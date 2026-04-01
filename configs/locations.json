@@ -1,0 +1,44 @@
+{
+    "porto": {
+        "latitude": 41.1579,
+        "longitude": -8.6291,
+        "timezone": "Europe/Lisbon",
+        "name": "Porto, Portugal"
+    },
+    "esposende": {
+        "latitude": 41.5333,
+        "longitude": -8.7833,
+        "timezone": "Europe/Lisbon",
+        "name": "Esposende, Portugal"
+    },
+    "erlangen": {
+        "latitude": 49.5897,
+        "longitude": 11.0078,
+        "timezone": "Europe/Berlin",
+        "name": "Erlangen, Germany"
+    },
+    "lisbon": {
+        "latitude": 38.7223,
+        "longitude": -9.1393,
+        "timezone": "Europe/Lisbon",
+        "name": "Lisbon, Portugal"
+    },
+    "melbourne": {
+        "latitude": -37.8142454,
+        "longitude": 144.9631732,
+        "timezone": "Australia/Melbourne",
+        "name": "Melbourne, City of Melbourne, Victoria, Australia"
+    },
+    "berlin": {
+        "latitude": 52.52,
+        "longitude": 13.405,
+        "timezone": "Europe/Berlin",
+        "name": "Berlin, Germany"
+    },
+    "madrid": {
+        "latitude": 40.4168,
+        "longitude": -3.7038,
+        "timezone": "Europe/Madrid",
+        "name": "Madrid, Spain"
+    }
+}

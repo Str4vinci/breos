@@ -1,0 +1,7 @@
+{
+    "inflation_elec": 0.02,
+    "discount_rate": 0.03,
+    "project_lifespan": 20,
+    "elec_price_grid": 0.2577,
+    "elec_price_export": 0.04
+}

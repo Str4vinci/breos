@@ -1,0 +1,32 @@
+{
+    "PT": {
+        "grid_carbon_intensity_gco2_kwh": 110.52,
+        "source": "Our World in Data / Ember Climate",
+        "year": 2024,
+        "country": "Portugal"
+    },
+    "DE": {
+        "grid_carbon_intensity_gco2_kwh": 338.36,
+        "source": "Our World in Data / Ember Climate",
+        "year": 2024,
+        "country": "Germany"
+    },
+    "ES": {
+        "grid_carbon_intensity_gco2_kwh": 145.89,
+        "source": "Our World in Data / Ember Climate",
+        "year": 2024,
+        "country": "Spain"
+    },
+    "NO": {
+        "grid_carbon_intensity_gco2_kwh": 30.75,
+        "source": "Our World in Data / Ember Climate",
+        "year": 2024,
+        "country": "Norway"
+    },
+    "AU": {
+        "grid_carbon_intensity_gco2_kwh": 553.83,
+        "source": "Our World in Data / Ember Climate",
+        "year": 2024,
+        "country": "Australia"
+    }
+}
