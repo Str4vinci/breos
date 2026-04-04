@@ -27,6 +27,9 @@ Usage:
 # Version
 __version__ = "0.1.0"
 
+# Public facade
+from breos.app import App
+
 # Utils
 from breos.utils import (
     is_leap_year,
@@ -241,6 +244,8 @@ def _get_numba():
 
 
 __all__ = [
+    # Public facade
+    "App",
     # Version
     "__version__",
     # Utils

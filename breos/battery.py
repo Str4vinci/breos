@@ -67,6 +67,8 @@ class BatteryConfig:
     # DC-coupled system (hybrid inverter) settings
     dc_coupled: bool = True             # True = hybrid inverter (DC-coupled battery)
     inverter_efficiency: float = 0.96   # Inverter efficiency (for DC→AC conversion)
+    # Battery chemistry
+    battery_type: str = 'lfp'           # Battery chemistry type
 
     def __post_init__(self):
         # Auto-compute replacement cost

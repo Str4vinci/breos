@@ -25,6 +25,7 @@ dependencies = [
     "openmeteo-requests>=1.7.4",
     "pandas>=2.3.3",
     "pyarrow>=19.0.0",
+    "nrel-pysam>=7.1.0",
     "pvlib==0.14.0",
     "pymoo>=0.6.1.6",
     "rainflow>=3.2.0",
