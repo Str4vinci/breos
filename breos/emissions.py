@@ -17,10 +17,11 @@ import pandas as pd
 @dataclass
 class EmissionsParams:
     """Parameters for CO2 emissions calculations."""
+
     grid_carbon_intensity_gco2_kwh: float  # gCO2eq/kWh of grid electricity
-    source: str = ""                        # Data source citation
-    year: int = 2024                        # Reference year for the data
-    country: str = ""                       # Country name
+    source: str = ""  # Data source citation
+    year: int = 2024  # Reference year for the data
+    country: str = ""  # Country name
 
 
 def calculate_co2_savings(
@@ -45,11 +46,11 @@ def calculate_co2_savings(
     co2_self_kg = self_consumed_kwh * ci / 1000
 
     return {
-        'CO2_Avoided_Total_kg': co2_total_kg,
-        'CO2_Avoided_SelfConsumed_kg': co2_self_kg,
-        'CO2_Avoided_Total_tCO2': co2_total_kg / 1000,
-        'CO2_Avoided_SelfConsumed_tCO2': co2_self_kg / 1000,
-        'Grid_Carbon_Intensity_gCO2_kWh': ci,
+        "CO2_Avoided_Total_kg": co2_total_kg,
+        "CO2_Avoided_SelfConsumed_kg": co2_self_kg,
+        "CO2_Avoided_Total_tCO2": co2_total_kg / 1000,
+        "CO2_Avoided_SelfConsumed_tCO2": co2_self_kg / 1000,
+        "Grid_Carbon_Intensity_gCO2_kWh": ci,
     }
 
 
@@ -76,13 +77,15 @@ def calculate_co2_projection(
     co2_total = yearly_pv_kwh * ci / 1000
     co2_self = yearly_self_consumed * ci / 1000
 
-    proj = pd.DataFrame({
-        'Year': range(1, n_years + 1),
-        'CO2_Avoided_Total_kg': co2_total,
-        'CO2_Avoided_SelfConsumed_kg': co2_self,
-        'CO2_Avoided_Total_Cumulative_kg': np.cumsum(co2_total),
-        'CO2_Avoided_SelfConsumed_Cumulative_kg': np.cumsum(co2_self),
-        'Grid_CI_gCO2_kWh': ci,
-    })
+    proj = pd.DataFrame(
+        {
+            "Year": range(1, n_years + 1),
+            "CO2_Avoided_Total_kg": co2_total,
+            "CO2_Avoided_SelfConsumed_kg": co2_self,
+            "CO2_Avoided_Total_Cumulative_kg": np.cumsum(co2_total),
+            "CO2_Avoided_SelfConsumed_Cumulative_kg": np.cumsum(co2_self),
+            "Grid_CI_gCO2_kWh": ci,
+        }
+    )
 
     return proj

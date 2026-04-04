@@ -61,6 +61,7 @@ _DEFAULTS: Dict[str, Any] = {
 
 # --- Helpers ------------------------------------------------------------------
 
+
 def _load_json(name: str) -> dict:
     path = os.path.join(_CONFIGS_DIR, name)
     with open(path) as f:
@@ -86,6 +87,7 @@ def _remap_tmy_year(df: pd.DataFrame, target_year: int) -> pd.DataFrame:
 
 
 # --- App class ----------------------------------------------------------------
+
 
 class App:
     """
@@ -251,19 +253,17 @@ class App:
             else:
                 batt_cfg = None
 
-            results_df, total_pv, summary_df, year_rep_cost, year_n_rep, degradation_df = (
-                simulate_energy_balance(
-                    pv_dc=dc_power,
-                    houseload=load_data,
-                    battery_config=batt_cfg,
-                    freq=freq,
-                    temperature_series=temp_series if has_battery else None,
-                    initial_fec=cumulative_fec,
-                    initial_calendar_seconds=cumulative_cal_seconds,
-                    initial_resistance_growth=cumulative_resistance_growth,
-                    initial_cumulative_cycle_deg=cumulative_cycle_deg,
-                    initial_cumulative_cal_deg=cumulative_cal_deg,
-                )
+            results_df, total_pv, summary_df, year_rep_cost, year_n_rep, degradation_df = simulate_energy_balance(
+                pv_dc=dc_power,
+                houseload=load_data,
+                battery_config=batt_cfg,
+                freq=freq,
+                temperature_series=temp_series if has_battery else None,
+                initial_fec=cumulative_fec,
+                initial_calendar_seconds=cumulative_cal_seconds,
+                initial_resistance_growth=cumulative_resistance_growth,
+                initial_cumulative_cycle_deg=cumulative_cycle_deg,
+                initial_cumulative_cal_deg=cumulative_cal_deg,
             )
 
             if first_year_results_df is None:
@@ -289,18 +289,20 @@ class App:
             total_export = (results_df["Sell_To_Grid"].sum() / 1000) * hours_per_step
             grid_indep = (1 - total_import / total_load) * 100 if total_load > 0 else 0
 
-            yearly_summaries.append({
-                "Year": year_idx + 1,
-                "PV_Production_kWh": total_pv_kwh,
-                "Load_kWh": total_load,
-                "Import_kWh": total_import,
-                "Export_kWh": total_export,
-                "Grid_Independence_%": grid_indep,
-                "Battery_SOH_%": current_soh if has_battery else None,
-                "Replacements": year_n_rep,
-                "Replacement_Cost": year_rep_cost,
-                "PV_Degradation_Factor": pv_degradation_factor,
-            })
+            yearly_summaries.append(
+                {
+                    "Year": year_idx + 1,
+                    "PV_Production_kWh": total_pv_kwh,
+                    "Load_kWh": total_load,
+                    "Import_kWh": total_import,
+                    "Export_kWh": total_export,
+                    "Grid_Independence_%": grid_indep,
+                    "Battery_SOH_%": current_soh if has_battery else None,
+                    "Replacements": year_n_rep,
+                    "Replacement_Cost": year_rep_cost,
+                    "PV_Degradation_Factor": pv_degradation_factor,
+                }
+            )
 
         yearly_df = pd.DataFrame(yearly_summaries)
 

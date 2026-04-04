@@ -54,19 +54,25 @@ class TestCalculateCosts:
 class TestFindPaybackYear:
     def test_known_payback(self):
         import pandas as pd
+
         # Savings turn positive at year 8
-        proj = pd.DataFrame({
-            "Year": range(1, 11),
-            "Savings_Cumulative_NPV": [-500, -400, -300, -200, -100, -50, -10, 30, 100, 200],
-        })
+        proj = pd.DataFrame(
+            {
+                "Year": range(1, 11),
+                "Savings_Cumulative_NPV": [-500, -400, -300, -200, -100, -50, -10, 30, 100, 200],
+            }
+        )
         assert find_payback_year(proj) == 8
 
     def test_no_payback(self):
         import pandas as pd
-        proj = pd.DataFrame({
-            "Year": range(1, 6),
-            "Savings_Cumulative_NPV": [-500, -400, -300, -200, -100],
-        })
+
+        proj = pd.DataFrame(
+            {
+                "Year": range(1, 6),
+                "Savings_Cumulative_NPV": [-500, -400, -300, -200, -100],
+            }
+        )
         assert find_payback_year(proj) is None
 
 

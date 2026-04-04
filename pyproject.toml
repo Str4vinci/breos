@@ -38,10 +38,27 @@ Homepage = "https://github.com/Str4vinci/BREOS"
 Repository = "https://github.com/Str4vinci/BREOS"
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0"]
+dev = ["pytest>=8.0", "ruff>=0.15"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I"]
+ignore = [
+    "E501",   # line too long — handled by formatter
+    "F401",   # unused import — __init__.py re-exports intentionally
+    "E741",   # ambiguous variable name — common in scientific code (l, I, O)
+]
+
+[tool.ruff.lint.per-file-ignores]
+"breos/__init__.py" = ["F401", "F811"]   # re-exports and shadowed imports
+"tests/*" = ["F811"]                      # pytest fixtures
+"breos/plotting.py" = ["F841", "F811", "F821", "E712"]  # large viz module with WIP code
 
 [build-system]
 requires = ["hatchling"]

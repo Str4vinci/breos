@@ -9,10 +9,10 @@ import os
 def is_leap_year(year: int) -> bool:
     """
     Check if a year is a leap year.
-    
+
     Args:
         year: Year to check
-        
+
     Returns:
         True if leap year, False otherwise
     """
@@ -22,11 +22,11 @@ def is_leap_year(year: int) -> bool:
 def count_leap_years(start_year: int, num_years: int) -> int:
     """
     Count the number of leap years in a range.
-    
+
     Args:
         start_year: Starting year
         num_years: Number of years to count
-        
+
     Returns:
         Number of leap years in the range
     """
@@ -36,7 +36,7 @@ def count_leap_years(start_year: int, num_years: int) -> int:
 def number_of_cores() -> int:
     """
     Get the number of available CPU cores for parallel processing.
-    
+
     Returns:
         Number of CPU cores (leaves 1 core free for system)
     """
@@ -48,24 +48,24 @@ def number_of_cores() -> int:
 def get_hours_per_step(freq: str) -> float:
     """
     Get the number of hours per timestep based on frequency.
-    
+
     Args:
         freq: Frequency string ('h' for hourly, '15min' for 15-minute)
-        
+
     Returns:
         Hours per timestep (1.0 for hourly, 0.25 for 15-min)
-        
+
     Raises:
         ValueError: If freq is not recognized
     """
     freq_map = {
-        'h': 1.0,
-        'H': 1.0,
-        '1h': 1.0,
-        '1H': 1.0,
-        '15min': 0.25,
-        '15T': 0.25,
-        '15m': 0.25,
+        "h": 1.0,
+        "H": 1.0,
+        "1h": 1.0,
+        "1H": 1.0,
+        "15min": 0.25,
+        "15T": 0.25,
+        "15m": 0.25,
     }
     if freq not in freq_map:
         raise ValueError(f"Unsupported frequency: {freq}. Use 'h' or '15min'.")
@@ -75,10 +75,10 @@ def get_hours_per_step(freq: str) -> float:
 def get_steps_per_day(freq: str) -> int:
     """
     Get the number of timesteps per day based on frequency.
-    
+
     Args:
         freq: Frequency string ('h' for hourly, '15min' for 15-minute)
-        
+
     Returns:
         Steps per day (24 for hourly, 96 for 15-min)
     """
@@ -89,11 +89,11 @@ def get_steps_per_day(freq: str) -> int:
 def get_steps_per_year(freq: str, leap_year: bool = False) -> int:
     """
     Get the number of timesteps per year based on frequency.
-    
+
     Args:
         freq: Frequency string ('h' for hourly, '15min' for 15-minute)
         leap_year: Whether to account for leap year (366 days)
-        
+
     Returns:
         Steps per year (8760/8784 for hourly, 35040/35136 for 15-min)
     """
