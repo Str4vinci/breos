@@ -22,5 +22,11 @@ jobs:
       - name: Install dependencies
         run: uv sync --extra dev
 
+      - name: Lint
+        run: uv run ruff check breos/ tests/
+
+      - name: Check formatting
+        run: uv run ruff format --check breos/ tests/
+
       - name: Run tests
         run: uv run pytest tests/ -v

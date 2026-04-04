@@ -13,10 +13,10 @@ from breos.pv_modules import get_module
 from breos.solar import PVModuleParams, calculate_pv_production_dc
 from breos.weather import extract_ambient_temperature
 
-
 # ---------------------------------------------------------------------------
 # Synthetic weather (1 year, hourly, no API call)
 # ---------------------------------------------------------------------------
+
 
 def _build_synthetic_weather(year: int = 2023, freq: str = "h") -> pd.DataFrame:
     """Build a realistic-ish 1-year weather DataFrame with sinusoidal patterns."""
@@ -42,11 +42,7 @@ def _build_synthetic_weather(year: int = 2023, freq: str = "h") -> pd.DataFrame:
     dhi = ghi * 0.3
 
     # Temperature: seasonal + diurnal
-    temp_air = (
-        15
-        + 8 * np.sin((day_of_year - 80) / 365 * 2 * np.pi)
-        + 4 * np.sin((hour_of_day - 14) / 24 * 2 * np.pi)
-    )
+    temp_air = 15 + 8 * np.sin((day_of_year - 80) / 365 * 2 * np.pi) + 4 * np.sin((hour_of_day - 14) / 24 * 2 * np.pi)
     wind_speed = np.full(n_steps, 3.0)
 
     return pd.DataFrame(
@@ -69,6 +65,7 @@ def synthetic_weather_15min():
 # Location
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture
 def porto_location():
     return Location(41.1579, -8.6291, tz="Europe/Lisbon")
@@ -78,6 +75,7 @@ def porto_location():
 # PV module
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture
 def pv_params():
     return get_module("Suntech_STP550S_STC")
@@ -86,6 +84,7 @@ def pv_params():
 # ---------------------------------------------------------------------------
 # Load profile
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture
 def sample_load():
@@ -102,6 +101,7 @@ def sample_load():
 # ---------------------------------------------------------------------------
 # PV DC production (1 module, hourly, synthetic weather)
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture
 def dc_production(synthetic_weather, porto_location, pv_params):
@@ -120,6 +120,7 @@ def dc_production(synthetic_weather, porto_location, pv_params):
 # Battery config
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture
 def battery_config():
     return BatteryConfig(nominal_energy_wh=5000, battery_type="lfp")
@@ -128,6 +129,7 @@ def battery_config():
 # ---------------------------------------------------------------------------
 # Temperature series
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture
 def temperature_series(synthetic_weather):
@@ -138,6 +140,7 @@ def temperature_series(synthetic_weather):
 # ---------------------------------------------------------------------------
 # Cost params (residential_pt style)
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture
 def cost_params():
@@ -162,6 +165,7 @@ def cost_params():
 # Emissions params
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture
 def emissions_params():
     return EmissionsParams(
@@ -174,9 +178,11 @@ def emissions_params():
 # Helper: monkeypatch weather for App tests
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture
 def _patch_weather(monkeypatch, synthetic_weather):
     """Monkeypatch fetch_tmy_weather_data so App tests never hit the network."""
+
     def _fake_fetch(*args, **kwargs):
         return synthetic_weather, {"inputs": {"location": {"latitude": 41.15, "longitude": -8.63, "elevation": 0}}}
 

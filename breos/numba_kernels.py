@@ -7,9 +7,10 @@ This module provides JIT-compiled versions of hot loops for:
 - Degradation updates
 """
 
+from typing import Tuple
+
 import numpy as np
 from numba import jit, prange
-from typing import Tuple
 
 
 @jit(nopython=True, cache=True)
@@ -23,11 +24,11 @@ def energy_balance_kernel(
     discharge_efficiency: float,
     standby_loss_wh: float,
     initial_soh: float,
-    hours_per_step: float
+    hours_per_step: float,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """
     Numba-optimized energy balance kernel.
-    
+
     Args:
         pv_energy_wh: PV energy per timestep (Wh)
         load_energy_wh: Load energy per timestep (Wh)
@@ -39,35 +40,35 @@ def energy_balance_kernel(
         standby_loss_wh: Standby loss per hour (Wh)
         initial_soh: Initial state of health (0-1)
         hours_per_step: Hours per simulation timestep
-        
+
     Returns:
         Tuple of (import_wh, sell_wh, battery_energy_wh, soc_normalized, soc_absolute)
     """
     n_steps = len(pv_energy_wh)
-    
+
     # Output arrays
     import_wh = np.zeros(n_steps)
     sell_wh = np.zeros(n_steps)
     battery_energy_wh = np.zeros(n_steps)
     soc_normalized = np.zeros(n_steps)
     soc_absolute = np.zeros(n_steps)
-    
+
     # Initialize battery state
     soh = initial_soh
     usable_cap = battery_nominal_wh * soh
     Emax = usable_cap * max_soc
     Emin = usable_cap * min_soc
     battery_E = Emax  # Start at max SOC
-    
+
     for i in range(n_steps):
         pv = pv_energy_wh[i]
         load = load_energy_wh[i]
         surplus = pv - load
-        
+
         # Apply standby loss
         standby = standby_loss_wh * hours_per_step
         battery_E = max(Emin, battery_E - standby)
-        
+
         if surplus >= 0:
             # Charging - excess PV
             charge_room = Emax - battery_E
@@ -85,25 +86,25 @@ def energy_balance_kernel(
                 import_wh[i] = max(0.0, deficit - delivered)
             else:
                 import_wh[i] = deficit
-        
+
         # Store battery state
         battery_energy_wh[i] = battery_E
-        
+
         # Calculate SOC
         if (Emax - Emin) > 0:
             soc_normalized[i] = (battery_E - Emin) / (Emax - Emin)
         else:
             soc_normalized[i] = 0.0
-        
+
         if usable_cap > 0:
             soc_absolute[i] = battery_E / usable_cap
         else:
             soc_absolute[i] = 0.0
-        
+
         # Clip SOC values
         soc_normalized[i] = max(0.0, min(1.0, soc_normalized[i]))
         soc_absolute[i] = max(0.0, min(1.0, soc_absolute[i]))
-    
+
     return import_wh, sell_wh, battery_energy_wh, soc_normalized, soc_absolute
 
 
@@ -118,48 +119,48 @@ def batch_energy_balance_kernel(
     discharge_efficiency: float,
     standby_loss_wh: float,
     initial_soh: float,
-    hours_per_step: float
+    hours_per_step: float,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
     Parallel Numba kernel for batch energy balance (Monte Carlo).
-    
+
     Args:
         pv_scenarios: PV energy per timestep for each scenario (Wh)
         load_scenarios: Load energy per timestep for each scenario (Wh)
         ... (same as energy_balance_kernel)
-        
+
     Returns:
         Tuple of (total_import, total_sell, grid_independence) arrays
     """
     n_scenarios = pv_scenarios.shape[0]
     n_steps = pv_scenarios.shape[1]
-    
+
     total_import = np.zeros(n_scenarios)
     total_sell = np.zeros(n_scenarios)
     total_load = np.zeros(n_scenarios)
     grid_independence = np.zeros(n_scenarios)
-    
+
     for s in prange(n_scenarios):
         soh = initial_soh
         usable_cap = battery_nominal_wh * soh
         Emax = usable_cap * max_soc
         Emin = usable_cap * min_soc
         battery_E = Emax
-        
+
         imp = 0.0
         sell = 0.0
         load_sum = 0.0
-        
+
         for i in range(n_steps):
             pv = pv_scenarios[s, i]
             load = load_scenarios[s, i]
             surplus = pv - load
             load_sum += load
-            
+
             # Standby loss
             standby = standby_loss_wh * hours_per_step
             battery_E = max(Emin, battery_E - standby)
-            
+
             if surplus >= 0:
                 charge_room = Emax - battery_E
                 charge_in = min(surplus, charge_room / charge_efficiency)
@@ -175,22 +176,23 @@ def batch_energy_balance_kernel(
                     imp += max(0.0, deficit - delivered)
                 else:
                     imp += deficit
-        
+
         total_import[s] = imp
         total_sell[s] = sell
         total_load[s] = load_sum
-        
+
         if load_sum > 0:
             grid_independence[s] = 100.0 * (1.0 - imp / load_sum)
         else:
             grid_independence[s] = 100.0
-    
+
     return total_import, total_sell, grid_independence
 
 
 # =========================================================================
 # Degradation-aware kernels
 # =========================================================================
+
 
 @jit(nopython=True, cache=True)
 def _daily_degradation_step(
@@ -202,10 +204,18 @@ def _daily_degradation_step(
     temperature: float,
     hours_per_step: float,
     # Naumann cycle params
-    A_Q: float, B_Q: float, C_DOC_Q: float, D_DOC_Q: float, Z_Q: float,
+    A_Q: float,
+    B_Q: float,
+    C_DOC_Q: float,
+    D_DOC_Q: float,
+    Z_Q: float,
     # Calendar params
-    k0_frac: float, Ea: float, cal_b: float, n_soc: float,
-    R_GAS: float, T_REF_K: float,
+    k0_frac: float,
+    Ea: float,
+    cal_b: float,
+    n_soc: float,
+    R_GAS: float,
+    T_REF_K: float,
 ) -> Tuple[float, float, float, float, float]:
     """
     Numba-compiled daily degradation step using aggregate SOC metrics.
@@ -264,9 +274,9 @@ def _daily_degradation_step(
 
         fec_new = fec_cum + dFEC
         if fec_cum > 0:
-            dq_pct = kC * kDOC * (fec_new ** Z_Q - fec_cum ** Z_Q)
+            dq_pct = kC * kDOC * (fec_new**Z_Q - fec_cum**Z_Q)
         else:
-            dq_pct = kC * kDOC * (fec_new ** Z_Q)
+            dq_pct = kC * kDOC * (fec_new**Z_Q)
         dSOH_cycle = dq_pct / 100.0
         fec_cum = fec_new
 
@@ -278,10 +288,10 @@ def _daily_degradation_step(
     t_new = t_old + 86400.0  # 1 day
 
     if t_old > 0:
-        term_old = t_old ** cal_b
+        term_old = t_old**cal_b
     else:
         term_old = 0.0
-    term_new = t_new ** cal_b
+    term_new = t_new**cal_b
     delta_time = term_new - term_old
 
     mean_soc = 0.0
@@ -289,7 +299,7 @@ def _daily_degradation_step(
         mean_soc += soc_day[i]
     mean_soc /= n
 
-    soc_stress = mean_soc ** n_soc if mean_soc > 0 else 0.0
+    soc_stress = mean_soc**n_soc if mean_soc > 0 else 0.0
 
     dSOH_calendar = k0_frac * arr_factor * delta_time * soc_stress
 
@@ -315,10 +325,18 @@ def energy_balance_kernel_with_degradation(
     hours_per_step: float,
     steps_per_day: int,
     # Naumann cycle params
-    A_Q: float, B_Q: float, C_DOC_Q: float, D_DOC_Q: float, Z_Q: float,
+    A_Q: float,
+    B_Q: float,
+    C_DOC_Q: float,
+    D_DOC_Q: float,
+    Z_Q: float,
     # Calendar params
-    k0_frac: float, Ea: float, cal_b: float, n_soc: float,
-    R_GAS: float, T_REF_K: float,
+    k0_frac: float,
+    Ea: float,
+    cal_b: float,
+    n_soc: float,
+    R_GAS: float,
+    T_REF_K: float,
     initial_fec: float,
     initial_cal_seconds: float,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, float, float, float]:
@@ -416,11 +434,24 @@ def energy_balance_kernel_with_degradation(
             mean_temp = day_temp_sum / steps_per_day
 
             soh, fec_cum, cal_seconds, _, _ = _daily_degradation_step(
-                day_soc, battery_nominal_wh, fec_cum, cal_seconds, soh,
-                mean_temp, hours_per_step,
-                A_Q, B_Q, C_DOC_Q, D_DOC_Q, Z_Q,
-                k0_frac, Ea, cal_b, n_soc,
-                R_GAS, T_REF_K,
+                day_soc,
+                battery_nominal_wh,
+                fec_cum,
+                cal_seconds,
+                soh,
+                mean_temp,
+                hours_per_step,
+                A_Q,
+                B_Q,
+                C_DOC_Q,
+                D_DOC_Q,
+                Z_Q,
+                k0_frac,
+                Ea,
+                cal_b,
+                n_soc,
+                R_GAS,
+                T_REF_K,
             )
 
             # Update capacity limits for next day
@@ -450,9 +481,17 @@ def batch_energy_balance_kernel_with_degradation(
     initial_soh: float,
     hours_per_step: float,
     steps_per_day: int,
-    A_Q: float, B_Q: float, C_DOC_Q: float, D_DOC_Q: float, Z_Q: float,
-    k0_frac: float, Ea: float, cal_b: float, n_soc: float,
-    R_GAS: float, T_REF_K: float,
+    A_Q: float,
+    B_Q: float,
+    C_DOC_Q: float,
+    D_DOC_Q: float,
+    Z_Q: float,
+    k0_frac: float,
+    Ea: float,
+    cal_b: float,
+    n_soc: float,
+    R_GAS: float,
+    T_REF_K: float,
     initial_fec: float,
     initial_cal_seconds: float,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
@@ -532,11 +571,24 @@ def batch_energy_balance_kernel_with_degradation(
                 mean_temp = day_temp_sum / steps_per_day
 
                 soh, fec_cum, cal_seconds, _, _ = _daily_degradation_step(
-                    day_soc, battery_nominal_wh, fec_cum, cal_seconds, soh,
-                    mean_temp, hours_per_step,
-                    A_Q, B_Q, C_DOC_Q, D_DOC_Q, Z_Q,
-                    k0_frac, Ea, cal_b, n_soc,
-                    R_GAS, T_REF_K,
+                    day_soc,
+                    battery_nominal_wh,
+                    fec_cum,
+                    cal_seconds,
+                    soh,
+                    mean_temp,
+                    hours_per_step,
+                    A_Q,
+                    B_Q,
+                    C_DOC_Q,
+                    D_DOC_Q,
+                    Z_Q,
+                    k0_frac,
+                    Ea,
+                    cal_b,
+                    n_soc,
+                    R_GAS,
+                    T_REF_K,
                 )
 
                 usable_cap = battery_nominal_wh * soh
@@ -563,6 +615,7 @@ def batch_energy_balance_kernel_with_degradation(
 # =========================================================================
 # Combined electrical + thermal kernels (TES + Heat Pump)
 # =========================================================================
+
 
 @jit(nopython=True, cache=True)
 def combined_energy_balance_kernel(
@@ -595,13 +648,20 @@ def combined_energy_balance_kernel(
     hours_per_step: float,
     steps_per_day: int,
     # Degradation params
-    A_Q: float, B_Q: float, C_DOC_Q: float, D_DOC_Q: float, Z_Q: float,
-    k0_frac: float, Ea: float, cal_b: float, n_soc: float,
-    R_GAS: float, T_REF_K: float,
+    A_Q: float,
+    B_Q: float,
+    C_DOC_Q: float,
+    D_DOC_Q: float,
+    Z_Q: float,
+    k0_frac: float,
+    Ea: float,
+    cal_b: float,
+    n_soc: float,
+    R_GAS: float,
+    T_REF_K: float,
     initial_fec: float,
     initial_cal_seconds: float,
-) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray,
-           float, float, float, float, float, float]:
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, float, float, float, float, float, float]:
     """
     Combined electrical + thermal energy balance with battery degradation.
 
@@ -783,11 +843,24 @@ def combined_energy_balance_kernel(
         if day_idx >= steps_per_day:
             mean_temp = day_temp_sum / steps_per_day
             soh, fec_cum, cal_seconds, _, _ = _daily_degradation_step(
-                day_soc, battery_nominal_wh, fec_cum, cal_seconds, soh,
-                mean_temp, hours_per_step,
-                A_Q, B_Q, C_DOC_Q, D_DOC_Q, Z_Q,
-                k0_frac, Ea, cal_b, n_soc,
-                R_GAS, T_REF_K,
+                day_soc,
+                battery_nominal_wh,
+                fec_cum,
+                cal_seconds,
+                soh,
+                mean_temp,
+                hours_per_step,
+                A_Q,
+                B_Q,
+                C_DOC_Q,
+                D_DOC_Q,
+                Z_Q,
+                k0_frac,
+                Ea,
+                cal_b,
+                n_soc,
+                R_GAS,
+                T_REF_K,
             )
             usable_cap = battery_nominal_wh * soh
             batt_Emax = usable_cap * max_soc
@@ -797,8 +870,19 @@ def combined_energy_balance_kernel(
             day_idx = 0
             day_temp_sum = 0.0
 
-    return (import_wh_arr, sell_wh_arr, battery_soc_arr, tes_soc_arr, hp_elec_arr,
-            soh, fec_cum, cal_seconds, total_thermal_unmet, total_hp_thermal, total_tes_discharge)
+    return (
+        import_wh_arr,
+        sell_wh_arr,
+        battery_soc_arr,
+        tes_soc_arr,
+        hp_elec_arr,
+        soh,
+        fec_cum,
+        cal_seconds,
+        total_thermal_unmet,
+        total_hp_thermal,
+        total_tes_discharge,
+    )
 
 
 @jit(nopython=True, cache=True, parallel=True)
@@ -809,25 +893,42 @@ def batch_combined_energy_balance_kernel(
     temperature_c: np.ndarray,
     # Battery
     battery_nominal_wh: float,
-    max_soc: float, min_soc: float,
-    charge_efficiency: float, discharge_efficiency: float,
-    standby_loss_wh: float, initial_soh: float,
+    max_soc: float,
+    min_soc: float,
+    charge_efficiency: float,
+    discharge_efficiency: float,
+    standby_loss_wh: float,
+    initial_soh: float,
     inverter_efficiency: float,
     # TES
     tes_nominal_wh_th: float,
-    tes_max_soc: float, tes_min_soc: float,
-    tes_charge_eff: float, tes_discharge_eff: float,
+    tes_max_soc: float,
+    tes_min_soc: float,
+    tes_charge_eff: float,
+    tes_discharge_eff: float,
     tes_standby_loss_frac: float,
     # HP
-    hp_rated_kw_th: float, hp_sink_temp_c: float,
-    hp_carnot_eff: float, hp_min_source_temp_c: float,
+    hp_rated_kw_th: float,
+    hp_sink_temp_c: float,
+    hp_carnot_eff: float,
+    hp_min_source_temp_c: float,
     # Sim
-    hours_per_step: float, steps_per_day: int,
+    hours_per_step: float,
+    steps_per_day: int,
     # Degradation
-    A_Q: float, B_Q: float, C_DOC_Q: float, D_DOC_Q: float, Z_Q: float,
-    k0_frac: float, Ea: float, cal_b: float, n_soc: float,
-    R_GAS: float, T_REF_K: float,
-    initial_fec: float, initial_cal_seconds: float,
+    A_Q: float,
+    B_Q: float,
+    C_DOC_Q: float,
+    D_DOC_Q: float,
+    Z_Q: float,
+    k0_frac: float,
+    Ea: float,
+    cal_b: float,
+    n_soc: float,
+    R_GAS: float,
+    T_REF_K: float,
+    initial_fec: float,
+    initial_cal_seconds: float,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """
     Parallel batch combined energy balance for optimization.
@@ -968,11 +1069,24 @@ def batch_combined_energy_balance_kernel(
             if day_idx >= steps_per_day:
                 mean_temp = day_temp_sum / steps_per_day
                 soh, fec_cum, cal_seconds, _, _ = _daily_degradation_step(
-                    day_soc, battery_nominal_wh, fec_cum, cal_seconds, soh,
-                    mean_temp, hours_per_step,
-                    A_Q, B_Q, C_DOC_Q, D_DOC_Q, Z_Q,
-                    k0_frac, Ea, cal_b, n_soc,
-                    R_GAS, T_REF_K,
+                    day_soc,
+                    battery_nominal_wh,
+                    fec_cum,
+                    cal_seconds,
+                    soh,
+                    mean_temp,
+                    hours_per_step,
+                    A_Q,
+                    B_Q,
+                    C_DOC_Q,
+                    D_DOC_Q,
+                    Z_Q,
+                    k0_frac,
+                    Ea,
+                    cal_b,
+                    n_soc,
+                    R_GAS,
+                    T_REF_K,
                 )
                 usable_cap = battery_nominal_wh * soh
                 batt_Emax = usable_cap * max_soc
@@ -991,20 +1105,13 @@ def batch_combined_energy_balance_kernel(
     return out_import, out_sell, out_elec_gi, out_thermal_cov, out_soh
 
 
-def simulate_energy_balance_numba(
-    ac_loss,
-    houseload,
-    battery_config,
-    freq: str = 'h',
-    start_time=None,
-    end_time=None
-):
+def simulate_energy_balance_numba(ac_loss, houseload, battery_config, freq: str = "h", start_time=None, end_time=None):
     """
     Numba-accelerated energy balance simulation.
-    
+
     This is a faster version of simulate_energy_balance() for cases where
     you don't need per-step degradation tracking.
-    
+
     Args:
         ac_loss: PV AC power series (W)
         houseload: Load DataFrame (W)
@@ -1012,27 +1119,28 @@ def simulate_energy_balance_numba(
         freq: Time frequency ('h' or '15min')
         start_time: Simulation start
         end_time: Simulation end
-        
+
     Returns:
         Tuple of (results_df, total_pv, summary_df)
     """
     import pandas as pd
+
     from breos.utils import get_hours_per_step
-    
+
     hours_per_step = get_hours_per_step(freq)
-    
+
     # Determine time range
     if start_time is None:
         start_time = ac_loss.index[0]
     if end_time is None:
         end_time = ac_loss.index[-1]
-    
+
     rng = pd.date_range(start=start_time, end=end_time, freq=freq)
-    
+
     # Prepare input arrays (convert W to Wh)
     ac_aligned = ac_loss.reindex(rng).fillna(0.0).values * hours_per_step
     load_aligned = houseload.iloc[:, 0].reindex(rng).fillna(0.0).values * hours_per_step
-    
+
     # Run Numba kernel
     import_wh, sell_wh, battery_E, soc_norm, soc_abs = energy_balance_kernel(
         pv_energy_wh=ac_aligned,
@@ -1042,39 +1150,41 @@ def simulate_energy_balance_numba(
         min_soc=battery_config.min_soc,
         charge_efficiency=battery_config.charge_efficiency,
         discharge_efficiency=battery_config.discharge_efficiency,
-        standby_loss_wh=getattr(battery_config, 'standby_loss_wh', 0.0),
+        standby_loss_wh=getattr(battery_config, "standby_loss_wh", 0.0),
         initial_soh=battery_config.initial_soh / 100.0,
-        hours_per_step=hours_per_step
+        hours_per_step=hours_per_step,
     )
-    
+
     # Build results DataFrame
-    results_df = pd.DataFrame({
-        'Datetime': rng,
-        'PV_Production': ac_aligned / hours_per_step,  # Back to W
-        'Houseload': load_aligned / hours_per_step,
-        'Import_From_Grid': import_wh / hours_per_step,
-        'Sell_To_Grid': sell_wh / hours_per_step,
-        'Battery_Energy': battery_E,
-        'Battery_SOC_Normalized': soc_norm,
-        'Battery_SOC_Absolute': soc_abs,
-    })
-    
+    results_df = pd.DataFrame(
+        {
+            "Datetime": rng,
+            "PV_Production": ac_aligned / hours_per_step,  # Back to W
+            "Houseload": load_aligned / hours_per_step,
+            "Import_From_Grid": import_wh / hours_per_step,
+            "Sell_To_Grid": sell_wh / hours_per_step,
+            "Battery_Energy": battery_E,
+            "Battery_SOC_Normalized": soc_norm,
+            "Battery_SOC_Absolute": soc_abs,
+        }
+    )
+
     # Summary
     total_pv = ac_aligned.sum()
     total_load = load_aligned.sum()
     total_import = import_wh.sum()
     total_sell = sell_wh.sum()
-    
+
     pct_import = (total_import / total_load * 100) if total_load > 0 else 0
-    
+
     summary = {
-        'Total PV [kWh]': total_pv / 1000,
-        'Total Load [kWh]': total_load / 1000,
-        'Sell [kWh]': total_sell / 1000,
-        'Import [kWh]': total_import / 1000,
-        'Import [%]': pct_import,
-        'Grid Independence [%]': 100 - pct_import,
+        "Total PV [kWh]": total_pv / 1000,
+        "Total Load [kWh]": total_load / 1000,
+        "Sell [kWh]": total_sell / 1000,
+        "Import [kWh]": total_import / 1000,
+        "Import [%]": pct_import,
+        "Grid Independence [%]": 100 - pct_import,
     }
     summary_df = pd.DataFrame([summary])
-    
+
     return results_df, total_pv, summary_df

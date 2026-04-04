@@ -10,29 +10,63 @@ This module handles battery energy storage simulation including:
 
 import math
 from dataclasses import dataclass
-from typing import Tuple, Optional, List, Dict
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
 import rainflow
 
-from breos.economics import BATTERY_REPLACEMENT_COST_PER_KWH
 from breos.constants import (
-    R_GAS, T_REF_K,
-    NAUMANN_K0_PERCENT, NAUMANN_EA_J_MOL, NAUMANN_EXPONENT_B, NAUMANN_SOC_EXPONENT_N,
-    LAM_K0_FRAC, LAM_EA_J_MOL, LAM_EXPONENT_B, LAM_SOC_EXPONENT_N,
-    LAM_CAL_K0_FRAC, LAM_CAL_EA_J_MOL, LAM_CAL_EXPONENT_B, LAM_CAL_SOC_EXPONENT_N,
-    LAM_CAL_RELAXED_K0_FRAC, LAM_CAL_RELAXED_EA_J_MOL, LAM_CAL_RELAXED_EXPONENT_B, LAM_CAL_RELAXED_SOC_EXPONENT_N,
-    LAM_CAL_HOURLY_K0_FRAC, LAM_CAL_HOURLY_EA_J_MOL, LAM_CAL_HOURLY_EXPONENT_B, LAM_CAL_HOURLY_SOC_EXPONENT_N,
-    MODERN_LFP_K0_FRAC, MODERN_LFP_EA_J_MOL, MODERN_LFP_EXPONENT_B, MODERN_LFP_SOC_EXPONENT_N,
-    A_Q, B_Q, C_DOC_Q, D_DOC_Q, Z_Q,
-    A_R, B_R, C_DOC_R, D_DOC_R, Z_R,
-    NAUMANN_K0_R_PERCENT, NAUMANN_EA_R_J_MOL, NAUMANN_EXPONENT_B_R, NAUMANN_SOC_EXPONENT_N_R,
-    DEFAULT_CHARGE_EFFICIENCY, DEFAULT_DISCHARGE_EFFICIENCY,
-    DEFAULT_STANDBY_LOSS_WH, DEFAULT_MAX_SOC, DEFAULT_MIN_SOC,
-    LFP_CAP_DERATE_PER_C_MODERATE, LFP_CAP_DERATE_PER_C_COLD,
+    A_Q,
+    A_R,
+    B_Q,
+    B_R,
+    C_DOC_Q,
+    C_DOC_R,
+    D_DOC_Q,
+    D_DOC_R,
+    DEFAULT_CHARGE_EFFICIENCY,
+    DEFAULT_DISCHARGE_EFFICIENCY,
+    DEFAULT_MAX_SOC,
+    DEFAULT_MIN_SOC,
+    DEFAULT_STANDBY_LOSS_WH,
     DEFAULT_THERMAL_RESISTANCE_KW,
+    LAM_CAL_EA_J_MOL,
+    LAM_CAL_EXPONENT_B,
+    LAM_CAL_HOURLY_EA_J_MOL,
+    LAM_CAL_HOURLY_EXPONENT_B,
+    LAM_CAL_HOURLY_K0_FRAC,
+    LAM_CAL_HOURLY_SOC_EXPONENT_N,
+    LAM_CAL_K0_FRAC,
+    LAM_CAL_RELAXED_EA_J_MOL,
+    LAM_CAL_RELAXED_EXPONENT_B,
+    LAM_CAL_RELAXED_K0_FRAC,
+    LAM_CAL_RELAXED_SOC_EXPONENT_N,
+    LAM_CAL_SOC_EXPONENT_N,
+    LAM_EA_J_MOL,
+    LAM_EXPONENT_B,
+    LAM_K0_FRAC,
+    LAM_SOC_EXPONENT_N,
+    LFP_CAP_DERATE_PER_C_COLD,
+    LFP_CAP_DERATE_PER_C_MODERATE,
+    MODERN_LFP_EA_J_MOL,
+    MODERN_LFP_EXPONENT_B,
+    MODERN_LFP_K0_FRAC,
+    MODERN_LFP_SOC_EXPONENT_N,
+    NAUMANN_EA_J_MOL,
+    NAUMANN_EA_R_J_MOL,
+    NAUMANN_EXPONENT_B,
+    NAUMANN_EXPONENT_B_R,
+    NAUMANN_K0_PERCENT,
+    NAUMANN_K0_R_PERCENT,
+    NAUMANN_SOC_EXPONENT_N,
+    NAUMANN_SOC_EXPONENT_N_R,
+    R_GAS,
+    T_REF_K,
+    Z_Q,
+    Z_R,
 )
+from breos.economics import BATTERY_REPLACEMENT_COST_PER_KWH
 from breos.utils import get_hours_per_step
 
 
@@ -40,17 +74,18 @@ from breos.utils import get_hours_per_step
 class BatteryConfig:
     """
     Configuration parameters for battery simulation.
-    
+
     For DC-coupled systems (hybrid inverters):
     - PV → Battery: No inverter loss (stays in DC)
     - Battery → Load: Inverter loss applies (DC to AC)
-    
+
     For AC-coupled systems:
     - All energy goes through inverter first
     """
-    nominal_energy_wh: float             # Required — nominal capacity in Wh
-    initial_soh: float = 100.0          # Initial state of health (%)
-    eol_percentage: float = 0.80        # End of life threshold (fraction)
+
+    nominal_energy_wh: float  # Required — nominal capacity in Wh
+    initial_soh: float = 100.0  # Initial state of health (%)
+    eol_percentage: float = 0.80  # End of life threshold (fraction)
     max_soc: float = DEFAULT_MAX_SOC
     min_soc: float = DEFAULT_MIN_SOC
     charge_efficiency: float = DEFAULT_CHARGE_EFFICIENCY
@@ -58,17 +93,19 @@ class BatteryConfig:
     standby_loss_wh: float = DEFAULT_STANDBY_LOSS_WH
     enable_replacement: bool = True
     replacement_cost: Optional[float] = None  # Auto-computed from cost per kWh if not set
-    calendar_model: str = 'naumann_lam_calibrated'  # 'naumann_lam_calibrated', 'naumann_lam', 'naumann_lam_modern', 'naumann'
+    calendar_model: str = (
+        "naumann_lam_calibrated"  # 'naumann_lam_calibrated', 'naumann_lam', 'naumann_lam_modern', 'naumann'
+    )
     # Resistance fade tracking
     enable_resistance_fade: bool = False  # Enable Naumann resistance growth model
     initial_resistance_growth: float = 0.0  # Initial relative resistance growth (fraction, 0=new)
     # Thermal model
     thermal_resistance_kw: float = DEFAULT_THERMAL_RESISTANCE_KW  # K/W for lumped thermal model
     # DC-coupled system (hybrid inverter) settings
-    dc_coupled: bool = True             # True = hybrid inverter (DC-coupled battery)
-    inverter_efficiency: float = 0.96   # Inverter efficiency (for DC→AC conversion)
+    dc_coupled: bool = True  # True = hybrid inverter (DC-coupled battery)
+    inverter_efficiency: float = 0.96  # Inverter efficiency (for DC→AC conversion)
     # Battery chemistry
-    battery_type: str = 'lfp'           # Battery chemistry type
+    battery_type: str = "lfp"  # Battery chemistry type
 
     def __post_init__(self):
         # Auto-compute replacement cost
@@ -85,7 +122,7 @@ def simulate_energy_balance(
     battery_config: Optional[BatteryConfig] = None,
     start_time: Optional[pd.Timestamp] = None,
     end_time: Optional[pd.Timestamp] = None,
-    freq: str = 'h',
+    freq: str = "h",
     temperature_series: Optional[pd.Series] = None,
     results_directory: Optional[str] = None,
     initial_fec: float = 0.0,
@@ -93,21 +130,21 @@ def simulate_energy_balance(
     initial_resistance_growth: float = 0.0,
     initial_cumulative_cycle_deg: float = 0.0,
     initial_cumulative_cal_deg: float = 0.0,
-    debug: bool = False
+    debug: bool = False,
 ) -> Tuple[pd.DataFrame, float, pd.DataFrame, float, int, pd.DataFrame]:
     """
     Simulate energy balance with battery storage and degradation.
-    
+
     This function processes PV DC production and load profiles to calculate
     grid interaction, battery state, and degradation. It properly handles
     DC-coupled and AC-coupled battery systems.
-    
+
     Energy flow for DC-coupled (hybrid inverter) systems:
     - PV -> Load: DC -> Inverter -> AC (one inverter loss)
     - PV -> Battery: DC -> Battery (charge efficiency only)
     - Battery -> Load: DC -> Inverter -> AC (discharge efficiency + inverter loss)
     - Grid -> Load: AC (no conversion)
-    
+
     Args:
         pv_dc: Series with PV DC power production (W) - before inverter
         houseload: DataFrame with electrical load (W) - AC
@@ -118,7 +155,7 @@ def simulate_energy_balance(
         temperature_series: Battery cell temperature (C), defaults to 25C
         results_directory: Directory for saving results (optional)
         debug: Enable debug output
-        
+
     Returns:
         Tuple of:
         - results_df: Detailed timestep results
@@ -130,23 +167,23 @@ def simulate_energy_balance(
     """
     if battery_config is None:
         battery_config = BatteryConfig(nominal_energy_wh=0)
-    
+
     # Determine time range
     if start_time is None:
         start_time = pv_dc.index[0]
     if end_time is None:
         end_time = pv_dc.index[-1]
-    
+
     # Calculate hours per step for energy conversion
     hours_per_step = get_hours_per_step(freq)
     steps_per_day = int(24 / hours_per_step)
-    
+
     # Create time range
     rng = pd.date_range(start=start_time, end=end_time, freq=freq)
-    
+
     # Align input data - pv_dc
     pv_dc = pv_dc.reindex(rng).fillna(0.0)
-    
+
     # Align load data
     if isinstance(houseload.index, pd.DatetimeIndex):
         houseload_series = houseload.iloc[:, 0].copy()
@@ -155,11 +192,11 @@ def simulate_energy_balance(
         # Work in UTC to avoid DST ambiguity (naive stripping creates
         # duplicates at fall-back transitions, e.g. Oct 26 01:00 in Lisbon).
         if load_idx.tz is not None:
-            load_utc = load_idx.tz_convert('UTC')
+            load_utc = load_idx.tz_convert("UTC")
         else:
-            load_utc = load_idx.tz_localize('UTC')
+            load_utc = load_idx.tz_localize("UTC")
 
-        rng_utc = rng.tz_convert('UTC') if rng.tz is not None else rng.tz_localize('UTC')
+        rng_utc = rng.tz_convert("UTC") if rng.tz is not None else rng.tz_localize("UTC")
 
         # Only remap year if load covers a single year different from simulation.
         # Use dominant year (most frequent) to handle tz-aware indices that
@@ -186,10 +223,10 @@ def simulate_energy_balance(
         temperature_series = pd.Series(25.0, index=rng)
     else:
         temperature_series = temperature_series.reindex(rng).fillna(25.0)
-    
+
     # Get degradation model parameters
     k0_frac, Ea_val, b_val, n_val = _get_degradation_params(battery_config.calendar_model)
-    
+
     # Initialize state
     battery_soh_decimal = battery_config.initial_soh / 100.0
     Battery_SOH = battery_config.initial_soh
@@ -206,7 +243,7 @@ def simulate_energy_balance(
     cumulative_cal_deg = initial_cumulative_cal_deg
     cumulative_resistance_cycle = 0.0
     cumulative_resistance_calendar = 0.0
-    
+
     degradation_tracking = []
     T_cell_day_sum = 0.0
 
@@ -245,7 +282,6 @@ def simulate_energy_balance(
 
         Import = Sell = 0.0
         charge_in = discharge_out = 0.0
-        pv_to_load_ac = 0.0  # PV power going directly to load (after inverter)
 
         if has_battery:
             # Calculate usable capacity with temperature derating
@@ -253,42 +289,39 @@ def simulate_energy_balance(
             f_cap = _cap_factor_fn(T_cell)
             Emax = usable_cap * battery_config.max_soc * f_cap
             Emin = usable_cap * battery_config.min_soc * f_cap
-            
+
             # Apply standby loss (scaled by timestep)
             standby_loss = battery_config.standby_loss_wh * hours_per_step
             Battery_Energy_Wh = max(Emin, Battery_Energy_Wh - standby_loss)
-            
+
             # Convert PV DC to AC for comparison with load
             pv_ac = pv_dc_power * battery_config.inverter_efficiency
-            
+
             # Energy flows:
             # Load is in AC terms
             # We have pv_dc_power in DC terms
             # Battery operates in DC
-            
+
             if pv_ac >= load:  # Surplus: PV covers load + potential charging
-                # PV to load (AC)
-                pv_to_load_ac = load
-                
                 # Remaining DC available for battery or export
                 # (pv_dc - pv_to_load_dc) where pv_to_load_dc = load / inverter_efficiency
-                dc_to_load = load / battery_config.inverter_efficiency if battery_config.inverter_efficiency > 0 else load
+                dc_to_load = (
+                    load / battery_config.inverter_efficiency if battery_config.inverter_efficiency > 0 else load
+                )
                 surplus_dc = pv_dc_power - dc_to_load
-                
+
                 # Charge battery with surplus DC (no inverter loss)
                 charge_room = Emax - Battery_Energy_Wh
                 charge_in = min(surplus_dc, charge_room / battery_config.charge_efficiency)
                 Battery_Energy_Wh += charge_in * battery_config.charge_efficiency
-                
+
                 # Export remainder (DC -> AC)
                 remaining_dc = surplus_dc - charge_in
                 Sell = remaining_dc * battery_config.inverter_efficiency
-                
+
             else:  # Deficit: PV insufficient, need battery or grid
-                # All PV goes to load first
-                pv_to_load_ac = pv_ac
                 deficit = load - pv_ac  # AC deficit
-                
+
                 # Try to cover deficit from battery
                 available = Battery_Energy_Wh - Emin
                 if available > 0:
@@ -307,12 +340,10 @@ def simulate_energy_balance(
             # No battery: simple DC to AC for load
             pv_ac = pv_dc_power * battery_config.inverter_efficiency
             if pv_ac >= load:
-                pv_to_load_ac = load
                 Sell = pv_ac - load
             else:
-                pv_to_load_ac = pv_ac
                 Import = load - pv_ac
-        
+
         # Compute cell temperature via lumped thermal model
         if has_battery and battery_config.thermal_resistance_kw > 0:
             # charge_in and discharge_out are in Wh; convert to W for thermal calc
@@ -332,7 +363,11 @@ def simulate_energy_balance(
         if has_battery:
             soc_normalized = (Battery_Energy_Wh - Emin) / (Emax - Emin) if (Emax - Emin) > 0 else 0.0
             soc_normalized = max(0.0, min(1.0, soc_normalized))
-            soc_absolute = Battery_Energy_Wh / (battery_config.nominal_energy_wh * battery_soh_decimal) if battery_soh_decimal > 0 else 0.0
+            soc_absolute = (
+                Battery_Energy_Wh / (battery_config.nominal_energy_wh * battery_soh_decimal)
+                if battery_soh_decimal > 0
+                else 0.0
+            )
             soc_absolute = max(0.0, min(1.0, soc_absolute))
         else:
             soc_normalized = 0.0
@@ -354,14 +389,14 @@ def simulate_energy_balance(
         _res_soc_abs[i] = soc_absolute
         _res_soh[i] = Battery_SOH if has_battery else 100.0
         _res_tcell[i] = T_cell
-        
+
         # Daily degradation update
         if soc_buf_idx >= steps_per_day:
             # Build Series from buffer using rng slice (avoids pd.date_range overhead)
             day_start_i = i - steps_per_day + 1
             soc_series = pd.Series(
                 soc_absolute_buffer[:steps_per_day].copy(),
-                index=rng[day_start_i:i + 1],
+                index=rng[day_start_i : i + 1],
             )
 
             # Cycle degradation
@@ -371,7 +406,7 @@ def simulate_energy_balance(
                 battery_config.nominal_energy_wh,
                 fec_cum=fec_cum,
                 battery_type=battery_config.battery_type,
-                debug=debug
+                debug=debug,
             )
 
             # Calendar degradation — use mean cell temperature over the day
@@ -387,7 +422,7 @@ def simulate_energy_balance(
                 cumulative_cal_seconds=cumulative_cal_seconds,
                 dt_days=1.0,
                 mean_soc_absolute=mean_soc_abs,
-                debug=debug
+                debug=debug,
             )
 
             battery_soh_decimal = soh_after_calendar
@@ -407,14 +442,11 @@ def simulate_energy_balance(
                 cycles = detect_cycles_rainflow(soc_series, time_index, min_doc_fraction=0.01)
 
                 # Compute FEC at start of day (before today's cycles were added)
-                day_fec = sum(
-                    max(0.0, min(1.0, c['doc'])) * c.get('count', 1.0) for c in cycles
-                )
+                day_fec = sum(max(0.0, min(1.0, c["doc"])) * c.get("count", 1.0) for c in cycles)
                 fec_before_day = fec_cum - day_fec
 
                 resistance_growth, dR_cycle = update_battery_resistance_cyclewise(
-                    resistance_growth, cycles, fec_before_day,
-                    debug=debug
+                    resistance_growth, cycles, fec_before_day, debug=debug
                 )
                 resistance_growth, dR_calendar = update_battery_resistance_calendar(
                     resistance_growth,
@@ -422,12 +454,14 @@ def simulate_energy_balance(
                     cumulative_cal_seconds=cumulative_cal_seconds,
                     dt_days=1.0,
                     mean_soc_absolute=mean_soc_abs,
-                    debug=debug
+                    debug=debug,
                 )
                 cumulative_resistance_cycle += dR_cycle
                 cumulative_resistance_calendar += dR_calendar
 
-                effective_rte = (battery_config.charge_efficiency * battery_config.discharge_efficiency) / (1.0 + resistance_growth)
+                effective_rte = (battery_config.charge_efficiency * battery_config.discharge_efficiency) / (
+                    1.0 + resistance_growth
+                )
 
             # Battery replacement check
             if battery_config.enable_replacement and battery_soh_decimal <= battery_config.eol_percentage:
@@ -450,43 +484,45 @@ def simulate_energy_balance(
                     print(f"\n*** BATTERY REPLACED at {step_time} ***")
 
             degradation_record = {
-                'Datetime': step_time,
-                'SOH': Battery_SOH,
-                'Cycle_Degradation': dSOH_cycle,
-                'Calendar_Degradation': dSOH_calendar,
-                'Cumulative_Cycle_Degradation': cumulative_cycle_deg,
-                'Cumulative_Calendar_Degradation': cumulative_cal_deg,
-                'Cumulative_FEC': fec_cum,
-                'Cumulative_Calendar_Seconds': cumulative_cal_seconds,
-                'Total_Degradation': 1.0 - battery_soh_decimal,
-                'Mean_SOC_Absolute': mean_soc_abs,
+                "Datetime": step_time,
+                "SOH": Battery_SOH,
+                "Cycle_Degradation": dSOH_cycle,
+                "Calendar_Degradation": dSOH_calendar,
+                "Cumulative_Cycle_Degradation": cumulative_cycle_deg,
+                "Cumulative_Calendar_Degradation": cumulative_cal_deg,
+                "Cumulative_FEC": fec_cum,
+                "Cumulative_Calendar_Seconds": cumulative_cal_seconds,
+                "Total_Degradation": 1.0 - battery_soh_decimal,
+                "Mean_SOC_Absolute": mean_soc_abs,
             }
             if battery_config.enable_resistance_fade:
-                degradation_record['Resistance_Growth'] = resistance_growth
-                degradation_record['Effective_RTE'] = effective_rte
+                degradation_record["Resistance_Growth"] = resistance_growth
+                degradation_record["Effective_RTE"] = effective_rte
             degradation_tracking.append(degradation_record)
 
             # Reset daily accumulators
             soc_buf_idx = 0
             T_cell_day_sum = 0.0
-    
+
     # Build results DataFrame from pre-allocated arrays
-    df = pd.DataFrame({
-        'Datetime': rng,
-        'PV_DC': _res_pv_dc,
-        'PV_Production': _res_pv_prod,
-        'Houseload': _res_load,
-        'PV_Delta': _res_pv_delta,
-        'Import_From_Grid': _res_import,
-        'Sell_To_Grid': _res_sell,
-        'Battery_Energy': _res_batt_e,
-        'Battery_SOC_Normalized': _res_soc_norm,
-        'Battery_SOC_Absolute': _res_soc_abs,
-        'Battery_SOH': _res_soh,
-        'T_cell': _res_tcell,
-        'Battery_Replaced': _res_replaced,
-        'Replacement_Cost': _res_repl_cost,
-    })
+    df = pd.DataFrame(
+        {
+            "Datetime": rng,
+            "PV_DC": _res_pv_dc,
+            "PV_Production": _res_pv_prod,
+            "Houseload": _res_load,
+            "PV_Delta": _res_pv_delta,
+            "Import_From_Grid": _res_import,
+            "Sell_To_Grid": _res_sell,
+            "Battery_Energy": _res_batt_e,
+            "Battery_SOC_Normalized": _res_soc_norm,
+            "Battery_SOC_Absolute": _res_soc_abs,
+            "Battery_SOH": _res_soh,
+            "T_cell": _res_tcell,
+            "Battery_Replaced": _res_replaced,
+            "Replacement_Cost": _res_repl_cost,
+        }
+    )
     deg_df = pd.DataFrame(degradation_tracking) if degradation_tracking else pd.DataFrame()
 
     # Summary calculations (use numpy sums on arrays directly)
@@ -494,22 +530,22 @@ def simulate_energy_balance(
     total_load = _res_load.sum() * hours_per_step
     total_sell = _res_sell.sum() * hours_per_step
     total_import = _res_import.sum() * hours_per_step
-    
+
     percentage_imported = (total_import / total_load * 100) if total_load > 0 else 0
-    
+
     summary = {
-        'Total PV [kWh]': total_pv / 1000.0,
-        'Total Load [kWh]': total_load / 1000.0,
-        'Sell [kWh]': total_sell / 1000.0,
-        'Import [kWh]': total_import / 1000.0,
-        'Import [%]': percentage_imported,
-        'Grid Independence [%]': 100 - percentage_imported,
-        'Final SOH [%]': Battery_SOH,
-        'N_Replacements': n_replacements,
-        'Replacement_Cost': total_replacement_cost
+        "Total PV [kWh]": total_pv / 1000.0,
+        "Total Load [kWh]": total_load / 1000.0,
+        "Sell [kWh]": total_sell / 1000.0,
+        "Import [kWh]": total_import / 1000.0,
+        "Import [%]": percentage_imported,
+        "Grid Independence [%]": 100 - percentage_imported,
+        "Final SOH [%]": Battery_SOH,
+        "N_Replacements": n_replacements,
+        "Replacement_Cost": total_replacement_cost,
     }
     summary_df = pd.DataFrame([summary])
-    
+
     return df, total_pv, summary_df, total_replacement_cost, n_replacements, deg_df
 
 
@@ -621,32 +657,36 @@ def _get_degradation_params(model: str) -> Tuple[float, float, float, float]:
         'naumann_lam_calibrated_hourly'— Naumann cycle + Lam calendar, field-calibrated, hourly res.
         'naumann_lam_modern'           — Naumann cycle + Lam calendar, projected 0.5×k₀ for 2020+ cells
     """
-    model_lower = model.lower().replace('-', '_')
+    model_lower = model.lower().replace("-", "_")
 
     # ── Naumann (pure) ────────────────────────────────────────────────────
-    if model_lower == 'naumann':
+    if model_lower == "naumann":
         k0_frac = NAUMANN_K0_PERCENT / 100.0
         return k0_frac, NAUMANN_EA_J_MOL, NAUMANN_EXPONENT_B, NAUMANN_SOC_EXPONENT_N
 
     # ── Naumann-Lam: lab-derived ──────────────────────────────────────────
-    elif model_lower in ('naumann_lam', 'lam'):
+    elif model_lower in ("naumann_lam", "lam"):
         return LAM_K0_FRAC, LAM_EA_J_MOL, LAM_EXPONENT_B, LAM_SOC_EXPONENT_N
 
     # ── Naumann-Lam: field-calibrated (default) ──────────────────────────
-    elif model_lower in ('naumann_lam_calibrated', 'lam_calibrated'):
+    elif model_lower in ("naumann_lam_calibrated", "lam_calibrated"):
         return LAM_CAL_K0_FRAC, LAM_CAL_EA_J_MOL, LAM_CAL_EXPONENT_B, LAM_CAL_SOC_EXPONENT_N
 
     # ── Naumann-Lam: field-calibrated relaxed ─────────────────────────────
-    elif model_lower in ('naumann_lam_calibrated_relaxed', 'lam_calibrated_relaxed',
-                         'lam_calibrated_1.5ea'):
-        return LAM_CAL_RELAXED_K0_FRAC, LAM_CAL_RELAXED_EA_J_MOL, LAM_CAL_RELAXED_EXPONENT_B, LAM_CAL_RELAXED_SOC_EXPONENT_N
+    elif model_lower in ("naumann_lam_calibrated_relaxed", "lam_calibrated_relaxed", "lam_calibrated_1.5ea"):
+        return (
+            LAM_CAL_RELAXED_K0_FRAC,
+            LAM_CAL_RELAXED_EA_J_MOL,
+            LAM_CAL_RELAXED_EXPONENT_B,
+            LAM_CAL_RELAXED_SOC_EXPONENT_N,
+        )
 
     # ── Naumann-Lam: field-calibrated hourly ──────────────────────────────
-    elif model_lower in ('naumann_lam_calibrated_hourly', 'lam_calibrated_hourly'):
+    elif model_lower in ("naumann_lam_calibrated_hourly", "lam_calibrated_hourly"):
         return LAM_CAL_HOURLY_K0_FRAC, LAM_CAL_HOURLY_EA_J_MOL, LAM_CAL_HOURLY_EXPONENT_B, LAM_CAL_HOURLY_SOC_EXPONENT_N
 
     # ── Naumann-Lam: modern LFP projection ───────────────────────────────
-    elif model_lower in ('naumann_lam_modern', 'modern_lfp'):
+    elif model_lower in ("naumann_lam_modern", "modern_lfp"):
         return MODERN_LFP_K0_FRAC, MODERN_LFP_EA_J_MOL, MODERN_LFP_EXPONENT_B, MODERN_LFP_SOC_EXPONENT_N
 
     else:
@@ -658,28 +698,26 @@ def _get_degradation_params(model: str) -> Tuple[float, float, float, float]:
 
 
 def detect_half_cycles_from_soc_series(
-    soc_abs_series: pd.Series,
-    time_index: pd.DatetimeIndex,
-    tiny_hysteresis: float = 1e-4
+    soc_abs_series: pd.Series, time_index: pd.DatetimeIndex, tiny_hysteresis: float = 1e-4
 ) -> Tuple[List[Dict], pd.Series]:
     """
     Detect charge/discharge half-cycles using local extrema logic.
-    
+
     Args:
         soc_abs_series: Absolute SOC series
         time_index: Datetime index
         tiny_hysteresis: Minimum change to count as extremum
-        
+
     Returns:
         Tuple of (half_cycles list, original series)
     """
     soc = soc_abs_series.values
     times = time_index
     n = len(soc)
-    
+
     if n < 2:
         return [], soc_abs_series
-    
+
     extrema_idx = [0]
     for i in range(1, n - 1):
         is_peak = soc[i] >= soc[i - 1] + tiny_hysteresis and soc[i] > soc[i + 1] + tiny_hysteresis
@@ -687,35 +725,35 @@ def detect_half_cycles_from_soc_series(
         if is_peak or is_trough:
             extrema_idx.append(i)
     extrema_idx.append(n - 1)
-    
+
     half_cycles = []
     for i in range(1, len(extrema_idx)):
         sidx = extrema_idx[i - 1]
         eidx = extrema_idx[i]
         if eidx == sidx:
             continue
-        
+
         doc = abs(soc[eidx] - soc[sidx])
-        mean_soc = float(np.mean(soc[sidx:eidx + 1]))
+        mean_soc = float(np.mean(soc[sidx : eidx + 1]))
         duration_h = (times[eidx] - times[sidx]).total_seconds() / 3600.0
         mean_c_rate = 0.0 if duration_h <= 0 else doc / duration_h
-        
-        half_cycles.append({
-            'start_idx': sidx,
-            'end_idx': eidx,
-            'doc': doc,
-            'mean_soc': mean_soc,
-            'mean_c_rate': mean_c_rate,
-            'duration_h': duration_h
-        })
-    
+
+        half_cycles.append(
+            {
+                "start_idx": sidx,
+                "end_idx": eidx,
+                "doc": doc,
+                "mean_soc": mean_soc,
+                "mean_c_rate": mean_c_rate,
+                "duration_h": duration_h,
+            }
+        )
+
     return half_cycles, soc_abs_series
 
 
 def detect_cycles_rainflow(
-    soc_abs_series: pd.Series,
-    time_index: pd.DatetimeIndex,
-    min_doc_fraction: float = 0.01
+    soc_abs_series: pd.Series, time_index: pd.DatetimeIndex, min_doc_fraction: float = 0.01
 ) -> List[Dict]:
     """
     Detect charge/discharge cycles using rainflow counting (ASTM E1049).
@@ -753,25 +791,23 @@ def detect_cycles_rainflow(
             duration_h = 0.0
         mean_c_rate = doc / duration_h if duration_h > 0 else 0.0
 
-        cycles.append({
-            'doc': doc,
-            'mean_soc': mean_soc,
-            'count': count,          # 1.0 for full, 0.5 for half
-            'mean_c_rate': mean_c_rate,
-            'start_idx': i_start,
-            'end_idx': i_end,
-        })
+        cycles.append(
+            {
+                "doc": doc,
+                "mean_soc": mean_soc,
+                "count": count,  # 1.0 for full, 0.5 for half
+                "mean_c_rate": mean_c_rate,
+                "start_idx": i_start,
+                "end_idx": i_end,
+            }
+        )
 
     return cycles
 
 
-def compute_halfcycle_energy_throughput(
-    hc: Dict,
-    soc_series_absolute: pd.Series,
-    nominal_energy_Wh: float
-) -> float:
+def compute_halfcycle_energy_throughput(hc: Dict, soc_series_absolute: pd.Series, nominal_energy_Wh: float) -> float:
     """Compute energy throughput (Wh) for a half-cycle."""
-    s = soc_series_absolute.iloc[hc['start_idx']:hc['end_idx'] + 1].values
+    s = soc_series_absolute.iloc[hc["start_idx"] : hc["end_idx"] + 1].values
     return abs(s[-1] - s[0]) * nominal_energy_Wh
 
 
@@ -791,6 +827,7 @@ def k_doc_Q(DOC_frac: float) -> float:
 # Resistance fade functions (Naumann 2020)
 # =========================================================================
 
+
 def k_c_rate_R(C_rate: float) -> float:
     """Calculate C-rate factor for resistance growth (Naumann Eq. 8 variant)."""
     kC = A_R * C_rate + B_R
@@ -804,11 +841,7 @@ def k_doc_R(DOC_frac: float) -> float:
 
 
 def update_battery_resistance_cyclewise(
-    resistance_growth: float,
-    cycles: List[Dict],
-    fec_cum: float,
-    min_DoD_fraction: float = 0.01,
-    debug: bool = False
+    resistance_growth: float, cycles: List[Dict], fec_cum: float, min_DoD_fraction: float = 0.01, debug: bool = False
 ) -> Tuple[float, float]:
     """
     Calculate cycle-induced resistance growth using Naumann's model.
@@ -830,13 +863,13 @@ def update_battery_resistance_cyclewise(
     running_fec = fec_cum
 
     for cyc in cycles:
-        DOC = max(0.0, min(1.0, cyc['doc']))
+        DOC = max(0.0, min(1.0, cyc["doc"]))
         if DOC < min_DoD_fraction:
             continue
 
-        count = cyc.get('count', 1.0)
+        count = cyc.get("count", 1.0)
         dFEC = DOC * count
-        mean_c_rate = cyc['mean_c_rate']
+        mean_c_rate = cyc["mean_c_rate"]
 
         kC = k_c_rate_R(mean_c_rate)
         kDOC = k_doc_R(DOC)
@@ -844,15 +877,14 @@ def update_battery_resistance_cyclewise(
         fec_new = running_fec + dFEC
 
         # Differential form: dR% = kC * kDOC * (FEC_new^Z_R - FEC_old^Z_R)
-        dR_percent = kC * kDOC * (fec_new ** Z_R - running_fec ** Z_R)
+        dR_percent = kC * kDOC * (fec_new**Z_R - running_fec**Z_R)
         dR_fraction = dR_percent / 100.0
 
         delta_R += dR_fraction
         running_fec = fec_new
 
         if debug:
-            print(f"[R-cycle] DOC={DOC:.4f}, C-rate={mean_c_rate:.4f}, "
-                  f"dR={dR_fraction*100:.6f}%")
+            print(f"[R-cycle] DOC={DOC:.4f}, C-rate={mean_c_rate:.4f}, dR={dR_fraction * 100:.6f}%")
 
     new_growth = resistance_growth + delta_R
     return new_growth, delta_R
@@ -864,7 +896,7 @@ def update_battery_resistance_calendar(
     cumulative_cal_seconds: float,
     dt_days: float = 1.0,
     mean_soc_absolute: float = 0.5,
-    debug: bool = False
+    debug: bool = False,
 ) -> Tuple[float, float]:
     """
     Calculate calendar-induced resistance growth using Naumann's model.
@@ -905,7 +937,7 @@ def update_battery_resistance_calendar(
     dR_fraction = k0_frac * arr_factor * delta_time * soc_stress
 
     if debug:
-        print(f"[R-calendar] T={T_cell_C:.1f}°C, dR={dR_fraction*100:.6f}%")
+        print(f"[R-calendar] T={T_cell_C:.1f}°C, dR={dR_fraction * 100:.6f}%")
 
     return resistance_growth + dR_fraction, dR_fraction
 
@@ -945,7 +977,7 @@ def resistance_to_efficiency(
     return eff_charge, eff_discharge
 
 
-def _get_cycle_params(battery_type: str = 'lfp') -> Tuple[float, float, float, float, float]:
+def _get_cycle_params(battery_type: str = "lfp") -> Tuple[float, float, float, float, float]:
     """Get cycle aging (Naumann-style) parameters for a battery chemistry.
 
     Returns:
@@ -961,8 +993,8 @@ def update_battery_soh_cyclewise(
     fec_cum: float = 0.0,
     min_DoD_fraction: float = 0.01,
     use_rainflow: bool = True,
-    battery_type: str = 'lfp',
-    debug: bool = False
+    battery_type: str = "lfp",
+    debug: bool = False,
 ) -> Tuple[float, float, float]:
     """
     Calculate cycle-induced degradation using Naumann's semi-empirical model.
@@ -999,14 +1031,14 @@ def update_battery_soh_cyclewise(
     qloss_cycle_fraction = 0.0
 
     for cyc in cycles:
-        DOC = max(0.0, min(1.0, cyc['doc']))
+        DOC = max(0.0, min(1.0, cyc["doc"]))
         if DOC < min_DoD_fraction:
             continue
 
-        mean_c_rate = cyc['mean_c_rate']
+        mean_c_rate = cyc["mean_c_rate"]
         # For rainflow cycles: count is 1.0 (full) or 0.5 (half)
         # For extrema-based: each entry is a half-cycle (count=1 implicitly)
-        count = cyc.get('count', 1.0)
+        count = cyc.get("count", 1.0)
 
         # Energy throughput for this cycle: DOC * count * nominal
         dFEC = DOC * count
@@ -1018,15 +1050,17 @@ def update_battery_soh_cyclewise(
         fec_new = fec_cum + dFEC
 
         # Differential form using cumulative FEC (Naumann Eq. 5-6)
-        dq_percent = kC * kDOC * (fec_new ** z_q - fec_cum ** z_q)
+        dq_percent = kC * kDOC * (fec_new**z_q - fec_cum**z_q)
         dq_fraction = dq_percent / 100.0
 
         qloss_cycle_fraction += dq_fraction
         fec_cum = fec_new
 
         if debug:
-            print(f"[cycle] DOC={DOC:.4f}, C-rate={mean_c_rate:.4f}, count={count}, "
-                  f"dFEC={dFEC:.6e}, dq={dq_fraction*100:.6f}%")
+            print(
+                f"[cycle] DOC={DOC:.4f}, C-rate={mean_c_rate:.4f}, count={count}, "
+                f"dFEC={dFEC:.6e}, dq={dq_fraction * 100:.6f}%"
+            )
 
     soh_after = max(0.0, soh_start_fraction - qloss_cycle_fraction)
     return soh_after, qloss_cycle_fraction, fec_cum
@@ -1042,13 +1076,13 @@ def update_battery_soh_calendar(
     cumulative_cal_seconds: float = 0.0,
     dt_days: float = 1.0,
     mean_soc_absolute: float = 0.5,
-    debug: bool = False
+    debug: bool = False,
 ) -> Tuple[float, float, float]:
     """
     Generalized calendar aging using power law physics (Naumann / Lam 2025).
-    
+
     dSOH = k0_frac * Arr * ((t+dt)^b - t^b) * SOC_stress
-    
+
     Args:
         soh_start_fraction: Starting SOH as fraction
         k0_frac: Rate constant (fraction per second^b)
@@ -1060,62 +1094,59 @@ def update_battery_soh_calendar(
         dt_days: Time step in days
         mean_soc_absolute: Mean SOC during period
         debug: Enable debug output
-        
+
     Returns:
         Tuple of (soh_after, dsoh_fraction, new_cumulative_seconds)
     """
     dt_seconds = dt_days * 86400.0
     if dt_seconds <= 0:
         return soh_start_fraction, 0.0, cumulative_cal_seconds
-    
+
     # Temperature factor (Arrhenius) relative to 25°C
     T_K = T_cell_C + 273.15
     arr_factor = math.exp(-Ea / R_GAS * (1.0 / T_K - 1.0 / T_REF_K))
-    
+
     # Power law time calculation
     t_old = cumulative_cal_seconds
     t_new = cumulative_cal_seconds + dt_seconds
-    
+
     term_old = math.pow(t_old, cal_b) if t_old > 0 else 0.0
     term_new = math.pow(t_new, cal_b)
     delta_time_factor = term_new - term_old
-    
+
     # SOC stress factor
     soc_stress = max(0.0, mean_soc_absolute) ** n
-    
+
     # Calculate degradation fraction
     d_soh_fraction = k0_frac * arr_factor * delta_time_factor * soc_stress
-    
+
     soh_after = max(0.0, soh_start_fraction - d_soh_fraction)
-    
+
     if debug:
-        print(f"[calendar] T={T_cell_C}°C, b={cal_b:.2f}, Δt^b={delta_time_factor:.2f}, "
-              f"d_soh={d_soh_fraction*100:.6f}%")
-    
+        print(
+            f"[calendar] T={T_cell_C}°C, b={cal_b:.2f}, Δt^b={delta_time_factor:.2f}, d_soh={d_soh_fraction * 100:.6f}%"
+        )
+
     return soh_after, d_soh_fraction, t_new
 
 
 def update_battery_soc(
-    battery_energy_wh: float,
-    nominal_energy_wh: float,
-    soh_fraction: float,
-    max_soc: float,
-    min_soc: float
+    battery_energy_wh: float, nominal_energy_wh: float, soh_fraction: float, max_soc: float, min_soc: float
 ) -> Tuple[float, float]:
     """
     Calculate normalized and absolute SOC.
-    
+
     Returns:
         Tuple of (soc_normalized, soc_absolute)
     """
     usable_cap = nominal_energy_wh * soh_fraction
     Emax = usable_cap * max_soc
     Emin = usable_cap * min_soc
-    
+
     soc_normalized = (battery_energy_wh - Emin) / (Emax - Emin) if (Emax - Emin) > 0 else 0
     soc_normalized = np.clip(soc_normalized, 0, 1)
-    
+
     soc_absolute = battery_energy_wh / usable_cap if usable_cap > 0 else 0
     soc_absolute = np.clip(soc_absolute, 0, 1)
-    
+
     return soc_normalized, soc_absolute

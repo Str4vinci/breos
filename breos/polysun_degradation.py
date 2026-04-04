@@ -21,20 +21,20 @@ References:
 """
 
 from dataclasses import dataclass, field
-from typing import List, Dict, Tuple, Optional
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
 
 from breos.constants import (
-    WOEHLER_LFP_TYPICAL_A,
-    WOEHLER_LFP_TYPICAL_B,
+    POLYSUN_CALENDAR_LIFE_LEAD,
+    POLYSUN_CALENDAR_LIFE_LION,
     WOEHLER_LFP_CONSERVATIVE_A,
     WOEHLER_LFP_CONSERVATIVE_B,
     WOEHLER_LFP_OPTIMISTIC_A,
     WOEHLER_LFP_OPTIMISTIC_B,
-    POLYSUN_CALENDAR_LIFE_LION,
-    POLYSUN_CALENDAR_LIFE_LEAD,
+    WOEHLER_LFP_TYPICAL_A,
+    WOEHLER_LFP_TYPICAL_B,
 )
 
 
@@ -52,6 +52,7 @@ class PolysunDegradationConfig:
         min_doc: Minimum DOD to count as a cycle (fraction, 0-1).
         deep_cycle_threshold: DOD above which a cycle is classified as "deep".
     """
+
     woehler_a: float = WOEHLER_LFP_TYPICAL_A
     woehler_b: float = WOEHLER_LFP_TYPICAL_B
     calendar_life_years: float = POLYSUN_CALENDAR_LIFE_LION
@@ -72,7 +73,7 @@ def woehler_cycles_to_failure(dod: float, a: float, b: float) -> float:
         Number of cycles to failure at the given DOD.
     """
     if dod <= 0:
-        return float('inf')
+        return float("inf")
     return a * dod ** (-b)
 
 
@@ -118,11 +119,13 @@ def compute_dod_histogram(
     extrema_positions = nonzero_indices[1:][sign_changes != 0]
 
     # Include start and end
-    extrema_values = np.concatenate([
-        [soc_series[0]],
-        soc_series[extrema_positions],
-        [soc_series[-1]],
-    ])
+    extrema_values = np.concatenate(
+        [
+            [soc_series[0]],
+            soc_series[extrema_positions],
+            [soc_series[-1]],
+        ]
+    )
 
     # Compute half-cycle DODs
     half_cycle_dods = np.abs(np.diff(extrema_values))
@@ -198,7 +201,7 @@ def predict_polysun_lifetime(
     if annual_damage > 0:
         cycle_life = 1.0 / annual_damage
     else:
-        cycle_life = float('inf')
+        cycle_life = float("inf")
     total_life = min(calendar_life_years, cycle_life)
     return total_life, cycle_life, calendar_life_years
 
@@ -232,14 +235,10 @@ def simulate_polysun_degradation(
     )
 
     # Annual Miner's damage
-    annual_damage = compute_miner_damage(
-        cycle_counts, bin_centers, config.woehler_a, config.woehler_b
-    )
+    annual_damage = compute_miner_damage(cycle_counts, bin_centers, config.woehler_a, config.woehler_b)
 
     # Predicted lifetime
-    total_life, cycle_life, calendar_life = predict_polysun_lifetime(
-        annual_damage, config.calendar_life_years
-    )
+    total_life, cycle_life, calendar_life = predict_polysun_lifetime(annual_damage, config.calendar_life_years)
 
     rows = []
     cumulative_damage = 0.0
@@ -250,7 +249,7 @@ def simulate_polysun_degradation(
         replaced = False
 
         # Calendar check: has the battery exceeded calendar life since last replacement?
-        years_since_replacement = year - n_replacements * int(total_life) if total_life < float('inf') else year
+        years_since_replacement = year - n_replacements * int(total_life) if total_life < float("inf") else year
 
         # Check both cycle and calendar end-of-life
         if cumulative_damage >= 1.0:
@@ -269,18 +268,20 @@ def simulate_polysun_degradation(
         # SOH = 1 - (damage * 0.20) maps D=1 to SOH=80% (typical EOL)
         soh_equivalent = max(0, 1.0 - cumulative_damage * 0.20) * 100.0
 
-        rows.append({
-            'Year': year,
-            'Damage_Annual': annual_damage,
-            'Damage_Cumulative': cumulative_damage,
-            'Cycle_Life_Years': cycle_life,
-            'Calendar_Life_Years': calendar_life,
-            'Total_Life_Years': total_life,
-            'Replacement': replaced,
-            'N_Replacements': n_replacements,
-            'SOH_Equivalent': soh_equivalent,
-            'Total_Cycles': total_cycles,
-            'Deep_Cycles': deep_cycles,
-        })
+        rows.append(
+            {
+                "Year": year,
+                "Damage_Annual": annual_damage,
+                "Damage_Cumulative": cumulative_damage,
+                "Cycle_Life_Years": cycle_life,
+                "Calendar_Life_Years": calendar_life,
+                "Total_Life_Years": total_life,
+                "Replacement": replaced,
+                "N_Replacements": n_replacements,
+                "SOH_Equivalent": soh_equivalent,
+                "Total_Cycles": total_cycles,
+                "Deep_Cycles": deep_cycles,
+            }
+        )
 
     return pd.DataFrame(rows)

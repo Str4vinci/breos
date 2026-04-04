@@ -7,10 +7,10 @@ import pytest
 import breos
 from breos.app import App
 
-
 # ---------------------------------------------------------------------------
 # Config validation
 # ---------------------------------------------------------------------------
+
 
 class TestAppValidation:
     def test_missing_location(self):
@@ -54,11 +54,13 @@ class TestAppValidation:
             App({"location": {"longitude": -8.6}, "n_modules": 10, "annual_consumption_kwh": 4000})
 
     def test_custom_location_valid(self):
-        app = App({
-            "location": {"latitude": 41.15, "longitude": -8.63, "timezone": "Europe/Lisbon"},
-            "n_modules": 6,
-            "annual_consumption_kwh": 3000,
-        })
+        app = App(
+            {
+                "location": {"latitude": 41.15, "longitude": -8.63, "timezone": "Europe/Lisbon"},
+                "n_modules": 6,
+                "annual_consumption_kwh": 3000,
+            }
+        )
         assert app._lat == 41.15
 
     def test_result_before_simulate(self):
@@ -71,17 +73,20 @@ class TestAppValidation:
 # Simulation (with monkeypatched weather)
 # ---------------------------------------------------------------------------
 
+
 class TestAppSimulateNoBattery:
     @pytest.fixture(autouse=True)
     def _setup(self, _patch_weather):
-        self.app = App({
-            "location": "porto",
-            "n_modules": 6,
-            "annual_consumption_kwh": 3000,
-            "cost_preset": "residential_pt",
-            "emissions_country": "PT",
-            "projection_years": 5,
-        })
+        self.app = App(
+            {
+                "location": "porto",
+                "n_modules": 6,
+                "annual_consumption_kwh": 3000,
+                "cost_preset": "residential_pt",
+                "emissions_country": "PT",
+                "projection_years": 5,
+            }
+        )
         self.app.simulate()
         self.result = self.app.result()
 
@@ -97,12 +102,22 @@ class TestAppSimulateNoBattery:
 
     def test_expected_keys_present(self):
         expected = {
-            "n_modules", "pv_kwp", "battery_kwh",
-            "pv_production_kwh", "consumption_kwh", "self_consumption_kwh",
-            "grid_import_kwh", "grid_export_kwh",
-            "grid_independence_pct", "self_consumption_pct",
-            "total_investment_eur", "payback_year", "npv_savings_eur", "lcoe_eur_kwh",
-            "co2_avoided_year1_kg", "co2_avoided_total_kg",
+            "n_modules",
+            "pv_kwp",
+            "battery_kwh",
+            "pv_production_kwh",
+            "consumption_kwh",
+            "self_consumption_kwh",
+            "grid_import_kwh",
+            "grid_export_kwh",
+            "grid_independence_pct",
+            "self_consumption_pct",
+            "total_investment_eur",
+            "payback_year",
+            "npv_savings_eur",
+            "lcoe_eur_kwh",
+            "co2_avoided_year1_kg",
+            "co2_avoided_total_kg",
             "yearly",
         }
         assert expected.issubset(self.result.keys())
@@ -136,15 +151,17 @@ class TestAppSimulateNoBattery:
 class TestAppSimulateWithBattery:
     @pytest.fixture(autouse=True)
     def _setup(self, _patch_weather):
-        self.app = App({
-            "location": "porto",
-            "n_modules": 6,
-            "annual_consumption_kwh": 3000,
-            "battery_kwh": 5.0,
-            "cost_preset": "residential_pt",
-            "emissions_country": "PT",
-            "projection_years": 5,
-        })
+        self.app = App(
+            {
+                "location": "porto",
+                "n_modules": 6,
+                "annual_consumption_kwh": 3000,
+                "battery_kwh": 5.0,
+                "cost_preset": "residential_pt",
+                "emissions_country": "PT",
+                "projection_years": 5,
+            }
+        )
         self.app.simulate()
         self.result = self.app.result()
 
@@ -159,13 +176,15 @@ class TestAppSimulateWithBattery:
 
     def test_battery_improves_grid_independence(self, _patch_weather):
         # Same system without battery should have lower grid independence
-        app_no_batt = App({
-            "location": "porto",
-            "n_modules": 6,
-            "annual_consumption_kwh": 3000,
-            "cost_preset": "residential_pt",
-            "projection_years": 5,
-        })
+        app_no_batt = App(
+            {
+                "location": "porto",
+                "n_modules": 6,
+                "annual_consumption_kwh": 3000,
+                "cost_preset": "residential_pt",
+                "projection_years": 5,
+            }
+        )
         app_no_batt.simulate()
         gi_no_batt = app_no_batt.result()["grid_independence_pct"]
         gi_with_batt = self.result["grid_independence_pct"]
