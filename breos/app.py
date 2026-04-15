@@ -27,7 +27,6 @@ from pvlib.location import Location
 from breos.battery import BatteryConfig, apply_indoor_temperature_model, simulate_energy_balance
 from breos.economics import CostParams, calculate_costs, calculate_lcoe, cost_analysis_projection, find_payback_year
 from breos.emissions import EmissionsParams, calculate_co2_savings
-from breos.inverter import InverterConfig
 from breos.load_profiles import load_profile
 from breos.pv_modules import MODULES, get_module
 from breos.solar import calculate_pv_production_dc, default_azimuth, estimate_optimal_tilt
@@ -469,10 +468,13 @@ class App:
             params["inverter_cost_per_kw_nobatt"] = preset.get("inverter_cost_per_kw_simple", 48.37)
             params["installation_cost_per_module"] = preset.get("installation_cost_per_module", 350.0)
             params["battery_installation_cost"] = preset.get("installation_cost_battery", 350.0)
-            params["maintenance_cost_per_panel"] = preset.get("maintenance_cost", 50.0)
-            params["other_cost_per_module"] = preset.get("other_costs", 50.0)
+            params["maintenance_cost_per_panel"] = preset.get("maintenance_cost_per_panel", 0.0)
+            params["maintenance_cost_fixed"] = preset.get("maintenance_cost", 50.0)
+            params["other_cost_per_module"] = preset.get("other_cost_per_module", 0.0)
+            params["other_cost_fixed"] = preset.get("other_costs", 50.0)
 
         # Financial defaults
+        params["dc_ac_ratio"] = cfg["inverter_loading_ratio"]
         params.setdefault("inflation_rate", cfg["inflation_rate"])
         params.setdefault("discount_rate", cfg["discount_rate"])
         params["pv_degradation_rate"] = cfg["pv_degradation_rate"]
@@ -484,35 +486,13 @@ class App:
         cfg = self._cfg
         n_modules = cfg["n_modules"]
         battery_kwh = cfg["battery_kwh"]
-        has_battery = battery_kwh > 0
 
-        inv_config = InverterConfig(
-            is_hybrid=has_battery,
-            dc_ac_ratio=cfg["inverter_loading_ratio"],
-            inverter_efficiency=cfg["inverter_efficiency"],
-        )
-        total_power_w = self._pv_params.Mpp * n_modules
-
-        costs = calculate_costs(
+        return calculate_costs(
             n_modules=n_modules,
             module_power_w=self._pv_params.Mpp,
             battery_capacity_wh=battery_kwh * 1000,
             cost_params=self._cost_params,
         )
-
-        # Override inverter cost with InverterConfig for correct loading ratio
-        costs["inverter_cost"] = inv_config.get_cost(total_power_w)
-
-        # Recalculate total with correct inverter cost
-        costs["total_initial_cost"] = (
-            costs["pv_cost"]
-            + costs["inverter_cost"]
-            + costs["battery_cost"]
-            + costs["installation_cost"]
-            + costs["other_costs"]
-        )
-
-        return costs
 
     @staticmethod
     def _yearly_to_dicts(yearly_df: pd.DataFrame) -> list:

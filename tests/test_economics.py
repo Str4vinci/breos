@@ -17,7 +17,7 @@ class TestCalculateCosts:
         assert costs["pv_cost"] == pytest.approx(10 * 550 * 0.125)
         assert costs["total_initial_cost"] > 0
         # No battery → simple inverter
-        assert costs["inverter_cost"] == pytest.approx(48.37 * 10 * 550 / 1000, rel=0.01)
+        assert costs["inverter_cost"] == pytest.approx(48.37 * (10 * 550 / 1000) / 1.25, rel=0.01)
 
     def test_with_battery(self, cost_params):
         costs = calculate_costs(
@@ -28,7 +28,7 @@ class TestCalculateCosts:
         )
         assert costs["battery_cost"] == pytest.approx(5 * 711.0)
         # With battery → hybrid inverter (more expensive)
-        assert costs["inverter_cost"] == pytest.approx(102.58 * 10 * 550 / 1000, rel=0.01)
+        assert costs["inverter_cost"] == pytest.approx(102.58 * (10 * 550 / 1000) / 1.25, rel=0.01)
         assert costs["total_initial_cost"] > costs["pv_cost"] + costs["battery_cost"]
 
     def test_cost_breakdown_sums_to_total(self, cost_params):

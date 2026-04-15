@@ -28,8 +28,8 @@ class TestCO2Savings:
 
     def test_portugal_intensity(self, emissions_params):
         result = calculate_co2_savings(1000.0, 500.0, emissions_params)
-        # 1000 * 110.52 / 1000 = 110.52 kg
-        assert result["CO2_Avoided_Total_kg"] == pytest.approx(110.52)
+        # 1000 * 127.91 / 1000 = 127.91 kg
+        assert result["CO2_Avoided_Total_kg"] == pytest.approx(127.91)
 
 
 class TestCO2Projection:

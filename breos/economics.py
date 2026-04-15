@@ -8,7 +8,7 @@ This module handles:
 - Payback period analysis
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Dict, Optional
 
 import numpy as np
@@ -32,15 +32,18 @@ class CostParams:
     # Equipment costs
     module_cost_per_w: float = 0.125  # €/W
     battery_cost_per_kwh: float = BATTERY_REPLACEMENT_COST_PER_KWH  # €/kWh
+    dc_ac_ratio: float = 1.25  # DC/AC sizing ratio for inverter CAPEX
     inverter_cost_per_kw: float = 102.58  # €/kW (with battery)
     inverter_cost_per_kw_nobatt: float = 48.37  # €/kW (without battery)
     installation_cost_per_module: float = 350.0  # €/module
     battery_installation_cost: float = 350.0  # € fixed
     other_cost_per_module: float = 50.0  # € cables, etc.
+    other_cost_fixed: float = 0.0  # € fixed misc. costs
     land_cost: float = 0.0
 
     # Operations
     maintenance_cost_per_panel: float = 10.0  # €/panel/year
+    maintenance_cost_fixed: float = 0.0  # € fixed /year
     operation_cost: float = 0.0  # € additional /year
 
     # Thermal system costs (TES + Heat Pump)
@@ -83,6 +86,7 @@ def calculate_costs(
         cost_params = CostParams()
 
     total_power_kw = n_modules * module_power_w / 1000
+    inverter_power_kw = total_power_kw / cost_params.dc_ac_ratio if cost_params.dc_ac_ratio > 0 else total_power_kw
     has_battery = battery_capacity_wh > 1
 
     # PV module costs
@@ -96,13 +100,13 @@ def calculate_costs(
     # Battery costs
     if has_battery:
         battery_cost = (battery_capacity_wh / 1000) * cost_params.battery_cost_per_kwh
-        inverter_cost = cost_params.inverter_cost_per_kw * total_power_kw
+        inverter_cost = cost_params.inverter_cost_per_kw * inverter_power_kw
     else:
         battery_cost = 0.0
-        inverter_cost = cost_params.inverter_cost_per_kw_nobatt * total_power_kw
+        inverter_cost = cost_params.inverter_cost_per_kw_nobatt * inverter_power_kw
 
     # Other costs
-    other_costs = cost_params.other_cost_per_module * n_modules
+    other_costs = (cost_params.other_cost_per_module * n_modules) + cost_params.other_cost_fixed
 
     # TES + Heat Pump costs
     tes_cost = tes_capacity_kwh_th * cost_params.tes_cost_per_kwh_th
@@ -112,8 +116,9 @@ def calculate_costs(
     # Maintenance
     annual_operation_cost = (
         cost_params.maintenance_cost_per_panel * n_modules
+        + cost_params.maintenance_cost_fixed
         + cost_params.operation_cost
-        + cost_params.hp_maintenance_annual
+        + (cost_params.hp_maintenance_annual if heat_pump_kw_th > 0 else 0.0)
     )
 
     # Total CAPEX

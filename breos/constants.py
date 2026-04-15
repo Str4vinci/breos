@@ -44,17 +44,34 @@ LAM_EA_J_MOL = 38500.0  # Activation Energy (0.4 eV converted to J/mol)
 LAM_EXPONENT_B = 0.75  # Time exponent (Based on Lam Fig 5A LFP cluster)
 LAM_SOC_EXPONENT_N = 0.75  # Assume same SOC exponent as Naumann/general LFP
 
-# === Lam Calibrated Parameters (Field-calibrated for residential LFP systems) ===
-# Calibrated against 5 LFP home storage systems from Zenodo dataset (12091223)
-# using differential evolution on 2015-2023 field data with capacity test ground truth.
-#
-# 15-min resolution (default): Mean CV RMSE = 5.3pp, train RMSE = 4.3pp,
-# overfitting gap 1.07pp (37% narrower than hourly). System 20 RMSE 9.8pp→6.4pp.
-# LOO cross-validation (5 folds), LFP-only filter, --resolution 15min.
-LAM_CAL_K0_FRAC = 5.7841386975994235e-08  # ~1x lab — field rate closer to lab at 15-min
-LAM_CAL_EA_J_MOL = 3748.510470404377  # 0.10x lab — low temperature sensitivity in residential
-LAM_CAL_EXPONENT_B = 0.788762656479986  # 1.05x lab — slightly super-sqrt time dependence
-LAM_CAL_SOC_EXPONENT_N = 0.10230418425202481  # 0.14x lab — SOC stress much weaker in field cycling
+# === Lam + Naumann field-calibrated parameters (current default, 15-min) ===
+# Re-run on 2026-04-12 against the effective 5-system Zenodo LFP field set
+# (systems 14, 15, 17, 20, 21) using the finalized validation pipeline.
+# Mean RMSE = 4.40pp on the full calibration fit; LOO mean CV RMSE = 6.0pp.
+LAM_NAUMANN_FIELD_CALIBRATED_K0_FRAC = 8.019530e-08
+LAM_NAUMANN_FIELD_CALIBRATED_EA_J_MOL = 11876.09
+LAM_NAUMANN_FIELD_CALIBRATED_EXPONENT_B = 0.7701374
+LAM_NAUMANN_FIELD_CALIBRATED_SOC_EXPONENT_N = 0.1010299
+
+# Backward-compatible aliases for the primary field-calibrated model.
+LAM_CAL_K0_FRAC = LAM_NAUMANN_FIELD_CALIBRATED_K0_FRAC
+LAM_CAL_EA_J_MOL = LAM_NAUMANN_FIELD_CALIBRATED_EA_J_MOL
+LAM_CAL_EXPONENT_B = LAM_NAUMANN_FIELD_CALIBRATED_EXPONENT_B
+LAM_CAL_SOC_EXPONENT_N = LAM_NAUMANN_FIELD_CALIBRATED_SOC_EXPONENT_N
+
+# === Lam + Naumann field-calibrated parameters (previous 15-min fit) ===
+# Retained for reproducibility under the model name
+# `lam_naumann_field_calibrated_old`.
+LAM_NAUMANN_FIELD_CALIBRATED_OLD_K0_FRAC = 5.7841386975994235e-08
+LAM_NAUMANN_FIELD_CALIBRATED_OLD_EA_J_MOL = 3748.510470404377
+LAM_NAUMANN_FIELD_CALIBRATED_OLD_EXPONENT_B = 0.788762656479986
+LAM_NAUMANN_FIELD_CALIBRATED_OLD_SOC_EXPONENT_N = 0.10230418425202481
+
+# Optional aliases for code that wants to reference the old fit directly.
+LAM_CAL_OLD_K0_FRAC = LAM_NAUMANN_FIELD_CALIBRATED_OLD_K0_FRAC
+LAM_CAL_OLD_EA_J_MOL = LAM_NAUMANN_FIELD_CALIBRATED_OLD_EA_J_MOL
+LAM_CAL_OLD_EXPONENT_B = LAM_NAUMANN_FIELD_CALIBRATED_OLD_EXPONENT_B
+LAM_CAL_OLD_SOC_EXPONENT_N = LAM_NAUMANN_FIELD_CALIBRATED_OLD_SOC_EXPONENT_N
 
 # === Lam Calibrated Parameters — Hourly resolution (legacy) ===
 # Same calibration as above but fitted at hourly (1h) resolution.
@@ -76,7 +93,7 @@ LAM_CAL_RELAXED_EXPONENT_B = LAM_CAL_EXPONENT_B  # Same time exponent
 LAM_CAL_RELAXED_SOC_EXPONENT_N = LAM_CAL_SOC_EXPONENT_N  # Same SOC sensitivity
 
 # === Modern LFP Parameters (projected for 2020+ cells) ===
-# The lam_calibrated model was fitted to 2015-era residential LFP systems.
+# The lam_naumann_field_calibrated model was fitted to 2015-era residential LFP systems.
 # Modern cells (CATL/BYD, 2020+) use improved electrolyte formulations and
 # BMS designs that are expected to reduce calendar aging. No field calibration
 # data is available for these newer cells yet.

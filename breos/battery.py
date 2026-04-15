@@ -38,6 +38,10 @@ from breos.constants import (
     LAM_CAL_HOURLY_K0_FRAC,
     LAM_CAL_HOURLY_SOC_EXPONENT_N,
     LAM_CAL_K0_FRAC,
+    LAM_CAL_OLD_EA_J_MOL,
+    LAM_CAL_OLD_EXPONENT_B,
+    LAM_CAL_OLD_K0_FRAC,
+    LAM_CAL_OLD_SOC_EXPONENT_N,
     LAM_CAL_RELAXED_EA_J_MOL,
     LAM_CAL_RELAXED_EXPONENT_B,
     LAM_CAL_RELAXED_K0_FRAC,
@@ -94,7 +98,7 @@ class BatteryConfig:
     enable_replacement: bool = True
     replacement_cost: Optional[float] = None  # Auto-computed from cost per kWh if not set
     calendar_model: str = (
-        "naumann_lam_calibrated"  # 'naumann_lam_calibrated', 'naumann_lam', 'naumann_lam_modern', 'naumann'
+        "naumann_lam_calibrated"  # Current field-calibrated fit; alias of 'lam_naumann_field_calibrated'
     )
     # Resistance fade tracking
     enable_resistance_fade: bool = False  # Enable Naumann resistance growth model
@@ -651,11 +655,14 @@ def _get_degradation_params(model: str) -> Tuple[float, float, float, float]:
     Lam et al. (2025) calendar params with different calibrations.
 
     Models:
-        'naumann'                      — Naumann 2020 calendar + cycle (NMC/LFP lab)
-        'naumann_lam'                  — Naumann cycle + Lam 2025 lab-derived calendar
-        'naumann_lam_calibrated'       — Naumann cycle + Lam calendar, field-calibrated (default)
-        'naumann_lam_calibrated_hourly'— Naumann cycle + Lam calendar, field-calibrated, hourly res.
-        'naumann_lam_modern'           — Naumann cycle + Lam calendar, projected 0.5×k₀ for 2020+ cells
+        'naumann'                        — Naumann 2020 calendar + cycle (NMC/LFP lab)
+        'naumann_lam'                    — Naumann cycle + Lam 2025 lab-derived calendar
+        'lam_naumann_field_calibrated'   — Current field-calibrated fit (canonical name)
+        'naumann_lam_calibrated'         — Backward-compatible alias for the current fit
+        'lam_naumann_field_calibrated_old' / 'naumann_lam_calibrated_old'
+                                         — Previous 15-min field calibration
+        'naumann_lam_calibrated_hourly'  — Hourly field calibration
+        'naumann_lam_modern'             — Projected 0.5×k₀ for 2020+ cells
     """
     model_lower = model.lower().replace("-", "_")
 
@@ -669,8 +676,12 @@ def _get_degradation_params(model: str) -> Tuple[float, float, float, float]:
         return LAM_K0_FRAC, LAM_EA_J_MOL, LAM_EXPONENT_B, LAM_SOC_EXPONENT_N
 
     # ── Naumann-Lam: field-calibrated (default) ──────────────────────────
-    elif model_lower in ("naumann_lam_calibrated", "lam_calibrated"):
+    elif model_lower in ("lam_naumann_field_calibrated", "naumann_lam_calibrated", "lam_calibrated"):
         return LAM_CAL_K0_FRAC, LAM_CAL_EA_J_MOL, LAM_CAL_EXPONENT_B, LAM_CAL_SOC_EXPONENT_N
+
+    # ── Naumann-Lam: previous field calibration ───────────────────────────
+    elif model_lower in ("lam_naumann_field_calibrated_old", "naumann_lam_calibrated_old", "lam_calibrated_old"):
+        return LAM_CAL_OLD_K0_FRAC, LAM_CAL_OLD_EA_J_MOL, LAM_CAL_OLD_EXPONENT_B, LAM_CAL_OLD_SOC_EXPONENT_N
 
     # ── Naumann-Lam: field-calibrated relaxed ─────────────────────────────
     elif model_lower in ("naumann_lam_calibrated_relaxed", "lam_calibrated_relaxed", "lam_calibrated_1.5ea"):
@@ -691,9 +702,11 @@ def _get_degradation_params(model: str) -> Tuple[float, float, float, float]:
 
     else:
         raise ValueError(
-            f"Unknown calendar model: {model}. Use 'naumann_lam_calibrated', 'naumann_lam', "
+            f"Unknown calendar model: {model}. Use 'lam_naumann_field_calibrated', "
+            f"'lam_naumann_field_calibrated_old', 'naumann_lam', "
             f"'naumann_lam_calibrated_hourly', 'naumann_lam_modern', or 'naumann'. "
-            f"Legacy aliases ('lam_calibrated', 'lam', 'modern_lfp') are also accepted."
+            f"Legacy aliases ('naumann_lam_calibrated', 'lam_calibrated', 'lam', 'modern_lfp') "
+            f"are also accepted."
         )
 
 

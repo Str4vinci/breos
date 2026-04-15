@@ -145,10 +145,11 @@ def temperature_series(synthetic_weather):
 @pytest.fixture
 def cost_params():
     return CostParams(
-        electricity_cost=0.2577,
+        electricity_cost=0.2582,
         electricity_sold_cost=0.04,
         module_cost_per_w=0.125,
         battery_cost_per_kwh=711.0,
+        dc_ac_ratio=1.25,
         inverter_cost_per_kw=102.58,
         inverter_cost_per_kw_nobatt=48.37,
         installation_cost_per_module=350.0,
@@ -169,7 +170,8 @@ def cost_params():
 @pytest.fixture
 def emissions_params():
     return EmissionsParams(
-        grid_carbon_intensity_gco2_kwh=110.52,
+        grid_carbon_intensity_gco2_kwh=127.91,
+        year=2025,
         country="Portugal",
     )
 
