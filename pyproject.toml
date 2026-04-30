@@ -1,0 +1,66 @@
+[project]
+name = "breos"
+version = "0.1.0"
+description = "Building Renewable Energy Optimization Software - A Python library for PV and battery energy system simulations"
+readme = "README.md"
+license = "BSD-3-Clause"
+requires-python = ">=3.13"
+authors = [
+    {name = "Leonardo Rodrigues", email = "lrodrigues@fe.up.pt"},
+]
+keywords = ["photovoltaic", "battery", "energy", "simulation", "optimization", "solar", "degradation"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: BSD License",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering",
+]
+dependencies = [
+    "geopy>=2.4.1",
+    "joblib>=1.5.3",
+    "matplotlib>=3.10.8",
+    "numba>=0.63.1",
+    "openpyxl>=3.1.0",
+    "openmeteo-requests>=1.7.4",
+    "pandas>=2.3.3",
+    "pyarrow>=19.0.0",
+    "nrel-pysam>=7.1.0",
+    "pvlib==0.14.0",
+    "pymoo>=0.6.1.6",
+    "rainflow>=3.2.0",
+    "requests-cache>=1.2.1",
+    "timezonefinder>=8.2.1",
+]
+
+[project.urls]
+Homepage = "https://github.com/Str4vinci/BREOS"
+Repository = "https://github.com/Str4vinci/BREOS"
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "ruff>=0.15"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I"]
+ignore = [
+    "E501",   # line too long — handled by formatter
+    "F401",   # unused import — __init__.py re-exports intentionally
+    "E741",   # ambiguous variable name — common in scientific code (l, I, O)
+]
+
+[tool.ruff.lint.per-file-ignores]
+"breos/__init__.py" = ["F401", "F811"]   # re-exports and shadowed imports
+"tests/*" = ["F811"]                      # pytest fixtures
+"breos/plotting.py" = ["F841", "F811", "F821", "E712"]  # large viz module with WIP code
+"tools/*" = ["E402"]                      # CLI scripts insert PROJECT_ROOT before imports
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
