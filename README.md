@@ -1,6 +1,6 @@
 # BREOS - Building Renewable Energy Optimization Software
 
-[![Tests](https://github.com/Str4vinci/BREOS/actions/workflows/tests.yml/badge.svg)](https://github.com/Str4vinci/BREOS/actions/workflows/tests.yml)
+[![Tests](https://github.com/Str4vinci/breos/actions/workflows/tests.yml/badge.svg)](https://github.com/Str4vinci/breos/actions/workflows/tests.yml)
 [![License: BSD-3](https://img.shields.io/badge/License-BSD_3--Clause-blue.svg)](LICENSE)
 [![Python 3.13+](https://img.shields.io/badge/python-3.13+-blue.svg)](https://www.python.org/downloads/)
 
@@ -26,8 +26,8 @@ pip install breos
 Or from source:
 
 ```bash
-git clone https://github.com/Str4vinci/BREOS.git
-cd BREOS
+git clone https://github.com/Str4vinci/breos.git
+cd breos
 pip install -e .
 ```
 
@@ -145,13 +145,19 @@ If you use BREOS in your research, please cite:
   author = {Rodrigues, Leonardo},
   title = {BREOS: Building Renewable Energy Optimization Software},
   year = {2026},
-  url = {https://github.com/Str4vinci/BREOS}
+  url = {https://github.com/Str4vinci/breos}
 }
 ```
 
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+
+BREOS uses `develop` as the default development branch. Feature work should be
+done on separate branches and opened as pull requests into `develop`.
+
+The `main` branch tracks stable releases only. Use `main` or the GitHub Releases
+page when you want the latest stable version.
 
 ## Contact
 
