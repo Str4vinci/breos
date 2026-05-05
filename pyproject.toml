@@ -34,8 +34,8 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/Str4vinci/BREOS"
-Repository = "https://github.com/Str4vinci/BREOS"
+Homepage = "https://github.com/Str4vinci/breos"
+Repository = "https://github.com/Str4vinci/breos"
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0", "ruff>=0.15"]
