@@ -29,7 +29,14 @@ from breos.economics import CostParams, calculate_costs, calculate_lcoe, cost_an
 from breos.emissions import EmissionsParams, calculate_co2_savings
 from breos.load_profiles import load_profile
 from breos.pv_modules import MODULES, get_module
-from breos.solar import calculate_pv_production_dc, default_azimuth, estimate_optimal_tilt
+from breos.solar import (
+    calculate_multi_array_production,
+    calculate_pv_production_dc,
+    estimate_optimal_tilt,
+)
+from breos.solar import (
+    default_azimuth as default_azimuth_fn,
+)
 from breos.utils import get_hours_per_step
 from breos.weather import extract_ambient_temperature, fetch_tmy_weather_data, load_weather, resample_to_15min
 
@@ -39,6 +46,7 @@ _CONFIGS_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "configs
 
 _DEFAULTS: Dict[str, Any] = {
     "battery_kwh": 0.0,
+    "pv_arrays": None,
     "pv_module": None,
     "load_profile": "6",
     "tilt": None,
@@ -99,12 +107,16 @@ class App:
 
         - ``location`` — preset key (``"porto"``) **or** dict with
           ``latitude``, ``longitude``, ``timezone``.
-        - ``n_modules`` — number of PV modules (int, > 0).
+        - ``n_modules`` — number of PV modules (int, > 0), unless
+          ``pv_arrays`` is provided.
         - ``annual_consumption_kwh`` — yearly electricity demand (float, > 0).
 
         Optional keys (with defaults):
 
         - ``battery_kwh`` (0.0) — battery capacity; 0 = no battery.
+        - ``pv_arrays`` (None) — list of arrays with ``modules``, ``module``,
+          ``tilt``/``slope``, and ``azimuth``. When set, BREOS calculates each
+          array separately and combines production before the energy balance.
         - ``pv_module`` (None) — PV module name from the catalogue; None = first available.
         - ``load_profile`` ("6") — load profile type ("1"–"8").
         - ``tilt`` (None) — tilt angle in degrees; None = auto from latitude.
@@ -145,15 +157,30 @@ class App:
             self._tz = loc["timezone"]
             self._loc_key = None
 
+        # Resolve PV arrays, if provided. Multi-array systems are the preferred
+        # representation for Designer rooftops because mixed faces cannot be
+        # reduced to one tilt/azimuth pair without losing production fidelity.
+        self._pv_arrays = self._normalise_pv_arrays(cfg.get("pv_arrays"))
+        if self._pv_arrays:
+            cfg["n_modules"] = sum(arr["modules"] for arr in self._pv_arrays)
+            total_power_w = sum(arr["modules"] * get_module(arr["module"]).Mpp for arr in self._pv_arrays)
+            self._avg_module_power_w = total_power_w / cfg["n_modules"]
+            self._system_kwp = total_power_w / 1000
+            module_name = self._pv_arrays[0]["module"]
+        else:
+            module_name = cfg["pv_module"]
+
         # Resolve PV module
-        module_name = cfg["pv_module"]
         if module_name is None:
             module_name = next(iter(MODULES))
         self._pv_params = get_module(module_name)
+        if not self._pv_arrays:
+            self._avg_module_power_w = self._pv_params.Mpp
+            self._system_kwp = cfg["n_modules"] * self._pv_params.Mpp / 1000
 
         # Resolve tilt / azimuth
         self._tilt = cfg["tilt"] if cfg["tilt"] is not None else estimate_optimal_tilt(self._lat)
-        self._azimuth = cfg["azimuth"] if cfg["azimuth"] is not None else default_azimuth(self._lat)
+        self._azimuth = cfg["azimuth"] if cfg["azimuth"] is not None else default_azimuth_fn(self._lat)
 
         # Resolve cost preset
         self._cost_params = self._resolve_costs(cfg)
@@ -190,15 +217,24 @@ class App:
 
         # 2. PV — 1-module DC production
         location = Location(self._lat, self._lon, tz=self._tz)
-        dc_1mod = calculate_pv_production_dc(
-            weather_data=weather,
-            location=location,
-            tilt=self._tilt,
-            surface_azimuth=self._azimuth,
-            n_modules=1,
-            pv_params=self._pv_params,
-            freq=freq,
-        )
+        if self._pv_arrays:
+            dc_system_base = calculate_multi_array_production(
+                weather_data=weather,
+                location=location,
+                arrays=self._pv_arrays,
+                freq=freq,
+            )
+        else:
+            dc_1mod = calculate_pv_production_dc(
+                weather_data=weather,
+                location=location,
+                tilt=self._tilt,
+                surface_azimuth=self._azimuth,
+                n_modules=1,
+                pv_params=self._pv_params,
+                freq=freq,
+            )
+            dc_system_base = dc_1mod * n_modules
 
         # 3. Load profile
         load_data = load_profile(
@@ -234,7 +270,7 @@ class App:
 
         for year_idx in range(projection_years):
             pv_degradation_factor = (1 - degradation_rate) ** year_idx
-            dc_power = dc_1mod * n_modules * pv_degradation_factor
+            dc_power = dc_system_base * pv_degradation_factor
 
             if has_battery:
                 batt_cfg = BatteryConfig(
@@ -334,7 +370,7 @@ class App:
 
         total_initial = costs_dict["total_initial_cost"]
         npv_savings = float(cost_proj["Savings_Cumulative_NPV"].iloc[-1])
-        system_kwp = n_modules * self._pv_params.Mpp / 1000
+        system_kwp = self._system_kwp
 
         lcoe = calculate_lcoe(
             total_investment=total_initial,
@@ -366,7 +402,20 @@ class App:
             "lcoe_eur_kwh": round(float(lcoe), 4),
             # Yearly breakdown
             "yearly": self._yearly_to_dicts(yearly_df),
+            "monthly": self._monthly_to_dicts(first_year_results_df, freq),
+            "financial": self._financial_to_dicts(cost_proj, total_initial),
         }
+
+        if self._pv_arrays:
+            result["pv_arrays"] = [
+                {
+                    "modules": arr["modules"],
+                    "module": arr["module"],
+                    "slope": arr["tilt"],
+                    "azimuth": arr["azimuth"],
+                }
+                for arr in self._pv_arrays
+            ]
 
         # Battery (only if present)
         if has_battery:
@@ -398,9 +447,13 @@ class App:
     @staticmethod
     def _validate(cfg: dict) -> None:
         # Required keys
-        for key in ("location", "n_modules", "annual_consumption_kwh"):
+        for key in ("location", "annual_consumption_kwh"):
             if key not in cfg:
                 raise ValueError(f"Missing required config key: '{key}'")
+
+        has_arrays = bool(cfg.get("pv_arrays"))
+        if not has_arrays and "n_modules" not in cfg:
+            raise ValueError("Missing required config key: 'n_modules'")
 
         loc = cfg["location"]
         if isinstance(loc, dict):
@@ -410,12 +463,53 @@ class App:
         elif not isinstance(loc, str):
             raise TypeError("'location' must be a string key or a dict with latitude/longitude/timezone")
 
-        if cfg["n_modules"] < 1:
+        if not has_arrays and cfg["n_modules"] < 1:
             raise ValueError("'n_modules' must be >= 1")
+        if has_arrays:
+            if not isinstance(cfg["pv_arrays"], list):
+                raise TypeError("'pv_arrays' must be a list")
+            for i, arr in enumerate(cfg["pv_arrays"]):
+                if not isinstance(arr, dict):
+                    raise TypeError(f"'pv_arrays[{i}]' must be a dict")
+                modules = arr.get("modules", arr.get("n_modules", 0))
+                if modules < 1:
+                    raise ValueError(f"'pv_arrays[{i}].modules' must be >= 1")
+                tilt = arr.get("tilt", arr.get("slope", cfg.get("tilt")))
+                azimuth = arr.get("azimuth", cfg.get("azimuth"))
+                if tilt is not None and not 0 <= tilt <= 90:
+                    raise ValueError(f"'pv_arrays[{i}].tilt' must be between 0 and 90")
+                if azimuth is not None and not 0 <= azimuth <= 360:
+                    raise ValueError(f"'pv_arrays[{i}].azimuth' must be between 0 and 360")
         if cfg["annual_consumption_kwh"] <= 0:
             raise ValueError("'annual_consumption_kwh' must be > 0")
         if cfg["resolution"] not in ("h", "15min"):
             raise ValueError("'resolution' must be 'h' or '15min'")
+
+    def _normalise_pv_arrays(self, arrays: Optional[list]) -> list[dict]:
+        if not arrays:
+            return []
+
+        default_module = self._cfg.get("pv_module") or next(iter(MODULES))
+        default_tilt = self._cfg.get("tilt") if self._cfg.get("tilt") is not None else estimate_optimal_tilt(self._lat)
+        default_azimuth = (
+            self._cfg.get("azimuth") if self._cfg.get("azimuth") is not None else default_azimuth_fn(self._lat)
+        )
+
+        normalized = []
+        for arr in arrays:
+            modules = int(arr.get("modules", arr.get("n_modules")))
+            module = arr.get("module") or default_module
+            tilt = arr.get("tilt", arr.get("slope", default_tilt))
+            azimuth = arr.get("azimuth", default_azimuth)
+            normalized.append(
+                {
+                    "modules": modules,
+                    "module": module,
+                    "tilt": float(tilt),
+                    "azimuth": float(azimuth),
+                }
+            )
+        return normalized
 
     def _load_weather(self, freq: str, start_year: int) -> pd.DataFrame:
         """Load TMY weather, falling back to PVGIS fetch."""
@@ -489,10 +583,61 @@ class App:
 
         return calculate_costs(
             n_modules=n_modules,
-            module_power_w=self._pv_params.Mpp,
+            module_power_w=self._avg_module_power_w,
             battery_capacity_wh=battery_kwh * 1000,
             cost_params=self._cost_params,
         )
+
+    @staticmethod
+    def _monthly_to_dicts(results_df: pd.DataFrame, freq: str) -> list:
+        """Convert first-year timestep results into monthly energy rows."""
+        hours_per_step = get_hours_per_step(freq)
+        df = results_df.copy()
+        if not isinstance(df.index, pd.DatetimeIndex):
+            if "Datetime" in df.columns:
+                df["Datetime"] = pd.to_datetime(df["Datetime"], utc=True)
+                df.set_index("Datetime", inplace=True)
+            else:
+                raise ValueError("results_df must have a DatetimeIndex or Datetime column")
+
+        monthly = df[["PV_Production", "Houseload", "Import_From_Grid", "Sell_To_Grid"]].resample("ME").sum()
+        monthly = monthly * hours_per_step / 1000
+
+        rows = []
+        for idx, row in monthly.iterrows():
+            pv = float(row["PV_Production"])
+            consumption = float(row["Houseload"])
+            export = float(row["Sell_To_Grid"])
+            imported = float(row["Import_From_Grid"])
+            self_consumption = pv - export
+            rows.append(
+                {
+                    "month": idx.strftime("%b"),
+                    "pv_kwh": round(pv, 2),
+                    "consumption_kwh": round(consumption, 2),
+                    "self_consumption_kwh": round(self_consumption, 2),
+                    "import_kwh": round(imported, 2),
+                    "export_kwh": round(export, 2),
+                    "grid_independence_pct": round((1 - imported / consumption) * 100, 2) if consumption > 0 else 0.0,
+                }
+            )
+        return rows
+
+    @staticmethod
+    def _financial_to_dicts(cost_proj: pd.DataFrame, total_initial_cost: float) -> list:
+        """Convert BREOS cost projection into the dashboard line-chart shape."""
+        rows = [{"year": 0, "balance": round(-float(total_initial_cost), 2), "reference": 0.0}]
+        for _, row in cost_proj.iterrows():
+            rows.append(
+                {
+                    "year": int(row["Year"]),
+                    "balance": round(float(row["Savings_Cumulative_NPV"]), 2),
+                    "reference": 0.0,
+                    "cost_with_system": round(float(row["Cost_System_Cumulative_NPV"]), 2),
+                    "cost_without_system": round(float(row["Cost_No_Sys_Cumulative_NPV"]), 2),
+                }
+            )
+        return rows
 
     @staticmethod
     def _yearly_to_dicts(yearly_df: pd.DataFrame) -> list:

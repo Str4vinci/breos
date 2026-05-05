@@ -63,6 +63,19 @@ class TestAppValidation:
         )
         assert app._lat == 41.15
 
+    def test_pv_arrays_allow_missing_n_modules(self):
+        app = App(
+            {
+                "location": "porto",
+                "annual_consumption_kwh": 3000,
+                "pv_arrays": [
+                    {"modules": 3, "module": "Erlangen_445W", "tilt": 10, "azimuth": 90},
+                    {"modules": 3, "module": "Erlangen_445W", "tilt": 10, "azimuth": 270},
+                ],
+            }
+        )
+        assert app._cfg["n_modules"] == 6
+
     def test_result_before_simulate(self):
         app = App({"location": "porto", "n_modules": 10, "annual_consumption_kwh": 4000})
         with pytest.raises(RuntimeError, match="simulate"):
@@ -119,11 +132,17 @@ class TestAppSimulateNoBattery:
             "co2_avoided_year1_kg",
             "co2_avoided_total_kg",
             "yearly",
+            "monthly",
+            "financial",
         }
         assert expected.issubset(self.result.keys())
 
     def test_yearly_length(self):
         assert len(self.result["yearly"]) == 5
+
+    def test_monthly_and_financial_lengths(self):
+        assert len(self.result["monthly"]) == 12
+        assert len(self.result["financial"]) == 6
 
     def test_system_echo(self):
         assert self.result["n_modules"] == 6
@@ -146,6 +165,38 @@ class TestAppSimulateNoBattery:
 
     def test_lcoe_positive(self):
         assert self.result["lcoe_eur_kwh"] > 0
+
+
+class TestAppSimulateMultiArray:
+    @pytest.fixture(autouse=True)
+    def _setup(self, _patch_weather):
+        self.app = App(
+            {
+                "location": "porto",
+                "annual_consumption_kwh": 3000,
+                "cost_preset": "residential_pt",
+                "projection_years": 5,
+                "pv_arrays": [
+                    {"modules": 3, "module": "Erlangen_445W", "slope": 10, "azimuth": 90},
+                    {"modules": 3, "module": "Erlangen_445W", "slope": 10, "azimuth": 270},
+                ],
+            }
+        )
+        self.app.simulate()
+        self.result = self.app.result()
+
+    def test_arrays_are_echoed(self):
+        assert self.result["n_modules"] == 6
+        assert len(self.result["pv_arrays"]) == 2
+        assert {arr["azimuth"] for arr in self.result["pv_arrays"]} == {90.0, 270.0}
+
+    def test_multi_array_result_has_chart_data(self):
+        assert len(self.result["monthly"]) == 12
+        assert self.result["financial"][0]["year"] == 0
+        assert self.result["financial"][-1]["year"] == 5
+
+    def test_multi_array_energy_positive(self):
+        assert self.result["pv_production_kwh"] > 0
 
 
 class TestAppSimulateWithBattery:
