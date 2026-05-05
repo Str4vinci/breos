@@ -491,7 +491,9 @@ class App:
 
         default_module = self._cfg.get("pv_module") or next(iter(MODULES))
         default_tilt = self._cfg.get("tilt") if self._cfg.get("tilt") is not None else estimate_optimal_tilt(self._lat)
-        default_azimuth = self._cfg.get("azimuth") if self._cfg.get("azimuth") is not None else default_azimuth_fn(self._lat)
+        default_azimuth = (
+            self._cfg.get("azimuth") if self._cfg.get("azimuth") is not None else default_azimuth_fn(self._lat)
+        )
 
         normalized = []
         for arr in arrays:
