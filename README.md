@@ -58,12 +58,13 @@ print(f"CO2 avoided: {result['co2_avoided_total_kg']:,.0f} kg")
 
 ## Configuration
 
-All keys except `location`, `n_modules`, and `annual_consumption_kwh` are optional with sensible defaults.
+All keys except `location`, `annual_consumption_kwh`, and either `n_modules` or `pv_arrays` are optional with sensible defaults.
 
 | Key | Default | Description |
 |-----|---------|-------------|
 | `location` | *required* | Preset key (`"porto"`, `"berlin"`, ...) or dict with `latitude`, `longitude`, `timezone` |
-| `n_modules` | *required* | Number of PV modules |
+| `n_modules` | *required unless `pv_arrays` is set* | Number of PV modules |
+| `pv_arrays` | `None` | Optional list of arrays with `modules`, `module`, `tilt`/`slope`, and `azimuth`; when present, the array module total overrides `n_modules` |
 | `annual_consumption_kwh` | *required* | Annual electricity demand (kWh) |
 | `battery_kwh` | `0.0` | Battery capacity (0 = no battery) |
 | `pv_module` | `None` | Module name from catalogue (`None` = default) |
@@ -98,7 +99,29 @@ All keys except `location`, `n_modules`, and `annual_consumption_kwh` are option
 | `co2_avoided_year1_kg` | Year 1 CO2 avoided |
 | `co2_avoided_total_kg` | Lifetime CO2 avoided |
 | `battery_soh_end_pct` | Battery state of health at end (if battery) |
+| `monthly` | Year 1 monthly balance rows for PV, load, imports, exports, and self-consumption |
+| `financial` | Yearly financial projection rows, including year 0 investment |
 | `yearly` | List of per-year dicts with detailed breakdown |
+
+### Multi-array PV systems
+
+Use `pv_arrays` when a roof has panels on different faces or orientations:
+
+```python
+app = breos.App({
+    "location": "porto",
+    "annual_consumption_kwh": 4000,
+    "pv_arrays": [
+        {"modules": 8, "module": "Erlangen_445W", "tilt": 10, "azimuth": 90},
+        {"modules": 8, "module": "Erlangen_445W", "tilt": 10, "azimuth": 270},
+    ],
+})
+app.simulate()
+```
+
+BREOS calculates production per array and combines the DC output before the
+energy balance, so east-west and pitched-roof layouts are not collapsed into a
+single representative tilt/azimuth.
 
 ## Advanced Usage
 
