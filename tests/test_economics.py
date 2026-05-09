@@ -26,7 +26,7 @@ class TestCalculateCosts:
             battery_capacity_wh=5000,
             cost_params=cost_params,
         )
-        assert costs["battery_cost"] == pytest.approx(5 * 711.0)
+        assert costs["battery_cost"] == pytest.approx(5 * 500.0)
         # With battery → hybrid inverter (more expensive)
         assert costs["inverter_cost"] == pytest.approx(102.58 * (10 * 550 / 1000) / 1.25, rel=0.01)
         assert costs["total_initial_cost"] > costs["pv_cost"] + costs["battery_cost"]

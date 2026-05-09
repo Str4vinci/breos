@@ -16,8 +16,8 @@ import pandas as pd
 
 from breos.utils import get_hours_per_step
 
-# Default replacement cost per kWh of battery capacity (€/kWh)
-BATTERY_REPLACEMENT_COST_PER_KWH: float = 711.0
+# Default battery and replacement cost per kWh of battery capacity (€/kWh)
+BATTERY_REPLACEMENT_COST_PER_KWH: float = 500.0
 
 
 @dataclass

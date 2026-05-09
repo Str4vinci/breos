@@ -285,7 +285,7 @@ def size_for_zeb(houseload: pd.DataFrame, ac_loss: pd.Series, current_n_modules:
 # Constants for defaults (can be overridden by config)
 DEFAULT_PANEL_WP = 550
 DEFAULT_MODULE_AREA = 1.134 * 2.278
-DEFAULT_BATTERY_KWH = 711
+DEFAULT_BATTERY_KWH = 500
 DEFAULT_ELEC_PRICE_GRID = 0.16
 DEFAULT_ELEC_PRICE_EXPORT = 0.05
 DEFAULT_INFLATION_ELEC = 0.02

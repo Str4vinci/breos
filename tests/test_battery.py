@@ -23,8 +23,8 @@ class TestBatteryConfig:
 
     def test_replacement_cost_auto(self):
         cfg = BatteryConfig(nominal_energy_wh=10000)
-        # 10 kWh * 711 €/kWh = 7110
-        assert cfg.replacement_cost == pytest.approx(7110.0, rel=0.01)
+        # 10 kWh * 500 €/kWh = 5000
+        assert cfg.replacement_cost == pytest.approx(5000.0, rel=0.01)
 
     def test_replacement_cost_zero_battery(self):
         cfg = BatteryConfig(nominal_energy_wh=0)

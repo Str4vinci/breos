@@ -25,7 +25,14 @@ import pandas as pd
 from pvlib.location import Location
 
 from breos.battery import BatteryConfig, apply_indoor_temperature_model, simulate_energy_balance
-from breos.economics import CostParams, calculate_costs, calculate_lcoe, cost_analysis_projection, find_payback_year
+from breos.economics import (
+    BATTERY_REPLACEMENT_COST_PER_KWH,
+    CostParams,
+    calculate_costs,
+    calculate_lcoe,
+    cost_analysis_projection,
+    find_payback_year,
+)
 from breos.emissions import EmissionsParams, calculate_co2_savings
 from breos.load_profiles import load_profile
 from breos.pv_modules import MODULES, get_module
@@ -557,7 +564,7 @@ class App:
             params["electricity_sold_cost"] = preset.get("electricity_sold_cost", 0.06)
             params["daily_power_cost"] = preset.get("daily_power_cost", 0.30)
             params["module_cost_per_w"] = preset.get("module_cost_per_w", 0.125)
-            params["battery_cost_per_kwh"] = preset.get("storage_cost_per_kwh", 711.0)
+            params["battery_cost_per_kwh"] = preset.get("storage_cost_per_kwh", BATTERY_REPLACEMENT_COST_PER_KWH)
             params["inverter_cost_per_kw"] = preset.get("inverter_cost_per_kw_hybrid", 102.58)
             params["inverter_cost_per_kw_nobatt"] = preset.get("inverter_cost_per_kw_simple", 48.37)
             params["installation_cost_per_module"] = preset.get("installation_cost_per_module", 350.0)

@@ -8,6 +8,7 @@ build/
 .venv/
 .env
 results/
+dev/
 *.csv
 !rlp/*.csv
 .codex
