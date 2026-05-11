@@ -105,7 +105,9 @@ def load_profile(
 
     # Check if native 15-min file exists
     use_native_15min = (
-        freq == "15min" and profile_type in PROFILE_FILES_15MIN and (rlp_directory / PROFILE_FILES_15MIN[profile_type]).exists()
+        freq == "15min"
+        and profile_type in PROFILE_FILES_15MIN
+        and (rlp_directory / PROFILE_FILES_15MIN[profile_type]).exists()
     )
 
     if use_native_15min:
