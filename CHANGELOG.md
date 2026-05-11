@@ -8,7 +8,7 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 - Public API facade (`breos.App`) — single entry point for simulations: config dict in, plain dict out.
 - Test suite — pytest coverage of the public API, battery, economics, emissions, and solar modules (all offline).
 - GitHub Actions CI on every push/PR.
-- `cost_params_from_config()` — flexible config parser for `CostParams` with legacy-key fallbacks.
+- `cost_params_from_config()` — config parser for `CostParams`.
 - Marginal grid carbon intensity support in `EmissionsParams` for more accurate CO₂ avoidance accounting.
 
 ### Changed
