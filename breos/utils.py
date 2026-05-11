@@ -60,12 +60,7 @@ def get_hours_per_step(freq: str) -> float:
     """
     freq_map = {
         "h": 1.0,
-        "H": 1.0,
-        "1h": 1.0,
-        "1H": 1.0,
         "15min": 0.25,
-        "15T": 0.25,
-        "15m": 0.25,
     }
     if freq not in freq_map:
         raise ValueError(f"Unsupported frequency: {freq}. Use 'h' or '15min'.")

@@ -64,7 +64,7 @@ All keys except `location`, `annual_consumption_kwh`, and either `n_modules` or 
 |-----|---------|-------------|
 | `location` | *required* | Preset key (`"porto"`, `"berlin"`, ...) or dict with `latitude`, `longitude`, `timezone` |
 | `n_modules` | *required unless `pv_arrays` is set* | Number of PV modules |
-| `pv_arrays` | `None` | Optional list of arrays with `modules`, `module`, `tilt`/`slope`, and `azimuth`; when present, the array module total overrides `n_modules` |
+| `pv_arrays` | `None` | Optional list of arrays with `modules`, `module`, `tilt`, and `azimuth`; when present, the array module total overrides `n_modules` |
 | `annual_consumption_kwh` | *required* | Annual electricity demand (kWh) |
 | `battery_kwh` | `0.0` | Battery capacity (0 = no battery) |
 | `pv_module` | `None` | Module name from catalogue (`None` = default) |

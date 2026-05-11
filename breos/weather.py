@@ -224,8 +224,10 @@ def fetch_tmy_weather_data(
         tmy_data.index = new_index
 
     # Resample to 15-min if requested
-    if freq != "h" and freq != "H" and freq != "1h":
+    if freq == "15min":
         tmy_data = resample_tmy_to_15min(tmy_data, metadata)
+    elif freq != "h":
+        raise ValueError("freq must be 'h' or '15min'")
 
     if save_to_file:
         # Encode metadata in filename: {location}_tmy_{year_min}_{year_max}_{db}.csv
@@ -342,7 +344,7 @@ def fetch_weather_data(
     hourly_dataframe.set_index("date", inplace=True)
 
     # Resample to 15-min if requested (pass location for clear-sky scaling)
-    if freq == "15min" or freq == "15T":
+    if freq == "15min":
         hourly_dataframe = resample_to_15min(hourly_dataframe, method="makima", latitude=latitude, longitude=longitude)
 
     if save_to_file:
@@ -812,7 +814,7 @@ def fetch_tmy_nsrdb(
     df = df[wanted].copy()
 
     # Resample to 15-min if requested
-    if freq == "15min" or freq == "15T":
+    if freq == "15min":
         df = resample_to_15min(df, method="makima", latitude=latitude, longitude=longitude)
 
     if save_to_file and location_name:
@@ -862,7 +864,7 @@ def read_epw_file(
         longitude = meta.get("longitude")
 
     # Resample to 15-min if requested
-    if freq == "15min" or freq == "15T":
+    if freq == "15min":
         df = resample_to_15min(df, method="makima", latitude=latitude, longitude=longitude)
 
     return df

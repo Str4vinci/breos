@@ -53,23 +53,6 @@ NAUMANN_LAM_FIELD_CALIBRATED_EA_J_MOL = 11876.09
 NAUMANN_LAM_FIELD_CALIBRATED_EXPONENT_B = 0.7701374
 NAUMANN_LAM_FIELD_CALIBRATED_SOC_EXPONENT_N = 0.1010299
 
-# === Naumann + Lam field-calibrated parameters (previous 15-min fit) ===
-# Retained for reproducibility under the model name
-# `naumann_lam_field_calibrated_old`.
-NAUMANN_LAM_FIELD_CALIBRATED_OLD_K0_FRAC = 5.7841386975994235e-08
-NAUMANN_LAM_FIELD_CALIBRATED_OLD_EA_J_MOL = 3748.510470404377
-NAUMANN_LAM_FIELD_CALIBRATED_OLD_EXPONENT_B = 0.788762656479986
-NAUMANN_LAM_FIELD_CALIBRATED_OLD_SOC_EXPONENT_N = 0.10230418425202481
-
-# === Lam Calibrated Parameters — Hourly resolution (legacy) ===
-# Same calibration as above but fitted at hourly (1h) resolution.
-# Mean CV RMSE = 6.0pp, train RMSE = 4.3pp, overfitting gap 1.7pp.
-# Superseded by 15-min calibration; retained for reproducibility.
-LAM_CAL_HOURLY_K0_FRAC = 4.375846e-07  # 7.1x higher than lab
-LAM_CAL_HOURLY_EA_J_MOL = 11655.12  # 0.30x lab
-LAM_CAL_HOURLY_EXPONENT_B = 0.6782  # 0.90x lab
-LAM_CAL_HOURLY_SOC_EXPONENT_N = 0.1144  # 0.15x lab
-
 # === Lam Calibrated Parameters — Relaxed Calendar Aging (1.5× Ea) ===
 # Sensitivity variant: 1.5× activation energy reduces calendar degradation
 # at typical residential temperatures (below 25°C reference).  Higher Ea
@@ -99,7 +82,7 @@ DEFAULT_CHARGE_EFFICIENCY = math.sqrt(_ROUND_TRIP_EFFICIENCY)  # ~0.9747
 DEFAULT_DISCHARGE_EFFICIENCY = math.sqrt(_ROUND_TRIP_EFFICIENCY)  # ~0.9747
 DEFAULT_STANDBY_LOSS_WH = 5.0
 DEFAULT_MAX_SOC = 0.90  # LFP long-life window (10-90%); use 1.0 for max performance
-DEFAULT_MIN_SOC = 0.10  # LFP long-life window; legacy NMC-style was 0.20
+DEFAULT_MIN_SOC = 0.10  # LFP long-life window
 
 # === LFP Temperature-Capacity Derating ===
 # Piecewise-linear approximation for LFP usable capacity vs. temperature.

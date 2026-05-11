@@ -2105,12 +2105,7 @@ def plot_optimization_results_2d(results_df: pd.DataFrame, results_directory: st
     # 2D Projection (Grid Independence vs NPV, color=ZEB_Ratio)
     fig2, ax2 = plt.subplots(figsize=(10, 8))
 
-    if "Grid_Independence_%" in results_df.columns:
-        x_2d = results_df["Grid_Independence_%"]
-    else:
-        # Fallback if column missing (legacy results?)
-        x_2d = results_df.get("Modules", [])  # Fallback placeholder
-
+    x_2d = results_df["Grid_Independence_%"]
     y_2d = results_df["NPV_Eur"]
 
     if "ZEB_Ratio" in results_df.columns:

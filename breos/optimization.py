@@ -14,6 +14,7 @@ import numpy as np
 import pandas as pd
 
 from breos.battery import BatteryConfig, simulate_energy_balance
+from breos.economics import calculate_costs, cost_params_from_config
 from breos.load_profiles import align_load_to_pv
 from breos.solar import PVModuleParams, calculate_pv_production_dc, default_azimuth
 
@@ -284,10 +285,6 @@ def size_for_zeb(houseload: pd.DataFrame, ac_loss: pd.Series, current_n_modules:
 
 # Constants for defaults (can be overridden by config)
 DEFAULT_PANEL_WP = 550
-DEFAULT_MODULE_AREA = 1.134 * 2.278
-DEFAULT_BATTERY_KWH = 500
-DEFAULT_ELEC_PRICE_GRID = 0.16
-DEFAULT_ELEC_PRICE_EXPORT = 0.05
 DEFAULT_INFLATION_ELEC = 0.02
 DEFAULT_DISCOUNT_RATE = 0.0
 
@@ -312,43 +309,28 @@ def calculate_financials(
         financials_config = {}
 
     panel_wp = costs_config.get("panel_wp", DEFAULT_PANEL_WP)
-    cost_pv_per_w = costs_config.get("pv_per_watt", 0.125)
-    cost_battery_per_kwh = costs_config.get("battery_per_kwh", DEFAULT_BATTERY_KWH)
-    install_pv_base = costs_config.get("install_pv_base", 350)
-    install_fixed = costs_config.get("install_fixed", 350)
-    other_per_mod = costs_config.get("other_per_mod", 50)
-
-    elec_price_grid = financials_config.get("elec_price_grid", DEFAULT_ELEC_PRICE_GRID)
-    elec_price_export = financials_config.get("elec_price_export", DEFAULT_ELEC_PRICE_EXPORT)
-    inflation_elec = financials_config.get("inflation_elec", DEFAULT_INFLATION_ELEC)
+    cost_params = cost_params_from_config(costs_config, financials_config)
+    electricity_cost = cost_params.electricity_cost
+    electricity_sold_cost = cost_params.electricity_sold_cost
+    inflation_rate = financials_config.get("inflation_rate", DEFAULT_INFLATION_ELEC)
     discount_rate = financials_config.get("discount_rate", DEFAULT_DISCOUNT_RATE)
     project_lifespan = int(financials_config.get("project_lifespan", DEFAULT_PROJECT_LIFESPAN))
 
     # 1. Calculate CAPEX (Initial Cost)
-    total_pv_power_kw = (n_modules * panel_wp) / 1000
-
-    # Inverter Cost & Installation Logic (Simplified)
-    # TODO: Make inverter cost dynamic based on config
-    if battery_kwh > 0.1:
-        inv_cost = 102.58 * total_pv_power_kw
-        inst_cost = (install_pv_base * n_modules) + install_fixed
-        bat_cost = battery_kwh * cost_battery_per_kwh
-    else:
-        inv_cost = 48.37 * total_pv_power_kw
-        inst_cost = 350 * n_modules  # Use hardcoded fallback or config? using 350 for consistency
-        bat_cost = 0
-
-    pv_material_cost = (n_modules * panel_wp) * cost_pv_per_w
-    other_cost = other_per_mod * n_modules
-
-    capex = pv_material_cost + bat_cost + inst_cost + inv_cost + other_cost
+    costs = calculate_costs(
+        n_modules=n_modules,
+        module_power_w=panel_wp,
+        battery_capacity_wh=battery_kwh * 1000,
+        cost_params=cost_params,
+    )
+    capex = costs["total_initial_cost"]
 
     # 2. Calculate Annual Savings
     # Baseline cost (if no solar existed)
-    cost_no_solar = annual_load_kwh * elec_price_grid
+    cost_no_solar = annual_load_kwh * electricity_cost
 
     # New cost (Imported energy + Earnings from Export)
-    cost_with_solar = (annual_import_kwh * elec_price_grid) - (annual_export_kwh * elec_price_export)
+    cost_with_solar = (annual_import_kwh * electricity_cost) - (annual_export_kwh * electricity_sold_cost)
 
     annual_savings = cost_no_solar - cost_with_solar
 
@@ -356,7 +338,7 @@ def calculate_financials(
     npv = -capex
     for year in range(1, project_lifespan + 1):
         # Escalate savings with energy inflation
-        savings_y = annual_savings * ((1 + inflation_elec) ** (year - 1))
+        savings_y = annual_savings * ((1 + inflation_rate) ** (year - 1))
         # Discount back to present value
         npv += savings_y / ((1 + discount_rate) ** year)
 
@@ -497,44 +479,12 @@ try:
             else:
                 azimuth = x[3]
 
-            # PV Params
-            pv_spec = self.config.get("pv_specs", {})
-            params = pv_spec.get("params", {})
+            from breos.pv_modules import get_module
 
-            if params:
-                pv_params = PVModuleParams(
-                    Mpp=params.get("Mpp", 550),
-                    Vmp=params.get("Vmp", 42.05),
-                    Imp=params.get("Imp", 13.08),
-                    Voc=params.get("Voc", 49.88),
-                    Isc=params.get("Isc", 14.01),
-                    T_Pmax_pct=params.get("T_Pmax_pct", params.get("T_Pmax", -0.34)),
-                    T_Voc_pct=params.get("T_Voc_pct", params.get("T_Voc", -0.26)),
-                    T_Isc_pct=params.get("T_Isc_pct", params.get("T_Isc", 0.05)),
-                    N_Cells=params.get("N_Cells", 144),
-                    celltype=params.get("celltype", "monoSi"),
-                )
-                module_area = pv_spec.get("dimensions", {}).get("width", 1.134) * pv_spec.get("dimensions", {}).get(
-                    "length", 2.278
-                )
-            else:
-                # Fallback to standard 'pv' config using get_module
-                # Import here to avoid circular dependencies if any
-                from breos.pv_modules import get_module
-
-                pv_cfg = self.config.get("pv", {})
-                module_name = pv_cfg.get("module", "Suntech_STP550S_STC")
-                pv_params = get_module(module_name)
-                # Assume standard area if not provided (get_module mostly returns electrical params)
-                # But get_module MIGHT return dimensions if updated? Currently returns PVModuleParams.
-                # PVModuleParams doesn't store dimensions usually.
-                # Let's check PVModuleParams definition in solar.py or rely on defaults.
-                # For now using defaults if not in params.
-
-                # Check directly in config if dimensions exist, else default
-                width = 1.134  # Standard 550W
-                length = 2.278
-                module_area = width * length
+            pv_cfg = self.config.get("pv", {})
+            module_name = pv_cfg.get("module", "Suntech_STP550S_STC")
+            pv_params = get_module(module_name)
+            module_area = pv_cfg.get("module_width_m", 1.134) * pv_cfg.get("module_length_m", 2.278)
 
             # --- 1. Constraint Check: Area ---
             system_area = n_modules * module_area
@@ -566,24 +516,15 @@ try:
             else:
                 total_load = float(aligned_houseload.iloc[:, 0].sum() / 1000)
 
-            # Energy Balance Logic
-            # Energy Balance Logic
-            # Support both 'battery' (new standard) and 'battery_specs' (legacy)
-            batt_spec = self.config.get("battery", self.config.get("battery_specs", {}))
-
-            # Extract efficiencies with fallbacks
-            # If 'efficiency' is present (legacy), use it for both. Else look for specific keys.
-            legacy_eff = batt_spec.get("efficiency", 0.9795)
-            chg_eff = batt_spec.get("charge_efficiency", legacy_eff)
-            dis_eff = batt_spec.get("discharge_efficiency", legacy_eff)
+            batt_spec = self.config.get("battery", {})
 
             # Configure Battery
             battery_config = BatteryConfig(
                 nominal_energy_wh=battery_kwh * 1000,
                 min_soc=batt_spec.get("min_soc", 0.2),
                 max_soc=batt_spec.get("max_soc", 0.8),
-                charge_efficiency=chg_eff,
-                discharge_efficiency=dis_eff,
+                charge_efficiency=batt_spec.get("charge_efficiency", 0.9795),
+                discharge_efficiency=batt_spec.get("discharge_efficiency", 0.9795),
                 initial_soh=batt_spec.get("initial_soh", 100),
                 enable_replacement=False,  # Single year optimization does not simulate replacement cycles
             )

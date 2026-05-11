@@ -122,7 +122,7 @@ class App:
 
         - ``battery_kwh`` (0.0) — battery capacity; 0 = no battery.
         - ``pv_arrays`` (None) — list of arrays with ``modules``, ``module``,
-          ``tilt``/``slope``, and ``azimuth``. When set, BREOS calculates each
+          ``tilt``, and ``azimuth``. When set, BREOS calculates each
           array separately and combines production before the energy balance.
         - ``pv_module`` (None) — PV module name from the catalogue; None = first available.
         - ``load_profile`` ("6") — load profile type ("1"–"8").
@@ -418,7 +418,7 @@ class App:
                 {
                     "modules": arr["modules"],
                     "module": arr["module"],
-                    "slope": arr["tilt"],
+                    "tilt": arr["tilt"],
                     "azimuth": arr["azimuth"],
                 }
                 for arr in self._pv_arrays
@@ -478,10 +478,10 @@ class App:
             for i, arr in enumerate(cfg["pv_arrays"]):
                 if not isinstance(arr, dict):
                     raise TypeError(f"'pv_arrays[{i}]' must be a dict")
-                modules = arr.get("modules", arr.get("n_modules", 0))
+                modules = arr.get("modules", 0)
                 if modules < 1:
                     raise ValueError(f"'pv_arrays[{i}].modules' must be >= 1")
-                tilt = arr.get("tilt", arr.get("slope", cfg.get("tilt")))
+                tilt = arr.get("tilt", cfg.get("tilt"))
                 azimuth = arr.get("azimuth", cfg.get("azimuth"))
                 if tilt is not None and not 0 <= tilt <= 90:
                     raise ValueError(f"'pv_arrays[{i}].tilt' must be between 0 and 90")
@@ -504,9 +504,9 @@ class App:
 
         normalized = []
         for arr in arrays:
-            modules = int(arr.get("modules", arr.get("n_modules")))
+            modules = int(arr["modules"])
             module = arr.get("module") or default_module
-            tilt = arr.get("tilt", arr.get("slope", default_tilt))
+            tilt = arr.get("tilt", default_tilt)
             azimuth = arr.get("azimuth", default_azimuth)
             normalized.append(
                 {

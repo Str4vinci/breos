@@ -105,9 +105,7 @@ def load_profile(
 
     # Check if native 15-min file exists
     use_native_15min = (
-        freq in ("15min", "15T")
-        and profile_type in PROFILE_FILES_15MIN
-        and (rlp_directory / PROFILE_FILES_15MIN[profile_type]).exists()
+        freq == "15min" and profile_type in PROFILE_FILES_15MIN and (rlp_directory / PROFILE_FILES_15MIN[profile_type]).exists()
     )
 
     if use_native_15min:
@@ -146,7 +144,7 @@ def load_profile(
         df = _extend_to_years(df, start_year, num_years)
 
     # Resample if needed (hourly to 15-min)
-    if freq in ("15min", "15T") and native_freq == "h":
+    if freq == "15min" and native_freq == "h":
         df = _resample_load_to_15min(df)
 
     return df

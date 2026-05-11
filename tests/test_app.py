@@ -177,8 +177,8 @@ class TestAppSimulateMultiArray:
                 "cost_preset": "residential_pt",
                 "projection_years": 5,
                 "pv_arrays": [
-                    {"modules": 3, "module": "Erlangen_445W", "slope": 10, "azimuth": 90},
-                    {"modules": 3, "module": "Erlangen_445W", "slope": 10, "azimuth": 270},
+                    {"modules": 3, "module": "Erlangen_445W", "tilt": 10, "azimuth": 90},
+                    {"modules": 3, "module": "Erlangen_445W", "tilt": 10, "azimuth": 270},
                 ],
             }
         )
@@ -189,6 +189,7 @@ class TestAppSimulateMultiArray:
         assert self.result["n_modules"] == 6
         assert len(self.result["pv_arrays"]) == 2
         assert {arr["azimuth"] for arr in self.result["pv_arrays"]} == {90.0, 270.0}
+        assert {arr["tilt"] for arr in self.result["pv_arrays"]} == {10.0}
 
     def test_multi_array_result_has_chart_data(self):
         assert len(self.result["monthly"]) == 12

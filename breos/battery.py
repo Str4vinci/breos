@@ -31,10 +31,6 @@ from breos.constants import (
     DEFAULT_MIN_SOC,
     DEFAULT_STANDBY_LOSS_WH,
     DEFAULT_THERMAL_RESISTANCE_KW,
-    LAM_CAL_HOURLY_EA_J_MOL,
-    LAM_CAL_HOURLY_EXPONENT_B,
-    LAM_CAL_HOURLY_K0_FRAC,
-    LAM_CAL_HOURLY_SOC_EXPONENT_N,
     LAM_CAL_RELAXED_EA_J_MOL,
     LAM_CAL_RELAXED_EXPONENT_B,
     LAM_CAL_RELAXED_K0_FRAC,
@@ -58,10 +54,6 @@ from breos.constants import (
     NAUMANN_LAM_FIELD_CALIBRATED_EA_J_MOL,
     NAUMANN_LAM_FIELD_CALIBRATED_EXPONENT_B,
     NAUMANN_LAM_FIELD_CALIBRATED_K0_FRAC,
-    NAUMANN_LAM_FIELD_CALIBRATED_OLD_EA_J_MOL,
-    NAUMANN_LAM_FIELD_CALIBRATED_OLD_EXPONENT_B,
-    NAUMANN_LAM_FIELD_CALIBRATED_OLD_K0_FRAC,
-    NAUMANN_LAM_FIELD_CALIBRATED_OLD_SOC_EXPONENT_N,
     NAUMANN_LAM_FIELD_CALIBRATED_SOC_EXPONENT_N,
     NAUMANN_SOC_EXPONENT_N,
     NAUMANN_SOC_EXPONENT_N_R,
@@ -656,8 +648,6 @@ def _get_degradation_params(model: str) -> Tuple[float, float, float, float]:
         'naumann'                          — Naumann 2020 calendar + cycle (NMC/LFP lab)
         'naumann_lam'                      — Naumann cycle + Lam 2025 lab-derived calendar
         'naumann_lam_field_calibrated'     — Current field-calibrated fit (canonical name)
-        'naumann_lam_field_calibrated_old' — Previous 15-min field calibration
-        'naumann_lam_calibrated_hourly'    — Hourly field calibration
         'naumann_lam_modern'               — Projected 0.5×k₀ for 2020+ cells
     """
     model_lower = model.lower().replace("-", "_")
@@ -680,15 +670,6 @@ def _get_degradation_params(model: str) -> Tuple[float, float, float, float]:
             NAUMANN_LAM_FIELD_CALIBRATED_SOC_EXPONENT_N,
         )
 
-    # ── Naumann-Lam: previous 15-min field calibration ────────────────────
-    elif model_lower == "naumann_lam_field_calibrated_old":
-        return (
-            NAUMANN_LAM_FIELD_CALIBRATED_OLD_K0_FRAC,
-            NAUMANN_LAM_FIELD_CALIBRATED_OLD_EA_J_MOL,
-            NAUMANN_LAM_FIELD_CALIBRATED_OLD_EXPONENT_B,
-            NAUMANN_LAM_FIELD_CALIBRATED_OLD_SOC_EXPONENT_N,
-        )
-
     # ── Naumann-Lam: field-calibrated relaxed ─────────────────────────────
     elif model_lower == "naumann_lam_calibrated_relaxed":
         return (
@@ -698,15 +679,6 @@ def _get_degradation_params(model: str) -> Tuple[float, float, float, float]:
             LAM_CAL_RELAXED_SOC_EXPONENT_N,
         )
 
-    # ── Naumann-Lam: field-calibrated hourly ──────────────────────────────
-    elif model_lower == "naumann_lam_calibrated_hourly":
-        return (
-            LAM_CAL_HOURLY_K0_FRAC,
-            LAM_CAL_HOURLY_EA_J_MOL,
-            LAM_CAL_HOURLY_EXPONENT_B,
-            LAM_CAL_HOURLY_SOC_EXPONENT_N,
-        )
-
     # ── Naumann-Lam: modern LFP projection ───────────────────────────────
     elif model_lower == "naumann_lam_modern":
         return MODERN_LFP_K0_FRAC, MODERN_LFP_EA_J_MOL, MODERN_LFP_EXPONENT_B, MODERN_LFP_SOC_EXPONENT_N
@@ -714,8 +686,8 @@ def _get_degradation_params(model: str) -> Tuple[float, float, float, float]:
     else:
         raise ValueError(
             f"Unknown calendar model: {model}. Use 'naumann_lam_field_calibrated', "
-            f"'naumann_lam_field_calibrated_old', 'naumann_lam', "
-            f"'naumann_lam_calibrated_hourly', 'naumann_lam_modern', or 'naumann'."
+            f"'naumann_lam', 'naumann_lam_calibrated_relaxed', "
+            f"'naumann_lam_modern', or 'naumann'."
         )
 
 

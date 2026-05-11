@@ -64,13 +64,7 @@ def cost_params_from_config(
     costs_config: Optional[Dict[str, Any]] = None,
     financials_config: Optional[Dict[str, Any]] = None,
 ) -> CostParams:
-    """Build :class:`CostParams` from modern config keys with legacy fallbacks.
-
-    Modern keys (preferred): ``storage_cost_per_kwh``, ``inverter_cost_per_kw_hybrid``,
-    ``inverter_cost_per_kw_simple``, ``installation_cost_battery``,
-    ``other_cost_per_module``. Legacy keys (e.g. ``maintenance_cost``,
-    ``other_costs``) still work where they exist.
-    """
+    """Build :class:`CostParams` from BREOS cost and financial config keys."""
     costs_config = costs_config or {}
     financials_config = financials_config or {}
 
@@ -90,10 +84,7 @@ def cost_params_from_config(
         inverter_cost_per_kw=costs_config.get("inverter_cost_per_kw_hybrid", 102.58),
         inverter_cost_per_kw_nobatt=costs_config.get("inverter_cost_per_kw_simple", 48.37),
         installation_cost_per_module=costs_config.get("installation_cost_per_module", 350.0),
-        battery_installation_cost=costs_config.get(
-            "installation_cost_battery",
-            costs_config.get("battery_installation_cost", 350.0),
-        ),
+        battery_installation_cost=costs_config.get("installation_cost_battery", 350.0),
         other_cost_per_module=costs_config.get("other_cost_per_module", 0.0),
         other_cost_fixed=costs_config.get("other_costs", 0.0),
         maintenance_cost_per_panel=costs_config.get("maintenance_cost_per_panel", 0.0),
@@ -488,19 +479,6 @@ def cost_analysis_projection(
             # In `battery.py`, we log `battery_config.replacement_cost`. This is likely the base cost input.
             # So yes, we need to inflate it.
             proj.loc[proj["Year"] == relative_year, "Cost_Replacement"] += cost * inflation_factor
-
-    # 2. Static configuration fallback (for single year projection)
-    # Only if we didn't find replacement in the simulated data (avoid double counting?)
-    # or if the user explicitly wants to force a replacement year in projection.
-    if "battery_replacement_cost" in costs and "battery_replacement_year" in costs:
-        rep_year = costs["battery_replacement_year"]
-        if 1 <= rep_year <= num_years:
-            # Check if we already have a replacement cost from simulation there?
-            # If simulated replacement happened, we probably shouldn't add static one.
-            if proj.loc[proj["Year"] == rep_year, "Cost_Replacement"].sum() == 0:
-                rep_inflation = (1 + inflation_rate) ** (rep_year - 1)
-                rep_cost = costs["battery_replacement_cost"] * rep_inflation
-                proj.loc[proj["Year"] == rep_year, "Cost_Replacement"] += rep_cost
 
     # Add to annual system cost
     proj["Cost_System_Annual"] += proj["Cost_Replacement"]
