@@ -56,6 +56,28 @@ print(f"CO2 avoided: {result['co2_avoided_total_kg']:,.0f} kg")
 
 `result()` returns a plain Python dict (JSON-serializable, no pandas). See [Configuration](#configuration) for all options.
 
+## Command Line
+
+Run a simulation without writing Python:
+
+```bash
+breos run \
+  --location porto \
+  --n-modules 10 \
+  --annual-consumption-kwh 4000 \
+  --battery-kwh 5.0 \
+  --cost-preset residential-pt \
+  --emissions-country pt \
+  --output result.json
+```
+
+The CLI writes the same JSON-serializable result returned by `App.result()`.
+You can also pass a TOML or JSON config file:
+
+```bash
+breos run --config experiment1.toml --output result.json
+```
+
 ## Configuration
 
 All keys except `location`, `annual_consumption_kwh`, and either `n_modules` or `pv_arrays` are optional with sensible defaults.

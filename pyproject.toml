@@ -37,6 +37,9 @@ dependencies = [
 Homepage = "https://github.com/Str4vinci/breos"
 Repository = "https://github.com/Str4vinci/breos"
 
+[project.scripts]
+breos = "breos.cli:main"
+
 [project.optional-dependencies]
 dev = ["pytest>=8.0", "ruff>=0.15"]
 

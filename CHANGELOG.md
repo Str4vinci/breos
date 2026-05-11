@@ -6,6 +6,7 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 
 ### Added
 - Public API facade (`breos.App`) — single entry point for simulations: config dict in, plain dict out.
+- Command line entry point (`breos run`) for running simulations from shell flags or TOML/JSON config files.
 - Test suite — pytest coverage of the public API, battery, economics, emissions, and solar modules (all offline).
 - GitHub Actions CI on every push/PR.
 - `cost_params_from_config()` — config parser for `CostParams`.
