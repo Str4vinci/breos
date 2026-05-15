@@ -194,6 +194,10 @@ If you use BREOS in your research, please cite:
 }
 ```
 
+## Roadmap
+
+See [ROADMAP.md](ROADMAP.md) for planned architectural work and capability extensions.
+
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
