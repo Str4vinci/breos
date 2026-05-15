@@ -23,8 +23,6 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # Profile type mappings
 PROFILE_FILES = {
     "1": "h0SLP_demandlib_1000kwh_hourly.csv",
-    "2": "family_profile_SynPro.csv",
-    "3": "LoadProfileGenerator_family_3kids.csv",
     "4": "EREDES_2025_BTN_1000kwh_hourly.csv",  # BTN A - Commercial
     "5": "EREDES_2025_BTN_1000kwh_hourly.csv",  # BTN B - Hybrid
     "6": "EREDES_2025_BTN_1000kwh_hourly.csv",  # BTN C - Residential
@@ -43,8 +41,6 @@ PROFILE_FILES_15MIN = {
 
 PROFILE_NAMES = {
     "1": "H0SLP (demandlib)",
-    "2": "SynPro Family",
-    "3": "LoadProfileGenerator",
     "4": "E-Redes 2025 - BTN A (Commercial)",
     "5": "E-Redes 2025 - BTN B (Hybrid)",
     "6": "E-Redes 2025 - BTN C (Residential)",
@@ -73,13 +69,13 @@ def load_profile(
     Load and scale a residential/commercial load profile.
 
     This is the main function for loading load profiles. It handles:
-    - Multiple profile types (H0SLP, SynPro, E-Redes, etc.)
+    - Multiple profile types (H0SLP, E-Redes, BDEW H0, REE, etc.)
     - Scaling to target annual consumption
     - Multi-year extension
     - 15-minute resolution (using native files or interpolation)
 
     Args:
-        profile_type: Profile type ('1' to '6') or name
+        profile_type: Profile type key (see PROFILE_NAMES) or name
         annual_consumption_kwh: Target annual consumption in kWh
         start_date: Start date for the profile (YYYY-MM-DD)
         freq: Time frequency ('h' for hourly, '15min' for 15-minute)
@@ -164,13 +160,6 @@ def _load_profile_csv(csv_file: Path, profile_type: str) -> pd.DataFrame:
             elif "h0_dyn" in df.columns:
                 df["h0_dyn"] *= 1000
                 df.rename(columns={"h0_dyn": "Electrical Consumption [W]"}, inplace=True)
-
-        elif profile_type in ("2", "3"):
-            # SynPro / LoadProfileGenerator format
-            df = pd.read_csv(csv_file, index_col=0)
-            # Assume first column is consumption in W
-            if "Electrical Consumption [W]" not in df.columns:
-                df.columns = ["Electrical Consumption [W]"]
 
         elif profile_type in ("4", "5", "6"):
             # E-Redes format

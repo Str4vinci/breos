@@ -37,3 +37,10 @@ collaboration upon request (see README for context):
 - Heat pump integration with COP modeling and coupled electro-thermal
   energy balance.
 - Community Self-Consumption (CSC) modeling for multi-building scenarios.
+
+## Reference load profiles pending license verification
+
+The following sample load profiles were removed from `rlp/` and `breos.load_profiles` before the open-source release because their redistribution terms were not confirmed. They can be re-added once written permission or a clear license is obtained from the upstream providers.
+
+- **SynPRO Family profile** (Fraunhofer ISE) — was profile key `"2"` / `family_profile_SynPro.csv`. Contact: synpro@ise.fraunhofer.de.
+- **LoadProfileGenerator family-with-3-kids profile** (Noah Pflugradt, FZJ IEK-3) — was profile key `"3"` / `LoadProfileGenerator_family_3kids.csv`. Tool itself is MIT-licensed; output redistribution policy needs author confirmation.
