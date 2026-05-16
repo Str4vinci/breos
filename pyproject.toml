@@ -42,6 +42,14 @@ breos = "breos.cli:main"
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0", "ruff>=0.15"]
+docs = [
+    "sphinx>=8.1",
+    "pydata-sphinx-theme>=0.16",
+    "myst-parser>=4.0",
+    "sphinx-design>=0.6",
+    "sphinx-copybutton>=0.5",
+    "sphinx-autodoc-typehints>=2.5",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
