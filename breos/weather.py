@@ -10,6 +10,7 @@ This module handles:
 import os
 import random
 import re
+from datetime import timedelta
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
@@ -17,6 +18,8 @@ import pandas as pd
 import pvlib
 from pvlib.location import Location
 from scipy.interpolate import Akima1DInterpolator
+
+from breos.utils import safe_path_slug
 
 # Optional imports for API calls
 try:
@@ -289,8 +292,10 @@ def fetch_weather_data(
             "Install with: uv add openmeteo-requests requests-cache"
         )
 
-    # Setup the Open-Meteo API client with cache and retry
-    cache_session = requests_cache.CachedSession(".cache", expire_after=-1)
+    # Setup the Open-Meteo API client with cache and retry. Cache expires
+    # after 30 days so we don't serve indefinitely-stale entries if a single
+    # bad response was ever written.
+    cache_session = requests_cache.CachedSession(".cache", expire_after=timedelta(days=30))
     retries = Retry(total=5, backoff_factor=0.2, status_forcelist=[500, 502, 503, 504])
     cache_session.mount("https://", HTTPAdapter(max_retries=retries))
     cache_session.mount("http://", HTTPAdapter(max_retries=retries))
@@ -351,7 +356,7 @@ def fetch_weather_data(
         start_year = start_date[:4]
         end_year = end_date[:4]
         if location_name:
-            loc_slug = location_name.lower()
+            loc_slug = safe_path_slug(location_name)
         else:
             loc_slug = f"lat{latitude:.0f}_lon{longitude:.0f}"
         filename = os.path.join(output_dir, f"{loc_slug}_historical_{start_year}_{end_year}_openmeteo.csv")
@@ -818,8 +823,9 @@ def fetch_tmy_nsrdb(
         df = resample_to_15min(df, method="makima", latitude=latitude, longitude=longitude)
 
     if save_to_file and location_name:
-        vintage = year if year != "tmy" else "tmy"
-        filename = f"weather/{location_name}_tmy_{vintage}_nsrdb.csv"
+        loc_slug = safe_path_slug(location_name)
+        vintage = safe_path_slug(year) if year != "tmy" else "tmy"
+        filename = f"weather/{loc_slug}_tmy_{vintage}_nsrdb.csv"
         os.makedirs(os.path.dirname(filename), exist_ok=True)
         df.to_csv(filename)
         print(f"Saved NSRDB data to {filename}")

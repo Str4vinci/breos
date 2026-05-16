@@ -4,6 +4,29 @@ Utility functions for breos library.
 
 import multiprocessing
 import os
+import re
+
+_SAFE_SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
+
+
+def safe_path_slug(name: str) -> str:
+    """Validate *name* as a safe filename component and return it lower-cased.
+
+    Input is lower-cased, then validated: allowed characters are ASCII letters,
+    digits, ``_``, ``-``. The result must start with an alphanumeric character
+    and be at most 64 characters. Anything else (path separators, ``..``, NUL
+    bytes, spaces, dots) is rejected so the value cannot be used to escape an
+    intended output directory when interpolated into a filename.
+    """
+    if not isinstance(name, str):
+        raise TypeError(f"safe_path_slug: expected str, got {type(name).__name__}")
+    lowered = name.lower()
+    if not _SAFE_SLUG_RE.match(lowered):
+        raise ValueError(
+            f"Cannot use {name!r} as a filename component "
+            "(allowed: a-z, 0-9, _, -; must start alphanumeric; max 64 chars)"
+        )
+    return lowered
 
 
 def is_leap_year(year: int) -> bool:
