@@ -22,6 +22,7 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).parent.parent.resolve()
 sys.path.insert(0, str(PROJECT_ROOT))
 
+from breos.utils import safe_path_slug
 from breos.weather import fetch_weather_data
 
 LOCATIONS_PATH = PROJECT_ROOT / "configs" / "base" / "locations.json"
@@ -40,6 +41,9 @@ def resolve_cities(config: dict) -> dict[str, dict]:
     resolved = {}
 
     for key, value in config["cities"].items():
+        # Validate every key — it will later be interpolated into an output
+        # filename via fetch_city().
+        safe_path_slug(key)
         if isinstance(value, dict):
             resolved[key] = value
         elif value == "locations":
@@ -63,6 +67,9 @@ def add_cities_to_locations(cities: dict[str, dict], config: dict) -> None:
 
     for key, value in config["cities"].items():
         if isinstance(value, dict) and key not in locations:
+            # Validate as a safe filename slug so a later fetch_city call cannot
+            # use this key to escape WEATHER_DIR.
+            safe_path_slug(key)
             locations[key] = value
             added.append(key)
 
@@ -77,7 +84,9 @@ def add_cities_to_locations(cities: dict[str, dict], config: dict) -> None:
 
 def fetch_city(city_key: str, city_info: dict, start_year: int, end_year: int, source: str, force: bool) -> bool:
     """Fetch weather data for a single city. Returns True if data was fetched."""
-    outfile = WEATHER_DIR / f"{city_key}_historical_{start_year}_{end_year}_{source}.csv"
+    key_slug = safe_path_slug(city_key)
+    source_slug = safe_path_slug(source)
+    outfile = WEATHER_DIR / f"{key_slug}_historical_{start_year}_{end_year}_{source_slug}.csv"
 
     if outfile.exists() and not force:
         print(f"SKIP: {outfile.name} already exists (use --force to overwrite)")
