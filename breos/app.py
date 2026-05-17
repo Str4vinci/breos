@@ -39,6 +39,7 @@ from breos.pv_modules import MODULES, get_module
 from breos.solar import (
     calculate_multi_array_production,
     calculate_pv_production_dc,
+    calculate_pv_production_dc_tracking,
     estimate_optimal_tilt,
 )
 from breos.solar import (
@@ -58,6 +59,14 @@ _DEFAULTS: Dict[str, Any] = {
     "load_profile": "6",
     "tilt": None,
     "azimuth": None,
+    "tracking": "fixed",
+    "axis_tilt": 0.0,
+    "axis_azimuth": None,
+    "max_angle": 60.0,
+    "backtrack": True,
+    "gcr": 0.35,
+    "cross_axis_tilt": 0.0,
+    "dual_axis_max_tilt": 90.0,
     "resolution": "h",
     "projection_years": 20,
     "cost_preset": None,
@@ -126,8 +135,16 @@ class App:
           array separately and combines production before the energy balance.
         - ``pv_module`` (None) — PV module name from the catalogue; None = first available.
         - ``load_profile`` ("6") — load profile type ("1"–"8").
-        - ``tilt`` (None) — tilt angle in degrees; None = auto from latitude.
-        - ``azimuth`` (None) — surface azimuth; None = auto from latitude.
+        - ``tilt`` (None) — tilt angle in degrees; None = auto from latitude (fixed only).
+        - ``azimuth`` (None) — surface azimuth; None = auto from latitude (fixed only).
+        - ``tracking`` ("fixed") — ``"fixed"``, ``"single_axis"``, or ``"dual_axis"``.
+        - ``axis_tilt`` (0.0) — single-axis rotation-axis tilt (degrees, 0 = HSAT).
+        - ``axis_azimuth`` (None) — single-axis rotation-axis azimuth (None = auto from latitude).
+        - ``max_angle`` (60.0) — single-axis maximum rotation from horizontal (±deg).
+        - ``backtrack`` (True) — single-axis backtracking to avoid row-shading.
+        - ``gcr`` (0.35) — single-axis ground coverage ratio.
+        - ``cross_axis_tilt`` (0.0) — terrain slope perpendicular to rotation axis.
+        - ``dual_axis_max_tilt`` (90.0) — dual-axis panel tilt cap (degrees).
         - ``resolution`` ("h") — time resolution ("h" or "15min").
         - ``projection_years`` (20) — economic projection horizon.
         - ``cost_preset`` (None) — key into configs/costs.json.
@@ -185,9 +202,17 @@ class App:
             self._avg_module_power_w = self._pv_params.Mpp
             self._system_kwp = cfg["n_modules"] * self._pv_params.Mpp / 1000
 
-        # Resolve tilt / azimuth
+        # Resolve tilt / azimuth (used for fixed-tilt arrays; ignored for tracking)
         self._tilt = cfg["tilt"] if cfg["tilt"] is not None else estimate_optimal_tilt(self._lat)
         self._azimuth = cfg["azimuth"] if cfg["azimuth"] is not None else default_azimuth_fn(self._lat)
+
+        # Resolve tracking
+        tracking = cfg["tracking"]
+        if tracking not in ("fixed", "single_axis", "dual_axis"):
+            raise ValueError(f"tracking must be 'fixed', 'single_axis', or 'dual_axis', got {tracking!r}")
+        self._tracking = tracking
+        # axis_azimuth defaults to hemisphere-appropriate orientation
+        self._axis_azimuth = cfg["axis_azimuth"] if cfg["axis_azimuth"] is not None else default_azimuth_fn(self._lat)
 
         # Resolve cost preset
         self._cost_params = self._resolve_costs(cfg)
@@ -232,15 +257,32 @@ class App:
                 freq=freq,
             )
         else:
-            dc_1mod = calculate_pv_production_dc(
-                weather_data=weather,
-                location=location,
-                tilt=self._tilt,
-                surface_azimuth=self._azimuth,
-                n_modules=1,
-                pv_params=self._pv_params,
-                freq=freq,
-            )
+            if self._tracking == "fixed":
+                dc_1mod = calculate_pv_production_dc(
+                    weather_data=weather,
+                    location=location,
+                    tilt=self._tilt,
+                    surface_azimuth=self._azimuth,
+                    n_modules=1,
+                    pv_params=self._pv_params,
+                    freq=freq,
+                )
+            else:
+                dc_1mod = calculate_pv_production_dc_tracking(
+                    weather_data=weather,
+                    location=location,
+                    n_modules=1,
+                    tracking=self._tracking,
+                    axis_tilt=cfg["axis_tilt"],
+                    axis_azimuth=self._axis_azimuth,
+                    max_angle=cfg["max_angle"],
+                    backtrack=cfg["backtrack"],
+                    gcr=cfg["gcr"],
+                    cross_axis_tilt=cfg["cross_axis_tilt"],
+                    dual_axis_max_tilt=cfg["dual_axis_max_tilt"],
+                    pv_params=self._pv_params,
+                    freq=freq,
+                )
             dc_system_base = dc_1mod * n_modules
 
         # 3. Load profile

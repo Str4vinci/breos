@@ -14,7 +14,6 @@ import numpy as np
 import pandas as pd
 import pvlib
 from pvlib.location import Location
-from pvlib.pvsystem import PVSystem
 
 from breos.utils import get_hours_per_step
 
@@ -67,6 +66,133 @@ class PVModuleParams:
         self.gamma_pmp = self.T_Pmax_pct
 
 
+def _prepare_solarpos_and_weather(weather_data: pd.DataFrame, location: Location, freq: str):
+    """Build time index, solar position, and aligned weather frame."""
+    if not isinstance(weather_data.index, pd.DatetimeIndex):
+        raise ValueError("weather_data must have a DatetimeIndex")
+
+    times = pd.date_range(start=weather_data.index[0], end=weather_data.index[-1], freq=freq)
+    solarpos = location.get_solarposition(times=times)
+    weather_aligned = weather_data.reindex(times, method="nearest")
+    return times, solarpos, weather_aligned
+
+
+def _compute_effective_irradiance_and_cell_temp(
+    weather_aligned: pd.DataFrame,
+    solarpos: pd.DataFrame,
+    surface_tilt,
+    surface_azimuth,
+):
+    """Compute effective POA irradiance (with IAM) and cell temperature.
+
+    surface_tilt / surface_azimuth may be scalars (fixed) or per-timestep arrays/Series
+    (tracking). Uses pvlib.irradiance.get_total_irradiance which is array-aware.
+    """
+    dni, ghi, dhi = _extract_irradiance(weather_aligned)
+    temp_air, wind_speed = _extract_met_data(weather_aligned)
+
+    aoi = pvlib.irradiance.aoi(surface_tilt, surface_azimuth, solarpos.apparent_zenith, solarpos.azimuth)
+    iam = pvlib.iam.ashrae(aoi)
+
+    poa = pvlib.irradiance.get_total_irradiance(
+        surface_tilt=surface_tilt,
+        surface_azimuth=surface_azimuth,
+        solar_zenith=solarpos.zenith,
+        solar_azimuth=solarpos.azimuth,
+        dni=dni,
+        ghi=ghi,
+        dhi=dhi,
+        model="isotropic",
+    )
+
+    poa_direct = np.nan_to_num(poa["poa_direct"].values, nan=0.0)
+    poa_diffuse = np.nan_to_num(poa["poa_diffuse"].values, nan=0.0)
+    poa_global = np.nan_to_num(poa["poa_global"].values, nan=0.0)
+    iam_clean = np.nan_to_num(np.asarray(iam, dtype=float), nan=0.0)
+
+    effective_irradiance = poa_direct * iam_clean + poa_diffuse
+    temp_cell = pvlib.temperature.faiman(poa_global, temp_air, wind_speed)
+    return effective_irradiance, temp_cell
+
+
+def _get_cec_params(pv_params: "PVModuleParams"):
+    """Fetch (and cache) CEC single-diode model params for a module."""
+    key = (
+        pv_params.celltype,
+        pv_params.Vmp,
+        pv_params.Imp,
+        pv_params.Voc,
+        pv_params.Isc,
+        pv_params.alpha_sc,
+        pv_params.beta_voc,
+        pv_params.gamma_pmp,
+        pv_params.N_Cells,
+    )
+    if key in _cec_param_cache:
+        return _cec_param_cache[key]
+
+    cec = pvlib.ivtools.sdm.fit_cec_sam(
+        celltype=pv_params.celltype,
+        v_mp=pv_params.Vmp,
+        i_mp=pv_params.Imp,
+        v_oc=pv_params.Voc,
+        i_sc=pv_params.Isc,
+        alpha_sc=pv_params.alpha_sc,
+        beta_voc=pv_params.beta_voc,
+        gamma_pmp=pv_params.gamma_pmp,
+        cells_in_series=pv_params.N_Cells,
+    )
+    _cec_param_cache[key] = cec
+    return cec
+
+
+def _dc_from_poa(
+    effective_irradiance: np.ndarray,
+    temp_cell: np.ndarray,
+    pv_params: "PVModuleParams",
+    n_modules: int,
+    times: pd.DatetimeIndex,
+    degradation_rate: float = 0.0,
+    current_year: Optional[int] = None,
+    start_year: Optional[int] = None,
+) -> pd.Series:
+    """Run CEC single-diode + pvwatts loss model and scale to array.
+
+    Shared between fixed-tilt and tracking DC paths.
+    """
+    I_L_ref, I_o_ref, R_s, R_sh_ref, a_ref, Adjust = _get_cec_params(pv_params)
+
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", category=RuntimeWarning)
+        cec = pvlib.pvsystem.calcparams_cec(
+            effective_irradiance, temp_cell, pv_params.alpha_sc, a_ref, I_L_ref, I_o_ref, R_sh_ref, R_s, Adjust
+        )
+        mpp = pvlib.pvsystem.max_power_point(*cec, method="newton")
+
+    if current_year is not None and start_year is not None:
+        years_operating = current_year - start_year + 0.5
+        age_degradation_factor = 100 * (1 - (1 - degradation_rate) ** years_operating)
+    else:
+        age_degradation_factor = 0.0
+
+    total_losses_percent = pvlib.pvsystem.pvwatts_losses(
+        soiling=2,
+        shading=3,
+        snow=0,
+        mismatch=2,
+        wiring=2,
+        connections=0.5,
+        lid=1.5,
+        nameplate_rating=1,
+        age=age_degradation_factor,
+        availability=3,
+    )
+
+    p_mp = mpp["p_mp"] if isinstance(mpp, dict) else mpp.p_mp
+    dc_power = np.asarray(p_mp) * n_modules * (1 - total_losses_percent / 100)
+    return pd.Series(dc_power, index=times, name="dc_power_W")
+
+
 def calculate_pv_production_dc(
     weather_data: pd.DataFrame,
     location: Location,
@@ -81,7 +207,7 @@ def calculate_pv_production_dc(
     verbose: bool = False,
 ) -> pd.Series:
     """
-    Calculate PV DC production from weather data.
+    Calculate PV DC production from weather data (fixed-tilt array).
 
     Returns DC power BEFORE inverter conversion. Use dc_to_ac() to convert
     to AC power for grid export or AC loads.
@@ -111,115 +237,130 @@ def calculate_pv_production_dc(
 
         pv_params = get_module("Generic_400W")
 
-    # Determine time range from weather data
-    if isinstance(weather_data.index, pd.DatetimeIndex):
-        start_h = weather_data.index[0]
-        end_h = weather_data.index[-1]
-    else:
-        raise ValueError("weather_data must have a DatetimeIndex")
-
-    # Get solar position
-    times = pd.date_range(start=start_h, end=end_h, freq=freq)
-    solarpos = location.get_solarposition(times=times)
-
-    # Align weather data with times
-    weather_aligned = weather_data.reindex(times, method="nearest")
-
-    # Calculate angle of incidence and IAM
-    aoi = pvlib.irradiance.aoi(tilt, surface_azimuth, solarpos.apparent_zenith, solarpos.azimuth)
-    iam = pvlib.iam.ashrae(aoi)
-
-    # Extract irradiance components (handle different column naming conventions)
-    dni, ghi, dhi = _extract_irradiance(weather_aligned)
-    temp_air, wind_speed = _extract_met_data(weather_aligned)
-
-    # Create PV system
-    pv_system = PVSystem(
-        surface_tilt=tilt, surface_azimuth=surface_azimuth, modules_per_string=n_modules, strings_per_inverter=1
+    times, solarpos, weather_aligned = _prepare_solarpos_and_weather(weather_data, location, freq)
+    effective_irradiance, temp_cell = _compute_effective_irradiance_and_cell_temp(
+        weather_aligned, solarpos, surface_tilt=tilt, surface_azimuth=surface_azimuth
     )
-
-    # Calculate POA irradiance
-    poa_irradiance = pv_system.get_irradiance(
-        solarpos.zenith, solarpos.azimuth, dni=dni, ghi=ghi, dhi=dhi, model="isotropic"
+    dc_power = _dc_from_poa(
+        effective_irradiance,
+        temp_cell,
+        pv_params,
+        n_modules,
+        times,
+        degradation_rate=degradation_rate,
+        current_year=current_year,
+        start_year=start_year,
     )
-
-    # Effective irradiance (with IAM)
-    effective_irradiance = poa_irradiance["poa_direct"].values * iam + poa_irradiance["poa_diffuse"].values
-
-    # Cell temperature
-    temp_cell = pvlib.temperature.faiman(poa_irradiance["poa_global"].values, temp_air, wind_speed)
-
-    # Calculate CEC model parameters (cached — only depends on module specs)
-    _cache_key = (
-        pv_params.celltype,
-        pv_params.Vmp,
-        pv_params.Imp,
-        pv_params.Voc,
-        pv_params.Isc,
-        pv_params.alpha_sc,
-        pv_params.beta_voc,
-        pv_params.gamma_pmp,
-        pv_params.N_Cells,
-    )
-    if _cache_key in _cec_param_cache:
-        I_L_ref, I_o_ref, R_s, R_sh_ref, a_ref, Adjust = _cec_param_cache[_cache_key]
-    else:
-        I_L_ref, I_o_ref, R_s, R_sh_ref, a_ref, Adjust = pvlib.ivtools.sdm.fit_cec_sam(
-            celltype=pv_params.celltype,
-            v_mp=pv_params.Vmp,
-            i_mp=pv_params.Imp,
-            v_oc=pv_params.Voc,
-            i_sc=pv_params.Isc,
-            alpha_sc=pv_params.alpha_sc,
-            beta_voc=pv_params.beta_voc,
-            gamma_pmp=pv_params.gamma_pmp,
-            cells_in_series=pv_params.N_Cells,
-        )
-        _cec_param_cache[_cache_key] = (I_L_ref, I_o_ref, R_s, R_sh_ref, a_ref, Adjust)
-
-    # Suppress RuntimeWarnings from pvlib during low/zero irradiance conditions (harmless)
-    with warnings.catch_warnings():
-        warnings.filterwarnings("ignore", category=RuntimeWarning)
-
-        # Calculate module parameters at operating conditions
-        cec_params = pvlib.pvsystem.calcparams_cec(
-            effective_irradiance, temp_cell, pv_params.alpha_sc, a_ref, I_L_ref, I_o_ref, R_sh_ref, R_s, Adjust
-        )
-
-        # Maximum power point
-        mpp = pvlib.pvsystem.max_power_point(*cec_params, method="newton")
-
-    # Calculate losses
-    if current_year is not None and start_year is not None:
-        years_operating = current_year - start_year + 0.5
-        age_degradation_factor = 100 * (1 - (1 - degradation_rate) ** years_operating)
-    else:
-        age_degradation_factor = 0.0
-
-    total_losses_percent = pvlib.pvsystem.pvwatts_losses(
-        soiling=2,
-        shading=3,
-        snow=0,
-        mismatch=2,
-        wiring=2,
-        connections=0.5,
-        lid=1.5,
-        nameplate_rating=1,
-        age=age_degradation_factor,
-        availability=3,
-    )
-
-    # Scale power by number of modules
-    dc_scaled = pv_system.scale_voltage_current_power(mpp)
-    dc_power = dc_scaled.p_mp * (1 - total_losses_percent / 100)
-
-    # Create output series with datetime index
-    dc_power = pd.Series(dc_power, index=times, name="dc_power_W")
 
     if verbose:
-        hours_per_step = get_hours_per_step(freq)
-        total_kwh = dc_power.sum() * hours_per_step / 1000
+        total_kwh = dc_power.sum() * get_hours_per_step(freq) / 1000
         print(f"Total PV DC production for tilt {tilt} deg: {total_kwh:.1f} kWh")
+
+    return dc_power
+
+
+def calculate_pv_production_dc_tracking(
+    weather_data: pd.DataFrame,
+    location: Location,
+    n_modules: int,
+    tracking: str = "single_axis",
+    axis_tilt: float = 0.0,
+    axis_azimuth: float = 180.0,
+    max_angle: float = 60.0,
+    backtrack: bool = True,
+    gcr: float = 0.35,
+    cross_axis_tilt: float = 0.0,
+    dual_axis_max_tilt: float = 90.0,
+    pv_params: Optional[PVModuleParams] = None,
+    freq: str = "h",
+    degradation_rate: float = 0.0,
+    current_year: Optional[int] = None,
+    start_year: Optional[int] = None,
+    verbose: bool = False,
+) -> pd.Series:
+    """
+    Calculate PV DC production for a tracking array (single- or dual-axis).
+
+    Single-axis (horizontal or tilted) trackers are the dominant configuration in
+    utility-scale PV. Dual-axis trackers gain slightly more energy but at higher
+    cost; they are common in CPV and high-latitude installations.
+
+    Args:
+        weather_data: DataFrame with weather variables.
+        location: pvlib Location object.
+        n_modules: Number of PV modules.
+        tracking: ``"single_axis"`` or ``"dual_axis"``.
+        axis_tilt: Tilt of the rotation axis (degrees). Single-axis only.
+            ``0`` = horizontal (HSAT); typical utility installations are 0.
+        axis_azimuth: Compass direction of the rotation axis (degrees).
+            ``180`` = N-S axis (panels rotate east→west across the day). Single-axis only.
+        max_angle: Maximum rotation from horizontal (degrees, ±). Typical ±60°.
+        backtrack: Whether the tracker backtracks to avoid row-to-row shading at low sun.
+        gcr: Ground coverage ratio (array area / land area). Typical 0.3–0.4 for utility.
+        cross_axis_tilt: Tilt of the axis perpendicular to the rotation axis (terrain slope).
+        dual_axis_max_tilt: Maximum panel tilt for dual-axis (degrees). ``90`` = unlimited.
+        pv_params: PV module parameters (uses defaults if None).
+        freq: Time frequency (``"h"`` or ``"15min"``).
+        degradation_rate: Annual degradation rate.
+        current_year: Current simulation year (for age-based degradation).
+        start_year: Year system was installed.
+        verbose: Whether to print production summary.
+
+    Returns:
+        pd.Series with DC power production in Watts (before inverter).
+    """
+    if tracking not in ("single_axis", "dual_axis"):
+        raise ValueError(f"tracking must be 'single_axis' or 'dual_axis', got {tracking!r}")
+
+    if pv_params is None:
+        from breos.pv_modules import get_module
+
+        pv_params = get_module("Generic_400W")
+
+    times, solarpos, weather_aligned = _prepare_solarpos_and_weather(weather_data, location, freq)
+
+    if tracking == "single_axis":
+        tracker = pvlib.tracking.singleaxis(
+            apparent_zenith=solarpos.apparent_zenith,
+            solar_azimuth=solarpos.azimuth,
+            axis_tilt=axis_tilt,
+            axis_azimuth=axis_azimuth,
+            max_angle=max_angle,
+            backtrack=backtrack,
+            gcr=gcr,
+            cross_axis_tilt=cross_axis_tilt,
+        )
+        # singleaxis returns NaN when sun is below horizon — stow to axis orientation
+        surface_tilt = tracker["surface_tilt"].fillna(axis_tilt).values
+        surface_azimuth = tracker["surface_azimuth"].fillna(axis_azimuth).values
+    else:
+        # Dual-axis: panel normal points at sun. Clip below horizon.
+        zenith = solarpos.apparent_zenith.values
+        sun_azimuth = solarpos.azimuth.values
+        surface_tilt = np.clip(zenith, 0.0, dual_axis_max_tilt)
+        surface_azimuth = sun_azimuth
+        # When sun is below horizon, stow flat facing south/north (axis_azimuth fallback)
+        below_horizon = zenith >= 90.0
+        surface_tilt = np.where(below_horizon, 0.0, surface_tilt)
+        surface_azimuth = np.where(below_horizon, axis_azimuth, surface_azimuth)
+
+    effective_irradiance, temp_cell = _compute_effective_irradiance_and_cell_temp(
+        weather_aligned, solarpos, surface_tilt=surface_tilt, surface_azimuth=surface_azimuth
+    )
+    dc_power = _dc_from_poa(
+        effective_irradiance,
+        temp_cell,
+        pv_params,
+        n_modules,
+        times,
+        degradation_rate=degradation_rate,
+        current_year=current_year,
+        start_year=start_year,
+    )
+
+    if verbose:
+        total_kwh = dc_power.sum() * get_hours_per_step(freq) / 1000
+        print(f"Total PV DC production ({tracking}): {total_kwh:.1f} kWh")
 
     return dc_power
 
@@ -493,14 +634,25 @@ def calculate_multi_array_production(
     """
     Calculate combined DC production from multiple PV arrays.
 
+    Each array is either fixed-tilt or tracking. Mixed configurations are supported.
+
     Args:
         weather_data: DataFrame with weather variables
         location: pvlib Location object
         arrays: List of dicts, each containing:
-            - 'modules': Number of modules (int)
-            - 'tilt': Tilt angle (float)
-            - 'azimuth': Azimuth angle (float)
-            - 'module': Module model name (str) [Optional]
+            Required:
+              - 'modules': Number of modules (int)
+            Common:
+              - 'module': Module model name (str)
+              - 'tracking': "fixed" (default) | "single_axis" | "dual_axis"
+            Fixed-tilt only:
+              - 'tilt': Tilt angle (float, deg)
+              - 'azimuth': Surface azimuth (float, deg)
+            Tracking only (single_axis defaults shown):
+              - 'axis_tilt' (0.0), 'axis_azimuth' (180.0), 'max_angle' (60.0),
+                'backtrack' (True), 'gcr' (0.35), 'cross_axis_tilt' (0.0)
+            Dual-axis only:
+              - 'dual_axis_max_tilt' (90.0)
         freq: Time frequency ('h' or '15min')
         degradation_rate: Annual degradation rate
         current_year: Current simulation year
@@ -523,28 +675,64 @@ def calculate_multi_array_production(
         if n_mod <= 0:
             continue
 
-        tilt = arr.get("tilt", 35)
-        azimuth = arr.get("azimuth", default_azimuth(location.latitude))
         mod_name = arr.get("module", "Generic_400W")
-
         pv_params = get_module(mod_name)
+        tracking = arr.get("tracking", "fixed")
 
-        if verbose:
-            print(f"   Array {i + 1}: {n_mod}x {mod_name}, Tilt={tilt}, Azimuth={azimuth}")
+        if tracking == "fixed":
+            tilt = arr.get("tilt", 35)
+            azimuth = arr.get("azimuth", default_azimuth(location.latitude))
 
-        dc = calculate_pv_production_dc(
-            weather_data=weather_data,
-            location=location,
-            tilt=tilt,
-            surface_azimuth=azimuth,
-            n_modules=n_mod,
-            pv_params=pv_params,
-            freq=freq,
-            degradation_rate=degradation_rate,
-            current_year=current_year,
-            start_year=start_year,
-            verbose=False,
-        )
+            if verbose:
+                print(f"   Array {i + 1}: {n_mod}x {mod_name}, fixed Tilt={tilt}, Azimuth={azimuth}")
+
+            dc = calculate_pv_production_dc(
+                weather_data=weather_data,
+                location=location,
+                tilt=tilt,
+                surface_azimuth=azimuth,
+                n_modules=n_mod,
+                pv_params=pv_params,
+                freq=freq,
+                degradation_rate=degradation_rate,
+                current_year=current_year,
+                start_year=start_year,
+                verbose=False,
+            )
+        elif tracking in ("single_axis", "dual_axis"):
+            if verbose:
+                if tracking == "single_axis":
+                    print(
+                        f"   Array {i + 1}: {n_mod}x {mod_name}, single-axis "
+                        f"axis_azimuth={arr.get('axis_azimuth', 180.0)}, "
+                        f"gcr={arr.get('gcr', 0.35)}, max_angle=±{arr.get('max_angle', 60.0)}"
+                    )
+                else:
+                    print(f"   Array {i + 1}: {n_mod}x {mod_name}, dual-axis")
+
+            dc = calculate_pv_production_dc_tracking(
+                weather_data=weather_data,
+                location=location,
+                n_modules=n_mod,
+                tracking=tracking,
+                axis_tilt=arr.get("axis_tilt", 0.0),
+                axis_azimuth=arr.get("axis_azimuth", default_azimuth(location.latitude)),
+                max_angle=arr.get("max_angle", 60.0),
+                backtrack=arr.get("backtrack", True),
+                gcr=arr.get("gcr", 0.35),
+                cross_axis_tilt=arr.get("cross_axis_tilt", 0.0),
+                dual_axis_max_tilt=arr.get("dual_axis_max_tilt", 90.0),
+                pv_params=pv_params,
+                freq=freq,
+                degradation_rate=degradation_rate,
+                current_year=current_year,
+                start_year=start_year,
+                verbose=False,
+            )
+        else:
+            raise ValueError(
+                f"Array {i + 1}: unknown tracking mode {tracking!r}. Use 'fixed', 'single_axis', or 'dual_axis'."
+            )
 
         if total_dc is None:
             total_dc = dc.fillna(0)

@@ -157,8 +157,10 @@ from breos.pv_modules import (
 # Solar
 from breos.solar import (
     PVModuleParams,
+    calculate_multi_array_production,
     calculate_pv_production_ac,
     calculate_pv_production_dc,
+    calculate_pv_production_dc_tracking,
     calculate_pv_production_tmy,
     dc_to_ac,
     default_azimuth,
@@ -293,6 +295,8 @@ __all__ = [
     "extract_ambient_temperature",
     # Solar
     "calculate_pv_production_dc",
+    "calculate_pv_production_dc_tracking",
+    "calculate_multi_array_production",
     "calculate_pv_production_ac",
     "calculate_pv_production_tmy",
     "dc_to_ac",
