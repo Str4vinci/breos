@@ -300,7 +300,7 @@ class App:
         if ambient_temp is not None:
             temp_series = apply_indoor_temperature_model(ambient_temp)
         else:
-            temp_series = pd.Series(25.0, index=dc_1mod.index)
+            temp_series = pd.Series(25.0, index=dc_system_base.index)
 
         # 5. Multi-year propagation
         replacement_cost_per_kwh = self._cost_params.battery_cost_per_kwh
@@ -456,15 +456,7 @@ class App:
         }
 
         if self._pv_arrays:
-            result["pv_arrays"] = [
-                {
-                    "modules": arr["modules"],
-                    "module": arr["module"],
-                    "tilt": arr["tilt"],
-                    "azimuth": arr["azimuth"],
-                }
-                for arr in self._pv_arrays
-            ]
+            result["pv_arrays"] = [dict(arr) for arr in self._pv_arrays]
 
         # Battery (only if present)
         if has_battery:
@@ -544,20 +536,33 @@ class App:
             self._cfg.get("azimuth") if self._cfg.get("azimuth") is not None else default_azimuth_fn(self._lat)
         )
 
+        tracking_passthrough_keys = (
+            "tracking",
+            "axis_tilt",
+            "axis_azimuth",
+            "max_angle",
+            "backtrack",
+            "gcr",
+            "cross_axis_tilt",
+            "dual_axis_max_tilt",
+        )
+
         normalized = []
         for arr in arrays:
             modules = int(arr["modules"])
             module = arr.get("module") or default_module
             tilt = arr.get("tilt", default_tilt)
             azimuth = arr.get("azimuth", default_azimuth)
-            normalized.append(
-                {
-                    "modules": modules,
-                    "module": module,
-                    "tilt": float(tilt),
-                    "azimuth": float(azimuth),
-                }
-            )
+            entry = {
+                "modules": modules,
+                "module": module,
+                "tilt": float(tilt),
+                "azimuth": float(azimuth),
+            }
+            for key in tracking_passthrough_keys:
+                if key in arr:
+                    entry[key] = arr[key]
+            normalized.append(entry)
         return normalized
 
     def _load_weather(self, freq: str, start_year: int) -> pd.DataFrame:

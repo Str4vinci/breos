@@ -200,6 +200,105 @@ class TestAppSimulateMultiArray:
         assert self.result["pv_production_kwh"] > 0
 
 
+class TestAppSimulateTracking:
+    def test_invalid_tracking(self, _patch_weather):
+        with pytest.raises(ValueError, match="tracking must be"):
+            App(
+                {
+                    "location": "porto",
+                    "n_modules": 6,
+                    "annual_consumption_kwh": 3000,
+                    "tracking": "trinity_axis",
+                }
+            )
+
+    def test_single_axis_runs(self, _patch_weather):
+        app = App(
+            {
+                "location": "porto",
+                "n_modules": 6,
+                "annual_consumption_kwh": 3000,
+                "cost_preset": "residential_pt",
+                "projection_years": 3,
+                "tracking": "single_axis",
+                "max_angle": 60.0,
+                "gcr": 0.35,
+            }
+        )
+        app.simulate()
+        result = app.result()
+        assert result["pv_production_kwh"] > 0
+        json.dumps(result)
+
+    def test_dual_axis_runs(self, _patch_weather):
+        app = App(
+            {
+                "location": "porto",
+                "n_modules": 6,
+                "annual_consumption_kwh": 3000,
+                "cost_preset": "residential_pt",
+                "projection_years": 3,
+                "tracking": "dual_axis",
+            }
+        )
+        app.simulate()
+        result = app.result()
+        assert result["pv_production_kwh"] > 0
+
+    def test_tracking_beats_fixed_via_app(self, _patch_weather):
+        """At the App level, single-axis (no backtrack, ±90°) should beat optimal fixed tilt."""
+        common = {
+            "location": "porto",
+            "n_modules": 6,
+            "annual_consumption_kwh": 3000,
+            "cost_preset": "residential_pt",
+            "projection_years": 1,
+        }
+        fixed = App(common)
+        fixed.simulate()
+        tracked = App({**common, "tracking": "single_axis", "backtrack": False, "max_angle": 90.0})
+        tracked.simulate()
+        assert tracked.result()["pv_production_kwh"] > fixed.result()["pv_production_kwh"]
+
+    def test_per_array_tracking_flows_through(self, _patch_weather):
+        """Tracking keys on pv_arrays entries must reach calculate_multi_array_production."""
+        fixed_app = App(
+            {
+                "location": "porto",
+                "annual_consumption_kwh": 3000,
+                "cost_preset": "residential_pt",
+                "projection_years": 1,
+                "pv_arrays": [
+                    {"modules": 6, "module": "Erlangen_445W", "tilt": 30, "azimuth": 180},
+                ],
+            }
+        )
+        fixed_app.simulate()
+        tracked_app = App(
+            {
+                "location": "porto",
+                "annual_consumption_kwh": 3000,
+                "cost_preset": "residential_pt",
+                "projection_years": 1,
+                "pv_arrays": [
+                    {
+                        "modules": 6,
+                        "module": "Erlangen_445W",
+                        "tracking": "single_axis",
+                        "axis_azimuth": 180,
+                        "max_angle": 90.0,
+                        "backtrack": False,
+                    },
+                ],
+            }
+        )
+        tracked_app.simulate()
+        # Tracking key must echo into result
+        assert tracked_app.result()["pv_arrays"][0].get("tracking") == "single_axis"
+        # And actually change production vs fixed
+        assert tracked_app.result()["pv_production_kwh"] != fixed_app.result()["pv_production_kwh"]
+
+
 class TestAppSimulateWithBattery:
     @pytest.fixture(autouse=True)
     def _setup(self, _patch_weather):
