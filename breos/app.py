@@ -209,14 +209,10 @@ class App:
         # Resolve tracking
         tracking = cfg["tracking"]
         if tracking not in ("fixed", "single_axis", "dual_axis"):
-            raise ValueError(
-                f"tracking must be 'fixed', 'single_axis', or 'dual_axis', got {tracking!r}"
-            )
+            raise ValueError(f"tracking must be 'fixed', 'single_axis', or 'dual_axis', got {tracking!r}")
         self._tracking = tracking
         # axis_azimuth defaults to hemisphere-appropriate orientation
-        self._axis_azimuth = (
-            cfg["axis_azimuth"] if cfg["axis_azimuth"] is not None else default_azimuth_fn(self._lat)
-        )
+        self._axis_azimuth = cfg["axis_azimuth"] if cfg["axis_azimuth"] is not None else default_azimuth_fn(self._lat)
 
         # Resolve cost preset
         self._cost_params = self._resolve_costs(cfg)

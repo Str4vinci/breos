@@ -731,8 +731,7 @@ def calculate_multi_array_production(
             )
         else:
             raise ValueError(
-                f"Array {i + 1}: unknown tracking mode {tracking!r}. "
-                "Use 'fixed', 'single_axis', or 'dual_axis'."
+                f"Array {i + 1}: unknown tracking mode {tracking!r}. Use 'fixed', 'single_axis', or 'dual_axis'."
             )
 
         if total_dc is None:

@@ -137,28 +137,20 @@ class TestTracking:
         """Single-axis tracker should produce more annual energy than optimal fixed tilt."""
         fixed = self._fixed(synthetic_weather, porto_location, pv_params).sum()
         # No backtracking, no row shading penalty for a fair upper-bound comparison
-        single = self._single(
-            synthetic_weather, porto_location, pv_params, backtrack=False, max_angle=90
-        ).sum()
+        single = self._single(synthetic_weather, porto_location, pv_params, backtrack=False, max_angle=90).sum()
         assert single > fixed
 
     def test_dual_geq_single_geq_fixed(self, synthetic_weather, porto_location, pv_params):
         """Energy hierarchy: dual_axis >= single_axis >= fixed (no-backtrack, full range)."""
         fixed = self._fixed(synthetic_weather, porto_location, pv_params).sum()
-        single = self._single(
-            synthetic_weather, porto_location, pv_params, backtrack=False, max_angle=90
-        ).sum()
+        single = self._single(synthetic_weather, porto_location, pv_params, backtrack=False, max_angle=90).sum()
         dual = self._dual(synthetic_weather, porto_location, pv_params).sum()
         assert dual >= single >= fixed
 
     def test_backtracking_reduces_low_sun_output(self, synthetic_weather, porto_location, pv_params):
         """Backtracking sacrifices some low-sun output to avoid row-to-row shading."""
-        no_bt = self._single(
-            synthetic_weather, porto_location, pv_params, backtrack=False, gcr=0.6, max_angle=60
-        ).sum()
-        bt = self._single(
-            synthetic_weather, porto_location, pv_params, backtrack=True, gcr=0.6, max_angle=60
-        ).sum()
+        no_bt = self._single(synthetic_weather, porto_location, pv_params, backtrack=False, gcr=0.6, max_angle=60).sum()
+        bt = self._single(synthetic_weather, porto_location, pv_params, backtrack=True, gcr=0.6, max_angle=60).sum()
         # With high GCR (0.6) backtracking is non-trivially restrictive
         assert bt < no_bt
 
