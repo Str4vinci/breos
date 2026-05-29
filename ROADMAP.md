@@ -23,6 +23,29 @@ a `pvlib.Location`, which means BREOS does not own its own public API.
 
 ## Capability extensions
 
+### String-aware inverter validation and modeling
+
+BREOS currently models PV systems at the aggregate array level. That is useful
+for fast production, battery, and economics studies, but it does not prove that
+a proposed PV layout is electrically buildable. Future work should add
+string-aware validation and, later, string-aware inverter modeling when callers
+provide module, inverter, environment, MPPT, and string-topology data.
+
+- Design note: [docs/architecture/string-inverter-sizing.md](docs/architecture/string-inverter-sizing.md)
+- Phase 1: apply aggregate inverter AC clipping consistently in the main
+  `App` energy flow.
+- Phase 2: add a pure validation API for string voltage windows, startup
+  voltage, MPPT current limits, parallel-string compatibility, and DC/AC ratio
+  warnings.
+- Phase 3: extend module and inverter catalogs with the datasheet fields needed
+  for those checks.
+- Phase 4: accept optional MPPT/string topology from callers and use it to
+  improve multi-array energy modeling.
+- Non-goal: code-compliance certification, conductor/fuse sizing, and physical
+  wiring auto-routing.
+
+## Longer-Term Research Modules
+
 The following modules exist in the broader research codebase and may be
 released into BREOS in future versions, or are available for academic
 collaboration upon request (see README for context):

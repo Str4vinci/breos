@@ -1,0 +1,1684 @@
+
+<!DOCTYPE html>
+
+
+<html lang="en" data-content_root="../../" >
+
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>breos.battery &#8212; BREOS</title>
+  
+  
+  
+  <script data-cfasync="false">
+    document.documentElement.dataset.mode = localStorage.getItem("mode") || "";
+    document.documentElement.dataset.theme = localStorage.getItem("theme") || "";
+  </script>
+  <!--
+    this give us a css class that will be invisible only if js is disabled
+  -->
+  <noscript>
+    <style>
+      .pst-js-only { display: none !important; }
+
+    </style>
+  </noscript>
+  
+  <!-- Loaded before other Sphinx assets -->
+  <link href="../../_static/styles/theme.css?digest=55c26ed414f5f8a31ebb" rel="stylesheet" />
+<link href="../../_static/styles/pydata-sphinx-theme.css?digest=55c26ed414f5f8a31ebb" rel="stylesheet" />
+
+    <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=8f2a1f02" />
+    <link rel="stylesheet" type="text/css" href="../../_static/copybutton.css?v=76b2166b" />
+    <link rel="stylesheet" type="text/css" href="../../_static/sphinx-design.min.css?v=95c83b7e" />
+  
+  <!-- So that users can add custom icons -->
+  <script defer src="../../_static/scripts/fontawesome.js?digest=55c26ed414f5f8a31ebb"></script>
+  <!-- Pre-loaded scripts that we'll load fully later -->
+  <link rel="preload" as="script" href="../../_static/scripts/bootstrap.js?digest=55c26ed414f5f8a31ebb" />
+<link rel="preload" as="script" href="../../_static/scripts/pydata-sphinx-theme.js?digest=55c26ed414f5f8a31ebb" />
+
+    <script src="../../_static/documentation_options.js?v=01f34227"></script>
+    <script src="../../_static/doctools.js?v=fd6eb6e6"></script>
+    <script src="../../_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <script src="../../_static/clipboard.min.js?v=a7894cd8"></script>
+    <script src="../../_static/copybutton.js?v=f281be69"></script>
+    <script src="../../_static/design-tabs.js?v=f930bc37"></script>
+    <script>DOCUMENTATION_OPTIONS.pagename = '_modules/breos/battery';</script>
+    <script>
+        DOCUMENTATION_OPTIONS.theme_version = '0.17.1';
+        DOCUMENTATION_OPTIONS.theme_switcher_json_url = 'https://breos.readthedocs.io/en/latest/_static/switcher.json';
+        DOCUMENTATION_OPTIONS.theme_switcher_version_match = 'latest';
+        DOCUMENTATION_OPTIONS.show_version_warning_banner =
+            false;
+        </script>
+    <script>DOCUMENTATION_OPTIONS.search_as_you_type = false;</script>
+    <link rel="index" title="Index" href="../../genindex.html" />
+    <link rel="search" title="Search" href="../../search.html" />
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <meta name="docsearch:language" content="en"/>
+  <meta name="docsearch:version" content="0.1" />
+  
+    
+    <script src="../../_static/searchtools.js"></script>
+    <script src="../../_static/language_data.js"></script>
+    <script src="../../searchindex.js"></script>
+  
+  </head>
+  <body data-default-mode="">
+  
+  
+  <div id="pst-skip-link" class="skip-link d-print-none"><a href="#main-content">Skip to main content</a></div>
+
+  
+  <div id="pst-scroll-pixel-helper"></div>
+  
+  <button type="button" class="btn rounded-pill" id="pst-back-to-top">
+    <i class="fa-solid fa-arrow-up"></i>Back to top</button>
+  
+  
+  
+  
+  <dialog id="pst-search-dialog">
+    
+<form class="bd-search d-flex align-items-center"
+      action="../../search.html"
+      method="get">
+  <i class="fa-solid fa-magnifying-glass"></i>
+  <input type="search"
+         class="form-control"
+         name="q"
+         placeholder="Search the docs ..."
+         aria-label="Search the docs ..."
+         autocomplete="off"
+         autocorrect="off"
+         autocapitalize="off"
+         spellcheck="false"/>
+  <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd>K</kbd></span>
+</form>
+  </dialog>
+
+  <div class="pst-async-banner-revealer d-none">
+  <aside id="bd-header-version-warning" class="d-none d-print-none" aria-label="Version warning"></aside>
+</div>
+
+  
+    <header id="pst-header" class="bd-header navbar navbar-expand-lg bd-navbar d-print-none">
+<div class="bd-header__inner bd-page-width">
+  <button class="pst-navbar-icon sidebar-toggle primary-toggle" aria-label="Site navigation">
+    <span class="fa-solid fa-bars"></span>
+  </button>
+  
+  
+  <div class="col-lg-3 navbar-header-items__start">
+    
+      <div class="navbar-item">
+
+  
+    
+  
+
+<a class="navbar-brand logo" href="../../index.html">
+  
+  
+  
+  
+  
+  
+    <p class="title logo__title">BREOS</p>
+  
+</a></div>
+    
+  </div>
+  
+  <div class="col-lg-9 navbar-header-items">
+    
+    <div class="me-auto navbar-header-items__center">
+      
+        <div class="navbar-item">
+<nav>
+  <ul class="bd-navbar-elements navbar-nav">
+    
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../../getting-started/index.html">
+    Getting started
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../../api/index.html">
+    API reference
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../../architecture/third-party-wrapping.html">
+    Third-Party Module Wrapping
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../../adr/index.html">
+    Architecture Decision Records
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../../changelog.html">
+    Changelog
+  </a>
+</li>
+
+  </ul>
+</nav></div>
+      
+    </div>
+    
+    
+    <div class="navbar-header-items__end">
+      
+        <div class="navbar-item navbar-persistent--container">
+          
+
+<button class="btn search-button-field search-button__button pst-js-only" title="Search" aria-label="Search" data-bs-placement="bottom" data-bs-toggle="tooltip">
+ <i class="fa-solid fa-magnifying-glass"></i>
+ <span class="search-button__default-text">Search</span>
+ <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd class="kbd-shortcut__modifier">K</kbd></span>
+</button>
+        </div>
+      
+      
+        <div class="navbar-item">
+<div class="version-switcher__container dropdown pst-js-only">
+  <button id="pst-version-switcher-button-2"
+    type="button"
+    class="version-switcher__button btn btn-sm dropdown-toggle"
+    data-bs-toggle="dropdown"
+    aria-haspopup="listbox"
+    aria-controls="pst-version-switcher-list-2"
+    aria-label="Version switcher list"
+  >
+    Choose version  <!-- this text may get changed later by javascript -->
+    <span class="caret"></span>
+  </button>
+  <div id="pst-version-switcher-list-2"
+    class="version-switcher__menu dropdown-menu list-group-flush py-0"
+    role="listbox" aria-labelledby="pst-version-switcher-button-2">
+    <!-- dropdown will be populated by javascript on page load -->
+  </div>
+</div></div>
+      
+        <div class="navbar-item">
+
+<button class="btn btn-sm nav-link pst-navbar-icon theme-switch-button pst-js-only" aria-label="Color mode" data-bs-title="Color mode"  data-bs-placement="bottom" data-bs-toggle="tooltip">
+  <i class="theme-switch fa-solid fa-sun                fa-lg" data-mode="light" title="Light"></i>
+  <i class="theme-switch fa-solid fa-moon               fa-lg" data-mode="dark"  title="Dark"></i>
+  <i class="theme-switch fa-solid fa-circle-half-stroke fa-lg" data-mode="auto"  title="System Settings"></i>
+</button></div>
+      
+        <div class="navbar-item"><ul class="navbar-icon-links"
+    aria-label="Icon Links">
+        <li class="nav-item">
+          
+          
+          
+          
+          
+          
+          
+          
+          <a href="https://github.com/Str4vinci/breos" title="GitHub" class="nav-link pst-navbar-icon" rel="noopener" target="_blank" data-bs-toggle="tooltip" data-bs-placement="bottom"><i class="fa-brands fa-square-github fa-lg" aria-hidden="true"></i>
+            <span class="sr-only">GitHub</span></a>
+        </li>
+</ul></div>
+      
+    </div>
+    
+  </div>
+  
+  
+    <div class="navbar-persistent--mobile">
+
+<button class="btn search-button-field search-button__button pst-js-only" title="Search" aria-label="Search" data-bs-placement="bottom" data-bs-toggle="tooltip">
+ <i class="fa-solid fa-magnifying-glass"></i>
+ <span class="search-button__default-text">Search</span>
+ <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd class="kbd-shortcut__modifier">K</kbd></span>
+</button>
+    </div>
+  
+
+  
+</div>
+
+    </header>
+  
+
+  <div class="bd-container">
+    <div class="bd-container__inner bd-page-width">
+      
+      
+      
+        
+      
+      <dialog id="pst-primary-sidebar-modal"></dialog>
+      <div id="pst-primary-sidebar" class="bd-sidebar-primary bd-sidebar hide-on-wide">
+        
+
+  
+  <div class="sidebar-header-items sidebar-primary__section">
+    
+    
+      <div class="sidebar-header-items__center">
+        
+          
+          
+            <div class="navbar-item">
+<nav>
+  <ul class="bd-navbar-elements navbar-nav">
+    
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../../getting-started/index.html">
+    Getting started
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../../api/index.html">
+    API reference
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../../architecture/third-party-wrapping.html">
+    Third-Party Module Wrapping
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../../adr/index.html">
+    Architecture Decision Records
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../../changelog.html">
+    Changelog
+  </a>
+</li>
+
+  </ul>
+</nav></div>
+          
+        
+      </div>
+    
+    
+    
+      <div class="sidebar-header-items__end">
+        
+          <div class="navbar-item">
+<div class="version-switcher__container dropdown pst-js-only">
+  <button id="pst-version-switcher-button-3"
+    type="button"
+    class="version-switcher__button btn btn-sm dropdown-toggle"
+    data-bs-toggle="dropdown"
+    aria-haspopup="listbox"
+    aria-controls="pst-version-switcher-list-3"
+    aria-label="Version switcher list"
+  >
+    Choose version  <!-- this text may get changed later by javascript -->
+    <span class="caret"></span>
+  </button>
+  <div id="pst-version-switcher-list-3"
+    class="version-switcher__menu dropdown-menu list-group-flush py-0"
+    role="listbox" aria-labelledby="pst-version-switcher-button-3">
+    <!-- dropdown will be populated by javascript on page load -->
+  </div>
+</div></div>
+        
+          <div class="navbar-item">
+
+<button class="btn btn-sm nav-link pst-navbar-icon theme-switch-button pst-js-only" aria-label="Color mode" data-bs-title="Color mode"  data-bs-placement="bottom" data-bs-toggle="tooltip">
+  <i class="theme-switch fa-solid fa-sun                fa-lg" data-mode="light" title="Light"></i>
+  <i class="theme-switch fa-solid fa-moon               fa-lg" data-mode="dark"  title="Dark"></i>
+  <i class="theme-switch fa-solid fa-circle-half-stroke fa-lg" data-mode="auto"  title="System Settings"></i>
+</button></div>
+        
+          <div class="navbar-item"><ul class="navbar-icon-links"
+    aria-label="Icon Links">
+        <li class="nav-item">
+          
+          
+          
+          
+          
+          
+          
+          
+          <a href="https://github.com/Str4vinci/breos" title="GitHub" class="nav-link pst-navbar-icon" rel="noopener" target="_blank" data-bs-toggle="tooltip" data-bs-placement="bottom"><i class="fa-brands fa-square-github fa-lg" aria-hidden="true"></i>
+            <span class="sr-only">GitHub</span></a>
+        </li>
+</ul></div>
+        
+      </div>
+    
+  </div>
+  
+  
+  <div class="sidebar-primary-items__end sidebar-primary__section">
+      <div class="sidebar-primary-item">
+<div id="ethical-ad-placement"
+      class="flat"
+      data-ea-publisher="readthedocs"
+      data-ea-type="readthedocs-sidebar"
+      data-ea-manual="true">
+</div></div>
+  </div>
+
+
+      </div>
+      
+      <main id="main-content" class="bd-main" role="main">
+        
+        
+          <div class="bd-content">
+            <div class="bd-article-container">
+              
+              <div class="bd-header-article d-print-none">
+<div class="header-article-items header-article__inner">
+  
+    <div class="header-article-items__start">
+      
+        <div class="header-article-item">
+
+<nav aria-label="Breadcrumb" class="d-print-none">
+  <ul class="bd-breadcrumbs">
+    
+    <li class="breadcrumb-item breadcrumb-home">
+      <a href="../../index.html" class="nav-link" aria-label="Home">
+        <i class="fa-solid fa-home"></i>
+      </a>
+    </li>
+    
+    <li class="breadcrumb-item"><a href="../index.html" class="nav-link">Module code</a></li>
+    
+    <li class="breadcrumb-item active" aria-current="page"><span class="ellipsis">breos.battery</span></li>
+  </ul>
+</nav>
+</div>
+      
+    </div>
+  
+  
+</div>
+</div>
+              
+              
+              
+                
+<div id="searchbox"></div>
+                <article class="bd-article">
+                  
+  <h1>Source code for breos.battery</h1><div class="highlight"><pre>
+<span></span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">Battery simulation module.</span>
+
+<span class="sd">This module handles battery energy storage simulation including:</span>
+<span class="sd">- Energy balance calculations</span>
+<span class="sd">- State of Charge (SOC) tracking</span>
+<span class="sd">- State of Health (SOH) degradation models (Naumann + Lam)</span>
+<span class="sd">- Cycle and calendar aging</span>
+<span class="sd">&quot;&quot;&quot;</span>
+
+<span class="kn">import</span><span class="w"> </span><span class="nn">math</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">dataclasses</span><span class="w"> </span><span class="kn">import</span> <span class="n">dataclass</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">typing</span><span class="w"> </span><span class="kn">import</span> <span class="n">Dict</span><span class="p">,</span> <span class="n">List</span><span class="p">,</span> <span class="n">Optional</span><span class="p">,</span> <span class="n">Tuple</span>
+
+<span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">pandas</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">pd</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">rainflow</span>
+
+<span class="kn">from</span><span class="w"> </span><span class="nn">breos.constants</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>
+    <span class="n">A_Q</span><span class="p">,</span>
+    <span class="n">A_R</span><span class="p">,</span>
+    <span class="n">B_Q</span><span class="p">,</span>
+    <span class="n">B_R</span><span class="p">,</span>
+    <span class="n">C_DOC_Q</span><span class="p">,</span>
+    <span class="n">C_DOC_R</span><span class="p">,</span>
+    <span class="n">D_DOC_Q</span><span class="p">,</span>
+    <span class="n">D_DOC_R</span><span class="p">,</span>
+    <span class="n">DEFAULT_CHARGE_EFFICIENCY</span><span class="p">,</span>
+    <span class="n">DEFAULT_DISCHARGE_EFFICIENCY</span><span class="p">,</span>
+    <span class="n">DEFAULT_MAX_SOC</span><span class="p">,</span>
+    <span class="n">DEFAULT_MIN_SOC</span><span class="p">,</span>
+    <span class="n">DEFAULT_STANDBY_LOSS_WH</span><span class="p">,</span>
+    <span class="n">DEFAULT_THERMAL_RESISTANCE_KW</span><span class="p">,</span>
+    <span class="n">LAM_CAL_RELAXED_EA_J_MOL</span><span class="p">,</span>
+    <span class="n">LAM_CAL_RELAXED_EXPONENT_B</span><span class="p">,</span>
+    <span class="n">LAM_CAL_RELAXED_K0_FRAC</span><span class="p">,</span>
+    <span class="n">LAM_CAL_RELAXED_SOC_EXPONENT_N</span><span class="p">,</span>
+    <span class="n">LAM_EA_J_MOL</span><span class="p">,</span>
+    <span class="n">LAM_EXPONENT_B</span><span class="p">,</span>
+    <span class="n">LAM_K0_FRAC</span><span class="p">,</span>
+    <span class="n">LAM_SOC_EXPONENT_N</span><span class="p">,</span>
+    <span class="n">LFP_CAP_DERATE_PER_C_COLD</span><span class="p">,</span>
+    <span class="n">LFP_CAP_DERATE_PER_C_MODERATE</span><span class="p">,</span>
+    <span class="n">MODERN_LFP_EA_J_MOL</span><span class="p">,</span>
+    <span class="n">MODERN_LFP_EXPONENT_B</span><span class="p">,</span>
+    <span class="n">MODERN_LFP_K0_FRAC</span><span class="p">,</span>
+    <span class="n">MODERN_LFP_SOC_EXPONENT_N</span><span class="p">,</span>
+    <span class="n">NAUMANN_EA_J_MOL</span><span class="p">,</span>
+    <span class="n">NAUMANN_EA_R_J_MOL</span><span class="p">,</span>
+    <span class="n">NAUMANN_EXPONENT_B</span><span class="p">,</span>
+    <span class="n">NAUMANN_EXPONENT_B_R</span><span class="p">,</span>
+    <span class="n">NAUMANN_K0_PERCENT</span><span class="p">,</span>
+    <span class="n">NAUMANN_K0_R_PERCENT</span><span class="p">,</span>
+    <span class="n">NAUMANN_LAM_FIELD_CALIBRATED_EA_J_MOL</span><span class="p">,</span>
+    <span class="n">NAUMANN_LAM_FIELD_CALIBRATED_EXPONENT_B</span><span class="p">,</span>
+    <span class="n">NAUMANN_LAM_FIELD_CALIBRATED_K0_FRAC</span><span class="p">,</span>
+    <span class="n">NAUMANN_LAM_FIELD_CALIBRATED_SOC_EXPONENT_N</span><span class="p">,</span>
+    <span class="n">NAUMANN_SOC_EXPONENT_N</span><span class="p">,</span>
+    <span class="n">NAUMANN_SOC_EXPONENT_N_R</span><span class="p">,</span>
+    <span class="n">R_GAS</span><span class="p">,</span>
+    <span class="n">T_REF_K</span><span class="p">,</span>
+    <span class="n">Z_Q</span><span class="p">,</span>
+    <span class="n">Z_R</span><span class="p">,</span>
+<span class="p">)</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">breos.economics</span><span class="w"> </span><span class="kn">import</span> <span class="n">BATTERY_REPLACEMENT_COST_PER_KWH</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">breos.utils</span><span class="w"> </span><span class="kn">import</span> <span class="n">get_hours_per_step</span>
+
+
+<div class="viewcode-block" id="BatteryConfig">
+<a class="viewcode-back" href="../../api/generated/breos.battery.BatteryConfig.html#breos.battery.BatteryConfig">[docs]</a>
+<span class="nd">@dataclass</span>
+<span class="k">class</span><span class="w"> </span><span class="nc">BatteryConfig</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Configuration parameters for battery simulation.</span>
+
+<span class="sd">    For DC-coupled systems (hybrid inverters):</span>
+<span class="sd">    - PV → Battery: No inverter loss (stays in DC)</span>
+<span class="sd">    - Battery → Load: Inverter loss applies (DC to AC)</span>
+
+<span class="sd">    For AC-coupled systems:</span>
+<span class="sd">    - All energy goes through inverter first</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="n">nominal_energy_wh</span><span class="p">:</span> <span class="nb">float</span>  <span class="c1"># Required — nominal capacity in Wh</span>
+    <span class="n">initial_soh</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">100.0</span>  <span class="c1"># Initial state of health (%)</span>
+    <span class="n">eol_percentage</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.80</span>  <span class="c1"># End of life threshold (fraction)</span>
+    <span class="n">max_soc</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="n">DEFAULT_MAX_SOC</span>
+    <span class="n">min_soc</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="n">DEFAULT_MIN_SOC</span>
+    <span class="n">charge_efficiency</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="n">DEFAULT_CHARGE_EFFICIENCY</span>
+    <span class="n">discharge_efficiency</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="n">DEFAULT_DISCHARGE_EFFICIENCY</span>
+    <span class="n">standby_loss_wh</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="n">DEFAULT_STANDBY_LOSS_WH</span>
+    <span class="n">enable_replacement</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span>
+    <span class="n">replacement_cost</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">float</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>  <span class="c1"># Auto-computed from cost per kWh if not set</span>
+    <span class="n">calendar_model</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;naumann_lam_field_calibrated&quot;</span>  <span class="c1"># Current field-calibrated fit (canonical name)</span>
+    <span class="c1"># Resistance fade tracking</span>
+    <span class="n">enable_resistance_fade</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span>  <span class="c1"># Enable Naumann resistance growth model</span>
+    <span class="n">initial_resistance_growth</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.0</span>  <span class="c1"># Initial relative resistance growth (fraction, 0=new)</span>
+    <span class="c1"># Thermal model</span>
+    <span class="n">thermal_resistance_kw</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="n">DEFAULT_THERMAL_RESISTANCE_KW</span>  <span class="c1"># K/W for lumped thermal model</span>
+    <span class="c1"># DC-coupled system (hybrid inverter) settings</span>
+    <span class="n">dc_coupled</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span>  <span class="c1"># True = hybrid inverter (DC-coupled battery)</span>
+    <span class="n">inverter_efficiency</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.96</span>  <span class="c1"># Inverter efficiency (for DC→AC conversion)</span>
+    <span class="c1"># Battery chemistry</span>
+    <span class="n">battery_type</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;lfp&quot;</span>  <span class="c1"># Battery chemistry type</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">__post_init__</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="c1"># Auto-compute replacement cost</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">replacement_cost</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">nominal_energy_wh</span> <span class="o">&gt;</span> <span class="mi">1</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">replacement_cost</span> <span class="o">=</span> <span class="n">BATTERY_REPLACEMENT_COST_PER_KWH</span> <span class="o">*</span> <span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">nominal_energy_wh</span> <span class="o">/</span> <span class="mi">1000</span><span class="p">)</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">replacement_cost</span> <span class="o">=</span> <span class="mf">0.0</span></div>
+
+
+
+<div class="viewcode-block" id="simulate_energy_balance">
+<a class="viewcode-back" href="../../api/generated/breos.battery.simulate_energy_balance.html#breos.battery.simulate_energy_balance">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">simulate_energy_balance</span><span class="p">(</span>
+    <span class="n">pv_dc</span><span class="p">:</span> <span class="n">pd</span><span class="o">.</span><span class="n">Series</span><span class="p">,</span>
+    <span class="n">houseload</span><span class="p">:</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">,</span>
+    <span class="n">battery_config</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">BatteryConfig</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="n">start_time</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">pd</span><span class="o">.</span><span class="n">Timestamp</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="n">end_time</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">pd</span><span class="o">.</span><span class="n">Timestamp</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="n">freq</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;h&quot;</span><span class="p">,</span>
+    <span class="n">temperature_series</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">pd</span><span class="o">.</span><span class="n">Series</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="n">results_directory</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="n">initial_fec</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.0</span><span class="p">,</span>
+    <span class="n">initial_calendar_seconds</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.0</span><span class="p">,</span>
+    <span class="n">initial_resistance_growth</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.0</span><span class="p">,</span>
+    <span class="n">initial_cumulative_cycle_deg</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.0</span><span class="p">,</span>
+    <span class="n">initial_cumulative_cal_deg</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.0</span><span class="p">,</span>
+    <span class="n">debug</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tuple</span><span class="p">[</span><span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">,</span> <span class="nb">float</span><span class="p">,</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">,</span> <span class="nb">float</span><span class="p">,</span> <span class="nb">int</span><span class="p">,</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">]:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Simulate energy balance with battery storage and degradation.</span>
+
+<span class="sd">    This function processes PV DC production and load profiles to calculate</span>
+<span class="sd">    grid interaction, battery state, and degradation. It properly handles</span>
+<span class="sd">    DC-coupled and AC-coupled battery systems.</span>
+
+<span class="sd">    Energy flow for DC-coupled (hybrid inverter) systems:</span>
+<span class="sd">    - PV -&gt; Load: DC -&gt; Inverter -&gt; AC (one inverter loss)</span>
+<span class="sd">    - PV -&gt; Battery: DC -&gt; Battery (charge efficiency only)</span>
+<span class="sd">    - Battery -&gt; Load: DC -&gt; Inverter -&gt; AC (discharge efficiency + inverter loss)</span>
+<span class="sd">    - Grid -&gt; Load: AC (no conversion)</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        pv_dc: Series with PV DC power production (W) - before inverter</span>
+<span class="sd">        houseload: DataFrame with electrical load (W) - AC</span>
+<span class="sd">        battery_config: Battery configuration parameters</span>
+<span class="sd">        start_time: Simulation start time (defaults to first index of pv_dc)</span>
+<span class="sd">        end_time: Simulation end time (defaults to last index of pv_dc)</span>
+<span class="sd">        freq: Time frequency (&#39;h&#39; for hourly, &#39;15min&#39; for 15-minute)</span>
+<span class="sd">        temperature_series: Battery cell temperature (C), defaults to 25C</span>
+<span class="sd">        results_directory: Directory for saving results (optional)</span>
+<span class="sd">        debug: Enable debug output</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        Tuple of:</span>
+<span class="sd">        - results_df: Detailed timestep results</span>
+<span class="sd">        - total_pv: Total PV DC production (Wh)</span>
+<span class="sd">        - summary_df: Summary statistics</span>
+<span class="sd">        - replacement_cost: Total battery replacement cost</span>
+<span class="sd">        - n_replacements: Number of battery replacements</span>
+<span class="sd">        - degradation_df: Daily degradation tracking</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">if</span> <span class="n">battery_config</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">battery_config</span> <span class="o">=</span> <span class="n">BatteryConfig</span><span class="p">(</span><span class="n">nominal_energy_wh</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+
+    <span class="c1"># Determine time range</span>
+    <span class="k">if</span> <span class="n">start_time</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">start_time</span> <span class="o">=</span> <span class="n">pv_dc</span><span class="o">.</span><span class="n">index</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+    <span class="k">if</span> <span class="n">end_time</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">end_time</span> <span class="o">=</span> <span class="n">pv_dc</span><span class="o">.</span><span class="n">index</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span>
+
+    <span class="c1"># Calculate hours per step for energy conversion</span>
+    <span class="n">hours_per_step</span> <span class="o">=</span> <span class="n">get_hours_per_step</span><span class="p">(</span><span class="n">freq</span><span class="p">)</span>
+    <span class="n">steps_per_day</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="mi">24</span> <span class="o">/</span> <span class="n">hours_per_step</span><span class="p">)</span>
+
+    <span class="c1"># Create time range</span>
+    <span class="n">rng</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">date_range</span><span class="p">(</span><span class="n">start</span><span class="o">=</span><span class="n">start_time</span><span class="p">,</span> <span class="n">end</span><span class="o">=</span><span class="n">end_time</span><span class="p">,</span> <span class="n">freq</span><span class="o">=</span><span class="n">freq</span><span class="p">)</span>
+
+    <span class="c1"># Align input data - pv_dc</span>
+    <span class="n">pv_dc</span> <span class="o">=</span> <span class="n">pv_dc</span><span class="o">.</span><span class="n">reindex</span><span class="p">(</span><span class="n">rng</span><span class="p">)</span><span class="o">.</span><span class="n">fillna</span><span class="p">(</span><span class="mf">0.0</span><span class="p">)</span>
+
+    <span class="c1"># Align load data</span>
+    <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">houseload</span><span class="o">.</span><span class="n">index</span><span class="p">,</span> <span class="n">pd</span><span class="o">.</span><span class="n">DatetimeIndex</span><span class="p">):</span>
+        <span class="n">houseload_series</span> <span class="o">=</span> <span class="n">houseload</span><span class="o">.</span><span class="n">iloc</span><span class="p">[:,</span> <span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">copy</span><span class="p">()</span>
+        <span class="n">load_idx</span> <span class="o">=</span> <span class="n">houseload_series</span><span class="o">.</span><span class="n">index</span>
+
+        <span class="c1"># Work in UTC to avoid DST ambiguity (naive stripping creates</span>
+        <span class="c1"># duplicates at fall-back transitions, e.g. Oct 26 01:00 in Lisbon).</span>
+        <span class="k">if</span> <span class="n">load_idx</span><span class="o">.</span><span class="n">tz</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">load_utc</span> <span class="o">=</span> <span class="n">load_idx</span><span class="o">.</span><span class="n">tz_convert</span><span class="p">(</span><span class="s2">&quot;UTC&quot;</span><span class="p">)</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">load_utc</span> <span class="o">=</span> <span class="n">load_idx</span><span class="o">.</span><span class="n">tz_localize</span><span class="p">(</span><span class="s2">&quot;UTC&quot;</span><span class="p">)</span>
+
+        <span class="n">rng_utc</span> <span class="o">=</span> <span class="n">rng</span><span class="o">.</span><span class="n">tz_convert</span><span class="p">(</span><span class="s2">&quot;UTC&quot;</span><span class="p">)</span> <span class="k">if</span> <span class="n">rng</span><span class="o">.</span><span class="n">tz</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="k">else</span> <span class="n">rng</span><span class="o">.</span><span class="n">tz_localize</span><span class="p">(</span><span class="s2">&quot;UTC&quot;</span><span class="p">)</span>
+
+        <span class="c1"># Only remap year if load covers a single year different from simulation.</span>
+        <span class="c1"># Use dominant year (most frequent) to handle tz-aware indices that</span>
+        <span class="c1"># span two calendar years in UTC (e.g., CET midnight = UTC 23:00 prev day).</span>
+        <span class="n">load_dominant_year</span> <span class="o">=</span> <span class="n">load_utc</span><span class="o">.</span><span class="n">year</span><span class="o">.</span><span class="n">value_counts</span><span class="p">()</span><span class="o">.</span><span class="n">idxmax</span><span class="p">()</span>
+        <span class="n">sim_dominant_year</span> <span class="o">=</span> <span class="n">rng_utc</span><span class="o">.</span><span class="n">year</span><span class="o">.</span><span class="n">value_counts</span><span class="p">()</span><span class="o">.</span><span class="n">idxmax</span><span class="p">()</span>
+        <span class="k">if</span> <span class="n">load_dominant_year</span> <span class="o">!=</span> <span class="n">sim_dominant_year</span><span class="p">:</span>
+            <span class="n">year_offset</span> <span class="o">=</span> <span class="n">sim_dominant_year</span> <span class="o">-</span> <span class="n">load_dominant_year</span>
+            <span class="n">load_utc</span> <span class="o">=</span> <span class="n">load_utc</span><span class="o">.</span><span class="n">map</span><span class="p">(</span><span class="k">lambda</span> <span class="n">dt</span><span class="p">:</span> <span class="n">dt</span><span class="o">.</span><span class="n">replace</span><span class="p">(</span><span class="n">year</span><span class="o">=</span><span class="n">dt</span><span class="o">.</span><span class="n">year</span> <span class="o">+</span> <span class="n">year_offset</span><span class="p">))</span>
+
+        <span class="c1"># Convert back to target timezone (UTC→local is always unambiguous)</span>
+        <span class="k">if</span> <span class="n">rng</span><span class="o">.</span><span class="n">tz</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">new_load_idx</span> <span class="o">=</span> <span class="n">load_utc</span><span class="o">.</span><span class="n">tz_convert</span><span class="p">(</span><span class="n">rng</span><span class="o">.</span><span class="n">tz</span><span class="p">)</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">new_load_idx</span> <span class="o">=</span> <span class="n">load_utc</span><span class="o">.</span><span class="n">tz_localize</span><span class="p">(</span><span class="kc">None</span><span class="p">)</span>
+        <span class="n">houseload_series</span><span class="o">.</span><span class="n">index</span> <span class="o">=</span> <span class="n">new_load_idx</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="n">houseload_series</span> <span class="o">=</span> <span class="n">houseload</span><span class="o">.</span><span class="n">iloc</span><span class="p">[:,</span> <span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">copy</span><span class="p">()</span>
+        <span class="n">houseload_series</span><span class="o">.</span><span class="n">index</span> <span class="o">=</span> <span class="n">pv_dc</span><span class="o">.</span><span class="n">index</span>
+    <span class="n">houseload_series</span> <span class="o">=</span> <span class="n">houseload_series</span><span class="o">.</span><span class="n">reindex</span><span class="p">(</span><span class="n">rng</span><span class="p">)</span><span class="o">.</span><span class="n">fillna</span><span class="p">(</span><span class="mf">0.0</span><span class="p">)</span>
+
+    <span class="c1"># Temperature series</span>
+    <span class="k">if</span> <span class="n">temperature_series</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">temperature_series</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">Series</span><span class="p">(</span><span class="mf">25.0</span><span class="p">,</span> <span class="n">index</span><span class="o">=</span><span class="n">rng</span><span class="p">)</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="n">temperature_series</span> <span class="o">=</span> <span class="n">temperature_series</span><span class="o">.</span><span class="n">reindex</span><span class="p">(</span><span class="n">rng</span><span class="p">)</span><span class="o">.</span><span class="n">fillna</span><span class="p">(</span><span class="mf">25.0</span><span class="p">)</span>
+
+    <span class="c1"># Get degradation model parameters</span>
+    <span class="n">k0_frac</span><span class="p">,</span> <span class="n">Ea_val</span><span class="p">,</span> <span class="n">b_val</span><span class="p">,</span> <span class="n">n_val</span> <span class="o">=</span> <span class="n">_get_degradation_params</span><span class="p">(</span><span class="n">battery_config</span><span class="o">.</span><span class="n">calendar_model</span><span class="p">)</span>
+
+    <span class="c1"># Initialize state</span>
+    <span class="n">battery_soh_decimal</span> <span class="o">=</span> <span class="n">battery_config</span><span class="o">.</span><span class="n">initial_soh</span> <span class="o">/</span> <span class="mf">100.0</span>
+    <span class="n">Battery_SOH</span> <span class="o">=</span> <span class="n">battery_config</span><span class="o">.</span><span class="n">initial_soh</span>
+    <span class="n">Battery_Energy_Wh</span> <span class="o">=</span> <span class="n">battery_config</span><span class="o">.</span><span class="n">nominal_energy_wh</span> <span class="o">*</span> <span class="n">battery_soh_decimal</span> <span class="o">*</span> <span class="n">battery_config</span><span class="o">.</span><span class="n">max_soc</span>
+
+    <span class="n">soc_absolute_buffer</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">empty</span><span class="p">(</span><span class="n">steps_per_day</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">float64</span><span class="p">)</span>
+    <span class="n">soc_buf_idx</span> <span class="o">=</span> <span class="mi">0</span>
+    <span class="n">fec_cum</span> <span class="o">=</span> <span class="n">initial_fec</span>
+    <span class="n">cumulative_cal_seconds</span> <span class="o">=</span> <span class="n">initial_calendar_seconds</span>
+    <span class="n">resistance_growth</span> <span class="o">=</span> <span class="n">initial_resistance_growth</span>
+    <span class="n">n_replacements</span> <span class="o">=</span> <span class="mi">0</span>
+    <span class="n">total_replacement_cost</span> <span class="o">=</span> <span class="mf">0.0</span>
+    <span class="n">cumulative_cycle_deg</span> <span class="o">=</span> <span class="n">initial_cumulative_cycle_deg</span>
+    <span class="n">cumulative_cal_deg</span> <span class="o">=</span> <span class="n">initial_cumulative_cal_deg</span>
+    <span class="n">cumulative_resistance_cycle</span> <span class="o">=</span> <span class="mf">0.0</span>
+    <span class="n">cumulative_resistance_calendar</span> <span class="o">=</span> <span class="mf">0.0</span>
+
+    <span class="n">degradation_tracking</span> <span class="o">=</span> <span class="p">[]</span>
+    <span class="n">T_cell_day_sum</span> <span class="o">=</span> <span class="mf">0.0</span>
+
+    <span class="c1"># Pre-extract numpy arrays for fast indexed access (avoids .loc[] overhead)</span>
+    <span class="n">_pv_dc_vals</span> <span class="o">=</span> <span class="n">pv_dc</span><span class="o">.</span><span class="n">values</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">float64</span><span class="p">)</span>
+    <span class="n">_load_vals</span> <span class="o">=</span> <span class="n">houseload_series</span><span class="o">.</span><span class="n">values</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">float64</span><span class="p">)</span>
+    <span class="n">_temp_vals</span> <span class="o">=</span> <span class="n">temperature_series</span><span class="o">.</span><span class="n">values</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">float64</span><span class="p">)</span>
+    <span class="n">n_steps</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">rng</span><span class="p">)</span>
+
+    <span class="c1"># Pre-allocate result arrays (avoids per-timestep dict creation)</span>
+    <span class="n">_res_pv_dc</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">empty</span><span class="p">(</span><span class="n">n_steps</span><span class="p">)</span>
+    <span class="n">_res_pv_prod</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">empty</span><span class="p">(</span><span class="n">n_steps</span><span class="p">)</span>
+    <span class="n">_res_load</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">empty</span><span class="p">(</span><span class="n">n_steps</span><span class="p">)</span>
+    <span class="n">_res_pv_delta</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">empty</span><span class="p">(</span><span class="n">n_steps</span><span class="p">)</span>
+    <span class="n">_res_import</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">empty</span><span class="p">(</span><span class="n">n_steps</span><span class="p">)</span>
+    <span class="n">_res_sell</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">empty</span><span class="p">(</span><span class="n">n_steps</span><span class="p">)</span>
+    <span class="n">_res_batt_e</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">empty</span><span class="p">(</span><span class="n">n_steps</span><span class="p">)</span>
+    <span class="n">_res_soc_norm</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">empty</span><span class="p">(</span><span class="n">n_steps</span><span class="p">)</span>
+    <span class="n">_res_soc_abs</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">empty</span><span class="p">(</span><span class="n">n_steps</span><span class="p">)</span>
+    <span class="n">_res_soh</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">empty</span><span class="p">(</span><span class="n">n_steps</span><span class="p">)</span>
+    <span class="n">_res_tcell</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">empty</span><span class="p">(</span><span class="n">n_steps</span><span class="p">)</span>
+    <span class="n">_res_replaced</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">zeros</span><span class="p">(</span><span class="n">n_steps</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="nb">bool</span><span class="p">)</span>
+    <span class="n">_res_repl_cost</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">zeros</span><span class="p">(</span><span class="n">n_steps</span><span class="p">)</span>
+    <span class="c1"># Hoist invariant check out of the loop</span>
+    <span class="n">has_battery</span> <span class="o">=</span> <span class="n">battery_config</span><span class="o">.</span><span class="n">nominal_energy_wh</span> <span class="o">&gt;</span> <span class="mi">1</span> <span class="ow">and</span> <span class="p">(</span><span class="n">battery_config</span><span class="o">.</span><span class="n">max_soc</span> <span class="o">-</span> <span class="n">battery_config</span><span class="o">.</span><span class="n">min_soc</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">0</span>
+    <span class="c1"># Bind capacity factor function once</span>
+    <span class="n">_cap_factor_fn</span> <span class="o">=</span> <span class="n">lfp_capacity_factor</span>
+
+    <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">n_steps</span><span class="p">):</span>
+        <span class="n">step_time</span> <span class="o">=</span> <span class="n">rng</span><span class="p">[</span><span class="n">i</span><span class="p">]</span>
+        <span class="c1"># Get values for this timestep via fast array indexing</span>
+        <span class="n">pv_dc_power</span> <span class="o">=</span> <span class="n">_pv_dc_vals</span><span class="p">[</span><span class="n">i</span><span class="p">]</span> <span class="o">*</span> <span class="n">hours_per_step</span>  <span class="c1"># DC power (Wh) before inverter</span>
+        <span class="n">load</span> <span class="o">=</span> <span class="n">_load_vals</span><span class="p">[</span><span class="n">i</span><span class="p">]</span> <span class="o">*</span> <span class="n">hours_per_step</span>  <span class="c1"># AC Load in Wh</span>
+        <span class="n">T_ambient</span> <span class="o">=</span> <span class="n">_temp_vals</span><span class="p">[</span><span class="n">i</span><span class="p">]</span>
+        <span class="n">T_cell</span> <span class="o">=</span> <span class="n">T_ambient</span>  <span class="c1"># default; overridden by thermal model below</span>
+
+        <span class="n">Import</span> <span class="o">=</span> <span class="n">Sell</span> <span class="o">=</span> <span class="mf">0.0</span>
+        <span class="n">charge_in</span> <span class="o">=</span> <span class="n">discharge_out</span> <span class="o">=</span> <span class="mf">0.0</span>
+
+        <span class="k">if</span> <span class="n">has_battery</span><span class="p">:</span>
+            <span class="c1"># Calculate usable capacity with temperature derating</span>
+            <span class="n">usable_cap</span> <span class="o">=</span> <span class="n">battery_config</span><span class="o">.</span><span class="n">nominal_energy_wh</span> <span class="o">*</span> <span class="n">battery_soh_decimal</span>
+            <span class="n">f_cap</span> <span class="o">=</span> <span class="n">_cap_factor_fn</span><span class="p">(</span><span class="n">T_cell</span><span class="p">)</span>
+            <span class="n">Emax</span> <span class="o">=</span> <span class="n">usable_cap</span> <span class="o">*</span> <span class="n">battery_config</span><span class="o">.</span><span class="n">max_soc</span> <span class="o">*</span> <span class="n">f_cap</span>
+            <span class="n">Emin</span> <span class="o">=</span> <span class="n">usable_cap</span> <span class="o">*</span> <span class="n">battery_config</span><span class="o">.</span><span class="n">min_soc</span> <span class="o">*</span> <span class="n">f_cap</span>
+
+            <span class="c1"># Apply standby loss (scaled by timestep)</span>
+            <span class="n">standby_loss</span> <span class="o">=</span> <span class="n">battery_config</span><span class="o">.</span><span class="n">standby_loss_wh</span> <span class="o">*</span> <span class="n">hours_per_step</span>
+            <span class="n">Battery_Energy_Wh</span> <span class="o">=</span> <span class="nb">max</span><span class="p">(</span><span class="n">Emin</span><span class="p">,</span> <span class="n">Battery_Energy_Wh</span> <span class="o">-</span> <span class="n">standby_loss</span><span class="p">)</span>
+
+            <span class="c1"># Convert PV DC to AC for comparison with load</span>
+            <span class="n">pv_ac</span> <span class="o">=</span> <span class="n">pv_dc_power</span> <span class="o">*</span> <span class="n">battery_config</span><span class="o">.</span><span class="n">inverter_efficiency</span>
+
+            <span class="c1"># Energy flows:</span>
+            <span class="c1"># Load is in AC terms</span>
+            <span class="c1"># We have pv_dc_power in DC terms</span>
+            <span class="c1"># Battery operates in DC</span>
+
+            <span class="k">if</span> <span class="n">pv_ac</span> <span class="o">&gt;=</span> <span class="n">load</span><span class="p">:</span>  <span class="c1"># Surplus: PV covers load + potential charging</span>
+                <span class="c1"># Remaining DC available for battery or export</span>
+                <span class="c1"># (pv_dc - pv_to_load_dc) where pv_to_load_dc = load / inverter_efficiency</span>
+                <span class="n">dc_to_load</span> <span class="o">=</span> <span class="p">(</span>
+                    <span class="n">load</span> <span class="o">/</span> <span class="n">battery_config</span><span class="o">.</span><span class="n">inverter_efficiency</span> <span class="k">if</span> <span class="n">battery_config</span><span class="o">.</span><span class="n">inverter_efficiency</span> <span class="o">&gt;</span> <span class="mi">0</span> <span class="k">else</span> <span class="n">load</span>
+                <span class="p">)</span>
+                <span class="n">surplus_dc</span> <span class="o">=</span> <span class="n">pv_dc_power</span> <span class="o">-</span> <span class="n">dc_to_load</span>
+
+                <span class="c1"># Charge battery with surplus DC (no inverter loss)</span>
+                <span class="n">charge_room</span> <span class="o">=</span> <span class="n">Emax</span> <span class="o">-</span> <span class="n">Battery_Energy_Wh</span>
+                <span class="n">charge_in</span> <span class="o">=</span> <span class="nb">min</span><span class="p">(</span><span class="n">surplus_dc</span><span class="p">,</span> <span class="n">charge_room</span> <span class="o">/</span> <span class="n">battery_config</span><span class="o">.</span><span class="n">charge_efficiency</span><span class="p">)</span>
+                <span class="n">Battery_Energy_Wh</span> <span class="o">+=</span> <span class="n">charge_in</span> <span class="o">*</span> <span class="n">battery_config</span><span class="o">.</span><span class="n">charge_efficiency</span>
+
+                <span class="c1"># Export remainder (DC -&gt; AC)</span>
+                <span class="n">remaining_dc</span> <span class="o">=</span> <span class="n">surplus_dc</span> <span class="o">-</span> <span class="n">charge_in</span>
+                <span class="n">Sell</span> <span class="o">=</span> <span class="n">remaining_dc</span> <span class="o">*</span> <span class="n">battery_config</span><span class="o">.</span><span class="n">inverter_efficiency</span>
+
+            <span class="k">else</span><span class="p">:</span>  <span class="c1"># Deficit: PV insufficient, need battery or grid</span>
+                <span class="n">deficit</span> <span class="o">=</span> <span class="n">load</span> <span class="o">-</span> <span class="n">pv_ac</span>  <span class="c1"># AC deficit</span>
+
+                <span class="c1"># Try to cover deficit from battery</span>
+                <span class="n">available</span> <span class="o">=</span> <span class="n">Battery_Energy_Wh</span> <span class="o">-</span> <span class="n">Emin</span>
+                <span class="k">if</span> <span class="n">available</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
+                    <span class="c1"># Battery discharge: DC -&gt; AC</span>
+                    <span class="n">eff_total</span> <span class="o">=</span> <span class="n">battery_config</span><span class="o">.</span><span class="n">discharge_efficiency</span> <span class="o">*</span> <span class="n">battery_config</span><span class="o">.</span><span class="n">inverter_efficiency</span>
+                    <span class="c1"># How much DC do we need to draw to provide &#39;deficit&#39; AC?</span>
+                    <span class="n">dc_needed</span> <span class="o">=</span> <span class="n">deficit</span> <span class="o">/</span> <span class="n">eff_total</span> <span class="k">if</span> <span class="n">eff_total</span> <span class="o">&gt;</span> <span class="mi">0</span> <span class="k">else</span> <span class="n">deficit</span>
+                    <span class="n">draw</span> <span class="o">=</span> <span class="nb">min</span><span class="p">(</span><span class="n">available</span><span class="p">,</span> <span class="n">dc_needed</span><span class="p">)</span>
+                    <span class="n">Battery_Energy_Wh</span> <span class="o">-=</span> <span class="n">draw</span>
+                    <span class="n">delivered_ac</span> <span class="o">=</span> <span class="n">draw</span> <span class="o">*</span> <span class="n">eff_total</span>
+                    <span class="n">discharge_out</span> <span class="o">=</span> <span class="n">draw</span>
+                    <span class="n">Import</span> <span class="o">=</span> <span class="nb">max</span><span class="p">(</span><span class="mf">0.0</span><span class="p">,</span> <span class="n">deficit</span> <span class="o">-</span> <span class="n">delivered_ac</span><span class="p">)</span>
+                <span class="k">else</span><span class="p">:</span>
+                    <span class="n">Import</span> <span class="o">=</span> <span class="n">deficit</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="c1"># No battery: simple DC to AC for load</span>
+            <span class="n">pv_ac</span> <span class="o">=</span> <span class="n">pv_dc_power</span> <span class="o">*</span> <span class="n">battery_config</span><span class="o">.</span><span class="n">inverter_efficiency</span>
+            <span class="k">if</span> <span class="n">pv_ac</span> <span class="o">&gt;=</span> <span class="n">load</span><span class="p">:</span>
+                <span class="n">Sell</span> <span class="o">=</span> <span class="n">pv_ac</span> <span class="o">-</span> <span class="n">load</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="n">Import</span> <span class="o">=</span> <span class="n">load</span> <span class="o">-</span> <span class="n">pv_ac</span>
+
+        <span class="c1"># Compute cell temperature via lumped thermal model</span>
+        <span class="k">if</span> <span class="n">has_battery</span> <span class="ow">and</span> <span class="n">battery_config</span><span class="o">.</span><span class="n">thermal_resistance_kw</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="c1"># charge_in and discharge_out are in Wh; convert to W for thermal calc</span>
+            <span class="n">charge_power_w</span> <span class="o">=</span> <span class="n">charge_in</span> <span class="o">/</span> <span class="n">hours_per_step</span> <span class="k">if</span> <span class="n">hours_per_step</span> <span class="o">&gt;</span> <span class="mi">0</span> <span class="k">else</span> <span class="mf">0.0</span>
+            <span class="n">discharge_power_w</span> <span class="o">=</span> <span class="n">discharge_out</span> <span class="o">/</span> <span class="n">hours_per_step</span> <span class="k">if</span> <span class="n">hours_per_step</span> <span class="o">&gt;</span> <span class="mi">0</span> <span class="k">else</span> <span class="mf">0.0</span>
+            <span class="n">T_cell</span> <span class="o">=</span> <span class="n">compute_cell_temperature</span><span class="p">(</span>
+                <span class="n">T_ambient</span><span class="p">,</span>
+                <span class="n">charge_power_w</span><span class="p">,</span>
+                <span class="n">discharge_power_w</span><span class="p">,</span>
+                <span class="n">battery_config</span><span class="o">.</span><span class="n">charge_efficiency</span><span class="p">,</span>
+                <span class="n">battery_config</span><span class="o">.</span><span class="n">discharge_efficiency</span><span class="p">,</span>
+                <span class="n">battery_config</span><span class="o">.</span><span class="n">thermal_resistance_kw</span><span class="p">,</span>
+            <span class="p">)</span>
+        <span class="n">T_cell_day_sum</span> <span class="o">+=</span> <span class="n">T_cell</span>
+
+        <span class="c1"># SOC calculations (handle no-battery case)</span>
+        <span class="k">if</span> <span class="n">has_battery</span><span class="p">:</span>
+            <span class="n">soc_normalized</span> <span class="o">=</span> <span class="p">(</span><span class="n">Battery_Energy_Wh</span> <span class="o">-</span> <span class="n">Emin</span><span class="p">)</span> <span class="o">/</span> <span class="p">(</span><span class="n">Emax</span> <span class="o">-</span> <span class="n">Emin</span><span class="p">)</span> <span class="k">if</span> <span class="p">(</span><span class="n">Emax</span> <span class="o">-</span> <span class="n">Emin</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">0</span> <span class="k">else</span> <span class="mf">0.0</span>
+            <span class="n">soc_normalized</span> <span class="o">=</span> <span class="nb">max</span><span class="p">(</span><span class="mf">0.0</span><span class="p">,</span> <span class="nb">min</span><span class="p">(</span><span class="mf">1.0</span><span class="p">,</span> <span class="n">soc_normalized</span><span class="p">))</span>
+            <span class="n">soc_absolute</span> <span class="o">=</span> <span class="p">(</span>
+                <span class="n">Battery_Energy_Wh</span> <span class="o">/</span> <span class="p">(</span><span class="n">battery_config</span><span class="o">.</span><span class="n">nominal_energy_wh</span> <span class="o">*</span> <span class="n">battery_soh_decimal</span><span class="p">)</span>
+                <span class="k">if</span> <span class="n">battery_soh_decimal</span> <span class="o">&gt;</span> <span class="mi">0</span>
+                <span class="k">else</span> <span class="mf">0.0</span>
+            <span class="p">)</span>
+            <span class="n">soc_absolute</span> <span class="o">=</span> <span class="nb">max</span><span class="p">(</span><span class="mf">0.0</span><span class="p">,</span> <span class="nb">min</span><span class="p">(</span><span class="mf">1.0</span><span class="p">,</span> <span class="n">soc_absolute</span><span class="p">))</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">soc_normalized</span> <span class="o">=</span> <span class="mf">0.0</span>
+            <span class="n">soc_absolute</span> <span class="o">=</span> <span class="mf">0.0</span>
+            <span class="n">Emax</span> <span class="o">=</span> <span class="mf">0.0</span>
+            <span class="n">Emin</span> <span class="o">=</span> <span class="mf">0.0</span>
+        <span class="n">soc_absolute_buffer</span><span class="p">[</span><span class="n">soc_buf_idx</span><span class="p">]</span> <span class="o">=</span> <span class="n">soc_absolute</span>
+        <span class="n">soc_buf_idx</span> <span class="o">+=</span> <span class="mi">1</span>
+
+        <span class="c1"># Store results via array indexing (avoids per-timestep dict overhead)</span>
+        <span class="n">_res_pv_dc</span><span class="p">[</span><span class="n">i</span><span class="p">]</span> <span class="o">=</span> <span class="n">pv_dc_power</span> <span class="o">/</span> <span class="n">hours_per_step</span>
+        <span class="n">_res_pv_prod</span><span class="p">[</span><span class="n">i</span><span class="p">]</span> <span class="o">=</span> <span class="n">pv_ac</span> <span class="o">/</span> <span class="n">hours_per_step</span>
+        <span class="n">_res_load</span><span class="p">[</span><span class="n">i</span><span class="p">]</span> <span class="o">=</span> <span class="n">load</span> <span class="o">/</span> <span class="n">hours_per_step</span>
+        <span class="n">_res_pv_delta</span><span class="p">[</span><span class="n">i</span><span class="p">]</span> <span class="o">=</span> <span class="p">(</span><span class="n">pv_ac</span> <span class="o">-</span> <span class="n">load</span><span class="p">)</span> <span class="o">/</span> <span class="n">hours_per_step</span>
+        <span class="n">_res_import</span><span class="p">[</span><span class="n">i</span><span class="p">]</span> <span class="o">=</span> <span class="n">Import</span> <span class="o">/</span> <span class="n">hours_per_step</span>
+        <span class="n">_res_sell</span><span class="p">[</span><span class="n">i</span><span class="p">]</span> <span class="o">=</span> <span class="n">Sell</span> <span class="o">/</span> <span class="n">hours_per_step</span>
+        <span class="n">_res_batt_e</span><span class="p">[</span><span class="n">i</span><span class="p">]</span> <span class="o">=</span> <span class="n">Battery_Energy_Wh</span> <span class="k">if</span> <span class="n">has_battery</span> <span class="k">else</span> <span class="mf">0.0</span>
+        <span class="n">_res_soc_norm</span><span class="p">[</span><span class="n">i</span><span class="p">]</span> <span class="o">=</span> <span class="n">soc_normalized</span>
+        <span class="n">_res_soc_abs</span><span class="p">[</span><span class="n">i</span><span class="p">]</span> <span class="o">=</span> <span class="n">soc_absolute</span>
+        <span class="n">_res_soh</span><span class="p">[</span><span class="n">i</span><span class="p">]</span> <span class="o">=</span> <span class="n">Battery_SOH</span> <span class="k">if</span> <span class="n">has_battery</span> <span class="k">else</span> <span class="mf">100.0</span>
+        <span class="n">_res_tcell</span><span class="p">[</span><span class="n">i</span><span class="p">]</span> <span class="o">=</span> <span class="n">T_cell</span>
+
+        <span class="c1"># Daily degradation update</span>
+        <span class="k">if</span> <span class="n">soc_buf_idx</span> <span class="o">&gt;=</span> <span class="n">steps_per_day</span><span class="p">:</span>
+            <span class="c1"># Build Series from buffer using rng slice (avoids pd.date_range overhead)</span>
+            <span class="n">day_start_i</span> <span class="o">=</span> <span class="n">i</span> <span class="o">-</span> <span class="n">steps_per_day</span> <span class="o">+</span> <span class="mi">1</span>
+            <span class="n">soc_series</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">Series</span><span class="p">(</span>
+                <span class="n">soc_absolute_buffer</span><span class="p">[:</span><span class="n">steps_per_day</span><span class="p">]</span><span class="o">.</span><span class="n">copy</span><span class="p">(),</span>
+                <span class="n">index</span><span class="o">=</span><span class="n">rng</span><span class="p">[</span><span class="n">day_start_i</span> <span class="p">:</span> <span class="n">i</span> <span class="o">+</span> <span class="mi">1</span><span class="p">],</span>
+            <span class="p">)</span>
+
+            <span class="c1"># Cycle degradation</span>
+            <span class="n">soh_after_cycle</span><span class="p">,</span> <span class="n">dSOH_cycle</span><span class="p">,</span> <span class="n">fec_cum</span> <span class="o">=</span> <span class="n">update_battery_soh_cyclewise</span><span class="p">(</span>
+                <span class="n">battery_soh_decimal</span><span class="p">,</span>
+                <span class="n">soc_series</span><span class="p">,</span>
+                <span class="n">battery_config</span><span class="o">.</span><span class="n">nominal_energy_wh</span><span class="p">,</span>
+                <span class="n">fec_cum</span><span class="o">=</span><span class="n">fec_cum</span><span class="p">,</span>
+                <span class="n">battery_type</span><span class="o">=</span><span class="n">battery_config</span><span class="o">.</span><span class="n">battery_type</span><span class="p">,</span>
+                <span class="n">debug</span><span class="o">=</span><span class="n">debug</span><span class="p">,</span>
+            <span class="p">)</span>
+
+            <span class="c1"># Calendar degradation — use mean cell temperature over the day</span>
+            <span class="n">mean_soc_abs</span> <span class="o">=</span> <span class="nb">float</span><span class="p">(</span><span class="n">soc_series</span><span class="o">.</span><span class="n">mean</span><span class="p">())</span>
+            <span class="n">mean_T_cell</span> <span class="o">=</span> <span class="n">T_cell_day_sum</span> <span class="o">/</span> <span class="n">steps_per_day</span>
+            <span class="n">soh_after_calendar</span><span class="p">,</span> <span class="n">dSOH_calendar</span><span class="p">,</span> <span class="n">cumulative_cal_seconds</span> <span class="o">=</span> <span class="n">update_battery_soh_calendar</span><span class="p">(</span>
+                <span class="n">soh_after_cycle</span><span class="p">,</span>
+                <span class="n">k0_frac</span><span class="o">=</span><span class="n">k0_frac</span><span class="p">,</span>
+                <span class="n">Ea</span><span class="o">=</span><span class="n">Ea_val</span><span class="p">,</span>
+                <span class="n">n</span><span class="o">=</span><span class="n">n_val</span><span class="p">,</span>
+                <span class="n">cal_b</span><span class="o">=</span><span class="n">b_val</span><span class="p">,</span>
+                <span class="n">T_cell_C</span><span class="o">=</span><span class="n">mean_T_cell</span><span class="p">,</span>
+                <span class="n">cumulative_cal_seconds</span><span class="o">=</span><span class="n">cumulative_cal_seconds</span><span class="p">,</span>
+                <span class="n">dt_days</span><span class="o">=</span><span class="mf">1.0</span><span class="p">,</span>
+                <span class="n">mean_soc_absolute</span><span class="o">=</span><span class="n">mean_soc_abs</span><span class="p">,</span>
+                <span class="n">debug</span><span class="o">=</span><span class="n">debug</span><span class="p">,</span>
+            <span class="p">)</span>
+
+            <span class="n">battery_soh_decimal</span> <span class="o">=</span> <span class="n">soh_after_calendar</span>
+
+            <span class="n">Battery_SOH</span> <span class="o">=</span> <span class="n">battery_soh_decimal</span> <span class="o">*</span> <span class="mf">100.0</span>
+
+            <span class="n">cumulative_cycle_deg</span> <span class="o">+=</span> <span class="n">dSOH_cycle</span>
+            <span class="n">cumulative_cal_deg</span> <span class="o">+=</span> <span class="n">dSOH_calendar</span>
+
+            <span class="c1"># Resistance fade (opt-in)</span>
+            <span class="n">dR_cycle</span> <span class="o">=</span> <span class="mf">0.0</span>
+            <span class="n">dR_calendar</span> <span class="o">=</span> <span class="mf">0.0</span>
+            <span class="n">effective_rte</span> <span class="o">=</span> <span class="n">battery_config</span><span class="o">.</span><span class="n">charge_efficiency</span> <span class="o">*</span> <span class="n">battery_config</span><span class="o">.</span><span class="n">discharge_efficiency</span>
+            <span class="k">if</span> <span class="n">battery_config</span><span class="o">.</span><span class="n">enable_resistance_fade</span><span class="p">:</span>
+                <span class="c1"># Get cycles for resistance calculation</span>
+                <span class="n">time_index</span> <span class="o">=</span> <span class="n">soc_series</span><span class="o">.</span><span class="n">index</span>
+                <span class="n">cycles</span> <span class="o">=</span> <span class="n">detect_cycles_rainflow</span><span class="p">(</span><span class="n">soc_series</span><span class="p">,</span> <span class="n">time_index</span><span class="p">,</span> <span class="n">min_doc_fraction</span><span class="o">=</span><span class="mf">0.01</span><span class="p">)</span>
+
+                <span class="c1"># Compute FEC at start of day (before today&#39;s cycles were added)</span>
+                <span class="n">day_fec</span> <span class="o">=</span> <span class="nb">sum</span><span class="p">(</span><span class="nb">max</span><span class="p">(</span><span class="mf">0.0</span><span class="p">,</span> <span class="nb">min</span><span class="p">(</span><span class="mf">1.0</span><span class="p">,</span> <span class="n">c</span><span class="p">[</span><span class="s2">&quot;doc&quot;</span><span class="p">]))</span> <span class="o">*</span> <span class="n">c</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;count&quot;</span><span class="p">,</span> <span class="mf">1.0</span><span class="p">)</span> <span class="k">for</span> <span class="n">c</span> <span class="ow">in</span> <span class="n">cycles</span><span class="p">)</span>
+                <span class="n">fec_before_day</span> <span class="o">=</span> <span class="n">fec_cum</span> <span class="o">-</span> <span class="n">day_fec</span>
+
+                <span class="n">resistance_growth</span><span class="p">,</span> <span class="n">dR_cycle</span> <span class="o">=</span> <span class="n">update_battery_resistance_cyclewise</span><span class="p">(</span>
+                    <span class="n">resistance_growth</span><span class="p">,</span> <span class="n">cycles</span><span class="p">,</span> <span class="n">fec_before_day</span><span class="p">,</span> <span class="n">debug</span><span class="o">=</span><span class="n">debug</span>
+                <span class="p">)</span>
+                <span class="n">resistance_growth</span><span class="p">,</span> <span class="n">dR_calendar</span> <span class="o">=</span> <span class="n">update_battery_resistance_calendar</span><span class="p">(</span>
+                    <span class="n">resistance_growth</span><span class="p">,</span>
+                    <span class="n">T_cell_C</span><span class="o">=</span><span class="n">T_cell</span><span class="p">,</span>
+                    <span class="n">cumulative_cal_seconds</span><span class="o">=</span><span class="n">cumulative_cal_seconds</span><span class="p">,</span>
+                    <span class="n">dt_days</span><span class="o">=</span><span class="mf">1.0</span><span class="p">,</span>
+                    <span class="n">mean_soc_absolute</span><span class="o">=</span><span class="n">mean_soc_abs</span><span class="p">,</span>
+                    <span class="n">debug</span><span class="o">=</span><span class="n">debug</span><span class="p">,</span>
+                <span class="p">)</span>
+                <span class="n">cumulative_resistance_cycle</span> <span class="o">+=</span> <span class="n">dR_cycle</span>
+                <span class="n">cumulative_resistance_calendar</span> <span class="o">+=</span> <span class="n">dR_calendar</span>
+
+                <span class="n">effective_rte</span> <span class="o">=</span> <span class="p">(</span><span class="n">battery_config</span><span class="o">.</span><span class="n">charge_efficiency</span> <span class="o">*</span> <span class="n">battery_config</span><span class="o">.</span><span class="n">discharge_efficiency</span><span class="p">)</span> <span class="o">/</span> <span class="p">(</span>
+                    <span class="mf">1.0</span> <span class="o">+</span> <span class="n">resistance_growth</span>
+                <span class="p">)</span>
+
+            <span class="c1"># Battery replacement check</span>
+            <span class="k">if</span> <span class="n">battery_config</span><span class="o">.</span><span class="n">enable_replacement</span> <span class="ow">and</span> <span class="n">battery_soh_decimal</span> <span class="o">&lt;=</span> <span class="n">battery_config</span><span class="o">.</span><span class="n">eol_percentage</span><span class="p">:</span>
+                <span class="n">battery_soh_decimal</span> <span class="o">=</span> <span class="mf">1.0</span>
+                <span class="n">Battery_SOH</span> <span class="o">=</span> <span class="mf">100.0</span>
+                <span class="n">fec_cum</span> <span class="o">=</span> <span class="mf">0.0</span>
+                <span class="n">cumulative_cal_seconds</span> <span class="o">=</span> <span class="mf">0.0</span>
+                <span class="n">resistance_growth</span> <span class="o">=</span> <span class="mf">0.0</span>
+                <span class="n">Battery_Energy_Wh</span> <span class="o">=</span> <span class="n">battery_config</span><span class="o">.</span><span class="n">nominal_energy_wh</span> <span class="o">*</span> <span class="n">battery_config</span><span class="o">.</span><span class="n">max_soc</span>
+                <span class="n">n_replacements</span> <span class="o">+=</span> <span class="mi">1</span>
+                <span class="n">total_replacement_cost</span> <span class="o">+=</span> <span class="n">battery_config</span><span class="o">.</span><span class="n">replacement_cost</span>
+                <span class="n">_res_replaced</span><span class="p">[</span><span class="n">i</span><span class="p">]</span> <span class="o">=</span> <span class="kc">True</span>
+                <span class="n">_res_repl_cost</span><span class="p">[</span><span class="n">i</span><span class="p">]</span> <span class="o">=</span> <span class="n">battery_config</span><span class="o">.</span><span class="n">replacement_cost</span>
+                <span class="n">cumulative_cycle_deg</span> <span class="o">=</span> <span class="mf">0.0</span>
+                <span class="n">cumulative_cal_deg</span> <span class="o">=</span> <span class="mf">0.0</span>
+                <span class="n">cumulative_resistance_cycle</span> <span class="o">=</span> <span class="mf">0.0</span>
+                <span class="n">cumulative_resistance_calendar</span> <span class="o">=</span> <span class="mf">0.0</span>
+
+                <span class="k">if</span> <span class="n">debug</span><span class="p">:</span>
+                    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="se">\n</span><span class="s2">*** BATTERY REPLACED at </span><span class="si">{</span><span class="n">step_time</span><span class="si">}</span><span class="s2"> ***&quot;</span><span class="p">)</span>
+
+            <span class="n">degradation_record</span> <span class="o">=</span> <span class="p">{</span>
+                <span class="s2">&quot;Datetime&quot;</span><span class="p">:</span> <span class="n">step_time</span><span class="p">,</span>
+                <span class="s2">&quot;SOH&quot;</span><span class="p">:</span> <span class="n">Battery_SOH</span><span class="p">,</span>
+                <span class="s2">&quot;Cycle_Degradation&quot;</span><span class="p">:</span> <span class="n">dSOH_cycle</span><span class="p">,</span>
+                <span class="s2">&quot;Calendar_Degradation&quot;</span><span class="p">:</span> <span class="n">dSOH_calendar</span><span class="p">,</span>
+                <span class="s2">&quot;Cumulative_Cycle_Degradation&quot;</span><span class="p">:</span> <span class="n">cumulative_cycle_deg</span><span class="p">,</span>
+                <span class="s2">&quot;Cumulative_Calendar_Degradation&quot;</span><span class="p">:</span> <span class="n">cumulative_cal_deg</span><span class="p">,</span>
+                <span class="s2">&quot;Cumulative_FEC&quot;</span><span class="p">:</span> <span class="n">fec_cum</span><span class="p">,</span>
+                <span class="s2">&quot;Cumulative_Calendar_Seconds&quot;</span><span class="p">:</span> <span class="n">cumulative_cal_seconds</span><span class="p">,</span>
+                <span class="s2">&quot;Total_Degradation&quot;</span><span class="p">:</span> <span class="mf">1.0</span> <span class="o">-</span> <span class="n">battery_soh_decimal</span><span class="p">,</span>
+                <span class="s2">&quot;Mean_SOC_Absolute&quot;</span><span class="p">:</span> <span class="n">mean_soc_abs</span><span class="p">,</span>
+            <span class="p">}</span>
+            <span class="k">if</span> <span class="n">battery_config</span><span class="o">.</span><span class="n">enable_resistance_fade</span><span class="p">:</span>
+                <span class="n">degradation_record</span><span class="p">[</span><span class="s2">&quot;Resistance_Growth&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">resistance_growth</span>
+                <span class="n">degradation_record</span><span class="p">[</span><span class="s2">&quot;Effective_RTE&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">effective_rte</span>
+            <span class="n">degradation_tracking</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">degradation_record</span><span class="p">)</span>
+
+            <span class="c1"># Reset daily accumulators</span>
+            <span class="n">soc_buf_idx</span> <span class="o">=</span> <span class="mi">0</span>
+            <span class="n">T_cell_day_sum</span> <span class="o">=</span> <span class="mf">0.0</span>
+
+    <span class="c1"># Build results DataFrame from pre-allocated arrays</span>
+    <span class="n">df</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">(</span>
+        <span class="p">{</span>
+            <span class="s2">&quot;Datetime&quot;</span><span class="p">:</span> <span class="n">rng</span><span class="p">,</span>
+            <span class="s2">&quot;PV_DC&quot;</span><span class="p">:</span> <span class="n">_res_pv_dc</span><span class="p">,</span>
+            <span class="s2">&quot;PV_Production&quot;</span><span class="p">:</span> <span class="n">_res_pv_prod</span><span class="p">,</span>
+            <span class="s2">&quot;Houseload&quot;</span><span class="p">:</span> <span class="n">_res_load</span><span class="p">,</span>
+            <span class="s2">&quot;PV_Delta&quot;</span><span class="p">:</span> <span class="n">_res_pv_delta</span><span class="p">,</span>
+            <span class="s2">&quot;Import_From_Grid&quot;</span><span class="p">:</span> <span class="n">_res_import</span><span class="p">,</span>
+            <span class="s2">&quot;Sell_To_Grid&quot;</span><span class="p">:</span> <span class="n">_res_sell</span><span class="p">,</span>
+            <span class="s2">&quot;Battery_Energy&quot;</span><span class="p">:</span> <span class="n">_res_batt_e</span><span class="p">,</span>
+            <span class="s2">&quot;Battery_SOC_Normalized&quot;</span><span class="p">:</span> <span class="n">_res_soc_norm</span><span class="p">,</span>
+            <span class="s2">&quot;Battery_SOC_Absolute&quot;</span><span class="p">:</span> <span class="n">_res_soc_abs</span><span class="p">,</span>
+            <span class="s2">&quot;Battery_SOH&quot;</span><span class="p">:</span> <span class="n">_res_soh</span><span class="p">,</span>
+            <span class="s2">&quot;T_cell&quot;</span><span class="p">:</span> <span class="n">_res_tcell</span><span class="p">,</span>
+            <span class="s2">&quot;Battery_Replaced&quot;</span><span class="p">:</span> <span class="n">_res_replaced</span><span class="p">,</span>
+            <span class="s2">&quot;Replacement_Cost&quot;</span><span class="p">:</span> <span class="n">_res_repl_cost</span><span class="p">,</span>
+        <span class="p">}</span>
+    <span class="p">)</span>
+    <span class="n">deg_df</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">(</span><span class="n">degradation_tracking</span><span class="p">)</span> <span class="k">if</span> <span class="n">degradation_tracking</span> <span class="k">else</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">()</span>
+
+    <span class="c1"># Summary calculations (use numpy sums on arrays directly)</span>
+    <span class="n">total_pv</span> <span class="o">=</span> <span class="n">_res_pv_prod</span><span class="o">.</span><span class="n">sum</span><span class="p">()</span> <span class="o">*</span> <span class="n">hours_per_step</span>
+    <span class="n">total_load</span> <span class="o">=</span> <span class="n">_res_load</span><span class="o">.</span><span class="n">sum</span><span class="p">()</span> <span class="o">*</span> <span class="n">hours_per_step</span>
+    <span class="n">total_sell</span> <span class="o">=</span> <span class="n">_res_sell</span><span class="o">.</span><span class="n">sum</span><span class="p">()</span> <span class="o">*</span> <span class="n">hours_per_step</span>
+    <span class="n">total_import</span> <span class="o">=</span> <span class="n">_res_import</span><span class="o">.</span><span class="n">sum</span><span class="p">()</span> <span class="o">*</span> <span class="n">hours_per_step</span>
+
+    <span class="n">percentage_imported</span> <span class="o">=</span> <span class="p">(</span><span class="n">total_import</span> <span class="o">/</span> <span class="n">total_load</span> <span class="o">*</span> <span class="mi">100</span><span class="p">)</span> <span class="k">if</span> <span class="n">total_load</span> <span class="o">&gt;</span> <span class="mi">0</span> <span class="k">else</span> <span class="mi">0</span>
+
+    <span class="n">summary</span> <span class="o">=</span> <span class="p">{</span>
+        <span class="s2">&quot;Total PV [kWh]&quot;</span><span class="p">:</span> <span class="n">total_pv</span> <span class="o">/</span> <span class="mf">1000.0</span><span class="p">,</span>
+        <span class="s2">&quot;Total Load [kWh]&quot;</span><span class="p">:</span> <span class="n">total_load</span> <span class="o">/</span> <span class="mf">1000.0</span><span class="p">,</span>
+        <span class="s2">&quot;Sell [kWh]&quot;</span><span class="p">:</span> <span class="n">total_sell</span> <span class="o">/</span> <span class="mf">1000.0</span><span class="p">,</span>
+        <span class="s2">&quot;Import [kWh]&quot;</span><span class="p">:</span> <span class="n">total_import</span> <span class="o">/</span> <span class="mf">1000.0</span><span class="p">,</span>
+        <span class="s2">&quot;Import [%]&quot;</span><span class="p">:</span> <span class="n">percentage_imported</span><span class="p">,</span>
+        <span class="s2">&quot;Grid Independence [%]&quot;</span><span class="p">:</span> <span class="mi">100</span> <span class="o">-</span> <span class="n">percentage_imported</span><span class="p">,</span>
+        <span class="s2">&quot;Final SOH [%]&quot;</span><span class="p">:</span> <span class="n">Battery_SOH</span><span class="p">,</span>
+        <span class="s2">&quot;N_Replacements&quot;</span><span class="p">:</span> <span class="n">n_replacements</span><span class="p">,</span>
+        <span class="s2">&quot;Replacement_Cost&quot;</span><span class="p">:</span> <span class="n">total_replacement_cost</span><span class="p">,</span>
+    <span class="p">}</span>
+    <span class="n">summary_df</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">([</span><span class="n">summary</span><span class="p">])</span>
+
+    <span class="k">return</span> <span class="n">df</span><span class="p">,</span> <span class="n">total_pv</span><span class="p">,</span> <span class="n">summary_df</span><span class="p">,</span> <span class="n">total_replacement_cost</span><span class="p">,</span> <span class="n">n_replacements</span><span class="p">,</span> <span class="n">deg_df</span></div>
+
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">lfp_capacity_factor</span><span class="p">(</span><span class="n">T_C</span><span class="p">:</span> <span class="nb">float</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">float</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Temperature-dependent usable capacity factor for LFP batteries.</span>
+
+<span class="sd">    Returns a factor in [0.5, 1.0] relative to nominal capacity at 25°C.</span>
+<span class="sd">    Uses a piecewise-linear model calibrated to typical LFP characterisation data:</span>
+<span class="sd">      - ≥25°C: 1.0  (capacity doesn&#39;t increase meaningfully above reference)</span>
+<span class="sd">      - 0–25°C: linear derating at LFP_CAP_DERATE_PER_C_MODERATE per °C</span>
+<span class="sd">      - &lt;0°C:   steeper derating at LFP_CAP_DERATE_PER_C_COLD per °C below 0</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        T_C: Battery temperature in °C</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        Capacity factor (dimensionless, ≤ 1.0)</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">if</span> <span class="n">T_C</span> <span class="o">&gt;=</span> <span class="mf">25.0</span><span class="p">:</span>
+        <span class="k">return</span> <span class="mf">1.0</span>
+    <span class="k">elif</span> <span class="n">T_C</span> <span class="o">&gt;=</span> <span class="mf">0.0</span><span class="p">:</span>
+        <span class="k">return</span> <span class="mf">1.0</span> <span class="o">-</span> <span class="n">LFP_CAP_DERATE_PER_C_MODERATE</span> <span class="o">*</span> <span class="p">(</span><span class="mf">25.0</span> <span class="o">-</span> <span class="n">T_C</span><span class="p">)</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="n">base_at_zero</span> <span class="o">=</span> <span class="mf">1.0</span> <span class="o">-</span> <span class="n">LFP_CAP_DERATE_PER_C_MODERATE</span> <span class="o">*</span> <span class="mf">25.0</span>  <span class="c1"># ~0.95</span>
+        <span class="k">return</span> <span class="nb">max</span><span class="p">(</span><span class="mf">0.5</span><span class="p">,</span> <span class="n">base_at_zero</span> <span class="o">-</span> <span class="n">LFP_CAP_DERATE_PER_C_COLD</span> <span class="o">*</span> <span class="nb">abs</span><span class="p">(</span><span class="n">T_C</span><span class="p">))</span>
+
+
+<div class="viewcode-block" id="compute_cell_temperature">
+<a class="viewcode-back" href="../../api/generated/breos.battery.compute_cell_temperature.html#breos.battery.compute_cell_temperature">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">compute_cell_temperature</span><span class="p">(</span>
+    <span class="n">T_ambient_C</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
+    <span class="n">charge_power_w</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
+    <span class="n">discharge_power_w</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
+    <span class="n">charge_eff</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
+    <span class="n">discharge_eff</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
+    <span class="n">thermal_resistance_kw</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="n">DEFAULT_THERMAL_RESISTANCE_KW</span><span class="p">,</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">float</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Compute battery cell temperature using a quasi-steady-state lumped thermal model.</span>
+
+<span class="sd">    Heat is generated by ohmic losses during charge and discharge. The cell</span>
+<span class="sd">    temperature rises above ambient proportional to heat dissipation and</span>
+<span class="sd">    thermal resistance of the enclosure.</span>
+
+<span class="sd">    Valid for hourly (or longer) timesteps where the battery thermal mass</span>
+<span class="sd">    reaches approximate equilibrium within each step.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        T_ambient_C: Ambient temperature (C)</span>
+<span class="sd">        charge_power_w: Power flowing into the battery this step (W, DC side)</span>
+<span class="sd">        discharge_power_w: Power drawn from the battery this step (W, DC side)</span>
+<span class="sd">        charge_eff: Charge efficiency (0-1)</span>
+<span class="sd">        discharge_eff: Discharge efficiency (0-1)</span>
+<span class="sd">        thermal_resistance_kw: Thermal resistance in K/W</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        Cell temperature (C)</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="c1"># Heat from charging: fraction (1 - eta_charge) is lost as heat</span>
+    <span class="n">P_loss_charge</span> <span class="o">=</span> <span class="n">charge_power_w</span> <span class="o">*</span> <span class="p">(</span><span class="mf">1.0</span> <span class="o">-</span> <span class="n">charge_eff</span><span class="p">)</span>
+    <span class="c1"># Heat from discharging: battery delivers more internally than reaches load</span>
+    <span class="n">P_loss_discharge</span> <span class="o">=</span> <span class="n">discharge_power_w</span> <span class="o">*</span> <span class="p">(</span><span class="mf">1.0</span> <span class="o">/</span> <span class="n">discharge_eff</span> <span class="o">-</span> <span class="mf">1.0</span><span class="p">)</span> <span class="k">if</span> <span class="n">discharge_eff</span> <span class="o">&gt;</span> <span class="mi">0</span> <span class="k">else</span> <span class="mf">0.0</span>
+
+    <span class="n">P_loss_total</span> <span class="o">=</span> <span class="n">P_loss_charge</span> <span class="o">+</span> <span class="n">P_loss_discharge</span>
+    <span class="n">T_cell</span> <span class="o">=</span> <span class="n">T_ambient_C</span> <span class="o">+</span> <span class="n">thermal_resistance_kw</span> <span class="o">*</span> <span class="n">P_loss_total</span>
+    <span class="k">return</span> <span class="n">T_cell</span></div>
+
+
+
+<div class="viewcode-block" id="apply_indoor_temperature_model">
+<a class="viewcode-back" href="../../api/generated/breos.battery.apply_indoor_temperature_model.html#breos.battery.apply_indoor_temperature_model">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">apply_indoor_temperature_model</span><span class="p">(</span>
+    <span class="n">outdoor_temperature</span><span class="p">:</span> <span class="n">pd</span><span class="o">.</span><span class="n">Series</span><span class="p">,</span>
+    <span class="n">setpoint_c</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">22.0</span><span class="p">,</span>
+    <span class="n">coupling_alpha</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.3</span><span class="p">,</span>
+    <span class="n">floor_c</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">15.0</span><span class="p">,</span>
+    <span class="n">ceiling_c</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">35.0</span><span class="p">,</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="n">pd</span><span class="o">.</span><span class="n">Series</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Transform outdoor temperature to indoor temperature for battery simulation.</span>
+
+<span class="sd">    Residential batteries are installed indoors where building thermal mass</span>
+<span class="sd">    buffers outdoor extremes. This stateless preprocessing applies a weighted</span>
+<span class="sd">    blend with clamp before temperatures enter the simulation loop.</span>
+
+<span class="sd">    T_indoor = clamp(alpha * T_outdoor + (1 - alpha) * T_setpoint, floor, ceiling)</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        outdoor_temperature: Outdoor ambient temperature series (°C)</span>
+<span class="sd">        setpoint_c: Indoor comfort midpoint (°C)</span>
+<span class="sd">        coupling_alpha: How much outdoor temp influences indoor (0=insulated, 1=outdoor)</span>
+<span class="sd">        floor_c: Minimum indoor temperature (°C)</span>
+<span class="sd">        ceiling_c: Maximum indoor temperature (°C)</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        Indoor temperature series (°C), same index as input</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">t_indoor</span> <span class="o">=</span> <span class="n">coupling_alpha</span> <span class="o">*</span> <span class="n">outdoor_temperature</span> <span class="o">+</span> <span class="p">(</span><span class="mf">1.0</span> <span class="o">-</span> <span class="n">coupling_alpha</span><span class="p">)</span> <span class="o">*</span> <span class="n">setpoint_c</span>
+    <span class="k">return</span> <span class="n">t_indoor</span><span class="o">.</span><span class="n">clip</span><span class="p">(</span><span class="n">lower</span><span class="o">=</span><span class="n">floor_c</span><span class="p">,</span> <span class="n">upper</span><span class="o">=</span><span class="n">ceiling_c</span><span class="p">)</span></div>
+
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">_get_degradation_params</span><span class="p">(</span><span class="n">model</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">]:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Get degradation model parameters based on model name.</span>
+
+<span class="sd">    All LFP models use Naumann (2020) cycle aging + the specified calendar aging parameters.</span>
+<span class="sd">    The &#39;naumann&#39; model uses Naumann&#39;s own calendar params; &#39;naumann_lam*&#39; variants use</span>
+<span class="sd">    Lam et al. (2025) calendar params with different calibrations.</span>
+
+<span class="sd">    Models:</span>
+<span class="sd">        &#39;naumann&#39;                          — Naumann 2020 calendar + cycle (NMC/LFP lab)</span>
+<span class="sd">        &#39;naumann_lam&#39;                      — Naumann cycle + Lam 2025 lab-derived calendar</span>
+<span class="sd">        &#39;naumann_lam_field_calibrated&#39;     — Current field-calibrated fit (canonical name)</span>
+<span class="sd">        &#39;naumann_lam_modern&#39;               — Projected 0.5×k₀ for 2020+ cells</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">model_lower</span> <span class="o">=</span> <span class="n">model</span><span class="o">.</span><span class="n">lower</span><span class="p">()</span><span class="o">.</span><span class="n">replace</span><span class="p">(</span><span class="s2">&quot;-&quot;</span><span class="p">,</span> <span class="s2">&quot;_&quot;</span><span class="p">)</span>
+
+    <span class="c1"># ── Naumann (pure) ────────────────────────────────────────────────────</span>
+    <span class="k">if</span> <span class="n">model_lower</span> <span class="o">==</span> <span class="s2">&quot;naumann&quot;</span><span class="p">:</span>
+        <span class="n">k0_frac</span> <span class="o">=</span> <span class="n">NAUMANN_K0_PERCENT</span> <span class="o">/</span> <span class="mf">100.0</span>
+        <span class="k">return</span> <span class="n">k0_frac</span><span class="p">,</span> <span class="n">NAUMANN_EA_J_MOL</span><span class="p">,</span> <span class="n">NAUMANN_EXPONENT_B</span><span class="p">,</span> <span class="n">NAUMANN_SOC_EXPONENT_N</span>
+
+    <span class="c1"># ── Naumann-Lam: lab-derived ──────────────────────────────────────────</span>
+    <span class="k">elif</span> <span class="n">model_lower</span> <span class="o">==</span> <span class="s2">&quot;naumann_lam&quot;</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">LAM_K0_FRAC</span><span class="p">,</span> <span class="n">LAM_EA_J_MOL</span><span class="p">,</span> <span class="n">LAM_EXPONENT_B</span><span class="p">,</span> <span class="n">LAM_SOC_EXPONENT_N</span>
+
+    <span class="c1"># ── Naumann-Lam: field-calibrated (default) ──────────────────────────</span>
+    <span class="k">elif</span> <span class="n">model_lower</span> <span class="o">==</span> <span class="s2">&quot;naumann_lam_field_calibrated&quot;</span><span class="p">:</span>
+        <span class="k">return</span> <span class="p">(</span>
+            <span class="n">NAUMANN_LAM_FIELD_CALIBRATED_K0_FRAC</span><span class="p">,</span>
+            <span class="n">NAUMANN_LAM_FIELD_CALIBRATED_EA_J_MOL</span><span class="p">,</span>
+            <span class="n">NAUMANN_LAM_FIELD_CALIBRATED_EXPONENT_B</span><span class="p">,</span>
+            <span class="n">NAUMANN_LAM_FIELD_CALIBRATED_SOC_EXPONENT_N</span><span class="p">,</span>
+        <span class="p">)</span>
+
+    <span class="c1"># ── Naumann-Lam: field-calibrated relaxed ─────────────────────────────</span>
+    <span class="k">elif</span> <span class="n">model_lower</span> <span class="o">==</span> <span class="s2">&quot;naumann_lam_calibrated_relaxed&quot;</span><span class="p">:</span>
+        <span class="k">return</span> <span class="p">(</span>
+            <span class="n">LAM_CAL_RELAXED_K0_FRAC</span><span class="p">,</span>
+            <span class="n">LAM_CAL_RELAXED_EA_J_MOL</span><span class="p">,</span>
+            <span class="n">LAM_CAL_RELAXED_EXPONENT_B</span><span class="p">,</span>
+            <span class="n">LAM_CAL_RELAXED_SOC_EXPONENT_N</span><span class="p">,</span>
+        <span class="p">)</span>
+
+    <span class="c1"># ── Naumann-Lam: modern LFP projection ───────────────────────────────</span>
+    <span class="k">elif</span> <span class="n">model_lower</span> <span class="o">==</span> <span class="s2">&quot;naumann_lam_modern&quot;</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">MODERN_LFP_K0_FRAC</span><span class="p">,</span> <span class="n">MODERN_LFP_EA_J_MOL</span><span class="p">,</span> <span class="n">MODERN_LFP_EXPONENT_B</span><span class="p">,</span> <span class="n">MODERN_LFP_SOC_EXPONENT_N</span>
+
+    <span class="k">else</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+            <span class="sa">f</span><span class="s2">&quot;Unknown calendar model: </span><span class="si">{</span><span class="n">model</span><span class="si">}</span><span class="s2">. Use &#39;naumann_lam_field_calibrated&#39;, &quot;</span>
+            <span class="sa">f</span><span class="s2">&quot;&#39;naumann_lam&#39;, &#39;naumann_lam_calibrated_relaxed&#39;, &quot;</span>
+            <span class="sa">f</span><span class="s2">&quot;&#39;naumann_lam_modern&#39;, or &#39;naumann&#39;.&quot;</span>
+        <span class="p">)</span>
+
+
+<div class="viewcode-block" id="detect_half_cycles_from_soc_series">
+<a class="viewcode-back" href="../../api/generated/breos.battery.detect_half_cycles_from_soc_series.html#breos.battery.detect_half_cycles_from_soc_series">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">detect_half_cycles_from_soc_series</span><span class="p">(</span>
+    <span class="n">soc_abs_series</span><span class="p">:</span> <span class="n">pd</span><span class="o">.</span><span class="n">Series</span><span class="p">,</span> <span class="n">time_index</span><span class="p">:</span> <span class="n">pd</span><span class="o">.</span><span class="n">DatetimeIndex</span><span class="p">,</span> <span class="n">tiny_hysteresis</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">1e-4</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tuple</span><span class="p">[</span><span class="n">List</span><span class="p">[</span><span class="n">Dict</span><span class="p">],</span> <span class="n">pd</span><span class="o">.</span><span class="n">Series</span><span class="p">]:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Detect charge/discharge half-cycles using local extrema logic.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        soc_abs_series: Absolute SOC series</span>
+<span class="sd">        time_index: Datetime index</span>
+<span class="sd">        tiny_hysteresis: Minimum change to count as extremum</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        Tuple of (half_cycles list, original series)</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">soc</span> <span class="o">=</span> <span class="n">soc_abs_series</span><span class="o">.</span><span class="n">values</span>
+    <span class="n">times</span> <span class="o">=</span> <span class="n">time_index</span>
+    <span class="n">n</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">soc</span><span class="p">)</span>
+
+    <span class="k">if</span> <span class="n">n</span> <span class="o">&lt;</span> <span class="mi">2</span><span class="p">:</span>
+        <span class="k">return</span> <span class="p">[],</span> <span class="n">soc_abs_series</span>
+
+    <span class="n">extrema_idx</span> <span class="o">=</span> <span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+    <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="n">n</span> <span class="o">-</span> <span class="mi">1</span><span class="p">):</span>
+        <span class="n">is_peak</span> <span class="o">=</span> <span class="n">soc</span><span class="p">[</span><span class="n">i</span><span class="p">]</span> <span class="o">&gt;=</span> <span class="n">soc</span><span class="p">[</span><span class="n">i</span> <span class="o">-</span> <span class="mi">1</span><span class="p">]</span> <span class="o">+</span> <span class="n">tiny_hysteresis</span> <span class="ow">and</span> <span class="n">soc</span><span class="p">[</span><span class="n">i</span><span class="p">]</span> <span class="o">&gt;</span> <span class="n">soc</span><span class="p">[</span><span class="n">i</span> <span class="o">+</span> <span class="mi">1</span><span class="p">]</span> <span class="o">+</span> <span class="n">tiny_hysteresis</span>
+        <span class="n">is_trough</span> <span class="o">=</span> <span class="n">soc</span><span class="p">[</span><span class="n">i</span><span class="p">]</span> <span class="o">&lt;=</span> <span class="n">soc</span><span class="p">[</span><span class="n">i</span> <span class="o">-</span> <span class="mi">1</span><span class="p">]</span> <span class="o">-</span> <span class="n">tiny_hysteresis</span> <span class="ow">and</span> <span class="n">soc</span><span class="p">[</span><span class="n">i</span><span class="p">]</span> <span class="o">&lt;</span> <span class="n">soc</span><span class="p">[</span><span class="n">i</span> <span class="o">+</span> <span class="mi">1</span><span class="p">]</span> <span class="o">-</span> <span class="n">tiny_hysteresis</span>
+        <span class="k">if</span> <span class="n">is_peak</span> <span class="ow">or</span> <span class="n">is_trough</span><span class="p">:</span>
+            <span class="n">extrema_idx</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">i</span><span class="p">)</span>
+    <span class="n">extrema_idx</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">n</span> <span class="o">-</span> <span class="mi">1</span><span class="p">)</span>
+
+    <span class="n">half_cycles</span> <span class="o">=</span> <span class="p">[]</span>
+    <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="nb">len</span><span class="p">(</span><span class="n">extrema_idx</span><span class="p">)):</span>
+        <span class="n">sidx</span> <span class="o">=</span> <span class="n">extrema_idx</span><span class="p">[</span><span class="n">i</span> <span class="o">-</span> <span class="mi">1</span><span class="p">]</span>
+        <span class="n">eidx</span> <span class="o">=</span> <span class="n">extrema_idx</span><span class="p">[</span><span class="n">i</span><span class="p">]</span>
+        <span class="k">if</span> <span class="n">eidx</span> <span class="o">==</span> <span class="n">sidx</span><span class="p">:</span>
+            <span class="k">continue</span>
+
+        <span class="n">doc</span> <span class="o">=</span> <span class="nb">abs</span><span class="p">(</span><span class="n">soc</span><span class="p">[</span><span class="n">eidx</span><span class="p">]</span> <span class="o">-</span> <span class="n">soc</span><span class="p">[</span><span class="n">sidx</span><span class="p">])</span>
+        <span class="n">mean_soc</span> <span class="o">=</span> <span class="nb">float</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">mean</span><span class="p">(</span><span class="n">soc</span><span class="p">[</span><span class="n">sidx</span> <span class="p">:</span> <span class="n">eidx</span> <span class="o">+</span> <span class="mi">1</span><span class="p">]))</span>
+        <span class="n">duration_h</span> <span class="o">=</span> <span class="p">(</span><span class="n">times</span><span class="p">[</span><span class="n">eidx</span><span class="p">]</span> <span class="o">-</span> <span class="n">times</span><span class="p">[</span><span class="n">sidx</span><span class="p">])</span><span class="o">.</span><span class="n">total_seconds</span><span class="p">()</span> <span class="o">/</span> <span class="mf">3600.0</span>
+        <span class="n">mean_c_rate</span> <span class="o">=</span> <span class="mf">0.0</span> <span class="k">if</span> <span class="n">duration_h</span> <span class="o">&lt;=</span> <span class="mi">0</span> <span class="k">else</span> <span class="n">doc</span> <span class="o">/</span> <span class="n">duration_h</span>
+
+        <span class="n">half_cycles</span><span class="o">.</span><span class="n">append</span><span class="p">(</span>
+            <span class="p">{</span>
+                <span class="s2">&quot;start_idx&quot;</span><span class="p">:</span> <span class="n">sidx</span><span class="p">,</span>
+                <span class="s2">&quot;end_idx&quot;</span><span class="p">:</span> <span class="n">eidx</span><span class="p">,</span>
+                <span class="s2">&quot;doc&quot;</span><span class="p">:</span> <span class="n">doc</span><span class="p">,</span>
+                <span class="s2">&quot;mean_soc&quot;</span><span class="p">:</span> <span class="n">mean_soc</span><span class="p">,</span>
+                <span class="s2">&quot;mean_c_rate&quot;</span><span class="p">:</span> <span class="n">mean_c_rate</span><span class="p">,</span>
+                <span class="s2">&quot;duration_h&quot;</span><span class="p">:</span> <span class="n">duration_h</span><span class="p">,</span>
+            <span class="p">}</span>
+        <span class="p">)</span>
+
+    <span class="k">return</span> <span class="n">half_cycles</span><span class="p">,</span> <span class="n">soc_abs_series</span></div>
+
+
+
+<div class="viewcode-block" id="detect_cycles_rainflow">
+<a class="viewcode-back" href="../../api/generated/breos.battery.detect_cycles_rainflow.html#breos.battery.detect_cycles_rainflow">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">detect_cycles_rainflow</span><span class="p">(</span>
+    <span class="n">soc_abs_series</span><span class="p">:</span> <span class="n">pd</span><span class="o">.</span><span class="n">Series</span><span class="p">,</span> <span class="n">time_index</span><span class="p">:</span> <span class="n">pd</span><span class="o">.</span><span class="n">DatetimeIndex</span><span class="p">,</span> <span class="n">min_doc_fraction</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.01</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="n">List</span><span class="p">[</span><span class="n">Dict</span><span class="p">]:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Detect charge/discharge cycles using rainflow counting (ASTM E1049).</span>
+
+<span class="sd">    Rainflow counting correctly identifies nested cycles common in residential</span>
+<span class="sd">    PV+storage profiles, which simple extrema-based methods miss.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        soc_abs_series: Absolute SOC series (0-1 range)</span>
+<span class="sd">        time_index: Datetime index for the series</span>
+<span class="sd">        min_doc_fraction: Minimum depth-of-cycle to include (fraction, 0-1)</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        List of cycle dicts with keys: &#39;doc&#39;, &#39;mean_soc&#39;, &#39;count&#39;,</span>
+<span class="sd">        &#39;mean_c_rate&#39;, &#39;start_idx&#39;, &#39;end_idx&#39;</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">soc_abs_series</span><span class="p">)</span> <span class="o">&lt;</span> <span class="mi">2</span><span class="p">:</span>
+        <span class="k">return</span> <span class="p">[]</span>
+
+    <span class="c1"># rainflow.extract_cycles expects a sequence; multiply by 100 for percent</span>
+    <span class="n">soc_pct</span> <span class="o">=</span> <span class="n">soc_abs_series</span><span class="o">.</span><span class="n">values</span> <span class="o">*</span> <span class="mf">100.0</span>
+
+    <span class="n">cycles</span> <span class="o">=</span> <span class="p">[]</span>
+    <span class="k">for</span> <span class="n">rng</span><span class="p">,</span> <span class="n">mean</span><span class="p">,</span> <span class="n">count</span><span class="p">,</span> <span class="n">i_start</span><span class="p">,</span> <span class="n">i_end</span> <span class="ow">in</span> <span class="n">rainflow</span><span class="o">.</span><span class="n">extract_cycles</span><span class="p">(</span><span class="n">soc_pct</span><span class="p">):</span>
+        <span class="n">doc</span> <span class="o">=</span> <span class="n">rng</span> <span class="o">/</span> <span class="mf">100.0</span>  <span class="c1"># convert back to fraction</span>
+        <span class="k">if</span> <span class="n">doc</span> <span class="o">&lt;</span> <span class="n">min_doc_fraction</span><span class="p">:</span>
+            <span class="k">continue</span>
+
+        <span class="n">mean_soc</span> <span class="o">=</span> <span class="n">mean</span> <span class="o">/</span> <span class="mf">100.0</span>
+
+        <span class="c1"># Estimate C-rate from cycle duration</span>
+        <span class="k">if</span> <span class="n">i_start</span> <span class="o">&lt;</span> <span class="nb">len</span><span class="p">(</span><span class="n">time_index</span><span class="p">)</span> <span class="ow">and</span> <span class="n">i_end</span> <span class="o">&lt;</span> <span class="nb">len</span><span class="p">(</span><span class="n">time_index</span><span class="p">):</span>
+            <span class="n">duration_h</span> <span class="o">=</span> <span class="p">(</span><span class="n">time_index</span><span class="p">[</span><span class="n">i_end</span><span class="p">]</span> <span class="o">-</span> <span class="n">time_index</span><span class="p">[</span><span class="n">i_start</span><span class="p">])</span><span class="o">.</span><span class="n">total_seconds</span><span class="p">()</span> <span class="o">/</span> <span class="mf">3600.0</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">duration_h</span> <span class="o">=</span> <span class="mf">0.0</span>
+        <span class="n">mean_c_rate</span> <span class="o">=</span> <span class="n">doc</span> <span class="o">/</span> <span class="n">duration_h</span> <span class="k">if</span> <span class="n">duration_h</span> <span class="o">&gt;</span> <span class="mi">0</span> <span class="k">else</span> <span class="mf">0.0</span>
+
+        <span class="n">cycles</span><span class="o">.</span><span class="n">append</span><span class="p">(</span>
+            <span class="p">{</span>
+                <span class="s2">&quot;doc&quot;</span><span class="p">:</span> <span class="n">doc</span><span class="p">,</span>
+                <span class="s2">&quot;mean_soc&quot;</span><span class="p">:</span> <span class="n">mean_soc</span><span class="p">,</span>
+                <span class="s2">&quot;count&quot;</span><span class="p">:</span> <span class="n">count</span><span class="p">,</span>  <span class="c1"># 1.0 for full, 0.5 for half</span>
+                <span class="s2">&quot;mean_c_rate&quot;</span><span class="p">:</span> <span class="n">mean_c_rate</span><span class="p">,</span>
+                <span class="s2">&quot;start_idx&quot;</span><span class="p">:</span> <span class="n">i_start</span><span class="p">,</span>
+                <span class="s2">&quot;end_idx&quot;</span><span class="p">:</span> <span class="n">i_end</span><span class="p">,</span>
+            <span class="p">}</span>
+        <span class="p">)</span>
+
+    <span class="k">return</span> <span class="n">cycles</span></div>
+
+
+
+<div class="viewcode-block" id="compute_halfcycle_energy_throughput">
+<a class="viewcode-back" href="../../api/generated/breos.battery.compute_halfcycle_energy_throughput.html#breos.battery.compute_halfcycle_energy_throughput">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">compute_halfcycle_energy_throughput</span><span class="p">(</span><span class="n">hc</span><span class="p">:</span> <span class="n">Dict</span><span class="p">,</span> <span class="n">soc_series_absolute</span><span class="p">:</span> <span class="n">pd</span><span class="o">.</span><span class="n">Series</span><span class="p">,</span> <span class="n">nominal_energy_Wh</span><span class="p">:</span> <span class="nb">float</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">float</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Compute energy throughput (Wh) for a half-cycle.&quot;&quot;&quot;</span>
+    <span class="n">s</span> <span class="o">=</span> <span class="n">soc_series_absolute</span><span class="o">.</span><span class="n">iloc</span><span class="p">[</span><span class="n">hc</span><span class="p">[</span><span class="s2">&quot;start_idx&quot;</span><span class="p">]</span> <span class="p">:</span> <span class="n">hc</span><span class="p">[</span><span class="s2">&quot;end_idx&quot;</span><span class="p">]</span> <span class="o">+</span> <span class="mi">1</span><span class="p">]</span><span class="o">.</span><span class="n">values</span>
+    <span class="k">return</span> <span class="nb">abs</span><span class="p">(</span><span class="n">s</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span> <span class="o">-</span> <span class="n">s</span><span class="p">[</span><span class="mi">0</span><span class="p">])</span> <span class="o">*</span> <span class="n">nominal_energy_Wh</span></div>
+
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">k_c_rate_Q</span><span class="p">(</span><span class="n">C_rate</span><span class="p">:</span> <span class="nb">float</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">float</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Calculate C-rate factor for capacity fade (Naumann Eq. 8).&quot;&quot;&quot;</span>
+    <span class="n">kC</span> <span class="o">=</span> <span class="n">A_Q</span> <span class="o">*</span> <span class="n">C_rate</span> <span class="o">+</span> <span class="n">B_Q</span>
+    <span class="k">return</span> <span class="nb">max</span><span class="p">(</span><span class="mf">0.0</span><span class="p">,</span> <span class="n">kC</span><span class="p">)</span>
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">k_doc_Q</span><span class="p">(</span><span class="n">DOC_frac</span><span class="p">:</span> <span class="nb">float</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">float</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Calculate DOC factor for capacity fade (Naumann Eq. 10).&quot;&quot;&quot;</span>
+    <span class="n">kDOC</span> <span class="o">=</span> <span class="n">C_DOC_Q</span> <span class="o">*</span> <span class="p">((</span><span class="n">DOC_frac</span> <span class="o">-</span> <span class="mf">0.6</span><span class="p">)</span> <span class="o">**</span> <span class="mi">3</span><span class="p">)</span> <span class="o">+</span> <span class="n">D_DOC_Q</span>
+    <span class="k">return</span> <span class="nb">max</span><span class="p">(</span><span class="mf">0.0</span><span class="p">,</span> <span class="n">kDOC</span><span class="p">)</span>
+
+
+<span class="c1"># =========================================================================</span>
+<span class="c1"># Resistance fade functions (Naumann 2020)</span>
+<span class="c1"># =========================================================================</span>
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">k_c_rate_R</span><span class="p">(</span><span class="n">C_rate</span><span class="p">:</span> <span class="nb">float</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">float</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Calculate C-rate factor for resistance growth (Naumann Eq. 8 variant).&quot;&quot;&quot;</span>
+    <span class="n">kC</span> <span class="o">=</span> <span class="n">A_R</span> <span class="o">*</span> <span class="n">C_rate</span> <span class="o">+</span> <span class="n">B_R</span>
+    <span class="k">return</span> <span class="nb">max</span><span class="p">(</span><span class="mf">0.0</span><span class="p">,</span> <span class="n">kC</span><span class="p">)</span>
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">k_doc_R</span><span class="p">(</span><span class="n">DOC_frac</span><span class="p">:</span> <span class="nb">float</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">float</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Calculate DOC factor for resistance growth (Naumann Eq. 10 variant).&quot;&quot;&quot;</span>
+    <span class="n">kDOC</span> <span class="o">=</span> <span class="n">C_DOC_R</span> <span class="o">*</span> <span class="p">((</span><span class="n">DOC_frac</span> <span class="o">-</span> <span class="mf">0.6</span><span class="p">)</span> <span class="o">**</span> <span class="mi">3</span><span class="p">)</span> <span class="o">+</span> <span class="n">D_DOC_R</span>
+    <span class="k">return</span> <span class="nb">max</span><span class="p">(</span><span class="mf">0.0</span><span class="p">,</span> <span class="n">kDOC</span><span class="p">)</span>
+
+
+<div class="viewcode-block" id="update_battery_resistance_cyclewise">
+<a class="viewcode-back" href="../../api/generated/breos.battery.update_battery_resistance_cyclewise.html#breos.battery.update_battery_resistance_cyclewise">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">update_battery_resistance_cyclewise</span><span class="p">(</span>
+    <span class="n">resistance_growth</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span> <span class="n">cycles</span><span class="p">:</span> <span class="n">List</span><span class="p">[</span><span class="n">Dict</span><span class="p">],</span> <span class="n">fec_cum</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span> <span class="n">min_DoD_fraction</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.01</span><span class="p">,</span> <span class="n">debug</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">]:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Calculate cycle-induced resistance growth using Naumann&#39;s model.</span>
+
+<span class="sd">    Uses the same differential form as capacity fade but with resistance</span>
+<span class="sd">    parameters (A_R, B_R, C_DOC_R, D_DOC_R, Z_R).</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        resistance_growth: Current cumulative resistance growth (fraction, e.g. 0.05 = 5%)</span>
+<span class="sd">        cycles: List of cycle dicts from detect_cycles_rainflow or detect_half_cycles</span>
+<span class="sd">        fec_cum: Cumulative FEC at start of this period</span>
+<span class="sd">        min_DoD_fraction: Minimum DOC to count</span>
+<span class="sd">        debug: Enable debug output</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        Tuple of (new_resistance_growth, delta_resistance_growth)</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">delta_R</span> <span class="o">=</span> <span class="mf">0.0</span>
+    <span class="n">running_fec</span> <span class="o">=</span> <span class="n">fec_cum</span>
+
+    <span class="k">for</span> <span class="n">cyc</span> <span class="ow">in</span> <span class="n">cycles</span><span class="p">:</span>
+        <span class="n">DOC</span> <span class="o">=</span> <span class="nb">max</span><span class="p">(</span><span class="mf">0.0</span><span class="p">,</span> <span class="nb">min</span><span class="p">(</span><span class="mf">1.0</span><span class="p">,</span> <span class="n">cyc</span><span class="p">[</span><span class="s2">&quot;doc&quot;</span><span class="p">]))</span>
+        <span class="k">if</span> <span class="n">DOC</span> <span class="o">&lt;</span> <span class="n">min_DoD_fraction</span><span class="p">:</span>
+            <span class="k">continue</span>
+
+        <span class="n">count</span> <span class="o">=</span> <span class="n">cyc</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;count&quot;</span><span class="p">,</span> <span class="mf">1.0</span><span class="p">)</span>
+        <span class="n">dFEC</span> <span class="o">=</span> <span class="n">DOC</span> <span class="o">*</span> <span class="n">count</span>
+        <span class="n">mean_c_rate</span> <span class="o">=</span> <span class="n">cyc</span><span class="p">[</span><span class="s2">&quot;mean_c_rate&quot;</span><span class="p">]</span>
+
+        <span class="n">kC</span> <span class="o">=</span> <span class="n">k_c_rate_R</span><span class="p">(</span><span class="n">mean_c_rate</span><span class="p">)</span>
+        <span class="n">kDOC</span> <span class="o">=</span> <span class="n">k_doc_R</span><span class="p">(</span><span class="n">DOC</span><span class="p">)</span>
+
+        <span class="n">fec_new</span> <span class="o">=</span> <span class="n">running_fec</span> <span class="o">+</span> <span class="n">dFEC</span>
+
+        <span class="c1"># Differential form: dR% = kC * kDOC * (FEC_new^Z_R - FEC_old^Z_R)</span>
+        <span class="n">dR_percent</span> <span class="o">=</span> <span class="n">kC</span> <span class="o">*</span> <span class="n">kDOC</span> <span class="o">*</span> <span class="p">(</span><span class="n">fec_new</span><span class="o">**</span><span class="n">Z_R</span> <span class="o">-</span> <span class="n">running_fec</span><span class="o">**</span><span class="n">Z_R</span><span class="p">)</span>
+        <span class="n">dR_fraction</span> <span class="o">=</span> <span class="n">dR_percent</span> <span class="o">/</span> <span class="mf">100.0</span>
+
+        <span class="n">delta_R</span> <span class="o">+=</span> <span class="n">dR_fraction</span>
+        <span class="n">running_fec</span> <span class="o">=</span> <span class="n">fec_new</span>
+
+        <span class="k">if</span> <span class="n">debug</span><span class="p">:</span>
+            <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;[R-cycle] DOC=</span><span class="si">{</span><span class="n">DOC</span><span class="si">:</span><span class="s2">.4f</span><span class="si">}</span><span class="s2">, C-rate=</span><span class="si">{</span><span class="n">mean_c_rate</span><span class="si">:</span><span class="s2">.4f</span><span class="si">}</span><span class="s2">, dR=</span><span class="si">{</span><span class="n">dR_fraction</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="mi">100</span><span class="si">:</span><span class="s2">.6f</span><span class="si">}</span><span class="s2">%&quot;</span><span class="p">)</span>
+
+    <span class="n">new_growth</span> <span class="o">=</span> <span class="n">resistance_growth</span> <span class="o">+</span> <span class="n">delta_R</span>
+    <span class="k">return</span> <span class="n">new_growth</span><span class="p">,</span> <span class="n">delta_R</span></div>
+
+
+
+<div class="viewcode-block" id="update_battery_resistance_calendar">
+<a class="viewcode-back" href="../../api/generated/breos.battery.update_battery_resistance_calendar.html#breos.battery.update_battery_resistance_calendar">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">update_battery_resistance_calendar</span><span class="p">(</span>
+    <span class="n">resistance_growth</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
+    <span class="n">T_cell_C</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
+    <span class="n">cumulative_cal_seconds</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
+    <span class="n">dt_days</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">1.0</span><span class="p">,</span>
+    <span class="n">mean_soc_absolute</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.5</span><span class="p">,</span>
+    <span class="n">debug</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">]:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Calculate calendar-induced resistance growth using Naumann&#39;s model.</span>
+
+<span class="sd">    Same Arrhenius + power-law structure as calendar capacity fade,</span>
+<span class="sd">    but with resistance-specific parameters from Naumann Table 6.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        resistance_growth: Current cumulative resistance growth (fraction)</span>
+<span class="sd">        T_cell_C: Cell temperature (C)</span>
+<span class="sd">        cumulative_cal_seconds: Total elapsed calendar seconds</span>
+<span class="sd">        dt_days: Time step in days</span>
+<span class="sd">        mean_soc_absolute: Mean absolute SOC during period</span>
+<span class="sd">        debug: Enable debug output</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        Tuple of (new_resistance_growth, delta_resistance_growth)</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">dt_seconds</span> <span class="o">=</span> <span class="n">dt_days</span> <span class="o">*</span> <span class="mf">86400.0</span>
+    <span class="k">if</span> <span class="n">dt_seconds</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">resistance_growth</span><span class="p">,</span> <span class="mf">0.0</span>
+
+    <span class="n">k0_frac</span> <span class="o">=</span> <span class="n">NAUMANN_K0_R_PERCENT</span> <span class="o">/</span> <span class="mf">100.0</span>
+
+    <span class="n">T_K</span> <span class="o">=</span> <span class="n">T_cell_C</span> <span class="o">+</span> <span class="mf">273.15</span>
+    <span class="n">arr_factor</span> <span class="o">=</span> <span class="n">math</span><span class="o">.</span><span class="n">exp</span><span class="p">(</span><span class="o">-</span><span class="n">NAUMANN_EA_R_J_MOL</span> <span class="o">/</span> <span class="n">R_GAS</span> <span class="o">*</span> <span class="p">(</span><span class="mf">1.0</span> <span class="o">/</span> <span class="n">T_K</span> <span class="o">-</span> <span class="mf">1.0</span> <span class="o">/</span> <span class="n">T_REF_K</span><span class="p">))</span>
+
+    <span class="n">t_old</span> <span class="o">=</span> <span class="n">cumulative_cal_seconds</span>
+    <span class="n">t_new</span> <span class="o">=</span> <span class="n">t_old</span> <span class="o">+</span> <span class="n">dt_seconds</span>
+    <span class="n">b</span> <span class="o">=</span> <span class="n">NAUMANN_EXPONENT_B_R</span>
+
+    <span class="n">term_old</span> <span class="o">=</span> <span class="n">math</span><span class="o">.</span><span class="n">pow</span><span class="p">(</span><span class="n">t_old</span><span class="p">,</span> <span class="n">b</span><span class="p">)</span> <span class="k">if</span> <span class="n">t_old</span> <span class="o">&gt;</span> <span class="mi">0</span> <span class="k">else</span> <span class="mf">0.0</span>
+    <span class="n">term_new</span> <span class="o">=</span> <span class="n">math</span><span class="o">.</span><span class="n">pow</span><span class="p">(</span><span class="n">t_new</span><span class="p">,</span> <span class="n">b</span><span class="p">)</span>
+    <span class="n">delta_time</span> <span class="o">=</span> <span class="n">term_new</span> <span class="o">-</span> <span class="n">term_old</span>
+
+    <span class="n">soc_stress</span> <span class="o">=</span> <span class="nb">max</span><span class="p">(</span><span class="mf">0.0</span><span class="p">,</span> <span class="n">mean_soc_absolute</span><span class="p">)</span> <span class="o">**</span> <span class="n">NAUMANN_SOC_EXPONENT_N_R</span>
+
+    <span class="n">dR_fraction</span> <span class="o">=</span> <span class="n">k0_frac</span> <span class="o">*</span> <span class="n">arr_factor</span> <span class="o">*</span> <span class="n">delta_time</span> <span class="o">*</span> <span class="n">soc_stress</span>
+
+    <span class="k">if</span> <span class="n">debug</span><span class="p">:</span>
+        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;[R-calendar] T=</span><span class="si">{</span><span class="n">T_cell_C</span><span class="si">:</span><span class="s2">.1f</span><span class="si">}</span><span class="s2">°C, dR=</span><span class="si">{</span><span class="n">dR_fraction</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="mi">100</span><span class="si">:</span><span class="s2">.6f</span><span class="si">}</span><span class="s2">%&quot;</span><span class="p">)</span>
+
+    <span class="k">return</span> <span class="n">resistance_growth</span> <span class="o">+</span> <span class="n">dR_fraction</span><span class="p">,</span> <span class="n">dR_fraction</span></div>
+
+
+
+<div class="viewcode-block" id="resistance_to_efficiency">
+<a class="viewcode-back" href="../../api/generated/breos.battery.resistance_to_efficiency.html#breos.battery.resistance_to_efficiency">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">resistance_to_efficiency</span><span class="p">(</span>
+    <span class="n">resistance_growth</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
+    <span class="n">base_charge_eff</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
+    <span class="n">base_discharge_eff</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">]:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Convert resistance growth to effective charge/discharge efficiencies.</span>
+
+<span class="sd">    Internal resistance growth increases ohmic losses proportionally.</span>
+<span class="sd">    The efficiency penalty is split equally between charge and discharge.</span>
+
+<span class="sd">    RTE_new = RTE_base / (1 + resistance_growth)</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        resistance_growth: Relative resistance growth (fraction, 0=new cell)</span>
+<span class="sd">        base_charge_eff: Baseline charge efficiency</span>
+<span class="sd">        base_discharge_eff: Baseline discharge efficiency</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        Tuple of (effective_charge_eff, effective_discharge_eff)</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">if</span> <span class="n">resistance_growth</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">base_charge_eff</span><span class="p">,</span> <span class="n">base_discharge_eff</span>
+
+    <span class="n">rte_base</span> <span class="o">=</span> <span class="n">base_charge_eff</span> <span class="o">*</span> <span class="n">base_discharge_eff</span>
+    <span class="n">rte_new</span> <span class="o">=</span> <span class="n">rte_base</span> <span class="o">/</span> <span class="p">(</span><span class="mf">1.0</span> <span class="o">+</span> <span class="n">resistance_growth</span><span class="p">)</span>
+
+    <span class="c1"># Split new RTE as sqrt across charge and discharge</span>
+    <span class="n">sqrt_rte_new</span> <span class="o">=</span> <span class="n">math</span><span class="o">.</span><span class="n">sqrt</span><span class="p">(</span><span class="nb">max</span><span class="p">(</span><span class="mf">0.01</span><span class="p">,</span> <span class="n">rte_new</span><span class="p">))</span>
+    <span class="n">eff_charge</span> <span class="o">=</span> <span class="nb">min</span><span class="p">(</span><span class="n">base_charge_eff</span><span class="p">,</span> <span class="n">sqrt_rte_new</span><span class="p">)</span>
+    <span class="n">eff_discharge</span> <span class="o">=</span> <span class="nb">min</span><span class="p">(</span><span class="n">base_discharge_eff</span><span class="p">,</span> <span class="n">sqrt_rte_new</span><span class="p">)</span>
+
+    <span class="k">return</span> <span class="n">eff_charge</span><span class="p">,</span> <span class="n">eff_discharge</span></div>
+
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">_get_cycle_params</span><span class="p">(</span><span class="n">battery_type</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;lfp&quot;</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">]:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Get cycle aging (Naumann-style) parameters for a battery chemistry.</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        Tuple of (a_q, b_q, c_doc_q, d_doc_q, z_q)</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">return</span> <span class="p">(</span><span class="n">A_Q</span><span class="p">,</span> <span class="n">B_Q</span><span class="p">,</span> <span class="n">C_DOC_Q</span><span class="p">,</span> <span class="n">D_DOC_Q</span><span class="p">,</span> <span class="n">Z_Q</span><span class="p">)</span>
+
+
+<div class="viewcode-block" id="update_battery_soh_cyclewise">
+<a class="viewcode-back" href="../../api/generated/breos.battery.update_battery_soh_cyclewise.html#breos.battery.update_battery_soh_cyclewise">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">update_battery_soh_cyclewise</span><span class="p">(</span>
+    <span class="n">soh_start_fraction</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
+    <span class="n">soc_series_absolute</span><span class="p">:</span> <span class="n">pd</span><span class="o">.</span><span class="n">Series</span><span class="p">,</span>
+    <span class="n">nominal_energy_Wh</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
+    <span class="n">fec_cum</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.0</span><span class="p">,</span>
+    <span class="n">min_DoD_fraction</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.01</span><span class="p">,</span>
+    <span class="n">use_rainflow</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span>
+    <span class="n">battery_type</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;lfp&quot;</span><span class="p">,</span>
+    <span class="n">debug</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">]:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Calculate cycle-induced degradation using Naumann&#39;s semi-empirical model.</span>
+
+<span class="sd">    Implements Equation 5-6 from Naumann 2020 paper, with technology-specific</span>
+<span class="sd">    cycle aging coefficients selected by battery_type.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        soh_start_fraction: Starting SOH as fraction (0-1)</span>
+<span class="sd">        soc_series_absolute: SOC time series</span>
+<span class="sd">        nominal_energy_Wh: Nominal battery capacity</span>
+<span class="sd">        fec_cum: Cumulative full equivalent cycles</span>
+<span class="sd">        min_DoD_fraction: Minimum DoD to count as cycle</span>
+<span class="sd">        use_rainflow: Use rainflow counting (True) or extrema-based detection (False)</span>
+<span class="sd">        battery_type: Battery chemistry (&#39;lfp&#39;)</span>
+<span class="sd">        debug: Enable debug output</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        Tuple of (soh_after, qloss_cycle_fraction, fec_cum)</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">soc_series_absolute</span><span class="p">)</span> <span class="o">&lt;</span> <span class="mi">2</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">soh_start_fraction</span><span class="p">,</span> <span class="mf">0.0</span><span class="p">,</span> <span class="n">fec_cum</span>
+
+    <span class="n">time_index</span> <span class="o">=</span> <span class="n">soc_series_absolute</span><span class="o">.</span><span class="n">index</span>
+
+    <span class="k">if</span> <span class="n">use_rainflow</span><span class="p">:</span>
+        <span class="n">cycles</span> <span class="o">=</span> <span class="n">detect_cycles_rainflow</span><span class="p">(</span><span class="n">soc_series_absolute</span><span class="p">,</span> <span class="n">time_index</span><span class="p">,</span> <span class="n">min_doc_fraction</span><span class="o">=</span><span class="n">min_DoD_fraction</span><span class="p">)</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="n">cycles</span><span class="p">,</span> <span class="n">_</span> <span class="o">=</span> <span class="n">detect_half_cycles_from_soc_series</span><span class="p">(</span><span class="n">soc_series_absolute</span><span class="p">,</span> <span class="n">time_index</span><span class="p">)</span>
+
+    <span class="c1"># Get technology-specific cycle parameters</span>
+    <span class="n">a_q</span><span class="p">,</span> <span class="n">b_q</span><span class="p">,</span> <span class="n">c_doc_q</span><span class="p">,</span> <span class="n">d_doc_q</span><span class="p">,</span> <span class="n">z_q</span> <span class="o">=</span> <span class="n">_get_cycle_params</span><span class="p">(</span><span class="n">battery_type</span><span class="p">)</span>
+
+    <span class="n">qloss_cycle_fraction</span> <span class="o">=</span> <span class="mf">0.0</span>
+
+    <span class="k">for</span> <span class="n">cyc</span> <span class="ow">in</span> <span class="n">cycles</span><span class="p">:</span>
+        <span class="n">DOC</span> <span class="o">=</span> <span class="nb">max</span><span class="p">(</span><span class="mf">0.0</span><span class="p">,</span> <span class="nb">min</span><span class="p">(</span><span class="mf">1.0</span><span class="p">,</span> <span class="n">cyc</span><span class="p">[</span><span class="s2">&quot;doc&quot;</span><span class="p">]))</span>
+        <span class="k">if</span> <span class="n">DOC</span> <span class="o">&lt;</span> <span class="n">min_DoD_fraction</span><span class="p">:</span>
+            <span class="k">continue</span>
+
+        <span class="n">mean_c_rate</span> <span class="o">=</span> <span class="n">cyc</span><span class="p">[</span><span class="s2">&quot;mean_c_rate&quot;</span><span class="p">]</span>
+        <span class="c1"># For rainflow cycles: count is 1.0 (full) or 0.5 (half)</span>
+        <span class="c1"># For extrema-based: each entry is a half-cycle (count=1 implicitly)</span>
+        <span class="n">count</span> <span class="o">=</span> <span class="n">cyc</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;count&quot;</span><span class="p">,</span> <span class="mf">1.0</span><span class="p">)</span>
+
+        <span class="c1"># Energy throughput for this cycle: DOC * count * nominal</span>
+        <span class="n">dFEC</span> <span class="o">=</span> <span class="n">DOC</span> <span class="o">*</span> <span class="n">count</span>
+
+        <span class="c1"># Naumann-style k-factors with technology-specific coefficients</span>
+        <span class="n">kC</span> <span class="o">=</span> <span class="nb">max</span><span class="p">(</span><span class="mf">0.0</span><span class="p">,</span> <span class="n">a_q</span> <span class="o">*</span> <span class="n">mean_c_rate</span> <span class="o">+</span> <span class="n">b_q</span><span class="p">)</span>
+        <span class="n">kDOC</span> <span class="o">=</span> <span class="nb">max</span><span class="p">(</span><span class="mf">0.0</span><span class="p">,</span> <span class="n">c_doc_q</span> <span class="o">*</span> <span class="p">((</span><span class="n">DOC</span> <span class="o">-</span> <span class="mf">0.6</span><span class="p">)</span> <span class="o">**</span> <span class="mi">3</span><span class="p">)</span> <span class="o">+</span> <span class="n">d_doc_q</span><span class="p">)</span>
+
+        <span class="n">fec_new</span> <span class="o">=</span> <span class="n">fec_cum</span> <span class="o">+</span> <span class="n">dFEC</span>
+
+        <span class="c1"># Differential form using cumulative FEC (Naumann Eq. 5-6)</span>
+        <span class="n">dq_percent</span> <span class="o">=</span> <span class="n">kC</span> <span class="o">*</span> <span class="n">kDOC</span> <span class="o">*</span> <span class="p">(</span><span class="n">fec_new</span><span class="o">**</span><span class="n">z_q</span> <span class="o">-</span> <span class="n">fec_cum</span><span class="o">**</span><span class="n">z_q</span><span class="p">)</span>
+        <span class="n">dq_fraction</span> <span class="o">=</span> <span class="n">dq_percent</span> <span class="o">/</span> <span class="mf">100.0</span>
+
+        <span class="n">qloss_cycle_fraction</span> <span class="o">+=</span> <span class="n">dq_fraction</span>
+        <span class="n">fec_cum</span> <span class="o">=</span> <span class="n">fec_new</span>
+
+        <span class="k">if</span> <span class="n">debug</span><span class="p">:</span>
+            <span class="nb">print</span><span class="p">(</span>
+                <span class="sa">f</span><span class="s2">&quot;[cycle] DOC=</span><span class="si">{</span><span class="n">DOC</span><span class="si">:</span><span class="s2">.4f</span><span class="si">}</span><span class="s2">, C-rate=</span><span class="si">{</span><span class="n">mean_c_rate</span><span class="si">:</span><span class="s2">.4f</span><span class="si">}</span><span class="s2">, count=</span><span class="si">{</span><span class="n">count</span><span class="si">}</span><span class="s2">, &quot;</span>
+                <span class="sa">f</span><span class="s2">&quot;dFEC=</span><span class="si">{</span><span class="n">dFEC</span><span class="si">:</span><span class="s2">.6e</span><span class="si">}</span><span class="s2">, dq=</span><span class="si">{</span><span class="n">dq_fraction</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="mi">100</span><span class="si">:</span><span class="s2">.6f</span><span class="si">}</span><span class="s2">%&quot;</span>
+            <span class="p">)</span>
+
+    <span class="n">soh_after</span> <span class="o">=</span> <span class="nb">max</span><span class="p">(</span><span class="mf">0.0</span><span class="p">,</span> <span class="n">soh_start_fraction</span> <span class="o">-</span> <span class="n">qloss_cycle_fraction</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">soh_after</span><span class="p">,</span> <span class="n">qloss_cycle_fraction</span><span class="p">,</span> <span class="n">fec_cum</span></div>
+
+
+
+<div class="viewcode-block" id="update_battery_soh_calendar">
+<a class="viewcode-back" href="../../api/generated/breos.battery.update_battery_soh_calendar.html#breos.battery.update_battery_soh_calendar">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">update_battery_soh_calendar</span><span class="p">(</span>
+    <span class="n">soh_start_fraction</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
+    <span class="n">k0_frac</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
+    <span class="n">Ea</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
+    <span class="n">n</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
+    <span class="n">cal_b</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
+    <span class="n">T_cell_C</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">25.0</span><span class="p">,</span>
+    <span class="n">cumulative_cal_seconds</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.0</span><span class="p">,</span>
+    <span class="n">dt_days</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">1.0</span><span class="p">,</span>
+    <span class="n">mean_soc_absolute</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.5</span><span class="p">,</span>
+    <span class="n">debug</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">]:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Generalized calendar aging using power law physics (Naumann / Lam 2025).</span>
+
+<span class="sd">    dSOH = k0_frac * Arr * ((t+dt)^b - t^b) * SOC_stress</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        soh_start_fraction: Starting SOH as fraction</span>
+<span class="sd">        k0_frac: Rate constant (fraction per second^b)</span>
+<span class="sd">        Ea: Activation energy (J/mol)</span>
+<span class="sd">        n: SOC exponent</span>
+<span class="sd">        cal_b: Time exponent (0.5 for sqrt-time, 0.75 for Lam)</span>
+<span class="sd">        T_cell_C: Cell temperature (°C)</span>
+<span class="sd">        cumulative_cal_seconds: Total elapsed seconds</span>
+<span class="sd">        dt_days: Time step in days</span>
+<span class="sd">        mean_soc_absolute: Mean SOC during period</span>
+<span class="sd">        debug: Enable debug output</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        Tuple of (soh_after, dsoh_fraction, new_cumulative_seconds)</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">dt_seconds</span> <span class="o">=</span> <span class="n">dt_days</span> <span class="o">*</span> <span class="mf">86400.0</span>
+    <span class="k">if</span> <span class="n">dt_seconds</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">soh_start_fraction</span><span class="p">,</span> <span class="mf">0.0</span><span class="p">,</span> <span class="n">cumulative_cal_seconds</span>
+
+    <span class="c1"># Temperature factor (Arrhenius) relative to 25°C</span>
+    <span class="n">T_K</span> <span class="o">=</span> <span class="n">T_cell_C</span> <span class="o">+</span> <span class="mf">273.15</span>
+    <span class="n">arr_factor</span> <span class="o">=</span> <span class="n">math</span><span class="o">.</span><span class="n">exp</span><span class="p">(</span><span class="o">-</span><span class="n">Ea</span> <span class="o">/</span> <span class="n">R_GAS</span> <span class="o">*</span> <span class="p">(</span><span class="mf">1.0</span> <span class="o">/</span> <span class="n">T_K</span> <span class="o">-</span> <span class="mf">1.0</span> <span class="o">/</span> <span class="n">T_REF_K</span><span class="p">))</span>
+
+    <span class="c1"># Power law time calculation</span>
+    <span class="n">t_old</span> <span class="o">=</span> <span class="n">cumulative_cal_seconds</span>
+    <span class="n">t_new</span> <span class="o">=</span> <span class="n">cumulative_cal_seconds</span> <span class="o">+</span> <span class="n">dt_seconds</span>
+
+    <span class="n">term_old</span> <span class="o">=</span> <span class="n">math</span><span class="o">.</span><span class="n">pow</span><span class="p">(</span><span class="n">t_old</span><span class="p">,</span> <span class="n">cal_b</span><span class="p">)</span> <span class="k">if</span> <span class="n">t_old</span> <span class="o">&gt;</span> <span class="mi">0</span> <span class="k">else</span> <span class="mf">0.0</span>
+    <span class="n">term_new</span> <span class="o">=</span> <span class="n">math</span><span class="o">.</span><span class="n">pow</span><span class="p">(</span><span class="n">t_new</span><span class="p">,</span> <span class="n">cal_b</span><span class="p">)</span>
+    <span class="n">delta_time_factor</span> <span class="o">=</span> <span class="n">term_new</span> <span class="o">-</span> <span class="n">term_old</span>
+
+    <span class="c1"># SOC stress factor</span>
+    <span class="n">soc_stress</span> <span class="o">=</span> <span class="nb">max</span><span class="p">(</span><span class="mf">0.0</span><span class="p">,</span> <span class="n">mean_soc_absolute</span><span class="p">)</span> <span class="o">**</span> <span class="n">n</span>
+
+    <span class="c1"># Calculate degradation fraction</span>
+    <span class="n">d_soh_fraction</span> <span class="o">=</span> <span class="n">k0_frac</span> <span class="o">*</span> <span class="n">arr_factor</span> <span class="o">*</span> <span class="n">delta_time_factor</span> <span class="o">*</span> <span class="n">soc_stress</span>
+
+    <span class="n">soh_after</span> <span class="o">=</span> <span class="nb">max</span><span class="p">(</span><span class="mf">0.0</span><span class="p">,</span> <span class="n">soh_start_fraction</span> <span class="o">-</span> <span class="n">d_soh_fraction</span><span class="p">)</span>
+
+    <span class="k">if</span> <span class="n">debug</span><span class="p">:</span>
+        <span class="nb">print</span><span class="p">(</span>
+            <span class="sa">f</span><span class="s2">&quot;[calendar] T=</span><span class="si">{</span><span class="n">T_cell_C</span><span class="si">}</span><span class="s2">°C, b=</span><span class="si">{</span><span class="n">cal_b</span><span class="si">:</span><span class="s2">.2f</span><span class="si">}</span><span class="s2">, Δt^b=</span><span class="si">{</span><span class="n">delta_time_factor</span><span class="si">:</span><span class="s2">.2f</span><span class="si">}</span><span class="s2">, d_soh=</span><span class="si">{</span><span class="n">d_soh_fraction</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="mi">100</span><span class="si">:</span><span class="s2">.6f</span><span class="si">}</span><span class="s2">%&quot;</span>
+        <span class="p">)</span>
+
+    <span class="k">return</span> <span class="n">soh_after</span><span class="p">,</span> <span class="n">d_soh_fraction</span><span class="p">,</span> <span class="n">t_new</span></div>
+
+
+
+<div class="viewcode-block" id="update_battery_soc">
+<a class="viewcode-back" href="../../api/generated/breos.battery.update_battery_soc.html#breos.battery.update_battery_soc">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">update_battery_soc</span><span class="p">(</span>
+    <span class="n">battery_energy_wh</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span> <span class="n">nominal_energy_wh</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span> <span class="n">soh_fraction</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span> <span class="n">max_soc</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span> <span class="n">min_soc</span><span class="p">:</span> <span class="nb">float</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">]:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Calculate normalized and absolute SOC.</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        Tuple of (soc_normalized, soc_absolute)</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">usable_cap</span> <span class="o">=</span> <span class="n">nominal_energy_wh</span> <span class="o">*</span> <span class="n">soh_fraction</span>
+    <span class="n">Emax</span> <span class="o">=</span> <span class="n">usable_cap</span> <span class="o">*</span> <span class="n">max_soc</span>
+    <span class="n">Emin</span> <span class="o">=</span> <span class="n">usable_cap</span> <span class="o">*</span> <span class="n">min_soc</span>
+
+    <span class="n">soc_normalized</span> <span class="o">=</span> <span class="p">(</span><span class="n">battery_energy_wh</span> <span class="o">-</span> <span class="n">Emin</span><span class="p">)</span> <span class="o">/</span> <span class="p">(</span><span class="n">Emax</span> <span class="o">-</span> <span class="n">Emin</span><span class="p">)</span> <span class="k">if</span> <span class="p">(</span><span class="n">Emax</span> <span class="o">-</span> <span class="n">Emin</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">0</span> <span class="k">else</span> <span class="mi">0</span>
+    <span class="n">soc_normalized</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">clip</span><span class="p">(</span><span class="n">soc_normalized</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">1</span><span class="p">)</span>
+
+    <span class="n">soc_absolute</span> <span class="o">=</span> <span class="n">battery_energy_wh</span> <span class="o">/</span> <span class="n">usable_cap</span> <span class="k">if</span> <span class="n">usable_cap</span> <span class="o">&gt;</span> <span class="mi">0</span> <span class="k">else</span> <span class="mi">0</span>
+    <span class="n">soc_absolute</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">clip</span><span class="p">(</span><span class="n">soc_absolute</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">1</span><span class="p">)</span>
+
+    <span class="k">return</span> <span class="n">soc_normalized</span><span class="p">,</span> <span class="n">soc_absolute</span></div>
+
+</pre></div>
+
+                </article>
+              
+              
+              
+              
+              
+            </div>
+            
+            
+              
+            
+          </div>
+          <footer class="bd-footer-content">
+            
+          </footer>
+        
+      </main>
+    </div>
+  </div>
+  
+  <!-- Scripts loaded after <body> so the DOM is not blocked -->
+  <script defer src="../../_static/scripts/bootstrap.js?digest=55c26ed414f5f8a31ebb"></script>
+<script defer src="../../_static/scripts/pydata-sphinx-theme.js?digest=55c26ed414f5f8a31ebb"></script>
+
+  <footer class="bd-footer">
+<div class="bd-footer__inner bd-page-width">
+  
+    <div class="footer-items__start">
+      
+        <div class="footer-item">
+
+  <p class="copyright">
+    
+      © Copyright 2026, Leonardo Rodrigues.
+      <br/>
+    
+  </p>
+</div>
+      
+    </div>
+  
+  
+  
+    <div class="footer-items__end">
+      
+        <div class="footer-item">
+
+  <p class="sphinx-version">
+    Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 9.1.0.
+    <br/>
+  </p>
+</div>
+      
+        <div class="footer-item">
+<p class="theme-version">
+  <!-- # L10n: Setting the PST URL as an argument as this does not need to be localized -->
+  Built with the <a href="https://pydata-sphinx-theme.readthedocs.io/en/stable/index.html">PyData Sphinx Theme</a> 0.17.1.
+</p></div>
+      
+    </div>
+  
+</div>
+
+  </footer>
+  </body>
+</html>

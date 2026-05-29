@@ -1,0 +1,1427 @@
+
+<!DOCTYPE html>
+
+
+<html lang="en" data-content_root="../../" >
+
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>breos.weather &#8212; BREOS</title>
+  
+  
+  
+  <script data-cfasync="false">
+    document.documentElement.dataset.mode = localStorage.getItem("mode") || "";
+    document.documentElement.dataset.theme = localStorage.getItem("theme") || "";
+  </script>
+  <!--
+    this give us a css class that will be invisible only if js is disabled
+  -->
+  <noscript>
+    <style>
+      .pst-js-only { display: none !important; }
+
+    </style>
+  </noscript>
+  
+  <!-- Loaded before other Sphinx assets -->
+  <link href="../../_static/styles/theme.css?digest=55c26ed414f5f8a31ebb" rel="stylesheet" />
+<link href="../../_static/styles/pydata-sphinx-theme.css?digest=55c26ed414f5f8a31ebb" rel="stylesheet" />
+
+    <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=8f2a1f02" />
+    <link rel="stylesheet" type="text/css" href="../../_static/copybutton.css?v=76b2166b" />
+    <link rel="stylesheet" type="text/css" href="../../_static/sphinx-design.min.css?v=95c83b7e" />
+  
+  <!-- So that users can add custom icons -->
+  <script defer src="../../_static/scripts/fontawesome.js?digest=55c26ed414f5f8a31ebb"></script>
+  <!-- Pre-loaded scripts that we'll load fully later -->
+  <link rel="preload" as="script" href="../../_static/scripts/bootstrap.js?digest=55c26ed414f5f8a31ebb" />
+<link rel="preload" as="script" href="../../_static/scripts/pydata-sphinx-theme.js?digest=55c26ed414f5f8a31ebb" />
+
+    <script src="../../_static/documentation_options.js?v=01f34227"></script>
+    <script src="../../_static/doctools.js?v=fd6eb6e6"></script>
+    <script src="../../_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <script src="../../_static/clipboard.min.js?v=a7894cd8"></script>
+    <script src="../../_static/copybutton.js?v=f281be69"></script>
+    <script src="../../_static/design-tabs.js?v=f930bc37"></script>
+    <script>DOCUMENTATION_OPTIONS.pagename = '_modules/breos/weather';</script>
+    <script>
+        DOCUMENTATION_OPTIONS.theme_version = '0.17.1';
+        DOCUMENTATION_OPTIONS.theme_switcher_json_url = 'https://breos.readthedocs.io/en/latest/_static/switcher.json';
+        DOCUMENTATION_OPTIONS.theme_switcher_version_match = 'latest';
+        DOCUMENTATION_OPTIONS.show_version_warning_banner =
+            false;
+        </script>
+    <script>DOCUMENTATION_OPTIONS.search_as_you_type = false;</script>
+    <link rel="index" title="Index" href="../../genindex.html" />
+    <link rel="search" title="Search" href="../../search.html" />
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <meta name="docsearch:language" content="en"/>
+  <meta name="docsearch:version" content="0.1" />
+  
+    
+    <script src="../../_static/searchtools.js"></script>
+    <script src="../../_static/language_data.js"></script>
+    <script src="../../searchindex.js"></script>
+  
+  </head>
+  <body data-default-mode="">
+  
+  
+  <div id="pst-skip-link" class="skip-link d-print-none"><a href="#main-content">Skip to main content</a></div>
+
+  
+  <div id="pst-scroll-pixel-helper"></div>
+  
+  <button type="button" class="btn rounded-pill" id="pst-back-to-top">
+    <i class="fa-solid fa-arrow-up"></i>Back to top</button>
+  
+  
+  
+  
+  <dialog id="pst-search-dialog">
+    
+<form class="bd-search d-flex align-items-center"
+      action="../../search.html"
+      method="get">
+  <i class="fa-solid fa-magnifying-glass"></i>
+  <input type="search"
+         class="form-control"
+         name="q"
+         placeholder="Search the docs ..."
+         aria-label="Search the docs ..."
+         autocomplete="off"
+         autocorrect="off"
+         autocapitalize="off"
+         spellcheck="false"/>
+  <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd>K</kbd></span>
+</form>
+  </dialog>
+
+  <div class="pst-async-banner-revealer d-none">
+  <aside id="bd-header-version-warning" class="d-none d-print-none" aria-label="Version warning"></aside>
+</div>
+
+  
+    <header id="pst-header" class="bd-header navbar navbar-expand-lg bd-navbar d-print-none">
+<div class="bd-header__inner bd-page-width">
+  <button class="pst-navbar-icon sidebar-toggle primary-toggle" aria-label="Site navigation">
+    <span class="fa-solid fa-bars"></span>
+  </button>
+  
+  
+  <div class="col-lg-3 navbar-header-items__start">
+    
+      <div class="navbar-item">
+
+  
+    
+  
+
+<a class="navbar-brand logo" href="../../index.html">
+  
+  
+  
+  
+  
+  
+    <p class="title logo__title">BREOS</p>
+  
+</a></div>
+    
+  </div>
+  
+  <div class="col-lg-9 navbar-header-items">
+    
+    <div class="me-auto navbar-header-items__center">
+      
+        <div class="navbar-item">
+<nav>
+  <ul class="bd-navbar-elements navbar-nav">
+    
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../../getting-started/index.html">
+    Getting started
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../../api/index.html">
+    API reference
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../../architecture/third-party-wrapping.html">
+    Third-Party Module Wrapping
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../../adr/index.html">
+    Architecture Decision Records
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../../changelog.html">
+    Changelog
+  </a>
+</li>
+
+  </ul>
+</nav></div>
+      
+    </div>
+    
+    
+    <div class="navbar-header-items__end">
+      
+        <div class="navbar-item navbar-persistent--container">
+          
+
+<button class="btn search-button-field search-button__button pst-js-only" title="Search" aria-label="Search" data-bs-placement="bottom" data-bs-toggle="tooltip">
+ <i class="fa-solid fa-magnifying-glass"></i>
+ <span class="search-button__default-text">Search</span>
+ <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd class="kbd-shortcut__modifier">K</kbd></span>
+</button>
+        </div>
+      
+      
+        <div class="navbar-item">
+<div class="version-switcher__container dropdown pst-js-only">
+  <button id="pst-version-switcher-button-2"
+    type="button"
+    class="version-switcher__button btn btn-sm dropdown-toggle"
+    data-bs-toggle="dropdown"
+    aria-haspopup="listbox"
+    aria-controls="pst-version-switcher-list-2"
+    aria-label="Version switcher list"
+  >
+    Choose version  <!-- this text may get changed later by javascript -->
+    <span class="caret"></span>
+  </button>
+  <div id="pst-version-switcher-list-2"
+    class="version-switcher__menu dropdown-menu list-group-flush py-0"
+    role="listbox" aria-labelledby="pst-version-switcher-button-2">
+    <!-- dropdown will be populated by javascript on page load -->
+  </div>
+</div></div>
+      
+        <div class="navbar-item">
+
+<button class="btn btn-sm nav-link pst-navbar-icon theme-switch-button pst-js-only" aria-label="Color mode" data-bs-title="Color mode"  data-bs-placement="bottom" data-bs-toggle="tooltip">
+  <i class="theme-switch fa-solid fa-sun                fa-lg" data-mode="light" title="Light"></i>
+  <i class="theme-switch fa-solid fa-moon               fa-lg" data-mode="dark"  title="Dark"></i>
+  <i class="theme-switch fa-solid fa-circle-half-stroke fa-lg" data-mode="auto"  title="System Settings"></i>
+</button></div>
+      
+        <div class="navbar-item"><ul class="navbar-icon-links"
+    aria-label="Icon Links">
+        <li class="nav-item">
+          
+          
+          
+          
+          
+          
+          
+          
+          <a href="https://github.com/Str4vinci/breos" title="GitHub" class="nav-link pst-navbar-icon" rel="noopener" target="_blank" data-bs-toggle="tooltip" data-bs-placement="bottom"><i class="fa-brands fa-square-github fa-lg" aria-hidden="true"></i>
+            <span class="sr-only">GitHub</span></a>
+        </li>
+</ul></div>
+      
+    </div>
+    
+  </div>
+  
+  
+    <div class="navbar-persistent--mobile">
+
+<button class="btn search-button-field search-button__button pst-js-only" title="Search" aria-label="Search" data-bs-placement="bottom" data-bs-toggle="tooltip">
+ <i class="fa-solid fa-magnifying-glass"></i>
+ <span class="search-button__default-text">Search</span>
+ <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd class="kbd-shortcut__modifier">K</kbd></span>
+</button>
+    </div>
+  
+
+  
+</div>
+
+    </header>
+  
+
+  <div class="bd-container">
+    <div class="bd-container__inner bd-page-width">
+      
+      
+      
+        
+      
+      <dialog id="pst-primary-sidebar-modal"></dialog>
+      <div id="pst-primary-sidebar" class="bd-sidebar-primary bd-sidebar hide-on-wide">
+        
+
+  
+  <div class="sidebar-header-items sidebar-primary__section">
+    
+    
+      <div class="sidebar-header-items__center">
+        
+          
+          
+            <div class="navbar-item">
+<nav>
+  <ul class="bd-navbar-elements navbar-nav">
+    
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../../getting-started/index.html">
+    Getting started
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../../api/index.html">
+    API reference
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../../architecture/third-party-wrapping.html">
+    Third-Party Module Wrapping
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../../adr/index.html">
+    Architecture Decision Records
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../../changelog.html">
+    Changelog
+  </a>
+</li>
+
+  </ul>
+</nav></div>
+          
+        
+      </div>
+    
+    
+    
+      <div class="sidebar-header-items__end">
+        
+          <div class="navbar-item">
+<div class="version-switcher__container dropdown pst-js-only">
+  <button id="pst-version-switcher-button-3"
+    type="button"
+    class="version-switcher__button btn btn-sm dropdown-toggle"
+    data-bs-toggle="dropdown"
+    aria-haspopup="listbox"
+    aria-controls="pst-version-switcher-list-3"
+    aria-label="Version switcher list"
+  >
+    Choose version  <!-- this text may get changed later by javascript -->
+    <span class="caret"></span>
+  </button>
+  <div id="pst-version-switcher-list-3"
+    class="version-switcher__menu dropdown-menu list-group-flush py-0"
+    role="listbox" aria-labelledby="pst-version-switcher-button-3">
+    <!-- dropdown will be populated by javascript on page load -->
+  </div>
+</div></div>
+        
+          <div class="navbar-item">
+
+<button class="btn btn-sm nav-link pst-navbar-icon theme-switch-button pst-js-only" aria-label="Color mode" data-bs-title="Color mode"  data-bs-placement="bottom" data-bs-toggle="tooltip">
+  <i class="theme-switch fa-solid fa-sun                fa-lg" data-mode="light" title="Light"></i>
+  <i class="theme-switch fa-solid fa-moon               fa-lg" data-mode="dark"  title="Dark"></i>
+  <i class="theme-switch fa-solid fa-circle-half-stroke fa-lg" data-mode="auto"  title="System Settings"></i>
+</button></div>
+        
+          <div class="navbar-item"><ul class="navbar-icon-links"
+    aria-label="Icon Links">
+        <li class="nav-item">
+          
+          
+          
+          
+          
+          
+          
+          
+          <a href="https://github.com/Str4vinci/breos" title="GitHub" class="nav-link pst-navbar-icon" rel="noopener" target="_blank" data-bs-toggle="tooltip" data-bs-placement="bottom"><i class="fa-brands fa-square-github fa-lg" aria-hidden="true"></i>
+            <span class="sr-only">GitHub</span></a>
+        </li>
+</ul></div>
+        
+      </div>
+    
+  </div>
+  
+  
+  <div class="sidebar-primary-items__end sidebar-primary__section">
+      <div class="sidebar-primary-item">
+<div id="ethical-ad-placement"
+      class="flat"
+      data-ea-publisher="readthedocs"
+      data-ea-type="readthedocs-sidebar"
+      data-ea-manual="true">
+</div></div>
+  </div>
+
+
+      </div>
+      
+      <main id="main-content" class="bd-main" role="main">
+        
+        
+          <div class="bd-content">
+            <div class="bd-article-container">
+              
+              <div class="bd-header-article d-print-none">
+<div class="header-article-items header-article__inner">
+  
+    <div class="header-article-items__start">
+      
+        <div class="header-article-item">
+
+<nav aria-label="Breadcrumb" class="d-print-none">
+  <ul class="bd-breadcrumbs">
+    
+    <li class="breadcrumb-item breadcrumb-home">
+      <a href="../../index.html" class="nav-link" aria-label="Home">
+        <i class="fa-solid fa-home"></i>
+      </a>
+    </li>
+    
+    <li class="breadcrumb-item"><a href="../index.html" class="nav-link">Module code</a></li>
+    
+    <li class="breadcrumb-item active" aria-current="page"><span class="ellipsis">breos.weather</span></li>
+  </ul>
+</nav>
+</div>
+      
+    </div>
+  
+  
+</div>
+</div>
+              
+              
+              
+                
+<div id="searchbox"></div>
+                <article class="bd-article">
+                  
+  <h1>Source code for breos.weather</h1><div class="highlight"><pre>
+<span></span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">Weather data fetching and processing module.</span>
+
+<span class="sd">This module handles:</span>
+<span class="sd">- Fetching TMY (Typical Meteorological Year) data from PVGIS</span>
+<span class="sd">- Fetching historical weather data from Open-Meteo</span>
+<span class="sd">- Converting between hourly and 15-minute resolutions using Makima interpolation</span>
+<span class="sd">&quot;&quot;&quot;</span>
+
+<span class="kn">import</span><span class="w"> </span><span class="nn">os</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">random</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">re</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">datetime</span><span class="w"> </span><span class="kn">import</span> <span class="n">timedelta</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">typing</span><span class="w"> </span><span class="kn">import</span> <span class="n">Dict</span><span class="p">,</span> <span class="n">List</span><span class="p">,</span> <span class="n">Optional</span><span class="p">,</span> <span class="n">Tuple</span>
+
+<span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">pandas</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">pd</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">pvlib</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">pvlib.location</span><span class="w"> </span><span class="kn">import</span> <span class="n">Location</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">scipy.interpolate</span><span class="w"> </span><span class="kn">import</span> <span class="n">Akima1DInterpolator</span>
+
+<span class="kn">from</span><span class="w"> </span><span class="nn">breos.utils</span><span class="w"> </span><span class="kn">import</span> <span class="n">safe_path_slug</span>
+
+<span class="c1"># Optional imports for API calls</span>
+<span class="k">try</span><span class="p">:</span>
+    <span class="kn">import</span><span class="w"> </span><span class="nn">openmeteo_requests</span>
+    <span class="kn">import</span><span class="w"> </span><span class="nn">requests_cache</span>
+    <span class="kn">from</span><span class="w"> </span><span class="nn">requests.adapters</span><span class="w"> </span><span class="kn">import</span> <span class="n">HTTPAdapter</span>
+    <span class="kn">from</span><span class="w"> </span><span class="nn">urllib3.util.retry</span><span class="w"> </span><span class="kn">import</span> <span class="n">Retry</span>
+
+    <span class="n">HAS_OPENMETEO</span> <span class="o">=</span> <span class="kc">True</span>
+<span class="k">except</span> <span class="ne">ImportError</span><span class="p">:</span>
+    <span class="n">HAS_OPENMETEO</span> <span class="o">=</span> <span class="kc">False</span>
+
+
+<div class="viewcode-block" id="parse_weather_filename">
+<a class="viewcode-back" href="../../api/generated/breos.weather.parse_weather_filename.html#breos.weather.parse_weather_filename">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">parse_weather_filename</span><span class="p">(</span><span class="n">filename</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]]:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Parse a weather filename following the convention:</span>
+<span class="sd">    {location}_{type}_{yearstart}_{yearend}_{source}.csv</span>
+
+<span class="sd">    Examples:</span>
+<span class="sd">        porto_tmy_2005_2023_pvgis-sarah3.csv</span>
+<span class="sd">        porto_historical_2005_2024_openmeteo.csv</span>
+<span class="sd">        lisbon_tmy_2014_nsrdb.csv</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        Dict with keys: location, type, year_start, year_end, source</span>
+<span class="sd">        Returns None if filename doesn&#39;t match the convention.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">basename</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">basename</span><span class="p">(</span><span class="n">filename</span><span class="p">)</span>
+    <span class="k">if</span> <span class="ow">not</span> <span class="n">basename</span><span class="o">.</span><span class="n">endswith</span><span class="p">(</span><span class="s2">&quot;.csv&quot;</span><span class="p">):</span>
+        <span class="k">return</span> <span class="kc">None</span>
+
+    <span class="n">name</span> <span class="o">=</span> <span class="n">basename</span><span class="p">[:</span><span class="o">-</span><span class="mi">4</span><span class="p">]</span>  <span class="c1"># strip .csv</span>
+
+    <span class="c1"># Pattern: location_type_yearstart_yearend_source</span>
+    <span class="c1"># Source may contain hyphens (e.g., pvgis-sarah3)</span>
+    <span class="n">match</span> <span class="o">=</span> <span class="n">re</span><span class="o">.</span><span class="n">match</span><span class="p">(</span><span class="sa">r</span><span class="s2">&quot;^([a-z]+)_(tmy|historical)_(\d</span><span class="si">{4}</span><span class="s2">)_(\d</span><span class="si">{4}</span><span class="s2">)_([\w-]+)$&quot;</span><span class="p">,</span> <span class="n">name</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">match</span><span class="p">:</span>
+        <span class="k">return</span> <span class="p">{</span>
+            <span class="s2">&quot;location&quot;</span><span class="p">:</span> <span class="n">match</span><span class="o">.</span><span class="n">group</span><span class="p">(</span><span class="mi">1</span><span class="p">),</span>
+            <span class="s2">&quot;type&quot;</span><span class="p">:</span> <span class="n">match</span><span class="o">.</span><span class="n">group</span><span class="p">(</span><span class="mi">2</span><span class="p">),</span>
+            <span class="s2">&quot;year_start&quot;</span><span class="p">:</span> <span class="n">match</span><span class="o">.</span><span class="n">group</span><span class="p">(</span><span class="mi">3</span><span class="p">),</span>
+            <span class="s2">&quot;year_end&quot;</span><span class="p">:</span> <span class="n">match</span><span class="o">.</span><span class="n">group</span><span class="p">(</span><span class="mi">4</span><span class="p">),</span>
+            <span class="s2">&quot;source&quot;</span><span class="p">:</span> <span class="n">match</span><span class="o">.</span><span class="n">group</span><span class="p">(</span><span class="mi">5</span><span class="p">),</span>
+        <span class="p">}</span>
+
+    <span class="c1"># Pattern without year_end: location_type_year_source (e.g., lisbon_tmy_2014_nsrdb)</span>
+    <span class="n">match</span> <span class="o">=</span> <span class="n">re</span><span class="o">.</span><span class="n">match</span><span class="p">(</span><span class="sa">r</span><span class="s2">&quot;^([a-z]+)_(tmy|historical)_(\d</span><span class="si">{4}</span><span class="s2">)_([\w-]+)$&quot;</span><span class="p">,</span> <span class="n">name</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">match</span><span class="p">:</span>
+        <span class="k">return</span> <span class="p">{</span>
+            <span class="s2">&quot;location&quot;</span><span class="p">:</span> <span class="n">match</span><span class="o">.</span><span class="n">group</span><span class="p">(</span><span class="mi">1</span><span class="p">),</span>
+            <span class="s2">&quot;type&quot;</span><span class="p">:</span> <span class="n">match</span><span class="o">.</span><span class="n">group</span><span class="p">(</span><span class="mi">2</span><span class="p">),</span>
+            <span class="s2">&quot;year_start&quot;</span><span class="p">:</span> <span class="n">match</span><span class="o">.</span><span class="n">group</span><span class="p">(</span><span class="mi">3</span><span class="p">),</span>
+            <span class="s2">&quot;year_end&quot;</span><span class="p">:</span> <span class="n">match</span><span class="o">.</span><span class="n">group</span><span class="p">(</span><span class="mi">3</span><span class="p">),</span>
+            <span class="s2">&quot;source&quot;</span><span class="p">:</span> <span class="n">match</span><span class="o">.</span><span class="n">group</span><span class="p">(</span><span class="mi">4</span><span class="p">),</span>
+        <span class="p">}</span>
+
+    <span class="k">return</span> <span class="kc">None</span></div>
+
+
+
+<div class="viewcode-block" id="load_weather">
+<a class="viewcode-back" href="../../api/generated/breos.weather.load_weather.html#breos.weather.load_weather">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">load_weather</span><span class="p">(</span>
+    <span class="n">location</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
+    <span class="n">data_type</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="n">start_year</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="n">end_year</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="n">source</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="n">weather_dir</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;weather/&quot;</span><span class="p">,</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Optional</span><span class="p">[</span><span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">]:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Smart weather loading: scan local files for matching weather data.</span>
+
+<span class="sd">    Searches the weather directory for files matching the naming convention,</span>
+<span class="sd">    filters by location/type/source, and checks date coverage. If a file</span>
+<span class="sd">    covers the requested range (e.g., requesting 2008-2010 and a 2005-2024</span>
+<span class="sd">    file exists), subsets it automatically.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        location: Location name (e.g., &#39;porto&#39;, &#39;lisbon&#39;)</span>
+<span class="sd">        data_type: &#39;tmy&#39; or &#39;historical&#39; (None = any)</span>
+<span class="sd">        start_year: Start year for date coverage check</span>
+<span class="sd">        end_year: End year for date coverage check</span>
+<span class="sd">        source: Data source filter (e.g., &#39;openmeteo&#39;, &#39;pvgis-sarah3&#39;)</span>
+<span class="sd">        weather_dir: Directory to scan for weather files</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        DataFrame if a matching file is found, None otherwise.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">if</span> <span class="ow">not</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">isdir</span><span class="p">(</span><span class="n">weather_dir</span><span class="p">):</span>
+        <span class="k">return</span> <span class="kc">None</span>
+
+    <span class="n">candidates</span> <span class="o">=</span> <span class="p">[]</span>
+    <span class="k">for</span> <span class="n">fname</span> <span class="ow">in</span> <span class="n">os</span><span class="o">.</span><span class="n">listdir</span><span class="p">(</span><span class="n">weather_dir</span><span class="p">):</span>
+        <span class="n">parsed</span> <span class="o">=</span> <span class="n">parse_weather_filename</span><span class="p">(</span><span class="n">fname</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">parsed</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="k">continue</span>
+        <span class="k">if</span> <span class="n">parsed</span><span class="p">[</span><span class="s2">&quot;location&quot;</span><span class="p">]</span> <span class="o">!=</span> <span class="n">location</span><span class="p">:</span>
+            <span class="k">continue</span>
+        <span class="k">if</span> <span class="n">data_type</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="n">parsed</span><span class="p">[</span><span class="s2">&quot;type&quot;</span><span class="p">]</span> <span class="o">!=</span> <span class="n">data_type</span><span class="p">:</span>
+            <span class="k">continue</span>
+        <span class="k">if</span> <span class="n">source</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="n">parsed</span><span class="p">[</span><span class="s2">&quot;source&quot;</span><span class="p">]</span> <span class="o">!=</span> <span class="n">source</span><span class="p">:</span>
+            <span class="k">continue</span>
+        <span class="n">parsed</span><span class="p">[</span><span class="s2">&quot;filepath&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">weather_dir</span><span class="p">,</span> <span class="n">fname</span><span class="p">)</span>
+        <span class="n">candidates</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">parsed</span><span class="p">)</span>
+
+    <span class="k">if</span> <span class="ow">not</span> <span class="n">candidates</span><span class="p">:</span>
+        <span class="k">return</span> <span class="kc">None</span>
+
+    <span class="c1"># If date range is specified, filter by coverage</span>
+    <span class="k">if</span> <span class="n">start_year</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="n">end_year</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">covered</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="k">for</span> <span class="n">c</span> <span class="ow">in</span> <span class="n">candidates</span><span class="p">:</span>
+            <span class="n">file_start</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">c</span><span class="p">[</span><span class="s2">&quot;year_start&quot;</span><span class="p">])</span>
+            <span class="n">file_end</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">c</span><span class="p">[</span><span class="s2">&quot;year_end&quot;</span><span class="p">])</span>
+            <span class="k">if</span> <span class="n">file_start</span> <span class="o">&lt;=</span> <span class="n">start_year</span> <span class="ow">and</span> <span class="n">file_end</span> <span class="o">&gt;=</span> <span class="n">end_year</span><span class="p">:</span>
+                <span class="n">covered</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">c</span><span class="p">)</span>
+            <span class="k">elif</span> <span class="n">c</span><span class="p">[</span><span class="s2">&quot;type&quot;</span><span class="p">]</span> <span class="o">==</span> <span class="s2">&quot;tmy&quot;</span><span class="p">:</span>
+                <span class="c1"># TMY files don&#39;t need date coverage — they represent a typical year</span>
+                <span class="n">covered</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">c</span><span class="p">)</span>
+        <span class="n">candidates</span> <span class="o">=</span> <span class="n">covered</span> <span class="k">if</span> <span class="n">covered</span> <span class="k">else</span> <span class="n">candidates</span>
+
+    <span class="c1"># Prefer the first match (could be refined with priority logic)</span>
+    <span class="n">best</span> <span class="o">=</span> <span class="n">candidates</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+    <span class="n">filepath</span> <span class="o">=</span> <span class="n">best</span><span class="p">[</span><span class="s2">&quot;filepath&quot;</span><span class="p">]</span>
+
+    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;   Found local weather file: </span><span class="si">{</span><span class="n">filepath</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+
+    <span class="n">df</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">read_csv</span><span class="p">(</span><span class="n">filepath</span><span class="p">,</span> <span class="n">index_col</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">parse_dates</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+
+    <span class="c1"># Parse datetime index if it didn&#39;t work from index_col=0</span>
+    <span class="k">if</span> <span class="ow">not</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">df</span><span class="o">.</span><span class="n">index</span><span class="p">,</span> <span class="n">pd</span><span class="o">.</span><span class="n">DatetimeIndex</span><span class="p">):</span>
+        <span class="c1"># Try converting the existing index (handles timezone-aware strings)</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="n">df</span><span class="o">.</span><span class="n">index</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">to_datetime</span><span class="p">(</span><span class="n">df</span><span class="o">.</span><span class="n">index</span><span class="p">,</span> <span class="n">utc</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+        <span class="k">except</span> <span class="p">(</span><span class="ne">ValueError</span><span class="p">,</span> <span class="ne">TypeError</span><span class="p">):</span>
+            <span class="c1"># Fall back to looking for named datetime columns</span>
+            <span class="n">df</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">read_csv</span><span class="p">(</span><span class="n">filepath</span><span class="p">)</span>
+            <span class="k">for</span> <span class="n">col_name</span> <span class="ow">in</span> <span class="p">[</span><span class="s2">&quot;date&quot;</span><span class="p">,</span> <span class="s2">&quot;time&quot;</span><span class="p">,</span> <span class="s2">&quot;Datetime&quot;</span><span class="p">]:</span>
+                <span class="k">if</span> <span class="n">col_name</span> <span class="ow">in</span> <span class="n">df</span><span class="o">.</span><span class="n">columns</span><span class="p">:</span>
+                    <span class="n">df</span><span class="p">[</span><span class="n">col_name</span><span class="p">]</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">to_datetime</span><span class="p">(</span><span class="n">df</span><span class="p">[</span><span class="n">col_name</span><span class="p">])</span>
+                    <span class="n">df</span><span class="o">.</span><span class="n">set_index</span><span class="p">(</span><span class="n">col_name</span><span class="p">,</span> <span class="n">inplace</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+                    <span class="k">break</span>
+
+    <span class="c1"># Subset by year range for historical data</span>
+    <span class="k">if</span> <span class="n">best</span><span class="p">[</span><span class="s2">&quot;type&quot;</span><span class="p">]</span> <span class="o">==</span> <span class="s2">&quot;historical&quot;</span> <span class="ow">and</span> <span class="n">start_year</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="n">end_year</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">file_start</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">best</span><span class="p">[</span><span class="s2">&quot;year_start&quot;</span><span class="p">])</span>
+        <span class="n">file_end</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">best</span><span class="p">[</span><span class="s2">&quot;year_end&quot;</span><span class="p">])</span>
+        <span class="k">if</span> <span class="n">file_start</span> <span class="o">&lt;</span> <span class="n">start_year</span> <span class="ow">or</span> <span class="n">file_end</span> <span class="o">&gt;</span> <span class="n">end_year</span><span class="p">:</span>
+            <span class="n">mask</span> <span class="o">=</span> <span class="p">(</span><span class="n">df</span><span class="o">.</span><span class="n">index</span><span class="o">.</span><span class="n">year</span> <span class="o">&gt;=</span> <span class="n">start_year</span><span class="p">)</span> <span class="o">&amp;</span> <span class="p">(</span><span class="n">df</span><span class="o">.</span><span class="n">index</span><span class="o">.</span><span class="n">year</span> <span class="o">&lt;=</span> <span class="n">end_year</span><span class="p">)</span>
+            <span class="n">df</span> <span class="o">=</span> <span class="n">df</span><span class="o">.</span><span class="n">loc</span><span class="p">[</span><span class="n">mask</span><span class="p">]</span>
+            <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;   Subset to </span><span class="si">{</span><span class="n">start_year</span><span class="si">}</span><span class="s2">-</span><span class="si">{</span><span class="n">end_year</span><span class="si">}</span><span class="s2"> (</span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">df</span><span class="p">)</span><span class="si">}</span><span class="s2"> rows)&quot;</span><span class="p">)</span>
+
+    <span class="k">return</span> <span class="n">df</span></div>
+
+
+
+<div class="viewcode-block" id="fetch_tmy_weather_data">
+<a class="viewcode-back" href="../../api/generated/breos.weather.fetch_tmy_weather_data.html#breos.weather.fetch_tmy_weather_data">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">fetch_tmy_weather_data</span><span class="p">(</span>
+    <span class="n">latitude</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
+    <span class="n">longitude</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
+    <span class="n">sample_year</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="mi">2025</span><span class="p">,</span>
+    <span class="n">freq</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;h&quot;</span><span class="p">,</span>
+    <span class="n">timezone</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="n">save_to_file</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tuple</span><span class="p">[</span><span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">,</span> <span class="nb">dict</span><span class="p">]:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Fetch Typical Meteorological Year (TMY) weather data from PVGIS.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        latitude: Latitude of the location</span>
+<span class="sd">        longitude: Longitude of the location</span>
+<span class="sd">        sample_year: Year to use for index (default: 2025). Set to None to keep original TMY index.</span>
+<span class="sd">        freq: Frequency for output data (&#39;h&#39; for hourly, &#39;15min&#39; for 15-minute)</span>
+<span class="sd">        timezone: Timezone string. Auto-detected if None.</span>
+<span class="sd">        save_to_file: Whether to save the data to CSV</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        Tuple of (tmy_data DataFrame, metadata dict)</span>
+
+<span class="sd">    Raises:</span>
+<span class="sd">        ValueError: If sample_year is a leap year (TMY has 8760 hours)</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">tmy_data</span><span class="p">,</span> <span class="n">metadata</span> <span class="o">=</span> <span class="n">pvlib</span><span class="o">.</span><span class="n">iotools</span><span class="o">.</span><span class="n">get_pvgis_tmy</span><span class="p">(</span>
+        <span class="n">latitude</span><span class="p">,</span>
+        <span class="n">longitude</span><span class="p">,</span>
+        <span class="n">outputformat</span><span class="o">=</span><span class="s2">&quot;json&quot;</span><span class="p">,</span>
+        <span class="n">usehorizon</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+        <span class="n">map_variables</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+        <span class="n">url</span><span class="o">=</span><span class="s2">&quot;https://re.jrc.ec.europa.eu/api/v5_3/&quot;</span><span class="p">,</span>
+        <span class="n">timeout</span><span class="o">=</span><span class="mi">120</span><span class="p">,</span>
+    <span class="p">)</span>
+
+    <span class="c1"># Reindex to sample year if requested</span>
+    <span class="k">if</span> <span class="n">sample_year</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="c1"># Check for leap year</span>
+        <span class="k">if</span> <span class="n">sample_year</span> <span class="o">%</span> <span class="mi">4</span> <span class="o">==</span> <span class="mi">0</span> <span class="ow">and</span> <span class="p">(</span><span class="n">sample_year</span> <span class="o">%</span> <span class="mi">100</span> <span class="o">!=</span> <span class="mi">0</span> <span class="ow">or</span> <span class="n">sample_year</span> <span class="o">%</span> <span class="mi">400</span> <span class="o">==</span> <span class="mi">0</span><span class="p">):</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Sample year </span><span class="si">{</span><span class="n">sample_year</span><span class="si">}</span><span class="s2"> is a leap year. TMY has 8760 hours. Use non-leap year.&quot;</span><span class="p">)</span>
+
+        <span class="c1"># Auto-detect timezone if not provided</span>
+        <span class="k">if</span> <span class="n">timezone</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="kn">from</span><span class="w"> </span><span class="nn">timezonefinder</span><span class="w"> </span><span class="kn">import</span> <span class="n">TimezoneFinder</span>
+
+            <span class="n">tf</span> <span class="o">=</span> <span class="n">TimezoneFinder</span><span class="p">()</span>
+            <span class="n">timezone</span> <span class="o">=</span> <span class="n">tf</span><span class="o">.</span><span class="n">timezone_at</span><span class="p">(</span><span class="n">lat</span><span class="o">=</span><span class="n">latitude</span><span class="p">,</span> <span class="n">lng</span><span class="o">=</span><span class="n">longitude</span><span class="p">)</span>
+
+        <span class="n">new_index</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">date_range</span><span class="p">(</span>
+            <span class="n">start</span><span class="o">=</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">sample_year</span><span class="si">}</span><span class="s2">-01-01 00:00&quot;</span><span class="p">,</span> <span class="n">end</span><span class="o">=</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">sample_year</span><span class="si">}</span><span class="s2">-12-31 23:00&quot;</span><span class="p">,</span> <span class="n">freq</span><span class="o">=</span><span class="s2">&quot;h&quot;</span><span class="p">,</span> <span class="n">tz</span><span class="o">=</span><span class="n">timezone</span>
+        <span class="p">)</span>
+        <span class="n">tmy_data</span><span class="o">.</span><span class="n">index</span> <span class="o">=</span> <span class="n">new_index</span>
+
+    <span class="c1"># Resample to 15-min if requested</span>
+    <span class="k">if</span> <span class="n">freq</span> <span class="o">==</span> <span class="s2">&quot;15min&quot;</span><span class="p">:</span>
+        <span class="n">tmy_data</span> <span class="o">=</span> <span class="n">resample_tmy_to_15min</span><span class="p">(</span><span class="n">tmy_data</span><span class="p">,</span> <span class="n">metadata</span><span class="p">)</span>
+    <span class="k">elif</span> <span class="n">freq</span> <span class="o">!=</span> <span class="s2">&quot;h&quot;</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;freq must be &#39;h&#39; or &#39;15min&#39;&quot;</span><span class="p">)</span>
+
+    <span class="k">if</span> <span class="n">save_to_file</span><span class="p">:</span>
+        <span class="c1"># Encode metadata in filename: {location}_tmy_{year_min}_{year_max}_{db}.csv</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="n">inputs</span> <span class="o">=</span> <span class="n">metadata</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;inputs&quot;</span><span class="p">,</span> <span class="p">{})</span>
+            <span class="n">meta_loc</span> <span class="o">=</span> <span class="n">inputs</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;location&quot;</span><span class="p">,</span> <span class="p">{})</span>
+            <span class="n">rad_db</span> <span class="o">=</span> <span class="n">inputs</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;meteo_data&quot;</span><span class="p">,</span> <span class="p">{})</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;radiation_db&quot;</span><span class="p">,</span> <span class="s2">&quot;unknown&quot;</span><span class="p">)</span>
+            <span class="n">year_min</span> <span class="o">=</span> <span class="n">inputs</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;meteo_data&quot;</span><span class="p">,</span> <span class="p">{})</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;year_min&quot;</span><span class="p">,</span> <span class="s2">&quot;unknown&quot;</span><span class="p">)</span>
+            <span class="n">year_max</span> <span class="o">=</span> <span class="n">inputs</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;meteo_data&quot;</span><span class="p">,</span> <span class="p">{})</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;year_max&quot;</span><span class="p">,</span> <span class="s2">&quot;unknown&quot;</span><span class="p">)</span>
+            <span class="c1"># Derive location name from coordinates (fallback)</span>
+            <span class="n">loc_name</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">&quot;lat</span><span class="si">{</span><span class="n">meta_loc</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s1">&#39;latitude&#39;</span><span class="p">,</span><span class="w"> </span><span class="n">latitude</span><span class="p">)</span><span class="si">:</span><span class="s2">.0f</span><span class="si">}</span><span class="s2">_lon</span><span class="si">{</span><span class="n">meta_loc</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s1">&#39;longitude&#39;</span><span class="p">,</span><span class="w"> </span><span class="n">longitude</span><span class="p">)</span><span class="si">:</span><span class="s2">.0f</span><span class="si">}</span><span class="s2">&quot;</span>
+            <span class="n">db_slug</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">&quot;pvgis-</span><span class="si">{</span><span class="n">rad_db</span><span class="o">.</span><span class="n">lower</span><span class="p">()</span><span class="si">}</span><span class="s2">&quot;</span> <span class="k">if</span> <span class="n">rad_db</span> <span class="o">!=</span> <span class="s2">&quot;unknown&quot;</span> <span class="k">else</span> <span class="s2">&quot;pvgis&quot;</span>
+            <span class="n">filename</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">&quot;weather/</span><span class="si">{</span><span class="n">loc_name</span><span class="si">}</span><span class="s2">_tmy_</span><span class="si">{</span><span class="n">year_min</span><span class="si">}</span><span class="s2">_</span><span class="si">{</span><span class="n">year_max</span><span class="si">}</span><span class="s2">_</span><span class="si">{</span><span class="n">db_slug</span><span class="si">}</span><span class="s2">.csv&quot;</span>
+        <span class="k">except</span> <span class="p">(</span><span class="ne">KeyError</span><span class="p">,</span> <span class="ne">AttributeError</span><span class="p">):</span>
+            <span class="n">filename</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">&quot;weather/tmy_data_</span><span class="si">{</span><span class="n">sample_year</span><span class="w"> </span><span class="k">if</span><span class="w"> </span><span class="n">sample_year</span><span class="w"> </span><span class="k">else</span><span class="w"> </span><span class="s1">&#39;original&#39;</span><span class="si">}</span><span class="s2">_</span><span class="si">{</span><span class="n">freq</span><span class="si">}</span><span class="s2">.csv&quot;</span>
+        <span class="n">os</span><span class="o">.</span><span class="n">makedirs</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">dirname</span><span class="p">(</span><span class="n">filename</span><span class="p">),</span> <span class="n">exist_ok</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+        <span class="n">tmy_data</span><span class="o">.</span><span class="n">to_csv</span><span class="p">(</span><span class="n">filename</span><span class="p">)</span>
+        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Saved TMY data to </span><span class="si">{</span><span class="n">filename</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+
+    <span class="k">return</span> <span class="n">tmy_data</span><span class="p">,</span> <span class="n">metadata</span></div>
+
+
+
+<div class="viewcode-block" id="fetch_weather_data">
+<a class="viewcode-back" href="../../api/generated/breos.weather.fetch_weather_data.html#breos.weather.fetch_weather_data">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">fetch_weather_data</span><span class="p">(</span>
+    <span class="n">latitude</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
+    <span class="n">longitude</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
+    <span class="n">start_date</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
+    <span class="n">end_date</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
+    <span class="n">tilt</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
+    <span class="n">azimuth</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
+    <span class="n">freq</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;h&quot;</span><span class="p">,</span>
+    <span class="n">save_to_file</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span>
+    <span class="n">location_name</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="n">output_dir</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;weather&quot;</span><span class="p">,</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Fetch historical weather data from the Open-Meteo API.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        latitude: Latitude of the location</span>
+<span class="sd">        longitude: Longitude of the location</span>
+<span class="sd">        start_date: Start date in format &#39;YYYY-MM-DD&#39;</span>
+<span class="sd">        end_date: End date in format &#39;YYYY-MM-DD&#39;</span>
+<span class="sd">        tilt: Tilt of the PV panel (degrees)</span>
+<span class="sd">        azimuth: Azimuth of the PV system (0° S, -90° E, 90° W, 180° N)</span>
+<span class="sd">        freq: Output frequency (&#39;h&#39; for hourly, &#39;15min&#39; for 15-minute)</span>
+<span class="sd">        save_to_file: Whether to save the data to CSV</span>
+<span class="sd">        location_name: Location name for filename (e.g., &#39;porto&#39;). If None, uses lat/lon.</span>
+<span class="sd">        output_dir: Directory to save the file (default: &#39;weather&#39;)</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        DataFrame with weather variables</span>
+
+<span class="sd">    Raises:</span>
+<span class="sd">        ImportError: If openmeteo_requests is not installed</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">if</span> <span class="ow">not</span> <span class="n">HAS_OPENMETEO</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">ImportError</span><span class="p">(</span>
+            <span class="s2">&quot;openmeteo_requests is required for historical weather data. &quot;</span>
+            <span class="s2">&quot;Install with: uv add openmeteo-requests requests-cache&quot;</span>
+        <span class="p">)</span>
+
+    <span class="c1"># Setup the Open-Meteo API client with cache and retry. Cache expires</span>
+    <span class="c1"># after 30 days so we don&#39;t serve indefinitely-stale entries if a single</span>
+    <span class="c1"># bad response was ever written.</span>
+    <span class="n">cache_session</span> <span class="o">=</span> <span class="n">requests_cache</span><span class="o">.</span><span class="n">CachedSession</span><span class="p">(</span><span class="s2">&quot;.cache&quot;</span><span class="p">,</span> <span class="n">expire_after</span><span class="o">=</span><span class="n">timedelta</span><span class="p">(</span><span class="n">days</span><span class="o">=</span><span class="mi">30</span><span class="p">))</span>
+    <span class="n">retries</span> <span class="o">=</span> <span class="n">Retry</span><span class="p">(</span><span class="n">total</span><span class="o">=</span><span class="mi">5</span><span class="p">,</span> <span class="n">backoff_factor</span><span class="o">=</span><span class="mf">0.2</span><span class="p">,</span> <span class="n">status_forcelist</span><span class="o">=</span><span class="p">[</span><span class="mi">500</span><span class="p">,</span> <span class="mi">502</span><span class="p">,</span> <span class="mi">503</span><span class="p">,</span> <span class="mi">504</span><span class="p">])</span>
+    <span class="n">cache_session</span><span class="o">.</span><span class="n">mount</span><span class="p">(</span><span class="s2">&quot;https://&quot;</span><span class="p">,</span> <span class="n">HTTPAdapter</span><span class="p">(</span><span class="n">max_retries</span><span class="o">=</span><span class="n">retries</span><span class="p">))</span>
+    <span class="n">cache_session</span><span class="o">.</span><span class="n">mount</span><span class="p">(</span><span class="s2">&quot;http://&quot;</span><span class="p">,</span> <span class="n">HTTPAdapter</span><span class="p">(</span><span class="n">max_retries</span><span class="o">=</span><span class="n">retries</span><span class="p">))</span>
+    <span class="n">openmeteo</span> <span class="o">=</span> <span class="n">openmeteo_requests</span><span class="o">.</span><span class="n">Client</span><span class="p">(</span><span class="n">session</span><span class="o">=</span><span class="n">cache_session</span><span class="p">)</span>
+
+    <span class="n">url</span> <span class="o">=</span> <span class="s2">&quot;https://archive-api.open-meteo.com/v1/archive&quot;</span>
+    <span class="n">params</span> <span class="o">=</span> <span class="p">{</span>
+        <span class="s2">&quot;latitude&quot;</span><span class="p">:</span> <span class="n">latitude</span><span class="p">,</span>
+        <span class="s2">&quot;longitude&quot;</span><span class="p">:</span> <span class="n">longitude</span><span class="p">,</span>
+        <span class="s2">&quot;start_date&quot;</span><span class="p">:</span> <span class="n">start_date</span><span class="p">,</span>
+        <span class="s2">&quot;end_date&quot;</span><span class="p">:</span> <span class="n">end_date</span><span class="p">,</span>
+        <span class="s2">&quot;hourly&quot;</span><span class="p">:</span> <span class="p">[</span>
+            <span class="s2">&quot;temperature_2m&quot;</span><span class="p">,</span>
+            <span class="s2">&quot;wind_speed_10m&quot;</span><span class="p">,</span>
+            <span class="s2">&quot;shortwave_radiation&quot;</span><span class="p">,</span>
+            <span class="s2">&quot;direct_radiation&quot;</span><span class="p">,</span>
+            <span class="s2">&quot;diffuse_radiation&quot;</span><span class="p">,</span>
+            <span class="s2">&quot;direct_normal_irradiance&quot;</span><span class="p">,</span>
+            <span class="s2">&quot;global_tilted_irradiance&quot;</span><span class="p">,</span>
+            <span class="s2">&quot;terrestrial_radiation&quot;</span><span class="p">,</span>
+        <span class="p">],</span>
+        <span class="s2">&quot;wind_speed_unit&quot;</span><span class="p">:</span> <span class="s2">&quot;ms&quot;</span><span class="p">,</span>
+        <span class="s2">&quot;timezone&quot;</span><span class="p">:</span> <span class="s2">&quot;GMT&quot;</span><span class="p">,</span>
+        <span class="s2">&quot;tilt&quot;</span><span class="p">:</span> <span class="n">tilt</span><span class="p">,</span>
+        <span class="s2">&quot;azimuth&quot;</span><span class="p">:</span> <span class="n">azimuth</span><span class="p">,</span>
+    <span class="p">}</span>
+
+    <span class="n">responses</span> <span class="o">=</span> <span class="n">openmeteo</span><span class="o">.</span><span class="n">weather_api</span><span class="p">(</span><span class="n">url</span><span class="p">,</span> <span class="n">params</span><span class="o">=</span><span class="n">params</span><span class="p">)</span>
+    <span class="n">response</span> <span class="o">=</span> <span class="n">responses</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+
+    <span class="c1"># Process hourly data</span>
+    <span class="n">hourly</span> <span class="o">=</span> <span class="n">response</span><span class="o">.</span><span class="n">Hourly</span><span class="p">()</span>
+    <span class="n">hourly_data</span> <span class="o">=</span> <span class="p">{</span>
+        <span class="s2">&quot;date&quot;</span><span class="p">:</span> <span class="n">pd</span><span class="o">.</span><span class="n">date_range</span><span class="p">(</span>
+            <span class="n">start</span><span class="o">=</span><span class="n">pd</span><span class="o">.</span><span class="n">to_datetime</span><span class="p">(</span><span class="n">hourly</span><span class="o">.</span><span class="n">Time</span><span class="p">(),</span> <span class="n">unit</span><span class="o">=</span><span class="s2">&quot;s&quot;</span><span class="p">),</span>
+            <span class="n">end</span><span class="o">=</span><span class="n">pd</span><span class="o">.</span><span class="n">to_datetime</span><span class="p">(</span><span class="n">hourly</span><span class="o">.</span><span class="n">TimeEnd</span><span class="p">(),</span> <span class="n">unit</span><span class="o">=</span><span class="s2">&quot;s&quot;</span><span class="p">),</span>
+            <span class="n">freq</span><span class="o">=</span><span class="n">pd</span><span class="o">.</span><span class="n">Timedelta</span><span class="p">(</span><span class="n">seconds</span><span class="o">=</span><span class="n">hourly</span><span class="o">.</span><span class="n">Interval</span><span class="p">()),</span>
+            <span class="n">inclusive</span><span class="o">=</span><span class="s2">&quot;left&quot;</span><span class="p">,</span>
+        <span class="p">),</span>
+        <span class="s2">&quot;temperature_2m&quot;</span><span class="p">:</span> <span class="n">hourly</span><span class="o">.</span><span class="n">Variables</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span><span class="o">.</span><span class="n">ValuesAsNumpy</span><span class="p">(),</span>
+        <span class="s2">&quot;wind_speed_10m&quot;</span><span class="p">:</span> <span class="n">hourly</span><span class="o">.</span><span class="n">Variables</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span><span class="o">.</span><span class="n">ValuesAsNumpy</span><span class="p">(),</span>
+        <span class="s2">&quot;shortwave_radiation&quot;</span><span class="p">:</span> <span class="n">hourly</span><span class="o">.</span><span class="n">Variables</span><span class="p">(</span><span class="mi">2</span><span class="p">)</span><span class="o">.</span><span class="n">ValuesAsNumpy</span><span class="p">(),</span>
+        <span class="s2">&quot;direct_radiation&quot;</span><span class="p">:</span> <span class="n">hourly</span><span class="o">.</span><span class="n">Variables</span><span class="p">(</span><span class="mi">3</span><span class="p">)</span><span class="o">.</span><span class="n">ValuesAsNumpy</span><span class="p">(),</span>
+        <span class="s2">&quot;diffuse_radiation&quot;</span><span class="p">:</span> <span class="n">hourly</span><span class="o">.</span><span class="n">Variables</span><span class="p">(</span><span class="mi">4</span><span class="p">)</span><span class="o">.</span><span class="n">ValuesAsNumpy</span><span class="p">(),</span>
+        <span class="s2">&quot;direct_normal_irradiance&quot;</span><span class="p">:</span> <span class="n">hourly</span><span class="o">.</span><span class="n">Variables</span><span class="p">(</span><span class="mi">5</span><span class="p">)</span><span class="o">.</span><span class="n">ValuesAsNumpy</span><span class="p">(),</span>
+        <span class="s2">&quot;global_tilted_irradiance&quot;</span><span class="p">:</span> <span class="n">hourly</span><span class="o">.</span><span class="n">Variables</span><span class="p">(</span><span class="mi">6</span><span class="p">)</span><span class="o">.</span><span class="n">ValuesAsNumpy</span><span class="p">(),</span>
+        <span class="s2">&quot;terrestrial_radiation&quot;</span><span class="p">:</span> <span class="n">hourly</span><span class="o">.</span><span class="n">Variables</span><span class="p">(</span><span class="mi">7</span><span class="p">)</span><span class="o">.</span><span class="n">ValuesAsNumpy</span><span class="p">(),</span>
+    <span class="p">}</span>
+
+    <span class="n">hourly_dataframe</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">(</span><span class="n">data</span><span class="o">=</span><span class="n">hourly_data</span><span class="p">)</span>
+    <span class="n">hourly_dataframe</span><span class="o">.</span><span class="n">set_index</span><span class="p">(</span><span class="s2">&quot;date&quot;</span><span class="p">,</span> <span class="n">inplace</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+
+    <span class="c1"># Resample to 15-min if requested (pass location for clear-sky scaling)</span>
+    <span class="k">if</span> <span class="n">freq</span> <span class="o">==</span> <span class="s2">&quot;15min&quot;</span><span class="p">:</span>
+        <span class="n">hourly_dataframe</span> <span class="o">=</span> <span class="n">resample_to_15min</span><span class="p">(</span><span class="n">hourly_dataframe</span><span class="p">,</span> <span class="n">method</span><span class="o">=</span><span class="s2">&quot;makima&quot;</span><span class="p">,</span> <span class="n">latitude</span><span class="o">=</span><span class="n">latitude</span><span class="p">,</span> <span class="n">longitude</span><span class="o">=</span><span class="n">longitude</span><span class="p">)</span>
+
+    <span class="k">if</span> <span class="n">save_to_file</span><span class="p">:</span>
+        <span class="n">start_year</span> <span class="o">=</span> <span class="n">start_date</span><span class="p">[:</span><span class="mi">4</span><span class="p">]</span>
+        <span class="n">end_year</span> <span class="o">=</span> <span class="n">end_date</span><span class="p">[:</span><span class="mi">4</span><span class="p">]</span>
+        <span class="k">if</span> <span class="n">location_name</span><span class="p">:</span>
+            <span class="n">loc_slug</span> <span class="o">=</span> <span class="n">safe_path_slug</span><span class="p">(</span><span class="n">location_name</span><span class="p">)</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">loc_slug</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">&quot;lat</span><span class="si">{</span><span class="n">latitude</span><span class="si">:</span><span class="s2">.0f</span><span class="si">}</span><span class="s2">_lon</span><span class="si">{</span><span class="n">longitude</span><span class="si">:</span><span class="s2">.0f</span><span class="si">}</span><span class="s2">&quot;</span>
+        <span class="n">filename</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">output_dir</span><span class="p">,</span> <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">loc_slug</span><span class="si">}</span><span class="s2">_historical_</span><span class="si">{</span><span class="n">start_year</span><span class="si">}</span><span class="s2">_</span><span class="si">{</span><span class="n">end_year</span><span class="si">}</span><span class="s2">_openmeteo.csv&quot;</span><span class="p">)</span>
+        <span class="n">os</span><span class="o">.</span><span class="n">makedirs</span><span class="p">(</span><span class="n">output_dir</span><span class="p">,</span> <span class="n">exist_ok</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+        <span class="n">hourly_dataframe</span><span class="o">.</span><span class="n">to_csv</span><span class="p">(</span><span class="n">filename</span><span class="p">)</span>
+        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Saved weather data to </span><span class="si">{</span><span class="n">filename</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+
+    <span class="k">return</span> <span class="n">hourly_dataframe</span></div>
+
+
+
+<div class="viewcode-block" id="resample_tmy_to_15min">
+<a class="viewcode-back" href="../../api/generated/breos.weather.resample_tmy_to_15min.html#breos.weather.resample_tmy_to_15min">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">resample_tmy_to_15min</span><span class="p">(</span><span class="n">tmy_data</span><span class="p">:</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">,</span> <span class="n">metadata</span><span class="p">:</span> <span class="nb">dict</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Resample TMY data from hourly to 15-minute intervals using Makima interpolation.</span>
+
+<span class="sd">    Uses clear-sky scaling for GHI to preserve solar physics.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        tmy_data: DataFrame with hourly TMY data</span>
+<span class="sd">        metadata: Metadata dict from PVGIS containing location info</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        DataFrame with 15-minute intervals</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="c1"># Location setup for clear-sky model</span>
+    <span class="n">loc</span> <span class="o">=</span> <span class="n">metadata</span><span class="p">[</span><span class="s2">&quot;inputs&quot;</span><span class="p">][</span><span class="s2">&quot;location&quot;</span><span class="p">]</span>
+    <span class="n">site</span> <span class="o">=</span> <span class="n">Location</span><span class="p">(</span><span class="n">loc</span><span class="p">[</span><span class="s2">&quot;latitude&quot;</span><span class="p">],</span> <span class="n">loc</span><span class="p">[</span><span class="s2">&quot;longitude&quot;</span><span class="p">],</span> <span class="n">altitude</span><span class="o">=</span><span class="n">loc</span><span class="p">[</span><span class="s2">&quot;elevation&quot;</span><span class="p">])</span>
+
+    <span class="c1"># Time handling</span>
+    <span class="n">df_60</span> <span class="o">=</span> <span class="n">tmy_data</span><span class="o">.</span><span class="n">copy</span><span class="p">()</span>
+    <span class="n">start</span> <span class="o">=</span> <span class="n">df_60</span><span class="o">.</span><span class="n">index</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+    <span class="n">end</span> <span class="o">=</span> <span class="n">df_60</span><span class="o">.</span><span class="n">index</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span> <span class="o">+</span> <span class="n">pd</span><span class="o">.</span><span class="n">Timedelta</span><span class="p">(</span><span class="n">minutes</span><span class="o">=</span><span class="mi">45</span><span class="p">)</span>
+    <span class="n">index_15</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">date_range</span><span class="p">(</span><span class="n">start</span><span class="p">,</span> <span class="n">end</span><span class="p">,</span> <span class="n">freq</span><span class="o">=</span><span class="s2">&quot;15min&quot;</span><span class="p">,</span> <span class="n">tz</span><span class="o">=</span><span class="n">df_60</span><span class="o">.</span><span class="n">index</span><span class="o">.</span><span class="n">tz</span><span class="p">)</span>
+
+    <span class="c1"># Convert timestamps to unix floats for Scipy</span>
+    <span class="n">x_60</span> <span class="o">=</span> <span class="n">df_60</span><span class="o">.</span><span class="n">index</span><span class="o">.</span><span class="n">view</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">int64</span><span class="p">)</span> <span class="o">//</span> <span class="mi">10</span><span class="o">**</span><span class="mi">9</span>
+    <span class="n">x_15</span> <span class="o">=</span> <span class="n">index_15</span><span class="o">.</span><span class="n">view</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">int64</span><span class="p">)</span> <span class="o">//</span> <span class="mi">10</span><span class="o">**</span><span class="mi">9</span>
+
+    <span class="c1"># Clear-sky scaling for irradiance (GHI, DNI, DHI)</span>
+    <span class="c1"># Interpolate clearness indices instead of raw irradiance to preserve</span>
+    <span class="c1"># sunrise/sunset transitions and physical consistency between components.</span>
+    <span class="n">cs_60</span> <span class="o">=</span> <span class="n">site</span><span class="o">.</span><span class="n">get_clearsky</span><span class="p">(</span><span class="n">df_60</span><span class="o">.</span><span class="n">index</span><span class="p">)</span>
+    <span class="n">cs_15</span> <span class="o">=</span> <span class="n">site</span><span class="o">.</span><span class="n">get_clearsky</span><span class="p">(</span><span class="n">index_15</span><span class="p">)</span>
+
+    <span class="n">df_15</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">(</span><span class="n">index</span><span class="o">=</span><span class="n">index_15</span><span class="p">)</span>
+    <span class="n">epsilon</span> <span class="o">=</span> <span class="mf">5.0</span>  <span class="c1"># Increased epsilon to avoid divide-by-zero spikes near dawn/dusk</span>
+
+    <span class="k">for</span> <span class="n">comp</span> <span class="ow">in</span> <span class="p">(</span><span class="s2">&quot;ghi&quot;</span><span class="p">,</span> <span class="s2">&quot;dni&quot;</span><span class="p">,</span> <span class="s2">&quot;dhi&quot;</span><span class="p">):</span>
+        <span class="k">if</span> <span class="n">comp</span> <span class="ow">in</span> <span class="n">df_60</span><span class="o">.</span><span class="n">columns</span><span class="p">:</span>
+            <span class="n">k_60</span> <span class="o">=</span> <span class="p">(</span><span class="n">df_60</span><span class="p">[</span><span class="n">comp</span><span class="p">]</span> <span class="o">/</span> <span class="p">(</span><span class="n">cs_60</span><span class="p">[</span><span class="n">comp</span><span class="p">]</span> <span class="o">+</span> <span class="n">epsilon</span><span class="p">))</span><span class="o">.</span><span class="n">values</span>
+            <span class="c1"># Clip K multiplier to physically reasonable max (e.g. 1.5x) to avoid massive dawn/dusk spikes</span>
+            <span class="n">k_60</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">clip</span><span class="p">(</span><span class="n">k_60</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mf">1.5</span><span class="p">)</span>
+
+            <span class="n">makima_k</span> <span class="o">=</span> <span class="n">Akima1DInterpolator</span><span class="p">(</span><span class="n">x_60</span><span class="p">,</span> <span class="n">k_60</span><span class="p">,</span> <span class="n">method</span><span class="o">=</span><span class="s2">&quot;makima&quot;</span><span class="p">)</span>
+            <span class="n">k_15</span> <span class="o">=</span> <span class="n">makima_k</span><span class="p">(</span><span class="n">x_15</span><span class="p">)</span>
+            <span class="n">df_15</span><span class="p">[</span><span class="n">comp</span><span class="p">]</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">clip</span><span class="p">(</span><span class="n">k_15</span> <span class="o">*</span> <span class="n">cs_15</span><span class="p">[</span><span class="n">comp</span><span class="p">],</span> <span class="mi">0</span><span class="p">,</span> <span class="kc">None</span><span class="p">)</span>
+
+    <span class="c1"># Interpolate non-irradiance columns directly with Makima</span>
+    <span class="n">met_cols</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;temp_air&quot;</span><span class="p">,</span> <span class="s2">&quot;relative_humidity&quot;</span><span class="p">,</span> <span class="s2">&quot;wind_speed&quot;</span><span class="p">]</span>
+
+    <span class="k">for</span> <span class="n">col</span> <span class="ow">in</span> <span class="n">met_cols</span><span class="p">:</span>
+        <span class="k">if</span> <span class="n">col</span> <span class="ow">in</span> <span class="n">df_60</span><span class="o">.</span><span class="n">columns</span><span class="p">:</span>
+            <span class="n">y_60</span> <span class="o">=</span> <span class="n">df_60</span><span class="p">[</span><span class="n">col</span><span class="p">]</span><span class="o">.</span><span class="n">values</span>
+            <span class="n">makima_generic</span> <span class="o">=</span> <span class="n">Akima1DInterpolator</span><span class="p">(</span><span class="n">x_60</span><span class="p">,</span> <span class="n">y_60</span><span class="p">,</span> <span class="n">method</span><span class="o">=</span><span class="s2">&quot;makima&quot;</span><span class="p">)</span>
+            <span class="n">df_15</span><span class="p">[</span><span class="n">col</span><span class="p">]</span> <span class="o">=</span> <span class="n">makima_generic</span><span class="p">(</span><span class="n">x_15</span><span class="p">)</span>
+
+    <span class="c1"># Physical clipping</span>
+    <span class="k">if</span> <span class="s2">&quot;relative_humidity&quot;</span> <span class="ow">in</span> <span class="n">df_15</span><span class="p">:</span>
+        <span class="n">df_15</span><span class="p">[</span><span class="s2">&quot;relative_humidity&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">df_15</span><span class="p">[</span><span class="s2">&quot;relative_humidity&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">clip</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">100</span><span class="p">)</span>
+    <span class="k">if</span> <span class="s2">&quot;wind_speed&quot;</span> <span class="ow">in</span> <span class="n">df_15</span><span class="p">:</span>
+        <span class="n">df_15</span><span class="p">[</span><span class="s2">&quot;wind_speed&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">clip</span><span class="p">(</span><span class="n">df_15</span><span class="p">[</span><span class="s2">&quot;wind_speed&quot;</span><span class="p">],</span> <span class="mi">0</span><span class="p">,</span> <span class="kc">None</span><span class="p">)</span>
+
+    <span class="k">return</span> <span class="n">df_15</span></div>
+
+
+
+<div class="viewcode-block" id="resample_to_15min">
+<a class="viewcode-back" href="../../api/generated/breos.weather.resample_to_15min.html#breos.weather.resample_to_15min">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">resample_to_15min</span><span class="p">(</span>
+    <span class="n">df_hourly</span><span class="p">:</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">,</span>
+    <span class="n">method</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;makima&quot;</span><span class="p">,</span>
+    <span class="n">non_negative_cols</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">List</span><span class="p">[</span><span class="nb">str</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="n">latitude</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">float</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="n">longitude</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">float</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Resample hourly DataFrame to 15-minute intervals.</span>
+
+<span class="sd">    When latitude/longitude are provided, uses clear-sky scaling for irradiance</span>
+<span class="sd">    columns (GHI, DNI, DHI) to preserve solar physics at sunrise/sunset</span>
+<span class="sd">    transitions. Otherwise falls back to direct interpolation.</span>
+
+<span class="sd">    Supports both TMY column names (ghi, dni, dhi) and Open-Meteo column names</span>
+<span class="sd">    (shortwave_radiation, direct_normal_irradiance, diffuse_radiation).</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        df_hourly: DataFrame with hourly DatetimeIndex</span>
+<span class="sd">        method: Interpolation method (&#39;makima&#39;, &#39;linear&#39;, &#39;cubic&#39;)</span>
+<span class="sd">        non_negative_cols: Columns to clip at zero (auto-detected for solar/wind)</span>
+<span class="sd">        latitude: Location latitude for clear-sky scaling (optional)</span>
+<span class="sd">        longitude: Location longitude for clear-sky scaling (optional)</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        DataFrame with 15-minute intervals</span>
+
+<span class="sd">    Raises:</span>
+<span class="sd">        ValueError: If DataFrame doesn&#39;t have DatetimeIndex</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="c1"># Ensure DatetimeIndex</span>
+    <span class="k">if</span> <span class="ow">not</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">df_hourly</span><span class="o">.</span><span class="n">index</span><span class="p">,</span> <span class="n">pd</span><span class="o">.</span><span class="n">DatetimeIndex</span><span class="p">):</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;DataFrame must have a DatetimeIndex&quot;</span><span class="p">)</span>
+
+    <span class="n">df_hourly</span> <span class="o">=</span> <span class="n">df_hourly</span><span class="o">.</span><span class="n">sort_index</span><span class="p">()</span>
+
+    <span class="c1"># Create target 15-min index</span>
+    <span class="n">target_index</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">date_range</span><span class="p">(</span><span class="n">start</span><span class="o">=</span><span class="n">df_hourly</span><span class="o">.</span><span class="n">index</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">end</span><span class="o">=</span><span class="n">df_hourly</span><span class="o">.</span><span class="n">index</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">],</span> <span class="n">freq</span><span class="o">=</span><span class="s2">&quot;15min&quot;</span><span class="p">)</span>
+
+    <span class="c1"># Convert timestamps to seconds for interpolation</span>
+    <span class="n">x_original</span> <span class="o">=</span> <span class="n">df_hourly</span><span class="o">.</span><span class="n">index</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="s2">&quot;int64&quot;</span><span class="p">)</span> <span class="o">//</span> <span class="mi">10</span><span class="o">**</span><span class="mi">9</span>
+    <span class="n">x_target</span> <span class="o">=</span> <span class="n">target_index</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="s2">&quot;int64&quot;</span><span class="p">)</span> <span class="o">//</span> <span class="mi">10</span><span class="o">**</span><span class="mi">9</span>
+
+    <span class="c1"># Map column names to irradiance type (supports TMY and Open-Meteo conventions)</span>
+    <span class="n">irrad_col_map</span> <span class="o">=</span> <span class="p">{}</span>  <span class="c1"># column_name -&gt; clear-sky component (&#39;ghi&#39;, &#39;dni&#39;, &#39;dhi&#39;)</span>
+    <span class="k">for</span> <span class="n">col</span> <span class="ow">in</span> <span class="n">df_hourly</span><span class="o">.</span><span class="n">columns</span><span class="p">:</span>
+        <span class="n">col_lower</span> <span class="o">=</span> <span class="n">col</span><span class="o">.</span><span class="n">lower</span><span class="p">()</span>
+        <span class="k">if</span> <span class="n">col_lower</span> <span class="ow">in</span> <span class="p">(</span><span class="s2">&quot;ghi&quot;</span><span class="p">,</span> <span class="s2">&quot;shortwave_radiation&quot;</span><span class="p">,</span> <span class="s2">&quot;global_horizontal_irradiance&quot;</span><span class="p">):</span>
+            <span class="n">irrad_col_map</span><span class="p">[</span><span class="n">col</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;ghi&quot;</span>
+        <span class="k">elif</span> <span class="n">col_lower</span> <span class="ow">in</span> <span class="p">(</span><span class="s2">&quot;dni&quot;</span><span class="p">,</span> <span class="s2">&quot;direct_normal_irradiance&quot;</span><span class="p">):</span>
+            <span class="n">irrad_col_map</span><span class="p">[</span><span class="n">col</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;dni&quot;</span>
+        <span class="k">elif</span> <span class="n">col_lower</span> <span class="ow">in</span> <span class="p">(</span><span class="s2">&quot;dhi&quot;</span><span class="p">,</span> <span class="s2">&quot;diffuse_radiation&quot;</span><span class="p">,</span> <span class="s2">&quot;diffuse_horizontal_irradiance&quot;</span><span class="p">):</span>
+            <span class="n">irrad_col_map</span><span class="p">[</span><span class="n">col</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;dhi&quot;</span>
+
+    <span class="c1"># Use clear-sky scaling if location is provided and we found irradiance columns</span>
+    <span class="n">use_clearsky</span> <span class="o">=</span> <span class="n">latitude</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="n">longitude</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="nb">len</span><span class="p">(</span><span class="n">irrad_col_map</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">0</span>
+
+    <span class="n">df_15min</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">(</span><span class="n">index</span><span class="o">=</span><span class="n">target_index</span><span class="p">)</span>
+    <span class="n">epsilon</span> <span class="o">=</span> <span class="mf">5.0</span>  <span class="c1"># Increased epsilon to avoid divide-by-zero spikes near dawn/dusk</span>
+
+    <span class="k">if</span> <span class="n">use_clearsky</span><span class="p">:</span>
+        <span class="n">site</span> <span class="o">=</span> <span class="n">Location</span><span class="p">(</span><span class="n">latitude</span><span class="p">,</span> <span class="n">longitude</span><span class="p">)</span>
+        <span class="n">cs_hourly</span> <span class="o">=</span> <span class="n">site</span><span class="o">.</span><span class="n">get_clearsky</span><span class="p">(</span><span class="n">df_hourly</span><span class="o">.</span><span class="n">index</span><span class="p">)</span>
+        <span class="n">cs_15min</span> <span class="o">=</span> <span class="n">site</span><span class="o">.</span><span class="n">get_clearsky</span><span class="p">(</span><span class="n">target_index</span><span class="p">)</span>
+
+    <span class="c1"># Get numeric columns only</span>
+    <span class="n">numeric_df</span> <span class="o">=</span> <span class="n">df_hourly</span><span class="o">.</span><span class="n">select_dtypes</span><span class="p">(</span><span class="n">include</span><span class="o">=</span><span class="p">[</span><span class="n">np</span><span class="o">.</span><span class="n">number</span><span class="p">])</span>
+
+    <span class="k">for</span> <span class="n">col</span> <span class="ow">in</span> <span class="n">numeric_df</span><span class="o">.</span><span class="n">columns</span><span class="p">:</span>
+        <span class="n">y_original</span> <span class="o">=</span> <span class="n">numeric_df</span><span class="p">[</span><span class="n">col</span><span class="p">]</span><span class="o">.</span><span class="n">values</span>
+
+        <span class="k">if</span> <span class="n">use_clearsky</span> <span class="ow">and</span> <span class="n">col</span> <span class="ow">in</span> <span class="n">irrad_col_map</span><span class="p">:</span>
+            <span class="c1"># Clear-sky scaling: interpolate clearness index, not raw irradiance</span>
+            <span class="n">cs_comp</span> <span class="o">=</span> <span class="n">irrad_col_map</span><span class="p">[</span><span class="n">col</span><span class="p">]</span>
+            <span class="n">k_hourly</span> <span class="o">=</span> <span class="n">y_original</span> <span class="o">/</span> <span class="p">(</span><span class="n">cs_hourly</span><span class="p">[</span><span class="n">cs_comp</span><span class="p">]</span><span class="o">.</span><span class="n">values</span> <span class="o">+</span> <span class="n">epsilon</span><span class="p">)</span>
+
+            <span class="c1"># Clip K multiplier to physically reasonable max (e.g. 1.5x) to avoid massive dawn/dusk spikes</span>
+            <span class="n">k_hourly</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">clip</span><span class="p">(</span><span class="n">k_hourly</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mf">1.5</span><span class="p">)</span>
+
+            <span class="k">if</span> <span class="n">method</span> <span class="o">==</span> <span class="s2">&quot;makima&quot;</span><span class="p">:</span>
+                <span class="n">interp_k</span> <span class="o">=</span> <span class="n">Akima1DInterpolator</span><span class="p">(</span><span class="n">x_original</span><span class="p">,</span> <span class="n">k_hourly</span><span class="p">,</span> <span class="n">method</span><span class="o">=</span><span class="s2">&quot;makima&quot;</span><span class="p">)</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="kn">from</span><span class="w"> </span><span class="nn">scipy.interpolate</span><span class="w"> </span><span class="kn">import</span> <span class="n">interp1d</span>
+
+                <span class="n">interp_k</span> <span class="o">=</span> <span class="n">interp1d</span><span class="p">(</span><span class="n">x_original</span><span class="p">,</span> <span class="n">k_hourly</span><span class="p">,</span> <span class="n">kind</span><span class="o">=</span><span class="n">method</span><span class="p">,</span> <span class="n">fill_value</span><span class="o">=</span><span class="s2">&quot;extrapolate&quot;</span><span class="p">)</span>
+            <span class="n">k_15min</span> <span class="o">=</span> <span class="n">interp_k</span><span class="p">(</span><span class="n">x_target</span><span class="p">)</span>
+            <span class="n">df_15min</span><span class="p">[</span><span class="n">col</span><span class="p">]</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">clip</span><span class="p">(</span><span class="n">k_15min</span> <span class="o">*</span> <span class="n">cs_15min</span><span class="p">[</span><span class="n">cs_comp</span><span class="p">]</span><span class="o">.</span><span class="n">values</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="kc">None</span><span class="p">)</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="c1"># Direct interpolation for non-irradiance columns</span>
+            <span class="k">if</span> <span class="n">method</span> <span class="o">==</span> <span class="s2">&quot;makima&quot;</span><span class="p">:</span>
+                <span class="n">interp</span> <span class="o">=</span> <span class="n">Akima1DInterpolator</span><span class="p">(</span><span class="n">x_original</span><span class="p">,</span> <span class="n">y_original</span><span class="p">,</span> <span class="n">method</span><span class="o">=</span><span class="s2">&quot;makima&quot;</span><span class="p">)</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="kn">from</span><span class="w"> </span><span class="nn">scipy.interpolate</span><span class="w"> </span><span class="kn">import</span> <span class="n">interp1d</span>
+
+                <span class="n">interp</span> <span class="o">=</span> <span class="n">interp1d</span><span class="p">(</span><span class="n">x_original</span><span class="p">,</span> <span class="n">y_original</span><span class="p">,</span> <span class="n">kind</span><span class="o">=</span><span class="n">method</span><span class="p">,</span> <span class="n">fill_value</span><span class="o">=</span><span class="s2">&quot;extrapolate&quot;</span><span class="p">)</span>
+            <span class="n">df_15min</span><span class="p">[</span><span class="n">col</span><span class="p">]</span> <span class="o">=</span> <span class="n">interp</span><span class="p">(</span><span class="n">x_target</span><span class="p">)</span>
+
+    <span class="c1"># Auto-detect non-negative columns (solar/wind) — applies to columns not</span>
+    <span class="c1"># already handled by clear-sky scaling</span>
+    <span class="k">if</span> <span class="n">non_negative_cols</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">non_negative_cols</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="k">for</span> <span class="n">col</span> <span class="ow">in</span> <span class="n">df_15min</span><span class="o">.</span><span class="n">columns</span><span class="p">:</span>
+            <span class="k">if</span> <span class="n">col</span> <span class="ow">in</span> <span class="n">irrad_col_map</span> <span class="ow">and</span> <span class="n">use_clearsky</span><span class="p">:</span>
+                <span class="k">continue</span>  <span class="c1"># already clipped via clear-sky scaling</span>
+            <span class="k">if</span> <span class="nb">any</span><span class="p">(</span><span class="n">x</span> <span class="ow">in</span> <span class="n">col</span><span class="o">.</span><span class="n">lower</span><span class="p">()</span> <span class="k">for</span> <span class="n">x</span> <span class="ow">in</span> <span class="p">[</span><span class="s2">&quot;irrad&quot;</span><span class="p">,</span> <span class="s2">&quot;radiation&quot;</span><span class="p">,</span> <span class="s2">&quot;tilted&quot;</span><span class="p">,</span> <span class="s2">&quot;terrestrial&quot;</span><span class="p">,</span> <span class="s2">&quot;wind&quot;</span><span class="p">,</span> <span class="s2">&quot;speed&quot;</span><span class="p">]):</span>
+                <span class="n">non_negative_cols</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">col</span><span class="p">)</span>
+
+    <span class="c1"># Clip negative values</span>
+    <span class="k">for</span> <span class="n">col</span> <span class="ow">in</span> <span class="n">non_negative_cols</span><span class="p">:</span>
+        <span class="k">if</span> <span class="n">col</span> <span class="ow">in</span> <span class="n">df_15min</span><span class="o">.</span><span class="n">columns</span><span class="p">:</span>
+            <span class="n">df_15min</span><span class="p">[</span><span class="n">col</span><span class="p">]</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">clip</span><span class="p">(</span><span class="n">df_15min</span><span class="p">[</span><span class="n">col</span><span class="p">],</span> <span class="mi">0</span><span class="p">,</span> <span class="kc">None</span><span class="p">)</span>
+
+    <span class="k">return</span> <span class="n">df_15min</span></div>
+
+
+
+<div class="viewcode-block" id="resample_to_hourly">
+<a class="viewcode-back" href="../../api/generated/breos.weather.resample_to_hourly.html#breos.weather.resample_to_hourly">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">resample_to_hourly</span><span class="p">(</span><span class="n">df_15min</span><span class="p">:</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">,</span> <span class="n">agg_method</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;mean&quot;</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Resample 15-minute DataFrame to hourly intervals.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        df_15min: DataFrame with 15-minute DatetimeIndex</span>
+<span class="sd">        agg_method: Aggregation method (&#39;mean&#39;, &#39;sum&#39;, &#39;first&#39;, &#39;last&#39;)</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        DataFrame with hourly intervals</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">if</span> <span class="n">agg_method</span> <span class="o">==</span> <span class="s2">&quot;mean&quot;</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">df_15min</span><span class="o">.</span><span class="n">resample</span><span class="p">(</span><span class="s2">&quot;h&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">mean</span><span class="p">()</span>
+    <span class="k">elif</span> <span class="n">agg_method</span> <span class="o">==</span> <span class="s2">&quot;sum&quot;</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">df_15min</span><span class="o">.</span><span class="n">resample</span><span class="p">(</span><span class="s2">&quot;h&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">sum</span><span class="p">()</span>
+    <span class="k">elif</span> <span class="n">agg_method</span> <span class="o">==</span> <span class="s2">&quot;first&quot;</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">df_15min</span><span class="o">.</span><span class="n">resample</span><span class="p">(</span><span class="s2">&quot;h&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">first</span><span class="p">()</span>
+    <span class="k">elif</span> <span class="n">agg_method</span> <span class="o">==</span> <span class="s2">&quot;last&quot;</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">df_15min</span><span class="o">.</span><span class="n">resample</span><span class="p">(</span><span class="s2">&quot;h&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">last</span><span class="p">()</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Unknown aggregation method: </span><span class="si">{</span><span class="n">agg_method</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span></div>
+
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">csv_15min_to_hourly</span><span class="p">(</span>
+    <span class="n">input_file_name</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
+    <span class="n">output_file_name</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
+    <span class="n">datetime_column</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;Datetime&quot;</span><span class="p">,</span>
+    <span class="n">datetime_format</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;</span><span class="si">%d</span><span class="s2">/%m/%Y %H:%M&quot;</span><span class="p">,</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Optional</span><span class="p">[</span><span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">]:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Convert 15-minute interval CSV data to hourly data.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        input_file_name: Path to input CSV file with 15-minute data</span>
+<span class="sd">        output_file_name: Path for output CSV file with hourly data</span>
+<span class="sd">        datetime_column: Name of the datetime column</span>
+<span class="sd">        datetime_format: Format of the datetime string</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        DataFrame with hourly aggregated data, or None on error</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">try</span><span class="p">:</span>
+        <span class="n">df</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">read_csv</span><span class="p">(</span><span class="n">input_file_name</span><span class="p">)</span>
+        <span class="n">df</span><span class="p">[</span><span class="n">datetime_column</span><span class="p">]</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">to_datetime</span><span class="p">(</span><span class="n">df</span><span class="p">[</span><span class="n">datetime_column</span><span class="p">],</span> <span class="nb">format</span><span class="o">=</span><span class="n">datetime_format</span><span class="p">)</span>
+        <span class="n">df</span><span class="o">.</span><span class="n">set_index</span><span class="p">(</span><span class="n">datetime_column</span><span class="p">,</span> <span class="n">inplace</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+
+        <span class="n">hourly_df</span> <span class="o">=</span> <span class="n">df</span><span class="o">.</span><span class="n">resample</span><span class="p">(</span><span class="s2">&quot;h&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">sum</span><span class="p">()</span>
+        <span class="n">hourly_df</span> <span class="o">=</span> <span class="n">hourly_df</span><span class="o">.</span><span class="n">reset_index</span><span class="p">()</span>
+
+        <span class="n">hourly_df</span><span class="o">.</span><span class="n">to_csv</span><span class="p">(</span><span class="n">output_file_name</span><span class="p">,</span> <span class="n">index</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+
+        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Successfully converted </span><span class="si">{</span><span class="n">input_file_name</span><span class="si">}</span><span class="s2"> to hourly data&quot;</span><span class="p">)</span>
+        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Output saved to: </span><span class="si">{</span><span class="n">output_file_name</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Original shape: </span><span class="si">{</span><span class="n">df</span><span class="o">.</span><span class="n">shape</span><span class="si">}</span><span class="s2"> -&gt; Hourly shape: </span><span class="si">{</span><span class="n">hourly_df</span><span class="o">.</span><span class="n">shape</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+
+        <span class="k">return</span> <span class="n">hourly_df</span>
+
+    <span class="k">except</span> <span class="ne">Exception</span> <span class="k">as</span> <span class="n">e</span><span class="p">:</span>
+        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Error processing file: </span><span class="si">{</span><span class="n">e</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+        <span class="k">return</span> <span class="kc">None</span>
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">csv_hourly_to_15min</span><span class="p">(</span>
+    <span class="n">input_file_name</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
+    <span class="n">output_file_name</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
+    <span class="n">datetime_column</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;Datetime&quot;</span><span class="p">,</span>
+    <span class="n">datetime_format</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;</span><span class="si">%d</span><span class="s2">/%m/%Y %H:%M&quot;</span><span class="p">,</span>
+    <span class="n">non_negative_cols</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">List</span><span class="p">[</span><span class="nb">str</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="n">latitude</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">float</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="n">longitude</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">float</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Optional</span><span class="p">[</span><span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">]:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Convert hourly CSV data to 15-minute intervals using Makima interpolation.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        input_file_name: Path to input CSV file with hourly data</span>
+<span class="sd">        output_file_name: Path for output CSV file with 15-minute data</span>
+<span class="sd">        datetime_column: Name of the datetime column</span>
+<span class="sd">        datetime_format: Format of the datetime string</span>
+<span class="sd">        non_negative_cols: Columns to force &gt;= 0</span>
+<span class="sd">        latitude: Location latitude for clear-sky scaling of irradiance (optional)</span>
+<span class="sd">        longitude: Location longitude for clear-sky scaling of irradiance (optional)</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        DataFrame with 15-minute interpolated data, or None on error</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">try</span><span class="p">:</span>
+        <span class="n">df</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">read_csv</span><span class="p">(</span><span class="n">input_file_name</span><span class="p">)</span>
+        <span class="n">df</span><span class="p">[</span><span class="n">datetime_column</span><span class="p">]</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">to_datetime</span><span class="p">(</span><span class="n">df</span><span class="p">[</span><span class="n">datetime_column</span><span class="p">],</span> <span class="nb">format</span><span class="o">=</span><span class="n">datetime_format</span><span class="p">)</span>
+        <span class="n">df</span><span class="o">.</span><span class="n">set_index</span><span class="p">(</span><span class="n">datetime_column</span><span class="p">,</span> <span class="n">inplace</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+        <span class="n">df</span> <span class="o">=</span> <span class="n">df</span><span class="o">.</span><span class="n">sort_index</span><span class="p">()</span>
+
+        <span class="c1"># Use the resample function</span>
+        <span class="n">df_15min</span> <span class="o">=</span> <span class="n">resample_to_15min</span><span class="p">(</span>
+            <span class="n">df</span><span class="p">,</span> <span class="n">method</span><span class="o">=</span><span class="s2">&quot;makima&quot;</span><span class="p">,</span> <span class="n">non_negative_cols</span><span class="o">=</span><span class="n">non_negative_cols</span><span class="p">,</span> <span class="n">latitude</span><span class="o">=</span><span class="n">latitude</span><span class="p">,</span> <span class="n">longitude</span><span class="o">=</span><span class="n">longitude</span>
+        <span class="p">)</span>
+
+        <span class="c1"># Reset index for saving</span>
+        <span class="n">df_15min</span> <span class="o">=</span> <span class="n">df_15min</span><span class="o">.</span><span class="n">reset_index</span><span class="p">()</span><span class="o">.</span><span class="n">rename</span><span class="p">(</span><span class="n">columns</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;index&quot;</span><span class="p">:</span> <span class="n">datetime_column</span><span class="p">})</span>
+        <span class="n">df_15min</span><span class="o">.</span><span class="n">to_csv</span><span class="p">(</span><span class="n">output_file_name</span><span class="p">,</span> <span class="n">index</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+
+        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Successfully converted </span><span class="si">{</span><span class="n">input_file_name</span><span class="si">}</span><span class="s2"> to 15-min data (Makima)&quot;</span><span class="p">)</span>
+        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Output saved to: </span><span class="si">{</span><span class="n">output_file_name</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Original shape: </span><span class="si">{</span><span class="n">df</span><span class="o">.</span><span class="n">shape</span><span class="si">}</span><span class="s2"> -&gt; 15-min shape: </span><span class="si">{</span><span class="n">df_15min</span><span class="o">.</span><span class="n">shape</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+
+        <span class="k">return</span> <span class="n">df_15min</span>
+
+    <span class="k">except</span> <span class="ne">Exception</span> <span class="k">as</span> <span class="n">e</span><span class="p">:</span>
+        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Error processing file: </span><span class="si">{</span><span class="n">e</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+        <span class="k">return</span> <span class="kc">None</span>
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">select_random_year_and_replace_datetime</span><span class="p">(</span><span class="n">csv_file_path</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">target_year</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">2025</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tuple</span><span class="p">[</span><span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">,</span> <span class="nb">int</span><span class="p">]:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Load weather data, randomly select a year, and replace datetime with target year.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        csv_file_path: Path to the CSV file</span>
+<span class="sd">        target_year: Year to replace the selected year&#39;s datetime with</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        Tuple of (DataFrame with target year dates, selected_year)</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">df</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">read_csv</span><span class="p">(</span><span class="n">csv_file_path</span><span class="p">)</span>
+
+    <span class="c1"># Parse datetime with format detection</span>
+    <span class="k">try</span><span class="p">:</span>
+        <span class="n">df</span><span class="p">[</span><span class="s2">&quot;date&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">to_datetime</span><span class="p">(</span><span class="n">df</span><span class="p">[</span><span class="s2">&quot;date&quot;</span><span class="p">],</span> <span class="nb">format</span><span class="o">=</span><span class="s2">&quot;ISO8601&quot;</span><span class="p">)</span>
+    <span class="k">except</span> <span class="ne">ValueError</span><span class="p">:</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="n">df</span><span class="p">[</span><span class="s2">&quot;date&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">to_datetime</span><span class="p">(</span><span class="n">df</span><span class="p">[</span><span class="s2">&quot;date&quot;</span><span class="p">],</span> <span class="nb">format</span><span class="o">=</span><span class="s2">&quot;</span><span class="si">%d</span><span class="s2">/%m/%Y %H:%M&quot;</span><span class="p">)</span>
+        <span class="k">except</span> <span class="ne">ValueError</span><span class="p">:</span>
+            <span class="n">df</span><span class="p">[</span><span class="s2">&quot;date&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">to_datetime</span><span class="p">(</span><span class="n">df</span><span class="p">[</span><span class="s2">&quot;date&quot;</span><span class="p">],</span> <span class="nb">format</span><span class="o">=</span><span class="s2">&quot;mixed&quot;</span><span class="p">)</span>
+
+    <span class="c1"># Extract year and get available years</span>
+    <span class="n">df</span><span class="p">[</span><span class="s2">&quot;year&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">df</span><span class="p">[</span><span class="s2">&quot;date&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">dt</span><span class="o">.</span><span class="n">year</span>
+    <span class="n">available_years</span> <span class="o">=</span> <span class="n">df</span><span class="p">[</span><span class="s2">&quot;year&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">unique</span><span class="p">()</span>
+
+    <span class="c1"># Randomly select a year</span>
+    <span class="n">selected_year</span> <span class="o">=</span> <span class="n">random</span><span class="o">.</span><span class="n">choice</span><span class="p">(</span><span class="n">available_years</span><span class="p">)</span>
+
+    <span class="c1"># Filter data for selected year</span>
+    <span class="n">selected_year_data</span> <span class="o">=</span> <span class="n">df</span><span class="p">[</span><span class="n">df</span><span class="p">[</span><span class="s2">&quot;year&quot;</span><span class="p">]</span> <span class="o">==</span> <span class="n">selected_year</span><span class="p">]</span><span class="o">.</span><span class="n">copy</span><span class="p">()</span>
+
+    <span class="c1"># Handle leap years by removing Feb 29</span>
+    <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">selected_year_data</span><span class="p">)</span> <span class="o">==</span> <span class="mi">8784</span><span class="p">:</span>  <span class="c1"># Leap year</span>
+        <span class="n">feb_29_mask</span> <span class="o">=</span> <span class="p">(</span><span class="n">selected_year_data</span><span class="p">[</span><span class="s2">&quot;date&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">dt</span><span class="o">.</span><span class="n">month</span> <span class="o">==</span> <span class="mi">2</span><span class="p">)</span> <span class="o">&amp;</span> <span class="p">(</span><span class="n">selected_year_data</span><span class="p">[</span><span class="s2">&quot;date&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">dt</span><span class="o">.</span><span class="n">day</span> <span class="o">==</span> <span class="mi">29</span><span class="p">)</span>
+        <span class="n">selected_year_data</span> <span class="o">=</span> <span class="n">selected_year_data</span><span class="p">[</span><span class="o">~</span><span class="n">feb_29_mask</span><span class="p">]</span>
+
+    <span class="c1"># Validate</span>
+    <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">selected_year_data</span><span class="p">)</span> <span class="o">!=</span> <span class="mi">8760</span><span class="p">:</span>
+        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Warning: Year </span><span class="si">{</span><span class="n">selected_year</span><span class="si">}</span><span class="s2"> has </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">selected_year_data</span><span class="p">)</span><span class="si">}</span><span class="s2"> hours, not 8760&quot;</span><span class="p">)</span>
+
+    <span class="c1"># Replace year in datetime</span>
+    <span class="n">year_diff</span> <span class="o">=</span> <span class="n">target_year</span> <span class="o">-</span> <span class="n">selected_year</span>
+    <span class="n">selected_year_data</span><span class="p">[</span><span class="s2">&quot;date&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">selected_year_data</span><span class="p">[</span><span class="s2">&quot;date&quot;</span><span class="p">]</span> <span class="o">+</span> <span class="n">pd</span><span class="o">.</span><span class="n">DateOffset</span><span class="p">(</span><span class="n">years</span><span class="o">=</span><span class="n">year_diff</span><span class="p">)</span>
+
+    <span class="c1"># Cleanup</span>
+    <span class="n">selected_year_data</span> <span class="o">=</span> <span class="n">selected_year_data</span><span class="o">.</span><span class="n">drop</span><span class="p">(</span><span class="s2">&quot;year&quot;</span><span class="p">,</span> <span class="n">axis</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+    <span class="n">selected_year_data</span> <span class="o">=</span> <span class="n">selected_year_data</span><span class="o">.</span><span class="n">reset_index</span><span class="p">(</span><span class="n">drop</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+
+    <span class="k">return</span> <span class="n">selected_year_data</span><span class="p">,</span> <span class="n">selected_year</span>
+
+
+<div class="viewcode-block" id="preload_weather_by_year">
+<a class="viewcode-back" href="../../api/generated/breos.weather.preload_weather_by_year.html#breos.weather.preload_weather_by_year">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">preload_weather_by_year</span><span class="p">(</span>
+    <span class="n">csv_file_path</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
+    <span class="n">target_year</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">2025</span><span class="p">,</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Dict</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">]:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Pre-load weather CSV once and split into per-year DataFrames.</span>
+
+<span class="sd">    Each year&#39;s dates are remapped to *target_year* so the resulting</span>
+<span class="sd">    DataFrames can be used directly in simulation (same datetime grid as</span>
+<span class="sd">    ``select_random_year_and_replace_datetime`` would produce).</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        csv_file_path: Path to the multi-year weather CSV</span>
+<span class="sd">        target_year: Calendar year to remap all dates to</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        Dict mapping original year → DataFrame with target-year dates, indexed by &#39;date&#39;</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">df</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">read_csv</span><span class="p">(</span><span class="n">csv_file_path</span><span class="p">)</span>
+
+    <span class="c1"># Parse datetime once</span>
+    <span class="k">try</span><span class="p">:</span>
+        <span class="n">df</span><span class="p">[</span><span class="s2">&quot;date&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">to_datetime</span><span class="p">(</span><span class="n">df</span><span class="p">[</span><span class="s2">&quot;date&quot;</span><span class="p">],</span> <span class="nb">format</span><span class="o">=</span><span class="s2">&quot;ISO8601&quot;</span><span class="p">)</span>
+    <span class="k">except</span> <span class="ne">ValueError</span><span class="p">:</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="n">df</span><span class="p">[</span><span class="s2">&quot;date&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">to_datetime</span><span class="p">(</span><span class="n">df</span><span class="p">[</span><span class="s2">&quot;date&quot;</span><span class="p">],</span> <span class="nb">format</span><span class="o">=</span><span class="s2">&quot;</span><span class="si">%d</span><span class="s2">/%m/%Y %H:%M&quot;</span><span class="p">)</span>
+        <span class="k">except</span> <span class="ne">ValueError</span><span class="p">:</span>
+            <span class="n">df</span><span class="p">[</span><span class="s2">&quot;date&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">to_datetime</span><span class="p">(</span><span class="n">df</span><span class="p">[</span><span class="s2">&quot;date&quot;</span><span class="p">],</span> <span class="nb">format</span><span class="o">=</span><span class="s2">&quot;mixed&quot;</span><span class="p">)</span>
+
+    <span class="n">df</span><span class="p">[</span><span class="s2">&quot;year&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">df</span><span class="p">[</span><span class="s2">&quot;date&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">dt</span><span class="o">.</span><span class="n">year</span>
+    <span class="n">available_years</span> <span class="o">=</span> <span class="n">df</span><span class="p">[</span><span class="s2">&quot;year&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">unique</span><span class="p">()</span>
+
+    <span class="n">result</span><span class="p">:</span> <span class="n">Dict</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">]</span> <span class="o">=</span> <span class="p">{}</span>
+    <span class="k">for</span> <span class="n">yr</span> <span class="ow">in</span> <span class="n">available_years</span><span class="p">:</span>
+        <span class="n">yr_data</span> <span class="o">=</span> <span class="n">df</span><span class="p">[</span><span class="n">df</span><span class="p">[</span><span class="s2">&quot;year&quot;</span><span class="p">]</span> <span class="o">==</span> <span class="n">yr</span><span class="p">]</span><span class="o">.</span><span class="n">copy</span><span class="p">()</span>
+
+        <span class="c1"># Handle leap years</span>
+        <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">yr_data</span><span class="p">)</span> <span class="o">==</span> <span class="mi">8784</span><span class="p">:</span>
+            <span class="n">feb_29_mask</span> <span class="o">=</span> <span class="p">(</span><span class="n">yr_data</span><span class="p">[</span><span class="s2">&quot;date&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">dt</span><span class="o">.</span><span class="n">month</span> <span class="o">==</span> <span class="mi">2</span><span class="p">)</span> <span class="o">&amp;</span> <span class="p">(</span><span class="n">yr_data</span><span class="p">[</span><span class="s2">&quot;date&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">dt</span><span class="o">.</span><span class="n">day</span> <span class="o">==</span> <span class="mi">29</span><span class="p">)</span>
+            <span class="n">yr_data</span> <span class="o">=</span> <span class="n">yr_data</span><span class="p">[</span><span class="o">~</span><span class="n">feb_29_mask</span><span class="p">]</span>
+
+        <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">yr_data</span><span class="p">)</span> <span class="o">!=</span> <span class="mi">8760</span><span class="p">:</span>
+            <span class="k">continue</span>  <span class="c1"># skip incomplete years</span>
+
+        <span class="c1"># Remap to target year</span>
+        <span class="n">year_diff</span> <span class="o">=</span> <span class="n">target_year</span> <span class="o">-</span> <span class="n">yr</span>
+        <span class="n">yr_data</span><span class="p">[</span><span class="s2">&quot;date&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">yr_data</span><span class="p">[</span><span class="s2">&quot;date&quot;</span><span class="p">]</span> <span class="o">+</span> <span class="n">pd</span><span class="o">.</span><span class="n">DateOffset</span><span class="p">(</span><span class="n">years</span><span class="o">=</span><span class="n">year_diff</span><span class="p">)</span>
+        <span class="n">yr_data</span> <span class="o">=</span> <span class="n">yr_data</span><span class="o">.</span><span class="n">drop</span><span class="p">(</span><span class="s2">&quot;year&quot;</span><span class="p">,</span> <span class="n">axis</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span><span class="o">.</span><span class="n">reset_index</span><span class="p">(</span><span class="n">drop</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+        <span class="n">result</span><span class="p">[</span><span class="nb">int</span><span class="p">(</span><span class="n">yr</span><span class="p">)]</span> <span class="o">=</span> <span class="n">yr_data</span>
+
+    <span class="k">return</span> <span class="n">result</span></div>
+
+
+
+<div class="viewcode-block" id="fetch_tmy_nsrdb">
+<a class="viewcode-back" href="../../api/generated/breos.weather.fetch_tmy_nsrdb.html#breos.weather.fetch_tmy_nsrdb">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">fetch_tmy_nsrdb</span><span class="p">(</span>
+    <span class="n">latitude</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
+    <span class="n">longitude</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
+    <span class="n">api_key</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="n">email</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="n">year</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;tmy&quot;</span><span class="p">,</span>
+    <span class="n">location_name</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="n">freq</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;h&quot;</span><span class="p">,</span>
+    <span class="n">save_to_file</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tuple</span><span class="p">[</span><span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">,</span> <span class="nb">dict</span><span class="p">]:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Fetch TMY data from NREL&#39;s NSRDB (National Solar Radiation Database) via pvlib.</span>
+
+<span class="sd">    Uses pvlib.iotools.get_nsrdb_psm4_tmy (PSM4 API).</span>
+<span class="sd">    Requires NREL_API_KEY and NREL_EMAIL environment variables, or pass them</span>
+<span class="sd">    directly. Get a free key at https://developer.nrel.gov/signup/</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        latitude: Latitude of the location</span>
+<span class="sd">        longitude: Longitude of the location</span>
+<span class="sd">        api_key: NREL API key (falls back to NREL_API_KEY env var)</span>
+<span class="sd">        email: Email for NREL API (falls back to NREL_EMAIL env var)</span>
+<span class="sd">        year: TMY variant — &#39;tmy&#39; for TMY, or a specific year string like &#39;2020&#39;</span>
+<span class="sd">        location_name: Location name for the output filename</span>
+<span class="sd">        freq: Output frequency (&#39;h&#39; for hourly, &#39;15min&#39; for 15-minute)</span>
+<span class="sd">        save_to_file: Whether to save the data to CSV</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        Tuple of (weather DataFrame, metadata dict)</span>
+
+<span class="sd">    Raises:</span>
+<span class="sd">        ValueError: If API key or email not provided</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">api_key</span> <span class="o">=</span> <span class="n">api_key</span> <span class="ow">or</span> <span class="n">os</span><span class="o">.</span><span class="n">environ</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;NREL_API_KEY&quot;</span><span class="p">)</span>
+    <span class="n">email</span> <span class="o">=</span> <span class="n">email</span> <span class="ow">or</span> <span class="n">os</span><span class="o">.</span><span class="n">environ</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;NREL_EMAIL&quot;</span><span class="p">)</span>
+
+    <span class="k">if</span> <span class="ow">not</span> <span class="n">api_key</span> <span class="ow">or</span> <span class="ow">not</span> <span class="n">email</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+            <span class="s2">&quot;NREL API key and email are required. Set NREL_API_KEY and NREL_EMAIL &quot;</span>
+            <span class="s2">&quot;environment variables or pass them directly.&quot;</span>
+        <span class="p">)</span>
+
+    <span class="n">df</span><span class="p">,</span> <span class="n">metadata</span> <span class="o">=</span> <span class="n">pvlib</span><span class="o">.</span><span class="n">iotools</span><span class="o">.</span><span class="n">get_nsrdb_psm4_tmy</span><span class="p">(</span>
+        <span class="n">latitude</span><span class="o">=</span><span class="n">latitude</span><span class="p">,</span>
+        <span class="n">longitude</span><span class="o">=</span><span class="n">longitude</span><span class="p">,</span>
+        <span class="n">api_key</span><span class="o">=</span><span class="n">api_key</span><span class="p">,</span>
+        <span class="n">email</span><span class="o">=</span><span class="n">email</span><span class="p">,</span>
+        <span class="n">year</span><span class="o">=</span><span class="n">year</span><span class="p">,</span>
+        <span class="n">map_variables</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+    <span class="p">)</span>
+
+    <span class="c1"># Keep only the columns we need (map_variables=True gives pvlib standard names)</span>
+    <span class="n">wanted</span> <span class="o">=</span> <span class="p">[</span><span class="n">c</span> <span class="k">for</span> <span class="n">c</span> <span class="ow">in</span> <span class="p">(</span><span class="s2">&quot;ghi&quot;</span><span class="p">,</span> <span class="s2">&quot;dni&quot;</span><span class="p">,</span> <span class="s2">&quot;dhi&quot;</span><span class="p">,</span> <span class="s2">&quot;temp_air&quot;</span><span class="p">,</span> <span class="s2">&quot;wind_speed&quot;</span><span class="p">)</span> <span class="k">if</span> <span class="n">c</span> <span class="ow">in</span> <span class="n">df</span><span class="o">.</span><span class="n">columns</span><span class="p">]</span>
+    <span class="n">df</span> <span class="o">=</span> <span class="n">df</span><span class="p">[</span><span class="n">wanted</span><span class="p">]</span><span class="o">.</span><span class="n">copy</span><span class="p">()</span>
+
+    <span class="c1"># Resample to 15-min if requested</span>
+    <span class="k">if</span> <span class="n">freq</span> <span class="o">==</span> <span class="s2">&quot;15min&quot;</span><span class="p">:</span>
+        <span class="n">df</span> <span class="o">=</span> <span class="n">resample_to_15min</span><span class="p">(</span><span class="n">df</span><span class="p">,</span> <span class="n">method</span><span class="o">=</span><span class="s2">&quot;makima&quot;</span><span class="p">,</span> <span class="n">latitude</span><span class="o">=</span><span class="n">latitude</span><span class="p">,</span> <span class="n">longitude</span><span class="o">=</span><span class="n">longitude</span><span class="p">)</span>
+
+    <span class="k">if</span> <span class="n">save_to_file</span> <span class="ow">and</span> <span class="n">location_name</span><span class="p">:</span>
+        <span class="n">loc_slug</span> <span class="o">=</span> <span class="n">safe_path_slug</span><span class="p">(</span><span class="n">location_name</span><span class="p">)</span>
+        <span class="n">vintage</span> <span class="o">=</span> <span class="n">safe_path_slug</span><span class="p">(</span><span class="n">year</span><span class="p">)</span> <span class="k">if</span> <span class="n">year</span> <span class="o">!=</span> <span class="s2">&quot;tmy&quot;</span> <span class="k">else</span> <span class="s2">&quot;tmy&quot;</span>
+        <span class="n">filename</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">&quot;weather/</span><span class="si">{</span><span class="n">loc_slug</span><span class="si">}</span><span class="s2">_tmy_</span><span class="si">{</span><span class="n">vintage</span><span class="si">}</span><span class="s2">_nsrdb.csv&quot;</span>
+        <span class="n">os</span><span class="o">.</span><span class="n">makedirs</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">dirname</span><span class="p">(</span><span class="n">filename</span><span class="p">),</span> <span class="n">exist_ok</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+        <span class="n">df</span><span class="o">.</span><span class="n">to_csv</span><span class="p">(</span><span class="n">filename</span><span class="p">)</span>
+        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Saved NSRDB data to </span><span class="si">{</span><span class="n">filename</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+
+    <span class="k">return</span> <span class="n">df</span><span class="p">,</span> <span class="n">metadata</span></div>
+
+
+
+<div class="viewcode-block" id="read_epw_file">
+<a class="viewcode-back" href="../../api/generated/breos.weather.read_epw_file.html#breos.weather.read_epw_file">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">read_epw_file</span><span class="p">(</span>
+    <span class="n">filepath</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">freq</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;h&quot;</span><span class="p">,</span> <span class="n">latitude</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">float</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">longitude</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">float</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Read an EPW (EnergyPlus Weather) file and return standardized weather DataFrame.</span>
+
+<span class="sd">    EPW files can be downloaded from https://climate.onebuilding.org/</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        filepath: Path to the .epw file</span>
+<span class="sd">        freq: Output frequency (&#39;h&#39; for hourly, &#39;15min&#39; for 15-minute)</span>
+<span class="sd">        latitude: Override latitude for clear-sky scaling (auto-detected from EPW if None)</span>
+<span class="sd">        longitude: Override longitude for clear-sky scaling (auto-detected from EPW if None)</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        DataFrame with standardized column names (ghi, dni, dhi, temp_air, wind_speed)</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">df</span><span class="p">,</span> <span class="n">meta</span> <span class="o">=</span> <span class="n">pvlib</span><span class="o">.</span><span class="n">iotools</span><span class="o">.</span><span class="n">read_epw</span><span class="p">(</span><span class="n">filepath</span><span class="p">)</span>
+
+    <span class="c1"># Standardize column names</span>
+    <span class="n">rename_map</span> <span class="o">=</span> <span class="p">{</span>
+        <span class="s2">&quot;ghi&quot;</span><span class="p">:</span> <span class="s2">&quot;ghi&quot;</span><span class="p">,</span>
+        <span class="s2">&quot;dni&quot;</span><span class="p">:</span> <span class="s2">&quot;dni&quot;</span><span class="p">,</span>
+        <span class="s2">&quot;dhi&quot;</span><span class="p">:</span> <span class="s2">&quot;dhi&quot;</span><span class="p">,</span>
+        <span class="s2">&quot;temp_air&quot;</span><span class="p">:</span> <span class="s2">&quot;temp_air&quot;</span><span class="p">,</span>
+        <span class="s2">&quot;wind_speed&quot;</span><span class="p">:</span> <span class="s2">&quot;wind_speed&quot;</span><span class="p">,</span>
+    <span class="p">}</span>
+    <span class="n">available</span> <span class="o">=</span> <span class="p">{</span><span class="n">k</span><span class="p">:</span> <span class="n">v</span> <span class="k">for</span> <span class="n">k</span><span class="p">,</span> <span class="n">v</span> <span class="ow">in</span> <span class="n">rename_map</span><span class="o">.</span><span class="n">items</span><span class="p">()</span> <span class="k">if</span> <span class="n">k</span> <span class="ow">in</span> <span class="n">df</span><span class="o">.</span><span class="n">columns</span><span class="p">}</span>
+    <span class="n">df</span> <span class="o">=</span> <span class="n">df</span><span class="p">[</span><span class="nb">list</span><span class="p">(</span><span class="n">available</span><span class="o">.</span><span class="n">keys</span><span class="p">())]</span><span class="o">.</span><span class="n">rename</span><span class="p">(</span><span class="n">columns</span><span class="o">=</span><span class="n">available</span><span class="p">)</span>
+
+    <span class="c1"># Use EPW metadata for coordinates if not provided</span>
+    <span class="k">if</span> <span class="n">latitude</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">latitude</span> <span class="o">=</span> <span class="n">meta</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;latitude&quot;</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">longitude</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">longitude</span> <span class="o">=</span> <span class="n">meta</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;longitude&quot;</span><span class="p">)</span>
+
+    <span class="c1"># Resample to 15-min if requested</span>
+    <span class="k">if</span> <span class="n">freq</span> <span class="o">==</span> <span class="s2">&quot;15min&quot;</span><span class="p">:</span>
+        <span class="n">df</span> <span class="o">=</span> <span class="n">resample_to_15min</span><span class="p">(</span><span class="n">df</span><span class="p">,</span> <span class="n">method</span><span class="o">=</span><span class="s2">&quot;makima&quot;</span><span class="p">,</span> <span class="n">latitude</span><span class="o">=</span><span class="n">latitude</span><span class="p">,</span> <span class="n">longitude</span><span class="o">=</span><span class="n">longitude</span><span class="p">)</span>
+
+    <span class="k">return</span> <span class="n">df</span></div>
+
+
+
+<div class="viewcode-block" id="extract_ambient_temperature">
+<a class="viewcode-back" href="../../api/generated/breos.weather.extract_ambient_temperature.html#breos.weather.extract_ambient_temperature">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">extract_ambient_temperature</span><span class="p">(</span><span class="n">weather_df</span><span class="p">:</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Optional</span><span class="p">[</span><span class="n">pd</span><span class="o">.</span><span class="n">Series</span><span class="p">]:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Extract hourly ambient temperature from a weather DataFrame.</span>
+
+<span class="sd">    Tries known column names in order of preference:</span>
+<span class="sd">    - &#39;temp_air&#39;       — PVGIS TMY (pvlib standard name)</span>
+<span class="sd">    - &#39;temperature_2m&#39; — Open-Meteo historical</span>
+<span class="sd">    - &#39;temp&#39;           — generic fallback</span>
+<span class="sd">    - &#39;air_temperature&#39;— alternative naming</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        pd.Series of temperatures, or None if no recognised column found.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">for</span> <span class="n">col</span> <span class="ow">in</span> <span class="p">(</span><span class="s2">&quot;temp_air&quot;</span><span class="p">,</span> <span class="s2">&quot;temperature_2m&quot;</span><span class="p">,</span> <span class="s2">&quot;temp&quot;</span><span class="p">,</span> <span class="s2">&quot;air_temperature&quot;</span><span class="p">):</span>
+        <span class="k">if</span> <span class="n">col</span> <span class="ow">in</span> <span class="n">weather_df</span><span class="o">.</span><span class="n">columns</span><span class="p">:</span>
+            <span class="k">return</span> <span class="n">weather_df</span><span class="p">[</span><span class="n">col</span><span class="p">]</span>
+    <span class="k">return</span> <span class="kc">None</span></div>
+
+</pre></div>
+
+                </article>
+              
+              
+              
+              
+              
+            </div>
+            
+            
+              
+            
+          </div>
+          <footer class="bd-footer-content">
+            
+          </footer>
+        
+      </main>
+    </div>
+  </div>
+  
+  <!-- Scripts loaded after <body> so the DOM is not blocked -->
+  <script defer src="../../_static/scripts/bootstrap.js?digest=55c26ed414f5f8a31ebb"></script>
+<script defer src="../../_static/scripts/pydata-sphinx-theme.js?digest=55c26ed414f5f8a31ebb"></script>
+
+  <footer class="bd-footer">
+<div class="bd-footer__inner bd-page-width">
+  
+    <div class="footer-items__start">
+      
+        <div class="footer-item">
+
+  <p class="copyright">
+    
+      © Copyright 2026, Leonardo Rodrigues.
+      <br/>
+    
+  </p>
+</div>
+      
+    </div>
+  
+  
+  
+    <div class="footer-items__end">
+      
+        <div class="footer-item">
+
+  <p class="sphinx-version">
+    Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 9.1.0.
+    <br/>
+  </p>
+</div>
+      
+        <div class="footer-item">
+<p class="theme-version">
+  <!-- # L10n: Setting the PST URL as an argument as this does not need to be localized -->
+  Built with the <a href="https://pydata-sphinx-theme.readthedocs.io/en/stable/index.html">PyData Sphinx Theme</a> 0.17.1.
+</p></div>
+      
+    </div>
+  
+</div>
+
+  </footer>
+  </body>
+</html>
