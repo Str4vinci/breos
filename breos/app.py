@@ -24,7 +24,7 @@ import numpy as np
 import pandas as pd
 from pvlib.location import Location
 
-from breos.battery import BatteryConfig, apply_indoor_temperature_model, simulate_energy_balance
+from breos.battery import BatteryConfig, simulate_energy_balance
 from breos.economics import (
     BATTERY_REPLACEMENT_COST_PER_KWH,
     CostParams,
@@ -45,8 +45,8 @@ from breos.solar import (
 from breos.solar import (
     default_azimuth as default_azimuth_fn,
 )
-from breos.utils import get_hours_per_step
-from breos.weather import extract_ambient_temperature, fetch_tmy_weather_data, load_weather, resample_to_15min
+from breos.utils import get_hours_per_step, remap_datetime_index_years
+from breos.weather import build_battery_temperature_series, fetch_tmy_weather_data, load_weather, resample_to_15min
 
 _CONFIGS_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "configs")
 
@@ -102,11 +102,13 @@ def _remap_tmy_year(df: pd.DataFrame, target_year: int) -> pd.DataFrame:
     offset = target_year - dominant_year
     if offset == 0:
         return df
-    new_idx = idx_utc.map(lambda dt: dt.replace(year=dt.year + offset))
+    remapped = df.copy()
+    remapped.index = idx_utc
+    remapped = remap_datetime_index_years(remapped, offset)
+    new_idx = remapped.index
     new_idx = new_idx.tz_convert(was_tz) if was_tz is not None else new_idx.tz_localize(None)
-    df = df.copy()
-    df.index = new_idx
-    return df
+    remapped.index = new_idx
+    return remapped
 
 
 # --- App class ----------------------------------------------------------------
@@ -296,11 +298,7 @@ class App:
         )
 
         # 4. Temperature series (indoor model for battery)
-        ambient_temp = extract_ambient_temperature(weather)
-        if ambient_temp is not None:
-            temp_series = apply_indoor_temperature_model(ambient_temp)
-        else:
-            temp_series = pd.Series(25.0, index=dc_system_base.index)
+        temp_series = build_battery_temperature_series("weather", index=dc_system_base.index, weather_df=weather)
 
         # 5. Multi-year propagation
         replacement_cost_per_kwh = self._cost_params.battery_cost_per_kwh

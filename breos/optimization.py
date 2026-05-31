@@ -17,6 +17,7 @@ from breos.battery import BatteryConfig, simulate_energy_balance
 from breos.economics import calculate_costs, cost_params_from_config
 from breos.load_profiles import align_load_to_pv
 from breos.solar import PVModuleParams, calculate_pv_production_dc, default_azimuth
+from breos.utils import get_hours_per_step
 
 
 @dataclass
@@ -27,6 +28,24 @@ class OptimizationResult:
     objective_value: float
     iterations: int
     details: Dict[str, Any]
+
+
+def _resolve_max_tilt_deg(constraints: Dict[str, Any], latitude: float) -> float:
+    """Resolve the optimization tilt upper bound from constraints."""
+    value = constraints.get("max_tilt_deg", 90.0)
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered == "adjust":
+            margin = float(constraints.get("tilt_margin_deg", 15.0))
+            adjusted = 5.0 * round((abs(float(latitude)) + margin) / 5.0)
+            return float(np.clip(adjusted, 60.0, 90.0))
+        try:
+            return float(value)
+        except ValueError as exc:
+            raise ValueError(
+                f"Unsupported constraints.max_tilt_deg value: {value!r}. Use a number or 'adjust'."
+            ) from exc
+    return float(value)
 
 
 def optimize_tilt(
@@ -157,8 +176,10 @@ def optimize_tilt_brent(
                 print(f"  Iteration {iterations[0]}: tilt={tilt:.2f}°, production={-production:.1f} kWh")
 
             return production
-        except Exception:
-            return 0
+        except Exception as e:
+            if verbose:
+                print(f"  Iteration {iterations[0]}: tilt={tilt:.2f}° failed - {e}")
+            return np.inf
 
     result = minimize_scalar(objective, bounds=tilt_range, method="bounded", options={"xatol": tol})
 
@@ -285,10 +306,128 @@ def size_for_zeb(houseload: pd.DataFrame, ac_loss: pd.Series, current_n_modules:
 
 # Constants for defaults (can be overridden by config)
 DEFAULT_PANEL_WP = 550
+DEFAULT_MODULE_AREA = 1.134 * 2.278
 DEFAULT_INFLATION_ELEC = 0.02
 DEFAULT_DISCOUNT_RATE = 0.0
 
 DEFAULT_PROJECT_LIFESPAN = 20
+
+
+def _pv_params_from_config(params: Dict[str, Any]) -> PVModuleParams:
+    """Build PVModuleParams from an inline config mapping."""
+    return PVModuleParams(
+        Mpp=params.get("Mpp", 550),
+        Vmp=params.get("Vmp", 42.05),
+        Imp=params.get("Imp", 13.08),
+        Voc=params.get("Voc", 49.88),
+        Isc=params.get("Isc", 14.01),
+        T_Pmax_pct=params.get("T_Pmax_pct", params.get("T_Pmax", -0.34)),
+        T_Voc_pct=params.get("T_Voc_pct", params.get("T_Voc", -0.26)),
+        T_Isc_pct=params.get("T_Isc_pct", params.get("T_Isc", 0.05)),
+        N_Cells=params.get("N_Cells", 144),
+        celltype=params.get("celltype", "monoSi"),
+    )
+
+
+def _dimensions_from_section(section: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    if section.get("dimensions"):
+        return section["dimensions"]
+    if "module_width_m" in section or "module_length_m" in section:
+        return {
+            "width": section.get("module_width_m"),
+            "length": section.get("module_length_m"),
+        }
+    return None
+
+
+def _module_area_from_dimensions(dimensions: Optional[Dict[str, Any]]) -> float:
+    """Resolve module footprint from config dimensions, falling back only when absent."""
+    if not dimensions:
+        return DEFAULT_MODULE_AREA
+
+    missing = {key for key in ("width", "length") if key not in dimensions or dimensions[key] is None}
+    if missing:
+        missing_list = ", ".join(sorted(missing))
+        raise ValueError(f"PV module dimensions missing required key(s): {missing_list}")
+
+    width = float(dimensions["width"])
+    length = float(dimensions["length"])
+    area = width * length
+    if area <= 0.0:
+        raise ValueError(f"PV module dimensions must define a positive area, got width={width}, length={length}")
+    return area
+
+
+def _resolve_pv_module_and_area(config: Dict[str, Any]) -> Tuple[PVModuleParams, float]:
+    """Resolve electrical module parameters and physical module area from config."""
+    pv_spec = config.get("pv_specs", {}) or {}
+    pv_cfg = config.get("pv", {}) or {}
+
+    pv_spec_params = pv_spec.get("params") or {}
+    pv_cfg_params = pv_cfg.get("params") or {}
+    pv_spec_dimensions = _dimensions_from_section(pv_spec)
+    pv_cfg_dimensions = _dimensions_from_section(pv_cfg)
+
+    if pv_spec_params:
+        pv_params = _pv_params_from_config(pv_spec_params)
+        dimensions = pv_spec_dimensions or pv_cfg_dimensions
+    elif pv_cfg_params:
+        pv_params = _pv_params_from_config(pv_cfg_params)
+        dimensions = pv_cfg_dimensions or pv_spec_dimensions
+    else:
+        from breos.pv_modules import get_module
+
+        module_name = pv_cfg.get("module") or config.get("pv_module") or "Suntech_STP550S_STC"
+        pv_params = get_module(module_name)
+        dimensions = pv_cfg_dimensions or pv_spec_dimensions
+
+    module_area = _module_area_from_dimensions(dimensions)
+    return pv_params, module_area
+
+
+def _temperature_series_from_config(
+    temp_config: Any,
+    index: pd.DatetimeIndex,
+    weather_df: Optional[pd.DataFrame] = None,
+    indoor_model: Optional[Dict[str, Any]] = None,
+    default_temp: float = 25.0,
+) -> pd.Series:
+    """Build a battery temperature series from config, weather, or a fixed value."""
+    from breos.weather import build_battery_temperature_series
+
+    return build_battery_temperature_series(
+        temp_config=temp_config,
+        index=index,
+        weather_df=weather_df,
+        indoor_model=indoor_model,
+        default_temp=default_temp,
+    )
+
+
+def _build_battery_config_from_spec(
+    batt_spec: Dict[str, Any],
+    nominal_energy_wh: float,
+    inverter_efficiency: float = 0.96,
+    initial_soh: float = 100.0,
+    enable_replacement: bool = False,
+) -> BatteryConfig:
+    """Build a BatteryConfig for optimization paths without dropping supported settings."""
+    return BatteryConfig(
+        nominal_energy_wh=nominal_energy_wh,
+        battery_type=batt_spec.get("battery_type", "lfp"),
+        min_soc=batt_spec.get("min_soc", 0.2),
+        max_soc=batt_spec.get("max_soc", 0.8),
+        charge_efficiency=batt_spec.get("charge_efficiency", 0.9795),
+        discharge_efficiency=batt_spec.get("discharge_efficiency", 0.9795),
+        standby_loss_wh=batt_spec.get("standby_loss_wh", 5.0),
+        initial_soh=initial_soh,
+        eol_percentage=batt_spec.get("eol_percentage", 0.8),
+        inverter_efficiency=inverter_efficiency,
+        dc_coupled=batt_spec.get("dc_coupled", True),
+        calendar_model=batt_spec.get("calendar_model", "naumann_lam_field_calibrated"),
+        enable_replacement=enable_replacement,
+        enable_resistance_fade=batt_spec.get("enable_resistance_fade", False),
+    )
 
 
 def calculate_financials(
@@ -422,6 +561,12 @@ try:
             self.budget_limit = self.constraints.get("budget_eur", 10000)
             self.area_limit = self.constraints.get("max_area_m2", 20)
             self.max_battery_kwh = self.constraints.get("max_battery_kwh", 30)
+            self.max_modules = self.constraints.get("max_modules", 60)
+            self.max_tilt_deg = _resolve_max_tilt_deg(self.constraints, self.location["latitude"])
+            self.freq = config.get("simulation", {}).get("resolution", "h")
+            self.pv_params, self.module_area_m2 = _resolve_pv_module_and_area(config)
+            self.batt_temp_cfg = config.get("battery", {}).get("temperature", "weather")
+            self.indoor_model = config.get("battery", {}).get("indoor_model")
 
             self.fixed_azimuth = config.get("mode", {}).get("fixed_azimuth")
 
@@ -432,12 +577,12 @@ try:
             # --- Dynamic Variable Setup ---
             if self.fixed_azimuth is not None:
                 # RETROFIT MODE: 3 Variables
-                # x[0]: n_modules (1-60)
+                # x[0]: n_modules (1-max_modules)
                 # x[1]: battery_kwh (0-max_battery_kwh)
-                # x[2]: surface_tilt (10-60)
+                # x[2]: surface_tilt (10-max_tilt_deg)
                 n_var = 3
                 xl = np.array([1, 0.0, 10.0])
-                xu = np.array([60, self.max_battery_kwh, 60.0])
+                xu = np.array([self.max_modules, self.max_battery_kwh, self.max_tilt_deg])
             else:
                 # PROJECT MODE: 4 Variables (+ Azimuth)
                 # Azimuth bounds depend on hemisphere
@@ -448,7 +593,7 @@ try:
                     azi_lower, azi_upper = -90.0, 90.0  # Search around North (0°)
                 n_var = 4
                 xl = np.array([1, 0.0, 10.0, azi_lower])
-                xu = np.array([60, self.max_battery_kwh, 60.0, azi_upper])
+                xu = np.array([self.max_modules, self.max_battery_kwh, self.max_tilt_deg, azi_upper])
 
             super().__init__(
                 n_var=n_var,
@@ -479,12 +624,8 @@ try:
             else:
                 azimuth = x[3]
 
-            from breos.pv_modules import get_module
-
-            pv_cfg = self.config.get("pv", {})
-            module_name = pv_cfg.get("module", "Suntech_STP550S_STC")
-            pv_params = get_module(module_name)
-            module_area = pv_cfg.get("module_width_m", 1.134) * pv_cfg.get("module_length_m", 2.278)
+            pv_params = self.pv_params
+            module_area = self.module_area_m2
 
             # --- 1. Constraint Check: Area ---
             system_area = n_modules * module_area
@@ -498,35 +639,40 @@ try:
                 surface_azimuth=azimuth,
                 n_modules=n_modules,
                 pv_params=pv_params,
-                freq="h",
+                freq=self.freq,
                 verbose=False,
             )
 
             # Align load to PV index
             if isinstance(self.houseload, pd.Series):
                 temp_df = pd.DataFrame({"Load": self.houseload})
-                aligned_houseload = align_load_to_pv(temp_df, dc_production)
+                aligned_houseload = align_load_to_pv(temp_df, dc_production, freq=self.freq)
             else:
-                aligned_houseload = align_load_to_pv(self.houseload, dc_production)
+                aligned_houseload = align_load_to_pv(self.houseload, dc_production, freq=self.freq)
 
-            total_prod = float(dc_production.sum() / 1000)
+            hours_per_step = get_hours_per_step(self.freq)
+            total_prod = float(dc_production.sum() * hours_per_step / 1000)
 
             if isinstance(aligned_houseload, pd.Series):
-                total_load = float(aligned_houseload.sum() / 1000)
+                total_load = float(aligned_houseload.sum() * hours_per_step / 1000)
             else:
-                total_load = float(aligned_houseload.iloc[:, 0].sum() / 1000)
+                total_load = float(aligned_houseload.iloc[:, 0].sum() * hours_per_step / 1000)
 
             batt_spec = self.config.get("battery", {})
 
             # Configure Battery
-            battery_config = BatteryConfig(
+            battery_config = _build_battery_config_from_spec(
+                batt_spec,
                 nominal_energy_wh=battery_kwh * 1000,
-                min_soc=batt_spec.get("min_soc", 0.2),
-                max_soc=batt_spec.get("max_soc", 0.8),
-                charge_efficiency=batt_spec.get("charge_efficiency", 0.9795),
-                discharge_efficiency=batt_spec.get("discharge_efficiency", 0.9795),
+                inverter_efficiency=self.config.get("inverter", {}).get("efficiency", 0.96),
                 initial_soh=batt_spec.get("initial_soh", 100),
-                enable_replacement=False,  # Single year optimization does not simulate replacement cycles
+                enable_replacement=False,
+            )
+            temperature_series = _temperature_series_from_config(
+                self.batt_temp_cfg,
+                dc_production.index,
+                weather_df=self.tmy_data,
+                indoor_model=self.indoor_model,
             )
 
             # Run Simulation
@@ -536,7 +682,8 @@ try:
                 battery_config=battery_config,
                 start_time=self.start_h,
                 end_time=self.end_h,
-                freq="h",
+                freq=self.freq,
+                temperature_series=temperature_series,
                 debug=False,
             )
             total_import = float(summary_df["Import [kWh]"].iloc[0])

@@ -106,6 +106,9 @@ from breos.emissions import (
 from breos.inverter import (
     INVERTER_PRESETS,
     InverterConfig,
+    InverterConversionResult,
+    calculate_dc_ac_efficiency,
+    calculate_dc_ac_power,
     get_inverter_preset,
 )
 
@@ -176,10 +179,12 @@ from breos.utils import (
     get_steps_per_year,
     is_leap_year,
     number_of_cores,
+    remap_datetime_index_years,
 )
 
 # Weather
 from breos.weather import (
+    build_battery_temperature_series,
     csv_15min_to_hourly,
     csv_hourly_to_15min,
     extract_ambient_temperature,
@@ -268,6 +273,7 @@ __all__ = [
     "get_hours_per_step",
     "get_steps_per_day",
     "get_steps_per_year",
+    "remap_datetime_index_years",
     # Constants
     "R_GAS",
     "T_REF_K",
@@ -292,7 +298,9 @@ __all__ = [
     "csv_15min_to_hourly",
     "csv_hourly_to_15min",
     "select_random_year_and_replace_datetime",
+    "preload_weather_by_year",
     "extract_ambient_temperature",
+    "build_battery_temperature_series",
     # Solar
     "calculate_pv_production_dc",
     "calculate_pv_production_dc_tracking",
@@ -308,6 +316,13 @@ __all__ = [
     "load_profile",
     "scale_to_annual_consumption",
     "align_load_to_pv",
+    # Inverter
+    "INVERTER_PRESETS",
+    "InverterConfig",
+    "InverterConversionResult",
+    "get_inverter_preset",
+    "calculate_dc_ac_power",
+    "calculate_dc_ac_efficiency",
     # Battery
     "simulate_energy_balance",
     "BatteryConfig",

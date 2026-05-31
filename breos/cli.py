@@ -23,12 +23,17 @@ def _package_version() -> str:
 def _load_config(path: Path) -> dict[str, Any]:
     suffix = path.suffix.lower()
     with path.open("rb") as f:
-        if suffix == ".toml":
-            data = tomllib.load(f)
-        elif suffix == ".json":
-            data = json.load(f)
-        else:
-            raise ValueError("Config file must be TOML or JSON")
+        try:
+            if suffix == ".toml":
+                data = tomllib.load(f)
+            elif suffix == ".json":
+                data = json.load(f)
+            else:
+                raise ValueError("Config file must be TOML or JSON")
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"Invalid JSON in {path}: line {exc.lineno}, column {exc.colno}: {exc.msg}") from exc
+        except tomllib.TOMLDecodeError as exc:
+            raise ValueError(f"Invalid TOML in {path}: {exc}") from exc
 
     if not isinstance(data, dict):
         raise ValueError("Config file must contain an object at the top level")

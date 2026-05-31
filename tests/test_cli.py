@@ -88,3 +88,15 @@ cost_preset = "residential_pt"
     assert FakeApp.seen_config["n_modules"] == 8
     assert FakeApp.seen_config["battery_kwh"] == 5.0
     assert json.loads(output_path.read_text(encoding="utf-8"))["grid_independence_pct"] == 42.0
+
+
+def test_invalid_json_config_reports_filename(tmp_path, capsys):
+    config_path = tmp_path / "broken_config.json"
+    config_path.write_text('{"location": "porto",', encoding="utf-8")
+
+    exit_code = cli.main(["run", "--config", str(config_path)])
+
+    assert exit_code == 1
+    stderr = capsys.readouterr().err
+    assert "Invalid JSON in" in stderr
+    assert "broken_config.json" in stderr

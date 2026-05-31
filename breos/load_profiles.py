@@ -48,6 +48,13 @@ PROFILE_NAMES = {
     "8": "REE 2026 - 2.0TD (Spain)",
 }
 
+PROFILE_ALIASES = {
+    "crest": "6",
+    "eredes_btn_c": "6",
+    "bdew_h0": "7",
+    "ree_2.0td": "8",
+}
+
 # Column mappings for E-Redes profiles
 EREDES_COLUMNS = {
     "4": "BTN A - Wh",
@@ -89,7 +96,7 @@ def load_profile(
     Raises:
         ValueError: If profile_type is not recognized
     """
-    profile_type = str(profile_type)
+    profile_type = PROFILE_ALIASES.get(str(profile_type).lower(), str(profile_type))
     if profile_type not in PROFILE_FILES:
         raise ValueError(f"Unknown profile type: {profile_type}. Valid types: {list(PROFILE_FILES.keys())}")
 
@@ -101,7 +108,7 @@ def load_profile(
 
     # Check if native 15-min file exists
     use_native_15min = (
-        freq == "15min"
+        freq in ("15min", "15T")
         and profile_type in PROFILE_FILES_15MIN
         and (rlp_directory / PROFILE_FILES_15MIN[profile_type]).exists()
     )
@@ -142,7 +149,7 @@ def load_profile(
         df = _extend_to_years(df, start_year, num_years)
 
     # Resample if needed (hourly to 15-min)
-    if freq == "15min" and native_freq == "h":
+    if freq in ("15min", "15T") and native_freq == "h":
         df = _resample_load_to_15min(df)
 
     return df
@@ -231,8 +238,25 @@ def _extend_to_years(df: pd.DataFrame, start_year: int, num_years: int) -> pd.Da
     Generates a fresh index for each year to handle leap years correctly
     and avoid duplicates from simple date shifting.
     """
-    # Get original data values and frequency
-    original_values = df.iloc[:, 0].values
+    def _calendar_key(ts: pd.Timestamp, day_override: Optional[int] = None):
+        offset = ts.utcoffset()
+        offset_seconds = int(offset.total_seconds()) if offset is not None else None
+        return (
+            ts.month,
+            ts.day if day_override is None else day_override,
+            ts.hour,
+            ts.minute,
+            offset_seconds,
+        )
+
+    # Build a calendar lookup from the canonical source year. Feb. 29 is excluded
+    # so leap years can duplicate Feb. 28 without shifting the rest of the year.
+    source_rows = {}
+    for ts, row in df.iterrows():
+        if ts.month == 2 and ts.day == 29:
+            continue
+        source_rows[_calendar_key(ts)] = row.to_numpy(copy=True)
+
     freq = pd.infer_freq(df.index) or "h"
     tz = df.index.tz
 
@@ -249,19 +273,14 @@ def _extend_to_years(df: pd.DataFrame, start_year: int, num_years: int) -> pd.Da
         # Cap at end of year exactly
         year_index = year_index[year_index.year == current_year]
 
-        # Prepare data
-        # If leap year needs more data than we have, or non-leap needs less
-        n_points = len(year_index)
-
-        if len(original_values) >= n_points:
-            # Truncate if we have enough
-            year_values = original_values[:n_points]
-        else:
-            # Repeat to fill if we need more (e.g. leap year 29th Feb)
-            # Simple strategy: repeat last value or Tile
-            # Tiling is better for load profiles
-            repeats = (n_points // len(original_values)) + 1
-            year_values = np.tile(original_values, repeats)[:n_points]
+        year_values = []
+        for ts in year_index:
+            day_override = 28 if (ts.month == 2 and ts.day == 29) else None
+            key = _calendar_key(ts, day_override=day_override)
+            if key not in source_rows:
+                raise KeyError(f"Missing canonical load value for {ts}")
+            year_values.append(source_rows[key])
+        year_values = np.vstack(year_values)
 
         # Create DataFrame
         year_df = pd.DataFrame(data=year_values, index=year_index, columns=df.columns)

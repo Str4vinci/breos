@@ -63,7 +63,7 @@ from breos.constants import (
     Z_R,
 )
 from breos.economics import BATTERY_REPLACEMENT_COST_PER_KWH
-from breos.utils import get_hours_per_step
+from breos.utils import get_hours_per_step, remap_datetime_index_years
 
 
 @dataclass
@@ -199,7 +199,9 @@ def simulate_energy_balance(
         sim_dominant_year = rng_utc.year.value_counts().idxmax()
         if load_dominant_year != sim_dominant_year:
             year_offset = sim_dominant_year - load_dominant_year
-            load_utc = load_utc.map(lambda dt: dt.replace(year=dt.year + year_offset))
+            houseload_series.index = load_utc
+            houseload_series = remap_datetime_index_years(houseload_series, year_offset)
+            load_utc = houseload_series.index
 
         # Convert back to target timezone (UTC→local is always unambiguous)
         if rng.tz is not None:
