@@ -238,6 +238,7 @@ def _extend_to_years(df: pd.DataFrame, start_year: int, num_years: int) -> pd.Da
     Generates a fresh index for each year to handle leap years correctly
     and avoid duplicates from simple date shifting.
     """
+
     def _calendar_key(ts: pd.Timestamp, day_override: Optional[int] = None):
         offset = ts.utcoffset()
         offset_seconds = int(offset.total_seconds()) if offset is not None else None
