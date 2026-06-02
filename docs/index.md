@@ -98,7 +98,10 @@ api/index
 :hidden:
 :caption: Project
 
+resources
 architecture/third-party-wrapping
+architecture/string-inverter-sizing
+legal/load-profile-data
 adr/index
 changelog
 ```

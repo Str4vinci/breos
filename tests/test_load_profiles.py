@@ -29,3 +29,19 @@ def test_load_profile_accepts_aliases_and_15t_frequency():
 
     assert len(profile) == 35040
     assert annual_kwh == pytest.approx(1000)
+
+
+def test_non_bundled_profile_requires_external_directory():
+    with pytest.raises(ValueError, match="not bundled"):
+        load_profile("eredes_btn_c", 1000)
+
+
+def test_external_native_15min_profile_can_downsample_to_hourly(tmp_path):
+    profile_path = tmp_path / "bdew_h0_2025_15min.csv"
+    pd.DataFrame({"Electrical Consumption [W]": np.ones(35040)}).to_csv(profile_path)
+
+    profile = load_profile("7", 1000, freq="h", rlp_directory=str(tmp_path))
+    annual_kwh = profile["Electrical Consumption [W]"].sum() / 1000
+
+    assert len(profile) == 8760
+    assert annual_kwh == pytest.approx(1000)

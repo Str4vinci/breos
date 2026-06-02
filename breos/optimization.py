@@ -189,7 +189,7 @@ def optimize_tilt_brent(
 
 
 def optimize_battery_size(
-    ac_loss: pd.Series,
+    pv_dc: pd.Series,
     houseload: pd.DataFrame,
     battery_sizes_wh: list,
     start_time: Optional[pd.Timestamp] = None,
@@ -202,7 +202,7 @@ def optimize_battery_size(
     Optimize battery size for self-consumption or grid independence.
 
     Args:
-        ac_loss: PV production series
+        pv_dc: PV DC production series
         houseload: Load DataFrame
         battery_sizes_wh: List of battery sizes to evaluate
         start_time: Simulation start
@@ -221,7 +221,7 @@ def optimize_battery_size(
 
         try:
             df, total_pv, summary, _, _, _ = simulate_energy_balance(
-                ac_loss=ac_loss,
+                pv_dc=pv_dc,
                 houseload=houseload,
                 battery_config=config,
                 start_time=start_time,
@@ -232,6 +232,9 @@ def optimize_battery_size(
 
             grid_independence = summary["Grid Independence [%]"].iloc[0]
             import_pct = summary["Import [%]"].iloc[0]
+            total_pv_kwh = summary["Total PV [kWh]"].iloc[0]
+            export_kwh = summary["Sell [kWh]"].iloc[0]
+            self_consumption_pct = ((total_pv_kwh - export_kwh) / total_pv_kwh) * 100 if total_pv_kwh > 0 else 0.0
 
             results.append(
                 {
@@ -239,6 +242,7 @@ def optimize_battery_size(
                     "battery_size_kwh": size_wh / 1000,
                     "grid_independence": grid_independence,
                     "import_percent": import_pct,
+                    "self_consumption": self_consumption_pct,
                 }
             )
 
@@ -250,14 +254,22 @@ def optimize_battery_size(
                 print(f"  {size_wh / 1000:.1f} kWh: Error - {e}")
 
     results_df = pd.DataFrame(results)
+    if results_df.empty:
+        raise RuntimeError("No battery sizes could be evaluated.")
 
-    if objective == "max_self_consumption" or objective == "max_grid_independence":
+    if objective == "max_self_consumption":
+        optimal_idx = results_df["self_consumption"].idxmax()
+        optimal_value = results_df.loc[optimal_idx, "self_consumption"]
+    elif objective == "max_grid_independence":
         optimal_idx = results_df["grid_independence"].idxmax()
-    else:  # min_import
+        optimal_value = results_df.loc[optimal_idx, "grid_independence"]
+    elif objective == "min_import":
         optimal_idx = results_df["import_percent"].idxmin()
+        optimal_value = results_df.loc[optimal_idx, "import_percent"]
+    else:
+        raise ValueError("objective must be 'max_self_consumption', 'max_grid_independence', or 'min_import'")
 
     optimal_size = results_df.loc[optimal_idx, "battery_size_wh"]
-    optimal_value = results_df.loc[optimal_idx, "grid_independence"]
 
     return OptimizationResult(
         optimal_value=optimal_size,

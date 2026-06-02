@@ -1,14 +1,26 @@
 # Attributions
 
-BREOS bundles or relies on third-party data and tools. This document lists each source, its license, and any redistribution or commercial-use caveats.
+BREOS bundles or relies on third-party data and tools. This document lists each source, its license posture, and any redistribution or commercial-use caveats.
 
-## Bundled reference load profiles (`rlp/`)
+This is a project-maintainer note, not legal advice.
+
+## Bundled reference load profiles
 
 | File | Source | License / Terms |
 |------|--------|-----------------|
-| `bdew_h0_2025_15min.csv`, `h0_SLP.csv`, `h0SLP_demandlib_*.csv` | BDEW H0 Standardlastprofil (German residential standard load profile, published by BDEW — Bundesverband der Energie- und Wasserwirtschaft) | Publicly published profile; widely redistributed in research. Attribution: BDEW. |
-| `EREDES_2025_BTN_*.csv` | E-REDES (Portuguese DSO) public BTN consumption profiles | Publicly released by the Portuguese DSO. Attribution: E-REDES. |
-| `REE_2026_2.0TD_*.csv` | Red Eléctrica de España standard 2.0TD profile | Public profile published by REE. Attribution: REE. |
+| `rlp/h0SLP_demandlib_1000kwh_hourly.csv`, `rlp/h0SLP_demandlib_1000kwh_15min.csv`, `breos/data/rlp/h0SLP_demandlib_*.csv` | Generated with demandlib H0 logic | demandlib documents itself as MIT-licensed free software. Preserve demandlib attribution and license notices when redistributing derived profile examples. |
+
+## Supported but not redistributed
+
+BREOS can load the following profile families when users provide their own licensed local copies through `breos.load_profile(..., rlp_directory="...")`:
+
+| Profile family | Why not bundled in this public release |
+|----------------|-----------------------------------------|
+| Direct BDEW Standardlastprofile exports (`h0_SLP.csv`, `bdew_h0_2025_15min.csv`) | BDEW publishes downloadable SLP files, but its public site terms reserve copyright rights and limit downloads/copies to private, non-commercial use unless written permission is granted. |
+| E-REDES BTN profiles (`EREDES_2025_BTN_*.csv`) | Public website terms reviewed for this release do not provide a clear redistribution grant for bundling derived CSVs in an OSS package. |
+| REE 2.0TD profiles (`REE_2026_2.0TD_*.csv`) | REE legal terms reserve intellectual-property rights and do not clearly authorize republishing derived CSV datasets in this package. |
+
+Users can still provide these files locally through `rlp_directory` when their source terms permit their use case. If written redistribution permission is granted, store the permission text with the release record before adding the files back to package data.
 
 ## Runtime data sources (fetched on demand)
 
@@ -32,3 +44,4 @@ If you redistribute BREOS or derived datasets:
 
 1. Preserve attributions above.
 2. If you call Open-Meteo from a commercial deployment, obtain a paid Open-Meteo subscription.
+3. Do not assume a public download page grants redistribution rights; keep externally sourced RLPs outside public package artifacts unless the source license is explicit.

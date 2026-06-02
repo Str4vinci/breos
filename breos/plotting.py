@@ -586,10 +586,9 @@ def plot_validation_multi_system(
     predicted SOH as lines.
 
     Args:
-        systems_results: Dict keyed by system_id, each value a dict with:
-            'simulation': DataFrame with 'date' and 'predicted_soh'
-            'truth': DataFrame with 'date' and 'measured_soh'
-            'metrics': dict with RMSE, R2, etc.
+        systems_results: Dict keyed by system_id. Each value contains
+            ``simulation`` data with ``date`` and ``predicted_soh``, ``truth``
+            data with ``date`` and ``measured_soh``, and optional ``metrics``.
         results_directory: Directory to save plot
     """
     _check_matplotlib()
@@ -2290,13 +2289,13 @@ def plot_weather_monthly_comparison(
     red min-year line, and green max-year line.
 
     Args:
-        tmy_vals:    Array of 12 monthly TMY values.
-        stats:       DataFrame with columns mean, ci_low, ci_high, min, max
-                     (one row per month, 12 rows).
-        ylabel:      Y-axis label (e.g. "GHI (kWh/m²)").
-        tmy_source:  Source label for the TMY line (e.g. "pvgis-sarah3").
+        tmy_vals: Array of 12 monthly TMY values.
+        stats: DataFrame with columns ``mean``, ``ci_low``, ``ci_high``,
+            ``min``, and ``max``.
+        ylabel: Y-axis label (e.g. "GHI (kWh/m²)").
+        tmy_source: Source label for the TMY line (e.g. "pvgis-sarah3").
         results_dir: Directory to save the plot.
-        filename:    Output filename (e.g. "monthly_ghi_comparison.png").
+        filename: Output filename (e.g. "monthly_ghi_comparison.png").
     """
     _check_matplotlib()
     os.makedirs(results_dir, exist_ok=True)
@@ -2429,11 +2428,11 @@ def plot_breakeven_comparison(
     Multi-scenario break-even comparison: N cumulative cost curves vs No-System baseline.
 
     Args:
-        cost_dfs: List of DataFrames, each with columns 'Year',
-                  'Cost_No_Sys_Cumulative_NPV', 'Cost_System_Cumulative_NPV',
-                  'Savings_Cumulative_NPV'.
-        labels:   Display label for each scenario.
-        colors:   Line colour for each scenario.
+        cost_dfs: List of DataFrames with ``Year``,
+            ``Cost_No_Sys_Cumulative_NPV``, ``Cost_System_Cumulative_NPV``,
+            and ``Savings_Cumulative_NPV`` columns.
+        labels: Display label for each scenario.
+        colors: Line colour for each scenario.
         results_dir: Output directory.
         filename: Output filename.
     """
@@ -2501,12 +2500,12 @@ def plot_breakeven_two(
     Two-scenario break-even comparison with annotated crossover markers.
 
     Args:
-        df1, df2:  DataFrames with 'Year', 'Cost_No_Sys_Cumulative_NPV',
-                   'Cost_System_Cumulative_NPV'.
-        label1/2:  Display labels.
-        be1/be2:   Pre-computed break-even years (decimal), or None.
+        df1, df2: DataFrames with ``Year``, ``Cost_No_Sys_Cumulative_NPV``,
+            and ``Cost_System_Cumulative_NPV`` columns.
+        label1/2: Display labels.
+        be1/be2: Pre-computed break-even years (decimal), or None.
         results_dir: Output directory.
-        filename:  Output filename.
+        filename: Output filename.
     """
     _check_matplotlib()
     os.makedirs(results_dir, exist_ok=True)
@@ -2666,12 +2665,12 @@ def plot_pareto_front_analysis(
     strategy).
 
     Args:
-        df:           Full results DataFrame with columns 'Consumption_kWh',
-                      'Tariff', 'Detailed_Strategy', 'Net_Cost_Eur',
-                      'Grid_Independence_%'.
+        df: Full results DataFrame with ``Consumption_kWh``, ``Tariff``,
+            ``Detailed_Strategy``, ``Net_Cost_Eur``, and
+            ``Grid_Independence_%`` columns.
         consumptions: List of consumption levels to plot (one subplot each).
-        results_dir:  Output directory.
-        filename:     Output filename.
+        results_dir: Output directory.
+        filename: Output filename.
     """
     _check_matplotlib()
     from matplotlib.lines import Line2D
@@ -2946,8 +2945,8 @@ def plot_calendar_aging_sensitivity(
     Plot SOH trajectories for different calendar aging k0 scaling factors.
 
     Args:
-        soh_trajectories: Dict mapping label strings (e.g. "k₀ × 0.25") to lists
-            of yearly SOH values (length = number of projection years).
+        soh_trajectories: Dict mapping label strings (e.g. "k₀ × 0.25") to
+            lists of yearly SOH values.
         eol_threshold: End-of-life SOH threshold as percentage (e.g. 80.0).
         results_dir: Directory to save the plot.
         filename: Output filename.
@@ -3012,8 +3011,8 @@ def plot_grid_independence_heatmap(
     Plot a heatmap of grid independence (or other metric) vs system size.
 
     Args:
-        pivot_data: DataFrame with battery_kwh as index, n_modules as columns,
-                    values are the metric (e.g. grid independence %)
+        pivot_data: DataFrame with battery capacity as index, module counts as
+            columns, and metric values in the cells.
         results_directory: Directory to save the plot
         location_name: Location name for labelling (used in axis/legend, not title)
         filename: Output filename
@@ -3075,8 +3074,8 @@ def plot_location_comparison_delta(
     Plot a diverging heatmap of the difference in a metric between two locations.
 
     Args:
-        delta_data: DataFrame with battery_kwh as index, n_modules as columns,
-                    values are (loc_a - loc_b) in percentage points
+        delta_data: DataFrame with battery capacity as index, module counts as
+            columns, and ``loc_a - loc_b`` values in percentage points.
         results_directory: Directory to save the plot
         loc_a: Name of location A
         loc_b: Name of location B
@@ -3409,10 +3408,8 @@ def plot_temperature_sensitivity_comparison(
     while Polysun predicts the same lifetime everywhere (temperature-blind).
 
     Args:
-        locations: Dict mapping location name to dict with keys:
-            'pvbat_eol_year': PVBAT predicted EOL year.
-            'polysun_total_life': Polysun total life (same for all if same cycling).
-            'mean_temp_c': Annual mean ambient temperature (°C).
+        locations: Dict mapping location names to ``pvbat_eol_year``,
+            ``polysun_total_life``, and ``mean_temp_c`` values.
         results_directory: Directory to save plot.
         suffix: Filename suffix.
     """

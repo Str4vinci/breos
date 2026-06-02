@@ -38,7 +38,7 @@ def run_acc_sizer_logic(config: Dict[str, Any], verbose: bool = True) -> pd.Data
     load_matrix = []
     for hh in households:
         # Load profile
-        p = load_profile(str(hh.get("profile_type", "6")), hh.get("consumption", 3000), freq="h")
+        p = load_profile(str(hh.get("profile_type", "1")), hh.get("consumption", 3000), freq="h")
         load_matrix.append(p.values)
     load_matrix_np = np.column_stack(load_matrix)
 

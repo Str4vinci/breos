@@ -215,8 +215,9 @@ def cost_analysis_projection(
     Includes inflation, discount rate, and PV degradation.
 
     Args:
-        results_df: DataFrame with simulation results
-            Required columns: Datetime, PV_Production, Houseload, Import_From_Grid, Sell_To_Grid
+        results_df: DataFrame with simulation results. Required columns are
+            ``Datetime``, ``PV_Production``, ``Houseload``,
+            ``Import_From_Grid``, and ``Sell_To_Grid``.
         costs: Dictionary with cost parameters (from calculate_costs())
         num_years: Number of years to project
         inflation_rate: Annual inflation for electricity/operation costs

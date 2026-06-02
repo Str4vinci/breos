@@ -1,0 +1,7 @@
+{
+    "discount_rate": 0.05,
+    "electricity_sold_cost": 0.04,
+    "electricity_cost": 0.2582,
+    "inflation_rate": 0.02,
+    "project_lifespan": 20
+}
