@@ -5,6 +5,9 @@ facade. It takes a single config dict, runs the full PV + battery +
 economics + emissions pipeline, and returns a plain JSON-serializable
 result dict.
 
+The example uses packaged defaults and public weather access. For real
+projects, review [Required Inputs](inputs.md) before interpreting results.
+
 ## A minimal example
 
 ```python
@@ -34,8 +37,8 @@ What just happened, end-to-end:
    from a local cache if present, otherwise fetched it from PVGIS.
 2. **PV** — Ten panels at the configured tilt and azimuth produced a
    year-long DC power series.
-3. **Load** — A standard residential load profile (E-Redes BTN C) scaled
-   to 4000 kWh/yr.
+3. **Load** — A bundled demandlib-derived H0 residential profile scaled to
+   4000 kWh/yr.
 4. **Energy balance** — Per-timestep dispatch decided how much PV is
    self-consumed, stored, or exported.
 5. **Battery degradation** — Twenty years of operation with Naumann calendar

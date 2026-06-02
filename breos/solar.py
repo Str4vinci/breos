@@ -639,20 +639,12 @@ def calculate_multi_array_production(
     Args:
         weather_data: DataFrame with weather variables
         location: pvlib Location object
-        arrays: List of dicts, each containing:
-            Required:
-              - 'modules': Number of modules (int)
-            Common:
-              - 'module': Module model name (str)
-              - 'tracking': "fixed" (default) | "single_axis" | "dual_axis"
-            Fixed-tilt only:
-              - 'tilt': Tilt angle (float, deg)
-              - 'azimuth': Surface azimuth (float, deg)
-            Tracking only (single_axis defaults shown):
-              - 'axis_tilt' (0.0), 'axis_azimuth' (180.0), 'max_angle' (60.0),
-                'backtrack' (True), 'gcr' (0.35), 'cross_axis_tilt' (0.0)
-            Dual-axis only:
-              - 'dual_axis_max_tilt' (90.0)
+        arrays: List of array dictionaries. Each entry requires ``modules``.
+            Common keys include ``module`` and ``tracking``. Fixed-tilt arrays
+            use ``tilt`` and ``azimuth``. Single-axis arrays can also set
+            ``axis_tilt``, ``axis_azimuth``, ``max_angle``, ``backtrack``,
+            ``gcr``, and ``cross_axis_tilt``. Dual-axis arrays can set
+            ``dual_axis_max_tilt``.
         freq: Time frequency ('h' or '15min')
         degradation_rate: Annual degradation rate
         current_year: Current simulation year

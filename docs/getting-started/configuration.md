@@ -9,6 +9,10 @@ three keys are strictly required:
 
 Every other key has a sensible default.
 
+Defaults are useful for examples. For real studies, provide project-specific
+weather/data access, load profiles, PV system data, and cost assumptions; see
+[Required Inputs](inputs.md).
+
 ## All keys
 
 | Key | Default | Description |
@@ -19,12 +23,13 @@ Every other key has a sensible default.
 | `annual_consumption_kwh` | *required* | Annual electricity demand (kWh) |
 | `battery_kwh` | `0.0` | Battery capacity in kWh (`0` = no battery) |
 | `pv_module` | `None` | Module key from the built-in catalogue. `None` uses the first available |
-| `load_profile` | `"6"` | Load profile type (see {py:func}`~breos.load_profile`) |
+| `load_profile` | `"1"` | Bundled demandlib-derived H0 profile (see {py:func}`~breos.load_profiles.load_profile`) |
+| `rlp_directory` | `None` | Directory containing licensed external RLP CSVs for non-bundled load profiles |
 | `tilt` | auto | Tilt angle (degrees). Auto-estimated from latitude when `None` |
 | `azimuth` | auto | Surface azimuth (degrees). Auto-set to 180 in the northern hemisphere |
 | `resolution` | `"h"` | Time resolution (`"h"` or `"15min"`) |
 | `projection_years` | `20` | Economic projection horizon |
-| `cost_preset` | `None` | Cost preset key from `configs/costs.json` |
+| `cost_preset` | `None` | Cost preset key from packaged defaults |
 | `inflation_rate` | `0.02` | Annual electricity price inflation |
 | `discount_rate` | `0.03` | Discount rate for NPV |
 | `emissions_country` | `None` | Country code for CO2 calculations (`"PT"`, `"DE"`, `"ES"`, ...) |
@@ -74,7 +79,8 @@ any explicit `n_modules` key is ignored.
 
 ## Cost and emissions presets
 
-Built-in presets live in `configs/costs.json` and `configs/emissions.json`.
+Built-in presets are packaged with BREOS. Editable copies and examples live
+in `configs/base/` and `configs/examples/`.
 Pass the key:
 
 ```python
@@ -91,3 +97,24 @@ For full control, build a {py:class}`~breos.CostParams` and
 {py:class}`~breos.EmissionsParams` yourself and call the lower-level
 functions — see [Building custom pipelines](../api/index.md) once that
 guide lands, or browse the [Cost analysis API](../api/cost-analysis.md).
+
+## Load profiles
+
+The public package default is `load_profile = "1"`, a demandlib-derived H0
+example bundled with BREOS. Other standard profile keys remain supported when
+you provide the required CSV files yourself through `rlp_directory`:
+
+```python
+breos.App({
+    "location": "porto",
+    "n_modules": 10,
+    "annual_consumption_kwh": 4000,
+    "load_profile": "6",
+    "rlp_directory": "/path/to/licensed/rlp/files",
+    "resolution": "15min",
+})
+```
+
+Use external BDEW, E-REDES, REE, or custom profiles only under terms that
+permit your intended use. See [Load Profile Data](../legal/load-profile-data.md)
+for the expected filenames and the reason these CSVs are not bundled.

@@ -89,7 +89,7 @@ def pv_params():
 @pytest.fixture
 def sample_load():
     return load_profile(
-        profile_type="6",
+        profile_type="1",
         annual_consumption_kwh=3000,
         start_date="2023-01-01",
         freq="h",

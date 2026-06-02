@@ -16,8 +16,7 @@ Usage:
     result = app.result()
 """
 
-import json
-import os
+from pathlib import Path
 from typing import Any, Dict, Optional
 
 import numpy as np
@@ -36,6 +35,7 @@ from breos.economics import (
 from breos.emissions import EmissionsParams, calculate_co2_savings
 from breos.load_profiles import load_profile
 from breos.pv_modules import MODULES, get_module
+from breos.resources import load_config_json
 from breos.solar import (
     calculate_multi_array_production,
     calculate_pv_production_dc,
@@ -48,15 +48,14 @@ from breos.solar import (
 from breos.utils import get_hours_per_step, remap_datetime_index_years
 from breos.weather import build_battery_temperature_series, fetch_tmy_weather_data, load_weather, resample_to_15min
 
-_CONFIGS_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "configs")
-
 # --- Defaults -----------------------------------------------------------------
 
 _DEFAULTS: Dict[str, Any] = {
     "battery_kwh": 0.0,
     "pv_arrays": None,
     "pv_module": None,
-    "load_profile": "6",
+    "load_profile": "1",
+    "rlp_directory": None,
     "tilt": None,
     "azimuth": None,
     "tracking": "fixed",
@@ -86,9 +85,7 @@ _DEFAULTS: Dict[str, Any] = {
 
 
 def _load_json(name: str) -> dict:
-    path = os.path.join(_CONFIGS_DIR, name)
-    with open(path) as f:
-        return json.load(f)
+    return load_config_json(name)
 
 
 def _remap_tmy_year(df: pd.DataFrame, target_year: int) -> pd.DataFrame:
@@ -136,7 +133,10 @@ class App:
           ``tilt``, and ``azimuth``. When set, BREOS calculates each
           array separately and combines production before the energy balance.
         - ``pv_module`` (None) — PV module name from the catalogue; None = first available.
-        - ``load_profile`` ("6") — load profile type ("1"–"8").
+        - ``load_profile`` ("1") — bundled H0 demand profile. Other profile
+          keys require caller-supplied profile CSVs.
+        - ``rlp_directory`` (None) — directory containing licensed external
+          RLP CSVs for non-bundled profile keys.
         - ``tilt`` (None) — tilt angle in degrees; None = auto from latitude (fixed only).
         - ``azimuth`` (None) — surface azimuth; None = auto from latitude (fixed only).
         - ``tracking`` ("fixed") — ``"fixed"``, ``"single_axis"``, or ``"dual_axis"``.
@@ -149,10 +149,10 @@ class App:
         - ``dual_axis_max_tilt`` (90.0) — dual-axis panel tilt cap (degrees).
         - ``resolution`` ("h") — time resolution ("h" or "15min").
         - ``projection_years`` (20) — economic projection horizon.
-        - ``cost_preset`` (None) — key into configs/costs.json.
+        - ``cost_preset`` (None) — key into the packaged cost presets.
         - ``inflation_rate`` (0.02) — annual electricity inflation.
         - ``discount_rate`` (0.03) — discount rate for NPV.
-        - ``emissions_country`` (None) — key into configs/emissions.json.
+        - ``emissions_country`` (None) — key into the packaged emissions presets.
         - ``pv_degradation_rate`` (0.005) — annual PV degradation.
         - ``calendar_model`` ("naumann_lam_field_calibrated") — battery calendar model.
         - ``dc_coupled`` (True) — DC-coupled / hybrid inverter.
@@ -294,6 +294,7 @@ class App:
             start_date=cfg["start_date"],
             freq=freq,
             num_years=1,
+            rlp_directory=cfg["rlp_directory"],
             timezone="UTC",
         )
 
@@ -566,11 +567,11 @@ class App:
     def _load_weather(self, freq: str, start_year: int) -> pd.DataFrame:
         """Load TMY weather, falling back to PVGIS fetch."""
         weather = None
-        weather_dir = os.path.join(os.path.dirname(_CONFIGS_DIR), "weather")
+        weather_dir = Path.cwd() / "weather"
 
         # Try local files first (faster) for preset locations
-        if self._loc_key and os.path.isdir(weather_dir):
-            weather = load_weather(location=self._loc_key, data_type="tmy", weather_dir=weather_dir)
+        if self._loc_key and weather_dir.is_dir():
+            weather = load_weather(location=self._loc_key, data_type="tmy", weather_dir=str(weather_dir))
 
         if weather is None:
             weather, _ = fetch_tmy_weather_data(

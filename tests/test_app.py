@@ -5,7 +5,9 @@ import json
 import pytest
 
 import breos
+import breos.app as app_module
 from breos.app import App
+from breos.load_profiles import load_profile as real_load_profile
 
 # ---------------------------------------------------------------------------
 # Config validation
@@ -80,6 +82,35 @@ class TestAppValidation:
         app = App({"location": "porto", "n_modules": 10, "annual_consumption_kwh": 4000})
         with pytest.raises(RuntimeError, match="simulate"):
             app.result()
+
+    def test_simulate_passes_external_rlp_directory(self, _patch_weather, monkeypatch, tmp_path):
+        seen = {}
+
+        def _fake_load_profile(**kwargs):
+            seen["rlp_directory"] = kwargs["rlp_directory"]
+            return real_load_profile(
+                profile_type="1",
+                annual_consumption_kwh=kwargs["annual_consumption_kwh"],
+                start_date=kwargs["start_date"],
+                freq=kwargs["freq"],
+                num_years=kwargs["num_years"],
+                timezone=kwargs["timezone"],
+            )
+
+        monkeypatch.setattr(app_module, "load_profile", _fake_load_profile)
+
+        app = App(
+            {
+                "location": "porto",
+                "n_modules": 1,
+                "annual_consumption_kwh": 1000,
+                "projection_years": 1,
+                "rlp_directory": str(tmp_path),
+            }
+        )
+        app.simulate()
+
+        assert seen["rlp_directory"] == str(tmp_path)
 
 
 # ---------------------------------------------------------------------------

@@ -11,6 +11,7 @@ results/
 dev/
 *.csv
 !rlp/*.csv
+!breos/data/rlp/*.csv
 .codex
 .claude/
 

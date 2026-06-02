@@ -1,0 +1,17 @@
+# Template for using non-bundled load profiles.
+# Put licensed CSV files in this directory; do not commit third-party RLPs
+# unless their license explicitly allows redistribution.
+rlp_directory = "external_rlp"
+
+location = "porto"
+n_modules = 10
+annual_consumption_kwh = 4000
+battery_kwh = 5.0
+
+# E-REDES BTN C. Requires EREDES_2025_BTN_1000kwh_hourly.csv and/or
+# EREDES_2025_BTN_1000kwh_15min.csv inside rlp_directory.
+load_profile = "6"
+resolution = "15min"
+
+cost_preset = "residential_pt"
+emissions_country = "PT"
