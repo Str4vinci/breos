@@ -29,6 +29,7 @@ REQUIRED_WHEEL_FILES = {
 REQUIRED_SDIST_FILES = {
     "docs/conf.py",
     "docs/index.md",
+    "docs/release.md",
     "docs/getting-started/quickstart.md",
     "docs/legal/load-profile-data.md",
 }
