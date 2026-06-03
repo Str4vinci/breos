@@ -44,6 +44,21 @@ provide module, inverter, environment, MPPT, and string-topology data.
 - Non-goal: code-compliance certification, conductor/fuse sizing, and physical
   wiring auto-routing.
 
+## Distribution and release automation
+
+### PyPI trusted publishing
+
+BREOS releases are currently cut from protected `main` commits and published as
+GitHub Releases. Future work should add PyPI trusted publishing so tagged
+releases can publish the verified wheel and source distribution without storing
+long-lived upload tokens in the repository.
+
+- Use GitHub Actions OIDC trusted publishing for PyPI.
+- Publish only from protected `v*` tags that point at `main`.
+- Reuse the release artifact verifier before upload so packaged data, docs
+  exclusions, and installed-wheel smoke checks stay covered.
+- Add a TestPyPI dry-run path before enabling production PyPI uploads.
+
 ## Longer-Term Research Modules
 
 The following modules exist in the broader research codebase and may be
