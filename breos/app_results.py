@@ -7,8 +7,8 @@ from typing import Any
 import pandas as pd
 
 from breos.app_config import ResolvedAppConfig
-from breos.app_simulation import SimulationArtifacts
 from breos.emissions import calculate_co2_savings
+from breos.runners.app import SimulationArtifacts
 from breos.utils import get_hours_per_step
 
 

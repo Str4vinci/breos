@@ -45,8 +45,8 @@ from breos.app_inputs import (
 )
 from breos.app_results import build_result as build_app_result
 from breos.app_results import financial_to_dicts, monthly_to_dicts, yearly_to_dicts
-from breos.app_simulation import run_app_simulation
 from breos.load_profiles import load_profile
+from breos.runners.app import run_app_simulation
 from breos.weather import build_battery_temperature_series, fetch_tmy_weather_data, load_weather, resample_to_15min
 
 
