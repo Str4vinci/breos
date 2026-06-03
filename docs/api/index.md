@@ -1,9 +1,9 @@
 # API reference
 
-BREOS's API reference is organized by domain "puzzle piece" rather than by
-Python module — the [PV reference](pv.md) pulls names from `breos.solar`,
+BREOS's API reference is organized by domain area rather than by Python
+module — the [PV reference](pv.md) pulls names from `breos.solar`,
 `breos.pv_modules`, and `breos.inverter`, since all three describe the same
-piece of a system.
+part of a system.
 
 The {py:class}`~breos.App` facade is the recommended entry point. The
 top-level `breos.__all__` list is intentionally narrower than the full
@@ -12,7 +12,7 @@ The pages below cover lower-level module APIs you reach for when composing a
 custom pipeline. Import those lower-level names from their modules, for example
 `from breos.solar import calculate_pv_production_dc`.
 
-## Puzzle pieces
+## Domain areas
 
 ::::{grid} 1 2 2 4
 :gutter: 3
