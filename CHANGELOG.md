@@ -4,6 +4,8 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-06-03
+
 ### Changed
 - Narrowed the top-level `breos.__all__` release surface to the stable facade,
   key configuration/result objects, and core composition helpers. Lower-level

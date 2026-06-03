@@ -4,7 +4,7 @@
 [![License: BSD-3](https://img.shields.io/badge/License-BSD_3--Clause-blue.svg)](LICENSE)
 [![Python 3.13+](https://img.shields.io/badge/python-3.13+-blue.svg)](https://www.python.org/downloads/)
 
-A modular Python library for photovoltaic (PV) and battery energy system simulations, designed for research and engineering applications.
+A Python library for PV and battery energy-system simulation and optimization, designed for research and engineering applications.
 
 ## Features
 
