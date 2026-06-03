@@ -2,13 +2,23 @@
 
 All notable changes to BREOS are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased]
+
+## [0.2.0] - 2026-06-03
+
+### Changed
+- Narrowed the top-level `breos.__all__` release surface to the stable facade,
+  key configuration/result objects, and core composition helpers. Lower-level
+  module APIs remain importable from their modules.
+
 ## [0.1.0] - 2026-04-30
 
 ### Added
 - Public API facade (`breos.App`) — single entry point for simulations: config dict in, plain dict out.
+- Command line entry point (`breos run`) for running simulations from shell flags or TOML/JSON config files.
 - Test suite — pytest coverage of the public API, battery, economics, emissions, and solar modules (all offline).
 - GitHub Actions CI on every push/PR.
-- `cost_params_from_config()` — flexible config parser for `CostParams` with legacy-key fallbacks.
+- `cost_params_from_config()` — config parser for `CostParams`.
 - Marginal grid carbon intensity support in `EmissionsParams` for more accurate CO₂ avoidance accounting.
 
 ### Changed

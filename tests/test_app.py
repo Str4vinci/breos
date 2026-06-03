@@ -5,7 +5,9 @@ import json
 import pytest
 
 import breos
+import breos.app as app_module
 from breos.app import App
+from breos.load_profiles import load_profile as real_load_profile
 
 # ---------------------------------------------------------------------------
 # Config validation
@@ -63,10 +65,52 @@ class TestAppValidation:
         )
         assert app._lat == 41.15
 
+    def test_pv_arrays_allow_missing_n_modules(self):
+        app = App(
+            {
+                "location": "porto",
+                "annual_consumption_kwh": 3000,
+                "pv_arrays": [
+                    {"modules": 3, "module": "Erlangen_445W", "tilt": 10, "azimuth": 90},
+                    {"modules": 3, "module": "Erlangen_445W", "tilt": 10, "azimuth": 270},
+                ],
+            }
+        )
+        assert app._cfg["n_modules"] == 6
+
     def test_result_before_simulate(self):
         app = App({"location": "porto", "n_modules": 10, "annual_consumption_kwh": 4000})
         with pytest.raises(RuntimeError, match="simulate"):
             app.result()
+
+    def test_simulate_passes_external_rlp_directory(self, _patch_weather, monkeypatch, tmp_path):
+        seen = {}
+
+        def _fake_load_profile(**kwargs):
+            seen["rlp_directory"] = kwargs["rlp_directory"]
+            return real_load_profile(
+                profile_type="1",
+                annual_consumption_kwh=kwargs["annual_consumption_kwh"],
+                start_date=kwargs["start_date"],
+                freq=kwargs["freq"],
+                num_years=kwargs["num_years"],
+                timezone=kwargs["timezone"],
+            )
+
+        monkeypatch.setattr(app_module, "load_profile", _fake_load_profile)
+
+        app = App(
+            {
+                "location": "porto",
+                "n_modules": 1,
+                "annual_consumption_kwh": 1000,
+                "projection_years": 1,
+                "rlp_directory": str(tmp_path),
+            }
+        )
+        app.simulate()
+
+        assert seen["rlp_directory"] == str(tmp_path)
 
 
 # ---------------------------------------------------------------------------
@@ -119,11 +163,17 @@ class TestAppSimulateNoBattery:
             "co2_avoided_year1_kg",
             "co2_avoided_total_kg",
             "yearly",
+            "monthly",
+            "financial",
         }
         assert expected.issubset(self.result.keys())
 
     def test_yearly_length(self):
         assert len(self.result["yearly"]) == 5
+
+    def test_monthly_and_financial_lengths(self):
+        assert len(self.result["monthly"]) == 12
+        assert len(self.result["financial"]) == 6
 
     def test_system_echo(self):
         assert self.result["n_modules"] == 6
@@ -146,6 +196,138 @@ class TestAppSimulateNoBattery:
 
     def test_lcoe_positive(self):
         assert self.result["lcoe_eur_kwh"] > 0
+
+
+class TestAppSimulateMultiArray:
+    @pytest.fixture(autouse=True)
+    def _setup(self, _patch_weather):
+        self.app = App(
+            {
+                "location": "porto",
+                "annual_consumption_kwh": 3000,
+                "cost_preset": "residential_pt",
+                "projection_years": 5,
+                "pv_arrays": [
+                    {"modules": 3, "module": "Erlangen_445W", "tilt": 10, "azimuth": 90},
+                    {"modules": 3, "module": "Erlangen_445W", "tilt": 10, "azimuth": 270},
+                ],
+            }
+        )
+        self.app.simulate()
+        self.result = self.app.result()
+
+    def test_arrays_are_echoed(self):
+        assert self.result["n_modules"] == 6
+        assert len(self.result["pv_arrays"]) == 2
+        assert {arr["azimuth"] for arr in self.result["pv_arrays"]} == {90.0, 270.0}
+        assert {arr["tilt"] for arr in self.result["pv_arrays"]} == {10.0}
+
+    def test_multi_array_result_has_chart_data(self):
+        assert len(self.result["monthly"]) == 12
+        assert self.result["financial"][0]["year"] == 0
+        assert self.result["financial"][-1]["year"] == 5
+
+    def test_multi_array_energy_positive(self):
+        assert self.result["pv_production_kwh"] > 0
+
+
+class TestAppSimulateTracking:
+    def test_invalid_tracking(self, _patch_weather):
+        with pytest.raises(ValueError, match="tracking must be"):
+            App(
+                {
+                    "location": "porto",
+                    "n_modules": 6,
+                    "annual_consumption_kwh": 3000,
+                    "tracking": "trinity_axis",
+                }
+            )
+
+    def test_single_axis_runs(self, _patch_weather):
+        app = App(
+            {
+                "location": "porto",
+                "n_modules": 6,
+                "annual_consumption_kwh": 3000,
+                "cost_preset": "residential_pt",
+                "projection_years": 3,
+                "tracking": "single_axis",
+                "max_angle": 60.0,
+                "gcr": 0.35,
+            }
+        )
+        app.simulate()
+        result = app.result()
+        assert result["pv_production_kwh"] > 0
+        json.dumps(result)
+
+    def test_dual_axis_runs(self, _patch_weather):
+        app = App(
+            {
+                "location": "porto",
+                "n_modules": 6,
+                "annual_consumption_kwh": 3000,
+                "cost_preset": "residential_pt",
+                "projection_years": 3,
+                "tracking": "dual_axis",
+            }
+        )
+        app.simulate()
+        result = app.result()
+        assert result["pv_production_kwh"] > 0
+
+    def test_tracking_beats_fixed_via_app(self, _patch_weather):
+        """At the App level, single-axis (no backtrack, ±90°) should beat optimal fixed tilt."""
+        common = {
+            "location": "porto",
+            "n_modules": 6,
+            "annual_consumption_kwh": 3000,
+            "cost_preset": "residential_pt",
+            "projection_years": 1,
+        }
+        fixed = App(common)
+        fixed.simulate()
+        tracked = App({**common, "tracking": "single_axis", "backtrack": False, "max_angle": 90.0})
+        tracked.simulate()
+        assert tracked.result()["pv_production_kwh"] > fixed.result()["pv_production_kwh"]
+
+    def test_per_array_tracking_flows_through(self, _patch_weather):
+        """Tracking keys on pv_arrays entries must reach calculate_multi_array_production."""
+        fixed_app = App(
+            {
+                "location": "porto",
+                "annual_consumption_kwh": 3000,
+                "cost_preset": "residential_pt",
+                "projection_years": 1,
+                "pv_arrays": [
+                    {"modules": 6, "module": "Erlangen_445W", "tilt": 30, "azimuth": 180},
+                ],
+            }
+        )
+        fixed_app.simulate()
+        tracked_app = App(
+            {
+                "location": "porto",
+                "annual_consumption_kwh": 3000,
+                "cost_preset": "residential_pt",
+                "projection_years": 1,
+                "pv_arrays": [
+                    {
+                        "modules": 6,
+                        "module": "Erlangen_445W",
+                        "tracking": "single_axis",
+                        "axis_azimuth": 180,
+                        "max_angle": 90.0,
+                        "backtrack": False,
+                    },
+                ],
+            }
+        )
+        tracked_app.simulate()
+        # Tracking key must echo into result
+        assert tracked_app.result()["pv_arrays"][0].get("tracking") == "single_axis"
+        # And actually change production vs fixed
+        assert tracked_app.result()["pv_production_kwh"] != fixed_app.result()["pv_production_kwh"]
 
 
 class TestAppSimulateWithBattery:

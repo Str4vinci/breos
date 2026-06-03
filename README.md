@@ -1,10 +1,10 @@
 # BREOS - Building Renewable Energy Optimization Software
 
-[![Tests](https://github.com/Str4vinci/BREOS/actions/workflows/tests.yml/badge.svg)](https://github.com/Str4vinci/BREOS/actions/workflows/tests.yml)
+[![Tests](https://github.com/Str4vinci/breos/actions/workflows/tests.yml/badge.svg)](https://github.com/Str4vinci/breos/actions/workflows/tests.yml)
 [![License: BSD-3](https://img.shields.io/badge/License-BSD_3--Clause-blue.svg)](LICENSE)
 [![Python 3.13+](https://img.shields.io/badge/python-3.13+-blue.svg)](https://www.python.org/downloads/)
 
-A modular Python library for photovoltaic (PV) and battery energy system simulations, designed for research and engineering applications.
+A Python library for PV and battery energy-system simulation and optimization, designed for research and engineering applications.
 
 ## Features
 
@@ -15,7 +15,7 @@ A modular Python library for photovoltaic (PV) and battery energy system simulat
 - **Optimization**: Multi-objective (grid independence, NPV, ZEB ratio) system sizing using pymoo (NSGA-II). Tilt/azimuth optimization via grid search or Brent's method.
 - **Emissions**: CO2 savings calculations and projections.
 - **Visualization**: Publication-ready plots for energy balances, degradation, breakeven, Pareto fronts, and more.
-- **Load profiles**: Support for standard load profiles (BDEW H0, EREDES, REE) and custom profiles.
+- **Load profiles**: Bundled demandlib-derived H0 examples, plus support for user-supplied BDEW, E-REDES, REE, and custom profiles.
 
 ## Installation
 
@@ -26,8 +26,8 @@ pip install breos
 Or from source:
 
 ```bash
-git clone https://github.com/Str4vinci/BREOS.git
-cd BREOS
+git clone https://github.com/Str4vinci/breos.git
+cd breos
 pip install -e .
 ```
 
@@ -56,23 +56,57 @@ print(f"CO2 avoided: {result['co2_avoided_total_kg']:,.0f} kg")
 
 `result()` returns a plain Python dict (JSON-serializable, no pandas). See [Configuration](#configuration) for all options.
 
+For real studies, bring your own weather/API access where required, licensed
+load profiles, PV module/system data, and cost/tariff assumptions. The packaged
+defaults are intended to make the tool runnable, not to certify a project.
+
+## Command Line
+
+Run a simulation without writing Python:
+
+```bash
+breos run \
+  --location porto \
+  --n-modules 10 \
+  --annual-consumption-kwh 4000 \
+  --battery-kwh 5.0 \
+  --cost-preset residential-pt \
+  --emissions-country pt \
+  --output result.json
+```
+
+The CLI writes the same JSON-serializable result returned by `App.result()`.
+You can also pass a TOML or JSON config file:
+
+```bash
+breos run --config experiment1.toml --output result.json
+```
+
+For non-bundled RLPs, put licensed CSVs in a local directory and pass it through config or flags:
+
+```bash
+breos run --config configs/examples/external-rlp.toml --rlp-directory external_rlp
+```
+
 ## Configuration
 
-All keys except `location`, `n_modules`, and `annual_consumption_kwh` are optional with sensible defaults.
+All keys except `location`, `annual_consumption_kwh`, and either `n_modules` or `pv_arrays` are optional with sensible defaults.
 
 | Key | Default | Description |
 |-----|---------|-------------|
 | `location` | *required* | Preset key (`"porto"`, `"berlin"`, ...) or dict with `latitude`, `longitude`, `timezone` |
-| `n_modules` | *required* | Number of PV modules |
+| `n_modules` | *required unless `pv_arrays` is set* | Number of PV modules |
+| `pv_arrays` | `None` | Optional list of arrays with `modules`, `module`, `tilt`, and `azimuth`; when present, the array module total overrides `n_modules` |
 | `annual_consumption_kwh` | *required* | Annual electricity demand (kWh) |
 | `battery_kwh` | `0.0` | Battery capacity (0 = no battery) |
 | `pv_module` | `None` | Module name from catalogue (`None` = default) |
-| `load_profile` | `"6"` | Load profile type (`"1"`–`"8"`) |
+| `load_profile` | `"1"` | Bundled demandlib-derived H0 profile. Other standard profiles require caller-supplied CSVs |
+| `rlp_directory` | `None` | Directory containing licensed external RLP CSVs for non-bundled load profiles |
 | `tilt` | auto | Tilt angle in degrees (auto-estimated from latitude) |
 | `azimuth` | auto | Surface azimuth (auto: 180 for northern hemisphere) |
 | `resolution` | `"h"` | Time resolution (`"h"` or `"15min"`) |
 | `projection_years` | `20` | Economic projection horizon |
-| `cost_preset` | `None` | Cost preset from `configs/costs.json` |
+| `cost_preset` | `None` | Cost preset key from packaged defaults; editable examples live in `configs/base/` |
 | `inflation_rate` | `0.02` | Annual electricity price inflation |
 | `discount_rate` | `0.03` | Discount rate for NPV calculations |
 | `emissions_country` | `None` | Country code for CO2 calculations (`"PT"`, `"DE"`, `"ES"`, ...) |
@@ -98,11 +132,33 @@ All keys except `location`, `n_modules`, and `annual_consumption_kwh` are option
 | `co2_avoided_year1_kg` | Year 1 CO2 avoided |
 | `co2_avoided_total_kg` | Lifetime CO2 avoided |
 | `battery_soh_end_pct` | Battery state of health at end (if battery) |
+| `monthly` | Year 1 monthly balance rows for PV, load, imports, exports, and self-consumption |
+| `financial` | Yearly financial projection rows, including year 0 investment |
 | `yearly` | List of per-year dicts with detailed breakdown |
+
+### Multi-array PV systems
+
+Use `pv_arrays` when a roof has panels on different faces or orientations:
+
+```python
+app = breos.App({
+    "location": "porto",
+    "annual_consumption_kwh": 4000,
+    "pv_arrays": [
+        {"modules": 8, "module": "Erlangen_445W", "tilt": 10, "azimuth": 90},
+        {"modules": 8, "module": "Erlangen_445W", "tilt": 10, "azimuth": 270},
+    ],
+})
+app.simulate()
+```
+
+BREOS calculates production per array and combines the DC output before the
+energy balance, so east-west and pitched-roof layouts are not collapsed into a
+single representative tilt/azimuth.
 
 ## Advanced Usage
 
-For full control over individual simulation steps, you can use the internal modules directly:
+For full control over individual simulation steps, use the lower-level modules directly:
 
 ```python
 from breos.weather import fetch_tmy_weather_data
@@ -136,6 +192,15 @@ These modules may be released in the future or are available for academic collab
 
 BREOS uses [Open-Meteo](https://open-meteo.com/) for historical weather data. Open-Meteo is free for non-commercial use. For commercial applications, please review their [pricing and terms](https://open-meteo.com/en/pricing).
 
+## Load Profile Data Note
+
+The public package bundles only demandlib-derived H0 example profiles. E-REDES, REE, and direct BDEW CSVs are supported as user-provided files through `rlp_directory`, but are not redistributed in this repository because their public source terms do not clearly grant package redistribution rights. See [ATTRIBUTIONS.md](ATTRIBUTIONS.md) and [docs/legal/load-profile-data.md](docs/legal/load-profile-data.md).
+
+## Resources
+
+See [docs/resources.md](docs/resources.md) for links to PV modelling references,
+RLP sources, weather/solar-resource APIs, and input assumptions to record.
+
 ## Citation
 
 If you use BREOS in your research, please cite:
@@ -145,13 +210,23 @@ If you use BREOS in your research, please cite:
   author = {Rodrigues, Leonardo},
   title = {BREOS: Building Renewable Energy Optimization Software},
   year = {2026},
-  url = {https://github.com/Str4vinci/BREOS}
+  url = {https://github.com/Str4vinci/breos}
 }
 ```
+
+## Roadmap
+
+See [ROADMAP.md](ROADMAP.md) for planned architectural work and capability extensions.
 
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+
+BREOS uses `develop` as the default development branch. Feature work should be
+done on separate branches and opened as pull requests into `develop`.
+
+The `main` branch tracks stable releases only. Use `main` or the GitHub Releases
+page when you want the latest stable version.
 
 ## Contact
 

@@ -23,8 +23,8 @@ class TestBatteryConfig:
 
     def test_replacement_cost_auto(self):
         cfg = BatteryConfig(nominal_energy_wh=10000)
-        # 10 kWh * 711 €/kWh = 7110
-        assert cfg.replacement_cost == pytest.approx(7110.0, rel=0.01)
+        # 10 kWh * 500 €/kWh = 5000
+        assert cfg.replacement_cost == pytest.approx(5000.0, rel=0.01)
 
     def test_replacement_cost_zero_battery(self):
         cfg = BatteryConfig(nominal_energy_wh=0)
@@ -93,6 +93,22 @@ class TestSimulateEnergyBalance:
             gi = (1 - total_import / total_load) * 100 if total_load > 0 else 0
             gi_values.append(gi)
         assert gi_values[1] > gi_values[0]
+
+    def test_load_year_remap_drops_feb_29_when_target_is_not_leap(self):
+        pv_idx = pd.date_range("2025-02-28 00:00", periods=48, freq="h", tz="UTC")
+        load_idx = pd.date_range("2024-02-28 00:00", periods=72, freq="h", tz="UTC")
+        pv_dc = pd.Series(0.0, index=pv_idx)
+        houseload = pd.DataFrame({"Load": 1000.0}, index=load_idx)
+
+        results_df, _, summary_df, *_ = simulate_energy_balance(
+            pv_dc=pv_dc,
+            houseload=houseload,
+            battery_config=None,
+            freq="h",
+        )
+
+        assert len(results_df) == 48
+        assert summary_df["Total Load [kWh]"].iloc[0] == pytest.approx(48.0)
 
 
 class TestIndoorTemperatureModel:

@@ -25,6 +25,6 @@ body:
       placeholder: |
         Python: 3.13
         OS: Ubuntu 24.04
-        BREOS: 0.2.0
+        breos: 0.2.0
     validations:
       required: true

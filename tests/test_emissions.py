@@ -31,6 +31,31 @@ class TestCO2Savings:
         # 1000 * 127.91 / 1000 = 127.91 kg
         assert result["CO2_Avoided_Total_kg"] == pytest.approx(127.91)
 
+    def test_grid_carbon_intensity_alias_uses_average_intensity(self):
+        params = EmissionsParams(
+            average_grid_carbon_intensity_gco2_kwh=100.0,
+            marginal_grid_carbon_intensity_gco2_kwh=350.0,
+        )
+
+        assert params.grid_carbon_intensity_gco2_kwh == pytest.approx(100.0)
+
+    def test_avoided_co2_uses_marginal_intensity_when_available(self):
+        params = EmissionsParams(
+            average_grid_carbon_intensity_gco2_kwh=100.0,
+            marginal_grid_carbon_intensity_gco2_kwh=350.0,
+        )
+
+        result = calculate_co2_savings(
+            total_pv_kwh=10.0,
+            self_consumed_kwh=4.0,
+            emissions_params=params,
+        )
+
+        assert result["CO2_Avoided_Total_kg"] == pytest.approx(3.5)
+        assert result["CO2_Avoided_SelfConsumed_kg"] == pytest.approx(1.4)
+        assert result["CO2_Avoided_Intensity_Type"] == "marginal"
+        assert result["Average_Grid_Carbon_Intensity_gCO2_kWh"] == pytest.approx(100.0)
+
 
 class TestCO2Projection:
     def test_shape(self):

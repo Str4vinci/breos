@@ -8,15 +8,17 @@ This module handles:
 """
 
 import os
-import random
 import re
-from typing import Dict, List, Optional, Tuple
+from datetime import timedelta
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
 import pvlib
 from pvlib.location import Location
 from scipy.interpolate import Akima1DInterpolator
+
+from breos.utils import safe_path_slug
 
 # Optional imports for API calls
 try:
@@ -52,7 +54,7 @@ def parse_weather_filename(filename: str) -> Optional[Dict[str, str]]:
 
     # Pattern: location_type_yearstart_yearend_source
     # Source may contain hyphens (e.g., pvgis-sarah3)
-    match = re.match(r"^([a-z]+)_(tmy|historical)_(\d{4})_(\d{4})_([\w-]+)$", name)
+    match = re.match(r"^(.+)_(tmy|historical)_(\d{4})_(\d{4})_([\w-]+)$", name)
     if match:
         return {
             "location": match.group(1),
@@ -63,7 +65,7 @@ def parse_weather_filename(filename: str) -> Optional[Dict[str, str]]:
         }
 
     # Pattern without year_end: location_type_year_source (e.g., lisbon_tmy_2014_nsrdb)
-    match = re.match(r"^([a-z]+)_(tmy|historical)_(\d{4})_([\w-]+)$", name)
+    match = re.match(r"^(.+)_(tmy|historical)_(\d{4})_([\w-]+)$", name)
     if match:
         return {
             "location": match.group(1),
@@ -224,8 +226,10 @@ def fetch_tmy_weather_data(
         tmy_data.index = new_index
 
     # Resample to 15-min if requested
-    if freq != "h" and freq != "H" and freq != "1h":
+    if freq in ("15min", "15T", "15m"):
         tmy_data = resample_tmy_to_15min(tmy_data, metadata)
+    elif freq not in ("h", "H", "1h", "1H"):
+        raise ValueError("freq must be 'h' or '15min'")
 
     if save_to_file:
         # Encode metadata in filename: {location}_tmy_{year_min}_{year_max}_{db}.csv
@@ -287,8 +291,10 @@ def fetch_weather_data(
             "Install with: uv add openmeteo-requests requests-cache"
         )
 
-    # Setup the Open-Meteo API client with cache and retry
-    cache_session = requests_cache.CachedSession(".cache", expire_after=-1)
+    # Setup the Open-Meteo API client with cache and retry. Cache expires
+    # after 30 days so we don't serve indefinitely-stale entries if a single
+    # bad response was ever written.
+    cache_session = requests_cache.CachedSession(".cache", expire_after=timedelta(days=30))
     retries = Retry(total=5, backoff_factor=0.2, status_forcelist=[500, 502, 503, 504])
     cache_session.mount("https://", HTTPAdapter(max_retries=retries))
     cache_session.mount("http://", HTTPAdapter(max_retries=retries))
@@ -342,14 +348,14 @@ def fetch_weather_data(
     hourly_dataframe.set_index("date", inplace=True)
 
     # Resample to 15-min if requested (pass location for clear-sky scaling)
-    if freq == "15min" or freq == "15T":
+    if freq in ("15min", "15T", "15m"):
         hourly_dataframe = resample_to_15min(hourly_dataframe, method="makima", latitude=latitude, longitude=longitude)
 
     if save_to_file:
         start_year = start_date[:4]
         end_year = end_date[:4]
         if location_name:
-            loc_slug = location_name.lower()
+            loc_slug = safe_path_slug(location_name)
         else:
             loc_slug = f"lat{latitude:.0f}_lon{longitude:.0f}"
         filename = os.path.join(output_dir, f"{loc_slug}_historical_{start_year}_{end_year}_openmeteo.csv")
@@ -461,7 +467,11 @@ def resample_to_15min(
     df_hourly = df_hourly.sort_index()
 
     # Create target 15-min index
-    target_index = pd.date_range(start=df_hourly.index[0], end=df_hourly.index[-1], freq="15min")
+    target_index = pd.date_range(
+        start=df_hourly.index[0],
+        end=df_hourly.index[-1] + pd.Timedelta(minutes=45),
+        freq="15min",
+    )
 
     # Convert timestamps to seconds for interpolation
     x_original = df_hourly.index.astype("int64") // 10**9
@@ -651,6 +661,19 @@ def csv_hourly_to_15min(
         return None
 
 
+def _derive_steps_per_year(dates: pd.Series) -> int:
+    """Derive expected rows per non-leap year from the median timestep."""
+    if len(dates) < 2:
+        return 8760
+
+    step = dates.diff().median()
+    if pd.isna(step) or step.total_seconds() <= 0:
+        return 8760
+
+    hours_per_step = step.total_seconds() / 3600.0
+    return int(round(8760.0 / hours_per_step))
+
+
 def select_random_year_and_replace_datetime(csv_file_path: str, target_year: int = 2025) -> Tuple[pd.DataFrame, int]:
     """
     Load weather data, randomly select a year, and replace datetime with target year.
@@ -677,20 +700,21 @@ def select_random_year_and_replace_datetime(csv_file_path: str, target_year: int
     df["year"] = df["date"].dt.year
     available_years = df["year"].unique()
 
-    # Randomly select a year
-    selected_year = random.choice(available_years)
+    # Use numpy RNG so Monte Carlo's np.random.seed(...) controls this choice.
+    selected_year = int(np.random.choice(available_years))
 
     # Filter data for selected year
     selected_year_data = df[df["year"] == selected_year].copy()
 
-    # Handle leap years by removing Feb 29
-    if len(selected_year_data) == 8784:  # Leap year
-        feb_29_mask = (selected_year_data["date"].dt.month == 2) & (selected_year_data["date"].dt.day == 29)
+    # Drop Feb 29 by date, not by row count, so this works at any resolution.
+    feb_29_mask = (selected_year_data["date"].dt.month == 2) & (selected_year_data["date"].dt.day == 29)
+    if feb_29_mask.any():
         selected_year_data = selected_year_data[~feb_29_mask]
 
-    # Validate
-    if len(selected_year_data) != 8760:
-        print(f"Warning: Year {selected_year} has {len(selected_year_data)} hours, not 8760")
+    # Validate against the data's own step size instead of assuming hourly data.
+    expected_rows = _derive_steps_per_year(selected_year_data["date"])
+    if len(selected_year_data) != expected_rows:
+        print(f"Warning: Year {selected_year} has {len(selected_year_data)} rows, expected {expected_rows}")
 
     # Replace year in datetime
     year_diff = target_year - selected_year
@@ -739,12 +763,13 @@ def preload_weather_by_year(
     for yr in available_years:
         yr_data = df[df["year"] == yr].copy()
 
-        # Handle leap years
-        if len(yr_data) == 8784:
-            feb_29_mask = (yr_data["date"].dt.month == 2) & (yr_data["date"].dt.day == 29)
+        # Drop Feb 29 by date, not by row count, so this works at any resolution.
+        feb_29_mask = (yr_data["date"].dt.month == 2) & (yr_data["date"].dt.day == 29)
+        if feb_29_mask.any():
             yr_data = yr_data[~feb_29_mask]
 
-        if len(yr_data) != 8760:
+        expected_rows = _derive_steps_per_year(yr_data["date"])
+        if len(yr_data) != expected_rows:
             continue  # skip incomplete years
 
         # Remap to target year
@@ -812,12 +837,13 @@ def fetch_tmy_nsrdb(
     df = df[wanted].copy()
 
     # Resample to 15-min if requested
-    if freq == "15min" or freq == "15T":
+    if freq in ("15min", "15T", "15m"):
         df = resample_to_15min(df, method="makima", latitude=latitude, longitude=longitude)
 
     if save_to_file and location_name:
-        vintage = year if year != "tmy" else "tmy"
-        filename = f"weather/{location_name}_tmy_{vintage}_nsrdb.csv"
+        loc_slug = safe_path_slug(location_name)
+        vintage = safe_path_slug(year) if year != "tmy" else "tmy"
+        filename = f"weather/{loc_slug}_tmy_{vintage}_nsrdb.csv"
         os.makedirs(os.path.dirname(filename), exist_ok=True)
         df.to_csv(filename)
         print(f"Saved NSRDB data to {filename}")
@@ -862,7 +888,7 @@ def read_epw_file(
         longitude = meta.get("longitude")
 
     # Resample to 15-min if requested
-    if freq == "15min" or freq == "15T":
+    if freq in ("15min", "15T", "15m"):
         df = resample_to_15min(df, method="makima", latitude=latitude, longitude=longitude)
 
     return df
@@ -885,3 +911,92 @@ def extract_ambient_temperature(weather_df: pd.DataFrame) -> Optional[pd.Series]
         if col in weather_df.columns:
             return weather_df[col]
     return None
+
+
+def build_battery_temperature_series(
+    temp_config: Any = None,
+    index: Optional[pd.DatetimeIndex] = None,
+    *,
+    start_time: Optional[pd.Timestamp] = None,
+    end_time: Optional[pd.Timestamp] = None,
+    freq: str = "h",
+    default_temp: float = 25.0,
+    weather_df: Optional[pd.DataFrame] = None,
+    indoor_model: Optional[Dict[str, Any]] = None,
+) -> pd.Series:
+    """Build the battery-temperature series used by degradation models.
+
+    ``temp_config`` accepts the same forms used by internal runners:
+    ``None``/``"weather"`` uses weather data, a number is a fixed temperature,
+    and a string is treated as a CSV path. The indoor buffering model is applied
+    by default and can be disabled with ``indoor_model={"enabled": False}``.
+    """
+    if index is None:
+        if start_time is None or end_time is None:
+            raise ValueError("Either index or start_time/end_time must be provided.")
+        index = pd.date_range(start=start_time, end=end_time, freq=freq)
+    else:
+        index = pd.DatetimeIndex(index)
+
+    result: Optional[pd.Series] = None
+
+    weather_indexed = weather_df
+    if weather_indexed is not None and not isinstance(weather_indexed.index, pd.DatetimeIndex):
+        date_col = next(
+            (c for c in weather_indexed.columns if str(c).lower() in {"date", "datetime", "time"}),
+            None,
+        )
+        if date_col is not None:
+            weather_indexed = weather_indexed.copy()
+            weather_indexed[date_col] = pd.to_datetime(weather_indexed[date_col])
+            weather_indexed = weather_indexed.set_index(date_col)
+
+    if temp_config is None or (isinstance(temp_config, str) and temp_config.lower() == "weather"):
+        ambient = extract_ambient_temperature(weather_indexed) if weather_indexed is not None else None
+        if ambient is not None:
+            ambient = ambient.copy()
+            if not isinstance(ambient.index, pd.DatetimeIndex) and len(ambient) == len(index):
+                ambient.index = index
+            result = ambient.reindex(index).ffill().fillna(default_temp)
+        else:
+            result = pd.Series(default_temp, index=index)
+    elif isinstance(temp_config, (int, float)):
+        result = pd.Series(float(temp_config), index=index)
+    elif isinstance(temp_config, str):
+        if os.path.exists(temp_config):
+            try:
+                df = pd.read_csv(temp_config)
+                date_col = next((c for c in df.columns if c.lower() in ["date", "datetime", "time"]), None)
+                val_col = next((c for c in df.columns if c.lower() in ["temp", "temperature", "t_cell", "t_amb"]), None)
+                if date_col and val_col:
+                    df[date_col] = pd.to_datetime(df[date_col])
+                    df.set_index(date_col, inplace=True)
+                    result = df[val_col].reindex(index).ffill().fillna(default_temp)
+            except Exception:
+                result = None
+        if result is None:
+            result = pd.Series(default_temp, index=index)
+    else:
+        result = pd.Series(default_temp, index=index)
+
+    indoor_model = indoor_model or {}
+    from breos.constants import (
+        DEFAULT_INDOOR_CEILING_C,
+        DEFAULT_INDOOR_COUPLING_ALPHA,
+        DEFAULT_INDOOR_FLOOR_C,
+        DEFAULT_INDOOR_MODEL_ENABLED,
+        DEFAULT_INDOOR_SETPOINT_C,
+    )
+
+    if indoor_model.get("enabled", DEFAULT_INDOOR_MODEL_ENABLED):
+        from breos.battery import apply_indoor_temperature_model
+
+        result = apply_indoor_temperature_model(
+            result,
+            setpoint_c=indoor_model.get("setpoint_c", DEFAULT_INDOOR_SETPOINT_C),
+            coupling_alpha=indoor_model.get("coupling_alpha", DEFAULT_INDOOR_COUPLING_ALPHA),
+            floor_c=indoor_model.get("floor_c", DEFAULT_INDOOR_FLOOR_C),
+            ceiling_c=indoor_model.get("ceiling_c", DEFAULT_INDOOR_CEILING_C),
+        )
+
+    return result

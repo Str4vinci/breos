@@ -7,8 +7,8 @@ Thanks for your interest in contributing to BREOS! This guide will help you get 
 1. Clone the repository:
 
 ```bash
-git clone https://github.com/Str4vinci/BREOS.git
-cd BREOS
+git clone https://github.com/Str4vinci/breos.git
+cd breos
 ```
 
 2. Install [uv](https://docs.astral.sh/uv/) (recommended) or use pip:
@@ -72,7 +72,7 @@ uv run pytest tests/test_app.py -v
 
 ## Reporting Issues
 
-Open an issue on [GitHub](https://github.com/Str4vinci/BREOS/issues) with:
+Open an issue on [GitHub](https://github.com/Str4vinci/breos/issues) with:
 
 - What you expected to happen
 - What actually happened

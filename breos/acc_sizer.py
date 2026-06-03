@@ -11,7 +11,7 @@ from pvlib.location import Location
 
 from breos import fetch_tmy_weather_data, load_profile
 from breos.acc import calculate_acc_metrics, calculate_variable_coefficients
-from breos.economics import calculate_costs
+from breos.economics import cost_params_from_config
 from breos.solar import calculate_multi_array_production, calculate_pv_production_dc
 
 
@@ -38,7 +38,7 @@ def run_acc_sizer_logic(config: Dict[str, Any], verbose: bool = True) -> pd.Data
     load_matrix = []
     for hh in households:
         # Load profile
-        p = load_profile(str(hh.get("profile_type", "6")), hh.get("consumption", 3000), freq="h")
+        p = load_profile(str(hh.get("profile_type", "1")), hh.get("consumption", 3000), freq="h")
         load_matrix.append(p.values)
     load_matrix_np = np.column_stack(load_matrix)
 
@@ -87,12 +87,13 @@ def run_acc_sizer_logic(config: Dict[str, Any], verbose: bool = True) -> pd.Data
     # Cost Params
     costs_cfg = config.get("costs", {})
     financials_cfg = config.get("financials", {})
-    elec_price_grid = financials_cfg.get("elec_price_grid", 0.16)
-    elec_price_export = financials_cfg.get("elec_price_export", 0.05)
+    cost_params = cost_params_from_config(costs_cfg, financials_cfg)
+    electricity_cost = cost_params.electricity_cost
+    electricity_sold_cost = cost_params.electricity_sold_cost
 
     # Baseline Cost (No Solar)
     # Simple assumption: Cost = Load * GridPrice
-    baseline_bill = total_community_load * elec_price_grid
+    baseline_bill = total_community_load * electricity_cost
 
     if verbose:
         print(f"Sweeping {len(multipliers)} sizes (Scale {min_scale}x to {max_scale}x)...")
@@ -139,8 +140,8 @@ def run_acc_sizer_logic(config: Dict[str, Any], verbose: bool = True) -> pd.Data
         capex = kwp * cost_per_kwp
 
         # Bill
-        bill_grid = total_import * elec_price_grid
-        bill_export_rev = total_export * elec_price_export
+        bill_grid = total_import * electricity_cost
+        bill_export_rev = total_export * electricity_sold_cost
         net_bill = bill_grid - bill_export_rev
 
         annual_savings = baseline_bill - net_bill

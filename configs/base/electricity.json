@@ -1,0 +1,189 @@
+{
+    "_note": "Eurostat nrg_pc_204, TOT_KWH band, EUR/kWh. I_TAX = all taxes included; X_TAX = all taxes excluded. Best available period used (2025-S2 preferred, 2025-S1 fallback). EL (Eurostat) mapped to GR. IE and LU excluded — no data available.",
+    "AT": {
+        "country": "Austria",
+        "electricity_cost_kwh": 0.3287,
+        "electricity_cost_excl_taxes_kwh": 0.2528,
+        "period": "2025-S2"
+    },
+    "BA": {
+        "country": "Bosnia Herzegovina",
+        "electricity_cost_kwh": 0.0991,
+        "electricity_cost_excl_taxes_kwh": 0.0837,
+        "period": "2025-S2"
+    },
+    "BE": {
+        "country": "Belgium",
+        "electricity_cost_kwh": 0.3554,
+        "electricity_cost_excl_taxes_kwh": 0.2758,
+        "period": "2025-S2"
+    },
+    "BG": {
+        "country": "Bulgaria",
+        "electricity_cost_kwh": 0.1353,
+        "electricity_cost_excl_taxes_kwh": 0.1128,
+        "period": "2025-S2"
+    },
+    "CY": {
+        "country": "Cyprus",
+        "electricity_cost_kwh": 0.2912,
+        "electricity_cost_excl_taxes_kwh": 0.1996,
+        "period": "2025-S2"
+    },
+    "CZ": {
+        "country": "Czechia",
+        "electricity_cost_kwh": 0.3107,
+        "electricity_cost_excl_taxes_kwh": 0.2325,
+        "period": "2025-S2"
+    },
+    "DE": {
+        "country": "Germany",
+        "electricity_cost_kwh": 0.4042,
+        "electricity_cost_excl_taxes_kwh": 0.2772,
+        "period": "2025-S2"
+    },
+    "DK": {
+        "country": "Denmark",
+        "electricity_cost_kwh": 0.2847,
+        "electricity_cost_excl_taxes_kwh": 0.1660,
+        "period": "2025-S2"
+    },
+    "EE": {
+        "country": "Estonia",
+        "electricity_cost_kwh": 0.2124,
+        "electricity_cost_excl_taxes_kwh": 0.1608,
+        "period": "2025-S2"
+    },
+    "ES": {
+        "country": "Spain",
+        "electricity_cost_kwh": 0.2841,
+        "electricity_cost_excl_taxes_kwh": 0.1967,
+        "period": "2025-S1"
+    },
+    "FI": {
+        "country": "Finland",
+        "electricity_cost_kwh": 0.1906,
+        "electricity_cost_excl_taxes_kwh": 0.1293,
+        "period": "2025-S2"
+    },
+    "FR": {
+        "country": "France",
+        "electricity_cost_kwh": 0.2479,
+        "electricity_cost_excl_taxes_kwh": 0.1727,
+        "period": "2025-S2"
+    },
+    "GR": {
+        "country": "Greece",
+        "electricity_cost_kwh": 0.2552,
+        "electricity_cost_excl_taxes_kwh": 0.2064,
+        "period": "2025-S2"
+    },
+    "HR": {
+        "country": "Croatia",
+        "electricity_cost_kwh": 0.1691,
+        "electricity_cost_excl_taxes_kwh": 0.1363,
+        "period": "2025-S1"
+    },
+    "HU": {
+        "country": "Hungary",
+        "electricity_cost_kwh": 0.1066,
+        "electricity_cost_excl_taxes_kwh": 0.0839,
+        "period": "2025-S1"
+    },
+    "IT": {
+        "country": "Italy",
+        "electricity_cost_kwh": 0.3330,
+        "electricity_cost_excl_taxes_kwh": 0.2485,
+        "period": "2025-S2"
+    },
+    "LT": {
+        "country": "Lithuania",
+        "electricity_cost_kwh": 0.2075,
+        "electricity_cost_excl_taxes_kwh": 0.1718,
+        "period": "2025-S2"
+    },
+    "LV": {
+        "country": "Latvia",
+        "electricity_cost_kwh": 0.2650,
+        "electricity_cost_excl_taxes_kwh": 0.2182,
+        "period": "2025-S2"
+    },
+    "ME": {
+        "country": "Montenegro",
+        "electricity_cost_kwh": 0.1060,
+        "electricity_cost_excl_taxes_kwh": 0.0923,
+        "period": "2025-S2"
+    },
+    "MK": {
+        "country": "North Macedonia",
+        "electricity_cost_kwh": 0.1181,
+        "electricity_cost_excl_taxes_kwh": 0.1001,
+        "period": "2025-S1"
+    },
+    "MT": {
+        "country": "Malta",
+        "electricity_cost_kwh": 0.1473,
+        "electricity_cost_excl_taxes_kwh": 0.1388,
+        "period": "2025-S2"
+    },
+    "NL": {
+        "country": "Netherlands",
+        "electricity_cost_kwh": 0.2483,
+        "electricity_cost_excl_taxes_kwh": 0.3027,
+        "period": "2025-S2"
+    },
+    "NO": {
+        "country": "Norway",
+        "electricity_cost_kwh": 0.1175,
+        "electricity_cost_excl_taxes_kwh": 0.0992,
+        "period": "2025-S2"
+    },
+    "PL": {
+        "country": "Poland",
+        "electricity_cost_kwh": 0.2854,
+        "electricity_cost_excl_taxes_kwh": 0.1621,
+        "period": "2025-S2"
+    },
+    "PT": {
+        "country": "Portugal",
+        "electricity_cost_kwh": 0.2582,
+        "electricity_cost_excl_taxes_kwh": 0.1695,
+        "period": "2025-S2"
+    },
+    "RO": {
+        "country": "Romania",
+        "electricity_cost_kwh": 0.2907,
+        "electricity_cost_excl_taxes_kwh": 0.2232,
+        "period": "2025-S2"
+    },
+    "RS": {
+        "country": "Serbia",
+        "electricity_cost_kwh": 0.1159,
+        "electricity_cost_excl_taxes_kwh": 0.0833,
+        "period": "2025-S1"
+    },
+    "SE": {
+        "country": "Sweden",
+        "electricity_cost_kwh": 0.2133,
+        "electricity_cost_excl_taxes_kwh": 0.1311,
+        "period": "2025-S1"
+    },
+    "SI": {
+        "country": "Slovenia",
+        "electricity_cost_kwh": 0.1807,
+        "electricity_cost_excl_taxes_kwh": 0.1456,
+        "period": "2025-S1"
+    },
+    "SK": {
+        "country": "Slovakia",
+        "electricity_cost_kwh": 0.1892,
+        "electricity_cost_excl_taxes_kwh": 0.1274,
+        "period": "2025-S1"
+    },
+    "XK": {
+        "country": "Kosovo",
+        "electricity_cost_kwh": 0.0941,
+        "electricity_cost_excl_taxes_kwh": 0.0842,
+        "period": "2025-S2"
+    }
+}

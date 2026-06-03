@@ -1,7 +1,7 @@
 """
 BREOS - Building Renewable Energy Optimization Software
 
-A modular Python library for photovoltaic and battery energy system simulations.
+Python library for PV and battery energy-system simulation and optimization.
 Supports both hourly ('h') and 15-minute ('15min') time resolutions.
 
 Modules:
@@ -17,15 +17,14 @@ Modules:
 
 Usage:
 ------
->>> from breos.weather import fetch_tmy_weather_data
->>> from breos.solar import calculate_pv_production, PVModuleParams
->>> from breos.battery import simulate_energy_balance, BatteryConfig
->>> from breos.load_profiles import load_profile
->>> from breos.economics import calculate_costs, cost_analysis_projection
+>>> import breos
+>>> app = breos.App({"location": "porto", "n_modules": 10, "annual_consumption_kwh": 4000})
+>>> app.simulate()
+>>> result = app.result()
 """
 
 # Version
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 # Public facade
 from breos.app import App
@@ -106,6 +105,9 @@ from breos.emissions import (
 from breos.inverter import (
     INVERTER_PRESETS,
     InverterConfig,
+    InverterConversionResult,
+    calculate_dc_ac_efficiency,
+    calculate_dc_ac_power,
     get_inverter_preset,
 )
 
@@ -157,8 +159,10 @@ from breos.pv_modules import (
 # Solar
 from breos.solar import (
     PVModuleParams,
+    calculate_multi_array_production,
     calculate_pv_production_ac,
     calculate_pv_production_dc,
+    calculate_pv_production_dc_tracking,
     calculate_pv_production_tmy,
     dc_to_ac,
     default_azimuth,
@@ -174,10 +178,12 @@ from breos.utils import (
     get_steps_per_year,
     is_leap_year,
     number_of_cores,
+    remap_datetime_index_years,
 )
 
 # Weather
 from breos.weather import (
+    build_battery_temperature_series,
     csv_15min_to_hourly,
     csv_hourly_to_15min,
     extract_ambient_temperature,
@@ -259,60 +265,43 @@ __all__ = [
     "App",
     # Version
     "__version__",
-    # Utils
-    "is_leap_year",
-    "count_leap_years",
-    "number_of_cores",
-    "get_hours_per_step",
-    "get_steps_per_day",
-    "get_steps_per_year",
-    # Constants
-    "R_GAS",
-    "T_REF_K",
-    "NAUMANN_K0_PERCENT",
-    "NAUMANN_EA_J_MOL",
-    "LAM_K0_FRAC",
-    "LAM_EA_J_MOL",
-    "DEFAULT_INDOOR_SETPOINT_C",
-    "DEFAULT_INDOOR_COUPLING_ALPHA",
-    "DEFAULT_INDOOR_FLOOR_C",
-    "DEFAULT_INDOOR_CEILING_C",
+    # Configuration and result objects
+    "BatteryConfig",
+    "CostParams",
+    "EmissionsParams",
+    "InverterConfig",
+    "InverterConversionResult",
+    "OptimizationResult",
+    "PVModuleParams",
     # Weather
-    "parse_weather_filename",
     "load_weather",
     "fetch_tmy_weather_data",
     "fetch_tmy_nsrdb",
     "fetch_weather_data",
     "read_epw_file",
-    "resample_tmy_to_15min",
-    "resample_to_15min",
-    "resample_to_hourly",
-    "csv_15min_to_hourly",
-    "csv_hourly_to_15min",
-    "select_random_year_and_replace_datetime",
-    "extract_ambient_temperature",
     # Solar
     "calculate_pv_production_dc",
+    "calculate_pv_production_dc_tracking",
+    "calculate_multi_array_production",
     "calculate_pv_production_ac",
-    "calculate_pv_production_tmy",
     "dc_to_ac",
-    "PVModuleParams",
     "estimate_optimal_tilt",
     "default_azimuth",
-    "zeb_sizer",
+    # PV module catalogue
+    "get_module",
+    "get_module_info",
+    "list_modules",
     # Load Profiles
     "load_profile",
     "scale_to_annual_consumption",
     "align_load_to_pv",
+    # Inverter
+    "get_inverter_preset",
+    "calculate_dc_ac_power",
     # Battery
     "simulate_energy_balance",
-    "BatteryConfig",
-    "update_battery_soh_cyclewise",
-    "update_battery_soh_calendar",
-    "update_battery_soc",
     "apply_indoor_temperature_model",
     # Emissions
-    "EmissionsParams",
     "calculate_co2_savings",
     "calculate_co2_projection",
     # Economics
@@ -321,34 +310,14 @@ __all__ = [
     "cost_params_from_config",
     "find_payback_year",
     "calculate_lcoe",
-    "CostParams",
     # Optimization
     "optimize_tilt",
     "optimize_tilt_brent",
     "optimize_battery_size",
-    "size_for_zeb",
-    "OptimizationResult",
     # I/O
     "export_results",
-    "export_cost_analysis",
     "export_summary",
-    "save_simulation_report",
     "load_results",
     "export_monthly_summary",
     "export_yearly_summary",
-    # Polysun Degradation
-    "PolysunDegradationConfig",
-    "woehler_cycles_to_failure",
-    "compute_dod_histogram",
-    "compute_miner_damage",
-    "predict_polysun_lifetime",
-    "simulate_polysun_degradation",
-    # Plotting
-    "plot_calendar_aging_sensitivity",
-    "plot_grid_independence_heatmap",
-    "plot_location_comparison_delta",
-    "plot_co2_savings",
-    "plot_degradation_methodology_comparison",
-    "plot_lifetime_prediction_comparison",
-    "plot_temperature_sensitivity_comparison",
 ]

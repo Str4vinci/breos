@@ -53,11 +53,11 @@ from breos.weather import extract_ambient_temperature, load_weather, resample_to
 # Location registry
 # ---------------------------------------------------------------------------
 LOCATION_REGISTRY = {
-    "porto": {"costs": "residential_pt", "tilt": 35, "azimuth": 180, "load_profile": "6"},
+    "porto": {"costs": "residential_pt", "tilt": 35, "azimuth": 180, "load_profile": "1"},
     "berlin": {"costs": "residential_de", "tilt": 40, "azimuth": 160, "load_profile": "1"},
-    "lisbon": {"costs": "residential_pt", "tilt": 35, "azimuth": 180, "load_profile": "6"},
+    "lisbon": {"costs": "residential_pt", "tilt": 35, "azimuth": 180, "load_profile": "1"},
     "erlangen": {"costs": "residential_de", "tilt": 40, "azimuth": 160, "load_profile": "1"},
-    "esposende": {"costs": "residential_pt", "tilt": 35, "azimuth": 180, "load_profile": "6"},
+    "esposende": {"costs": "residential_pt", "tilt": 35, "azimuth": 180, "load_profile": "1"},
 }
 
 # Fixed system parameters

@@ -8,7 +8,13 @@ build/
 .venv/
 .env
 results/
+dev/
 *.csv
 !rlp/*.csv
+!breos/data/rlp/*.csv
 .codex
 .claude/
+
+# Sphinx
+docs/_build/
+docs/api/generated/

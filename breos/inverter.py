@@ -7,7 +7,7 @@ This module handles:
 - Efficiency calculations
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional
 
 
@@ -68,6 +68,21 @@ class InverterConfig:
         return power_kw * cost_per_kw
 
 
+@dataclass(frozen=True)
+class InverterConversionResult:
+    """AC conversion result with explicit DC-side clipping bookkeeping."""
+
+    ac_power_w: float
+    conversion_loss_w: float
+    clipping_loss_dc_w: float
+    clipping_loss_ac_equivalent_w: float
+
+    @property
+    def total_dc_input_w(self) -> float:
+        """DC input reconstructed from AC output, conversion loss, and clipping."""
+        return self.ac_power_w + self.conversion_loss_w + self.clipping_loss_dc_w
+
+
 # Common inverter presets
 INVERTER_PRESETS = {
     "residential_hybrid": InverterConfig(
@@ -115,13 +130,16 @@ def get_inverter_preset(name: str) -> InverterConfig:
     return INVERTER_PRESETS[name]
 
 
-def calculate_dc_ac_efficiency(
+def calculate_dc_ac_power(
     pv_dc_power: float, inverter_ac_power: float, inverter_efficiency: float = 0.96
-) -> float:
+) -> InverterConversionResult:
     """
-    Calculate AC output considering inverter clipping.
+    Calculate AC output and loss buckets for a DC-to-AC inverter.
 
-    If DC power exceeds inverter rating, clips to inverter limit.
+    Clipping is reported on the DC side: power above the DC input required
+    to saturate the AC rating is ``clipping_loss_dc_w``. The AC-equivalent
+    clipping value is also exposed for reports that compare against
+    ``pv_dc_power * inverter_efficiency``.
 
     Args:
         pv_dc_power: DC power from PV array (W)
@@ -129,8 +147,43 @@ def calculate_dc_ac_efficiency(
         inverter_efficiency: Inverter efficiency at MPP
 
     Returns:
-        AC power output (W)
+        InverterConversionResult with AC output and loss buckets.
     """
-    max_ac = inverter_ac_power
+    pv_dc_power = max(0.0, float(pv_dc_power))
+    inverter_ac_power = max(0.0, float(inverter_ac_power))
+    inverter_efficiency = min(1.0, max(0.0, float(inverter_efficiency)))
+
+    if inverter_efficiency <= 0.0 or inverter_ac_power <= 0.0:
+        return InverterConversionResult(
+            ac_power_w=0.0,
+            conversion_loss_w=0.0,
+            clipping_loss_dc_w=pv_dc_power,
+            clipping_loss_ac_equivalent_w=0.0,
+        )
+
     theoretical_ac = pv_dc_power * inverter_efficiency
-    return min(theoretical_ac, max_ac)
+    ac_power = min(theoretical_ac, inverter_ac_power)
+    dc_used = min(pv_dc_power, inverter_ac_power / inverter_efficiency)
+    clipping_loss_dc = max(0.0, pv_dc_power - dc_used)
+    conversion_loss = max(0.0, dc_used - ac_power)
+    clipping_loss_ac_equiv = max(0.0, theoretical_ac - ac_power)
+
+    return InverterConversionResult(
+        ac_power_w=ac_power,
+        conversion_loss_w=conversion_loss,
+        clipping_loss_dc_w=clipping_loss_dc,
+        clipping_loss_ac_equivalent_w=clipping_loss_ac_equiv,
+    )
+
+
+def calculate_dc_ac_efficiency(
+    pv_dc_power: float, inverter_ac_power: float, inverter_efficiency: float = 0.96
+) -> float:
+    """
+    Calculate AC output considering inverter clipping.
+
+    This compatibility helper returns only AC power. Use
+    ``calculate_dc_ac_power()`` when clipping losses need to be reported
+    separately.
+    """
+    return calculate_dc_ac_power(pv_dc_power, inverter_ac_power, inverter_efficiency).ac_power_w

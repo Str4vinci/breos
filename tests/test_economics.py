@@ -3,6 +3,7 @@
 import pytest
 
 from breos.economics import CostParams, calculate_costs, calculate_lcoe, find_payback_year
+from breos.optimization import calculate_financials
 
 
 class TestCalculateCosts:
@@ -26,7 +27,7 @@ class TestCalculateCosts:
             battery_capacity_wh=5000,
             cost_params=cost_params,
         )
-        assert costs["battery_cost"] == pytest.approx(5 * 711.0)
+        assert costs["battery_cost"] == pytest.approx(5 * 500.0)
         # With battery → hybrid inverter (more expensive)
         assert costs["inverter_cost"] == pytest.approx(102.58 * (10 * 550 / 1000) / 1.25, rel=0.01)
         assert costs["total_initial_cost"] > costs["pv_cost"] + costs["battery_cost"]
@@ -49,6 +50,39 @@ class TestCalculateCosts:
             + costs.get("tes_installation_cost", 0)
         )
         assert costs["total_initial_cost"] == pytest.approx(parts, rel=0.001)
+
+    def test_optimizer_financials_honor_modern_cost_keys(self):
+        base = dict(
+            n_modules=10,
+            battery_kwh=5.0,
+            annual_import_kwh=2000.0,
+            annual_export_kwh=1000.0,
+            annual_load_kwh=4000.0,
+            costs_config={
+                "module_cost_per_w": 0.10,
+                "storage_cost_per_kwh": 400.0,
+                "installation_cost_per_module": 200.0,
+                "installation_cost_battery": 500.0,
+                "other_costs": 100.0,
+            },
+            financials_config={
+                "electricity_cost": 0.30,
+                "electricity_sold_cost": 0.05,
+                "inflation_rate": 0.01,
+                "discount_rate": 0.0,
+                "project_lifespan": 5,
+            },
+        )
+
+        capex_a, npv_a = calculate_financials(**base)
+
+        modified = dict(base)
+        modified["costs_config"] = dict(base["costs_config"], module_cost_per_w=0.30)
+        modified["financials_config"] = dict(base["financials_config"], electricity_cost=0.45)
+        capex_b, npv_b = calculate_financials(**modified)
+
+        assert capex_b > capex_a
+        assert npv_b != npv_a
 
 
 class TestFindPaybackYear:

@@ -44,9 +44,11 @@ def resolve_location(name: str) -> dict:
 
 
 def fetch_tmy(args):
+    from breos.utils import safe_path_slug
     from breos.weather import fetch_tmy_weather_data, parse_weather_filename
 
     loc = resolve_location(args.location)
+    loc_slug = safe_path_slug(args.location)
     print(f"Location: {args.location} ({loc['latitude']}, {loc['longitude']})")
 
     # Check if TMY already exists locally
@@ -54,7 +56,7 @@ def fetch_tmy(args):
     existing = []
     for fname in os.listdir(WEATHER_DIR):
         parsed = parse_weather_filename(fname)
-        if parsed and parsed["location"] == args.location and parsed["type"] == "tmy":
+        if parsed and parsed["location"] == loc_slug and parsed["type"] == "tmy":
             existing.append(fname)
 
     if existing and not args.force:
@@ -76,7 +78,7 @@ def fetch_tmy(args):
     year_min = inputs.get("meteo_data", {}).get("year_min", "unknown")
     year_max = inputs.get("meteo_data", {}).get("year_max", "unknown")
     db_slug = f"pvgis-{rad_db.lower().replace('pvgis-', '')}"
-    filename = WEATHER_DIR / f"{args.location}_tmy_{year_min}_{year_max}_{db_slug}.csv"
+    filename = WEATHER_DIR / f"{loc_slug}_tmy_{year_min}_{year_max}_{db_slug}.csv"
 
     tmy_data.to_csv(filename)
     size_mb = filename.stat().st_size / 1e6
@@ -84,13 +86,15 @@ def fetch_tmy(args):
 
 
 def fetch_historical(args):
+    from breos.utils import safe_path_slug
     from breos.weather import fetch_weather_data
 
     loc = resolve_location(args.location)
+    loc_slug = safe_path_slug(args.location)
     print(f"Location: {args.location} ({loc['latitude']}, {loc['longitude']})")
     print(f"Period: {args.start}-{args.end}")
 
-    filename = WEATHER_DIR / f"{args.location}_historical_{args.start}_{args.end}_openmeteo.csv"
+    filename = WEATHER_DIR / f"{loc_slug}_historical_{args.start}_{args.end}_openmeteo.csv"
 
     if filename.exists() and not args.force:
         print(f"Already exists: {filename.name}")

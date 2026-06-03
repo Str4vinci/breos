@@ -89,7 +89,7 @@ def pv_params():
 @pytest.fixture
 def sample_load():
     return load_profile(
-        profile_type="6",
+        profile_type="1",
         annual_consumption_kwh=3000,
         start_date="2023-01-01",
         freq="h",
@@ -148,7 +148,7 @@ def cost_params():
         electricity_cost=0.2582,
         electricity_sold_cost=0.04,
         module_cost_per_w=0.125,
-        battery_cost_per_kwh=711.0,
+        battery_cost_per_kwh=500.0,
         dc_ac_ratio=1.25,
         inverter_cost_per_kw=102.58,
         inverter_cost_per_kw_nobatt=48.37,
