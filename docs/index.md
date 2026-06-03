@@ -99,6 +99,7 @@ api/index
 :caption: Project
 
 resources
+release
 architecture/third-party-wrapping
 architecture/string-inverter-sizing
 legal/load-profile-data
