@@ -158,7 +158,7 @@ single representative tilt/azimuth.
 
 ## Advanced Usage
 
-For full control over individual simulation steps, you can use the internal modules directly:
+For full control over individual simulation steps, use the lower-level modules directly:
 
 ```python
 from breos.weather import fetch_tmy_weather_data

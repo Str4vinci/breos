@@ -1,13 +1,16 @@
 # API reference
 
-BREOS's public API is organized by domain "puzzle piece" rather than by
+BREOS's API reference is organized by domain "puzzle piece" rather than by
 Python module — the [PV reference](pv.md) pulls names from `breos.solar`,
 `breos.pv_modules`, and `breos.inverter`, since all three describe the same
 piece of a system.
 
 The {py:class}`~breos.App` facade is the recommended entry point. The
-pages below cover the lower-level functions you reach for when composing a
-custom pipeline.
+top-level `breos.__all__` list is intentionally narrower than the full
+reference: it marks the stable release surface for `from breos import *`.
+The pages below cover lower-level module APIs you reach for when composing a
+custom pipeline. Import those lower-level names from their modules, for example
+`from breos.solar import calculate_pv_production_dc`.
 
 ## Puzzle pieces
 
@@ -76,9 +79,9 @@ fronts.
 
 ## Other surfaces
 
-[Appendix](appendix.md) documents the remaining public names — constants,
-I/O helpers, utilities, and other modules that are exposed but not
-load-bearing for typical use.
+[Appendix](appendix.md) documents additional module APIs — constants, I/O
+helpers, utilities, and research-validation modules that remain importable but
+are not part of the narrow top-level release surface.
 
 ```{toctree}
 :hidden:

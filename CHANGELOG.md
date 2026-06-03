@@ -2,6 +2,13 @@
 
 All notable changes to BREOS are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased]
+
+### Changed
+- Narrowed the top-level `breos.__all__` release surface to the stable facade,
+  key configuration/result objects, and core composition helpers. Lower-level
+  module APIs remain importable from their modules.
+
 ## [0.1.0] - 2026-04-30
 
 ### Added

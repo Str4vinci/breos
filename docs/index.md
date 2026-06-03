@@ -57,8 +57,8 @@ result dict means.
 :link: api/index
 :link-type: doc
 
-Every public function and class, organized by what it does — weather, PV,
-battery, costs, and so on.
+Stable facade guidance and lower-level module reference, organized by what
+each piece does — weather, PV, battery, costs, and so on.
 :::
 
 :::{grid-item-card} Architecture

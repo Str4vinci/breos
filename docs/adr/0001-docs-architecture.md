@@ -8,10 +8,10 @@ composable submodule usage introduced later as "Building custom pipelines."
 
 The API reference mirrors the same eight puzzle pieces with hand-curated
 `autosummary` lists, plus a recursive `api/appendix.md` for utilities,
-constants, and other names that ended up in `__all__` but aren't part of
-the primary surface. Narrative ("user-guide/") will be separated from
-theory ("concepts/") in future PRs so degradation-model math doesn't drown
-the practical battery-configuration page.
+constants, and other module APIs that remain importable but are not part of
+the narrow top-level release surface. Narrative ("user-guide/") will be
+separated from theory ("concepts/") in future PRs so degradation-model math
+doesn't drown the practical battery-configuration page.
 
 ## Why
 
@@ -20,6 +20,6 @@ the practical battery-configuration page.
 - Puzzle pieces cross Python module boundaries (PV = `solar.py` +
   `pv_modules.py` + `inverter.py`). Documenting per-module would scatter
   related material.
-- Curated `autosummary` blocks keep ~30 user-facing names on the index
-  while still surfacing the full `__all__` via the appendix's recursive
-  crawl.
+- Curated `autosummary` blocks keep the primary user-facing names on the
+  index while the appendix still surfaces additional module APIs through a
+  recursive crawl.

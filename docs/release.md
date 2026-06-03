@@ -50,8 +50,8 @@ BREOS from the installed wheel instead of the source checkout.
 
 ## API Stability
 
-- Treat `breos.App` and documented config/result keys as the primary stable
-  surface for 0.1.x.
+- Treat `breos.App`, documented config/result keys, and names in `breos.__all__`
+  as the primary stable surface for 0.2.x.
 - Add golden-output tests before changing core energy balance, economics,
   emissions, or time-resolution behavior.
 - Keep module-level APIs importable unless a removal is documented in the
@@ -72,7 +72,7 @@ Rationale:
 - `library` matches how users install and import BREOS.
 - `simulation and optimization` describes the main user-facing purpose.
 - `framework` can describe the internal/extensible architecture, but sounds
-  broader than the current 0.1.0 public surface.
+  broader than the current pre-1.0 public surface.
 - `engine` can be used for the simulation core, but should not describe the
   whole project unless a stable lower-level engine API is intentionally exposed.
 - `model` should refer to specific algorithms or component models, not the full

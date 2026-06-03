@@ -32,13 +32,10 @@ def test_dc_ac_power_clips_negative_inputs_to_zero():
     assert result.total_dc_input_w == 0.0
 
 
-def test_package_all_exports_new_public_helpers():
+def test_package_all_exports_stable_inverter_helpers():
     expected = {
         "calculate_dc_ac_power",
         "InverterConversionResult",
-        "build_battery_temperature_series",
-        "preload_weather_by_year",
-        "remap_datetime_index_years",
     }
 
     assert expected.issubset(set(breos.__all__))
