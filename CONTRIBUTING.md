@@ -27,6 +27,16 @@ pip install -e ".[dev]"
 uv run pytest tests/ -v
 ```
 
+For release-style validation, run the same gates used by CI:
+
+```bash
+uv run ruff check breos/ tests/ tools/
+uv run ruff format --check breos/ tests/ tools/
+uv run pytest tests/ -v
+uv run python tools/verify_release_artifacts.py
+uv run --extra docs sphinx-build -b html docs docs/_build/html
+```
+
 ## Branching
 
 - `main` — stable, release-ready code. Do not push directly.
@@ -67,7 +77,8 @@ uv run pytest tests/test_app.py -v
 
 - PRs should target `develop`, not `main`
 - Include a brief description of what changed and why
-- Make sure CI passes (tests run automatically on every PR)
+- Make sure CI passes. It runs lint, format checks, tests, release artifact
+  verification, and the Sphinx docs build on every PR to `develop` or `main`.
 - Keep PRs focused — one feature or fix per PR
 
 ## Reporting Issues

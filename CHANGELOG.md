@@ -4,6 +4,15 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-06-03
+
+### Documentation
+- Updated installation guidance to use the stable GitHub tag until PyPI
+  publishing is available.
+- Added PyPI trusted publishing to the roadmap.
+- Documented the full CI/release validation gates in the contributor guide.
+- Standardized API documentation wording around domain areas.
+
 ## [0.2.0] - 2026-06-03
 
 ### Changed
