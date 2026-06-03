@@ -13,8 +13,8 @@ Building Renewable Energy Optimization Software
 ::::
 
 ::::{div} sd-text-center sd-py-3
-A modular Python library for photovoltaic and battery energy system
-simulations, designed for research and engineering applications.
+A Python library for PV and battery energy-system simulation and
+optimization, designed for research and engineering applications.
 ::::
 
 ## Quick example
@@ -72,7 +72,7 @@ Design decisions and refactoring plans for BREOS's internal structure.
 
 ## Status
 
-BREOS is pre-1.0 (currently `0.1.0`, beta). The public API may change
+BREOS is pre-1.0 (current release `0.2.0`, beta). The public API may change
 between minor releases. The [roadmap](https://github.com/Str4vinci/breos/blob/main/ROADMAP.md)
 tracks larger refactoring work — notably, the planned [adapter layer for
 third-party libraries](architecture/third-party-wrapping.md) will change

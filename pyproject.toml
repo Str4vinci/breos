@@ -1,7 +1,7 @@
 [project]
 name = "breos"
-version = "0.1.0"
-description = "Building Renewable Energy Optimization Software - A Python library for PV and battery energy system simulations"
+version = "0.2.0"
+description = "Python library for PV and battery energy-system simulation and optimization"
 readme = "README.md"
 license = "BSD-3-Clause"
 requires-python = ">=3.13"

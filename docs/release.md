@@ -57,15 +57,11 @@ BREOS from the installed wheel instead of the source checkout.
 - Keep module-level APIs importable unless a removal is documented in the
   changelog with a migration path.
 
-## Open Positioning Question
+## Public Wording
 
-Before the public release, decide the project wording used in the README,
-package metadata, docs front page, and release notes:
-
-> Is BREOS a simulation engine, a framework, a model, or a library?
-
-Working recommendation: use **Python library for PV and battery energy-system
-simulation and optimization** as the default public wording.
+Use **Python library for PV and battery energy-system simulation and
+optimization** as the default public wording in the README, package metadata,
+docs front page, and release notes.
 
 Rationale:
 

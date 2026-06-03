@@ -1,7 +1,7 @@
 """
 BREOS - Building Renewable Energy Optimization Software
 
-A modular Python library for photovoltaic and battery energy system simulations.
+Python library for PV and battery energy-system simulation and optimization.
 Supports both hourly ('h') and 15-minute ('15min') time resolutions.
 
 Modules:
@@ -24,7 +24,7 @@ Usage:
 """
 
 # Version
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 # Public facade
 from breos.app import App
