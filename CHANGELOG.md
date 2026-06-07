@@ -4,6 +4,12 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-06-07
+
+### Documentation
+- Expanded third-party notices with dependency credits, runtime data-source
+  caveats, and scientific/model attribution guidance.
+
 ## [0.2.1] - 2026-06-03
 
 ### Documentation
