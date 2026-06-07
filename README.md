@@ -20,7 +20,7 @@ A Python library for PV and battery energy-system simulation and optimization, d
 ## Installation
 
 ```bash
-pip install "breos @ git+https://github.com/Str4vinci/breos.git@v0.2.1"
+pip install "breos @ git+https://github.com/Str4vinci/breos.git@v0.2.2"
 ```
 
 PyPI publishing is planned for a future release. Until then, install the latest
