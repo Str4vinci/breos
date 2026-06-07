@@ -1,6 +1,8 @@
-# Attributions
+# Attributions and Third-Party Notices
 
-BREOS bundles or relies on third-party data and tools. This document lists each source, its license posture, and any redistribution or commercial-use caveats.
+BREOS bundles or relies on third-party data, services, software, and published
+methods. This document lists each source, its license posture, and any
+redistribution, commercial-use, citation, or attribution caveats.
 
 This is a project-maintainer note, not legal advice.
 
@@ -8,7 +10,7 @@ This is a project-maintainer note, not legal advice.
 
 | File | Source | License / Terms |
 |------|--------|-----------------|
-| `rlp/h0SLP_demandlib_1000kwh_hourly.csv`, `rlp/h0SLP_demandlib_1000kwh_15min.csv`, `breos/data/rlp/h0SLP_demandlib_*.csv` | Generated with demandlib H0 logic | demandlib documents itself as MIT-licensed free software. Preserve demandlib attribution and license notices when redistributing derived profile examples. |
+| `rlp/h0SLP_demandlib_1000kwh_hourly.csv`, `rlp/h0SLP_demandlib_1000kwh_15min.csv`, `breos/data/rlp/h0SLP_demandlib_*.csv` | Generated with [demandlib](https://demandlib.readthedocs.io/) H0 logic | demandlib documents itself as MIT-licensed free software. Preserve demandlib attribution and license notices when redistributing derived profile examples. |
 
 ## Supported but not redistributed
 
@@ -32,11 +34,44 @@ Users can still provide these files locally through `rlp_directory` when their s
 
 ## Python dependencies
 
-All Python dependencies are open source under their respective licenses (see `pyproject.toml` and `uv.lock`). Notable ones with non-trivial redistribution implications:
+BREOS's Python dependencies are open-source packages under their respective
+licenses. See `pyproject.toml`, `uv.lock`, and each package's own metadata for
+the authoritative license text. Current runtime dependencies include:
 
+- **geopy** — MIT
+- **joblib** — BSD 3-Clause
+- **matplotlib** — Matplotlib / PSF-style license terms
+- **numba** — BSD
+- **openpyxl** — MIT
+- **openmeteo-requests** — MIT
+- **pandas** — BSD 3-Clause
+- **pyarrow** — Apache 2.0
+- **NREL-PySAM** — BSD 3-Clause. Refer to the NREL-PySAM license and SAM
+  notices for bundled model details.
 - **pvlib** — BSD 3-Clause
-- **NREL-PySAM** — Refer to the NREL-PySAM license; bindings around SAM (proprietary NREL software, free to use).
 - **pymoo** — Apache 2.0
+- **rainflow** — MIT
+- **requests-cache** — BSD 2-Clause
+- **timezonefinder** — MIT
+
+## Scientific and model credits
+
+BREOS implements or wraps methods from the photovoltaic, battery, optimization,
+and reliability literature. These credits are separate from software-license
+requirements, but they should be preserved in papers, reports, and downstream
+documentation where the relevant models affect results.
+
+| Area | Used by | Credit / citation note |
+|------|---------|------------------------|
+| PV modelling | `breos/solar.py`, `breos/weather.py` | BREOS uses [pvlib python](https://pvlib-python.readthedocs.io/) for solar position, irradiance transposition, temperature, CEC/SAM-style module fitting, PVWatts losses, tracking, and inverter helpers. Cite pvlib in published work that relies on these calculations. |
+| SAM / CEC PV parameters | `breos/solar.py`, `breos/pv_modules.py` | CEC/SAM-style single-diode parameters and NREL SAM documentation inform module modelling assumptions. |
+| Multi-objective optimization | `breos/optimization.py` | BREOS uses [pymoo](https://pymoo.org/) for NSGA-II multi-objective optimization. Cite pymoo where optimizer behavior is material to the study. |
+| Rainflow cycle counting | `breos/battery.py` | BREOS uses the `rainflow` Python package and ASTM E1049-style rainflow counting for battery cycle detection in the reference path. |
+| Battery cycle and calendar ageing | `breos/battery.py`, `breos/constants.py`, `breos/numba_kernels.py` | Naumann et al. (2020) parameterization and equations are used for cycle ageing and selected calendar/resistance ageing behavior. |
+| LFP calendar ageing calibration | `breos/constants.py`, `breos/battery.py` | Lam et al. (2025) LFP calendar ageing behavior informs the `naumann_lam*` calendar-model variants and field-calibrated defaults. |
+| Polysun-style degradation comparison | `breos/polysun_degradation.py`, `breos/plotting.py` | The comparison baseline follows Polysun / Vela Solaris battery-lifetime methodology: Woehler curve, Miner's linear damage accumulation, DOD histograms, fixed calendar lifetime, and no continuous SOH feedback. |
+| PerMod comparison context | `breos/polysun_degradation.py` | Weniger et al., "Performance Model for PV-Battery Systems (PerMod)", HTW Berlin, 2023, is used as a comparison reference for PV-battery performance modelling. |
+| Linear damage accumulation | `breos/polysun_degradation.py` | Palmgren-Miner linear damage accumulation is used for Polysun-style cycle damage aggregation. |
 
 ## Notes for downstream users
 
@@ -45,3 +80,4 @@ If you redistribute BREOS or derived datasets:
 1. Preserve attributions above.
 2. If you call Open-Meteo from a commercial deployment, obtain a paid Open-Meteo subscription.
 3. Do not assume a public download page grants redistribution rights; keep externally sourced RLPs outside public package artifacts unless the source license is explicit.
+4. Cite the scientific/model references that materially affect published or customer-facing results.
