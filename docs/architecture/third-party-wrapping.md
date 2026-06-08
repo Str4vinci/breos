@@ -9,7 +9,7 @@
 BREOS imports several third-party libraries directly throughout the package
 (`pvlib`, `pandas`, `numpy`, `scipy`, `numba`, `rainflow`, `geopy`,
 `openmeteo-requests`, `timezonefinder`, `nrel-pysam`, `pymoo`,
-`requests-cache`, `joblib`, `matplotlib`, `openpyxl`).
+`requests-cache`, `matplotlib`, `openpyxl`).
 
 Direct usage means those libraries co-own the BREOS public API. When they
 change — and `pvlib` in particular has historically broken APIs across
@@ -112,7 +112,7 @@ signatures.
 - `nrel-pysam` → `breos.adapters.sam_model` (if/when used beyond optional
   paths).
 - `pymoo` → `breos.adapters.multi_objective` (used in `optimization.py`).
-- `openpyxl` → encapsulated inside `breos.io` already; keep as-is.
+- `openpyxl`, `pyarrow` → keep in validation/export-specific paths.
 
 ### Out of scope: pandas and numpy
 
@@ -129,8 +129,9 @@ If we later want stronger schema guarantees, introduce typed wrappers at
 specific boundaries (e.g. a `WeatherFrame` dataclass that validates
 columns) rather than a global abstraction.
 
-`matplotlib` is also kept direct — `plotting.py` is intentionally an
-output module, not a load-bearing core dependency.
+`matplotlib` is also kept direct inside `plotting.py`, but it is packaged as
+an optional `plots` extra because plotting is not a load-bearing core
+dependency.
 
 ## Migration mechanics
 

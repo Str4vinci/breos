@@ -4,6 +4,14 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 
 ## [Unreleased]
 
+### Changed
+- Slimmed the default runtime dependency set to the BREOS core simulation
+  stack and moved heavier workflow packages behind extras: `plots`,
+  `optimization`, `weather`, `fast`, `cec-fit`, `validation`, and
+  `location-tools`.
+- The `dev` extra now installs optional feature dependencies so contributor
+  test runs continue to cover optional paths.
+
 ## [0.2.3] - 2026-06-08
 
 ### Changed

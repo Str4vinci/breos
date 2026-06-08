@@ -104,26 +104,29 @@ name = "breos"
 version = "0.2.3"
 source = { editable = "." }
 dependencies = [
-    { name = "geopy" },
-    { name = "joblib" },
+    { name = "numpy" },
+    { name = "pandas" },
+    { name = "pvlib" },
+    { name = "rainflow" },
+    { name = "scipy" },
+]
+
+[package.optional-dependencies]
+cec-fit = [
+    { name = "nrel-pysam" },
+]
+dev = [
     { name = "matplotlib" },
     { name = "nrel-pysam" },
     { name = "numba" },
     { name = "openmeteo-requests" },
     { name = "openpyxl" },
-    { name = "pandas" },
-    { name = "pvlib" },
     { name = "pyarrow" },
     { name = "pymoo" },
-    { name = "rainflow" },
-    { name = "requests-cache" },
-    { name = "timezonefinder" },
-]
-
-[package.optional-dependencies]
-dev = [
     { name = "pytest" },
+    { name = "requests-cache" },
     { name = "ruff" },
+    { name = "timezonefinder" },
 ]
 docs = [
     { name = "myst-parser" },
@@ -135,33 +138,66 @@ docs = [
     { name = "sphinx-copybutton" },
     { name = "sphinx-design" },
 ]
+fast = [
+    { name = "numba" },
+]
+location-tools = [
+    { name = "geopy" },
+    { name = "timezonefinder" },
+]
+optimization = [
+    { name = "pymoo" },
+]
+plots = [
+    { name = "matplotlib" },
+]
+validation = [
+    { name = "openpyxl" },
+    { name = "pyarrow" },
+]
+weather = [
+    { name = "openmeteo-requests" },
+    { name = "requests-cache" },
+    { name = "timezonefinder" },
+]
 
 [package.metadata]
 requires-dist = [
-    { name = "geopy", specifier = ">=2.4.1" },
-    { name = "joblib", specifier = ">=1.5.3" },
-    { name = "matplotlib", specifier = ">=3.10.8" },
+    { name = "geopy", marker = "extra == 'location-tools'", specifier = ">=2.4.1" },
+    { name = "matplotlib", marker = "extra == 'dev'", specifier = ">=3.10.8" },
+    { name = "matplotlib", marker = "extra == 'plots'", specifier = ">=3.10.8" },
     { name = "myst-parser", marker = "extra == 'docs'", specifier = ">=4.0" },
-    { name = "nrel-pysam", specifier = ">=7.1.0" },
-    { name = "numba", specifier = ">=0.63.1" },
-    { name = "openmeteo-requests", specifier = ">=1.7.4" },
-    { name = "openpyxl", specifier = ">=3.1.0" },
+    { name = "nrel-pysam", marker = "extra == 'cec-fit'", specifier = ">=7.1.0" },
+    { name = "nrel-pysam", marker = "extra == 'dev'", specifier = ">=7.1.0" },
+    { name = "numba", marker = "extra == 'dev'", specifier = ">=0.63.1" },
+    { name = "numba", marker = "extra == 'fast'", specifier = ">=0.63.1" },
+    { name = "numpy", specifier = ">=2.0" },
+    { name = "openmeteo-requests", marker = "extra == 'dev'", specifier = ">=1.7.4" },
+    { name = "openmeteo-requests", marker = "extra == 'weather'", specifier = ">=1.7.4" },
+    { name = "openpyxl", marker = "extra == 'dev'", specifier = ">=3.1.0" },
+    { name = "openpyxl", marker = "extra == 'validation'", specifier = ">=3.1.0" },
     { name = "pandas", specifier = ">=2.3.3" },
     { name = "pvlib", specifier = ">=0.14.0,<0.16" },
-    { name = "pyarrow", specifier = ">=19.0.0" },
+    { name = "pyarrow", marker = "extra == 'dev'", specifier = ">=19.0.0" },
+    { name = "pyarrow", marker = "extra == 'validation'", specifier = ">=19.0.0" },
     { name = "pydata-sphinx-theme", marker = "extra == 'docs'", specifier = ">=0.16" },
-    { name = "pymoo", specifier = ">=0.6.1.6" },
+    { name = "pymoo", marker = "extra == 'dev'", specifier = ">=0.6.1.6" },
+    { name = "pymoo", marker = "extra == 'optimization'", specifier = ">=0.6.1.6" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
     { name = "rainflow", specifier = ">=3.2.0" },
-    { name = "requests-cache", specifier = ">=1.2.1" },
+    { name = "requests-cache", marker = "extra == 'dev'", specifier = ">=1.2.1" },
+    { name = "requests-cache", marker = "extra == 'weather'", specifier = ">=1.2.1" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.15" },
+    { name = "scipy", specifier = ">=1.14" },
     { name = "sphinx", marker = "extra == 'docs'", specifier = ">=8.1" },
     { name = "sphinx-autodoc-typehints", marker = "extra == 'docs'", specifier = ">=2.5" },
     { name = "sphinx-copybutton", marker = "extra == 'docs'", specifier = ">=0.5" },
     { name = "sphinx-design", marker = "extra == 'docs'", specifier = ">=0.6" },
-    { name = "timezonefinder", specifier = ">=8.2.1" },
+    { name = "timezonefinder", marker = "extra == 'dev'", specifier = ">=8.2.1" },
+    { name = "timezonefinder", marker = "extra == 'location-tools'", specifier = ">=8.2.1" },
+    { name = "timezonefinder", marker = "extra == 'weather'", specifier = ">=8.2.1" },
 ]
-provides-extras = ["dev", "docs"]
+provides-extras = ["cec-fit", "fast", "plots", "optimization", "weather", "validation", "location-tools", "dev", "docs"]
 
 [[package]]
 name = "cattrs"
@@ -773,15 +809,6 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/df/bf/f7da0350254c0ed7c72f3e33cef02e048281fec7ecec5f032d4aac52226b/jinja2-3.1.6.tar.gz", hash = "sha256:0137fb05990d35f1275a587e9aee6d56da821fc83491a0fb838183be43f66d6d", size = 245115, upload-time = "2025-03-05T20:05:02.478Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/62/a1/3d680cbfd5f4b8f15abc1d571870c5fc3e594bb582bc3b64ea099db13e56/jinja2-3.1.6-py3-none-any.whl", hash = "sha256:85ece4451f492d0c13c5dd7c13a64681a86afae63a5f347908daf103ce6d2f67", size = 134899, upload-time = "2025-03-05T20:05:00.369Z" },
-]
-
-[[package]]
-name = "joblib"
-version = "1.5.3"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/41/f2/d34e8b3a08a9cc79a50b2208a93dce981fe615b64d5a4d4abee421d898df/joblib-1.5.3.tar.gz", hash = "sha256:8561a3269e6801106863fd0d6d84bb737be9e7631e33aaed3fb9ce5953688da3", size = 331603, upload-time = "2025-12-15T08:41:46.427Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/7b/91/984aca2ec129e2757d1e4e3c81c3fcda9d0f85b74670a094cc443d9ee949/joblib-1.5.3-py3-none-any.whl", hash = "sha256:5fc3c5039fc5ca8c0276333a188bbd59d6b7ab37fe6632daa76bc7f9ec18e713", size = 309071, upload-time = "2025-12-15T08:41:44.973Z" },
 ]
 
 [[package]]

@@ -5,6 +5,9 @@ method handles smooth one-dimensional problems (tilt); NSGA-II via
 [pymoo](https://pymoo.org/) handles multi-objective sizing (PV count vs
 battery vs cost vs grid independence).
 
+Install `breos[optimization]` to use pymoo-backed multi-objective classes.
+The one-dimensional helpers use the core scientific stack.
+
 ## Tilt
 
 ```{eval-rst}
