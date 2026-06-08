@@ -4,6 +4,30 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 
 ## [Unreleased]
 
+## [0.2.3] - 2026-06-08
+
+### Changed
+- Lowered the minimum supported Python from 3.13 to 3.11 — the real floor, set by
+  pandas, timezonefinder, and stdlib `tomllib`. CI now runs a 3.11/3.12/3.13 matrix.
+- Relaxed the pvlib constraint from `==0.14.0` to `>=0.14.0,<0.16` after verifying
+  the full API surface and the test suite against pvlib 0.15.1.
+- `breos.__version__` is now resolved from installed package metadata
+  (`importlib.metadata`) instead of a hardcoded literal, so it can no longer drift
+  from `pyproject.toml`.
+
+### Added
+- `CITATION.cff`, `CODE_OF_CONDUCT.md`, and `SECURITY.md` for open-source release
+  readiness.
+
+### Removed
+- Duplicate top-level `rlp/*.csv` load-profile files (byte-identical to the
+  packaged `breos/data/rlp/` copies that runtime actually uses). `rlp/README.md` is
+  retained as external-RLP guidance.
+
+### Documentation
+- README badge and installation docs now state Python 3.11+.
+- Trimmed `ATTRIBUTIONS.md` to reference only the packaged load-profile paths.
+
 ## [0.2.2] - 2026-06-07
 
 ### Documentation

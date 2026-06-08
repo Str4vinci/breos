@@ -10,6 +10,14 @@ jobs:
   test:
     runs-on: ubuntu-latest
 
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+
+    env:
+      UV_PYTHON: ${{ matrix.python-version }}
+
     steps:
       - uses: actions/checkout@v6
 
@@ -17,7 +25,7 @@ jobs:
         uses: astral-sh/setup-uv@v7
 
       - name: Set up Python
-        run: uv python install 3.13
+        run: uv python install ${{ matrix.python-version }}
 
       - name: Install dependencies
         run: uv sync --extra dev --extra docs
