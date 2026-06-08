@@ -1,0 +1,24 @@
+cff-version: 1.2.0
+title: "BREOS: Building Renewable Energy Optimization Software"
+message: "If you use BREOS in your research, please cite it as below."
+type: software
+authors:
+  - given-names: Leonardo
+    family-names: Rodrigues
+    email: lrodrigues@fe.up.pt
+repository-code: "https://github.com/Str4vinci/breos"
+url: "https://github.com/Str4vinci/breos"
+abstract: >-
+  A Python library for PV and battery energy-system simulation and
+  optimization, designed for research and engineering applications.
+keywords:
+  - photovoltaic
+  - battery
+  - energy
+  - simulation
+  - optimization
+  - solar
+  - degradation
+license: BSD-3-Clause
+version: 0.2.3
+date-released: "2026-06-08"

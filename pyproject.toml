@@ -1,10 +1,10 @@
 [project]
 name = "breos"
-version = "0.2.2"
+version = "0.2.3"
 description = "Python library for PV and battery energy-system simulation and optimization"
 readme = "README.md"
 license = "BSD-3-Clause"
-requires-python = ">=3.13"
+requires-python = ">=3.11"
 authors = [
     {name = "Leonardo Rodrigues", email = "lrodrigues@fe.up.pt"},
 ]
@@ -13,6 +13,8 @@ classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Science/Research",
     "License :: OSI Approved :: BSD License",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
     "Topic :: Scientific/Engineering",
 ]
@@ -26,7 +28,7 @@ dependencies = [
     "pandas>=2.3.3",
     "pyarrow>=19.0.0",
     "nrel-pysam>=7.1.0",
-    "pvlib==0.14.0",
+    "pvlib>=0.14.0,<0.16",
     "pymoo>=0.6.1.6",
     "rainflow>=3.2.0",
     "requests-cache>=1.2.1",
@@ -56,7 +58,7 @@ testpaths = ["tests"]
 
 [tool.ruff]
 line-length = 120
-target-version = "py313"
+target-version = "py311"
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I"]

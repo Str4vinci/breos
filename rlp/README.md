@@ -1,11 +1,13 @@
-# Load Profile Files
+# External Load Profiles
 
-This directory keeps only redistributable example RLPs in the public repository:
+BREOS ships its default H0 reference load profiles **inside the package**
+(`breos/data/rlp/`), so you do not need any files here to run a basic simulation.
 
-- `h0SLP_demandlib_1000kwh_hourly.csv`
-- `h0SLP_demandlib_1000kwh_15min.csv`
-
-BREOS still supports external E-REDES, REE, BDEW, and custom CSV profiles through `rlp_directory`. Users must provide those files from a source they are licensed to use.
+This directory documents how to supply your **own** load profiles — E-REDES, REE,
+BDEW, or custom CSVs — which BREOS does not redistribute. Point BREOS at a local
+directory of your licensed files via `rlp_directory` (Python API) or
+`--rlp-directory` (CLI). You are responsible for ensuring your source's terms
+permit your use.
 
 Expected external filenames:
 

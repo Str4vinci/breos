@@ -23,8 +23,17 @@ Usage:
 >>> result = app.result()
 """
 
-# Version
-__version__ = "0.2.1"
+# Version — resolved from the installed package metadata so it always matches
+# the version declared in pyproject.toml (the single source of truth). This is
+# the same mechanism used by breos/cli.py and docs/conf.py, which keeps the
+# literal from drifting out of sync with the distribution version on a release.
+from importlib.metadata import PackageNotFoundError
+from importlib.metadata import version as _version
+
+try:
+    __version__ = _version("breos")
+except PackageNotFoundError:  # running from a source tree without an install
+    __version__ = "0.0.0+unknown"
 
 # Public facade
 from breos.app import App

@@ -72,7 +72,7 @@ Design decisions and refactoring plans for BREOS's internal structure.
 
 ## Status
 
-BREOS is pre-1.0 (current release `0.2.2`, beta). The public API may change
+BREOS is pre-1.0 (current release `0.2.3`, beta). The public API may change
 between minor releases. The [roadmap](https://github.com/Str4vinci/breos/blob/main/ROADMAP.md)
 tracks larger refactoring work — notably, the planned [adapter layer for
 third-party libraries](architecture/third-party-wrapping.md) will change

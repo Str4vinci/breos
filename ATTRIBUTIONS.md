@@ -10,7 +10,7 @@ This is a project-maintainer note, not legal advice.
 
 | File | Source | License / Terms |
 |------|--------|-----------------|
-| `rlp/h0SLP_demandlib_1000kwh_hourly.csv`, `rlp/h0SLP_demandlib_1000kwh_15min.csv`, `breos/data/rlp/h0SLP_demandlib_*.csv` | Generated with [demandlib](https://demandlib.readthedocs.io/) H0 logic | demandlib documents itself as MIT-licensed free software. Preserve demandlib attribution and license notices when redistributing derived profile examples. |
+| `breos/data/rlp/h0SLP_demandlib_1000kwh_hourly.csv`, `breos/data/rlp/h0SLP_demandlib_1000kwh_15min.csv` | Generated with [demandlib](https://demandlib.readthedocs.io/) H0 logic | demandlib documents itself as MIT-licensed free software. Preserve demandlib attribution and license notices when redistributing derived profile examples. |
 
 ## Supported but not redistributed
 
