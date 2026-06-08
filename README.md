@@ -23,6 +23,17 @@ A Python library for PV and battery energy-system simulation and optimization, d
 pip install "breos @ git+https://github.com/Str4vinci/breos.git@v0.2.3"
 ```
 
+Optional feature groups keep the default install focused on core PV +
+battery simulation:
+
+```bash
+pip install "breos[plots]"          # publication plots
+pip install "breos[optimization]"   # pymoo multi-objective sizing
+pip install "breos[weather]"        # Open-Meteo historical weather fetching
+pip install "breos[fast]"           # Numba kernels
+pip install "breos[validation]"     # Excel / Arrow validation workflows
+```
+
 PyPI publishing is planned for a future release. Until then, install the latest
 stable tag from GitHub, or install from source:
 

@@ -19,10 +19,25 @@ cd breos
 pip install -e .
 ```
 
+## Optional features
+
+The base install includes the core simulation stack. Install extras for
+workflows that need heavier optional packages:
+
+```bash
+pip install -e ".[plots]"          # matplotlib plotting helpers
+pip install -e ".[optimization]"   # pymoo multi-objective sizing
+pip install -e ".[weather]"        # Open-Meteo historical weather fetching
+pip install -e ".[fast]"           # Numba kernels
+pip install -e ".[validation]"     # Excel / Arrow validation workflows
+pip install -e ".[location-tools]" # geocoding and timezone lookup helpers
+```
+
 ## Development install
 
 If you plan to contribute, install with the dev extras for testing and
-linting:
+linting. The dev extra also installs BREOS's optional feature dependencies so
+the full local test suite can exercise optional paths:
 
 ```bash
 pip install -e ".[dev]"
