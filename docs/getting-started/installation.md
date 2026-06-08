@@ -1,11 +1,11 @@
 # Installation
 
-BREOS requires Python 3.13 or newer.
+BREOS requires Python 3.11 or newer.
 
 ## From the stable tag
 
 ```bash
-pip install "breos @ git+https://github.com/Str4vinci/breos.git@v0.2.2"
+pip install "breos @ git+https://github.com/Str4vinci/breos.git@v0.2.3"
 ```
 
 PyPI publishing is planned for a future release. Until then, install the latest

@@ -2,7 +2,7 @@
 
 [![Tests](https://github.com/Str4vinci/breos/actions/workflows/tests.yml/badge.svg)](https://github.com/Str4vinci/breos/actions/workflows/tests.yml)
 [![License: BSD-3](https://img.shields.io/badge/License-BSD_3--Clause-blue.svg)](LICENSE)
-[![Python 3.13+](https://img.shields.io/badge/python-3.13+-blue.svg)](https://www.python.org/downloads/)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 
 A Python library for PV and battery energy-system simulation and optimization, designed for research and engineering applications.
 
@@ -20,7 +20,7 @@ A Python library for PV and battery energy-system simulation and optimization, d
 ## Installation
 
 ```bash
-pip install "breos @ git+https://github.com/Str4vinci/breos.git@v0.2.2"
+pip install "breos @ git+https://github.com/Str4vinci/breos.git@v0.2.3"
 ```
 
 PyPI publishing is planned for a future release. Until then, install the latest
