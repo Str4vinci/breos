@@ -58,6 +58,13 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   dry-run path.
 
 ### Changed
+- Renamed remaining pre-release "PVBAT" branding to BREOS in the Polysun
+  comparison plots: the `plot_degradation_methodology_comparison` first
+  argument is now `breos_soh`, the scenario/location dicts passed to
+  `plot_lifetime_prediction_comparison` and
+  `plot_temperature_sensitivity_comparison` use the `breos_eol_year` key,
+  legend labels read "BREOS (Naumann)", and the SOH comparison figure is
+  saved as `polysun_breos_soh_comparison*.png`.
 - Cost defaults are single-sourced from the `CostParams` dataclass:
   `cost_params_from_config` and the App preset fallbacks no longer carry
   their own diverging literals (packaged presets are unaffected).

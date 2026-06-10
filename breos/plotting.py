@@ -3005,26 +3005,26 @@ def plot_co2_savings(
 
 
 # =========================================================================
-# Polysun vs PVBAT degradation comparison plots
+# Polysun vs BREOS degradation comparison plots
 # =========================================================================
 
 
 def plot_degradation_methodology_comparison(
-    pvbat_soh: "pd.DataFrame",
+    breos_soh: "pd.DataFrame",
     polysun_df: "pd.DataFrame",
     results_directory: str,
     scenario_label: str = "",
     suffix: str = "",
 ) -> None:
     """
-    Compare PVBAT continuous SOH vs Polysun Miner's damage accumulation.
+    Compare BREOS continuous SOH vs Polysun Miner's damage accumulation.
 
     Produces two separate figures:
-      1. SOH over time: PVBAT's declining SOH curve vs Polysun's equivalent SOH
+      1. SOH over time: BREOS's declining SOH curve vs Polysun's equivalent SOH
       2. Polysun damage accumulation (D) with replacement threshold at D=1
 
     Args:
-        pvbat_soh: PVBAT degradation DataFrame with 'SOH' column (%) indexed by year
+        breos_soh: BREOS degradation DataFrame with 'SOH' column (%) indexed by year
             or containing a 'Year' column.
         polysun_df: Output of simulate_polysun_degradation().
         results_directory: Directory to save plots.
@@ -3034,14 +3034,14 @@ def plot_degradation_methodology_comparison(
     _check_matplotlib()
     os.makedirs(results_directory, exist_ok=True)
 
-    years_pvbat = pvbat_soh["Year"].values if "Year" in pvbat_soh.columns else np.arange(1, len(pvbat_soh) + 1)
-    soh_pvbat = pvbat_soh["SOH"].values if "SOH" in pvbat_soh.columns else pvbat_soh.iloc[:, 0].values
+    years_breos = breos_soh["Year"].values if "Year" in breos_soh.columns else np.arange(1, len(breos_soh) + 1)
+    soh_breos = breos_soh["SOH"].values if "SOH" in breos_soh.columns else breos_soh.iloc[:, 0].values
     years_polysun = polysun_df["Year"].values
     soh_polysun = polysun_df["SOH_Equivalent"].values
 
     # --- Figure 1: SOH comparison ---
     fig, ax = plt.subplots(figsize=(12, 6))
-    ax.plot(years_pvbat, soh_pvbat, "b-", linewidth=2.5, marker="o", markersize=3, label="PVBAT (Naumann)")
+    ax.plot(years_breos, soh_breos, "b-", linewidth=2.5, marker="o", markersize=3, label="BREOS (Naumann)")
     ax.plot(years_polysun, soh_polysun, "r--", linewidth=2.5, marker="s", markersize=3, label="Polysun (Miner/Wöhler)")
     ax.axhline(80, color="grey", linestyle=":", linewidth=1.5, alpha=0.7, label="EOL threshold (80%)")
 
@@ -3053,7 +3053,7 @@ def plot_degradation_methodology_comparison(
     ax.set_xlabel("Year", fontsize=12)
     ax.set_ylabel("State of Health (%)", fontsize=12)
     ax.set_ylim(60, 102)
-    ax.set_xticks(range(int(min(years_pvbat[0], years_polysun[0])), int(max(years_pvbat[-1], years_polysun[-1])) + 1))
+    ax.set_xticks(range(int(min(years_breos[0], years_polysun[0])), int(max(years_breos[-1], years_polysun[-1])) + 1))
     ax.legend(fontsize=11)
     ax.grid(alpha=0.3)
     if scenario_label:
@@ -3071,7 +3071,7 @@ def plot_degradation_methodology_comparison(
 
     fig.tight_layout()
     fig.savefig(
-        os.path.join(results_directory, f"polysun_pvbat_soh_comparison{suffix}.png"), dpi=300, bbox_inches="tight"
+        os.path.join(results_directory, f"polysun_breos_soh_comparison{suffix}.png"), dpi=300, bbox_inches="tight"
     )
     plt.close(fig)
 
@@ -3125,7 +3125,7 @@ def plot_lifetime_prediction_comparison(
 
     Args:
         scenarios: Dict mapping scenario label to dict with keys:
-            'pvbat_eol_year': Year PVBAT hits 80% SOH (float or int).
+            'breos_eol_year': Year BREOS hits 80% SOH (float or int).
             'polysun_total_life': Polysun predicted total life (years).
             'polysun_cycle_life': Polysun cycle life component (years).
             'polysun_calendar_life': Polysun calendar life component (years).
@@ -3136,14 +3136,14 @@ def plot_lifetime_prediction_comparison(
     os.makedirs(results_directory, exist_ok=True)
 
     labels = list(scenarios.keys())
-    pvbat_years = [scenarios[s]["pvbat_eol_year"] for s in labels]
+    breos_years = [scenarios[s]["breos_eol_year"] for s in labels]
     polysun_years = [scenarios[s]["polysun_total_life"] for s in labels]
 
     x = np.arange(len(labels))
     width = 0.35
 
     fig, ax = plt.subplots(figsize=(10, 6))
-    bars1 = ax.bar(x - width / 2, pvbat_years, width, label="PVBAT (Naumann)", color="#1976D2", alpha=0.85)
+    bars1 = ax.bar(x - width / 2, breos_years, width, label="BREOS (Naumann)", color="#1976D2", alpha=0.85)
     bars2 = ax.bar(x + width / 2, polysun_years, width, label="Polysun (Miner/Wöhler)", color="#D32F2F", alpha=0.85)
 
     # Annotate bar values
@@ -3185,11 +3185,11 @@ def plot_temperature_sensitivity_comparison(
     suffix: str = "",
 ) -> None:
     """
-    Show how PVBAT lifetime varies across locations (temperature-dependent)
+    Show how BREOS lifetime varies across locations (temperature-dependent)
     while Polysun predicts the same lifetime everywhere (temperature-blind).
 
     Args:
-        locations: Dict mapping location names to ``pvbat_eol_year``,
+        locations: Dict mapping location names to ``breos_eol_year``,
             ``polysun_total_life``, and ``mean_temp_c`` values.
         results_directory: Directory to save plot.
         suffix: Filename suffix.
@@ -3198,14 +3198,14 @@ def plot_temperature_sensitivity_comparison(
     os.makedirs(results_directory, exist_ok=True)
 
     labels = list(locations.keys())
-    pvbat_years = [locations[s]["pvbat_eol_year"] for s in labels]
+    breos_years = [locations[s]["breos_eol_year"] for s in labels]
     polysun_years = [locations[s]["polysun_total_life"] for s in labels]
     temps = [locations[s]["mean_temp_c"] for s in labels]
 
     # Sort by temperature
     sort_idx = np.argsort(temps)
     labels = [labels[i] for i in sort_idx]
-    pvbat_years = [pvbat_years[i] for i in sort_idx]
+    breos_years = [breos_years[i] for i in sort_idx]
     polysun_years = [polysun_years[i] for i in sort_idx]
     temps = [temps[i] for i in sort_idx]
 
@@ -3213,7 +3213,7 @@ def plot_temperature_sensitivity_comparison(
     width = 0.35
 
     fig, ax = plt.subplots(figsize=(10, 6))
-    bars1 = ax.bar(x - width / 2, pvbat_years, width, label="PVBAT (Naumann)", color="#1976D2", alpha=0.85)
+    bars1 = ax.bar(x - width / 2, breos_years, width, label="BREOS (Naumann)", color="#1976D2", alpha=0.85)
     bars2 = ax.bar(x + width / 2, polysun_years, width, label="Polysun (Miner/Wöhler)", color="#D32F2F", alpha=0.85)
 
     # Annotate with temperature
