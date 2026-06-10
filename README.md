@@ -10,7 +10,7 @@ A Python library for PV and battery energy-system simulation and optimization, d
 
 - **Weather data**: Fetch TMY data from PVGIS/NSRDB and historical data from Open-Meteo. Support for hourly and 15-minute resolutions with Makima interpolation.
 - **PV production**: DC and AC power calculations using pvlib, with built-in module database and inverter presets.
-- **Battery simulation**: Energy balance with Numba-accelerated kernels. Calendar and cycle aging models (Naumann 2020, Lam 2025) with field-calibrated LFP parameters.
+- **Battery simulation**: Energy balance with calendar and cycle aging models (Naumann 2020, Lam 2025) and field-calibrated LFP parameters. Optional approximate Numba kernels for fast standalone screening studies.
 - **Economics**: NPV, LCOE, breakeven analysis, and cost projections with configurable tariffs and inflation.
 - **Optimization**: Multi-objective (grid independence, NPV, ZEB ratio) system sizing using pymoo (NSGA-II). Tilt/azimuth optimization via grid search or Brent's method.
 - **Emissions**: CO2 savings calculations and projections.
@@ -30,7 +30,7 @@ battery simulation:
 pip install "breos[plots]"          # publication plots
 pip install "breos[optimization]"   # pymoo multi-objective sizing
 pip install "breos[weather]"        # Open-Meteo historical weather fetching
-pip install "breos[fast]"           # Numba kernels
+pip install "breos[fast]"           # Approximate Numba screening kernels (not used by App)
 pip install "breos[validation]"     # Excel / Arrow validation workflows
 ```
 
