@@ -83,7 +83,7 @@ Release flow:
 ## API Stability
 
 - Treat `breos.App`, documented config/result keys, and names in `breos.__all__`
-  as the primary stable surface for 0.2.x.
+  as the primary stable surface for the 0.x series.
 - Add golden-output tests before changing core energy balance, economics,
   emissions, or time-resolution behavior.
 - Keep module-level APIs importable unless a removal is documented in the

@@ -10,11 +10,11 @@ A Python library for PV and battery energy-system simulation and optimization, d
 ## Features
 
 - **Weather data**: Fetch TMY data from PVGIS/NSRDB and historical data from Open-Meteo. Support for hourly and 15-minute resolutions with Makima interpolation.
-- **PV production**: DC and AC power calculations using pvlib, with built-in module database and inverter presets.
+- **PV production**: DC and AC power calculations using pvlib (CEC single-diode model), with a small catalog of example modules and full support for custom module parameters.
 - **Battery simulation**: Energy balance with calendar and cycle aging models (Naumann 2020, Lam 2025) and field-calibrated LFP parameters. Optional approximate Numba kernels for fast standalone screening studies.
 - **Economics**: NPV, LCOE, breakeven analysis, and cost projections with configurable tariffs and inflation.
 - **Optimization**: Multi-objective (grid independence, NPV, ZEB ratio) system sizing using pymoo (NSGA-II). Tilt/azimuth optimization via grid search or Brent's method.
-- **Emissions**: CO2 savings calculations and projections.
+- **Emissions**: CO<sub>2</sub> savings calculations and projections.
 - **Visualization**: Publication-ready plots for energy balances, degradation, breakeven, Pareto fronts, and more.
 - **Load profiles**: Bundled demandlib-derived H0 examples, plus support for user-supplied BDEW, E-REDES, REE, and custom profiles.
 
@@ -134,7 +134,7 @@ All keys except `location`, `annual_consumption_kwh`, and either `n_modules` or 
 | `n_modules` | *required unless `pv_arrays` is set* | Number of PV modules |
 | `pv_arrays` | `None` | Optional list of arrays with `modules`, `module`, `tilt`, and `azimuth`; when present, the array module total overrides `n_modules` |
 | `annual_consumption_kwh` | *required* | Annual electricity demand (kWh) |
-| `battery_kwh` | `0.0` | Battery capacity (0 = no battery) |
+| `battery_kwh` | `0.0` | Nominal battery capacity in kWh (0 = no battery). The SOC window sets the usable share — see [Modeling conventions](#modeling-conventions) |
 | `pv_module` | `None` | Module name from catalogue (`None` = default) |
 | `load_profile` | `"1"` | Bundled demandlib-derived H0 profile. Other standard profiles require caller-supplied CSVs |
 | `rlp_directory` | `None` | Directory containing licensed external RLP CSVs for non-bundled load profiles |
@@ -153,11 +153,11 @@ All keys except `location`, `annual_consumption_kwh`, and either `n_modules` or 
 | `cost_preset` | `None` | Cost preset key from packaged defaults; editable examples live in `configs/base/` |
 | `inflation_rate` | `0.02` | Annual electricity price inflation |
 | `discount_rate` | `0.03` | Discount rate for NPV calculations |
-| `emissions_country` | `None` | Country code for CO2 calculations (`"PT"`, `"DE"`, `"ES"`, ...) |
+| `emissions_country` | `None` | Country code for CO<sub>2</sub> calculations (`"PT"`, `"DE"`, `"ES"`, ...) |
 | `pv_degradation_rate` | `0.005` | Annual PV degradation (0.5%) |
 | `calendar_model` | `"naumann_lam_field_calibrated"` | Battery calendar aging model |
-| `battery_min_soc` | `0.10` | Battery SOC floor (fraction of usable capacity) |
-| `battery_max_soc` | `0.90` | Battery SOC ceiling |
+| `battery_min_soc` | `0.10` | Battery SOC floor (fraction of nominal, SOH-derated capacity) |
+| `battery_max_soc` | `0.90` | Battery SOC ceiling (same basis as `battery_min_soc`) |
 | `battery_eol_percentage` | `0.70` | SOH fraction that triggers battery replacement |
 | `battery_rte` | `None` | Battery round-trip efficiency, split evenly across charge/discharge (`None` = 0.95) |
 | `dc_coupled` | `True` | DC-coupled / hybrid inverter |
@@ -178,10 +178,22 @@ All keys except `location`, `annual_consumption_kwh`, and either `n_modules` or 
   clips AC output (PV and battery discharge combined) at the inverter rating
   implied by `inverter_loading_ratio` — the same rating used for inverter
   CAPEX. DC surplus above the rating can still charge a DC-coupled battery.
+- **Battery SOC window**: `battery_kwh` is the nominal pack capacity. The
+  energy balance only cycles the battery between `battery_min_soc` and
+  `battery_max_soc`, so the effective storage swing is
+  `battery_kwh × (battery_max_soc − battery_min_soc)` — 80% of nominal with
+  the defaults. Battery datasheets usually advertise *usable* capacity; to
+  match a spec sheet, enter `usable / 0.8` or widen the SOC window. Aging is
+  evaluated on absolute SOC, so the window also shapes degradation results —
+  the defaults reflect the operating range the field-calibrated aging
+  parameters were fit for.
 
 ## Result
 
-`app.result()` returns a dict with:
+`app.result()` returns a dict whose main fields are listed below; see
+[docs/getting-started/interpreting-results.md](docs/getting-started/interpreting-results.md)
+for the full key reference, including system echo fields (`pv_kwp`,
+`consumption_kwh`, ...), grid flows, and battery replacement details.
 
 | Key | Description |
 |-----|-------------|
@@ -192,8 +204,8 @@ All keys except `location`, `annual_consumption_kwh`, and either `n_modules` or 
 | `payback_year` | Payback year (`None` if not reached) |
 | `npv_savings_eur` | NPV savings over projection period |
 | `lcoe_eur_kwh` | Levelized cost of electricity |
-| `co2_avoided_year1_kg` | Year 1 CO2 avoided |
-| `co2_avoided_total_kg` | Lifetime CO2 avoided |
+| `co2_avoided_year1_kg` | Year 1 CO<sub>2</sub> avoided |
+| `co2_avoided_total_kg` | Lifetime CO<sub>2</sub> avoided |
 | `battery_soh_end_pct` | Battery state of health at end (if battery) |
 | `monthly` | Year 1 monthly balance rows for PV, load, imports, exports, and self-consumption |
 | `financial` | Yearly financial projection rows, including year 0 investment |

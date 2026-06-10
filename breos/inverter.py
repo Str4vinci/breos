@@ -113,9 +113,9 @@ def get_inverter_preset(name: str) -> InverterConfig:
     Get a pre-defined inverter configuration.
 
     Available presets:
-    - residential_hybrid: 1.1 ratio, hybrid
-    - residential_simple: 1.1 ratio, grid-tie only
-    - commercial_hybrid: 1.25 ratio, hybrid
+    - residential_hybrid: 1.25 ratio, 0.96 efficiency, hybrid
+    - residential_simple: 1.25 ratio, 0.96 efficiency, grid-tie only
+    - commercial_hybrid: 1.25 ratio, 0.98 efficiency, hybrid
     - oversized_1.5: 1.5 ratio for high DC/AC
 
     Args:

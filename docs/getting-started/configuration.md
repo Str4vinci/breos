@@ -21,7 +21,7 @@ weather/data access, load profiles, PV system data, and cost assumptions; see
 | `n_modules` | *required unless `pv_arrays` is set* | Number of PV modules |
 | `pv_arrays` | `None` | List of arrays with `modules`, `module`, `tilt`, and `azimuth`. When present, the array module total overrides `n_modules` |
 | `annual_consumption_kwh` | *required* | Annual electricity demand (kWh) |
-| `battery_kwh` | `0.0` | Battery capacity in kWh (`0` = no battery) |
+| `battery_kwh` | `0.0` | Nominal battery capacity in kWh (`0` = no battery). The SOC window sets the usable share — see [below](#battery-capacity-and-the-soc-window) |
 | `pv_module` | `None` | Module key from the built-in catalogue. `None` uses the first available |
 | `load_profile` | `"1"` | Bundled demandlib-derived H0 profile (see {py:func}`~breos.load_profiles.load_profile`) |
 | `rlp_directory` | `None` | Directory containing licensed external RLP CSVs for non-bundled load profiles |
@@ -43,8 +43,8 @@ weather/data access, load profiles, PV system data, and cost assumptions; see
 | `emissions_country` | `None` | Country code for CO2 calculations (`"PT"`, `"DE"`, `"ES"`, ...) |
 | `pv_degradation_rate` | `0.005` | Annual PV degradation rate (0.5% / year) |
 | `calendar_model` | `"naumann_lam_field_calibrated"` | Battery calendar aging model |
-| `battery_min_soc` | `0.10` | Battery SOC floor (fraction of usable capacity) |
-| `battery_max_soc` | `0.90` | Battery SOC ceiling |
+| `battery_min_soc` | `0.10` | Battery SOC floor (fraction of nominal, SOH-derated capacity) |
+| `battery_max_soc` | `0.90` | Battery SOC ceiling (same basis as `battery_min_soc`) |
 | `battery_eol_percentage` | `0.70` | SOH fraction that triggers battery replacement |
 | `battery_rte` | `None` | Battery round-trip efficiency (`None` = 0.95), split evenly across charge/discharge |
 | `dc_coupled` | `True` | DC-coupled / hybrid inverter (vs AC-coupled) |
@@ -52,6 +52,27 @@ weather/data access, load profiles, PV system data, and cost assumptions; see
 | `inverter_loading_ratio` | `1.25` | DC/AC oversizing ratio; also sets the inverter AC rating that clips production |
 | `pv_loss_overrides` | `None` | Per-component overrides (percent) for the fixed PVWatts system losses, e.g. `{"shading": 0.0}` |
 | `start_date` | `"2023-01-01"` | First simulation date |
+
+## Battery capacity and the SOC window
+
+`battery_kwh` is the **nominal** pack capacity. The energy balance only
+cycles the battery between `battery_min_soc` and `battery_max_soc`, so the
+effective storage swing is:
+
+```
+usable swing = battery_kwh × (battery_max_soc − battery_min_soc)
+```
+
+With the defaults (0.10–0.90) that is 80% of nominal: `battery_kwh = 5.0`
+gives a 4.0 kWh swing at full state of health.
+
+Battery datasheets usually advertise *usable* capacity. To match a spec
+sheet, either enter `usable / 0.8` as `battery_kwh` or widen the SOC window.
+Keep in mind that calendar and cycle aging are evaluated on the absolute SOC,
+so the window also shapes degradation results — the defaults reflect the
+operating range the field-calibrated aging parameters were fit for, and
+simulating a 0–1.00 window models a battery management system that no real
+product ships.
 
 ## Discovering available options
 
