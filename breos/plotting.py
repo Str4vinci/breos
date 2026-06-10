@@ -14,6 +14,8 @@ from typing import List, Optional, Tuple
 import numpy as np
 import pandas as pd
 
+MONTH_LABELS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+
 # Plotting imports with backend handling
 try:
     import matplotlib
@@ -291,16 +293,13 @@ def degradation_plots(degradation_df: pd.DataFrame, results_directory: str) -> N
     if "Year" in degradation_df.columns and degradation_df["Year"].nunique() > 1:
         # Multi-year: use day index (sequential)
         x = np.arange(len(degradation_df))  # Day index (0, 1, 2, ...)
-        x_label = "Days"
         x_years = x / 365.0  # Convert to years for tick labels
         use_years_axis = True
     elif "Datetime" in degradation_df.columns:
         x = pd.to_datetime(degradation_df["Datetime"])
-        x_label = None  # Use default date formatting
         use_years_axis = False
     else:
         x = degradation_df.index
-        x_label = None
         use_years_axis = False
 
     # 1. SOH over time
@@ -722,7 +721,7 @@ def plot_cell_temperature(
     min_by_month = min_by_month.reindex(months, fill_value=0.0)
     max_by_month = max_by_month.reindex(months, fill_value=0.0)
 
-    month_names = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+    month_names = MONTH_LABELS
 
     fig, ax = plt.subplots(figsize=(12, 5))
     ax.fill_between(months, min_by_month.values, max_by_month.values, alpha=0.25, color="red", label="Min–Max range")
@@ -1145,7 +1144,7 @@ def plot_monthly_balance(results_df: pd.DataFrame, results_directory: str) -> No
     monthly_avg = monthly_avg.reindex(np.arange(1, 13), fill_value=0.0)
 
     months = np.arange(1, 13)
-    month_names = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+    month_names = MONTH_LABELS
 
     fig, ax = plt.subplots(figsize=(12, 6))
 
@@ -1245,7 +1244,7 @@ def plot_montecarlo_simulation(
 
         # Filter for rows that actually have the break-even flag set to True
         # This ensures we get a row where break_even_year is populated
-        successful_rows = df[df["break_even_achieved"] == True]
+        successful_rows = df[df["break_even_achieved"].fillna(False).astype(bool)]
 
         # Get unique runs from these rows
         success_df = successful_rows.drop_duplicates("run_number")
@@ -1295,7 +1294,6 @@ def plot_breakeven_distribution(
 
     # Stats box
     achieved = len(breakeven_steps)
-    not_achieved = total_runs - achieved
     mean_val = np.mean(breakeven_steps)
     median_val = np.median(breakeven_steps)
     std_val = np.std(breakeven_steps)
@@ -1585,218 +1583,6 @@ def plot_montecarlo_grid_independence_distribution(
     plt.close()
 
 
-def plot_tariff_comparison(
-    results_df: pd.DataFrame,
-    tou_periods: "TOUPeriods",
-    prices_list: List[Tuple[str, "TOUPrices"]],
-    results_directory: str,
-    scenario_name: str = "",
-) -> None:
-    """
-    Plot comparison of yearly net costs under different tariff schemes.
-
-    Args:
-        results_df: Simulation results
-        tou_periods: TOUPeriods object to determine peak/off-peak
-        prices_list: List of (name, TOUPrices object) tuples
-        results_directory: Output directory
-        scenario_name: Optional suffix
-    """
-    _check_matplotlib()
-
-    os.makedirs(results_directory, exist_ok=True)
-    suffix = f"_{scenario_name}" if scenario_name else ""
-
-    if "Datetime" not in results_df.columns and not isinstance(results_df.index, pd.DatetimeIndex):
-        print("Error: results_df needs Datetime index or column")
-        return
-
-    df = results_df.copy()
-    if "Datetime" in df.columns:
-        df["Datetime"] = pd.to_datetime(df["Datetime"])
-        df.set_index("Datetime", inplace=True)
-
-    # Calculate costs for each tariff
-    costs = []
-    names = []
-
-    # Needs flow columns
-    if "Import_From_Grid" not in df.columns or "Sell_To_Grid" not in df.columns:
-        print("Error: Import/Sell columns missing")
-        return
-
-    # Calculate hours per step (safe approximation from frequency if not 1h)
-    # Better: get step size from index
-    # Assuming constant step size
-    dt_hours = (df.index[1] - df.index[0]).total_seconds() / 3600.0 if len(df) > 1 else 1.0
-
-    # Pre-calculate period names for the index to speed up
-    # We can use the cycle from tou_periods
-    period_names = [tou_periods.get_period(t) for t in df.index]
-    df["TOU_Period"] = period_names
-
-    for name, price_obj in prices_list:
-        total_import_cost = 0.0
-        total_revenue = 0.0
-
-        # Vectorized calculation
-        if hasattr(price_obj, "simple_tariff") and name.lower() == "simple":
-            # Simple tariff: one price for import
-            import_cost = df["Import_From_Grid"].sum() * dt_hours * price_obj.simple_tariff
-        else:
-            # TOU calculation
-            # Map period names to prices in price_obj
-            # period_names are 'peak', 'mid_peak', ...
-            # We create a series of prices aligned with index
-
-            # Create a mapping dict
-            p_map = {
-                "peak": price_obj.peak,
-                "mid_peak": price_obj.mid_peak,
-                "off_peak": price_obj.off_peak,
-                "super_off_peak": price_obj.super_off_peak,
-            }
-
-            price_series = df["TOU_Period"].map(p_map)
-
-            # Calculate import cost
-            import_cost = (df["Import_From_Grid"] * dt_hours * price_series).sum()
-
-        # Export (Fixed sell price usually, or could be indexed too?)
-        # Assuming simple sell_price for now
-        revenue = df["Sell_To_Grid"].sum() * dt_hours * price_obj.sell_price
-
-        net_cost = (import_cost - revenue) / 1000.0  # Convert to k€? No, keep in €
-        costs.append(net_cost)
-        names.append(name)
-
-    # Plot
-    fig, ax = plt.subplots(figsize=(10, 6))
-
-    bars = ax.bar(names, costs, color="steelblue", alpha=0.8, edgecolor="black")
-
-    ax.set_ylabel("Yearly Net Electricity Cost (€)", fontsize=12)
-    # ax.set_title('Tariff Regime Comparison', fontsize=14)
-    ax.grid(True, alpha=0.3, axis="y")
-
-    # Add labels
-    for bar in bars:
-        height = bar.get_height()
-        ax.text(
-            bar.get_x() + bar.get_width() / 2.0,
-            height,
-            f"€{height:.2f}",
-            ha="center",
-            va="bottom",
-            fontsize=11,
-            fontweight="bold",
-        )
-
-    plt.tight_layout()
-    plt.savefig(f"{results_directory}/tariff_comparison{suffix}.png", dpi=300)
-    plt.close()
-
-
-def plot_optimization_results_3d(
-    df: pd.DataFrame,
-    results_dir: str,
-    x_col: str = "Grid_Independence_%",
-    y_col: str = "NPV_Eur",
-    z_col: str = "ZEB_Ratio",
-    filename: str = "pareto_front_3d.png",
-) -> None:
-    """
-    Create a 3D scatter plot of optimization results.
-
-    Args:
-        df: DataFrame containing the results
-        results_dir: Directory to save the plot
-        x_col: Column name for X axis (Grid Independence)
-        y_col: Column name for Y axis (NPV)
-        z_col: Column name for Z axis (ZEB Ratio)
-        filename: Output filename
-    """
-    _check_matplotlib()
-    from mpl_toolkits.mplot3d import Axes3D  # noqa: F401 unused import
-
-    os.makedirs(results_dir, exist_ok=True)
-
-    # Check columns exist
-    missing = [col for col in [x_col, y_col, z_col] if col not in df.columns]
-    if missing:
-        print(f"Warning: Missing columns for 3D plot: {missing}")
-        return
-
-    try:
-        fig = plt.figure(figsize=(12, 10))
-        ax = fig.add_subplot(111, projection="3d")
-
-        # Scatte plot
-        # Color by Z axis (ZEB Ratio) for extra clarity
-        sc = ax.scatter(
-            df[x_col],
-            df[y_col],
-            df[z_col],
-            c=df[z_col],
-            cmap="viridis",
-            s=80,
-            alpha=0.8,
-            edgecolor="black",
-            linewidth=0.5,
-        )
-
-        ax.set_xlabel(x_col.replace("_", " "))
-        ax.set_ylabel(y_col.replace("_", " "))
-        ax.set_zlabel(z_col.replace("_", " "))
-
-        # Add colorbar
-        plt.colorbar(sc, ax=ax, label=z_col.replace("_", " "), shrink=0.6)
-
-        # Title
-        # ax.set_title('Multi-Objective Optimization Surface')
-
-        plt.tight_layout()
-        plt.savefig(os.path.join(results_dir, filename), dpi=300)
-        plt.close()
-        print(f"3D Plot saved to {os.path.join(results_dir, filename)}")
-
-    except Exception as e:
-        print(f"Error creating 3D plot: {e}")
-
-
-def plot_optimization_results_2d(
-    df: pd.DataFrame,
-    results_dir: str,
-    x_col: str = "Grid_Independence_%",
-    y_col: str = "NPV_Eur",
-    z_col: str = "ZEB_Ratio",
-    filename: str = "pareto_front.png",
-) -> None:
-    """
-    Create a 2D scatter plot of optimization results.
-    """
-    _check_matplotlib()
-
-    os.makedirs(results_dir, exist_ok=True)
-
-    try:
-        plt.figure(figsize=(10, 6))
-        sc = plt.scatter(df[x_col], df[y_col], c=df[z_col], cmap="viridis", s=100, alpha=0.8)
-        plt.colorbar(sc, label=z_col.replace("_", " "))
-        plt.xlabel(x_col.replace("_", " ").replace("%", "(%)"))
-        plt.ylabel("Net Present Value (€)")
-        # plt.title('Pareto Front: Financials vs Independence') # Removed per user request
-        plt.grid(True, alpha=0.3)
-
-        filepath = os.path.join(results_dir, filename)
-        plt.savefig(filepath)
-        plt.close()
-        print(f"2D Plot saved to {filepath}")
-
-    except Exception as e:
-        print(f"Error creating 2D plot: {e}")
-
-
 def plot_tariff_comparison_manual(
     regimes: List[str],
     vals_sys: List[float],
@@ -1895,7 +1681,6 @@ def plot_tariff_comparison(results_df: pd.DataFrame, results_directory: str, sce
         bars = ax.bar(tariffs, values, color=colors, alpha=0.9, edgecolor="black", linewidth=0.6)
 
         # Add value labels (rounded to cents)
-        min_val = values.min()
         for bar, val in zip(bars, values):
             height = bar.get_height()
             label_text = f"€{val:.2f}"
@@ -2189,9 +1974,6 @@ def plot_acc_sizing_sweep(results_df: pd.DataFrame, results_directory: str, scen
     lines1, labels1 = ax1.get_legend_handles_labels()
     lines2, labels2 = ax2.get_legend_handles_labels()
     ax1.legend(lines1 + lines2, labels1 + labels2, loc="center right")
-
-    title = f"ACC Sizing Sweep{': ' + scenario_name if scenario_name else ''}"
-    # ax1.set_title(title)
 
     plt.tight_layout()
     plt.savefig(f"{results_directory}/acc_sizing_sweep{suffix}.png", dpi=300)
@@ -2797,8 +2579,8 @@ def plot_loo_cv_summary(
     width = 0.35
 
     fig, ax = plt.subplots(figsize=(10, 6))
-    bars_train = ax.bar(x - width / 2, train_rmses, width, color="#2196F3", alpha=0.85, label="Train RMSE")
-    bars_held = ax.bar(x + width / 2, held_out_rmses, width, color="#F44336", alpha=0.85, label="Held-out RMSE")
+    ax.bar(x - width / 2, train_rmses, width, color="#2196F3", alpha=0.85, label="Train RMSE")
+    ax.bar(x + width / 2, held_out_rmses, width, color="#F44336", alpha=0.85, label="Held-out RMSE")
 
     ax.axhline(
         y=mean_cv, color="#F44336", linestyle="--", linewidth=1.5, alpha=0.7, label=f"Mean CV RMSE ({mean_cv:.1f} pp)"

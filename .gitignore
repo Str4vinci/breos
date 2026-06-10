@@ -13,6 +13,7 @@ dev/
 !breos/data/rlp/*.csv
 .codex
 .claude/
+.DS_Store
 
 # Sphinx
 docs/_build/
