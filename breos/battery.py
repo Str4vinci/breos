@@ -286,9 +286,13 @@ def simulate_energy_balance(
             Emax = usable_cap * battery_config.max_soc * f_cap
             Emin = usable_cap * battery_config.min_soc * f_cap
 
-            # Apply standby loss (scaled by timestep)
+            # Apply standby loss (scaled by timestep) and clamp stored energy
+            # into the temperature-derated window, mirroring the Numba kernel.
+            # Without the upper clamp, Emax shrinking below the stored energy
+            # (cold-temperature derate, daily SOH decline) made charge_room
+            # negative and silently drained the battery into Sell_To_Grid.
             standby_loss = battery_config.standby_loss_wh * hours_per_step
-            Battery_Energy_Wh = max(Emin, Battery_Energy_Wh - standby_loss)
+            Battery_Energy_Wh = min(Emax, max(Emin, Battery_Energy_Wh - standby_loss))
 
             # Convert PV DC to AC for comparison with load
             pv_ac = pv_dc_power * battery_config.inverter_efficiency
@@ -307,7 +311,7 @@ def simulate_energy_balance(
                 surplus_dc = pv_dc_power - dc_to_load
 
                 # Charge battery with surplus DC (no inverter loss)
-                charge_room = Emax - Battery_Energy_Wh
+                charge_room = max(0.0, Emax - Battery_Energy_Wh)
                 charge_in = min(surplus_dc, charge_room / battery_config.charge_efficiency)
                 Battery_Energy_Wh += charge_in * battery_config.charge_efficiency
 

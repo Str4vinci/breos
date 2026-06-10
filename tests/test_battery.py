@@ -110,6 +110,33 @@ class TestSimulateEnergyBalance:
         assert len(results_df) == 48
         assert summary_df["Total Load [kWh]"].iloc[0] == pytest.approx(48.0)
 
+    def test_cold_derate_cannot_sell_energy_pv_never_produced(self):
+        # A full battery whose temperature drops sees Emax shrink below its
+        # stored energy (lfp cold derate). charge_room went negative and the
+        # battery silently drained into Sell_To_Grid: 100 Wh of PV exported
+        # ~539 Wh in the first cold hour. Export must never exceed PV AC.
+        idx = pd.date_range("2025-01-01 00:00", periods=6, freq="h", tz="UTC")
+        pv_dc = pd.Series(100.0, index=idx)
+        houseload = pd.DataFrame({"Load": 0.0}, index=idx)
+        config = BatteryConfig(nominal_energy_wh=10000, battery_type="lfp")
+        temperature = pd.Series([25.0, 25.0, 0.0, 0.0, 0.0, 0.0], index=idx)
+
+        results_df, *_ = simulate_energy_balance(
+            pv_dc=pv_dc,
+            houseload=houseload,
+            battery_config=config,
+            temperature_series=temperature,
+            freq="h",
+        )
+
+        pv_ac_max = 100.0 * config.inverter_efficiency
+        assert results_df["Sell_To_Grid"].max() <= pv_ac_max + 1e-9
+        # Stored energy is clamped into the temperature-derated window
+        from breos.battery import lfp_capacity_factor
+
+        emax_cold = 10000 * config.max_soc * lfp_capacity_factor(0.0)
+        assert results_df["Battery_Energy"].iloc[-1] <= emax_cold + 1e-9
+
 
 class TestIndoorTemperatureModel:
     def test_output_shape(self):
