@@ -158,7 +158,7 @@ def simulate_energy_balance(
     Returns:
         Tuple of:
         - results_df: Detailed timestep results
-        - total_pv: Total PV DC production (Wh)
+        - total_pv: Total PV AC production after inverter efficiency (Wh)
         - summary_df: Summary statistics
         - replacement_cost: Total battery replacement cost
         - n_replacements: Number of battery replacements
@@ -233,6 +233,9 @@ def simulate_energy_balance(
     Battery_SOH = battery_config.initial_soh
     Battery_Energy_Wh = battery_config.nominal_energy_wh * battery_soh_decimal * battery_config.max_soc
 
+    # Degradation day-windows are positional (fixed steps_per_day), not
+    # calendar-based: DST days and trailing partial days shift/skip windows
+    # by design; the Numba kernels share the convention.
     soc_absolute_buffer = np.empty(steps_per_day, dtype=np.float64)
     soc_buf_idx = 0
     fec_cum = initial_fec

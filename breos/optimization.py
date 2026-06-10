@@ -85,7 +85,7 @@ def optimize_tilt(
 
     for tilt in tilts:
         try:
-            ac_power = calculate_pv_production_dc(
+            dc_power = calculate_pv_production_dc(
                 weather_data=weather_data,
                 location=location,
                 tilt=tilt,
@@ -95,7 +95,7 @@ def optimize_tilt(
                 freq=freq,
                 verbose=False,
             )
-            total_production = ac_power.sum() / 1000  # kWh
+            total_production = dc_power.sum() * get_hours_per_step(freq) / 1000  # kWh (DC)
             results.append({"tilt": tilt, "production_kwh": total_production})
 
             if verbose:
@@ -160,7 +160,7 @@ def optimize_tilt_brent(
     def objective(tilt):
         iterations[0] += 1
         try:
-            ac_power = calculate_pv_production_dc(
+            dc_power = calculate_pv_production_dc(
                 weather_data=weather_data,
                 location=location,
                 tilt=tilt,
@@ -170,7 +170,8 @@ def optimize_tilt_brent(
                 freq=freq,
                 verbose=False,
             )
-            production = -ac_power.sum() / 1000  # Negative for minimization
+            # Negative kWh (DC) for minimization
+            production = -dc_power.sum() * get_hours_per_step(freq) / 1000
 
             if verbose:
                 print(f"  Iteration {iterations[0]}: tilt={tilt:.2f}°, production={-production:.1f} kWh")
