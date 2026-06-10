@@ -296,6 +296,11 @@ def fetch_weather_data(
 
     Raises:
         ImportError: If openmeteo_requests is not installed
+
+    Note:
+        Responses are cached in a ``.cache.sqlite`` file created in the
+        current working directory (30-day expiry). Delete it to force
+        fresh API responses.
     """
     if not HAS_OPENMETEO:
         raise ImportError(

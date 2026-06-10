@@ -66,7 +66,13 @@ def load_weather_for_simulation(
     deps: AppRuntimeDependencies,
     weather_dir: Path | None = None,
 ) -> pd.DataFrame:
-    """Load TMY weather, falling back to PVGIS fetch."""
+    """Load TMY weather, falling back to PVGIS fetch.
+
+    When ``weather_dir`` is not given, a ``weather/`` directory in the
+    current working directory is scanned first: a file matching the
+    location preset key takes precedence over the PVGIS fetch. Remove or
+    rename the directory (or its files) to force a fresh fetch.
+    """
     weather = None
     weather_path = weather_dir or Path.cwd() / "weather"
 

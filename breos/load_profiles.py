@@ -50,6 +50,10 @@ PROFILE_NAMES = {
     "8": "REE 2026 - 2.0TD (external file required)",
 }
 
+# Note: "bdew_h0" maps to the bundled demandlib profile "1", which
+# implements the BDEW H0 standard shape. Profile "7" is the externally
+# published BDEW H0 2025 file and must be supplied via rlp_directory —
+# request it explicitly as "7" if that exact dataset is needed.
 PROFILE_ALIASES = {
     "default": "1",
     "demandlib_h0": "1",

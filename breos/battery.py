@@ -307,7 +307,12 @@ def simulate_energy_balance(
         charge_in = discharge_out = 0.0
 
         if has_battery:
-            # Calculate usable capacity with temperature derating
+            # Calculate usable capacity with temperature derating. f_cap is
+            # computed from the ambient/indoor temperature at step start; the
+            # lumped thermal model warms T_cell later in the step, so aging
+            # sees the warmed cell while derating sees the environment. This
+            # is intentional: usable capacity is set by the pack's state
+            # before this step's charge/discharge self-heating.
             usable_cap = battery_config.nominal_energy_wh * battery_soh_decimal
             f_cap = _cap_factor_fn(T_cell)
             Emax = usable_cap * battery_config.max_soc * f_cap

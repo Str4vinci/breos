@@ -222,6 +222,14 @@ These modules may be released in the future or are available for academic collab
 
 BREOS uses [Open-Meteo](https://open-meteo.com/) for historical weather data. Open-Meteo is free for non-commercial use. For commercial applications, please review their [pricing and terms](https://open-meteo.com/en/pricing).
 
+Two working-directory conventions to be aware of:
+
+- A `weather/` directory in the current working directory is scanned before
+  any PVGIS fetch — a file matching the location preset name is used silently
+  instead of fetching. Remove or rename it to force a fresh fetch.
+- Historical Open-Meteo fetches cache responses in a `.cache.sqlite` file in
+  the current working directory (30-day expiry).
+
 Library modules report progress (file discovery, saved files, conversions)
 through the standard `logging` module under the `breos.*` logger names —
 enable them with `logging.basicConfig(level=logging.INFO)` or silence them
