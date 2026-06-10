@@ -83,6 +83,14 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   run" walkthrough built on `configs/examples/quickstart.toml`, the new
   option-discovery commands, and a representative output excerpt with
   plausibility ranges.
+- New recipes page with validated copy-paste configs: PV-only home, PV plus
+  battery, custom latitude/longitude/timezone, east-west roof with
+  `pv_arrays`, 15-minute resolution, external E-REDES/BDEW/REE load
+  profiles, and offline runs with cached weather.
+- New generated "Packaged options" reference page listing locations, PV
+  modules, cost presets, emissions factors, and load profiles. It is built
+  by `tools/generate_option_docs.py` from the packaged data and source
+  constants, and a test fails CI when the page drifts.
 - README documents the fixed PVWatts loss components, the inverter clipping
   convention, the `weather/` working-directory override, the Open-Meteo
   `.cache.sqlite` file, logging configuration, and the new config keys.

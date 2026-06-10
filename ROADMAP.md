@@ -26,9 +26,9 @@ a `pvlib.Location`, which means BREOS does not own its own public API.
 ### Make the first successful run easier to trust
 
 The 0.3.0 onboarding pass added the "10-minute first run" quickstart,
-the required-inputs page, the `breos list` discovery commands, and
-`breos validate-config` / `breos run --dry-run` config inspection with
-`--json` output. Remaining work:
+the required-inputs page, the recipes page, the generated packaged-options
+reference, the `breos list` discovery commands, and `breos validate-config` /
+`breos run --dry-run` config inspection with `--json` output. Remaining work:
 
 Ongoing docs hygiene:
 
@@ -40,18 +40,9 @@ Ongoing docs hygiene:
 - Keep the representative quickstart output excerpt in the docs close to what
   current dependency versions actually produce.
 
-Short-term onboarding work:
-
-- Add recipes for common cases: PV-only home, PV plus battery, custom
-  latitude/longitude/timezone, east-west roof with `pv_arrays`, 15-minute
-  resolution, and external RLP files.
-
 Option discovery work:
 
 - Add matching Python helpers where useful, building on `list_modules()`.
-- Generate docs tables from the packaged resources/source constants so option
-  docs cannot drift from `breos/data/configs/*.json`, `MODULES`, and
-  `PROFILE_NAMES`.
 
 Config inspection work:
 

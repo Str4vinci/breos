@@ -61,6 +61,9 @@ breos list emissions
 breos list load-profiles
 ```
 
+The same lists, with full details, live on the
+[packaged options](options.md) page.
+
 ## A minimal Python example
 
 ```python
@@ -126,6 +129,9 @@ The CLI writes the same JSON-serializable dict that `App.result()` returns.
 
 ## Next steps
 
+- See [Recipes](recipes.md) for copy-paste configs: PV-only, east-west
+  roofs, custom coordinates, 15-minute resolution, external load profiles,
+  and offline runs.
 - See [Configuration](configuration.md) for every option `App` accepts.
 - See [Interpreting results](interpreting-results.md) for what each result
   key means.

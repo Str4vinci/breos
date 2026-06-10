@@ -9,6 +9,8 @@ what the result dict contains.
 installation
 inputs
 quickstart
+recipes
 configuration
+options
 interpreting-results
 ```
