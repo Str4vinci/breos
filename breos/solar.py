@@ -20,6 +20,21 @@ from breos.utils import get_hours_per_step
 # Module-level cache for CEC model parameters (depends only on module specs, not weather)
 _cec_param_cache: Dict[tuple, tuple] = {}
 
+# System loss components (percent) applied to every DC production calculation
+# via pvlib's pvwatts_losses. Combined multiplicatively they total ~14.1%
+# (age-based degradation is added separately per simulation year).
+DEFAULT_PVWATTS_LOSSES: Dict[str, float] = {
+    "soiling": 2.0,
+    "shading": 3.0,
+    "snow": 0.0,
+    "mismatch": 2.0,
+    "wiring": 2.0,
+    "connections": 0.5,
+    "lid": 1.5,
+    "nameplate_rating": 1.0,
+    "availability": 3.0,
+}
+
 
 @dataclass
 class PVModuleParams:
@@ -155,11 +170,22 @@ def _dc_from_poa(
     degradation_rate: float = 0.0,
     current_year: Optional[int] = None,
     start_year: Optional[int] = None,
+    loss_overrides: Optional[Dict[str, float]] = None,
 ) -> pd.Series:
     """Run CEC single-diode + pvwatts loss model and scale to array.
 
-    Shared between fixed-tilt and tracking DC paths.
+    Shared between fixed-tilt and tracking DC paths. System losses default
+    to DEFAULT_PVWATTS_LOSSES; ``loss_overrides`` replaces individual
+    components (percent).
     """
+    loss_components = dict(DEFAULT_PVWATTS_LOSSES)
+    if loss_overrides:
+        unknown = set(loss_overrides) - set(DEFAULT_PVWATTS_LOSSES)
+        if unknown:
+            valid = ", ".join(sorted(DEFAULT_PVWATTS_LOSSES))
+            raise ValueError(f"Unknown loss component(s) {sorted(unknown)}. Valid components: {valid}")
+        loss_components.update(loss_overrides)
+
     I_L_ref, I_o_ref, R_s, R_sh_ref, a_ref, Adjust = _get_cec_params(pv_params)
 
     with warnings.catch_warnings():
@@ -176,16 +202,8 @@ def _dc_from_poa(
         age_degradation_factor = 0.0
 
     total_losses_percent = pvlib.pvsystem.pvwatts_losses(
-        soiling=2,
-        shading=3,
-        snow=0,
-        mismatch=2,
-        wiring=2,
-        connections=0.5,
-        lid=1.5,
-        nameplate_rating=1,
         age=age_degradation_factor,
-        availability=3,
+        **loss_components,
     )
 
     p_mp = mpp["p_mp"] if isinstance(mpp, dict) else mpp.p_mp
@@ -205,6 +223,7 @@ def calculate_pv_production_dc(
     current_year: Optional[int] = None,
     start_year: Optional[int] = None,
     verbose: bool = False,
+    loss_overrides: Optional[Dict[str, float]] = None,
 ) -> pd.Series:
     """
     Calculate PV DC production from weather data (fixed-tilt array).
@@ -215,6 +234,12 @@ def calculate_pv_production_dc(
     For DC-coupled battery systems:
     - Use DC output directly for battery charging (apply only charge efficiency)
     - Use dc_to_ac() for power going to AC loads or grid
+
+    System losses: DEFAULT_PVWATTS_LOSSES (~14.1% combined: soiling 2,
+    shading 3, mismatch 2, wiring 2, connections 0.5, LID 1.5, nameplate 1,
+    availability 3) are always applied via pvlib's pvwatts_losses; inverter
+    conversion is NOT included here. Pass ``loss_overrides`` to change
+    individual components (percent), e.g. ``{"shading": 0.0}``.
 
     Args:
         weather_data: DataFrame with weather variables (must include ghi/dni/dhi or shortwave_radiation)
@@ -250,6 +275,7 @@ def calculate_pv_production_dc(
         degradation_rate=degradation_rate,
         current_year=current_year,
         start_year=start_year,
+        loss_overrides=loss_overrides,
     )
 
     if verbose:
@@ -277,6 +303,7 @@ def calculate_pv_production_dc_tracking(
     current_year: Optional[int] = None,
     start_year: Optional[int] = None,
     verbose: bool = False,
+    loss_overrides: Optional[Dict[str, float]] = None,
 ) -> pd.Series:
     """
     Calculate PV DC production for a tracking array (single- or dual-axis).
@@ -356,6 +383,7 @@ def calculate_pv_production_dc_tracking(
         degradation_rate=degradation_rate,
         current_year=current_year,
         start_year=start_year,
+        loss_overrides=loss_overrides,
     )
 
     if verbose:
@@ -630,6 +658,7 @@ def calculate_multi_array_production(
     current_year: Optional[int] = None,
     start_year: Optional[int] = None,
     verbose: bool = False,
+    loss_overrides: Optional[Dict[str, float]] = None,
 ) -> pd.Series:
     """
     Calculate combined DC production from multiple PV arrays.
@@ -690,6 +719,7 @@ def calculate_multi_array_production(
                 current_year=current_year,
                 start_year=start_year,
                 verbose=False,
+                loss_overrides=loss_overrides,
             )
         elif tracking in ("single_axis", "dual_axis"):
             if verbose:
@@ -720,6 +750,7 @@ def calculate_multi_array_production(
                 current_year=current_year,
                 start_year=start_year,
                 verbose=False,
+                loss_overrides=loss_overrides,
             )
         else:
             raise ValueError(

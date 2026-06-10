@@ -126,7 +126,21 @@ All keys except `location`, `annual_consumption_kwh`, and either `n_modules` or 
 | `calendar_model` | `"naumann_lam_field_calibrated"` | Battery calendar aging model |
 | `dc_coupled` | `True` | DC-coupled / hybrid inverter |
 | `inverter_efficiency` | `0.96` | Inverter efficiency |
-| `inverter_loading_ratio` | `1.25` | DC/AC oversizing ratio |
+| `inverter_loading_ratio` | `1.25` | DC/AC oversizing ratio; also sets the inverter AC rating that clips production |
+| `pv_loss_overrides` | `None` | Per-component overrides (percent) for the fixed PVWatts system losses, e.g. `{"shading": 0.0}` |
+
+### Modeling conventions
+
+- **System losses**: every DC production calculation applies pvlib's PVWatts
+  losses with BREOS defaults of soiling 2%, shading 3%, mismatch 2%, wiring 2%,
+  connections 0.5%, LID 1.5%, nameplate 1%, and availability 3% — about 14.1%
+  combined (`breos.solar.DEFAULT_PVWATTS_LOSSES`). Age-based degradation is
+  added separately per simulation year. Override individual components with
+  `pv_loss_overrides` (App) or `loss_overrides` (solar functions).
+- **Inverter**: the energy balance applies a flat `inverter_efficiency` and
+  clips AC output (PV and battery discharge combined) at the inverter rating
+  implied by `inverter_loading_ratio` — the same rating used for inverter
+  CAPEX. DC surplus above the rating can still charge a DC-coupled battery.
 
 ## Result
 

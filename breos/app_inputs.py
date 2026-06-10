@@ -97,6 +97,7 @@ def build_dc_system_base(cfg: dict[str, Any], resolved: ResolvedAppConfig, weath
     """Build undegraded system-level DC production for one simulation year."""
     location = Location(resolved.lat, resolved.lon, tz=resolved.timezone)
     freq = cfg["resolution"]
+    loss_overrides = cfg["pv_loss_overrides"]
 
     if resolved.pv_arrays:
         return calculate_multi_array_production(
@@ -104,6 +105,7 @@ def build_dc_system_base(cfg: dict[str, Any], resolved: ResolvedAppConfig, weath
             location=location,
             arrays=resolved.pv_arrays,
             freq=freq,
+            loss_overrides=loss_overrides,
         )
 
     if resolved.tracking == "fixed":
@@ -115,6 +117,7 @@ def build_dc_system_base(cfg: dict[str, Any], resolved: ResolvedAppConfig, weath
             n_modules=1,
             pv_params=resolved.pv_params,
             freq=freq,
+            loss_overrides=loss_overrides,
         )
     else:
         dc_1mod = calculate_pv_production_dc_tracking(
@@ -131,6 +134,7 @@ def build_dc_system_base(cfg: dict[str, Any], resolved: ResolvedAppConfig, weath
             dual_axis_max_tilt=cfg["dual_axis_max_tilt"],
             pv_params=resolved.pv_params,
             freq=freq,
+            loss_overrides=loss_overrides,
         )
     return dc_1mod * cfg["n_modules"]
 

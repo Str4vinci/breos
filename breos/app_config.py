@@ -39,6 +39,7 @@ DEFAULTS: dict[str, Any] = {
     "dc_coupled": True,
     "inverter_efficiency": 0.96,
     "inverter_loading_ratio": 1.25,
+    "pv_loss_overrides": None,
     "start_date": "2023-01-01",
 }
 
@@ -113,6 +114,13 @@ def validate_config(cfg: dict[str, Any]) -> None:
         raise ValueError("'annual_consumption_kwh' must be > 0")
     if cfg["resolution"] not in ("h", "15min"):
         raise ValueError("'resolution' must be 'h' or '15min'")
+    overrides = cfg.get("pv_loss_overrides")
+    if overrides is not None:
+        if not isinstance(overrides, dict):
+            raise TypeError("'pv_loss_overrides' must be a dict of loss component percentages")
+        for name, value in overrides.items():
+            if not isinstance(value, (int, float)) or not 0 <= value <= 100:
+                raise ValueError(f"'pv_loss_overrides[{name!r}]' must be a percentage between 0 and 100")
 
 
 def resolve_location(cfg: dict[str, Any]) -> tuple[float, float, str, str | None]:

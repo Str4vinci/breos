@@ -55,6 +55,28 @@ class TestAppValidation:
         with pytest.raises(ValueError, match="latitude"):
             App({"location": {"longitude": -8.6}, "n_modules": 10, "annual_consumption_kwh": 4000})
 
+    def test_invalid_pv_loss_overrides_value(self):
+        with pytest.raises(ValueError, match="pv_loss_overrides"):
+            App(
+                {
+                    "location": "porto",
+                    "n_modules": 10,
+                    "annual_consumption_kwh": 4000,
+                    "pv_loss_overrides": {"shading": 200},
+                }
+            )
+
+    def test_invalid_pv_loss_overrides_type(self):
+        with pytest.raises(TypeError, match="pv_loss_overrides"):
+            App(
+                {
+                    "location": "porto",
+                    "n_modules": 10,
+                    "annual_consumption_kwh": 4000,
+                    "pv_loss_overrides": 5.0,
+                }
+            )
+
     def test_custom_location_valid(self):
         app = App(
             {
@@ -111,6 +133,25 @@ class TestAppValidation:
         app.simulate()
 
         assert seen["rlp_directory"] == str(tmp_path)
+
+    def test_pv_loss_overrides_increase_production(self, _patch_weather):
+        def _run(overrides):
+            app = App(
+                {
+                    "location": "porto",
+                    "n_modules": 6,
+                    "annual_consumption_kwh": 3000,
+                    "projection_years": 1,
+                    "pv_loss_overrides": overrides,
+                }
+            )
+            app.simulate()
+            return app.result()["pv_production_kwh"]
+
+        base = _run(None)
+        no_shading = _run({"shading": 0.0})
+
+        assert no_shading == pytest.approx(base / 0.97, rel=1e-6)
 
     def test_smaller_inverter_clips_app_production(self, _patch_weather):
         def _run(loading_ratio):
