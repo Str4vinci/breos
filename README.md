@@ -24,6 +24,13 @@ A Python library for PV and battery energy-system simulation and optimization, d
 pip install breos
 ```
 
+Or with [uv](https://docs.astral.sh/uv/):
+
+```bash
+uv add breos          # as a project dependency
+uvx breos --version   # run the CLI without installing
+```
+
 Optional feature groups keep the default install focused on core PV +
 battery simulation:
 

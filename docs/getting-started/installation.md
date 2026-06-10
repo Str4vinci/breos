@@ -8,6 +8,14 @@ BREOS requires Python 3.11 or newer.
 pip install breos
 ```
 
+With [uv](https://docs.astral.sh/uv/), add it to a project or run the CLI
+directly without installing:
+
+```bash
+uv add breos
+uvx breos run --location porto --n-modules 10 --annual-consumption-kwh 4000
+```
+
 To install a specific release tag directly from GitHub instead:
 
 ```bash
