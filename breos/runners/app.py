@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import Any
 
@@ -69,18 +70,26 @@ def run_app_simulation(
         dc_power = inputs.dc_system_base * pv_degradation_factor
 
         if has_battery:
+            batt_kwargs: dict[str, Any] = {}
+            if cfg["battery_rte"] is not None:
+                # Split the round-trip efficiency evenly across charge and
+                # discharge, matching the BatteryConfig default convention.
+                one_way = math.sqrt(cfg["battery_rte"])
+                batt_kwargs["charge_efficiency"] = one_way
+                batt_kwargs["discharge_efficiency"] = one_way
             batt_cfg = BatteryConfig(
                 nominal_energy_wh=battery_wh,
                 initial_soh=current_soh,
-                eol_percentage=0.70,
-                max_soc=0.90,
-                min_soc=0.10,
+                eol_percentage=cfg["battery_eol_percentage"],
+                max_soc=cfg["battery_max_soc"],
+                min_soc=cfg["battery_min_soc"],
                 dc_coupled=cfg["dc_coupled"],
                 inverter_efficiency=cfg["inverter_efficiency"],
                 inverter_ac_capacity_w=inverter_ac_capacity_w,
                 enable_replacement=True,
                 replacement_cost=replacement_cost,
                 calendar_model=cfg["calendar_model"],
+                **batt_kwargs,
             )
         else:
             # PV-only runs still flow through the same inverter model so the

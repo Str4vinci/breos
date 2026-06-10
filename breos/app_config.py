@@ -36,6 +36,10 @@ DEFAULTS: dict[str, Any] = {
     "emissions_country": None,
     "pv_degradation_rate": 0.005,
     "calendar_model": "naumann_lam_field_calibrated",
+    "battery_min_soc": 0.10,
+    "battery_max_soc": 0.90,
+    "battery_eol_percentage": 0.70,
+    "battery_rte": None,
     "dc_coupled": True,
     "inverter_efficiency": 0.96,
     "inverter_loading_ratio": 1.25,
@@ -121,6 +125,12 @@ def validate_config(cfg: dict[str, Any]) -> None:
         for name, value in overrides.items():
             if not isinstance(value, (int, float)) or not 0 <= value <= 100:
                 raise ValueError(f"'pv_loss_overrides[{name!r}]' must be a percentage between 0 and 100")
+    if not 0 <= cfg["battery_min_soc"] < cfg["battery_max_soc"] <= 1:
+        raise ValueError("'battery_min_soc' and 'battery_max_soc' must satisfy 0 <= min < max <= 1")
+    if not 0 < cfg["battery_eol_percentage"] < 1:
+        raise ValueError("'battery_eol_percentage' must be between 0 and 1 (exclusive)")
+    if cfg["battery_rte"] is not None and not 0 < cfg["battery_rte"] <= 1:
+        raise ValueError("'battery_rte' must be between 0 (exclusive) and 1 (inclusive)")
 
 
 def resolve_location(cfg: dict[str, Any]) -> tuple[float, float, str, str | None]:

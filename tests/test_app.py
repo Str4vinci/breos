@@ -55,6 +55,40 @@ class TestAppValidation:
         with pytest.raises(ValueError, match="latitude"):
             App({"location": {"longitude": -8.6}, "n_modules": 10, "annual_consumption_kwh": 4000})
 
+    def test_invalid_battery_soc_window(self):
+        with pytest.raises(ValueError, match="battery_min_soc"):
+            App(
+                {
+                    "location": "porto",
+                    "n_modules": 10,
+                    "annual_consumption_kwh": 4000,
+                    "battery_min_soc": 0.9,
+                    "battery_max_soc": 0.2,
+                }
+            )
+
+    def test_invalid_battery_rte(self):
+        with pytest.raises(ValueError, match="battery_rte"):
+            App(
+                {
+                    "location": "porto",
+                    "n_modules": 10,
+                    "annual_consumption_kwh": 4000,
+                    "battery_rte": 1.5,
+                }
+            )
+
+    def test_invalid_battery_eol(self):
+        with pytest.raises(ValueError, match="battery_eol_percentage"):
+            App(
+                {
+                    "location": "porto",
+                    "n_modules": 10,
+                    "annual_consumption_kwh": 4000,
+                    "battery_eol_percentage": 0.0,
+                }
+            )
+
     def test_invalid_pv_loss_overrides_value(self):
         with pytest.raises(ValueError, match="pv_loss_overrides"):
             App(
@@ -133,6 +167,28 @@ class TestAppValidation:
         app.simulate()
 
         assert seen["rlp_directory"] == str(tmp_path)
+
+    def test_battery_soc_window_reaches_simulation(self, _patch_weather):
+        def _run(**extra):
+            app = App(
+                {
+                    "location": "porto",
+                    "n_modules": 6,
+                    "annual_consumption_kwh": 3000,
+                    "battery_kwh": 5.0,
+                    "projection_years": 1,
+                    **extra,
+                }
+            )
+            app.simulate()
+            return app
+
+        default_gi = _run().result()["grid_independence_pct"]
+        narrow_gi = _run(battery_min_soc=0.45, battery_max_soc=0.55).result()["grid_independence_pct"]
+
+        # A 10% SOC window stores a tenth of the energy of the default
+        # 10-90% window, so grid independence must drop
+        assert narrow_gi < default_gi
 
     def test_pv_loss_overrides_increase_production(self, _patch_weather):
         def _run(overrides):

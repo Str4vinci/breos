@@ -124,6 +124,10 @@ All keys except `location`, `annual_consumption_kwh`, and either `n_modules` or 
 | `emissions_country` | `None` | Country code for CO2 calculations (`"PT"`, `"DE"`, `"ES"`, ...) |
 | `pv_degradation_rate` | `0.005` | Annual PV degradation (0.5%) |
 | `calendar_model` | `"naumann_lam_field_calibrated"` | Battery calendar aging model |
+| `battery_min_soc` | `0.10` | Battery SOC floor (fraction of usable capacity) |
+| `battery_max_soc` | `0.90` | Battery SOC ceiling |
+| `battery_eol_percentage` | `0.70` | SOH fraction that triggers battery replacement |
+| `battery_rte` | `None` | Battery round-trip efficiency, split evenly across charge/discharge (`None` = 0.95) |
 | `dc_coupled` | `True` | DC-coupled / hybrid inverter |
 | `inverter_efficiency` | `0.96` | Inverter efficiency |
 | `inverter_loading_ratio` | `1.25` | DC/AC oversizing ratio; also sets the inverter AC rating that clips production |
