@@ -188,26 +188,21 @@ def fetch_tmy_weather_data(
         longitude: Longitude of the location
         sample_year: Year to use for index (default: 2025). Set to None to keep original TMY index.
         freq: Frequency for output data ('h' for hourly, '15min' for 15-minute)
-        timezone: Timezone string. Auto-detected if None.
+        timezone: Timezone string used to determine the location's whole-hour
+            UTC offset (offset taken at Jan 1 of sample_year, i.e. standard
+            time for northern-hemisphere locations). Auto-detected if None.
         save_to_file: Whether to save the data to CSV
 
     Returns:
-        Tuple of (tmy_data DataFrame, metadata dict)
+        Tuple of (tmy_data DataFrame, metadata dict). When sample_year is set,
+        the index is fixed-offset local time starting at local midnight of
+        Jan 1; rows are rolled (not relabeled) so each timestamp remains the
+        correct UTC instant for its irradiance values.
 
     Raises:
         ValueError: If sample_year is a leap year (TMY has 8760 hours)
     """
-    tmy_data, metadata = pvlib.iotools.get_pvgis_tmy(
-        latitude,
-        longitude,
-        outputformat="json",
-        usehorizon=True,
-        map_variables=True,
-        url="https://re.jrc.ec.europa.eu/api/v5_3/",
-        timeout=120,
-    )
-
-    # Reindex to sample year if requested
+    roll_utc_offset = None
     if sample_year is not None:
         # Check for leap year
         if sample_year % 4 == 0 and (sample_year % 100 != 0 or sample_year % 400 == 0):
@@ -220,10 +215,24 @@ def fetch_tmy_weather_data(
             tf = TimezoneFinder()
             timezone = tf.timezone_at(lat=latitude, lng=longitude)
 
-        new_index = pd.date_range(
-            start=f"{sample_year}-01-01 00:00", end=f"{sample_year}-12-31 23:00", freq="h", tz=timezone
-        )
-        tmy_data.index = new_index
+        utc_offset = pd.Timestamp(f"{sample_year}-01-01", tz=timezone).utcoffset()
+        roll_utc_offset = round(utc_offset.total_seconds() / 3600)
+
+    # PVGIS returns UTC-ordered rows. roll_utc_offset/coerce_year make pvlib
+    # roll the data so the series starts at local midnight of sample_year
+    # while keeping each row's timestamp the correct UTC instant — never
+    # relabel the UTC-ordered rows with local-time labels.
+    tmy_data, metadata = pvlib.iotools.get_pvgis_tmy(
+        latitude,
+        longitude,
+        outputformat="json",
+        usehorizon=True,
+        map_variables=True,
+        url="https://re.jrc.ec.europa.eu/api/v5_3/",
+        timeout=120,
+        roll_utc_offset=roll_utc_offset,
+        coerce_year=sample_year,
+    )
 
     # Resample to 15-min if requested
     if freq in ("15min", "15T", "15m"):
