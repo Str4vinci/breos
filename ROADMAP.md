@@ -37,8 +37,8 @@ Ongoing docs hygiene:
 - Keep the README and getting-started configuration tables in sync with the
   public `App` config surface, including battery SOC/EOL/RTE keys and
   `pv_loss_overrides`.
-- Add expected quickstart output ranges or a representative output excerpt so a
-  first-time user can tell whether the run behaved plausibly.
+- Keep the representative quickstart output excerpt in the docs close to what
+  current dependency versions actually produce.
 
 Short-term onboarding work:
 

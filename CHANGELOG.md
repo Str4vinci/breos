@@ -80,8 +80,9 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 ### Documentation
 - Install snippets in the README and docs point at PyPI (`pip install breos`)
   instead of git tag installs, and the quickstart gained a "10-minute first
-  run" walkthrough built on `configs/examples/quickstart.toml` plus the new
-  option-discovery commands.
+  run" walkthrough built on `configs/examples/quickstart.toml`, the new
+  option-discovery commands, and a representative output excerpt with
+  plausibility ranges.
 - README documents the fixed PVWatts loss components, the inverter clipping
   convention, the `weather/` working-directory override, the Open-Meteo
   `.cache.sqlite` file, logging configuration, and the new config keys.

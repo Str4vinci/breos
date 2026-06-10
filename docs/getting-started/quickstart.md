@@ -25,11 +25,31 @@ timezone, module count, PV size, inverter AC rating, load profile, battery
 capacity, cost preset, and emissions preset.
 
 The final command runs the full simulation and writes a JSON object with
-top-level keys such as `pv_production_kwh`, `grid_independence_pct`,
-`self_consumption_pct`, `payback_year`, `npv_savings_eur`, `monthly`,
-`financial`, and `yearly`. Exact values depend on the weather source and model
-assumptions, so use the dry-run summary and [Required Inputs](inputs.md) to
-decide which defaults are acceptable for your study.
+scalar headline keys plus `yearly`, `monthly`, and `financial` detail blocks.
+A representative run (PVGIS TMY for Porto, packaged defaults) produces
+top-level values close to these:
+
+```json
+{
+  "n_modules": 10,
+  "pv_kwp": 5.5,
+  "battery_kwh": 5.0,
+  "pv_production_kwh": 8288.0,
+  "grid_independence_pct": 80.2,
+  "self_consumption_pct": 39.8,
+  "total_investment_eur": 7788.9,
+  "payback_year": 10,
+  "npv_savings_eur": 5041.3,
+  "battery_soh_end_pct": 70.6,
+  "co2_avoided_total_kg": 20228.0
+}
+```
+
+Exact numbers shift with the PVGIS TMY vintage and dependency versions, but a
+plausible first run lands in the same neighborhood — roughly 8 MWh/yr of PV
+production and 75–85% grid independence for this config. If your values are
+far off, use the dry-run summary and [Required Inputs](inputs.md) to check
+which defaults your run actually used.
 
 To discover packaged option keys:
 
