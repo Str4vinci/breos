@@ -55,6 +55,36 @@ class TestAppValidation:
         with pytest.raises(ValueError, match="latitude"):
             App({"location": {"longitude": -8.6}, "n_modules": 10, "annual_consumption_kwh": 4000})
 
+    def test_invalid_negative_battery_kwh(self):
+        # A negative battery must not silently reduce CAPEX
+        with pytest.raises(ValueError, match="battery_kwh"):
+            App({"location": "porto", "n_modules": 10, "annual_consumption_kwh": 4000, "battery_kwh": -5})
+
+    def test_invalid_top_level_tilt(self):
+        with pytest.raises(ValueError, match="tilt"):
+            App({"location": "porto", "n_modules": 10, "annual_consumption_kwh": 4000, "tilt": 120})
+
+    def test_invalid_top_level_azimuth(self):
+        with pytest.raises(ValueError, match="azimuth"):
+            App({"location": "porto", "n_modules": 10, "annual_consumption_kwh": 4000, "azimuth": 400})
+
+    def test_invalid_inverter_efficiency(self):
+        with pytest.raises(ValueError, match="inverter_efficiency"):
+            App({"location": "porto", "n_modules": 10, "annual_consumption_kwh": 4000, "inverter_efficiency": 1.5})
+
+    def test_invalid_inverter_loading_ratio(self):
+        with pytest.raises(ValueError, match="inverter_loading_ratio"):
+            App({"location": "porto", "n_modules": 10, "annual_consumption_kwh": 4000, "inverter_loading_ratio": 0})
+
+    def test_invalid_projection_years(self):
+        # Must fail at config load, not with a late RuntimeError mid-simulation
+        with pytest.raises(ValueError, match="projection_years"):
+            App({"location": "porto", "n_modules": 10, "annual_consumption_kwh": 4000, "projection_years": 0})
+
+    def test_invalid_pv_degradation_rate(self):
+        with pytest.raises(ValueError, match="pv_degradation_rate"):
+            App({"location": "porto", "n_modules": 10, "annual_consumption_kwh": 4000, "pv_degradation_rate": 1.5})
+
     def test_invalid_battery_soc_window(self):
         with pytest.raises(ValueError, match="battery_min_soc"):
             App(

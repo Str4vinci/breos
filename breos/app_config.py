@@ -116,6 +116,22 @@ def validate_config(cfg: dict[str, Any]) -> None:
                 raise ValueError(f"'pv_arrays[{i}].azimuth' must be between 0 and 360")
     if cfg["annual_consumption_kwh"] <= 0:
         raise ValueError("'annual_consumption_kwh' must be > 0")
+    if cfg["battery_kwh"] < 0:
+        raise ValueError("'battery_kwh' must be >= 0")
+    tilt = cfg.get("tilt")
+    if tilt is not None and not 0 <= tilt <= 90:
+        raise ValueError("'tilt' must be between 0 and 90")
+    azimuth = cfg.get("azimuth")
+    if azimuth is not None and not 0 <= azimuth <= 360:
+        raise ValueError("'azimuth' must be between 0 and 360")
+    if not 0 < cfg["inverter_efficiency"] <= 1:
+        raise ValueError("'inverter_efficiency' must be between 0 (exclusive) and 1 (inclusive)")
+    if cfg["inverter_loading_ratio"] <= 0:
+        raise ValueError("'inverter_loading_ratio' must be > 0")
+    if cfg["projection_years"] < 1:
+        raise ValueError("'projection_years' must be >= 1")
+    if not 0 <= cfg["pv_degradation_rate"] < 1:
+        raise ValueError("'pv_degradation_rate' must be between 0 (inclusive) and 1 (exclusive)")
     if cfg["resolution"] not in ("h", "15min"):
         raise ValueError("'resolution' must be 'h' or '15min'")
     overrides = cfg.get("pv_loss_overrides")
