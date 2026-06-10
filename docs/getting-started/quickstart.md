@@ -8,7 +8,40 @@ result dict.
 The example uses packaged defaults and public weather access. For real
 projects, review [Required Inputs](inputs.md) before interpreting results.
 
-## A minimal example
+## A 10-minute first run
+
+The repository includes a runnable example config:
+
+```bash
+breos validate-config configs/examples/quickstart.toml
+breos run --config configs/examples/quickstart.toml --dry-run
+breos run --config configs/examples/quickstart.toml --output result.json
+```
+
+`validate-config` checks required keys and prints the resolved choices without
+fetching weather or running a simulation. `--dry-run` writes the same resolved
+configuration summary as JSON. A successful dry run shows the location,
+timezone, module count, PV size, inverter AC rating, load profile, battery
+capacity, cost preset, and emissions preset.
+
+The final command runs the full simulation and writes a JSON object with
+top-level keys such as `pv_production_kwh`, `grid_independence_pct`,
+`self_consumption_pct`, `payback_year`, `npv_savings_eur`, `monthly`,
+`financial`, and `yearly`. Exact values depend on the weather source and model
+assumptions, so use the dry-run summary and [Required Inputs](inputs.md) to
+decide which defaults are acceptable for your study.
+
+To discover packaged option keys:
+
+```bash
+breos list locations
+breos list modules
+breos list cost-presets
+breos list emissions
+breos list load-profiles
+```
+
+## A minimal Python example
 
 ```python
 import breos
@@ -66,7 +99,7 @@ breos run \
 Or with a TOML or JSON config file:
 
 ```bash
-breos run --config experiment1.toml --output result.json
+breos run --config configs/examples/quickstart.toml --output result.json
 ```
 
 The CLI writes the same JSON-serializable dict that `App.result()` returns.

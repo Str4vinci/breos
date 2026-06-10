@@ -5,7 +5,7 @@ BREOS requires Python 3.11 or newer.
 ## From the stable tag
 
 ```bash
-pip install "breos @ git+https://github.com/Str4vinci/breos.git@v0.2.3"
+pip install "breos @ git+https://github.com/Str4vinci/breos.git@v0.3.0"
 ```
 
 PyPI publishing is planned for a future release. Until then, install the latest
@@ -25,13 +25,16 @@ The base install includes the core simulation stack. Install extras for
 workflows that need heavier optional packages:
 
 ```bash
-pip install -e ".[plots]"          # matplotlib plotting helpers
-pip install -e ".[optimization]"   # pymoo multi-objective sizing
-pip install -e ".[weather]"        # Open-Meteo historical weather fetching
-pip install -e ".[fast]"           # Numba kernels
-pip install -e ".[validation]"     # Excel / Arrow validation workflows
-pip install -e ".[location-tools]" # geocoding and timezone lookup helpers
+pip install "breos[plots] @ git+https://github.com/Str4vinci/breos.git@v0.3.0"
+pip install "breos[optimization] @ git+https://github.com/Str4vinci/breos.git@v0.3.0"
+pip install "breos[weather] @ git+https://github.com/Str4vinci/breos.git@v0.3.0"
+pip install "breos[fast] @ git+https://github.com/Str4vinci/breos.git@v0.3.0"
+pip install "breos[validation] @ git+https://github.com/Str4vinci/breos.git@v0.3.0"
+pip install "breos[location-tools] @ git+https://github.com/Str4vinci/breos.git@v0.3.0"
 ```
+
+For a source checkout, use the editable equivalents, for example
+`pip install -e ".[plots]"`.
 
 ## Development install
 

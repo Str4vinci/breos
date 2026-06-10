@@ -106,3 +106,69 @@ def test_invalid_json_config_reports_filename(tmp_path, capsys):
     stderr = capsys.readouterr().err
     assert "Invalid JSON in" in stderr
     assert "broken_config.json" in stderr
+
+
+def test_list_locations_outputs_packaged_keys(capsys):
+    exit_code = cli.main(["list", "locations"])
+
+    assert exit_code == 0
+    output = capsys.readouterr().out
+    assert "porto: Porto, Portugal" in output
+    assert "Europe/Lisbon" in output
+
+
+def test_list_modules_json_outputs_catalog(capsys):
+    exit_code = cli.main(["list", "modules", "--json"])
+
+    assert exit_code == 0
+    output = json.loads(capsys.readouterr().out)
+    assert any(row["key"] == "Generic_400W" and row["power_w"] == 400 for row in output)
+
+
+def test_validate_config_summarizes_without_simulation(tmp_path, capsys):
+    config_path = tmp_path / "quickstart.toml"
+    config_path.write_text(
+        """
+location = "porto"
+n_modules = 10
+annual_consumption_kwh = 4000
+battery_kwh = 5.0
+cost_preset = "residential_pt"
+emissions_country = "PT"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    exit_code = cli.main(["validate-config", str(config_path)])
+
+    assert exit_code == 0
+    output = capsys.readouterr().out
+    assert "Config OK" in output
+    assert "Location: porto (Europe/Lisbon)" in output
+    assert "PV: 10 modules" in output
+    assert "Inverter AC rating" in output
+
+
+def test_run_dry_run_outputs_resolved_config_without_simulating(monkeypatch, tmp_path):
+    monkeypatch.setattr(cli, "App", FakeApp)
+    FakeApp.simulated = False
+    config_path = tmp_path / "quickstart.toml"
+    config_path.write_text(
+        """
+location = "porto"
+n_modules = 10
+annual_consumption_kwh = 4000
+battery_kwh = 5.0
+""".strip(),
+        encoding="utf-8",
+    )
+    output_path = tmp_path / "resolved.json"
+
+    exit_code = cli.main(["run", "--config", str(config_path), "--dry-run", "--output", str(output_path)])
+
+    assert exit_code == 0
+    assert FakeApp.simulated is False
+    output = json.loads(output_path.read_text(encoding="utf-8"))
+    assert output["valid"] is True
+    assert output["location"]["key"] == "porto"
+    assert output["pv"]["n_modules"] == 10

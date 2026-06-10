@@ -27,6 +27,14 @@ weather/data access, load profiles, PV system data, and cost assumptions; see
 | `rlp_directory` | `None` | Directory containing licensed external RLP CSVs for non-bundled load profiles |
 | `tilt` | auto | Tilt angle (degrees). Auto-estimated from latitude when `None` |
 | `azimuth` | auto | Surface azimuth (degrees). Auto-set to 180 in the northern hemisphere |
+| `tracking` | `"fixed"` | Tracking mode (`"fixed"`, `"single_axis"`, or `"dual_axis"`) |
+| `axis_tilt` | `0.0` | Single-axis tracker axis tilt |
+| `axis_azimuth` | auto | Tracker axis azimuth. Auto-set from latitude when `None` |
+| `max_angle` | `60.0` | Single-axis tracker maximum rotation angle |
+| `backtrack` | `True` | Whether single-axis trackers backtrack to avoid row shading |
+| `gcr` | `0.35` | Ground coverage ratio for single-axis tracking |
+| `cross_axis_tilt` | `0.0` | Cross-axis terrain slope for single-axis tracking |
+| `dual_axis_max_tilt` | `90.0` | Maximum panel tilt for dual-axis tracking |
 | `resolution` | `"h"` | Time resolution (`"h"` or `"15min"`) |
 | `projection_years` | `20` | Economic projection horizon |
 | `cost_preset` | `None` | Cost preset key from packaged defaults |
@@ -35,10 +43,40 @@ weather/data access, load profiles, PV system data, and cost assumptions; see
 | `emissions_country` | `None` | Country code for CO2 calculations (`"PT"`, `"DE"`, `"ES"`, ...) |
 | `pv_degradation_rate` | `0.005` | Annual PV degradation rate (0.5% / year) |
 | `calendar_model` | `"naumann_lam_field_calibrated"` | Battery calendar aging model |
+| `battery_min_soc` | `0.10` | Battery SOC floor (fraction of usable capacity) |
+| `battery_max_soc` | `0.90` | Battery SOC ceiling |
+| `battery_eol_percentage` | `0.70` | SOH fraction that triggers battery replacement |
+| `battery_rte` | `None` | Battery round-trip efficiency (`None` = 0.95), split evenly across charge/discharge |
 | `dc_coupled` | `True` | DC-coupled / hybrid inverter (vs AC-coupled) |
 | `inverter_efficiency` | `0.96` | Inverter efficiency |
-| `inverter_loading_ratio` | `1.25` | DC/AC oversizing ratio |
+| `inverter_loading_ratio` | `1.25` | DC/AC oversizing ratio; also sets the inverter AC rating that clips production |
+| `pv_loss_overrides` | `None` | Per-component overrides (percent) for the fixed PVWatts system losses, e.g. `{"shading": 0.0}` |
 | `start_date` | `"2023-01-01"` | First simulation date |
+
+## Discovering available options
+
+Use the CLI to list packaged option keys:
+
+```bash
+breos list locations
+breos list modules
+breos list cost-presets
+breos list emissions
+breos list load-profiles
+```
+
+Add `--json` to any `breos list` command for machine-readable output.
+
+Before running a full simulation, validate and inspect a config:
+
+```bash
+breos validate-config configs/examples/quickstart.toml
+breos run --config configs/examples/quickstart.toml --dry-run
+```
+
+These commands resolve packaged presets, modules, inverter sizing, battery
+settings, load-profile choices, and emissions settings without fetching weather
+or simulating.
 
 ## Custom location
 

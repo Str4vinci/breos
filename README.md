@@ -20,18 +20,18 @@ A Python library for PV and battery energy-system simulation and optimization, d
 ## Installation
 
 ```bash
-pip install "breos @ git+https://github.com/Str4vinci/breos.git@v0.2.3"
+pip install "breos @ git+https://github.com/Str4vinci/breos.git@v0.3.0"
 ```
 
 Optional feature groups keep the default install focused on core PV +
 battery simulation:
 
 ```bash
-pip install "breos[plots]"          # publication plots
-pip install "breos[optimization]"   # pymoo multi-objective sizing
-pip install "breos[weather]"        # Open-Meteo historical weather fetching
-pip install "breos[fast]"           # Approximate Numba screening kernels (not used by App)
-pip install "breos[validation]"     # Excel / Arrow validation workflows
+pip install "breos[plots] @ git+https://github.com/Str4vinci/breos.git@v0.3.0"
+pip install "breos[optimization] @ git+https://github.com/Str4vinci/breos.git@v0.3.0"
+pip install "breos[weather] @ git+https://github.com/Str4vinci/breos.git@v0.3.0"
+pip install "breos[fast] @ git+https://github.com/Str4vinci/breos.git@v0.3.0"
+pip install "breos[validation] @ git+https://github.com/Str4vinci/breos.git@v0.3.0"
 ```
 
 PyPI publishing is planned for a future release. Until then, install the latest
@@ -91,7 +91,24 @@ The CLI writes the same JSON-serializable result returned by `App.result()`.
 You can also pass a TOML or JSON config file:
 
 ```bash
-breos run --config experiment1.toml --output result.json
+breos run --config configs/examples/quickstart.toml --output result.json
+```
+
+Inspect a config before running the full simulation:
+
+```bash
+breos validate-config configs/examples/quickstart.toml
+breos run --config configs/examples/quickstart.toml --dry-run
+```
+
+Discover packaged option keys:
+
+```bash
+breos list locations
+breos list modules
+breos list cost-presets
+breos list emissions
+breos list load-profiles
 ```
 
 For non-bundled RLPs, put licensed CSVs in a local directory and pass it through config or flags:
@@ -116,6 +133,14 @@ All keys except `location`, `annual_consumption_kwh`, and either `n_modules` or 
 | `rlp_directory` | `None` | Directory containing licensed external RLP CSVs for non-bundled load profiles |
 | `tilt` | auto | Tilt angle in degrees (auto-estimated from latitude) |
 | `azimuth` | auto | Surface azimuth (auto: 180 for northern hemisphere) |
+| `tracking` | `"fixed"` | Tracking mode (`"fixed"`, `"single_axis"`, or `"dual_axis"`) |
+| `axis_tilt` | `0.0` | Single-axis tracker axis tilt |
+| `axis_azimuth` | auto | Tracker axis azimuth (auto from latitude) |
+| `max_angle` | `60.0` | Single-axis tracker maximum rotation angle |
+| `backtrack` | `True` | Whether single-axis trackers backtrack to avoid row shading |
+| `gcr` | `0.35` | Ground coverage ratio for single-axis tracking |
+| `cross_axis_tilt` | `0.0` | Cross-axis terrain slope for single-axis tracking |
+| `dual_axis_max_tilt` | `90.0` | Maximum panel tilt for dual-axis tracking |
 | `resolution` | `"h"` | Time resolution (`"h"` or `"15min"`) |
 | `projection_years` | `20` | Economic projection horizon |
 | `cost_preset` | `None` | Cost preset key from packaged defaults; editable examples live in `configs/base/` |
@@ -132,6 +157,7 @@ All keys except `location`, `annual_consumption_kwh`, and either `n_modules` or 
 | `inverter_efficiency` | `0.96` | Inverter efficiency |
 | `inverter_loading_ratio` | `1.25` | DC/AC oversizing ratio; also sets the inverter AC rating that clips production |
 | `pv_loss_overrides` | `None` | Per-component overrides (percent) for the fixed PVWatts system losses, e.g. `{"shading": 0.0}` |
+| `start_date` | `"2023-01-01"` | First simulation date |
 
 ### Modeling conventions
 
