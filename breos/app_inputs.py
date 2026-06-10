@@ -135,8 +135,15 @@ def build_dc_system_base(cfg: dict[str, Any], resolved: ResolvedAppConfig, weath
     return dc_1mod * cfg["n_modules"]
 
 
-def load_consumption_profile(cfg: dict[str, Any], deps: AppRuntimeDependencies) -> pd.Series:
-    """Load and scale the configured demand profile."""
+def load_consumption_profile(
+    cfg: dict[str, Any], deps: AppRuntimeDependencies, timezone: str | None = None
+) -> pd.Series:
+    """Load and scale the configured demand profile.
+
+    Profile rows describe household behavior at legal clock time, so the
+    location timezone pins them to local wall clock; the simulation aligns
+    load and PV by UTC instant.
+    """
     return deps.load_profile(
         profile_type=cfg["load_profile"],
         annual_consumption_kwh=cfg["annual_consumption_kwh"],
@@ -144,7 +151,7 @@ def load_consumption_profile(cfg: dict[str, Any], deps: AppRuntimeDependencies) 
         freq=cfg["resolution"],
         num_years=1,
         rlp_directory=cfg["rlp_directory"],
-        timezone="UTC",
+        timezone=timezone or "UTC",
     )
 
 
@@ -156,7 +163,7 @@ def prepare_simulation_inputs(
     start_year = int(cfg["start_date"][:4])
     weather = load_weather_for_simulation(resolved, freq, start_year, deps)
     dc_system_base = build_dc_system_base(cfg, resolved, weather)
-    load_data = load_consumption_profile(cfg, deps)
+    load_data = load_consumption_profile(cfg, deps, timezone=resolved.timezone)
     temperature_series = deps.build_battery_temperature_series(
         "weather",
         index=dc_system_base.index,

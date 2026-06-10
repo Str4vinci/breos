@@ -112,6 +112,34 @@ class TestAppValidation:
 
         assert seen["rlp_directory"] == str(tmp_path)
 
+    def test_simulate_localizes_load_to_location_timezone(self, _patch_weather, monkeypatch):
+        seen = {}
+
+        def _fake_load_profile(**kwargs):
+            seen["timezone"] = kwargs["timezone"]
+            return real_load_profile(
+                profile_type="1",
+                annual_consumption_kwh=kwargs["annual_consumption_kwh"],
+                start_date=kwargs["start_date"],
+                freq=kwargs["freq"],
+                num_years=kwargs["num_years"],
+                timezone=kwargs["timezone"],
+            )
+
+        monkeypatch.setattr(app_module, "load_profile", _fake_load_profile)
+
+        app = App(
+            {
+                "location": "porto",
+                "n_modules": 1,
+                "annual_consumption_kwh": 1000,
+                "projection_years": 1,
+            }
+        )
+        app.simulate()
+
+        assert seen["timezone"] == "Europe/Lisbon"
+
 
 # ---------------------------------------------------------------------------
 # Simulation (with monkeypatched weather)
