@@ -33,6 +33,7 @@
       ~BatteryConfig.eol_percentage
       ~BatteryConfig.initial_resistance_growth
       ~BatteryConfig.initial_soh
+      ~BatteryConfig.inverter_ac_capacity_w
       ~BatteryConfig.inverter_efficiency
       ~BatteryConfig.max_soc
       ~BatteryConfig.min_soc
