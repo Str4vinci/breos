@@ -52,13 +52,10 @@ def run_acc_sizer_logic(config: Dict[str, Any], verbose: bool = True) -> pd.Data
 
     # 2. Pre-Calculate Unit PV Production (1 Module PER ARRAY) ----------------
     # We will assume we scale all arrays proportionally.
-    # Eg. if Array1 has 1 mod, Array2 has 1 mod.
-    # If user wants different ratios, they should specificy distinct arrays.
-    # For sizing, we'll define "System Size" as Total Modules, distributed evenly or as per config ratios?
-    # Simple approach: Keep the RATIO of modules in 'pv_arrays' constant, and scale the multiplier.
-
-    # Let's calculate the DC output of the "Base Config" defined in JSON
-    # And then sweep multipliers [0.1, 0.2 ... 5.0]
+    # "System size" is the total module count: the per-array module ratio
+    # from the base config is kept constant and scaled by a multiplier, so
+    # callers wanting different ratios define distinct arrays. The base DC
+    # curve is computed once and reused across the multiplier sweep.
 
     if verbose:
         print("Calculating Base PV Production...")
@@ -128,14 +125,10 @@ def run_acc_sizer_logic(config: Dict[str, Any], verbose: bool = True) -> pd.Data
         total_import = metrics["total_import"] / 1000.0
         total_export = metrics["total_export"] / 1000.0
 
-        # Financials
-        # CAPEX: rough estimate
-        # Assuming simple cost model: Fixed + Per_Module
-        # We can use breos.economics if available or simple:
-        # Cost = N_Modules * Cost_Per_Mod + Inverter + Balance
-        # Let's use simple linear for sizer:
+        # Financials: the sizer uses a deliberately simple linear CAPEX
+        # model (EUR per kWp, assuming 550 W modules) rather than the full
+        # breos.economics breakdown — it only needs relative ranking.
         cost_per_kwp = costs_cfg.get("cost_per_kwp", 800)  # EUR
-        # Assume 550W modules
         kwp = n_modules_total * 0.550
         capex = kwp * cost_per_kwp
 

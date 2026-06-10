@@ -2162,9 +2162,8 @@ def plot_acc_sizing_sweep(results_df: pd.DataFrame, results_directory: str, scen
     ax2 = ax1.twinx()
     color2 = "tab:red"
     ax2.set_ylabel("Payback Period (Years)", color=color2, fontsize=12)
-    # Filter out infinite payback for plotting if necessary, but typically sizer limits range
-    # Clamp large values for valid display? Or log scale?
-    # Let's plot raw but perhaps limit Y to reasonable max if distinct outlier exists
+    # Payback is plotted raw; the sizer bounds the sweep range, so infinite
+    # or outlier payback values are not specially clamped here.
     y2 = results_df["Payback_Years"]
     ax2.plot(x, y2, color=color2, marker="s", linestyle="--", label="Payback")
     ax2.tick_params(axis="y", labelcolor=color2)

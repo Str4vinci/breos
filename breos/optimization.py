@@ -555,11 +555,8 @@ try:
             self.results_dir = results_dir
 
             self.location = config["location"]
-            # Ideally passed as pvlib Location, but if dict, construct it?
-            # For now assume caller passes data and logic handles location construction if needed
-            # Actually calculate_pv_production needs Location object.
-            # We'll construct it in _evaluate or pass it in.
-            # Better to pass it in or construct once.
+            # config['location'] is a plain dict; the pvlib Location that
+            # calculate_pv_production_dc needs is constructed once here.
             from pvlib.location import Location
 
             self.loc_obj = Location(

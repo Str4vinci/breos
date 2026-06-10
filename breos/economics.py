@@ -442,52 +442,24 @@ def cost_analysis_projection(
 
     proj["Cost_System_Cumulative"] = costs["total_initial_cost"] + proj["Cost_System_Annual"].cumsum()
 
-    # Battery replacement
-    # 1. From simulation results (dynamic)
-    # We use the yearly_replacement calculated from the FIRST year results as base?
-    # NO. The simulation results ONLY cover the simulated period.
-    # If this is a PROJECTION (single year -> 20 years), we don't have simulated results for future years.
-    # However, if this is a MULTIYEAR simulation, results_df has all years.
-
-    # Let's check if we have data for all years in the projection
-    # If results_df has data for year Y, we should use it.
-
-    # Actually, cost_analysis_projection logic currently takes the FIRST year and projects it.
-    # It assumes single year simulation.
-    # If it is multiyear, 'yearly' dataframe above will have multiple rows.
-
-    # Logic update:
-    # If 'yearly' has data for the specific projection year, use actuals.
-    # If not (projection derived from first year), we assume no replacement in first year implies no replacement?
-    # Or we follow the standard logic.
-
-    # For replacement cost specifically:
-    # If we are in multiyear simulation mode, `results_df` contains all events.
-    # yearly_replacement has the sum for each year.
-
-    # Add a column for replacement cost to `proj`
+    # Battery replacement, taken from simulated years where available.
+    # Simulation results only cover the simulated period: the App's
+    # multi-year loop provides per-year replacement events for every
+    # projection year, while a single-year run provides at most year 1 and
+    # leaves later projection years without replacement costs.
     proj["Cost_Replacement"] = 0.0
 
-    # Map available replacement data from simulation to the projection
-    # yearly_replacement index is Year (e.g. 2023, 2024...)
-    # proj['Year'] is relative year (1, 2, 3...)
-    # We need to align them.
-
-    # Get the start year from the data
+    # yearly_replacement is indexed by calendar year; proj['Year'] is the
+    # relative year (1, 2, ...), so align via the simulation start year.
     start_year = df["Year"].min()
 
     for relative_year in proj["Year"]:
         actual_year = start_year + relative_year - 1
         if actual_year in yearly_replacement.index:
-            # We have simulated data for this year
             cost = yearly_replacement.loc[actual_year, "Replacement_Cost"]
-            # Apply inflation if it wasn't already encompassed in the simulation?
-            # The simulation outputs nominal cost at time of replacement?
-            # Usually simulation just outputs the base cost value. We should apply inflation here.
+            # The simulation logs replacement at the base (year-1) cost
+            # input, so inflate to the replacement year here.
             inflation_factor = (1 + inflation_rate) ** (relative_year - 1)
-            # Actually, check if simulation output `Replacement_Cost` is real or nominal.
-            # In `battery.py`, we log `battery_config.replacement_cost`. This is likely the base cost input.
-            # So yes, we need to inflate it.
             proj.loc[proj["Year"] == relative_year, "Cost_Replacement"] += cost * inflation_factor
 
     # Add to annual system cost
