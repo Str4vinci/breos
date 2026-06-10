@@ -47,6 +47,12 @@ def run_app_simulation(
 
     replacement_cost = resolved.cost_params.battery_cost_per_kwh * battery_kwh
 
+    # Size the inverter AC rating the same way CAPEX does (economics
+    # calculate_costs), so the paid-for inverter also clips production.
+    pv_peak_w = cfg["n_modules"] * resolved.avg_module_power_w
+    loading_ratio = cfg["inverter_loading_ratio"]
+    inverter_ac_capacity_w = pv_peak_w / loading_ratio if loading_ratio and loading_ratio > 0 else None
+
     cumulative_fec = 0.0
     cumulative_cal_seconds = 0.0
     cumulative_resistance_growth = 0.0
@@ -71,12 +77,19 @@ def run_app_simulation(
                 min_soc=0.10,
                 dc_coupled=cfg["dc_coupled"],
                 inverter_efficiency=cfg["inverter_efficiency"],
+                inverter_ac_capacity_w=inverter_ac_capacity_w,
                 enable_replacement=True,
                 replacement_cost=replacement_cost,
                 calendar_model=cfg["calendar_model"],
             )
         else:
-            batt_cfg = None
+            # PV-only runs still flow through the same inverter model so the
+            # configured efficiency and AC clipping apply consistently.
+            batt_cfg = BatteryConfig(
+                nominal_energy_wh=0,
+                inverter_efficiency=cfg["inverter_efficiency"],
+                inverter_ac_capacity_w=inverter_ac_capacity_w,
+            )
 
         results_df, total_pv, _summary_df, year_rep_cost, year_n_rep, degradation_df = simulate_energy_balance(
             pv_dc=dc_power,

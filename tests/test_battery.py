@@ -110,6 +110,49 @@ class TestSimulateEnergyBalance:
         assert len(results_df) == 48
         assert summary_df["Total Load [kWh]"].iloc[0] == pytest.approx(48.0)
 
+    def test_inverter_ac_capacity_clips_pv_and_export(self):
+        idx = pd.date_range("2025-01-01 00:00", periods=4, freq="h", tz="UTC")
+        pv_dc = pd.Series([0.0, 2000.0, 3000.0, 1000.0], index=idx)
+        houseload = pd.DataFrame({"Load": 500.0}, index=idx)
+        config = BatteryConfig(nominal_energy_wh=0, inverter_ac_capacity_w=1000.0)
+
+        results_df, total_pv, *_ = simulate_energy_balance(
+            pv_dc=pv_dc, houseload=houseload, battery_config=config, freq="h"
+        )
+
+        # AC production saturates at the inverter rating
+        assert results_df["PV_Production"].max() == pytest.approx(1000.0)
+        # Export uses the headroom left after serving the load
+        assert results_df["Sell_To_Grid"].max() == pytest.approx(500.0)
+        # total_pv sums the clipped AC production
+        assert total_pv == pytest.approx(1000.0 + 1000.0 + 960.0)
+
+    def test_battery_shares_inverter_cap_and_charges_from_clipped_dc(self):
+        idx = pd.date_range("2025-01-01 00:00", periods=2, freq="h", tz="UTC")
+        pv_dc = pd.Series([0.0, 3000.0], index=idx)
+        houseload = pd.DataFrame({"Load": [2000.0, 0.0]}, index=idx)
+        config = BatteryConfig(
+            nominal_energy_wh=2000,
+            inverter_ac_capacity_w=1000.0,
+            standby_loss_wh=0.0,
+            enable_replacement=False,
+        )
+
+        results_df, *_ = simulate_energy_balance(
+            pv_dc=pv_dc,
+            houseload=houseload,
+            battery_config=config,
+            freq="h",
+            temperature_series=pd.Series(25.0, index=idx),
+        )
+
+        # Hour 0: battery discharge AC is capped at the rating; the rest imports
+        assert results_df["Import_From_Grid"].iloc[0] == pytest.approx(1000.0)
+        # Hour 1: DC surplus above the AC cap still charges the DC-coupled
+        # battery back to full, while export clips at the rating
+        assert results_df["Battery_Energy"].iloc[1] == pytest.approx(1800.0)
+        assert results_df["Sell_To_Grid"].iloc[1] == pytest.approx(1000.0)
+
     def test_cold_derate_cannot_sell_energy_pv_never_produced(self):
         # A full battery whose temperature drops sees Emax shrink below its
         # stored energy (lfp cold derate). charge_room went negative and the

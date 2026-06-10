@@ -98,6 +98,9 @@ class BatteryConfig:
     # DC-coupled system (hybrid inverter) settings
     dc_coupled: bool = True  # True = hybrid inverter (DC-coupled battery)
     inverter_efficiency: float = 0.96  # Inverter efficiency (for DC→AC conversion)
+    # Inverter AC rating (W) shared by PV and battery discharge; AC output is
+    # clipped to this each step. None disables clipping (legacy behavior).
+    inverter_ac_capacity_w: Optional[float] = None
     # Battery chemistry
     battery_type: str = "lfp"  # Battery chemistry type
 
@@ -267,6 +270,12 @@ def simulate_energy_balance(
     has_battery = battery_config.nominal_energy_wh > 1 and (battery_config.max_soc - battery_config.min_soc) > 0
     # Bind capacity factor function once
     _cap_factor_fn = lfp_capacity_factor
+    # Inverter AC cap per step (Wh); None keeps the legacy uncapped model
+    cap_wh = (
+        battery_config.inverter_ac_capacity_w * hours_per_step
+        if battery_config.inverter_ac_capacity_w is not None
+        else float("inf")
+    )
 
     for i in range(n_steps):
         step_time = rng[i]
@@ -294,8 +303,9 @@ def simulate_energy_balance(
             standby_loss = battery_config.standby_loss_wh * hours_per_step
             Battery_Energy_Wh = min(Emax, max(Emin, Battery_Energy_Wh - standby_loss))
 
-            # Convert PV DC to AC for comparison with load
-            pv_ac = pv_dc_power * battery_config.inverter_efficiency
+            # Convert PV DC to AC for comparison with load (clipped at the
+            # inverter AC rating; excess DC can still charge the battery)
+            pv_ac = min(pv_dc_power * battery_config.inverter_efficiency, cap_wh)
 
             # Energy flows:
             # Load is in AC terms
@@ -315,9 +325,10 @@ def simulate_energy_balance(
                 charge_in = min(surplus_dc, charge_room / battery_config.charge_efficiency)
                 Battery_Energy_Wh += charge_in * battery_config.charge_efficiency
 
-                # Export remainder (DC -> AC)
+                # Export remainder (DC -> AC) within the inverter headroom
+                # left after serving the load; the rest is curtailed
                 remaining_dc = surplus_dc - charge_in
-                Sell = remaining_dc * battery_config.inverter_efficiency
+                Sell = min(remaining_dc * battery_config.inverter_efficiency, cap_wh - load)
 
             else:  # Deficit: PV insufficient, need battery or grid
                 deficit = load - pv_ac  # AC deficit
@@ -328,8 +339,10 @@ def simulate_energy_balance(
                     # Battery discharge: DC -> AC
                     eff_total = battery_config.discharge_efficiency * battery_config.inverter_efficiency
                     # How much DC do we need to draw to provide 'deficit' AC?
+                    # Battery discharge shares the inverter AC rating with PV.
                     dc_needed = deficit / eff_total if eff_total > 0 else deficit
-                    draw = min(available, dc_needed)
+                    draw_cap = (cap_wh - pv_ac) / eff_total if eff_total > 0 else 0.0
+                    draw = min(available, dc_needed, draw_cap)
                     Battery_Energy_Wh -= draw
                     delivered_ac = draw * eff_total
                     discharge_out = draw
@@ -337,8 +350,8 @@ def simulate_energy_balance(
                 else:
                     Import = deficit
         else:
-            # No battery: simple DC to AC for load
-            pv_ac = pv_dc_power * battery_config.inverter_efficiency
+            # No battery: simple DC to AC for load (clipped at the AC rating)
+            pv_ac = min(pv_dc_power * battery_config.inverter_efficiency, cap_wh)
             if pv_ac >= load:
                 Sell = pv_ac - load
             else:

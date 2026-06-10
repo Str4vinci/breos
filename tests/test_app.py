@@ -112,6 +112,25 @@ class TestAppValidation:
 
         assert seen["rlp_directory"] == str(tmp_path)
 
+    def test_smaller_inverter_clips_app_production(self, _patch_weather):
+        def _run(loading_ratio):
+            app = App(
+                {
+                    "location": "porto",
+                    "n_modules": 6,
+                    "annual_consumption_kwh": 3000,
+                    "projection_years": 1,
+                    "inverter_loading_ratio": loading_ratio,
+                }
+            )
+            app.simulate()
+            return app.result()["pv_production_kwh"]
+
+        # A heavily undersized inverter (high DC/AC ratio) must clip yield;
+        # before 0.3.0 the App paid clipping-sized inverter CAPEX while
+        # production was never clipped.
+        assert _run(3.0) < _run(1.0)
+
     def test_simulate_localizes_load_to_location_timezone(self, _patch_weather, monkeypatch):
         seen = {}
 
