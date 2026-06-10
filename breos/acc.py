@@ -12,12 +12,15 @@ Supported Sharing Coefficients:
 Includes optimization capabilities to find ideal coefficients.
 """
 
+import logging
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 import numpy as np
 import pandas as pd
 from scipy.optimize import minimize
+
+logger = logging.getLogger(__name__)
 
 
 def calculate_variable_coefficients(load_matrix: np.ndarray) -> np.ndarray:
@@ -291,4 +294,4 @@ def generate_acc_report(
             gain = r["Self_Sufficiency_%"] - baseline_ss
             f.write(f"  {r['Strategy']:>30}: {gain:+.2f}%\n")
 
-    print(f"Detailed report saved to: {report_path}")
+    logger.info("Detailed report saved to: %s", report_path)

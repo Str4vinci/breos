@@ -222,6 +222,11 @@ These modules may be released in the future or are available for academic collab
 
 BREOS uses [Open-Meteo](https://open-meteo.com/) for historical weather data. Open-Meteo is free for non-commercial use. For commercial applications, please review their [pricing and terms](https://open-meteo.com/en/pricing).
 
+Library modules report progress (file discovery, saved files, conversions)
+through the standard `logging` module under the `breos.*` logger names —
+enable them with `logging.basicConfig(level=logging.INFO)` or silence them
+per module. Functions with a `verbose` flag still print to stdout when asked.
+
 ## Load Profile Data Note
 
 The public package bundles only demandlib-derived H0 example profiles. E-REDES, REE, and direct BDEW CSVs are supported as user-provided files through `rlp_directory`, but are not redistributed in this repository because their public source terms do not clearly grant package redistribution rights. See [ATTRIBUTIONS.md](ATTRIBUTIONS.md) and [docs/legal/load-profile-data.md](docs/legal/load-profile-data.md).

@@ -7,6 +7,7 @@ This module handles:
 - Converting between hourly and 15-minute resolutions using Makima interpolation
 """
 
+import logging
 import os
 import re
 from datetime import timedelta
@@ -19,6 +20,8 @@ from pvlib.location import Location
 from scipy.interpolate import Akima1DInterpolator
 
 from breos.utils import safe_path_slug
+
+logger = logging.getLogger(__name__)
 
 # Optional imports for API calls
 try:
@@ -142,7 +145,7 @@ def load_weather(
     best = candidates[0]
     filepath = best["filepath"]
 
-    print(f"   Found local weather file: {filepath}")
+    logger.info("Found local weather file: %s", filepath)
 
     df = pd.read_csv(filepath, index_col=0, parse_dates=True)
 
@@ -167,7 +170,7 @@ def load_weather(
         if file_start < start_year or file_end > end_year:
             mask = (df.index.year >= start_year) & (df.index.year <= end_year)
             df = df.loc[mask]
-            print(f"   Subset to {start_year}-{end_year} ({len(df)} rows)")
+            logger.info("Subset to %s-%s (%d rows)", start_year, end_year, len(df))
 
     return df
 
@@ -256,7 +259,7 @@ def fetch_tmy_weather_data(
             filename = f"weather/tmy_data_{sample_year if sample_year else 'original'}_{freq}.csv"
         os.makedirs(os.path.dirname(filename), exist_ok=True)
         tmy_data.to_csv(filename)
-        print(f"Saved TMY data to {filename}")
+        logger.info("Saved TMY data to %s", filename)
 
     return tmy_data, metadata
 
@@ -370,7 +373,7 @@ def fetch_weather_data(
         filename = os.path.join(output_dir, f"{loc_slug}_historical_{start_year}_{end_year}_openmeteo.csv")
         os.makedirs(output_dir, exist_ok=True)
         hourly_dataframe.to_csv(filename)
-        print(f"Saved weather data to {filename}")
+        logger.info("Saved weather data to %s", filename)
 
     return hourly_dataframe
 
@@ -609,14 +612,18 @@ def csv_15min_to_hourly(
 
         hourly_df.to_csv(output_file_name, index=False)
 
-        print(f"Successfully converted {input_file_name} to hourly data")
-        print(f"Output saved to: {output_file_name}")
-        print(f"Original shape: {df.shape} -> Hourly shape: {hourly_df.shape}")
+        logger.info(
+            "Converted %s to hourly data at %s (%s -> %s)",
+            input_file_name,
+            output_file_name,
+            df.shape,
+            hourly_df.shape,
+        )
 
         return hourly_df
 
     except Exception as e:
-        print(f"Error processing file: {e}")
+        logger.error("Error processing file: %s", e)
         return None
 
 
@@ -659,14 +666,18 @@ def csv_hourly_to_15min(
         df_15min = df_15min.reset_index().rename(columns={"index": datetime_column})
         df_15min.to_csv(output_file_name, index=False)
 
-        print(f"Successfully converted {input_file_name} to 15-min data (Makima)")
-        print(f"Output saved to: {output_file_name}")
-        print(f"Original shape: {df.shape} -> 15-min shape: {df_15min.shape}")
+        logger.info(
+            "Converted %s to 15-min data (Makima) at %s (%s -> %s)",
+            input_file_name,
+            output_file_name,
+            df.shape,
+            df_15min.shape,
+        )
 
         return df_15min
 
     except Exception as e:
-        print(f"Error processing file: {e}")
+        logger.error("Error processing file: %s", e)
         return None
 
 
@@ -723,7 +734,7 @@ def select_random_year_and_replace_datetime(csv_file_path: str, target_year: int
     # Validate against the data's own step size instead of assuming hourly data.
     expected_rows = _derive_steps_per_year(selected_year_data["date"])
     if len(selected_year_data) != expected_rows:
-        print(f"Warning: Year {selected_year} has {len(selected_year_data)} rows, expected {expected_rows}")
+        logger.warning("Year %s has %d rows, expected %d", selected_year, len(selected_year_data), expected_rows)
 
     # Replace year in datetime
     year_diff = target_year - selected_year
@@ -855,7 +866,7 @@ def fetch_tmy_nsrdb(
         filename = f"weather/{loc_slug}_tmy_{vintage}_nsrdb.csv"
         os.makedirs(os.path.dirname(filename), exist_ok=True)
         df.to_csv(filename)
-        print(f"Saved NSRDB data to {filename}")
+        logger.info("Saved NSRDB data to %s", filename)
 
     return df, metadata
 
