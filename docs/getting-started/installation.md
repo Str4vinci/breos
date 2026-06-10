@@ -2,14 +2,17 @@
 
 BREOS requires Python 3.11 or newer.
 
-## From the stable tag
+## From PyPI
+
+```bash
+pip install breos
+```
+
+To install a specific release tag directly from GitHub instead:
 
 ```bash
 pip install "breos @ git+https://github.com/Str4vinci/breos.git@v0.3.0"
 ```
-
-PyPI publishing is planned for a future release. Until then, install the latest
-stable GitHub tag or use a source checkout.
 
 ## From source
 
@@ -25,12 +28,12 @@ The base install includes the core simulation stack. Install extras for
 workflows that need heavier optional packages:
 
 ```bash
-pip install "breos[plots] @ git+https://github.com/Str4vinci/breos.git@v0.3.0"
-pip install "breos[optimization] @ git+https://github.com/Str4vinci/breos.git@v0.3.0"
-pip install "breos[weather] @ git+https://github.com/Str4vinci/breos.git@v0.3.0"
-pip install "breos[fast] @ git+https://github.com/Str4vinci/breos.git@v0.3.0"
-pip install "breos[validation] @ git+https://github.com/Str4vinci/breos.git@v0.3.0"
-pip install "breos[location-tools] @ git+https://github.com/Str4vinci/breos.git@v0.3.0"
+pip install "breos[plots]"          # matplotlib plotting helpers
+pip install "breos[optimization]"   # pymoo multi-objective sizing
+pip install "breos[weather]"        # Open-Meteo historical weather fetching
+pip install "breos[fast]"           # Numba kernels
+pip install "breos[validation]"     # Excel / Arrow validation workflows
+pip install "breos[location-tools]" # geocoding and timezone lookup helpers
 ```
 
 For a source checkout, use the editable equivalents, for example

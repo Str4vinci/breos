@@ -45,6 +45,17 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 - Parity tests for the optional Numba kernels: the duplicated LFP derate
   constants against `battery.lfp_capacity_factor`, and the energy-balance
   kernel against the reference path under shared-model conditions.
+- CLI discovery and inspection commands: `breos list
+  {locations,modules,cost-presets,emissions,load-profiles}` prints packaged
+  option keys, `breos validate-config <config>` checks a config file and
+  summarizes the resolved choices, and `breos run --dry-run` writes the
+  resolved configuration as JSON without running a simulation. `list` and
+  `validate-config` accept `--json` for machine-readable output.
+- PyPI distribution: 0.3.0 is the first release installable with
+  `pip install breos`. Tagged `v*` releases on `main` now publish to PyPI
+  through GitHub Actions trusted publishing (OIDC), running the release
+  artifact verifier before upload, with a manually triggered TestPyPI
+  dry-run path.
 
 ### Changed
 - Cost defaults are single-sourced from the `CostParams` dataclass:
@@ -67,6 +78,10 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   test runs continue to cover optional paths.
 
 ### Documentation
+- Install snippets in the README and docs point at PyPI (`pip install breos`)
+  instead of git tag installs, and the quickstart gained a "10-minute first
+  run" walkthrough built on `configs/examples/quickstart.toml` plus the new
+  option-discovery commands.
 - README documents the fixed PVWatts loss components, the inverter clipping
   convention, the `weather/` working-directory override, the Open-Meteo
   `.cache.sqlite` file, logging configuration, and the new config keys.

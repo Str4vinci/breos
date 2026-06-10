@@ -1,6 +1,7 @@
 # BREOS - Building Renewable Energy Optimization Software
 
 [![Tests](https://github.com/Str4vinci/breos/actions/workflows/tests.yml/badge.svg)](https://github.com/Str4vinci/breos/actions/workflows/tests.yml)
+[![PyPI](https://img.shields.io/pypi/v/breos.svg)](https://pypi.org/project/breos/)
 [![License: BSD-3](https://img.shields.io/badge/License-BSD_3--Clause-blue.svg)](LICENSE)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 
@@ -20,22 +21,21 @@ A Python library for PV and battery energy-system simulation and optimization, d
 ## Installation
 
 ```bash
-pip install "breos @ git+https://github.com/Str4vinci/breos.git@v0.3.0"
+pip install breos
 ```
 
 Optional feature groups keep the default install focused on core PV +
 battery simulation:
 
 ```bash
-pip install "breos[plots] @ git+https://github.com/Str4vinci/breos.git@v0.3.0"
-pip install "breos[optimization] @ git+https://github.com/Str4vinci/breos.git@v0.3.0"
-pip install "breos[weather] @ git+https://github.com/Str4vinci/breos.git@v0.3.0"
-pip install "breos[fast] @ git+https://github.com/Str4vinci/breos.git@v0.3.0"
-pip install "breos[validation] @ git+https://github.com/Str4vinci/breos.git@v0.3.0"
+pip install "breos[plots]"          # publication plots
+pip install "breos[optimization]"   # pymoo multi-objective sizing
+pip install "breos[weather]"        # Open-Meteo historical weather fetching
+pip install "breos[fast]"           # approximate Numba screening kernels (not used by App)
+pip install "breos[validation]"     # Excel / Arrow validation workflows
 ```
 
-PyPI publishing is planned for a future release. Until then, install the latest
-stable tag from GitHub, or install from source:
+To install from source instead:
 
 ```bash
 git clone https://github.com/Str4vinci/breos.git

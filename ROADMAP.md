@@ -25,15 +25,15 @@ a `pvlib.Location`, which means BREOS does not own its own public API.
 
 ### Make the first successful run easier to trust
 
-BREOS has a working quickstart, but new users still need too much domain and
-source-code knowledge after the first run. The next onboarding pass should make
-the packaged defaults, available option keys, and result sanity checks visible
-without requiring users to inspect JSON resources or Python modules.
+The 0.3.0 onboarding pass added the "10-minute first run" quickstart,
+the required-inputs page, the `breos list` discovery commands, and
+`breos validate-config` / `breos run --dry-run` config inspection with
+`--json` output. Remaining work:
 
 Ongoing docs hygiene:
 
-- Keep install snippets and docs status text aligned with the current stable
-  tag.
+- Keep install snippets and docs status text aligned with the current release
+  on PyPI.
 - Keep the README and getting-started configuration tables in sync with the
   public `App` config surface, including battery SOC/EOL/RTE keys and
   `pv_loss_overrides`.
@@ -42,24 +42,12 @@ Ongoing docs hygiene:
 
 Short-term onboarding work:
 
-- Add a "10-minute first run" guide built around
-  `configs/examples/quickstart.toml`, including the exact CLI command, output
-  file shape, and the defaults BREOS used.
-- Add a "choose your inputs" page that explains the minimum decisions:
-  location, module count/catalog entry, annual demand/load profile, battery
-  capacity, cost preset, emissions preset, and inverter assumptions.
 - Add recipes for common cases: PV-only home, PV plus battery, custom
   latitude/longitude/timezone, east-west roof with `pv_arrays`, 15-minute
   resolution, and external RLP files.
-- Add a small "what to replace for a real study" checklist immediately after
-  the quickstart: weather source, licensed load data, PV/inverter datasheets,
-  tariffs/costs, and emissions assumptions.
 
 Option discovery work:
 
-- Add CLI commands for packaged options:
-  `breos list locations`, `breos list modules`, `breos list cost-presets`,
-  `breos list emissions`, and `breos list load-profiles`.
 - Add matching Python helpers where useful, building on `list_modules()`.
 - Generate docs tables from the packaged resources/source constants so option
   docs cannot drift from `breos/data/configs/*.json`, `MODULES`, and
@@ -67,18 +55,11 @@ Option discovery work:
 
 Config inspection work:
 
-- Add `breos validate-config <config>` or `breos run --dry-run --explain`.
-- The dry run should print the resolved location, timezone, PV module(s),
-  inverter AC rating, load profile source, PVWatts loss components, cost
-  preset, emissions preset, and any assumptions that make the run unsuitable
-  for a real study.
-- Include a machine-readable mode so downstream scripts and agents can inspect
-  resolved configuration without running a full simulation.
+- Extend the dry-run summary with the fully resolved PVWatts loss components
+  (today it only echoes `pv_loss_overrides`).
 
 Agent and contributor setup:
 
-- Add an agent/developer smoke test command, for example:
-  `uv run breos run --config configs/examples/quickstart.toml --output /tmp/breos-smoke.json`.
 - Keep `AGENTS.md` and `CONTRIBUTING.md` aligned on branch flow, test gates,
   and the public `breos.App` facade as the preferred extension point.
 - Consider a single `make`/`just`/script entry for local validation if command
@@ -111,16 +92,14 @@ provide module, inverter, environment, MPPT, and string-topology data.
 
 ### PyPI trusted publishing
 
-BREOS releases are currently cut from protected `main` commits and published as
-GitHub Releases. Future work should add PyPI trusted publishing so tagged
-releases can publish the verified wheel and source distribution without storing
-long-lived upload tokens in the repository.
+Shipped in 0.3.0: `.github/workflows/publish.yml` publishes `v*` tags that
+point at `main` to PyPI via GitHub Actions OIDC trusted publishing, re-runs
+the release artifact verifier before upload, and offers a manually triggered
+TestPyPI dry-run. The one-time index and environment configuration is
+documented in [docs/release.md](docs/release.md). Remaining work:
 
-- Use GitHub Actions OIDC trusted publishing for PyPI.
-- Publish only from protected `v*` tags that point at `main`.
-- Reuse the release artifact verifier before upload so packaged data, docs
-  exclusions, and installed-wheel smoke checks stay covered.
-- Add a TestPyPI dry-run path before enabling production PyPI uploads.
+- Protect `v*` tags in GitHub repository settings so only maintainers can
+  create release tags.
 
 ## Longer-Term Research Modules
 
