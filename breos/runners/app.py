@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import Any
 
@@ -47,6 +48,12 @@ def run_app_simulation(
 
     replacement_cost = resolved.cost_params.battery_cost_per_kwh * battery_kwh
 
+    # Size the inverter AC rating the same way CAPEX does (economics
+    # calculate_costs), so the paid-for inverter also clips production.
+    pv_peak_w = cfg["n_modules"] * resolved.avg_module_power_w
+    loading_ratio = cfg["inverter_loading_ratio"]
+    inverter_ac_capacity_w = pv_peak_w / loading_ratio if loading_ratio and loading_ratio > 0 else None
+
     cumulative_fec = 0.0
     cumulative_cal_seconds = 0.0
     cumulative_resistance_growth = 0.0
@@ -63,20 +70,35 @@ def run_app_simulation(
         dc_power = inputs.dc_system_base * pv_degradation_factor
 
         if has_battery:
+            batt_kwargs: dict[str, Any] = {}
+            if cfg["battery_rte"] is not None:
+                # Split the round-trip efficiency evenly across charge and
+                # discharge, matching the BatteryConfig default convention.
+                one_way = math.sqrt(cfg["battery_rte"])
+                batt_kwargs["charge_efficiency"] = one_way
+                batt_kwargs["discharge_efficiency"] = one_way
             batt_cfg = BatteryConfig(
                 nominal_energy_wh=battery_wh,
                 initial_soh=current_soh,
-                eol_percentage=0.70,
-                max_soc=0.90,
-                min_soc=0.10,
+                eol_percentage=cfg["battery_eol_percentage"],
+                max_soc=cfg["battery_max_soc"],
+                min_soc=cfg["battery_min_soc"],
                 dc_coupled=cfg["dc_coupled"],
                 inverter_efficiency=cfg["inverter_efficiency"],
+                inverter_ac_capacity_w=inverter_ac_capacity_w,
                 enable_replacement=True,
                 replacement_cost=replacement_cost,
                 calendar_model=cfg["calendar_model"],
+                **batt_kwargs,
             )
         else:
-            batt_cfg = None
+            # PV-only runs still flow through the same inverter model so the
+            # configured efficiency and AC clipping apply consistently.
+            batt_cfg = BatteryConfig(
+                nominal_energy_wh=0,
+                inverter_efficiency=cfg["inverter_efficiency"],
+                inverter_ac_capacity_w=inverter_ac_capacity_w,
+            )
 
         results_df, total_pv, _summary_df, year_rep_cost, year_n_rep, degradation_df = simulate_energy_balance(
             pv_dc=dc_power,

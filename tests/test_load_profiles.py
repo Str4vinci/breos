@@ -31,6 +31,38 @@ def test_load_profile_accepts_aliases_and_15t_frequency():
     assert annual_kwh == pytest.approx(1000)
 
 
+def test_load_profile_pins_rows_to_local_wall_clock_across_dst():
+    # Household behavior follows the legal clock, so a localized profile must
+    # keep each row's wall-clock label year-round (UTC instants shift by the
+    # DST offset) — an instant-spaced index would only shift the start.
+    utc_prof = load_profile("1", 5000, freq="h", timezone="UTC").iloc[:, 0]
+    loc_prof = load_profile("1", 5000, freq="h", timezone="Europe/Berlin").iloc[:, 0]
+
+    idx = loc_prof.index
+    assert len(loc_prof) == 8760
+    assert idx.is_unique and idx.is_monotonic_increasing
+    assert idx[0] == pd.Timestamp("2025-01-01 00:00", tz="Europe/Berlin")
+    # Evenly spaced in absolute time despite the DST transitions
+    assert len(idx.to_series().diff().dropna().unique()) == 1
+    # Energy preserved (one dropped spring-forward row, one forward-fill)
+    assert float(loc_prof.sum()) / 1000.0 == pytest.approx(5000.0, abs=5.0)
+
+    # Same wall-clock pattern as the UTC profile in winter AND summer
+    for day in ("2025-01-15", "2025-07-15"):
+        np.testing.assert_allclose(loc_prof[day].to_numpy(), utc_prof[day].to_numpy())
+    # Local-calendar DST days have 23 and 25 wall-clock hours
+    assert len(loc_prof["2025-03-30"]) == 23
+    assert len(loc_prof["2025-10-26"]) == 25
+
+
+def test_load_profile_utc_default_keeps_legacy_convention():
+    profile = load_profile("1", 1000, freq="h")
+
+    assert str(profile.index.tz) == "UTC"
+    assert profile.index[0] == pd.Timestamp("2025-01-01 00:00", tz="UTC")
+    assert len(profile) == 8760
+
+
 def test_non_bundled_profile_requires_external_directory():
     with pytest.raises(ValueError, match="not bundled"):
         load_profile("eredes_btn_c", 1000)

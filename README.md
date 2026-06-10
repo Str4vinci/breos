@@ -10,7 +10,7 @@ A Python library for PV and battery energy-system simulation and optimization, d
 
 - **Weather data**: Fetch TMY data from PVGIS/NSRDB and historical data from Open-Meteo. Support for hourly and 15-minute resolutions with Makima interpolation.
 - **PV production**: DC and AC power calculations using pvlib, with built-in module database and inverter presets.
-- **Battery simulation**: Energy balance with Numba-accelerated kernels. Calendar and cycle aging models (Naumann 2020, Lam 2025) with field-calibrated LFP parameters.
+- **Battery simulation**: Energy balance with calendar and cycle aging models (Naumann 2020, Lam 2025) and field-calibrated LFP parameters. Optional approximate Numba kernels for fast standalone screening studies.
 - **Economics**: NPV, LCOE, breakeven analysis, and cost projections with configurable tariffs and inflation.
 - **Optimization**: Multi-objective (grid independence, NPV, ZEB ratio) system sizing using pymoo (NSGA-II). Tilt/azimuth optimization via grid search or Brent's method.
 - **Emissions**: CO2 savings calculations and projections.
@@ -21,6 +21,17 @@ A Python library for PV and battery energy-system simulation and optimization, d
 
 ```bash
 pip install "breos @ git+https://github.com/Str4vinci/breos.git@v0.2.3"
+```
+
+Optional feature groups keep the default install focused on core PV +
+battery simulation:
+
+```bash
+pip install "breos[plots]"          # publication plots
+pip install "breos[optimization]"   # pymoo multi-objective sizing
+pip install "breos[weather]"        # Open-Meteo historical weather fetching
+pip install "breos[fast]"           # Approximate Numba screening kernels (not used by App)
+pip install "breos[validation]"     # Excel / Arrow validation workflows
 ```
 
 PyPI publishing is planned for a future release. Until then, install the latest
@@ -113,9 +124,27 @@ All keys except `location`, `annual_consumption_kwh`, and either `n_modules` or 
 | `emissions_country` | `None` | Country code for CO2 calculations (`"PT"`, `"DE"`, `"ES"`, ...) |
 | `pv_degradation_rate` | `0.005` | Annual PV degradation (0.5%) |
 | `calendar_model` | `"naumann_lam_field_calibrated"` | Battery calendar aging model |
+| `battery_min_soc` | `0.10` | Battery SOC floor (fraction of usable capacity) |
+| `battery_max_soc` | `0.90` | Battery SOC ceiling |
+| `battery_eol_percentage` | `0.70` | SOH fraction that triggers battery replacement |
+| `battery_rte` | `None` | Battery round-trip efficiency, split evenly across charge/discharge (`None` = 0.95) |
 | `dc_coupled` | `True` | DC-coupled / hybrid inverter |
 | `inverter_efficiency` | `0.96` | Inverter efficiency |
-| `inverter_loading_ratio` | `1.25` | DC/AC oversizing ratio |
+| `inverter_loading_ratio` | `1.25` | DC/AC oversizing ratio; also sets the inverter AC rating that clips production |
+| `pv_loss_overrides` | `None` | Per-component overrides (percent) for the fixed PVWatts system losses, e.g. `{"shading": 0.0}` |
+
+### Modeling conventions
+
+- **System losses**: every DC production calculation applies pvlib's PVWatts
+  losses with BREOS defaults of soiling 2%, shading 3%, mismatch 2%, wiring 2%,
+  connections 0.5%, LID 1.5%, nameplate 1%, and availability 3% — about 14.1%
+  combined (`breos.solar.DEFAULT_PVWATTS_LOSSES`). Age-based degradation is
+  added separately per simulation year. Override individual components with
+  `pv_loss_overrides` (App) or `loss_overrides` (solar functions).
+- **Inverter**: the energy balance applies a flat `inverter_efficiency` and
+  clips AC output (PV and battery discharge combined) at the inverter rating
+  implied by `inverter_loading_ratio` — the same rating used for inverter
+  CAPEX. DC surplus above the rating can still charge a DC-coupled battery.
 
 ## Result
 
@@ -192,6 +221,19 @@ These modules may be released in the future or are available for academic collab
 ## Weather Data Note
 
 BREOS uses [Open-Meteo](https://open-meteo.com/) for historical weather data. Open-Meteo is free for non-commercial use. For commercial applications, please review their [pricing and terms](https://open-meteo.com/en/pricing).
+
+Two working-directory conventions to be aware of:
+
+- A `weather/` directory in the current working directory is scanned before
+  any PVGIS fetch — a file matching the location preset name is used silently
+  instead of fetching. Remove or rename it to force a fresh fetch.
+- Historical Open-Meteo fetches cache responses in a `.cache.sqlite` file in
+  the current working directory (30-day expiry).
+
+Library modules report progress (file discovery, saved files, conversions)
+through the standard `logging` module under the `breos.*` logger names —
+enable them with `logging.basicConfig(level=logging.INFO)` or silence them
+per module. Functions with a `verbose` flag still print to stdout when asked.
 
 ## Load Profile Data Note
 

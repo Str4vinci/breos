@@ -64,41 +64,50 @@ def cost_params_from_config(
     costs_config: Optional[Dict[str, Any]] = None,
     financials_config: Optional[Dict[str, Any]] = None,
 ) -> CostParams:
-    """Build :class:`CostParams` from BREOS cost and financial config keys."""
+    """Build :class:`CostParams` from BREOS cost and financial config keys.
+
+    Missing keys fall back to the :class:`CostParams` dataclass defaults, so
+    the config and direct-construction paths cannot diverge.
+    """
     costs_config = costs_config or {}
     financials_config = financials_config or {}
+    defaults = CostParams()
 
     return CostParams(
         electricity_cost=costs_config.get(
             "electricity_cost",
-            financials_config.get("electricity_cost", 0.27),
+            financials_config.get("electricity_cost", defaults.electricity_cost),
         ),
         electricity_sold_cost=costs_config.get(
             "electricity_sold_cost",
-            financials_config.get("electricity_sold_cost", 0.06),
+            financials_config.get("electricity_sold_cost", defaults.electricity_sold_cost),
         ),
-        daily_power_cost=costs_config.get("daily_power_cost", 0.30),
-        module_cost_per_w=costs_config.get("module_cost_per_w", 0.125),
-        battery_cost_per_kwh=costs_config.get("storage_cost_per_kwh", BATTERY_REPLACEMENT_COST_PER_KWH),
-        dc_ac_ratio=costs_config.get("dc_ac_ratio", 1.25),
-        inverter_cost_per_kw=costs_config.get("inverter_cost_per_kw_hybrid", 102.58),
-        inverter_cost_per_kw_nobatt=costs_config.get("inverter_cost_per_kw_simple", 48.37),
-        installation_cost_per_module=costs_config.get("installation_cost_per_module", 350.0),
-        battery_installation_cost=costs_config.get("installation_cost_battery", 350.0),
-        other_cost_per_module=costs_config.get("other_cost_per_module", 0.0),
-        other_cost_fixed=costs_config.get("other_costs", 0.0),
-        maintenance_cost_per_panel=costs_config.get("maintenance_cost_per_panel", 0.0),
-        maintenance_cost_fixed=costs_config.get("maintenance_cost", 0.0),
-        operation_cost=costs_config.get("operation_cost", 0.0),
-        tes_cost_per_kwh_th=costs_config.get("tes_cost_per_kwh_th", 0.0),
-        heat_pump_cost_per_kw_th=costs_config.get("heat_pump_cost_per_kw_th", 0.0),
-        hp_maintenance_annual=costs_config.get("hp_maintenance_annual", 0.0),
-        gas_cost_per_kwh=costs_config.get("gas_cost_per_kwh", 0.0),
-        tes_installation_cost=costs_config.get("tes_installation_cost", 0.0),
-        inflation_rate=financials_config.get("inflation_rate", 0.02),
-        sell_price_inflation=financials_config.get("sell_price_inflation", 0.0),
-        discount_rate=financials_config.get("discount_rate", 0.0),
-        pv_degradation_rate=financials_config.get("pv_degradation_rate", 0.005),
+        daily_power_cost=costs_config.get("daily_power_cost", defaults.daily_power_cost),
+        module_cost_per_w=costs_config.get("module_cost_per_w", defaults.module_cost_per_w),
+        battery_cost_per_kwh=costs_config.get("storage_cost_per_kwh", defaults.battery_cost_per_kwh),
+        dc_ac_ratio=costs_config.get("dc_ac_ratio", defaults.dc_ac_ratio),
+        inverter_cost_per_kw=costs_config.get("inverter_cost_per_kw_hybrid", defaults.inverter_cost_per_kw),
+        inverter_cost_per_kw_nobatt=costs_config.get(
+            "inverter_cost_per_kw_simple", defaults.inverter_cost_per_kw_nobatt
+        ),
+        installation_cost_per_module=costs_config.get(
+            "installation_cost_per_module", defaults.installation_cost_per_module
+        ),
+        battery_installation_cost=costs_config.get("installation_cost_battery", defaults.battery_installation_cost),
+        other_cost_per_module=costs_config.get("other_cost_per_module", defaults.other_cost_per_module),
+        other_cost_fixed=costs_config.get("other_costs", defaults.other_cost_fixed),
+        maintenance_cost_per_panel=costs_config.get("maintenance_cost_per_panel", defaults.maintenance_cost_per_panel),
+        maintenance_cost_fixed=costs_config.get("maintenance_cost", defaults.maintenance_cost_fixed),
+        operation_cost=costs_config.get("operation_cost", defaults.operation_cost),
+        tes_cost_per_kwh_th=costs_config.get("tes_cost_per_kwh_th", defaults.tes_cost_per_kwh_th),
+        heat_pump_cost_per_kw_th=costs_config.get("heat_pump_cost_per_kw_th", defaults.heat_pump_cost_per_kw_th),
+        hp_maintenance_annual=costs_config.get("hp_maintenance_annual", defaults.hp_maintenance_annual),
+        gas_cost_per_kwh=costs_config.get("gas_cost_per_kwh", defaults.gas_cost_per_kwh),
+        tes_installation_cost=costs_config.get("tes_installation_cost", defaults.tes_installation_cost),
+        inflation_rate=financials_config.get("inflation_rate", defaults.inflation_rate),
+        sell_price_inflation=financials_config.get("sell_price_inflation", defaults.sell_price_inflation),
+        discount_rate=financials_config.get("discount_rate", defaults.discount_rate),
+        pv_degradation_rate=financials_config.get("pv_degradation_rate", defaults.pv_degradation_rate),
     )
 
 
@@ -433,52 +442,24 @@ def cost_analysis_projection(
 
     proj["Cost_System_Cumulative"] = costs["total_initial_cost"] + proj["Cost_System_Annual"].cumsum()
 
-    # Battery replacement
-    # 1. From simulation results (dynamic)
-    # We use the yearly_replacement calculated from the FIRST year results as base?
-    # NO. The simulation results ONLY cover the simulated period.
-    # If this is a PROJECTION (single year -> 20 years), we don't have simulated results for future years.
-    # However, if this is a MULTIYEAR simulation, results_df has all years.
-
-    # Let's check if we have data for all years in the projection
-    # If results_df has data for year Y, we should use it.
-
-    # Actually, cost_analysis_projection logic currently takes the FIRST year and projects it.
-    # It assumes single year simulation.
-    # If it is multiyear, 'yearly' dataframe above will have multiple rows.
-
-    # Logic update:
-    # If 'yearly' has data for the specific projection year, use actuals.
-    # If not (projection derived from first year), we assume no replacement in first year implies no replacement?
-    # Or we follow the standard logic.
-
-    # For replacement cost specifically:
-    # If we are in multiyear simulation mode, `results_df` contains all events.
-    # yearly_replacement has the sum for each year.
-
-    # Add a column for replacement cost to `proj`
+    # Battery replacement, taken from simulated years where available.
+    # Simulation results only cover the simulated period: the App's
+    # multi-year loop provides per-year replacement events for every
+    # projection year, while a single-year run provides at most year 1 and
+    # leaves later projection years without replacement costs.
     proj["Cost_Replacement"] = 0.0
 
-    # Map available replacement data from simulation to the projection
-    # yearly_replacement index is Year (e.g. 2023, 2024...)
-    # proj['Year'] is relative year (1, 2, 3...)
-    # We need to align them.
-
-    # Get the start year from the data
+    # yearly_replacement is indexed by calendar year; proj['Year'] is the
+    # relative year (1, 2, ...), so align via the simulation start year.
     start_year = df["Year"].min()
 
     for relative_year in proj["Year"]:
         actual_year = start_year + relative_year - 1
         if actual_year in yearly_replacement.index:
-            # We have simulated data for this year
             cost = yearly_replacement.loc[actual_year, "Replacement_Cost"]
-            # Apply inflation if it wasn't already encompassed in the simulation?
-            # The simulation outputs nominal cost at time of replacement?
-            # Usually simulation just outputs the base cost value. We should apply inflation here.
+            # The simulation logs replacement at the base (year-1) cost
+            # input, so inflate to the replacement year here.
             inflation_factor = (1 + inflation_rate) ** (relative_year - 1)
-            # Actually, check if simulation output `Replacement_Cost` is real or nominal.
-            # In `battery.py`, we log `battery_config.replacement_cost`. This is likely the base cost input.
-            # So yes, we need to inflate it.
             proj.loc[proj["Year"] == relative_year, "Cost_Replacement"] += cost * inflation_factor
 
     # Add to annual system cost

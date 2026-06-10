@@ -3,6 +3,9 @@
 Sources, loaders, and resampling utilities for solar irradiance and
 temperature time series.
 
+Local weather loading and PVGIS/NSRDB TMY helpers use the core install.
+Open-Meteo historical fetching requires `breos[weather]`.
+
 ## Loading from local files
 
 ```{eval-rst}

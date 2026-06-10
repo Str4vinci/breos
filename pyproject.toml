@@ -1,6 +1,6 @@
 [project]
 name = "breos"
-version = "0.2.3"
+version = "0.3.0"
 description = "Python library for PV and battery energy-system simulation and optimization"
 readme = "README.md"
 license = "BSD-3-Clause"
@@ -19,20 +19,11 @@ classifiers = [
     "Topic :: Scientific/Engineering",
 ]
 dependencies = [
-    "geopy>=2.4.1",
-    "joblib>=1.5.3",
-    "matplotlib>=3.10.8",
-    "numba>=0.63.1",
-    "openpyxl>=3.1.0",
-    "openmeteo-requests>=1.7.4",
+    "numpy>=2.0",
     "pandas>=2.3.3",
-    "pyarrow>=19.0.0",
-    "nrel-pysam>=7.1.0",
     "pvlib>=0.14.0,<0.16",
-    "pymoo>=0.6.1.6",
     "rainflow>=3.2.0",
-    "requests-cache>=1.2.1",
-    "timezonefinder>=8.2.1",
+    "scipy>=1.14",
 ]
 
 [project.urls]
@@ -43,7 +34,36 @@ Repository = "https://github.com/Str4vinci/breos"
 breos = "breos.cli:main"
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0", "ruff>=0.15"]
+cec-fit = ["nrel-pysam>=7.1.0"]
+fast = ["numba>=0.63.1"]
+plots = ["matplotlib>=3.10.8"]
+optimization = ["pymoo>=0.6.1.6"]
+weather = [
+    "openmeteo-requests>=1.7.4",
+    "requests-cache>=1.2.1",
+    "timezonefinder>=8.2.1",
+]
+validation = [
+    "openpyxl>=3.1.0",
+    "pyarrow>=19.0.0",
+]
+location-tools = [
+    "geopy>=2.4.1",
+    "timezonefinder>=8.2.1",
+]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.15",
+    "matplotlib>=3.10.8",
+    "numba>=0.63.1",
+    "openpyxl>=3.1.0",
+    "openmeteo-requests>=1.7.4",
+    "pyarrow>=19.0.0",
+    "nrel-pysam>=7.1.0",
+    "pymoo>=0.6.1.6",
+    "requests-cache>=1.2.1",
+    "timezonefinder>=8.2.1",
+]
 docs = [
     "sphinx>=8.1",
     "pydata-sphinx-theme>=0.16",
@@ -71,7 +91,6 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 "breos/__init__.py" = ["F401", "F811"]   # re-exports and shadowed imports
 "tests/*" = ["F811"]                      # pytest fixtures
-"breos/plotting.py" = ["F841", "F811", "F821", "E712"]  # large viz module with WIP code
 "tools/*" = ["E402"]                      # CLI scripts insert PROJECT_ROOT before imports
 
 [build-system]
