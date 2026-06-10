@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from breos.economics import BATTERY_REPLACEMENT_COST_PER_KWH, CostParams, calculate_costs
+from breos.economics import CostParams, calculate_costs
 from breos.emissions import EmissionsParams
 from breos.pv_modules import MODULES, PVModuleParams, get_module
 from breos.resources import load_config_json
@@ -200,8 +200,14 @@ def resolve_tracking(cfg: dict[str, Any], lat: float) -> tuple[str, float]:
 
 
 def resolve_costs(cfg: dict[str, Any]) -> CostParams:
-    """Build CostParams from packaged presets, overrides, and financial defaults."""
+    """Build CostParams from packaged presets, overrides, and financial defaults.
+
+    Preset keys override the :class:`CostParams` dataclass defaults; a key
+    missing from a preset falls back to the same default used when no
+    preset is configured, so the two paths cannot diverge.
+    """
     params: dict[str, Any] = {}
+    defaults = CostParams()
 
     if cfg.get("cost_preset"):
         costs_db = load_json("costs.json")
@@ -211,19 +217,27 @@ def resolve_costs(cfg: dict[str, Any]) -> CostParams:
             raise ValueError(f"Unknown cost preset '{preset_key}'. Available: {available}")
         preset = costs_db[preset_key]
 
-        params["electricity_cost"] = preset.get("electricity_cost", 0.27)
-        params["electricity_sold_cost"] = preset.get("electricity_sold_cost", 0.06)
-        params["daily_power_cost"] = preset.get("daily_power_cost", 0.30)
-        params["module_cost_per_w"] = preset.get("module_cost_per_w", 0.125)
-        params["battery_cost_per_kwh"] = preset.get("storage_cost_per_kwh", BATTERY_REPLACEMENT_COST_PER_KWH)
-        params["inverter_cost_per_kw"] = preset.get("inverter_cost_per_kw_hybrid", 102.58)
-        params["inverter_cost_per_kw_nobatt"] = preset.get("inverter_cost_per_kw_simple", 48.37)
-        params["installation_cost_per_module"] = preset.get("installation_cost_per_module", 350.0)
-        params["battery_installation_cost"] = preset.get("installation_cost_battery", 350.0)
-        params["maintenance_cost_per_panel"] = preset.get("maintenance_cost_per_panel", 0.0)
-        params["maintenance_cost_fixed"] = preset.get("maintenance_cost", 50.0)
-        params["other_cost_per_module"] = preset.get("other_cost_per_module", 0.0)
-        params["other_cost_fixed"] = preset.get("other_costs", 50.0)
+        params["electricity_cost"] = preset.get("electricity_cost", defaults.electricity_cost)
+        params["electricity_sold_cost"] = preset.get("electricity_sold_cost", defaults.electricity_sold_cost)
+        params["daily_power_cost"] = preset.get("daily_power_cost", defaults.daily_power_cost)
+        params["module_cost_per_w"] = preset.get("module_cost_per_w", defaults.module_cost_per_w)
+        params["battery_cost_per_kwh"] = preset.get("storage_cost_per_kwh", defaults.battery_cost_per_kwh)
+        params["inverter_cost_per_kw"] = preset.get("inverter_cost_per_kw_hybrid", defaults.inverter_cost_per_kw)
+        params["inverter_cost_per_kw_nobatt"] = preset.get(
+            "inverter_cost_per_kw_simple", defaults.inverter_cost_per_kw_nobatt
+        )
+        params["installation_cost_per_module"] = preset.get(
+            "installation_cost_per_module", defaults.installation_cost_per_module
+        )
+        params["battery_installation_cost"] = preset.get(
+            "installation_cost_battery", defaults.battery_installation_cost
+        )
+        params["maintenance_cost_per_panel"] = preset.get(
+            "maintenance_cost_per_panel", defaults.maintenance_cost_per_panel
+        )
+        params["maintenance_cost_fixed"] = preset.get("maintenance_cost", defaults.maintenance_cost_fixed)
+        params["other_cost_per_module"] = preset.get("other_cost_per_module", defaults.other_cost_per_module)
+        params["other_cost_fixed"] = preset.get("other_costs", defaults.other_cost_fixed)
 
     params["dc_ac_ratio"] = cfg["inverter_loading_ratio"]
     params.setdefault("inflation_rate", cfg["inflation_rate"])
