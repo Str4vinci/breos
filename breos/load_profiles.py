@@ -50,6 +50,10 @@ PROFILE_NAMES = {
     "8": "REE 2026 - 2.0TD (external file required)",
 }
 
+# Note: "bdew_h0" maps to the bundled demandlib profile "1", which
+# implements the BDEW H0 standard shape. Profile "7" is the externally
+# published BDEW H0 2025 file and must be supplied via rlp_directory —
+# request it explicitly as "7" if that exact dataset is needed.
 PROFILE_ALIASES = {
     "default": "1",
     "demandlib_h0": "1",
@@ -93,7 +97,11 @@ def load_profile(
         num_years: Number of years to generate
         rlp_directory: Directory containing RLP files. When omitted, BREOS
             uses only redistributable packaged profiles.
-        timezone: Timezone for the index (default: 'UTC' to match TMY data)
+        timezone: Timezone for the index. Profile rows are wall-clock local
+            behavior (H0 morning/evening peaks), so pass the location's
+            timezone to pin them to local time; the simulation aligns load
+            and PV by UTC instant. The 'UTC' default keeps the legacy
+            UTC-clock convention for callers without a location.
 
     Returns:
         DataFrame with 'Electrical Consumption [W]' column and DatetimeIndex
@@ -149,12 +157,13 @@ def load_profile(
     with path_context as csv_file:
         df = _load_profile_csv(Path(csv_file), profile_type)
 
-    # Create datetime index for one year
+    # Create a naive wall-clock index for one year; rows describe household
+    # behavior at local clock time and are pinned to the timezone afterwards
     start_year = int(start_date[:4])
     hours_in_year = 8760  # Non-leap year
     steps_per_hour = 4 if native_freq == "15min" else 1
 
-    new_index = pd.date_range(start=start_date, periods=hours_in_year * steps_per_hour, freq=native_freq, tz=timezone)
+    new_index = pd.date_range(start=start_date, periods=hours_in_year * steps_per_hour, freq=native_freq)
 
     # Adjust if profile has different length
     if len(df) < len(new_index):
@@ -170,9 +179,12 @@ def load_profile(
     # Scale to target consumption
     scale_to_annual_consumption(df, annual_consumption_kwh)
 
-    # Extend to multiple years if needed
+    # Extend to multiple years if needed (on the naive wall-clock index, so
+    # each year is localized at its own DST transition dates below)
     if num_years > 1:
         df = _extend_to_years(df, start_year, num_years)
+
+    df = _localize_wall_clock_index(df, timezone, native_freq)
 
     # Resample if needed (hourly to 15-min)
     if freq in ("15min", "15T") and native_freq == "h":
@@ -181,6 +193,29 @@ def load_profile(
         df = df.resample("h").mean()
 
     return df
+
+
+def _localize_wall_clock_index(df: pd.DataFrame, timezone: Optional[str], freq: str) -> pd.DataFrame:
+    """Pin naive wall-clock profile rows to a timezone's legal time.
+
+    Household behavior follows the legal clock, so each row keeps its
+    wall-clock label. In a DST-observing timezone the spring-forward hour
+    does not exist (its rows are dropped) and the fall-back hour occurs
+    twice (the rows cover the standard-time occurrence; the DST instants
+    are forward-filled), keeping the result evenly spaced in absolute time.
+    """
+    localized = df.copy()
+    if timezone is None or timezone == "UTC":
+        localized.index = localized.index.tz_localize("UTC")
+        return localized
+
+    idx = localized.index.tz_localize(timezone, nonexistent="shift_forward", ambiguous=False)
+    localized.index = idx
+    localized = localized[~localized.index.duplicated(keep="last")]
+    full = pd.date_range(localized.index[0], localized.index[-1], freq=freq)
+    localized = localized.reindex(full).ffill()
+    localized.index.name = "DateTime"
+    return localized
 
 
 def _load_profile_csv(csv_file: Path, profile_type: str) -> pd.DataFrame:

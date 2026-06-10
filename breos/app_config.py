@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from breos.economics import BATTERY_REPLACEMENT_COST_PER_KWH, CostParams, calculate_costs
+from breos.economics import CostParams, calculate_costs
 from breos.emissions import EmissionsParams
 from breos.pv_modules import MODULES, PVModuleParams, get_module
 from breos.resources import load_config_json
@@ -36,9 +36,14 @@ DEFAULTS: dict[str, Any] = {
     "emissions_country": None,
     "pv_degradation_rate": 0.005,
     "calendar_model": "naumann_lam_field_calibrated",
+    "battery_min_soc": 0.10,
+    "battery_max_soc": 0.90,
+    "battery_eol_percentage": 0.70,
+    "battery_rte": None,
     "dc_coupled": True,
     "inverter_efficiency": 0.96,
     "inverter_loading_ratio": 1.25,
+    "pv_loss_overrides": None,
     "start_date": "2023-01-01",
 }
 
@@ -111,8 +116,37 @@ def validate_config(cfg: dict[str, Any]) -> None:
                 raise ValueError(f"'pv_arrays[{i}].azimuth' must be between 0 and 360")
     if cfg["annual_consumption_kwh"] <= 0:
         raise ValueError("'annual_consumption_kwh' must be > 0")
+    if cfg["battery_kwh"] < 0:
+        raise ValueError("'battery_kwh' must be >= 0")
+    tilt = cfg.get("tilt")
+    if tilt is not None and not 0 <= tilt <= 90:
+        raise ValueError("'tilt' must be between 0 and 90")
+    azimuth = cfg.get("azimuth")
+    if azimuth is not None and not 0 <= azimuth <= 360:
+        raise ValueError("'azimuth' must be between 0 and 360")
+    if not 0 < cfg["inverter_efficiency"] <= 1:
+        raise ValueError("'inverter_efficiency' must be between 0 (exclusive) and 1 (inclusive)")
+    if cfg["inverter_loading_ratio"] <= 0:
+        raise ValueError("'inverter_loading_ratio' must be > 0")
+    if cfg["projection_years"] < 1:
+        raise ValueError("'projection_years' must be >= 1")
+    if not 0 <= cfg["pv_degradation_rate"] < 1:
+        raise ValueError("'pv_degradation_rate' must be between 0 (inclusive) and 1 (exclusive)")
     if cfg["resolution"] not in ("h", "15min"):
         raise ValueError("'resolution' must be 'h' or '15min'")
+    overrides = cfg.get("pv_loss_overrides")
+    if overrides is not None:
+        if not isinstance(overrides, dict):
+            raise TypeError("'pv_loss_overrides' must be a dict of loss component percentages")
+        for name, value in overrides.items():
+            if not isinstance(value, (int, float)) or not 0 <= value <= 100:
+                raise ValueError(f"'pv_loss_overrides[{name!r}]' must be a percentage between 0 and 100")
+    if not 0 <= cfg["battery_min_soc"] < cfg["battery_max_soc"] <= 1:
+        raise ValueError("'battery_min_soc' and 'battery_max_soc' must satisfy 0 <= min < max <= 1")
+    if not 0 < cfg["battery_eol_percentage"] < 1:
+        raise ValueError("'battery_eol_percentage' must be between 0 and 1 (exclusive)")
+    if cfg["battery_rte"] is not None and not 0 < cfg["battery_rte"] <= 1:
+        raise ValueError("'battery_rte' must be between 0 (exclusive) and 1 (inclusive)")
 
 
 def resolve_location(cfg: dict[str, Any]) -> tuple[float, float, str, str | None]:
@@ -200,8 +234,14 @@ def resolve_tracking(cfg: dict[str, Any], lat: float) -> tuple[str, float]:
 
 
 def resolve_costs(cfg: dict[str, Any]) -> CostParams:
-    """Build CostParams from packaged presets, overrides, and financial defaults."""
+    """Build CostParams from packaged presets, overrides, and financial defaults.
+
+    Preset keys override the :class:`CostParams` dataclass defaults; a key
+    missing from a preset falls back to the same default used when no
+    preset is configured, so the two paths cannot diverge.
+    """
     params: dict[str, Any] = {}
+    defaults = CostParams()
 
     if cfg.get("cost_preset"):
         costs_db = load_json("costs.json")
@@ -211,19 +251,27 @@ def resolve_costs(cfg: dict[str, Any]) -> CostParams:
             raise ValueError(f"Unknown cost preset '{preset_key}'. Available: {available}")
         preset = costs_db[preset_key]
 
-        params["electricity_cost"] = preset.get("electricity_cost", 0.27)
-        params["electricity_sold_cost"] = preset.get("electricity_sold_cost", 0.06)
-        params["daily_power_cost"] = preset.get("daily_power_cost", 0.30)
-        params["module_cost_per_w"] = preset.get("module_cost_per_w", 0.125)
-        params["battery_cost_per_kwh"] = preset.get("storage_cost_per_kwh", BATTERY_REPLACEMENT_COST_PER_KWH)
-        params["inverter_cost_per_kw"] = preset.get("inverter_cost_per_kw_hybrid", 102.58)
-        params["inverter_cost_per_kw_nobatt"] = preset.get("inverter_cost_per_kw_simple", 48.37)
-        params["installation_cost_per_module"] = preset.get("installation_cost_per_module", 350.0)
-        params["battery_installation_cost"] = preset.get("installation_cost_battery", 350.0)
-        params["maintenance_cost_per_panel"] = preset.get("maintenance_cost_per_panel", 0.0)
-        params["maintenance_cost_fixed"] = preset.get("maintenance_cost", 50.0)
-        params["other_cost_per_module"] = preset.get("other_cost_per_module", 0.0)
-        params["other_cost_fixed"] = preset.get("other_costs", 50.0)
+        params["electricity_cost"] = preset.get("electricity_cost", defaults.electricity_cost)
+        params["electricity_sold_cost"] = preset.get("electricity_sold_cost", defaults.electricity_sold_cost)
+        params["daily_power_cost"] = preset.get("daily_power_cost", defaults.daily_power_cost)
+        params["module_cost_per_w"] = preset.get("module_cost_per_w", defaults.module_cost_per_w)
+        params["battery_cost_per_kwh"] = preset.get("storage_cost_per_kwh", defaults.battery_cost_per_kwh)
+        params["inverter_cost_per_kw"] = preset.get("inverter_cost_per_kw_hybrid", defaults.inverter_cost_per_kw)
+        params["inverter_cost_per_kw_nobatt"] = preset.get(
+            "inverter_cost_per_kw_simple", defaults.inverter_cost_per_kw_nobatt
+        )
+        params["installation_cost_per_module"] = preset.get(
+            "installation_cost_per_module", defaults.installation_cost_per_module
+        )
+        params["battery_installation_cost"] = preset.get(
+            "installation_cost_battery", defaults.battery_installation_cost
+        )
+        params["maintenance_cost_per_panel"] = preset.get(
+            "maintenance_cost_per_panel", defaults.maintenance_cost_per_panel
+        )
+        params["maintenance_cost_fixed"] = preset.get("maintenance_cost", defaults.maintenance_cost_fixed)
+        params["other_cost_per_module"] = preset.get("other_cost_per_module", defaults.other_cost_per_module)
+        params["other_cost_fixed"] = preset.get("other_costs", defaults.other_cost_fixed)
 
     params["dc_ac_ratio"] = cfg["inverter_loading_ratio"]
     params.setdefault("inflation_rate", cfg["inflation_rate"])

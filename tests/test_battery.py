@@ -110,6 +110,106 @@ class TestSimulateEnergyBalance:
         assert len(results_df) == 48
         assert summary_df["Total Load [kWh]"].iloc[0] == pytest.approx(48.0)
 
+    def test_resistance_fade_derates_energy_loop_efficiency(self):
+        # enable_resistance_fade must feed the effective RTE back into the
+        # charge/discharge flows, not just record it: with substantial
+        # resistance growth the same scenario delivers less battery energy.
+        idx = pd.date_range("2025-01-01 00:00", periods=24, freq="h", tz="UTC")
+        pv = pd.Series([0.0] * 8 + [2000.0] * 8 + [0.0] * 8, index=idx)
+        houseload = pd.DataFrame({"Load": [800.0] * 8 + [0.0] * 8 + [800.0] * 8}, index=idx)
+
+        def _run(**kwargs):
+            config = BatteryConfig(
+                nominal_energy_wh=5000,
+                standby_loss_wh=0.0,
+                enable_replacement=False,
+                **kwargs,
+            )
+            results_df, *_ = simulate_energy_balance(
+                pv_dc=pv,
+                houseload=houseload,
+                battery_config=config,
+                freq="h",
+                temperature_series=pd.Series(25.0, index=idx),
+            )
+            return results_df["Import_From_Grid"].sum()
+
+        import_base = _run()
+        import_faded = _run(enable_resistance_fade=True, initial_resistance_growth=1.0)
+
+        # 1.0 relative resistance growth halves the round-trip efficiency
+        assert import_faded > import_base
+
+    def test_inverter_ac_capacity_clips_pv_and_export(self):
+        idx = pd.date_range("2025-01-01 00:00", periods=4, freq="h", tz="UTC")
+        pv_dc = pd.Series([0.0, 2000.0, 3000.0, 1000.0], index=idx)
+        houseload = pd.DataFrame({"Load": 500.0}, index=idx)
+        config = BatteryConfig(nominal_energy_wh=0, inverter_ac_capacity_w=1000.0)
+
+        results_df, total_pv, *_ = simulate_energy_balance(
+            pv_dc=pv_dc, houseload=houseload, battery_config=config, freq="h"
+        )
+
+        # AC production saturates at the inverter rating
+        assert results_df["PV_Production"].max() == pytest.approx(1000.0)
+        # Export uses the headroom left after serving the load
+        assert results_df["Sell_To_Grid"].max() == pytest.approx(500.0)
+        # total_pv sums the clipped AC production
+        assert total_pv == pytest.approx(1000.0 + 1000.0 + 960.0)
+
+    def test_battery_shares_inverter_cap_and_charges_from_clipped_dc(self):
+        idx = pd.date_range("2025-01-01 00:00", periods=2, freq="h", tz="UTC")
+        pv_dc = pd.Series([0.0, 3000.0], index=idx)
+        houseload = pd.DataFrame({"Load": [2000.0, 0.0]}, index=idx)
+        config = BatteryConfig(
+            nominal_energy_wh=2000,
+            inverter_ac_capacity_w=1000.0,
+            standby_loss_wh=0.0,
+            enable_replacement=False,
+        )
+
+        results_df, *_ = simulate_energy_balance(
+            pv_dc=pv_dc,
+            houseload=houseload,
+            battery_config=config,
+            freq="h",
+            temperature_series=pd.Series(25.0, index=idx),
+        )
+
+        # Hour 0: battery discharge AC is capped at the rating; the rest imports
+        assert results_df["Import_From_Grid"].iloc[0] == pytest.approx(1000.0)
+        # Hour 1: DC surplus above the AC cap still charges the DC-coupled
+        # battery back to full, while export clips at the rating
+        assert results_df["Battery_Energy"].iloc[1] == pytest.approx(1800.0)
+        assert results_df["Sell_To_Grid"].iloc[1] == pytest.approx(1000.0)
+
+    def test_cold_derate_cannot_sell_energy_pv_never_produced(self):
+        # A full battery whose temperature drops sees Emax shrink below its
+        # stored energy (lfp cold derate). charge_room went negative and the
+        # battery silently drained into Sell_To_Grid: 100 Wh of PV exported
+        # ~539 Wh in the first cold hour. Export must never exceed PV AC.
+        idx = pd.date_range("2025-01-01 00:00", periods=6, freq="h", tz="UTC")
+        pv_dc = pd.Series(100.0, index=idx)
+        houseload = pd.DataFrame({"Load": 0.0}, index=idx)
+        config = BatteryConfig(nominal_energy_wh=10000, battery_type="lfp")
+        temperature = pd.Series([25.0, 25.0, 0.0, 0.0, 0.0, 0.0], index=idx)
+
+        results_df, *_ = simulate_energy_balance(
+            pv_dc=pv_dc,
+            houseload=houseload,
+            battery_config=config,
+            temperature_series=temperature,
+            freq="h",
+        )
+
+        pv_ac_max = 100.0 * config.inverter_efficiency
+        assert results_df["Sell_To_Grid"].max() <= pv_ac_max + 1e-9
+        # Stored energy is clamped into the temperature-derated window
+        from breos.battery import lfp_capacity_factor
+
+        emax_cold = 10000 * config.max_soc * lfp_capacity_factor(0.0)
+        assert results_df["Battery_Energy"].iloc[-1] <= emax_cold + 1e-9
+
 
 class TestIndoorTemperatureModel:
     def test_output_shape(self):

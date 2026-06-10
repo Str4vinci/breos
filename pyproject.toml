@@ -1,6 +1,6 @@
 [project]
 name = "breos"
-version = "0.2.3"
+version = "0.3.0"
 description = "Python library for PV and battery energy-system simulation and optimization"
 readme = "README.md"
 license = "BSD-3-Clause"
@@ -91,7 +91,6 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 "breos/__init__.py" = ["F401", "F811"]   # re-exports and shadowed imports
 "tests/*" = ["F811"]                      # pytest fixtures
-"breos/plotting.py" = ["F841", "F811", "F821", "E712"]  # large viz module with WIP code
 "tools/*" = ["E402"]                      # CLI scripts insert PROJECT_ROOT before imports
 
 [build-system]

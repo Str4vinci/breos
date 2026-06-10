@@ -66,7 +66,13 @@ def load_weather_for_simulation(
     deps: AppRuntimeDependencies,
     weather_dir: Path | None = None,
 ) -> pd.DataFrame:
-    """Load TMY weather, falling back to PVGIS fetch."""
+    """Load TMY weather, falling back to PVGIS fetch.
+
+    When ``weather_dir`` is not given, a ``weather/`` directory in the
+    current working directory is scanned first: a file matching the
+    location preset key takes precedence over the PVGIS fetch. Remove or
+    rename the directory (or its files) to force a fresh fetch.
+    """
     weather = None
     weather_path = weather_dir or Path.cwd() / "weather"
 
@@ -97,6 +103,7 @@ def build_dc_system_base(cfg: dict[str, Any], resolved: ResolvedAppConfig, weath
     """Build undegraded system-level DC production for one simulation year."""
     location = Location(resolved.lat, resolved.lon, tz=resolved.timezone)
     freq = cfg["resolution"]
+    loss_overrides = cfg["pv_loss_overrides"]
 
     if resolved.pv_arrays:
         return calculate_multi_array_production(
@@ -104,6 +111,7 @@ def build_dc_system_base(cfg: dict[str, Any], resolved: ResolvedAppConfig, weath
             location=location,
             arrays=resolved.pv_arrays,
             freq=freq,
+            loss_overrides=loss_overrides,
         )
 
     if resolved.tracking == "fixed":
@@ -115,6 +123,7 @@ def build_dc_system_base(cfg: dict[str, Any], resolved: ResolvedAppConfig, weath
             n_modules=1,
             pv_params=resolved.pv_params,
             freq=freq,
+            loss_overrides=loss_overrides,
         )
     else:
         dc_1mod = calculate_pv_production_dc_tracking(
@@ -131,12 +140,20 @@ def build_dc_system_base(cfg: dict[str, Any], resolved: ResolvedAppConfig, weath
             dual_axis_max_tilt=cfg["dual_axis_max_tilt"],
             pv_params=resolved.pv_params,
             freq=freq,
+            loss_overrides=loss_overrides,
         )
     return dc_1mod * cfg["n_modules"]
 
 
-def load_consumption_profile(cfg: dict[str, Any], deps: AppRuntimeDependencies) -> pd.Series:
-    """Load and scale the configured demand profile."""
+def load_consumption_profile(
+    cfg: dict[str, Any], deps: AppRuntimeDependencies, timezone: str | None = None
+) -> pd.Series:
+    """Load and scale the configured demand profile.
+
+    Profile rows describe household behavior at legal clock time, so the
+    location timezone pins them to local wall clock; the simulation aligns
+    load and PV by UTC instant.
+    """
     return deps.load_profile(
         profile_type=cfg["load_profile"],
         annual_consumption_kwh=cfg["annual_consumption_kwh"],
@@ -144,7 +161,7 @@ def load_consumption_profile(cfg: dict[str, Any], deps: AppRuntimeDependencies) 
         freq=cfg["resolution"],
         num_years=1,
         rlp_directory=cfg["rlp_directory"],
-        timezone="UTC",
+        timezone=timezone or "UTC",
     )
 
 
@@ -156,7 +173,7 @@ def prepare_simulation_inputs(
     start_year = int(cfg["start_date"][:4])
     weather = load_weather_for_simulation(resolved, freq, start_year, deps)
     dc_system_base = build_dc_system_base(cfg, resolved, weather)
-    load_data = load_consumption_profile(cfg, deps)
+    load_data = load_consumption_profile(cfg, deps, timezone=resolved.timezone)
     temperature_series = deps.build_battery_temperature_series(
         "weather",
         index=dc_system_base.index,

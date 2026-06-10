@@ -53,11 +53,11 @@ def test_simulate_energy_balance_battery_golden_output():
         {
             "Total PV [kWh]": 22.272,
             "Total Load [kWh]": 36.0,
-            "Sell [kWh]": 7.042558969772534,
-            "Import [kWh]": 19.04936863644225,
-            "Import [%]": 52.91491287900625,
-            "Grid Independence [%]": 47.08508712099375,
-            "Final SOH [%]": 99.7669719903168,
+            "Sell [kWh]": 7.0425545297401175,
+            "Import [kWh]": 19.064139530204148,
+            "Import [%]": 52.955943139455975,
+            "Grid Independence [%]": 47.044056860544025,
+            "Final SOH [%]": 99.76712171800783,
             "N_Replacements": 0,
             "Replacement_Cost": 0.0,
         },
@@ -66,7 +66,7 @@ def test_simulate_energy_balance_battery_golden_output():
     assert replacement_cost == pytest.approx(0.0)
     assert n_replacements == 0
     assert len(degradation_df) == 2
-    assert results_df["Battery_Energy"].iloc[-1] == pytest.approx(297.7074191036577)
+    assert results_df["Battery_Energy"].iloc[-1] == pytest.approx(297.70796832641753)
 
 
 def test_simulate_energy_balance_15min_golden_output():

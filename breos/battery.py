@@ -90,7 +90,9 @@ class BatteryConfig:
     enable_replacement: bool = True
     replacement_cost: Optional[float] = None  # Auto-computed from cost per kWh if not set
     calendar_model: str = "naumann_lam_field_calibrated"  # Current field-calibrated fit (canonical name)
-    # Resistance fade tracking
+    # Resistance fade (opt-in): grows internal resistance daily and derates
+    # the charge/discharge efficiencies in the energy loop so the effective
+    # round-trip efficiency declines as the battery ages.
     enable_resistance_fade: bool = False  # Enable Naumann resistance growth model
     initial_resistance_growth: float = 0.0  # Initial relative resistance growth (fraction, 0=new)
     # Thermal model
@@ -98,6 +100,9 @@ class BatteryConfig:
     # DC-coupled system (hybrid inverter) settings
     dc_coupled: bool = True  # True = hybrid inverter (DC-coupled battery)
     inverter_efficiency: float = 0.96  # Inverter efficiency (for DC→AC conversion)
+    # Inverter AC rating (W) shared by PV and battery discharge; AC output is
+    # clipped to this each step. None disables clipping (legacy behavior).
+    inverter_ac_capacity_w: Optional[float] = None
     # Battery chemistry
     battery_type: str = "lfp"  # Battery chemistry type
 
@@ -153,7 +158,7 @@ def simulate_energy_balance(
     Returns:
         Tuple of:
         - results_df: Detailed timestep results
-        - total_pv: Total PV DC production (Wh)
+        - total_pv: Total PV AC production after inverter efficiency (Wh)
         - summary_df: Summary statistics
         - replacement_cost: Total battery replacement cost
         - n_replacements: Number of battery replacements
@@ -228,11 +233,27 @@ def simulate_energy_balance(
     Battery_SOH = battery_config.initial_soh
     Battery_Energy_Wh = battery_config.nominal_energy_wh * battery_soh_decimal * battery_config.max_soc
 
+    # Degradation day-windows are positional (fixed steps_per_day), not
+    # calendar-based: DST days and trailing partial days shift/skip windows
+    # by design; the Numba kernels share the convention.
     soc_absolute_buffer = np.empty(steps_per_day, dtype=np.float64)
     soc_buf_idx = 0
     fec_cum = initial_fec
     cumulative_cal_seconds = initial_calendar_seconds
-    resistance_growth = initial_resistance_growth
+    # The function argument is the multi-year continuation seam (used by the
+    # App's year loop); when left at its default the battery's configured
+    # starting resistance applies.
+    resistance_growth = (
+        initial_resistance_growth if initial_resistance_growth > 0.0 else battery_config.initial_resistance_growth
+    )
+    # Charge/discharge efficiencies, derated by resistance growth when the
+    # fade model is enabled; updated after each daily degradation step.
+    eff_charge = battery_config.charge_efficiency
+    eff_discharge = battery_config.discharge_efficiency
+    if battery_config.enable_resistance_fade and resistance_growth > 0.0:
+        _rte_derate = math.sqrt(1.0 + resistance_growth)
+        eff_charge /= _rte_derate
+        eff_discharge /= _rte_derate
     n_replacements = 0
     total_replacement_cost = 0.0
     cumulative_cycle_deg = initial_cumulative_cycle_deg
@@ -267,6 +288,12 @@ def simulate_energy_balance(
     has_battery = battery_config.nominal_energy_wh > 1 and (battery_config.max_soc - battery_config.min_soc) > 0
     # Bind capacity factor function once
     _cap_factor_fn = lfp_capacity_factor
+    # Inverter AC cap per step (Wh); None keeps the legacy uncapped model
+    cap_wh = (
+        battery_config.inverter_ac_capacity_w * hours_per_step
+        if battery_config.inverter_ac_capacity_w is not None
+        else float("inf")
+    )
 
     for i in range(n_steps):
         step_time = rng[i]
@@ -280,18 +307,28 @@ def simulate_energy_balance(
         charge_in = discharge_out = 0.0
 
         if has_battery:
-            # Calculate usable capacity with temperature derating
+            # Calculate usable capacity with temperature derating. f_cap is
+            # computed from the ambient/indoor temperature at step start; the
+            # lumped thermal model warms T_cell later in the step, so aging
+            # sees the warmed cell while derating sees the environment. This
+            # is intentional: usable capacity is set by the pack's state
+            # before this step's charge/discharge self-heating.
             usable_cap = battery_config.nominal_energy_wh * battery_soh_decimal
             f_cap = _cap_factor_fn(T_cell)
             Emax = usable_cap * battery_config.max_soc * f_cap
             Emin = usable_cap * battery_config.min_soc * f_cap
 
-            # Apply standby loss (scaled by timestep)
+            # Apply standby loss (scaled by timestep) and clamp stored energy
+            # into the temperature-derated window, mirroring the Numba kernel.
+            # Without the upper clamp, Emax shrinking below the stored energy
+            # (cold-temperature derate, daily SOH decline) made charge_room
+            # negative and silently drained the battery into Sell_To_Grid.
             standby_loss = battery_config.standby_loss_wh * hours_per_step
-            Battery_Energy_Wh = max(Emin, Battery_Energy_Wh - standby_loss)
+            Battery_Energy_Wh = min(Emax, max(Emin, Battery_Energy_Wh - standby_loss))
 
-            # Convert PV DC to AC for comparison with load
-            pv_ac = pv_dc_power * battery_config.inverter_efficiency
+            # Convert PV DC to AC for comparison with load (clipped at the
+            # inverter AC rating; excess DC can still charge the battery)
+            pv_ac = min(pv_dc_power * battery_config.inverter_efficiency, cap_wh)
 
             # Energy flows:
             # Load is in AC terms
@@ -307,13 +344,14 @@ def simulate_energy_balance(
                 surplus_dc = pv_dc_power - dc_to_load
 
                 # Charge battery with surplus DC (no inverter loss)
-                charge_room = Emax - Battery_Energy_Wh
-                charge_in = min(surplus_dc, charge_room / battery_config.charge_efficiency)
-                Battery_Energy_Wh += charge_in * battery_config.charge_efficiency
+                charge_room = max(0.0, Emax - Battery_Energy_Wh)
+                charge_in = min(surplus_dc, charge_room / eff_charge)
+                Battery_Energy_Wh += charge_in * eff_charge
 
-                # Export remainder (DC -> AC)
+                # Export remainder (DC -> AC) within the inverter headroom
+                # left after serving the load; the rest is curtailed
                 remaining_dc = surplus_dc - charge_in
-                Sell = remaining_dc * battery_config.inverter_efficiency
+                Sell = min(remaining_dc * battery_config.inverter_efficiency, cap_wh - load)
 
             else:  # Deficit: PV insufficient, need battery or grid
                 deficit = load - pv_ac  # AC deficit
@@ -322,10 +360,12 @@ def simulate_energy_balance(
                 available = Battery_Energy_Wh - Emin
                 if available > 0:
                     # Battery discharge: DC -> AC
-                    eff_total = battery_config.discharge_efficiency * battery_config.inverter_efficiency
+                    eff_total = eff_discharge * battery_config.inverter_efficiency
                     # How much DC do we need to draw to provide 'deficit' AC?
+                    # Battery discharge shares the inverter AC rating with PV.
                     dc_needed = deficit / eff_total if eff_total > 0 else deficit
-                    draw = min(available, dc_needed)
+                    draw_cap = (cap_wh - pv_ac) / eff_total if eff_total > 0 else 0.0
+                    draw = min(available, dc_needed, draw_cap)
                     Battery_Energy_Wh -= draw
                     delivered_ac = draw * eff_total
                     discharge_out = draw
@@ -333,8 +373,8 @@ def simulate_energy_balance(
                 else:
                     Import = deficit
         else:
-            # No battery: simple DC to AC for load
-            pv_ac = pv_dc_power * battery_config.inverter_efficiency
+            # No battery: simple DC to AC for load (clipped at the AC rating)
+            pv_ac = min(pv_dc_power * battery_config.inverter_efficiency, cap_wh)
             if pv_ac >= load:
                 Sell = pv_ac - load
             else:
@@ -349,8 +389,8 @@ def simulate_energy_balance(
                 T_ambient,
                 charge_power_w,
                 discharge_power_w,
-                battery_config.charge_efficiency,
-                battery_config.discharge_efficiency,
+                eff_charge,
+                eff_discharge,
                 battery_config.thermal_resistance_kw,
             )
         T_cell_day_sum += T_cell
@@ -455,9 +495,13 @@ def simulate_energy_balance(
                 cumulative_resistance_cycle += dR_cycle
                 cumulative_resistance_calendar += dR_calendar
 
-                effective_rte = (battery_config.charge_efficiency * battery_config.discharge_efficiency) / (
-                    1.0 + resistance_growth
-                )
+                # Feed the resistance penalty back into the energy loop,
+                # split evenly across charge and discharge so their product
+                # equals the effective round-trip efficiency.
+                _rte_derate = math.sqrt(1.0 + resistance_growth)
+                eff_charge = battery_config.charge_efficiency / _rte_derate
+                eff_discharge = battery_config.discharge_efficiency / _rte_derate
+                effective_rte = eff_charge * eff_discharge
 
             # Battery replacement check
             if battery_config.enable_replacement and battery_soh_decimal <= battery_config.eol_percentage:
@@ -466,6 +510,8 @@ def simulate_energy_balance(
                 fec_cum = 0.0
                 cumulative_cal_seconds = 0.0
                 resistance_growth = 0.0
+                eff_charge = battery_config.charge_efficiency
+                eff_discharge = battery_config.discharge_efficiency
                 Battery_Energy_Wh = battery_config.nominal_energy_wh * battery_config.max_soc
                 n_replacements += 1
                 total_replacement_cost += battery_config.replacement_cost

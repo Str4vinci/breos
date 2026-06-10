@@ -1,5 +1,6 @@
 """Tests for weather and weather-derived helpers."""
 
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -74,6 +75,67 @@ def test_fetch_tmy_weather_accepts_hourly_frequency_alias(monkeypatch):
     weather, _metadata = fetch_tmy_weather_data(41.0, -8.0, sample_year=None, freq="H")
 
     assert len(weather) == 1
+
+
+def test_fetch_tmy_keeps_utc_instants_for_non_utc_location(monkeypatch):
+    # PVGIS serves UTC-ordered rows; synthetic GHI peaks at 11:00 UTC
+    # (solar noon near Berlin's longitude). The fetch must roll the data
+    # to local midnight without breaking each row's UTC instant — the old
+    # relabeling bug shifted irradiance against solar position by the
+    # location's full UTC offset.
+    from pvlib.iotools.pvgis import _coerce_and_roll_tmy
+
+    utc_idx = pd.date_range("1990-01-01", periods=8760, freq="h", tz="UTC")
+    ghi = np.where(
+        utc_idx.hour == 11,
+        800.0,
+        np.where(np.abs(utc_idx.hour - 11) <= 3, 300.0, 0.0),
+    )
+    raw = pd.DataFrame({"ghi": ghi, "temp_air": 10.0}, index=utc_idx)
+
+    def fake_get_pvgis_tmy(latitude, longitude, *args, roll_utc_offset=None, coerce_year=1990, **kwargs):
+        data = raw.copy()
+        if not (roll_utc_offset is None and coerce_year is None):
+            data = _coerce_and_roll_tmy(data, roll_utc_offset, coerce_year or 1990)
+        return data, {"inputs": {}}
+
+    monkeypatch.setattr("breos.weather.pvlib.iotools.get_pvgis_tmy", fake_get_pvgis_tmy)
+
+    tmy_data, _ = fetch_tmy_weather_data(
+        latitude=52.52,
+        longitude=13.405,
+        sample_year=2025,
+        timezone="Europe/Berlin",
+    )
+
+    assert len(tmy_data) == 8760
+    # Series starts at local midnight of the sample year (UTC+1 standard time)
+    assert tmy_data.index[0] == pd.Timestamp("2025-01-01 00:00", tz="Etc/GMT-1")
+    # Parsed back as UTC instants (as the pipeline does), the GHI peak must
+    # stay at 11:00 UTC; the relabeling bug moved it to 10:00 UTC.
+    utc_hours = tmy_data.index.tz_convert("UTC").hour
+    peak_utc_hour = tmy_data.groupby(utc_hours)["ghi"].mean().idxmax()
+    assert peak_utc_hour == 11
+    # On the local clock the mean-GHI peak lands at midday, not the UTC peak.
+    peak_local_hour = tmy_data.groupby(tmy_data.index.hour)["ghi"].mean().idxmax()
+    assert 11 <= peak_local_hour <= 15
+
+
+def test_fetch_tmy_without_sample_year_keeps_original_index(monkeypatch):
+    tmy = pd.DataFrame({"ghi": [0.0]}, index=pd.date_range("2009-01-01 00:00", periods=1, freq="h", tz="UTC"))
+    captured = {}
+
+    def fake_get_pvgis_tmy(*args, **kwargs):
+        captured.update(kwargs)
+        return tmy.copy(), {}
+
+    monkeypatch.setattr("breos.weather.pvlib.iotools.get_pvgis_tmy", fake_get_pvgis_tmy)
+
+    weather, _metadata = fetch_tmy_weather_data(41.0, -8.0, sample_year=None)
+
+    assert captured["roll_utc_offset"] is None
+    assert captured["coerce_year"] is None
+    assert weather.index[0] == tmy.index[0]
 
 
 def test_read_epw_accepts_15t_frequency_alias(monkeypatch):

@@ -55,6 +55,92 @@ class TestAppValidation:
         with pytest.raises(ValueError, match="latitude"):
             App({"location": {"longitude": -8.6}, "n_modules": 10, "annual_consumption_kwh": 4000})
 
+    def test_invalid_negative_battery_kwh(self):
+        # A negative battery must not silently reduce CAPEX
+        with pytest.raises(ValueError, match="battery_kwh"):
+            App({"location": "porto", "n_modules": 10, "annual_consumption_kwh": 4000, "battery_kwh": -5})
+
+    def test_invalid_top_level_tilt(self):
+        with pytest.raises(ValueError, match="tilt"):
+            App({"location": "porto", "n_modules": 10, "annual_consumption_kwh": 4000, "tilt": 120})
+
+    def test_invalid_top_level_azimuth(self):
+        with pytest.raises(ValueError, match="azimuth"):
+            App({"location": "porto", "n_modules": 10, "annual_consumption_kwh": 4000, "azimuth": 400})
+
+    def test_invalid_inverter_efficiency(self):
+        with pytest.raises(ValueError, match="inverter_efficiency"):
+            App({"location": "porto", "n_modules": 10, "annual_consumption_kwh": 4000, "inverter_efficiency": 1.5})
+
+    def test_invalid_inverter_loading_ratio(self):
+        with pytest.raises(ValueError, match="inverter_loading_ratio"):
+            App({"location": "porto", "n_modules": 10, "annual_consumption_kwh": 4000, "inverter_loading_ratio": 0})
+
+    def test_invalid_projection_years(self):
+        # Must fail at config load, not with a late RuntimeError mid-simulation
+        with pytest.raises(ValueError, match="projection_years"):
+            App({"location": "porto", "n_modules": 10, "annual_consumption_kwh": 4000, "projection_years": 0})
+
+    def test_invalid_pv_degradation_rate(self):
+        with pytest.raises(ValueError, match="pv_degradation_rate"):
+            App({"location": "porto", "n_modules": 10, "annual_consumption_kwh": 4000, "pv_degradation_rate": 1.5})
+
+    def test_invalid_battery_soc_window(self):
+        with pytest.raises(ValueError, match="battery_min_soc"):
+            App(
+                {
+                    "location": "porto",
+                    "n_modules": 10,
+                    "annual_consumption_kwh": 4000,
+                    "battery_min_soc": 0.9,
+                    "battery_max_soc": 0.2,
+                }
+            )
+
+    def test_invalid_battery_rte(self):
+        with pytest.raises(ValueError, match="battery_rte"):
+            App(
+                {
+                    "location": "porto",
+                    "n_modules": 10,
+                    "annual_consumption_kwh": 4000,
+                    "battery_rte": 1.5,
+                }
+            )
+
+    def test_invalid_battery_eol(self):
+        with pytest.raises(ValueError, match="battery_eol_percentage"):
+            App(
+                {
+                    "location": "porto",
+                    "n_modules": 10,
+                    "annual_consumption_kwh": 4000,
+                    "battery_eol_percentage": 0.0,
+                }
+            )
+
+    def test_invalid_pv_loss_overrides_value(self):
+        with pytest.raises(ValueError, match="pv_loss_overrides"):
+            App(
+                {
+                    "location": "porto",
+                    "n_modules": 10,
+                    "annual_consumption_kwh": 4000,
+                    "pv_loss_overrides": {"shading": 200},
+                }
+            )
+
+    def test_invalid_pv_loss_overrides_type(self):
+        with pytest.raises(TypeError, match="pv_loss_overrides"):
+            App(
+                {
+                    "location": "porto",
+                    "n_modules": 10,
+                    "annual_consumption_kwh": 4000,
+                    "pv_loss_overrides": 5.0,
+                }
+            )
+
     def test_custom_location_valid(self):
         app = App(
             {
@@ -111,6 +197,94 @@ class TestAppValidation:
         app.simulate()
 
         assert seen["rlp_directory"] == str(tmp_path)
+
+    def test_battery_soc_window_reaches_simulation(self, _patch_weather):
+        def _run(**extra):
+            app = App(
+                {
+                    "location": "porto",
+                    "n_modules": 6,
+                    "annual_consumption_kwh": 3000,
+                    "battery_kwh": 5.0,
+                    "projection_years": 1,
+                    **extra,
+                }
+            )
+            app.simulate()
+            return app
+
+        default_gi = _run().result()["grid_independence_pct"]
+        narrow_gi = _run(battery_min_soc=0.45, battery_max_soc=0.55).result()["grid_independence_pct"]
+
+        # A 10% SOC window stores a tenth of the energy of the default
+        # 10-90% window, so grid independence must drop
+        assert narrow_gi < default_gi
+
+    def test_pv_loss_overrides_increase_production(self, _patch_weather):
+        def _run(overrides):
+            app = App(
+                {
+                    "location": "porto",
+                    "n_modules": 6,
+                    "annual_consumption_kwh": 3000,
+                    "projection_years": 1,
+                    "pv_loss_overrides": overrides,
+                }
+            )
+            app.simulate()
+            return app.result()["pv_production_kwh"]
+
+        base = _run(None)
+        no_shading = _run({"shading": 0.0})
+
+        assert no_shading == pytest.approx(base / 0.97, rel=1e-6)
+
+    def test_smaller_inverter_clips_app_production(self, _patch_weather):
+        def _run(loading_ratio):
+            app = App(
+                {
+                    "location": "porto",
+                    "n_modules": 6,
+                    "annual_consumption_kwh": 3000,
+                    "projection_years": 1,
+                    "inverter_loading_ratio": loading_ratio,
+                }
+            )
+            app.simulate()
+            return app.result()["pv_production_kwh"]
+
+        # A heavily undersized inverter (high DC/AC ratio) must clip yield;
+        # before 0.3.0 the App paid clipping-sized inverter CAPEX while
+        # production was never clipped.
+        assert _run(3.0) < _run(1.0)
+
+    def test_simulate_localizes_load_to_location_timezone(self, _patch_weather, monkeypatch):
+        seen = {}
+
+        def _fake_load_profile(**kwargs):
+            seen["timezone"] = kwargs["timezone"]
+            return real_load_profile(
+                profile_type="1",
+                annual_consumption_kwh=kwargs["annual_consumption_kwh"],
+                start_date=kwargs["start_date"],
+                freq=kwargs["freq"],
+                num_years=kwargs["num_years"],
+                timezone=kwargs["timezone"],
+            )
+
+        monkeypatch.setattr(app_module, "load_profile", _fake_load_profile)
+
+        app = App(
+            {
+                "location": "porto",
+                "n_modules": 1,
+                "annual_consumption_kwh": 1000,
+                "projection_years": 1,
+            }
+        )
+        app.simulate()
+
+        assert seen["timezone"] == "Europe/Lisbon"
 
 
 # ---------------------------------------------------------------------------

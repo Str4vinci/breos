@@ -2,8 +2,37 @@
 
 import pytest
 
-from breos.economics import CostParams, calculate_costs, calculate_lcoe, find_payback_year
+from breos.economics import CostParams, calculate_costs, calculate_lcoe, cost_params_from_config, find_payback_year
 from breos.optimization import calculate_financials
+
+
+class TestCostDefaultsSingleSource:
+    def test_cost_params_from_config_empty_matches_dataclass_defaults(self):
+        # Missing config keys must fall back to the CostParams defaults, so
+        # config-driven and direct-construction paths cannot diverge.
+        assert cost_params_from_config({}, {}) == CostParams()
+
+    def test_resolve_costs_preset_fallbacks_match_dataclass_defaults(self, monkeypatch):
+        from breos import app_config
+
+        monkeypatch.setattr(app_config, "load_json", lambda name: {"minimal": {}})
+        cfg = {
+            "cost_preset": "minimal",
+            "inverter_loading_ratio": 1.25,
+            "inflation_rate": 0.02,
+            "discount_rate": 0.0,
+            "pv_degradation_rate": 0.005,
+        }
+
+        params = app_config.resolve_costs(cfg)
+
+        # A preset that omits every key behaves exactly like no preset
+        assert params == CostParams(
+            dc_ac_ratio=1.25,
+            inflation_rate=0.02,
+            discount_rate=0.0,
+            pv_degradation_rate=0.005,
+        )
 
 
 class TestCalculateCosts:

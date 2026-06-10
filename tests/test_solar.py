@@ -66,6 +66,35 @@ class TestPVProduction:
         )
         assert dc_5.sum() == pytest.approx(dc_1.sum() * 5, rel=0.001)
 
+    def test_loss_overrides_change_production(self, synthetic_weather, porto_location, pv_params):
+        kwargs = dict(
+            weather_data=synthetic_weather,
+            location=porto_location,
+            tilt=35,
+            surface_azimuth=180,
+            n_modules=1,
+            pv_params=pv_params,
+            freq="h",
+        )
+        base = calculate_pv_production_dc(**kwargs)
+        no_shading = calculate_pv_production_dc(**kwargs, loss_overrides={"shading": 0.0})
+
+        # Removing the 3% shading loss scales production by 1/0.97
+        assert no_shading.sum() == pytest.approx(base.sum() / 0.97, rel=1e-6)
+
+    def test_loss_overrides_reject_unknown_component(self, synthetic_weather, porto_location, pv_params):
+        with pytest.raises(ValueError, match="Unknown loss component"):
+            calculate_pv_production_dc(
+                weather_data=synthetic_weather,
+                location=porto_location,
+                tilt=35,
+                surface_azimuth=180,
+                n_modules=1,
+                pv_params=pv_params,
+                freq="h",
+                loss_overrides={"typo_component": 1.0},
+            )
+
     def test_zero_ghi_zero_production(self, porto_location, pv_params):
         # Night-time weather: all irradiance = 0
         idx = pd.date_range("2023-01-01", periods=24, freq="h", tz="UTC")
