@@ -90,7 +90,9 @@ class BatteryConfig:
     enable_replacement: bool = True
     replacement_cost: Optional[float] = None  # Auto-computed from cost per kWh if not set
     calendar_model: str = "naumann_lam_field_calibrated"  # Current field-calibrated fit (canonical name)
-    # Resistance fade tracking
+    # Resistance fade (opt-in): grows internal resistance daily and derates
+    # the charge/discharge efficiencies in the energy loop so the effective
+    # round-trip efficiency declines as the battery ages.
     enable_resistance_fade: bool = False  # Enable Naumann resistance growth model
     initial_resistance_growth: float = 0.0  # Initial relative resistance growth (fraction, 0=new)
     # Thermal model
@@ -235,7 +237,20 @@ def simulate_energy_balance(
     soc_buf_idx = 0
     fec_cum = initial_fec
     cumulative_cal_seconds = initial_calendar_seconds
-    resistance_growth = initial_resistance_growth
+    # The function argument is the multi-year continuation seam (used by the
+    # App's year loop); when left at its default the battery's configured
+    # starting resistance applies.
+    resistance_growth = (
+        initial_resistance_growth if initial_resistance_growth > 0.0 else battery_config.initial_resistance_growth
+    )
+    # Charge/discharge efficiencies, derated by resistance growth when the
+    # fade model is enabled; updated after each daily degradation step.
+    eff_charge = battery_config.charge_efficiency
+    eff_discharge = battery_config.discharge_efficiency
+    if battery_config.enable_resistance_fade and resistance_growth > 0.0:
+        _rte_derate = math.sqrt(1.0 + resistance_growth)
+        eff_charge /= _rte_derate
+        eff_discharge /= _rte_derate
     n_replacements = 0
     total_replacement_cost = 0.0
     cumulative_cycle_deg = initial_cumulative_cycle_deg
@@ -322,8 +337,8 @@ def simulate_energy_balance(
 
                 # Charge battery with surplus DC (no inverter loss)
                 charge_room = max(0.0, Emax - Battery_Energy_Wh)
-                charge_in = min(surplus_dc, charge_room / battery_config.charge_efficiency)
-                Battery_Energy_Wh += charge_in * battery_config.charge_efficiency
+                charge_in = min(surplus_dc, charge_room / eff_charge)
+                Battery_Energy_Wh += charge_in * eff_charge
 
                 # Export remainder (DC -> AC) within the inverter headroom
                 # left after serving the load; the rest is curtailed
@@ -337,7 +352,7 @@ def simulate_energy_balance(
                 available = Battery_Energy_Wh - Emin
                 if available > 0:
                     # Battery discharge: DC -> AC
-                    eff_total = battery_config.discharge_efficiency * battery_config.inverter_efficiency
+                    eff_total = eff_discharge * battery_config.inverter_efficiency
                     # How much DC do we need to draw to provide 'deficit' AC?
                     # Battery discharge shares the inverter AC rating with PV.
                     dc_needed = deficit / eff_total if eff_total > 0 else deficit
@@ -366,8 +381,8 @@ def simulate_energy_balance(
                 T_ambient,
                 charge_power_w,
                 discharge_power_w,
-                battery_config.charge_efficiency,
-                battery_config.discharge_efficiency,
+                eff_charge,
+                eff_discharge,
                 battery_config.thermal_resistance_kw,
             )
         T_cell_day_sum += T_cell
@@ -472,9 +487,13 @@ def simulate_energy_balance(
                 cumulative_resistance_cycle += dR_cycle
                 cumulative_resistance_calendar += dR_calendar
 
-                effective_rte = (battery_config.charge_efficiency * battery_config.discharge_efficiency) / (
-                    1.0 + resistance_growth
-                )
+                # Feed the resistance penalty back into the energy loop,
+                # split evenly across charge and discharge so their product
+                # equals the effective round-trip efficiency.
+                _rte_derate = math.sqrt(1.0 + resistance_growth)
+                eff_charge = battery_config.charge_efficiency / _rte_derate
+                eff_discharge = battery_config.discharge_efficiency / _rte_derate
+                effective_rte = eff_charge * eff_discharge
 
             # Battery replacement check
             if battery_config.enable_replacement and battery_soh_decimal <= battery_config.eol_percentage:
@@ -483,6 +502,8 @@ def simulate_energy_balance(
                 fec_cum = 0.0
                 cumulative_cal_seconds = 0.0
                 resistance_growth = 0.0
+                eff_charge = battery_config.charge_efficiency
+                eff_discharge = battery_config.discharge_efficiency
                 Battery_Energy_Wh = battery_config.nominal_energy_wh * battery_config.max_soc
                 n_replacements += 1
                 total_replacement_cost += battery_config.replacement_cost

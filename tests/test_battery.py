@@ -110,6 +110,36 @@ class TestSimulateEnergyBalance:
         assert len(results_df) == 48
         assert summary_df["Total Load [kWh]"].iloc[0] == pytest.approx(48.0)
 
+    def test_resistance_fade_derates_energy_loop_efficiency(self):
+        # enable_resistance_fade must feed the effective RTE back into the
+        # charge/discharge flows, not just record it: with substantial
+        # resistance growth the same scenario delivers less battery energy.
+        idx = pd.date_range("2025-01-01 00:00", periods=24, freq="h", tz="UTC")
+        pv = pd.Series([0.0] * 8 + [2000.0] * 8 + [0.0] * 8, index=idx)
+        houseload = pd.DataFrame({"Load": [800.0] * 8 + [0.0] * 8 + [800.0] * 8}, index=idx)
+
+        def _run(**kwargs):
+            config = BatteryConfig(
+                nominal_energy_wh=5000,
+                standby_loss_wh=0.0,
+                enable_replacement=False,
+                **kwargs,
+            )
+            results_df, *_ = simulate_energy_balance(
+                pv_dc=pv,
+                houseload=houseload,
+                battery_config=config,
+                freq="h",
+                temperature_series=pd.Series(25.0, index=idx),
+            )
+            return results_df["Import_From_Grid"].sum()
+
+        import_base = _run()
+        import_faded = _run(enable_resistance_fade=True, initial_resistance_growth=1.0)
+
+        # 1.0 relative resistance growth halves the round-trip efficiency
+        assert import_faded > import_base
+
     def test_inverter_ac_capacity_clips_pv_and_export(self):
         idx = pd.date_range("2025-01-01 00:00", periods=4, freq="h", tz="UTC")
         pv_dc = pd.Series([0.0, 2000.0, 3000.0, 1000.0], index=idx)
