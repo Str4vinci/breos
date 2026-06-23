@@ -11,7 +11,7 @@ import pandas as pd
 from breos.app_config import ResolvedAppConfig, build_costs_dict
 from breos.app_inputs import AppRuntimeDependencies, prepare_simulation_inputs
 from breos.battery import BatteryConfig, simulate_energy_balance
-from breos.economics import calculate_lcoe, cost_analysis_projection, find_payback_year
+from breos.economics import calculate_lcoe_from_projection, cost_analysis_projection, find_payback_year
 from breos.utils import get_hours_per_step
 
 
@@ -166,14 +166,10 @@ def run_app_simulation(
         emissions_params=resolved.emissions_params,
     )
 
-    year1_pv = yearly_df.iloc[0]["PV_Production_kWh"]
-    lcoe = calculate_lcoe(
+    lcoe = calculate_lcoe_from_projection(
+        cost_projection,
         total_investment=costs["total_initial_cost"],
-        annual_production_kwh=year1_pv,
-        annual_operation_cost=costs["annual_operation_cost"],
-        lifetime_years=projection_years,
         discount_rate=cfg["discount_rate"],
-        degradation_rate=degradation_rate,
     )
 
     return SimulationArtifacts(

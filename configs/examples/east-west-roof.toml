@@ -1,0 +1,28 @@
+# Split east/west rooftop: two arrays at the same tilt facing opposite ways.
+# Flattens the generation curve to better cover morning and evening load,
+# instead of one midday peak. Uses [[pv_arrays]] instead of a single n_modules.
+#
+#   breos run --config configs/examples/east-west-roof.toml
+
+location = "porto"
+annual_consumption_kwh = 4000
+battery_kwh = 5.0
+
+load_profile = "demandlib_h0"
+cost_preset = "residential_pt"
+emissions_country = "PT"
+projection_years = 20
+resolution = "h"
+
+# Total module count is summed from the arrays below (no top-level n_modules).
+# Each array may also set its own `module`; otherwise pv_module / the default
+# catalogue module is used.
+[[pv_arrays]]
+modules = 6
+tilt = 15
+azimuth = 90     # east-facing
+
+[[pv_arrays]]
+modules = 6
+tilt = 15
+azimuth = 270    # west-facing

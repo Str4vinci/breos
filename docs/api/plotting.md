@@ -71,8 +71,10 @@ styling overrides.
 
    breos.plotting.plot_calendar_aging_sensitivity
    breos.plotting.plot_temperature_sensitivity_comparison
+   breos.plotting.plot_montecarlo_simulation
    breos.plotting.plot_montecarlo_npv_distribution
    breos.plotting.plot_montecarlo_grid_independence_distribution
+   breos.plotting.plot_montecarlo_final_soh_distribution
 ```
 
 ## Batch comparison

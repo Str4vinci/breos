@@ -5,7 +5,7 @@ Historical Weather Data Fetcher
 Batch-fetch historical weather data from Open-Meteo's Archive API for multiple cities.
 
 Reads a JSON config specifying cities (inline or from locations.json) and a date range,
-then calls pvbat.weather.fetch_weather_data() for each city. Data is saved to weather/.
+then calls breos.weather.fetch_weather_data() for each city. Data is saved to weather/.
 
 Usage:
     python tools/fetch_historical_weather.py configs/tools/fetch_berlin_lisbon.json

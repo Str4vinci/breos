@@ -3,7 +3,7 @@ Polysun-style battery degradation model.
 
 Implements the Wöhler curve + Miner's linear damage accumulation methodology
 used by Polysun (Vela Solaris) for battery lifetime estimation. This serves
-as a comparison baseline against PVBAT's Naumann-based continuous degradation.
+as a comparison baseline against BREOS's Naumann-based continuous degradation.
 
 Polysun methodology:
     1. Cycle counting: 20 DOD histogram bins (equal width)

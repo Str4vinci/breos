@@ -149,7 +149,7 @@ class TestAppValidation:
                 "annual_consumption_kwh": 3000,
             }
         )
-        assert app._lat == 41.15
+        assert app._resolved.lat == 41.15
 
     def test_pv_arrays_allow_missing_n_modules(self):
         app = App(
@@ -273,6 +273,28 @@ class TestAppValidation:
             )
 
         monkeypatch.setattr(app_module, "load_profile", _fake_load_profile)
+
+        app = App(
+            {
+                "location": "porto",
+                "n_modules": 1,
+                "annual_consumption_kwh": 1000,
+                "projection_years": 1,
+            }
+        )
+        app.simulate()
+
+        assert seen["timezone"] == "Europe/Lisbon"
+
+    def test_simulate_passes_location_timezone_to_tmy_fetch(self, monkeypatch, synthetic_weather):
+        seen = {}
+
+        def _fake_fetch(**kwargs):
+            seen["timezone"] = kwargs["timezone"]
+            return synthetic_weather, {"inputs": {"location": {"latitude": 41.15, "longitude": -8.63, "elevation": 0}}}
+
+        monkeypatch.setattr(app_module, "load_weather", lambda **kw: None)
+        monkeypatch.setattr(app_module, "fetch_tmy_weather_data", _fake_fetch)
 
         app = App(
             {

@@ -46,13 +46,6 @@ class CostParams:
     maintenance_cost_fixed: float = 0.0  # € fixed /year
     operation_cost: float = 0.0  # € additional /year
 
-    # Thermal system costs (TES + Heat Pump)
-    tes_cost_per_kwh_th: float = 0.0  # €/kWh_th (0 = not included)
-    heat_pump_cost_per_kw_th: float = 0.0  # €/kW_th (0 = not included)
-    hp_maintenance_annual: float = 0.0  # €/year heat pump maintenance
-    gas_cost_per_kwh: float = 0.0  # €/kWh baseline heating fuel cost
-    tes_installation_cost: float = 0.0  # € fixed TES installation
-
     # Analysis parameters
     inflation_rate: float = 0.02
     sell_price_inflation: float = 0.0
@@ -99,11 +92,6 @@ def cost_params_from_config(
         maintenance_cost_per_panel=costs_config.get("maintenance_cost_per_panel", defaults.maintenance_cost_per_panel),
         maintenance_cost_fixed=costs_config.get("maintenance_cost", defaults.maintenance_cost_fixed),
         operation_cost=costs_config.get("operation_cost", defaults.operation_cost),
-        tes_cost_per_kwh_th=costs_config.get("tes_cost_per_kwh_th", defaults.tes_cost_per_kwh_th),
-        heat_pump_cost_per_kw_th=costs_config.get("heat_pump_cost_per_kw_th", defaults.heat_pump_cost_per_kw_th),
-        hp_maintenance_annual=costs_config.get("hp_maintenance_annual", defaults.hp_maintenance_annual),
-        gas_cost_per_kwh=costs_config.get("gas_cost_per_kwh", defaults.gas_cost_per_kwh),
-        tes_installation_cost=costs_config.get("tes_installation_cost", defaults.tes_installation_cost),
         inflation_rate=financials_config.get("inflation_rate", defaults.inflation_rate),
         sell_price_inflation=financials_config.get("sell_price_inflation", defaults.sell_price_inflation),
         discount_rate=financials_config.get("discount_rate", defaults.discount_rate),
@@ -116,8 +104,6 @@ def calculate_costs(
     module_power_w: float,
     battery_capacity_wh: float = 0.0,
     cost_params: Optional[CostParams] = None,
-    tes_capacity_kwh_th: float = 0.0,
-    heat_pump_kw_th: float = 0.0,
 ) -> Dict[str, float]:
     """
     Calculate system costs (CAPEX) and return cost dictionary.
@@ -127,8 +113,6 @@ def calculate_costs(
         module_power_w: Power per module in Watts (STC)
         battery_capacity_wh: Battery capacity in Wh (0 for no battery)
         cost_params: Cost parameters
-        tes_capacity_kwh_th: TES capacity in kWh_th (0 for no TES)
-        heat_pump_kw_th: Heat pump rated thermal power in kW_th (0 for no HP)
 
     Returns:
         Dictionary with cost breakdown and totals
@@ -159,37 +143,22 @@ def calculate_costs(
     # Other costs
     other_costs = (cost_params.other_cost_per_module * n_modules) + cost_params.other_cost_fixed
 
-    # TES + Heat Pump costs
-    tes_cost = tes_capacity_kwh_th * cost_params.tes_cost_per_kwh_th
-    hp_cost = heat_pump_kw_th * cost_params.heat_pump_cost_per_kw_th
-    tes_install = cost_params.tes_installation_cost if (tes_capacity_kwh_th > 0 or heat_pump_kw_th > 0) else 0.0
-
     # Maintenance
     annual_operation_cost = (
         cost_params.maintenance_cost_per_panel * n_modules
         + cost_params.maintenance_cost_fixed
         + cost_params.operation_cost
-        + (cost_params.hp_maintenance_annual if heat_pump_kw_th > 0 else 0.0)
     )
 
     # Total CAPEX
     total_initial_cost = (
-        pv_cost
-        + inverter_cost
-        + battery_cost
-        + installation_cost
-        + cost_params.land_cost
-        + other_costs
-        + tes_cost
-        + hp_cost
-        + tes_install
+        pv_cost + inverter_cost + battery_cost + installation_cost + cost_params.land_cost + other_costs
     )
 
     return {
         "electricity_cost": cost_params.electricity_cost,
         "electricity_sold_cost": cost_params.electricity_sold_cost,
         "daily_power_cost": cost_params.daily_power_cost,
-        "gas_cost_per_kwh": cost_params.gas_cost_per_kwh,
         "total_initial_cost": total_initial_cost,
         "annual_operation_cost": annual_operation_cost,
         "pv_cost": pv_cost,
@@ -197,9 +166,6 @@ def calculate_costs(
         "battery_cost": battery_cost,
         "installation_cost": installation_cost,
         "other_costs": other_costs,
-        "tes_cost": tes_cost,
-        "hp_cost": hp_cost,
-        "tes_installation_cost": tes_install,
     }
 
 
@@ -254,8 +220,6 @@ def cost_analysis_projection(
         # Map yearly_summary_df to projection (it should already have num_years rows)
         yearly_data = yearly_summary_df.set_index("Year")
 
-        # Get first year data for baseline calculation
-        first_year_load = yearly_data["Load_kWh"].iloc[0]
         first_year_days = 365  # Assume full year
 
         # Factors
@@ -263,17 +227,10 @@ def cost_analysis_projection(
         sell_inflation_factors = (1 + sell_price_inflation) ** (proj["Year"] - 1)
         discount_factors = 1 / ((1 + discount_rate) ** proj["Year"])
 
-        # Baseline (no system) - uses first year's load, scaled by inflation
-        # Include gas heating cost if thermal system is present
-        gas_cost = costs.get("gas_cost_per_kwh", 0.0)
-        thermal_demand_kwh = yearly_data.get("Thermal_Demand_kWh", pd.Series(0.0, index=yearly_data.index))
-        first_year_thermal = float(thermal_demand_kwh.iloc[0]) if hasattr(thermal_demand_kwh, "iloc") else 0.0
-        baseline_gas_annual = first_year_thermal * gas_cost
-
+        # Baseline (no system) - use the actual yearly demand from propagation.
+        proj["Load_kWh"] = yearly_data["Load_kWh"].values
         proj["Cost_No_Sys_Annual"] = (
-            first_year_load * costs["electricity_cost"]
-            + first_year_days * costs["daily_power_cost"]
-            + baseline_gas_annual
+            proj["Load_kWh"] * costs["electricity_cost"] + first_year_days * costs["daily_power_cost"]
         ) * inflation_factors
         proj["Cost_No_Sys_Cumulative"] = proj["Cost_No_Sys_Annual"].cumsum()
 
@@ -325,6 +282,11 @@ def cost_analysis_projection(
         proj.attrs["final_npv_savings"] = proj["Savings_Cumulative_NPV"].iloc[-1]
         if total_replacement_cost is not None:
             proj.attrs["total_replacement_cost"] = total_replacement_cost
+        proj.attrs["lcoe_eur_kwh"] = calculate_lcoe_from_projection(
+            proj,
+            total_investment=costs["total_initial_cost"],
+            discount_rate=discount_rate,
+        )
 
         # CO2 emissions avoided
         if emissions_params is not None:
@@ -492,6 +454,11 @@ def cost_analysis_projection(
 
     proj.attrs["total_investment"] = costs["total_initial_cost"]
     proj.attrs["final_npv_savings"] = proj["Savings_Cumulative_NPV"].iloc[-1]
+    proj.attrs["lcoe_eur_kwh"] = calculate_lcoe_from_projection(
+        proj,
+        total_investment=costs["total_initial_cost"],
+        discount_rate=discount_rate,
+    )
 
     # CO2 emissions avoided
     if emissions_params is not None:
@@ -578,5 +545,73 @@ def calculate_lcoe(
     for t in range(1, lifetime_years + 1):
         year_production = annual_production_kwh * ((1 - degradation_rate) ** (t - 1))
         npv_production += year_production / ((1 + discount_rate) ** t)
+
+    return npv_costs / npv_production if npv_production > 0 else float("inf")
+
+
+def calculate_lcoe_from_projection(
+    cost_projection: pd.DataFrame,
+    total_investment: Optional[float] = None,
+    discount_rate: float = 0.0,
+    production_column: str = "PV_Production_kWh",
+) -> float:
+    """Calculate LCOE from a simulated multi-year projection.
+
+    This variant is intended for simulation outputs that already contain
+    year-by-year PV production and replacement costs. It uses system CAPEX,
+    operation costs, and replacement costs as the cost basis; grid import
+    charges, fixed grid charges, and export revenue are excluded because those
+    are tariff outcomes rather than generation costs.
+
+    Args:
+        cost_projection: DataFrame from :func:`cost_analysis_projection`.
+        total_investment: System CAPEX. If omitted, uses
+            ``cost_projection.attrs["total_investment"]`` or infers it from
+            the first cumulative/annual system-cost row.
+        discount_rate: Discount rate used for production and annual costs.
+        production_column: Column containing yearly production in kWh.
+
+    Returns:
+        LCOE in €/kWh.
+    """
+    if cost_projection.empty:
+        return float("inf")
+    if production_column not in cost_projection.columns:
+        raise ValueError(f"cost_projection must include {production_column!r}")
+
+    if total_investment is None:
+        total_investment = cost_projection.attrs.get("total_investment")
+    if total_investment is None:
+        if {"Cost_System_Cumulative", "Cost_System_Annual"}.issubset(cost_projection.columns):
+            first = (
+                cost_projection.sort_values("Year").iloc[0]
+                if "Year" in cost_projection.columns
+                else cost_projection.iloc[0]
+            )
+            total_investment = float(first["Cost_System_Cumulative"] - first["Cost_System_Annual"])
+        else:
+            raise ValueError("total_investment is required when it cannot be inferred from cost_projection")
+
+    years = (
+        pd.to_numeric(cost_projection["Year"], errors="coerce")
+        if "Year" in cost_projection.columns
+        else pd.Series(range(1, len(cost_projection) + 1), index=cost_projection.index)
+    )
+    discount_factors = 1 / ((1 + discount_rate) ** years)
+
+    production = pd.to_numeric(cost_projection[production_column], errors="coerce").fillna(0.0)
+    operation = (
+        pd.to_numeric(cost_projection["Cost_Operation"], errors="coerce").fillna(0.0)
+        if "Cost_Operation" in cost_projection.columns
+        else pd.Series(0.0, index=cost_projection.index)
+    )
+    replacement = (
+        pd.to_numeric(cost_projection["Cost_Replacement"], errors="coerce").fillna(0.0)
+        if "Cost_Replacement" in cost_projection.columns
+        else pd.Series(0.0, index=cost_projection.index)
+    )
+
+    npv_costs = float(total_investment) + float(((operation + replacement) * discount_factors).sum())
+    npv_production = float((production * discount_factors).sum())
 
     return npv_costs / npv_production if npv_production > 0 else float("inf")

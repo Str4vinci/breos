@@ -3,7 +3,7 @@
 import pytest
 
 import breos
-from breos.inverter import calculate_dc_ac_efficiency, calculate_dc_ac_power
+from breos.inverter import calculate_dc_ac_power
 
 
 def test_dc_ac_power_exposes_dc_side_clipping_losses():
@@ -18,7 +18,6 @@ def test_dc_ac_power_exposes_dc_side_clipping_losses():
     assert result.clipping_loss_dc_w == pytest.approx(250.0)
     assert result.clipping_loss_ac_equivalent_w == pytest.approx(200.0)
     assert result.total_dc_input_w == pytest.approx(1500.0)
-    assert calculate_dc_ac_efficiency(1500.0, 1000.0, 0.8) == pytest.approx(1000.0)
 
 
 def test_dc_ac_power_clips_negative_inputs_to_zero():

@@ -31,17 +31,14 @@ NEW_PRICES = {
     "pt": {
         "electricity_cost": _COSTS_CFG["residential_pt"]["electricity_cost"],
         "electricity_sold_cost": _COSTS_CFG["residential_pt"]["electricity_sold_cost"],
-        "gas_cost_per_kwh": _COSTS_CFG["residential_pt"].get("gas_cost_per_kwh", 0.08),
     },
     "es": {
         "electricity_cost": _COSTS_CFG["residential_es"]["electricity_cost"],
         "electricity_sold_cost": _COSTS_CFG["residential_es"]["electricity_sold_cost"],
-        "gas_cost_per_kwh": _COSTS_CFG["residential_es"].get("gas_cost_per_kwh", 0.08),
     },
     "de": {
         "electricity_cost": _COSTS_CFG["residential_de"]["electricity_cost"],
         "electricity_sold_cost": _COSTS_CFG["residential_de"]["electricity_sold_cost"],
-        "gas_cost_per_kwh": _COSTS_CFG["residential_de"].get("gas_cost_per_kwh", 0.12),
     },
 }
 
@@ -58,11 +55,11 @@ _SKIP_PREFIXES = (
     "ea_sensitivity",
     "montecarlo",
     "webapp_test",
-    "tou_germany_analysis",
+    "tariff_sensitivity",
     "optimization_run",
     "azitilt_optimization",
 )
-_SKIP_EXACT = {"comparison", "joao_tables", "joao_pv_battery_optimization", "tou_reference_case_spain"}
+_SKIP_EXACT = {"comparison", "joao_tables", "joao_pv_battery_optimization", "reference_case_spain"}
 
 
 def detect_country(results_dir: Path) -> str:
@@ -144,7 +141,6 @@ def recalculate_dir(results_dir: Path, dry_run: bool = False) -> str:
     costs = {
         "electricity_cost": prices["electricity_cost"],
         "electricity_sold_cost": prices["electricity_sold_cost"],
-        "gas_cost_per_kwh": prices["gas_cost_per_kwh"],
         "total_initial_cost": params["total_initial_cost"],
         "annual_operation_cost": params["annual_operation_cost"],
         "daily_power_cost": params["daily_power_cost"],

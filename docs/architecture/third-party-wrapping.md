@@ -2,7 +2,7 @@
 
 **Status:** Proposed — not yet implemented
 **Tracked by:** [#11](https://github.com/Str4vinci/breos/issues/11)
-**Owner:** TBD
+**Owner:** BREOS maintainers
 
 ## Problem
 
@@ -22,11 +22,12 @@ BREOS may break. Concretely today:
   modules.
 - `Location` from `pvlib.location` appears in the public signatures of
   `solar.calculate_pv_production_dc`, `solar.calculate_pv_production_ac`,
-  `solar.calculate_multi_array_production`, `acc_sizer`, `app`, and
+  `solar.calculate_multi_array_production`, `app`, and
   `optimization`. Anyone calling BREOS must construct a `pvlib.Location`
   themselves.
-- `rainflow` is imported in `battery.py`, `scipy.optimize.minimize` in
-  `acc.py`, `scipy.interpolate.Akima1DInterpolator` in `weather.py`.
+- `rainflow` is imported in `battery.py`, `scipy.optimize.minimize_scalar` in
+  `optimization.py`, `scipy.optimize.differential_evolution` in a tooling
+  script, and `scipy.interpolate.Akima1DInterpolator` in `weather.py`.
 
 ## Goal
 
@@ -98,8 +99,8 @@ signatures.
 ### Phase 2 — small scientific deps
 
 - `rainflow` → `breos.adapters.cycle_counting` (used in `battery.py`).
-- `scipy.optimize.minimize` → `breos.adapters.optimizer` (used in
-  `acc.py`).
+- `scipy.optimize.minimize_scalar` → `breos.adapters.optimizer` (used in
+  `optimization.py`).
 - `scipy.interpolate.Akima1DInterpolator` → `breos.adapters.interpolation`
   (used in `weather.py`).
 - `numba.jit/prange` → keep direct (perf-critical, tightly coupled to
@@ -109,8 +110,8 @@ signatures.
 
 - `openmeteo-requests`, `requests-cache` → `breos.adapters.weather_client`.
 - `geopy`, `timezonefinder` → `breos.adapters.geo`.
-- `nrel-pysam` → `breos.adapters.sam_model` (if/when used beyond optional
-  paths).
+- `nrel-pysam` → `breos.adapters.sam_model` (reached transitively through
+  pvlib's `fit_cec_sam` on the default PV path).
 - `pymoo` → `breos.adapters.multi_objective` (used in `optimization.py`).
 - `openpyxl`, `pyarrow` → keep in validation/export-specific paths.
 

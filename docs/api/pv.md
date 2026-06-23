@@ -3,6 +3,12 @@
 DC and AC production, multi-array layouts, the built-in module catalogue,
 and inverter sizing.
 
+BREOS uses pvlib for solar position, irradiance transposition, cell
+temperature, and PV performance model pieces. The functions below document the
+BREOS wrapper surface; for PV modeling background and parameter references,
+start with the [pvlib documentation](https://pvlib-python.readthedocs.io/en/stable/)
+and the project [Resources](../resources.md) page.
+
 ## Production
 
 ```{eval-rst}

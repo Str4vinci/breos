@@ -1,0 +1,16 @@
+# Germany scenario: location, cost preset, and emissions factor swapped together.
+# Compare against configs/examples/pv-plus-battery.toml (Portugal) to see how
+# tariffs and grid carbon intensity change the economics and CO2 results.
+#
+#   breos run --config configs/examples/germany-berlin.toml
+
+location = "berlin"
+n_modules = 12
+annual_consumption_kwh = 4500
+battery_kwh = 7.5
+
+load_profile = "demandlib_h0"
+cost_preset = "residential_de"
+emissions_country = "DE"
+projection_years = 20
+resolution = "h"

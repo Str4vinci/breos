@@ -1,0 +1,52 @@
+# ============================================================================
+# BREOS run config — annotated reference
+#
+# Shows every available key with its default in [brackets]. Delete any line to
+# fall back to the default. This file doubles as a realistic PV + battery run.
+#
+#   breos run --config configs/examples/pv-plus-battery.toml
+#
+# List valid values for the catalogue fields with:
+#   breos list locations | modules | cost-presets | emissions | load-profiles
+# ============================================================================
+
+# --- Required ---------------------------------------------------------------
+location = "porto"                 # preset key; see `breos list locations`
+n_modules = 10                     # PV module count (omit if using [[pv_arrays]])
+annual_consumption_kwh = 4000      # yearly household demand
+
+# --- Storage ----------------------------------------------------------------
+battery_kwh = 5.0                  # [0.0] usable capacity; 0 = PV-only
+
+# --- Catalogue selections ---------------------------------------------------
+pv_module = "Suntech_STP550S_STC"  # [first catalogue module]; `breos list modules`
+cost_preset = "residential_pt"     # [none] tariffs + capex; `breos list cost-presets`
+emissions_country = "PT"           # [none] grid carbon intensity; `breos list emissions`
+load_profile = "demandlib_h0"      # ["1"] bundled H0 profile; `breos list load-profiles`
+# rlp_directory = "external_rlp"   # only needed for external (non-bundled) profiles
+
+# --- Array geometry ---------------------------------------------------------
+tilt = 35                          # [optimal for latitude] degrees from horizontal
+azimuth = 180                      # [equator-facing] 180 = south, 90 = east, 270 = west
+
+# --- Time + horizon ---------------------------------------------------------
+resolution = "h"                   # ["h"] "h" (hourly) or "15min"
+projection_years = 20              # [20] economic projection horizon
+start_date = "2023-01-01"          # ["2023-01-01"] first simulated day
+
+# --- Economics --------------------------------------------------------------
+inflation_rate = 0.02              # [0.02] annual electricity price growth
+discount_rate = 0.03               # [0.03] NPV discount rate
+pv_degradation_rate = 0.005        # [0.005] annual PV output loss
+
+# --- Inverter ---------------------------------------------------------------
+dc_coupled = true                  # [true] true = DC-coupled, false = AC-coupled
+inverter_efficiency = 0.96         # [0.96]
+inverter_loading_ratio = 1.25      # [1.25] DC/AC oversizing ratio
+
+# --- Battery detail (advanced) ----------------------------------------------
+calendar_model = "naumann_lam_field_calibrated"  # calendar aging model
+battery_min_soc = 0.10             # [0.10] lower SoC limit
+battery_max_soc = 0.90             # [0.90] upper SoC limit
+battery_eol_percentage = 0.70      # [0.70] capacity fraction at end-of-life
+# battery_rte = 0.95               # [derived] round-trip efficiency override

@@ -44,7 +44,7 @@ LAM_EA_J_MOL = 38500.0  # Activation Energy (0.4 eV converted to J/mol)
 LAM_EXPONENT_B = 0.75  # Time exponent (Based on Lam Fig 5A LFP cluster)
 LAM_SOC_EXPONENT_N = 0.75  # Assume same SOC exponent as Naumann/general LFP
 
-# === Naumann + Lam field-calibrated parameters (current default, 15-min) ===
+# === Naumann + Lam field-calibrated parameters v1 (default, 15-min) ===
 # Re-run on 2026-04-12 against the effective 5-system Zenodo LFP field set
 # (systems 14, 15, 17, 20, 21) using the finalized validation pipeline.
 # Mean RMSE = 4.40pp on the full calibration fit; LOO mean CV RMSE = 6.0pp.
@@ -52,28 +52,20 @@ NAUMANN_LAM_FIELD_CALIBRATED_K0_FRAC = 8.019530e-08
 NAUMANN_LAM_FIELD_CALIBRATED_EA_J_MOL = 11876.09
 NAUMANN_LAM_FIELD_CALIBRATED_EXPONENT_B = 0.7701374
 NAUMANN_LAM_FIELD_CALIBRATED_SOC_EXPONENT_N = 0.1010299
+NAUMANN_LAM_FIELD_CALIBRATED_V1_K0_FRAC = NAUMANN_LAM_FIELD_CALIBRATED_K0_FRAC
+NAUMANN_LAM_FIELD_CALIBRATED_V1_EA_J_MOL = NAUMANN_LAM_FIELD_CALIBRATED_EA_J_MOL
+NAUMANN_LAM_FIELD_CALIBRATED_V1_EXPONENT_B = NAUMANN_LAM_FIELD_CALIBRATED_EXPONENT_B
+NAUMANN_LAM_FIELD_CALIBRATED_V1_SOC_EXPONENT_N = NAUMANN_LAM_FIELD_CALIBRATED_SOC_EXPONENT_N
 
-# === Lam Calibrated Parameters — Relaxed Calendar Aging (1.5× Ea) ===
-# Sensitivity variant: 1.5× activation energy reduces calendar degradation
-# at typical residential temperatures (below 25°C reference).  Higher Ea
-# means the Arrhenius rate drops more steeply below T_ref, producing
-# slower calendar aging in mild climates like Porto (~15°C annual mean).
-LAM_CAL_RELAXED_K0_FRAC = NAUMANN_LAM_FIELD_CALIBRATED_K0_FRAC  # Same rate constant
-LAM_CAL_RELAXED_EA_J_MOL = NAUMANN_LAM_FIELD_CALIBRATED_EA_J_MOL * 1.5  # 1.5× activation energy
-LAM_CAL_RELAXED_EXPONENT_B = NAUMANN_LAM_FIELD_CALIBRATED_EXPONENT_B  # Same time exponent
-LAM_CAL_RELAXED_SOC_EXPONENT_N = NAUMANN_LAM_FIELD_CALIBRATED_SOC_EXPONENT_N  # Same SOC sensitivity
-
-# === Modern LFP Parameters (projected for 2020+ cells) ===
-# The naumann_lam_field_calibrated model was fitted to 2015-era residential LFP systems.
-# Modern cells (CATL/BYD, 2020+) use improved electrolyte formulations and
-# BMS designs that are expected to reduce calendar aging. No field calibration
-# data is available for these newer cells yet.
-# Conservative estimate: halve the calendar rate constant k0 while keeping
-# the same physical mechanisms (activation energy, time exponent, SOC sensitivity).
-MODERN_LFP_K0_FRAC = NAUMANN_LAM_FIELD_CALIBRATED_K0_FRAC * 0.5  # 50% reduction in calendar rate constant
-MODERN_LFP_EA_J_MOL = NAUMANN_LAM_FIELD_CALIBRATED_EA_J_MOL  # Same activation energy (same mechanism)
-MODERN_LFP_EXPONENT_B = NAUMANN_LAM_FIELD_CALIBRATED_EXPONENT_B  # Same time exponent
-MODERN_LFP_SOC_EXPONENT_N = NAUMANN_LAM_FIELD_CALIBRATED_SOC_EXPONENT_N  # Same SOC sensitivity
+# === Naumann + Lam field-calibrated parameters v2 (15-min) ===
+# Revalidation on 2026-06-12, Variant C2: Ea and n fixed to Lam lab defaults,
+# fitting only k0_frac and cal_b against the Zenodo LFP field set.
+# Full-fit RMSE = 4.65pp; LOO mean CV RMSE = 5.49pp; pooled LOO RMSE = 5.61pp.
+# Retained as a v2 sensitivity; v1 remains the default.
+NAUMANN_LAM_FIELD_CALIBRATED_V2_K0_FRAC = 3.6244128958919006e-07
+NAUMANN_LAM_FIELD_CALIBRATED_V2_EA_J_MOL = LAM_EA_J_MOL
+NAUMANN_LAM_FIELD_CALIBRATED_V2_EXPONENT_B = 0.7108636007561147
+NAUMANN_LAM_FIELD_CALIBRATED_V2_SOC_EXPONENT_N = LAM_SOC_EXPONENT_N
 
 # Default battery parameters
 # For 95% round-trip efficiency, use sqrt(0.95) ≈ 0.9747 for each direction

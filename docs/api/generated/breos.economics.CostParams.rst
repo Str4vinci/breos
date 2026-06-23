@@ -30,9 +30,6 @@
       ~CostParams.discount_rate
       ~CostParams.electricity_cost
       ~CostParams.electricity_sold_cost
-      ~CostParams.gas_cost_per_kwh
-      ~CostParams.heat_pump_cost_per_kw_th
-      ~CostParams.hp_maintenance_annual
       ~CostParams.inflation_rate
       ~CostParams.installation_cost_per_module
       ~CostParams.inverter_cost_per_kw
@@ -46,7 +43,5 @@
       ~CostParams.other_cost_per_module
       ~CostParams.pv_degradation_rate
       ~CostParams.sell_price_inflation
-      ~CostParams.tes_cost_per_kwh_th
-      ~CostParams.tes_installation_cost
    
    

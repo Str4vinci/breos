@@ -32,6 +32,7 @@ energy balance.
    :toctree: generated/
 
    breos.economics.calculate_lcoe
+   breos.economics.calculate_lcoe_from_projection
    breos.economics.find_payback_year
 ```
 

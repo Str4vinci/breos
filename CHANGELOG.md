@@ -2,7 +2,7 @@
 
 All notable changes to BREOS are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/).
 
-## [0.3.0] - 2026-06-10
+## [0.3.0] - 2026-06-24
 
 ### Fixed
 - **TMY timezone misalignment (results-changing):** `fetch_tmy_weather_data`
@@ -42,11 +42,39 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   hardcoded to 0.10/0.90/0.70/sqrt(0.95)).
 - `enable_resistance_fade` now feeds the resistance-derated round-trip
   efficiency back into the energy loop (previously tracking-only).
+- Battery degradation calibration variants are explicit for the 0.3.0
+  release: `naumann_lam_field_calibrated` remains the default v1 field
+  calibration, `naumann_lam_field_calibrated_v1` is an equivalent explicit
+  alias, and `naumann_lam_field_calibrated_v2` exposes the v2
+  field-calibrated fit with Lam `Ea`/`n` fixed and `k0`/`b` fitted to field
+  data.
 - Parity tests for the optional Numba kernels: the duplicated LFP derate
   constants against `battery.lfp_capacity_factor`, and the energy-balance
   kernel against the reference path under shared-model conditions.
+- CLI discovery and inspection commands: `breos list
+  {locations,modules,cost-presets,emissions,load-profiles}` prints packaged
+  option keys, `breos validate-config <config>` checks a config file and
+  summarizes the resolved choices, and `breos run --dry-run` writes the
+  resolved configuration as JSON without running a simulation. `list` and
+  `validate-config` accept `--json` for machine-readable output.
+- PyPI distribution: 0.3.0 is the first release installable with
+  `pip install breos`. Tagged `v*` releases on `main` now publish to PyPI
+  through GitHub Actions trusted publishing (OIDC), running the release
+  artifact verifier before upload, with a manually triggered TestPyPI
+  dry-run path.
+- Projection-based LCOE support:
+  `breos.economics.calculate_lcoe_from_projection` computes LCOE from the
+  simulated multi-year cost projection, and the batch location comparison
+  tool now writes `lcoe_eur_kwh` plus LCOE heatmaps.
 
 ### Changed
+- Renamed remaining pre-release "PVBAT" branding to BREOS in the Polysun
+  comparison plots: the `plot_degradation_methodology_comparison` first
+  argument is now `breos_soh`, the scenario/location dicts passed to
+  `plot_lifetime_prediction_comparison` and
+  `plot_temperature_sensitivity_comparison` use the `breos_eol_year` key,
+  legend labels read "BREOS (Naumann)", and the SOH comparison figure is
+  saved as `polysun_breos_soh_comparison*.png`.
 - Cost defaults are single-sourced from the `CostParams` dataclass:
   `cost_params_from_config` and the App preset fallbacks no longer carry
   their own diverging literals (packaged presets are unaffected).
@@ -56,17 +84,35 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   the new battery keys.
 - PV-only App runs construct an explicit inverter model, so a configured
   `inverter_efficiency` now applies without a battery (previously ignored).
+- `App.result()["lcoe_eur_kwh"]` now uses the simulated projection, including
+  O&M and battery replacement costs, instead of the simpler CAPEX + fixed
+  annual O&M helper.
 - Library progress messages (weather file discovery, saved files, CSV
   conversions) go through `logging` under `breos.*` logger names instead of
   unconditional `print()`. Functions with a `verbose` flag still print.
 - Slimmed the default runtime dependency set to the BREOS core simulation
   stack and moved heavier workflow packages behind extras: `plots`,
-  `optimization`, `weather`, `fast`, `cec-fit`, `validation`, and
-  `location-tools`.
+  `optimization`, `weather`, `fast`, `validation`, and `location-tools`.
+  NREL-PySAM stays in the core set because the default PV model fits CEC
+  single-diode parameters at runtime via pvlib's `fit_cec_sam`.
 - The `dev` extra now installs optional feature dependencies so contributor
   test runs continue to cover optional paths.
 
 ### Documentation
+- Install snippets in the README and docs point at PyPI (`pip install breos`)
+  instead of git tag installs, and the quickstart gained a "10-minute first
+  run" walkthrough with a pip-friendly inline config, the matching
+  `configs/examples/quickstart.toml` source-checkout example, the new
+  option-discovery commands, and a representative output excerpt with
+  plausibility ranges.
+- New recipes page with validated copy-paste configs: PV-only home, PV plus
+  battery, custom latitude/longitude/timezone, east-west roof with
+  `pv_arrays`, 15-minute resolution, external E-REDES/BDEW/REE load
+  profiles, and offline runs with cached weather.
+- New generated "Packaged options" reference page listing locations, PV
+  modules, cost presets, emissions factors, and load profiles. It is built
+  by `tools/generate_option_docs.py` from the packaged data and source
+  constants, and a test fails CI when the page drifts.
 - README documents the fixed PVWatts loss components, the inverter clipping
   convention, the `weather/` working-directory override, the Open-Meteo
   `.cache.sqlite` file, logging configuration, and the new config keys.
@@ -77,7 +123,7 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   BDEW-H0-shaped profile `"1"`, distinct from the external BDEW H0 2025
   dataset (profile `"7"`).
 - Replaced stream-of-consciousness working notes in `economics`,
-  `optimization`, `acc_sizer`, and `plotting` with factual comments, and
+  `optimization`, and `plotting` with factual comments, and
   fixed mislabeled docstrings (`total_pv` is post-inverter AC; the Suntech
   NOMT catalog entry documents its NMOT-condition rating).
 
@@ -149,4 +195,4 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 - NPV discount factor now uses `(1 + r) ** Year` (time-0 NPV) instead of `(1 + r) ** (Year - 1)`. Affects all `cost_analysis_projection` outputs.
 
 ### Removed
-- Out-of-scope kernels (`combined_energy_balance_kernel`, `batch_combined_energy_balance_kernel`) and any thermal storage / heat-pump / V2H / time-of-use code paths. BREOS focuses on PV + battery simulation.
+- Out-of-scope kernels (`combined_energy_balance_kernel`, `batch_combined_energy_balance_kernel`) and non-core energy-system code paths. BREOS focuses on PV + battery simulation.

@@ -85,6 +85,7 @@ def load_weather_for_simulation(
             longitude=resolved.lon,
             sample_year=start_year,
             freq="h",
+            timezone=resolved.timezone,
         )
 
     if weather.index.tz is None:
