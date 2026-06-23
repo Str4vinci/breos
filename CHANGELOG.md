@@ -2,7 +2,7 @@
 
 All notable changes to BREOS are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/).
 
-## [0.3.0] - 2026-06-23
+## [0.3.0] - 2026-06-24
 
 ### Fixed
 - **TMY timezone misalignment (results-changing):** `fetch_tmy_weather_data`
