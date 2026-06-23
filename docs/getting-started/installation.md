@@ -2,14 +2,25 @@
 
 BREOS requires Python 3.11 or newer.
 
-## From the stable tag
+## From PyPI
 
 ```bash
-pip install "breos @ git+https://github.com/Str4vinci/breos.git@v0.2.3"
+pip install breos
 ```
 
-PyPI publishing is planned for a future release. Until then, install the latest
-stable GitHub tag or use a source checkout.
+With [uv](https://docs.astral.sh/uv/), add it to a project or run the CLI
+directly without installing:
+
+```bash
+uv add breos
+uvx breos run --location porto --n-modules 10 --annual-consumption-kwh 4000
+```
+
+To install a specific release tag directly from GitHub instead:
+
+```bash
+pip install "breos @ git+https://github.com/Str4vinci/breos.git@v0.3.0"
+```
 
 ## From source
 
@@ -25,13 +36,16 @@ The base install includes the core simulation stack. Install extras for
 workflows that need heavier optional packages:
 
 ```bash
-pip install -e ".[plots]"          # matplotlib plotting helpers
-pip install -e ".[optimization]"   # pymoo multi-objective sizing
-pip install -e ".[weather]"        # Open-Meteo historical weather fetching
-pip install -e ".[fast]"           # Numba kernels
-pip install -e ".[validation]"     # Excel / Arrow validation workflows
-pip install -e ".[location-tools]" # geocoding and timezone lookup helpers
+pip install "breos[plots]"          # matplotlib plotting helpers
+pip install "breos[optimization]"   # pymoo multi-objective sizing
+pip install "breos[weather]"        # Open-Meteo historical weather fetching
+pip install "breos[fast]"           # Numba kernels
+pip install "breos[validation]"     # Excel / Arrow dependencies for local validation work
+pip install "breos[location-tools]" # geocoding and timezone lookup helpers
 ```
+
+For a source checkout, use the editable equivalents, for example
+`pip install -e ".[plots]"`.
 
 ## Development install
 

@@ -26,6 +26,7 @@ def test_top_level_all_is_narrow_release_surface():
         "calculate_co2_savings",
         "optimize_tilt",
         "optimize_battery_size",
+        "optimize_system_multi_objective",
         "export_results",
         "load_results",
     }

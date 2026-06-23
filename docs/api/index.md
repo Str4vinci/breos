@@ -43,7 +43,7 @@ Standard residential and commercial profiles, scaling, alignment.
 :link: energy-balance
 :link-type: doc
 
-Per-timestep dispatch of PV, load, battery, and grid.
+Per-timestep PV, load, battery, and grid energy flows.
 :::
 
 :::{grid-item-card} Battery
@@ -64,7 +64,7 @@ Cost parameters, NPV / LCOE / payback projections, emissions.
 :link: optimization
 :link-type: doc
 
-Tilt search, battery sizing, NSGA-II multi-objective Pareto.
+Tilt search, battery sizing, ZEB sizing, and NSGA-II multi-objective sizing.
 :::
 
 :::{grid-item-card} Plotting

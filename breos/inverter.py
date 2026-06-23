@@ -113,9 +113,9 @@ def get_inverter_preset(name: str) -> InverterConfig:
     Get a pre-defined inverter configuration.
 
     Available presets:
-    - residential_hybrid: 1.1 ratio, hybrid
-    - residential_simple: 1.1 ratio, grid-tie only
-    - commercial_hybrid: 1.25 ratio, hybrid
+    - residential_hybrid: 1.25 ratio, 0.96 efficiency, hybrid
+    - residential_simple: 1.25 ratio, 0.96 efficiency, grid-tie only
+    - commercial_hybrid: 1.25 ratio, 0.98 efficiency, hybrid
     - oversized_1.5: 1.5 ratio for high DC/AC
 
     Args:
@@ -174,16 +174,3 @@ def calculate_dc_ac_power(
         clipping_loss_dc_w=clipping_loss_dc,
         clipping_loss_ac_equivalent_w=clipping_loss_ac_equiv,
     )
-
-
-def calculate_dc_ac_efficiency(
-    pv_dc_power: float, inverter_ac_power: float, inverter_efficiency: float = 0.96
-) -> float:
-    """
-    Calculate AC output considering inverter clipping.
-
-    This compatibility helper returns only AC power. Use
-    ``calculate_dc_ac_power()`` when clipping losses need to be reported
-    separately.
-    """
-    return calculate_dc_ac_power(pv_dc_power, inverter_ac_power, inverter_efficiency).ac_power_w

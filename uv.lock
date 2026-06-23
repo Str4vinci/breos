@@ -104,6 +104,7 @@ name = "breos"
 version = "0.3.0"
 source = { editable = "." }
 dependencies = [
+    { name = "nrel-pysam" },
     { name = "numpy" },
     { name = "pandas" },
     { name = "pvlib" },
@@ -112,12 +113,8 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
-cec-fit = [
-    { name = "nrel-pysam" },
-]
 dev = [
     { name = "matplotlib" },
-    { name = "nrel-pysam" },
     { name = "numba" },
     { name = "openmeteo-requests" },
     { name = "openpyxl" },
@@ -167,8 +164,7 @@ requires-dist = [
     { name = "matplotlib", marker = "extra == 'dev'", specifier = ">=3.10.8" },
     { name = "matplotlib", marker = "extra == 'plots'", specifier = ">=3.10.8" },
     { name = "myst-parser", marker = "extra == 'docs'", specifier = ">=4.0" },
-    { name = "nrel-pysam", marker = "extra == 'cec-fit'", specifier = ">=7.1.0" },
-    { name = "nrel-pysam", marker = "extra == 'dev'", specifier = ">=7.1.0" },
+    { name = "nrel-pysam", specifier = ">=7.1.0" },
     { name = "numba", marker = "extra == 'dev'", specifier = ">=0.63.1" },
     { name = "numba", marker = "extra == 'fast'", specifier = ">=0.63.1" },
     { name = "numpy", specifier = ">=2.0" },
@@ -197,7 +193,7 @@ requires-dist = [
     { name = "timezonefinder", marker = "extra == 'location-tools'", specifier = ">=8.2.1" },
     { name = "timezonefinder", marker = "extra == 'weather'", specifier = ">=8.2.1" },
 ]
-provides-extras = ["cec-fit", "fast", "plots", "optimization", "weather", "validation", "location-tools", "dev", "docs"]
+provides-extras = ["fast", "plots", "optimization", "weather", "validation", "location-tools", "dev", "docs"]
 
 [[package]]
 name = "cattrs"

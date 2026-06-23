@@ -1,8 +1,17 @@
 """Tests for the economics module."""
 
+import pandas as pd
 import pytest
 
-from breos.economics import CostParams, calculate_costs, calculate_lcoe, cost_params_from_config, find_payback_year
+from breos.economics import (
+    CostParams,
+    calculate_costs,
+    calculate_lcoe,
+    calculate_lcoe_from_projection,
+    cost_analysis_projection,
+    cost_params_from_config,
+    find_payback_year,
+)
 from breos.optimization import calculate_financials
 
 
@@ -74,9 +83,6 @@ class TestCalculateCosts:
             + costs["battery_cost"]
             + costs["installation_cost"]
             + costs["other_costs"]
-            + costs.get("tes_cost", 0)
-            + costs.get("hp_cost", 0)
-            + costs.get("tes_installation_cost", 0)
         )
         assert costs["total_initial_cost"] == pytest.approx(parts, rel=0.001)
 
@@ -179,3 +185,85 @@ class TestLCOE:
             lifetime_years=20,
         )
         assert lcoe == float("inf")
+
+    def test_projection_lcoe_includes_replacement_costs(self):
+        projection = pd.DataFrame(
+            {
+                "Year": [1, 2],
+                "PV_Production_kWh": [1000.0, 1000.0],
+                "Cost_Operation": [100.0, 100.0],
+                "Cost_Replacement": [0.0, 500.0],
+            }
+        )
+
+        lcoe = calculate_lcoe_from_projection(projection, total_investment=1000.0, discount_rate=0.0)
+
+        assert lcoe == pytest.approx(0.85)
+
+    def test_cost_projection_exposes_lcoe_attr(self):
+        costs = {
+            "electricity_cost": 0.30,
+            "electricity_sold_cost": 0.05,
+            "daily_power_cost": 0.20,
+            "total_initial_cost": 1000.0,
+            "annual_operation_cost": 100.0,
+        }
+        yearly_summary = pd.DataFrame(
+            {
+                "Year": [1, 2],
+                "Load_kWh": [1200.0, 1200.0],
+                "PV_Production_kWh": [1000.0, 900.0],
+                "Import_kWh": [400.0, 450.0],
+                "Export_kWh": [200.0, 180.0],
+                "PV_Degradation_Factor": [1.0, 0.9],
+                "Replacement_Cost": [0.0, 500.0],
+            }
+        )
+
+        projection = cost_analysis_projection(
+            pd.DataFrame(),
+            costs,
+            num_years=2,
+            inflation_rate=0.0,
+            discount_rate=0.0,
+            yearly_summary_df=yearly_summary,
+        )
+
+        assert projection.attrs["lcoe_eur_kwh"] == pytest.approx((1000 + 100 + 100 + 500) / (1000 + 900))
+
+    def test_cost_projection_uses_yearly_load_for_no_system_baseline(self):
+        costs = {
+            "electricity_cost": 0.30,
+            "electricity_sold_cost": 0.05,
+            "daily_power_cost": 0.20,
+            "total_initial_cost": 1000.0,
+            "annual_operation_cost": 100.0,
+        }
+        yearly_summary = pd.DataFrame(
+            {
+                "Year": [1, 2],
+                "Load_kWh": [1000.0, 2000.0],
+                "PV_Production_kWh": [800.0, 800.0],
+                "Import_kWh": [300.0, 600.0],
+                "Export_kWh": [100.0, 100.0],
+                "PV_Degradation_Factor": [1.0, 1.0],
+                "Replacement_Cost": [0.0, 0.0],
+            }
+        )
+
+        projection = cost_analysis_projection(
+            pd.DataFrame(),
+            costs,
+            num_years=2,
+            inflation_rate=0.0,
+            discount_rate=0.0,
+            yearly_summary_df=yearly_summary,
+        )
+
+        daily = 365 * costs["daily_power_cost"]
+        assert projection["Cost_No_Sys_Annual"].tolist() == pytest.approx(
+            [
+                1000.0 * costs["electricity_cost"] + daily,
+                2000.0 * costs["electricity_cost"] + daily,
+            ]
+        )

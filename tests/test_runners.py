@@ -1,6 +1,5 @@
 """Tests for workflow runner module boundaries."""
 
-import breos.app_simulation as legacy_app_simulation
 from breos.runners import SimulationArtifacts, run_app_simulation
 from breos.runners.app import SimulationArtifacts as AppSimulationArtifacts
 from breos.runners.app import run_app_simulation as run_app_runner
@@ -9,8 +8,3 @@ from breos.runners.app import run_app_simulation as run_app_runner
 def test_app_runner_exports_are_available_from_runner_package():
     assert run_app_simulation is run_app_runner
     assert SimulationArtifacts is AppSimulationArtifacts
-
-
-def test_app_simulation_module_remains_compatible():
-    assert legacy_app_simulation.run_app_simulation is run_app_runner
-    assert legacy_app_simulation.SimulationArtifacts is AppSimulationArtifacts

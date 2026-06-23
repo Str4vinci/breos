@@ -27,6 +27,13 @@ pip install -e ".[dev]"
 uv run pytest tests/ -v
 ```
 
+For a fast end-to-end smoke test without writing code:
+
+```bash
+uv run breos validate-config configs/examples/quickstart.toml
+uv run breos run --config configs/examples/quickstart.toml --dry-run
+```
+
 For release-style validation, run the same gates used by CI:
 
 ```bash

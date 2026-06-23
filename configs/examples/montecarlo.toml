@@ -1,0 +1,34 @@
+# Monte Carlo: resample weather years + demand to get outcome distributions.
+#
+#   breos montecarlo --config configs/examples/montecarlo.toml --plots
+#
+# Each run is a full multi-year projection; for every projection year a weather
+# year is drawn (with replacement) from the multi-year file below and demand is
+# scaled by a random factor ~ Normal(1, load_uncertainty). Aggregating the runs
+# gives the spread of NPV savings, payback year, grid independence, and SoH.
+#
+# BREOS does NOT ship weather data. Provide your own multi-year historical CSV
+# (a 'date' column plus the weather fields the PV model uses) and point
+# [montecarlo].weather_file at it. The conventional location is a local
+# weather/ directory, which is git-ignored.
+
+# --- Scenario (same keys as `breos run`) ------------------------------------
+location = "porto"
+n_modules = 10
+annual_consumption_kwh = 4000
+battery_kwh = 5.0
+pv_module = "Suntech_STP550S_STC"
+cost_preset = "residential_pt"
+emissions_country = "PT"
+load_profile = "demandlib_h0"
+resolution = "h"
+projection_years = 20
+
+# --- Monte Carlo controls ---------------------------------------------------
+[montecarlo]
+weather_file = "weather/porto_historical_2005_2024_openmeteo.csv"  # provide your own
+n_runs = 100             # number of Monte Carlo trajectories
+years_per_run = 20       # projection horizon; weather + demand resampled each year
+load_uncertainty = 0.10  # std-dev of the annual demand multiplier (Normal, mean 1.0)
+target_year = 2025       # calendar year the weather index is mapped to
+seed = 42                # fixed seed -> reproducible; remove for fresh randomness

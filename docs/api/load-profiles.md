@@ -4,9 +4,10 @@ Bundled demandlib-derived H0 examples plus utilities for scaling and time
 alignment. BREOS also supports user-supplied BDEW, E-REDES, REE, and custom
 CSV files through the `rlp_directory` argument.
 
-For public examples, use `profile_type="1"`. Other profile keys are treated
-as external data and require local files that users are licensed to use.
-See [Load Profile Data](../legal/load-profile-data.md).
+For public examples, use `profile_type="demandlib_h0"` or the equivalent
+canonical key `"1"`. Other profile keys are treated as external data and
+require local files that users are licensed to use. See
+[Load Profile Data](../legal/load-profile-data.md).
 
 ## External profile files
 

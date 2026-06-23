@@ -13,7 +13,7 @@ LOCATIONS_FILE = PROJECT_ROOT / "configs" / "base" / "locations.json"
 
 
 def get_location_data(address):
-    geolocator = Nominatim(user_agent="pvbat-dev-tool")
+    geolocator = Nominatim(user_agent="breos-dev-tool")
     location = geolocator.geocode(address)
     return location
 

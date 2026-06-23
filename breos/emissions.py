@@ -32,11 +32,6 @@ class EmissionsParams:
     country: str = ""  # Country name
 
     @property
-    def grid_carbon_intensity_gco2_kwh(self) -> float:
-        """Backward-compatible alias for the average grid intensity."""
-        return self.average_intensity_gco2_kwh
-
-    @property
     def average_intensity_gco2_kwh(self) -> float:
         if self.average_grid_carbon_intensity_gco2_kwh is not None:
             return float(self.average_grid_carbon_intensity_gco2_kwh)

@@ -31,20 +31,12 @@ from breos.constants import (
     DEFAULT_MIN_SOC,
     DEFAULT_STANDBY_LOSS_WH,
     DEFAULT_THERMAL_RESISTANCE_KW,
-    LAM_CAL_RELAXED_EA_J_MOL,
-    LAM_CAL_RELAXED_EXPONENT_B,
-    LAM_CAL_RELAXED_K0_FRAC,
-    LAM_CAL_RELAXED_SOC_EXPONENT_N,
     LAM_EA_J_MOL,
     LAM_EXPONENT_B,
     LAM_K0_FRAC,
     LAM_SOC_EXPONENT_N,
     LFP_CAP_DERATE_PER_C_COLD,
     LFP_CAP_DERATE_PER_C_MODERATE,
-    MODERN_LFP_EA_J_MOL,
-    MODERN_LFP_EXPONENT_B,
-    MODERN_LFP_K0_FRAC,
-    MODERN_LFP_SOC_EXPONENT_N,
     NAUMANN_EA_J_MOL,
     NAUMANN_EA_R_J_MOL,
     NAUMANN_EXPONENT_B,
@@ -55,6 +47,14 @@ from breos.constants import (
     NAUMANN_LAM_FIELD_CALIBRATED_EXPONENT_B,
     NAUMANN_LAM_FIELD_CALIBRATED_K0_FRAC,
     NAUMANN_LAM_FIELD_CALIBRATED_SOC_EXPONENT_N,
+    NAUMANN_LAM_FIELD_CALIBRATED_V1_EA_J_MOL,
+    NAUMANN_LAM_FIELD_CALIBRATED_V1_EXPONENT_B,
+    NAUMANN_LAM_FIELD_CALIBRATED_V1_K0_FRAC,
+    NAUMANN_LAM_FIELD_CALIBRATED_V1_SOC_EXPONENT_N,
+    NAUMANN_LAM_FIELD_CALIBRATED_V2_EA_J_MOL,
+    NAUMANN_LAM_FIELD_CALIBRATED_V2_EXPONENT_B,
+    NAUMANN_LAM_FIELD_CALIBRATED_V2_K0_FRAC,
+    NAUMANN_LAM_FIELD_CALIBRATED_V2_SOC_EXPONENT_N,
     NAUMANN_SOC_EXPONENT_N,
     NAUMANN_SOC_EXPONENT_N_R,
     R_GAS,
@@ -89,7 +89,7 @@ class BatteryConfig:
     standby_loss_wh: float = DEFAULT_STANDBY_LOSS_WH
     enable_replacement: bool = True
     replacement_cost: Optional[float] = None  # Auto-computed from cost per kWh if not set
-    calendar_model: str = "naumann_lam_field_calibrated"  # Current field-calibrated fit (canonical name)
+    calendar_model: str = "naumann_lam_field_calibrated"  # v1 field-calibrated default alias
     # Resistance fade (opt-in): grows internal resistance daily and derates
     # the charge/discharge efficiencies in the energy loop so the effective
     # round-trip efficiency declines as the battery ages.
@@ -695,8 +695,10 @@ def _get_degradation_params(model: str) -> Tuple[float, float, float, float]:
     Models:
         'naumann'                          — Naumann 2020 calendar + cycle (NMC/LFP lab)
         'naumann_lam'                      — Naumann cycle + Lam 2025 lab-derived calendar
-        'naumann_lam_field_calibrated'     — Current field-calibrated fit (canonical name)
-        'naumann_lam_modern'               — Projected 0.5×k₀ for 2020+ cells
+        'naumann_lam_field_calibrated'     — v1 field-calibrated fit (default alias)
+        'naumann_lam_field_calibrated_v1'  — v1 field-calibrated fit (explicit)
+        'naumann_lam_field_calibrated_v2'  — v2 field-calibrated fit with
+                                             Lam Ea/n fixed and k0/b fitted
     """
     model_lower = model.lower().replace("-", "_")
 
@@ -709,7 +711,7 @@ def _get_degradation_params(model: str) -> Tuple[float, float, float, float]:
     elif model_lower == "naumann_lam":
         return LAM_K0_FRAC, LAM_EA_J_MOL, LAM_EXPONENT_B, LAM_SOC_EXPONENT_N
 
-    # ── Naumann-Lam: field-calibrated (default) ──────────────────────────
+    # ── Naumann-Lam: field-calibrated v1 (default) ───────────────────────
     elif model_lower == "naumann_lam_field_calibrated":
         return (
             NAUMANN_LAM_FIELD_CALIBRATED_K0_FRAC,
@@ -718,24 +720,28 @@ def _get_degradation_params(model: str) -> Tuple[float, float, float, float]:
             NAUMANN_LAM_FIELD_CALIBRATED_SOC_EXPONENT_N,
         )
 
-    # ── Naumann-Lam: field-calibrated relaxed ─────────────────────────────
-    elif model_lower == "naumann_lam_calibrated_relaxed":
+    elif model_lower == "naumann_lam_field_calibrated_v1":
         return (
-            LAM_CAL_RELAXED_K0_FRAC,
-            LAM_CAL_RELAXED_EA_J_MOL,
-            LAM_CAL_RELAXED_EXPONENT_B,
-            LAM_CAL_RELAXED_SOC_EXPONENT_N,
+            NAUMANN_LAM_FIELD_CALIBRATED_V1_K0_FRAC,
+            NAUMANN_LAM_FIELD_CALIBRATED_V1_EA_J_MOL,
+            NAUMANN_LAM_FIELD_CALIBRATED_V1_EXPONENT_B,
+            NAUMANN_LAM_FIELD_CALIBRATED_V1_SOC_EXPONENT_N,
         )
 
-    # ── Naumann-Lam: modern LFP projection ───────────────────────────────
-    elif model_lower == "naumann_lam_modern":
-        return MODERN_LFP_K0_FRAC, MODERN_LFP_EA_J_MOL, MODERN_LFP_EXPONENT_B, MODERN_LFP_SOC_EXPONENT_N
+    elif model_lower == "naumann_lam_field_calibrated_v2":
+        return (
+            NAUMANN_LAM_FIELD_CALIBRATED_V2_K0_FRAC,
+            NAUMANN_LAM_FIELD_CALIBRATED_V2_EA_J_MOL,
+            NAUMANN_LAM_FIELD_CALIBRATED_V2_EXPONENT_B,
+            NAUMANN_LAM_FIELD_CALIBRATED_V2_SOC_EXPONENT_N,
+        )
 
     else:
         raise ValueError(
             f"Unknown calendar model: {model}. Use 'naumann_lam_field_calibrated', "
-            f"'naumann_lam', 'naumann_lam_calibrated_relaxed', "
-            f"'naumann_lam_modern', or 'naumann'."
+            f"'naumann_lam_field_calibrated_v1', "
+            f"'naumann_lam_field_calibrated_v2', "
+            f"'naumann_lam', or 'naumann'."
         )
 
 

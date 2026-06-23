@@ -98,6 +98,7 @@ from breos.economics import (
     CostParams,
     calculate_costs,
     calculate_lcoe,
+    calculate_lcoe_from_projection,
     cost_analysis_projection,
     cost_params_from_config,
     find_payback_year,
@@ -115,7 +116,6 @@ from breos.inverter import (
     INVERTER_PRESETS,
     InverterConfig,
     InverterConversionResult,
-    calculate_dc_ac_efficiency,
     calculate_dc_ac_power,
     get_inverter_preset,
 )
@@ -138,10 +138,18 @@ from breos.load_profiles import (
     scale_to_annual_consumption,
 )
 
+# Monte Carlo (weather + demand uncertainty)
+from breos.montecarlo import (
+    MonteCarloResult,
+    MonteCarloSettings,
+    run_montecarlo,
+)
+
 # Optimization
 from breos.optimization import (
     OptimizationResult,
     optimize_battery_size,
+    optimize_system_multi_objective,
     optimize_tilt,
     optimize_tilt_brent,
     size_for_zeb,
@@ -236,9 +244,11 @@ try:
         plot_loo_cv_summary,
         plot_loo_param_stability,
         plot_loo_predictions,
-        plot_montecarlo_grid_independence_distribution,
         # Monte Carlo distributions
+        plot_montecarlo_final_soh_distribution,
+        plot_montecarlo_grid_independence_distribution,
         plot_montecarlo_npv_distribution,
+        plot_montecarlo_simulation,
         plot_monthly_balance,
         plot_monthly_comparison,
         plot_pareto_front_analysis,
@@ -319,10 +329,16 @@ __all__ = [
     "cost_params_from_config",
     "find_payback_year",
     "calculate_lcoe",
+    "calculate_lcoe_from_projection",
     # Optimization
     "optimize_tilt",
     "optimize_tilt_brent",
     "optimize_battery_size",
+    "optimize_system_multi_objective",
+    # Monte Carlo
+    "run_montecarlo",
+    "MonteCarloSettings",
+    "MonteCarloResult",
     # I/O
     "export_results",
     "export_summary",

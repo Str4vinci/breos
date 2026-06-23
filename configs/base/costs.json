@@ -13,12 +13,7 @@
         "maintenance_cost_per_panel": 10,
         "daily_power_cost": 0.3,
         "other_costs": 0,
-        "other_cost_per_module": 50,
-        "tes_cost_per_kwh_th": 200,
-        "heat_pump_cost_per_kw_th": 500,
-        "hp_maintenance_annual": 120,
-        "gas_cost_per_kwh": 0.12,
-        "tes_installation_cost": 500
+        "other_cost_per_module": 50
     },
     "residential_es": {
         "electricity_cost": 0.2841,
@@ -34,12 +29,7 @@
         "maintenance_cost_per_panel": 10,
         "daily_power_cost": 0.3,
         "other_costs": 0,
-        "other_cost_per_module": 30,
-        "tes_cost_per_kwh_th": 200,
-        "heat_pump_cost_per_kw_th": 500,
-        "hp_maintenance_annual": 100,
-        "gas_cost_per_kwh": 0.08,
-        "tes_installation_cost": 500
+        "other_cost_per_module": 30
     },
     "residential_pt": {
         "electricity_cost": 0.2582,
@@ -55,11 +45,6 @@
         "maintenance_cost_per_panel": 10,
         "daily_power_cost": 0.3,
         "other_costs": 0,
-        "other_cost_per_module": 30,
-        "tes_cost_per_kwh_th": 200,
-        "heat_pump_cost_per_kw_th": 500,
-        "hp_maintenance_annual": 100,
-        "gas_cost_per_kwh": 0.08,
-        "tes_installation_cost": 500
+        "other_cost_per_module": 30
     }
 }

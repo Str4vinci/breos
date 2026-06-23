@@ -36,12 +36,13 @@ Users can still provide these files locally through `rlp_directory` when their s
 
 BREOS's Python dependencies are open-source packages under their respective
 licenses. See `pyproject.toml`, `uv.lock`, and each package's own metadata for
-the authoritative license text. Current runtime dependencies include:
+the authoritative license text. Core and optional dependencies currently include:
 
 - **geopy** — MIT
 - **joblib** — BSD 3-Clause
 - **matplotlib** — Matplotlib / PSF-style license terms
 - **numba** — BSD
+- **numpy** — BSD 3-Clause
 - **openpyxl** — MIT
 - **openmeteo-requests** — MIT
 - **pandas** — BSD 3-Clause
@@ -52,6 +53,7 @@ the authoritative license text. Current runtime dependencies include:
 - **pymoo** — Apache 2.0
 - **rainflow** — MIT
 - **requests-cache** — BSD 2-Clause
+- **scipy** — BSD 3-Clause
 - **timezonefinder** — MIT
 
 ## Scientific and model credits
