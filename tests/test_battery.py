@@ -6,9 +6,11 @@ import pytest
 
 from breos.battery import (
     BatteryConfig,
+    _get_degradation_params,
     apply_indoor_temperature_model,
     simulate_energy_balance,
 )
+from breos.constants import LAM_EA_J_MOL, LAM_SOC_EXPONENT_N
 
 
 class TestBatteryConfig:
@@ -37,6 +39,24 @@ class TestBatteryConfig:
     def test_battery_type_accessible(self):
         cfg = BatteryConfig(nominal_energy_wh=5000, battery_type="lfp")
         assert cfg.battery_type == "lfp"
+
+    def test_field_calibrated_default_is_v1(self):
+        assert _get_degradation_params("naumann_lam_field_calibrated") == _get_degradation_params(
+            "naumann_lam_field_calibrated_v1"
+        )
+
+    def test_field_calibrated_v2_uses_lam_fixed_params(self):
+        default_k0, default_ea, default_b, default_n = _get_degradation_params("naumann_lam_field_calibrated")
+        v2_k0, v2_ea, v2_b, v2_n = _get_degradation_params("naumann_lam_field_calibrated_v2")
+
+        assert v2_k0 == pytest.approx(3.6244128958919006e-07)
+        assert v2_k0 != default_k0
+        assert v2_ea == LAM_EA_J_MOL
+        assert v2_b == pytest.approx(0.7108636007561147)
+        assert v2_b != default_b
+        assert v2_n == LAM_SOC_EXPONENT_N
+        assert v2_ea > default_ea
+        assert v2_n > default_n
 
 
 class TestSimulateEnergyBalance:

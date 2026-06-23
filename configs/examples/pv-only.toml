@@ -1,0 +1,15 @@
+# PV-only baseline: rooftop solar with no battery.
+# Useful as the reference case to compare any battery scenario against.
+#
+#   breos run --config configs/examples/pv-only.toml
+
+location = "porto"
+n_modules = 10
+annual_consumption_kwh = 4000
+battery_kwh = 0                 # no storage -> self-consumption + grid export only
+
+load_profile = "demandlib_h0"  # bundled synthetic H0 household profile
+cost_preset = "residential_pt"
+emissions_country = "PT"
+projection_years = 20
+resolution = "h"

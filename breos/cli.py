@@ -12,7 +12,7 @@ from typing import Any, Sequence
 
 from breos.app import App
 from breos.app_config import resolve_app_config
-from breos.load_profiles import PROFILE_NAMES
+from breos.load_profiles import PROFILE_ALIASES, PROFILE_NAMES
 from breos.pv_modules import MODULES
 from breos.resources import load_config_json
 
@@ -211,10 +211,14 @@ def _load_options(category: str) -> list[dict[str, Any]]:
 
     if category == "load-profiles":
         bundled = {"1"}
+        aliases_by_key: dict[str, list[str]] = {}
+        for alias, key in PROFILE_ALIASES.items():
+            aliases_by_key.setdefault(key, []).append(alias)
         return [
             {
                 "key": key,
                 "name": name,
+                "aliases": ", ".join(sorted(aliases_by_key.get(key, []))) or None,
                 "bundled": key in bundled,
                 "requires_rlp_directory": key not in bundled,
             }
@@ -242,11 +246,13 @@ def _format_options(category: str, rows: list[dict[str, Any]]) -> str:
             f"{row['key']}: {row['country']}, {row['grid_intensity_gco2_kwh']} gCO2/kWh ({row['year']})" for row in rows
         )
     if category == "load-profiles":
-        return "\n".join(
-            f"{row['key']}: {row['name']} "
-            f"({'bundled' if row['bundled'] else 'external CSV required via rlp_directory'})"
-            for row in rows
-        )
+        lines = []
+        for row in rows:
+            name = row["name"].replace(" (external file required)", "")
+            status = "bundled" if row["bundled"] else "external CSV required via rlp_directory"
+            alias_text = f"; aliases: {row['aliases']}" if row.get("aliases") else ""
+            lines.append(f"{row['key']}: {name} ({status}{alias_text})")
+        return "\n".join(lines)
     raise ValueError(f"Unknown list category: {category}")
 
 
@@ -273,6 +279,66 @@ def _validate_config(args: argparse.Namespace) -> int:
         print(f"Battery: {payload['battery']['capacity_kwh']} kWh")
         print(f"Cost preset: {payload['economics']['cost_preset'] or 'none'}")
         print(f"Emissions: {payload['emissions']['country'] or 'disabled'}")
+    return 0
+
+
+def _montecarlo(args: argparse.Namespace) -> int:
+    from breos.montecarlo import MonteCarloSettings, run_montecarlo
+
+    config = _load_config(args.config)
+    mc_cfg = config.get("montecarlo", {}) if isinstance(config.get("montecarlo"), dict) else {}
+
+    weather_file = args.weather_file or mc_cfg.get("weather_file")
+    if not weather_file:
+        raise ValueError("Monte Carlo needs a weather file: set [montecarlo].weather_file or pass --weather-file.")
+
+    def _pick(cli_value: Any, key: str, default: Any) -> Any:
+        return cli_value if cli_value is not None else mc_cfg.get(key, default)
+
+    settings = MonteCarloSettings(
+        weather_file=str(weather_file),
+        n_runs=int(_pick(args.runs, "n_runs", 100)),
+        years_per_run=_pick(args.years, "years_per_run", None),
+        load_uncertainty=float(_pick(args.load_uncertainty, "load_uncertainty", 0.10)),
+        target_year=int(_pick(args.target_year, "target_year", 2025)),
+        seed=_pick(args.seed, "seed", None),
+        min_load_scale=float(mc_cfg.get("min_load_scale", 0.0)),
+        max_load_scale=mc_cfg.get("max_load_scale"),
+    )
+
+    result = run_montecarlo(config, settings)
+
+    out_path = args.output or Path("monte_carlo_results.csv")
+    result.runs.to_csv(out_path, index=False)
+    plots_dir = None
+    if args.plots:
+        from breos.plotting import plot_montecarlo_simulation
+
+        plot_montecarlo_simulation([], str(out_path.parent), full_df=result.runs, verbose=not args.json)
+        plots_dir = out_path.parent / "plots"
+
+    if args.json:
+        payload = {
+            "settings": settings.__dict__,
+            "summary": result.summary,
+            "available_years": result.available_years,
+            "results_csv": str(out_path),
+        }
+        if plots_dir is not None:
+            payload["plots_directory"] = str(plots_dir)
+        print(json.dumps(payload, indent=2))
+        return 0
+
+    print(
+        f"Monte Carlo: {settings.n_runs} runs x "
+        f"{settings.years_per_run or 'config'} years, "
+        f"weather years {min(result.available_years)}-{max(result.available_years)} "
+        f"({len(result.available_years)} available)"
+    )
+    print(f"Per-run results written to: {out_path}")
+    print(f"{'metric':<28}{'mean':>12}{'p5':>12}{'p50':>12}{'p95':>12}")
+    for metric, stats in result.summary.items():
+        print(f"{metric:<28}{stats['mean']:>12.2f}{stats['p5']:>12.2f}{stats['p50']:>12.2f}{stats['p95']:>12.2f}")
     return 0
 
 
@@ -324,6 +390,26 @@ def build_parser() -> argparse.ArgumentParser:
     validate.add_argument("config", type=Path, help="TOML or JSON config file.")
     validate.add_argument("--json", action="store_true", help="Write machine-readable JSON.")
     validate.set_defaults(func=_validate_config)
+
+    mc = subparsers.add_parser(
+        "montecarlo",
+        help="Run a Monte Carlo study over weather years and demand uncertainty.",
+    )
+    mc.add_argument("--config", type=Path, required=True, help="TOML or JSON config file with a [montecarlo] section.")
+    mc.add_argument("--weather-file", help="Multi-year historical weather CSV (overrides [montecarlo].weather_file).")
+    mc.add_argument("--runs", type=int, help="Number of Monte Carlo runs (trajectories).")
+    mc.add_argument(
+        "--years", type=int, dest="years", help="Projection years per run. Defaults to config projection_years."
+    )
+    mc.add_argument(
+        "--load-uncertainty", type=float, help="Std-dev of the annual demand multiplier (Normal, mean 1.0)."
+    )
+    mc.add_argument("--target-year", type=int, help="Calendar year the weather index is mapped to.")
+    mc.add_argument("--seed", type=int, help="Base random seed for reproducible runs.")
+    mc.add_argument("--output", type=Path, help="Per-run results CSV path (default: monte_carlo_results.csv).")
+    mc.add_argument("--plots", action="store_true", help="Generate Monte Carlo distribution plots next to the CSV.")
+    mc.add_argument("--json", action="store_true", help="Write machine-readable JSON summary to stdout.")
+    mc.set_defaults(func=_montecarlo)
 
     return parser
 

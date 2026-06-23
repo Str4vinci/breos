@@ -1,0 +1,5 @@
+# Weather data is user-provided and may be large or licensed — never commit it.
+# This directory is the conventional drop-spot for multi-year historical CSVs
+# used by `breos montecarlo` and for cached TMY files used by `breos run`.
+*
+!.gitignore

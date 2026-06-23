@@ -10,7 +10,7 @@ Examples:
     python compare_results.py results/singleyear_porto_15min results/singleyear_porto_15min_nobatt
 
     # Three folders with custom labels
-    python compare_results.py results/singleyear_porto_15min results/singleyear_porto_15min_tou_always results/singleyear_porto_15min_nobatt --labels "Baseline,TOU Always,No Battery"
+    python compare_results.py results/pv_battery results/pv_only results/high_consumption --labels "PV + Battery,PV Only,High Consumption"
 
     # Custom output directory
     python compare_results.py results/folder1 results/folder2 --output results/my_comparison

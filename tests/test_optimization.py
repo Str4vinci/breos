@@ -6,7 +6,7 @@ import pytest
 
 pytest.importorskip("pymoo")
 
-from breos.optimization import SolarDesignProblem
+from breos.optimization import SolarDesignProblem, optimize_system_multi_objective
 
 
 def test_solar_design_problem_area_constraint_uses_pv_dimensions(monkeypatch):
@@ -98,3 +98,54 @@ def test_solar_design_problem_uses_configured_resolution(monkeypatch):
     assert captured["balance_freq"] == "15min"
     assert captured["annual_load_kwh"] == pytest.approx(0.5)
     assert list(captured["temperature_series"]) == [20.0, 20.0]
+
+
+def test_optimize_system_multi_objective_returns_pareto_dataframe(monkeypatch):
+    idx = pd.date_range("2025-01-01 00:00", periods=4, freq="h", tz="UTC")
+    tmy_data = pd.DataFrame({"temp_air": [15.0, 16.0, 17.0, 18.0], "ghi": [0.0, 500.0, 500.0, 0.0]}, index=idx)
+    houseload = pd.DataFrame({"Load": [500.0, 500.0, 500.0, 500.0]}, index=idx)
+    dc = pd.Series([0.0, 1000.0, 1000.0, 0.0], index=idx)
+    summary = pd.DataFrame({"Import [kWh]": [1.0], "Sell [kWh]": [0.25]})
+    config = {
+        "location": {"latitude": 41.15, "longitude": -8.61, "timezone": "UTC"},
+        "simulation": {"resolution": "h"},
+        "constraints": {
+            "budget_eur": 100000.0,
+            "max_area_m2": 100.0,
+            "max_modules": 4,
+            "max_battery_kwh": 3.0,
+            "max_tilt_deg": 30.0,
+        },
+        "mode": {"fixed_azimuth": 180},
+        "battery": {"temperature": 20.0},
+    }
+
+    monkeypatch.setattr("breos.optimization.calculate_pv_production_dc", lambda **kwargs: dc)
+    monkeypatch.setattr(
+        "breos.optimization.simulate_energy_balance",
+        lambda **kwargs: (pd.DataFrame(), 0.0, summary, 0.0, 0, pd.DataFrame()),
+    )
+    monkeypatch.setattr("breos.optimization.calculate_financials", lambda *args, **kwargs: (1000.0, 2500.0))
+
+    result = optimize_system_multi_objective(
+        tmy_data,
+        houseload,
+        config,
+        pop_size=4,
+        n_gen=1,
+        seed=1,
+        verbose=False,
+    )
+
+    pareto = result.details["pareto"]
+    assert result.iterations >= 1
+    assert not pareto.empty
+    assert set(pareto.columns) >= {
+        "Modules",
+        "Battery_kWh",
+        "Tilt",
+        "Azimuth",
+        "Grid_Independence_%",
+        "NPV_Eur",
+        "ZEB_Ratio",
+    }

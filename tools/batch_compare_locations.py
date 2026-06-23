@@ -34,7 +34,7 @@ from breos.battery import (
     apply_indoor_temperature_model,
     simulate_energy_balance,
 )
-from breos.economics import cost_analysis_projection, find_payback_year
+from breos.economics import calculate_lcoe_from_projection, cost_analysis_projection, find_payback_year
 from breos.inverter import InverterConfig
 from breos.load_profiles import load_profile
 from breos.plotting import (
@@ -348,6 +348,11 @@ def _run_single_sim(args_tuple):
     roi_percent = (npv_savings / total_initial * 100) if total_initial > 0 else 0.0
     savings_per_kwp = (npv_savings / system_kwp) if system_kwp > 0 else 0.0
     savings_per_euro = (npv_savings / total_initial) if total_initial > 0 else 0.0
+    lcoe_eur_kwh = calculate_lcoe_from_projection(
+        cost_proj,
+        total_investment=total_initial,
+        discount_rate=costs_cfg.get("discount_rate", 0.0),
+    )
 
     # System utilization (year 1)
     yr1_pv = year1["PV_Production_kWh"]
@@ -369,6 +374,7 @@ def _run_single_sim(args_tuple):
         "total_replacement_cost": total_replacement_cost,
         # Economic efficiency
         "npv_savings_20yr": npv_savings,
+        "lcoe_eur_kwh": lcoe_eur_kwh,
         "roi_percent": roi_percent,
         "savings_per_kwp": savings_per_kwp,
         "savings_per_euro": savings_per_euro,
@@ -626,6 +632,24 @@ def generate_outputs(results_df, output_dir, locations, cost_projections=None):
             cmap="RdYlGn",
         )
         print(f"Saved: roi_{loc}.png")
+
+    # LCOE heatmaps
+    for loc in locations:
+        loc_df = results_df[results_df["location"] == loc]
+        pivot = loc_df.pivot_table(
+            index="battery_kwh",
+            columns="n_modules",
+            values="lcoe_eur_kwh",
+        )
+        plot_grid_independence_heatmap(
+            pivot,
+            output_dir,
+            loc,
+            filename=f"lcoe_{loc}.png",
+            metric_label="LCOE (€/kWh)",
+            cmap="YlOrRd",
+        )
+        print(f"Saved: lcoe_{loc}.png")
 
     # Savings per € invested heatmaps
     for loc in locations:

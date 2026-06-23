@@ -3,7 +3,7 @@ import os
 import pandas as pd
 
 # Define paths
-results_dir = "results/tou_complete_optimization"
+results_dir = "results/complete_optimization"
 input_file = os.path.join(results_dir, "all_results.csv")
 
 # Check if file exists

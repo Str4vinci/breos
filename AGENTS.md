@@ -23,10 +23,6 @@ uv run ruff format --check breos tests
 uv build
 ```
 
-## Release data policy
-
-Only redistribute profiles whose upstream terms are clear enough for a public package. BREOS currently bundles demandlib-derived H0 examples. E-REDES, REE, and direct BDEW downloads remain supported only as user-supplied local files via `rlp_directory`.
-
 ## Change guidance
 
 - Prefer extending `breos.App` through backwards-compatible config keys.

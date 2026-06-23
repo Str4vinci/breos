@@ -81,4 +81,4 @@ If an operator explicitly allows redistribution, keep a copy of the permission o
 
 ## Practical rule
 
-Use `load_profile = "1"` for public examples and packaged defaults. Use other profile keys only in private or downstream projects after obtaining the source files under terms that permit the intended use.
+Use `load_profile = "demandlib_h0"` or the equivalent canonical key `"1"` for public examples and packaged defaults. Use other profile keys only in private or downstream projects after obtaining the source files under terms that permit the intended use.

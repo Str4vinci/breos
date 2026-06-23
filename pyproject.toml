@@ -19,6 +19,7 @@ classifiers = [
     "Topic :: Scientific/Engineering",
 ]
 dependencies = [
+    "nrel-pysam>=7.1.0",
     "numpy>=2.0",
     "pandas>=2.3.3",
     "pvlib>=0.14.0,<0.16",
@@ -34,7 +35,6 @@ Repository = "https://github.com/Str4vinci/breos"
 breos = "breos.cli:main"
 
 [project.optional-dependencies]
-cec-fit = ["nrel-pysam>=7.1.0"]
 fast = ["numba>=0.63.1"]
 plots = ["matplotlib>=3.10.8"]
 optimization = ["pymoo>=0.6.1.6"]
@@ -59,7 +59,6 @@ dev = [
     "openpyxl>=3.1.0",
     "openmeteo-requests>=1.7.4",
     "pyarrow>=19.0.0",
-    "nrel-pysam>=7.1.0",
     "pymoo>=0.6.1.6",
     "requests-cache>=1.2.1",
     "timezonefinder>=8.2.1",

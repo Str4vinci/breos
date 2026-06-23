@@ -23,7 +23,7 @@ weather/data access, load profiles, PV system data, and cost assumptions; see
 | `annual_consumption_kwh` | *required* | Annual electricity demand (kWh) |
 | `battery_kwh` | `0.0` | Nominal battery capacity in kWh (`0` = no battery). The SOC window sets the usable share — see [below](#battery-capacity-and-the-soc-window) |
 | `pv_module` | `None` | Module key from the built-in catalogue. `None` uses the first available |
-| `load_profile` | `"1"` | Bundled demandlib-derived H0 profile (see {py:func}`~breos.load_profiles.load_profile`) |
+| `load_profile` | `"1"` | Bundled demandlib-derived H0 profile; `"demandlib_h0"` is the friendly alias (see {py:func}`~breos.load_profiles.load_profile`) |
 | `rlp_directory` | `None` | Directory containing licensed external RLP CSVs for non-bundled load profiles |
 | `tilt` | auto | Tilt angle (degrees). Auto-estimated from latitude when `None` |
 | `azimuth` | auto | Surface azimuth (degrees). Auto-set to 180 in the northern hemisphere |
@@ -42,7 +42,7 @@ weather/data access, load profiles, PV system data, and cost assumptions; see
 | `discount_rate` | `0.03` | Discount rate for NPV |
 | `emissions_country` | `None` | Country code for CO2 calculations (`"PT"`, `"DE"`, `"ES"`, ...) |
 | `pv_degradation_rate` | `0.005` | Annual PV degradation rate (0.5% / year) |
-| `calendar_model` | `"naumann_lam_field_calibrated"` | Battery calendar aging model |
+| `calendar_model` | `"naumann_lam_field_calibrated"` | Battery calendar aging model. Default is the v1 field calibration; use `"naumann_lam_field_calibrated_v2"` for the v2 field-calibrated fit with Lam `Ea`/`n` fixed and `k0`/`b` fitted |
 | `battery_min_soc` | `0.10` | Battery SOC floor (fraction of nominal, SOH-derated capacity) |
 | `battery_max_soc` | `0.90` | Battery SOC ceiling (same basis as `battery_min_soc`) |
 | `battery_eol_percentage` | `0.70` | SOH fraction that triggers battery replacement |
@@ -74,6 +74,14 @@ operating range the field-calibrated aging parameters were fit for, and
 simulating a 0–1.00 window models a battery management system that no real
 product ships.
 
+## Battery degradation calibration
+
+`calendar_model = "naumann_lam_field_calibrated"` is the stable default and
+maps to the v1 field calibration. The explicit
+`"naumann_lam_field_calibrated_v1"` alias is equivalent. Use
+`"naumann_lam_field_calibrated_v2"` for the v2 field-calibrated fit with Lam
+`Ea`/`n` fixed and `k0`/`b` fitted to field data.
+
 ## Discovering available options
 
 Use the CLI to list packaged option keys:
@@ -91,8 +99,8 @@ Add `--json` to any `breos list` command for machine-readable output.
 Before running a full simulation, validate and inspect a config:
 
 ```bash
-breos validate-config configs/examples/quickstart.toml
-breos run --config configs/examples/quickstart.toml --dry-run
+breos validate-config quickstart.toml
+breos run --config quickstart.toml --dry-run
 ```
 
 These commands resolve packaged presets, modules, inverter sizing, battery
@@ -154,14 +162,15 @@ breos.App({
 
 For full control, build a {py:class}`~breos.CostParams` and
 {py:class}`~breos.EmissionsParams` yourself and call the lower-level
-functions — see [Building custom pipelines](../api/index.md) once that
-guide lands, or browse the [Cost analysis API](../api/cost-analysis.md).
+functions documented in the [Cost and emissions API](../api/cost-analysis.md).
 
 ## Load profiles
 
 The public package default is `load_profile = "1"`, a demandlib-derived H0
-example bundled with BREOS. Other standard profile keys remain supported when
-you provide the required CSV files yourself through `rlp_directory`:
+example bundled with BREOS. `load_profile = "demandlib_h0"` is the same
+profile under a readable alias and is preferred in examples. Other standard
+profile keys remain supported when you provide the required CSV files yourself
+through `rlp_directory`:
 
 ```python
 breos.App({

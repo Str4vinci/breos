@@ -7,8 +7,8 @@ what the result dict contains.
 :maxdepth: 1
 
 installation
-inputs
 quickstart
+inputs
 recipes
 configuration
 options

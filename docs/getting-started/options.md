@@ -92,13 +92,13 @@ Country codes for the `emissions_country` config key, from `breos/data/configs/e
 
 ## Load profiles
 
-Keys for the `load_profile` config key, from `breos.load_profiles.PROFILE_NAMES`. Non-bundled profiles need their source CSVs supplied through `rlp_directory` — see [Load Profile Data](../legal/load-profile-data.md) for expected filenames and licensing notes.
+Keys for the `load_profile` config key, from `breos.load_profiles.PROFILE_NAMES`. Non-bundled profiles need their source CSVs supplied through `rlp_directory` — see [Load Profile Data](../legal/load-profile-data.md) for expected filenames and licensing notes. The `bdew_h0` alias maps to the bundled demandlib-shaped H0 example; direct BDEW H0 2025 is key `7` and requires an external CSV.
 
-| Key | Name | Bundled |
-|---|---|---|
-| `1` | H0SLP (demandlib) | yes |
-| `4` | E-Redes 2025 - BTN A (external file required) | no |
-| `5` | E-Redes 2025 - BTN B (external file required) | no |
-| `6` | E-Redes 2025 - BTN C (external file required) | no |
-| `7` | BDEW H0 2025 (external file required) | no |
-| `8` | REE 2026 - 2.0TD (external file required) | no |
+| Key | Name | Aliases | Bundled |
+|---|---|---|---|
+| `1` | H0SLP (demandlib) | `bdew_h0, crest, default, demandlib_h0, h0` | yes |
+| `4` | E-Redes 2025 - BTN A (external file required) | — | no |
+| `5` | E-Redes 2025 - BTN B (external file required) | — | no |
+| `6` | E-Redes 2025 - BTN C (external file required) | `eredes_btn_c` | no |
+| `7` | BDEW H0 2025 (external file required) | — | no |
+| `8` | REE 2026 - 2.0TD (external file required) | `ree_2.0td` | no |

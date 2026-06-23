@@ -40,7 +40,7 @@ pip install "breos[plots]"          # matplotlib plotting helpers
 pip install "breos[optimization]"   # pymoo multi-objective sizing
 pip install "breos[weather]"        # Open-Meteo historical weather fetching
 pip install "breos[fast]"           # Numba kernels
-pip install "breos[validation]"     # Excel / Arrow validation workflows
+pip install "breos[validation]"     # Excel / Arrow dependencies for local validation work
 pip install "breos[location-tools]" # geocoding and timezone lookup helpers
 ```
 

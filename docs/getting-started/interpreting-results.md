@@ -21,7 +21,7 @@ flag.
 | `total_investment_eur` | Total CAPEX |
 | `payback_year` | First year with positive cumulative NPV (`None` if not reached) |
 | `npv_savings_eur` | Cumulative NPV savings over the projection horizon |
-| `lcoe_eur_kwh` | Levelized cost of electricity |
+| `lcoe_eur_kwh` | Levelized cost of electricity from system CAPEX, O&M, simulated replacements, and discounted PV production |
 | `monthly` | Year 1 monthly energy balance rows |
 | `financial` | Yearly financial projection rows (year 0 = investment) |
 | `yearly` | Per-year breakdown of production, load, imports, exports |

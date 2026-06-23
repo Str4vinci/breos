@@ -93,7 +93,12 @@ def export_cost_analysis(
 
 
 def export_summary(
-    summary_df: pd.DataFrame, results_directory: str, prefix: str = "", suffix: str = "", format: str = "txt"
+    summary_df: pd.DataFrame,
+    results_directory: str,
+    prefix: str = "",
+    suffix: str = "",
+    format: str = "txt",
+    extra_metrics: Optional[Dict[str, Any]] = None,
 ) -> str:
     """
     Export summary statistics as formatted text or CSV.
@@ -104,11 +109,19 @@ def export_summary(
         prefix: Optional prefix for filename
         suffix: Optional suffix for filename
         format: Output format ('txt' for formatted text, 'csv' for raw)
+        extra_metrics: Optional label -> value pairs appended as additional
+            summary fields (e.g. ``{"LCOE [EUR/kWh]": "0.1327"}``). Pre-format
+            float values as strings to control their displayed precision.
 
     Returns:
         Path to the saved file
     """
     os.makedirs(results_directory, exist_ok=True)
+
+    if extra_metrics:
+        summary_df = summary_df.copy()
+        for label, value in extra_metrics.items():
+            summary_df[label] = value
 
     parts = [p for p in [prefix, "summary", suffix] if p]
     filename = "_".join(parts) + f".{format}"
@@ -134,6 +147,40 @@ def export_summary(
     return filepath
 
 
+def _economics_summary_metrics(cost_projection_df: Optional[pd.DataFrame]) -> Dict[str, Any]:
+    """Pull headline economics figures from a cost projection's ``attrs``.
+
+    The projection produced by :func:`breos.economics.cost_analysis_projection`
+    stamps LCOE, payback, NPV savings, and total investment onto
+    ``DataFrame.attrs``. This surfaces them as summary fields without any
+    recomputation. Missing figures are skipped; an absent projection yields an
+    empty dict.
+    """
+    if cost_projection_df is None:
+        return {}
+
+    attrs = cost_projection_df.attrs
+    metrics: Dict[str, Any] = {}
+
+    lcoe = attrs.get("lcoe_eur_kwh")
+    if lcoe is not None and np.isfinite(lcoe):
+        metrics["LCOE [EUR/kWh]"] = f"{float(lcoe):.4f}"
+
+    total_investment = attrs.get("total_investment")
+    if total_investment is not None:
+        metrics["Total Investment [EUR]"] = f"{float(total_investment):.2f}"
+
+    npv = attrs.get("final_npv_savings")
+    if npv is not None:
+        metrics["NPV Savings [EUR]"] = f"{float(npv):.2f}"
+
+    if "payback_year" in attrs:
+        payback = attrs.get("payback_year")
+        metrics["Payback [year]"] = "N/A" if payback is None else int(payback)
+
+    return metrics
+
+
 def save_simulation_report(
     results_df: pd.DataFrame,
     summary_df: pd.DataFrame,
@@ -142,15 +189,18 @@ def save_simulation_report(
     degradation_df: Optional[pd.DataFrame] = None,
     results_directory: str = "results",
     scenario_name: str = "",
+    economics_metrics: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, str]:
     """
     Save complete simulation report with all outputs.
 
-    Generates:
-    - results_{scenario}.csv: Full simulation time series
-    - summary_{scenario}.txt: Key metrics summary
-    - costs_{scenario}.csv: Cost analysis (if provided)
-    - degradation_{scenario}.csv: Battery degradation data (if provided)
+    Generates these files:
+
+    - ``results_{scenario}.csv``: full simulation time series.
+    - ``summary_{scenario}.txt``: key metrics summary, including LCOE,
+      payback, and NPV when a cost projection is provided.
+    - ``costs_{scenario}.csv``: cost analysis, if provided.
+    - ``degradation_{scenario}.csv``: battery degradation data, if provided.
 
     Args:
         results_df: Full simulation results DataFrame
@@ -160,6 +210,8 @@ def save_simulation_report(
         degradation_df: Optional degradation tracking DataFrame
         results_directory: Directory to save all files
         scenario_name: Scenario identifier for filenames
+        economics_metrics: Optional label -> value pairs added to the summary,
+            overriding any figures auto-derived from ``cost_projection_df``.
 
     Returns:
         Dictionary mapping file types to saved file paths
@@ -172,8 +224,13 @@ def save_simulation_report(
     # Save results
     saved_files["results"] = export_results(results_df, results_directory, suffix=suffix, format="csv")
 
-    # Save summary
-    saved_files["summary"] = export_summary(summary_df, results_directory, suffix=suffix, format="txt")
+    # Save summary, enriched with headline economics figures when available
+    summary_metrics = _economics_summary_metrics(cost_projection_df)
+    if economics_metrics:
+        summary_metrics.update(economics_metrics)
+    saved_files["summary"] = export_summary(
+        summary_df, results_directory, suffix=suffix, format="txt", extra_metrics=summary_metrics or None
+    )
 
     # Save cost projection if provided
     if cost_projection_df is not None:

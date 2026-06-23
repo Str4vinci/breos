@@ -21,6 +21,29 @@ a `pvlib.Location`, which means BREOS does not own its own public API.
 - Estimated effort: ~3–4 weeks of focused work, split into many small
   PRs.
 
+## Performance and portability
+
+### Resource controls and Apple Silicon hygiene
+
+BREOS already runs on macOS/Apple Silicon when installed in a native ARM
+Python environment, but longer optimization and Monte Carlo workflows need
+clearer resource controls so laptops and small-memory machines do not
+oversubscribe CPU threads or memory. Future work should make parallelism
+explicit, reproducible, and visible at startup.
+
+- Add CLI and config-level worker controls for simulation batches,
+  optimization, and Monte Carlo runs, for example `--workers 4` and an
+  equivalent config key.
+- Set conservative auto-defaults based on CPU count and available memory, with
+  particular care for fanless or low-memory Apple Silicon machines.
+- Control nested threading for Numba and scientific BLAS/OpenMP libraries, and
+  document `NUMBA_NUM_THREADS`, `OMP_NUM_THREADS`, `OPENBLAS_NUM_THREADS`,
+  `MKL_NUM_THREADS`, and `VECLIB_MAXIMUM_THREADS`.
+- Print a compact startup diagnostic for long runs: platform/architecture, CPU
+  count, selected worker count, Numba thread count, and detected memory.
+- Add a benchmark/smoke mode for comparing machines without launching a full
+  production run, e.g. reduced generations/population for optimizers.
+
 ## Onboarding and discoverability
 
 ### Make the first successful run easier to trust
@@ -58,6 +81,28 @@ Agent and contributor setup:
 
 ## Capability extensions
 
+### Configurable sky-diffusion (transposition) models
+
+**Target: 0.3.1.** BREOS currently hardcodes the isotropic sky-diffusion model
+when transposing GHI/DHI/DNI to plane-of-array irradiance (`model="isotropic"`
+in `solar._compute_effective_irradiance_and_cell_temp`). The isotropic model is
+simple and robust but underestimates POA on clear days; anisotropic models
+(Hay-Davies, Reindl, King, Perez, Perez-Driesse) are more accurate and are all
+available in `pvlib.irradiance.get_total_irradiance`. Callers should be able to
+select the model via config and the public production APIs.
+
+- Expose a `transposition_model` (a.k.a. `sky_model`) option threaded through
+  `calculate_pv_production_dc`, the tracking variant, and the `App` config
+  surface, defaulting to `isotropic` for backward compatibility.
+- Supply the extra inputs the anisotropic models need that the current
+  `get_total_irradiance` call omits: extraterrestrial DNI, relative airmass,
+  and (for Perez) the appropriate coefficient set.
+- Validate against the isotropic baseline on at least one reference location and
+  document the expected annual-yield differences (Perez vs isotropic can shift
+  annual POA by a few percent).
+- Add a docs entry and a recipe showing how to switch models.
+- Non-goal: spectral or bifacial irradiance modeling.
+
 ### String-aware inverter validation and modeling
 
 BREOS currently models PV systems at the aggregate array level. That is useful
@@ -79,6 +124,21 @@ provide module, inverter, environment, MPPT, and string-topology data.
 - Non-goal: code-compliance certification, conductor/fuse sizing, and physical
   wiring auto-routing.
 
+### 0.3.0 workflow hardening
+
+The 0.3.0 public surface focuses on deterministic PV + stationary-battery
+simulation, economic analysis, Monte Carlo uncertainty studies, and
+multi-objective PV/battery sizing. Near-term roadmap items should harden those
+workflows before adding new feature families:
+
+- Keep Monte Carlo outputs and plots aligned with the public result schema.
+- Add small example datasets or documented download steps for reproducible MC
+  demos without committing large weather files.
+- Improve multi-objective sizing examples, result serialization, and Pareto
+  plotting documentation.
+- Add release smoke tests for the exact README quickstart, MC example, and MOO
+  example.
+
 ## Distribution and release automation
 
 ### PyPI trusted publishing
@@ -91,23 +151,6 @@ documented in [docs/release.md](docs/release.md). Remaining work:
 
 - Protect `v*` tags in GitHub repository settings so only maintainers can
   create release tags.
-
-## Longer-Term Research Modules
-
-The following modules exist in the broader research codebase and may be
-released into BREOS in future versions, or are available for academic
-collaboration upon request (see README for context):
-
-- Time-of-Use (TOU) tariff optimization with multi-period pricing and
-  strategy comparison.
-- Vehicle-to-Home (V2H) simulation with EV scheduling and bidirectional
-  charging.
-- Multi-chemistry battery support — Sodium-ion (SIB), Vanadium Redox Flow
-  (VRFB), Solid-State (SSB).
-- Thermal energy storage (TES) with phase-change material modeling.
-- Heat pump integration with COP modeling and coupled electro-thermal
-  energy balance.
-- Community Self-Consumption (CSC) modeling for multi-building scenarios.
 
 ## Reference load profiles pending license verification
 

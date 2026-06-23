@@ -1,8 +1,8 @@
 # Energy balance
 
-Per-timestep dispatch of PV, load, battery, and grid. The dispatch engine
-runs the same way for PV-only and PV+battery systems — when no battery is
-configured, it simply skips the storage path.
+Per-timestep energy-flow accounting for PV, load, battery, and grid. The
+energy-balance engine runs the same way for PV-only and PV+battery systems —
+when no battery is configured, it simply skips the storage path.
 
 ## Main entry point
 

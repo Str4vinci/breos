@@ -30,6 +30,11 @@ class OptimizationResult:
     details: Dict[str, Any]
 
 
+def _serial_elementwise_runner(func: Callable[[Any], Any], args: list[Any]) -> list[Any]:
+    """Fallback pymoo elementwise runner for single-process evaluation."""
+    return [func(arg) for arg in args]
+
+
 def _resolve_max_tilt_deg(constraints: Dict[str, Any], latitude: float) -> float:
     """Resolve the optimization tilt upper bound from constraints."""
     value = constraints.get("max_tilt_deg", 90.0)
@@ -611,7 +616,7 @@ try:
                 n_ieq_constr=2,  # Constr1: Budget, Constr2: Area
                 xl=xl,
                 xu=xu,
-                elementwise_runner=elementwise_runner,
+                elementwise_runner=elementwise_runner or _serial_elementwise_runner,
             )
 
         def __getstate__(self):
@@ -732,3 +737,111 @@ try:
 except ImportError:
     # If pymoo is not installed, these classes won't be available
     pass
+
+
+def optimize_system_multi_objective(
+    tmy_data: pd.DataFrame,
+    houseload: pd.DataFrame,
+    config: Dict[str, Any],
+    results_dir: str = "results/optimization",
+    pop_size: int = 40,
+    n_gen: int = 100,
+    n_offsprings: int | None = None,
+    seed: int = 1,
+    verbose: bool = False,
+) -> OptimizationResult:
+    """Run NSGA-II multi-objective PV/battery sizing.
+
+    This is the public wrapper around :class:`SolarDesignProblem`. It optimizes
+    module count, battery capacity, tilt, and optionally azimuth. Objectives are
+    grid independence, NPV, and ZEB ratio. Install ``breos[optimization]`` to
+    provide the pymoo dependency.
+
+    Args:
+        tmy_data: One-year weather DataFrame.
+        houseload: One-year load profile.
+        config: Optimization config using the nested keys consumed by
+            :class:`SolarDesignProblem` (``location``, ``constraints``,
+            ``simulation``, ``pv``, ``battery``, ``costs``, ``financials``).
+        results_dir: Directory label retained in the problem object.
+        pop_size: NSGA-II population size.
+        n_gen: Number of generations.
+        n_offsprings: Offspring count per generation. Defaults to pymoo's
+            algorithm default when ``None``.
+        seed: Random seed passed to pymoo.
+        verbose: Print pymoo progress.
+
+    Returns:
+        :class:`OptimizationResult` whose ``details["pareto"]`` is a DataFrame
+        with ``Modules``, ``Battery_kWh``, ``Tilt``, ``Azimuth``,
+        ``Grid_Independence_%``, ``NPV_Eur``, and ``ZEB_Ratio``.
+
+    Raises:
+        ImportError: If pymoo is not installed.
+        RuntimeError: If the optimizer returns no feasible solution.
+    """
+    if "SolarDesignProblem" not in globals() or "DiscreteGridRepair" not in globals():
+        raise ImportError(
+            "pymoo is required for optimize_system_multi_objective(). Install with: pip install 'breos[optimization]'"
+        )
+
+    try:
+        from pymoo.algorithms.moo.nsga2 import NSGA2
+        from pymoo.operators.crossover.sbx import SBX
+        from pymoo.operators.mutation.pm import PM
+        from pymoo.operators.sampling.rnd import FloatRandomSampling
+        from pymoo.optimize import minimize
+    except ImportError as exc:
+        raise ImportError(
+            "pymoo is required for optimize_system_multi_objective(). Install with: pip install 'breos[optimization]'"
+        ) from exc
+
+    algorithm_kwargs: dict[str, Any] = {
+        "pop_size": pop_size,
+        "sampling": FloatRandomSampling(),
+        "crossover": SBX(prob=0.9, eta=15),
+        "mutation": PM(eta=20),
+        "repair": DiscreteGridRepair(),
+        "eliminate_duplicates": True,
+    }
+    if n_offsprings is not None:
+        algorithm_kwargs["n_offsprings"] = n_offsprings
+
+    problem = SolarDesignProblem(tmy_data, houseload, config, results_dir)
+    result = minimize(
+        problem,
+        NSGA2(**algorithm_kwargs),
+        ("n_gen", n_gen),
+        seed=seed,
+        verbose=verbose,
+    )
+
+    if result.X is None or result.F is None:
+        raise RuntimeError("Multi-objective optimization found no feasible solutions.")
+
+    x = np.atleast_2d(result.X)
+    f = np.atleast_2d(result.F)
+    fixed_azimuth = (config.get("mode") or {}).get("fixed_azimuth")
+    if fixed_azimuth is not None:
+        pareto = pd.DataFrame(x, columns=["Modules", "Battery_kWh", "Tilt"])
+        pareto["Azimuth"] = fixed_azimuth
+    else:
+        pareto = pd.DataFrame(x, columns=["Modules", "Battery_kWh", "Tilt", "Azimuth"])
+
+    pareto["Modules"] = pareto["Modules"].round().astype(int)
+    pareto["Battery_kWh"] = pareto["Battery_kWh"].round().astype(float)
+    pareto["Grid_Independence_%"] = (1 - f[:, 0]) * 100
+    pareto["NPV_Eur"] = -f[:, 1]
+    pareto["ZEB_Ratio"] = -f[:, 2]
+
+    actual_generations = int(getattr(result.algorithm, "n_gen", n_gen))
+    return OptimizationResult(
+        optimal_value=float("nan"),
+        objective_value=float("nan"),
+        iterations=actual_generations,
+        details={
+            "pareto": pareto,
+            "pymoo_result": result,
+            "problem": problem,
+        },
+    )

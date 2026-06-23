@@ -22,7 +22,9 @@ local weather files through the lower-level weather helpers.
 ## Load profiles
 
 BREOS bundles only the demandlib-derived H0 example profile. It is suitable
-for examples and baseline residential simulations.
+for examples and baseline residential simulations. Use
+`load_profile = "demandlib_h0"` or the equivalent canonical key `"1"` for that
+bundled profile.
 
 For E-REDES, REE, direct BDEW, measured smart-meter data, or any other custom
 profile, provide licensed local CSV files and pass `rlp_directory`:

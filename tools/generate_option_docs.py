@@ -99,11 +99,14 @@ SECTIONS: list[dict[str, Any]] = [
             " `breos.load_profiles.PROFILE_NAMES`. Non-bundled profiles need their"
             " source CSVs supplied through `rlp_directory` — see"
             " [Load Profile Data](../legal/load-profile-data.md) for expected"
-            " filenames and licensing notes."
+            " filenames and licensing notes. The `bdew_h0` alias maps to the"
+            " bundled demandlib-shaped H0 example; direct BDEW H0 2025 is key"
+            " `7` and requires an external CSV."
         ),
         "columns": [
             ("key", "Key", "code"),
             ("name", "Name", "text"),
+            ("aliases", "Aliases", "code"),
             ("bundled", "Bundled", "text"),
         ],
     },

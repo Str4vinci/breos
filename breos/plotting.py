@@ -1175,8 +1175,85 @@ def plot_monthly_balance(results_df: pd.DataFrame, results_directory: str) -> No
     plt.close()
 
 
+def _finite_numeric_series(df: pd.DataFrame, column: str) -> pd.Series:
+    """Return finite numeric values from a DataFrame column."""
+    if column not in df.columns:
+        return pd.Series(dtype=float)
+    series = pd.to_numeric(df[column], errors="coerce")
+    return series.replace([np.inf, -np.inf], np.nan).dropna()
+
+
+def _is_breos_montecarlo_summary(df: pd.DataFrame) -> bool:
+    """Detect the one-row-per-run schema written by ``breos montecarlo``."""
+    return "npv_savings_eur" in df.columns and ("run" in df.columns or "payback_year" in df.columns)
+
+
+def _plot_montecarlo_distribution(
+    values: pd.Series,
+    results_directory: str,
+    filename: str,
+    xlabel: str,
+    color: str,
+    suffix: str = "",
+    include_zero: bool = False,
+) -> bool:
+    """Shared histogram with P5/P50/P95 markers for MC summary metrics."""
+    _check_matplotlib()
+
+    values = pd.to_numeric(values, errors="coerce").replace([np.inf, -np.inf], np.nan).dropna()
+    if values.empty:
+        return False
+
+    p5 = float(values.quantile(0.05))
+    p50 = float(values.quantile(0.50))
+    p95 = float(values.quantile(0.95))
+
+    fig, ax = plt.subplots(figsize=(12, 8))
+    bins = min(80, max(8, int(np.sqrt(len(values)) * 2)))
+    ax.hist(values, bins=bins, color=color, alpha=0.65, edgecolor="white", linewidth=0.5)
+
+    for val, label, linestyle, linewidth in (
+        (p5, "P5", "--", 1.5),
+        (p50, "P50", "-", 2.5),
+        (p95, "P95", "--", 1.5),
+    ):
+        ax.axvline(val, color="tab:red", linestyle=linestyle, linewidth=linewidth, label=f"{label}: {val:,.2f}")
+
+    if include_zero:
+        ax.axvline(0, color="black", linewidth=0.8, alpha=0.5)
+
+    ax.set_xlabel(xlabel, fontsize=12)
+    ax.set_ylabel("Runs", fontsize=12)
+    ax.grid(True, alpha=0.3, axis="y")
+    ax.legend()
+
+    plt.tight_layout()
+    plt.savefig(f"{results_directory}/{filename}{suffix}.png", dpi=300)
+    plt.close()
+    return True
+
+
+def _plot_montecarlo_payback_summary(df: pd.DataFrame, results_directory: str, suffix: str = "") -> None:
+    """Plot payback distribution, CDF, and achieved/not-achieved summary."""
+    _check_matplotlib()
+
+    total_runs = len(df)
+    payback = _finite_numeric_series(df, "payback_year")
+    achieved_count = len(payback)
+
+    if achieved_count:
+        payback_values = payback.tolist()
+        plot_breakeven_distribution(payback_values, total_runs, results_directory, suffix)
+        plot_breakeven_cdf(payback_values, results_directory, suffix)
+    plot_breakeven_summary_bar(achieved_count, total_runs, results_directory, suffix)
+
+
 def plot_montecarlo_simulation(
-    all_data: List[dict], results_directory: str, scenario_name: str = "", full_df: Optional[pd.DataFrame] = None
+    all_data: List[dict],
+    results_directory: str,
+    scenario_name: str = "",
+    full_df: Optional[pd.DataFrame] = None,
+    verbose: bool = True,
 ) -> None:
     """
     Generate all plots for Monte Carlo simulation results.
@@ -1186,6 +1263,8 @@ def plot_montecarlo_simulation(
         results_directory: Directory to save plots
         scenario_name: Optional suffix for filenames
         full_df: Optional DataFrame with full time-series results (for overlays)
+            or the one-row-per-run CSV written by ``breos montecarlo``.
+        verbose: Print the output directory when plots are generated.
     """
     _check_matplotlib()
 
@@ -1212,6 +1291,23 @@ def plot_montecarlo_simulation(
     if os.path.exists(details_path):
         details_df = pd.read_csv(details_path)
 
+    if full_df is not None and _is_breos_montecarlo_summary(full_df):
+        plot_montecarlo_npv_distribution(full_df, plots_folder, suffix)
+        plot_montecarlo_grid_independence_distribution(full_df, plots_folder, suffix)
+        plot_montecarlo_final_soh_distribution(full_df, plots_folder, suffix)
+        _plot_montecarlo_distribution(
+            _finite_numeric_series(full_df, "lcoe_eur_kwh"),
+            plots_folder,
+            "montecarlo_lcoe_distribution",
+            "LCOE (EUR/kWh)",
+            "tab:purple",
+            suffix,
+        )
+        _plot_montecarlo_payback_summary(full_df, plots_folder, suffix)
+        if verbose:
+            print(f"Monte Carlo plots saved to: {plots_folder}")
+        return
+
     if full_df is not None:
         # 4. Cost Overlay
         plot_montecarlo_cost_overlay(full_df, plots_folder, suffix)
@@ -1233,6 +1329,23 @@ def plot_montecarlo_simulation(
         df = full_df
     else:
         df = pd.DataFrame(all_data)
+
+    if not df.empty and _is_breos_montecarlo_summary(df):
+        plot_montecarlo_npv_distribution(df, plots_folder, suffix)
+        plot_montecarlo_grid_independence_distribution(df, plots_folder, suffix)
+        plot_montecarlo_final_soh_distribution(df, plots_folder, suffix)
+        _plot_montecarlo_distribution(
+            _finite_numeric_series(df, "lcoe_eur_kwh"),
+            plots_folder,
+            "montecarlo_lcoe_distribution",
+            "LCOE (EUR/kWh)",
+            "tab:purple",
+            suffix,
+        )
+        _plot_montecarlo_payback_summary(df, plots_folder, suffix)
+        if verbose:
+            print(f"Monte Carlo plots saved to: {plots_folder}")
+        return
 
     if not df.empty and "run_number" in df.columns:
         # Total unique runs
@@ -1269,7 +1382,8 @@ def plot_montecarlo_simulation(
     # 3. Summary Bar (Success Rate)
     plot_breakeven_summary_bar(len(breakeven_steps), total_runs, plots_folder, suffix)
 
-    print(f"Monte Carlo plots saved to: {plots_folder}")
+    if verbose:
+        print(f"Monte Carlo plots saved to: {plots_folder}")
 
 
 def plot_breakeven_distribution(
@@ -1489,11 +1603,25 @@ def plot_montecarlo_soh_overlay(all_results_df: pd.DataFrame, results_directory:
 
 def plot_montecarlo_npv_distribution(all_results_df: pd.DataFrame, results_directory: str, suffix: str = "") -> None:
     """
-    Histogram of final-year NPV savings across all MC runs, with P10/P50/P90/P99 lines.
+    Histogram of NPV savings across all MC runs.
 
-    NPV savings = cumulative_nosys_cost - cumulative_system_cost
+    Supports the one-row-per-run ``breos montecarlo`` CSV
+    (``npv_savings_eur``) and the legacy run-year schema where NPV savings is
+    derived from cumulative system and no-system costs.
     """
     _check_matplotlib()
+
+    if "npv_savings_eur" in all_results_df.columns:
+        _plot_montecarlo_distribution(
+            _finite_numeric_series(all_results_df, "npv_savings_eur"),
+            results_directory,
+            "montecarlo_npv_distribution",
+            "NPV Savings (EUR)",
+            "tab:blue",
+            suffix,
+            include_zero=True,
+        )
+        return
 
     df = all_results_df.copy()
     df["npv_savings"] = df["cumulative_nosys_cost"] - df["cumulative_system_cost"]
@@ -1540,9 +1668,24 @@ def plot_montecarlo_grid_independence_distribution(
     all_results_df: pd.DataFrame, results_directory: str, suffix: str = ""
 ) -> None:
     """
-    Histogram of final-year grid independence across all MC runs, with P10/P50/P90/P99 lines.
+    Histogram of grid independence across all MC runs.
+
+    Supports the one-row-per-run ``breos montecarlo`` CSV
+    (``mean_grid_independence_pct``) and the legacy run-year schema
+    (``grid_independence_pct``).
     """
     _check_matplotlib()
+
+    if "mean_grid_independence_pct" in all_results_df.columns:
+        _plot_montecarlo_distribution(
+            _finite_numeric_series(all_results_df, "mean_grid_independence_pct"),
+            results_directory,
+            "montecarlo_grid_independence_distribution",
+            "Mean Grid Independence (%)",
+            "tab:green",
+            suffix,
+        )
+        return
 
     if "grid_independence_pct" not in all_results_df.columns:
         print("No grid_independence_pct column found, skipping distribution plot.")
@@ -1581,6 +1724,24 @@ def plot_montecarlo_grid_independence_distribution(
     plt.tight_layout()
     plt.savefig(f"{results_directory}/montecarlo_grid_independence_distribution{suffix}.png", dpi=300)
     plt.close()
+
+
+def plot_montecarlo_final_soh_distribution(
+    all_results_df: pd.DataFrame, results_directory: str, suffix: str = ""
+) -> None:
+    """
+    Histogram of final battery state-of-health across one-row-per-run MC results.
+    """
+    _check_matplotlib()
+
+    _plot_montecarlo_distribution(
+        _finite_numeric_series(all_results_df, "final_soh_pct"),
+        results_directory,
+        "montecarlo_final_soh_distribution",
+        "Final Battery SOH (%)",
+        "tab:cyan",
+        suffix,
+    )
 
 
 def plot_tariff_comparison_manual(
@@ -1910,110 +2071,6 @@ def plot_optimization_results_2d(results_df: pd.DataFrame, results_directory: st
 
     plt.tight_layout()
     plt.savefig(f"{results_directory}/pareto_front{suffix}.png", dpi=300)
-    plt.close()
-
-
-def plot_acc_sizing_sweep(results_df: pd.DataFrame, results_directory: str, scenario_name: str = "") -> None:
-    """
-    Plot ACC Sizer results: Dual-axis plot of Self-Sufficiency vs Payback Period.
-
-    Args:
-        results_df: DataFrame with sizing results (from acc_sizer_logic)
-        results_directory: Directory to save plots
-        scenario_name: Optional suffix
-    """
-    _check_matplotlib()
-
-    os.makedirs(results_directory, exist_ok=True)
-    suffix = f"_{scenario_name}" if scenario_name else ""
-
-    # Sort by Scale/Size to ensure lines plot correctly
-    results_df = results_df.sort_values("Modules")
-
-    fig, ax1 = plt.subplots(figsize=(10, 6))
-
-    # X-Axis: System Size (kWp)
-    x = results_df["System_kWp"]
-
-    # Y-Axis 1: Self-Sufficiency (Benefit)
-    color1 = "tab:blue"
-    ax1.set_xlabel("System Size (kWp)", fontsize=12)
-    ax1.set_ylabel("Self-Sufficiency (%)", color=color1, fontsize=12)
-    ax1.plot(x, results_df["Self_Sufficiency_Pct"], color=color1, marker="o", label="Self-Sufficiency")
-    ax1.tick_params(axis="y", labelcolor=color1)
-    ax1.grid(True, alpha=0.3)
-
-    # Y-Axis 2: Payback Period (Cost Metric)
-    ax2 = ax1.twinx()
-    color2 = "tab:red"
-    ax2.set_ylabel("Payback Period (Years)", color=color2, fontsize=12)
-    # Payback is plotted raw; the sizer bounds the sweep range, so infinite
-    # or outlier payback values are not specially clamped here.
-    y2 = results_df["Payback_Years"]
-    ax2.plot(x, y2, color=color2, marker="s", linestyle="--", label="Payback")
-    ax2.tick_params(axis="y", labelcolor=color2)
-
-    # Mark Optima
-    # Financial Optimum (Min Payback)
-    opt_fin_idx = y2.idxmin()
-    opt_fin_x = x.loc[opt_fin_idx]
-    opt_fin_y = y2.loc[opt_fin_idx]
-    ax2.scatter(
-        [opt_fin_x], [opt_fin_y], s=150, c="red", marker="*", edgecolors="black", zorder=10, label="Financial Opt."
-    )
-
-    # Technical Optimum (Max SS)
-    opt_tech_idx = results_df["Self_Sufficiency_Pct"].idxmax()
-    opt_tech_x = x.loc[opt_tech_idx]
-    opt_tech_y = results_df["Self_Sufficiency_Pct"].loc[opt_tech_idx]
-    ax1.scatter(
-        [opt_tech_x], [opt_tech_y], s=150, c="blue", marker="*", edgecolors="black", zorder=10, label="Technical Opt."
-    )
-
-    # Combine Legends
-    lines1, labels1 = ax1.get_legend_handles_labels()
-    lines2, labels2 = ax2.get_legend_handles_labels()
-    ax1.legend(lines1 + lines2, labels1 + labels2, loc="center right")
-
-    plt.tight_layout()
-    plt.savefig(f"{results_directory}/acc_sizing_sweep{suffix}.png", dpi=300)
-    plt.close()
-
-    # Additional Plot: Trade-off (ROI vs Grid Independence -> Payback vs SS)
-    # User asked for ROI vs SS specifically.
-    fig2, ax = plt.subplots(figsize=(10, 6))
-
-    # Scatter Payback vs SS
-    # Ideal: High SS (Right), Low Payback (Bottom) -> Bottom-Right corner
-    sc = ax.scatter(
-        results_df["Self_Sufficiency_Pct"],
-        results_df["Payback_Years"],
-        c=results_df["System_kWp"],
-        cmap="viridis",
-        s=100,
-        edgecolor="black",
-    )
-
-    cbar = plt.colorbar(sc)
-    cbar.set_label("System Size (kWp)")
-
-    ax.set_xlabel("Self-Sufficiency (%)", fontsize=12)
-    ax.set_ylabel("Payback Period (Years)", fontsize=12)
-    # ax.set_title("Sizing Trade-off: Payback vs Self-Sufficiency")
-    ax.grid(True, alpha=0.3)
-
-    # Annotate Pareto points
-    for idx in [opt_fin_idx, opt_tech_idx]:
-        txt = f"{results_df.loc[idx, 'System_kWp']:.1f} kWp"
-        ax.annotate(
-            txt,
-            (results_df.loc[idx, "Self_Sufficiency_Pct"], results_df.loc[idx, "Payback_Years"]),
-            xytext=(5, 5),
-            textcoords="offset points",
-        )
-
-    plt.tight_layout()
-    plt.savefig(f"{results_directory}/acc_sizing_tradeoff{suffix}.png", dpi=300)
     plt.close()
 
 
