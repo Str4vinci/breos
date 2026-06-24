@@ -2,6 +2,22 @@
 
 All notable changes to BREOS are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased]
+
+### Added
+- Config validation now rejects unknown top-level keys. A typo such as
+  `batery_kwh` previously slipped through `merge_defaults` and silently
+  defaulted (e.g. the battery to `0`), producing plausible-but-wrong results;
+  it now raises listing the offending key(s). The optional `montecarlo`
+  section is recognised so Monte Carlo configs still validate.
+
+### Changed
+- `resolve_pv_system` no longer mutates the merged config in place to record
+  the derived `n_modules`; the resolved count is materialised into a fresh
+  dict by `resolve_app_config`, so the dict wrapped by the frozen
+  `ResolvedAppConfig` is built once and the caller's input dict is left
+  untouched.
+
 ## [0.3.0] - 2026-06-24
 
 ### Fixed
