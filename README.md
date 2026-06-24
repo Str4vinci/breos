@@ -196,7 +196,8 @@ PV loss overrides, battery SOC limits, tariffs, inflation, and discounting.
 - **PV model background**: BREOS uses pvlib for solar position, irradiance
   transposition, cell temperature, and PV performance model pieces. The
   sky-diffusion transposition model is selectable via `transposition_model`
-  (default `isotropic`; see configuration docs). See
+  (default `isotropic`), with `albedo`/`surface_type` for ground reflectance
+  and `model_perez` for the Perez coefficient set (see configuration docs). See
   [docs/resources.md](docs/resources.md) for pvlib and PV model references.
 - **Inverter**: the energy balance applies a flat `inverter_efficiency` and
   clips AC output (PV and battery discharge combined) at the inverter rating

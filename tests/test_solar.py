@@ -4,6 +4,8 @@ import pandas as pd
 import pytest
 
 from breos.solar import (
+    PEREZ_MODELS,
+    SURFACE_TYPES,
     TRANSPOSITION_MODELS,
     calculate_multi_array_production,
     calculate_pv_production_dc,
@@ -299,3 +301,80 @@ class TestTranspositionModel:
             transposition_model="isotropic",
         )
         assert per_array.sum() != pytest.approx(default_iso.sum())
+
+
+class TestGroundReflectance:
+    def _dc(self, weather, loc, pv_params, **kw):
+        return calculate_pv_production_dc(
+            weather_data=weather,
+            location=loc,
+            tilt=35,
+            surface_azimuth=180,
+            n_modules=1,
+            pv_params=pv_params,
+            freq="h",
+            **kw,
+        )
+
+    def test_default_albedo_unchanged(self, synthetic_weather, porto_location, pv_params):
+        # Not passing albedo must reproduce pvlib's 0.25 default exactly.
+        base = self._dc(synthetic_weather, porto_location, pv_params)
+        explicit = self._dc(synthetic_weather, porto_location, pv_params, albedo=0.25)
+        pd.testing.assert_series_equal(base, explicit)
+
+    def test_higher_albedo_raises_yield(self, synthetic_weather, porto_location, pv_params):
+        base = self._dc(synthetic_weather, porto_location, pv_params).sum()
+        snowy = self._dc(synthetic_weather, porto_location, pv_params, albedo=0.65).sum()
+        assert snowy > base
+
+    def test_surface_type_matches_equivalent_albedo(self, synthetic_weather, porto_location, pv_params):
+        # pvlib maps surface_type="snow" to albedo 0.65.
+        by_type = self._dc(synthetic_weather, porto_location, pv_params, surface_type="snow")
+        by_value = self._dc(synthetic_weather, porto_location, pv_params, albedo=0.65)
+        pd.testing.assert_series_equal(by_type, by_value)
+
+    def test_albedo_and_surface_type_conflict(self, synthetic_weather, porto_location, pv_params):
+        with pytest.raises(ValueError, match="either 'albedo' or 'surface_type'"):
+            self._dc(synthetic_weather, porto_location, pv_params, albedo=0.3, surface_type="snow")
+
+    def test_invalid_surface_type(self, synthetic_weather, porto_location, pv_params):
+        with pytest.raises(ValueError, match="Unknown surface_type"):
+            self._dc(synthetic_weather, porto_location, pv_params, surface_type="lava")
+
+    def test_albedo_out_of_range(self, synthetic_weather, porto_location, pv_params):
+        with pytest.raises(ValueError, match="albedo must be between 0 and 1"):
+            self._dc(synthetic_weather, porto_location, pv_params, albedo=1.5)
+
+    def test_all_surface_types_resolve(self, synthetic_weather, porto_location, pv_params):
+        for surface_type in SURFACE_TYPES:
+            dc = self._dc(synthetic_weather, porto_location, pv_params, surface_type=surface_type)
+            assert dc.sum() > 0, surface_type
+
+
+class TestPerezCoefficients:
+    def _perez(self, weather, loc, pv_params, model_perez):
+        return calculate_pv_production_dc(
+            weather_data=weather,
+            location=loc,
+            tilt=35,
+            surface_azimuth=180,
+            n_modules=1,
+            pv_params=pv_params,
+            freq="h",
+            transposition_model="perez",
+            model_perez=model_perez,
+        )
+
+    def test_coefficient_set_changes_result(self, synthetic_weather, porto_location, pv_params):
+        default = self._perez(synthetic_weather, porto_location, pv_params, "allsitescomposite1990")
+        france = self._perez(synthetic_weather, porto_location, pv_params, "france1988")
+        assert france.sum() != pytest.approx(default.sum())
+
+    def test_all_perez_sets_resolve(self, synthetic_weather, porto_location, pv_params):
+        for model_perez in PEREZ_MODELS:
+            dc = self._perez(synthetic_weather, porto_location, pv_params, model_perez)
+            assert dc.sum() > 0, model_perez
+
+    def test_invalid_perez_model(self, synthetic_weather, porto_location, pv_params):
+        with pytest.raises(ValueError, match="Unknown Perez coefficient model"):
+            self._perez(synthetic_weather, porto_location, pv_params, "not_a_set")

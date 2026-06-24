@@ -14,6 +14,13 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   (extraterrestrial DNI, relative airmass) are derived internally. The default
   `isotropic` reproduces prior results bit-for-bit. Per-array overrides are
   supported in `pv_arrays`.
+- Configurable ground reflectance and Perez coefficients to drive those models
+  with real site information: `albedo` (0-1) or a named `surface_type`
+  (`"snow"`, `"sea"`, `"grass"`, ...) sets the ground-diffuse reflectance for
+  every model (previously fixed at pvlib's 0.25), and `model_perez` selects
+  the Perez coefficient set. All three are App config keys with matching
+  `--albedo` / `--surface-type` / `--perez-model` CLI flags and per-array
+  overrides; not setting them leaves the previous defaults unchanged.
 
 ## [0.3.0] - 2026-06-24
 
