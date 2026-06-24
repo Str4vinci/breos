@@ -21,6 +21,34 @@ a `pvlib.Location`, which means BREOS does not own its own public API.
 - Estimated effort: ~3–4 weeks of focused work, split into many small
   PRs.
 
+### Declarative config schema with strict validation
+
+The public `App` config surface is currently defined and checked in four
+separate places: the `DEFAULTS` dict and imperative `validate_config` in
+`breos.app_config`, plus the `argparse` flag definitions and the
+`_add_override` calls in `breos.cli`. Adding one parameter means editing all
+four, which is drift-prone, and the hand-rolled validation is hard to keep in
+sync with the defaults. Replace it with a single declarative schema (a
+dataclass with field metadata, or `pydantic`) so defaults, types, bounds, and
+documentation live in one place.
+
+- **Near-term first step (do independently of the full refactor): reject
+  unknown config keys.** Today `merge_defaults` does `{**DEFAULTS, **config}`
+  and `validate_config` only checks *known* keys, so a typo such as
+  `batery_kwh` is silently dropped and the battery defaults to `0.0` — the run
+  succeeds and returns plausible-but-wrong numbers with no warning. This is a
+  real footgun for parametric/batch studies driven by many config files. Add an
+  allowed-key check that raises listing the unknown key(s), in the existing
+  "Unknown X. Available: ..." style. Small, self-contained, worth a test.
+- **Full step:** collapse `DEFAULTS`, the validation rules, and the CLI flag
+  definitions into the schema so a new parameter is added once, not four times.
+- **Side cleanup:** stop mutating the input config during resolution —
+  `resolve_pv_system` writes `cfg["n_modules"] = sum(...)` into the same dict
+  the `frozen=True` `ResolvedAppConfig` wraps, which makes the immutability
+  partly cosmetic and the data flow harder to follow.
+- Keep all error messages actionable; preserve current behaviour for valid
+  configs (regression-test the example configs in `configs/examples/`).
+
 ## Performance and portability
 
 ### Resource controls and Apple Silicon hygiene
@@ -123,6 +151,23 @@ provide module, inverter, environment, MPPT, and string-topology data.
   improve multi-array energy modeling.
 - Non-goal: code-compliance certification, conductor/fuse sizing, and physical
   wiring auto-routing.
+
+### Parameter sweeps and batch runs
+
+The CLI runs one config to one result (`breos run --config ... --output ...`).
+Research workflows often set up *many* configs — parametric sweeps over module
+count, battery size, tilt, tariffs, and so on — which today means scripting the
+Python `App` in a loop by hand. Add a first-class way to enumerate a parameter
+grid (or a set of config files) and collect the per-run results into one table.
+
+- For example a `breos sweep` command over a base config plus a parameter grid,
+  or a glob of config files resolved into one combined CSV/JSON of results.
+- Reuse the worker controls planned under "Resource controls and Apple Silicon
+  hygiene" for parallel execution of independent runs.
+- Echo the resolved config (and `breos` version) per row so a sweep output is
+  self-describing and reproducible.
+- Non-goal: this is explicit enumeration, not optimization — the `optimization`
+  module's NSGA-II sizing already covers searching for good designs.
 
 ### 0.3.0 workflow hardening
 
