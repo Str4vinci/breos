@@ -68,6 +68,27 @@ class TestAppValidation:
         with pytest.raises(ValueError, match="azimuth"):
             App({"location": "porto", "n_modules": 10, "annual_consumption_kwh": 4000, "azimuth": 400})
 
+    def test_invalid_transposition_model(self):
+        with pytest.raises(ValueError, match="transposition_model"):
+            App(
+                {
+                    "location": "porto",
+                    "n_modules": 10,
+                    "annual_consumption_kwh": 4000,
+                    "transposition_model": "not_a_model",
+                }
+            )
+
+    def test_invalid_per_array_transposition_model(self):
+        with pytest.raises(ValueError, match=r"pv_arrays\[0\].transposition_model"):
+            App(
+                {
+                    "location": "porto",
+                    "annual_consumption_kwh": 4000,
+                    "pv_arrays": [{"modules": 5, "transposition_model": "not_a_model"}],
+                }
+            )
+
     def test_invalid_inverter_efficiency(self):
         with pytest.raises(ValueError, match="inverter_efficiency"):
             App({"location": "porto", "n_modules": 10, "annual_consumption_kwh": 4000, "inverter_efficiency": 1.5})
@@ -219,6 +240,24 @@ class TestAppValidation:
         # A 10% SOC window stores a tenth of the energy of the default
         # 10-90% window, so grid independence must drop
         assert narrow_gi < default_gi
+
+    def test_transposition_model_reaches_simulation(self, _patch_weather):
+        def _run(model):
+            app = App(
+                {
+                    "location": "porto",
+                    "n_modules": 6,
+                    "annual_consumption_kwh": 3000,
+                    "projection_years": 1,
+                    "transposition_model": model,
+                }
+            )
+            app.simulate()
+            return app.result()["pv_production_kwh"]
+
+        # The model must flow all the way through App.simulate(); an
+        # anisotropic model yields a different PV total than isotropic.
+        assert _run("perez") != pytest.approx(_run("isotropic"))
 
     def test_pv_loss_overrides_increase_production(self, _patch_weather):
         def _run(overrides):

@@ -35,6 +35,31 @@ DEFAULT_PVWATTS_LOSSES: Dict[str, float] = {
     "availability": 3.0,
 }
 
+# Sky-diffusion (transposition) models for projecting GHI/DHI/DNI onto the
+# plane of array, as supported by pvlib.irradiance.get_total_irradiance.
+# ``isotropic`` is the simple, robust baseline (and the default); the
+# anisotropic models are more accurate on clear days but need extra inputs
+# (extraterrestrial DNI and, for the Perez variants, relative airmass).
+TRANSPOSITION_MODELS = (
+    "isotropic",
+    "klucher",
+    "haydavies",
+    "reindl",
+    "king",
+    "perez",
+    "perez-driesse",
+)
+DEFAULT_TRANSPOSITION_MODEL = "isotropic"
+
+
+def _resolve_transposition_model(model: str) -> str:
+    """Normalise and validate a sky-diffusion transposition model name."""
+    normalised = str(model).strip().lower()
+    if normalised not in TRANSPOSITION_MODELS:
+        valid = ", ".join(TRANSPOSITION_MODELS)
+        raise ValueError(f"Unknown transposition model {model!r}. Valid models: {valid}")
+    return normalised
+
 
 @dataclass
 class PVModuleParams:
@@ -97,17 +122,30 @@ def _compute_effective_irradiance_and_cell_temp(
     solarpos: pd.DataFrame,
     surface_tilt,
     surface_azimuth,
+    transposition_model: str = DEFAULT_TRANSPOSITION_MODEL,
 ):
     """Compute effective POA irradiance (with IAM) and cell temperature.
 
     surface_tilt / surface_azimuth may be scalars (fixed) or per-timestep arrays/Series
     (tracking). Uses pvlib.irradiance.get_total_irradiance which is array-aware.
+
+    ``transposition_model`` selects the sky-diffusion model (see
+    ``TRANSPOSITION_MODELS``); the default ``"isotropic"`` reproduces prior
+    behaviour bit-for-bit.
     """
+    model = _resolve_transposition_model(transposition_model)
     dni, ghi, dhi = _extract_irradiance(weather_aligned)
     temp_air, wind_speed = _extract_met_data(weather_aligned)
 
     aoi = pvlib.irradiance.aoi(surface_tilt, surface_azimuth, solarpos.apparent_zenith, solarpos.azimuth)
     iam = pvlib.iam.ashrae(aoi)
+
+    # Hay-Davies, Reindl, and the Perez variants need extraterrestrial DNI; the
+    # Perez variants additionally need relative airmass. Isotropic, Klucher, and
+    # King ignore both, and passing them does not change the isotropic result,
+    # so computing them unconditionally keeps the call site simple.
+    dni_extra = pvlib.irradiance.get_extra_radiation(solarpos.index)
+    airmass = pvlib.atmosphere.get_relative_airmass(solarpos.apparent_zenith)
 
     poa = pvlib.irradiance.get_total_irradiance(
         surface_tilt=surface_tilt,
@@ -117,7 +155,9 @@ def _compute_effective_irradiance_and_cell_temp(
         dni=dni,
         ghi=ghi,
         dhi=dhi,
-        model="isotropic",
+        dni_extra=dni_extra,
+        airmass=airmass,
+        model=model,
     )
 
     poa_direct = np.nan_to_num(poa["poa_direct"].values, nan=0.0)
@@ -224,6 +264,7 @@ def calculate_pv_production_dc(
     start_year: Optional[int] = None,
     verbose: bool = False,
     loss_overrides: Optional[Dict[str, float]] = None,
+    transposition_model: str = DEFAULT_TRANSPOSITION_MODEL,
 ) -> pd.Series:
     """
     Calculate PV DC production from weather data (fixed-tilt array).
@@ -253,6 +294,9 @@ def calculate_pv_production_dc(
         current_year: Current simulation year (for age-based degradation)
         start_year: Year system was installed (for age calculation)
         verbose: Whether to print production summary
+        loss_overrides: Per-component PVWatts loss overrides (percent)
+        transposition_model: Sky-diffusion model for POA transposition
+            (one of ``TRANSPOSITION_MODELS``); defaults to ``"isotropic"``.
 
     Returns:
         pd.Series with DC power production in Watts (before inverter)
@@ -264,7 +308,11 @@ def calculate_pv_production_dc(
 
     times, solarpos, weather_aligned = _prepare_solarpos_and_weather(weather_data, location, freq)
     effective_irradiance, temp_cell = _compute_effective_irradiance_and_cell_temp(
-        weather_aligned, solarpos, surface_tilt=tilt, surface_azimuth=surface_azimuth
+        weather_aligned,
+        solarpos,
+        surface_tilt=tilt,
+        surface_azimuth=surface_azimuth,
+        transposition_model=transposition_model,
     )
     dc_power = _dc_from_poa(
         effective_irradiance,
@@ -304,6 +352,7 @@ def calculate_pv_production_dc_tracking(
     start_year: Optional[int] = None,
     verbose: bool = False,
     loss_overrides: Optional[Dict[str, float]] = None,
+    transposition_model: str = DEFAULT_TRANSPOSITION_MODEL,
 ) -> pd.Series:
     """
     Calculate PV DC production for a tracking array (single- or dual-axis).
@@ -332,6 +381,9 @@ def calculate_pv_production_dc_tracking(
         current_year: Current simulation year (for age-based degradation).
         start_year: Year system was installed.
         verbose: Whether to print production summary.
+        loss_overrides: Per-component PVWatts loss overrides (percent).
+        transposition_model: Sky-diffusion model for POA transposition
+            (one of ``TRANSPOSITION_MODELS``); defaults to ``"isotropic"``.
 
     Returns:
         pd.Series with DC power production in Watts (before inverter).
@@ -372,7 +424,11 @@ def calculate_pv_production_dc_tracking(
         surface_azimuth = np.where(below_horizon, axis_azimuth, surface_azimuth)
 
     effective_irradiance, temp_cell = _compute_effective_irradiance_and_cell_temp(
-        weather_aligned, solarpos, surface_tilt=surface_tilt, surface_azimuth=surface_azimuth
+        weather_aligned,
+        solarpos,
+        surface_tilt=surface_tilt,
+        surface_azimuth=surface_azimuth,
+        transposition_model=transposition_model,
     )
     dc_power = _dc_from_poa(
         effective_irradiance,
@@ -430,6 +486,7 @@ def calculate_pv_production_tmy(
     pv_params: Optional[PVModuleParams] = None,
     freq: str = "h",
     verbose: bool = True,
+    transposition_model: str = DEFAULT_TRANSPOSITION_MODEL,
 ) -> pd.Series:
     """
     Calculate PV DC production from TMY data.
@@ -459,6 +516,7 @@ def calculate_pv_production_tmy(
         freq=freq,
         degradation_rate=0.0,  # TMY doesn't include degradation
         verbose=verbose,
+        transposition_model=transposition_model,
     )
 
 
@@ -476,6 +534,7 @@ def calculate_pv_production_ac(
     inverter_loading_ratio: float = 1.25,
     inverter_efficiency: float = 0.96,
     verbose: bool = False,
+    transposition_model: str = DEFAULT_TRANSPOSITION_MODEL,
 ) -> pd.Series:
     """
     Calculate PV AC production from weather data.
@@ -518,6 +577,7 @@ def calculate_pv_production_ac(
         current_year=current_year,
         start_year=start_year,
         verbose=False,
+        transposition_model=transposition_model,
     )
 
     pv_peak_power_w = n_modules * pv_params.Mpp
@@ -659,6 +719,7 @@ def calculate_multi_array_production(
     start_year: Optional[int] = None,
     verbose: bool = False,
     loss_overrides: Optional[Dict[str, float]] = None,
+    transposition_model: str = DEFAULT_TRANSPOSITION_MODEL,
 ) -> pd.Series:
     """
     Calculate combined DC production from multiple PV arrays.
@@ -673,12 +734,16 @@ def calculate_multi_array_production(
             use ``tilt`` and ``azimuth``. Single-axis arrays can also set
             ``axis_tilt``, ``axis_azimuth``, ``max_angle``, ``backtrack``,
             ``gcr``, and ``cross_axis_tilt``. Dual-axis arrays can set
-            ``dual_axis_max_tilt``.
+            ``dual_axis_max_tilt``. Any array may set ``transposition_model``
+            to override the function-level default for that array.
         freq: Time frequency ('h' or '15min')
         degradation_rate: Annual degradation rate
         current_year: Current simulation year
         start_year: Installation year
         verbose: Print summary
+        loss_overrides: Per-component PVWatts loss overrides (percent)
+        transposition_model: Default sky-diffusion model for arrays that do
+            not set their own (one of ``TRANSPOSITION_MODELS``).
 
     Returns:
         pd.Series with total DC power (watts)
@@ -699,6 +764,7 @@ def calculate_multi_array_production(
         mod_name = arr.get("module", "Generic_400W")
         pv_params = get_module(mod_name)
         tracking = arr.get("tracking", "fixed")
+        arr_transposition = arr.get("transposition_model", transposition_model)
 
         if tracking == "fixed":
             tilt = arr.get("tilt", 35)
@@ -720,6 +786,7 @@ def calculate_multi_array_production(
                 start_year=start_year,
                 verbose=False,
                 loss_overrides=loss_overrides,
+                transposition_model=arr_transposition,
             )
         elif tracking in ("single_axis", "dual_axis"):
             if verbose:
@@ -751,6 +818,7 @@ def calculate_multi_array_production(
                 start_year=start_year,
                 verbose=False,
                 loss_overrides=loss_overrides,
+                transposition_model=arr_transposition,
             )
         else:
             raise ValueError(

@@ -182,8 +182,8 @@ Only `location`, `annual_consumption_kwh`, and either `n_modules` or
 | `rlp_directory` | `None` | Directory containing licensed external RLP CSVs for non-bundled load profiles |
 
 See [docs/getting-started/configuration.md](docs/getting-started/configuration.md)
-for every option, including tracking, PV loss overrides, battery SOC limits,
-tariffs, inflation, and discounting.
+for every option, including tracking, the sky-diffusion (transposition) model,
+PV loss overrides, battery SOC limits, tariffs, inflation, and discounting.
 
 ### Modeling conventions
 
@@ -194,7 +194,9 @@ tariffs, inflation, and discounting.
   added separately per simulation year. Override individual components with
   `pv_loss_overrides` (App) or `loss_overrides` (solar functions).
 - **PV model background**: BREOS uses pvlib for solar position, irradiance
-  transposition, cell temperature, and PV performance model pieces. See
+  transposition, cell temperature, and PV performance model pieces. The
+  sky-diffusion transposition model is selectable via `transposition_model`
+  (default `isotropic`; see configuration docs). See
   [docs/resources.md](docs/resources.md) for pvlib and PV model references.
 - **Inverter**: the energy balance applies a flat `inverter_efficiency` and
   clips AC output (PV and battery discharge combined) at the inverter rating

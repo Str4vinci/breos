@@ -9,8 +9,8 @@ from breos.economics import CostParams, calculate_costs
 from breos.emissions import EmissionsParams
 from breos.pv_modules import MODULES, PVModuleParams, get_module
 from breos.resources import load_config_json
+from breos.solar import DEFAULT_TRANSPOSITION_MODEL, TRANSPOSITION_MODELS, estimate_optimal_tilt
 from breos.solar import default_azimuth as default_azimuth_fn
-from breos.solar import estimate_optimal_tilt
 
 DEFAULTS: dict[str, Any] = {
     "battery_kwh": 0.0,
@@ -28,6 +28,7 @@ DEFAULTS: dict[str, Any] = {
     "gcr": 0.35,
     "cross_axis_tilt": 0.0,
     "dual_axis_max_tilt": 90.0,
+    "transposition_model": DEFAULT_TRANSPOSITION_MODEL,
     "resolution": "h",
     "projection_years": 20,
     "cost_preset": None,
@@ -114,6 +115,10 @@ def validate_config(cfg: dict[str, Any]) -> None:
                 raise ValueError(f"'pv_arrays[{i}].tilt' must be between 0 and 90")
             if azimuth is not None and not 0 <= azimuth <= 360:
                 raise ValueError(f"'pv_arrays[{i}].azimuth' must be between 0 and 360")
+            arr_model = arr.get("transposition_model")
+            if arr_model is not None and str(arr_model).strip().lower() not in TRANSPOSITION_MODELS:
+                valid = ", ".join(TRANSPOSITION_MODELS)
+                raise ValueError(f"'pv_arrays[{i}].transposition_model' must be one of: {valid}")
     if cfg["annual_consumption_kwh"] <= 0:
         raise ValueError("'annual_consumption_kwh' must be > 0")
     if cfg["battery_kwh"] < 0:
@@ -134,6 +139,9 @@ def validate_config(cfg: dict[str, Any]) -> None:
         raise ValueError("'pv_degradation_rate' must be between 0 (inclusive) and 1 (exclusive)")
     if cfg["resolution"] not in ("h", "15min"):
         raise ValueError("'resolution' must be 'h' or '15min'")
+    if str(cfg["transposition_model"]).strip().lower() not in TRANSPOSITION_MODELS:
+        valid = ", ".join(TRANSPOSITION_MODELS)
+        raise ValueError(f"'transposition_model' must be one of: {valid}")
     overrides = cfg.get("pv_loss_overrides")
     if overrides is not None:
         if not isinstance(overrides, dict):
@@ -171,7 +179,7 @@ def normalise_pv_arrays(arrays: list[dict[str, Any]] | None, cfg: dict[str, Any]
     default_tilt = cfg.get("tilt") if cfg.get("tilt") is not None else estimate_optimal_tilt(lat)
     default_azimuth = cfg.get("azimuth") if cfg.get("azimuth") is not None else default_azimuth_fn(lat)
 
-    tracking_passthrough_keys = (
+    passthrough_keys = (
         "tracking",
         "axis_tilt",
         "axis_azimuth",
@@ -180,6 +188,7 @@ def normalise_pv_arrays(arrays: list[dict[str, Any]] | None, cfg: dict[str, Any]
         "gcr",
         "cross_axis_tilt",
         "dual_axis_max_tilt",
+        "transposition_model",
     )
 
     normalized: list[dict[str, Any]] = []
@@ -190,7 +199,7 @@ def normalise_pv_arrays(arrays: list[dict[str, Any]] | None, cfg: dict[str, Any]
             "tilt": float(arr.get("tilt", default_tilt)),
             "azimuth": float(arr.get("azimuth", default_azimuth)),
         }
-        for key in tracking_passthrough_keys:
+        for key in passthrough_keys:
             if key in arr:
                 entry[key] = arr[key]
         normalized.append(entry)

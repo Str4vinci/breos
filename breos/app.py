@@ -44,8 +44,9 @@ class App:
         - ``annual_consumption_kwh`` - yearly electricity demand (float, > 0).
 
         Optional keys include battery size, PV arrays, module selection, load
-        profile, tracking, resolution, projection years, cost and emissions
-        presets, degradation, and inverter assumptions.
+        profile, tracking, sky-diffusion model (``transposition_model``),
+        resolution, projection years, cost and emissions presets, degradation,
+        and inverter assumptions.
     """
 
     def __init__(self, config: dict) -> None:

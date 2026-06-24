@@ -89,6 +89,25 @@ tilt = 10
 azimuth = 270   # west
 ```
 
+## Anisotropic sky-diffusion model
+
+The default `isotropic` transposition underestimates plane-of-array
+irradiance on clear days. Switch to an anisotropic model — here Perez — to
+capture circumsolar and horizon brightening. No extra weather inputs are
+needed; see [Sky-diffusion model](configuration.md#sky-diffusion-transposition-model):
+
+```toml
+location = "porto"
+n_modules = 10
+annual_consumption_kwh = 4000
+cost_preset = "residential_pt"
+emissions_country = "PT"
+transposition_model = "perez"
+```
+
+From the CLI, the equivalent flag is `--transposition-model perez`
+(alias `--sky-model`).
+
 ## 15-minute resolution
 
 Hourly weather is interpolated to 15-minute steps (Makima), and the bundled

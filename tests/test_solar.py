@@ -4,6 +4,7 @@ import pandas as pd
 import pytest
 
 from breos.solar import (
+    TRANSPOSITION_MODELS,
     calculate_multi_array_production,
     calculate_pv_production_dc,
     calculate_pv_production_dc_tracking,
@@ -238,3 +239,63 @@ class TestMultiArrayTracking:
                 arrays=arrays,
                 freq="h",
             )
+
+
+class TestTranspositionModel:
+    def _dc(self, weather, loc, pv_params, **kw):
+        return calculate_pv_production_dc(
+            weather_data=weather,
+            location=loc,
+            tilt=35,
+            surface_azimuth=180,
+            n_modules=1,
+            pv_params=pv_params,
+            freq="h",
+            **kw,
+        )
+
+    def test_default_matches_explicit_isotropic(self, synthetic_weather, porto_location, pv_params):
+        # The default must reproduce the prior isotropic result bit-for-bit.
+        default = self._dc(synthetic_weather, porto_location, pv_params)
+        isotropic = self._dc(synthetic_weather, porto_location, pv_params, transposition_model="isotropic")
+        pd.testing.assert_series_equal(default, isotropic)
+
+    def test_all_models_run_and_are_non_negative(self, synthetic_weather, porto_location, pv_params):
+        for model in TRANSPOSITION_MODELS:
+            dc = self._dc(synthetic_weather, porto_location, pv_params, transposition_model=model)
+            assert (dc >= -0.01).all(), model
+            assert dc.sum() > 0, model
+
+    def test_anisotropic_differs_from_isotropic(self, synthetic_weather, porto_location, pv_params):
+        # Anisotropic models raise clear-day POA, so annual energy should exceed isotropic.
+        isotropic = self._dc(synthetic_weather, porto_location, pv_params, transposition_model="isotropic").sum()
+        perez = self._dc(synthetic_weather, porto_location, pv_params, transposition_model="perez").sum()
+        assert perez > isotropic
+
+    def test_case_insensitive(self, synthetic_weather, porto_location, pv_params):
+        lower = self._dc(synthetic_weather, porto_location, pv_params, transposition_model="haydavies")
+        upper = self._dc(synthetic_weather, porto_location, pv_params, transposition_model="HayDavies")
+        pd.testing.assert_series_equal(lower, upper)
+
+    def test_invalid_model_raises(self, synthetic_weather, porto_location, pv_params):
+        with pytest.raises(ValueError, match="Unknown transposition model"):
+            self._dc(synthetic_weather, porto_location, pv_params, transposition_model="bogus")
+
+    def test_per_array_override(self, synthetic_weather, porto_location):
+        # A per-array transposition_model overrides the function-level default.
+        arrays = [{"modules": 50, "tilt": 30, "azimuth": 180, "transposition_model": "perez"}]
+        default_iso = calculate_multi_array_production(
+            weather_data=synthetic_weather,
+            location=porto_location,
+            arrays=[{"modules": 50, "tilt": 30, "azimuth": 180}],
+            freq="h",
+            transposition_model="isotropic",
+        )
+        per_array = calculate_multi_array_production(
+            weather_data=synthetic_weather,
+            location=porto_location,
+            arrays=arrays,
+            freq="h",
+            transposition_model="isotropic",
+        )
+        assert per_array.sum() != pytest.approx(default_iso.sum())

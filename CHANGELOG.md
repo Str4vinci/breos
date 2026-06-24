@@ -2,6 +2,19 @@
 
 All notable changes to BREOS are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased]
+
+### Added
+- Configurable sky-diffusion (transposition) model via a `transposition_model`
+  config key and `--transposition-model` / `--sky-model` CLI flag, threaded
+  through `calculate_pv_production_dc`, the tracking and multi-array variants,
+  and the `App` config surface. Supports `isotropic` (default), `klucher`,
+  `haydavies`, `reindl`, `king`, `perez`, and `perez-driesse` via pvlib's
+  `get_total_irradiance`; the extra inputs the anisotropic models need
+  (extraterrestrial DNI, relative airmass) are derived internally. The default
+  `isotropic` reproduces prior results bit-for-bit. Per-array overrides are
+  supported in `pv_arrays`.
+
 ## [0.3.0] - 2026-06-24
 
 ### Fixed
