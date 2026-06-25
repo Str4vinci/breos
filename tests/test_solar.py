@@ -3,6 +3,7 @@
 import pandas as pd
 import pytest
 
+import breos.solar as solar
 from breos.solar import (
     calculate_multi_array_production,
     calculate_pv_production_dc,
@@ -41,6 +42,33 @@ class TestPVProduction:
         )
         assert isinstance(dc, pd.Series)
         assert len(dc) == len(synthetic_weather)
+
+    def test_default_path_uses_local_cec_fit(self, synthetic_weather, porto_location, pv_params, monkeypatch):
+        calls = 0
+        original_fit = solar.fit_cec_params
+
+        def wrapped_fit(*args, **kwargs):
+            nonlocal calls
+            calls += 1
+            return original_fit(*args, **kwargs)
+
+        monkeypatch.setattr(solar, "fit_cec_params", wrapped_fit)
+        solar._cec_param_cache.clear()
+        try:
+            dc = calculate_pv_production_dc(
+                weather_data=synthetic_weather.iloc[:48],
+                location=porto_location,
+                tilt=35,
+                surface_azimuth=180,
+                n_modules=1,
+                pv_params=pv_params,
+                freq="h",
+            )
+        finally:
+            solar._cec_param_cache.clear()
+
+        assert calls == 1
+        assert dc.sum() > 0
 
     def test_all_non_negative(self, dc_production):
         assert (dc_production >= -0.01).all()  # small tolerance for floating point
