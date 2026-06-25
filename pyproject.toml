@@ -4,7 +4,7 @@ version = "0.3.0"
 description = "Python library for PV and battery energy-system simulation and optimization"
 readme = "README.md"
 license = "BSD-3-Clause"
-requires-python = ">=3.11"
+requires-python = ">=3.11,<3.14"
 authors = [
     {name = "Leonardo Rodrigues", email = "lrodrigues@fe.up.pt"},
 ]
