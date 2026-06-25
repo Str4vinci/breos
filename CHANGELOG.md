@@ -2,6 +2,14 @@
 
 All notable changes to BREOS are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.3.1] - 2026-06-25
+
+### Changed
+- Pinned `requires-python` to `>=3.11,<3.14`. The transitive `nrel-pysam`
+  dependency (reached through pvlib's CEC fit) publishes no Python 3.14 wheel
+  or sdist, so installs on 3.14 could not resolve. This is a stopgap; 0.3.2
+  removes the `nrel-pysam` dependency and lifts the cap.
+
 ## [0.3.0] - 2026-06-24
 
 ### Fixed
