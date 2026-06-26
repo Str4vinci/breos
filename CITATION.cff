@@ -26,14 +26,14 @@ preferred-citation:
   type: article
   title: "A Modular, Open-Source Python Framework for Household PV-Battery Sizing: Validation, Multi-Objective Optimization, and Uncertainty Quantification"
   authors:
-    - given-names: Leonardo
+    - given-names: L.
       family-names: Rodrigues
       email: lrodrigues@fe.up.pt
-    - given-names: João
+    - given-names: "J. M. P. Q."
       family-names: Delgado
-    - given-names: Adélio
+    - given-names: A.
       family-names: Mendes
-    - given-names: Ana Sofia
+    - given-names: "A. S."
       family-names: Guimarães
   year: 2026
   notes: "Manuscript under submission."
