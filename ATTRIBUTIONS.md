@@ -47,8 +47,6 @@ the authoritative license text. Core and optional dependencies currently include
 - **openmeteo-requests** — MIT
 - **pandas** — BSD 3-Clause
 - **pyarrow** — Apache 2.0
-- **NREL-PySAM** — BSD 3-Clause. Refer to the NREL-PySAM license and SAM
-  notices for bundled model details.
 - **pvlib** — BSD 3-Clause
 - **pymoo** — Apache 2.0
 - **rainflow** — MIT
@@ -65,8 +63,8 @@ documentation where the relevant models affect results.
 
 | Area | Used by | Credit / citation note |
 |------|---------|------------------------|
-| PV modelling | `breos/solar.py`, `breos/weather.py` | BREOS uses [pvlib python](https://pvlib-python.readthedocs.io/) for solar position, irradiance transposition, temperature, CEC/SAM-style module fitting, PVWatts losses, tracking, and inverter helpers. Cite pvlib in published work that relies on these calculations. |
-| SAM / CEC PV parameters | `breos/solar.py`, `breos/pv_modules.py` | CEC/SAM-style single-diode parameters and NREL SAM documentation inform module modelling assumptions. |
+| PV modelling | `breos/solar.py`, `breos/weather.py` | BREOS uses [pvlib python](https://pvlib-python.readthedocs.io/) for solar position, irradiance transposition, temperature, CEC single-diode evaluation (`calcparams_cec`, `max_power_point`), PVWatts losses, tracking, and inverter helpers. Cite pvlib in published work that relies on these calculations. |
+| CEC PV parameter fitting | `breos/cec_fit.py`, `breos/solar.py`, `breos/pv_modules.py` | The CEC 6-parameter coefficient calculator follows A. Dobos, "An Improved Coefficient Calculator for the California Energy Commission 6 Parameter Photovoltaic Module Model", J. Solar Energy Eng. 134 (2012), DOI:10.1115/1.4005759. |
 | Multi-objective optimization | `breos/optimization.py` | BREOS uses [pymoo](https://pymoo.org/) for NSGA-II multi-objective optimization. Cite pymoo where optimizer behavior is material to the study. |
 | Rainflow cycle counting | `breos/battery.py` | BREOS uses the `rainflow` Python package and ASTM E1049-style rainflow counting for battery cycle detection in the reference path. |
 | Battery cycle and calendar ageing | `breos/battery.py`, `breos/constants.py`, `breos/numba_kernels.py` | Naumann et al. (2020) parameterization and equations are used for cycle ageing and selected calendar/resistance ageing behavior. |

@@ -2,6 +2,35 @@
 
 All notable changes to BREOS are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased]
+
+### Removed
+- The `nrel-pysam` runtime dependency. It was only ever reached transitively,
+  through pvlib's `fit_cec_sam`, to fit the CEC single-diode parameters on the
+  default PV path. `nrel-pysam` publishes no Python 3.14 wheel or sdist and was
+  the sole blocker to running BREOS on 3.14.
+
+### Added
+- `breos.cec_fit.fit_cec_params`: a pure-`scipy`/`pvlib` implementation of the
+  CEC 6-parameter coefficient calculator (Dobos 2012, DOI:10.1115/1.4005759),
+  a drop-in for `pvlib.ivtools.sdm.fit_cec_sam`. Across every bundled module it
+  reproduces the SAM fit to within 0.03% on maximum power over a
+  temperature x irradiance grid and 0.004% on annual energy, so model results
+  are unchanged. Validated against the `nrel-pysam` oracle by
+  `tools/validate_cec_fit.py`.
+- Python 3.14 support: the `3.14` classifier and CI matrix entry, now that the
+  `nrel-pysam` blocker is gone.
+
+### Changed
+- The default PV path fits CEC parameters via `breos.cec_fit.fit_cec_params`
+  instead of `pvlib.ivtools.sdm.fit_cec_sam`; `breos/solar.py` and the public
+  API are otherwise unchanged.
+- The two placeholder `Generic_400W` and `Generic_600W_Bifacial` catalog
+  modules now carry realistic mono-PERC datasheet specifications (their
+  previous made-up values fit cleanly under SAM only via an internal
+  short-circuit-current heuristic); their nameplate power and keys are
+  unchanged.
+
 ## [0.3.1] - 2026-06-25
 
 ### Changed
@@ -102,7 +131,8 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   stack and moved heavier workflow packages behind extras: `plots`,
   `optimization`, `weather`, `fast`, `validation`, and `location-tools`.
   NREL-PySAM stays in the core set because the default PV model fits CEC
-  single-diode parameters at runtime via pvlib's `fit_cec_sam`.
+  single-diode parameters at runtime via pvlib's `fit_cec_sam`. (Removed after
+  0.3.0 — see the Unreleased section above.)
 - The `dev` extra now installs optional feature dependencies so contributor
   test runs continue to cover optional paths.
 
