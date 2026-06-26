@@ -32,20 +32,18 @@ sync with the defaults. Replace it with a single declarative schema (a
 dataclass with field metadata, or `pydantic`) so defaults, types, bounds, and
 documentation live in one place.
 
-- **Near-term first step (do independently of the full refactor): reject
-  unknown config keys.** Today `merge_defaults` does `{**DEFAULTS, **config}`
-  and `validate_config` only checks *known* keys, so a typo such as
-  `batery_kwh` is silently dropped and the battery defaults to `0.0` — the run
-  succeeds and returns plausible-but-wrong numbers with no warning. This is a
-  real footgun for parametric/batch studies driven by many config files. Add an
-  allowed-key check that raises listing the unknown key(s), in the existing
-  "Unknown X. Available: ..." style. Small, self-contained, worth a test.
-- **Full step:** collapse `DEFAULTS`, the validation rules, and the CLI flag
-  definitions into the schema so a new parameter is added once, not four times.
-- **Side cleanup:** stop mutating the input config during resolution —
-  `resolve_pv_system` writes `cfg["n_modules"] = sum(...)` into the same dict
-  the `frozen=True` `ResolvedAppConfig` wraps, which makes the immutability
-  partly cosmetic and the data flow harder to follow.
+- **Near-term first step — shipped in 0.3.2:** unknown top-level config keys
+  are now rejected. A typo such as `batery_kwh` previously slipped through
+  `merge_defaults` and silently defaulted (e.g. the battery to `0.0`),
+  producing plausible-but-wrong results; it now raises listing the offending
+  key(s) in the existing "Unknown X. Available: ..." style.
+- **Side cleanup — shipped in 0.3.2:** resolution no longer mutates the
+  caller's input config. The derived `n_modules` is materialised into a fresh
+  dict instead of being written back into the dict wrapped by the frozen
+  `ResolvedAppConfig`.
+- **Full step (pending):** collapse `DEFAULTS`, the validation rules, and the
+  CLI flag definitions into the schema so a new parameter is added once, not
+  four times.
 - Keep all error messages actionable; preserve current behaviour for valid
   configs (regression-test the example configs in `configs/examples/`).
 
@@ -142,7 +140,8 @@ Principles:
 Capabilities to bring fully online, roughly in order (tracking is already wired
 end-to-end through `build_dc_system_base` and the multi-array path):
 
-- **Configurable transposition models** — see the dedicated item below (0.3.2).
+- **Configurable transposition models** — shipped in 0.3.2 (see the dedicated
+  item below).
 - **Bifacial rear-gain** — see the dedicated item below.
 - **Cell-temperature model choice** — `faiman` is currently hardcoded in
   `_compute_effective_irradiance_and_cell_temp`; expose `sapm`, `pvsyst`, and
@@ -156,26 +155,20 @@ end-to-end through `build_dc_system_base` and the multi-array path):
 
 ### Configurable sky-diffusion (transposition) models
 
-**Target: 0.3.2.** BREOS currently hardcodes the isotropic sky-diffusion model
-when transposing GHI/DHI/DNI to plane-of-array irradiance (`model="isotropic"`
-in `solar._compute_effective_irradiance_and_cell_temp`). The isotropic model is
-simple and robust but underestimates POA on clear days; anisotropic models
-(Hay-Davies, Reindl, King, Perez, Perez-Driesse) are more accurate and are all
-available in `pvlib.irradiance.get_total_irradiance`. Callers should be able to
-select the model via config and the public production APIs.
+**Shipped in 0.3.2.** The sky-diffusion (transposition) model is now selectable
+via a `transposition_model` (a.k.a. `sky_model`) config key and
+`--transposition-model` / `--sky-model` CLI flag, threaded through
+`calculate_pv_production_dc`, the tracking and multi-array variants, and the
+`App` config surface, with per-array overrides. Supported models: `isotropic`
+(default, reproduces prior results bit-for-bit), `klucher`, `haydavies`,
+`reindl`, `king`, `perez`, and `perez-driesse`, with the extra inputs the
+anisotropic models need (extraterrestrial DNI, relative airmass) derived
+internally. Configurable ground reflectance (`albedo` / `surface_type`) and
+Perez coefficient set (`model_perez`) shipped alongside. See the CHANGELOG for
+details.
 
-- Expose a `transposition_model` (a.k.a. `sky_model`) option threaded through
-  `calculate_pv_production_dc`, the tracking variant, and the `App` config
-  surface, defaulting to `isotropic` for backward compatibility.
-- Supply the extra inputs the anisotropic models need that the current
-  `get_total_irradiance` call omits: extraterrestrial DNI, relative airmass,
-  and (for Perez) the appropriate coefficient set.
-- Validate against the isotropic baseline on at least one reference location and
-  document the expected annual-yield differences (Perez vs isotropic can shift
-  annual POA by a few percent).
-- Add a docs entry and a recipe showing how to switch models.
-- Non-goal for this item: spectral irradiance modeling. Bifacial rear-gain is now
-  planned separately — see "Bifacial rear-gain modeling" below.
+Spectral irradiance modeling remains a non-goal for this item; bifacial
+rear-gain is tracked separately — see "Bifacial rear-gain modeling" below.
 
 ### Bifacial rear-gain modeling
 

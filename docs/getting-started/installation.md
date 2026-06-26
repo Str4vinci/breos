@@ -19,7 +19,7 @@ uvx breos run --location porto --n-modules 10 --annual-consumption-kwh 4000
 To install a specific release tag directly from GitHub instead:
 
 ```bash
-pip install "breos @ git+https://github.com/Str4vinci/breos.git@v0.3.0"
+pip install "breos @ git+https://github.com/Str4vinci/breos.git@v0.3.2"
 ```
 
 ## From source
