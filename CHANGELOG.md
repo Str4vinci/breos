@@ -2,7 +2,7 @@
 
 All notable changes to BREOS are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/).
 
-## [Unreleased]
+## [0.3.2] - 2026-06-26
 
 ### Removed
 - The `nrel-pysam` runtime dependency. It was only ever reached transitively,
