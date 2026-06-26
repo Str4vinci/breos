@@ -4,6 +4,11 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 
 ## [0.3.2] - 2026-06-26
 
+> **Upgrading:** config validation is now strict — a config with an unknown
+> top-level key (e.g. a typo like `batery_kwh`) that silently defaulted in
+> 0.3.1 now raises listing the offending key(s). Fix or remove stray keys
+> before upgrading. All other changes preserve prior behaviour by default.
+
 ### Removed
 - The `nrel-pysam` runtime dependency. It was only ever reached transitively,
   through pvlib's `fit_cec_sam`, to fit the CEC single-diode parameters on the
