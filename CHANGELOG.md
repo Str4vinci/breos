@@ -20,6 +20,11 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   `tools/validate_cec_fit.py`.
 - Python 3.14 support: the `3.14` classifier and CI matrix entry, now that the
   `nrel-pysam` blocker is gone.
+- Config validation now rejects unknown top-level keys. A typo such as
+  `batery_kwh` previously slipped through `merge_defaults` and silently
+  defaulted (e.g. the battery to `0`), producing plausible-but-wrong results;
+  it now raises listing the offending key(s). The optional `montecarlo`
+  section is recognised so Monte Carlo configs still validate.
 
 ### Changed
 - The default PV path fits CEC parameters via `breos.cec_fit.fit_cec_params`
@@ -30,6 +35,11 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   previous made-up values fit cleanly under SAM only via an internal
   short-circuit-current heuristic); their nameplate power and keys are
   unchanged.
+- `resolve_pv_system` no longer mutates the merged config in place to record
+  the derived `n_modules`; the resolved count is materialised into a fresh
+  dict by `resolve_app_config`, so the dict wrapped by the frozen
+  `ResolvedAppConfig` is built once and the caller's input dict is left
+  untouched.
 
 ## [0.3.1] - 2026-06-25
 

@@ -53,6 +53,11 @@ weather/data access, load profiles, PV system data, and cost assumptions; see
 | `pv_loss_overrides` | `None` | Per-component overrides (percent) for the fixed PVWatts system losses, e.g. `{"shading": 0.0}` |
 | `start_date` | `"2023-01-01"` | First simulation date |
 
+Unknown top-level keys are rejected at load time. A misspelled key such as
+`batery_kwh` raises an error listing the offending key rather than being
+silently ignored (which would quietly fall back to the default). The optional
+`[montecarlo]` section used by `breos montecarlo` is recognised and allowed.
+
 ## Battery capacity and the SOC window
 
 `battery_kwh` is the **nominal** pack capacity. The energy balance only
