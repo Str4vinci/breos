@@ -16,6 +16,7 @@ import pvlib
 from pvlib.albedo import SURFACE_ALBEDOS
 from pvlib.location import Location
 
+from breos.cec_fit import fit_cec_params
 from breos.utils import get_hours_per_step
 
 # Module-level cache for CEC model parameters (depends only on module specs, not weather)
@@ -251,12 +252,12 @@ def _get_cec_params(pv_params: "PVModuleParams"):
     if key in _cec_param_cache:
         return _cec_param_cache[key]
 
-    cec = pvlib.ivtools.sdm.fit_cec_sam(
+    cec = fit_cec_params(
         celltype=pv_params.celltype,
-        v_mp=pv_params.Vmp,
-        i_mp=pv_params.Imp,
-        v_oc=pv_params.Voc,
-        i_sc=pv_params.Isc,
+        Vmp=pv_params.Vmp,
+        Imp=pv_params.Imp,
+        Voc=pv_params.Voc,
+        Isc=pv_params.Isc,
         alpha_sc=pv_params.alpha_sc,
         beta_voc=pv_params.beta_voc,
         gamma_pmp=pv_params.gamma_pmp,

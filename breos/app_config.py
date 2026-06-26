@@ -58,6 +58,18 @@ DEFAULTS: dict[str, Any] = {
     "start_date": "2023-01-01",
 }
 
+# Required inputs are not in DEFAULTS (they have no default); ``montecarlo`` is
+# an optional config-file section consumed by the Monte Carlo runner/CLI, which
+# validates the same dict through resolve_app_config. Everything else at the top
+# level must be a known key so typos (e.g. ``batery_kwh``) fail loudly instead
+# of being silently dropped by merge_defaults.
+ALLOWED_CONFIG_KEYS: frozenset[str] = frozenset(DEFAULTS) | {
+    "location",
+    "annual_consumption_kwh",
+    "n_modules",
+    "montecarlo",
+}
+
 
 @dataclass(frozen=True)
 class ResolvedAppConfig:
@@ -121,6 +133,11 @@ def _validate_sky_settings(
 
 def validate_config(cfg: dict[str, Any]) -> None:
     """Validate user-facing App config before resolving derived values."""
+    unknown = set(cfg) - ALLOWED_CONFIG_KEYS
+    if unknown:
+        available = ", ".join(sorted(ALLOWED_CONFIG_KEYS))
+        raise ValueError(f"Unknown config key(s): {', '.join(sorted(unknown))}. Available: {available}")
+
     for key in ("location", "annual_consumption_kwh"):
         if key not in cfg:
             raise ValueError(f"Missing required config key: '{key}'")
@@ -251,16 +268,22 @@ def normalise_pv_arrays(arrays: list[dict[str, Any]] | None, cfg: dict[str, Any]
 
 def resolve_pv_system(
     cfg: dict[str, Any], lat: float
-) -> tuple[list[dict[str, Any]], PVModuleParams, float, float, float, float]:
-    """Resolve PV module, array, tilt, azimuth, and system sizing details."""
+) -> tuple[list[dict[str, Any]], PVModuleParams, int, float, float, float, float]:
+    """Resolve PV module, array, tilt, azimuth, and system sizing details.
+
+    Returns the resolved module count rather than writing it back into ``cfg``;
+    the caller materialises it so the dict wrapped by the frozen
+    :class:`ResolvedAppConfig` is built once and not mutated in place.
+    """
     pv_arrays = normalise_pv_arrays(cfg.get("pv_arrays"), cfg, lat)
     if pv_arrays:
-        cfg["n_modules"] = sum(arr["modules"] for arr in pv_arrays)
+        n_modules = sum(arr["modules"] for arr in pv_arrays)
         total_power_w = sum(arr["modules"] * get_module(arr["module"]).Mpp for arr in pv_arrays)
-        avg_module_power_w = total_power_w / cfg["n_modules"]
+        avg_module_power_w = total_power_w / n_modules
         system_kwp = total_power_w / 1000
         module_name = pv_arrays[0]["module"]
     else:
+        n_modules = cfg["n_modules"]
         module_name = cfg["pv_module"]
 
     if module_name is None:
@@ -269,11 +292,11 @@ def resolve_pv_system(
 
     if not pv_arrays:
         avg_module_power_w = pv_params.Mpp
-        system_kwp = cfg["n_modules"] * pv_params.Mpp / 1000
+        system_kwp = n_modules * pv_params.Mpp / 1000
 
     tilt = cfg["tilt"] if cfg["tilt"] is not None else estimate_optimal_tilt(lat)
     azimuth = cfg["azimuth"] if cfg["azimuth"] is not None else default_azimuth_fn(lat)
-    return pv_arrays, pv_params, avg_module_power_w, system_kwp, tilt, azimuth
+    return pv_arrays, pv_params, n_modules, avg_module_power_w, system_kwp, tilt, azimuth
 
 
 def resolve_tracking(cfg: dict[str, Any], lat: float) -> tuple[str, float]:
@@ -362,8 +385,12 @@ def resolve_app_config(config: dict[str, Any]) -> ResolvedAppConfig:
     validate_config(cfg)
 
     lat, lon, timezone, loc_key = resolve_location(cfg)
-    pv_arrays, pv_params, avg_module_power_w, system_kwp, tilt, azimuth = resolve_pv_system(cfg, lat)
+    pv_arrays, pv_params, n_modules, avg_module_power_w, system_kwp, tilt, azimuth = resolve_pv_system(cfg, lat)
     tracking, axis_azimuth = resolve_tracking(cfg, lat)
+
+    # Materialise the resolved module count (derived from pv_arrays when set)
+    # into a fresh dict rather than mutating the merged config in place.
+    cfg = {**cfg, "n_modules": n_modules}
 
     return ResolvedAppConfig(
         cfg=cfg,

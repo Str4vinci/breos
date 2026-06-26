@@ -1,6 +1,6 @@
 [project]
 name = "breos"
-version = "0.3.0"
+version = "0.3.1"
 description = "Python library for PV and battery energy-system simulation and optimization"
 readme = "README.md"
 license = "BSD-3-Clause"
@@ -16,10 +16,10 @@ classifiers = [
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Topic :: Scientific/Engineering",
 ]
 dependencies = [
-    "nrel-pysam>=7.1.0",
     "numpy>=2.0",
     "pandas>=2.3.3",
     "pvlib>=0.14.0,<0.16",
