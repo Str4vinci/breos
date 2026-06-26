@@ -13,6 +13,7 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 import pandas as pd
 import pvlib
+from pvlib.albedo import SURFACE_ALBEDOS
 from pvlib.location import Location
 
 from breos.cec_fit import fit_cec_params
@@ -35,6 +36,76 @@ DEFAULT_PVWATTS_LOSSES: Dict[str, float] = {
     "nameplate_rating": 1.0,
     "availability": 3.0,
 }
+
+# Sky-diffusion (transposition) models for projecting GHI/DHI/DNI onto the
+# plane of array, as supported by pvlib.irradiance.get_total_irradiance.
+# ``isotropic`` is the simple, robust baseline (and the default); the
+# anisotropic models are more accurate on clear days but need extra inputs
+# (extraterrestrial DNI and, for the Perez variants, relative airmass).
+TRANSPOSITION_MODELS = (
+    "isotropic",
+    "klucher",
+    "haydavies",
+    "reindl",
+    "king",
+    "perez",
+    "perez-driesse",
+)
+DEFAULT_TRANSPOSITION_MODEL = "isotropic"
+
+# Perez sky-diffusion coefficient sets accepted by pvlib's perez model. Only
+# used when ``transposition_model == "perez"``; the default matches pvlib.
+PEREZ_MODELS = (
+    "allsitescomposite1990",
+    "allsitescomposite1988",
+    "sandiacomposite1988",
+    "usacomposite1988",
+    "france1988",
+    "phoenix1988",
+    "elmonte1988",
+    "osage1988",
+    "albuquerque1988",
+    "capecanaveral1988",
+    "albany1988",
+)
+DEFAULT_PEREZ_MODEL = "allsitescomposite1990"
+
+# Named ground-cover types pvlib maps to a ground reflectance (albedo); an
+# alternative to supplying a numeric ``albedo`` directly.
+SURFACE_TYPES = tuple(sorted(SURFACE_ALBEDOS))
+
+
+def _resolve_transposition_model(model: str) -> str:
+    """Normalise and validate a sky-diffusion transposition model name."""
+    normalised = str(model).strip().lower()
+    if normalised not in TRANSPOSITION_MODELS:
+        valid = ", ".join(TRANSPOSITION_MODELS)
+        raise ValueError(f"Unknown transposition model {model!r}. Valid models: {valid}")
+    return normalised
+
+
+def _resolve_perez_model(model_perez: str) -> str:
+    """Validate the Perez coefficient set name."""
+    if model_perez not in PEREZ_MODELS:
+        valid = ", ".join(PEREZ_MODELS)
+        raise ValueError(f"Unknown Perez coefficient model {model_perez!r}. Valid models: {valid}")
+    return model_perez
+
+
+def _resolve_ground_reflectance(albedo, surface_type):
+    """Validate the ground-reflectance inputs and return ``(albedo, surface_type)``.
+
+    Accepts either a numeric ``albedo`` (0-1) or a named ``surface_type`` from
+    ``SURFACE_TYPES`` (which pvlib maps to an albedo), but not both.
+    """
+    if albedo is not None and surface_type is not None:
+        raise ValueError("Set either 'albedo' or 'surface_type', not both.")
+    if surface_type is not None and surface_type not in SURFACE_ALBEDOS:
+        valid = ", ".join(SURFACE_TYPES)
+        raise ValueError(f"Unknown surface_type {surface_type!r}. Valid types: {valid}")
+    if albedo is not None and not 0.0 <= albedo <= 1.0:
+        raise ValueError(f"albedo must be between 0 and 1, got {albedo!r}")
+    return albedo, surface_type
 
 
 @dataclass
@@ -98,17 +169,47 @@ def _compute_effective_irradiance_and_cell_temp(
     solarpos: pd.DataFrame,
     surface_tilt,
     surface_azimuth,
+    transposition_model: str = DEFAULT_TRANSPOSITION_MODEL,
+    albedo: Optional[float] = None,
+    surface_type: Optional[str] = None,
+    model_perez: str = DEFAULT_PEREZ_MODEL,
 ):
     """Compute effective POA irradiance (with IAM) and cell temperature.
 
     surface_tilt / surface_azimuth may be scalars (fixed) or per-timestep arrays/Series
     (tracking). Uses pvlib.irradiance.get_total_irradiance which is array-aware.
+
+    ``transposition_model`` selects the sky-diffusion model (see
+    ``TRANSPOSITION_MODELS``); the default ``"isotropic"`` reproduces prior
+    behaviour bit-for-bit. ``albedo`` (0-1) or ``surface_type`` (see
+    ``SURFACE_TYPES``) sets the ground reflectance for the ground-diffuse
+    component; when neither is given pvlib's 0.25 default applies.
+    ``model_perez`` selects the Perez coefficient set (only used by the
+    ``"perez"`` model).
     """
+    model = _resolve_transposition_model(transposition_model)
+    albedo, surface_type = _resolve_ground_reflectance(albedo, surface_type)
+    model_perez = _resolve_perez_model(model_perez)
     dni, ghi, dhi = _extract_irradiance(weather_aligned)
     temp_air, wind_speed = _extract_met_data(weather_aligned)
 
     aoi = pvlib.irradiance.aoi(surface_tilt, surface_azimuth, solarpos.apparent_zenith, solarpos.azimuth)
     iam = pvlib.iam.ashrae(aoi)
+
+    # Hay-Davies, Reindl, and the Perez variants need extraterrestrial DNI; the
+    # Perez variants additionally need relative airmass. Isotropic, Klucher, and
+    # King ignore both, and passing them does not change the isotropic result,
+    # so computing them unconditionally keeps the call site simple.
+    dni_extra = pvlib.irradiance.get_extra_radiation(solarpos.index)
+    airmass = pvlib.atmosphere.get_relative_airmass(solarpos.apparent_zenith)
+
+    # Only forward ground-reflectance overrides when set, so the default path
+    # keeps pvlib's built-in albedo and stays bit-for-bit identical.
+    ground_kwargs: Dict[str, Any] = {}
+    if albedo is not None:
+        ground_kwargs["albedo"] = albedo
+    if surface_type is not None:
+        ground_kwargs["surface_type"] = surface_type
 
     poa = pvlib.irradiance.get_total_irradiance(
         surface_tilt=surface_tilt,
@@ -118,7 +219,11 @@ def _compute_effective_irradiance_and_cell_temp(
         dni=dni,
         ghi=ghi,
         dhi=dhi,
-        model="isotropic",
+        dni_extra=dni_extra,
+        airmass=airmass,
+        model=model,
+        model_perez=model_perez,
+        **ground_kwargs,
     )
 
     poa_direct = np.nan_to_num(poa["poa_direct"].values, nan=0.0)
@@ -225,6 +330,10 @@ def calculate_pv_production_dc(
     start_year: Optional[int] = None,
     verbose: bool = False,
     loss_overrides: Optional[Dict[str, float]] = None,
+    transposition_model: str = DEFAULT_TRANSPOSITION_MODEL,
+    albedo: Optional[float] = None,
+    surface_type: Optional[str] = None,
+    model_perez: str = DEFAULT_PEREZ_MODEL,
 ) -> pd.Series:
     """
     Calculate PV DC production from weather data (fixed-tilt array).
@@ -254,6 +363,16 @@ def calculate_pv_production_dc(
         current_year: Current simulation year (for age-based degradation)
         start_year: Year system was installed (for age calculation)
         verbose: Whether to print production summary
+        loss_overrides: Per-component PVWatts loss overrides (percent)
+        transposition_model: Sky-diffusion model for POA transposition
+            (one of ``TRANSPOSITION_MODELS``); defaults to ``"isotropic"``.
+        albedo: Ground reflectance (0-1) for the ground-diffuse component;
+            ``None`` uses pvlib's 0.25 default. Mutually exclusive with
+            ``surface_type``.
+        surface_type: Named ground cover (one of ``SURFACE_TYPES``) mapped to
+            an albedo by pvlib; an alternative to ``albedo``.
+        model_perez: Perez coefficient set (one of ``PEREZ_MODELS``); only
+            used when ``transposition_model`` is ``"perez"``.
 
     Returns:
         pd.Series with DC power production in Watts (before inverter)
@@ -265,7 +384,14 @@ def calculate_pv_production_dc(
 
     times, solarpos, weather_aligned = _prepare_solarpos_and_weather(weather_data, location, freq)
     effective_irradiance, temp_cell = _compute_effective_irradiance_and_cell_temp(
-        weather_aligned, solarpos, surface_tilt=tilt, surface_azimuth=surface_azimuth
+        weather_aligned,
+        solarpos,
+        surface_tilt=tilt,
+        surface_azimuth=surface_azimuth,
+        transposition_model=transposition_model,
+        albedo=albedo,
+        surface_type=surface_type,
+        model_perez=model_perez,
     )
     dc_power = _dc_from_poa(
         effective_irradiance,
@@ -305,6 +431,10 @@ def calculate_pv_production_dc_tracking(
     start_year: Optional[int] = None,
     verbose: bool = False,
     loss_overrides: Optional[Dict[str, float]] = None,
+    transposition_model: str = DEFAULT_TRANSPOSITION_MODEL,
+    albedo: Optional[float] = None,
+    surface_type: Optional[str] = None,
+    model_perez: str = DEFAULT_PEREZ_MODEL,
 ) -> pd.Series:
     """
     Calculate PV DC production for a tracking array (single- or dual-axis).
@@ -333,6 +463,16 @@ def calculate_pv_production_dc_tracking(
         current_year: Current simulation year (for age-based degradation).
         start_year: Year system was installed.
         verbose: Whether to print production summary.
+        loss_overrides: Per-component PVWatts loss overrides (percent).
+        transposition_model: Sky-diffusion model for POA transposition
+            (one of ``TRANSPOSITION_MODELS``); defaults to ``"isotropic"``.
+        albedo: Ground reflectance (0-1) for the ground-diffuse component;
+            ``None`` uses pvlib's 0.25 default. Mutually exclusive with
+            ``surface_type``.
+        surface_type: Named ground cover (one of ``SURFACE_TYPES``) mapped to
+            an albedo by pvlib; an alternative to ``albedo``.
+        model_perez: Perez coefficient set (one of ``PEREZ_MODELS``); only
+            used when ``transposition_model`` is ``"perez"``.
 
     Returns:
         pd.Series with DC power production in Watts (before inverter).
@@ -373,7 +513,14 @@ def calculate_pv_production_dc_tracking(
         surface_azimuth = np.where(below_horizon, axis_azimuth, surface_azimuth)
 
     effective_irradiance, temp_cell = _compute_effective_irradiance_and_cell_temp(
-        weather_aligned, solarpos, surface_tilt=surface_tilt, surface_azimuth=surface_azimuth
+        weather_aligned,
+        solarpos,
+        surface_tilt=surface_tilt,
+        surface_azimuth=surface_azimuth,
+        transposition_model=transposition_model,
+        albedo=albedo,
+        surface_type=surface_type,
+        model_perez=model_perez,
     )
     dc_power = _dc_from_poa(
         effective_irradiance,
@@ -431,6 +578,10 @@ def calculate_pv_production_tmy(
     pv_params: Optional[PVModuleParams] = None,
     freq: str = "h",
     verbose: bool = True,
+    transposition_model: str = DEFAULT_TRANSPOSITION_MODEL,
+    albedo: Optional[float] = None,
+    surface_type: Optional[str] = None,
+    model_perez: str = DEFAULT_PEREZ_MODEL,
 ) -> pd.Series:
     """
     Calculate PV DC production from TMY data.
@@ -460,6 +611,10 @@ def calculate_pv_production_tmy(
         freq=freq,
         degradation_rate=0.0,  # TMY doesn't include degradation
         verbose=verbose,
+        transposition_model=transposition_model,
+        albedo=albedo,
+        surface_type=surface_type,
+        model_perez=model_perez,
     )
 
 
@@ -477,6 +632,10 @@ def calculate_pv_production_ac(
     inverter_loading_ratio: float = 1.25,
     inverter_efficiency: float = 0.96,
     verbose: bool = False,
+    transposition_model: str = DEFAULT_TRANSPOSITION_MODEL,
+    albedo: Optional[float] = None,
+    surface_type: Optional[str] = None,
+    model_perez: str = DEFAULT_PEREZ_MODEL,
 ) -> pd.Series:
     """
     Calculate PV AC production from weather data.
@@ -519,6 +678,10 @@ def calculate_pv_production_ac(
         current_year=current_year,
         start_year=start_year,
         verbose=False,
+        transposition_model=transposition_model,
+        albedo=albedo,
+        surface_type=surface_type,
+        model_perez=model_perez,
     )
 
     pv_peak_power_w = n_modules * pv_params.Mpp
@@ -660,6 +823,10 @@ def calculate_multi_array_production(
     start_year: Optional[int] = None,
     verbose: bool = False,
     loss_overrides: Optional[Dict[str, float]] = None,
+    transposition_model: str = DEFAULT_TRANSPOSITION_MODEL,
+    albedo: Optional[float] = None,
+    surface_type: Optional[str] = None,
+    model_perez: str = DEFAULT_PEREZ_MODEL,
 ) -> pd.Series:
     """
     Calculate combined DC production from multiple PV arrays.
@@ -674,12 +841,22 @@ def calculate_multi_array_production(
             use ``tilt`` and ``azimuth``. Single-axis arrays can also set
             ``axis_tilt``, ``axis_azimuth``, ``max_angle``, ``backtrack``,
             ``gcr``, and ``cross_axis_tilt``. Dual-axis arrays can set
-            ``dual_axis_max_tilt``.
+            ``dual_axis_max_tilt``. Any array may also set
+            ``transposition_model``, ``albedo``/``surface_type``, or
+            ``model_perez`` to override the function-level defaults.
         freq: Time frequency ('h' or '15min')
         degradation_rate: Annual degradation rate
         current_year: Current simulation year
         start_year: Installation year
         verbose: Print summary
+        loss_overrides: Per-component PVWatts loss overrides (percent)
+        transposition_model: Default sky-diffusion model for arrays that do
+            not set their own (one of ``TRANSPOSITION_MODELS``).
+        albedo: Default ground reflectance (0-1); arrays may override with
+            their own ``albedo`` or ``surface_type``.
+        surface_type: Default named ground cover (one of ``SURFACE_TYPES``);
+            mutually exclusive with ``albedo``.
+        model_perez: Default Perez coefficient set (one of ``PEREZ_MODELS``).
 
     Returns:
         pd.Series with total DC power (watts)
@@ -700,6 +877,10 @@ def calculate_multi_array_production(
         mod_name = arr.get("module", "Generic_400W")
         pv_params = get_module(mod_name)
         tracking = arr.get("tracking", "fixed")
+        arr_transposition = arr.get("transposition_model", transposition_model)
+        arr_albedo = arr.get("albedo", albedo)
+        arr_surface_type = arr.get("surface_type", surface_type)
+        arr_model_perez = arr.get("model_perez", model_perez)
 
         if tracking == "fixed":
             tilt = arr.get("tilt", 35)
@@ -721,6 +902,10 @@ def calculate_multi_array_production(
                 start_year=start_year,
                 verbose=False,
                 loss_overrides=loss_overrides,
+                transposition_model=arr_transposition,
+                albedo=arr_albedo,
+                surface_type=arr_surface_type,
+                model_perez=arr_model_perez,
             )
         elif tracking in ("single_axis", "dual_axis"):
             if verbose:
@@ -752,6 +937,10 @@ def calculate_multi_array_production(
                 start_year=start_year,
                 verbose=False,
                 loss_overrides=loss_overrides,
+                transposition_model=arr_transposition,
+                albedo=arr_albedo,
+                surface_type=arr_surface_type,
+                model_perez=arr_model_perez,
             )
         else:
             raise ValueError(

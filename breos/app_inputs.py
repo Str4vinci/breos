@@ -105,6 +105,12 @@ def build_dc_system_base(cfg: dict[str, Any], resolved: ResolvedAppConfig, weath
     location = Location(resolved.lat, resolved.lon, tz=resolved.timezone)
     freq = cfg["resolution"]
     loss_overrides = cfg["pv_loss_overrides"]
+    sky_kwargs = {
+        "transposition_model": cfg["transposition_model"],
+        "albedo": cfg["albedo"],
+        "surface_type": cfg["surface_type"],
+        "model_perez": cfg["model_perez"],
+    }
 
     if resolved.pv_arrays:
         return calculate_multi_array_production(
@@ -113,6 +119,7 @@ def build_dc_system_base(cfg: dict[str, Any], resolved: ResolvedAppConfig, weath
             arrays=resolved.pv_arrays,
             freq=freq,
             loss_overrides=loss_overrides,
+            **sky_kwargs,
         )
 
     if resolved.tracking == "fixed":
@@ -125,6 +132,7 @@ def build_dc_system_base(cfg: dict[str, Any], resolved: ResolvedAppConfig, weath
             pv_params=resolved.pv_params,
             freq=freq,
             loss_overrides=loss_overrides,
+            **sky_kwargs,
         )
     else:
         dc_1mod = calculate_pv_production_dc_tracking(
@@ -142,6 +150,7 @@ def build_dc_system_base(cfg: dict[str, Any], resolved: ResolvedAppConfig, weath
             pv_params=resolved.pv_params,
             freq=freq,
             loss_overrides=loss_overrides,
+            **sky_kwargs,
         )
     return dc_1mod * cfg["n_modules"]
 

@@ -109,9 +109,54 @@ Agent and contributor setup:
 
 ## Capability extensions
 
+### Full pvlib PV modeling behind a self-contained PV stage
+
+BREOS deliberately treats PV production as a *self-contained stage* with a single
+output contract: **(weather + system config) → a DC-power time series in watts**,
+summed to system level (or per-array for multi-array). Everything pvlib does —
+transposition, tracking, cell-temperature, IAM, spectral, bifacial rear-gain —
+lives *inside* that stage. The downstream chain (inverter/AC conversion, battery
+dispatch, economics, emissions, Monte Carlo, NSGA-II sizing) consumes only the DC
+series and must stay invariant as new physics is switched on. Keeping that
+boundary firm is what lets us progressively "turn on" more of pvlib without
+destabilising the rest of the engine.
+
+This is the functional, data-flow counterpart to "Wrap third-party modules behind
+adapters" ([#11](https://github.com/Str4vinci/breos/issues/11)) above: adapters
+own the *types* crossing the boundary; this item owns the *contract* that boundary
+guarantees.
+
+Principles:
+
+- One output contract: a watts DC `pd.Series` on the run's time index. A new
+  capability must not add new required inputs to any downstream stage.
+- New physics is opt-in and defaults to current behaviour, so existing configs
+  reproduce bit-for-bit (regression-test the example configs in
+  `configs/examples/`).
+- Each capability declares the *extra inputs* it needs and fails loudly (in the
+  existing "Unknown X. Available: ..." style) when a config selects a model whose
+  inputs are missing — never silently fall back to different physics.
+- Validate every new model against the current baseline on at least one reference
+  location and document the expected annual-yield delta.
+
+Capabilities to bring fully online, roughly in order (tracking is already wired
+end-to-end through `build_dc_system_base` and the multi-array path):
+
+- **Configurable transposition models** — see the dedicated item below (0.3.2).
+- **Bifacial rear-gain** — see the dedicated item below.
+- **Cell-temperature model choice** — `faiman` is currently hardcoded in
+  `_compute_effective_irradiance_and_cell_temp`; expose `sapm`, `pvsyst`, and
+  `noct_sam` with their parameter sets.
+- **IAM model choice** — `ashrae` is currently hardcoded; expose `martin_ruiz`,
+  `physical`, and the SAPM IAM.
+- **DC-side loss refinements** — optional time-series ohmic/soiling/snow models in
+  place of (parts of) the flat PVWatts loss stack, where inputs allow.
+- Non-goal: replacing the CEC single-diode core or the PVWatts loss model as the
+  defaults. This is about *optional* fidelity, not a new default engine.
+
 ### Configurable sky-diffusion (transposition) models
 
-**Target: 0.3.1.** BREOS currently hardcodes the isotropic sky-diffusion model
+**Target: 0.3.2.** BREOS currently hardcodes the isotropic sky-diffusion model
 when transposing GHI/DHI/DNI to plane-of-array irradiance (`model="isotropic"`
 in `solar._compute_effective_irradiance_and_cell_temp`). The isotropic model is
 simple and robust but underestimates POA on clear days; anisotropic models
@@ -129,7 +174,36 @@ select the model via config and the public production APIs.
   document the expected annual-yield differences (Perez vs isotropic can shift
   annual POA by a few percent).
 - Add a docs entry and a recipe showing how to switch models.
-- Non-goal: spectral or bifacial irradiance modeling.
+- Non-goal for this item: spectral irradiance modeling. Bifacial rear-gain is now
+  planned separately — see "Bifacial rear-gain modeling" below.
+
+### Bifacial rear-gain modeling
+
+Several catalog modules are labelled "Bifacial" but BREOS models them front-side
+only, so the label is currently cosmetic. pvlib *can* model rear irradiance — the
+gap is inputs, not capability. Add real rear-gain so a bifacial module's extra
+yield (typically ~5–15%, dominated by ground albedo and mounting height) is
+actually simulated. This is the first concrete new capability under "Full pvlib PV
+modeling" above.
+
+- **Module input ("unless the panel states it, we can't model it"):** add a
+  `bifaciality` factor (rear/front efficiency ratio, ~0.7–0.85 for TOPCon) to
+  `PVModuleParams` and the module catalog in `pv_modules.py`. Absent or zero ⇒
+  front-only, exactly as today.
+- **Site/array inputs:** ground `albedo` (the single biggest driver; ~0.2 grass to
+  ~0.6 snow/sand) and row geometry. Tracking arrays already carry `gcr`; fixed
+  arrays need the `infinite_shed` geometry (gcr, height, pitch).
+- **Model:** use `pvlib.bifacial.infinite_shed.get_irradiance` (pure pvlib, no new
+  dependencies). Prefer it over `pvlib.bifacial.pvfactors.*`, which drags in the
+  `pvfactors`/`shapely` stack — out of scope for the default install.
+- **Integration:** compute rear POA inside
+  `_compute_effective_irradiance_and_cell_temp` and blend
+  `effective_irradiance += bifaciality * poa_rear` before the CEC DC model. The
+  stage's output contract (DC-watts series) is unchanged, so nothing downstream
+  moves — the whole point of the self-contained PV stage above.
+- Validate against the front-only baseline (`bifaciality=0` must reproduce it
+  bit-for-bit) and document expected rear-gain deltas versus albedo and mounting
+  height.
 
 ### String-aware inverter validation and modeling
 

@@ -9,8 +9,15 @@ from breos.economics import CostParams, calculate_costs
 from breos.emissions import EmissionsParams
 from breos.pv_modules import MODULES, PVModuleParams, get_module
 from breos.resources import load_config_json
+from breos.solar import (
+    DEFAULT_PEREZ_MODEL,
+    DEFAULT_TRANSPOSITION_MODEL,
+    PEREZ_MODELS,
+    SURFACE_TYPES,
+    TRANSPOSITION_MODELS,
+    estimate_optimal_tilt,
+)
 from breos.solar import default_azimuth as default_azimuth_fn
-from breos.solar import estimate_optimal_tilt
 
 DEFAULTS: dict[str, Any] = {
     "battery_kwh": 0.0,
@@ -28,6 +35,10 @@ DEFAULTS: dict[str, Any] = {
     "gcr": 0.35,
     "cross_axis_tilt": 0.0,
     "dual_axis_max_tilt": 90.0,
+    "transposition_model": DEFAULT_TRANSPOSITION_MODEL,
+    "albedo": None,
+    "surface_type": None,
+    "model_perez": DEFAULT_PEREZ_MODEL,
     "resolution": "h",
     "projection_years": 20,
     "cost_preset": None,
@@ -91,6 +102,35 @@ def merge_defaults(config: dict[str, Any]) -> dict[str, Any]:
     return {**DEFAULTS, **config}
 
 
+def _validate_sky_settings(
+    transposition_model: Any,
+    albedo: Any,
+    surface_type: Any,
+    model_perez: Any,
+    where: str = "",
+) -> None:
+    """Validate the sky-diffusion settings shared by the top level and arrays.
+
+    ``where`` prefixes the key name in error messages (e.g. ``pv_arrays[0]``);
+    ``None`` values are treated as "not set" and skipped, so per-array overrides
+    only validate the keys they actually provide.
+    """
+    prefix = f"{where}." if where else ""
+    if transposition_model is not None and str(transposition_model).strip().lower() not in TRANSPOSITION_MODELS:
+        valid = ", ".join(TRANSPOSITION_MODELS)
+        raise ValueError(f"'{prefix}transposition_model' must be one of: {valid}")
+    if albedo is not None and surface_type is not None:
+        raise ValueError(f"Set either '{prefix}albedo' or '{prefix}surface_type', not both.")
+    if albedo is not None and (not isinstance(albedo, (int, float)) or not 0 <= albedo <= 1):
+        raise ValueError(f"'{prefix}albedo' must be a number between 0 and 1")
+    if surface_type is not None and surface_type not in SURFACE_TYPES:
+        valid = ", ".join(SURFACE_TYPES)
+        raise ValueError(f"'{prefix}surface_type' must be one of: {valid}")
+    if model_perez is not None and model_perez not in PEREZ_MODELS:
+        valid = ", ".join(PEREZ_MODELS)
+        raise ValueError(f"'{prefix}model_perez' must be one of: {valid}")
+
+
 def validate_config(cfg: dict[str, Any]) -> None:
     """Validate user-facing App config before resolving derived values."""
     unknown = set(cfg) - ALLOWED_CONFIG_KEYS
@@ -131,6 +171,13 @@ def validate_config(cfg: dict[str, Any]) -> None:
                 raise ValueError(f"'pv_arrays[{i}].tilt' must be between 0 and 90")
             if azimuth is not None and not 0 <= azimuth <= 360:
                 raise ValueError(f"'pv_arrays[{i}].azimuth' must be between 0 and 360")
+            _validate_sky_settings(
+                arr.get("transposition_model"),
+                arr.get("albedo"),
+                arr.get("surface_type"),
+                arr.get("model_perez"),
+                where=f"pv_arrays[{i}]",
+            )
     if cfg["annual_consumption_kwh"] <= 0:
         raise ValueError("'annual_consumption_kwh' must be > 0")
     if cfg["battery_kwh"] < 0:
@@ -151,6 +198,7 @@ def validate_config(cfg: dict[str, Any]) -> None:
         raise ValueError("'pv_degradation_rate' must be between 0 (inclusive) and 1 (exclusive)")
     if cfg["resolution"] not in ("h", "15min"):
         raise ValueError("'resolution' must be 'h' or '15min'")
+    _validate_sky_settings(cfg["transposition_model"], cfg["albedo"], cfg["surface_type"], cfg["model_perez"])
     overrides = cfg.get("pv_loss_overrides")
     if overrides is not None:
         if not isinstance(overrides, dict):
@@ -188,7 +236,7 @@ def normalise_pv_arrays(arrays: list[dict[str, Any]] | None, cfg: dict[str, Any]
     default_tilt = cfg.get("tilt") if cfg.get("tilt") is not None else estimate_optimal_tilt(lat)
     default_azimuth = cfg.get("azimuth") if cfg.get("azimuth") is not None else default_azimuth_fn(lat)
 
-    tracking_passthrough_keys = (
+    passthrough_keys = (
         "tracking",
         "axis_tilt",
         "axis_azimuth",
@@ -197,6 +245,10 @@ def normalise_pv_arrays(arrays: list[dict[str, Any]] | None, cfg: dict[str, Any]
         "gcr",
         "cross_axis_tilt",
         "dual_axis_max_tilt",
+        "transposition_model",
+        "albedo",
+        "surface_type",
+        "model_perez",
     )
 
     normalized: list[dict[str, Any]] = []
@@ -207,7 +259,7 @@ def normalise_pv_arrays(arrays: list[dict[str, Any]] | None, cfg: dict[str, Any]
             "tilt": float(arr.get("tilt", default_tilt)),
             "azimuth": float(arr.get("azimuth", default_azimuth)),
         }
-        for key in tracking_passthrough_keys:
+        for key in passthrough_keys:
             if key in arr:
                 entry[key] = arr[key]
         normalized.append(entry)

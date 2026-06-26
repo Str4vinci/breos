@@ -68,6 +68,61 @@ class TestAppValidation:
         with pytest.raises(ValueError, match="azimuth"):
             App({"location": "porto", "n_modules": 10, "annual_consumption_kwh": 4000, "azimuth": 400})
 
+    def test_invalid_transposition_model(self):
+        with pytest.raises(ValueError, match="transposition_model"):
+            App(
+                {
+                    "location": "porto",
+                    "n_modules": 10,
+                    "annual_consumption_kwh": 4000,
+                    "transposition_model": "not_a_model",
+                }
+            )
+
+    def test_invalid_per_array_transposition_model(self):
+        with pytest.raises(ValueError, match=r"pv_arrays\[0\].transposition_model"):
+            App(
+                {
+                    "location": "porto",
+                    "annual_consumption_kwh": 4000,
+                    "pv_arrays": [{"modules": 5, "transposition_model": "not_a_model"}],
+                }
+            )
+
+    def test_invalid_albedo(self):
+        with pytest.raises(ValueError, match="albedo"):
+            App({"location": "porto", "n_modules": 10, "annual_consumption_kwh": 4000, "albedo": 1.5})
+
+    def test_invalid_surface_type(self):
+        with pytest.raises(ValueError, match="surface_type"):
+            App({"location": "porto", "n_modules": 10, "annual_consumption_kwh": 4000, "surface_type": "lava"})
+
+    def test_albedo_and_surface_type_conflict(self):
+        with pytest.raises(ValueError, match="either"):
+            App(
+                {
+                    "location": "porto",
+                    "n_modules": 10,
+                    "annual_consumption_kwh": 4000,
+                    "albedo": 0.3,
+                    "surface_type": "snow",
+                }
+            )
+
+    def test_invalid_model_perez(self):
+        with pytest.raises(ValueError, match="model_perez"):
+            App({"location": "porto", "n_modules": 10, "annual_consumption_kwh": 4000, "model_perez": "nope"})
+
+    def test_invalid_per_array_albedo(self):
+        with pytest.raises(ValueError, match=r"pv_arrays\[0\].albedo"):
+            App(
+                {
+                    "location": "porto",
+                    "annual_consumption_kwh": 4000,
+                    "pv_arrays": [{"modules": 5, "albedo": 9}],
+                }
+            )
+
     def test_invalid_inverter_efficiency(self):
         with pytest.raises(ValueError, match="inverter_efficiency"):
             App({"location": "porto", "n_modules": 10, "annual_consumption_kwh": 4000, "inverter_efficiency": 1.5})
@@ -264,6 +319,43 @@ class TestAppValidation:
         # A 10% SOC window stores a tenth of the energy of the default
         # 10-90% window, so grid independence must drop
         assert narrow_gi < default_gi
+
+    def test_transposition_model_reaches_simulation(self, _patch_weather):
+        def _run(model):
+            app = App(
+                {
+                    "location": "porto",
+                    "n_modules": 6,
+                    "annual_consumption_kwh": 3000,
+                    "projection_years": 1,
+                    "transposition_model": model,
+                }
+            )
+            app.simulate()
+            return app.result()["pv_production_kwh"]
+
+        # The model must flow all the way through App.simulate(); an
+        # anisotropic model yields a different PV total than isotropic.
+        assert _run("perez") != pytest.approx(_run("isotropic"))
+
+    def test_albedo_reaches_simulation(self, _patch_weather):
+        def _run(**extra):
+            app = App(
+                {
+                    "location": "porto",
+                    "n_modules": 6,
+                    "annual_consumption_kwh": 3000,
+                    "projection_years": 1,
+                    **extra,
+                }
+            )
+            app.simulate()
+            return app.result()["pv_production_kwh"]
+
+        # A higher ground reflectance must raise PV production end-to-end.
+        assert _run(albedo=0.65) > _run()
+        # surface_type is an equivalent way to set the same albedo.
+        assert _run(surface_type="snow") == pytest.approx(_run(albedo=0.65))
 
     def test_pv_loss_overrides_increase_production(self, _patch_weather):
         def _run(overrides):

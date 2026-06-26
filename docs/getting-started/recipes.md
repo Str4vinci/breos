@@ -89,6 +89,30 @@ tilt = 10
 azimuth = 270   # west
 ```
 
+## Anisotropic sky-diffusion model
+
+The default `isotropic` transposition underestimates plane-of-array
+irradiance on clear days. Switch to an anisotropic model — here Perez — to
+capture circumsolar and horizon brightening. No extra weather inputs are
+needed; see [Sky-diffusion model](configuration.md#sky-diffusion-transposition-model):
+
+```toml
+location = "porto"
+n_modules = 10
+annual_consumption_kwh = 4000
+cost_preset = "residential_pt"
+emissions_country = "PT"
+transposition_model = "perez"
+surface_type = "grass"          # or a numeric albedo, e.g. albedo = 0.2
+```
+
+`surface_type` (or a numeric `albedo`) sets the ground reflectance that feeds
+the ground-diffuse component; a snowy or sandy foreground (`"snow"`, `"sand"`)
+raises annual yield further. Leave both unset to keep pvlib's 0.25 default.
+
+From the CLI, the equivalent flag is `--transposition-model perez`
+(alias `--sky-model`).
+
 ## 15-minute resolution
 
 Hourly weather is interpolated to 15-minute steps (Makima), and the bundled
