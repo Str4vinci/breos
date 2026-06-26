@@ -8,7 +8,7 @@
 
 BREOS imports several third-party libraries directly throughout the package
 (`pvlib`, `pandas`, `numpy`, `scipy`, `numba`, `rainflow`, `geopy`,
-`openmeteo-requests`, `timezonefinder`, `nrel-pysam`, `pymoo`,
+`openmeteo-requests`, `timezonefinder`, `pymoo`,
 `requests-cache`, `matplotlib`, `openpyxl`).
 
 Direct usage means those libraries co-own the BREOS public API. When they
@@ -92,7 +92,7 @@ signatures.
 | `PVSystem`         | `breos.adapters.pv_system`       | `pvlib.pvsystem.PVSystem`                        |
 | `irradiance.aoi`   | `breos.adapters.irradiance`      | `pvlib.irradiance.aoi`, `pvlib.iam.ashrae`       |
 | `cell_temperature` | `breos.adapters.thermal`         | `pvlib.temperature.faiman`                       |
-| `cec_model`        | `breos.adapters.pv_model`        | `pvlib.ivtools.sdm.fit_cec_sam`, `calcparams_cec`, `max_power_point`, `pvwatts_losses` |
+| `cec_model`        | `breos.adapters.pv_model`        | `breos.cec_fit.fit_cec_params`, `pvlib.pvsystem.calcparams_cec`, `max_power_point`, `pvwatts_losses` |
 | `inverter`         | `breos.adapters.inverter`        | `pvlib.inverter.pvwatts`                         |
 | `weather_io`       | `breos.adapters.weather_io`      | `pvlib.iotools.get_pvgis_tmy`, `get_nsrdb_psm4_tmy`, `read_epw` |
 
@@ -110,8 +110,6 @@ signatures.
 
 - `openmeteo-requests`, `requests-cache` → `breos.adapters.weather_client`.
 - `geopy`, `timezonefinder` → `breos.adapters.geo`.
-- `nrel-pysam` → `breos.adapters.sam_model` (reached transitively through
-  pvlib's `fit_cec_sam` on the default PV path).
 - `pymoo` → `breos.adapters.multi_objective` (used in `optimization.py`).
 - `openpyxl`, `pyarrow` → keep in validation/export-specific paths.
 

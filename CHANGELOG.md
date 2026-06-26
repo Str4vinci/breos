@@ -4,7 +4,22 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 
 ## [Unreleased]
 
+### Removed
+- The `nrel-pysam` runtime dependency. It was only ever reached transitively,
+  through pvlib's `fit_cec_sam`, to fit the CEC single-diode parameters on the
+  default PV path. `nrel-pysam` publishes no Python 3.14 wheel or sdist and was
+  the sole blocker to running BREOS on 3.14.
+
 ### Added
+- `breos.cec_fit.fit_cec_params`: a pure-`scipy`/`pvlib` implementation of the
+  CEC 6-parameter coefficient calculator (Dobos 2012, DOI:10.1115/1.4005759),
+  a drop-in for `pvlib.ivtools.sdm.fit_cec_sam`. Across every bundled module it
+  reproduces the SAM fit to within 0.03% on maximum power over a
+  temperature x irradiance grid and 0.004% on annual energy, so model results
+  are unchanged. Validated against the `nrel-pysam` oracle by
+  `tools/validate_cec_fit.py`.
+- Python 3.14 support: the `3.14` classifier and CI matrix entry, now that the
+  `nrel-pysam` blocker is gone.
 - Config validation now rejects unknown top-level keys. A typo such as
   `batery_kwh` previously slipped through `merge_defaults` and silently
   defaulted (e.g. the battery to `0`), producing plausible-but-wrong results;
@@ -12,11 +27,27 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   section is recognised so Monte Carlo configs still validate.
 
 ### Changed
+- The default PV path fits CEC parameters via `breos.cec_fit.fit_cec_params`
+  instead of `pvlib.ivtools.sdm.fit_cec_sam`; `breos/solar.py` and the public
+  API are otherwise unchanged.
+- The two placeholder `Generic_400W` and `Generic_600W_Bifacial` catalog
+  modules now carry realistic mono-PERC datasheet specifications (their
+  previous made-up values fit cleanly under SAM only via an internal
+  short-circuit-current heuristic); their nameplate power and keys are
+  unchanged.
 - `resolve_pv_system` no longer mutates the merged config in place to record
   the derived `n_modules`; the resolved count is materialised into a fresh
   dict by `resolve_app_config`, so the dict wrapped by the frozen
   `ResolvedAppConfig` is built once and the caller's input dict is left
   untouched.
+
+## [0.3.1] - 2026-06-25
+
+### Changed
+- Pinned `requires-python` to `>=3.11,<3.14`. The transitive `nrel-pysam`
+  dependency (reached through pvlib's CEC fit) publishes no Python 3.14 wheel
+  or sdist, so installs on 3.14 could not resolve. This is a stopgap; 0.3.2
+  removes the `nrel-pysam` dependency and lifts the cap.
 
 ## [0.3.0] - 2026-06-24
 
@@ -110,7 +141,8 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   stack and moved heavier workflow packages behind extras: `plots`,
   `optimization`, `weather`, `fast`, `validation`, and `location-tools`.
   NREL-PySAM stays in the core set because the default PV model fits CEC
-  single-diode parameters at runtime via pvlib's `fit_cec_sam`.
+  single-diode parameters at runtime via pvlib's `fit_cec_sam`. (Removed after
+  0.3.0 — see the Unreleased section above.)
 - The `dev` extra now installs optional feature dependencies so contributor
   test runs continue to cover optional paths.
 
