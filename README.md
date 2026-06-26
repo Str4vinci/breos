@@ -316,14 +316,26 @@ RLP sources, weather/solar-resource APIs, and input assumptions to record.
 
 ## Citation
 
-If you use BREOS in your research, please cite:
+If you use BREOS in your research, please cite the paper (currently under
+submission):
+
+```bibtex
+@unpublished{rodrigues2026breos,
+  author = {Rodrigues, L. and Delgado, J. M. P. Q. and Mendes, A. and Guimar{\~a}es, A. S.},
+  title  = {A Modular, Open-Source Python Framework for Household PV-Battery Sizing: Validation, Multi-Objective Optimization, and Uncertainty Quantification},
+  year   = {2026},
+  note   = {Manuscript under submission}
+}
+```
+
+You may also cite the software directly:
 
 ```bibtex
 @software{breos,
   author = {Rodrigues, Leonardo},
-  title = {BREOS: Building Renewable Energy Optimization Software},
-  year = {2026},
-  url = {https://github.com/Str4vinci/breos}
+  title  = {BREOS: Building Renewable Energy Optimization Software},
+  year   = {2026},
+  url    = {https://github.com/Str4vinci/breos}
 }
 ```
 
