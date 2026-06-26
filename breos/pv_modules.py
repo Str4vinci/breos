@@ -75,37 +75,38 @@ MODULES: Dict[str, PVModuleParams] = {
         N_Cells=144,
     ),
     # -------------------------------------------------------------------------
-    # Generic 400W Module (Common residential panel)
-    # Note: Parameters are based on Canadian Solar CS1U-400MS
-    # to ensure successful calculation in pvlib's CEC IV model
+    # Generic 400W Module (common 72-cell / 144-half-cell residential panel)
+    # Representative mono-PERC specs (LONGi LR4-72HPH-400M family).
     # -------------------------------------------------------------------------
     "Generic_400W": PVModuleParams(
         Mpp=400,
-        Vmp=44.1,  # V - Voltage at MPP
-        Imp=9.08,  # A - Current at MPP
-        Voc=53.4,  # V - Open circuit voltage
-        Isc=9.60,  # A - Short circuit current
+        Vmp=41.0,  # V - Voltage at MPP
+        Imp=9.76,  # A - Current at MPP
+        Voc=49.3,  # V - Open circuit voltage
+        Isc=10.30,  # A - Short circuit current
         celltype="monoSi",
-        T_Pmax_pct=-0.36,  # %/°C - Power temperature coefficient
-        T_Voc_pct=-0.29,  # %/°C - Voltage temperature coefficient
+        T_Pmax_pct=-0.35,  # %/°C - Power temperature coefficient
+        T_Voc_pct=-0.265,  # %/°C - Voltage temperature coefficient
         T_Isc_pct=0.05,  # %/°C - Current temperature coefficient
-        N_Cells=144,  # Cells
-        Name="Generic 400W (Canadian Solar CS1U-400MS ref)",
+        N_Cells=144,  # 72-cell module (144 half-cells)
+        Name="Generic 400W (LONGi LR4-72HPH-400M ref)",
     ),
     # -------------------------------------------------------------------------
-    # Generic 600W Bifacial Module (Utility-scale)
+    # Generic 600W Bifacial Module (utility-scale, high-voltage 144-half-cell)
+    # Representative mono-PERC specs; the model treats it as a front-side module.
     # -------------------------------------------------------------------------
     "Generic_600W_Bifacial": PVModuleParams(
         Mpp=600,
-        Vmp=45.0,
-        Imp=13.33,
-        Voc=54.0,
-        Isc=14.5,
+        Vmp=44.6,
+        Imp=13.46,
+        Voc=53.7,
+        Isc=14.25,
         celltype="monoSi",
         T_Pmax_pct=-0.34,
         T_Voc_pct=-0.26,
-        T_Isc_pct=0.05,
-        N_Cells=156,
+        T_Isc_pct=0.046,
+        N_Cells=144,
+        Name="Generic 600W bifacial (utility-scale ref)",
     ),
 }
 

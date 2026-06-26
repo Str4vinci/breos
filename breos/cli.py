@@ -15,6 +15,7 @@ from breos.app_config import resolve_app_config
 from breos.load_profiles import PROFILE_ALIASES, PROFILE_NAMES
 from breos.pv_modules import MODULES
 from breos.resources import load_config_json
+from breos.solar import PEREZ_MODELS, SURFACE_TYPES, TRANSPOSITION_MODELS
 
 
 def _package_version() -> str:
@@ -62,6 +63,10 @@ def _build_config(args: argparse.Namespace) -> dict[str, Any]:
     _add_override(overrides, "rlp_directory", str(args.rlp_directory) if args.rlp_directory else None)
     _add_override(overrides, "tilt", args.tilt)
     _add_override(overrides, "azimuth", args.azimuth)
+    _add_override(overrides, "transposition_model", args.transposition_model)
+    _add_override(overrides, "albedo", args.albedo)
+    _add_override(overrides, "surface_type", args.surface_type)
+    _add_override(overrides, "model_perez", args.model_perez)
     _add_override(overrides, "resolution", args.resolution)
     _add_override(overrides, "projection_years", args.projection_years)
     _add_override(overrides, "inflation_rate", args.inflation_rate)
@@ -121,6 +126,10 @@ def _resolved_config_summary(config: dict[str, Any]) -> dict[str, Any]:
             "arrays": resolved.pv_arrays or None,
             "tilt": resolved.tilt,
             "azimuth": resolved.azimuth,
+            "transposition_model": cfg["transposition_model"],
+            "albedo": cfg["albedo"],
+            "surface_type": cfg["surface_type"],
+            "model_perez": cfg["model_perez"],
             "pv_loss_overrides": cfg["pv_loss_overrides"],
         },
         "inverter": {
@@ -361,6 +370,27 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--rlp-directory", type=Path, help="Directory containing licensed external RLP CSV files.")
     run.add_argument("--tilt", type=float, help="PV tilt angle in degrees.")
     run.add_argument("--azimuth", type=float, help="PV surface azimuth in degrees.")
+    run.add_argument(
+        "--transposition-model",
+        "--sky-model",
+        dest="transposition_model",
+        choices=TRANSPOSITION_MODELS,
+        help="Sky-diffusion model for POA transposition (default: isotropic).",
+    )
+    run.add_argument(
+        "--albedo", type=float, help="Ground reflectance 0-1 (default: pvlib 0.25). Excludes --surface-type."
+    )
+    run.add_argument(
+        "--surface-type",
+        choices=SURFACE_TYPES,
+        help="Named ground cover mapped to an albedo (alternative to --albedo).",
+    )
+    run.add_argument(
+        "--perez-model",
+        dest="model_perez",
+        choices=PEREZ_MODELS,
+        help="Perez coefficient set (only used with --transposition-model perez).",
+    )
     run.add_argument("--resolution", choices=("h", "15min"), help="Simulation time resolution.")
     run.add_argument("--projection-years", type=int, help="Economic projection horizon.")
     run.add_argument("--inflation-rate", type=float, help="Annual electricity price inflation.")

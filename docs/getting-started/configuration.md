@@ -35,6 +35,10 @@ weather/data access, load profiles, PV system data, and cost assumptions; see
 | `gcr` | `0.35` | Ground coverage ratio for single-axis tracking |
 | `cross_axis_tilt` | `0.0` | Cross-axis terrain slope for single-axis tracking |
 | `dual_axis_max_tilt` | `90.0` | Maximum panel tilt for dual-axis tracking |
+| `transposition_model` | `"isotropic"` | Sky-diffusion model used to project GHI/DHI/DNI onto the plane of array (see [below](#sky-diffusion-transposition-model)) |
+| `albedo` | `None` | Ground reflectance (0-1) for the ground-diffuse component; `None` uses pvlib's 0.25 default. Mutually exclusive with `surface_type` |
+| `surface_type` | `None` | Named ground cover (e.g. `"snow"`, `"sea"`, `"grass"`) mapped to an albedo; an alternative to `albedo` |
+| `model_perez` | `"allsitescomposite1990"` | Perez coefficient set; only used when `transposition_model = "perez"` |
 | `resolution` | `"h"` | Time resolution (`"h"` or `"15min"`) |
 | `projection_years` | `20` | Economic projection horizon |
 | `cost_preset` | `None` | Cost preset key from packaged defaults |
@@ -52,6 +56,11 @@ weather/data access, load profiles, PV system data, and cost assumptions; see
 | `inverter_loading_ratio` | `1.25` | DC/AC oversizing ratio; also sets the inverter AC rating that clips production |
 | `pv_loss_overrides` | `None` | Per-component overrides (percent) for the fixed PVWatts system losses, e.g. `{"shading": 0.0}` |
 | `start_date` | `"2023-01-01"` | First simulation date |
+
+Unknown top-level keys are rejected at load time. A misspelled key such as
+`batery_kwh` raises an error listing the offending key rather than being
+silently ignored (which would quietly fall back to the default). The optional
+`[montecarlo]` section used by `breos montecarlo` is recognised and allowed.
 
 ## Battery capacity and the SOC window
 
@@ -143,6 +152,66 @@ breos.App({
 
 When `pv_arrays` is set, `n_modules` is computed from the array totals and
 any explicit `n_modules` key is ignored.
+
+Each array may also set its own `transposition_model`, overriding the
+top-level default for that array only.
+
+## Sky-diffusion (transposition) model
+
+To compute plane-of-array (POA) irradiance, BREOS transposes the horizontal
+irradiance components (GHI/DHI/DNI) onto the tilted module surface using a
+*sky-diffusion* (transposition) model. The default, `"isotropic"`, treats
+diffuse sky radiance as uniform — simple and robust, but it underestimates POA
+on clear days because it ignores circumsolar and horizon brightening.
+
+Anisotropic models capture those effects and are generally more accurate; over
+a full year, Perez can raise modeled POA by a few percent relative to
+isotropic at mid-latitude sites. Set `transposition_model` to any of:
+
+`isotropic` (default), `klucher`, `haydavies`, `reindl`, `king`, `perez`,
+`perez-driesse`.
+
+```python
+breos.App({
+    "location": "porto",
+    "n_modules": 10,
+    "annual_consumption_kwh": 4000,
+    "transposition_model": "perez",
+})
+```
+
+The extra inputs the anisotropic models need (extraterrestrial DNI and, for
+the Perez variants, relative airmass) are derived internally from the time
+index and solar position, so no additional weather columns are required. All
+models are provided by
+[`pvlib.irradiance.get_total_irradiance`](https://pvlib-python.readthedocs.io/en/stable/reference/generated/pvlib.irradiance.get_total_irradiance.html).
+
+### Ground reflectance (albedo)
+
+Every transposition model adds a ground-reflected diffuse component, which
+depends on how reflective the ground around the array is. By default BREOS
+uses pvlib's 0.25 albedo. If you know your site, set it explicitly — either a
+numeric `albedo` (0-1) or a named `surface_type` that pvlib maps to an albedo
+(`"snow"` ≈ 0.65, `"sea"`, `"grass"`, `"sand"`, `"urban"`, …). Set one or the
+other, not both. A snowy or sandy foreground can add a few percent to annual
+POA on tilted arrays.
+
+```python
+breos.App({
+    "location": "berlin",
+    "n_modules": 10,
+    "annual_consumption_kwh": 4000,
+    "transposition_model": "perez",
+    "surface_type": "snow",     # or: "albedo": 0.65
+})
+```
+
+### Perez coefficient set
+
+The `perez` model uses an empirically fitted coefficient set. `model_perez`
+selects it (default `"allsitescomposite1990"`); the other sets are
+location/era-specific fits from the Perez papers and are only consulted when
+`transposition_model = "perez"`.
 
 ## Cost and emissions presets
 

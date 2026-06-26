@@ -2,6 +2,66 @@
 
 All notable changes to BREOS are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.3.2] - 2026-06-26
+
+> **Upgrading:** config validation is now strict — a config with an unknown
+> top-level key (e.g. a typo like `batery_kwh`) that silently defaulted in
+> 0.3.1 now raises listing the offending key(s). Fix or remove stray keys
+> before upgrading. All other changes preserve prior behaviour by default.
+
+### Removed
+- The `nrel-pysam` runtime dependency. It was only ever reached transitively,
+  through pvlib's `fit_cec_sam`, to fit the CEC single-diode parameters on the
+  default PV path. `nrel-pysam` publishes no Python 3.14 wheel or sdist and was
+  the sole blocker to running BREOS on 3.14.
+
+### Added
+- `breos.cec_fit.fit_cec_params`: a pure-`scipy`/`pvlib` implementation of the
+  CEC 6-parameter coefficient calculator (Dobos 2012, DOI:10.1115/1.4005759),
+  a drop-in for `pvlib.ivtools.sdm.fit_cec_sam`. Across every bundled module it
+  reproduces the SAM fit to within 0.03% on maximum power over a
+  temperature x irradiance grid and 0.004% on annual energy, so model results
+  are unchanged. Validated against the `nrel-pysam` oracle by
+  `tools/validate_cec_fit.py`.
+- Python 3.14 support: the `3.14` classifier and CI matrix entry, now that the
+  `nrel-pysam` blocker is gone.
+- Config validation now rejects unknown top-level keys. A typo such as
+  `batery_kwh` previously slipped through `merge_defaults` and silently
+  defaulted (e.g. the battery to `0`), producing plausible-but-wrong results;
+  it now raises listing the offending key(s). The optional `montecarlo`
+  section is recognised so Monte Carlo configs still validate.
+- Configurable sky-diffusion (transposition) model via a `transposition_model`
+  config key and `--transposition-model` / `--sky-model` CLI flag, threaded
+  through `calculate_pv_production_dc`, the tracking and multi-array variants,
+  and the `App` config surface. Supports `isotropic` (default), `klucher`,
+  `haydavies`, `reindl`, `king`, `perez`, and `perez-driesse` via pvlib's
+  `get_total_irradiance`; the extra inputs the anisotropic models need
+  (extraterrestrial DNI, relative airmass) are derived internally. The default
+  `isotropic` reproduces prior results bit-for-bit. Per-array overrides are
+  supported in `pv_arrays`.
+- Configurable ground reflectance and Perez coefficients to drive those models
+  with real site information: `albedo` (0-1) or a named `surface_type`
+  (`"snow"`, `"sea"`, `"grass"`, ...) sets the ground-diffuse reflectance for
+  every model (previously fixed at pvlib's 0.25), and `model_perez` selects
+  the Perez coefficient set. All three are App config keys with matching
+  `--albedo` / `--surface-type` / `--perez-model` CLI flags and per-array
+  overrides; not setting them leaves the previous defaults unchanged.
+
+### Changed
+- The default PV path fits CEC parameters via `breos.cec_fit.fit_cec_params`
+  instead of `pvlib.ivtools.sdm.fit_cec_sam`; `breos/solar.py` and the public
+  API are otherwise unchanged.
+- The two placeholder `Generic_400W` and `Generic_600W_Bifacial` catalog
+  modules now carry realistic mono-PERC datasheet specifications (their
+  previous made-up values fit cleanly under SAM only via an internal
+  short-circuit-current heuristic); their nameplate power and keys are
+  unchanged.
+- `resolve_pv_system` no longer mutates the merged config in place to record
+  the derived `n_modules`; the resolved count is materialised into a fresh
+  dict by `resolve_app_config`, so the dict wrapped by the frozen
+  `ResolvedAppConfig` is built once and the caller's input dict is left
+  untouched.
+
 ## [0.3.1] - 2026-06-25
 
 ### Changed
@@ -102,7 +162,8 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   stack and moved heavier workflow packages behind extras: `plots`,
   `optimization`, `weather`, `fast`, `validation`, and `location-tools`.
   NREL-PySAM stays in the core set because the default PV model fits CEC
-  single-diode parameters at runtime via pvlib's `fit_cec_sam`.
+  single-diode parameters at runtime via pvlib's `fit_cec_sam`. (Removed after
+  0.3.0 — see the Unreleased section above.)
 - The `dev` extra now installs optional feature dependencies so contributor
   test runs continue to cover optional paths.
 

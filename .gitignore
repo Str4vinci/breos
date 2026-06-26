@@ -18,3 +18,6 @@ dev/
 # Sphinx
 docs/_build/
 docs/api/generated/
+
+# Local-only working references (do not commit)
+pysam-removal.md
