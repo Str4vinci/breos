@@ -322,7 +322,7 @@ submission):
 ```bibtex
 @unpublished{rodrigues2026breos,
   author = {Rodrigues, L. and Delgado, J. M. P. Q. and Mendes, A. and Guimar{\~a}es, A. S.},
-  title  = {A Modular, Open-Source Python Framework for Household PV-Battery Sizing: Validation, Multi-Objective Optimization, and Uncertainty Quantification},
+  title  = {A Modular, Open-Source Python Framework for Household PV-Battery Sizing: Validation, Multi-Objective Optimisation, and Uncertainty Analysis},
   year   = {2026},
   note   = {Manuscript under submission}
 }
