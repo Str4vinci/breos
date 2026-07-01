@@ -14,6 +14,14 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   and the pymoo-backed multi-objective optimization helper.
 - `breos.solar.resolve_pvwatts_losses`, used by dry-run/config inspection to
   report resolved PVWatts loss components and their combined percentage.
+- `sell_price_inflation` App config key and `--sell-price-inflation` CLI flag
+  (default `0.0`). `CostParams` and `cost_analysis_projection` already
+  supported an annual export-price inflation, but no config key existed and
+  neither the App runner nor the Monte Carlo runner passed it, so the public
+  paths always projected with `0.0`. The value is validated in
+  `validate_config`, threaded through both projection call sites, and shown
+  in `breos run --dry-run` / `validate-config --json`. The `0.0` default
+  reproduces existing results bit-for-bit.
 
 ### Changed
 - `breos run --dry-run` and `breos validate-config --json` now include the

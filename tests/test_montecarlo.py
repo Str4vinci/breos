@@ -87,6 +87,24 @@ def test_run_montecarlo_defaults_years_to_projection_years(tmp_path):
     assert result.summary["npv_savings_eur"]["std"] == 0.0
 
 
+def test_run_montecarlo_threads_sell_price_inflation(tmp_path, monkeypatch):
+    import breos.montecarlo as mc_module
+
+    weather = _write_multiyear_weather(tmp_path / "multi.csv")
+    seen = {}
+    original = mc_module.cost_analysis_projection
+
+    def _capture(*args, **kwargs):
+        seen["sell_price_inflation"] = kwargs.get("sell_price_inflation")
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(mc_module, "cost_analysis_projection", _capture)
+    settings = MonteCarloSettings(weather_file=str(weather), n_runs=1, years_per_run=2, seed=0)
+    run_montecarlo({**_base_config(), "sell_price_inflation": 0.04}, settings)
+
+    assert seen["sell_price_inflation"] == 0.04
+
+
 def test_run_montecarlo_rejects_empty_weather(tmp_path):
     empty = tmp_path / "empty.csv"
     pd.DataFrame({"date": [], "shortwave_radiation": []}).to_csv(empty, index=False)
