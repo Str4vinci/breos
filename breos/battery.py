@@ -79,11 +79,15 @@ class BatteryConfig:
 
     For AC-coupled systems:
     - All energy goes through inverter first
+
+    ``eol_percentage`` defaults to 0.70 (replace the battery when its state
+    of health falls to 70% of nominal capacity), matching the App config
+    default ``battery_eol_percentage``.
     """
 
     nominal_energy_wh: float  # Required — nominal capacity in Wh
     initial_soh: float = 100.0  # Initial state of health (%)
-    eol_percentage: float = 0.80  # End of life threshold (fraction)
+    eol_percentage: float = 0.70  # End of life threshold (fraction)
     max_soc: float = DEFAULT_MAX_SOC
     min_soc: float = DEFAULT_MIN_SOC
     charge_efficiency: float = DEFAULT_CHARGE_EFFICIENCY

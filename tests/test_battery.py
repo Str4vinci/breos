@@ -19,10 +19,24 @@ class TestBatteryConfig:
         cfg = BatteryConfig(nominal_energy_wh=5000)
         assert cfg.max_soc == 0.90
         assert cfg.min_soc == 0.10
+        assert cfg.eol_percentage == 0.70
         assert cfg.dc_coupled is True
         assert cfg.inverter_efficiency == 0.96
         assert cfg.battery_type == "lfp"
         assert cfg.calendar_model == "naumann_lam_field_calibrated"
+
+    def test_eol_default_agrees_across_config_surfaces(self):
+        # BatteryConfig, the App config DEFAULTS, and the optimizer's
+        # battery-spec fallback used to disagree (0.80 / 0.70 / 0.8); the
+        # replacement threshold must default to the same value everywhere.
+        from breos.app_config import DEFAULTS
+        from breos.optimization import _build_battery_config_from_spec
+
+        direct = BatteryConfig(nominal_energy_wh=5000)
+        from_spec = _build_battery_config_from_spec({}, nominal_energy_wh=5000)
+
+        assert direct.eol_percentage == DEFAULTS["battery_eol_percentage"]
+        assert from_spec.eol_percentage == DEFAULTS["battery_eol_percentage"]
 
     def test_replacement_cost_auto(self):
         cfg = BatteryConfig(nominal_energy_wh=10000)
