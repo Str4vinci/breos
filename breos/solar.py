@@ -181,7 +181,8 @@ class PVModuleParams:
 
         # 3. HANDLE POWER (gamma_pmp)
         # Power is almost always used as %/C in pvlib models, passed as unitless decimal or %
-        self.gamma_pmp = self.T_Pmax_pct
+        if self.gamma_pmp is None:
+            self.gamma_pmp = self.T_Pmax_pct
 
 
 def _prepare_solarpos_and_weather(weather_data: pd.DataFrame, location: Location, freq: str):

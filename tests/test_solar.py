@@ -8,12 +8,41 @@ from breos.solar import (
     PEREZ_MODELS,
     SURFACE_TYPES,
     TRANSPOSITION_MODELS,
+    PVModuleParams,
     calculate_multi_array_production,
     calculate_pv_production_dc,
     calculate_pv_production_dc_tracking,
     default_azimuth,
     estimate_optimal_tilt,
 )
+
+
+def _module_params(**overrides):
+    """Generic_400W-style datasheet values for PVModuleParams tests."""
+    params = dict(
+        Mpp=400,
+        Vmp=41.0,
+        Imp=9.76,
+        Voc=49.3,
+        Isc=10.30,
+        T_Pmax_pct=-0.35,
+        T_Voc_pct=-0.265,
+        T_Isc_pct=0.05,
+        N_Cells=144,
+    )
+    params.update(overrides)
+    return PVModuleParams(**params)
+
+
+class TestPVModuleParams:
+    def test_gamma_pmp_defaults_to_power_coefficient(self):
+        params = _module_params()
+        assert params.gamma_pmp == params.T_Pmax_pct
+
+    def test_gamma_pmp_override_is_respected(self):
+        # A user-supplied gamma_pmp must not be silently replaced by T_Pmax_pct.
+        params = _module_params(gamma_pmp=-0.30)
+        assert params.gamma_pmp == -0.30
 
 
 class TestTiltAndAzimuth:
