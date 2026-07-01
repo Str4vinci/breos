@@ -65,6 +65,8 @@ from breos.constants import (
 from breos.economics import BATTERY_REPLACEMENT_COST_PER_KWH
 from breos.utils import get_hours_per_step, remap_datetime_index_years
 
+SUPPORTED_BATTERY_TYPES: tuple[str, ...] = ("lfp",)
+
 
 @dataclass
 class BatteryConfig:
@@ -103,10 +105,12 @@ class BatteryConfig:
     # Inverter AC rating (W) shared by PV and battery discharge; AC output is
     # clipped to this each step. None disables clipping (legacy behavior).
     inverter_ac_capacity_w: Optional[float] = None
-    # Battery chemistry
-    battery_type: str = "lfp"  # Battery chemistry type
+    # Battery chemistry. The native degradation model is currently LFP-only;
+    # unsupported values fail loudly instead of reusing LFP parameters.
+    battery_type: str = "lfp"
 
     def __post_init__(self):
+        self.battery_type = _normalise_battery_type(self.battery_type)
         # Auto-compute replacement cost
         if self.replacement_cost is None:
             if self.nominal_energy_wh > 1:
@@ -1025,12 +1029,25 @@ def resistance_to_efficiency(
     return eff_charge, eff_discharge
 
 
+def _normalise_battery_type(battery_type: str) -> str:
+    """Normalize and validate the native battery chemistry selector."""
+    normalised = str(battery_type).strip().lower()
+    if normalised not in SUPPORTED_BATTERY_TYPES:
+        available = ", ".join(SUPPORTED_BATTERY_TYPES)
+        raise ValueError(
+            f"Unsupported battery_type {battery_type!r}. "
+            f"The native BREOS degradation model currently supports only: {available}."
+        )
+    return normalised
+
+
 def _get_cycle_params(battery_type: str = "lfp") -> Tuple[float, float, float, float, float]:
     """Get cycle aging (Naumann-style) parameters for a battery chemistry.
 
     Returns:
         Tuple of (a_q, b_q, c_doc_q, d_doc_q, z_q)
     """
+    _normalise_battery_type(battery_type)
     return (A_Q, B_Q, C_DOC_Q, D_DOC_Q, Z_Q)
 
 

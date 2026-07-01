@@ -60,7 +60,8 @@ weather/data access, load profiles, PV system data, and cost assumptions; see
 Unknown top-level keys are rejected at load time. A misspelled key such as
 `batery_kwh` raises an error listing the offending key rather than being
 silently ignored (which would quietly fall back to the default). The optional
-`[montecarlo]` section used by `breos montecarlo` is recognised and allowed.
+`[sweep]` and `[montecarlo]` sections used by their dedicated CLI commands are
+recognised and allowed.
 
 ## Battery capacity and the SOC window
 
@@ -91,6 +92,11 @@ maps to the v1 field calibration. The explicit
 `"naumann_lam_field_calibrated_v2"` for the v2 field-calibrated fit with Lam
 `Ea`/`n` fixed and `k0`/`b` fitted to field data.
 
+The native BREOS degradation path is currently calibrated for LFP cells only.
+Lower-level `BatteryConfig(battery_type="LFP")` normalizes to `"lfp"`; other
+chemistries raise instead of silently reusing LFP cycle-aging parameters. See
+the roadmap for the planned opt-in multi-chemistry degradation engine.
+
 ## Discovering available options
 
 Use the CLI to list packaged option keys:
@@ -113,8 +119,10 @@ breos run --config quickstart.toml --dry-run
 ```
 
 These commands resolve packaged presets, modules, inverter sizing, battery
-settings, load-profile choices, and emissions settings without fetching weather
-or simulating.
+settings, load-profile choices, emissions settings, and the static PVWatts loss
+stack without fetching weather or simulating. In JSON output, `pv.losses`
+contains the resolved component percentages plus the combined PVWatts loss
+percentage after applying any `pv_loss_overrides`.
 
 ## Custom location
 

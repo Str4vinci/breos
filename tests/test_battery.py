@@ -9,6 +9,7 @@ from breos.battery import (
     _get_degradation_params,
     apply_indoor_temperature_model,
     simulate_energy_balance,
+    update_battery_soh_cyclewise,
 )
 from breos.constants import LAM_EA_J_MOL, LAM_SOC_EXPONENT_N
 
@@ -37,8 +38,18 @@ class TestBatteryConfig:
         assert cfg.replacement_cost == 1000.0
 
     def test_battery_type_accessible(self):
-        cfg = BatteryConfig(nominal_energy_wh=5000, battery_type="lfp")
+        cfg = BatteryConfig(nominal_energy_wh=5000, battery_type="LFP")
         assert cfg.battery_type == "lfp"
+
+    def test_non_lfp_battery_type_rejected(self):
+        with pytest.raises(ValueError, match="supports only: lfp"):
+            BatteryConfig(nominal_energy_wh=5000, battery_type="nmc")
+
+    def test_cycle_aging_rejects_non_lfp_battery_type(self):
+        soc = pd.Series([0.1, 0.8, 0.2], index=pd.date_range("2025-01-01", periods=3, freq="h"))
+
+        with pytest.raises(ValueError, match="supports only: lfp"):
+            update_battery_soh_cyclewise(1.0, soc, 5000.0, battery_type="nca")
 
     def test_field_calibrated_default_is_v1(self):
         assert _get_degradation_params("naumann_lam_field_calibrated") == _get_degradation_params(

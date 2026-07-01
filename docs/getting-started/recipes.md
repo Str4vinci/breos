@@ -113,6 +113,39 @@ raises annual yield further. Leave both unset to keep pvlib's 0.25 default.
 From the CLI, the equivalent flag is `--transposition-model perez`
 (alias `--sky-model`).
 
+## Parameter sweep
+
+Use `breos sweep` when you want to run the same scenario over an explicit grid
+of App config values. The top-level keys define the base scenario; every key
+under `[sweep]` replaces the matching top-level key for each run. The command
+runs the Cartesian product and writes one CSV row per combination:
+
+```toml
+location = "porto"
+n_modules = 10
+annual_consumption_kwh = 4000
+battery_kwh = 0.0
+load_profile = "demandlib_h0"
+cost_preset = "residential_pt"
+emissions_country = "PT"
+projection_years = 20
+resolution = "h"
+
+[sweep]
+n_modules = [8, 10, 12]
+battery_kwh = [0.0, 5.0]
+```
+
+```bash
+breos sweep --config config.toml --output sweep_results.csv
+```
+
+The output includes the varied parameters (`param_*` columns), resolved system
+sizing, the BREOS version, and top-level scalar result metrics such as grid
+independence, NPV, payback, LCOE, and battery replacement totals. This is
+explicit enumeration, not an optimizer; use the optimization API for searching
+over objectives and constraints.
+
 ## 15-minute resolution
 
 Hourly weather is interpolated to 15-minute steps (Makima), and the bundled
