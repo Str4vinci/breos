@@ -4,6 +4,14 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 
 ## [Unreleased]
 
+### Removed
+- The `Suntech_STP550S_NOMT` catalog module. Its datasheet points were NMOT
+  ratings (800 W/m², Mpp = 415 W), but the CEC single-diode fit interprets
+  `Vmp`/`Imp`/`Voc`/`Isc` as STC values, so the entry produced silently wrong
+  model parameters. Configs referencing it now fail with the standard
+  "Module '...' not found. Available: ..." error; use `Suntech_STP550S_STC`
+  (the same physical module at STC) instead.
+
 ### Added
 - `breos sweep`, a serial parameter-grid CLI command that expands a `[sweep]`
   section in a normal App config and writes one combined CSV with varied
