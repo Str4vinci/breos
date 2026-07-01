@@ -43,6 +43,7 @@ weather/data access, load profiles, PV system data, and cost assumptions; see
 | `projection_years` | `20` | Economic projection horizon |
 | `cost_preset` | `None` | Cost preset key from packaged defaults |
 | `inflation_rate` | `0.02` | Annual electricity price inflation |
+| `sell_price_inflation` | `0.0` | Annual inflation of the grid export (sell) price |
 | `discount_rate` | `0.03` | Discount rate for NPV |
 | `emissions_country` | `None` | Country code for CO2 calculations (`"PT"`, `"DE"`, `"ES"`, ...) |
 | `pv_degradation_rate` | `0.005` | Annual PV degradation rate (0.5% / year) |

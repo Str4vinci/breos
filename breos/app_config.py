@@ -43,6 +43,7 @@ DEFAULTS: dict[str, Any] = {
     "projection_years": 20,
     "cost_preset": None,
     "inflation_rate": 0.02,
+    "sell_price_inflation": 0.0,
     "discount_rate": 0.03,
     "emissions_country": None,
     "pv_degradation_rate": 0.005,
@@ -206,6 +207,8 @@ def validate_config(cfg: dict[str, Any]) -> None:
         for name, value in overrides.items():
             if not isinstance(value, (int, float)) or not 0 <= value <= 100:
                 raise ValueError(f"'pv_loss_overrides[{name!r}]' must be a percentage between 0 and 100")
+    if not -1 < cfg["sell_price_inflation"] < 1:
+        raise ValueError("'sell_price_inflation' must be between -1 and 1 (exclusive)")
     if not 0 <= cfg["battery_min_soc"] < cfg["battery_max_soc"] <= 1:
         raise ValueError("'battery_min_soc' and 'battery_max_soc' must satisfy 0 <= min < max <= 1")
     if not 0 < cfg["battery_eol_percentage"] < 1:
@@ -350,6 +353,7 @@ def resolve_costs(cfg: dict[str, Any]) -> CostParams:
 
     params["dc_ac_ratio"] = cfg["inverter_loading_ratio"]
     params.setdefault("inflation_rate", cfg["inflation_rate"])
+    params.setdefault("sell_price_inflation", cfg["sell_price_inflation"])
     params.setdefault("discount_rate", cfg["discount_rate"])
     params["pv_degradation_rate"] = cfg["pv_degradation_rate"]
 

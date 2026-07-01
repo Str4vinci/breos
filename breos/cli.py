@@ -72,6 +72,7 @@ def _build_config(args: argparse.Namespace) -> dict[str, Any]:
     _add_override(overrides, "resolution", args.resolution)
     _add_override(overrides, "projection_years", args.projection_years)
     _add_override(overrides, "inflation_rate", args.inflation_rate)
+    _add_override(overrides, "sell_price_inflation", args.sell_price_inflation)
     _add_override(overrides, "discount_rate", args.discount_rate)
     _add_override(overrides, "pv_degradation_rate", args.pv_degradation_rate)
     _add_override(overrides, "calendar_model", args.calendar_model)
@@ -159,6 +160,7 @@ def _resolved_config_summary(config: dict[str, Any]) -> dict[str, Any]:
             "cost_preset": cfg["cost_preset"],
             "projection_years": cfg["projection_years"],
             "inflation_rate": cfg["inflation_rate"],
+            "sell_price_inflation": cfg["sell_price_inflation"],
             "discount_rate": cfg["discount_rate"],
         },
         "emissions": {
@@ -490,6 +492,9 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--resolution", choices=("h", "15min"), help="Simulation time resolution.")
     run.add_argument("--projection-years", type=int, help="Economic projection horizon.")
     run.add_argument("--inflation-rate", type=float, help="Annual electricity price inflation.")
+    run.add_argument(
+        "--sell-price-inflation", type=float, help="Annual inflation of the grid export (sell) price. Default 0."
+    )
     run.add_argument("--discount-rate", type=float, help="Discount rate for NPV calculations.")
     run.add_argument("--pv-degradation-rate", type=float, help="Annual PV degradation rate.")
     run.add_argument("--calendar-model", help="Battery calendar aging model.")

@@ -64,6 +64,27 @@ def test_run_from_flags_outputs_json(monkeypatch, capsys):
     assert output["grid_independence_pct"] == 42.0
 
 
+def test_run_flag_sell_price_inflation_reaches_config(monkeypatch, capsys):
+    monkeypatch.setattr(cli, "App", FakeApp)
+
+    exit_code = cli.main(
+        [
+            "run",
+            "--location",
+            "porto",
+            "--n-modules",
+            "10",
+            "--annual-consumption-kwh",
+            "4000",
+            "--sell-price-inflation",
+            "0.03",
+        ]
+    )
+
+    assert exit_code == 0
+    assert FakeApp.seen_config["sell_price_inflation"] == 0.03
+
+
 def test_run_from_toml_config_with_cli_override(monkeypatch, tmp_path):
     monkeypatch.setattr(cli, "App", FakeApp)
     config_path = tmp_path / "experiment.toml"
