@@ -1,6 +1,6 @@
 cff-version: 1.2.0
 title: "BREOS: Building Renewable Energy Optimization Software"
-message: "If you use BREOS in your research, please cite it as below."
+message: "If you use BREOS in your research, please cite the SSRN preprint below."
 type: software
 authors:
   - given-names: Leonardo
@@ -36,4 +36,6 @@ preferred-citation:
     - given-names: "A. S."
       family-names: Guimarães
   year: 2026
-  notes: "Manuscript under submission."
+  doi: "10.2139/ssrn.7032064"
+  url: "https://papers.ssrn.com/sol3/papers.cfm?abstract_id=7032064"
+  notes: "SSRN preprint submitted to Applied Energy."
