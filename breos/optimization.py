@@ -439,7 +439,7 @@ def _build_battery_config_from_spec(
         discharge_efficiency=batt_spec.get("discharge_efficiency", 0.9795),
         standby_loss_wh=batt_spec.get("standby_loss_wh", 5.0),
         initial_soh=initial_soh,
-        eol_percentage=batt_spec.get("eol_percentage", 0.8),
+        eol_percentage=batt_spec.get("eol_percentage", 0.7),
         inverter_efficiency=inverter_efficiency,
         dc_coupled=batt_spec.get("dc_coupled", True),
         calendar_model=batt_spec.get("calendar_model", "naumann_lam_field_calibrated"),

@@ -38,6 +38,14 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 - `BatteryConfig.battery_type` is now explicit about the native degradation
   model being LFP-only: `"LFP"` normalizes to `"lfp"`, while unsupported
   chemistries raise instead of silently reusing LFP cycle-aging parameters.
+- `BatteryConfig.eol_percentage` now defaults to `0.70`, aligning with the
+  App config default `battery_eol_percentage = 0.70` and the optimizer's
+  battery-spec fallback (previously `0.80` and `0.8` respectively — three
+  surfaces, two values). App and CLI results are unchanged (they always pass
+  the config value explicitly), but direct `BatteryConfig` users who relied
+  on the implicit `0.80` will now see batteries replaced later, at 70% SOH;
+  pass `eol_percentage=0.8` to keep the old threshold. The same applies to
+  optimization battery specs without an explicit `eol_percentage`.
 
 ### Fixed
 - `dc_to_ac` (and therefore `calculate_pv_production_ac`) clipped ~4% below
