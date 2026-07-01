@@ -3,23 +3,108 @@
 This document tracks planned work that is not yet scheduled. Items here
 are intentions, not commitments — see GitHub issues for active work.
 
+## Model accuracy and validation
+
+The goal is a gold-standard *engine* — PVsyst/HelioScope-class results
+without the 3D scene modeling. That standard is earned two ways: closing
+known systematic modeling gaps, and publishing reproducible evidence that
+the numbers are right. This work takes priority over architectural
+refactoring (see the deferred adapter layer at the bottom of this document).
+
+### Standing validation and benchmark suite
+
+The single highest-leverage credibility item. PVsyst's authority comes from
+decades of published validation; BREOS needs a reproducible harness that
+compares its annual and monthly yields against SAM/PVWatts and against
+measured public datasets (e.g. NREL PVDAQ), per location and per model
+choice, with deltas documented and tracked over time.
+
+- Start from the existing seeds: `tools/validate_cec_fit.py` and
+  `tools/batch_compare_locations.py`.
+- Publish expected-delta tables per transposition / cell-temperature / IAM
+  choice, and wire a CI job that fails when a delta drifts beyond a stated
+  tolerance.
+- Every new physics capability (bifacial, cell-temperature models, IAM
+  models) lands with its row in the benchmark table — this generalizes the
+  per-item "validate against baseline" notes elsewhere in this roadmap.
+
+### Mid-interval solar position for hourly weather
+
+`solar._prepare_solarpos_and_weather` computes solar position at the
+interval *labels* of hourly averaged irradiance. PVWatts/SAM (and PVsyst,
+equivalently) evaluate sun position at the interval midpoint; using labels
+causes a systematic transposition/AOI error that is worst near
+sunrise/sunset and for east/west-facing arrays, and it biases every
+anisotropic transposition model. This is the cheapest meaningful accuracy
+win available.
+
+- Add a half-interval shift for interval-averaged weather, opt-in at first
+  so existing configs reproduce bit-for-bit, then fold it into the
+  recommended profile (below).
+- While in there, pass `apparent_zenith` consistently: AOI already uses it,
+  but `get_total_irradiance` currently receives the true `zenith`.
+- Document the expected annual-yield delta via the benchmark suite.
+
+### One inverter model everywhere (App, dc_to_ac, optimizer)
+
+Three inverter representations exist today and they disagree: the `App`
+energy balance uses a flat efficiency plus an AC cap treated as the
+nameplate; `solar.dc_to_ac` uses pvlib's pvwatts part-load curve but passes
+the intended AC nameplate as pvlib's `pdc0` (a *DC input* limit), so it
+clips ~4% low; and the NSGA-II optimizer applies no AC clipping at all and
+prices systems without the daily connection fee or battery replacements.
+Designs are picked by one model and reported by another, which biases the
+Pareto front toward high DC/AC ratios whose clipping is never seen.
+
+- Unify on a single conversion model (the pvwatts part-load curve is the
+  better physics) with one definition of the AC nameplate.
+- Make "the optimizer scores designs with the same engine that reports
+  them" a regression-tested invariant; this includes aligning
+  `align_load_to_pv` with the App's wall-clock/UTC load alignment.
+- This extends Phase 1 of "String-aware inverter validation and modeling"
+  below and subsumes its App-only scope.
+
+### Battery charge/discharge power limits
+
+The dispatch loop has no C-rate limits: charging is unbounded (a 5 kWh pack
+absorbs any surplus in a single step) and discharge is bounded only by the
+shared inverter AC rating. Credible sizing studies need power limits.
+
+- Add max charge/discharge power keys (or a C-rate key, default ~0.5C),
+  validated in the existing "Unknown X. Available: ..." style.
+- Unlimited stays available explicitly, and the default must be introduced
+  with a documented yield/self-consumption delta — it will change results
+  for small batteries paired with large arrays.
+
+### Energy loss waterfall
+
+PVsyst's loss diagram is its most-loved diagnostic, and it is pure engine
+work: report the chain transposition gain → IAM → temperature → static
+PVWatts stack (already componentized) → inverter clipping → conversion →
+battery round-trip → curtailment. Today curtailed energy in the surplus
+branch vanishes without a trace, and `inverter.InverterConversionResult`
+already carries clipping bookkeeping but has no production caller. Surface
+the waterfall in `App.result()` and the CLI JSON output.
+
+### Horizon-profile input
+
+Far-horizon shading without any 3D: PVGIS TMY is already fetched with
+`usehorizon=True`, so PVGIS-sourced weather accounts for it implicitly —
+but user-supplied weather files and custom horizons get nothing. Accept a
+horizon profile (azimuth/elevation pairs) and apply it via pvlib's horizon
+tools, documenting the PVGIS overlap so shading is not double-counted.
+
+### Recommended model profile and future defaults
+
+Isotropic transposition, label-timestamp sun position, beam-only IAM, and
+free-standing Faiman coefficients are all kept as defaults for bit-for-bit
+compatibility — but they are not what a gold-standard engine should
+recommend. Define a documented "recommended" profile (haydavies/perez
+transposition, mid-interval sun position, diffuse IAM, mount-appropriate
+thermal coefficients), steer new users to it in the quickstart, and plan
+the default flip for a major version with a clear upgrade note.
+
 ## Architecture
-
-### Wrap third-party modules behind adapters
-
-Concentrate every direct import of `pvlib`, `scipy`, `rainflow`, and other
-third-party scientific libraries in a small `breos.adapters` layer so that
-upstream API changes only affect a single file rather than the whole
-package. The current `Location` parameter exposed by
-`solar.calculate_pv_production_dc` (and several other public functions) is
-a `pvlib.Location`, which means BREOS does not own its own public API.
-
-- Tracking issue: [#11](https://github.com/Str4vinci/breos/issues/11)
-- Design: [docs/architecture/third-party-wrapping.md](docs/architecture/third-party-wrapping.md)
-- Scope: pvlib first (Phase 1), then scipy / rainflow (Phase 2), then IO
-  clients (Phase 3). Pandas, numpy, and matplotlib are kept direct.
-- Estimated effort: ~3–4 weeks of focused work, split into many small
-  PRs.
 
 ### Declarative config schema with strict validation
 
@@ -146,9 +231,15 @@ end-to-end through `build_dc_system_base` and the multi-array path):
 - **Bifacial rear-gain** — see the dedicated item below.
 - **Cell-temperature model choice** — `faiman` is currently hardcoded in
   `_compute_effective_irradiance_and_cell_temp`; expose `sapm`, `pvsyst`, and
-  `noct_sam` with their parameter sets.
+  `noct_sam` with their parameter sets. Lead with mount-type parameter
+  presets (open rack vs roof mount): the current free-standing coefficients
+  run cool for rooftop residential systems — BREOS's primary audience — and
+  systematically overestimate their yield.
 - **IAM model choice** — `ashrae` is currently hardcoded; expose `martin_ruiz`,
-  `physical`, and the SAPM IAM.
+  `physical`, and the SAPM IAM. Also apply IAM to the diffuse components:
+  effective irradiance currently applies IAM to beam only (diffuse passes at
+  1.0), a ~0.5–1% systematic overestimate; pvlib's `iam.marion_diffuse`
+  covers the sky/ground diffuse terms.
 - **DC-side loss refinements** — optional time-series ohmic/soiling/snow models in
   place of (parts of) the flat PVWatts loss stack, where inputs allow.
 - Non-goal: replacing the CEC single-diode core or the PVWatts loss model as the
@@ -209,7 +300,8 @@ provide module, inverter, environment, MPPT, and string-topology data.
 
 - Design note: [docs/architecture/string-inverter-sizing.md](docs/architecture/string-inverter-sizing.md)
 - Phase 1: apply aggregate inverter AC clipping consistently in the main
-  `App` energy flow.
+  `App` energy flow. Shipped for the `App` path; extended and superseded by
+  "One inverter model everywhere" under Model accuracy and validation.
 - Phase 2: add a pure validation API for string voltage windows, startup
   voltage, MPPT current limits, parallel-string compatibility, and DC/AC ratio
   warnings.
@@ -264,8 +356,24 @@ LCOE, payback, and CO₂ results without hand-entering every cost.
   with source and vintage documented.
 - Keep the "Unknown cost preset '...'. Available: ..." and "Unknown emissions
   country '...'" errors actionable as the catalogs grow.
-- Non-goal: live tariff / FX feeds or time-of-use tariff structures — this is
-  static, documented, per-country presets, not a market-data integration.
+- Non-goal: live tariff / FX feeds — this is static, documented, per-country
+  presets, not a market-data integration. Time-of-use tariff *structures* are
+  no longer a non-goal; see the dedicated item below.
+
+### Time-of-use tariff structures
+
+Flat import/export prices cannot value a battery correctly in markets where
+time-of-use tariffs are standard (ES 2.0TD periods, PT bi/tri-horária, DE
+dynamic tariffs) — and battery economics is BREOS's differentiator.
+Restructure the economics layer so a tariff is a pluggable price time series
+rather than a single scalar, and ship static, documented TOU presets per
+country following the existing `residential_<cc>` convention.
+
+- Requires per-timestep import/export pricing in the results path; the
+  flat-price path must reproduce current results bit-for-bit.
+- Later: TOU-aware dispatch (charge/discharge on price signals) as an opt-in
+  strategy — greedy self-consumption stays the default.
+- Non-goal: live tariff APIs, dynamic hourly market prices, FX feeds.
 
 ### Additional Li-ion battery chemistries
 
@@ -323,6 +431,29 @@ documented in [docs/release.md](docs/release.md). Remaining work:
 
 - Protect `v*` tags in GitHub repository settings so only maintainers can
   create release tags.
+
+## Deferred
+
+### Wrap third-party modules behind adapters
+
+**Deprioritized 2026-07:** the model-accuracy and validation work above
+delivers more user-visible value per week of effort; pvlib API churn is
+modest and the `pvlib>=0.14,<0.16` pin already contains it. Revisit once
+the accuracy items land.
+
+Concentrate every direct import of `pvlib`, `scipy`, `rainflow`, and other
+third-party scientific libraries in a small `breos.adapters` layer so that
+upstream API changes only affect a single file rather than the whole
+package. The current `Location` parameter exposed by
+`solar.calculate_pv_production_dc` (and several other public functions) is
+a `pvlib.Location`, which means BREOS does not own its own public API.
+
+- Tracking issue: [#11](https://github.com/Str4vinci/breos/issues/11)
+- Design: [docs/architecture/third-party-wrapping.md](docs/architecture/third-party-wrapping.md)
+- Scope: pvlib first (Phase 1), then scipy / rainflow (Phase 2), then IO
+  clients (Phase 3). Pandas, numpy, and matplotlib are kept direct.
+- Estimated effort: ~3–4 weeks of focused work, split into many small
+  PRs.
 
 ## Reference load profiles pending license verification
 
