@@ -12,6 +12,7 @@ from breos.solar import (
     calculate_multi_array_production,
     calculate_pv_production_dc,
     calculate_pv_production_dc_tracking,
+    dc_to_ac,
     default_azimuth,
     estimate_optimal_tilt,
 )
@@ -43,6 +44,31 @@ class TestPVModuleParams:
         # A user-supplied gamma_pmp must not be silently replaced by T_Pmax_pct.
         params = _module_params(gamma_pmp=-0.30)
         assert params.gamma_pmp == -0.30
+
+
+class TestDcToAc:
+    def _dc(self, watts, periods=4):
+        idx = pd.date_range("2023-06-01", periods=periods, freq="h", tz="UTC")
+        return pd.Series([float(watts)] * periods, index=idx)
+
+    def test_clips_at_ac_nameplate(self):
+        # AC nameplate = pv_peak / loading ratio = 8000 W. pvlib's pdc0 is a
+        # DC-input limit (pac0 = eta * pdc0), so passing the nameplate as pdc0
+        # used to clip ~4% low, at eta * nameplate = 7680 W.
+        ac = dc_to_ac(self._dc(20000.0), pv_peak_power_w=10000.0, inverter_loading_ratio=1.25, inverter_efficiency=0.96)
+        assert ac.max() == pytest.approx(8000.0)
+
+    def test_full_dc_limit_reaches_nameplate_exactly(self):
+        # At pdc == pdc0 (= nameplate / eta) the pvwatts curve outputs pac0.
+        ac = dc_to_ac(
+            self._dc(8000.0 / 0.96), pv_peak_power_w=10000.0, inverter_loading_ratio=1.25, inverter_efficiency=0.96
+        )
+        assert ac.iloc[0] == pytest.approx(8000.0)
+
+    def test_part_load_stays_below_input_and_nameplate(self):
+        ac = dc_to_ac(self._dc(4000.0), pv_peak_power_w=10000.0, inverter_loading_ratio=1.25, inverter_efficiency=0.96)
+        assert (ac < 4000.0).all()
+        assert (ac <= 8000.0).all()
 
 
 class TestTiltAndAzimuth:

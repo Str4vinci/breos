@@ -24,6 +24,17 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   chemistries raise instead of silently reusing LFP cycle-aging parameters.
 
 ### Fixed
+- `dc_to_ac` (and therefore `calculate_pv_production_ac`) clipped ~4% below
+  the intended inverter AC nameplate: it passed the nameplate
+  (`pv_peak_power_w / inverter_loading_ratio`) as pvlib's `pdc0`, which is a
+  DC-input limit whose AC nameplate is `eta_inv_nom * pdc0`. The DC limit is
+  now derived as `nameplate / eta_inv_nom`, so clipping happens at the same
+  AC rating used by `InverterConfig.size_from_pv`, the App energy balance,
+  `economics.calculate_costs`, and the CLI's reported `ac_rating_kw`. This
+  raises `dc_to_ac` / `calculate_pv_production_ac` outputs slightly at every
+  operating point (most visibly during clipping hours); App simulation
+  results are unchanged because the App path converts DC through
+  `simulate_energy_balance`, not `dc_to_ac`.
 - `PVModuleParams` no longer discards a user-supplied `gamma_pmp`: the
   constructor argument existed but `__post_init__` unconditionally overwrote
   it with `T_Pmax_pct`. It now only defaults to `T_Pmax_pct` when not given,
