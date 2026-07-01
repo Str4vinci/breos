@@ -95,8 +95,9 @@ Option discovery work:
 
 Config inspection work:
 
-- Extend the dry-run summary with the fully resolved PVWatts loss components
-  (today it only echoes `pv_loss_overrides`).
+- **Shipped in 0.3.3:** the dry-run / `validate-config --json` summary now
+  includes the fully resolved static PVWatts loss components and combined loss
+  percentage after applying `pv_loss_overrides`.
 
 Agent and contributor setup:
 
@@ -227,14 +228,72 @@ count, battery size, tilt, tariffs, and so on — which today means scripting th
 Python `App` in a loop by hand. Add a first-class way to enumerate a parameter
 grid (or a set of config files) and collect the per-run results into one table.
 
-- For example a `breos sweep` command over a base config plus a parameter grid,
-  or a glob of config files resolved into one combined CSV/JSON of results.
-- Reuse the worker controls planned under "Resource controls and Apple Silicon
-  hygiene" for parallel execution of independent runs.
-- Echo the resolved config (and `breos` version) per row so a sweep output is
-  self-describing and reproducible.
+- **MVP shipped in 0.3.3:** `breos sweep --config ... --output ...` expands a
+  `[sweep]` parameter grid in a normal App config, runs the Cartesian product
+  serially, and writes one combined CSV with varied parameters, resolved system
+  sizing, the BREOS version, and top-level scalar result metrics.
+- Remaining work: accept a glob/list of config files resolved into one combined
+  CSV/JSON of results.
+- Remaining work: reuse the worker controls planned under "Resource controls
+  and Apple Silicon hygiene" for parallel execution of independent runs.
+- Remaining work: optionally echo a fuller resolved-config payload per row when
+  users need more than the current resolved sizing columns.
 - Non-goal: this is explicit enumeration, not optimization — the `optimization`
   module's NSGA-II sizing already covers searching for good designs.
+
+### Globalization: economics and grid emissions beyond Europe
+
+BREOS ships cost and grid-emission presets that are entirely European. The cost
+catalog (`breos/data/configs/costs.json`) covers only `residential_de`,
+`residential_es`, and `residential_pt` — all Eurozone, priced implicitly in EUR
+with no currency field — and the emissions catalog
+(`breos/data/configs/emissions.json`) covers only the ~36 ENTSO-E countries.
+Adding other countries' economics would let non-European users get realistic
+LCOE, payback, and CO₂ results without hand-entering every cost.
+
+- Introduce an explicit `currency` concept. Today every cost is bare EUR; adding
+  other-country presets first needs a currency field per cost preset, surfaced in
+  results and plots, so a BRL or USD preset cannot be silently mixed with EUR
+  defaults.
+- Add non-EU cost presets to `costs.json` (electricity tariff, feed-in / sold
+  price, module / inverter / storage capex, install and maintenance), each citing
+  its source and year and following the existing `residential_<cc>` key
+  convention.
+- Add non-European grid-emission factors to `emissions.json` beyond the ENTSO-E
+  set (for example BR, US, AU, IN, CN, JP), keyed by the same ISO country codes,
+  with source and vintage documented.
+- Keep the "Unknown cost preset '...'. Available: ..." and "Unknown emissions
+  country '...'" errors actionable as the catalogs grow.
+- Non-goal: live tariff / FX feeds or time-of-use tariff structures — this is
+  static, documented, per-country presets, not a market-data integration.
+
+### Additional Li-ion battery chemistries
+
+The battery degradation model is calibrated for LFP only. Calendar aging uses the
+Naumann 2020 LFP parameter sets (`naumann_lam_field_calibrated` default and
+variants in `breos/constants.py`), and cycle aging uses LFP Wöhler curves
+(`WOEHLER_LFP_CONSERVATIVE` / `_TYPICAL` / `_OPTIMISTIC`, consumed in
+`breos/polysun_degradation.py`). This is the same "label without the physics" gap
+as bifacial modules. In 0.3.3 the native `BatteryConfig.battery_type` selector
+was made honest: `LFP` normalizes to `lfp`, and unsupported values now raise
+instead of silently reusing LFP cycle-aging parameters. Add real per-chemistry
+aging so NMC / NCA packs degrade on their own parameters.
+
+- Add a `battery_chemistry` config key (defaulting to `lfp`) that selects the
+  calendar and Wöhler parameter sets, validated in the existing "Unknown X.
+  Available: ..." style.
+- Add NMC and NCA parameter sets (calendar-aging coefficients and Wöhler `a` / `b`
+  cycle coefficients), each with a documented source; consider LTO and
+  sodium-ion as later additions.
+- Allow per-chemistry calendar-life and round-trip-efficiency defaults where they
+  differ from LFP (for example NMC's higher energy density but shorter cycle
+  life).
+- Default `lfp` must reproduce current results bit-for-bit — regression-test the
+  example configs in `configs/examples/`, exactly as the PV-capability items above
+  require.
+- Non-goal: electrochemical / physics-based (single-particle, P2D) models — this
+  stays an empirical Wöhler-plus-calendar approach, just parameterised per
+  chemistry.
 
 ### 0.3.0 workflow hardening
 
@@ -248,8 +307,9 @@ workflows before adding new feature families:
   demos without committing large weather files.
 - Improve multi-objective sizing examples, result serialization, and Pareto
   plotting documentation.
-- Add release smoke tests for the exact README quickstart, MC example, and MOO
-  example.
+- **Shipped in 0.3.3:** release smoke tests cover the README quickstart, the
+  Monte Carlo example path with generated local weather, and the pymoo-backed
+  multi-objective optimization helper.
 
 ## Distribution and release automation
 

@@ -2,6 +2,27 @@
 
 All notable changes to BREOS are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased]
+
+### Added
+- `breos sweep`, a serial parameter-grid CLI command that expands a `[sweep]`
+  section in a normal App config and writes one combined CSV with varied
+  parameters, resolved system sizing, BREOS version, and scalar result metrics.
+- `configs/examples/sweep.toml` as a runnable sweep example over module count
+  and battery size.
+- Release-smoke tests for the README quickstart, the Monte Carlo example path,
+  and the pymoo-backed multi-objective optimization helper.
+- `breos.solar.resolve_pvwatts_losses`, used by dry-run/config inspection to
+  report resolved PVWatts loss components and their combined percentage.
+
+### Changed
+- `breos run --dry-run` and `breos validate-config --json` now include the
+  fully resolved static PVWatts loss stack instead of only echoing
+  `pv_loss_overrides`.
+- `BatteryConfig.battery_type` is now explicit about the native degradation
+  model being LFP-only: `"LFP"` normalizes to `"lfp"`, while unsupported
+  chemistries raise instead of silently reusing LFP cycle-aging parameters.
+
 ## [0.3.2] - 2026-06-26
 
 > **Upgrading:** config validation is now strict — a config with an unknown

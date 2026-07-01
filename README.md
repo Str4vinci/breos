@@ -131,6 +131,28 @@ breos list emissions
 breos list load-profiles
 ```
 
+Run a parameter grid from a normal config plus a `[sweep]` section:
+
+```toml
+location = "porto"
+n_modules = 10
+annual_consumption_kwh = 4000
+battery_kwh = 0.0
+cost_preset = "residential_pt"
+
+[sweep]
+n_modules = [8, 10, 12]
+battery_kwh = [0.0, 5.0]
+```
+
+```bash
+breos sweep --config configs/examples/sweep.toml --output sweep_results.csv
+```
+
+The command runs every parameter combination and writes one CSV row per run,
+including the varied parameters, resolved system sizing, BREOS version, and
+top-level scalar result metrics.
+
 Run a Monte Carlo study over weather-year and demand uncertainty:
 
 ```bash
