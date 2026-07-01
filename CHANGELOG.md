@@ -23,6 +23,13 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   model being LFP-only: `"LFP"` normalizes to `"lfp"`, while unsupported
   chemistries raise instead of silently reusing LFP cycle-aging parameters.
 
+### Fixed
+- `PVModuleParams` no longer discards a user-supplied `gamma_pmp`: the
+  constructor argument existed but `__post_init__` unconditionally overwrote
+  it with `T_Pmax_pct`. It now only defaults to `T_Pmax_pct` when not given,
+  matching the `alpha_sc_abs` / `beta_voc_abs` override pattern. Catalog
+  modules and configs that never set `gamma_pmp` are unaffected.
+
 ## [0.3.2] - 2026-06-26
 
 > **Upgrading:** config validation is now strict — a config with an unknown
