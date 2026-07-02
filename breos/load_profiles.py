@@ -373,6 +373,14 @@ def align_load_to_pv(load_df: pd.DataFrame, pv_series: pd.Series, freq: str = "h
     This handles the common case where load profiles use a generic year (e.g., 2023)
     but PV/TMY data uses a different year (e.g., 1990).
 
+    .. warning::
+        Values are re-stamped positionally, ignoring timezones — only safe
+        when load and PV share the same clock convention (both UTC or both
+        the same fixed offset). :func:`breos.battery.simulate_energy_balance`
+        performs timezone- and DST-aware alignment internally, so do NOT
+        pre-align with this function when passing both series there; the
+        optimizer stopped doing so in 0.3.4.
+
     Args:
         load_df: Load profile DataFrame with DatetimeIndex
         pv_series: PV production Series with DatetimeIndex

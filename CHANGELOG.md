@@ -72,6 +72,27 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   optimization battery specs without an explicit `eol_percentage`.
 
 ### Fixed
+- The NSGA-II optimizer (`optimize_system_multi_objective`) scored candidate
+  designs with a different model than the App reports, in three ways, all
+  fixed:
+  - candidates were simulated **without AC clipping** (no
+    `inverter_ac_capacity_w`), biasing the Pareto front toward high DC/AC
+    ratios whose clipping losses were never seen. Candidates now get the
+    CAPEX-matched nameplate (`pv_peak / costs.dc_ac_ratio`) — the inverter a
+    design pays for is the one that clips it;
+  - `calculate_financials` ignored maintenance, PV degradation, and the
+    separate export-price inflation. It now mirrors the year-1-estimation
+    formulas of `cost_analysis_projection` exactly (equivalence enforced by
+    `tests/test_optimization_parity.py`); the fixed daily grid fee cancels
+    out of the savings NPV and remains omitted by construction. NPV values
+    and Pareto fronts change (lower, more realistic NPVs). Known remaining
+    gap: battery replacement costs, which need a multi-year SOH estimate;
+  - the load was positionally re-stamped onto the PV index via
+    `align_load_to_pv`, ignoring timezones (a UTC-offset shift of the whole
+    profile against PV). The raw load now reaches
+    `simulate_energy_balance`, whose internal alignment is timezone- and
+    DST-aware — the same code path the App uses. `align_load_to_pv` keeps
+    its behaviour for external callers but now carries a docstring warning.
 - `dc_to_ac` (and therefore `calculate_pv_production_ac`) clipped ~4% below
   the intended inverter AC nameplate: it passed the nameplate
   (`pv_peak_power_w / inverter_loading_ratio`) as pvlib's `pdc0`, which is a

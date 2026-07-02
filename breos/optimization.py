@@ -15,7 +15,6 @@ import pandas as pd
 
 from breos.battery import BatteryConfig, simulate_energy_balance
 from breos.economics import calculate_costs, cost_params_from_config
-from breos.load_profiles import align_load_to_pv
 from breos.solar import PVModuleParams, calculate_pv_production_dc, default_azimuth
 from breos.utils import get_hours_per_step
 
@@ -428,6 +427,7 @@ def _build_battery_config_from_spec(
     inverter_efficiency: float = 0.96,
     initial_soh: float = 100.0,
     enable_replacement: bool = False,
+    inverter_ac_capacity_w: Optional[float] = None,
 ) -> BatteryConfig:
     """Build a BatteryConfig for optimization paths without dropping supported settings."""
     return BatteryConfig(
@@ -441,6 +441,7 @@ def _build_battery_config_from_spec(
         initial_soh=initial_soh,
         eol_percentage=batt_spec.get("eol_percentage", 0.7),
         inverter_efficiency=inverter_efficiency,
+        inverter_ac_capacity_w=inverter_ac_capacity_w,
         dc_coupled=batt_spec.get("dc_coupled", True),
         calendar_model=batt_spec.get("calendar_model", "naumann_lam_field_calibrated"),
         enable_replacement=enable_replacement,
@@ -456,9 +457,23 @@ def calculate_financials(
     annual_load_kwh: float,
     costs_config: Dict[str, float] = None,
     financials_config: Dict[str, float] = None,
+    annual_pv_kwh: Optional[float] = None,
 ) -> Tuple[float, float]:
-    """
-    Calculates Net Present Value (ROI metric) and Initial CAPEX.
+    """Calculate initial CAPEX and lifetime NPV of savings for a design.
+
+    Mirrors the year-1-estimation formulas of
+    :func:`breos.economics.cost_analysis_projection` (maintenance, PV
+    degradation, separate import/export price inflation) so the optimizer
+    ranks designs with the same economics the App reports;
+    ``tests/test_optimization_parity.py`` enforces the equivalence. The fixed
+    daily grid fee is charged identically with and without the system, so it
+    cancels out of the savings NPV and is omitted here. Battery replacements
+    require a multi-year SOH simulation and are not estimated (known gap; the
+    App's reported projection includes them).
+
+    ``annual_pv_kwh`` apportions degradation between lost export and extra
+    import via the year-1 self-consumption ratio. When ``None``, year-1
+    energy flows are held flat across the lifespan (pre-0.3.4 behaviour).
     """
     if costs_config is None:
         costs_config = {}
@@ -470,10 +485,12 @@ def calculate_financials(
     electricity_cost = cost_params.electricity_cost
     electricity_sold_cost = cost_params.electricity_sold_cost
     inflation_rate = financials_config.get("inflation_rate", DEFAULT_INFLATION_ELEC)
+    sell_price_inflation = cost_params.sell_price_inflation
     discount_rate = financials_config.get("discount_rate", DEFAULT_DISCOUNT_RATE)
+    degradation_rate = cost_params.pv_degradation_rate
     project_lifespan = int(financials_config.get("project_lifespan", DEFAULT_PROJECT_LIFESPAN))
 
-    # 1. Calculate CAPEX (Initial Cost)
+    # 1. CAPEX and yearly O&M (same cost model as the App's build_costs_dict)
     costs = calculate_costs(
         n_modules=n_modules,
         module_power_w=panel_wp,
@@ -481,23 +498,37 @@ def calculate_financials(
         cost_params=cost_params,
     )
     capex = costs["total_initial_cost"]
+    annual_operation_cost = costs["annual_operation_cost"]
 
-    # 2. Calculate Annual Savings
-    # Baseline cost (if no solar existed)
-    cost_no_solar = annual_load_kwh * electricity_cost
+    # 2. Degradation apportioning: lost PV splits into lost export and extra
+    # import in proportion to the year-1 self-consumption ratio — the same
+    # estimation cost_analysis_projection uses for single-year runs.
+    if annual_pv_kwh is not None and annual_pv_kwh > 0:
+        self_consumption_ratio = 1.0 - (annual_export_kwh / annual_pv_kwh)
+    else:
+        self_consumption_ratio = None
 
-    # New cost (Imported energy + Earnings from Export)
-    cost_with_solar = (annual_import_kwh * electricity_cost) - (annual_export_kwh * electricity_sold_cost)
-
-    annual_savings = cost_no_solar - cost_with_solar
-
-    # 3. Calculate NPV (Net Present Value)
+    # 3. NPV of savings vs the no-system baseline
     npv = -capex
     for year in range(1, project_lifespan + 1):
-        # Escalate savings with energy inflation
-        savings_y = annual_savings * ((1 + inflation_rate) ** (year - 1))
-        # Discount back to present value
-        npv += savings_y / ((1 + discount_rate) ** year)
+        inflation = (1 + inflation_rate) ** (year - 1)
+        sell_inflation = (1 + sell_price_inflation) ** (year - 1)
+
+        if self_consumption_ratio is not None:
+            pv_year = annual_pv_kwh * (1 - degradation_rate) ** (year - 1)
+            export_year = pv_year * (1 - self_consumption_ratio)
+            import_year = annual_import_kwh + (annual_pv_kwh - pv_year) * self_consumption_ratio
+        else:
+            export_year = annual_export_kwh
+            import_year = annual_import_kwh
+
+        cost_no_system = annual_load_kwh * electricity_cost * inflation
+        cost_with_system = (
+            import_year * electricity_cost * inflation
+            - export_year * electricity_sold_cost * sell_inflation
+            + annual_operation_cost * inflation
+        )
+        npv += (cost_no_system - cost_with_system) / ((1 + discount_rate) ** year)
 
     return capex, npv
 
@@ -582,6 +613,11 @@ try:
             self.pv_params, self.module_area_m2 = _resolve_pv_module_and_area(config)
             self.batt_temp_cfg = config.get("battery", {}).get("temperature", "weather")
             self.indoor_model = config.get("battery", {}).get("indoor_model")
+            # Inverter AC rating follows the CAPEX sizing convention
+            # (economics.calculate_costs): nameplate = DC peak / dc_ac_ratio.
+            # The inverter each candidate pays for is also the one that clips
+            # its production — same invariant as the App runner.
+            self.dc_ac_ratio = cost_params_from_config(config.get("costs"), config.get("financials")).dc_ac_ratio
 
             self.fixed_azimuth = config.get("mode", {}).get("fixed_azimuth")
 
@@ -658,22 +694,25 @@ try:
                 verbose=False,
             )
 
-            # Align load to PV index
+            # Load alignment (timezone- and DST-aware year remapping) happens
+            # inside simulate_energy_balance — the same code path the App
+            # uses. Positionally re-stamping the load onto the PV index here
+            # (the pre-0.3.4 align_load_to_pv call) discarded the load's real
+            # timestamps and could shift it against PV by the UTC offset.
             if isinstance(self.houseload, pd.Series):
-                temp_df = pd.DataFrame({"Load": self.houseload})
-                aligned_houseload = align_load_to_pv(temp_df, dc_production, freq=self.freq)
+                houseload_df = self.houseload.to_frame(name="Load")
             else:
-                aligned_houseload = align_load_to_pv(self.houseload, dc_production, freq=self.freq)
+                houseload_df = self.houseload
 
             hours_per_step = get_hours_per_step(self.freq)
             total_prod = float(dc_production.sum() * hours_per_step / 1000)
-
-            if isinstance(aligned_houseload, pd.Series):
-                total_load = float(aligned_houseload.sum() * hours_per_step / 1000)
-            else:
-                total_load = float(aligned_houseload.iloc[:, 0].sum() * hours_per_step / 1000)
+            total_load = float(houseload_df.iloc[:, 0].sum() * hours_per_step / 1000)
 
             batt_spec = self.config.get("battery", {})
+
+            # Inverter AC nameplate shared by PV export and battery discharge
+            pv_peak_w = n_modules * pv_params.Mpp
+            inverter_ac_capacity_w = pv_peak_w / self.dc_ac_ratio if self.dc_ac_ratio > 0 else None
 
             # Configure Battery
             battery_config = _build_battery_config_from_spec(
@@ -682,6 +721,7 @@ try:
                 inverter_efficiency=self.config.get("inverter", {}).get("efficiency", 0.96),
                 initial_soh=batt_spec.get("initial_soh", 100),
                 enable_replacement=False,
+                inverter_ac_capacity_w=inverter_ac_capacity_w,
             )
             temperature_series = _temperature_series_from_config(
                 self.batt_temp_cfg,
@@ -693,7 +733,7 @@ try:
             # Run Simulation
             results_df, total_pv_wh, summary_df, _, _, _ = simulate_energy_balance(
                 pv_dc=dc_production,
-                houseload=aligned_houseload,
+                houseload=houseload_df,
                 battery_config=battery_config,
                 start_time=self.start_h,
                 end_time=self.end_h,
@@ -718,6 +758,7 @@ try:
                 total_load,
                 costs_config=self.config.get("costs"),
                 financials_config=self.config.get("financials"),
+                annual_pv_kwh=total_prod,
             )
 
             # Obj 3: ZEB Status (Maximize Ratio -> Minimize Negative)
