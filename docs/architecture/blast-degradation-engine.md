@@ -10,8 +10,7 @@ BREOS's battery degradation is calibrated for **LFP only**. Calendar aging uses
 the Naumann/Lam power-law (`k0, Ea, b, n`) in `update_battery_soh_calendar`, and
 cycle aging uses an LFP Naumann/Wöhler form in `update_battery_soh_cyclewise`.
 Before 0.3.3, a config could name a non-LFP pack (`BatteryConfig.battery_type`)
-but still age it on LFP curves. In 0.3.3 (in `[Unreleased]` at the time of
-writing — `pyproject.toml` still reads 0.3.2) the native path was made explicit:
+but still age it on LFP curves. In 0.3.3 the native path was made explicit:
 `BatteryConfig(battery_type="LFP")` normalizes to `"lfp"`, and unsupported
 chemistries now raise instead of silently reusing LFP cycle-aging parameters.
 The runner (`breos/runners/app.py`) still does not expose battery chemistry as
