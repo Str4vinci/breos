@@ -1,9 +1,11 @@
 # Optimization
 
 Optimization helpers for system configuration. Brent's method handles smooth
-one-dimensional problems (tilt); simple sweeps handle battery sizing and ZEB
+one-dimensional problems (tilt); helper sweeps handle battery sizing and ZEB
 sizing; [pymoo](https://pymoo.org/) powers public multi-objective PV/battery
-sizing (PV count, battery, cost, grid independence, and ZEB ratio).
+sizing (PV count, battery, cost, grid independence, and ZEB ratio). For
+end-to-end App runs over an explicit config grid, use the `breos sweep` CLI
+command documented in [Recipes](../getting-started/recipes.md#parameter-sweep).
 
 Install `breos[optimization]` to use pymoo-backed multi-objective sizing.
 The one-dimensional helpers use the core scientific stack.

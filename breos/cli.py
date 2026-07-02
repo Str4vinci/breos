@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import argparse
+import csv
+import itertools
 import json
 import sys
 import tomllib
@@ -15,7 +17,7 @@ from breos.app_config import resolve_app_config
 from breos.load_profiles import PROFILE_ALIASES, PROFILE_NAMES
 from breos.pv_modules import MODULES
 from breos.resources import load_config_json
-from breos.solar import PEREZ_MODELS, SURFACE_TYPES, TRANSPOSITION_MODELS
+from breos.solar import PEREZ_MODELS, SURFACE_TYPES, TRANSPOSITION_MODELS, resolve_pvwatts_losses
 
 
 def _package_version() -> str:
@@ -70,6 +72,7 @@ def _build_config(args: argparse.Namespace) -> dict[str, Any]:
     _add_override(overrides, "resolution", args.resolution)
     _add_override(overrides, "projection_years", args.projection_years)
     _add_override(overrides, "inflation_rate", args.inflation_rate)
+    _add_override(overrides, "sell_price_inflation", args.sell_price_inflation)
     _add_override(overrides, "discount_rate", args.discount_rate)
     _add_override(overrides, "pv_degradation_rate", args.pv_degradation_rate)
     _add_override(overrides, "calendar_model", args.calendar_model)
@@ -131,6 +134,7 @@ def _resolved_config_summary(config: dict[str, Any]) -> dict[str, Any]:
             "surface_type": cfg["surface_type"],
             "model_perez": cfg["model_perez"],
             "pv_loss_overrides": cfg["pv_loss_overrides"],
+            "losses": resolve_pvwatts_losses(cfg["pv_loss_overrides"]),
         },
         "inverter": {
             "efficiency": cfg["inverter_efficiency"],
@@ -156,6 +160,7 @@ def _resolved_config_summary(config: dict[str, Any]) -> dict[str, Any]:
             "cost_preset": cfg["cost_preset"],
             "projection_years": cfg["projection_years"],
             "inflation_rate": cfg["inflation_rate"],
+            "sell_price_inflation": cfg["sell_price_inflation"],
             "discount_rate": cfg["discount_rate"],
         },
         "emissions": {
@@ -291,6 +296,99 @@ def _validate_config(args: argparse.Namespace) -> int:
     return 0
 
 
+def _normalise_sweep_grid(raw_grid: Any) -> dict[str, list[Any]]:
+    """Validate and normalise a ``[sweep]`` section into parameter lists."""
+    if not isinstance(raw_grid, dict):
+        raise TypeError("Sweep config must contain a [sweep] table with parameter arrays.")
+
+    grid: dict[str, list[Any]] = {}
+    for key, values in raw_grid.items():
+        normalised_key = key.replace("-", "_")
+        if not isinstance(values, list) or not values:
+            raise ValueError(f"sweep.{key} must be a non-empty array of values")
+        grid[normalised_key] = values
+
+    if not grid:
+        raise ValueError("Sweep config must define at least one parameter under [sweep].")
+    return grid
+
+
+def _csv_cell(value: Any) -> Any:
+    """Return a stable scalar representation for CSV output."""
+    if isinstance(value, (dict, list, tuple)):
+        return json.dumps(value, sort_keys=True)
+    return value
+
+
+def _scalar_result_items(result: dict[str, Any]) -> dict[str, Any]:
+    """Keep only top-level scalar result metrics for a sweep row."""
+    scalars: dict[str, Any] = {}
+    for key, value in result.items():
+        if isinstance(value, (str, int, float, bool)) or value is None:
+            scalars[key] = value
+    return scalars
+
+
+def _write_sweep_csv(rows: list[dict[str, Any]], output: Path) -> None:
+    fieldnames: list[str] = []
+    for row in rows:
+        for key in row:
+            if key not in fieldnames:
+                fieldnames.append(key)
+
+    output.parent.mkdir(parents=True, exist_ok=True)
+    with output.open("w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow({key: _csv_cell(value) for key, value in row.items()})
+
+
+def _sweep(args: argparse.Namespace) -> int:
+    config = _load_config(args.config)
+    raw_grid = config.pop("sweep", None)
+    if raw_grid is None:
+        raise ValueError("Sweep config must include a [sweep] section.")
+
+    grid = _normalise_sweep_grid(raw_grid)
+    param_keys = list(grid)
+    rows: list[dict[str, Any]] = []
+
+    for run_idx, values in enumerate(itertools.product(*(grid[key] for key in param_keys)), start=1):
+        varied = dict(zip(param_keys, values))
+        run_config = {**config, **varied}
+        resolved = _resolved_config_summary(run_config)
+
+        app = App(run_config)
+        app.simulate()
+        result = app.result()
+
+        row: dict[str, Any] = {
+            "run": run_idx,
+            "breos_version": _package_version(),
+        }
+        row.update({f"param_{key}": value for key, value in varied.items()})
+        row.update(
+            {
+                "resolved_location": resolved["location"]["key"] or "custom",
+                "resolved_n_modules": resolved["pv"]["n_modules"],
+                "resolved_battery_kwh": resolved["battery"]["capacity_kwh"],
+                "resolved_pv_kwp": resolved["pv"]["system_kwp"],
+                "resolved_inverter_ac_kw": resolved["inverter"]["ac_rating_kw"],
+            }
+        )
+        row.update(_scalar_result_items(result))
+        rows.append(row)
+
+    _write_sweep_csv(rows, args.output)
+
+    if args.json:
+        print(json.dumps({"runs": len(rows), "results_csv": str(args.output), "rows": rows}, indent=2))
+    else:
+        print(f"Sweep: {len(rows)} runs written to {args.output}")
+    return 0
+
+
 def _montecarlo(args: argparse.Namespace) -> int:
     from breos.montecarlo import MonteCarloSettings, run_montecarlo
 
@@ -394,6 +492,9 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--resolution", choices=("h", "15min"), help="Simulation time resolution.")
     run.add_argument("--projection-years", type=int, help="Economic projection horizon.")
     run.add_argument("--inflation-rate", type=float, help="Annual electricity price inflation.")
+    run.add_argument(
+        "--sell-price-inflation", type=float, help="Annual inflation of the grid export (sell) price. Default 0."
+    )
     run.add_argument("--discount-rate", type=float, help="Discount rate for NPV calculations.")
     run.add_argument("--pv-degradation-rate", type=float, help="Annual PV degradation rate.")
     run.add_argument("--calendar-model", help="Battery calendar aging model.")
@@ -420,6 +521,12 @@ def build_parser() -> argparse.ArgumentParser:
     validate.add_argument("config", type=Path, help="TOML or JSON config file.")
     validate.add_argument("--json", action="store_true", help="Write machine-readable JSON.")
     validate.set_defaults(func=_validate_config)
+
+    sweep = subparsers.add_parser("sweep", help="Run a parameter-grid sweep from a config [sweep] section.")
+    sweep.add_argument("--config", type=Path, required=True, help="TOML or JSON config file with a [sweep] section.")
+    sweep.add_argument("--output", type=Path, default=Path("sweep_results.csv"), help="Combined results CSV path.")
+    sweep.add_argument("--json", action="store_true", help="Print machine-readable summary to stdout.")
+    sweep.set_defaults(func=_sweep)
 
     mc = subparsers.add_parser(
         "montecarlo",

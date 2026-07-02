@@ -36,7 +36,10 @@ breos run --config quickstart.toml --output result.json
 fetching weather or running a simulation. `--dry-run` writes the same resolved
 configuration summary as JSON. A successful dry run shows the location,
 timezone, module count, PV size, inverter AC rating, load profile, battery
-capacity, cost preset, and emissions preset.
+capacity, cost preset, emissions preset, and resolved static PVWatts loss
+components. The loss block applies any `pv_loss_overrides` and reports the
+combined percentage, so you can verify shading/soiling/wiring assumptions before
+fetching weather.
 
 The final command runs the full simulation and writes a JSON object with
 scalar headline keys plus `yearly`, `monthly`, and `financial` detail blocks.

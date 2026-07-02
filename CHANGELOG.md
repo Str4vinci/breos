@@ -2,6 +2,69 @@
 
 All notable changes to BREOS are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased]
+
+### Removed
+- The `Suntech_STP550S_NOMT` catalog module. Its datasheet points were NMOT
+  ratings (800 W/m², Mpp = 415 W), but the CEC single-diode fit interprets
+  `Vmp`/`Imp`/`Voc`/`Isc` as STC values, so the entry produced silently wrong
+  model parameters. Configs referencing it now fail with the standard
+  "Module '...' not found. Available: ..." error; use `Suntech_STP550S_STC`
+  (the same physical module at STC) instead.
+
+### Added
+- `breos sweep`, a serial parameter-grid CLI command that expands a `[sweep]`
+  section in a normal App config and writes one combined CSV with varied
+  parameters, resolved system sizing, BREOS version, and scalar result metrics.
+- `configs/examples/sweep.toml` as a runnable sweep example over module count
+  and battery size.
+- Release-smoke tests for the README quickstart, the Monte Carlo example path,
+  and the pymoo-backed multi-objective optimization helper.
+- `breos.solar.resolve_pvwatts_losses`, used by dry-run/config inspection to
+  report resolved PVWatts loss components and their combined percentage.
+- `sell_price_inflation` App config key and `--sell-price-inflation` CLI flag
+  (default `0.0`). `CostParams` and `cost_analysis_projection` already
+  supported an annual export-price inflation, but no config key existed and
+  neither the App runner nor the Monte Carlo runner passed it, so the public
+  paths always projected with `0.0`. The value is validated in
+  `validate_config`, threaded through both projection call sites, and shown
+  in `breos run --dry-run` / `validate-config --json`. The `0.0` default
+  reproduces existing results bit-for-bit.
+
+### Changed
+- `breos run --dry-run` and `breos validate-config --json` now include the
+  fully resolved static PVWatts loss stack instead of only echoing
+  `pv_loss_overrides`.
+- `BatteryConfig.battery_type` is now explicit about the native degradation
+  model being LFP-only: `"LFP"` normalizes to `"lfp"`, while unsupported
+  chemistries raise instead of silently reusing LFP cycle-aging parameters.
+- `BatteryConfig.eol_percentage` now defaults to `0.70`, aligning with the
+  App config default `battery_eol_percentage = 0.70` and the optimizer's
+  battery-spec fallback (previously `0.80` and `0.8` respectively — three
+  surfaces, two values). App and CLI results are unchanged (they always pass
+  the config value explicitly), but direct `BatteryConfig` users who relied
+  on the implicit `0.80` will now see batteries replaced later, at 70% SOH;
+  pass `eol_percentage=0.8` to keep the old threshold. The same applies to
+  optimization battery specs without an explicit `eol_percentage`.
+
+### Fixed
+- `dc_to_ac` (and therefore `calculate_pv_production_ac`) clipped ~4% below
+  the intended inverter AC nameplate: it passed the nameplate
+  (`pv_peak_power_w / inverter_loading_ratio`) as pvlib's `pdc0`, which is a
+  DC-input limit whose AC nameplate is `eta_inv_nom * pdc0`. The DC limit is
+  now derived as `nameplate / eta_inv_nom`, so clipping happens at the same
+  AC rating used by `InverterConfig.size_from_pv`, the App energy balance,
+  `economics.calculate_costs`, and the CLI's reported `ac_rating_kw`. This
+  raises `dc_to_ac` / `calculate_pv_production_ac` outputs slightly at every
+  operating point (most visibly during clipping hours); App simulation
+  results are unchanged because the App path converts DC through
+  `simulate_energy_balance`, not `dc_to_ac`.
+- `PVModuleParams` no longer discards a user-supplied `gamma_pmp`: the
+  constructor argument existed but `__post_init__` unconditionally overwrote
+  it with `T_Pmax_pct`. It now only defaults to `T_Pmax_pct` when not given,
+  matching the `alpha_sc_abs` / `beta_voc_abs` override pattern. Catalog
+  modules and configs that never set `gamma_pmp` are unaffected.
+
 ## [0.3.2] - 2026-06-26
 
 > **Upgrading:** config validation is now strict — a config with an unknown

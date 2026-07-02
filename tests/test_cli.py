@@ -1,5 +1,6 @@
 """Tests for the BREOS command line interface."""
 
+import csv
 import json
 
 from breos import cli
@@ -61,6 +62,27 @@ def test_run_from_flags_outputs_json(monkeypatch, capsys):
 
     output = json.loads(capsys.readouterr().out)
     assert output["grid_independence_pct"] == 42.0
+
+
+def test_run_flag_sell_price_inflation_reaches_config(monkeypatch, capsys):
+    monkeypatch.setattr(cli, "App", FakeApp)
+
+    exit_code = cli.main(
+        [
+            "run",
+            "--location",
+            "porto",
+            "--n-modules",
+            "10",
+            "--annual-consumption-kwh",
+            "4000",
+            "--sell-price-inflation",
+            "0.03",
+        ]
+    )
+
+    assert exit_code == 0
+    assert FakeApp.seen_config["sell_price_inflation"] == 0.03
 
 
 def test_run_from_toml_config_with_cli_override(monkeypatch, tmp_path):
@@ -172,3 +194,55 @@ battery_kwh = 5.0
     assert output["valid"] is True
     assert output["location"]["key"] == "porto"
     assert output["pv"]["n_modules"] == 10
+    assert output["pv"]["losses"]["components_pct"]["shading"] == 3.0
+    assert 14.0 < output["pv"]["losses"]["combined_pct"] < 15.0
+
+
+def test_sweep_expands_grid_and_writes_combined_csv(monkeypatch, tmp_path, capsys):
+    seen_configs = []
+
+    class SweepFakeApp:
+        def __init__(self, config):
+            self.config = config
+            seen_configs.append(config)
+
+        def simulate(self):
+            return None
+
+        def result(self):
+            return {
+                "grid_independence_pct": 40.0 + self.config["n_modules"],
+                "npv_savings_eur": 1000.0 + self.config["battery_kwh"],
+                "yearly": [{"year": 1}],
+            }
+
+    monkeypatch.setattr(cli, "App", SweepFakeApp)
+    config_path = tmp_path / "sweep.toml"
+    config_path.write_text(
+        """
+location = "porto"
+n_modules = 8
+annual_consumption_kwh = 3500
+battery_kwh = 0
+cost_preset = "residential_pt"
+
+[sweep]
+n_modules = [8, 10]
+battery_kwh = [0.0, 5.0]
+""".strip(),
+        encoding="utf-8",
+    )
+    output_path = tmp_path / "sweep.csv"
+
+    exit_code = cli.main(["sweep", "--config", str(config_path), "--output", str(output_path), "--json"])
+
+    assert exit_code == 0
+    assert len(seen_configs) == 4
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["runs"] == 4
+    rows = list(csv.DictReader(output_path.open(encoding="utf-8")))
+    assert len(rows) == 4
+    assert rows[0]["param_n_modules"] == "8"
+    assert rows[-1]["param_battery_kwh"] == "5.0"
+    assert "yearly" not in rows[0]
+    assert rows[0]["grid_independence_pct"] == "48.0"

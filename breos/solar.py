@@ -37,6 +37,37 @@ DEFAULT_PVWATTS_LOSSES: Dict[str, float] = {
     "availability": 3.0,
 }
 
+
+def resolve_pvwatts_losses(
+    loss_overrides: Optional[Dict[str, float]] = None,
+    *,
+    age_degradation_percent: float = 0.0,
+) -> dict[str, Any]:
+    """Return resolved PVWatts loss components and their combined percentage.
+
+    ``loss_overrides`` replaces named BREOS default components. Age-based
+    degradation is reported separately because App applies annual degradation
+    outside the static PVWatts component stack.
+    """
+    components = dict(DEFAULT_PVWATTS_LOSSES)
+    if loss_overrides:
+        unknown = set(loss_overrides) - set(DEFAULT_PVWATTS_LOSSES)
+        if unknown:
+            valid = ", ".join(sorted(DEFAULT_PVWATTS_LOSSES))
+            raise ValueError(f"Unknown loss component(s) {sorted(unknown)}. Valid components: {valid}")
+        components.update(loss_overrides)
+
+    combined_percent = pvlib.pvsystem.pvwatts_losses(
+        age=age_degradation_percent,
+        **components,
+    )
+    return {
+        "components_pct": components,
+        "age_degradation_pct": float(age_degradation_percent),
+        "combined_pct": float(combined_percent),
+    }
+
+
 # Sky-diffusion (transposition) models for projecting GHI/DHI/DNI onto the
 # plane of array, as supported by pvlib.irradiance.get_total_irradiance.
 # ``isotropic`` is the simple, robust baseline (and the default); the
@@ -150,7 +181,8 @@ class PVModuleParams:
 
         # 3. HANDLE POWER (gamma_pmp)
         # Power is almost always used as %/C in pvlib models, passed as unitless decimal or %
-        self.gamma_pmp = self.T_Pmax_pct
+        if self.gamma_pmp is None:
+            self.gamma_pmp = self.T_Pmax_pct
 
 
 def _prepare_solarpos_and_weather(weather_data: pd.DataFrame, location: Location, freq: str):
@@ -284,14 +316,6 @@ def _dc_from_poa(
     to DEFAULT_PVWATTS_LOSSES; ``loss_overrides`` replaces individual
     components (percent).
     """
-    loss_components = dict(DEFAULT_PVWATTS_LOSSES)
-    if loss_overrides:
-        unknown = set(loss_overrides) - set(DEFAULT_PVWATTS_LOSSES)
-        if unknown:
-            valid = ", ".join(sorted(DEFAULT_PVWATTS_LOSSES))
-            raise ValueError(f"Unknown loss component(s) {sorted(unknown)}. Valid components: {valid}")
-        loss_components.update(loss_overrides)
-
     I_L_ref, I_o_ref, R_s, R_sh_ref, a_ref, Adjust = _get_cec_params(pv_params)
 
     with warnings.catch_warnings():
@@ -307,10 +331,10 @@ def _dc_from_poa(
     else:
         age_degradation_factor = 0.0
 
-    total_losses_percent = pvlib.pvsystem.pvwatts_losses(
-        age=age_degradation_factor,
-        **loss_components,
-    )
+    total_losses_percent = resolve_pvwatts_losses(
+        loss_overrides,
+        age_degradation_percent=age_degradation_factor,
+    )["combined_pct"]
 
     p_mp = mpp["p_mp"] if isinstance(mpp, dict) else mpp.p_mp
     dc_power = np.asarray(p_mp) * n_modules * (1 - total_losses_percent / 100)
@@ -564,7 +588,12 @@ def dc_to_ac(
     """
     inv_size = pv_peak_power_w / inverter_loading_ratio
 
-    ac_power = pvlib.inverter.pvwatts(pdc=dc_power, pdc0=inv_size, eta_inv_nom=inverter_efficiency, eta_inv_ref=0.9637)
+    # pvlib's pdc0 is the DC-input limit; the AC nameplate is
+    # pac0 = eta_inv_nom * pdc0. BREOS sizes inverters by AC nameplate
+    # (pv_peak / loading ratio), so back out the matching DC limit.
+    pdc0 = inv_size / inverter_efficiency
+
+    ac_power = pvlib.inverter.pvwatts(pdc=dc_power, pdc0=pdc0, eta_inv_nom=inverter_efficiency, eta_inv_ref=0.9637)
 
     return pd.Series(ac_power, index=dc_power.index, name="ac_power_W")
 
