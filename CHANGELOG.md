@@ -2,7 +2,7 @@
 
 All notable changes to BREOS are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/).
 
-## [Unreleased]
+## [0.3.3] - 2026-07-02
 
 ### Removed
 - The `Suntech_STP550S_NOMT` catalog module. Its datasheet points were NMOT
@@ -46,6 +46,13 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   on the implicit `0.80` will now see batteries replaced later, at 70% SOH;
   pass `eol_percentage=0.8` to keep the old threshold. The same applies to
   optimization battery specs without an explicit `eol_percentage`.
+
+### Documentation
+- Updated the README and `CITATION.cff` to cite the SSRN preprint DOI
+  (`10.2139/ssrn.7032064`).
+- Added the BLAST degradation-engine design note and refreshed roadmap
+  priorities around model accuracy, validation, energy-loss accounting, and
+  future default-model profiles.
 
 ### Fixed
 - `dc_to_ac` (and therefore `calculate_pv_production_ac`) clipped ~4% below
@@ -225,8 +232,8 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   stack and moved heavier workflow packages behind extras: `plots`,
   `optimization`, `weather`, `fast`, `validation`, and `location-tools`.
   NREL-PySAM stays in the core set because the default PV model fits CEC
-  single-diode parameters at runtime via pvlib's `fit_cec_sam`. (Removed after
-  0.3.0 — see the Unreleased section above.)
+  single-diode parameters at runtime via pvlib's `fit_cec_sam`. (Removed in
+  0.3.2.)
 - The `dev` extra now installs optional feature dependencies so contributor
   test runs continue to cover optional paths.
 
