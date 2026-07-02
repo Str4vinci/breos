@@ -67,7 +67,7 @@ def _compute(key, model):
 
     from breos.pv_modules import get_module
     from breos.solar import calculate_pv_production_ac
-    from validation.common import load_spec, load_validation_weather
+    from validation.common import MODEL_CONFIGS, load_spec, load_validation_weather
 
     system, locations = load_spec()
     loc = locations[key]
@@ -84,8 +84,8 @@ def _compute(key, model):
         freq="h",
         inverter_loading_ratio=system["dc_ac_ratio"],
         inverter_efficiency=system["inverter_efficiency"],
-        transposition_model=model,
         albedo=system["albedo"],
+        **MODEL_CONFIGS[model],
     )
     monthly = ac.groupby(ac.index.month).sum() / 1000.0
     result = {

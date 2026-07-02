@@ -20,6 +20,18 @@ REPORT_PATH = VALIDATION_DIR / "REPORT.md"
 
 MONTH_LABELS = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
 
+# Model configs the suite runs BREOS with. isotropic = shipped default;
+# perez = what the external references effectively use; perez_mid = perez plus
+# mid-interval solar position (the full PVWatts/SAM convention). Keys are the
+# model names stored in results/baseline JSONs; values are
+# calculate_pv_production_ac keyword overrides. The drift test recomputes
+# from this same mapping.
+MODEL_CONFIGS = {
+    "isotropic": {"transposition_model": "isotropic"},
+    "perez": {"transposition_model": "perez"},
+    "perez_mid": {"transposition_model": "perez", "solar_position": "mid-interval"},
+}
+
 
 def load_spec():
     """Return (system_spec, locations) from validation/locations.json."""

@@ -3,10 +3,11 @@
 
 For every location in ``validation/locations.json`` with a weather file under
 ``validation/data/weather/``, computes hourly AC production with
-``breos.solar.calculate_pv_production_ac`` for two transposition models
-(``isotropic`` — the shipped default — and ``perez``, which is what the
-external references effectively use) and writes monthly/annual energies to
-``validation/results/breos_results.json``.
+``breos.solar.calculate_pv_production_ac`` for three model configs
+(``isotropic`` — the shipped default; ``perez`` — what the external
+references effectively use; and ``perez_mid`` — perez plus mid-interval
+solar position, the full PVWatts/SAM convention) and writes monthly/annual
+energies to ``validation/results/breos_results.json``.
 
 ``--write-baseline`` additionally snapshots the results to
 ``validation/baselines/breos_baseline.json``, the file
@@ -35,14 +36,13 @@ from breos.pv_modules import get_module  # noqa: E402
 from breos.solar import calculate_pv_production_ac  # noqa: E402
 from validation.common import (  # noqa: E402
     BASELINE_PATH,
+    MODEL_CONFIGS,
     RESULTS_DIR,
     RESULTS_PATH,
     find_weather_file,
     load_spec,
     load_validation_weather,
 )
-
-TRANSPOSITION_MODELS = ("isotropic", "perez")
 
 
 def run_location(key: str, loc: dict, system: dict, weather_file: Path) -> dict:
@@ -51,7 +51,7 @@ def run_location(key: str, loc: dict, system: dict, weather_file: Path) -> dict:
     pv_params = get_module(system["module"])
 
     models = {}
-    for transposition in TRANSPOSITION_MODELS:
+    for name, model_kwargs in MODEL_CONFIGS.items():
         ac = calculate_pv_production_ac(
             weather_data=weather,
             location=location,
@@ -62,14 +62,14 @@ def run_location(key: str, loc: dict, system: dict, weather_file: Path) -> dict:
             freq="h",
             inverter_loading_ratio=system["dc_ac_ratio"],
             inverter_efficiency=system["inverter_efficiency"],
-            transposition_model=transposition,
             albedo=system["albedo"],
+            **model_kwargs,
         )
         monthly = ac.groupby(ac.index.month).sum() / 1000.0  # Wh -> kWh at hourly steps
         monthly_kwh = [round(float(monthly.get(m, 0.0)), 3) for m in range(1, 13)]
         annual_kwh = round(float(ac.sum()) / 1000.0, 3)
-        models[transposition] = {"monthly_kwh": monthly_kwh, "annual_kwh": annual_kwh}
-        print(f"  {transposition:>10}: {annual_kwh:8.1f} kWh/yr")
+        models[name] = {"monthly_kwh": monthly_kwh, "annual_kwh": annual_kwh}
+        print(f"  {name:>10}: {annual_kwh:8.1f} kWh/yr")
 
     return {"weather_file": weather_file.name, "models": models}
 

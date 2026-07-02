@@ -13,6 +13,16 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   (the same physical module at STC) instead.
 
 ### Added
+- `solar_position` App config key, `--solar-position` CLI flag, and
+  `solar_position=` parameter on every solar-chain function
+  (`calculate_pv_production_dc`/`_dc_tracking`/`_ac`/`_tmy`,
+  `calculate_multi_array_production`). `"mid-interval"` evaluates the sun
+  half a timestep after each label — the PVWatts/SAM convention for
+  interval-averaged irradiance (an hourly value labelled 07:00 representing
+  the 07:00–08:00 average pairs with the 07:30 sun) — and also drives
+  tracker rotation angles. The default `"interval-start"` reproduces prior
+  behaviour bit-for-bit. The validation suite now runs a third
+  `perez_mid` config so the effect is measured per site.
 - A standing validation suite under `validation/` (repo-side, not shipped):
   seven sites on four continents with committed PVGIS TMY weather inputs
   (trimmed to the five columns BREOS reads and gzipped, ~90 KB per site),
@@ -40,6 +50,12 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   reproduces existing results bit-for-bit.
 
 ### Changed
+- POA transposition now receives the refraction-corrected apparent zenith,
+  matching pvlib's `ModelChain`. Previously one call mixed zenith
+  definitions: the AOI/IAM step used `apparent_zenith` while
+  `get_total_irradiance` got the true `zenith`. Annual yields move by well
+  under 0.1% (refraction only matters near the horizon); the validation
+  baseline was regenerated accordingly.
 - `breos run --dry-run` and `breos validate-config --json` now include the
   fully resolved static PVWatts loss stack instead of only echoing
   `pv_loss_overrides`.

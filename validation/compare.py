@@ -56,6 +56,7 @@ def build_rows(results: dict):
 
         iso = res["models"]["isotropic"]["annual_kwh"]
         perez = res["models"]["perez"]["annual_kwh"]
+        perez_mid = (res["models"].get("perez_mid") or {}).get("annual_kwh")
         pvgis_annual = pvgis.get("annual_kwh")
         pvwatts_annual = pvwatts.get("annual_kwh")
 
@@ -80,9 +81,11 @@ def build_rows(results: dict):
                 "name": ref.get("name", key),
                 "iso": iso,
                 "perez": perez,
+                "perez_mid": perez_mid,
                 "pvgis": pvgis_annual,
                 "pvgis_dev": _pct(perez, pvgis_annual),
                 "pvgis_dev_iso": _pct(iso, pvgis_annual),
+                "pvgis_dev_mid": _pct(perez_mid, pvgis_annual) if perez_mid is not None else None,
                 "pvwatts": pvwatts_annual,
                 "pvwatts_dev": _pct(perez, pvwatts_annual),
                 "monthly_dev_max": monthly_dev_max,
@@ -97,15 +100,16 @@ def build_rows(results: dict):
 def print_table(rows, results):
     print(f"\nBREOS {results['breos_version']} validation — annual AC yield (kWh), 4 kWp system")
     header = (
-        f"{'location':<16} {'BREOS iso':>10} {'BREOS perez':>12} {'PVGIS':>8} "
-        f"{'Δperez':>8} {'Δiso':>8} {'PVWatts':>8} {'Δperez':>8}  notes"
+        f"{'location':<16} {'BREOS iso':>10} {'BREOS perez':>12} {'perez+mid':>10} {'PVGIS':>8} "
+        f"{'Δperez':>8} {'Δ+mid':>8} {'Δiso':>8} {'PVWatts':>8} {'Δperez':>8}  notes"
     )
     print(header)
     print("-" * len(header))
     for r in rows:
         print(
-            f"{r['key']:<16} {r['iso']:>10.0f} {r['perez']:>12.0f} {_fmt_kwh(r['pvgis']):>8} "
-            f"{_fmt_pct(r['pvgis_dev']):>8} {_fmt_pct(r['pvgis_dev_iso']):>8} "
+            f"{r['key']:<16} {r['iso']:>10.0f} {r['perez']:>12.0f} {_fmt_kwh(r['perez_mid']):>10} "
+            f"{_fmt_kwh(r['pvgis']):>8} "
+            f"{_fmt_pct(r['pvgis_dev']):>8} {_fmt_pct(r['pvgis_dev_mid']):>8} {_fmt_pct(r['pvgis_dev_iso']):>8} "
             f"{_fmt_kwh(r['pvwatts']):>8} {_fmt_pct(r['pvwatts_dev']):>8}  {r['notes']}"
         )
 
@@ -129,13 +133,15 @@ def write_report(rows, results):
         "",
         "## Annual AC yield (kWh)",
         "",
-        "| Location | BREOS isotropic | BREOS perez | PVGIS PVcalc | Δ perez vs PVGIS | PVWatts v8 | Δ perez vs PVWatts | Notes |",
-        "|---|---|---|---|---|---|---|---|",
+        "| Location | BREOS isotropic | BREOS perez | BREOS perez+mid-interval | PVGIS PVcalc "
+        "| Δ perez vs PVGIS | Δ perez+mid vs PVGIS | PVWatts v8 | Δ perez vs PVWatts | Notes |",
+        "|---|---|---|---|---|---|---|---|---|---|",
     ]
     for r in rows:
         lines.append(
-            f"| {r['name']} | {r['iso']:.0f} | {r['perez']:.0f} | {_fmt_kwh(r['pvgis'])} "
-            f"| {_fmt_pct(r['pvgis_dev'])} | {_fmt_kwh(r['pvwatts'])} | {_fmt_pct(r['pvwatts_dev'])} "
+            f"| {r['name']} | {r['iso']:.0f} | {r['perez']:.0f} | {_fmt_kwh(r['perez_mid'])} "
+            f"| {_fmt_kwh(r['pvgis'])} | {_fmt_pct(r['pvgis_dev'])} | {_fmt_pct(r['pvgis_dev_mid'])} "
+            f"| {_fmt_kwh(r['pvwatts'])} | {_fmt_pct(r['pvwatts_dev'])} "
             f"| {r['notes']} |"
         )
 
