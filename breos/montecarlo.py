@@ -273,6 +273,7 @@ def _simulate_trajectory(
         costs=costs,
         num_years=years_per_run,
         inflation_rate=cfg["inflation_rate"],
+        sell_price_inflation=cfg["sell_price_inflation"],
         discount_rate=cfg["discount_rate"],
         freq=freq,
         yearly_summary_df=yearly_df,

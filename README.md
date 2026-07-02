@@ -131,6 +131,28 @@ breos list emissions
 breos list load-profiles
 ```
 
+Run a parameter grid from a normal config plus a `[sweep]` section:
+
+```toml
+location = "porto"
+n_modules = 10
+annual_consumption_kwh = 4000
+battery_kwh = 0.0
+cost_preset = "residential_pt"
+
+[sweep]
+n_modules = [8, 10, 12]
+battery_kwh = [0.0, 5.0]
+```
+
+```bash
+breos sweep --config configs/examples/sweep.toml --output sweep_results.csv
+```
+
+The command runs every parameter combination and writes one CSV row per run,
+including the varied parameters, resolved system sizing, BREOS version, and
+top-level scalar result metrics.
+
 Run a Monte Carlo study over weather-year and demand uncertainty:
 
 ```bash
@@ -281,12 +303,13 @@ pv_dc = calculate_pv_production_dc(weather, location, tilt=35, surface_azimuth=1
 # ...
 ```
 
-## Version 0.3.0 Scope
+## Version 0.3.3 Scope
 
-BREOS 0.3.0 focuses on PV and stationary-battery simulation, economic
-analysis, emissions, Monte Carlo uncertainty studies, and PV/battery sizing.
-The public API is centered on `breos.App`, with lower-level modules available
-for users who need to assemble their own study pipeline.
+BREOS 0.3.3 focuses on PV and stationary-battery simulation, economic
+analysis, emissions, Monte Carlo uncertainty studies, PV/battery sizing, and
+serial parameter sweeps. The public API is centered on `breos.App`, with
+lower-level modules available for users who need to assemble their own study
+pipeline.
 
 ## Weather Data Note
 
@@ -316,14 +339,27 @@ RLP sources, weather/solar-resource APIs, and input assumptions to record.
 
 ## Citation
 
-If you use BREOS in your research, please cite:
+If you use BREOS in your research, please cite the preprint:
+
+```bibtex
+@misc{rodrigues2026breos,
+  author = {Rodrigues, L. and Delgado, J. M. P. Q. and Mendes, A. and Guimar{\~a}es, A. S.},
+  title  = {A Modular, Open-Source Python Framework for Household PV-Battery Sizing: Validation, Multi-Objective Optimisation, and Uncertainty Analysis},
+  year   = {2026},
+  doi    = {10.2139/ssrn.7032064},
+  url    = {https://papers.ssrn.com/sol3/papers.cfm?abstract_id=7032064},
+  note   = {SSRN preprint}
+}
+```
+
+You may also cite the software directly:
 
 ```bibtex
 @software{breos,
   author = {Rodrigues, Leonardo},
-  title = {BREOS: Building Renewable Energy Optimization Software},
-  year = {2026},
-  url = {https://github.com/Str4vinci/breos}
+  title  = {BREOS: Building Renewable Energy Optimization Software},
+  year   = {2026},
+  url    = {https://github.com/Str4vinci/breos}
 }
 ```
 

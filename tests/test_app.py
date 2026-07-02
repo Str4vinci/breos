@@ -174,6 +174,17 @@ class TestAppValidation:
                 }
             )
 
+    def test_invalid_sell_price_inflation(self):
+        with pytest.raises(ValueError, match="sell_price_inflation"):
+            App(
+                {
+                    "location": "porto",
+                    "n_modules": 10,
+                    "annual_consumption_kwh": 4000,
+                    "sell_price_inflation": 1.0,
+                }
+            )
+
     def test_invalid_pv_loss_overrides_value(self):
         with pytest.raises(ValueError, match="pv_loss_overrides"):
             App(
@@ -319,6 +330,25 @@ class TestAppValidation:
         # A 10% SOC window stores a tenth of the energy of the default
         # 10-90% window, so grid independence must drop
         assert narrow_gi < default_gi
+
+    def test_sell_price_inflation_reaches_projection(self, _patch_weather):
+        def _run(**extra):
+            app = App(
+                {
+                    "location": "porto",
+                    "n_modules": 6,
+                    "annual_consumption_kwh": 3000,
+                    "projection_years": 2,
+                    **extra,
+                }
+            )
+            app.simulate()
+            return app.result()["npv_savings_eur"]
+
+        # Inflating the export price raises later-year export revenue, so
+        # cumulative NPV savings must grow. The key used to exist only on
+        # CostParams and never reached cost_analysis_projection from a config.
+        assert _run(sell_price_inflation=0.5) > _run()
 
     def test_transposition_model_reaches_simulation(self, _patch_weather):
         def _run(model):

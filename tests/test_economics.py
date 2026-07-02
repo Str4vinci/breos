@@ -29,6 +29,7 @@ class TestCostDefaultsSingleSource:
             "cost_preset": "minimal",
             "inverter_loading_ratio": 1.25,
             "inflation_rate": 0.02,
+            "sell_price_inflation": 0.01,
             "discount_rate": 0.0,
             "pv_degradation_rate": 0.005,
         }
@@ -39,6 +40,7 @@ class TestCostDefaultsSingleSource:
         assert params == CostParams(
             dc_ac_ratio=1.25,
             inflation_rate=0.02,
+            sell_price_inflation=0.01,
             discount_rate=0.0,
             pv_degradation_rate=0.005,
         )

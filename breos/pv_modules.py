@@ -42,23 +42,6 @@ MODULES: Dict[str, PVModuleParams] = {
         N_Cells=6 * 24,  # 144 cells
         Name="Suntech_STP550S-C72/Vmh",
     ),
-    # NMOT-condition variant of the STP550S: same physical 550 W module, but
-    # rated at Nominal Module Operating Temperature (800 W/m2, 20 degC
-    # ambient), hence Mpp=415 under the 550-family key.
-    "Suntech_STP550S_NOMT": PVModuleParams(
-        Mpp=415,  # W - Maximum Power Point at NMOT (550 W at STC)
-        Vmp=38.9,  # V - Voltage at MPP
-        Imp=10.67,  # A - Current at MPP
-        Voc=46.9,  # V - Open circuit voltage
-        Isc=11.22,  # A - Short circuit current
-        celltype="monoSi",
-        Module_Efficiency=0.213,  # fraction - Module Efficiency (21.3 %)
-        T_Pmax_pct=-0.36,  # %/°C - Power temperature coefficient
-        T_Voc_pct=-0.304,  # %/°C - Voltage temperature coefficient
-        T_Isc_pct=0.05,  # %/°C - Current temperature coefficient
-        N_Cells=6 * 24,  # 144 cells
-        Name="Suntech_STP550S-C72/Vmh",
-    ),
     # -------------------------------------------------------------------------
     # 445W Mono-Si Module (Used in max_case.py - Erlangen, Germany)
     # -------------------------------------------------------------------------
@@ -154,7 +137,7 @@ def list_modules() -> List[str]:
 
     Example:
         >>> list_modules()
-        ['Suntech_STP550S_STC', 'Suntech_STP550S_NOMT', 'Erlangen_445W', 'Generic_400W', 'Generic_600W_Bifacial']
+        ['Suntech_STP550S_STC', 'Erlangen_445W', 'Generic_400W', 'Generic_600W_Bifacial']
     """
     return list(MODULES.keys())
 

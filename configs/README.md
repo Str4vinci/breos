@@ -8,14 +8,15 @@ keep your own runnable example configs.
 ```
 configs/
 ├── base/        # editable copies of the packaged JSON presets (reference only)
-└── examples/    # runnable run configs for `breos run --config`
+└── examples/    # runnable CLI configs for `breos run`, `sweep`, and `montecarlo`
 ```
 
 - **`base/`** mirrors the packaged presets (`locations`, `costs`, `emissions`,
   `financials`, `electricity`). Read them to see what BREOS ships and to copy
   values into your run config. The CLI always loads its own packaged copies, so
   editing files here is for reference — it does not change a run.
-- **`examples/`** holds run configs — the inputs for a single `breos run`.
+- **`examples/`** holds CLI configs — mostly single-run inputs for `breos run`,
+  plus dedicated `sweep` and Monte Carlo examples.
 
 ## Running a simulation
 
@@ -31,6 +32,9 @@ breos run --config configs/examples/pv-only.toml --battery-kwh 5
 
 # Monte Carlo over weather years + demand (needs a multi-year weather file)
 breos montecarlo --config configs/examples/montecarlo.toml --runs 100 --plots
+
+# Parameter grid over a base scenario
+breos sweep --config configs/examples/sweep.toml --output sweep_results.csv
 ```
 
 ### Monte Carlo
@@ -61,6 +65,7 @@ breos list locations | modules | cost-presets | emissions | load-profiles
 | [`pv-only.toml`](examples/pv-only.toml) | Baseline with no battery, to compare storage scenarios against |
 | [`germany-berlin.toml`](examples/germany-berlin.toml) | Swapping location + cost preset + emissions factor together |
 | [`east-west-roof.toml`](examples/east-west-roof.toml) | Multiple `[[pv_arrays]]` (split east/west roof) |
+| [`sweep.toml`](examples/sweep.toml) | Parameter grid over module count and battery size (`breos sweep`) |
 | [`montecarlo.toml`](examples/montecarlo.toml) | Monte Carlo over weather years + demand (`breos montecarlo`) |
 | [`external-rlp.toml`](examples/external-rlp.toml) | Using non-bundled, licensed load profiles |
 
@@ -76,8 +81,8 @@ any example and edit it for your own scenario.
   as a template and put the licensed CSV files in a local directory such as
   `external_rlp/` (do not commit third-party RLPs).
 - `breos run` configs are **flat** key/value files (TOML or JSON). The only
-  recognised table is `[[pv_arrays]]`. The `[montecarlo]` table is read by
-  `breos montecarlo`, and `breos run` ignores it.
+  recognised table for `breos run` is `[[pv_arrays]]`. The `[sweep]` and
+  `[montecarlo]` tables are read by their dedicated CLI commands.
 - Configs written for the research `pvbat` engine — with nested model sections,
   inheritance, or simulation-type blocks — are **not** compatible: BREOS
   silently ignores keys it does not recognise, so those sections would be dropped

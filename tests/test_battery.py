@@ -9,6 +9,7 @@ from breos.battery import (
     _get_degradation_params,
     apply_indoor_temperature_model,
     simulate_energy_balance,
+    update_battery_soh_cyclewise,
 )
 from breos.constants import LAM_EA_J_MOL, LAM_SOC_EXPONENT_N
 
@@ -18,10 +19,24 @@ class TestBatteryConfig:
         cfg = BatteryConfig(nominal_energy_wh=5000)
         assert cfg.max_soc == 0.90
         assert cfg.min_soc == 0.10
+        assert cfg.eol_percentage == 0.70
         assert cfg.dc_coupled is True
         assert cfg.inverter_efficiency == 0.96
         assert cfg.battery_type == "lfp"
         assert cfg.calendar_model == "naumann_lam_field_calibrated"
+
+    def test_eol_default_agrees_across_config_surfaces(self):
+        # BatteryConfig, the App config DEFAULTS, and the optimizer's
+        # battery-spec fallback used to disagree (0.80 / 0.70 / 0.8); the
+        # replacement threshold must default to the same value everywhere.
+        from breos.app_config import DEFAULTS
+        from breos.optimization import _build_battery_config_from_spec
+
+        direct = BatteryConfig(nominal_energy_wh=5000)
+        from_spec = _build_battery_config_from_spec({}, nominal_energy_wh=5000)
+
+        assert direct.eol_percentage == DEFAULTS["battery_eol_percentage"]
+        assert from_spec.eol_percentage == DEFAULTS["battery_eol_percentage"]
 
     def test_replacement_cost_auto(self):
         cfg = BatteryConfig(nominal_energy_wh=10000)
@@ -37,8 +52,18 @@ class TestBatteryConfig:
         assert cfg.replacement_cost == 1000.0
 
     def test_battery_type_accessible(self):
-        cfg = BatteryConfig(nominal_energy_wh=5000, battery_type="lfp")
+        cfg = BatteryConfig(nominal_energy_wh=5000, battery_type="LFP")
         assert cfg.battery_type == "lfp"
+
+    def test_non_lfp_battery_type_rejected(self):
+        with pytest.raises(ValueError, match="supports only: lfp"):
+            BatteryConfig(nominal_energy_wh=5000, battery_type="nmc")
+
+    def test_cycle_aging_rejects_non_lfp_battery_type(self):
+        soc = pd.Series([0.1, 0.8, 0.2], index=pd.date_range("2025-01-01", periods=3, freq="h"))
+
+        with pytest.raises(ValueError, match="supports only: lfp"):
+            update_battery_soh_cyclewise(1.0, soc, 5000.0, battery_type="nca")
 
     def test_field_calibrated_default_is_v1(self):
         assert _get_degradation_params("naumann_lam_field_calibrated") == _get_degradation_params(
