@@ -1,0 +1,75 @@
+{
+  "location_key": "berlin",
+  "name": "Berlin, Germany",
+  "latitude": 52.52,
+  "longitude": 13.405,
+  "tilt": 35,
+  "azimuth_pvlib": 180,
+  "system": {
+    "module": "Generic_400W",
+    "n_modules": 10,
+    "peak_power_kw": 4.0,
+    "dc_ac_ratio": 1.2,
+    "inverter_efficiency": 0.96,
+    "albedo": 0.2,
+    "mounting": "free",
+    "breos_losses_pct": 14.08,
+    "pvgis_loss_pct": 17.51
+  },
+  "weather": {
+    "file": "berlin_tmy_2005_2023_pvgis-sarah3.csv.gz",
+    "radiation_db": "PVGIS-SARAH3",
+    "year_min": 2005,
+    "year_max": 2023,
+    "fetched": "2026-07-02"
+  },
+  "pvgis_pvcalc": {
+    "fetched": "2026-07-02",
+    "params": {
+      "lat": 52.52,
+      "lon": 13.405,
+      "peakpower": 4.0,
+      "loss": 17.51,
+      "angle": 35,
+      "aspect": 0,
+      "mountingplace": "free",
+      "outputformat": "json"
+    },
+    "radiation_db": "PVGIS-SARAH3",
+    "years": "2005-2023",
+    "monthly_kwh": [
+      121.31,
+      209.94,
+      344.89,
+      464.21,
+      505.69,
+      508.42,
+      494.85,
+      463.52,
+      394.48,
+      268.39,
+      146.01,
+      104.64
+    ],
+    "annual_kwh": 4026.36,
+    "poa_monthly_kwh_m2": [
+      36.92,
+      62.98,
+      107.21,
+      149.41,
+      166.74,
+      171.84,
+      168.79,
+      156.46,
+      128.96,
+      85.21,
+      45.34,
+      32.24
+    ],
+    "poa_annual_kwh_m2": 1312.1
+  },
+  "pvwatts_v8": {
+    "fetched": "2026-07-02",
+    "error": "ConnectionError: HTTPSConnectionPool(host='developer.nrel.gov', port=443): Max retries exceeded with url: /api/pvwatts/v8.json?lat=52.52&lon=13.405&system_capacity=4.0&module_type=0&array_type=0&tilt=35&azimuth=180&losses=14.08&dc_ac_ratio=1.2&inv_eff=96.0&albedo=0.2&radius=0&dataset=nsrdb&api_key=DEMO_KEY (Caused by NameResolutionError(\"HTTPSConnection(host='developer.nrel.gov', port=443): Failed to resolve 'developer.nrel.gov' ([Errno 8] nodename nor servname provided, or not known)\"))"
+  }
+}

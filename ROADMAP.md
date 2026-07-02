@@ -13,6 +13,11 @@ refactoring (see the deferred adapter layer at the bottom of this document).
 
 ### Standing validation and benchmark suite
 
+**Status: seeded 2026-07** — `validation/` holds a seven-site worldwide
+harness (PVGIS TMY inputs, PVGIS PVcalc references, PVWatts v8 fetcher) and
+`tests/test_validation_drift.py` fails CI on any unintended model drift
+(0.1% self-baseline) or gross error (±10% vs PVGIS). Remaining work below.
+
 The single highest-leverage credibility item. PVsyst's authority comes from
 decades of published validation; BREOS needs a reproducible harness that
 compares its annual and monthly yields against SAM/PVWatts and against

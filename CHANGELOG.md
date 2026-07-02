@@ -13,6 +13,14 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   (the same physical module at STC) instead.
 
 ### Added
+- A standing validation suite under `validation/` (repo-side, not shipped):
+  seven sites on four continents with committed PVGIS TMY weather inputs
+  (trimmed to the five columns BREOS reads and gzipped, ~90 KB per site),
+  independent PVGIS PVcalc reference results (PVWatts v8 fetcher included,
+  references pending network access to `developer.nrel.gov`), a comparison
+  report generator, and `tests/test_validation_drift.py`, which fails CI when
+  BREOS output drifts >0.1% from its committed baseline or falls outside a
+  ±10% gross-error band around the PVGIS reference.
 - `breos sweep`, a serial parameter-grid CLI command that expands a `[sweep]`
   section in a normal App config and writes one combined CSV with varied
   parameters, resolved system sizing, BREOS version, and scalar result metrics.
