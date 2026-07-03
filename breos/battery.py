@@ -10,7 +10,7 @@ This module handles battery energy storage simulation including:
 
 import math
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -344,10 +344,17 @@ def simulate_energy_balance(
     initial_resistance_growth: float = 0.0,
     initial_cumulative_cycle_deg: float = 0.0,
     initial_cumulative_cal_deg: float = 0.0,
+    degradation_engine: str = "native",
+    blast_model: Optional[str] = None,
+    initial_degradation_state: Optional[Dict[str, Any]] = None,
+    return_degradation_state: bool = False,
     debug: bool = False,
     initial_energy_wh: Optional[float] = None,
     initial_pv_origin_energy_wh: Optional[float] = None,
-) -> Tuple[pd.DataFrame, float, pd.DataFrame, float, int, pd.DataFrame]:
+) -> (
+    Tuple[pd.DataFrame, float, pd.DataFrame, float, int, pd.DataFrame]
+    | Tuple[pd.DataFrame, float, pd.DataFrame, float, int, pd.DataFrame, Dict[str, Any]]
+):
     """
     Simulate energy balance with battery storage and degradation.
 
@@ -370,6 +377,13 @@ def simulate_energy_balance(
         freq: Time frequency ('h' for hourly, '15min' for 15-minute)
         temperature_series: Battery cell temperature (C), defaults to 25C
         results_directory: Directory for saving results (optional)
+        degradation_engine: Degradation backend. ``"native"`` preserves the
+            Naumann/Lam model; ``"blast"`` uses the BLAST daily endpoint adapter.
+        blast_model: BLAST model key when ``degradation_engine="blast"``.
+        initial_degradation_state: Optional state returned by a previous call
+            with ``return_degradation_state=True``.
+        return_degradation_state: Append final degradation carry state to the
+            return tuple when True.
         debug: Enable debug output
         initial_energy_wh: Optional carried stored-energy state (Wh). Defaults
             to the configured max-SOC state for first-run compatibility.
@@ -446,6 +460,13 @@ def simulate_energy_balance(
     else:
         temperature_series = temperature_series.reindex(rng).fillna(25.0)
 
+    degradation_engine_key = str(degradation_engine).strip().lower()
+    if degradation_engine_key not in {"native", "blast"}:
+        raise ValueError("degradation_engine must be 'native' or 'blast'")
+
+    if degradation_engine_key == "blast" and not blast_model:
+        raise ValueError("blast_model is required when degradation_engine='blast'")
+
     # Get degradation model parameters
     k0_frac, Ea_val, b_val, n_val = _get_degradation_params(battery_config.calendar_model)
 
@@ -487,6 +508,7 @@ def simulate_energy_balance(
     # calendar-based: DST days and trailing partial days shift/skip windows
     # by design; the Numba kernels share the convention.
     soc_absolute_buffer = np.empty(steps_per_day, dtype=np.float64)
+    t_cell_day_buffer = np.empty(steps_per_day, dtype=np.float64)
     soc_buf_idx = 0
     fec_cum = initial_fec
     cumulative_cal_seconds = initial_calendar_seconds
@@ -565,6 +587,35 @@ def simulate_energy_balance(
     _res_batt_pv_end = np.empty(n_steps)
     # Hoist invariant check out of the loop
     has_battery = battery_config.nominal_energy_wh > 1 and (battery_config.max_soc - battery_config.min_soc) > 0
+    blast_engine = None
+    build_blast_endpoint_day = None
+    blast_day_start_soc = battery_config.max_soc if has_battery else 0.0
+    blast_day_start_t_cell = float(_temp_vals[0]) if n_steps else 25.0
+
+    if degradation_engine_key == "blast":
+        if not has_battery:
+            raise ValueError("degradation_engine='blast' requires a configured battery")
+
+        from breos.degradation.engine import BlastEngine, build_endpoint_day
+
+        state_payload = initial_degradation_state or {}
+        blast_snapshot = state_payload.get("blast_engine", state_payload)
+        if blast_snapshot:
+            blast_engine = BlastEngine.from_snapshot(blast_model, blast_snapshot)
+        else:
+            blast_engine = BlastEngine(blast_model)
+            if not math.isclose(battery_config.initial_soh, 100.0):
+                raise ValueError(
+                    "BLAST starts from a beginning-of-life model unless initial_degradation_state is provided"
+                )
+
+        build_blast_endpoint_day = build_endpoint_day
+        battery_soh_decimal = blast_engine.soh()
+        Battery_SOH = battery_soh_decimal * 100.0
+        Battery_Energy_Wh = battery_config.nominal_energy_wh * battery_soh_decimal * battery_config.max_soc
+        blast_day_start_soc = float(state_payload.get("day_start_soc_absolute", blast_day_start_soc))
+        blast_day_start_t_cell = float(state_payload.get("day_start_temperature_c", blast_day_start_t_cell))
+
     # Bind capacity factor function once
     _cap_factor_fn = lfp_capacity_factor
     # Inverter AC cap per step (Wh); None keeps the legacy uncapped model
@@ -704,6 +755,7 @@ def simulate_energy_balance(
             soc_normalized = 0.0
             soc_absolute = 0.0
         soc_absolute_buffer[soc_buf_idx] = soc_absolute
+        t_cell_day_buffer[soc_buf_idx] = T_cell
         soc_buf_idx += 1
 
         # Store results via array indexing (avoids per-timestep dict overhead)
@@ -757,34 +809,55 @@ def simulate_energy_balance(
                 soc_absolute_buffer[:steps_per_day].copy(),
                 index=rng[day_start_i : i + 1],
             )
+            t_cell_day = t_cell_day_buffer[:steps_per_day].copy()
+            day_end_soc_absolute = float(soc_absolute_buffer[steps_per_day - 1])
+            day_end_t_cell = float(t_cell_day[steps_per_day - 1])
 
-            # Cycle degradation
-            soh_after_cycle, dSOH_cycle, fec_cum = update_battery_soh_cyclewise(
-                battery_soh_decimal,
-                soc_series,
-                battery_config.nominal_energy_wh,
-                fec_cum=fec_cum,
-                battery_type=battery_config.battery_type,
-                debug=debug,
-            )
-
-            # Calendar degradation — use mean cell temperature over the day
             mean_soc_abs = float(soc_series.mean())
             mean_T_cell = T_cell_day_sum / steps_per_day
-            soh_after_calendar, dSOH_calendar, cumulative_cal_seconds = update_battery_soh_calendar(
-                soh_after_cycle,
-                k0_frac=k0_frac,
-                Ea=Ea_val,
-                n=n_val,
-                cal_b=b_val,
-                T_cell_C=mean_T_cell,
-                cumulative_cal_seconds=cumulative_cal_seconds,
-                dt_days=1.0,
-                mean_soc_absolute=mean_soc_abs,
-                debug=debug,
-            )
+            effective_rte = battery_config.charge_efficiency * battery_config.discharge_efficiency
 
-            battery_soh_decimal = soh_after_calendar
+            if blast_engine is not None:
+                previous_soh_decimal = battery_soh_decimal
+                t_secs_day, soc_day, t_cell_day_c = build_blast_endpoint_day(
+                    hours_per_step * 3600.0,
+                    soc_series.to_numpy(),
+                    t_cell_day,
+                    start_soc=blast_day_start_soc,
+                    start_temperature_c=blast_day_start_t_cell,
+                )
+                battery_soh_decimal = blast_engine.step(t_secs_day, soc_day, t_cell_day_c)
+                dSOH_cycle = 0.0
+                dSOH_calendar = 0.0
+                dSOH_blast = max(0.0, previous_soh_decimal - battery_soh_decimal)
+                cumulative_cal_seconds += 86400.0
+            else:
+                # Cycle degradation
+                soh_after_cycle, dSOH_cycle, fec_cum = update_battery_soh_cyclewise(
+                    battery_soh_decimal,
+                    soc_series,
+                    battery_config.nominal_energy_wh,
+                    fec_cum=fec_cum,
+                    battery_type=battery_config.battery_type,
+                    debug=debug,
+                )
+
+                # Calendar degradation — use mean cell temperature over the day
+                soh_after_calendar, dSOH_calendar, cumulative_cal_seconds = update_battery_soh_calendar(
+                    soh_after_cycle,
+                    k0_frac=k0_frac,
+                    Ea=Ea_val,
+                    n=n_val,
+                    cal_b=b_val,
+                    T_cell_C=mean_T_cell,
+                    cumulative_cal_seconds=cumulative_cal_seconds,
+                    dt_days=1.0,
+                    mean_soc_absolute=mean_soc_abs,
+                    debug=debug,
+                )
+
+                battery_soh_decimal = soh_after_calendar
+                dSOH_blast = 0.0
 
             Battery_SOH = battery_soh_decimal * 100.0
 
@@ -794,7 +867,6 @@ def simulate_energy_balance(
             # Resistance fade (opt-in)
             dR_cycle = 0.0
             dR_calendar = 0.0
-            effective_rte = battery_config.charge_efficiency * battery_config.discharge_efficiency
             if battery_config.enable_resistance_fade:
                 # Get cycles for resistance calculation
                 time_index = soc_series.index
@@ -847,6 +919,9 @@ def simulate_energy_balance(
                 cumulative_cal_deg = 0.0
                 cumulative_resistance_cycle = 0.0
                 cumulative_resistance_calendar = 0.0
+                day_end_soc_absolute = battery_config.max_soc
+                if blast_engine is not None:
+                    blast_engine.reset()
 
                 # Replacement occurs inside this timestep boundary. Rewrite
                 # the already-recorded state so the reported end matches the
@@ -878,6 +953,9 @@ def simulate_energy_balance(
                 "Total_Degradation": 1.0 - battery_soh_decimal,
                 "Mean_SOC_Absolute": mean_soc_abs,
             }
+            if blast_engine is not None:
+                degradation_record["BLAST_Model"] = blast_model
+                degradation_record["BLAST_Degradation"] = dSOH_blast
             if battery_config.enable_resistance_fade:
                 degradation_record["Resistance_Growth"] = resistance_growth
                 degradation_record["Effective_RTE"] = effective_rte
@@ -886,6 +964,8 @@ def simulate_energy_balance(
             # Reset daily accumulators
             soc_buf_idx = 0
             T_cell_day_sum = 0.0
+            blast_day_start_soc = day_end_soc_absolute
+            blast_day_start_t_cell = day_end_t_cell
 
     # Build results DataFrame from pre-allocated arrays
     df = pd.DataFrame(
@@ -940,7 +1020,29 @@ def simulate_energy_balance(
     }
     summary_df = pd.DataFrame([summary])
 
-    return df, total_pv, summary_df, total_replacement_cost, n_replacements, deg_df
+    result = (df, total_pv, summary_df, total_replacement_cost, n_replacements, deg_df)
+    if not return_degradation_state:
+        return result
+
+    final_degradation_state: Dict[str, Any] = {
+        "degradation_engine": degradation_engine_key,
+        "fec_cum": float(fec_cum),
+        "cumulative_calendar_seconds": float(cumulative_cal_seconds),
+        "resistance_growth": float(resistance_growth),
+        "cumulative_cycle_degradation": float(cumulative_cycle_deg),
+        "cumulative_calendar_degradation": float(cumulative_cal_deg),
+    }
+    if blast_engine is not None:
+        final_degradation_state.update(
+            {
+                "blast_model": blast_model,
+                "blast_engine": blast_engine.state_snapshot(),
+                "day_start_soc_absolute": float(blast_day_start_soc),
+                "day_start_temperature_c": float(blast_day_start_t_cell),
+            }
+        )
+
+    return (*result, final_degradation_state)
 
 
 def lfp_capacity_factor(T_C: float) -> float:
