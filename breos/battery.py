@@ -827,6 +827,7 @@ def simulate_energy_balance(
                     start_temperature_c=blast_day_start_t_cell,
                 )
                 battery_soh_decimal = blast_engine.step(t_secs_day, soc_day, t_cell_day_c)
+                fec_cum = float(blast_engine.model.stressors["efc"][-1])
                 dSOH_cycle = 0.0
                 dSOH_calendar = 0.0
                 dSOH_blast = max(0.0, previous_soh_decimal - battery_soh_decimal)
