@@ -60,6 +60,9 @@ def run_app_simulation(
     cumulative_cycle_deg = 0.0
     cumulative_cal_deg = 0.0
     current_soh = 100.0
+    degradation_engine = str(cfg.get("degradation_engine", "native")).strip().lower()
+    blast_model = cfg.get("blast_model")
+    degradation_state: dict[str, Any] | None = None
     total_replacements = 0
     total_replacement_cost = 0.0
     yearly_summaries: list[dict[str, Any]] = []
@@ -100,7 +103,7 @@ def run_app_simulation(
                 inverter_ac_capacity_w=inverter_ac_capacity_w,
             )
 
-        results_df, total_pv, _summary_df, year_rep_cost, year_n_rep, degradation_df = simulate_energy_balance(
+        sim_result = simulate_energy_balance(
             pv_dc=dc_power,
             houseload=inputs.load_data,
             battery_config=batt_cfg,
@@ -111,7 +114,23 @@ def run_app_simulation(
             initial_resistance_growth=cumulative_resistance_growth,
             initial_cumulative_cycle_deg=cumulative_cycle_deg,
             initial_cumulative_cal_deg=cumulative_cal_deg,
+            degradation_engine=degradation_engine,
+            blast_model=blast_model,
+            initial_degradation_state=degradation_state,
+            return_degradation_state=degradation_engine == "blast",
         )
+        if degradation_engine == "blast":
+            (
+                results_df,
+                total_pv,
+                _summary_df,
+                year_rep_cost,
+                year_n_rep,
+                degradation_df,
+                degradation_state,
+            ) = sim_result
+        else:
+            results_df, total_pv, _summary_df, year_rep_cost, year_n_rep, degradation_df = sim_result
 
         if first_year_results_df is None:
             first_year_results_df = results_df
