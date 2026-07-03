@@ -416,6 +416,57 @@ class TestSimulateEnergyBalance:
         second_degradation = second_day[-1]
         assert second_degradation["SOH"].iloc[-1] == pytest.approx(full_degradation["SOH"].iloc[-1], abs=1e-12)
 
+    def test_blast_state_payload_carries_mid_swing_anchor(self):
+        # Exact split-vs-continuous equality is only attainable when the day
+        # ends with the battery full, because every simulate_energy_balance
+        # call starts dispatch from a full battery (the existing year-boundary
+        # convention). This test instead pins the anchor bookkeeping under a
+        # profile that is still mid-discharge at midnight: the carried
+        # day-start anchor must be the true mid-swing SoC, and day-1 EFC must
+        # not depend on how long the run continues afterwards.
+        idx = pd.date_range("2025-01-01 00:00", periods=48, freq="h", tz="UTC")
+        pv_dc = pd.Series(([0.0] * 8 + [2500.0] * 8 + [0.0] * 8) * 2, index=idx)
+        houseload = pd.DataFrame(
+            {"Load": ([400.0] * 8 + [0.0] * 8 + [400.0] * 8) * 2}, index=idx
+        )
+        temperature = pd.Series(25.0, index=idx)
+        config = BatteryConfig(nominal_energy_wh=5000, standby_loss_wh=0.0, enable_replacement=False)
+
+        results_df, _, _, _, _, full_degradation, _ = simulate_energy_balance(
+            pv_dc=pv_dc,
+            houseload=houseload,
+            battery_config=config,
+            freq="h",
+            temperature_series=temperature,
+            degradation_engine="blast",
+            blast_model="lfp_gr_250ah_prismatic",
+            return_degradation_state=True,
+        )
+        *_, first_state = simulate_energy_balance(
+            pv_dc=pv_dc.iloc[:24],
+            houseload=houseload.iloc[:24],
+            battery_config=config,
+            freq="h",
+            temperature_series=temperature.iloc[:24],
+            degradation_engine="blast",
+            blast_model="lfp_gr_250ah_prismatic",
+            return_degradation_state=True,
+        )
+
+        soc_abs = results_df["Battery_SOC_Absolute"]
+        # The boundary is genuinely mid-swing, not saturated at either limit.
+        assert abs(soc_abs.iloc[24] - soc_abs.iloc[23]) > 0.01
+        anchor = first_state["day_start_soc_absolute"]
+        assert abs(anchor - config.max_soc) > 0.05
+        assert abs(anchor - config.min_soc) > 0.05
+        assert anchor == pytest.approx(soc_abs.iloc[23], abs=1e-12)
+
+        day_1_efc = first_state["blast_engine"]["stressors"]["efc"][-1]
+        assert day_1_efc > 0.0
+        assert day_1_efc == pytest.approx(
+            full_degradation["Cumulative_FEC"].iloc[0], abs=1e-12
+        )
+
     def test_blast_cumulative_fec_tracks_engine_efc(self):
         idx = pd.date_range("2025-01-01 00:00", periods=48, freq="h", tz="UTC")
         pv_dc = pd.Series(([0.0] * 8 + [2500.0] * 8 + [0.0] * 8) * 2, index=idx)
