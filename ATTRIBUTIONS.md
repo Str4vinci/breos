@@ -12,6 +12,12 @@ This is a project-maintainer note, not legal advice.
 |------|--------|-----------------|
 | `breos/data/rlp/h0SLP_demandlib_1000kwh_hourly.csv`, `breos/data/rlp/h0SLP_demandlib_1000kwh_15min.csv` | Generated with [demandlib](https://demandlib.readthedocs.io/) H0 logic | demandlib documents itself as MIT-licensed free software. Preserve demandlib attribution and license notices when redistributing derived profile examples. |
 
+## Bundled third-party software
+
+| Files | Source | License / Terms |
+|-------|--------|-----------------|
+| `breos/degradation/blast/` | BLAST-Lite 1.1.0, vendored from the clean NREL source history at commit `d789e00` (`Correct Tesla Model 3 data source in README`). The GitHub organization has since redirected from `NREL/BLAST-Lite` to `NatLabRockies/BLAST-Lite`. | BSD-3-Clause. The vendored BLAST `LICENSE` and DOE `NOTICE` are preserved at `breos/degradation/blast/LICENSE` and `breos/degradation/blast/NOTICE`. Phase 0 applies only mechanical BREOS vendoring transforms: `np.trapz` to `np.trapezoid`, pandas/matplotlib import trim, package-relative imports, and extraction of `rescale_soc`. Golden parity fixtures were generated from the local BLAST-Lite prep commit `b12e8f3`. |
+
 ## Supported but not redistributed
 
 BREOS can load the following profile families when users provide their own licensed local copies through `breos.load_profile(..., rlp_directory="...")`:
@@ -69,6 +75,7 @@ documentation where the relevant models affect results.
 | Rainflow cycle counting | `breos/battery.py` | BREOS uses the `rainflow` Python package and ASTM E1049-style rainflow counting for battery cycle detection in the reference path. |
 | Battery cycle and calendar ageing | `breos/battery.py`, `breos/constants.py`, `breos/numba_kernels.py` | Naumann et al. (2020) parameterization and equations are used for cycle ageing and selected calendar/resistance ageing behavior. |
 | LFP calendar ageing calibration | `breos/constants.py`, `breos/battery.py` | Lam et al. (2025) LFP calendar ageing behavior informs the `naumann_lam*` calendar-model variants and field-calibrated defaults. |
+| BLAST-Lite battery ageing models | `breos/degradation/blast/` | BLAST-Lite model classes preserve DOI-cited empirical degradation models for LFP-Gr, NMC-Gr, NMC-GrSi, NMC-LTO, NCA-Gr, NCA-GrSi, and LMO-Gr cells. Primary source DOIs preserved from BLAST-Lite include `10.1016/j.est.2018.01.019`, `10.1016/j.jpowsour.2019.227666`, `10.1149/1945-7111/ac86a8`, `10.1109/EEEIC/ICPSEUROPE54979.2022.9854784`, `10.1016/j.est.2020.101695`, `10.1149/2.0411609jes`, `10.1149/1945-7111/abae37`, `10.1016/j.jpowsour.2022.232498`, `10.1016/j.jpowsour.2020.228566`, `10.1016/j.jpowsour.2014.02.012`, `10.1016/j.est.2023.109042`, and `10.1149/1945-7111/ac2ebd`. |
 | Polysun-style degradation comparison | `breos/polysun_degradation.py`, `breos/plotting.py` | The comparison baseline follows Polysun / Vela Solaris battery-lifetime methodology: Woehler curve, Miner's linear damage accumulation, DOD histograms, fixed calendar lifetime, and no continuous SOH feedback. |
 | PerMod comparison context | `breos/polysun_degradation.py` | Weniger et al., "Performance Model for PV-Battery Systems (PerMod)", HTW Berlin, 2023, is used as a comparison reference for PV-battery performance modelling. |
 | Linear damage accumulation | `breos/polysun_degradation.py` | Palmgren-Miner linear damage accumulation is used for Polysun-style cycle damage aggregation. |

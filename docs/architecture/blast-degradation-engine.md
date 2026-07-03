@@ -372,19 +372,18 @@ Phase 4 wires that loop — never silently run as native.
 
 Settle before implementation begins:
 
-- **[OPEN] Cross-year state carrier.** Either thread a serialized
-  `state_snapshot()` dict through `simulate_energy_balance`'s return tuple
-  (consistent with the existing `initial_fec` / `final` scalar pattern; keeps
-  engine objects out of the function signature) **or** pass the live `BlastEngine`
-  instance through the runner's year loop (less code). Recommendation:
-  **snapshot** — BLAST state is four dicts of numpy arrays
-  (`states`/`outputs`/`stressors`/`rates`), trivially copyable and picklable,
-  which Phase 4 Monte Carlo (process pools) will want anyway; a live engine
-  mutates a caller-owned object across yearly calls, a pattern
-  `simulate_energy_balance` currently avoids. Not yet decided.
+- None currently.
 
 Resolved:
 
+- **[DECIDED] Cross-year state carrier uses serialized snapshots.** Thread a
+  `state_snapshot()` dict through `simulate_energy_balance`'s return tuple
+  instead of passing a live `BlastEngine` through the runner's year loop. This is
+  consistent with the existing `initial_fec` / `final` scalar pattern, keeps
+  mutable engine objects out of the function signature, and gives Phase 4 Monte
+  Carlo a picklable representation. Prototype tests in the BLAST-Lite prep
+  branch proved snapshot continuity across all 14 BLAST models, including the
+  P3b multi-mode models.
 - **[DECIDED] Do not repurpose `battery_type` for BLAST chemistry.** In 0.3.3 it
   became a guarded native-LFP selector instead of a silent no-op for non-LFP
   values. The new `degradation_engine` / `blast_model` keys should select BLAST
