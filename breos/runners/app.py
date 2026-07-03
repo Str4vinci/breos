@@ -92,6 +92,7 @@ def run_app_simulation(
                 enable_replacement=True,
                 replacement_cost=replacement_cost,
                 calendar_model=cfg["calendar_model"],
+                enable_resistance_fade=cfg.get("enable_resistance_fade", False),
                 **batt_kwargs,
             )
         else:
