@@ -237,6 +237,73 @@ class TestAppValidation:
         )
         assert app._cfg["n_modules"] == 10
 
+    def test_blast_config_accepts_enabled_p1_models(self):
+        for blast_model in ("lfp_gr_250ah_prismatic", "nca_gr_panasonic_3ah"):
+            app = App(
+                {
+                    "location": "porto",
+                    "n_modules": 10,
+                    "annual_consumption_kwh": 4000,
+                    "battery_kwh": 5.0,
+                    "degradation_engine": "blast",
+                    "blast_model": blast_model,
+                }
+            )
+            assert app._cfg["degradation_engine"] == "blast"
+            assert app._cfg["blast_model"] == blast_model
+
+    def test_invalid_degradation_engine_rejected(self):
+        with pytest.raises(ValueError, match="degradation_engine"):
+            App(
+                {
+                    "location": "porto",
+                    "n_modules": 10,
+                    "annual_consumption_kwh": 4000,
+                    "degradation_engine": "magic",
+                }
+            )
+
+    def test_blast_config_rejects_non_p1_model(self):
+        with pytest.raises(ValueError, match="Unknown blast_model"):
+            App(
+                {
+                    "location": "porto",
+                    "n_modules": 10,
+                    "annual_consumption_kwh": 4000,
+                    "battery_kwh": 5.0,
+                    "degradation_engine": "blast",
+                    "blast_model": "nmc811_grsi_lgm50_5ah",
+                }
+            )
+
+    def test_blast_config_rejects_montecarlo_section(self):
+        with pytest.raises(ValueError, match="Monte Carlo"):
+            App(
+                {
+                    "location": "porto",
+                    "n_modules": 10,
+                    "annual_consumption_kwh": 4000,
+                    "battery_kwh": 5.0,
+                    "degradation_engine": "blast",
+                    "blast_model": "lfp_gr_250ah_prismatic",
+                    "montecarlo": {"n_runs": 10, "weather_file": "weather.csv"},
+                }
+            )
+
+    def test_blast_config_rejects_resistance_fade(self):
+        with pytest.raises(ValueError, match="enable_resistance_fade"):
+            App(
+                {
+                    "location": "porto",
+                    "n_modules": 10,
+                    "annual_consumption_kwh": 4000,
+                    "battery_kwh": 5.0,
+                    "degradation_engine": "blast",
+                    "blast_model": "lfp_gr_250ah_prismatic",
+                    "enable_resistance_fade": True,
+                }
+            )
+
     def test_custom_location_valid(self):
         app = App(
             {
