@@ -206,6 +206,7 @@ def _simulate_trajectory(
                 enable_replacement=True,
                 replacement_cost=replacement_cost,
                 calendar_model=cfg["calendar_model"],
+                enable_resistance_fade=cfg.get("enable_resistance_fade", False),
                 **batt_kwargs,
             )
         else:
@@ -334,6 +335,8 @@ def run_montecarlo(config: dict[str, Any], settings: MonteCarloSettings) -> Mont
     """
     resolved = resolve_app_config(config)
     cfg = resolved.cfg
+    if cfg["degradation_engine"] == "blast":
+        raise ValueError("degradation_engine='blast' is not supported with Monte Carlo yet")
     years_per_run = settings.years_per_run or cfg["projection_years"]
 
     dc_by_year, temp_by_year = _precompute_year_caches(cfg, resolved, settings)

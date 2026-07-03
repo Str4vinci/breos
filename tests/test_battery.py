@@ -255,6 +255,184 @@ class TestSimulateEnergyBalance:
         emax_cold = 10000 * config.max_soc * lfp_capacity_factor(0.0)
         assert results_df["Battery_Energy"].iloc[-1] <= emax_cold + 1e-9
 
+    def test_blast_degradation_engine_returns_final_state(self):
+        idx = pd.date_range("2025-01-01 00:00", periods=48, freq="h", tz="UTC")
+        pv_dc = pd.Series(0.0, index=idx)
+        houseload = pd.DataFrame({"Load": 0.0}, index=idx)
+        temperature = pd.Series(25.0, index=idx)
+        config = BatteryConfig(nominal_energy_wh=5000, standby_loss_wh=0.0, enable_replacement=False)
+
+        result = simulate_energy_balance(
+            pv_dc=pv_dc,
+            houseload=houseload,
+            battery_config=config,
+            freq="h",
+            temperature_series=temperature,
+            degradation_engine="blast",
+            blast_model="lfp_gr_250ah_prismatic",
+            return_degradation_state=True,
+        )
+
+        assert len(result) == 7
+        results_df, _, summary_df, _, _, degradation_df, degradation_state = result
+        assert len(degradation_df) == 2
+        assert degradation_df["BLAST_Model"].tolist() == ["lfp_gr_250ah_prismatic"] * 2
+        assert "BLAST_Degradation" in degradation_df.columns
+        assert summary_df["Final SOH [%]"].iloc[0] == pytest.approx(degradation_df["SOH"].iloc[-1])
+        assert degradation_state["degradation_engine"] == "blast"
+        assert degradation_state["blast_model"] == "lfp_gr_250ah_prismatic"
+        assert degradation_state["blast_engine"]["blast_model_key"] == "lfp_gr_250ah_prismatic"
+        assert degradation_state["day_start_soc_absolute"] == pytest.approx(
+            results_df["Battery_SOC_Absolute"].iloc[-1]
+        )
+
+    def test_blast_degradation_state_threads_across_calls(self):
+        idx = pd.date_range("2025-01-01 00:00", periods=48, freq="h", tz="UTC")
+        pv_dc = pd.Series(0.0, index=idx)
+        houseload = pd.DataFrame({"Load": 0.0}, index=idx)
+        temperature = pd.Series(25.0, index=idx)
+        config = BatteryConfig(nominal_energy_wh=5000, standby_loss_wh=0.0, enable_replacement=False)
+
+        full_run = simulate_energy_balance(
+            pv_dc=pv_dc,
+            houseload=houseload,
+            battery_config=config,
+            freq="h",
+            temperature_series=temperature,
+            degradation_engine="blast",
+            blast_model="lfp_gr_250ah_prismatic",
+        )
+        first_day = simulate_energy_balance(
+            pv_dc=pv_dc.iloc[:24],
+            houseload=houseload.iloc[:24],
+            battery_config=config,
+            freq="h",
+            temperature_series=temperature.iloc[:24],
+            degradation_engine="blast",
+            blast_model="lfp_gr_250ah_prismatic",
+            return_degradation_state=True,
+        )
+        *_, degradation_state = first_day
+        second_day = simulate_energy_balance(
+            pv_dc=pv_dc.iloc[24:],
+            houseload=houseload.iloc[24:],
+            battery_config=config,
+            freq="h",
+            temperature_series=temperature.iloc[24:],
+            degradation_engine="blast",
+            blast_model="lfp_gr_250ah_prismatic",
+            initial_degradation_state=degradation_state,
+        )
+
+        full_degradation = full_run[-1]
+        second_degradation = second_day[-1]
+        assert second_degradation["SOH"].iloc[-1] == pytest.approx(full_degradation["SOH"].iloc[-1], abs=1e-12)
+
+    def test_blast_state_payload_carries_mid_swing_anchor(self):
+        # Exact split-vs-continuous equality is only attainable when the day
+        # ends with the battery full, because every simulate_energy_balance
+        # call starts dispatch from a full battery (the existing year-boundary
+        # convention). This test instead pins the anchor bookkeeping under a
+        # profile that is still mid-discharge at midnight: the carried
+        # day-start anchor must be the true mid-swing SoC, and day-1 EFC must
+        # not depend on how long the run continues afterwards.
+        idx = pd.date_range("2025-01-01 00:00", periods=48, freq="h", tz="UTC")
+        pv_dc = pd.Series(([0.0] * 8 + [2500.0] * 8 + [0.0] * 8) * 2, index=idx)
+        houseload = pd.DataFrame(
+            {"Load": ([400.0] * 8 + [0.0] * 8 + [400.0] * 8) * 2}, index=idx
+        )
+        temperature = pd.Series(25.0, index=idx)
+        config = BatteryConfig(nominal_energy_wh=5000, standby_loss_wh=0.0, enable_replacement=False)
+
+        results_df, _, _, _, _, full_degradation, _ = simulate_energy_balance(
+            pv_dc=pv_dc,
+            houseload=houseload,
+            battery_config=config,
+            freq="h",
+            temperature_series=temperature,
+            degradation_engine="blast",
+            blast_model="lfp_gr_250ah_prismatic",
+            return_degradation_state=True,
+        )
+        *_, first_state = simulate_energy_balance(
+            pv_dc=pv_dc.iloc[:24],
+            houseload=houseload.iloc[:24],
+            battery_config=config,
+            freq="h",
+            temperature_series=temperature.iloc[:24],
+            degradation_engine="blast",
+            blast_model="lfp_gr_250ah_prismatic",
+            return_degradation_state=True,
+        )
+
+        soc_abs = results_df["Battery_SOC_Absolute"]
+        # The boundary is genuinely mid-swing, not saturated at either limit.
+        assert abs(soc_abs.iloc[24] - soc_abs.iloc[23]) > 0.01
+        anchor = first_state["day_start_soc_absolute"]
+        assert abs(anchor - config.max_soc) > 0.05
+        assert abs(anchor - config.min_soc) > 0.05
+        assert anchor == pytest.approx(soc_abs.iloc[23], abs=1e-12)
+
+        day_1_efc = first_state["blast_engine"]["stressors"]["efc"][-1]
+        assert day_1_efc > 0.0
+        assert day_1_efc == pytest.approx(
+            full_degradation["Cumulative_FEC"].iloc[0], abs=1e-12
+        )
+
+    def test_blast_cumulative_fec_tracks_engine_efc(self):
+        idx = pd.date_range("2025-01-01 00:00", periods=48, freq="h", tz="UTC")
+        pv_dc = pd.Series(([0.0] * 8 + [2500.0] * 8 + [0.0] * 8) * 2, index=idx)
+        houseload = pd.DataFrame({"Load": ([900.0] * 8 + [0.0] * 8 + [900.0] * 8) * 2}, index=idx)
+        temperature = pd.Series(25.0, index=idx)
+        config = BatteryConfig(nominal_energy_wh=5000, standby_loss_wh=0.0, enable_replacement=False)
+
+        *_, degradation_df, degradation_state = simulate_energy_balance(
+            pv_dc=pv_dc,
+            houseload=houseload,
+            battery_config=config,
+            freq="h",
+            temperature_series=temperature,
+            degradation_engine="blast",
+            blast_model="lfp_gr_250ah_prismatic",
+            return_degradation_state=True,
+        )
+
+        engine_efc = degradation_state["blast_engine"]["stressors"]["efc"][-1]
+        assert degradation_df["Cumulative_FEC"].iloc[-1] > 0.0
+        assert degradation_df["Cumulative_FEC"].iloc[-1] == pytest.approx(engine_efc, abs=1e-12)
+
+    def test_blast_replacement_resets_engine_state(self):
+        idx = pd.date_range("2025-01-01 00:00", periods=24, freq="h", tz="UTC")
+        pv_dc = pd.Series(0.0, index=idx)
+        houseload = pd.DataFrame({"Load": 0.0}, index=idx)
+        temperature = pd.Series(45.0, index=idx)
+        config = BatteryConfig(
+            nominal_energy_wh=5000,
+            standby_loss_wh=0.0,
+            eol_percentage=0.999999999,
+            enable_replacement=True,
+        )
+
+        results_df, _, summary_df, _, n_replacements, degradation_df, degradation_state = simulate_energy_balance(
+            pv_dc=pv_dc,
+            houseload=houseload,
+            battery_config=config,
+            freq="h",
+            temperature_series=temperature,
+            degradation_engine="blast",
+            blast_model="lfp_gr_250ah_prismatic",
+            return_degradation_state=True,
+        )
+
+        assert n_replacements == 1
+        assert bool(results_df["Battery_Replaced"].iloc[-1]) is True
+        assert degradation_df["SOH"].iloc[-1] == pytest.approx(100.0)
+        assert degradation_df["Cumulative_FEC"].iloc[-1] == pytest.approx(0.0)
+        assert summary_df["Final SOH [%]"].iloc[0] == pytest.approx(100.0)
+        assert degradation_state["blast_engine"]["outputs"]["q"][-1] == pytest.approx(1.0)
+        assert degradation_state["blast_engine"]["stressors"]["efc"][-1] == pytest.approx(0.0)
+        assert degradation_state["day_start_soc_absolute"] == pytest.approx(config.max_soc)
+
 
 class TestIndoorTemperatureModel:
     def test_output_shape(self):

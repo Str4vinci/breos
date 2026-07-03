@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from breos.degradation.engine import P1_BLAST_MODEL_KEYS
 from breos.economics import CostParams, calculate_costs
 from breos.emissions import EmissionsParams
 from breos.pv_modules import MODULES, PVModuleParams, get_module
@@ -48,10 +49,13 @@ DEFAULTS: dict[str, Any] = {
     "emissions_country": None,
     "pv_degradation_rate": 0.005,
     "calendar_model": "naumann_lam_field_calibrated",
+    "degradation_engine": "native",
+    "blast_model": None,
     "battery_min_soc": 0.10,
     "battery_max_soc": 0.90,
     "battery_eol_percentage": 0.70,
     "battery_rte": None,
+    "enable_resistance_fade": False,
     "dc_coupled": True,
     "inverter_efficiency": 0.96,
     "inverter_loading_ratio": 1.25,
@@ -215,6 +219,22 @@ def validate_config(cfg: dict[str, Any]) -> None:
         raise ValueError("'battery_eol_percentage' must be between 0 and 1 (exclusive)")
     if cfg["battery_rte"] is not None and not 0 < cfg["battery_rte"] <= 1:
         raise ValueError("'battery_rte' must be between 0 (exclusive) and 1 (inclusive)")
+    if not isinstance(cfg["enable_resistance_fade"], bool):
+        raise TypeError("'enable_resistance_fade' must be a boolean")
+
+    degradation_engine = str(cfg["degradation_engine"]).strip().lower()
+    if degradation_engine not in ("native", "blast"):
+        raise ValueError("'degradation_engine' must be one of: native, blast")
+    cfg["degradation_engine"] = degradation_engine
+
+    if degradation_engine == "blast":
+        if "montecarlo" in cfg:
+            raise ValueError("'degradation_engine=blast' is not supported with Monte Carlo yet")
+        if cfg["enable_resistance_fade"]:
+            raise ValueError("'degradation_engine=blast' cannot be combined with 'enable_resistance_fade'")
+        if cfg["blast_model"] not in P1_BLAST_MODEL_KEYS:
+            available = ", ".join(P1_BLAST_MODEL_KEYS)
+            raise ValueError(f"Unknown blast_model {cfg['blast_model']!r}. Available: {available}")
 
 
 def resolve_location(cfg: dict[str, Any]) -> tuple[float, float, str, str | None]:

@@ -105,6 +105,18 @@ def test_run_montecarlo_threads_sell_price_inflation(tmp_path, monkeypatch):
     assert seen["sell_price_inflation"] == 0.04
 
 
+def test_run_montecarlo_rejects_blast_degradation(tmp_path):
+    settings = MonteCarloSettings(weather_file=str(tmp_path / "missing.csv"), n_runs=1)
+    config = {
+        **_base_config(),
+        "degradation_engine": "blast",
+        "blast_model": "lfp_gr_250ah_prismatic",
+    }
+
+    with pytest.raises(ValueError, match="Monte Carlo"):
+        run_montecarlo(config, settings)
+
+
 def test_run_montecarlo_rejects_empty_weather(tmp_path):
     empty = tmp_path / "empty.csv"
     pd.DataFrame({"date": [], "shortwave_radiation": []}).to_csv(empty, index=False)
