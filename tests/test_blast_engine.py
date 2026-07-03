@@ -81,6 +81,49 @@ def test_all_models_snapshot_restore_continuity():
         assert restored.model.stressors["t_days"][-1] == pytest.approx(2.0)
 
 
+def test_snapshot_restore_preserves_mid_swing_boundary_efc():
+    hours = np.arange(49, dtype=float)
+    soc = 0.5 + 0.3 * np.sin((hours - 3.0) * 2 * np.pi / 24.0)
+    temperature_c = np.full(hours.shape, 25.0)
+
+    day_1 = build_endpoint_day(
+        step_seconds=3600,
+        soc_samples=soc[1:25],
+        temperature_c_samples=temperature_c[1:25],
+        start_soc=soc[0],
+        start_temperature_c=temperature_c[0],
+    )
+    day_2 = build_endpoint_day(
+        step_seconds=3600,
+        soc_samples=soc[25:49],
+        temperature_c_samples=temperature_c[25:49],
+        start_soc=soc[24],
+        start_temperature_c=temperature_c[24],
+    )
+    assert abs(soc[25] - soc[24]) > 0.01
+
+    continuous = BlastEngine("lfp_gr_250ah_prismatic")
+    continuous.step(*day_1)
+    q_after_day_1 = continuous.soh()
+    continuous_soh = continuous.step(*day_2)
+
+    split = BlastEngine("lfp_gr_250ah_prismatic")
+    split.step(*day_1)
+    restored = BlastEngine.from_snapshot("lfp_gr_250ah_prismatic", split.state_snapshot())
+    split_soh = restored.step(*day_2)
+
+    expected_efc = (np.abs(np.diff(soc[:25])).sum() / 2.0) + (
+        np.abs(np.diff(soc[24:49])).sum() / 2.0
+    ) * q_after_day_1
+
+    assert split_soh == pytest.approx(continuous_soh, abs=1e-12)
+    assert restored.model.stressors["efc"][-1] == pytest.approx(
+        continuous.model.stressors["efc"][-1],
+        abs=1e-12,
+    )
+    assert continuous.model.stressors["efc"][-1] == pytest.approx(expected_efc, abs=1e-12)
+
+
 def test_adapter_matches_vendored_simulate_battery_life_fixed_soc_storage():
     days = 100
     t_day = np.array([0.0, 86400.0])

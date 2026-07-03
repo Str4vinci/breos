@@ -2,6 +2,16 @@
 
 All notable changes to BREOS are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased]
+
+### Added
+- Vendored BLAST-Lite degradation models as an opt-in `degradation_engine="blast"`
+  path with the `BlastEngine` adapter, daily endpoint-grid integration,
+  cross-year snapshot threading, replacement reset handling, P1 model gates
+  (`lfp_gr_250ah_prismatic`, `nca_gr_panasonic_3ah`), and validation that keeps
+  BLAST disabled for Monte Carlo and resistance-fade runs until those paths are
+  explicitly supported.
+
 ## [0.3.3] - 2026-07-02
 
 ### Removed
