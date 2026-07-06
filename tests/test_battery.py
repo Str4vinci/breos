@@ -1,5 +1,7 @@
 """Tests for the battery module."""
 
+import warnings
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -378,6 +380,36 @@ class TestSimulateEnergyBalance:
         assert day_1_efc == pytest.approx(
             full_degradation["Cumulative_FEC"].iloc[0], abs=1e-12
         )
+
+    def test_blast_extrapolation_warning_fires_once_per_simulation(self):
+        idx = pd.date_range("2025-01-01 00:00", periods=24, freq="h", tz="UTC")
+        pv_dc = pd.Series(0.0, index=idx)
+        houseload = pd.DataFrame({"Load": 0.0}, index=idx)
+        temperature = pd.Series(25.0, index=idx)
+        config = BatteryConfig(nominal_energy_wh=5000, standby_loss_wh=0.0, enable_replacement=False)
+
+        common = dict(
+            battery_config=config,
+            freq="h",
+            degradation_engine="blast",
+            blast_model="lfp_gr_250ah_prismatic",
+            return_degradation_state=True,
+        )
+        with pytest.warns(UserWarning, match="1-3 years"):
+            *_, degradation_state = simulate_energy_balance(
+                pv_dc=pv_dc, houseload=houseload, temperature_series=temperature, **common
+            )
+
+        # Continuation years restore from a snapshot and must not re-warn.
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            simulate_energy_balance(
+                pv_dc=pv_dc,
+                houseload=houseload,
+                temperature_series=temperature,
+                initial_degradation_state=degradation_state,
+                **common,
+            )
 
     def test_blast_cumulative_fec_tracks_engine_efc(self):
         idx = pd.date_range("2025-01-01 00:00", periods=48, freq="h", tz="UTC")

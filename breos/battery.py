@@ -9,6 +9,7 @@ This module handles battery energy storage simulation including:
 """
 
 import math
+import warnings
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -337,6 +338,18 @@ def simulate_energy_balance(
                 raise ValueError(
                     "BLAST starts from a beginning-of-life model unless initial_degradation_state is provided"
                 )
+            # Warn once per logical simulation: continuation years arrive with
+            # a snapshot and skip this branch.
+            warnings.warn(
+                "degradation_engine='blast': BLAST-Lite parameters are identified "
+                "from lab aging campaigns typically spanning 1-3 years. Multi-decade "
+                "SoH projections extrapolate the fitted trajectory shapes far beyond "
+                "the aging data and may be optimistic (late-life degradation knees "
+                "may be missed). The native engine gives a more conservative "
+                "field-calibrated LFP estimate.",
+                UserWarning,
+                stacklevel=2,
+            )
 
         build_blast_endpoint_day = build_endpoint_day
         battery_soh_decimal = blast_engine.soh()

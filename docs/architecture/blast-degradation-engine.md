@@ -244,6 +244,17 @@ Note: several keys (Panasonic, Sony-Murata cylindrical, the NMC fast-charge
 pouches) are EV / high-power cells tested well above stationary C-rates — they
 run, but lean on the out-of-range warning below.
 
+**Data-horizon caveat (implemented as a runtime warning).** The underlying
+aging campaigns typically span 1–3 years; 20-year projections extrapolate the
+fitted trajectory shapes (power-law / sigmoid) far beyond the data and may be
+optimistic — late-life degradation knees can be invisible in short campaigns.
+`simulate_energy_balance` emits a `UserWarning` once per logical simulation
+(fresh-engine construction only; snapshot continuations do not re-warn). This
+is also part of why **native stays the default**: it is field-calibrated for
+stationary LFP and empirically more conservative. Synthetic reference point
+(~250 FEC/yr residential profile at 25 °C, 10 kWh): 10-year SoH is
+native ≈ 67 %, BLAST LFP 250Ah ≈ 89 %, BLAST NCA Panasonic ≈ 79 %.
+
 ## Chemistry profile registry (per-chemistry settings)
 
 There are **three tiers** of per-chemistry data; only the third is a user

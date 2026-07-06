@@ -11,6 +11,15 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   (`lfp_gr_250ah_prismatic`, `nca_gr_panasonic_3ah`), and validation that keeps
   BLAST disabled for Monte Carlo and resistance-fade runs until those paths are
   explicitly supported.
+- BLAST runs emit a one-time extrapolation warning: the model parameters come
+  from lab aging campaigns typically spanning 1-3 years, so multi-decade SoH
+  projections extrapolate the fitted trajectory shapes and may be optimistic.
+  The native Naumann/Lam engine remains the default; it is field-calibrated
+  and more conservative.
+- Multi-condition BLAST parity fixture and tests: vendored model parameters
+  are asserted equal to the untransformed upstream source, and trajectories
+  match at 1e-12 across hot/cold storage, deep and shallow-fast cycling, and
+  intraday-varying temperature conditions.
 
 ## [0.3.3] - 2026-07-02
 
