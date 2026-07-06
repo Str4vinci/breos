@@ -4,14 +4,6 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 
 ## [Unreleased]
 
-### Removed
-- The `Suntech_STP550S_NOMT` catalog module. Its datasheet points were NMOT
-  ratings (800 W/m², Mpp = 415 W), but the CEC single-diode fit interprets
-  `Vmp`/`Imp`/`Voc`/`Isc` as STC values, so the entry produced silently wrong
-  model parameters. Configs referencing it now fail with the standard
-  "Module '...' not found. Available: ..." error; use `Suntech_STP550S_STC`
-  (the same physical module at STC) instead.
-
 ### Added
 - `solar_position` App config key, `--solar-position` CLI flag, and
   `solar_position=` parameter on every solar-chain function
@@ -31,23 +23,6 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   report generator, and `tests/test_validation_drift.py`, which fails CI when
   BREOS output drifts >0.1% from its committed baseline or falls outside a
   ±10% gross-error band around the PVGIS reference.
-- `breos sweep`, a serial parameter-grid CLI command that expands a `[sweep]`
-  section in a normal App config and writes one combined CSV with varied
-  parameters, resolved system sizing, BREOS version, and scalar result metrics.
-- `configs/examples/sweep.toml` as a runnable sweep example over module count
-  and battery size.
-- Release-smoke tests for the README quickstart, the Monte Carlo example path,
-  and the pymoo-backed multi-objective optimization helper.
-- `breos.solar.resolve_pvwatts_losses`, used by dry-run/config inspection to
-  report resolved PVWatts loss components and their combined percentage.
-- `sell_price_inflation` App config key and `--sell-price-inflation` CLI flag
-  (default `0.0`). `CostParams` and `cost_analysis_projection` already
-  supported an annual export-price inflation, but no config key existed and
-  neither the App runner nor the Monte Carlo runner passed it, so the public
-  paths always projected with `0.0`. The value is validated in
-  `validate_config`, threaded through both projection call sites, and shown
-  in `breos run --dry-run` / `validate-config --json`. The `0.0` default
-  reproduces existing results bit-for-bit.
 
 ### Changed
 - POA transposition now receives the refraction-corrected apparent zenith,
@@ -56,20 +31,6 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   `get_total_irradiance` got the true `zenith`. Annual yields move by well
   under 0.1% (refraction only matters near the horizon); the validation
   baseline was regenerated accordingly.
-- `breos run --dry-run` and `breos validate-config --json` now include the
-  fully resolved static PVWatts loss stack instead of only echoing
-  `pv_loss_overrides`.
-- `BatteryConfig.battery_type` is now explicit about the native degradation
-  model being LFP-only: `"LFP"` normalizes to `"lfp"`, while unsupported
-  chemistries raise instead of silently reusing LFP cycle-aging parameters.
-- `BatteryConfig.eol_percentage` now defaults to `0.70`, aligning with the
-  App config default `battery_eol_percentage = 0.70` and the optimizer's
-  battery-spec fallback (previously `0.80` and `0.8` respectively — three
-  surfaces, two values). App and CLI results are unchanged (they always pass
-  the config value explicitly), but direct `BatteryConfig` users who relied
-  on the implicit `0.80` will now see batteries replaced later, at 70% SOH;
-  pass `eol_percentage=0.8` to keep the old threshold. The same applies to
-  optimization battery specs without an explicit `eol_percentage`.
 
 ### Fixed
 - The NSGA-II optimizer (`optimize_system_multi_objective`) scored candidate
@@ -93,6 +54,60 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
     `simulate_energy_balance`, whose internal alignment is timezone- and
     DST-aware — the same code path the App uses. `align_load_to_pv` keeps
     its behaviour for external callers but now carries a docstring warning.
+
+## [0.3.3] - 2026-07-02
+
+### Removed
+- The `Suntech_STP550S_NOMT` catalog module. Its datasheet points were NMOT
+  ratings (800 W/m², Mpp = 415 W), but the CEC single-diode fit interprets
+  `Vmp`/`Imp`/`Voc`/`Isc` as STC values, so the entry produced silently wrong
+  model parameters. Configs referencing it now fail with the standard
+  "Module '...' not found. Available: ..." error; use `Suntech_STP550S_STC`
+  (the same physical module at STC) instead.
+
+### Added
+- `breos sweep`, a serial parameter-grid CLI command that expands a `[sweep]`
+  section in a normal App config and writes one combined CSV with varied
+  parameters, resolved system sizing, BREOS version, and scalar result metrics.
+- `configs/examples/sweep.toml` as a runnable sweep example over module count
+  and battery size.
+- Release-smoke tests for the README quickstart, the Monte Carlo example path,
+  and the pymoo-backed multi-objective optimization helper.
+- `breos.solar.resolve_pvwatts_losses`, used by dry-run/config inspection to
+  report resolved PVWatts loss components and their combined percentage.
+- `sell_price_inflation` App config key and `--sell-price-inflation` CLI flag
+  (default `0.0`). `CostParams` and `cost_analysis_projection` already
+  supported an annual export-price inflation, but no config key existed and
+  neither the App runner nor the Monte Carlo runner passed it, so the public
+  paths always projected with `0.0`. The value is validated in
+  `validate_config`, threaded through both projection call sites, and shown
+  in `breos run --dry-run` / `validate-config --json`. The `0.0` default
+  reproduces existing results bit-for-bit.
+
+### Changed
+- `breos run --dry-run` and `breos validate-config --json` now include the
+  fully resolved static PVWatts loss stack instead of only echoing
+  `pv_loss_overrides`.
+- `BatteryConfig.battery_type` is now explicit about the native degradation
+  model being LFP-only: `"LFP"` normalizes to `"lfp"`, while unsupported
+  chemistries raise instead of silently reusing LFP cycle-aging parameters.
+- `BatteryConfig.eol_percentage` now defaults to `0.70`, aligning with the
+  App config default `battery_eol_percentage = 0.70` and the optimizer's
+  battery-spec fallback (previously `0.80` and `0.8` respectively — three
+  surfaces, two values). App and CLI results are unchanged (they always pass
+  the config value explicitly), but direct `BatteryConfig` users who relied
+  on the implicit `0.80` will now see batteries replaced later, at 70% SOH;
+  pass `eol_percentage=0.8` to keep the old threshold. The same applies to
+  optimization battery specs without an explicit `eol_percentage`.
+
+### Documentation
+- Updated the README and `CITATION.cff` to cite the SSRN preprint DOI
+  (`10.2139/ssrn.7032064`).
+- Added the BLAST degradation-engine design note and refreshed roadmap
+  priorities around model accuracy, validation, energy-loss accounting, and
+  future default-model profiles.
+
+### Fixed
 - `dc_to_ac` (and therefore `calculate_pv_production_ac`) clipped ~4% below
   the intended inverter AC nameplate: it passed the nameplate
   (`pv_peak_power_w / inverter_loading_ratio`) as pvlib's `pdc0`, which is a
@@ -270,8 +285,8 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   stack and moved heavier workflow packages behind extras: `plots`,
   `optimization`, `weather`, `fast`, `validation`, and `location-tools`.
   NREL-PySAM stays in the core set because the default PV model fits CEC
-  single-diode parameters at runtime via pvlib's `fit_cec_sam`. (Removed after
-  0.3.0 — see the Unreleased section above.)
+  single-diode parameters at runtime via pvlib's `fit_cec_sam`. (Removed in
+  0.3.2.)
 - The `dev` extra now installs optional feature dependencies so contributor
   test runs continue to cover optional paths.
 

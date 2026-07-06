@@ -1,6 +1,6 @@
 [project]
 name = "breos"
-version = "0.3.2"
+version = "0.3.3"
 description = "Python library for PV and battery energy-system simulation and optimization"
 readme = "README.md"
 license = "BSD-3-Clause"
