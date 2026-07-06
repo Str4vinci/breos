@@ -118,6 +118,18 @@ SOLAR_POSITION_METHODS = (
 )
 DEFAULT_SOLAR_POSITION = "interval-start"
 
+# Whether the incidence-angle modifier is applied to the diffuse POA
+# components. ``none`` applies IAM to beam only, with diffuse passing at 1.0
+# — the default and the only prior behaviour, a known ~0.5-1% systematic
+# overestimate. ``marion`` additionally weighs the sky- and ground-diffuse
+# components with the same ashrae IAM integrated over their view factors
+# (Marion 2017, via pvlib's ``iam.marion_diffuse``).
+DIFFUSE_IAM_METHODS = (
+    "none",
+    "marion",
+)
+DEFAULT_DIFFUSE_IAM = "none"
+
 
 def _resolve_transposition_model(model: str) -> str:
     """Normalise and validate a sky-diffusion transposition model name."""
@@ -134,6 +146,15 @@ def _resolve_solar_position_method(method: str) -> str:
     if normalised not in SOLAR_POSITION_METHODS:
         valid = ", ".join(SOLAR_POSITION_METHODS)
         raise ValueError(f"Unknown solar position method {method!r}. Valid methods: {valid}")
+    return normalised
+
+
+def _resolve_diffuse_iam_method(method: str) -> str:
+    """Normalise and validate a diffuse-IAM method name."""
+    normalised = str(method).strip().lower()
+    if normalised not in DIFFUSE_IAM_METHODS:
+        valid = ", ".join(DIFFUSE_IAM_METHODS)
+        raise ValueError(f"Unknown diffuse IAM method {method!r}. Valid methods: {valid}")
     return normalised
 
 
@@ -244,6 +265,7 @@ def _compute_effective_irradiance_and_cell_temp(
     albedo: Optional[float] = None,
     surface_type: Optional[str] = None,
     model_perez: str = DEFAULT_PEREZ_MODEL,
+    diffuse_iam: str = DEFAULT_DIFFUSE_IAM,
 ):
     """Compute effective POA irradiance (with IAM) and cell temperature.
 
@@ -256,11 +278,14 @@ def _compute_effective_irradiance_and_cell_temp(
     ``SURFACE_TYPES``) sets the ground reflectance for the ground-diffuse
     component; when neither is given pvlib's 0.25 default applies.
     ``model_perez`` selects the Perez coefficient set (only used by the
-    ``"perez"`` model).
+    ``"perez"`` model). ``diffuse_iam`` selects whether IAM is also applied
+    to the diffuse components (see ``DIFFUSE_IAM_METHODS``); the default
+    ``"none"`` reproduces prior behaviour bit-for-bit.
     """
     model = _resolve_transposition_model(transposition_model)
     albedo, surface_type = _resolve_ground_reflectance(albedo, surface_type)
     model_perez = _resolve_perez_model(model_perez)
+    diffuse_iam = _resolve_diffuse_iam_method(diffuse_iam)
     dni, ghi, dhi = _extract_irradiance(weather_aligned)
     temp_air, wind_speed = _extract_met_data(weather_aligned)
 
@@ -305,7 +330,19 @@ def _compute_effective_irradiance_and_cell_temp(
     poa_global = np.nan_to_num(poa["poa_global"].values, nan=0.0)
     iam_clean = np.nan_to_num(np.asarray(iam, dtype=float), nan=0.0)
 
-    effective_irradiance = poa_direct * iam_clean + poa_diffuse
+    if diffuse_iam == "marion":
+        # Marion (2017) view-factor-integrated IAM on the diffuse components,
+        # using the same ashrae model as the beam IAM above. Transposition
+        # folds any horizon-brightening term into poa_sky_diffuse, so the sky
+        # multiplier covers it too.
+        poa_sky = np.nan_to_num(poa["poa_sky_diffuse"].values, nan=0.0)
+        poa_ground = np.nan_to_num(poa["poa_ground_diffuse"].values, nan=0.0)
+        multipliers = pvlib.iam.marion_diffuse("ashrae", surface_tilt)
+        sky_mult = np.nan_to_num(np.asarray(multipliers["sky"], dtype=float), nan=0.0)
+        ground_mult = np.nan_to_num(np.asarray(multipliers["ground"], dtype=float), nan=0.0)
+        effective_irradiance = poa_direct * iam_clean + poa_sky * sky_mult + poa_ground * ground_mult
+    else:
+        effective_irradiance = poa_direct * iam_clean + poa_diffuse
     temp_cell = pvlib.temperature.faiman(poa_global, temp_air, wind_speed)
     return effective_irradiance, temp_cell
 
@@ -401,6 +438,7 @@ def calculate_pv_production_dc(
     surface_type: Optional[str] = None,
     model_perez: str = DEFAULT_PEREZ_MODEL,
     solar_position: str = DEFAULT_SOLAR_POSITION,
+    diffuse_iam: str = DEFAULT_DIFFUSE_IAM,
 ) -> pd.Series:
     """
     Calculate PV DC production from weather data (fixed-tilt array).
@@ -444,6 +482,11 @@ def calculate_pv_production_dc(
             evaluated (one of ``SOLAR_POSITION_METHODS``). ``"mid-interval"``
             matches PVWatts/SAM for interval-averaged irradiance; the default
             ``"interval-start"`` reproduces prior behaviour bit-for-bit.
+        diffuse_iam: Whether IAM is also applied to the diffuse POA
+            components (one of ``DIFFUSE_IAM_METHODS``). ``"marion"``
+            weighs sky- and ground-diffuse with the view-factor-integrated
+            ashrae IAM; the default ``"none"`` (beam-only IAM) reproduces
+            prior behaviour bit-for-bit.
 
     Returns:
         pd.Series with DC power production in Watts (before inverter)
@@ -465,6 +508,7 @@ def calculate_pv_production_dc(
         albedo=albedo,
         surface_type=surface_type,
         model_perez=model_perez,
+        diffuse_iam=diffuse_iam,
     )
     dc_power = _dc_from_poa(
         effective_irradiance,
@@ -509,6 +553,7 @@ def calculate_pv_production_dc_tracking(
     surface_type: Optional[str] = None,
     model_perez: str = DEFAULT_PEREZ_MODEL,
     solar_position: str = DEFAULT_SOLAR_POSITION,
+    diffuse_iam: str = DEFAULT_DIFFUSE_IAM,
 ) -> pd.Series:
     """
     Calculate PV DC production for a tracking array (single- or dual-axis).
@@ -550,6 +595,9 @@ def calculate_pv_production_dc_tracking(
         solar_position: Where within each timestep the sun position is
             evaluated (one of ``SOLAR_POSITION_METHODS``); also drives the
             tracker rotation angles.
+        diffuse_iam: Whether IAM is also applied to the diffuse POA
+            components (one of ``DIFFUSE_IAM_METHODS``); the default
+            ``"none"`` reproduces prior behaviour bit-for-bit.
 
     Returns:
         pd.Series with DC power production in Watts (before inverter).
@@ -600,6 +648,7 @@ def calculate_pv_production_dc_tracking(
         albedo=albedo,
         surface_type=surface_type,
         model_perez=model_perez,
+        diffuse_iam=diffuse_iam,
     )
     dc_power = _dc_from_poa(
         effective_irradiance,
@@ -667,6 +716,7 @@ def calculate_pv_production_tmy(
     surface_type: Optional[str] = None,
     model_perez: str = DEFAULT_PEREZ_MODEL,
     solar_position: str = DEFAULT_SOLAR_POSITION,
+    diffuse_iam: str = DEFAULT_DIFFUSE_IAM,
 ) -> pd.Series:
     """
     Calculate PV DC production from TMY data.
@@ -701,6 +751,7 @@ def calculate_pv_production_tmy(
         surface_type=surface_type,
         model_perez=model_perez,
         solar_position=solar_position,
+        diffuse_iam=diffuse_iam,
     )
 
 
@@ -723,6 +774,7 @@ def calculate_pv_production_ac(
     surface_type: Optional[str] = None,
     model_perez: str = DEFAULT_PEREZ_MODEL,
     solar_position: str = DEFAULT_SOLAR_POSITION,
+    diffuse_iam: str = DEFAULT_DIFFUSE_IAM,
 ) -> pd.Series:
     """
     Calculate PV AC production from weather data.
@@ -770,6 +822,7 @@ def calculate_pv_production_ac(
         surface_type=surface_type,
         model_perez=model_perez,
         solar_position=solar_position,
+        diffuse_iam=diffuse_iam,
     )
 
     pv_peak_power_w = n_modules * pv_params.Mpp
@@ -916,6 +969,7 @@ def calculate_multi_array_production(
     surface_type: Optional[str] = None,
     model_perez: str = DEFAULT_PEREZ_MODEL,
     solar_position: str = DEFAULT_SOLAR_POSITION,
+    diffuse_iam: str = DEFAULT_DIFFUSE_IAM,
 ) -> pd.Series:
     """
     Calculate combined DC production from multiple PV arrays.
@@ -946,6 +1000,9 @@ def calculate_multi_array_production(
         surface_type: Default named ground cover (one of ``SURFACE_TYPES``);
             mutually exclusive with ``albedo``.
         model_perez: Default Perez coefficient set (one of ``PEREZ_MODELS``).
+        diffuse_iam: Whether IAM is also applied to the diffuse POA
+            components (one of ``DIFFUSE_IAM_METHODS``); function-level for
+            all arrays, like ``solar_position``.
 
     Returns:
         pd.Series with total DC power (watts)
@@ -996,6 +1053,7 @@ def calculate_multi_array_production(
                 surface_type=arr_surface_type,
                 model_perez=arr_model_perez,
                 solar_position=solar_position,
+                diffuse_iam=diffuse_iam,
             )
         elif tracking in ("single_axis", "dual_axis"):
             if verbose:
@@ -1032,6 +1090,7 @@ def calculate_multi_array_production(
                 surface_type=arr_surface_type,
                 model_perez=arr_model_perez,
                 solar_position=solar_position,
+                diffuse_iam=diffuse_iam,
             )
         else:
             raise ValueError(

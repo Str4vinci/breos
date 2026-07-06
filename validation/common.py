@@ -22,14 +22,15 @@ MONTH_LABELS = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "
 
 # Model configs the suite runs BREOS with. isotropic = shipped default;
 # perez = what the external references effectively use; perez_mid = perez plus
-# mid-interval solar position (the full PVWatts/SAM convention). Keys are the
-# model names stored in results/baseline JSONs; values are
-# calculate_pv_production_ac keyword overrides. The drift test recomputes
-# from this same mapping.
+# mid-interval solar position (the full PVWatts/SAM convention); perez_diffuse
+# = perez plus Marion diffuse IAM. Keys are the model names stored in
+# results/baseline JSONs; values are calculate_pv_production_ac keyword
+# overrides. The drift test recomputes from this same mapping.
 MODEL_CONFIGS = {
     "isotropic": {"transposition_model": "isotropic"},
     "perez": {"transposition_model": "perez"},
     "perez_mid": {"transposition_model": "perez", "solar_position": "mid-interval"},
+    "perez_diffuse": {"transposition_model": "perez", "diffuse_iam": "marion"},
 }
 
 

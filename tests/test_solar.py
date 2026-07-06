@@ -459,6 +459,57 @@ class TestSolarPosition:
         assert dc.sum() > 0
 
 
+class TestDiffuseIAM:
+    def _dc(self, weather, loc, pv_params, **kw):
+        return calculate_pv_production_dc(
+            weather_data=weather,
+            location=loc,
+            tilt=35,
+            surface_azimuth=180,
+            n_modules=1,
+            pv_params=pv_params,
+            freq="h",
+            **kw,
+        )
+
+    def test_default_matches_explicit_none(self, synthetic_weather, porto_location, pv_params):
+        # The default must reproduce the prior beam-only behaviour bit-for-bit.
+        default = self._dc(synthetic_weather, porto_location, pv_params)
+        explicit = self._dc(synthetic_weather, porto_location, pv_params, diffuse_iam="none")
+        pd.testing.assert_series_equal(default, explicit)
+
+    def test_marion_reduces_annual_yield(self, synthetic_weather, porto_location, pv_params):
+        # Diffuse IAM multipliers are < 1, so applying them can only remove
+        # energy; the size of the removal is bounded by the diffuse fraction
+        # (roughly 0.2-3% annually for a 35-degree fixed tilt).
+        none = self._dc(synthetic_weather, porto_location, pv_params, diffuse_iam="none").sum()
+        marion = self._dc(synthetic_weather, porto_location, pv_params, diffuse_iam="marion").sum()
+        assert marion < none
+        assert 0.002 < 1 - marion / none < 0.03
+
+    def test_case_insensitive(self, synthetic_weather, porto_location, pv_params):
+        lower = self._dc(synthetic_weather, porto_location, pv_params, diffuse_iam="marion")
+        upper = self._dc(synthetic_weather, porto_location, pv_params, diffuse_iam="Marion")
+        pd.testing.assert_series_equal(lower, upper)
+
+    def test_invalid_method_raises(self, synthetic_weather, porto_location, pv_params):
+        with pytest.raises(ValueError, match="Unknown diffuse IAM method"):
+            self._dc(synthetic_weather, porto_location, pv_params, diffuse_iam="martin")
+
+    def test_tracking_accepts_marion(self, synthetic_weather, porto_location, pv_params):
+        dc = calculate_pv_production_dc_tracking(
+            weather_data=synthetic_weather,
+            location=porto_location,
+            n_modules=1,
+            tracking="single_axis",
+            pv_params=pv_params,
+            freq="h",
+            diffuse_iam="marion",
+        )
+        assert (dc >= -0.01).all()
+        assert dc.sum() > 0
+
+
 class TestGroundReflectance:
     def _dc(self, weather, loc, pv_params, **kw):
         return calculate_pv_production_dc(

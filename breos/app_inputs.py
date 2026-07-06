@@ -111,6 +111,7 @@ def build_dc_system_base(cfg: dict[str, Any], resolved: ResolvedAppConfig, weath
         "surface_type": cfg["surface_type"],
         "model_perez": cfg["model_perez"],
         "solar_position": cfg["solar_position"],
+        "diffuse_iam": cfg["diffuse_iam"],
     }
 
     if resolved.pv_arrays:
