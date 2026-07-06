@@ -7,8 +7,12 @@ import json
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 FIXTURE_PATH = Path(__file__).parent / "fixtures" / "blast" / "blast_golden_soh_100d.json"
+MULTICONDITION_FIXTURE_PATH = (
+    Path(__file__).parent / "fixtures" / "blast" / "blast_parity_multicondition.json"
+)
 VENDORED_ROOT = Path(__file__).resolve().parents[1] / "breos" / "degradation" / "blast"
 
 MODEL_CLASSES = {
@@ -140,3 +144,67 @@ def test_vendored_blast_matches_golden_soh_fixture():
             actual["t_days"], expected["t_days"], rtol=0, atol=1e-12
         )
         np.testing.assert_allclose(actual["efc"], expected["efc"], rtol=0, atol=1e-12)
+
+
+def test_vendored_blast_parameters_match_untransformed_source():
+    """Every model's literal parameters equal the untransformed-source dump."""
+
+    fixture = json.loads(MULTICONDITION_FIXTURE_PATH.read_text())
+    assert fixture["schema"] == "blast-lite-breos-parity-multicondition-v1"
+    assert set(fixture["parameters"]) == set(MODEL_CLASSES)
+
+    for model_key, (module_name, class_name) in MODEL_CLASSES.items():
+        model = _load_class(module_name, class_name)()
+        expected = fixture["parameters"][model_key]
+
+        assert float(model.cap) == expected["cap"], model_key
+        actual_params = {k: float(v) for k, v in model._params_life.items()}
+        assert actual_params == expected["params_life"], model_key
+        actual_range = json.loads(json.dumps(model.experimental_range, default=float))
+        assert actual_range == expected["experimental_range"], model_key
+
+
+def test_vendored_blast_matches_multicondition_parity_fixture():
+    """Transform neutrality beyond the single-point golden fixture.
+
+    The conditions activate hot/cold calendar terms, deep-DOD and higher-rate
+    cycling terms, and intraday-varying temperature (the trapezoid-integration
+    path rewritten from ``np.trapz``). Trajectories were generated from the
+    untransformed source under numpy 1.x.
+    """
+
+    fixture = json.loads(MULTICONDITION_FIXTURE_PATH.read_text())
+    days = fixture["metadata"]["days_per_condition"]
+
+    for condition_name, condition in fixture["conditions"].items():
+        profile = condition["profile"]
+        t_secs = np.asarray(profile["time_s"], dtype=float)
+        soc = np.asarray(profile["soc"], dtype=float)
+        temperature_c = np.asarray(profile["temperature_c"], dtype=float)
+
+        for model_key, (module_name, class_name) in MODEL_CLASSES.items():
+            model = _load_class(module_name, class_name)()
+            q, efc = [], []
+            for _ in range(days):
+                model.update_battery_state(
+                    t_secs.copy(), soc.copy(), temperature_c.copy()
+                )
+                q.append(float(model.outputs["q"][-1]))
+                efc.append(float(model.stressors["efc"][-1]))
+
+            expected = condition["trajectories"][model_key]
+            err = f"{condition_name}/{model_key}"
+            np.testing.assert_allclose(q, expected["q"], rtol=0, atol=1e-12, err_msg=err)
+            np.testing.assert_allclose(
+                efc, expected["efc"], rtol=0, atol=1e-12, err_msg=err
+            )
+
+            expected_final = condition["final_outputs"][model_key]
+            actual_final = {
+                out_key: float(series[-1]) for out_key, series in model.outputs.items()
+            }
+            assert set(actual_final) == set(expected_final), err
+            for out_key, expected_value in expected_final.items():
+                assert actual_final[out_key] == pytest.approx(
+                    expected_value, abs=1e-12
+                ), f"{err}:{out_key}"
