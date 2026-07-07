@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from breos.degradation.engine import P1_BLAST_MODEL_KEYS
+from breos.degradation.engine import ENABLED_BLAST_MODEL_KEYS
 from breos.economics import CostParams, calculate_costs
 from breos.emissions import EmissionsParams
 from breos.pv_modules import MODULES, PVModuleParams, get_module
@@ -232,8 +232,8 @@ def validate_config(cfg: dict[str, Any]) -> None:
             raise ValueError("'degradation_engine=blast' is not supported with Monte Carlo yet")
         if cfg["enable_resistance_fade"]:
             raise ValueError("'degradation_engine=blast' cannot be combined with 'enable_resistance_fade'")
-        if cfg["blast_model"] not in P1_BLAST_MODEL_KEYS:
-            available = ", ".join(P1_BLAST_MODEL_KEYS)
+        if cfg["blast_model"] not in ENABLED_BLAST_MODEL_KEYS:
+            available = ", ".join(ENABLED_BLAST_MODEL_KEYS)
             raise ValueError(f"Unknown blast_model {cfg['blast_model']!r}. Available: {available}")
 
 

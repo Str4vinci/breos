@@ -20,6 +20,12 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   are asserted equal to the untransformed upstream source, and trajectories
   match at 1e-12 across hot/cold storage, deep and shallow-fast cycling, and
   intraday-varying temperature conditions.
+- All 14 BLAST chemistries are now selectable via `blast_model` (previously
+  only the two P1 models). Each simulated day is checked against the model's
+  published `experimental_range`; out-of-range temperature, depth-of-discharge,
+  SoC window, or C-rates warn once per stressor per battery lifetime that
+  results are extrapolated beyond the aging study. A 20-year per-chemistry
+  smoke test guards trajectory sanity.
 
 ## [0.3.3] - 2026-07-02
 

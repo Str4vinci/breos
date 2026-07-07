@@ -237,8 +237,11 @@ class TestAppValidation:
         )
         assert app._cfg["n_modules"] == 10
 
-    def test_blast_config_accepts_enabled_p1_models(self):
-        for blast_model in ("lfp_gr_250ah_prismatic", "nca_gr_panasonic_3ah"):
+    def test_blast_config_accepts_all_enabled_models(self):
+        from breos.degradation.engine import ENABLED_BLAST_MODEL_KEYS
+
+        assert len(ENABLED_BLAST_MODEL_KEYS) == 14
+        for blast_model in ENABLED_BLAST_MODEL_KEYS:
             app = App(
                 {
                     "location": "porto",
@@ -263,7 +266,7 @@ class TestAppValidation:
                 }
             )
 
-    def test_blast_config_rejects_non_p1_model(self):
+    def test_blast_config_rejects_unknown_model(self):
         with pytest.raises(ValueError, match="Unknown blast_model"):
             App(
                 {
@@ -272,7 +275,7 @@ class TestAppValidation:
                     "annual_consumption_kwh": 4000,
                     "battery_kwh": 5.0,
                     "degradation_engine": "blast",
-                    "blast_model": "nmc811_grsi_lgm50_5ah",
+                    "blast_model": "not_a_real_model",
                 }
             )
 

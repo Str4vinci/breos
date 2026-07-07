@@ -7,6 +7,7 @@ configuration, or replacement behavior.
 
 from __future__ import annotations
 
+import warnings
 from copy import deepcopy
 from typing import Any
 
@@ -32,6 +33,27 @@ BLAST_MODEL_CLASSES = {
 }
 
 P1_BLAST_MODEL_KEYS = ("lfp_gr_250ah_prismatic", "nca_gr_panasonic_3ah")
+
+# All 14 models are enabled: parameter fidelity and transform neutrality are
+# proven by the vendoring parity tests, and out-of-range operation is surfaced
+# by the experimental_range warnings emitted from BlastEngine.step().
+ENABLED_BLAST_MODEL_KEYS = tuple(BLAST_MODEL_CLASSES)
+
+# Days with less SoC swing than this are treated as storage: the cycling-only
+# ranges (dod, C-rates) are not checked against calendar-dominated days.
+_CYCLING_DOD_THRESHOLD = 0.01
+
+
+def _range_bounds(value: Any) -> tuple[float, float]:
+    """Normalize an experimental_range entry to (lo, hi).
+
+    Entries are either ``[lo, hi]`` or a single tested value (e.g. the LG M50
+    declares ``dod: [1]``), which collapses to a degenerate range.
+    """
+
+    if isinstance(value, (list, tuple)):
+        return float(min(value)), float(max(value))
+    return float(value), float(value)
 
 
 def _as_1d_float_array(name: str, values: Any) -> np.ndarray:
@@ -115,6 +137,7 @@ class BlastEngine:
             )
         self.blast_model_key = blast_model_key
         self._model_kwargs = dict(model_kwargs)
+        self._warned_ranges: set[str] = set()
         self.model = self._new_model()
 
     def _new_model(self):
@@ -126,8 +149,74 @@ class BlastEngine:
         t_secs, soc, temperature_c = normalize_step_inputs(
             t_secs_day, soc_abs_day, t_cell_day_c
         )
+        self._check_experimental_range(t_secs, soc, temperature_c)
         self.model.update_battery_state(t_secs, soc, temperature_c)
         return self.soh()
+
+    def _check_experimental_range(
+        self, t_secs: np.ndarray, soc: np.ndarray, temperature_c: np.ndarray
+    ) -> None:
+        """Warn (once per stressor per engine lifetime) on extrapolated inputs.
+
+        Ranges come from the vendored model's ``experimental_range``; outside
+        them the model runs but extrapolates beyond its aging study. Storage
+        days skip the cycling-only checks (dod, C-rates).
+        """
+
+        exp_range = getattr(self.model, "experimental_range", None) or {}
+        violations: dict[str, str] = {}
+
+        if "cycling_temperature" in exp_range:
+            lo, hi = _range_bounds(exp_range["cycling_temperature"])
+            t_min, t_max = float(np.min(temperature_c)), float(np.max(temperature_c))
+            if t_min < lo or t_max > hi:
+                violations["cycling_temperature"] = (
+                    f"{t_min:.1f}..{t_max:.1f} C vs tested [{lo:g}, {hi:g}] C"
+                )
+
+        day_dod = float(np.max(soc) - np.min(soc))
+        if day_dod > _CYCLING_DOD_THRESHOLD:
+            if "dod" in exp_range:
+                lo, hi = _range_bounds(exp_range["dod"])
+                if day_dod < lo or day_dod > hi:
+                    violations["dod"] = f"{day_dod:.2f} vs tested [{lo:g}, {hi:g}]"
+
+            if "soc" in exp_range:
+                lo, hi = _range_bounds(exp_range["soc"])
+                s_min, s_max = float(np.min(soc)), float(np.max(soc))
+                if s_min < lo - 1e-9 or s_max > hi + 1e-9:
+                    violations["soc"] = (
+                        f"{s_min:.2f}..{s_max:.2f} vs tested [{lo:g}, {hi:g}]"
+                    )
+
+            # Instantaneous C-rates, SoH-rescaled to nominal units the same
+            # way BLAST's own stressor extraction does; ignore storage noise.
+            rates = np.diff(soc) / (np.diff(t_secs) / 3600.0) * self.soh()
+            rates[np.abs(rates) < 1e-2] = 0.0
+            max_charge = float(np.max(rates))
+            max_discharge = float(-np.min(rates))
+            if "max_rate_charge" in exp_range:
+                _, hi = _range_bounds(exp_range["max_rate_charge"])
+                if max_charge > hi:
+                    violations["max_rate_charge"] = f"{max_charge:.2f}C vs tested {hi:g}C"
+            if "max_rate_discharge" in exp_range:
+                _, hi = _range_bounds(exp_range["max_rate_discharge"])
+                if max_discharge > hi:
+                    violations["max_rate_discharge"] = (
+                        f"{max_discharge:.2f}C vs tested {hi:g}C"
+                    )
+
+        for stressor, detail in violations.items():
+            if stressor in self._warned_ranges:
+                continue
+            self._warned_ranges.add(stressor)
+            warnings.warn(
+                f"blast_model '{self.blast_model_key}': daily {stressor} {detail} — "
+                "outside the aging study's tested range; degradation results are "
+                "extrapolated.",
+                UserWarning,
+                stacklevel=3,
+            )
 
     def soh(self) -> float:
         """Return current BLAST capacity fraction."""
@@ -138,6 +227,7 @@ class BlastEngine:
         """Reset to a fresh beginning-of-life model instance."""
 
         self.model = self._new_model()
+        self._warned_ranges = set()
 
     def state_snapshot(self, *, serializable: bool = True) -> dict[str, Any]:
         """Copy the model state required for cross-year threading."""
@@ -145,6 +235,7 @@ class BlastEngine:
         snapshot: dict[str, Any] = {
             "blast_model_key": self.blast_model_key,
             "model_kwargs": deepcopy(self._model_kwargs),
+            "warned_ranges": sorted(self._warned_ranges),
         }
         for group_name in self._ARRAY_GROUPS:
             group = getattr(self.model, group_name)
@@ -168,6 +259,7 @@ class BlastEngine:
             )
 
         engine = cls(blast_model_key, **snapshot.get("model_kwargs", {}))
+        engine._warned_ranges = set(snapshot.get("warned_ranges", ()))
         for group_name in cls._ARRAY_GROUPS:
             group = snapshot[group_name]
             setattr(

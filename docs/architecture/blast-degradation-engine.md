@@ -1,6 +1,8 @@
 # BLAST Degradation Engine
 
-**Status:** Phase 0-1 implemented locally; Phase 2+ planned
+**Status:** Phases 0-1 and 3 implemented (all 14 models enabled with
+`experimental_range` warnings); Phase 2 (chemistry profiles / CLI) and
+Phase 4 planned
 **Relates to:** ROADMAP "Additional Li-ion battery chemistries"
 **Owner:** BREOS maintainers
 
@@ -378,12 +380,19 @@ Phase 4 wires that loop — never silently run as native.
   merge-order) + full config/CLI plumbing (`--degradation-engine` /
   `--blast-model`; **retire** the legacy `battery_type` selector — see the
   resolved decision below).
-- **Phase 3a** — Enable the remaining **power-law** chemistries (LMO 2nd-life,
-  NMC811 M50/MJ1, NMC 50Ah B1/B2, NMC 75Ah A, NMC111 Sanyo, NMC-LTO);
-  per-chemistry smoke tests + `experimental_range` out-of-bounds warnings.
-- **Phase 3b** — Enable the **sigmoid / break-in / multi-mode** chemistries
-  (LFP Sony-Murata, NCA-Si Sony-Murata, NMC111 Kokam, NMC622 DENSO) — exercises
-  the sigmoid/exp/power-B kernels and multi-output handling.
+- **Phase 3 (implemented, both halves in one pass)** — All 14 chemistries
+  enabled: the multi-condition parity fixtures already exercised every kernel
+  (power-law, sigmoid, break-in, multi-mode) at 1e-12, so the planned 3a/3b
+  split collapsed. `BlastEngine.step()` checks each day against the model's
+  `experimental_range` (cycling temperature always; dod / SoC window /
+  charge & discharge C-rate on cycling days) and warns once per stressor per
+  engine lifetime — the dedup set threads through snapshots so continuation
+  years stay quiet, and `reset()` (replacement) re-arms it. A 20-year
+  per-chemistry smoke test pins finiteness, monotonic non-increasing SoH, and
+  a plausible 5-year band. Note from that smoke: some EV-derived power-law
+  models (LMO Leaf 2nd-life, NMC811 MJ1) extrapolate below zero SoH late in a
+  20-year *unmanaged* run — harmless in practice because EoL replacement
+  triggers long before, but library users disabling replacement should know.
 - **Phase 4 (later)** — **Monte Carlo BLAST support** (thread state through
   `montecarlo.py`'s own year loop — until then `blast` + MC raises);
   resistance-fade mapping for multi-mode models; fast/repeat mode for Monte

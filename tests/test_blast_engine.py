@@ -2,15 +2,28 @@
 
 from __future__ import annotations
 
+import warnings
+
 import numpy as np
 import pytest
 
 from breos.degradation.engine import (
     BLAST_MODEL_CLASSES,
+    ENABLED_BLAST_MODEL_KEYS,
     P1_BLAST_MODEL_KEYS,
     BlastEngine,
     build_endpoint_day,
 )
+
+
+def _deep_cycle_day() -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """One 25 C day cycling 0.9 -> 0.05 -> 0.9 (dod 0.85, slopes ~0.07C)."""
+
+    t_secs = np.arange(25, dtype=float) * 3600.0
+    down = np.linspace(0.9, 0.05, 13)
+    soc = np.concatenate([down, np.linspace(0.05, 0.9, 13)[1:]])
+    temperature_c = np.full(25, 25.0)
+    return t_secs, soc, temperature_c
 
 
 def _daily_profile() -> tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -152,3 +165,86 @@ def test_adapter_matches_vendored_simulate_battery_life_fixed_soc_storage():
             atol=1e-6,
             err_msg=model_key,
         )
+
+
+def test_range_warning_fires_once_and_survives_snapshot():
+    t_secs = np.arange(25, dtype=float) * 3600.0
+    soc = np.full(25, 0.55)
+    hot = np.full(25, 50.0)  # flagship tested cycling_temperature [10, 45] C
+
+    engine = BlastEngine("lfp_gr_250ah_prismatic")
+    with pytest.warns(UserWarning, match="cycling_temperature"):
+        engine.step(t_secs, soc, hot)
+
+    # Same violation again: deduplicated for the engine lifetime...
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        engine.step(t_secs, soc, hot)
+
+    # ...and the dedup state survives snapshot threading across years.
+    restored = BlastEngine.from_snapshot(
+        "lfp_gr_250ah_prismatic", engine.state_snapshot()
+    )
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        restored.step(t_secs, soc, hot)
+
+    # reset() models a battery replacement: a fresh cell warns anew.
+    engine.reset()
+    with pytest.warns(UserWarning, match="cycling_temperature"):
+        engine.step(t_secs, soc, hot)
+
+
+def test_range_warnings_cover_dod_and_charge_rate():
+    t_secs = np.arange(25, dtype=float) * 3600.0
+    temperature_c = np.full(25, 25.0)
+
+    # dod 0.3, below the flagship's tested [0.8, 1]
+    shallow = 0.55 + 0.15 * np.sin(np.linspace(0, 2 * np.pi, 25))
+    with pytest.warns(UserWarning, match="daily dod"):
+        BlastEngine("lfp_gr_250ah_prismatic").step(t_secs, shallow, temperature_c)
+
+    # 0.8 SoC in one hour: 0.8C charge, above the flagship's tested 0.65C
+    fast_charge = np.concatenate([[0.1], np.full(24, 0.9)])
+    with pytest.warns(UserWarning, match="max_rate_charge"):
+        BlastEngine("lfp_gr_250ah_prismatic").step(t_secs, fast_charge, temperature_c)
+
+
+def test_in_range_day_emits_no_warnings():
+    t_secs, soc, temperature_c = _deep_cycle_day()
+
+    engine = BlastEngine("lfp_gr_250ah_prismatic")
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        engine.step(t_secs, soc, temperature_c)
+
+
+def test_all_enabled_models_20yr_smoke():
+    """Design-doc Phase 3 gate: 20-year trajectory sanity for every model.
+
+    Uses BLAST's constant-input repeating fast path (non-conserve variant:
+    the conserve branch assumes a 'dod' stressor key some vendored models do
+    not define — an upstream quirk; the BREOS adapter never uses this path).
+    SoH must stay finite and monotonic non-increasing, be plausible within a
+    realistic service horizon (5 years), and not blow up over 20 unmanaged
+    years — some EV-derived power-law models extrapolate below zero late in
+    an unmanaged run, which real BREOS runs never reach because replacement
+    triggers at EoL first.
+    """
+
+    assert set(ENABLED_BLAST_MODEL_KEYS) == set(BLAST_MODEL_CLASSES)
+    t_secs, soc, temperature_c = _deep_cycle_day()
+    days = 20 * 365
+
+    for model_key, model_cls in BLAST_MODEL_CLASSES.items():
+        model = model_cls()
+        model.update_battery_state(t_secs.copy(), soc.copy(), temperature_c.copy())
+        for _ in range(days - 1):
+            model.update_battery_state_repeating(is_conserve_energy_throughput=False)
+
+        q = np.asarray(model.outputs["q"], dtype=float)
+        assert np.all(np.isfinite(q)), model_key
+        assert model.stressors["t_days"][-1] == pytest.approx(days)
+        assert np.all(np.diff(q) <= 1e-12), model_key
+        assert 0.4 < q[5 * 365] <= 1.0, f"{model_key}: q@5y={q[5 * 365]:.3f}"
+        assert q[-1] > -0.5, f"{model_key}: q@20y={q[-1]:.3f}"
