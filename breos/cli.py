@@ -22,6 +22,7 @@ from breos.solar import (
     PEREZ_MODELS,
     SOLAR_POSITION_METHODS,
     SURFACE_TYPES,
+    TEMPERATURE_MODELS,
     TRANSPOSITION_MODELS,
     resolve_pvwatts_losses,
 )
@@ -78,6 +79,7 @@ def _build_config(args: argparse.Namespace) -> dict[str, Any]:
     _add_override(overrides, "model_perez", args.model_perez)
     _add_override(overrides, "solar_position", args.solar_position)
     _add_override(overrides, "diffuse_iam", args.diffuse_iam)
+    _add_override(overrides, "temperature_model", args.temperature_model)
     _add_override(overrides, "resolution", args.resolution)
     _add_override(overrides, "projection_years", args.projection_years)
     _add_override(overrides, "inflation_rate", args.inflation_rate)
@@ -144,6 +146,7 @@ def _resolved_config_summary(config: dict[str, Any]) -> dict[str, Any]:
             "model_perez": cfg["model_perez"],
             "solar_position": cfg["solar_position"],
             "diffuse_iam": cfg["diffuse_iam"],
+            "temperature_model": cfg["temperature_model"],
             "pv_loss_overrides": cfg["pv_loss_overrides"],
             "losses": resolve_pvwatts_losses(cfg["pv_loss_overrides"]),
         },
@@ -516,6 +519,16 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "Whether IAM is also applied to the diffuse POA components. 'marion' weighs sky- and "
             "ground-diffuse with the view-factor-integrated ashrae IAM (default: none, beam-only)."
+        ),
+    )
+    run.add_argument(
+        "--temperature-model",
+        dest="temperature_model",
+        choices=TEMPERATURE_MODELS,
+        help=(
+            "Cell-temperature model / mounting preset. The pvsyst-* presets use PVsyst's documented "
+            "mounting coefficients; pick semi-integrated or insulated for roof mounts "
+            "(default: faiman, open rack)."
         ),
     )
     run.add_argument("--resolution", choices=("h", "15min"), help="Simulation time resolution.")

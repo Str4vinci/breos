@@ -510,6 +510,80 @@ class TestDiffuseIAM:
         assert dc.sum() > 0
 
 
+class TestTemperatureModel:
+    def _annual(self, weather, loc, pv_params, **kw):
+        return calculate_pv_production_dc(
+            weather_data=weather,
+            location=loc,
+            tilt=35,
+            surface_azimuth=180,
+            n_modules=1,
+            pv_params=pv_params,
+            freq="h",
+            **kw,
+        ).sum()
+
+    def test_default_matches_explicit_faiman(self, synthetic_weather, porto_location, pv_params):
+        # The default must reproduce the prior faiman behaviour bit-for-bit.
+        default = calculate_pv_production_dc(
+            weather_data=synthetic_weather,
+            location=porto_location,
+            tilt=35,
+            surface_azimuth=180,
+            n_modules=1,
+            pv_params=pv_params,
+            freq="h",
+        )
+        explicit = calculate_pv_production_dc(
+            weather_data=synthetic_weather,
+            location=porto_location,
+            tilt=35,
+            surface_azimuth=180,
+            n_modules=1,
+            pv_params=pv_params,
+            freq="h",
+            temperature_model="faiman",
+        )
+        pd.testing.assert_series_equal(default, explicit)
+
+    def test_worse_ventilation_lowers_yield(self, synthetic_weather, porto_location, pv_params):
+        # Lower heat-loss coefficients mean hotter cells and less energy:
+        # free-standing > semi-integrated > insulated, strictly.
+        free = self._annual(synthetic_weather, porto_location, pv_params, temperature_model="pvsyst-freestanding")
+        semi = self._annual(synthetic_weather, porto_location, pv_params, temperature_model="pvsyst-semi-integrated")
+        insulated = self._annual(synthetic_weather, porto_location, pv_params, temperature_model="pvsyst-insulated")
+        assert free > semi > insulated
+
+    def test_roof_preset_yields_less_than_faiman(self, synthetic_weather, porto_location, pv_params):
+        # The headline claim: the open-rack default over-predicts roof mounts.
+        faiman = self._annual(synthetic_weather, porto_location, pv_params, temperature_model="faiman")
+        semi = self._annual(synthetic_weather, porto_location, pv_params, temperature_model="pvsyst-semi-integrated")
+        assert semi < faiman
+        assert 0.001 < 1 - semi / faiman < 0.10
+
+    def test_case_insensitive(self, synthetic_weather, porto_location, pv_params):
+        lower = self._annual(synthetic_weather, porto_location, pv_params, temperature_model="pvsyst-insulated")
+        upper = self._annual(synthetic_weather, porto_location, pv_params, temperature_model="PVsyst-Insulated")
+        assert lower == upper
+
+    def test_invalid_model_raises(self, synthetic_weather, porto_location, pv_params):
+        with pytest.raises(ValueError, match="Unknown temperature model"):
+            self._annual(synthetic_weather, porto_location, pv_params, temperature_model="sapm")
+
+    def test_tracking_accepts_preset(self, synthetic_weather, porto_location, pv_params):
+        dc = calculate_pv_production_dc_tracking(
+            weather_data=synthetic_weather,
+            location=porto_location,
+            n_modules=1,
+            tracking="single_axis",
+            pv_params=pv_params,
+            freq="h",
+            temperature_model="pvsyst-semi-integrated",
+        )
+        assert (dc >= -0.01).all()
+        assert dc.sum() > 0
+
+
 class TestGroundReflectance:
     def _dc(self, weather, loc, pv_params, **kw):
         return calculate_pv_production_dc(

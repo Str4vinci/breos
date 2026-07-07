@@ -41,6 +41,7 @@ weather/data access, load profiles, PV system data, and cost assumptions; see
 | `model_perez` | `"allsitescomposite1990"` | Perez coefficient set; only used when `transposition_model = "perez"` |
 | `solar_position` | `"interval-start"` | Where within each timestep the sun position is evaluated. `"mid-interval"` matches the PVWatts/SAM convention for interval-averaged weather (hourly value labelled 07:00 = 07:00–08:00 average → 07:30 sun) |
 | `diffuse_iam` | `"none"` | Whether the incidence-angle modifier is also applied to the diffuse POA components. `"marion"` weighs sky- and ground-diffuse with the view-factor-integrated ashrae IAM (Marion 2017); the default applies IAM to beam only, a known ~0.5–1% overestimate |
+| `temperature_model` | `"faiman"` | Cell-temperature model / mounting preset. `"pvsyst-freestanding"`, `"pvsyst-semi-integrated"`, and `"pvsyst-insulated"` use PVsyst's documented mounting coefficients — pick a roof preset for rooftop systems; the default Faiman open-rack coefficients run cool for them |
 | `resolution` | `"h"` | Time resolution (`"h"` or `"15min"`) |
 | `projection_years` | `20` | Economic projection horizon |
 | `cost_preset` | `None` | Cost preset key from packaged defaults |

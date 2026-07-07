@@ -130,6 +130,29 @@ DIFFUSE_IAM_METHODS = (
 )
 DEFAULT_DIFFUSE_IAM = "none"
 
+# Cell-temperature model and mounting presets. ``faiman`` is pvlib's Faiman
+# (2008) model with its open-rack default coefficients (u0=25, u1=6.84) —
+# the default and the only prior behaviour. The ``pvsyst-*`` presets use
+# pvlib's PVsyst cell model with its documented mounting parameter sets:
+# free-standing coefficients run cool for roof-mounted systems, so rooftop
+# studies should pick the mounting-appropriate preset (``semi-integrated``
+# for close roof mounts with a rear air gap, ``insulated`` for fully
+# building-integrated modules with no rear ventilation).
+TEMPERATURE_MODELS = (
+    "faiman",
+    "pvsyst-freestanding",
+    "pvsyst-semi-integrated",
+    "pvsyst-insulated",
+)
+DEFAULT_TEMPERATURE_MODEL = "faiman"
+
+# pvsyst-* preset -> key into pvlib's TEMPERATURE_MODEL_PARAMETERS["pvsyst"].
+_PVSYST_MOUNTING = {
+    "pvsyst-freestanding": "freestanding",
+    "pvsyst-semi-integrated": "semi_integrated",
+    "pvsyst-insulated": "insulated",
+}
+
 
 def _resolve_transposition_model(model: str) -> str:
     """Normalise and validate a sky-diffusion transposition model name."""
@@ -155,6 +178,15 @@ def _resolve_diffuse_iam_method(method: str) -> str:
     if normalised not in DIFFUSE_IAM_METHODS:
         valid = ", ".join(DIFFUSE_IAM_METHODS)
         raise ValueError(f"Unknown diffuse IAM method {method!r}. Valid methods: {valid}")
+    return normalised
+
+
+def _resolve_temperature_model(model: str) -> str:
+    """Normalise and validate a cell-temperature model / mounting preset name."""
+    normalised = str(model).strip().lower()
+    if normalised not in TEMPERATURE_MODELS:
+        valid = ", ".join(TEMPERATURE_MODELS)
+        raise ValueError(f"Unknown temperature model {model!r}. Valid models: {valid}")
     return normalised
 
 
@@ -266,6 +298,7 @@ def _compute_effective_irradiance_and_cell_temp(
     surface_type: Optional[str] = None,
     model_perez: str = DEFAULT_PEREZ_MODEL,
     diffuse_iam: str = DEFAULT_DIFFUSE_IAM,
+    temperature_model: str = DEFAULT_TEMPERATURE_MODEL,
 ):
     """Compute effective POA irradiance (with IAM) and cell temperature.
 
@@ -280,12 +313,17 @@ def _compute_effective_irradiance_and_cell_temp(
     ``model_perez`` selects the Perez coefficient set (only used by the
     ``"perez"`` model). ``diffuse_iam`` selects whether IAM is also applied
     to the diffuse components (see ``DIFFUSE_IAM_METHODS``); the default
-    ``"none"`` reproduces prior behaviour bit-for-bit.
+    ``"none"`` reproduces prior behaviour bit-for-bit. ``temperature_model``
+    selects the cell-temperature model / mounting preset (see
+    ``TEMPERATURE_MODELS``); the default ``"faiman"`` reproduces prior
+    behaviour bit-for-bit, and the pvsyst presets use pvlib's default
+    ``module_efficiency``/``alpha_absorption``.
     """
     model = _resolve_transposition_model(transposition_model)
     albedo, surface_type = _resolve_ground_reflectance(albedo, surface_type)
     model_perez = _resolve_perez_model(model_perez)
     diffuse_iam = _resolve_diffuse_iam_method(diffuse_iam)
+    temperature_model = _resolve_temperature_model(temperature_model)
     dni, ghi, dhi = _extract_irradiance(weather_aligned)
     temp_air, wind_speed = _extract_met_data(weather_aligned)
 
@@ -343,7 +381,12 @@ def _compute_effective_irradiance_and_cell_temp(
         effective_irradiance = poa_direct * iam_clean + poa_sky * sky_mult + poa_ground * ground_mult
     else:
         effective_irradiance = poa_direct * iam_clean + poa_diffuse
-    temp_cell = pvlib.temperature.faiman(poa_global, temp_air, wind_speed)
+
+    if temperature_model == "faiman":
+        temp_cell = pvlib.temperature.faiman(poa_global, temp_air, wind_speed)
+    else:
+        params = pvlib.temperature.TEMPERATURE_MODEL_PARAMETERS["pvsyst"][_PVSYST_MOUNTING[temperature_model]]
+        temp_cell = pvlib.temperature.pvsyst_cell(poa_global, temp_air, wind_speed, **params)
     return effective_irradiance, temp_cell
 
 
@@ -439,6 +482,7 @@ def calculate_pv_production_dc(
     model_perez: str = DEFAULT_PEREZ_MODEL,
     solar_position: str = DEFAULT_SOLAR_POSITION,
     diffuse_iam: str = DEFAULT_DIFFUSE_IAM,
+    temperature_model: str = DEFAULT_TEMPERATURE_MODEL,
 ) -> pd.Series:
     """
     Calculate PV DC production from weather data (fixed-tilt array).
@@ -487,6 +531,11 @@ def calculate_pv_production_dc(
             weighs sky- and ground-diffuse with the view-factor-integrated
             ashrae IAM; the default ``"none"`` (beam-only IAM) reproduces
             prior behaviour bit-for-bit.
+        temperature_model: Cell-temperature model / mounting preset (one of
+            ``TEMPERATURE_MODELS``). The ``pvsyst-*`` presets use pvlib's
+            PVsyst cell model with its documented mounting coefficients;
+            the default ``"faiman"`` (open rack) reproduces prior behaviour
+            bit-for-bit.
 
     Returns:
         pd.Series with DC power production in Watts (before inverter)
@@ -509,6 +558,7 @@ def calculate_pv_production_dc(
         surface_type=surface_type,
         model_perez=model_perez,
         diffuse_iam=diffuse_iam,
+        temperature_model=temperature_model,
     )
     dc_power = _dc_from_poa(
         effective_irradiance,
@@ -554,6 +604,7 @@ def calculate_pv_production_dc_tracking(
     model_perez: str = DEFAULT_PEREZ_MODEL,
     solar_position: str = DEFAULT_SOLAR_POSITION,
     diffuse_iam: str = DEFAULT_DIFFUSE_IAM,
+    temperature_model: str = DEFAULT_TEMPERATURE_MODEL,
 ) -> pd.Series:
     """
     Calculate PV DC production for a tracking array (single- or dual-axis).
@@ -598,6 +649,9 @@ def calculate_pv_production_dc_tracking(
         diffuse_iam: Whether IAM is also applied to the diffuse POA
             components (one of ``DIFFUSE_IAM_METHODS``); the default
             ``"none"`` reproduces prior behaviour bit-for-bit.
+        temperature_model: Cell-temperature model / mounting preset (one of
+            ``TEMPERATURE_MODELS``); the default ``"faiman"`` (open rack)
+            reproduces prior behaviour bit-for-bit.
 
     Returns:
         pd.Series with DC power production in Watts (before inverter).
@@ -649,6 +703,7 @@ def calculate_pv_production_dc_tracking(
         surface_type=surface_type,
         model_perez=model_perez,
         diffuse_iam=diffuse_iam,
+        temperature_model=temperature_model,
     )
     dc_power = _dc_from_poa(
         effective_irradiance,
@@ -717,6 +772,7 @@ def calculate_pv_production_tmy(
     model_perez: str = DEFAULT_PEREZ_MODEL,
     solar_position: str = DEFAULT_SOLAR_POSITION,
     diffuse_iam: str = DEFAULT_DIFFUSE_IAM,
+    temperature_model: str = DEFAULT_TEMPERATURE_MODEL,
 ) -> pd.Series:
     """
     Calculate PV DC production from TMY data.
@@ -752,6 +808,7 @@ def calculate_pv_production_tmy(
         model_perez=model_perez,
         solar_position=solar_position,
         diffuse_iam=diffuse_iam,
+        temperature_model=temperature_model,
     )
 
 
@@ -775,6 +832,7 @@ def calculate_pv_production_ac(
     model_perez: str = DEFAULT_PEREZ_MODEL,
     solar_position: str = DEFAULT_SOLAR_POSITION,
     diffuse_iam: str = DEFAULT_DIFFUSE_IAM,
+    temperature_model: str = DEFAULT_TEMPERATURE_MODEL,
 ) -> pd.Series:
     """
     Calculate PV AC production from weather data.
@@ -823,6 +881,7 @@ def calculate_pv_production_ac(
         model_perez=model_perez,
         solar_position=solar_position,
         diffuse_iam=diffuse_iam,
+        temperature_model=temperature_model,
     )
 
     pv_peak_power_w = n_modules * pv_params.Mpp
@@ -970,6 +1029,7 @@ def calculate_multi_array_production(
     model_perez: str = DEFAULT_PEREZ_MODEL,
     solar_position: str = DEFAULT_SOLAR_POSITION,
     diffuse_iam: str = DEFAULT_DIFFUSE_IAM,
+    temperature_model: str = DEFAULT_TEMPERATURE_MODEL,
 ) -> pd.Series:
     """
     Calculate combined DC production from multiple PV arrays.
@@ -1003,6 +1063,9 @@ def calculate_multi_array_production(
         diffuse_iam: Whether IAM is also applied to the diffuse POA
             components (one of ``DIFFUSE_IAM_METHODS``); function-level for
             all arrays, like ``solar_position``.
+        temperature_model: Cell-temperature model / mounting preset (one of
+            ``TEMPERATURE_MODELS``); function-level for all arrays, like
+            ``solar_position``.
 
     Returns:
         pd.Series with total DC power (watts)
@@ -1054,6 +1117,7 @@ def calculate_multi_array_production(
                 model_perez=arr_model_perez,
                 solar_position=solar_position,
                 diffuse_iam=diffuse_iam,
+                temperature_model=temperature_model,
             )
         elif tracking in ("single_axis", "dual_axis"):
             if verbose:
@@ -1091,6 +1155,7 @@ def calculate_multi_array_production(
                 model_perez=arr_model_perez,
                 solar_position=solar_position,
                 diffuse_iam=diffuse_iam,
+                temperature_model=temperature_model,
             )
         else:
             raise ValueError(

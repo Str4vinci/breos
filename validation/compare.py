@@ -58,6 +58,7 @@ def build_rows(results: dict):
         perez = res["models"]["perez"]["annual_kwh"]
         perez_mid = (res["models"].get("perez_mid") or {}).get("annual_kwh")
         perez_diffuse = (res["models"].get("perez_diffuse") or {}).get("annual_kwh")
+        perez_roof = (res["models"].get("perez_roof") or {}).get("annual_kwh")
         pvgis_annual = pvgis.get("annual_kwh")
         pvwatts_annual = pvwatts.get("annual_kwh")
 
@@ -89,6 +90,8 @@ def build_rows(results: dict):
                 "pvgis_dev_iso": _pct(iso, pvgis_annual),
                 "pvgis_dev_mid": _pct(perez_mid, pvgis_annual) if perez_mid is not None else None,
                 "pvgis_dev_diffuse": _pct(perez_diffuse, pvgis_annual) if perez_diffuse is not None else None,
+                "perez_roof": perez_roof,
+                "roof_delta": _pct(perez_roof, perez) if perez_roof is not None else None,
                 "pvwatts": pvwatts_annual,
                 "pvwatts_dev": _pct(perez, pvwatts_annual),
                 "monthly_dev_max": monthly_dev_max,
@@ -104,7 +107,7 @@ def print_table(rows, results):
     print(f"\nBREOS {results['breos_version']} validation — annual AC yield (kWh), 4 kWp system")
     header = (
         f"{'location':<16} {'BREOS iso':>10} {'BREOS perez':>12} {'perez+mid':>10} {'perez+diam':>10} {'PVGIS':>8} "
-        f"{'Δperez':>8} {'Δ+mid':>8} {'Δ+diam':>8} {'Δiso':>8} {'PVWatts':>8} {'Δperez':>8}  notes"
+        f"{'Δperez':>8} {'Δ+mid':>8} {'Δ+diam':>8} {'Δiso':>8} {'roofΔ':>8} {'PVWatts':>8} {'Δperez':>8}  notes"
     )
     print(header)
     print("-" * len(header))
@@ -114,6 +117,7 @@ def print_table(rows, results):
             f"{_fmt_kwh(r['perez_diffuse']):>10} {_fmt_kwh(r['pvgis']):>8} "
             f"{_fmt_pct(r['pvgis_dev']):>8} {_fmt_pct(r['pvgis_dev_mid']):>8} "
             f"{_fmt_pct(r['pvgis_dev_diffuse']):>8} {_fmt_pct(r['pvgis_dev_iso']):>8} "
+            f"{_fmt_pct(r['roof_delta']):>8} "
             f"{_fmt_kwh(r['pvwatts']):>8} {_fmt_pct(r['pvwatts_dev']):>8}  {r['notes']}"
         )
 
@@ -135,12 +139,16 @@ def write_report(rows, results):
         "PVWatts uses NSRDB/international station data). The tight regression guarantee "
         "is the baseline test in `tests/test_validation_drift.py`; these bands catch gross drift.",
         "",
+        "The roof-mount column is the yield delta of `perez_roof` (PVsyst semi-integrated "
+        "thermal preset) against `perez` (free-standing) — a documented model-choice effect, "
+        "not a comparison against the free-standing references.",
+        "",
         "## Annual AC yield (kWh)",
         "",
         "| Location | BREOS isotropic | BREOS perez | BREOS perez+mid-interval | BREOS perez+diffuse-IAM "
         "| PVGIS PVcalc | Δ perez vs PVGIS | Δ perez+mid vs PVGIS | Δ perez+diffuse vs PVGIS "
-        "| PVWatts v8 | Δ perez vs PVWatts | Notes |",
-        "|---|---|---|---|---|---|---|---|---|---|---|---|",
+        "| Roof-mount yield Δ | PVWatts v8 | Δ perez vs PVWatts | Notes |",
+        "|---|---|---|---|---|---|---|---|---|---|---|---|---|",
     ]
     for r in rows:
         lines.append(
@@ -148,6 +156,7 @@ def write_report(rows, results):
             f"| {_fmt_kwh(r['perez_diffuse'])} "
             f"| {_fmt_kwh(r['pvgis'])} | {_fmt_pct(r['pvgis_dev'])} | {_fmt_pct(r['pvgis_dev_mid'])} "
             f"| {_fmt_pct(r['pvgis_dev_diffuse'])} "
+            f"| {_fmt_pct(r['roof_delta'])} "
             f"| {_fmt_kwh(r['pvwatts'])} | {_fmt_pct(r['pvwatts_dev'])} "
             f"| {r['notes']} |"
         )
