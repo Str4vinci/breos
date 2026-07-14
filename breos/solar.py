@@ -129,6 +129,8 @@ DIFFUSE_IAM_METHODS = (
     "marion",
 )
 DEFAULT_DIFFUSE_IAM = "none"
+_MARION_DIFFUSE_GRID_STEP_DEG = 0.5
+_marion_diffuse_grid_cache: Dict[tuple[float, float, float], tuple[np.ndarray, Dict[str, np.ndarray]]] = {}
 
 # Cell-temperature model and mounting presets. ``faiman`` is pvlib's Faiman
 # (2008) model with its open-rack default coefficients (u0=25, u1=6.84) —
@@ -179,6 +181,45 @@ def _resolve_diffuse_iam_method(method: str) -> str:
         valid = ", ".join(DIFFUSE_IAM_METHODS)
         raise ValueError(f"Unknown diffuse IAM method {method!r}. Valid methods: {valid}")
     return normalised
+
+
+def _marion_diffuse_ashrae(surface_tilt):
+    """Return Marion diffuse IAM for ashrae, interpolating large tilt arrays.
+
+    pvlib's exact Marion integration is fast for fixed tilt but expensive for
+    tracker arrays with thousands of distinct angles. The integrated
+    sky/ground multipliers are smooth over tilt, so a cached 0.5 degree grid
+    keeps tracker runs tractable without changing the scalar fixed-tilt path.
+    """
+    tilt_array = np.asarray(surface_tilt, dtype=float)
+    if tilt_array.ndim == 0 or tilt_array.size <= 16:
+        return pvlib.iam.marion_diffuse("ashrae", surface_tilt)
+
+    finite = tilt_array[np.isfinite(tilt_array)]
+    if finite.size == 0:
+        zeros = np.zeros_like(tilt_array, dtype=float)
+        return {"sky": zeros, "ground": zeros}
+
+    step = _MARION_DIFFUSE_GRID_STEP_DEG
+    lo = math.floor(float(finite.min()) / step) * step
+    hi = math.ceil(float(finite.max()) / step) * step
+    key = (lo, hi, step)
+
+    if key not in _marion_diffuse_grid_cache:
+        grid = np.arange(lo, hi + step / 2.0, step)
+        values = {"sky": [], "ground": []}
+        for tilt in grid:
+            exact = pvlib.iam.marion_diffuse("ashrae", float(tilt))
+            values["sky"].append(float(exact["sky"]))
+            values["ground"].append(float(exact["ground"]))
+        _marion_diffuse_grid_cache[key] = (
+            grid,
+            {region: np.asarray(region_values) for region, region_values in values.items()},
+        )
+
+    grid, values = _marion_diffuse_grid_cache[key]
+    interp_tilt = np.nan_to_num(tilt_array, nan=lo)
+    return {region: np.interp(interp_tilt, grid, region_values) for region, region_values in values.items()}
 
 
 def _resolve_temperature_model(model: str) -> str:
@@ -375,7 +416,7 @@ def _compute_effective_irradiance_and_cell_temp(
         # multiplier covers it too.
         poa_sky = np.nan_to_num(poa["poa_sky_diffuse"].values, nan=0.0)
         poa_ground = np.nan_to_num(poa["poa_ground_diffuse"].values, nan=0.0)
-        multipliers = pvlib.iam.marion_diffuse("ashrae", surface_tilt)
+        multipliers = _marion_diffuse_ashrae(surface_tilt)
         sky_mult = np.nan_to_num(np.asarray(multipliers["sky"], dtype=float), nan=0.0)
         ground_mult = np.nan_to_num(np.asarray(multipliers["ground"], dtype=float), nan=0.0)
         effective_irradiance = poa_direct * iam_clean + poa_sky * sky_mult + poa_ground * ground_mult
