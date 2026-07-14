@@ -11,6 +11,24 @@ from breos.runners import SimulationArtifacts, run_app_simulation
 from breos.runners import app as app_runner
 from breos.runners.app import SimulationArtifacts as AppSimulationArtifacts
 from breos.runners.app import run_app_simulation as run_app_runner
+from breos.solar import PVProductionBreakdown
+
+
+def _pv_breakdown(pv: pd.Series) -> PVProductionBreakdown:
+    zeros = pd.Series(0.0, index=pv.index)
+    return PVProductionBreakdown(
+        horizontal_reference_dc=pv,
+        poa_global_dc=pv,
+        effective_irradiance_dc=pv,
+        module_dc=pv,
+        dc_after_static_losses=pv,
+        dc_after_losses=pv,
+        pvwatts_component_losses={},
+        pvwatts_components_pct={},
+        pvwatts_combined_pct=0.0,
+        age_degradation_pct=0.0,
+        age_degradation_loss=zeros,
+    )
 
 
 def test_app_runner_exports_are_available_from_runner_package():
@@ -28,6 +46,7 @@ def test_app_runner_native_default_matches_explicit_native(monkeypatch):
         dc_system_base=pv,
         load_data=load,
         temperature_series=temperature,
+        pv_breakdown=_pv_breakdown(pv),
     )
 
     monkeypatch.setattr(app_runner, "prepare_simulation_inputs", lambda cfg, resolved, deps: inputs)
@@ -44,6 +63,9 @@ def test_app_runner_native_default_matches_explicit_native(monkeypatch):
         "n_modules": 1,
         "inverter_loading_ratio": 1.25,
         "battery_rte": None,
+        "battery_max_charge_power_w": None,
+        "battery_max_discharge_power_w": None,
+        "enable_resistance_fade": False,
         "battery_eol_percentage": 0.70,
         "battery_max_soc": 0.90,
         "battery_min_soc": 0.10,
@@ -81,6 +103,7 @@ def test_app_runner_threads_blast_state_across_projection_years(monkeypatch):
         dc_system_base=one_day_pv,
         load_data=one_day_load,
         temperature_series=one_day_temperature,
+        pv_breakdown=_pv_breakdown(one_day_pv),
     )
 
     monkeypatch.setattr(app_runner, "prepare_simulation_inputs", lambda cfg, resolved, deps: inputs)
@@ -104,6 +127,9 @@ def test_app_runner_threads_blast_state_across_projection_years(monkeypatch):
         "n_modules": 1,
         "inverter_loading_ratio": 1.25,
         "battery_rte": None,
+        "battery_max_charge_power_w": None,
+        "battery_max_discharge_power_w": None,
+        "enable_resistance_fade": False,
         "battery_eol_percentage": 0.70,
         "battery_max_soc": 0.90,
         "battery_min_soc": 0.10,
