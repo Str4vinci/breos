@@ -2,7 +2,7 @@
 
 All notable changes to BREOS are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/).
 
-## [Unreleased]
+## [0.3.4] - 2026-07-14
 
 ### Added
 - A versioned, explicit DC/AC timestep energy ledger now reports PV routing,

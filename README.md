@@ -316,13 +316,13 @@ pv_dc = calculate_pv_production_dc(weather, location, tilt=35, surface_azimuth=1
 # ...
 ```
 
-## Version 0.3.3 Scope
+## Version 0.3.4 Scope
 
-BREOS 0.3.3 focuses on PV and stationary-battery simulation, economic
-analysis, emissions, Monte Carlo uncertainty studies, PV/battery sizing, and
-serial parameter sweeps. The public API is centered on `breos.App`, with
-lower-level modules available for users who need to assemble their own study
-pipeline.
+BREOS 0.3.4 adds an explicit DC/AC energy ledger, cross-year battery-state
+continuity, reconciled PV loss reporting, optimizer/App parity, and a standing
+multi-site validation suite. It also adds opt-in solar-position, diffuse-IAM,
+and mounting-temperature models while keeping `breos.App` as the stable public
+facade and retaining compatibility aliases for existing result fields.
 
 ## Weather Data Note
 
