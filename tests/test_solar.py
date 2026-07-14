@@ -386,6 +386,79 @@ class TestTranspositionModel:
         assert per_array.sum() != pytest.approx(default_iso.sum())
 
 
+class TestSolarPosition:
+    def _dc(self, weather, loc, pv_params, **kw):
+        return calculate_pv_production_dc(
+            weather_data=weather,
+            location=loc,
+            tilt=35,
+            surface_azimuth=180,
+            n_modules=1,
+            pv_params=pv_params,
+            freq="h",
+            **kw,
+        )
+
+    def test_default_matches_explicit_interval_start(self, synthetic_weather, porto_location, pv_params):
+        # The default must reproduce the prior behaviour bit-for-bit.
+        default = self._dc(synthetic_weather, porto_location, pv_params)
+        explicit = self._dc(synthetic_weather, porto_location, pv_params, solar_position="interval-start")
+        pd.testing.assert_series_equal(default, explicit)
+
+    def test_mid_interval_shifts_output_but_keeps_index(self, synthetic_weather, porto_location, pv_params):
+        start = self._dc(synthetic_weather, porto_location, pv_params, solar_position="interval-start")
+        mid = self._dc(synthetic_weather, porto_location, pv_params, solar_position="mid-interval")
+        # Same label grid, different sun geometry per step.
+        assert mid.index.equals(start.index)
+        assert not mid.equals(start)
+        # A half-hour shift redistributes energy within the day; annual totals stay close.
+        assert mid.sum() == pytest.approx(start.sum(), rel=0.05)
+
+    def test_mid_interval_moves_energy_toward_morning_for_east_array(
+        self, synthetic_weather, porto_location, pv_params
+    ):
+        # For an east-facing array the sun evaluated half a step later has moved
+        # off the panel normal by evening and onto it in the morning; the split
+        # between pre- and post-noon energy must therefore change.
+        def split(sp):
+            dc = calculate_pv_production_dc(
+                weather_data=synthetic_weather,
+                location=porto_location,
+                tilt=35,
+                surface_azimuth=90,
+                n_modules=1,
+                pv_params=pv_params,
+                freq="h",
+                solar_position=sp,
+            )
+            morning = dc[dc.index.hour < 12].sum()
+            return morning / dc.sum()
+
+        assert split("mid-interval") != pytest.approx(split("interval-start"), rel=1e-3)
+
+    def test_case_insensitive(self, synthetic_weather, porto_location, pv_params):
+        lower = self._dc(synthetic_weather, porto_location, pv_params, solar_position="mid-interval")
+        upper = self._dc(synthetic_weather, porto_location, pv_params, solar_position="Mid-Interval")
+        pd.testing.assert_series_equal(lower, upper)
+
+    def test_invalid_method_raises(self, synthetic_weather, porto_location, pv_params):
+        with pytest.raises(ValueError, match="Unknown solar position method"):
+            self._dc(synthetic_weather, porto_location, pv_params, solar_position="midpoint")
+
+    def test_tracking_accepts_mid_interval(self, synthetic_weather, porto_location, pv_params):
+        dc = calculate_pv_production_dc_tracking(
+            weather_data=synthetic_weather,
+            location=porto_location,
+            n_modules=1,
+            tracking="single_axis",
+            pv_params=pv_params,
+            freq="h",
+            solar_position="mid-interval",
+        )
+        assert (dc >= -0.01).all()
+        assert dc.sum() > 0
+
+
 class TestGroundReflectance:
     def _dc(self, weather, loc, pv_params, **kw):
         return calculate_pv_production_dc(

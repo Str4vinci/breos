@@ -11,6 +11,8 @@ results/
 dev/
 *.csv
 !breos/data/rlp/*.csv
+!validation/data/weather/*.csv
+!validation/data/weather/*.csv.gz
 .codex
 .claude/
 .DS_Store

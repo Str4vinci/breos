@@ -404,7 +404,9 @@ class TestAppValidation:
         base = _run(None)
         no_shading = _run({"shading": 0.0})
 
-        assert no_shading == pytest.approx(base / 0.97, rel=1e-6)
+        # Both operands are rounded to 2 decimals by build_result, so the
+        # tightest honest tolerance is the rounding granularity (±0.005 each).
+        assert no_shading == pytest.approx(base / 0.97, abs=0.011)
 
     def test_smaller_inverter_clips_app_production(self, _patch_weather):
         def _run(loading_ratio):

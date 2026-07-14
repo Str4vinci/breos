@@ -13,6 +13,11 @@ refactoring (see the deferred adapter layer at the bottom of this document).
 
 ### Standing validation and benchmark suite
 
+**Status: seeded 2026-07** — `validation/` holds a seven-site worldwide
+harness (PVGIS TMY inputs, PVGIS PVcalc references, PVWatts v8 fetcher) and
+`tests/test_validation_drift.py` fails CI on any unintended model drift
+(0.1% self-baseline) or gross error (±10% vs PVGIS). Remaining work below.
+
 The single highest-leverage credibility item. PVsyst's authority comes from
 decades of published validation; BREOS needs a reproducible harness that
 compares its annual and monthly yields against SAM/PVWatts and against
@@ -30,6 +35,13 @@ choice, with deltas documented and tracked over time.
 
 ### Mid-interval solar position for hourly weather
 
+**Status: shipped opt-in 2026-07 (0.3.4)** — `solar_position = "mid-interval"`
+config key / `--solar-position` CLI flag across the whole solar chain
+(including tracker angles); default unchanged. The zenith/apparent-zenith
+inconsistency in transposition was fixed at the same time. The validation
+suite runs a `perez_mid` config per site; the default flip stays parked at
+the next major version per "Recommended model profile" below.
+
 `solar._prepare_solarpos_and_weather` computes solar position at the
 interval *labels* of hourly averaged irradiance. PVWatts/SAM (and PVsyst,
 equivalently) evaluate sun position at the interval midpoint; using labels
@@ -46,6 +58,16 @@ win available.
 - Document the expected annual-yield delta via the benchmark suite.
 
 ### One inverter model everywhere (App, dc_to_ac, optimizer)
+
+**Status: largely done 2026-07 (0.3.3/0.3.4)** — `dc_to_ac` clips at the
+true AC nameplate (0.3.3); the NSGA-II optimizer now simulates candidates
+with the CAPEX-matched AC nameplate, prices them with the same estimation
+formulas as `cost_analysis_projection` (equivalence enforced by
+`tests/test_optimization_parity.py`), and passes the load to
+`simulate_energy_balance` unmangled so its timezone-aware alignment applies
+(0.3.4). Remaining: battery replacement costs in optimizer scoring (needs a
+cheap SOH-trajectory estimate from year-1 cycling), and unifying the App's
+flat-efficiency conversion with the pvwatts part-load curve.
 
 Three inverter representations exist today and they disagree: the `App`
 energy balance uses a flat efficiency plus an AC cap treated as the

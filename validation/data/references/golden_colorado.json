@@ -1,0 +1,75 @@
+{
+  "location_key": "golden_colorado",
+  "name": "Golden, Colorado, USA (NREL)",
+  "latitude": 39.7407,
+  "longitude": -105.1686,
+  "tilt": 35,
+  "azimuth_pvlib": 180,
+  "system": {
+    "module": "Generic_400W",
+    "n_modules": 10,
+    "peak_power_kw": 4.0,
+    "dc_ac_ratio": 1.2,
+    "inverter_efficiency": 0.96,
+    "albedo": 0.2,
+    "mounting": "free",
+    "breos_losses_pct": 14.08,
+    "pvgis_loss_pct": 17.51
+  },
+  "weather": {
+    "file": "golden_colorado_tmy_2005_2023_pvgis-era5.csv.gz",
+    "radiation_db": "PVGIS-ERA5",
+    "year_min": 2005,
+    "year_max": 2023,
+    "fetched": "2026-07-02"
+  },
+  "pvgis_pvcalc": {
+    "fetched": "2026-07-02",
+    "params": {
+      "lat": 39.7407,
+      "lon": -105.1686,
+      "peakpower": 4.0,
+      "loss": 17.51,
+      "angle": 35,
+      "aspect": 0,
+      "mountingplace": "free",
+      "outputformat": "json"
+    },
+    "radiation_db": "PVGIS-ERA5",
+    "years": "2005-2023",
+    "monthly_kwh": [
+      544.24,
+      580.82,
+      673.42,
+      642.96,
+      609.15,
+      588.96,
+      589.34,
+      600.13,
+      591.05,
+      575.77,
+      523.89,
+      498.89
+    ],
+    "annual_kwh": 7018.62,
+    "poa_monthly_kwh_m2": [
+      166.68,
+      180.25,
+      216.11,
+      210.69,
+      204.62,
+      204.81,
+      208.71,
+      211.44,
+      203.9,
+      189.52,
+      165.51,
+      152.36
+    ],
+    "poa_annual_kwh_m2": 2314.6
+  },
+  "pvwatts_v8": {
+    "fetched": "2026-07-02",
+    "error": "ConnectionError: HTTPSConnectionPool(host='developer.nrel.gov', port=443): Max retries exceeded with url: /api/pvwatts/v8.json?lat=39.7407&lon=-105.1686&system_capacity=4.0&module_type=0&array_type=0&tilt=35&azimuth=180&losses=14.08&dc_ac_ratio=1.2&inv_eff=96.0&albedo=0.2&radius=0&dataset=nsrdb&api_key=DEMO_KEY (Caused by NameResolutionError(\"HTTPSConnection(host='developer.nrel.gov', port=443): Failed to resolve 'developer.nrel.gov' ([Errno 8] nodename nor servname provided, or not known)\"))"
+  }
+}

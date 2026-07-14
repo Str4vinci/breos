@@ -17,7 +17,13 @@ from breos.app_config import resolve_app_config
 from breos.load_profiles import PROFILE_ALIASES, PROFILE_NAMES
 from breos.pv_modules import MODULES
 from breos.resources import load_config_json
-from breos.solar import PEREZ_MODELS, SURFACE_TYPES, TRANSPOSITION_MODELS, resolve_pvwatts_losses
+from breos.solar import (
+    PEREZ_MODELS,
+    SOLAR_POSITION_METHODS,
+    SURFACE_TYPES,
+    TRANSPOSITION_MODELS,
+    resolve_pvwatts_losses,
+)
 
 
 def _package_version() -> str:
@@ -69,6 +75,7 @@ def _build_config(args: argparse.Namespace) -> dict[str, Any]:
     _add_override(overrides, "albedo", args.albedo)
     _add_override(overrides, "surface_type", args.surface_type)
     _add_override(overrides, "model_perez", args.model_perez)
+    _add_override(overrides, "solar_position", args.solar_position)
     _add_override(overrides, "resolution", args.resolution)
     _add_override(overrides, "projection_years", args.projection_years)
     _add_override(overrides, "inflation_rate", args.inflation_rate)
@@ -133,6 +140,7 @@ def _resolved_config_summary(config: dict[str, Any]) -> dict[str, Any]:
             "albedo": cfg["albedo"],
             "surface_type": cfg["surface_type"],
             "model_perez": cfg["model_perez"],
+            "solar_position": cfg["solar_position"],
             "pv_loss_overrides": cfg["pv_loss_overrides"],
             "losses": resolve_pvwatts_losses(cfg["pv_loss_overrides"]),
         },
@@ -488,6 +496,15 @@ def build_parser() -> argparse.ArgumentParser:
         dest="model_perez",
         choices=PEREZ_MODELS,
         help="Perez coefficient set (only used with --transposition-model perez).",
+    )
+    run.add_argument(
+        "--solar-position",
+        dest="solar_position",
+        choices=SOLAR_POSITION_METHODS,
+        help=(
+            "Where within each timestep the sun position is evaluated. 'mid-interval' matches "
+            "PVWatts/SAM for interval-averaged weather (default: interval-start)."
+        ),
     )
     run.add_argument("--resolution", choices=("h", "15min"), help="Simulation time resolution.")
     run.add_argument("--projection-years", type=int, help="Economic projection horizon.")

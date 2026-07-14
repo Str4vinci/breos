@@ -1,0 +1,69 @@
+{
+    "system": {
+        "module": "Generic_400W",
+        "n_modules": 10,
+        "peak_power_kw": 4.0,
+        "dc_ac_ratio": 1.2,
+        "inverter_efficiency": 0.96,
+        "albedo": 0.2,
+        "mounting": "free"
+    },
+    "locations": {
+        "porto": {
+            "name": "Porto, Portugal",
+            "latitude": 41.1579,
+            "longitude": -8.6291,
+            "timezone": "Europe/Lisbon",
+            "tilt": 35,
+            "azimuth": 180
+        },
+        "berlin": {
+            "name": "Berlin, Germany",
+            "latitude": 52.52,
+            "longitude": 13.405,
+            "timezone": "Europe/Berlin",
+            "tilt": 35,
+            "azimuth": 180
+        },
+        "golden_colorado": {
+            "name": "Golden, Colorado, USA (NREL)",
+            "latitude": 39.7407,
+            "longitude": -105.1686,
+            "timezone": "America/Denver",
+            "tilt": 35,
+            "azimuth": 180
+        },
+        "nairobi": {
+            "name": "Nairobi, Kenya",
+            "latitude": -1.2864,
+            "longitude": 36.8172,
+            "timezone": "Africa/Nairobi",
+            "tilt": 10,
+            "azimuth": 0
+        },
+        "new_delhi": {
+            "name": "New Delhi, India",
+            "latitude": 28.6139,
+            "longitude": 77.209,
+            "timezone": "Asia/Kolkata",
+            "tilt": 28,
+            "azimuth": 180
+        },
+        "melbourne": {
+            "name": "Melbourne, Australia",
+            "latitude": -37.8142,
+            "longitude": 144.9632,
+            "timezone": "Australia/Melbourne",
+            "tilt": 35,
+            "azimuth": 0
+        },
+        "sao_paulo": {
+            "name": "São Paulo, Brazil",
+            "latitude": -23.5505,
+            "longitude": -46.6333,
+            "timezone": "America/Sao_Paulo",
+            "tilt": 23,
+            "azimuth": 0
+        }
+    }
+}

@@ -105,6 +105,19 @@ DEFAULT_PEREZ_MODEL = "allsitescomposite1990"
 # alternative to supplying a numeric ``albedo`` directly.
 SURFACE_TYPES = tuple(sorted(SURFACE_ALBEDOS))
 
+# Where within each timestep the solar position is evaluated.
+# ``interval-start`` evaluates at the timestamp itself (the default, and the
+# only prior behaviour). ``mid-interval`` evaluates half a step later, which
+# is the PVWatts/SAM convention for interval-averaged irradiance: an hourly
+# value labelled 07:00 that represents the 07:00-08:00 average pairs with the
+# 07:30 sun position. Use it when the weather source reports interval
+# averages (e.g. ERA5); keep the default for instantaneous samples.
+SOLAR_POSITION_METHODS = (
+    "interval-start",
+    "mid-interval",
+)
+DEFAULT_SOLAR_POSITION = "interval-start"
+
 
 def _resolve_transposition_model(model: str) -> str:
     """Normalise and validate a sky-diffusion transposition model name."""
@@ -112,6 +125,15 @@ def _resolve_transposition_model(model: str) -> str:
     if normalised not in TRANSPOSITION_MODELS:
         valid = ", ".join(TRANSPOSITION_MODELS)
         raise ValueError(f"Unknown transposition model {model!r}. Valid models: {valid}")
+    return normalised
+
+
+def _resolve_solar_position_method(method: str) -> str:
+    """Normalise and validate a solar-position evaluation method name."""
+    normalised = str(method).strip().lower()
+    if normalised not in SOLAR_POSITION_METHODS:
+        valid = ", ".join(SOLAR_POSITION_METHODS)
+        raise ValueError(f"Unknown solar position method {method!r}. Valid methods: {valid}")
     return normalised
 
 
@@ -185,13 +207,30 @@ class PVModuleParams:
             self.gamma_pmp = self.T_Pmax_pct
 
 
-def _prepare_solarpos_and_weather(weather_data: pd.DataFrame, location: Location, freq: str):
-    """Build time index, solar position, and aligned weather frame."""
+def _prepare_solarpos_and_weather(
+    weather_data: pd.DataFrame,
+    location: Location,
+    freq: str,
+    solar_position: str = DEFAULT_SOLAR_POSITION,
+):
+    """Build time index, solar position, and aligned weather frame.
+
+    ``solar_position="mid-interval"`` evaluates the sun half a timestep after
+    each label (the PVWatts/SAM convention for interval-averaged irradiance)
+    while keeping the returned frame indexed at the labels, so downstream
+    alignment is unchanged.
+    """
     if not isinstance(weather_data.index, pd.DatetimeIndex):
         raise ValueError("weather_data must have a DatetimeIndex")
+    method = _resolve_solar_position_method(solar_position)
 
     times = pd.date_range(start=weather_data.index[0], end=weather_data.index[-1], freq=freq)
-    solarpos = location.get_solarposition(times=times)
+    if method == "mid-interval":
+        half_step = pd.Timedelta(hours=get_hours_per_step(freq) / 2.0)
+        solarpos = location.get_solarposition(times=times + half_step)
+        solarpos.index = times
+    else:
+        solarpos = location.get_solarposition(times=times)
     weather_aligned = weather_data.reindex(times, method="nearest")
     return times, solarpos, weather_aligned
 
@@ -243,10 +282,13 @@ def _compute_effective_irradiance_and_cell_temp(
     if surface_type is not None:
         ground_kwargs["surface_type"] = surface_type
 
+    # apparent_zenith (refraction-corrected) everywhere, matching pvlib's
+    # ModelChain; aoi above uses it too. Mixing true and apparent zenith in
+    # one transposition call was an inconsistency fixed in 0.3.4.
     poa = pvlib.irradiance.get_total_irradiance(
         surface_tilt=surface_tilt,
         surface_azimuth=surface_azimuth,
-        solar_zenith=solarpos.zenith,
+        solar_zenith=solarpos.apparent_zenith,
         solar_azimuth=solarpos.azimuth,
         dni=dni,
         ghi=ghi,
@@ -358,6 +400,7 @@ def calculate_pv_production_dc(
     albedo: Optional[float] = None,
     surface_type: Optional[str] = None,
     model_perez: str = DEFAULT_PEREZ_MODEL,
+    solar_position: str = DEFAULT_SOLAR_POSITION,
 ) -> pd.Series:
     """
     Calculate PV DC production from weather data (fixed-tilt array).
@@ -397,6 +440,10 @@ def calculate_pv_production_dc(
             an albedo by pvlib; an alternative to ``albedo``.
         model_perez: Perez coefficient set (one of ``PEREZ_MODELS``); only
             used when ``transposition_model`` is ``"perez"``.
+        solar_position: Where within each timestep the sun position is
+            evaluated (one of ``SOLAR_POSITION_METHODS``). ``"mid-interval"``
+            matches PVWatts/SAM for interval-averaged irradiance; the default
+            ``"interval-start"`` reproduces prior behaviour bit-for-bit.
 
     Returns:
         pd.Series with DC power production in Watts (before inverter)
@@ -406,7 +453,9 @@ def calculate_pv_production_dc(
 
         pv_params = get_module("Generic_400W")
 
-    times, solarpos, weather_aligned = _prepare_solarpos_and_weather(weather_data, location, freq)
+    times, solarpos, weather_aligned = _prepare_solarpos_and_weather(
+        weather_data, location, freq, solar_position=solar_position
+    )
     effective_irradiance, temp_cell = _compute_effective_irradiance_and_cell_temp(
         weather_aligned,
         solarpos,
@@ -459,6 +508,7 @@ def calculate_pv_production_dc_tracking(
     albedo: Optional[float] = None,
     surface_type: Optional[str] = None,
     model_perez: str = DEFAULT_PEREZ_MODEL,
+    solar_position: str = DEFAULT_SOLAR_POSITION,
 ) -> pd.Series:
     """
     Calculate PV DC production for a tracking array (single- or dual-axis).
@@ -497,6 +547,9 @@ def calculate_pv_production_dc_tracking(
             an albedo by pvlib; an alternative to ``albedo``.
         model_perez: Perez coefficient set (one of ``PEREZ_MODELS``); only
             used when ``transposition_model`` is ``"perez"``.
+        solar_position: Where within each timestep the sun position is
+            evaluated (one of ``SOLAR_POSITION_METHODS``); also drives the
+            tracker rotation angles.
 
     Returns:
         pd.Series with DC power production in Watts (before inverter).
@@ -509,7 +562,9 @@ def calculate_pv_production_dc_tracking(
 
         pv_params = get_module("Generic_400W")
 
-    times, solarpos, weather_aligned = _prepare_solarpos_and_weather(weather_data, location, freq)
+    times, solarpos, weather_aligned = _prepare_solarpos_and_weather(
+        weather_data, location, freq, solar_position=solar_position
+    )
 
     if tracking == "single_axis":
         tracker = pvlib.tracking.singleaxis(
@@ -611,6 +666,7 @@ def calculate_pv_production_tmy(
     albedo: Optional[float] = None,
     surface_type: Optional[str] = None,
     model_perez: str = DEFAULT_PEREZ_MODEL,
+    solar_position: str = DEFAULT_SOLAR_POSITION,
 ) -> pd.Series:
     """
     Calculate PV DC production from TMY data.
@@ -644,6 +700,7 @@ def calculate_pv_production_tmy(
         albedo=albedo,
         surface_type=surface_type,
         model_perez=model_perez,
+        solar_position=solar_position,
     )
 
 
@@ -665,6 +722,7 @@ def calculate_pv_production_ac(
     albedo: Optional[float] = None,
     surface_type: Optional[str] = None,
     model_perez: str = DEFAULT_PEREZ_MODEL,
+    solar_position: str = DEFAULT_SOLAR_POSITION,
 ) -> pd.Series:
     """
     Calculate PV AC production from weather data.
@@ -711,6 +769,7 @@ def calculate_pv_production_ac(
         albedo=albedo,
         surface_type=surface_type,
         model_perez=model_perez,
+        solar_position=solar_position,
     )
 
     pv_peak_power_w = n_modules * pv_params.Mpp
@@ -856,6 +915,7 @@ def calculate_multi_array_production(
     albedo: Optional[float] = None,
     surface_type: Optional[str] = None,
     model_perez: str = DEFAULT_PEREZ_MODEL,
+    solar_position: str = DEFAULT_SOLAR_POSITION,
 ) -> pd.Series:
     """
     Calculate combined DC production from multiple PV arrays.
@@ -935,6 +995,7 @@ def calculate_multi_array_production(
                 albedo=arr_albedo,
                 surface_type=arr_surface_type,
                 model_perez=arr_model_perez,
+                solar_position=solar_position,
             )
         elif tracking in ("single_axis", "dual_axis"):
             if verbose:
@@ -970,6 +1031,7 @@ def calculate_multi_array_production(
                 albedo=arr_albedo,
                 surface_type=arr_surface_type,
                 model_perez=arr_model_perez,
+                solar_position=solar_position,
             )
         else:
             raise ValueError(

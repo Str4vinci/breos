@@ -2,6 +2,59 @@
 
 All notable changes to BREOS are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased]
+
+### Added
+- `solar_position` App config key, `--solar-position` CLI flag, and
+  `solar_position=` parameter on every solar-chain function
+  (`calculate_pv_production_dc`/`_dc_tracking`/`_ac`/`_tmy`,
+  `calculate_multi_array_production`). `"mid-interval"` evaluates the sun
+  half a timestep after each label — the PVWatts/SAM convention for
+  interval-averaged irradiance (an hourly value labelled 07:00 representing
+  the 07:00–08:00 average pairs with the 07:30 sun) — and also drives
+  tracker rotation angles. The default `"interval-start"` reproduces prior
+  behaviour bit-for-bit. The validation suite now runs a third
+  `perez_mid` config so the effect is measured per site.
+- A standing validation suite under `validation/` (repo-side, not shipped):
+  seven sites on four continents with committed PVGIS TMY weather inputs
+  (trimmed to the five columns BREOS reads and gzipped, ~90 KB per site),
+  independent PVGIS PVcalc reference results (PVWatts v8 fetcher included,
+  references pending network access to `developer.nrel.gov`), a comparison
+  report generator, and `tests/test_validation_drift.py`, which fails CI when
+  BREOS output drifts >0.1% from its committed baseline or falls outside a
+  ±10% gross-error band around the PVGIS reference.
+
+### Changed
+- POA transposition now receives the refraction-corrected apparent zenith,
+  matching pvlib's `ModelChain`. Previously one call mixed zenith
+  definitions: the AOI/IAM step used `apparent_zenith` while
+  `get_total_irradiance` got the true `zenith`. Annual yields move by well
+  under 0.1% (refraction only matters near the horizon); the validation
+  baseline was regenerated accordingly.
+
+### Fixed
+- The NSGA-II optimizer (`optimize_system_multi_objective`) scored candidate
+  designs with a different model than the App reports, in three ways, all
+  fixed:
+  - candidates were simulated **without AC clipping** (no
+    `inverter_ac_capacity_w`), biasing the Pareto front toward high DC/AC
+    ratios whose clipping losses were never seen. Candidates now get the
+    CAPEX-matched nameplate (`pv_peak / costs.dc_ac_ratio`) — the inverter a
+    design pays for is the one that clips it;
+  - `calculate_financials` ignored maintenance, PV degradation, and the
+    separate export-price inflation. It now mirrors the year-1-estimation
+    formulas of `cost_analysis_projection` exactly (equivalence enforced by
+    `tests/test_optimization_parity.py`); the fixed daily grid fee cancels
+    out of the savings NPV and remains omitted by construction. NPV values
+    and Pareto fronts change (lower, more realistic NPVs). Known remaining
+    gap: battery replacement costs, which need a multi-year SOH estimate;
+  - the load was positionally re-stamped onto the PV index via
+    `align_load_to_pv`, ignoring timezones (a UTC-offset shift of the whole
+    profile against PV). The raw load now reaches
+    `simulate_energy_balance`, whose internal alignment is timezone- and
+    DST-aware — the same code path the App uses. `align_load_to_pv` keeps
+    its behaviour for external callers but now carries a docstring warning.
+
 ## [0.3.3] - 2026-07-02
 
 ### Removed

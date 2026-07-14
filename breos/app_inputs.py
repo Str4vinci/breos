@@ -110,6 +110,7 @@ def build_dc_system_base(cfg: dict[str, Any], resolved: ResolvedAppConfig, weath
         "albedo": cfg["albedo"],
         "surface_type": cfg["surface_type"],
         "model_perez": cfg["model_perez"],
+        "solar_position": cfg["solar_position"],
     }
 
     if resolved.pv_arrays:

@@ -11,8 +11,10 @@ from breos.pv_modules import MODULES, PVModuleParams, get_module
 from breos.resources import load_config_json
 from breos.solar import (
     DEFAULT_PEREZ_MODEL,
+    DEFAULT_SOLAR_POSITION,
     DEFAULT_TRANSPOSITION_MODEL,
     PEREZ_MODELS,
+    SOLAR_POSITION_METHODS,
     SURFACE_TYPES,
     TRANSPOSITION_MODELS,
     estimate_optimal_tilt,
@@ -39,6 +41,7 @@ DEFAULTS: dict[str, Any] = {
     "albedo": None,
     "surface_type": None,
     "model_perez": DEFAULT_PEREZ_MODEL,
+    "solar_position": DEFAULT_SOLAR_POSITION,
     "resolution": "h",
     "projection_years": 20,
     "cost_preset": None,
@@ -200,6 +203,9 @@ def validate_config(cfg: dict[str, Any]) -> None:
     if cfg["resolution"] not in ("h", "15min"):
         raise ValueError("'resolution' must be 'h' or '15min'")
     _validate_sky_settings(cfg["transposition_model"], cfg["albedo"], cfg["surface_type"], cfg["model_perez"])
+    if str(cfg["solar_position"]).strip().lower() not in SOLAR_POSITION_METHODS:
+        valid = ", ".join(SOLAR_POSITION_METHODS)
+        raise ValueError(f"'solar_position' must be one of: {valid}")
     overrides = cfg.get("pv_loss_overrides")
     if overrides is not None:
         if not isinstance(overrides, dict):

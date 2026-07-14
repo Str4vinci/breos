@@ -1,0 +1,75 @@
+{
+  "location_key": "sao_paulo",
+  "name": "São Paulo, Brazil",
+  "latitude": -23.5505,
+  "longitude": -46.6333,
+  "tilt": 23,
+  "azimuth_pvlib": 0,
+  "system": {
+    "module": "Generic_400W",
+    "n_modules": 10,
+    "peak_power_kw": 4.0,
+    "dc_ac_ratio": 1.2,
+    "inverter_efficiency": 0.96,
+    "albedo": 0.2,
+    "mounting": "free",
+    "breos_losses_pct": 14.08,
+    "pvgis_loss_pct": 17.51
+  },
+  "weather": {
+    "file": "sao_paulo_tmy_2005_2023_pvgis-sarah3.csv.gz",
+    "radiation_db": "PVGIS-SARAH3",
+    "year_min": 2005,
+    "year_max": 2023,
+    "fetched": "2026-07-02"
+  },
+  "pvgis_pvcalc": {
+    "fetched": "2026-07-02",
+    "params": {
+      "lat": -23.5505,
+      "lon": -46.6333,
+      "peakpower": 4.0,
+      "loss": 17.51,
+      "angle": 23,
+      "aspect": -180,
+      "mountingplace": "free",
+      "outputformat": "json"
+    },
+    "radiation_db": "PVGIS-SARAH3",
+    "years": "2005-2023",
+    "monthly_kwh": [
+      439.71,
+      437.18,
+      470.69,
+      437.11,
+      399.74,
+      376.17,
+      426.66,
+      441.96,
+      417.19,
+      418.91,
+      435.71,
+      462.13
+    ],
+    "annual_kwh": 5163.17,
+    "poa_monthly_kwh_m2": [
+      153.02,
+      152.14,
+      162.84,
+      149.41,
+      135.02,
+      126.06,
+      143.46,
+      150.22,
+      143.39,
+      144.9,
+      149.94,
+      160.03
+    ],
+    "poa_annual_kwh_m2": 1770.43
+  },
+  "pvwatts_v8": {
+    "fetched": "2026-07-02",
+    "error": "ConnectionError: HTTPSConnectionPool(host='developer.nrel.gov', port=443): Max retries exceeded with url: /api/pvwatts/v8.json?lat=-23.5505&lon=-46.6333&system_capacity=4.0&module_type=0&array_type=0&tilt=23&azimuth=0&losses=14.08&dc_ac_ratio=1.2&inv_eff=96.0&albedo=0.2&radius=0&dataset=nsrdb&api_key=DEMO_KEY (Caused by NameResolutionError(\"HTTPSConnection(host='developer.nrel.gov', port=443): Failed to resolve 'developer.nrel.gov' ([Errno 8] nodename nor servname provided, or not known)\"))"
+  }
+}

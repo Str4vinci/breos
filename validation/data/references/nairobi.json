@@ -1,0 +1,75 @@
+{
+  "location_key": "nairobi",
+  "name": "Nairobi, Kenya",
+  "latitude": -1.2864,
+  "longitude": 36.8172,
+  "tilt": 10,
+  "azimuth_pvlib": 0,
+  "system": {
+    "module": "Generic_400W",
+    "n_modules": 10,
+    "peak_power_kw": 4.0,
+    "dc_ac_ratio": 1.2,
+    "inverter_efficiency": 0.96,
+    "albedo": 0.2,
+    "mounting": "free",
+    "breos_losses_pct": 14.08,
+    "pvgis_loss_pct": 17.51
+  },
+  "weather": {
+    "file": "nairobi_tmy_2005_2023_pvgis-sarah3.csv.gz",
+    "radiation_db": "PVGIS-SARAH3",
+    "year_min": 2005,
+    "year_max": 2023,
+    "fetched": "2026-07-02"
+  },
+  "pvgis_pvcalc": {
+    "fetched": "2026-07-02",
+    "params": {
+      "lat": -1.2864,
+      "lon": 36.8172,
+      "peakpower": 4.0,
+      "loss": 17.51,
+      "angle": 10,
+      "aspect": -180,
+      "mountingplace": "free",
+      "outputformat": "json"
+    },
+    "radiation_db": "PVGIS-SARAH3",
+    "years": "2005-2023",
+    "monthly_kwh": [
+      555.57,
+      525.26,
+      589.86,
+      510.74,
+      445.16,
+      377.22,
+      365.26,
+      390.27,
+      459.04,
+      512.61,
+      469.24,
+      518.13
+    ],
+    "annual_kwh": 5718.35,
+    "poa_monthly_kwh_m2": [
+      191.24,
+      184.56,
+      203.66,
+      174.18,
+      151.07,
+      127.49,
+      124.22,
+      132.18,
+      157.17,
+      175.49,
+      159.35,
+      175.77
+    ],
+    "poa_annual_kwh_m2": 1956.38
+  },
+  "pvwatts_v8": {
+    "fetched": "2026-07-02",
+    "error": "ConnectionError: HTTPSConnectionPool(host='developer.nrel.gov', port=443): Max retries exceeded with url: /api/pvwatts/v8.json?lat=-1.2864&lon=36.8172&system_capacity=4.0&module_type=0&array_type=0&tilt=10&azimuth=0&losses=14.08&dc_ac_ratio=1.2&inv_eff=96.0&albedo=0.2&radius=0&dataset=nsrdb&api_key=DEMO_KEY (Caused by NameResolutionError(\"HTTPSConnection(host='developer.nrel.gov', port=443): Failed to resolve 'developer.nrel.gov' ([Errno 8] nodename nor servname provided, or not known)\"))"
+  }
+}
