@@ -13,6 +13,7 @@ from breos.degradation.profiles import (
     BLAST_STATE_SCHEMA_VERSION,
     BLAST_UPSTREAM_COMMIT,
     CORE_BLAST_MODEL_KEYS,
+    ENABLED_BLAST_MODEL_KEYS,
     get_battery_model_profile,
     merge_battery_config_layers,
 )
@@ -32,6 +33,7 @@ def test_registry_is_the_single_catalog_for_all_vendored_models():
     assert len(BATTERY_MODEL_REGISTRY) == 14
     assert tuple(BLAST_MODEL_CLASSES) == tuple(BATTERY_MODEL_REGISTRY)
     assert CORE_BLAST_MODEL_KEYS == ("lfp_gr_250ah_prismatic", "nca_gr_panasonic_3ah")
+    assert ENABLED_BLAST_MODEL_KEYS == tuple(BATTERY_MODEL_REGISTRY)
 
     for key, profile in BATTERY_MODEL_REGISTRY.items():
         model = BLAST_MODEL_CLASSES[key]()
@@ -104,8 +106,11 @@ def test_config_rejects_ambiguous_or_incomplete_model_selection():
         resolve_app_config(_base_config(battery_type="lfp"))
     with pytest.raises(ValueError, match="requires.*degradation_engine=blast"):
         resolve_app_config(_base_config(blast_model="lfp_gr_250ah_prismatic"))
+    phase3 = resolve_app_config(_base_config(degradation_engine="blast", blast_model="nmc622_gr_denso_50ah")).cfg
+    assert phase3["blast_model"] == "nmc622_gr_denso_50ah"
+
     with pytest.raises(ValueError, match="Available"):
-        resolve_app_config(_base_config(degradation_engine="blast", blast_model="nmc622_gr_denso_50ah"))
+        resolve_app_config(_base_config(degradation_engine="blast", blast_model="not_a_model"))
     with pytest.raises(ValueError, match="battery_kwh.*> 0"):
         resolve_app_config(
             _base_config(

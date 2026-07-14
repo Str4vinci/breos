@@ -278,18 +278,18 @@ class TestAppValidation:
                 }
             )
 
-    def test_blast_config_rejects_non_p1_model(self):
-        with pytest.raises(ValueError, match="Unknown blast_model"):
-            App(
-                {
-                    "location": "porto",
-                    "n_modules": 10,
-                    "annual_consumption_kwh": 4000,
-                    "battery_kwh": 5.0,
-                    "degradation_engine": "blast",
-                    "blast_model": "nmc811_grsi_lgm50_5ah",
-                }
-            )
+    def test_blast_config_enables_phase3_models(self):
+        app = App(
+            {
+                "location": "porto",
+                "n_modules": 10,
+                "annual_consumption_kwh": 4000,
+                "battery_kwh": 5.0,
+                "degradation_engine": "blast",
+                "blast_model": "nmc811_grsi_lgm50_5ah",
+            }
+        )
+        assert app._cfg["blast_model"] == "nmc811_grsi_lgm50_5ah"
 
     def test_blast_config_rejects_montecarlo_section(self):
         with pytest.raises(ValueError, match="Monte Carlo"):
@@ -690,7 +690,9 @@ class TestAppSimulateNoBattery:
         assert degradation["initial_soh_pct"] == 100.0
         assert degradation["final_soh_pct"] == round(result["battery_soh_end_pct"], 1)
         assert degradation["state_schema_version"] == "1.0"
-        assert degradation["experimental_range_warnings"] == []
+        range_warnings = degradation["experimental_range_warnings"]
+        assert range_warnings
+        assert len({warning["code"] for warning in range_warnings}) == len(range_warnings)
         assert degradation["aging_horizon_extrapolation_warnings"] == []
         assert result["provenance"]["degradation"] == degradation
 

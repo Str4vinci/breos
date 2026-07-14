@@ -2,13 +2,18 @@
 
 from __future__ import annotations
 
+import json
+import warnings
+
 import numpy as np
 import pytest
 
 from breos.degradation.engine import (
     BLAST_MODEL_CLASSES,
     P1_BLAST_MODEL_KEYS,
+    BlastAgingHorizonWarning,
     BlastEngine,
+    BlastExperimentalRangeWarning,
     build_endpoint_day,
 )
 
@@ -150,3 +155,40 @@ def test_adapter_matches_vendored_simulate_battery_life_fixed_soc_storage():
             atol=1e-6,
             err_msg=model_key,
         )
+
+
+def test_experimental_range_warnings_deduplicate_across_snapshot_continuation():
+    profile = (np.array([0.0, 86400.0]), np.array([0.5, 0.5]), np.array([55.0, 55.0]))
+    engine = BlastEngine("lfp_gr_250ah_prismatic")
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        engine.step(*profile)
+        restored = BlastEngine.from_snapshot("lfp_gr_250ah_prismatic", json.loads(json.dumps(engine.state_snapshot())))
+        restored.step(*profile)
+
+    records = restored.warning_records("experimental_range")
+    assert len([record for record in records if record["field"] == "temperature_c"]) == 1
+    assert len([item for item in caught if item.category is BlastExperimentalRangeWarning]) == 2
+    # Temperature and DOD each warn once; restoring the snapshot emits neither again.
+
+
+def test_sourced_aging_horizon_warns_once_and_survives_snapshot():
+    profile = (
+        np.array([0.0, 43200.0, 86400.0]),
+        np.array([0.1, 0.9, 0.1]),
+        np.array([25.0, 25.0, 25.0]),
+    )
+    engine = BlastEngine("nca_gr_panasonic_3ah")
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        for _ in range(301):
+            engine.step(*profile)
+        restored = BlastEngine.from_snapshot("nca_gr_panasonic_3ah", engine.state_snapshot())
+        restored.step(*profile)
+
+    records = restored.warning_records("aging_horizon")
+    assert len(records) == 1
+    assert records[0]["supported_days"] == 300.0
+    assert len([item for item in caught if item.category is BlastAgingHorizonWarning]) == 1

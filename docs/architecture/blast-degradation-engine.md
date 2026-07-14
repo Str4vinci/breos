@@ -1,6 +1,6 @@
 # BLAST Degradation Engine
 
-**Status:** Phase 0-1 implemented locally; Phase 2+ planned
+**Status:** Phases 0-3 implemented for 0.4.0; Phase 4 deferred
 **Relates to:** ROADMAP "Additional Li-ion battery chemistries"
 **Owner:** BREOS maintainers
 
@@ -14,8 +14,9 @@ but still age it on LFP curves. In 0.3.3 the native path was made explicit:
 `BatteryConfig(battery_type="LFP")` normalizes to `"lfp"`, and unsupported
 chemistries now raise instead of silently reusing LFP cycle-aging parameters.
 The runner (`breos/runners/app.py`) exposes BLAST through explicit
-`degradation_engine` / `blast_model` config keys; chemistry-profile defaults
-remain a Phase 2 task.
+`degradation_engine` / `blast_model` config keys and a declarative profile
+registry. Profiles supply only sourced defaults; no generic chemistry defaults
+are inferred.
 
 NREL's [BLAST-Lite](https://github.com/NREL/BLAST-Lite) (BSD-3) provides **14
 lab-calibrated, DOI-cited degradation models** (in the version vendored) spanning
