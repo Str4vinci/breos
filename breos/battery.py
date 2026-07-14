@@ -63,6 +63,7 @@ from breos.constants import (
     Z_R,
 )
 from breos.economics import BATTERY_REPLACEMENT_COST_PER_KWH
+from breos.inverter import calculate_dc_ac_power, dc_power_for_ac_output
 from breos.utils import get_hours_per_step, remap_datetime_index_years
 
 SUPPORTED_BATTERY_TYPES: tuple[str, ...] = ("lfp",)
@@ -225,7 +226,8 @@ def _dispatch_dc_step(
         "battery_inverter_loss": 0.0,
         "grid_import": 0.0,
     }
-    pv_ac_max = min(pv_dc * inv_eff, inv_cap_ac_wh)
+    pv_conversion = calculate_dc_ac_power(pv_dc, inv_cap_ac_wh, inv_eff)
+    pv_ac_max = pv_conversion.ac_power_w
 
     def charge(surplus_dc: float) -> float:
         nonlocal battery_energy
@@ -241,21 +243,23 @@ def _dispatch_dc_step(
 
     if has_battery and pv_ac_max >= load:
         ledger["pv_ac_to_load"] = load
-        dc_to_load = load / inv_eff if inv_eff > 0.0 else 0.0
+        dc_to_load = dc_power_for_ac_output(load, inv_cap_ac_wh, inv_eff)
         surplus_dc = max(0.0, pv_dc - dc_to_load)
         drawn = charge(surplus_dc)
         remaining_dc = surplus_dc - drawn
-        export_headroom = max(0.0, inv_cap_ac_wh - load)
-        export_ac = min(remaining_dc * inv_eff, export_headroom)
-        dc_export = export_ac / inv_eff if inv_eff > 0.0 else 0.0
+        direct_conversion = calculate_dc_ac_power(dc_to_load + remaining_dc, inv_cap_ac_wh, inv_eff)
+        export_ac = max(0.0, direct_conversion.ac_power_w - load)
+        dc_export = max(0.0, dc_to_load + remaining_dc - direct_conversion.clipping_loss_dc_w - dc_to_load)
         ledger["pv_ac_export"] = export_ac
         ledger["pv_dc_to_inverter"] = dc_to_load + dc_export
-        ledger["pv_dc_curtailed"] = max(0.0, remaining_dc - dc_export)
+        ledger["pv_dc_curtailed"] = direct_conversion.clipping_loss_dc_w
+        ledger["pv_direct_inverter_loss"] = direct_conversion.conversion_loss_w
     elif has_battery:
         ledger["pv_ac_to_load"] = pv_ac_max
-        dc_to_inverter = pv_ac_max / inv_eff if inv_eff > 0.0 else 0.0
+        dc_to_inverter = pv_dc - pv_conversion.clipping_loss_dc_w
         ledger["pv_dc_to_inverter"] = dc_to_inverter
-        excess_dc = max(0.0, pv_dc - dc_to_inverter)
+        ledger["pv_direct_inverter_loss"] = pv_conversion.conversion_loss_w
+        excess_dc = pv_conversion.clipping_loss_dc_w
         deficit = load - pv_ac_max
         if excess_dc > 1e-12:
             # The inverter is saturated by PV. DC above its immediate AC
@@ -265,31 +269,64 @@ def _dispatch_dc_step(
             ledger["grid_import"] = deficit
         else:
             available = max(0.0, battery_energy - emin)
-            headroom = max(0.0, inv_cap_ac_wh - pv_ac_max)
-            target_ac = min(deficit, cap_discharge_ac_wh, headroom)
-            total_eff = eff_discharge * inv_eff
-            if available > 0.0 and total_eff > 0.0 and target_ac > 0.0:
-                draw = min(available, target_ac / total_eff)
+            target_total_ac = min(load, inv_cap_ac_wh)
+            if available > 0.0 and eff_discharge > 0.0 and target_total_ac > pv_ac_max:
+                total_dc_target = dc_power_for_ac_output(target_total_ac, inv_cap_ac_wh, inv_eff)
+                battery_dc = min(available * eff_discharge, max(0.0, total_dc_target - pv_dc))
+
+                def combined_conversion(battery_dc_input: float) -> tuple[float, float, float]:
+                    total_dc = pv_dc + battery_dc_input
+                    conversion = calculate_dc_ac_power(total_dc, inv_cap_ac_wh, inv_eff)
+                    if total_dc <= 0.0:
+                        return 0.0, 0.0, 0.0
+                    battery_ac = conversion.ac_power_w * battery_dc_input / total_dc
+                    pv_ac = conversion.ac_power_w - battery_ac
+                    return pv_ac, battery_ac, conversion.conversion_loss_w
+
+                # The public discharge limit is AC delivered. If it binds,
+                # solve for the battery DC contribution at the one shared
+                # inverter operating point rather than applying a second
+                # independent part-load curve.
+                if math.isfinite(cap_discharge_ac_wh):
+                    _, unconstrained_battery_ac, _ = combined_conversion(battery_dc)
+                    if unconstrained_battery_ac > cap_discharge_ac_wh:
+                        lower = 0.0
+                        upper = battery_dc
+                        for _ in range(40):
+                            midpoint = (lower + upper) / 2.0
+                            _, midpoint_battery_ac, _ = combined_conversion(midpoint)
+                            if midpoint_battery_ac < cap_discharge_ac_wh:
+                                lower = midpoint
+                            else:
+                                upper = midpoint
+                        battery_dc = upper
+
+                pv_delivered_ac, delivered_ac, total_inverter_loss = combined_conversion(battery_dc)
+                draw = battery_dc / eff_discharge
                 battery_energy -= draw
-                after_cells = draw * eff_discharge
-                delivered_ac = after_cells * inv_eff
+                total_inverter_dc = pv_dc + battery_dc
+                battery_inverter_loss = (
+                    total_inverter_loss * battery_dc / total_inverter_dc if total_inverter_dc > 0.0 else 0.0
+                )
                 ledger["battery_discharge_dc"] = draw
                 ledger["battery_ac_to_load"] = delivered_ac
-                ledger["battery_discharge_loss"] = draw - after_cells
-                ledger["battery_inverter_loss"] = after_cells - delivered_ac
-                ledger["grid_import"] = max(0.0, deficit - delivered_ac)
+                ledger["battery_discharge_loss"] = draw - battery_dc
+                ledger["battery_inverter_loss"] = battery_inverter_loss
+                ledger["pv_ac_to_load"] = pv_delivered_ac
+                ledger["pv_direct_inverter_loss"] = total_inverter_loss - battery_inverter_loss
+                ledger["grid_import"] = max(0.0, load - pv_delivered_ac - delivered_ac)
             else:
                 ledger["grid_import"] = deficit
     else:
         usable_ac = pv_ac_max
         ledger["pv_ac_to_load"] = min(usable_ac, load)
         ledger["pv_ac_export"] = usable_ac - ledger["pv_ac_to_load"]
-        dc_to_inverter = usable_ac / inv_eff if inv_eff > 0.0 else 0.0
+        dc_to_inverter = pv_dc - pv_conversion.clipping_loss_dc_w
         ledger["pv_dc_to_inverter"] = dc_to_inverter
-        ledger["pv_dc_curtailed"] = max(0.0, pv_dc - dc_to_inverter)
+        ledger["pv_dc_curtailed"] = pv_conversion.clipping_loss_dc_w
+        ledger["pv_direct_inverter_loss"] = pv_conversion.conversion_loss_w
         ledger["grid_import"] = max(0.0, load - ledger["pv_ac_to_load"])
 
-    ledger["pv_direct_inverter_loss"] = ledger["pv_dc_to_inverter"] * (1.0 - inv_eff)
     return battery_energy, ledger
 
 
@@ -625,7 +662,14 @@ def simulate_energy_balance(
         pv_curtailment = ledger["pv_dc_curtailed"]
         battery_charge_loss = ledger["battery_charge_loss"]
         battery_discharge_loss = ledger["battery_discharge_loss"]
-        pv_production = (pv_dc_power - pv_curtailment) * battery_config.inverter_efficiency
+        # Compatibility field: retain the exact 0.3.4 result when a lower-
+        # level caller omits the inverter rating. With a finite inverter, use
+        # the explicit part-load conversion loss. Public economics use the AC
+        # ledger fields instead.
+        if math.isinf(cap_wh):
+            pv_production = (pv_dc_power - pv_curtailment) * battery_config.inverter_efficiency
+        else:
+            pv_production = pv_dc_power - pv_curtailment - ledger["pv_direct_inverter_loss"]
         battery_energy_delta = Battery_Energy_Wh - battery_energy_beginning
 
         # Compute cell temperature via lumped thermal model
