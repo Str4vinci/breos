@@ -10,12 +10,16 @@ from breos.emissions import EmissionsParams
 from breos.pv_modules import MODULES, PVModuleParams, get_module
 from breos.resources import load_config_json
 from breos.solar import (
+    DEFAULT_DIFFUSE_IAM,
     DEFAULT_PEREZ_MODEL,
     DEFAULT_SOLAR_POSITION,
+    DEFAULT_TEMPERATURE_MODEL,
     DEFAULT_TRANSPOSITION_MODEL,
+    DIFFUSE_IAM_METHODS,
     PEREZ_MODELS,
     SOLAR_POSITION_METHODS,
     SURFACE_TYPES,
+    TEMPERATURE_MODELS,
     TRANSPOSITION_MODELS,
     estimate_optimal_tilt,
 )
@@ -42,6 +46,8 @@ DEFAULTS: dict[str, Any] = {
     "surface_type": None,
     "model_perez": DEFAULT_PEREZ_MODEL,
     "solar_position": DEFAULT_SOLAR_POSITION,
+    "diffuse_iam": DEFAULT_DIFFUSE_IAM,
+    "temperature_model": DEFAULT_TEMPERATURE_MODEL,
     "resolution": "h",
     "projection_years": 20,
     "cost_preset": None,
@@ -206,6 +212,12 @@ def validate_config(cfg: dict[str, Any]) -> None:
     if str(cfg["solar_position"]).strip().lower() not in SOLAR_POSITION_METHODS:
         valid = ", ".join(SOLAR_POSITION_METHODS)
         raise ValueError(f"'solar_position' must be one of: {valid}")
+    if str(cfg["diffuse_iam"]).strip().lower() not in DIFFUSE_IAM_METHODS:
+        valid = ", ".join(DIFFUSE_IAM_METHODS)
+        raise ValueError(f"'diffuse_iam' must be one of: {valid}")
+    if str(cfg["temperature_model"]).strip().lower() not in TEMPERATURE_MODELS:
+        valid = ", ".join(TEMPERATURE_MODELS)
+        raise ValueError(f"'temperature_model' must be one of: {valid}")
     overrides = cfg.get("pv_loss_overrides")
     if overrides is not None:
         if not isinstance(overrides, dict):

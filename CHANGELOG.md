@@ -5,6 +5,26 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 ## [Unreleased]
 
 ### Added
+- `temperature_model` App config key, `--temperature-model` CLI flag, and
+  `temperature_model=` parameter on every solar-chain function. The
+  `"pvsyst-freestanding"`, `"pvsyst-semi-integrated"`, and
+  `"pvsyst-insulated"` presets use pvlib's PVsyst cell-temperature model
+  with its documented mounting coefficient sets. The default `"faiman"`
+  (open-rack Faiman coefficients, bit-for-bit unchanged) runs cool for
+  roof-mounted systems — BREOS's primary audience — and systematically
+  overestimates their yield; rooftop studies should pick a roof preset.
+  The validation suite runs a `perez_roof` (semi-integrated) config so the
+  rooftop yield delta is documented per site.
+- `diffuse_iam` App config key, `--diffuse-iam` CLI flag, and `diffuse_iam=`
+  parameter on every solar-chain function. `"marion"` applies the
+  incidence-angle modifier to the sky- and ground-diffuse POA components via
+  pvlib's view-factor-integrated `iam.marion_diffuse` (Marion 2017), using
+  the same ashrae model as the beam IAM. Beam-only IAM (diffuse passing at
+  1.0) was a known ~0.5–1.5% systematic overestimate; across the validation
+  suite `"marion"` lowers annual yield 1.1–2.0% and moves BREOS toward the
+  PVGIS reference at all seven sites (e.g. Porto +9.4% → +7.8%). The default
+  `"none"` reproduces prior behaviour bit-for-bit; the validation suite now
+  runs a `perez_diffuse` config so the effect is tracked per site.
 - `solar_position` App config key, `--solar-position` CLI flag, and
   `solar_position=` parameter on every solar-chain function
   (`calculate_pv_production_dc`/`_dc_tracking`/`_ac`/`_tmy`,

@@ -251,17 +251,19 @@ end-to-end through `build_dc_system_base` and the multi-array path):
 - **Configurable transposition models** — shipped in 0.3.2 (see the dedicated
   item below).
 - **Bifacial rear-gain** — see the dedicated item below.
-- **Cell-temperature model choice** — `faiman` is currently hardcoded in
-  `_compute_effective_irradiance_and_cell_temp`; expose `sapm`, `pvsyst`, and
-  `noct_sam` with their parameter sets. Lead with mount-type parameter
-  presets (open rack vs roof mount): the current free-standing coefficients
-  run cool for rooftop residential systems — BREOS's primary audience — and
-  systematically overestimate their yield.
-- **IAM model choice** — `ashrae` is currently hardcoded; expose `martin_ruiz`,
-  `physical`, and the SAPM IAM. Also apply IAM to the diffuse components:
-  effective irradiance currently applies IAM to beam only (diffuse passes at
-  1.0), a ~0.5–1% systematic overestimate; pvlib's `iam.marion_diffuse`
-  covers the sky/ground diffuse terms.
+- **Cell-temperature model choice** — mount-type presets shipped 2026-07
+  (0.3.4): `temperature_model` selects `faiman` (default, open rack,
+  bit-for-bit) or the PVsyst mounting presets
+  (`pvsyst-freestanding`/`-semi-integrated`/`-insulated`), addressing the
+  rooftop over-prediction. Remaining: expose `sapm` and `noct_sam` with
+  their parameter sets, and let the pvsyst path take the module's real
+  efficiency instead of pvlib's 0.1 default.
+- **IAM model choice** — diffuse IAM shipped 2026-07 (0.3.4):
+  `diffuse_iam = "marion"` applies the view-factor-integrated ashrae IAM to
+  the sky/ground diffuse terms (was beam-only, a ~0.5–1% systematic
+  overestimate; moves BREOS toward PVGIS at all seven validation sites).
+  Remaining: expose `martin_ruiz`, `physical`, and the SAPM IAM for the
+  beam term.
 - **DC-side loss refinements** — optional time-series ohmic/soiling/snow models in
   place of (parts of) the flat PVWatts loss stack, where inputs allow.
 - Non-goal: replacing the CEC single-diode core or the PVWatts loss model as the
