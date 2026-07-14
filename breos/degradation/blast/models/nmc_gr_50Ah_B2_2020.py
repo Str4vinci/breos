@@ -24,7 +24,7 @@ class NMC_Gr_50Ah_B2(BatteryDegradationModel):
 
         MODEL SENSITIVITY
             The model predicts degradation rate versus time as a function of temperature and average
-            state-of-charge and degradation rate versus equivalent full cycles (charge-throughput) as 
+            state-of-charge and degradation rate versus equivalent full cycles (charge-throughput) as
             a function of average state-of-charge during a cycle, depth-of-discharge, and average of the
             charge and discharge C-rates.
 
@@ -38,44 +38,44 @@ class NMC_Gr_50Ah_B2(BatteryDegradationModel):
     def __init__(self, degradation_scalar: float = 1, label: str = "NMC-Gr B2 50Ah"):
         # States: Internal states of the battery model
         self.states = {
-            'qLoss_t': np.array([0]),
-            'qLoss_EFC': np.array([0]),
+            "qLoss_t": np.array([0]),
+            "qLoss_EFC": np.array([0]),
         }
 
         # Outputs: Battery properties derived from state values
         self.outputs = {
-            'q': np.array([1]),
-            'q_t': np.array([1]),
-            'q_EFC': np.array([1]),
+            "q": np.array([1]),
+            "q_t": np.array([1]),
+            "q_EFC": np.array([1]),
         }
 
         # Stressors: History of stressors on the battery
         self.stressors = {
-            'delta_t_days': np.array([np.nan]), 
-            't_days': np.array([0]),
-            'delta_efc': np.array([np.nan]), 
-            'efc': np.array([0]),
-            'TdegK': np.array([np.nan]),
-            'soc': np.array([np.nan]), 
-            'Ua': np.array([np.nan]), 
-            'dod': np.array([np.nan]), 
-            'Crate': np.array([np.nan]),
+            "delta_t_days": np.array([np.nan]),
+            "t_days": np.array([0]),
+            "delta_efc": np.array([np.nan]),
+            "efc": np.array([0]),
+            "TdegK": np.array([np.nan]),
+            "soc": np.array([np.nan]),
+            "Ua": np.array([np.nan]),
+            "dod": np.array([np.nan]),
+            "Crate": np.array([np.nan]),
         }
 
         # Rates: History of stressor-dependent degradation rates
         self.rates = {
-            'kcal': np.array([np.nan]),
-            'kcyc': np.array([np.nan]),
+            "kcal": np.array([np.nan]),
+            "kcyc": np.array([np.nan]),
         }
 
         # Expermental range: details on the range of experimental conditions, i.e.,
         # the range we expect the model to be valid in
         self.experimental_range = {
-            'cycling_temperature': [10, 45],
-            'dod': [0.8, 1],
-            'soc': [0, 1],
-            'max_rate_charge': 1.75,
-            'max_rate_discharge': 1.75,
+            "cycling_temperature": [10, 45],
+            "dod": [0.8, 1],
+            "soc": [0, 1],
+            "max_rate_charge": 1.75,
+            "max_rate_discharge": 1.75,
         }
 
         # Degradation scalar - scales all state changes by a coefficient
@@ -93,16 +93,16 @@ class NMC_Gr_50Ah_B2(BatteryDegradationModel):
     def _params_life(self):
         return {
             # Capacity fade parameters
-            'p1': 12,
-            'p2': -3.91,
-            'pcal': 0.584,
-            'p3': 2.2e+09,
-            'p4': 11.9,
-            'p5': -35.7,
-            'p6': 13.7,
-            'pcyc': 0.907,
+            "p1": 12,
+            "p2": -3.91,
+            "pcal": 0.584,
+            "p3": 2.2e09,
+            "p4": 11.9,
+            "p5": -35.7,
+            "p6": 13.7,
+            "pcyc": 0.907,
         }
-    
+
     def update_rates(self, stressors):
         # Calculate and update battery degradation rates based on stressor values
         # Inputs:
@@ -117,20 +117,21 @@ class NMC_Gr_50Ah_B2(BatteryDegradationModel):
         dod = stressors["dod"]
         Crate = stressors["Crate"]
         TdegKN = TdegK / (273.15 + 35)
-        UaN = Ua / 0.123 # Ua at about 50% SOC
+        UaN = Ua / 0.123  # Ua at about 50% SOC
 
         # Grab parameters
         p = self._params_life
 
         # Calculate the degradation coefficients
-        kcal = (p['p1']
-            * np.exp(p['p2']*(1/(TdegKN**3)) * (UaN**(1/3))))
+        kcal = p["p1"] * np.exp(p["p2"] * (1 / (TdegKN**3)) * (UaN ** (1 / 3)))
 
-        kcyc = (p['p3']
-            * (dod*(1/(TdegKN**3))*(Crate**0.5))**p['p4']
-            * np.exp(p['p5']*dod*(1/(TdegKN**2))*(Crate**0.5))
-            * np.exp(p['p6']*(dod**2)*(1/(TdegKN**3))*Crate))
-        
+        kcyc = (
+            p["p3"]
+            * (dod * (1 / (TdegKN**3)) * (Crate**0.5)) ** p["p4"]
+            * np.exp(p["p5"] * dod * (1 / (TdegKN**2)) * (Crate**0.5))
+            * np.exp(p["p6"] * (dod**2) * (1 / (TdegKN**3)) * Crate)
+        )
+
         # Calculate time based average of each rate
         kcal = np.trapezoid(kcal, x=t_secs) / delta_t_secs
         kcyc = np.trapezoid(kcyc, x=t_secs) / delta_t_secs
@@ -139,17 +140,17 @@ class NMC_Gr_50Ah_B2(BatteryDegradationModel):
         rates = np.array([kcal, kcyc])
         for k, v in zip(self.rates.keys(), rates):
             self.rates[k] = np.append(self.rates[k], v)
-    
+
     def update_states(self, stressors):
         # Update the battery states, based both on the degradation state as well as the battery performance
         # at the ambient temperature, T_celsius
         # Inputs:
-            #   stressors (dict): output from extract_stressors
-            
+        #   stressors (dict): output from extract_stressors
+
         # Unpack stressors
         delta_t_days = stressors["delta_t_days"]
         delta_efc = stressors["delta_efc"]
-        
+
         # Grab parameters
         p = self._params_life
 
@@ -161,23 +162,27 @@ class NMC_Gr_50Ah_B2(BatteryDegradationModel):
         # Calculate incremental state changes
         states = self.states
         # Capacity
-        dq_t = self._degradation_scalar * self._update_power_state(states['qLoss_t'][-1], delta_t_days/1e4, r['kcal'], p['pcal'])
-        dq_EFC = self._degradation_scalar * self._update_power_state(states['qLoss_EFC'][-1], delta_efc/1e4, r['kcyc'], p['pcyc'])
+        dq_t = self._degradation_scalar * self._update_power_state(
+            states["qLoss_t"][-1], delta_t_days / 1e4, r["kcal"], p["pcal"]
+        )
+        dq_EFC = self._degradation_scalar * self._update_power_state(
+            states["qLoss_EFC"][-1], delta_efc / 1e4, r["kcyc"], p["pcyc"]
+        )
 
         # Accumulate and store states
         dx = np.array([dq_t, dq_EFC])
         for k, v in zip(states.keys(), dx):
             x = self.states[k][-1] + v
             self.states[k] = np.append(self.states[k], x)
-    
+
     def update_outputs(self, stressors):
         # Calculate outputs, based on current battery state
         states = self.states
 
         # Capacity
-        q_t = 1 - states['qLoss_t'][-1]
-        q_EFC = 1 - states['qLoss_EFC'][-1]
-        q = 1 - states['qLoss_t'][-1] - states['qLoss_EFC'][-1]
+        q_t = 1 - states["qLoss_t"][-1]
+        q_EFC = 1 - states["qLoss_EFC"][-1]
+        q = 1 - states["qLoss_t"][-1] - states["qLoss_EFC"][-1]
 
         # Assemble output
         out = np.array([q, q_t, q_EFC])

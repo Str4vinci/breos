@@ -66,7 +66,7 @@ class BatteryDegradationModel:
         """
         Update time-varying power B state
         Trajectory equation: y = (k*x)^p
-        State equation: 
+        State equation:
             z = (y^(1/p))/k
             dy = (p*(k*z)^p)/z
 
@@ -128,7 +128,7 @@ class BatteryDegradationModel:
                 z = (k * x_inv) ** p
                 dydx = (2 * y_inf * p * np.exp(z) * z) / (x_inv * (np.exp(z) + 1) ** 2)
         return dydx * dx
-    
+
     @staticmethod
     def _update_exponential_relax_state(y0: float, dx: float, y_inf: float, tau: float):
         """
@@ -148,7 +148,7 @@ class BatteryDegradationModel:
         if dx == 0:
             dydx = 0
         else:
-            dydx = (tau*y_inf**2) / (y_inf-y0)
+            dydx = (tau * y_inf**2) / (y_inf - y0)
             # Avoid negative values (when y > y_inf)
             if dydx < 0:
                 dydx = 0
@@ -170,6 +170,7 @@ class BatteryDegradationModel:
         Return:
             Ua
         """
+
         # Calculate lithiation fraction from soc
         def get_Xa(soc):
             return 8.5 * 10**-3 + soc * (0.78 - 8.5 * 10**-3)
@@ -222,15 +223,11 @@ class BatteryDegradationModel:
         required_keys = ["Temperature_C", "SOC", "Time_s"]
         for key in required_keys:
             if key not in input_timeseries:
-                raise ValueError(
-                    f"Required key '{key}' is missing in the input_timeseries dictionary."
-                )
+                raise ValueError(f"Required key '{key}' is missing in the input_timeseries dictionary.")
         # Check if all values are numpy arrays and of the same length
         lengths = [len(input_timeseries[key]) for key in required_keys]
         if len(set(lengths)) != 1:
-            raise ValueError(
-                "All numpy arrays in input_timeseries must have the same length."
-            )
+            raise ValueError("All numpy arrays in input_timeseries must have the same length.")
 
         # Unpack the inputs. DataFrame-like objects are accepted without
         # importing pandas into the vendored BREOS runtime path.
@@ -244,14 +241,12 @@ class BatteryDegradationModel:
                 soc = input_timeseries["SOC"].values
                 temperature = input_timeseries["Temperature_C"].values
             except (AttributeError, KeyError, TypeError) as exc:
-                raise TypeError(
-                    "'input_timeseries' was not a dict or DataFrame-like object."
-                ) from exc
+                raise TypeError("'input_timeseries' was not a dict or DataFrame-like object.") from exc
 
         # Check stopping criteria (thresholds)
         # If all are none, infer that we just run the simulation over the input timeseries once, so set threshold_time to t_secs[-1]
         if threshold_time is None and threshold_capacity is None and threshold_efc is None:
-            threshold_time = (t_secs[-1] - 1) / (365 *24 * 60 * 60) # 1 s threshold to make sure we cross this limit
+            threshold_time = (t_secs[-1] - 1) / (365 * 24 * 60 * 60)  # 1 s threshold to make sure we cross this limit
 
         if is_constant_input:
             # Run life sim repeating until simulation is longer than threshold_time
@@ -266,20 +261,19 @@ class BatteryDegradationModel:
                 if threshold_time is not None and self.stressors["t_days"][-1] / 365 > threshold_time:
                     is_simulation_complete = True
                     break
-                if threshold_capacity is not None and self.outputs['q'][-1] < threshold_capacity:
+                if threshold_capacity is not None and self.outputs["q"][-1] < threshold_capacity:
                     is_simulation_complete = True
                     break
                 if threshold_efc is not None and self.stressors["efc"][-1] > threshold_efc:
                     is_simulation_complete = True
                     break
                 self.update_battery_state_repeating(is_conserve_energy_throughput)
-    
+
             return self
         else:
             # Chunk the input timeseries into cycles (SOC turning points) using the rainflow algorithm
             cycles_generator = (
-                [span, mean, count, idx_start, idx_end]
-                for span, mean, count, idx_start, idx_end in extract_cycles(soc)
+                [span, mean, count, idx_start, idx_end] for span, mean, count, idx_start, idx_end in extract_cycles(soc)
             )
             idx_turning_point = []
             for cycle in cycles_generator:
@@ -316,29 +310,29 @@ class BatteryDegradationModel:
                         # Rescale SOC according to SOH to reflect changing battery performance over its life
                         # If this isn't true, the '_extract_stressors' function will automatically decrease dEFC
                         # by the health of the battery to reflect lower charge throughput from a cycle as the battery ages.
-                        soc_ = soc[prior_breakpoint:breakpoint + 1]
-                        soc_ = rescale_soc(soc_, 1/self.outputs["q"][-1])
-                        soc[prior_breakpoint:breakpoint + 1] = soc_
+                        soc_ = soc[prior_breakpoint : breakpoint + 1]
+                        soc_ = rescale_soc(soc_, 1 / self.outputs["q"][-1])
+                        soc[prior_breakpoint : breakpoint + 1] = soc_
                         if breakpoint < len(soc) - 1:
-                            soc[breakpoint + 1:] += (soc_[-1] - soc[breakpoint])
+                            soc[breakpoint + 1 :] += soc_[-1] - soc[breakpoint]
                         # plt.plot(t_secs, soc)
                     # Update battery state between breakpoints
                     self.update_battery_state(
-                        t_secs[prior_breakpoint:breakpoint + 1],
-                        soc[prior_breakpoint:breakpoint + 1],
-                        temperature[prior_breakpoint:breakpoint + 1],
+                        t_secs[prior_breakpoint : breakpoint + 1],
+                        soc[prior_breakpoint : breakpoint + 1],
+                        temperature[prior_breakpoint : breakpoint + 1],
                     )
                     prior_breakpoint = breakpoint + 1
                     if threshold_time is not None and self.stressors["t_days"][-1] / 365 > threshold_time:
                         is_simulation_complete = True
                         break
-                    if threshold_capacity is not None and self.outputs['q'][-1] < threshold_capacity:
+                    if threshold_capacity is not None and self.outputs["q"][-1] < threshold_capacity:
                         is_simulation_complete = True
                         break
                     if threshold_efc is not None and self.stressors["efc"][-1] > threshold_efc:
                         is_simulation_complete = True
                         break
-            
+
             return self
 
     @staticmethod
@@ -373,10 +367,7 @@ class BatteryDegradationModel:
             if time_seconds[i] - time_seconds[last_breakpoint] > max_time_diff_s:
                 # Add a breakpoint at each day
                 for i_time in range(last_breakpoint, i):
-                    if (
-                        time_seconds[i_time] - time_seconds[last_breakpoint]
-                        > max_time_diff_s
-                    ):
+                    if time_seconds[i_time] - time_seconds[last_breakpoint] > max_time_diff_s:
                         breakpoints.append(i_time)
                         last_breakpoint = i_time
                 continue
@@ -388,9 +379,7 @@ class BatteryDegradationModel:
 
         return breakpoints
 
-    def update_battery_state(
-        self, t_secs: np.ndarray, soc: np.ndarray, T_celsius: np.ndarray
-    ):
+    def update_battery_state(self, t_secs: np.ndarray, soc: np.ndarray, T_celsius: np.ndarray):
         """
         Update the battery states, based both on the degradation state as well as the battery performance
         at the ambient temperature, T_celsius. This function assumes battery load is changing all the time.
@@ -418,7 +407,9 @@ class BatteryDegradationModel:
             if key == "delta_t_days":
                 # Accumulate value
                 self.stressors[key] = np.append(self.stressors[key], stressors[key])
-                self.stressors["t_days"] = np.append(self.stressors["t_days"], self.stressors["t_days"][-1] + stressors[key])
+                self.stressors["t_days"] = np.append(
+                    self.stressors["t_days"], self.stressors["t_days"][-1] + stressors[key]
+                )
             elif key == "delta_efc":
                 # Accumulate value
                 self.stressors[key] = np.append(self.stressors[key], stressors[key])
@@ -461,7 +452,7 @@ class BatteryDegradationModel:
         else:
             self.stressors["efc"] = np.append(
                 self.stressors["efc"],
-                self.stressors["efc"][-1] + self.stressors["delta_efc"][-1] * self.outputs['q'][-1],
+                self.stressors["efc"][-1] + self.stressors["delta_efc"][-1] * self.outputs["q"][-1],
             )
 
         # copy end values of old stressors into a dict
@@ -506,9 +497,7 @@ class BatteryDegradationModel:
         """
         pass
 
-    def _extract_stressors(self, 
-        t_secs: np.ndarray, soc: np.ndarray, T_celsius: np.ndarray
-    ) -> dict:
+    def _extract_stressors(self, t_secs: np.ndarray, soc: np.ndarray, T_celsius: np.ndarray) -> dict:
         """Extract stressor values including time, temperature, depth-of-discharge,
         temperature, Ua, C-rate, and cycles.
 
@@ -524,18 +513,14 @@ class BatteryDegradationModel:
         # Extract stressors
         t_days = t_secs / (24 * 60 * 60)
         delta_t_days = t_days[-1] - t_days[0]
-        delta_efc = (
-            np.sum(np.abs(np.ediff1d(soc, to_begin=0))) / 2
-        )  # sum the total changes to SOC / 2
+        delta_efc = np.sum(np.abs(np.ediff1d(soc, to_begin=0))) / 2  # sum the total changes to SOC / 2
         # EFC is in units of amp*hours per amp*hours nominal, not percent capacity per percent capacity nominal, so rescale by current health
         delta_efc = delta_efc * self.outputs["q"][-1]
         dod = np.max(soc) - np.min(soc)
-        abs_instantaneous_crate = np.abs(
-            np.diff(soc) / np.diff(t_secs / (60 * 60))
-        )  # get instantaneous C-rates
-        abs_instantaneous_crate[
-            abs_instantaneous_crate < 1e-2
-        ] = 0  # get rid of extremely small values (storage) before calculating mean
+        abs_instantaneous_crate = np.abs(np.diff(soc) / np.diff(t_secs / (60 * 60)))  # get instantaneous C-rates
+        abs_instantaneous_crate[abs_instantaneous_crate < 1e-2] = (
+            0  # get rid of extremely small values (storage) before calculating mean
+        )
         Crate = np.trapezoid(abs_instantaneous_crate, t_days[1:]) / delta_t_days
         # Check storage condition, which will give nan Crate:
         if np.isnan(Crate):

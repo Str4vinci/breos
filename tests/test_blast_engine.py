@@ -112,9 +112,7 @@ def test_snapshot_restore_preserves_mid_swing_boundary_efc():
     restored = BlastEngine.from_snapshot("lfp_gr_250ah_prismatic", split.state_snapshot())
     split_soh = restored.step(*day_2)
 
-    expected_efc = (np.abs(np.diff(soc[:25])).sum() / 2.0) + (
-        np.abs(np.diff(soc[24:49])).sum() / 2.0
-    ) * q_after_day_1
+    expected_efc = (np.abs(np.diff(soc[:25])).sum() / 2.0) + (np.abs(np.diff(soc[24:49])).sum() / 2.0) * q_after_day_1
 
     assert split_soh == pytest.approx(continuous_soh, abs=1e-12)
     assert restored.model.stressors["efc"][-1] == pytest.approx(

@@ -1,16 +1,17 @@
 # Paul Gasper, NREL
-# This model is fit to LG M50 cell aging data reported by Truong Bui et al, https://ieeexplore.ieee.org/document/9617644 
-# Cell chemistry details were reported in a different study by O'Regan et al, https://www.sciencedirect.com/science/article/pii/S0013468622008593 
+# This model is fit to LG M50 cell aging data reported by Truong Bui et al, https://ieeexplore.ieee.org/document/9617644
+# Cell chemistry details were reported in a different study by O'Regan et al, https://www.sciencedirect.com/science/article/pii/S0013468622008593
 # Cell tests were reported in 2021, so likely 2019 or 2020 LG MJ1 cells.
 # These 21700 LG M50 cells are similar to those found in some EVs, such as Lucid and Rivian, though not sure if those have GrSi composite negative electrodes.
 
 import numpy as np
 from ..degradation_model import BatteryDegradationModel
 
+
 class Nmc811_GrSi_LGM50_5Ah_Battery(BatteryDegradationModel):
     """
-    This model is fit to LG M50 cell aging data reported by Truong Bui et al, https://ieeexplore.ieee.org/document/9617644 
-    Cell chemistry details were reported in a different study by O'Regan et al, https://www.sciencedirect.com/science/article/pii/S0013468622008593 
+    This model is fit to LG M50 cell aging data reported by Truong Bui et al, https://ieeexplore.ieee.org/document/9617644
+    Cell chemistry details were reported in a different study by O'Regan et al, https://www.sciencedirect.com/science/article/pii/S0013468622008593
     Cell tests were reported in 2021, so likely 2019 or 2020 LG MJ1 cells.
     These 21700 LG M50 cells are similar to those found in some EVs, such as Lucid and Rivian, though not sure if those have GrSi composite negative electrodes.
 
@@ -24,7 +25,7 @@ class Nmc811_GrSi_LGM50_5Ah_Battery(BatteryDegradationModel):
 
         MODEL SENSITIVITY
             The model predicts degradation rate versus time as a function of temperature and average
-            state-of-charge and degradation rate versus equivalent full cycles (charge-throughput) as 
+            state-of-charge and degradation rate versus equivalent full cycles (charge-throughput) as
             a function of discharge C-rate and temperature.
 
         MODEL LIMITATIONS
@@ -36,44 +37,44 @@ class Nmc811_GrSi_LGM50_5Ah_Battery(BatteryDegradationModel):
     def __init__(self, degradation_scalar: float = 1, label: str = "NMC811-GrSi LG M50"):
         # States: Internal states of the battery model
         self.states = {
-            'qLoss_t': np.array([0]),
-            'qLoss_EFC': np.array([0]),
+            "qLoss_t": np.array([0]),
+            "qLoss_EFC": np.array([0]),
         }
 
         # Outputs: Battery properties derived from state values
         self.outputs = {
-            'q': np.array([1]),
-            'q_t': np.array([1]),
-            'q_EFC': np.array([1]),
+            "q": np.array([1]),
+            "q_t": np.array([1]),
+            "q_EFC": np.array([1]),
         }
 
         # Stressors: History of stressors on the battery
         self.stressors = {
-            'delta_t_days': np.array([np.nan]), 
-            't_days': np.array([0]),
-            'delta_efc': np.array([np.nan]), 
-            'efc': np.array([0]),
-            'TdegK': np.array([np.nan]),
-            'soc': np.array([np.nan]),
-            'dod': np.array([np.nan]),
-            'Crate': np.array([np.nan]),
-            'Cdis': np.array([np.nan]),
+            "delta_t_days": np.array([np.nan]),
+            "t_days": np.array([0]),
+            "delta_efc": np.array([np.nan]),
+            "efc": np.array([0]),
+            "TdegK": np.array([np.nan]),
+            "soc": np.array([np.nan]),
+            "dod": np.array([np.nan]),
+            "Crate": np.array([np.nan]),
+            "Cdis": np.array([np.nan]),
         }
 
         # Rates: History of stressor-dependent degradation rates
         self.rates = {
-            'k_cal': np.array([np.nan]),
-            'k_cyc': np.array([np.nan]),
+            "k_cal": np.array([np.nan]),
+            "k_cyc": np.array([np.nan]),
         }
 
         # Expermental range: details on the range of experimental conditions, i.e.,
         # the range we expect the model to be valid in
         self.experimental_range = {
-            'cycling_temperature': [0, 25],
-            'dod': [1],
-            'soc': [0, 1],
-            'max_rate_charge': 0.3,
-            'max_rate_discharge': 2,
+            "cycling_temperature": [0, 25],
+            "dod": [1],
+            "soc": [0, 1],
+            "max_rate_charge": 0.3,
+            "max_rate_discharge": 2,
         }
 
         # Degradation scalar - scales all state changes by a coefficient
@@ -91,16 +92,16 @@ class Nmc811_GrSi_LGM50_5Ah_Battery(BatteryDegradationModel):
     def _params_life(self):
         return {
             # Capacity fade parameters
-            'p_cal': 0.651697743905278,
-            'q1_b0': -2.39156628786525,
-            'q1_b1': 2.44205317834185,
-            'q1_b2': -4.45998246136905,
-            'q1_b3': 0.448140062203916,
-            'q1_b4': -0.185337797906876,
-            'p_cyc': 0.441996792536332,
-            'q3_b0': 0.181235015387132,
-            'q3_b1': -0.123779206033993,
-            'q3_b2': 1.24459541295018,
+            "p_cal": 0.651697743905278,
+            "q1_b0": -2.39156628786525,
+            "q1_b1": 2.44205317834185,
+            "q1_b2": -4.45998246136905,
+            "q1_b3": 0.448140062203916,
+            "q1_b4": -0.185337797906876,
+            "p_cyc": 0.441996792536332,
+            "q3_b0": 0.181235015387132,
+            "q3_b1": -0.123779206033993,
+            "q3_b2": 1.24459541295018,
         }
 
     # Battery model
@@ -118,24 +119,20 @@ class Nmc811_GrSi_LGM50_5Ah_Battery(BatteryDegradationModel):
         Cdis = stressors["Cdis"]
         TdegKN = TdegK / (273.15 + 35)
         UaN = Ua / 0.123
-        
+
         # Grab parameters
         p = self._params_life
 
         # Calculate the degradation coefficients
         k_cal = (
-            p['q1_b0']
-            + p['q1_b1']*np.exp((TdegKN**3)*(1/(UaN**(1/3))))
-            + p['q1_b2']*(TdegKN**3)*(1/(UaN**0.5))
-            + p['q1_b3']*np.exp((1/(TdegKN**2))*(soc**0.5))
-            + p['q1_b4']*np.exp((soc**3))
+            p["q1_b0"]
+            + p["q1_b1"] * np.exp((TdegKN**3) * (1 / (UaN ** (1 / 3))))
+            + p["q1_b2"] * (TdegKN**3) * (1 / (UaN**0.5))
+            + p["q1_b3"] * np.exp((1 / (TdegKN**2)) * (soc**0.5))
+            + p["q1_b4"] * np.exp((soc**3))
         )
-        
-        k_cyc  = (
-            p['q3_b0']
-            * np.exp(p['q3_b1']*(Cdis**3))
-            * np.exp(p['q3_b2']*(TdegKN**3)*(Cdis**0.5))
-        )
+
+        k_cyc = p["q3_b0"] * np.exp(p["q3_b1"] * (Cdis**3)) * np.exp(p["q3_b2"] * (TdegKN**3) * (Cdis**0.5))
 
         # Calculate time based average of each rate
         k_cal = np.trapezoid(k_cal, x=t_secs) / delta_t_secs
@@ -145,13 +142,13 @@ class Nmc811_GrSi_LGM50_5Ah_Battery(BatteryDegradationModel):
         rates = np.array([k_cal, k_cyc])
         for k, v in zip(self.rates.keys(), rates):
             self.rates[k] = np.append(self.rates[k], v)
-    
+
     def update_states(self, stressors):
         # Update the battery states, based both on the degradation state as well as the battery performance
         # at the ambient temperature, T_celsius
         # Inputs:
-            #   stressors (dict): output from extract_stressors
-            
+        #   stressors (dict): output from extract_stressors
+
         # Unpack stressors
         delta_t_days = stressors["delta_t_days"]
         delta_efc = stressors["delta_efc"]
@@ -167,60 +164,70 @@ class Nmc811_GrSi_LGM50_5Ah_Battery(BatteryDegradationModel):
         # Calculate incremental state changes
         states = self.states
         # Capacity
-        dq_t = self._degradation_scalar * self._update_power_state(states['qLoss_t'][-1], delta_t_days/1e4, r['k_cal'], p['p_cal'])
-        dq_EFC = self._degradation_scalar * self._update_power_state(states['qLoss_EFC'][-1], delta_efc/1e4, r['k_cyc'], p['p_cyc'])
+        dq_t = self._degradation_scalar * self._update_power_state(
+            states["qLoss_t"][-1], delta_t_days / 1e4, r["k_cal"], p["p_cal"]
+        )
+        dq_EFC = self._degradation_scalar * self._update_power_state(
+            states["qLoss_EFC"][-1], delta_efc / 1e4, r["k_cyc"], p["p_cyc"]
+        )
 
         # Accumulate and store states
         dx = np.array([dq_t, dq_EFC])
         for k, v in zip(states.keys(), dx):
             x = self.states[k][-1] + v
             self.states[k] = np.append(self.states[k], x)
-    
+
     def update_outputs(self, stressors):
         # Calculate outputs, based on current battery state
         states = self.states
 
         # Capacity
-        q_t = 1 - states['qLoss_t'][-1]
-        q_EFC = 1 - states['qLoss_EFC'][-1]
-        q = 1 - states['qLoss_t'][-1] - states['qLoss_EFC'][-1]
+        q_t = 1 - states["qLoss_t"][-1]
+        q_EFC = 1 - states["qLoss_EFC"][-1]
+        q = 1 - states["qLoss_t"][-1] - states["qLoss_EFC"][-1]
 
         # Assemble output
         out = np.array([q, q_t, q_EFC])
         # Store results
         for k, v in zip(list(self.outputs.keys()), out):
             self.outputs[k] = np.append(self.outputs[k], v)
-    
+
     def _extract_stressors(self, t_secs, soc, T_celsius):
         # extract the usual stressors
         stressors = BatteryDegradationModel._extract_stressors(self, t_secs, soc, T_celsius)
         # model specific stressors: Cdis
-        t_days = t_secs / (24*60*60)
+        t_days = t_secs / (24 * 60 * 60)
         delta_t_days = t_days[-1] - t_days[0]
         dt = np.diff(t_secs)
-        abs_instantaneous_crate = np.abs(np.diff(soc)/np.diff(t_secs/(60*60))) # get instantaneous C-rates
-        abs_instantaneous_crate[abs_instantaneous_crate < 1e-2] = 0 # get rid of extremely small values (storage) before calculating mean
+        abs_instantaneous_crate = np.abs(np.diff(soc) / np.diff(t_secs / (60 * 60)))  # get instantaneous C-rates
+        abs_instantaneous_crate[abs_instantaneous_crate < 1e-2] = (
+            0  # get rid of extremely small values (storage) before calculating mean
+        )
         Crate = np.trapezoid(abs_instantaneous_crate, t_days[1:]) / delta_t_days
         # Check storage condition, which will give nan Crate:
         if np.isnan(Crate):
             Cdis = 0
         else:
-            instantaneous_crate = np.diff(soc)/(dt/3600)
-            instantaneous_crate[np.abs(instantaneous_crate) < 1e-2] = 0 # threshold tiny values to zero to prevent weirdness
+            instantaneous_crate = np.diff(soc) / (dt / 3600)
+            instantaneous_crate[np.abs(instantaneous_crate) < 1e-2] = (
+                0  # threshold tiny values to zero to prevent weirdness
+            )
             mask_cdis = instantaneous_crate < 0
             instantaneous_cdis = instantaneous_crate[mask_cdis]
             dt_discharging = dt[mask_cdis]
             t_secs_discharging = np.cumsum(dt_discharging)
             if len(instantaneous_cdis) > 1:
-                Cdis = np.trapezoid(instantaneous_cdis, t_secs_discharging) / (t_secs_discharging[-1] - t_secs_discharging[0])
+                Cdis = np.trapezoid(instantaneous_cdis, t_secs_discharging) / (
+                    t_secs_discharging[-1] - t_secs_discharging[0]
+                )
             elif len(instantaneous_cdis) == 1:
                 Cdis = instantaneous_cdis[0]
-            else: # half cycle with no charge segment
+            else:  # half cycle with no charge segment
                 Cdis = 0
         # Similar to EFC, C-rate is in units of Amps/Amp*hours nominal, not percent SOC per hour, so rescale by SOH to correct units
         Crate = Crate * self.outputs["q"][-1]
         Cdis = Cdis * self.outputs["q"][-1]
 
-        stressors['Crate'] = Crate
-        stressors['Cdis'] = np.abs(Cdis)
+        stressors["Crate"] = Crate
+        stressors["Cdis"] = np.abs(Cdis)
         return stressors

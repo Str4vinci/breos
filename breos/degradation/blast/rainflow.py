@@ -128,9 +128,7 @@ def count_cycles(series, ndigits=None, nbins=None, binsize=None):
         raise ValueError("Arguments ndigits, nbins and binsize are mutually exclusive")
 
     counts = defaultdict(float)
-    cycles = (
-        (rng, count) for rng, mean, count, i_start, i_end in extract_cycles(series)
-    )
+    cycles = ((rng, count) for rng, mean, count, i_start, i_end in extract_cycles(series))
 
     if nbins is not None:
         binsize = (max(series) - min(series)) / nbins

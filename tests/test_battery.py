@@ -370,9 +370,7 @@ class TestSimulateEnergyBalance:
         assert degradation_state["degradation_engine"] == "blast"
         assert degradation_state["blast_model"] == "lfp_gr_250ah_prismatic"
         assert degradation_state["blast_engine"]["blast_model_key"] == "lfp_gr_250ah_prismatic"
-        assert degradation_state["day_start_soc_absolute"] == pytest.approx(
-            results_df["Battery_SOC_Absolute"].iloc[-1]
-        )
+        assert degradation_state["day_start_soc_absolute"] == pytest.approx(results_df["Battery_SOC_Absolute"].iloc[-1])
 
     def test_blast_degradation_state_threads_across_calls(self):
         idx = pd.date_range("2025-01-01 00:00", periods=48, freq="h", tz="UTC")
@@ -426,9 +424,7 @@ class TestSimulateEnergyBalance:
         # not depend on how long the run continues afterwards.
         idx = pd.date_range("2025-01-01 00:00", periods=48, freq="h", tz="UTC")
         pv_dc = pd.Series(([0.0] * 8 + [2500.0] * 8 + [0.0] * 8) * 2, index=idx)
-        houseload = pd.DataFrame(
-            {"Load": ([400.0] * 8 + [0.0] * 8 + [400.0] * 8) * 2}, index=idx
-        )
+        houseload = pd.DataFrame({"Load": ([400.0] * 8 + [0.0] * 8 + [400.0] * 8) * 2}, index=idx)
         temperature = pd.Series(25.0, index=idx)
         config = BatteryConfig(nominal_energy_wh=5000, standby_loss_wh=0.0, enable_replacement=False)
 
@@ -463,9 +459,7 @@ class TestSimulateEnergyBalance:
 
         day_1_efc = first_state["blast_engine"]["stressors"]["efc"][-1]
         assert day_1_efc > 0.0
-        assert day_1_efc == pytest.approx(
-            full_degradation["Cumulative_FEC"].iloc[0], abs=1e-12
-        )
+        assert day_1_efc == pytest.approx(full_degradation["Cumulative_FEC"].iloc[0], abs=1e-12)
 
     def test_blast_cumulative_fec_tracks_engine_efc(self):
         idx = pd.date_range("2025-01-01 00:00", periods=48, freq="h", tz="UTC")

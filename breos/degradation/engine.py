@@ -45,9 +45,7 @@ def _as_1d_float_array(name: str, values: Any) -> np.ndarray:
     return array
 
 
-def normalize_step_inputs(
-    t_secs: Any, soc: Any, temperature_c: Any
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+def normalize_step_inputs(t_secs: Any, soc: Any, temperature_c: Any) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Validate and normalize one BLAST update chunk."""
 
     t_secs_array = _as_1d_float_array("t_secs", t_secs)
@@ -86,9 +84,7 @@ def build_endpoint_day(
         raise ValueError("step_seconds must be a positive finite value")
 
     soc_post = _as_1d_float_array("soc_samples", soc_samples)
-    temperature_post = _as_1d_float_array(
-        "temperature_c_samples", temperature_c_samples
-    )
+    temperature_post = _as_1d_float_array("temperature_c_samples", temperature_c_samples)
     if temperature_post.size == 1 and soc_post.size > 1:
         temperature_post = np.full(soc_post.shape, temperature_post.item())
     if temperature_post.size != soc_post.size:
@@ -110,9 +106,7 @@ class BlastEngine:
     def __init__(self, blast_model_key: str, **model_kwargs: Any):
         if blast_model_key not in BLAST_MODEL_CLASSES:
             available = ", ".join(BLAST_MODEL_CLASSES)
-            raise KeyError(
-                f"Unknown BLAST model key {blast_model_key!r}. Available: {available}"
-            )
+            raise KeyError(f"Unknown BLAST model key {blast_model_key!r}. Available: {available}")
         self.blast_model_key = blast_model_key
         self._model_kwargs = dict(model_kwargs)
         self.model = self._new_model()
@@ -123,9 +117,7 @@ class BlastEngine:
     def step(self, t_secs_day: Any, soc_abs_day: Any, t_cell_day_c: Any) -> float:
         """Update by one time chunk and return current SoH fraction."""
 
-        t_secs, soc, temperature_c = normalize_step_inputs(
-            t_secs_day, soc_abs_day, t_cell_day_c
-        )
+        t_secs, soc, temperature_c = normalize_step_inputs(t_secs_day, soc_abs_day, t_cell_day_c)
         self.model.update_battery_state(t_secs, soc, temperature_c)
         return self.soh()
 
@@ -149,23 +141,17 @@ class BlastEngine:
         for group_name in self._ARRAY_GROUPS:
             group = getattr(self.model, group_name)
             snapshot[group_name] = {
-                key: (value.tolist() if serializable else value.copy())
-                for key, value in group.items()
+                key: (value.tolist() if serializable else value.copy()) for key, value in group.items()
             }
         return snapshot
 
     @classmethod
-    def from_snapshot(
-        cls, blast_model_key: str, snapshot: dict[str, Any]
-    ) -> "BlastEngine":
+    def from_snapshot(cls, blast_model_key: str, snapshot: dict[str, Any]) -> "BlastEngine":
         """Rebuild an engine from a previous ``state_snapshot`` result."""
 
         snapshot_key = snapshot.get("blast_model_key")
         if snapshot_key is not None and snapshot_key != blast_model_key:
-            raise ValueError(
-                f"Snapshot blast_model_key {snapshot_key!r} does not match "
-                f"{blast_model_key!r}"
-            )
+            raise ValueError(f"Snapshot blast_model_key {snapshot_key!r} does not match {blast_model_key!r}")
 
         engine = cls(blast_model_key, **snapshot.get("model_kwargs", {}))
         for group_name in cls._ARRAY_GROUPS:

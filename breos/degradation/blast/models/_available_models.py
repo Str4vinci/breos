@@ -6,4 +6,4 @@ def available_models():
     Return list of names of available models.
     """
     clsmembers = inspect.getmembers(sys.modules[__package__], inspect.isclass)
-    return [cls[0] for cls in clsmembers if cls[0] != 'BatteryDegradationModel']
+    return [cls[0] for cls in clsmembers if cls[0] != "BatteryDegradationModel"]

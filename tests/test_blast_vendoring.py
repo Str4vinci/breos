@@ -99,9 +99,7 @@ def _run_model(model_cls, fixture: dict) -> dict[str, list[float]]:
 def test_vendored_blast_imports_all_models():
     from breos.degradation.blast.models import available_models
 
-    assert set(available_models()) == {
-        class_name for _, class_name in MODEL_CLASSES.values()
-    }
+    assert set(available_models()) == {class_name for _, class_name in MODEL_CLASSES.values()}
 
 
 def test_vendored_blast_has_no_forbidden_heavy_imports_or_trapz():
@@ -136,7 +134,5 @@ def test_vendored_blast_matches_golden_soh_fixture():
         expected = fixture["trajectories"][model_key]
 
         np.testing.assert_allclose(actual["soh"], expected["soh"], rtol=0, atol=1e-12)
-        np.testing.assert_allclose(
-            actual["t_days"], expected["t_days"], rtol=0, atol=1e-12
-        )
+        np.testing.assert_allclose(actual["t_days"], expected["t_days"], rtol=0, atol=1e-12)
         np.testing.assert_allclose(actual["efc"], expected["efc"], rtol=0, atol=1e-12)
