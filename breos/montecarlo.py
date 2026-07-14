@@ -178,6 +178,8 @@ def _simulate_trajectory(
     total_replacement_cost = 0.0
     yearly_summaries: list[dict[str, Any]] = []
     first_year_results_df: pd.DataFrame | None = None
+    carried_energy_wh: float | None = None
+    carried_pv_origin_energy_wh: float | None = None
 
     for year_idx in range(years_per_run):
         pv_degradation_factor = (1 - degradation_rate) ** year_idx
@@ -206,6 +208,8 @@ def _simulate_trajectory(
                 enable_replacement=True,
                 replacement_cost=replacement_cost,
                 calendar_model=cfg["calendar_model"],
+                max_charge_power_w=cfg["battery_max_charge_power_w"],
+                max_discharge_power_w=cfg["battery_max_discharge_power_w"],
                 **batt_kwargs,
             )
         else:
@@ -214,6 +218,13 @@ def _simulate_trajectory(
                 inverter_efficiency=cfg["inverter_efficiency"],
                 inverter_ac_capacity_w=inverter_ac_capacity_w,
             )
+
+        state_kwargs: dict[str, float] = {}
+        if carried_energy_wh is not None:
+            state_kwargs = {
+                "initial_energy_wh": carried_energy_wh,
+                "initial_pv_origin_energy_wh": carried_pv_origin_energy_wh or 0.0,
+            }
 
         results_df, total_pv, _summary_df, year_rep_cost, year_n_rep, degradation_df = simulate_energy_balance(
             pv_dc=dc_power,
@@ -226,7 +237,12 @@ def _simulate_trajectory(
             initial_resistance_growth=cumulative_resistance_growth,
             initial_cumulative_cycle_deg=cumulative_cycle_deg,
             initial_cumulative_cal_deg=cumulative_cal_deg,
+            **state_kwargs,
         )
+
+        if has_battery:
+            carried_energy_wh = float(results_df["Battery_Energy_End"].iloc[-1])
+            carried_pv_origin_energy_wh = float(results_df["Battery_PV_Origin_Energy_End"].iloc[-1])
 
         if first_year_results_df is None:
             first_year_results_df = results_df
@@ -243,16 +259,26 @@ def _simulate_trajectory(
         total_replacements += year_n_rep
         total_replacement_cost += year_rep_cost
 
-        total_pv_kwh = total_pv / 1000
+        pv_dc_kwh = float(results_df["PV_DC"].sum() * hours_per_step / 1000)
+        legacy_pv_kwh = float(results_df["PV_Production"].sum() * hours_per_step / 1000)
+        direct_pv_ac_kwh = float(results_df["PV_AC_To_Load"].sum() * hours_per_step / 1000)
+        pv_origin_battery_ac_kwh = float(results_df["Battery_AC_To_Load_PV"].sum() * hours_per_step / 1000)
         total_load = (results_df["Houseload"].sum() / 1000) * hours_per_step
         total_import = (results_df["Import_From_Grid"].sum() / 1000) * hours_per_step
         total_export = (results_df["Sell_To_Grid"].sum() / 1000) * hours_per_step
+        total_pv_kwh = direct_pv_ac_kwh + pv_origin_battery_ac_kwh + total_export
         grid_indep = (1 - total_import / total_load) * 100 if total_load > 0 else 0
 
         yearly_summaries.append(
             {
                 "Year": year_idx + 1,
                 "PV_Production_kWh": total_pv_kwh,
+                "Legacy_PV_Production_kWh": legacy_pv_kwh,
+                "PV_DC_Generation_kWh": pv_dc_kwh,
+                "Direct_PV_AC_Load_kWh": direct_pv_ac_kwh,
+                "PV_Origin_Battery_AC_Load_kWh": pv_origin_battery_ac_kwh,
+                "Self_Consumption_kWh": direct_pv_ac_kwh + pv_origin_battery_ac_kwh,
+                "Curtailment_DC_kWh": float(results_df["PV_DC_Curtailed"].sum() * hours_per_step / 1000),
                 "Load_kWh": total_load,
                 "Import_kWh": total_import,
                 "Export_kWh": total_export,
@@ -296,7 +322,12 @@ def _simulate_trajectory(
         "mean_grid_independence_pct": float(yearly_df["Grid_Independence_%"].mean()),
         "total_replacements": int(total_replacements),
         "total_replacement_cost_eur": float(total_replacement_cost),
-        "mean_pv_production_kwh": float(yearly_df["PV_Production_kWh"].mean()),
+        "mean_pv_production_kwh": float(yearly_df["Legacy_PV_Production_kWh"].mean()),
+        "mean_pv_dc_generation_kwh": float(yearly_df["PV_DC_Generation_kWh"].mean()),
+        "mean_direct_pv_ac_load_kwh": float(yearly_df["Direct_PV_AC_Load_kWh"].mean()),
+        "mean_pv_origin_battery_ac_load_kwh": float(yearly_df["PV_Origin_Battery_AC_Load_kWh"].mean()),
+        "mean_self_consumption_kwh": float(yearly_df["Self_Consumption_kWh"].mean()),
+        "mean_usable_ac_system_production_kwh": float(yearly_df["PV_Production_kWh"].mean()),
         "mean_import_kwh": float(yearly_df["Import_kWh"].mean()),
         "mean_export_kwh": float(yearly_df["Export_kWh"].mean()),
     }

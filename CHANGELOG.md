@@ -2,6 +2,116 @@
 
 All notable changes to BREOS are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.3.4] - 2026-07-14
+
+### Added
+- A versioned, explicit DC/AC timestep energy ledger now reports PV routing,
+  direct and battery inverter losses, cell conversion losses, standby,
+  capacity-window adjustments, storage boundary state, and PV-origin battery
+  delivery. Optional battery charge (DC input) and discharge (AC delivered)
+  power limits are available through `BatteryConfig`, `App`, Monte Carlo, and
+  CLI configuration.
+- `App.result()` separates behind-the-meter, export, and total CO2 benefits
+  and includes JSON-serializable model/configuration provenance.
+- `App.result()` now includes `pv_loss_waterfall`, a year-1 diagnostic that
+  reports the PV chain from horizontal irradiance reference through
+  transposition, IAM, cell temperature, static PVWatts losses, year-1
+  degradation, inverter clipping/conversion, surplus curtailment, and battery
+  dispatch losses. `breos run` JSON output includes the same block, and
+  `breos.plotting.plot_pv_loss_waterfall` renders it as a PV loss diagram.
+- `temperature_model` App config key, `--temperature-model` CLI flag, and
+  `temperature_model=` parameter on every solar-chain function. The
+  `"pvsyst-freestanding"`, `"pvsyst-semi-integrated"`, and
+  `"pvsyst-insulated"` presets use pvlib's PVsyst cell-temperature model
+  with its documented mounting coefficient sets. The default `"faiman"`
+  (open-rack Faiman coefficients, bit-for-bit unchanged) runs cool for
+  roof-mounted systems — BREOS's primary audience — and systematically
+  overestimates their yield; rooftop studies should pick a roof preset.
+  The validation suite runs a `perez_roof` (semi-integrated) config so the
+  rooftop yield delta is documented per site.
+- `diffuse_iam` App config key, `--diffuse-iam` CLI flag, and `diffuse_iam=`
+  parameter on every solar-chain function. `"marion"` applies the
+  incidence-angle modifier to the sky- and ground-diffuse POA components via
+  pvlib's view-factor-integrated `iam.marion_diffuse` (Marion 2017), using
+  the same ashrae model as the beam IAM. Beam-only IAM (diffuse passing at
+  1.0) was a known ~0.5–1.5% systematic overestimate; across the validation
+  suite `"marion"` lowers annual yield 1.1–2.0% and moves BREOS toward the
+  PVGIS reference at all seven sites (e.g. Porto +9.4% → +7.8%). The default
+  `"none"` reproduces prior behaviour bit-for-bit; the validation suite now
+  runs a `perez_diffuse` config so the effect is tracked per site.
+- `solar_position` App config key, `--solar-position` CLI flag, and
+  `solar_position=` parameter on every solar-chain function
+  (`calculate_pv_production_dc`/`_dc_tracking`/`_ac`/`_tmy`,
+  `calculate_multi_array_production`). `"mid-interval"` evaluates the sun
+  half a timestep after each label — the PVWatts/SAM convention for
+  interval-averaged irradiance (an hourly value labelled 07:00 representing
+  the 07:00–08:00 average pairs with the 07:30 sun) — and also drives
+  tracker rotation angles. The default `"interval-start"` reproduces prior
+  behaviour bit-for-bit. The validation suite now runs a third
+  `perez_mid` config so the effect is measured per site.
+- A standing validation suite under `validation/` (repo-side, not shipped):
+  seven sites on four continents with committed PVGIS TMY weather inputs
+  (trimmed to the five columns BREOS reads and gzipped, ~90 KB per site),
+  independent PVGIS PVcalc reference results (PVWatts v8 fetcher included,
+  references pending network access to `developer.nrel.gov`), a comparison
+  report generator, and `tests/test_validation_drift.py`, which fails CI when
+  BREOS output drifts >0.1% from its committed baseline or falls outside a
+  ±10% gross-error band around the PVGIS reference.
+
+### Changed
+- `PV_Production` remains as `(PV_DC - curtailed DC) × inverter efficiency`
+  for compatibility. New self-consumption, emissions, loss reporting, and
+  optimizer objectives use explicit AC ledger flows. Consumers should migrate
+  to `pv_ac_system_kwh`, direct/load/export fields, and the versioned ledger.
+- Real calendar-year load profiles now include leap day (8,784 hourly or
+  35,136 quarter-hourly intervals) while preserving exact annual energy.
+- `diffuse_iam="marion"` now keeps fixed-tilt arrays on pvlib's exact Marion
+  integration path but uses a cached 0.5° tilt grid for tracking arrays,
+  avoiding thousands of repeated sky/ground diffuse IAM integrations per run.
+- POA transposition now receives the refraction-corrected apparent zenith,
+  matching pvlib's `ModelChain`. Previously one call mixed zenith
+  definitions: the AOI/IAM step used `apparent_zenith` while
+  `get_total_irradiance` got the true `zenith`. Annual yields move by well
+  under 0.1% (refraction only matters near the horizon); the validation
+  baseline was regenerated accordingly.
+
+### Fixed
+- Unsupported AC-coupled dispatch (`dc_coupled=False`) now fails early instead
+  of silently executing the DC-coupled model.
+- The DC-coupled dispatcher now shares inverter headroom between PV and battery
+  discharge, routes above-headroom PV to storage before curtailment, records
+  battery-discharge inverter loss, closes with non-zero delta SOC, and reports
+  temperature/SOH capacity-window changes explicitly.
+- Resistance calendar aging now uses daily mean cell temperature rather than
+  the final timestep's temperature.
+- Multiyear App and Monte Carlo runs now carry stored energy and PV-origin
+  inventory across year boundaries instead of silently resetting to a full,
+  unknown-origin battery each January.
+- Optimizer candidates now use the App's top-level inverter efficiency and
+  the simulated/aligned load when computing objectives.
+- The NSGA-II optimizer (`optimize_system_multi_objective`) scored candidate
+  designs with a different model than the App reports, in three ways, all
+  fixed:
+  - candidates were simulated **without AC clipping** (no
+    `inverter_ac_capacity_w`), biasing the Pareto front toward high DC/AC
+    ratios whose clipping losses were never seen. Candidates now get the
+    CAPEX-matched nameplate (`pv_peak / costs.dc_ac_ratio`) — the inverter a
+    design pays for is the one that clips it;
+  - `calculate_financials` ignored maintenance, PV degradation, and the
+    separate export-price inflation. It now mirrors the year-1-estimation
+    formulas of `cost_analysis_projection` exactly (equivalence enforced by
+    `tests/test_optimization_parity.py`); the fixed daily grid fee cancels
+    out of the savings NPV and remains omitted by construction. NPV values
+    and Pareto fronts change (lower, more realistic NPVs). Candidate battery
+    replacements use a documented year-1-SOH projection; App multiyear
+    propagation remains the higher-fidelity basis;
+  - the load was positionally re-stamped onto the PV index via
+    `align_load_to_pv`, ignoring timezones (a UTC-offset shift of the whole
+    profile against PV). The raw load now reaches
+    `simulate_energy_balance`, whose internal alignment is timezone- and
+    DST-aware — the same code path the App uses. `align_load_to_pv` keeps
+    its behaviour for external callers but now carries a docstring warning.
+
 ## [0.3.3] - 2026-07-02
 
 ### Removed

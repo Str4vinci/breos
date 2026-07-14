@@ -10,6 +10,7 @@ from breos.solar import (
     TRANSPOSITION_MODELS,
     PVModuleParams,
     calculate_multi_array_production,
+    calculate_pv_production_breakdown,
     calculate_pv_production_dc,
     calculate_pv_production_dc_tracking,
     dc_to_ac,
@@ -167,6 +168,24 @@ class TestPVProduction:
 
         # Removing the 3% shading loss scales production by 1/0.97
         assert no_shading.sum() == pytest.approx(base.sum() / 0.97, rel=1e-6)
+
+    def test_loss_breakdown_final_matches_dc_output(self, synthetic_weather, porto_location, pv_params):
+        kwargs = dict(
+            weather_data=synthetic_weather,
+            location=porto_location,
+            tilt=35,
+            surface_azimuth=180,
+            n_modules=1,
+            pv_params=pv_params,
+            freq="h",
+        )
+        breakdown = calculate_pv_production_breakdown(**kwargs)
+        dc = calculate_pv_production_dc(**kwargs)
+
+        pd.testing.assert_series_equal(breakdown.dc_after_losses, dc)
+        assert breakdown.pvwatts_components_pct["shading"] == 3.0
+        assert breakdown.pvwatts_component_losses["shading"].sum() > 0
+        assert breakdown.module_dc.sum() > breakdown.dc_after_static_losses.sum()
 
     def test_loss_overrides_reject_unknown_component(self, synthetic_weather, porto_location, pv_params):
         with pytest.raises(ValueError, match="Unknown loss component"):
@@ -384,6 +403,204 @@ class TestTranspositionModel:
             transposition_model="isotropic",
         )
         assert per_array.sum() != pytest.approx(default_iso.sum())
+
+
+class TestSolarPosition:
+    def _dc(self, weather, loc, pv_params, **kw):
+        return calculate_pv_production_dc(
+            weather_data=weather,
+            location=loc,
+            tilt=35,
+            surface_azimuth=180,
+            n_modules=1,
+            pv_params=pv_params,
+            freq="h",
+            **kw,
+        )
+
+    def test_default_matches_explicit_interval_start(self, synthetic_weather, porto_location, pv_params):
+        # The default must reproduce the prior behaviour bit-for-bit.
+        default = self._dc(synthetic_weather, porto_location, pv_params)
+        explicit = self._dc(synthetic_weather, porto_location, pv_params, solar_position="interval-start")
+        pd.testing.assert_series_equal(default, explicit)
+
+    def test_mid_interval_shifts_output_but_keeps_index(self, synthetic_weather, porto_location, pv_params):
+        start = self._dc(synthetic_weather, porto_location, pv_params, solar_position="interval-start")
+        mid = self._dc(synthetic_weather, porto_location, pv_params, solar_position="mid-interval")
+        # Same label grid, different sun geometry per step.
+        assert mid.index.equals(start.index)
+        assert not mid.equals(start)
+        # A half-hour shift redistributes energy within the day; annual totals stay close.
+        assert mid.sum() == pytest.approx(start.sum(), rel=0.05)
+
+    def test_mid_interval_moves_energy_toward_morning_for_east_array(
+        self, synthetic_weather, porto_location, pv_params
+    ):
+        # For an east-facing array the sun evaluated half a step later has moved
+        # off the panel normal by evening and onto it in the morning; the split
+        # between pre- and post-noon energy must therefore change.
+        def split(sp):
+            dc = calculate_pv_production_dc(
+                weather_data=synthetic_weather,
+                location=porto_location,
+                tilt=35,
+                surface_azimuth=90,
+                n_modules=1,
+                pv_params=pv_params,
+                freq="h",
+                solar_position=sp,
+            )
+            morning = dc[dc.index.hour < 12].sum()
+            return morning / dc.sum()
+
+        assert split("mid-interval") != pytest.approx(split("interval-start"), rel=1e-3)
+
+    def test_case_insensitive(self, synthetic_weather, porto_location, pv_params):
+        lower = self._dc(synthetic_weather, porto_location, pv_params, solar_position="mid-interval")
+        upper = self._dc(synthetic_weather, porto_location, pv_params, solar_position="Mid-Interval")
+        pd.testing.assert_series_equal(lower, upper)
+
+    def test_invalid_method_raises(self, synthetic_weather, porto_location, pv_params):
+        with pytest.raises(ValueError, match="Unknown solar position method"):
+            self._dc(synthetic_weather, porto_location, pv_params, solar_position="midpoint")
+
+    def test_tracking_accepts_mid_interval(self, synthetic_weather, porto_location, pv_params):
+        dc = calculate_pv_production_dc_tracking(
+            weather_data=synthetic_weather,
+            location=porto_location,
+            n_modules=1,
+            tracking="single_axis",
+            pv_params=pv_params,
+            freq="h",
+            solar_position="mid-interval",
+        )
+        assert (dc >= -0.01).all()
+        assert dc.sum() > 0
+
+
+class TestDiffuseIAM:
+    def _dc(self, weather, loc, pv_params, **kw):
+        return calculate_pv_production_dc(
+            weather_data=weather,
+            location=loc,
+            tilt=35,
+            surface_azimuth=180,
+            n_modules=1,
+            pv_params=pv_params,
+            freq="h",
+            **kw,
+        )
+
+    def test_default_matches_explicit_none(self, synthetic_weather, porto_location, pv_params):
+        # The default must reproduce the prior beam-only behaviour bit-for-bit.
+        default = self._dc(synthetic_weather, porto_location, pv_params)
+        explicit = self._dc(synthetic_weather, porto_location, pv_params, diffuse_iam="none")
+        pd.testing.assert_series_equal(default, explicit)
+
+    def test_marion_reduces_annual_yield(self, synthetic_weather, porto_location, pv_params):
+        # Diffuse IAM multipliers are < 1, so applying them can only remove
+        # energy; the size of the removal is bounded by the diffuse fraction
+        # (roughly 0.2-3% annually for a 35-degree fixed tilt).
+        none = self._dc(synthetic_weather, porto_location, pv_params, diffuse_iam="none").sum()
+        marion = self._dc(synthetic_weather, porto_location, pv_params, diffuse_iam="marion").sum()
+        assert marion < none
+        assert 0.002 < 1 - marion / none < 0.03
+
+    def test_case_insensitive(self, synthetic_weather, porto_location, pv_params):
+        lower = self._dc(synthetic_weather, porto_location, pv_params, diffuse_iam="marion")
+        upper = self._dc(synthetic_weather, porto_location, pv_params, diffuse_iam="Marion")
+        pd.testing.assert_series_equal(lower, upper)
+
+    def test_invalid_method_raises(self, synthetic_weather, porto_location, pv_params):
+        with pytest.raises(ValueError, match="Unknown diffuse IAM method"):
+            self._dc(synthetic_weather, porto_location, pv_params, diffuse_iam="martin")
+
+    def test_tracking_accepts_marion(self, synthetic_weather, porto_location, pv_params):
+        dc = calculate_pv_production_dc_tracking(
+            weather_data=synthetic_weather,
+            location=porto_location,
+            n_modules=1,
+            tracking="single_axis",
+            pv_params=pv_params,
+            freq="h",
+            diffuse_iam="marion",
+        )
+        assert (dc >= -0.01).all()
+        assert dc.sum() > 0
+
+
+class TestTemperatureModel:
+    def _annual(self, weather, loc, pv_params, **kw):
+        return calculate_pv_production_dc(
+            weather_data=weather,
+            location=loc,
+            tilt=35,
+            surface_azimuth=180,
+            n_modules=1,
+            pv_params=pv_params,
+            freq="h",
+            **kw,
+        ).sum()
+
+    def test_default_matches_explicit_faiman(self, synthetic_weather, porto_location, pv_params):
+        # The default must reproduce the prior faiman behaviour bit-for-bit.
+        default = calculate_pv_production_dc(
+            weather_data=synthetic_weather,
+            location=porto_location,
+            tilt=35,
+            surface_azimuth=180,
+            n_modules=1,
+            pv_params=pv_params,
+            freq="h",
+        )
+        explicit = calculate_pv_production_dc(
+            weather_data=synthetic_weather,
+            location=porto_location,
+            tilt=35,
+            surface_azimuth=180,
+            n_modules=1,
+            pv_params=pv_params,
+            freq="h",
+            temperature_model="faiman",
+        )
+        pd.testing.assert_series_equal(default, explicit)
+
+    def test_worse_ventilation_lowers_yield(self, synthetic_weather, porto_location, pv_params):
+        # Lower heat-loss coefficients mean hotter cells and less energy:
+        # free-standing > semi-integrated > insulated, strictly.
+        free = self._annual(synthetic_weather, porto_location, pv_params, temperature_model="pvsyst-freestanding")
+        semi = self._annual(synthetic_weather, porto_location, pv_params, temperature_model="pvsyst-semi-integrated")
+        insulated = self._annual(synthetic_weather, porto_location, pv_params, temperature_model="pvsyst-insulated")
+        assert free > semi > insulated
+
+    def test_roof_preset_yields_less_than_faiman(self, synthetic_weather, porto_location, pv_params):
+        # The headline claim: the open-rack default over-predicts roof mounts.
+        faiman = self._annual(synthetic_weather, porto_location, pv_params, temperature_model="faiman")
+        semi = self._annual(synthetic_weather, porto_location, pv_params, temperature_model="pvsyst-semi-integrated")
+        assert semi < faiman
+        assert 0.001 < 1 - semi / faiman < 0.10
+
+    def test_case_insensitive(self, synthetic_weather, porto_location, pv_params):
+        lower = self._annual(synthetic_weather, porto_location, pv_params, temperature_model="pvsyst-insulated")
+        upper = self._annual(synthetic_weather, porto_location, pv_params, temperature_model="PVsyst-Insulated")
+        assert lower == upper
+
+    def test_invalid_model_raises(self, synthetic_weather, porto_location, pv_params):
+        with pytest.raises(ValueError, match="Unknown temperature model"):
+            self._annual(synthetic_weather, porto_location, pv_params, temperature_model="sapm")
+
+    def test_tracking_accepts_preset(self, synthetic_weather, porto_location, pv_params):
+        dc = calculate_pv_production_dc_tracking(
+            weather_data=synthetic_weather,
+            location=porto_location,
+            n_modules=1,
+            tracking="single_axis",
+            pv_params=pv_params,
+            freq="h",
+            temperature_model="pvsyst-semi-integrated",
+        )
+        assert (dc >= -0.01).all()
+        assert dc.sum() > 0
 
 
 class TestGroundReflectance:

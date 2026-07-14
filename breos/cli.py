@@ -17,7 +17,15 @@ from breos.app_config import resolve_app_config
 from breos.load_profiles import PROFILE_ALIASES, PROFILE_NAMES
 from breos.pv_modules import MODULES
 from breos.resources import load_config_json
-from breos.solar import PEREZ_MODELS, SURFACE_TYPES, TRANSPOSITION_MODELS, resolve_pvwatts_losses
+from breos.solar import (
+    DIFFUSE_IAM_METHODS,
+    PEREZ_MODELS,
+    SOLAR_POSITION_METHODS,
+    SURFACE_TYPES,
+    TEMPERATURE_MODELS,
+    TRANSPOSITION_MODELS,
+    resolve_pvwatts_losses,
+)
 
 
 def _package_version() -> str:
@@ -60,6 +68,8 @@ def _build_config(args: argparse.Namespace) -> dict[str, Any]:
     _add_override(overrides, "n_modules", args.n_modules)
     _add_override(overrides, "annual_consumption_kwh", args.annual_consumption_kwh)
     _add_override(overrides, "battery_kwh", args.battery_kwh)
+    _add_override(overrides, "battery_max_charge_power_w", args.battery_max_charge_power_w)
+    _add_override(overrides, "battery_max_discharge_power_w", args.battery_max_discharge_power_w)
     _add_override(overrides, "pv_module", args.pv_module)
     _add_override(overrides, "load_profile", args.load_profile)
     _add_override(overrides, "rlp_directory", str(args.rlp_directory) if args.rlp_directory else None)
@@ -69,10 +79,14 @@ def _build_config(args: argparse.Namespace) -> dict[str, Any]:
     _add_override(overrides, "albedo", args.albedo)
     _add_override(overrides, "surface_type", args.surface_type)
     _add_override(overrides, "model_perez", args.model_perez)
+    _add_override(overrides, "solar_position", args.solar_position)
+    _add_override(overrides, "diffuse_iam", args.diffuse_iam)
+    _add_override(overrides, "temperature_model", args.temperature_model)
     _add_override(overrides, "resolution", args.resolution)
     _add_override(overrides, "projection_years", args.projection_years)
     _add_override(overrides, "inflation_rate", args.inflation_rate)
     _add_override(overrides, "sell_price_inflation", args.sell_price_inflation)
+    _add_override(overrides, "export_emissions_factor_gco2_kwh", args.export_emissions_factor_gco2_kwh)
     _add_override(overrides, "discount_rate", args.discount_rate)
     _add_override(overrides, "pv_degradation_rate", args.pv_degradation_rate)
     _add_override(overrides, "calendar_model", args.calendar_model)
@@ -133,6 +147,9 @@ def _resolved_config_summary(config: dict[str, Any]) -> dict[str, Any]:
             "albedo": cfg["albedo"],
             "surface_type": cfg["surface_type"],
             "model_perez": cfg["model_perez"],
+            "solar_position": cfg["solar_position"],
+            "diffuse_iam": cfg["diffuse_iam"],
+            "temperature_model": cfg["temperature_model"],
             "pv_loss_overrides": cfg["pv_loss_overrides"],
             "losses": resolve_pvwatts_losses(cfg["pv_loss_overrides"]),
         },
@@ -151,6 +168,8 @@ def _resolved_config_summary(config: dict[str, Any]) -> dict[str, Any]:
         },
         "battery": {
             "capacity_kwh": cfg["battery_kwh"],
+            "max_charge_power_w": cfg["battery_max_charge_power_w"],
+            "max_discharge_power_w": cfg["battery_max_discharge_power_w"],
             "min_soc": cfg["battery_min_soc"],
             "max_soc": cfg["battery_max_soc"],
             "eol_percentage": cfg["battery_eol_percentage"],
@@ -166,6 +185,7 @@ def _resolved_config_summary(config: dict[str, Any]) -> dict[str, Any]:
         "emissions": {
             "country": cfg["emissions_country"],
             "enabled": resolved.emissions_params is not None,
+            "export_factor_gco2_kwh": cfg["export_emissions_factor_gco2_kwh"],
         },
         "notes": [
             "This is a resolved configuration check only; no weather fetch or simulation was run.",
@@ -461,6 +481,16 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--n-modules", type=int, help="Number of PV modules.")
     run.add_argument("--annual-consumption-kwh", type=float, help="Annual electricity demand in kWh.")
     run.add_argument("--battery-kwh", type=float, help="Battery capacity in kWh.")
+    run.add_argument(
+        "--battery-max-charge-power-w",
+        type=float,
+        help="Maximum DC power entering the battery charge path in W (default: unlimited).",
+    )
+    run.add_argument(
+        "--battery-max-discharge-power-w",
+        type=float,
+        help="Maximum battery AC power delivered to load in W (default: unlimited).",
+    )
     run.add_argument("--cost-preset", help="Cost preset key, for example 'residential-pt'.")
     run.add_argument("--emissions-country", help="Country code for emissions, for example 'pt'.")
     run.add_argument("--pv-module", help="PV module catalogue key.")
@@ -489,17 +519,55 @@ def build_parser() -> argparse.ArgumentParser:
         choices=PEREZ_MODELS,
         help="Perez coefficient set (only used with --transposition-model perez).",
     )
+    run.add_argument(
+        "--solar-position",
+        dest="solar_position",
+        choices=SOLAR_POSITION_METHODS,
+        help=(
+            "Where within each timestep the sun position is evaluated. 'mid-interval' matches "
+            "PVWatts/SAM for interval-averaged weather (default: interval-start)."
+        ),
+    )
+    run.add_argument(
+        "--diffuse-iam",
+        dest="diffuse_iam",
+        choices=DIFFUSE_IAM_METHODS,
+        help=(
+            "Whether IAM is also applied to the diffuse POA components. 'marion' weighs sky- and "
+            "ground-diffuse with the view-factor-integrated ashrae IAM (default: none, beam-only)."
+        ),
+    )
+    run.add_argument(
+        "--temperature-model",
+        dest="temperature_model",
+        choices=TEMPERATURE_MODELS,
+        help=(
+            "Cell-temperature model / mounting preset. The pvsyst-* presets use PVsyst's documented "
+            "mounting coefficients; pick semi-integrated or insulated for roof mounts "
+            "(default: faiman, open rack)."
+        ),
+    )
     run.add_argument("--resolution", choices=("h", "15min"), help="Simulation time resolution.")
     run.add_argument("--projection-years", type=int, help="Economic projection horizon.")
     run.add_argument("--inflation-rate", type=float, help="Annual electricity price inflation.")
     run.add_argument(
         "--sell-price-inflation", type=float, help="Annual inflation of the grid export (sell) price. Default 0."
     )
+    run.add_argument(
+        "--export-emissions-factor-gco2-kwh",
+        type=float,
+        help="Exported-generation displacement factor in gCO2/kWh (default: grid avoided factor).",
+    )
     run.add_argument("--discount-rate", type=float, help="Discount rate for NPV calculations.")
     run.add_argument("--pv-degradation-rate", type=float, help="Annual PV degradation rate.")
     run.add_argument("--calendar-model", help="Battery calendar aging model.")
-    run.add_argument("--dc-coupled", dest="dc_coupled", action="store_true", default=None, help="Use DC coupling.")
-    run.add_argument("--ac-coupled", dest="dc_coupled", action="store_false", help="Use AC coupling.")
+    run.add_argument(
+        "--dc-coupled",
+        dest="dc_coupled",
+        action="store_true",
+        default=None,
+        help="Use the supported DC-coupled/hybrid battery model.",
+    )
     run.add_argument("--inverter-efficiency", type=float, help="Inverter efficiency.")
     run.add_argument("--inverter-loading-ratio", type=float, help="DC/AC oversizing ratio.")
     run.add_argument("--start-date", help="Simulation start date, YYYY-MM-DD.")

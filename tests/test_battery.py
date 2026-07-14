@@ -59,6 +59,44 @@ class TestBatteryConfig:
         with pytest.raises(ValueError, match="supports only: lfp"):
             BatteryConfig(nominal_energy_wh=5000, battery_type="nmc")
 
+    def test_ac_coupled_dispatch_rejected(self):
+        with pytest.raises(NotImplementedError, match="AC-coupled"):
+            BatteryConfig(nominal_energy_wh=5000, dc_coupled=False)
+
+    @pytest.mark.parametrize("field", ["max_charge_power_w", "max_discharge_power_w"])
+    @pytest.mark.parametrize("value", [-1.0, float("inf"), float("nan")])
+    def test_power_caps_must_be_finite_and_non_negative(self, field, value):
+        with pytest.raises(ValueError, match=field):
+            BatteryConfig(nominal_energy_wh=5000, **{field: value})
+
+    def test_zero_power_caps_are_valid(self):
+        cfg = BatteryConfig(nominal_energy_wh=5000, max_charge_power_w=0.0, max_discharge_power_w=0.0)
+        assert cfg.max_charge_power_w == 0.0
+        assert cfg.max_discharge_power_w == 0.0
+
+    @pytest.mark.parametrize(
+        "kwargs,match",
+        [
+            ({"nominal_energy_wh": -1.0}, "nominal_energy_wh"),
+            ({"nominal_energy_wh": float("inf")}, "nominal_energy_wh"),
+            ({"nominal_energy_wh": True}, "not a bool"),
+            ({"nominal_energy_wh": 1000.0, "initial_soh": 101.0}, "initial_soh"),
+            ({"nominal_energy_wh": 1000.0, "eol_percentage": -0.1}, "eol_percentage"),
+            ({"nominal_energy_wh": 1000.0, "min_soc": 0.9, "max_soc": 0.9}, "SOC limits"),
+            ({"nominal_energy_wh": 1000.0, "min_soc": -0.1}, "SOC limits"),
+            ({"nominal_energy_wh": 1000.0, "charge_efficiency": 0.0}, "charge_efficiency"),
+            ({"nominal_energy_wh": 1000.0, "discharge_efficiency": 1.1}, "discharge_efficiency"),
+            ({"nominal_energy_wh": 1000.0, "inverter_efficiency": float("nan")}, "inverter_efficiency"),
+            ({"nominal_energy_wh": 1000.0, "standby_loss_wh": -1.0}, "standby_loss_wh"),
+            ({"nominal_energy_wh": 1000.0, "thermal_resistance_kw": -1.0}, "thermal_resistance_kw"),
+            ({"nominal_energy_wh": 1000.0, "max_charge_power_w": True}, "max_charge_power_w"),
+            ({"nominal_energy_wh": 1000.0, "dc_coupled": "true"}, "dc_coupled"),
+        ],
+    )
+    def test_physical_configuration_validation(self, kwargs, match):
+        with pytest.raises(ValueError, match=match):
+            BatteryConfig(**kwargs)
+
     def test_cycle_aging_rejects_non_lfp_battery_type(self):
         soc = pd.Series([0.1, 0.8, 0.2], index=pd.date_range("2025-01-01", periods=3, freq="h"))
 
@@ -254,6 +292,324 @@ class TestSimulateEnergyBalance:
 
         emax_cold = 10000 * config.max_soc * lfp_capacity_factor(0.0)
         assert results_df["Battery_Energy"].iloc[-1] <= emax_cold + 1e-9
+
+
+class TestEnergyLedger:
+    @staticmethod
+    def _run(pv_w, load_w, freq="h", **config_kwargs):
+        idx = pd.date_range("2025-01-01", periods=len(pv_w), freq=freq, tz="UTC")
+        config_kwargs.setdefault("nominal_energy_wh", 4000.0)
+        config_kwargs.setdefault("standby_loss_wh", 0.0)
+        config_kwargs.setdefault("enable_replacement", False)
+        config = BatteryConfig(**config_kwargs)
+        results, total_pv, *_ = simulate_energy_balance(
+            pv_dc=pd.Series(pv_w, index=idx, dtype=float),
+            houseload=pd.DataFrame({"Load": load_w}, index=idx, dtype=float),
+            battery_config=config,
+            temperature_series=pd.Series(25.0, index=idx),
+            freq=freq,
+        )
+        return results, total_pv, config
+
+    @staticmethod
+    def _assert_conservation(results, config):
+        np.testing.assert_allclose(
+            results["PV_DC"],
+            results["PV_DC_To_Battery"] + results["PV_DC_To_Inverter"] + results["PV_DC_Curtailed"],
+            atol=1e-8,
+        )
+        np.testing.assert_allclose(
+            results["Houseload"],
+            results["PV_AC_To_Load"] + results["Battery_AC_To_Load"] + results["Import_From_Grid"],
+            atol=1e-8,
+        )
+        np.testing.assert_allclose(results["PV_AC_Export"], results["Sell_To_Grid"], atol=1e-8)
+        np.testing.assert_allclose(
+            results["Battery_Charge_Stored"],
+            results["Battery_Charge_Input"] * config.charge_efficiency,
+            atol=1e-8,
+        )
+        np.testing.assert_allclose(
+            results["Battery_Energy_Delta"],
+            results["Battery_Charge_Stored"]
+            - results["Battery_Discharge_DC"]
+            - results["Standby_Loss"]
+            - results["Capacity_Window_Loss"]
+            - results["Battery_Replacement_Energy_Removed"]
+            + results["Battery_Replacement_Energy_Added"],
+            atol=1e-8,
+        )
+        np.testing.assert_allclose(
+            results["Inverter_Loss"],
+            results["PV_Direct_Inverter_Loss"] + results["Battery_Inverter_Loss"],
+            atol=1e-8,
+        )
+        # PV and replacement-added energy are the external inputs. Delivered
+        # energy, losses, net battery movement, and energy removed with a
+        # replaced pack are outputs.
+        rhs = (
+            results["PV_AC_To_Load"]
+            + results["PV_AC_Export"]
+            + results["Battery_AC_To_Load"]
+            + results["PV_DC_Curtailed"]
+            + results["Battery_Charge_Loss"]
+            + results["Battery_Discharge_Loss"]
+            + results["PV_Direct_Inverter_Loss"]
+            + results["Battery_Inverter_Loss"]
+            + results["Standby_Loss"]
+            + results["Capacity_Window_Loss"]
+            + results["Battery_Replacement_Energy_Removed"]
+            + results["Battery_Energy_Delta"]
+        )
+        lhs = results["PV_DC"] + results["Battery_Replacement_Energy_Added"]
+        np.testing.assert_allclose(lhs, rhs, atol=1e-7)
+
+    @pytest.mark.parametrize("freq,repeats", [("h", 1), ("15min", 4)])
+    def test_per_step_and_annual_conservation(self, freq, repeats):
+        pv = np.repeat([0.0, 7000.0, 2000.0, 0.0, 9000.0, 0.0], repeats)
+        load = np.repeat([5000.0, 500.0, 3500.0, 2500.0, 500.0, 4000.0], repeats)
+        results, total_pv, config = self._run(
+            pv,
+            load,
+            freq=freq,
+            inverter_ac_capacity_w=3000.0,
+            max_charge_power_w=1200.0,
+            max_discharge_power_w=900.0,
+        )
+        self._assert_conservation(results, config)
+        hours = 0.25 if freq == "15min" else 1.0
+        assert total_pv == pytest.approx(results["PV_Production"].sum() * hours)
+        assert total_pv == pytest.approx(
+            ((results["PV_DC"] - results["PV_DC_Curtailed"]) * config.inverter_efficiency).sum() * hours
+        )
+
+    def test_charge_precedes_export_and_curtailment_is_unusable_dc(self):
+        results, _, config = self._run(
+            [0.0, 10000.0, 10000.0],
+            [20000.0, 500.0, 500.0],
+            nominal_energy_wh=2000.0,
+            inverter_ac_capacity_w=2000.0,
+        )
+        self._assert_conservation(results, config)
+        assert results["PV_DC_To_Battery"].iloc[1] > 0.0
+        assert results["PV_AC_Export"].iloc[1] > 0.0
+        assert results["PV_DC_Curtailed"].iloc[1] > 0.0
+        assert results["PV_DC_Curtailed"].iloc[2] >= results["PV_DC_Curtailed"].iloc[1]
+
+    def test_shared_inverter_headroom_and_power_caps(self):
+        results, _, config = self._run(
+            [0.0, 8000.0, 1000.0],
+            [10000.0, 0.0, 5000.0],
+            inverter_ac_capacity_w=2000.0,
+            max_charge_power_w=1000.0,
+            max_discharge_power_w=700.0,
+        )
+        self._assert_conservation(results, config)
+        inverter_output = results["PV_AC_To_Load"] + results["PV_AC_Export"] + results["Battery_AC_To_Load"]
+        assert inverter_output.max() <= 2000.0 + 1e-8
+        assert results["PV_DC_To_Battery"].max() <= 1000.0 + 1e-8
+        assert results["Battery_AC_To_Load"].max() <= 700.0 + 1e-8
+
+    def test_hourly_and_quarter_hour_energy_agree(self):
+        pv_hourly = [0.0, 7000.0, 2000.0, 0.0, 9000.0, 0.0]
+        load_hourly = [5000.0, 500.0, 3500.0, 2500.0, 500.0, 4000.0]
+        kwargs = {
+            "inverter_ac_capacity_w": 3000.0,
+            "max_charge_power_w": 1200.0,
+            "max_discharge_power_w": 900.0,
+        }
+        hourly, _, _ = self._run(pv_hourly, load_hourly, **kwargs)
+        quarterly, _, _ = self._run(
+            np.repeat(pv_hourly, 4),
+            np.repeat(load_hourly, 4),
+            freq="15min",
+            **kwargs,
+        )
+        for column in ("Import_From_Grid", "Sell_To_Grid", "PV_DC_Curtailed"):
+            assert hourly[column].sum() == pytest.approx(quarterly[column].sum() * 0.25)
+        assert hourly["Battery_Energy_End"].iloc[-1] == pytest.approx(quarterly["Battery_Energy_End"].iloc[-1])
+
+    def test_pv_origin_inventory_starts_zero_and_mixes_proportionally(self):
+        results, _, config = self._run(
+            [0.0, 5000.0, 0.0],
+            [10000.0, 0.0, 1000.0],
+            nominal_energy_wh=1000.0,
+            charge_efficiency=0.9,
+            discharge_efficiency=0.9,
+            inverter_efficiency=0.8,
+        )
+        self._assert_conservation(results, config)
+        assert results["Battery_PV_Origin_Energy_Beginning"].iloc[0] == 0.0
+        assert results["Battery_PV_Origin_Energy_End"].iloc[1] > 0.0
+        assert results["PV_Origin_Battery_AC_To_Load"].iloc[2] > 0.0
+        assert results["PV_Origin_Battery_AC_To_Load"].iloc[2] <= results["Battery_AC_To_Load"].iloc[2]
+        np.testing.assert_allclose(results["Battery_AC_To_Load_PV"], results["PV_Origin_Battery_AC_To_Load"])
+        assert results["PV_Direct_Inverter_Loss"].sum() > 0.0
+        assert results["Battery_Inverter_Loss"].sum() > 0.0
+        np.testing.assert_allclose(results["Battery_Charge_Loss"], results["Battery_Charge_Input"] * 0.1)
+
+    def test_standby_is_separate_from_capacity_window_loss(self):
+        results, _, config = self._run([0.0], [0.0], standby_loss_wh=20.0)
+        self._assert_conservation(results, config)
+        assert results["Standby_Loss"].iloc[0] == pytest.approx(20.0)
+        assert results["Battery_Standby_Loss"].iloc[0] == pytest.approx(20.0)
+        assert results["Capacity_Window_Loss"].iloc[0] == 0.0
+        assert results["Battery_Energy_Delta"].iloc[0] == pytest.approx(-20.0)
+
+    def test_temperature_capacity_reduction_is_explicit_loss(self):
+        idx = pd.date_range("2025-01-01", periods=2, freq="h", tz="UTC")
+        config = BatteryConfig(nominal_energy_wh=10000.0, standby_loss_wh=0.0, enable_replacement=False)
+        results, *_ = simulate_energy_balance(
+            pv_dc=pd.Series(0.0, index=idx),
+            houseload=pd.DataFrame({"Load": 0.0}, index=idx),
+            battery_config=config,
+            temperature_series=pd.Series([25.0, 0.0], index=idx),
+            freq="h",
+        )
+        self._assert_conservation(results, config)
+        assert results["Capacity_Window_Loss"].iloc[1] > 0.0
+        assert results["Battery_Energy_End"].iloc[1] < results["Battery_Energy_Beginning"].iloc[1]
+
+    def test_resistance_calendar_uses_daily_mean_cell_temperature(self, monkeypatch):
+        import breos.battery as battery_module
+
+        seen_temperatures = []
+
+        def capture_temperature(resistance_growth, T_cell_C, **kwargs):
+            seen_temperatures.append(T_cell_C)
+            return resistance_growth, 0.0
+
+        monkeypatch.setattr(battery_module, "update_battery_resistance_calendar", capture_temperature)
+        idx = pd.date_range("2025-01-01", periods=24, freq="h", tz="UTC")
+        simulate_energy_balance(
+            pv_dc=pd.Series(0.0, index=idx),
+            houseload=pd.DataFrame({"Load": 0.0}, index=idx),
+            battery_config=BatteryConfig(
+                nominal_energy_wh=1000.0,
+                enable_replacement=False,
+                enable_resistance_fade=True,
+                thermal_resistance_kw=0.0,
+            ),
+            temperature_series=pd.Series([10.0] * 12 + [30.0] * 12, index=idx),
+            freq="h",
+        )
+        assert seen_temperatures == pytest.approx([20.0])
+
+    def test_replacement_energy_closes_timestep_boundary(self, monkeypatch):
+        import breos.battery as battery_module
+
+        def force_eol(soh_start_fraction, cumulative_cal_seconds, **kwargs):
+            return 0.5, soh_start_fraction - 0.5, cumulative_cal_seconds + 86400.0
+
+        monkeypatch.setattr(battery_module, "update_battery_soh_calendar", force_eol)
+        results, _, config = self._run(
+            [0.0] * 24,
+            [1000.0] * 24,
+            nominal_energy_wh=4000.0,
+            enable_replacement=True,
+            eol_percentage=0.7,
+        )
+        self._assert_conservation(results, config)
+        final = results.iloc[-1]
+        assert bool(final["Battery_Replaced"])
+        assert final["Battery_Replacement_Energy_Removed"] == pytest.approx(400.0)
+        assert final["Battery_Replacement_Energy_Added"] == pytest.approx(3600.0)
+        assert final["Battery_Energy_End"] == pytest.approx(3600.0)
+        assert final["Battery_Energy_Delta"] == pytest.approx(3200.0)
+        assert final["Battery_SOC_Normalized"] == pytest.approx(1.0)
+        assert final["Battery_SOC_Absolute"] == pytest.approx(config.max_soc)
+        assert final["Battery_SOH"] == pytest.approx(100.0)
+        assert final["Battery_PV_Origin_Energy_End"] == 0.0
+
+    @pytest.mark.parametrize(
+        "initial_energy,initial_origin,match",
+        [
+            (1001.0, 0.0, "initial_energy_wh"),
+            (-1.0, 0.0, "initial_energy_wh"),
+            (500.0, 501.0, "initial_pv_origin_energy_wh"),
+            (500.0, -1.0, "initial_pv_origin_energy_wh"),
+            (float("nan"), 0.0, "initial_energy_wh"),
+        ],
+    )
+    def test_invalid_initial_state_cannot_create_energy(self, initial_energy, initial_origin, match):
+        idx = pd.date_range("2025-01-01", periods=1, freq="h", tz="UTC")
+        with pytest.raises(ValueError, match=match):
+            simulate_energy_balance(
+                pv_dc=pd.Series(0.0, index=idx),
+                houseload=pd.DataFrame({"Load": 0.0}, index=idx),
+                battery_config=BatteryConfig(nominal_energy_wh=1000.0, standby_loss_wh=0.0),
+                initial_energy_wh=initial_energy,
+                initial_pv_origin_energy_wh=initial_origin,
+            )
+
+    def test_zero_passed_state_is_not_raised_to_minimum_soc(self):
+        idx = pd.date_range("2025-01-01", periods=1, freq="h", tz="UTC")
+        results, *_ = simulate_energy_balance(
+            pv_dc=pd.Series(0.0, index=idx),
+            houseload=pd.DataFrame({"Load": 0.0}, index=idx),
+            battery_config=BatteryConfig(nominal_energy_wh=1000.0, standby_loss_wh=0.0),
+            initial_energy_wh=0.0,
+            initial_pv_origin_energy_wh=0.0,
+        )
+        assert results["Battery_Energy_Beginning"].iloc[0] == 0.0
+        assert results["Battery_Energy_End"].iloc[0] == 0.0
+
+    def test_carried_energy_above_new_soh_window_becomes_capacity_loss(self):
+        idx = pd.date_range("2025-01-01", periods=1, freq="h", tz="UTC")
+        config = BatteryConfig(
+            nominal_energy_wh=1000.0,
+            initial_soh=50.0,
+            standby_loss_wh=0.0,
+            enable_replacement=False,
+        )
+        results, *_ = simulate_energy_balance(
+            pv_dc=pd.Series(0.0, index=idx),
+            houseload=pd.DataFrame({"Load": 0.0}, index=idx),
+            battery_config=config,
+            temperature_series=pd.Series(25.0, index=idx),
+            initial_energy_wh=700.0,
+            initial_pv_origin_energy_wh=350.0,
+        )
+        assert results["Battery_Energy_Beginning"].iloc[0] == pytest.approx(700.0)
+        assert results["Capacity_Window_Loss"].iloc[0] == pytest.approx(250.0)
+        assert results["Battery_Energy_End"].iloc[0] == pytest.approx(450.0)
+        assert results["Battery_Energy_Delta"].iloc[0] == pytest.approx(-250.0)
+        assert results["Battery_PV_Origin_Energy_End"].iloc[0] == pytest.approx(225.0)
+        self._assert_conservation(results, config)
+
+    def test_passed_energy_and_pv_origin_continue_exactly(self):
+        config = BatteryConfig(
+            nominal_energy_wh=1000.0,
+            standby_loss_wh=0.0,
+            enable_replacement=False,
+            charge_efficiency=0.9,
+            discharge_efficiency=0.9,
+            inverter_efficiency=0.8,
+        )
+        first_idx = pd.date_range("2025-01-01", periods=3, freq="h", tz="UTC")
+        first, *_ = simulate_energy_balance(
+            pv_dc=pd.Series([0.0, 5000.0, 0.0], index=first_idx),
+            houseload=pd.DataFrame({"Load": [1000.0, 0.0, 500.0]}, index=first_idx),
+            battery_config=config,
+            temperature_series=pd.Series(25.0, index=first_idx),
+        )
+        carried_energy = first["Battery_Energy_End"].iloc[-1]
+        carried_origin = first["Battery_PV_Origin_Energy_End"].iloc[-1]
+        assert carried_origin > 0.0
+
+        second_idx = pd.date_range("2025-01-01 03:00", periods=2, freq="h", tz="UTC")
+        second, *_ = simulate_energy_balance(
+            pv_dc=pd.Series(0.0, index=second_idx),
+            houseload=pd.DataFrame({"Load": 0.0}, index=second_idx),
+            battery_config=config,
+            temperature_series=pd.Series(25.0, index=second_idx),
+            initial_energy_wh=carried_energy,
+            initial_pv_origin_energy_wh=carried_origin,
+        )
+        assert second["Battery_Energy_Beginning"].iloc[0] == pytest.approx(carried_energy)
+        assert second["Battery_PV_Origin_Energy_Beginning"].iloc[0] == pytest.approx(carried_origin)
+        assert second["Battery_Energy_End"].iloc[0] == pytest.approx(carried_energy)
+        assert second["Battery_PV_Origin_Energy_End"].iloc[0] == pytest.approx(carried_origin)
 
 
 class TestIndoorTemperatureModel:

@@ -7,6 +7,7 @@ This module handles:
 - Converting between hourly and 15-minute resolutions using Makima interpolation
 """
 
+import hashlib
 import logging
 import os
 import re
@@ -172,6 +173,16 @@ def load_weather(
             df = df.loc[mask]
             logger.info("Subset to %s-%s (%d rows)", start_year, end_year, len(df))
 
+    path = os.path.abspath(filepath)
+    with open(path, "rb") as weather_file:
+        sha256 = hashlib.file_digest(weather_file, "sha256").hexdigest()
+    df.attrs["breos_weather_metadata"] = {
+        "source": "local_file",
+        "path": path,
+        "sha256": sha256,
+        "parsed_filename": {key: value for key, value in best.items() if key != "filepath"},
+    }
+
     return df
 
 
@@ -261,6 +272,10 @@ def fetch_tmy_weather_data(
         tmy_data.to_csv(filename)
         logger.info("Saved TMY data to %s", filename)
 
+    tmy_data.attrs["breos_weather_metadata"] = {
+        "source": "PVGIS_TMY",
+        "api_metadata": metadata,
+    }
     return tmy_data, metadata
 
 

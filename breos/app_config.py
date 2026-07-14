@@ -2,18 +2,28 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
+from datetime import date
+from numbers import Real
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from breos.economics import CostParams, calculate_costs
 from breos.emissions import EmissionsParams
 from breos.pv_modules import MODULES, PVModuleParams, get_module
 from breos.resources import load_config_json
 from breos.solar import (
+    DEFAULT_DIFFUSE_IAM,
     DEFAULT_PEREZ_MODEL,
+    DEFAULT_SOLAR_POSITION,
+    DEFAULT_TEMPERATURE_MODEL,
     DEFAULT_TRANSPOSITION_MODEL,
+    DIFFUSE_IAM_METHODS,
     PEREZ_MODELS,
+    SOLAR_POSITION_METHODS,
     SURFACE_TYPES,
+    TEMPERATURE_MODELS,
     TRANSPOSITION_MODELS,
     estimate_optimal_tilt,
 )
@@ -39,6 +49,9 @@ DEFAULTS: dict[str, Any] = {
     "albedo": None,
     "surface_type": None,
     "model_perez": DEFAULT_PEREZ_MODEL,
+    "solar_position": DEFAULT_SOLAR_POSITION,
+    "diffuse_iam": DEFAULT_DIFFUSE_IAM,
+    "temperature_model": DEFAULT_TEMPERATURE_MODEL,
     "resolution": "h",
     "projection_years": 20,
     "cost_preset": None,
@@ -46,12 +59,15 @@ DEFAULTS: dict[str, Any] = {
     "sell_price_inflation": 0.0,
     "discount_rate": 0.03,
     "emissions_country": None,
+    "export_emissions_factor_gco2_kwh": None,
     "pv_degradation_rate": 0.005,
     "calendar_model": "naumann_lam_field_calibrated",
     "battery_min_soc": 0.10,
     "battery_max_soc": 0.90,
     "battery_eol_percentage": 0.70,
     "battery_rte": None,
+    "battery_max_charge_power_w": None,
+    "battery_max_discharge_power_w": None,
     "dc_coupled": True,
     "inverter_efficiency": 0.96,
     "inverter_loading_ratio": 1.25,
@@ -152,10 +168,22 @@ def validate_config(cfg: dict[str, Any]) -> None:
         for field in ("latitude", "longitude", "timezone"):
             if field not in loc:
                 raise ValueError(f"Custom location must include '{field}'")
+        lat = _finite_real(loc["latitude"], "location.latitude")
+        lon = _finite_real(loc["longitude"], "location.longitude")
+        if not -90 <= lat <= 90:
+            raise ValueError("'location.latitude' must be between -90 and 90")
+        if not -180 <= lon <= 180:
+            raise ValueError("'location.longitude' must be between -180 and 180")
+        if not isinstance(loc["timezone"], str):
+            raise TypeError("'location.timezone' must be an IANA timezone string")
+        try:
+            ZoneInfo(loc["timezone"])
+        except ZoneInfoNotFoundError as exc:
+            raise ValueError(f"Unknown IANA timezone: {loc['timezone']!r}") from exc
     elif not isinstance(loc, str):
         raise TypeError("'location' must be a string key or a dict with latitude/longitude/timezone")
 
-    if not has_arrays and cfg["n_modules"] < 1:
+    if not has_arrays and (not _is_int(cfg["n_modules"]) or cfg["n_modules"] < 1):
         raise ValueError("'n_modules' must be >= 1")
     if has_arrays:
         if not isinstance(cfg["pv_arrays"], list):
@@ -164,13 +192,17 @@ def validate_config(cfg: dict[str, Any]) -> None:
             if not isinstance(arr, dict):
                 raise TypeError(f"'pv_arrays[{i}]' must be a dict")
             modules = arr.get("modules", 0)
-            if modules < 1:
+            if not _is_int(modules) or modules < 1:
                 raise ValueError(f"'pv_arrays[{i}].modules' must be >= 1")
+            module = arr.get("module", cfg.get("pv_module"))
+            if module is not None and module not in MODULES:
+                available = ", ".join(sorted(MODULES))
+                raise ValueError(f"Unknown PV module {module!r} in pv_arrays[{i}]. Available: {available}")
             tilt = arr.get("tilt", cfg.get("tilt"))
             azimuth = arr.get("azimuth", cfg.get("azimuth"))
-            if tilt is not None and not 0 <= tilt <= 90:
+            if tilt is not None and not 0 <= _finite_real(tilt, f"pv_arrays[{i}].tilt") <= 90:
                 raise ValueError(f"'pv_arrays[{i}].tilt' must be between 0 and 90")
-            if azimuth is not None and not 0 <= azimuth <= 360:
+            if azimuth is not None and not 0 <= _finite_real(azimuth, f"pv_arrays[{i}].azimuth") <= 360:
                 raise ValueError(f"'pv_arrays[{i}].azimuth' must be between 0 and 360")
             _validate_sky_settings(
                 arr.get("transposition_model"),
@@ -179,27 +211,39 @@ def validate_config(cfg: dict[str, Any]) -> None:
                 arr.get("model_perez"),
                 where=f"pv_arrays[{i}]",
             )
-    if cfg["annual_consumption_kwh"] <= 0:
+    if _finite_real(cfg["annual_consumption_kwh"], "annual_consumption_kwh") <= 0:
         raise ValueError("'annual_consumption_kwh' must be > 0")
-    if cfg["battery_kwh"] < 0:
+    if _finite_real(cfg["battery_kwh"], "battery_kwh") < 0:
         raise ValueError("'battery_kwh' must be >= 0")
+    if cfg.get("pv_module") is not None and cfg["pv_module"] not in MODULES:
+        available = ", ".join(sorted(MODULES))
+        raise ValueError(f"Unknown PV module {cfg['pv_module']!r}. Available: {available}")
     tilt = cfg.get("tilt")
-    if tilt is not None and not 0 <= tilt <= 90:
+    if tilt is not None and not 0 <= _finite_real(tilt, "tilt") <= 90:
         raise ValueError("'tilt' must be between 0 and 90")
     azimuth = cfg.get("azimuth")
-    if azimuth is not None and not 0 <= azimuth <= 360:
+    if azimuth is not None and not 0 <= _finite_real(azimuth, "azimuth") <= 360:
         raise ValueError("'azimuth' must be between 0 and 360")
-    if not 0 < cfg["inverter_efficiency"] <= 1:
+    if not 0 < _finite_real(cfg["inverter_efficiency"], "inverter_efficiency") <= 1:
         raise ValueError("'inverter_efficiency' must be between 0 (exclusive) and 1 (inclusive)")
-    if cfg["inverter_loading_ratio"] <= 0:
+    if _finite_real(cfg["inverter_loading_ratio"], "inverter_loading_ratio") <= 0:
         raise ValueError("'inverter_loading_ratio' must be > 0")
-    if cfg["projection_years"] < 1:
+    if not _is_int(cfg["projection_years"]) or cfg["projection_years"] < 1:
         raise ValueError("'projection_years' must be >= 1")
-    if not 0 <= cfg["pv_degradation_rate"] < 1:
+    if not 0 <= _finite_real(cfg["pv_degradation_rate"], "pv_degradation_rate") < 1:
         raise ValueError("'pv_degradation_rate' must be between 0 (inclusive) and 1 (exclusive)")
     if cfg["resolution"] not in ("h", "15min"):
         raise ValueError("'resolution' must be 'h' or '15min'")
     _validate_sky_settings(cfg["transposition_model"], cfg["albedo"], cfg["surface_type"], cfg["model_perez"])
+    if str(cfg["solar_position"]).strip().lower() not in SOLAR_POSITION_METHODS:
+        valid = ", ".join(SOLAR_POSITION_METHODS)
+        raise ValueError(f"'solar_position' must be one of: {valid}")
+    if str(cfg["diffuse_iam"]).strip().lower() not in DIFFUSE_IAM_METHODS:
+        valid = ", ".join(DIFFUSE_IAM_METHODS)
+        raise ValueError(f"'diffuse_iam' must be one of: {valid}")
+    if str(cfg["temperature_model"]).strip().lower() not in TEMPERATURE_MODELS:
+        valid = ", ".join(TEMPERATURE_MODELS)
+        raise ValueError(f"'temperature_model' must be one of: {valid}")
     overrides = cfg.get("pv_loss_overrides")
     if overrides is not None:
         if not isinstance(overrides, dict):
@@ -207,14 +251,60 @@ def validate_config(cfg: dict[str, Any]) -> None:
         for name, value in overrides.items():
             if not isinstance(value, (int, float)) or not 0 <= value <= 100:
                 raise ValueError(f"'pv_loss_overrides[{name!r}]' must be a percentage between 0 and 100")
-    if not -1 < cfg["sell_price_inflation"] < 1:
+    for key in ("inflation_rate", "discount_rate"):
+        if _finite_real(cfg[key], key) <= -1:
+            raise ValueError(f"'{key}' must be greater than -1")
+    if not -1 < _finite_real(cfg["sell_price_inflation"], "sell_price_inflation") < 1:
         raise ValueError("'sell_price_inflation' must be between -1 and 1 (exclusive)")
-    if not 0 <= cfg["battery_min_soc"] < cfg["battery_max_soc"] <= 1:
+    if cfg["export_emissions_factor_gco2_kwh"] is not None:
+        if _finite_real(cfg["export_emissions_factor_gco2_kwh"], "export_emissions_factor_gco2_kwh") < 0:
+            raise ValueError("'export_emissions_factor_gco2_kwh' must be >= 0 when configured")
+    min_soc = _finite_real(cfg["battery_min_soc"], "battery_min_soc")
+    max_soc = _finite_real(cfg["battery_max_soc"], "battery_max_soc")
+    if not 0 <= min_soc < max_soc <= 1:
         raise ValueError("'battery_min_soc' and 'battery_max_soc' must satisfy 0 <= min < max <= 1")
-    if not 0 < cfg["battery_eol_percentage"] < 1:
+    if not 0 < _finite_real(cfg["battery_eol_percentage"], "battery_eol_percentage") < 1:
         raise ValueError("'battery_eol_percentage' must be between 0 and 1 (exclusive)")
-    if cfg["battery_rte"] is not None and not 0 < cfg["battery_rte"] <= 1:
+    if cfg["battery_rte"] is not None and not 0 < _finite_real(cfg["battery_rte"], "battery_rte") <= 1:
         raise ValueError("'battery_rte' must be between 0 (exclusive) and 1 (inclusive)")
+    for key in ("battery_max_charge_power_w", "battery_max_discharge_power_w"):
+        if cfg[key] is not None and _finite_real(cfg[key], key) < 0:
+            raise ValueError(f"'{key}' must be >= 0 when configured")
+    if not isinstance(cfg["dc_coupled"], bool):
+        raise TypeError("'dc_coupled' must be a boolean")
+    if not cfg["dc_coupled"]:
+        raise NotImplementedError("BREOS 0.3.x supports DC-coupled/hybrid battery dispatch only")
+    valid_calendar_models = {
+        "naumann",
+        "naumann_lam",
+        "naumann_lam_field_calibrated",
+        "naumann_lam_field_calibrated_v1",
+        "naumann_lam_field_calibrated_v2",
+    }
+    calendar_model = str(cfg["calendar_model"]).strip().lower().replace("-", "_")
+    if calendar_model not in valid_calendar_models:
+        raise ValueError(f"'calendar_model' must be one of: {', '.join(sorted(valid_calendar_models))}")
+    if not isinstance(cfg["start_date"], str):
+        raise TypeError("'start_date' must be an ISO date string (YYYY-MM-DD)")
+    try:
+        date.fromisoformat(cfg["start_date"])
+    except ValueError as exc:
+        raise ValueError("'start_date' must be a valid ISO date (YYYY-MM-DD)") from exc
+
+
+def _is_int(value: Any) -> bool:
+    """Return whether *value* is an integer, excluding booleans."""
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _finite_real(value: Any, key: str) -> float:
+    """Return a finite float or raise an actionable public config error."""
+    if isinstance(value, bool) or not isinstance(value, Real):
+        raise TypeError(f"'{key}' must be a finite number")
+    result = float(value)
+    if not math.isfinite(result):
+        raise ValueError(f"'{key}' must be a finite number")
+    return result
 
 
 def resolve_location(cfg: dict[str, Any]) -> tuple[float, float, str, str | None]:
@@ -370,7 +460,10 @@ def resolve_emissions(cfg: dict[str, Any]) -> EmissionsParams | None:
     if key not in emissions_db:
         available = ", ".join(sorted(emissions_db))
         raise ValueError(f"Unknown emissions country '{key}'. Available: {available}")
-    return EmissionsParams(**emissions_db[key])
+    params = dict(emissions_db[key])
+    if cfg["export_emissions_factor_gco2_kwh"] is not None:
+        params["export_displacement_carbon_intensity_gco2_kwh"] = cfg["export_emissions_factor_gco2_kwh"]
+    return EmissionsParams(**params)
 
 
 def build_costs_dict(cfg: dict[str, Any], resolved: ResolvedAppConfig) -> dict[str, float]:

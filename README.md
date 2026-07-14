@@ -250,19 +250,32 @@ for the full key reference, including system echo fields (`pv_kwp`,
 
 | Key | Description |
 |-----|-------------|
-| `pv_production_kwh` | Year 1 PV production |
+| `pv_production_kwh` | Legacy AC-equivalent non-curtailed PV field |
+| `pv_ac_system_kwh` | Year 1 usable AC delivered to load or export |
+| `pv_dc_generation_kwh` | Year 1 PV DC generation before dispatch |
 | `grid_independence_pct` | Year 1 grid independence (%) |
 | `self_consumption_pct` | Year 1 self-consumption ratio (%) |
 | `total_investment_eur` | Total CAPEX |
 | `payback_year` | Payback year (`None` if not reached) |
 | `npv_savings_eur` | NPV savings over projection period |
 | `lcoe_eur_kwh` | Levelized cost of electricity from system CAPEX, O&M, simulated replacements, and discounted PV production |
-| `co2_avoided_year1_kg` | Year 1 CO<sub>2</sub> avoided |
-| `co2_avoided_total_kg` | Lifetime CO<sub>2</sub> avoided |
+| `co2_avoided_self_consumption_year1_kg` | Year 1 behind-the-meter CO<sub>2</sub> benefit |
+| `co2_avoided_export_year1_kg` | Year 1 exported-generation CO<sub>2</sub> benefit |
+| `co2_avoided_total_year1_kg` | Sum of year 1 pathway benefits |
+| `co2_avoided_total_lifetime_kg` | Sum of lifetime pathway benefits |
+| `co2_avoided_year1_kg`, `co2_avoided_total_kg` | Compatibility aliases for totals |
 | `battery_soh_end_pct` | Battery state of health at end (if battery) |
 | `monthly` | Year 1 monthly balance rows for PV, load, imports, exports, and self-consumption |
 | `financial` | Yearly financial projection rows, including year 0 investment |
 | `yearly` | List of per-year dicts with detailed breakdown |
+
+BREOS 0.3.x models DC-coupled/hybrid stationary batteries only; unsupported
+AC coupling fails explicitly. PV and battery discharge share the inverter AC
+nameplate, while above-headroom PV can still charge the DC battery. Optional
+charge and discharge power limits are available; `None` retains the legacy
+unlimited behavior. See the [energy-balance contract](docs/api/energy-balance.md)
+for DC/AC bases, conservation identities, and migration guidance for
+`PV_Production` consumers.
 
 ### Multi-array PV systems
 
@@ -303,13 +316,13 @@ pv_dc = calculate_pv_production_dc(weather, location, tilt=35, surface_azimuth=1
 # ...
 ```
 
-## Version 0.3.3 Scope
+## Version 0.3.4 Scope
 
-BREOS 0.3.3 focuses on PV and stationary-battery simulation, economic
-analysis, emissions, Monte Carlo uncertainty studies, PV/battery sizing, and
-serial parameter sweeps. The public API is centered on `breos.App`, with
-lower-level modules available for users who need to assemble their own study
-pipeline.
+BREOS 0.3.4 adds an explicit DC/AC energy ledger, cross-year battery-state
+continuity, reconciled PV loss reporting, optimizer/App parity, and a standing
+multi-site validation suite. It also adds opt-in solar-position, diffuse-IAM,
+and mounting-temperature models while keeping `breos.App` as the stable public
+facade and retaining compatibility aliases for existing result fields.
 
 ## Weather Data Note
 

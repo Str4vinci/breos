@@ -252,6 +252,7 @@ try:
         plot_monthly_balance,
         plot_monthly_comparison,
         plot_pareto_front_analysis,
+        plot_pv_loss_waterfall,
         plot_resistance_and_efficiency,
         plot_temperature_sensitivity_comparison,
         plot_tilt_optimization,

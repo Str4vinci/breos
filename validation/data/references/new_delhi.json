@@ -1,0 +1,75 @@
+{
+  "location_key": "new_delhi",
+  "name": "New Delhi, India",
+  "latitude": 28.6139,
+  "longitude": 77.209,
+  "tilt": 28,
+  "azimuth_pvlib": 180,
+  "system": {
+    "module": "Generic_400W",
+    "n_modules": 10,
+    "peak_power_kw": 4.0,
+    "dc_ac_ratio": 1.2,
+    "inverter_efficiency": 0.96,
+    "albedo": 0.2,
+    "mounting": "free",
+    "breos_losses_pct": 14.08,
+    "pvgis_loss_pct": 17.51
+  },
+  "weather": {
+    "file": "new_delhi_tmy_2005_2023_pvgis-era5.csv.gz",
+    "radiation_db": "PVGIS-ERA5",
+    "year_min": 2005,
+    "year_max": 2023,
+    "fetched": "2026-07-02"
+  },
+  "pvgis_pvcalc": {
+    "fetched": "2026-07-02",
+    "params": {
+      "lat": 28.6139,
+      "lon": 77.209,
+      "peakpower": 4.0,
+      "loss": 17.51,
+      "angle": 28,
+      "aspect": 0,
+      "mountingplace": "free",
+      "outputformat": "json"
+    },
+    "radiation_db": "PVGIS-ERA5",
+    "years": "2005-2023",
+    "monthly_kwh": [
+      542.45,
+      531.33,
+      606.51,
+      586.84,
+      562.43,
+      476.77,
+      390.95,
+      401.18,
+      456.48,
+      567.3,
+      532.11,
+      539.67
+    ],
+    "annual_kwh": 6194.03,
+    "poa_monthly_kwh_m2": [
+      177.0,
+      177.73,
+      212.14,
+      212.8,
+      207.61,
+      171.73,
+      137.35,
+      139.49,
+      159.43,
+      198.1,
+      181.27,
+      177.48
+    ],
+    "poa_annual_kwh_m2": 2152.13
+  },
+  "pvwatts_v8": {
+    "fetched": "2026-07-02",
+    "error": "ConnectionError: HTTPSConnectionPool(host='developer.nrel.gov', port=443): Max retries exceeded with url: /api/pvwatts/v8.json?lat=28.6139&lon=77.209&system_capacity=4.0&module_type=0&array_type=0&tilt=28&azimuth=180&losses=14.08&dc_ac_ratio=1.2&inv_eff=96.0&albedo=0.2&radius=0&dataset=nsrdb&api_key=DEMO_KEY (Caused by NameResolutionError(\"HTTPSConnection(host='developer.nrel.gov', port=443): Failed to resolve 'developer.nrel.gov' ([Errno 8] nodename nor servname provided, or not known)\"))"
+  }
+}

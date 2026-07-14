@@ -66,6 +66,8 @@ def test_run_montecarlo_shapes_and_years(tmp_path):
     assert result.available_years == [2021, 2022]
     for col in ("npv_savings_eur", "lcoe_eur_kwh", "final_soh_pct", "mean_grid_independence_pct"):
         assert col in result.runs.columns
+    assert "mean_pv_dc_generation_kwh" in result.runs
+    assert "mean_usable_ac_system_production_kwh" in result.runs
     assert "npv_savings_eur" in result.summary
     assert set(result.summary["npv_savings_eur"]) >= {"mean", "p5", "p50", "p95"}
 
@@ -103,6 +105,64 @@ def test_run_montecarlo_threads_sell_price_inflation(tmp_path, monkeypatch):
     run_montecarlo({**_base_config(), "sell_price_inflation": 0.04}, settings)
 
     assert seen["sell_price_inflation"] == 0.04
+
+
+def test_run_montecarlo_threads_battery_power_limits(tmp_path, monkeypatch):
+    import breos.montecarlo as mc_module
+
+    weather = _write_multiyear_weather(tmp_path / "multi.csv", years=(2021,))
+    seen = []
+    original = mc_module.BatteryConfig
+
+    def _capture(*args, **kwargs):
+        seen.append((kwargs.get("max_charge_power_w"), kwargs.get("max_discharge_power_w")))
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(mc_module, "BatteryConfig", _capture)
+    settings = MonteCarloSettings(weather_file=str(weather), n_runs=1, years_per_run=1, seed=0)
+    run_montecarlo(
+        {**_base_config(), "battery_max_charge_power_w": 321.0, "battery_max_discharge_power_w": 456.0},
+        settings,
+    )
+    assert seen == [(321.0, 456.0)]
+
+
+def test_montecarlo_carries_battery_and_pv_origin_inventory_between_years(tmp_path, monkeypatch):
+    import breos.montecarlo as mc_module
+
+    weather = _write_multiyear_weather(tmp_path / "multi.csv", years=(2021,))
+    original = mc_module.simulate_energy_balance
+    calls = []
+
+    def _capture(*args, **kwargs):
+        output = original(*args, **kwargs)
+        results = output[0]
+        calls.append(
+            {
+                "initial_energy_wh": kwargs.get("initial_energy_wh"),
+                "initial_pv_origin_energy_wh": kwargs.get("initial_pv_origin_energy_wh"),
+                "ending_energy_wh": float(results["Battery_Energy_End"].iloc[-1]),
+                "ending_pv_origin_energy_wh": float(results["Battery_PV_Origin_Energy_End"].iloc[-1]),
+                "beginning_energy_wh": float(results["Battery_Energy_Beginning"].iloc[0]),
+                "beginning_pv_origin_energy_wh": float(results["Battery_PV_Origin_Energy_Beginning"].iloc[0]),
+            }
+        )
+        return output
+
+    monkeypatch.setattr(mc_module, "simulate_energy_balance", _capture)
+    settings = MonteCarloSettings(weather_file=str(weather), n_runs=1, years_per_run=2, seed=0)
+    result = run_montecarlo(_base_config(), settings)
+
+    assert calls[0]["initial_energy_wh"] is None
+    assert calls[0]["ending_pv_origin_energy_wh"] > 0
+    assert calls[1]["initial_energy_wh"] == pytest.approx(calls[0]["ending_energy_wh"])
+    assert calls[1]["initial_pv_origin_energy_wh"] == pytest.approx(calls[0]["ending_pv_origin_energy_wh"])
+    assert calls[1]["beginning_energy_wh"] == pytest.approx(calls[0]["ending_energy_wh"])
+    assert calls[1]["beginning_pv_origin_energy_wh"] == pytest.approx(calls[0]["ending_pv_origin_energy_wh"])
+    assert result.runs.loc[0, "mean_pv_origin_battery_ac_load_kwh"] > 0
+    assert result.runs.loc[0, "mean_self_consumption_kwh"] == pytest.approx(
+        result.runs.loc[0, "mean_direct_pv_ac_load_kwh"] + result.runs.loc[0, "mean_pv_origin_battery_ac_load_kwh"]
+    )
 
 
 def test_run_montecarlo_rejects_empty_weather(tmp_path):

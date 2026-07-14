@@ -11,9 +11,10 @@ from pvlib.location import Location
 
 from breos.app_config import ResolvedAppConfig
 from breos.solar import (
-    calculate_multi_array_production,
-    calculate_pv_production_dc,
-    calculate_pv_production_dc_tracking,
+    PVProductionBreakdown,
+    calculate_multi_array_production_breakdown,
+    calculate_pv_production_breakdown,
+    calculate_pv_production_tracking_breakdown,
 )
 from breos.utils import remap_datetime_index_years
 
@@ -35,6 +36,7 @@ class PreparedSimulationInputs:
 
     weather: pd.DataFrame
     dc_system_base: pd.Series
+    pv_breakdown: PVProductionBreakdown
     load_data: pd.Series
     temperature_series: pd.Series
 
@@ -91,17 +93,27 @@ def load_weather_for_simulation(
     if weather.index.tz is None:
         weather.index = weather.index.tz_localize("UTC")
     weather = remap_tmy_year(weather, start_year)
+    weather_metadata = weather.attrs.get("breos_weather_metadata")
 
     if freq == "15min":
         inferred = pd.infer_freq(weather.index[:10])
         if inferred and "h" in inferred.lower() and "15" not in inferred:
             weather = deps.resample_to_15min(weather, latitude=resolved.lat, longitude=resolved.lon)
+            if weather_metadata is not None:
+                weather.attrs["breos_weather_metadata"] = weather_metadata
 
     return weather
 
 
 def build_dc_system_base(cfg: dict[str, Any], resolved: ResolvedAppConfig, weather: pd.DataFrame) -> pd.Series:
     """Build undegraded system-level DC production for one simulation year."""
+    return build_pv_production_breakdown(cfg, resolved, weather).dc_after_losses
+
+
+def build_pv_production_breakdown(
+    cfg: dict[str, Any], resolved: ResolvedAppConfig, weather: pd.DataFrame
+) -> PVProductionBreakdown:
+    """Build undegraded system-level PV production and loss-stage details."""
     location = Location(resolved.lat, resolved.lon, tz=resolved.timezone)
     freq = cfg["resolution"]
     loss_overrides = cfg["pv_loss_overrides"]
@@ -110,10 +122,13 @@ def build_dc_system_base(cfg: dict[str, Any], resolved: ResolvedAppConfig, weath
         "albedo": cfg["albedo"],
         "surface_type": cfg["surface_type"],
         "model_perez": cfg["model_perez"],
+        "solar_position": cfg["solar_position"],
+        "diffuse_iam": cfg["diffuse_iam"],
+        "temperature_model": cfg["temperature_model"],
     }
 
     if resolved.pv_arrays:
-        return calculate_multi_array_production(
+        return calculate_multi_array_production_breakdown(
             weather_data=weather,
             location=location,
             arrays=resolved.pv_arrays,
@@ -123,22 +138,22 @@ def build_dc_system_base(cfg: dict[str, Any], resolved: ResolvedAppConfig, weath
         )
 
     if resolved.tracking == "fixed":
-        dc_1mod = calculate_pv_production_dc(
+        breakdown = calculate_pv_production_breakdown(
             weather_data=weather,
             location=location,
             tilt=resolved.tilt,
             surface_azimuth=resolved.azimuth,
-            n_modules=1,
+            n_modules=cfg["n_modules"],
             pv_params=resolved.pv_params,
             freq=freq,
             loss_overrides=loss_overrides,
             **sky_kwargs,
         )
     else:
-        dc_1mod = calculate_pv_production_dc_tracking(
+        breakdown = calculate_pv_production_tracking_breakdown(
             weather_data=weather,
             location=location,
-            n_modules=1,
+            n_modules=cfg["n_modules"],
             tracking=resolved.tracking,
             axis_tilt=cfg["axis_tilt"],
             axis_azimuth=resolved.axis_azimuth,
@@ -152,7 +167,7 @@ def build_dc_system_base(cfg: dict[str, Any], resolved: ResolvedAppConfig, weath
             loss_overrides=loss_overrides,
             **sky_kwargs,
         )
-    return dc_1mod * cfg["n_modules"]
+    return breakdown
 
 
 def load_consumption_profile(
@@ -182,7 +197,8 @@ def prepare_simulation_inputs(
     freq = cfg["resolution"]
     start_year = int(cfg["start_date"][:4])
     weather = load_weather_for_simulation(resolved, freq, start_year, deps)
-    dc_system_base = build_dc_system_base(cfg, resolved, weather)
+    pv_breakdown = build_pv_production_breakdown(cfg, resolved, weather)
+    dc_system_base = pv_breakdown.dc_after_losses
     load_data = load_consumption_profile(cfg, deps, timezone=resolved.timezone)
     temperature_series = deps.build_battery_temperature_series(
         "weather",
@@ -192,6 +208,7 @@ def prepare_simulation_inputs(
     return PreparedSimulationInputs(
         weather=weather,
         dc_system_base=dc_system_base,
+        pv_breakdown=pv_breakdown,
         load_data=load_data,
         temperature_series=temperature_series,
     )

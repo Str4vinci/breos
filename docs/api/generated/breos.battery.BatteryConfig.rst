@@ -35,6 +35,8 @@
       ~BatteryConfig.initial_soh
       ~BatteryConfig.inverter_ac_capacity_w
       ~BatteryConfig.inverter_efficiency
+      ~BatteryConfig.max_charge_power_w
+      ~BatteryConfig.max_discharge_power_w
       ~BatteryConfig.max_soc
       ~BatteryConfig.min_soc
       ~BatteryConfig.replacement_cost

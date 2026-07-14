@@ -56,6 +56,24 @@ class TestCO2Savings:
         assert result["CO2_Avoided_Intensity_Type"] == "marginal"
         assert result["Average_Grid_Carbon_Intensity_gCO2_kWh"] == pytest.approx(100.0)
 
+    def test_separate_export_factor_sums_exactly(self):
+        params = EmissionsParams(
+            average_grid_carbon_intensity_gco2_kwh=100.0,
+            export_displacement_carbon_intensity_gco2_kwh=25.0,
+        )
+        result = calculate_co2_savings(10.0, 4.0, params)
+
+        assert result["CO2_Avoided_SelfConsumed_kg"] == pytest.approx(0.4)
+        assert result["CO2_Avoided_Export_kg"] == pytest.approx(0.15)
+        assert result["CO2_Avoided_Total_kg"] == pytest.approx(
+            result["CO2_Avoided_SelfConsumed_kg"] + result["CO2_Avoided_Export_kg"]
+        )
+
+    def test_export_factor_falls_back_to_avoided_grid_factor(self):
+        params = EmissionsParams(marginal_grid_carbon_intensity_gco2_kwh=300.0)
+        result = calculate_co2_savings(10.0, 4.0, params)
+        assert result["CO2_Avoided_Export_kg"] == pytest.approx(1.8)
+
 
 class TestCO2Projection:
     def test_shape(self):

@@ -19,6 +19,29 @@ from breos.utils import get_hours_per_step
 # Default battery and replacement cost per kWh of battery capacity (€/kWh)
 BATTERY_REPLACEMENT_COST_PER_KWH: float = 500.0
 
+SYSTEM_AC_PRODUCTION_COLUMNS = ("PV_AC_To_Load", "Battery_AC_To_Load_PV")
+
+
+def system_ac_production_power(results_df: pd.DataFrame) -> pd.Series:
+    """Return usable PV-system AC production in the frame's power unit.
+
+    Prefer the explicit ledger: direct PV to load, PV returned from battery
+    to load, and PV exported at the AC boundary. ``Sell_To_Grid`` is accepted
+    as the export alias. Older frames fall back to compatibility-only
+    ``PV_Production``.
+    """
+    if all(column in results_df.columns for column in SYSTEM_AC_PRODUCTION_COLUMNS):
+        export_column = "PV_AC_Export" if "PV_AC_Export" in results_df.columns else "Sell_To_Grid"
+        if export_column in results_df.columns:
+            columns = [*SYSTEM_AC_PRODUCTION_COLUMNS, export_column]
+            return results_df[columns].apply(pd.to_numeric, errors="coerce").fillna(0.0).sum(axis=1)
+
+    if "PV_Production" in results_df.columns:
+        return pd.to_numeric(results_df["PV_Production"], errors="coerce").fillna(0.0)
+
+    required = ", ".join((*SYSTEM_AC_PRODUCTION_COLUMNS, "PV_AC_Export (or Sell_To_Grid)"))
+    raise KeyError(f"Results do not contain the AC system-production ledger ({required}) or legacy PV_Production")
+
 
 @dataclass
 class CostParams:
@@ -190,9 +213,11 @@ def cost_analysis_projection(
     Includes inflation, discount rate, and PV degradation.
 
     Args:
-        results_df: DataFrame with simulation results. Required columns are
-            ``Datetime``, ``PV_Production``, ``Houseload``,
-            ``Import_From_Grid``, and ``Sell_To_Grid``.
+        results_df: DataFrame with ``Datetime``, ``Houseload``,
+            ``Import_From_Grid``, and ``Sell_To_Grid``. System production is
+            ``PV_AC_To_Load + Battery_AC_To_Load_PV + PV_AC_Export``
+            (``Sell_To_Grid`` is the export alias); legacy ``PV_Production``
+            is accepted for compatibility.
         costs: Dictionary with cost parameters (from calculate_costs())
         num_years: Number of years to project
         inflation_rate: Annual inflation for electricity/operation costs
@@ -338,11 +363,12 @@ def cost_analysis_projection(
     hours_per_step = get_hours_per_step(freq)
 
     # Convert W (or whatever units, usually W in results_df) to kW
-    # Note: results_df columns like PV_Production are typically in W (Power).
+    # Result columns are typically in W (Power).
     # To get Energy (kWh), we need to multiply by hours_per_step and divide by 1000.
 
     # First convert columns to numeric, just in case
-    cols_to_numeric = ["PV_Production", "Houseload", "Import_From_Grid", "Sell_To_Grid", "Replacement_Cost"]
+    df["System_AC_Production"] = system_ac_production_power(df)
+    cols_to_numeric = ["System_AC_Production", "Houseload", "Import_From_Grid", "Sell_To_Grid", "Replacement_Cost"]
     for col in cols_to_numeric:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0.0)
@@ -351,7 +377,7 @@ def cost_analysis_projection(
     # Summing Power (W) gives sum(Watts). To get Wh, multiply by hours_per_step.
     # To get kWh, divide by 1000.
     # Replacement_Cost is already in currency (EUR), likely summed is correct (not power->energy).
-    yearly = df[["PV_Production", "Houseload", "Import_From_Grid", "Sell_To_Grid"]].groupby(df["Year"]).sum()
+    yearly = df[["System_AC_Production", "Houseload", "Import_From_Grid", "Sell_To_Grid"]].groupby(df["Year"]).sum()
 
     # Handle replacement cost separately if present (it's already simple sum, no kWh conversion needed)
     if "Replacement_Cost" in df.columns:
@@ -367,7 +393,7 @@ def cost_analysis_projection(
     first_year_load = yearly["Houseload"].iloc[0]
     first_year_import = yearly["Import_From_Grid"].iloc[0]
     first_year_export = yearly["Sell_To_Grid"].iloc[0]
-    first_year_pv = yearly["PV_Production"].iloc[0]
+    first_year_pv = yearly["System_AC_Production"].iloc[0]
     first_year_days = daily_counts.iloc[0]
 
     # Build projection

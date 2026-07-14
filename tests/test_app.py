@@ -404,7 +404,9 @@ class TestAppValidation:
         base = _run(None)
         no_shading = _run({"shading": 0.0})
 
-        assert no_shading == pytest.approx(base / 0.97, rel=1e-6)
+        # Both operands are rounded to 2 decimals by build_result, so the
+        # tightest honest tolerance is the rounding granularity (±0.005 each).
+        assert no_shading == pytest.approx(base / 0.97, abs=0.011)
 
     def test_smaller_inverter_clips_app_production(self, _patch_weather):
         def _run(loading_ratio):
@@ -528,6 +530,7 @@ class TestAppSimulateNoBattery:
             "yearly",
             "monthly",
             "financial",
+            "pv_loss_waterfall",
         }
         assert expected.issubset(self.result.keys())
 
@@ -545,6 +548,20 @@ class TestAppSimulateNoBattery:
     def test_pv_production_positive(self):
         assert self.result["pv_production_kwh"] > 0
 
+    def test_pv_loss_waterfall_reconciles_to_reported_pv(self):
+        waterfall = self.result["pv_loss_waterfall"]
+        assert waterfall["basis"] == "year_1"
+        assert waterfall["unit"] == "kWh"
+        balance = waterfall["energy_balance"]
+        assert balance["pv_dc"]["generation_kwh"] == pytest.approx(self.result["pv_dc_generation_kwh"], abs=0.02)
+        assert balance["pv_dc"]["residual_kwh"] == pytest.approx(0.0, abs=1e-5)
+        assert balance["ac_delivery"]["usable_system_production_kwh"] == pytest.approx(
+            self.result["usable_ac_system_production_kwh"], abs=0.02
+        )
+        assert waterfall["pvwatts"]["components_pct"]["shading"] == 3.0
+        assert waterfall["pvwatts"]["combined_kwh"] > 0
+        assert waterfall["inverter"]["conversion_loss_kwh"] > 0
+
     def test_grid_independence_range(self):
         gi = self.result["grid_independence_pct"]
         assert 0 <= gi <= 100
@@ -552,7 +569,19 @@ class TestAppSimulateNoBattery:
     def test_energy_conservation(self):
         r = self.result
         # self_consumption + export should approximately equal PV production
-        assert abs(r["self_consumption_kwh"] + r["grid_export_kwh"] - r["pv_production_kwh"]) < 1.0
+        assert abs(r["self_consumption_kwh"] + r["grid_export_kwh"] - r["usable_ac_system_production_kwh"]) < 1.0
+
+    def test_explicit_production_schema_and_provenance(self):
+        r = self.result
+        assert r["self_consumption_kwh"] == pytest.approx(
+            r["direct_pv_ac_load_kwh"] + r["pv_origin_battery_ac_load_kwh"], abs=0.02
+        )
+        assert r["usable_ac_system_production_kwh"] == pytest.approx(
+            r["self_consumption_kwh"] + r["grid_export_kwh"], abs=0.02
+        )
+        assert r["provenance"]["ledger_schema_version"] == "1.0"
+        assert r["provenance"]["timezone"] == "Europe/Lisbon"
+        json.dumps(r["provenance"])
 
     def test_investment_positive(self):
         assert self.result["total_investment_eur"] > 0
@@ -715,6 +744,22 @@ class TestAppSimulateWithBattery:
         assert "battery_replacements" in self.result
         assert "battery_replacement_cost_eur" in self.result
 
+    def test_loss_waterfall_reports_battery_dispatch_losses(self):
+        dispatch = self.result["pv_loss_waterfall"]["dispatch"]
+        inverter = self.result["pv_loss_waterfall"]["inverter"]
+        assert dispatch["battery_round_trip_loss_kwh"] >= 0
+        assert dispatch["battery_round_trip_loss_kwh"] == pytest.approx(
+            dispatch["battery_charge_loss_kwh"] + dispatch["battery_discharge_loss_kwh"],
+            abs=0.01,
+        )
+        stored = self.result["pv_loss_waterfall"]["energy_balance"]["battery_stored_energy"]
+        assert stored["residual_kwh"] == pytest.approx(0.0, abs=1e-5)
+        assert inverter["conversion_loss_kwh"] == pytest.approx(
+            inverter["direct_pv_conversion_loss_kwh"] + inverter["battery_discharge_conversion_loss_kwh"],
+            abs=0.02,
+        )
+        assert dispatch["stored_energy_report"] == "energy_balance.battery_stored_energy"
+
     def test_battery_soh_range(self):
         soh = self.result["battery_soh_end_pct"]
         assert 0 < soh <= 100
@@ -741,3 +786,55 @@ class TestAppSimulateWithBattery:
 
     def test_json_serializable(self):
         json.dumps(self.result)
+
+
+def test_multiyear_battery_inventory_and_pv_origin_cross_year_boundary(_patch_weather, monkeypatch):
+    import breos.runners.app as runner_module
+
+    original = runner_module.simulate_energy_balance
+    calls = []
+
+    def _capture(*args, **kwargs):
+        output = original(*args, **kwargs)
+        results = output[0]
+        calls.append(
+            {
+                "initial_energy_wh": kwargs.get("initial_energy_wh"),
+                "initial_pv_origin_energy_wh": kwargs.get("initial_pv_origin_energy_wh"),
+                "ending_energy_wh": float(results["Battery_Energy_End"].iloc[-1]),
+                "ending_pv_origin_energy_wh": float(results["Battery_PV_Origin_Energy_End"].iloc[-1]),
+                "beginning_energy_wh": float(results["Battery_Energy_Beginning"].iloc[0]),
+                "beginning_pv_origin_energy_wh": float(results["Battery_PV_Origin_Energy_Beginning"].iloc[0]),
+            }
+        )
+        return output
+
+    monkeypatch.setattr(runner_module, "simulate_energy_balance", _capture)
+    app = App(
+        {
+            "location": "porto",
+            "n_modules": 6,
+            "annual_consumption_kwh": 3000,
+            "battery_kwh": 5.0,
+            "emissions_country": "PT",
+            "projection_years": 2,
+        }
+    )
+    app.simulate()
+    result = app.result()
+
+    assert calls[0]["initial_energy_wh"] is None
+    assert calls[0]["initial_pv_origin_energy_wh"] is None
+    assert calls[0]["ending_pv_origin_energy_wh"] > 0
+    assert calls[1]["initial_energy_wh"] == pytest.approx(calls[0]["ending_energy_wh"])
+    assert calls[1]["initial_pv_origin_energy_wh"] == pytest.approx(calls[0]["ending_pv_origin_energy_wh"])
+    assert calls[1]["beginning_energy_wh"] == pytest.approx(calls[0]["ending_energy_wh"])
+    assert calls[1]["beginning_pv_origin_energy_wh"] == pytest.approx(calls[0]["ending_pv_origin_energy_wh"])
+    year2 = result["yearly"][1]
+    assert year2["pv_origin_battery_ac_load_kwh"] > 0
+    assert year2["self_consumption_kwh"] == pytest.approx(
+        year2["direct_pv_ac_load_kwh"] + year2["pv_origin_battery_ac_load_kwh"], abs=0.02
+    )
+    assert year2["usable_ac_system_production_kwh"] == pytest.approx(
+        year2["self_consumption_kwh"] + year2["export_kwh"], abs=0.02
+    )

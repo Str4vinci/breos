@@ -1,0 +1,75 @@
+{
+  "location_key": "melbourne",
+  "name": "Melbourne, Australia",
+  "latitude": -37.8142,
+  "longitude": 144.9632,
+  "tilt": 35,
+  "azimuth_pvlib": 0,
+  "system": {
+    "module": "Generic_400W",
+    "n_modules": 10,
+    "peak_power_kw": 4.0,
+    "dc_ac_ratio": 1.2,
+    "inverter_efficiency": 0.96,
+    "albedo": 0.2,
+    "mounting": "free",
+    "breos_losses_pct": 14.08,
+    "pvgis_loss_pct": 17.51
+  },
+  "weather": {
+    "file": "melbourne_tmy_2005_2023_pvgis-era5.csv.gz",
+    "radiation_db": "PVGIS-ERA5",
+    "year_min": 2005,
+    "year_max": 2023,
+    "fetched": "2026-07-02"
+  },
+  "pvgis_pvcalc": {
+    "fetched": "2026-07-02",
+    "params": {
+      "lat": -37.8142,
+      "lon": 144.9632,
+      "peakpower": 4.0,
+      "loss": 17.51,
+      "angle": 35,
+      "aspect": -180,
+      "mountingplace": "free",
+      "outputformat": "json"
+    },
+    "radiation_db": "PVGIS-ERA5",
+    "years": "2005-2023",
+    "monthly_kwh": [
+      593.44,
+      525.45,
+      522.87,
+      418.07,
+      350.02,
+      301.06,
+      335.48,
+      402.24,
+      476.54,
+      548.31,
+      540.41,
+      585.1
+    ],
+    "annual_kwh": 5598.98,
+    "poa_monthly_kwh_m2": [
+      203.07,
+      178.48,
+      175.75,
+      137.22,
+      112.01,
+      95.01,
+      105.18,
+      127.13,
+      153.06,
+      180.59,
+      181.09,
+      197.2
+    ],
+    "poa_annual_kwh_m2": 1845.79
+  },
+  "pvwatts_v8": {
+    "fetched": "2026-07-02",
+    "error": "ConnectionError: HTTPSConnectionPool(host='developer.nrel.gov', port=443): Max retries exceeded with url: /api/pvwatts/v8.json?lat=-37.8142&lon=144.9632&system_capacity=4.0&module_type=0&array_type=0&tilt=35&azimuth=0&losses=14.08&dc_ac_ratio=1.2&inv_eff=96.0&albedo=0.2&radius=0&dataset=nsrdb&api_key=DEMO_KEY (Caused by NameResolutionError(\"HTTPSConnection(host='developer.nrel.gov', port=443): Failed to resolve 'developer.nrel.gov' ([Errno 8] nodename nor servname provided, or not known)\"))"
+  }
+}
