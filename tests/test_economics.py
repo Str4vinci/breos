@@ -11,6 +11,7 @@ from breos.economics import (
     cost_analysis_projection,
     cost_params_from_config,
     find_payback_year,
+    system_ac_production_power,
 )
 from breos.optimization import calculate_financials
 
@@ -120,6 +121,44 @@ class TestCalculateCosts:
 
         assert capex_b > capex_a
         assert npv_b != npv_a
+
+    def test_optimizer_financials_use_selected_module_mpp_unless_overridden(self):
+        base = {
+            "module_cost_per_w": 0.20,
+            "inverter_cost_per_kw_simple": 0.0,
+            "installation_cost_per_module": 0.0,
+            "other_cost_per_module": 0.0,
+        }
+        financials = {"project_lifespan": 1}
+
+        capex_400, _ = calculate_financials(10, 0.0, 0.0, 0.0, 0.0, base, financials, module_power_w=400.0)
+        capex_550, _ = calculate_financials(10, 0.0, 0.0, 0.0, 0.0, base, financials, module_power_w=550.0)
+        assert capex_550 - capex_400 == pytest.approx(10 * 150 * 0.20)
+
+        override = dict(base, panel_wp=500.0)
+        capex_override, _ = calculate_financials(10, 0.0, 0.0, 0.0, 0.0, override, financials, module_power_w=400.0)
+        capex_500, _ = calculate_financials(10, 0.0, 0.0, 0.0, 0.0, base, financials, module_power_w=500.0)
+        assert capex_override == pytest.approx(capex_500)
+
+
+def test_system_ac_production_prefers_explicit_ledger_over_legacy_field():
+    results = pd.DataFrame(
+        {
+            "PV_AC_To_Load": [300.0, 100.0],
+            "Battery_AC_To_Load_PV": [50.0, 25.0],
+            "PV_AC_Export": [200.0, 75.0],
+            "Sell_To_Grid": [999.0, 999.0],
+            "PV_Production": [9999.0, 9999.0],
+        }
+    )
+
+    assert system_ac_production_power(results).tolist() == pytest.approx([550.0, 200.0])
+
+
+def test_system_ac_production_accepts_legacy_field():
+    results = pd.DataFrame({"PV_Production": [500.0, 250.0]})
+
+    assert system_ac_production_power(results).tolist() == pytest.approx([500.0, 250.0])
 
 
 class TestFindPaybackYear:

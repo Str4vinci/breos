@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+import json
+from importlib.metadata import PackageNotFoundError, version
 from typing import Any
 
 import pandas as pd
 
 from breos.app_config import ResolvedAppConfig
 from breos.emissions import calculate_co2_savings
-from breos.runners.app import SimulationArtifacts
+from breos.runners.app import LEDGER_SCHEMA_VERSION, SimulationArtifacts
 from breos.utils import get_hours_per_step
 
 
@@ -23,20 +25,39 @@ def monthly_to_dicts(results_df: pd.DataFrame, freq: str) -> list[dict[str, Any]
         else:
             raise ValueError("results_df must have a DatetimeIndex or Datetime column")
 
-    monthly = df[["PV_Production", "Houseload", "Import_From_Grid", "Sell_To_Grid"]].resample("ME").sum()
+    columns = [
+        "PV_DC",
+        "PV_Production",
+        "PV_AC_To_Load",
+        "Battery_AC_To_Load_PV",
+        "Houseload",
+        "Import_From_Grid",
+        "PV_AC_Export",
+        "PV_DC_Curtailed",
+    ]
+    monthly = df[columns].resample("ME").sum()
     monthly = monthly * hours_per_step / 1000
 
     rows = []
     for idx, row in monthly.iterrows():
-        pv = float(row["PV_Production"])
+        pv_dc = float(row["PV_DC"])
+        direct = float(row["PV_AC_To_Load"])
+        battery = float(row["Battery_AC_To_Load_PV"])
+        usable_pv = direct + battery + float(row["PV_AC_Export"])
+        legacy_pv = float(row["PV_Production"])
         consumption = float(row["Houseload"])
-        export = float(row["Sell_To_Grid"])
+        export = float(row["PV_AC_Export"])
         imported = float(row["Import_From_Grid"])
-        self_consumption = pv - export
+        self_consumption = direct + battery
         rows.append(
             {
                 "month": idx.strftime("%b"),
-                "pv_kwh": round(pv, 2),
+                "pv_kwh": round(legacy_pv, 2),
+                "pv_dc_generation_kwh": round(pv_dc, 2),
+                "direct_pv_ac_load_kwh": round(direct, 2),
+                "pv_origin_battery_ac_load_kwh": round(battery, 2),
+                "usable_ac_system_production_kwh": round(usable_pv, 2),
+                "curtailment_dc_kwh": round(float(row["PV_DC_Curtailed"]), 2),
                 "consumption_kwh": round(consumption, 2),
                 "self_consumption_kwh": round(self_consumption, 2),
                 "import_kwh": round(imported, 2),
@@ -69,9 +90,14 @@ def yearly_to_dicts(yearly_df: pd.DataFrame) -> list[dict[str, Any]]:
     for _, row in yearly_df.iterrows():
         item: dict[str, Any] = {
             "year": int(row["Year"]),
-            "pv_kwh": round(float(row["PV_Production_kWh"]), 2),
+            "pv_kwh": round(float(row["Legacy_PV_Production_kWh"]), 2),
+            "pv_dc_generation_kwh": round(float(row["PV_DC_Generation_kWh"]), 2),
+            "direct_pv_ac_load_kwh": round(float(row["Direct_PV_AC_Load_kWh"]), 2),
+            "pv_origin_battery_ac_load_kwh": round(float(row["PV_Origin_Battery_AC_Load_kWh"]), 2),
+            "usable_ac_system_production_kwh": round(float(row["PV_Production_kWh"]), 2),
+            "curtailment_dc_kwh": round(float(row["Curtailment_DC_kWh"]), 2),
             "consumption_kwh": round(float(row["Load_kWh"]), 2),
-            "self_consumption_kwh": round(float(row["PV_Production_kWh"] - row["Export_kWh"]), 2),
+            "self_consumption_kwh": round(float(row["Self_Consumption_kWh"]), 2),
             "import_kwh": round(float(row["Import_kWh"]), 2),
             "export_kwh": round(float(row["Export_kWh"]), 2),
             "grid_independence_pct": round(float(row["Grid_Independence_%"]), 2),
@@ -82,6 +108,43 @@ def yearly_to_dicts(yearly_df: pd.DataFrame) -> list[dict[str, Any]]:
     return rows
 
 
+def _package_version() -> str:
+    try:
+        return version("breos")
+    except PackageNotFoundError:
+        return "unknown"
+
+
+def _provenance(cfg: dict[str, Any], resolved: ResolvedAppConfig, artifacts: SimulationArtifacts) -> dict[str, Any]:
+    normalized_cfg = {
+        **cfg,
+        "location": {
+            "preset": resolved.loc_key,
+            "latitude": resolved.lat,
+            "longitude": resolved.lon,
+            "timezone": resolved.timezone,
+        },
+        "tilt": resolved.tilt,
+        "azimuth": resolved.azimuth,
+        "axis_azimuth": resolved.axis_azimuth,
+        "pv_module": cfg.get("pv_module") or resolved.pv_params.Name,
+    }
+    # Round-trip through JSON to guarantee only public, serializable scalar types.
+    normalized_cfg = json.loads(json.dumps(normalized_cfg, default=str))
+    weather = json.loads(json.dumps(artifacts.weather_metadata, default=str))
+    weather.setdefault("latitude", resolved.lat)
+    weather.setdefault("longitude", resolved.lon)
+    return {
+        "breos_version": _package_version(),
+        "ledger_schema_version": LEDGER_SCHEMA_VERSION,
+        "resolved_config": normalized_cfg,
+        "weather": weather,
+        "resolution": cfg["resolution"],
+        "timezone": resolved.timezone,
+        "start_date": cfg["start_date"],
+    }
+
+
 def build_result(
     cfg: dict[str, Any],
     resolved: ResolvedAppConfig,
@@ -90,10 +153,11 @@ def build_result(
     """Build the public JSON-serializable App result dictionary."""
     year1 = artifacts.yearly_df.iloc[0]
     yr1_pv = year1["PV_Production_kWh"]
+    legacy_yr1_pv = year1["Legacy_PV_Production_kWh"]
     yr1_export = year1["Export_kWh"]
     yr1_import = year1["Import_kWh"]
     yr1_load = year1["Load_kWh"]
-    self_consumption_kwh = yr1_pv - yr1_export
+    self_consumption_kwh = year1["Self_Consumption_kWh"]
     self_consumption_pct = (self_consumption_kwh / yr1_pv * 100) if yr1_pv > 0 else 0.0
     grid_indep_y1 = year1["Grid_Independence_%"]
 
@@ -104,7 +168,13 @@ def build_result(
         "n_modules": cfg["n_modules"],
         "pv_kwp": round(resolved.system_kwp, 3),
         "battery_kwh": cfg["battery_kwh"],
-        "pv_production_kwh": round(float(yr1_pv), 2),
+        # Compatibility field: legacy potential AC conversion of uncurtailed PV.
+        "pv_production_kwh": round(float(legacy_yr1_pv), 2),
+        "pv_dc_generation_kwh": round(float(year1["PV_DC_Generation_kWh"]), 2),
+        "direct_pv_ac_load_kwh": round(float(year1["Direct_PV_AC_Load_kWh"]), 2),
+        "pv_origin_battery_ac_load_kwh": round(float(year1["PV_Origin_Battery_AC_Load_kWh"]), 2),
+        "usable_ac_system_production_kwh": round(float(yr1_pv), 2),
+        "curtailment_dc_kwh": round(float(year1["Curtailment_DC_kWh"]), 2),
         "consumption_kwh": round(float(yr1_load), 2),
         "self_consumption_kwh": round(float(self_consumption_kwh), 2),
         "grid_import_kwh": round(float(yr1_import), 2),
@@ -118,6 +188,8 @@ def build_result(
         "yearly": yearly_to_dicts(artifacts.yearly_df),
         "monthly": monthly_to_dicts(artifacts.first_year_results_df, cfg["resolution"]),
         "financial": financial_to_dicts(artifacts.cost_projection, total_initial),
+        "pv_loss_waterfall": artifacts.pv_loss_waterfall,
+        "provenance": _provenance(cfg, resolved, artifacts),
     }
 
     if resolved.pv_arrays:
@@ -130,8 +202,27 @@ def build_result(
 
     if resolved.emissions_params is not None:
         co2 = calculate_co2_savings(yr1_pv, self_consumption_kwh, resolved.emissions_params)
-        lifetime_co2 = float(artifacts.cost_projection["CO2_Avoided_Total_Cumulative_kg"].iloc[-1])
-        result["co2_avoided_year1_kg"] = round(co2["CO2_Avoided_Total_kg"], 2)
-        result["co2_avoided_total_kg"] = round(lifetime_co2, 2)
+        lifetime_self = 0.0
+        lifetime_export = 0.0
+        for _, row in artifacts.yearly_df.iterrows():
+            yearly_co2 = calculate_co2_savings(
+                float(row["PV_Production_kWh"]), float(row["Self_Consumption_kWh"]), resolved.emissions_params
+            )
+            lifetime_self += yearly_co2["CO2_Avoided_SelfConsumed_kg"]
+            lifetime_export += yearly_co2["CO2_Avoided_Export_kg"]
+        lifetime_total = lifetime_self + lifetime_export
+        result.update(
+            {
+                "co2_avoided_self_consumption_year1_kg": round(co2["CO2_Avoided_SelfConsumed_kg"], 2),
+                "co2_avoided_export_year1_kg": round(co2["CO2_Avoided_Export_kg"], 2),
+                "co2_avoided_total_year1_kg": round(co2["CO2_Avoided_Total_kg"], 2),
+                "co2_avoided_self_consumption_lifetime_kg": round(lifetime_self, 2),
+                "co2_avoided_export_lifetime_kg": round(lifetime_export, 2),
+                "co2_avoided_total_lifetime_kg": round(lifetime_total, 2),
+                # Compatibility aliases retained for the pre-ledger public schema.
+                "co2_avoided_year1_kg": round(co2["CO2_Avoided_Total_kg"], 2),
+                "co2_avoided_total_kg": round(lifetime_total, 2),
+            }
+        )
 
     return result

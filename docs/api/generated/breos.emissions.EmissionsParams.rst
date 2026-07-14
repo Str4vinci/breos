@@ -28,6 +28,8 @@
       ~EmissionsParams.avoided_intensity_gco2_kwh
       ~EmissionsParams.avoided_intensity_type
       ~EmissionsParams.country
+      ~EmissionsParams.export_displacement_carbon_intensity_gco2_kwh
+      ~EmissionsParams.export_displacement_intensity_gco2_kwh
       ~EmissionsParams.marginal_grid_carbon_intensity_gco2_kwh
       ~EmissionsParams.marginal_source
       ~EmissionsParams.source

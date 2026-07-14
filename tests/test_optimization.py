@@ -100,6 +100,97 @@ def test_solar_design_problem_uses_configured_resolution(monkeypatch):
     assert list(captured["temperature_series"]) == [20.0, 20.0]
 
 
+def test_solar_design_problem_scores_zeb_from_explicit_ac_ledger(monkeypatch):
+    idx = pd.date_range("2025-01-01 00:00", periods=2, freq="h", tz="UTC")
+    tmy_data = pd.DataFrame({"temp_air": [15.0, 16.0], "ghi": [500.0, 500.0]}, index=idx)
+    houseload = pd.DataFrame({"Load": [500.0, 500.0]}, index=idx)  # 1 kWh
+    dc = pd.Series([1000.0, 1000.0], index=idx)  # 2 kWh raw DC
+    results = pd.DataFrame(
+        {
+            "PV_AC_To_Load": [300.0, 300.0],
+            "Battery_AC_To_Load_PV": [50.0, 50.0],
+            "PV_AC_Export": [75.0, 75.0],
+            "PV_Production": [1000.0, 1000.0],
+        },
+        index=idx,
+    )  # 0.85 kWh usable AC
+    summary = pd.DataFrame({"Import [kWh]": [0.3], "Sell [kWh]": [0.15], "Final SOH [%]": [85.0]})
+    captured = {}
+    config = {
+        "location": {"latitude": 41.15, "longitude": -8.61, "timezone": "UTC"},
+        "simulation": {"resolution": "h"},
+        "constraints": {"budget_eur": 100000, "max_area_m2": 100.0},
+        "mode": {"fixed_azimuth": 180},
+        "battery": {"temperature": 20.0},
+    }
+
+    monkeypatch.setattr("breos.optimization.calculate_pv_production_dc", lambda **kwargs: dc)
+    monkeypatch.setattr(
+        "breos.optimization.simulate_energy_balance",
+        lambda **kwargs: (results, 2000.0, summary, 0.0, 0, pd.DataFrame()),
+    )
+
+    def fake_financials(*args, **kwargs):
+        captured.update(kwargs)
+        return 0.0, 0.0
+
+    monkeypatch.setattr("breos.optimization.calculate_financials", fake_financials)
+
+    problem = SolarDesignProblem(tmy_data, houseload, config, "results/_test_run/problem_zeb_ac")
+    out = {}
+    problem._evaluate(np.array([2.0, 1.0, 10.0], dtype=float), out)
+
+    assert -out["F"][2] == pytest.approx(0.85)
+    assert captured["annual_pv_kwh"] == pytest.approx(0.85)
+    assert captured["annual_battery_soh_loss_pct"] == pytest.approx(15.0)
+    assert problem.battery_replacement_treatment["method"] == "repeat_simulated_year_1_soh_loss_to_eol"
+
+
+def test_solar_design_problem_uses_simulated_load_for_objective_denominator(monkeypatch):
+    idx = pd.date_range("2025-01-01 00:00", periods=2, freq="h", tz="UTC")
+    load_idx = pd.date_range("2025-01-01 00:00", periods=3, freq="h", tz="UTC")
+    tmy_data = pd.DataFrame({"temp_air": [15.0, 16.0], "ghi": [0.0, 0.0]}, index=idx)
+    houseload = pd.DataFrame({"Load": [500.0, 500.0, 500.0]}, index=load_idx)
+    dc = pd.Series([0.0, 0.0], index=idx)
+    results = pd.DataFrame(
+        {
+            "Houseload": [500.0, 500.0],
+            "PV_AC_To_Load": [0.0, 0.0],
+            "Battery_AC_To_Load_PV": [0.0, 0.0],
+            "PV_AC_Export": [0.0, 0.0],
+        },
+        index=idx,
+    )
+    summary = pd.DataFrame({"Import [kWh]": [1.0], "Sell [kWh]": [0.0]})
+    captured = {}
+    config = {
+        "location": {"latitude": 41.15, "longitude": -8.61, "timezone": "UTC"},
+        "simulation": {"resolution": "h"},
+        "constraints": {"budget_eur": 100000, "max_area_m2": 100.0},
+        "mode": {"fixed_azimuth": 180},
+        "battery": {"temperature": 20.0},
+    }
+
+    monkeypatch.setattr("breos.optimization.calculate_pv_production_dc", lambda **kwargs: dc)
+    monkeypatch.setattr(
+        "breos.optimization.simulate_energy_balance",
+        lambda **kwargs: (results, 0.0, summary, 0.0, 0, pd.DataFrame()),
+    )
+
+    def fake_financials(*args, **kwargs):
+        captured["annual_load_kwh"] = args[4]
+        return 0.0, 0.0
+
+    monkeypatch.setattr("breos.optimization.calculate_financials", fake_financials)
+
+    problem = SolarDesignProblem(tmy_data, houseload, config, "results/_test_run/problem_aligned_load")
+    out = {}
+    problem._evaluate(np.array([2.0, 0.0, 10.0], dtype=float), out)
+
+    assert captured["annual_load_kwh"] == pytest.approx(1.0)
+    assert out["F"][0] == pytest.approx(1.0)
+
+
 def test_optimize_system_multi_objective_returns_pareto_dataframe(monkeypatch):
     idx = pd.date_range("2025-01-01 00:00", periods=4, freq="h", tz="UTC")
     tmy_data = pd.DataFrame({"temp_air": [15.0, 16.0, 17.0, 18.0], "ghi": [0.0, 500.0, 500.0, 0.0]}, index=idx)
@@ -149,3 +240,4 @@ def test_optimize_system_multi_objective_returns_pareto_dataframe(monkeypatch):
         "NPV_Eur",
         "ZEB_Ratio",
     }
+    assert result.details["battery_replacement_treatment"]["method"] == ("repeat_simulated_year_1_soh_loss_to_eol")

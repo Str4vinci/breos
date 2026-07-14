@@ -10,7 +10,8 @@ WARNING: these kernels are APPROXIMATE standalone engines with no
 production callers — ``breos.App`` and ``simulate_energy_balance`` always
 use the reference Python path in ``battery.py``. The kernels differ from
 the reference model: no inverter conversion losses or AC clipping, a
-segment-based depth-of-cycle proxy instead of rainflow counting, and no
+segment-based depth-of-cycle proxy instead of rainflow counting, no coupling
+selection, no battery power limits, no explicit flow/loss ledger, and no
 replacement logic. Do not mix kernel outputs with reference-path results
 in published numbers. The LFP temperature derate
 (``_lfp_capacity_factor_numba``) is parity-tested against
@@ -21,6 +22,15 @@ from typing import Tuple
 
 import numpy as np
 from numba import jit, prange
+
+ENERGY_BALANCE_CAPABILITIES = {
+    "status": "approximate_screening_only",
+    "production_caller": False,
+    "inverter_clipping": False,
+    "dc_coupling_ledger": False,
+    "battery_power_limits": False,
+    "replacement_events": False,
+}
 
 
 @jit(nopython=True, cache=True)

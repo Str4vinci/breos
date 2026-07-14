@@ -5,6 +5,20 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 ## [Unreleased]
 
 ### Added
+- A versioned, explicit DC/AC timestep energy ledger now reports PV routing,
+  direct and battery inverter losses, cell conversion losses, standby,
+  capacity-window adjustments, storage boundary state, and PV-origin battery
+  delivery. Optional battery charge (DC input) and discharge (AC delivered)
+  power limits are available through `BatteryConfig`, `App`, Monte Carlo, and
+  CLI configuration.
+- `App.result()` separates behind-the-meter, export, and total CO2 benefits
+  and includes JSON-serializable model/configuration provenance.
+- `App.result()` now includes `pv_loss_waterfall`, a year-1 diagnostic that
+  reports the PV chain from horizontal irradiance reference through
+  transposition, IAM, cell temperature, static PVWatts losses, year-1
+  degradation, inverter clipping/conversion, surplus curtailment, and battery
+  dispatch losses. `breos run` JSON output includes the same block, and
+  `breos.plotting.plot_pv_loss_waterfall` renders it as a PV loss diagram.
 - `temperature_model` App config key, `--temperature-model` CLI flag, and
   `temperature_model=` parameter on every solar-chain function. The
   `"pvsyst-freestanding"`, `"pvsyst-semi-integrated"`, and
@@ -45,6 +59,15 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   ±10% gross-error band around the PVGIS reference.
 
 ### Changed
+- `PV_Production` remains as `(PV_DC - curtailed DC) × inverter efficiency`
+  for compatibility. New self-consumption, emissions, loss reporting, and
+  optimizer objectives use explicit AC ledger flows. Consumers should migrate
+  to `pv_ac_system_kwh`, direct/load/export fields, and the versioned ledger.
+- Real calendar-year load profiles now include leap day (8,784 hourly or
+  35,136 quarter-hourly intervals) while preserving exact annual energy.
+- `diffuse_iam="marion"` now keeps fixed-tilt arrays on pvlib's exact Marion
+  integration path but uses a cached 0.5° tilt grid for tracking arrays,
+  avoiding thousands of repeated sky/ground diffuse IAM integrations per run.
 - POA transposition now receives the refraction-corrected apparent zenith,
   matching pvlib's `ModelChain`. Previously one call mixed zenith
   definitions: the AOI/IAM step used `apparent_zenith` while
@@ -53,6 +76,19 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   baseline was regenerated accordingly.
 
 ### Fixed
+- Unsupported AC-coupled dispatch (`dc_coupled=False`) now fails early instead
+  of silently executing the DC-coupled model.
+- The DC-coupled dispatcher now shares inverter headroom between PV and battery
+  discharge, routes above-headroom PV to storage before curtailment, records
+  battery-discharge inverter loss, closes with non-zero delta SOC, and reports
+  temperature/SOH capacity-window changes explicitly.
+- Resistance calendar aging now uses daily mean cell temperature rather than
+  the final timestep's temperature.
+- Multiyear App and Monte Carlo runs now carry stored energy and PV-origin
+  inventory across year boundaries instead of silently resetting to a full,
+  unknown-origin battery each January.
+- Optimizer candidates now use the App's top-level inverter efficiency and
+  the simulated/aligned load when computing objectives.
 - The NSGA-II optimizer (`optimize_system_multi_objective`) scored candidate
   designs with a different model than the App reports, in three ways, all
   fixed:
@@ -66,8 +102,9 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
     formulas of `cost_analysis_projection` exactly (equivalence enforced by
     `tests/test_optimization_parity.py`); the fixed daily grid fee cancels
     out of the savings NPV and remains omitted by construction. NPV values
-    and Pareto fronts change (lower, more realistic NPVs). Known remaining
-    gap: battery replacement costs, which need a multi-year SOH estimate;
+    and Pareto fronts change (lower, more realistic NPVs). Candidate battery
+    replacements use a documented year-1-SOH projection; App multiyear
+    propagation remains the higher-fidelity basis;
   - the load was positionally re-stamped onto the PV index via
     `align_load_to_pv`, ignoring timezones (a UTC-offset shift of the whole
     profile against PV). The raw load now reaches

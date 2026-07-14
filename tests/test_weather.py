@@ -7,6 +7,7 @@ import pytest
 from breos.weather import (
     build_battery_temperature_series,
     fetch_tmy_weather_data,
+    load_weather,
     parse_weather_filename,
     preload_weather_by_year,
     read_epw_file,
@@ -75,6 +76,22 @@ def test_fetch_tmy_weather_accepts_hourly_frequency_alias(monkeypatch):
     weather, _metadata = fetch_tmy_weather_data(41.0, -8.0, sample_year=None, freq="H")
 
     assert len(weather) == 1
+    assert weather.attrs["breos_weather_metadata"]["source"] == "PVGIS_TMY"
+
+
+def test_local_weather_records_path_and_hash(tmp_path):
+    path = tmp_path / "porto_tmy_2005_2023_pvgis-sarah3.csv"
+    pd.DataFrame(
+        {"ghi": [0.0, 1.0]},
+        index=pd.date_range("2025-01-01", periods=2, freq="h", tz="UTC"),
+    ).to_csv(path)
+
+    weather = load_weather("porto", data_type="tmy", weather_dir=str(tmp_path))
+
+    metadata = weather.attrs["breos_weather_metadata"]
+    assert metadata["source"] == "local_file"
+    assert metadata["path"] == str(path.resolve())
+    assert len(metadata["sha256"]) == 64
 
 
 def test_fetch_tmy_keeps_utc_instants_for_non_utc_location(monkeypatch):

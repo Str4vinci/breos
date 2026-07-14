@@ -250,19 +250,32 @@ for the full key reference, including system echo fields (`pv_kwp`,
 
 | Key | Description |
 |-----|-------------|
-| `pv_production_kwh` | Year 1 PV production |
+| `pv_production_kwh` | Legacy AC-equivalent non-curtailed PV field |
+| `pv_ac_system_kwh` | Year 1 usable AC delivered to load or export |
+| `pv_dc_generation_kwh` | Year 1 PV DC generation before dispatch |
 | `grid_independence_pct` | Year 1 grid independence (%) |
 | `self_consumption_pct` | Year 1 self-consumption ratio (%) |
 | `total_investment_eur` | Total CAPEX |
 | `payback_year` | Payback year (`None` if not reached) |
 | `npv_savings_eur` | NPV savings over projection period |
 | `lcoe_eur_kwh` | Levelized cost of electricity from system CAPEX, O&M, simulated replacements, and discounted PV production |
-| `co2_avoided_year1_kg` | Year 1 CO<sub>2</sub> avoided |
-| `co2_avoided_total_kg` | Lifetime CO<sub>2</sub> avoided |
+| `co2_avoided_self_consumption_year1_kg` | Year 1 behind-the-meter CO<sub>2</sub> benefit |
+| `co2_avoided_export_year1_kg` | Year 1 exported-generation CO<sub>2</sub> benefit |
+| `co2_avoided_total_year1_kg` | Sum of year 1 pathway benefits |
+| `co2_avoided_total_lifetime_kg` | Sum of lifetime pathway benefits |
+| `co2_avoided_year1_kg`, `co2_avoided_total_kg` | Compatibility aliases for totals |
 | `battery_soh_end_pct` | Battery state of health at end (if battery) |
 | `monthly` | Year 1 monthly balance rows for PV, load, imports, exports, and self-consumption |
 | `financial` | Yearly financial projection rows, including year 0 investment |
 | `yearly` | List of per-year dicts with detailed breakdown |
+
+BREOS 0.3.x models DC-coupled/hybrid stationary batteries only; unsupported
+AC coupling fails explicitly. PV and battery discharge share the inverter AC
+nameplate, while above-headroom PV can still charge the DC battery. Optional
+charge and discharge power limits are available; `None` retains the legacy
+unlimited behavior. See the [energy-balance contract](docs/api/energy-balance.md)
+for DC/AC bases, conservation identities, and migration guidance for
+`PV_Production` consumers.
 
 ### Multi-array PV systems
 

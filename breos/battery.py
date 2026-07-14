@@ -73,12 +73,15 @@ class BatteryConfig:
     """
     Configuration parameters for battery simulation.
 
-    For DC-coupled systems (hybrid inverters):
+    Only DC-coupled systems (hybrid inverters) are modelled:
     - PV → Battery: No inverter loss (stays in DC)
     - Battery → Load: Inverter loss applies (DC to AC)
 
-    For AC-coupled systems:
-    - All energy goes through inverter first
+    AC-coupled dispatch is not implemented; ``dc_coupled=False`` raises.
+
+    Power limits are nameplate powers and therefore scale with the timestep:
+    ``max_charge_power_w`` limits DC input to the battery path, while
+    ``max_discharge_power_w`` limits battery AC delivered to the load.
 
     ``eol_percentage`` defaults to 0.70 (replace the battery when its state
     of health falls to 70% of nominal capacity), matching the App config
@@ -112,8 +115,73 @@ class BatteryConfig:
     # Battery chemistry. The native degradation model is currently LFP-only;
     # unsupported values fail loudly instead of reusing LFP parameters.
     battery_type: str = "lfp"
+    max_charge_power_w: Optional[float] = None
+    max_discharge_power_w: Optional[float] = None
 
     def __post_init__(self):
+        if not isinstance(self.dc_coupled, bool):
+            raise ValueError("dc_coupled must be a bool")
+        if not self.dc_coupled:
+            raise NotImplementedError(
+                "AC-coupled battery dispatch is not implemented. Only DC-coupled "
+                "(hybrid inverter) systems are supported; set dc_coupled=True."
+            )
+
+        def finite(name: str, value: float) -> float:
+            if isinstance(value, (bool, np.bool_)):
+                raise ValueError(f"{name} must be a finite number, not a bool")
+            try:
+                result = float(value)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(f"{name} must be a finite number") from exc
+            if not math.isfinite(result):
+                raise ValueError(f"{name} must be a finite number")
+            return result
+
+        self.nominal_energy_wh = finite("nominal_energy_wh", self.nominal_energy_wh)
+        self.initial_soh = finite("initial_soh", self.initial_soh)
+        self.eol_percentage = finite("eol_percentage", self.eol_percentage)
+        self.min_soc = finite("min_soc", self.min_soc)
+        self.max_soc = finite("max_soc", self.max_soc)
+        self.charge_efficiency = finite("charge_efficiency", self.charge_efficiency)
+        self.discharge_efficiency = finite("discharge_efficiency", self.discharge_efficiency)
+        self.inverter_efficiency = finite("inverter_efficiency", self.inverter_efficiency)
+        self.standby_loss_wh = finite("standby_loss_wh", self.standby_loss_wh)
+        self.initial_resistance_growth = finite("initial_resistance_growth", self.initial_resistance_growth)
+        self.thermal_resistance_kw = finite("thermal_resistance_kw", self.thermal_resistance_kw)
+
+        if self.nominal_energy_wh < 0.0:
+            raise ValueError("nominal_energy_wh must be non-negative")
+        if not 0.0 <= self.initial_soh <= 100.0:
+            raise ValueError("initial_soh must be between 0 and 100")
+        if not 0.0 <= self.eol_percentage <= 1.0:
+            raise ValueError("eol_percentage must be between 0 and 1")
+        if not 0.0 <= self.min_soc < self.max_soc <= 1.0:
+            raise ValueError("SOC limits must satisfy 0 <= min_soc < max_soc <= 1")
+        for name in ("charge_efficiency", "discharge_efficiency", "inverter_efficiency"):
+            value = getattr(self, name)
+            if not 0.0 < value <= 1.0:
+                raise ValueError(f"{name} must be greater than 0 and at most 1")
+        for name in ("standby_loss_wh", "initial_resistance_growth", "thermal_resistance_kw"):
+            if getattr(self, name) < 0.0:
+                raise ValueError(f"{name} must be non-negative")
+        if self.replacement_cost is not None:
+            self.replacement_cost = finite("replacement_cost", self.replacement_cost)
+            if self.replacement_cost < 0.0:
+                raise ValueError("replacement_cost must be non-negative")
+
+        for name in ("inverter_ac_capacity_w", "max_charge_power_w", "max_discharge_power_w"):
+            value = getattr(self, name)
+            if value is not None:
+                if isinstance(value, (bool, np.bool_)):
+                    raise ValueError(f"{name} must be a finite non-negative number or None")
+                try:
+                    value = float(value)
+                except (TypeError, ValueError) as exc:
+                    raise ValueError(f"{name} must be a finite non-negative number or None") from exc
+                if not math.isfinite(value) or value < 0.0:
+                    raise ValueError(f"{name} must be a finite non-negative number or None")
+                setattr(self, name, value)
         self.battery_type = _normalise_battery_type(self.battery_type)
         # Auto-compute replacement cost
         if self.replacement_cost is None:
@@ -121,6 +189,108 @@ class BatteryConfig:
                 self.replacement_cost = BATTERY_REPLACEMENT_COST_PER_KWH * (self.nominal_energy_wh / 1000)
             else:
                 self.replacement_cost = 0.0
+
+
+def _dispatch_dc_step(
+    pv_dc: float,
+    load: float,
+    battery_energy: float,
+    emin: float,
+    emax: float,
+    eff_charge: float,
+    eff_discharge: float,
+    inv_eff: float,
+    cap_charge_in_wh: float,
+    cap_discharge_ac_wh: float,
+    inv_cap_ac_wh: float,
+    has_battery: bool,
+) -> Tuple[float, Dict[str, float]]:
+    """Dispatch one DC-coupled timestep; inputs, outputs and ledger are Wh.
+
+    PV serves AC load first. Surplus DC then charges the battery before any
+    export. PV and battery discharge share the inverter AC nameplate.
+    """
+    ledger = {
+        "pv_dc_to_battery": 0.0,
+        "pv_dc_to_inverter": 0.0,
+        "pv_dc_curtailed": 0.0,
+        "pv_ac_to_load": 0.0,
+        "pv_ac_export": 0.0,
+        "battery_charge_input": 0.0,
+        "battery_discharge_dc": 0.0,
+        "battery_ac_to_load": 0.0,
+        "battery_charge_loss": 0.0,
+        "battery_discharge_loss": 0.0,
+        "pv_direct_inverter_loss": 0.0,
+        "battery_inverter_loss": 0.0,
+        "grid_import": 0.0,
+    }
+    pv_ac_max = min(pv_dc * inv_eff, inv_cap_ac_wh)
+
+    def charge(surplus_dc: float) -> float:
+        nonlocal battery_energy
+        room = max(0.0, emax - battery_energy)
+        if room <= 0.0 or eff_charge <= 0.0:
+            return 0.0
+        drawn = min(surplus_dc, room / eff_charge, cap_charge_in_wh)
+        battery_energy += drawn * eff_charge
+        ledger["pv_dc_to_battery"] = drawn
+        ledger["battery_charge_input"] = drawn
+        ledger["battery_charge_loss"] = drawn * (1.0 - eff_charge)
+        return drawn
+
+    if has_battery and pv_ac_max >= load:
+        ledger["pv_ac_to_load"] = load
+        dc_to_load = load / inv_eff if inv_eff > 0.0 else 0.0
+        surplus_dc = max(0.0, pv_dc - dc_to_load)
+        drawn = charge(surplus_dc)
+        remaining_dc = surplus_dc - drawn
+        export_headroom = max(0.0, inv_cap_ac_wh - load)
+        export_ac = min(remaining_dc * inv_eff, export_headroom)
+        dc_export = export_ac / inv_eff if inv_eff > 0.0 else 0.0
+        ledger["pv_ac_export"] = export_ac
+        ledger["pv_dc_to_inverter"] = dc_to_load + dc_export
+        ledger["pv_dc_curtailed"] = max(0.0, remaining_dc - dc_export)
+    elif has_battery:
+        ledger["pv_ac_to_load"] = pv_ac_max
+        dc_to_inverter = pv_ac_max / inv_eff if inv_eff > 0.0 else 0.0
+        ledger["pv_dc_to_inverter"] = dc_to_inverter
+        excess_dc = max(0.0, pv_dc - dc_to_inverter)
+        deficit = load - pv_ac_max
+        if excess_dc > 1e-12:
+            # The inverter is saturated by PV. DC above its immediate AC
+            # headroom may charge, but battery discharge has no AC headroom.
+            drawn = charge(excess_dc)
+            ledger["pv_dc_curtailed"] = excess_dc - drawn
+            ledger["grid_import"] = deficit
+        else:
+            available = max(0.0, battery_energy - emin)
+            headroom = max(0.0, inv_cap_ac_wh - pv_ac_max)
+            target_ac = min(deficit, cap_discharge_ac_wh, headroom)
+            total_eff = eff_discharge * inv_eff
+            if available > 0.0 and total_eff > 0.0 and target_ac > 0.0:
+                draw = min(available, target_ac / total_eff)
+                battery_energy -= draw
+                after_cells = draw * eff_discharge
+                delivered_ac = after_cells * inv_eff
+                ledger["battery_discharge_dc"] = draw
+                ledger["battery_ac_to_load"] = delivered_ac
+                ledger["battery_discharge_loss"] = draw - after_cells
+                ledger["battery_inverter_loss"] = after_cells - delivered_ac
+                ledger["grid_import"] = max(0.0, deficit - delivered_ac)
+            else:
+                ledger["grid_import"] = deficit
+    else:
+        usable_ac = pv_ac_max
+        ledger["pv_ac_to_load"] = min(usable_ac, load)
+        ledger["pv_ac_export"] = usable_ac - ledger["pv_ac_to_load"]
+        dc_to_inverter = usable_ac / inv_eff if inv_eff > 0.0 else 0.0
+        ledger["pv_dc_to_inverter"] = dc_to_inverter
+        ledger["pv_dc_curtailed"] = max(0.0, pv_dc - dc_to_inverter)
+        ledger["grid_import"] = max(0.0, load - ledger["pv_ac_to_load"])
+
+    ledger["pv_direct_inverter_loss"] = ledger["pv_dc_to_inverter"] * (1.0 - inv_eff)
+    return battery_energy, ledger
 
 
 def simulate_energy_balance(
@@ -138,13 +308,15 @@ def simulate_energy_balance(
     initial_cumulative_cycle_deg: float = 0.0,
     initial_cumulative_cal_deg: float = 0.0,
     debug: bool = False,
+    initial_energy_wh: Optional[float] = None,
+    initial_pv_origin_energy_wh: Optional[float] = None,
 ) -> Tuple[pd.DataFrame, float, pd.DataFrame, float, int, pd.DataFrame]:
     """
     Simulate energy balance with battery storage and degradation.
 
     This function processes PV DC production and load profiles to calculate
-    grid interaction, battery state, and degradation. It properly handles
-    DC-coupled and AC-coupled battery systems.
+    grid interaction, battery state, and degradation for DC-coupled hybrid
+    inverter systems. AC-coupled battery dispatch is not implemented.
 
     Energy flow for DC-coupled (hybrid inverter) systems:
     - PV -> Load: DC -> Inverter -> AC (one inverter loss)
@@ -162,6 +334,10 @@ def simulate_energy_balance(
         temperature_series: Battery cell temperature (C), defaults to 25C
         results_directory: Directory for saving results (optional)
         debug: Enable debug output
+        initial_energy_wh: Optional carried stored-energy state (Wh). Defaults
+            to the configured max-SOC state for first-run compatibility.
+        initial_pv_origin_energy_wh: Optional PV-origin share of the carried
+            stored energy (Wh). Defaults to zero.
 
     Returns:
         Tuple of:
@@ -239,7 +415,36 @@ def simulate_energy_balance(
     # Initialize state
     battery_soh_decimal = battery_config.initial_soh / 100.0
     Battery_SOH = battery_config.initial_soh
-    Battery_Energy_Wh = battery_config.nominal_energy_wh * battery_soh_decimal * battery_config.max_soc
+    default_initial_energy_wh = battery_config.nominal_energy_wh * battery_soh_decimal * battery_config.max_soc
+    if initial_energy_wh is None:
+        Battery_Energy_Wh = default_initial_energy_wh
+    else:
+        if isinstance(initial_energy_wh, (bool, np.bool_)):
+            raise ValueError("initial_energy_wh must be a finite number, not a bool")
+        try:
+            Battery_Energy_Wh = float(initial_energy_wh)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("initial_energy_wh must be a finite number") from exc
+        if not math.isfinite(Battery_Energy_Wh):
+            raise ValueError("initial_energy_wh must be a finite number")
+        if not 0.0 <= Battery_Energy_Wh <= battery_config.nominal_energy_wh:
+            raise ValueError(
+                f"initial_energy_wh must be between 0 and nominal_energy_wh ({battery_config.nominal_energy_wh:g} Wh)"
+            )
+
+    if initial_pv_origin_energy_wh is None:
+        Battery_PV_Origin_Energy_Wh = 0.0
+    else:
+        if isinstance(initial_pv_origin_energy_wh, (bool, np.bool_)):
+            raise ValueError("initial_pv_origin_energy_wh must be a finite number, not a bool")
+        try:
+            Battery_PV_Origin_Energy_Wh = float(initial_pv_origin_energy_wh)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("initial_pv_origin_energy_wh must be a finite number") from exc
+        if not math.isfinite(Battery_PV_Origin_Energy_Wh):
+            raise ValueError("initial_pv_origin_energy_wh must be a finite number")
+        if not 0.0 <= Battery_PV_Origin_Energy_Wh <= Battery_Energy_Wh:
+            raise ValueError("initial_pv_origin_energy_wh must be between 0 and initial_energy_wh")
 
     # Degradation day-windows are positional (fixed steps_per_day), not
     # calendar-based: DST days and trailing partial days shift/skip windows
@@ -292,6 +497,35 @@ def simulate_energy_balance(
     _res_tcell = np.empty(n_steps)
     _res_replaced = np.zeros(n_steps, dtype=bool)
     _res_repl_cost = np.zeros(n_steps)
+    _res_pv_curtailment = np.empty(n_steps)
+    _res_batt_charge_loss = np.empty(n_steps)
+    _res_batt_discharge_loss = np.empty(n_steps)
+    _res_batt_standby_loss = np.empty(n_steps)
+    _ledger_keys = (
+        "PV_DC_To_Battery",
+        "PV_DC_To_Inverter",
+        "PV_DC_Curtailed",
+        "PV_AC_To_Load",
+        "PV_AC_Export",
+        "Battery_Charge_Input",
+        "Battery_Charge_Stored",
+        "Battery_Discharge_DC",
+        "Battery_AC_To_Load",
+        "Battery_AC_To_Load_PV",
+        "PV_Origin_Battery_AC_To_Load",
+        "PV_Direct_Inverter_Loss",
+        "Battery_Inverter_Loss",
+        "Inverter_Loss",
+        "Standby_Loss",
+        "Capacity_Window_Loss",
+        "Battery_Replacement_Energy_Removed",
+        "Battery_Replacement_Energy_Added",
+        "Battery_Energy_Delta",
+    )
+    _ledger_arrays = {key: np.empty(n_steps) for key in _ledger_keys}
+    _res_batt_e_begin = np.empty(n_steps)
+    _res_batt_pv_begin = np.empty(n_steps)
+    _res_batt_pv_end = np.empty(n_steps)
     # Hoist invariant check out of the loop
     has_battery = battery_config.nominal_energy_wh > 1 and (battery_config.max_soc - battery_config.min_soc) > 0
     # Bind capacity factor function once
@@ -300,6 +534,16 @@ def simulate_energy_balance(
     cap_wh = (
         battery_config.inverter_ac_capacity_w * hours_per_step
         if battery_config.inverter_ac_capacity_w is not None
+        else float("inf")
+    )
+    cap_charge_wh = (
+        battery_config.max_charge_power_w * hours_per_step
+        if battery_config.max_charge_power_w is not None
+        else float("inf")
+    )
+    cap_discharge_wh = (
+        battery_config.max_discharge_power_w * hours_per_step
+        if battery_config.max_discharge_power_w is not None
         else float("inf")
     )
 
@@ -311,8 +555,10 @@ def simulate_energy_balance(
         T_ambient = _temp_vals[i]
         T_cell = T_ambient  # default; overridden by thermal model below
 
-        Import = Sell = 0.0
-        charge_in = discharge_out = 0.0
+        battery_energy_beginning = Battery_Energy_Wh if has_battery else 0.0
+        pv_origin_beginning = Battery_PV_Origin_Energy_Wh if has_battery else 0.0
+        capacity_window_loss = 0.0
+        battery_standby_loss = 0.0
 
         if has_battery:
             # Calculate usable capacity with temperature derating. f_cap is
@@ -326,67 +572,61 @@ def simulate_energy_balance(
             Emax = usable_cap * battery_config.max_soc * f_cap
             Emin = usable_cap * battery_config.min_soc * f_cap
 
-            # Apply standby loss (scaled by timestep) and clamp stored energy
-            # into the temperature-derated window, mirroring the Numba kernel.
-            # Without the upper clamp, Emax shrinking below the stored energy
-            # (cold-temperature derate, daily SOH decline) made charge_room
-            # negative and silently drained the battery into Sell_To_Grid.
+            # A temperature/SOH-driven reduction in Emax is an explicit loss;
+            # it is not export or standby consumption. The lower reserve is a
+            # dispatch boundary and must never create energy when it rises.
+            capacity_window_loss = max(0.0, Battery_Energy_Wh - Emax)
+            if capacity_window_loss > 0.0 and Battery_Energy_Wh > 0.0:
+                Battery_PV_Origin_Energy_Wh *= Emax / Battery_Energy_Wh
+                Battery_Energy_Wh = Emax
+
             standby_loss = battery_config.standby_loss_wh * hours_per_step
-            Battery_Energy_Wh = min(Emax, max(Emin, Battery_Energy_Wh - standby_loss))
-
-            # Convert PV DC to AC for comparison with load (clipped at the
-            # inverter AC rating; excess DC can still charge the battery)
-            pv_ac = min(pv_dc_power * battery_config.inverter_efficiency, cap_wh)
-
-            # Energy flows:
-            # Load is in AC terms
-            # We have pv_dc_power in DC terms
-            # Battery operates in DC
-
-            if pv_ac >= load:  # Surplus: PV covers load + potential charging
-                # Remaining DC available for battery or export
-                # (pv_dc - pv_to_load_dc) where pv_to_load_dc = load / inverter_efficiency
-                dc_to_load = (
-                    load / battery_config.inverter_efficiency if battery_config.inverter_efficiency > 0 else load
-                )
-                surplus_dc = pv_dc_power - dc_to_load
-
-                # Charge battery with surplus DC (no inverter loss)
-                charge_room = max(0.0, Emax - Battery_Energy_Wh)
-                charge_in = min(surplus_dc, charge_room / eff_charge)
-                Battery_Energy_Wh += charge_in * eff_charge
-
-                # Export remainder (DC -> AC) within the inverter headroom
-                # left after serving the load; the rest is curtailed
-                remaining_dc = surplus_dc - charge_in
-                Sell = min(remaining_dc * battery_config.inverter_efficiency, cap_wh - load)
-
-            else:  # Deficit: PV insufficient, need battery or grid
-                deficit = load - pv_ac  # AC deficit
-
-                # Try to cover deficit from battery
-                available = Battery_Energy_Wh - Emin
-                if available > 0:
-                    # Battery discharge: DC -> AC
-                    eff_total = eff_discharge * battery_config.inverter_efficiency
-                    # How much DC do we need to draw to provide 'deficit' AC?
-                    # Battery discharge shares the inverter AC rating with PV.
-                    dc_needed = deficit / eff_total if eff_total > 0 else deficit
-                    draw_cap = (cap_wh - pv_ac) / eff_total if eff_total > 0 else 0.0
-                    draw = min(available, dc_needed, draw_cap)
-                    Battery_Energy_Wh -= draw
-                    delivered_ac = draw * eff_total
-                    discharge_out = draw
-                    Import = max(0.0, deficit - delivered_ac)
-                else:
-                    Import = deficit
+            removable_for_standby = max(0.0, Battery_Energy_Wh - Emin)
+            battery_standby_loss = min(standby_loss, removable_for_standby)
+            if battery_standby_loss > 0.0 and Battery_Energy_Wh > 0.0:
+                Battery_PV_Origin_Energy_Wh *= (Battery_Energy_Wh - battery_standby_loss) / Battery_Energy_Wh
+                Battery_Energy_Wh -= battery_standby_loss
         else:
-            # No battery: simple DC to AC for load (clipped at the AC rating)
-            pv_ac = min(pv_dc_power * battery_config.inverter_efficiency, cap_wh)
-            if pv_ac >= load:
-                Sell = pv_ac - load
-            else:
-                Import = load - pv_ac
+            Emax = 0.0
+            Emin = 0.0
+
+        energy_before_dispatch = Battery_Energy_Wh
+        origin_before_dispatch = Battery_PV_Origin_Energy_Wh
+        origin_fraction = (
+            min(1.0, max(0.0, origin_before_dispatch / energy_before_dispatch)) if energy_before_dispatch > 0.0 else 0.0
+        )
+        Battery_Energy_Wh, ledger = _dispatch_dc_step(
+            pv_dc_power,
+            load,
+            Battery_Energy_Wh,
+            Emin,
+            Emax,
+            eff_charge,
+            eff_discharge,
+            battery_config.inverter_efficiency,
+            cap_charge_wh,
+            cap_discharge_wh,
+            cap_wh,
+            has_battery,
+        )
+        charge_stored = ledger["battery_charge_input"] * eff_charge
+        pv_origin_discharge_dc = ledger["battery_discharge_dc"] * origin_fraction
+        pv_origin_battery_ac = ledger["battery_ac_to_load"] * origin_fraction
+        Battery_PV_Origin_Energy_Wh = max(
+            0.0,
+            origin_before_dispatch - pv_origin_discharge_dc + charge_stored,
+        )
+        Battery_PV_Origin_Energy_Wh = min(Battery_PV_Origin_Energy_Wh, Battery_Energy_Wh)
+
+        Import = ledger["grid_import"]
+        Sell = ledger["pv_ac_export"]
+        charge_in = ledger["battery_charge_input"]
+        discharge_out = ledger["battery_discharge_dc"]
+        pv_curtailment = ledger["pv_dc_curtailed"]
+        battery_charge_loss = ledger["battery_charge_loss"]
+        battery_discharge_loss = ledger["battery_discharge_loss"]
+        pv_production = (pv_dc_power - pv_curtailment) * battery_config.inverter_efficiency
+        battery_energy_delta = Battery_Energy_Wh - battery_energy_beginning
 
         # Compute cell temperature via lumped thermal model
         if has_battery and battery_config.thermal_resistance_kw > 0:
@@ -416,16 +656,14 @@ def simulate_energy_balance(
         else:
             soc_normalized = 0.0
             soc_absolute = 0.0
-            Emax = 0.0
-            Emin = 0.0
         soc_absolute_buffer[soc_buf_idx] = soc_absolute
         soc_buf_idx += 1
 
         # Store results via array indexing (avoids per-timestep dict overhead)
         _res_pv_dc[i] = pv_dc_power / hours_per_step
-        _res_pv_prod[i] = pv_ac / hours_per_step
+        _res_pv_prod[i] = pv_production / hours_per_step
         _res_load[i] = load / hours_per_step
-        _res_pv_delta[i] = (pv_ac - load) / hours_per_step
+        _res_pv_delta[i] = (pv_production - load) / hours_per_step
         _res_import[i] = Import / hours_per_step
         _res_sell[i] = Sell / hours_per_step
         _res_batt_e[i] = Battery_Energy_Wh if has_battery else 0.0
@@ -433,6 +671,36 @@ def simulate_energy_balance(
         _res_soc_abs[i] = soc_absolute
         _res_soh[i] = Battery_SOH if has_battery else 100.0
         _res_tcell[i] = T_cell
+        _res_pv_curtailment[i] = pv_curtailment / hours_per_step
+        _res_batt_charge_loss[i] = battery_charge_loss / hours_per_step
+        _res_batt_discharge_loss[i] = battery_discharge_loss / hours_per_step
+        _res_batt_standby_loss[i] = battery_standby_loss / hours_per_step
+        _res_batt_e_begin[i] = battery_energy_beginning
+        _res_batt_pv_begin[i] = pv_origin_beginning
+        _res_batt_pv_end[i] = Battery_PV_Origin_Energy_Wh
+        ledger_w = {
+            "PV_DC_To_Battery": ledger["pv_dc_to_battery"],
+            "PV_DC_To_Inverter": ledger["pv_dc_to_inverter"],
+            "PV_DC_Curtailed": ledger["pv_dc_curtailed"],
+            "PV_AC_To_Load": ledger["pv_ac_to_load"],
+            "PV_AC_Export": ledger["pv_ac_export"],
+            "Battery_Charge_Input": ledger["battery_charge_input"],
+            "Battery_Charge_Stored": charge_stored,
+            "Battery_Discharge_DC": ledger["battery_discharge_dc"],
+            "Battery_AC_To_Load": ledger["battery_ac_to_load"],
+            "Battery_AC_To_Load_PV": pv_origin_battery_ac,
+            "PV_Origin_Battery_AC_To_Load": pv_origin_battery_ac,
+            "PV_Direct_Inverter_Loss": ledger["pv_direct_inverter_loss"],
+            "Battery_Inverter_Loss": ledger["battery_inverter_loss"],
+            "Inverter_Loss": ledger["pv_direct_inverter_loss"] + ledger["battery_inverter_loss"],
+            "Standby_Loss": battery_standby_loss,
+            "Capacity_Window_Loss": capacity_window_loss,
+            "Battery_Replacement_Energy_Removed": 0.0,
+            "Battery_Replacement_Energy_Added": 0.0,
+            "Battery_Energy_Delta": battery_energy_delta,
+        }
+        for key, value_wh in ledger_w.items():
+            _ledger_arrays[key][i] = value_wh / hours_per_step
 
         # Daily degradation update
         if soc_buf_idx >= steps_per_day:
@@ -494,7 +762,7 @@ def simulate_energy_balance(
                 )
                 resistance_growth, dR_calendar = update_battery_resistance_calendar(
                     resistance_growth,
-                    T_cell_C=T_cell,
+                    T_cell_C=mean_T_cell,
                     cumulative_cal_seconds=cumulative_cal_seconds,
                     dt_days=1.0,
                     mean_soc_absolute=mean_soc_abs,
@@ -513,6 +781,7 @@ def simulate_energy_balance(
 
             # Battery replacement check
             if battery_config.enable_replacement and battery_soh_decimal <= battery_config.eol_percentage:
+                replacement_energy_removed = Battery_Energy_Wh
                 battery_soh_decimal = 1.0
                 Battery_SOH = 100.0
                 fec_cum = 0.0
@@ -521,6 +790,8 @@ def simulate_energy_balance(
                 eff_charge = battery_config.charge_efficiency
                 eff_discharge = battery_config.discharge_efficiency
                 Battery_Energy_Wh = battery_config.nominal_energy_wh * battery_config.max_soc
+                replacement_energy_added = Battery_Energy_Wh
+                Battery_PV_Origin_Energy_Wh = 0.0
                 n_replacements += 1
                 total_replacement_cost += battery_config.replacement_cost
                 _res_replaced[i] = True
@@ -529,6 +800,21 @@ def simulate_energy_balance(
                 cumulative_cal_deg = 0.0
                 cumulative_resistance_cycle = 0.0
                 cumulative_resistance_calendar = 0.0
+
+                # Replacement occurs inside this timestep boundary. Rewrite
+                # the already-recorded state so the reported end matches the
+                # next timestep's beginning, and expose both external energy
+                # transfers for whole-system reconciliation.
+                _res_batt_e[i] = Battery_Energy_Wh
+                _res_soc_norm[i] = 1.0
+                _res_soc_abs[i] = battery_config.max_soc
+                _res_soh[i] = 100.0
+                _res_batt_pv_end[i] = 0.0
+                _ledger_arrays["Battery_Replacement_Energy_Removed"][i] = replacement_energy_removed / hours_per_step
+                _ledger_arrays["Battery_Replacement_Energy_Added"][i] = replacement_energy_added / hours_per_step
+                _ledger_arrays["Battery_Energy_Delta"][i] = (
+                    Battery_Energy_Wh - battery_energy_beginning
+                ) / hours_per_step
 
                 if debug:
                     print(f"\n*** BATTERY REPLACED at {step_time} ***")
@@ -571,6 +857,17 @@ def simulate_energy_balance(
             "T_cell": _res_tcell,
             "Battery_Replaced": _res_replaced,
             "Replacement_Cost": _res_repl_cost,
+            "PV_Curtailment": _res_pv_curtailment,
+            "Battery_Charge_Loss": _res_batt_charge_loss,
+            "Battery_Discharge_Loss": _res_batt_discharge_loss,
+            "Battery_Standby_Loss": _res_batt_standby_loss,
+            # Stored-energy state columns are Wh; all explicit flow/loss
+            # ledger columns are average W over the timestep.
+            "Battery_Energy_Beginning": _res_batt_e_begin,
+            "Battery_Energy_End": _res_batt_e,
+            "Battery_PV_Origin_Energy_Beginning": _res_batt_pv_begin,
+            "Battery_PV_Origin_Energy_End": _res_batt_pv_end,
+            **_ledger_arrays,
         }
     )
     deg_df = pd.DataFrame(degradation_tracking) if degradation_tracking else pd.DataFrame()
@@ -656,7 +953,7 @@ def compute_cell_temperature(
     # Heat from charging: fraction (1 - eta_charge) is lost as heat
     P_loss_charge = charge_power_w * (1.0 - charge_eff)
     # Heat from discharging: battery delivers more internally than reaches load
-    P_loss_discharge = discharge_power_w * (1.0 / discharge_eff - 1.0) if discharge_eff > 0 else 0.0
+    P_loss_discharge = discharge_power_w * (1.0 - discharge_eff)
 
     P_loss_total = P_loss_charge + P_loss_discharge
     T_cell = T_ambient_C + thermal_resistance_kw * P_loss_total

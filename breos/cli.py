@@ -68,6 +68,8 @@ def _build_config(args: argparse.Namespace) -> dict[str, Any]:
     _add_override(overrides, "n_modules", args.n_modules)
     _add_override(overrides, "annual_consumption_kwh", args.annual_consumption_kwh)
     _add_override(overrides, "battery_kwh", args.battery_kwh)
+    _add_override(overrides, "battery_max_charge_power_w", args.battery_max_charge_power_w)
+    _add_override(overrides, "battery_max_discharge_power_w", args.battery_max_discharge_power_w)
     _add_override(overrides, "pv_module", args.pv_module)
     _add_override(overrides, "load_profile", args.load_profile)
     _add_override(overrides, "rlp_directory", str(args.rlp_directory) if args.rlp_directory else None)
@@ -84,6 +86,7 @@ def _build_config(args: argparse.Namespace) -> dict[str, Any]:
     _add_override(overrides, "projection_years", args.projection_years)
     _add_override(overrides, "inflation_rate", args.inflation_rate)
     _add_override(overrides, "sell_price_inflation", args.sell_price_inflation)
+    _add_override(overrides, "export_emissions_factor_gco2_kwh", args.export_emissions_factor_gco2_kwh)
     _add_override(overrides, "discount_rate", args.discount_rate)
     _add_override(overrides, "pv_degradation_rate", args.pv_degradation_rate)
     _add_override(overrides, "calendar_model", args.calendar_model)
@@ -165,6 +168,8 @@ def _resolved_config_summary(config: dict[str, Any]) -> dict[str, Any]:
         },
         "battery": {
             "capacity_kwh": cfg["battery_kwh"],
+            "max_charge_power_w": cfg["battery_max_charge_power_w"],
+            "max_discharge_power_w": cfg["battery_max_discharge_power_w"],
             "min_soc": cfg["battery_min_soc"],
             "max_soc": cfg["battery_max_soc"],
             "eol_percentage": cfg["battery_eol_percentage"],
@@ -180,6 +185,7 @@ def _resolved_config_summary(config: dict[str, Any]) -> dict[str, Any]:
         "emissions": {
             "country": cfg["emissions_country"],
             "enabled": resolved.emissions_params is not None,
+            "export_factor_gco2_kwh": cfg["export_emissions_factor_gco2_kwh"],
         },
         "notes": [
             "This is a resolved configuration check only; no weather fetch or simulation was run.",
@@ -475,6 +481,16 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--n-modules", type=int, help="Number of PV modules.")
     run.add_argument("--annual-consumption-kwh", type=float, help="Annual electricity demand in kWh.")
     run.add_argument("--battery-kwh", type=float, help="Battery capacity in kWh.")
+    run.add_argument(
+        "--battery-max-charge-power-w",
+        type=float,
+        help="Maximum DC power entering the battery charge path in W (default: unlimited).",
+    )
+    run.add_argument(
+        "--battery-max-discharge-power-w",
+        type=float,
+        help="Maximum battery AC power delivered to load in W (default: unlimited).",
+    )
     run.add_argument("--cost-preset", help="Cost preset key, for example 'residential-pt'.")
     run.add_argument("--emissions-country", help="Country code for emissions, for example 'pt'.")
     run.add_argument("--pv-module", help="PV module catalogue key.")
@@ -537,11 +553,21 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument(
         "--sell-price-inflation", type=float, help="Annual inflation of the grid export (sell) price. Default 0."
     )
+    run.add_argument(
+        "--export-emissions-factor-gco2-kwh",
+        type=float,
+        help="Exported-generation displacement factor in gCO2/kWh (default: grid avoided factor).",
+    )
     run.add_argument("--discount-rate", type=float, help="Discount rate for NPV calculations.")
     run.add_argument("--pv-degradation-rate", type=float, help="Annual PV degradation rate.")
     run.add_argument("--calendar-model", help="Battery calendar aging model.")
-    run.add_argument("--dc-coupled", dest="dc_coupled", action="store_true", default=None, help="Use DC coupling.")
-    run.add_argument("--ac-coupled", dest="dc_coupled", action="store_false", help="Use AC coupling.")
+    run.add_argument(
+        "--dc-coupled",
+        dest="dc_coupled",
+        action="store_true",
+        default=None,
+        help="Use the supported DC-coupled/hybrid battery model.",
+    )
     run.add_argument("--inverter-efficiency", type=float, help="Inverter efficiency.")
     run.add_argument("--inverter-loading-ratio", type=float, help="DC/AC oversizing ratio.")
     run.add_argument("--start-date", help="Simulation start date, YYYY-MM-DD.")

@@ -65,8 +65,9 @@ with the CAPEX-matched AC nameplate, prices them with the same estimation
 formulas as `cost_analysis_projection` (equivalence enforced by
 `tests/test_optimization_parity.py`), and passes the load to
 `simulate_energy_balance` unmangled so its timezone-aware alignment applies
-(0.3.4). Remaining: battery replacement costs in optimizer scoring (needs a
-cheap SOH-trajectory estimate from year-1 cycling), and unifying the App's
+(0.3.4). Battery replacement costs now use a documented year-1-SOH projection
+in optimizer scoring; the App retains the higher-fidelity multiyear trajectory.
+Remaining: unifying the App's
 flat-efficiency conversion with the pvwatts part-load curve.
 
 Three inverter representations exist today and they disagree: the `App`
@@ -99,6 +100,12 @@ shared inverter AC rating. Credible sizing studies need power limits.
   for small batteries paired with large arrays.
 
 ### Energy loss waterfall
+
+**Status: seeded 2026-07 (0.3.4)** — `App.result()` / `breos run` JSON now
+include `pv_loss_waterfall` with transposition, IAM, temperature, static
+PVWatts, year-1 degradation, inverter clipping/conversion, battery
+round-trip, standby, and surplus-curtailment buckets, plus
+`plot_pv_loss_waterfall` for a visual PV loss diagram.
 
 PVsyst's loss diagram is its most-loved diagnostic, and it is pure engine
 work: report the chain transposition gain → IAM → temperature → static

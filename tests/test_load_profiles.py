@@ -63,6 +63,50 @@ def test_load_profile_utc_default_keeps_legacy_convention():
     assert len(profile) == 8760
 
 
+@pytest.mark.parametrize(
+    ("freq", "expected_length", "expected_end", "hours_per_step"),
+    [
+        ("h", 8784, "2024-12-31 23:00", 1.0),
+        ("15min", 35136, "2024-12-31 23:45", 0.25),
+    ],
+)
+@pytest.mark.parametrize("timezone", ["UTC", "Europe/Berlin"])
+def test_load_profile_uses_real_leap_calendar_and_preserves_energy(
+    freq, expected_length, expected_end, hours_per_step, timezone
+):
+    profile = load_profile(
+        "1",
+        4321,
+        start_date="2024-01-01",
+        freq=freq,
+        timezone=timezone,
+    )
+    load = profile["Electrical Consumption [W]"]
+
+    assert len(profile) == expected_length
+    assert profile.index[-1] == pd.Timestamp(expected_end, tz=timezone)
+    assert profile.index.is_unique and profile.index.is_monotonic_increasing
+    assert profile.index.to_series().diff().dropna().nunique() == 1
+    assert load.sum() * hours_per_step / 1000 == pytest.approx(4321, abs=1e-9)
+
+    feb28 = load.loc["2024-02-28"].to_numpy()
+    feb29 = load.loc["2024-02-29"].to_numpy()
+    np.testing.assert_allclose(feb29, feb28, rtol=0, atol=1e-12)
+
+
+def test_load_profile_leap_day_does_not_shift_march_profile():
+    leap = load_profile("1", 1000, start_date="2024-01-01", freq="h", timezone="UTC")
+    canonical = load_profile("1", 1000, start_date="2025-01-01", freq="h", timezone="UTC")
+
+    # Compare against a within-profile reference because each returned calendar
+    # is independently scaled to the requested annual energy.
+    leap_load = leap.iloc[:, 0]
+    canonical_load = canonical.iloc[:, 0]
+    assert leap_load.loc["2024-03-01 00:00"] / leap_load.iloc[0] == pytest.approx(
+        canonical_load.loc["2025-03-01 00:00"] / canonical_load.iloc[0]
+    )
+
+
 def test_non_bundled_profile_requires_external_directory():
     with pytest.raises(ValueError, match="not bundled"):
         load_profile("eredes_btn_c", 1000)
