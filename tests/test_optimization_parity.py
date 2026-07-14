@@ -46,7 +46,10 @@ def _first_year_results_df():
     idx = pd.date_range("2023-01-01 00:00", periods=8760, freq="h", tz="UTC")
     return pd.DataFrame(
         {
-            "PV_Production": 1000.0,  # W -> 8760 kWh/yr
+            "PV_AC_To_Load": 500.0,
+            "Battery_AC_To_Load_PV": 200.0,
+            "PV_AC_Export": 300.0,  # system AC = 1000 W -> 8760 kWh/yr
+            "PV_Production": 9999.0,  # compatibility field must not drive projection
             "Houseload": 500.0,
             "Import_From_Grid": 200.0,
             "Sell_To_Grid": 300.0,
@@ -107,6 +110,33 @@ def test_calculate_financials_flat_fallback_without_pv():
     assert npv_flat > npv_degraded
 
 
+def test_replacement_prone_design_scores_worse_than_replacement_free():
+    costs = dict(
+        COSTS_CONFIG,
+        storage_cost_per_kwh=400.0,
+    )
+    financials = dict(FINANCIALS_CONFIG, project_lifespan=3, inflation_rate=0.0, discount_rate=0.0)
+    common = dict(
+        n_modules=1,
+        battery_kwh=2.0,
+        annual_import_kwh=0.0,
+        annual_export_kwh=0.0,
+        annual_load_kwh=0.0,
+        costs_config=costs,
+        financials_config=financials,
+        module_power_w=400.0,
+        battery_initial_soh_pct=100.0,
+        battery_eol_percentage=0.70,
+    )
+
+    _, npv_free = calculate_financials(**common, annual_battery_soh_loss_pct=0.0)
+    _, npv_replacement = calculate_financials(**common, annual_battery_soh_loss_pct=15.0)
+
+    # 15 percentage points/year reaches 70% at the end of year 2; the
+    # replacement uses the App's storage-cost basis: 2 kWh * EUR 400/kWh.
+    assert npv_free - npv_replacement == pytest.approx(800.0)
+
+
 # ---------------------------------------------------------------------------
 # SolarDesignProblem wiring (requires pymoo)
 # ---------------------------------------------------------------------------
@@ -162,6 +192,38 @@ def test_optimizer_applies_capex_matched_ac_clipping(monkeypatch):
     assert captured["battery_config"].inverter_ac_capacity_w == pytest.approx(2 * 550 / 1.6)
     # and the financials receive the PV energy for degradation apportioning
     assert "annual_pv_kwh" in captured["financials_kwargs"]
+    assert captured["financials_kwargs"]["module_power_w"] == pytest.approx(550.0)
+
+
+def test_optimizer_prefers_app_top_level_inverter_efficiency(monkeypatch):
+    idx = pd.date_range("2025-01-01 00:00", periods=2, freq="h", tz="UTC")
+    houseload = pd.DataFrame({"Load": [500.0, 500.0]}, index=idx)
+    config = _problem_config()
+    config["inverter_efficiency"] = 0.80
+    config["inverter"] = {"efficiency": 0.91}
+
+    captured = _run_evaluate(monkeypatch, config, houseload, idx)
+
+    assert captured["battery_config"].inverter_efficiency == pytest.approx(0.80)
+
+
+def test_optimizer_propagates_battery_power_caps(monkeypatch):
+    idx = pd.date_range("2025-01-01 00:00", periods=2, freq="h", tz="UTC")
+    houseload = pd.DataFrame({"Load": [500.0, 500.0]}, index=idx)
+    config = _problem_config()
+    config["battery"].update(
+        {
+            "max_charge_power_w": 1750.0,
+            "max_discharge_power_w": 2250.0,
+        }
+    )
+
+    captured = _run_evaluate(monkeypatch, config, houseload, idx)
+
+    # Frozen convention: charge is DC input-side power; discharge is AC
+    # delivered-to-load power. BatteryConfig enforces both during dispatch.
+    assert captured["battery_config"].max_charge_power_w == pytest.approx(1750.0)
+    assert captured["battery_config"].max_discharge_power_w == pytest.approx(2250.0)
 
 
 def test_optimizer_passes_load_with_original_timestamps(monkeypatch):

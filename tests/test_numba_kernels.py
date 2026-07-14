@@ -7,6 +7,19 @@ import pytest
 pytest.importorskip("numba")
 
 
+def test_numba_energy_balance_capability_contract_is_explicit():
+    from breos.numba_kernels import ENERGY_BALANCE_CAPABILITIES
+
+    assert ENERGY_BALANCE_CAPABILITIES == {
+        "status": "approximate_screening_only",
+        "production_caller": False,
+        "inverter_clipping": False,
+        "dc_coupling_ledger": False,
+        "battery_power_limits": False,
+        "replacement_events": False,
+    }
+
+
 def test_lfp_capacity_factor_parity_with_python_reference():
     # The kernel hand-duplicates the LFP derate constants from constants.py;
     # pin them against the reference implementation across both derate

@@ -16,6 +16,7 @@ and the project [Resources](../resources.md) page.
    :toctree: generated/
 
    breos.solar.calculate_pv_production_dc
+   breos.solar.calculate_pv_production_breakdown
    breos.solar.calculate_pv_production_ac
    breos.solar.calculate_multi_array_production
    breos.solar.dc_to_ac
@@ -33,6 +34,7 @@ unknown keys, and `list_modules` returns the available keys.
    :toctree: generated/
 
    breos.solar.PVModuleParams
+   breos.solar.PVProductionBreakdown
    breos.pv_modules.get_module
    breos.pv_modules.list_modules
    breos.pv_modules.get_module_info

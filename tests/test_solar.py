@@ -10,6 +10,7 @@ from breos.solar import (
     TRANSPOSITION_MODELS,
     PVModuleParams,
     calculate_multi_array_production,
+    calculate_pv_production_breakdown,
     calculate_pv_production_dc,
     calculate_pv_production_dc_tracking,
     dc_to_ac,
@@ -167,6 +168,24 @@ class TestPVProduction:
 
         # Removing the 3% shading loss scales production by 1/0.97
         assert no_shading.sum() == pytest.approx(base.sum() / 0.97, rel=1e-6)
+
+    def test_loss_breakdown_final_matches_dc_output(self, synthetic_weather, porto_location, pv_params):
+        kwargs = dict(
+            weather_data=synthetic_weather,
+            location=porto_location,
+            tilt=35,
+            surface_azimuth=180,
+            n_modules=1,
+            pv_params=pv_params,
+            freq="h",
+        )
+        breakdown = calculate_pv_production_breakdown(**kwargs)
+        dc = calculate_pv_production_dc(**kwargs)
+
+        pd.testing.assert_series_equal(breakdown.dc_after_losses, dc)
+        assert breakdown.pvwatts_components_pct["shading"] == 3.0
+        assert breakdown.pvwatts_component_losses["shading"].sum() > 0
+        assert breakdown.module_dc.sum() > breakdown.dc_after_static_losses.sum()
 
     def test_loss_overrides_reject_unknown_component(self, synthetic_weather, porto_location, pv_params):
         with pytest.raises(ValueError, match="Unknown loss component"):

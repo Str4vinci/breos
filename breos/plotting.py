@@ -23,6 +23,7 @@ try:
     matplotlib.use("Agg")  # Non-interactive backend
     import matplotlib.dates as mdates
     import matplotlib.pyplot as plt
+    from matplotlib.patches import Polygon, Rectangle
     from matplotlib.ticker import FuncFormatter
 
     HAS_MATPLOTLIB = True
@@ -65,6 +66,263 @@ def set_presentation_mode(enabled: bool = True, scale: float = 1.5):
     else:
         plt.rcdefaults()
         matplotlib.use("Agg")
+
+
+def _format_loss_energy(value_kwh: float) -> str:
+    """Format kWh values compactly for plot annotations."""
+    if abs(value_kwh) >= 1000:
+        return f"{value_kwh / 1000:.2f} MWh"
+    return f"{value_kwh:.1f} kWh"
+
+
+def _format_loss_delta(stage: dict) -> str:
+    """Format a stage delta using the plot's sign convention."""
+    delta_pct = float(stage.get("delta_pct_of_previous", 0.0))
+    delta_kwh = float(stage.get("delta_kwh", 0.0))
+    sign = "+" if delta_pct > 0 else ""
+    return f"{sign}{delta_pct:.2f}% ({sign}{_format_loss_energy(delta_kwh)})"
+
+
+def plot_pv_loss_waterfall(
+    waterfall: dict,
+    output_path: Optional[str] = None,
+    title: str = "PV Loss Diagram - Year 1",
+    figsize: Tuple[float, float] = (12.5, 10.0),
+):
+    """
+    Plot an annual PV loss diagram from ``pv_loss_waterfall``.
+
+    Args:
+        waterfall: ``App.result()["pv_loss_waterfall"]`` dictionary.
+        output_path: Optional PNG/PDF/SVG path. When provided, parent
+            directories are created and the figure is saved.
+        title: Figure title.
+        figsize: Matplotlib figure size.
+
+    Returns:
+        The matplotlib ``Figure``.
+    """
+    _check_matplotlib()
+
+    stages = list(waterfall.get("stages", []))
+    if len(stages) < 2:
+        raise ValueError("waterfall must contain at least two stages")
+
+    energies = np.array([float(stage["energy_kwh"]) for stage in stages], dtype=float)
+    max_energy = max(float(np.nanmax(energies)), 1.0)
+    reference_energy = energies[0] if energies[0] > 0 else 1.0
+    n_stages = len(stages)
+
+    # Funnel occupies the left/centre; stage names and step losses sit to the
+    # right of each band (PVsyst-style) so the diagram is self-describing.
+    center_x = 0.32
+    max_width = 0.46
+    top_y, bottom_y = 0.86, 0.30
+    y_positions = np.linspace(top_y, bottom_y, n_stages)
+    widths = np.maximum(0.05, max_width * energies / max_energy)
+    left = center_x - widths / 2.0
+    right = center_x + widths / 2.0
+    label_x = center_x + max_width / 2.0 + 0.035
+
+    fig, ax = plt.subplots(figsize=figsize)
+    ax.set_xlim(0, 1)
+    ax.set_ylim(0, 1)
+    ax.axis("off")
+    ax.text(0.04, 0.965, title, ha="left", va="center", fontsize=16, weight="bold", color="#111827")
+    ax.text(
+        0.04,
+        0.93,
+        "Annual PV conversion stages to the dispatch-ready DC bus",
+        ha="left",
+        va="center",
+        fontsize=9,
+        color="#4b5563",
+    )
+
+    flow_points = [(left[0], y_positions[0]), *zip(left[1:], y_positions[1:])]
+    flow_points += [(right[-1], y_positions[-1]), *zip(right[-2::-1], y_positions[-2::-1])]
+    ax.add_patch(Polygon(flow_points, closed=True, facecolor="#eef6ff", edgecolor="none", zorder=1))
+
+    # Hatch (rather than solid-fill) the area gained/lost between consecutive
+    # stages so the wedges read as loss annotations, not as a render artefact.
+    for idx in range(1, n_stages):
+        delta = float(stages[idx].get("delta_kwh", 0.0))
+        if delta == 0.0:
+            continue
+        if delta > 0:
+            face, hatch_color = "#f0fdf4", "#4ade80"
+        else:
+            face, hatch_color = "#fef2f2", "#f87171"
+        y0, y1 = y_positions[idx - 1], y_positions[idx]
+        for prev_edge, edge in ((left[idx - 1], left[idx]), (right[idx - 1], right[idx])):
+            ax.add_patch(
+                Polygon(
+                    [(prev_edge, y0), (edge, y1), (prev_edge, y1)],
+                    closed=True,
+                    facecolor=face,
+                    edgecolor=hatch_color,
+                    hatch="////",
+                    linewidth=0.0,
+                    zorder=2,
+                )
+            )
+
+    ax.add_patch(Polygon(flow_points, closed=True, facecolor="none", edgecolor="#1f2937", linewidth=1.2, zorder=4))
+
+    for idx, (stage, y) in enumerate(zip(stages, y_positions)):
+        is_edge = idx in (0, n_stages - 1)
+        ax.plot([left[idx], right[idx]], [y, y], color="#1f2937", linewidth=0.7, alpha=0.35, zorder=3)
+
+        cumulative_pct = 100.0 * energies[idx] / reference_energy
+        ax.text(
+            center_x,
+            y + 0.011,
+            f"{_format_loss_energy(float(stage['energy_kwh']))}  ·  {cumulative_pct:.1f}%",
+            ha="center",
+            va="bottom",
+            fontsize=8.6,
+            weight="bold" if is_edge else "normal",
+            color="#111827",
+        )
+
+        # Dotted leader tying the band to its stage label on the right.
+        ax.plot(
+            [right[idx] + 0.008, label_x - 0.008],
+            [y, y],
+            color="#9ca3af",
+            linewidth=0.6,
+            linestyle=(0, (2, 3)),
+            zorder=0,
+        )
+        if idx == 0:
+            ax.text(label_x, y, stage["label"], ha="left", va="center", fontsize=9.2, weight="bold", color="#111827")
+            continue
+        delta_pct = float(stage.get("delta_pct_of_previous", 0.0))
+        step_color = "#047857" if delta_pct > 0 else "#b91c1c" if delta_pct < 0 else "#9ca3af"
+        ax.text(
+            label_x,
+            y + 0.009,
+            stage["label"],
+            ha="left",
+            va="bottom",
+            fontsize=9.2,
+            weight="bold" if is_edge else "normal",
+            color="#111827",
+        )
+        ax.text(
+            label_x,
+            y - 0.009,
+            _format_loss_delta(stage) if delta_pct else "0.00% (0.0 kWh)",
+            ha="left",
+            va="top",
+            fontsize=8.4,
+            color=step_color,
+        )
+
+    ax.text(
+        center_x,
+        bottom_y - 0.05,
+        f"Dispatch-ready PV DC: {_format_loss_energy(float(stages[-1]['energy_kwh']))}",
+        ha="center",
+        va="center",
+        fontsize=11,
+        weight="bold",
+        color="#111827",
+    )
+
+    detail_y0 = 0.035
+    detail_h = 0.165
+    ax.add_patch(
+        Rectangle(
+            (0.04, detail_y0),
+            0.92,
+            detail_h,
+            facecolor="#f9fafb",
+            edgecolor="#e5e7eb",
+            linewidth=0.8,
+        )
+    )
+    component_items = list(waterfall.get("pvwatts", {}).get("components_kwh", {}).items())
+    left_components = component_items[:5]
+    right_components = component_items[5:]
+    component_pct = waterfall.get("pvwatts", {}).get("components_pct", {})
+
+    def _component_line(name: str, value: float) -> str:
+        pct = component_pct.get(name)
+        pct_text = f"{pct:.1f}% · " if isinstance(pct, (int, float)) else ""
+        return f"{name.replace('_', ' ').title()}: {pct_text}{_format_loss_energy(float(value))}"
+
+    heading_y = detail_y0 + detail_h - 0.022
+    row0_y = detail_y0 + detail_h - 0.046
+    row_step = 0.021
+    ax.text(0.06, heading_y, "Static PVWatts components", ha="left", va="center", fontsize=8.7, weight="bold")
+    for row, (name, value) in enumerate(left_components):
+        ax.text(
+            0.06,
+            row0_y - row * row_step,
+            _component_line(name, value),
+            ha="left",
+            va="center",
+            fontsize=7.5,
+            color="#374151",
+        )
+    for row, (name, value) in enumerate(right_components):
+        ax.text(
+            0.35,
+            row0_y - row * row_step,
+            _component_line(name, value),
+            ha="left",
+            va="center",
+            fontsize=7.5,
+            color="#374151",
+        )
+
+    ax.text(0.66, heading_y, "Inverter and dispatch", ha="left", va="center", fontsize=8.7, weight="bold")
+    balance = waterfall.get("energy_balance", {})
+    pv_dc = balance.get("pv_dc", {})
+    ac = balance.get("ac_delivery", {})
+    extra_rows = [
+        ("Direct PV to load (AC)", ac.get("direct_pv_to_load_kwh", 0.0)),
+        ("PV via battery to load (AC)", ac.get("pv_origin_battery_to_load_kwh", 0.0)),
+        ("Grid export (AC)", ac.get("export_kwh", 0.0)),
+        ("Inverter conversion loss", waterfall.get("inverter", {}).get("conversion_loss_kwh", 0.0)),
+        ("Curtailment (DC)", pv_dc.get("curtailed_kwh", 0.0)),
+    ]
+    for row, (label, value) in enumerate(extra_rows):
+        ax.text(
+            0.66,
+            row0_y - row * row_step,
+            f"{label}: {_format_loss_energy(float(value))}",
+            ha="left",
+            va="center",
+            fontsize=7.5,
+            color="#374151",
+        )
+
+    # Keep this summary near the detail box rather than as a stage row because
+    # the component losses are sequential and therefore do not sum arithmetically
+    # to the combined percentage.
+    combined = waterfall.get("pvwatts", {}).get("combined_kwh")
+    combined_pct = waterfall.get("pvwatts", {}).get("combined_pct")
+    if isinstance(combined, (int, float)) and isinstance(combined_pct, (int, float)):
+        ax.text(
+            0.35,
+            detail_y0 + 0.012,
+            f"PVWatts combined: {combined_pct:.2f}% · {_format_loss_energy(float(combined))}",
+            ha="left",
+            va="center",
+            fontsize=7.7,
+            color="#111827",
+            weight="bold",
+        )
+
+    if output_path:
+        output_dir = os.path.dirname(os.path.abspath(output_path))
+        if output_dir:
+            os.makedirs(output_dir, exist_ok=True)
+        fig.savefig(output_path, dpi=200, bbox_inches="tight")
+
+    return fig
 
 
 def create_cost_plots(

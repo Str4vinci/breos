@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from importlib.metadata import version as pkg_version
 
 project = "BREOS"
@@ -58,6 +59,11 @@ intersphinx_mapping = {
     "matplotlib": ("https://matplotlib.org/stable/", None),
     "pvlib": ("https://pvlib-python.readthedocs.io/en/stable/", None),
 }
+if os.environ.get("BREOS_DOCS_OFFLINE"):
+    # Keep local/restricted release verification deterministic. External type
+    # links are enriched in normal/Read the Docs builds where inventories are
+    # reachable, but they are not required to validate BREOS's own sources.
+    intersphinx_mapping = {}
 
 # --- MyST -------------------------------------------------------------------
 

@@ -18,6 +18,15 @@ styling overrides.
    breos.plotting.yearly_graphs
 ```
 
+## PV loss diagnostics
+
+```{eval-rst}
+.. autosummary::
+   :toctree: generated/
+
+   breos.plotting.plot_pv_loss_waterfall
+```
+
 ## Cost and breakeven
 
 ```{eval-rst}
