@@ -300,6 +300,21 @@ single representative tilt/azimuth.
 
 ## Advanced Usage
 
+### Opt-in BLAST degradation models
+
+Native Naumann/Lam degradation remains the default. Select BLAST explicitly
+with `degradation_engine = "blast"` and a stable `blast_model` key. Discover
+the 14 scientifically identified vendored cell models with
+`breos.list_battery_models()` or `breos list battery-models`; the output
+includes chemistry, form factor, experimental range, citations, capabilities,
+and upstream provenance. App configs using the ambiguous legacy
+`battery_type` selector now receive an actionable migration error.
+
+BLAST model profiles never invent generic chemistry defaults. Resolution is
+user config over sourced profile defaults over global defaults. BLAST remains
+opt-in, and BLAST plus Monte Carlo is rejected explicitly rather than falling
+back to native degradation.
+
 For full control over individual simulation steps, use the lower-level modules directly:
 
 ```python

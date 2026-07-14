@@ -142,6 +142,7 @@ def _provenance(cfg: dict[str, Any], resolved: ResolvedAppConfig, artifacts: Sim
         "resolution": cfg["resolution"],
         "timezone": resolved.timezone,
         "start_date": cfg["start_date"],
+        "degradation": artifacts.degradation_summary,
     }
 
 
@@ -190,15 +191,21 @@ def build_result(
         "financial": financial_to_dicts(artifacts.cost_projection, total_initial),
         "pv_loss_waterfall": artifacts.pv_loss_waterfall,
         "provenance": _provenance(cfg, resolved, artifacts),
+        "degradation": artifacts.degradation_summary,
     }
 
     if resolved.pv_arrays:
         result["pv_arrays"] = [dict(arr) for arr in resolved.pv_arrays]
 
     if cfg["battery_kwh"] > 0:
-        result["battery_soh_end_pct"] = round(float(artifacts.current_soh), 2)
+        soh_digits = 1 if cfg["degradation_engine"] == "blast" else 2
+        result["battery_soh_end_pct"] = round(float(artifacts.current_soh), soh_digits)
         result["battery_replacements"] = artifacts.total_replacements
         result["battery_replacement_cost_eur"] = round(float(artifacts.total_replacement_cost), 2)
+        if cfg["degradation_engine"] == "blast":
+            for row in result["yearly"]:
+                if "soh_pct" in row:
+                    row["soh_pct"] = round(float(row["soh_pct"]), 1)
 
     if resolved.emissions_params is not None:
         co2 = calculate_co2_savings(yr1_pv, self_consumption_kwh, resolved.emissions_params)

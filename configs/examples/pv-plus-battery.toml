@@ -17,6 +17,8 @@ annual_consumption_kwh = 4000      # yearly household demand
 
 # --- Storage ----------------------------------------------------------------
 battery_kwh = 5.0                  # [0.0] usable capacity; 0 = PV-only
+degradation_engine = "native"      # ["native"] Naumann/Lam; use "blast" explicitly
+# blast_model = "lfp_gr_250ah_prismatic"  # required when degradation_engine = "blast"
 
 # --- Catalogue selections ---------------------------------------------------
 pv_module = "Suntech_STP550S_STC"  # [first catalogue module]; `breos list modules`

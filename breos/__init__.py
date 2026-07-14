@@ -93,6 +93,14 @@ from breos.constants import (
     Z_R,
 )
 
+# Battery degradation model discovery
+from breos.degradation import (
+    BATTERY_MODEL_REGISTRY,
+    BatteryModelProfile,
+    get_battery_model_profile,
+    list_battery_models,
+)
+
 # Economics
 from breos.economics import (
     CostParams,
@@ -323,6 +331,10 @@ __all__ = [
     # Battery
     "simulate_energy_balance",
     "apply_indoor_temperature_model",
+    "list_battery_models",
+    "get_battery_model_profile",
+    "BatteryModelProfile",
+    "BATTERY_MODEL_REGISTRY",
     # Emissions
     "calculate_co2_savings",
     "calculate_co2_projection",

@@ -53,6 +53,13 @@ Per-timestep PV, load, battery, and grid energy flows.
 Configuration, indoor temperature model, calendar and cycle degradation.
 :::
 
+:::{grid-item-card} Degradation models
+:link: degradation-models
+:link-type: doc
+
+Native and BLAST model selection, discovery, provenance, and migration.
+:::
+
 :::{grid-item-card} Cost analysis
 :link: cost-analysis
 :link-type: doc
@@ -91,6 +98,7 @@ pv
 load-profiles
 energy-balance
 battery
+degradation-models
 cost-analysis
 optimization
 plotting
