@@ -25,7 +25,26 @@ REQUIRED_WHEEL_FILES = {
     "breos/data/configs/financials.json",
     "breos/data/rlp/h0SLP_demandlib_1000kwh_hourly.csv",
     "breos/data/rlp/h0SLP_demandlib_1000kwh_15min.csv",
+    "breos/degradation/blast/LICENSE",
+    "breos/degradation/blast/NOTICE",
 }
+REQUIRED_BLAST_MODEL_FILES = {
+    "lfp_gr_250AhPrismatic_2019.py",
+    "lfp_gr_SonyMurata3Ah_2018.py",
+    "lmo_gr_NissanLeaf66Ah_2ndLife_2020.py",
+    "nca_gr_Panasonic3Ah_2018.py",
+    "nca_grsi_SonyMurata2p5Ah_2023.py",
+    "nmc111_gr_Kokam75Ah_2017.py",
+    "nmc111_gr_Sanyo2Ah_2014.py",
+    "nmc622_gr_DENSO50Ah_2021.py",
+    "nmc811_grSi_LGM50_5Ah_2021.py",
+    "nmc811_grSi_LGMJ1_4Ah_2020.py",
+    "nmc_gr_50Ah_B1_2020.py",
+    "nmc_gr_50Ah_B2_2020.py",
+    "nmc_gr_75Ah_A_2019.py",
+    "nmc_lto_10Ah_2020.py",
+}
+REQUIRED_WHEEL_FILES.update(f"breos/degradation/blast/models/{filename}" for filename in REQUIRED_BLAST_MODEL_FILES)
 REQUIRED_SDIST_FILES = {
     "docs/conf.py",
     "docs/index.md",
@@ -133,6 +152,7 @@ def _smoke_test_installed_wheel(wheel: Path, work_dir: Path) -> None:
         import json
         import os
         import sys
+        from importlib.resources import files
         from pathlib import Path
 
         repo_root = Path(os.environ["BREOS_REPO_ROOT"]).resolve()
@@ -150,6 +170,8 @@ def _smoke_test_installed_wheel(wheel: Path, work_dir: Path) -> None:
 
         import breos
         from breos.app import App
+        from breos.degradation.engine import BLAST_MODEL_CLASSES
+        from breos.degradation.profiles import BLAST_UPSTREAM_COMMIT, BLAST_UPSTREAM_VERSION
         from breos.load_profiles import load_profile
         from breos.resources import load_config_json, rlp_resource
 
@@ -173,7 +195,34 @@ def _smoke_test_installed_wheel(wheel: Path, work_dir: Path) -> None:
         if app._cfg["location"] != "porto":
             raise AssertionError("App did not resolve packaged configuration")
 
-        print(json.dumps({"breos_file": str(breos_file), "profile_rows": len(profile)}))
+        profiles = breos.list_battery_models()
+        if len(profiles) != 14 or set(BLAST_MODEL_CLASSES) != {profile["key"] for profile in profiles}:
+            raise AssertionError("installed wheel does not expose all 14 BLAST profiles and model classes")
+        for model_key, model_class in BLAST_MODEL_CLASSES.items():
+            model = model_class()
+            if "q" not in model.outputs:
+                raise AssertionError(f"installed BLAST model {model_key} has no capacity output")
+        if BLAST_UPSTREAM_VERSION != "1.1.0" or BLAST_UPSTREAM_COMMIT != "d789e00":
+            raise AssertionError("installed BLAST provenance does not match the vendored pin")
+
+        blast_package = files("breos.degradation.blast")
+        license_text = blast_package.joinpath("LICENSE").read_text(encoding="utf-8")
+        notice_text = blast_package.joinpath("NOTICE").read_text(encoding="utf-8")
+        if "Copyright (c) 2023, Alliance for Sustainable Energy" not in license_text:
+            raise AssertionError("installed BLAST license is missing or unexpected")
+        if "Alliance for Sustainable Energy" not in notice_text:
+            raise AssertionError("installed BLAST DOE attribution notice is missing or unexpected")
+
+        print(
+            json.dumps(
+                {
+                    "breos_file": str(breos_file),
+                    "profile_rows": len(profile),
+                    "blast_models": len(profiles),
+                    "blast_upstream": f"{BLAST_UPSTREAM_VERSION}@{BLAST_UPSTREAM_COMMIT}",
+                }
+            )
+        )
         """
     )
     env = os.environ.copy()

@@ -37,7 +37,32 @@ uv run --extra docs sphinx-build -b html docs docs/_build/html
 
 The release artifact verifier must build both wheel and sdist, confirm packaged
 runtime data is present, confirm generated docs are not shipped, and import
-BREOS from the installed wheel instead of the source checkout.
+BREOS from the installed wheel instead of the source checkout. It also imports
+all 14 vendored BLAST models and verifies the installed BLAST license, DOE
+notice, and pinned upstream provenance.
+
+## 0.4.0 Validation Matrix
+
+The `Tests` workflow runs the complete matrix on Python 3.11, 3.12, 3.13, and
+3.14. The following release claims must remain tied to executable checks:
+
+| Gate | Executable coverage |
+| --- | --- |
+| Native remains the default and matches an explicit native run | `tests/test_battery_profiles.py`, `tests/test_runners.py` |
+| Adapter parameters and trajectories match pinned upstream BLAST | `tests/test_blast_multicondition_parity.py` |
+| All 14 models execute and restore snapshots | `tests/test_blast_engine.py` |
+| One continuous run equals snapshot continuation | `tests/test_blast_engine.py`, `tests/test_runners.py` |
+| Leap-year and 15-minute behavior | `tests/test_load_profiles.py`, `tests/test_weather.py`, `tests/test_battery.py` |
+| Replacement resets model state and battery inventory | `tests/test_battery.py` |
+| Battery power limits and shared inverter interactions | `tests/test_battery.py`, `tests/test_inverter.py` |
+| Snapshot JSON round trips and schema rejection | `tests/test_battery_profiles.py` |
+| Range/horizon warnings deduplicate across continuation | `tests/test_blast_engine.py`, `tests/test_runners.py` |
+| Installed wheel contains models, provenance, license, and notice | `tools/verify_release_artifacts.py` |
+
+The upstream parity fixture records the generating Python and NumPy versions;
+it is a checked release artifact, not regenerated during CI. Regeneration must
+use the pinned unmodified BLAST-Lite source and be reviewed as a scientific
+data change.
 
 ## Publishing To PyPI
 
