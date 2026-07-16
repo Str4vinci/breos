@@ -11,12 +11,22 @@ import pytest
 from breos.degradation.engine import BLAST_MODEL_CLASSES, BlastEngine
 
 FIXTURE_PATH = Path(__file__).parent / "fixtures" / "blast" / "blast_parity_multicondition.json"
+UPSTREAM_COMMIT = "d789e00bca60f628de640745c18eb724b07358bd"
 
 
 @pytest.fixture(scope="module")
 def parity_fixture():
     with FIXTURE_PATH.open(encoding="utf-8") as fixture_file:
         return json.load(fixture_file)
+
+
+def test_fixture_records_exact_upstream_and_generation_environment(parity_fixture):
+    assert parity_fixture["metadata"] == {
+        "source": f"local untransformed BLAST-Lite checkout (blast/ at commit {UPSTREAM_COMMIT})",
+        "numpy_version": "1.26.4",
+        "python_version": "3.11.15",
+        "days_per_condition": 60,
+    }
 
 
 @pytest.mark.parametrize("model_key", tuple(BLAST_MODEL_CLASSES))
