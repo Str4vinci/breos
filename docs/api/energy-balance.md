@@ -29,6 +29,13 @@ converts them once to Wh (`W × interval hours`), applies all limits and
 conservation equations in energy units, then converts flows back to W.
 Stored-energy state columns remain Wh.
 
+Direct PV and battery discharge use the same PVWatts part-load inverter
+curve as `breos.solar.dc_to_ac`. The configured AC nameplate remains shared:
+PV output consumes headroom before battery discharge, and combined delivery
+cannot exceed the rating. A lower-level `BatteryConfig` with no inverter
+nameplate keeps the legacy unbounded flat-efficiency fallback because an
+inverter loading fraction cannot be defined without rated power.
+
 ## DC routing and limits
 
 Direct PV serves AC load first. Surplus PV DC charges the battery before
@@ -74,10 +81,11 @@ to a free full state at calendar boundaries.
 
 ## Compatibility fields and KPIs
 
-`PV_Production` is retained as an AC-equivalent compatibility field:
-`(PV_DC − PV_DC_Curtailed) × inverter_efficiency`. It is identical to the
-legacy field when no inverter cap binds, but it is not physical AC delivery
-through storage and new KPIs do not derive from it.
+`PV_Production` is retained as an AC-equivalent compatibility field. With a
+finite inverter it is non-curtailed PV minus the explicit direct-PV inverter
+loss; lower-level callers that omit a nameplate retain the exact legacy
+`(PV_DC − PV_DC_Curtailed) × inverter_efficiency` calculation. It is not
+physical AC delivery through storage, and new KPIs do not derive from it.
 
 Self-consumed PV is `PV_AC_To_Load + Battery_AC_To_Load_PV`. Usable system AC
 generation is self-consumed PV plus `PV_AC_Export`. Grid independence is

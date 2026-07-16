@@ -221,10 +221,11 @@ PV loss overrides, battery SOC limits, tariffs, inflation, and discounting.
   (default `isotropic`), with `albedo`/`surface_type` for ground reflectance
   and `model_perez` for the Perez coefficient set (see configuration docs). See
   [docs/resources.md](docs/resources.md) for pvlib and PV model references.
-- **Inverter**: the energy balance applies a flat `inverter_efficiency` and
-  clips AC output (PV and battery discharge combined) at the inverter rating
-  implied by `inverter_loading_ratio` — the same rating used for inverter
-  CAPEX. DC surplus above the rating can still charge a DC-coupled battery.
+- **Inverter**: the energy balance and `dc_to_ac()` use the same PVWatts
+  part-load curve, parameterized by nominal `inverter_efficiency`, and clip
+  PV and battery discharge at their shared AC rating implied by
+  `inverter_loading_ratio` — the same rating used for inverter CAPEX. DC
+  surplus above the rating can still charge a DC-coupled battery.
 - **Battery SOC window**: `battery_kwh` is the nominal pack capacity. The
   energy balance only cycles the battery between `battery_min_soc` and
   `battery_max_soc`, so the effective storage swing is

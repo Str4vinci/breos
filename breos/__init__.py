@@ -117,6 +117,7 @@ from breos.inverter import (
     InverterConfig,
     InverterConversionResult,
     calculate_dc_ac_power,
+    dc_power_for_ac_output,
     get_inverter_preset,
 )
 
@@ -318,6 +319,7 @@ __all__ = [
     # Inverter
     "get_inverter_preset",
     "calculate_dc_ac_power",
+    "dc_power_for_ac_output",
     # Battery
     "simulate_energy_balance",
     "apply_indoor_temperature_model",

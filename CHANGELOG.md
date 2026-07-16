@@ -2,6 +2,18 @@
 
 All notable changes to BREOS are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased]
+
+### Changed
+- The App energy balance and public `dc_to_ac()` helper now share the same
+  PVWatts part-load inverter curve. Dispatch therefore accounts for loading-
+  dependent conversion losses when serving load, exporting PV, and
+  discharging the battery, while preserving the shared AC nameplate,
+  charge-before-export behavior, and explicit 0.3.4 energy ledger. Lower-
+  level `BatteryConfig` callers that omit an inverter nameplate retain the
+  legacy unbounded flat-efficiency fallback because part load is undefined
+  without a rated power.
+
 ## [0.3.4] - 2026-07-14
 
 ### Added

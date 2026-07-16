@@ -17,6 +17,7 @@ from pvlib.albedo import SURFACE_ALBEDOS
 from pvlib.location import Location
 
 from breos.cec_fit import fit_cec_params
+from breos.inverter import calculate_dc_ac_power
 from breos.utils import get_hours_per_step
 
 # Module-level cache for CEC model parameters (depends only on module specs, not weather)
@@ -1119,12 +1120,7 @@ def dc_to_ac(
     """
     inv_size = pv_peak_power_w / inverter_loading_ratio
 
-    # pvlib's pdc0 is the DC-input limit; the AC nameplate is
-    # pac0 = eta_inv_nom * pdc0. BREOS sizes inverters by AC nameplate
-    # (pv_peak / loading ratio), so back out the matching DC limit.
-    pdc0 = inv_size / inverter_efficiency
-
-    ac_power = pvlib.inverter.pvwatts(pdc=dc_power, pdc0=pdc0, eta_inv_nom=inverter_efficiency, eta_inv_ref=0.9637)
+    ac_power = dc_power.map(lambda value: calculate_dc_ac_power(value, inv_size, inverter_efficiency).ac_power_w)
 
     return pd.Series(ac_power, index=dc_power.index, name="ac_power_W")
 

@@ -12,6 +12,8 @@ from breos.battery import (
     update_battery_soh_cyclewise,
 )
 from breos.constants import LAM_EA_J_MOL, LAM_SOC_EXPONENT_N
+from breos.inverter import calculate_dc_ac_power
+from breos.solar import dc_to_ac
 
 
 class TestBatteryConfig:
@@ -238,7 +240,55 @@ class TestSimulateEnergyBalance:
         # Export uses the headroom left after serving the load
         assert results_df["Sell_To_Grid"].max() == pytest.approx(500.0)
         # total_pv sums the clipped AC production
-        assert total_pv == pytest.approx(1000.0 + 1000.0 + 960.0)
+        expected = sum(calculate_dc_ac_power(value, 1000.0, config.inverter_efficiency).ac_power_w for value in pv_dc)
+        assert total_pv == pytest.approx(expected)
+
+    def test_pv_only_dispatch_matches_public_dc_to_ac_curve(self):
+        idx = pd.date_range("2025-01-01", periods=5, freq="h", tz="UTC")
+        pv_dc = pd.Series([0.0, 50.0, 400.0, 900.0, 1400.0], index=idx)
+        houseload = pd.DataFrame({"Load": 0.0}, index=idx)
+        config = BatteryConfig(nominal_energy_wh=0, inverter_ac_capacity_w=1000.0)
+
+        results_df, *_ = simulate_energy_balance(
+            pv_dc=pv_dc,
+            houseload=houseload,
+            battery_config=config,
+            freq="h",
+        )
+        expected = dc_to_ac(
+            pv_dc,
+            pv_peak_power_w=1250.0,
+            inverter_loading_ratio=1.25,
+            inverter_efficiency=config.inverter_efficiency,
+        )
+
+        np.testing.assert_allclose(results_df["PV_Production"], expected)
+        np.testing.assert_allclose(results_df["PV_AC_Export"], expected)
+
+    @pytest.mark.parametrize("nominal_energy_wh", [0.0, 1000.0])
+    def test_negative_pv_input_is_clamped_before_dispatch(self, nominal_energy_wh):
+        idx = pd.date_range("2025-01-01", periods=1, freq="h", tz="UTC")
+        config = BatteryConfig(
+            nominal_energy_wh=nominal_energy_wh,
+            inverter_ac_capacity_w=1000.0,
+            standby_loss_wh=0.0,
+            enable_replacement=False,
+        )
+
+        results, *_ = simulate_energy_balance(
+            pv_dc=pd.Series([-100.0], index=idx),
+            houseload=pd.DataFrame({"Load": [500.0]}, index=idx),
+            battery_config=config,
+            temperature_series=pd.Series(25.0, index=idx),
+        )
+
+        assert results["PV_DC"].iloc[0] == 0.0
+        assert results["PV_DC_To_Battery"].iloc[0] == 0.0
+        assert results["PV_DC_To_Inverter"].iloc[0] == 0.0
+        assert results["PV_AC_To_Load"].iloc[0] == 0.0
+        assert results["Houseload"].iloc[0] == pytest.approx(
+            results["Battery_AC_To_Load"].iloc[0] + results["Import_From_Grid"].iloc[0]
+        )
 
     def test_battery_shares_inverter_cap_and_charges_from_clipped_dc(self):
         idx = pd.date_range("2025-01-01 00:00", periods=2, freq="h", tz="UTC")
@@ -380,7 +430,7 @@ class TestEnergyLedger:
         hours = 0.25 if freq == "15min" else 1.0
         assert total_pv == pytest.approx(results["PV_Production"].sum() * hours)
         assert total_pv == pytest.approx(
-            ((results["PV_DC"] - results["PV_DC_Curtailed"]) * config.inverter_efficiency).sum() * hours
+            (results["PV_DC"] - results["PV_DC_Curtailed"] - results["PV_Direct_Inverter_Loss"]).sum() * hours
         )
 
     def test_charge_precedes_export_and_curtailment_is_unusable_dc(self):
@@ -409,6 +459,22 @@ class TestEnergyLedger:
         assert inverter_output.max() <= 2000.0 + 1e-8
         assert results["PV_DC_To_Battery"].max() <= 1000.0 + 1e-8
         assert results["Battery_AC_To_Load"].max() <= 700.0 + 1e-8
+
+        simultaneous = results["Battery_AC_To_Load"] > 0.0
+        combined_dc = (
+            results.loc[simultaneous, "PV_DC_To_Inverter"]
+            + results.loc[simultaneous, "Battery_Discharge_DC"] * config.discharge_efficiency
+        )
+        expected_ac = combined_dc.map(
+            lambda value: (
+                calculate_dc_ac_power(
+                    value,
+                    config.inverter_ac_capacity_w,
+                    config.inverter_efficiency,
+                ).ac_power_w
+            )
+        )
+        np.testing.assert_allclose(inverter_output.loc[simultaneous], expected_ac)
 
     def test_hourly_and_quarter_hour_energy_agree(self):
         pv_hourly = [0.0, 7000.0, 2000.0, 0.0, 9000.0, 0.0]
