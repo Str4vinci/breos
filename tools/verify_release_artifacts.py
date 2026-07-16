@@ -202,7 +202,10 @@ def _smoke_test_installed_wheel(wheel: Path, work_dir: Path) -> None:
             model = model_class()
             if "q" not in model.outputs:
                 raise AssertionError(f"installed BLAST model {model_key} has no capacity output")
-        if BLAST_UPSTREAM_VERSION != "1.1.0" or BLAST_UPSTREAM_COMMIT != "d789e00":
+        if (
+            BLAST_UPSTREAM_VERSION != "1.1.0"
+            or BLAST_UPSTREAM_COMMIT != "d789e00bca60f628de640745c18eb724b07358bd"
+        ):
             raise AssertionError("installed BLAST provenance does not match the vendored pin")
 
         blast_package = files("breos.degradation.blast")
