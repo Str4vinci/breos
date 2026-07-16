@@ -323,8 +323,10 @@ Phase 4 wires that loop — never silently run as native.
 
 ## Licensing / attribution
 
-- Preserve the BSD-3 copyright header (`Alliance for Energy Innovation, LLC`) and
-  the DOE-contract `NOTICE` text in every vendored file.
+- Preserve the upstream copyright headers carried by the transformed source
+  files. Bundle the upstream BSD-3 license and DOE-contract notice unchanged as
+  `breos/degradation/blast/LICENSE` and `breos/degradation/blast/NOTICE`, as
+  recorded in the vendoring manifest.
 - Add a BLAST-Lite entry to `ATTRIBUTIONS.md` (source, commit/version vendored,
   DOIs of the model papers).
 
