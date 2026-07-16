@@ -170,5 +170,4 @@ def test_app_runner_threads_blast_state_across_projection_years(monkeypatch):
         abs=1e-12,
     )
     range_warnings = artifacts.degradation_summary["experimental_range_warnings"]
-    assert range_warnings
-    assert len({warning["code"] for warning in range_warnings}) == len(range_warnings)
+    assert range_warnings == []

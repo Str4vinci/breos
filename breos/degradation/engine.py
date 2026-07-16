@@ -140,7 +140,7 @@ class BlastEngine:
 
     def _check_experimental_range(self, t_secs: np.ndarray, soc: np.ndarray, temperature_c: np.ndarray) -> None:
         limits = BATTERY_MODEL_REGISTRY[self.blast_model_key].experimental_range
-        checks = (
+        checks = [
             (
                 "temperature_c",
                 float(np.min(temperature_c)),
@@ -148,8 +148,10 @@ class BlastEngine:
                 limits["cycling_temperature_c"],
             ),
             ("soc", float(np.min(soc)), float(np.max(soc)), limits["soc"]),
-            ("dod", float(np.ptp(soc)), float(np.ptp(soc)), limits["dod"]),
-        )
+        ]
+        observed_dod = float(np.ptp(soc))
+        if observed_dod > 1e-12:
+            checks.append(("dod", observed_dod, observed_dod, limits["dod"]))
         for field, observed_min, observed_max, supported in checks:
             supported_min = float(min(supported))
             supported_max = float(max(supported))

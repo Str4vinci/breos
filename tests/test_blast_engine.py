@@ -169,8 +169,25 @@ def test_experimental_range_warnings_deduplicate_across_snapshot_continuation():
 
     records = restored.warning_records("experimental_range")
     assert len([record for record in records if record["field"] == "temperature_c"]) == 1
-    assert len([item for item in caught if item.category is BlastExperimentalRangeWarning]) == 2
-    # Temperature and DOD each warn once; restoring the snapshot emits neither again.
+    assert {record["field"] for record in records} == {"temperature_c"}
+    assert len([item for item in caught if item.category is BlastExperimentalRangeWarning]) == 1
+    # Constant-SOC storage has no cycling DOD; restoring emits no duplicate temperature warning.
+
+
+def test_nonzero_shallow_dod_emits_experimental_range_warning():
+    engine = BlastEngine("lfp_gr_250ah_prismatic")
+
+    with pytest.warns(BlastExperimentalRangeWarning, match="dod range"):
+        engine.step(
+            np.array([0.0, 3600.0]),
+            np.array([0.5, 0.6]),
+            np.array([25.0, 25.0]),
+        )
+
+    records = engine.warning_records("experimental_range")
+    assert [record["field"] for record in records] == ["dod"]
+    assert records[0]["observed"] == [pytest.approx(0.1), pytest.approx(0.1)]
+    assert records[0]["supported"] == [0.8, 1.0]
 
 
 def test_sourced_aging_horizon_warns_once_and_survives_snapshot():
