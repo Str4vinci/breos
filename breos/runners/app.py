@@ -396,6 +396,7 @@ def run_app_simulation(
     ]
     if degradation_engine == "blast":
         profile = get_battery_model_profile(str(blast_model))
+        warning_records = degradation_state.get("blast_engine", {}).get("warnings", []) if degradation_state else []
         degradation_summary = {
             "engine": "blast",
             "model_key": blast_model,
@@ -405,8 +406,12 @@ def run_app_simulation(
             "replacement_events": replacement_events,
             "calibration_basis": "cell-model",
             "pack_calibrated": False,
-            "experimental_range_warnings": [],
-            "aging_horizon_extrapolation_warnings": [],
+            "experimental_range_warnings": [
+                warning for warning in warning_records if warning.get("category") == "experimental_range"
+            ],
+            "aging_horizon_extrapolation_warnings": [
+                warning for warning in warning_records if warning.get("category") == "aging_horizon"
+            ],
             "state_schema_version": BLAST_STATE_SCHEMA_VERSION,
         }
     else:

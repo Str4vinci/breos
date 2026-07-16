@@ -32,10 +32,11 @@ breos list battery-models --json
 
 The registry reports stable keys, readable names, chemistry, cell form factor,
 nominal cell capacity, experimental ranges, study citations, capacity and
-resistance outputs, upstream BLAST provenance, and whether the model is enabled
-in the current integration phase. All 14 vendored models are discoverable;
-the profile-layer PR enables only the two core models end to end. The remaining
-models are enabled by the separately validated all-model parity phase.
+resistance outputs, upstream BLAST provenance, and its integration phase. All
+14 vendored models are discoverable and enabled end to end. Their parameters
+and trajectories are checked against fixtures generated from the pinned,
+unmodified BLAST-Lite source across storage, cycling, temperature, and C-rate
+conditions.
 
 ## Configuration precedence
 
@@ -76,6 +77,14 @@ replacement events, cell-model versus pack-calibrated status, warning lists,
 and serialized state-schema version. These are empirical **cell models**, not
 pack-calibrated field models. Long-horizon BLAST SOH is rounded to one decimal
 place to avoid implying unsupported precision.
+
+Experimental-range warnings identify the observed and supported temperature,
+SOC, DOD, or C-rate values. Warning codes are retained in the JSON-safe engine
+snapshot, so a continued multi-year run does not repeat the same warning.
+Numeric aging-data horizons are reported only when the vendored source states
+one: the Panasonic NCA profile warns after its documented 300-day calendar
+aging horizon. Models without a sourced numeric horizon leave that field
+unknown rather than inventing a limit.
 
 BLAST plus Monte Carlo is rejected explicitly in 0.4.0. It never falls back to
 native degradation. BLAST resistance outputs are reported as capabilities but

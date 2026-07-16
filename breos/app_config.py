@@ -9,7 +9,7 @@ from numbers import Real
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from breos.degradation.profiles import CORE_BLAST_MODEL_KEYS, apply_battery_profile_defaults
+from breos.degradation.profiles import ENABLED_BLAST_MODEL_KEYS, apply_battery_profile_defaults
 from breos.economics import CostParams, calculate_costs
 from breos.emissions import EmissionsParams
 from breos.pv_modules import MODULES, PVModuleParams, get_module
@@ -316,8 +316,8 @@ def validate_config(cfg: dict[str, Any]) -> None:
             raise ValueError("'degradation_engine=blast' is not supported with Monte Carlo yet")
         if cfg["enable_resistance_fade"]:
             raise ValueError("'degradation_engine=blast' cannot be combined with 'enable_resistance_fade'")
-        if cfg["blast_model"] not in CORE_BLAST_MODEL_KEYS:
-            available = ", ".join(CORE_BLAST_MODEL_KEYS)
+        if cfg["blast_model"] not in ENABLED_BLAST_MODEL_KEYS:
+            available = ", ".join(ENABLED_BLAST_MODEL_KEYS)
             raise ValueError(f"Unknown blast_model {cfg['blast_model']!r}. Available: {available}")
     elif cfg["blast_model"] is not None:
         raise ValueError("'blast_model' requires 'degradation_engine=blast'; native degradation remains the default")

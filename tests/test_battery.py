@@ -1,5 +1,7 @@
 """Tests for the battery module."""
 
+from copy import deepcopy
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -12,6 +14,8 @@ from breos.battery import (
     update_battery_soh_cyclewise,
 )
 from breos.constants import LAM_EA_J_MOL, LAM_SOC_EXPONENT_N
+from breos.degradation.engine import BlastEngine
+from breos.economics import system_ac_production_power
 from breos.inverter import calculate_dc_ac_power
 from breos.solar import dc_to_ac
 
@@ -528,6 +532,110 @@ class TestSimulateEnergyBalance:
                 degradation_engine="blast",
                 blast_model="lfp_gr_250ah_prismatic",
             )
+
+    def test_blast_resistance_output_is_diagnostic_only(self):
+        model_key = "nmc111_gr_sanyo_2ah"
+        baseline_snapshot = BlastEngine(model_key).state_snapshot()
+        perturbed_snapshot = deepcopy(baseline_snapshot)
+
+        # Hold every capacity state/output constant while imposing a large,
+        # internally consistent resistance increase on this resistance-capable model.
+        perturbed_snapshot["states"]["rGain_t"][-1] = 3.0
+        perturbed_snapshot["states"]["rGain_EFC"][-1] = 4.0
+        perturbed_snapshot["outputs"]["r_t"][-1] = 4.0
+        perturbed_snapshot["outputs"]["r_EFC"][-1] = 5.0
+        perturbed_snapshot["outputs"]["r"][-1] = 8.0
+        for capacity_key in ("q", "q_t", "q_EFC"):
+            assert perturbed_snapshot["outputs"][capacity_key] == baseline_snapshot["outputs"][capacity_key]
+
+        idx = pd.date_range("2025-01-01", periods=48, freq="h", tz="UTC")
+        pv_dc = pd.Series(([0.0] * 8 + [2500.0] * 8 + [0.0] * 8) * 2, index=idx)
+        houseload = pd.DataFrame({"Load": ([600.0] * 8 + [0.0] * 8 + [600.0] * 8) * 2}, index=idx)
+        temperature = pd.Series(25.0, index=idx)
+        config = BatteryConfig(nominal_energy_wh=5000, standby_loss_wh=0.0, enable_replacement=False)
+
+        def run(snapshot):
+            return simulate_energy_balance(
+                pv_dc=pv_dc,
+                houseload=houseload,
+                battery_config=config,
+                freq="h",
+                temperature_series=temperature,
+                degradation_engine="blast",
+                blast_model=model_key,
+                initial_degradation_state=snapshot,
+                return_degradation_state=True,
+            )
+
+        baseline = run(baseline_snapshot)
+        perturbed = run(perturbed_snapshot)
+        baseline_results, _, baseline_summary, _, _, baseline_degradation, baseline_final_state = baseline
+        perturbed_results, _, perturbed_summary, _, _, perturbed_degradation, perturbed_final_state = perturbed
+
+        ledger_columns = (
+            "PV_DC_To_Battery",
+            "PV_DC_To_Inverter",
+            "PV_DC_Curtailed",
+            "PV_AC_To_Load",
+            "PV_AC_Export",
+            "Battery_Charge_Input",
+            "Battery_Charge_Stored",
+            "Battery_Discharge_DC",
+            "Battery_AC_To_Load",
+            "Battery_AC_To_Load_PV",
+            "PV_Origin_Battery_AC_To_Load",
+            "PV_Direct_Inverter_Loss",
+            "Battery_Inverter_Loss",
+            "Inverter_Loss",
+            "Standby_Loss",
+            "Capacity_Window_Loss",
+            "Battery_Replacement_Energy_Removed",
+            "Battery_Replacement_Energy_Added",
+            "Battery_Energy_Delta",
+        )
+        pd.testing.assert_frame_equal(
+            perturbed_results[list(ledger_columns)],
+            baseline_results[list(ledger_columns)],
+            check_exact=True,
+        )
+
+        economics_columns = ("Houseload", "Import_From_Grid", "Sell_To_Grid")
+        pd.testing.assert_frame_equal(
+            perturbed_results[list(economics_columns)],
+            baseline_results[list(economics_columns)],
+            check_exact=True,
+        )
+        pd.testing.assert_series_equal(
+            system_ac_production_power(perturbed_results),
+            system_ac_production_power(baseline_results),
+            check_exact=True,
+        )
+
+        dispatch_and_capacity_columns = (
+            "Battery_Energy_Beginning",
+            "Battery_Energy_End",
+            "Battery_PV_Origin_Energy_Beginning",
+            "Battery_PV_Origin_Energy_End",
+            "Battery_SOC_Normalized",
+            "Battery_SOC_Absolute",
+            "Battery_SOH",
+        )
+        pd.testing.assert_frame_equal(
+            perturbed_results[list(dispatch_and_capacity_columns)],
+            baseline_results[list(dispatch_and_capacity_columns)],
+            check_exact=True,
+        )
+        pd.testing.assert_series_equal(perturbed_degradation["SOH"], baseline_degradation["SOH"], check_exact=True)
+        assert perturbed_summary["Final SOH [%]"].iloc[0] == baseline_summary["Final SOH [%]"].iloc[0]
+        for capacity_key in ("q", "q_t", "q_EFC"):
+            assert (
+                perturbed_final_state["blast_engine"]["outputs"][capacity_key]
+                == baseline_final_state["blast_engine"]["outputs"][capacity_key]
+            )
+        assert (
+            perturbed_final_state["blast_engine"]["outputs"]["r"][-1]
+            > baseline_final_state["blast_engine"]["outputs"]["r"][-1] + 6.0
+        )
 
     @pytest.mark.parametrize(
         ("contradictory_kwargs", "message"),

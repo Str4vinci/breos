@@ -7,8 +7,7 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 ### Added
 - Vendored BLAST-Lite degradation models as an opt-in `degradation_engine="blast"`
   path with the `BlastEngine` adapter, daily endpoint-grid integration,
-  cross-year snapshot threading, replacement reset handling, P1 model gates
-  (`lfp_gr_250ah_prismatic`, `nca_gr_panasonic_3ah`), and validation that keeps
+  cross-year snapshot threading, replacement reset handling, and validation that keeps
   BLAST disabled for Monte Carlo and resistance-fade runs until those paths are
   explicitly supported.
 - A declarative 14-model BLAST registry with stable keys, chemistry and cell
@@ -18,6 +17,9 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   versioned JSON-safe engine snapshots. BLAST result/provenance blocks identify
   the cell model, calibration basis, initial/final SOH, replacements, warnings,
   and state schema.
+- All 14 BLAST models enabled with multi-condition parameter and trajectory
+  parity against the pinned upstream source, deduplicated experimental-range
+  warnings, and sourced aging-horizon warnings carried through snapshots.
 
 ### Changed
 - The App energy balance and public `dc_to_ac()` helper now share the same

@@ -45,6 +45,7 @@ class BatteryModelProfile:
     output_keys: tuple[str, ...]
     operating_defaults: Mapping[str, Any]
     release_phase: str
+    aging_horizon_days: float | None = None
     notes: str = ""
 
     @property
@@ -69,6 +70,7 @@ class BatteryModelProfile:
             "output_keys": list(self.output_keys),
             "operating_defaults": _json_metadata(self.operating_defaults),
             "release_phase": self.release_phase,
+            "aging_horizon_days": self.aging_horizon_days,
             "notes": self.notes,
             "supports_capacity": self.supports_capacity,
             "supports_resistance": self.supports_resistance,
@@ -94,6 +96,7 @@ def _profile(
     citations: tuple[str, ...],
     output_keys: tuple[str, ...],
     release_phase: str = "phase3",
+    aging_horizon_days: float | None = None,
     notes: str = "",
 ) -> BatteryModelProfile:
     # BLAST model papers do not define pack-level operating defaults. Keep the
@@ -111,6 +114,7 @@ def _profile(
         output_keys=output_keys,
         operating_defaults=_freeze_metadata({}),
         release_phase=release_phase,
+        aging_horizon_days=aging_horizon_days,
         notes=notes,
     )
 
@@ -156,6 +160,7 @@ BATTERY_MODEL_REGISTRY: Mapping[str, BatteryModelProfile] = MappingProxyType(
             ("https://doi.org/10.1149/2.0411609jes", "https://doi.org/10.1149/1945-7111/abae37"),
             ("q", "q_t", "q_EFC"),
             release_phase="core",
+            aging_horizon_days=300.0,
         ),
         "lmo_gr_nissanleaf_66ah_2nd": _profile(
             "lmo_gr_nissanleaf_66ah_2nd",
@@ -388,6 +393,7 @@ BATTERY_MODEL_REGISTRY: Mapping[str, BatteryModelProfile] = MappingProxyType(
 )
 
 CORE_BLAST_MODEL_KEYS = tuple(key for key, profile in BATTERY_MODEL_REGISTRY.items() if profile.release_phase == "core")
+ENABLED_BLAST_MODEL_KEYS = tuple(BATTERY_MODEL_REGISTRY)
 
 
 def get_battery_model_profile(key: str) -> BatteryModelProfile:
@@ -404,7 +410,7 @@ def list_battery_models(*, enabled_only: bool = False) -> list[dict[str, Any]]:
     return [
         profile.as_dict()
         for profile in BATTERY_MODEL_REGISTRY.values()
-        if not enabled_only or profile.release_phase == "core"
+        if not enabled_only or profile.key in ENABLED_BLAST_MODEL_KEYS
     ]
 
 
