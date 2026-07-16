@@ -4,6 +4,14 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 
 ## [Unreleased]
 
+### Added
+- Vendored BLAST-Lite degradation models as an opt-in `degradation_engine="blast"`
+  path with the `BlastEngine` adapter, daily endpoint-grid integration,
+  cross-year snapshot threading, replacement reset handling, P1 model gates
+  (`lfp_gr_250ah_prismatic`, `nca_gr_panasonic_3ah`), and validation that keeps
+  BLAST disabled for Monte Carlo and resistance-fade runs until those paths are
+  explicitly supported.
+
 ### Changed
 - The App energy balance and public `dc_to_ac()` helper now share the same
   PVWatts part-load inverter curve. Dispatch therefore accounts for loading-
@@ -120,9 +128,9 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   - the load was positionally re-stamped onto the PV index via
     `align_load_to_pv`, ignoring timezones (a UTC-offset shift of the whole
     profile against PV). The raw load now reaches
-    `simulate_energy_balance`, whose internal alignment is timezone- and
-    DST-aware — the same code path the App uses. `align_load_to_pv` keeps
-    its behaviour for external callers but now carries a docstring warning.
+  `simulate_energy_balance`, whose internal alignment is timezone- and
+  DST-aware — the same code path the App uses. `align_load_to_pv` keeps
+  its behaviour for external callers but now carries a docstring warning.
 
 ## [0.3.3] - 2026-07-02
 

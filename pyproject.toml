@@ -91,6 +91,7 @@ ignore = [
 "breos/__init__.py" = ["F401", "F811"]   # re-exports and shadowed imports
 "tests/*" = ["F811"]                      # pytest fixtures
 "tools/*" = ["E402"]                      # CLI scripts insert PROJECT_ROOT before imports
+"breos/degradation/blast/**/*.py" = ["E401", "F841", "I001", "W291", "W292", "W293"]  # vendored BLAST-Lite source
 
 [build-system]
 requires = ["hatchling"]

@@ -1,6 +1,6 @@
 # BLAST Degradation Engine
 
-**Status:** Proposed — not yet implemented
+**Status:** Phase 0-1 implemented locally; Phase 2+ planned
 **Relates to:** ROADMAP "Additional Li-ion battery chemistries"
 **Owner:** BREOS maintainers
 
@@ -13,8 +13,9 @@ Before 0.3.3, a config could name a non-LFP pack (`BatteryConfig.battery_type`)
 but still age it on LFP curves. In 0.3.3 the native path was made explicit:
 `BatteryConfig(battery_type="LFP")` normalizes to `"lfp"`, and unsupported
 chemistries now raise instead of silently reusing LFP cycle-aging parameters.
-The runner (`breos/runners/app.py`) still does not expose battery chemistry as
-an App config key; BLAST remains the planned route for real non-LFP physics.
+The runner (`breos/runners/app.py`) exposes BLAST through explicit
+`degradation_engine` / `blast_model` config keys; chemistry-profile defaults
+remain a Phase 2 task.
 
 NREL's [BLAST-Lite](https://github.com/NREL/BLAST-Lite) (BSD-3) provides **14
 lab-calibrated, DOI-cited degradation models** (in the version vendored) spanning
@@ -162,6 +163,13 @@ degradation state via `initial_fec`, `initial_calendar_seconds`, etc.
   `BlastEngine` instance through the year loop).
 - On year N+1, rebuild via `BlastEngine.from_snapshot(...)` so cumulative
   `t_days`/`efc`/states continue seamlessly.
+- **Year-boundary dispatch convention (native and BLAST alike):** the App
+  runner passes the true end-of-year stored energy and PV-origin inventory into
+  the next `simulate_energy_balance` call. The BLAST state payload separately
+  carries the matching end-of-year absolute-SoC and temperature anchors used
+  to build the next degradation window. Split and continuous simulations
+  therefore agree across a mid-swing boundary without an artificial refill;
+  focused tests cover both energy inventories and BLAST EFC/SoH continuity.
 
 ### Replacement reset
 
@@ -372,19 +380,18 @@ Phase 4 wires that loop — never silently run as native.
 
 Settle before implementation begins:
 
-- **[OPEN] Cross-year state carrier.** Either thread a serialized
-  `state_snapshot()` dict through `simulate_energy_balance`'s return tuple
-  (consistent with the existing `initial_fec` / `final` scalar pattern; keeps
-  engine objects out of the function signature) **or** pass the live `BlastEngine`
-  instance through the runner's year loop (less code). Recommendation:
-  **snapshot** — BLAST state is four dicts of numpy arrays
-  (`states`/`outputs`/`stressors`/`rates`), trivially copyable and picklable,
-  which Phase 4 Monte Carlo (process pools) will want anyway; a live engine
-  mutates a caller-owned object across yearly calls, a pattern
-  `simulate_energy_balance` currently avoids. Not yet decided.
+- None currently.
 
 Resolved:
 
+- **[DECIDED] Cross-year state carrier uses serialized snapshots.** Thread a
+  `state_snapshot()` dict through `simulate_energy_balance`'s return tuple
+  instead of passing a live `BlastEngine` through the runner's year loop. This is
+  consistent with the existing `initial_fec` / `final` scalar pattern, keeps
+  mutable engine objects out of the function signature, and gives Phase 4 Monte
+  Carlo a picklable representation. Prototype tests in the BLAST-Lite prep
+  branch proved snapshot continuity across all 14 BLAST models, including the
+  P3b multi-mode models.
 - **[DECIDED] Do not repurpose `battery_type` for BLAST chemistry.** In 0.3.3 it
   became a guarded native-LFP selector instead of a silent no-op for non-LFP
   values. The new `degradation_engine` / `blast_model` keys should select BLAST
