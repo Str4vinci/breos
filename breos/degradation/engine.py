@@ -13,25 +13,12 @@ from typing import Any
 import numpy as np
 
 from breos.degradation.blast import models
+from breos.degradation.profiles import BATTERY_MODEL_REGISTRY, BLAST_STATE_SCHEMA_VERSION, CORE_BLAST_MODEL_KEYS
 
-BLAST_MODEL_CLASSES = {
-    "lfp_gr_250ah_prismatic": models.Lfp_Gr_250AhPrismatic,
-    "nca_gr_panasonic_3ah": models.Nca_Gr_Panasonic3Ah_Battery,
-    "lmo_gr_nissanleaf_66ah_2nd": models.Lmo_Gr_NissanLeaf66Ah_2ndLife_Battery,
-    "nmc811_grsi_lgm50_5ah": models.Nmc811_GrSi_LGM50_5Ah_Battery,
-    "nmc811_grsi_lgmj1_4ah": models.Nmc811_GrSi_LGMJ1_4Ah_Battery,
-    "nmc_gr_50ah_b1": models.NMC_Gr_50Ah_B1,
-    "nmc_gr_50ah_b2": models.NMC_Gr_50Ah_B2,
-    "nmc_gr_75ah_a": models.NMC_Gr_75Ah_A,
-    "nmc111_gr_sanyo_2ah": models.Nmc111_Gr_Sanyo2Ah_Battery,
-    "nmc_lto_10ah": models.Nmc_Lto_10Ah_Battery,
-    "lfp_gr_sonymurata_3ah": models.Lfp_Gr_SonyMurata3Ah_Battery,
-    "nca_grsi_sonymurata_2p5ah": models.NCA_GrSi_SonyMurata2p5Ah_Battery,
-    "nmc111_gr_kokam_75ah": models.Nmc111_Gr_Kokam75Ah_Battery,
-    "nmc622_gr_denso_50ah": models.Nmc622_Gr_DENSO50Ah_Battery,
-}
+BLAST_MODEL_CLASSES = {key: getattr(models, profile.class_name) for key, profile in BATTERY_MODEL_REGISTRY.items()}
 
-P1_BLAST_MODEL_KEYS = ("lfp_gr_250ah_prismatic", "nca_gr_panasonic_3ah")
+# Backwards-compatible internal name used by the replayed Phase 1 tests.
+P1_BLAST_MODEL_KEYS = CORE_BLAST_MODEL_KEYS
 
 
 def _as_1d_float_array(name: str, values: Any) -> np.ndarray:
@@ -135,6 +122,7 @@ class BlastEngine:
         """Copy the model state required for cross-year threading."""
 
         snapshot: dict[str, Any] = {
+            "schema_version": BLAST_STATE_SCHEMA_VERSION,
             "blast_model_key": self.blast_model_key,
             "model_kwargs": deepcopy(self._model_kwargs),
         }
@@ -152,6 +140,11 @@ class BlastEngine:
         snapshot_key = snapshot.get("blast_model_key")
         if snapshot_key is not None and snapshot_key != blast_model_key:
             raise ValueError(f"Snapshot blast_model_key {snapshot_key!r} does not match {blast_model_key!r}")
+        schema_version = snapshot.get("schema_version", BLAST_STATE_SCHEMA_VERSION)
+        if schema_version != BLAST_STATE_SCHEMA_VERSION:
+            raise ValueError(
+                f"Unsupported BLAST state schema {schema_version!r}; expected {BLAST_STATE_SCHEMA_VERSION!r}"
+            )
 
         engine = cls(blast_model_key, **snapshot.get("model_kwargs", {}))
         for group_name in cls._ARRAY_GROUPS:

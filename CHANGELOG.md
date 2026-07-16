@@ -11,6 +11,13 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   (`lfp_gr_250ah_prismatic`, `nca_gr_panasonic_3ah`), and validation that keeps
   BLAST disabled for Monte Carlo and resistance-fade runs until those paths are
   explicitly supported.
+- A declarative 14-model BLAST registry with stable keys, chemistry and cell
+  metadata, experimental ranges, study citations, output capabilities,
+  upstream provenance, Python discovery (`list_battery_models()`), CLI
+  discovery (`breos list battery-models`), explicit CLI model selection, and
+  versioned JSON-safe engine snapshots. BLAST result/provenance blocks identify
+  the cell model, calibration basis, initial/final SOH, replacements, warnings,
+  and state schema.
 
 ### Changed
 - The App energy balance and public `dc_to_ac()` helper now share the same
@@ -21,6 +28,13 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   level `BatteryConfig` callers that omit an inverter nameplate retain the
   legacy unbounded flat-efficiency fallback because part load is undefined
   without a rated power.
+- App configuration now resolves user values over sourced battery-profile
+  defaults over global defaults. Native Naumann/Lam remains the default;
+  `blast_model` requires explicit `degradation_engine="blast"`. The ambiguous
+  App-level `battery_type` selector, which strict App validation already
+  rejected as unknown in 0.3.4, now raises targeted migration guidance instead
+  of being repurposed for chemistry/model selection. The lower-level
+  `BatteryConfig(battery_type="LFP")` API remains supported.
 
 ## [0.3.4] - 2026-07-14
 

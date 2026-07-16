@@ -665,6 +665,35 @@ class TestAppSimulateNoBattery:
         assert r["provenance"]["timezone"] == "Europe/Lisbon"
         json.dumps(r["provenance"])
 
+    def test_blast_result_reports_model_identity_and_state_provenance(self):
+        app = App(
+            {
+                "location": "porto",
+                "n_modules": 6,
+                "annual_consumption_kwh": 3000,
+                "battery_kwh": 5.0,
+                "projection_years": 1,
+                "degradation_engine": "blast",
+                "blast_model": "lfp_gr_250ah_prismatic",
+            }
+        )
+        app.simulate()
+        result = app.result()
+
+        degradation = result["degradation"]
+        assert degradation["engine"] == "blast"
+        assert degradation["model_key"] == "lfp_gr_250ah_prismatic"
+        assert degradation["model_profile"]["key"] == degradation["model_key"]
+        assert degradation["model_profile"]["upstream"]["commit"] == "d789e00bca60f628de640745c18eb724b07358bd"
+        assert degradation["model_profile"]["calibration_basis"] == "cell-model"
+        assert degradation["pack_calibrated"] is False
+        assert degradation["initial_soh_pct"] == 100.0
+        assert degradation["final_soh_pct"] == round(result["battery_soh_end_pct"], 1)
+        assert degradation["state_schema_version"] == "1.0"
+        assert degradation["experimental_range_warnings"] == []
+        assert degradation["aging_horizon_extrapolation_warnings"] == []
+        assert result["provenance"]["degradation"] == degradation
+
     def test_investment_positive(self):
         assert self.result["total_investment_eur"] > 0
 
