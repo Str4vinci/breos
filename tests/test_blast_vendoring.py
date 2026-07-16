@@ -3,13 +3,17 @@
 from __future__ import annotations
 
 import ast
+import hashlib
 import json
+import re
 from pathlib import Path
 
 import numpy as np
 
 FIXTURE_PATH = Path(__file__).parent / "fixtures" / "blast" / "blast_golden_soh_100d.json"
-VENDORED_ROOT = Path(__file__).resolve().parents[1] / "breos" / "degradation" / "blast"
+REPO_ROOT = Path(__file__).resolve().parents[1]
+VENDORED_ROOT = REPO_ROOT / "breos" / "degradation" / "blast"
+VENDORED_MANIFEST_PATH = VENDORED_ROOT / "VENDORED.md"
 
 MODEL_CLASSES = {
     "lfp_gr_250ah_prismatic": (
@@ -100,6 +104,29 @@ def test_vendored_blast_imports_all_models():
     from breos.degradation.blast.models import available_models
 
     assert set(available_models()) == {class_name for _, class_name in MODEL_CLASSES.values()}
+
+
+def test_vendored_manifest_pins_provenance_and_current_result_hashes():
+    manifest = VENDORED_MANIFEST_PATH.read_text()
+    assert "d789e00bca60f628de640745c18eb724b07358bd" in manifest
+    assert "b12e8f377a4b8d93901b54300acbbe2a1f987b95" in manifest
+
+    result_entries = re.findall(
+        r"^\| `[^`]+` \| `[0-9a-f]{64}` \| `([^`]+)` \| `([0-9a-f]{64})` \|",
+        manifest,
+        flags=re.MULTILINE,
+    )
+    assert len(result_entries) == 23
+    assert {path for path, _ in result_entries} >= {
+        "breos/degradation/blast/LICENSE",
+        "breos/degradation/blast/NOTICE",
+        "tests/fixtures/blast/blast_golden_soh_100d.json",
+    }
+
+    for relative_path, expected_sha256 in result_entries:
+        result_path = REPO_ROOT / relative_path
+        assert result_path.is_file(), relative_path
+        assert hashlib.sha256(result_path.read_bytes()).hexdigest() == expected_sha256, relative_path
 
 
 def test_vendored_blast_has_no_forbidden_heavy_imports_or_trapz():

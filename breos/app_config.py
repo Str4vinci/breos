@@ -311,6 +311,8 @@ def validate_config(cfg: dict[str, Any]) -> None:
         if cfg["blast_model"] not in P1_BLAST_MODEL_KEYS:
             available = ", ".join(P1_BLAST_MODEL_KEYS)
             raise ValueError(f"Unknown blast_model {cfg['blast_model']!r}. Available: {available}")
+    elif cfg["blast_model"] is not None:
+        raise ValueError("'blast_model' requires 'degradation_engine=blast'")
 
 
 def _is_int(value: Any) -> bool:

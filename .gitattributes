@@ -1,0 +1,2 @@
+# Preserve the upstream legal notice byte-for-byte, including its trailing space.
+breos/degradation/blast/NOTICE -whitespace

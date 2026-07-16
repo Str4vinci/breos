@@ -252,6 +252,21 @@ class TestAppValidation:
             assert app._cfg["degradation_engine"] == "blast"
             assert app._cfg["blast_model"] == blast_model
 
+    @pytest.mark.parametrize("degradation_engine", [None, "native"])
+    def test_blast_model_requires_explicit_blast_engine(self, degradation_engine):
+        config = {
+            "location": "porto",
+            "n_modules": 10,
+            "annual_consumption_kwh": 4000,
+            "battery_kwh": 5.0,
+            "blast_model": "lfp_gr_250ah_prismatic",
+        }
+        if degradation_engine is not None:
+            config["degradation_engine"] = degradation_engine
+
+        with pytest.raises(ValueError, match="blast_model.*requires.*degradation_engine=blast"):
+            App(config)
+
     def test_invalid_degradation_engine_rejected(self):
         with pytest.raises(ValueError, match="degradation_engine"):
             App(

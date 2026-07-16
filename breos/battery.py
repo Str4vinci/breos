@@ -380,8 +380,8 @@ def simulate_energy_balance(
         degradation_engine: Degradation backend. ``"native"`` preserves the
             Naumann/Lam model; ``"blast"`` uses the BLAST daily endpoint adapter.
         blast_model: BLAST model key when ``degradation_engine="blast"``.
-        initial_degradation_state: Optional state returned by a previous call
-            with ``return_degradation_state=True``.
+        initial_degradation_state: Optional BLAST state returned by a previous
+            call with ``return_degradation_state=True``.
         return_degradation_state: Append final degradation carry state to the
             return tuple when True.
         debug: Enable debug output
@@ -464,8 +464,14 @@ def simulate_energy_balance(
     if degradation_engine_key not in {"native", "blast"}:
         raise ValueError("degradation_engine must be 'native' or 'blast'")
 
+    if degradation_engine_key == "native" and blast_model is not None:
+        raise ValueError("blast_model requires degradation_engine='blast'")
+    if degradation_engine_key == "native" and initial_degradation_state is not None:
+        raise ValueError("initial_degradation_state requires degradation_engine='blast'")
     if degradation_engine_key == "blast" and not blast_model:
         raise ValueError("blast_model is required when degradation_engine='blast'")
+    if degradation_engine_key == "blast" and battery_config.enable_resistance_fade:
+        raise ValueError("degradation_engine='blast' cannot be combined with enable_resistance_fade")
 
     # Get degradation model parameters
     k0_frac, Ea_val, b_val, n_val = _get_degradation_params(battery_config.calendar_model)
@@ -612,7 +618,8 @@ def simulate_energy_balance(
         build_blast_endpoint_day = build_endpoint_day
         battery_soh_decimal = blast_engine.soh()
         Battery_SOH = battery_soh_decimal * 100.0
-        Battery_Energy_Wh = battery_config.nominal_energy_wh * battery_soh_decimal * battery_config.max_soc
+        if initial_energy_wh is None:
+            Battery_Energy_Wh = battery_config.nominal_energy_wh * battery_soh_decimal * battery_config.max_soc
         blast_day_start_soc = float(state_payload.get("day_start_soc_absolute", blast_day_start_soc))
         blast_day_start_t_cell = float(state_payload.get("day_start_temperature_c", blast_day_start_t_cell))
 

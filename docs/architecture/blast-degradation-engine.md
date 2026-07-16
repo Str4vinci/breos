@@ -163,15 +163,13 @@ degradation state via `initial_fec`, `initial_calendar_seconds`, etc.
   `BlastEngine` instance through the year loop).
 - On year N+1, rebuild via `BlastEngine.from_snapshot(...)` so cumulative
   `t_days`/`efc`/states continue seamlessly.
-- **Year-boundary dispatch convention (native and BLAST alike):** every
-  `simulate_energy_balance` call starts dispatch from a full battery, so a
-  multi-call run only equals a single continuous run exactly when each year
-  ends with the battery full. The BLAST path carries the *true* end-of-year SoC
-  anchor, so the artificial refill shows up honestly as one partial cycle of
-  EFC per year boundary (negligible over a year) instead of being hidden.
-  Continuity tests that assert 1e-12 equality therefore use profiles that end
-  the day/year saturated; mid-swing boundaries are covered by anchor-payload
-  and day-1-EFC invariance tests instead.
+- **Year-boundary dispatch convention (native and BLAST alike):** the App
+  runner passes the true end-of-year stored energy and PV-origin inventory into
+  the next `simulate_energy_balance` call. The BLAST state payload separately
+  carries the matching end-of-year absolute-SoC and temperature anchors used
+  to build the next degradation window. Split and continuous simulations
+  therefore agree across a mid-swing boundary without an artificial refill;
+  focused tests cover both energy inventories and BLAST EFC/SoH continuity.
 
 ### Replacement reset
 

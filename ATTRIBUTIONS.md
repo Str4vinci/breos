@@ -16,7 +16,7 @@ This is a project-maintainer note, not legal advice.
 
 | Files | Source | License / Terms |
 |-------|--------|-----------------|
-| `breos/degradation/blast/` | BLAST-Lite 1.1.0, vendored from the clean NREL source history at commit `d789e00` (`Correct Tesla Model 3 data source in README`). The GitHub organization has since redirected from `NREL/BLAST-Lite` to `NatLabRockies/BLAST-Lite`. | BSD-3-Clause. The vendored BLAST `LICENSE` and DOE `NOTICE` are preserved at `breos/degradation/blast/LICENSE` and `breos/degradation/blast/NOTICE`. Phase 0 applies only mechanical BREOS vendoring transforms: `np.trapz` to `np.trapezoid`, pandas/matplotlib import trim, package-relative imports, and extraction of `rescale_soc`. Golden parity fixtures were generated from the local BLAST-Lite prep commit `b12e8f3`. |
+| `breos/degradation/blast/` | BLAST-Lite 1.1.0, vendored from the clean NREL source history at commit `d789e00` (`Correct Tesla Model 3 data source in README`). The GitHub organization has since redirected from `NREL/BLAST-Lite` to `NatLabRockies/BLAST-Lite`. | BSD-3-Clause. The vendored BLAST `LICENSE` and DOE `NOTICE` are preserved at `breos/degradation/blast/LICENSE` and `breos/degradation/blast/NOTICE`. Phase 0 applies only mechanical BREOS vendoring transforms: `np.trapz` to `np.trapezoid`, pandas/matplotlib import trim, package-relative imports, and extraction of `rescale_soc`. Golden parity fixtures were generated from the local BLAST-Lite prep commit `b12e8f3`. Per-file source/result hashes and the complete transformation record are in `breos/degradation/blast/VENDORED.md`. |
 
 ## Supported but not redistributed
 
