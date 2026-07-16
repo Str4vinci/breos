@@ -683,6 +683,8 @@ class TestAppSimulateNoBattery:
         degradation = result["degradation"]
         assert degradation["engine"] == "blast"
         assert degradation["model_key"] == "lfp_gr_250ah_prismatic"
+        assert degradation["model_profile"]["key"] == degradation["model_key"]
+        assert degradation["model_profile"]["upstream"]["commit"] == "d789e00bca60f628de640745c18eb724b07358bd"
         assert degradation["model_profile"]["calibration_basis"] == "cell-model"
         assert degradation["pack_calibrated"] is False
         assert degradation["initial_soh_pct"] == 100.0

@@ -310,6 +310,8 @@ def validate_config(cfg: dict[str, Any]) -> None:
     cfg["degradation_engine"] = degradation_engine
 
     if degradation_engine == "blast":
+        if cfg["battery_kwh"] <= 0:
+            raise ValueError("'degradation_engine=blast' requires 'battery_kwh' > 0")
         if "montecarlo" in cfg:
             raise ValueError("'degradation_engine=blast' is not supported with Monte Carlo yet")
         if cfg["enable_resistance_fade"]:
@@ -318,7 +320,7 @@ def validate_config(cfg: dict[str, Any]) -> None:
             available = ", ".join(CORE_BLAST_MODEL_KEYS)
             raise ValueError(f"Unknown blast_model {cfg['blast_model']!r}. Available: {available}")
     elif cfg["blast_model"] is not None:
-        raise ValueError("'blast_model' requires degradation_engine='blast'; native degradation remains the default")
+        raise ValueError("'blast_model' requires 'degradation_engine=blast'; native degradation remains the default")
 
 
 def _is_int(value: Any) -> bool:

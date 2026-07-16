@@ -7,8 +7,26 @@ from types import MappingProxyType
 from typing import Any, Mapping
 
 BLAST_UPSTREAM_VERSION = "1.1.0"
-BLAST_UPSTREAM_COMMIT = "d789e00"
+BLAST_UPSTREAM_COMMIT = "d789e00bca60f628de640745c18eb724b07358bd"
 BLAST_STATE_SCHEMA_VERSION = "1.0"
+
+
+def _freeze_metadata(value: Any) -> Any:
+    """Recursively freeze registry metadata without changing its values."""
+    if isinstance(value, Mapping):
+        return MappingProxyType({key: _freeze_metadata(item) for key, item in value.items()})
+    if isinstance(value, (list, tuple)):
+        return tuple(_freeze_metadata(item) for item in value)
+    return value
+
+
+def _json_metadata(value: Any) -> Any:
+    """Return fresh JSON-safe containers for frozen registry metadata."""
+    if isinstance(value, Mapping):
+        return {key: _json_metadata(item) for key, item in value.items()}
+    if isinstance(value, tuple):
+        return [_json_metadata(item) for item in value]
+    return value
 
 
 @dataclass(frozen=True)
@@ -46,10 +64,10 @@ class BatteryModelProfile:
             "chemistry": self.chemistry,
             "cell_format": self.cell_format,
             "nominal_capacity_ah": self.nominal_capacity_ah,
-            "experimental_range": dict(self.experimental_range),
+            "experimental_range": _json_metadata(self.experimental_range),
             "citations": list(self.citations),
             "output_keys": list(self.output_keys),
-            "operating_defaults": dict(self.operating_defaults),
+            "operating_defaults": _json_metadata(self.operating_defaults),
             "release_phase": self.release_phase,
             "notes": self.notes,
             "supports_capacity": self.supports_capacity,
@@ -88,10 +106,10 @@ def _profile(
         chemistry=chemistry,
         cell_format=cell_format,
         nominal_capacity_ah=nominal_capacity_ah,
-        experimental_range=MappingProxyType(experimental_range),
+        experimental_range=_freeze_metadata(experimental_range),
         citations=citations,
         output_keys=output_keys,
-        operating_defaults=MappingProxyType({}),
+        operating_defaults=_freeze_metadata({}),
         release_phase=release_phase,
         notes=notes,
     )

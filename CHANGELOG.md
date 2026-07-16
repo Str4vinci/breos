@@ -31,8 +31,10 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 - App configuration now resolves user values over sourced battery-profile
   defaults over global defaults. Native Naumann/Lam remains the default;
   `blast_model` requires explicit `degradation_engine="blast"`. The ambiguous
-  App-level `battery_type` selector raises with migration guidance instead of
-  being repurposed for chemistry/model selection.
+  App-level `battery_type` selector, which strict App validation already
+  rejected as unknown in 0.3.4, now raises targeted migration guidance instead
+  of being repurposed for chemistry/model selection. The lower-level
+  `BatteryConfig(battery_type="LFP")` API remains supported.
 
 ## [0.3.4] - 2026-07-14
 

@@ -1,6 +1,7 @@
 """Public discovery, metadata, and configuration semantics for BLAST models."""
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -10,6 +11,7 @@ from breos.degradation.engine import BLAST_MODEL_CLASSES, BlastEngine
 from breos.degradation.profiles import (
     BATTERY_MODEL_REGISTRY,
     BLAST_STATE_SCHEMA_VERSION,
+    BLAST_UPSTREAM_COMMIT,
     CORE_BLAST_MODEL_KEYS,
     get_battery_model_profile,
     merge_battery_config_layers,
@@ -34,9 +36,11 @@ def test_registry_is_the_single_catalog_for_all_vendored_models():
     for key, profile in BATTERY_MODEL_REGISTRY.items():
         model = BLAST_MODEL_CLASSES[key]()
         assert profile.nominal_capacity_ah == model.cap
-        assert profile.experimental_range["cycling_temperature_c"] == model.experimental_range["cycling_temperature"]
-        assert profile.experimental_range["dod"] == model.experimental_range["dod"]
-        assert profile.experimental_range["soc"] == model.experimental_range["soc"]
+        assert profile.experimental_range["cycling_temperature_c"] == tuple(
+            model.experimental_range["cycling_temperature"]
+        )
+        assert profile.experimental_range["dod"] == tuple(model.experimental_range["dod"])
+        assert profile.experimental_range["soc"] == tuple(model.experimental_range["soc"])
         assert profile.experimental_range["max_c_rate_charge"] == model.experimental_range["max_rate_charge"]
         assert profile.experimental_range["max_c_rate_discharge"] == model.experimental_range["max_rate_discharge"]
         assert profile.output_keys == tuple(model.outputs)
@@ -52,6 +56,28 @@ def test_python_discovery_is_public_and_json_serializable():
     assert models[0]["calibration_basis"] == "cell-model"
     assert models[0]["pack_calibrated"] is False
     json.dumps(models)
+
+
+def test_registry_metadata_is_immutable_and_discovery_results_are_isolated():
+    profile = get_battery_model_profile("lfp_gr_250ah_prismatic")
+    with pytest.raises(TypeError):
+        profile.experimental_range["soc"][0] = -1
+
+    discovered = breos.list_battery_models()
+    lfp = next(model for model in discovered if model["key"] == profile.key)
+    lfp["experimental_range"]["soc"][0] = -1
+    lfp["upstream"]["commit"] = "changed"
+
+    fresh_lfp = next(model for model in breos.list_battery_models() if model["key"] == profile.key)
+    assert profile.experimental_range["soc"] == (0, 1)
+    assert fresh_lfp["experimental_range"]["soc"] == [0, 1]
+    assert fresh_lfp["upstream"]["commit"] == BLAST_UPSTREAM_COMMIT
+
+
+def test_registry_upstream_identity_matches_vendoring_manifest():
+    manifest = (Path(__file__).parents[1] / "breos/degradation/blast/VENDORED.md").read_text(encoding="utf-8")
+    assert len(BLAST_UPSTREAM_COMMIT) == 40
+    assert BLAST_UPSTREAM_COMMIT in manifest
 
 
 def test_config_precedence_is_user_then_profile_then_global():
@@ -76,16 +102,25 @@ def test_native_is_default_and_blast_is_explicit_opt_in():
 def test_config_rejects_ambiguous_or_incomplete_model_selection():
     with pytest.raises(ValueError, match="ambiguous legacy selector"):
         resolve_app_config(_base_config(battery_type="lfp"))
-    with pytest.raises(ValueError, match="requires degradation_engine='blast'"):
+    with pytest.raises(ValueError, match="requires.*degradation_engine=blast"):
         resolve_app_config(_base_config(blast_model="lfp_gr_250ah_prismatic"))
     with pytest.raises(ValueError, match="Available"):
         resolve_app_config(_base_config(degradation_engine="blast", blast_model="nmc622_gr_denso_50ah"))
+    with pytest.raises(ValueError, match="battery_kwh.*> 0"):
+        resolve_app_config(
+            _base_config(
+                battery_kwh=0,
+                degradation_engine="blast",
+                blast_model="lfp_gr_250ah_prismatic",
+            )
+        )
 
 
 def test_snapshot_schema_survives_json_round_trip_and_rejects_unknown_versions():
     engine = BlastEngine("lfp_gr_250ah_prismatic")
     snapshot = json.loads(json.dumps(engine.state_snapshot()))
     assert snapshot["schema_version"] == BLAST_STATE_SCHEMA_VERSION
+    assert snapshot["blast_model_key"] == "lfp_gr_250ah_prismatic"
     restored = BlastEngine.from_snapshot("lfp_gr_250ah_prismatic", snapshot)
     assert restored.soh() == pytest.approx(1.0)
 

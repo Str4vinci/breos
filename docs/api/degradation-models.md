@@ -54,6 +54,9 @@ overrides them.
 
 Do not use the legacy `battery_type` selector in `App` configuration. It was
 ambiguous: it mixed chemistry identity with degradation-model selection.
+Strict `App` validation already rejected this key as unknown in 0.3.4; 0.4.0
+adds targeted migration guidance rather than introducing a new breaking
+change.
 Choose `degradation_engine="native"` (or omit it) for the existing LFP
 Naumann/Lam model. Choose `degradation_engine="blast"` together with one
 stable `blast_model` key for BLAST. Supplying `blast_model` while the native
@@ -61,6 +64,9 @@ engine is active raises instead of silently changing behavior.
 
 The lower-level `BatteryConfig.battery_type` field remains temporarily limited
 to `"lfp"` for native cycle-aging compatibility; it does not select BLAST.
+
+BLAST selection requires `battery_kwh > 0`; PV-only configurations should keep
+the default native engine and omit `blast_model`.
 
 ## Result interpretation
 
@@ -74,4 +80,3 @@ place to avoid implying unsupported precision.
 BLAST plus Monte Carlo is rejected explicitly in 0.4.0. It never falls back to
 native degradation. BLAST resistance outputs are reported as capabilities but
 do not alter dispatch efficiency or power limits.
-
