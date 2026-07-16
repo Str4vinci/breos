@@ -102,6 +102,7 @@ resources
 release
 architecture/third-party-wrapping
 architecture/string-inverter-sizing
+architecture/battery-degradation-strategy
 architecture/blast-degradation-engine
 legal/load-profile-data
 adr/index

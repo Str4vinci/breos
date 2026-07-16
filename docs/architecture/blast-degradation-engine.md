@@ -1,10 +1,15 @@
 # BLAST Degradation Engine
 
 **Status:** Phases 0-1 and 3 implemented (all 14 models enabled with
-`experimental_range` warnings); Phase 2 (chemistry profiles / CLI) and
+`experimental_range` warnings); Phase 2 (cell-model profiles / CLI) and
 Phase 4 planned
 **Relates to:** ROADMAP "Additional Li-ion battery chemistries"
 **Owner:** BREOS maintainers
+
+The scientific default and validation gates are defined in
+[Battery Degradation Strategy for 0.4 and Beyond](battery-degradation-strategy.md).
+In particular, native Naumann/Lam remains the generic residential-LFP default
+until genuinely held-out field validation supports changing it.
 
 ## Problem
 
@@ -17,7 +22,7 @@ but still age it on LFP curves. In 0.3.3 the native path was made explicit:
 chemistries now raise instead of silently reusing LFP cycle-aging parameters.
 The runner (`breos/runners/app.py`) exposes BLAST through explicit
 `degradation_engine` / `blast_model` config keys; chemistry-profile defaults
-remain a Phase 2 task.
+and user-facing profile discovery remain Phase 2 tasks.
 
 NREL's [BLAST-Lite](https://github.com/NREL/BLAST-Lite) (BSD-3) provides **14
 lab-calibrated, DOI-cited degradation models** (in the version vendored) spanning
@@ -246,6 +251,35 @@ Note: several keys (Panasonic, Sony-Murata cylindrical, the NMC fast-charge
 pouches) are EV / high-power cells tested well above stationary C-rates — they
 run, but lean on the out-of-range warning below.
 
+### User-facing cell-model profiles
+
+Each key selects a particular empirical cell model, not a chemistry-wide life
+curve. The ranges below come from the vendored models' `experimental_range`
+metadata and drive runtime warnings. `Cchg/Cdis` lists maximum tested charge
+and discharge rates. Links identify the source studies recorded by BLAST.
+
+| Key | Named cell/chemistry profile | Outputs | Tested cycling range | Source studies |
+|---|---|---|---|---|
+| `lfp_gr_250ah_prismatic` | Commercial >250 Ah prismatic LFP-Gr | Capacity | T 10–45 °C; DoD 0.8–1; SoC 0–1; 0.65C/1C | [Experimental aging data](https://doi.org/10.1016/j.est.2023.109042) |
+| `nca_gr_panasonic_3ah` | Panasonic NCR18650B ~3 Ah NCA-Gr | Capacity | T 15–35 °C; DoD 0.8–1; SoC 0–1; 0.5C/2C | [Calendar aging](https://doi.org/10.1149/2.0411609jes); [cycle aging](https://doi.org/10.1149/1945-7111/abae37) |
+| `lmo_gr_nissanleaf_66ah_2nd` | Nissan Leaf 66 Ah second-life LMO-Gr half-module | Capacity | T 20–30 °C; DoD 0.8–1; SoC 0–1; 1C/1C | [Calendar aging](https://doi.org/10.1109/EEEIC/ICPSEUROPE54979.2022.9854784); [cycle aging](https://doi.org/10.1016/j.est.2020.101695) |
+| `nmc811_grsi_lgm50_5ah` | LG M50 5 Ah NMC811-GrSi cylindrical | Capacity | T 0–25 °C; DoD 1; SoC 0–1; 0.3C/2C | [Aging data](https://ieeexplore.ieee.org/document/9617644); [cell characterization](https://www.sciencedirect.com/science/article/pii/S0013468622008593) |
+| `nmc811_grsi_lgmj1_4ah` | LG MJ1 ~4 Ah NMC811-GrSi cylindrical | Capacity | T 0–50 °C; DoD 0.2–0.8; SoC 0.1–0.9; 1C/3C | [EVERLASTING D2.3](https://everlasting-project.eu/wp-content/uploads/2020/03/EVERLASTING_D2.3_final_20200228.pdf) |
+| `nmc_gr_50ah_b1` | Manufacturer-anonymous B1 50 Ah NMC-Gr pouch | Capacity | T 10–45 °C; DoD 0.8–1; SoC 0–1; 1.75C/1.75C | [Experimental aging data](https://doi.org/10.1016/j.est.2023.109042) |
+| `nmc_gr_50ah_b2` | Manufacturer-anonymous B2 50 Ah NMC-Gr pouch | Capacity | T 10–45 °C; DoD 0.8–1; SoC 0–1; 1.75C/1.75C | [Experimental aging data](https://doi.org/10.1016/j.est.2023.109042) |
+| `nmc_gr_75ah_a` | Manufacturer-anonymous A 75 Ah NMC-Gr pouch | Capacity | T 10–45 °C; DoD 0.8–1; SoC 0–1; 2C/2C | [Experimental aging data](https://doi.org/10.1016/j.est.2023.109042) |
+| `nmc111_gr_sanyo_2ah` | Sanyo UR18650E ~2 Ah NMC111-Gr | Capacity + resistance | T 20–40 °C; DoD 0–1; SoC 0–1; 1C/1C | [Model/aging study](https://doi.org/10.1016/j.jpowsour.2014.02.012); [cell analysis](https://doi.org/10.1016/j.jpowsour.2013.09.143) |
+| `nmc_lto_10ah` | Commercial ~10 Ah NMC-LTO | Capacity | T 30–60 °C; DoD 0–1; SoC 0–1; 10C/10C | [Experimental aging data](https://doi.org/10.1016/j.jpowsour.2020.228566) |
+| `lfp_gr_sonymurata_3ah` | Sony/Murata 3 Ah LFP-Gr cylindrical | Capacity + resistance | T 20–40 °C; DoD 0.8–1; SoC 0–1; 1C/2C | [Calendar aging](https://doi.org/10.1016/j.est.2018.01.019); [cycle aging](https://doi.org/10.1016/j.jpowsour.2019.227666); [BLAST model identification](https://doi.org/10.1149/1945-7111/ac86a8) |
+| `nca_grsi_sonymurata_2p5ah` | Sony/Murata VTC5A NCA-GrSi cylindrical | Capacity | T 5–35 °C; DoD 0.2–1; SoC 0–1; 2C/10C | [Accelerated aging](https://doi.org/10.1016/j.jpowsour.2022.232498); [cycle model](https://doi.org/10.1016/j.jpowsour.2023.233947); [calendar model](https://doi.org/10.1016/j.jpowsour.2023.233208) |
+| `nmc111_gr_kokam_75ah` | Kokam 75 Ah NMC111-Gr pouch | Capacity + resistance | T 0–45 °C; DoD 0.8–1; SoC 0–1; 1C/1C | [Experimental/model study](https://ieeexplore.ieee.org/document/7963578) |
+| `nmc622_gr_denso_50ah` | DENSO 50 Ah NMC622-Gr EV cell | Capacity | T 10–60 °C; DoD 0.1–1; SoC 0–1; 1C/1C | [Experimental/model study](https://doi.org/10.1149/1945-7111/ac2ebd) |
+
+These are validity descriptors, not recommended residential operating
+envelopes. Calendar-aging conditions and study duration must be read from the
+linked studies. Future CLI/Python discovery should be generated from one
+profile registry containing these identities, ranges, and sources.
+
 **Data-horizon caveat (implemented as a runtime warning).** The underlying
 aging campaigns typically span 1–3 years; 20-year projections extrapolate the
 fitted trajectory shapes (power-law / sigmoid) far beyond the data and may be
@@ -253,14 +287,17 @@ optimistic — late-life degradation knees can be invisible in short campaigns.
 `simulate_energy_balance` emits a `UserWarning` once per logical simulation
 (fresh-engine construction only; snapshot continuations do not re-warn). This
 is also part of why **native stays the default**: it is field-calibrated for
-stationary LFP and empirically more conservative. Synthetic reference point
-(~250 FEC/yr residential profile at 25 °C, 10 kWh): 10-year SoH is
-native ≈ 67 %, BLAST LFP 250Ah ≈ 89 %, BLAST NCA Panasonic ≈ 79 %.
+stationary LFP and empirically more conservative. Synthetic trajectories are
+useful sensitivity checks, not default-selection evidence. The primary
+scientific comparison is native Naumann/Lam against BLAST's Sony/Murata 3 Ah
+LFP profile because both ultimately relate to the Naumann Sony/Murata dataset.
+The 250 Ah prismatic model remains useful as a separate stationary-cell
+sensitivity, not as the apples-to-apples default comparison.
 
-## Chemistry profile registry (per-chemistry settings)
+## Cell-model profile registry and chemistry defaults
 
-There are **three tiers** of per-chemistry data; only the third is a user
-*setting*. Conflating them is the trap to avoid.
+There are **three tiers** of profile data; only the third is a user *setting*.
+Conflating a named cell model with a generic chemistry is the trap to avoid.
 
 1. **Degradation parameters** (`qcal_*` / `qcyc_*`) — baked into the vendored
    BLAST class, calibrated to papers. **Never user-tunable.**
@@ -275,10 +312,12 @@ There are **three tiers** of per-chemistry data; only the third is a user
 
 ### Design: a declarative registry feeding existing `BatteryConfig` fields
 
-A small `breos/degradation/chemistry_profiles.py` (or JSON in `breos/data/configs/`,
-mirroring the existing `costs.json` / `emissions.json` preset pattern) keyed by
-`blast_model`, supplying **only tier-3 defaults**. Selecting a model auto-loads
-its profile; every field stays independently overridable.
+A small profile registry (or JSON in `breos/data/configs/`, mirroring the
+existing `costs.json` / `emissions.json` preset pattern) keyed by `blast_model`
+must first expose the tier-1/2 identity, study links, output capabilities, and
+validity ranges shown above. It may also supply **only sourced tier-3
+defaults**. Selecting a model auto-loads its profile; every operating field
+stays independently overridable.
 
 Precedence (explicit, least-surprising):
 
@@ -355,6 +394,12 @@ Monte Carlo also has its **own** year loop with separate state threading
 `degradation_engine="blast"` + Monte Carlo is **rejected at validation** until
 Phase 4 wires that loop — never silently run as native.
 
+For native accuracy studies, retain the reference Python path with full
+rainflow counting. The optional Numba degradation kernel uses a
+segment/extrema depth-of-cycle approximation and remains a screening path; it
+is not a substitute for the reference path in calibration or published model
+comparisons.
+
 ## Licensing / attribution
 
 - Preserve the BSD-3 copyright header (`Alliance for Energy Innovation, LLC`) and
@@ -376,7 +421,8 @@ Phase 4 wires that loop — never silently run as native.
   resets BLAST. Enable the two simple 2-bucket-power models end-to-end —
   **LFP 250Ah prismatic (flagship)** + **NCA Panasonic (POC)**; default path
   untouched. Adapter-parity, cross-year-continuity, and regression tests.
-- **Phase 2** — The **chemistry profile registry** (precedence + raw-key
+- **Phase 2** — The **cell-model profile registry and sourced chemistry
+  defaults** (precedence + raw-key
   merge-order) + full config/CLI plumbing (`--degradation-engine` /
   `--blast-model`; **retire** the legacy `battery_type` selector — see the
   resolved decision below).
@@ -395,8 +441,10 @@ Phase 4 wires that loop — never silently run as native.
   triggers long before, but library users disabling replacement should know.
 - **Phase 4 (later)** — **Monte Carlo BLAST support** (thread state through
   `montecarlo.py`'s own year loop — until then `blast` + MC raises);
-  resistance-fade mapping for multi-mode models; fast/repeat mode for Monte
-  Carlo; ROADMAP + docs update.
+  a model-sensitivity result range; pack-level calibration when suitable data
+  exists; fast/repeat mode for Monte Carlo; ROADMAP + docs update. Resistance
+  may affect dispatch only after a defensible, validated mapping from each
+  BLAST resistance output to BREOS efficiency and power limits exists.
 
 ## Open decisions
 
@@ -422,5 +470,8 @@ Resolved:
 ## Non-goals
 
 - Replacing the native Naumann/Lam LFP path as the default.
+- Treating BLAST cell-level expected life as pack-level calibration.
+- Coupling BLAST resistance to efficiency or power limits without a validated
+  mapping.
 - Electrochemical / P2D models.
 - Re-mapping BLAST parameters into BREOS's equation form.
