@@ -41,6 +41,15 @@ def test_dc_ac_inverse_round_trip(ac_fraction):
     assert result.ac_power_w == pytest.approx(target, rel=1e-12, abs=1e-9)
 
 
+def test_unity_nominal_efficiency_cannot_create_energy():
+    dc_input = dc_power_for_ac_output(600.0, 1000.0, inverter_efficiency=1.0)
+    result = calculate_dc_ac_power(dc_input, 1000.0, inverter_efficiency=1.0)
+
+    assert dc_input == pytest.approx(600.0)
+    assert result.ac_power_w == pytest.approx(600.0)
+    assert result.total_dc_input_w == pytest.approx(dc_input)
+
+
 def test_package_all_exports_stable_inverter_helpers():
     expected = {
         "calculate_dc_ac_power",

@@ -265,6 +265,31 @@ class TestSimulateEnergyBalance:
         np.testing.assert_allclose(results_df["PV_Production"], expected)
         np.testing.assert_allclose(results_df["PV_AC_Export"], expected)
 
+    @pytest.mark.parametrize("nominal_energy_wh", [0.0, 1000.0])
+    def test_negative_pv_input_is_clamped_before_dispatch(self, nominal_energy_wh):
+        idx = pd.date_range("2025-01-01", periods=1, freq="h", tz="UTC")
+        config = BatteryConfig(
+            nominal_energy_wh=nominal_energy_wh,
+            inverter_ac_capacity_w=1000.0,
+            standby_loss_wh=0.0,
+            enable_replacement=False,
+        )
+
+        results, *_ = simulate_energy_balance(
+            pv_dc=pd.Series([-100.0], index=idx),
+            houseload=pd.DataFrame({"Load": [500.0]}, index=idx),
+            battery_config=config,
+            temperature_series=pd.Series(25.0, index=idx),
+        )
+
+        assert results["PV_DC"].iloc[0] == 0.0
+        assert results["PV_DC_To_Battery"].iloc[0] == 0.0
+        assert results["PV_DC_To_Inverter"].iloc[0] == 0.0
+        assert results["PV_AC_To_Load"].iloc[0] == 0.0
+        assert results["Houseload"].iloc[0] == pytest.approx(
+            results["Battery_AC_To_Load"].iloc[0] + results["Import_From_Grid"].iloc[0]
+        )
+
     def test_battery_shares_inverter_cap_and_charges_from_clipped_dc(self):
         idx = pd.date_range("2025-01-01 00:00", periods=2, freq="h", tz="UTC")
         pv_dc = pd.Series([0.0, 3000.0], index=idx)

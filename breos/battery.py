@@ -587,7 +587,10 @@ def simulate_energy_balance(
     for i in range(n_steps):
         step_time = rng[i]
         # Get values for this timestep via fast array indexing
-        pv_dc_power = _pv_dc_vals[i] * hours_per_step  # DC power (Wh) before inverter
+        # Treat negative model/data artefacts as zero generation, matching the
+        # public inverter helper and preventing negative PV from being
+        # allocated through the shared PV/battery conversion path.
+        pv_dc_power = max(0.0, _pv_dc_vals[i] * hours_per_step)  # DC power (Wh) before inverter
         load = _load_vals[i] * hours_per_step  # AC Load in Wh
         T_ambient = _temp_vals[i]
         T_cell = T_ambient  # default; overridden by thermal model below

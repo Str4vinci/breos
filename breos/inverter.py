@@ -198,6 +198,7 @@ def calculate_dc_ac_power(
     ac_power = max(
         0.0,
         min(
+            dc_used,
             inverter_ac_power,
             (inverter_efficiency / PVWATTS_REFERENCE_EFFICIENCY)
             * pdc0
@@ -244,4 +245,8 @@ def dc_power_for_ac_output(ac_power_w: float, inverter_ac_power: float, inverter
     c = normalized_ac - PVWATTS_CURVE_CONSTANT
     discriminant = max(0.0, b * b - 4.0 * a * c)
     zeta = (-b - math.sqrt(discriminant)) / (2.0 * a)
-    return min(upper, max(0.0, zeta * upper))
+    # At unusually high nominal efficiencies the empirical PVWatts curve can
+    # exceed 100% conversion efficiency around its peak. The forward helper
+    # caps AC output at DC input to preserve energy conservation, so its
+    # inverse must also request at least the target amount of DC.
+    return min(upper, max(ac_target, zeta * upper))
