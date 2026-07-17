@@ -29,6 +29,7 @@ dependencies = [
 
 [project.urls]
 Homepage = "https://github.com/Str4vinci/breos"
+Documentation = "https://breos.readthedocs.io/"
 Repository = "https://github.com/Str4vinci/breos"
 
 [project.scripts]
