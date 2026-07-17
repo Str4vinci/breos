@@ -54,12 +54,21 @@ class BatteryDegradationModel:
             else:
                 y0 = k * (dx**p)
                 dydx = y0 / dx
+            return dydx * dx
+        if dx == 0:
+            dydx = 0
+        elif y0 / k > 0:
+            dydx = k * p * ((y0 / k) ** ((p - 1) / p))
         else:
-            if dx == 0:
-                dydx = 0
-            else:
-                dydx = k * p * ((y0 / k) ** ((p - 1) / p))
-        return dydx * dx
+            # Avoid a fractional power of a negative ratio (when the rate sign
+            # flips between updates); restart the trajectory at x = dx.
+            dydx = k * (dx**p) / dx
+        dy = dydx * dx
+        # Avoid stepping across zero (when time-varying rates overshoot the
+        # single-signed trajectory y = k*x^p)
+        if (y0 + dy) * y0 < 0:
+            dy = -y0
+        return dy
 
     @staticmethod
     def _update_power_B_state(y0: float, dx: float, k: float, p: float):
@@ -85,13 +94,22 @@ class BatteryDegradationModel:
             else:
                 y0 = (k * dx) ** p
                 dydx = y0 / dx
+            return dydx * dx
+        if dx == 0:
+            dydx = 0
+        elif y0 > 0:
+            z = (y0 ** (1 / p)) / k
+            dydx = (p * (k * z) ** p) / z
         else:
-            if dx == 0:
-                dydx = 0
-            else:
-                z = (y0 ** (1 / p)) / k
-                dydx = (p * (k * z) ** p) / z
-        return dydx * dx
+            # Avoid a fractional root of a negative state (when time-varying
+            # rates overshoot); restart the trajectory at x = dx.
+            dydx = ((k * dx) ** p) / dx
+        dy = dydx * dx
+        # Avoid stepping across zero (when time-varying rates overshoot the
+        # single-signed trajectory y = (k*x)^p)
+        if (y0 + dy) * y0 < 0:
+            dy = -y0
+        return dy
 
     @staticmethod
     def _update_sigmoid_state(y0: float, dx: float, y_inf: float, k: float, p: float):
@@ -120,14 +138,21 @@ class BatteryDegradationModel:
             else:
                 dy = 2 * y_inf * (1 / 2 - 1 / (1 + np.exp((k * dx) ** p)))
                 dydx = dy / dx
+            return dydx * dx
+        if dx == 0 or y0 >= y_inf:
+            # Avoid inverting beyond the asymptote (when y >= y_inf after
+            # y_inf shrank between updates); the state is saturated for the
+            # current rate.
+            dydx = 0
         else:
-            if dx == 0:
-                dydx = 0
-            else:
-                x_inv = (1 / k) * ((np.log(-(2 * y_inf / (y0 - y_inf)) - 1)) ** (1 / p))
-                z = (k * x_inv) ** p
-                dydx = (2 * y_inf * p * np.exp(z) * z) / (x_inv * (np.exp(z) + 1) ** 2)
-        return dydx * dx
+            x_inv = (1 / k) * ((np.log(-(2 * y_inf / (y0 - y_inf)) - 1)) ** (1 / p))
+            z = (k * x_inv) ** p
+            dydx = (2 * y_inf * p * np.exp(z) * z) / (x_inv * (np.exp(z) + 1) ** 2)
+        dy = dydx * dx
+        # Avoid overshooting the asymptote within one step
+        if dy > y_inf - y0:
+            dy = y_inf - y0
+        return dy
 
     @staticmethod
     def _update_exponential_relax_state(y0: float, dx: float, y_inf: float, tau: float):

@@ -15,7 +15,7 @@ byte-for-byte identical.
 | `LICENSE` | `5c608631ff4a0bd83b9768e1f38d8e317ea67c878192eba6222bc5856dae47ea` | `breos/degradation/blast/LICENSE` | `5c608631ff4a0bd83b9768e1f38d8e317ea67c878192eba6222bc5856dae47ea` | L |
 | `NOTICE` | `58f1af21812d1b59fb979738e1d886235e182c94a35fb5bd1482cd77f9f7a96a` | `breos/degradation/blast/NOTICE` | `58f1af21812d1b59fb979738e1d886235e182c94a35fb5bd1482cd77f9f7a96a` | L |
 | `blast/__init__.py` | `6ab38125c18e1578df64f1dd6703677855c80d715caa8b5793a08fca73069e60` | `breos/degradation/blast/__init__.py` | `c56c9d8cfc98bc102f37f90faecd24774843f349bf851c5c366616f354299239` | P |
-| `blast/models/degradation_model.py` | `65a1c013a0b9cc91ff5881e195df6c1723fe05b8b84a6bb0b457969696ec10ab` | `breos/degradation/blast/degradation_model.py` | `170fd2c25029fcc02d08098f27847fa4dbecc47ab6dd45cf774b8a3274e6b347` | B, I, N, F |
+| `blast/models/degradation_model.py` | `65a1c013a0b9cc91ff5881e195df6c1723fe05b8b84a6bb0b457969696ec10ab` | `breos/degradation/blast/degradation_model.py` | `d1cc93db6d24da4418b9c09a624624339679e6a23482a3000657d26e10fa6ad6` | B, I, N, F, S |
 | `blast/utils/functions.py` | `2e23fb7cb609ebad34fdca8d2b8d2a75a8b5021c95c3be0c0543a554907fc323` | `breos/degradation/blast/functions.py` | `a6d156c880f206bae1e9422d217fe44dda7388091356552d5ebaadb7b3e34ffd` | E, F |
 | `blast/utils/rainflow.py` | `12ee9c0d48877ae7cd13465b4d1a092ef07c9629b72b2b2cb6bd76f705cdfff8` | `breos/degradation/blast/rainflow.py` | `4eacc7d9be9d86eaaa0104c428ee4f76febb8180b078aae20c7f5fb0d0a7f420` | R, F |
 | `blast/models/__init__.py` | `5dfc819435065cefdebdbe4763ee00a9c73269ed45e7781e66d18953e2c7df89` | `breos/degradation/blast/models/__init__.py` | `91fec32d1b52ad1a8d4f19b4278131ff2bf33ce34ef5db505bd83716af945203` | R, I, F |
@@ -52,6 +52,19 @@ byte-for-byte identical.
   hard pandas type check, and its annotation is dependency-neutral.
 - **F — repository formatting:** applied Ruff/Black-compatible formatting,
   including whitespace, quote, and line-wrap changes.
+- **S — state-domain guards:** bounded the incremental state updates to the
+  valid domain of their trajectory inversions. Upstream's state-space
+  integration evaluates fractional powers of `y0 / k` (power states) and
+  `log(-(2*y_inf/(y0-y_inf)) - 1)` (sigmoid states); when day-varying
+  stressors shrink `k` or `y_inf` between updates, the accumulated state can
+  overshoot past zero or the asymptote, and the next update returns NaN that
+  silently corrupts SoH (observed for `nmc_lto_10ah`, day 3, and
+  `nca_grsi_sonymurata_2p5ah`, year ~10, under real PV self-consumption
+  profiles). The guards clamp each step so states never cross zero and
+  sigmoid states never exceed their current `y_inf`, mirroring the guard
+  upstream already applies in `_update_exponential_relax_state`. Constant
+  and periodic profiles never hit the guards; the golden and parity
+  fixtures are byte-identical.
 
 No scientific coefficient, equation, or calibration value was intentionally
 changed. The transformed models are checked against fixed all-model golden

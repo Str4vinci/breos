@@ -833,7 +833,9 @@ def simulate_energy_balance(
                     start_soc=blast_day_start_soc,
                     start_temperature_c=blast_day_start_t_cell,
                 )
-                battery_soh_decimal = blast_engine.step(t_secs_day, soc_day, t_cell_day_c)
+                # BLAST capacity extrapolations can dip below zero for cells
+                # aged far past their data; a dead battery has zero capacity.
+                battery_soh_decimal = max(0.0, blast_engine.step(t_secs_day, soc_day, t_cell_day_c))
                 fec_cum = float(blast_engine.model.stressors["efc"][-1])
                 dSOH_cycle = 0.0
                 dSOH_calendar = 0.0

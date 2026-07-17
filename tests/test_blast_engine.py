@@ -14,6 +14,7 @@ from breos.degradation.engine import (
     BlastAgingHorizonWarning,
     BlastEngine,
     BlastExperimentalRangeWarning,
+    BlastNumericalError,
     build_endpoint_day,
 )
 
@@ -209,3 +210,44 @@ def test_sourced_aging_horizon_warns_once_and_survives_snapshot():
     assert len(records) == 1
     assert records[0]["supported_days"] == 300.0
     assert len([item for item in caught if item.category is BlastAgingHorizonWarning]) == 1
+
+
+def test_all_models_stay_finite_when_daily_stressors_soften():
+    """Deep-cycling days followed by light low-SOC days must not NaN.
+
+    Regression: negative-exponent power states (nmc_lto_10ah) and shrinking
+    sigmoid asymptotes (nca_grsi_sonymurata_2p5ah) overshoot their trajectory
+    domain when day-to-day stressors soften abruptly, which real dispatch
+    profiles produce routinely (e.g. the first calm winter day).
+    """
+    hours = np.arange(25, dtype=float)
+    t_secs = hours * 3600.0
+    temperature_c = np.full(25, 20.0)
+    deep = np.interp(hours, [0, 10, 14, 17, 23, 24], [0.1, 0.1, 0.9, 0.9, 0.1, 0.1])
+    light = np.interp(hours, [0, 10, 14, 17, 23, 24], [0.1, 0.1, 0.5, 0.5, 0.1, 0.1])
+
+    for key in BLAST_MODEL_CLASSES:
+        engine = BlastEngine(key)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            for soc in (deep, deep, light, light):
+                soh = engine.step(t_secs, soc, temperature_c)
+        assert np.isfinite(soh), key
+        for group_name in ("states", "outputs"):
+            group = getattr(engine.model, group_name)
+            for state_name, values in group.items():
+                assert np.all(np.isfinite(values)), f"{key}.{group_name}.{state_name}"
+
+
+def test_step_raises_on_non_finite_soh():
+    engine = BlastEngine("lfp_gr_250ah_prismatic")
+    t_secs, soc, temperature_c = _daily_profile()
+
+    def corrupting_update(*_args):
+        engine.model.outputs["q"] = np.append(engine.model.outputs["q"], np.nan)
+
+    engine.model.update_battery_state = corrupting_update
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        with pytest.raises(BlastNumericalError, match="non-finite SoH"):
+            engine.step(t_secs, soc, temperature_c)

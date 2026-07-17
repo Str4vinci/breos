@@ -22,6 +22,10 @@ BLAST_MODEL_CLASSES = {key: getattr(models, profile.class_name) for key, profile
 P1_BLAST_MODEL_KEYS = CORE_BLAST_MODEL_KEYS
 
 
+class BlastNumericalError(RuntimeError):
+    """A BLAST model produced a non-finite state; results are unusable."""
+
+
 class BlastExperimentalRangeWarning(UserWarning):
     """A BLAST input falls outside conditions represented by its test data."""
 
@@ -118,7 +122,16 @@ class BlastEngine:
         self._check_experimental_range(t_secs, soc, temperature_c)
         self.model.update_battery_state(t_secs, soc, temperature_c)
         self._check_aging_horizon()
-        return self.soh()
+        soh = self.soh()
+        if not np.isfinite(soh):
+            elapsed_days = float(self.model.stressors["t_days"][-1])
+            raise BlastNumericalError(
+                f"BLAST model {self.blast_model_key!r} produced a non-finite SoH "
+                f"after {elapsed_days:.0f} simulated days. This indicates a "
+                "state-update instability; the engine state is corrupt and the "
+                "simulation cannot continue."
+            )
+        return soh
 
     def _record_warning(
         self,
