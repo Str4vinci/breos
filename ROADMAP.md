@@ -8,10 +8,9 @@ are intentions, not commitments — see GitHub issues for active work.
 Recorded 2026-07 after the 0.4.0 release. Like everything here these are
 intentions, not commitments; reassess after each release.
 
-- **0.4.1 / 0.4.2** — maintainability refactors only (degradation validity
-  checking, result construction, config-validation decomposition in 0.4.1;
-  degradation protocol, snapshot codecs, and BLAST parity tooling in 0.4.2),
-  per the 0.4.x refactor plan. No feature or behavior changes.
+- **0.4.1 / 0.4.2** — maintainability refactors only, following a separate
+  working refactor plan for selected BREOS functions. No feature or behavior
+  changes.
 - **0.5.0** — bifacial rear-gain is the firm scope (activation key, explicit
   rear-gain loss-waterfall stage, benchmark rows). Independently complete
   PV-fidelity items (the pvsyst real-efficiency fix, additional IAM and
@@ -19,9 +18,11 @@ intentions, not commitments; reassess after each release.
   compatibility and benchmark tests.
 - **0.5.x** — the declarative config schema (behavior-preserving, and
   deliberately before TOU adds another cluster of config keys);
-  horizon-profile input; possibly the degradation-session refactor (R6).
+  horizon-profile input; and further internal maintainability work if needed.
 - **0.6.0** — the currency concept plus time-of-use tariff
   valuation and static presets; flat pricing preserved bit-for-bit.
+
+## Model accuracy and validation
 
 The goal is a gold-standard *engine* — PVsyst/HelioScope-class results
 without the 3D scene modeling. That standard is earned two ways: closing
@@ -29,14 +30,10 @@ known systematic modeling gaps, and publishing reproducible evidence that
 the numbers are right. This work takes priority over architectural
 refactoring (see the deferred adapter layer at the bottom of this document).
 
-## Model accuracy and validation
-
 ### Standing validation and benchmark suite
 
-**Status: seeded 2026-07** — `validation/` holds a seven-site worldwide
-harness (PVGIS TMY inputs, PVGIS PVcalc references, PVWatts v8 fetcher) and
-`tests/test_validation_drift.py` fails CI on any unintended model drift
-(0.1% self-baseline) or gross error (±10% vs PVGIS). Remaining work below.
+Build on the existing seven-site `validation/` harness and
+`tests/test_validation_drift.py` safeguards with broader reproducible evidence.
 
 The single highest-leverage credibility item. PVsyst's authority comes from
 decades of published validation; BREOS needs a reproducible harness that
@@ -52,26 +49,6 @@ choice, with deltas documented and tracked over time.
 - Every new physics capability (bifacial, cell-temperature models, IAM
   models) lands with its row in the benchmark table — this generalizes the
   per-item "validate against baseline" notes elsewhere in this roadmap.
-
-### One inverter model everywhere (App, dc_to_ac, optimizer)
-
-Remaining: unify the `App` energy balance's flat-efficiency conversion with
-the pvwatts part-load curve. `dc_to_ac` already clips at the true AC
-nameplate (0.3.3), and the NSGA-II optimizer now simulates candidates with
-the CAPEX-matched AC nameplate, prices them with the same estimation
-formulas as `cost_analysis_projection` (equivalence enforced by
-`tests/test_optimization_parity.py`), and passes the load through
-`simulate_energy_balance` unmangled (0.3.4). What is left is the `App`
-energy balance, which still uses a flat efficiency plus an AC cap treated as
-the nameplate.
-
-- Unify on a single conversion model (the pvwatts part-load curve is the
-  better physics) with one definition of the AC nameplate.
-- Keep "the optimizer scores designs with the same engine that reports
-  them" a regression-tested invariant; this includes aligning
-  `align_load_to_pv` with the App's wall-clock/UTC load alignment.
-- Extends Phase 1 of "String-aware inverter validation and modeling" below
-  and subsumes its App-only scope.
 
 ### Horizon-profile input
 
@@ -117,12 +94,9 @@ documentation live in one place.
   deliberately scheduled *before* the 0.6.0 TOU/currency work adds another
   cluster of config keys, and deserves its own release slot rather than
   riding along a feature release.
-- **Coordination with the 0.4.x refactor plan:** phase R3 decomposes the
-  imperative `validate_config` for 0.4.1. If the full schema lands in
-  0.5.x, a four-way R3 decomposition gets rewritten within two releases —
-  either trim R3 to the battery/degradation validation split the 0.4.x
-  degradation refactors actually need, or do full R3 knowing the decomposed
-  validators are transplant material. Decide before 0.4.1 branches.
+- **Coordination with the function-level refactor plan:** earlier internal
+  validation cleanup should create reusable boundaries for the full schema,
+  not throwaway helpers that need another rewrite in 0.5.x.
 - **The hard part is error-message parity**, not the schema itself: the
   acceptance bar is the same exception types with equally actionable
   "Unknown X. Available: ..." messages. Off-the-shelf pydantic messages do
@@ -156,14 +130,10 @@ explicit, reproducible, and visible at startup.
 
 ## Onboarding and discoverability
 
-### Make the first successful run easier to trust
+### Keep the first successful run easy to trust
 
-The 0.3.0 onboarding pass shipped the "10-minute first run" quickstart, the
-required-inputs page, the recipes page, the generated packaged-options
-reference, the `breos list` discovery commands, and `breos validate-config` /
-`breos run --dry-run` config inspection with `--json` output (the dry-run
-summary now includes the fully resolved static PVWatts loss components and
-combined loss percentage after applying `pv_loss_overrides`). Remaining work:
+Continue improving the existing quickstart, discovery commands, configuration
+inspection, and packaged-options reference through the following work.
 
 Ongoing docs hygiene:
 
@@ -223,16 +193,14 @@ Capabilities still to bring online (transposition is already selectable via
 end-to-end through `build_dc_system_base` and the multi-array path):
 
 - **Bifacial rear-gain** — see the dedicated item below.
-- **Cell-temperature model choice** — mount-type presets shipped 2026-07
-  (0.3.4: `temperature_model` selects `faiman` or the PVsyst mounting
-  presets). Remaining: expose `sapm` and `noct_sam` with their parameter
-  sets, and let the pvsyst path take the module's real efficiency instead of
+- **Cell-temperature model choice** — expose `sapm` and `noct_sam` alongside
+  the existing Faiman and PVsyst mounting presets, with their parameter sets,
+  and let the PVsyst path take the module's real efficiency instead of
   pvlib's 0.1 default — a natural 0.5.0 ride-along, since
   `PVModuleParams.Module_Efficiency` already exists as explicitly unused
   metadata.
-- **IAM model choice** — diffuse IAM shipped 2026-07 (0.3.4:
-  `diffuse_iam = "marion"`). Remaining: expose `martin_ruiz`, `physical`,
-  and the SAPM IAM for the beam term.
+- **IAM model choice** — expose `martin_ruiz`, `physical`, and the SAPM IAM
+  for the beam term, extending the existing diffuse-IAM option.
 - **DC-side loss refinements** — optional time-series ohmic/soiling/snow models in
   place of (parts of) the flat PVWatts loss stack, where inputs allow.
 - Non-goal: replacing the CEC single-diode core or the PVWatts loss model as the
@@ -299,26 +267,20 @@ string-aware validation and, later, string-aware inverter modeling when callers
 provide module, inverter, environment, MPPT, and string-topology data.
 
 - Design note: [docs/architecture/string-inverter-sizing.md](docs/architecture/string-inverter-sizing.md)
-- Phase 1 (apply aggregate inverter AC clipping consistently in the `App`
-  energy flow) shipped and is extended/superseded by "One inverter model
-  everywhere" under Model accuracy and validation.
-- Phase 2: add a pure validation API for string voltage windows, startup
+- First, add a pure validation API for string voltage windows, startup
   voltage, MPPT current limits, parallel-string compatibility, and DC/AC ratio
   warnings.
-- Phase 3: extend module and inverter catalogs with the datasheet fields needed
+- Then extend module and inverter catalogs with the datasheet fields needed
   for those checks.
-- Phase 4: accept optional MPPT/string topology from callers and use it to
+- Later, accept optional MPPT/string topology from callers and use it to
   improve multi-array energy modeling.
 - Non-goal: code-compliance certification, conductor/fuse sizing, and physical
   wiring auto-routing.
 
 ### Parameter sweeps and batch runs
 
-`breos sweep --config ... --output ...` ships an MVP (0.3.3): it expands a
-`[sweep]` parameter grid in a normal App config, runs the Cartesian product
-serially, and writes one combined CSV with varied parameters, resolved system
-sizing, the BREOS version, and top-level scalar result metrics. Research
-workflows often need more than one grid, so remaining work:
+Extend the current single-config, serial `breos sweep --config ... --output ...`
+workflow for research runs that need more than one parameter grid:
 
 - Accept a glob/list of config files resolved into one combined CSV/JSON of
   results.
@@ -397,8 +359,8 @@ preset twice.
   are static and the simulation deterministic, a perfect-foresight day-ahead
   schedule (strategy sees the price series, emits charge/discharge windows
   or SOC targets; the step function stays dumb) is the honest v1 contract.
-  The 0.4.x degradation-session refactor (R6) makes the surrounding energy
-  loop easier to reason about but is not itself the dispatch seam.
+  Planned internal session refactoring may make the surrounding energy loop
+  easier to reason about, but it is not itself the dispatch seam.
 - Non-goal: live tariff APIs, dynamic hourly market prices, FX feeds.
 
 ### Additional Li-ion battery chemistries
@@ -460,13 +422,7 @@ workflows before adding new feature families:
 
 ## Distribution and release automation
 
-### PyPI trusted publishing
-
-Shipped in 0.3.0: `.github/workflows/publish.yml` publishes `v*` tags that
-point at `main` to PyPI via GitHub Actions OIDC trusted publishing, re-runs
-the release artifact verifier before upload, and offers a manually triggered
-TestPyPI dry-run (one-time index and environment configuration documented in
-[docs/release.md](docs/release.md)). Remaining work:
+### Release tag protection
 
 - Protect `v*` tags in GitHub repository settings so only maintainers can
   create release tags.

@@ -1,7 +1,7 @@
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/Str4vinci/breos/develop/docs/_static/BREOS.png">
-    <img alt="BREOS logo" src="https://raw.githubusercontent.com/Str4vinci/breos/develop/docs/_static/BREOS_black.png" width="200">
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/Str4vinci/breos/main/docs/_static/BREOS.png">
+    <img alt="BREOS logo" src="https://raw.githubusercontent.com/Str4vinci/breos/main/docs/_static/BREOS_black.png" width="200">
   </picture>
 </p>
 
