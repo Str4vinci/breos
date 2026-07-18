@@ -334,13 +334,19 @@ pv_dc = calculate_pv_production_dc(weather, location, tilt=35, surface_azimuth=1
 # ...
 ```
 
-## Version 0.3.4 Scope
+## Version 0.4.0 Scope
 
-BREOS 0.3.4 adds an explicit DC/AC energy ledger, cross-year battery-state
-continuity, reconciled PV loss reporting, optimizer/App parity, and a standing
-multi-site validation suite. It also adds opt-in solar-position, diffuse-IAM,
-and mounting-temperature models while keeping `breos.App` as the stable public
-facade and retaining compatibility aliases for existing result fields.
+BREOS 0.4.0 adds opt-in BLAST-Lite battery degradation: a vendored
+`degradation_engine="blast"` path exposing 14 scientifically identified cell
+models, Python (`breos.list_battery_models()`) and CLI (`breos list
+battery-models`) discovery, versioned JSON-safe snapshots with upstream
+provenance, and validation that keeps BLAST disabled for Monte Carlo and
+resistance-fade runs. Dispatch now shares a single PVWatts part-load inverter
+curve between the App energy balance and the public `dc_to_ac()` helper, and
+App configuration resolves user values over sourced battery-profile defaults
+over global defaults. Native Naumann/Lam degradation remains the default,
+`breos.App` remains the stable public facade, and the ambiguous App-level
+`battery_type` selector now raises actionable migration guidance.
 
 ## Weather Data Note
 

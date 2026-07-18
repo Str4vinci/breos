@@ -4,6 +4,8 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-07-18
+
 ### Added
 - Vendored BLAST-Lite degradation models as an opt-in `degradation_engine="blast"`
   path with the `BlastEngine` adapter, daily endpoint-grid integration,
@@ -37,6 +39,9 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   rejected as unknown in 0.3.4, now raises targeted migration guidance instead
   of being repurposed for chemistry/model selection. The lower-level
   `BatteryConfig(battery_type="LFP")` API remains supported.
+
+### Acknowledgments
+- Thanks to Paul Gasper at NLR for suggesting the BLAST-Lite integration.
 
 ## [0.3.4] - 2026-07-14
 
