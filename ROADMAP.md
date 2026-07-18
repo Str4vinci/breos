@@ -3,6 +3,33 @@
 This document tracks planned work that is not yet scheduled. Items here
 are intentions, not commitments — see GitHub issues for active work.
 
+## Release sequencing outlook
+
+Recorded 2026-07 after the 0.4.0 release. Like everything here these are
+intentions, not commitments; reassess after each release.
+
+- **0.4.1 / 0.4.2** — maintainability refactors only (degradation validity
+  checking, result construction, config-validation decomposition in 0.4.1;
+  degradation protocol, snapshot codecs, and BLAST parity tooling in 0.4.2),
+  per the 0.4.x refactor plan. No feature or behavior changes.
+- **0.5.0** — bifacial rear-gain is the firm scope (activation key, explicit
+  rear-gain loss-waterfall stage, benchmark rows). Independently complete
+  PV-fidelity items (the pvsyst real-efficiency fix, additional IAM and
+  cell-temperature models) may ride along if each lands with its own
+  compatibility and benchmark tests.
+- **0.5.x** — the declarative config schema (behavior-preserving, and
+  deliberately before TOU adds another cluster of config keys);
+  horizon-profile input; possibly the degradation-session refactor (R6).
+- **0.6.0** — the currency concept plus phase-1 time-of-use tariff
+  valuation and static presets; flat pricing preserved bit-for-bit.
+- **0.7.0** — opt-in price-aware dispatch behind an explicit
+  dispatch-strategy contract, design doc first.
+- **0.8.0 candidate** — BLAST under Monte Carlo: real continuation,
+  provenance, and performance work, not just removing the current explicit
+  rejection.
+- **1.0** — the recommended-model-profile default flips (and the battery
+  power-limit default), with a clear upgrade note.
+
 ## Model accuracy and validation
 
 The goal is a gold-standard *engine* — PVsyst/HelioScope-class results
@@ -89,15 +116,15 @@ Pareto front toward high DC/AC ratios whose clipping is never seen.
 
 ### Battery charge/discharge power limits
 
-The dispatch loop has no C-rate limits: charging is unbounded (a 5 kWh pack
-absorbs any surplus in a single step) and discharge is bounded only by the
-shared inverter AC rating. Credible sizing studies need power limits.
+**Status: shipped 2026-07 (0.3.4)** — optional battery charge (DC input)
+and discharge (AC delivered) power limits are available through
+`BatteryConfig`, `App`, Monte Carlo, and CLI configuration. Unlimited
+remains the default.
 
-- Add max charge/discharge power keys (or a C-rate key, default ~0.5C),
-  validated in the existing "Unknown X. Available: ..." style.
-- Unlimited stays available explicitly, and the default must be introduced
-  with a documented yield/self-consumption delta — it will change results
-  for small batteries paired with large arrays.
+- Remaining: the default C-rate decision (~0.5C). Introducing a default
+  changes results for small batteries paired with large arrays, so it must
+  ship with a documented yield/self-consumption delta — deferred to the
+  default-policy release (1.0) alongside the recommended-profile flips.
 
 ### Energy loss waterfall
 
@@ -123,6 +150,10 @@ but user-supplied weather files and custom horizons get nothing. Accept a
 horizon profile (azimuth/elevation pairs) and apply it via pvlib's horizon
 tools, documenting the PVGIS overlap so shading is not double-counted.
 
+Planned as a standalone 0.5.x feature, deliberately outside the 0.5.0
+bifacial gate: the PVGIS double-counting semantics and the input format are
+distinct enough to review on their own.
+
 ### Recommended model profile and future defaults
 
 Isotropic transposition, label-timestamp sun position, beam-only IAM, and
@@ -131,7 +162,8 @@ compatibility — but they are not what a gold-standard engine should
 recommend. Define a documented "recommended" profile (haydavies/perez
 transposition, mid-interval sun position, diffuse IAM, mount-appropriate
 thermal coefficients), steer new users to it in the quickstart, and plan
-the default flip for a major version with a clear upgrade note.
+the default flip for a major version (targeted: 1.0) with a clear upgrade
+note, together with the battery power-limit default C-rate decision.
 
 ## Architecture
 
@@ -155,9 +187,23 @@ documentation live in one place.
   caller's input config. The derived `n_modules` is materialised into a fresh
   dict instead of being written back into the dict wrapped by the frozen
   `ResolvedAppConfig`.
-- **Full step (pending):** collapse `DEFAULTS`, the validation rules, and the
-  CLI flag definitions into the schema so a new parameter is added once, not
-  four times.
+- **Full step (pending, targeted at a 0.5.x behavior-preserving release):**
+  collapse `DEFAULTS`, the validation rules, and the CLI flag definitions
+  into the schema so a new parameter is added once, not four times. This is
+  deliberately scheduled *before* the 0.6.0 TOU/currency work adds another
+  cluster of config keys, and deserves its own release slot rather than
+  riding along a feature release.
+- **Coordination with the 0.4.x refactor plan:** phase R3 decomposes the
+  imperative `validate_config` for 0.4.1. If the full schema lands in
+  0.5.x, a four-way R3 decomposition gets rewritten within two releases —
+  either trim R3 to the battery/degradation validation split the 0.4.x
+  degradation refactors actually need, or do full R3 knowing the decomposed
+  validators are transplant material. Decide before 0.4.1 branches.
+- **The hard part is error-message parity**, not the schema itself: the
+  acceptance bar is the same exception types with equally actionable
+  "Unknown X. Available: ..." messages. Off-the-shelf pydantic messages do
+  not meet it, so plan for either a dataclass-with-field-metadata schema
+  with hand-rolled errors, or pydantic behind a message-translation layer.
 - Keep all error messages actionable; preserve current behaviour for valid
   configs (regression-test the example configs in `configs/examples/`).
 
@@ -264,7 +310,9 @@ end-to-end through `build_dc_system_base` and the multi-array path):
   (`pvsyst-freestanding`/`-semi-integrated`/`-insulated`), addressing the
   rooftop over-prediction. Remaining: expose `sapm` and `noct_sam` with
   their parameter sets, and let the pvsyst path take the module's real
-  efficiency instead of pvlib's 0.1 default.
+  efficiency instead of pvlib's 0.1 default — the latter is a natural 0.5.0
+  ride-along, since `PVModuleParams.Module_Efficiency` already exists as
+  explicitly unused metadata.
 - **IAM model choice** — diffuse IAM shipped 2026-07 (0.3.4):
   `diffuse_iam = "marion"` applies the view-factor-integrated ashrae IAM to
   the sky/ground diffuse terms (was beam-only, a ~0.5–1% systematic
@@ -304,22 +352,46 @@ modeling" above.
 
 - **Module input ("unless the panel states it, we can't model it"):** add a
   `bifaciality` factor (rear/front efficiency ratio, ~0.7–0.85 for TOPCon) to
-  `PVModuleParams` and the module catalog in `pv_modules.py`. Absent or zero ⇒
-  front-only, exactly as today.
-- **Site/array inputs:** ground `albedo` (the single biggest driver; ~0.2 grass to
-  ~0.6 snow/sand) and row geometry. Tracking arrays already carry `gcr`; fixed
-  arrays need the `infinite_shed` geometry (gcr, height, pitch).
-- **Model:** use `pvlib.bifacial.infinite_shed.get_irradiance` (pure pvlib, no new
-  dependencies). Prefer it over `pvlib.bifacial.pvfactors.*`, which drags in the
-  `pvfactors`/`shapely` stack — out of scope for the default install.
+  `PVModuleParams` and the module catalog in `pv_modules.py` — as *datasheet
+  metadata only*. Metadata never activates modeling: adding `bifaciality` to a
+  catalog module must not change any existing configuration's results.
+- **Activation is a separate config key:** `bifacial_model = "none" |
+  "infinite_sheds"` (default `"none"`), following the `temperature_model` /
+  `diffuse_iam` pattern. Row geometry is required only when the model is
+  activated, and selecting `"infinite_sheds"` for a module without a sourced
+  `bifaciality` raises in the "Unknown X. Available: ..." style rather than
+  assuming a typical value.
+- **Site/array inputs:** ground `albedo` / `surface_type` already exist
+  (0.3.2); the new inputs are row geometry. Tracking arrays already carry
+  `gcr`; fixed arrays need the infinite-sheds geometry (gcr, height, pitch).
+- **Model:** use `pvlib.bifacial.infinite_sheds.get_irradiance_poa` (pure
+  pvlib, no new dependencies) called for the *back* surface only (flipped
+  tilt/azimuth), and apply `bifaciality` in BREOS code. Do not use
+  `get_irradiance`: its `poa_global` already folds in a silent
+  `bifaciality=0.8` default, which risks double counting (or modeling a rear
+  gain nobody configured). Its narrower transposition support (isotropic /
+  haydavies) then constrains only the rear estimate — the front chain keeps
+  BREOS's full transposition set. Prefer all of this over
+  `pvlib.bifacial.pvfactors.*`, which drags in the `pvfactors`/`shapely`
+  stack — out of scope for the default install.
+- **Documented hybrid limitation:** the front side stays BREOS's existing
+  chain (an unshaded, isolated array) while the rear side sees the
+  infinite-sheds row geometry. That is correct in the small-gcr rooftop
+  limit — BREOS's primary audience — and front-optimistic for dense
+  ground-mount rows. Document it, and consider a warning for tight pitch.
 - **Integration:** compute rear POA inside
   `_compute_effective_irradiance_and_cell_temp` and blend
   `effective_irradiance += bifaciality * poa_rear` before the CEC DC model. The
   stage's output contract (DC-watts series) is unchanged, so nothing downstream
   moves — the whole point of the self-contained PV stage above.
-- Validate against the front-only baseline (`bifaciality=0` must reproduce it
-  bit-for-bit) and document expected rear-gain deltas versus albedo and mounting
-  height.
+- **Diagnostics:** rear gain is an explicit `pv_loss_waterfall` and
+  provenance stage. Both rear gain and the front chain land in effective
+  irradiance before the CEC model, so without its own bucket the gain would
+  be silently absorbed into the transposition stage (or masquerade as an IAM
+  change).
+- Validate against the front-only baseline (`bifacial_model="none"` must
+  reproduce it bit-for-bit) and document expected rear-gain deltas versus
+  albedo and mounting height.
 
 ### String-aware inverter validation and modeling
 
@@ -398,12 +470,42 @@ time-of-use tariffs are standard (ES 2.0TD periods, PT bi/tri-horária, DE
 dynamic tariffs) — and battery economics is BREOS's differentiator.
 Restructure the economics layer so a tariff is a pluggable price time series
 rather than a single scalar, and ship static, documented TOU presets per
-country following the existing `residential_<cc>` convention.
+country following the existing `residential_<cc>` convention. Phase-1
+valuation is targeted at 0.6.0, together with the currency concept from the
+globalization item above — both restructure the same preset/economics
+surface, and doing TOU presets first in bare EUR would mean touching every
+preset twice.
 
 - Requires per-timestep import/export pricing in the results path; the
   flat-price path must reproduce current results bit-for-bit.
-- Later: TOU-aware dispatch (charge/discharge on price signals) as an opt-in
-  strategy — greedy self-consumption stays the default.
+- Valuation does not require touching `simulate_energy_balance()`, but it is
+  not economics-only either: the App runner already re-simulates every year
+  at full timestep resolution, yet retains only year 1's timestep frame and
+  reduces each year to annual import/export totals before economics runs.
+  Phase 1 therefore computes per-year price-weighted import cost and export
+  revenue *inside* the runner's year loop (loop-local aggregation alongside
+  the existing yearly summaries — no retention or schema change).
+- Tariff periods are defined in local wall-clock time (ES 2.0TD, PT
+  horária), so tariff resolution must reuse the timezone-aware alignment
+  machinery from 0.3.4 and survive DST transitions and the
+  TMY-year-replayed-N-times pattern.
+- Currency: existing EUR-named surfaces (`npv_savings_eur`, `lcoe_eur_kwh`,
+  `total_investment_eur`, `battery_replacement_cost_eur`, the financial
+  dicts, sweep CSV columns, plot labels) remain as compatibility aliases for
+  EUR configurations while currency-neutral fields and explicit currency
+  metadata are introduced.
+- Later (0.7.0 target): TOU-aware dispatch (charge/discharge on price
+  signals) as an opt-in strategy — greedy self-consumption stays the
+  default. This needs an explicit dispatch-strategy contract, specified in a
+  design doc before implementation (à la
+  `docs/architecture/string-inverter-sizing.md`). The seam begins around
+  `_dispatch_dc_step` in `breos/battery.py`, which is per-step and
+  memoryless; price-aware dispatch needs lookahead, and since TOU presets
+  are static and the simulation deterministic, a perfect-foresight day-ahead
+  schedule (strategy sees the price series, emits charge/discharge windows
+  or SOC targets; the step function stays dumb) is the honest v1 contract.
+  The 0.4.x degradation-session refactor (R6) makes the surrounding energy
+  loop easier to reason about but is not itself the dispatch seam.
 - Non-goal: live tariff APIs, dynamic hourly market prices, FX feeds.
 
 ### Additional Li-ion battery chemistries
@@ -433,6 +535,22 @@ aging so NMC / NCA packs degrade on their own parameters.
 - Non-goal: electrochemical / physics-based (single-particle, P2D) models — this
   stays an empirical Wöhler-plus-calendar approach, just parameterised per
   chemistry.
+
+**Priority note (2026-07):** the 0.4.0 BLAST integration lowers this item's
+urgency — anyone needing non-LFP degradation can opt into a sourced,
+cell-specific BLAST model today. Lower priority, not obsolete: BLAST
+provides specific cells, not generic NMC/NCA defaults, and it remains
+unavailable under Monte Carlo. Native per-chemistry parameter sets stay on
+the roadmap for the generic-default and MC use cases.
+
+### BLAST under Monte Carlo
+
+BLAST is explicitly rejected in Monte Carlo runs (0.4.0). Enabling it is a
+candidate 0.8.0 headline, after the degradation-protocol and snapshot-codec
+refactors have settled. This is real work, not just removing the rejection:
+per-draw continuation semantics, provenance that identifies the sampled
+configuration per trajectory, and performance (N draws × daily model
+stepping) all need design and testing.
 
 ### 0.3.0 workflow hardening
 
