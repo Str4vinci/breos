@@ -84,7 +84,11 @@ html_static_path = ["_static"]
 html_title = "BREOS"
 
 html_theme_options = {
-    "logo": {"text": "BREOS"},
+    "logo": {
+        "image_light": "_static/BREOS_black.svg",
+        "image_dark": "_static/BREOS.png",
+        "text": "BREOS",
+    },
     "github_url": "https://github.com/Str4vinci/breos",
     "navbar_end": ["version-switcher", "theme-switcher", "navbar-icon-links"],
     "show_prev_next": False,
