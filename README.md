@@ -1,9 +1,18 @@
-# BREOS - Building Renewable Energy Optimization Software
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/Str4vinci/breos/develop/docs/_static/BREOS.png">
+    <img alt="BREOS logo" src="https://raw.githubusercontent.com/Str4vinci/breos/develop/docs/_static/BREOS_black.png" width="200">
+  </picture>
+</p>
 
-[![Tests](https://github.com/Str4vinci/breos/actions/workflows/tests.yml/badge.svg)](https://github.com/Str4vinci/breos/actions/workflows/tests.yml)
-[![PyPI](https://img.shields.io/pypi/v/breos.svg)](https://pypi.org/project/breos/)
-[![License: BSD-3](https://img.shields.io/badge/License-BSD_3--Clause-blue.svg)](LICENSE)
-[![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
+<h1 align="center">BREOS — Building Renewable Energy Optimization Software</h1>
+
+<p align="center">
+<a href="https://github.com/Str4vinci/breos/actions/workflows/tests.yml"><img alt="Tests" src="https://github.com/Str4vinci/breos/actions/workflows/tests.yml/badge.svg"></a>
+<a href="https://pypi.org/project/breos/"><img alt="PyPI" src="https://img.shields.io/pypi/v/breos.svg"></a>
+<a href="LICENSE"><img alt="License: BSD-3" src="https://img.shields.io/badge/License-BSD_3--Clause-blue.svg"></a>
+<a href="https://www.python.org/downloads/"><img alt="Python 3.11+" src="https://img.shields.io/badge/python-3.11+-blue.svg"></a>
+</p>
 
 A Python library for PV and battery energy-system simulation and optimization, designed for research and engineering applications.
 

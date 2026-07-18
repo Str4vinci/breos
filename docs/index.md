@@ -4,6 +4,20 @@ sd_hide_title: true
 
 # BREOS
 
+```{image} _static/BREOS_black.svg
+:alt: BREOS logo
+:width: 220px
+:align: center
+:class: only-light
+```
+
+```{image} _static/BREOS.png
+:alt: BREOS logo
+:width: 220px
+:align: center
+:class: only-dark
+```
+
 ::::{div} sd-text-center sd-fs-2 sd-fw-bold
 BREOS
 ::::
