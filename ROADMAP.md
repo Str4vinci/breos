@@ -20,23 +20,16 @@ intentions, not commitments; reassess after each release.
 - **0.5.x** — the declarative config schema (behavior-preserving, and
   deliberately before TOU adds another cluster of config keys);
   horizon-profile input; possibly the degradation-session refactor (R6).
-- **0.6.0** — the currency concept plus phase-1 time-of-use tariff
+- **0.6.0** — the currency concept plus time-of-use tariff
   valuation and static presets; flat pricing preserved bit-for-bit.
-- **0.7.0** — opt-in price-aware dispatch behind an explicit
-  dispatch-strategy contract, design doc first.
-- **0.8.0 candidate** — BLAST under Monte Carlo: real continuation,
-  provenance, and performance work, not just removing the current explicit
-  rejection.
-- **1.0** — the recommended-model-profile default flips (and the battery
-  power-limit default), with a clear upgrade note.
-
-## Model accuracy and validation
 
 The goal is a gold-standard *engine* — PVsyst/HelioScope-class results
 without the 3D scene modeling. That standard is earned two ways: closing
 known systematic modeling gaps, and publishing reproducible evidence that
 the numbers are right. This work takes priority over architectural
 refactoring (see the deferred adapter layer at the bottom of this document).
+
+## Model accuracy and validation
 
 ### Standing validation and benchmark suite
 
@@ -60,87 +53,25 @@ choice, with deltas documented and tracked over time.
   models) lands with its row in the benchmark table — this generalizes the
   per-item "validate against baseline" notes elsewhere in this roadmap.
 
-### Mid-interval solar position for hourly weather
-
-**Status: shipped opt-in 2026-07 (0.3.4)** — `solar_position = "mid-interval"`
-config key / `--solar-position` CLI flag across the whole solar chain
-(including tracker angles); default unchanged. The zenith/apparent-zenith
-inconsistency in transposition was fixed at the same time. The validation
-suite runs a `perez_mid` config per site; the default flip stays parked at
-the next major version per "Recommended model profile" below.
-
-`solar._prepare_solarpos_and_weather` computes solar position at the
-interval *labels* of hourly averaged irradiance. PVWatts/SAM (and PVsyst,
-equivalently) evaluate sun position at the interval midpoint; using labels
-causes a systematic transposition/AOI error that is worst near
-sunrise/sunset and for east/west-facing arrays, and it biases every
-anisotropic transposition model. This is the cheapest meaningful accuracy
-win available.
-
-- Add a half-interval shift for interval-averaged weather, opt-in at first
-  so existing configs reproduce bit-for-bit, then fold it into the
-  recommended profile (below).
-- While in there, pass `apparent_zenith` consistently: AOI already uses it,
-  but `get_total_irradiance` currently receives the true `zenith`.
-- Document the expected annual-yield delta via the benchmark suite.
-
 ### One inverter model everywhere (App, dc_to_ac, optimizer)
 
-**Status: largely done 2026-07 (0.3.3/0.3.4)** — `dc_to_ac` clips at the
-true AC nameplate (0.3.3); the NSGA-II optimizer now simulates candidates
-with the CAPEX-matched AC nameplate, prices them with the same estimation
+Remaining: unify the `App` energy balance's flat-efficiency conversion with
+the pvwatts part-load curve. `dc_to_ac` already clips at the true AC
+nameplate (0.3.3), and the NSGA-II optimizer now simulates candidates with
+the CAPEX-matched AC nameplate, prices them with the same estimation
 formulas as `cost_analysis_projection` (equivalence enforced by
-`tests/test_optimization_parity.py`), and passes the load to
-`simulate_energy_balance` unmangled so its timezone-aware alignment applies
-(0.3.4). Battery replacement costs now use a documented year-1-SOH projection
-in optimizer scoring; the App retains the higher-fidelity multiyear trajectory.
-Remaining: unifying the App's
-flat-efficiency conversion with the pvwatts part-load curve.
-
-Three inverter representations exist today and they disagree: the `App`
-energy balance uses a flat efficiency plus an AC cap treated as the
-nameplate; `solar.dc_to_ac` uses pvlib's pvwatts part-load curve but passes
-the intended AC nameplate as pvlib's `pdc0` (a *DC input* limit), so it
-clips ~4% low; and the NSGA-II optimizer applies no AC clipping at all and
-prices systems without the daily connection fee or battery replacements.
-Designs are picked by one model and reported by another, which biases the
-Pareto front toward high DC/AC ratios whose clipping is never seen.
+`tests/test_optimization_parity.py`), and passes the load through
+`simulate_energy_balance` unmangled (0.3.4). What is left is the `App`
+energy balance, which still uses a flat efficiency plus an AC cap treated as
+the nameplate.
 
 - Unify on a single conversion model (the pvwatts part-load curve is the
   better physics) with one definition of the AC nameplate.
-- Make "the optimizer scores designs with the same engine that reports
+- Keep "the optimizer scores designs with the same engine that reports
   them" a regression-tested invariant; this includes aligning
   `align_load_to_pv` with the App's wall-clock/UTC load alignment.
-- This extends Phase 1 of "String-aware inverter validation and modeling"
-  below and subsumes its App-only scope.
-
-### Battery charge/discharge power limits
-
-**Status: shipped 2026-07 (0.3.4)** — optional battery charge (DC input)
-and discharge (AC delivered) power limits are available through
-`BatteryConfig`, `App`, Monte Carlo, and CLI configuration. Unlimited
-remains the default.
-
-- Remaining: the default C-rate decision (~0.5C). Introducing a default
-  changes results for small batteries paired with large arrays, so it must
-  ship with a documented yield/self-consumption delta — deferred to the
-  default-policy release (1.0) alongside the recommended-profile flips.
-
-### Energy loss waterfall
-
-**Status: seeded 2026-07 (0.3.4)** — `App.result()` / `breos run` JSON now
-include `pv_loss_waterfall` with transposition, IAM, temperature, static
-PVWatts, year-1 degradation, inverter clipping/conversion, battery
-round-trip, standby, and surplus-curtailment buckets, plus
-`plot_pv_loss_waterfall` for a visual PV loss diagram.
-
-PVsyst's loss diagram is its most-loved diagnostic, and it is pure engine
-work: report the chain transposition gain → IAM → temperature → static
-PVWatts stack (already componentized) → inverter clipping → conversion →
-battery round-trip → curtailment. Today curtailed energy in the surplus
-branch vanishes without a trace, and `inverter.InverterConversionResult`
-already carries clipping bookkeeping but has no production caller. Surface
-the waterfall in `App.result()` and the CLI JSON output.
+- Extends Phase 1 of "String-aware inverter validation and modeling" below
+  and subsumes its App-only scope.
 
 ### Horizon-profile input
 
@@ -163,7 +94,9 @@ recommend. Define a documented "recommended" profile (haydavies/perez
 transposition, mid-interval sun position, diffuse IAM, mount-appropriate
 thermal coefficients), steer new users to it in the quickstart, and plan
 the default flip for a major version (targeted: 1.0) with a clear upgrade
-note, together with the battery power-limit default C-rate decision.
+note, together with the battery power-limit default C-rate decision (~0.5C,
+which changes results for small batteries paired with large arrays and so
+must ship with a documented yield/self-consumption delta).
 
 ## Architecture
 
@@ -178,15 +111,6 @@ sync with the defaults. Replace it with a single declarative schema (a
 dataclass with field metadata, or `pydantic`) so defaults, types, bounds, and
 documentation live in one place.
 
-- **Near-term first step — shipped in 0.3.2:** unknown top-level config keys
-  are now rejected. A typo such as `batery_kwh` previously slipped through
-  `merge_defaults` and silently defaulted (e.g. the battery to `0.0`),
-  producing plausible-but-wrong results; it now raises listing the offending
-  key(s) in the existing "Unknown X. Available: ..." style.
-- **Side cleanup — shipped in 0.3.2:** resolution no longer mutates the
-  caller's input config. The derived `n_modules` is materialised into a fresh
-  dict instead of being written back into the dict wrapped by the frozen
-  `ResolvedAppConfig`.
 - **Full step (pending, targeted at a 0.5.x behavior-preserving release):**
   collapse `DEFAULTS`, the validation rules, and the CLI flag definitions
   into the schema so a new parameter is added once, not four times. This is
@@ -234,10 +158,12 @@ explicit, reproducible, and visible at startup.
 
 ### Make the first successful run easier to trust
 
-The 0.3.0 onboarding pass added the "10-minute first run" quickstart,
-the required-inputs page, the recipes page, the generated packaged-options
+The 0.3.0 onboarding pass shipped the "10-minute first run" quickstart, the
+required-inputs page, the recipes page, the generated packaged-options
 reference, the `breos list` discovery commands, and `breos validate-config` /
-`breos run --dry-run` config inspection with `--json` output. Remaining work:
+`breos run --dry-run` config inspection with `--json` output (the dry-run
+summary now includes the fully resolved static PVWatts loss components and
+combined loss percentage after applying `pv_loss_overrides`). Remaining work:
 
 Ongoing docs hygiene:
 
@@ -252,12 +178,6 @@ Ongoing docs hygiene:
 Option discovery work:
 
 - Add matching Python helpers where useful, building on `list_modules()`.
-
-Config inspection work:
-
-- **Shipped in 0.3.3:** the dry-run / `validate-config --json` summary now
-  includes the fully resolved static PVWatts loss components and combined loss
-  percentage after applying `pv_loss_overrides`.
 
 Agent and contributor setup:
 
@@ -281,7 +201,7 @@ boundary firm is what lets us progressively "turn on" more of pvlib without
 destabilising the rest of the engine.
 
 This is the functional, data-flow counterpart to "Wrap third-party modules behind
-adapters" ([#11](https://github.com/Str4vinci/breos/issues/11)) above: adapters
+adapters" ([#11](https://github.com/Str4vinci/breos/issues/11)) below: adapters
 own the *types* crossing the boundary; this item owns the *contract* that boundary
 guarantees.
 
@@ -298,48 +218,25 @@ Principles:
 - Validate every new model against the current baseline on at least one reference
   location and document the expected annual-yield delta.
 
-Capabilities to bring fully online, roughly in order (tracking is already wired
+Capabilities still to bring online (transposition is already selectable via
+`transposition_model` / `sky_model` since 0.3.2, and tracking is wired
 end-to-end through `build_dc_system_base` and the multi-array path):
 
-- **Configurable transposition models** — shipped in 0.3.2 (see the dedicated
-  item below).
 - **Bifacial rear-gain** — see the dedicated item below.
 - **Cell-temperature model choice** — mount-type presets shipped 2026-07
-  (0.3.4): `temperature_model` selects `faiman` (default, open rack,
-  bit-for-bit) or the PVsyst mounting presets
-  (`pvsyst-freestanding`/`-semi-integrated`/`-insulated`), addressing the
-  rooftop over-prediction. Remaining: expose `sapm` and `noct_sam` with
-  their parameter sets, and let the pvsyst path take the module's real
-  efficiency instead of pvlib's 0.1 default — the latter is a natural 0.5.0
-  ride-along, since `PVModuleParams.Module_Efficiency` already exists as
-  explicitly unused metadata.
-- **IAM model choice** — diffuse IAM shipped 2026-07 (0.3.4):
-  `diffuse_iam = "marion"` applies the view-factor-integrated ashrae IAM to
-  the sky/ground diffuse terms (was beam-only, a ~0.5–1% systematic
-  overestimate; moves BREOS toward PVGIS at all seven validation sites).
-  Remaining: expose `martin_ruiz`, `physical`, and the SAPM IAM for the
-  beam term.
+  (0.3.4: `temperature_model` selects `faiman` or the PVsyst mounting
+  presets). Remaining: expose `sapm` and `noct_sam` with their parameter
+  sets, and let the pvsyst path take the module's real efficiency instead of
+  pvlib's 0.1 default — a natural 0.5.0 ride-along, since
+  `PVModuleParams.Module_Efficiency` already exists as explicitly unused
+  metadata.
+- **IAM model choice** — diffuse IAM shipped 2026-07 (0.3.4:
+  `diffuse_iam = "marion"`). Remaining: expose `martin_ruiz`, `physical`,
+  and the SAPM IAM for the beam term.
 - **DC-side loss refinements** — optional time-series ohmic/soiling/snow models in
   place of (parts of) the flat PVWatts loss stack, where inputs allow.
 - Non-goal: replacing the CEC single-diode core or the PVWatts loss model as the
   defaults. This is about *optional* fidelity, not a new default engine.
-
-### Configurable sky-diffusion (transposition) models
-
-**Shipped in 0.3.2.** The sky-diffusion (transposition) model is now selectable
-via a `transposition_model` (a.k.a. `sky_model`) config key and
-`--transposition-model` / `--sky-model` CLI flag, threaded through
-`calculate_pv_production_dc`, the tracking and multi-array variants, and the
-`App` config surface, with per-array overrides. Supported models: `isotropic`
-(default, reproduces prior results bit-for-bit), `klucher`, `haydavies`,
-`reindl`, `king`, `perez`, and `perez-driesse`, with the extra inputs the
-anisotropic models need (extraterrestrial DNI, relative airmass) derived
-internally. Configurable ground reflectance (`albedo` / `surface_type`) and
-Perez coefficient set (`model_perez`) shipped alongside. See the CHANGELOG for
-details.
-
-Spectral irradiance modeling remains a non-goal for this item; bifacial
-rear-gain is tracked separately — see "Bifacial rear-gain modeling" below.
 
 ### Bifacial rear-gain modeling
 
@@ -402,9 +299,9 @@ string-aware validation and, later, string-aware inverter modeling when callers
 provide module, inverter, environment, MPPT, and string-topology data.
 
 - Design note: [docs/architecture/string-inverter-sizing.md](docs/architecture/string-inverter-sizing.md)
-- Phase 1: apply aggregate inverter AC clipping consistently in the main
-  `App` energy flow. Shipped for the `App` path; extended and superseded by
-  "One inverter model everywhere" under Model accuracy and validation.
+- Phase 1 (apply aggregate inverter AC clipping consistently in the `App`
+  energy flow) shipped and is extended/superseded by "One inverter model
+  everywhere" under Model accuracy and validation.
 - Phase 2: add a pure validation API for string voltage windows, startup
   voltage, MPPT current limits, parallel-string compatibility, and DC/AC ratio
   warnings.
@@ -417,22 +314,18 @@ provide module, inverter, environment, MPPT, and string-topology data.
 
 ### Parameter sweeps and batch runs
 
-The CLI runs one config to one result (`breos run --config ... --output ...`).
-Research workflows often set up *many* configs — parametric sweeps over module
-count, battery size, tilt, tariffs, and so on — which today means scripting the
-Python `App` in a loop by hand. Add a first-class way to enumerate a parameter
-grid (or a set of config files) and collect the per-run results into one table.
+`breos sweep --config ... --output ...` ships an MVP (0.3.3): it expands a
+`[sweep]` parameter grid in a normal App config, runs the Cartesian product
+serially, and writes one combined CSV with varied parameters, resolved system
+sizing, the BREOS version, and top-level scalar result metrics. Research
+workflows often need more than one grid, so remaining work:
 
-- **MVP shipped in 0.3.3:** `breos sweep --config ... --output ...` expands a
-  `[sweep]` parameter grid in a normal App config, runs the Cartesian product
-  serially, and writes one combined CSV with varied parameters, resolved system
-  sizing, the BREOS version, and top-level scalar result metrics.
-- Remaining work: accept a glob/list of config files resolved into one combined
-  CSV/JSON of results.
-- Remaining work: reuse the worker controls planned under "Resource controls
-  and Apple Silicon hygiene" for parallel execution of independent runs.
-- Remaining work: optionally echo a fuller resolved-config payload per row when
-  users need more than the current resolved sizing columns.
+- Accept a glob/list of config files resolved into one combined CSV/JSON of
+  results.
+- Reuse the worker controls planned under "Resource controls and Apple
+  Silicon hygiene" for parallel execution of independent runs.
+- Optionally echo a fuller resolved-config payload per row when users need
+  more than the current resolved sizing columns.
 - Non-goal: this is explicit enumeration, not optimization — the `optimization`
   module's NSGA-II sizing already covers searching for good designs.
 
@@ -552,11 +445,11 @@ per-draw continuation semantics, provenance that identifies the sampled
 configuration per trajectory, and performance (N draws × daily model
 stepping) all need design and testing.
 
-### 0.3.0 workflow hardening
+### Workflow hardening
 
-The 0.3.0 public surface focuses on deterministic PV + stationary-battery
+The public surface focuses on deterministic PV + stationary-battery
 simulation, economic analysis, Monte Carlo uncertainty studies, and
-multi-objective PV/battery sizing. Near-term roadmap items should harden those
+multi-objective PV/battery sizing. Near-term work should harden those
 workflows before adding new feature families:
 
 - Keep Monte Carlo outputs and plots aligned with the public result schema.
@@ -564,9 +457,6 @@ workflows before adding new feature families:
   demos without committing large weather files.
 - Improve multi-objective sizing examples, result serialization, and Pareto
   plotting documentation.
-- **Shipped in 0.3.3:** release smoke tests cover the README quickstart, the
-  Monte Carlo example path with generated local weather, and the pymoo-backed
-  multi-objective optimization helper.
 
 ## Distribution and release automation
 
@@ -575,8 +465,8 @@ workflows before adding new feature families:
 Shipped in 0.3.0: `.github/workflows/publish.yml` publishes `v*` tags that
 point at `main` to PyPI via GitHub Actions OIDC trusted publishing, re-runs
 the release artifact verifier before upload, and offers a manually triggered
-TestPyPI dry-run. The one-time index and environment configuration is
-documented in [docs/release.md](docs/release.md). Remaining work:
+TestPyPI dry-run (one-time index and environment configuration documented in
+[docs/release.md](docs/release.md)). Remaining work:
 
 - Protect `v*` tags in GitHub repository settings so only maintainers can
   create release tags.
