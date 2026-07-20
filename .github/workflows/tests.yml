@@ -2,12 +2,19 @@ name: Tests
 
 on:
   push:
-    branches: [main, develop]
+    branches: [main, develop, "release/**"]
   pull_request:
-    branches: [main, develop]
+    branches: [main, develop, "release/**"]
+  # Slow endurance/multi-year tests run nightly, on demand, and as a release gate.
+  schedule:
+    - cron: "0 4 * * *"  # 04:00 UTC every day
+  workflow_dispatch:
 
 jobs:
   test:
+    # The default fast suite runs on pushes and PRs (including release/**),
+    # not on the scheduled/dispatch slow runs.
+    if: github.event_name == 'push' || github.event_name == 'pull_request'
     runs-on: ubuntu-latest
 
     strategy:
@@ -37,6 +44,7 @@ jobs:
         run: uv run ruff format --check breos/ tests/ tools/
 
       - name: Run tests
+        # Slow tests are deselected by default (pyproject addopts: -m "not slow").
         run: uv run pytest tests/ -v
 
       - name: Verify release artifacts
@@ -44,3 +52,31 @@ jobs:
 
       - name: Build docs
         run: uv run --extra docs sphinx-build -b html docs docs/_build/html
+
+  slow-tests:
+    # Long-running endurance tests on Python 3.12. Release pushes and PRs run
+    # this gate automatically; other branches rely on the nightly/manual runs.
+    if: >-
+      github.event_name == 'schedule' ||
+      github.event_name == 'workflow_dispatch' ||
+      startsWith(github.ref, 'refs/heads/release/') ||
+      startsWith(github.base_ref, 'release/')
+    runs-on: ubuntu-latest
+
+    env:
+      UV_PYTHON: "3.12"
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Install dependencies
+        run: uv sync --extra dev
+
+      - name: Run slow tests
+        run: uv run pytest tests/ -m slow -v

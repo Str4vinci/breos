@@ -1,6 +1,6 @@
 [project]
 name = "breos"
-version = "0.3.4"
+version = "0.4.0"
 description = "Python library for PV and battery energy-system simulation and optimization"
 readme = "README.md"
 license = "BSD-3-Clause"
@@ -75,6 +75,14 @@ docs = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# Slow endurance/multi-year tests are deselected by default so the normal suite
+# stays fast. Run them explicitly with `pytest -m slow` (the scheduled CI job
+# and the release verification both do this); `-m slow` on the command line
+# overrides this default marker expression.
+addopts = ["-m", "not slow"]
+markers = [
+    "slow: long-running endurance and multi-year integration tests; deselected by default, run with -m slow",
+]
 
 [tool.ruff]
 line-length = 120
