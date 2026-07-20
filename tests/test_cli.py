@@ -147,6 +147,45 @@ def test_list_modules_json_outputs_catalog(capsys):
     assert any(row["key"] == "Generic_400W" and row["power_w"] == 400 for row in output)
 
 
+def test_list_battery_models_exposes_scientific_metadata(capsys):
+    exit_code = cli.main(["list", "battery-models", "--json"])
+
+    assert exit_code == 0
+    output = json.loads(capsys.readouterr().out)
+    assert len(output) == 14
+    lfp = next(row for row in output if row["key"] == "lfp_gr_250ah_prismatic")
+    assert lfp["chemistry"] == "LFP/graphite"
+    assert lfp["cell_format"] == "prismatic"
+    assert lfp["experimental_range"]["cycling_temperature_c"] == [10, 45]
+    assert lfp["release_phase"] == "core"
+
+
+def test_run_cli_threads_blast_selection(monkeypatch, tmp_path):
+    monkeypatch.setattr(cli, "App", FakeApp)
+    FakeApp.seen_config = None
+    config_path = tmp_path / "quickstart.toml"
+    config_path.write_text(
+        'location = "porto"\nn_modules = 10\nannual_consumption_kwh = 4000\nbattery_kwh = 5.0\n',
+        encoding="utf-8",
+    )
+
+    exit_code = cli.main(
+        [
+            "run",
+            "--config",
+            str(config_path),
+            "--degradation-engine",
+            "blast",
+            "--blast-model",
+            "lfp_gr_250ah_prismatic",
+        ]
+    )
+
+    assert exit_code == 0
+    assert FakeApp.seen_config["degradation_engine"] == "blast"
+    assert FakeApp.seen_config["blast_model"] == "lfp_gr_250ah_prismatic"
+
+
 def test_validate_config_summarizes_without_simulation(tmp_path, capsys):
     config_path = tmp_path / "quickstart.toml"
     config_path.write_text(
@@ -196,6 +235,8 @@ battery_kwh = 5.0
     assert output["pv"]["n_modules"] == 10
     assert output["pv"]["losses"]["components_pct"]["shading"] == 3.0
     assert 14.0 < output["pv"]["losses"]["combined_pct"] < 15.0
+    assert output["battery"]["degradation_engine"] == "native"
+    assert output["battery"]["blast_model"] is None
 
 
 def test_sweep_expands_grid_and_writes_combined_csv(monkeypatch, tmp_path, capsys):

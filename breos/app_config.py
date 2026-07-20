@@ -9,6 +9,7 @@ from numbers import Real
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from breos.degradation.profiles import ENABLED_BLAST_MODEL_KEYS, apply_battery_profile_defaults
 from breos.economics import CostParams, calculate_costs
 from breos.emissions import EmissionsParams
 from breos.pv_modules import MODULES, PVModuleParams, get_module
@@ -62,12 +63,15 @@ DEFAULTS: dict[str, Any] = {
     "export_emissions_factor_gco2_kwh": None,
     "pv_degradation_rate": 0.005,
     "calendar_model": "naumann_lam_field_calibrated",
+    "degradation_engine": "native",
+    "blast_model": None,
     "battery_min_soc": 0.10,
     "battery_max_soc": 0.90,
     "battery_eol_percentage": 0.70,
     "battery_rte": None,
     "battery_max_charge_power_w": None,
     "battery_max_discharge_power_w": None,
+    "enable_resistance_fade": False,
     "dc_coupled": True,
     "inverter_efficiency": 0.96,
     "inverter_loading_ratio": 1.25,
@@ -85,6 +89,7 @@ ALLOWED_CONFIG_KEYS: frozenset[str] = frozenset(DEFAULTS) | {
     "annual_consumption_kwh",
     "n_modules",
     "montecarlo",
+    "battery_type",
 }
 
 
@@ -115,8 +120,8 @@ def load_json(name: str) -> dict[str, Any]:
 
 
 def merge_defaults(config: dict[str, Any]) -> dict[str, Any]:
-    """Return a mutable config with App defaults applied."""
-    return {**DEFAULTS, **config}
+    """Apply user values over BLAST profile defaults over global defaults."""
+    return apply_battery_profile_defaults(DEFAULTS, config)
 
 
 def _validate_sky_settings(
@@ -150,6 +155,11 @@ def _validate_sky_settings(
 
 def validate_config(cfg: dict[str, Any]) -> None:
     """Validate user-facing App config before resolving derived values."""
+    if "battery_type" in cfg:
+        raise ValueError(
+            "'battery_type' is an ambiguous legacy selector and is not supported by App. "
+            "Use degradation_engine='native' (default), or set degradation_engine='blast' with blast_model='<key>'."
+        )
     unknown = set(cfg) - ALLOWED_CONFIG_KEYS
     if unknown:
         available = ", ".join(sorted(ALLOWED_CONFIG_KEYS))
@@ -290,6 +300,27 @@ def validate_config(cfg: dict[str, Any]) -> None:
         date.fromisoformat(cfg["start_date"])
     except ValueError as exc:
         raise ValueError("'start_date' must be a valid ISO date (YYYY-MM-DD)") from exc
+
+    if not isinstance(cfg["enable_resistance_fade"], bool):
+        raise TypeError("'enable_resistance_fade' must be a boolean")
+
+    degradation_engine = str(cfg["degradation_engine"]).strip().lower()
+    if degradation_engine not in ("native", "blast"):
+        raise ValueError("'degradation_engine' must be one of: native, blast")
+    cfg["degradation_engine"] = degradation_engine
+
+    if degradation_engine == "blast":
+        if cfg["battery_kwh"] <= 0:
+            raise ValueError("'degradation_engine=blast' requires 'battery_kwh' > 0")
+        if "montecarlo" in cfg:
+            raise ValueError("'degradation_engine=blast' is not supported with Monte Carlo yet")
+        if cfg["enable_resistance_fade"]:
+            raise ValueError("'degradation_engine=blast' cannot be combined with 'enable_resistance_fade'")
+        if cfg["blast_model"] not in ENABLED_BLAST_MODEL_KEYS:
+            available = ", ".join(ENABLED_BLAST_MODEL_KEYS)
+            raise ValueError(f"Unknown blast_model {cfg['blast_model']!r}. Available: {available}")
+    elif cfg["blast_model"] is not None:
+        raise ValueError("'blast_model' requires 'degradation_engine=blast'; native degradation remains the default")
 
 
 def _is_int(value: Any) -> bool:

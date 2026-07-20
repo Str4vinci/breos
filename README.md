@@ -1,9 +1,18 @@
-# BREOS - Building Renewable Energy Optimization Software
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/Str4vinci/breos/main/docs/_static/BREOS.png">
+    <img alt="BREOS logo" src="https://raw.githubusercontent.com/Str4vinci/breos/main/docs/_static/BREOS_black.png" width="200">
+  </picture>
+</p>
 
-[![Tests](https://github.com/Str4vinci/breos/actions/workflows/tests.yml/badge.svg)](https://github.com/Str4vinci/breos/actions/workflows/tests.yml)
-[![PyPI](https://img.shields.io/pypi/v/breos.svg)](https://pypi.org/project/breos/)
-[![License: BSD-3](https://img.shields.io/badge/License-BSD_3--Clause-blue.svg)](LICENSE)
-[![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
+<h1 align="center">BREOS — Building Renewable Energy Optimization Software</h1>
+
+<p align="center">
+<a href="https://github.com/Str4vinci/breos/actions/workflows/tests.yml"><img alt="Tests" src="https://github.com/Str4vinci/breos/actions/workflows/tests.yml/badge.svg"></a>
+<a href="https://pypi.org/project/breos/"><img alt="PyPI" src="https://img.shields.io/pypi/v/breos.svg"></a>
+<a href="LICENSE"><img alt="License: BSD-3" src="https://img.shields.io/badge/License-BSD_3--Clause-blue.svg"></a>
+<a href="https://www.python.org/downloads/"><img alt="Python 3.11+" src="https://img.shields.io/badge/python-3.11+-blue.svg"></a>
+</p>
 
 A Python library for PV and battery energy-system simulation and optimization, designed for research and engineering applications.
 
@@ -221,10 +230,11 @@ PV loss overrides, battery SOC limits, tariffs, inflation, and discounting.
   (default `isotropic`), with `albedo`/`surface_type` for ground reflectance
   and `model_perez` for the Perez coefficient set (see configuration docs). See
   [docs/resources.md](docs/resources.md) for pvlib and PV model references.
-- **Inverter**: the energy balance applies a flat `inverter_efficiency` and
-  clips AC output (PV and battery discharge combined) at the inverter rating
-  implied by `inverter_loading_ratio` — the same rating used for inverter
-  CAPEX. DC surplus above the rating can still charge a DC-coupled battery.
+- **Inverter**: the energy balance and `dc_to_ac()` use the same PVWatts
+  part-load curve, parameterized by nominal `inverter_efficiency`, and clip
+  PV and battery discharge at their shared AC rating implied by
+  `inverter_loading_ratio` — the same rating used for inverter CAPEX. DC
+  surplus above the rating can still charge a DC-coupled battery.
 - **Battery SOC window**: `battery_kwh` is the nominal pack capacity. The
   energy balance only cycles the battery between `battery_min_soc` and
   `battery_max_soc`, so the effective storage swing is
@@ -299,6 +309,23 @@ single representative tilt/azimuth.
 
 ## Advanced Usage
 
+### Opt-in BLAST degradation models
+
+Native Naumann/Lam degradation remains the default. Select BLAST explicitly
+with `degradation_engine = "blast"` and a stable `blast_model` key. Discover
+the 14 scientifically identified vendored cell models with
+`breos.list_battery_models()` or `breos list battery-models`; the output
+includes chemistry, form factor, experimental range, citations, capabilities,
+and upstream provenance. Strict App config validation already rejected the
+ambiguous `battery_type` selector in 0.3.4; 0.4.0 gives that input an actionable
+migration error. Lower-level `BatteryConfig(battery_type="LFP")` remains
+supported for native degradation.
+
+BLAST model profiles never invent generic chemistry defaults. Resolution is
+user config over sourced profile defaults over global defaults. BLAST remains
+opt-in, and BLAST plus Monte Carlo is rejected explicitly rather than falling
+back to native degradation. BLAST also requires a positive `battery_kwh`.
+
 For full control over individual simulation steps, use the lower-level modules directly:
 
 ```python
@@ -316,13 +343,19 @@ pv_dc = calculate_pv_production_dc(weather, location, tilt=35, surface_azimuth=1
 # ...
 ```
 
-## Version 0.3.4 Scope
+## Version 0.4.0 Scope
 
-BREOS 0.3.4 adds an explicit DC/AC energy ledger, cross-year battery-state
-continuity, reconciled PV loss reporting, optimizer/App parity, and a standing
-multi-site validation suite. It also adds opt-in solar-position, diffuse-IAM,
-and mounting-temperature models while keeping `breos.App` as the stable public
-facade and retaining compatibility aliases for existing result fields.
+BREOS 0.4.0 adds opt-in BLAST-Lite battery degradation: a vendored
+`degradation_engine="blast"` path exposing 14 scientifically identified cell
+models, Python (`breos.list_battery_models()`) and CLI (`breos list
+battery-models`) discovery, versioned JSON-safe snapshots with upstream
+provenance, and validation that keeps BLAST disabled for Monte Carlo and
+resistance-fade runs. Dispatch now shares a single PVWatts part-load inverter
+curve between the App energy balance and the public `dc_to_ac()` helper, and
+App configuration resolves user values over sourced battery-profile defaults
+over global defaults. Native Naumann/Lam degradation remains the default,
+`breos.App` remains the stable public facade, and the ambiguous App-level
+`battery_type` selector now raises actionable migration guidance.
 
 ## Weather Data Note
 

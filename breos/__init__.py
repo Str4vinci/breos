@@ -93,6 +93,14 @@ from breos.constants import (
     Z_R,
 )
 
+# Battery degradation model discovery
+from breos.degradation import (
+    BATTERY_MODEL_REGISTRY,
+    BatteryModelProfile,
+    get_battery_model_profile,
+    list_battery_models,
+)
+
 # Economics
 from breos.economics import (
     CostParams,
@@ -117,6 +125,7 @@ from breos.inverter import (
     InverterConfig,
     InverterConversionResult,
     calculate_dc_ac_power,
+    dc_power_for_ac_output,
     get_inverter_preset,
 )
 
@@ -318,9 +327,14 @@ __all__ = [
     # Inverter
     "get_inverter_preset",
     "calculate_dc_ac_power",
+    "dc_power_for_ac_output",
     # Battery
     "simulate_energy_balance",
     "apply_indoor_temperature_model",
+    "list_battery_models",
+    "get_battery_model_profile",
+    "BatteryModelProfile",
+    "BATTERY_MODEL_REGISTRY",
     # Emissions
     "calculate_co2_savings",
     "calculate_co2_projection",

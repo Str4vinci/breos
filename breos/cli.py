@@ -14,6 +14,7 @@ from typing import Any, Sequence
 
 from breos.app import App
 from breos.app_config import resolve_app_config
+from breos.degradation import get_battery_model_profile, list_battery_models
 from breos.load_profiles import PROFILE_ALIASES, PROFILE_NAMES
 from breos.pv_modules import MODULES
 from breos.resources import load_config_json
@@ -90,6 +91,8 @@ def _build_config(args: argparse.Namespace) -> dict[str, Any]:
     _add_override(overrides, "discount_rate", args.discount_rate)
     _add_override(overrides, "pv_degradation_rate", args.pv_degradation_rate)
     _add_override(overrides, "calendar_model", args.calendar_model)
+    _add_override(overrides, "degradation_engine", args.degradation_engine)
+    _add_override(overrides, "blast_model", args.blast_model)
     _add_override(overrides, "dc_coupled", args.dc_coupled)
     _add_override(overrides, "inverter_efficiency", args.inverter_efficiency)
     _add_override(overrides, "inverter_loading_ratio", args.inverter_loading_ratio)
@@ -174,6 +177,11 @@ def _resolved_config_summary(config: dict[str, Any]) -> dict[str, Any]:
             "max_soc": cfg["battery_max_soc"],
             "eol_percentage": cfg["battery_eol_percentage"],
             "round_trip_efficiency": cfg["battery_rte"] if cfg["battery_rte"] is not None else 0.95,
+            "degradation_engine": cfg["degradation_engine"],
+            "blast_model": cfg["blast_model"],
+            "model_profile": (
+                get_battery_model_profile(cfg["blast_model"]).as_dict() if cfg["blast_model"] is not None else None
+            ),
         },
         "economics": {
             "cost_preset": cfg["cost_preset"],
@@ -259,6 +267,9 @@ def _load_options(category: str) -> list[dict[str, Any]]:
             for key, name in sorted(PROFILE_NAMES.items())
         ]
 
+    if category == "battery-models":
+        return list_battery_models()
+
     raise ValueError(f"Unknown list category: {category}")
 
 
@@ -287,6 +298,11 @@ def _format_options(category: str, rows: list[dict[str, Any]]) -> str:
             alias_text = f"; aliases: {row['aliases']}" if row.get("aliases") else ""
             lines.append(f"{row['key']}: {name} ({status}{alias_text})")
         return "\n".join(lines)
+    if category == "battery-models":
+        return "\n".join(
+            f"{row['key']}: {row['name']} ({row['chemistry']}, {row['cell_format']}; {row['release_phase']})"
+            for row in rows
+        )
     raise ValueError(f"Unknown list category: {category}")
 
 
@@ -562,6 +578,12 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--pv-degradation-rate", type=float, help="Annual PV degradation rate.")
     run.add_argument("--calendar-model", help="Battery calendar aging model.")
     run.add_argument(
+        "--degradation-engine",
+        choices=("native", "blast"),
+        help="Battery degradation engine (default: native Naumann/Lam).",
+    )
+    run.add_argument("--blast-model", help="Stable BLAST battery-model key; requires --degradation-engine blast.")
+    run.add_argument(
         "--dc-coupled",
         dest="dc_coupled",
         action="store_true",
@@ -579,7 +601,7 @@ def build_parser() -> argparse.ArgumentParser:
     list_parser = subparsers.add_parser("list", help="List packaged option keys.")
     list_parser.add_argument(
         "category",
-        choices=("locations", "modules", "cost-presets", "emissions", "load-profiles"),
+        choices=("locations", "modules", "cost-presets", "emissions", "load-profiles", "battery-models"),
         help="Packaged option category to list.",
     )
     list_parser.add_argument("--json", action="store_true", help="Write machine-readable JSON.")

@@ -11,6 +11,7 @@ import pandas as pd
 from breos.app_config import ResolvedAppConfig, build_costs_dict
 from breos.app_inputs import AppRuntimeDependencies, prepare_simulation_inputs
 from breos.battery import BatteryConfig, simulate_energy_balance
+from breos.degradation.profiles import BLAST_STATE_SCHEMA_VERSION, get_battery_model_profile
 from breos.economics import calculate_lcoe_from_projection, cost_analysis_projection, find_payback_year
 from breos.solar import PVProductionBreakdown
 from breos.utils import get_hours_per_step
@@ -31,6 +32,7 @@ class SimulationArtifacts:
     total_replacement_cost: float
     pv_loss_waterfall: dict[str, Any]
     weather_metadata: dict[str, Any]
+    degradation_summary: dict[str, Any]
 
 
 LEDGER_SCHEMA_VERSION = "1.0"
@@ -230,6 +232,9 @@ def run_app_simulation(
     cumulative_cycle_deg = 0.0
     cumulative_cal_deg = 0.0
     current_soh = 100.0
+    degradation_engine = str(cfg.get("degradation_engine", "native")).strip().lower()
+    blast_model = cfg.get("blast_model")
+    degradation_state: dict[str, Any] | None = None
     total_replacements = 0
     total_replacement_cost = 0.0
     yearly_summaries: list[dict[str, Any]] = []
@@ -263,6 +268,7 @@ def run_app_simulation(
                 calendar_model=cfg["calendar_model"],
                 max_charge_power_w=cfg["battery_max_charge_power_w"],
                 max_discharge_power_w=cfg["battery_max_discharge_power_w"],
+                enable_resistance_fade=cfg.get("enable_resistance_fade", False),
                 **batt_kwargs,
             )
         else:
@@ -281,7 +287,7 @@ def run_app_simulation(
                 "initial_pv_origin_energy_wh": carried_pv_origin_energy_wh or 0.0,
             }
 
-        results_df, total_pv, _summary_df, year_rep_cost, year_n_rep, degradation_df = simulate_energy_balance(
+        sim_result = simulate_energy_balance(
             pv_dc=dc_power,
             houseload=inputs.load_data,
             battery_config=batt_cfg,
@@ -293,7 +299,23 @@ def run_app_simulation(
             initial_cumulative_cycle_deg=cumulative_cycle_deg,
             initial_cumulative_cal_deg=cumulative_cal_deg,
             **state_kwargs,
+            degradation_engine=degradation_engine,
+            blast_model=blast_model,
+            initial_degradation_state=degradation_state,
+            return_degradation_state=degradation_engine == "blast",
         )
+        if degradation_engine == "blast":
+            (
+                results_df,
+                total_pv,
+                _summary_df,
+                year_rep_cost,
+                year_n_rep,
+                degradation_df,
+                degradation_state,
+            ) = sim_result
+        else:
+            results_df, total_pv, _summary_df, year_rep_cost, year_n_rep, degradation_df = sim_result
 
         if has_battery:
             carried_energy_wh = float(results_df["Battery_Energy_End"].iloc[-1])
@@ -369,6 +391,38 @@ def run_app_simulation(
         discount_rate=cfg["discount_rate"],
     )
 
+    replacement_events = [
+        {"year": int(row["Year"]), "count": int(row["Replacements"])} for row in yearly_summaries if row["Replacements"]
+    ]
+    if degradation_engine == "blast":
+        profile = get_battery_model_profile(str(blast_model))
+        warning_records = degradation_state.get("blast_engine", {}).get("warnings", []) if degradation_state else []
+        degradation_summary = {
+            "engine": "blast",
+            "model_key": blast_model,
+            "model_profile": profile.as_dict(),
+            "initial_soh_pct": 100.0,
+            "final_soh_pct": round(float(current_soh), 1),
+            "replacement_events": replacement_events,
+            "calibration_basis": "cell-model",
+            "pack_calibrated": False,
+            "experimental_range_warnings": [
+                warning for warning in warning_records if warning.get("category") == "experimental_range"
+            ],
+            "aging_horizon_extrapolation_warnings": [
+                warning for warning in warning_records if warning.get("category") == "aging_horizon"
+            ],
+            "state_schema_version": BLAST_STATE_SCHEMA_VERSION,
+        }
+    else:
+        degradation_summary = {
+            "engine": "native",
+            "model_key": cfg["calendar_model"],
+            "initial_soh_pct": 100.0,
+            "final_soh_pct": round(float(current_soh), 2),
+            "replacement_events": replacement_events,
+        }
+
     return SimulationArtifacts(
         yearly_df=yearly_df,
         first_year_results_df=first_year_results_df,
@@ -389,4 +443,5 @@ def run_app_simulation(
                 },
             )
         ),
+        degradation_summary=degradation_summary,
     )

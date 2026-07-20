@@ -52,6 +52,8 @@ weather/data access, load profiles, PV system data, and cost assumptions; see
 | `export_emissions_factor_gco2_kwh` | `None` | Optional displacement factor for exported PV. `None` uses the preset's avoided-grid factor and reports that fallback explicitly |
 | `pv_degradation_rate` | `0.005` | Annual PV degradation rate (0.5% / year) |
 | `calendar_model` | `"naumann_lam_field_calibrated"` | Battery calendar aging model. Default is the v1 field calibration; use `"naumann_lam_field_calibrated_v2"` for the v2 field-calibrated fit with Lam `Ea`/`n` fixed and `k0`/`b` fitted |
+| `degradation_engine` | `"native"` | `"native"` keeps Naumann/Lam; `"blast"` explicitly opts into a vendored BLAST cell model |
+| `blast_model` | `None` | Stable BLAST model key; required with `degradation_engine="blast"` and invalid with the native engine |
 | `battery_min_soc` | `0.10` | Battery SOC floor (fraction of nominal, SOH-derated capacity) |
 | `battery_max_soc` | `0.90` | Battery SOC ceiling (same basis as `battery_min_soc`) |
 | `battery_eol_percentage` | `0.70` | SOH fraction that triggers battery replacement |
@@ -59,7 +61,7 @@ weather/data access, load profiles, PV system data, and cost assumptions; see
 | `battery_max_charge_power_w` | `None` | Maximum DC power entering the battery charge path; `None` is unlimited |
 | `battery_max_discharge_power_w` | `None` | Maximum battery AC power delivered to load; `None` is unlimited |
 | `dc_coupled` | `True` | DC-coupled / hybrid inverter. `False` is unsupported in 0.3.x and raises |
-| `inverter_efficiency` | `0.96` | Inverter efficiency |
+| `inverter_efficiency` | `0.96` | Nominal inverter efficiency used by the PVWatts part-load curve |
 | `inverter_loading_ratio` | `1.25` | DC/AC oversizing ratio; also sets the inverter AC rating that clips production |
 | `pv_loss_overrides` | `None` | Per-component overrides (percent) for the fixed PVWatts system losses, e.g. `{"shading": 0.0}` |
 | `start_date` | `"2023-01-01"` | First simulation date |
@@ -104,10 +106,14 @@ maps to the v1 field calibration. The explicit
 `"naumann_lam_field_calibrated_v2"` for the v2 field-calibrated fit with Lam
 `Ea`/`n` fixed and `k0`/`b` fitted to field data.
 
-The native BREOS degradation path is currently calibrated for LFP cells only.
-Lower-level `BatteryConfig(battery_type="LFP")` normalizes to `"lfp"`; other
-chemistries raise instead of silently reusing LFP cycle-aging parameters. See
-the roadmap for the planned opt-in multi-chemistry degradation engine.
+The native BREOS degradation path is calibrated for LFP cells only. App config
+must not use the ambiguous legacy `battery_type` selector: omit
+`degradation_engine` for native behavior, or set `degradation_engine="blast"`
+and a stable `blast_model` key. Lower-level
+`BatteryConfig(battery_type="LFP")` still normalizes to `"lfp"` for native
+compatibility; it does not select BLAST. See the
+[degradation model reference](../api/degradation-models.md) for discovery,
+precedence, provenance, and migration details.
 
 ## Discovering available options
 
@@ -118,6 +124,7 @@ breos list locations
 breos list modules
 breos list cost-presets
 breos list emissions
+breos list battery-models
 breos list load-profiles
 ```
 

@@ -237,6 +237,88 @@ class TestAppValidation:
         )
         assert app._cfg["n_modules"] == 10
 
+    def test_blast_config_accepts_enabled_p1_models(self):
+        for blast_model in ("lfp_gr_250ah_prismatic", "nca_gr_panasonic_3ah"):
+            app = App(
+                {
+                    "location": "porto",
+                    "n_modules": 10,
+                    "annual_consumption_kwh": 4000,
+                    "battery_kwh": 5.0,
+                    "degradation_engine": "blast",
+                    "blast_model": blast_model,
+                }
+            )
+            assert app._cfg["degradation_engine"] == "blast"
+            assert app._cfg["blast_model"] == blast_model
+
+    @pytest.mark.parametrize("degradation_engine", [None, "native"])
+    def test_blast_model_requires_explicit_blast_engine(self, degradation_engine):
+        config = {
+            "location": "porto",
+            "n_modules": 10,
+            "annual_consumption_kwh": 4000,
+            "battery_kwh": 5.0,
+            "blast_model": "lfp_gr_250ah_prismatic",
+        }
+        if degradation_engine is not None:
+            config["degradation_engine"] = degradation_engine
+
+        with pytest.raises(ValueError, match="blast_model.*requires.*degradation_engine=blast"):
+            App(config)
+
+    def test_invalid_degradation_engine_rejected(self):
+        with pytest.raises(ValueError, match="degradation_engine"):
+            App(
+                {
+                    "location": "porto",
+                    "n_modules": 10,
+                    "annual_consumption_kwh": 4000,
+                    "degradation_engine": "magic",
+                }
+            )
+
+    def test_blast_config_enables_phase3_models(self):
+        app = App(
+            {
+                "location": "porto",
+                "n_modules": 10,
+                "annual_consumption_kwh": 4000,
+                "battery_kwh": 5.0,
+                "degradation_engine": "blast",
+                "blast_model": "nmc811_grsi_lgm50_5ah",
+            }
+        )
+        assert app._cfg["blast_model"] == "nmc811_grsi_lgm50_5ah"
+
+    def test_blast_config_rejects_montecarlo_section(self):
+        with pytest.raises(ValueError, match="Monte Carlo"):
+            App(
+                {
+                    "location": "porto",
+                    "n_modules": 10,
+                    "annual_consumption_kwh": 4000,
+                    "battery_kwh": 5.0,
+                    "degradation_engine": "blast",
+                    "blast_model": "lfp_gr_250ah_prismatic",
+                    "montecarlo": {"n_runs": 10, "weather_file": "weather.csv"},
+                }
+            )
+
+    def test_blast_config_rejects_resistance_fade(self):
+        with pytest.raises(ValueError, match="enable_resistance_fade"):
+            App(
+                {
+                    "location": "porto",
+                    "n_modules": 10,
+                    "annual_consumption_kwh": 4000,
+                    "battery_kwh": 5.0,
+                    "degradation_engine": "blast",
+                    "blast_model": "lfp_gr_250ah_prismatic",
+                    "enable_resistance_fade": True,
+                }
+            )
+
     def test_custom_location_valid(self):
         app = App(
             {
@@ -404,9 +486,9 @@ class TestAppValidation:
         base = _run(None)
         no_shading = _run({"shading": 0.0})
 
-        # Both operands are rounded to 2 decimals by build_result, so the
-        # tightest honest tolerance is the rounding granularity (±0.005 each).
-        assert no_shading == pytest.approx(base / 0.97, abs=0.011)
+        # Removing a DC loss increases production. The AC increase is not a
+        # fixed 1 / 0.97 ratio because inverter efficiency varies with load.
+        assert no_shading > base
 
     def test_smaller_inverter_clips_app_production(self, _patch_weather):
         def _run(loading_ratio):
@@ -582,6 +664,37 @@ class TestAppSimulateNoBattery:
         assert r["provenance"]["ledger_schema_version"] == "1.0"
         assert r["provenance"]["timezone"] == "Europe/Lisbon"
         json.dumps(r["provenance"])
+
+    def test_blast_result_reports_model_identity_and_state_provenance(self):
+        app = App(
+            {
+                "location": "porto",
+                "n_modules": 6,
+                "annual_consumption_kwh": 3000,
+                "battery_kwh": 5.0,
+                "projection_years": 1,
+                "degradation_engine": "blast",
+                "blast_model": "lfp_gr_250ah_prismatic",
+            }
+        )
+        app.simulate()
+        result = app.result()
+
+        degradation = result["degradation"]
+        assert degradation["engine"] == "blast"
+        assert degradation["model_key"] == "lfp_gr_250ah_prismatic"
+        assert degradation["model_profile"]["key"] == degradation["model_key"]
+        assert degradation["model_profile"]["upstream"]["commit"] == "d789e00bca60f628de640745c18eb724b07358bd"
+        assert degradation["model_profile"]["calibration_basis"] == "cell-model"
+        assert degradation["pack_calibrated"] is False
+        assert degradation["initial_soh_pct"] == 100.0
+        assert degradation["final_soh_pct"] == round(result["battery_soh_end_pct"], 1)
+        assert degradation["state_schema_version"] == "1.0"
+        range_warnings = degradation["experimental_range_warnings"]
+        assert range_warnings
+        assert len({warning["code"] for warning in range_warnings}) == len(range_warnings)
+        assert degradation["aging_horizon_extrapolation_warnings"] == []
+        assert result["provenance"]["degradation"] == degradation
 
     def test_investment_positive(self):
         assert self.result["total_investment_eur"] > 0

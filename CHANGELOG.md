@@ -2,6 +2,73 @@
 
 All notable changes to BREOS are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased]
+
+## [0.4.0] - 2026-07-20
+
+### Added
+- Vendored BLAST-Lite degradation models as an opt-in `degradation_engine="blast"`
+  path with the `BlastEngine` adapter, daily endpoint-grid integration,
+  cross-year snapshot threading, replacement reset handling, and validation that keeps
+  BLAST disabled for Monte Carlo and resistance-fade runs until those paths are
+  explicitly supported.
+- A declarative 14-model BLAST registry with stable keys, chemistry and cell
+  metadata, experimental ranges, study citations, output capabilities,
+  upstream provenance, Python discovery (`list_battery_models()`), CLI
+  discovery (`breos list battery-models`), explicit CLI model selection, and
+  versioned JSON-safe engine snapshots. BLAST result/provenance blocks identify
+  the cell model, calibration basis, initial/final SOH, replacements, warnings,
+  and state schema.
+- All 14 BLAST models enabled with multi-condition parameter and trajectory
+  parity against the pinned upstream source, deduplicated experimental-range
+  warnings, and sourced aging-horizon warnings carried through snapshots.
+
+### Changed
+- The App energy balance and public `dc_to_ac()` helper now share the same
+  PVWatts part-load inverter curve. Dispatch therefore accounts for loading-
+  dependent conversion losses when serving load, exporting PV, and
+  discharging the battery, while preserving the shared AC nameplate,
+  charge-before-export behavior, and explicit 0.3.4 energy ledger. Lower-
+  level `BatteryConfig` callers that omit an inverter nameplate retain the
+  legacy unbounded flat-efficiency fallback because part load is undefined
+  without a rated power.
+- App configuration now resolves user values over sourced battery-profile
+  defaults over global defaults. Native Naumann/Lam remains the default;
+  `blast_model` requires explicit `degradation_engine="blast"`. The ambiguous
+  App-level `battery_type` selector, which strict App validation already
+  rejected as unknown in 0.3.4, now raises targeted migration guidance instead
+  of being repurposed for chemistry/model selection. The lower-level
+  `BatteryConfig(battery_type="LFP")` API remains supported.
+
+### Fixed
+- BLAST time-varying state updates are guarded against trajectory-inversion
+  domain overshoot. When day-varying stressors shrink a state's rate
+  coefficient or sigmoid asymptote between updates, the accumulated state can
+  fall outside the domain of the trajectory inversion; the next update
+  previously returned NaN that silently corrupted SoH (`nmc_lto_10ah` around
+  day 3 and `nca_grsi_sonymurata_2p5ah` around year 9 of real multi-year
+  profiles). A saturated sigmoid state (`y0 >= y_inf` after `y_inf` shrank) now
+  holds its accumulated loss by returning a zero increment instead of snapping
+  it back down to `y_inf`; the earlier clamp produced a negative increment that
+  decreased an accumulated degradation state and manufactured artificial
+  capacity recovery. Increments for the supported positive sigmoid-loss
+  trajectories are therefore never negative. Constant and periodic profiles
+  never hit the guards, so the golden and multi-condition parity fixtures are
+  unchanged.
+- `BlastEngine.step` now raises `BlastNumericalError` — reporting the model key,
+  elapsed days, and offending field names — whenever any newest state or output
+  value is non-finite, not only when capacity `q` is, matching the documented
+  fail-loud contract instead of propagating a corrupt state.
+
+### Notes
+- The Panasonic NCA model (`nca_gr_panasonic_3ah`) emits a
+  `BlastAgingHorizonWarning` once a projection extends past its sourced 300-day
+  aging-data horizon, so multi-year projections with that cell warn that they
+  extrapolate beyond the calibration window.
+
+### Acknowledgments
+- Thanks to Paul Gasper at NLR for suggesting the BLAST-Lite integration.
+
 ## [0.3.4] - 2026-07-14
 
 ### Added
@@ -108,9 +175,9 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   - the load was positionally re-stamped onto the PV index via
     `align_load_to_pv`, ignoring timezones (a UTC-offset shift of the whole
     profile against PV). The raw load now reaches
-    `simulate_energy_balance`, whose internal alignment is timezone- and
-    DST-aware — the same code path the App uses. `align_load_to_pv` keeps
-    its behaviour for external callers but now carries a docstring warning.
+  `simulate_energy_balance`, whose internal alignment is timezone- and
+  DST-aware — the same code path the App uses. `align_load_to_pv` keeps
+  its behaviour for external callers but now carries a docstring warning.
 
 ## [0.3.3] - 2026-07-02
 

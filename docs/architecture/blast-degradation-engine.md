@@ -1,8 +1,11 @@
 # BLAST Degradation Engine
 
-**Status:** Proposed — not yet implemented
+**Status:** Phases 0-3 implemented for 0.4.0; Phase 4 deferred
 **Relates to:** ROADMAP "Additional Li-ion battery chemistries"
 **Owner:** BREOS maintainers
+
+The cross-cutting default, validation, cell-to-pack, resistance, and provenance
+rules are maintained in [Battery degradation policy](battery-degradation-policy.md).
 
 ## Problem
 
@@ -13,8 +16,10 @@ Before 0.3.3, a config could name a non-LFP pack (`BatteryConfig.battery_type`)
 but still age it on LFP curves. In 0.3.3 the native path was made explicit:
 `BatteryConfig(battery_type="LFP")` normalizes to `"lfp"`, and unsupported
 chemistries now raise instead of silently reusing LFP cycle-aging parameters.
-The runner (`breos/runners/app.py`) still does not expose battery chemistry as
-an App config key; BLAST remains the planned route for real non-LFP physics.
+The runner (`breos/runners/app.py`) exposes BLAST through explicit
+`degradation_engine` / `blast_model` config keys and a declarative profile
+registry. Profiles supply only sourced defaults; no generic chemistry defaults
+are inferred.
 
 NREL's [BLAST-Lite](https://github.com/NREL/BLAST-Lite) (BSD-3) provides **14
 lab-calibrated, DOI-cited degradation models** (in the version vendored) spanning
@@ -162,6 +167,13 @@ degradation state via `initial_fec`, `initial_calendar_seconds`, etc.
   `BlastEngine` instance through the year loop).
 - On year N+1, rebuild via `BlastEngine.from_snapshot(...)` so cumulative
   `t_days`/`efc`/states continue seamlessly.
+- **Year-boundary dispatch convention (native and BLAST alike):** the App
+  runner passes the true end-of-year stored energy and PV-origin inventory into
+  the next `simulate_energy_balance` call. The BLAST state payload separately
+  carries the matching end-of-year absolute-SoC and temperature anchors used
+  to build the next degradation window. Split and continuous simulations
+  therefore agree across a mid-swing boundary without an artificial refill;
+  focused tests cover both energy inventories and BLAST EFC/SoH continuity.
 
 ### Replacement reset
 
@@ -170,9 +182,11 @@ accumulators. BLAST path instead calls `blast_engine.reset()` (fresh instance).
 
 ### Resistance fade
 
-Phase 1: **disable `enable_resistance_fade` for the BLAST path** (raise if both
-set) — BLAST multi-mode models expose `outputs['r']`, but mapping resistance→RTE
-derate is its own task. Defer to Phase 4.
+BLAST multi-mode models expose resistance outputs, but those values are
+diagnostic only: they do not alter dispatch, efficiency, or power limits.
+`enable_resistance_fade` remains incompatible with the BLAST path and raises if
+both are selected. A future coupling requires the model-specific validation
+defined in [Battery degradation policy](battery-degradation-policy.md#resistance-and-screening-paths).
 
 ## Config plumbing
 
@@ -187,18 +201,17 @@ drift-prone — keep additions minimal until that lands):
    `degradation_engine="blast"` together with Monte Carlo** until Phase 4 — raise
    a clear error, never silently fall back to native (see the Monte Carlo note in
    Performance / Phasing).
-3. `breos/runners/app.py`: pass both into `BatteryConfig`. **Retire or fully
-   deprecate the legacy `battery_type` field** (see Open decisions) — the new
-   `degradation_engine` / `blast_model` keys replace it; don't overload a field
-   that currently means native-LFP-only.
+3. `breos/runners/app.py`: pass both into the energy-balance path. Do not
+   repurpose lower-level `BatteryConfig.battery_type`, which remains a guarded
+   native-LFP selector; App migration guidance points callers to the explicit
+   `degradation_engine` / `blast_model` keys.
 4. `breos/cli.py`: `--degradation-engine` / `--blast-model` flags via
    `_add_override`.
 
 `degradation_engine="native"` (default) ⇒ existing behavior, **bit-for-bit**.
 
-When `blast_model` is set, its chemistry profile (see below) is resolved into the
-`BatteryConfig` defaults *before* user overrides are applied, following the
-precedence rule in "Chemistry profile registry."
+When `blast_model` is set, its cell-model profile (see below) is resolved before
+user overrides are applied, following the profile-registry precedence rule.
 
 ## Model catalog (vendor all 14, enable in phases)
 
@@ -234,57 +247,33 @@ Note: several keys (Panasonic, Sony-Murata cylindrical, the NMC fast-charge
 pouches) are EV / high-power cells tested well above stationary C-rates — they
 run, but lean on the out-of-range warning below.
 
-## Chemistry profile registry (per-chemistry settings)
+## Cell-model profile registry
 
-There are **three tiers** of per-chemistry data; only the third is a user
-*setting*. Conflating them is the trap to avoid.
+There are **three tiers** of profile data; only the third can be a user
+*setting*. A named cell model is not a generic chemistry profile.
 
 1. **Degradation parameters** (`qcal_*` / `qcyc_*`) — baked into the vendored
    BLAST class, calibrated to papers. **Never user-tunable.**
 2. **Validity ranges** (`experimental_range`, e.g. the 250Ah LFP declares
    `cycling_temperature: [10, 45]`, `dod: [0.8, 1]`, `max_rate_charge: 0.65`) —
    also baked in; drives **warnings, not tuning**.
-3. **Operating-envelope defaults** — RTE, SoC window (`min_soc`/`max_soc`),
-   `eol_percentage`, C-rate limits, energy density. These **differ by chemistry**
-   (LFP tolerates 0–100% DoD + long calendar life; NMC/NCA prefer narrower
-   windows; LTO huge cycle life / low energy density; 2nd-life Leaf starts below
-   100% SoH) and **are the legitimate "settings per chemistry."**
+3. **Operating-envelope defaults** — pack-level RTE, SoC window
+   (`min_soc`/`max_soc`), EOL threshold, and power limits. The bundled studies
+   do not source generic pack defaults, so the current profiles leave this tier
+   empty instead of inferring values from chemistry labels.
 
-### Design: a declarative registry feeding existing `BatteryConfig` fields
+`breos/degradation/profiles.py` is the single declarative registry for Python
+and CLI discovery, engine class lookup, model identity, citations, ranges, and
+output capabilities. Configuration resolves in this order:
 
-A small `breos/degradation/chemistry_profiles.py` (or JSON in `breos/data/configs/`,
-mirroring the existing `costs.json` / `emissions.json` preset pattern) keyed by
-`blast_model`, supplying **only tier-3 defaults**. Selecting a model auto-loads
-its profile; every field stays independently overridable.
-
-Precedence (explicit, least-surprising):
-
-```
-explicit user config  >  chemistry profile default  >  global BatteryConfig default
+```text
+explicit user config > sourced profile default > global App default
 ```
 
-**Merge-order implementation note.** `resolve_app_config` currently does
-`merge_defaults(config)` *then* validates (`app_config.py:382-385`), so by
-validation time the raw user keys are indistinguishable from defaults. To honor
-the precedence above, capture the **raw user key set** before merging and resolve
-as `{**DEFAULTS, **chemistry_profile, **raw_user_config}` — the profile fills only
-keys the user did not set. (This is also a prerequisite the ROADMAP "declarative
-schema" item will need.)
-
-### Rules
-
-- **Don't fabricate tier-3 numbers.** Ship a per-chemistry default only where a
-  source supports it; otherwise inherit the global default. (Same "documented
-  source" bar the ROADMAP sets — a made-up per-chemistry RTE is worse than the
-  honest global default.)
-- **Cost stays out of the chemistry profile.** $/kWh already lives in the
-  cost-preset system; duplicating it here creates two sources of truth. The
-  profile owns the *electrochemical* envelope only.
-- **Warn, don't block, on conflicts.** If a user picks NMC and forces
-  `max_soc=1.0`, emit an `experimental_range` warning — don't reject it.
-
-Net: BLAST class owns the *physics*, the chemistry profile owns *policy
-defaults*, the user keeps the final say.
+Cost remains in the cost-preset system. Experimental-range conflicts warn
+rather than rewriting a user's operating configuration. The full scientific
+and default-change rules are in
+[Battery degradation policy](battery-degradation-policy.md#scientific-interpretation).
 
 ## Known integration risks to verify
 
@@ -334,8 +323,10 @@ Phase 4 wires that loop — never silently run as native.
 
 ## Licensing / attribution
 
-- Preserve the BSD-3 copyright header (`Alliance for Energy Innovation, LLC`) and
-  the DOE-contract `NOTICE` text in every vendored file.
+- Preserve the upstream copyright headers carried by the transformed source
+  files. Bundle the upstream BSD-3 license and DOE-contract notice unchanged as
+  `breos/degradation/blast/LICENSE` and `breos/degradation/blast/NOTICE`, as
+  recorded in the vendoring manifest.
 - Add a BLAST-Lite entry to `ATTRIBUTIONS.md` (source, commit/version vendored,
   DOIs of the model papers).
 
@@ -353,10 +344,10 @@ Phase 4 wires that loop — never silently run as native.
   resets BLAST. Enable the two simple 2-bucket-power models end-to-end —
   **LFP 250Ah prismatic (flagship)** + **NCA Panasonic (POC)**; default path
   untouched. Adapter-parity, cross-year-continuity, and regression tests.
-- **Phase 2** — The **chemistry profile registry** (precedence + raw-key
+- **Phase 2** — The **cell-model profile registry** (precedence + raw-key
   merge-order) + full config/CLI plumbing (`--degradation-engine` /
-  `--blast-model`; **retire** the legacy `battery_type` selector — see the
-  resolved decision below).
+  `--blast-model`) and targeted App migration guidance for the unsupported
+  `battery_type` key without removing the lower-level native-LFP field.
 - **Phase 3a** — Enable the remaining **power-law** chemistries (LMO 2nd-life,
   NMC811 M50/MJ1, NMC 50Ah B1/B2, NMC 75Ah A, NMC111 Sanyo, NMC-LTO);
   per-chemistry smoke tests + `experimental_range` out-of-bounds warnings.
@@ -372,23 +363,22 @@ Phase 4 wires that loop — never silently run as native.
 
 Settle before implementation begins:
 
-- **[OPEN] Cross-year state carrier.** Either thread a serialized
-  `state_snapshot()` dict through `simulate_energy_balance`'s return tuple
-  (consistent with the existing `initial_fec` / `final` scalar pattern; keeps
-  engine objects out of the function signature) **or** pass the live `BlastEngine`
-  instance through the runner's year loop (less code). Recommendation:
-  **snapshot** — BLAST state is four dicts of numpy arrays
-  (`states`/`outputs`/`stressors`/`rates`), trivially copyable and picklable,
-  which Phase 4 Monte Carlo (process pools) will want anyway; a live engine
-  mutates a caller-owned object across yearly calls, a pattern
-  `simulate_energy_balance` currently avoids. Not yet decided.
+- None currently.
 
 Resolved:
 
-- **[DECIDED] Do not repurpose `battery_type` for BLAST chemistry.** In 0.3.3 it
-  became a guarded native-LFP selector instead of a silent no-op for non-LFP
-  values. The new `degradation_engine` / `blast_model` keys should select BLAST
-  chemistry rather than overloading `battery_type`.
+- **[DECIDED] Cross-year state carrier uses serialized snapshots.** Thread a
+  `state_snapshot()` dict through `simulate_energy_balance`'s return tuple
+  instead of passing a live `BlastEngine` through the runner's year loop. This is
+  consistent with the existing `initial_fec` / `final` scalar pattern, keeps
+  mutable engine objects out of the function signature, and gives Phase 4 Monte
+  Carlo a picklable representation. Prototype tests in the BLAST-Lite prep
+  branch proved snapshot continuity across all 14 BLAST models, including the
+  P3b multi-mode models.
+- **[DECIDED] Do not repurpose `battery_type` for BLAST chemistry.** At the
+  lower level it is a guarded native-LFP selector. Strict App validation already
+  rejected the key in 0.3.4; 0.4.0 adds a targeted migration error. The explicit
+  `degradation_engine` / `blast_model` keys select BLAST instead.
 
 ## Non-goals
 
