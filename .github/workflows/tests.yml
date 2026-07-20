@@ -5,9 +5,9 @@ on:
     branches: [main, develop, "release/**"]
   pull_request:
     branches: [main, develop, "release/**"]
-  # Slow endurance/multi-year tests run on a schedule and on demand only.
+  # Slow endurance/multi-year tests run nightly, on demand, and as a release gate.
   schedule:
-    - cron: "0 4 * * 1"  # 04:00 UTC every Monday
+    - cron: "0 4 * * *"  # 04:00 UTC every day
   workflow_dispatch:
 
 jobs:
@@ -54,8 +54,13 @@ jobs:
         run: uv run --extra docs sphinx-build -b html docs docs/_build/html
 
   slow-tests:
-    # Long-running endurance and multi-year integration tests on Python 3.12.
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    # Long-running endurance tests on Python 3.12. Release pushes and PRs run
+    # this gate automatically; other branches rely on the nightly/manual runs.
+    if: >-
+      github.event_name == 'schedule' ||
+      github.event_name == 'workflow_dispatch' ||
+      startsWith(github.ref, 'refs/heads/release/') ||
+      startsWith(github.base_ref, 'release/')
     runs-on: ubuntu-latest
 
     env:

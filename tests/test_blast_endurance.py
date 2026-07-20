@@ -16,8 +16,8 @@ past their trajectory-inversion domain, which:
   ``y_inf - y0`` (a negative increment), recovering capacity — caught here by
   the nca_grsi SOH-monotonicity and loss-state assertions.
 
-The empirically validated endurance bounds below are read off the committed
-fixture with the corrected model. They are real degradation endpoints, not
+The recorded regression bounds below are read off the committed fixture with
+the corrected model. They are deterministic degradation endpoints, not
 clip-satisfiable [0, 1] guards: a spurious recovery, NaN, or clamp regression
 moves a model off its endpoint and fails the test.
 """
@@ -98,7 +98,7 @@ def test_all_blast_models_endure_twenty_field_years():
 
         final_soh = soh_history[-1]
         expected = EXPECTED_FINAL_SOH[model_key]
-        # Observed SOH stays within the empirically validated fixture bounds.
+        # Observed SOH stays within the recorded fixture regression bounds.
         assert final_soh == pytest.approx(expected, abs=SOH_ABS_TOL), model_key
         assert soh_history.min() >= expected - SOH_ABS_TOL, model_key
         # No spurious capacity creation beyond initial full health.

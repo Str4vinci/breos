@@ -60,10 +60,10 @@ byte-for-byte identical.
   overshoot past zero or the asymptote, and the next update returns NaN that
   silently corrupts SoH (observed for `nmc_lto_10ah`, day 3, and
   `nca_grsi_sonymurata_2p5ah`, year ~10, under real PV self-consumption
-  profiles). The guards clamp each step so power states never cross zero
-  and sigmoid states never exceed their current `y_inf`, mirroring the
-  guard upstream already applies in `_update_exponential_relax_state`. A
-  saturated sigmoid state (`y0 >= y_inf` after `y_inf` shrank) holds its
+  profiles). The guards clamp each step so power states never cross zero and
+  sigmoid updates never overshoot the active `y_inf`, mirroring the guard
+  upstream already applies in `_update_exponential_relax_state`. A sigmoid
+  state already above a newly shrunken asymptote (`y0 >= y_inf`) holds its
   accumulated value by returning a zero increment; it is never snapped back
   down to `y_inf`, which would decrease an accumulated loss and manufacture
   capacity recovery. Increments for the supported positive sigmoid-loss
