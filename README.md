@@ -1,3 +1,10 @@
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/Str4vinci/breos/main/docs/_static/BREOS.png">
+    <img alt="BREOS logo" src="https://raw.githubusercontent.com/Str4vinci/breos/main/docs/_static/BREOS_black.png" width="200">
+  </picture>
+</p>
+
 # BREOS - Building Renewable Energy Optimization Software
 
 [![Tests](https://github.com/Str4vinci/breos/actions/workflows/tests.yml/badge.svg)](https://github.com/Str4vinci/breos/actions/workflows/tests.yml)
