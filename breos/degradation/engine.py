@@ -122,16 +122,34 @@ class BlastEngine:
         self._check_experimental_range(t_secs, soc, temperature_c)
         self.model.update_battery_state(t_secs, soc, temperature_c)
         self._check_aging_horizon()
-        soh = self.soh()
-        if not np.isfinite(soh):
+        self._check_finite_update()
+        return self.soh()
+
+    def _check_finite_update(self) -> None:
+        """Raise ``BlastNumericalError`` if the update produced a non-finite value.
+
+        Inspects the newest entry of every ``states`` and ``outputs`` array, not
+        only capacity ``q``: a state-domain overshoot can corrupt an internal
+        loss term one or more steps before it surfaces in ``q``. Only the most
+        recent entry is read, which the update just applied always populates, so
+        the intentional initial NaN sentinels in ``stressors`` and ``rates`` are
+        never inspected.
+        """
+
+        offending = [
+            f"{group_name}.{field}"
+            for group_name in ("states", "outputs")
+            for field, values in getattr(self.model, group_name).items()
+            if not np.isfinite(values[-1])
+        ]
+        if offending:
             elapsed_days = float(self.model.stressors["t_days"][-1])
             raise BlastNumericalError(
-                f"BLAST model {self.blast_model_key!r} produced a non-finite SoH "
-                f"after {elapsed_days:.0f} simulated days. This indicates a "
-                "state-update instability; the engine state is corrupt and the "
-                "simulation cannot continue."
+                f"BLAST model {self.blast_model_key!r} produced non-finite values in "
+                f"{', '.join(offending)} after {elapsed_days:.0f} simulated days. This "
+                "indicates a state-update instability; the engine state is corrupt and "
+                "the simulation cannot continue."
             )
-        return soh
 
     def _record_warning(
         self,

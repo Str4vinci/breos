@@ -8,6 +8,7 @@ import warnings
 import numpy as np
 import pytest
 
+from breos.degradation.blast.degradation_model import BatteryDegradationModel
 from breos.degradation.engine import (
     BLAST_MODEL_CLASSES,
     P1_BLAST_MODEL_KEYS,
@@ -239,7 +240,115 @@ def test_all_models_stay_finite_when_daily_stressors_soften():
                 assert np.all(np.isfinite(values)), f"{key}.{group_name}.{state_name}"
 
 
-def test_step_raises_on_non_finite_soh():
+# ---------------------------------------------------------------------------
+# State-transformation domain guards (pure numerical unit tests)
+# ---------------------------------------------------------------------------
+
+
+def test_sigmoid_state_zero_dx_returns_zero():
+    dy = BatteryDegradationModel._update_sigmoid_state(y0=0.02, dx=0.0, y_inf=0.05, k=1e-3, p=1.0)
+    assert dy == 0.0
+
+
+def test_sigmoid_state_holds_when_asymptote_shrinks_below_state():
+    """y0 > y_inf must return exactly zero, not the negative y_inf - y0.
+
+    When day-varying stressors shrink the rate-dependent asymptote below the
+    already-accumulated loss, the state is saturated. The pre-fix clamp turned
+    the zeroed rate into the negative increment ``y_inf - y0``, decreasing an
+    accumulated degradation state and manufacturing capacity recovery.
+    """
+    y0, y_inf = 0.05, 0.04
+    dy = BatteryDegradationModel._update_sigmoid_state(y0=y0, dx=10.0, y_inf=y_inf, k=1e-3, p=1.0)
+
+    assert dy == 0.0
+    # The regression: the old guard would have returned y_inf - y0 = -0.01.
+    assert dy != pytest.approx(y_inf - y0)
+    assert dy >= 0.0
+
+
+def test_sigmoid_state_at_asymptote_returns_zero():
+    dy = BatteryDegradationModel._update_sigmoid_state(y0=0.05, dx=10.0, y_inf=0.05, k=1e-3, p=1.0)
+    assert dy == 0.0
+
+
+def test_sigmoid_state_overshoot_lands_at_but_not_beyond_asymptote():
+    """A single large step is capped at the remaining gap y_inf - y0."""
+    y0, y_inf = 0.01, 0.05
+    dy = BatteryDegradationModel._update_sigmoid_state(y0=y0, dx=1e9, y_inf=y_inf, k=1e-3, p=1.0)
+
+    assert dy == pytest.approx(y_inf - y0)
+    assert y0 + dy == pytest.approx(y_inf)
+    assert y0 + dy <= y_inf + 1e-12
+
+
+def test_sigmoid_state_increments_finite_and_nonnegative_for_valid_inputs():
+    """Representative valid sigmoid-loss inputs yield finite, nonnegative steps."""
+    rng = np.random.default_rng(20240720)
+    for _ in range(20000):
+        y_inf = rng.uniform(1e-3, 0.3)
+        y0 = rng.uniform(0.0, y_inf)
+        dx = rng.uniform(0.0, 1e4)
+        k = rng.uniform(1e-4, 1e-2)
+        p = rng.uniform(0.3, 2.0)
+        dy = BatteryDegradationModel._update_sigmoid_state(y0, dx, y_inf, k, p)
+        assert np.isfinite(dy)
+        assert dy >= 0.0
+        assert y0 + dy <= y_inf + 1e-12
+
+
+def test_power_states_cannot_cross_trajectory_domain():
+    """A rate-sign flip must land power/power-B states at zero, not beyond it.
+
+    The single-signed trajectories y = k*x^p and y = (k*x)^p lose meaning once
+    the accumulated state crosses zero, so a step that would overshoot is
+    clamped to exactly -y0.
+    """
+    # Power state: k < 0 while the accumulated state is positive.
+    dy_power = BatteryDegradationModel._update_power_state(y0=1.0, dx=1.0, k=-2.0, p=0.5)
+    assert np.isfinite(dy_power)
+    assert 1.0 + dy_power == pytest.approx(0.0)
+    assert 1.0 + dy_power >= 0.0
+
+    # Power-B state: negative exponent drives a positive state toward zero.
+    dy_power_b = BatteryDegradationModel._update_power_B_state(y0=1.0, dx=1.0, k=2.0, p=-0.5)
+    assert np.isfinite(dy_power_b)
+    assert 1.0 + dy_power_b == pytest.approx(0.0)
+    assert 1.0 + dy_power_b >= 0.0
+
+    # dx == 0 is inert for both transforms.
+    assert BatteryDegradationModel._update_power_state(y0=0.3, dx=0.0, k=1.0, p=0.5) == 0.0
+    assert BatteryDegradationModel._update_power_B_state(y0=0.3, dx=0.0, k=1.0, p=0.5) == 0.0
+
+
+def test_power_state_real_lto_reproducer_stays_finite():
+    """The nmc_lto_10ah day-3 reproducer must keep every state/output finite.
+
+    nmc_lto_10ah integrates three power states, one with a negative exponent
+    (beta_p = -0.553). Deep-cycling days followed by softer light-cycling days
+    shrink the rate coefficient between updates and previously drove the state
+    across its single-signed domain, returning NaN around day 3.
+    """
+    hours = np.arange(25, dtype=float)
+    t_secs = hours * 3600.0
+    temperature_c = np.full(25, 40.0)  # inside the [30, 60] C experimental range
+    deep = np.interp(hours, [0, 10, 14, 17, 23, 24], [0.1, 0.1, 0.9, 0.9, 0.1, 0.1])
+    light = np.interp(hours, [0, 10, 14, 17, 23, 24], [0.1, 0.1, 0.5, 0.5, 0.1, 0.1])
+
+    engine = BlastEngine("nmc_lto_10ah")
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        for soc in (deep, deep, light, light, deep, light):
+            soh = engine.step(t_secs, soc, temperature_c)
+            assert np.isfinite(soh)
+
+    for group_name in ("states", "outputs"):
+        group = getattr(engine.model, group_name)
+        for state_name, values in group.items():
+            assert np.all(np.isfinite(values)), f"nmc_lto_10ah.{group_name}.{state_name}"
+
+
+def test_step_raises_on_non_finite_capacity_output():
     engine = BlastEngine("lfp_gr_250ah_prismatic")
     t_secs, soc, temperature_c = _daily_profile()
 
@@ -249,5 +358,32 @@ def test_step_raises_on_non_finite_soh():
     engine.model.update_battery_state = corrupting_update
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        with pytest.raises(BlastNumericalError, match="non-finite SoH"):
+        with pytest.raises(BlastNumericalError, match=r"outputs\.q") as excinfo:
             engine.step(t_secs, soc, temperature_c)
+
+    # The error names the model key and the elapsed-day horizon per its docstring.
+    assert "lfp_gr_250ah_prismatic" in str(excinfo.value)
+    assert "simulated days" in str(excinfo.value)
+
+
+def test_step_raises_on_non_finite_internal_state():
+    """A corrupted internal loss state is caught even while capacity q stays finite."""
+    engine = BlastEngine("nca_grsi_sonymurata_2p5ah")
+    t_secs, soc, temperature_c = _daily_profile()
+
+    def corrupting_update(*_args):
+        # Advance only an internal sigmoid-loss state; leave the derived q
+        # outputs untouched so the failure is invisible to a q-only check.
+        engine.model.states["qLoss_t"] = np.append(engine.model.states["qLoss_t"], np.nan)
+        for name in engine.model.outputs:
+            engine.model.outputs[name] = np.append(engine.model.outputs[name], engine.model.outputs[name][-1])
+        engine.model.stressors["t_days"] = np.append(engine.model.stressors["t_days"], 1.0)
+
+    engine.model.update_battery_state = corrupting_update
+    assert np.isfinite(engine.soh())
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        with pytest.raises(BlastNumericalError, match=r"states\.qLoss_t") as excinfo:
+            engine.step(t_secs, soc, temperature_c)
+
+    assert "nca_grsi_sonymurata_2p5ah" in str(excinfo.value)

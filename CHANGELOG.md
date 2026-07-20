@@ -4,7 +4,7 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 
 ## [Unreleased]
 
-## [0.4.0] - 2026-07-18
+## [0.4.0] - 2026-07-20
 
 ### Added
 - Vendored BLAST-Lite degradation models as an opt-in `degradation_engine="blast"`
@@ -39,6 +39,32 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   rejected as unknown in 0.3.4, now raises targeted migration guidance instead
   of being repurposed for chemistry/model selection. The lower-level
   `BatteryConfig(battery_type="LFP")` API remains supported.
+
+### Fixed
+- BLAST time-varying state updates are guarded against trajectory-inversion
+  domain overshoot. When day-varying stressors shrink a state's rate
+  coefficient or sigmoid asymptote between updates, the accumulated state can
+  fall outside the domain of the trajectory inversion; the next update
+  previously returned NaN that silently corrupted SoH (`nmc_lto_10ah` around
+  day 3 and `nca_grsi_sonymurata_2p5ah` around year 9 of real multi-year
+  profiles). A saturated sigmoid state (`y0 >= y_inf` after `y_inf` shrank) now
+  holds its accumulated loss by returning a zero increment instead of snapping
+  it back down to `y_inf`; the earlier clamp produced a negative increment that
+  decreased an accumulated degradation state and manufactured artificial
+  capacity recovery. Increments for the supported positive sigmoid-loss
+  trajectories are therefore never negative. Constant and periodic profiles
+  never hit the guards, so the golden and multi-condition parity fixtures are
+  unchanged.
+- `BlastEngine.step` now raises `BlastNumericalError` — reporting the model key,
+  elapsed days, and offending field names — whenever any newest state or output
+  value is non-finite, not only when capacity `q` is, matching the documented
+  fail-loud contract instead of propagating a corrupt state.
+
+### Notes
+- The Panasonic NCA model (`nca_gr_panasonic_3ah`) emits a
+  `BlastAgingHorizonWarning` once a projection extends past its sourced 300-day
+  aging-data horizon, so multi-year projections with that cell warn that they
+  extrapolate beyond the calibration window.
 
 ### Acknowledgments
 - Thanks to Paul Gasper at NLR for suggesting the BLAST-Lite integration.
