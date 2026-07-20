@@ -20,8 +20,8 @@ keywords:
   - solar
   - degradation
 license: BSD-3-Clause
-version: 0.3.4
-date-released: "2026-07-14"
+version: 0.4.0
+date-released: "2026-07-20"
 preferred-citation:
   type: article
   title: "A Modular, Open-Source Python Framework for Household PV-Battery Sizing: Validation, Multi-Objective Optimisation, and Uncertainty Analysis"
