@@ -14,6 +14,9 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 - Added grouped weekly dependency updates, core-package coverage reporting that
   excludes vendored BLAST-Lite, and lightweight macOS/Windows public-entrypoint
   smoke tests.
+- Added reproducible BLAST parity-fixture tooling with strict clean-checkout and
+  upstream-pin guards plus a reviewed provenance manifest, while keeping the
+  committed scientific fixture unchanged during ordinary tests.
 
 ## [0.4.1] - 2026-07-23
 
