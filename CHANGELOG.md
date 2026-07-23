@@ -4,6 +4,8 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-07-23
+
 ### Changed
 - Extracted BLAST experimental-range and aging-horizon validation into a focused
   internal warning collector while preserving warning records, snapshot
