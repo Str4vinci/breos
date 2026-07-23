@@ -56,7 +56,7 @@ def test_existing_top_level_attributes_remain_importable():
 def test_top_level_plotting_compatibility_is_lazy(tmp_path):
     """Core imports stay quiet while historical plotting attributes still work."""
 
-    code = """
+    core_import_code = """
 import sys
 
 import breos
@@ -64,14 +64,22 @@ import breos
 assert "breos.plotting" not in sys.modules
 assert "matplotlib" not in sys.modules
 assert "plot_co2_savings" in dir(breos)
+"""
+    plotting_import_code = """
+import sys
+
+import breos
+
+assert "breos.plotting" not in sys.modules
+assert "matplotlib" not in sys.modules
 assert callable(breos.plot_co2_savings)
 assert "breos.plotting" in sys.modules
 assert "matplotlib" in sys.modules
 """
     env = os.environ.copy()
     env["MPLCONFIGDIR"] = str(tmp_path)
-    completed = subprocess.run(
-        [sys.executable, "-c", code],
+    core_import = subprocess.run(
+        [sys.executable, "-c", core_import_code],
         cwd=tmp_path,
         env=env,
         text=True,
@@ -79,5 +87,18 @@ assert "matplotlib" in sys.modules
         check=False,
     )
 
-    assert completed.returncode == 0, completed.stderr
-    assert completed.stderr == ""
+    assert core_import.returncode == 0, core_import.stderr
+    assert core_import.stderr == ""
+
+    plotting_import = subprocess.run(
+        [sys.executable, "-c", plotting_import_code],
+        cwd=tmp_path,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    # A fresh Matplotlib installation may announce font-cache creation on
+    # stderr. The quiet-import contract applies before plotting is requested.
+    assert plotting_import.returncode == 0, plotting_import.stderr
