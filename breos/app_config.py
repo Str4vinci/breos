@@ -155,6 +155,15 @@ def _validate_sky_settings(
 
 def validate_config(cfg: dict[str, Any]) -> None:
     """Validate user-facing App config before resolving derived values."""
+    has_arrays = _validate_structure_and_location(cfg)
+    _validate_pv_and_inverter(cfg, has_arrays)
+    _validate_time_and_weather(cfg)
+    _validate_economics(cfg)
+    _validate_battery_and_degradation(cfg)
+
+
+def _validate_structure_and_location(cfg: dict[str, Any]) -> bool:
+    """Validate top-level keys, required inputs, and location structure."""
     if "battery_type" in cfg:
         raise ValueError(
             "'battery_type' is an ambiguous legacy selector and is not supported by App. "
@@ -193,6 +202,11 @@ def validate_config(cfg: dict[str, Any]) -> None:
     elif not isinstance(loc, str):
         raise TypeError("'location' must be a string key or a dict with latitude/longitude/timezone")
 
+    return has_arrays
+
+
+def _validate_pv_and_inverter(cfg: dict[str, Any], has_arrays: bool) -> None:
+    """Validate PV sizing, array geometry, sky models, and inverter inputs."""
     if not has_arrays and (not _is_int(cfg["n_modules"]) or cfg["n_modules"] < 1):
         raise ValueError("'n_modules' must be >= 1")
     if has_arrays:
@@ -238,6 +252,10 @@ def validate_config(cfg: dict[str, Any]) -> None:
         raise ValueError("'inverter_efficiency' must be between 0 (exclusive) and 1 (inclusive)")
     if _finite_real(cfg["inverter_loading_ratio"], "inverter_loading_ratio") <= 0:
         raise ValueError("'inverter_loading_ratio' must be > 0")
+
+
+def _validate_time_and_weather(cfg: dict[str, Any]) -> None:
+    """Validate simulation horizon, resolution, and solar-model selections."""
     if not _is_int(cfg["projection_years"]) or cfg["projection_years"] < 1:
         raise ValueError("'projection_years' must be >= 1")
     if not 0 <= _finite_real(cfg["pv_degradation_rate"], "pv_degradation_rate") < 1:
@@ -261,6 +279,10 @@ def validate_config(cfg: dict[str, Any]) -> None:
         for name, value in overrides.items():
             if not isinstance(value, (int, float)) or not 0 <= value <= 100:
                 raise ValueError(f"'pv_loss_overrides[{name!r}]' must be a percentage between 0 and 100")
+
+
+def _validate_economics(cfg: dict[str, Any]) -> None:
+    """Validate financial and optional export-emissions inputs."""
     for key in ("inflation_rate", "discount_rate"):
         if _finite_real(cfg[key], key) <= -1:
             raise ValueError(f"'{key}' must be greater than -1")
@@ -269,6 +291,10 @@ def validate_config(cfg: dict[str, Any]) -> None:
     if cfg["export_emissions_factor_gco2_kwh"] is not None:
         if _finite_real(cfg["export_emissions_factor_gco2_kwh"], "export_emissions_factor_gco2_kwh") < 0:
             raise ValueError("'export_emissions_factor_gco2_kwh' must be >= 0 when configured")
+
+
+def _validate_battery_and_degradation(cfg: dict[str, Any]) -> None:
+    """Validate battery dispatch and explicit degradation-engine selection."""
     min_soc = _finite_real(cfg["battery_min_soc"], "battery_min_soc")
     max_soc = _finite_real(cfg["battery_max_soc"], "battery_max_soc")
     if not 0 <= min_soc < max_soc <= 1:

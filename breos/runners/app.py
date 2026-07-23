@@ -12,6 +12,7 @@ from breos.app_config import ResolvedAppConfig, build_costs_dict
 from breos.app_inputs import AppRuntimeDependencies, prepare_simulation_inputs
 from breos.battery import BatteryConfig, simulate_energy_balance
 from breos.degradation.profiles import BLAST_STATE_SCHEMA_VERSION, get_battery_model_profile
+from breos.degradation.results import build_degradation_summary
 from breos.economics import calculate_lcoe_from_projection, cost_analysis_projection, find_payback_year
 from breos.solar import PVProductionBreakdown
 from breos.utils import get_hours_per_step
@@ -397,31 +398,22 @@ def run_app_simulation(
     if degradation_engine == "blast":
         profile = get_battery_model_profile(str(blast_model))
         warning_records = degradation_state.get("blast_engine", {}).get("warnings", []) if degradation_state else []
-        degradation_summary = {
-            "engine": "blast",
-            "model_key": blast_model,
-            "model_profile": profile.as_dict(),
-            "initial_soh_pct": 100.0,
-            "final_soh_pct": round(float(current_soh), 1),
-            "replacement_events": replacement_events,
-            "calibration_basis": "cell-model",
-            "pack_calibrated": False,
-            "experimental_range_warnings": [
-                warning for warning in warning_records if warning.get("category") == "experimental_range"
-            ],
-            "aging_horizon_extrapolation_warnings": [
-                warning for warning in warning_records if warning.get("category") == "aging_horizon"
-            ],
-            "state_schema_version": BLAST_STATE_SCHEMA_VERSION,
-        }
+        degradation_summary = build_degradation_summary(
+            engine="blast",
+            model_key=str(blast_model),
+            model_profile=profile.as_dict(),
+            final_soh_pct=current_soh,
+            replacement_events=replacement_events,
+            warning_records=warning_records,
+            state_schema_version=BLAST_STATE_SCHEMA_VERSION,
+        )
     else:
-        degradation_summary = {
-            "engine": "native",
-            "model_key": cfg["calendar_model"],
-            "initial_soh_pct": 100.0,
-            "final_soh_pct": round(float(current_soh), 2),
-            "replacement_events": replacement_events,
-        }
+        degradation_summary = build_degradation_summary(
+            engine="native",
+            model_key=cfg["calendar_model"],
+            final_soh_pct=current_soh,
+            replacement_events=replacement_events,
+        )
 
     return SimulationArtifacts(
         yearly_df=yearly_df,

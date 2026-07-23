@@ -4,6 +4,17 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 
 ## [Unreleased]
 
+### Changed
+- Extracted BLAST experimental-range and aging-horizon validation into a focused
+  internal warning collector while preserving warning records, snapshot
+  continuation, replacement-reset behavior, and the `breos.App` result schema.
+- Centralized native and BLAST degradation-result construction in a focused
+  schema-aware builder while preserving public fields, engine-specific SOH
+  precision, and shared result/provenance data.
+- Decomposed `breos.App` configuration validation into focused subsystem
+  validators while preserving validation order, public errors, normalization,
+  defaults, and resolution precedence.
+
 ## [0.4.0] - 2026-07-20
 
 ### Added
