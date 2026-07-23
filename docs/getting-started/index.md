@@ -8,6 +8,7 @@ what the result dict contains.
 
 installation
 quickstart
+troubleshooting
 inputs
 recipes
 configuration

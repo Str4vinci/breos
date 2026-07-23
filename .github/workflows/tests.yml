@@ -44,14 +44,62 @@ jobs:
         run: uv run ruff format --check breos/ tests/ tools/
 
       - name: Run tests
+        if: matrix.python-version != '3.12'
         # Slow tests are deselected by default (pyproject addopts: -m "not slow").
         run: uv run pytest tests/ -v
+
+      - name: Run tests with core coverage
+        if: matrix.python-version == '3.12'
+        # Vendored BLAST-Lite is excluded by the coverage configuration.
+        run: uv run pytest tests/ -v --cov=breos --cov-report=term-missing --cov-report=xml
+
+      - name: Upload core coverage report
+        if: matrix.python-version == '3.12'
+        uses: actions/upload-artifact@v4
+        with:
+          name: core-coverage-python-3.12
+          path: coverage.xml
+          if-no-files-found: error
 
       - name: Verify release artifacts
         run: uv run python tools/verify_release_artifacts.py
 
       - name: Build docs
-        run: uv run --extra docs sphinx-build -b html docs docs/_build/html
+        run: uv run --extra docs sphinx-build -W -b html docs docs/_build/html
+
+  platform-smoke:
+    # Keep non-Linux coverage focused on installation and public entrypoints;
+    # the complete version matrix remains on Linux above.
+    if: github.event_name == 'push' || github.event_name == 'pull_request'
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+
+    env:
+      UV_PYTHON: "3.12"
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Install dependencies
+        run: uv sync --extra dev
+
+      - name: Smoke-test public entrypoints
+        run: >-
+          uv run pytest
+          tests/test_public_api.py
+          tests/test_cli_correctness.py
+          tests/test_release_smoke.py::test_readme_quickstart_smoke
+          -q
 
   slow-tests:
     # Long-running endurance tests on Python 3.12. Release pushes and PRs run

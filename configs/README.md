@@ -53,7 +53,11 @@ The catalogue keys used in a config (`location`, `pv_module`, `cost_preset`,
 valid values with:
 
 ```bash
-breos list locations | modules | cost-presets | emissions | load-profiles
+breos list locations
+breos list modules
+breos list cost-presets
+breos list emissions
+breos list load-profiles
 ```
 
 ## Example configs
@@ -84,7 +88,7 @@ any example and edit it for your own scenario.
   recognised table for `breos run` is `[[pv_arrays]]`. The `[sweep]` and
   `[montecarlo]` tables are read by their dedicated CLI commands.
 - Configs written for the research `pvbat` engine — with nested model sections,
-  inheritance, or simulation-type blocks — are **not** compatible: BREOS
-  silently ignores keys it does not recognise, so those sections would be dropped
-  and defaults used instead. Translate the values you need into the flat keys
-  shown in `pv-plus-battery.toml` (and `[montecarlo]` for MC studies).
+  inheritance, or simulation-type blocks — are **not** compatible. BREOS
+  rejects unknown top-level keys rather than silently applying defaults.
+  Translate the values you need into the flat keys shown in
+  `pv-plus-battery.toml` (and `[montecarlo]` for MC studies).

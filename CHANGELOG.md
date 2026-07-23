@@ -4,6 +4,17 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 
 ## [Unreleased]
 
+### Changed
+- Deferred optional plotting imports until a plotting compatibility attribute
+  is first accessed, keeping core imports and non-plotting CLI commands quiet
+  while preserving existing top-level names.
+- Improved first-run onboarding with a no-file/no-network dry run,
+  troubleshooting guidance, corrected discovery commands, and synchronized
+  support and release documentation.
+- Added grouped weekly dependency updates, core-package coverage reporting that
+  excludes vendored BLAST-Lite, and lightweight macOS/Windows public-entrypoint
+  smoke tests.
+
 ## [0.4.1] - 2026-07-23
 
 ### Changed

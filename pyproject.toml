@@ -31,6 +31,8 @@ dependencies = [
 Homepage = "https://github.com/Str4vinci/breos"
 Documentation = "https://breos.readthedocs.io/"
 Repository = "https://github.com/Str4vinci/breos"
+Issues = "https://github.com/Str4vinci/breos/issues"
+Changelog = "https://github.com/Str4vinci/breos/blob/main/CHANGELOG.md"
 
 [project.scripts]
 breos = "breos.cli:main"
@@ -54,6 +56,7 @@ location-tools = [
 ]
 dev = [
     "pytest>=8.0",
+    "pytest-cov>=7.0",
     "ruff>=0.15",
     "matplotlib>=3.10.8",
     "numba>=0.63.1",
@@ -83,6 +86,15 @@ addopts = ["-m", "not slow"]
 markers = [
     "slow: long-running endurance and multi-year integration tests; deselected by default, run with -m slow",
 ]
+
+[tool.coverage.run]
+branch = true
+source = ["breos"]
+omit = ["breos/degradation/blast/*"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
 
 [tool.ruff]
 line-length = 120

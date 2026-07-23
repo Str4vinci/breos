@@ -44,7 +44,10 @@ notice, and pinned upstream provenance.
 ## 0.4.x Validation Matrix
 
 The `Tests` workflow runs the complete matrix on Python 3.11, 3.12, 3.13, and
-3.14. The following release claims must remain tied to executable checks:
+3.14. Python 3.12 also reports branch-aware core-package coverage, excluding
+the vendored BLAST-Lite implementation, while macOS and Windows run a focused
+public-entrypoint smoke suite. The following release claims must remain tied to
+executable checks:
 
 | Gate | Executable coverage |
 | --- | --- |

@@ -15,7 +15,7 @@ cd breos
 
 ```bash
 # With uv (recommended)
-uv sync --extra dev
+uv sync --extra dev --extra docs
 
 # With pip
 pip install -e ".[dev]"
@@ -39,9 +39,10 @@ For release-style validation, run the same gates used by CI:
 ```bash
 uv run ruff check breos/ tests/ tools/
 uv run ruff format --check breos/ tests/ tools/
-uv run pytest tests/ -v
+uv run pytest tests/ -v --cov=breos --cov-report=term-missing
+uv run pytest tests/ -m slow -v
 uv run python tools/verify_release_artifacts.py
-uv run --extra docs sphinx-build -b html docs docs/_build/html
+uv run --extra docs sphinx-build -W -b html docs docs/_build/html
 ```
 
 ## Branching
@@ -84,8 +85,10 @@ uv run pytest tests/test_app.py -v
 
 - PRs should target `develop`, not `main`
 - Include a brief description of what changed and why
-- Make sure CI passes. It runs lint, format checks, tests, release artifact
-  verification, and the Sphinx docs build on every PR to `develop` or `main`.
+- Make sure CI passes. It runs lint, format checks, tests and core-package
+  coverage, release artifact verification, the Sphinx docs build, and
+  lightweight macOS/Windows public-entrypoint checks on every PR to `develop`
+  or `main`.
 - Keep PRs focused — one feature or fix per PR
 
 ## Reporting Issues

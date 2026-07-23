@@ -115,6 +115,7 @@ api/index
 resources
 release
 architecture/third-party-wrapping
+architecture/0.4x-refactor-plan
 architecture/string-inverter-sizing
 architecture/battery-degradation-policy
 architecture/blast-degradation-engine

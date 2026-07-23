@@ -46,6 +46,14 @@ uv add breos          # as a project dependency
 uvx breos --version   # run the CLI without installing
 ```
 
+Verify the installation and inspect a complete resolved configuration without
+creating a file, fetching weather, or running a simulation:
+
+```bash
+breos run --location porto --n-modules 10 \
+  --annual-consumption-kwh 4000 --dry-run
+```
+
 The default install is a lean core. Some workflows need optional extras (e.g.
 optimization, historical weather, plots):
 
@@ -125,7 +133,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md). Feature work happens on branches off
 
 ## Contact
 
-For questions, collaboration, or access to additional modules: lrodrigues@fe.up.pt.
+For questions, research collaboration, or support: lrodrigues@fe.up.pt.
 
 ## License
 

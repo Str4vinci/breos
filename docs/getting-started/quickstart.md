@@ -8,6 +8,20 @@ result dict.
 The example uses packaged defaults and public weather access. For real
 projects, review [Required Inputs](inputs.md) before interpreting results.
 
+## Verify the installation without network access
+
+Before creating a config file, run a complete configuration dry run:
+
+```bash
+breos run --location porto --n-modules 10 \
+  --annual-consumption-kwh 4000 --dry-run
+```
+
+This validates the installation and prints the resolved location, PV sizing,
+inverter, load, battery, economics, emissions, and loss assumptions. It does
+not fetch weather or start a simulation. If it fails, see
+[Troubleshooting](troubleshooting.md).
+
 ## A 10-minute first run
 
 Create a small `quickstart.toml` config:
@@ -161,5 +175,7 @@ The CLI writes the same JSON-serializable dict that `App.result()` returns.
 - See [Configuration](configuration.md) for every option `App` accepts.
 - See [Interpreting results](interpreting-results.md) for what each result
   key means.
+- See [Troubleshooting](troubleshooting.md) for weather access, preset,
+  optional-dependency, cache, and runtime problems.
 - See the [API reference](../api/index.md) for the lower-level functions
   the `App` calls under the hood.
