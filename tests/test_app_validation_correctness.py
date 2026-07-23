@@ -5,6 +5,7 @@ import math
 import pytest
 
 from breos.app import App
+from breos.app_config import merge_defaults, validate_config
 
 
 def _config(**overrides):
@@ -72,3 +73,51 @@ def test_ac_coupling_is_an_explicitly_unsupported_public_configuration():
         App(_config(dc_coupled=False))
     with pytest.raises(TypeError, match="dc_coupled"):
         App(_config(dc_coupled="true"))
+
+
+@pytest.mark.parametrize(
+    ("overrides", "error_type", "message"),
+    [
+        (
+            {"location": {"latitude": 91, "longitude": 0, "timezone": "UTC"}},
+            ValueError,
+            "'location.latitude' must be between -90 and 90",
+        ),
+        ({"pv_arrays": [{"modules": 0}]}, ValueError, "'pv_arrays[0].modules' must be >= 1"),
+        (
+            {"inverter_efficiency": 0},
+            ValueError,
+            "'inverter_efficiency' must be between 0 (exclusive) and 1 (inclusive)",
+        ),
+        ({"resolution": "30min"}, ValueError, "'resolution' must be 'h' or '15min'"),
+        ({"discount_rate": -1}, ValueError, "'discount_rate' must be greater than -1"),
+        (
+            {"battery_min_soc": 0.9, "battery_max_soc": 0.2},
+            ValueError,
+            "'battery_min_soc' and 'battery_max_soc' must satisfy 0 <= min < max <= 1",
+        ),
+    ],
+)
+def test_validation_subsystems_preserve_public_error_contract(overrides, error_type, message):
+    """Characterize exact public errors at each validation subsystem boundary."""
+    cfg = merge_defaults(_config(**overrides))
+
+    with pytest.raises(error_type) as exc_info:
+        validate_config(cfg)
+
+    assert str(exc_info.value) == message
+
+
+def test_validation_preserves_blast_normalization_and_conflict_errors():
+    cfg = merge_defaults(_config(degradation_engine=" BLAST ", blast_model="lfp_gr_250ah_prismatic", battery_kwh=5.0))
+
+    validate_config(cfg)
+
+    assert cfg["degradation_engine"] == "blast"
+
+    invalid = merge_defaults(
+        _config(degradation_engine="blast", blast_model="lfp_gr_250ah_prismatic", battery_kwh=5.0, montecarlo={})
+    )
+    with pytest.raises(ValueError) as exc_info:
+        validate_config(invalid)
+    assert str(exc_info.value) == "'degradation_engine=blast' is not supported with Monte Carlo yet"

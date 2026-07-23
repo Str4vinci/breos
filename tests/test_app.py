@@ -695,6 +695,7 @@ class TestAppSimulateNoBattery:
         assert len({warning["code"] for warning in range_warnings}) == len(range_warnings)
         assert degradation["aging_horizon_extrapolation_warnings"] == []
         assert result["provenance"]["degradation"] == degradation
+        assert result["provenance"]["degradation"] is degradation
 
     def test_investment_positive(self):
         assert self.result["total_investment_eur"] > 0
