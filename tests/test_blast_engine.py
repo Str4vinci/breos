@@ -213,6 +213,92 @@ def test_sourced_aging_horizon_warns_once_and_survives_snapshot():
     assert len([item for item in caught if item.category is BlastAgingHorizonWarning]) == 1
 
 
+def test_warning_records_have_stable_json_shape_and_order():
+    engine = BlastEngine("nmc811_grsi_lgmj1_4ah")
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        engine.step(
+            np.array([0.0, 900.0, 1800.0]),
+            np.array([0.0, 1.0, 0.0]),
+            np.array([60.0, 60.0, 60.0]),
+        )
+
+    expected = [
+        {
+            "code": "experimental_range.temperature_c",
+            "message": (
+                "BLAST model 'nmc811_grsi_lgmj1_4ah' received temperature_c range "
+                "[60, 60] outside experimental range [0, 50]."
+            ),
+            "category": "experimental_range",
+            "field": "temperature_c",
+            "observed": [60.0, 60.0],
+            "supported": [0.0, 50.0],
+        },
+        {
+            "code": "experimental_range.soc",
+            "message": (
+                "BLAST model 'nmc811_grsi_lgmj1_4ah' received soc range [0, 1] outside experimental range [0.1, 0.9]."
+            ),
+            "category": "experimental_range",
+            "field": "soc",
+            "observed": [0.0, 1.0],
+            "supported": [0.1, 0.9],
+        },
+        {
+            "code": "experimental_range.dod",
+            "message": (
+                "BLAST model 'nmc811_grsi_lgmj1_4ah' received dod range [1, 1] outside experimental range [0.2, 0.8]."
+            ),
+            "category": "experimental_range",
+            "field": "dod",
+            "observed": [1.0, 1.0],
+            "supported": [0.2, 0.8],
+        },
+        {
+            "code": "experimental_range.c_rate_charge",
+            "message": (
+                "BLAST model 'nmc811_grsi_lgmj1_4ah' received c_rate_charge 4 C above experimental maximum 1 C."
+            ),
+            "category": "experimental_range",
+            "field": "c_rate_charge",
+            "observed": 4.0,
+            "supported": 1.0,
+        },
+        {
+            "code": "experimental_range.c_rate_discharge",
+            "message": (
+                "BLAST model 'nmc811_grsi_lgmj1_4ah' received c_rate_discharge 4 C above experimental maximum 3 C."
+            ),
+            "category": "experimental_range",
+            "field": "c_rate_discharge",
+            "observed": 4.0,
+            "supported": 3.0,
+        },
+    ]
+
+    assert json.dumps(engine.warning_records(), separators=(",", ":")) == json.dumps(
+        expected,
+        separators=(",", ":"),
+    )
+
+
+def test_reset_preserves_run_level_warning_history():
+    profile = (np.array([0.0, 86400.0]), np.array([0.5, 0.5]), np.array([55.0, 55.0]))
+    engine = BlastEngine("lfp_gr_250ah_prismatic")
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        engine.step(*profile)
+        records_before_reset = engine.warning_records()
+        engine.reset()
+        engine.step(*profile)
+
+    assert engine.warning_records() == records_before_reset
+    assert len([item for item in caught if item.category is BlastExperimentalRangeWarning]) == 1
+
+
 def test_all_models_stay_finite_when_daily_stressors_soften():
     """Deep-cycling days followed by light low-SOC days must not NaN.
 
