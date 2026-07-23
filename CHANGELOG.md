@@ -14,6 +14,9 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 - Added grouped weekly dependency updates, core-package coverage reporting that
   excludes vendored BLAST-Lite, and lightweight macOS/Windows public-entrypoint
   smoke tests.
+- Removed the unused `openpyxl` and `pyarrow` development/validation
+  dependencies; the now-empty `validation` extra remains as a compatibility
+  alias because the validation harness uses committed CSV and JSON artifacts.
 
 ## [0.4.1] - 2026-07-23
 

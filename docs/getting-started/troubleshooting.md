@@ -50,7 +50,6 @@ pip install "breos[plots]"          # Matplotlib plotting helpers
 pip install "breos[optimization]"   # pymoo optimization
 pip install "breos[weather]"        # Open-Meteo historical weather
 pip install "breos[fast]"           # Numba acceleration
-pip install "breos[validation]"     # Excel and Arrow validation tools
 ```
 
 Core imports, help, option discovery, and configuration validation do not load

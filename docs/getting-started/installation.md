@@ -40,7 +40,6 @@ pip install "breos[plots]"          # matplotlib plotting helpers
 pip install "breos[optimization]"   # pymoo multi-objective sizing
 pip install "breos[weather]"        # Open-Meteo historical weather fetching
 pip install "breos[fast]"           # Numba kernels
-pip install "breos[validation]"     # Excel / Arrow dependencies for local validation work
 pip install "breos[location-tools]" # geocoding and timezone lookup helpers
 ```
 
@@ -50,8 +49,8 @@ For a source checkout, use the editable equivalents, for example
 ## Development install
 
 If you plan to contribute, install with the dev extras for testing and
-linting. The dev extra also installs BREOS's optional feature dependencies so
-the full local test suite can exercise optional paths:
+linting. The dev extra also installs the optional packages exercised by the
+full local test suite:
 
 ```bash
 pip install -e ".[dev]"

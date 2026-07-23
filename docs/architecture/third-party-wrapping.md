@@ -9,7 +9,7 @@
 BREOS imports several third-party libraries directly throughout the package
 (`pvlib`, `pandas`, `numpy`, `scipy`, `numba`, `rainflow`, `geopy`,
 `openmeteo-requests`, `timezonefinder`, `pymoo`,
-`requests-cache`, `matplotlib`, `openpyxl`).
+`requests-cache`, `matplotlib`).
 
 Direct usage means those libraries co-own the BREOS public API. When they
 change — and `pvlib` in particular has historically broken APIs across
@@ -111,7 +111,6 @@ signatures.
 - `openmeteo-requests`, `requests-cache` → `breos.adapters.weather_client`.
 - `geopy`, `timezonefinder` → `breos.adapters.geo`.
 - `pymoo` → `breos.adapters.multi_objective` (used in `optimization.py`).
-- `openpyxl`, `pyarrow` → keep in validation/export-specific paths.
 
 ### Out of scope: pandas and numpy
 
