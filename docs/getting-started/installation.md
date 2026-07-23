@@ -74,7 +74,14 @@ uv sync --extra dev --extra docs     # development plus documentation
 
 ## Verifying the install
 
-```python
-import breos
-print(breos.__version__)
+Check the installed version, then resolve a complete configuration without
+creating a file, fetching weather, or running a simulation:
+
+```bash
+breos --version
+breos run --location porto --n-modules 10 \
+  --annual-consumption-kwh 4000 --dry-run
 ```
+
+See [Troubleshooting](troubleshooting.md) if the command fails or a later
+weather-backed simulation cannot reach its data source.

@@ -8,9 +8,12 @@ are intentions, not commitments — see GitHub issues for active work.
 Recorded 2026-07 after the 0.4.0 release. Like everything here these are
 intentions, not commitments; reassess after each release.
 
-- **0.4.1 / 0.4.2** — maintainability refactors only, following a separate
-  working refactor plan for selected BREOS functions. No feature or behavior
-  changes.
+- **0.4.1** — behavior-preserving degradation and configuration refactors
+  (warning collection, public degradation results, and validation boundaries).
+- **0.4.2** — remaining behavior-preserving maintainability work plus onboarding
+  hygiene: lazy optional imports, a quiet no-network installation check,
+  first-run troubleshooting, dependency/coverage automation, and lightweight
+  portability evidence. No scientific-model, dispatch, or result changes.
 - **0.5.0** — bifacial rear-gain is the firm scope (activation key, explicit
   rear-gain loss-waterfall stage, benchmark rows). Independently complete
   PV-fidelity items (the pvsyst real-efficiency fix, additional IAM and
@@ -94,7 +97,7 @@ documentation live in one place.
   deliberately scheduled *before* the 0.6.0 TOU/currency work adds another
   cluster of config keys, and deserves its own release slot rather than
   riding along a feature release.
-- **Coordination with the function-level refactor plan:** earlier internal
+- **Coordination with the [function-level refactor plan](docs/architecture/0.4x-refactor-plan.md):** earlier internal
   validation cleanup should create reusable boundaries for the full schema,
   not throwaway helpers that need another rewrite in 0.5.x.
 - **The hard part is error-message parity**, not the schema itself: the
@@ -144,10 +147,35 @@ Ongoing docs hygiene:
   `pv_loss_overrides`.
 - Keep the representative quickstart output excerpt in the docs close to what
   current dependency versions actually produce.
+- Keep security support tables, release-matrix headings, example commands, and
+  version-specific limitation text aligned with the latest release.
+
+Immediate 0.4.2 onboarding work:
+
+- Put a no-file, no-network `breos run ... --dry-run` installation check next
+  to the install command.
+- Keep optional plotting imports lazy so core imports, `--help`, option
+  discovery, and configuration validation do not initialize Matplotlib.
+- Maintain a short first-run troubleshooting page covering weather/network
+  failures, preset discovery, optional extras, cache behavior, and expected
+  runtimes.
+- Maintain weekly grouped dependency updates, core-package coverage that does
+  not treat vendored BLAST as ordinary application code, and lightweight
+  macOS/Windows public-API smoke checks.
 
 Option discovery work:
 
 - Add matching Python helpers where useful, building on `list_modules()`.
+- Curate small `good first issue` tasks around docs, examples, and tooling so
+  the contribution guide leads to approachable work.
+
+Future additive onboarding work:
+
+- Consider a deterministic offline `breos demo` command using clearly labeled
+  synthetic inputs. Because this adds a public CLI surface, schedule it for a
+  feature release (0.5.x) rather than forcing it into a 0.4.x patch.
+- Consider a compact human-readable completion summary while retaining the
+  full JSON result as the machine-readable output contract.
 
 Agent and contributor setup:
 

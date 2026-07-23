@@ -32,7 +32,7 @@ uv run ruff check breos/ tests/ tools/
 uv run ruff format --check breos/ tests/ tools/
 uv run pytest tests/ -v
 uv run python tools/verify_release_artifacts.py
-uv run --extra docs sphinx-build -b html docs docs/_build/html
+uv run --extra docs sphinx-build -W -b html docs docs/_build/html
 ```
 
 The release artifact verifier must build both wheel and sdist, confirm packaged
@@ -41,10 +41,13 @@ BREOS from the installed wheel instead of the source checkout. It also imports
 all 14 vendored BLAST models and verifies the installed BLAST license, DOE
 notice, and pinned upstream provenance.
 
-## 0.4.0 Validation Matrix
+## 0.4.x Validation Matrix
 
 The `Tests` workflow runs the complete matrix on Python 3.11, 3.12, 3.13, and
-3.14. The following release claims must remain tied to executable checks:
+3.14. Python 3.12 also reports branch-aware core-package coverage, excluding
+the vendored BLAST-Lite implementation, while macOS and Windows run a focused
+public-entrypoint smoke suite. The following release claims must remain tied to
+executable checks:
 
 | Gate | Executable coverage |
 | --- | --- |
