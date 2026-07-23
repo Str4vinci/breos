@@ -347,6 +347,31 @@ class TestSimulateEnergyBalance:
         emax_cold = 10000 * config.max_soc * lfp_capacity_factor(0.0)
         assert results_df["Battery_Energy"].iloc[-1] <= emax_cold + 1e-9
 
+    def test_native_degradation_engine_preserves_final_state_shape(self):
+        idx = pd.date_range("2025-01-01 00:00", periods=1, freq="h", tz="UTC")
+        result = simulate_energy_balance(
+            pv_dc=pd.Series(0.0, index=idx),
+            houseload=pd.DataFrame({"Load": 0.0}, index=idx),
+            battery_config=BatteryConfig(nominal_energy_wh=5000, enable_replacement=False),
+            freq="h",
+            initial_fec=3.0,
+            initial_calendar_seconds=86400.0,
+            initial_resistance_growth=0.05,
+            initial_cumulative_cycle_deg=0.1,
+            initial_cumulative_cal_deg=0.2,
+            degradation_engine="native",
+            return_degradation_state=True,
+        )
+
+        assert result[-1] == {
+            "degradation_engine": "native",
+            "fec_cum": 3.0,
+            "cumulative_calendar_seconds": 86400.0,
+            "resistance_growth": 0.05,
+            "cumulative_cycle_degradation": 0.1,
+            "cumulative_calendar_degradation": 0.2,
+        }
+
     def test_blast_degradation_engine_returns_final_state(self):
         idx = pd.date_range("2025-01-01 00:00", periods=48, freq="h", tz="UTC")
         pv_dc = pd.Series(0.0, index=idx)
