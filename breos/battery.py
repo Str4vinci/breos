@@ -62,6 +62,12 @@ from breos.constants import (
     Z_Q,
     Z_R,
 )
+from breos.degradation.protocol import (
+    BlastDegradationAdapter,
+    DegradationDay,
+    DegradationLifecycle,
+    NativeDegradationAdapter,
+)
 from breos.economics import BATTERY_REPLACEMENT_COST_PER_KWH
 from breos.inverter import calculate_dc_ac_power, dc_power_for_ac_output
 from breos.utils import get_hours_per_step, remap_datetime_index_years
@@ -593,35 +599,50 @@ def simulate_energy_balance(
     _res_batt_pv_end = np.empty(n_steps)
     # Hoist invariant check out of the loop
     has_battery = battery_config.nominal_energy_wh > 1 and (battery_config.max_soc - battery_config.min_soc) > 0
-    blast_engine = None
-    build_blast_endpoint_day = None
-    blast_day_start_soc = battery_config.max_soc if has_battery else 0.0
-    blast_day_start_t_cell = float(_temp_vals[0]) if n_steps else 25.0
+    degradation_day_start_soc = battery_config.max_soc if has_battery else 0.0
+    degradation_day_start_t_cell = float(_temp_vals[0]) if n_steps else 25.0
 
     if degradation_engine_key == "blast":
         if not has_battery:
             raise ValueError("degradation_engine='blast' requires a configured battery")
 
-        from breos.degradation.engine import BlastEngine, build_endpoint_day
-
         state_payload = initial_degradation_state or {}
         blast_snapshot = state_payload.get("blast_engine", state_payload)
-        if blast_snapshot:
-            blast_engine = BlastEngine.from_snapshot(blast_model, blast_snapshot)
-        else:
-            blast_engine = BlastEngine(blast_model)
-            if not math.isclose(battery_config.initial_soh, 100.0):
-                raise ValueError(
-                    "BLAST starts from a beginning-of-life model unless initial_degradation_state is provided"
-                )
+        if not blast_snapshot and not math.isclose(battery_config.initial_soh, 100.0):
+            raise ValueError("BLAST starts from a beginning-of-life model unless initial_degradation_state is provided")
+        degradation_lifecycle: DegradationLifecycle = BlastDegradationAdapter(
+            str(blast_model),
+            initial_state=state_payload,
+            initial_fec=initial_fec,
+            initial_calendar_seconds=initial_calendar_seconds,
+            initial_cumulative_cycle_degradation=initial_cumulative_cycle_deg,
+            initial_cumulative_calendar_degradation=initial_cumulative_cal_deg,
+        )
+        degradation_day_start_soc = float(state_payload.get("day_start_soc_absolute", degradation_day_start_soc))
+        degradation_day_start_t_cell = float(state_payload.get("day_start_temperature_c", degradation_day_start_t_cell))
+    else:
+        degradation_lifecycle = NativeDegradationAdapter(
+            model_key=battery_config.calendar_model,
+            initial_soh_fraction=battery_soh_decimal,
+            initial_fec=initial_fec,
+            initial_calendar_seconds=initial_calendar_seconds,
+            initial_cumulative_cycle_degradation=initial_cumulative_cycle_deg,
+            initial_cumulative_calendar_degradation=initial_cumulative_cal_deg,
+            nominal_energy_wh=battery_config.nominal_energy_wh,
+            battery_type=battery_config.battery_type,
+            k0_fraction=k0_frac,
+            activation_energy=Ea_val,
+            soc_exponent=n_val,
+            time_exponent=b_val,
+            cycle_step=update_battery_soh_cyclewise,
+            calendar_step=update_battery_soh_calendar,
+            debug=debug,
+        )
 
-        build_blast_endpoint_day = build_endpoint_day
-        battery_soh_decimal = blast_engine.soh()
-        Battery_SOH = battery_soh_decimal * 100.0
-        if initial_energy_wh is None:
-            Battery_Energy_Wh = battery_config.nominal_energy_wh * battery_soh_decimal * battery_config.max_soc
-        blast_day_start_soc = float(state_payload.get("day_start_soc_absolute", blast_day_start_soc))
-        blast_day_start_t_cell = float(state_payload.get("day_start_temperature_c", blast_day_start_t_cell))
+    battery_soh_decimal = degradation_lifecycle.soh()
+    Battery_SOH = battery_soh_decimal * 100.0
+    if degradation_engine_key == "blast" and initial_energy_wh is None:
+        Battery_Energy_Wh = battery_config.nominal_energy_wh * battery_soh_decimal * battery_config.max_soc
 
     # Bind capacity factor function once
     _cap_factor_fn = lfp_capacity_factor
@@ -824,50 +845,20 @@ def simulate_energy_balance(
             mean_T_cell = T_cell_day_sum / steps_per_day
             effective_rte = battery_config.charge_efficiency * battery_config.discharge_efficiency
 
-            if blast_engine is not None:
-                previous_soh_decimal = battery_soh_decimal
-                t_secs_day, soc_day, t_cell_day_c = build_blast_endpoint_day(
-                    hours_per_step * 3600.0,
-                    soc_series.to_numpy(),
-                    t_cell_day,
-                    start_soc=blast_day_start_soc,
-                    start_temperature_c=blast_day_start_t_cell,
+            degradation_step = degradation_lifecycle.step(
+                DegradationDay(
+                    soc=soc_series,
+                    temperature_c=t_cell_day,
+                    step_seconds=hours_per_step * 3600.0,
+                    start_soc=degradation_day_start_soc,
+                    start_temperature_c=degradation_day_start_t_cell,
                 )
-                # BLAST capacity extrapolations can dip below zero for cells
-                # aged far past their data; a dead battery has zero capacity.
-                battery_soh_decimal = max(0.0, blast_engine.step(t_secs_day, soc_day, t_cell_day_c))
-                fec_cum = float(blast_engine.model.stressors["efc"][-1])
-                dSOH_cycle = 0.0
-                dSOH_calendar = 0.0
-                dSOH_blast = max(0.0, previous_soh_decimal - battery_soh_decimal)
-                cumulative_cal_seconds += 86400.0
-            else:
-                # Cycle degradation
-                soh_after_cycle, dSOH_cycle, fec_cum = update_battery_soh_cyclewise(
-                    battery_soh_decimal,
-                    soc_series,
-                    battery_config.nominal_energy_wh,
-                    fec_cum=fec_cum,
-                    battery_type=battery_config.battery_type,
-                    debug=debug,
-                )
-
-                # Calendar degradation — use mean cell temperature over the day
-                soh_after_calendar, dSOH_calendar, cumulative_cal_seconds = update_battery_soh_calendar(
-                    soh_after_cycle,
-                    k0_frac=k0_frac,
-                    Ea=Ea_val,
-                    n=n_val,
-                    cal_b=b_val,
-                    T_cell_C=mean_T_cell,
-                    cumulative_cal_seconds=cumulative_cal_seconds,
-                    dt_days=1.0,
-                    mean_soc_absolute=mean_soc_abs,
-                    debug=debug,
-                )
-
-                battery_soh_decimal = soh_after_calendar
-                dSOH_blast = 0.0
+            )
+            battery_soh_decimal = degradation_step.soh_fraction
+            fec_cum = degradation_step.fec
+            cumulative_cal_seconds = degradation_step.calendar_seconds
+            dSOH_cycle = degradation_step.cycle_degradation
+            dSOH_calendar = degradation_step.calendar_degradation
 
             Battery_SOH = battery_soh_decimal * 100.0
 
@@ -930,8 +921,7 @@ def simulate_energy_balance(
                 cumulative_resistance_cycle = 0.0
                 cumulative_resistance_calendar = 0.0
                 day_end_soc_absolute = battery_config.max_soc
-                if blast_engine is not None:
-                    blast_engine.reset()
+                degradation_lifecycle.reset()
 
                 # Replacement occurs inside this timestep boundary. Rewrite
                 # the already-recorded state so the reported end matches the
@@ -963,9 +953,7 @@ def simulate_energy_balance(
                 "Total_Degradation": 1.0 - battery_soh_decimal,
                 "Mean_SOC_Absolute": mean_soc_abs,
             }
-            if blast_engine is not None:
-                degradation_record["BLAST_Model"] = blast_model
-                degradation_record["BLAST_Degradation"] = dSOH_blast
+            degradation_record.update(degradation_lifecycle.tracking_fields(degradation_step))
             if battery_config.enable_resistance_fade:
                 degradation_record["Resistance_Growth"] = resistance_growth
                 degradation_record["Effective_RTE"] = effective_rte
@@ -974,8 +962,8 @@ def simulate_energy_balance(
             # Reset daily accumulators
             soc_buf_idx = 0
             T_cell_day_sum = 0.0
-            blast_day_start_soc = day_end_soc_absolute
-            blast_day_start_t_cell = day_end_t_cell
+            degradation_day_start_soc = day_end_soc_absolute
+            degradation_day_start_t_cell = day_end_t_cell
 
     # Build results DataFrame from pre-allocated arrays
     df = pd.DataFrame(
@@ -1034,23 +1022,19 @@ def simulate_energy_balance(
     if not return_degradation_state:
         return result
 
+    adapter_snapshot = degradation_lifecycle.snapshot(
+        day_start_soc=degradation_day_start_soc,
+        day_start_temperature_c=degradation_day_start_t_cell,
+    )
     final_degradation_state: Dict[str, Any] = {
-        "degradation_engine": degradation_engine_key,
-        "fec_cum": float(fec_cum),
-        "cumulative_calendar_seconds": float(cumulative_cal_seconds),
+        "degradation_engine": adapter_snapshot.pop("degradation_engine"),
+        "fec_cum": float(adapter_snapshot.pop("fec_cum")),
+        "cumulative_calendar_seconds": float(adapter_snapshot.pop("cumulative_calendar_seconds")),
         "resistance_growth": float(resistance_growth),
-        "cumulative_cycle_degradation": float(cumulative_cycle_deg),
-        "cumulative_calendar_degradation": float(cumulative_cal_deg),
+        "cumulative_cycle_degradation": float(adapter_snapshot.pop("cumulative_cycle_degradation")),
+        "cumulative_calendar_degradation": float(adapter_snapshot.pop("cumulative_calendar_degradation")),
+        **adapter_snapshot,
     }
-    if blast_engine is not None:
-        final_degradation_state.update(
-            {
-                "blast_model": blast_model,
-                "blast_engine": blast_engine.state_snapshot(),
-                "day_start_soc_absolute": float(blast_day_start_soc),
-                "day_start_temperature_c": float(blast_day_start_t_cell),
-            }
-        )
 
     return (*result, final_degradation_state)
 

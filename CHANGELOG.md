@@ -21,6 +21,9 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 - Added reproducible BLAST parity-fixture tooling with strict clean-checkout and
   upstream-pin guards plus a reviewed provenance manifest, while keeping the
   committed scientific fixture unchanged during ordinary tests.
+- Added a narrow internal degradation lifecycle protocol with native and BLAST
+  adapters, centralizing daily stepping, reset, snapshot, warning, tracking,
+  and provenance behavior without changing dispatch or public result schemas.
 
 ## [0.4.1] - 2026-07-23
 

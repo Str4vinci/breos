@@ -11,6 +11,8 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping
 from typing import Any, Literal
 
+from breos.degradation.protocol import resolve_degradation_provenance, warning_records_from_snapshot
+
 DegradationEngineName = Literal["blast", "native"]
 
 
@@ -63,3 +65,25 @@ def build_degradation_summary(
         ],
         "state_schema_version": state_schema_version,
     }
+
+
+def build_degradation_summary_from_state(
+    *,
+    engine: DegradationEngineName,
+    model_key: str,
+    final_soh_pct: float,
+    replacement_events: list[dict[str, int]],
+    state: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    """Build a result block from lifecycle state without runner branching."""
+
+    provenance = resolve_degradation_provenance(engine, model_key)
+    return build_degradation_summary(
+        engine=provenance.engine,
+        model_key=provenance.model_key,
+        model_profile=provenance.model_profile,
+        final_soh_pct=final_soh_pct,
+        replacement_events=replacement_events,
+        warning_records=warning_records_from_snapshot(engine, state),
+        state_schema_version=provenance.state_schema_version,
+    )
