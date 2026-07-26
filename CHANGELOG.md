@@ -11,9 +11,10 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 - Improved first-run onboarding with a no-file/no-network dry run,
   troubleshooting guidance, corrected discovery commands, and synchronized
   support and release documentation.
-- Added grouped weekly dependency updates, core-package coverage reporting that
-  excludes vendored BLAST-Lite, and lightweight macOS/Windows public-entrypoint
-  smoke tests.
+- Refreshed locked Python dependencies and GitHub Actions, kept automated
+  dependency maintenance security-focused, added core-package coverage that
+  excludes vendored BLAST-Lite, and added lightweight macOS/Windows
+  public-entrypoint smoke tests.
 - Removed the unused `openpyxl` and `pyarrow` development/validation
   dependencies; the now-empty `validation` extra remains as a compatibility
   alias because the validation harness uses committed CSV and JSON artifacts.
