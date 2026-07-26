@@ -12,8 +12,9 @@ intentions, not commitments; reassess after each release.
   (warning collection, public degradation results, and validation boundaries).
 - **0.4.2** — remaining behavior-preserving maintainability work plus onboarding
   hygiene: lazy optional imports, a quiet no-network installation check,
-  first-run troubleshooting, dependency/coverage automation, and lightweight
-  portability evidence. No scientific-model, dispatch, or result changes.
+  first-run troubleshooting, dependency hygiene, coverage automation, and
+  lightweight portability evidence. No scientific-model, dispatch, or result
+  changes.
 - **0.5.0** — bifacial rear-gain is the firm scope (activation key, explicit
   rear-gain loss-waterfall stage, benchmark rows). Independently complete
   PV-fidelity items (the pvsyst real-efficiency fix, additional IAM and
@@ -159,9 +160,10 @@ Immediate 0.4.2 onboarding work:
 - Maintain a short first-run troubleshooting page covering weather/network
   failures, preset discovery, optional extras, cache behavior, and expected
   runtimes.
-- Maintain weekly grouped dependency updates, core-package coverage that does
-  not treat vendored BLAST as ordinary application code, and lightweight
-  macOS/Windows public-API smoke checks.
+- Keep automated dependency maintenance focused on security updates, maintain
+  core-package coverage that does not treat vendored BLAST as ordinary
+  application code, and retain lightweight macOS/Windows public-API smoke
+  checks.
 
 Option discovery work:
 
