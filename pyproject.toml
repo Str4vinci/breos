@@ -46,10 +46,9 @@ weather = [
     "requests-cache>=1.2.1",
     "timezonefinder>=8.2.1",
 ]
-validation = [
-    "openpyxl>=3.1.0",
-    "pyarrow>=19.0.0",
-]
+# Compatibility alias for setup scripts written before 0.4.2. The validation
+# harness uses committed CSV/JSON artifacts and needs no dedicated packages.
+validation = []
 location-tools = [
     "geopy>=2.4.1",
     "timezonefinder>=8.2.1",
@@ -60,9 +59,7 @@ dev = [
     "ruff>=0.15",
     "matplotlib>=3.10.8",
     "numba>=0.63.1",
-    "openpyxl>=3.1.0",
     "openmeteo-requests>=1.7.4",
-    "pyarrow>=19.0.0",
     "pymoo>=0.6.1.6",
     "requests-cache>=1.2.1",
     "timezonefinder>=8.2.1",
