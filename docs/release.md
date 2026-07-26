@@ -67,6 +67,33 @@ it is a checked release artifact, not regenerated during CI. Regeneration must
 use the pinned unmodified BLAST-Lite source and be reviewed as a scientific
 data change.
 
+### Regenerating the BLAST parity fixture
+
+`tools/generate_blast_parity_fixture.py` is the maintained generator for
+`tests/fixtures/blast/blast_parity_multicondition.json`. Its adjacent
+`.manifest.json` sidecar records the exact source commit and version, Python
+and NumPy versions, fixture schema and SHA-256, named profile definitions and
+hashes, and the canonical generation command. Ordinary tests read these
+committed artifacts and do not need a BLAST-Lite checkout.
+
+Clone BLAST-Lite separately, check out the commit recorded in the manifest,
+and install its runtime dependencies in an environment with the recorded
+Python and NumPy versions. The generator requires the repository root
+explicitly and checks that it is clean before importing `blast.models`:
+
+```bash
+git clone https://github.com/NatLabRockies/BLAST-Lite.git /tmp/BLAST-Lite
+git -C /tmp/BLAST-Lite checkout d789e00bca60f628de640745c18eb724b07358bd
+git -C /tmp/BLAST-Lite status --short
+python tools/generate_blast_parity_fixture.py --blast-checkout /tmp/BLAST-Lite --check
+```
+
+Omit `--check` to rewrite the fixture and sidecar through atomic file
+replacement. Review both as scientific artifacts. The tool refuses a
+different commit unless `--allow-unexpected-commit` is passed; use that
+override together with an explicit `--source-version` only in a pull request
+that updates BREOS's upstream pin.
+
 ## Publishing To PyPI
 
 The `Publish` workflow (`.github/workflows/publish.yml`) uses

@@ -18,6 +18,9 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 - Removed the unused `openpyxl` and `pyarrow` development/validation
   dependencies; the now-empty `validation` extra remains as a compatibility
   alias because the validation harness uses committed CSV and JSON artifacts.
+- Added reproducible BLAST parity-fixture tooling with strict clean-checkout and
+  upstream-pin guards plus a reviewed provenance manifest, while keeping the
+  committed scientific fixture unchanged during ordinary tests.
 
 ## [0.4.1] - 2026-07-23
 
