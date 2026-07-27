@@ -60,7 +60,7 @@ weather/data access, load profiles, PV system data, and cost assumptions; see
 | `battery_rte` | `None` | Battery round-trip efficiency (`None` = 0.95), split evenly across charge/discharge |
 | `battery_max_charge_power_w` | `None` | Maximum DC power entering the battery charge path; `None` is unlimited |
 | `battery_max_discharge_power_w` | `None` | Maximum battery AC power delivered to load; `None` is unlimited |
-| `dc_coupled` | `True` | DC-coupled / hybrid inverter. `False` is unsupported in 0.3.x and raises |
+| `dc_coupled` | `True` | DC-coupled / hybrid inverter. `False` is currently unsupported and raises |
 | `inverter_efficiency` | `0.96` | Nominal inverter efficiency used by the PVWatts part-load curve |
 | `inverter_loading_ratio` | `1.25` | DC/AC oversizing ratio; also sets the inverter AC rating that clips production |
 | `pv_loss_overrides` | `None` | Per-component overrides (percent) for the fixed PVWatts system losses, e.g. `{"shading": 0.0}` |

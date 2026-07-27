@@ -11,8 +11,7 @@ import pandas as pd
 from breos.app_config import ResolvedAppConfig, build_costs_dict
 from breos.app_inputs import AppRuntimeDependencies, prepare_simulation_inputs
 from breos.battery import BatteryConfig, simulate_energy_balance
-from breos.degradation.profiles import BLAST_STATE_SCHEMA_VERSION, get_battery_model_profile
-from breos.degradation.results import build_degradation_summary
+from breos.degradation.results import build_degradation_summary_from_state
 from breos.economics import calculate_lcoe_from_projection, cost_analysis_projection, find_payback_year
 from breos.solar import PVProductionBreakdown
 from breos.utils import get_hours_per_step
@@ -302,21 +301,18 @@ def run_app_simulation(
             **state_kwargs,
             degradation_engine=degradation_engine,
             blast_model=blast_model,
-            initial_degradation_state=degradation_state,
-            return_degradation_state=degradation_engine == "blast",
+            initial_degradation_state=degradation_state if degradation_engine == "blast" else None,
+            return_degradation_state=True,
         )
-        if degradation_engine == "blast":
-            (
-                results_df,
-                total_pv,
-                _summary_df,
-                year_rep_cost,
-                year_n_rep,
-                degradation_df,
-                degradation_state,
-            ) = sim_result
-        else:
-            results_df, total_pv, _summary_df, year_rep_cost, year_n_rep, degradation_df = sim_result
+        (
+            results_df,
+            total_pv,
+            _summary_df,
+            year_rep_cost,
+            year_n_rep,
+            degradation_df,
+            degradation_state,
+        ) = sim_result
 
         if has_battery:
             carried_energy_wh = float(results_df["Battery_Energy_End"].iloc[-1])
@@ -395,25 +391,13 @@ def run_app_simulation(
     replacement_events = [
         {"year": int(row["Year"]), "count": int(row["Replacements"])} for row in yearly_summaries if row["Replacements"]
     ]
-    if degradation_engine == "blast":
-        profile = get_battery_model_profile(str(blast_model))
-        warning_records = degradation_state.get("blast_engine", {}).get("warnings", []) if degradation_state else []
-        degradation_summary = build_degradation_summary(
-            engine="blast",
-            model_key=str(blast_model),
-            model_profile=profile.as_dict(),
-            final_soh_pct=current_soh,
-            replacement_events=replacement_events,
-            warning_records=warning_records,
-            state_schema_version=BLAST_STATE_SCHEMA_VERSION,
-        )
-    else:
-        degradation_summary = build_degradation_summary(
-            engine="native",
-            model_key=cfg["calendar_model"],
-            final_soh_pct=current_soh,
-            replacement_events=replacement_events,
-        )
+    degradation_summary = build_degradation_summary_from_state(
+        engine=degradation_engine,
+        model_key=str(blast_model) if blast_model is not None else cfg["calendar_model"],
+        final_soh_pct=current_soh,
+        replacement_events=replacement_events,
+        state=degradation_state,
+    )
 
     return SimulationArtifacts(
         yearly_df=yearly_df,

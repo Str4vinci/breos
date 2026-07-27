@@ -27,6 +27,7 @@ Usage:
 # the version declared in pyproject.toml (the single source of truth). This is
 # the same mechanism used by breos/cli.py and docs/conf.py, which keeps the
 # literal from drifting out of sync with the distribution version on a release.
+from importlib import import_module
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as _version
 
@@ -226,59 +227,72 @@ from breos.weather import (
     select_random_year_and_replace_datetime,
 )
 
-# Plotting (try to import, skip if matplotlib not installed)
-try:
-    from breos.plotting import (
-        create_cost_plots,
-        degradation_plots,
-        monthly_graphs,
-        plot_azitilt_ew_1d,
-        plot_azitilt_landscape_2d,
-        plot_azitilt_landscape_3d,
-        plot_battery_soh_timeseries,
-        plot_breakeven,
-        plot_breakeven_comparison,
-        plot_breakeven_two,
-        # Sensitivity analysis
-        plot_calendar_aging_sensitivity,
-        plot_cell_temperature,
-        # CO2 savings
-        plot_co2_savings,
-        # Polysun vs BREOS comparison
-        plot_degradation_methodology_comparison,
-        # Batch comparison
-        plot_grid_independence_heatmap,
-        plot_lifetime_prediction_comparison,
-        plot_location_comparison_delta,
-        plot_loo_cv_summary,
-        plot_loo_param_stability,
-        plot_loo_predictions,
-        # Monte Carlo distributions
-        plot_montecarlo_final_soh_distribution,
-        plot_montecarlo_grid_independence_distribution,
-        plot_montecarlo_npv_distribution,
-        plot_montecarlo_simulation,
-        plot_monthly_balance,
-        plot_monthly_comparison,
-        plot_pareto_front_analysis,
-        plot_pv_loss_waterfall,
-        plot_resistance_and_efficiency,
-        plot_temperature_sensitivity_comparison,
-        plot_tilt_optimization,
-        plot_timeseries,
-        plot_validation_degradation_split,
-        plot_validation_multi_system,
-        plot_validation_parity,
-        plot_validation_residuals,
-        plot_validation_soh_comparison,
-        plot_weather_annual_ghi_distribution,
-        plot_weather_monthly_comparison,
-        set_presentation_mode,
-        weekly_graphs,
-        yearly_graphs,
-    )
-except ImportError:
-    pass  # matplotlib not installed
+# Plotting functions historically remain available as top-level attributes, but
+# importing core BREOS or invoking a non-plotting CLI command must not initialize
+# Matplotlib. PEP 562 module attribute hooks preserve those compatibility names
+# while deferring the optional plotting stack until a caller actually uses it.
+_LAZY_PLOTTING_EXPORTS = frozenset(
+    {
+        "create_cost_plots",
+        "degradation_plots",
+        "monthly_graphs",
+        "plot_azitilt_ew_1d",
+        "plot_azitilt_landscape_2d",
+        "plot_azitilt_landscape_3d",
+        "plot_battery_soh_timeseries",
+        "plot_breakeven",
+        "plot_breakeven_comparison",
+        "plot_breakeven_two",
+        "plot_calendar_aging_sensitivity",
+        "plot_cell_temperature",
+        "plot_co2_savings",
+        "plot_degradation_methodology_comparison",
+        "plot_grid_independence_heatmap",
+        "plot_lifetime_prediction_comparison",
+        "plot_location_comparison_delta",
+        "plot_loo_cv_summary",
+        "plot_loo_param_stability",
+        "plot_loo_predictions",
+        "plot_montecarlo_final_soh_distribution",
+        "plot_montecarlo_grid_independence_distribution",
+        "plot_montecarlo_npv_distribution",
+        "plot_montecarlo_simulation",
+        "plot_monthly_balance",
+        "plot_monthly_comparison",
+        "plot_pareto_front_analysis",
+        "plot_pv_loss_waterfall",
+        "plot_resistance_and_efficiency",
+        "plot_temperature_sensitivity_comparison",
+        "plot_tilt_optimization",
+        "plot_timeseries",
+        "plot_validation_degradation_split",
+        "plot_validation_multi_system",
+        "plot_validation_parity",
+        "plot_validation_residuals",
+        "plot_validation_soh_comparison",
+        "plot_weather_annual_ghi_distribution",
+        "plot_weather_monthly_comparison",
+        "set_presentation_mode",
+        "weekly_graphs",
+        "yearly_graphs",
+    }
+)
+
+
+def __getattr__(name: str):
+    """Resolve compatibility plotting attributes without eager imports."""
+
+    if name not in _LAZY_PLOTTING_EXPORTS:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    value = getattr(import_module("breos.plotting"), name)
+    globals()[name] = value
+    return value
+
+
+def __dir__() -> list[str]:
+    """Include lazy compatibility attributes in interactive discovery."""
+
+    return sorted(set(globals()) | _LAZY_PLOTTING_EXPORTS)
 
 
 # Numba kernels (lazy import to avoid slow import at package load)

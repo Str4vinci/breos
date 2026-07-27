@@ -1,6 +1,6 @@
 [project]
 name = "breos"
-version = "0.4.1"
+version = "0.4.2"
 description = "Python library for PV and battery energy-system simulation and optimization"
 readme = "README.md"
 license = "BSD-3-Clause"
@@ -31,6 +31,8 @@ dependencies = [
 Homepage = "https://github.com/Str4vinci/breos"
 Documentation = "https://breos.readthedocs.io/"
 Repository = "https://github.com/Str4vinci/breos"
+Issues = "https://github.com/Str4vinci/breos/issues"
+Changelog = "https://github.com/Str4vinci/breos/blob/main/CHANGELOG.md"
 
 [project.scripts]
 breos = "breos.cli:main"
@@ -44,22 +46,20 @@ weather = [
     "requests-cache>=1.2.1",
     "timezonefinder>=8.2.1",
 ]
-validation = [
-    "openpyxl>=3.1.0",
-    "pyarrow>=19.0.0",
-]
+# Compatibility alias for setup scripts written before 0.4.2. The validation
+# harness uses committed CSV/JSON artifacts and needs no dedicated packages.
+validation = []
 location-tools = [
     "geopy>=2.4.1",
     "timezonefinder>=8.2.1",
 ]
 dev = [
     "pytest>=8.0",
+    "pytest-cov>=7.0",
     "ruff>=0.15",
     "matplotlib>=3.10.8",
     "numba>=0.63.1",
-    "openpyxl>=3.1.0",
     "openmeteo-requests>=1.7.4",
-    "pyarrow>=19.0.0",
     "pymoo>=0.6.1.6",
     "requests-cache>=1.2.1",
     "timezonefinder>=8.2.1",
@@ -83,6 +83,15 @@ addopts = ["-m", "not slow"]
 markers = [
     "slow: long-running endurance and multi-year integration tests; deselected by default, run with -m slow",
 ]
+
+[tool.coverage.run]
+branch = true
+source = ["breos"]
+omit = ["breos/degradation/blast/*"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
 
 [tool.ruff]
 line-length = 120

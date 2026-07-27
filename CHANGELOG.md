@@ -4,6 +4,29 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-07-27
+
+### Changed
+- Deferred optional plotting imports until a plotting compatibility attribute
+  is first accessed, keeping core imports and non-plotting CLI commands quiet
+  while preserving existing top-level names.
+- Improved first-run onboarding with a no-file/no-network dry run,
+  troubleshooting guidance, corrected discovery commands, and synchronized
+  support and release documentation.
+- Refreshed locked Python dependencies and GitHub Actions, resolved reported
+  dependency security advisories, kept automated dependency maintenance
+  security-focused, added core-package coverage that excludes vendored
+  BLAST-Lite, and added lightweight macOS/Windows public-entrypoint smoke tests.
+- Removed the unused `openpyxl` and `pyarrow` development/validation
+  dependencies; the now-empty `validation` extra remains as a compatibility
+  alias because the validation harness uses committed CSV and JSON artifacts.
+- Added reproducible BLAST parity-fixture tooling with strict clean-checkout and
+  upstream-pin guards plus a reviewed provenance manifest, while keeping the
+  committed scientific fixture unchanged during ordinary tests.
+- Added a narrow internal degradation lifecycle protocol with native and BLAST
+  adapters, centralizing daily stepping, reset, snapshot, warning, tracking,
+  and provenance behavior without changing dispatch or public result schemas.
+
 ## [0.4.1] - 2026-07-23
 
 ### Changed

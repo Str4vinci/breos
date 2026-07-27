@@ -4,6 +4,8 @@ __pycache__/
 dist/
 build/
 .cache/
+.coverage
+coverage.xml
 *.egg
 .venv/
 .env

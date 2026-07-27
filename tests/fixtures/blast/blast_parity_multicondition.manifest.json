@@ -1,0 +1,46 @@
+{
+  "environment": {
+    "numpy": "1.26.4",
+    "python": "3.11.15"
+  },
+  "fixture": {
+    "path": "tests/fixtures/blast/blast_parity_multicondition.json",
+    "schema": "blast-lite-breos-parity-multicondition-v1",
+    "sha256": "8a962994d2378242896cb7936d2e7ef85c629b666a07951e888de619422643be"
+  },
+  "generation": {
+    "command": "python tools/generate_blast_parity_fixture.py --blast-checkout <CLEAN_BLAST_LITE_CHECKOUT>",
+    "tool": "tools/generate_blast_parity_fixture.py"
+  },
+  "profiles": {
+    "definitions": {
+      "cold_storage": {
+        "description": "constant 30% SoC at 5 C, sampled hourly for 60 days",
+        "sha256": "8a4ccd95ddff7d0c5aa27804caf3359f3b5b52798573aa70425168bf4657df0c"
+      },
+      "deep_cycle": {
+        "description": "daily triangular 95%-5%-95% SoC cycle at 25 C for 60 days",
+        "sha256": "cea2e424e2d58c19e12a79b9951f053269bbfc9412c36e4e67f49842bf42137f"
+      },
+      "hot_storage": {
+        "description": "constant 90% SoC at 45 C, sampled hourly for 60 days",
+        "sha256": "0ae11a093077cb8101e80da15899663d3a10b8f63b310e1e55c1399d0cd3a2d7"
+      },
+      "shallow_fast_cycle": {
+        "description": "four daily sinusoidal 60%-90% SoC cycles at 40 C for 60 days",
+        "sha256": "134776c71ae44c68c202353862e0e95a24076db74991ee0bb6fc43c2bc99dc71"
+      },
+      "tvar_deep_cycle": {
+        "description": "daily triangular 95%-5%-95% SoC cycle with 15-35 C sinusoid for 60 days",
+        "sha256": "66a09ff6b92ac0c6a08fb1750d233f815522b7cbe16f55273b7804ee97d51f89"
+      }
+    },
+    "sha256": "13e3ed772c59ea6b186ccf180f27757891fc577ad9a480bbebdb4352e8d91a16"
+  },
+  "schema": "breos-blast-parity-generation-manifest-v1",
+  "source": {
+    "commit": "d789e00bca60f628de640745c18eb724b07358bd",
+    "project": "BLAST-Lite",
+    "version": "1.1.0"
+  }
+}
