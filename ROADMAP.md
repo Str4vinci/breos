@@ -10,11 +10,11 @@ intentions, not commitments; reassess after each release.
 
 - **0.4.1** — behavior-preserving degradation and configuration refactors
   (warning collection, public degradation results, and validation boundaries).
-- **0.4.2** — remaining behavior-preserving maintainability work plus onboarding
-  hygiene: lazy optional imports, a quiet no-network installation check,
-  first-run troubleshooting, dependency hygiene, coverage automation, and
-  lightweight portability evidence. No scientific-model, dispatch, or result
-  changes.
+- **0.4.2** — completed behavior-preserving maintainability and onboarding
+  work: lazy optional imports, a quiet no-network installation check, first-run
+  troubleshooting, dependency hygiene, coverage automation, cross-platform
+  smoke tests, reproducible BLAST parity tooling, and an internal degradation
+  lifecycle protocol. No scientific-model, dispatch, or public result changes.
 - **0.5.0** — bifacial rear-gain is the firm scope (activation key, explicit
   rear-gain loss-waterfall stage, benchmark rows). Independently complete
   PV-fidelity items (the pvsyst real-efficiency fix, additional IAM and
@@ -151,19 +151,21 @@ Ongoing docs hygiene:
 - Keep security support tables, release-matrix headings, example commands, and
   version-specific limitation text aligned with the latest release.
 
-Immediate 0.4.2 onboarding work:
+Completed for 0.4.2:
 
-- Put a no-file, no-network `breos run ... --dry-run` installation check next
+- Added a no-file, no-network `breos run ... --dry-run` installation check next
   to the install command.
-- Keep optional plotting imports lazy so core imports, `--help`, option
+- Kept optional plotting imports lazy so core imports, `--help`, option
   discovery, and configuration validation do not initialize Matplotlib.
-- Maintain a short first-run troubleshooting page covering weather/network
+- Added a short first-run troubleshooting page covering weather/network
   failures, preset discovery, optional extras, cache behavior, and expected
   runtimes.
-- Keep automated dependency maintenance focused on security updates, maintain
+- Kept automated dependency maintenance focused on security updates, added
   core-package coverage that does not treat vendored BLAST as ordinary
-  application code, and retain lightweight macOS/Windows public-API smoke
-  checks.
+  application code, and added lightweight macOS/Windows public-API smoke checks.
+- Added reproducible tooling and provenance for the reviewed BLAST parity
+  fixture, plus a narrow internal degradation lifecycle protocol that preserves
+  dispatch and public result schemas.
 
 Option discovery work:
 
