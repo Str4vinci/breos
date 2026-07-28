@@ -133,6 +133,15 @@ DEFAULT_DIFFUSE_IAM = "none"
 _MARION_DIFFUSE_GRID_STEP_DEG = 0.5
 _marion_diffuse_grid_cache: Dict[tuple[float, float, float], tuple[np.ndarray, Dict[str, np.ndarray]]] = {}
 
+# Rear-side irradiance is opt-in. ``none`` preserves the historical front-only
+# model exactly; ``infinite_sheds`` uses pvlib's row-geometry model for the back
+# surface while leaving BREOS's existing front-side transposition unchanged.
+BIFACIAL_MODELS = (
+    "none",
+    "infinite_sheds",
+)
+DEFAULT_BIFACIAL_MODEL = "none"
+
 # Cell-temperature model and mounting presets. ``faiman`` is pvlib's Faiman
 # (2008) model with its open-rack default coefficients (u0=25, u1=6.84) —
 # the default and the only prior behaviour. The ``pvsyst-*`` presets use
@@ -230,6 +239,48 @@ def _resolve_temperature_model(model: str) -> str:
         valid = ", ".join(TEMPERATURE_MODELS)
         raise ValueError(f"Unknown temperature model {model!r}. Valid models: {valid}")
     return normalised
+
+
+def _resolve_bifacial_model(model: str) -> str:
+    """Normalise and validate a rear-irradiance model name."""
+    normalised = str(model).strip().lower()
+    if normalised not in BIFACIAL_MODELS:
+        valid = ", ".join(BIFACIAL_MODELS)
+        raise ValueError(f"Unknown bifacial model {model!r}. Valid models: {valid}")
+    return normalised
+
+
+def _validate_bifacial_inputs(
+    model: str,
+    bifaciality: Optional[float],
+    gcr: float,
+    pvrow_height: Optional[float],
+    pvrow_pitch: Optional[float],
+) -> str:
+    """Validate opt-in bifacial metadata and row geometry."""
+    model = _resolve_bifacial_model(model)
+    if model == "none":
+        return model
+    if bifaciality is None:
+        raise ValueError("bifacial_model='infinite_sheds' requires PV module bifaciality metadata")
+
+    geometry = {
+        "gcr": gcr,
+        "pvrow_height": pvrow_height,
+        "pvrow_pitch": pvrow_pitch,
+    }
+    for name, value in geometry.items():
+        if isinstance(value, bool) or not isinstance(value, (int, float, np.number)):
+            raise TypeError(f"{name} must be a finite number for bifacial modeling")
+        if not math.isfinite(float(value)):
+            raise ValueError(f"{name} must be a finite number for bifacial modeling")
+    if not 0.0 < float(gcr) <= 1.0:
+        raise ValueError("gcr must be between 0 (exclusive) and 1 (inclusive) for bifacial modeling")
+    if float(pvrow_height) <= 0.0:
+        raise ValueError("pvrow_height must be > 0 for bifacial modeling")
+    if float(pvrow_pitch) <= 0.0:
+        raise ValueError("pvrow_pitch must be > 0 for bifacial modeling")
+    return model
 
 
 def _resolve_perez_model(model_perez: str) -> str:
@@ -335,6 +386,8 @@ class _IrradianceModelResult:
 
     ghi: np.ndarray
     poa_global: np.ndarray
+    front_effective_irradiance: np.ndarray
+    rear_effective_irradiance: np.ndarray
     effective_irradiance: np.ndarray
     temp_cell: np.ndarray
 
@@ -378,6 +431,11 @@ def _compute_irradiance_and_cell_temp_detail(
     model_perez: str = DEFAULT_PEREZ_MODEL,
     diffuse_iam: str = DEFAULT_DIFFUSE_IAM,
     temperature_model: str = DEFAULT_TEMPERATURE_MODEL,
+    bifacial_model: str = DEFAULT_BIFACIAL_MODEL,
+    bifaciality: Optional[float] = None,
+    gcr: float = 0.35,
+    pvrow_height: Optional[float] = None,
+    pvrow_pitch: Optional[float] = None,
 ) -> _IrradianceModelResult:
     """Compute GHI, POA, effective irradiance, and cell temperature.
 
@@ -403,6 +461,13 @@ def _compute_irradiance_and_cell_temp_detail(
     model_perez = _resolve_perez_model(model_perez)
     diffuse_iam = _resolve_diffuse_iam_method(diffuse_iam)
     temperature_model = _resolve_temperature_model(temperature_model)
+    bifacial_model = _validate_bifacial_inputs(
+        bifacial_model,
+        bifaciality,
+        gcr,
+        pvrow_height,
+        pvrow_pitch,
+    )
     dni, ghi, dhi = _extract_irradiance(weather_aligned)
     temp_air, wind_speed = _extract_met_data(weather_aligned)
 
@@ -457,9 +522,39 @@ def _compute_irradiance_and_cell_temp_detail(
         multipliers = _marion_diffuse_ashrae(surface_tilt)
         sky_mult = np.nan_to_num(np.asarray(multipliers["sky"], dtype=float), nan=0.0)
         ground_mult = np.nan_to_num(np.asarray(multipliers["ground"], dtype=float), nan=0.0)
-        effective_irradiance = poa_direct * iam_clean + poa_sky * sky_mult + poa_ground * ground_mult
+        front_effective_irradiance = poa_direct * iam_clean + poa_sky * sky_mult + poa_ground * ground_mult
     else:
-        effective_irradiance = poa_direct * iam_clean + poa_diffuse
+        front_effective_irradiance = poa_direct * iam_clean + poa_diffuse
+
+    if bifacial_model == "infinite_sheds":
+        tilt = np.asarray(surface_tilt, dtype=float)
+        azimuth = np.asarray(surface_azimuth, dtype=float)
+        back_tilt = 180.0 - tilt
+        back_azimuth = np.mod(azimuth + 180.0, 360.0)
+        rear_transposition = "haydavies" if model == "haydavies" else "isotropic"
+        rear_albedo = float(albedo) if albedo is not None else float(SURFACE_ALBEDOS.get(surface_type, 0.25))
+        rear = pvlib.bifacial.infinite_sheds.get_irradiance_poa(
+            surface_tilt=back_tilt,
+            surface_azimuth=back_azimuth,
+            solar_zenith=np.asarray(solarpos.apparent_zenith, dtype=float),
+            solar_azimuth=np.asarray(solarpos.azimuth, dtype=float),
+            gcr=float(gcr),
+            height=float(pvrow_height),
+            pitch=float(pvrow_pitch),
+            ghi=np.asarray(ghi, dtype=float),
+            dhi=np.asarray(dhi, dtype=float),
+            dni=np.asarray(dni, dtype=float),
+            albedo=rear_albedo,
+            model=rear_transposition,
+            dni_extra=np.asarray(dni_extra, dtype=float),
+            vectorize=tilt.ndim > 0 and tilt.size > 1,
+        )
+        rear_poa = np.clip(np.nan_to_num(np.asarray(rear["poa_global"], dtype=float), nan=0.0), 0.0, None)
+        rear_effective_irradiance = float(bifaciality) * rear_poa
+        effective_irradiance = front_effective_irradiance + rear_effective_irradiance
+    else:
+        rear_effective_irradiance = np.zeros_like(front_effective_irradiance)
+        effective_irradiance = front_effective_irradiance
 
     if temperature_model == "faiman":
         temp_cell = pvlib.temperature.faiman(poa_global, temp_air, wind_speed)
@@ -469,6 +564,8 @@ def _compute_irradiance_and_cell_temp_detail(
     return _IrradianceModelResult(
         ghi=np.nan_to_num(np.asarray(ghi, dtype=float), nan=0.0),
         poa_global=poa_global,
+        front_effective_irradiance=front_effective_irradiance,
+        rear_effective_irradiance=rear_effective_irradiance,
         effective_irradiance=effective_irradiance,
         temp_cell=np.nan_to_num(np.asarray(temp_cell, dtype=float), nan=25.0),
     )
@@ -485,6 +582,11 @@ def _compute_effective_irradiance_and_cell_temp(
     model_perez: str = DEFAULT_PEREZ_MODEL,
     diffuse_iam: str = DEFAULT_DIFFUSE_IAM,
     temperature_model: str = DEFAULT_TEMPERATURE_MODEL,
+    bifacial_model: str = DEFAULT_BIFACIAL_MODEL,
+    bifaciality: Optional[float] = None,
+    gcr: float = 0.35,
+    pvrow_height: Optional[float] = None,
+    pvrow_pitch: Optional[float] = None,
 ):
     """Compute effective POA irradiance (with IAM) and cell temperature."""
     detail = _compute_irradiance_and_cell_temp_detail(
@@ -498,6 +600,11 @@ def _compute_effective_irradiance_and_cell_temp(
         model_perez=model_perez,
         diffuse_iam=diffuse_iam,
         temperature_model=temperature_model,
+        bifacial_model=bifacial_model,
+        bifaciality=bifaciality,
+        gcr=gcr,
+        pvrow_height=pvrow_height,
+        pvrow_pitch=pvrow_pitch,
     )
     return detail.effective_irradiance, detail.temp_cell
 
@@ -634,6 +741,10 @@ def _build_pv_production_breakdown(
     model_perez: str = DEFAULT_PEREZ_MODEL,
     diffuse_iam: str = DEFAULT_DIFFUSE_IAM,
     temperature_model: str = DEFAULT_TEMPERATURE_MODEL,
+    bifacial_model: str = DEFAULT_BIFACIAL_MODEL,
+    gcr: float = 0.35,
+    pvrow_height: Optional[float] = None,
+    pvrow_pitch: Optional[float] = None,
 ) -> PVProductionBreakdown:
     """Build the full fixed/tracking PV production breakdown."""
     detail = _compute_irradiance_and_cell_temp_detail(
@@ -647,6 +758,11 @@ def _build_pv_production_breakdown(
         model_perez=model_perez,
         diffuse_iam=diffuse_iam,
         temperature_model=temperature_model,
+        bifacial_model=bifacial_model,
+        bifaciality=pv_params.bifaciality,
+        gcr=gcr,
+        pvrow_height=pvrow_height,
+        pvrow_pitch=pvrow_pitch,
     )
     module_dc = _module_dc_before_losses(
         detail.effective_irradiance,
@@ -762,6 +878,10 @@ def calculate_pv_production_breakdown(
     solar_position: str = DEFAULT_SOLAR_POSITION,
     diffuse_iam: str = DEFAULT_DIFFUSE_IAM,
     temperature_model: str = DEFAULT_TEMPERATURE_MODEL,
+    bifacial_model: str = DEFAULT_BIFACIAL_MODEL,
+    gcr: float = 0.35,
+    pvrow_height: Optional[float] = None,
+    pvrow_pitch: Optional[float] = None,
 ) -> PVProductionBreakdown:
     """Calculate fixed-tilt PV production with intermediate loss stages."""
     if pv_params is None:
@@ -790,6 +910,10 @@ def calculate_pv_production_breakdown(
         model_perez=model_perez,
         diffuse_iam=diffuse_iam,
         temperature_model=temperature_model,
+        bifacial_model=bifacial_model,
+        gcr=gcr,
+        pvrow_height=pvrow_height,
+        pvrow_pitch=pvrow_pitch,
     )
 
     if verbose:
@@ -819,6 +943,10 @@ def calculate_pv_production_dc(
     solar_position: str = DEFAULT_SOLAR_POSITION,
     diffuse_iam: str = DEFAULT_DIFFUSE_IAM,
     temperature_model: str = DEFAULT_TEMPERATURE_MODEL,
+    bifacial_model: str = DEFAULT_BIFACIAL_MODEL,
+    gcr: float = 0.35,
+    pvrow_height: Optional[float] = None,
+    pvrow_pitch: Optional[float] = None,
 ) -> pd.Series:
     """
     Calculate PV DC production from weather data (fixed-tilt array).
@@ -872,6 +1000,10 @@ def calculate_pv_production_dc(
             PVsyst cell model with its documented mounting coefficients;
             the default ``"faiman"`` (open rack) reproduces prior behaviour
             bit-for-bit.
+        bifacial_model: Rear-irradiance model (one of ``BIFACIAL_MODELS``).
+            ``"none"`` preserves front-only production; ``"infinite_sheds"``
+            requires module bifaciality plus ``gcr``, ``pvrow_height``, and
+            ``pvrow_pitch``.
 
     Returns:
         pd.Series with DC power production in Watts (before inverter)
@@ -896,6 +1028,10 @@ def calculate_pv_production_dc(
         solar_position=solar_position,
         diffuse_iam=diffuse_iam,
         temperature_model=temperature_model,
+        bifacial_model=bifacial_model,
+        gcr=gcr,
+        pvrow_height=pvrow_height,
+        pvrow_pitch=pvrow_pitch,
     ).dc_after_losses
 
 
@@ -925,6 +1061,9 @@ def calculate_pv_production_tracking_breakdown(
     solar_position: str = DEFAULT_SOLAR_POSITION,
     diffuse_iam: str = DEFAULT_DIFFUSE_IAM,
     temperature_model: str = DEFAULT_TEMPERATURE_MODEL,
+    bifacial_model: str = DEFAULT_BIFACIAL_MODEL,
+    pvrow_height: Optional[float] = None,
+    pvrow_pitch: Optional[float] = None,
 ) -> PVProductionBreakdown:
     """Calculate tracking-array PV production with intermediate loss stages.
 
@@ -987,6 +1126,10 @@ def calculate_pv_production_tracking_breakdown(
         model_perez=model_perez,
         diffuse_iam=diffuse_iam,
         temperature_model=temperature_model,
+        bifacial_model=bifacial_model,
+        gcr=gcr,
+        pvrow_height=pvrow_height,
+        pvrow_pitch=pvrow_pitch,
     )
 
     if verbose:
@@ -1022,6 +1165,9 @@ def calculate_pv_production_dc_tracking(
     solar_position: str = DEFAULT_SOLAR_POSITION,
     diffuse_iam: str = DEFAULT_DIFFUSE_IAM,
     temperature_model: str = DEFAULT_TEMPERATURE_MODEL,
+    bifacial_model: str = DEFAULT_BIFACIAL_MODEL,
+    pvrow_height: Optional[float] = None,
+    pvrow_pitch: Optional[float] = None,
 ) -> pd.Series:
     """
     Calculate PV DC production for a tracking array (single- or dual-axis).
@@ -1069,6 +1215,8 @@ def calculate_pv_production_dc_tracking(
         temperature_model: Cell-temperature model / mounting preset (one of
             ``TEMPERATURE_MODELS``); the default ``"faiman"`` (open rack)
             reproduces prior behaviour bit-for-bit.
+        bifacial_model: Rear-irradiance model (one of ``BIFACIAL_MODELS``).
+            ``"infinite_sheds"`` requires module bifaciality and row height/pitch.
 
     Returns:
         pd.Series with DC power production in Watts (before inverter).
@@ -1099,6 +1247,9 @@ def calculate_pv_production_dc_tracking(
         solar_position=solar_position,
         diffuse_iam=diffuse_iam,
         temperature_model=temperature_model,
+        bifacial_model=bifacial_model,
+        pvrow_height=pvrow_height,
+        pvrow_pitch=pvrow_pitch,
     ).dc_after_losses
 
 
@@ -1146,6 +1297,10 @@ def calculate_pv_production_tmy(
     solar_position: str = DEFAULT_SOLAR_POSITION,
     diffuse_iam: str = DEFAULT_DIFFUSE_IAM,
     temperature_model: str = DEFAULT_TEMPERATURE_MODEL,
+    bifacial_model: str = DEFAULT_BIFACIAL_MODEL,
+    gcr: float = 0.35,
+    pvrow_height: Optional[float] = None,
+    pvrow_pitch: Optional[float] = None,
 ) -> pd.Series:
     """
     Calculate PV DC production from TMY data.
@@ -1182,6 +1337,10 @@ def calculate_pv_production_tmy(
         solar_position=solar_position,
         diffuse_iam=diffuse_iam,
         temperature_model=temperature_model,
+        bifacial_model=bifacial_model,
+        gcr=gcr,
+        pvrow_height=pvrow_height,
+        pvrow_pitch=pvrow_pitch,
     )
 
 
@@ -1206,6 +1365,10 @@ def calculate_pv_production_ac(
     solar_position: str = DEFAULT_SOLAR_POSITION,
     diffuse_iam: str = DEFAULT_DIFFUSE_IAM,
     temperature_model: str = DEFAULT_TEMPERATURE_MODEL,
+    bifacial_model: str = DEFAULT_BIFACIAL_MODEL,
+    gcr: float = 0.35,
+    pvrow_height: Optional[float] = None,
+    pvrow_pitch: Optional[float] = None,
 ) -> pd.Series:
     """
     Calculate PV AC production from weather data.
@@ -1255,6 +1418,10 @@ def calculate_pv_production_ac(
         solar_position=solar_position,
         diffuse_iam=diffuse_iam,
         temperature_model=temperature_model,
+        bifacial_model=bifacial_model,
+        gcr=gcr,
+        pvrow_height=pvrow_height,
+        pvrow_pitch=pvrow_pitch,
     )
 
     pv_peak_power_w = n_modules * pv_params.Mpp
@@ -1437,6 +1604,10 @@ def calculate_multi_array_production_breakdown(
     solar_position: str = DEFAULT_SOLAR_POSITION,
     diffuse_iam: str = DEFAULT_DIFFUSE_IAM,
     temperature_model: str = DEFAULT_TEMPERATURE_MODEL,
+    bifacial_model: str = DEFAULT_BIFACIAL_MODEL,
+    gcr: float = 0.35,
+    pvrow_height: Optional[float] = None,
+    pvrow_pitch: Optional[float] = None,
 ) -> PVProductionBreakdown:
     """Calculate combined DC production breakdown from multiple PV arrays.
 
@@ -1462,6 +1633,10 @@ def calculate_multi_array_production_breakdown(
         arr_albedo = arr.get("albedo", albedo)
         arr_surface_type = arr.get("surface_type", surface_type)
         arr_model_perez = arr.get("model_perez", model_perez)
+        arr_bifacial_model = arr.get("bifacial_model", bifacial_model)
+        arr_gcr = arr.get("gcr", gcr)
+        arr_pvrow_height = arr.get("pvrow_height", pvrow_height)
+        arr_pvrow_pitch = arr.get("pvrow_pitch", pvrow_pitch)
 
         if tracking == "fixed":
             tilt = arr.get("tilt", 35)
@@ -1490,6 +1665,10 @@ def calculate_multi_array_production_breakdown(
                 solar_position=solar_position,
                 diffuse_iam=diffuse_iam,
                 temperature_model=temperature_model,
+                bifacial_model=arr_bifacial_model,
+                gcr=arr_gcr,
+                pvrow_height=arr_pvrow_height,
+                pvrow_pitch=arr_pvrow_pitch,
             )
         elif tracking in ("single_axis", "dual_axis"):
             if verbose:
@@ -1511,7 +1690,7 @@ def calculate_multi_array_production_breakdown(
                 axis_azimuth=arr.get("axis_azimuth", default_azimuth(location.latitude)),
                 max_angle=arr.get("max_angle", 60.0),
                 backtrack=arr.get("backtrack", True),
-                gcr=arr.get("gcr", 0.35),
+                gcr=arr_gcr,
                 cross_axis_tilt=arr.get("cross_axis_tilt", 0.0),
                 dual_axis_max_tilt=arr.get("dual_axis_max_tilt", 90.0),
                 pv_params=pv_params,
@@ -1528,6 +1707,9 @@ def calculate_multi_array_production_breakdown(
                 solar_position=solar_position,
                 diffuse_iam=diffuse_iam,
                 temperature_model=temperature_model,
+                bifacial_model=arr_bifacial_model,
+                pvrow_height=arr_pvrow_height,
+                pvrow_pitch=arr_pvrow_pitch,
             )
         else:
             raise ValueError(
@@ -1582,6 +1764,10 @@ def calculate_multi_array_production(
     solar_position: str = DEFAULT_SOLAR_POSITION,
     diffuse_iam: str = DEFAULT_DIFFUSE_IAM,
     temperature_model: str = DEFAULT_TEMPERATURE_MODEL,
+    bifacial_model: str = DEFAULT_BIFACIAL_MODEL,
+    gcr: float = 0.35,
+    pvrow_height: Optional[float] = None,
+    pvrow_pitch: Optional[float] = None,
 ) -> pd.Series:
     """
     Calculate combined DC production from multiple PV arrays.
@@ -1618,6 +1804,9 @@ def calculate_multi_array_production(
         temperature_model: Cell-temperature model / mounting preset (one of
             ``TEMPERATURE_MODELS``); function-level for all arrays, like
             ``solar_position``.
+        bifacial_model: Default rear-irradiance model for arrays that do not
+            override it. ``"infinite_sheds"`` requires bifacial module metadata
+            plus GCR, row height, and row pitch.
 
     Returns:
         pd.Series with total DC power (watts)
@@ -1639,4 +1828,8 @@ def calculate_multi_array_production(
         solar_position=solar_position,
         diffuse_iam=diffuse_iam,
         temperature_model=temperature_model,
+        bifacial_model=bifacial_model,
+        gcr=gcr,
+        pvrow_height=pvrow_height,
+        pvrow_pitch=pvrow_pitch,
     ).dc_after_losses

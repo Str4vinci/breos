@@ -85,6 +85,38 @@ def test_run_flag_sell_price_inflation_reaches_config(monkeypatch, capsys):
     assert FakeApp.seen_config["sell_price_inflation"] == 0.03
 
 
+def test_run_bifacial_flags_reach_config(monkeypatch, capsys):
+    monkeypatch.setattr(cli, "App", FakeApp)
+
+    exit_code = cli.main(
+        [
+            "run",
+            "--location",
+            "porto",
+            "--n-modules",
+            "10",
+            "--annual-consumption-kwh",
+            "4000",
+            "--pv-module",
+            "Generic_600W_Bifacial",
+            "--bifacial-model",
+            "infinite_sheds",
+            "--gcr",
+            "0.35",
+            "--pvrow-height",
+            "1.5",
+            "--pvrow-pitch",
+            "6.0",
+        ]
+    )
+
+    assert exit_code == 0
+    assert FakeApp.seen_config["bifacial_model"] == "infinite_sheds"
+    assert FakeApp.seen_config["gcr"] == 0.35
+    assert FakeApp.seen_config["pvrow_height"] == 1.5
+    assert FakeApp.seen_config["pvrow_pitch"] == 6.0
+
+
 def test_run_from_toml_config_with_cli_override(monkeypatch, tmp_path):
     monkeypatch.setattr(cli, "App", FakeApp)
     config_path = tmp_path / "experiment.toml"
@@ -237,6 +269,41 @@ battery_kwh = 5.0
     assert 14.0 < output["pv"]["losses"]["combined_pct"] < 15.0
     assert output["battery"]["degradation_engine"] == "native"
     assert output["battery"]["blast_model"] is None
+
+
+def test_run_dry_run_reports_bifacial_geometry(monkeypatch, tmp_path):
+    monkeypatch.setattr(cli, "App", FakeApp)
+    output_path = tmp_path / "resolved.json"
+
+    exit_code = cli.main(
+        [
+            "run",
+            "--location",
+            "porto",
+            "--n-modules",
+            "10",
+            "--annual-consumption-kwh",
+            "4000",
+            "--pv-module",
+            "Generic_600W_Bifacial",
+            "--bifacial-model",
+            "infinite_sheds",
+            "--pvrow-height",
+            "1.5",
+            "--pvrow-pitch",
+            "6.0",
+            "--dry-run",
+            "--output",
+            str(output_path),
+        ]
+    )
+
+    assert exit_code == 0
+    pv = json.loads(output_path.read_text(encoding="utf-8"))["pv"]
+    assert pv["bifacial_model"] == "infinite_sheds"
+    assert pv["gcr"] == 0.35
+    assert pv["pvrow_height"] == 1.5
+    assert pv["pvrow_pitch"] == 6.0
 
 
 def test_sweep_expands_grid_and_writes_combined_csv(monkeypatch, tmp_path, capsys):

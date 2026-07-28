@@ -19,6 +19,7 @@ from breos.load_profiles import PROFILE_ALIASES, PROFILE_NAMES
 from breos.pv_modules import MODULES
 from breos.resources import load_config_json
 from breos.solar import (
+    BIFACIAL_MODELS,
     DIFFUSE_IAM_METHODS,
     PEREZ_MODELS,
     SOLAR_POSITION_METHODS,
@@ -83,6 +84,10 @@ def _build_config(args: argparse.Namespace) -> dict[str, Any]:
     _add_override(overrides, "solar_position", args.solar_position)
     _add_override(overrides, "diffuse_iam", args.diffuse_iam)
     _add_override(overrides, "temperature_model", args.temperature_model)
+    _add_override(overrides, "bifacial_model", args.bifacial_model)
+    _add_override(overrides, "pvrow_height", args.pvrow_height)
+    _add_override(overrides, "pvrow_pitch", args.pvrow_pitch)
+    _add_override(overrides, "gcr", args.gcr)
     _add_override(overrides, "resolution", args.resolution)
     _add_override(overrides, "projection_years", args.projection_years)
     _add_override(overrides, "inflation_rate", args.inflation_rate)
@@ -153,6 +158,10 @@ def _resolved_config_summary(config: dict[str, Any]) -> dict[str, Any]:
             "solar_position": cfg["solar_position"],
             "diffuse_iam": cfg["diffuse_iam"],
             "temperature_model": cfg["temperature_model"],
+            "bifacial_model": cfg["bifacial_model"],
+            "gcr": cfg["gcr"],
+            "pvrow_height": cfg["pvrow_height"],
+            "pvrow_pitch": cfg["pvrow_pitch"],
             "pv_loss_overrides": cfg["pv_loss_overrides"],
             "losses": resolve_pvwatts_losses(cfg["pv_loss_overrides"]),
         },
@@ -563,6 +572,22 @@ def build_parser() -> argparse.ArgumentParser:
             "(default: faiman, open rack)."
         ),
     )
+    run.add_argument(
+        "--bifacial-model",
+        choices=BIFACIAL_MODELS,
+        help="Rear-irradiance model (default: none; infinite_sheds requires bifacial module metadata and row geometry).",
+    )
+    run.add_argument(
+        "--pvrow-height",
+        type=float,
+        help="PV row center height above ground; use the same unit as --pvrow-pitch.",
+    )
+    run.add_argument(
+        "--pvrow-pitch",
+        type=float,
+        help="Distance between PV rows; use the same unit as --pvrow-height.",
+    )
+    run.add_argument("--gcr", type=float, help="PV row ground coverage ratio (default: 0.35).")
     run.add_argument("--resolution", choices=("h", "15min"), help="Simulation time resolution.")
     run.add_argument("--projection-years", type=int, help="Economic projection horizon.")
     run.add_argument("--inflation-rate", type=float, help="Annual electricity price inflation.")

@@ -4,6 +4,7 @@ import pandas as pd
 import pytest
 
 import breos.solar as solar
+from breos.pv_modules import get_module
 from breos.solar import (
     PEREZ_MODELS,
     SURFACE_TYPES,
@@ -122,6 +123,74 @@ class TestPVProduction:
         bifacial_metadata = calculate_pv_production_dc(**kwargs, pv_params=_module_params(bifaciality=0.8))
 
         pd.testing.assert_series_equal(front_only, bifacial_metadata)
+
+    def test_infinite_sheds_adds_rear_gain(self, synthetic_weather, porto_location):
+        kwargs = dict(
+            weather_data=synthetic_weather.iloc[: 24 * 30],
+            location=porto_location,
+            tilt=35,
+            surface_azimuth=180,
+            n_modules=1,
+            pv_params=get_module("Generic_600W_Bifacial"),
+            freq="h",
+            albedo=0.25,
+        )
+
+        front_only = calculate_pv_production_dc(**kwargs)
+        bifacial = calculate_pv_production_dc(
+            **kwargs,
+            bifacial_model="infinite_sheds",
+            gcr=0.35,
+            pvrow_height=1.5,
+            pvrow_pitch=6.0,
+        )
+
+        assert bifacial.sum() > front_only.sum()
+
+    def test_rear_gain_increases_with_albedo(self, synthetic_weather, porto_location):
+        kwargs = dict(
+            weather_data=synthetic_weather.iloc[: 24 * 30],
+            location=porto_location,
+            tilt=35,
+            surface_azimuth=180,
+            n_modules=1,
+            pv_params=get_module("Generic_600W_Bifacial"),
+            freq="h",
+            bifacial_model="infinite_sheds",
+            gcr=0.35,
+            pvrow_height=1.5,
+            pvrow_pitch=6.0,
+        )
+
+        low_albedo = calculate_pv_production_dc(**kwargs, albedo=0.15)
+        high_albedo = calculate_pv_production_dc(**kwargs, albedo=0.65)
+
+        assert high_albedo.sum() > low_albedo.sum()
+
+    def test_infinite_sheds_requires_bifacial_metadata_and_geometry(self, synthetic_weather, porto_location):
+        kwargs = dict(
+            weather_data=synthetic_weather.iloc[:48],
+            location=porto_location,
+            tilt=35,
+            surface_azimuth=180,
+            n_modules=1,
+            freq="h",
+            bifacial_model="infinite_sheds",
+            gcr=0.35,
+        )
+
+        with pytest.raises(ValueError, match="requires PV module bifaciality"):
+            calculate_pv_production_dc(
+                **kwargs,
+                pv_params=_module_params(),
+                pvrow_height=1.5,
+                pvrow_pitch=6.0,
+            )
+        with pytest.raises(TypeError, match="pvrow_height must be a finite number"):
+            calculate_pv_production_dc(
+                **kwargs,
+                pv_params=get_module("Generic_600W_Bifacial"),
+            )
 
     def test_output_shape(self, synthetic_weather, porto_location, pv_params):
         dc = calculate_pv_production_dc(
@@ -350,6 +419,23 @@ class TestTracking:
             )
             assert dc.fillna(0).sum() == pytest.approx(0.0, abs=1.0)
 
+    def test_single_axis_supports_infinite_sheds_rear_gain(self, synthetic_weather, porto_location):
+        module = get_module("Generic_600W_Bifacial")
+        weather = synthetic_weather.iloc[: 24 * 30]
+
+        front_only = self._single(weather, porto_location, module, gcr=0.35)
+        bifacial = self._single(
+            weather,
+            porto_location,
+            module,
+            gcr=0.35,
+            bifacial_model="infinite_sheds",
+            pvrow_height=1.5,
+            pvrow_pitch=6.0,
+        )
+
+        assert bifacial.sum() > front_only.sum()
+
 
 class TestMultiArrayTracking:
     def test_mixed_arrays(self, synthetic_weather, porto_location):
@@ -377,6 +463,32 @@ class TestMultiArrayTracking:
                 arrays=arrays,
                 freq="h",
             )
+
+    def test_per_array_bifacial_model_is_independent(self, synthetic_weather, porto_location):
+        weather = synthetic_weather.iloc[: 24 * 30]
+        front_array = {
+            "modules": 1,
+            "module": "Generic_600W_Bifacial",
+            "tilt": 30,
+            "azimuth": 180,
+        }
+        bifacial_array = {
+            **front_array,
+            "bifacial_model": "infinite_sheds",
+            "gcr": 0.35,
+            "pvrow_height": 1.5,
+            "pvrow_pitch": 6.0,
+        }
+
+        front_only = calculate_multi_array_production(weather, porto_location, [front_array], freq="h")
+        mixed = calculate_multi_array_production(
+            weather,
+            porto_location,
+            [front_array, bifacial_array],
+            freq="h",
+        )
+
+        assert mixed.sum() > 2 * front_only.sum()
 
 
 class TestTranspositionModel:

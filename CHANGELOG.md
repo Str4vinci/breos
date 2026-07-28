@@ -8,6 +8,10 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 - Added optional, validated `PVModuleParams.bifaciality` metadata and a sourced
   maximum-power bifaciality value for the generic 600 W bifacial catalog entry.
   The metadata alone does not activate rear-gain modeling or change production.
+- Added opt-in `bifacial_model="infinite_sheds"` rear-gain modeling for fixed,
+  tracking, and mixed multi-array systems. The App/CLI path requires explicit
+  row height and pitch plus sourced module bifaciality; the default `"none"`
+  path preserves front-only production.
 
 ## [0.4.2] - 2026-07-27
 

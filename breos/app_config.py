@@ -15,6 +15,8 @@ from breos.emissions import EmissionsParams
 from breos.pv_modules import MODULES, PVModuleParams, get_module
 from breos.resources import load_config_json
 from breos.solar import (
+    BIFACIAL_MODELS,
+    DEFAULT_BIFACIAL_MODEL,
     DEFAULT_DIFFUSE_IAM,
     DEFAULT_PEREZ_MODEL,
     DEFAULT_SOLAR_POSITION,
@@ -53,6 +55,9 @@ DEFAULTS: dict[str, Any] = {
     "solar_position": DEFAULT_SOLAR_POSITION,
     "diffuse_iam": DEFAULT_DIFFUSE_IAM,
     "temperature_model": DEFAULT_TEMPERATURE_MODEL,
+    "bifacial_model": DEFAULT_BIFACIAL_MODEL,
+    "pvrow_height": None,
+    "pvrow_pitch": None,
     "resolution": "h",
     "projection_years": 20,
     "cost_preset": None,
@@ -153,6 +158,41 @@ def _validate_sky_settings(
         raise ValueError(f"'{prefix}model_perez' must be one of: {valid}")
 
 
+def _validate_bifacial_settings(
+    model: Any,
+    module: Any,
+    gcr: Any,
+    pvrow_height: Any,
+    pvrow_pitch: Any,
+    where: str = "",
+) -> None:
+    """Validate opt-in bifacial module metadata and row geometry."""
+    prefix = f"{where}." if where else ""
+    normalised = str(model).strip().lower()
+    if normalised not in BIFACIAL_MODELS:
+        valid = ", ".join(BIFACIAL_MODELS)
+        raise ValueError(f"'{prefix}bifacial_model' must be one of: {valid}")
+
+    for key, value in (("pvrow_height", pvrow_height), ("pvrow_pitch", pvrow_pitch)):
+        if value is not None and _finite_real(value, f"{prefix}{key}") <= 0:
+            raise ValueError(f"'{prefix}{key}' must be > 0 when configured")
+
+    if normalised == "none":
+        return
+
+    module_key = module or next(iter(MODULES))
+    if module_key in MODULES and MODULES[module_key].bifaciality is None:
+        raise ValueError(
+            f"'{prefix}bifacial_model=infinite_sheds' requires bifaciality metadata for PV module {module_key!r}"
+        )
+    if pvrow_height is None:
+        raise ValueError(f"'{prefix}pvrow_height' is required when bifacial_model='infinite_sheds'")
+    if pvrow_pitch is None:
+        raise ValueError(f"'{prefix}pvrow_pitch' is required when bifacial_model='infinite_sheds'")
+    if not 0 < _finite_real(gcr, f"{prefix}gcr") <= 1:
+        raise ValueError(f"'{prefix}gcr' must be between 0 (exclusive) and 1 (inclusive)")
+
+
 def validate_config(cfg: dict[str, Any]) -> None:
     """Validate user-facing App config before resolving derived values."""
     has_arrays = _validate_structure_and_location(cfg)
@@ -235,6 +275,14 @@ def _validate_pv_and_inverter(cfg: dict[str, Any], has_arrays: bool) -> None:
                 arr.get("model_perez"),
                 where=f"pv_arrays[{i}]",
             )
+            _validate_bifacial_settings(
+                arr.get("bifacial_model", cfg["bifacial_model"]),
+                module or next(iter(MODULES)),
+                arr.get("gcr", cfg["gcr"]),
+                arr.get("pvrow_height", cfg["pvrow_height"]),
+                arr.get("pvrow_pitch", cfg["pvrow_pitch"]),
+                where=f"pv_arrays[{i}]",
+            )
     if _finite_real(cfg["annual_consumption_kwh"], "annual_consumption_kwh") <= 0:
         raise ValueError("'annual_consumption_kwh' must be > 0")
     if _finite_real(cfg["battery_kwh"], "battery_kwh") < 0:
@@ -248,6 +296,14 @@ def _validate_pv_and_inverter(cfg: dict[str, Any], has_arrays: bool) -> None:
     azimuth = cfg.get("azimuth")
     if azimuth is not None and not 0 <= _finite_real(azimuth, "azimuth") <= 360:
         raise ValueError("'azimuth' must be between 0 and 360")
+    if not has_arrays:
+        _validate_bifacial_settings(
+            cfg["bifacial_model"],
+            cfg.get("pv_module") or next(iter(MODULES)),
+            cfg["gcr"],
+            cfg["pvrow_height"],
+            cfg["pvrow_pitch"],
+        )
     if not 0 < _finite_real(cfg["inverter_efficiency"], "inverter_efficiency") <= 1:
         raise ValueError("'inverter_efficiency' must be between 0 (exclusive) and 1 (inclusive)")
     if _finite_real(cfg["inverter_loading_ratio"], "inverter_loading_ratio") <= 0:
@@ -272,6 +328,7 @@ def _validate_time_and_weather(cfg: dict[str, Any]) -> None:
     if str(cfg["temperature_model"]).strip().lower() not in TEMPERATURE_MODELS:
         valid = ", ".join(TEMPERATURE_MODELS)
         raise ValueError(f"'temperature_model' must be one of: {valid}")
+    cfg["bifacial_model"] = str(cfg["bifacial_model"]).strip().lower()
     overrides = cfg.get("pv_loss_overrides")
     if overrides is not None:
         if not isinstance(overrides, dict):
@@ -399,6 +456,9 @@ def normalise_pv_arrays(arrays: list[dict[str, Any]] | None, cfg: dict[str, Any]
         "albedo",
         "surface_type",
         "model_perez",
+        "bifacial_model",
+        "pvrow_height",
+        "pvrow_pitch",
     )
 
     normalized: list[dict[str, Any]] = []
