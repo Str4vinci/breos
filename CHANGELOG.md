@@ -52,6 +52,11 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   public solar-function signatures, defaults, and numerical paths. Config
   validation is preserved except for the `gcr` tightening noted above.
 
+### Fixed
+- Corrected the `fast` extra documentation: the current Numba kernels are
+  approximate screening utilities and do not accelerate `breos.App`, Monte
+  Carlo, or multi-objective optimization production paths.
+
 ## [0.4.2] - 2026-07-27
 
 ### Changed
