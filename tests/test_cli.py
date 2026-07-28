@@ -177,6 +177,17 @@ def test_list_modules_json_outputs_catalog(capsys):
     assert exit_code == 0
     output = json.loads(capsys.readouterr().out)
     assert any(row["key"] == "Generic_400W" and row["power_w"] == 400 for row in output)
+    bifacial = next(row for row in output if row["key"] == "Generic_600W_Bifacial")
+    assert bifacial["bifaciality"] == 0.7
+
+
+def test_list_modules_text_identifies_bifaciality(capsys):
+    exit_code = cli.main(["list", "modules"])
+
+    assert exit_code == 0
+    output = capsys.readouterr().out
+    assert "Generic_600W_Bifacial: 600 W" in output
+    assert "bifaciality 70.0%" in output
 
 
 def test_list_battery_models_exposes_scientific_metadata(capsys):

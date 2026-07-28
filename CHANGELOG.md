@@ -17,6 +17,9 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   term is zero and front-side irradiance, cell temperature, and DC production
   are bit-for-bit unchanged. That guarantee covers the rear-gain model only,
   not the `gcr` forwarding change noted below.
+- Added bifacial configuration and rear-gain diagnostics to the PV loss
+  waterfall and result provenance, a runnable ground-mount example, and paired
+  front/rear regression benchmarks across the seven-site validation matrix.
 
 ### Changed
 - Multi-array systems now honour the top-level `gcr` when placing per-array

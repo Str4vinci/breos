@@ -32,7 +32,7 @@ weather/data access, load profiles, PV system data, and cost assumptions; see
 | `axis_azimuth` | auto | Tracker axis azimuth. Auto-set from latitude when `None` |
 | `max_angle` | `60.0` | Single-axis tracker maximum rotation angle |
 | `backtrack` | `True` | Whether single-axis trackers backtrack to avoid row shading |
-| `gcr` | `0.35` | Ground coverage ratio for single-axis tracking |
+| `gcr` | `0.35` | Ground coverage ratio for single-axis tracking and infinite-sheds bifacial geometry |
 | `cross_axis_tilt` | `0.0` | Cross-axis terrain slope for single-axis tracking |
 | `dual_axis_max_tilt` | `90.0` | Maximum panel tilt for dual-axis tracking |
 | `transposition_model` | `"isotropic"` | Sky-diffusion model used to project GHI/DHI/DNI onto the plane of array (see [below](#sky-diffusion-transposition-model)) |
@@ -42,6 +42,9 @@ weather/data access, load profiles, PV system data, and cost assumptions; see
 | `solar_position` | `"interval-start"` | Where within each timestep the sun position is evaluated. `"mid-interval"` matches the PVWatts/SAM convention for interval-averaged weather (hourly value labelled 07:00 = 07:00–08:00 average → 07:30 sun) |
 | `diffuse_iam` | `"none"` | Whether the incidence-angle modifier is also applied to the diffuse POA components. `"marion"` weighs sky- and ground-diffuse with the view-factor-integrated ashrae IAM (Marion 2017); the default applies IAM to beam only, a known ~0.5–1% overestimate |
 | `temperature_model` | `"faiman"` | Cell-temperature model / mounting preset. `"pvsyst-freestanding"`, `"pvsyst-semi-integrated"`, and `"pvsyst-insulated"` use PVsyst's documented mounting coefficients — pick a roof preset for rooftop systems; the default Faiman open-rack coefficients run cool for them |
+| `bifacial_model` | `"none"` | Rear-irradiance model. `"none"` preserves front-only production; `"infinite_sheds"` requires sourced module bifaciality plus `gcr`, `pvrow_height`, and `pvrow_pitch` |
+| `pvrow_height` | `None` | Height of the PV row center above ground; required by `"infinite_sheds"` and expressed in the same unit as `pvrow_pitch` |
+| `pvrow_pitch` | `None` | Distance between adjacent PV rows; required by `"infinite_sheds"` and expressed in the same unit as `pvrow_height` |
 | `resolution` | `"h"` | Time resolution (`"h"` or `"15min"`) |
 | `projection_years` | `20` | Economic projection horizon |
 | `cost_preset` | `None` | Cost preset key from packaged defaults |
@@ -147,6 +150,43 @@ For `diffuse_iam = "marion"`, fixed-tilt arrays use pvlib's exact Marion
 diffuse integration. Tracking arrays evaluate the same integrated IAM on a
 cached 0.5 degree tilt grid and interpolate per timestep, avoiding thousands
 of repeated integrations while preserving a smooth tracker response.
+
+## Bifacial rear gain
+
+Bifacial modeling is deliberately opt-in. A module's `bifaciality` metadata
+never changes production by itself; set `bifacial_model = "infinite_sheds"`
+and provide complete row geometry to activate rear irradiance:
+
+```python
+breos.App({
+    "location": "porto",
+    "n_modules": 10,
+    "annual_consumption_kwh": 4000,
+    "pv_module": "Generic_600W_Bifacial",
+    "bifacial_model": "infinite_sheds",
+    "albedo": 0.2,
+    "gcr": 0.35,
+    "pvrow_height": 1.5,
+    "pvrow_pitch": 6.0,
+})
+```
+
+`pvrow_height` is the row-center height and `pvrow_pitch` is the distance
+between rows. Their absolute unit is arbitrary, but both values must use the
+same unit. For `pv_arrays`, each array may override the model and geometry;
+this permits mixed front-only and bifacial systems.
+
+BREOS keeps its existing unshaded front-side transposition chain and uses
+pvlib's infinite-sheds row geometry for the rear side only. This hybrid is a
+good approximation in the low-GCR limit, but it is front-optimistic for dense
+ground-mount rows because front-side row shading is not modeled. The rear
+estimate uses Hay-Davies when the front selects it and isotropic transposition
+for every other front-side model. No extra `pvfactors`/Shapely dependency is
+required.
+
+The year-1 result reports the modeled contribution under
+`pv_loss_waterfall.bifacial`, as an ordered `bifacial_rear_gain` waterfall
+stage, and under `provenance.pv_model.bifacial`.
 
 ## Custom location
 

@@ -73,6 +73,8 @@ def _compute(key, model):
     loc = locations[key]
     entry = _BASELINE["locations"][key]
     weather = load_validation_weather(VALIDATION_DIR / "data" / "weather" / entry["weather_file"])
+    model_kwargs = dict(MODEL_CONFIGS[model])
+    pv_params = get_module(model_kwargs.pop("pv_module", system["module"]))
 
     ac = calculate_pv_production_ac(
         weather_data=weather,
@@ -80,12 +82,12 @@ def _compute(key, model):
         tilt=loc["tilt"],
         surface_azimuth=loc["azimuth"],
         n_modules=system["n_modules"],
-        pv_params=get_module(system["module"]),
+        pv_params=pv_params,
         freq="h",
         inverter_loading_ratio=system["dc_ac_ratio"],
         inverter_efficiency=system["inverter_efficiency"],
         albedo=system["albedo"],
-        **MODEL_CONFIGS[model],
+        **model_kwargs,
     )
     monthly = ac.groupby(ac.index.month).sum() / 1000.0
     result = {

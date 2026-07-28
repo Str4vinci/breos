@@ -1,0 +1,23 @@
+# Opt-in bifacial ground-mount example.
+#
+# The module's catalog bifaciality is metadata only. Rear gain starts only when
+# bifacial_model is explicitly activated with complete row geometry.
+#
+#   breos run --config configs/examples/bifacial-ground-mount.toml
+
+location = "porto"
+n_modules = 10
+annual_consumption_kwh = 4000
+battery_kwh = 0
+
+pv_module = "Generic_600W_Bifacial"
+bifacial_model = "infinite_sheds"
+albedo = 0.2
+gcr = 0.35
+pvrow_height = 1.5  # row-center height; same unit as pitch
+pvrow_pitch = 6.0   # distance between rows
+
+load_profile = "demandlib_h0"
+cost_preset = "residential_pt"
+projection_years = 20
+resolution = "h"

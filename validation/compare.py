@@ -59,6 +59,8 @@ def build_rows(results: dict):
         perez_mid = (res["models"].get("perez_mid") or {}).get("annual_kwh")
         perez_diffuse = (res["models"].get("perez_diffuse") or {}).get("annual_kwh")
         perez_roof = (res["models"].get("perez_roof") or {}).get("annual_kwh")
+        bifacial_front = (res["models"].get("bifacial_front") or {}).get("annual_kwh")
+        bifacial_rear = (res["models"].get("bifacial_rear") or {}).get("annual_kwh")
         pvgis_annual = pvgis.get("annual_kwh")
         pvwatts_annual = pvwatts.get("annual_kwh")
 
@@ -92,6 +94,11 @@ def build_rows(results: dict):
                 "pvgis_dev_diffuse": _pct(perez_diffuse, pvgis_annual) if perez_diffuse is not None else None,
                 "perez_roof": perez_roof,
                 "roof_delta": _pct(perez_roof, perez) if perez_roof is not None else None,
+                "bifacial_gain": (
+                    _pct(bifacial_rear, bifacial_front)
+                    if bifacial_front is not None and bifacial_rear is not None
+                    else None
+                ),
                 "pvwatts": pvwatts_annual,
                 "pvwatts_dev": _pct(perez, pvwatts_annual),
                 "monthly_dev_max": monthly_dev_max,
@@ -106,8 +113,9 @@ def build_rows(results: dict):
 def print_table(rows, results):
     print(f"\nBREOS {results['breos_version']} validation — annual AC yield (kWh), 4 kWp system")
     header = (
-        f"{'location':<16} {'BREOS iso':>10} {'BREOS perez':>12} {'perez+mid':>10} {'perez+diam':>10} {'PVGIS':>8} "
-        f"{'Δperez':>8} {'Δ+mid':>8} {'Δ+diam':>8} {'Δiso':>8} {'roofΔ':>8} {'PVWatts':>8} {'Δperez':>8}  notes"
+        f"{'location':<16} {'BREOS iso':>10} {'BREOS perez':>12} {'perez+mid':>10} {'perez+IAM':>10} {'PVGIS':>8} "
+        f"{'Δperez':>8} {'Δ+mid':>8} {'Δ+IAM':>8} {'Δiso':>8} {'roofΔ':>8} {'rearΔ':>8} "
+        f"{'PVWatts':>8} {'Δperez':>8}  notes"
     )
     print(header)
     print("-" * len(header))
@@ -117,7 +125,7 @@ def print_table(rows, results):
             f"{_fmt_kwh(r['perez_diffuse']):>10} {_fmt_kwh(r['pvgis']):>8} "
             f"{_fmt_pct(r['pvgis_dev']):>8} {_fmt_pct(r['pvgis_dev_mid']):>8} "
             f"{_fmt_pct(r['pvgis_dev_diffuse']):>8} {_fmt_pct(r['pvgis_dev_iso']):>8} "
-            f"{_fmt_pct(r['roof_delta']):>8} "
+            f"{_fmt_pct(r['roof_delta']):>8} {_fmt_pct(r['bifacial_gain']):>8} "
             f"{_fmt_kwh(r['pvwatts']):>8} {_fmt_pct(r['pvwatts_dev']):>8}  {r['notes']}"
         )
 
@@ -143,12 +151,16 @@ def write_report(rows, results):
         "thermal preset) against `perez` (free-standing) — a documented model-choice effect, "
         "not a comparison against the free-standing references.",
         "",
+        "The bifacial rear-gain column compares `bifacial_rear` with `bifacial_front` "
+        "using the same 600 W module, weather, front-side Perez model, albedo 0.2, GCR 0.35, "
+        "row-center height 1.5, and pitch 6.0 (height and pitch in the same arbitrary unit).",
+        "",
         "## Annual AC yield (kWh)",
         "",
         "| Location | BREOS isotropic | BREOS perez | BREOS perez+mid-interval | BREOS perez+diffuse-IAM "
         "| PVGIS PVcalc | Δ perez vs PVGIS | Δ perez+mid vs PVGIS | Δ perez+diffuse vs PVGIS "
-        "| Roof-mount yield Δ | PVWatts v8 | Δ perez vs PVWatts | Notes |",
-        "|---|---|---|---|---|---|---|---|---|---|---|---|---|",
+        "| Roof-mount yield Δ | Bifacial rear-gain Δ | PVWatts v8 | Δ perez vs PVWatts | Notes |",
+        "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|",
     ]
     for r in rows:
         lines.append(
@@ -157,6 +169,7 @@ def write_report(rows, results):
             f"| {_fmt_kwh(r['pvgis'])} | {_fmt_pct(r['pvgis_dev'])} | {_fmt_pct(r['pvgis_dev_mid'])} "
             f"| {_fmt_pct(r['pvgis_dev_diffuse'])} "
             f"| {_fmt_pct(r['roof_delta'])} "
+            f"| {_fmt_pct(r['bifacial_gain'])} "
             f"| {_fmt_kwh(r['pvwatts'])} | {_fmt_pct(r['pvwatts_dev'])} "
             f"| {r['notes']} |"
         )

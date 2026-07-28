@@ -643,6 +643,11 @@ class TestAppSimulateNoBattery:
         assert waterfall["pvwatts"]["components_pct"]["shading"] == 3.0
         assert waterfall["pvwatts"]["combined_kwh"] > 0
         assert waterfall["inverter"]["conversion_loss_kwh"] > 0
+        assert waterfall["bifacial"]["enabled"] is False
+        assert waterfall["bifacial"]["model"] == "none"
+        assert waterfall["bifacial"]["rear_gain_effective_dc_kwh"] == 0.0
+        rear_stage = next(stage for stage in waterfall["stages"] if stage["key"] == "bifacial_rear_gain")
+        assert rear_stage["delta_kwh"] == 0.0
 
     def test_grid_independence_range(self):
         gi = self.result["grid_independence_pct"]
@@ -811,7 +816,30 @@ class TestAppBifacialConfig:
         )
         bifacial.simulate()
 
-        assert bifacial.result()["pv_dc_generation_kwh"] > front_only.result()["pv_dc_generation_kwh"]
+        result = bifacial.result()
+        assert result["pv_dc_generation_kwh"] > front_only.result()["pv_dc_generation_kwh"]
+        summary = result["pv_loss_waterfall"]["bifacial"]
+        assert summary["enabled"] is True
+        assert summary["model"] == "infinite_sheds"
+        assert summary["rear_gain_effective_dc_kwh"] > 0
+        assert summary["rear_gain_pct_of_front_effective"] > 0
+        assert summary["arrays"] == [
+            {
+                "array_index": 0,
+                "modules": 6,
+                "module": "Generic_600W_Bifacial",
+                "model": "infinite_sheds",
+                "bifaciality": 0.7,
+                "gcr": 0.35,
+                "pvrow_height": 1.5,
+                "pvrow_pitch": 6.0,
+            }
+        ]
+        rear_stage = next(
+            stage for stage in result["pv_loss_waterfall"]["stages"] if stage["key"] == "bifacial_rear_gain"
+        )
+        assert rear_stage["delta_kwh"] == pytest.approx(summary["rear_gain_effective_dc_kwh"], abs=0.01)
+        assert result["provenance"]["pv_model"]["bifacial"] == summary
 
 
 class TestAppSimulateTracking:

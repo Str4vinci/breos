@@ -232,6 +232,7 @@ def _load_options(category: str) -> list[dict[str, Any]]:
                 "power_w": module.Mpp,
                 "name": module.Name or key,
                 "celltype": module.celltype,
+                "bifaciality": module.bifaciality,
             }
             for key, module in sorted(MODULES.items())
         ]
@@ -288,7 +289,12 @@ def _format_options(category: str, rows: list[dict[str, Any]]) -> str:
             f"{row['key']}: {row['name']} ({row['latitude']}, {row['longitude']}, {row['timezone']})" for row in rows
         )
     if category == "modules":
-        return "\n".join(f"{row['key']}: {row['power_w']} W, {row['name']}" for row in rows)
+        lines = []
+        for row in rows:
+            bifaciality = row["bifaciality"]
+            suffix = f", bifaciality {bifaciality * 100:.1f}%" if bifaciality is not None else ""
+            lines.append(f"{row['key']}: {row['power_w']} W, {row['name']}{suffix}")
+        return "\n".join(lines)
     if category == "cost-presets":
         return "\n".join(
             f"{row['key']}: buy {row['electricity_cost_eur_kwh']} EUR/kWh, "
