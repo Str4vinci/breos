@@ -15,11 +15,14 @@ intentions, not commitments; reassess after each release.
   troubleshooting, dependency hygiene, coverage automation, cross-platform
   smoke tests, reproducible BLAST parity tooling, and an internal degradation
   lifecycle protocol. No scientific-model, dispatch, or public result changes.
-- **0.5.0** — bifacial rear-gain is the firm scope (activation key, explicit
-  rear-gain loss-waterfall stage, benchmark rows). Independently complete
-  PV-fidelity items (the pvsyst real-efficiency fix, additional IAM and
-  cell-temperature models) may ride along if each lands with its own
-  compatibility and benchmark tests.
+- **0.5.0** — a focused PV-fidelity release delivered as independently
+  reviewable slices: bifacial rear gain (activation key, explicit waterfall
+  stage, and benchmark rows); a behavior-preserving internal PV-model-core
+  refactor; selectable pvlib IAM models; sourced cell-temperature fidelity;
+  and a recommended-configuration example that includes an equal-nameplate
+  2×600 W bifacial versus 3×400 W monofacial comparison. Existing defaults
+  remain bit-for-bit compatible unless a documented correctness fix is
+  explicitly selected.
 - **0.5.x** — the declarative config schema (behavior-preserving, and
   deliberately before TOU adds another cluster of config keys);
   horizon-profile input; and further internal maintainability work if needed.
@@ -33,6 +36,37 @@ without the 3D scene modeling. That standard is earned two ways: closing
 known systematic modeling gaps, and publishing reproducible evidence that
 the numbers are right. This work takes priority over architectural
 refactoring (see the deferred adapter layer at the bottom of this document).
+
+### 0.5.0 PV-fidelity delivery plan
+
+Keep the public `breos.App` facade and `breos.solar` function signatures
+stable while landing the release as a local/PR stack in this order:
+
+1. **PV model core refactor:** introduce one internal resolved-options object
+   for transposition, ground reflectance, IAM, temperature, and bifacial
+   choices; extract narrow IAM and temperature kernels; and leave all public
+   defaults, errors, and numerical results unchanged. This is deliberately a
+   targeted seam for the next two features, not the deferred project-wide
+   third-party-adapter rewrite.
+2. **IAM selection:** expose pvlib's `ashrae`, `physical`, and `martin_ruiz`
+   beam models, with `ashrae` retaining the historical default. When diffuse
+   IAM is enabled, use pvlib's Marion solid-angle integration with the same
+   selected IAM model so beam and diffuse optics cannot silently disagree.
+3. **Temperature fidelity:** pass sourced module efficiency into the existing
+   PVsyst heat-balance path, add named SAPM construction/mounting presets, and
+   add SAM NOCT only for modules with sourced NOCT and efficiency metadata.
+   Never invent missing module thermal inputs. Record any intentional change
+   to an already opt-in model in the changelog and validation report.
+4. **Guidance and evidence:** publish a recommended PV configuration without
+   changing defaults, add IAM/temperature rows to the seven-site validation
+   report, and add a practical equal-nameplate comparison of 2×600 W
+   bifacial against 3×400 W monofacial modules. State the albedo, GCR, row
+   height/pitch, inverter loading, and the front-shading limitation beside the
+   result.
+
+Each slice gets its own compatibility tests and benchmark evidence. Horizon
+profiles, string-aware electrical validation, currency, and time-of-use
+tariffs remain outside 0.5.0.
 
 ### Standing validation and benchmark suite
 
@@ -225,14 +259,16 @@ Capabilities still to bring online (transposition is already selectable via
 end-to-end through `build_dc_system_base` and the multi-array path):
 
 - **Bifacial rear-gain** — see the dedicated item below.
-- **Cell-temperature model choice** — expose `sapm` and `noct_sam` alongside
-  the existing Faiman and PVsyst mounting presets, with their parameter sets,
-  and let the PVsyst path take the module's real efficiency instead of
-  pvlib's 0.1 default — a natural 0.5.0 ride-along, since
-  `PVModuleParams.Module_Efficiency` already exists as explicitly unused
-  metadata.
-- **IAM model choice** — expose `martin_ruiz`, `physical`, and the SAPM IAM
-  for the beam term, extending the existing diffuse-IAM option.
+- **Cell-temperature model choice (0.5.0):** expose named SAPM presets and,
+  where the module catalog has complete sourced inputs, `noct_sam` alongside
+  the existing Faiman and PVsyst presets. Let the PVsyst path consume real
+  module efficiency instead of pvlib's 0.1 fallback. `noct_sam` must require
+  NOCT plus efficiency rather than assuming either value.
+- **IAM model choice (0.5.0):** expose pvlib's `martin_ruiz` and `physical`
+  beam models alongside the existing `ashrae` path, and extend Marion diffuse
+  IAM with the same selection. SAPM IAM remains later work because its
+  module-specific polynomial coefficients are not in BREOS's CEC-style
+  catalog.
 - **DC-side loss refinements** — optional time-series ohmic/soiling/snow models in
   place of (parts of) the flat PVWatts loss stack, where inputs allow.
 - Non-goal: replacing the CEC single-diode core or the PVWatts loss model as the

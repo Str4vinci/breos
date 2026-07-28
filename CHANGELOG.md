@@ -37,6 +37,9 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   different production. Set `gcr` explicitly on each entry in `pv_arrays` to
   keep the previous geometry. Single-array systems and per-array `gcr`
   overrides are unaffected.
+- Refactored PV model-option resolution and the IAM and temperature kernels
+  into focused internal modules while preserving the `breos.App` facade,
+  public solar-function signatures, defaults, validation, and numerical paths.
 
 ## [0.4.2] - 2026-07-27
 
