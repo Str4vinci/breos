@@ -1,0 +1,17 @@
+# Architecture and implementation notes
+
+These documents preserve design context for contributors. They are not part of
+the Read the Docs user site and may describe proposals, superseded approaches,
+or implementation history.
+
+| Note | Status |
+|---|---|
+| [Third-party module wrapping](third-party-wrapping.md) | Proposed; tracked by GitHub issue #11 |
+| [String inverter sizing](string-inverter-sizing.md) | Proposed capability |
+| [0.4.x refactor and onboarding plan](0.4x-refactor-plan.md) | Historical delivery plan |
+| [Battery degradation policy](battery-degradation-policy.md) | Active maintainer policy |
+| [BLAST degradation engine](blast-degradation-engine.md) | Implementation record with deferred work |
+
+Use `ROADMAP.md` for public release intent and GitHub issues for active
+discussion. Update user-facing `docs/` only when behavior is implemented and
+ready for users to rely on.

@@ -9,6 +9,12 @@ BREOS wrapper surface; for PV modeling background and parameter references,
 start with the [pvlib documentation](https://pvlib-python.readthedocs.io/en/stable/)
 and the project [Resources](../resources.md) page.
 
+The module-performance path uses the CEC six-parameter single-diode model.
+BREOS fits its parameters locally from catalogue or datasheet values with
+`breos.cec_fit`, then evaluates them with pvlib. It does not require PySAM and
+does not automatically import SAM/CEC component tables; those remain useful
+model documentation and comparison data.
+
 ## Production
 
 ```{eval-rst}
