@@ -336,6 +336,221 @@ def _dispatch_dc_step(
     return battery_energy, ledger
 
 
+def _align_simulation_inputs(
+    pv_dc: pd.Series,
+    houseload: pd.DataFrame,
+    temperature_series: Optional[pd.Series],
+    rng: pd.DatetimeIndex,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Reindex PV, load and temperature onto ``rng`` as float64 arrays.
+
+    The loop indexes these positionally, so everything the simulation reads
+    per step is settled here: gaps become zero generation / zero load / 25C,
+    and the load profile is year-shifted when it comes from a different year
+    than the simulation window.
+    """
+    pv_values = pv_dc.reindex(rng).fillna(0.0)
+
+    if isinstance(houseload.index, pd.DatetimeIndex):
+        houseload_series = houseload.iloc[:, 0].copy()
+        load_idx = houseload_series.index
+
+        # Work in UTC to avoid DST ambiguity (naive stripping creates
+        # duplicates at fall-back transitions, e.g. Oct 26 01:00 in Lisbon).
+        if load_idx.tz is not None:
+            load_utc = load_idx.tz_convert("UTC")
+        else:
+            load_utc = load_idx.tz_localize("UTC")
+
+        rng_utc = rng.tz_convert("UTC") if rng.tz is not None else rng.tz_localize("UTC")
+
+        # Only remap year if load covers a single year different from simulation.
+        # Use dominant year (most frequent) to handle tz-aware indices that
+        # span two calendar years in UTC (e.g., CET midnight = UTC 23:00 prev day).
+        load_dominant_year = load_utc.year.value_counts().idxmax()
+        sim_dominant_year = rng_utc.year.value_counts().idxmax()
+        if load_dominant_year != sim_dominant_year:
+            year_offset = sim_dominant_year - load_dominant_year
+            houseload_series.index = load_utc
+            houseload_series = remap_datetime_index_years(houseload_series, year_offset)
+            load_utc = houseload_series.index
+
+        # Convert back to target timezone (UTC→local is always unambiguous)
+        if rng.tz is not None:
+            new_load_idx = load_utc.tz_convert(rng.tz)
+        else:
+            new_load_idx = load_utc.tz_localize(None)
+        houseload_series.index = new_load_idx
+    else:
+        houseload_series = houseload.iloc[:, 0].copy()
+        houseload_series.index = pv_values.index
+    houseload_series = houseload_series.reindex(rng).fillna(0.0)
+
+    if temperature_series is None:
+        temperature_series = pd.Series(25.0, index=rng)
+    else:
+        temperature_series = temperature_series.reindex(rng).fillna(25.0)
+
+    return (
+        pv_values.values.astype(np.float64),
+        houseload_series.values.astype(np.float64),
+        temperature_series.values.astype(np.float64),
+    )
+
+
+def _resolve_degradation_engine(
+    degradation_engine: str,
+    blast_model: Optional[str],
+    initial_degradation_state: Optional[Dict[str, Any]],
+    battery_config: BatteryConfig,
+) -> str:
+    """Normalise the degradation backend name and reject incoherent pairings.
+
+    Every combination that a backend could only honour by silently ignoring
+    one of its inputs fails here, before any simulation work.
+    """
+    engine_key = str(degradation_engine).strip().lower()
+    if engine_key not in {"native", "blast"}:
+        raise ValueError("degradation_engine must be 'native' or 'blast'")
+
+    if engine_key == "native" and blast_model is not None:
+        raise ValueError("blast_model requires degradation_engine='blast'")
+    if engine_key == "native" and initial_degradation_state is not None:
+        raise ValueError("initial_degradation_state requires degradation_engine='blast'")
+    if engine_key == "blast" and not blast_model:
+        raise ValueError("blast_model is required when degradation_engine='blast'")
+    if engine_key == "blast" and battery_config.enable_resistance_fade:
+        raise ValueError("degradation_engine='blast' cannot be combined with enable_resistance_fade")
+    return engine_key
+
+
+def _resolve_carried_energy(
+    initial_energy_wh: Optional[float],
+    initial_pv_origin_energy_wh: Optional[float],
+    battery_config: BatteryConfig,
+    battery_soh_decimal: float,
+) -> Tuple[float, float]:
+    """Validate the carried stored-energy state, returning ``(energy, pv_origin)``.
+
+    Both default for a fresh run: a battery starting full at its configured
+    max SOC, with none of that energy attributable to PV.
+    """
+    if initial_energy_wh is None:
+        energy_wh = battery_config.nominal_energy_wh * battery_soh_decimal * battery_config.max_soc
+    else:
+        if isinstance(initial_energy_wh, (bool, np.bool_)):
+            raise ValueError("initial_energy_wh must be a finite number, not a bool")
+        try:
+            energy_wh = float(initial_energy_wh)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("initial_energy_wh must be a finite number") from exc
+        if not math.isfinite(energy_wh):
+            raise ValueError("initial_energy_wh must be a finite number")
+        if not 0.0 <= energy_wh <= battery_config.nominal_energy_wh:
+            raise ValueError(
+                f"initial_energy_wh must be between 0 and nominal_energy_wh ({battery_config.nominal_energy_wh:g} Wh)"
+            )
+
+    if initial_pv_origin_energy_wh is None:
+        pv_origin_wh = 0.0
+    else:
+        if isinstance(initial_pv_origin_energy_wh, (bool, np.bool_)):
+            raise ValueError("initial_pv_origin_energy_wh must be a finite number, not a bool")
+        try:
+            pv_origin_wh = float(initial_pv_origin_energy_wh)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("initial_pv_origin_energy_wh must be a finite number") from exc
+        if not math.isfinite(pv_origin_wh):
+            raise ValueError("initial_pv_origin_energy_wh must be a finite number")
+        if not 0.0 <= pv_origin_wh <= energy_wh:
+            raise ValueError("initial_pv_origin_energy_wh must be between 0 and initial_energy_wh")
+
+    return energy_wh, pv_origin_wh
+
+
+def _build_degradation_lifecycle(
+    engine_key: str,
+    battery_config: BatteryConfig,
+    *,
+    battery_soh_decimal: float,
+    has_battery: bool,
+    blast_model: Optional[str],
+    initial_degradation_state: Optional[Dict[str, Any]],
+    initial_fec: float,
+    initial_calendar_seconds: float,
+    initial_cumulative_cycle_deg: float,
+    initial_cumulative_cal_deg: float,
+    default_day_start_soc: float,
+    default_day_start_t_cell: float,
+    debug: bool,
+) -> Tuple[DegradationLifecycle, float, float]:
+    """Construct the degradation backend and its first day-boundary state.
+
+    Returns the lifecycle adapter plus the SOC and cell temperature the first
+    daily step should treat as the previous day's endpoint. BLAST consumes
+    that boundary pair (its daily endpoint model spans midnight); the native
+    adapter ignores it, so the defaults only matter for the BLAST path, where
+    a carried snapshot overrides them.
+    """
+    if engine_key != "blast":
+        lifecycle: DegradationLifecycle = NativeDegradationAdapter(
+            model_key=battery_config.calendar_model,
+            initial_soh_fraction=battery_soh_decimal,
+            initial_fec=initial_fec,
+            initial_calendar_seconds=initial_calendar_seconds,
+            initial_cumulative_cycle_degradation=initial_cumulative_cycle_deg,
+            initial_cumulative_calendar_degradation=initial_cumulative_cal_deg,
+            nominal_energy_wh=battery_config.nominal_energy_wh,
+            battery_type=battery_config.battery_type,
+            **_native_degradation_kwargs(battery_config.calendar_model),
+            cycle_step=update_battery_soh_cyclewise,
+            calendar_step=update_battery_soh_calendar,
+            debug=debug,
+        )
+        return lifecycle, default_day_start_soc, default_day_start_t_cell
+
+    if not has_battery:
+        raise ValueError("degradation_engine='blast' requires a configured battery")
+
+    state_payload = initial_degradation_state or {}
+    blast_snapshot = state_payload.get("blast_engine", state_payload)
+    if not blast_snapshot and not math.isclose(battery_config.initial_soh, 100.0):
+        raise ValueError("BLAST starts from a beginning-of-life model unless initial_degradation_state is provided")
+    lifecycle = BlastDegradationAdapter(
+        str(blast_model),
+        initial_state=state_payload,
+        initial_fec=initial_fec,
+        initial_calendar_seconds=initial_calendar_seconds,
+        initial_cumulative_cycle_degradation=initial_cumulative_cycle_deg,
+        initial_cumulative_calendar_degradation=initial_cumulative_cal_deg,
+    )
+    return (
+        lifecycle,
+        float(state_payload.get("day_start_soc_absolute", default_day_start_soc)),
+        float(state_payload.get("day_start_temperature_c", default_day_start_t_cell)),
+    )
+
+
+def _native_degradation_kwargs(calendar_model: str) -> Dict[str, float]:
+    """Map a calendar-model name onto the native adapter's parameter names."""
+    k0_frac, activation_energy, time_exponent, soc_exponent = _get_degradation_params(calendar_model)
+    return {
+        "k0_fraction": k0_frac,
+        "activation_energy": activation_energy,
+        "soc_exponent": soc_exponent,
+        "time_exponent": time_exponent,
+    }
+
+
+def _step_energy_cap(power_w: Optional[float], hours_per_step: float) -> float:
+    """Convert a nameplate power limit (W) to a per-step energy cap (Wh).
+
+    ``None`` means unlimited, which the dispatch kernel reads as an infinite
+    cap rather than as a separate branch.
+    """
+    return power_w * hours_per_step if power_w is not None else float("inf")
+
+
 def simulate_energy_balance(
     pv_dc: pd.Series,
     houseload: pd.DataFrame,
@@ -421,100 +636,24 @@ def simulate_energy_balance(
     # Create time range
     rng = pd.date_range(start=start_time, end=end_time, freq=freq)
 
-    # Align input data - pv_dc
-    pv_dc = pv_dc.reindex(rng).fillna(0.0)
+    _pv_dc_vals, _load_vals, _temp_vals = _align_simulation_inputs(pv_dc, houseload, temperature_series, rng)
 
-    # Align load data
-    if isinstance(houseload.index, pd.DatetimeIndex):
-        houseload_series = houseload.iloc[:, 0].copy()
-        load_idx = houseload_series.index
-
-        # Work in UTC to avoid DST ambiguity (naive stripping creates
-        # duplicates at fall-back transitions, e.g. Oct 26 01:00 in Lisbon).
-        if load_idx.tz is not None:
-            load_utc = load_idx.tz_convert("UTC")
-        else:
-            load_utc = load_idx.tz_localize("UTC")
-
-        rng_utc = rng.tz_convert("UTC") if rng.tz is not None else rng.tz_localize("UTC")
-
-        # Only remap year if load covers a single year different from simulation.
-        # Use dominant year (most frequent) to handle tz-aware indices that
-        # span two calendar years in UTC (e.g., CET midnight = UTC 23:00 prev day).
-        load_dominant_year = load_utc.year.value_counts().idxmax()
-        sim_dominant_year = rng_utc.year.value_counts().idxmax()
-        if load_dominant_year != sim_dominant_year:
-            year_offset = sim_dominant_year - load_dominant_year
-            houseload_series.index = load_utc
-            houseload_series = remap_datetime_index_years(houseload_series, year_offset)
-            load_utc = houseload_series.index
-
-        # Convert back to target timezone (UTC→local is always unambiguous)
-        if rng.tz is not None:
-            new_load_idx = load_utc.tz_convert(rng.tz)
-        else:
-            new_load_idx = load_utc.tz_localize(None)
-        houseload_series.index = new_load_idx
-    else:
-        houseload_series = houseload.iloc[:, 0].copy()
-        houseload_series.index = pv_dc.index
-    houseload_series = houseload_series.reindex(rng).fillna(0.0)
-
-    # Temperature series
-    if temperature_series is None:
-        temperature_series = pd.Series(25.0, index=rng)
-    else:
-        temperature_series = temperature_series.reindex(rng).fillna(25.0)
-
-    degradation_engine_key = str(degradation_engine).strip().lower()
-    if degradation_engine_key not in {"native", "blast"}:
-        raise ValueError("degradation_engine must be 'native' or 'blast'")
-
-    if degradation_engine_key == "native" and blast_model is not None:
-        raise ValueError("blast_model requires degradation_engine='blast'")
-    if degradation_engine_key == "native" and initial_degradation_state is not None:
-        raise ValueError("initial_degradation_state requires degradation_engine='blast'")
-    if degradation_engine_key == "blast" and not blast_model:
-        raise ValueError("blast_model is required when degradation_engine='blast'")
-    if degradation_engine_key == "blast" and battery_config.enable_resistance_fade:
-        raise ValueError("degradation_engine='blast' cannot be combined with enable_resistance_fade")
-
-    # Get degradation model parameters
-    k0_frac, Ea_val, b_val, n_val = _get_degradation_params(battery_config.calendar_model)
+    degradation_engine_key = _resolve_degradation_engine(
+        degradation_engine,
+        blast_model,
+        initial_degradation_state,
+        battery_config,
+    )
 
     # Initialize state
     battery_soh_decimal = battery_config.initial_soh / 100.0
     Battery_SOH = battery_config.initial_soh
-    default_initial_energy_wh = battery_config.nominal_energy_wh * battery_soh_decimal * battery_config.max_soc
-    if initial_energy_wh is None:
-        Battery_Energy_Wh = default_initial_energy_wh
-    else:
-        if isinstance(initial_energy_wh, (bool, np.bool_)):
-            raise ValueError("initial_energy_wh must be a finite number, not a bool")
-        try:
-            Battery_Energy_Wh = float(initial_energy_wh)
-        except (TypeError, ValueError) as exc:
-            raise ValueError("initial_energy_wh must be a finite number") from exc
-        if not math.isfinite(Battery_Energy_Wh):
-            raise ValueError("initial_energy_wh must be a finite number")
-        if not 0.0 <= Battery_Energy_Wh <= battery_config.nominal_energy_wh:
-            raise ValueError(
-                f"initial_energy_wh must be between 0 and nominal_energy_wh ({battery_config.nominal_energy_wh:g} Wh)"
-            )
-
-    if initial_pv_origin_energy_wh is None:
-        Battery_PV_Origin_Energy_Wh = 0.0
-    else:
-        if isinstance(initial_pv_origin_energy_wh, (bool, np.bool_)):
-            raise ValueError("initial_pv_origin_energy_wh must be a finite number, not a bool")
-        try:
-            Battery_PV_Origin_Energy_Wh = float(initial_pv_origin_energy_wh)
-        except (TypeError, ValueError) as exc:
-            raise ValueError("initial_pv_origin_energy_wh must be a finite number") from exc
-        if not math.isfinite(Battery_PV_Origin_Energy_Wh):
-            raise ValueError("initial_pv_origin_energy_wh must be a finite number")
-        if not 0.0 <= Battery_PV_Origin_Energy_Wh <= Battery_Energy_Wh:
-            raise ValueError("initial_pv_origin_energy_wh must be between 0 and initial_energy_wh")
+    Battery_Energy_Wh, Battery_PV_Origin_Energy_Wh = _resolve_carried_energy(
+        initial_energy_wh,
+        initial_pv_origin_energy_wh,
+        battery_config,
+        battery_soh_decimal,
+    )
 
     # Degradation day-windows are positional (fixed steps_per_day), not
     # calendar-based: DST days and trailing partial days shift/skip windows
@@ -548,10 +687,6 @@ def simulate_energy_balance(
     degradation_tracking = []
     T_cell_day_sum = 0.0
 
-    # Pre-extract numpy arrays for fast indexed access (avoids .loc[] overhead)
-    _pv_dc_vals = pv_dc.values.astype(np.float64)
-    _load_vals = houseload_series.values.astype(np.float64)
-    _temp_vals = temperature_series.values.astype(np.float64)
     n_steps = len(rng)
 
     # Pre-allocate result arrays (avoids per-timestep dict creation)
@@ -602,42 +737,21 @@ def simulate_energy_balance(
     degradation_day_start_soc = battery_config.max_soc if has_battery else 0.0
     degradation_day_start_t_cell = float(_temp_vals[0]) if n_steps else 25.0
 
-    if degradation_engine_key == "blast":
-        if not has_battery:
-            raise ValueError("degradation_engine='blast' requires a configured battery")
-
-        state_payload = initial_degradation_state or {}
-        blast_snapshot = state_payload.get("blast_engine", state_payload)
-        if not blast_snapshot and not math.isclose(battery_config.initial_soh, 100.0):
-            raise ValueError("BLAST starts from a beginning-of-life model unless initial_degradation_state is provided")
-        degradation_lifecycle: DegradationLifecycle = BlastDegradationAdapter(
-            str(blast_model),
-            initial_state=state_payload,
-            initial_fec=initial_fec,
-            initial_calendar_seconds=initial_calendar_seconds,
-            initial_cumulative_cycle_degradation=initial_cumulative_cycle_deg,
-            initial_cumulative_calendar_degradation=initial_cumulative_cal_deg,
-        )
-        degradation_day_start_soc = float(state_payload.get("day_start_soc_absolute", degradation_day_start_soc))
-        degradation_day_start_t_cell = float(state_payload.get("day_start_temperature_c", degradation_day_start_t_cell))
-    else:
-        degradation_lifecycle = NativeDegradationAdapter(
-            model_key=battery_config.calendar_model,
-            initial_soh_fraction=battery_soh_decimal,
-            initial_fec=initial_fec,
-            initial_calendar_seconds=initial_calendar_seconds,
-            initial_cumulative_cycle_degradation=initial_cumulative_cycle_deg,
-            initial_cumulative_calendar_degradation=initial_cumulative_cal_deg,
-            nominal_energy_wh=battery_config.nominal_energy_wh,
-            battery_type=battery_config.battery_type,
-            k0_fraction=k0_frac,
-            activation_energy=Ea_val,
-            soc_exponent=n_val,
-            time_exponent=b_val,
-            cycle_step=update_battery_soh_cyclewise,
-            calendar_step=update_battery_soh_calendar,
-            debug=debug,
-        )
+    degradation_lifecycle, degradation_day_start_soc, degradation_day_start_t_cell = _build_degradation_lifecycle(
+        degradation_engine_key,
+        battery_config,
+        battery_soh_decimal=battery_soh_decimal,
+        has_battery=has_battery,
+        blast_model=blast_model,
+        initial_degradation_state=initial_degradation_state,
+        initial_fec=initial_fec,
+        initial_calendar_seconds=initial_calendar_seconds,
+        initial_cumulative_cycle_deg=initial_cumulative_cycle_deg,
+        initial_cumulative_cal_deg=initial_cumulative_cal_deg,
+        default_day_start_soc=degradation_day_start_soc,
+        default_day_start_t_cell=degradation_day_start_t_cell,
+        debug=debug,
+    )
 
     battery_soh_decimal = degradation_lifecycle.soh()
     Battery_SOH = battery_soh_decimal * 100.0
@@ -646,22 +760,11 @@ def simulate_energy_balance(
 
     # Bind capacity factor function once
     _cap_factor_fn = lfp_capacity_factor
-    # Inverter AC cap per step (Wh); None keeps the legacy uncapped model
-    cap_wh = (
-        battery_config.inverter_ac_capacity_w * hours_per_step
-        if battery_config.inverter_ac_capacity_w is not None
-        else float("inf")
-    )
-    cap_charge_wh = (
-        battery_config.max_charge_power_w * hours_per_step
-        if battery_config.max_charge_power_w is not None
-        else float("inf")
-    )
-    cap_discharge_wh = (
-        battery_config.max_discharge_power_w * hours_per_step
-        if battery_config.max_discharge_power_w is not None
-        else float("inf")
-    )
+    # Per-step energy caps (Wh) for the shared inverter AC nameplate and the
+    # battery's own charge/discharge power limits.
+    cap_wh = _step_energy_cap(battery_config.inverter_ac_capacity_w, hours_per_step)
+    cap_charge_wh = _step_energy_cap(battery_config.max_charge_power_w, hours_per_step)
+    cap_discharge_wh = _step_energy_cap(battery_config.max_discharge_power_w, hours_per_step)
 
     for i in range(n_steps):
         step_time = rng[i]
