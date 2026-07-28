@@ -46,6 +46,25 @@ class TestPVModuleParams:
         params = _module_params(gamma_pmp=-0.30)
         assert params.gamma_pmp == -0.30
 
+    def test_bifaciality_is_optional_metadata(self):
+        assert _module_params().bifaciality is None
+        assert _module_params(bifaciality=0.8).bifaciality == 0.8
+
+    def test_bifaciality_does_not_shift_existing_positional_fields(self):
+        required = [400, 41.0, 9.76, 49.3, 10.30, -0.35, -0.265, 0.05, 144]
+        params = PVModuleParams(*required, "Existing name", 0.21, "monoSi", None, None, -0.30)
+
+        assert params.Name == "Existing name"
+        assert params.Module_Efficiency == 0.21
+        assert params.celltype == "monoSi"
+        assert params.gamma_pmp == -0.30
+        assert params.bifaciality is None
+
+    @pytest.mark.parametrize("bifaciality", [0.0, -0.1, 1.01])
+    def test_bifaciality_must_be_a_physical_ratio(self, bifaciality):
+        with pytest.raises(ValueError, match="bifaciality must be between"):
+            _module_params(bifaciality=bifaciality)
+
 
 class TestDcToAc:
     def _dc(self, watts, periods=4):
@@ -89,6 +108,21 @@ class TestTiltAndAzimuth:
 
 
 class TestPVProduction:
+    def test_bifaciality_metadata_does_not_activate_rear_gain(self, synthetic_weather, porto_location):
+        kwargs = dict(
+            weather_data=synthetic_weather.iloc[:48],
+            location=porto_location,
+            tilt=35,
+            surface_azimuth=180,
+            n_modules=1,
+            freq="h",
+        )
+
+        front_only = calculate_pv_production_dc(**kwargs, pv_params=_module_params())
+        bifacial_metadata = calculate_pv_production_dc(**kwargs, pv_params=_module_params(bifaciality=0.8))
+
+        pd.testing.assert_series_equal(front_only, bifacial_metadata)
+
     def test_output_shape(self, synthetic_weather, porto_location, pv_params):
         dc = calculate_pv_production_dc(
             weather_data=synthetic_weather,

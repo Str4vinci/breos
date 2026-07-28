@@ -76,7 +76,11 @@ MODULES: Dict[str, PVModuleParams] = {
     ),
     # -------------------------------------------------------------------------
     # Generic 600W Bifacial Module (utility-scale, high-voltage 144-half-cell)
-    # Representative mono-PERC specs; the model treats it as a front-side module.
+    # Representative mono-PERC specs. The 0.70 maximum-power bifaciality is
+    # sourced from Trina Solar's 600 W Vertex TSM-DEG20C.20 datasheet
+    # (TSM_EN_2020_PA1): https://www.trinasolar.com/sites/default/files/600WVertex.pdf
+    # It remains inert metadata until bifacial modeling is explicitly activated
+    # by the caller.
     # -------------------------------------------------------------------------
     "Generic_600W_Bifacial": PVModuleParams(
         Mpp=600,
@@ -89,7 +93,8 @@ MODULES: Dict[str, PVModuleParams] = {
         T_Voc_pct=-0.26,
         T_Isc_pct=0.046,
         N_Cells=144,
-        Name="Generic 600W bifacial (utility-scale ref)",
+        bifaciality=0.70,
+        Name="Generic 600W bifacial (Trina Vertex bifaciality ref)",
     ),
 }
 
@@ -166,6 +171,7 @@ Cells:      {m.N_Cells}
 T_Pmax:     {m.T_Pmax_pct} %/°C
 Name:       {m.Name}
 Efficiency: {f"{m.Module_Efficiency * 100:.1f} %" if m.Module_Efficiency is not None else "n/a"}
+Bifaciality: {f"{m.bifaciality * 100:.1f} %" if m.bifaciality is not None else "n/a"}
 """
 
 

@@ -279,8 +279,13 @@ class PVModuleParams:
     alpha_sc_abs: Optional[float] = None  # A/°C - if provided, overrides T_Isc_pct conversion
     beta_voc_abs: Optional[float] = None  # V/°C - if provided, overrides T_Voc_pct conversion
     gamma_pmp: Optional[float] = None
+    # Appended after all pre-0.5 fields to preserve positional construction.
+    bifaciality: Optional[float] = None  # Metadata: rear/front maximum-power ratio (inert by itself)
 
     def __post_init__(self):
+        if self.bifaciality is not None and not 0.0 < self.bifaciality <= 1.0:
+            raise ValueError("bifaciality must be between 0 (exclusive) and 1 (inclusive)")
+
         # 1. HANDLE CURRENT (alpha_sc)
         if self.alpha_sc_abs is not None:
             # User provided absolute A/C directly
