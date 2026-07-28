@@ -542,6 +542,53 @@ def _native_degradation_kwargs(calendar_model: str) -> Dict[str, float]:
     }
 
 
+def _apply_capacity_window(
+    nominal_energy_wh: float,
+    soh_fraction: float,
+    max_soc: float,
+    min_soc: float,
+    standby_loss_wh: float,
+    energy_wh: float,
+    pv_origin_wh: float,
+    t_cell: float,
+) -> Tuple[float, float, float, float, float, float]:
+    """Derate the usable SOC window and bleed standby loss, before dispatch.
+
+    Returns ``(energy, pv_origin, emin, emax, capacity_window_loss, standby)``,
+    all in Wh. Assumes a configured battery; the no-battery case never calls
+    this. ``standby_loss_wh`` is already scaled to the timestep.
+
+    ``t_cell`` here is the ambient/indoor temperature at step start, not the
+    self-heated cell temperature the thermal model produces later in the same
+    step: usable capacity is set by the pack's state *before* this step's
+    charge/discharge self-heating, while aging sees the warmed cell. That
+    split is intentional.
+
+    A temperature- or SOH-driven fall in ``emax`` is booked as an explicit
+    loss — it is neither export nor standby consumption — and the lower
+    reserve is a dispatch boundary that must never create energy when it
+    rises. The PV-origin share is rescaled with every reduction so it stays a
+    fraction of what is actually stored.
+    """
+    usable_cap = nominal_energy_wh * soh_fraction
+    f_cap = lfp_capacity_factor(t_cell)
+    emax = usable_cap * max_soc * f_cap
+    emin = usable_cap * min_soc * f_cap
+
+    capacity_window_loss = max(0.0, energy_wh - emax)
+    if capacity_window_loss > 0.0 and energy_wh > 0.0:
+        pv_origin_wh *= emax / energy_wh
+        energy_wh = emax
+
+    removable_for_standby = max(0.0, energy_wh - emin)
+    standby = min(standby_loss_wh, removable_for_standby)
+    if standby > 0.0 and energy_wh > 0.0:
+        pv_origin_wh *= (energy_wh - standby) / energy_wh
+        energy_wh -= standby
+
+    return energy_wh, pv_origin_wh, emin, emax, capacity_window_loss, standby
+
+
 def _step_energy_cap(power_w: Optional[float], hours_per_step: float) -> float:
     """Convert a nameplate power limit (W) to a per-step energy cap (Wh).
 
@@ -1143,10 +1190,9 @@ def simulate_energy_balance(
         day_start_t_cell=degradation_day_start_t_cell,
     )
 
-    # Bind capacity factor function once
-    _cap_factor_fn = lfp_capacity_factor
     # Per-step energy caps (Wh) for the shared inverter AC nameplate and the
     # battery's own charge/discharge power limits.
+    standby_loss_per_step_wh = battery_config.standby_loss_wh * hours_per_step
     cap_wh = _step_energy_cap(battery_config.inverter_ac_capacity_w, hours_per_step)
     cap_charge_wh = _step_energy_cap(battery_config.max_charge_power_w, hours_per_step)
     cap_discharge_wh = _step_energy_cap(battery_config.max_discharge_power_w, hours_per_step)
@@ -1168,31 +1214,23 @@ def simulate_energy_balance(
         battery_standby_loss = 0.0
 
         if has_battery:
-            # Calculate usable capacity with temperature derating. f_cap is
-            # computed from the ambient/indoor temperature at step start; the
-            # lumped thermal model warms T_cell later in the step, so aging
-            # sees the warmed cell while derating sees the environment. This
-            # is intentional: usable capacity is set by the pack's state
-            # before this step's charge/discharge self-heating.
-            usable_cap = battery_config.nominal_energy_wh * battery_soh_decimal
-            f_cap = _cap_factor_fn(T_cell)
-            Emax = usable_cap * battery_config.max_soc * f_cap
-            Emin = usable_cap * battery_config.min_soc * f_cap
-
-            # A temperature/SOH-driven reduction in Emax is an explicit loss;
-            # it is not export or standby consumption. The lower reserve is a
-            # dispatch boundary and must never create energy when it rises.
-            capacity_window_loss = max(0.0, Battery_Energy_Wh - Emax)
-            if capacity_window_loss > 0.0 and Battery_Energy_Wh > 0.0:
-                Battery_PV_Origin_Energy_Wh *= Emax / Battery_Energy_Wh
-                Battery_Energy_Wh = Emax
-
-            standby_loss = battery_config.standby_loss_wh * hours_per_step
-            removable_for_standby = max(0.0, Battery_Energy_Wh - Emin)
-            battery_standby_loss = min(standby_loss, removable_for_standby)
-            if battery_standby_loss > 0.0 and Battery_Energy_Wh > 0.0:
-                Battery_PV_Origin_Energy_Wh *= (Battery_Energy_Wh - battery_standby_loss) / Battery_Energy_Wh
-                Battery_Energy_Wh -= battery_standby_loss
+            (
+                Battery_Energy_Wh,
+                Battery_PV_Origin_Energy_Wh,
+                Emin,
+                Emax,
+                capacity_window_loss,
+                battery_standby_loss,
+            ) = _apply_capacity_window(
+                battery_config.nominal_energy_wh,
+                battery_soh_decimal,
+                battery_config.max_soc,
+                battery_config.min_soc,
+                standby_loss_per_step_wh,
+                Battery_Energy_Wh,
+                Battery_PV_Origin_Energy_Wh,
+                T_cell,
+            )
         else:
             Emax = 0.0
             Emin = 0.0
