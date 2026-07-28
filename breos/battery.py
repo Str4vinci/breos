@@ -551,6 +551,189 @@ def _step_energy_cap(power_w: Optional[float], hours_per_step: float) -> float:
     return power_w * hours_per_step if power_w is not None else float("inf")
 
 
+# Explicit per-step energy flows and losses, in the column order they appear
+# in the results frame. Every entry is accumulated in Wh during the loop and
+# divided by the step length on write, so the frame reports average W.
+_LEDGER_COLUMNS: Tuple[str, ...] = (
+    "PV_DC_To_Battery",
+    "PV_DC_To_Inverter",
+    "PV_DC_Curtailed",
+    "PV_AC_To_Load",
+    "PV_AC_Export",
+    "Battery_Charge_Input",
+    "Battery_Charge_Stored",
+    "Battery_Discharge_DC",
+    "Battery_AC_To_Load",
+    "Battery_AC_To_Load_PV",
+    "PV_Origin_Battery_AC_To_Load",
+    "PV_Direct_Inverter_Loss",
+    "Battery_Inverter_Loss",
+    "Inverter_Loss",
+    "Standby_Loss",
+    "Capacity_Window_Loss",
+    "Battery_Replacement_Energy_Removed",
+    "Battery_Replacement_Energy_Added",
+    "Battery_Energy_Delta",
+)
+
+
+class _ResultBuffers:
+    """Pre-allocated per-timestep output arrays and their frame layout.
+
+    The simulation writes into these positionally rather than appending dicts,
+    which is what keeps an 8760-step loop out of pandas. Owning both the
+    allocation and :meth:`to_frame` here means the column set is described
+    once instead of drifting between two ends of a 700-line function.
+
+    ``replaced`` and ``replacement_cost`` are zero-filled because only
+    replacement days write them; every other array is fully overwritten each
+    step and is left uninitialised.
+    """
+
+    __slots__ = (
+        "pv_dc",
+        "pv_production",
+        "load",
+        "pv_delta",
+        "grid_import",
+        "grid_export",
+        "battery_energy",
+        "soc_normalized",
+        "soc_absolute",
+        "soh",
+        "t_cell",
+        "replaced",
+        "replacement_cost",
+        "pv_curtailment",
+        "charge_loss",
+        "discharge_loss",
+        "standby_loss",
+        "battery_energy_begin",
+        "pv_origin_begin",
+        "pv_origin_end",
+        "ledger",
+    )
+
+    def __init__(self, n_steps: int) -> None:
+        self.pv_dc = np.empty(n_steps)
+        self.pv_production = np.empty(n_steps)
+        self.load = np.empty(n_steps)
+        self.pv_delta = np.empty(n_steps)
+        self.grid_import = np.empty(n_steps)
+        self.grid_export = np.empty(n_steps)
+        self.battery_energy = np.empty(n_steps)
+        self.soc_normalized = np.empty(n_steps)
+        self.soc_absolute = np.empty(n_steps)
+        self.soh = np.empty(n_steps)
+        self.t_cell = np.empty(n_steps)
+        self.replaced = np.zeros(n_steps, dtype=bool)
+        self.replacement_cost = np.zeros(n_steps)
+        self.pv_curtailment = np.empty(n_steps)
+        self.charge_loss = np.empty(n_steps)
+        self.discharge_loss = np.empty(n_steps)
+        self.standby_loss = np.empty(n_steps)
+        self.battery_energy_begin = np.empty(n_steps)
+        self.pv_origin_begin = np.empty(n_steps)
+        self.pv_origin_end = np.empty(n_steps)
+        self.ledger = {key: np.empty(n_steps) for key in _LEDGER_COLUMNS}
+
+    def to_frame(self, rng: pd.DatetimeIndex) -> pd.DataFrame:
+        """Assemble the public per-timestep results frame."""
+        return pd.DataFrame(
+            {
+                "Datetime": rng,
+                "PV_DC": self.pv_dc,
+                "PV_Production": self.pv_production,
+                "Houseload": self.load,
+                "PV_Delta": self.pv_delta,
+                "Import_From_Grid": self.grid_import,
+                "Sell_To_Grid": self.grid_export,
+                "Battery_Energy": self.battery_energy,
+                "Battery_SOC_Normalized": self.soc_normalized,
+                "Battery_SOC_Absolute": self.soc_absolute,
+                "Battery_SOH": self.soh,
+                "T_cell": self.t_cell,
+                "Battery_Replaced": self.replaced,
+                "Replacement_Cost": self.replacement_cost,
+                "PV_Curtailment": self.pv_curtailment,
+                "Battery_Charge_Loss": self.charge_loss,
+                "Battery_Discharge_Loss": self.discharge_loss,
+                "Battery_Standby_Loss": self.standby_loss,
+                # Stored-energy state columns are Wh; all explicit flow/loss
+                # ledger columns are average W over the timestep. The
+                # end-of-step energy is the same array as "Battery_Energy".
+                "Battery_Energy_Beginning": self.battery_energy_begin,
+                "Battery_Energy_End": self.battery_energy,
+                "Battery_PV_Origin_Energy_Beginning": self.pv_origin_begin,
+                "Battery_PV_Origin_Energy_End": self.pv_origin_end,
+                **self.ledger,
+            }
+        )
+
+
+def _build_summary_frame(
+    buffers: _ResultBuffers,
+    hours_per_step: float,
+    *,
+    final_soh_percent: float,
+    n_replacements: int,
+    total_replacement_cost: float,
+) -> Tuple[pd.DataFrame, float]:
+    """Summarise a completed run, returning ``(summary_df, total_pv_wh)``.
+
+    ``total_pv`` is both a summary row and a separate public return value, so
+    it is computed once here and handed back rather than recomputed.
+    """
+    total_pv = buffers.pv_production.sum() * hours_per_step
+    total_load = buffers.load.sum() * hours_per_step
+    total_sell = buffers.grid_export.sum() * hours_per_step
+    total_import = buffers.grid_import.sum() * hours_per_step
+
+    percentage_imported = (total_import / total_load * 100) if total_load > 0 else 0
+
+    summary = {
+        "Total PV [kWh]": total_pv / 1000.0,
+        "Total Load [kWh]": total_load / 1000.0,
+        "Sell [kWh]": total_sell / 1000.0,
+        "Import [kWh]": total_import / 1000.0,
+        "Import [%]": percentage_imported,
+        "Grid Independence [%]": 100 - percentage_imported,
+        "Final SOH [%]": final_soh_percent,
+        "N_Replacements": n_replacements,
+        "Replacement_Cost": total_replacement_cost,
+    }
+    return pd.DataFrame([summary]), total_pv
+
+
+def _build_final_degradation_state(
+    degradation_lifecycle: DegradationLifecycle,
+    *,
+    day_start_soc: float,
+    day_start_temperature_c: float,
+    resistance_growth: float,
+) -> Dict[str, Any]:
+    """Assemble the carry state a follow-on run can be resumed from.
+
+    The engine-independent keys are listed first and explicitly, so the
+    schema a caller round-trips does not depend on adapter dict ordering;
+    whatever else the adapter reports (BLAST engine internals) follows.
+    Resistance growth is owned by the energy loop, not by either adapter.
+    """
+    adapter_snapshot = degradation_lifecycle.snapshot(
+        day_start_soc=day_start_soc,
+        day_start_temperature_c=day_start_temperature_c,
+    )
+    return {
+        "degradation_engine": adapter_snapshot.pop("degradation_engine"),
+        "fec_cum": float(adapter_snapshot.pop("fec_cum")),
+        "cumulative_calendar_seconds": float(adapter_snapshot.pop("cumulative_calendar_seconds")),
+        "resistance_growth": float(resistance_growth),
+        "cumulative_cycle_degradation": float(adapter_snapshot.pop("cumulative_cycle_degradation")),
+        "cumulative_calendar_degradation": float(adapter_snapshot.pop("cumulative_calendar_degradation")),
+        **adapter_snapshot,
+    }
+
+
 def simulate_energy_balance(
     pv_dc: pd.Series,
     houseload: pd.DataFrame,
@@ -690,48 +873,8 @@ def simulate_energy_balance(
     n_steps = len(rng)
 
     # Pre-allocate result arrays (avoids per-timestep dict creation)
-    _res_pv_dc = np.empty(n_steps)
-    _res_pv_prod = np.empty(n_steps)
-    _res_load = np.empty(n_steps)
-    _res_pv_delta = np.empty(n_steps)
-    _res_import = np.empty(n_steps)
-    _res_sell = np.empty(n_steps)
-    _res_batt_e = np.empty(n_steps)
-    _res_soc_norm = np.empty(n_steps)
-    _res_soc_abs = np.empty(n_steps)
-    _res_soh = np.empty(n_steps)
-    _res_tcell = np.empty(n_steps)
-    _res_replaced = np.zeros(n_steps, dtype=bool)
-    _res_repl_cost = np.zeros(n_steps)
-    _res_pv_curtailment = np.empty(n_steps)
-    _res_batt_charge_loss = np.empty(n_steps)
-    _res_batt_discharge_loss = np.empty(n_steps)
-    _res_batt_standby_loss = np.empty(n_steps)
-    _ledger_keys = (
-        "PV_DC_To_Battery",
-        "PV_DC_To_Inverter",
-        "PV_DC_Curtailed",
-        "PV_AC_To_Load",
-        "PV_AC_Export",
-        "Battery_Charge_Input",
-        "Battery_Charge_Stored",
-        "Battery_Discharge_DC",
-        "Battery_AC_To_Load",
-        "Battery_AC_To_Load_PV",
-        "PV_Origin_Battery_AC_To_Load",
-        "PV_Direct_Inverter_Loss",
-        "Battery_Inverter_Loss",
-        "Inverter_Loss",
-        "Standby_Loss",
-        "Capacity_Window_Loss",
-        "Battery_Replacement_Energy_Removed",
-        "Battery_Replacement_Energy_Added",
-        "Battery_Energy_Delta",
-    )
-    _ledger_arrays = {key: np.empty(n_steps) for key in _ledger_keys}
-    _res_batt_e_begin = np.empty(n_steps)
-    _res_batt_pv_begin = np.empty(n_steps)
-    _res_batt_pv_end = np.empty(n_steps)
+    out = _ResultBuffers(n_steps)
+    _ledger_arrays = out.ledger
     # Hoist invariant check out of the loop
     has_battery = battery_config.nominal_energy_wh > 1 and (battery_config.max_soc - battery_config.min_soc) > 0
     degradation_day_start_soc = battery_config.max_soc if has_battery else 0.0
@@ -890,24 +1033,24 @@ def simulate_energy_balance(
         soc_buf_idx += 1
 
         # Store results via array indexing (avoids per-timestep dict overhead)
-        _res_pv_dc[i] = pv_dc_power / hours_per_step
-        _res_pv_prod[i] = pv_production / hours_per_step
-        _res_load[i] = load / hours_per_step
-        _res_pv_delta[i] = (pv_production - load) / hours_per_step
-        _res_import[i] = Import / hours_per_step
-        _res_sell[i] = Sell / hours_per_step
-        _res_batt_e[i] = Battery_Energy_Wh if has_battery else 0.0
-        _res_soc_norm[i] = soc_normalized
-        _res_soc_abs[i] = soc_absolute
-        _res_soh[i] = Battery_SOH if has_battery else 100.0
-        _res_tcell[i] = T_cell
-        _res_pv_curtailment[i] = pv_curtailment / hours_per_step
-        _res_batt_charge_loss[i] = battery_charge_loss / hours_per_step
-        _res_batt_discharge_loss[i] = battery_discharge_loss / hours_per_step
-        _res_batt_standby_loss[i] = battery_standby_loss / hours_per_step
-        _res_batt_e_begin[i] = battery_energy_beginning
-        _res_batt_pv_begin[i] = pv_origin_beginning
-        _res_batt_pv_end[i] = Battery_PV_Origin_Energy_Wh
+        out.pv_dc[i] = pv_dc_power / hours_per_step
+        out.pv_production[i] = pv_production / hours_per_step
+        out.load[i] = load / hours_per_step
+        out.pv_delta[i] = (pv_production - load) / hours_per_step
+        out.grid_import[i] = Import / hours_per_step
+        out.grid_export[i] = Sell / hours_per_step
+        out.battery_energy[i] = Battery_Energy_Wh if has_battery else 0.0
+        out.soc_normalized[i] = soc_normalized
+        out.soc_absolute[i] = soc_absolute
+        out.soh[i] = Battery_SOH if has_battery else 100.0
+        out.t_cell[i] = T_cell
+        out.pv_curtailment[i] = pv_curtailment / hours_per_step
+        out.charge_loss[i] = battery_charge_loss / hours_per_step
+        out.discharge_loss[i] = battery_discharge_loss / hours_per_step
+        out.standby_loss[i] = battery_standby_loss / hours_per_step
+        out.battery_energy_begin[i] = battery_energy_beginning
+        out.pv_origin_begin[i] = pv_origin_beginning
+        out.pv_origin_end[i] = Battery_PV_Origin_Energy_Wh
         ledger_w = {
             "PV_DC_To_Battery": ledger["pv_dc_to_battery"],
             "PV_DC_To_Inverter": ledger["pv_dc_to_inverter"],
@@ -1017,8 +1160,8 @@ def simulate_energy_balance(
                 Battery_PV_Origin_Energy_Wh = 0.0
                 n_replacements += 1
                 total_replacement_cost += battery_config.replacement_cost
-                _res_replaced[i] = True
-                _res_repl_cost[i] = battery_config.replacement_cost
+                out.replaced[i] = True
+                out.replacement_cost[i] = battery_config.replacement_cost
                 cumulative_cycle_deg = 0.0
                 cumulative_cal_deg = 0.0
                 cumulative_resistance_cycle = 0.0
@@ -1030,11 +1173,11 @@ def simulate_energy_balance(
                 # the already-recorded state so the reported end matches the
                 # next timestep's beginning, and expose both external energy
                 # transfers for whole-system reconciliation.
-                _res_batt_e[i] = Battery_Energy_Wh
-                _res_soc_norm[i] = 1.0
-                _res_soc_abs[i] = battery_config.max_soc
-                _res_soh[i] = 100.0
-                _res_batt_pv_end[i] = 0.0
+                out.battery_energy[i] = Battery_Energy_Wh
+                out.soc_normalized[i] = 1.0
+                out.soc_absolute[i] = battery_config.max_soc
+                out.soh[i] = 100.0
+                out.pv_origin_end[i] = 0.0
                 _ledger_arrays["Battery_Replacement_Energy_Removed"][i] = replacement_energy_removed / hours_per_step
                 _ledger_arrays["Battery_Replacement_Energy_Added"][i] = replacement_energy_added / hours_per_step
                 _ledger_arrays["Battery_Energy_Delta"][i] = (
@@ -1068,77 +1211,26 @@ def simulate_energy_balance(
             degradation_day_start_soc = day_end_soc_absolute
             degradation_day_start_t_cell = day_end_t_cell
 
-    # Build results DataFrame from pre-allocated arrays
-    df = pd.DataFrame(
-        {
-            "Datetime": rng,
-            "PV_DC": _res_pv_dc,
-            "PV_Production": _res_pv_prod,
-            "Houseload": _res_load,
-            "PV_Delta": _res_pv_delta,
-            "Import_From_Grid": _res_import,
-            "Sell_To_Grid": _res_sell,
-            "Battery_Energy": _res_batt_e,
-            "Battery_SOC_Normalized": _res_soc_norm,
-            "Battery_SOC_Absolute": _res_soc_abs,
-            "Battery_SOH": _res_soh,
-            "T_cell": _res_tcell,
-            "Battery_Replaced": _res_replaced,
-            "Replacement_Cost": _res_repl_cost,
-            "PV_Curtailment": _res_pv_curtailment,
-            "Battery_Charge_Loss": _res_batt_charge_loss,
-            "Battery_Discharge_Loss": _res_batt_discharge_loss,
-            "Battery_Standby_Loss": _res_batt_standby_loss,
-            # Stored-energy state columns are Wh; all explicit flow/loss
-            # ledger columns are average W over the timestep.
-            "Battery_Energy_Beginning": _res_batt_e_begin,
-            "Battery_Energy_End": _res_batt_e,
-            "Battery_PV_Origin_Energy_Beginning": _res_batt_pv_begin,
-            "Battery_PV_Origin_Energy_End": _res_batt_pv_end,
-            **_ledger_arrays,
-        }
-    )
+    df = out.to_frame(rng)
     deg_df = pd.DataFrame(degradation_tracking) if degradation_tracking else pd.DataFrame()
-
-    # Summary calculations (use numpy sums on arrays directly)
-    total_pv = _res_pv_prod.sum() * hours_per_step
-    total_load = _res_load.sum() * hours_per_step
-    total_sell = _res_sell.sum() * hours_per_step
-    total_import = _res_import.sum() * hours_per_step
-
-    percentage_imported = (total_import / total_load * 100) if total_load > 0 else 0
-
-    summary = {
-        "Total PV [kWh]": total_pv / 1000.0,
-        "Total Load [kWh]": total_load / 1000.0,
-        "Sell [kWh]": total_sell / 1000.0,
-        "Import [kWh]": total_import / 1000.0,
-        "Import [%]": percentage_imported,
-        "Grid Independence [%]": 100 - percentage_imported,
-        "Final SOH [%]": Battery_SOH,
-        "N_Replacements": n_replacements,
-        "Replacement_Cost": total_replacement_cost,
-    }
-    summary_df = pd.DataFrame([summary])
+    summary_df, total_pv = _build_summary_frame(
+        out,
+        hours_per_step,
+        final_soh_percent=Battery_SOH,
+        n_replacements=n_replacements,
+        total_replacement_cost=total_replacement_cost,
+    )
 
     result = (df, total_pv, summary_df, total_replacement_cost, n_replacements, deg_df)
     if not return_degradation_state:
         return result
 
-    adapter_snapshot = degradation_lifecycle.snapshot(
+    final_degradation_state = _build_final_degradation_state(
+        degradation_lifecycle,
         day_start_soc=degradation_day_start_soc,
         day_start_temperature_c=degradation_day_start_t_cell,
+        resistance_growth=resistance_growth,
     )
-    final_degradation_state: Dict[str, Any] = {
-        "degradation_engine": adapter_snapshot.pop("degradation_engine"),
-        "fec_cum": float(adapter_snapshot.pop("fec_cum")),
-        "cumulative_calendar_seconds": float(adapter_snapshot.pop("cumulative_calendar_seconds")),
-        "resistance_growth": float(resistance_growth),
-        "cumulative_cycle_degradation": float(adapter_snapshot.pop("cumulative_cycle_degradation")),
-        "cumulative_calendar_degradation": float(adapter_snapshot.pop("cumulative_calendar_degradation")),
-        **adapter_snapshot,
-    }
-
     return (*result, final_degradation_state)
 
 
