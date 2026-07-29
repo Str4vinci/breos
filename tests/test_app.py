@@ -560,6 +560,74 @@ class TestAppValidation:
         assert seen["timezone"] == "Europe/Lisbon"
 
 
+class TestGcrValidation:
+    """``gcr`` is checked on every path, not only under a bifacial model.
+
+    It drives pvlib's backtracking rotation as well as ``infinite_sheds`` rear
+    view factors, and pvlib silently computes a different rotation rather than
+    rejecting a nonsensical ratio — a mistyped ``3.5`` used to return roughly
+    half the annual energy with no error anywhere.
+    """
+
+    BASE = {"location": "porto", "n_modules": 10, "annual_consumption_kwh": 4000}
+
+    @pytest.mark.parametrize("gcr", [0, 0.0, -0.5, 1.2, 3.5, 5.0])
+    @pytest.mark.parametrize("tracking", ["fixed", "single_axis", "dual_axis"])
+    def test_out_of_range_gcr_rejected_without_a_bifacial_model(self, gcr, tracking):
+        with pytest.raises(ValueError, match="'gcr' must be between 0 .exclusive. and 1 .inclusive."):
+            App({**self.BASE, "gcr": gcr, "tracking": tracking})
+
+    @pytest.mark.parametrize("gcr", ["x", None, float("nan"), float("inf")])
+    def test_non_finite_gcr_rejected(self, gcr):
+        with pytest.raises((ValueError, TypeError), match="'gcr' must be a finite number"):
+            App({**self.BASE, "gcr": gcr})
+
+    @pytest.mark.parametrize("gcr", [0.01, 0.35, 1, 1.0])
+    def test_valid_gcr_accepted(self, gcr):
+        App({**self.BASE, "gcr": gcr})
+
+    def test_per_array_gcr_override_is_reported_against_its_own_key(self):
+        with pytest.raises(ValueError, match=r"'pv_arrays\[1\].gcr' must be between"):
+            App(
+                {
+                    "location": "porto",
+                    "annual_consumption_kwh": 4000,
+                    "pv_arrays": [{"modules": 4}, {"modules": 3, "gcr": 2.0}],
+                }
+            )
+
+    def test_top_level_gcr_checked_even_when_every_array_overrides_it(self):
+        """It is still the function-level default handed to the multi-array path."""
+        with pytest.raises(ValueError, match="'gcr' must be between"):
+            App(
+                {
+                    "location": "porto",
+                    "annual_consumption_kwh": 4000,
+                    "gcr": 4.0,
+                    "pv_arrays": [{"modules": 4, "gcr": 0.4}],
+                }
+            )
+
+    @pytest.mark.parametrize(
+        ("extra", "expected"),
+        [
+            ({"resolution": "weekly"}, "resolution"),
+            ({"inverter_efficiency": 2.0}, "inverter_efficiency"),
+            ({"transposition_model": "nope"}, "transposition_model"),
+            ({"tilt": 120}, "tilt"),
+            ({"bifacial_model": "nope"}, "bifacial_model"),
+        ],
+    )
+    def test_gcr_check_never_steals_a_pre_existing_error(self, extra, expected):
+        """The check runs last, so it is purely additive.
+
+        A config that was already rejected for some other key must keep
+        reporting that key rather than switching to gcr.
+        """
+        with pytest.raises((ValueError, TypeError), match=expected):
+            App({**self.BASE, **extra, "gcr": 3.5})
+
+
 # ---------------------------------------------------------------------------
 # Simulation (with monkeypatched weather)
 # ---------------------------------------------------------------------------

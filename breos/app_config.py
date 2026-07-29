@@ -186,7 +186,13 @@ def _validate_bifacial_settings(
     pvrow_pitch: Any,
     where: str = "",
 ) -> None:
-    """Validate opt-in bifacial module metadata and row geometry."""
+    """Validate opt-in bifacial module metadata and row geometry.
+
+    Shares its predicates with :mod:`breos.pv.model_options` but reports them
+    against config keys. ``pvrow_*`` geometry is required only for an active
+    rear-side model; ``gcr`` is also checked independently after the existing
+    validators because tracking can consume it without bifacial modeling.
+    """
     prefix = f"{where}." if where else ""
     normalised = normalise_model_name(model)
     if not is_known_model(model, BIFACIAL_MODELS):
@@ -221,6 +227,31 @@ def validate_config(cfg: dict[str, Any]) -> None:
     _validate_time_and_weather(cfg)
     _validate_economics(cfg)
     _validate_battery_and_degradation(cfg)
+    _validate_reachable_gcr(cfg, has_arrays)
+
+
+def _validate_reachable_gcr(cfg: dict[str, Any], has_arrays: bool) -> None:
+    """Check every ``gcr`` that can reach the model, once everything else passes.
+
+    Runs last, and deliberately so: an out-of-range ``gcr`` used to be caught
+    only under an active bifacial model, so checking it earlier would change
+    which error an already-broken config reports. Running it here makes the
+    check purely additive — a config failing on some other key keeps failing
+    on that key, and ``gcr`` is only ever the *new* reason a config is
+    rejected.
+
+    Arrays that set no ``gcr`` inherit the top-level value, which is also the
+    function-level default handed to the multi-array entry point, so the
+    top-level value is checked even when every array overrides it. Bifacial
+    arrays have already had their effective ``gcr`` checked in the loop above;
+    re-checking an explicit override here is harmless and covers the
+    non-bifacial tracking path that nothing else reaches.
+    """
+    _validate_gcr(cfg["gcr"])
+    if has_arrays:
+        for index, array in enumerate(cfg["pv_arrays"]):
+            if "gcr" in array:
+                _validate_gcr(array["gcr"], f"pv_arrays[{index}].")
 
 
 def _validate_structure_and_location(cfg: dict[str, Any]) -> bool:
