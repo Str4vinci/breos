@@ -21,6 +21,10 @@ class TestCatalog:
         assert module.bifaciality == pytest.approx(0.70)
         assert "Bifaciality: 70.0 %" in get_module_info("Generic_600W_Bifacial")
 
+    def test_catalog_does_not_claim_unsourced_noct_metadata(self):
+        assert all(module.NOCT is None for module in MODULES.values())
+        assert "NOCT:       n/a (not sourced in bundled catalog)" in get_module_info("Suntech_STP550S_STC")
+
     def test_nomt_entry_removed(self):
         # The Suntech_STP550S_NOMT entry fed NMOT datasheet points (800 W/m2,
         # Mpp=415) into the STC-based CEC fit, which interprets Vmp/Imp/Voc/Isc

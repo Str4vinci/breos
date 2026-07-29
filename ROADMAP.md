@@ -53,11 +53,11 @@ stable while landing the release as a local/PR stack in this order:
    retaining the historical default. When diffuse IAM is enabled, pvlib's
    Marion solid-angle integration uses the same selected IAM model so beam
    and diffuse optics cannot silently disagree.
-3. **Temperature fidelity:** pass sourced module efficiency into the existing
-   PVsyst heat-balance path, add named SAPM construction/mounting presets, and
-   add SAM NOCT only for modules with sourced NOCT and efficiency metadata.
-   Never invent missing module thermal inputs. Record any intentional change
-   to an already opt-in model in the changelog and validation report.
+3. **Temperature fidelity:** delivered on `feature/0.5.0-temperature-models`:
+   PVsyst consumes sourced module efficiency, named SAPM
+   construction/mounting presets are selectable, and `noct-sam` strictly
+   requires NOCT plus efficiency metadata. No bundled catalog entry has a
+   sourced NOCT yet, so catalog activation remains intentionally deferred.
 4. **Guidance and evidence:** publish a recommended PV configuration without
    changing defaults, add IAM/temperature rows to the seven-site validation
    report, and add a practical equal-nameplate comparison of 2×600 W

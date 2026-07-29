@@ -172,6 +172,7 @@ T_Pmax:     {m.T_Pmax_pct} %/°C
 Name:       {m.Name}
 Efficiency: {f"{m.Module_Efficiency * 100:.1f} %" if m.Module_Efficiency is not None else "n/a"}
 Bifaciality: {f"{m.bifaciality * 100:.1f} %" if m.bifaciality is not None else "n/a"}
+NOCT:       {f"{m.NOCT:.1f} °C" if m.NOCT is not None else "n/a (not sourced in bundled catalog)"}
 """
 
 

@@ -43,6 +43,18 @@ class TestAppValidation:
         with pytest.raises(ValueError, match="resolution"):
             App({"location": "porto", "n_modules": 10, "annual_consumption_kwh": 4000, "resolution": "30min"})
 
+    def test_noct_sam_requires_module_metadata_during_config_resolution(self):
+        with pytest.raises(ValueError, match="NOCT metadata"):
+            App(
+                {
+                    "location": "porto",
+                    "n_modules": 10,
+                    "annual_consumption_kwh": 4000,
+                    "pv_module": "Suntech_STP550S_STC",
+                    "temperature_model": "noct-sam",
+                }
+            )
+
     def test_invalid_cost_preset(self):
         with pytest.raises(ValueError, match="Unknown cost preset"):
             App({"location": "porto", "n_modules": 10, "annual_consumption_kwh": 4000, "cost_preset": "fake_preset"})

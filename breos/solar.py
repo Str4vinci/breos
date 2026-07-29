@@ -165,7 +165,7 @@ class PVModuleParams:
     N_Cells: int  # Number of cells (eg 6*24 or 144)
 
     Name: Optional[str] = None  # Metadata: specific module model name
-    Module_Efficiency: Optional[float] = None  # Metadata: module efficiency fraction, e.g. 0.213 (not used in calc)
+    Module_Efficiency: Optional[float] = None  # Metadata: module efficiency fraction, e.g. 0.213
     celltype: str = "monoSi"
 
     alpha_sc_abs: Optional[float] = None  # A/°C - if provided, overrides T_Isc_pct conversion
@@ -173,6 +173,7 @@ class PVModuleParams:
     gamma_pmp: Optional[float] = None
     # Appended after all pre-0.5 fields to preserve positional construction.
     bifaciality: Optional[float] = None  # Metadata: rear/front maximum-power ratio (inert by itself)
+    NOCT: Optional[float] = None  # Metadata: nominal operating cell temperature (°C), required by noct-sam
 
     def __post_init__(self):
         if self.bifaciality is not None and not 0.0 < self.bifaciality <= 1.0:
@@ -268,6 +269,7 @@ def _compute_irradiance_and_cell_temp_detail(
     solarpos: pd.DataFrame,
     surface_tilt,
     surface_azimuth,
+    pv_params: "PVModuleParams",
     model_options: PVModelOptions,
 ) -> _IrradianceModelResult:
     """Compute GHI, POA, effective irradiance, and cell temperature.
@@ -386,6 +388,8 @@ def _compute_irradiance_and_cell_temp_detail(
         temp_air,
         wind_speed,
         model_options.temperature_model,
+        module_efficiency=pv_params.Module_Efficiency,
+        noct=pv_params.NOCT,
     )
     return _IrradianceModelResult(
         ghi=np.nan_to_num(np.asarray(ghi, dtype=float), nan=0.0),
@@ -531,6 +535,7 @@ def _build_pv_production_breakdown(
         solarpos,
         surface_tilt=surface_tilt,
         surface_azimuth=surface_azimuth,
+        pv_params=pv_params,
         model_options=model_options,
     )
     module_dc = _module_dc_before_losses(

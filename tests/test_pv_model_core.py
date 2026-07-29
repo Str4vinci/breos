@@ -118,6 +118,84 @@ def test_temperature_kernel_preserves_pvlib_dispatch(model, pvlib_function, para
     np.testing.assert_allclose(actual, expected)
 
 
+def test_pvsyst_kernel_uses_sourced_module_efficiency():
+    poa_global = np.array([0.0, 400.0, 900.0])
+    temp_air = np.array([15.0, 20.0, 28.0])
+    wind_speed = np.array([1.0, 2.0, 4.0])
+    params = pvlib.temperature.TEMPERATURE_MODEL_PARAMETERS["pvsyst"]["semi_integrated"]
+
+    actual = calculate_cell_temperature(
+        poa_global,
+        temp_air,
+        wind_speed,
+        "pvsyst-semi-integrated",
+        module_efficiency=0.213,
+    )
+    expected = pvlib.temperature.pvsyst_cell(
+        poa_global,
+        temp_air,
+        wind_speed,
+        module_efficiency=0.213,
+        **params,
+    )
+
+    np.testing.assert_allclose(actual, expected)
+
+
+def test_pvsyst_rejects_nonphysical_supplied_module_efficiency():
+    with pytest.raises(ValueError, match="Module_Efficiency"):
+        calculate_cell_temperature(
+            np.array([900.0]),
+            np.array([28.0]),
+            np.array([2.0]),
+            "pvsyst-semi-integrated",
+            module_efficiency=1.1,
+        )
+
+
+@pytest.mark.parametrize(
+    ("model", "parameter_key"),
+    [
+        ("sapm-open-rack-glass-glass", "open_rack_glass_glass"),
+        ("sapm-close-mount-glass-glass", "close_mount_glass_glass"),
+        ("sapm-open-rack-glass-polymer", "open_rack_glass_polymer"),
+        ("sapm-insulated-back-glass-polymer", "insulated_back_glass_polymer"),
+    ],
+)
+def test_sapm_temperature_presets_dispatch_to_matching_pvlib_parameters(model, parameter_key):
+    poa_global = np.array([0.0, 400.0, 900.0])
+    temp_air = np.array([15.0, 20.0, 28.0])
+    wind_speed = np.array([1.0, 2.0, 4.0])
+    params = pvlib.temperature.TEMPERATURE_MODEL_PARAMETERS["sapm"][parameter_key]
+
+    actual = calculate_cell_temperature(poa_global, temp_air, wind_speed, model)
+    expected = pvlib.temperature.sapm_cell(poa_global, temp_air, wind_speed, **params)
+
+    np.testing.assert_allclose(actual, expected)
+
+
+def test_noct_sam_requires_complete_sourced_module_metadata():
+    poa_global = np.array([0.0, 400.0, 900.0])
+    temp_air = np.array([15.0, 20.0, 28.0])
+    wind_speed = np.array([1.0, 2.0, 4.0])
+
+    with pytest.raises(ValueError, match="Module_Efficiency"):
+        calculate_cell_temperature(poa_global, temp_air, wind_speed, "noct-sam")
+    with pytest.raises(ValueError, match="NOCT metadata"):
+        calculate_cell_temperature(poa_global, temp_air, wind_speed, "noct-sam", module_efficiency=0.213)
+
+    actual = calculate_cell_temperature(
+        poa_global,
+        temp_air,
+        wind_speed,
+        "noct-sam",
+        module_efficiency=0.213,
+        noct=45.0,
+    )
+    expected = pvlib.temperature.noct_sam(poa_global, temp_air, wind_speed, noct=45.0, module_efficiency=0.213)
+    np.testing.assert_allclose(actual, expected)
+
+
 @pytest.mark.parametrize("function", MODEL_OPTION_ENTRY_POINTS, ids=lambda f: f.__name__)
 def test_every_entry_point_declares_the_whole_model_option_block(function):
     """Each public entry point must accept every shared model option by keyword.

@@ -103,16 +103,20 @@ DEFAULT_BIFACIAL_MODEL = "none"
 # Cell-temperature model and mounting presets. ``faiman`` is pvlib's Faiman
 # (2008) model with its open-rack default coefficients (u0=25, u1=6.84) —
 # the default and the only prior behaviour. The ``pvsyst-*`` presets use
-# pvlib's PVsyst cell model with its documented mounting parameter sets:
-# free-standing coefficients run cool for roof-mounted systems, so rooftop
-# studies should pick the mounting-appropriate preset (``semi-integrated``
-# for close roof mounts with a rear air gap, ``insulated`` for fully
-# building-integrated modules with no rear ventilation).
+# PVsyst's documented mounting parameter sets. ``sapm-*`` names retain the
+# construction and mounting combinations defined by pvlib/Sandia. ``noct-sam``
+# is available only when the selected module carries sourced NOCT and
+# efficiency metadata; it never guesses those inputs.
 TEMPERATURE_MODELS = (
     "faiman",
     "pvsyst-freestanding",
     "pvsyst-semi-integrated",
     "pvsyst-insulated",
+    "sapm-open-rack-glass-glass",
+    "sapm-close-mount-glass-glass",
+    "sapm-open-rack-glass-polymer",
+    "sapm-insulated-back-glass-polymer",
+    "noct-sam",
 )
 DEFAULT_TEMPERATURE_MODEL = "faiman"
 
