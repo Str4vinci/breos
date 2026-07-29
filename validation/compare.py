@@ -64,6 +64,9 @@ def build_rows(results: dict):
         perez_sapm_roof = (res["models"].get("perez_sapm_roof") or {}).get("annual_kwh")
         bifacial_front = (res["models"].get("bifacial_front") or {}).get("annual_kwh")
         bifacial_rear = (res["models"].get("bifacial_rear") or {}).get("annual_kwh")
+        nameplate_mono = (res["models"].get("nameplate_mono_1200") or {}).get("annual_kwh")
+        nameplate_bifacial_front = (res["models"].get("nameplate_bifacial_front_1200") or {}).get("annual_kwh")
+        nameplate_bifacial_rear = (res["models"].get("nameplate_bifacial_rear_1200") or {}).get("annual_kwh")
         pvgis_annual = pvgis.get("annual_kwh")
         pvwatts_annual = pvwatts.get("annual_kwh")
 
@@ -105,6 +108,19 @@ def build_rows(results: dict):
                     if bifacial_front is not None and bifacial_rear is not None
                     else None
                 ),
+                "nameplate_mono": nameplate_mono,
+                "nameplate_bifacial_front": nameplate_bifacial_front,
+                "nameplate_bifacial_rear": nameplate_bifacial_rear,
+                "nameplate_front_delta": (
+                    _pct(nameplate_bifacial_front, nameplate_mono)
+                    if nameplate_bifacial_front is not None and nameplate_mono is not None
+                    else None
+                ),
+                "nameplate_rear_delta": (
+                    _pct(nameplate_bifacial_rear, nameplate_bifacial_front)
+                    if nameplate_bifacial_rear is not None and nameplate_bifacial_front is not None
+                    else None
+                ),
                 "pvwatts": pvwatts_annual,
                 "pvwatts_dev": _pct(perez, pvwatts_annual),
                 "monthly_dev_max": monthly_dev_max,
@@ -135,6 +151,20 @@ def print_table(rows, results):
             f"{_fmt_pct(r['martin_ruiz_delta']):>8} {_fmt_pct(r['pvgis_dev_iso']):>8} "
             f"{_fmt_pct(r['roof_delta']):>8} {_fmt_pct(r['sapm_roof_delta']):>8} {_fmt_pct(r['bifacial_gain']):>8} "
             f"{_fmt_kwh(r['pvwatts']):>8} {_fmt_pct(r['pvwatts_dev']):>8}  {r['notes']}"
+        )
+
+    print("\nEqual-nameplate comparison — annual AC yield (kWh), 1.2 kWp STC")
+    comparison_header = (
+        f"{'location':<16} {'3x400 mono':>12} {'2x600 front':>13} {'2x600 rear':>12} "
+        f"{'front vs mono':>14} {'rear vs front':>15}"
+    )
+    print(comparison_header)
+    print("-" * len(comparison_header))
+    for r in rows:
+        print(
+            f"{r['key']:<16} {_fmt_kwh(r['nameplate_mono']):>12} "
+            f"{_fmt_kwh(r['nameplate_bifacial_front']):>13} {_fmt_kwh(r['nameplate_bifacial_rear']):>12} "
+            f"{_fmt_pct(r['nameplate_front_delta']):>14} {_fmt_pct(r['nameplate_rear_delta']):>15}"
         )
 
 
@@ -191,6 +221,32 @@ def write_report(rows, results):
             f"| {_fmt_pct(r['bifacial_gain'])} "
             f"| {_fmt_kwh(r['pvwatts'])} | {_fmt_pct(r['pvwatts_dev'])} "
             f"| {r['notes']} |"
+        )
+
+    lines += [
+        "",
+        "## Equal-nameplate module comparison (1.2 kWp STC)",
+        "",
+        "This comparison holds weather, tilt/azimuth, albedo 0.2, DC/AC ratio 1.2, inverter efficiency 0.96, "
+        "losses, Perez transposition, mid-interval solar position, physical beam IAM, Marion diffuse IAM, and "
+        "the Faiman open-rack temperature model fixed. It compares 3×400 W monofacial modules with 2×600 W "
+        "bifacial modules front-only, then activates infinite-sheds rear irradiance at GCR 0.35, row-center "
+        "height 1.5, and pitch 6.0 (height and pitch use the same arbitrary unit).",
+        "",
+        "Equal STC nameplate does not mean equal module area, string layout, or electrical and temperature "
+        "coefficients. Therefore `front vs mono` includes the catalog modules' different parameter sets; "
+        "`rear vs front` isolates the modeled rear gain. The front side remains unshaded, so dense-row results "
+        "can be optimistic and are not a bankable layout estimate.",
+        "",
+        "| Location | 3×400 W mono (kWh) | 2×600 W bifacial, front-only (kWh) "
+        "| 2×600 W bifacial + rear (kWh) | Front vs mono | Rear vs front |",
+        "|---|---|---|---|---|---|",
+    ]
+    for r in rows:
+        lines.append(
+            f"| {r['name']} | {_fmt_kwh(r['nameplate_mono'])} | {_fmt_kwh(r['nameplate_bifacial_front'])} "
+            f"| {_fmt_kwh(r['nameplate_bifacial_rear'])} | {_fmt_pct(r['nameplate_front_delta'])} "
+            f"| {_fmt_pct(r['nameplate_rear_delta'])} |"
         )
 
     lines += ["", "## Monthly shape vs PVGIS (BREOS perez, kWh)", ""]

@@ -5,6 +5,11 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 ## [Unreleased]
 
 ### Added
+- Added an explicit recommended rooftop PV example and a reproducible
+  seven-site equal-nameplate comparison of 3×400 W monofacial, 2×600 W
+  bifacial front-only, and 2×600 W bifacial rear-gain configurations. The
+  report separates module-parameter differences from modeled rear gain and
+  states the geometry, inverter loading, and front-shading limitation.
 - Added selectable `iam_model` optics to the App config, `--iam-model` CLI
   flag, and every public solar-chain function. `"ashrae"` remains the
   bit-for-bit historical default; `"physical"` and `"martin_ruiz"` expose

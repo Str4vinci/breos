@@ -29,10 +29,10 @@ MONTH_LABELS = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "
 # comparable Sandia close-mount glass/glass preset. Both measure rooftop yield
 # deltas rather than matching the free-standing references. Keys are the
 # model names stored in results/baseline JSONs; values are
-# calculate_pv_production_ac keyword overrides. ``pv_module`` is consumed by
-# the harness before calling that function, allowing same-weather comparisons
-# against a module with the bifacial metadata required by infinite-sheds. The
-# drift test recomputes from this same mapping.
+# calculate_pv_production_ac keyword overrides. ``pv_module`` and ``n_modules``
+# are consumed by the harness before calling that function, allowing
+# same-weather and equal-nameplate comparisons. The drift test recomputes from
+# this same mapping.
 MODEL_CONFIGS = {
     "isotropic": {"transposition_model": "isotropic"},
     "perez": {"transposition_model": "perez"},
@@ -50,6 +50,37 @@ MODEL_CONFIGS = {
     "bifacial_rear": {
         "pv_module": "Generic_600W_Bifacial",
         "transposition_model": "perez",
+        "bifacial_model": "infinite_sheds",
+        "gcr": 0.35,
+        "pvrow_height": 1.5,
+        "pvrow_pitch": 6.0,
+    },
+    # Recommended common front-side settings at equal 1.2 kWp STC nameplate.
+    # The front-only bifacial row separates module-model differences from the
+    # rear-gain delta of the otherwise identical infinite-sheds row.
+    "nameplate_mono_1200": {
+        "pv_module": "Generic_400W",
+        "n_modules": 3,
+        "transposition_model": "perez",
+        "solar_position": "mid-interval",
+        "iam_model": "physical",
+        "diffuse_iam": "marion",
+    },
+    "nameplate_bifacial_front_1200": {
+        "pv_module": "Generic_600W_Bifacial",
+        "n_modules": 2,
+        "transposition_model": "perez",
+        "solar_position": "mid-interval",
+        "iam_model": "physical",
+        "diffuse_iam": "marion",
+    },
+    "nameplate_bifacial_rear_1200": {
+        "pv_module": "Generic_600W_Bifacial",
+        "n_modules": 2,
+        "transposition_model": "perez",
+        "solar_position": "mid-interval",
+        "iam_model": "physical",
+        "diffuse_iam": "marion",
         "bifacial_model": "infinite_sheds",
         "gcr": 0.35,
         "pvrow_height": 1.5,

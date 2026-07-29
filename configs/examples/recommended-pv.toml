@@ -1,0 +1,33 @@
+# Recommended rooftop PV-model profile for interval-averaged hourly weather.
+#
+# This example opts into BREOS's higher-fidelity choices explicitly. They are
+# recommendations, not global defaults: existing configurations retain the
+# historical compatible model path unless they select these keys.
+#
+#   breos validate-config configs/examples/recommended-pv.toml
+#   breos run --config configs/examples/recommended-pv.toml
+
+location = "porto"
+tilt = 35
+azimuth = 180
+n_modules = 8
+annual_consumption_kwh = 4000
+battery_kwh = 0
+
+# The Suntech catalog entry has sourced module efficiency, which the selected
+# PVsyst heat-balance model consumes. The semi-integrated preset represents a
+# close rooftop mount with a rear air gap; choose a mount-appropriate thermal
+# preset for a different installation.
+pv_module = "Suntech_STP550S_STC"
+transposition_model = "perez"
+solar_position = "mid-interval"
+iam_model = "physical"
+diffuse_iam = "marion"
+temperature_model = "pvsyst-semi-integrated"
+albedo = 0.2
+
+load_profile = "demandlib_h0"
+cost_preset = "residential_pt"
+emissions_country = "PT"
+projection_years = 20
+resolution = "h"
