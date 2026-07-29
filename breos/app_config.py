@@ -12,6 +12,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from breos.degradation.profiles import ENABLED_BLAST_MODEL_KEYS, apply_battery_profile_defaults
 from breos.economics import CostParams, calculate_costs
 from breos.emissions import EmissionsParams
+from breos.pv.model_options import is_known_model, is_valid_albedo, is_valid_gcr, normalise_model_name
 from breos.pv_modules import MODULES, PVModuleParams, get_module
 from breos.resources import load_config_json
 from breos.solar import (
@@ -141,14 +142,17 @@ def _validate_sky_settings(
     ``where`` prefixes the key name in error messages (e.g. ``pv_arrays[0]``);
     ``None`` values are treated as "not set" and skipped, so per-array overrides
     only validate the keys they actually provide.
+
+    The rules come from :mod:`breos.pv.model_options`; only the config-key
+    phrasing and the None-means-unset handling are this layer's own.
     """
     prefix = f"{where}." if where else ""
-    if transposition_model is not None and str(transposition_model).strip().lower() not in TRANSPOSITION_MODELS:
+    if transposition_model is not None and not is_known_model(transposition_model, TRANSPOSITION_MODELS):
         valid = ", ".join(TRANSPOSITION_MODELS)
         raise ValueError(f"'{prefix}transposition_model' must be one of: {valid}")
     if albedo is not None and surface_type is not None:
         raise ValueError(f"Set either '{prefix}albedo' or '{prefix}surface_type', not both.")
-    if albedo is not None and (not isinstance(albedo, (int, float)) or not 0 <= albedo <= 1):
+    if albedo is not None and (not isinstance(albedo, (int, float)) or not is_valid_albedo(albedo)):
         raise ValueError(f"'{prefix}albedo' must be a number between 0 and 1")
     if surface_type is not None and surface_type not in SURFACE_TYPES:
         valid = ", ".join(SURFACE_TYPES)
@@ -156,6 +160,22 @@ def _validate_sky_settings(
     if model_perez is not None and model_perez not in PEREZ_MODELS:
         valid = ", ".join(PEREZ_MODELS)
         raise ValueError(f"'{prefix}model_perez' must be one of: {valid}")
+
+
+def _validate_gcr(gcr: Any, prefix: str = "") -> None:
+    """Validate a ground coverage ratio, whichever model consumes it.
+
+    ``gcr`` has two consumers and neither is a shading calculation: the
+    ``infinite_sheds`` rear-side view factors, and — on the tracking path —
+    the backtracking rotation schedule that pvlib's ``singleaxis`` derives
+    from it. The second is why this is checked even with no rear-side model
+    active. pvlib does not reject a nonsensical ratio; it quietly computes a
+    different rotation, so a mistyped ``3.5`` returns roughly half the annual
+    energy with no error anywhere. ``prefix`` already carries its trailing
+    dot, matching the other config-key messages.
+    """
+    if not is_valid_gcr(_finite_real(gcr, f"{prefix}gcr")):
+        raise ValueError(f"'{prefix}gcr' must be between 0 (exclusive) and 1 (inclusive)")
 
 
 def _validate_bifacial_settings(
@@ -168,8 +188,8 @@ def _validate_bifacial_settings(
 ) -> None:
     """Validate opt-in bifacial module metadata and row geometry."""
     prefix = f"{where}." if where else ""
-    normalised = str(model).strip().lower()
-    if normalised not in BIFACIAL_MODELS:
+    normalised = normalise_model_name(model)
+    if not is_known_model(model, BIFACIAL_MODELS):
         valid = ", ".join(BIFACIAL_MODELS)
         raise ValueError(f"'{prefix}bifacial_model' must be one of: {valid}")
 
@@ -189,8 +209,9 @@ def _validate_bifacial_settings(
         raise ValueError(f"'{prefix}pvrow_height' is required when bifacial_model='infinite_sheds'")
     if pvrow_pitch is None:
         raise ValueError(f"'{prefix}pvrow_pitch' is required when bifacial_model='infinite_sheds'")
-    if not 0 < _finite_real(gcr, f"{prefix}gcr") <= 1:
-        raise ValueError(f"'{prefix}gcr' must be between 0 (exclusive) and 1 (inclusive)")
+    # Deliberately last, so an active rear-side model still reports its
+    # missing metadata and geometry before quibbling about the ratio.
+    _validate_gcr(gcr, prefix)
 
 
 def validate_config(cfg: dict[str, Any]) -> None:
@@ -319,16 +340,16 @@ def _validate_time_and_weather(cfg: dict[str, Any]) -> None:
     if cfg["resolution"] not in ("h", "15min"):
         raise ValueError("'resolution' must be 'h' or '15min'")
     _validate_sky_settings(cfg["transposition_model"], cfg["albedo"], cfg["surface_type"], cfg["model_perez"])
-    if str(cfg["solar_position"]).strip().lower() not in SOLAR_POSITION_METHODS:
+    if not is_known_model(cfg["solar_position"], SOLAR_POSITION_METHODS):
         valid = ", ".join(SOLAR_POSITION_METHODS)
         raise ValueError(f"'solar_position' must be one of: {valid}")
-    if str(cfg["diffuse_iam"]).strip().lower() not in DIFFUSE_IAM_METHODS:
+    if not is_known_model(cfg["diffuse_iam"], DIFFUSE_IAM_METHODS):
         valid = ", ".join(DIFFUSE_IAM_METHODS)
         raise ValueError(f"'diffuse_iam' must be one of: {valid}")
-    if str(cfg["temperature_model"]).strip().lower() not in TEMPERATURE_MODELS:
+    if not is_known_model(cfg["temperature_model"], TEMPERATURE_MODELS):
         valid = ", ".join(TEMPERATURE_MODELS)
         raise ValueError(f"'temperature_model' must be one of: {valid}")
-    cfg["bifacial_model"] = str(cfg["bifacial_model"]).strip().lower()
+    cfg["bifacial_model"] = normalise_model_name(cfg["bifacial_model"])
     overrides = cfg.get("pv_loss_overrides")
     if overrides is not None:
         if not isinstance(overrides, dict):
