@@ -58,6 +58,62 @@ DEFAULT_PVWATTS_LOSSES: Dict[str, float] = {
     "availability": 3.0,
 }
 
+# The PV model-option block every public ``calculate_pv_production_*`` entry
+# point accepts. Each of those functions still declares these explicitly —
+# the signature is the documentation, and ``**kwargs`` would silently swallow
+# a misspelled option — but the wrappers that only forward the block use this
+# tuple instead of re-listing it, so adding an option is one edit here plus
+# one per signature rather than one per call site too.
+_MODEL_OPTION_KEYS = (
+    "transposition_model",
+    "albedo",
+    "surface_type",
+    "model_perez",
+    "solar_position",
+    "diffuse_iam",
+    "temperature_model",
+    "bifacial_model",
+    "gcr",
+    "pvrow_height",
+    "pvrow_pitch",
+)
+
+# On the tracking entry points ``gcr`` is tracker row geometry with its own
+# argument slot next to ``backtrack`` and ``cross_axis_tilt``, so it is
+# forwarded there rather than as part of the model-option block.
+_TRACKING_MODEL_OPTION_KEYS = tuple(key for key in _MODEL_OPTION_KEYS if key != "gcr")
+
+# Model options a single array in ``calculate_multi_array_production_breakdown``
+# may override. ``diffuse_iam``, ``temperature_model`` and ``solar_position``
+# are deliberately absent: they are function-level for every array. That
+# asymmetry is intentional and documented on the public function — sky and
+# ground geometry genuinely differ between arrays on one building, whereas the
+# thermal model and the solar-position convention describe the simulation, not
+# the array.
+_PER_ARRAY_MODEL_OPTION_KEYS = (
+    "transposition_model",
+    "albedo",
+    "surface_type",
+    "model_perez",
+    "bifacial_model",
+    "gcr",
+    "pvrow_height",
+    "pvrow_pitch",
+)
+_FUNCTION_LEVEL_MODEL_OPTION_KEYS = tuple(key for key in _MODEL_OPTION_KEYS if key not in _PER_ARRAY_MODEL_OPTION_KEYS)
+
+
+def _model_option_kwargs(caller_locals: Dict[str, Any], keys: tuple = _MODEL_OPTION_KEYS) -> Dict[str, Any]:
+    """Pick the shared model-option block out of a caller's ``locals()``.
+
+    Call this from a wrapper that only forwards its options, passing
+    ``locals()`` before any of the named options is rebound, so the result is
+    the arguments as the caller received them rather than anything derived
+    later in the body. Missing a key is a ``KeyError`` at the call, which is
+    what keeps the tuple and the signatures from drifting apart silently.
+    """
+    return {key: caller_locals[key] for key in keys}
+
 
 def resolve_pvwatts_losses(
     loss_overrides: Optional[Dict[str, float]] = None,
@@ -216,33 +272,18 @@ def _compute_irradiance_and_cell_temp_detail(
     surface_tilt / surface_azimuth may be scalars (fixed) or per-timestep arrays/Series
     (tracking). Uses pvlib.irradiance.get_total_irradiance which is array-aware.
 
-    ``model_options.transposition_model`` selects the sky-diffusion model (see
-    ``TRANSPOSITION_MODELS``); the default ``"isotropic"`` reproduces prior
-    behaviour bit-for-bit. ``albedo`` (0-1) or ``surface_type`` (see
-    ``SURFACE_TYPES``) sets the ground reflectance for the ground-diffuse
-    component; when neither is given pvlib's 0.25 default applies.
-    ``model_perez`` selects the Perez coefficient set (only used by the
-    ``"perez"`` model). ``diffuse_iam`` selects whether IAM is also applied
-    to the diffuse components (see ``DIFFUSE_IAM_METHODS``); the default
-    ``"none"`` reproduces prior behaviour bit-for-bit. ``temperature_model``
-    selects the cell-temperature model / mounting preset (see
-    ``TEMPERATURE_MODELS``); the default ``"faiman"`` reproduces prior
-    behaviour bit-for-bit, and the pvsyst presets use pvlib's default
-    ``module_efficiency``/``alpha_absorption``. The cell-temperature model is
-    driven by front-side ``poa_global`` plus the bifaciality-weighted rear
-    irradiance, so rear gain contributes heat as well as power; with
-    ``bifacial_model="none"`` the rear term is zero and the result is unchanged.
+    ``model_options`` must come from
+    :func:`breos.pv.model_options.resolve_pv_model_options`; every model name
+    and geometry value it carries is taken as already validated. Its BREOS
+    defaults (isotropic transposition, beam-only IAM, faiman cell temperature,
+    no rear-side model, pvlib's own 0.25 albedo) reproduce pre-0.4 behaviour
+    bit-for-bit — see ``breos.pv.model_options`` for what each choice means.
+
+    The cell-temperature model is driven by front-side ``poa_global`` plus the
+    bifaciality-weighted rear irradiance, so rear gain contributes heat as well
+    as power; with ``bifacial_model="none"`` the rear term is zero and the
+    result is unchanged.
     """
-    model = model_options.transposition_model
-    albedo = model_options.albedo
-    surface_type = model_options.surface_type
-    model_perez = model_options.model_perez
-    diffuse_iam = model_options.diffuse_iam
-    bifacial_model = model_options.bifacial_model
-    bifaciality = model_options.bifaciality
-    gcr = model_options.gcr
-    pvrow_height = model_options.pvrow_height
-    pvrow_pitch = model_options.pvrow_pitch
     dni, ghi, dhi = _extract_irradiance(weather_aligned)
     temp_air, wind_speed = _extract_met_data(weather_aligned)
 
@@ -257,10 +298,10 @@ def _compute_irradiance_and_cell_temp_detail(
     # Only forward ground-reflectance overrides when set, so the default path
     # keeps pvlib's built-in albedo and stays bit-for-bit identical.
     ground_kwargs: Dict[str, Any] = {}
-    if albedo is not None:
-        ground_kwargs["albedo"] = albedo
-    if surface_type is not None:
-        ground_kwargs["surface_type"] = surface_type
+    if model_options.albedo is not None:
+        ground_kwargs["albedo"] = model_options.albedo
+    if model_options.surface_type is not None:
+        ground_kwargs["surface_type"] = model_options.surface_type
 
     # apparent_zenith (refraction-corrected) everywhere, matching pvlib's
     # ModelChain; aoi above uses it too. Mixing true and apparent zenith in
@@ -275,8 +316,8 @@ def _compute_irradiance_and_cell_temp_detail(
         dhi=dhi,
         dni_extra=dni_extra,
         airmass=airmass,
-        model=model,
-        model_perez=model_perez,
+        model=model_options.transposition_model,
+        model_perez=model_options.model_perez,
         **ground_kwargs,
     )
 
@@ -285,24 +326,33 @@ def _compute_irradiance_and_cell_temp_detail(
         poa,
         aoi,
         surface_tilt,
-        diffuse_iam,
+        model_options.diffuse_iam,
     )
 
-    if bifacial_model == "infinite_sheds":
+    if model_options.bifacial_model == "infinite_sheds":
         tilt = np.asarray(surface_tilt, dtype=float)
         azimuth = np.asarray(surface_azimuth, dtype=float)
         back_tilt = 180.0 - tilt
         back_azimuth = np.mod(azimuth + 180.0, 360.0)
-        rear_transposition = "haydavies" if model == "haydavies" else "isotropic"
-        rear_albedo = float(albedo) if albedo is not None else float(SURFACE_ALBEDOS.get(surface_type, 0.25))
+        # infinite_sheds only accepts 'isotropic' or 'haydavies', so the rear
+        # side matches the front only when the front is one of those; every
+        # other front model falls back to isotropic rather than failing.
+        rear_transposition = "haydavies" if model_options.transposition_model == "haydavies" else "isotropic"
+        # Rear ground reflectance must be a number here (infinite_sheds takes
+        # no surface_type), so resolve the named type to pvlib's albedo value.
+        rear_albedo = (
+            float(model_options.albedo)
+            if model_options.albedo is not None
+            else float(SURFACE_ALBEDOS.get(model_options.surface_type, 0.25))
+        )
         rear = pvlib.bifacial.infinite_sheds.get_irradiance_poa(
             surface_tilt=back_tilt,
             surface_azimuth=back_azimuth,
             solar_zenith=np.asarray(solarpos.apparent_zenith, dtype=float),
             solar_azimuth=np.asarray(solarpos.azimuth, dtype=float),
-            gcr=float(gcr),
-            height=float(pvrow_height),
-            pitch=float(pvrow_pitch),
+            gcr=float(model_options.gcr),
+            height=float(model_options.pvrow_height),
+            pitch=float(model_options.pvrow_pitch),
             ghi=np.asarray(ghi, dtype=float),
             dhi=np.asarray(dhi, dtype=float),
             dni=np.asarray(dni, dtype=float),
@@ -312,7 +362,7 @@ def _compute_irradiance_and_cell_temp_detail(
             vectorize=tilt.ndim > 0 and tilt.size > 1,
         )
         rear_poa = np.clip(np.nan_to_num(np.asarray(rear["poa_global"], dtype=float), nan=0.0), 0.0, None)
-        rear_effective_irradiance = float(bifaciality) * rear_poa
+        rear_effective_irradiance = float(model_options.bifaciality) * rear_poa
         effective_irradiance = front_effective_irradiance + rear_effective_irradiance
     else:
         rear_effective_irradiance = np.zeros_like(front_effective_irradiance)
@@ -749,17 +799,7 @@ def calculate_pv_production_dc(
         start_year=start_year,
         verbose=verbose,
         loss_overrides=loss_overrides,
-        transposition_model=transposition_model,
-        albedo=albedo,
-        surface_type=surface_type,
-        model_perez=model_perez,
-        solar_position=solar_position,
-        diffuse_iam=diffuse_iam,
-        temperature_model=temperature_model,
-        bifacial_model=bifacial_model,
-        gcr=gcr,
-        pvrow_height=pvrow_height,
-        pvrow_pitch=pvrow_pitch,
+        **_model_option_kwargs(locals()),
     ).dc_after_losses
 
 
@@ -972,16 +1012,7 @@ def calculate_pv_production_dc_tracking(
         start_year=start_year,
         verbose=verbose,
         loss_overrides=loss_overrides,
-        transposition_model=transposition_model,
-        albedo=albedo,
-        surface_type=surface_type,
-        model_perez=model_perez,
-        solar_position=solar_position,
-        diffuse_iam=diffuse_iam,
-        temperature_model=temperature_model,
-        bifacial_model=bifacial_model,
-        pvrow_height=pvrow_height,
-        pvrow_pitch=pvrow_pitch,
+        **_model_option_kwargs(locals(), _TRACKING_MODEL_OPTION_KEYS),
     ).dc_after_losses
 
 
@@ -1062,17 +1093,7 @@ def calculate_pv_production_tmy(
         freq=freq,
         degradation_rate=0.0,  # TMY doesn't include degradation
         verbose=verbose,
-        transposition_model=transposition_model,
-        albedo=albedo,
-        surface_type=surface_type,
-        model_perez=model_perez,
-        solar_position=solar_position,
-        diffuse_iam=diffuse_iam,
-        temperature_model=temperature_model,
-        bifacial_model=bifacial_model,
-        gcr=gcr,
-        pvrow_height=pvrow_height,
-        pvrow_pitch=pvrow_pitch,
+        **_model_option_kwargs(locals()),
     )
 
 
@@ -1126,6 +1147,8 @@ def calculate_pv_production_ac(
     Returns:
         pd.Series with AC power production in Watts
     """
+    model_kwargs = _model_option_kwargs(locals())
+
     if pv_params is None:
         from breos.pv_modules import get_module
 
@@ -1143,17 +1166,7 @@ def calculate_pv_production_ac(
         current_year=current_year,
         start_year=start_year,
         verbose=False,
-        transposition_model=transposition_model,
-        albedo=albedo,
-        surface_type=surface_type,
-        model_perez=model_perez,
-        solar_position=solar_position,
-        diffuse_iam=diffuse_iam,
-        temperature_model=temperature_model,
-        bifacial_model=bifacial_model,
-        gcr=gcr,
-        pvrow_height=pvrow_height,
-        pvrow_pitch=pvrow_pitch,
+        **model_kwargs,
     )
 
     pv_peak_power_w = n_modules * pv_params.Mpp
@@ -1347,6 +1360,8 @@ def calculate_multi_array_production_breakdown(
 
     Each array is either fixed-tilt or tracking. Mixed configurations are supported.
     """
+    defaults = _model_option_kwargs(locals())
+
     # Import locally to avoid circular dependencies (if solar imported by pv_modules)
     try:
         from breos.pv_modules import get_module
@@ -1363,14 +1378,11 @@ def calculate_multi_array_production_breakdown(
         mod_name = arr.get("module", "Generic_400W")
         pv_params = get_module(mod_name)
         tracking = arr.get("tracking", "fixed")
-        arr_transposition = arr.get("transposition_model", transposition_model)
-        arr_albedo = arr.get("albedo", albedo)
-        arr_surface_type = arr.get("surface_type", surface_type)
-        arr_model_perez = arr.get("model_perez", model_perez)
-        arr_bifacial_model = arr.get("bifacial_model", bifacial_model)
-        arr_gcr = arr.get("gcr", gcr)
-        arr_pvrow_height = arr.get("pvrow_height", pvrow_height)
-        arr_pvrow_pitch = arr.get("pvrow_pitch", pvrow_pitch)
+        # Sky/ground geometry is per-array overridable; the thermal model and
+        # solar-position convention stay function-level for every array.
+        arr_options = {key: arr.get(key, defaults[key]) for key in _PER_ARRAY_MODEL_OPTION_KEYS}
+        arr_options.update({key: defaults[key] for key in _FUNCTION_LEVEL_MODEL_OPTION_KEYS})
+        arr_gcr = arr_options["gcr"]
 
         if tracking == "fixed":
             tilt = arr.get("tilt", 35)
@@ -1392,17 +1404,7 @@ def calculate_multi_array_production_breakdown(
                 start_year=start_year,
                 verbose=False,
                 loss_overrides=loss_overrides,
-                transposition_model=arr_transposition,
-                albedo=arr_albedo,
-                surface_type=arr_surface_type,
-                model_perez=arr_model_perez,
-                solar_position=solar_position,
-                diffuse_iam=diffuse_iam,
-                temperature_model=temperature_model,
-                bifacial_model=arr_bifacial_model,
-                gcr=arr_gcr,
-                pvrow_height=arr_pvrow_height,
-                pvrow_pitch=arr_pvrow_pitch,
+                **arr_options,
             )
         elif tracking in ("single_axis", "dual_axis"):
             if verbose:
@@ -1434,16 +1436,8 @@ def calculate_multi_array_production_breakdown(
                 start_year=start_year,
                 verbose=False,
                 loss_overrides=loss_overrides,
-                transposition_model=arr_transposition,
-                albedo=arr_albedo,
-                surface_type=arr_surface_type,
-                model_perez=arr_model_perez,
-                solar_position=solar_position,
-                diffuse_iam=diffuse_iam,
-                temperature_model=temperature_model,
-                bifacial_model=arr_bifacial_model,
-                pvrow_height=arr_pvrow_height,
-                pvrow_pitch=arr_pvrow_pitch,
+                # gcr goes in the tracker geometry block above, not here.
+                **{key: value for key, value in arr_options.items() if key != "gcr"},
             )
         else:
             raise ValueError(
@@ -1557,15 +1551,5 @@ def calculate_multi_array_production(
         start_year=start_year,
         verbose=verbose,
         loss_overrides=loss_overrides,
-        transposition_model=transposition_model,
-        albedo=albedo,
-        surface_type=surface_type,
-        model_perez=model_perez,
-        solar_position=solar_position,
-        diffuse_iam=diffuse_iam,
-        temperature_model=temperature_model,
-        bifacial_model=bifacial_model,
-        gcr=gcr,
-        pvrow_height=pvrow_height,
-        pvrow_pitch=pvrow_pitch,
+        **_model_option_kwargs(locals()),
     ).dc_after_losses
