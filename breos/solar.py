@@ -343,47 +343,6 @@ def _compute_irradiance_and_cell_temp_detail(
     )
 
 
-def _compute_effective_irradiance_and_cell_temp(
-    weather_aligned: pd.DataFrame,
-    solarpos: pd.DataFrame,
-    surface_tilt,
-    surface_azimuth,
-    transposition_model: str = DEFAULT_TRANSPOSITION_MODEL,
-    albedo: Optional[float] = None,
-    surface_type: Optional[str] = None,
-    model_perez: str = DEFAULT_PEREZ_MODEL,
-    diffuse_iam: str = DEFAULT_DIFFUSE_IAM,
-    temperature_model: str = DEFAULT_TEMPERATURE_MODEL,
-    bifacial_model: str = DEFAULT_BIFACIAL_MODEL,
-    bifaciality: Optional[float] = None,
-    gcr: float = 0.35,
-    pvrow_height: Optional[float] = None,
-    pvrow_pitch: Optional[float] = None,
-):
-    """Compute effective POA irradiance (with IAM) and cell temperature."""
-    model_options = resolve_pv_model_options(
-        transposition_model=transposition_model,
-        albedo=albedo,
-        surface_type=surface_type,
-        model_perez=model_perez,
-        diffuse_iam=diffuse_iam,
-        temperature_model=temperature_model,
-        bifacial_model=bifacial_model,
-        bifaciality=bifaciality,
-        gcr=gcr,
-        pvrow_height=pvrow_height,
-        pvrow_pitch=pvrow_pitch,
-    )
-    detail = _compute_irradiance_and_cell_temp_detail(
-        weather_aligned,
-        solarpos,
-        surface_tilt=surface_tilt,
-        surface_azimuth=surface_azimuth,
-        model_options=model_options,
-    )
-    return detail.effective_irradiance, detail.temp_cell
-
-
 def _get_cec_params(pv_params: "PVModuleParams"):
     """Fetch (and cache) CEC single-diode model params for a module."""
     key = (

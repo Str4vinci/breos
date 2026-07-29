@@ -313,7 +313,7 @@ modeling" above.
   limit — BREOS's primary audience — and front-optimistic for dense
   ground-mount rows. Document it, and consider a warning for tight pitch.
 - **Integration:** compute rear POA inside
-  `_compute_effective_irradiance_and_cell_temp` and blend
+  `_compute_irradiance_and_cell_temp_detail` and blend
   `effective_irradiance += bifaciality * poa_rear` before the CEC DC model. The
   stage's output contract (DC-watts series) is unchanged, so nothing downstream
   moves — the whole point of the self-contained PV stage above.
