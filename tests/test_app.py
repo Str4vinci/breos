@@ -79,6 +79,17 @@ class TestAppValidation:
                 }
             )
 
+    def test_invalid_iam_model(self):
+        with pytest.raises(ValueError, match="iam_model"):
+            App(
+                {
+                    "location": "porto",
+                    "n_modules": 10,
+                    "annual_consumption_kwh": 4000,
+                    "iam_model": "not_a_model",
+                }
+            )
+
     def test_invalid_per_array_transposition_model(self):
         with pytest.raises(ValueError, match=r"pv_arrays\[0\].transposition_model"):
             App(
@@ -449,6 +460,22 @@ class TestAppValidation:
         # The model must flow all the way through App.simulate(); an
         # anisotropic model yields a different PV total than isotropic.
         assert _run("perez") != pytest.approx(_run("isotropic"))
+
+    def test_iam_model_reaches_simulation(self, _patch_weather):
+        def _run(model):
+            app = App(
+                {
+                    "location": "porto",
+                    "n_modules": 6,
+                    "annual_consumption_kwh": 3000,
+                    "projection_years": 1,
+                    "iam_model": model,
+                }
+            )
+            app.simulate()
+            return app.result()["pv_production_kwh"]
+
+        assert _run("physical") != pytest.approx(_run("ashrae"))
 
     def test_albedo_reaches_simulation(self, _patch_weather):
         def _run(**extra):

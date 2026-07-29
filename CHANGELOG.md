@@ -5,6 +5,11 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 ## [Unreleased]
 
 ### Added
+- Added selectable `iam_model` optics to the App config, `--iam-model` CLI
+  flag, and every public solar-chain function. `"ashrae"` remains the
+  bit-for-bit historical default; `"physical"` and `"martin_ruiz"` expose
+  pvlib's respective defaults. When `diffuse_iam="marion"` is enabled, the
+  same selected IAM model is integrated for the sky and ground components.
 - Added optional, validated `PVModuleParams.bifaciality` metadata and a sourced
   maximum-power bifaciality value for the generic 600 W bifacial catalog entry.
   The metadata alone does not activate rear-gain modeling or change production.

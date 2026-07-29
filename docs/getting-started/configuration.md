@@ -40,7 +40,8 @@ weather/data access, load profiles, PV system data, and cost assumptions; see
 | `surface_type` | `None` | Named ground cover (e.g. `"snow"`, `"sea"`, `"grass"`) mapped to an albedo; an alternative to `albedo` |
 | `model_perez` | `"allsitescomposite1990"` | Perez coefficient set; only used when `transposition_model = "perez"` |
 | `solar_position` | `"interval-start"` | Where within each timestep the sun position is evaluated. `"mid-interval"` matches the PVWatts/SAM convention for interval-averaged weather (hourly value labelled 07:00 = 07:00–08:00 average → 07:30 sun) |
-| `diffuse_iam` | `"none"` | Whether the incidence-angle modifier is also applied to the diffuse POA components. `"marion"` weighs sky- and ground-diffuse with the view-factor-integrated ashrae IAM (Marion 2017); the default applies IAM to beam only, a known ~0.5–1% overestimate |
+| `iam_model` | `"ashrae"` | Beam incidence-angle modifier. `"physical"` uses pvlib's physical optics model and `"martin_ruiz"` its empirical model; the Ashrae default preserves historical results |
+| `diffuse_iam` | `"none"` | Whether the incidence-angle modifier is also applied to the diffuse POA components. `"marion"` weighs sky- and ground-diffuse with the view-factor-integrated selected IAM model (Marion 2017); the default applies IAM to beam only, a known ~0.5–1% overestimate |
 | `temperature_model` | `"faiman"` | Cell-temperature model / mounting preset. `"pvsyst-freestanding"`, `"pvsyst-semi-integrated"`, and `"pvsyst-insulated"` use PVsyst's documented mounting coefficients — pick a roof preset for rooftop systems; the default Faiman open-rack coefficients run cool for them |
 | `bifacial_model` | `"none"` | Rear-irradiance model. `"none"` preserves front-only production; `"infinite_sheds"` requires sourced module bifaciality plus `gcr`, `pvrow_height`, and `pvrow_pitch` |
 | `pvrow_height` | `None` | Height of the PV row center above ground; required by `"infinite_sheds"` and expressed in the same unit as `pvrow_pitch` |
@@ -146,10 +147,20 @@ stack without fetching weather or simulating. In JSON output, `pv.losses`
 contains the resolved component percentages plus the combined PVWatts loss
 percentage after applying any `pv_loss_overrides`.
 
+## Incidence-angle modifier (IAM)
+
+`iam_model` controls the optical loss applied to direct irradiance. The
+historical default, `"ashrae"`, remains the compatible choice. Set it to
+`"physical"` for pvlib's physical glass/refraction model or `"martin_ruiz"`
+for its empirical model. BREOS deliberately uses pvlib's published default
+parameters for both alternatives; it does not fabricate module-specific
+optical inputs.
+
 For `diffuse_iam = "marion"`, fixed-tilt arrays use pvlib's exact Marion
-diffuse integration. Tracking arrays evaluate the same integrated IAM on a
-cached 0.5 degree tilt grid and interpolate per timestep, avoiding thousands
-of repeated integrations while preserving a smooth tracker response.
+diffuse integration with that same selected IAM model. Tracking arrays
+evaluate the integrated IAM on a cached 0.5 degree tilt grid and interpolate
+per timestep, avoiding thousands of repeated integrations while preserving a
+smooth tracker response.
 
 ## Bifacial rear gain
 

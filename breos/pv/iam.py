@@ -1,9 +1,9 @@
 """Focused incidence-angle modifier kernels used by :mod:`breos.solar`.
 
-The beam IAM is always pvlib's ``ashrae``, which is BREOS's historical
-behaviour; the diffuse components are only weighted when the caller opted in
-via ``diffuse_iam="marion"``. Inputs are assumed already validated by
-:mod:`breos.pv.model_options`.
+The beam IAM uses the selected pvlib model (``ashrae`` by default, preserving
+BREOS's historical behaviour); diffuse components are only weighted when the
+caller opts in via ``diffuse_iam="marion"``. Inputs are assumed already
+validated by :mod:`breos.pv.model_options`.
 """
 
 from __future__ import annotations
@@ -22,11 +22,11 @@ _MARION_DIFFUSE_GRID_STEP_DEG = 0.5
 # rounded-out tilt span so repeated years or Monte Carlo runs over the same
 # tracker geometry reuse one grid. Unbounded, but each entry is a few thousand
 # floats and the number of distinct spans in a session is tiny.
-_marion_diffuse_grid_cache: dict[tuple[float, float, float], tuple[np.ndarray, dict[str, np.ndarray]]] = {}
+_marion_diffuse_grid_cache: dict[tuple[str, float, float, float], tuple[np.ndarray, dict[str, np.ndarray]]] = {}
 
 
-def _marion_diffuse_ashrae(surface_tilt):
-    """Return Marion diffuse IAM for ashrae, interpolating large tilt arrays.
+def _marion_diffuse(surface_tilt, iam_model: str):
+    """Return Marion diffuse IAM for *iam_model*, interpolating large tilt arrays.
 
     pvlib's exact Marion integration is fast for fixed tilt but expensive for
     tracker arrays with thousands of distinct angles. The integrated
@@ -37,7 +37,7 @@ def _marion_diffuse_ashrae(surface_tilt):
     # Small inputs (scalar fixed tilt, or a handful of angles) go straight to
     # pvlib so the common case stays bit-for-bit exact.
     if tilt_array.ndim == 0 or tilt_array.size <= 16:
-        return pvlib.iam.marion_diffuse("ashrae", surface_tilt)
+        return pvlib.iam.marion_diffuse(iam_model, surface_tilt)
 
     finite = tilt_array[np.isfinite(tilt_array)]
     if finite.size == 0:
@@ -47,13 +47,13 @@ def _marion_diffuse_ashrae(surface_tilt):
     step = _MARION_DIFFUSE_GRID_STEP_DEG
     lo = math.floor(float(finite.min()) / step) * step
     hi = math.ceil(float(finite.max()) / step) * step
-    key = (lo, hi, step)
+    key = (iam_model, lo, hi, step)
 
     if key not in _marion_diffuse_grid_cache:
         grid = np.arange(lo, hi + step / 2.0, step)
         values = {"sky": [], "ground": []}
         for tilt in grid:
-            exact = pvlib.iam.marion_diffuse("ashrae", float(tilt))
+            exact = pvlib.iam.marion_diffuse(iam_model, float(tilt))
             values["sky"].append(float(exact["sky"]))
             values["ground"].append(float(exact["ground"]))
         _marion_diffuse_grid_cache[key] = (
@@ -68,27 +68,29 @@ def _marion_diffuse_ashrae(surface_tilt):
     return {region: np.interp(interp_tilt, grid, region_values) for region, region_values in values.items()}
 
 
-def calculate_front_effective_irradiance(poa, aoi, surface_tilt, diffuse_iam: str) -> np.ndarray:
-    """Apply the ashrae beam IAM and, optionally, the Marion diffuse IAM.
+def calculate_front_effective_irradiance(
+    poa, aoi, surface_tilt, diffuse_iam: str, iam_model: str = "ashrae"
+) -> np.ndarray:
+    """Apply the selected beam IAM and, optionally, matching Marion diffuse IAM.
 
     ``poa`` is the frame returned by ``pvlib.irradiance.get_total_irradiance``
     and ``diffuse_iam`` must already be one of ``DIFFUSE_IAM_METHODS``. Returns
     front-side effective irradiance in W/m2, with NaNs zeroed so downstream
     single-diode and thermal calls never see them.
     """
-    iam = pvlib.iam.ashrae(aoi)
+    iam = getattr(pvlib.iam, iam_model)(aoi)
     poa_direct = np.nan_to_num(poa["poa_direct"].values, nan=0.0)
     poa_diffuse = np.nan_to_num(poa["poa_diffuse"].values, nan=0.0)
     iam_clean = np.nan_to_num(np.asarray(iam, dtype=float), nan=0.0)
 
     if diffuse_iam == "marion":
         # Marion (2017) view-factor-integrated IAM on the diffuse components,
-        # using the same ashrae model as the beam IAM above. Transposition
+        # using the same beam model as above. Transposition
         # folds any horizon-brightening term into poa_sky_diffuse, so the sky
         # multiplier covers it too.
         poa_sky = np.nan_to_num(poa["poa_sky_diffuse"].values, nan=0.0)
         poa_ground = np.nan_to_num(poa["poa_ground_diffuse"].values, nan=0.0)
-        multipliers = _marion_diffuse_ashrae(surface_tilt)
+        multipliers = _marion_diffuse(surface_tilt, iam_model)
         sky_mult = np.nan_to_num(np.asarray(multipliers["sky"], dtype=float), nan=0.0)
         ground_mult = np.nan_to_num(np.asarray(multipliers["ground"], dtype=float), nan=0.0)
         return poa_direct * iam_clean + poa_sky * sky_mult + poa_ground * ground_mult

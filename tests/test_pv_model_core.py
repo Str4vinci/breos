@@ -29,6 +29,7 @@ MODEL_OPTION_ENTRY_POINTS = (
 def test_model_options_are_normalised_validated_and_immutable():
     options = resolve_pv_model_options(
         transposition_model=" PEREZ ",
+        iam_model=" Martin_Ruiz ",
         diffuse_iam="MARION",
         temperature_model="PVsyst-Insulated",
         surface_type="urban",
@@ -39,6 +40,7 @@ def test_model_options_are_normalised_validated_and_immutable():
         albedo=None,
         surface_type="urban",
         model_perez="allsitescomposite1990",
+        iam_model="martin_ruiz",
         diffuse_iam="marion",
         temperature_model="pvsyst-insulated",
         bifacial_model="none",
@@ -67,6 +69,29 @@ def test_front_irradiance_kernel_preserves_beam_only_ashrae_path():
     )
 
     actual = calculate_front_effective_irradiance(poa, aoi, 30.0, "none")
+
+    np.testing.assert_allclose(actual, expected)
+
+
+@pytest.mark.parametrize("iam_model", ("physical", "martin_ruiz"))
+def test_front_irradiance_kernel_dispatches_selected_beam_and_marion_models(iam_model):
+    poa = pd.DataFrame(
+        {
+            "poa_direct": [800.0, 200.0],
+            "poa_diffuse": [100.0, 80.0],
+            "poa_sky_diffuse": [75.0, 60.0],
+            "poa_ground_diffuse": [25.0, 20.0],
+        }
+    )
+    aoi = np.array([10.0, 70.0])
+    marion = pvlib.iam.marion_diffuse(iam_model, 30.0)
+    expected = (
+        poa["poa_direct"].to_numpy() * getattr(pvlib.iam, iam_model)(aoi)
+        + poa["poa_sky_diffuse"].to_numpy() * marion["sky"]
+        + poa["poa_ground_diffuse"].to_numpy() * marion["ground"]
+    )
+
+    actual = calculate_front_effective_irradiance(poa, aoi, 30.0, "marion", iam_model)
 
     np.testing.assert_allclose(actual, expected)
 
@@ -116,7 +141,7 @@ def test_every_entry_point_declares_the_whole_model_option_block(function):
 def test_model_option_keys_partition_into_per_array_and_function_level():
     """The multi-array override asymmetry is intentional — pin it exactly.
 
-    ``diffuse_iam``/``temperature_model``/``solar_position`` are function-level
+    ``iam_model``/``diffuse_iam``/``temperature_model``/``solar_position`` are function-level
     for every array while the sky and ground geometry is per-array
     overridable. A new option must land in exactly one of the two tuples, so
     the partition (not just the union) is what gets asserted.
@@ -126,7 +151,7 @@ def test_model_option_keys_partition_into_per_array_and_function_level():
 
     assert per_array | function_level == set(solar._MODEL_OPTION_KEYS)
     assert per_array & function_level == set()
-    assert function_level == {"solar_position", "diffuse_iam", "temperature_model"}
+    assert function_level == {"solar_position", "iam_model", "diffuse_iam", "temperature_model"}
     # gcr is model geometry here but tracker geometry on the tracking path.
     assert set(solar._TRACKING_MODEL_OPTION_KEYS) == set(solar._MODEL_OPTION_KEYS) - {"gcr"}
 

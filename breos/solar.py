@@ -23,11 +23,13 @@ from breos.pv.model_options import (
     BIFACIAL_MODELS,
     DEFAULT_BIFACIAL_MODEL,
     DEFAULT_DIFFUSE_IAM,
+    DEFAULT_IAM_MODEL,
     DEFAULT_PEREZ_MODEL,
     DEFAULT_SOLAR_POSITION,
     DEFAULT_TEMPERATURE_MODEL,
     DEFAULT_TRANSPOSITION_MODEL,
     DIFFUSE_IAM_METHODS,
+    IAM_MODELS,
     PEREZ_MODELS,
     SOLAR_POSITION_METHODS,
     SURFACE_TYPES,
@@ -70,6 +72,7 @@ _MODEL_OPTION_KEYS = (
     "surface_type",
     "model_perez",
     "solar_position",
+    "iam_model",
     "diffuse_iam",
     "temperature_model",
     "bifacial_model",
@@ -84,7 +87,8 @@ _MODEL_OPTION_KEYS = (
 _TRACKING_MODEL_OPTION_KEYS = tuple(key for key in _MODEL_OPTION_KEYS if key != "gcr")
 
 # Model options a single array in ``calculate_multi_array_production_breakdown``
-# may override. ``diffuse_iam``, ``temperature_model`` and ``solar_position``
+# may override. ``iam_model``, ``diffuse_iam``, ``temperature_model`` and
+# ``solar_position``
 # are deliberately absent: they are function-level for every array. That
 # asymmetry is intentional and documented on the public function — sky and
 # ground geometry genuinely differ between arrays on one building, whereas the
@@ -327,6 +331,7 @@ def _compute_irradiance_and_cell_temp_detail(
         aoi,
         surface_tilt,
         model_options.diffuse_iam,
+        model_options.iam_model,
     )
 
     if model_options.bifacial_model == "infinite_sheds":
@@ -650,6 +655,7 @@ def calculate_pv_production_breakdown(
     surface_type: Optional[str] = None,
     model_perez: str = DEFAULT_PEREZ_MODEL,
     solar_position: str = DEFAULT_SOLAR_POSITION,
+    iam_model: str = DEFAULT_IAM_MODEL,
     diffuse_iam: str = DEFAULT_DIFFUSE_IAM,
     temperature_model: str = DEFAULT_TEMPERATURE_MODEL,
     bifacial_model: str = DEFAULT_BIFACIAL_MODEL,
@@ -671,6 +677,7 @@ def calculate_pv_production_breakdown(
         albedo=albedo,
         surface_type=surface_type,
         model_perez=model_perez,
+        iam_model=iam_model,
         diffuse_iam=diffuse_iam,
         temperature_model=temperature_model,
         bifacial_model=bifacial_model,
@@ -719,6 +726,7 @@ def calculate_pv_production_dc(
     surface_type: Optional[str] = None,
     model_perez: str = DEFAULT_PEREZ_MODEL,
     solar_position: str = DEFAULT_SOLAR_POSITION,
+    iam_model: str = DEFAULT_IAM_MODEL,
     diffuse_iam: str = DEFAULT_DIFFUSE_IAM,
     temperature_model: str = DEFAULT_TEMPERATURE_MODEL,
     bifacial_model: str = DEFAULT_BIFACIAL_MODEL,
@@ -827,6 +835,7 @@ def calculate_pv_production_tracking_breakdown(
     surface_type: Optional[str] = None,
     model_perez: str = DEFAULT_PEREZ_MODEL,
     solar_position: str = DEFAULT_SOLAR_POSITION,
+    iam_model: str = DEFAULT_IAM_MODEL,
     diffuse_iam: str = DEFAULT_DIFFUSE_IAM,
     temperature_model: str = DEFAULT_TEMPERATURE_MODEL,
     bifacial_model: str = DEFAULT_BIFACIAL_MODEL,
@@ -881,6 +890,7 @@ def calculate_pv_production_tracking_breakdown(
         albedo=albedo,
         surface_type=surface_type,
         model_perez=model_perez,
+        iam_model=iam_model,
         diffuse_iam=diffuse_iam,
         temperature_model=temperature_model,
         bifacial_model=bifacial_model,
@@ -935,6 +945,7 @@ def calculate_pv_production_dc_tracking(
     surface_type: Optional[str] = None,
     model_perez: str = DEFAULT_PEREZ_MODEL,
     solar_position: str = DEFAULT_SOLAR_POSITION,
+    iam_model: str = DEFAULT_IAM_MODEL,
     diffuse_iam: str = DEFAULT_DIFFUSE_IAM,
     temperature_model: str = DEFAULT_TEMPERATURE_MODEL,
     bifacial_model: str = DEFAULT_BIFACIAL_MODEL,
@@ -1058,6 +1069,7 @@ def calculate_pv_production_tmy(
     surface_type: Optional[str] = None,
     model_perez: str = DEFAULT_PEREZ_MODEL,
     solar_position: str = DEFAULT_SOLAR_POSITION,
+    iam_model: str = DEFAULT_IAM_MODEL,
     diffuse_iam: str = DEFAULT_DIFFUSE_IAM,
     temperature_model: str = DEFAULT_TEMPERATURE_MODEL,
     bifacial_model: str = DEFAULT_BIFACIAL_MODEL,
@@ -1116,6 +1128,7 @@ def calculate_pv_production_ac(
     surface_type: Optional[str] = None,
     model_perez: str = DEFAULT_PEREZ_MODEL,
     solar_position: str = DEFAULT_SOLAR_POSITION,
+    iam_model: str = DEFAULT_IAM_MODEL,
     diffuse_iam: str = DEFAULT_DIFFUSE_IAM,
     temperature_model: str = DEFAULT_TEMPERATURE_MODEL,
     bifacial_model: str = DEFAULT_BIFACIAL_MODEL,
@@ -1349,6 +1362,7 @@ def calculate_multi_array_production_breakdown(
     surface_type: Optional[str] = None,
     model_perez: str = DEFAULT_PEREZ_MODEL,
     solar_position: str = DEFAULT_SOLAR_POSITION,
+    iam_model: str = DEFAULT_IAM_MODEL,
     diffuse_iam: str = DEFAULT_DIFFUSE_IAM,
     temperature_model: str = DEFAULT_TEMPERATURE_MODEL,
     bifacial_model: str = DEFAULT_BIFACIAL_MODEL,
@@ -1492,6 +1506,7 @@ def calculate_multi_array_production(
     surface_type: Optional[str] = None,
     model_perez: str = DEFAULT_PEREZ_MODEL,
     solar_position: str = DEFAULT_SOLAR_POSITION,
+    iam_model: str = DEFAULT_IAM_MODEL,
     diffuse_iam: str = DEFAULT_DIFFUSE_IAM,
     temperature_model: str = DEFAULT_TEMPERATURE_MODEL,
     bifacial_model: str = DEFAULT_BIFACIAL_MODEL,
