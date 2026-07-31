@@ -9,12 +9,39 @@ This module handles:
 
 import math
 from dataclasses import dataclass
+from numbers import Integral, Real
 from typing import Optional
 
 PVWATTS_REFERENCE_EFFICIENCY = 0.9637
 PVWATTS_CURVE_QUADRATIC = -0.0162
 PVWATTS_CURVE_LINEAR = 0.9858
 PVWATTS_CURVE_CONSTANT = -0.0059
+
+
+def _require_optional_non_negative_finite(name: str, value: Optional[float]) -> None:
+    """Reject invalid supplied datasheet quantities while allowing unknown limits."""
+    if value is None:
+        return
+    if isinstance(value, bool) or not isinstance(value, Real) or not math.isfinite(value) or value < 0:
+        raise ValueError(f"{name} must be a finite non-negative number when provided")
+
+
+def _require_positive_finite(name: str, value: float) -> None:
+    """Reject a ratio or other quantity that must be strictly positive."""
+    if isinstance(value, bool) or not isinstance(value, Real) or not math.isfinite(value) or value <= 0:
+        raise ValueError(f"{name} must be a finite positive number")
+
+
+def _require_efficiency(name: str, value: float) -> None:
+    """Reject efficiencies outside the physically meaningful interval (0, 1]."""
+    if isinstance(value, bool) or not isinstance(value, Real) or not math.isfinite(value) or not 0 < value <= 1:
+        raise ValueError(f"{name} must be a finite number in (0, 1]")
+
+
+def _require_positive_integer(name: str, value: int) -> None:
+    """Reject MPPT counts and parallel-string limits that cannot describe hardware."""
+    if isinstance(value, bool) or not isinstance(value, Integral) or value <= 0:
+        raise ValueError(f"{name} must be a positive integer")
 
 
 @dataclass
@@ -30,6 +57,19 @@ class InverterConfig:
         mppt_channels: Number of MPPT channels
         cost_per_kw_simple: Cost per kW for simple (grid-tie) inverter
         cost_per_kw_hybrid: Cost per kW for hybrid inverter (with battery)
+        max_dc_voltage_v: Absolute maximum DC input voltage from the datasheet (V).
+        max_dc_power_w: Maximum recommended or permitted DC input power (W).
+        min_mppt_voltage_v: Lower bound of the MPPT operating window (V).
+        max_mppt_voltage_v: Upper bound of the MPPT operating window (V).
+        startup_voltage_v: DC voltage required for inverter startup (V).
+        max_strings_per_mppt: Maximum parallel strings permitted on each MPPT.
+        max_input_current_per_mppt_a: Maximum operating input current per MPPT (A).
+        max_short_circuit_current_per_mppt_a: Maximum short-circuit current per MPPT (A).
+
+    The datasheet fields are optional so existing aggregate simulations and
+    callers which do not yet know a particular inverter's nameplate limits
+    remain valid. When a field is supplied, it is validated here rather than
+    relying on an API boundary to do so.
     """
 
     nominal_power_w: Optional[float] = None
@@ -39,6 +79,71 @@ class InverterConfig:
     mppt_channels: int = 2
     cost_per_kw_simple: float = 48.37  # €/kW for simple grid-tie inverter
     cost_per_kw_hybrid: float = 102.58  # €/kW for hybrid inverter
+    max_dc_voltage_v: Optional[float] = None
+    max_dc_power_w: Optional[float] = None
+    min_mppt_voltage_v: Optional[float] = None
+    max_mppt_voltage_v: Optional[float] = None
+    startup_voltage_v: Optional[float] = None
+    max_strings_per_mppt: Optional[int] = None
+    max_input_current_per_mppt_a: Optional[float] = None
+    max_short_circuit_current_per_mppt_a: Optional[float] = None
+
+    def __post_init__(self) -> None:
+        """Validate configuration and supplied datasheet limits without dependencies."""
+        _require_optional_non_negative_finite("nominal_power_w", self.nominal_power_w)
+        _require_positive_finite("dc_ac_ratio", self.dc_ac_ratio)
+        _require_efficiency("inverter_efficiency", self.inverter_efficiency)
+        if not isinstance(self.is_hybrid, bool):
+            raise ValueError("is_hybrid must be a bool")
+        _require_positive_integer("mppt_channels", self.mppt_channels)
+        _require_optional_non_negative_finite("cost_per_kw_simple", self.cost_per_kw_simple)
+        _require_optional_non_negative_finite("cost_per_kw_hybrid", self.cost_per_kw_hybrid)
+        _require_optional_non_negative_finite("max_dc_voltage_v", self.max_dc_voltage_v)
+        _require_optional_non_negative_finite("max_dc_power_w", self.max_dc_power_w)
+        _require_optional_non_negative_finite("min_mppt_voltage_v", self.min_mppt_voltage_v)
+        _require_optional_non_negative_finite("max_mppt_voltage_v", self.max_mppt_voltage_v)
+        _require_optional_non_negative_finite("startup_voltage_v", self.startup_voltage_v)
+        _require_optional_non_negative_finite("max_input_current_per_mppt_a", self.max_input_current_per_mppt_a)
+        _require_optional_non_negative_finite(
+            "max_short_circuit_current_per_mppt_a", self.max_short_circuit_current_per_mppt_a
+        )
+
+        if self.max_strings_per_mppt is not None:
+            _require_positive_integer("max_strings_per_mppt", self.max_strings_per_mppt)
+
+        if (
+            self.min_mppt_voltage_v is not None
+            and self.max_mppt_voltage_v is not None
+            and self.min_mppt_voltage_v > self.max_mppt_voltage_v
+        ):
+            raise ValueError("min_mppt_voltage_v must not exceed max_mppt_voltage_v")
+
+        if (
+            self.max_dc_voltage_v is not None
+            and self.max_mppt_voltage_v is not None
+            and self.max_mppt_voltage_v > self.max_dc_voltage_v
+        ):
+            raise ValueError("max_mppt_voltage_v must not exceed max_dc_voltage_v")
+
+        if (
+            self.max_dc_voltage_v is not None
+            and self.min_mppt_voltage_v is not None
+            and self.min_mppt_voltage_v > self.max_dc_voltage_v
+        ):
+            raise ValueError("min_mppt_voltage_v must not exceed max_dc_voltage_v")
+
+        # Only the physical ceiling is enforced. Startup voltage is deliberately
+        # not required to sit inside the MPPT window: plenty of real datasheets
+        # quote a startup well below the MPP range minimum (Fronius Primo starts
+        # at ~80 V against an MPP range from ~240 V), because startup marks where
+        # the inverter wakes up, not where it can track. Requiring containment
+        # would reject a faithful transcription of those sheets.
+        if (
+            self.startup_voltage_v is not None
+            and self.max_dc_voltage_v is not None
+            and self.startup_voltage_v > self.max_dc_voltage_v
+        ):
+            raise ValueError("startup_voltage_v must not exceed max_dc_voltage_v")
 
     def size_from_pv(self, pv_peak_power_w: float) -> float:
         """
