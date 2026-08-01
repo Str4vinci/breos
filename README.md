@@ -133,7 +133,10 @@ See [CONTRIBUTING.md](CONTRIBUTING.md). Feature work happens on branches off
 
 ## Contact
 
-For questions, research collaboration, or support: lrodrigues@fe.up.pt.
+Usage questions and feature ideas:
+[GitHub Discussions](https://github.com/Str4vinci/breos/discussions).
+Bugs: [issues](https://github.com/Str4vinci/breos/issues).
+Research collaboration or private enquiries: lrodrigues@fe.up.pt.
 
 ## License
 

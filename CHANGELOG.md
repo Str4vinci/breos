@@ -51,6 +51,13 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   into focused internal modules while preserving the `breos.App` facade,
   public solar-function signatures, defaults, and numerical paths. Config
   validation is preserved except for the `gcr` tightening noted above.
+- Expanded PyPI package metadata (classifiers and keywords) so the project is
+  discoverable through scientific-computing and platform facets rather than the
+  generic `Topic :: Scientific/Engineering` bucket alone. Packaging metadata
+  only; no code, dependency, or public-API change.
+- Pointed usage questions and feature ideas at GitHub Discussions from the
+  README, contributing guide, and issue-template chooser, keeping the
+  maintainer email for research collaboration and private enquiries.
 
 ## [0.4.2] - 2026-07-27
 
