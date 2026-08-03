@@ -13,6 +13,16 @@ import math
 import numpy as np
 import pvlib
 
+# BREOS IAM model name -> pvlib beam-IAM callable. Bound explicitly, and at
+# import, so that a pvlib rename fails when the package loads rather than
+# midway through a simulation. ``breos.pv.model_options.resolve_iam_model``
+# owns validating the name, so the keys here must track ``IAM_MODELS``.
+_IAM_MODELS = {
+    "ashrae": pvlib.iam.ashrae,
+    "physical": pvlib.iam.physical,
+    "martin_ruiz": pvlib.iam.martin_ruiz,
+}
+
 # Tilt resolution of the cached Marion multiplier grid. The integrated sky and
 # ground multipliers vary smoothly and slowly over tilt, so 0.5 degrees is far
 # finer than the ~0.5-1% effect the diffuse IAM itself corrects for.
@@ -77,8 +87,12 @@ def calculate_front_effective_irradiance(
     and ``diffuse_iam`` must already be one of ``DIFFUSE_IAM_METHODS``. Returns
     front-side effective irradiance in W/m2, with NaNs zeroed so downstream
     single-diode and thermal calls never see them.
+
+    ``iam_model`` must already be one of ``IAM_MODELS``; an unrecognised name
+    raises ``KeyError`` here rather than being validated, because
+    :func:`breos.pv.model_options.resolve_iam_model` owns that check.
     """
-    iam = getattr(pvlib.iam, iam_model)(aoi)
+    iam = _IAM_MODELS[iam_model](aoi)
     poa_direct = np.nan_to_num(poa["poa_direct"].values, nan=0.0)
     poa_diffuse = np.nan_to_num(poa["poa_diffuse"].values, nan=0.0)
     iam_clean = np.nan_to_num(np.asarray(iam, dtype=float), nan=0.0)

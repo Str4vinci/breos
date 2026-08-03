@@ -88,12 +88,11 @@ _TRACKING_MODEL_OPTION_KEYS = tuple(key for key in _MODEL_OPTION_KEYS if key != 
 
 # Model options a single array in ``calculate_multi_array_production_breakdown``
 # may override. ``iam_model``, ``diffuse_iam``, ``temperature_model`` and
-# ``solar_position``
-# are deliberately absent: they are function-level for every array. That
-# asymmetry is intentional and documented on the public function — sky and
-# ground geometry genuinely differ between arrays on one building, whereas the
-# thermal model and the solar-position convention describe the simulation, not
-# the array.
+# ``solar_position`` are deliberately absent: they are function-level for every
+# array. That asymmetry is intentional and documented on the public function —
+# sky and ground geometry genuinely differ between arrays on one building,
+# whereas the thermal model and the solar-position convention describe the
+# simulation, not the array.
 _PER_ARRAY_MODEL_OPTION_KEYS = (
     "transposition_model",
     "albedo",
