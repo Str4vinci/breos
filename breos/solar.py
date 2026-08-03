@@ -1688,7 +1688,7 @@ def calculate_multi_array_production_breakdown(
                     print(
                         f"   Array {i + 1}: {n_mod}x {mod_name}, single-axis "
                         f"axis_azimuth={arr.get('axis_azimuth', 180.0)}, "
-                        f"gcr={arr.get('gcr', 0.35)}, max_angle=±{arr.get('max_angle', 60.0)}"
+                        f"gcr={arr_gcr}, max_angle=±{arr.get('max_angle', 60.0)}"
                     )
                 else:
                     print(f"   Array {i + 1}: {n_mod}x {mod_name}, dual-axis")
