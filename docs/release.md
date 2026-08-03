@@ -41,6 +41,12 @@ BREOS from the installed wheel instead of the source checkout. It also imports
 all 14 vendored BLAST models and verifies the installed BLAST license, DOE
 notice, and pinned upstream provenance.
 
+Regenerate `validation/baselines/breos_baseline.json` *after* bumping the
+package version, not before. The baseline records `breos.__version__` as read
+at generation time, so a baseline generated on the previous version stamps
+itself with that version while encoding the new release's behavior, which
+misleads anyone later diffing it against the release it names.
+
 ## Release Validation Matrix
 
 The `Tests` workflow runs the complete matrix on Python 3.11, 3.12, 3.13, and
