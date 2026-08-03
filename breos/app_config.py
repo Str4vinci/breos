@@ -130,6 +130,17 @@ def merge_defaults(config: dict[str, Any]) -> dict[str, Any]:
     return apply_battery_profile_defaults(DEFAULTS, config)
 
 
+def default_module_key() -> str:
+    """Return the catalog key used when a config names no PV module.
+
+    ``DEFAULTS["pv_module"]`` is ``None`` rather than a key, so the real
+    default is the catalog's insertion order. Resolving it here keeps the
+    validation, resolution, and results layers from each re-deriving it and
+    silently disagreeing if the catalog is reordered.
+    """
+    return next(iter(MODULES))
+
+
 def _validate_sky_settings(
     transposition_model: Any,
     albedo: Any,
@@ -206,7 +217,7 @@ def _validate_bifacial_settings(
     if normalised == "none":
         return
 
-    module_key = module or next(iter(MODULES))
+    module_key = module or default_module_key()
     if module_key in MODULES and MODULES[module_key].bifaciality is None:
         raise ValueError(
             f"'{prefix}bifacial_model=infinite_sheds' requires bifaciality metadata for PV module {module_key!r}"
@@ -329,7 +340,7 @@ def _validate_pv_and_inverter(cfg: dict[str, Any], has_arrays: bool) -> None:
             )
             _validate_bifacial_settings(
                 arr.get("bifacial_model", cfg["bifacial_model"]),
-                module or next(iter(MODULES)),
+                module or default_module_key(),
                 arr.get("gcr", cfg["gcr"]),
                 arr.get("pvrow_height", cfg["pvrow_height"]),
                 arr.get("pvrow_pitch", cfg["pvrow_pitch"]),
@@ -351,7 +362,7 @@ def _validate_pv_and_inverter(cfg: dict[str, Any], has_arrays: bool) -> None:
     if not has_arrays:
         _validate_bifacial_settings(
             cfg["bifacial_model"],
-            cfg.get("pv_module") or next(iter(MODULES)),
+            cfg.get("pv_module") or default_module_key(),
             cfg["gcr"],
             cfg["pvrow_height"],
             cfg["pvrow_pitch"],
@@ -491,7 +502,7 @@ def normalise_pv_arrays(arrays: list[dict[str, Any]] | None, cfg: dict[str, Any]
     if not arrays:
         return []
 
-    default_module = cfg.get("pv_module") or next(iter(MODULES))
+    default_module = cfg.get("pv_module") or default_module_key()
     default_tilt = cfg.get("tilt") if cfg.get("tilt") is not None else estimate_optimal_tilt(lat)
     default_azimuth = cfg.get("azimuth") if cfg.get("azimuth") is not None else default_azimuth_fn(lat)
 
@@ -549,7 +560,7 @@ def resolve_pv_system(
         module_name = cfg["pv_module"]
 
     if module_name is None:
-        module_name = next(iter(MODULES))
+        module_name = default_module_key()
     pv_params = get_module(module_name)
 
     if not pv_arrays:

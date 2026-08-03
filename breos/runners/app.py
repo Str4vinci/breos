@@ -8,12 +8,12 @@ from typing import Any
 
 import pandas as pd
 
-from breos.app_config import ResolvedAppConfig, build_costs_dict
+from breos.app_config import DEFAULTS, ResolvedAppConfig, build_costs_dict, default_module_key
 from breos.app_inputs import AppRuntimeDependencies, prepare_simulation_inputs
 from breos.battery import BatteryConfig, simulate_energy_balance
 from breos.degradation.results import build_degradation_summary_from_state
 from breos.economics import calculate_lcoe_from_projection, cost_analysis_projection, find_payback_year
-from breos.pv_modules import MODULES, get_module
+from breos.pv_modules import get_module
 from breos.solar import PVProductionBreakdown
 from breos.utils import get_hours_per_step
 
@@ -74,8 +74,8 @@ def _bifacial_summary(
     rear_gain_dc_kwh: float,
 ) -> dict[str, Any]:
     """Build JSON-safe bifacial configuration and year-1 gain provenance."""
-    default_model = cfg.get("bifacial_model", "none")
-    default_gcr = cfg.get("gcr", 0.35)
+    default_model = cfg.get("bifacial_model", DEFAULTS["bifacial_model"])
+    default_gcr = cfg.get("gcr", DEFAULTS["gcr"])
     default_height = cfg.get("pvrow_height")
     default_pitch = cfg.get("pvrow_pitch")
     resolved_arrays = getattr(resolved, "pv_arrays", None)
@@ -85,7 +85,7 @@ def _bifacial_summary(
         arrays = [
             {
                 "modules": cfg["n_modules"],
-                "module": cfg.get("pv_module") or next(iter(MODULES)),
+                "module": cfg.get("pv_module") or default_module_key(),
                 "bifacial_model": default_model,
                 "gcr": default_gcr,
                 "pvrow_height": default_height,
@@ -97,7 +97,7 @@ def _bifacial_summary(
     models: set[str] = set()
     for index, array in enumerate(arrays):
         model = str(array.get("bifacial_model", default_model)).strip().lower()
-        module_key = array.get("module") or cfg.get("pv_module") or next(iter(MODULES))
+        module_key = array.get("module") or cfg.get("pv_module") or default_module_key()
         module = get_module(module_key)
         models.add(model)
         row: dict[str, Any] = {
