@@ -18,13 +18,13 @@ The bifacial rear-gain column compares `bifacial_rear` with `bifacial_front` usi
 
 | Location | BREOS isotropic | BREOS perez | BREOS perez+mid-interval | BREOS perez+diffuse-IAM | PVGIS PVcalc | Δ perez vs PVGIS | Δ perez+mid vs PVGIS | Δ perez+diffuse vs PVGIS | Physical IAM Δ | Martin-Ruiz IAM Δ | PVsyst roof-mount yield Δ | SAPM roof-mount yield Δ | Bifacial rear-gain Δ | PVWatts v8 | Δ perez vs PVWatts | Notes |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| Porto, Portugal | 6043 | 6331 | 6286 | 6243 | 5789 | +9.4% | +8.6% | +7.8% | -0.2% | +0.2% | -4.0% | -6.2% | +7.6% | — | — | PVGIS PVGIS-SARAH3 2005-2023; PVWatts: fetch failed |
-| Berlin, Germany | 4045 | 4295 | 4280 | 4215 | 4026 | +6.7% | +6.3% | +4.7% | -0.2% | +0.2% | -2.9% | -4.9% | +8.2% | — | — | PVGIS PVGIS-SARAH3 2005-2023; PVWatts: fetch failed |
-| Golden, Colorado, USA (NREL) | 6940 | 7243 | 7439 | 7163 | 7019 | +3.2% | +6.0% | +2.1% | -0.2% | +0.2% | -2.6% | -5.7% | +6.8% | — | — | PVGIS PVGIS-ERA5 2005-2023; PVWatts: fetch failed |
-| Nairobi, Kenya | 6199 | 6215 | 6117 | 6092 | 5718 | +8.7% | +7.0% | +6.5% | -0.3% | +0.2% | -3.5% | -5.9% | +9.3% | — | — | PVGIS PVGIS-SARAH3 2005-2023; PVWatts: fetch failed |
-| New Delhi, India | 6350 | 6568 | 6726 | 6487 | 6194 | +6.0% | +8.6% | +4.7% | -0.2% | +0.3% | -3.2% | -5.9% | +7.6% | — | — | PVGIS PVGIS-ERA5 2005-2023; PVWatts: fetch failed |
-| Melbourne, Australia | 5768 | 6054 | 6164 | 5974 | 5599 | +8.1% | +10.1% | +6.7% | -0.3% | +0.2% | -3.9% | -5.7% | +7.5% | — | — | PVGIS PVGIS-ERA5 2005-2023; PVWatts: fetch failed |
-| São Paulo, Brazil | 5464 | 5589 | 5611 | 5483 | 5163 | +8.2% | +8.7% | +6.2% | -0.2% | +0.2% | -3.1% | -5.6% | +8.6% | — | — | PVGIS PVGIS-SARAH3 2005-2023; PVWatts: fetch failed |
+| Porto, Portugal | 6043 | 6331 | 6286 | 6243 | 5789 | +9.4% | +8.6% | +7.8% | -0.2% | +0.2% | -4.0% | -6.2% | +7.2% | — | — | PVGIS PVGIS-SARAH3 2005-2023; PVWatts: fetch failed |
+| Berlin, Germany | 4045 | 4295 | 4280 | 4215 | 4026 | +6.7% | +6.3% | +4.7% | -0.2% | +0.2% | -2.9% | -4.9% | +7.8% | — | — | PVGIS PVGIS-SARAH3 2005-2023; PVWatts: fetch failed |
+| Golden, Colorado, USA (NREL) | 6940 | 7243 | 7439 | 7163 | 7019 | +3.2% | +6.0% | +2.1% | -0.2% | +0.2% | -2.6% | -5.7% | +6.4% | — | — | PVGIS PVGIS-ERA5 2005-2023; PVWatts: fetch failed |
+| Nairobi, Kenya | 6199 | 6215 | 6117 | 6092 | 5718 | +8.7% | +7.0% | +6.5% | -0.3% | +0.2% | -3.5% | -5.9% | +8.8% | — | — | PVGIS PVGIS-SARAH3 2005-2023; PVWatts: fetch failed |
+| New Delhi, India | 6350 | 6568 | 6726 | 6487 | 6194 | +6.0% | +8.6% | +4.7% | -0.2% | +0.3% | -3.2% | -5.9% | +7.1% | — | — | PVGIS PVGIS-ERA5 2005-2023; PVWatts: fetch failed |
+| Melbourne, Australia | 5768 | 6054 | 6164 | 5974 | 5599 | +8.1% | +10.1% | +6.7% | -0.3% | +0.2% | -3.9% | -5.7% | +7.2% | — | — | PVGIS PVGIS-ERA5 2005-2023; PVWatts: fetch failed |
+| São Paulo, Brazil | 5464 | 5589 | 5611 | 5483 | 5163 | +8.2% | +8.7% | +6.2% | -0.2% | +0.2% | -3.1% | -5.6% | +8.1% | — | — | PVGIS PVGIS-SARAH3 2005-2023; PVWatts: fetch failed |
 
 ## Monthly shape vs PVGIS (BREOS perez, kWh)
 
