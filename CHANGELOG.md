@@ -37,9 +37,20 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   different production. Set `gcr` explicitly on each entry in `pv_arrays` to
   keep the previous geometry. Single-array systems and per-array `gcr`
   overrides are unaffected.
+- `App` and CLI configuration now reject a `gcr` outside `(0, 1]`, including
+  non-finite and null values and every explicit `pv_arrays[i].gcr` override,
+  instead of passing it to pvlib. pvlib does not reject a nonsensical ratio on
+  the tracking path; it quietly derives a different backtracking rotation, so a
+  mistyped `3.5` previously returned roughly half the annual energy with no
+  error. Configurations that were already invalid for another reason keep
+  reporting that error. Tracking configurations with an out-of-range `gcr` that
+  used to run and produce wrong numbers now fail at `App()` construction. This
+  guards the config path only; callers going directly to `breos.solar` tracking
+  functions are still responsible for their own `gcr`.
 - Refactored PV model-option resolution and the IAM and temperature kernels
   into focused internal modules while preserving the `breos.App` facade,
-  public solar-function signatures, defaults, validation, and numerical paths.
+  public solar-function signatures, defaults, and numerical paths. Config
+  validation is preserved except for the `gcr` tightening noted above.
 
 ## [0.4.2] - 2026-07-27
 
