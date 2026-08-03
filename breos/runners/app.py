@@ -36,7 +36,11 @@ class SimulationArtifacts:
     degradation_summary: dict[str, Any]
 
 
-LEDGER_SCHEMA_VERSION = "1.0"
+# 1.1 adds the bifacial_rear_gain PV loss-waterfall stage, relabels the iam
+# stage to name the front side explicitly, and adds the pv_model provenance
+# block. All three are additive, so 1.0 consumers keep reading the fields they
+# already knew.
+LEDGER_SCHEMA_VERSION = "1.1"
 
 
 def _series_energy_kwh(series: pd.Series, freq: str) -> float:

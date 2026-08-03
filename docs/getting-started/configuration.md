@@ -181,8 +181,10 @@ pvlib's infinite-sheds row geometry for the rear side only. This hybrid is a
 good approximation in the low-GCR limit, but it is front-optimistic for dense
 ground-mount rows because front-side row shading is not modeled. The rear
 estimate uses Hay-Davies when the front selects it and isotropic transposition
-for every other front-side model. No extra `pvfactors`/Shapely dependency is
-required.
+for every other front-side model. Rear irradiance is included in the thermal
+balance as well as in DC power, so the cell-temperature model sees the
+bifaciality-weighted rear gain and the resulting temperature rise offsets part
+of it. No extra `pvfactors`/Shapely dependency is required.
 
 The year-1 result reports the modeled contribution under
 `pv_loss_waterfall.bifacial`, as an ordered `bifacial_rear_gain` waterfall

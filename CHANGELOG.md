@@ -22,6 +22,11 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   front/rear regression benchmarks across the seven-site validation matrix.
 
 ### Changed
+- Bumped `provenance.ledger_schema_version` to `1.1`. The result schema gains
+  the `bifacial_rear_gain` PV loss-waterfall stage and the `provenance.pv_model`
+  block, and the `iam` stage is relabelled to name the front side explicitly.
+  The additions are backward compatible; consumers that pin the value need to
+  accept `1.1`.
 - Multi-array systems now honour the top-level `gcr` when placing per-array
   tracking geometry. `calculate_multi_array_production_breakdown` takes a
   function-level `gcr` and the App/CLI path forwards the configured `gcr`;
