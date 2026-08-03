@@ -24,6 +24,7 @@
    .. autosummary::
    
       ~PVModuleParams.Module_Efficiency
+      ~PVModuleParams.NOCT
       ~PVModuleParams.Name
       ~PVModuleParams.alpha_sc_abs
       ~PVModuleParams.beta_voc_abs

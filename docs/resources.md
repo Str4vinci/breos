@@ -13,7 +13,7 @@ requirements, and commercial-use limits before using it in a project.
 | [pvlib `retrieve_sam`](https://pvlib-python.readthedocs.io/en/stable/reference/generated/pvlib.pvsystem.retrieve_sam.html) | Accessing module and inverter parameter tables bundled with pvlib. | Useful when comparing BREOS module entries against SAM/CEC style data. |
 | [NREL SAM photovoltaic module help](https://samrepo.nrelcloud.org/help/pv_module.html) | Understanding CEC, Sandia, IEC 61853, PVWatts, and user-entered module models. | Good background when deciding which module datasheet parameters are needed. |
 | Manufacturer datasheets | Final project assumptions for module power, temperature coefficients, dimensions, and inverter ratings. | Prefer datasheets for real designs; catalogue entries can lag current products. |
-| [Trina Vertex TSM-DEG20C.20 datasheet](https://www.trinasolar.com/sites/default/files/600WVertex.pdf) | Maximum-power bifaciality reference for BREOS's generic 600 W bifacial catalog entry. | The catalog entry remains a representative generic module; the sourced 70% factor is inert unless bifacial modeling is activated. |
+| [Trina Vertex TSM-DEG20C.20 datasheet](https://d2fp8gxcp7iq0s.cloudfront.net/documents/jz96t7q3r8tgfwMcpj79rB4LgxqrX9QsmzpaVycj.pdf) | Maximum-power bifaciality, power temperature coefficient, and 21.2% module efficiency for BREOS's generic 600 W bifacial catalog entry. | The catalog entry remains a representative generic module and keeps its own 144-half-cell electricals; the sourced 70% bifaciality is inert unless bifacial modeling is activated. |
 
 ## Load profiles
 

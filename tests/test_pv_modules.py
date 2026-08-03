@@ -21,6 +21,26 @@ class TestCatalog:
         assert module.bifaciality == pytest.approx(0.70)
         assert "Bifaciality: 70.0 %" in get_module_info("Generic_600W_Bifacial")
 
+    def test_sourced_efficiencies_match_their_datasheet_bins(self):
+        # Both values come from the module's own datasheet STC table; they are
+        # not derived from an assumed frame area.
+        assert get_module("Suntech_STP550S_STC").Module_Efficiency == pytest.approx(0.213)
+        assert get_module("Generic_600W_Bifacial").Module_Efficiency == pytest.approx(0.212)
+        assert "Efficiency: 21.2 %" in get_module_info("Generic_600W_Bifacial")
+
+    def test_catalog_efficiencies_are_physical_when_present(self):
+        for key, module in MODULES.items():
+            if module.Module_Efficiency is not None:
+                assert 0 < module.Module_Efficiency <= 1, key
+
+    def test_unsourced_entries_leave_efficiency_unset_for_the_breos_default(self):
+        # These two entries name no datasheet that quotes an efficiency, so they
+        # stay None and pick up DEFAULT_MODULE_EFFICIENCY in the PVsyst path
+        # rather than carrying a back-derived number.
+        assert get_module("Erlangen_445W").Module_Efficiency is None
+        assert get_module("Generic_400W").Module_Efficiency is None
+        assert "Efficiency: n/a" in get_module_info("Generic_400W")
+
     def test_catalog_does_not_claim_unsourced_noct_metadata(self):
         assert all(module.NOCT is None for module in MODULES.values())
         assert "NOCT:       n/a (not sourced in bundled catalog)" in get_module_info("Suntech_STP550S_STC")

@@ -165,7 +165,10 @@ class PVModuleParams:
     N_Cells: int  # Number of cells (eg 6*24 or 144)
 
     Name: Optional[str] = None  # Metadata: specific module model name
-    Module_Efficiency: Optional[float] = None  # Metadata: module efficiency fraction, e.g. 0.213
+    # Module efficiency fraction, e.g. 0.213. Feeds the PVsyst and SAM NOCT
+    # cell-temperature models; when unset the PVsyst path uses
+    # breos.pv.temperature.DEFAULT_MODULE_EFFICIENCY and noct-sam refuses to run.
+    Module_Efficiency: Optional[float] = None
     celltype: str = "monoSi"
 
     alpha_sc_abs: Optional[float] = None  # A/°C - if provided, overrides T_Isc_pct conversion

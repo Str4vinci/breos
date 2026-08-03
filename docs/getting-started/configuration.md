@@ -166,9 +166,25 @@ smooth tracker response.
 
 `"faiman"` remains the default, with its historical open-rack coefficients.
 The three `"pvsyst-*"` presets model free-standing, semi-integrated, and
-insulated mounting. When a selected module has a sourced `Module_Efficiency`,
-BREOS supplies it to PVsyst's heat-balance calculation; entries without that
-metadata retain pvlib's documented legacy default.
+insulated mounting.
+
+PVsyst's heat balance takes a module efficiency, which is a physical input
+rather than a tuning constant: it sets the share of absorbed energy that leaves
+the module as electricity instead of heat. BREOS supplies a module's sourced
+`Module_Efficiency` when it has one, and a representative 20% for modern
+crystalline silicon when it does not. Both are deliberate — pvlib's own 0.1
+default is a legacy placeholder that would model a module as converting 10% and
+shedding the other 90% as heat, which runs cell temperatures roughly 2.5 °C hot
+at 800 W/m². Anywhere in the realistic 19–22% band shifts cell temperature by at
+most about 0.5 °C, so the exact figure matters much less than not inheriting
+0.1.
+
+Two details worth knowing if you are comparing against PVsyst itself. The value
+is defined at the operating point, and BREOS uses the datasheet STC efficiency
+as a stand-in; PVsyst re-evaluates it each timestep, which is worth a further
+0.4–0.6 °C at high irradiance. And efficiency only reaches the `pvsyst-*` and
+`"noct-sam"` thermal models — it plays no part in the single-diode DC
+calculation, which works from the full IV parameters.
 
 The four `"sapm-*"` choices are named exactly for pvlib's Sandia construction
 and mounting coefficient sets:
