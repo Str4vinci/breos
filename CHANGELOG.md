@@ -58,6 +58,13 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 - Pointed usage questions and feature ideas at GitHub Discussions from the
   README, contributing guide, and issue-template chooser, keeping the
   maintainer email for research collaboration and private enquiries.
+- Credited pvlib as the PV modeling foundation in the README opening, added its
+  recommended citation to the README, `ATTRIBUTIONS.md`, and a `references`
+  entry in `CITATION.cff`, and added a README acknowledgements section covering
+  pvlib, BLAST-Lite, demandlib, pymoo, and the weather data sources.
+- Removed residential-only framing from the README description and feature
+  list. The packaged presets remain residential-scale, but the engine itself
+  carries no building assumption.
 
 ## [0.4.2] - 2026-07-27
 
