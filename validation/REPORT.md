@@ -34,13 +34,13 @@ Equal STC nameplate does not mean equal module area, string layout, or electrica
 
 | Location | 3×400 W mono (kWh) | 2×600 W bifacial, front-only (kWh) | 2×600 W bifacial + rear (kWh) | Front vs mono | Rear vs front |
 |---|---|---|---|---|---|
-| Porto, Portugal | 1857 | 1862 | 2008 | +0.3% | +7.8% |
-| Berlin, Germany | 1257 | 1260 | 1366 | +0.3% | +8.4% |
-| Golden, Colorado, USA (NREL) | 2204 | 2208 | 2353 | +0.2% | +6.6% |
-| Nairobi, Kenya | 1793 | 1799 | 1974 | +0.3% | +9.8% |
-| New Delhi, India | 1990 | 1998 | 2147 | +0.4% | +7.5% |
-| Melbourne, Australia | 1822 | 1826 | 1961 | +0.2% | +7.4% |
-| São Paulo, Brazil | 1649 | 1654 | 1799 | +0.3% | +8.8% |
+| Porto, Portugal | 1857 | 1862 | 2001 | +0.3% | +7.5% |
+| Berlin, Germany | 1257 | 1260 | 1362 | +0.3% | +8.1% |
+| Golden, Colorado, USA (NREL) | 2204 | 2208 | 2344 | +0.2% | +6.1% |
+| Nairobi, Kenya | 1793 | 1799 | 1964 | +0.3% | +9.2% |
+| New Delhi, India | 1990 | 1998 | 2138 | +0.4% | +7.0% |
+| Melbourne, Australia | 1822 | 1826 | 1955 | +0.2% | +7.1% |
+| São Paulo, Brazil | 1649 | 1654 | 1790 | +0.3% | +8.2% |
 
 ## Monthly shape vs PVGIS (BREOS perez, kWh)
 
