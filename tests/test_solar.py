@@ -1,6 +1,8 @@
 """Tests for the solar module."""
 
+import numpy as np
 import pandas as pd
+import pvlib
 import pytest
 
 import breos.solar as solar
@@ -18,6 +20,19 @@ from breos.solar import (
     default_azimuth,
     estimate_optimal_tilt,
 )
+
+
+def _spy_on_faiman(monkeypatch):
+    """Record the irradiance array every ``faiman`` call is driven with."""
+    calls = []
+    real_faiman = pvlib.temperature.faiman
+
+    def spy(poa_global, *args, **kwargs):
+        calls.append(np.asarray(poa_global, dtype=float).copy())
+        return real_faiman(poa_global, *args, **kwargs)
+
+    monkeypatch.setattr(pvlib.temperature, "faiman", spy)
+    return calls
 
 
 def _module_params(**overrides):
@@ -191,6 +206,60 @@ class TestPVProduction:
                 **kwargs,
                 pv_params=get_module("Generic_600W_Bifacial"),
             )
+
+    def _detail_inputs(self, weather, location):
+        _, solarpos, weather_aligned = solar._prepare_solarpos_and_weather(weather, location, "h")
+        return weather_aligned, solarpos
+
+    def test_cell_temperature_excludes_rear_when_bifacial_disabled(
+        self, synthetic_weather, porto_location, monkeypatch
+    ):
+        # bifacial_model="none" must stay bit-for-bit identical to driving the
+        # temperature model with front-side poa_global alone.
+        thermal_inputs = _spy_on_faiman(monkeypatch)
+        weather_aligned, solarpos = self._detail_inputs(synthetic_weather.iloc[: 24 * 7], porto_location)
+
+        detail = solar._compute_irradiance_and_cell_temp_detail(
+            weather_aligned,
+            solarpos,
+            surface_tilt=35,
+            surface_azimuth=180,
+        )
+
+        assert not detail.rear_effective_irradiance.any()
+        np.testing.assert_array_equal(thermal_inputs[-1], detail.poa_global)
+
+    def test_rear_irradiance_heats_the_module(self, synthetic_weather, porto_location, monkeypatch):
+        # Rear gain must contribute heat as well as power; pvlib's bifacial
+        # convention feeds poa_front + poa_back * bifaciality to the
+        # temperature model.
+        thermal_inputs = _spy_on_faiman(monkeypatch)
+        weather_aligned, solarpos = self._detail_inputs(synthetic_weather.iloc[: 24 * 7], porto_location)
+        kwargs = dict(surface_tilt=35, surface_azimuth=180, albedo=0.25)
+
+        front_only = solar._compute_irradiance_and_cell_temp_detail(weather_aligned, solarpos, **kwargs)
+        bifacial = solar._compute_irradiance_and_cell_temp_detail(
+            weather_aligned,
+            solarpos,
+            bifacial_model="infinite_sheds",
+            bifaciality=0.8,
+            gcr=0.35,
+            pvrow_height=1.5,
+            pvrow_pitch=6.0,
+            **kwargs,
+        )
+
+        np.testing.assert_array_equal(
+            thermal_inputs[-1],
+            bifacial.poa_global + bifacial.rear_effective_irradiance,
+        )
+        np.testing.assert_array_equal(bifacial.poa_global, front_only.poa_global)
+        assert (bifacial.temp_cell >= front_only.temp_cell).all()
+        # Rear irradiance below ~1 W/m2 is lost in float rounding of the
+        # temperature model, so only require a strict rise where it is real.
+        lit = bifacial.rear_effective_irradiance > 1.0
+        assert lit.any()
+        assert (bifacial.temp_cell[lit] > front_only.temp_cell[lit]).all()
 
     def test_output_shape(self, synthetic_weather, porto_location, pv_params):
         dc = calculate_pv_production_dc(

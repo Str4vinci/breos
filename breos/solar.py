@@ -454,7 +454,10 @@ def _compute_irradiance_and_cell_temp_detail(
     selects the cell-temperature model / mounting preset (see
     ``TEMPERATURE_MODELS``); the default ``"faiman"`` reproduces prior
     behaviour bit-for-bit, and the pvsyst presets use pvlib's default
-    ``module_efficiency``/``alpha_absorption``.
+    ``module_efficiency``/``alpha_absorption``. The cell-temperature model is
+    driven by front-side ``poa_global`` plus the bifaciality-weighted rear
+    irradiance, so rear gain contributes heat as well as power; with
+    ``bifacial_model="none"`` the rear term is zero and the result is unchanged.
     """
     model = _resolve_transposition_model(transposition_model)
     albedo, surface_type = _resolve_ground_reflectance(albedo, surface_type)
@@ -556,11 +559,20 @@ def _compute_irradiance_and_cell_temp_detail(
         rear_effective_irradiance = np.zeros_like(front_effective_irradiance)
         effective_irradiance = front_effective_irradiance
 
+    # Rear irradiance heats the module as well as powering it, so it belongs in
+    # the thermal balance too. This matches pvlib's bifacial convention, where
+    # infinite_sheds returns poa_global = poa_front + poa_back * bifaciality and
+    # that composed series is what feeds the temperature model. Driving the
+    # temperature model from the front side alone credits the rear gain with
+    # power but no heat and overstates net bifacial gain. On the non-bifacial
+    # path rear_effective_irradiance is all zeros, so bifacial_model="none"
+    # stays bit-for-bit identical.
+    thermal_irradiance = poa_global + rear_effective_irradiance
     if temperature_model == "faiman":
-        temp_cell = pvlib.temperature.faiman(poa_global, temp_air, wind_speed)
+        temp_cell = pvlib.temperature.faiman(thermal_irradiance, temp_air, wind_speed)
     else:
         params = pvlib.temperature.TEMPERATURE_MODEL_PARAMETERS["pvsyst"][_PVSYST_MOUNTING[temperature_model]]
-        temp_cell = pvlib.temperature.pvsyst_cell(poa_global, temp_air, wind_speed, **params)
+        temp_cell = pvlib.temperature.pvsyst_cell(thermal_irradiance, temp_air, wind_speed, **params)
     return _IrradianceModelResult(
         ghi=np.nan_to_num(np.asarray(ghi, dtype=float), nan=0.0),
         poa_global=poa_global,

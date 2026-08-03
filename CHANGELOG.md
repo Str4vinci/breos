@@ -10,8 +10,12 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   The metadata alone does not activate rear-gain modeling or change production.
 - Added opt-in `bifacial_model="infinite_sheds"` rear-gain modeling for fixed,
   tracking, and mixed multi-array systems. The App/CLI path requires explicit
-  row height and pitch plus sourced module bifaciality; the default `"none"`
-  path preserves front-only production.
+  row height and pitch plus sourced module bifaciality. Rear irradiance feeds
+  both DC power and the cell-temperature model, following pvlib's
+  `poa_front + poa_back * bifaciality` convention, so rear gain is not credited
+  with power but no heat. With the default `bifacial_model="none"` the rear
+  term is zero and front-side irradiance, cell temperature, and DC production
+  are bit-for-bit unchanged.
 
 ## [0.4.2] - 2026-07-27
 
