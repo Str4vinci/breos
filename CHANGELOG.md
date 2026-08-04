@@ -8,6 +8,27 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 - Added optional, validated `PVModuleParams.bifaciality` metadata and a sourced
   maximum-power bifaciality value for the generic 600 W bifacial catalog entry.
   The metadata alone does not activate rear-gain modeling or change production.
+- Added opt-in `bifacial_model="infinite_sheds"` rear-gain modeling for fixed,
+  tracking, and mixed multi-array systems. The App/CLI path requires explicit
+  row height and pitch plus sourced module bifaciality. Rear irradiance feeds
+  both DC power and the cell-temperature model, following pvlib's
+  `poa_front + poa_back * bifaciality` convention, so rear gain is not credited
+  with power but no heat. With the default `bifacial_model="none"` the rear
+  term is zero and front-side irradiance, cell temperature, and DC production
+  are bit-for-bit unchanged. That guarantee covers the rear-gain model only,
+  not the `gcr` forwarding change noted below.
+
+### Changed
+- Multi-array systems now honour the top-level `gcr` when placing per-array
+  tracking geometry. `calculate_multi_array_production_breakdown` takes a
+  function-level `gcr` and the App/CLI path forwards the configured `gcr`;
+  previously per-array tracking fell back to a hardcoded `0.35` and a
+  non-default top-level `gcr` never reached it. Existing multi-array tracking
+  configurations that set a non-default top-level `gcr` without a per-array
+  `gcr` now backtrack with different row geometry and produce slightly
+  different production. Set `gcr` explicitly on each entry in `pv_arrays` to
+  keep the previous geometry. Single-array systems and per-array `gcr`
+  overrides are unaffected.
 
 ## [0.4.2] - 2026-07-27
 

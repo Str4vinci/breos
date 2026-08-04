@@ -125,6 +125,9 @@ def build_pv_production_breakdown(
         "solar_position": cfg["solar_position"],
         "diffuse_iam": cfg["diffuse_iam"],
         "temperature_model": cfg["temperature_model"],
+        "bifacial_model": cfg["bifacial_model"],
+        "pvrow_height": cfg["pvrow_height"],
+        "pvrow_pitch": cfg["pvrow_pitch"],
     }
 
     if resolved.pv_arrays:
@@ -134,6 +137,7 @@ def build_pv_production_breakdown(
             arrays=resolved.pv_arrays,
             freq=freq,
             loss_overrides=loss_overrides,
+            gcr=cfg["gcr"],
             **sky_kwargs,
         )
 
@@ -147,6 +151,7 @@ def build_pv_production_breakdown(
             pv_params=resolved.pv_params,
             freq=freq,
             loss_overrides=loss_overrides,
+            gcr=cfg["gcr"],
             **sky_kwargs,
         )
     else:

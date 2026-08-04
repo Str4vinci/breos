@@ -737,6 +737,83 @@ class TestAppSimulateMultiArray:
         assert self.result["pv_production_kwh"] > 0
 
 
+class TestAppBifacialConfig:
+    def _config(self, **overrides):
+        return {
+            "location": "porto",
+            "n_modules": 6,
+            "annual_consumption_kwh": 3000,
+            "pv_module": "Generic_600W_Bifacial",
+            **overrides,
+        }
+
+    def test_front_only_default_needs_no_row_geometry(self):
+        app = App(self._config())
+
+        assert app._cfg["bifacial_model"] == "none"
+        assert app._cfg["pvrow_height"] is None
+        assert app._cfg["pvrow_pitch"] is None
+
+    def test_infinite_sheds_requires_bifacial_module(self):
+        with pytest.raises(ValueError, match="requires bifaciality metadata"):
+            App(
+                self._config(
+                    pv_module="Generic_400W",
+                    bifacial_model="infinite_sheds",
+                    pvrow_height=1.5,
+                    pvrow_pitch=6.0,
+                )
+            )
+
+    @pytest.mark.parametrize("missing", ["pvrow_height", "pvrow_pitch"])
+    def test_infinite_sheds_requires_complete_geometry(self, missing):
+        geometry = {"pvrow_height": 1.5, "pvrow_pitch": 6.0}
+        geometry.pop(missing)
+
+        with pytest.raises(ValueError, match=missing):
+            App(self._config(bifacial_model="infinite_sheds", **geometry))
+
+    def test_per_array_bifacial_override_is_normalized(self):
+        app = App(
+            {
+                "location": "porto",
+                "annual_consumption_kwh": 3000,
+                "pv_arrays": [
+                    {
+                        "modules": 6,
+                        "module": "Generic_600W_Bifacial",
+                        "tilt": 25,
+                        "azimuth": 180,
+                        "bifacial_model": "infinite_sheds",
+                        "gcr": 0.35,
+                        "pvrow_height": 1.5,
+                        "pvrow_pitch": 6.0,
+                    }
+                ],
+            }
+        )
+
+        assert app._cfg["pv_arrays"][0]["bifacial_model"] == "infinite_sheds"
+        assert app._cfg["pv_arrays"][0]["pvrow_height"] == 1.5
+
+    def test_infinite_sheds_runs_through_app_and_adds_generation(self, _patch_weather):
+        common = self._config(projection_years=1, albedo=0.3)
+        front_only = App(common)
+        front_only.simulate()
+        bifacial = App(
+            {
+                **common,
+                "bifacial_model": "infinite_sheds",
+                "gcr": 0.35,
+                "pvrow_height": 1.5,
+                "pvrow_pitch": 6.0,
+            }
+        )
+        bifacial.simulate()
+
+        assert bifacial.result()["pv_dc_generation_kwh"] > front_only.result()["pv_dc_generation_kwh"]
+
+
 class TestAppSimulateTracking:
     def test_invalid_tracking(self, _patch_weather):
         with pytest.raises(ValueError, match="tracking must be"):
