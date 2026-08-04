@@ -12,6 +12,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from breos.degradation.profiles import ENABLED_BLAST_MODEL_KEYS, apply_battery_profile_defaults
 from breos.economics import CostParams, calculate_costs
 from breos.emissions import EmissionsParams
+from breos.pv.model_options import is_known_model, is_valid_albedo, is_valid_gcr, normalise_model_name
 from breos.pv_modules import MODULES, PVModuleParams, get_module
 from breos.resources import load_config_json
 from breos.solar import (
@@ -129,6 +130,17 @@ def merge_defaults(config: dict[str, Any]) -> dict[str, Any]:
     return apply_battery_profile_defaults(DEFAULTS, config)
 
 
+def default_module_key() -> str:
+    """Return the catalog key used when a config names no PV module.
+
+    ``DEFAULTS["pv_module"]`` is ``None`` rather than a key, so the real
+    default is the catalog's insertion order. Resolving it here keeps the
+    validation, resolution, and results layers from each re-deriving it and
+    silently disagreeing if the catalog is reordered.
+    """
+    return next(iter(MODULES))
+
+
 def _validate_sky_settings(
     transposition_model: Any,
     albedo: Any,
@@ -141,14 +153,17 @@ def _validate_sky_settings(
     ``where`` prefixes the key name in error messages (e.g. ``pv_arrays[0]``);
     ``None`` values are treated as "not set" and skipped, so per-array overrides
     only validate the keys they actually provide.
+
+    The rules come from :mod:`breos.pv.model_options`; only the config-key
+    phrasing and the None-means-unset handling are this layer's own.
     """
     prefix = f"{where}." if where else ""
-    if transposition_model is not None and str(transposition_model).strip().lower() not in TRANSPOSITION_MODELS:
+    if transposition_model is not None and not is_known_model(transposition_model, TRANSPOSITION_MODELS):
         valid = ", ".join(TRANSPOSITION_MODELS)
         raise ValueError(f"'{prefix}transposition_model' must be one of: {valid}")
     if albedo is not None and surface_type is not None:
         raise ValueError(f"Set either '{prefix}albedo' or '{prefix}surface_type', not both.")
-    if albedo is not None and (not isinstance(albedo, (int, float)) or not 0 <= albedo <= 1):
+    if albedo is not None and (not isinstance(albedo, (int, float)) or not is_valid_albedo(albedo)):
         raise ValueError(f"'{prefix}albedo' must be a number between 0 and 1")
     if surface_type is not None and surface_type not in SURFACE_TYPES:
         valid = ", ".join(SURFACE_TYPES)
@@ -156,6 +171,22 @@ def _validate_sky_settings(
     if model_perez is not None and model_perez not in PEREZ_MODELS:
         valid = ", ".join(PEREZ_MODELS)
         raise ValueError(f"'{prefix}model_perez' must be one of: {valid}")
+
+
+def _validate_gcr(gcr: Any, prefix: str = "") -> None:
+    """Validate a ground coverage ratio, whichever model consumes it.
+
+    ``gcr`` has two consumers and neither is a shading calculation: the
+    ``infinite_sheds`` rear-side view factors, and — on the tracking path —
+    the backtracking rotation schedule that pvlib's ``singleaxis`` derives
+    from it. The second is why this is checked even with no rear-side model
+    active. pvlib does not reject a nonsensical ratio; it quietly computes a
+    different rotation, so a mistyped ``3.5`` returns roughly half the annual
+    energy with no error anywhere. ``prefix`` already carries its trailing
+    dot, matching the other config-key messages.
+    """
+    if not is_valid_gcr(_finite_real(gcr, f"{prefix}gcr")):
+        raise ValueError(f"'{prefix}gcr' must be between 0 (exclusive) and 1 (inclusive)")
 
 
 def _validate_bifacial_settings(
@@ -166,10 +197,16 @@ def _validate_bifacial_settings(
     pvrow_pitch: Any,
     where: str = "",
 ) -> None:
-    """Validate opt-in bifacial module metadata and row geometry."""
+    """Validate opt-in bifacial module metadata and row geometry.
+
+    Shares its predicates with :mod:`breos.pv.model_options` but reports them
+    against config keys. ``pvrow_*`` geometry is required only for an active
+    rear-side model; ``gcr`` is also checked independently after the existing
+    validators because tracking can consume it without bifacial modeling.
+    """
     prefix = f"{where}." if where else ""
-    normalised = str(model).strip().lower()
-    if normalised not in BIFACIAL_MODELS:
+    normalised = normalise_model_name(model)
+    if not is_known_model(model, BIFACIAL_MODELS):
         valid = ", ".join(BIFACIAL_MODELS)
         raise ValueError(f"'{prefix}bifacial_model' must be one of: {valid}")
 
@@ -180,7 +217,7 @@ def _validate_bifacial_settings(
     if normalised == "none":
         return
 
-    module_key = module or next(iter(MODULES))
+    module_key = module or default_module_key()
     if module_key in MODULES and MODULES[module_key].bifaciality is None:
         raise ValueError(
             f"'{prefix}bifacial_model=infinite_sheds' requires bifaciality metadata for PV module {module_key!r}"
@@ -189,8 +226,9 @@ def _validate_bifacial_settings(
         raise ValueError(f"'{prefix}pvrow_height' is required when bifacial_model='infinite_sheds'")
     if pvrow_pitch is None:
         raise ValueError(f"'{prefix}pvrow_pitch' is required when bifacial_model='infinite_sheds'")
-    if not 0 < _finite_real(gcr, f"{prefix}gcr") <= 1:
-        raise ValueError(f"'{prefix}gcr' must be between 0 (exclusive) and 1 (inclusive)")
+    # Deliberately last, so an active rear-side model still reports its
+    # missing metadata and geometry before quibbling about the ratio.
+    _validate_gcr(gcr, prefix)
 
 
 def validate_config(cfg: dict[str, Any]) -> None:
@@ -200,6 +238,31 @@ def validate_config(cfg: dict[str, Any]) -> None:
     _validate_time_and_weather(cfg)
     _validate_economics(cfg)
     _validate_battery_and_degradation(cfg)
+    _validate_reachable_gcr(cfg, has_arrays)
+
+
+def _validate_reachable_gcr(cfg: dict[str, Any], has_arrays: bool) -> None:
+    """Check every ``gcr`` that can reach the model, once everything else passes.
+
+    Runs last, and deliberately so: an out-of-range ``gcr`` used to be caught
+    only under an active bifacial model, so checking it earlier would change
+    which error an already-broken config reports. Running it here makes the
+    check purely additive — a config failing on some other key keeps failing
+    on that key, and ``gcr`` is only ever the *new* reason a config is
+    rejected.
+
+    Arrays that set no ``gcr`` inherit the top-level value, which is also the
+    function-level default handed to the multi-array entry point, so the
+    top-level value is checked even when every array overrides it. Bifacial
+    arrays have already had their effective ``gcr`` checked in the loop above;
+    re-checking an explicit override here is harmless and covers the
+    non-bifacial tracking path that nothing else reaches.
+    """
+    _validate_gcr(cfg["gcr"])
+    if has_arrays:
+        for index, array in enumerate(cfg["pv_arrays"]):
+            if "gcr" in array:
+                _validate_gcr(array["gcr"], f"pv_arrays[{index}].")
 
 
 def _validate_structure_and_location(cfg: dict[str, Any]) -> bool:
@@ -277,7 +340,7 @@ def _validate_pv_and_inverter(cfg: dict[str, Any], has_arrays: bool) -> None:
             )
             _validate_bifacial_settings(
                 arr.get("bifacial_model", cfg["bifacial_model"]),
-                module or next(iter(MODULES)),
+                module or default_module_key(),
                 arr.get("gcr", cfg["gcr"]),
                 arr.get("pvrow_height", cfg["pvrow_height"]),
                 arr.get("pvrow_pitch", cfg["pvrow_pitch"]),
@@ -299,7 +362,7 @@ def _validate_pv_and_inverter(cfg: dict[str, Any], has_arrays: bool) -> None:
     if not has_arrays:
         _validate_bifacial_settings(
             cfg["bifacial_model"],
-            cfg.get("pv_module") or next(iter(MODULES)),
+            cfg.get("pv_module") or default_module_key(),
             cfg["gcr"],
             cfg["pvrow_height"],
             cfg["pvrow_pitch"],
@@ -319,16 +382,16 @@ def _validate_time_and_weather(cfg: dict[str, Any]) -> None:
     if cfg["resolution"] not in ("h", "15min"):
         raise ValueError("'resolution' must be 'h' or '15min'")
     _validate_sky_settings(cfg["transposition_model"], cfg["albedo"], cfg["surface_type"], cfg["model_perez"])
-    if str(cfg["solar_position"]).strip().lower() not in SOLAR_POSITION_METHODS:
+    if not is_known_model(cfg["solar_position"], SOLAR_POSITION_METHODS):
         valid = ", ".join(SOLAR_POSITION_METHODS)
         raise ValueError(f"'solar_position' must be one of: {valid}")
-    if str(cfg["diffuse_iam"]).strip().lower() not in DIFFUSE_IAM_METHODS:
+    if not is_known_model(cfg["diffuse_iam"], DIFFUSE_IAM_METHODS):
         valid = ", ".join(DIFFUSE_IAM_METHODS)
         raise ValueError(f"'diffuse_iam' must be one of: {valid}")
-    if str(cfg["temperature_model"]).strip().lower() not in TEMPERATURE_MODELS:
+    if not is_known_model(cfg["temperature_model"], TEMPERATURE_MODELS):
         valid = ", ".join(TEMPERATURE_MODELS)
         raise ValueError(f"'temperature_model' must be one of: {valid}")
-    cfg["bifacial_model"] = str(cfg["bifacial_model"]).strip().lower()
+    cfg["bifacial_model"] = normalise_model_name(cfg["bifacial_model"])
     overrides = cfg.get("pv_loss_overrides")
     if overrides is not None:
         if not isinstance(overrides, dict):
@@ -439,7 +502,7 @@ def normalise_pv_arrays(arrays: list[dict[str, Any]] | None, cfg: dict[str, Any]
     if not arrays:
         return []
 
-    default_module = cfg.get("pv_module") or next(iter(MODULES))
+    default_module = cfg.get("pv_module") or default_module_key()
     default_tilt = cfg.get("tilt") if cfg.get("tilt") is not None else estimate_optimal_tilt(lat)
     default_azimuth = cfg.get("azimuth") if cfg.get("azimuth") is not None else default_azimuth_fn(lat)
 
@@ -497,7 +560,7 @@ def resolve_pv_system(
         module_name = cfg["pv_module"]
 
     if module_name is None:
-        module_name = next(iter(MODULES))
+        module_name = default_module_key()
     pv_params = get_module(module_name)
 
     if not pv_arrays:

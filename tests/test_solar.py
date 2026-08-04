@@ -6,6 +6,7 @@ import pvlib
 import pytest
 
 import breos.solar as solar
+from breos.pv.model_options import resolve_pv_model_options
 from breos.pv_modules import get_module
 from breos.solar import (
     PEREZ_MODELS,
@@ -231,6 +232,7 @@ class TestPVProduction:
             solarpos,
             surface_tilt=35,
             surface_azimuth=180,
+            model_options=resolve_pv_model_options(),
         )
 
         assert not detail.rear_effective_irradiance.any()
@@ -242,18 +244,26 @@ class TestPVProduction:
         # temperature model.
         thermal_inputs = _spy_on_faiman(monkeypatch)
         weather_aligned, solarpos = self._detail_inputs(synthetic_weather.iloc[: 24 * 7], porto_location)
-        kwargs = dict(surface_tilt=35, surface_azimuth=180, albedo=0.25)
+        geometry = dict(surface_tilt=35, surface_azimuth=180)
 
-        front_only = solar._compute_irradiance_and_cell_temp_detail(weather_aligned, solarpos, **kwargs)
+        front_only = solar._compute_irradiance_and_cell_temp_detail(
+            weather_aligned,
+            solarpos,
+            model_options=resolve_pv_model_options(albedo=0.25),
+            **geometry,
+        )
         bifacial = solar._compute_irradiance_and_cell_temp_detail(
             weather_aligned,
             solarpos,
-            bifacial_model="infinite_sheds",
-            bifaciality=0.8,
-            gcr=0.35,
-            pvrow_height=1.5,
-            pvrow_pitch=6.0,
-            **kwargs,
+            model_options=resolve_pv_model_options(
+                albedo=0.25,
+                bifacial_model="infinite_sheds",
+                bifaciality=0.8,
+                gcr=0.35,
+                pvrow_height=1.5,
+                pvrow_pitch=6.0,
+            ),
+            **geometry,
         )
 
         np.testing.assert_array_equal(
