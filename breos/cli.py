@@ -21,6 +21,7 @@ from breos.resources import load_config_json
 from breos.solar import (
     BIFACIAL_MODELS,
     DIFFUSE_IAM_METHODS,
+    IAM_MODELS,
     PEREZ_MODELS,
     SOLAR_POSITION_METHODS,
     SURFACE_TYPES,
@@ -82,6 +83,7 @@ def _build_config(args: argparse.Namespace) -> dict[str, Any]:
     _add_override(overrides, "surface_type", args.surface_type)
     _add_override(overrides, "model_perez", args.model_perez)
     _add_override(overrides, "solar_position", args.solar_position)
+    _add_override(overrides, "iam_model", args.iam_model)
     _add_override(overrides, "diffuse_iam", args.diffuse_iam)
     _add_override(overrides, "temperature_model", args.temperature_model)
     _add_override(overrides, "bifacial_model", args.bifacial_model)
@@ -156,6 +158,7 @@ def _resolved_config_summary(config: dict[str, Any]) -> dict[str, Any]:
             "surface_type": cfg["surface_type"],
             "model_perez": cfg["model_perez"],
             "solar_position": cfg["solar_position"],
+            "iam_model": cfg["iam_model"],
             "diffuse_iam": cfg["diffuse_iam"],
             "temperature_model": cfg["temperature_model"],
             "bifacial_model": cfg["bifacial_model"],
@@ -560,12 +563,17 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     run.add_argument(
+        "--iam-model",
+        choices=IAM_MODELS,
+        help="Beam incidence-angle modifier (default: ashrae, historical compatibility).",
+    )
+    run.add_argument(
         "--diffuse-iam",
         dest="diffuse_iam",
         choices=DIFFUSE_IAM_METHODS,
         help=(
             "Whether IAM is also applied to the diffuse POA components. 'marion' weighs sky- and "
-            "ground-diffuse with the view-factor-integrated ashrae IAM (default: none, beam-only)."
+            "ground-diffuse with the view-factor-integrated selected IAM model (default: none, beam-only)."
         ),
     )
     run.add_argument(

@@ -8,19 +8,21 @@ Deviations bundle weather-source differences with model differences (BREOS runs 
 
 The roof-mount column is the yield delta of `perez_roof` (PVsyst semi-integrated thermal preset) against `perez` (free-standing) — a documented model-choice effect, not a comparison against the free-standing references.
 
+The physical and Martin-Ruiz columns are their respective `perez_*` IAM-model yield deltas against the Ashrae `perez_diffuse` case. All three enable Marion diffuse IAM, so beam and diffuse optics use the same selected model.
+
 The bifacial rear-gain column compares `bifacial_rear` with `bifacial_front` using the same 600 W module, weather, front-side Perez model, albedo 0.2, GCR 0.35, row-center height 1.5, and pitch 6.0 (height and pitch in the same arbitrary unit).
 
 ## Annual AC yield (kWh)
 
-| Location | BREOS isotropic | BREOS perez | BREOS perez+mid-interval | BREOS perez+diffuse-IAM | PVGIS PVcalc | Δ perez vs PVGIS | Δ perez+mid vs PVGIS | Δ perez+diffuse vs PVGIS | Roof-mount yield Δ | Bifacial rear-gain Δ | PVWatts v8 | Δ perez vs PVWatts | Notes |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| Porto, Portugal | 6043 | 6331 | 6286 | 6243 | 5789 | +9.4% | +8.6% | +7.8% | -5.2% | +7.2% | — | — | PVGIS PVGIS-SARAH3 2005-2023; PVWatts: fetch failed |
-| Berlin, Germany | 4045 | 4295 | 4280 | 4215 | 4026 | +6.7% | +6.3% | +4.7% | -3.9% | +7.8% | — | — | PVGIS PVGIS-SARAH3 2005-2023; PVWatts: fetch failed |
-| Golden, Colorado, USA (NREL) | 6940 | 7243 | 7439 | 7163 | 7019 | +3.2% | +6.0% | +2.1% | -3.8% | +6.4% | — | — | PVGIS PVGIS-ERA5 2005-2023; PVWatts: fetch failed |
-| Nairobi, Kenya | 6199 | 6215 | 6117 | 6092 | 5718 | +8.7% | +7.0% | +6.5% | -4.7% | +8.8% | — | — | PVGIS PVGIS-SARAH3 2005-2023; PVWatts: fetch failed |
-| New Delhi, India | 6350 | 6568 | 6726 | 6487 | 6194 | +6.0% | +8.6% | +4.7% | -4.4% | +7.1% | — | — | PVGIS PVGIS-ERA5 2005-2023; PVWatts: fetch failed |
-| Melbourne, Australia | 5768 | 6054 | 6164 | 5974 | 5599 | +8.1% | +10.1% | +6.7% | -5.0% | +7.2% | — | — | PVGIS PVGIS-ERA5 2005-2023; PVWatts: fetch failed |
-| São Paulo, Brazil | 5464 | 5589 | 5611 | 5483 | 5163 | +8.2% | +8.7% | +6.2% | -4.3% | +8.1% | — | — | PVGIS PVGIS-SARAH3 2005-2023; PVWatts: fetch failed |
+| Location | BREOS isotropic | BREOS perez | BREOS perez+mid-interval | BREOS perez+diffuse-IAM | PVGIS PVcalc | Δ perez vs PVGIS | Δ perez+mid vs PVGIS | Δ perez+diffuse vs PVGIS | Physical IAM Δ | Martin-Ruiz IAM Δ | Roof-mount yield Δ | Bifacial rear-gain Δ | PVWatts v8 | Δ perez vs PVWatts | Notes |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| Porto, Portugal | 6043 | 6331 | 6286 | 6243 | 5789 | +9.4% | +8.6% | +7.8% | -0.2% | +0.2% | -5.2% | +7.2% | — | — | PVGIS PVGIS-SARAH3 2005-2023; PVWatts: fetch failed |
+| Berlin, Germany | 4045 | 4295 | 4280 | 4215 | 4026 | +6.7% | +6.3% | +4.7% | -0.2% | +0.2% | -3.9% | +7.8% | — | — | PVGIS PVGIS-SARAH3 2005-2023; PVWatts: fetch failed |
+| Golden, Colorado, USA (NREL) | 6940 | 7243 | 7439 | 7163 | 7019 | +3.2% | +6.0% | +2.1% | -0.2% | +0.2% | -3.8% | +6.4% | — | — | PVGIS PVGIS-ERA5 2005-2023; PVWatts: fetch failed |
+| Nairobi, Kenya | 6199 | 6215 | 6117 | 6092 | 5718 | +8.7% | +7.0% | +6.5% | -0.3% | +0.2% | -4.7% | +8.8% | — | — | PVGIS PVGIS-SARAH3 2005-2023; PVWatts: fetch failed |
+| New Delhi, India | 6350 | 6568 | 6726 | 6487 | 6194 | +6.0% | +8.6% | +4.7% | -0.2% | +0.3% | -4.4% | +7.1% | — | — | PVGIS PVGIS-ERA5 2005-2023; PVWatts: fetch failed |
+| Melbourne, Australia | 5768 | 6054 | 6164 | 5974 | 5599 | +8.1% | +10.1% | +6.7% | -0.3% | +0.2% | -5.0% | +7.2% | — | — | PVGIS PVGIS-ERA5 2005-2023; PVWatts: fetch failed |
+| São Paulo, Brazil | 5464 | 5589 | 5611 | 5483 | 5163 | +8.2% | +8.7% | +6.2% | -0.2% | +0.2% | -4.3% | +8.1% | — | — | PVGIS PVGIS-SARAH3 2005-2023; PVWatts: fetch failed |
 
 ## Monthly shape vs PVGIS (BREOS perez, kWh)
 

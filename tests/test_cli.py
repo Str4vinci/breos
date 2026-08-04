@@ -282,6 +282,30 @@ battery_kwh = 5.0
     assert output["battery"]["blast_model"] is None
 
 
+def test_run_iam_model_override_is_reflected_in_dry_run(tmp_path):
+    output_path = tmp_path / "resolved.json"
+
+    exit_code = cli.main(
+        [
+            "run",
+            "--location",
+            "porto",
+            "--n-modules",
+            "8",
+            "--annual-consumption-kwh",
+            "3000",
+            "--iam-model",
+            "physical",
+            "--dry-run",
+            "--output",
+            str(output_path),
+        ]
+    )
+
+    assert exit_code == 0
+    assert json.loads(output_path.read_text(encoding="utf-8"))["pv"]["iam_model"] == "physical"
+
+
 def test_run_dry_run_reports_bifacial_geometry(monkeypatch, tmp_path):
     monkeypatch.setattr(cli, "App", FakeApp)
     output_path = tmp_path / "resolved.json"

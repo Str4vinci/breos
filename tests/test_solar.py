@@ -761,6 +761,35 @@ class TestDiffuseIAM:
         assert dc.sum() > 0
 
 
+class TestIAMModel:
+    def _annual(self, weather, loc, pv_params, **kw):
+        return calculate_pv_production_dc(
+            weather_data=weather,
+            location=loc,
+            tilt=35,
+            surface_azimuth=180,
+            n_modules=1,
+            pv_params=pv_params,
+            freq="h",
+            **kw,
+        ).sum()
+
+    def test_default_matches_explicit_ashrae(self, synthetic_weather, porto_location, pv_params):
+        default = self._annual(synthetic_weather, porto_location, pv_params)
+        explicit = self._annual(synthetic_weather, porto_location, pv_params, iam_model="ashrae")
+        assert default == explicit
+
+    @pytest.mark.parametrize("iam_model", ("physical", "martin_ruiz"))
+    def test_selectable_model_changes_beam_path(self, synthetic_weather, porto_location, pv_params, iam_model):
+        ashrae = self._annual(synthetic_weather, porto_location, pv_params, iam_model="ashrae")
+        selected = self._annual(synthetic_weather, porto_location, pv_params, iam_model=iam_model)
+        assert selected != pytest.approx(ashrae)
+
+    def test_invalid_model_raises(self, synthetic_weather, porto_location, pv_params):
+        with pytest.raises(ValueError, match="Unknown IAM model"):
+            self._annual(synthetic_weather, porto_location, pv_params, iam_model="not-an-iam")
+
+
 class TestTemperatureModel:
     def _annual(self, weather, loc, pv_params, **kw):
         return calculate_pv_production_dc(
