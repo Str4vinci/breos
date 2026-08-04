@@ -30,6 +30,10 @@ load_profile = "demandlib_h0"      # ["1"] bundled H0 profile; `breos list load-
 # --- Array geometry ---------------------------------------------------------
 tilt = 35                          # [optimal for latitude] degrees from horizontal
 azimuth = 180                      # [equator-facing] 180 = south, 90 = east, 270 = west
+gcr = 0.35                         # [0.35] row slant length / row pitch
+bifacial_model = "none"            # ["none"] or "infinite_sheds"
+# pvrow_height = 1.5               # required for infinite_sheds; same unit as pitch
+# pvrow_pitch = 6.0                # required for infinite_sheds; same unit as height
 
 # --- Time + horizon ---------------------------------------------------------
 resolution = "h"                   # ["h"] "h" (hourly) or "15min"

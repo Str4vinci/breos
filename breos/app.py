@@ -45,6 +45,7 @@ class App:
 
         Optional keys include battery size, PV arrays, module selection, load
         profile, tracking, sky-diffusion model (``transposition_model``),
+        opt-in bifacial rear gain (``bifacial_model`` plus row geometry),
         resolution, projection years, cost and emissions presets, degradation,
         and inverter assumptions.
     """

@@ -121,6 +121,8 @@ def _pv_breakdown(pv: pd.Series) -> PVProductionBreakdown:
     return PVProductionBreakdown(
         horizontal_reference_dc=pv,
         poa_global_dc=pv,
+        front_effective_irradiance_dc=pv,
+        rear_gain_dc=zeros,
         effective_irradiance_dc=pv,
         module_dc=pv,
         dc_after_static_losses=pv,

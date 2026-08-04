@@ -152,15 +152,22 @@ class TestPVProduction:
         )
 
         front_only = calculate_pv_production_dc(**kwargs)
-        bifacial = calculate_pv_production_dc(
+        bifacial_breakdown = calculate_pv_production_breakdown(
             **kwargs,
             bifacial_model="infinite_sheds",
             gcr=0.35,
             pvrow_height=1.5,
             pvrow_pitch=6.0,
         )
+        bifacial = bifacial_breakdown.dc_after_losses
 
         assert bifacial.sum() > front_only.sum()
+        assert bifacial_breakdown.rear_gain_dc.sum() > 0
+        pd.testing.assert_series_equal(
+            bifacial_breakdown.front_effective_irradiance_dc + bifacial_breakdown.rear_gain_dc,
+            bifacial_breakdown.effective_irradiance_dc,
+            check_names=False,
+        )
 
     def test_rear_gain_increases_with_albedo(self, synthetic_weather, porto_location):
         kwargs = dict(

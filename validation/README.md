@@ -61,11 +61,13 @@ modeling the moment it lands.
 
 ## What the numbers mean
 
-BREOS is run twice per site: with its shipped default transposition
-(`isotropic`, systematically low on tilted planes) and with `perez` (what
-PVGIS and PVWatts effectively use). Comparing both against PVGIS quantifies
-the isotropic penalty per climate — evidence for the "recommended model
-profile" roadmap item.
+BREOS is run with the shipped default transposition (`isotropic`), `perez`, and
+focused model-choice variants for timestamp convention, diffuse IAM, roof
+temperature, and bifacial rear gain. Comparing isotropic and Perez against
+PVGIS quantifies the transposition effect. The bifacial rows compare the same
+600 W module front-only and with infinite-sheds rear gain on the same checked-in
+weather (`albedo=0.2`, `gcr=0.35`, row-center height 1.5, pitch 6.0), isolating
+the rear-side contribution from module sizing and weather.
 
 Alignment choices, so the three models see the same system: BREOS's default
 PVWatts loss stack (~14.1%) is passed to PVWatts as `losses` with

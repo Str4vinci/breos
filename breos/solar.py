@@ -369,6 +369,8 @@ class PVProductionBreakdown:
 
     horizontal_reference_dc: pd.Series
     poa_global_dc: pd.Series
+    front_effective_irradiance_dc: pd.Series
+    rear_gain_dc: pd.Series
     effective_irradiance_dc: pd.Series
     module_dc: pd.Series
     dc_after_static_losses: pd.Series
@@ -790,6 +792,13 @@ def _build_pv_production_breakdown(
     effective_irradiance_dc = (module_dc / pd.Series(safe_temperature_factor, index=times)).rename(
         "effective_irradiance_dc_W"
     )
+    front_effective_irradiance_dc = _scale_reference_dc(
+        effective_irradiance_dc,
+        detail.front_effective_irradiance,
+        detail.effective_irradiance,
+        name="front_effective_irradiance_dc_W",
+    )
+    rear_gain_dc = (effective_irradiance_dc - front_effective_irradiance_dc).rename("rear_gain_dc_W")
     poa_global_dc = _scale_reference_dc(
         effective_irradiance_dc,
         detail.poa_global,
@@ -816,6 +825,8 @@ def _build_pv_production_breakdown(
     return PVProductionBreakdown(
         horizontal_reference_dc=horizontal_reference_dc,
         poa_global_dc=poa_global_dc,
+        front_effective_irradiance_dc=front_effective_irradiance_dc,
+        rear_gain_dc=rear_gain_dc,
         effective_irradiance_dc=effective_irradiance_dc,
         module_dc=module_dc,
         dc_after_static_losses=dc_after_static,
@@ -1587,6 +1598,8 @@ def _sum_pv_breakdowns(breakdowns: list[PVProductionBreakdown]) -> PVProductionB
     return PVProductionBreakdown(
         horizontal_reference_dc=_sum_attr("horizontal_reference_dc"),
         poa_global_dc=_sum_attr("poa_global_dc"),
+        front_effective_irradiance_dc=_sum_attr("front_effective_irradiance_dc"),
+        rear_gain_dc=_sum_attr("rear_gain_dc"),
         effective_irradiance_dc=_sum_attr("effective_irradiance_dc"),
         module_dc=_sum_attr("module_dc"),
         dc_after_static_losses=_sum_attr("dc_after_static_losses"),
@@ -1736,6 +1749,8 @@ def calculate_multi_array_production_breakdown(
         return PVProductionBreakdown(
             horizontal_reference_dc=zeros.rename("horizontal_reference_dc_W"),
             poa_global_dc=zeros.rename("poa_global_dc_W"),
+            front_effective_irradiance_dc=zeros.rename("front_effective_irradiance_dc_W"),
+            rear_gain_dc=zeros.rename("rear_gain_dc_W"),
             effective_irradiance_dc=zeros.rename("effective_irradiance_dc_W"),
             module_dc=zeros.rename("module_dc_W"),
             dc_after_static_losses=zeros.rename("dc_after_static_losses_W"),

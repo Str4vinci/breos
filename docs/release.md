@@ -41,7 +41,7 @@ BREOS from the installed wheel instead of the source checkout. It also imports
 all 14 vendored BLAST models and verifies the installed BLAST license, DOE
 notice, and pinned upstream provenance.
 
-## 0.4.x Validation Matrix
+## Release Validation Matrix
 
 The `Tests` workflow runs the complete matrix on Python 3.11, 3.12, 3.13, and
 3.14. Python 3.12 also reports branch-aware core-package coverage, excluding
@@ -58,6 +58,7 @@ executable checks:
 | Leap-year and 15-minute behavior | `tests/test_load_profiles.py`, `tests/test_weather.py`, `tests/test_battery.py` |
 | Replacement resets model state and battery inventory | `tests/test_battery.py` |
 | Battery power limits and shared inverter interactions | `tests/test_battery.py`, `tests/test_inverter.py` |
+| Bifacial metadata is inert by default and rear gain is opt-in, attributable, and provenance-carrying | `tests/test_solar.py`, `tests/test_app.py`, `tests/test_validation_drift.py` |
 | Snapshot JSON round trips and schema rejection | `tests/test_battery_profiles.py` |
 | Range/horizon warnings deduplicate across continuation | `tests/test_blast_engine.py`, `tests/test_runners.py` |
 | Installed wheel contains models, provenance, license, and notice | `tools/verify_release_artifacts.py` |

@@ -64,6 +64,7 @@ SECTIONS: list[dict[str, Any]] = [
             ("power_w", "Power (W)", "text"),
             ("name", "Name", "text"),
             ("celltype", "Cell type", "text"),
+            ("bifaciality", "Bifaciality", "text"),
         ],
     },
     {
