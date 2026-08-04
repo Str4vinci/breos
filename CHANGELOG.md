@@ -20,6 +20,15 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 - Added bifacial configuration and rear-gain diagnostics to the PV loss
   waterfall and result provenance, a runnable ground-mount example, and paired
   front/rear regression benchmarks across the seven-site validation matrix.
+- Added optional `InverterConfig` datasheet limits: absolute maximum DC voltage
+  and power, the MPPT operating window and startup voltage, per-MPPT operating
+  and short-circuit current limits, and maximum parallel strings per MPPT. Each
+  is validated on its own and against the others when supplied — the MPPT
+  window must not be inverted and must sit within the DC voltage ceiling. Only
+  that physical ceiling constrains startup voltage; it is deliberately allowed
+  outside the MPPT window, because real datasheets quote a startup well below
+  the MPP range minimum. The fields default to `None`, are not read by any
+  model yet, and change no result.
 
 ### Changed
 - Bumped `provenance.ledger_schema_version` to `1.1`. The result schema gains
@@ -51,6 +60,14 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   into focused internal modules while preserving the `breos.App` facade,
   public solar-function signatures, defaults, and numerical paths. Config
   validation is preserved except for the `gcr` tightening noted above.
+- `InverterConfig` now validates its pre-existing fields on construction rather
+  than trusting callers: `nominal_power_w` and both cost fields must be finite
+  and non-negative, `dc_ac_ratio` finite and positive, `inverter_efficiency`
+  within `(0, 1]`, `mppt_channels` a positive integer, and `is_hybrid` a bool.
+  Code that built a physically impossible inverter — a negative rating, an
+  efficiency above 1, zero MPPT channels — used to construct successfully and
+  produce meaningless numbers downstream; it now raises `ValueError` at
+  construction. Configurations that were already valid are unaffected.
 
 ## [0.4.2] - 2026-07-27
 
