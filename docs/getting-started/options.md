@@ -33,7 +33,7 @@ Catalogue keys for the `pv_module` config key, from `breos.pv_modules.MODULES`.
 |---|---|---|---|
 | `Erlangen_445W` | 445 | Erlangen_445W | monoSi |
 | `Generic_400W` | 400 | Generic 400W (LONGi LR4-72HPH-400M ref) | monoSi |
-| `Generic_600W_Bifacial` | 600 | Generic 600W bifacial (utility-scale ref) | monoSi |
+| `Generic_600W_Bifacial` | 600 | Generic 600W bifacial (Trina Vertex bifaciality ref) | monoSi |
 | `Suntech_STP550S_STC` | 550 | Suntech_STP550S-C72/Vmh | monoSi |
 
 ## Cost presets

@@ -4,6 +4,11 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 
 ## [Unreleased]
 
+### Added
+- Added optional, validated `PVModuleParams.bifaciality` metadata and a sourced
+  maximum-power bifaciality value for the generic 600 W bifacial catalog entry.
+  The metadata alone does not activate rear-gain modeling or change production.
+
 ## [0.4.2] - 2026-07-27
 
 ### Changed

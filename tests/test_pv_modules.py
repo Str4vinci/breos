@@ -2,7 +2,7 @@
 
 import pytest
 
-from breos.pv_modules import MODULES, get_module, list_modules
+from breos.pv_modules import MODULES, get_module, get_module_info, list_modules
 
 
 class TestCatalog:
@@ -14,6 +14,12 @@ class TestCatalog:
     def test_unknown_module_error_lists_available(self):
         with pytest.raises(KeyError, match="not found. Available:"):
             get_module("No_Such_Module")
+
+    def test_bifacial_module_exposes_sourced_inert_metadata(self):
+        module = get_module("Generic_600W_Bifacial")
+
+        assert module.bifaciality == pytest.approx(0.70)
+        assert "Bifaciality: 70.0 %" in get_module_info("Generic_600W_Bifacial")
 
     def test_nomt_entry_removed(self):
         # The Suntech_STP550S_NOMT entry fed NMOT datasheet points (800 W/m2,
