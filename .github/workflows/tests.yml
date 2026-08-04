@@ -3,8 +3,11 @@ name: Tests
 on:
   push:
     branches: [main, develop, "release/**"]
+  # Deliberately unfiltered: a `branches` filter here matches the *base* of the
+  # pull request, so a PR stacked on another feature branch would get no run at
+  # all until it was retargeted at develop, which is the point where a failure
+  # is most expensive to discover.
   pull_request:
-    branches: [main, develop, "release/**"]
   # Slow endurance/multi-year tests run nightly, on demand, and as a release gate.
   schedule:
     - cron: "0 4 * * *"  # 04:00 UTC every day
