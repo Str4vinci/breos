@@ -44,6 +44,10 @@ MODULES: Dict[str, PVModuleParams] = {
     ),
     # -------------------------------------------------------------------------
     # 445W Mono-Si Module (Used in max_case.py - Erlangen, Germany)
+    # No manufacturer or datasheet is recorded for this entry, so its module
+    # efficiency is deliberately left unset rather than back-derived from an
+    # assumed frame area. The PVsyst temperature models fall back to
+    # breos.pv.temperature.DEFAULT_MODULE_EFFICIENCY for it.
     # -------------------------------------------------------------------------
     "Erlangen_445W": PVModuleParams(
         Mpp=445,  # W - Maximum Power Point
@@ -60,6 +64,10 @@ MODULES: Dict[str, PVModuleParams] = {
     # -------------------------------------------------------------------------
     # Generic 400W Module (common 72-cell / 144-half-cell residential panel)
     # Representative mono-PERC specs (LONGi LR4-72HPH-400M family).
+    # The published LR4-72HPH bins start well above 400 W, so no datasheet
+    # efficiency can be quoted for a 400 W unit of that family without inventing
+    # a frame area. Left unset: the PVsyst temperature models fall back to
+    # breos.pv.temperature.DEFAULT_MODULE_EFFICIENCY.
     # -------------------------------------------------------------------------
     "Generic_400W": PVModuleParams(
         Mpp=400,
@@ -76,11 +84,15 @@ MODULES: Dict[str, PVModuleParams] = {
     ),
     # -------------------------------------------------------------------------
     # Generic 600W Bifacial Module (utility-scale, high-voltage 144-half-cell)
-    # Representative mono-PERC specs. The 0.70 maximum-power bifaciality is
-    # sourced from Trina Solar's 600 W Vertex TSM-DEG20C.20 datasheet
-    # (TSM_EN_2020_PA1): https://www.trinasolar.com/sites/default/files/600WVertex.pdf
-    # It remains inert metadata until bifacial modeling is explicitly activated
-    # by the caller.
+    # Representative mono-PERC specs. The 0.70 maximum-power bifaciality, the
+    # -0.34 %/°C power coefficient, and the 21.2 % module efficiency are sourced
+    # from Trina Solar's 600 W Vertex TSM-DEG20C.20 datasheet (TSM_EN_2020_PA2),
+    # which lists 21.2 % at the 600 W bin of its STC electrical-data table:
+    # https://d2fp8gxcp7iq0s.cloudfront.net/documents/jz96t7q3r8tgfwMcpj79rB4LgxqrX9QsmzpaVycj.pdf
+    # The remaining electricals stay generic: Trina's module is a 120-cell
+    # 210 mm design (Voc 41.7 V), whereas this entry represents the 144-half-cell
+    # format. Bifaciality remains inert until bifacial modeling is explicitly
+    # activated by the caller.
     # -------------------------------------------------------------------------
     "Generic_600W_Bifacial": PVModuleParams(
         Mpp=600,
@@ -89,6 +101,7 @@ MODULES: Dict[str, PVModuleParams] = {
         Voc=53.7,
         Isc=14.25,
         celltype="monoSi",
+        Module_Efficiency=0.212,  # fraction - Module Efficiency (21.2 %)
         T_Pmax_pct=-0.34,
         T_Voc_pct=-0.26,
         T_Isc_pct=0.046,
@@ -172,6 +185,7 @@ T_Pmax:     {m.T_Pmax_pct} %/°C
 Name:       {m.Name}
 Efficiency: {f"{m.Module_Efficiency * 100:.1f} %" if m.Module_Efficiency is not None else "n/a"}
 Bifaciality: {f"{m.bifaciality * 100:.1f} %" if m.bifaciality is not None else "n/a"}
+NOCT:       {f"{m.NOCT:.1f} °C" if m.NOCT is not None else "n/a (not sourced in bundled catalog)"}
 """
 
 

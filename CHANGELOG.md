@@ -10,6 +10,11 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   bit-for-bit historical default; `"physical"` and `"martin_ruiz"` expose
   pvlib's respective defaults. When `diffuse_iam="marion"` is enabled, the
   same selected IAM model is integrated for the sky and ground components.
+- Added named SAPM temperature presets for the four pvlib/Sandia construction
+  and mounting combinations, plus strict opt-in `temperature_model="noct-sam"`
+  support. SAM NOCT refuses to run without sourced NOCT and module-efficiency
+  metadata; the bundled module catalog has no sourced NOCT yet, so no catalog
+  entry is activated by default or by implication.
 - Added optional, validated `PVModuleParams.bifaciality` metadata and a sourced
   maximum-power bifaciality value for the generic 600 W bifacial catalog entry.
   The metadata alone does not activate rear-gain modeling or change production.
@@ -52,6 +57,24 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   used to run and produce wrong numbers now fail at `App()` construction. This
   guards the config path only; callers going directly to `breos.solar` tracking
   functions are still responsible for their own `gcr`.
+- **PVsyst temperature presets now model a realistic module conversion
+  efficiency, which changes results for existing `pvsyst-*` configurations.**
+  pvlib's heat balance treats module efficiency as the share of absorbed energy
+  that leaves as electricity rather than heat, and its 0.1 default is a legacy
+  placeholder no crystalline-silicon module has approached in decades. BREOS now
+  passes a module's sourced `Module_Efficiency` when it has one and a
+  representative 0.20 otherwise, so every module is modelled consistently
+  instead of splitting on which catalog entry happens to carry metadata.
+  Expect cell temperatures roughly 2.5–3 °C lower and annual yield 1.0–1.3%
+  higher for `pvsyst-*` runs; the refreshed validation baseline moves only its
+  `perez_roof` variant, by that margin, across all seven sites. The `faiman`
+  default is untouched and all default results remain bit-for-bit unchanged.
+- Sourced the 21.2% module efficiency for the generic 600 W bifacial catalog
+  entry from the same Trina Vertex TSM-DEG20C.20 datasheet that already supplies
+  its bifaciality and power temperature coefficient, and refreshed that
+  citation's dead URL. The 445 W Erlangen and generic 400 W entries name no
+  datasheet that quotes an efficiency, so they intentionally stay unset and use
+  the representative default rather than a back-derived figure.
 - Refactored PV model-option resolution and the IAM and temperature kernels
   into focused internal modules while preserving the `breos.App` facade,
   public solar-function signatures, defaults, and numerical paths. Config

@@ -25,8 +25,9 @@ MONTH_LABELS = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "
 # mid-interval solar position (the full PVWatts/SAM convention); perez_diffuse
 # = perez plus Marion diffuse IAM; perez_physical and perez_martin_ruiz select
 # alternative beam/diffuse optics; perez_roof = perez with the PVsyst
-# semi-integrated (close roof mount) thermal preset — measures the rooftop
-# yield delta rather than matching the free-standing references. Keys are the
+# semi-integrated (close roof mount) thermal preset; perez_sapm_roof is the
+# comparable Sandia close-mount glass/glass preset. Both measure rooftop yield
+# deltas rather than matching the free-standing references. Keys are the
 # model names stored in results/baseline JSONs; values are
 # calculate_pv_production_ac keyword overrides. ``pv_module`` is consumed by
 # the harness before calling that function, allowing same-weather comparisons
@@ -44,6 +45,7 @@ MODEL_CONFIGS = {
         "diffuse_iam": "marion",
     },
     "perez_roof": {"transposition_model": "perez", "temperature_model": "pvsyst-semi-integrated"},
+    "perez_sapm_roof": {"transposition_model": "perez", "temperature_model": "sapm-close-mount-glass-glass"},
     "bifacial_front": {"pv_module": "Generic_600W_Bifacial", "transposition_model": "perez"},
     "bifacial_rear": {
         "pv_module": "Generic_600W_Bifacial",

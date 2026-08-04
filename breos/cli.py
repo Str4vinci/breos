@@ -235,7 +235,9 @@ def _load_options(category: str) -> list[dict[str, Any]]:
                 "power_w": module.Mpp,
                 "name": module.Name or key,
                 "celltype": module.celltype,
+                "module_efficiency": module.Module_Efficiency,
                 "bifaciality": module.bifaciality,
+                "noct_c": module.NOCT,
             }
             for key, module in sorted(MODULES.items())
         ]
@@ -295,7 +297,9 @@ def _format_options(category: str, rows: list[dict[str, Any]]) -> str:
         lines = []
         for row in rows:
             bifaciality = row["bifaciality"]
+            noct = row["noct_c"]
             suffix = f", bifaciality {bifaciality * 100:.1f}%" if bifaciality is not None else ""
+            suffix += f", NOCT {noct:.1f}°C" if noct is not None else ""
             lines.append(f"{row['key']}: {row['power_w']} W, {row['name']}{suffix}")
         return "\n".join(lines)
     if category == "cost-presets":
@@ -581,9 +585,9 @@ def build_parser() -> argparse.ArgumentParser:
         dest="temperature_model",
         choices=TEMPERATURE_MODELS,
         help=(
-            "Cell-temperature model / mounting preset. The pvsyst-* presets use PVsyst's documented "
-            "mounting coefficients; pick semi-integrated or insulated for roof mounts "
-            "(default: faiman, open rack)."
+            "Cell-temperature model / mounting preset. The pvsyst-* and sapm-* presets use documented "
+            "mounting coefficients; noct-sam additionally requires sourced module NOCT and efficiency "
+            "metadata (not yet bundled). Default: faiman, open rack."
         ),
     )
     run.add_argument(

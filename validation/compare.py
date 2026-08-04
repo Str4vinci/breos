@@ -61,6 +61,7 @@ def build_rows(results: dict):
         perez_physical = (res["models"].get("perez_physical") or {}).get("annual_kwh")
         perez_martin_ruiz = (res["models"].get("perez_martin_ruiz") or {}).get("annual_kwh")
         perez_roof = (res["models"].get("perez_roof") or {}).get("annual_kwh")
+        perez_sapm_roof = (res["models"].get("perez_sapm_roof") or {}).get("annual_kwh")
         bifacial_front = (res["models"].get("bifacial_front") or {}).get("annual_kwh")
         bifacial_rear = (res["models"].get("bifacial_rear") or {}).get("annual_kwh")
         pvgis_annual = pvgis.get("annual_kwh")
@@ -98,6 +99,7 @@ def build_rows(results: dict):
                 "pvgis_dev_diffuse": _pct(perez_diffuse, pvgis_annual) if perez_diffuse is not None else None,
                 "perez_roof": perez_roof,
                 "roof_delta": _pct(perez_roof, perez) if perez_roof is not None else None,
+                "sapm_roof_delta": _pct(perez_sapm_roof, perez) if perez_sapm_roof is not None else None,
                 "bifacial_gain": (
                     _pct(bifacial_rear, bifacial_front)
                     if bifacial_front is not None and bifacial_rear is not None
@@ -118,7 +120,8 @@ def print_table(rows, results):
     print(f"\nBREOS {results['breos_version']} validation — annual AC yield (kWh), 4 kWp system")
     header = (
         f"{'location':<16} {'BREOS iso':>10} {'BREOS perez':>12} {'perez+mid':>10} {'perez+IAM':>10} {'PVGIS':>8} "
-        f"{'Δperez':>8} {'Δ+mid':>8} {'Δ+IAM':>8} {'Δphys':>8} {'ΔMR':>8} {'Δiso':>8} {'roofΔ':>8} {'rearΔ':>8} "
+        f"{'Δperez':>8} {'Δ+mid':>8} {'Δ+IAM':>8} {'Δphys':>8} {'ΔMR':>8} {'Δiso':>8} "
+        f"{'PVsystΔ':>8} {'SAPMΔ':>8} {'rearΔ':>8} "
         f"{'PVWatts':>8} {'Δperez':>8}  notes"
     )
     print(header)
@@ -130,7 +133,7 @@ def print_table(rows, results):
             f"{_fmt_pct(r['pvgis_dev']):>8} {_fmt_pct(r['pvgis_dev_mid']):>8} "
             f"{_fmt_pct(r['pvgis_dev_diffuse']):>8} {_fmt_pct(r['physical_delta']):>8} "
             f"{_fmt_pct(r['martin_ruiz_delta']):>8} {_fmt_pct(r['pvgis_dev_iso']):>8} "
-            f"{_fmt_pct(r['roof_delta']):>8} {_fmt_pct(r['bifacial_gain']):>8} "
+            f"{_fmt_pct(r['roof_delta']):>8} {_fmt_pct(r['sapm_roof_delta']):>8} {_fmt_pct(r['bifacial_gain']):>8} "
             f"{_fmt_kwh(r['pvwatts']):>8} {_fmt_pct(r['pvwatts_dev']):>8}  {r['notes']}"
         )
 
@@ -161,6 +164,9 @@ def write_report(rows, results):
         "All three enable Marion diffuse IAM, so beam and diffuse optics use "
         "the same selected model.",
         "",
+        "The SAPM roof-mount column is the same comparison for `perez_sapm_roof` "
+        "(SAPM close-mount glass/glass). Neither roof-mount column is a reference-model claim.",
+        "",
         "The bifacial rear-gain column compares `bifacial_rear` with `bifacial_front` "
         "using the same 600 W module, weather, front-side Perez model, albedo 0.2, GCR 0.35, "
         "row-center height 1.5, and pitch 6.0 (height and pitch in the same arbitrary unit).",
@@ -169,8 +175,9 @@ def write_report(rows, results):
         "",
         "| Location | BREOS isotropic | BREOS perez | BREOS perez+mid-interval | BREOS perez+diffuse-IAM "
         "| PVGIS PVcalc | Δ perez vs PVGIS | Δ perez+mid vs PVGIS | Δ perez+diffuse vs PVGIS "
-        "| Physical IAM Δ | Martin-Ruiz IAM Δ | Roof-mount yield Δ | Bifacial rear-gain Δ | PVWatts v8 | Δ perez vs PVWatts | Notes |",
-        "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|",
+        "| Physical IAM Δ | Martin-Ruiz IAM Δ | PVsyst roof-mount yield Δ | SAPM roof-mount yield Δ "
+        "| Bifacial rear-gain Δ | PVWatts v8 | Δ perez vs PVWatts | Notes |",
+        "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|",
     ]
     for r in rows:
         lines.append(
@@ -180,6 +187,7 @@ def write_report(rows, results):
             f"| {_fmt_pct(r['pvgis_dev_diffuse'])} "
             f"| {_fmt_pct(r['physical_delta'])} | {_fmt_pct(r['martin_ruiz_delta'])} "
             f"| {_fmt_pct(r['roof_delta'])} "
+            f"| {_fmt_pct(r['sapm_roof_delta'])} "
             f"| {_fmt_pct(r['bifacial_gain'])} "
             f"| {_fmt_kwh(r['pvwatts'])} | {_fmt_pct(r['pvwatts_dev'])} "
             f"| {r['notes']} |"

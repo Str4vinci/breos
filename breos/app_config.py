@@ -13,6 +13,7 @@ from breos.degradation.profiles import ENABLED_BLAST_MODEL_KEYS, apply_battery_p
 from breos.economics import CostParams, calculate_costs
 from breos.emissions import EmissionsParams
 from breos.pv.model_options import is_known_model, is_valid_albedo, is_valid_gcr, normalise_model_name
+from breos.pv.temperature import validate_temperature_inputs
 from breos.pv_modules import MODULES, PVModuleParams, get_module
 from breos.resources import load_config_json
 from breos.solar import (
@@ -578,6 +579,23 @@ def resolve_pv_system(
     return pv_arrays, pv_params, n_modules, avg_module_power_w, system_kwp, tilt, azimuth
 
 
+def validate_temperature_module_metadata(
+    temperature_model: str,
+    pv_arrays: list[dict[str, Any]],
+    pv_params: PVModuleParams,
+) -> None:
+    """Validate any module metadata required by the selected thermal model.
+
+    Array configurations may name different modules, so SAM NOCT needs each
+    one checked during App config resolution rather than failing after weather
+    loading. The thermal kernel repeats this validation for direct solar calls.
+    """
+    model = normalise_model_name(temperature_model)
+    modules = [get_module(arr["module"]) for arr in pv_arrays] if pv_arrays else [pv_params]
+    for module in modules:
+        validate_temperature_inputs(model, module.Module_Efficiency, module.NOCT)
+
+
 def resolve_tracking(cfg: dict[str, Any], lat: float) -> tuple[str, float]:
     """Resolve tracker mode and orientation defaults."""
     tracking = cfg["tracking"]
@@ -669,6 +687,7 @@ def resolve_app_config(config: dict[str, Any]) -> ResolvedAppConfig:
 
     lat, lon, timezone, loc_key = resolve_location(cfg)
     pv_arrays, pv_params, n_modules, avg_module_power_w, system_kwp, tilt, azimuth = resolve_pv_system(cfg, lat)
+    validate_temperature_module_metadata(cfg["temperature_model"], pv_arrays, pv_params)
     tracking, axis_azimuth = resolve_tracking(cfg, lat)
 
     # Materialise the resolved module count (derived from pv_arrays when set)

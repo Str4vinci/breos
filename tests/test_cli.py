@@ -190,6 +190,41 @@ def test_list_modules_text_identifies_bifaciality(capsys):
     assert "bifaciality 70.0%" in output
 
 
+def test_temperature_model_flags_expose_sapm_and_reject_unsourced_noct_metadata(capsys):
+    sapm_exit = cli.main(
+        [
+            "run",
+            "--location",
+            "porto",
+            "--n-modules",
+            "10",
+            "--annual-consumption-kwh",
+            "4000",
+            "--temperature-model",
+            "sapm-close-mount-glass-glass",
+            "--dry-run",
+        ]
+    )
+    assert sapm_exit == 0
+
+    noct_exit = cli.main(
+        [
+            "run",
+            "--location",
+            "porto",
+            "--n-modules",
+            "10",
+            "--annual-consumption-kwh",
+            "4000",
+            "--temperature-model",
+            "noct-sam",
+            "--dry-run",
+        ]
+    )
+    assert noct_exit == 1
+    assert "NOCT metadata" in capsys.readouterr().err
+
+
 def test_list_battery_models_exposes_scientific_metadata(capsys):
     exit_code = cli.main(["list", "battery-models", "--json"])
 

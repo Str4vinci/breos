@@ -62,8 +62,8 @@ modeling the moment it lands.
 ## What the numbers mean
 
 BREOS is run with the shipped default transposition (`isotropic`), `perez`, and
-focused model-choice variants for timestamp convention, diffuse IAM, roof
-temperature, and bifacial rear gain. Comparing isotropic and Perez against
+focused model-choice variants for timestamp convention, diffuse IAM, PVsyst
+and SAPM roof-temperature presets, and bifacial rear gain. Comparing isotropic and Perez against
 PVGIS quantifies the transposition effect. The bifacial rows compare the same
 600 W module front-only and with infinite-sheds rear gain on the same checked-in
 weather (`albedo=0.2`, `gcr=0.35`, row-center height 1.5, pitch 6.0), isolating
