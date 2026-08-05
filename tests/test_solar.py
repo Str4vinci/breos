@@ -76,6 +76,11 @@ class TestPVModuleParams:
         assert params.celltype == "monoSi"
         assert params.gamma_pmp == -0.30
         assert params.bifaciality is None
+        assert params.NOCT is None
+
+    def test_noct_is_optional_metadata_appended_after_existing_fields(self):
+        assert _module_params().NOCT is None
+        assert _module_params(NOCT=45.0).NOCT == 45.0
 
     @pytest.mark.parametrize("bifaciality", [0.0, -0.1, 1.01])
     def test_bifaciality_must_be_a_physical_ratio(self, bifaciality):
@@ -232,6 +237,7 @@ class TestPVProduction:
             solarpos,
             surface_tilt=35,
             surface_azimuth=180,
+            pv_params=_module_params(),
             model_options=resolve_pv_model_options(),
         )
 
@@ -244,7 +250,7 @@ class TestPVProduction:
         # temperature model.
         thermal_inputs = _spy_on_faiman(monkeypatch)
         weather_aligned, solarpos = self._detail_inputs(synthetic_weather.iloc[: 24 * 7], porto_location)
-        geometry = dict(surface_tilt=35, surface_azimuth=180)
+        geometry = dict(surface_tilt=35, surface_azimuth=180, pv_params=_module_params())
 
         front_only = solar._compute_irradiance_and_cell_temp_detail(
             weather_aligned,
@@ -761,6 +767,35 @@ class TestDiffuseIAM:
         assert dc.sum() > 0
 
 
+class TestIAMModel:
+    def _annual(self, weather, loc, pv_params, **kw):
+        return calculate_pv_production_dc(
+            weather_data=weather,
+            location=loc,
+            tilt=35,
+            surface_azimuth=180,
+            n_modules=1,
+            pv_params=pv_params,
+            freq="h",
+            **kw,
+        ).sum()
+
+    def test_default_matches_explicit_ashrae(self, synthetic_weather, porto_location, pv_params):
+        default = self._annual(synthetic_weather, porto_location, pv_params)
+        explicit = self._annual(synthetic_weather, porto_location, pv_params, iam_model="ashrae")
+        assert default == explicit
+
+    @pytest.mark.parametrize("iam_model", ("physical", "martin_ruiz"))
+    def test_selectable_model_changes_beam_path(self, synthetic_weather, porto_location, pv_params, iam_model):
+        ashrae = self._annual(synthetic_weather, porto_location, pv_params, iam_model="ashrae")
+        selected = self._annual(synthetic_weather, porto_location, pv_params, iam_model=iam_model)
+        assert selected != pytest.approx(ashrae)
+
+    def test_invalid_model_raises(self, synthetic_weather, porto_location, pv_params):
+        with pytest.raises(ValueError, match="Unknown IAM model"):
+            self._annual(synthetic_weather, porto_location, pv_params, iam_model="not-an-iam")
+
+
 class TestTemperatureModel:
     def _annual(self, weather, loc, pv_params, **kw):
         return calculate_pv_production_dc(
@@ -820,6 +855,15 @@ class TestTemperatureModel:
     def test_invalid_model_raises(self, synthetic_weather, porto_location, pv_params):
         with pytest.raises(ValueError, match="Unknown temperature model"):
             self._annual(synthetic_weather, porto_location, pv_params, temperature_model="sapm")
+
+    def test_noct_sam_requires_complete_module_metadata(self, synthetic_weather, porto_location, pv_params):
+        # The shared fixture is the catalog Suntech module: it has sourced
+        # efficiency but no sourced NOCT, so the strict model rejects it.
+        with pytest.raises(ValueError, match="NOCT metadata"):
+            self._annual(synthetic_weather, porto_location, pv_params, temperature_model="noct-sam")
+
+        with_metadata = _module_params(Module_Efficiency=0.21, NOCT=45.0)
+        assert self._annual(synthetic_weather, porto_location, with_metadata, temperature_model="noct-sam") > 0
 
     def test_tracking_accepts_preset(self, synthetic_weather, porto_location, pv_params):
         dc = calculate_pv_production_dc_tracking(
