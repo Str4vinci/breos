@@ -13,10 +13,13 @@
 [![License: BSD-3](https://img.shields.io/badge/License-BSD_3--Clause-blue.svg)](LICENSE)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 
-BREOS is a Python library for simulating and optimizing household PV + battery
-energy systems (weather, PV production, battery aging, economics, emissions,
-and multi-objective sizing) behind one stable `breos.App` facade, with
-lower-level modules for building custom study pipelines.
+BREOS is a Python library for simulating and optimizing PV + battery energy
+systems (weather, PV production, battery aging, economics, emissions, and
+multi-objective sizing) behind one stable `breos.App` facade, with lower-level
+modules for building custom study pipelines. The PV modeling is powered by
+[pvlib python](https://pvlib-python.readthedocs.io/), which supplies the solar
+position, irradiance, cell-temperature, and single-diode physics BREOS builds
+its production pipeline on.
 
 **📖 Full documentation: [breos.readthedocs.io](https://breos.readthedocs.io/)**
 
@@ -24,14 +27,14 @@ lower-level modules for building custom study pipelines.
 
 - **Weather** — TMY from PVGIS/NSRDB and historical data from Open-Meteo, at hourly or 15-minute resolution.
 - **PV production** — pvlib CEC single-diode model, with a small example module catalog to get started.
-- **Multi-array roofs** — combine multiple faces/orientations (e.g. east-west) at the DC stage instead of one representative tilt.
+- **Multi-array systems** — combine multiple faces/orientations (e.g. an east-west roof) at the DC stage instead of one representative tilt.
 - **Battery** — energy balance with calendar + cycle aging (Naumann 2020, Lam 2025) and field-calibrated LFP parameters.
 - **Economics** — NPV, LCOE, breakeven, and cost projections with configurable tariffs and inflation.
 - **Monte Carlo** — weather-year and demand resampling for NPV, payback, grid-independence, LCOE, and SoH distributions.
 - **Optimization** — multi-objective PV/battery sizing (pymoo NSGA-II), tilt optimization, and sizing sweeps.
 - **Emissions** — CO<sub>2</sub> savings and projections.
 - **Visualization** — publication-ready plots for energy balances, degradation, breakeven, and Pareto fronts.
-- **Bring your own data** — every layer accepts custom inputs: PV module parameters, battery degradation coefficients, weather CSVs, residential load profiles, and cost/tariff/emissions assumptions. The packaged presets are starting points, not fixed defaults.
+- **Bring your own data** — every layer accepts custom inputs: PV module parameters, battery degradation coefficients, weather CSVs, load profiles, and cost/tariff/emissions assumptions. The packaged presets are starting points, not fixed defaults.
 
 ## Installation
 
@@ -126,6 +129,46 @@ If you use BREOS in your research, please cite the preprint:
 }
 ```
 
+BREOS results that depend on PV production also depend on pvlib. Please cite it
+alongside BREOS:
+
+```bibtex
+@article{anderson2023pvlib,
+  author  = {Anderson, K. and Hansen, C. and Holmgren, W. and Jensen, A. and Mikofski, M. and Driesse, A.},
+  title   = {pvlib python: 2023 project update},
+  journal = {Journal of Open Source Software},
+  volume  = {8},
+  number  = {92},
+  pages   = {5994},
+  year    = {2023},
+  doi     = {10.21105/joss.05994}
+}
+```
+
+pvlib additionally asks that you cite the Zenodo DOI for the specific pvlib
+version you used.
+
+## Acknowledgements
+
+BREOS stands on work done by others:
+
+- **[pvlib python](https://pvlib-python.readthedocs.io/)** — the PV modeling
+  foundation: solar position, irradiance transposition, IAM, cell temperature,
+  CEC single-diode evaluation, PVWatts losses, tracking, and inverter helpers.
+  BREOS composes these into a production pipeline with staged losses,
+  degradation, and multi-array handling; the underlying physics is pvlib's.
+- **[BLAST-Lite](https://github.com/NatLabRockies/BLAST-Lite)** (NREL) —
+  vendored battery life models.
+- **[demandlib](https://demandlib.readthedocs.io/)** — basis for the bundled
+  example H0 load profiles.
+- **[pymoo](https://pymoo.org/)** — NSGA-II multi-objective optimization.
+- **PVGIS (EU JRC)**, **NREL NSRDB**, and **Open-Meteo** — weather and solar
+  resource data.
+
+Model choices, defaults, and any errors in how these are combined are BREOS's
+own, not those of the upstream projects. See
+[ATTRIBUTIONS.md](ATTRIBUTIONS.md) for the full list with licenses and terms.
+
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md). Feature work happens on branches off
@@ -133,7 +176,10 @@ See [CONTRIBUTING.md](CONTRIBUTING.md). Feature work happens on branches off
 
 ## Contact
 
-For questions, research collaboration, or support: lrodrigues@fe.up.pt.
+Usage questions and feature ideas:
+[GitHub Discussions](https://github.com/Str4vinci/breos/discussions).
+Bugs: [issues](https://github.com/Str4vinci/breos/issues).
+Research collaboration or private enquiries: lrodrigues@fe.up.pt.
 
 ## License
 

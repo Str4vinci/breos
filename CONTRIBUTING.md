@@ -119,4 +119,11 @@ Open an issue on [GitHub](https://github.com/Str4vinci/breos/issues) with:
 
 ## Questions
 
-For questions or collaboration, reach out at lrodrigues@fe.up.pt.
+For usage questions, modeling assumptions, and anything where the answer is
+likely useful to someone else, use
+[GitHub Discussions](https://github.com/Str4vinci/breos/discussions) — the
+Q&A category for questions, Ideas for feature proposals that are not yet a
+concrete issue.
+
+For research collaboration or anything that does not belong in public, reach
+out at lrodrigues@fe.up.pt.
