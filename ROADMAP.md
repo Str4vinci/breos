@@ -15,14 +15,19 @@ intentions, not commitments; reassess after each release.
   troubleshooting, dependency hygiene, coverage automation, cross-platform
   smoke tests, reproducible BLAST parity tooling, and an internal degradation
   lifecycle protocol. No scientific-model, dispatch, or public result changes.
-- **0.5.0** — a focused PV-fidelity release delivered as independently
-  reviewable slices: bifacial rear gain (activation key, explicit waterfall
-  stage, and benchmark rows); a behavior-preserving internal PV-model-core
-  refactor; selectable pvlib IAM models; sourced cell-temperature fidelity;
-  and a recommended-configuration example that includes an equal-nameplate
-  2×600 W bifacial versus 3×400 W monofacial comparison. Existing defaults
-  remain bit-for-bit compatible unless a documented correctness fix is
-  explicitly selected.
+- **0.5.0** — completed PV-fidelity release, delivered as independently
+  reviewable slices: opt-in bifacial rear gain (activation key, explicit
+  waterfall stage, and benchmark rows); a behavior-preserving internal
+  PV-model-core refactor; selectable pvlib IAM models; sourced
+  cell-temperature fidelity; and a recommended-configuration example with an
+  equal-nameplate 2×600 W bifacial versus 3×400 W monofacial comparison.
+  Shipped alongside them: validated inverter datasheet limits, extracted
+  battery dispatch seams, a reorganized documentation site, and broader
+  package metadata. Default results stay bit-for-bit compatible apart from
+  three documented correctness fixes, each confined to a non-default
+  configuration: multi-array tracking now honours the top-level `gcr`, an
+  out-of-range `gcr` is rejected instead of silently backtracking, and the
+  `pvsyst-*` temperature presets model a realistic module efficiency.
 - **0.5.x** — the declarative config schema (behavior-preserving, and
   deliberately before TOU adds another cluster of config keys);
   horizon-profile input; and further internal maintainability work if needed.
@@ -37,37 +42,41 @@ known systematic modeling gaps, and publishing reproducible evidence that
 the numbers are right. This work takes priority over architectural
 refactoring (see the deferred adapter layer at the bottom of this document).
 
-### 0.5.0 PV-fidelity delivery plan
+### 0.5.0 PV-fidelity delivery (completed)
 
-Keep the public `breos.App` facade and `breos.solar` function signatures
-stable while landing the release as a local/PR stack in this order:
+Delivered as a PR stack that kept the public `breos.App` facade and
+`breos.solar` function signatures stable:
 
-1. **PV model core refactor:** introduce one internal resolved-options object
-   for transposition, ground reflectance, IAM, temperature, and bifacial
-   choices; extract narrow IAM and temperature kernels; and leave all public
-   defaults, errors, and numerical results unchanged. This is deliberately a
-   targeted seam for the next two features, not the deferred project-wide
-   third-party-adapter rewrite.
-2. **IAM selection (delivered):** pvlib's `ashrae`, `physical`, and
-   `martin_ruiz` beam models are selectable via `iam_model`, with `ashrae`
-   retaining the historical default. When diffuse IAM is enabled, pvlib's
-   Marion solid-angle integration uses the same selected IAM model so beam
-   and diffuse optics cannot silently disagree.
-3. **Temperature fidelity:** delivered on `feature/0.5.0-temperature-models`:
-   PVsyst consumes sourced module efficiency, named SAPM
-   construction/mounting presets are selectable, and `noct-sam` strictly
+1. **Bifacial rear gain:** inert validated module `bifaciality` metadata,
+   then opt-in `bifacial_model="infinite_sheds"` rear gain for fixed,
+   tracking, and mixed multi-array systems, with rear irradiance feeding both
+   DC power and cell temperature, an explicit loss-waterfall stage, provenance,
+   a runnable ground-mount example, and paired front/rear benchmark rows.
+2. **PV model core refactor:** one internal resolved-options object for
+   transposition, ground reflectance, IAM, temperature, and bifacial choices,
+   plus narrow IAM and temperature kernels, leaving public defaults, errors,
+   and numerical results unchanged. It was a targeted seam for the two
+   features that followed, not the deferred project-wide third-party-adapter
+   rewrite.
+3. **IAM selection:** pvlib's `ashrae`, `physical`, and `martin_ruiz` beam
+   models are selectable via `iam_model`, with `ashrae` retaining the
+   historical default. When diffuse IAM is enabled, pvlib's Marion
+   solid-angle integration uses the same selected IAM model so beam and
+   diffuse optics cannot silently disagree.
+4. **Temperature fidelity:** PVsyst consumes sourced module efficiency, named
+   SAPM construction/mounting presets are selectable, and `noct-sam` strictly
    requires NOCT plus efficiency metadata. No bundled catalog entry has a
    sourced NOCT yet, so catalog activation remains intentionally deferred.
-4. **Guidance and evidence (delivered):** the recommended PV configuration
-   leaves defaults unchanged; IAM/temperature choices have seven-site
-   benchmark rows; and the equal-nameplate comparison separates 2×600 W
-   bifacial front-only and rear-gain results from 3×400 W monofacial results.
-   Its albedo, GCR, row height/pitch, inverter loading, and front-shading
-   limitation are recorded beside the result.
+5. **Guidance and evidence:** the recommended PV configuration leaves defaults
+   unchanged; IAM/temperature choices have seven-site benchmark rows; and the
+   equal-nameplate comparison separates 2×600 W bifacial front-only and
+   rear-gain results from 3×400 W monofacial results. Its albedo, GCR, row
+   height/pitch, inverter loading, and front-shading limitation are recorded
+   beside the result.
 
-Each slice gets its own compatibility tests and benchmark evidence. Horizon
-profiles, string-aware electrical validation, currency, and time-of-use
-tariffs remain outside 0.5.0.
+Each slice landed with its own compatibility tests and benchmark evidence.
+Horizon profiles, string-aware electrical validation, currency, and
+time-of-use tariffs stayed outside 0.5.0, as planned.
 
 ### Standing validation and benchmark suite
 
@@ -185,6 +194,16 @@ Ongoing docs hygiene:
   current dependency versions actually produce.
 - Keep security support tables, release-matrix headings, example commands, and
   version-specific limitation text aligned with the latest release.
+
+Completed for 0.5.0:
+
+- Reorganized the documentation site around task-oriented guides, model
+  assumptions, and API reference, moved internal design plans, ADRs, and
+  maintainer procedures to repository-only documentation, and replaced stale
+  0.3.x capability references with version-neutral wording.
+- Broadened PyPI classifiers and keywords, credited pvlib and the other
+  upstream projects and data sources, and routed usage questions and feature
+  ideas to GitHub Discussions.
 
 Completed for 0.4.2:
 
