@@ -30,7 +30,15 @@
       ~InverterConfig.dc_ac_ratio
       ~InverterConfig.inverter_efficiency
       ~InverterConfig.is_hybrid
+      ~InverterConfig.max_dc_power_w
+      ~InverterConfig.max_dc_voltage_v
+      ~InverterConfig.max_input_current_per_mppt_a
+      ~InverterConfig.max_mppt_voltage_v
+      ~InverterConfig.max_short_circuit_current_per_mppt_a
+      ~InverterConfig.max_strings_per_mppt
+      ~InverterConfig.min_mppt_voltage_v
       ~InverterConfig.mppt_channels
       ~InverterConfig.nominal_power_w
+      ~InverterConfig.startup_voltage_v
    
    

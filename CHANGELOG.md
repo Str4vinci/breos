@@ -4,6 +4,8 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-08-05
+
 ### Added
 - Added an explicit recommended rooftop PV example and a reproducible
   seven-site equal-nameplate comparison of 3×400 W monofacial, 2×600 W
