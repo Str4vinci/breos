@@ -29,12 +29,12 @@ Preset keys for the `location` config key, from `breos/data/configs/locations.js
 
 Catalogue keys for the `pv_module` config key, from `breos.pv_modules.MODULES`.
 
-| Key | Power (W) | Name | Cell type | Bifaciality |
-|---|---|---|---|---|
-| `Erlangen_445W` | 445 | Erlangen_445W | monoSi | — |
-| `Generic_400W` | 400 | Generic 400W (LONGi LR4-72HPH-400M ref) | monoSi | — |
-| `Generic_600W_Bifacial` | 600 | Generic 600W bifacial (Trina Vertex bifaciality ref) | monoSi | 0.7 |
-| `Suntech_STP550S_STC` | 550 | Suntech_STP550S-C72/Vmh | monoSi | — |
+| Key | Power (W) | Name | Cell type | Efficiency | Bifaciality | NOCT (°C) |
+|---|---|---|---|---|---|---|
+| `Erlangen_445W` | 445 | Erlangen_445W | monoSi | — | — | — |
+| `Generic_400W` | 400 | Generic 400W (LONGi LR4-72HPH-400M ref) | monoSi | — | — | — |
+| `Generic_600W_Bifacial` | 600 | Generic 600W bifacial (Trina Vertex bifaciality ref) | monoSi | 0.212 | 0.7 | — |
+| `Suntech_STP550S_STC` | 550 | Suntech_STP550S-C72/Vmh | monoSi | 0.213 | — | — |
 
 ## Cost presets
 

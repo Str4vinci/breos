@@ -65,6 +65,7 @@ executable checks:
 | Replacement resets model state and battery inventory | `tests/test_battery.py` |
 | Battery power limits and shared inverter interactions | `tests/test_battery.py`, `tests/test_inverter.py` |
 | Bifacial metadata is inert by default and rear gain is opt-in, attributable, and provenance-carrying | `tests/test_solar.py`, `tests/test_app.py`, `tests/test_validation_drift.py` |
+| Legacy PV defaults remain stable while IAM, temperature, and recommended/equal-nameplate rows are reproducible | `tests/test_pv_model_core.py`, `tests/test_solar.py`, `tests/test_validation_drift.py` |
 | Snapshot JSON round trips and schema rejection | `tests/test_battery_profiles.py` |
 | Range/horizon warnings deduplicate across continuation | `tests/test_blast_engine.py`, `tests/test_runners.py` |
 | Installed wheel contains models, provenance, license, and notice | `tools/verify_release_artifacts.py` |

@@ -3,7 +3,7 @@
 This policy defines the scientific and public-API gates for battery-degradation
 changes. Implementation details and the current model catalog live in
 [BLAST Degradation Engine](blast-degradation-engine.md) and
-[Battery degradation models](../api/degradation-models.md).
+[Battery degradation models](../../docs/api/degradation-models.md).
 
 ## Stable public behavior
 
@@ -94,5 +94,5 @@ Keep these records separate:
   unmodified BLAST-Lite source and be reviewed as a scientific data change.
 
 The executable artifact and fixture gates are maintained in
-[Public Release Checklist](../release.md); this policy does not duplicate that
+[Public Release Checklist](../../maintainers/release-checklist.md); this policy does not duplicate that
 release procedure.

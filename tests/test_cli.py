@@ -2,6 +2,7 @@
 
 import csv
 import json
+from pathlib import Path
 
 from breos import cli
 
@@ -190,6 +191,41 @@ def test_list_modules_text_identifies_bifaciality(capsys):
     assert "bifaciality 70.0%" in output
 
 
+def test_temperature_model_flags_expose_sapm_and_reject_unsourced_noct_metadata(capsys):
+    sapm_exit = cli.main(
+        [
+            "run",
+            "--location",
+            "porto",
+            "--n-modules",
+            "10",
+            "--annual-consumption-kwh",
+            "4000",
+            "--temperature-model",
+            "sapm-close-mount-glass-glass",
+            "--dry-run",
+        ]
+    )
+    assert sapm_exit == 0
+
+    noct_exit = cli.main(
+        [
+            "run",
+            "--location",
+            "porto",
+            "--n-modules",
+            "10",
+            "--annual-consumption-kwh",
+            "4000",
+            "--temperature-model",
+            "noct-sam",
+            "--dry-run",
+        ]
+    )
+    assert noct_exit == 1
+    assert "NOCT metadata" in capsys.readouterr().err
+
+
 def test_list_battery_models_exposes_scientific_metadata(capsys):
     exit_code = cli.main(["list", "battery-models", "--json"])
 
@@ -253,6 +289,17 @@ emissions_country = "PT"
     assert "Inverter AC rating" in output
 
 
+def test_recommended_pv_example_validates(capsys):
+    config_path = Path(__file__).resolve().parents[1] / "configs" / "examples" / "recommended-pv.toml"
+
+    exit_code = cli.main(["validate-config", str(config_path)])
+
+    assert exit_code == 0
+    output = capsys.readouterr().out
+    assert "Config OK" in output
+    assert "PV: 8 modules, 4.400 kWp" in output
+
+
 def test_run_dry_run_outputs_resolved_config_without_simulating(monkeypatch, tmp_path):
     monkeypatch.setattr(cli, "App", FakeApp)
     FakeApp.simulated = False
@@ -280,6 +327,30 @@ battery_kwh = 5.0
     assert 14.0 < output["pv"]["losses"]["combined_pct"] < 15.0
     assert output["battery"]["degradation_engine"] == "native"
     assert output["battery"]["blast_model"] is None
+
+
+def test_run_iam_model_override_is_reflected_in_dry_run(tmp_path):
+    output_path = tmp_path / "resolved.json"
+
+    exit_code = cli.main(
+        [
+            "run",
+            "--location",
+            "porto",
+            "--n-modules",
+            "8",
+            "--annual-consumption-kwh",
+            "3000",
+            "--iam-model",
+            "physical",
+            "--dry-run",
+            "--output",
+            str(output_path),
+        ]
+    )
+
+    assert exit_code == 0
+    assert json.loads(output_path.read_text(encoding="utf-8"))["pv"]["iam_model"] == "physical"
 
 
 def test_run_dry_run_reports_bifacial_geometry(monkeypatch, tmp_path):

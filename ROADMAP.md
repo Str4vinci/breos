@@ -48,21 +48,22 @@ stable while landing the release as a local/PR stack in this order:
    defaults, errors, and numerical results unchanged. This is deliberately a
    targeted seam for the next two features, not the deferred project-wide
    third-party-adapter rewrite.
-2. **IAM selection:** expose pvlib's `ashrae`, `physical`, and `martin_ruiz`
-   beam models, with `ashrae` retaining the historical default. When diffuse
-   IAM is enabled, use pvlib's Marion solid-angle integration with the same
-   selected IAM model so beam and diffuse optics cannot silently disagree.
-3. **Temperature fidelity:** pass sourced module efficiency into the existing
-   PVsyst heat-balance path, add named SAPM construction/mounting presets, and
-   add SAM NOCT only for modules with sourced NOCT and efficiency metadata.
-   Never invent missing module thermal inputs. Record any intentional change
-   to an already opt-in model in the changelog and validation report.
-4. **Guidance and evidence:** publish a recommended PV configuration without
-   changing defaults, add IAM/temperature rows to the seven-site validation
-   report, and add a practical equal-nameplate comparison of 2×600 W
-   bifacial against 3×400 W monofacial modules. State the albedo, GCR, row
-   height/pitch, inverter loading, and the front-shading limitation beside the
-   result.
+2. **IAM selection (delivered):** pvlib's `ashrae`, `physical`, and
+   `martin_ruiz` beam models are selectable via `iam_model`, with `ashrae`
+   retaining the historical default. When diffuse IAM is enabled, pvlib's
+   Marion solid-angle integration uses the same selected IAM model so beam
+   and diffuse optics cannot silently disagree.
+3. **Temperature fidelity:** delivered on `feature/0.5.0-temperature-models`:
+   PVsyst consumes sourced module efficiency, named SAPM
+   construction/mounting presets are selectable, and `noct-sam` strictly
+   requires NOCT plus efficiency metadata. No bundled catalog entry has a
+   sourced NOCT yet, so catalog activation remains intentionally deferred.
+4. **Guidance and evidence (delivered):** the recommended PV configuration
+   leaves defaults unchanged; IAM/temperature choices have seven-site
+   benchmark rows; and the equal-nameplate comparison separates 2×600 W
+   bifacial front-only and rear-gain results from 3×400 W monofacial results.
+   Its albedo, GCR, row height/pitch, inverter loading, and front-shading
+   limitation are recorded beside the result.
 
 Each slice gets its own compatibility tests and benchmark evidence. Horizon
 profiles, string-aware electrical validation, currency, and time-of-use
@@ -132,7 +133,7 @@ documentation live in one place.
   deliberately scheduled *before* the 0.6.0 TOU/currency work adds another
   cluster of config keys, and deserves its own release slot rather than
   riding along a feature release.
-- **Coordination with the [function-level refactor plan](docs/architecture/0.4x-refactor-plan.md):** earlier internal
+- **Coordination with the [function-level refactor plan](design/architecture/0.4x-refactor-plan.md):** earlier internal
   validation cleanup should create reusable boundaries for the full schema,
   not throwaway helpers that need another rewrite in 0.5.x.
 - **The hard part is error-message parity**, not the schema itself: the
@@ -264,11 +265,11 @@ end-to-end through `build_dc_system_base` and the multi-array path):
   the existing Faiman and PVsyst presets. Let the PVsyst path consume real
   module efficiency instead of pvlib's 0.1 fallback. `noct_sam` must require
   NOCT plus efficiency rather than assuming either value.
-- **IAM model choice (0.5.0):** expose pvlib's `martin_ruiz` and `physical`
-  beam models alongside the existing `ashrae` path, and extend Marion diffuse
-  IAM with the same selection. SAPM IAM remains later work because its
-  module-specific polynomial coefficients are not in BREOS's CEC-style
-  catalog.
+- **IAM model choice (delivered for 0.5.0):** `iam_model` exposes pvlib's
+  `martin_ruiz` and `physical` beam models alongside the historical `ashrae`
+  path, and Marion diffuse IAM follows that same selection. SAPM IAM remains
+  later work because its module-specific polynomial coefficients are not in
+  BREOS's CEC-style catalog.
 - **DC-side loss refinements** — optional time-series ohmic/soiling/snow models in
   place of (parts of) the flat PVWatts loss stack, where inputs allow.
 - Non-goal: replacing the CEC single-diode core or the PVWatts loss model as the
@@ -334,7 +335,7 @@ a proposed PV layout is electrically buildable. Future work should add
 string-aware validation and, later, string-aware inverter modeling when callers
 provide module, inverter, environment, MPPT, and string-topology data.
 
-- Design note: [docs/architecture/string-inverter-sizing.md](docs/architecture/string-inverter-sizing.md)
+- Design note: [design/architecture/string-inverter-sizing.md](design/architecture/string-inverter-sizing.md)
 - First, add a pure validation API for string voltage windows, startup
   voltage, MPPT current limits, parallel-string compatibility, and DC/AC ratio
   warnings.
@@ -421,7 +422,7 @@ preset twice.
   signals) as an opt-in strategy — greedy self-consumption stays the
   default. This needs an explicit dispatch-strategy contract, specified in a
   design doc before implementation (à la
-  `docs/architecture/string-inverter-sizing.md`). The seam begins around
+  `design/architecture/string-inverter-sizing.md`). The seam begins around
   `_dispatch_dc_step` in `breos/battery.py`, which is per-step and
   memoryless; price-aware dispatch needs lookahead, and since TOU presets
   are static and the simulation deterministic, a perfect-foresight day-ahead
@@ -512,7 +513,7 @@ package. The current `Location` parameter exposed by
 a `pvlib.Location`, which means BREOS does not own its own public API.
 
 - Tracking issue: [#11](https://github.com/Str4vinci/breos/issues/11)
-- Design: [docs/architecture/third-party-wrapping.md](docs/architecture/third-party-wrapping.md)
+- Design: [design/architecture/third-party-wrapping.md](design/architecture/third-party-wrapping.md)
 - Scope: pvlib first (Phase 1), then scipy / rainflow (Phase 2), then IO
   clients (Phase 3). Pandas, numpy, and matplotlib are kept direct.
 - Estimated effort: ~3–4 weeks of focused work, split into many small

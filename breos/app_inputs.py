@@ -123,6 +123,7 @@ def build_pv_production_breakdown(
         "surface_type": cfg["surface_type"],
         "model_perez": cfg["model_perez"],
         "solar_position": cfg["solar_position"],
+        "iam_model": cfg["iam_model"],
         "diffuse_iam": cfg["diffuse_iam"],
         "temperature_model": cfg["temperature_model"],
         "bifacial_model": cfg["bifacial_model"],

@@ -69,11 +69,21 @@ SOLAR_POSITION_METHODS = (
 )
 DEFAULT_SOLAR_POSITION = "interval-start"
 
+# Beam incidence-angle modifier. ``ashrae`` is BREOS's historical model and
+# remains the default. The alternatives expose pvlib's physical optics and
+# Martin-Ruiz empirical model without adding BREOS-owned fitting parameters.
+IAM_MODELS = (
+    "ashrae",
+    "physical",
+    "martin_ruiz",
+)
+DEFAULT_IAM_MODEL = "ashrae"
+
 # Whether the incidence-angle modifier is applied to the diffuse POA
 # components. ``none`` applies IAM to beam only, with diffuse passing at 1.0
 # — the default and the only prior behaviour, a known ~0.5-1% systematic
 # overestimate. ``marion`` additionally weighs the sky- and ground-diffuse
-# components with the same ashrae IAM integrated over their view factors
+# components with the selected beam IAM integrated over their view factors
 # (Marion 2017, via pvlib's ``iam.marion_diffuse``).
 DIFFUSE_IAM_METHODS = (
     "none",
@@ -93,16 +103,20 @@ DEFAULT_BIFACIAL_MODEL = "none"
 # Cell-temperature model and mounting presets. ``faiman`` is pvlib's Faiman
 # (2008) model with its open-rack default coefficients (u0=25, u1=6.84) —
 # the default and the only prior behaviour. The ``pvsyst-*`` presets use
-# pvlib's PVsyst cell model with its documented mounting parameter sets:
-# free-standing coefficients run cool for roof-mounted systems, so rooftop
-# studies should pick the mounting-appropriate preset (``semi-integrated``
-# for close roof mounts with a rear air gap, ``insulated`` for fully
-# building-integrated modules with no rear ventilation).
+# PVsyst's documented mounting parameter sets. ``sapm-*`` names retain the
+# construction and mounting combinations defined by pvlib/Sandia. ``noct-sam``
+# is available only when the selected module carries sourced NOCT and
+# efficiency metadata; it never guesses those inputs.
 TEMPERATURE_MODELS = (
     "faiman",
     "pvsyst-freestanding",
     "pvsyst-semi-integrated",
     "pvsyst-insulated",
+    "sapm-open-rack-glass-glass",
+    "sapm-close-mount-glass-glass",
+    "sapm-open-rack-glass-polymer",
+    "sapm-insulated-back-glass-polymer",
+    "noct-sam",
 )
 DEFAULT_TEMPERATURE_MODEL = "faiman"
 
@@ -182,6 +196,7 @@ class PVModelOptions:
     albedo: float | None
     surface_type: str | None
     model_perez: str
+    iam_model: str
     diffuse_iam: str
     temperature_model: str
     bifacial_model: str
@@ -205,6 +220,14 @@ def resolve_solar_position_method(method: str) -> str:
         valid = ", ".join(SOLAR_POSITION_METHODS)
         raise ValueError(f"Unknown solar position method {method!r}. Valid methods: {valid}")
     return normalise_model_name(method)
+
+
+def resolve_iam_model(model: str) -> str:
+    """Normalise and validate a beam incidence-angle modifier model."""
+    if not is_known_model(model, IAM_MODELS):
+        valid = ", ".join(IAM_MODELS)
+        raise ValueError(f"Unknown IAM model {model!r}. Valid models: {valid}")
+    return normalise_model_name(model)
 
 
 def resolve_diffuse_iam_method(method: str) -> str:
@@ -305,6 +328,7 @@ def resolve_pv_model_options(
     albedo: float | None = None,
     surface_type: str | None = None,
     model_perez: str = DEFAULT_PEREZ_MODEL,
+    iam_model: str = DEFAULT_IAM_MODEL,
     diffuse_iam: str = DEFAULT_DIFFUSE_IAM,
     temperature_model: str = DEFAULT_TEMPERATURE_MODEL,
     bifacial_model: str = DEFAULT_BIFACIAL_MODEL,
@@ -325,6 +349,7 @@ def resolve_pv_model_options(
     transposition_model = resolve_transposition_model(transposition_model)
     albedo, surface_type = resolve_ground_reflectance(albedo, surface_type)
     model_perez = resolve_perez_model(model_perez)
+    iam_model = resolve_iam_model(iam_model)
     diffuse_iam = resolve_diffuse_iam_method(diffuse_iam)
     temperature_model = resolve_temperature_model(temperature_model)
     bifacial_model = validate_bifacial_inputs(
@@ -339,6 +364,7 @@ def resolve_pv_model_options(
         albedo=albedo,
         surface_type=surface_type,
         model_perez=model_perez,
+        iam_model=iam_model,
         diffuse_iam=diffuse_iam,
         temperature_model=temperature_model,
         bifacial_model=bifacial_model,
