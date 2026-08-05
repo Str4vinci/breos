@@ -130,13 +130,29 @@ Release flow:
 
 1. Merge the release PR into `main` after all gates pass.
 2. Optionally trigger the `Publish` workflow manually (`workflow_dispatch`)
-   to dry-run the upload against TestPyPI, then verify with
-   `pip install --index-url https://test.pypi.org/simple/ --extra-index-url https://pypi.org/simple/ breos`.
+   to dry-run the upload against TestPyPI, then verify the release installs
+   into a throwaway environment. TestPyPI serves `breos` itself; the runtime
+   dependencies still come from PyPI:
+
+   ```
+   uv venv /tmp/breos-testpypi
+   VIRTUAL_ENV=/tmp/breos-testpypi uv pip install \
+     --index-url https://test.pypi.org/simple/ \
+     --extra-index-url https://pypi.org/simple/ breos
+   ```
+
+   If uv resolves a dependency to an unexpected TestPyPI upload rather than
+   the real PyPI release, add `--index-strategy unsafe-best-match`.
 3. Tag the release commit on `main` (`git tag vX.Y.Z && git push origin vX.Y.Z`).
    The workflow refuses tags whose commit is not on `main`, then publishes to
    PyPI.
-4. Create the GitHub Release from the tag and confirm
-   `pip install breos==X.Y.Z` works from a clean environment.
+4. Create the GitHub Release from the tag and confirm the published release
+   installs from a clean environment:
+
+   ```
+   uv venv /tmp/breos-pypi
+   VIRTUAL_ENV=/tmp/breos-pypi uv pip install breos==X.Y.Z
+   ```
 
 ## Data And Docs
 
