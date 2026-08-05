@@ -119,6 +119,14 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 - Removed residential-only framing from the README description and feature
   list. The packaged presets remain residential-scale, but the engine itself
   carries no building assumption.
+- Moved core-package coverage instrumentation out of the per-pull-request test
+  matrix and into a separate `coverage-report` job on the nightly, manual, and
+  release triggers. All four Python versions now run the suite uninstrumented,
+  which takes a pull request from roughly 45 minutes to a few minutes. Coverage
+  is unchanged in scope — still branch-aware, still excluding vendored
+  BLAST-Lite — and remains a report rather than a gate, as it was before: no
+  threshold is configured. CI also no longer filters the `pull_request` trigger
+  by base branch, so pull requests stacked on other feature branches are built.
 
 ### Fixed
 - Corrected the `fast` extra documentation: the current Numba kernels are

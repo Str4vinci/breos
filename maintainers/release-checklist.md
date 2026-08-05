@@ -50,10 +50,14 @@ misleads anyone later diffing it against the release it names.
 ## Release Validation Matrix
 
 The `Tests` workflow runs the complete matrix on Python 3.11, 3.12, 3.13, and
-3.14. Python 3.12 also reports branch-aware core-package coverage, excluding
-the vendored BLAST-Lite implementation, while macOS and Windows run a focused
-public-entrypoint smoke suite. The following release claims must remain tied to
-executable checks:
+3.14, while macOS and Windows run a focused public-entrypoint smoke suite. A
+separate `coverage-report` job publishes branch-aware core-package coverage on
+Python 3.12, excluding the vendored BLAST-Lite implementation; it runs nightly,
+on demand, and on `release/**`, so a release build produces a coverage snapshot
+without every pull request paying for one. That job is a report, not a gate — no
+threshold is configured, and a failure there means the instrumented run broke
+rather than that coverage is insufficient. The following release claims must
+remain tied to executable checks:
 
 | Gate | Executable coverage |
 | --- | --- |
