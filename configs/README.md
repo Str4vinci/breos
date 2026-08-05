@@ -70,6 +70,7 @@ breos list load-profiles
 | [`germany-berlin.toml`](examples/germany-berlin.toml) | Swapping location + cost preset + emissions factor together |
 | [`east-west-roof.toml`](examples/east-west-roof.toml) | Multiple `[[pv_arrays]]` (split east/west roof) |
 | [`bifacial-ground-mount.toml`](examples/bifacial-ground-mount.toml) | Opt-in infinite-sheds rear gain with explicit row geometry |
+| [`recommended-pv.toml`](examples/recommended-pv.toml) | Explicit higher-fidelity rooftop PV choices while compatible defaults remain unchanged |
 | [`sweep.toml`](examples/sweep.toml) | Parameter grid over module count and battery size (`breos sweep`) |
 | [`montecarlo.toml`](examples/montecarlo.toml) | Monte Carlo over weather years + demand (`breos montecarlo`) |
 | [`external-rlp.toml`](examples/external-rlp.toml) | Using non-bundled, licensed load profiles |

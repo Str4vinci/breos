@@ -11,7 +11,7 @@ import pytest
 from breos import solar
 from breos.pv.iam import calculate_front_effective_irradiance
 from breos.pv.model_options import PVModelOptions, resolve_pv_model_options
-from breos.pv.temperature import calculate_cell_temperature
+from breos.pv.temperature import DEFAULT_MODULE_EFFICIENCY, calculate_cell_temperature
 
 # Every public entry point that accepts the shared PV model-option block.
 MODEL_OPTION_ENTRY_POINTS = (
@@ -29,6 +29,7 @@ MODEL_OPTION_ENTRY_POINTS = (
 def test_model_options_are_normalised_validated_and_immutable():
     options = resolve_pv_model_options(
         transposition_model=" PEREZ ",
+        iam_model=" Martin_Ruiz ",
         diffuse_iam="MARION",
         temperature_model="PVsyst-Insulated",
         surface_type="urban",
@@ -39,6 +40,7 @@ def test_model_options_are_normalised_validated_and_immutable():
         albedo=None,
         surface_type="urban",
         model_perez="allsitescomposite1990",
+        iam_model="martin_ruiz",
         diffuse_iam="marion",
         temperature_model="pvsyst-insulated",
         bifacial_model="none",
@@ -71,6 +73,29 @@ def test_front_irradiance_kernel_preserves_beam_only_ashrae_path():
     np.testing.assert_allclose(actual, expected)
 
 
+@pytest.mark.parametrize("iam_model", ("physical", "martin_ruiz"))
+def test_front_irradiance_kernel_dispatches_selected_beam_and_marion_models(iam_model):
+    poa = pd.DataFrame(
+        {
+            "poa_direct": [800.0, 200.0],
+            "poa_diffuse": [100.0, 80.0],
+            "poa_sky_diffuse": [75.0, 60.0],
+            "poa_ground_diffuse": [25.0, 20.0],
+        }
+    )
+    aoi = np.array([10.0, 70.0])
+    marion = pvlib.iam.marion_diffuse(iam_model, 30.0)
+    expected = (
+        poa["poa_direct"].to_numpy() * getattr(pvlib.iam, iam_model)(aoi)
+        + poa["poa_sky_diffuse"].to_numpy() * marion["sky"]
+        + poa["poa_ground_diffuse"].to_numpy() * marion["ground"]
+    )
+
+    actual = calculate_front_effective_irradiance(poa, aoi, 30.0, "marion", iam_model)
+
+    np.testing.assert_allclose(actual, expected)
+
+
 @pytest.mark.parametrize(
     ("model", "pvlib_function", "parameters"),
     [
@@ -78,7 +103,12 @@ def test_front_irradiance_kernel_preserves_beam_only_ashrae_path():
         (
             "pvsyst-semi-integrated",
             pvlib.temperature.pvsyst_cell,
-            pvlib.temperature.TEMPERATURE_MODEL_PARAMETERS["pvsyst"]["semi_integrated"],
+            {
+                **pvlib.temperature.TEMPERATURE_MODEL_PARAMETERS["pvsyst"]["semi_integrated"],
+                # Metadata-less modules take BREOS's representative c-Si value,
+                # not pvlib's legacy 0.1 default.
+                "module_efficiency": DEFAULT_MODULE_EFFICIENCY,
+            },
         ),
     ],
 )
@@ -90,6 +120,111 @@ def test_temperature_kernel_preserves_pvlib_dispatch(model, pvlib_function, para
 
     actual = calculate_cell_temperature(poa_global, temp_air, wind_speed, model)
 
+    np.testing.assert_allclose(actual, expected)
+
+
+def test_pvsyst_kernel_uses_sourced_module_efficiency():
+    poa_global = np.array([0.0, 400.0, 900.0])
+    temp_air = np.array([15.0, 20.0, 28.0])
+    wind_speed = np.array([1.0, 2.0, 4.0])
+    params = pvlib.temperature.TEMPERATURE_MODEL_PARAMETERS["pvsyst"]["semi_integrated"]
+
+    actual = calculate_cell_temperature(
+        poa_global,
+        temp_air,
+        wind_speed,
+        "pvsyst-semi-integrated",
+        module_efficiency=0.213,
+    )
+    expected = pvlib.temperature.pvsyst_cell(
+        poa_global,
+        temp_air,
+        wind_speed,
+        module_efficiency=0.213,
+        **params,
+    )
+
+    np.testing.assert_allclose(actual, expected)
+
+
+def test_pvsyst_kernel_falls_back_to_breos_default_efficiency():
+    """A metadata-less module must not silently inherit pvlib's legacy 0.1."""
+    poa_global = np.array([0.0, 400.0, 900.0])
+    temp_air = np.array([15.0, 20.0, 28.0])
+    wind_speed = np.array([1.0, 2.0, 4.0])
+    params = pvlib.temperature.TEMPERATURE_MODEL_PARAMETERS["pvsyst"]["freestanding"]
+
+    actual = calculate_cell_temperature(poa_global, temp_air, wind_speed, "pvsyst-freestanding")
+
+    expected = pvlib.temperature.pvsyst_cell(
+        poa_global,
+        temp_air,
+        wind_speed,
+        module_efficiency=DEFAULT_MODULE_EFFICIENCY,
+        **params,
+    )
+    np.testing.assert_allclose(actual, expected)
+
+    pvlib_legacy_default = pvlib.temperature.pvsyst_cell(poa_global, temp_air, wind_speed, **params)
+    assert actual[-1] < pvlib_legacy_default[-1]
+
+
+def test_breos_default_efficiency_is_representative_of_modern_silicon():
+    """Guards the default against drifting back toward pvlib's 0.1 placeholder."""
+    assert 0.15 < DEFAULT_MODULE_EFFICIENCY < 0.25
+
+
+def test_pvsyst_rejects_nonphysical_supplied_module_efficiency():
+    with pytest.raises(ValueError, match="Module_Efficiency"):
+        calculate_cell_temperature(
+            np.array([900.0]),
+            np.array([28.0]),
+            np.array([2.0]),
+            "pvsyst-semi-integrated",
+            module_efficiency=1.1,
+        )
+
+
+@pytest.mark.parametrize(
+    ("model", "parameter_key"),
+    [
+        ("sapm-open-rack-glass-glass", "open_rack_glass_glass"),
+        ("sapm-close-mount-glass-glass", "close_mount_glass_glass"),
+        ("sapm-open-rack-glass-polymer", "open_rack_glass_polymer"),
+        ("sapm-insulated-back-glass-polymer", "insulated_back_glass_polymer"),
+    ],
+)
+def test_sapm_temperature_presets_dispatch_to_matching_pvlib_parameters(model, parameter_key):
+    poa_global = np.array([0.0, 400.0, 900.0])
+    temp_air = np.array([15.0, 20.0, 28.0])
+    wind_speed = np.array([1.0, 2.0, 4.0])
+    params = pvlib.temperature.TEMPERATURE_MODEL_PARAMETERS["sapm"][parameter_key]
+
+    actual = calculate_cell_temperature(poa_global, temp_air, wind_speed, model)
+    expected = pvlib.temperature.sapm_cell(poa_global, temp_air, wind_speed, **params)
+
+    np.testing.assert_allclose(actual, expected)
+
+
+def test_noct_sam_requires_complete_sourced_module_metadata():
+    poa_global = np.array([0.0, 400.0, 900.0])
+    temp_air = np.array([15.0, 20.0, 28.0])
+    wind_speed = np.array([1.0, 2.0, 4.0])
+
+    with pytest.raises(ValueError, match="Module_Efficiency"):
+        calculate_cell_temperature(poa_global, temp_air, wind_speed, "noct-sam")
+    with pytest.raises(ValueError, match="NOCT metadata"):
+        calculate_cell_temperature(poa_global, temp_air, wind_speed, "noct-sam", module_efficiency=0.213)
+
+    actual = calculate_cell_temperature(
+        poa_global,
+        temp_air,
+        wind_speed,
+        "noct-sam",
+        module_efficiency=0.213,
+        noct=45.0,
+    )
+    expected = pvlib.temperature.noct_sam(poa_global, temp_air, wind_speed, noct=45.0, module_efficiency=0.213)
     np.testing.assert_allclose(actual, expected)
 
 
@@ -116,7 +251,7 @@ def test_every_entry_point_declares_the_whole_model_option_block(function):
 def test_model_option_keys_partition_into_per_array_and_function_level():
     """The multi-array override asymmetry is intentional — pin it exactly.
 
-    ``diffuse_iam``/``temperature_model``/``solar_position`` are function-level
+    ``iam_model``/``diffuse_iam``/``temperature_model``/``solar_position`` are function-level
     for every array while the sky and ground geometry is per-array
     overridable. A new option must land in exactly one of the two tuples, so
     the partition (not just the union) is what gets asserted.
@@ -126,7 +261,7 @@ def test_model_option_keys_partition_into_per_array_and_function_level():
 
     assert per_array | function_level == set(solar._MODEL_OPTION_KEYS)
     assert per_array & function_level == set()
-    assert function_level == {"solar_position", "diffuse_iam", "temperature_model"}
+    assert function_level == {"solar_position", "iam_model", "diffuse_iam", "temperature_model"}
     # gcr is model geometry here but tracker geometry on the tracking path.
     assert set(solar._TRACKING_MODEL_OPTION_KEYS) == set(solar._MODEL_OPTION_KEYS) - {"gcr"}
 
