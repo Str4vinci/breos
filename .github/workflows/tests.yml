@@ -8,7 +8,8 @@ on:
   # all until it was retargeted at develop, which is the point where a failure
   # is most expensive to discover.
   pull_request:
-  # Slow endurance/multi-year tests run nightly, on demand, and as a release gate.
+  # Slow endurance/multi-year tests run nightly, on demand, and as a release
+  # gate; the coverage report is published on the same triggers.
   schedule:
     - cron: "0 4 * * *"  # 04:00 UTC every day
   workflow_dispatch:
@@ -47,22 +48,8 @@ jobs:
         run: uv run ruff format --check breos/ tests/ tools/
 
       - name: Run tests
-        if: matrix.python-version != '3.12'
         # Slow tests are deselected by default (pyproject addopts: -m "not slow").
         run: uv run pytest tests/ -v
-
-      - name: Run tests with core coverage
-        if: matrix.python-version == '3.12'
-        # Vendored BLAST-Lite is excluded by the coverage configuration.
-        run: uv run pytest tests/ -v --cov=breos --cov-report=term-missing --cov-report=xml
-
-      - name: Upload core coverage report
-        if: matrix.python-version == '3.12'
-        uses: actions/upload-artifact@v7
-        with:
-          name: core-coverage-python-3.12
-          path: coverage.xml
-          if-no-files-found: error
 
       - name: Verify release artifacts
         run: uv run python tools/verify_release_artifacts.py
@@ -131,3 +118,43 @@ jobs:
 
       - name: Run slow tests
         run: uv run pytest tests/ -m slow -v
+
+  coverage-report:
+    # Publishes a branch-aware core-coverage snapshot; it is a report, not a
+    # gate. No threshold is configured, so a failure here means the instrumented
+    # run itself broke, never that coverage is too low. Instrumenting the whole
+    # suite costs 25-45 minutes against ~2 minutes uninstrumented, which is why
+    # it stays off the per-PR path. If diff coverage matters later, add a check
+    # scoped to the changed lines rather than restoring this to the matrix.
+    if: >-
+      github.event_name == 'schedule' ||
+      github.event_name == 'workflow_dispatch' ||
+      startsWith(github.ref, 'refs/heads/release/') ||
+      startsWith(github.base_ref, 'release/')
+    runs-on: ubuntu-latest
+
+    env:
+      UV_PYTHON: "3.12"
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Install dependencies
+        run: uv sync --extra dev
+
+      - name: Run tests with core coverage
+        # Vendored BLAST-Lite is excluded by the coverage configuration.
+        run: uv run pytest tests/ -v --cov=breos --cov-report=term-missing --cov-report=xml
+
+      - name: Upload core coverage report
+        uses: actions/upload-artifact@v7
+        with:
+          name: core-coverage-python-3.12
+          path: coverage.xml
+          if-no-files-found: error
