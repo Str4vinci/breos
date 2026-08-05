@@ -65,6 +65,23 @@ git checkout -b feature/your-feature-name
 5. Commit with a clear message describing what and why
 6. Push and open a Pull Request against `develop`
 
+## Documentation placement
+
+Keep documentation close to its audience:
+
+- `docs/` is published on Read the Docs. Put installation, guides, current
+  model behavior, data resources, and public API documentation there.
+- `ROADMAP.md` communicates public release intent and capabilities under
+  consideration.
+- `design/` keeps proposals, implementation plans, and architecture decision
+  records for contributor discussion without presenting them as released
+  behavior.
+- `maintainers/` keeps operational procedures such as the release checklist.
+
+When an issue moves from proposal to implementation, update the public guide
+to describe the finished behavior rather than publishing the issue plan or PR
+checklist verbatim.
+
 ## Tests
 
 All tests are in `tests/` and use pytest. Tests run offline using synthetic weather fixtures — no API calls required.

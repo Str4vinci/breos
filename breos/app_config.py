@@ -13,17 +13,20 @@ from breos.degradation.profiles import ENABLED_BLAST_MODEL_KEYS, apply_battery_p
 from breos.economics import CostParams, calculate_costs
 from breos.emissions import EmissionsParams
 from breos.pv.model_options import is_known_model, is_valid_albedo, is_valid_gcr, normalise_model_name
+from breos.pv.temperature import validate_temperature_inputs
 from breos.pv_modules import MODULES, PVModuleParams, get_module
 from breos.resources import load_config_json
 from breos.solar import (
     BIFACIAL_MODELS,
     DEFAULT_BIFACIAL_MODEL,
     DEFAULT_DIFFUSE_IAM,
+    DEFAULT_IAM_MODEL,
     DEFAULT_PEREZ_MODEL,
     DEFAULT_SOLAR_POSITION,
     DEFAULT_TEMPERATURE_MODEL,
     DEFAULT_TRANSPOSITION_MODEL,
     DIFFUSE_IAM_METHODS,
+    IAM_MODELS,
     PEREZ_MODELS,
     SOLAR_POSITION_METHODS,
     SURFACE_TYPES,
@@ -54,6 +57,7 @@ DEFAULTS: dict[str, Any] = {
     "surface_type": None,
     "model_perez": DEFAULT_PEREZ_MODEL,
     "solar_position": DEFAULT_SOLAR_POSITION,
+    "iam_model": DEFAULT_IAM_MODEL,
     "diffuse_iam": DEFAULT_DIFFUSE_IAM,
     "temperature_model": DEFAULT_TEMPERATURE_MODEL,
     "bifacial_model": DEFAULT_BIFACIAL_MODEL,
@@ -385,6 +389,9 @@ def _validate_time_and_weather(cfg: dict[str, Any]) -> None:
     if not is_known_model(cfg["solar_position"], SOLAR_POSITION_METHODS):
         valid = ", ".join(SOLAR_POSITION_METHODS)
         raise ValueError(f"'solar_position' must be one of: {valid}")
+    if not is_known_model(cfg["iam_model"], IAM_MODELS):
+        valid = ", ".join(IAM_MODELS)
+        raise ValueError(f"'iam_model' must be one of: {valid}")
     if not is_known_model(cfg["diffuse_iam"], DIFFUSE_IAM_METHODS):
         valid = ", ".join(DIFFUSE_IAM_METHODS)
         raise ValueError(f"'diffuse_iam' must be one of: {valid}")
@@ -572,6 +579,23 @@ def resolve_pv_system(
     return pv_arrays, pv_params, n_modules, avg_module_power_w, system_kwp, tilt, azimuth
 
 
+def validate_temperature_module_metadata(
+    temperature_model: str,
+    pv_arrays: list[dict[str, Any]],
+    pv_params: PVModuleParams,
+) -> None:
+    """Validate any module metadata required by the selected thermal model.
+
+    Array configurations may name different modules, so SAM NOCT needs each
+    one checked during App config resolution rather than failing after weather
+    loading. The thermal kernel repeats this validation for direct solar calls.
+    """
+    model = normalise_model_name(temperature_model)
+    modules = [get_module(arr["module"]) for arr in pv_arrays] if pv_arrays else [pv_params]
+    for module in modules:
+        validate_temperature_inputs(model, module.Module_Efficiency, module.NOCT)
+
+
 def resolve_tracking(cfg: dict[str, Any], lat: float) -> tuple[str, float]:
     """Resolve tracker mode and orientation defaults."""
     tracking = cfg["tracking"]
@@ -663,6 +687,7 @@ def resolve_app_config(config: dict[str, Any]) -> ResolvedAppConfig:
 
     lat, lon, timezone, loc_key = resolve_location(cfg)
     pv_arrays, pv_params, n_modules, avg_module_power_w, system_kwp, tilt, azimuth = resolve_pv_system(cfg, lat)
+    validate_temperature_module_metadata(cfg["temperature_model"], pv_arrays, pv_params)
     tracking, axis_azimuth = resolve_tracking(cfg, lat)
 
     # Materialise the resolved module count (derived from pv_arrays when set)

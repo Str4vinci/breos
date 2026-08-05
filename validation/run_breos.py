@@ -6,8 +6,8 @@ For every location in ``validation/locations.json`` with a weather file under
 ``breos.solar.calculate_pv_production_ac`` for the focused model variants in
 ``validation.common.MODEL_CONFIGS`` and writes monthly/annual energies to
 ``validation/results/breos_results.json``. The variants cover the shipped
-isotropic default, Perez, timestamp and IAM choices, roof temperature, and a
-paired front-only/bifacial comparison.
+isotropic default, Perez, timestamp and IAM choices, roof temperature, and
+front-only/rear-gain comparisons including equal-nameplate module counts.
 
 ``--write-baseline`` additionally snapshots the results to
 ``validation/baselines/breos_baseline.json``, the file
@@ -52,12 +52,13 @@ def run_location(key: str, loc: dict, system: dict, weather_file: Path) -> dict:
     for name, model_kwargs in MODEL_CONFIGS.items():
         model_kwargs = dict(model_kwargs)
         pv_params = get_module(model_kwargs.pop("pv_module", system["module"]))
+        n_modules = model_kwargs.pop("n_modules", system["n_modules"])
         ac = calculate_pv_production_ac(
             weather_data=weather,
             location=location,
             tilt=loc["tilt"],
             surface_azimuth=loc["azimuth"],
-            n_modules=system["n_modules"],
+            n_modules=n_modules,
             pv_params=pv_params,
             freq="h",
             inverter_loading_ratio=system["dc_ac_ratio"],

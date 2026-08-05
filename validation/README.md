@@ -9,7 +9,7 @@ the package.
 
 | Path | What it is | Committed? |
 |---|---|---|
-| `locations.json` | The validation sites + one shared 4 kWp system spec | yes |
+| `locations.json` | The validation sites + shared 4 kWp reference-system spec | yes |
 | `data/weather/*.csv.gz` | PVGIS TMY hourly weather per site — the input BREOS runs on | yes (gitignore exception) |
 | `data/references/*.json` | External reference results + every request parameter | yes |
 | `baselines/breos_baseline.json` | BREOS's own outputs, snapshotted — the drift-test anchor | yes |
@@ -62,12 +62,17 @@ modeling the moment it lands.
 ## What the numbers mean
 
 BREOS is run with the shipped default transposition (`isotropic`), `perez`, and
-focused model-choice variants for timestamp convention, diffuse IAM, roof
-temperature, and bifacial rear gain. Comparing isotropic and Perez against
-PVGIS quantifies the transposition effect. The bifacial rows compare the same
-600 W module front-only and with infinite-sheds rear gain on the same checked-in
-weather (`albedo=0.2`, `gcr=0.35`, row-center height 1.5, pitch 6.0), isolating
-the rear-side contribution from module sizing and weather.
+focused model-choice variants for timestamp convention, IAM, PVsyst and SAPM
+roof-temperature presets, and bifacial rear gain. Comparing isotropic and Perez
+against PVGIS quantifies the transposition effect. The bifacial rows compare the
+same 600 W module front-only and with infinite-sheds rear gain on the same
+checked-in weather (`albedo=0.2`, `gcr=0.35`, row-center height 1.5, pitch 6.0),
+isolating the rear-side contribution from module sizing and weather.
+
+The equal-nameplate section separately compares 3×400 W monofacial with 2×600 W
+bifacial front-only and rear-gain cases. It holds weather and common model
+choices fixed, but it is an energy-model comparison—not a claim of equal area,
+string layout, or bankable dense-row shading accuracy.
 
 Alignment choices, so the three models see the same system: BREOS's default
 PVWatts loss stack (~14.1%) is passed to PVWatts as `losses` with

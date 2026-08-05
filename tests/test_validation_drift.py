@@ -60,6 +60,23 @@ else:  # pragma: no cover - guarded by pytestmark
 _RESULT_CACHE = {}
 
 
+def test_equal_nameplate_comparison_contract():
+    from breos.pv_modules import get_module
+    from validation.common import MODEL_CONFIGS
+
+    mono = MODEL_CONFIGS["nameplate_mono_1200"]
+    front = MODEL_CONFIGS["nameplate_bifacial_front_1200"]
+    rear = MODEL_CONFIGS["nameplate_bifacial_rear_1200"]
+
+    assert mono["n_modules"] * get_module(mono["pv_module"]).Mpp == pytest.approx(1200)
+    assert front["n_modules"] * get_module(front["pv_module"]).Mpp == pytest.approx(1200)
+    assert rear["n_modules"] * get_module(rear["pv_module"]).Mpp == pytest.approx(1200)
+
+    common_keys = ("pv_module", "n_modules", "transposition_model", "solar_position", "iam_model", "diffuse_iam")
+    assert {key: front[key] for key in common_keys} == {key: rear[key] for key in common_keys}
+    assert rear["bifacial_model"] == "infinite_sheds"
+
+
 def _compute(key, model):
     """Recompute BREOS production for a baseline case (cached per session)."""
     if (key, model) in _RESULT_CACHE:
@@ -75,13 +92,14 @@ def _compute(key, model):
     weather = load_validation_weather(VALIDATION_DIR / "data" / "weather" / entry["weather_file"])
     model_kwargs = dict(MODEL_CONFIGS[model])
     pv_params = get_module(model_kwargs.pop("pv_module", system["module"]))
+    n_modules = model_kwargs.pop("n_modules", system["n_modules"])
 
     ac = calculate_pv_production_ac(
         weather_data=weather,
         location=Location(loc["latitude"], loc["longitude"], tz=loc["timezone"]),
         tilt=loc["tilt"],
         surface_azimuth=loc["azimuth"],
-        n_modules=system["n_modules"],
+        n_modules=n_modules,
         pv_params=pv_params,
         freq="h",
         inverter_loading_ratio=system["dc_ac_ratio"],

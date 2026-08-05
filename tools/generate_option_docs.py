@@ -18,9 +18,11 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from breos.cli import _load_options
-
 REPO_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(REPO_ROOT))
+
+from breos.cli import _load_options  # noqa: E402
+
 OUTPUT_PATH = REPO_ROOT / "docs" / "getting-started" / "options.md"
 
 HEADER = """\
@@ -64,7 +66,9 @@ SECTIONS: list[dict[str, Any]] = [
             ("power_w", "Power (W)", "text"),
             ("name", "Name", "text"),
             ("celltype", "Cell type", "text"),
+            ("module_efficiency", "Efficiency", "text"),
             ("bifaciality", "Bifaciality", "text"),
+            ("noct_c", "NOCT (°C)", "text"),
         ],
     },
     {

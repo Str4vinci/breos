@@ -5,6 +5,21 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 ## [Unreleased]
 
 ### Added
+- Added an explicit recommended rooftop PV example and a reproducible
+  seven-site equal-nameplate comparison of 3×400 W monofacial, 2×600 W
+  bifacial front-only, and 2×600 W bifacial rear-gain configurations. The
+  report separates module-parameter differences from modeled rear gain and
+  states the geometry, inverter loading, and front-shading limitation.
+- Added selectable `iam_model` optics to the App config, `--iam-model` CLI
+  flag, and every public solar-chain function. `"ashrae"` remains the
+  bit-for-bit historical default; `"physical"` and `"martin_ruiz"` expose
+  pvlib's respective defaults. When `diffuse_iam="marion"` is enabled, the
+  same selected IAM model is integrated for the sky and ground components.
+- Added named SAPM temperature presets for the four pvlib/Sandia construction
+  and mounting combinations, plus strict opt-in `temperature_model="noct-sam"`
+  support. SAM NOCT refuses to run without sourced NOCT and module-efficiency
+  metadata; the bundled module catalog has no sourced NOCT yet, so no catalog
+  entry is activated by default or by implication.
 - Added optional, validated `PVModuleParams.bifaciality` metadata and a sourced
   maximum-power bifaciality value for the generic 600 W bifacial catalog entry.
   The metadata alone does not activate rear-gain modeling or change production.
@@ -20,6 +35,15 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 - Added bifacial configuration and rear-gain diagnostics to the PV loss
   waterfall and result provenance, a runnable ground-mount example, and paired
   front/rear regression benchmarks across the seven-site validation matrix.
+- Added optional `InverterConfig` datasheet limits: absolute maximum DC voltage
+  and power, the MPPT operating window and startup voltage, per-MPPT operating
+  and short-circuit current limits, and maximum parallel strings per MPPT. Each
+  is validated on its own and against the others when supplied — the MPPT
+  window must not be inverted and must sit within the DC voltage ceiling. Only
+  that physical ceiling constrains startup voltage; it is deliberately allowed
+  outside the MPPT window, because real datasheets quote a startup well below
+  the MPP range minimum. The fields default to `None`, are not read by any
+  model yet, and change no result.
 
 ### Changed
 - Bumped `provenance.ledger_schema_version` to `1.1`. The result schema gains
@@ -47,10 +71,40 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   used to run and produce wrong numbers now fail at `App()` construction. This
   guards the config path only; callers going directly to `breos.solar` tracking
   functions are still responsible for their own `gcr`.
+- **PVsyst temperature presets now model a realistic module conversion
+  efficiency, which changes results for existing `pvsyst-*` configurations.**
+  pvlib's heat balance treats module efficiency as the share of absorbed energy
+  that leaves as electricity rather than heat, and its 0.1 default is a legacy
+  placeholder no crystalline-silicon module has approached in decades. BREOS now
+  passes a module's sourced `Module_Efficiency` when it has one and a
+  representative 0.20 otherwise, so every module is modelled consistently
+  instead of splitting on which catalog entry happens to carry metadata.
+  Expect cell temperatures roughly 2.5–3 °C lower and annual yield 1.0–1.3%
+  higher for `pvsyst-*` runs; the refreshed validation baseline moves only its
+  `perez_roof` variant, by that margin, across all seven sites. The `faiman`
+  default is untouched and all default results remain bit-for-bit unchanged.
+- Sourced the 21.2% module efficiency for the generic 600 W bifacial catalog
+  entry from the same Trina Vertex TSM-DEG20C.20 datasheet that already supplies
+  its bifaciality and power temperature coefficient, and refreshed that
+  citation's dead URL. The 445 W Erlangen and generic 400 W entries name no
+  datasheet that quotes an efficiency, so they intentionally stay unset and use
+  the representative default rather than a back-derived figure.
 - Refactored PV model-option resolution and the IAM and temperature kernels
   into focused internal modules while preserving the `breos.App` facade,
   public solar-function signatures, defaults, and numerical paths. Config
   validation is preserved except for the `gcr` tightening noted above.
+- `InverterConfig` now validates its pre-existing fields on construction rather
+  than trusting callers: `nominal_power_w` and both cost fields must be finite
+  and non-negative, `dc_ac_ratio` finite and positive, `inverter_efficiency`
+  within `(0, 1]`, `mppt_channels` a positive integer, and `is_hybrid` a bool.
+  Code that built a physically impossible inverter — a negative rating, an
+  efficiency above 1, zero MPPT channels — used to construct successfully and
+  produce meaningless numbers downstream; it now raises `ValueError` at
+  construction. Configurations that were already valid are unaffected.
+- Reorganized Read the Docs around task-oriented guides, model assumptions,
+  and API reference; moved internal design plans, ADRs, and maintainer
+  procedures to repository-only documentation; and replaced stale current
+  capability references to the 0.3.x series with version-neutral wording.
 - Expanded PyPI package metadata (classifiers and keywords) so the project is
   discoverable through scientific-computing and platform facets rather than the
   generic `Topic :: Scientific/Engineering` bucket alone. Packaging metadata
@@ -65,6 +119,11 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 - Removed residential-only framing from the README description and feature
   list. The packaged presets remain residential-scale, but the engine itself
   carries no building assumption.
+
+### Fixed
+- Corrected the `fast` extra documentation: the current Numba kernels are
+  approximate screening utilities and do not accelerate `breos.App`, Monte
+  Carlo, or multi-objective optimization production paths.
 
 ## [0.4.2] - 2026-07-27
 

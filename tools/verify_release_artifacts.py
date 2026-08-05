@@ -48,7 +48,7 @@ REQUIRED_WHEEL_FILES.update(f"breos/degradation/blast/models/{filename}" for fil
 REQUIRED_SDIST_FILES = {
     "docs/conf.py",
     "docs/index.md",
-    "docs/release.md",
+    "maintainers/release-checklist.md",
     "docs/getting-started/quickstart.md",
     "docs/legal/load-profile-data.md",
 }

@@ -49,8 +49,12 @@ by the workflow:
 pip install "breos[plots]"          # Matplotlib plotting helpers
 pip install "breos[optimization]"   # pymoo optimization
 pip install "breos[weather]"        # Open-Meteo historical weather
-pip install "breos[fast]"           # Numba acceleration
+pip install "breos[fast]"           # Approximate screening kernels only
 ```
+
+The current Numba kernels are not called by `breos.App`, Monte Carlo, or
+multi-objective optimization, so installing `fast` does not accelerate those
+production paths.
 
 Core imports, help, option discovery, and configuration validation do not load
 Matplotlib. If an actual plotting command reports that its configuration
