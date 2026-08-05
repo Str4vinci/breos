@@ -102,10 +102,11 @@ uv run pytest tests/test_app.py -v
 
 - PRs should target `develop`, not `main`
 - Include a brief description of what changed and why
-- Make sure CI passes. It runs lint, format checks, tests and core-package
-  coverage, release artifact verification, the Sphinx docs build, and
+- Make sure CI passes. It runs lint, format checks, tests on Python 3.11
+  through 3.14, release artifact verification, the Sphinx docs build, and
   lightweight macOS/Windows public-entrypoint checks on every PR to `develop`
-  or `main`.
+  or `main`. Core-package coverage is not part of that — it is published by a
+  separate `coverage-report` job that runs nightly, on demand, and at release.
 - Keep PRs focused — one feature or fix per PR
 
 ## Reporting Issues
