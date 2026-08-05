@@ -10,11 +10,12 @@ with Lam `Ea`/`n` fixed and `k0`/`b` fitted to field data.
 
 ## Configuration
 
-BREOS 0.3.x supports stationary DC-coupled/hybrid batteries only. AC-coupled
-dispatch is not implemented and fails explicitly. Optional charge and
-discharge nameplate limits default to unlimited for 0.3.x compatibility;
-configure them for realistic sizing studies. Charge power is measured at the
-DC charge-path input. Discharge power is measured as AC delivered to load.
+BREOS currently supports stationary DC-coupled/hybrid batteries only.
+AC-coupled dispatch is not implemented and fails explicitly. Optional charge
+and discharge nameplate limits default to unlimited for backward
+compatibility; configure them for realistic sizing studies. Charge power is
+measured at the DC charge-path input. Discharge power is measured as AC
+delivered to load.
 
 ```{eval-rst}
 .. autosummary::

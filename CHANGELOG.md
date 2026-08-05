@@ -84,6 +84,10 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   into focused internal modules while preserving the `breos.App` facade,
   public solar-function signatures, defaults, and numerical paths. Config
   validation is preserved except for the `gcr` tightening noted above.
+- Reorganized Read the Docs around task-oriented guides, model assumptions,
+  and API reference; moved internal design plans, ADRs, and maintainer
+  procedures to repository-only documentation; and replaced stale current
+  capability references to the 0.3.x series with version-neutral wording.
 
 ### Fixed
 - Corrected the `fast` extra documentation: the current Numba kernels are

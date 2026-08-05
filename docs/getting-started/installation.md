@@ -16,10 +16,11 @@ uv add breos
 uvx breos run --location porto --n-modules 10 --annual-consumption-kwh 4000
 ```
 
-To install a specific release tag directly from GitHub instead:
+To install a specific release tag directly from GitHub instead, replace
+`X.Y.Z` with the release you want:
 
 ```bash
-pip install "breos @ git+https://github.com/Str4vinci/breos.git@v0.4.2"
+pip install "breos @ git+https://github.com/Str4vinci/breos.git@vX.Y.Z"
 ```
 
 ## From source

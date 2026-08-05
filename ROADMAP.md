@@ -133,7 +133,7 @@ documentation live in one place.
   deliberately scheduled *before* the 0.6.0 TOU/currency work adds another
   cluster of config keys, and deserves its own release slot rather than
   riding along a feature release.
-- **Coordination with the [function-level refactor plan](docs/architecture/0.4x-refactor-plan.md):** earlier internal
+- **Coordination with the [function-level refactor plan](design/architecture/0.4x-refactor-plan.md):** earlier internal
   validation cleanup should create reusable boundaries for the full schema,
   not throwaway helpers that need another rewrite in 0.5.x.
 - **The hard part is error-message parity**, not the schema itself: the
@@ -335,7 +335,7 @@ a proposed PV layout is electrically buildable. Future work should add
 string-aware validation and, later, string-aware inverter modeling when callers
 provide module, inverter, environment, MPPT, and string-topology data.
 
-- Design note: [docs/architecture/string-inverter-sizing.md](docs/architecture/string-inverter-sizing.md)
+- Design note: [design/architecture/string-inverter-sizing.md](design/architecture/string-inverter-sizing.md)
 - First, add a pure validation API for string voltage windows, startup
   voltage, MPPT current limits, parallel-string compatibility, and DC/AC ratio
   warnings.
@@ -422,7 +422,7 @@ preset twice.
   signals) as an opt-in strategy — greedy self-consumption stays the
   default. This needs an explicit dispatch-strategy contract, specified in a
   design doc before implementation (à la
-  `docs/architecture/string-inverter-sizing.md`). The seam begins around
+  `design/architecture/string-inverter-sizing.md`). The seam begins around
   `_dispatch_dc_step` in `breos/battery.py`, which is per-step and
   memoryless; price-aware dispatch needs lookahead, and since TOU presets
   are static and the simulation deterministic, a perfect-foresight day-ahead
@@ -513,7 +513,7 @@ package. The current `Location` parameter exposed by
 a `pvlib.Location`, which means BREOS does not own its own public API.
 
 - Tracking issue: [#11](https://github.com/Str4vinci/breos/issues/11)
-- Design: [docs/architecture/third-party-wrapping.md](docs/architecture/third-party-wrapping.md)
+- Design: [design/architecture/third-party-wrapping.md](design/architecture/third-party-wrapping.md)
 - Scope: pvlib first (Phase 1), then scipy / rainflow (Phase 2), then IO
   clients (Phase 3). Pandas, numpy, and matplotlib are kept direct.
 - Estimated effort: ~3–4 weeks of focused work, split into many small
