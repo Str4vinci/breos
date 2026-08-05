@@ -1,9 +1,13 @@
 """Tests for the solar module."""
 
+import numpy as np
 import pandas as pd
+import pvlib
 import pytest
 
 import breos.solar as solar
+from breos.pv.model_options import resolve_pv_model_options
+from breos.pv_modules import get_module
 from breos.solar import (
     PEREZ_MODELS,
     SURFACE_TYPES,
@@ -17,6 +21,19 @@ from breos.solar import (
     default_azimuth,
     estimate_optimal_tilt,
 )
+
+
+def _spy_on_faiman(monkeypatch):
+    """Record the irradiance array every ``faiman`` call is driven with."""
+    calls = []
+    real_faiman = pvlib.temperature.faiman
+
+    def spy(poa_global, *args, **kwargs):
+        calls.append(np.asarray(poa_global, dtype=float).copy())
+        return real_faiman(poa_global, *args, **kwargs)
+
+    monkeypatch.setattr(pvlib.temperature, "faiman", spy)
+    return calls
 
 
 def _module_params(**overrides):
@@ -45,6 +62,30 @@ class TestPVModuleParams:
         # A user-supplied gamma_pmp must not be silently replaced by T_Pmax_pct.
         params = _module_params(gamma_pmp=-0.30)
         assert params.gamma_pmp == -0.30
+
+    def test_bifaciality_is_optional_metadata(self):
+        assert _module_params().bifaciality is None
+        assert _module_params(bifaciality=0.8).bifaciality == 0.8
+
+    def test_bifaciality_does_not_shift_existing_positional_fields(self):
+        required = [400, 41.0, 9.76, 49.3, 10.30, -0.35, -0.265, 0.05, 144]
+        params = PVModuleParams(*required, "Existing name", 0.21, "monoSi", None, None, -0.30)
+
+        assert params.Name == "Existing name"
+        assert params.Module_Efficiency == 0.21
+        assert params.celltype == "monoSi"
+        assert params.gamma_pmp == -0.30
+        assert params.bifaciality is None
+        assert params.NOCT is None
+
+    def test_noct_is_optional_metadata_appended_after_existing_fields(self):
+        assert _module_params().NOCT is None
+        assert _module_params(NOCT=45.0).NOCT == 45.0
+
+    @pytest.mark.parametrize("bifaciality", [0.0, -0.1, 1.01])
+    def test_bifaciality_must_be_a_physical_ratio(self, bifaciality):
+        with pytest.raises(ValueError, match="bifaciality must be between"):
+            _module_params(bifaciality=bifaciality)
 
 
 class TestDcToAc:
@@ -89,6 +130,160 @@ class TestTiltAndAzimuth:
 
 
 class TestPVProduction:
+    def test_bifaciality_metadata_does_not_activate_rear_gain(self, synthetic_weather, porto_location):
+        kwargs = dict(
+            weather_data=synthetic_weather.iloc[:48],
+            location=porto_location,
+            tilt=35,
+            surface_azimuth=180,
+            n_modules=1,
+            freq="h",
+        )
+
+        front_only = calculate_pv_production_dc(**kwargs, pv_params=_module_params())
+        bifacial_metadata = calculate_pv_production_dc(**kwargs, pv_params=_module_params(bifaciality=0.8))
+
+        pd.testing.assert_series_equal(front_only, bifacial_metadata)
+
+    def test_infinite_sheds_adds_rear_gain(self, synthetic_weather, porto_location):
+        kwargs = dict(
+            weather_data=synthetic_weather.iloc[: 24 * 30],
+            location=porto_location,
+            tilt=35,
+            surface_azimuth=180,
+            n_modules=1,
+            pv_params=get_module("Generic_600W_Bifacial"),
+            freq="h",
+            albedo=0.25,
+        )
+
+        front_only = calculate_pv_production_dc(**kwargs)
+        bifacial_breakdown = calculate_pv_production_breakdown(
+            **kwargs,
+            bifacial_model="infinite_sheds",
+            gcr=0.35,
+            pvrow_height=1.5,
+            pvrow_pitch=6.0,
+        )
+        bifacial = bifacial_breakdown.dc_after_losses
+
+        assert bifacial.sum() > front_only.sum()
+        assert bifacial_breakdown.rear_gain_dc.sum() > 0
+        pd.testing.assert_series_equal(
+            bifacial_breakdown.front_effective_irradiance_dc + bifacial_breakdown.rear_gain_dc,
+            bifacial_breakdown.effective_irradiance_dc,
+            check_names=False,
+        )
+
+    def test_rear_gain_increases_with_albedo(self, synthetic_weather, porto_location):
+        kwargs = dict(
+            weather_data=synthetic_weather.iloc[: 24 * 30],
+            location=porto_location,
+            tilt=35,
+            surface_azimuth=180,
+            n_modules=1,
+            pv_params=get_module("Generic_600W_Bifacial"),
+            freq="h",
+            bifacial_model="infinite_sheds",
+            gcr=0.35,
+            pvrow_height=1.5,
+            pvrow_pitch=6.0,
+        )
+
+        low_albedo = calculate_pv_production_dc(**kwargs, albedo=0.15)
+        high_albedo = calculate_pv_production_dc(**kwargs, albedo=0.65)
+
+        assert high_albedo.sum() > low_albedo.sum()
+
+    def test_infinite_sheds_requires_bifacial_metadata_and_geometry(self, synthetic_weather, porto_location):
+        kwargs = dict(
+            weather_data=synthetic_weather.iloc[:48],
+            location=porto_location,
+            tilt=35,
+            surface_azimuth=180,
+            n_modules=1,
+            freq="h",
+            bifacial_model="infinite_sheds",
+            gcr=0.35,
+        )
+
+        with pytest.raises(ValueError, match="requires PV module bifaciality"):
+            calculate_pv_production_dc(
+                **kwargs,
+                pv_params=_module_params(),
+                pvrow_height=1.5,
+                pvrow_pitch=6.0,
+            )
+        with pytest.raises(TypeError, match="pvrow_height must be a finite number"):
+            calculate_pv_production_dc(
+                **kwargs,
+                pv_params=get_module("Generic_600W_Bifacial"),
+            )
+
+    def _detail_inputs(self, weather, location):
+        _, solarpos, weather_aligned = solar._prepare_solarpos_and_weather(weather, location, "h")
+        return weather_aligned, solarpos
+
+    def test_cell_temperature_excludes_rear_when_bifacial_disabled(
+        self, synthetic_weather, porto_location, monkeypatch
+    ):
+        # bifacial_model="none" must stay bit-for-bit identical to driving the
+        # temperature model with front-side poa_global alone.
+        thermal_inputs = _spy_on_faiman(monkeypatch)
+        weather_aligned, solarpos = self._detail_inputs(synthetic_weather.iloc[: 24 * 7], porto_location)
+
+        detail = solar._compute_irradiance_and_cell_temp_detail(
+            weather_aligned,
+            solarpos,
+            surface_tilt=35,
+            surface_azimuth=180,
+            pv_params=_module_params(),
+            model_options=resolve_pv_model_options(),
+        )
+
+        assert not detail.rear_effective_irradiance.any()
+        np.testing.assert_array_equal(thermal_inputs[-1], detail.poa_global)
+
+    def test_rear_irradiance_heats_the_module(self, synthetic_weather, porto_location, monkeypatch):
+        # Rear gain must contribute heat as well as power; pvlib's bifacial
+        # convention feeds poa_front + poa_back * bifaciality to the
+        # temperature model.
+        thermal_inputs = _spy_on_faiman(monkeypatch)
+        weather_aligned, solarpos = self._detail_inputs(synthetic_weather.iloc[: 24 * 7], porto_location)
+        geometry = dict(surface_tilt=35, surface_azimuth=180, pv_params=_module_params())
+
+        front_only = solar._compute_irradiance_and_cell_temp_detail(
+            weather_aligned,
+            solarpos,
+            model_options=resolve_pv_model_options(albedo=0.25),
+            **geometry,
+        )
+        bifacial = solar._compute_irradiance_and_cell_temp_detail(
+            weather_aligned,
+            solarpos,
+            model_options=resolve_pv_model_options(
+                albedo=0.25,
+                bifacial_model="infinite_sheds",
+                bifaciality=0.8,
+                gcr=0.35,
+                pvrow_height=1.5,
+                pvrow_pitch=6.0,
+            ),
+            **geometry,
+        )
+
+        np.testing.assert_array_equal(
+            thermal_inputs[-1],
+            bifacial.poa_global + bifacial.rear_effective_irradiance,
+        )
+        np.testing.assert_array_equal(bifacial.poa_global, front_only.poa_global)
+        assert (bifacial.temp_cell >= front_only.temp_cell).all()
+        # Rear irradiance below ~1 W/m2 is lost in float rounding of the
+        # temperature model, so only require a strict rise where it is real.
+        lit = bifacial.rear_effective_irradiance > 1.0
+        assert lit.any()
+        assert (bifacial.temp_cell[lit] > front_only.temp_cell[lit]).all()
+
     def test_output_shape(self, synthetic_weather, porto_location, pv_params):
         dc = calculate_pv_production_dc(
             weather_data=synthetic_weather,
@@ -316,6 +511,23 @@ class TestTracking:
             )
             assert dc.fillna(0).sum() == pytest.approx(0.0, abs=1.0)
 
+    def test_single_axis_supports_infinite_sheds_rear_gain(self, synthetic_weather, porto_location):
+        module = get_module("Generic_600W_Bifacial")
+        weather = synthetic_weather.iloc[: 24 * 30]
+
+        front_only = self._single(weather, porto_location, module, gcr=0.35)
+        bifacial = self._single(
+            weather,
+            porto_location,
+            module,
+            gcr=0.35,
+            bifacial_model="infinite_sheds",
+            pvrow_height=1.5,
+            pvrow_pitch=6.0,
+        )
+
+        assert bifacial.sum() > front_only.sum()
+
 
 class TestMultiArrayTracking:
     def test_mixed_arrays(self, synthetic_weather, porto_location):
@@ -343,6 +555,32 @@ class TestMultiArrayTracking:
                 arrays=arrays,
                 freq="h",
             )
+
+    def test_per_array_bifacial_model_is_independent(self, synthetic_weather, porto_location):
+        weather = synthetic_weather.iloc[: 24 * 30]
+        front_array = {
+            "modules": 1,
+            "module": "Generic_600W_Bifacial",
+            "tilt": 30,
+            "azimuth": 180,
+        }
+        bifacial_array = {
+            **front_array,
+            "bifacial_model": "infinite_sheds",
+            "gcr": 0.35,
+            "pvrow_height": 1.5,
+            "pvrow_pitch": 6.0,
+        }
+
+        front_only = calculate_multi_array_production(weather, porto_location, [front_array], freq="h")
+        mixed = calculate_multi_array_production(
+            weather,
+            porto_location,
+            [front_array, bifacial_array],
+            freq="h",
+        )
+
+        assert mixed.sum() > 2 * front_only.sum()
 
 
 class TestTranspositionModel:
@@ -529,6 +767,35 @@ class TestDiffuseIAM:
         assert dc.sum() > 0
 
 
+class TestIAMModel:
+    def _annual(self, weather, loc, pv_params, **kw):
+        return calculate_pv_production_dc(
+            weather_data=weather,
+            location=loc,
+            tilt=35,
+            surface_azimuth=180,
+            n_modules=1,
+            pv_params=pv_params,
+            freq="h",
+            **kw,
+        ).sum()
+
+    def test_default_matches_explicit_ashrae(self, synthetic_weather, porto_location, pv_params):
+        default = self._annual(synthetic_weather, porto_location, pv_params)
+        explicit = self._annual(synthetic_weather, porto_location, pv_params, iam_model="ashrae")
+        assert default == explicit
+
+    @pytest.mark.parametrize("iam_model", ("physical", "martin_ruiz"))
+    def test_selectable_model_changes_beam_path(self, synthetic_weather, porto_location, pv_params, iam_model):
+        ashrae = self._annual(synthetic_weather, porto_location, pv_params, iam_model="ashrae")
+        selected = self._annual(synthetic_weather, porto_location, pv_params, iam_model=iam_model)
+        assert selected != pytest.approx(ashrae)
+
+    def test_invalid_model_raises(self, synthetic_weather, porto_location, pv_params):
+        with pytest.raises(ValueError, match="Unknown IAM model"):
+            self._annual(synthetic_weather, porto_location, pv_params, iam_model="not-an-iam")
+
+
 class TestTemperatureModel:
     def _annual(self, weather, loc, pv_params, **kw):
         return calculate_pv_production_dc(
@@ -588,6 +855,15 @@ class TestTemperatureModel:
     def test_invalid_model_raises(self, synthetic_weather, porto_location, pv_params):
         with pytest.raises(ValueError, match="Unknown temperature model"):
             self._annual(synthetic_weather, porto_location, pv_params, temperature_model="sapm")
+
+    def test_noct_sam_requires_complete_module_metadata(self, synthetic_weather, porto_location, pv_params):
+        # The shared fixture is the catalog Suntech module: it has sourced
+        # efficiency but no sourced NOCT, so the strict model rejects it.
+        with pytest.raises(ValueError, match="NOCT metadata"):
+            self._annual(synthetic_weather, porto_location, pv_params, temperature_model="noct-sam")
+
+        with_metadata = _module_params(Module_Efficiency=0.21, NOCT=45.0)
+        assert self._annual(synthetic_weather, porto_location, with_metadata, temperature_model="noct-sam") > 0
 
     def test_tracking_accepts_preset(self, synthetic_weather, porto_location, pv_params):
         dc = calculate_pv_production_dc_tracking(

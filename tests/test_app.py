@@ -43,6 +43,18 @@ class TestAppValidation:
         with pytest.raises(ValueError, match="resolution"):
             App({"location": "porto", "n_modules": 10, "annual_consumption_kwh": 4000, "resolution": "30min"})
 
+    def test_noct_sam_requires_module_metadata_during_config_resolution(self):
+        with pytest.raises(ValueError, match="NOCT metadata"):
+            App(
+                {
+                    "location": "porto",
+                    "n_modules": 10,
+                    "annual_consumption_kwh": 4000,
+                    "pv_module": "Suntech_STP550S_STC",
+                    "temperature_model": "noct-sam",
+                }
+            )
+
     def test_invalid_cost_preset(self):
         with pytest.raises(ValueError, match="Unknown cost preset"):
             App({"location": "porto", "n_modules": 10, "annual_consumption_kwh": 4000, "cost_preset": "fake_preset"})
@@ -76,6 +88,17 @@ class TestAppValidation:
                     "n_modules": 10,
                     "annual_consumption_kwh": 4000,
                     "transposition_model": "not_a_model",
+                }
+            )
+
+    def test_invalid_iam_model(self):
+        with pytest.raises(ValueError, match="iam_model"):
+            App(
+                {
+                    "location": "porto",
+                    "n_modules": 10,
+                    "annual_consumption_kwh": 4000,
+                    "iam_model": "not_a_model",
                 }
             )
 
@@ -450,6 +473,22 @@ class TestAppValidation:
         # anisotropic model yields a different PV total than isotropic.
         assert _run("perez") != pytest.approx(_run("isotropic"))
 
+    def test_iam_model_reaches_simulation(self, _patch_weather):
+        def _run(model):
+            app = App(
+                {
+                    "location": "porto",
+                    "n_modules": 6,
+                    "annual_consumption_kwh": 3000,
+                    "projection_years": 1,
+                    "iam_model": model,
+                }
+            )
+            app.simulate()
+            return app.result()["pv_production_kwh"]
+
+        assert _run("physical") != pytest.approx(_run("ashrae"))
+
     def test_albedo_reaches_simulation(self, _patch_weather):
         def _run(**extra):
             app = App(
@@ -560,6 +599,74 @@ class TestAppValidation:
         assert seen["timezone"] == "Europe/Lisbon"
 
 
+class TestGcrValidation:
+    """``gcr`` is checked on every path, not only under a bifacial model.
+
+    It drives pvlib's backtracking rotation as well as ``infinite_sheds`` rear
+    view factors, and pvlib silently computes a different rotation rather than
+    rejecting a nonsensical ratio — a mistyped ``3.5`` used to return roughly
+    half the annual energy with no error anywhere.
+    """
+
+    BASE = {"location": "porto", "n_modules": 10, "annual_consumption_kwh": 4000}
+
+    @pytest.mark.parametrize("gcr", [0, 0.0, -0.5, 1.2, 3.5, 5.0])
+    @pytest.mark.parametrize("tracking", ["fixed", "single_axis", "dual_axis"])
+    def test_out_of_range_gcr_rejected_without_a_bifacial_model(self, gcr, tracking):
+        with pytest.raises(ValueError, match="'gcr' must be between 0 .exclusive. and 1 .inclusive."):
+            App({**self.BASE, "gcr": gcr, "tracking": tracking})
+
+    @pytest.mark.parametrize("gcr", ["x", None, float("nan"), float("inf")])
+    def test_non_finite_gcr_rejected(self, gcr):
+        with pytest.raises((ValueError, TypeError), match="'gcr' must be a finite number"):
+            App({**self.BASE, "gcr": gcr})
+
+    @pytest.mark.parametrize("gcr", [0.01, 0.35, 1, 1.0])
+    def test_valid_gcr_accepted(self, gcr):
+        App({**self.BASE, "gcr": gcr})
+
+    def test_per_array_gcr_override_is_reported_against_its_own_key(self):
+        with pytest.raises(ValueError, match=r"'pv_arrays\[1\].gcr' must be between"):
+            App(
+                {
+                    "location": "porto",
+                    "annual_consumption_kwh": 4000,
+                    "pv_arrays": [{"modules": 4}, {"modules": 3, "gcr": 2.0}],
+                }
+            )
+
+    def test_top_level_gcr_checked_even_when_every_array_overrides_it(self):
+        """It is still the function-level default handed to the multi-array path."""
+        with pytest.raises(ValueError, match="'gcr' must be between"):
+            App(
+                {
+                    "location": "porto",
+                    "annual_consumption_kwh": 4000,
+                    "gcr": 4.0,
+                    "pv_arrays": [{"modules": 4, "gcr": 0.4}],
+                }
+            )
+
+    @pytest.mark.parametrize(
+        ("extra", "expected"),
+        [
+            ({"resolution": "weekly"}, "resolution"),
+            ({"inverter_efficiency": 2.0}, "inverter_efficiency"),
+            ({"transposition_model": "nope"}, "transposition_model"),
+            ({"tilt": 120}, "tilt"),
+            ({"bifacial_model": "nope"}, "bifacial_model"),
+        ],
+    )
+    def test_gcr_check_never_steals_a_pre_existing_error(self, extra, expected):
+        """The check runs last, so it is purely additive.
+
+        A config that was already rejected for some other key must keep
+        reporting that key rather than switching to gcr.
+        """
+        with pytest.raises((ValueError, TypeError), match=expected):
+            App({**self.BASE, **extra, "gcr": 3.5})
+
+
 # ---------------------------------------------------------------------------
 # Simulation (with monkeypatched weather)
 # ---------------------------------------------------------------------------
@@ -643,6 +750,11 @@ class TestAppSimulateNoBattery:
         assert waterfall["pvwatts"]["components_pct"]["shading"] == 3.0
         assert waterfall["pvwatts"]["combined_kwh"] > 0
         assert waterfall["inverter"]["conversion_loss_kwh"] > 0
+        assert waterfall["bifacial"]["enabled"] is False
+        assert waterfall["bifacial"]["model"] == "none"
+        assert waterfall["bifacial"]["rear_gain_effective_dc_kwh"] == 0.0
+        rear_stage = next(stage for stage in waterfall["stages"] if stage["key"] == "bifacial_rear_gain")
+        assert rear_stage["delta_kwh"] == 0.0
 
     def test_grid_independence_range(self):
         gi = self.result["grid_independence_pct"]
@@ -661,7 +773,7 @@ class TestAppSimulateNoBattery:
         assert r["usable_ac_system_production_kwh"] == pytest.approx(
             r["self_consumption_kwh"] + r["grid_export_kwh"], abs=0.02
         )
-        assert r["provenance"]["ledger_schema_version"] == "1.0"
+        assert r["provenance"]["ledger_schema_version"] == "1.1"
         assert r["provenance"]["timezone"] == "Europe/Lisbon"
         json.dumps(r["provenance"])
 
@@ -735,6 +847,106 @@ class TestAppSimulateMultiArray:
 
     def test_multi_array_energy_positive(self):
         assert self.result["pv_production_kwh"] > 0
+
+
+class TestAppBifacialConfig:
+    def _config(self, **overrides):
+        return {
+            "location": "porto",
+            "n_modules": 6,
+            "annual_consumption_kwh": 3000,
+            "pv_module": "Generic_600W_Bifacial",
+            **overrides,
+        }
+
+    def test_front_only_default_needs_no_row_geometry(self):
+        app = App(self._config())
+
+        assert app._cfg["bifacial_model"] == "none"
+        assert app._cfg["pvrow_height"] is None
+        assert app._cfg["pvrow_pitch"] is None
+
+    def test_infinite_sheds_requires_bifacial_module(self):
+        with pytest.raises(ValueError, match="requires bifaciality metadata"):
+            App(
+                self._config(
+                    pv_module="Generic_400W",
+                    bifacial_model="infinite_sheds",
+                    pvrow_height=1.5,
+                    pvrow_pitch=6.0,
+                )
+            )
+
+    @pytest.mark.parametrize("missing", ["pvrow_height", "pvrow_pitch"])
+    def test_infinite_sheds_requires_complete_geometry(self, missing):
+        geometry = {"pvrow_height": 1.5, "pvrow_pitch": 6.0}
+        geometry.pop(missing)
+
+        with pytest.raises(ValueError, match=missing):
+            App(self._config(bifacial_model="infinite_sheds", **geometry))
+
+    def test_per_array_bifacial_override_is_normalized(self):
+        app = App(
+            {
+                "location": "porto",
+                "annual_consumption_kwh": 3000,
+                "pv_arrays": [
+                    {
+                        "modules": 6,
+                        "module": "Generic_600W_Bifacial",
+                        "tilt": 25,
+                        "azimuth": 180,
+                        "bifacial_model": "infinite_sheds",
+                        "gcr": 0.35,
+                        "pvrow_height": 1.5,
+                        "pvrow_pitch": 6.0,
+                    }
+                ],
+            }
+        )
+
+        assert app._cfg["pv_arrays"][0]["bifacial_model"] == "infinite_sheds"
+        assert app._cfg["pv_arrays"][0]["pvrow_height"] == 1.5
+
+    def test_infinite_sheds_runs_through_app_and_adds_generation(self, _patch_weather):
+        common = self._config(projection_years=1, albedo=0.3)
+        front_only = App(common)
+        front_only.simulate()
+        bifacial = App(
+            {
+                **common,
+                "bifacial_model": "infinite_sheds",
+                "gcr": 0.35,
+                "pvrow_height": 1.5,
+                "pvrow_pitch": 6.0,
+            }
+        )
+        bifacial.simulate()
+
+        result = bifacial.result()
+        assert result["pv_dc_generation_kwh"] > front_only.result()["pv_dc_generation_kwh"]
+        summary = result["pv_loss_waterfall"]["bifacial"]
+        assert summary["enabled"] is True
+        assert summary["model"] == "infinite_sheds"
+        assert summary["rear_gain_effective_dc_kwh"] > 0
+        assert summary["rear_gain_pct_of_front_effective"] > 0
+        assert summary["arrays"] == [
+            {
+                "array_index": 0,
+                "modules": 6,
+                "module": "Generic_600W_Bifacial",
+                "model": "infinite_sheds",
+                "bifaciality": 0.7,
+                "gcr": 0.35,
+                "pvrow_height": 1.5,
+                "pvrow_pitch": 6.0,
+            }
+        ]
+        rear_stage = next(
+            stage for stage in result["pv_loss_waterfall"]["stages"] if stage["key"] == "bifacial_rear_gain"
+        )
+        assert rear_stage["delta_kwh"] == pytest.approx(summary["rear_gain_effective_dc_kwh"], abs=0.01)
+        assert result["provenance"]["pv_model"]["bifacial"] == summary
 
 
 class TestAppSimulateTracking:

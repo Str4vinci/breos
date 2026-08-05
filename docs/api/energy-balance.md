@@ -19,10 +19,10 @@ Battery-specific outputs are empty when running without storage.
 
 ## Physical boundary and coupling
 
-BREOS 0.3.x implements **DC-coupled/hybrid dispatch only**. PV and the
-battery share one inverter AC nameplate. `BatteryConfig(dc_coupled=False)`
-and `App({..., "dc_coupled": False})` raise rather than silently running the
-DC model under an AC-coupled label.
+BREOS currently implements **DC-coupled/hybrid dispatch only**. PV and the
+battery share one inverter AC nameplate. `BatteryConfig(dc_coupled=False)` and
+`App({..., "dc_coupled": False})` raise rather than silently running the DC
+model under an AC-coupled label.
 
 Inputs and flow columns are average power in W over each interval. Dispatch
 converts them once to Wh (`W × interval hours`), applies all limits and

@@ -10,9 +10,11 @@ requirements, and commercial-use limits before using it in a project.
 | Resource | Use it for | Notes |
 |---|---|---|
 | [pvlib Python documentation](https://pvlib-python.readthedocs.io/en/stable/) | Solar position, irradiance transposition, PV temperature, and PV performance model references. | BREOS uses pvlib internally for PV calculations. |
-| [pvlib `retrieve_sam`](https://pvlib-python.readthedocs.io/en/stable/reference/generated/pvlib.pvsystem.retrieve_sam.html) | Accessing module and inverter parameter tables bundled with pvlib. | Useful when comparing BREOS module entries against SAM/CEC style data. |
-| [NREL SAM photovoltaic module help](https://samrepo.nrelcloud.org/help/pv_module.html) | Understanding CEC, Sandia, IEC 61853, PVWatts, and user-entered module models. | Good background when deciding which module datasheet parameters are needed. |
+| [pvlib `retrieve_sam`](https://pvlib-python.readthedocs.io/en/stable/reference/generated/pvlib.pvsystem.retrieve_sam.html) | Accessing module and inverter parameter tables bundled with pvlib. | Useful reference data for comparing BREOS entries; BREOS does not import these tables automatically. |
+| [NREL SAM photovoltaic module help](https://samrepo.nrelcloud.org/help/pv_module.html) | Understanding CEC, Sandia, IEC 61853, PVWatts, and user-entered module models. | BREOS uses the CEC six-parameter model family but does not require PySAM. SAM identifies the CEC Modules library as California Energy Commission data. |
+| [NREL SAM PV publications](https://sam.nrel.gov/photovoltaic/pv-publications.html) | Technical references for the CEC coefficient calculator and detailed SAM photovoltaic model. | Start with Dobos (2012) for the coefficient fit implemented by `breos.cec_fit`. |
 | Manufacturer datasheets | Final project assumptions for module power, temperature coefficients, dimensions, and inverter ratings. | Prefer datasheets for real designs; catalogue entries can lag current products. |
+| [Trina Vertex TSM-DEG20C.20 datasheet](https://d2fp8gxcp7iq0s.cloudfront.net/documents/jz96t7q3r8tgfwMcpj79rB4LgxqrX9QsmzpaVycj.pdf) | Maximum-power bifaciality, power temperature coefficient, and 21.2% module efficiency for BREOS's generic 600 W bifacial catalog entry. | The catalog entry remains a representative generic module and keeps its own 144-half-cell electricals; the sourced 70% bifaciality is inert unless bifacial modeling is activated. |
 
 ## Load profiles
 

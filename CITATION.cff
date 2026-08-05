@@ -20,8 +20,8 @@ keywords:
   - solar
   - degradation
 license: BSD-3-Clause
-version: 0.4.2
-date-released: "2026-07-27"
+version: 0.5.0
+date-released: "2026-08-05"
 preferred-citation:
   type: article
   title: "A Modular, Open-Source Python Framework for Household PV-Battery Sizing: Validation, Multi-Objective Optimisation, and Uncertainty Analysis"
@@ -39,3 +39,29 @@ preferred-citation:
   doi: "10.2139/ssrn.7032064"
   url: "https://papers.ssrn.com/sol3/papers.cfm?abstract_id=7032064"
   notes: "SSRN preprint."
+references:
+  - type: article
+    title: "pvlib python: 2023 project update"
+    authors:
+      - given-names: K.
+        family-names: Anderson
+      - given-names: C.
+        family-names: Hansen
+      - given-names: W.
+        family-names: Holmgren
+      - given-names: A.
+        family-names: Jensen
+      - given-names: M.
+        family-names: Mikofski
+      - given-names: A.
+        family-names: Driesse
+    journal: "Journal of Open Source Software"
+    volume: 8
+    issue: 92
+    start: 5994
+    year: 2023
+    doi: "10.21105/joss.05994"
+    notes: >-
+      BREOS uses pvlib python for PV modeling. Cite this alongside BREOS in work
+      that depends on PV production results, together with the Zenodo DOI of the
+      specific pvlib version used.

@@ -15,11 +15,19 @@ intentions, not commitments; reassess after each release.
   troubleshooting, dependency hygiene, coverage automation, cross-platform
   smoke tests, reproducible BLAST parity tooling, and an internal degradation
   lifecycle protocol. No scientific-model, dispatch, or public result changes.
-- **0.5.0** — bifacial rear-gain is the firm scope (activation key, explicit
-  rear-gain loss-waterfall stage, benchmark rows). Independently complete
-  PV-fidelity items (the pvsyst real-efficiency fix, additional IAM and
-  cell-temperature models) may ride along if each lands with its own
-  compatibility and benchmark tests.
+- **0.5.0** — completed PV-fidelity release, delivered as independently
+  reviewable slices: opt-in bifacial rear gain (activation key, explicit
+  waterfall stage, and benchmark rows); a behavior-preserving internal
+  PV-model-core refactor; selectable pvlib IAM models; sourced
+  cell-temperature fidelity; and a recommended-configuration example with an
+  equal-nameplate 2×600 W bifacial versus 3×400 W monofacial comparison.
+  Shipped alongside them: validated inverter datasheet limits, extracted
+  battery dispatch seams, a reorganized documentation site, and broader
+  package metadata. Default results stay bit-for-bit compatible apart from
+  three documented correctness fixes, each confined to a non-default
+  configuration: multi-array tracking now honours the top-level `gcr`, an
+  out-of-range `gcr` is rejected instead of silently backtracking, and the
+  `pvsyst-*` temperature presets model a realistic module efficiency.
 - **0.5.x** — the declarative config schema (behavior-preserving, and
   deliberately before TOU adds another cluster of config keys);
   horizon-profile input; and further internal maintainability work if needed.
@@ -33,6 +41,42 @@ without the 3D scene modeling. That standard is earned two ways: closing
 known systematic modeling gaps, and publishing reproducible evidence that
 the numbers are right. This work takes priority over architectural
 refactoring (see the deferred adapter layer at the bottom of this document).
+
+### 0.5.0 PV-fidelity delivery (completed)
+
+Delivered as a PR stack that kept the public `breos.App` facade and
+`breos.solar` function signatures stable:
+
+1. **Bifacial rear gain:** inert validated module `bifaciality` metadata,
+   then opt-in `bifacial_model="infinite_sheds"` rear gain for fixed,
+   tracking, and mixed multi-array systems, with rear irradiance feeding both
+   DC power and cell temperature, an explicit loss-waterfall stage, provenance,
+   a runnable ground-mount example, and paired front/rear benchmark rows.
+2. **PV model core refactor:** one internal resolved-options object for
+   transposition, ground reflectance, IAM, temperature, and bifacial choices,
+   plus narrow IAM and temperature kernels, leaving public defaults, errors,
+   and numerical results unchanged. It was a targeted seam for the two
+   features that followed, not the deferred project-wide third-party-adapter
+   rewrite.
+3. **IAM selection:** pvlib's `ashrae`, `physical`, and `martin_ruiz` beam
+   models are selectable via `iam_model`, with `ashrae` retaining the
+   historical default. When diffuse IAM is enabled, pvlib's Marion
+   solid-angle integration uses the same selected IAM model so beam and
+   diffuse optics cannot silently disagree.
+4. **Temperature fidelity:** PVsyst consumes sourced module efficiency, named
+   SAPM construction/mounting presets are selectable, and `noct-sam` strictly
+   requires NOCT plus efficiency metadata. No bundled catalog entry has a
+   sourced NOCT yet, so catalog activation remains intentionally deferred.
+5. **Guidance and evidence:** the recommended PV configuration leaves defaults
+   unchanged; IAM/temperature choices have seven-site benchmark rows; and the
+   equal-nameplate comparison separates 2×600 W bifacial front-only and
+   rear-gain results from 3×400 W monofacial results. Its albedo, GCR, row
+   height/pitch, inverter loading, and front-shading limitation are recorded
+   beside the result.
+
+Each slice landed with its own compatibility tests and benchmark evidence.
+Horizon profiles, string-aware electrical validation, currency, and
+time-of-use tariffs stayed outside 0.5.0, as planned.
 
 ### Standing validation and benchmark suite
 
@@ -98,7 +142,7 @@ documentation live in one place.
   deliberately scheduled *before* the 0.6.0 TOU/currency work adds another
   cluster of config keys, and deserves its own release slot rather than
   riding along a feature release.
-- **Coordination with the [function-level refactor plan](docs/architecture/0.4x-refactor-plan.md):** earlier internal
+- **Coordination with the [function-level refactor plan](design/architecture/0.4x-refactor-plan.md):** earlier internal
   validation cleanup should create reusable boundaries for the full schema,
   not throwaway helpers that need another rewrite in 0.5.x.
 - **The hard part is error-message parity**, not the schema itself: the
@@ -150,6 +194,16 @@ Ongoing docs hygiene:
   current dependency versions actually produce.
 - Keep security support tables, release-matrix headings, example commands, and
   version-specific limitation text aligned with the latest release.
+
+Completed for 0.5.0:
+
+- Reorganized the documentation site around task-oriented guides, model
+  assumptions, and API reference, moved internal design plans, ADRs, and
+  maintainer procedures to repository-only documentation, and replaced stale
+  0.3.x capability references with version-neutral wording.
+- Broadened PyPI classifiers and keywords, credited pvlib and the other
+  upstream projects and data sources, and routed usage questions and feature
+  ideas to GitHub Discussions.
 
 Completed for 0.4.2:
 
@@ -225,14 +279,16 @@ Capabilities still to bring online (transposition is already selectable via
 end-to-end through `build_dc_system_base` and the multi-array path):
 
 - **Bifacial rear-gain** — see the dedicated item below.
-- **Cell-temperature model choice** — expose `sapm` and `noct_sam` alongside
-  the existing Faiman and PVsyst mounting presets, with their parameter sets,
-  and let the PVsyst path take the module's real efficiency instead of
-  pvlib's 0.1 default — a natural 0.5.0 ride-along, since
-  `PVModuleParams.Module_Efficiency` already exists as explicitly unused
-  metadata.
-- **IAM model choice** — expose `martin_ruiz`, `physical`, and the SAPM IAM
-  for the beam term, extending the existing diffuse-IAM option.
+- **Cell-temperature model choice (0.5.0):** expose named SAPM presets and,
+  where the module catalog has complete sourced inputs, `noct_sam` alongside
+  the existing Faiman and PVsyst presets. Let the PVsyst path consume real
+  module efficiency instead of pvlib's 0.1 fallback. `noct_sam` must require
+  NOCT plus efficiency rather than assuming either value.
+- **IAM model choice (delivered for 0.5.0):** `iam_model` exposes pvlib's
+  `martin_ruiz` and `physical` beam models alongside the historical `ashrae`
+  path, and Marion diffuse IAM follows that same selection. SAPM IAM remains
+  later work because its module-specific polynomial coefficients are not in
+  BREOS's CEC-style catalog.
 - **DC-side loss refinements** — optional time-series ohmic/soiling/snow models in
   place of (parts of) the flat PVWatts loss stack, where inputs allow.
 - Non-goal: replacing the CEC single-diode core or the PVWatts loss model as the
@@ -277,7 +333,7 @@ modeling" above.
   limit — BREOS's primary audience — and front-optimistic for dense
   ground-mount rows. Document it, and consider a warning for tight pitch.
 - **Integration:** compute rear POA inside
-  `_compute_effective_irradiance_and_cell_temp` and blend
+  `_compute_irradiance_and_cell_temp_detail` and blend
   `effective_irradiance += bifaciality * poa_rear` before the CEC DC model. The
   stage's output contract (DC-watts series) is unchanged, so nothing downstream
   moves — the whole point of the self-contained PV stage above.
@@ -298,7 +354,7 @@ a proposed PV layout is electrically buildable. Future work should add
 string-aware validation and, later, string-aware inverter modeling when callers
 provide module, inverter, environment, MPPT, and string-topology data.
 
-- Design note: [docs/architecture/string-inverter-sizing.md](docs/architecture/string-inverter-sizing.md)
+- Design note: [design/architecture/string-inverter-sizing.md](design/architecture/string-inverter-sizing.md)
 - First, add a pure validation API for string voltage windows, startup
   voltage, MPPT current limits, parallel-string compatibility, and DC/AC ratio
   warnings.
@@ -385,7 +441,7 @@ preset twice.
   signals) as an opt-in strategy — greedy self-consumption stays the
   default. This needs an explicit dispatch-strategy contract, specified in a
   design doc before implementation (à la
-  `docs/architecture/string-inverter-sizing.md`). The seam begins around
+  `design/architecture/string-inverter-sizing.md`). The seam begins around
   `_dispatch_dc_step` in `breos/battery.py`, which is per-step and
   memoryless; price-aware dispatch needs lookahead, and since TOU presets
   are static and the simulation deterministic, a perfect-foresight day-ahead
@@ -476,7 +532,7 @@ package. The current `Location` parameter exposed by
 a `pvlib.Location`, which means BREOS does not own its own public API.
 
 - Tracking issue: [#11](https://github.com/Str4vinci/breos/issues/11)
-- Design: [docs/architecture/third-party-wrapping.md](docs/architecture/third-party-wrapping.md)
+- Design: [design/architecture/third-party-wrapping.md](design/architecture/third-party-wrapping.md)
 - Scope: pvlib first (Phase 1), then scipy / rainflow (Phase 2), then IO
   clients (Phase 3). Pandas, numpy, and matplotlib are kept direct.
 - Estimated effort: ~3–4 weeks of focused work, split into many small

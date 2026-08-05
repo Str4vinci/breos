@@ -142,6 +142,7 @@ def _provenance(cfg: dict[str, Any], resolved: ResolvedAppConfig, artifacts: Sim
         "resolution": cfg["resolution"],
         "timezone": resolved.timezone,
         "start_date": cfg["start_date"],
+        "pv_model": {"bifacial": artifacts.pv_loss_waterfall["bifacial"]},
         "degradation": artifacts.degradation_summary,
     }
 

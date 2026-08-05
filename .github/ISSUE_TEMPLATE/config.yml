@@ -1,0 +1,12 @@
+# Keep the blank-issue escape hatch: the templates guide, they should not gate.
+blank_issues_enabled: true
+contact_links:
+  - name: Question or usage help
+    url: https://github.com/Str4vinci/breos/discussions/categories/q-a
+    about: Ask about configuration, modeling assumptions, or interpreting results.
+  - name: Idea or feature discussion
+    url: https://github.com/Str4vinci/breos/discussions/categories/ideas
+    about: Propose or discuss an idea before it becomes a concrete feature request.
+  - name: Documentation
+    url: https://breos.readthedocs.io/
+    about: Getting started, configuration reference, and troubleshooting.

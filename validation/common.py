@@ -23,18 +23,69 @@ MONTH_LABELS = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "
 # Model configs the suite runs BREOS with. isotropic = shipped default;
 # perez = what the external references effectively use; perez_mid = perez plus
 # mid-interval solar position (the full PVWatts/SAM convention); perez_diffuse
-# = perez plus Marion diffuse IAM; perez_roof = perez with the PVsyst
-# semi-integrated (close roof mount) thermal preset — measures the rooftop
-# yield delta rather than matching the free-standing references. Keys are the
+# = perez plus Marion diffuse IAM; perez_physical and perez_martin_ruiz select
+# alternative beam/diffuse optics; perez_roof = perez with the PVsyst
+# semi-integrated (close roof mount) thermal preset; perez_sapm_roof is the
+# comparable Sandia close-mount glass/glass preset. Both measure rooftop yield
+# deltas rather than matching the free-standing references. Keys are the
 # model names stored in results/baseline JSONs; values are
-# calculate_pv_production_ac keyword overrides. The drift test recomputes
-# from this same mapping.
+# calculate_pv_production_ac keyword overrides. ``pv_module`` and ``n_modules``
+# are consumed by the harness before calling that function, allowing
+# same-weather and equal-nameplate comparisons. The drift test recomputes from
+# this same mapping.
 MODEL_CONFIGS = {
     "isotropic": {"transposition_model": "isotropic"},
     "perez": {"transposition_model": "perez"},
     "perez_mid": {"transposition_model": "perez", "solar_position": "mid-interval"},
     "perez_diffuse": {"transposition_model": "perez", "diffuse_iam": "marion"},
+    "perez_physical": {"transposition_model": "perez", "iam_model": "physical", "diffuse_iam": "marion"},
+    "perez_martin_ruiz": {
+        "transposition_model": "perez",
+        "iam_model": "martin_ruiz",
+        "diffuse_iam": "marion",
+    },
     "perez_roof": {"transposition_model": "perez", "temperature_model": "pvsyst-semi-integrated"},
+    "perez_sapm_roof": {"transposition_model": "perez", "temperature_model": "sapm-close-mount-glass-glass"},
+    "bifacial_front": {"pv_module": "Generic_600W_Bifacial", "transposition_model": "perez"},
+    "bifacial_rear": {
+        "pv_module": "Generic_600W_Bifacial",
+        "transposition_model": "perez",
+        "bifacial_model": "infinite_sheds",
+        "gcr": 0.35,
+        "pvrow_height": 1.5,
+        "pvrow_pitch": 6.0,
+    },
+    # Recommended common front-side settings at equal 1.2 kWp STC nameplate.
+    # The front-only bifacial row separates module-model differences from the
+    # rear-gain delta of the otherwise identical infinite-sheds row.
+    "nameplate_mono_1200": {
+        "pv_module": "Generic_400W",
+        "n_modules": 3,
+        "transposition_model": "perez",
+        "solar_position": "mid-interval",
+        "iam_model": "physical",
+        "diffuse_iam": "marion",
+    },
+    "nameplate_bifacial_front_1200": {
+        "pv_module": "Generic_600W_Bifacial",
+        "n_modules": 2,
+        "transposition_model": "perez",
+        "solar_position": "mid-interval",
+        "iam_model": "physical",
+        "diffuse_iam": "marion",
+    },
+    "nameplate_bifacial_rear_1200": {
+        "pv_module": "Generic_600W_Bifacial",
+        "n_modules": 2,
+        "transposition_model": "perez",
+        "solar_position": "mid-interval",
+        "iam_model": "physical",
+        "diffuse_iam": "marion",
+        "bifacial_model": "infinite_sheds",
+        "gcr": 0.35,
+        "pvrow_height": 1.5,
+        "pvrow_pitch": 6.0,
+    },
 }
 
 

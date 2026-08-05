@@ -65,6 +65,23 @@ git checkout -b feature/your-feature-name
 5. Commit with a clear message describing what and why
 6. Push and open a Pull Request against `develop`
 
+## Documentation placement
+
+Keep documentation close to its audience:
+
+- `docs/` is published on Read the Docs. Put installation, guides, current
+  model behavior, data resources, and public API documentation there.
+- `ROADMAP.md` communicates public release intent and capabilities under
+  consideration.
+- `design/` keeps proposals, implementation plans, and architecture decision
+  records for contributor discussion without presenting them as released
+  behavior.
+- `maintainers/` keeps operational procedures such as the release checklist.
+
+When an issue moves from proposal to implementation, update the public guide
+to describe the finished behavior rather than publishing the issue plan or PR
+checklist verbatim.
+
 ## Tests
 
 All tests are in `tests/` and use pytest. Tests run offline using synthetic weather fixtures — no API calls required.
@@ -85,10 +102,11 @@ uv run pytest tests/test_app.py -v
 
 - PRs should target `develop`, not `main`
 - Include a brief description of what changed and why
-- Make sure CI passes. It runs lint, format checks, tests and core-package
-  coverage, release artifact verification, the Sphinx docs build, and
+- Make sure CI passes. It runs lint, format checks, tests on Python 3.11
+  through 3.14, release artifact verification, the Sphinx docs build, and
   lightweight macOS/Windows public-entrypoint checks on every PR to `develop`
-  or `main`.
+  or `main`. Core-package coverage is not part of that — it is published by a
+  separate `coverage-report` job that runs nightly, on demand, and at release.
 - Keep PRs focused — one feature or fix per PR
 
 ## Reporting Issues
@@ -102,4 +120,11 @@ Open an issue on [GitHub](https://github.com/Str4vinci/breos/issues) with:
 
 ## Questions
 
-For questions or collaboration, reach out at lrodrigues@fe.up.pt.
+For usage questions, modeling assumptions, and anything where the answer is
+likely useful to someone else, use
+[GitHub Discussions](https://github.com/Str4vinci/breos/discussions) — the
+Q&A category for questions, Ideas for feature proposals that are not yet a
+concrete issue.
+
+For research collaboration or anything that does not belong in public, reach
+out at lrodrigues@fe.up.pt.

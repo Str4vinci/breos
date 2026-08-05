@@ -28,11 +28,18 @@ def test_plot_pv_loss_waterfall_writes_png(tmp_path):
                 "delta_pct_of_previous": -1.54,
             },
             {
+                "key": "bifacial_rear_gain",
+                "label": "Bifacial rear gain",
+                "energy_kwh": 1360.0,
+                "delta_kwh": 80.0,
+                "delta_pct_of_previous": 6.25,
+            },
+            {
                 "key": "temperature",
                 "label": "Cell temperature",
                 "energy_kwh": 1230.0,
-                "delta_kwh": -50.0,
-                "delta_pct_of_previous": -3.91,
+                "delta_kwh": -130.0,
+                "delta_pct_of_previous": -9.56,
             },
             {
                 "key": "inverter_conversion",

@@ -41,13 +41,23 @@ BREOS from the installed wheel instead of the source checkout. It also imports
 all 14 vendored BLAST models and verifies the installed BLAST license, DOE
 notice, and pinned upstream provenance.
 
-## 0.4.x Validation Matrix
+Regenerate `validation/baselines/breos_baseline.json` *after* bumping the
+package version, not before. The baseline records `breos.__version__` as read
+at generation time, so a baseline generated on the previous version stamps
+itself with that version while encoding the new release's behavior, which
+misleads anyone later diffing it against the release it names.
+
+## Release Validation Matrix
 
 The `Tests` workflow runs the complete matrix on Python 3.11, 3.12, 3.13, and
-3.14. Python 3.12 also reports branch-aware core-package coverage, excluding
-the vendored BLAST-Lite implementation, while macOS and Windows run a focused
-public-entrypoint smoke suite. The following release claims must remain tied to
-executable checks:
+3.14, while macOS and Windows run a focused public-entrypoint smoke suite. A
+separate `coverage-report` job publishes branch-aware core-package coverage on
+Python 3.12, excluding the vendored BLAST-Lite implementation; it runs nightly,
+on demand, and on `release/**`, so a release build produces a coverage snapshot
+without every pull request paying for one. That job is a report, not a gate — no
+threshold is configured, and a failure there means the instrumented run broke
+rather than that coverage is insufficient. The following release claims must
+remain tied to executable checks:
 
 | Gate | Executable coverage |
 | --- | --- |
@@ -58,6 +68,8 @@ executable checks:
 | Leap-year and 15-minute behavior | `tests/test_load_profiles.py`, `tests/test_weather.py`, `tests/test_battery.py` |
 | Replacement resets model state and battery inventory | `tests/test_battery.py` |
 | Battery power limits and shared inverter interactions | `tests/test_battery.py`, `tests/test_inverter.py` |
+| Bifacial metadata is inert by default and rear gain is opt-in, attributable, and provenance-carrying | `tests/test_solar.py`, `tests/test_app.py`, `tests/test_validation_drift.py` |
+| Legacy PV defaults remain stable while IAM, temperature, and recommended/equal-nameplate rows are reproducible | `tests/test_pv_model_core.py`, `tests/test_solar.py`, `tests/test_validation_drift.py` |
 | Snapshot JSON round trips and schema rejection | `tests/test_battery_profiles.py` |
 | Range/horizon warnings deduplicate across continuation | `tests/test_blast_engine.py`, `tests/test_runners.py` |
 | Installed wheel contains models, provenance, license, and notice | `tools/verify_release_artifacts.py` |

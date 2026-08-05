@@ -1,6 +1,6 @@
 [project]
 name = "breos"
-version = "0.4.2"
+version = "0.5.0"
 description = "Python library for PV and battery energy-system simulation and optimization"
 readme = "README.md"
 license = "BSD-3-Clause"
@@ -8,16 +8,35 @@ requires-python = ">=3.11"
 authors = [
     {name = "Leonardo Rodrigues", email = "lrodrigues@fe.up.pt"},
 ]
-keywords = ["photovoltaic", "battery", "energy", "simulation", "optimization", "solar", "degradation"]
+keywords = [
+    "photovoltaic",
+    "battery",
+    "energy",
+    "simulation",
+    "optimization",
+    "solar",
+    "degradation",
+    "renewable-energy",
+    "energy-storage",
+    "self-consumption",
+    "pvlib",
+]
 classifiers = [
     "Development Status :: 4 - Beta",
+    "Environment :: Console",
     "Intended Audience :: Science/Research",
     "License :: OSI Approved :: BSD License",
+    "Natural Language :: English",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
     "Programming Language :: Python :: 3.14",
     "Topic :: Scientific/Engineering",
+    "Topic :: Scientific/Engineering :: Physics",
+    "Topic :: Scientific/Engineering :: Visualization",
 ]
 dependencies = [
     "numpy>=2.0",

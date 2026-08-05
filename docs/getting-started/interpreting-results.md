@@ -73,9 +73,16 @@ echoing each array's configuration (`modules`, `module`, `tilt`,
 
 `pv_loss_waterfall` reports the year 1 PV production chain in kWh. Its
 ordered `stages` cover only the linear PV-model chain: horizontal reference,
-transposition, incidence-angle modifier, cell temperature, static PVWatts
-losses, and year 1 degradation. Dispatch is a branching flow and is therefore
-reported under `energy_balance`, not forced into a misleading linear stage.
+transposition, front-side incidence-angle modifier, optional bifacial rear
+gain, cell temperature, static PVWatts losses, and year 1 degradation. Dispatch
+is a branching flow and is therefore reported under `energy_balance`, not
+forced into a misleading linear stage.
+
+The `bifacial` block identifies the resolved model and per-array module factor
+and geometry. It reports rear gain in effective-DC-equivalent kWh and as a
+percentage of front effective irradiance. The same block is retained under
+`provenance.pv_model.bifacial` so serialized results carry the assumptions that
+produced the gain.
 
 The `pvwatts` block contains fixed-loss percentages and attributed kWh. The
 `inverter` block reports AC rating plus separate direct-PV and

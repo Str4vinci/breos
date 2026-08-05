@@ -8,11 +8,12 @@ from typing import Any
 
 import pandas as pd
 
-from breos.app_config import ResolvedAppConfig, build_costs_dict
+from breos.app_config import DEFAULTS, ResolvedAppConfig, build_costs_dict, default_module_key
 from breos.app_inputs import AppRuntimeDependencies, prepare_simulation_inputs
 from breos.battery import BatteryConfig, simulate_energy_balance
 from breos.degradation.results import build_degradation_summary_from_state
 from breos.economics import calculate_lcoe_from_projection, cost_analysis_projection, find_payback_year
+from breos.pv_modules import get_module
 from breos.solar import PVProductionBreakdown
 from breos.utils import get_hours_per_step
 
@@ -35,7 +36,11 @@ class SimulationArtifacts:
     degradation_summary: dict[str, Any]
 
 
-LEDGER_SCHEMA_VERSION = "1.0"
+# 1.1 adds the bifacial_rear_gain PV loss-waterfall stage, relabels the iam
+# stage to name the front side explicitly, and adds the pv_model provenance
+# block. All three are additive, so 1.0 consumers keep reading the fields they
+# already knew.
+LEDGER_SCHEMA_VERSION = "1.1"
 
 
 def _series_energy_kwh(series: pd.Series, freq: str) -> float:
@@ -62,6 +67,68 @@ def _waterfall_stage(key: str, label: str, energy_kwh: float, previous_kwh: floa
     return stage
 
 
+def _bifacial_summary(
+    cfg: dict[str, Any],
+    resolved: ResolvedAppConfig,
+    front_effective_dc_kwh: float,
+    rear_gain_dc_kwh: float,
+) -> dict[str, Any]:
+    """Build JSON-safe bifacial configuration and year-1 gain provenance."""
+    default_model = cfg.get("bifacial_model", DEFAULTS["bifacial_model"])
+    default_gcr = cfg.get("gcr", DEFAULTS["gcr"])
+    default_height = cfg.get("pvrow_height")
+    default_pitch = cfg.get("pvrow_pitch")
+    resolved_arrays = getattr(resolved, "pv_arrays", None)
+    if resolved_arrays:
+        arrays = resolved_arrays
+    else:
+        arrays = [
+            {
+                "modules": cfg["n_modules"],
+                "module": cfg.get("pv_module") or default_module_key(),
+                "bifacial_model": default_model,
+                "gcr": default_gcr,
+                "pvrow_height": default_height,
+                "pvrow_pitch": default_pitch,
+            }
+        ]
+
+    rows: list[dict[str, Any]] = []
+    models: set[str] = set()
+    for index, array in enumerate(arrays):
+        model = str(array.get("bifacial_model", default_model)).strip().lower()
+        module_key = array.get("module") or cfg.get("pv_module") or default_module_key()
+        module = get_module(module_key)
+        models.add(model)
+        row: dict[str, Any] = {
+            "array_index": index,
+            "modules": int(array["modules"]),
+            "module": module_key,
+            "model": model,
+            "bifaciality": float(module.bifaciality) if module.bifaciality is not None else None,
+        }
+        if model != "none":
+            row.update(
+                {
+                    "gcr": float(array.get("gcr", default_gcr)),
+                    "pvrow_height": float(array.get("pvrow_height", default_height)),
+                    "pvrow_pitch": float(array.get("pvrow_pitch", default_pitch)),
+                }
+            )
+        rows.append(row)
+
+    rear_gain_dc_kwh = max(0.0, rear_gain_dc_kwh)
+    return {
+        "enabled": any(model != "none" for model in models),
+        "model": next(iter(models)) if len(models) == 1 else "mixed",
+        "rear_gain_effective_dc_kwh": _rounded(rear_gain_dc_kwh),
+        "rear_gain_pct_of_front_effective": _rounded(
+            rear_gain_dc_kwh / front_effective_dc_kwh * 100.0 if front_effective_dc_kwh else 0.0
+        ),
+        "arrays": rows,
+    }
+
+
 def _build_pv_loss_waterfall(
     pv_breakdown: PVProductionBreakdown,
     first_year_results_df: pd.DataFrame,
@@ -72,6 +139,8 @@ def _build_pv_loss_waterfall(
     freq = cfg["resolution"]
     horizontal_dc = _series_energy_kwh(pv_breakdown.horizontal_reference_dc, freq)
     poa_dc = _series_energy_kwh(pv_breakdown.poa_global_dc, freq)
+    front_effective_dc = _series_energy_kwh(pv_breakdown.front_effective_irradiance_dc, freq)
+    rear_gain_dc = _series_energy_kwh(pv_breakdown.rear_gain_dc, freq)
     effective_dc = _series_energy_kwh(pv_breakdown.effective_irradiance_dc, freq)
     module_dc = _series_energy_kwh(pv_breakdown.module_dc, freq)
     dc_after_static = _series_energy_kwh(pv_breakdown.dc_after_static_losses, freq)
@@ -118,7 +187,8 @@ def _build_pv_loss_waterfall(
     stages = [
         _waterfall_stage("horizontal_reference_dc", "Horizontal irradiance reference", horizontal_dc),
         _waterfall_stage("transposition", "Plane-of-array transposition", poa_dc, horizontal_dc),
-        _waterfall_stage("iam", "Incidence-angle modifier", effective_dc, poa_dc),
+        _waterfall_stage("iam", "Front-side incidence-angle modifier", front_effective_dc, poa_dc),
+        _waterfall_stage("bifacial_rear_gain", "Bifacial rear gain", effective_dc, front_effective_dc),
         _waterfall_stage("temperature", "Cell temperature", module_dc, effective_dc),
         _waterfall_stage("pvwatts_static", "Static PVWatts losses", dc_after_static, module_dc),
         _waterfall_stage("year_1_degradation", "Year 1 PV degradation", dc_after_degradation, dc_after_static),
@@ -158,6 +228,7 @@ def _build_pv_loss_waterfall(
         "state_unit": "kWh at period boundary",
         "ledger_schema_version": LEDGER_SCHEMA_VERSION,
         "stages": stages,
+        "bifacial": _bifacial_summary(cfg, resolved, front_effective_dc, rear_gain_dc),
         "pvwatts": {
             "components_pct": {name: float(value) for name, value in pv_breakdown.pvwatts_components_pct.items()},
             "components_kwh": pvwatts_components,

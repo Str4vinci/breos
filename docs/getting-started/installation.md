@@ -16,10 +16,11 @@ uv add breos
 uvx breos run --location porto --n-modules 10 --annual-consumption-kwh 4000
 ```
 
-To install a specific release tag directly from GitHub instead:
+To install a specific release tag directly from GitHub instead, replace
+`X.Y.Z` with the release you want:
 
 ```bash
-pip install "breos @ git+https://github.com/Str4vinci/breos.git@v0.4.2"
+pip install "breos @ git+https://github.com/Str4vinci/breos.git@vX.Y.Z"
 ```
 
 ## From source
@@ -39,7 +40,7 @@ workflows that need heavier optional packages:
 pip install "breos[plots]"          # matplotlib plotting helpers
 pip install "breos[optimization]"   # pymoo multi-objective sizing
 pip install "breos[weather]"        # Open-Meteo historical weather fetching
-pip install "breos[fast]"           # Numba kernels
+pip install "breos[fast]"           # Approximate screening kernels only
 pip install "breos[location-tools]" # geocoding and timezone lookup helpers
 ```
 
