@@ -2,6 +2,7 @@
 
 import csv
 import json
+from pathlib import Path
 
 from breos import cli
 
@@ -286,6 +287,17 @@ emissions_country = "PT"
     assert "Location: porto (Europe/Lisbon)" in output
     assert "PV: 10 modules" in output
     assert "Inverter AC rating" in output
+
+
+def test_recommended_pv_example_validates(capsys):
+    config_path = Path(__file__).resolve().parents[1] / "configs" / "examples" / "recommended-pv.toml"
+
+    exit_code = cli.main(["validate-config", str(config_path)])
+
+    assert exit_code == 0
+    output = capsys.readouterr().out
+    assert "Config OK" in output
+    assert "PV: 8 modules, 4.400 kWp" in output
 
 
 def test_run_dry_run_outputs_resolved_config_without_simulating(monkeypatch, tmp_path):

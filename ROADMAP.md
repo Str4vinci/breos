@@ -58,12 +58,12 @@ stable while landing the release as a local/PR stack in this order:
    construction/mounting presets are selectable, and `noct-sam` strictly
    requires NOCT plus efficiency metadata. No bundled catalog entry has a
    sourced NOCT yet, so catalog activation remains intentionally deferred.
-4. **Guidance and evidence:** publish a recommended PV configuration without
-   changing defaults, add IAM/temperature rows to the seven-site validation
-   report, and add a practical equal-nameplate comparison of 2×600 W
-   bifacial against 3×400 W monofacial modules. State the albedo, GCR, row
-   height/pitch, inverter loading, and the front-shading limitation beside the
-   result.
+4. **Guidance and evidence (delivered):** the recommended PV configuration
+   leaves defaults unchanged; IAM/temperature choices have seven-site
+   benchmark rows; and the equal-nameplate comparison separates 2×600 W
+   bifacial front-only and rear-gain results from 3×400 W monofacial results.
+   Its albedo, GCR, row height/pitch, inverter loading, and front-shading
+   limitation are recorded beside the result.
 
 Each slice gets its own compatibility tests and benchmark evidence. Horizon
 profiles, string-aware electrical validation, currency, and time-of-use

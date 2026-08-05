@@ -26,6 +26,22 @@ The bifacial rear-gain column compares `bifacial_rear` with `bifacial_front` usi
 | Melbourne, Australia | 5768 | 6054 | 6164 | 5974 | 5599 | +8.1% | +10.1% | +6.7% | -0.3% | +0.2% | -3.9% | -5.7% | +7.2% | — | — | PVGIS PVGIS-ERA5 2005-2023; PVWatts: fetch failed |
 | São Paulo, Brazil | 5464 | 5589 | 5611 | 5483 | 5163 | +8.2% | +8.7% | +6.2% | -0.2% | +0.2% | -3.1% | -5.6% | +8.1% | — | — | PVGIS PVGIS-SARAH3 2005-2023; PVWatts: fetch failed |
 
+## Equal-nameplate module comparison (1.2 kWp STC)
+
+This comparison holds weather, tilt/azimuth, albedo 0.2, DC/AC ratio 1.2, inverter efficiency 0.96, losses, Perez transposition, mid-interval solar position, physical beam IAM, Marion diffuse IAM, and the Faiman open-rack temperature model fixed. It compares 3×400 W monofacial modules with 2×600 W bifacial modules front-only, then activates infinite-sheds rear irradiance at GCR 0.35, row-center height 1.5, and pitch 6.0 (height and pitch use the same arbitrary unit).
+
+Equal STC nameplate does not mean equal module area, string layout, or electrical and temperature coefficients. Therefore `front vs mono` includes the catalog modules' different parameter sets; `rear vs front` isolates the modeled rear gain. The front side remains unshaded, so dense-row results can be optimistic and are not a bankable layout estimate.
+
+| Location | 3×400 W mono (kWh) | 2×600 W bifacial, front-only (kWh) | 2×600 W bifacial + rear (kWh) | Front vs mono | Rear vs front |
+|---|---|---|---|---|---|
+| Porto, Portugal | 1857 | 1862 | 2001 | +0.3% | +7.5% |
+| Berlin, Germany | 1257 | 1260 | 1362 | +0.3% | +8.1% |
+| Golden, Colorado, USA (NREL) | 2204 | 2208 | 2344 | +0.2% | +6.1% |
+| Nairobi, Kenya | 1793 | 1799 | 1964 | +0.3% | +9.2% |
+| New Delhi, India | 1990 | 1998 | 2138 | +0.4% | +7.0% |
+| Melbourne, Australia | 1822 | 1826 | 1955 | +0.2% | +7.1% |
+| São Paulo, Brazil | 1649 | 1654 | 1790 | +0.3% | +8.2% |
+
 ## Monthly shape vs PVGIS (BREOS perez, kWh)
 
 ### Porto, Portugal

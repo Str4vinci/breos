@@ -147,6 +147,26 @@ stack without fetching weather or simulating. In JSON output, `pv.losses`
 contains the resolved component percentages plus the combined PVWatts loss
 percentage after applying any `pv_loss_overrides`.
 
+## Recommended PV-model starting point
+
+BREOS keeps historical defaults stable so existing studies remain reproducible.
+For a new hourly study using interval-averaged weather, the explicit profile in
+`configs/examples/recommended-pv.toml` is a stronger starting point:
+
+| Choice | Compatible default | Recommended starting point |
+|---|---|---|
+| Sky transposition | `isotropic` | `perez` |
+| Solar position | `interval-start` | `mid-interval` for interval-averaged weather |
+| Beam IAM | `ashrae` | `physical` |
+| Diffuse IAM | `none` | `marion` |
+| Cell temperature | `faiman` open rack | A mount-appropriate PVsyst or SAPM preset |
+
+These are explicit modeling assumptions, not universally correct replacements.
+Match the timestamp convention to the weather source and the temperature preset
+to the physical construction. The example uses a close rooftop mount and a
+catalog module with sourced efficiency; a free-standing array should select a
+free-standing/open-rack thermal model instead.
+
 ## Incidence-angle modifier (IAM)
 
 `iam_model` controls the optical loss applied to direct irradiance. The
