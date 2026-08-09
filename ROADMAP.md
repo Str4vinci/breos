@@ -466,7 +466,7 @@ BREOS answers "what does *this* system cost and yield under *one* set of
 economic assumptions". The assumptions that dominate the answer — electricity
 price, capex, feed-in tariff, discount rate, and how each escalates over the
 project lifetime — are the ones a user is least able to know and most wants to
-interrogate. Make them explicit, varyable, and reportable, so BREOS can produce
+interrogate. Make them explicit, variable, and reportable, so BREOS can produce
 the four standard techno-economic analyses:
 
 - **Sensitivity analysis** (one-at-a-time): which assumption does the answer
@@ -489,13 +489,22 @@ declarative config schema before TOU.
 is currently price-blind (`breos/battery.py` carries `replacement_cost` only as
 a bookkeeping tag on replacement events, never as a dispatch input), so varying
 prices, capex, tariffs, or the discount rate changes no simulated energy flow.
-A pure-economics scenario run must therefore simulate the physics *once* and
-re-run only `cost_analysis_projection()` per scenario — hundreds of scenarios in
-seconds rather than hundreds of full simulations. This shortcut becomes wrong
-the moment TOU-aware dispatch (0.7.0 target, above) makes price an input to
-dispatch, so the scenario runner must detect a price-aware dispatch strategy and
-fall back to full re-simulation. Treat that guard as a correctness requirement,
-not an optimisation detail.
+A pure-economics scenario run should therefore simulate the physics *once* and
+revalue its price-independent outputs per scenario — hundreds of scenarios in
+seconds rather than hundreds of full simulations. This is not yet equivalent to
+naively calling `cost_analysis_projection()` again: the App runner currently
+prices each battery replacement before simulation and stores that currency
+amount in `yearly_summary_df["Replacement_Cost"]`. Phase 2 must instead retain
+the price-independent replacement schedule/count and reprice every event from
+the scenario's battery capex and replacement-cost escalator. A regression test
+must vary battery capex while holding the replacement years fixed and assert
+that both initial and replacement capex change.
+
+The simulate-once shortcut becomes wrong the moment TOU-aware dispatch (0.7.0
+target, above) makes price an input to dispatch, so the scenario runner must
+detect a price-aware dispatch strategy and fall back to full re-simulation.
+Treat both that guard and replacement-event repricing as correctness
+requirements, not optimisation details.
 
 Phases:
 
@@ -522,12 +531,15 @@ Phases:
 - **Phase 2 — scenario definition and runner (0.6.x/0.7.0).** Named coherent
   bundles in config (`[scenarios.high_price_low_capex]`), each a validated
   override set over phase 0's surface; one result row per scenario × design.
-  Implements the simulate-once/re-cost-many path and the price-aware-dispatch
-  guard above. Ship a tornado diagram and a scenario-comparison plot.
+  Implements the simulate-once/re-cost-many path, price-independent replacement
+  events, and the price-aware-dispatch guard above. Ship a tornado diagram and
+  a scenario-comparison plot.
 - **Phase 3 — switching values.** A 1-D root-find over any scalar economic knob
-  for a target (`npv_savings == 0`, `payback_year <= N`). Cheap once phases 0–2
-  exist, and the highest-value output for a policy audience: "the feed-in tariff
-  at which residential storage turns NPV-positive in PT is X".
+  for a continuous target such as `npv_savings == 0`. Express a
+  `payback_year <= N` threshold as discounted cumulative savings at year N equal
+  to zero; do not root-find the discrete integer `payback_year`. Cheap once
+  phases 0–2 exist, and the highest-value output for a policy audience: "the
+  feed-in tariff at which residential storage turns NPV-positive in PT is X".
 - **Phase 4 (optional) — economic uncertainty in Monte Carlo.** Extend
   `MonteCarloSettings`, which today samples only weather year and load scale, to
   sample economic inputs from distributions and report P10/P50/P90 NPV and LCOE.
