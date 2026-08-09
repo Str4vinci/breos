@@ -784,12 +784,13 @@ def _apply_resistance_fade(
     aging.cumulative_resistance_cycle += dR_cycle
     aging.cumulative_resistance_calendar += dR_calendar
 
-    # Feed the resistance penalty back into the energy loop, split evenly
-    # across charge and discharge so their product equals the effective
-    # round-trip efficiency.
-    rte_derate = math.sqrt(1.0 + aging.resistance_growth)
-    aging.eff_charge = battery_config.charge_efficiency / rte_derate
-    aging.eff_discharge = battery_config.discharge_efficiency / rte_derate
+    # Feed the resistance penalty back into the energy loop using the same
+    # mapping as the initial dispatch state.
+    aging.eff_charge, aging.eff_discharge = resistance_to_efficiency(
+        aging.resistance_growth,
+        battery_config.charge_efficiency,
+        battery_config.discharge_efficiency,
+    )
     return aging.eff_charge * aging.eff_discharge
 
 
@@ -1130,10 +1131,12 @@ def simulate_energy_balance(
     # fade model is enabled; updated after each daily degradation step.
     eff_charge = battery_config.charge_efficiency
     eff_discharge = battery_config.discharge_efficiency
-    if battery_config.enable_resistance_fade and resistance_growth > 0.0:
-        _rte_derate = math.sqrt(1.0 + resistance_growth)
-        eff_charge /= _rte_derate
-        eff_discharge /= _rte_derate
+    if battery_config.enable_resistance_fade:
+        eff_charge, eff_discharge = resistance_to_efficiency(
+            resistance_growth,
+            battery_config.charge_efficiency,
+            battery_config.discharge_efficiency,
+        )
 
     degradation_tracking: List[Dict[str, Any]] = []
     T_cell_day_sum = 0.0
@@ -1820,8 +1823,9 @@ def resistance_to_efficiency(
     """
     Convert resistance growth to effective charge/discharge efficiencies.
 
-    Internal resistance growth increases ohmic losses proportionally.
-    The efficiency penalty is split equally between charge and discharge.
+    Internal resistance growth increases ohmic losses proportionally. Both
+    baseline efficiencies receive the same ``sqrt(1 + growth)`` derating,
+    preserving their original ratio.
 
     RTE_new = RTE_base / (1 + resistance_growth)
 
@@ -1836,15 +1840,8 @@ def resistance_to_efficiency(
     if resistance_growth <= 0:
         return base_charge_eff, base_discharge_eff
 
-    rte_base = base_charge_eff * base_discharge_eff
-    rte_new = rte_base / (1.0 + resistance_growth)
-
-    # Split new RTE as sqrt across charge and discharge
-    sqrt_rte_new = math.sqrt(max(0.01, rte_new))
-    eff_charge = min(base_charge_eff, sqrt_rte_new)
-    eff_discharge = min(base_discharge_eff, sqrt_rte_new)
-
-    return eff_charge, eff_discharge
+    derate = math.sqrt(1.0 + resistance_growth)
+    return base_charge_eff / derate, base_discharge_eff / derate
 
 
 def _normalise_battery_type(battery_type: str) -> str:
