@@ -318,6 +318,25 @@ def test_shipped_example_configs_validate(config_path, capsys):
     assert "Config OK" in capsys.readouterr().out
 
 
+def test_validate_config_rejects_malformed_sweep(tmp_path, capsys):
+    config_path = tmp_path / "invalid-sweep.toml"
+    config_path.write_text(
+        """
+location = "porto"
+n_modules = 10
+annual_consumption_kwh = 4000
+
+[sweep]
+battery_kwh = []
+""".strip()
+    )
+
+    exit_code = cli.main(["validate-config", str(config_path)])
+
+    assert exit_code == 1
+    assert "sweep.battery_kwh must be a non-empty array" in capsys.readouterr().err
+
+
 def test_run_dry_run_outputs_resolved_config_without_simulating(monkeypatch, tmp_path):
     monkeypatch.setattr(cli, "App", FakeApp)
     FakeApp.simulated = False
