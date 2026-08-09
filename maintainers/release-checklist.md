@@ -135,14 +135,19 @@ Release flow:
    dependencies still come from PyPI:
 
    ```
-   uv venv /tmp/breos-testpypi
+   uv venv --clear /tmp/breos-testpypi
    VIRTUAL_ENV=/tmp/breos-testpypi uv pip install \
-     --index-url https://test.pypi.org/simple/ \
-     --extra-index-url https://pypi.org/simple/ breos
+     --index https://test.pypi.org/simple/ \
+     breos==X.Y.Z
+   VIRTUAL_ENV=/tmp/breos-testpypi uv pip show breos
+   VIRTUAL_ENV=/tmp/breos-testpypi uv pip check
    ```
 
-   If uv resolves a dependency to an unexpected TestPyPI upload rather than
-   the real PyPI release, add `--index-strategy unsafe-best-match`.
+   `--index` gives TestPyPI priority while leaving PyPI as uv's default,
+   lower-priority index for dependencies that are absent from TestPyPI. Keep
+   uv's default `first-index` strategy: if an unexpected TestPyPI package
+   shadows a dependency, investigate it rather than enabling an `unsafe-*`
+   index strategy.
 3. Tag the release commit on `main` (`git tag vX.Y.Z && git push origin vX.Y.Z`).
    The workflow refuses tags whose commit is not on `main`, then publishes to
    PyPI.
@@ -150,8 +155,10 @@ Release flow:
    installs from a clean environment:
 
    ```
-   uv venv /tmp/breos-pypi
+   uv venv --clear /tmp/breos-pypi
    VIRTUAL_ENV=/tmp/breos-pypi uv pip install breos==X.Y.Z
+   VIRTUAL_ENV=/tmp/breos-pypi uv pip show breos
+   VIRTUAL_ENV=/tmp/breos-pypi uv pip check
    ```
 
 ## Data And Docs
