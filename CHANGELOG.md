@@ -4,6 +4,14 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 
 ## [Unreleased]
 
+### Fixed
+- Accept the optional `[sweep]` config section in `ALLOWED_CONFIG_KEYS`, so
+  `breos validate-config configs/examples/sweep.toml` no longer rejects a
+  shipped example that `breos sweep` runs successfully. The documented
+  behaviour was already that `[sweep]` and `[montecarlo]` are recognised; only
+  `[montecarlo]` actually was. Every `configs/examples/*.toml` is now covered
+  by a `validate-config` regression test.
+
 ## [0.5.0] - 2026-08-05
 
 ### Added
