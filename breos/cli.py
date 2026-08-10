@@ -339,6 +339,8 @@ def _list_options_command(args: argparse.Namespace) -> int:
 
 def _validate_config(args: argparse.Namespace) -> int:
     config = _load_config(args.config)
+    if "sweep" in config:
+        _normalise_sweep_grid(config["sweep"])
     payload = _resolved_config_summary(config)
     if args.json:
         print(json.dumps(payload, indent=2))
