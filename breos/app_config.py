@@ -89,16 +89,18 @@ DEFAULTS: dict[str, Any] = {
     "start_date": "2023-01-01",
 }
 
-# Required inputs are not in DEFAULTS (they have no default); ``montecarlo`` is
-# an optional config-file section consumed by the Monte Carlo runner/CLI, which
-# validates the same dict through resolve_app_config. Everything else at the top
-# level must be a known key so typos (e.g. ``batery_kwh``) fail loudly instead
-# of being silently dropped by merge_defaults.
+# Required inputs are not in DEFAULTS (they have no default); ``montecarlo`` and
+# ``sweep`` are optional config-file sections consumed by their dedicated
+# runners/CLI commands, which validate the same dict through resolve_app_config.
+# Everything else at the top level must be a known key so typos (e.g.
+# ``batery_kwh``) fail loudly instead of being silently dropped by
+# merge_defaults.
 ALLOWED_CONFIG_KEYS: frozenset[str] = frozenset(DEFAULTS) | {
     "location",
     "annual_consumption_kwh",
     "n_modules",
     "montecarlo",
+    "sweep",
     "battery_type",
 }
 
