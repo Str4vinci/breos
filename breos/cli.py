@@ -13,22 +13,12 @@ from pathlib import Path
 from typing import Any, Sequence
 
 from breos.app import App
-from breos.app_config import resolve_app_config
+from breos.app_config import APP_CONFIG_FIELDS, resolve_app_config
 from breos.degradation import get_battery_model_profile, list_battery_models
 from breos.load_profiles import PROFILE_ALIASES, PROFILE_NAMES
 from breos.pv_modules import MODULES
 from breos.resources import load_config_json
-from breos.solar import (
-    BIFACIAL_MODELS,
-    DIFFUSE_IAM_METHODS,
-    IAM_MODELS,
-    PEREZ_MODELS,
-    SOLAR_POSITION_METHODS,
-    SURFACE_TYPES,
-    TEMPERATURE_MODELS,
-    TRANSPOSITION_MODELS,
-    resolve_pvwatts_losses,
-)
+from breos.solar import resolve_pvwatts_losses
 
 
 def _package_version() -> str:
@@ -58,57 +48,21 @@ def _load_config(path: Path) -> dict[str, Any]:
     return {key.replace("-", "_"): value for key, value in data.items()}
 
 
-def _add_override(overrides: dict[str, Any], key: str, value: Any) -> None:
-    if value is not None:
-        overrides[key] = value
-
-
 def _build_config(args: argparse.Namespace) -> dict[str, Any]:
     config = _load_config(args.config) if args.config else {}
 
     overrides: dict[str, Any] = {}
-    _add_override(overrides, "location", args.location.lower() if args.location else None)
-    _add_override(overrides, "n_modules", args.n_modules)
-    _add_override(overrides, "annual_consumption_kwh", args.annual_consumption_kwh)
-    _add_override(overrides, "battery_kwh", args.battery_kwh)
-    _add_override(overrides, "battery_max_charge_power_w", args.battery_max_charge_power_w)
-    _add_override(overrides, "battery_max_discharge_power_w", args.battery_max_discharge_power_w)
-    _add_override(overrides, "pv_module", args.pv_module)
-    _add_override(overrides, "load_profile", args.load_profile)
-    _add_override(overrides, "rlp_directory", str(args.rlp_directory) if args.rlp_directory else None)
-    _add_override(overrides, "tilt", args.tilt)
-    _add_override(overrides, "azimuth", args.azimuth)
-    _add_override(overrides, "transposition_model", args.transposition_model)
-    _add_override(overrides, "albedo", args.albedo)
-    _add_override(overrides, "surface_type", args.surface_type)
-    _add_override(overrides, "model_perez", args.model_perez)
-    _add_override(overrides, "solar_position", args.solar_position)
-    _add_override(overrides, "iam_model", args.iam_model)
-    _add_override(overrides, "diffuse_iam", args.diffuse_iam)
-    _add_override(overrides, "temperature_model", args.temperature_model)
-    _add_override(overrides, "bifacial_model", args.bifacial_model)
-    _add_override(overrides, "pvrow_height", args.pvrow_height)
-    _add_override(overrides, "pvrow_pitch", args.pvrow_pitch)
-    _add_override(overrides, "gcr", args.gcr)
-    _add_override(overrides, "resolution", args.resolution)
-    _add_override(overrides, "projection_years", args.projection_years)
-    _add_override(overrides, "inflation_rate", args.inflation_rate)
-    _add_override(overrides, "sell_price_inflation", args.sell_price_inflation)
-    _add_override(overrides, "export_emissions_factor_gco2_kwh", args.export_emissions_factor_gco2_kwh)
-    _add_override(overrides, "discount_rate", args.discount_rate)
-    _add_override(overrides, "pv_degradation_rate", args.pv_degradation_rate)
-    _add_override(overrides, "calendar_model", args.calendar_model)
-    _add_override(overrides, "degradation_engine", args.degradation_engine)
-    _add_override(overrides, "blast_model", args.blast_model)
-    _add_override(overrides, "dc_coupled", args.dc_coupled)
-    _add_override(overrides, "inverter_efficiency", args.inverter_efficiency)
-    _add_override(overrides, "inverter_loading_ratio", args.inverter_loading_ratio)
-    _add_override(overrides, "start_date", args.start_date)
-
-    if args.cost_preset:
-        overrides["cost_preset"] = args.cost_preset.replace("-", "_")
-    if args.emissions_country:
-        overrides["emissions_country"] = args.emissions_country.upper()
+    for key, field in APP_CONFIG_FIELDS.items():
+        if not field.cli_flags:
+            continue
+        value = getattr(args, key)
+        if value is None:
+            continue
+        if field.cli_normalizer is not None:
+            value = field.cli_normalizer(value)
+        if value is None:
+            continue
+        overrides[key] = value
 
     return {**config, **overrides}
 
@@ -509,6 +463,24 @@ def _montecarlo(args: argparse.Namespace) -> int:
     return 0
 
 
+def _add_run_config_arguments(parser: argparse.ArgumentParser) -> None:
+    """Generate App config override flags from the field registry."""
+    for key, field in APP_CONFIG_FIELDS.items():
+        if not field.cli_flags:
+            continue
+
+        kwargs: dict[str, Any] = {"dest": key, "help": field.cli_help}
+        if field.cli_type is not None:
+            kwargs["type"] = field.cli_type
+        if field.cli_choices is not None:
+            kwargs["choices"] = field.cli_choices
+        if field.cli_action is not None:
+            kwargs["action"] = field.cli_action
+            # A missing boolean flag must not overwrite a config-file value.
+            kwargs["default"] = None
+        parser.add_argument(*field.cli_flags, **kwargs)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="breos", description="Run BREOS simulations from the command line.")
     parser.add_argument("--version", action="version", version=f"breos {_package_version()}")
@@ -517,127 +489,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     run = subparsers.add_parser("run", help="Run a PV + battery simulation.")
     run.add_argument("--config", type=Path, help="TOML or JSON file with App configuration.")
-    run.add_argument("--location", help="Location preset key, for example 'porto'.")
-    run.add_argument("--n-modules", type=int, help="Number of PV modules.")
-    run.add_argument("--annual-consumption-kwh", type=float, help="Annual electricity demand in kWh.")
-    run.add_argument("--battery-kwh", type=float, help="Battery capacity in kWh.")
-    run.add_argument(
-        "--battery-max-charge-power-w",
-        type=float,
-        help="Maximum DC power entering the battery charge path in W (default: unlimited).",
-    )
-    run.add_argument(
-        "--battery-max-discharge-power-w",
-        type=float,
-        help="Maximum battery AC power delivered to load in W (default: unlimited).",
-    )
-    run.add_argument("--cost-preset", help="Cost preset key, for example 'residential-pt'.")
-    run.add_argument("--emissions-country", help="Country code for emissions, for example 'pt'.")
-    run.add_argument("--pv-module", help="PV module catalogue key.")
-    run.add_argument("--load-profile", help="Load profile type.")
-    run.add_argument("--rlp-directory", type=Path, help="Directory containing licensed external RLP CSV files.")
-    run.add_argument("--tilt", type=float, help="PV tilt angle in degrees.")
-    run.add_argument("--azimuth", type=float, help="PV surface azimuth in degrees.")
-    run.add_argument(
-        "--transposition-model",
-        "--sky-model",
-        dest="transposition_model",
-        choices=TRANSPOSITION_MODELS,
-        help="Sky-diffusion model for POA transposition (default: isotropic).",
-    )
-    run.add_argument(
-        "--albedo", type=float, help="Ground reflectance 0-1 (default: pvlib 0.25). Excludes --surface-type."
-    )
-    run.add_argument(
-        "--surface-type",
-        choices=SURFACE_TYPES,
-        help="Named ground cover mapped to an albedo (alternative to --albedo).",
-    )
-    run.add_argument(
-        "--perez-model",
-        dest="model_perez",
-        choices=PEREZ_MODELS,
-        help="Perez coefficient set (only used with --transposition-model perez).",
-    )
-    run.add_argument(
-        "--solar-position",
-        dest="solar_position",
-        choices=SOLAR_POSITION_METHODS,
-        help=(
-            "Where within each timestep the sun position is evaluated. 'mid-interval' matches "
-            "PVWatts/SAM for interval-averaged weather (default: interval-start)."
-        ),
-    )
-    run.add_argument(
-        "--iam-model",
-        choices=IAM_MODELS,
-        help="Beam incidence-angle modifier (default: ashrae, historical compatibility).",
-    )
-    run.add_argument(
-        "--diffuse-iam",
-        dest="diffuse_iam",
-        choices=DIFFUSE_IAM_METHODS,
-        help=(
-            "Whether IAM is also applied to the diffuse POA components. 'marion' weighs sky- and "
-            "ground-diffuse with the view-factor-integrated selected IAM model (default: none, beam-only)."
-        ),
-    )
-    run.add_argument(
-        "--temperature-model",
-        dest="temperature_model",
-        choices=TEMPERATURE_MODELS,
-        help=(
-            "Cell-temperature model / mounting preset. The pvsyst-* and sapm-* presets use documented "
-            "mounting coefficients; noct-sam additionally requires sourced module NOCT and efficiency "
-            "metadata (not yet bundled). Default: faiman, open rack."
-        ),
-    )
-    run.add_argument(
-        "--bifacial-model",
-        choices=BIFACIAL_MODELS,
-        help="Rear-irradiance model (default: none; infinite_sheds requires bifacial module metadata and row geometry).",
-    )
-    run.add_argument(
-        "--pvrow-height",
-        type=float,
-        help="PV row center height above ground; use the same unit as --pvrow-pitch.",
-    )
-    run.add_argument(
-        "--pvrow-pitch",
-        type=float,
-        help="Distance between PV rows; use the same unit as --pvrow-height.",
-    )
-    run.add_argument("--gcr", type=float, help="PV row ground coverage ratio (default: 0.35).")
-    run.add_argument("--resolution", choices=("h", "15min"), help="Simulation time resolution.")
-    run.add_argument("--projection-years", type=int, help="Economic projection horizon.")
-    run.add_argument("--inflation-rate", type=float, help="Annual electricity price inflation.")
-    run.add_argument(
-        "--sell-price-inflation", type=float, help="Annual inflation of the grid export (sell) price. Default 0."
-    )
-    run.add_argument(
-        "--export-emissions-factor-gco2-kwh",
-        type=float,
-        help="Exported-generation displacement factor in gCO2/kWh (default: grid avoided factor).",
-    )
-    run.add_argument("--discount-rate", type=float, help="Discount rate for NPV calculations.")
-    run.add_argument("--pv-degradation-rate", type=float, help="Annual PV degradation rate.")
-    run.add_argument("--calendar-model", help="Battery calendar aging model.")
-    run.add_argument(
-        "--degradation-engine",
-        choices=("native", "blast"),
-        help="Battery degradation engine (default: native Naumann/Lam).",
-    )
-    run.add_argument("--blast-model", help="Stable BLAST battery-model key; requires --degradation-engine blast.")
-    run.add_argument(
-        "--dc-coupled",
-        dest="dc_coupled",
-        action="store_true",
-        default=None,
-        help="Use the supported DC-coupled/hybrid battery model.",
-    )
-    run.add_argument("--inverter-efficiency", type=float, help="Inverter efficiency.")
-    run.add_argument("--inverter-loading-ratio", type=float, help="DC/AC oversizing ratio.")
-    run.add_argument("--start-date", help="Simulation start date, YYYY-MM-DD.")
+    _add_run_config_arguments(run)
     run.add_argument("--output", type=Path, help="Write JSON results to this file instead of stdout.")
     run.add_argument("--indent", type=int, default=2, help="JSON indentation. Use 0 for compact output.")
     run.add_argument("--dry-run", action="store_true", help="Validate and print resolved config without simulation.")
