@@ -30,9 +30,14 @@ intentions, not commitments; reassess after each release.
   `pvsyst-*` temperature presets model a realistic module efficiency.
 - **0.5.x** — the declarative config schema (behavior-preserving, and
   deliberately before TOU adds another cluster of config keys);
-  horizon-profile input; and further internal maintainability work if needed.
+  horizon-profile input; the cost-override seam (phase 0 of economic
+  scenario analysis, which TOU does not invalidate); and further internal
+  maintainability work if needed.
 - **0.6.0** — the currency concept plus time-of-use tariff
   valuation and static presets; flat pricing preserved bit-for-bit.
+- **0.6.x / 0.7.0** — economic scenario and sensitivity analysis phases 1–3
+  (escalator decomposition, scenario runner, switching values), sequenced
+  after TOU restructures the same price surface.
 
 ## Model accuracy and validation
 
@@ -378,6 +383,10 @@ workflow for research runs that need more than one parameter grid:
   more than the current resolved sizing columns.
 - Non-goal: this is explicit enumeration, not optimization — the `optimization`
   module's NSGA-II sizing already covers searching for good designs.
+- Related: phase 0 of "Economic scenario and sensitivity analysis" below adds
+  dotted-key support to `[sweep]`, without which no economic parameter below the
+  top level can be enumerated at all. Do the two together if they land in the
+  same release.
 
 ### Globalization: economics and grid emissions beyond Europe
 
@@ -450,6 +459,97 @@ preset twice.
   Planned internal session refactoring may make the surrounding energy loop
   easier to reason about, but it is not itself the dispatch seam.
 - Non-goal: live tariff APIs, dynamic hourly market prices, FX feeds.
+
+### Economic scenario and sensitivity analysis
+
+BREOS answers "what does *this* system cost and yield under *one* set of
+economic assumptions". The assumptions that dominate the answer — electricity
+price, capex, feed-in tariff, discount rate, and how each escalates over the
+project lifetime — are the ones a user is least able to know and most wants to
+interrogate. Make them explicit, variable, and reportable, so BREOS can produce
+the four standard techno-economic analyses:
+
+- **Sensitivity analysis** (one-at-a-time): which assumption does the answer
+  hinge on? Reported as a tornado diagram of NPV swing per parameter.
+- **Scenario analysis**: coherent *bundles* of assumptions varied together
+  (the IEA STEPS/APS pattern), not one lever at a time.
+- **Switching values** (break-even / threshold analysis): invert the question —
+  what feed-in tariff or capex makes NPV zero, or payback ≤ N years?
+- **Probabilistic analysis**: distributions over economic inputs, reported as
+  P10/P50/P90 NPV and LCOE, alongside the weather-year and load uncertainty
+  Monte Carlo already samples.
+
+**Sequencing.** Phase 0 is a 0.5.x item; phases 1–3 follow the 0.6.0 TOU and
+currency work, which restructures the same preset/economics surface from scalar
+prices to price time series. Building the scenario layer on today's scalar
+surface would mean building it twice — the same reasoning that put the
+declarative config schema before TOU.
+
+**Architectural note: economics is downstream of the energy balance.** Dispatch
+is currently price-blind (`breos/battery.py` carries `replacement_cost` only as
+a bookkeeping tag on replacement events, never as a dispatch input), so varying
+prices, capex, tariffs, or the discount rate changes no simulated energy flow.
+A pure-economics scenario run should therefore simulate the physics *once* and
+revalue its price-independent outputs per scenario — hundreds of scenarios in
+seconds rather than hundreds of full simulations. This is not yet equivalent to
+naively calling `cost_analysis_projection()` again: the App runner currently
+prices each battery replacement before simulation and stores that currency
+amount in `yearly_summary_df["Replacement_Cost"]`. Phase 2 must instead retain
+the price-independent replacement schedule/count and reprice every event from
+the scenario's battery capex and replacement-cost escalator. A regression test
+must vary battery capex while holding the replacement years fixed and assert
+that both initial and replacement capex change.
+
+The simulate-once shortcut becomes wrong the moment TOU-aware dispatch (0.7.0
+target, above) makes price an input to dispatch, so the scenario runner must
+detect a price-aware dispatch strategy and fall back to full re-simulation.
+Treat both that guard and replacement-event repricing as correctness
+requirements, not optimisation details.
+
+Phases:
+
+- **Phase 0 — cost-override seam (0.5.x).** Today every price and capex term
+  (`electricity_cost`, `electricity_sold_cost`, `module_cost_per_w`,
+  `storage_cost_per_kwh`, …) reaches `CostParams` *only* through `cost_preset`
+  in `resolve_costs`; only `inflation_rate`, `sell_price_inflation`, and
+  `discount_rate` are top-level keys. And `_sweep` merges the grid at the top
+  level (`{**config, **varied}`), so it cannot reach a nested key. The result is
+  that electricity price and capex cannot be swept at all without authoring one
+  throwaway preset per value. Add a `[costs]` override table layered over
+  preset → dataclass defaults, and dotted-key support in `[sweep]`, both with
+  the existing `Unknown key '...'. Available: ...` error style. Small,
+  independently useful, and unaffected by the TOU restructure.
+- **Phase 1 — escalator decomposition (0.6.x).** A single `inflation_rate`
+  currently escalates import cost, O&M, the standing charge, *and* battery
+  replacement capex alike. That conflates general inflation with energy-price
+  escalation and with capex learning, and the last one is arguably backwards:
+  battery capex has followed a declining experience curve, so inflating
+  replacement cost at ~2%/yr systematically penalises storage. Split into named
+  escalators — electricity import, export/feed-in, O&M, and a replacement-capex
+  learning rate (declining by default) — each reproducing current results
+  bit-for-bit when set to today's values.
+- **Phase 2 — scenario definition and runner (0.6.x/0.7.0).** Named coherent
+  bundles in config (`[scenarios.high_price_low_capex]`), each a validated
+  override set over phase 0's surface; one result row per scenario × design.
+  Implements the simulate-once/re-cost-many path, price-independent replacement
+  events, and the price-aware-dispatch guard above. Ship a tornado diagram and
+  a scenario-comparison plot.
+- **Phase 3 — switching values.** A 1-D root-find over any scalar economic knob
+  for a continuous target such as `npv_savings == 0`. Express a
+  `payback_year <= N` threshold as discounted cumulative savings at year N equal
+  to zero; do not root-find the discrete integer `payback_year`. Cheap once
+  phases 0–2 exist, and the highest-value output for a policy audience: "the
+  feed-in tariff at which residential storage turns NPV-positive in PT is X".
+- **Phase 4 (optional) — economic uncertainty in Monte Carlo.** Extend
+  `MonteCarloSettings`, which today samples only weather year and load scale, to
+  sample economic inputs from distributions and report P10/P50/P90 NPV and LCOE.
+
+- Non-goal: BREOS models a *single system*. Scenario analysis says whether one
+  investment pencils out under a given assumption set; it does not model
+  adoption, deployment volume, or total programme cost. Those need an uptake
+  model layered on top and are out of scope.
+- Non-goal: live price, FX, or market-data feeds — the same boundary the
+  globalization and TOU items draw. Scenarios are user-declared and static.
 
 ### Additional Li-ion battery chemistries
 
