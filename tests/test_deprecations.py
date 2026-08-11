@@ -4,8 +4,10 @@ import inspect
 import os
 import subprocess
 import sys
+import warnings
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 import breos
@@ -89,6 +91,23 @@ def test_deprecated_dataclass_warns_only_when_instantiated():
 
     assert config.n_bins == 12
     assert "n_bins" in inspect.signature(config_class).parameters
+
+
+def test_polysun_entrypoint_emits_one_warning_at_the_user_call_site():
+    with pytest.warns(DeprecationWarning):
+        config = polysun_degradation.PolysunDegradationConfig(n_bins=4)
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always", DeprecationWarning)
+        result = polysun_degradation.simulate_polysun_degradation(
+            np.array([0.2, 0.8, 0.2]),
+            config,
+            n_years=1,
+        )
+
+    assert len(caught) == 1
+    assert Path(caught[0].filename) == Path(__file__)
+    assert len(result) == 1
 
 
 def test_deprecated_plot_warns_before_preserving_argument_validation():
