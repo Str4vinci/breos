@@ -468,10 +468,10 @@ the four standard techno-economic analyses:
   P10/P50/P90 NPV and LCOE, alongside the weather-year and load uncertainty
   Monte Carlo already samples.
 
-**Sequencing.** Phase 0 is a 0.5.x item; phases 1–3 follow the 0.6.0 TOU and
-currency work, which restructures the same preset/economics surface from scalar
-prices to price time series. Building the scenario layer on today's scalar
-surface would mean building it twice — the same reasoning that put the
+**Sequencing.** Phase 0 is delivered in 0.5.x; phases 1–3 still follow the 0.6.0
+TOU and currency work, which restructures the same preset/economics surface from
+scalar prices to price time series. Building the scenario layer on today's
+scalar surface would mean building it twice — the same reasoning that put the
 declarative config schema before TOU.
 
 **Architectural note: economics is downstream of the energy balance.** Dispatch
@@ -497,17 +497,12 @@ requirements, not optimisation details.
 
 Phases:
 
-- **Phase 0 — cost-override seam (0.5.x).** Today every price and capex term
-  (`electricity_cost`, `electricity_sold_cost`, `module_cost_per_w`,
-  `storage_cost_per_kwh`, …) reaches `CostParams` *only* through `cost_preset`
-  in `resolve_costs`; only `inflation_rate`, `sell_price_inflation`, and
-  `discount_rate` are top-level keys. And `_sweep` merges the grid at the top
-  level (`{**config, **varied}`), so it cannot reach a nested key. The result is
-  that electricity price and capex cannot be swept at all without authoring one
-  throwaway preset per value. Add a `[costs]` override table layered over
-  preset → dataclass defaults, and dotted-key support in `[sweep]`, both with
-  the existing `Unknown key '...'. Available: ...` error style. Small,
-  independently useful, and unaffected by the TOU restructure.
+- **Phase 0 — cost-override seam (delivered in 0.5.x).** A validated `[costs]`
+  table now layers explicit user overrides over the selected preset and
+  `CostParams` defaults. Dotted `[sweep]` keys can vary nested economic inputs
+  such as `costs.electricity_cost`, with actionable unknown-key errors. Existing
+  flat configurations retain their resolved costs bit-for-bit. This seam stays
+  independently useful and is unaffected by the TOU restructure.
 - **Phase 1 — escalator decomposition (0.6.x).** A single `inflation_rate`
   currently escalates import cost, O&M, the standing charge, *and* battery
   replacement capex alike. That conflates general inflation with energy-price
