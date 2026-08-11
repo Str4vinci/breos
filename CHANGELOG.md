@@ -15,6 +15,10 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   approximation reconstructed from public documentation. Its generated plot
   legends now say "documentation-derived baseline" instead of presenting the
   series as Polysun output; calculations and compatibility APIs are unchanged.
+- Updated branch protection on `develop` and `main` so the existing Python
+  3.14 CI matrix job is required alongside Python 3.11–3.13. Python 3.14 had
+  run successfully since June, but the manually maintained required-check list
+  had not been updated when that matrix entry was added.
 
 ### Deprecated
 - Deprecated the unused `breos.numba_kernels` module and `breos[fast]` extra;
