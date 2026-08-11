@@ -4,6 +4,14 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 
 ## [Unreleased]
 
+### Added
+- Added explicit terrain-horizon provenance to weather inputs. PVGIS TMY
+  fetching now accepts `use_horizon=False` for explicitly unshaded irradiance
+  while preserving the historical provider-horizon default. Automatically
+  saved weather CSVs gain digest-bound `.csv.metadata.json` sidecars; missing,
+  legacy, malformed, or stale sidecars load conservatively with an `unknown`
+  horizon status rather than inferring treatment from the filename.
+
 ## [0.5.1] - 2026-08-11
 
 ### Changed

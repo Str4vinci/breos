@@ -9,6 +9,27 @@ Open-Meteo historical fetching requires `breos[weather]`.
 The NSRDB helper and legacy downsampling/CSV converters are scheduled for
 removal in 0.6.0. See [Deprecations for 0.6.0](../deprecations.md).
 
+## Horizon provenance
+
+Weather returned by BREOS records a `horizon` object in
+`DataFrame.attrs["breos_weather_metadata"]`. Its `status` is one of:
+
+- `applied`: the provider already applied a terrain-horizon profile;
+- `not_applied`: the provider explicitly returned unshaded irradiance;
+- `unknown`: BREOS cannot establish whether terrain shading is present.
+
+PVGIS TMY requests apply the provider's default horizon by default. Pass
+`use_horizon=False` to request unshaded PVGIS irradiance. This switch is
+useful when a separate shading model will be applied later; it does not itself
+apply a user-defined profile.
+
+When a weather fetcher saves a CSV, BREOS also writes a versioned sidecar named
+`<weather-file>.csv.metadata.json`. The sidecar includes the CSV's SHA-256
+digest, so provenance is only restored when it still matches the weather data.
+Missing, malformed, legacy, or stale sidecars are safe to load, but their
+horizon status is `unknown`. BREOS never infers horizon treatment from a
+filename such as `pvgis-sarah3`.
+
 ## Loading from local files
 
 ```{eval-rst}

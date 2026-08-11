@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
@@ -41,6 +42,25 @@ class PreparedSimulationInputs:
     temperature_series: pd.Series
 
 
+def _ensure_weather_horizon_metadata(weather: pd.DataFrame) -> None:
+    """Give injected or legacy weather an explicit conservative horizon state."""
+    metadata = deepcopy(weather.attrs.get("breos_weather_metadata"))
+    if not isinstance(metadata, dict):
+        metadata = {
+            "source": "runtime_dependency_or_unknown",
+            "note": "The injected weather provider did not expose source metadata.",
+        }
+    horizon = metadata.get("horizon")
+    if not isinstance(horizon, dict) or horizon.get("status") not in {"applied", "not_applied", "unknown"}:
+        metadata["horizon"] = {"status": "unknown", "provider": None, "profile": None}
+    else:
+        horizon = deepcopy(horizon)
+        horizon.setdefault("provider", None)
+        horizon.setdefault("profile", None)
+        metadata["horizon"] = horizon
+    weather.attrs["breos_weather_metadata"] = metadata
+
+
 def remap_tmy_year(df: pd.DataFrame, target_year: int) -> pd.DataFrame:
     """Remap a TMY DatetimeIndex to target_year."""
     idx = df.index
@@ -52,12 +72,15 @@ def remap_tmy_year(df: pd.DataFrame, target_year: int) -> pd.DataFrame:
     offset = target_year - dominant_year
     if offset == 0:
         return df
+    weather_metadata = deepcopy(df.attrs.get("breos_weather_metadata"))
     remapped = df.copy()
     remapped.index = idx_utc
     remapped = remap_datetime_index_years(remapped, offset)
     new_idx = remapped.index
     new_idx = new_idx.tz_convert(was_tz) if was_tz is not None else new_idx.tz_localize(None)
     remapped.index = new_idx
+    if weather_metadata is not None:
+        remapped.attrs["breos_weather_metadata"] = weather_metadata
     return remapped
 
 
@@ -90,6 +113,7 @@ def load_weather_for_simulation(
             timezone=resolved.timezone,
         )
 
+    _ensure_weather_horizon_metadata(weather)
     if weather.index.tz is None:
         weather.index = weather.index.tz_localize("UTC")
     weather = remap_tmy_year(weather, start_year)
