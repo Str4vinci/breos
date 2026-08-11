@@ -3328,7 +3328,7 @@ def plot_co2_savings(
 
 
 # =========================================================================
-# Polysun vs BREOS degradation comparison plots
+# Deprecated documentation-derived baseline vs BREOS comparison plots
 # =========================================================================
 
 
@@ -3341,16 +3341,17 @@ def plot_degradation_methodology_comparison(
     suffix: str = "",
 ) -> None:
     """
-    Compare BREOS continuous SOH vs Polysun Miner's damage accumulation.
+    Compare BREOS continuous SOH with the documentation-derived baseline.
 
     Produces two separate figures:
-      1. SOH over time: BREOS's declining SOH curve vs Polysun's equivalent SOH
-      2. Polysun damage accumulation (D) with replacement threshold at D=1
+      1. BREOS's declining SOH curve vs the baseline's illustrative equivalent
+      2. Baseline damage accumulation (D) with replacement threshold at D=1
 
     Args:
         breos_soh: BREOS degradation DataFrame with 'SOH' column (%) indexed by year
             or containing a 'Year' column.
-        polysun_df: Output of simulate_polysun_degradation().
+        polysun_df: Output of the deprecated ``simulate_polysun_degradation``
+            compatibility function. The legacy parameter name is preserved.
         results_directory: Directory to save plots.
         scenario_label: Label for annotation (e.g., "Porto 5kWp/5kWh").
         suffix: Filename suffix.
@@ -3366,7 +3367,15 @@ def plot_degradation_methodology_comparison(
     # --- Figure 1: SOH comparison ---
     fig, ax = plt.subplots(figsize=(12, 6))
     ax.plot(years_breos, soh_breos, "b-", linewidth=2.5, marker="o", markersize=3, label="BREOS (Naumann)")
-    ax.plot(years_polysun, soh_polysun, "r--", linewidth=2.5, marker="s", markersize=3, label="Polysun (Miner/Wöhler)")
+    ax.plot(
+        years_polysun,
+        soh_polysun,
+        "r--",
+        linewidth=2.5,
+        marker="s",
+        markersize=3,
+        label="Documentation-derived baseline (Miner/Wöhler)",
+    )
     ax.axhline(80, color="grey", linestyle=":", linewidth=1.5, alpha=0.7, label="EOL threshold (80%)")
 
     # Mark replacements
@@ -3399,7 +3408,7 @@ def plot_degradation_methodology_comparison(
     )
     plt.close(fig)
 
-    # --- Figure 2: Polysun damage accumulation ---
+    # --- Figure 2: comparison-baseline damage accumulation ---
     fig, ax = plt.subplots(figsize=(12, 6))
     ax.plot(
         years_polysun,
@@ -3451,9 +3460,9 @@ def plot_lifetime_prediction_comparison(
     Args:
         scenarios: Dict mapping scenario label to dict with keys:
             'breos_eol_year': Year BREOS hits 80% SOH (float or int).
-            'polysun_total_life': Polysun predicted total life (years).
-            'polysun_cycle_life': Polysun cycle life component (years).
-            'polysun_calendar_life': Polysun calendar life component (years).
+            'polysun_total_life': Baseline total life (years; legacy key).
+            'polysun_cycle_life': Baseline cycle life (years; legacy key).
+            'polysun_calendar_life': Baseline calendar life (years; legacy key).
         results_directory: Directory to save plot.
         suffix: Filename suffix.
     """
@@ -3469,7 +3478,14 @@ def plot_lifetime_prediction_comparison(
 
     fig, ax = plt.subplots(figsize=(10, 6))
     bars1 = ax.bar(x - width / 2, breos_years, width, label="BREOS (Naumann)", color="#1976D2", alpha=0.85)
-    bars2 = ax.bar(x + width / 2, polysun_years, width, label="Polysun (Miner/Wöhler)", color="#D32F2F", alpha=0.85)
+    bars2 = ax.bar(
+        x + width / 2,
+        polysun_years,
+        width,
+        label="Documentation-derived baseline",
+        color="#D32F2F",
+        alpha=0.85,
+    )
 
     # Annotate bar values
     for bar in bars1:
@@ -3511,8 +3527,10 @@ def plot_temperature_sensitivity_comparison(
     suffix: str = "",
 ) -> None:
     """
-    Show how BREOS lifetime varies across locations (temperature-dependent)
-    while Polysun predicts the same lifetime everywhere (temperature-blind).
+    Compare temperature-dependent BREOS results with the fixed-input baseline.
+
+    The baseline's lack of temperature response is a limitation of this
+    approximation, not a claim about the current Polysun product.
 
     Args:
         locations: Dict mapping location names to ``breos_eol_year``,
@@ -3540,7 +3558,14 @@ def plot_temperature_sensitivity_comparison(
 
     fig, ax = plt.subplots(figsize=(10, 6))
     bars1 = ax.bar(x - width / 2, breos_years, width, label="BREOS (Naumann)", color="#1976D2", alpha=0.85)
-    bars2 = ax.bar(x + width / 2, polysun_years, width, label="Polysun (Miner/Wöhler)", color="#D32F2F", alpha=0.85)
+    bars2 = ax.bar(
+        x + width / 2,
+        polysun_years,
+        width,
+        label="Documentation-derived baseline",
+        color="#D32F2F",
+        alpha=0.85,
+    )
 
     # Annotate with temperature
     for i, (bar, temp) in enumerate(zip(bars1, temps)):

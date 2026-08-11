@@ -110,6 +110,15 @@ def test_polysun_entrypoint_emits_one_warning_at_the_user_call_site():
     assert len(result) == 1
 
 
+def test_polysun_compatibility_module_disclaims_product_fidelity():
+    module_doc = polysun_degradation.__doc__ or ""
+
+    assert "Independent approximation" in module_doc
+    assert "not Polysun source code" in module_doc
+    assert "not derived from PerMod" in module_doc
+    assert "not been validated as a reproduction" in module_doc
+
+
 def test_deprecated_plot_warns_before_preserving_argument_validation():
     with pytest.warns(DeprecationWarning, match=r"plot_loo_cv_summary.*BREOS 0\.6\.0"):
         with pytest.raises(TypeError):
