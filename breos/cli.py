@@ -341,6 +341,11 @@ def _normalise_sweep_grid(raw_grid: Any) -> dict[str, list[Any]]:
         if top_level not in ALLOWED_CONFIG_KEYS:
             available = ", ".join(sorted(ALLOWED_CONFIG_KEYS))
             raise ValueError(f"Unknown sweep key '{key}'. Available: {available}")
+        if separator and top_level != "costs":
+            available = ", ".join(f"costs.{name}" for name in sorted(COST_OVERRIDE_KEYS))
+            raise ValueError(
+                f"Unknown sweep key '{key}'. Dotted keys are supported only under 'costs'. Available: {available}"
+            )
         if top_level == "costs" and (not separator or nested not in COST_OVERRIDE_KEYS):
             available = ", ".join(f"costs.{name}" for name in sorted(COST_OVERRIDE_KEYS))
             raise ValueError(f"Unknown sweep key '{key}'. Available: {available}")

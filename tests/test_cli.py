@@ -574,3 +574,26 @@ annual_consumption_kwh = 3500
     error = capsys.readouterr().err
     assert "Unknown sweep key 'costs.electricty_cost'" in error
     assert "costs.electricity_cost" in error
+
+
+def test_validate_config_rejects_dotted_sweep_key_outside_costs(tmp_path, capsys):
+    config_path = tmp_path / "invalid-nested-sweep.toml"
+    config_path.write_text(
+        """
+location = "porto"
+n_modules = 8
+annual_consumption_kwh = 3500
+
+[sweep]
+"location.foo" = ["ignored-before-validation"]
+""".strip(),
+        encoding="utf-8",
+    )
+
+    exit_code = cli.main(["validate-config", str(config_path)])
+
+    assert exit_code == 1
+    error = capsys.readouterr().err
+    assert "Unknown sweep key 'location.foo'" in error
+    assert "Dotted keys are supported only under 'costs'" in error
+    assert "costs.electricity_cost" in error
