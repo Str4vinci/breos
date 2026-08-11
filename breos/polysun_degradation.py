@@ -26,6 +26,7 @@ from typing import Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 
+from breos._deprecations import deprecated
 from breos.constants import (
     POLYSUN_CALENDAR_LIFE_LEAD,
     POLYSUN_CALENDAR_LIFE_LION,
@@ -38,6 +39,7 @@ from breos.constants import (
 )
 
 
+@deprecated(name="breos.polysun_degradation.PolysunDegradationConfig")
 @dataclass
 class PolysunDegradationConfig:
     """Configuration for Polysun-style degradation model.
@@ -61,6 +63,7 @@ class PolysunDegradationConfig:
     deep_cycle_threshold: float = 0.50
 
 
+@deprecated(name="breos.polysun_degradation.woehler_cycles_to_failure")
 def woehler_cycles_to_failure(dod: float, a: float, b: float) -> float:
     """Cycles to failure from Wöhler curve: N(DOD) = a * DOD^(-b).
 
@@ -77,6 +80,7 @@ def woehler_cycles_to_failure(dod: float, a: float, b: float) -> float:
     return a * dod ** (-b)
 
 
+@deprecated(name="breos.polysun_degradation.compute_dod_histogram")
 def compute_dod_histogram(
     soc_series: np.ndarray,
     n_bins: int = 20,
@@ -153,6 +157,7 @@ def compute_dod_histogram(
     return bin_centers, cycle_counts, total_cycles, deep_cycles
 
 
+@deprecated(name="breos.polysun_degradation.compute_miner_damage")
 def compute_miner_damage(
     cycle_counts: np.ndarray,
     bin_centers: np.ndarray,
@@ -182,6 +187,7 @@ def compute_miner_damage(
     return damage
 
 
+@deprecated(name="breos.polysun_degradation.predict_polysun_lifetime")
 def predict_polysun_lifetime(
     annual_damage: float,
     calendar_life_years: float,
@@ -206,6 +212,7 @@ def predict_polysun_lifetime(
     return total_life, cycle_life, calendar_life_years
 
 
+@deprecated(name="breos.polysun_degradation.simulate_polysun_degradation")
 def simulate_polysun_degradation(
     soc_series: np.ndarray,
     config: PolysunDegradationConfig,

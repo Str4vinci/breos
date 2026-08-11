@@ -14,6 +14,8 @@ from typing import List, Optional, Tuple
 import numpy as np
 import pandas as pd
 
+from breos._deprecations import deprecated
+
 MONTH_LABELS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
 
 # Plotting imports with backend handling
@@ -2204,6 +2206,7 @@ def plot_tariff_comparison(results_df: pd.DataFrame, results_directory: str, sce
         plt.close()
 
 
+@deprecated(name="breos.plotting.plot_smart_charging_sweep")
 def plot_smart_charging_sweep(
     results_df: pd.DataFrame, optimal_pct: float, results_directory: str, scenario_name: str = ""
 ) -> None:
@@ -2248,6 +2251,7 @@ def plot_smart_charging_sweep(
     plt.close()
 
 
+@deprecated(name="breos.plotting.plot_optimization_results_3d")
 def plot_optimization_results_3d(results_df: pd.DataFrame, results_directory: str, scenario_name: str = "") -> None:
     """
     Create 3D scatter plot for 3-objective optimization results.
@@ -2290,6 +2294,7 @@ def plot_optimization_results_3d(results_df: pd.DataFrame, results_directory: st
     plt.close()
 
 
+@deprecated(name="breos.plotting.plot_optimization_results_2d")
 def plot_optimization_results_2d(results_df: pd.DataFrame, results_directory: str, scenario_name: str = "") -> None:
     """
     Create 2D scatter plot for optimization results (Pareto Front).
@@ -2867,6 +2872,7 @@ def plot_pareto_front_analysis(
     plt.close()
 
 
+@deprecated(name="breos.plotting.plot_loo_cv_summary")
 def plot_loo_cv_summary(
     loo_data: dict,
     results_directory: str,
@@ -2913,6 +2919,7 @@ def plot_loo_cv_summary(
     plt.close()
 
 
+@deprecated(name="breos.plotting.plot_loo_param_stability")
 def plot_loo_param_stability(
     loo_data: dict,
     full_cal_params: dict,
@@ -2973,6 +2980,7 @@ def plot_loo_param_stability(
         plt.close()
 
 
+@deprecated(name="breos.plotting.plot_loo_predictions")
 def plot_loo_predictions(
     systems_predictions: list,
     results_directory: str,
@@ -3324,6 +3332,7 @@ def plot_co2_savings(
 # =========================================================================
 
 
+@deprecated(name="breos.plotting.plot_degradation_methodology_comparison")
 def plot_degradation_methodology_comparison(
     breos_soh: "pd.DataFrame",
     polysun_df: "pd.DataFrame",
@@ -3430,6 +3439,7 @@ def plot_degradation_methodology_comparison(
     plt.close(fig)
 
 
+@deprecated(name="breos.plotting.plot_lifetime_prediction_comparison")
 def plot_lifetime_prediction_comparison(
     scenarios: dict,
     results_directory: str,
@@ -3494,6 +3504,7 @@ def plot_lifetime_prediction_comparison(
     plt.close(fig)
 
 
+@deprecated(name="breos.plotting.plot_temperature_sensitivity_comparison")
 def plot_temperature_sensitivity_comparison(
     locations: dict,
     results_directory: str,
