@@ -1,6 +1,6 @@
 {
-  "breos_version": "0.5.0",
-  "generated": "2026-08-05",
+  "breos_version": "0.5.1",
+  "generated": "2026-08-11",
   "system": {
     "module": "Generic_400W",
     "n_modules": 10,
