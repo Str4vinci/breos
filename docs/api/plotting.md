@@ -4,6 +4,11 @@ Publication-ready matplotlib figures grouped by what they visualize.
 All functions write a PNG to a results directory and accept optional
 styling overrides.
 
+The article-scoped Polysun comparison plots and six undocumented helpers are
+deprecated for removal in 0.6.0. This page still lists
+`plot_temperature_sensitivity_comparison` during the compatibility window; see
+[Deprecations for 0.6.0](../deprecations.md).
+
 ## Time series
 
 ```{eval-rst}

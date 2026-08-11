@@ -182,7 +182,10 @@ def compute_miner_damage(
     for n_i, dod_i in zip(cycle_counts, bin_centers):
         if n_i <= 0 or dod_i <= 0:
             continue
-        n_fail = woehler_cycles_to_failure(dod_i, woehler_a, woehler_b)
+        # This public helper is deprecated, but an internal call is not another
+        # user invocation. Bypass the warning wrapper so callers of this
+        # higher-level entry point receive one warning at their own call site.
+        n_fail = woehler_cycles_to_failure.__wrapped__(dod_i, woehler_a, woehler_b)
         damage += n_i / n_fail
     return damage
 
@@ -235,17 +238,21 @@ def simulate_polysun_degradation(
         Total_Cycles, Deep_Cycles.
     """
     # Compute annual cycle histogram once (same profile every year)
-    bin_centers, cycle_counts, total_cycles, deep_cycles = compute_dod_histogram(
+    # Use the preserved implementations directly so one public call produces
+    # one user-facing warning instead of a cascade from library-internal calls.
+    bin_centers, cycle_counts, total_cycles, deep_cycles = compute_dod_histogram.__wrapped__(
         soc_series,
         n_bins=config.n_bins,
         min_doc=config.min_doc,
     )
 
     # Annual Miner's damage
-    annual_damage = compute_miner_damage(cycle_counts, bin_centers, config.woehler_a, config.woehler_b)
+    annual_damage = compute_miner_damage.__wrapped__(cycle_counts, bin_centers, config.woehler_a, config.woehler_b)
 
     # Predicted lifetime
-    total_life, cycle_life, calendar_life = predict_polysun_lifetime(annual_damage, config.calendar_life_years)
+    total_life, cycle_life, calendar_life = predict_polysun_lifetime.__wrapped__(
+        annual_damage, config.calendar_life_years
+    )
 
     rows = []
     cumulative_damage = 0.0

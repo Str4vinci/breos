@@ -1,10 +1,12 @@
 # Deprecations for 0.6.0
 
-BREOS 0.5.1 keeps the APIs below working but emits a `DeprecationWarning` when
-they are used. They are
-scheduled for removal in BREOS 0.6.0. Python hides `DeprecationWarning` by
-default; run tests with `-W default` or `-W error::DeprecationWarning` to find
-calls before upgrading.
+BREOS 0.5.1 keeps the APIs below working. Deprecated callables emit a
+`DeprecationWarning` when called, `PolysunDegradationConfig` warns when
+instantiated, and directly importing `breos.numba_kernels` warns. The
+`breos[fast]` extra and comparison-only constants cannot warn on use and are
+announced here and in the changelog. All are scheduled for removal in BREOS
+0.6.0. Python hides `DeprecationWarning` by default; run tests with `-W default`
+or `-W error::DeprecationWarning` to find calls before upgrading.
 
 The {py:class}`~breos.App` facade and its configuration are unaffected.
 
@@ -19,8 +21,9 @@ is no supported accelerated replacement in 0.5.x.
 
 ## Polysun comparison baseline
 
-The article-scoped `breos.polysun_degradation` module and its three comparison
-plots are deprecated without a package replacement:
+The article-scoped `breos.polysun_degradation` module, its comparison-only
+constants in `breos.constants`, and its three comparison plots are deprecated
+without a package replacement:
 
 - `PolysunDegradationConfig`, `woehler_cycles_to_failure`,
   `compute_dod_histogram`, `compute_miner_damage`,
@@ -28,6 +31,10 @@ plots are deprecated without a package replacement:
 - `plot_degradation_methodology_comparison`,
   `plot_lifetime_prediction_comparison`, and
   `plot_temperature_sensitivity_comparison`
+- `WOEHLER_LFP_CONSERVATIVE_A`, `WOEHLER_LFP_CONSERVATIVE_B`,
+  `WOEHLER_LFP_TYPICAL_A`, `WOEHLER_LFP_TYPICAL_B`,
+  `WOEHLER_LFP_OPTIMISTIC_A`, `WOEHLER_LFP_OPTIMISTIC_B`,
+  `POLYSUN_CALENDAR_LIFE_LION`, and `POLYSUN_CALENDAR_LIFE_LEAD`
 
 Copy the comparison implementation into the research artifact that needs it
 before moving to 0.6.0. BREOS's supported degradation models are documented in
