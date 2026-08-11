@@ -16,6 +16,7 @@ import pvlib
 from pvlib.albedo import SURFACE_ALBEDOS
 from pvlib.location import Location
 
+from breos._deprecations import deprecated
 from breos.cec_fit import fit_cec_params
 from breos.inverter import calculate_dc_ac_power
 from breos.pv.iam import calculate_front_effective_irradiance
@@ -1062,6 +1063,7 @@ def dc_to_ac(
     return pd.Series(ac_power, index=dc_power.index, name="ac_power_W")
 
 
+@deprecated(name="breos.solar.calculate_pv_production_tmy", replacement="breos.solar.calculate_pv_production_dc")
 def calculate_pv_production_tmy(
     tmy_data: pd.DataFrame,
     location: Location,
@@ -1278,6 +1280,7 @@ def default_azimuth(latitude: float) -> float:
     return 180.0 if latitude >= 0 else 0.0
 
 
+@deprecated(name="breos.solar.zeb_sizer")
 def zeb_sizer(houseload: pd.DataFrame, ac_loss: pd.Series, current_n_modules: int, freq: str = "h") -> Dict[str, float]:
     """
     Size a Zero Energy Building (ZEB) PV system.

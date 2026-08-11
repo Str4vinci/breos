@@ -103,9 +103,10 @@ DEFAULT_INDOOR_COUPLING_ALPHA = 0.3  # Outdoor influence (0=fully insulated, 1=o
 DEFAULT_INDOOR_FLOOR_C = 15.0  # Min indoor temp — even unheated garage in mild climate
 DEFAULT_INDOOR_CEILING_C = 35.0  # Max indoor temp — summer heat buildup
 
-# === Polysun Wöhler Curve Parameters (Cycle Life vs DOD) ===
-# Polysun models cycle life using a Wöhler (S-N) curve: N(DOD) = a * DOD^(-b)
-# where N = cycles to failure, DOD = depth of discharge (0-1).
+# === Deprecated comparison Wöhler parameters (Cycle Life vs DOD) ===
+# The public Polysun lifetime documentation describes a Wöhler (S-N) curve,
+# N(DOD) = a * DOD^(-b), but these example values are BREOS choices derived
+# from the literature below, not Polysun catalogue parameters.
 #
 # LFP parameters derived from published cycle life data:
 #   - Wang et al. 2011: ~3000 cycles at 100% DOD, ~7500 at 50% DOD for LFP
@@ -125,6 +126,6 @@ WOEHLER_LFP_OPTIMISTIC_B = 1.7  # DOD exponent
 # Reference data points for validation (typical, a=5000, b=1.6):
 #   DOD=1.0 → 5000,  DOD=0.8 → 7440,  DOD=0.5 → 15157,  DOD=0.2 → 67860
 
-# Polysun default calendar lifetimes (fixed, no temperature dependence)
+# Default calendar lifetimes reported in the public Polysun documentation.
 POLYSUN_CALENDAR_LIFE_LION = 20.0  # Li-ion (LFP)
 POLYSUN_CALENDAR_LIFE_LEAD = 10.0  # Lead-acid

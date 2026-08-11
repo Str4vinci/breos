@@ -20,6 +20,7 @@ import pvlib
 from pvlib.location import Location
 from scipy.interpolate import Akima1DInterpolator
 
+from breos._deprecations import deprecated
 from breos.utils import safe_path_slug
 
 logger = logging.getLogger(__name__)
@@ -581,6 +582,7 @@ def resample_to_15min(
     return df_15min
 
 
+@deprecated(name="breos.weather.resample_to_hourly", replacement="pandas.DataFrame.resample")
 def resample_to_hourly(df_15min: pd.DataFrame, agg_method: str = "mean") -> pd.DataFrame:
     """
     Resample 15-minute DataFrame to hourly intervals.
@@ -604,6 +606,7 @@ def resample_to_hourly(df_15min: pd.DataFrame, agg_method: str = "mean") -> pd.D
         raise ValueError(f"Unknown aggregation method: {agg_method}")
 
 
+@deprecated(name="breos.weather.csv_15min_to_hourly", replacement="pandas.DataFrame.resample")
 def csv_15min_to_hourly(
     input_file_name: str,
     output_file_name: str,
@@ -647,6 +650,7 @@ def csv_15min_to_hourly(
         return None
 
 
+@deprecated(name="breos.weather.csv_hourly_to_15min", replacement="breos.weather.resample_to_15min")
 def csv_hourly_to_15min(
     input_file_name: str,
     output_file_name: str,
@@ -821,6 +825,7 @@ def preload_weather_by_year(
     return result
 
 
+@deprecated(name="breos.weather.fetch_tmy_nsrdb", replacement="breos.weather.fetch_tmy_weather_data")
 def fetch_tmy_nsrdb(
     latitude: float,
     longitude: float,

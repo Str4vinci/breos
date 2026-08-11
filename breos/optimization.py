@@ -13,6 +13,7 @@ from typing import Any, Callable, Dict, Optional, Tuple
 import numpy as np
 import pandas as pd
 
+from breos._deprecations import deprecated
 from breos.battery import BatteryConfig, simulate_energy_balance
 from breos.economics import calculate_costs, cost_params_from_config, system_ac_production_power
 from breos.solar import PVModuleParams, calculate_pv_production_dc, default_azimuth
@@ -126,6 +127,7 @@ def optimize_tilt(
     )
 
 
+@deprecated(name="breos.optimization.optimize_tilt_brent", replacement="breos.optimization.optimize_tilt")
 def optimize_tilt_brent(
     weather_data: pd.DataFrame,
     location,
@@ -284,6 +286,7 @@ def optimize_battery_size(
     )
 
 
+@deprecated(name="breos.optimization.size_for_zeb")
 def size_for_zeb(houseload: pd.DataFrame, ac_loss: pd.Series, current_n_modules: int) -> Dict[str, float]:
     """
     Calculate PV system size needed for Zero Energy Building (ZEB).

@@ -16,6 +16,7 @@ import numpy as np
 import pandas as pd
 import rainflow
 
+from breos._deprecations import deprecated
 from breos.constants import (
     A_Q,
     A_R,
@@ -1678,18 +1679,21 @@ def detect_cycles_rainflow(
     return cycles
 
 
+@deprecated(name="breos.battery.compute_halfcycle_energy_throughput")
 def compute_halfcycle_energy_throughput(hc: Dict, soc_series_absolute: pd.Series, nominal_energy_Wh: float) -> float:
     """Compute energy throughput (Wh) for a half-cycle."""
     s = soc_series_absolute.iloc[hc["start_idx"] : hc["end_idx"] + 1].values
     return abs(s[-1] - s[0]) * nominal_energy_Wh
 
 
+@deprecated(name="breos.battery.k_c_rate_Q")
 def k_c_rate_Q(C_rate: float) -> float:
     """Calculate C-rate factor for capacity fade (Naumann Eq. 8)."""
     kC = A_Q * C_rate + B_Q
     return max(0.0, kC)
 
 
+@deprecated(name="breos.battery.k_doc_Q")
 def k_doc_Q(DOC_frac: float) -> float:
     """Calculate DOC factor for capacity fade (Naumann Eq. 10)."""
     kDOC = C_DOC_Q * ((DOC_frac - 0.6) ** 3) + D_DOC_Q
@@ -2010,6 +2014,7 @@ def update_battery_soh_calendar(
     return soh_after, d_soh_fraction, t_new
 
 
+@deprecated(name="breos.battery.update_battery_soc")
 def update_battery_soc(
     battery_energy_wh: float, nominal_energy_wh: float, soh_fraction: float, max_soc: float, min_soc: float
 ) -> Tuple[float, float]:
