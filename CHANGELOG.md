@@ -11,13 +11,19 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   derives defaults, allowed top-level keys, CLI options, and CLI override
   handling. Historical ordering, aliases, normalization, config-file
   precedence, validation messages, and simulation results are preserved.
+- Clarified that the deprecated article lifetime baseline is an independent
+  approximation reconstructed from public documentation. Its generated plot
+  legends now say "documentation-derived baseline" instead of presenting the
+  series as Polysun output; calculations and compatibility APIs are unchanged.
 
 ### Deprecated
 - Deprecated the unused `breos.numba_kernels` module and `breos[fast]` extra;
   the standalone approximate kernels are not used by `App` or the supported
   simulation path and are scheduled for removal in 0.6.0.
-- Deprecated the article-scoped Polysun comparison subsystem, its three plots,
-  and its comparison-only constants for removal in 0.6.0.
+- Deprecated the article-scoped, documentation-derived Wöhler/Miner comparison
+  subsystem, its three plots, and its comparison-only constants for removal in
+  0.6.0. Despite legacy API names, this is an independent BREOS approximation,
+  not Polysun or PerMod source code or a validated reproduction of Polysun.
 - Deprecated six uncalled, undocumented optimization/leave-one-out plots and
   orphaned helpers across `battery`, `io`, `optimization`, `solar`, `utils`,
   and `weather` for removal in 0.6.0. Functions keep their signatures and

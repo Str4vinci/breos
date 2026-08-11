@@ -542,12 +542,13 @@ Phases:
 
 ### Additional Li-ion battery chemistries
 
-The battery degradation model is calibrated for LFP only. Calendar aging uses the
-Naumann 2020 LFP parameter sets (`naumann_lam_field_calibrated` default and
-variants in `breos/constants.py`), and cycle aging uses LFP Wöhler curves
-(`WOEHLER_LFP_CONSERVATIVE` / `_TYPICAL` / `_OPTIMISTIC`, consumed in
-`breos/polysun_degradation.py`). This is the same "label without the physics" gap
-as bifacial modules. In 0.3.3 the native `BatteryConfig.battery_type` selector
+The native battery degradation model is calibrated for LFP only. Calendar and
+cycle aging use the Naumann 2020 LFP parameterization, while the supported
+BLAST models expose their own cell-specific calibrations. The deprecated
+documentation-derived lifetime comparison and its example Wöhler constants are
+not part of the supported degradation path and will be removed in 0.6.0. This
+is the same "label without the physics" gap as bifacial modules. In 0.3.3 the
+native `BatteryConfig.battery_type` selector
 was made honest: `LFP` normalizes to `lfp`, and unsupported values now raise
 instead of silently reusing LFP cycle-aging parameters. Add real per-chemistry
 aging so NMC / NCA packs degrade on their own parameters.
