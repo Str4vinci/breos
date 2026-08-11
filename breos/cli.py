@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import csv
 import itertools
 import json
@@ -13,7 +14,7 @@ from pathlib import Path
 from typing import Any, Sequence
 
 from breos.app import App
-from breos.app_config import APP_CONFIG_FIELDS, resolve_app_config
+from breos.app_config import ALLOWED_CONFIG_KEYS, APP_CONFIG_FIELDS, COST_OVERRIDE_KEYS, resolve_app_config
 from breos.degradation import get_battery_model_profile, list_battery_models
 from breos.load_profiles import PROFILE_ALIASES, PROFILE_NAMES
 from breos.pv_modules import MODULES
@@ -316,15 +317,60 @@ def _normalise_sweep_grid(raw_grid: Any) -> dict[str, list[Any]]:
         raise TypeError("Sweep config must contain a [sweep] table with parameter arrays.")
 
     grid: dict[str, list[Any]] = {}
-    for key, values in raw_grid.items():
-        normalised_key = key.replace("-", "_")
-        if not isinstance(values, list) or not values:
-            raise ValueError(f"sweep.{key} must be a non-empty array of values")
-        grid[normalised_key] = values
+
+    def add_entries(entries: dict[str, Any], prefix: str = "") -> None:
+        for raw_key, values in entries.items():
+            key = raw_key.replace("-", "_")
+            dotted_key = f"{prefix}.{key}" if prefix else key
+            if isinstance(values, dict):
+                add_entries(values, dotted_key)
+                continue
+            if not isinstance(values, list) or not values:
+                raise ValueError(f"sweep.{dotted_key} must be a non-empty array of values")
+            if dotted_key in grid:
+                raise ValueError(f"Duplicate sweep key '{dotted_key}'")
+            grid[dotted_key] = values
+
+    add_entries(raw_grid)
 
     if not grid:
         raise ValueError("Sweep config must define at least one parameter under [sweep].")
+
+    for key in grid:
+        top_level, separator, nested = key.partition(".")
+        if top_level not in ALLOWED_CONFIG_KEYS:
+            available = ", ".join(sorted(ALLOWED_CONFIG_KEYS))
+            raise ValueError(f"Unknown sweep key '{key}'. Available: {available}")
+        if top_level == "costs" and (not separator or nested not in COST_OVERRIDE_KEYS):
+            available = ", ".join(f"costs.{name}" for name in sorted(COST_OVERRIDE_KEYS))
+            raise ValueError(f"Unknown sweep key '{key}'. Available: {available}")
+
+    keys = set(grid)
+    for key in keys:
+        parts = key.split(".")
+        for index in range(1, len(parts)):
+            parent = ".".join(parts[:index])
+            if parent in keys:
+                raise ValueError(f"Sweep keys '{parent}' and '{key}' conflict")
     return grid
+
+
+def _apply_sweep_values(config: dict[str, Any], varied: dict[str, Any]) -> dict[str, Any]:
+    """Return a run config with top-level or dotted sweep values applied."""
+    result = copy.deepcopy(config)
+    for key, value in varied.items():
+        parts = key.split(".")
+        target = result
+        for part in parts[:-1]:
+            child = target.get(part)
+            if child is None:
+                child = {}
+                target[part] = child
+            if not isinstance(child, dict):
+                raise TypeError(f"Cannot apply sweep key '{key}': '{part}' is not a table/dict")
+            target = child
+        target[parts[-1]] = value
+    return result
 
 
 def _csv_cell(value: Any) -> Any:
@@ -370,7 +416,7 @@ def _sweep(args: argparse.Namespace) -> int:
 
     for run_idx, values in enumerate(itertools.product(*(grid[key] for key in param_keys)), start=1):
         varied = dict(zip(param_keys, values))
-        run_config = {**config, **varied}
+        run_config = _apply_sweep_values(config, varied)
         resolved = _resolved_config_summary(run_config)
 
         app = App(run_config)

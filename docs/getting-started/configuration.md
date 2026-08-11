@@ -49,6 +49,7 @@ weather/data access, load profiles, PV system data, and cost assumptions; see
 | `resolution` | `"h"` | Time resolution (`"h"` or `"15min"`) |
 | `projection_years` | `20` | Economic projection horizon |
 | `cost_preset` | `None` | Cost preset key from packaged defaults |
+| `costs` | *unset* | Optional cost overrides layered over the selected preset and built-in defaults; see [below](#cost-and-emissions-presets) |
 | `inflation_rate` | `0.02` | Annual electricity price inflation |
 | `sell_price_inflation` | `0.0` | Annual inflation of the grid export (sell) price |
 | `discount_rate` | `0.03` | Discount rate for NPV |
@@ -361,7 +362,9 @@ location/era-specific fits from the Perez papers and are only consulted when
 
 Built-in presets are packaged with BREOS. Editable copies and examples live
 in `configs/base/` and `configs/examples/`.
-Pass the key:
+Pass the key, then use the optional `costs` table for project-specific values.
+Explicit overrides win over the named preset; preset values win over
+{py:class}`~breos.CostParams` defaults:
 
 ```python
 breos.App({
@@ -369,9 +372,32 @@ breos.App({
     "n_modules": 10,
     "annual_consumption_kwh": 4000,
     "cost_preset": "residential_pt",
+    "costs": {
+        "electricity_cost": 0.22,
+        "storage_cost_per_kwh": 425.0,
+    },
     "emissions_country": "PT",
 })
 ```
+
+TOML uses a dedicated table:
+
+```toml
+cost_preset = "residential_pt"
+
+[costs]
+electricity_cost = 0.22
+storage_cost_per_kwh = 425.0
+```
+
+The accepted keys follow the packaged cost-catalogue names:
+`electricity_cost`, `electricity_sold_cost`, `daily_power_cost`,
+`module_cost_per_w`, `storage_cost_per_kwh`,
+`inverter_cost_per_kw_hybrid`, `inverter_cost_per_kw_simple`,
+`installation_cost_per_module`, `installation_cost_battery`,
+`other_cost_per_module`, `other_costs`, `land_cost`,
+`maintenance_cost_per_panel`, `maintenance_cost`, and `operation_cost`.
+Unknown keys and negative or non-finite values are rejected before simulation.
 
 For full control, build a {py:class}`~breos.CostParams` and
 {py:class}`~breos.EmissionsParams` yourself and call the lower-level
