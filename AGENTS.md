@@ -29,3 +29,9 @@ uv build
 - Avoid repo-relative runtime paths; packaged resources should be loaded through `breos.resources`.
 - Keep generated files out of git unless they are intentional release assets.
 - Add focused tests for public API behavior when touching defaults, packaged data, or serialization.
+
+## Pull requests
+
+- Use a specific, descriptive branch name with a conventional change-type prefix such as `feat/`, `fix/`, `refactor/`, or `docs/`. Do not use generic branch names such as `agents` or `codex`.
+- Start every PR description with a plain, human-readable paragraph that explains the purpose of the change.
+- Before drafting a PR description, review relevant previously closed PRs and follow the repository's established tone and structure.
