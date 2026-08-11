@@ -28,11 +28,14 @@ intentions, not commitments; reassess after each release.
   configuration: multi-array tracking now honours the top-level `gcr`, an
   out-of-range `gcr` is rejected instead of silently backtracking, and the
   `pvsyst-*` temperature presets model a realistic module efficiency.
-- **0.5.x** — the declarative config schema (behavior-preserving, and
-  deliberately before TOU adds another cluster of config keys);
-  horizon-profile input; the cost-override seam (phase 0 of economic
-  scenario analysis, which TOU does not invalidate); and further internal
-  maintainability work if needed.
+- **0.5.1** — completed maintenance release: fixed validation of the shipped
+  sweep example, centralized the mechanical App configuration contract, and
+  reconciled resistance-fade efficiency mapping without changing simulation
+  results. Deprecated the confirmed public dead-code surface ahead of its
+  planned removal in 0.6.0.
+- **0.5.x** — horizon-profile input; the cost-override seam (phase 0 of
+  economic scenario analysis, which TOU does not invalidate); and further
+  internal maintainability work if needed.
 - **0.6.0** — the currency concept plus time-of-use tariff
   valuation and static presets; flat pricing preserved bit-for-bit.
 - **0.6.x / 0.7.0** — economic scenario and sensitivity analysis phases 1–3
@@ -130,33 +133,19 @@ must ship with a documented yield/self-consumption delta).
 
 ## Architecture
 
-### Declarative config schema with strict validation
+### Declarative config registry with strict validation (completed in 0.5.1)
 
-The public `App` config surface is currently defined and checked in four
-separate places: the `DEFAULTS` dict and imperative `validate_config` in
-`breos.app_config`, plus the `argparse` flag definitions and the
-`_add_override` calls in `breos.cli`. Adding one parameter means editing all
-four, which is drift-prone, and the hand-rolled validation is hard to keep in
-sync with the defaults. Replace it with a single declarative schema (a
-dataclass with field metadata, or `pydantic`) so defaults, types, bounds, and
-documentation live in one place.
+One `AppConfigField` registry now derives public App defaults, allowed
+top-level keys, CLI argument definitions, and CLI override handling. Adding a
+mechanical configuration field no longer requires keeping four declarations in
+sync, and registry invariants plus every shipped example guard against future
+drift.
 
-- **Full step (pending, targeted at a 0.5.x behavior-preserving release):**
-  collapse `DEFAULTS`, the validation rules, and the CLI flag definitions
-  into the schema so a new parameter is added once, not four times. This is
-  deliberately scheduled *before* the 0.6.0 TOU/currency work adds another
-  cluster of config keys, and deserves its own release slot rather than
-  riding along a feature release.
-- **Coordination with the [function-level refactor plan](design/architecture/0.4x-refactor-plan.md):** earlier internal
-  validation cleanup should create reusable boundaries for the full schema,
-  not throwaway helpers that need another rewrite in 0.5.x.
-- **The hard part is error-message parity**, not the schema itself: the
-  acceptance bar is the same exception types with equally actionable
-  "Unknown X. Available: ..." messages. Off-the-shelf pydantic messages do
-  not meet it, so plan for either a dataclass-with-field-metadata schema
-  with hand-rolled errors, or pydantic behind a message-translation layer.
-- Keep all error messages actionable; preserve current behaviour for valid
-  configs (regression-test the example configs in `configs/examples/`).
+Scientific and cross-field constraints deliberately remain in focused
+validators. That boundary preserves the established validation order,
+exception types, and actionable error messages while keeping the registry from
+becoming a second scientific rules engine. The 0.6.0 TOU/currency work can add
+its configuration cluster through the completed registry.
 
 ## Performance and portability
 
