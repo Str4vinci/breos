@@ -1,14 +1,17 @@
 # Optimization
 
-Optimization helpers for system configuration. Brent's method handles smooth
-one-dimensional problems (tilt); helper sweeps handle battery sizing and ZEB
-sizing; [pymoo](https://pymoo.org/) powers public multi-objective PV/battery
-sizing (PV count, battery, cost, grid independence, and ZEB ratio). For
-end-to-end App runs over an explicit config grid, use the `breos sweep` CLI
-command documented in [Recipes](../getting-started/recipes.md#parameter-sweep).
+Optimization helpers for system configuration. The supported tilt grid search
+and battery-sizing helper cover one-dimensional sizing;
+[pymoo](https://pymoo.org/) powers public multi-objective PV/battery sizing (PV
+count, battery, cost, grid independence, and ZEB ratio). For end-to-end App
+runs over an explicit config grid, use the `breos sweep` CLI command documented
+in [Recipes](../getting-started/recipes.md#parameter-sweep).
 
 Install `breos[optimization]` to use pymoo-backed multi-objective sizing.
 The one-dimensional helpers use the core scientific stack.
+
+The Brent tilt helper and both standalone ZEB sizing helpers are scheduled for
+removal in 0.6.0. See [Deprecations for 0.6.0](../deprecations.md).
 
 ZEB and financial production use usable AC system energy from the dispatch
 ledger, not raw PV DC, so inverter efficiency and clipping affect candidate

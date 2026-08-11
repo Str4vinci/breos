@@ -4,7 +4,11 @@ import csv
 import json
 from pathlib import Path
 
+import pytest
+
 from breos import cli
+
+EXAMPLE_CONFIGS = sorted((Path(__file__).resolve().parents[1] / "configs" / "examples").glob("*.toml"))
 
 
 class FakeApp:
@@ -298,6 +302,39 @@ def test_recommended_pv_example_validates(capsys):
     output = capsys.readouterr().out
     assert "Config OK" in output
     assert "PV: 8 modules, 4.400 kWp" in output
+
+
+def test_example_configs_are_discovered():
+    # A moved or renamed directory would otherwise turn the parametrised test
+    # below into zero silent cases.
+    assert len(EXAMPLE_CONFIGS) >= 10
+
+
+@pytest.mark.parametrize("config_path", EXAMPLE_CONFIGS, ids=lambda path: path.name)
+def test_shipped_example_configs_validate(config_path, capsys):
+    exit_code = cli.main(["validate-config", str(config_path)])
+
+    assert exit_code == 0
+    assert "Config OK" in capsys.readouterr().out
+
+
+def test_validate_config_rejects_malformed_sweep(tmp_path, capsys):
+    config_path = tmp_path / "invalid-sweep.toml"
+    config_path.write_text(
+        """
+location = "porto"
+n_modules = 10
+annual_consumption_kwh = 4000
+
+[sweep]
+battery_kwh = []
+""".strip()
+    )
+
+    exit_code = cli.main(["validate-config", str(config_path)])
+
+    assert exit_code == 1
+    assert "sweep.battery_kwh must be a non-empty array" in capsys.readouterr().err
 
 
 def test_run_dry_run_outputs_resolved_config_without_simulating(monkeypatch, tmp_path):

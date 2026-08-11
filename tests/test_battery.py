@@ -10,6 +10,7 @@ from breos.battery import (
     BatteryConfig,
     _get_degradation_params,
     apply_indoor_temperature_model,
+    resistance_to_efficiency,
     simulate_energy_balance,
     update_battery_soh_cyclewise,
 )
@@ -126,6 +127,30 @@ class TestBatteryConfig:
         assert v2_n == LAM_SOC_EXPONENT_N
         assert v2_ea > default_ea
         assert v2_n > default_n
+
+
+class TestResistanceToEfficiency:
+    @pytest.mark.parametrize("resistance_growth", [0.0, -0.25])
+    def test_non_positive_growth_preserves_base_efficiencies(self, resistance_growth):
+        assert resistance_to_efficiency(resistance_growth, 0.98, 0.91) == (0.98, 0.91)
+
+    def test_asymmetric_efficiencies_keep_the_same_ratio(self):
+        growth = 0.44
+        expected_derate = np.sqrt(1.0 + growth)
+
+        eff_charge, eff_discharge = resistance_to_efficiency(growth, 0.99, 0.81)
+
+        assert eff_charge == pytest.approx(0.99 / expected_derate)
+        assert eff_discharge == pytest.approx(0.81 / expected_derate)
+        assert eff_charge / eff_discharge == pytest.approx(0.99 / 0.81)
+
+    def test_high_growth_has_no_efficiency_floor(self):
+        eff_charge, eff_discharge = resistance_to_efficiency(9999.0, 0.98, 0.82)
+
+        assert eff_charge == pytest.approx(0.0098)
+        assert eff_discharge == pytest.approx(0.0082)
+        assert eff_charge < 0.01
+        assert eff_discharge < 0.01
 
 
 class TestSimulateEnergyBalance:

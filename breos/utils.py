@@ -9,6 +9,8 @@ import re
 import numpy as np
 import pandas as pd
 
+from breos._deprecations import deprecated
+
 _SAFE_SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
 
 
@@ -45,6 +47,7 @@ def is_leap_year(year: int) -> bool:
     return year % 4 == 0 and (year % 100 != 0 or year % 400 == 0)
 
 
+@deprecated(name="breos.utils.count_leap_years", replacement="breos.utils.is_leap_year")
 def count_leap_years(start_year: int, num_years: int) -> int:
     """
     Count the number of leap years in a range.
@@ -91,6 +94,7 @@ def remap_datetime_index_years(obj, year_offset: int):
     return out
 
 
+@deprecated(name="breos.utils.number_of_cores", replacement="os.cpu_count")
 def number_of_cores() -> int:
     """
     Get the number of available CPU cores for parallel processing.

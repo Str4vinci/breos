@@ -6,7 +6,8 @@ import math
 from dataclasses import dataclass
 from datetime import date
 from numbers import Real
-from typing import Any
+from pathlib import Path
+from typing import Any, Callable
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from breos.degradation.profiles import ENABLED_BLAST_MODEL_KEYS, apply_battery_profile_defaults
@@ -36,71 +37,347 @@ from breos.solar import (
 )
 from breos.solar import default_azimuth as default_azimuth_fn
 
-DEFAULTS: dict[str, Any] = {
-    "battery_kwh": 0.0,
-    "pv_arrays": None,
-    "pv_module": None,
-    "load_profile": "1",
-    "rlp_directory": None,
-    "tilt": None,
-    "azimuth": None,
-    "tracking": "fixed",
-    "axis_tilt": 0.0,
-    "axis_azimuth": None,
-    "max_angle": 60.0,
-    "backtrack": True,
-    "gcr": 0.35,
-    "cross_axis_tilt": 0.0,
-    "dual_axis_max_tilt": 90.0,
-    "transposition_model": DEFAULT_TRANSPOSITION_MODEL,
-    "albedo": None,
-    "surface_type": None,
-    "model_perez": DEFAULT_PEREZ_MODEL,
-    "solar_position": DEFAULT_SOLAR_POSITION,
-    "iam_model": DEFAULT_IAM_MODEL,
-    "diffuse_iam": DEFAULT_DIFFUSE_IAM,
-    "temperature_model": DEFAULT_TEMPERATURE_MODEL,
-    "bifacial_model": DEFAULT_BIFACIAL_MODEL,
-    "pvrow_height": None,
-    "pvrow_pitch": None,
-    "resolution": "h",
-    "projection_years": 20,
-    "cost_preset": None,
-    "inflation_rate": 0.02,
-    "sell_price_inflation": 0.0,
-    "discount_rate": 0.03,
-    "emissions_country": None,
-    "export_emissions_factor_gco2_kwh": None,
-    "pv_degradation_rate": 0.005,
-    "calendar_model": "naumann_lam_field_calibrated",
-    "degradation_engine": "native",
-    "blast_model": None,
-    "battery_min_soc": 0.10,
-    "battery_max_soc": 0.90,
-    "battery_eol_percentage": 0.70,
-    "battery_rte": None,
-    "battery_max_charge_power_w": None,
-    "battery_max_discharge_power_w": None,
-    "enable_resistance_fade": False,
-    "dc_coupled": True,
-    "inverter_efficiency": 0.96,
-    "inverter_loading_ratio": 1.25,
-    "pv_loss_overrides": None,
-    "start_date": "2023-01-01",
+_NO_DEFAULT = object()
+
+
+@dataclass(frozen=True)
+class AppConfigField:
+    """Declarative metadata for one public App configuration key.
+
+    Scientific constraints intentionally remain in the focused validators
+    below. This registry owns the mechanical contract that had previously
+    drifted across defaults, the allowed-key list, CLI arguments, and CLI
+    override propagation.
+    """
+
+    default: Any = _NO_DEFAULT
+    default_order: int | None = None
+    cli_flags: tuple[str, ...] = ()
+    cli_type: Callable[[str], Any] | None = None
+    cli_choices: tuple[str, ...] | None = None
+    cli_action: str | None = None
+    cli_help: str | None = None
+    cli_normalizer: Callable[[Any], Any] | None = None
+
+    @property
+    def has_default(self) -> bool:
+        return self.default is not _NO_DEFAULT
+
+
+def _lower(value: str) -> str | None:
+    return value.lower() if value else None
+
+
+def _upper(value: str) -> str | None:
+    return value.upper() if value else None
+
+
+def _underscored(value: str) -> str | None:
+    return value.replace("-", "_") if value else None
+
+
+APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
+    # CLI-exposed fields are kept in parser display order. Required inputs have
+    # no default; argparse still leaves them optional so --config can supply
+    # them, and the existing App validators remain the source of required-key
+    # errors.
+    "location": AppConfigField(
+        cli_flags=("--location",),
+        cli_help="Location preset key, for example 'porto'.",
+        cli_normalizer=_lower,
+    ),
+    "n_modules": AppConfigField(cli_flags=("--n-modules",), cli_type=int, cli_help="Number of PV modules."),
+    "annual_consumption_kwh": AppConfigField(
+        cli_flags=("--annual-consumption-kwh",),
+        cli_type=float,
+        cli_help="Annual electricity demand in kWh.",
+    ),
+    "battery_kwh": AppConfigField(
+        default=0.0,
+        default_order=0,
+        cli_flags=("--battery-kwh",),
+        cli_type=float,
+        cli_help="Battery capacity in kWh.",
+    ),
+    "battery_max_charge_power_w": AppConfigField(
+        default=None,
+        default_order=42,
+        cli_flags=("--battery-max-charge-power-w",),
+        cli_type=float,
+        cli_help="Maximum DC power entering the battery charge path in W (default: unlimited).",
+    ),
+    "battery_max_discharge_power_w": AppConfigField(
+        default=None,
+        default_order=43,
+        cli_flags=("--battery-max-discharge-power-w",),
+        cli_type=float,
+        cli_help="Maximum battery AC power delivered to load in W (default: unlimited).",
+    ),
+    "cost_preset": AppConfigField(
+        default=None,
+        default_order=28,
+        cli_flags=("--cost-preset",),
+        cli_help="Cost preset key, for example 'residential-pt'.",
+        cli_normalizer=_underscored,
+    ),
+    "emissions_country": AppConfigField(
+        default=None,
+        default_order=32,
+        cli_flags=("--emissions-country",),
+        cli_help="Country code for emissions, for example 'pt'.",
+        cli_normalizer=_upper,
+    ),
+    "pv_module": AppConfigField(
+        default=None, default_order=2, cli_flags=("--pv-module",), cli_help="PV module catalogue key."
+    ),
+    "load_profile": AppConfigField(
+        default="1", default_order=3, cli_flags=("--load-profile",), cli_help="Load profile type."
+    ),
+    "rlp_directory": AppConfigField(
+        default=None,
+        default_order=4,
+        cli_flags=("--rlp-directory",),
+        cli_type=Path,
+        cli_help="Directory containing licensed external RLP CSV files.",
+        cli_normalizer=str,
+    ),
+    "tilt": AppConfigField(
+        default=None,
+        default_order=5,
+        cli_flags=("--tilt",),
+        cli_type=float,
+        cli_help="PV tilt angle in degrees.",
+    ),
+    "azimuth": AppConfigField(
+        default=None,
+        default_order=6,
+        cli_flags=("--azimuth",),
+        cli_type=float,
+        cli_help="PV surface azimuth in degrees.",
+    ),
+    "transposition_model": AppConfigField(
+        default=DEFAULT_TRANSPOSITION_MODEL,
+        default_order=15,
+        cli_flags=("--transposition-model", "--sky-model"),
+        cli_choices=tuple(TRANSPOSITION_MODELS),
+        cli_help="Sky-diffusion model for POA transposition (default: isotropic).",
+    ),
+    "albedo": AppConfigField(
+        default=None,
+        default_order=16,
+        cli_flags=("--albedo",),
+        cli_type=float,
+        cli_help="Ground reflectance 0-1 (default: pvlib 0.25). Excludes --surface-type.",
+    ),
+    "surface_type": AppConfigField(
+        default=None,
+        default_order=17,
+        cli_flags=("--surface-type",),
+        cli_choices=tuple(SURFACE_TYPES),
+        cli_help="Named ground cover mapped to an albedo (alternative to --albedo).",
+    ),
+    "model_perez": AppConfigField(
+        default=DEFAULT_PEREZ_MODEL,
+        default_order=18,
+        cli_flags=("--perez-model",),
+        cli_choices=tuple(PEREZ_MODELS),
+        cli_help="Perez coefficient set (only used with --transposition-model perez).",
+    ),
+    "solar_position": AppConfigField(
+        default=DEFAULT_SOLAR_POSITION,
+        default_order=19,
+        cli_flags=("--solar-position",),
+        cli_choices=tuple(SOLAR_POSITION_METHODS),
+        cli_help=(
+            "Where within each timestep the sun position is evaluated. 'mid-interval' matches "
+            "PVWatts/SAM for interval-averaged weather (default: interval-start)."
+        ),
+    ),
+    "iam_model": AppConfigField(
+        default=DEFAULT_IAM_MODEL,
+        default_order=20,
+        cli_flags=("--iam-model",),
+        cli_choices=tuple(IAM_MODELS),
+        cli_help="Beam incidence-angle modifier (default: ashrae, historical compatibility).",
+    ),
+    "diffuse_iam": AppConfigField(
+        default=DEFAULT_DIFFUSE_IAM,
+        default_order=21,
+        cli_flags=("--diffuse-iam",),
+        cli_choices=tuple(DIFFUSE_IAM_METHODS),
+        cli_help=(
+            "Whether IAM is also applied to the diffuse POA components. 'marion' weighs sky- and "
+            "ground-diffuse with the view-factor-integrated selected IAM model (default: none, beam-only)."
+        ),
+    ),
+    "temperature_model": AppConfigField(
+        default=DEFAULT_TEMPERATURE_MODEL,
+        default_order=22,
+        cli_flags=("--temperature-model",),
+        cli_choices=tuple(TEMPERATURE_MODELS),
+        cli_help=(
+            "Cell-temperature model / mounting preset. The pvsyst-* and sapm-* presets use documented "
+            "mounting coefficients; noct-sam additionally requires sourced module NOCT and efficiency "
+            "metadata (not yet bundled). Default: faiman, open rack."
+        ),
+    ),
+    "bifacial_model": AppConfigField(
+        default=DEFAULT_BIFACIAL_MODEL,
+        default_order=23,
+        cli_flags=("--bifacial-model",),
+        cli_choices=tuple(BIFACIAL_MODELS),
+        cli_help=(
+            "Rear-irradiance model (default: none; infinite_sheds requires bifacial module metadata and row geometry)."
+        ),
+    ),
+    "pvrow_height": AppConfigField(
+        default=None,
+        default_order=24,
+        cli_flags=("--pvrow-height",),
+        cli_type=float,
+        cli_help="PV row center height above ground; use the same unit as --pvrow-pitch.",
+    ),
+    "pvrow_pitch": AppConfigField(
+        default=None,
+        default_order=25,
+        cli_flags=("--pvrow-pitch",),
+        cli_type=float,
+        cli_help="Distance between PV rows; use the same unit as --pvrow-height.",
+    ),
+    "gcr": AppConfigField(
+        default=0.35,
+        default_order=12,
+        cli_flags=("--gcr",),
+        cli_type=float,
+        cli_help="PV row ground coverage ratio (default: 0.35).",
+    ),
+    "resolution": AppConfigField(
+        default="h",
+        default_order=26,
+        cli_flags=("--resolution",),
+        cli_choices=("h", "15min"),
+        cli_help="Simulation time resolution.",
+    ),
+    "projection_years": AppConfigField(
+        default=20,
+        default_order=27,
+        cli_flags=("--projection-years",),
+        cli_type=int,
+        cli_help="Economic projection horizon.",
+    ),
+    "inflation_rate": AppConfigField(
+        default=0.02,
+        default_order=29,
+        cli_flags=("--inflation-rate",),
+        cli_type=float,
+        cli_help="Annual electricity price inflation.",
+    ),
+    "sell_price_inflation": AppConfigField(
+        default=0.0,
+        default_order=30,
+        cli_flags=("--sell-price-inflation",),
+        cli_type=float,
+        cli_help="Annual inflation of the grid export (sell) price. Default 0.",
+    ),
+    "export_emissions_factor_gco2_kwh": AppConfigField(
+        default=None,
+        default_order=33,
+        cli_flags=("--export-emissions-factor-gco2-kwh",),
+        cli_type=float,
+        cli_help="Exported-generation displacement factor in gCO2/kWh (default: grid avoided factor).",
+    ),
+    "discount_rate": AppConfigField(
+        default=0.03,
+        default_order=31,
+        cli_flags=("--discount-rate",),
+        cli_type=float,
+        cli_help="Discount rate for NPV calculations.",
+    ),
+    "pv_degradation_rate": AppConfigField(
+        default=0.005,
+        default_order=34,
+        cli_flags=("--pv-degradation-rate",),
+        cli_type=float,
+        cli_help="Annual PV degradation rate.",
+    ),
+    "calendar_model": AppConfigField(
+        default="naumann_lam_field_calibrated",
+        default_order=35,
+        cli_flags=("--calendar-model",),
+        cli_help="Battery calendar aging model.",
+    ),
+    "degradation_engine": AppConfigField(
+        default="native",
+        default_order=36,
+        cli_flags=("--degradation-engine",),
+        cli_choices=("native", "blast"),
+        cli_help="Battery degradation engine (default: native Naumann/Lam).",
+    ),
+    "blast_model": AppConfigField(
+        default=None,
+        default_order=37,
+        cli_flags=("--blast-model",),
+        cli_help="Stable BLAST battery-model key; requires --degradation-engine blast.",
+    ),
+    "dc_coupled": AppConfigField(
+        default=True,
+        default_order=45,
+        cli_flags=("--dc-coupled",),
+        cli_action="store_true",
+        cli_help="Use the supported DC-coupled/hybrid battery model.",
+    ),
+    "inverter_efficiency": AppConfigField(
+        default=0.96,
+        default_order=46,
+        cli_flags=("--inverter-efficiency",),
+        cli_type=float,
+        cli_help="Inverter efficiency.",
+    ),
+    "inverter_loading_ratio": AppConfigField(
+        default=1.25,
+        default_order=47,
+        cli_flags=("--inverter-loading-ratio",),
+        cli_type=float,
+        cli_help="DC/AC oversizing ratio.",
+    ),
+    "start_date": AppConfigField(
+        default="2023-01-01",
+        default_order=49,
+        cli_flags=("--start-date",),
+        cli_help="Simulation start date, YYYY-MM-DD.",
+    ),
+    # Config-file/API-only fields.
+    "pv_arrays": AppConfigField(default=None, default_order=1),
+    "tracking": AppConfigField(default="fixed", default_order=7),
+    "axis_tilt": AppConfigField(default=0.0, default_order=8),
+    "axis_azimuth": AppConfigField(default=None, default_order=9),
+    "max_angle": AppConfigField(default=60.0, default_order=10),
+    "backtrack": AppConfigField(default=True, default_order=11),
+    "cross_axis_tilt": AppConfigField(default=0.0, default_order=13),
+    "dual_axis_max_tilt": AppConfigField(default=90.0, default_order=14),
+    "battery_min_soc": AppConfigField(default=0.10, default_order=38),
+    "battery_max_soc": AppConfigField(default=0.90, default_order=39),
+    "battery_eol_percentage": AppConfigField(default=0.70, default_order=40),
+    "battery_rte": AppConfigField(default=None, default_order=41),
+    "enable_resistance_fade": AppConfigField(default=False, default_order=44),
+    "pv_loss_overrides": AppConfigField(default=None, default_order=48),
+    # Runner sections are accepted by App resolution so each workflow can use
+    # the same base config validation. The CLI validates their own structure.
+    "montecarlo": AppConfigField(),
+    "sweep": AppConfigField(),
+    # Kept solely to preserve the existing actionable legacy-selector error.
+    "battery_type": AppConfigField(),
 }
 
-# Required inputs are not in DEFAULTS (they have no default); ``montecarlo`` is
-# an optional config-file section consumed by the Monte Carlo runner/CLI, which
-# validates the same dict through resolve_app_config. Everything else at the top
-# level must be a known key so typos (e.g. ``batery_kwh``) fail loudly instead
-# of being silently dropped by merge_defaults.
-ALLOWED_CONFIG_KEYS: frozenset[str] = frozenset(DEFAULTS) | {
-    "location",
-    "annual_consumption_kwh",
-    "n_modules",
-    "montecarlo",
-    "battery_type",
-}
+_DEFAULT_FIELDS = sorted(
+    ((name, field) for name, field in APP_CONFIG_FIELDS.items() if field.has_default),
+    key=lambda item: item[1].default_order if item[1].default_order is not None else math.inf,
+)
+DEFAULTS: dict[str, Any] = {name: field.default for name, field in _DEFAULT_FIELDS}
+
+# Everything at the top level must be registered so typos (e.g.
+# ``batery_kwh``) fail loudly instead of being silently dropped by defaults.
+ALLOWED_CONFIG_KEYS: frozenset[str] = frozenset(APP_CONFIG_FIELDS)
 
 
 @dataclass(frozen=True)

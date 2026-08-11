@@ -165,7 +165,7 @@ from breos.optimization import (
     size_for_zeb,
 )
 
-# Polysun Degradation (comparison baseline)
+# Independent documentation-derived lifetime approximation (deprecated)
 from breos.polysun_degradation import (
     PolysunDegradationConfig,
     compute_dod_histogram,

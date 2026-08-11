@@ -23,6 +23,13 @@ from typing import Tuple
 import numpy as np
 from numba import jit, prange
 
+from breos._deprecations import warn_deprecated
+
+warn_deprecated(
+    "breos.numba_kernels",
+    replacement="breos.battery.simulate_energy_balance",
+)
+
 ENERGY_BALANCE_CAPABILITIES = {
     "status": "approximate_screening_only",
     "production_caller": False,

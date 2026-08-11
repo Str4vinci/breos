@@ -6,6 +6,8 @@ import pytest
 
 pytest.importorskip("numba")
 
+pytestmark = pytest.mark.filterwarnings("ignore:breos.numba_kernels is deprecated:DeprecationWarning")
+
 
 def test_numba_energy_balance_capability_contract_is_explicit():
     from breos.numba_kernels import ENERGY_BALANCE_CAPABILITIES

@@ -4,6 +4,52 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-08-11
+
+### Changed
+- Centralized App configuration metadata in one declarative registry that now
+  derives defaults, allowed top-level keys, CLI options, and CLI override
+  handling. Historical ordering, aliases, normalization, config-file
+  precedence, validation messages, and simulation results are preserved.
+- Clarified that the deprecated article lifetime baseline is an independent
+  approximation reconstructed from public documentation. Its generated plot
+  legends now say "documentation-derived baseline" instead of presenting the
+  series as Polysun output; calculations and compatibility APIs are unchanged.
+- Updated branch protection on `develop` and `main` so the existing Python
+  3.14 CI matrix job is required alongside Python 3.11–3.13. Python 3.14 had
+  run successfully since June, but the manually maintained required-check list
+  had not been updated when that matrix entry was added.
+
+### Deprecated
+- Deprecated the unused `breos.numba_kernels` module and `breos[fast]` extra;
+  the standalone approximate kernels are not used by `App` or the supported
+  simulation path and are scheduled for removal in 0.6.0.
+- Deprecated the article-scoped, documentation-derived Wöhler/Miner comparison
+  subsystem, its three plots, and its comparison-only constants for removal in
+  0.6.0. Despite legacy API names, this is an independent BREOS approximation,
+  not Polysun or PerMod source code or a validated reproduction of Polysun.
+- Deprecated six uncalled, undocumented optimization/leave-one-out plots and
+  orphaned helpers across `battery`, `io`, `optimization`, `solar`, `utils`,
+  and `weather` for removal in 0.6.0. Functions keep their signatures and
+  behaviour throughout 0.5.x and emit `DeprecationWarning` only when called;
+  see the [deprecation guide](https://breos.readthedocs.io/en/latest/deprecations.html)
+  for the complete inventory and migration paths.
+
+### Fixed
+- Accept the optional `[sweep]` config section in `ALLOWED_CONFIG_KEYS`, so
+  `breos validate-config configs/examples/sweep.toml` no longer rejects a
+  shipped example that `breos sweep` runs successfully. The documented
+  behaviour was already that `[sweep]` and `[montecarlo]` are recognised; only
+  `[montecarlo]` actually was. `validate-config` now also rejects an empty or
+  malformed sweep grid, and every `configs/examples/*.toml` is covered by a
+  regression test.
+- Made the public `resistance_to_efficiency()` helper match the live
+  resistance-fade path: both one-way efficiencies receive the same
+  `sqrt(1 + growth)` derating, preserving configured charge/discharge
+  asymmetry and removing the helper's former artificial floor. Initial and
+  daily simulation paths now call the helper; simulation results are
+  unchanged because they already used this mapping.
+
 ## [0.5.0] - 2026-08-05
 
 ### Added
