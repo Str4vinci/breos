@@ -14,6 +14,8 @@ from typing import Any, Dict, List, Optional, Union
 import numpy as np
 import pandas as pd
 
+from breos._deprecations import deprecated
+
 
 def export_results(
     results_df: pd.DataFrame,
@@ -181,6 +183,10 @@ def _economics_summary_metrics(cost_projection_df: Optional[pd.DataFrame]) -> Di
     return metrics
 
 
+@deprecated(
+    name="breos.io.save_simulation_report",
+    replacement="the focused export_results, export_summary, and export_cost_analysis functions",
+)
 def save_simulation_report(
     results_df: pd.DataFrame,
     summary_df: pd.DataFrame,
@@ -284,6 +290,7 @@ def load_results(filepath: str, parse_dates: Union[bool, List[str]] = True) -> p
     return df
 
 
+@deprecated(name="breos.io.export_monthly_summary", replacement="pandas.DataFrame.resample")
 def export_monthly_summary(results_df: pd.DataFrame, results_directory: str, prefix: str = "", suffix: str = "") -> str:
     """
     Export monthly aggregated summary to CSV.
@@ -322,6 +329,7 @@ def export_monthly_summary(results_df: pd.DataFrame, results_directory: str, pre
     return filepath
 
 
+@deprecated(name="breos.io.export_yearly_summary", replacement="pandas.DataFrame.resample")
 def export_yearly_summary(results_df: pd.DataFrame, results_directory: str, prefix: str = "", suffix: str = "") -> str:
     """
     Export yearly aggregated summary to CSV.

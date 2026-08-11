@@ -6,6 +6,9 @@ temperature time series.
 Local weather loading and PVGIS/NSRDB TMY helpers use the core install.
 Open-Meteo historical fetching requires `breos[weather]`.
 
+The NSRDB helper and legacy downsampling/CSV converters are scheduled for
+removal in 0.6.0. See [Deprecations for 0.6.0](../deprecations.md).
+
 ## Loading from local files
 
 ```{eval-rst}

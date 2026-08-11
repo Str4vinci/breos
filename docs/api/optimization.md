@@ -10,6 +10,9 @@ command documented in [Recipes](../getting-started/recipes.md#parameter-sweep).
 Install `breos[optimization]` to use pymoo-backed multi-objective sizing.
 The one-dimensional helpers use the core scientific stack.
 
+The Brent tilt helper and both standalone ZEB sizing helpers are scheduled for
+removal in 0.6.0. See [Deprecations for 0.6.0](../deprecations.md).
+
 ZEB and financial production use usable AC system energy from the dispatch
 ledger, not raw PV DC, so inverter efficiency and clipping affect candidate
 scores. Physical size, inverter rating, and CAPEX use the selected module's
