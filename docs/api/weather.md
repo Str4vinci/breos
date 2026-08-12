@@ -20,8 +20,36 @@ Weather returned by BREOS records a `horizon` object in
 
 PVGIS TMY requests apply the provider's default horizon by default. Pass
 `use_horizon=False` to request unshaded PVGIS irradiance. This switch is
-useful when a separate shading model will be applied later; it does not itself
-apply a user-defined profile.
+useful when a separate shading model will be applied; it does not itself apply
+a user-defined profile.
+
+At the App level, configure an inline circular horizon as azimuth/elevation
+pairs:
+
+```toml
+horizon_profile = [
+  [0, 4],
+  [90, 12],
+  [180, 3],
+  [270, 7],
+]
+```
+
+Azimuth is clockwise from north and both values are degrees. BREOS linearly
+interpolates across north, including between the last and first point. It
+zeros DNI while the apparent sun elevation is on or below that line and
+removes the corresponding direct-horizontal component from GHI. DHI is kept:
+the v1 profile models far-horizon beam obstruction, not diffuse sky-view loss.
+
+When this key is active and no cached weather matches, the App automatically
+requests fresh PVGIS data with `use_horizon=False`. It refuses weather marked
+`applied` (double-counting) or `unknown` (unsafe to decide). A local CSV is
+therefore eligible only when its valid metadata sidecar records
+`horizon.status = "not_applied"`.
+
+Monte Carlo weather files do not yet carry equivalent per-file horizon
+provenance, so `horizon_profile` is rejected by that workflow rather than
+being applied to weather whose prior treatment is unknown.
 
 When a weather fetcher saves a CSV, BREOS also writes a versioned sidecar named
 `<weather-file>.csv.metadata.json`. The sidecar includes the CSV's SHA-256

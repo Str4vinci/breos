@@ -56,6 +56,7 @@ EXPECTED_DEFAULTS = {
     "inverter_loading_ratio": 1.25,
     "pv_loss_overrides": None,
     "start_date": "2023-01-01",
+    "horizon_profile": None,
 }
 
 EXPECTED_CLI_FIELDS = [

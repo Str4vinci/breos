@@ -368,6 +368,11 @@ def run_montecarlo(config: dict[str, Any], settings: MonteCarloSettings) -> Mont
     cfg = resolved.cfg
     if cfg["degradation_engine"] == "blast":
         raise ValueError("degradation_engine='blast' is not supported with Monte Carlo yet")
+    if cfg["horizon_profile"] is not None:
+        raise ValueError(
+            "'horizon_profile' is not supported with Monte Carlo weather files yet because their "
+            "terrain-horizon provenance is unknown"
+        )
     years_per_run = settings.years_per_run or cfg["projection_years"]
 
     dc_by_year, temp_by_year = _precompute_year_caches(cfg, resolved, settings)

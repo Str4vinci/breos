@@ -11,6 +11,12 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   saved weather CSVs gain digest-bound `.csv.metadata.json` sidecars; missing,
   legacy, malformed, or stale sidecars load conservatively with an `unknown`
   horizon status rather than inferring treatment from the filename.
+- Added opt-in App `horizon_profile` shading from inline azimuth/elevation
+  pairs. BREOS circularly interpolates the terrain line, removes direct beam
+  while the sun is on or below it, and records the normalized profile and
+  shaded-timestep count in weather provenance. Fresh PVGIS requests
+  automatically disable its provider horizon; already-shaded or unknown-
+  provenance weather is rejected to prevent silent double-counting.
 
 ## [0.5.1] - 2026-08-11
 

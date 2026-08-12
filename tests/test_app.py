@@ -529,6 +529,27 @@ class TestAppValidation:
         # fixed 1 / 0.97 ratio because inverter efficiency varies with load.
         assert no_shading > base
 
+    def test_horizon_profile_reduces_generation_and_is_serialized(self, _patch_weather):
+        common = {
+            "location": "porto",
+            "n_modules": 6,
+            "annual_consumption_kwh": 3000,
+            "projection_years": 1,
+        }
+        baseline = App(common)
+        baseline.simulate()
+        horizon = App({**common, "horizon_profile": [[0, 90], [180, 90]]})
+        horizon.simulate()
+
+        result = horizon.result()
+        assert result["pv_dc_generation_kwh"] < baseline.result()["pv_dc_generation_kwh"]
+        horizon_provenance = result["provenance"]["weather"]["horizon"]
+        assert horizon_provenance["status"] == "applied"
+        assert horizon_provenance["provider"] == "breos"
+        assert horizon_provenance["profile"]["points"] == [[0.0, 90.0], [180.0, 90.0]]
+        assert horizon_provenance["profile"]["shaded_timesteps"] > 0
+        json.dumps(result)
+
     def test_smaller_inverter_clips_app_production(self, _patch_weather):
         def _run(loading_ratio):
             app = App(
