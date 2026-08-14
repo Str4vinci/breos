@@ -4,6 +4,13 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 
 ## [Unreleased]
 
+### Added
+- Add a validated `[costs]` override table with explicit user override → named
+  preset → `CostParams` default precedence, plus dotted `[sweep]` keys such as
+  `costs.electricity_cost` for economic sensitivity runs. Unknown cost keys and
+  invalid values now fail with actionable errors; existing flat configurations
+  retain their previous resolved costs.
+
 ## [0.5.1] - 2026-08-11
 
 ### Changed
