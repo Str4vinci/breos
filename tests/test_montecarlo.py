@@ -177,6 +177,17 @@ def test_run_montecarlo_rejects_blast_degradation(tmp_path):
         run_montecarlo(config, settings)
 
 
+def test_run_montecarlo_rejects_horizon_profile_without_weather_provenance(tmp_path):
+    weather = _write_multiyear_weather(tmp_path / "multi.csv")
+    settings = MonteCarloSettings(weather_file=str(weather), n_runs=1)
+
+    with pytest.raises(ValueError, match="horizon_profile.*provenance is unknown"):
+        run_montecarlo(
+            {**_base_config(), "horizon_profile": [[0, 5], [180, 2]]},
+            settings,
+        )
+
+
 def test_run_montecarlo_rejects_empty_weather(tmp_path):
     empty = tmp_path / "empty.csv"
     pd.DataFrame({"date": [], "shortwave_radiation": []}).to_csv(empty, index=False)

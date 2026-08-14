@@ -106,17 +106,15 @@ choice, with deltas documented and tracked over time.
   models) lands with its row in the benchmark table — this generalizes the
   per-item "validate against baseline" notes elsewhere in this roadmap.
 
-### Horizon-profile input
+### Horizon-profile input (completed in 0.5.x)
 
-Far-horizon shading without any 3D: PVGIS TMY is already fetched with
-`usehorizon=True`, so PVGIS-sourced weather accounts for it implicitly —
-but user-supplied weather files and custom horizons get nothing. Accept a
-horizon profile (azimuth/elevation pairs) and apply it via pvlib's horizon
-tools, documenting the PVGIS overlap so shading is not double-counted.
-
-Planned as a standalone 0.5.x feature, deliberately outside the 0.5.0
-bifacial gate: the PVGIS double-counting semantics and the input format are
-distinct enough to review on their own.
+BREOS accepts a circularly interpolated horizon profile as azimuth/elevation
+pairs and applies binary far-horizon direct-beam shading. Fresh PVGIS requests
+automatically set `usehorizon=False` when a custom profile is configured;
+weather already marked `applied` or conservatively marked `unknown` is rejected
+instead of risking double-counting. The normalized profile, interpolation and
+shaded-timestep count remain in serialized weather provenance. Diffuse
+sky-view obstruction is explicitly outside the v1 profile.
 
 ### Recommended model profile and future defaults
 

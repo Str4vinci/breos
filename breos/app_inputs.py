@@ -11,6 +11,8 @@ import pandas as pd
 from pvlib.location import Location
 
 from breos.app_config import ResolvedAppConfig
+from breos.pv.horizon import apply_terrain_horizon_profile
+from breos.pv.model_options import DEFAULT_SOLAR_POSITION
 from breos.solar import (
     PVProductionBreakdown,
     calculate_multi_array_production_breakdown,
@@ -90,6 +92,9 @@ def load_weather_for_simulation(
     start_year: int,
     deps: AppRuntimeDependencies,
     weather_dir: Path | None = None,
+    *,
+    horizon_profile: Any = None,
+    solar_position: str = DEFAULT_SOLAR_POSITION,
 ) -> pd.DataFrame:
     """Load TMY weather, falling back to PVGIS fetch.
 
@@ -111,6 +116,7 @@ def load_weather_for_simulation(
             sample_year=start_year,
             freq="h",
             timezone=resolved.timezone,
+            use_horizon=horizon_profile is None,
         )
 
     _ensure_weather_horizon_metadata(weather)
@@ -125,6 +131,15 @@ def load_weather_for_simulation(
             weather = deps.resample_to_15min(weather, latitude=resolved.lat, longitude=resolved.lon)
             if weather_metadata is not None:
                 weather.attrs["breos_weather_metadata"] = weather_metadata
+
+    if horizon_profile is not None:
+        weather = apply_terrain_horizon_profile(
+            weather,
+            Location(resolved.lat, resolved.lon, tz=resolved.timezone),
+            horizon_profile,
+            freq=freq,
+            solar_position=solar_position,
+        )
 
     return weather
 
@@ -226,7 +241,14 @@ def prepare_simulation_inputs(
     """Prepare weather, PV, demand, and temperature inputs for the App pipeline."""
     freq = cfg["resolution"]
     start_year = int(cfg["start_date"][:4])
-    weather = load_weather_for_simulation(resolved, freq, start_year, deps)
+    weather = load_weather_for_simulation(
+        resolved,
+        freq,
+        start_year,
+        deps,
+        horizon_profile=cfg["horizon_profile"],
+        solar_position=cfg["solar_position"],
+    )
     pv_breakdown = build_pv_production_breakdown(cfg, resolved, weather)
     dc_system_base = pv_breakdown.dc_after_losses
     load_data = load_consumption_profile(cfg, deps, timezone=resolved.timezone)

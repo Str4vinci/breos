@@ -189,6 +189,34 @@ emissions_country = "PT"
 A runnable template also ships in the repository as
 `configs/examples/external-rlp.toml`.
 
+## Apply a custom terrain horizon
+
+Use azimuth/elevation pairs to model far-horizon direct-beam obstruction
+without a 3D scene:
+
+```toml
+location = "porto"
+n_modules = 8
+annual_consumption_kwh = 4000
+
+horizon_profile = [
+  [0, 4],
+  [60, 9],
+  [120, 14],
+  [180, 3],
+  [270, 6],
+]
+```
+
+The profile is circular: BREOS interpolates from the last point back to the
+first across north, so a repeated `360` endpoint is unnecessary. With a fresh
+PVGIS fetch, configuring the profile automatically requests provider data
+without PVGIS's own horizon. Cached weather must have a matching provenance
+sidecar that explicitly records `not_applied`; legacy CSVs are rejected because
+their horizon treatment cannot be established safely. The normalized profile
+and number of shaded timesteps appear under
+`provenance.weather.horizon.profile`.
+
 ## Offline runs with cached weather
 
 When the config uses a location *preset key*, BREOS scans a `weather/`
