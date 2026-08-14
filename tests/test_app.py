@@ -59,6 +59,53 @@ class TestAppValidation:
         with pytest.raises(ValueError, match="Unknown cost preset"):
             App({"location": "porto", "n_modules": 10, "annual_consumption_kwh": 4000, "cost_preset": "fake_preset"})
 
+    def test_cost_overrides_must_be_a_table(self):
+        with pytest.raises(TypeError, match="'costs' must be a table/dict"):
+            App({"location": "porto", "n_modules": 10, "annual_consumption_kwh": 4000, "costs": 0.25})
+
+    def test_unknown_cost_override_is_actionable(self):
+        with pytest.raises(ValueError, match=r"Unknown key 'costs\.electricty_cost'.*costs\.electricity_cost"):
+            App(
+                {
+                    "location": "porto",
+                    "n_modules": 10,
+                    "annual_consumption_kwh": 4000,
+                    "costs": {"electricty_cost": 0.25},
+                }
+            )
+
+    def test_cost_overrides_resolve_through_app_facade(self):
+        app = App(
+            {
+                "location": "porto",
+                "n_modules": 10,
+                "annual_consumption_kwh": 4000,
+                "cost_preset": "residential_pt",
+                "costs": {
+                    "electricity_cost": 0.22,
+                    "storage_cost_per_kwh": 425.0,
+                    "land_cost": 1000.0,
+                },
+            }
+        )
+
+        assert app._resolved.cost_params.electricity_cost == 0.22
+        assert app._resolved.cost_params.battery_cost_per_kwh == 425.0
+        assert app._resolved.cost_params.land_cost == 1000.0
+        assert app._resolved.cost_params.module_cost_per_w == 0.125
+
+    @pytest.mark.parametrize("value", [-0.01, float("inf"), True])
+    def test_cost_overrides_must_be_non_negative_finite_numbers(self, value):
+        with pytest.raises((TypeError, ValueError), match=r"costs\.electricity_cost"):
+            App(
+                {
+                    "location": "porto",
+                    "n_modules": 10,
+                    "annual_consumption_kwh": 4000,
+                    "costs": {"electricity_cost": value},
+                }
+            )
+
     def test_invalid_emissions_country(self):
         with pytest.raises(ValueError, match="Unknown emissions country"):
             App({"location": "porto", "n_modules": 10, "annual_consumption_kwh": 4000, "emissions_country": "XX"})

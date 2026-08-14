@@ -22,6 +22,12 @@ class TestCostDefaultsSingleSource:
         # config-driven and direct-construction paths cannot diverge.
         assert cost_params_from_config({}, {}) == CostParams()
 
+    def test_cost_params_from_config_maps_land_cost(self):
+        params = cost_params_from_config({"land_cost": 1250.0}, {})
+
+        assert params.land_cost == 1250.0
+        assert params.operation_cost == CostParams().operation_cost
+
     def test_resolve_costs_preset_fallbacks_match_dataclass_defaults(self, monkeypatch):
         from breos import app_config
 
@@ -43,6 +49,77 @@ class TestCostDefaultsSingleSource:
             inflation_rate=0.02,
             sell_price_inflation=0.01,
             discount_rate=0.0,
+            pv_degradation_rate=0.005,
+        )
+
+    def test_app_cost_overrides_layer_over_preset_and_defaults(self, monkeypatch):
+        from breos import app_config
+
+        monkeypatch.setattr(
+            app_config,
+            "load_json",
+            lambda name: {
+                "partial": {
+                    "electricity_cost": 0.31,
+                    "storage_cost_per_kwh": 450.0,
+                    "maintenance_cost": 12.0,
+                }
+            },
+        )
+        cfg = {
+            "cost_preset": "partial",
+            "costs": {
+                "electricity_cost": 0.42,
+                "storage_cost_per_kwh": 375.0,
+                "operation_cost": 20.0,
+            },
+            "inverter_loading_ratio": 1.4,
+            "inflation_rate": 0.025,
+            "sell_price_inflation": 0.01,
+            "discount_rate": 0.04,
+            "pv_degradation_rate": 0.006,
+        }
+
+        params = app_config.resolve_costs(cfg)
+
+        assert params.electricity_cost == 0.42  # explicit override
+        assert params.battery_cost_per_kwh == 375.0  # catalog name maps to CostParams
+        assert params.maintenance_cost_fixed == 12.0  # preset value remains
+        assert params.operation_cost == 20.0  # default-only term can be overridden
+        assert params.module_cost_per_w == CostParams().module_cost_per_w
+        assert params.dc_ac_ratio == 1.4
+        assert params.inflation_rate == 0.025
+
+    def test_flat_preset_resolution_is_unchanged(self):
+        from breos import app_config
+
+        cfg = {
+            "cost_preset": "residential_pt",
+            "inverter_loading_ratio": 1.25,
+            "inflation_rate": 0.02,
+            "sell_price_inflation": 0.0,
+            "discount_rate": 0.03,
+            "pv_degradation_rate": 0.005,
+        }
+
+        assert app_config.resolve_costs(cfg) == CostParams(
+            electricity_cost=0.2582,
+            electricity_sold_cost=0.04,
+            daily_power_cost=0.3,
+            module_cost_per_w=0.125,
+            battery_cost_per_kwh=500,
+            dc_ac_ratio=1.25,
+            inverter_cost_per_kw=102.58,
+            inverter_cost_per_kw_nobatt=48.37,
+            installation_cost_per_module=350,
+            battery_installation_cost=350,
+            other_cost_per_module=30,
+            other_cost_fixed=0,
+            maintenance_cost_per_panel=10,
+            maintenance_cost_fixed=0,
+            inflation_rate=0.02,
+            sell_price_inflation=0.0,
+            discount_rate=0.03,
             pv_degradation_rate=0.005,
         )
 
