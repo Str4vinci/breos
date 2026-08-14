@@ -117,8 +117,9 @@ From the CLI, the equivalent flag is `--transposition-model perez`
 
 Use `breos sweep` when you want to run the same scenario over an explicit grid
 of App config values. The top-level keys define the base scenario; every key
-under `[sweep]` replaces the matching top-level key for each run. The command
-runs the Cartesian product and writes one CSV row per combination:
+under `[sweep]` replaces the matching key for each run. Quote dotted keys to
+vary values inside a table such as `[costs]`. The command runs the Cartesian
+product and writes one CSV row per combination:
 
 ```toml
 location = "porto"
@@ -134,13 +135,15 @@ resolution = "h"
 [sweep]
 n_modules = [8, 10, 12]
 battery_kwh = [0.0, 5.0]
+"costs.electricity_cost" = [0.20, 0.30]
 ```
 
 ```bash
 breos sweep --config config.toml --output sweep_results.csv
 ```
 
-The output includes the varied parameters (`param_*` columns), resolved system
+The output includes the varied parameters (`param_*` columns, including for
+example `param_costs.electricity_cost`), resolved system
 sizing, the BREOS version, and top-level scalar result metrics such as grid
 independence, NPV, payback, LCOE, and battery replacement totals. This is
 explicit enumeration, not an optimizer; use the optimization API for searching

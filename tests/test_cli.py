@@ -473,3 +473,127 @@ battery_kwh = [0.0, 5.0]
     assert rows[-1]["param_battery_kwh"] == "5.0"
     assert "yearly" not in rows[0]
     assert rows[0]["grid_independence_pct"] == "48.0"
+
+
+def test_sweep_applies_dotted_cost_keys_without_mutating_base_config(monkeypatch, tmp_path, capsys):
+    seen_configs = []
+
+    class SweepFakeApp:
+        def __init__(self, config):
+            self.config = config
+            seen_configs.append(config)
+
+        def simulate(self):
+            return None
+
+        def result(self):
+            return {"npv_savings_eur": self.config["costs"]["electricity_cost"] * 1000}
+
+    monkeypatch.setattr(cli, "App", SweepFakeApp)
+    config_path = tmp_path / "cost-sweep.toml"
+    config_path.write_text(
+        """
+location = "porto"
+n_modules = 8
+annual_consumption_kwh = 3500
+cost_preset = "residential_pt"
+
+[costs]
+storage_cost_per_kwh = 420.0
+
+[sweep]
+"costs.electricity_cost" = [0.20, 0.30]
+""".strip(),
+        encoding="utf-8",
+    )
+    output_path = tmp_path / "cost-sweep.csv"
+
+    exit_code = cli.main(["sweep", "--config", str(config_path), "--output", str(output_path), "--json"])
+
+    assert exit_code == 0
+    assert [config["costs"] for config in seen_configs] == [
+        {"storage_cost_per_kwh": 420.0, "electricity_cost": 0.20},
+        {"storage_cost_per_kwh": 420.0, "electricity_cost": 0.30},
+    ]
+    rows = list(csv.DictReader(output_path.open(encoding="utf-8")))
+    assert [row["param_costs.electricity_cost"] for row in rows] == ["0.2", "0.3"]
+    assert [row["npv_savings_eur"] for row in rows] == ["200.0", "300.0"]
+
+
+def test_sweep_accepts_unquoted_toml_dotted_cost_key(monkeypatch, tmp_path, capsys):
+    seen_configs = []
+
+    class SweepFakeApp:
+        def __init__(self, config):
+            seen_configs.append(config)
+
+        def simulate(self):
+            return None
+
+        def result(self):
+            return {}
+
+    monkeypatch.setattr(cli, "App", SweepFakeApp)
+    config_path = tmp_path / "nested-cost-sweep.toml"
+    config_path.write_text(
+        """
+location = "porto"
+n_modules = 8
+annual_consumption_kwh = 3500
+
+[sweep]
+costs.electricity_cost = [0.20, 0.30]
+""".strip(),
+        encoding="utf-8",
+    )
+
+    exit_code = cli.main(["sweep", "--config", str(config_path), "--output", str(tmp_path / "out.csv")])
+
+    assert exit_code == 0
+    assert [config["costs"]["electricity_cost"] for config in seen_configs] == [0.20, 0.30]
+    assert "Sweep: 2 runs" in capsys.readouterr().out
+
+
+def test_validate_config_rejects_unknown_dotted_sweep_cost_key(tmp_path, capsys):
+    config_path = tmp_path / "invalid-cost-sweep.toml"
+    config_path.write_text(
+        """
+location = "porto"
+n_modules = 8
+annual_consumption_kwh = 3500
+
+[sweep]
+"costs.electricty_cost" = [0.20, 0.30]
+""".strip(),
+        encoding="utf-8",
+    )
+
+    exit_code = cli.main(["validate-config", str(config_path)])
+
+    assert exit_code == 1
+    error = capsys.readouterr().err
+    assert "Unknown sweep key 'costs.electricty_cost'" in error
+    assert "costs.electricity_cost" in error
+
+
+def test_validate_config_rejects_dotted_sweep_key_outside_costs(tmp_path, capsys):
+    config_path = tmp_path / "invalid-nested-sweep.toml"
+    config_path.write_text(
+        """
+location = "porto"
+n_modules = 8
+annual_consumption_kwh = 3500
+
+[sweep]
+"location.foo" = ["ignored-before-validation"]
+""".strip(),
+        encoding="utf-8",
+    )
+
+    exit_code = cli.main(["validate-config", str(config_path)])
+
+    assert exit_code == 1
+    error = capsys.readouterr().err
+    assert "Unknown sweep key 'location.foo'" in error
+    assert "Dotted keys are supported only under 'costs'" in error
+    assert "costs.electricity_cost" in error
