@@ -17,6 +17,12 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   legacy, malformed, or stale sidecars load conservatively with an `unknown`
   horizon status rather than inferring treatment from the filename.
 
+### Removed
+- Removed the repository-only `tools/analyze_results.py` scratch script and
+  the superseded two-folder `tools/compare_two_results.py` helper. The supported
+  `tools/compare_results.py` command handles two or more result folders and no
+  longer depends on a nonexistent private plotting palette.
+
 ## [0.5.1] - 2026-08-11
 
 ### Changed
