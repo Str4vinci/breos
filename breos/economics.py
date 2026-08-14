@@ -21,6 +21,27 @@ BATTERY_REPLACEMENT_COST_PER_KWH: float = 500.0
 
 SYSTEM_AC_PRODUCTION_COLUMNS = ("PV_AC_To_Load", "Battery_AC_To_Load_PV")
 
+# Canonical translation from the public cost-catalogue/config vocabulary to
+# CostParams attributes. App presets, App ``[costs]`` overrides, and the
+# lower-level ``cost_params_from_config`` helper all share this mapping.
+COST_CONFIG_KEY_TO_PARAM: dict[str, str] = {
+    "electricity_cost": "electricity_cost",
+    "electricity_sold_cost": "electricity_sold_cost",
+    "daily_power_cost": "daily_power_cost",
+    "module_cost_per_w": "module_cost_per_w",
+    "storage_cost_per_kwh": "battery_cost_per_kwh",
+    "inverter_cost_per_kw_hybrid": "inverter_cost_per_kw",
+    "inverter_cost_per_kw_simple": "inverter_cost_per_kw_nobatt",
+    "installation_cost_per_module": "installation_cost_per_module",
+    "installation_cost_battery": "battery_installation_cost",
+    "other_cost_per_module": "other_cost_per_module",
+    "other_costs": "other_cost_fixed",
+    "land_cost": "land_cost",
+    "maintenance_cost_per_panel": "maintenance_cost_per_panel",
+    "maintenance_cost": "maintenance_cost_fixed",
+    "operation_cost": "operation_cost",
+}
+
 
 def system_ac_production_power(results_df: pd.DataFrame) -> pd.Series:
     """Return usable PV-system AC production in the frame's power unit.
@@ -89,37 +110,23 @@ def cost_params_from_config(
     financials_config = financials_config or {}
     defaults = CostParams()
 
-    return CostParams(
-        electricity_cost=costs_config.get(
-            "electricity_cost",
-            financials_config.get("electricity_cost", defaults.electricity_cost),
-        ),
-        electricity_sold_cost=costs_config.get(
-            "electricity_sold_cost",
-            financials_config.get("electricity_sold_cost", defaults.electricity_sold_cost),
-        ),
-        daily_power_cost=costs_config.get("daily_power_cost", defaults.daily_power_cost),
-        module_cost_per_w=costs_config.get("module_cost_per_w", defaults.module_cost_per_w),
-        battery_cost_per_kwh=costs_config.get("storage_cost_per_kwh", defaults.battery_cost_per_kwh),
+    params = {
+        param_key: costs_config.get(config_key, getattr(defaults, param_key))
+        for config_key, param_key in COST_CONFIG_KEY_TO_PARAM.items()
+    }
+    # Historical lower-level callers can supply the two energy prices through
+    # ``financials_config``; an explicit costs value still takes precedence.
+    for key in ("electricity_cost", "electricity_sold_cost"):
+        if key not in costs_config:
+            params[key] = financials_config.get(key, getattr(defaults, key))
+    params.update(
         dc_ac_ratio=costs_config.get("dc_ac_ratio", defaults.dc_ac_ratio),
-        inverter_cost_per_kw=costs_config.get("inverter_cost_per_kw_hybrid", defaults.inverter_cost_per_kw),
-        inverter_cost_per_kw_nobatt=costs_config.get(
-            "inverter_cost_per_kw_simple", defaults.inverter_cost_per_kw_nobatt
-        ),
-        installation_cost_per_module=costs_config.get(
-            "installation_cost_per_module", defaults.installation_cost_per_module
-        ),
-        battery_installation_cost=costs_config.get("installation_cost_battery", defaults.battery_installation_cost),
-        other_cost_per_module=costs_config.get("other_cost_per_module", defaults.other_cost_per_module),
-        other_cost_fixed=costs_config.get("other_costs", defaults.other_cost_fixed),
-        maintenance_cost_per_panel=costs_config.get("maintenance_cost_per_panel", defaults.maintenance_cost_per_panel),
-        maintenance_cost_fixed=costs_config.get("maintenance_cost", defaults.maintenance_cost_fixed),
-        operation_cost=costs_config.get("operation_cost", defaults.operation_cost),
         inflation_rate=financials_config.get("inflation_rate", defaults.inflation_rate),
         sell_price_inflation=financials_config.get("sell_price_inflation", defaults.sell_price_inflation),
         discount_rate=financials_config.get("discount_rate", defaults.discount_rate),
         pv_degradation_rate=financials_config.get("pv_degradation_rate", defaults.pv_degradation_rate),
     )
+    return CostParams(**params)
 
 
 def calculate_costs(

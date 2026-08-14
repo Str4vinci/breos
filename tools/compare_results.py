@@ -26,7 +26,11 @@ import pandas as pd
 PROJECT_ROOT = Path(__file__).parent.parent.resolve()
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from breos.plotting import _BREAKEVEN_COLORS, plot_breakeven_comparison
+from breos.plotting import plot_breakeven_comparison
+
+# Keep script presentation choices local instead of importing a private symbol
+# from the public plotting module.
+BREAKEVEN_COLORS = ("#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd", "#8c564b")
 
 
 def _interpolate_breakeven(df: pd.DataFrame):
@@ -65,7 +69,7 @@ def compare_results(folders: list, labels: list = None, output_dir: str = "resul
             df = pd.read_csv(f"{folder}/cost_projection.csv")
             cost_dfs.append(df)
             valid_labels.append(label)
-            valid_colors.append(_BREAKEVEN_COLORS[i % len(_BREAKEVEN_COLORS)])
+            valid_colors.append(BREAKEVEN_COLORS[i % len(BREAKEVEN_COLORS)])
             max_year = int(df["Year"].max())
         except FileNotFoundError:
             print(f"Warning: {folder}/cost_projection.csv not found, skipping")

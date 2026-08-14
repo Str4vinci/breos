@@ -5,6 +5,11 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 ## [Unreleased]
 
 ### Added
+- Add a validated `[costs]` override table with explicit user override → named
+  preset → `CostParams` default precedence, plus dotted `[sweep]` keys such as
+  `costs.electricity_cost` for economic sensitivity runs. Unknown cost keys and
+  invalid values now fail with actionable errors; existing flat configurations
+  retain their previous resolved costs.
 - Added explicit terrain-horizon provenance to weather inputs. PVGIS TMY
   fetching now accepts `use_horizon=False` for explicitly unshaded irradiance
   while preserving the historical provider-horizon default. Automatically
@@ -17,6 +22,12 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   shaded-timestep count in weather provenance. Fresh PVGIS requests
   automatically disable its provider horizon; already-shaded or unknown-
   provenance weather is rejected to prevent silent double-counting.
+
+### Removed
+- Removed the repository-only `tools/analyze_results.py` scratch script and
+  the superseded two-folder `tools/compare_two_results.py` helper. The supported
+  `tools/compare_results.py` command handles two or more result folders and no
+  longer depends on a nonexistent private plotting palette.
 
 ## [0.5.1] - 2026-08-11
 

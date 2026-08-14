@@ -119,6 +119,7 @@ def test_registry_preserves_defaults_and_allowed_top_level_keys():
             "location",
             "annual_consumption_kwh",
             "n_modules",
+            "costs",
             "montecarlo",
             "sweep",
             "battery_type",
