@@ -10,6 +10,12 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   `costs.electricity_cost` for economic sensitivity runs. Unknown cost keys and
   invalid values now fail with actionable errors; existing flat configurations
   retain their previous resolved costs.
+- Added explicit terrain-horizon provenance to weather inputs. PVGIS TMY
+  fetching now accepts `use_horizon=False` for explicitly unshaded irradiance
+  while preserving the historical provider-horizon default. Automatically
+  saved weather CSVs gain digest-bound `.csv.metadata.json` sidecars; missing,
+  legacy, malformed, or stale sidecars load conservatively with an `unknown`
+  horizon status rather than inferring treatment from the filename.
 
 ### Removed
 - Removed the repository-only `tools/analyze_results.py` scratch script and

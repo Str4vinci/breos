@@ -209,6 +209,13 @@ tmy, _ = fetch_tmy_weather_data(
 tmy.to_csv("weather/porto_tmy_2005_2023_pvgis-sarah3.csv")
 ```
 
+This manual CSV export is compatible with existing offline runs, but it has no
+provenance sidecar and is therefore loaded with an `unknown` horizon status.
+Calling `fetch_tmy_weather_data(..., save_to_file=True)` writes both the CSV
+and its digest-bound `.csv.metadata.json` sidecar. Keep the two files together
+and rename both with the same CSV basename if you adapt the generated filename
+to a location preset.
+
 Subsequent runs from the same working directory work without network access
 (the log line `Found local weather file` confirms the cache hit). Custom
 coordinate-dict locations always fetch; delete or rename the file to force a

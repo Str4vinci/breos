@@ -1,5 +1,7 @@
 """Tests for weather and weather-derived helpers."""
 
+import json
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -11,6 +13,7 @@ from breos.weather import (
     parse_weather_filename,
     preload_weather_by_year,
     read_epw_file,
+    resample_tmy_to_15min,
     resample_to_15min,
     select_random_year_and_replace_datetime,
 )
@@ -65,10 +68,12 @@ def test_resample_to_15min_keeps_all_slots_in_last_hour():
     assert resampled.index[-1] == pd.Timestamp("2025-01-01 02:45")
 
 
-def test_fetch_tmy_weather_accepts_hourly_frequency_alias(monkeypatch):
+def test_fetch_tmy_weather_accepts_hourly_frequency_alias_and_uses_horizon_by_default(monkeypatch):
     tmy = pd.DataFrame({"ghi": [0.0]}, index=pd.date_range("2020-01-01 00:00", periods=1, freq="h"))
+    captured = {}
 
     def fake_get_pvgis_tmy(*args, **kwargs):
+        captured.update(kwargs)
         return tmy.copy(), {}
 
     monkeypatch.setattr("breos.weather.pvlib.iotools.get_pvgis_tmy", fake_get_pvgis_tmy)
@@ -76,7 +81,33 @@ def test_fetch_tmy_weather_accepts_hourly_frequency_alias(monkeypatch):
     weather, _metadata = fetch_tmy_weather_data(41.0, -8.0, sample_year=None, freq="H")
 
     assert len(weather) == 1
+    assert captured["usehorizon"] is True
     assert weather.attrs["breos_weather_metadata"]["source"] == "PVGIS_TMY"
+    assert weather.attrs["breos_weather_metadata"]["horizon"] == {
+        "status": "applied",
+        "provider": "pvgis",
+        "profile": "provider_default",
+    }
+
+
+def test_fetch_tmy_can_request_unshaded_pvgis_weather(monkeypatch):
+    tmy = pd.DataFrame({"ghi": [0.0]}, index=pd.date_range("2020-01-01 00:00", periods=1, freq="h"))
+    captured = {}
+
+    def fake_get_pvgis_tmy(*args, **kwargs):
+        captured.update(kwargs)
+        return tmy.copy(), {}
+
+    monkeypatch.setattr("breos.weather.pvlib.iotools.get_pvgis_tmy", fake_get_pvgis_tmy)
+
+    weather, _metadata = fetch_tmy_weather_data(41.0, -8.0, sample_year=None, use_horizon=False)
+
+    assert captured["usehorizon"] is False
+    assert weather.attrs["breos_weather_metadata"]["horizon"] == {
+        "status": "not_applied",
+        "provider": "pvgis",
+        "profile": None,
+    }
 
 
 def test_local_weather_records_path_and_hash(tmp_path):
@@ -92,6 +123,97 @@ def test_local_weather_records_path_and_hash(tmp_path):
     assert metadata["source"] == "local_file"
     assert metadata["path"] == str(path.resolve())
     assert len(metadata["sha256"]) == 64
+    assert metadata["horizon"] == {"status": "unknown", "provider": None, "profile": None}
+
+
+def test_saved_pvgis_weather_round_trips_horizon_metadata(monkeypatch, tmp_path):
+    tmy = pd.DataFrame(
+        {"ghi": [0.0, 1.0]},
+        index=pd.date_range("2020-01-01 00:00", periods=2, freq="h", tz="UTC"),
+    )
+    api_metadata = {
+        "inputs": {
+            "location": {"latitude": 41.0, "longitude": -8.0},
+            "meteo_data": {"radiation_db": "SARAH3", "year_min": 2005, "year_max": 2023},
+        }
+    }
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        "breos.weather.pvlib.iotools.get_pvgis_tmy",
+        lambda *args, **kwargs: (tmy.copy(), api_metadata),
+    )
+
+    fetch_tmy_weather_data(41.0, -8.0, sample_year=None, save_to_file=True, use_horizon=False)
+
+    csv_path = tmp_path / "weather" / "lat41_lon-8_tmy_2005_2023_pvgis-sarah3.csv"
+    sidecar_path = csv_path.with_name(f"{csv_path.name}.metadata.json")
+    payload = json.loads(sidecar_path.read_text())
+    assert payload["schema_version"] == 1
+    assert len(payload["weather_sha256"]) == 64
+
+    loaded = load_weather("lat41_lon-8", data_type="tmy", weather_dir=str(csv_path.parent))
+    metadata = loaded.attrs["breos_weather_metadata"]
+    assert metadata["source"] == "local_file"
+    assert metadata["upstream_source"] == "PVGIS_TMY"
+    assert metadata["api_metadata"] == api_metadata
+    assert metadata["horizon"] == {"status": "not_applied", "provider": "pvgis", "profile": None}
+    assert metadata["metadata_sidecar"] == str(sidecar_path)
+
+
+def test_stale_weather_sidecar_is_ignored(monkeypatch, tmp_path, caplog):
+    tmy = pd.DataFrame(
+        {"ghi": [0.0, 1.0]},
+        index=pd.date_range("2020-01-01 00:00", periods=2, freq="h", tz="UTC"),
+    )
+    api_metadata = {
+        "inputs": {
+            "location": {"latitude": 41.0, "longitude": -8.0},
+            "meteo_data": {"radiation_db": "SARAH3", "year_min": 2005, "year_max": 2023},
+        }
+    }
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        "breos.weather.pvlib.iotools.get_pvgis_tmy",
+        lambda *args, **kwargs: (tmy.copy(), api_metadata),
+    )
+    fetch_tmy_weather_data(41.0, -8.0, sample_year=None, save_to_file=True)
+    csv_path = tmp_path / "weather" / "lat41_lon-8_tmy_2005_2023_pvgis-sarah3.csv"
+    csv_path.write_text(csv_path.read_text() + "\n")
+
+    loaded = load_weather("lat41_lon-8", data_type="tmy", weather_dir=str(csv_path.parent))
+
+    assert loaded.attrs["breos_weather_metadata"]["horizon"]["status"] == "unknown"
+    assert "digest does not match" in caplog.text
+
+
+def test_resample_to_15min_preserves_weather_metadata():
+    idx = pd.date_range("2025-01-01 00:00", periods=3, freq="h", tz="UTC")
+    weather = pd.DataFrame({"temp_air": [0.0, 4.0, 8.0]}, index=idx)
+    weather.attrs["breos_weather_metadata"] = {
+        "source": "test",
+        "horizon": {"status": "not_applied", "provider": "test", "profile": None},
+    }
+
+    resampled = resample_to_15min(weather, method="linear")
+
+    assert resampled.attrs["breos_weather_metadata"] == weather.attrs["breos_weather_metadata"]
+    assert resampled.attrs["breos_weather_metadata"] is not weather.attrs["breos_weather_metadata"]
+
+
+def test_resample_tmy_to_15min_preserves_weather_metadata():
+    idx = pd.date_range("2025-01-01 00:00", periods=4, freq="h", tz="UTC")
+    weather = pd.DataFrame({"temp_air": [0.0, 4.0, 8.0, 12.0]}, index=idx)
+    weather.attrs["breos_weather_metadata"] = {
+        "source": "test",
+        "horizon": {"status": "applied", "provider": "test", "profile": "test"},
+    }
+    api_metadata = {"inputs": {"location": {"latitude": 41.0, "longitude": -8.0, "elevation": 0.0}}}
+
+    resampled = resample_tmy_to_15min(weather, api_metadata)
+
+    assert resampled.attrs["breos_weather_metadata"] == weather.attrs["breos_weather_metadata"]
+    assert resampled.attrs["breos_weather_metadata"] is not weather.attrs["breos_weather_metadata"]
 
 
 def test_fetch_tmy_keeps_utc_instants_for_non_utc_location(monkeypatch):
@@ -180,9 +302,14 @@ def test_read_epw_accepts_15t_frequency_alias(monkeypatch):
     monkeypatch.setattr("breos.weather.pvlib.iotools.read_epw", fake_read_epw)
     monkeypatch.setattr("breos.weather.resample_to_15min", fake_resample)
 
-    read_epw_file("dummy.epw", freq="15T")
+    weather = read_epw_file("dummy.epw", freq="15T")
 
     assert calls == {"method": "makima", "latitude": 41.0, "longitude": -8.0}
+    assert weather.attrs["breos_weather_metadata"]["horizon"] == {
+        "status": "unknown",
+        "provider": "epw",
+        "profile": None,
+    }
 
 
 def test_select_random_year_accepts_15min_leap_year_after_dropping_feb_29(tmp_path):
