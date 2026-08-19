@@ -8,10 +8,13 @@ This module handles:
 """
 
 import hashlib
+import json
 import logging
 import os
 import re
+from copy import deepcopy
 from datetime import timedelta
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
@@ -24,6 +27,77 @@ from breos._deprecations import deprecated
 from breos.utils import safe_path_slug
 
 logger = logging.getLogger(__name__)
+
+_WEATHER_METADATA_KEY = "breos_weather_metadata"
+_WEATHER_METADATA_SCHEMA_VERSION = 1
+
+
+def _unknown_horizon_metadata(provider: str | None = None) -> dict[str, str | None]:
+    """Return the conservative horizon state for weather of unknown provenance."""
+    return {"status": "unknown", "provider": provider, "profile": None}
+
+
+def _weather_metadata_sidecar_path(filepath: str | os.PathLike[str]) -> Path:
+    """Return the stable metadata sidecar path for a weather CSV."""
+    return Path(f"{os.fspath(filepath)}.metadata.json")
+
+
+def _weather_file_sha256(filepath: str | os.PathLike[str]) -> str:
+    with open(filepath, "rb") as weather_file:
+        return hashlib.file_digest(weather_file, "sha256").hexdigest()
+
+
+def _json_default(value: Any) -> Any:
+    """Convert common scientific scalar types used by provider metadata."""
+    if isinstance(value, np.generic):
+        return value.item()
+    if isinstance(value, np.ndarray):
+        return value.tolist()
+    if isinstance(value, (pd.Timestamp, Path)):
+        return str(value)
+    raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
+
+
+def _save_weather_csv_with_metadata(weather: pd.DataFrame, filepath: str | os.PathLike[str]) -> None:
+    """Write a weather CSV and its versioned, content-bound provenance sidecar."""
+    weather.to_csv(filepath)
+    payload = {
+        "schema_version": _WEATHER_METADATA_SCHEMA_VERSION,
+        "weather_sha256": _weather_file_sha256(filepath),
+        _WEATHER_METADATA_KEY: deepcopy(weather.attrs.get(_WEATHER_METADATA_KEY, {})),
+    }
+    sidecar_path = _weather_metadata_sidecar_path(filepath)
+    with open(sidecar_path, "w", encoding="utf-8") as sidecar:
+        json.dump(payload, sidecar, indent=2, sort_keys=True, default=_json_default)
+        sidecar.write("\n")
+
+
+def _load_weather_metadata_sidecar(filepath: str | os.PathLike[str], weather_sha256: str) -> dict[str, Any] | None:
+    """Load metadata only when its sidecar schema and CSV digest are valid."""
+    sidecar_path = _weather_metadata_sidecar_path(filepath)
+    if not sidecar_path.is_file():
+        return None
+
+    try:
+        with open(sidecar_path, encoding="utf-8") as sidecar:
+            payload = json.load(sidecar)
+    except (OSError, json.JSONDecodeError) as exc:
+        logger.warning("Ignoring unreadable weather metadata sidecar %s: %s", sidecar_path, exc)
+        return None
+
+    if not isinstance(payload, dict) or payload.get("schema_version") != _WEATHER_METADATA_SCHEMA_VERSION:
+        logger.warning("Ignoring weather metadata sidecar with unsupported schema: %s", sidecar_path)
+        return None
+    if payload.get("weather_sha256") != weather_sha256:
+        logger.warning("Ignoring weather metadata sidecar whose CSV digest does not match: %s", sidecar_path)
+        return None
+
+    metadata = payload.get(_WEATHER_METADATA_KEY)
+    if not isinstance(metadata, dict):
+        logger.warning("Ignoring weather metadata sidecar without a metadata object: %s", sidecar_path)
+        return None
+    return metadata
+
 
 # Optional imports for API calls
 try:
@@ -175,14 +249,32 @@ def load_weather(
             logger.info("Subset to %s-%s (%d rows)", start_year, end_year, len(df))
 
     path = os.path.abspath(filepath)
-    with open(path, "rb") as weather_file:
-        sha256 = hashlib.file_digest(weather_file, "sha256").hexdigest()
-    df.attrs["breos_weather_metadata"] = {
-        "source": "local_file",
-        "path": path,
-        "sha256": sha256,
-        "parsed_filename": {key: value for key, value in best.items() if key != "filepath"},
-    }
+    sha256 = _weather_file_sha256(path)
+    persisted_metadata = _load_weather_metadata_sidecar(path, sha256)
+    metadata = deepcopy(persisted_metadata) if persisted_metadata is not None else {}
+    upstream_source = metadata.get("source")
+    horizon = metadata.get("horizon")
+    if not isinstance(horizon, dict) or horizon.get("status") not in {"applied", "not_applied", "unknown"}:
+        horizon = _unknown_horizon_metadata()
+    else:
+        horizon = deepcopy(horizon)
+        horizon.setdefault("provider", None)
+        horizon.setdefault("profile", None)
+
+    metadata.update(
+        {
+            "source": "local_file",
+            "path": path,
+            "sha256": sha256,
+            "parsed_filename": {key: value for key, value in best.items() if key != "filepath"},
+            "horizon": horizon,
+        }
+    )
+    if persisted_metadata is not None:
+        if upstream_source is not None:
+            metadata["upstream_source"] = upstream_source
+        metadata["metadata_sidecar"] = str(_weather_metadata_sidecar_path(path))
+    df.attrs[_WEATHER_METADATA_KEY] = metadata
 
     return df
 
@@ -194,6 +286,7 @@ def fetch_tmy_weather_data(
     freq: str = "h",
     timezone: Optional[str] = None,
     save_to_file: bool = False,
+    use_horizon: bool = True,
 ) -> Tuple[pd.DataFrame, dict]:
     """
     Fetch Typical Meteorological Year (TMY) weather data from PVGIS.
@@ -207,6 +300,8 @@ def fetch_tmy_weather_data(
             UTC offset (offset taken at Jan 1 of sample_year, i.e. standard
             time for northern-hemisphere locations). Auto-detected if None.
         save_to_file: Whether to save the data to CSV
+        use_horizon: Whether PVGIS should apply its terrain-horizon profile.
+            Defaults to True, preserving the historical BREOS behavior.
 
     Returns:
         Tuple of (tmy_data DataFrame, metadata dict). When sample_year is set,
@@ -241,13 +336,23 @@ def fetch_tmy_weather_data(
         latitude,
         longitude,
         outputformat="json",
-        usehorizon=True,
+        usehorizon=use_horizon,
         map_variables=True,
         url="https://re.jrc.ec.europa.eu/api/v5_3/",
         timeout=120,
         roll_utc_offset=roll_utc_offset,
         coerce_year=sample_year,
     )
+
+    tmy_data.attrs[_WEATHER_METADATA_KEY] = {
+        "source": "PVGIS_TMY",
+        "api_metadata": metadata,
+        "horizon": {
+            "status": "applied" if use_horizon else "not_applied",
+            "provider": "pvgis",
+            "profile": "provider_default" if use_horizon else None,
+        },
+    }
 
     # Resample to 15-min if requested
     if freq in ("15min", "15T", "15m"):
@@ -270,13 +375,9 @@ def fetch_tmy_weather_data(
         except (KeyError, AttributeError):
             filename = f"weather/tmy_data_{sample_year if sample_year else 'original'}_{freq}.csv"
         os.makedirs(os.path.dirname(filename), exist_ok=True)
-        tmy_data.to_csv(filename)
-        logger.info("Saved TMY data to %s", filename)
+        _save_weather_csv_with_metadata(tmy_data, filename)
+        logger.info("Saved TMY data and provenance sidecar to %s", filename)
 
-    tmy_data.attrs["breos_weather_metadata"] = {
-        "source": "PVGIS_TMY",
-        "api_metadata": metadata,
-    }
     return tmy_data, metadata
 
 
@@ -379,6 +480,10 @@ def fetch_weather_data(
 
     hourly_dataframe = pd.DataFrame(data=hourly_data)
     hourly_dataframe.set_index("date", inplace=True)
+    hourly_dataframe.attrs[_WEATHER_METADATA_KEY] = {
+        "source": "OpenMeteo_historical",
+        "horizon": _unknown_horizon_metadata("openmeteo"),
+    }
 
     # Resample to 15-min if requested (pass location for clear-sky scaling)
     if freq in ("15min", "15T", "15m"):
@@ -393,8 +498,8 @@ def fetch_weather_data(
             loc_slug = f"lat{latitude:.0f}_lon{longitude:.0f}"
         filename = os.path.join(output_dir, f"{loc_slug}_historical_{start_year}_{end_year}_openmeteo.csv")
         os.makedirs(output_dir, exist_ok=True)
-        hourly_dataframe.to_csv(filename)
-        logger.info("Saved weather data to %s", filename)
+        _save_weather_csv_with_metadata(hourly_dataframe, filename)
+        logger.info("Saved weather data and provenance sidecar to %s", filename)
 
     return hourly_dataframe
 
@@ -412,6 +517,8 @@ def resample_tmy_to_15min(tmy_data: pd.DataFrame, metadata: dict) -> pd.DataFram
     Returns:
         DataFrame with 15-minute intervals
     """
+    weather_metadata = deepcopy(tmy_data.attrs.get(_WEATHER_METADATA_KEY))
+
     # Location setup for clear-sky model
     loc = metadata["inputs"]["location"]
     site = Location(loc["latitude"], loc["longitude"], altitude=loc["elevation"])
@@ -460,6 +567,9 @@ def resample_tmy_to_15min(tmy_data: pd.DataFrame, metadata: dict) -> pd.DataFram
     if "wind_speed" in df_15:
         df_15["wind_speed"] = np.clip(df_15["wind_speed"], 0, None)
 
+    if weather_metadata is not None:
+        df_15.attrs[_WEATHER_METADATA_KEY] = weather_metadata
+
     return df_15
 
 
@@ -493,6 +603,8 @@ def resample_to_15min(
     Raises:
         ValueError: If DataFrame doesn't have DatetimeIndex
     """
+    weather_metadata = deepcopy(df_hourly.attrs.get(_WEATHER_METADATA_KEY))
+
     # Ensure DatetimeIndex
     if not isinstance(df_hourly.index, pd.DatetimeIndex):
         raise ValueError("DataFrame must have a DatetimeIndex")
@@ -578,6 +690,9 @@ def resample_to_15min(
     for col in non_negative_cols:
         if col in df_15min.columns:
             df_15min[col] = np.clip(df_15min[col], 0, None)
+
+    if weather_metadata is not None:
+        df_15min.attrs[_WEATHER_METADATA_KEY] = weather_metadata
 
     return df_15min
 
@@ -935,6 +1050,12 @@ def read_epw_file(
     # Resample to 15-min if requested
     if freq in ("15min", "15T", "15m"):
         df = resample_to_15min(df, method="makima", latitude=latitude, longitude=longitude)
+
+    df.attrs[_WEATHER_METADATA_KEY] = {
+        "source": "EPW_file",
+        "path": os.path.abspath(filepath),
+        "horizon": _unknown_horizon_metadata("epw"),
+    }
 
     return df
 

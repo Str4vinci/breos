@@ -117,8 +117,9 @@ From the CLI, the equivalent flag is `--transposition-model perez`
 
 Use `breos sweep` when you want to run the same scenario over an explicit grid
 of App config values. The top-level keys define the base scenario; every key
-under `[sweep]` replaces the matching top-level key for each run. The command
-runs the Cartesian product and writes one CSV row per combination:
+under `[sweep]` replaces the matching key for each run. Quote dotted keys to
+vary values inside a table such as `[costs]`. The command runs the Cartesian
+product and writes one CSV row per combination:
 
 ```toml
 location = "porto"
@@ -134,13 +135,15 @@ resolution = "h"
 [sweep]
 n_modules = [8, 10, 12]
 battery_kwh = [0.0, 5.0]
+"costs.electricity_cost" = [0.20, 0.30]
 ```
 
 ```bash
 breos sweep --config config.toml --output sweep_results.csv
 ```
 
-The output includes the varied parameters (`param_*` columns), resolved system
+The output includes the varied parameters (`param_*` columns, including for
+example `param_costs.electricity_cost`), resolved system
 sizing, the BREOS version, and top-level scalar result metrics such as grid
 independence, NPV, payback, LCOE, and battery replacement totals. This is
 explicit enumeration, not an optimizer; use the optimization API for searching
@@ -186,6 +189,34 @@ emissions_country = "PT"
 A runnable template also ships in the repository as
 `configs/examples/external-rlp.toml`.
 
+## Apply a custom terrain horizon
+
+Use azimuth/elevation pairs to model far-horizon direct-beam obstruction
+without a 3D scene:
+
+```toml
+location = "porto"
+n_modules = 8
+annual_consumption_kwh = 4000
+
+horizon_profile = [
+  [0, 4],
+  [60, 9],
+  [120, 14],
+  [180, 3],
+  [270, 6],
+]
+```
+
+The profile is circular: BREOS interpolates from the last point back to the
+first across north, so a repeated `360` endpoint is unnecessary. With a fresh
+PVGIS fetch, configuring the profile automatically requests provider data
+without PVGIS's own horizon. Cached weather must have a matching provenance
+sidecar that explicitly records `not_applied`; legacy CSVs are rejected because
+their horizon treatment cannot be established safely. The normalized profile
+and number of shaded timesteps appear under
+`provenance.weather.horizon.profile`.
+
 ## Offline runs with cached weather
 
 When the config uses a location *preset key*, BREOS scans a `weather/`
@@ -205,6 +236,13 @@ tmy, _ = fetch_tmy_weather_data(
 )
 tmy.to_csv("weather/porto_tmy_2005_2023_pvgis-sarah3.csv")
 ```
+
+This manual CSV export is compatible with existing offline runs, but it has no
+provenance sidecar and is therefore loaded with an `unknown` horizon status.
+Calling `fetch_tmy_weather_data(..., save_to_file=True)` writes both the CSV
+and its digest-bound `.csv.metadata.json` sidecar. Keep the two files together
+and rename both with the same CSV basename if you adapt the generated filename
+to a location preset.
 
 Subsequent runs from the same working directory work without network access
 (the log line `Found local weather file` confirms the cache hit). Custom

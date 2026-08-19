@@ -86,9 +86,11 @@ any example and edit it for your own scenario.
 - For external RLPs, use [`examples/external-rlp.toml`](examples/external-rlp.toml)
   as a template and put the licensed CSV files in a local directory such as
   `external_rlp/` (do not commit third-party RLPs).
-- `breos run` configs are **flat** key/value files (TOML or JSON). The only
-  recognised table for `breos run` is `[[pv_arrays]]`. The `[sweep]` and
-  `[montecarlo]` tables are read by their dedicated CLI commands.
+- `breos run` configs are mostly flat key/value files (TOML or JSON).
+  `[[pv_arrays]]` describes multiple arrays and `[costs]` holds explicit cost
+  overrides. The `[sweep]` and `[montecarlo]` tables are read by their dedicated
+  CLI commands; sweep entries can use quoted dotted keys such as
+  `"costs.electricity_cost"`.
 - Configs written for the research `pvbat` engine — with nested model sections,
   inheritance, or simulation-type blocks — are **not** compatible. BREOS
   rejects unknown top-level keys rather than silently applying defaults.

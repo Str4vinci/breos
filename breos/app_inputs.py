@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
@@ -10,6 +11,8 @@ import pandas as pd
 from pvlib.location import Location
 
 from breos.app_config import ResolvedAppConfig
+from breos.pv.horizon import apply_terrain_horizon_profile
+from breos.pv.model_options import DEFAULT_SOLAR_POSITION
 from breos.solar import (
     PVProductionBreakdown,
     calculate_multi_array_production_breakdown,
@@ -41,6 +44,25 @@ class PreparedSimulationInputs:
     temperature_series: pd.Series
 
 
+def _ensure_weather_horizon_metadata(weather: pd.DataFrame) -> None:
+    """Give injected or legacy weather an explicit conservative horizon state."""
+    metadata = deepcopy(weather.attrs.get("breos_weather_metadata"))
+    if not isinstance(metadata, dict):
+        metadata = {
+            "source": "runtime_dependency_or_unknown",
+            "note": "The injected weather provider did not expose source metadata.",
+        }
+    horizon = metadata.get("horizon")
+    if not isinstance(horizon, dict) or horizon.get("status") not in {"applied", "not_applied", "unknown"}:
+        metadata["horizon"] = {"status": "unknown", "provider": None, "profile": None}
+    else:
+        horizon = deepcopy(horizon)
+        horizon.setdefault("provider", None)
+        horizon.setdefault("profile", None)
+        metadata["horizon"] = horizon
+    weather.attrs["breos_weather_metadata"] = metadata
+
+
 def remap_tmy_year(df: pd.DataFrame, target_year: int) -> pd.DataFrame:
     """Remap a TMY DatetimeIndex to target_year."""
     idx = df.index
@@ -52,12 +74,15 @@ def remap_tmy_year(df: pd.DataFrame, target_year: int) -> pd.DataFrame:
     offset = target_year - dominant_year
     if offset == 0:
         return df
+    weather_metadata = deepcopy(df.attrs.get("breos_weather_metadata"))
     remapped = df.copy()
     remapped.index = idx_utc
     remapped = remap_datetime_index_years(remapped, offset)
     new_idx = remapped.index
     new_idx = new_idx.tz_convert(was_tz) if was_tz is not None else new_idx.tz_localize(None)
     remapped.index = new_idx
+    if weather_metadata is not None:
+        remapped.attrs["breos_weather_metadata"] = weather_metadata
     return remapped
 
 
@@ -67,6 +92,9 @@ def load_weather_for_simulation(
     start_year: int,
     deps: AppRuntimeDependencies,
     weather_dir: Path | None = None,
+    *,
+    horizon_profile: Any = None,
+    solar_position: str = DEFAULT_SOLAR_POSITION,
 ) -> pd.DataFrame:
     """Load TMY weather, falling back to PVGIS fetch.
 
@@ -88,8 +116,10 @@ def load_weather_for_simulation(
             sample_year=start_year,
             freq="h",
             timezone=resolved.timezone,
+            use_horizon=horizon_profile is None,
         )
 
+    _ensure_weather_horizon_metadata(weather)
     if weather.index.tz is None:
         weather.index = weather.index.tz_localize("UTC")
     weather = remap_tmy_year(weather, start_year)
@@ -101,6 +131,15 @@ def load_weather_for_simulation(
             weather = deps.resample_to_15min(weather, latitude=resolved.lat, longitude=resolved.lon)
             if weather_metadata is not None:
                 weather.attrs["breos_weather_metadata"] = weather_metadata
+
+    if horizon_profile is not None:
+        weather = apply_terrain_horizon_profile(
+            weather,
+            Location(resolved.lat, resolved.lon, tz=resolved.timezone),
+            horizon_profile,
+            freq=freq,
+            solar_position=solar_position,
+        )
 
     return weather
 
@@ -202,7 +241,14 @@ def prepare_simulation_inputs(
     """Prepare weather, PV, demand, and temperature inputs for the App pipeline."""
     freq = cfg["resolution"]
     start_year = int(cfg["start_date"][:4])
-    weather = load_weather_for_simulation(resolved, freq, start_year, deps)
+    weather = load_weather_for_simulation(
+        resolved,
+        freq,
+        start_year,
+        deps,
+        horizon_profile=cfg["horizon_profile"],
+        solar_position=cfg["solar_position"],
+    )
     pv_breakdown = build_pv_production_breakdown(cfg, resolved, weather)
     dc_system_base = pv_breakdown.dc_after_losses
     load_data = load_consumption_profile(cfg, deps, timezone=resolved.timezone)

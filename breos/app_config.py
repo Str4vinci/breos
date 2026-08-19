@@ -11,8 +11,9 @@ from typing import Any, Callable
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from breos.degradation.profiles import ENABLED_BLAST_MODEL_KEYS, apply_battery_profile_defaults
-from breos.economics import CostParams, calculate_costs
+from breos.economics import COST_CONFIG_KEY_TO_PARAM, CostParams, calculate_costs
 from breos.emissions import EmissionsParams
+from breos.pv.horizon import normalise_horizon_profile
 from breos.pv.model_options import is_known_model, is_valid_albedo, is_valid_gcr, normalise_model_name
 from breos.pv.temperature import validate_temperature_inputs
 from breos.pv_modules import MODULES, PVModuleParams, get_module
@@ -347,6 +348,7 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         cli_help="Simulation start date, YYYY-MM-DD.",
     ),
     # Config-file/API-only fields.
+    "costs": AppConfigField(),
     "pv_arrays": AppConfigField(default=None, default_order=1),
     "tracking": AppConfigField(default="fixed", default_order=7),
     "axis_tilt": AppConfigField(default=0.0, default_order=8),
@@ -361,6 +363,7 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
     "battery_rte": AppConfigField(default=None, default_order=41),
     "enable_resistance_fade": AppConfigField(default=False, default_order=44),
     "pv_loss_overrides": AppConfigField(default=None, default_order=48),
+    "horizon_profile": AppConfigField(default=None, default_order=50),
     # Runner sections are accepted by App resolution so each workflow can use
     # the same base config validation. The CLI validates their own structure.
     "montecarlo": AppConfigField(),
@@ -378,6 +381,11 @@ DEFAULTS: dict[str, Any] = {name: field.default for name, field in _DEFAULT_FIEL
 # Everything at the top level must be registered so typos (e.g.
 # ``batery_kwh``) fail loudly instead of being silently dropped by defaults.
 ALLOWED_CONFIG_KEYS: frozenset[str] = frozenset(APP_CONFIG_FIELDS)
+
+# Cost override keys deliberately use the existing preset-catalog vocabulary;
+# the canonical translation to CostParams lives in ``breos.economics`` so the
+# App and lower-level construction helper cannot drift.
+COST_OVERRIDE_KEYS: frozenset[str] = frozenset(COST_CONFIG_KEY_TO_PARAM)
 
 
 @dataclass(frozen=True)
@@ -662,6 +670,7 @@ def _validate_time_and_weather(cfg: dict[str, Any]) -> None:
         raise ValueError("'pv_degradation_rate' must be between 0 (inclusive) and 1 (exclusive)")
     if cfg["resolution"] not in ("h", "15min"):
         raise ValueError("'resolution' must be 'h' or '15min'")
+    cfg["horizon_profile"] = normalise_horizon_profile(cfg["horizon_profile"])
     _validate_sky_settings(cfg["transposition_model"], cfg["albedo"], cfg["surface_type"], cfg["model_perez"])
     if not is_known_model(cfg["solar_position"], SOLAR_POSITION_METHODS):
         valid = ", ".join(SOLAR_POSITION_METHODS)
@@ -692,6 +701,21 @@ def _validate_economics(cfg: dict[str, Any]) -> None:
             raise ValueError(f"'{key}' must be greater than -1")
     if not -1 < _finite_real(cfg["sell_price_inflation"], "sell_price_inflation") < 1:
         raise ValueError("'sell_price_inflation' must be between -1 and 1 (exclusive)")
+    if "costs" in cfg:
+        overrides = cfg["costs"]
+        if not isinstance(overrides, dict):
+            raise TypeError("'costs' must be a table/dict of cost overrides")
+        unknown = set(overrides) - COST_OVERRIDE_KEYS
+        if unknown:
+            available = ", ".join(f"costs.{key}" for key in sorted(COST_OVERRIDE_KEYS))
+            if len(unknown) == 1:
+                unknown_text = f"Unknown key 'costs.{next(iter(unknown))}'"
+            else:
+                unknown_text = "Unknown keys " + ", ".join(f"'costs.{key}'" for key in sorted(unknown))
+            raise ValueError(f"{unknown_text}. Available: {available}")
+        for key, value in overrides.items():
+            if _finite_real(value, f"costs.{key}") < 0:
+                raise ValueError(f"'costs.{key}' must be >= 0")
     if cfg["export_emissions_factor_gco2_kwh"] is not None:
         if _finite_real(cfg["export_emissions_factor_gco2_kwh"], "export_emissions_factor_gco2_kwh") < 0:
             raise ValueError("'export_emissions_factor_gco2_kwh' must be >= 0 when configured")
@@ -890,7 +914,6 @@ def resolve_costs(cfg: dict[str, Any]) -> CostParams:
     preset is configured, so the two paths cannot diverge.
     """
     params: dict[str, Any] = {}
-    defaults = CostParams()
 
     if cfg.get("cost_preset"):
         costs_db = load_json("costs.json")
@@ -899,28 +922,15 @@ def resolve_costs(cfg: dict[str, Any]) -> CostParams:
             available = ", ".join(sorted(costs_db))
             raise ValueError(f"Unknown cost preset '{preset_key}'. Available: {available}")
         preset = costs_db[preset_key]
+        for config_key, param_key in COST_CONFIG_KEY_TO_PARAM.items():
+            if config_key in preset:
+                params[param_key] = preset[config_key]
 
-        params["electricity_cost"] = preset.get("electricity_cost", defaults.electricity_cost)
-        params["electricity_sold_cost"] = preset.get("electricity_sold_cost", defaults.electricity_sold_cost)
-        params["daily_power_cost"] = preset.get("daily_power_cost", defaults.daily_power_cost)
-        params["module_cost_per_w"] = preset.get("module_cost_per_w", defaults.module_cost_per_w)
-        params["battery_cost_per_kwh"] = preset.get("storage_cost_per_kwh", defaults.battery_cost_per_kwh)
-        params["inverter_cost_per_kw"] = preset.get("inverter_cost_per_kw_hybrid", defaults.inverter_cost_per_kw)
-        params["inverter_cost_per_kw_nobatt"] = preset.get(
-            "inverter_cost_per_kw_simple", defaults.inverter_cost_per_kw_nobatt
-        )
-        params["installation_cost_per_module"] = preset.get(
-            "installation_cost_per_module", defaults.installation_cost_per_module
-        )
-        params["battery_installation_cost"] = preset.get(
-            "installation_cost_battery", defaults.battery_installation_cost
-        )
-        params["maintenance_cost_per_panel"] = preset.get(
-            "maintenance_cost_per_panel", defaults.maintenance_cost_per_panel
-        )
-        params["maintenance_cost_fixed"] = preset.get("maintenance_cost", defaults.maintenance_cost_fixed)
-        params["other_cost_per_module"] = preset.get("other_cost_per_module", defaults.other_cost_per_module)
-        params["other_cost_fixed"] = preset.get("other_costs", defaults.other_cost_fixed)
+    # Explicit values are the final layer: user overrides > named preset >
+    # CostParams defaults. Validation has already guaranteed this is a known,
+    # finite, non-negative table.
+    for config_key, value in cfg.get("costs", {}).items():
+        params[COST_CONFIG_KEY_TO_PARAM[config_key]] = value
 
     params["dc_ac_ratio"] = cfg["inverter_loading_ratio"]
     params.setdefault("inflation_rate", cfg["inflation_rate"])

@@ -59,6 +59,53 @@ class TestAppValidation:
         with pytest.raises(ValueError, match="Unknown cost preset"):
             App({"location": "porto", "n_modules": 10, "annual_consumption_kwh": 4000, "cost_preset": "fake_preset"})
 
+    def test_cost_overrides_must_be_a_table(self):
+        with pytest.raises(TypeError, match="'costs' must be a table/dict"):
+            App({"location": "porto", "n_modules": 10, "annual_consumption_kwh": 4000, "costs": 0.25})
+
+    def test_unknown_cost_override_is_actionable(self):
+        with pytest.raises(ValueError, match=r"Unknown key 'costs\.electricty_cost'.*costs\.electricity_cost"):
+            App(
+                {
+                    "location": "porto",
+                    "n_modules": 10,
+                    "annual_consumption_kwh": 4000,
+                    "costs": {"electricty_cost": 0.25},
+                }
+            )
+
+    def test_cost_overrides_resolve_through_app_facade(self):
+        app = App(
+            {
+                "location": "porto",
+                "n_modules": 10,
+                "annual_consumption_kwh": 4000,
+                "cost_preset": "residential_pt",
+                "costs": {
+                    "electricity_cost": 0.22,
+                    "storage_cost_per_kwh": 425.0,
+                    "land_cost": 1000.0,
+                },
+            }
+        )
+
+        assert app._resolved.cost_params.electricity_cost == 0.22
+        assert app._resolved.cost_params.battery_cost_per_kwh == 425.0
+        assert app._resolved.cost_params.land_cost == 1000.0
+        assert app._resolved.cost_params.module_cost_per_w == 0.125
+
+    @pytest.mark.parametrize("value", [-0.01, float("inf"), True])
+    def test_cost_overrides_must_be_non_negative_finite_numbers(self, value):
+        with pytest.raises((TypeError, ValueError), match=r"costs\.electricity_cost"):
+            App(
+                {
+                    "location": "porto",
+                    "n_modules": 10,
+                    "annual_consumption_kwh": 4000,
+                    "costs": {"electricity_cost": value},
+                }
+            )
+
     def test_invalid_emissions_country(self):
         with pytest.raises(ValueError, match="Unknown emissions country"):
             App({"location": "porto", "n_modules": 10, "annual_consumption_kwh": 4000, "emissions_country": "XX"})
@@ -528,6 +575,27 @@ class TestAppValidation:
         # Removing a DC loss increases production. The AC increase is not a
         # fixed 1 / 0.97 ratio because inverter efficiency varies with load.
         assert no_shading > base
+
+    def test_horizon_profile_reduces_generation_and_is_serialized(self, _patch_weather):
+        common = {
+            "location": "porto",
+            "n_modules": 6,
+            "annual_consumption_kwh": 3000,
+            "projection_years": 1,
+        }
+        baseline = App(common)
+        baseline.simulate()
+        horizon = App({**common, "horizon_profile": [[0, 90], [180, 90]]})
+        horizon.simulate()
+
+        result = horizon.result()
+        assert result["pv_dc_generation_kwh"] < baseline.result()["pv_dc_generation_kwh"]
+        horizon_provenance = result["provenance"]["weather"]["horizon"]
+        assert horizon_provenance["status"] == "applied"
+        assert horizon_provenance["provider"] == "breos"
+        assert horizon_provenance["profile"]["points"] == [[0.0, 90.0], [180.0, 90.0]]
+        assert horizon_provenance["profile"]["shaded_timesteps"] > 0
+        json.dumps(result)
 
     def test_smaller_inverter_clips_app_production(self, _patch_weather):
         def _run(loading_ratio):

@@ -186,7 +186,17 @@ def _patch_weather(monkeypatch, synthetic_weather):
     """Monkeypatch fetch_tmy_weather_data so App tests never hit the network."""
 
     def _fake_fetch(*args, **kwargs):
-        return synthetic_weather, {"inputs": {"location": {"latitude": 41.15, "longitude": -8.63, "elevation": 0}}}
+        weather = synthetic_weather.copy()
+        use_horizon = kwargs.get("use_horizon", True)
+        weather.attrs["breos_weather_metadata"] = {
+            "source": "PVGIS_TMY",
+            "horizon": {
+                "status": "applied" if use_horizon else "not_applied",
+                "provider": "pvgis",
+                "profile": "provider_default" if use_horizon else None,
+            },
+        }
+        return weather, {"inputs": {"location": {"latitude": 41.15, "longitude": -8.63, "elevation": 0}}}
 
     monkeypatch.setattr("breos.app.fetch_tmy_weather_data", _fake_fetch)
     monkeypatch.setattr("breos.app.load_weather", lambda **kw: None)  # force fetch path

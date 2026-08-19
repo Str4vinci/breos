@@ -38,7 +38,6 @@ from breos.economics import calculate_lcoe_from_projection, cost_analysis_projec
 from breos.inverter import InverterConfig
 from breos.load_profiles import load_profile
 from breos.plotting import (
-    _BREAKEVEN_COLORS,
     plot_breakeven,
     plot_breakeven_comparison,
     plot_grid_independence_heatmap,
@@ -48,6 +47,8 @@ from breos.pv_modules import get_module
 from breos.solar import PVModuleParams, calculate_pv_production_dc
 from breos.utils import get_hours_per_step
 from breos.weather import extract_ambient_temperature, load_weather, resample_to_15min
+
+BREAKEVEN_COLORS = ("#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd", "#8c564b")
 
 # ---------------------------------------------------------------------------
 # Location registry
@@ -767,7 +768,7 @@ def generate_outputs(results_df, output_dir, locations, cost_projections=None):
                     if key in cost_projections:
                         cost_dfs.append(cost_projections[key])
                         labels.append(f"{loc.capitalize()} ({int(n_mod)}p/{int(batt)}kWh)")
-                        colors.append(_BREAKEVEN_COLORS[i % len(_BREAKEVEN_COLORS)])
+                        colors.append(BREAKEVEN_COLORS[i % len(BREAKEVEN_COLORS)])
 
                 if len(cost_dfs) >= 2:
                     fname = f"breakeven_comparison_{int(n_mod)}p_{int(batt)}kWh.png"

@@ -1,6 +1,6 @@
 # Deprecations for 0.6.0
 
-BREOS 0.5.1 keeps the APIs below working. Deprecated callables emit a
+BREOS 0.5.2 keeps the APIs below working. Deprecated callables emit a
 `DeprecationWarning` when called, `PolysunDegradationConfig` warns when
 instantiated, and directly importing `breos.numba_kernels` warns. The
 `breos[fast]` extra and comparison-only constants cannot warn on use and are
@@ -51,7 +51,7 @@ The deprecated inventory is:
   `WOEHLER_LFP_OPTIMISTIC_A`, `WOEHLER_LFP_OPTIMISTIC_B`,
   `POLYSUN_CALENDAR_LIFE_LION`, and `POLYSUN_CALENDAR_LIFE_LEAD`
 
-Archive the exact BREOS 0.5.1 tag or copy the comparison implementation into
+Archive the exact BREOS 0.5.2 tag or copy the comparison implementation into
 the article's versioned research artifact before moving to 0.6.0. The module,
 exports, constants, plots, and compatibility tests will then be deleted from
 the shipped package. BREOS's supported degradation models are documented in
