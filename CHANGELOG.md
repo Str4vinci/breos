@@ -4,6 +4,8 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 
 ## [Unreleased]
 
+## [0.5.2] - 2026-08-19
+
 ### Added
 - Add a validated `[costs]` override table with explicit user override → named
   preset → `CostParams` default precedence, plus dotted `[sweep]` keys such as
