@@ -1,0 +1,260 @@
+{
+  "schedules": {
+    "pt_mainland_2026_daily_bi": {
+      "version": "2026",
+      "timezone": "Europe/Lisbon",
+      "cycle": "daily",
+      "periods": ["off_peak", "peak"],
+      "source_url": "https://www.erse.pt/atividade/regulacao/tarifas-e-precos-eletricidade/",
+      "required_resolution_minutes": 60,
+      "rules": [
+        {
+          "days": "all",
+          "season": "all",
+          "intervals": {
+            "off_peak": [["00:00", "08:00"], ["22:00", "24:00"]],
+            "peak": [["08:00", "22:00"]]
+          }
+        }
+      ]
+    },
+    "pt_mainland_2026_daily_tri": {
+      "version": "2026",
+      "timezone": "Europe/Lisbon",
+      "cycle": "daily",
+      "periods": ["super_off_peak", "off_peak", "mid_peak", "peak"],
+      "source_url": "https://www.erse.pt/atividade/regulacao/tarifas-e-precos-eletricidade/",
+      "required_resolution_minutes": 30,
+      "rules": [
+        {
+          "days": "all",
+          "season": "standard",
+          "intervals": {
+            "super_off_peak": [["02:00", "06:00"]],
+            "off_peak": [["00:00", "02:00"], ["06:00", "08:00"], ["22:00", "24:00"]],
+            "mid_peak": [["08:00", "09:00"], ["10:30", "18:00"], ["20:30", "22:00"]],
+            "peak": [["09:00", "10:30"], ["18:00", "20:30"]]
+          }
+        },
+        {
+          "days": "all",
+          "season": "dst",
+          "intervals": {
+            "super_off_peak": [["02:00", "06:00"]],
+            "off_peak": [["00:00", "02:00"], ["06:00", "08:00"], ["22:00", "24:00"]],
+            "mid_peak": [["08:00", "10:30"], ["13:00", "19:30"], ["21:00", "22:00"]],
+            "peak": [["10:30", "13:00"], ["19:30", "21:00"]]
+          }
+        }
+      ]
+    },
+    "pt_mainland_2026_weekly_bi": {
+      "version": "2026",
+      "timezone": "Europe/Lisbon",
+      "cycle": "weekly",
+      "periods": ["off_peak", "peak"],
+      "source_url": "https://www.erse.pt/atividade/regulacao/tarifas-e-precos-eletricidade/",
+      "required_resolution_minutes": 30,
+      "rules": [
+        {
+          "days": "weekday",
+          "season": "all",
+          "intervals": {
+            "off_peak": [["00:00", "07:00"]],
+            "peak": [["07:00", "24:00"]]
+          }
+        },
+        {
+          "days": "saturday",
+          "season": "standard",
+          "intervals": {
+            "off_peak": [["00:00", "09:30"], ["13:00", "18:30"], ["22:00", "24:00"]],
+            "peak": [["09:30", "13:00"], ["18:30", "22:00"]]
+          }
+        },
+        {
+          "days": "saturday",
+          "season": "dst",
+          "intervals": {
+            "off_peak": [["00:00", "09:00"], ["14:00", "20:00"], ["22:00", "24:00"]],
+            "peak": [["09:00", "14:00"], ["20:00", "22:00"]]
+          }
+        },
+        {
+          "days": "sunday",
+          "season": "all",
+          "intervals": {"off_peak": [["00:00", "24:00"]]}
+        }
+      ]
+    },
+    "pt_mainland_2026_weekly_tri": {
+      "version": "2026",
+      "timezone": "Europe/Lisbon",
+      "cycle": "weekly",
+      "periods": ["super_off_peak", "off_peak", "mid_peak", "peak"],
+      "source_url": "https://www.erse.pt/atividade/regulacao/tarifas-e-precos-eletricidade/",
+      "required_resolution_minutes": 15,
+      "rules": [
+        {
+          "days": "weekday",
+          "season": "standard",
+          "intervals": {
+            "super_off_peak": [["02:00", "06:00"]],
+            "off_peak": [["00:00", "02:00"], ["06:00", "07:00"]],
+            "mid_peak": [["07:00", "09:30"], ["12:00", "18:30"], ["21:00", "24:00"]],
+            "peak": [["09:30", "12:00"], ["18:30", "21:00"]]
+          }
+        },
+        {
+          "days": "weekday",
+          "season": "dst",
+          "intervals": {
+            "super_off_peak": [["02:00", "06:00"]],
+            "off_peak": [["00:00", "02:00"], ["06:00", "07:00"]],
+            "mid_peak": [["07:00", "09:15"], ["12:15", "24:00"]],
+            "peak": [["09:15", "12:15"]]
+          }
+        },
+        {
+          "days": "saturday",
+          "season": "standard",
+          "intervals": {
+            "super_off_peak": [["02:00", "06:00"]],
+            "off_peak": [["00:00", "02:00"], ["06:00", "09:30"], ["13:00", "18:30"], ["22:00", "24:00"]],
+            "mid_peak": [["09:30", "13:00"], ["18:30", "22:00"]]
+          }
+        },
+        {
+          "days": "saturday",
+          "season": "dst",
+          "intervals": {
+            "super_off_peak": [["02:00", "06:00"]],
+            "off_peak": [["00:00", "02:00"], ["06:00", "09:00"], ["14:00", "20:00"], ["22:00", "24:00"]],
+            "mid_peak": [["09:00", "14:00"], ["20:00", "22:00"]]
+          }
+        },
+        {
+          "days": "sunday",
+          "season": "all",
+          "intervals": {
+            "super_off_peak": [["02:00", "06:00"]],
+            "off_peak": [["00:00", "02:00"], ["06:00", "24:00"]]
+          }
+        }
+      ]
+    },
+    "pt_mainland_2027_daily_bi": {
+      "version": "approved-2026-07-31",
+      "timezone": "Europe/Lisbon",
+      "cycle": "daily",
+      "periods": ["off_peak", "peak"],
+      "source_url": "https://www.erse.pt/media/3eec14ln/cp137_fecho_ersexplica_pr_horarios.pdf",
+      "effective_from": "2027-07-01",
+      "required_resolution_minutes": 30,
+      "rules": [
+        {
+          "days": "all",
+          "season": "all",
+          "intervals": {
+            "off_peak": [["00:00", "08:30"], ["22:30", "24:00"]],
+            "peak": [["08:30", "22:30"]]
+          }
+        }
+      ]
+    },
+    "pt_mainland_2027_daily_tri": {
+      "version": "approved-2026-07-31",
+      "timezone": "Europe/Lisbon",
+      "cycle": "daily",
+      "periods": ["off_peak", "mid_peak", "peak"],
+      "source_url": "https://www.erse.pt/media/3eec14ln/cp137_fecho_ersexplica_pr_horarios.pdf",
+      "effective_from": "2027-07-01",
+      "required_resolution_minutes": 30,
+      "rules": [
+        {
+          "days": "all",
+          "season": "all",
+          "intervals": {
+            "off_peak": [["00:00", "08:30"], ["22:30", "24:00"]],
+            "mid_peak": [["08:30", "17:30"], ["21:30", "22:30"]],
+            "peak": [["17:30", "21:30"]]
+          }
+        }
+      ]
+    },
+    "pt_mainland_2027_weekly_bi": {
+      "version": "approved-2026-07-31",
+      "timezone": "Europe/Lisbon",
+      "cycle": "weekly",
+      "periods": ["off_peak", "peak"],
+      "source_url": "https://www.erse.pt/media/3eec14ln/cp137_fecho_ersexplica_pr_horarios.pdf",
+      "effective_from": "2027-07-01",
+      "required_resolution_minutes": 30,
+      "rules": [
+        {
+          "days": "weekday",
+          "season": "all",
+          "intervals": {
+            "off_peak": [["00:30", "07:30"]],
+            "peak": [["00:00", "00:30"], ["07:30", "24:00"]]
+          }
+        },
+        {
+          "days": "saturday",
+          "season": "all",
+          "intervals": {
+            "off_peak": [["00:00", "17:00"]],
+            "peak": [["17:00", "24:00"]]
+          }
+        },
+        {
+          "days": "sunday",
+          "season": "all",
+          "intervals": {"off_peak": [["00:00", "24:00"]]}
+        }
+      ]
+    },
+    "pt_mainland_2027_weekly_tri": {
+      "version": "approved-2026-07-31",
+      "timezone": "Europe/Lisbon",
+      "cycle": "weekly",
+      "periods": ["off_peak", "mid_peak", "peak"],
+      "source_url": "https://www.erse.pt/media/3eec14ln/cp137_fecho_ersexplica_pr_horarios.pdf",
+      "effective_from": "2027-07-01",
+      "required_resolution_minutes": 30,
+      "rules": [
+        {
+          "days": "weekday",
+          "season": "standard",
+          "intervals": {
+            "off_peak": [["00:30", "07:30"]],
+            "mid_peak": [["00:00", "00:30"], ["07:30", "17:00"], ["22:00", "24:00"]],
+            "peak": [["17:00", "22:00"]]
+          }
+        },
+        {
+          "days": "weekday",
+          "season": "dst",
+          "intervals": {
+            "off_peak": [["00:30", "07:30"]],
+            "mid_peak": [["00:00", "00:30"], ["07:30", "19:30"], ["22:30", "24:00"]],
+            "peak": [["19:30", "22:30"]]
+          }
+        },
+        {
+          "days": "saturday",
+          "season": "all",
+          "intervals": {
+            "off_peak": [["00:00", "17:00"]],
+            "mid_peak": [["17:00", "24:00"]]
+          }
+        },
+        {
+          "days": "sunday",
+          "season": "all",
+          "intervals": {"off_peak": [["00:00", "24:00"]]}
+        }
+      ]
+    }
+  }
+}
