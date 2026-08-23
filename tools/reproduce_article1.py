@@ -16,6 +16,7 @@ import sys
 import tomllib
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -73,19 +74,39 @@ def _display_path(path: Path) -> str:
         return str(path.resolve())
 
 
+def _battery_cost_slug(cost: float) -> str:
+    """Return a stable, filesystem-safe label for a battery-cost scenario."""
+    return f"{cost:g}".replace(".", "p")
+
+
+def _battery_cost_scenarios(requested: list[float] | None) -> list[float | None]:
+    """Resolve optional CLI cost scenarios while preserving the default layout."""
+    if not requested:
+        return [None]
+    scenarios: list[float] = []
+    for cost in requested:
+        if cost < 0.0:
+            raise ValueError("--battery-cost must be non-negative")
+        if cost not in scenarios:
+            scenarios.append(cost)
+    return scenarios
+
+
 def _load_inputs(
     config: dict,
     rlp_directory: Path,
     weather_override: Path | None = None,
-) -> tuple[pd.DataFrame, pd.DataFrame, Path, Path]:
+) -> tuple[pd.DataFrame, pd.DataFrame, Path, Path | None]:
     simulation = config["simulation"]
     location = config["location"]
     load_config = config["load"]
     weather_path = weather_override or PROJECT_ROOT / simulation["weather_file"]
-    rlp_path = rlp_directory / load_config["external_filename"]
+    profile_type = str(load_config["profile_type"])
+    uses_packaged_profile = profile_type in {"1", "default", "demandlib_h0", "h0", "bdew_h0"}
+    rlp_path = None if uses_packaged_profile else rlp_directory / load_config["external_filename"]
     if not weather_path.is_file():
         raise FileNotFoundError(f"Article 1 weather file not found: {weather_path}")
-    if not rlp_path.is_file():
+    if rlp_path is not None and not rlp_path.is_file():
         raise FileNotFoundError(
             f"Article 1 external RLP not found: {rlp_path}. Pass --rlp-directory with the licensed E-REDES file."
         )
@@ -107,7 +128,7 @@ def _load_inputs(
         float(load_config["annual_consumption_kwh"]),
         start_date=str(weather.index[0].year) + "-01-01",
         freq=str(simulation["resolution"]),
-        rlp_directory=str(rlp_directory),
+        rlp_directory=None if uses_packaged_profile else str(rlp_directory),
         timezone=str(location["timezone"]),
     )
     return weather, load, weather_path, rlp_path
@@ -119,6 +140,8 @@ def _fixed_candidates(
     load: pd.DataFrame,
     selected_labels: set[str],
     output_directory: Path,
+    *,
+    compare_reference: bool = True,
 ) -> pd.DataFrame:
     rows = []
     for reference in config["reference_candidates"]:
@@ -136,8 +159,10 @@ def _fixed_candidates(
         output = result.metrics
         reproduced_gi = float(output["Projected_Grid_Independence_%"])
         reproduced_npv = float(output["Projected_NPV_Eur"])
-        reference_gi = float(reference.get("projected_grid_independence_pct", float("nan")))
-        reference_npv = float(reference.get("projected_npv_eur", float("nan")))
+        reference_gi = (
+            float(reference.get("projected_grid_independence_pct", float("nan"))) if compare_reference else float("nan")
+        )
+        reference_npv = float(reference.get("projected_npv_eur", float("nan"))) if compare_reference else float("nan")
         row = {
             "Label": reference["label"],
             "Modules": int(reference["modules"]),
@@ -164,6 +189,79 @@ def _fixed_candidates(
     return pd.DataFrame(rows)
 
 
+def _select_pareto_representatives(pareto: pd.DataFrame) -> pd.DataFrame:
+    """Select the maximum-NPV, normalized-knee, and maximum-GI designs."""
+    if pareto.empty:
+        raise ValueError("Cannot select representatives from an empty Pareto front")
+    npv_column = "Projected_NPV_Eur"
+    gi_column = "Projected_Grid_Independence_%"
+    missing = {npv_column, gi_column} - set(pareto.columns)
+    if missing:
+        raise ValueError(f"Pareto front is missing projected metric columns: {', '.join(sorted(missing))}")
+
+    npv = pareto[npv_column].to_numpy(dtype=float)
+    gi = pareto[gi_column].to_numpy(dtype=float)
+    npv_span = float(np.max(npv) - np.min(npv))
+    gi_span = float(np.max(gi) - np.min(gi))
+    npv_normalized = (npv - np.min(npv)) / (npv_span if npv_span > 0.0 else 1.0)
+    gi_normalized = (gi - np.min(gi)) / (gi_span if gi_span > 0.0 else 1.0)
+    knee_distance = np.hypot(1.0 - npv_normalized, 1.0 - gi_normalized)
+    selections = (
+        ("max_npv", int(np.argmax(npv))),
+        ("knee", int(np.argmin(knee_distance))),
+        ("max_gi", int(np.argmax(gi))),
+    )
+
+    rows = []
+    for label, position in selections:
+        row = pareto.iloc[position].to_dict()
+        row = {"Representative": label, **row}
+        rows.append(row)
+    return pd.DataFrame(rows)
+
+
+def _export_pareto_representatives(
+    config: dict,
+    weather: pd.DataFrame,
+    load: pd.DataFrame,
+    pareto: pd.DataFrame,
+    output_directory: Path,
+) -> tuple[pd.DataFrame, dict[str, dict[str, str]]]:
+    """Replay selected Pareto designs and export their plot-independent tables."""
+    representatives = _select_pareto_representatives(pareto)
+    summaries = []
+    artifacts = {}
+    for representative in representatives.to_dict(orient="records"):
+        label = str(representative["Representative"])
+        result = evaluate_projected_design(
+            weather,
+            load,
+            config,
+            n_modules=int(representative["Modules"]),
+            battery_kwh=float(representative["Battery_kWh"]),
+            tilt=float(representative["Tilt"]),
+            azimuth=float(representative["Azimuth"]),
+        )
+        directory = output_directory / "representatives" / label
+        directory.mkdir(parents=True, exist_ok=True)
+        yearly_path = directory / "yearly_summary.csv"
+        financial_path = directory / "cost_projection.csv"
+        metrics_path = directory / "metrics.json"
+        result.yearly.to_csv(yearly_path, index=False)
+        result.financial.to_csv(financial_path, index=False)
+        metrics_path.write_text(json.dumps(result.metrics, indent=2, default=str) + "\n")
+        summaries.append({**representative, **result.metrics})
+        artifacts[label] = {
+            "yearly_summary": str(yearly_path.relative_to(output_directory)),
+            "yearly_summary_sha256": _sha256(yearly_path),
+            "cost_projection": str(financial_path.relative_to(output_directory)),
+            "cost_projection_sha256": _sha256(financial_path),
+            "metrics": str(metrics_path.relative_to(output_directory)),
+            "metrics_sha256": _sha256(metrics_path),
+        }
+    return pd.DataFrame(summaries), artifacts
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
@@ -175,6 +273,21 @@ def main() -> int:
         "--calendar-model",
         help="Override battery.calendar_model (for example naumann_lam_field_calibrated_v2 or naumann_lam)",
     )
+    parser.add_argument("--resolution", choices=("h", "15min"), help="Override simulation.resolution")
+    parser.add_argument(
+        "--load-profile",
+        choices=("eredes", "h0"),
+        help="Override the configured household profile; h0 uses BREOS packaged data",
+    )
+    parser.add_argument(
+        "--battery-cost",
+        action="append",
+        type=float,
+        help=(
+            "Override costs.storage_cost_per_kwh. Repeat the option to run several "
+            "cost scenarios in separate battery-cost-* directories."
+        ),
+    )
     optimization_group = parser.add_mutually_exclusive_group()
     optimization_group.add_argument("--smoke-optimization", action="store_true")
     optimization_group.add_argument("--full-optimization", action="store_true")
@@ -183,101 +296,144 @@ def main() -> int:
     args = parser.parse_args()
 
     config_bytes = args.config.read_bytes()
-    config = tomllib.loads(config_bytes.decode("utf-8"))
+    base_config = tomllib.loads(config_bytes.decode("utf-8"))
     if args.calendar_model:
-        config.setdefault("battery", {})["calendar_model"] = args.calendar_model
-    weather, load, weather_path, rlp_path = _load_inputs(config, args.rlp_directory, args.weather_file)
-    args.output.mkdir(parents=True, exist_ok=True)
+        base_config.setdefault("battery", {})["calendar_model"] = args.calendar_model
+    if args.resolution:
+        base_config.setdefault("simulation", {})["resolution"] = args.resolution
+    if args.load_profile:
+        base_config.setdefault("load", {})["profile_type"] = "6" if args.load_profile == "eredes" else "1"
+    weather, load, weather_path, rlp_path = _load_inputs(base_config, args.rlp_directory, args.weather_file)
+    configured_cost = float(base_config["costs"]["storage_cost_per_kwh"])
 
-    fixed = pd.DataFrame()
-    fixed_path = args.output / "fixed_candidates.csv"
-    if not args.skip_fixed:
-        fixed = _fixed_candidates(config, weather, load, set(args.candidate), args.output)
-        fixed.to_csv(fixed_path, index=False)
-        print(fixed.to_string(index=False))
-        print(f"\nWrote {fixed_path}")
-
-    report = {
-        "breos_version": breos.__version__,
-        "breos_source": _git_revision(),
-        "python_version": platform.python_version(),
-        "platform": platform.platform(),
-        "dependency_versions": _dependency_versions(),
-        "command": shlex.join([sys.executable, *sys.argv]),
-        "research_commit": RESEARCH_COMMIT,
-        "research_pareto_sha256": RESEARCH_PARETO_SHA256,
-        "research_weather_sha256": RESEARCH_WEATHER_SHA256,
-        "config": _display_path(args.config),
-        "config_sha256": hashlib.sha256(config_bytes).hexdigest(),
-        "resolved_config_sha256": hashlib.sha256(
-            json.dumps(config, sort_keys=True, separators=(",", ":")).encode("utf-8")
-        ).hexdigest(),
-        "resolved_config": config,
-        "weather": _display_path(weather_path),
-        "weather_file_sha256": _sha256(weather_path),
-        "weather_uncompressed_sha256": _sha256(
-            weather_path,
-            decompress_gzip=weather_path.suffix == ".gz",
-        ),
-        "external_rlp_filename": rlp_path.name,
-        "external_rlp_sha256": _sha256(rlp_path),
-        "fixed_candidates": fixed.to_dict(orient="records"),
-        "fixed_candidate_artifacts": (
-            {
-                str(row["Label"]): {
-                    "yearly_summary": f"candidates/{str(row['Label']).lower()}/yearly_summary.csv",
-                    "yearly_summary_sha256": _sha256(
-                        args.output / "candidates" / str(row["Label"]).lower() / "yearly_summary.csv"
-                    ),
-                    "cost_projection": f"candidates/{str(row['Label']).lower()}/cost_projection.csv",
-                    "cost_projection_sha256": _sha256(
-                        args.output / "candidates" / str(row["Label"]).lower() / "cost_projection.csv"
-                    ),
-                    "metrics": f"candidates/{str(row['Label']).lower()}/metrics.json",
-                    "metrics_sha256": _sha256(args.output / "candidates" / str(row["Label"]).lower() / "metrics.json"),
-                }
-                for row in fixed.to_dict(orient="records")
-            }
-            if not fixed.empty
-            else {}
-        ),
-    }
-
-    if args.full_optimization or args.smoke_optimization:
-        run_config = copy.deepcopy(config)
-        optimization = run_config["optimization"]
-        if args.smoke_optimization:
-            optimization.update({"pop_size": 4, "n_offsprings": 2, "n_gen": 1, "early_stop": False})
-        result = optimize_system_multi_objective(
-            weather,
-            load,
-            run_config,
-            results_dir=str(args.output / "optimization"),
-            pop_size=int(optimization["pop_size"]),
-            n_gen=int(optimization["n_gen"]),
-            n_offsprings=int(optimization["n_offsprings"]),
-            seed=int(optimization["seed"]),
-            verbose=True,
-            n_procs=args.n_procs,
+    for requested_cost in _battery_cost_scenarios(args.battery_cost):
+        config = copy.deepcopy(base_config)
+        scenario_output = args.output
+        if requested_cost is not None:
+            config["costs"]["storage_cost_per_kwh"] = requested_cost
+            scenario_output = args.output / f"battery-cost-{_battery_cost_slug(requested_cost)}"
+        scenario_output.mkdir(parents=True, exist_ok=True)
+        scenario_cost = float(config["costs"]["storage_cost_per_kwh"])
+        compare_reference = (
+            scenario_cost == configured_cost
+            and not args.calendar_model
+            and not args.resolution
+            and not args.load_profile
         )
-        pareto_path = args.output / "pareto_results.csv"
-        result.details["pareto"].to_csv(pareto_path, index=False)
-        report["optimization"] = {
-            "run_type": "full" if args.full_optimization else "smoke",
-            "settings": optimization,
-            "iterations": result.iterations,
-            "objective_basis": result.details["objective_basis"],
-            "objective_names": result.details["objective_names"],
-            "early_stop": result.details["early_stop"],
-            "n_procs": result.details["n_procs"],
-            "pareto_csv": pareto_path.name,
-            "pareto_sha256": _sha256(pareto_path),
-        }
-        print(f"Wrote {pareto_path}")
 
-    report_path = args.output / "reproduction.json"
-    report_path.write_text(json.dumps(report, indent=2, default=str) + "\n")
-    print(f"Wrote {report_path}")
+        fixed = pd.DataFrame()
+        fixed_path = scenario_output / "fixed_candidates.csv"
+        if not args.skip_fixed:
+            fixed = _fixed_candidates(
+                config,
+                weather,
+                load,
+                set(args.candidate),
+                scenario_output,
+                compare_reference=compare_reference,
+            )
+            fixed.to_csv(fixed_path, index=False)
+            print(fixed.to_string(index=False))
+            print(f"\nWrote {fixed_path}")
+
+        report = {
+            "breos_version": breos.__version__,
+            "breos_source": _git_revision(),
+            "python_version": platform.python_version(),
+            "platform": platform.platform(),
+            "dependency_versions": _dependency_versions(),
+            "command": shlex.join([sys.executable, *sys.argv]),
+            "battery_cost_scenario_eur_per_kwh": scenario_cost,
+            "research_commit": RESEARCH_COMMIT,
+            "research_pareto_sha256": RESEARCH_PARETO_SHA256,
+            "research_weather_sha256": RESEARCH_WEATHER_SHA256,
+            "config": _display_path(args.config),
+            "config_sha256": hashlib.sha256(config_bytes).hexdigest(),
+            "resolved_config_sha256": hashlib.sha256(
+                json.dumps(config, sort_keys=True, separators=(",", ":")).encode("utf-8")
+            ).hexdigest(),
+            "resolved_config": config,
+            "weather": _display_path(weather_path),
+            "weather_file_sha256": _sha256(weather_path),
+            "weather_uncompressed_sha256": _sha256(
+                weather_path,
+                decompress_gzip=weather_path.suffix == ".gz",
+            ),
+            "external_rlp_filename": rlp_path.name if rlp_path is not None else None,
+            "external_rlp_sha256": _sha256(rlp_path) if rlp_path is not None else None,
+            "fixed_candidates": fixed.to_dict(orient="records"),
+            "fixed_candidate_artifacts": (
+                {
+                    str(row["Label"]): {
+                        "yearly_summary": f"candidates/{str(row['Label']).lower()}/yearly_summary.csv",
+                        "yearly_summary_sha256": _sha256(
+                            scenario_output / "candidates" / str(row["Label"]).lower() / "yearly_summary.csv"
+                        ),
+                        "cost_projection": f"candidates/{str(row['Label']).lower()}/cost_projection.csv",
+                        "cost_projection_sha256": _sha256(
+                            scenario_output / "candidates" / str(row["Label"]).lower() / "cost_projection.csv"
+                        ),
+                        "metrics": f"candidates/{str(row['Label']).lower()}/metrics.json",
+                        "metrics_sha256": _sha256(
+                            scenario_output / "candidates" / str(row["Label"]).lower() / "metrics.json"
+                        ),
+                    }
+                    for row in fixed.to_dict(orient="records")
+                }
+                if not fixed.empty
+                else {}
+            ),
+        }
+
+        if args.full_optimization or args.smoke_optimization:
+            run_config = copy.deepcopy(config)
+            optimization = run_config["optimization"]
+            if args.smoke_optimization:
+                optimization.update({"pop_size": 4, "n_offsprings": 2, "n_gen": 1, "early_stop": False})
+            result = optimize_system_multi_objective(
+                weather,
+                load,
+                run_config,
+                results_dir=str(scenario_output / "optimization"),
+                pop_size=int(optimization["pop_size"]),
+                n_gen=int(optimization["n_gen"]),
+                n_offsprings=int(optimization["n_offsprings"]),
+                seed=int(optimization["seed"]),
+                verbose=True,
+                n_procs=args.n_procs,
+            )
+            pareto_path = scenario_output / "pareto_results.csv"
+            pareto = result.details["pareto"]
+            pareto.to_csv(pareto_path, index=False)
+            representatives, representative_artifacts = _export_pareto_representatives(
+                config,
+                weather,
+                load,
+                pareto,
+                scenario_output,
+            )
+            representatives_path = scenario_output / "pareto_representatives.csv"
+            representatives.to_csv(representatives_path, index=False)
+            report["optimization"] = {
+                "run_type": "full" if args.full_optimization else "smoke",
+                "settings": optimization,
+                "iterations": result.iterations,
+                "objective_basis": result.details["objective_basis"],
+                "objective_names": result.details["objective_names"],
+                "early_stop": result.details["early_stop"],
+                "n_procs": result.details["n_procs"],
+                "pareto_csv": pareto_path.name,
+                "pareto_sha256": _sha256(pareto_path),
+                "representatives_csv": representatives_path.name,
+                "representatives_sha256": _sha256(representatives_path),
+                "representative_artifacts": representative_artifacts,
+            }
+            print(f"Wrote {pareto_path}")
+            print(f"Wrote {representatives_path}")
+
+        report_path = scenario_output / "reproduction.json"
+        report_path.write_text(json.dumps(report, indent=2, default=str) + "\n")
+        print(f"Wrote {report_path}")
     return 0
 
 

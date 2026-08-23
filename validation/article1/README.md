@@ -1,5 +1,9 @@
 # Article 1 projected-optimization reproduction
 
+Use the [Article 1 source-data runbook](runbook.md) to generate the complete
+deterministic, sensitivity, orientation, weather-comparison, and Monte Carlo
+bundle from the final BREOS release commit.
+
 This report compares four archived Article 1 Pareto candidates with the
 corrected projected optimizer prepared for the BREOS 0.6.0 release line. The
 new results deliberately do not reproduce known errors in the research run.
@@ -81,6 +85,11 @@ That JSON records the resolved configuration, environment, inputs, clean
 source revision, worker count, objective names, generation count, and Pareto
 digest. Generated outputs are deliberately not committed; rerun the command
 below to create them in the chosen output directory.
+
+Pass `--battery-cost` more than once to run isolated battery-cost scenarios.
+The Article 1 sensitivity uses €350, €500, and €711 per kWh. Each scenario
+also replays its maximum-NPV, normalized-knee, and maximum-GI design and
+exports the yearly and financial ledgers.
 
 The reproduction command also exports a plot-independent source bundle for
 each fixed case: projected metrics, the yearly energy/degradation-state table,

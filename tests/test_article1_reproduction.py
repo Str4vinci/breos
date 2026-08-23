@@ -4,9 +4,18 @@ import os
 import tomllib
 from pathlib import Path
 
+import pandas as pd
 import pytest
 
-from tools.reproduce_article1 import DEFAULT_CONFIG, _fixed_candidates, _load_inputs, _sha256
+from tools.reproduce_article1 import (
+    DEFAULT_CONFIG,
+    _battery_cost_scenarios,
+    _battery_cost_slug,
+    _fixed_candidates,
+    _load_inputs,
+    _select_pareto_representatives,
+    _sha256,
+)
 
 EXPECTED_RLP_SHA256 = "23becc5a7bfc927b1f7604156e0e4953dcc6bb65268ca947b38db3dc4f2b28bc"
 EXPECTED_CONFIG_SHA256 = "b35ce7d4e90b89955a580d65d0abefe9e6d588dc729bc1cc472890efcc267631"
@@ -47,6 +56,35 @@ def test_article1_config_pins_projected_run_controls():
         "tilt": 35.0,
         "azimuth": 180.0,
     }
+
+
+def test_article1_battery_cost_scenarios_are_explicit_and_stable():
+    assert _battery_cost_scenarios(None) == [None]
+    assert _battery_cost_scenarios([350.0, 500.0, 711.0, 500.0]) == [350.0, 500.0, 711.0]
+    assert _battery_cost_slug(350.0) == "350"
+    assert _battery_cost_slug(711.5) == "711p5"
+
+    with pytest.raises(ValueError, match="non-negative"):
+        _battery_cost_scenarios([-1.0])
+
+
+def test_article1_pareto_representatives_use_projected_objectives():
+    pareto = pd.DataFrame(
+        {
+            "Modules": [6, 9, 9],
+            "Battery_kWh": [0.0, 9.0, 20.0],
+            "Tilt": [30.0, 35.0, 45.0],
+            "Azimuth": [190.0, 190.0, 175.0],
+            "Projected_Grid_Independence_%": [40.0, 75.0, 90.0],
+            "Projected_NPV_Eur": [5500.0, 3000.0, -5000.0],
+        }
+    )
+
+    selected = _select_pareto_representatives(pareto).set_index("Representative")
+
+    assert selected.loc["max_npv", "Battery_kWh"] == 0.0
+    assert selected.loc["knee", "Battery_kWh"] == 9.0
+    assert selected.loc["max_gi", "Battery_kWh"] == 20.0
 
 
 def test_article1_fixed_candidates_with_licensed_rlp(tmp_path):
