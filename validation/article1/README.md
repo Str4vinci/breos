@@ -165,6 +165,35 @@ uv run python tools/reproduce_article1.py \
 Add `--candidate C2` and omit `--full-optimization` when only the fixed C2
 degradation-model comparison is required.
 
+## Historical-weather Monte Carlo
+
+[`article1-montecarlo.toml`](article1-montecarlo.toml) defines the C1-C5
+historical-weather study. It uses only the public `breos.montecarlo` engine and
+exports both the per-run summary and the per-run, per-year source table behind
+the cost envelope and break-even CDF.
+
+The manuscript specifies an annual load multiplier drawn uniformly from
+0.95-1.05. The archived July research code actually drew from a normal
+distribution with mean 1 and standard deviation 0.05. The BREOS reproduction
+configuration follows the stated uniform method. Do not compare its new Monte
+Carlo values with the archived values as if the sampling methods were equal.
+
+Run C2 first:
+
+```bash
+uv run python tools/reproduce_article1_montecarlo.py \
+  --rlp-directory /path/to/licensed/rlp \
+  --weather-file /path/to/porto_historical_2005_2024_openmeteo.csv \
+  --case C2 \
+  --n-procs 8 \
+  --output results/article1-montecarlo-v1
+```
+
+After reviewing C2, replace `--case C2` with `--case all` to run all five
+cases. Use `--runs 100` for a short workflow check; omit it for the configured
+10,000 trajectories. Each case directory contains `runs.csv`, `yearly.csv`,
+`summary.json`, and `provenance.json`.
+
 Run the opt-in numerical regression locally:
 
 ```bash
