@@ -12,10 +12,14 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   remains the default; projected ZEB is a diagnostic or optional feasibility
   constraint, not a third objective.
 - Added a version-controlled Article 1 configuration, deterministic
-  fixed-candidate reproduction command, opt-in licensed-profile regression,
-  and comparison report. The report preserves the archived values while
+  fixed-candidate reproduction command, per-candidate yearly and financial
+  source tables, opt-in licensed-profile regression, and comparison report.
+  The report preserves the archived values while
   explaining corrected drift from the original hourly-to-15-minute weather
   handling and AC dispatch methodology.
+- Added `evaluate_projected_design` for detailed evaluation of a fixed design.
+  It returns the projected metrics, annual energy and degradation-state
+  ledger, and discounted financial ledger without requiring an NSGA-II run.
 - Added opt-in hourly-energy conservation to `resample_to_15min`. It preserves
   each source hour's GHI, DNI, and DHI energy after clear-sky interpolation;
   the established resampling output remains the default.

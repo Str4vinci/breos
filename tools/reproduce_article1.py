@@ -23,7 +23,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 import breos  # noqa: E402
 from breos.load_profiles import load_profile  # noqa: E402
-from breos.optimization import SolarDesignProblem, optimize_system_multi_objective  # noqa: E402
+from breos.optimization import evaluate_projected_design, optimize_system_multi_objective  # noqa: E402
 from breos.weather import resample_to_15min  # noqa: E402
 
 DEFAULT_CONFIG = PROJECT_ROOT / "validation/article1/article1-projected-optimization.toml"
@@ -118,24 +118,26 @@ def _fixed_candidates(
     weather: pd.DataFrame,
     load: pd.DataFrame,
     selected_labels: set[str],
+    output_directory: Path,
 ) -> pd.DataFrame:
-    problem = SolarDesignProblem(weather, load, config, "results/article1/fixed_candidates")
     rows = []
     for reference in config["reference_candidates"]:
         if selected_labels and reference["label"] not in selected_labels:
             continue
-        candidate = [
-            float(reference["modules"]),
-            float(reference["battery_kwh"]),
-            float(reference["tilt"]),
-            float(reference["azimuth"]),
-        ]
-        output: dict = {}
-        problem._evaluate(candidate, output)
+        result = evaluate_projected_design(
+            weather,
+            load,
+            config,
+            n_modules=int(reference["modules"]),
+            battery_kwh=float(reference["battery_kwh"]),
+            tilt=float(reference["tilt"]),
+            azimuth=float(reference["azimuth"]),
+        )
+        output = result.metrics
         reproduced_gi = float(output["Projected_Grid_Independence_%"])
         reproduced_npv = float(output["Projected_NPV_Eur"])
-        reference_gi = float(reference["projected_grid_independence_pct"])
-        reference_npv = float(reference["projected_npv_eur"])
+        reference_gi = float(reference.get("projected_grid_independence_pct", float("nan")))
+        reference_npv = float(reference.get("projected_npv_eur", float("nan")))
         row = {
             "Label": reference["label"],
             "Modules": int(reference["modules"]),
@@ -150,9 +152,15 @@ def _fixed_candidates(
             "NPV_Difference_Eur": reproduced_npv - reference_npv,
         }
         for key, value in output.items():
-            if key.startswith("SteadyState_") or key.startswith("Projected_") or key.startswith("Objective_"):
+            if key.startswith("Projected_"):
                 row[key] = value
         rows.append(row)
+
+        candidate_directory = output_directory / "candidates" / str(reference["label"]).lower()
+        candidate_directory.mkdir(parents=True, exist_ok=True)
+        result.yearly.to_csv(candidate_directory / "yearly_summary.csv", index=False)
+        result.financial.to_csv(candidate_directory / "cost_projection.csv", index=False)
+        (candidate_directory / "metrics.json").write_text(json.dumps(output, indent=2, default=str) + "\n")
     return pd.DataFrame(rows)
 
 
@@ -162,6 +170,11 @@ def main() -> int:
     parser.add_argument("--rlp-directory", type=Path, required=True)
     parser.add_argument("--weather-file", type=Path, help="Override the configured weather file")
     parser.add_argument("--candidate", action="append", default=[], help="Run only the named fixed candidate")
+    parser.add_argument("--skip-fixed", action="store_true", help="Skip fixed-design evaluations")
+    parser.add_argument(
+        "--calendar-model",
+        help="Override battery.calendar_model (for example naumann_lam_field_calibrated_v2 or naumann_lam)",
+    )
     optimization_group = parser.add_mutually_exclusive_group()
     optimization_group.add_argument("--smoke-optimization", action="store_true")
     optimization_group.add_argument("--full-optimization", action="store_true")
@@ -171,14 +184,18 @@ def main() -> int:
 
     config_bytes = args.config.read_bytes()
     config = tomllib.loads(config_bytes.decode("utf-8"))
+    if args.calendar_model:
+        config.setdefault("battery", {})["calendar_model"] = args.calendar_model
     weather, load, weather_path, rlp_path = _load_inputs(config, args.rlp_directory, args.weather_file)
     args.output.mkdir(parents=True, exist_ok=True)
 
-    fixed = _fixed_candidates(config, weather, load, set(args.candidate))
+    fixed = pd.DataFrame()
     fixed_path = args.output / "fixed_candidates.csv"
-    fixed.to_csv(fixed_path, index=False)
-    print(fixed.to_string(index=False))
-    print(f"\nWrote {fixed_path}")
+    if not args.skip_fixed:
+        fixed = _fixed_candidates(config, weather, load, set(args.candidate), args.output)
+        fixed.to_csv(fixed_path, index=False)
+        print(fixed.to_string(index=False))
+        print(f"\nWrote {fixed_path}")
 
     report = {
         "breos_version": breos.__version__,
@@ -192,6 +209,9 @@ def main() -> int:
         "research_weather_sha256": RESEARCH_WEATHER_SHA256,
         "config": _display_path(args.config),
         "config_sha256": hashlib.sha256(config_bytes).hexdigest(),
+        "resolved_config_sha256": hashlib.sha256(
+            json.dumps(config, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest(),
         "resolved_config": config,
         "weather": _display_path(weather_path),
         "weather_file_sha256": _sha256(weather_path),
@@ -202,6 +222,25 @@ def main() -> int:
         "external_rlp_filename": rlp_path.name,
         "external_rlp_sha256": _sha256(rlp_path),
         "fixed_candidates": fixed.to_dict(orient="records"),
+        "fixed_candidate_artifacts": (
+            {
+                str(row["Label"]): {
+                    "yearly_summary": f"candidates/{str(row['Label']).lower()}/yearly_summary.csv",
+                    "yearly_summary_sha256": _sha256(
+                        args.output / "candidates" / str(row["Label"]).lower() / "yearly_summary.csv"
+                    ),
+                    "cost_projection": f"candidates/{str(row['Label']).lower()}/cost_projection.csv",
+                    "cost_projection_sha256": _sha256(
+                        args.output / "candidates" / str(row["Label"]).lower() / "cost_projection.csv"
+                    ),
+                    "metrics": f"candidates/{str(row['Label']).lower()}/metrics.json",
+                    "metrics_sha256": _sha256(args.output / "candidates" / str(row["Label"]).lower() / "metrics.json"),
+                }
+                for row in fixed.to_dict(orient="records")
+            }
+            if not fixed.empty
+            else {}
+        ),
     }
 
     if args.full_optimization or args.smoke_optimization:

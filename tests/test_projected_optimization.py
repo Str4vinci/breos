@@ -4,7 +4,12 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from breos.optimization import _evaluate_projected_design_metrics, _summarize_projected_lifetime_metrics
+from breos.optimization import (
+    ProjectedDesignResult,
+    _evaluate_projected_design_metrics,
+    _summarize_projected_lifetime_metrics,
+    evaluate_projected_design,
+)
 from breos.pv_modules import get_module
 
 
@@ -121,3 +126,55 @@ def test_projected_evaluator_carries_physical_and_degradation_state(monkeypatch)
     assert metrics["Projected_Replacement_Cost_Eur"] == pytest.approx(1000.0)
     assert metrics["Projected_Final_SOH_%"] == pytest.approx(99.0)
     assert metrics["Projected_Breakeven_Year"] == pytest.approx(2.0)
+    assert metrics["_yearly_summary_df"]["Battery_Cumulative_FEC"].tolist() == pytest.approx([10.0, 20.0])
+    assert metrics["_yearly_summary_df"]["Battery_Cumulative_Calendar_Degradation"].tolist() == pytest.approx(
+        [0.02, 0.04]
+    )
+
+
+def test_public_projected_design_evaluator_returns_plot_source_tables(monkeypatch):
+    idx = pd.date_range("2025-01-01", periods=2, freq="h", tz="UTC")
+    weather = pd.DataFrame({"temp_air": [20.0, 20.0]}, index=idx)
+    load = pd.DataFrame({"Load": [500.0, 500.0]}, index=idx)
+    yearly = pd.DataFrame({"Year": [1], "Grid_Independence_%": [60.0]})
+    financial = pd.DataFrame({"Year": [1], "Savings_Cumulative_NPV": [100.0]})
+
+    monkeypatch.setattr(
+        "breos.optimization.calculate_pv_production_dc",
+        lambda **_kwargs: pd.Series([100.0, 200.0], index=idx),
+    )
+    monkeypatch.setattr(
+        "breos.optimization._temperature_series_from_config",
+        lambda *_args, **_kwargs: pd.Series([20.0, 20.0], index=idx),
+    )
+    monkeypatch.setattr(
+        "breos.optimization._evaluate_projected_design_metrics",
+        lambda **_kwargs: {
+            "Projected_Grid_Independence_%": 60.0,
+            "Projected_NPV_Eur": 100.0,
+            "_yearly_summary_df": yearly,
+            "_cost_projection_df": financial,
+        },
+    )
+
+    result = evaluate_projected_design(
+        weather,
+        load,
+        {
+            "location": {"latitude": 41.15, "longitude": -8.63},
+            "pv": {"module": "Suntech_STP550S_STC"},
+            "simulation": {"resolution": "h", "years_projection": 1},
+            "financials": {"project_lifespan": 1},
+            "costs": {"dc_ac_ratio": 1.25},
+        },
+        n_modules=9,
+        battery_kwh=5.0,
+        tilt=25.0,
+        azimuth=185.0,
+    )
+
+    assert isinstance(result, ProjectedDesignResult)
+    assert result.metrics["Modules"] == 9
+    assert result.metrics["Projected_NPV_Eur"] == pytest.approx(100.0)
+    pd.testing.assert_frame_equal(result.yearly, yearly)
+    pd.testing.assert_frame_equal(result.financial, financial)

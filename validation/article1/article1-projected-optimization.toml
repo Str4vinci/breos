@@ -116,3 +116,10 @@ tilt = 45.0
 azimuth = 175.0
 projected_grid_independence_pct = 89.39035743523462
 projected_npv_eur = -5094.0374517273485
+
+[[reference_candidates]]
+label = "C5"
+modules = 4
+battery_kwh = 0.0
+tilt = 35.0
+azimuth = 180.0

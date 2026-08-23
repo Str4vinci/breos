@@ -60,12 +60,18 @@ the corresponding diagnostic but is not an objective. `Objective_*` columns
 identify the metrics sent to NSGA-II explicitly; projected output has no
 `Objective_ZEB_Ratio` column.
 
+Use `evaluate_projected_design` when you need the detailed result for one
+fixed design instead of a Pareto search. It returns the projected metrics, the
+annual energy and degradation-state ledger, and the matching discounted
+financial ledger. These tables are intended as stable source data for custom
+analysis and plots; BREOS does not require a particular visualization layer.
+
 ## Article 1 reproduction
 
 [`validation/article1/article1-projected-optimization.toml`](../../validation/article1/article1-projected-optimization.toml)
 pins the Article 1 15-minute, 20-year configuration, four archived comparison
-candidates, NSGA-II seed and early stopping, battery degradation, replacement,
-and financial assumptions. Its hourly TMY is interpolated with the clear-sky
+candidates plus the C5 low-investment benchmark, NSGA-II seed and early
+stopping, battery degradation, replacement, and financial assumptions. Its hourly TMY is interpolated with the clear-sky
 shape and opt-in hourly-energy conservation; the established general
 resampling default remains unchanged. The E-REDES household profile is
 licensed external data and is not redistributed.
@@ -83,6 +89,13 @@ Add `--full-optimization` to run the configured population. Use
 evaluate NSGA-II candidates in parallel. The command writes CSV results plus
 `reproduction.json`, which records the resolved config, exact
 source revision and dirty flag, command, software versions, and input hashes.
+Each fixed candidate also gets `yearly_summary.csv`, `cost_projection.csv`,
+and `metrics.json`, with their hashes recorded in the report.
+
+Use `--calendar-model naumann_lam_field_calibrated_v2` or
+`--calendar-model naumann_lam` to repeat fixed-design or full optimization
+runs with the field-v2 or laboratory calendar-degradation parameters. Put each
+model in a separate `--output` directory.
 The [reproduction report](https://github.com/Str4vinci/breos/blob/develop/validation/article1/README.md)
 explains the numerical changes caused by post-study corrections.
 
@@ -103,6 +116,7 @@ explains the numerical changes caused by post-study corrections.
    :toctree: generated/
 
    breos.optimization.optimize_system_multi_objective
+   breos.optimization.evaluate_projected_design
 ```
 
 ## Battery sizing
@@ -122,4 +136,5 @@ explains the numerical changes caused by post-study corrections.
    :toctree: generated/
 
    breos.optimization.OptimizationResult
+   breos.optimization.ProjectedDesignResult
 ```

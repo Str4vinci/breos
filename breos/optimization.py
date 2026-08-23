@@ -35,6 +35,20 @@ class OptimizationResult:
     details: Dict[str, Any]
 
 
+@dataclass
+class ProjectedDesignResult:
+    """Detailed result for one fixed design evaluated over a project horizon.
+
+    ``metrics`` contains the projected headline values used by the optimizer.
+    ``yearly`` is the simulated annual energy and degradation-state ledger, and
+    ``financial`` is the corresponding discounted cost ledger.
+    """
+
+    metrics: Dict[str, Any]
+    yearly: pd.DataFrame
+    financial: pd.DataFrame
+
+
 def _serial_elementwise_runner(func: Callable[[Any], Any], args: list[Any]) -> list[Any]:
     """Fallback pymoo elementwise runner for single-process evaluation."""
     return [func(arg) for arg in args]
@@ -568,6 +582,11 @@ def _projected_year_summary(
     freq: str,
     pv_degradation_factor: float,
     battery_soh: float,
+    cumulative_fec: float,
+    cumulative_calendar_seconds: float,
+    cumulative_cycle_degradation: float,
+    cumulative_calendar_degradation: float,
+    resistance_growth: float,
     replacements: int,
     replacement_cost: float,
 ) -> Dict[str, Any]:
@@ -596,6 +615,11 @@ def _projected_year_summary(
         "Export_kWh": export_kwh,
         "Grid_Independence_%": grid_independence,
         "Battery_SOH_%": float(battery_soh),
+        "Battery_Cumulative_FEC": float(cumulative_fec),
+        "Battery_Cumulative_Calendar_Seconds": float(cumulative_calendar_seconds),
+        "Battery_Cumulative_Cycle_Degradation": float(cumulative_cycle_degradation),
+        "Battery_Cumulative_Calendar_Degradation": float(cumulative_calendar_degradation),
+        "Battery_Resistance_Growth": float(resistance_growth),
         "Replacements": int(replacements),
         "Replacement_Cost": float(replacement_cost),
         "PV_Degradation_Factor": float(pv_degradation_factor),
@@ -758,6 +782,11 @@ def _evaluate_projected_design_metrics(
                 freq=freq,
                 pv_degradation_factor=degradation_factor,
                 battery_soh=current_soh,
+                cumulative_fec=cumulative_fec,
+                cumulative_calendar_seconds=cumulative_cal_seconds,
+                cumulative_cycle_degradation=cumulative_cycle_deg,
+                cumulative_calendar_degradation=cumulative_cal_deg,
+                resistance_growth=cumulative_resistance_growth,
                 replacements=int(year_replacements),
                 replacement_cost=float(year_replacement_cost),
             )
@@ -799,6 +828,110 @@ def _evaluate_projected_design_metrics(
         metrics["_yearly_summary_df"] = yearly_summary_df
         metrics["_cost_projection_df"] = cost_projection
     return metrics
+
+
+def evaluate_projected_design(
+    tmy_data: pd.DataFrame,
+    houseload: pd.DataFrame,
+    config: Dict[str, Any],
+    *,
+    n_modules: int,
+    battery_kwh: float,
+    tilt: float,
+    azimuth: float,
+) -> ProjectedDesignResult:
+    """Evaluate one fixed PV-battery design over repeated TMY project years.
+
+    This is the detailed fixed-design counterpart to projected NSGA-II
+    scoring. It uses the same PV, battery, replacement, degradation, and
+    economics components as :func:`optimize_system_multi_objective` and
+    returns the annual source tables needed for analysis or plotting.
+
+    Args:
+        tmy_data: One-year weather DataFrame.
+        houseload: One-year load profile.
+        config: Nested projected-optimization configuration.
+        n_modules: Installed PV module count.
+        battery_kwh: Installed nominal battery capacity in kWh.
+        tilt: PV surface tilt in degrees.
+        azimuth: PV surface azimuth in degrees.
+
+    Returns:
+        Projected metrics, yearly simulation ledger, and financial ledger.
+    """
+    if int(n_modules) < 1:
+        raise ValueError("n_modules must be at least 1")
+    if float(battery_kwh) < 0.0:
+        raise ValueError("battery_kwh must be non-negative")
+
+    from pvlib.location import Location
+
+    location = config["location"]
+    loc_obj = Location(
+        float(location["latitude"]),
+        float(location["longitude"]),
+        tz=location.get("timezone", "UTC"),
+        altitude=float(location.get("altitude", 0.0)),
+        name=str(location.get("name", "")),
+    )
+    simulation = config.get("simulation", {}) or {}
+    financials = config.get("financials", {}) or {}
+    pv_config = config.get("pv", {}) or {}
+    battery = config.get("battery", {}) or {}
+    freq = str(simulation.get("resolution", "h"))
+    years_projection = int(
+        simulation.get("years_projection", financials.get("project_lifespan", DEFAULT_PROJECT_LIFESPAN))
+    )
+    degradation_rate = float(pv_config.get("degradation_rate", financials.get("pv_degradation_rate", 0.005)))
+    pv_params, _module_area = _resolve_pv_module_and_area(config)
+    base_dc_power = calculate_pv_production_dc(
+        weather_data=tmy_data,
+        location=loc_obj,
+        tilt=float(tilt),
+        surface_azimuth=float(azimuth),
+        n_modules=int(n_modules),
+        pv_params=pv_params,
+        freq=freq,
+        verbose=False,
+    )
+    temperature_series = _temperature_series_from_config(
+        battery.get("temperature", "weather"),
+        base_dc_power.index,
+        weather_df=tmy_data,
+        indoor_model=battery.get("indoor_model"),
+    )
+    dc_ac_ratio = cost_params_from_config(config.get("costs"), financials).dc_ac_ratio
+    inverter_ac_capacity_w = int(n_modules) * pv_params.Mpp / dc_ac_ratio if dc_ac_ratio > 0.0 else None
+    raw_metrics = _evaluate_projected_design_metrics(
+        base_dc_power=base_dc_power,
+        tmy_data=tmy_data,
+        houseload=houseload,
+        temperature_series=temperature_series,
+        pv_params=pv_params,
+        batt_spec=battery,
+        costs_cfg=config.get("costs", {}) or {},
+        fin_cfg=financials,
+        freq=freq,
+        years_projection=years_projection,
+        degradation_rate=degradation_rate,
+        n_modules=int(n_modules),
+        battery_kwh=float(battery_kwh),
+        inverter_efficiency=float(
+            config.get("inverter_efficiency", (config.get("inverter", {}) or {}).get("efficiency", 0.96))
+        ),
+        inverter_ac_capacity_w=inverter_ac_capacity_w,
+        return_tables=True,
+    )
+    yearly = raw_metrics.pop("_yearly_summary_df")
+    financial = raw_metrics.pop("_cost_projection_df")
+    metrics = {
+        "Modules": int(n_modules),
+        "Battery_kWh": float(battery_kwh),
+        "Tilt": float(tilt),
+        "Azimuth": float(azimuth),
+        **raw_metrics,
+    }
+    return ProjectedDesignResult(metrics=metrics, yearly=yearly, financial=financial)
 
 
 def calculate_financials(
