@@ -8,6 +8,9 @@ new results deliberately do not reproduce known errors in the research run.
 
 - Archived run: `dev/results/a1_july_rerun_tuxedo/moo_15min` in the private
   research repository.
+- Earlier reference tag supplied for comparison: `a1_jun_26_submission`
+  (`6af21cc61640da7fc003d79319527631ec7cbddd`). The later July rerun above is
+  the Article 1 result set used for the numerical comparison.
 - Research revision: `a0db6aae1e8d04a8260f51a34543b23bd82a1762`.
 - Archived Pareto SHA-256:
   `5334b8361b2395f0f19b6839005964b0b61bfa0d00e5ea28f450cfb4cde0a225`.
@@ -15,6 +18,9 @@ new results deliberately do not reproduce known errors in the research run.
   `d2258dc7ea0d6432a6ddf69f748e67e88a36b235a906d5c6ab7da96e8e6911e0`.
 - Public BREOS base revision:
   `8fd1f21c4f1335350d87f91d76246b3fd1184f6d` (`origin/develop`).
+- Tested BREOS feature revision:
+  `8dcf17574ca440f77b9092651035ae32b5e6f998`, with a clean tracked
+  worktree recorded by the reproduction tool.
 - Reproduction config SHA-256:
   `675244c823f4f6dd4947efa359266ad7b1508b1a12d85218954b1c09fc3ce32e`.
 - Bundled weather SHA-256 (compressed):
@@ -51,6 +57,30 @@ candidates. Its output used exactly two objectives (`Projected_Grid_Independence
 and `Projected_NPV_Eur`), retained projected ZEB only as a diagnostic, and
 produced Pareto CSV SHA-256
 `e458780b84d477bda5ed726dfdcb7b87a7a357bf0c97a54d6443126a98674645`.
+
+## Full projected optimization
+
+The exact Article 1 NSGA-II configuration completed all 40 configured
+generations (2,050 evaluations) with seed 1 and eight worker processes. It
+returned 100 unique nondominated designs using only projected GI and projected
+NPV as objectives. Early stopping did not trigger before the generation cap.
+
+The corrected front spans 40.825173% to 88.819590% projected GI and
+−€5,280.60 to €5,379.67 projected NPV. Its maximum-NPV design has 6 modules,
+no battery, 25° tilt, and 195° azimuth. Its maximum-GI design has 9 modules, a
+20 kWh battery, 50° tilt, and 185° azimuth. A normalized closest-to-ideal
+summary point has 9 modules, a 9 kWh battery, 30° tilt, and 190° azimuth, with
+77.617510% projected GI and €2,454.04 projected NPV. This summary point is not
+an additional optimization objective or a prescribed design choice.
+
+The generated 100-row `pareto_results.csv` has SHA-256
+`24dac6a404c3d17a5ee0f3de4589d3bec9a6bcca3c78eeb3f0504b1f803c8a98`.
+The accompanying `reproduction.json` has SHA-256
+`bdcc906dfab1f55324363f44dad4144a167193f9fea29ad2dd6b4c37685233e7`.
+That JSON records the resolved configuration, environment, inputs, clean
+source revision, worker count, objective names, generation count, and Pareto
+digest. Generated outputs are deliberately not committed; rerun the command
+below to create them in the chosen output directory.
 
 ## Why the results differ
 
@@ -100,6 +130,7 @@ Run the exact NSGA-II settings after reviewing the fixed-candidate comparison:
 uv run python tools/reproduce_article1.py \
   --rlp-directory /path/to/licensed/rlp \
   --full-optimization \
+  --n-procs 8 \
   --output results/article1
 ```
 
