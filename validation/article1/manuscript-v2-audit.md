@@ -19,7 +19,7 @@ machine-readable outputs with recorded provenance.
 | Table 8 and representative metrics | Implemented | Recalculate GI, NPV, exact break-even, replacement count/cost, final SoH, and LCOE from the final C1-C5 bundle. |
 | Hourly-resolution sensitivity | Supported by the engines, not pinned by an Article config | Add an explicit hourly configuration before retaining numerical sensitivity claims. |
 | E-REDES versus H0 load sensitivity | Both profiles are supported, but the comparison is not pinned by the current Article command | Add a fixed-C2 load-profile comparison configuration and provenance report. |
-| Lifetime emissions claims | The deterministic App exposes emissions, but the projected fixed-design bundle does not yet include them | Add projected emissions to the fixed-design metrics/financial ledger or generate a separate provenance-bound emissions table. |
+| Lifetime emissions claims | Implemented in the projected fixed-design metrics and annual financial ledger | Recalculate the manuscript values from the final C1-C5 bundle using the pinned 127.91 gCO2/kWh factor. |
 | Full field-v2 and laboratory optimizations | Supported through `--calendar-model` | Run both full optimizations at the final release commit and replace the manuscript's archived values. |
 
 ## Methodology discrepancies to resolve
@@ -48,8 +48,8 @@ Before tagging 0.6.0:
 - merge projected optimization and detailed fixed-design exports;
 - merge reproducible Monte Carlo distributions, yearly trajectories, worker
   control, and provenance;
-- decide whether orientation, weather comparison, load sensitivity, and
-  projected emissions are part of 0.6.0 or a separate Article data package;
+- decide whether orientation, weather comparison, and load sensitivity are
+  part of 0.6.0 or a separate Article data package;
 - run the final deterministic v1, field-v2, and laboratory configurations;
 - run the final Monte Carlo configurations;
 - update every affected manuscript number from those final outputs;
