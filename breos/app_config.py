@@ -359,6 +359,7 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
     # Config-file/API-only fields.
     "costs": AppConfigField(),
     "tariff": AppConfigField(),
+    "smart_charging": AppConfigField(),
     "pv_arrays": AppConfigField(default=None, default_order=1),
     "tracking": AppConfigField(default="fixed", default_order=7),
     "axis_tilt": AppConfigField(default=0.0, default_order=8),
@@ -407,6 +408,16 @@ TARIFF_CONFIG_KEYS: frozenset[str] = frozenset(
         "study_date",
     }
 )
+SMART_CHARGING_CONFIG_KEYS: frozenset[str] = frozenset(
+    {
+        "mode",
+        "target_usable_fraction",
+        "charge_periods",
+        "discharge_periods",
+        "grid_charge_efficiency",
+        "grid_import_limit_w",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -434,6 +445,33 @@ class AppTariffConfig:
 
 
 @dataclass(frozen=True)
+class AppSmartChargingConfig:
+    """Validated App inputs for the fixed-target tariff controller."""
+
+    mode: str
+    target_usable_fraction: float | None = None
+    charge_periods: tuple[str, ...] = ()
+    discharge_periods: tuple[str, ...] = ()
+    grid_charge_efficiency: float | None = None
+    grid_import_limit_w: float | None = None
+
+    def as_config_dict(self) -> dict[str, Any]:
+        """Return the normalized, JSON-safe public configuration table."""
+        result: dict[str, Any] = {"mode": self.mode}
+        if self.mode == "fixed_target":
+            result.update(
+                {
+                    "target_usable_fraction": self.target_usable_fraction,
+                    "charge_periods": list(self.charge_periods),
+                    "discharge_periods": list(self.discharge_periods),
+                    "grid_charge_efficiency": self.grid_charge_efficiency,
+                    "grid_import_limit_w": self.grid_import_limit_w,
+                }
+            )
+        return result
+
+
+@dataclass(frozen=True)
 class ResolvedAppConfig:
     """Config values resolved to runtime objects used by the App pipeline."""
 
@@ -453,6 +491,7 @@ class ResolvedAppConfig:
     cost_params: CostParams
     emissions_params: EmissionsParams | None
     tariff: AppTariffConfig | None = None
+    smart_charging: AppSmartChargingConfig | None = None
 
 
 def load_json(name: str) -> dict[str, Any]:
@@ -572,8 +611,9 @@ def validate_config(cfg: dict[str, Any]) -> None:
     _validate_pv_and_inverter(cfg, has_arrays)
     _validate_time_and_weather(cfg)
     _validate_economics(cfg)
-    resolve_tariff_config(cfg)
+    tariff = resolve_tariff_config(cfg)
     _validate_battery_and_degradation(cfg)
+    resolve_smart_charging_config(cfg, tariff)
     _validate_reachable_gcr(cfg, has_arrays)
 
 
@@ -834,6 +874,97 @@ def resolve_tariff_config(cfg: dict[str, Any]) -> AppTariffConfig | None:
     )
 
 
+def resolve_smart_charging_config(
+    cfg: dict[str, Any],
+    tariff: AppTariffConfig | None = None,
+) -> AppSmartChargingConfig | None:
+    """Validate and normalize the optional App smart-charging table."""
+    if "smart_charging" not in cfg:
+        return None
+    table = cfg["smart_charging"]
+    if not isinstance(table, dict):
+        raise TypeError("'smart_charging' must be a table/dict")
+
+    unknown = set(table) - SMART_CHARGING_CONFIG_KEYS
+    if unknown:
+        available = ", ".join(f"smart_charging.{key}" for key in sorted(SMART_CHARGING_CONFIG_KEYS))
+        unknown_text = ", ".join(f"'smart_charging.{key}'" for key in sorted(unknown))
+        raise ValueError(f"Unknown smart-charging key(s): {unknown_text}. Available: {available}")
+
+    raw_mode = table.get("mode", "disabled")
+    if not isinstance(raw_mode, str) or not raw_mode.strip():
+        raise TypeError("'smart_charging.mode' must be a non-empty string")
+    mode = raw_mode.strip().lower().replace("-", "_")
+    if mode not in {"disabled", "fixed_target"}:
+        raise ValueError("'smart_charging.mode' must be one of: disabled, fixed_target")
+    if mode == "disabled":
+        extra = set(table) - {"mode"}
+        if extra:
+            names = ", ".join(f"smart_charging.{key}" for key in sorted(extra))
+            raise ValueError(f"Disabled smart charging does not accept: {names}")
+        return AppSmartChargingConfig(mode="disabled")
+
+    required = ("target_usable_fraction", "charge_periods", "discharge_periods")
+    missing = [key for key in required if key not in table]
+    if missing:
+        raise ValueError(
+            f"Missing required smart-charging key(s): {', '.join(f'smart_charging.{key}' for key in missing)}"
+        )
+    if tariff is None:
+        raise ValueError("'smart_charging.mode=fixed_target' requires a tariff")
+    if _finite_real(cfg["battery_kwh"], "battery_kwh") <= 0.0:
+        raise ValueError("'smart_charging.mode=fixed_target' requires battery_kwh > 0")
+
+    target = _finite_real(table["target_usable_fraction"], "smart_charging.target_usable_fraction")
+    if not 0.0 <= target <= 1.0:
+        raise ValueError("'smart_charging.target_usable_fraction' must be between 0 and 1")
+
+    schedule = get_tariff_schedule(tariff.schedule_identifier)
+    known_periods = set(schedule.periods)
+
+    def periods(key: str) -> tuple[str, ...]:
+        values = table[key]
+        if not isinstance(values, (list, tuple)):
+            raise TypeError(f"'smart_charging.{key}' must be a list of tariff period names")
+        normalized: list[str] = []
+        for value in values:
+            if not isinstance(value, str) or not value.strip():
+                raise TypeError(f"'smart_charging.{key}' must contain non-empty tariff period names")
+            period = value.strip()
+            if period not in known_periods:
+                available = ", ".join(sorted(known_periods))
+                raise ValueError(f"Unknown smart_charging.{key} period {period!r}. Available: {available}")
+            if period in normalized:
+                raise ValueError(f"'smart_charging.{key}' must not contain duplicate period {period!r}")
+            normalized.append(period)
+        if not normalized:
+            raise ValueError(f"'smart_charging.{key}' must contain at least one tariff period")
+        return tuple(normalized)
+
+    charge_periods = periods("charge_periods")
+    discharge_periods = periods("discharge_periods")
+    overlap = set(charge_periods) & set(discharge_periods)
+    if overlap:
+        raise ValueError(f"Smart-charging charge and discharge periods overlap: {', '.join(sorted(overlap))}")
+
+    efficiency = _finite_real(table.get("grid_charge_efficiency", 0.95), "smart_charging.grid_charge_efficiency")
+    if not 0.0 < efficiency <= 1.0:
+        raise ValueError("'smart_charging.grid_charge_efficiency' must be greater than 0 and at most 1")
+    raw_limit = table.get("grid_import_limit_w")
+    limit = None if raw_limit is None else _finite_real(raw_limit, "smart_charging.grid_import_limit_w")
+    if limit is not None and limit <= 0.0:
+        raise ValueError("'smart_charging.grid_import_limit_w' must be greater than 0 when configured")
+
+    return AppSmartChargingConfig(
+        mode="fixed_target",
+        target_usable_fraction=target,
+        charge_periods=charge_periods,
+        discharge_periods=discharge_periods,
+        grid_charge_efficiency=efficiency,
+        grid_import_limit_w=limit,
+    )
+
+
 def _validate_battery_and_degradation(cfg: dict[str, Any]) -> None:
     """Validate battery dispatch and explicit degradation-engine selection."""
     min_soc = _finite_real(cfg["battery_min_soc"], "battery_min_soc")
@@ -1085,6 +1216,7 @@ def resolve_app_config(config: dict[str, Any]) -> ResolvedAppConfig:
     cfg = merge_defaults(config)
     validate_config(cfg)
     tariff = resolve_tariff_config(cfg)
+    smart_charging = resolve_smart_charging_config(cfg, tariff)
 
     lat, lon, timezone, loc_key = resolve_location(cfg)
     pv_arrays, pv_params, n_modules, avg_module_power_w, system_kwp, tilt, azimuth = resolve_pv_system(cfg, lat)
@@ -1096,6 +1228,8 @@ def resolve_app_config(config: dict[str, Any]) -> ResolvedAppConfig:
     cfg = {**cfg, "n_modules": n_modules}
     if tariff is not None:
         cfg["tariff"] = tariff.as_config_dict()
+    if smart_charging is not None:
+        cfg["smart_charging"] = smart_charging.as_config_dict()
 
     return ResolvedAppConfig(
         cfg=cfg,
@@ -1114,4 +1248,5 @@ def resolve_app_config(config: dict[str, Any]) -> ResolvedAppConfig:
         cost_params=resolve_costs(cfg),
         emissions_params=resolve_emissions(cfg),
         tariff=tariff,
+        smart_charging=smart_charging,
     )

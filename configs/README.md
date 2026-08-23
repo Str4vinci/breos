@@ -76,6 +76,7 @@ breos list tariff-schedules
 | [`montecarlo.toml`](examples/montecarlo.toml) | Monte Carlo over weather years + demand (`breos montecarlo`) |
 | [`external-rlp.toml`](examples/external-rlp.toml) | Using non-bundled, licensed load profiles |
 | [`time-of-use-portugal.toml`](examples/time-of-use-portugal.toml) | Portuguese daily bi-hourly schedule with user-supplied example prices |
+| [`smart-charging-portugal.toml`](examples/smart-charging-portugal.toml) | Fixed-target grid charging against a Portuguese daily bi-hourly schedule |
 
 Start from `pv-plus-battery.toml` if you want to see the full set of knobs; copy
 any example and edit it for your own scenario.
@@ -90,7 +91,8 @@ any example and edit it for your own scenario.
   `external_rlp/` (do not commit third-party RLPs).
 - `breos run` configs are mostly flat key/value files (TOML or JSON).
   `[[pv_arrays]]` describes multiple arrays. `[costs]` holds explicit cost
-  overrides, and `[tariff]` holds a time-of-use schedule and prices. The
+  overrides, and `[tariff]` holds a time-of-use schedule and prices.
+  `[smart_charging]` holds the optional battery controller. The
   `[sweep]` and `[montecarlo]` tables are read by their dedicated
   CLI commands; sweep entries can use quoted dotted keys such as
   `"costs.electricity_cost"`.

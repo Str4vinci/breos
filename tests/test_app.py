@@ -841,7 +841,7 @@ class TestAppSimulateNoBattery:
         assert r["usable_ac_system_production_kwh"] == pytest.approx(
             r["self_consumption_kwh"] + r["grid_export_kwh"], abs=0.02
         )
-        assert r["provenance"]["ledger_schema_version"] == "1.1"
+        assert r["provenance"]["ledger_schema_version"] == "2.0"
         assert r["provenance"]["timezone"] == "Europe/Lisbon"
         json.dumps(r["provenance"])
 

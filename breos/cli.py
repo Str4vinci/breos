@@ -150,6 +150,7 @@ def _resolved_config_summary(config: dict[str, Any]) -> dict[str, Any]:
             "model_profile": (
                 get_battery_model_profile(cfg["blast_model"]).as_dict() if cfg["blast_model"] is not None else None
             ),
+            "smart_charging": cfg.get("smart_charging"),
         },
         "economics": {
             "cost_preset": cfg["cost_preset"],
@@ -326,6 +327,8 @@ def _validate_config(args: argparse.Namespace) -> int:
         print(f"Inverter AC rating: {payload['inverter']['ac_rating_kw']:.3f} kW")
         print(f"Load profile: {payload['load']['load_profile']} at {payload['load']['resolution']}")
         print(f"Battery: {payload['battery']['capacity_kwh']} kWh")
+        smart_charging = payload["battery"]["smart_charging"]
+        print(f"Smart charging: {smart_charging['mode'] if smart_charging else 'disabled'}")
         print(f"Cost preset: {payload['economics']['cost_preset'] or 'none'}")
         tariff = payload["economics"]["tariff"]
         print(f"Tariff: {tariff['schedule'] if tariff else 'flat'}")

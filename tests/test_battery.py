@@ -833,13 +833,23 @@ class TestEnergyLedger:
         )
         np.testing.assert_allclose(
             results["Houseload"],
-            results["PV_AC_To_Load"] + results["Battery_AC_To_Load"] + results["Import_From_Grid"],
+            results["PV_AC_To_Load"] + results["Battery_AC_To_Load"] + results["Grid_AC_To_Load"],
+            atol=1e-8,
+        )
+        np.testing.assert_allclose(
+            results["Import_From_Grid"],
+            results["Grid_AC_To_Load"] + results["Grid_AC_To_Battery"],
             atol=1e-8,
         )
         np.testing.assert_allclose(results["PV_AC_Export"], results["Sell_To_Grid"], atol=1e-8)
         np.testing.assert_allclose(
-            results["Battery_Charge_Stored"],
+            results["PV_Battery_Charge_Stored"],
             results["Battery_Charge_Input"] * config.charge_efficiency,
+            atol=1e-8,
+        )
+        np.testing.assert_allclose(
+            results["Battery_Charge_Stored"],
+            results["PV_Battery_Charge_Stored"] + results["Grid_Battery_Charge_Stored"],
             atol=1e-8,
         )
         np.testing.assert_allclose(
@@ -857,9 +867,9 @@ class TestEnergyLedger:
             results["PV_Direct_Inverter_Loss"] + results["Battery_Inverter_Loss"],
             atol=1e-8,
         )
-        # PV and replacement-added energy are the external inputs. Delivered
-        # energy, losses, net battery movement, and energy removed with a
-        # replaced pack are outputs.
+        # PV, grid charging, and replacement-added energy are external inputs.
+        # Delivered energy, losses, net battery movement, and energy removed
+        # with a replaced pack are outputs.
         rhs = (
             results["PV_AC_To_Load"]
             + results["PV_AC_Export"]
@@ -869,13 +879,19 @@ class TestEnergyLedger:
             + results["Battery_Discharge_Loss"]
             + results["PV_Direct_Inverter_Loss"]
             + results["Battery_Inverter_Loss"]
+            + results["Grid_Charge_Loss"]
             + results["Standby_Loss"]
             + results["Capacity_Window_Loss"]
             + results["Battery_Replacement_Energy_Removed"]
             + results["Battery_Energy_Delta"]
         )
-        lhs = results["PV_DC"] + results["Battery_Replacement_Energy_Added"]
+        lhs = results["PV_DC"] + results["Grid_AC_To_Battery"] + results["Battery_Replacement_Energy_Added"]
         np.testing.assert_allclose(lhs, rhs, atol=1e-7)
+        np.testing.assert_allclose(
+            results["Battery_Energy_End"],
+            results["Battery_PV_Origin_Energy_End"] + results["Battery_Grid_Origin_Energy_End"],
+            atol=1e-8,
+        )
 
     @pytest.mark.parametrize("freq,repeats", [("h", 1), ("15min", 4)])
     def test_per_step_and_annual_conservation(self, freq, repeats):

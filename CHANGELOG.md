@@ -11,6 +11,11 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   and values both system grid flows and the no-system baseline with the same
   resolved price arrays. Flat-price configurations retain their existing
   behavior and result shape.
+- Added opt-in fixed-target smart charging through the App `smart_charging`
+  table. The controller uses tariff periods to bound grid charging and battery
+  discharge while the canonical battery model retains ownership of physical
+  limits, losses, degradation, and replacement. Ledger schema 2.0 separates
+  PV-origin and grid-origin storage flows.
 
 ## [0.5.2] - 2026-08-19
 

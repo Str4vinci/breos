@@ -15,7 +15,12 @@ from breos.tariffs import ResolvedTariff
 from breos.utils import get_hours_per_step
 
 
-def monthly_to_dicts(results_df: pd.DataFrame, freq: str) -> list[dict[str, Any]]:
+def monthly_to_dicts(
+    results_df: pd.DataFrame,
+    freq: str,
+    *,
+    include_smart_charging: bool = False,
+) -> list[dict[str, Any]]:
     """Convert first-year timestep results into monthly energy rows."""
     hours_per_step = get_hours_per_step(freq)
     df = results_df.copy()
@@ -36,6 +41,8 @@ def monthly_to_dicts(results_df: pd.DataFrame, freq: str) -> list[dict[str, Any]
         "PV_AC_Export",
         "PV_DC_Curtailed",
     ]
+    if include_smart_charging:
+        columns.extend(["Grid_AC_To_Battery", "Grid_Charge_Loss", "Grid_Origin_Battery_AC_To_Load"])
     monthly = df[columns].resample("ME").sum()
     monthly = monthly * hours_per_step / 1000
 
@@ -50,22 +57,29 @@ def monthly_to_dicts(results_df: pd.DataFrame, freq: str) -> list[dict[str, Any]
         export = float(row["PV_AC_Export"])
         imported = float(row["Import_From_Grid"])
         self_consumption = direct + battery
-        rows.append(
-            {
-                "month": idx.strftime("%b"),
-                "pv_kwh": round(legacy_pv, 2),
-                "pv_dc_generation_kwh": round(pv_dc, 2),
-                "direct_pv_ac_load_kwh": round(direct, 2),
-                "pv_origin_battery_ac_load_kwh": round(battery, 2),
-                "usable_ac_system_production_kwh": round(usable_pv, 2),
-                "curtailment_dc_kwh": round(float(row["PV_DC_Curtailed"]), 2),
-                "consumption_kwh": round(consumption, 2),
-                "self_consumption_kwh": round(self_consumption, 2),
-                "import_kwh": round(imported, 2),
-                "export_kwh": round(export, 2),
-                "grid_independence_pct": round((1 - imported / consumption) * 100, 2) if consumption > 0 else 0.0,
-            }
-        )
+        item = {
+            "month": idx.strftime("%b"),
+            "pv_kwh": round(legacy_pv, 2),
+            "pv_dc_generation_kwh": round(pv_dc, 2),
+            "direct_pv_ac_load_kwh": round(direct, 2),
+            "pv_origin_battery_ac_load_kwh": round(battery, 2),
+            "usable_ac_system_production_kwh": round(usable_pv, 2),
+            "curtailment_dc_kwh": round(float(row["PV_DC_Curtailed"]), 2),
+            "consumption_kwh": round(consumption, 2),
+            "self_consumption_kwh": round(self_consumption, 2),
+            "import_kwh": round(imported, 2),
+            "export_kwh": round(export, 2),
+            "grid_independence_pct": round((1 - imported / consumption) * 100, 2) if consumption > 0 else 0.0,
+        }
+        if include_smart_charging:
+            item.update(
+                {
+                    "grid_charge_kwh": round(float(row["Grid_AC_To_Battery"]), 2),
+                    "grid_charge_loss_kwh": round(float(row["Grid_Charge_Loss"]), 2),
+                    "grid_origin_battery_ac_load_kwh": round(float(row["Grid_Origin_Battery_AC_To_Load"]), 2),
+                }
+            )
+        rows.append(item)
     return rows
 
 
@@ -85,7 +99,7 @@ def financial_to_dicts(cost_proj: pd.DataFrame, total_initial_cost: float) -> li
     return rows
 
 
-def yearly_to_dicts(yearly_df: pd.DataFrame) -> list[dict[str, Any]]:
+def yearly_to_dicts(yearly_df: pd.DataFrame, *, include_smart_charging: bool = False) -> list[dict[str, Any]]:
     """Convert yearly summary DataFrame to a list of plain dicts."""
     rows = []
     for _, row in yearly_df.iterrows():
@@ -105,6 +119,14 @@ def yearly_to_dicts(yearly_df: pd.DataFrame) -> list[dict[str, Any]]:
         }
         if row["Battery_SOH_%"] is not None:
             item["soh_pct"] = round(float(row["Battery_SOH_%"]), 2)
+        if include_smart_charging:
+            item.update(
+                {
+                    "grid_charge_kwh": round(float(row["Grid_Charge_kWh"]), 2),
+                    "grid_charge_loss_kwh": round(float(row["Grid_Charge_Loss_kWh"]), 2),
+                    "grid_origin_battery_ac_load_kwh": round(float(row["Grid_Origin_Battery_AC_Load_kWh"]), 2),
+                }
+            )
         rows.append(item)
     return rows
 
@@ -201,6 +223,40 @@ def _tariff_result(artifacts: SimulationArtifacts, cfg: dict[str, Any]) -> dict[
     }
 
 
+def _smart_charging_result(artifacts: SimulationArtifacts, cfg: dict[str, Any]) -> dict[str, Any]:
+    """Build controller provenance, storage boundaries, and annual grid flows."""
+    instructions = artifacts.dispatch_instructions
+    if instructions is None:
+        raise ValueError("Smart-charging results require resolved dispatch instructions")
+    controller = cfg["smart_charging"]
+    yearly = []
+    for _, row in artifacts.yearly_df.iterrows():
+        yearly.append(
+            {
+                "year": int(row["Year"]),
+                "grid_charge_kwh": round(float(row["Grid_Charge_kWh"]), 6),
+                "grid_charge_loss_kwh": round(float(row["Grid_Charge_Loss_kWh"]), 6),
+                "grid_origin_battery_ac_load_kwh": round(float(row["Grid_Origin_Battery_AC_Load_kWh"]), 6),
+                "stored_energy_beginning_kwh": round(float(row["Battery_Energy_Beginning_kWh"]), 6),
+                "stored_energy_end_kwh": round(float(row["Battery_Energy_End_kWh"]), 6),
+                "pv_origin_stored_energy_end_kwh": round(float(row["Battery_PV_Origin_Energy_End_kWh"]), 6),
+                "grid_origin_stored_energy_end_kwh": round(float(row["Battery_Grid_Origin_Energy_End_kWh"]), 6),
+            }
+        )
+    return {
+        "mode": instructions.mode,
+        "instruction_hash": instructions.instruction_hash,
+        "resolved_steps": len(instructions.index),
+        "target_usable_fraction": controller["target_usable_fraction"],
+        "charge_periods": list(controller["charge_periods"]),
+        "discharge_periods": list(controller["discharge_periods"]),
+        "grid_charge_efficiency": controller["grid_charge_efficiency"],
+        "grid_import_limit_w": controller["grid_import_limit_w"],
+        "terminal_convention": "physical_carry",
+        "yearly": yearly,
+    }
+
+
 def _provenance(cfg: dict[str, Any], resolved: ResolvedAppConfig, artifacts: SimulationArtifacts) -> dict[str, Any]:
     normalized_cfg = {
         **cfg,
@@ -235,6 +291,10 @@ def _provenance(cfg: dict[str, Any], resolved: ResolvedAppConfig, artifacts: Sim
         tariff_provenance = _tariff_provenance(artifacts.resolved_tariff)
         tariff_provenance["study_date"] = cfg["tariff"].get("study_date")
         provenance["tariff"] = tariff_provenance
+    if artifacts.dispatch_instructions is not None:
+        smart_charging = _smart_charging_result(artifacts, cfg)
+        smart_charging.pop("yearly")
+        provenance["smart_charging"] = smart_charging
     return provenance
 
 
@@ -278,8 +338,15 @@ def build_result(
         "payback_year": int(artifacts.payback_year) if artifacts.payback_year is not None else None,
         "npv_savings_eur": round(float(npv_savings), 2),
         "lcoe_eur_kwh": round(float(artifacts.lcoe), 4),
-        "yearly": yearly_to_dicts(artifacts.yearly_df),
-        "monthly": monthly_to_dicts(artifacts.first_year_results_df, cfg["resolution"]),
+        "yearly": yearly_to_dicts(
+            artifacts.yearly_df,
+            include_smart_charging=artifacts.dispatch_instructions is not None,
+        ),
+        "monthly": monthly_to_dicts(
+            artifacts.first_year_results_df,
+            cfg["resolution"],
+            include_smart_charging=artifacts.dispatch_instructions is not None,
+        ),
         "financial": financial_to_dicts(artifacts.cost_projection, total_initial),
         "pv_loss_waterfall": artifacts.pv_loss_waterfall,
         "provenance": _provenance(cfg, resolved, artifacts),
@@ -295,6 +362,18 @@ def build_result(
                 "npv_savings": round(float(npv_savings), 2),
                 "lcoe_per_kwh": round(float(artifacts.lcoe), 4),
                 "tariff": _tariff_result(artifacts, cfg),
+            }
+        )
+
+    if artifacts.dispatch_instructions is not None:
+        smart_charging = _smart_charging_result(artifacts, cfg)
+        first_year = smart_charging["yearly"][0]
+        result.update(
+            {
+                "grid_charge_kwh": round(float(first_year["grid_charge_kwh"]), 2),
+                "grid_charge_loss_kwh": round(float(first_year["grid_charge_loss_kwh"]), 2),
+                "grid_origin_battery_ac_load_kwh": round(float(first_year["grid_origin_battery_ac_load_kwh"]), 2),
+                "smart_charging": smart_charging,
             }
         )
 

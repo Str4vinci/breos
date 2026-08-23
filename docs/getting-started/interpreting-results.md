@@ -148,3 +148,18 @@ each schedule period.
 Tariff runs also expose the currency-neutral top-level fields
 `total_investment`, `npv_savings`, and `lcoe_per_kwh`. For EUR runs, the
 existing `*_eur` fields remain compatibility aliases.
+
+### `smart_charging`
+
+This block exists only for active fixed-target smart charging. It records the
+resolved instruction hash, target, tariff periods, charge efficiency, grid
+import limit, and terminal convention.
+
+Each yearly row reports grid-charge energy, grid-charge loss, grid-origin
+battery delivery, and stored-energy boundaries. The top-level
+`grid_charge_kwh`, `grid_charge_loss_kwh`, and
+`grid_origin_battery_ac_load_kwh` fields contain the year 1 values. Monthly and
+yearly energy rows include the same flow fields.
+
+Grid-origin battery delivery does not count as self-consumed PV. The tariff
+import totals include both direct grid supply to load and grid charging.

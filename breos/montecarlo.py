@@ -368,6 +368,8 @@ def run_montecarlo(config: dict[str, Any], settings: MonteCarloSettings) -> Mont
     cfg = resolved.cfg
     if cfg["degradation_engine"] == "blast":
         raise ValueError("degradation_engine='blast' is not supported with Monte Carlo yet")
+    if resolved.tariff is not None:
+        raise ValueError("'tariff' and 'smart_charging' are not supported with Monte Carlo yet")
     if cfg["horizon_profile"] is not None:
         raise ValueError(
             "'horizon_profile' is not supported with Monte Carlo weather files yet because their "

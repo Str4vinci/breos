@@ -177,6 +177,29 @@ def test_run_montecarlo_rejects_blast_degradation(tmp_path):
         run_montecarlo(config, settings)
 
 
+def test_run_montecarlo_rejects_tariff_and_smart_charging_before_weather_access(tmp_path):
+    settings = MonteCarloSettings(weather_file=str(tmp_path / "missing.csv"), n_runs=1)
+    config = {
+        **_base_config(),
+        "battery_kwh": 5.0,
+        "tariff": {
+            "schedule": "pt_mainland_2026_daily_bi",
+            "currency": "EUR",
+            "import_prices": {"off_peak": 0.10, "peak": 0.40},
+            "export_prices": {"all": 0.05},
+        },
+        "smart_charging": {
+            "mode": "fixed_target",
+            "target_usable_fraction": 0.5,
+            "charge_periods": ["off_peak"],
+            "discharge_periods": ["peak"],
+        },
+    }
+
+    with pytest.raises(ValueError, match="tariff.*smart_charging.*Monte Carlo"):
+        run_montecarlo(config, settings)
+
+
 def test_run_montecarlo_rejects_horizon_profile_without_weather_provenance(tmp_path):
     weather = _write_multiyear_weather(tmp_path / "multi.csv")
     settings = MonteCarloSettings(weather_file=str(weather), n_runs=1)

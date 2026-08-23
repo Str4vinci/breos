@@ -333,6 +333,20 @@ def test_tariff_example_dry_run_reports_resolved_tariff(tmp_path):
     assert tariff["currency"] == "EUR"
 
 
+def test_smart_charging_example_dry_run_reports_resolved_controller(tmp_path):
+    config_path = Path(__file__).resolve().parents[1] / "configs" / "examples" / "smart-charging-portugal.toml"
+    output_path = tmp_path / "resolved.json"
+
+    exit_code = cli.main(["run", "--config", str(config_path), "--dry-run", "--output", str(output_path)])
+
+    assert exit_code == 0
+    output = json.loads(output_path.read_text(encoding="utf-8"))
+    smart_charging = output["battery"]["smart_charging"]
+    assert smart_charging["mode"] == "fixed_target"
+    assert smart_charging["charge_periods"] == ["off_peak"]
+    assert smart_charging["discharge_periods"] == ["peak"]
+
+
 @pytest.mark.parametrize("config_path", EXAMPLE_CONFIGS, ids=lambda path: path.name)
 def test_shipped_example_configs_validate(config_path, capsys):
     exit_code = cli.main(["validate-config", str(config_path)])

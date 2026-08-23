@@ -1,0 +1,29 @@
+# Fixed-target battery charging with example Portuguese tariff prices.
+# Replace every price and power limit with values from the study contract.
+
+location = "porto"
+n_modules = 10
+annual_consumption_kwh = 4000
+load_profile = "demandlib_h0"
+battery_kwh = 8
+battery_max_charge_power_w = 3000
+battery_max_discharge_power_w = 3000
+cost_preset = "residential_pt"
+projection_years = 20
+resolution = "h"
+
+[tariff]
+schedule = "pt_mainland_2026_daily_bi"
+currency = "EUR"
+import_prices = { off_peak = 0.12, peak = 0.24 }
+export_prices = { all = 0.04 }
+fixed_charge_per_day = 0.30
+boundary_policy = "strict"
+
+[smart_charging]
+mode = "fixed_target"
+target_usable_fraction = 0.50
+charge_periods = ["off_peak"]
+discharge_periods = ["peak"]
+grid_charge_efficiency = 0.95
+grid_import_limit_w = 5000

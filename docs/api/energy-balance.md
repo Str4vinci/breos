@@ -11,6 +11,8 @@ when no battery is configured, it simply skips the storage path.
    :toctree: generated/
 
    breos.battery.simulate_energy_balance
+   breos.dispatch.DispatchInstructions
+   breos.smart_charging.resolve_fixed_target_instructions
 ```
 
 The function returns a six-tuple of `(results_df, total_pv_wh,
@@ -48,6 +50,10 @@ battery has not crossed the inverter and is never classified as clipping.
 inverter losses. Both limits scale with the timestep. `None` means unlimited
 for backward compatibility; users should configure product nameplate limits.
 
+Fixed-target smart charging can add an AC grid-to-battery path. Grid charging
+uses only unused inverter headroom and battery charge-power headroom. The site
+import limit applies to both `Grid_AC_To_Load` and `Grid_AC_To_Battery`.
+
 ## Ledger schema
 
 | Column | Unit/basis | Definition |
@@ -58,22 +64,34 @@ for backward compatibility; users should configure product nameplate limits.
 | `PV_DC_Curtailed` | W, DC | PV that cannot be routed |
 | `PV_AC_To_Load` | W, AC | Direct PV delivered to load |
 | `PV_AC_Export` | W, AC | Direct PV exported (`Sell_To_Grid` alias) |
-| `Battery_Charge_Stored` | W-equivalent | Increase due to charging after charge loss |
+| `Grid_AC_To_Load` | W, AC | Grid import delivered directly to load |
+| `Grid_AC_To_Battery` | W, AC | Grid import entering the battery charge path |
+| `PV_Battery_Charge_Stored` | W-equivalent | Stored increase from PV charging |
+| `Grid_Battery_Charge_Stored` | W-equivalent | Stored increase from grid charging |
+| `Battery_Charge_Stored` | W-equivalent | Total stored increase from PV and grid charging |
 | `Battery_Discharge_DC` | W-equivalent, stored DC | Energy removed from storage |
 | `Battery_AC_To_Load` | W, AC | All battery energy delivered to load |
 | `Battery_AC_To_Load_PV` | W, AC | PV-origin share of battery delivery |
+| `Battery_AC_To_Load_Grid` | W, AC | Grid-origin share of battery delivery |
 | `PV_Direct_Inverter_Loss` | W | Direct-PV inverter conversion loss |
 | `Battery_Inverter_Loss` | W | Battery-discharge inverter loss |
 | `Battery_Charge_Loss` / `Battery_Discharge_Loss` | W | Cell conversion losses |
+| `Grid_Charge_Loss` | W | AC-to-stored-DC grid-charge loss |
 | `Standby_Loss` | W | Storage standby loss |
 | `Capacity_Window_Loss` | W | Energy explicitly removed when temperature/SOH lowers `Emax` |
 | `Battery_Energy_Beginning` / `Battery_Energy_End` | Wh | Stored energy at interval boundaries |
+| `Battery_PV_Origin_Energy_Beginning` / `Battery_PV_Origin_Energy_End` | Wh | PV-origin stored energy at interval boundaries |
+| `Battery_Grid_Origin_Energy_Beginning` / `Battery_Grid_Origin_Energy_End` | Wh | Grid-origin stored energy at interval boundaries |
 | `Battery_Energy_Delta` | W-equivalent | End minus beginning, including explicit boundary adjustments |
 
 PV-origin inventory begins at zero at the reporting boundary and is mixed
 proportionally with stored energy. This prevents initial SOC from being
 credited as PV and makes ending PV inventory visible rather than crediting it
 as self-consumption.
+
+Ledger schema 2.0 treats initial and replacement energy as grid-origin energy.
+Standby, capacity-window, and discharge losses remove both origins in
+proportion to their stored shares.
 
 App and Monte Carlo projections carry both total stored energy and PV-origin
 inventory from one simulated year into the next. They do not reset the battery

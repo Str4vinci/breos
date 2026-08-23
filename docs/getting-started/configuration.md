@@ -52,6 +52,7 @@ weather/data access, load profiles, PV system data, and cost assumptions; see
 | `cost_preset` | `None` | Cost preset key from packaged defaults |
 | `costs` | *unset* | Optional cost overrides layered over the selected preset and built-in defaults; see [below](#cost-and-emissions-presets) |
 | `tariff` | *unset* | Optional time-of-use schedule, currency, prices, and fixed charge; see [below](#time-of-use-tariffs) |
+| `smart_charging` | *unset* | Optional tariff-aligned battery controller; see [below](#fixed-target-smart-charging) |
 | `inflation_rate` | `0.02` | Annual electricity price inflation |
 | `sell_price_inflation` | `0.0` | Annual inflation of the grid export (sell) price |
 | `discount_rate` | `0.03` | Discount rate for NPV |
@@ -466,6 +467,50 @@ weekly tariff schedule onto each project's civil calendar.
 
 If you omit `tariff`, BREOS retains the flat-price calculation and its existing
 result shape.
+
+## Fixed-target smart charging
+
+Set `smart_charging.mode = "fixed_target"` to charge the battery from the grid
+during selected tariff periods and discharge it during other periods:
+
+```toml
+[smart_charging]
+mode = "fixed_target"
+target_usable_fraction = 0.50
+charge_periods = ["off_peak"]
+discharge_periods = ["peak"]
+grid_charge_efficiency = 0.95
+grid_import_limit_w = 5000
+```
+
+Fixed-target mode requires `battery_kwh > 0` and a `tariff` table. Every period
+name must exist in the selected schedule. Charge and discharge periods cannot
+overlap.
+
+`target_usable_fraction` uses the configured battery SOC window. Zero maps to
+`battery_min_soc`, and one maps to `battery_max_soc`. During a charge period,
+BREOS charges from the grid until the battery reaches that target. PV can still
+charge the battery in any period.
+
+Grid charging obeys `battery_max_charge_power_w`, the shared inverter AC
+rating, and `grid_import_limit_w`. The import limit includes load and battery
+charging. BREOS does not grid-charge while PV exports. The
+`grid_charge_efficiency` value covers the AC-to-stored-DC path.
+BREOS reports its aggregate loss but does not assign that loss to battery-cell
+heat because the input does not separate inverter and cell losses.
+
+The battery discharges only during `discharge_periods`. The controller supplies
+permissions and targets to the battery model. The battery model still applies
+the SOC window, power limits, conversion losses, degradation, and replacement.
+
+Omit `smart_charging`, or set only `mode = "disabled"`, to retain greedy
+self-consumption dispatch. Fixed-target mode uses physical state carry between
+project years. It is a deterministic controller, not a forecast optimizer or a
+perfect-foresight benchmark.
+
+`breos sweep` supports tariff valuation and smart charging because each sweep
+row runs through `App`. `breos montecarlo` rejects both features until its
+resampled weather-year loop can resolve the matching civil calendar.
 
 For full control, build a {py:class}`~breos.CostParams` and
 {py:class}`~breos.EmissionsParams` yourself and call the lower-level

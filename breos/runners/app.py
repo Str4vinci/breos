@@ -12,8 +12,10 @@ from breos.app_config import DEFAULTS, ResolvedAppConfig, build_costs_dict, defa
 from breos.app_inputs import AppRuntimeDependencies, prepare_simulation_inputs
 from breos.battery import BatteryConfig, simulate_energy_balance
 from breos.degradation.results import build_degradation_summary_from_state
+from breos.dispatch import DispatchInstructions
 from breos.economics import calculate_lcoe_from_projection, cost_analysis_projection, find_payback_year
 from breos.pv_modules import get_module
+from breos.smart_charging import resolve_fixed_target_instructions
 from breos.solar import PVProductionBreakdown
 from breos.tariffs import ResolvedTariff, resolve_named_tariff
 from breos.utils import get_hours_per_step
@@ -36,13 +38,12 @@ class SimulationArtifacts:
     weather_metadata: dict[str, Any]
     degradation_summary: dict[str, Any]
     resolved_tariff: ResolvedTariff | None = None
+    dispatch_instructions: DispatchInstructions | None = None
 
 
-# 1.1 adds the bifacial_rear_gain PV loss-waterfall stage, relabels the iam
-# stage to name the front side explicitly, and adds the pv_model provenance
-# block. All three are additive, so 1.0 consumers keep reading the fields they
-# already knew.
-LEDGER_SCHEMA_VERSION = "1.1"
+# 2.0 adds grid-origin stored energy, grid charging, and controller instruction
+# fields. The existing columns retain their meanings for greedy dispatch.
+LEDGER_SCHEMA_VERSION = "2.0"
 
 
 def _series_energy_kwh(series: pd.Series, freq: str) -> float:
@@ -218,6 +219,9 @@ def _build_pv_loss_waterfall(
     export_ac = e("PV_AC_Export")
     battery_ac = e("Battery_AC_To_Load")
     pv_origin_battery_ac = e("Battery_AC_To_Load_PV")
+    grid_origin_battery_ac = e("Battery_AC_To_Load_Grid")
+    grid_to_load = e("Grid_AC_To_Load")
+    grid_to_battery = e("Grid_AC_To_Battery")
     inverter_conversion = e("Inverter_Loss")
     direct_pv_conversion = e("PV_Direct_Inverter_Loss")
     battery_discharge_conversion = e("Battery_Inverter_Loss")
@@ -234,12 +238,15 @@ def _build_pv_loss_waterfall(
         "battery_discharge_loss_kwh": _rounded(
             _series_energy_kwh(first_year_results_df.get("Battery_Discharge_Loss", empty_series), freq)
         ),
+        "grid_charge_loss_kwh": _rounded(
+            _series_energy_kwh(first_year_results_df.get("Grid_Charge_Loss", empty_series), freq)
+        ),
         "battery_standby_loss_kwh": _rounded(
             _series_energy_kwh(first_year_results_df.get("Battery_Standby_Loss", empty_series), freq)
         ),
     }
     dispatch["battery_round_trip_loss_kwh"] = _rounded(
-        dispatch["battery_charge_loss_kwh"] + dispatch["battery_discharge_loss_kwh"]
+        dispatch["battery_charge_loss_kwh"] + dispatch["battery_discharge_loss_kwh"] + dispatch["grid_charge_loss_kwh"]
     )
 
     stages = [
@@ -312,9 +319,16 @@ def _build_pv_loss_waterfall(
             "ac_delivery": {
                 "direct_pv_to_load_kwh": _rounded(direct_pv_ac),
                 "pv_origin_battery_to_load_kwh": _rounded(pv_origin_battery_ac),
+                "grid_origin_battery_to_load_kwh": _rounded(grid_origin_battery_ac),
                 "battery_to_load_all_origins_kwh": _rounded(battery_ac),
                 "export_kwh": _rounded(export_ac),
                 "usable_system_production_kwh": _rounded(direct_pv_ac + pv_origin_battery_ac + export_ac),
+            },
+            "grid_ac": {
+                "import_kwh": _rounded(grid_to_load + grid_to_battery),
+                "to_load_kwh": _rounded(grid_to_load),
+                "to_battery_kwh": _rounded(grid_to_battery),
+                "residual_kwh": _rounded(e("Import_From_Grid") - grid_to_load - grid_to_battery, 6),
             },
             "battery_stored_energy": {
                 "beginning_kwh": _rounded(battery_begin),
@@ -355,6 +369,19 @@ def run_app_simulation(
             tariff_config.prices,
             study_date=tariff_config.study_date,
             boundary_policy=tariff_config.boundary_policy,
+        )
+    dispatch_instructions = None
+    smart_charging_config = getattr(resolved, "smart_charging", None)
+    if smart_charging_config is not None and smart_charging_config.mode == "fixed_target":
+        if resolved_tariff is None:
+            raise ValueError("Fixed-target smart charging requires a resolved tariff")
+        dispatch_instructions = resolve_fixed_target_instructions(
+            resolved_tariff,
+            target_usable_fraction=smart_charging_config.target_usable_fraction,
+            charge_periods=smart_charging_config.charge_periods,
+            discharge_periods=smart_charging_config.discharge_periods,
+            grid_charge_efficiency=smart_charging_config.grid_charge_efficiency,
+            grid_import_limit_w=smart_charging_config.grid_import_limit_w,
         )
 
     replacement_cost = resolved.cost_params.battery_cost_per_kwh * battery_kwh
@@ -426,6 +453,7 @@ def run_app_simulation(
                 "initial_pv_origin_energy_wh": carried_pv_origin_energy_wh or 0.0,
             }
 
+        dispatch_kwargs = {"dispatch_instructions": dispatch_instructions} if dispatch_instructions is not None else {}
         sim_result = simulate_energy_balance(
             pv_dc=dc_power,
             houseload=inputs.load_data,
@@ -442,6 +470,7 @@ def run_app_simulation(
             blast_model=blast_model,
             initial_degradation_state=degradation_state if degradation_engine == "blast" else None,
             return_degradation_state=True,
+            **dispatch_kwargs,
         )
         (
             results_df,
@@ -500,6 +529,22 @@ def run_app_simulation(
             "Replacement_Cost": year_rep_cost,
             "PV_Degradation_Factor": pv_degradation_factor,
         }
+        if dispatch_instructions is not None:
+            yearly_summary.update(
+                {
+                    "Grid_Charge_kWh": _series_energy_kwh(results_df["Grid_AC_To_Battery"], freq),
+                    "Grid_Charge_Loss_kWh": _series_energy_kwh(results_df["Grid_Charge_Loss"], freq),
+                    "Grid_Origin_Battery_AC_Load_kWh": _series_energy_kwh(
+                        results_df["Grid_Origin_Battery_AC_To_Load"], freq
+                    ),
+                    "Battery_Energy_Beginning_kWh": float(results_df["Battery_Energy_Beginning"].iloc[0]) / 1000.0,
+                    "Battery_Energy_End_kWh": float(results_df["Battery_Energy_End"].iloc[-1]) / 1000.0,
+                    "Battery_PV_Origin_Energy_End_kWh": float(results_df["Battery_PV_Origin_Energy_End"].iloc[-1])
+                    / 1000.0,
+                    "Battery_Grid_Origin_Energy_End_kWh": float(results_df["Battery_Grid_Origin_Energy_End"].iloc[-1])
+                    / 1000.0,
+                }
+            )
         if resolved_tariff is not None:
             yearly_summary.update(_tariff_year_values(results_df, resolved_tariff, freq))
         yearly_summaries.append(yearly_summary)
@@ -561,4 +606,5 @@ def run_app_simulation(
         ),
         degradation_summary=degradation_summary,
         resolved_tariff=resolved_tariff,
+        dispatch_instructions=dispatch_instructions,
     )

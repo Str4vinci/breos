@@ -121,6 +121,7 @@ def test_registry_preserves_defaults_and_allowed_top_level_keys():
             "n_modules",
             "costs",
             "tariff",
+            "smart_charging",
             "montecarlo",
             "sweep",
             "battery_type",

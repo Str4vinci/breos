@@ -69,6 +69,7 @@ from breos.degradation.protocol import (
     DegradationLifecycle,
     NativeDegradationAdapter,
 )
+from breos.dispatch import DispatchInstructions
 from breos.economics import BATTERY_REPLACEMENT_COST_PER_KWH
 from breos.inverter import calculate_dc_ac_power, dc_power_for_ac_output
 from breos.utils import get_hours_per_step, remap_datetime_index_years
@@ -212,6 +213,11 @@ def _dispatch_dc_step(
     cap_discharge_ac_wh: float,
     inv_cap_ac_wh: float,
     has_battery: bool,
+    discharge_allowed: bool,
+    minimum_usable_fraction: float,
+    grid_charge_target_usable_fraction: float | None,
+    grid_charge_efficiency: float,
+    grid_import_limit_ac_wh: float,
 ) -> Tuple[float, Dict[str, float]]:
     """Dispatch one DC-coupled timestep; inputs, outputs and ledger are Wh.
 
@@ -232,6 +238,10 @@ def _dispatch_dc_step(
         "pv_direct_inverter_loss": 0.0,
         "battery_inverter_loss": 0.0,
         "grid_import": 0.0,
+        "grid_ac_to_load": 0.0,
+        "grid_ac_to_battery": 0.0,
+        "grid_charge_stored": 0.0,
+        "grid_charge_loss": 0.0,
     }
     pv_conversion = calculate_dc_ac_power(pv_dc, inv_cap_ac_wh, inv_eff)
     pv_ac_max = pv_conversion.ac_power_w
@@ -275,7 +285,8 @@ def _dispatch_dc_step(
             ledger["pv_dc_curtailed"] = excess_dc - drawn
             ledger["grid_import"] = deficit
         else:
-            available = max(0.0, battery_energy - emin)
+            dispatch_floor = emin + minimum_usable_fraction * (emax - emin)
+            available = max(0.0, battery_energy - dispatch_floor) if discharge_allowed else 0.0
             target_total_ac = min(load, inv_cap_ac_wh)
             if available > 0.0 and eff_discharge > 0.0 and target_total_ac > pv_ac_max:
                 total_dc_target = dc_power_for_ac_output(target_total_ac, inv_cap_ac_wh, inv_eff)
@@ -333,6 +344,30 @@ def _dispatch_dc_step(
         ledger["pv_dc_curtailed"] = pv_conversion.clipping_loss_dc_w
         ledger["pv_direct_inverter_loss"] = pv_conversion.conversion_loss_w
         ledger["grid_import"] = max(0.0, load - ledger["pv_ac_to_load"])
+
+    ledger["grid_ac_to_load"] = ledger["grid_import"]
+    if has_battery and grid_charge_target_usable_fraction is not None and ledger["pv_ac_export"] <= 1e-12:
+        target_energy = emin + grid_charge_target_usable_fraction * (emax - emin)
+        room_to_target = max(0.0, target_energy - battery_energy)
+        remaining_charge_cap = max(0.0, cap_charge_in_wh - ledger["battery_charge_input"])
+        remaining_import_cap = max(0.0, grid_import_limit_ac_wh - ledger["grid_import"])
+        inverter_grid_charge_headroom = max(
+            0.0,
+            inv_cap_ac_wh - ledger["pv_ac_to_load"] - ledger["battery_ac_to_load"] - ledger["pv_ac_export"],
+        )
+        grid_ac = min(
+            room_to_target / grid_charge_efficiency,
+            remaining_charge_cap,
+            inverter_grid_charge_headroom,
+            remaining_import_cap,
+        )
+        if grid_ac > 0.0:
+            stored = grid_ac * grid_charge_efficiency
+            battery_energy += stored
+            ledger["grid_ac_to_battery"] = grid_ac
+            ledger["grid_charge_stored"] = stored
+            ledger["grid_charge_loss"] = grid_ac - stored
+            ledger["grid_import"] += grid_ac
 
     return battery_energy, ledger
 
@@ -608,14 +643,21 @@ _LEDGER_COLUMNS: Tuple[str, ...] = (
     "PV_DC_Curtailed",
     "PV_AC_To_Load",
     "PV_AC_Export",
+    "Grid_AC_To_Load",
+    "Grid_AC_To_Battery",
     "Battery_Charge_Input",
+    "PV_Battery_Charge_Stored",
+    "Grid_Battery_Charge_Stored",
     "Battery_Charge_Stored",
     "Battery_Discharge_DC",
     "Battery_AC_To_Load",
     "Battery_AC_To_Load_PV",
+    "Battery_AC_To_Load_Grid",
     "PV_Origin_Battery_AC_To_Load",
+    "Grid_Origin_Battery_AC_To_Load",
     "PV_Direct_Inverter_Loss",
     "Battery_Inverter_Loss",
+    "Grid_Charge_Loss",
     "Inverter_Loss",
     "Standby_Loss",
     "Capacity_Window_Loss",
@@ -659,6 +701,8 @@ class _ResultBuffers:
         "battery_energy_begin",
         "pv_origin_begin",
         "pv_origin_end",
+        "grid_origin_begin",
+        "grid_origin_end",
         "ledger",
     )
 
@@ -683,6 +727,8 @@ class _ResultBuffers:
         self.battery_energy_begin = np.empty(n_steps)
         self.pv_origin_begin = np.empty(n_steps)
         self.pv_origin_end = np.empty(n_steps)
+        self.grid_origin_begin = np.empty(n_steps)
+        self.grid_origin_end = np.empty(n_steps)
         self.ledger = {key: np.empty(n_steps) for key in _LEDGER_COLUMNS}
 
     def to_frame(self, rng: pd.DatetimeIndex) -> pd.DataFrame:
@@ -714,6 +760,8 @@ class _ResultBuffers:
                 "Battery_Energy_End": self.battery_energy,
                 "Battery_PV_Origin_Energy_Beginning": self.pv_origin_begin,
                 "Battery_PV_Origin_Energy_End": self.pv_origin_end,
+                "Battery_Grid_Origin_Energy_Beginning": self.grid_origin_begin,
+                "Battery_Grid_Origin_Energy_End": self.grid_origin_end,
                 **self.ledger,
             }
         )
@@ -839,6 +887,7 @@ def _apply_battery_replacement(
     out.soc_absolute[step_index] = battery_config.max_soc
     out.soh[step_index] = 100.0
     out.pv_origin_end[step_index] = 0.0
+    out.grid_origin_end[step_index] = battery_energy_wh
     out.ledger["Battery_Replacement_Energy_Removed"][step_index] = replacement_energy_removed / hours_per_step
     out.ledger["Battery_Replacement_Energy_Added"][step_index] = replacement_energy_added / hours_per_step
     out.ledger["Battery_Energy_Delta"][step_index] = (battery_energy_wh - battery_energy_beginning) / hours_per_step
@@ -1033,6 +1082,7 @@ def simulate_energy_balance(
     debug: bool = False,
     initial_energy_wh: Optional[float] = None,
     initial_pv_origin_energy_wh: Optional[float] = None,
+    dispatch_instructions: Optional[DispatchInstructions] = None,
 ) -> (
     Tuple[pd.DataFrame, float, pd.DataFrame, float, int, pd.DataFrame]
     | Tuple[pd.DataFrame, float, pd.DataFrame, float, int, pd.DataFrame, Dict[str, Any]]
@@ -1071,6 +1121,8 @@ def simulate_energy_balance(
             to the configured max-SOC state for first-run compatibility.
         initial_pv_origin_energy_wh: Optional PV-origin share of the carried
             stored energy (Wh). Defaults to zero.
+        dispatch_instructions: Optional tariff-aligned discharge and grid-charge
+            instructions. Omit this value for greedy self-consumption dispatch.
 
     Returns:
         Tuple of:
@@ -1096,6 +1148,11 @@ def simulate_energy_balance(
 
     # Create time range
     rng = pd.date_range(start=start_time, end=end_time, freq=freq)
+
+    if dispatch_instructions is not None:
+        dispatch_instructions.validate_index(rng)
+        if battery_config.nominal_energy_wh <= 1:
+            raise ValueError("Dispatch instructions require a configured battery")
 
     _pv_dc_vals, _load_vals, _temp_vals = _align_simulation_inputs(pv_dc, houseload, temperature_series, rng)
 
@@ -1200,6 +1257,11 @@ def simulate_energy_balance(
     cap_wh = _step_energy_cap(battery_config.inverter_ac_capacity_w, hours_per_step)
     cap_charge_wh = _step_energy_cap(battery_config.max_charge_power_w, hours_per_step)
     cap_discharge_wh = _step_energy_cap(battery_config.max_discharge_power_w, hours_per_step)
+    grid_import_limit_wh = (
+        dispatch_instructions.grid_import_limit_w * hours_per_step
+        if dispatch_instructions is not None and dispatch_instructions.grid_import_limit_w is not None
+        else float("inf")
+    )
 
     for i in range(n_steps):
         step_time = rng[i]
@@ -1244,6 +1306,16 @@ def simulate_energy_balance(
         origin_fraction = (
             min(1.0, max(0.0, origin_before_dispatch / energy_before_dispatch)) if energy_before_dispatch > 0.0 else 0.0
         )
+        discharge_allowed = dispatch_instructions.discharge_allowed[i] if dispatch_instructions is not None else True
+        minimum_usable_fraction = (
+            dispatch_instructions.minimum_usable_fraction[i] if dispatch_instructions is not None else 0.0
+        )
+        grid_charge_target = (
+            dispatch_instructions.grid_charge_target_usable_fraction[i] if dispatch_instructions is not None else None
+        )
+        grid_charge_efficiency = (
+            dispatch_instructions.grid_charge_efficiency if dispatch_instructions is not None else 1.0
+        )
         Battery_Energy_Wh, ledger = _dispatch_dc_step(
             pv_dc_power,
             load,
@@ -1257,13 +1329,21 @@ def simulate_energy_balance(
             cap_discharge_wh,
             cap_wh,
             has_battery,
+            discharge_allowed,
+            minimum_usable_fraction,
+            grid_charge_target,
+            grid_charge_efficiency,
+            grid_import_limit_wh,
         )
-        charge_stored = ledger["battery_charge_input"] * eff_charge
+        pv_charge_stored = ledger["battery_charge_input"] * eff_charge
+        grid_charge_stored = ledger["grid_charge_stored"]
+        charge_stored = pv_charge_stored + grid_charge_stored
         pv_origin_discharge_dc = ledger["battery_discharge_dc"] * origin_fraction
         pv_origin_battery_ac = ledger["battery_ac_to_load"] * origin_fraction
+        grid_origin_battery_ac = ledger["battery_ac_to_load"] - pv_origin_battery_ac
         Battery_PV_Origin_Energy_Wh = max(
             0.0,
-            origin_before_dispatch - pv_origin_discharge_dc + charge_stored,
+            origin_before_dispatch - pv_origin_discharge_dc + pv_charge_stored,
         )
         Battery_PV_Origin_Energy_Wh = min(Battery_PV_Origin_Energy_Wh, Battery_Energy_Wh)
 
@@ -1335,20 +1415,29 @@ def simulate_energy_balance(
         out.battery_energy_begin[i] = battery_energy_beginning
         out.pv_origin_begin[i] = pv_origin_beginning
         out.pv_origin_end[i] = Battery_PV_Origin_Energy_Wh
+        out.grid_origin_begin[i] = max(0.0, battery_energy_beginning - pv_origin_beginning)
+        out.grid_origin_end[i] = max(0.0, Battery_Energy_Wh - Battery_PV_Origin_Energy_Wh)
         ledger_w = {
             "PV_DC_To_Battery": ledger["pv_dc_to_battery"],
             "PV_DC_To_Inverter": ledger["pv_dc_to_inverter"],
             "PV_DC_Curtailed": ledger["pv_dc_curtailed"],
             "PV_AC_To_Load": ledger["pv_ac_to_load"],
             "PV_AC_Export": ledger["pv_ac_export"],
+            "Grid_AC_To_Load": ledger["grid_ac_to_load"],
+            "Grid_AC_To_Battery": ledger["grid_ac_to_battery"],
             "Battery_Charge_Input": ledger["battery_charge_input"],
+            "PV_Battery_Charge_Stored": pv_charge_stored,
+            "Grid_Battery_Charge_Stored": grid_charge_stored,
             "Battery_Charge_Stored": charge_stored,
             "Battery_Discharge_DC": ledger["battery_discharge_dc"],
             "Battery_AC_To_Load": ledger["battery_ac_to_load"],
             "Battery_AC_To_Load_PV": pv_origin_battery_ac,
+            "Battery_AC_To_Load_Grid": grid_origin_battery_ac,
             "PV_Origin_Battery_AC_To_Load": pv_origin_battery_ac,
+            "Grid_Origin_Battery_AC_To_Load": grid_origin_battery_ac,
             "PV_Direct_Inverter_Loss": ledger["pv_direct_inverter_loss"],
             "Battery_Inverter_Loss": ledger["battery_inverter_loss"],
+            "Grid_Charge_Loss": ledger["grid_charge_loss"],
             "Inverter_Loss": ledger["pv_direct_inverter_loss"] + ledger["battery_inverter_loss"],
             "Standby_Loss": battery_standby_loss,
             "Capacity_Window_Loss": capacity_window_loss,
@@ -1395,6 +1484,10 @@ def simulate_energy_balance(
             T_cell_day_sum = 0.0
 
     df = out.to_frame(rng)
+    if dispatch_instructions is not None:
+        df["Dispatch_Discharge_Allowed"] = dispatch_instructions.discharge_allowed
+        df["Dispatch_Minimum_Usable_Fraction"] = dispatch_instructions.minimum_usable_fraction
+        df["Dispatch_Grid_Charge_Target_Usable_Fraction"] = dispatch_instructions.grid_charge_target_usable_fraction
     deg_df = pd.DataFrame(degradation_tracking) if degradation_tracking else pd.DataFrame()
     summary_df, total_pv = _build_summary_frame(
         out,
