@@ -77,6 +77,8 @@ def test_projected_evaluator_carries_physical_and_degradation_state(monkeypatch)
             {
                 "Year": [1, 2],
                 "Savings_Cumulative_NPV": [-100.0, 50.0],
+                "CO2_Avoided_Total_Cumulative_kg": [10.0, 21.0],
+                "CO2_Avoided_SelfConsumed_Cumulative_kg": [8.0, 17.0],
             }
         )
         projection.attrs["payback_year"] = 2
@@ -84,6 +86,7 @@ def test_projected_evaluator_carries_physical_and_degradation_state(monkeypatch)
 
     monkeypatch.setattr("breos.optimization.simulate_energy_balance", fake_balance)
     monkeypatch.setattr("breos.optimization.cost_analysis_projection", fake_projection)
+    monkeypatch.setattr("breos.optimization.calculate_lcoe_from_projection", lambda *_args, **_kwargs: 0.123)
 
     metrics = _evaluate_projected_design_metrics(
         base_dc_power=base_dc,
@@ -126,6 +129,9 @@ def test_projected_evaluator_carries_physical_and_degradation_state(monkeypatch)
     assert metrics["Projected_Replacement_Cost_Eur"] == pytest.approx(1000.0)
     assert metrics["Projected_Final_SOH_%"] == pytest.approx(99.0)
     assert metrics["Projected_Breakeven_Year"] == pytest.approx(2.0)
+    assert metrics["Projected_LCOE_Eur_kWh"] == pytest.approx(0.123)
+    assert metrics["Projected_CO2_Avoided_Total_kg"] == pytest.approx(21.0)
+    assert metrics["Projected_CO2_Avoided_SelfConsumed_kg"] == pytest.approx(17.0)
     assert metrics["_yearly_summary_df"]["Battery_Cumulative_FEC"].tolist() == pytest.approx([10.0, 20.0])
     assert metrics["_yearly_summary_df"]["Battery_Cumulative_Calendar_Degradation"].tolist() == pytest.approx(
         [0.02, 0.04]

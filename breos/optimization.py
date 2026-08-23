@@ -17,10 +17,12 @@ from breos._deprecations import deprecated
 from breos.battery import BatteryConfig, simulate_energy_balance
 from breos.economics import (
     calculate_costs,
+    calculate_lcoe_from_projection,
     cost_analysis_projection,
     cost_params_from_config,
     system_ac_production_power,
 )
+from breos.emissions import EmissionsParams
 from breos.solar import PVModuleParams, calculate_pv_production_dc, default_azimuth
 from breos.utils import get_hours_per_step
 
@@ -673,6 +675,7 @@ def _evaluate_projected_design_metrics(
     battery_kwh: float,
     inverter_efficiency: float,
     inverter_ac_capacity_w: Optional[float],
+    emissions_params: Optional[EmissionsParams] = None,
     return_tables: bool = False,
 ) -> Dict[str, Any]:
     """Evaluate one design over repeated TMY years using production engines."""
@@ -805,6 +808,7 @@ def _evaluate_projected_design_metrics(
         freq=freq,
         yearly_summary_df=yearly_summary_df,
         total_replacement_cost=total_replacement_cost,
+        emissions_params=emissions_params,
     )
     payback_year = cost_projection.attrs.get("payback_year")
     payback_exact = _interpolate_payback_year(cost_projection)
@@ -823,7 +827,23 @@ def _evaluate_projected_design_metrics(
         "Projected_PV_DC_FinalYear_kWh": float(yearly_summary_df["PV_DC_kWh"].iloc[-1]),
         "Projected_PV_DC_Curtailed_Year1_kWh": float(yearly_summary_df["PV_DC_Curtailed_kWh"].iloc[0]),
         "Projected_Inverter_Loss_Year1_kWh": float(yearly_summary_df["Inverter_Loss_kWh"].iloc[0]),
+        "Projected_LCOE_Eur_kWh": float(
+            calculate_lcoe_from_projection(
+                cost_projection,
+                total_investment=float(costs["total_initial_cost"]),
+                discount_rate=float(fin_cfg.get("discount_rate", DEFAULT_DISCOUNT_RATE)),
+            )
+        ),
     }
+    if "CO2_Avoided_Total_Cumulative_kg" in cost_projection:
+        metrics.update(
+            {
+                "Projected_CO2_Avoided_Total_kg": float(cost_projection["CO2_Avoided_Total_Cumulative_kg"].iloc[-1]),
+                "Projected_CO2_Avoided_SelfConsumed_kg": float(
+                    cost_projection["CO2_Avoided_SelfConsumed_Cumulative_kg"].iloc[-1]
+                ),
+            }
+        )
     if return_tables:
         metrics["_yearly_summary_df"] = yearly_summary_df
         metrics["_cost_projection_df"] = cost_projection
@@ -876,6 +896,7 @@ def evaluate_projected_design(
     )
     simulation = config.get("simulation", {}) or {}
     financials = config.get("financials", {}) or {}
+    emissions_config = config.get("emissions")
     pv_config = config.get("pv", {}) or {}
     battery = config.get("battery", {}) or {}
     freq = str(simulation.get("resolution", "h"))
@@ -920,6 +941,7 @@ def evaluate_projected_design(
             config.get("inverter_efficiency", (config.get("inverter", {}) or {}).get("efficiency", 0.96))
         ),
         inverter_ac_capacity_w=inverter_ac_capacity_w,
+        emissions_params=EmissionsParams(**emissions_config) if emissions_config else None,
         return_tables=True,
     )
     yearly = raw_metrics.pop("_yearly_summary_df")

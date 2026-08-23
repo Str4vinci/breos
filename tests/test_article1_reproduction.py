@@ -9,7 +9,7 @@ import pytest
 from tools.reproduce_article1 import DEFAULT_CONFIG, _fixed_candidates, _load_inputs, _sha256
 
 EXPECTED_RLP_SHA256 = "23becc5a7bfc927b1f7604156e0e4953dcc6bb65268ca947b38db3dc4f2b28bc"
-EXPECTED_CONFIG_SHA256 = "c44ba45c2d3d597275ef8fb66d7403551c6489af88545238f93c64c1b1f8a44f"
+EXPECTED_CONFIG_SHA256 = "b35ce7d4e90b89955a580d65d0abefe9e6d588dc729bc1cc472890efcc267631"
 EXPECTED = {
     "C1": (40.68817313425559, 5374.158425855234),
     "C2": (63.885472875836804, 3621.655066348969),
@@ -38,6 +38,7 @@ def test_article1_config_pins_projected_run_controls():
         "early_stop": {"ftol": 0.0025, "period": 10, "min_gen": 20, "n_skip": 0},
     }
     assert config["constraints"]["enforce_zeb"] is False
+    assert config["emissions"]["average_grid_carbon_intensity_gco2_kwh"] == 127.91
     assert len(config["reference_candidates"]) == 5
     assert config["reference_candidates"][-1] == {
         "label": "C5",

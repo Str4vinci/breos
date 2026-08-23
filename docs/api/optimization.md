@@ -63,7 +63,9 @@ identify the metrics sent to NSGA-II explicitly; projected output has no
 Use `evaluate_projected_design` when you need the detailed result for one
 fixed design instead of a Pareto search. It returns the projected metrics, the
 annual energy and degradation-state ledger, and the matching discounted
-financial ledger. These tables are intended as stable source data for custom
+financial ledger. LCOE and configured lifetime avoided-emissions totals are
+included in the metrics, while the financial table retains their annual source
+columns. These tables are intended as stable source data for custom
 analysis and plots; BREOS does not require a particular visualization layer.
 
 ## Article 1 reproduction
