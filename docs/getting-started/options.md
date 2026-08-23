@@ -101,3 +101,18 @@ Keys for the `load_profile` config key, from `breos.load_profiles.PROFILE_NAMES`
 | `6` | E-Redes 2025 - BTN C (external file required) | `eredes_btn_c` | no |
 | `7` | BDEW H0 2025 (external file required) | — | no |
 | `8` | REE 2026 - 2.0TD (external file required) | `ree_2.0td` | no |
+
+## Tariff schedules
+
+Price-independent schedule keys for `tariff.schedule`, from `breos/data/configs/tariffs.json`. Supply import and export prices in the App config. See [Configuration](configuration.md#time-of-use-tariffs).
+
+| Key | Version | Timezone | Cycle | Periods | Effective from | Effective to |
+|---|---|---|---|---|---|---|
+| `pt_mainland_2026_daily_bi` | 2026 | `Europe/Lisbon` | daily | `off_peak, peak` | — | — |
+| `pt_mainland_2026_daily_tri` | 2026 | `Europe/Lisbon` | daily | `super_off_peak, off_peak, mid_peak, peak` | — | — |
+| `pt_mainland_2026_weekly_bi` | 2026 | `Europe/Lisbon` | weekly | `off_peak, peak` | — | — |
+| `pt_mainland_2026_weekly_tri` | 2026 | `Europe/Lisbon` | weekly | `super_off_peak, off_peak, mid_peak, peak` | — | — |
+| `pt_mainland_2027_daily_bi` | approved-2026-07-31 | `Europe/Lisbon` | daily | `off_peak, peak` | 2027-07-01 | — |
+| `pt_mainland_2027_daily_tri` | approved-2026-07-31 | `Europe/Lisbon` | daily | `off_peak, mid_peak, peak` | 2027-07-01 | — |
+| `pt_mainland_2027_weekly_bi` | approved-2026-07-31 | `Europe/Lisbon` | weekly | `off_peak, peak` | 2027-07-01 | — |
+| `pt_mainland_2027_weekly_tri` | approved-2026-07-31 | `Europe/Lisbon` | weekly | `off_peak, mid_peak, peak` | 2027-07-01 | — |

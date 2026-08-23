@@ -346,7 +346,7 @@ def get_tariff_schedule(identifier: str) -> TariffSchedule:
         return _schedule_catalog()[name]["schedule"]
     except KeyError as exc:
         available = ", ".join(available_tariff_schedules())
-        raise KeyError(f"Unknown tariff schedule {name!r}. Available: {available}") from exc
+        raise ValueError(f"Unknown tariff schedule {name!r}. Available: {available}") from exc
 
 
 def _validate_schedule_resolution(index: pd.DatetimeIndex, identifier: str, required_minutes: int) -> None:
@@ -491,6 +491,13 @@ def _validate_price_periods(schedule: TariffSchedule, prices: TariffPrices) -> N
             raise ValueError(
                 f"Unknown {name} period(s) for schedule {schedule.identifier!r}: {', '.join(sorted(unknown))}"
             )
+
+
+def validate_tariff_prices(schedule: TariffSchedule, prices: TariffPrices) -> None:
+    """Validate that price keys cover every period in a schedule."""
+    _validate_price_periods(schedule, prices)
+    _prices_for_labels(schedule.periods, prices.import_prices, "import price")
+    _prices_for_labels(schedule.periods, prices.export_prices, "export price")
 
 
 def _prices_for_labels(labels: tuple[str, ...], values: Mapping[str, float], name: str) -> tuple[float, ...]:

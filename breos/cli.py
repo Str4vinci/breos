@@ -20,6 +20,7 @@ from breos.load_profiles import PROFILE_ALIASES, PROFILE_NAMES
 from breos.pv_modules import MODULES
 from breos.resources import load_config_json
 from breos.solar import resolve_pvwatts_losses
+from breos.tariffs import available_tariff_schedules, get_tariff_schedule
 
 
 def _package_version() -> str:
@@ -156,6 +157,7 @@ def _resolved_config_summary(config: dict[str, Any]) -> dict[str, Any]:
             "inflation_rate": cfg["inflation_rate"],
             "sell_price_inflation": cfg["sell_price_inflation"],
             "discount_rate": cfg["discount_rate"],
+            "tariff": cfg.get("tariff"),
         },
         "emissions": {
             "country": cfg["emissions_country"],
@@ -237,6 +239,22 @@ def _load_options(category: str) -> list[dict[str, Any]]:
             for key, name in sorted(PROFILE_NAMES.items())
         ]
 
+    if category == "tariff-schedules":
+        return [
+            {
+                "key": identifier,
+                "version": schedule.version,
+                "timezone": schedule.timezone,
+                "cycle": schedule.cycle,
+                "periods": ", ".join(schedule.periods),
+                "effective_from": schedule.effective_from.isoformat() if schedule.effective_from else None,
+                "effective_to": schedule.effective_to.isoformat() if schedule.effective_to else None,
+                "source_url": schedule.source_url,
+            }
+            for identifier in available_tariff_schedules()
+            for schedule in (get_tariff_schedule(identifier),)
+        ]
+
     if category == "battery-models":
         return list_battery_models()
 
@@ -248,6 +266,8 @@ def _format_options(category: str, rows: list[dict[str, Any]]) -> str:
         return "\n".join(
             f"{row['key']}: {row['name']} ({row['latitude']}, {row['longitude']}, {row['timezone']})" for row in rows
         )
+    if category == "tariff-schedules":
+        return "\n".join(f"{row['key']}: {row['cycle']}, {row['timezone']}; periods: {row['periods']}" for row in rows)
     if category == "modules":
         lines = []
         for row in rows:
@@ -307,6 +327,8 @@ def _validate_config(args: argparse.Namespace) -> int:
         print(f"Load profile: {payload['load']['load_profile']} at {payload['load']['resolution']}")
         print(f"Battery: {payload['battery']['capacity_kwh']} kWh")
         print(f"Cost preset: {payload['economics']['cost_preset'] or 'none'}")
+        tariff = payload["economics"]["tariff"]
+        print(f"Tariff: {tariff['schedule'] if tariff else 'flat'}")
         print(f"Emissions: {payload['emissions']['country'] or 'disabled'}")
     return 0
 
@@ -549,7 +571,15 @@ def build_parser() -> argparse.ArgumentParser:
     list_parser = subparsers.add_parser("list", help="List packaged option keys.")
     list_parser.add_argument(
         "category",
-        choices=("locations", "modules", "cost-presets", "emissions", "load-profiles", "battery-models"),
+        choices=(
+            "locations",
+            "modules",
+            "cost-presets",
+            "emissions",
+            "load-profiles",
+            "tariff-schedules",
+            "battery-models",
+        ),
         help="Packaged option category to list.",
     )
     list_parser.add_argument("--json", action="store_true", help="Write machine-readable JSON.")

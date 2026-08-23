@@ -385,3 +385,43 @@ class TestLCOE:
                 2000.0 * costs["electricity_cost"] + daily,
             ]
         )
+
+    def test_cost_projection_uses_prevalued_tou_components_for_system_and_baseline(self):
+        costs = {
+            "electricity_cost": 99.0,
+            "electricity_sold_cost": 99.0,
+            "daily_power_cost": 99.0,
+            "total_initial_cost": 1000.0,
+            "annual_operation_cost": 100.0,
+        }
+        yearly_summary = pd.DataFrame(
+            {
+                "Year": [1, 2],
+                "Load_kWh": [1000.0, 1000.0],
+                "PV_Production_kWh": [800.0, 800.0],
+                "Import_kWh": [300.0, 300.0],
+                "Export_kWh": [100.0, 100.0],
+                "PV_Degradation_Factor": [1.0, 1.0],
+                "Replacement_Cost": [0.0, 0.0],
+                "Tariff_Import_Cost_Base": [90.0, 100.0],
+                "Tariff_Export_Revenue_Base": [10.0, 20.0],
+                "Tariff_Baseline_Import_Cost_Base": [300.0, 320.0],
+                "Tariff_Fixed_Charge_Base": [50.0, 50.0],
+            }
+        )
+
+        projection = cost_analysis_projection(
+            pd.DataFrame(),
+            costs,
+            num_years=2,
+            inflation_rate=0.10,
+            sell_price_inflation=0.20,
+            discount_rate=0.0,
+            yearly_summary_df=yearly_summary,
+        )
+
+        assert projection["Cost_Import"].tolist() == pytest.approx([90.0, 110.0])
+        assert projection["Revenue_Export"].tolist() == pytest.approx([10.0, 24.0])
+        assert projection["Cost_Daily"].tolist() == pytest.approx([50.0, 55.0])
+        assert projection["Cost_No_Sys_Import"].tolist() == pytest.approx([300.0, 352.0])
+        assert projection["Cost_No_Sys_Annual"].tolist() == pytest.approx([350.0, 407.0])

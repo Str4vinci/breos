@@ -132,3 +132,19 @@ A list of dicts with one row per year (year 0 is the investment row):
 `cost_without_system` are the cumulative discounted costs of operating with
 and without the BREOS-sized system. The crossover point of `balance ≥ 0`
 defines `payback_year`.
+
+### `tariff`
+
+This block exists only when the App config contains `tariff`. It records the
+currency, the schedule and price hashes, effective dates, source metadata, and
+one valuation row per project year.
+
+Each yearly row reports `import_cost`, `export_revenue`, `fixed_charge`, and
+`net_grid_cost`. `baseline_import_cost` values the full load at the same import
+price array. `baseline_total_cost` adds the fixed charge. The `periods` mapping
+reconciles those monetary totals with import, export, and baseline energy for
+each schedule period.
+
+Tariff runs also expose the currency-neutral top-level fields
+`total_investment`, `npv_savings`, and `lcoe_per_kwh`. For EUR runs, the
+existing `*_eur` fields remain compatibility aliases.

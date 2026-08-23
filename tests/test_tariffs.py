@@ -160,7 +160,7 @@ def test_bundled_schedule_catalog_contains_price_independent_portuguese_cycles()
 
 
 def test_unknown_bundled_schedule_fails_without_country_fallback():
-    with pytest.raises(KeyError, match="Unknown tariff schedule.*pt"):
+    with pytest.raises(ValueError, match="Unknown tariff schedule.*pt"):
         get_tariff_schedule("pt")
 
 

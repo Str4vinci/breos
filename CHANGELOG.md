@@ -4,6 +4,14 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 
 ## [Unreleased]
 
+### Added
+- Added opt-in Portuguese time-of-use valuation through the App `tariff`
+  table. BREOS keeps schedules separate from user-supplied prices, classifies
+  local civil time across DST transitions, rejects incompatible resolutions,
+  and values both system grid flows and the no-system baseline with the same
+  resolved price arrays. Flat-price configurations retain their existing
+  behavior and result shape.
+
 ## [0.5.2] - 2026-08-19
 
 ### Added

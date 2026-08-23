@@ -1,0 +1,18 @@
+# Portuguese daily bi-hourly valuation with example supplier prices.
+# Replace every price with the values from the contract used by the study.
+
+location = "porto"
+n_modules = 10
+annual_consumption_kwh = 4000
+load_profile = "demandlib_h0"
+cost_preset = "residential_pt"
+projection_years = 20
+resolution = "h"
+
+[tariff]
+schedule = "pt_mainland_2026_daily_bi"
+currency = "EUR"
+import_prices = { off_peak = 0.12, peak = 0.24 }
+export_prices = { all = 0.04 }
+fixed_charge_per_day = 0.30
+boundary_policy = "strict"

@@ -15,6 +15,7 @@ from breos.degradation.results import build_degradation_summary_from_state
 from breos.economics import calculate_lcoe_from_projection, cost_analysis_projection, find_payback_year
 from breos.pv_modules import get_module
 from breos.solar import PVProductionBreakdown
+from breos.tariffs import ResolvedTariff, resolve_named_tariff
 from breos.utils import get_hours_per_step
 
 
@@ -34,6 +35,7 @@ class SimulationArtifacts:
     pv_loss_waterfall: dict[str, Any]
     weather_metadata: dict[str, Any]
     degradation_summary: dict[str, Any]
+    resolved_tariff: ResolvedTariff | None = None
 
 
 # 1.1 adds the bifacial_rear_gain PV loss-waterfall stage, relabels the iam
@@ -46,6 +48,62 @@ LEDGER_SCHEMA_VERSION = "1.1"
 def _series_energy_kwh(series: pd.Series, freq: str) -> float:
     """Convert a power series in W to energy in kWh."""
     return float(series.fillna(0.0).sum() * get_hours_per_step(freq) / 1000.0)
+
+
+def _tariff_year_values(results_df: pd.DataFrame, tariff: ResolvedTariff, freq: str) -> dict[str, Any]:
+    """Value one simulated year and its no-system baseline at resolved prices."""
+    results_index = (
+        results_df.index
+        if isinstance(results_df.index, pd.DatetimeIndex)
+        else pd.DatetimeIndex(pd.to_datetime(results_df["Datetime"], utc=True))
+    )
+    results_instants = results_index.tz_convert("UTC").as_unit("ns")
+    tariff_instants = tariff.index.tz_convert("UTC").as_unit("ns")
+    if not results_instants.equals(tariff_instants):
+        raise ValueError("Resolved tariff index does not match the simulation results index")
+
+    step_kwh = get_hours_per_step(freq) / 1000.0
+    imported = pd.Series(
+        pd.to_numeric(results_df["Import_From_Grid"], errors="coerce").fillna(0.0).to_numpy() * step_kwh,
+        index=tariff.index,
+    )
+    exported = pd.Series(
+        pd.to_numeric(results_df["Sell_To_Grid"], errors="coerce").fillna(0.0).to_numpy() * step_kwh,
+        index=tariff.index,
+    )
+    baseline_imported = pd.Series(
+        pd.to_numeric(results_df["Houseload"], errors="coerce").fillna(0.0).to_numpy() * step_kwh,
+        index=tariff.index,
+    )
+    import_prices = pd.Series(tariff.import_price_per_kwh, index=tariff.index, dtype=float)
+    export_prices = pd.Series(tariff.export_price_per_kwh, index=tariff.index, dtype=float)
+
+    local_dates = tariff.index.tz_convert(tariff.schedule.timezone).normalize()
+    fixed_charge = float(local_dates.nunique()) * tariff.prices.fixed_charge_per_day
+
+    periods: dict[str, dict[str, float]] = {}
+    labels = pd.Series(tariff.period_labels, index=tariff.index)
+    for period in tariff.schedule.periods:
+        selected = labels == period
+        period_import = imported[selected]
+        period_export = exported[selected]
+        period_baseline = baseline_imported[selected]
+        periods[period] = {
+            "import_kwh": float(period_import.sum()),
+            "export_kwh": float(period_export.sum()),
+            "baseline_import_kwh": float(period_baseline.sum()),
+            "import_cost_base": float((period_import * import_prices[selected]).sum()),
+            "export_revenue_base": float((period_export * export_prices[selected]).sum()),
+            "baseline_import_cost_base": float((period_baseline * import_prices[selected]).sum()),
+        }
+
+    return {
+        "Tariff_Import_Cost_Base": sum(row["import_cost_base"] for row in periods.values()),
+        "Tariff_Export_Revenue_Base": sum(row["export_revenue_base"] for row in periods.values()),
+        "Tariff_Baseline_Import_Cost_Base": sum(row["baseline_import_cost_base"] for row in periods.values()),
+        "Tariff_Fixed_Charge_Base": fixed_charge,
+        "Tariff_Periods_Base": periods,
+    }
 
 
 def _rounded(value: float, digits: int = 2) -> float:
@@ -288,6 +346,16 @@ def run_app_simulation(
     projection_years = cfg["projection_years"]
     degradation_rate = cfg["pv_degradation_rate"]
     hours_per_step = get_hours_per_step(freq)
+    resolved_tariff = None
+    tariff_config = getattr(resolved, "tariff", None)
+    if tariff_config is not None:
+        resolved_tariff = resolve_named_tariff(
+            inputs.dc_system_base.index,
+            tariff_config.schedule_identifier,
+            tariff_config.prices,
+            study_date=tariff_config.study_date,
+            boundary_policy=tariff_config.boundary_policy,
+        )
 
     replacement_cost = resolved.cost_params.battery_cost_per_kwh * battery_kwh
 
@@ -414,26 +482,27 @@ def run_app_simulation(
         total_pv_kwh = direct_pv_ac_kwh + pv_origin_battery_ac_kwh + total_export
         grid_indep = (1 - total_import / total_load) * 100 if total_load > 0 else 0
 
-        yearly_summaries.append(
-            {
-                "Year": year_idx + 1,
-                "PV_Production_kWh": total_pv_kwh,
-                "Legacy_PV_Production_kWh": legacy_pv_kwh,
-                "PV_DC_Generation_kWh": pv_dc_kwh,
-                "Direct_PV_AC_Load_kWh": direct_pv_ac_kwh,
-                "PV_Origin_Battery_AC_Load_kWh": pv_origin_battery_ac_kwh,
-                "Self_Consumption_kWh": direct_pv_ac_kwh + pv_origin_battery_ac_kwh,
-                "Curtailment_DC_kWh": _series_energy_kwh(results_df["PV_DC_Curtailed"], freq),
-                "Load_kWh": total_load,
-                "Import_kWh": total_import,
-                "Export_kWh": total_export,
-                "Grid_Independence_%": grid_indep,
-                "Battery_SOH_%": current_soh if has_battery else None,
-                "Replacements": year_n_rep,
-                "Replacement_Cost": year_rep_cost,
-                "PV_Degradation_Factor": pv_degradation_factor,
-            }
-        )
+        yearly_summary: dict[str, Any] = {
+            "Year": year_idx + 1,
+            "PV_Production_kWh": total_pv_kwh,
+            "Legacy_PV_Production_kWh": legacy_pv_kwh,
+            "PV_DC_Generation_kWh": pv_dc_kwh,
+            "Direct_PV_AC_Load_kWh": direct_pv_ac_kwh,
+            "PV_Origin_Battery_AC_Load_kWh": pv_origin_battery_ac_kwh,
+            "Self_Consumption_kWh": direct_pv_ac_kwh + pv_origin_battery_ac_kwh,
+            "Curtailment_DC_kWh": _series_energy_kwh(results_df["PV_DC_Curtailed"], freq),
+            "Load_kWh": total_load,
+            "Import_kWh": total_import,
+            "Export_kWh": total_export,
+            "Grid_Independence_%": grid_indep,
+            "Battery_SOH_%": current_soh if has_battery else None,
+            "Replacements": year_n_rep,
+            "Replacement_Cost": year_rep_cost,
+            "PV_Degradation_Factor": pv_degradation_factor,
+        }
+        if resolved_tariff is not None:
+            yearly_summary.update(_tariff_year_values(results_df, resolved_tariff, freq))
+        yearly_summaries.append(yearly_summary)
 
     yearly_df = pd.DataFrame(yearly_summaries)
     if first_year_results_df is None:
@@ -491,4 +560,5 @@ def run_app_simulation(
             )
         ),
         degradation_summary=degradation_summary,
+        resolved_tariff=resolved_tariff,
     )

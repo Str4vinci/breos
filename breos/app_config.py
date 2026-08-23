@@ -10,6 +10,8 @@ from pathlib import Path
 from typing import Any, Callable
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+import pandas as pd
+
 from breos.degradation.profiles import ENABLED_BLAST_MODEL_KEYS, apply_battery_profile_defaults
 from breos.economics import COST_CONFIG_KEY_TO_PARAM, CostParams, calculate_costs
 from breos.emissions import EmissionsParams
@@ -37,6 +39,13 @@ from breos.solar import (
     estimate_optimal_tilt,
 )
 from breos.solar import default_azimuth as default_azimuth_fn
+from breos.tariffs import (
+    BOUNDARY_POLICIES,
+    TariffPrices,
+    classify_tariff_periods,
+    get_tariff_schedule,
+    validate_tariff_prices,
+)
 
 _NO_DEFAULT = object()
 
@@ -349,6 +358,7 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
     ),
     # Config-file/API-only fields.
     "costs": AppConfigField(),
+    "tariff": AppConfigField(),
     "pv_arrays": AppConfigField(default=None, default_order=1),
     "tracking": AppConfigField(default="fixed", default_order=7),
     "axis_tilt": AppConfigField(default=0.0, default_order=8),
@@ -386,6 +396,41 @@ ALLOWED_CONFIG_KEYS: frozenset[str] = frozenset(APP_CONFIG_FIELDS)
 # the canonical translation to CostParams lives in ``breos.economics`` so the
 # App and lower-level construction helper cannot drift.
 COST_OVERRIDE_KEYS: frozenset[str] = frozenset(COST_CONFIG_KEY_TO_PARAM)
+TARIFF_CONFIG_KEYS: frozenset[str] = frozenset(
+    {
+        "schedule",
+        "currency",
+        "import_prices",
+        "export_prices",
+        "fixed_charge_per_day",
+        "boundary_policy",
+        "study_date",
+    }
+)
+
+
+@dataclass(frozen=True)
+class AppTariffConfig:
+    """Validated tariff inputs that are independent of a simulation index."""
+
+    schedule_identifier: str
+    prices: TariffPrices
+    boundary_policy: str
+    study_date: date | None
+
+    def as_config_dict(self) -> dict[str, Any]:
+        """Return the normalized, JSON-safe public configuration table."""
+        result: dict[str, Any] = {
+            "schedule": self.schedule_identifier,
+            "currency": self.prices.currency,
+            "import_prices": dict(self.prices.import_prices),
+            "export_prices": dict(self.prices.export_prices),
+            "fixed_charge_per_day": self.prices.fixed_charge_per_day,
+            "boundary_policy": self.boundary_policy,
+        }
+        if self.study_date is not None:
+            result["study_date"] = self.study_date.isoformat()
+        return result
 
 
 @dataclass(frozen=True)
@@ -407,6 +452,7 @@ class ResolvedAppConfig:
     axis_azimuth: float
     cost_params: CostParams
     emissions_params: EmissionsParams | None
+    tariff: AppTariffConfig | None = None
 
 
 def load_json(name: str) -> dict[str, Any]:
@@ -526,6 +572,7 @@ def validate_config(cfg: dict[str, Any]) -> None:
     _validate_pv_and_inverter(cfg, has_arrays)
     _validate_time_and_weather(cfg)
     _validate_economics(cfg)
+    resolve_tariff_config(cfg)
     _validate_battery_and_degradation(cfg)
     _validate_reachable_gcr(cfg, has_arrays)
 
@@ -719,6 +766,72 @@ def _validate_economics(cfg: dict[str, Any]) -> None:
     if cfg["export_emissions_factor_gco2_kwh"] is not None:
         if _finite_real(cfg["export_emissions_factor_gco2_kwh"], "export_emissions_factor_gco2_kwh") < 0:
             raise ValueError("'export_emissions_factor_gco2_kwh' must be >= 0 when configured")
+
+
+def resolve_tariff_config(cfg: dict[str, Any]) -> AppTariffConfig | None:
+    """Validate and normalize the optional App tariff table."""
+    if "tariff" not in cfg:
+        return None
+    table = cfg["tariff"]
+    if not isinstance(table, dict):
+        raise TypeError("'tariff' must be a table/dict")
+
+    unknown = set(table) - TARIFF_CONFIG_KEYS
+    if unknown:
+        available = ", ".join(f"tariff.{key}" for key in sorted(TARIFF_CONFIG_KEYS))
+        unknown_text = ", ".join(f"'tariff.{key}'" for key in sorted(unknown))
+        raise ValueError(f"Unknown tariff key(s): {unknown_text}. Available: {available}")
+
+    required = ("schedule", "currency", "import_prices", "export_prices")
+    missing = [key for key in required if key not in table]
+    if missing:
+        raise ValueError(f"Missing required tariff key(s): {', '.join(f'tariff.{key}' for key in missing)}")
+
+    schedule = get_tariff_schedule(table["schedule"])
+    boundary_policy = table.get("boundary_policy", "strict")
+    if boundary_policy not in BOUNDARY_POLICIES:
+        allowed = ", ".join(sorted(BOUNDARY_POLICIES))
+        raise ValueError(f"'tariff.boundary_policy' must be one of: {allowed}")
+
+    raw_study_date = table.get("study_date")
+    if raw_study_date is None:
+        study_date = None
+    elif isinstance(raw_study_date, date):
+        study_date = raw_study_date
+    elif isinstance(raw_study_date, str):
+        try:
+            study_date = date.fromisoformat(raw_study_date)
+        except ValueError as exc:
+            raise ValueError("'tariff.study_date' must be a valid ISO date (YYYY-MM-DD)") from exc
+    else:
+        raise TypeError("'tariff.study_date' must be an ISO date string when configured")
+
+    prices = TariffPrices(
+        currency=table["currency"],
+        import_prices=table["import_prices"],
+        export_prices=table["export_prices"],
+        fixed_charge_per_day=table.get("fixed_charge_per_day", 0.0),
+    )
+    validate_tariff_prices(schedule, prices)
+
+    validation_index = pd.date_range(
+        cfg["start_date"],
+        periods=2,
+        freq=cfg["resolution"],
+        tz=schedule.timezone,
+    )
+    classify_tariff_periods(
+        validation_index,
+        schedule.identifier,
+        study_date=study_date,
+        boundary_policy=boundary_policy,
+    )
+    return AppTariffConfig(
+        schedule_identifier=schedule.identifier,
+        prices=prices,
+        boundary_policy=boundary_policy,
+        study_date=study_date,
+    )
 
 
 def _validate_battery_and_degradation(cfg: dict[str, Any]) -> None:
@@ -971,6 +1084,7 @@ def resolve_app_config(config: dict[str, Any]) -> ResolvedAppConfig:
     """Merge, validate, and resolve App configuration."""
     cfg = merge_defaults(config)
     validate_config(cfg)
+    tariff = resolve_tariff_config(cfg)
 
     lat, lon, timezone, loc_key = resolve_location(cfg)
     pv_arrays, pv_params, n_modules, avg_module_power_w, system_kwp, tilt, azimuth = resolve_pv_system(cfg, lat)
@@ -980,6 +1094,8 @@ def resolve_app_config(config: dict[str, Any]) -> ResolvedAppConfig:
     # Materialise the resolved module count (derived from pv_arrays when set)
     # into a fresh dict rather than mutating the merged config in place.
     cfg = {**cfg, "n_modules": n_modules}
+    if tariff is not None:
+        cfg["tariff"] = tariff.as_config_dict()
 
     return ResolvedAppConfig(
         cfg=cfg,
@@ -997,4 +1113,5 @@ def resolve_app_config(config: dict[str, Any]) -> ResolvedAppConfig:
         axis_azimuth=axis_azimuth,
         cost_params=resolve_costs(cfg),
         emissions_params=resolve_emissions(cfg),
+        tariff=tariff,
     )

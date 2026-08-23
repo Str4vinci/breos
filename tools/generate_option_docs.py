@@ -115,6 +115,24 @@ SECTIONS: list[dict[str, Any]] = [
             ("bundled", "Bundled", "text"),
         ],
     },
+    {
+        "category": "tariff-schedules",
+        "title": "Tariff schedules",
+        "intro": (
+            "Price-independent schedule keys for `tariff.schedule`, from"
+            " `breos/data/configs/tariffs.json`. Supply import and export prices"
+            " in the App config. See [Configuration](configuration.md#time-of-use-tariffs)."
+        ),
+        "columns": [
+            ("key", "Key", "code"),
+            ("version", "Version", "text"),
+            ("timezone", "Timezone", "code"),
+            ("cycle", "Cycle", "text"),
+            ("periods", "Periods", "code"),
+            ("effective_from", "Effective from", "text"),
+            ("effective_to", "Effective to", "text"),
+        ],
+    },
 ]
 
 

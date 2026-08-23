@@ -20,6 +20,14 @@ from breos.utils import get_hours_per_step
 BATTERY_REPLACEMENT_COST_PER_KWH: float = 500.0
 
 SYSTEM_AC_PRODUCTION_COLUMNS = ("PV_AC_To_Load", "Battery_AC_To_Load_PV")
+TARIFF_YEARLY_VALUE_COLUMNS = frozenset(
+    {
+        "Tariff_Import_Cost_Base",
+        "Tariff_Export_Revenue_Base",
+        "Tariff_Baseline_Import_Cost_Base",
+        "Tariff_Fixed_Charge_Base",
+    }
+)
 
 # Canonical translation from the public cost-catalogue/config vocabulary to
 # CostParams attributes. App presets, App ``[costs]`` overrides, and the
@@ -259,11 +267,19 @@ def cost_analysis_projection(
         sell_inflation_factors = (1 + sell_price_inflation) ** (proj["Year"] - 1)
         discount_factors = 1 / ((1 + discount_rate) ** proj["Year"])
 
+        uses_tariff_valuation = TARIFF_YEARLY_VALUE_COLUMNS.issubset(yearly_data.columns)
+
         # Baseline (no system) - use the actual yearly demand from propagation.
         proj["Load_kWh"] = yearly_data["Load_kWh"].values
-        proj["Cost_No_Sys_Annual"] = (
-            proj["Load_kWh"] * costs["electricity_cost"] + first_year_days * costs["daily_power_cost"]
-        ) * inflation_factors
+        if uses_tariff_valuation:
+            proj["Cost_No_Sys_Import"] = yearly_data["Tariff_Baseline_Import_Cost_Base"].values * inflation_factors
+            proj["Cost_No_Sys_Annual"] = (
+                proj["Cost_No_Sys_Import"] + yearly_data["Tariff_Fixed_Charge_Base"].values * inflation_factors
+            )
+        else:
+            proj["Cost_No_Sys_Annual"] = (
+                proj["Load_kWh"] * costs["electricity_cost"] + first_year_days * costs["daily_power_cost"]
+            ) * inflation_factors
         proj["Cost_No_Sys_Cumulative"] = proj["Cost_No_Sys_Annual"].cumsum()
 
         # With PV system - Use ACTUAL yearly values from propagation
@@ -272,12 +288,19 @@ def cost_analysis_projection(
         proj["Degradation_Factor"] = yearly_data["PV_Degradation_Factor"].values
 
         # Cost calculations using actual data
-        proj["Cost_Import"] = yearly_data["Import_kWh"].values * costs["electricity_cost"] * inflation_factors
-        proj["Revenue_Export"] = (
-            yearly_data["Export_kWh"].values * costs["electricity_sold_cost"] * sell_inflation_factors
-        )
+        if uses_tariff_valuation:
+            proj["Cost_Import"] = yearly_data["Tariff_Import_Cost_Base"].values * inflation_factors
+            proj["Revenue_Export"] = yearly_data["Tariff_Export_Revenue_Base"].values * sell_inflation_factors
+        else:
+            proj["Cost_Import"] = yearly_data["Import_kWh"].values * costs["electricity_cost"] * inflation_factors
+            proj["Revenue_Export"] = (
+                yearly_data["Export_kWh"].values * costs["electricity_sold_cost"] * sell_inflation_factors
+            )
         proj["Cost_Operation"] = costs["annual_operation_cost"] * inflation_factors
-        proj["Cost_Daily"] = first_year_days * costs["daily_power_cost"] * inflation_factors
+        if uses_tariff_valuation:
+            proj["Cost_Daily"] = yearly_data["Tariff_Fixed_Charge_Base"].values * inflation_factors
+        else:
+            proj["Cost_Daily"] = first_year_days * costs["daily_power_cost"] * inflation_factors
 
         # Battery replacement costs from propagation
         proj["Cost_Replacement"] = yearly_data["Replacement_Cost"].values * inflation_factors

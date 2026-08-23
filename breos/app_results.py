@@ -11,6 +11,7 @@ import pandas as pd
 from breos.app_config import ResolvedAppConfig
 from breos.emissions import calculate_co2_savings
 from breos.runners.app import LEDGER_SCHEMA_VERSION, SimulationArtifacts
+from breos.tariffs import ResolvedTariff
 from breos.utils import get_hours_per_step
 
 
@@ -115,6 +116,91 @@ def _package_version() -> str:
         return "unknown"
 
 
+def _iso_date(value: Any) -> str | None:
+    return value.isoformat() if value is not None else None
+
+
+def _tariff_provenance(tariff: ResolvedTariff) -> dict[str, Any]:
+    """Build reproducibility metadata for a resolved tariff."""
+    return {
+        "currency": tariff.prices.currency,
+        "boundary_policy": tariff.boundary_policy,
+        "schedule": {
+            "identifier": tariff.schedule.identifier,
+            "version": tariff.schedule.version,
+            "timezone": tariff.schedule.timezone,
+            "cycle": tariff.schedule.cycle,
+            "periods": list(tariff.schedule.periods),
+            "period_codes": {period: code for code, period in enumerate(tariff.schedule.periods)},
+            "source_url": tariff.schedule.source_url,
+            "effective_from": _iso_date(tariff.schedule.effective_from),
+            "effective_to": _iso_date(tariff.schedule.effective_to),
+            "hash": tariff.schedule_hash,
+        },
+        "prices": {
+            "identifier": tariff.prices.identifier,
+            "version": tariff.prices.version,
+            "import_per_kwh": dict(tariff.prices.import_prices),
+            "export_per_kwh": dict(tariff.prices.export_prices),
+            "fixed_charge_per_day": tariff.prices.fixed_charge_per_day,
+            "source_url": tariff.prices.source_url,
+            "effective_from": _iso_date(tariff.prices.effective_from),
+            "effective_to": _iso_date(tariff.prices.effective_to),
+            "hash": tariff.price_hash,
+        },
+        "resolved_steps": len(tariff.index),
+    }
+
+
+def _tariff_result(artifacts: SimulationArtifacts, cfg: dict[str, Any]) -> dict[str, Any]:
+    """Build annual tariff valuation and provenance for public results."""
+    tariff = artifacts.resolved_tariff
+    if tariff is None:
+        raise ValueError("Tariff results require a resolved tariff")
+
+    yearly: list[dict[str, Any]] = []
+    for position, (_, projection) in enumerate(artifacts.cost_projection.iterrows()):
+        summary = artifacts.yearly_df.iloc[position]
+        import_factor = (1 + cfg["inflation_rate"]) ** position
+        export_factor = (1 + cfg["sell_price_inflation"]) ** position
+        periods = {
+            period: {
+                "import_kwh": round(float(values["import_kwh"]), 6),
+                "export_kwh": round(float(values["export_kwh"]), 6),
+                "baseline_import_kwh": round(float(values["baseline_import_kwh"]), 6),
+                "import_cost": round(float(values["import_cost_base"]) * import_factor, 6),
+                "export_revenue": round(float(values["export_revenue_base"]) * export_factor, 6),
+                "baseline_import_cost": round(float(values["baseline_import_cost_base"]) * import_factor, 6),
+            }
+            for period, values in summary["Tariff_Periods_Base"].items()
+        }
+        yearly.append(
+            {
+                "year": int(projection["Year"]),
+                "import_cost": round(float(projection["Cost_Import"]), 6),
+                "export_revenue": round(float(projection["Revenue_Export"]), 6),
+                "fixed_charge": round(float(projection["Cost_Daily"]), 6),
+                "baseline_import_cost": round(float(projection["Cost_No_Sys_Import"]), 6),
+                "baseline_total_cost": round(float(projection["Cost_No_Sys_Annual"]), 6),
+                "net_grid_cost": round(
+                    float(projection["Cost_Import"] - projection["Revenue_Export"] + projection["Cost_Daily"]),
+                    6,
+                ),
+                "periods": periods,
+            }
+        )
+
+    return {
+        **_tariff_provenance(tariff),
+        "study_date": cfg["tariff"].get("study_date"),
+        "inflation": {
+            "import_and_fixed_rate": cfg["inflation_rate"],
+            "export_rate": cfg["sell_price_inflation"],
+        },
+        "yearly": yearly,
+    }
+
+
 def _provenance(cfg: dict[str, Any], resolved: ResolvedAppConfig, artifacts: SimulationArtifacts) -> dict[str, Any]:
     normalized_cfg = {
         **cfg,
@@ -134,7 +220,7 @@ def _provenance(cfg: dict[str, Any], resolved: ResolvedAppConfig, artifacts: Sim
     weather = json.loads(json.dumps(artifacts.weather_metadata, default=str))
     weather.setdefault("latitude", resolved.lat)
     weather.setdefault("longitude", resolved.lon)
-    return {
+    provenance = {
         "breos_version": _package_version(),
         "ledger_schema_version": LEDGER_SCHEMA_VERSION,
         "resolved_config": normalized_cfg,
@@ -145,6 +231,11 @@ def _provenance(cfg: dict[str, Any], resolved: ResolvedAppConfig, artifacts: Sim
         "pv_model": {"bifacial": artifacts.pv_loss_waterfall["bifacial"]},
         "degradation": artifacts.degradation_summary,
     }
+    if artifacts.resolved_tariff is not None:
+        tariff_provenance = _tariff_provenance(artifacts.resolved_tariff)
+        tariff_provenance["study_date"] = cfg["tariff"].get("study_date")
+        provenance["tariff"] = tariff_provenance
+    return provenance
 
 
 def build_result(
@@ -194,6 +285,18 @@ def build_result(
         "provenance": _provenance(cfg, resolved, artifacts),
         "degradation": artifacts.degradation_summary,
     }
+
+    if artifacts.resolved_tariff is not None:
+        currency = artifacts.resolved_tariff.prices.currency
+        result.update(
+            {
+                "currency": currency,
+                "total_investment": round(float(total_initial), 2),
+                "npv_savings": round(float(npv_savings), 2),
+                "lcoe_per_kwh": round(float(artifacts.lcoe), 4),
+                "tariff": _tariff_result(artifacts, cfg),
+            }
+        )
 
     if resolved.pv_arrays:
         result["pv_arrays"] = [dict(arr) for arr in resolved.pv_arrays]

@@ -51,6 +51,7 @@ weather/data access, load profiles, PV system data, and cost assumptions; see
 | `projection_years` | `20` | Economic projection horizon |
 | `cost_preset` | `None` | Cost preset key from packaged defaults |
 | `costs` | *unset* | Optional cost overrides layered over the selected preset and built-in defaults; see [below](#cost-and-emissions-presets) |
+| `tariff` | *unset* | Optional time-of-use schedule, currency, prices, and fixed charge; see [below](#time-of-use-tariffs) |
 | `inflation_rate` | `0.02` | Annual electricity price inflation |
 | `sell_price_inflation` | `0.0` | Annual inflation of the grid export (sell) price |
 | `discount_rate` | `0.03` | Discount rate for NPV |
@@ -399,6 +400,72 @@ The accepted keys follow the packaged cost-catalogue names:
 `other_cost_per_module`, `other_costs`, `land_cost`,
 `maintenance_cost_per_panel`, `maintenance_cost`, and `operation_cost`.
 Unknown keys and negative or non-finite values are rejected before simulation.
+
+## Time-of-use tariffs
+
+Set `tariff` to value grid imports and exports by local civil-time period. The
+schedule contains period rules and regulatory provenance. You provide the
+supplier prices separately:
+
+```toml
+resolution = "h"
+
+[tariff]
+schedule = "pt_mainland_2026_daily_bi"
+currency = "EUR"
+import_prices = { off_peak = 0.12, peak = 0.24 }
+export_prices = { all = 0.04 }
+fixed_charge_per_day = 0.30
+boundary_policy = "strict"
+```
+
+The prices above are examples, not a supplier offer. Replace them with values
+from the contract that applies to the study. BREOS does not fetch prices or
+exchange rates.
+
+BREOS includes these accepted Portuguese mainland schedules:
+
+- `pt_mainland_2026_daily_bi`
+- `pt_mainland_2026_daily_tri`
+- `pt_mainland_2026_weekly_bi`
+- `pt_mainland_2026_weekly_tri`
+- `pt_mainland_2027_daily_bi`
+- `pt_mainland_2027_daily_tri`
+- `pt_mainland_2027_weekly_bi`
+- `pt_mainland_2027_weekly_tri`
+
+The 2027 entries contain the accepted boundaries. BREOS does not package the
+earlier CP137 proposal schedules.
+
+`boundary_policy = "strict"` rejects a simulation resolution that cannot
+represent every schedule boundary. Use `resolution = "15min"` for schedules
+that contain half-hour or quarter-hour transitions. The 2026 daily bi-hourly
+schedule is the only bundled schedule that supports hourly input.
+
+For a weather reference year outside the schedule's effective dates, set
+`study_date` to the date whose tariff rules the study uses:
+
+```toml
+[tariff]
+schedule = "pt_mainland_2027_daily_tri"
+study_date = "2027-07-01"
+currency = "EUR"
+import_prices = { off_peak = 0.12, mid_peak = 0.20, peak = 0.30 }
+export_prices = { all = 0.04 }
+```
+
+When `tariff` is set, its import prices, export prices, and fixed charge replace
+the flat `costs.electricity_cost`, `costs.electricity_sold_cost`, and
+`costs.daily_power_cost` values. Equipment and operation costs still come from
+`cost_preset` and `costs`. `inflation_rate` escalates imports and fixed charges;
+`sell_price_inflation` escalates export revenue.
+
+The current projection reuses the representative simulation calendar in every
+project year. Inflation changes monetary values, but BREOS does not shift a
+weekly tariff schedule onto each project's civil calendar.
+
+If you omit `tariff`, BREOS retains the flat-price calculation and its existing
+result shape.
 
 For full control, build a {py:class}`~breos.CostParams` and
 {py:class}`~breos.EmissionsParams` yourself and call the lower-level

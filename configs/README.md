@@ -58,6 +58,7 @@ breos list modules
 breos list cost-presets
 breos list emissions
 breos list load-profiles
+breos list tariff-schedules
 ```
 
 ## Example configs
@@ -74,6 +75,7 @@ breos list load-profiles
 | [`sweep.toml`](examples/sweep.toml) | Parameter grid over module count and battery size (`breos sweep`) |
 | [`montecarlo.toml`](examples/montecarlo.toml) | Monte Carlo over weather years + demand (`breos montecarlo`) |
 | [`external-rlp.toml`](examples/external-rlp.toml) | Using non-bundled, licensed load profiles |
+| [`time-of-use-portugal.toml`](examples/time-of-use-portugal.toml) | Portuguese daily bi-hourly schedule with user-supplied example prices |
 
 Start from `pv-plus-battery.toml` if you want to see the full set of knobs; copy
 any example and edit it for your own scenario.
@@ -87,8 +89,9 @@ any example and edit it for your own scenario.
   as a template and put the licensed CSV files in a local directory such as
   `external_rlp/` (do not commit third-party RLPs).
 - `breos run` configs are mostly flat key/value files (TOML or JSON).
-  `[[pv_arrays]]` describes multiple arrays and `[costs]` holds explicit cost
-  overrides. The `[sweep]` and `[montecarlo]` tables are read by their dedicated
+  `[[pv_arrays]]` describes multiple arrays. `[costs]` holds explicit cost
+  overrides, and `[tariff]` holds a time-of-use schedule and prices. The
+  `[sweep]` and `[montecarlo]` tables are read by their dedicated
   CLI commands; sweep entries can use quoted dotted keys such as
   `"costs.electricity_cost"`.
 - Configs written for the research `pvbat` engine — with nested model sections,

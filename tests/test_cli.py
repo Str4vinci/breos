@@ -310,6 +310,29 @@ def test_example_configs_are_discovered():
     assert len(EXAMPLE_CONFIGS) >= 10
 
 
+def test_list_tariff_schedules_reports_only_accepted_packaged_cycles(capsys):
+    exit_code = cli.main(["list", "tariff-schedules", "--json"])
+
+    assert exit_code == 0
+    rows = json.loads(capsys.readouterr().out)
+    identifiers = {row["key"] for row in rows}
+    assert "pt_mainland_2027_daily_tri" in identifiers
+    assert not any("proposal" in identifier.lower() or "cp137" in identifier.lower() for identifier in identifiers)
+
+
+def test_tariff_example_dry_run_reports_resolved_tariff(tmp_path):
+    config_path = Path(__file__).resolve().parents[1] / "configs" / "examples" / "time-of-use-portugal.toml"
+    output_path = tmp_path / "resolved.json"
+
+    exit_code = cli.main(["run", "--config", str(config_path), "--dry-run", "--output", str(output_path)])
+
+    assert exit_code == 0
+    output = json.loads(output_path.read_text(encoding="utf-8"))
+    tariff = output["economics"]["tariff"]
+    assert tariff["schedule"] == "pt_mainland_2026_daily_bi"
+    assert tariff["currency"] == "EUR"
+
+
 @pytest.mark.parametrize("config_path", EXAMPLE_CONFIGS, ids=lambda path: path.name)
 def test_shipped_example_configs_validate(config_path, capsys):
     exit_code = cli.main(["validate-config", str(config_path)])
