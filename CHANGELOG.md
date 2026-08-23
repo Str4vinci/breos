@@ -19,7 +19,8 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   handling and AC dispatch methodology.
 - Added `evaluate_projected_design` for detailed evaluation of a fixed design.
   It returns the projected metrics, annual energy and degradation-state
-  ledger, and discounted financial ledger without requiring an NSGA-II run.
+  ledger, discounted financial ledger, LCOE, and configured lifetime
+  avoided-emissions totals without requiring an NSGA-II run.
 - Added reproducible Monte Carlo controls for normal or bounded-uniform demand
   sampling, historical weather-year bounds, energy-conserving 15-minute
   interpolation, and independent trajectory workers. Opt-in yearly output

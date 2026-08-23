@@ -75,6 +75,12 @@ sell_price_inflation = 0.0
 project_lifespan = 20
 pv_degradation_rate = 0.005
 
+[emissions]
+country = "Portugal"
+average_grid_carbon_intensity_gco2_kwh = 127.91
+source = "Ember Climate, Europe Yearly Full Release"
+year = 2025
+
 [simulation]
 resolution = "15min"
 years_projection = 20

@@ -22,7 +22,7 @@ new results deliberately do not reproduce known errors in the research run.
   `8dcf17574ca440f77b9092651035ae32b5e6f998`, with a clean tracked
   worktree recorded by the reproduction tool.
 - Reproduction config SHA-256:
-  `c44ba45c2d3d597275ef8fb66d7403551c6489af88545238f93c64c1b1f8a44f`.
+  `b35ce7d4e90b89955a580d65d0abefe9e6d588dc729bc1cc472890efcc267631`.
 - Bundled weather SHA-256 (compressed):
   `bf84e31b02ad9bf39f331a5ce8629b1ea8f80cd1597748e72a87a0fce56b4f15`.
 - Bundled weather SHA-256 (uncompressed):
@@ -84,7 +84,8 @@ below to create them in the chosen output directory.
 
 The reproduction command also exports a plot-independent source bundle for
 each fixed case: projected metrics, the yearly energy/degradation-state table,
-and the financial ledger. C5 (4 modules, no battery, 35° tilt, 180° azimuth) is
+and the financial ledger, including LCOE and lifetime emissions inputs. C5 (4
+modules, no battery, 35° tilt, 180° azimuth) is
 included as the manuscript's low-investment benchmark. It was not part of the
 four-candidate full-precision comparison above.
 
