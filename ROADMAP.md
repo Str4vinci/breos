@@ -8,7 +8,8 @@ plans behind individual items.
 
 - **0.6.0** — currency concept; time-of-use tariff valuation with static
   per-country presets; opt-in fixed-target smart charging. Flat pricing and
-  greedy self-consumption stay the compatible defaults.
+  greedy self-consumption stay the compatible defaults. See
+  [design/architecture/0.6x-phd-porting-plan.md](design/architecture/0.6x-phd-porting-plan.md).
 - **0.6.x / 0.7.0** — economic scenario and sensitivity analysis (sensitivity,
   scenarios, switching values, probabilistic), then price-aware dispatch as an
   opt-in strategy.
