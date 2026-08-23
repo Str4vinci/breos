@@ -15,7 +15,12 @@ import pandas as pd
 
 from breos._deprecations import deprecated
 from breos.battery import BatteryConfig, simulate_energy_balance
-from breos.economics import calculate_costs, cost_params_from_config, system_ac_production_power
+from breos.economics import (
+    calculate_costs,
+    cost_analysis_projection,
+    cost_params_from_config,
+    system_ac_production_power,
+)
 from breos.solar import PVModuleParams, calculate_pv_production_dc, default_azimuth
 from breos.utils import get_hours_per_step
 
@@ -491,6 +496,7 @@ def _build_battery_config_from_spec(
     initial_soh: float = 100.0,
     enable_replacement: bool = False,
     inverter_ac_capacity_w: Optional[float] = None,
+    replacement_cost: Optional[float] = None,
 ) -> BatteryConfig:
     """Build a BatteryConfig for optimization paths without dropping supported settings."""
     return BatteryConfig(
@@ -510,8 +516,289 @@ def _build_battery_config_from_spec(
         dc_coupled=batt_spec.get("dc_coupled", True),
         calendar_model=batt_spec.get("calendar_model", "naumann_lam_field_calibrated"),
         enable_replacement=enable_replacement,
+        replacement_cost=replacement_cost,
         enable_resistance_fade=batt_spec.get("enable_resistance_fade", False),
     )
+
+
+def _safe_ratio(numerator: float, denominator: float) -> float:
+    """Return a finite scalar ratio, or zero when the denominator is zero."""
+    denominator = float(denominator)
+    if abs(denominator) < 1e-12:
+        return 0.0
+    return float(numerator) / denominator
+
+
+def _projected_replacement_cost(batt_spec: Dict[str, Any], battery_kwh: float, storage_cost: float) -> float:
+    """Resolve a projected replacement event cost from explicit or calculated input."""
+    configured = batt_spec.get("replacement_cost")
+    if configured is None or (isinstance(configured, str) and configured.strip().lower() in {"auto", "calculate"}):
+        return float(battery_kwh) * float(storage_cost)
+    if isinstance(configured, bool):
+        raise ValueError("battery.replacement_cost must be a non-negative number or 'calculate'")
+    replacement_cost = float(configured)
+    if not np.isfinite(replacement_cost) or replacement_cost < 0.0:
+        raise ValueError("battery.replacement_cost must be a non-negative number or 'calculate'")
+    return replacement_cost
+
+
+def _interpolate_payback_year(cost_projection: pd.DataFrame) -> Optional[float]:
+    """Interpolate discounted payback from cumulative NPV savings."""
+    if "Savings_Cumulative_NPV" not in cost_projection.columns or cost_projection.empty:
+        return None
+
+    savings = cost_projection["Savings_Cumulative_NPV"].to_numpy(dtype=float)
+    years = cost_projection["Year"].to_numpy(dtype=float)
+    if savings[0] >= 0.0:
+        return float(years[0])
+
+    for idx in range(1, len(savings)):
+        if savings[idx] >= 0.0 and savings[idx - 1] < 0.0:
+            delta = savings[idx] - savings[idx - 1]
+            if abs(delta) < 1e-12:
+                return float(years[idx])
+            return float(years[idx - 1] - savings[idx - 1] / delta)
+    return None
+
+
+def _projected_year_summary(
+    *,
+    year: int,
+    results_df: pd.DataFrame,
+    freq: str,
+    pv_degradation_factor: float,
+    battery_soh: float,
+    replacements: int,
+    replacement_cost: float,
+) -> Dict[str, Any]:
+    """Aggregate one simulated project year from the canonical energy ledger."""
+    hours_per_step = get_hours_per_step(freq)
+
+    def energy_kwh(column: str) -> float:
+        return float(pd.to_numeric(results_df[column], errors="coerce").fillna(0.0).sum() * hours_per_step / 1000.0)
+
+    def optional_energy_kwh(column: str) -> float:
+        return energy_kwh(column) if column in results_df.columns else 0.0
+
+    load_kwh = energy_kwh("Houseload")
+    import_kwh = energy_kwh("Import_From_Grid")
+    export_kwh = energy_kwh("Sell_To_Grid")
+    pv_kwh = float(system_ac_production_power(results_df).sum() * hours_per_step / 1000.0)
+    grid_independence = 100.0 * (1.0 - _safe_ratio(import_kwh, load_kwh)) if load_kwh > 0.0 else 0.0
+    return {
+        "Year": int(year),
+        "PV_Production_kWh": pv_kwh,
+        "PV_DC_kWh": optional_energy_kwh("PV_DC"),
+        "PV_DC_Curtailed_kWh": optional_energy_kwh("PV_DC_Curtailed"),
+        "Inverter_Loss_kWh": optional_energy_kwh("Inverter_Loss"),
+        "Load_kWh": load_kwh,
+        "Import_kWh": import_kwh,
+        "Export_kWh": export_kwh,
+        "Grid_Independence_%": grid_independence,
+        "Battery_SOH_%": float(battery_soh),
+        "Replacements": int(replacements),
+        "Replacement_Cost": float(replacement_cost),
+        "PV_Degradation_Factor": float(pv_degradation_factor),
+    }
+
+
+def _summarize_projected_lifetime_metrics(yearly_summary_df: pd.DataFrame) -> Dict[str, float]:
+    """Summarize lifetime metrics from actual simulated yearly values."""
+    if yearly_summary_df.empty:
+        raise ValueError("yearly_summary_df must contain at least one year")
+
+    load = yearly_summary_df["Load_kWh"].astype(float)
+    production = yearly_summary_df["PV_Production_kWh"].astype(float)
+    imports = yearly_summary_df["Import_kWh"].astype(float)
+    annual_gi = yearly_summary_df["Grid_Independence_%"].astype(float)
+    annual_zeb = np.divide(
+        production.to_numpy(dtype=float),
+        load.to_numpy(dtype=float),
+        out=np.zeros(len(yearly_summary_df), dtype=float),
+        where=load.to_numpy(dtype=float) > 0.0,
+    )
+
+    return {
+        "Projected_Grid_Independence_%": 100.0 * (1.0 - _safe_ratio(imports.sum(), load.sum())),
+        "Projected_Grid_Independence_Year1_%": float(annual_gi.iloc[0]),
+        "Projected_Grid_Independence_FinalYear_%": float(annual_gi.iloc[-1]),
+        "Projected_Grid_Independence_Mean_%": float(annual_gi.mean()),
+        "Projected_Grid_Independence_Min_%": float(annual_gi.min()),
+        "Projected_ZEB_Ratio": _safe_ratio(production.sum(), load.sum()),
+        "Projected_ZEB_Ratio_Year1": float(annual_zeb[0]),
+        "Projected_ZEB_Ratio_FinalYear": float(annual_zeb[-1]),
+        "Projected_ZEB_Ratio_Mean": float(np.mean(annual_zeb)),
+        "Projected_ZEB_Ratio_Min": float(np.min(annual_zeb)),
+    }
+
+
+def _evaluate_projected_design_metrics(
+    *,
+    base_dc_power: pd.Series,
+    tmy_data: pd.DataFrame,
+    houseload: pd.DataFrame,
+    temperature_series: pd.Series,
+    pv_params: PVModuleParams,
+    batt_spec: Dict[str, Any],
+    costs_cfg: Dict[str, Any],
+    fin_cfg: Dict[str, Any],
+    freq: str,
+    years_projection: int,
+    degradation_rate: float,
+    n_modules: int,
+    battery_kwh: float,
+    inverter_efficiency: float,
+    inverter_ac_capacity_w: Optional[float],
+    return_tables: bool = False,
+) -> Dict[str, Any]:
+    """Evaluate one design over repeated TMY years using production engines."""
+    if years_projection < 1:
+        raise ValueError("projected optimization requires at least one project year")
+    if not 0.0 <= float(degradation_rate) < 1.0:
+        raise ValueError("projected PV degradation rate must be between 0 and 1")
+
+    cost_params = cost_params_from_config(costs_cfg, fin_cfg)
+    costs = calculate_costs(
+        n_modules=n_modules,
+        module_power_w=pv_params.Mpp,
+        battery_capacity_wh=battery_kwh * 1000.0,
+        cost_params=cost_params,
+    )
+    replacement_cost = _projected_replacement_cost(
+        batt_spec,
+        battery_kwh,
+        cost_params.battery_cost_per_kwh,
+    )
+    has_battery = battery_kwh > 0.0
+    current_soh = float(batt_spec.get("initial_soh", 100.0)) if has_battery else 100.0
+    cumulative_fec = 0.0
+    cumulative_cal_seconds = 0.0
+    cumulative_resistance_growth = 0.0
+    cumulative_cycle_deg = 0.0
+    cumulative_cal_deg = 0.0
+    carried_energy_wh: Optional[float] = None
+    carried_pv_origin_energy_wh: Optional[float] = None
+    degradation_engine = str(batt_spec.get("degradation_engine", "native")).strip().lower()
+    blast_model = batt_spec.get("blast_model")
+    degradation_state: Optional[Dict[str, Any]] = None
+    total_replacements = 0
+    total_replacement_cost = 0.0
+    yearly_summaries: list[Dict[str, Any]] = []
+    first_year_results_df: Optional[pd.DataFrame] = None
+
+    for year_idx in range(years_projection):
+        degradation_factor = (1.0 - float(degradation_rate)) ** year_idx
+        dc_power = base_dc_power * degradation_factor
+        battery_config = _build_battery_config_from_spec(
+            batt_spec,
+            nominal_energy_wh=battery_kwh * 1000.0,
+            inverter_efficiency=inverter_efficiency,
+            initial_soh=current_soh,
+            enable_replacement=bool(batt_spec.get("enable_replacement", True)) and has_battery,
+            inverter_ac_capacity_w=inverter_ac_capacity_w,
+            replacement_cost=replacement_cost,
+        )
+        state_kwargs: Dict[str, float] = {}
+        if carried_energy_wh is not None:
+            state_kwargs = {
+                "initial_energy_wh": carried_energy_wh,
+                "initial_pv_origin_energy_wh": carried_pv_origin_energy_wh or 0.0,
+            }
+
+        simulation = simulate_energy_balance(
+            pv_dc=dc_power,
+            houseload=houseload,
+            battery_config=battery_config,
+            start_time=dc_power.index[0],
+            end_time=dc_power.index[-1],
+            freq=freq,
+            temperature_series=temperature_series if has_battery else None,
+            initial_fec=cumulative_fec,
+            initial_calendar_seconds=cumulative_cal_seconds,
+            initial_resistance_growth=cumulative_resistance_growth,
+            initial_cumulative_cycle_deg=cumulative_cycle_deg,
+            initial_cumulative_cal_deg=cumulative_cal_deg,
+            degradation_engine=degradation_engine,
+            blast_model=blast_model,
+            initial_degradation_state=degradation_state if degradation_engine == "blast" else None,
+            return_degradation_state=True,
+            debug=False,
+            **state_kwargs,
+        )
+        (
+            results_df,
+            _total_pv_wh,
+            _summary_df,
+            year_replacement_cost,
+            year_replacements,
+            degradation_df,
+            degradation_state,
+        ) = simulation
+
+        if first_year_results_df is None:
+            first_year_results_df = results_df
+        if has_battery:
+            carried_energy_wh = float(results_df["Battery_Energy_End"].iloc[-1])
+            carried_pv_origin_energy_wh = float(results_df["Battery_PV_Origin_Energy_End"].iloc[-1])
+            if not degradation_df.empty:
+                cumulative_fec = float(degradation_df["Cumulative_FEC"].iloc[-1])
+                cumulative_cal_seconds = float(degradation_df["Cumulative_Calendar_Seconds"].iloc[-1])
+                cumulative_cycle_deg = float(degradation_df["Cumulative_Cycle_Degradation"].iloc[-1])
+                cumulative_cal_deg = float(degradation_df["Cumulative_Calendar_Degradation"].iloc[-1])
+                current_soh = float(degradation_df["SOH"].iloc[-1])
+                if "Resistance_Growth" in degradation_df.columns:
+                    cumulative_resistance_growth = float(degradation_df["Resistance_Growth"].iloc[-1])
+
+        total_replacements += int(year_replacements)
+        total_replacement_cost += float(year_replacement_cost)
+        yearly_summaries.append(
+            _projected_year_summary(
+                year=year_idx + 1,
+                results_df=results_df,
+                freq=freq,
+                pv_degradation_factor=degradation_factor,
+                battery_soh=current_soh,
+                replacements=int(year_replacements),
+                replacement_cost=float(year_replacement_cost),
+            )
+        )
+
+    yearly_summary_df = pd.DataFrame(yearly_summaries)
+    if first_year_results_df is None:
+        raise RuntimeError("projected design evaluation produced no simulation years")
+    cost_projection = cost_analysis_projection(
+        results_df=first_year_results_df,
+        costs=costs,
+        num_years=years_projection,
+        inflation_rate=float(fin_cfg.get("inflation_rate", DEFAULT_INFLATION_ELEC)),
+        sell_price_inflation=float(fin_cfg.get("sell_price_inflation", 0.0)),
+        discount_rate=float(fin_cfg.get("discount_rate", DEFAULT_DISCOUNT_RATE)),
+        freq=freq,
+        yearly_summary_df=yearly_summary_df,
+        total_replacement_cost=total_replacement_cost,
+    )
+    payback_year = cost_projection.attrs.get("payback_year")
+    payback_exact = _interpolate_payback_year(cost_projection)
+    metrics: Dict[str, Any] = {
+        **_summarize_projected_lifetime_metrics(yearly_summary_df),
+        "Projected_NPV_Eur": float(cost_projection["Savings_Cumulative_NPV"].iloc[-1]),
+        "Projected_Breakeven_Year": float(payback_year) if payback_year is not None else np.nan,
+        "Projected_Breakeven_Year_Exact": payback_exact if payback_exact is not None else np.nan,
+        "Projected_Initial_Cost_Eur": float(costs["total_initial_cost"]),
+        "Projected_Replacement_Cost_Eur": float(total_replacement_cost),
+        "Projected_Total_Replacements": int(total_replacements),
+        "Projected_Final_SOH_%": float(current_soh),
+        "Projected_PV_Production_Year1_kWh": float(yearly_summary_df["PV_Production_kWh"].iloc[0]),
+        "Projected_PV_Production_FinalYear_kWh": float(yearly_summary_df["PV_Production_kWh"].iloc[-1]),
+        "Projected_PV_DC_Year1_kWh": float(yearly_summary_df["PV_DC_kWh"].iloc[0]),
+        "Projected_PV_DC_FinalYear_kWh": float(yearly_summary_df["PV_DC_kWh"].iloc[-1]),
+        "Projected_PV_DC_Curtailed_Year1_kWh": float(yearly_summary_df["PV_DC_Curtailed_kWh"].iloc[0]),
+        "Projected_Inverter_Loss_Year1_kWh": float(yearly_summary_df["Inverter_Loss_kWh"].iloc[0]),
+    }
+    if return_tables:
+        metrics["_yearly_summary_df"] = yearly_summary_df
+        metrics["_cost_projection_df"] = cost_projection
+    return metrics
 
 
 def calculate_financials(
@@ -697,7 +984,25 @@ try:
             self.max_battery_kwh = self.constraints.get("max_battery_kwh", 30)
             self.max_modules = self.constraints.get("max_modules", 60)
             self.max_tilt_deg = _resolve_max_tilt_deg(self.constraints, self.location["latitude"])
+            self.enforce_zeb = bool(self.constraints.get("enforce_zeb", False))
             self.freq = config.get("simulation", {}).get("resolution", "h")
+            self.opt_cfg = config.get("optimization", {}) or {}
+            self.objective_basis = str(self.opt_cfg.get("objective_basis", "steady_state")).strip().lower()
+            if self.objective_basis not in {"steady_state", "projected"}:
+                raise ValueError("optimization.objective_basis must be 'steady_state' or 'projected'")
+            self.projected_objectives = self.objective_basis == "projected"
+            self.projected_years = int(
+                config.get("simulation", {}).get(
+                    "years_projection",
+                    config.get("financials", {}).get("project_lifespan", DEFAULT_PROJECT_LIFESPAN),
+                )
+            )
+            self.projected_degradation_rate = float(
+                config.get("pv", {}).get(
+                    "degradation_rate",
+                    config.get("financials", {}).get("pv_degradation_rate", 0.005),
+                )
+            )
             self.pv_params, self.module_area_m2 = _resolve_pv_module_and_area(config)
             self.batt_temp_cfg = config.get("battery", {}).get("temperature", "weather")
             self.indoor_model = config.get("battery", {}).get("indoor_model")
@@ -712,9 +1017,15 @@ try:
             )
 
             self.battery_replacement_treatment = {
-                "method": "repeat_simulated_year_1_soh_loss_to_eol",
+                "method": (
+                    "simulated_yearly_state_propagation"
+                    if self.projected_objectives
+                    else "repeat_simulated_year_1_soh_loss_to_eol"
+                ),
                 "description": (
-                    "Steady-state candidate scoring repeats its simulated year-1 SOH loss, "
+                    "Projected scoring simulates every year and records actual replacement events."
+                    if self.projected_objectives
+                    else "Steady-state candidate scoring repeats its simulated year-1 SOH loss, "
                     "replaces at the configured EOL threshold, resets SOH to 100%, and applies "
                     "the configured storage cost in each estimated replacement year."
                 ),
@@ -750,8 +1061,8 @@ try:
 
             super().__init__(
                 n_var=n_var,
-                n_obj=3,  # Obj1: Grid Indep, Obj2: ROI (NPV), Obj3: ZEB Ratio
-                n_ieq_constr=2,  # Constr1: Budget, Constr2: Area
+                n_obj=2 if self.projected_objectives else 3,
+                n_ieq_constr=3 if self.enforce_zeb else 2,
                 xl=xl,
                 xu=xu,
                 elementwise_runner=elementwise_runner or _serial_elementwise_runner,
@@ -891,6 +1202,47 @@ try:
             # Obj 3: ZEB Status (Maximize Ratio -> Minimize Negative)
             zeb_ratio = total_ac_prod / total_load if total_load > 0 else 0
 
+            steady_state_gi = (1.0 - grid_dependence_ratio) * 100.0
+            out["SteadyState_Grid_Independence_%"] = steady_state_gi
+            out["SteadyState_NPV_Eur"] = npv
+            out["SteadyState_ZEB_Ratio"] = zeb_ratio
+
+            objective_grid_dependence = grid_dependence_ratio
+            objective_npv = npv
+            objective_zeb = zeb_ratio
+            if self.projected_objectives:
+                projected_metrics = _evaluate_projected_design_metrics(
+                    base_dc_power=dc_production,
+                    tmy_data=self.tmy_data,
+                    houseload=houseload_df,
+                    temperature_series=temperature_series,
+                    pv_params=pv_params,
+                    batt_spec=batt_spec,
+                    costs_cfg=self.config.get("costs", {}) or {},
+                    fin_cfg=self.config.get("financials", {}) or {},
+                    freq=self.freq,
+                    years_projection=self.projected_years,
+                    degradation_rate=self.projected_degradation_rate,
+                    n_modules=n_modules,
+                    battery_kwh=float(battery_kwh),
+                    inverter_efficiency=self.inverter_efficiency,
+                    inverter_ac_capacity_w=inverter_ac_capacity_w,
+                )
+                out.update(projected_metrics)
+                objective_grid_dependence = 1.0 - float(projected_metrics["Projected_Grid_Independence_%"]) / 100.0
+                objective_npv = float(projected_metrics["Projected_NPV_Eur"])
+                objective_zeb = float(projected_metrics["Projected_ZEB_Ratio"])
+
+            out["ZEB_Ratio"] = objective_zeb
+            out["Objective_Grid_Independence_%"] = (
+                float(projected_metrics["Projected_Grid_Independence_%"])
+                if self.projected_objectives
+                else steady_state_gi
+            )
+            out["Objective_NPV_Eur"] = objective_npv
+            if not self.projected_objectives:
+                out["Objective_ZEB_Ratio"] = objective_zeb
+
             # --- 4. Constraints Calculation ---
             # g1: Price <= Budget (g1 <= 0 means satisfied)
             g1 = capex - self.budget_limit
@@ -898,13 +1250,74 @@ try:
             # g2: Area <= Max Area
             g2 = system_area - self.area_limit
 
-            # Return
-            out["F"] = [grid_dependence_ratio, -npv, -zeb_ratio]
-            out["G"] = [g1, g2]
+            constraints = [g1, g2]
+            if self.enforce_zeb:
+                constraints.append(1.0 - objective_zeb)
+
+            if self.projected_objectives:
+                out["F"] = [objective_grid_dependence, -objective_npv]
+            else:
+                out["F"] = [objective_grid_dependence, -objective_npv, -objective_zeb]
+            out["G"] = constraints
 
 except ImportError:
     # If pymoo is not installed, these classes won't be available
     pass
+
+
+def _build_multi_objective_termination(n_gen: int, early_stop: Any):
+    """Build the configured pymoo generation cap and objective-space stop."""
+    if early_stop in (None, False):
+        return ("n_gen", n_gen), None
+    if early_stop is True:
+        early_stop = {}
+    if not isinstance(early_stop, dict):
+        raise ValueError("optimization.early_stop must be a boolean or a mapping")
+    if early_stop.get("enabled", True) is False:
+        return ("n_gen", n_gen), None
+
+    from pymoo.core.termination import Termination
+    from pymoo.termination.collection import TerminationCollection
+    from pymoo.termination.ftol import MultiObjectiveSpaceTermination
+    from pymoo.termination.max_gen import MaximumGenerationTermination
+    from pymoo.termination.robust import RobustTermination
+
+    class _MinGenerationTermination(Termination):
+        def __init__(self, termination, minimum: int) -> None:
+            super().__init__()
+            self.termination = termination
+            self.minimum = max(1, int(minimum))
+
+        def _update(self, algorithm):
+            progress = self.termination.update(algorithm)
+            return 0.0 if algorithm.n_gen < self.minimum else progress
+
+    ftol = float(early_stop.get("ftol", 0.0025))
+    if ftol <= 0.0:
+        raise ValueError("optimization.early_stop.ftol must be greater than zero")
+    period = max(1, int(early_stop.get("period", 10)))
+    n_skip = max(0, int(early_stop.get("n_skip", 0)))
+    min_gen = max(1, int(early_stop.get("min_gen", min(20, n_gen))))
+    only_feasible = bool(early_stop.get("only_feasible", True))
+    objective_stop = RobustTermination(
+        MultiObjectiveSpaceTermination(tol=ftol, only_feas=only_feasible, n_skip=n_skip),
+        period=period,
+    )
+    metadata = {
+        "n_gen_cap": int(n_gen),
+        "ftol": ftol,
+        "period": period,
+        "n_skip": n_skip,
+        "min_gen": min_gen,
+        "only_feasible": only_feasible,
+    }
+    return (
+        TerminationCollection(
+            MaximumGenerationTermination(n_gen),
+            _MinGenerationTermination(objective_stop, minimum=min_gen),
+        ),
+        metadata,
+    )
 
 
 def optimize_system_multi_objective(
@@ -917,13 +1330,17 @@ def optimize_system_multi_objective(
     n_offsprings: int | None = None,
     seed: int = 1,
     verbose: bool = False,
+    n_procs: int = 1,
 ) -> OptimizationResult:
     """Run NSGA-II multi-objective PV/battery sizing.
 
     This is the public wrapper around :class:`SolarDesignProblem`. It optimizes
     module count, battery capacity, tilt, and optionally azimuth. Objectives are
-    grid independence, NPV, and ZEB ratio. Install ``breos[optimization]`` to
-    provide the pymoo dependency.
+    By default, objectives are annual grid independence, NPV, and ZEB ratio.
+    With ``optimization.objective_basis = "projected"``, objectives are
+    lifetime grid independence and NPV; ZEB remains a diagnostic unless
+    ``constraints.enforce_zeb`` enables it as a feasibility constraint.
+    Install ``breos[optimization]`` to provide the pymoo dependency.
 
     Args:
         tmy_data: One-year weather DataFrame.
@@ -938,11 +1355,13 @@ def optimize_system_multi_objective(
             algorithm default when ``None``.
         seed: Random seed passed to pymoo.
         verbose: Print pymoo progress.
+        n_procs: Candidate-evaluation worker processes. The default ``1``
+            preserves serial behavior.
 
     Returns:
         :class:`OptimizationResult` whose ``details["pareto"]`` is a DataFrame
-        with ``Modules``, ``Battery_kWh``, ``Tilt``, ``Azimuth``,
-        ``Grid_Independence_%``, ``NPV_Eur``, and ``ZEB_Ratio``.
+        with ``Modules``, ``Battery_kWh``, ``Tilt``, ``Azimuth``, objective
+        values, ZEB diagnostics, and explicit steady-state/projected fields.
 
     Raises:
         ImportError: If pymoo is not installed.
@@ -975,14 +1394,46 @@ def optimize_system_multi_objective(
     if n_offsprings is not None:
         algorithm_kwargs["n_offsprings"] = n_offsprings
 
-    problem = SolarDesignProblem(tmy_data, houseload, config, results_dir)
-    result = minimize(
-        problem,
-        NSGA2(**algorithm_kwargs),
-        ("n_gen", n_gen),
-        seed=seed,
-        verbose=verbose,
+    if isinstance(n_procs, bool) or int(n_procs) < 1:
+        raise ValueError("n_procs must be a positive integer")
+    n_procs = int(n_procs)
+
+    pool = None
+    elementwise_runner = None
+    if n_procs > 1:
+        from multiprocessing import Pool
+
+        try:
+            from pymoo.parallelization import StarmapParallelization
+        except ImportError:  # pymoo 0.6.1 compatibility
+            from pymoo.core.problem import StarmapParallelization
+
+        pool = Pool(n_procs)
+        elementwise_runner = StarmapParallelization(pool.starmap)
+
+    problem = SolarDesignProblem(
+        tmy_data,
+        houseload,
+        config,
+        results_dir,
+        elementwise_runner=elementwise_runner,
     )
+    termination, early_stop_metadata = _build_multi_objective_termination(
+        n_gen,
+        (config.get("optimization") or {}).get("early_stop"),
+    )
+    try:
+        result = minimize(
+            problem,
+            NSGA2(**algorithm_kwargs),
+            termination,
+            seed=seed,
+            verbose=verbose,
+        )
+    finally:
+        if pool is not None:
+            pool.close()
+            pool.join()
 
     if result.X is None or result.F is None:
         raise RuntimeError("Multi-objective optimization found no feasible solutions.")
@@ -1000,9 +1451,36 @@ def optimize_system_multi_objective(
     pareto["Battery_kWh"] = pareto["Battery_kWh"].round().astype(float)
     pareto["Grid_Independence_%"] = (1 - f[:, 0]) * 100
     pareto["NPV_Eur"] = -f[:, 1]
-    pareto["ZEB_Ratio"] = -f[:, 2]
+    if problem.projected_objectives:
+        diagnostic_rows: list[Dict[str, Any]] = []
+        for candidate in x:
+            diagnostics: Dict[str, Any] = {}
+            problem._evaluate(candidate.copy(), diagnostics)
+            diagnostic_rows.append(
+                {
+                    key: value
+                    for key, value in diagnostics.items()
+                    if key.startswith("SteadyState_")
+                    or key.startswith("Projected_")
+                    or key.startswith("Objective_")
+                    or key == "ZEB_Ratio"
+                }
+            )
+        diagnostics_df = pd.DataFrame(diagnostic_rows)
+        for column in diagnostics_df.columns:
+            pareto[column] = diagnostics_df[column].to_numpy()
+        pareto["Grid_Independence_%"] = pareto["Projected_Grid_Independence_%"]
+        pareto["NPV_Eur"] = pareto["Projected_NPV_Eur"]
+        pareto["ZEB_Ratio"] = pareto["Projected_ZEB_Ratio"]
+    else:
+        pareto["ZEB_Ratio"] = -f[:, 2]
+        pareto["Objective_Grid_Independence_%"] = pareto["Grid_Independence_%"]
+        pareto["Objective_NPV_Eur"] = pareto["NPV_Eur"]
+        pareto["Objective_ZEB_Ratio"] = pareto["ZEB_Ratio"]
 
-    actual_generations = int(getattr(result.algorithm, "n_gen", n_gen))
+    # pymoo advances the counter after its termination update. Report the last
+    # completed generation, matching the research workflow's saved metadata.
+    actual_generations = max(0, int(getattr(result.algorithm, "n_gen", n_gen + 1)) - 1)
     return OptimizationResult(
         optimal_value=float("nan"),
         objective_value=float("nan"),
@@ -1011,6 +1489,14 @@ def optimize_system_multi_objective(
             "pareto": pareto,
             "pymoo_result": result,
             "problem": problem,
+            "objective_basis": problem.objective_basis,
+            "objective_names": (
+                ["Projected_Grid_Independence_%", "Projected_NPV_Eur"]
+                if problem.projected_objectives
+                else ["SteadyState_Grid_Independence_%", "SteadyState_NPV_Eur", "SteadyState_ZEB_Ratio"]
+            ),
+            "early_stop": early_stop_metadata,
+            "n_procs": n_procs,
             "battery_replacement_treatment": problem.battery_replacement_treatment,
         },
     )

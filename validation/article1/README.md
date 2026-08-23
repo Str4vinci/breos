@@ -1,0 +1,111 @@
+# Article 1 projected-optimization reproduction
+
+This report compares four archived Article 1 Pareto candidates with the
+corrected projected optimizer prepared for the BREOS 0.5.3 release line. The
+new results deliberately do not reproduce known errors in the research run.
+
+## Provenance
+
+- Archived run: `dev/results/a1_july_rerun_tuxedo/moo_15min` in the private
+  research repository.
+- Research revision: `a0db6aae1e8d04a8260f51a34543b23bd82a1762`.
+- Archived Pareto SHA-256:
+  `5334b8361b2395f0f19b6839005964b0b61bfa0d00e5ea28f450cfb4cde0a225`.
+- Archived weather SHA-256:
+  `d2258dc7ea0d6432a6ddf69f748e67e88a36b235a906d5c6ab7da96e8e6911e0`.
+- Public BREOS base revision:
+  `8fd1f21c4f1335350d87f91d76246b3fd1184f6d` (`origin/develop`).
+- Reproduction config SHA-256:
+  `675244c823f4f6dd4947efa359266ad7b1508b1a12d85218954b1c09fc3ce32e`.
+- Bundled weather SHA-256 (compressed):
+  `bf84e31b02ad9bf39f331a5ce8629b1ea8f80cd1597748e72a87a0fce56b4f15`.
+- Bundled weather SHA-256 (uncompressed):
+  `79af3f5edbf5040409506178b17e25a48ce1c426cb8eaff51991afb6e1199126`.
+- External E-REDES RLP SHA-256:
+  `23becc5a7bfc927b1f7604156e0e4953dcc6bb65268ca947b38db3dc4f2b28bc`.
+
+The E-REDES profile is not redistributed. Pass the directory containing the
+licensed file to the reproduction command. `reproduction.json` records the
+fully resolved config, command line, Python and BREOS versions, exact source
+revision, dirty-worktree flag, and all input hashes for every run.
+
+The nested optimizer config lives here as
+[`article1-projected-optimization.toml`](article1-projected-optimization.toml).
+It is not an App/`breos run` config; `tools/reproduce_article1.py` is its public
+entrypoint.
+
+## Fixed candidates
+
+| Candidate | Design (modules, battery, tilt, azimuth) | Archived GI | BREOS GI | Archived NPV | BREOS NPV |
+| --- | --- | ---: | ---: | ---: | ---: |
+| C1 | 6, 0 kWh, 30°, 190° | 41.056152% | 40.688173% | €5,424.43 | €5,374.16 |
+| C2 | 9, 5 kWh, 25°, 185° | 64.768329% | 63.885473% | €3,779.25 | €3,621.66 |
+| C3 | 9, 9 kWh, 35°, 190° | 78.683166% | 77.600575% | €2,642.02 | €2,456.26 |
+| C4 | 9, 20 kWh, 45°, 175° | 89.390357% | 88.749742% | −€5,094.04 | −€5,263.66 |
+
+[`fixed-candidate-comparison.csv`](fixed-candidate-comparison.csv) contains
+the full-precision values and absolute and relative differences.
+
+A two-process NSGA-II smoke run completed one generation with four evaluated
+candidates. Its output used exactly two objectives (`Projected_Grid_Independence_%`
+and `Projected_NPV_Eur`), retained projected ZEB only as a diagnostic, and
+produced Pareto CSV SHA-256
+`e458780b84d477bda5ed726dfdcb7b87a7a357bf0c97a54d6443126a98674645`.
+
+## Why the results differ
+
+The archived run has a resolution error. Its TMY loader returned 8,760 hourly
+rows even when the optimization requested a 15-minute resolution. The PV
+calculation then constructed a 15-minute index and selected the nearest hourly
+irradiance value at every step. For C1, this repetition produces 4,943.362 kWh
+after a flat 96% inverter efficiency, which matches the archived 4,943.364 kWh.
+
+The Article 1 reproduction uses clear-sky-aware interpolation and then
+renormalizes each source hour's four GHI, DNI, and DHI values so their mean
+equals the original hourly value. This preserves the source irradiance energy
+while improving intra-hour solar shape. The energy-conserving option is
+explicit and leaves the established BREOS resampling default unchanged.
+
+BREOS uses the corrected explicit AC dispatch ledger. A finite inverter
+rating applies the PVWatts part-load curve and clipping instead of an unbounded
+flat 96% conversion. For C1, the first-year result is 5,182.097 kWh DC and
+4,962.091 kWh usable AC, including 215.926 kWh conversion loss and 4.080 kWh
+curtailed DC. Battery candidates additionally carry stored energy,
+PV-origin energy, degradation state, and resistance growth across years.
+
+The outer archived MOO provenance records `other_cost_per_module = 50`, but
+the projection template that actually scored candidates resolved to €30 per
+module. The public reproduction uses €30, matching the archived candidate
+CAPEX (for example, €2,820.1968 for C1). This is an archived provenance defect,
+not a reason to alter the current cost engine.
+
+The bundled public TMY is a normalized, rounded form of the archived PVGIS
+file and therefore has a different digest. Repeating C1 with the exact archived
+weather changes the result by only +0.0145 percentage points GI and about
++€2.40 NPV. It does not explain the archived discrepancy.
+
+## Commands
+
+Run all fixed candidates:
+
+```bash
+uv run python tools/reproduce_article1.py \
+  --rlp-directory /path/to/licensed/rlp \
+  --output results/article1
+```
+
+Run the exact NSGA-II settings after reviewing the fixed-candidate comparison:
+
+```bash
+uv run python tools/reproduce_article1.py \
+  --rlp-directory /path/to/licensed/rlp \
+  --full-optimization \
+  --output results/article1
+```
+
+Run the opt-in numerical regression locally:
+
+```bash
+BREOS_ARTICLE1_RLP_DIRECTORY=/path/to/licensed/rlp \
+  uv run pytest -q tests/test_article1_reproduction.py
+```

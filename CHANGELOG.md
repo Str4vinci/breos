@@ -4,6 +4,22 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 
 ## [Unreleased]
 
+### Added
+- Added an opt-in projected multi-objective optimizer that evaluates each
+  candidate over a repeated-TMY project lifetime, carries battery degradation
+  and physical state between years, records actual replacements, and optimizes
+  lifetime grid independence and NPV. Existing annual three-objective behavior
+  remains the default; projected ZEB is a diagnostic or optional feasibility
+  constraint, not a third objective.
+- Added a version-controlled Article 1 configuration, deterministic
+  fixed-candidate reproduction command, opt-in licensed-profile regression,
+  and comparison report. The report preserves the archived values while
+  explaining corrected drift from the original hourly-to-15-minute weather
+  handling and AC dispatch methodology.
+- Added opt-in hourly-energy conservation to `resample_to_15min`. It preserves
+  each source hour's GHI, DNI, and DHI energy after clear-sky interpolation;
+  the established resampling output remains the default.
+
 ## [0.5.2] - 2026-08-19
 
 ### Added
