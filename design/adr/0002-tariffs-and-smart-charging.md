@@ -1,6 +1,6 @@
 # 0002 — Tariffs are resolved values; smart charging is an instruction layer
 
-- **Status:** Accepted for 0.6.x implementation
+- **Status:** Accepted for 0.7.x implementation
 - **Date:** 2026-08-20
 
 ## Context
@@ -72,14 +72,14 @@ The exact keys have these meanings:
 - `schedule` is a versioned bundled schedule identifier. It contains civil-time
   period rules and regulatory provenance, never supplier prices.
 - `currency` is an uppercase supported ISO 4217 code shared by energy prices,
-  fixed charges, CAPEX, OPEX, and replacement costs. 0.6.0 initially enables
+  fixed charges, CAPEX, OPEX, and replacement costs. 0.7.0 initially enables
   EUR; adding a currency requires a complete same-currency cost catalog or
   explicit user costs. BREOS does not convert currencies or fetch FX rates.
 - `import_prices` and `export_prices` map period labels to non-negative values
   per kWh. `all` is an explicit fallback for every schedule period; missing
   used periods otherwise fail validation.
 - `fixed_charge_per_day` is a non-negative charge in the declared currency.
-- `boundary_policy` is `strict` in 0.6.0. A schedule containing boundaries that
+- `boundary_policy` is `strict` in 0.7.0. A schedule containing boundaries that
   the simulation resolution cannot represent is rejected. Approximation may be
   added later only as an explicit policy recorded in provenance.
 
@@ -208,7 +208,7 @@ use the schema version to detect the additive origin and valuation fields.
 ## Implementation gates
 
 Implementation follows the delivery sequence in
-`design/architecture/0.6x-phd-porting-plan.md`. In particular:
+`design/architecture/0.7x-phd-porting-plan.md`. In particular:
 
 1. tariff resolution and valuation land before dispatch changes;
 2. no-op instruction parity covers native and BLAST degradation;

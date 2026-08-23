@@ -6,13 +6,18 @@ plans behind individual items.
 
 ## Next releases
 
-- **0.6.0** — currency concept; time-of-use tariff valuation with static
-  per-country presets; opt-in fixed-target smart charging. Flat pricing and
-  greedy self-consumption stay the compatible defaults. See
-  [design/architecture/0.6x-phd-porting-plan.md](design/architecture/0.6x-phd-porting-plan.md).
-- **0.6.x / 0.7.0** — economic scenario and sensitivity analysis (sensitivity,
-  scenarios, switching values, probabilistic), then price-aware dispatch as an
-  opt-in strategy.
+- **0.6.0** — projected-lifetime PV-battery optimization, detailed fixed-design
+  source tables, reproducible historical-weather Monte Carlo, and the planned
+  0.5.x deprecation removals. Annual optimization remains the compatible
+  default. See
+  [design/architecture/0.6x-projected-optimization-plan.md](design/architecture/0.6x-projected-optimization-plan.md).
+- **0.7.0** — currency concept; time-of-use tariff valuation with static,
+  provenance-bound schedules; opt-in fixed-target smart charging. Flat pricing
+  and greedy self-consumption stay the compatible defaults. See
+  [design/architecture/0.7x-phd-porting-plan.md](design/architecture/0.7x-phd-porting-plan.md).
+- **0.7.x** — economic scenario and sensitivity analysis (scenarios,
+  switching values, and probabilistic inputs), then broader price-aware
+  dispatch strategies.
 - **1.0** — flip to the recommended model defaults with a documented upgrade
   note.
 
