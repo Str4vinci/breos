@@ -249,25 +249,24 @@ def test_montecarlo_carries_battery_and_pv_origin_inventory_between_years(tmp_pa
     import breos.montecarlo as mc_module
 
     weather = _write_multiyear_weather(tmp_path / "multi.csv", years=(2021,))
-    original = mc_module.simulate_energy_balance
+    original = mc_module.simulate_energy_balance_summary
     calls = []
 
     def _capture(*args, **kwargs):
         output = original(*args, **kwargs)
-        results = output[0]
         calls.append(
             {
                 "initial_energy_wh": kwargs.get("initial_energy_wh"),
                 "initial_pv_origin_energy_wh": kwargs.get("initial_pv_origin_energy_wh"),
-                "ending_energy_wh": float(results["Battery_Energy_End"].iloc[-1]),
-                "ending_pv_origin_energy_wh": float(results["Battery_PV_Origin_Energy_End"].iloc[-1]),
-                "beginning_energy_wh": float(results["Battery_Energy_Beginning"].iloc[0]),
-                "beginning_pv_origin_energy_wh": float(results["Battery_PV_Origin_Energy_Beginning"].iloc[0]),
+                "ending_energy_wh": output.carried_energy_wh,
+                "ending_pv_origin_energy_wh": output.carried_pv_origin_energy_wh,
+                "beginning_energy_wh": output.opening_energy_wh,
+                "beginning_pv_origin_energy_wh": output.opening_pv_origin_energy_wh,
             }
         )
         return output
 
-    monkeypatch.setattr(mc_module, "simulate_energy_balance", _capture)
+    monkeypatch.setattr(mc_module, "simulate_energy_balance_summary", _capture)
     settings = MonteCarloSettings(weather_file=str(weather), n_runs=1, years_per_run=2, seed=0)
     result = run_montecarlo(_base_config(), settings)
 

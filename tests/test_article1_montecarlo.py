@@ -19,7 +19,7 @@ def test_article1_montecarlo_config_pins_manuscript_method():
         "target_year": 2025,
         "weather_start_year": 2005,
         "weather_end_year": 2023,
-        "seed": 1,
+        "seed": 42,
         "min_load_scale": 0.95,
         "max_load_scale": 1.05,
         "preserve_irradiance_energy": True,
@@ -42,9 +42,9 @@ def test_article1_montecarlo_config_pins_manuscript_method():
     assert module["area_m2"] == 1.134 * 2.278
 
 
-def test_article1_montecarlo_cli_overrides_only_runtime_size_and_workers():
+def test_article1_montecarlo_cli_overrides_only_runtime_size_workers_and_backend():
     config = tomllib.loads(DEFAULT_CONFIG.read_text())
-    args = argparse.Namespace(weather_file="historical.csv", runs=25, n_procs=4)
+    args = argparse.Namespace(weather_file="historical.csv", runs=25, n_procs=4, execution_backend=None)
 
     settings = _settings(config, args)
 
@@ -55,6 +55,22 @@ def test_article1_montecarlo_cli_overrides_only_runtime_size_and_workers():
     assert settings.collect_yearly is True
     assert settings.weather_start_year == 2005
     assert settings.weather_end_year == 2023
+    # The manuscript configuration pins no backend, so the reference path is
+    # what runs unless a run explicitly asks for the accelerator.
+    assert settings.execution_backend == "python"
+
+
+def test_article1_montecarlo_backend_is_overridable_without_touching_the_config():
+    config = tomllib.loads(DEFAULT_CONFIG.read_text())
+    assert "execution_backend" not in config["montecarlo"]
+    args = argparse.Namespace(weather_file="historical.csv", runs=None, n_procs=None, execution_backend="numba")
+
+    settings = _settings(config, args)
+
+    assert settings.execution_backend == "numba"
+    # Every other input still comes from the pinned configuration.
+    assert settings.n_runs == config["montecarlo"]["n_runs"]
+    assert settings.seed == config["montecarlo"]["seed"]
 
 
 def test_article1_montecarlo_case_selection_is_explicit():

@@ -53,8 +53,21 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   `"python"` remains the default and the numerical reference. Provenance
   records the resolved backend, whether the JIT cache was warm or cold for
   the run, and the installed Numba and llvmlite versions.
+- Added `breos --execution-backend` to the `montecarlo` command and to the
+  Article 1 reproduction tool, so a run can select the accelerator without
+  editing the pinned manuscript configuration.
+- Added Monte Carlo yearly diagnostics needed to compare execution paths field
+  by field: separate direct-PV and battery inverter losses, charge and
+  discharge input and losses, standby loss, capacity-window loss, replacement
+  energy removed and added, carried battery and PV-origin energy, and the
+  within-year timestep indices at which the pack was replaced.
 
 ### Changed
+- `remap_datetime_index_years` now shifts tz-naive and fixed-offset indices
+  without a Python-level pass over the index, about 43x faster on a 15-minute
+  year. Indices under a zone that can have offset transitions keep the
+  element-wise path, which remains the authority; the fast path is bit-exact
+  where it applies.
 - Updated the Suntech STP550S-C72/Vmh catalogue temperature coefficients to
   the matching monofacial datasheet values of -0.34 %/°C for maximum power and
   -0.26 %/°C for open-circuit voltage. The Article configurations also record

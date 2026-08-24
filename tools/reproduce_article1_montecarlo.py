@@ -106,6 +106,9 @@ def _settings(config: dict, args: argparse.Namespace) -> MonteCarloSettings:
         preserve_irradiance_energy=bool(values["preserve_irradiance_energy"]),
         collect_yearly=bool(values["collect_yearly"]),
         n_procs=int(args.n_procs if args.n_procs is not None else values["n_procs"]),
+        execution_backend=str(
+            args.execution_backend if args.execution_backend is not None else values.get("execution_backend", "python")
+        ),
     )
 
 
@@ -136,6 +139,14 @@ def main() -> int:
     parser.add_argument("--calendar-model", help="Override the configured native calendar-degradation model")
     parser.add_argument("--runs", type=int, help="Override the configured number of trajectories")
     parser.add_argument("--n-procs", type=int, help="Worker processes for independent trajectories")
+    parser.add_argument(
+        "--execution-backend",
+        choices=("python", "numba"),
+        help=(
+            "Within-day dispatch implementation. Defaults to the configured value, or 'python'. "
+            "'numba' requires the breos[fast] extra and is recorded in the run provenance."
+        ),
+    )
     parser.add_argument("--validate-only", action="store_true", help="Validate selected cases without simulation")
     parser.add_argument("--output", type=Path, default=PROJECT_ROOT / "results/article1-montecarlo")
     args = parser.parse_args()
