@@ -40,6 +40,19 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 - Added opt-in hourly-energy conservation to `resample_to_15min`. It preserves
   each source hour's GHI, DNI, and DHI energy after clear-sky interpolation;
   energy conservation remains opt-in for general runs.
+- Added a summary-only simulation path that returns annual energy totals,
+  grid independence, degradation state, replacements, carried battery and
+  PV-origin energy, and temperature diagnostics without materialising a
+  per-timestep results frame. Monte Carlo runs through it.
+- Added an optional Numba dispatch backend for Monte Carlo, selected with
+  `[montecarlo].execution_backend = "numba"` and installed with
+  `pip install "breos[fast]"`. It compiles one day of dispatch at a time at
+  fixed state of health and resistance; rainflow counting, degradation,
+  resistance growth, and replacement stay in the Python reference path.
+  Selecting it without Numba installed fails before any trajectory starts.
+  `"python"` remains the default and the numerical reference. Provenance
+  records the resolved backend, whether the JIT cache was warm or cold for
+  the run, and the installed Numba and llvmlite versions.
 
 ### Changed
 - Updated the Suntech STP550S-C72/Vmh catalogue temperature coefficients to
@@ -55,6 +68,10 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   compatibility.
 - The Article configurations now pin a fixed 25 °C battery temperature and
   disable indoor remapping, matching the manuscript methodology.
+- Withdrew the announced 0.6.0 removal of the `breos[fast]` extra. The extra
+  is retained and undeprecated because it now installs the dependency for the
+  optional Monte Carlo dispatch backend. The separate removal of the
+  approximate `breos.numba_kernels` screening module proceeds as announced.
 
 ### Fixed
 - Kept Article 1 PV module geometry metadata out of the strict BREOS runtime
@@ -126,7 +143,8 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 ### Deprecated
 - Deprecated the unused `breos.numba_kernels` module and `breos[fast]` extra;
   the standalone approximate kernels are not used by `App` or the supported
-  simulation path and are scheduled for removal in 0.6.0.
+  simulation path and are scheduled for removal in 0.6.0. The `breos[fast]`
+  part of this announcement was later withdrawn; see Unreleased.
 - Deprecated the article-scoped, documentation-derived Wöhler/Miner comparison
   subsystem, its three plots, and its comparison-only constants for removal in
   0.6.0. Despite legacy API names, this is an independent BREOS approximation,

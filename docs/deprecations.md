@@ -3,21 +3,37 @@
 BREOS 0.5.2 keeps the APIs below working. Deprecated callables emit a
 `DeprecationWarning` when called, `PolysunDegradationConfig` warns when
 instantiated, and directly importing `breos.numba_kernels` warns. The
-`breos[fast]` extra and comparison-only constants cannot warn on use and are
-announced here and in the changelog. All are scheduled for removal in BREOS
-0.6.0. Python hides `DeprecationWarning` by default; run tests with `-W default`
-or `-W error::DeprecationWarning` to find calls before upgrading.
+comparison-only constants cannot warn on use and are announced here and in the
+changelog. All are scheduled for removal in BREOS 0.6.0. Python hides
+`DeprecationWarning` by default; run tests with `-W default` or
+`-W error::DeprecationWarning` to find calls before upgrading.
+
+The `breos[fast]` extra was also announced for removal in 0.6.0. That
+announcement is withdrawn: the extra is retained and is no longer deprecated.
+See [Accelerated screening kernels](#accelerated-screening-kernels) below.
 
 The {py:class}`~breos.App` facade and its configuration are unaffected.
 
 ## Accelerated screening kernels
 
-`breos.numba_kernels` and the `breos[fast]` optional extra are deprecated.
-These approximate standalone kernels are not called by `App` or by
+`breos.numba_kernels` is deprecated and is removed in 0.6.0. These approximate
+standalone kernels are not called by `App` or by
 {py:func}`breos.battery.simulate_energy_balance`, and their degradation and
 dispatch behavior does not match the reference simulation. Use
 {py:func}`breos.battery.simulate_energy_balance` for supported results. There
 is no supported accelerated replacement in 0.5.x.
+
+**The `breos[fast]` extra is retained.** Its earlier deprecation is withdrawn.
+In 0.6.0 the extra installs the optional dependency for a new private daily
+dispatch kernel that Monte Carlo can select with
+`[montecarlo].execution_backend = "numba"`. Unlike the removed screening
+kernels, that kernel carries the production BREOS dispatch and ledger and
+leaves rainflow counting, degradation, resistance growth, and replacement in
+Python. It is private (`breos._numba_dispatch`) and has no public API surface;
+select it through configuration, not by importing it.
+
+BREOS remains fully functional without Numba. The Python path stays the
+default and the numerical reference.
 
 ## Polysun comparison baseline
 
