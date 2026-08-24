@@ -71,6 +71,60 @@ def test_article1_bundle_accepts_unaffected_ancestor_outputs(tmp_path, monkeypat
     assert audit.source_commits == {"old", "new"}
 
 
+def test_article1_bundle_accepts_reports_with_compatible_dependency_subsets(tmp_path, monkeypatch):
+    audit = BundleAudit(tmp_path)
+    audit.reports = [
+        (
+            tmp_path / "base-v1/reproduction.json",
+            {
+                "breos_source": {"commit": "old"},
+                "dependency_versions": {"numpy": "1", "pymoo": "2"},
+            },
+        ),
+        (
+            tmp_path / "orientation/provenance.json",
+            {
+                "breos_source": {"commit": "new"},
+                "dependency_versions": {"numpy": "1"},
+            },
+        ),
+    ]
+    monkeypatch.setattr(audit, "_is_ancestor", lambda commit, target: True)
+    monkeypatch.setattr(audit, "_numerical_source_changed", lambda commit, target: False)
+    monkeypatch.setattr(audit, "_source_object", lambda commit, path: f"same:{path}")
+
+    audit._verify_source_compatibility({"breos_source": {"commit": "new"}})
+
+    assert audit.errors == []
+
+
+def test_article1_bundle_rejects_conflicting_dependency_versions(tmp_path, monkeypatch):
+    audit = BundleAudit(tmp_path)
+    audit.reports = [
+        (
+            tmp_path / "base-v1/reproduction.json",
+            {
+                "breos_source": {"commit": "old"},
+                "dependency_versions": {"numpy": "1"},
+            },
+        ),
+        (
+            tmp_path / "orientation/provenance.json",
+            {
+                "breos_source": {"commit": "new"},
+                "dependency_versions": {"numpy": "2"},
+            },
+        ),
+    ]
+    monkeypatch.setattr(audit, "_is_ancestor", lambda commit, target: True)
+    monkeypatch.setattr(audit, "_numerical_source_changed", lambda commit, target: False)
+    monkeypatch.setattr(audit, "_source_object", lambda commit, path: f"same:{path}")
+
+    audit._verify_source_compatibility({"breos_source": {"commit": "new"}})
+
+    assert any("conflicting dependency versions" in error for error in audit.errors)
+
+
 def test_article1_bundle_rejects_changed_generator_for_ancestor_output(tmp_path, monkeypatch):
     audit = BundleAudit(tmp_path)
     audit.reports = [

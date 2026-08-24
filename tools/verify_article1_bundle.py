@@ -210,12 +210,14 @@ class BundleAudit:
                         f"source changed for {relative}: {source_path} differs between BREOS commits {commit} and {target}"
                     )
 
-        dependency_sets = {
-            json.dumps(payload.get("dependency_versions", {}), sort_keys=True)
-            for _path, payload in self.reports
-            if payload.get("dependency_versions")
+        dependency_versions: dict[str, set[str]] = {}
+        for _path, payload in self.reports:
+            for package, version in payload.get("dependency_versions", {}).items():
+                dependency_versions.setdefault(str(package), set()).add(str(version))
+        conflicts = {
+            package: sorted(versions) for package, versions in dependency_versions.items() if len(versions) > 1
         }
-        self.expect(len(dependency_sets) <= 1, "result bundle contains different numerical dependency versions")
+        self.expect(not conflicts, f"result bundle contains conflicting dependency versions: {conflicts}")
 
     def deterministic_report(
         self,
