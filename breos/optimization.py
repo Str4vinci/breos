@@ -24,7 +24,12 @@ from breos.economics import (
 )
 from breos.emissions import EmissionsParams
 from breos.execution import DEFAULT_EXECUTION_BACKEND, require_backend, validate_execution_backend
-from breos.solar import PVModuleParams, calculate_pv_production_dc, default_azimuth
+from breos.solar import (
+    _MODEL_OPTION_KEYS,
+    PVModuleParams,
+    calculate_pv_production_dc,
+    default_azimuth,
+)
 from breos.utils import get_hours_per_step
 
 
@@ -50,6 +55,18 @@ class ProjectedDesignResult:
     metrics: Dict[str, Any]
     yearly: pd.DataFrame
     financial: pd.DataFrame
+
+
+def _config_model_options(config: Dict[str, Any]) -> Dict[str, Any]:
+    """PV model options carried at the root of a projected config.
+
+    Absent keys are omitted so the PV model's own defaults still apply.
+    Forwarding these is what makes a configured transposition, solar-position
+    or IAM choice actually run in the optimization paths; without it the
+    options are validated and recorded in provenance while the simulation
+    silently keeps the defaults.
+    """
+    return {key: config[key] for key in _MODEL_OPTION_KEYS if key in config}
 
 
 def _serial_elementwise_runner(func: Callable[[Any], Any], args: list[Any]) -> list[Any]:
@@ -79,6 +96,7 @@ def optimize_tilt(
     weather_data: pd.DataFrame,
     location,
     n_modules: int,
+    model_options: Optional[Dict[str, Any]] = None,
     pv_params: Optional[PVModuleParams] = None,
     surface_azimuth: Optional[float] = None,
     tilt_range: Tuple[float, float] = (0.0, 60.0),
@@ -127,6 +145,7 @@ def optimize_tilt(
                 pv_params=pv_params,
                 freq=freq,
                 verbose=False,
+                **(model_options or {}),
             )
             total_production = dc_power.sum() * get_hours_per_step(freq) / 1000  # kWh (DC)
             results.append({"tilt": tilt, "production_kwh": total_production})
@@ -164,6 +183,7 @@ def optimize_tilt_brent(
     weather_data: pd.DataFrame,
     location,
     n_modules: int,
+    model_options: Optional[Dict[str, Any]] = None,
     pv_params: Optional[PVModuleParams] = None,
     surface_azimuth: Optional[float] = None,
     tilt_range: Tuple[float, float] = (0.0, 60.0),
@@ -207,6 +227,7 @@ def optimize_tilt_brent(
                 pv_params=pv_params,
                 freq=freq,
                 verbose=False,
+                **(model_options or {}),
             )
             # Negative kWh (DC) for minimization
             production = -dc_power.sum() * get_hours_per_step(freq) / 1000
@@ -938,6 +959,7 @@ def evaluate_projected_design(
         pv_params=pv_params,
         freq=freq,
         verbose=False,
+        **_config_model_options(config),
     )
     temperature_series = _temperature_series_from_config(
         battery.get("temperature", "weather"),
@@ -1172,6 +1194,8 @@ try:
             self.max_tilt_deg = _resolve_max_tilt_deg(self.constraints, self.location["latitude"])
             self.enforce_zeb = bool(self.constraints.get("enforce_zeb", False))
             self.freq = config.get("simulation", {}).get("resolution", "h")
+            # Resolved once: candidate scoring is the hottest loop here.
+            self.model_options = _config_model_options(config)
             self.opt_cfg = config.get("optimization", {}) or {}
             self.objective_basis = str(self.opt_cfg.get("objective_basis", "steady_state")).strip().lower()
             if self.objective_basis not in {"steady_state", "projected"}:
@@ -1291,6 +1315,7 @@ try:
                 pv_params=pv_params,
                 freq=self.freq,
                 verbose=False,
+                **self.model_options,
             )
 
             # Load alignment (timezone- and DST-aware year remapping) happens
