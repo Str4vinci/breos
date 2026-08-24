@@ -334,10 +334,13 @@ class BundleAudit:
         self.expect(
             config.get("battery", {}).get("calendar_model") == calendar_model, f"wrong calendar model: {relative}"
         )
-        self.expect(config.get("battery", {}).get("temperature") == 25.0, f"wrong battery temperature: {relative}")
         self.expect(
-            config.get("battery", {}).get("indoor_model") == {"enabled": False},
-            f"battery indoor remapping is not disabled: {relative}",
+            config.get("battery", {}).get("temperature") == "weather",
+            f"battery temperature is not weather-driven: {relative}",
+        )
+        self.expect(
+            config.get("battery", {}).get("indoor_model") == {"enabled": True},
+            f"battery indoor buffering is not enabled: {relative}",
         )
         self.expect(
             config.get("optimization", {}).get("objective_basis") == "projected", f"wrong objectives: {relative}"
@@ -431,10 +434,13 @@ class BundleAudit:
                 self.expect(settings.get("seed") == 42, f"wrong Monte Carlo seed: {case}")
                 self.expect(settings.get("load_distribution") == "uniform", f"wrong load distribution: {case}")
                 config = payload.get("resolved_config", {})
-                self.expect(config.get("battery_temperature") == 25.0, f"wrong battery temperature: {case}")
                 self.expect(
-                    config.get("battery_indoor_model") == {"enabled": False},
-                    f"battery indoor remapping is not disabled: {case}",
+                    config.get("battery_temperature") == "weather",
+                    f"battery temperature is not weather-driven: {case}",
+                )
+                self.expect(
+                    config.get("battery_indoor_model") == {"enabled": True},
+                    f"battery indoor buffering is not enabled: {case}",
                 )
 
         self._verify_source_compatibility(manifest)
