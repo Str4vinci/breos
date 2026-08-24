@@ -10,6 +10,7 @@ a larger PV-plus-battery system.
 from __future__ import annotations
 
 import sys
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -65,13 +66,20 @@ def config(n_modules: int, battery_kwh: float) -> dict:
     }
 
 
-def dump(path: str, backend: str, weather: str) -> None:
+def dump(path: str, backend: str, weather: str, n_procs: int = 1) -> None:
+    """Dump every numeric Monte Carlo output for one backend.
+
+    ``n_procs`` is part of the parity claim, not just a speed knob: the pooled
+    path seeds and aggregates in workers, so a study that matches serially can
+    still diverge when pooled. Both are compared.
+    """
     from breos.montecarlo import MonteCarloSettings, run_montecarlo
 
     payload: dict[str, np.ndarray] = {}
     for case, (n_modules, battery_kwh) in CASES.items():
         kwargs = dict(
             weather_file=weather,
+            n_procs=n_procs,
             n_runs=6,
             years_per_run=4,
             seed=20260824,
@@ -102,4 +110,7 @@ def dump(path: str, backend: str, weather: str) -> None:
 
 if __name__ == "__main__":
     out, backend, weather = sys.argv[1], sys.argv[2], sys.argv[3]
-    dump(out, backend, weather)
+    procs = int(sys.argv[4]) if len(sys.argv) > 4 else 1
+    if not Path(weather).exists():
+        write_weather(weather)
+    dump(out, backend, weather, procs)
