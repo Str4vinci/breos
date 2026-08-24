@@ -287,6 +287,16 @@ def run_app_simulation(
     deps: AppRuntimeDependencies,
 ) -> SimulationArtifacts:
     """Run the weather/PV/load/battery/economics simulation pipeline."""
+    # Resolve the backend before anything is fetched or computed. Input
+    # preparation can hit the network for weather, so a missing optional
+    # dependency should be reported now rather than after a download.
+    # resolve_app_config always supplies this; the default covers direct
+    # callers that build a cfg dict themselves, and it is the reference
+    # implementation rather than the fast one.
+    execution_backend = cfg.get("execution_backend", DEFAULT_EXECUTION_BACKEND)
+    execution = backend_provenance(execution_backend)
+    jit_cache_states: list[str] = []
+
     inputs = prepare_simulation_inputs(cfg, resolved, deps)
 
     freq = cfg["resolution"]
@@ -296,16 +306,6 @@ def run_app_simulation(
     projection_years = cfg["projection_years"]
     degradation_rate = cfg["pv_degradation_rate"]
     hours_per_step = get_hours_per_step(freq)
-
-    # Resolve and record the backend before any year runs, so a missing
-    # optional dependency stops the run at the start rather than part-way
-    # through a twenty-year projection.
-    # resolve_app_config always supplies this; the default covers direct
-    # callers that build a cfg dict themselves, and it defaults to the
-    # reference implementation rather than the fast one.
-    execution_backend = cfg.get("execution_backend", DEFAULT_EXECUTION_BACKEND)
-    execution = backend_provenance(execution_backend)
-    jit_cache_states: list[str] = []
 
     replacement_cost = resolved.cost_params.battery_cost_per_kwh * battery_kwh
 

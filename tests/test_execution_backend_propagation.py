@@ -152,3 +152,107 @@ def test_article_tools_default_to_the_reference_backend():
         module = _load_tool(name)
         parser_source = inspect.getsource(module.main)
         assert "--execution-backend" in parser_source, f"{name} does not expose the backend"
+
+
+def test_missing_numba_is_reported_before_app_prepares_inputs(monkeypatch):
+    """The dependency check must precede input preparation, which can hit the network.
+
+    Downloading a year of weather and then failing on a missing import wastes
+    the expensive step to report the cheap problem.
+    """
+    from breos import _numba_dispatch
+    from breos.runners import app as app_runner
+
+    monkeypatch.setattr(_numba_dispatch, "numba_available", lambda: False)
+
+    def _must_not_run(*args, **kwargs):
+        raise AssertionError("inputs were prepared before the backend was checked")
+
+    monkeypatch.setattr(app_runner, "prepare_simulation_inputs", _must_not_run)
+
+    with pytest.raises(_numba_dispatch.NumbaUnavailableError):
+        app_runner.run_app_simulation(
+            {**resolve_app_config({**BASE_CONFIG, "execution_backend": "numba"}).cfg},
+            resolve_app_config({**BASE_CONFIG, "execution_backend": "numba"}),
+            None,
+        )
+
+
+def test_missing_numba_is_reported_before_the_first_candidate(monkeypatch):
+    """optimize_battery_size checks at entry, not inside the size loop.
+
+    An empty size list proves the ordering: with the check inside the loop
+    there would be nothing to trip over, and the call would succeed.
+    """
+    from breos import _numba_dispatch, optimization
+
+    monkeypatch.setattr(_numba_dispatch, "numba_available", lambda: False)
+
+    with pytest.raises(_numba_dispatch.NumbaUnavailableError):
+        optimization.optimize_battery_size(
+            pv_dc=None,
+            houseload=None,
+            battery_sizes_wh=[],
+            execution_backend="numba",
+        )
+
+
+@pytest.mark.parametrize(
+    ("function", "expensive"),
+    [
+        ("evaluate_projected_design", "calculate_pv_production_dc("),
+        ("optimize_system_multi_objective", "Pool("),
+    ],
+)
+def test_dependency_check_precedes_the_expensive_step(function, expensive):
+    """Ordering inside these two is not observable without running them.
+
+    Both would need a full weather frame or a live worker pool to exercise, so
+    the check here is that the guard textually precedes the expensive call.
+    """
+    from breos import optimization
+
+    source = inspect.getsource(getattr(optimization, function))
+    assert "require_backend(execution_backend)" in source
+    assert source.index("require_backend(execution_backend)") < source.index(expensive), (
+        f"{function} does the expensive work before checking the backend"
+    )
+
+
+def test_numba_provenance_always_carries_a_cache_field():
+    """A driver that cannot observe its workers still records the field.
+
+    The deterministic Article report fans work out to subprocesses and has no
+    observations to aggregate. "unknown" is provenance; a missing key reads as
+    an oversight when the run that produced it took hours.
+    """
+    pytest.importorskip("numba", reason="the compiled backend needs the breos[fast] extra")
+
+    assert backend_provenance("numba")["jit_cache"] == "unknown"
+    assert backend_provenance("numba", jit_cache_states=["warm", "warm"])["jit_cache"] == "warm"
+    assert backend_provenance("numba", jit_cache_states=["warm", "cold"])["jit_cache"] == "cold"
+    assert "jit_cache" not in backend_provenance("python")
+
+
+def test_deterministic_article_report_records_the_cache_field():
+    """reproduce_article1.py writes backend_provenance straight into its report."""
+    module = _load_tool("reproduce_article1.py")
+    source = inspect.getsource(module.main)
+    assert '"execution": backend_provenance(args.execution_backend)' in source
+
+
+def test_app_assembled_outputs_are_identical_on_both_backends():
+    """The gate the timestep tests cannot provide.
+
+    Timestep parity compares the buffer matrix. It says nothing about the
+    yearly rollups, cost projection, LCOE, NPV, payback, monthly and financial
+    tables, degradation summary or PV loss waterfall that App assembles on top
+    -- all of which pass through economics and aggregation code the timestep
+    comparison never touches.
+    """
+    pytest.importorskip("numba", reason="the compiled backend needs the breos[fast] extra")
+    app_parity = _load_tool("parity/app_parity.py")
+
+    compared, differences = app_parity.compare_scenario("c2_balanced", app_parity.SCENARIOS["c2_balanced"])
+    assert not differences, "\n".join(differences)
+    assert compared > 400, f"only {compared} fields compared -- the gate is not covering the output"

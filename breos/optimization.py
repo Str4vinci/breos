@@ -254,6 +254,9 @@ def optimize_battery_size(
     Returns:
         OptimizationResult with optimal battery size
     """
+    # Before the first candidate, not inside the loop over battery sizes.
+    require_backend(execution_backend)
+
     results = []
 
     for size_wh in battery_sizes_wh:
@@ -900,6 +903,11 @@ def evaluate_projected_design(
     if float(battery_kwh) < 0.0:
         raise ValueError("battery_kwh must be non-negative")
 
+    # Before the PV production model runs, not after it. Computing a year of
+    # irradiance and then failing on a missing import wastes the expensive part
+    # and reports the cheap problem late.
+    require_backend(execution_backend)
+
     from pvlib.location import Location
 
     location = config["location"]
@@ -939,8 +947,6 @@ def evaluate_projected_design(
     )
     dc_ac_ratio = cost_params_from_config(config.get("costs"), financials).dc_ac_ratio
     inverter_ac_capacity_w = int(n_modules) * pv_params.Mpp / dc_ac_ratio if dc_ac_ratio > 0.0 else None
-    # Fail before the first projected year rather than inside it.
-    require_backend(execution_backend)
     raw_metrics = _evaluate_projected_design_metrics(
         execution_backend=execution_backend,
         base_dc_power=base_dc_power,
@@ -1581,6 +1587,11 @@ def optimize_system_multi_objective(
         raise ValueError("n_procs must be a positive integer")
     n_procs = int(n_procs)
 
+    # Before the worker pool exists. An NSGA-II run is long and a missing
+    # optional dependency should not surface as a traceback from inside a pool
+    # that then has to be torn down.
+    require_backend(execution_backend)
+
     pool = None
     elementwise_runner = None
     if n_procs > 1:
@@ -1594,10 +1605,6 @@ def optimize_system_multi_objective(
         pool = Pool(n_procs)
         elementwise_runner = StarmapParallelization(pool.starmap)
 
-    # Fail before the first generation rather than inside a worker: an NSGA-II
-    # run is long, and a missing optional dependency should not surface as a
-    # pool traceback partway through it.
-    require_backend(execution_backend)
     problem = SolarDesignProblem(
         tmy_data,
         houseload,

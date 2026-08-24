@@ -51,12 +51,23 @@ def require_backend(execution_backend: str) -> None:
         require_numba_dispatch_day()
 
 
-def backend_provenance(execution_backend: str) -> dict[str, Any]:
+def backend_provenance(
+    execution_backend: str,
+    *,
+    jit_cache_states: list[str] | None = None,
+) -> dict[str, Any]:
     """Check the backend is usable and record the toolchain it ran on.
 
     A bit-identity claim cannot be checked after the fact without a stated
     toolchain, so the versions are recorded for every run rather than only for
     benchmarks.
+
+    A ``numba`` record always carries a ``jit_cache`` field. Callers that
+    aggregate worker observations pass them in; callers that cannot observe
+    their workers -- a driver that fans work out to subprocesses, for instance
+    -- pass nothing and get ``"unknown"``. A field that admits it could not
+    tell is provenance; a missing field is a gap that reads as an oversight
+    later, which is worse on a run that took hours.
     """
     validate_execution_backend(execution_backend)
     provenance: dict[str, Any] = {
@@ -70,6 +81,7 @@ def backend_provenance(execution_backend: str) -> dict[str, Any]:
 
         require_numba_dispatch_day()
         provenance.update(numba_versions())
+        provenance["jit_cache"] = aggregate_jit_cache_states(list(jit_cache_states or []))
     return provenance
 
 
