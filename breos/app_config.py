@@ -13,6 +13,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from breos.degradation.profiles import ENABLED_BLAST_MODEL_KEYS, apply_battery_profile_defaults
 from breos.economics import COST_CONFIG_KEY_TO_PARAM, CostParams, calculate_costs
 from breos.emissions import EmissionsParams
+from breos.execution import DEFAULT_EXECUTION_BACKEND, EXECUTION_BACKENDS, validate_execution_backend
 from breos.pv.horizon import normalise_horizon_profile
 from breos.pv.model_options import is_known_model, is_valid_albedo, is_valid_gcr, normalise_model_name
 from breos.pv.temperature import validate_temperature_inputs
@@ -366,6 +367,17 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
     "horizon_profile": AppConfigField(default=None, default_order=50),
     "battery_temperature": AppConfigField(default="weather", default_order=51),
     "battery_indoor_model": AppConfigField(default=None, default_order=52),
+    "execution_backend": AppConfigField(
+        default=DEFAULT_EXECUTION_BACKEND,
+        default_order=53,
+        cli_flags=("--execution-backend",),
+        cli_choices=EXECUTION_BACKENDS,
+        cli_help=(
+            "Within-day dispatch implementation. 'python' is the numerical reference; "
+            "'numba' is an optional compiled path that reproduces it bit for bit and "
+            'needs the extra: pip install "breos[fast]".'
+        ),
+    ),
     # Runner sections are accepted by App resolution so each workflow can use
     # the same base config validation. The CLI validates their own structure.
     "montecarlo": AppConfigField(),
@@ -783,6 +795,11 @@ def _validate_battery_and_degradation(cfg: dict[str, Any]) -> None:
 
     if not isinstance(cfg["enable_resistance_fade"], bool):
         raise TypeError("'enable_resistance_fade' must be a boolean")
+
+    # Validated through breos.execution so App and Monte Carlo cannot disagree
+    # about which names exist. The default stays "python": the compiled path is
+    # an optimisation that must be asked for, never selected by ambient state.
+    cfg["execution_backend"] = validate_execution_backend(cfg["execution_backend"])
 
     degradation_engine = str(cfg["degradation_engine"]).strip().lower()
     if degradation_engine not in ("native", "blast"):

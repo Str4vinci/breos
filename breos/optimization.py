@@ -23,6 +23,7 @@ from breos.economics import (
     system_ac_production_power,
 )
 from breos.emissions import EmissionsParams
+from breos.execution import DEFAULT_EXECUTION_BACKEND, require_backend, validate_execution_backend
 from breos.solar import PVModuleParams, calculate_pv_production_dc, default_azimuth
 from breos.utils import get_hours_per_step
 
@@ -235,6 +236,7 @@ def optimize_battery_size(
     freq: str = "h",
     objective: str = "max_self_consumption",
     verbose: bool = True,
+    execution_backend: str = DEFAULT_EXECUTION_BACKEND,
 ) -> OptimizationResult:
     """
     Optimize battery size for self-consumption or grid independence.
@@ -266,6 +268,7 @@ def optimize_battery_size(
                 end_time=end_time,
                 freq=freq,
                 debug=False,
+                execution_backend=execution_backend,
             )
 
             grid_independence = summary["Grid Independence [%]"].iloc[0]
@@ -687,6 +690,7 @@ def _evaluate_projected_design_metrics(
     inverter_ac_capacity_w: Optional[float],
     emissions_params: Optional[EmissionsParams] = None,
     return_tables: bool = False,
+    execution_backend: str = DEFAULT_EXECUTION_BACKEND,
 ) -> Dict[str, Any]:
     """Evaluate one design over repeated TMY years using production engines."""
     if years_projection < 1:
@@ -760,6 +764,7 @@ def _evaluate_projected_design_metrics(
             initial_degradation_state=degradation_state if degradation_engine == "blast" else None,
             return_degradation_state=True,
             debug=False,
+            execution_backend=execution_backend,
             **state_kwargs,
         )
         (
@@ -869,6 +874,7 @@ def evaluate_projected_design(
     battery_kwh: float,
     tilt: float,
     azimuth: float,
+    execution_backend: str = DEFAULT_EXECUTION_BACKEND,
 ) -> ProjectedDesignResult:
     """Evaluate one fixed PV-battery design over repeated TMY project years.
 
@@ -933,7 +939,10 @@ def evaluate_projected_design(
     )
     dc_ac_ratio = cost_params_from_config(config.get("costs"), financials).dc_ac_ratio
     inverter_ac_capacity_w = int(n_modules) * pv_params.Mpp / dc_ac_ratio if dc_ac_ratio > 0.0 else None
+    # Fail before the first projected year rather than inside it.
+    require_backend(execution_backend)
     raw_metrics = _evaluate_projected_design_metrics(
+        execution_backend=execution_backend,
         base_dc_power=base_dc_power,
         tmy_data=tmy_data,
         houseload=houseload,
@@ -1124,7 +1133,13 @@ try:
             config: Dict[str, Any],
             results_dir: str,
             elementwise_runner=None,
+            execution_backend: str = DEFAULT_EXECUTION_BACKEND,
         ):
+            # Passed explicitly by the caller, never read out of ``config``.
+            # Candidate scoring is the hottest loop in the package, which makes
+            # it exactly the place where a silently-inherited backend would be
+            # hardest to notice and hardest to attribute afterwards.
+            self.execution_backend = validate_execution_backend(execution_backend)
             self.tmy_data = tmy_data
             self.houseload = houseload
             self.config = config
@@ -1317,6 +1332,7 @@ try:
                 freq=self.freq,
                 temperature_series=temperature_series,
                 debug=False,
+                execution_backend=self.execution_backend,
             )
             total_import = float(summary_df["Import [kWh]"].iloc[0])
             total_export = float(summary_df["Sell [kWh]"].iloc[0])
@@ -1377,6 +1393,7 @@ try:
             objective_zeb = zeb_ratio
             if self.projected_objectives:
                 projected_metrics = _evaluate_projected_design_metrics(
+                    execution_backend=self.execution_backend,
                     base_dc_power=dc_production,
                     tmy_data=self.tmy_data,
                     houseload=houseload_df,
@@ -1496,6 +1513,7 @@ def optimize_system_multi_objective(
     seed: int = 1,
     verbose: bool = False,
     n_procs: int = 1,
+    execution_backend: str = DEFAULT_EXECUTION_BACKEND,
 ) -> OptimizationResult:
     """Run NSGA-II multi-objective PV/battery sizing.
 
@@ -1576,12 +1594,17 @@ def optimize_system_multi_objective(
         pool = Pool(n_procs)
         elementwise_runner = StarmapParallelization(pool.starmap)
 
+    # Fail before the first generation rather than inside a worker: an NSGA-II
+    # run is long, and a missing optional dependency should not surface as a
+    # pool traceback partway through it.
+    require_backend(execution_backend)
     problem = SolarDesignProblem(
         tmy_data,
         houseload,
         config,
         results_dir,
         elementwise_runner=elementwise_runner,
+        execution_backend=execution_backend,
     )
     termination, early_stop_metadata = _build_multi_objective_termination(
         n_gen,

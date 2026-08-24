@@ -21,7 +21,6 @@ multi-year historical CSV (see ``configs/examples/montecarlo.toml``).
 from __future__ import annotations
 
 import math
-import platform
 from dataclasses import asdict, dataclass, field
 from importlib.metadata import PackageNotFoundError, version
 from multiprocessing import Pool
@@ -36,11 +35,20 @@ from breos.app_inputs import (
     build_dc_system_base,
     load_consumption_profile,
 )
-from breos.battery import EXECUTION_BACKENDS, BatteryConfig, simulate_energy_balance_summary
+from breos.battery import BatteryConfig, simulate_energy_balance_summary
 from breos.economics import (
     calculate_lcoe_from_projection,
     cost_analysis_projection,
     find_payback_year,
+)
+from breos.execution import (
+    aggregate_jit_cache_states,
+    observed_jit_cache_state,
+    reset_jit_cache_observation,
+    validate_execution_backend,
+)
+from breos.execution import (
+    backend_provenance as _backend_provenance,
 )
 from breos.load_profiles import load_profile
 from breos.utils import get_hours_per_step
@@ -441,24 +449,10 @@ def _interpolate_payback_year(cost_projection: pd.DataFrame) -> float | None:
 def _resolve_backend(execution_backend: str) -> dict[str, Any]:
     """Check the backend is usable and record its toolchain.
 
-    A bit-identity claim is only meaningful against a stated toolchain, and it
-    cannot be checked after the fact without one, so the compiler versions and
-    runtime versions are recorded for every run rather than only for
-    benchmarks. Workers report the JIT cache outcome after they call the
-    compiled dispatcher.
+    Thin wrapper over :func:`breos.execution.backend_provenance` so that App
+    and Monte Carlo record the same keys from the same code.
     """
-    provenance: dict[str, Any] = {
-        "execution_backend": execution_backend,
-        "python": platform.python_version(),
-        "numpy": np.__version__,
-        "pandas": pd.__version__,
-    }
-    if execution_backend == "numba":
-        from breos._numba_dispatch import numba_versions, require_numba_dispatch_day
-
-        require_numba_dispatch_day()
-        provenance.update(numba_versions())
-    return provenance
+    return _backend_provenance(execution_backend)
 
 
 def _summarize(runs: pd.DataFrame) -> dict[str, dict[str, float]]:
@@ -497,10 +491,9 @@ def _run_trajectory_index(run_idx: int) -> tuple[int, dict[str, Any], pd.DataFra
     if _WORKER_CONTEXT is None:
         raise RuntimeError("Monte Carlo worker context was not initialized")
     cfg, resolved, base_load, dc_by_year, temp_by_year, available_years, years_per_run, settings = _WORKER_CONTEXT
-    if settings.execution_backend == "numba":
-        from breos._numba_dispatch import reset_jit_cache_observation
-
-        reset_jit_cache_observation()
+    # One observation window per trajectory: that is the unit of work whose
+    # compile cost is being attributed. A no-op on the Python backend.
+    reset_jit_cache_observation(settings.execution_backend)
     seed = None if settings.seed is None else settings.seed + run_idx
     rng = np.random.default_rng(seed)
     metrics, trajectory = _simulate_trajectory(
@@ -514,32 +507,23 @@ def _run_trajectory_index(run_idx: int) -> tuple[int, dict[str, Any], pd.DataFra
         settings,
         rng,
     )
+    # None from a numba run means no compiled dispatch call was observed -- a
+    # trajectory can legitimately never enter the kernel. Record that as
+    # "unknown" rather than aborting: the trajectory's results are valid either
+    # way, and provenance that admits it could not tell is more useful than no
+    # results at all. On the Python backend there is nothing to report.
     jit_cache_state = None
     if settings.execution_backend == "numba":
-        from breos._numba_dispatch import observed_jit_cache_state
-
-        # None means no compiled dispatch call was observed in this worker --
-        # a trajectory can legitimately never enter the kernel. Record that as
-        # "unknown" rather than aborting: the trajectory's results are valid
-        # either way, and provenance that admits it could not tell is more
-        # useful than no results at all.
-        jit_cache_state = observed_jit_cache_state() or "unknown"
+        jit_cache_state = observed_jit_cache_state(settings.execution_backend) or "unknown"
     return run_idx, metrics, trajectory, jit_cache_state
 
 
 def _aggregate_jit_cache_states(states: list[str]) -> str:
     """Summarise the workers' JIT cache observations for provenance.
 
-    ``cold`` wins over ``warm`` because one worker compiling means the study
-    paid for a compile. ``unknown`` wins over both: if any worker could not
-    tell, the study-level claim cannot be trusted either. An empty list is
-    ``unknown`` as well -- it means nothing was observed, not that the cache
-    was warm. This never raises; provenance bookkeeping must not be able to
-    fail a completed study.
+    Thin wrapper over :func:`breos.execution.aggregate_jit_cache_states`.
     """
-    if not states or any(state not in {"warm", "cold"} for state in states):
-        return "unknown"
-    return "cold" if "cold" in states else "warm"
+    return aggregate_jit_cache_states(states)
 
 
 def run_montecarlo(config: dict[str, Any], settings: MonteCarloSettings) -> MonteCarloResult:
@@ -564,8 +548,7 @@ def run_montecarlo(config: dict[str, Any], settings: MonteCarloSettings) -> Mont
         raise ValueError("load_distribution must be 'normal' or 'uniform'")
     if settings.n_procs < 1:
         raise ValueError("n_procs must be at least 1")
-    if settings.execution_backend not in EXECUTION_BACKENDS:
-        raise ValueError(f"execution_backend must be one of {EXECUTION_BACKENDS}, got {settings.execution_backend!r}")
+    validate_execution_backend(settings.execution_backend)
     if (
         settings.weather_start_year is not None
         and settings.weather_end_year is not None

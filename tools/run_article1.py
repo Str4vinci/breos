@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import importlib.metadata
+import json
 import os
 import shlex
 import subprocess
@@ -12,6 +13,14 @@ import sys
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(PROJECT_ROOT))
+
+from breos.execution import (  # noqa: E402
+    DEFAULT_EXECUTION_BACKEND,
+    EXECUTION_BACKENDS,
+    backend_provenance,
+)
+
 DEFAULT_INPUT_ROOT = PROJECT_ROOT / "dev/article1-inputs"
 DEFAULT_OUTPUT_ROOT = PROJECT_ROOT / "results/article1"
 ARTICLE_VERSION = "0.6.0"
@@ -50,22 +59,33 @@ def _monte_carlo_validation_command(input_root: Path) -> list[str]:
     )
 
 
-def _fixed_command(input_root: Path, output_root: Path) -> list[str]:
+def _fixed_command(input_root: Path, output_root: Path, execution_backend: str) -> list[str]:
     return _python_tool(
         "reproduce_article1.py",
         "--rlp-directory",
         input_root / "rlp",
+        "--execution-backend",
+        execution_backend,
         "--output",
         output_root / "base-v1",
     )
 
 
-def _analysis_commands(input_root: Path, output_root: Path, n_procs: int) -> list[list[str]]:
+def _analysis_commands(input_root: Path, output_root: Path, n_procs: int, execution_backend: str) -> list[list[str]]:
+    """Deterministic analyses.
+
+    Only the ``reproduce_article1.py`` invocations take a backend.
+    ``reproduce_article1_context.py`` builds orientation and weather-comparison
+    tables without ever entering the within-day dispatch loop, so forwarding
+    the flag there would record a claim about code that never ran.
+    """
     rlp = input_root / "rlp"
     weather = input_root / "weather/porto_historical_2005_2024_openmeteo.csv"
     return [
         _python_tool(
             "reproduce_article1.py",
+            "--execution-backend",
+            execution_backend,
             "--rlp-directory",
             rlp,
             "--battery-cost",
@@ -83,6 +103,8 @@ def _analysis_commands(input_root: Path, output_root: Path, n_procs: int) -> lis
         ),
         _python_tool(
             "reproduce_article1.py",
+            "--execution-backend",
+            execution_backend,
             "--rlp-directory",
             rlp,
             "--resolution",
@@ -96,6 +118,8 @@ def _analysis_commands(input_root: Path, output_root: Path, n_procs: int) -> lis
         ),
         _python_tool(
             "reproduce_article1.py",
+            "--execution-backend",
+            execution_backend,
             "--rlp-directory",
             rlp,
             "--load-profile",
@@ -107,6 +131,8 @@ def _analysis_commands(input_root: Path, output_root: Path, n_procs: int) -> lis
         ),
         _python_tool(
             "reproduce_article1.py",
+            "--execution-backend",
+            execution_backend,
             "--rlp-directory",
             rlp,
             "--calendar-model",
@@ -121,6 +147,8 @@ def _analysis_commands(input_root: Path, output_root: Path, n_procs: int) -> lis
         ),
         _python_tool(
             "reproduce_article1.py",
+            "--execution-backend",
+            execution_backend,
             "--rlp-directory",
             rlp,
             "--calendar-model",
@@ -155,8 +183,11 @@ def _monte_carlo_commands(
     output_root: Path,
     n_procs: int,
     runs: int | None,
+    execution_backend: str,
 ) -> list[list[str]]:
     common: list[object] = [
+        "--execution-backend",
+        execution_backend,
         "--rlp-directory",
         input_root / "rlp",
         "--weather-file",
@@ -191,33 +222,34 @@ def commands_for_stage(
     output_root: Path,
     n_procs: int,
     runs: int | None = None,
+    execution_backend: str = DEFAULT_EXECUTION_BACKEND,
 ) -> list[list[str]]:
-    """Return the ordered commands for one workflow stage."""
+    """Return the ordered commands for one workflow stage.
+
+    The backend reaches only the stages that simulate. The preflight,
+    validation and verification commands read and check inputs and outputs;
+    they never run the dispatch loop, so they take no backend.
+    """
     checks = [_preflight_command(input_root, output_root), _monte_carlo_validation_command(input_root)]
+    fixed = _fixed_command(input_root, output_root, execution_backend)
+    analysis = _analysis_commands(input_root, output_root, n_procs, execution_backend)
+    monte_carlo = _monte_carlo_commands(input_root, output_root, n_procs, runs, execution_backend)
+    verify = _python_tool("verify_article1_bundle.py", output_root)
+
     if stage == "check":
         return checks
     if stage == "fixed":
-        return [*checks, _fixed_command(input_root, output_root)]
+        return [*checks, fixed]
     if stage == "analysis":
-        return [*checks, *_analysis_commands(input_root, output_root, n_procs)]
+        return [*checks, *analysis]
     if stage == "deterministic":
-        return [
-            *checks,
-            _fixed_command(input_root, output_root),
-            *_analysis_commands(input_root, output_root, n_procs),
-        ]
+        return [*checks, fixed, *analysis]
     if stage == "monte-carlo":
-        return [*checks, *_monte_carlo_commands(input_root, output_root, n_procs, runs)]
+        return [*checks, *monte_carlo]
     if stage == "verify":
-        return [_python_tool("verify_article1_bundle.py", output_root)]
+        return [verify]
     if stage == "all":
-        return [
-            *checks,
-            _fixed_command(input_root, output_root),
-            *_analysis_commands(input_root, output_root, n_procs),
-            *_monte_carlo_commands(input_root, output_root, n_procs, runs),
-            _python_tool("verify_article1_bundle.py", output_root),
-        ]
+        return [*checks, fixed, *analysis, *monte_carlo, verify]
     raise ValueError(f"Unknown stage: {stage}")
 
 
@@ -282,6 +314,16 @@ def main() -> int:
         default=min(8, os.cpu_count() or 1),
         help="Worker processes for optimization and Monte Carlo (default: up to 8)",
     )
+    parser.add_argument(
+        "--execution-backend",
+        choices=EXECUTION_BACKENDS,
+        default=DEFAULT_EXECUTION_BACKEND,
+        help=(
+            "Within-day dispatch implementation for the simulating stages. 'python' is the "
+            "numerical reference and the default; 'numba' is a compiled path that reproduces "
+            'it bit for bit and needs pip install "breos[fast]".'
+        ),
+    )
     parser.add_argument("--mc-runs", type=int, help="Override 10,000 Monte Carlo trajectories for each case")
     parser.add_argument("--dry-run", action="store_true", help="Print the commands without running them")
     args = parser.parse_args()
@@ -299,7 +341,12 @@ def main() -> int:
         args.output.resolve(),
         args.n_procs,
         args.mc_runs,
+        args.execution_backend,
     )
+    # Say what will run before it runs. Each tool records its own execution
+    # provenance in its own output, but a bundle assembled over hours is much
+    # easier to read back if the run that produced it announced the choice.
+    print(f"execution: {json.dumps(backend_provenance(args.execution_backend), sort_keys=True)}", flush=True)
     if not args.dry_run:
         _require_clean_article_version()
     _run(commands, dry_run=args.dry_run)

@@ -71,6 +71,7 @@ from breos._numba_dispatch import (
     R_T_CELL,
 )
 
+
 @njit(cache=True, fastmath=False, nogil=True)
 def _lfp_capacity_factor(t_c):
     if t_c >= 25.0:
@@ -80,6 +81,7 @@ def _lfp_capacity_factor(t_c):
     else:
         base_at_zero = 1.0 - LFP_CAP_DERATE_PER_C_MODERATE * 25.0
         return max(0.5, base_at_zero - LFP_CAP_DERATE_PER_C_COLD * abs(t_c))
+
 
 @njit(cache=True, fastmath=False, nogil=True)
 def _dc_ac(pv_dc_power, inverter_ac_power, inverter_efficiency, pow_two):
@@ -115,15 +117,14 @@ def _dc_ac(pv_dc_power, inverter_ac_power, inverter_efficiency, pow_two):
             (inverter_efficiency / PVWATTS_REFERENCE_EFFICIENCY)
             * pdc0
             * (
-                PVWATTS_CURVE_QUADRATIC * math.pow(zeta, pow_two)
-                + PVWATTS_CURVE_LINEAR * zeta
-                + PVWATTS_CURVE_CONSTANT
+                PVWATTS_CURVE_QUADRATIC * math.pow(zeta, pow_two) + PVWATTS_CURVE_LINEAR * zeta + PVWATTS_CURVE_CONSTANT
             ),
         ),
     )
     clipping_loss_dc = max(0.0, pv_dc_power - dc_used)
     conversion_loss = max(0.0, dc_used - ac_power)
     return ac_power, conversion_loss, clipping_loss_dc
+
 
 @njit(cache=True, fastmath=False, nogil=True)
 def _dc_for_ac(ac_power_w, inverter_ac_power, inverter_efficiency):
@@ -147,6 +148,7 @@ def _dc_for_ac(ac_power_w, inverter_ac_power, inverter_efficiency):
     discriminant = max(0.0, b * b - 4.0 * a * c)
     zeta = (-b - np.sqrt(discriminant)) / (2.0 * a)
     return min(upper, max(ac_target, zeta * upper))
+
 
 @njit(cache=True, fastmath=False, nogil=True)
 def _dispatch_day_kernel(

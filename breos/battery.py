@@ -70,6 +70,10 @@ from breos.degradation.protocol import (
     NativeDegradationAdapter,
 )
 from breos.economics import BATTERY_REPLACEMENT_COST_PER_KWH
+from breos.execution import (  # noqa: F401  -- EXECUTION_BACKENDS re-exported
+    EXECUTION_BACKENDS,
+    validate_execution_backend,
+)
 from breos.inverter import calculate_dc_ac_power, dc_power_for_ac_output
 from breos.utils import get_hours_per_step, remap_datetime_index_years
 
@@ -1209,23 +1213,20 @@ def _build_final_degradation_state(
     }
 
 
-EXECUTION_BACKENDS: Tuple[str, ...] = ("python", "numba")
-
-
 def _resolve_dispatch_day(execution_backend: str) -> Any:
     """Return the within-day dispatch implementation for a backend name.
 
     Resolution happens once per simulated year, before any timestep runs, so
     a missing optional dependency is reported at the start of a study rather
-    than part-way through one.
+    than part-way through one. The name check lives in :mod:`breos.execution`
+    so App and Monte Carlo cannot disagree about what is valid.
     """
+    validate_execution_backend(execution_backend)
     if execution_backend == "python":
         return _dispatch_day_python
-    if execution_backend == "numba":
-        from breos._numba_dispatch import require_numba_dispatch_day
+    from breos._numba_dispatch import require_numba_dispatch_day
 
-        return require_numba_dispatch_day()
-    raise ValueError(f"execution_backend must be one of {EXECUTION_BACKENDS}, got {execution_backend!r}")
+    return require_numba_dispatch_day()
 
 
 @dataclass(slots=True)
