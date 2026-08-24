@@ -14,6 +14,8 @@ external_filename = "EREDES_2025_BTN_1000kwh_15min.csv"
 
 [pv]
 module = "Suntech_STP550S_STC"
+module_width_m = 1.134
+module_length_m = 2.278
 degradation_rate = 0.005
 
 [battery]

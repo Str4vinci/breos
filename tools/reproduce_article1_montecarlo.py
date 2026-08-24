@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import copy
 import hashlib
+import importlib.metadata
 import json
 import platform
 import shlex
@@ -20,6 +21,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 import breos  # noqa: E402
 from breos.montecarlo import MonteCarloSettings, run_montecarlo  # noqa: E402
+from breos.pv_modules import get_module  # noqa: E402
 
 DEFAULT_CONFIG = PROJECT_ROOT / "validation/article1/article1-montecarlo.toml"
 
@@ -48,6 +50,22 @@ def _git_revision() -> dict[str, str | bool]:
         text=True,
     ).stdout.strip()
     return {"commit": revision, "tracked_worktree_dirty": bool(status)}
+
+
+def _dependency_versions() -> dict[str, str]:
+    return {package: importlib.metadata.version(package) for package in ("numpy", "pandas", "pvlib", "scipy")}
+
+
+def _pv_module_provenance(config: dict) -> dict:
+    width = float(config.get("pv_module_width_m", 1.134))
+    length = float(config.get("pv_module_length_m", 2.278))
+    return {
+        "catalog_key": str(config["pv_module"]),
+        "parameters": asdict(get_module(str(config["pv_module"]))),
+        "width_m": width,
+        "length_m": length,
+        "area_m2": width * length,
+    }
 
 
 def _selected_cases(cases: dict, requested: list[str]) -> list[str]:
@@ -146,11 +164,14 @@ def main() -> int:
             "breos_version": breos.__version__,
             "breos_source": _git_revision(),
             "python_version": platform.python_version(),
+            "platform": platform.platform(),
+            "dependency_versions": _dependency_versions(),
             "command": shlex.join([sys.executable, *sys.argv]),
             "base_config": str(args.config),
             "base_config_sha256": hashlib.sha256(config_bytes).hexdigest(),
             "resolved_config_sha256": resolved_hash,
             "resolved_config": case_config,
+            "resolved_pv_module": _pv_module_provenance(case_config),
             "settings": asdict(settings),
             "available_weather_years": result.available_years,
             "weather_file": str(weather_file),

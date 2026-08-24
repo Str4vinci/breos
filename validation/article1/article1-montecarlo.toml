@@ -6,6 +6,8 @@
 
 annual_consumption_kwh = 5000.0
 pv_module = "Suntech_STP550S_STC"
+pv_module_width_m = 1.134
+pv_module_length_m = 2.278
 load_profile = "6"
 resolution = "15min"
 projection_years = 20

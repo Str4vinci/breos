@@ -3,7 +3,7 @@
 import argparse
 import tomllib
 
-from tools.reproduce_article1_montecarlo import DEFAULT_CONFIG, _selected_cases, _settings
+from tools.reproduce_article1_montecarlo import DEFAULT_CONFIG, _pv_module_provenance, _selected_cases, _settings
 
 
 def test_article1_montecarlo_config_pins_manuscript_method():
@@ -32,6 +32,9 @@ def test_article1_montecarlo_config_pins_manuscript_method():
         "tilt": 25.0,
         "azimuth": 185.0,
     }
+    module = _pv_module_provenance(config)
+    assert module["parameters"]["T_Pmax_pct"] == -0.34
+    assert module["area_m2"] == 1.134 * 2.278
 
 
 def test_article1_montecarlo_cli_overrides_only_runtime_size_and_workers():

@@ -14,6 +14,7 @@ import shlex
 import subprocess
 import sys
 import tomllib
+from dataclasses import asdict
 from pathlib import Path
 
 import numpy as np
@@ -23,8 +24,9 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
 import breos  # noqa: E402
-from breos.load_profiles import load_profile  # noqa: E402
+from breos.load_profiles import PROFILE_FILES, PROFILE_FILES_15MIN, load_profile  # noqa: E402
 from breos.optimization import evaluate_projected_design, optimize_system_multi_objective  # noqa: E402
+from breos.pv_modules import get_module  # noqa: E402
 from breos.weather import resample_to_15min  # noqa: E402
 
 DEFAULT_CONFIG = PROJECT_ROOT / "validation/article1/article1-projected-optimization.toml"
@@ -66,6 +68,20 @@ def _dependency_versions() -> dict[str, str]:
     return {package: importlib.metadata.version(package) for package in ("numpy", "pandas", "pvlib", "scipy", "pymoo")}
 
 
+def _pv_module_provenance(config: dict) -> dict:
+    """Resolve the electrical and physical PV inputs used by the Article run."""
+    pv = config["pv"]
+    width = float(pv.get("module_width_m", 1.134))
+    length = float(pv.get("module_length_m", 2.278))
+    return {
+        "catalog_key": str(pv["module"]),
+        "parameters": asdict(get_module(str(pv["module"]))),
+        "width_m": width,
+        "length_m": length,
+        "area_m2": width * length,
+    }
+
+
 def _display_path(path: Path) -> str:
     """Prefer a repository-relative input path without hiding external inputs."""
     try:
@@ -92,6 +108,15 @@ def _battery_cost_scenarios(requested: list[float] | None) -> list[float | None]
     return scenarios
 
 
+def _resolved_rlp_path(config: dict, rlp_directory: Path) -> Path | None:
+    profile_type = str(config["load"]["profile_type"])
+    if profile_type in {"1", "default", "demandlib_h0", "h0", "bdew_h0"}:
+        return None
+    resolution = str(config["simulation"]["resolution"])
+    filename = PROFILE_FILES_15MIN[profile_type] if resolution == "15min" else PROFILE_FILES[profile_type]
+    return rlp_directory / filename
+
+
 def _load_inputs(
     config: dict,
     rlp_directory: Path,
@@ -101,9 +126,8 @@ def _load_inputs(
     location = config["location"]
     load_config = config["load"]
     weather_path = weather_override or PROJECT_ROOT / simulation["weather_file"]
-    profile_type = str(load_config["profile_type"])
-    uses_packaged_profile = profile_type in {"1", "default", "demandlib_h0", "h0", "bdew_h0"}
-    rlp_path = None if uses_packaged_profile else rlp_directory / load_config["external_filename"]
+    rlp_path = _resolved_rlp_path(config, rlp_directory)
+    uses_packaged_profile = rlp_path is None
     if not weather_path.is_file():
         raise FileNotFoundError(f"Article 1 weather file not found: {weather_path}")
     if rlp_path is not None and not rlp_path.is_file():
@@ -353,6 +377,7 @@ def main() -> int:
                 json.dumps(config, sort_keys=True, separators=(",", ":")).encode("utf-8")
             ).hexdigest(),
             "resolved_config": config,
+            "resolved_pv_module": _pv_module_provenance(config),
             "weather": _display_path(weather_path),
             "weather_file_sha256": _sha256(weather_path),
             "weather_uncompressed_sha256": _sha256(

@@ -11,11 +11,31 @@ Set these paths before you start:
 ```bash
 export BREOS_A1_RLP_DIR=/path/to/licensed/rlp
 export BREOS_A1_HISTORICAL_WEATHER=/path/to/porto_historical_2005_2024_openmeteo.csv
+export BREOS_A1_VALIDATION_DIR=/path/to/Esposende_ModelValidation
 ```
 
-`BREOS_A1_RLP_DIR` must contain
-`EREDES_2025_BTN_1000kwh_15min.csv`. BREOS records the SHA-256 digest of both
-external inputs. Do not commit the licensed E-REDES file.
+`BREOS_A1_RLP_DIR` must contain both
+`EREDES_2025_BTN_1000kwh_15min.csv` and
+`EREDES_2025_BTN_1000kwh_hourly.csv`. The hourly sensitivity consumes the
+hourly file; the other deterministic and Monte Carlo runs consume the
+15-minute file. BREOS records the SHA-256 digest of the file each run actually
+uses. Do not commit the licensed E-REDES files.
+
+Verify and inventory every external input before the scientific runs:
+
+```bash
+uv run python tools/preflight_article1_inputs.py \
+  --rlp-directory "$BREOS_A1_RLP_DIR" \
+  --historical-weather-file "$BREOS_A1_HISTORICAL_WEATHER" \
+  --validation-directory "$BREOS_A1_VALIDATION_DIR" \
+  --copy-validation-to results/article1/external-validation \
+  --output results/article1/input-manifest.json
+```
+
+This command does not run a simulation. It verifies the pinned hashes and
+copies the three external Figure 2 comparison tables into the ignored local
+result bundle. Their origin and licence must still be disclosed with the
+manuscript data package.
 
 Run all commands from the BREOS repository root at the final release commit.
 Commit all tracked changes before the scientific runs so each provenance file
@@ -122,7 +142,9 @@ uv run python tools/reproduce_article1_context.py \
 
 The command evaluates one module over the manuscript's 10-90° tilt and
 100-260° azimuth bounds. It writes both module production and area-normalized
-production.
+production. The orientation screen is hourly, matching the original
+orientation analysis; it is separate from the 15-minute household dispatch
+and projected optimization.
 
 ## Generate the weather-comparison source table
 
@@ -169,7 +191,21 @@ uv run python tools/reproduce_article1_montecarlo.py \
 Omit `--runs` to use the configured 10,000 trajectories. Each case writes
 `runs.csv`, `yearly.csv`, `summary.json`, and `provenance.json`.
 
+The Monte Carlo configuration is the EUR 500/kWh base case. The EUR 350 and
+EUR 711/kWh assumptions apply to the deterministic Pareto-front sensitivity;
+the manuscript does not define separate Monte Carlo studies for those costs.
+
 ## Preserve the final bundle
+
+Verify that every expected result exists, was produced from the same clean
+BREOS commit, uses the pinned Article inputs, and still matches its recorded
+artifact hash:
+
+```bash
+uv run python tools/verify_article1_bundle.py results/article1
+```
+
+The verifier reads files and hashes only. It does not recalculate any result.
 
 Keep the complete `results/article1` directory with the submitted manuscript.
 Archive that directory in the manuscript data deposit. Commit only the BREOS

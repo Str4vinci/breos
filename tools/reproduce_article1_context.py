@@ -12,6 +12,8 @@ import shlex
 import subprocess
 import sys
 import tomllib
+from dataclasses import asdict
+from importlib import metadata
 from pathlib import Path
 
 import numpy as np
@@ -64,6 +66,23 @@ def _git_revision() -> dict[str, str | bool]:
 def _load_config(path: Path) -> tuple[dict, bytes]:
     content = path.read_bytes()
     return tomllib.loads(content.decode("utf-8")), content
+
+
+def _dependency_versions() -> dict[str, str]:
+    return {package: metadata.version(package) for package in ("numpy", "pandas", "pvlib", "scipy")}
+
+
+def _pv_module_provenance(config: dict, *, width_m: float | None = None, length_m: float | None = None) -> dict:
+    pv = config["pv"]
+    width = float(width_m if width_m is not None else pv.get("module_width_m", 1.134))
+    length = float(length_m if length_m is not None else pv.get("module_length_m", 2.278))
+    return {
+        "catalog_key": str(pv["module"]),
+        "parameters": asdict(get_module(str(pv["module"]))),
+        "width_m": width,
+        "length_m": length,
+        "area_m2": width * length,
+    }
 
 
 def _location(config: dict) -> Location:
@@ -126,7 +145,12 @@ def _inclusive_values(start: float, stop: float, step: float) -> np.ndarray:
 
 def _orientation_source(args: argparse.Namespace, config: dict) -> dict:
     weather, weather_path = _load_tmy(config, args.weather_file, resolution=args.resolution)
-    module_area = float(args.module_width_m * args.module_length_m)
+    pv_module = _pv_module_provenance(
+        config,
+        width_m=args.module_width_m,
+        length_m=args.module_length_m,
+    )
+    module_area = float(pv_module["area_m2"])
     rows = []
     for tilt in _inclusive_values(args.tilt_min, args.tilt_max, args.tilt_step):
         for azimuth in _inclusive_values(args.azimuth_min, args.azimuth_max, args.azimuth_step):
@@ -176,7 +200,7 @@ def _orientation_source(args: argparse.Namespace, config: dict) -> dict:
         "weather_file_sha256": _sha256(weather_path),
         "weather_uncompressed_sha256": _sha256(weather_path, decompress_gzip=weather_path.suffix == ".gz"),
         "resolution": args.resolution,
-        "module_area_m2": module_area,
+        "resolved_pv_module": pv_module,
         "grid": {
             "tilt_min_deg": args.tilt_min,
             "tilt_max_deg": args.tilt_max,
@@ -309,8 +333,8 @@ def main() -> int:
     orientation.add_argument("--azimuth-min", type=float, default=100.0)
     orientation.add_argument("--azimuth-max", type=float, default=260.0)
     orientation.add_argument("--azimuth-step", type=float, default=5.0)
-    orientation.add_argument("--module-width-m", type=float, default=1.134)
-    orientation.add_argument("--module-length-m", type=float, default=2.278)
+    orientation.add_argument("--module-width-m", type=float)
+    orientation.add_argument("--module-length-m", type=float)
     orientation.add_argument("--seed", type=int, default=1)
 
     weather = subparsers.add_parser("weather-comparison", help="Generate Figure 6 source data")
@@ -333,9 +357,12 @@ def main() -> int:
         "breos_version": breos.__version__,
         "breos_source": _git_revision(),
         "python_version": platform.python_version(),
+        "platform": platform.platform(),
+        "dependency_versions": _dependency_versions(),
         "command": shlex.join([sys.executable, *sys.argv]),
         "config": str(args.config),
         "config_sha256": hashlib.sha256(config_bytes).hexdigest(),
+        "resolved_pv_module": _pv_module_provenance(config),
         **analysis,
     }
     report_path = args.output / "provenance.json"
