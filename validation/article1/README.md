@@ -3,8 +3,14 @@
 This directory contains the versioned configurations and documentation needed
 to generate the Article 1 source-data bundle with BREOS 0.6.
 
-Use the [source-data runbook](runbook.md) for the complete ordered command
-sequence. Use the [manuscript audit](manuscript-v2-audit.md) to map each result
+Run the complete deterministic workflow with:
+
+```bash
+uv run python tools/run_article1.py
+```
+
+Use the [source-data runbook](runbook.md) for the Monte Carlo and verification
+commands. Use the [manuscript audit](manuscript-v2-audit.md) to map each result
 to the generated CSV or JSON source data.
 
 ## Scope

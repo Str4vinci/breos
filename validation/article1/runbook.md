@@ -1,236 +1,106 @@
-# Generate the Article 1 source data
+# Run the Article 1 simulations
 
-This runbook generates the BREOS source tables for the Article 1 manuscript.
-The commands write generated files under the ignored `results/` directory.
-They do not write to the research repository.
+`tools/run_article1.py` runs the complete Article 1 workflow. It uses local
+inputs from `dev/article1-inputs/` and writes results to `results/article1/`.
+Both directories are ignored by Git.
 
-## Prepare the BREOS environment
+## Prepare the environment
 
-Run from a clean checkout of the final 0.6.0 release commit:
+Run all commands from the BREOS repository root at the final release commit:
 
 ```bash
-cd /path/to/breos
-git status --short --branch
 uv sync --extra dev --extra docs --frozen
-uv run python -c 'import breos; assert breos.__version__ == "0.6.0", breos.__version__; print(breos.__version__)'
+uv run python tools/run_article1.py check
 ```
 
-Do not start the scientific runs if `git status` lists tracked changes or the
-version check does not print `0.6.0`. The reproduction tools record both facts
-in their provenance files, and the final bundle verifier rejects dirty or
-mixed-commit results.
+The `check` stage verifies every external input and records its SHA-256 digest.
+It does not run a simulation. The runner stops if the active BREOS version is
+not 0.6.0 or the tracked worktree is dirty.
 
-## Set the external input paths
+## Run the deterministic workflow
 
-Set these paths before you start:
+Run the fixed candidates, all projected optimizations, and the context
+analyses:
 
 ```bash
-export BREOS_A1_RLP_DIR=/path/to/licensed/rlp
-export BREOS_A1_HISTORICAL_WEATHER=/path/to/porto_historical_2005_2024_openmeteo.csv
-export BREOS_A1_VALIDATION_DIR=/path/to/Esposende_ModelValidation
+uv run python tools/run_article1.py
 ```
 
-`BREOS_A1_RLP_DIR` must contain both
-`EREDES_2025_BTN_1000kwh_15min.csv` and
-`EREDES_2025_BTN_1000kwh_hourly.csv`. The hourly sensitivity consumes the
-hourly file; the other deterministic and Monte Carlo runs consume the
-15-minute file. BREOS records the SHA-256 digest of the file each run actually
-uses. Do not commit the licensed E-REDES files.
-
-Verify and inventory every external input before the scientific runs:
+To inspect C1-C5 before starting the longer optimizations, split the work into
+two commands:
 
 ```bash
-uv run python tools/preflight_article1_inputs.py \
-  --rlp-directory "$BREOS_A1_RLP_DIR" \
-  --historical-weather-file "$BREOS_A1_HISTORICAL_WEATHER" \
-  --validation-directory "$BREOS_A1_VALIDATION_DIR" \
-  --copy-validation-to results/article1/external-validation \
-  --output results/article1/input-manifest.json
+uv run python tools/run_article1.py fixed
+uv run python tools/run_article1.py analysis
 ```
 
-This command does not run a simulation. It verifies the pinned hashes and
-copies the three external Figure 2 comparison tables into the ignored local
-result bundle. Their origin and licence must still be disclosed with the
-manuscript data package.
+The deterministic workflow produces:
 
-Run all commands from the BREOS repository root at the final release commit.
-Commit all tracked changes before the scientific runs so each provenance file
-records `tracked_worktree_dirty` as `false`.
+- the C1-C5 fixed-design tables at EUR 500/kWh;
+- the EUR 350, 500, and 711/kWh projected Pareto fronts;
+- the hourly-resolution optimization;
+- the H0-load C2 comparison;
+- the field-v2 and laboratory degradation optimizations and C2 replays;
+- the orientation table; and
+- the 2005-2023 historical-weather comparison.
 
-The versioned deterministic and Monte Carlo configurations use a fixed battery
-temperature of 25 °C. They disable BREOS's optional indoor-temperature
-transform so the supplied value remains exactly 25 °C.
+## Run Monte Carlo
 
-## Generate the fixed base cases
-
-Generate the C1-C5 base-case tables at €500/kWh:
+Run the configured 10,000 trajectories for C2 first, then C1, C3, C4, and C5:
 
 ```bash
-uv run python tools/reproduce_article1.py \
-  --rlp-directory "$BREOS_A1_RLP_DIR" \
-  --output results/article1/base-v1
+uv run python tools/run_article1.py monte-carlo
 ```
 
-This command writes `fixed_candidates.csv`, a `reproduction.json` file, and
-the yearly, financial, and metric files for each candidate.
-
-## Generate the battery-cost fronts
-
-Run the €350, €500, and €711 per kWh projected optimizations:
+Use `--mc-runs` only for a trial run. A trial bundle does not pass final
+verification:
 
 ```bash
-uv run python tools/reproduce_article1.py \
-  --rlp-directory "$BREOS_A1_RLP_DIR" \
-  --battery-cost 350 \
-  --battery-cost 500 \
-  --battery-cost 711 \
-  --skip-fixed \
-  --full-optimization \
-  --n-procs 8 \
-  --output results/article1/battery-cost-sensitivity
+uv run python tools/run_article1.py monte-carlo --mc-runs 25
 ```
 
-The command creates one `battery-cost-*` directory per scenario. Each
-directory contains the Pareto front and replayed maximum-NPV, knee, and
-maximum-GI designs. Replacement costs use the selected capacity cost. The
-fixed €350 installation charge applies only to the initial installation.
+The Monte Carlo configuration uses the EUR 500/kWh base case. The EUR 350 and
+711/kWh values apply only to the deterministic Pareto sensitivity.
 
-## Generate the timestep and load-profile sensitivities
+## Verify the result bundle
 
-Run the hourly projected optimization:
+After every full run completes, verify the provenance and artifact hashes:
 
 ```bash
-uv run python tools/reproduce_article1.py \
-  --rlp-directory "$BREOS_A1_RLP_DIR" \
-  --resolution h \
-  --skip-fixed \
-  --full-optimization \
-  --n-procs 8 \
-  --output results/article1/hourly-v1
+uv run python tools/run_article1.py verify
 ```
 
-Evaluate C2 with the packaged H0 profile:
+To run every stage and verify the result in one command, use:
 
 ```bash
-uv run python tools/reproduce_article1.py \
-  --rlp-directory "$BREOS_A1_RLP_DIR" \
-  --load-profile h0 \
-  --candidate C2 \
-  --output results/article1/load-profile-h0
+uv run python tools/run_article1.py all
 ```
 
-Compare the H0 result with C2 under `results/article1/base-v1`.
+The complete result bundle is in `results/article1/`. Keep that directory with
+the manuscript source data. Do not commit the licensed E-REDES profile or the
+third-party validation data.
 
-## Generate the degradation sensitivities
+## Local input layout
 
-Run the field-v2 optimization and C2 replay:
+The default input directory has this layout:
 
-```bash
-uv run python tools/reproduce_article1.py \
-  --rlp-directory "$BREOS_A1_RLP_DIR" \
-  --calendar-model naumann_lam_field_calibrated_v2 \
-  --candidate C2 \
-  --full-optimization \
-  --n-procs 8 \
-  --output results/article1/field-v2
+```text
+dev/article1-inputs/
+├── rlp/
+│   ├── EREDES_2025_BTN_1000kwh_15min.csv
+│   └── EREDES_2025_BTN_1000kwh_hourly.csv
+├── validation/
+│   ├── daily_results.csv
+│   ├── monthly_results.csv
+│   └── weekly_results.csv
+└── weather/
+    └── porto_historical_2005_2024_openmeteo.csv
 ```
 
-Run the laboratory-parameter optimization and C2 replay:
+If the input bundle is elsewhere, pass `--input-root`. To change the result
+directory, pass `--output`.
 
-```bash
-uv run python tools/reproduce_article1.py \
-  --rlp-directory "$BREOS_A1_RLP_DIR" \
-  --calendar-model naumann_lam \
-  --candidate C2 \
-  --full-optimization \
-  --n-procs 8 \
-  --output results/article1/laboratory
-```
-
-Use the three C2 `yearly_summary.csv` files from the base, field-v2, and
-laboratory runs for the degradation comparison.
-
-## Generate the orientation source table
-
-Generate the tilt-azimuth grid and continuous optimum for Figure 3:
-
-```bash
-uv run python tools/reproduce_article1_context.py \
-  --output results/article1/orientation \
-  orientation
-```
-
-The command evaluates one module over the manuscript's 10-90° tilt and
-100-260° azimuth bounds. It writes both module production and area-normalized
-production. The orientation screen is hourly, matching the original
-orientation analysis; it is separate from the 15-minute household dispatch
-and projected optimization.
-
-## Generate the weather-comparison source table
-
-Generate the 2005-2023 monthly source data for Figure 6:
-
-```bash
-uv run python tools/reproduce_article1_context.py \
-  --output results/article1/weather-comparison \
-  weather-comparison \
-  --historical-weather-file "$BREOS_A1_HISTORICAL_WEATHER"
-```
-
-The command writes the per-year monthly values and the TMY-versus-historical
-summary, including the mean, standard deviation, 95% confidence interval,
-minimum, and maximum.
-
-## Generate the Monte Carlo source data
-
-Run C2 first:
-
-```bash
-uv run python tools/reproduce_article1_montecarlo.py \
-  --rlp-directory "$BREOS_A1_RLP_DIR" \
-  --weather-file "$BREOS_A1_HISTORICAL_WEATHER" \
-  --case C2 \
-  --n-procs 8 \
-  --output results/article1/monte-carlo-v1
-```
-
-After you inspect C2, run the remaining cases without repeating C2:
-
-```bash
-uv run python tools/reproduce_article1_montecarlo.py \
-  --rlp-directory "$BREOS_A1_RLP_DIR" \
-  --weather-file "$BREOS_A1_HISTORICAL_WEATHER" \
-  --case C1 \
-  --case C3 \
-  --case C4 \
-  --case C5 \
-  --n-procs 8 \
-  --output results/article1/monte-carlo-v1
-```
-
-Omit `--runs` to use the configured 10,000 trajectories. Each case writes
-`runs.csv`, `yearly.csv`, `summary.json`, and `provenance.json`.
-
-The Monte Carlo configuration is the EUR 500/kWh base case. The EUR 350 and
-EUR 711/kWh assumptions apply to the deterministic Pareto-front sensitivity;
-the manuscript does not define separate Monte Carlo studies for those costs.
-The weather file contains 2005-2024, but the configured sampling pool is
-2005-2023. This matches the archived Article workflow and the PVGIS-SARAH3 TMY
-source period. Update Section 2.7 of the manuscript, which currently says that
-the sampled pool includes 2024.
-
-## Preserve the final bundle
-
-Verify that every expected result exists, was produced from the same clean
-BREOS commit, uses the pinned Article inputs, and still matches its recorded
-artifact hash:
-
-```bash
-uv run python tools/verify_article1_bundle.py results/article1
-```
-
-The verifier reads files and hashes only. It does not recalculate any result.
-
-Keep the complete `results/article1` directory with the submitted manuscript.
-Archive that directory in the manuscript data deposit. Commit only the BREOS
-code, configurations, tests, and documentation.
+The historical weather file contains 2005-2024. The Article configuration
+samples 2005-2023 to match the archived workflow and the TMY source period.
+Update Section 2.7 of the manuscript, which currently says that Monte Carlo
+also samples 2024.

@@ -34,6 +34,9 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   for C1-C5. It pins the manuscript's uniform 0.95-1.05 load multiplier and
   records that the archived research implementation instead used a normal
   draw.
+- Added `tools/run_article1.py` as the single entry point for input checks,
+  deterministic analyses, Monte Carlo runs, and final bundle verification.
+  It discovers ignored local inputs under `dev/article1-inputs/` by default.
 - Added opt-in hourly-energy conservation to `resample_to_15min`. It preserves
   each source hour's GHI, DNI, and DHI energy after clear-sky interpolation;
   energy conservation remains opt-in for general runs.
