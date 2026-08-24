@@ -47,7 +47,7 @@ def _power_frame_to_energy_kwh(frame: pd.DataFrame) -> pd.DataFrame:
     intervals = np.diff(frame.index.asi8)
     if np.any(intervals <= 0) or not np.all(intervals == intervals[0]):
         raise ValueError("Power-to-energy plotting requires a regular increasing time index")
-    hours_per_step = float(intervals[0] / (3_600 * 10**9))
+    hours_per_step = (frame.index[1] - frame.index[0]).total_seconds() / 3600.0
     return frame * (hours_per_step / 1000.0)
 
 

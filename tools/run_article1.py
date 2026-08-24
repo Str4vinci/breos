@@ -37,6 +37,19 @@ def _preflight_command(input_root: Path, output_root: Path) -> list[str]:
     )
 
 
+def _monte_carlo_validation_command(input_root: Path) -> list[str]:
+    return _python_tool(
+        "reproduce_article1_montecarlo.py",
+        "--case",
+        "all",
+        "--rlp-directory",
+        input_root / "rlp",
+        "--weather-file",
+        input_root / "weather/porto_historical_2005_2024_openmeteo.csv",
+        "--validate-only",
+    )
+
+
 def _fixed_command(input_root: Path, output_root: Path) -> list[str]:
     return _python_tool(
         "reproduce_article1.py",
@@ -180,26 +193,26 @@ def commands_for_stage(
     runs: int | None = None,
 ) -> list[list[str]]:
     """Return the ordered commands for one workflow stage."""
-    preflight = [_preflight_command(input_root, output_root)]
+    checks = [_preflight_command(input_root, output_root), _monte_carlo_validation_command(input_root)]
     if stage == "check":
-        return preflight
+        return checks
     if stage == "fixed":
-        return [*preflight, _fixed_command(input_root, output_root)]
+        return [*checks, _fixed_command(input_root, output_root)]
     if stage == "analysis":
-        return [*preflight, *_analysis_commands(input_root, output_root, n_procs)]
+        return [*checks, *_analysis_commands(input_root, output_root, n_procs)]
     if stage == "deterministic":
         return [
-            *preflight,
+            *checks,
             _fixed_command(input_root, output_root),
             *_analysis_commands(input_root, output_root, n_procs),
         ]
     if stage == "monte-carlo":
-        return [*preflight, *_monte_carlo_commands(input_root, output_root, n_procs, runs)]
+        return [*checks, *_monte_carlo_commands(input_root, output_root, n_procs, runs)]
     if stage == "verify":
         return [_python_tool("verify_article1_bundle.py", output_root)]
     if stage == "all":
         return [
-            *preflight,
+            *checks,
             _fixed_command(input_root, output_root),
             *_analysis_commands(input_root, output_root, n_procs),
             *_monte_carlo_commands(input_root, output_root, n_procs, runs),

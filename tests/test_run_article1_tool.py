@@ -16,6 +16,7 @@ def test_deterministic_stage_runs_preflight_and_every_non_monte_carlo_analysis()
 
     assert _script_names(commands) == [
         "preflight_article1_inputs.py",
+        "reproduce_article1_montecarlo.py",
         "reproduce_article1.py",
         "reproduce_article1.py",
         "reproduce_article1.py",
@@ -25,7 +26,7 @@ def test_deterministic_stage_runs_preflight_and_every_non_monte_carlo_analysis()
         "reproduce_article1_context.py",
         "reproduce_article1_context.py",
     ]
-    assert "reproduce_article1_montecarlo.py" not in _script_names(commands)
+    assert "--validate-only" in commands[1]
     assert any("battery-cost-sensitivity" in argument for command in commands for argument in command)
     assert any(argument == "6" for command in commands for argument in command)
 
@@ -53,7 +54,7 @@ def test_all_stage_runs_c2_first_and_finishes_with_bundle_verification():
 def test_monte_carlo_run_override_is_explicit():
     commands = commands_for_stage("monte-carlo", Path("inputs"), Path("outputs"), n_procs=2, runs=25)
 
-    monte_carlo = commands[1:]
+    monte_carlo = commands[2:]
     assert len(monte_carlo) == 2
     for command in monte_carlo:
         assert command[command.index("--runs") + 1] == "25"

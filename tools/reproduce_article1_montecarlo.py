@@ -20,6 +20,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
 import breos  # noqa: E402
+from breos.app_config import resolve_app_config  # noqa: E402
 from breos.montecarlo import MonteCarloSettings, run_montecarlo  # noqa: E402
 from breos.pv_modules import get_module  # noqa: E402
 
@@ -68,6 +69,16 @@ def _pv_module_provenance(config: dict) -> dict:
     }
 
 
+def _split_article_config(config: dict) -> tuple[dict, dict, dict]:
+    """Separate App inputs, case definitions, and publication metadata."""
+    simulation_config = copy.deepcopy(config)
+    module_provenance = _pv_module_provenance(simulation_config)
+    cases = simulation_config.pop("cases")
+    simulation_config.pop("pv_module_width_m", None)
+    simulation_config.pop("pv_module_length_m", None)
+    return simulation_config, cases, module_provenance
+
+
 def _selected_cases(cases: dict, requested: list[str]) -> list[str]:
     if not requested or any(value.lower() == "all" for value in requested):
         return list(cases)
@@ -98,6 +109,19 @@ def _settings(config: dict, args: argparse.Namespace) -> MonteCarloSettings:
     )
 
 
+def _case_config(base_config: dict, case: dict) -> dict:
+    config = copy.deepcopy(base_config)
+    config.update(
+        {
+            "n_modules": int(case["n_modules"]),
+            "battery_kwh": float(case["battery_kwh"]),
+            "tilt": float(case["tilt"]),
+            "azimuth": float(case["azimuth"]),
+        }
+    )
+    return config
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
@@ -112,12 +136,13 @@ def main() -> int:
     parser.add_argument("--calendar-model", help="Override the configured native calendar-degradation model")
     parser.add_argument("--runs", type=int, help="Override the configured number of trajectories")
     parser.add_argument("--n-procs", type=int, help="Worker processes for independent trajectories")
+    parser.add_argument("--validate-only", action="store_true", help="Validate selected cases without simulation")
     parser.add_argument("--output", type=Path, default=PROJECT_ROOT / "results/article1-montecarlo")
     args = parser.parse_args()
 
     config_bytes = args.config.read_bytes()
-    full_config = tomllib.loads(config_bytes.decode("utf-8"))
-    cases = full_config.pop("cases")
+    loaded_config = tomllib.loads(config_bytes.decode("utf-8"))
+    full_config, cases, module_provenance = _split_article_config(loaded_config)
     if args.calendar_model:
         full_config["calendar_model"] = args.calendar_model
     full_config["rlp_directory"] = str(args.rlp_directory.resolve())
@@ -131,17 +156,15 @@ def main() -> int:
         raise FileNotFoundError(rlp_file)
 
     selected = _selected_cases(cases, args.case)
+    if args.validate_only:
+        for case_id in selected:
+            resolve_app_config(_case_config(full_config, cases[case_id]))
+        print(f"Validated Article 1 Monte Carlo configuration for: {', '.join(selected)}")
+        return 0
+
     for case_id in selected:
         case = cases[case_id]
-        case_config = copy.deepcopy(full_config)
-        case_config.update(
-            {
-                "n_modules": int(case["n_modules"]),
-                "battery_kwh": float(case["battery_kwh"]),
-                "tilt": float(case["tilt"]),
-                "azimuth": float(case["azimuth"]),
-            }
-        )
+        case_config = _case_config(full_config, case)
         result = run_montecarlo(case_config, settings)
         case_directory = args.output / case_id.lower()
         case_directory.mkdir(parents=True, exist_ok=True)
@@ -171,7 +194,7 @@ def main() -> int:
             "base_config_sha256": hashlib.sha256(config_bytes).hexdigest(),
             "resolved_config_sha256": resolved_hash,
             "resolved_config": case_config,
-            "resolved_pv_module": _pv_module_provenance(case_config),
+            "resolved_pv_module": module_provenance,
             "settings": asdict(settings),
             "available_weather_years": result.available_years,
             "weather_file": str(weather_file),

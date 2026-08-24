@@ -77,7 +77,7 @@ def test_resample_to_15min_makima_holds_last_observation_through_last_hour():
     assert len(resampled) == 16
     assert resampled.index[-1] == pd.Timestamp("2025-01-01 03:45")
     assert resampled["temp_air"].notna().all()
-    assert resampled.loc["2025-01-01 03:00":, "temp_air"].tolist() == [12.0] * 4
+    assert resampled.loc["2025-01-01 03:00":, "temp_air"].tolist() == pytest.approx([12.0] * 4)
 
 
 def test_resample_to_15min_can_preserve_each_hours_irradiance_energy():

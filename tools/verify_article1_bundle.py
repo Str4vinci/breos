@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -29,6 +30,28 @@ EXPECTED_EXTERNAL_VALIDATION_HASHES = {
     "daily_results.csv": "e376382026bc266b5895ce9ba2cf3504c632351a4fe34ab0ac8a6fe86ca857b8",
 }
 
+# Article generators export plot-independent source tables. Presentation-only
+# changes therefore do not invalidate previously generated numerical outputs.
+NON_NUMERICAL_SOURCE_PATHS = ("breos/plotting.py",)
+
+
+def _report_source_paths(relative: str) -> tuple[str, ...]:
+    """Return source paths that can affect one generated report."""
+    if relative.startswith("monte-carlo-v1/"):
+        return (
+            "tools/reproduce_article1_montecarlo.py",
+            "validation/article1/article1-montecarlo.toml",
+        )
+    if relative.startswith(("orientation/", "weather-comparison/")):
+        return (
+            "tools/reproduce_article1_context.py",
+            "validation/article1/article1-projected-optimization.toml",
+        )
+    return (
+        "tools/reproduce_article1.py",
+        "validation/article1/article1-projected-optimization.toml",
+    )
+
 
 def _sha256(path: Path) -> str:
     digest = hashlib.sha256()
@@ -43,6 +66,7 @@ class BundleAudit:
         self.root = root.resolve()
         self.errors: list[str] = []
         self.reports: list[tuple[Path, dict[str, Any]]] = []
+        self.source_commits: set[str] = set()
 
     def require_file(self, relative: str) -> Path:
         path = self.root / relative
@@ -105,6 +129,93 @@ class BundleAudit:
         elif isinstance(value, list):
             for item in value:
                 self._verify_artifact_hashes(directory, item, report_name)
+
+    @staticmethod
+    def _source_object(commit: str, path: str) -> str:
+        return subprocess.run(
+            ["git", "rev-parse", f"{commit}:{path}"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+
+    @staticmethod
+    def _is_ancestor(commit: str, target: str) -> bool:
+        return (
+            subprocess.run(
+                ["git", "merge-base", "--is-ancestor", commit, target],
+                capture_output=True,
+                text=True,
+            ).returncode
+            == 0
+        )
+
+    @staticmethod
+    def _numerical_source_changed(commit: str, target: str) -> bool:
+        command = ["git", "diff", "--quiet", commit, target, "--", "breos"]
+        command.extend(f":(exclude){path}" for path in NON_NUMERICAL_SOURCE_PATHS)
+        result = subprocess.run(command, capture_output=True, text=True)
+        if result.returncode not in {0, 1}:
+            raise subprocess.CalledProcessError(result.returncode, command, result.stdout, result.stderr)
+        return result.returncode == 1
+
+    def _verify_source_compatibility(self, manifest: dict[str, Any]) -> None:
+        commits = {
+            str(payload.get("breos_source", {}).get("commit"))
+            for _path, payload in self.reports
+            if payload.get("breos_source", {}).get("commit")
+        }
+        manifest_commit = manifest.get("breos_source", {}).get("commit")
+        if manifest_commit:
+            commits.add(str(manifest_commit))
+        self.source_commits = commits
+        if len(commits) <= 1:
+            return
+        if not manifest_commit:
+            self.errors.append(
+                f"result bundle contains multiple BREOS commits without a manifest commit: {sorted(commits)}"
+            )
+            return
+
+        target = str(manifest_commit)
+        for commit in commits:
+            if not self._is_ancestor(commit, target):
+                self.errors.append(f"BREOS commit {commit} is not an ancestor of manifest commit {target}")
+
+        for commit in commits - {target}:
+            try:
+                numerical_source_changed = self._numerical_source_changed(commit, target)
+            except subprocess.CalledProcessError:
+                self.errors.append(f"cannot compare BREOS numerical source between commits {commit} and {target}")
+                continue
+            if numerical_source_changed:
+                self.errors.append(f"BREOS numerical source differs between commits {commit} and {target}")
+
+        for report_path, payload in self.reports:
+            commit = payload.get("breos_source", {}).get("commit")
+            if not commit or commit == target:
+                continue
+            relative = str(report_path.relative_to(self.root))
+            for source_path in _report_source_paths(relative):
+                try:
+                    recorded_object = self._source_object(str(commit), source_path)
+                    target_object = self._source_object(target, source_path)
+                except subprocess.CalledProcessError:
+                    self.errors.append(
+                        f"cannot compare {source_path} between BREOS commits {commit} and {target} for {relative}"
+                    )
+                    continue
+                if recorded_object != target_object:
+                    self.errors.append(
+                        f"source changed for {relative}: {source_path} differs between BREOS commits {commit} and {target}"
+                    )
+
+        dependency_sets = {
+            json.dumps(payload.get("dependency_versions", {}), sort_keys=True)
+            for _path, payload in self.reports
+            if payload.get("dependency_versions")
+        }
+        self.expect(len(dependency_sets) <= 1, "result bundle contains different numerical dependency versions")
 
     def deterministic_report(
         self,
@@ -229,15 +340,7 @@ class BundleAudit:
                     f"battery indoor remapping is not disabled: {case}",
                 )
 
-        commits = {
-            payload.get("breos_source", {}).get("commit")
-            for _path, payload in self.reports
-            if payload.get("breos_source", {}).get("commit")
-        }
-        manifest_commit = manifest.get("breos_source", {}).get("commit")
-        if manifest_commit:
-            commits.add(manifest_commit)
-        self.expect(len(commits) == 1, f"result bundle contains multiple BREOS commits: {sorted(commits)}")
+        self._verify_source_compatibility(manifest)
 
 
 def main() -> int:
@@ -253,7 +356,13 @@ def main() -> int:
             print(f"- {error}")
         return 1
     print(f"Article 1 bundle verification passed: {audit.root}")
-    print(f"Verified {len(audit.reports)} provenance reports from one BREOS commit.")
+    if len(audit.source_commits) == 1:
+        print(f"Verified {len(audit.reports)} provenance reports from one BREOS commit.")
+    else:
+        print(
+            f"Verified {len(audit.reports)} provenance reports across {len(audit.source_commits)} "
+            "source-compatible BREOS commits."
+        )
     return 0
 
 

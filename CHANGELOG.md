@@ -47,8 +47,9 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   -0.26 %/°C for open-circuit voltage. The Article configurations also record
   the 1.134 m by 2.278 m module frame explicitly.
 - Corrected power-to-energy aggregation in monthly and annual plotting helpers
-  by applying the inferred timestep duration. Hourly plots retain their prior
-  values; 15-minute energy plots are no longer four times too large.
+  by applying the inferred timestep duration independently of pandas' internal
+  datetime resolution. Hourly plots retain their prior values; 15-minute
+  energy plots are no longer four times too large.
 - The bundled hourly demandlib H0 profile now labels its watt-valued column as
   watts. The loader still accepts the historical kilowatt header for external
   compatibility.
@@ -56,6 +57,9 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   disable indoor remapping, matching the manuscript methodology.
 
 ### Fixed
+- Kept Article 1 PV module geometry metadata out of the strict BREOS runtime
+  configuration, and validate every Monte Carlo case before starting any
+  trajectories.
 - Filled the final three 15-minute slots produced by Makima weather
   interpolation by holding the last source-hour state instead of returning
   NaNs that downstream simulation silently treated as zeros.
