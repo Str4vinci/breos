@@ -5,7 +5,11 @@ import hashlib
 import pytest
 
 from tools.preflight_article1_inputs import EXPECTED_SHA256, _checked_input
-from tools.verify_article1_bundle import BundleAudit, _report_source_paths
+from tools.verify_article1_bundle import (
+    EXPECTED_MONTE_CARLO_YEARLY_COLUMNS,
+    BundleAudit,
+    _report_source_paths,
+)
 
 
 def test_article1_input_preflight_accepts_only_pinned_hash(tmp_path, monkeypatch):
@@ -35,6 +39,43 @@ def test_article1_bundle_audit_reports_missing_files(tmp_path):
     audit.require_file("missing.csv")
 
     assert audit.errors == ["missing file: missing.csv"]
+
+
+def test_article1_bundle_accepts_exact_monte_carlo_yearly_schema(tmp_path):
+    path = tmp_path / "monte-carlo-v1/c1/yearly.csv"
+    path.parent.mkdir(parents=True)
+    path.write_text(",".join(EXPECTED_MONTE_CARLO_YEARLY_COLUMNS) + "\n")
+    audit = BundleAudit(tmp_path)
+
+    audit.verify_monte_carlo_yearly_schema("c1")
+
+    assert audit.errors == []
+
+
+@pytest.mark.parametrize(
+    ("columns", "expected_error"),
+    [
+        (EXPECTED_MONTE_CARLO_YEARLY_COLUMNS[:-1], "missing ['Marginal_Grid_CI_gCO2_kWh']"),
+        ((*EXPECTED_MONTE_CARLO_YEARLY_COLUMNS, "Extra"), "unexpected ['Extra']"),
+        (
+            (
+                EXPECTED_MONTE_CARLO_YEARLY_COLUMNS[1],
+                EXPECTED_MONTE_CARLO_YEARLY_COLUMNS[0],
+                *EXPECTED_MONTE_CARLO_YEARLY_COLUMNS[2:],
+            ),
+            "column order differs",
+        ),
+    ],
+)
+def test_article1_bundle_rejects_monte_carlo_yearly_schema_drift(tmp_path, columns, expected_error):
+    path = tmp_path / "monte-carlo-v1/c1/yearly.csv"
+    path.parent.mkdir(parents=True)
+    path.write_text(",".join(columns) + "\n")
+    audit = BundleAudit(tmp_path)
+
+    audit.verify_monte_carlo_yearly_schema("c1")
+
+    assert any(expected_error in error for error in audit.errors)
 
 
 def test_article1_source_compatibility_uses_the_generator_for_each_report():
