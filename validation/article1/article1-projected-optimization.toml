@@ -27,6 +27,8 @@ charge_efficiency = 0.974679434
 discharge_efficiency = 0.974679434
 # Research input: 85 A at 51.2 V, expressed through the public power cap.
 max_charge_power_w = 4352.0
+temperature = 25.0
+indoor_model = { enabled = false }
 enable_replacement = true
 replacement_cost = "calculate"
 

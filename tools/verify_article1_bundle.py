@@ -73,8 +73,17 @@ class BundleAudit:
         self.expect(bool(source.get("commit")), f"missing BREOS commit: {relative}")
         self.expect(source.get("tracked_worktree_dirty") is False, f"dirty source recorded: {relative}")
         module = payload.get("resolved_pv_module", {})
-        coefficient = module.get("parameters", {}).get("T_Pmax_pct")
-        self.expect(coefficient == -0.34, f"unexpected PV T_Pmax_pct in {relative}: {coefficient!r}")
+        parameters = module.get("parameters", {})
+        pmax_coefficient = parameters.get("T_Pmax_pct")
+        voc_coefficient = parameters.get("T_Voc_pct")
+        self.expect(
+            pmax_coefficient == -0.34,
+            f"unexpected PV T_Pmax_pct in {relative}: {pmax_coefficient!r}",
+        )
+        self.expect(
+            voc_coefficient == -0.26,
+            f"unexpected PV T_Voc_pct in {relative}: {voc_coefficient!r}",
+        )
         self.expect(module.get("width_m") == 1.134, f"unexpected PV width in {relative}")
         self.expect(module.get("length_m") == 2.278, f"unexpected PV length in {relative}")
 
@@ -117,6 +126,11 @@ class BundleAudit:
         self.expect(config.get("load", {}).get("profile_type") == profile, f"wrong load profile: {relative}")
         self.expect(
             config.get("battery", {}).get("calendar_model") == calendar_model, f"wrong calendar model: {relative}"
+        )
+        self.expect(config.get("battery", {}).get("temperature") == 25.0, f"wrong battery temperature: {relative}")
+        self.expect(
+            config.get("battery", {}).get("indoor_model") == {"enabled": False},
+            f"battery indoor remapping is not disabled: {relative}",
         )
         self.expect(
             config.get("optimization", {}).get("objective_basis") == "projected", f"wrong objectives: {relative}"
@@ -208,6 +222,12 @@ class BundleAudit:
                 self.expect(settings.get("years_per_run") == 20, f"wrong Monte Carlo horizon: {case}")
                 self.expect(settings.get("seed") == 1, f"wrong Monte Carlo seed: {case}")
                 self.expect(settings.get("load_distribution") == "uniform", f"wrong load distribution: {case}")
+                config = payload.get("resolved_config", {})
+                self.expect(config.get("battery_temperature") == 25.0, f"wrong battery temperature: {case}")
+                self.expect(
+                    config.get("battery_indoor_model") == {"enabled": False},
+                    f"battery indoor remapping is not disabled: {case}",
+                )
 
         commits = {
             payload.get("breos_source", {}).get("commit")

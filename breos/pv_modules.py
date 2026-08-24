@@ -36,8 +36,10 @@ MODULES: Dict[str, PVModuleParams] = {
         Isc=14.01,  # A - Short circuit current
         celltype="monoSi",
         Module_Efficiency=0.213,  # fraction - Module Efficiency (21.3 %)
+        # Suntech EN-STP-Ultra-V-NO3.02-Rev 2022 coefficients for the
+        # monofacial C72/Vmh revision represented by these STC values.
         T_Pmax_pct=-0.34,  # %/°C - Power temperature coefficient
-        T_Voc_pct=-0.304,  # %/°C - Voltage temperature coefficient
+        T_Voc_pct=-0.26,  # %/°C - Voltage temperature coefficient
         T_Isc_pct=0.05,  # %/°C - Current temperature coefficient
         N_Cells=6 * 24,  # 144 cells
         Name="Suntech_STP550S-C72/Vmh",

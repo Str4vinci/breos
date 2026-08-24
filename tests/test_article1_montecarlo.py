@@ -32,8 +32,11 @@ def test_article1_montecarlo_config_pins_manuscript_method():
         "tilt": 25.0,
         "azimuth": 185.0,
     }
+    assert config["battery_temperature"] == 25.0
+    assert config["battery_indoor_model"] == {"enabled": False}
     module = _pv_module_provenance(config)
     assert module["parameters"]["T_Pmax_pct"] == -0.34
+    assert module["parameters"]["T_Voc_pct"] == -0.26
     assert module["area_m2"] == 1.134 * 2.278
 
 

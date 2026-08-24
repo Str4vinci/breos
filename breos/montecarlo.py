@@ -172,7 +172,10 @@ def _precompute_year_caches(
                 )
         dc_by_year[year] = build_dc_system_base(cfg, resolved, weather)
         temp_by_year[year] = build_battery_temperature_series(
-            "weather", index=dc_by_year[year].index, weather_df=weather
+            cfg["battery_temperature"],
+            index=dc_by_year[year].index,
+            weather_df=weather,
+            indoor_model=cfg["battery_indoor_model"],
         )
     return dc_by_year, temp_by_year
 

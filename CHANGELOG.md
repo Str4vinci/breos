@@ -27,6 +27,9 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   exposes the energy, degradation, and discounted-cost paths behind summary
   distributions, and the CLI writes a provenance report with input and output
   hashes. Existing normal sampling and aggregate-only output remain defaults.
+- Added public battery-temperature and indoor-temperature-model configuration
+  fields. Deterministic App and Monte Carlo runs now use the same resolved
+  temperature input while retaining the ambient-weather default.
 - Added an Article 1 Monte Carlo configuration and BREOS orchestration command
   for C1-C5. It pins the manuscript's uniform 0.95-1.05 load multiplier and
   records that the archived research implementation instead used a normal
@@ -36,15 +39,18 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   energy conservation remains opt-in for general runs.
 
 ### Changed
-- Updated the Suntech STP550S-C72/Vmh catalogue power temperature coefficient
-  to the Article 1 value of -0.34 %/°C and made the Article configurations
-  record the 1.134 m by 2.278 m module frame explicitly.
+- Updated the Suntech STP550S-C72/Vmh catalogue temperature coefficients to
+  the matching monofacial datasheet values of -0.34 %/°C for maximum power and
+  -0.26 %/°C for open-circuit voltage. The Article configurations also record
+  the 1.134 m by 2.278 m module frame explicitly.
 - Corrected power-to-energy aggregation in monthly and annual plotting helpers
   by applying the inferred timestep duration. Hourly plots retain their prior
   values; 15-minute energy plots are no longer four times too large.
 - The bundled hourly demandlib H0 profile now labels its watt-valued column as
   watts. The loader still accepts the historical kilowatt header for external
   compatibility.
+- The Article configurations now pin a fixed 25 °C battery temperature and
+  disable indoor remapping, matching the manuscript methodology.
 
 ### Fixed
 - Filled the final three 15-minute slots produced by Makima weather

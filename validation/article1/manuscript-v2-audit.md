@@ -51,9 +51,12 @@ submission.
    `payback_year_exact`, which linearly interpolates the discounted cumulative
    cash-flow crossing, rather than the first positive integer year.
 5. The Article module power temperature coefficient is -0.34 %/°C. The
-   versioned configuration names the module preset, and every reproduction
-   report records the fully resolved electrical parameters and frame area so
-   this input is not implicit.
+   matching [Suntech monofacial module sheet](https://www.suntech-power.com/wp-content/uploads/download/product-specification/EN_Ultra_V_STP550S_C72_Vmh.pdf)
+   gives an open-circuit-voltage coefficient of -0.26 %/°C, or
+   -0.129688 V/°C at 49.88 V; this agrees with Table 1 after rounding. The
+   versioned configuration names the corrected module preset, and every
+   reproduction report records the fully resolved electrical parameters and
+   frame area so these inputs are not implicit.
 6. BREOS 0.5.2's default Makima weather resampling left the last three
    15-minute slots outside the interpolation domain. BREOS 0.6 holds the last
    observed weather state through that final source hour. All corrected
@@ -63,6 +66,15 @@ submission.
    uses the symmetric transform and still enforces zero irradiance when the
    clear-sky value is zero. The Article energy-conservation option then
    preserves every source hour's mean irradiance.
+8. The manuscript assumes a fixed battery temperature of 25 °C. Both archived
+   Article configurations omitted that setting and therefore inherited the
+   ambient-weather default. The BREOS 0.6 Article configurations explicitly
+   use 25 °C and disable indoor-temperature remapping. Treat the resulting
+   degradation and economic changes as corrected-model drift.
+9. Section 2.7 says that Monte Carlo samples weather from 2005-2024. The July
+   run, Figure 6 text, and versioned BREOS configuration use 2005-2023, with
+   2024 excluded from the sampling pool. Update Section 2.7 to 2005-2023 unless
+   the study is intentionally redesigned and rerun with 2024 included.
 
 ## Release gate
 

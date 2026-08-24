@@ -4,6 +4,22 @@ This runbook generates the BREOS source tables for the Article 1 manuscript.
 The commands write generated files under the ignored `results/` directory.
 They do not write to the research repository.
 
+## Prepare the BREOS environment
+
+Run from a clean checkout of the final 0.6.0 release commit:
+
+```bash
+cd /path/to/breos
+git status --short --branch
+uv sync --extra dev --extra docs --frozen
+uv run python -c 'import breos; assert breos.__version__ == "0.6.0", breos.__version__; print(breos.__version__)'
+```
+
+Do not start the scientific runs if `git status` lists tracked changes or the
+version check does not print `0.6.0`. The reproduction tools record both facts
+in their provenance files, and the final bundle verifier rejects dirty or
+mixed-commit results.
+
 ## Set the external input paths
 
 Set these paths before you start:
@@ -40,6 +56,10 @@ manuscript data package.
 Run all commands from the BREOS repository root at the final release commit.
 Commit all tracked changes before the scientific runs so each provenance file
 records `tracked_worktree_dirty` as `false`.
+
+The versioned deterministic and Monte Carlo configurations use a fixed battery
+temperature of 25 °C. They disable BREOS's optional indoor-temperature
+transform so the supplied value remains exactly 25 °C.
 
 ## Generate the fixed base cases
 
@@ -194,6 +214,10 @@ Omit `--runs` to use the configured 10,000 trajectories. Each case writes
 The Monte Carlo configuration is the EUR 500/kWh base case. The EUR 350 and
 EUR 711/kWh assumptions apply to the deterministic Pareto-front sensitivity;
 the manuscript does not define separate Monte Carlo studies for those costs.
+The weather file contains 2005-2024, but the configured sampling pool is
+2005-2023. This matches the archived Article workflow and the PVGIS-SARAH3 TMY
+source period. Update Section 2.7 of the manuscript, which currently says that
+the sampled pool includes 2024.
 
 ## Preserve the final bundle
 

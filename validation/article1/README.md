@@ -35,7 +35,12 @@ uniform annual load multiplier from 0.95 through 1.05.
 Both configurations identify the Suntech module and explicitly record its
 1.134 m by 2.278 m frame. Every generated provenance file records the complete
 resolved module parameters, including the Article power temperature
-coefficient of -0.34 %/°C.
+coefficient of -0.34 %/°C and open-circuit-voltage coefficient of
+-0.26 %/°C (-0.13 V/°C after rounding at the rated Voc).
+
+Both configurations also pin battery temperature to 25 °C and disable the
+optional indoor-temperature transform. This matches the manuscript assumption
+instead of inheriting BREOS's ambient-weather default.
 
 ## External inputs
 
@@ -62,8 +67,10 @@ The archived workflow contained methodological issues that BREOS 0.6 does not
 preserve: it repeated hourly irradiance in the nominal 15-minute run, used a
 flat unbounded inverter conversion, and sampled normally distributed load in
 the Monte Carlo despite the manuscript specifying a bounded uniform
-distribution. BREOS 0.6 also fixes the final-hour Makima interpolation gap.
-These changes can alter every reported result.
+distribution. The archived deterministic and Monte Carlo configurations also
+omitted the manuscript's fixed 25 °C battery temperature and therefore used
+the ambient-weather default. BREOS 0.6 also fixes the final-hour Makima
+interpolation gap. These changes can alter every reported result.
 
 Earlier corrected values generated before the final module and resampling
 fixes are intentionally not reported here. Add final numerical comparisons

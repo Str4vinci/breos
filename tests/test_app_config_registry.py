@@ -57,6 +57,8 @@ EXPECTED_DEFAULTS = {
     "pv_loss_overrides": None,
     "start_date": "2023-01-01",
     "horizon_profile": None,
+    "battery_temperature": "weather",
+    "battery_indoor_model": None,
 }
 
 EXPECTED_CLI_FIELDS = [
