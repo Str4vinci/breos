@@ -68,6 +68,18 @@ def test_resample_to_15min_keeps_all_slots_in_last_hour():
     assert resampled.index[-1] == pd.Timestamp("2025-01-01 02:45")
 
 
+def test_resample_to_15min_makima_holds_last_observation_through_last_hour():
+    idx = pd.date_range("2025-01-01 00:00", periods=4, freq="h")
+    weather = pd.DataFrame({"temp_air": [0.0, 4.0, 8.0, 12.0]}, index=idx)
+
+    resampled = resample_to_15min(weather)
+
+    assert len(resampled) == 16
+    assert resampled.index[-1] == pd.Timestamp("2025-01-01 03:45")
+    assert resampled["temp_air"].notna().all()
+    assert resampled.loc["2025-01-01 03:00":, "temp_air"].tolist() == [12.0] * 4
+
+
 def test_resample_to_15min_can_preserve_each_hours_irradiance_energy():
     idx = pd.date_range("2025-06-21 10:00", periods=4, freq="h", tz="UTC")
     weather = pd.DataFrame(
@@ -91,6 +103,15 @@ def test_resample_to_15min_can_preserve_each_hours_irradiance_energy():
     for column in ("ghi", "dni", "dhi"):
         hourly_means = resampled[column].to_numpy().reshape(len(weather), 4).mean(axis=1)
         assert hourly_means == pytest.approx(weather[column].to_numpy())
+
+
+def test_clear_sky_resampling_does_not_attenuate_values_at_source_timestamps():
+    idx = pd.date_range("2025-06-21 10:00", periods=4, freq="h", tz="UTC")
+    weather = pd.DataFrame({"ghi": [50.0, 100.0, 75.0, 25.0]}, index=idx)
+
+    resampled = resample_to_15min(weather, latitude=41.1579, longitude=-8.6291)
+
+    assert resampled.loc[idx, "ghi"].to_numpy() == pytest.approx(weather["ghi"].to_numpy())
 
 
 def test_fetch_tmy_weather_accepts_hourly_frequency_alias_and_uses_horizon_by_default(monkeypatch):
@@ -300,6 +321,21 @@ def test_fetch_tmy_without_sample_year_keeps_original_index(monkeypatch):
     assert captured["roll_utc_offset"] is None
     assert captured["coerce_year"] is None
     assert weather.index[0] == tmy.index[0]
+
+
+def test_fetch_tmy_rejects_fractional_hour_timezone_before_request(monkeypatch):
+    requested = False
+
+    def fake_get_pvgis_tmy(*args, **kwargs):
+        nonlocal requested
+        requested = True
+
+    monkeypatch.setattr("breos.weather.pvlib.iotools.get_pvgis_tmy", fake_get_pvgis_tmy)
+
+    with pytest.raises(ValueError, match="fractional-hour timezone"):
+        fetch_tmy_weather_data(22.57, 88.36, sample_year=2025, timezone="Asia/Kolkata")
+
+    assert requested is False
 
 
 def test_read_epw_accepts_15t_frequency_alias(monkeypatch):

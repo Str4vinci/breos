@@ -19,7 +19,7 @@ _KNOWN = dict(
     Isc=14.01,
     alpha_sc=0.05 * 14.01 / 100,
     beta_voc=-0.304 * 49.88 / 100,
-    gamma_pmp=-0.36,
+    gamma_pmp=-0.34,
     cells_in_series=144,
 )
 

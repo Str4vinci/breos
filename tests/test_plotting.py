@@ -1,6 +1,18 @@
 """Tests for plotting helpers."""
 
+import pandas as pd
 import pytest
+
+
+def test_power_frame_to_energy_kwh_applies_timestep_duration():
+    from breos.plotting import _power_frame_to_energy_kwh
+
+    index = pd.date_range("2025-01-01", periods=4, freq="15min")
+    power = pd.DataFrame({"Load": [1000.0] * 4}, index=index)
+
+    energy = _power_frame_to_energy_kwh(power)
+
+    assert energy["Load"].sum() == pytest.approx(1.0)
 
 
 def test_plot_pv_loss_waterfall_writes_png(tmp_path):

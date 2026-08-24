@@ -1,12 +1,41 @@
 """Tests for optimization guardrails."""
 
+from types import SimpleNamespace
+
 import numpy as np
 import pandas as pd
 import pytest
 
 pytest.importorskip("pymoo")
 
-from breos.optimization import SolarDesignProblem, optimize_system_multi_objective
+from breos.optimization import SolarDesignProblem, optimize_system_multi_objective, optimize_tilt
+
+
+def test_optimize_tilt_rejects_unimplemented_objective():
+    with pytest.raises(ValueError, match="max_production"):
+        optimize_tilt(
+            pd.DataFrame(),
+            SimpleNamespace(latitude=41.0),
+            1,
+            objective="max_self_consumption",
+            verbose=False,
+        )
+
+
+def test_optimize_tilt_raises_when_every_evaluation_fails(monkeypatch):
+    monkeypatch.setattr(
+        "breos.optimization.calculate_pv_production_dc",
+        lambda **kwargs: (_ for _ in ()).throw(RuntimeError("invalid weather")),
+    )
+
+    with pytest.raises(RuntimeError, match="failed for every"):
+        optimize_tilt(
+            pd.DataFrame(),
+            SimpleNamespace(latitude=41.0),
+            1,
+            n_points=2,
+            verbose=False,
+        )
 
 
 def test_projected_objective_basis_uses_two_objectives_and_optional_zeb_constraint():

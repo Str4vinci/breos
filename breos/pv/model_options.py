@@ -298,10 +298,10 @@ def validate_bifacial_inputs(
 
 def resolve_perez_model(model_perez: str) -> str:
     """Validate the Perez coefficient set name."""
-    if model_perez not in PEREZ_MODELS:
+    if not is_known_model(model_perez, PEREZ_MODELS):
         valid = ", ".join(PEREZ_MODELS)
         raise ValueError(f"Unknown Perez coefficient model {model_perez!r}. Valid models: {valid}")
-    return model_perez
+    return normalise_model_name(model_perez)
 
 
 def resolve_ground_reflectance(albedo, surface_type):

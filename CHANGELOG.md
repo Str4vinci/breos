@@ -13,10 +13,10 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   constraint, not a third objective.
 - Added a version-controlled Article 1 configuration, deterministic
   fixed-candidate reproduction command, per-candidate yearly and financial
-  source tables, opt-in licensed-profile regression, and comparison report.
-  The report preserves the archived values while
-  explaining corrected drift from the original hourly-to-15-minute weather
-  handling and AC dispatch methodology.
+  source tables, input preflight, complete result-bundle verifier, and
+  manuscript-to-source-data audit. Generated provenance records the resolved
+  PV module and geometry as well as software, source, config, input, and output
+  hashes.
 - Added `evaluate_projected_design` for detailed evaluation of a fixed design.
   It returns the projected metrics, annual energy and degradation-state
   ledger, discounted financial ledger, LCOE, and configured lifetime
@@ -33,7 +33,39 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   draw.
 - Added opt-in hourly-energy conservation to `resample_to_15min`. It preserves
   each source hour's GHI, DNI, and DHI energy after clear-sky interpolation;
-  the established resampling output remains the default.
+  energy conservation remains opt-in for general runs.
+
+### Changed
+- Updated the Suntech STP550S-C72/Vmh catalogue power temperature coefficient
+  to the Article 1 value of -0.34 %/°C and made the Article configurations
+  record the 1.134 m by 2.278 m module frame explicitly.
+- Corrected power-to-energy aggregation in monthly and annual plotting helpers
+  by applying the inferred timestep duration. Hourly plots retain their prior
+  values; 15-minute energy plots are no longer four times too large.
+- The bundled hourly demandlib H0 profile now labels its watt-valued column as
+  watts. The loader still accepts the historical kilowatt header for external
+  compatibility.
+
+### Fixed
+- Filled the final three 15-minute slots produced by Makima weather
+  interpolation by holding the last source-hour state instead of returning
+  NaNs that downstream simulation silently treated as zeros.
+- Made clear-sky-index interpolation use the same low-light stabilizer during
+  division and reconstruction, avoiding systematic low-light attenuation.
+- Reject fractional-hour timezone row rolls when coercing PVGIS TMY data to a
+  sample year, because pvlib's interface accepts only whole-hour rolls. This
+  replaces silent 15-30 minute irradiance misalignment with an actionable
+  error.
+- Normalize Perez coefficient-set names consistently with the other PV model
+  selectors.
+- Reject the unimplemented `max_self_consumption` tilt objective and raise when
+  every tilt evaluation fails instead of silently returning the first angle.
+- Warn when the CEC fit returns a best-residual physical solution that does not
+  meet the requested gamma tolerance.
+- Fixed plotting legend ordering and multi-scenario break-even x-axis limits.
+- Removed an unreachable global-degradation plot branch that checked column
+  names no BREOS simulation produces. The supported per-battery degradation
+  plot continues to use the production cumulative-degradation columns.
 
 ## [0.5.2] - 2026-08-19
 
