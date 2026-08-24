@@ -4,33 +4,49 @@ BREOS 0.5.2 keeps the APIs below working. Deprecated callables emit a
 `DeprecationWarning` when called, `PolysunDegradationConfig` warns when
 instantiated, and directly importing `breos.numba_kernels` warns. The
 comparison-only constants cannot warn on use and are announced here and in the
-changelog. All are scheduled for removal in BREOS 0.6.0. Python hides
-`DeprecationWarning` by default; run tests with `-W default` or
-`-W error::DeprecationWarning` to find calls before upgrading.
+changelog. Python hides `DeprecationWarning` by default; run tests with
+`-W default` or `-W error::DeprecationWarning` to find calls before upgrading.
 
-The `breos[fast]` extra was also announced for removal in 0.6.0. That
-announcement is withdrawn: the extra is retained and is no longer deprecated.
-See [Accelerated screening kernels](#accelerated-screening-kernels) below.
+Two announced 0.6.0 removals are withdrawn. The `breos[fast]` extra is retained
+and is no longer deprecated. `breos.numba_kernels` is retained and stays
+deprecated. Both are covered under
+[Accelerated screening kernels](#accelerated-screening-kernels) below;
+everything else on this page is still scheduled for removal in 0.6.0.
 
 The {py:class}`~breos.App` facade and its configuration are unaffected.
 
 ## Accelerated screening kernels
 
-`breos.numba_kernels` is deprecated and is removed in 0.6.0. These approximate
-standalone kernels are not called by `App` or by
-{py:func}`breos.battery.simulate_energy_balance`, and their degradation and
-dispatch behavior does not match the reference simulation. Use
-{py:func}`breos.battery.simulate_energy_balance` for supported results. There
-is no supported accelerated replacement in 0.5.x.
+**The announced 0.6.0 removal of `breos.numba_kernels` is withdrawn.** The
+module is retained. It stays deprecated, and importing it still warns: it is
+not called by `App` or by {py:func}`breos.battery.simulate_energy_balance`, and
+its degradation and dispatch behavior does not match the reference simulation,
+so it must not be used for reported results. Use
+{py:func}`breos.battery.simulate_energy_balance` for those. No removal date is
+scheduled; this page will announce one if that changes.
 
-**The `breos[fast]` extra is retained.** Its earlier deprecation is withdrawn.
-In 0.6.0 the extra installs the optional dependency for a new private daily
-dispatch kernel that Monte Carlo can select with
-`[montecarlo].execution_backend = "numba"`. Unlike the removed screening
-kernels, that kernel carries the production BREOS dispatch and ledger and
-leaves rainflow counting, degradation, resistance growth, and replacement in
-Python. It is private (`breos._numba_dispatch`) and has no public API surface;
-select it through configuration, not by importing it.
+**The `breos[fast]` extra is retained.** Its earlier deprecation is withdrawn
+as well.
+
+### These are two different things
+
+The retained screening module and the accelerated backend added in 0.6.0 share
+a dependency and nothing else. Confusing them would be easy and would matter,
+so the difference is stated plainly:
+
+| | `breos.numba_kernels` | `breos._numba_dispatch` |
+|---|---|---|
+| Status | Retained, deprecated, never called by the supported path | The 0.6.0 accelerated backend |
+| Fidelity | Approximate. A different cycle proxy and no replacement logic | Bit-identical to the Python reference |
+| Scope | Standalone whole-simulation kernels | The within-day dispatch only |
+| Degradation | Its own approximation | Left in Python: rainflow counting, calendar and cycle degradation, resistance growth, replacement |
+| How to use | Not for reported results | Configuration only, never by import |
+
+The 0.6.0 backend is private (`breos._numba_dispatch`) and has no public API
+surface. Select it through configuration: `[montecarlo].execution_backend`,
+the `execution_backend` App configuration key, or `--execution-backend` on the
+supported command-line tools. It carries the production BREOS dispatch and
+ledger, and reproduces the Python path bit for bit on a stated toolchain.
 
 BREOS remains fully functional without Numba. The Python path stays the
 default and the numerical reference.

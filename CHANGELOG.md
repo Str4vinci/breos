@@ -83,8 +83,15 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   disable indoor remapping, matching the manuscript methodology.
 - Withdrew the announced 0.6.0 removal of the `breos[fast]` extra. The extra
   is retained and undeprecated because it now installs the dependency for the
-  optional Monte Carlo dispatch backend. The separate removal of the
-  approximate `breos.numba_kernels` screening module proceeds as announced.
+  optional dispatch backend.
+- Withdrew the announced 0.6.0 removal of the `breos.numba_kernels` screening
+  module. The module is retained and stays deprecated: it is still not called
+  by `App` or by the supported simulation path, and its approximate cycle proxy
+  and absent replacement logic mean it must not be used for reported results.
+  No removal date is scheduled. It is unrelated to the accelerated backend
+  added in this release beyond sharing the optional dependency -- that backend
+  is private, covers the within-day dispatch only, leaves degradation in
+  Python, and is bit-identical to the reference.
 
 ### Fixed
 - Kept Article 1 PV module geometry metadata out of the strict BREOS runtime
@@ -156,8 +163,9 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 ### Deprecated
 - Deprecated the unused `breos.numba_kernels` module and `breos[fast]` extra;
   the standalone approximate kernels are not used by `App` or the supported
-  simulation path and are scheduled for removal in 0.6.0. The `breos[fast]`
-  part of this announcement was later withdrawn; see Unreleased.
+  simulation path and are scheduled for removal in 0.6.0. Both removals were
+  later withdrawn: the extra is undeprecated and the module is retained while
+  staying deprecated. See Unreleased.
 - Deprecated the article-scoped, documentation-derived Wöhler/Miner comparison
   subsystem, its three plots, and its comparison-only constants for removal in
   0.6.0. Despite legacy API names, this is an independent BREOS approximation,

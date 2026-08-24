@@ -56,6 +56,21 @@ def _identical(left: pd.Series, right: pd.Series) -> tuple[bool, str]:
     return False, f"{int(unequal.sum())}/{len(left)} elements differ"
 
 
+def _execution_block(directory: Path) -> dict | None:
+    """Return a case's execution provenance, wherever the writer put it.
+
+    App and Monte Carlo write it at the top level; the Article reproduction
+    tool nests it under ``montecarlo_provenance``. Looking in one place only
+    reports ``null`` for a run that did record its backend, which would defeat
+    the point of checking.
+    """
+    provenance = json.loads((directory / "provenance.json").read_text())
+    execution = provenance.get("execution")
+    if execution is None:
+        execution = (provenance.get("montecarlo_provenance") or {}).get("execution")
+    return execution
+
+
 def compare_case(reference: Path, candidate: Path) -> tuple[int, list[str]]:
     problems: list[str] = []
     compared = 0
@@ -99,13 +114,22 @@ def main() -> int:
 
     print(f"reference: {reference}")
     print(f"candidate: {candidate}")
+    backends = {}
     for label, directory in (("reference", reference), ("candidate", candidate)):
-        provenance = json.loads((directory / "provenance.json").read_text())
-        execution = provenance.get("execution")
+        execution = _execution_block(directory)
+        backends[label] = (execution or {}).get("execution_backend")
         print(f"  {label} execution: {json.dumps(execution)}")
     print()
 
     compared, problems = compare_case(reference, candidate)
+
+    # Without this the gate can silently compare two Python runs and call it a
+    # pass. The candidate must say it ran the compiled path, and the two sides
+    # must not report the same backend.
+    if backends["candidate"] is None:
+        problems.append("candidate records no execution backend — cannot prove the compiled path ran")
+    elif backends["candidate"] == backends["reference"]:
+        problems.append(f"both sides report backend {backends['candidate']!r} — the comparison proves nothing")
     print()
     if problems:
         for line in problems:
