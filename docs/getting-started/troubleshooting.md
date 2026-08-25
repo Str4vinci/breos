@@ -49,14 +49,11 @@ by the workflow:
 pip install "breos[plots]"          # Matplotlib plotting helpers
 pip install "breos[optimization]"   # pymoo optimization
 pip install "breos[weather]"        # Open-Meteo historical weather
-pip install "breos[fast]"           # Deprecated; removed in BREOS 0.6.0
+pip install "breos[fast]"           # Optional compiled dispatch backend
 ```
 
-The current Numba kernels are not called by `breos.App`, Monte Carlo, or
-multi-objective optimization, so installing `fast` does not accelerate those
-production paths. The extra and its standalone kernels are deprecated in 0.5.1
-and scheduled for removal in 0.6.0; see
-[Deprecations for 0.6.0](../deprecations.md).
+The `fast` extra is retained in BREOS 0.6.0 for the optional compiled dispatch
+backend. The pure-Python path remains the default and numerical reference.
 
 Core imports, help, option discovery, and configuration validation do not load
 Matplotlib. If an actual plotting command reports that its configuration

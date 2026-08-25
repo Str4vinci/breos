@@ -44,18 +44,14 @@ from breos.battery import (
     BatteryConfig,
     apply_indoor_temperature_model,
     compute_cell_temperature,
-    compute_halfcycle_energy_throughput,
     detect_cycles_rainflow,
     detect_half_cycles_from_soc_series,
-    k_c_rate_Q,
     k_c_rate_R,
-    k_doc_Q,
     k_doc_R,
     resistance_to_efficiency,
     simulate_energy_balance,
     update_battery_resistance_calendar,
     update_battery_resistance_cyclewise,
-    update_battery_soc,
     update_battery_soh_calendar,
     update_battery_soh_cyclewise,
 )
@@ -133,12 +129,9 @@ from breos.inverter import (
 # I/O (export/import functions)
 from breos.io import (
     export_cost_analysis,
-    export_monthly_summary,
     export_results,
     export_summary,
-    export_yearly_summary,
     load_results,
-    save_simulation_report,
 )
 
 # Load Profiles
@@ -161,18 +154,6 @@ from breos.optimization import (
     optimize_battery_size,
     optimize_system_multi_objective,
     optimize_tilt,
-    optimize_tilt_brent,
-    size_for_zeb,
-)
-
-# Independent documentation-derived lifetime approximation (deprecated)
-from breos.polysun_degradation import (
-    PolysunDegradationConfig,
-    compute_dod_histogram,
-    compute_miner_damage,
-    predict_polysun_lifetime,
-    simulate_polysun_degradation,
-    woehler_cycles_to_failure,
 )
 
 # PV Module Database
@@ -190,31 +171,24 @@ from breos.solar import (
     calculate_pv_production_ac,
     calculate_pv_production_dc,
     calculate_pv_production_dc_tracking,
-    calculate_pv_production_tmy,
     dc_to_ac,
     default_azimuth,
     estimate_optimal_tilt,
-    zeb_sizer,
 )
 
 # Utils
 from breos.utils import (
-    count_leap_years,
     get_hours_per_step,
     get_steps_per_day,
     get_steps_per_year,
     is_leap_year,
-    number_of_cores,
     remap_datetime_index_years,
 )
 
 # Weather
 from breos.weather import (
     build_battery_temperature_series,
-    csv_15min_to_hourly,
-    csv_hourly_to_15min,
     extract_ambient_temperature,
-    fetch_tmy_nsrdb,
     fetch_tmy_weather_data,
     fetch_weather_data,
     load_weather,
@@ -223,7 +197,6 @@ from breos.weather import (
     read_epw_file,
     resample_tmy_to_15min,
     resample_to_15min,
-    resample_to_hourly,
     select_random_year_and_replace_datetime,
 )
 
@@ -246,13 +219,8 @@ _LAZY_PLOTTING_EXPORTS = frozenset(
         "plot_calendar_aging_sensitivity",
         "plot_cell_temperature",
         "plot_co2_savings",
-        "plot_degradation_methodology_comparison",
         "plot_grid_independence_heatmap",
-        "plot_lifetime_prediction_comparison",
         "plot_location_comparison_delta",
-        "plot_loo_cv_summary",
-        "plot_loo_param_stability",
-        "plot_loo_predictions",
         "plot_montecarlo_final_soh_distribution",
         "plot_montecarlo_grid_independence_distribution",
         "plot_montecarlo_npv_distribution",
@@ -262,7 +230,6 @@ _LAZY_PLOTTING_EXPORTS = frozenset(
         "plot_pareto_front_analysis",
         "plot_pv_loss_waterfall",
         "plot_resistance_and_efficiency",
-        "plot_temperature_sensitivity_comparison",
         "plot_tilt_optimization",
         "plot_timeseries",
         "plot_validation_degradation_split",
@@ -295,14 +262,6 @@ def __dir__() -> list[str]:
     return sorted(set(globals()) | _LAZY_PLOTTING_EXPORTS)
 
 
-# Numba kernels (lazy import to avoid slow import at package load)
-def _get_numba():
-    """Lazy import of Numba-accelerated kernels."""
-    from breos import numba_kernels
-
-    return numba_kernels
-
-
 __all__ = [
     # Public facade
     "App",
@@ -319,7 +278,6 @@ __all__ = [
     # Weather
     "load_weather",
     "fetch_tmy_weather_data",
-    "fetch_tmy_nsrdb",
     "fetch_weather_data",
     "read_epw_file",
     # Solar
@@ -361,7 +319,6 @@ __all__ = [
     "calculate_lcoe_from_projection",
     # Optimization
     "optimize_tilt",
-    "optimize_tilt_brent",
     "optimize_battery_size",
     "optimize_system_multi_objective",
     # Monte Carlo
@@ -372,6 +329,4 @@ __all__ = [
     "export_results",
     "export_summary",
     "load_results",
-    "export_monthly_summary",
-    "export_yearly_summary",
 ]

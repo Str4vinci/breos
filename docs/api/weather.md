@@ -6,9 +6,6 @@ temperature time series.
 Local weather loading and PVGIS/NSRDB TMY helpers use the core install.
 Open-Meteo historical fetching requires `breos[weather]`.
 
-The NSRDB helper and legacy downsampling/CSV converters are scheduled for
-removal in 0.6.0. See [Deprecations for 0.6.0](../deprecations.md).
-
 ## Horizon provenance
 
 Weather returned by BREOS records a `horizon` object in
@@ -76,7 +73,6 @@ filename such as `pvgis-sarah3`.
    :toctree: generated/
 
    breos.weather.fetch_tmy_weather_data
-   breos.weather.fetch_tmy_nsrdb
    breos.weather.fetch_weather_data
 ```
 
@@ -91,7 +87,6 @@ sunrise / sunset transitions stay physically consistent.
    :toctree: generated/
 
    breos.weather.resample_to_15min
-   breos.weather.resample_to_hourly
    breos.weather.resample_tmy_to_15min
 ```
 

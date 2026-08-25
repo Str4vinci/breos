@@ -4,6 +4,17 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 
 ## [Unreleased]
 
+### Removed
+
+- Removed the APIs deprecated for 0.6.0: the standalone
+  `breos.numba_kernels` screening module, the documentation-derived Polysun
+  comparison baseline, nine unverified plotting helpers, and 17 orphaned
+  helpers across `battery`, `io`, `optimization`, `solar`, `utils`, and
+  `weather`. The `breos[fast]` extra remains available for the new compiled
+  dispatch backend. The archived
+  [v0.5.2 migration guide](https://github.com/Str4vinci/breos/blob/v0.5.2/docs/deprecations.md)
+  lists replacements for removed helpers.
+
 ## [0.5.2] - 2026-08-19
 
 ### Added
@@ -59,7 +70,7 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   orphaned helpers across `battery`, `io`, `optimization`, `solar`, `utils`,
   and `weather` for removal in 0.6.0. Functions keep their signatures and
   behaviour throughout 0.5.x and emit `DeprecationWarning` only when called;
-  see the [deprecation guide](https://breos.readthedocs.io/en/latest/deprecations.html)
+  see the [v0.5.2 deprecation guide](https://github.com/Str4vinci/breos/blob/v0.5.2/docs/deprecations.md)
   for the complete inventory and migration paths.
 
 ### Fixed
