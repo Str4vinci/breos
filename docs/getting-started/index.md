@@ -55,6 +55,22 @@ Copy working configurations for PV-only, PV + battery, east-west roofs,
 external load profiles, sweeps, and offline runs.
 :::
 
+:::{grid-item-card} Optimization
+:link: optimization
+:link-type: doc
+
+Search for a design instead of specifying one: NSGA-II sizing, projected-lifetime
+objectives, and detailed evaluation of a chosen candidate.
+:::
+
+:::{grid-item-card} Monte Carlo
+:link: monte-carlo
+:link-type: doc
+
+Resample weather years and demand to get outcome distributions rather than one
+number, with reproducible seeds and provenance.
+:::
+
 :::{grid-item-card} Configuration
 :link: configuration
 :link-type: doc

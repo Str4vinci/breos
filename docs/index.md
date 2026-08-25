@@ -149,6 +149,8 @@ getting-started/quickstart
 getting-started/troubleshooting
 getting-started/inputs
 getting-started/recipes
+getting-started/optimization
+getting-started/monte-carlo
 getting-started/configuration
 getting-started/options
 getting-started/interpreting-results
