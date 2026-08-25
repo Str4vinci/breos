@@ -394,6 +394,15 @@ class BundleAudit:
                 == "71c26d072c09faf16dab37230cfe8b2d430bd39344333227d00c7be4e76a188a",
                 "unexpected historical-weather input hash",
             )
+            for label, filename in (
+                ("validation_monthly", "monthly_results.csv"),
+                ("validation_weekly", "weekly_results.csv"),
+                ("validation_daily", "daily_results.csv"),
+            ):
+                self.expect(
+                    manifest_inputs.get(label, {}).get("sha256") == EXPECTED_EXTERNAL_VALIDATION_HASHES[filename],
+                    f"unexpected {label.replace('_', ' ')} hash in input manifest",
+                )
         for filename, expected in EXPECTED_EXTERNAL_VALIDATION_HASHES.items():
             path = self.require_file(f"external-validation/{filename}")
             if path.is_file():
