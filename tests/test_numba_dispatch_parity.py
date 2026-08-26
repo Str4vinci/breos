@@ -20,6 +20,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+import breos.battery as battery_module
 from breos._numba_dispatch import _build_kernel
 from breos.battery import (
     _STATE_ROW_INDEX,
@@ -87,6 +88,16 @@ def test_numba_matches_python_exactly(scenario):
 def test_single_day_matches():
     """Validation step 2: one compiled day against one reference day."""
     _assert_identical("one_day", _run("one_day", "python"), _run("one_day", "numba"))
+
+
+def test_numba_pv_only_keeps_compiled_dispatch(monkeypatch):
+    def fail_if_vectorized(*args, **kwargs):
+        raise AssertionError("the multi-worker Numba path must not use the memory-bound vectorized dispatcher")
+
+    monkeypatch.setattr(battery_module, "_dispatch_no_battery_vectorized", fail_if_vectorized)
+    result = _run("no_battery", "numba")
+
+    assert len(result[0]) == 35040
 
 
 def test_trailing_partial_day_matches():

@@ -10,7 +10,10 @@ import breos.battery as battery_module
 from breos.battery import (
     BatteryConfig,
     _datetime_index_ticks,
+    _dispatch_day_python,
+    _dispatch_no_battery_vectorized,
     _get_degradation_params,
+    _ResultBuffers,
     _update_battery_soh_cyclewise_arrays,
     apply_indoor_temperature_model,
     resistance_to_efficiency,
@@ -184,6 +187,74 @@ class TestResistanceToEfficiency:
 
 
 class TestSimulateEnergyBalance:
+    @pytest.mark.parametrize("inverter_ac_capacity_w", [0.0, 6400.0, None])
+    def test_vectorized_pv_only_matches_scalar_reference_exactly(self, inverter_ac_capacity_w):
+        pv_dc = np.asarray([-100.0, 0.0, 1.0, 40.1, 75.0, 500.0, 3200.0, 6400.0, 9000.0])
+        load = np.asarray([500.0, 0.0, 2.0, 20.0, 100.0, 250.0, 4000.0, 7000.0, 500.0])
+        temperature = np.asarray([-5.0, 0.0, 5.0, 10.0, 15.0, 20.0, 25.0, 30.0, 35.0])
+        config = BatteryConfig(
+            nominal_energy_wh=0.0,
+            inverter_ac_capacity_w=inverter_ac_capacity_w,
+        )
+        hours_per_step = 0.25
+        cap_wh = float("inf") if inverter_ac_capacity_w is None else inverter_ac_capacity_w * hours_per_step
+        reference = _ResultBuffers(len(pv_dc))
+        vectorized = _ResultBuffers(len(pv_dc))
+
+        _dispatch_day_python(
+            reference,
+            pv_dc,
+            load,
+            temperature,
+            0,
+            len(pv_dc),
+            battery_config=config,
+            has_battery=False,
+            battery_soh_decimal=1.0,
+            Battery_SOH=100.0,
+            Battery_Energy_Wh=0.0,
+            Battery_PV_Origin_Energy_Wh=0.0,
+            eff_charge=config.charge_efficiency,
+            eff_discharge=config.discharge_efficiency,
+            hours_per_step=hours_per_step,
+            standby_loss_per_step_wh=0.0,
+            cap_wh=cap_wh,
+            cap_charge_wh=float("inf"),
+            cap_discharge_wh=float("inf"),
+        )
+        _dispatch_no_battery_vectorized(
+            vectorized,
+            pv_dc,
+            load,
+            temperature,
+            battery_config=config,
+            hours_per_step=hours_per_step,
+            cap_wh=cap_wh,
+        )
+
+        assert np.array_equal(vectorized.matrix, reference.matrix)
+
+    def test_python_pv_only_run_uses_vectorized_dispatch(self, monkeypatch):
+        index = pd.date_range("2025-01-01", periods=24, freq="h", tz="UTC")
+        original = battery_module._dispatch_no_battery_vectorized
+        calls = 0
+
+        def recording_dispatch(*args, **kwargs):
+            nonlocal calls
+            calls += 1
+            return original(*args, **kwargs)
+
+        monkeypatch.setattr(battery_module, "_dispatch_no_battery_vectorized", recording_dispatch)
+        simulate_energy_balance(
+            pv_dc=pd.Series(1000.0, index=index),
+            houseload=pd.DataFrame({"Load": 500.0}, index=index),
+            battery_config=BatteryConfig(nominal_energy_wh=0.0),
+            freq="h",
+            execution_backend="python",
+        )
+
+        assert calls == 1
+
     def test_zero_battery_skips_daily_degradation(self, monkeypatch):
         index = pd.date_range("2025-01-01", periods=24, freq="h", tz="UTC")
 

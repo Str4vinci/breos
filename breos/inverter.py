@@ -12,6 +12,8 @@ from dataclasses import dataclass
 from numbers import Integral, Real
 from typing import Optional
 
+import numpy as np
+
 PVWATTS_REFERENCE_EFFICIENCY = 0.9637
 PVWATTS_CURVE_QUADRATIC = -0.0162
 PVWATTS_CURVE_LINEAR = 0.9858
@@ -320,6 +322,42 @@ def calculate_dc_ac_power(
         clipping_loss_dc_w=clipping_loss_dc,
         clipping_loss_ac_equivalent_w=clipping_loss_ac_equiv,
     )
+
+
+def _calculate_dc_ac_power_arrays(
+    pv_dc_power: np.ndarray,
+    inverter_ac_power: float,
+    inverter_efficiency: float = 0.96,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Vectorized counterpart of :func:`calculate_dc_ac_power`.
+
+    Returns AC power, conversion loss, and DC-side clipping arrays. Expression
+    order mirrors the scalar helper so the simulation can retain bit parity.
+    """
+    pv_dc_power = np.maximum(0.0, np.asarray(pv_dc_power, dtype=np.float64))
+    inverter_ac_power = max(0.0, float(inverter_ac_power))
+    inverter_efficiency = min(1.0, max(0.0, float(inverter_efficiency)))
+
+    if inverter_efficiency <= 0.0 or inverter_ac_power <= 0.0:
+        zeros = np.zeros_like(pv_dc_power)
+        return zeros, zeros, pv_dc_power
+
+    if not math.isfinite(inverter_ac_power):
+        ac_power = pv_dc_power * inverter_efficiency
+        return ac_power, pv_dc_power - ac_power, np.zeros_like(pv_dc_power)
+
+    pdc0 = inverter_ac_power / inverter_efficiency
+    dc_used = np.minimum(pv_dc_power, pdc0)
+    zeta = dc_used / pdc0
+    curve_power = (
+        (inverter_efficiency / PVWATTS_REFERENCE_EFFICIENCY)
+        * pdc0
+        * (PVWATTS_CURVE_QUADRATIC * zeta**2 + PVWATTS_CURVE_LINEAR * zeta + PVWATTS_CURVE_CONSTANT)
+    )
+    ac_power = np.maximum(0.0, np.minimum(np.minimum(dc_used, inverter_ac_power), curve_power))
+    clipping_loss_dc = np.maximum(0.0, pv_dc_power - dc_used)
+    conversion_loss = np.maximum(0.0, dc_used - ac_power)
+    return ac_power, conversion_loss, clipping_loss_dc
 
 
 def dc_power_for_ac_output(ac_power_w: float, inverter_ac_power: float, inverter_efficiency: float = 0.96) -> float:

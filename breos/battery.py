@@ -74,7 +74,7 @@ from breos.execution import (  # noqa: F401  -- EXECUTION_BACKENDS re-exported
     EXECUTION_BACKENDS,
     validate_execution_backend,
 )
-from breos.inverter import calculate_dc_ac_power, dc_power_for_ac_output
+from breos.inverter import _calculate_dc_ac_power_arrays, calculate_dc_ac_power, dc_power_for_ac_output
 from breos.utils import get_hours_per_step, remap_datetime_index_years
 
 SUPPORTED_BATTERY_TYPES: tuple[str, ...] = ("lfp",)
@@ -1054,6 +1054,54 @@ def _dispatch_day_python(
     return Battery_Energy_Wh, Battery_PV_Origin_Energy_Wh, T_cell_day_sum, battery_energy_beginning
 
 
+def _dispatch_no_battery_vectorized(
+    out: "_ResultBuffers",
+    pv_dc_values: np.ndarray,
+    load_values: np.ndarray,
+    temperature_values: np.ndarray,
+    *,
+    battery_config: BatteryConfig,
+    hours_per_step: float,
+    cap_wh: float,
+) -> None:
+    """Fill a PV-only result buffer without entering the timestep loop."""
+    out.matrix.fill(0.0)
+
+    pv_dc_wh = np.maximum(0.0, pv_dc_values * hours_per_step)
+    load_wh = load_values * hours_per_step
+    ac_wh, conversion_loss_wh, clipping_loss_dc_wh = _calculate_dc_ac_power_arrays(
+        pv_dc_wh,
+        cap_wh,
+        battery_config.inverter_efficiency,
+    )
+    pv_ac_to_load_wh = np.minimum(ac_wh, load_wh)
+    grid_export_wh = ac_wh - pv_ac_to_load_wh
+    grid_import_wh = np.maximum(0.0, load_wh - pv_ac_to_load_wh)
+    if math.isinf(cap_wh):
+        pv_production_wh = (pv_dc_wh - clipping_loss_dc_wh) * battery_config.inverter_efficiency
+    else:
+        # Keep the scalar reference's subtraction order. Returning ``ac_wh``
+        # here is algebraically equivalent but differs by one ULP at low load.
+        pv_production_wh = pv_dc_wh - clipping_loss_dc_wh - conversion_loss_wh
+
+    out.pv_dc[:] = pv_dc_wh / hours_per_step
+    out.pv_production[:] = pv_production_wh / hours_per_step
+    out.load[:] = load_wh / hours_per_step
+    out.pv_delta[:] = (pv_production_wh - load_wh) / hours_per_step
+    out.grid_import[:] = grid_import_wh / hours_per_step
+    out.grid_export[:] = grid_export_wh / hours_per_step
+    out.soh.fill(100.0)
+    out.t_cell[:] = temperature_values
+    out.pv_curtailment[:] = clipping_loss_dc_wh / hours_per_step
+
+    out.ledger["PV_DC_To_Inverter"][:] = (pv_dc_wh - clipping_loss_dc_wh) / hours_per_step
+    out.ledger["PV_DC_Curtailed"][:] = clipping_loss_dc_wh / hours_per_step
+    out.ledger["PV_AC_To_Load"][:] = pv_ac_to_load_wh / hours_per_step
+    out.ledger["PV_AC_Export"][:] = grid_export_wh / hours_per_step
+    out.ledger["PV_Direct_Inverter_Loss"][:] = conversion_loss_wh / hours_per_step
+    out.ledger["Inverter_Loss"][:] = conversion_loss_wh / hours_per_step
+
+
 def _apply_daily_degradation(
     aging: _AgingState,
     lifecycle: DegradationLifecycle,
@@ -1545,6 +1593,27 @@ def _simulate_core(
     cap_discharge_wh = _step_energy_cap(battery_config.max_discharge_power_w, hours_per_step)
 
     dispatch_day = _resolve_dispatch_day(execution_backend)
+
+    if not has_battery and execution_backend == "python":
+        _dispatch_no_battery_vectorized(
+            out,
+            _pv_dc_vals,
+            _load_vals,
+            _temp_vals,
+            battery_config=battery_config,
+            hours_per_step=hours_per_step,
+            cap_wh=cap_wh,
+        )
+        return _CoreRun(
+            buffers=out,
+            rng=rng,
+            aging=aging,
+            lifecycle=degradation_lifecycle,
+            degradation_tracking=degradation_tracking,
+            hours_per_step=hours_per_step,
+            has_battery=False,
+            final_soh_percent=Battery_SOH,
+        )
 
     # Dispatch advances one degradation day at a time. Health state is fixed
     # for the whole window and advanced here, between windows, so every
