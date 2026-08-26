@@ -1,4 +1,4 @@
-"""Static coverage for the Article 1 workflow wrapper."""
+"""Static coverage for the forthcoming publication workflow wrapper."""
 
 from pathlib import Path
 

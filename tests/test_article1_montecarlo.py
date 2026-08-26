@@ -1,4 +1,4 @@
-"""Static coverage for the Article 1 Monte Carlo workflow."""
+"""Static coverage for the forthcoming publication Monte Carlo workflow."""
 
 import argparse
 import tomllib
