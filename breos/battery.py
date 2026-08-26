@@ -508,7 +508,7 @@ def _build_degradation_lifecycle(
             nominal_energy_wh=battery_config.nominal_energy_wh,
             battery_type=battery_config.battery_type,
             **_native_degradation_kwargs(battery_config.calendar_model),
-            cycle_step=update_battery_soh_cyclewise,
+            cycle_step=_update_battery_soh_cyclewise_arrays,
             calendar_step=update_battery_soh_calendar,
             debug=debug,
         )
@@ -764,7 +764,9 @@ class _AgingState:
 def _apply_resistance_fade(
     aging: _AgingState,
     battery_config: BatteryConfig,
-    soc_series: pd.Series,
+    soc_values: np.ndarray,
+    time_ticks: np.ndarray,
+    ticks_per_second: float,
     *,
     mean_t_cell: float,
     mean_soc_absolute: float,
@@ -777,7 +779,12 @@ def _apply_resistance_fade(
     lifecycle step has already folded them into the cumulative FEC, so they
     are subtracted back out here.
     """
-    cycles = detect_cycles_rainflow(soc_series, soc_series.index, min_doc_fraction=0.01)
+    cycles = _detect_cycles_rainflow_arrays(
+        soc_values,
+        time_ticks,
+        ticks_per_second,
+        min_doc_fraction=0.01,
+    )
     day_fec = sum(max(0.0, min(1.0, c["doc"])) * c.get("count", 1.0) for c in cycles)
     fec_before_day = aging.fec_cum - day_fec
 
@@ -1079,17 +1086,19 @@ def _apply_daily_degradation(
     starting boundary; a replacement moves that endpoint to the fresh pack's
     max SOC, since the recorded state was rewritten to match.
     """
-    soc_series = pd.Series(soc_absolute_day, index=day_index)
+    time_ticks, ticks_per_second = _datetime_index_ticks(day_index)
     day_end_soc_absolute = float(soc_absolute_day[steps_per_day - 1])
     day_end_t_cell = float(t_cell_day[steps_per_day - 1])
 
-    mean_soc_abs = float(soc_series.mean())
+    mean_soc_abs = float(np.mean(soc_absolute_day))
     mean_t_cell = t_cell_day_sum / steps_per_day
     effective_rte = battery_config.charge_efficiency * battery_config.discharge_efficiency
 
     degradation_step = lifecycle.step(
         DegradationDay(
-            soc=soc_series,
+            soc=soc_absolute_day,
+            time_ticks=time_ticks,
+            ticks_per_second=ticks_per_second,
             temperature_c=t_cell_day,
             step_seconds=hours_per_step * 3600.0,
             start_soc=aging.day_start_soc,
@@ -1107,7 +1116,9 @@ def _apply_daily_degradation(
         effective_rte = _apply_resistance_fade(
             aging,
             battery_config,
-            soc_series,
+            soc_absolute_day,
+            time_ticks,
+            ticks_per_second,
             mean_t_cell=mean_t_cell,
             mean_soc_absolute=mean_soc_abs,
             debug=debug,
@@ -1574,35 +1585,36 @@ def _simulate_core(
             # which is what the per-step loop did before this was hoisted.
             break
 
-        last_step = window_end - 1
-        Battery_Energy_Wh, Battery_PV_Origin_Energy_Wh = _apply_daily_degradation(
-            aging,
-            degradation_lifecycle,
-            battery_config,
-            out,
-            degradation_tracking,
-            step_index=last_step,
-            # Timestamps are read once per closed day rather than once per
-            # step; nothing inside the window depends on the calendar.
-            step_time=rng[last_step],
-            day_index=rng[window_start:window_end],
-            # Copied before the call so a replacement rewriting the closing
-            # step's recorded state cannot reach the day the aging model saw.
-            soc_absolute_day=out.soc_absolute[window_start:window_end].copy(),
-            t_cell_day=out.t_cell[window_start:window_end].copy(),
-            t_cell_day_sum=T_cell_day_sum,
-            steps_per_day=steps_per_day,
-            hours_per_step=hours_per_step,
-            battery_energy_wh=Battery_Energy_Wh,
-            pv_origin_energy_wh=Battery_PV_Origin_Energy_Wh,
-            battery_energy_beginning=battery_energy_beginning,
-            debug=debug,
-        )
-        # Refresh the loop's hot copies of the daily-boundary state.
-        battery_soh_decimal = aging.soh_fraction
-        Battery_SOH = aging.soh_percent
-        eff_charge = aging.eff_charge
-        eff_discharge = aging.eff_discharge
+        if has_battery:
+            last_step = window_end - 1
+            Battery_Energy_Wh, Battery_PV_Origin_Energy_Wh = _apply_daily_degradation(
+                aging,
+                degradation_lifecycle,
+                battery_config,
+                out,
+                degradation_tracking,
+                step_index=last_step,
+                # Timestamps are read once per closed day rather than once per
+                # step; nothing inside the window depends on the calendar.
+                step_time=rng[last_step],
+                day_index=rng[window_start:window_end],
+                # Copied before the call so a replacement rewriting the closing
+                # step's recorded state cannot reach the day the aging model saw.
+                soc_absolute_day=out.soc_absolute[window_start:window_end].copy(),
+                t_cell_day=out.t_cell[window_start:window_end].copy(),
+                t_cell_day_sum=T_cell_day_sum,
+                steps_per_day=steps_per_day,
+                hours_per_step=hours_per_step,
+                battery_energy_wh=Battery_Energy_Wh,
+                pv_origin_energy_wh=Battery_PV_Origin_Energy_Wh,
+                battery_energy_beginning=battery_energy_beginning,
+                debug=debug,
+            )
+            # Refresh the loop's hot copies of the daily-boundary state.
+            battery_soh_decimal = aging.soh_fraction
+            Battery_SOH = aging.soh_percent
+            eff_charge = aging.eff_charge
+            eff_discharge = aging.eff_discharge
         window_start = window_end
 
     return _CoreRun(
@@ -1971,6 +1983,66 @@ def detect_half_cycles_from_soc_series(
     return half_cycles, soc_abs_series
 
 
+_TICKS_PER_SECOND = {
+    "s": 1.0,
+    "ms": 1_000.0,
+    "us": 1_000_000.0,
+    "ns": 1_000_000_000.0,
+}
+
+
+def _datetime_index_ticks(time_index: pd.DatetimeIndex) -> Tuple[np.ndarray, float]:
+    """Return integer timestamps and their scale without changing resolution."""
+    try:
+        ticks_per_second = _TICKS_PER_SECOND[time_index.unit]
+    except KeyError as exc:
+        raise ValueError(f"Unsupported DatetimeIndex resolution: {time_index.unit}") from exc
+    return time_index.asi8, ticks_per_second
+
+
+def _detect_cycles_rainflow_arrays(
+    soc_values: np.ndarray,
+    time_ticks: np.ndarray,
+    ticks_per_second: float,
+    min_doc_fraction: float = 0.01,
+) -> List[Dict]:
+    """Detect rainflow cycles from arrays used by the simulation hot path."""
+    if len(soc_values) < 2:
+        return []
+
+    # rainflow.extract_cycles expects a sequence; multiply by 100 for percent
+    soc_pct = soc_values * 100.0
+
+    cycles = []
+    for rng, mean, count, i_start, i_end in rainflow.extract_cycles(soc_pct):
+        doc = rng / 100.0  # convert back to fraction
+        if doc < min_doc_fraction:
+            continue
+
+        mean_soc = mean / 100.0
+
+        # Estimate C-rate from cycle duration
+        if i_start < len(time_ticks) and i_end < len(time_ticks):
+            duration_seconds = (time_ticks[i_end] - time_ticks[i_start]) / ticks_per_second
+            duration_h = duration_seconds / 3600.0
+        else:
+            duration_h = 0.0
+        mean_c_rate = doc / duration_h if duration_h > 0 else 0.0
+
+        cycles.append(
+            {
+                "doc": doc,
+                "mean_soc": mean_soc,
+                "count": count,  # 1.0 for full, 0.5 for half
+                "mean_c_rate": mean_c_rate,
+                "start_idx": i_start,
+                "end_idx": i_end,
+            }
+        )
+
+    return cycles
+
+
 def detect_cycles_rainflow(
     soc_abs_series: pd.Series, time_index: pd.DatetimeIndex, min_doc_fraction: float = 0.01
 ) -> List[Dict]:
@@ -1989,39 +2061,13 @@ def detect_cycles_rainflow(
         List of cycle dicts with keys: 'doc', 'mean_soc', 'count',
         'mean_c_rate', 'start_idx', 'end_idx'
     """
-    if len(soc_abs_series) < 2:
-        return []
-
-    # rainflow.extract_cycles expects a sequence; multiply by 100 for percent
-    soc_pct = soc_abs_series.values * 100.0
-
-    cycles = []
-    for rng, mean, count, i_start, i_end in rainflow.extract_cycles(soc_pct):
-        doc = rng / 100.0  # convert back to fraction
-        if doc < min_doc_fraction:
-            continue
-
-        mean_soc = mean / 100.0
-
-        # Estimate C-rate from cycle duration
-        if i_start < len(time_index) and i_end < len(time_index):
-            duration_h = (time_index[i_end] - time_index[i_start]).total_seconds() / 3600.0
-        else:
-            duration_h = 0.0
-        mean_c_rate = doc / duration_h if duration_h > 0 else 0.0
-
-        cycles.append(
-            {
-                "doc": doc,
-                "mean_soc": mean_soc,
-                "count": count,  # 1.0 for full, 0.5 for half
-                "mean_c_rate": mean_c_rate,
-                "start_idx": i_start,
-                "end_idx": i_end,
-            }
-        )
-
-    return cycles
+    time_ticks, ticks_per_second = _datetime_index_ticks(time_index)
+    return _detect_cycles_rainflow_arrays(
+        soc_abs_series.to_numpy(),
+        time_ticks,
+        ticks_per_second,
+        min_doc_fraction=min_doc_fraction,
+    )
 
 
 @deprecated(name="breos.battery.compute_halfcycle_energy_throughput")
@@ -2215,46 +2261,17 @@ def _get_cycle_params(battery_type: str = "lfp") -> Tuple[float, float, float, f
     return (A_Q, B_Q, C_DOC_Q, D_DOC_Q, Z_Q)
 
 
-def update_battery_soh_cyclewise(
+def _update_battery_soh_from_cycles(
     soh_start_fraction: float,
-    soc_series_absolute: pd.Series,
+    cycles: List[Dict],
     nominal_energy_Wh: float,
     fec_cum: float = 0.0,
     min_DoD_fraction: float = 0.01,
-    use_rainflow: bool = True,
     battery_type: str = "lfp",
     debug: bool = False,
 ) -> Tuple[float, float, float]:
-    """
-    Calculate cycle-induced degradation using Naumann's semi-empirical model.
-
-    Implements Equation 5-6 from Naumann 2020 paper, with technology-specific
-    cycle aging coefficients selected by battery_type.
-
-    Args:
-        soh_start_fraction: Starting SOH as fraction (0-1)
-        soc_series_absolute: SOC time series
-        nominal_energy_Wh: Nominal battery capacity
-        fec_cum: Cumulative full equivalent cycles
-        min_DoD_fraction: Minimum DoD to count as cycle
-        use_rainflow: Use rainflow counting (True) or extrema-based detection (False)
-        battery_type: Battery chemistry ('lfp')
-        debug: Enable debug output
-
-    Returns:
-        Tuple of (soh_after, qloss_cycle_fraction, fec_cum)
-    """
-    if len(soc_series_absolute) < 2:
-        return soh_start_fraction, 0.0, fec_cum
-
-    time_index = soc_series_absolute.index
-
-    if use_rainflow:
-        cycles = detect_cycles_rainflow(soc_series_absolute, time_index, min_doc_fraction=min_DoD_fraction)
-    else:
-        cycles, _ = detect_half_cycles_from_soc_series(soc_series_absolute, time_index)
-
     # Get technology-specific cycle parameters
+    del nominal_energy_Wh
     a_q, b_q, c_doc_q, d_doc_q, z_q = _get_cycle_params(battery_type)
 
     qloss_cycle_fraction = 0.0
@@ -2293,6 +2310,96 @@ def update_battery_soh_cyclewise(
 
     soh_after = max(0.0, soh_start_fraction - qloss_cycle_fraction)
     return soh_after, qloss_cycle_fraction, fec_cum
+
+
+def _update_battery_soh_cyclewise_arrays(
+    soh_start_fraction: float,
+    soc_values: np.ndarray,
+    time_ticks: np.ndarray,
+    ticks_per_second: float,
+    nominal_energy_Wh: float,
+    fec_cum: float = 0.0,
+    min_DoD_fraction: float = 0.01,
+    battery_type: str = "lfp",
+    debug: bool = False,
+) -> Tuple[float, float, float]:
+    """Run native rainflow degradation without constructing pandas objects."""
+    if len(soc_values) < 2:
+        return soh_start_fraction, 0.0, fec_cum
+    cycles = _detect_cycles_rainflow_arrays(
+        soc_values,
+        time_ticks,
+        ticks_per_second,
+        min_doc_fraction=min_DoD_fraction,
+    )
+    return _update_battery_soh_from_cycles(
+        soh_start_fraction,
+        cycles,
+        nominal_energy_Wh,
+        fec_cum=fec_cum,
+        min_DoD_fraction=min_DoD_fraction,
+        battery_type=battery_type,
+        debug=debug,
+    )
+
+
+def update_battery_soh_cyclewise(
+    soh_start_fraction: float,
+    soc_series_absolute: pd.Series,
+    nominal_energy_Wh: float,
+    fec_cum: float = 0.0,
+    min_DoD_fraction: float = 0.01,
+    use_rainflow: bool = True,
+    battery_type: str = "lfp",
+    debug: bool = False,
+) -> Tuple[float, float, float]:
+    """
+    Calculate cycle-induced degradation using Naumann's semi-empirical model.
+
+    Implements Equation 5-6 from Naumann 2020 paper, with technology-specific
+    cycle aging coefficients selected by battery_type.
+
+    Args:
+        soh_start_fraction: Starting SOH as fraction (0-1)
+        soc_series_absolute: SOC time series
+        nominal_energy_Wh: Nominal battery capacity
+        fec_cum: Cumulative full equivalent cycles
+        min_DoD_fraction: Minimum DoD to count as cycle
+        use_rainflow: Use rainflow counting (True) or extrema-based detection (False)
+        battery_type: Battery chemistry ('lfp')
+        debug: Enable debug output
+
+    Returns:
+        Tuple of (soh_after, qloss_cycle_fraction, fec_cum)
+    """
+    if len(soc_series_absolute) < 2:
+        return soh_start_fraction, 0.0, fec_cum
+
+    time_index = soc_series_absolute.index
+    if use_rainflow:
+        time_ticks, ticks_per_second = _datetime_index_ticks(time_index)
+        return _update_battery_soh_cyclewise_arrays(
+            soh_start_fraction,
+            soc_series_absolute.to_numpy(),
+            time_ticks,
+            ticks_per_second,
+            nominal_energy_Wh,
+            fec_cum=fec_cum,
+            min_DoD_fraction=min_DoD_fraction,
+            battery_type=battery_type,
+            debug=debug,
+        )
+
+    cycles, _ = detect_half_cycles_from_soc_series(soc_series_absolute, time_index)
+    return _update_battery_soh_from_cycles(
+        soh_start_fraction,
+        cycles,
+        nominal_energy_Wh,
+        fec_cum=fec_cum,
+        min_DoD_fraction=min_DoD_fraction,
+        battery_type=battery_type,
+        debug=debug,
+    )
 
 
 def update_battery_soh_calendar(
