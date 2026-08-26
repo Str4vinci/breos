@@ -351,6 +351,7 @@ def test_pv_only_montecarlo_is_unchanged_by_the_chain_cache(tmp_path, monkeypatc
     assert built == [6]
     pd.testing.assert_frame_equal(uncached.runs, cached.runs)
     pd.testing.assert_frame_equal(uncached.yearly, cached.yearly)
+    assert cached.provenance["execution"]["dispatch_path"] == "pv_only_vectorized"
 
 
 def test_run_montecarlo_rejects_blast_degradation(tmp_path):

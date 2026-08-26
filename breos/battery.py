@@ -72,6 +72,7 @@ from breos.degradation.protocol import (
 from breos.economics import BATTERY_REPLACEMENT_COST_PER_KWH
 from breos.execution import (  # noqa: F401  -- EXECUTION_BACKENDS re-exported
     EXECUTION_BACKENDS,
+    is_pv_only_dispatch,
     validate_execution_backend,
 )
 from breos.inverter import _calculate_dc_ac_power_arrays, calculate_dc_ac_power, dc_power_for_ac_output
@@ -1763,12 +1764,16 @@ def _simulate_core(
     n_steps = len(rng)
 
     # Hoist invariant check out of the loop
-    has_battery = battery_config.nominal_energy_wh > 1 and (battery_config.max_soc - battery_config.min_soc) > 0
+    has_battery = not is_pv_only_dispatch(
+        battery_config.nominal_energy_wh,
+        battery_config.max_soc,
+        battery_config.min_soc,
+    )
     # The vectorized PV-only dispatch below is the only producer that leaves
     # most columns at zero, so it is the only one whose output can be served
     # from the reduced buffer -- and only when the caller wants a summary,
     # since the detailed frame must own a writable array per column.
-    pv_only_summary = summary_only and not has_battery and execution_backend == "python"
+    pv_only_summary = summary_only and not has_battery
 
     # Pre-allocate result arrays (avoids per-timestep dict creation)
     out = _PvOnlySummaryBuffers(n_steps) if pv_only_summary else _ResultBuffers(n_steps)
@@ -1826,7 +1831,10 @@ def _simulate_core(
 
     dispatch_day = _resolve_dispatch_day(execution_backend)
 
-    if not has_battery and execution_backend == "python":
+    # PV-only balance is already vectorized with NumPy and does not need the
+    # general per-step dispatcher. This common path is faster than either the
+    # Python or Numba day loop and keeps one numerical implementation.
+    if not has_battery:
         _dispatch_no_battery_vectorized(
             out,
             _pv_dc_vals,

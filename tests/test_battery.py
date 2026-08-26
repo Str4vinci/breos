@@ -429,7 +429,7 @@ class TestSimulateEnergyBalance:
         results_df.loc[0, "PV_Curtailment"] = 1234.5
         assert results_df.loc[0, "PV_DC_Curtailed"] != 1234.5
 
-    def test_python_pv_only_run_uses_vectorized_dispatch(self, monkeypatch):
+    def test_pv_only_run_uses_vectorized_dispatch(self, monkeypatch):
         index = pd.date_range("2025-01-01", periods=24, freq="h", tz="UTC")
         original = battery_module._dispatch_no_battery_vectorized
         calls = 0

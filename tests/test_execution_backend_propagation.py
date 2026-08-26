@@ -19,8 +19,10 @@ from breos.app_config import resolve_app_config
 from breos.execution import (
     DEFAULT_EXECUTION_BACKEND,
     EXECUTION_BACKENDS,
+    PV_ONLY_DISPATCH_PATH,
     aggregate_jit_cache_states,
     backend_provenance,
+    is_pv_only_dispatch,
     validate_execution_backend,
 )
 
@@ -232,6 +234,34 @@ def test_numba_provenance_always_carries_a_cache_field():
     assert backend_provenance("numba", jit_cache_states=["warm", "warm"])["jit_cache"] == "warm"
     assert backend_provenance("numba", jit_cache_states=["warm", "cold"])["jit_cache"] == "cold"
     assert "jit_cache" not in backend_provenance("python")
+
+
+def test_pv_only_dispatch_path_agrees_with_the_dispatch_itself():
+    """One predicate, so provenance cannot claim a path the run did not take.
+
+    A battery too small to move energy, or with no room between its SOC
+    limits, takes the vectorized PV-only path. Provenance said otherwise while
+    App, Monte Carlo and the dispatch each spelled the question themselves.
+    """
+    assert is_pv_only_dispatch(0.0, 0.9, 0.1)
+    assert is_pv_only_dispatch(0.5, 0.9, 0.1)
+    assert is_pv_only_dispatch(10_000.0, 0.9, 0.9)
+    assert not is_pv_only_dispatch(10_000.0, 0.9, 0.1)
+
+    assert backend_provenance("python", pv_only=True)["dispatch_path"] == PV_ONLY_DISPATCH_PATH
+    assert "dispatch_path" not in backend_provenance("python")
+
+
+def test_app_records_the_pv_only_path_for_a_battery_too_small_to_dispatch():
+    """The disagreement this centralisation removes, at the App boundary.
+
+    Half a watt-hour is below what the dispatch will move, so the run takes
+    the vectorized PV-only path. Provenance used to say a battery was
+    dispatched -- and on the compiled backend, that a kernel had run.
+    """
+    app = App({**BASE_CONFIG, "battery_kwh": 0.0005})
+    app.simulate()
+    assert app.result()["provenance"]["execution"]["dispatch_path"] == PV_ONLY_DISPATCH_PATH
 
 
 def test_deterministic_article_report_records_the_cache_field():
