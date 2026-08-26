@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Reproduce the deterministic Article 1 projected optimization results."""
+"""Reproduce the forthcoming publication study's projected optimization results."""
 
 from __future__ import annotations
 
@@ -84,10 +84,11 @@ def _load_inputs(
     weather_path = weather_override or PROJECT_ROOT / simulation["weather_file"]
     rlp_path = rlp_directory / load_config["external_filename"]
     if not weather_path.is_file():
-        raise FileNotFoundError(f"Article 1 weather file not found: {weather_path}")
+        raise FileNotFoundError(f"Weather file for the forthcoming publication study not found: {weather_path}")
     if not rlp_path.is_file():
         raise FileNotFoundError(
-            f"Article 1 external RLP not found: {rlp_path}. Pass --rlp-directory with the licensed E-REDES file."
+            f"External RLP for the forthcoming publication study not found: {rlp_path}. "
+            "Pass --rlp-directory with the licensed E-REDES file."
         )
 
     weather = pd.read_csv(weather_path, index_col=0)

@@ -68,15 +68,16 @@ included in the metrics, while the financial table retains their annual source
 columns. These tables are intended as stable source data for custom
 analysis and plots; BREOS does not require a particular visualization layer.
 
-## Article 1 reproduction
+## Forthcoming publication study reproduction
 
 [`validation/article1/article1-projected-optimization.toml`](../../validation/article1/article1-projected-optimization.toml)
-pins the Article 1 15-minute, 20-year configuration, four archived comparison
-candidates plus the C5 low-investment benchmark, NSGA-II seed and early
-stopping, battery degradation, replacement, and financial assumptions. Its hourly TMY is interpolated with the clear-sky
-shape and opt-in hourly-energy conservation; the established general
-resampling default remains unchanged. The E-REDES household profile is
-licensed external data and is not redistributed.
+pins the 15-minute, 20-year configuration for the forthcoming publication
+study: four archived comparison candidates plus the C5 low-investment benchmark,
+NSGA-II seed and early stopping, battery degradation, replacement, and
+financial assumptions. Its hourly TMY is interpolated with the clear-sky shape
+and opt-in hourly-energy conservation. The established general resampling
+default remains unchanged. The E-REDES household profile is licensed external
+data and is not redistributed.
 
 Run the deterministic fixed candidates before starting NSGA-II:
 

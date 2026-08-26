@@ -1,4 +1,4 @@
-"""Opt-in regression against the licensed Article 1 household profile."""
+"""Opt-in regression against the licensed profile used by the forthcoming publication study."""
 
 import os
 import tomllib
@@ -9,7 +9,7 @@ import pytest
 from tools.reproduce_article1 import DEFAULT_CONFIG, _fixed_candidates, _load_inputs, _sha256
 
 EXPECTED_RLP_SHA256 = "23becc5a7bfc927b1f7604156e0e4953dcc6bb65268ca947b38db3dc4f2b28bc"
-EXPECTED_CONFIG_SHA256 = "b35ce7d4e90b89955a580d65d0abefe9e6d588dc729bc1cc472890efcc267631"
+EXPECTED_CONFIG_SHA256 = "684199bf797c19e3265666e7637342f7259793161ae67780a7b56437fdd83f54"
 EXPECTED = {
     "C1": (40.68817313425559, 5374.158425855234),
     "C2": (63.885472875836804, 3621.655066348969),
@@ -53,7 +53,7 @@ def test_article1_fixed_candidates_with_licensed_rlp(tmp_path):
     """Pin deterministic v0.6 projected values when the external RLP is available."""
     rlp_value = os.environ.get("BREOS_ARTICLE1_RLP_DIRECTORY")
     if not rlp_value:
-        pytest.skip("set BREOS_ARTICLE1_RLP_DIRECTORY to run the licensed Article 1 regression")
+        pytest.skip("set BREOS_ARTICLE1_RLP_DIRECTORY to run the forthcoming publication study regression")
 
     config = tomllib.loads(DEFAULT_CONFIG.read_text())
     weather, load, _weather_path, rlp_path = _load_inputs(config, Path(rlp_value))

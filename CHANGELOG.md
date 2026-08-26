@@ -11,9 +11,10 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   lifetime grid independence and NPV. Existing annual three-objective behavior
   remains the default; projected ZEB is a diagnostic or optional feasibility
   constraint, not a third objective.
-- Added a version-controlled Article 1 configuration, deterministic
-  fixed-candidate reproduction command, per-candidate yearly and financial
-  source tables, opt-in licensed-profile regression, and comparison report.
+- Added a version-controlled configuration for the forthcoming publication
+  study, a deterministic fixed-candidate reproduction command, per-candidate
+  yearly and financial source tables, an opt-in licensed-profile regression,
+  and a comparison report.
   The report preserves the archived values while
   explaining corrected drift from the original hourly-to-15-minute weather
   handling and AC dispatch methodology.
