@@ -6,10 +6,25 @@ import pytest
 
 from tools.preflight_article1_inputs import EXPECTED_SHA256, _checked_input
 from tools.verify_article1_bundle import (
+    EXPECTED_EXTERNAL_VALIDATION_HASHES,
     EXPECTED_MONTE_CARLO_YEARLY_COLUMNS,
     BundleAudit,
     _report_source_paths,
 )
+
+CORRECTED_VALIDATION_HASHES = {
+    "monthly_results.csv": "84cce17d0d51f745895bad1c98adaa3ef3d6043f076ce69d3a1dff5ecad1a526",
+    "weekly_results.csv": "07c7b938da100ca5c5301a0ef9a6988b24616f7e5eb5166408056afd1ae79375",
+    "daily_results.csv": "2d12468d982f0b59af875841bf8b9e228a532c6f4060070245907bbb243b0bfb",
+}
+
+
+def test_article1_tools_pin_corrected_validation_inputs():
+    assert EXPECTED_EXTERNAL_VALIDATION_HASHES == CORRECTED_VALIDATION_HASHES
+    assert {
+        filename: EXPECTED_SHA256[f"validation_{filename.removesuffix('_results.csv')}"]
+        for filename in CORRECTED_VALIDATION_HASHES
+    } == CORRECTED_VALIDATION_HASHES
 
 
 def test_article1_input_preflight_accepts_only_pinned_hash(tmp_path, monkeypatch):

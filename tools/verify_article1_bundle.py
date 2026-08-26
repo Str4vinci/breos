@@ -26,9 +26,11 @@ EXPECTED_ARTIFACT_HASH_KEYS = {
     "yearly_summary_sha256",
 }
 EXPECTED_EXTERNAL_VALIDATION_HASHES = {
-    "monthly_results.csv": "d2b777e2b58abdad055abe25ec45c7fd879947f498622b6f17966b8d4803d1cb",
-    "weekly_results.csv": "b5ff0311df777b62f22de1111ba277321203e57e2ab5c6eac67e6673880d397b",
-    "daily_results.csv": "e376382026bc266b5895ce9ba2cf3504c632351a4fe34ab0ac8a6fe86ca857b8",
+    # Corrected Esposende Figure 2 data from the provenance-clean rerun at
+    # phd commit e1558f1678946c4a8d2146a4bd62ad38e068080d.
+    "monthly_results.csv": "84cce17d0d51f745895bad1c98adaa3ef3d6043f076ce69d3a1dff5ecad1a526",
+    "weekly_results.csv": "07c7b938da100ca5c5301a0ef9a6988b24616f7e5eb5166408056afd1ae79375",
+    "daily_results.csv": "2d12468d982f0b59af875841bf8b9e228a532c6f4060070245907bbb243b0bfb",
 }
 EXPECTED_MONTE_CARLO_YEARLY_COLUMNS = (
     "run",
