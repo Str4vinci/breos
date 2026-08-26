@@ -20,7 +20,7 @@ from tools.reproduce_article1 import (
 )
 
 EXPECTED_RLP_SHA256 = "23becc5a7bfc927b1f7604156e0e4953dcc6bb65268ca947b38db3dc4f2b28bc"
-EXPECTED_CONFIG_SHA256 = "48181f462f6af8d8f25b26e480542b7ffadf9a73fd835a972d83441029c8e009"
+EXPECTED_CONFIG_SHA256 = "1c8029f8d339d6bc67ab31229c4a1033e55a9ac299b9047d3a34d84b2c9b703f"
 FIXED_REGRESSION_LABELS = {"C1", "C2", "C3", "C4"}
 
 
@@ -44,6 +44,7 @@ def test_article1_config_pins_projected_run_controls():
         "early_stop": {"ftol": 0.0025, "period": 10, "min_gen": 20, "n_skip": 0},
     }
     assert config["constraints"]["enforce_zeb"] is False
+    assert config["solar_position"] == "interval-start"
     assert config["pv"]["module_width_m"] == 1.134
     assert config["pv"]["module_length_m"] == 2.278
     assert config["battery"]["temperature"] == "weather"

@@ -1,10 +1,11 @@
 name = "Article 1 projected optimization reproduction"
 inverter_efficiency = 0.96
-# Best-available PV chain. Perez transposition with mid-interval solar
-# position, and Marion diffuse/ground IAM instead of beam-only -- the
+# The PVGIS SARAH3 TMY irradiance is effectively instantaneous at its hourly
+# label, so evaluate the solar position at the interval start. Use Perez
+# transposition and Marion diffuse/ground IAM instead of beam-only IAM; the
 # beam-only default is a documented 0.5-1.5% systematic overestimate.
 transposition_model = "perez"
-solar_position = "mid-interval"
+solar_position = "interval-start"
 diffuse_iam = "marion"
 
 [location]
