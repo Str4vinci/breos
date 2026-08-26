@@ -19,7 +19,7 @@ def test_article1_montecarlo_config_pins_manuscript_method():
         "target_year": 2025,
         "weather_start_year": 2005,
         "weather_end_year": 2023,
-        "seed": 1,
+        "seed": 42,
         "min_load_scale": 0.95,
         "max_load_scale": 1.05,
         "preserve_irradiance_energy": True,

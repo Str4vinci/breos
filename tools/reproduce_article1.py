@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Reproduce the deterministic Article 1 projected optimization results."""
+"""Reproduce projected optimization results for the forthcoming publication."""
 
 from __future__ import annotations
 
@@ -69,7 +69,7 @@ def _dependency_versions() -> dict[str, str]:
 
 
 def _pv_module_provenance(config: dict) -> dict:
-    """Resolve the electrical and physical PV inputs used by the Article run."""
+    """Resolve the electrical and physical PV inputs for the publication study."""
     pv = config["pv"]
     width = float(pv.get("module_width_m", 1.134))
     length = float(pv.get("module_length_m", 2.278))
@@ -129,10 +129,11 @@ def _load_inputs(
     rlp_path = _resolved_rlp_path(config, rlp_directory)
     uses_packaged_profile = rlp_path is None
     if not weather_path.is_file():
-        raise FileNotFoundError(f"Article 1 weather file not found: {weather_path}")
+        raise FileNotFoundError(f"Weather file for the forthcoming publication not found: {weather_path}")
     if rlp_path is not None and not rlp_path.is_file():
         raise FileNotFoundError(
-            f"Article 1 external RLP not found: {rlp_path}. Pass --rlp-directory with the licensed E-REDES file."
+            "External RLP for the forthcoming publication not found: "
+            f"{rlp_path}. Pass --rlp-directory with the licensed E-REDES file."
         )
 
     weather = pd.read_csv(weather_path, index_col=0)

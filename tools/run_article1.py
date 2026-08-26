@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the complete Article 1 reproduction workflow with local defaults."""
+"""Run the complete workflow for the forthcoming publication."""
 
 from __future__ import annotations
 
@@ -224,7 +224,10 @@ def commands_for_stage(
 def _require_clean_article_version() -> None:
     version = importlib.metadata.version("breos")
     if version != ARTICLE_VERSION:
-        raise RuntimeError(f"Article 1 requires BREOS {ARTICLE_VERSION}; the active environment reports {version}")
+        raise RuntimeError(
+            f"The forthcoming publication workflow requires BREOS {ARTICLE_VERSION}; "
+            f"the active environment reports {version}"
+        )
     status = subprocess.run(
         ["git", "status", "--short", "--untracked-files=no"],
         cwd=PROJECT_ROOT,
@@ -233,7 +236,7 @@ def _require_clean_article_version() -> None:
         text=True,
     ).stdout.strip()
     if status:
-        raise RuntimeError("Commit or restore tracked changes before running Article 1 simulations")
+        raise RuntimeError("Commit or restore tracked changes before running forthcoming publication simulations")
 
 
 def _run(commands: list[list[str]], *, dry_run: bool) -> None:

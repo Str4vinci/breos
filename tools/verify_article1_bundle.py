@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify a completed Article 1 result bundle without recalculating results."""
+"""Verify a completed result bundle for the forthcoming publication."""
 
 from __future__ import annotations
 
@@ -30,8 +30,9 @@ EXPECTED_EXTERNAL_VALIDATION_HASHES = {
     "daily_results.csv": "e376382026bc266b5895ce9ba2cf3504c632351a4fe34ab0ac8a6fe86ca857b8",
 }
 
-# Article generators export plot-independent source tables. Presentation-only
-# changes therefore do not invalidate previously generated numerical outputs.
+# Publication-study generators export plot-independent source tables.
+# Presentation-only changes therefore do not invalidate previously generated
+# numerical outputs.
 NON_NUMERICAL_SOURCE_PATHS = ("breos/plotting.py",)
 
 
@@ -333,7 +334,7 @@ class BundleAudit:
                 settings = payload.get("settings", {})
                 self.expect(settings.get("n_runs") == 10000, f"wrong Monte Carlo run count: {case}")
                 self.expect(settings.get("years_per_run") == 20, f"wrong Monte Carlo horizon: {case}")
-                self.expect(settings.get("seed") == 1, f"wrong Monte Carlo seed: {case}")
+                self.expect(settings.get("seed") == 42, f"wrong Monte Carlo seed: {case}")
                 self.expect(settings.get("load_distribution") == "uniform", f"wrong load distribution: {case}")
                 config = payload.get("resolved_config", {})
                 self.expect(config.get("battery_temperature") == 25.0, f"wrong battery temperature: {case}")
@@ -353,11 +354,11 @@ def main() -> int:
     audit = BundleAudit(args.root)
     audit.verify()
     if audit.errors:
-        print("Article 1 bundle verification failed:")
+        print("Forthcoming publication bundle verification failed:")
         for error in audit.errors:
             print(f"- {error}")
         return 1
-    print(f"Article 1 bundle verification passed: {audit.root}")
+    print(f"Forthcoming publication bundle verification passed: {audit.root}")
     if len(audit.source_commits) == 1:
         print(f"Verified {len(audit.reports)} provenance reports from one BREOS commit.")
     else:

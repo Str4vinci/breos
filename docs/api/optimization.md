@@ -65,7 +65,8 @@ Multi-objective sizing accepts these explicit constraint keys:
 
 Set the physical and financial limits explicitly for publication runs. The
 defaults preserve earlier direct-API behavior; they are not site-specific
-recommendations. The Article configuration pins every applicable limit.
+recommendations. The configuration for the forthcoming publication pins every
+applicable limit.
 
 Projected results expose `SteadyState_*` and `Projected_*` diagnostics. The
 ordinary `Grid_Independence_%` and `NPV_Eur` columns mirror the values used by
@@ -83,15 +84,16 @@ included in the metrics, while the financial table retains their annual source
 columns. These tables are intended as stable source data for custom
 analysis and plots; BREOS does not require a particular visualization layer.
 
-## Article 1 reproduction
+## Forthcoming publication reproduction
 
 [`validation/article1/article1-projected-optimization.toml`](../../validation/article1/article1-projected-optimization.toml)
-pins the Article 1 15-minute, 20-year configuration, four archived comparison
-candidates plus the C5 low-investment benchmark, NSGA-II seed and early
-stopping, battery degradation, replacement, and financial assumptions. Its hourly TMY is interpolated with the clear-sky
-shape and opt-in hourly-energy conservation; energy conservation remains
-opt-in for general resampling. The E-REDES household profile is
-licensed external data and is not redistributed.
+pins the forthcoming publication's 15-minute, 20-year configuration, four
+archived comparison candidates plus the C5 low-investment benchmark, NSGA-II
+seed and early stopping, battery degradation, replacement, and financial
+assumptions. Its hourly TMY is interpolated with the clear-sky shape and
+opt-in hourly-energy conservation. Energy conservation remains opt-in for
+general resampling. The E-REDES household profile is licensed external data
+and is not redistributed.
 
 Run the deterministic fixed candidates before starting NSGA-II:
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify and inventory Article 1 inputs without running a simulation."""
+"""Verify and inventory inputs for the forthcoming publication."""
 
 from __future__ import annotations
 
@@ -113,7 +113,7 @@ def main() -> int:
     if args.output is not None:
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(rendered)
-        print(f"Article 1 input preflight passed; wrote {args.output}")
+        print(f"Input preflight for the forthcoming publication passed; wrote {args.output}")
     else:
         print(rendered, end="")
     return 0

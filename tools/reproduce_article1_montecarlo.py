@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate Article 1 Monte Carlo source tables with public BREOS APIs."""
+"""Generate Monte Carlo source tables for the forthcoming publication."""
 
 from __future__ import annotations
 
@@ -159,7 +159,7 @@ def main() -> int:
     if args.validate_only:
         for case_id in selected:
             resolve_app_config(_case_config(full_config, cases[case_id]))
-        print(f"Validated Article 1 Monte Carlo configuration for: {', '.join(selected)}")
+        print(f"Validated the forthcoming publication's Monte Carlo configuration for: {', '.join(selected)}")
         return 0
 
     for case_id in selected:
@@ -174,7 +174,7 @@ def main() -> int:
         provenance_path = case_directory / "provenance.json"
         result.runs.to_csv(runs_path, index=False)
         if result.yearly is None:
-            raise RuntimeError("Article 1 Monte Carlo requires collect_yearly=true")
+            raise RuntimeError("The forthcoming publication's Monte Carlo run requires collect_yearly=true")
         result.yearly.to_csv(yearly_path, index=False)
         summary_path.write_text(json.dumps(result.summary, indent=2) + "\n")
 
