@@ -25,6 +25,7 @@ EXPECTED_ARTIFACT_HASH_KEYS = {
     "yearly_csv_sha256",
     "yearly_summary_sha256",
 }
+EXPECTED_HISTORICAL_WEATHER_SHA256 = "0b2d42e6f3e2309aed3c0f65de461cab11b885173f6e45f0cd93adee29417650"
 EXPECTED_EXTERNAL_VALIDATION_HASHES = {
     "monthly_results.csv": "d2b777e2b58abdad055abe25ec45c7fd879947f498622b6f17966b8d4803d1cb",
     "weekly_results.csv": "b5ff0311df777b62f22de1111ba277321203e57e2ab5c6eac67e6673880d397b",
@@ -388,8 +389,7 @@ class BundleAudit:
                 "unexpected hourly E-REDES input hash",
             )
             self.expect(
-                manifest_inputs.get("historical_weather", {}).get("sha256")
-                == "71c26d072c09faf16dab37230cfe8b2d430bd39344333227d00c7be4e76a188a",
+                manifest_inputs.get("historical_weather", {}).get("sha256") == EXPECTED_HISTORICAL_WEATHER_SHA256,
                 "unexpected historical-weather input hash",
             )
         for filename, expected in EXPECTED_EXTERNAL_VALIDATION_HASHES.items():
