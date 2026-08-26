@@ -63,6 +63,10 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   within-year timestep indices at which the pack was replaced.
 
 ### Changed
+- The Article 1 configurations now evaluate solar position at the interval
+  start. This matches the effectively instantaneous PVGIS SARAH3 TMY labels
+  and is closer than mid-interval for Open-Meteo's preceding-hour radiation
+  means.
 - `remap_datetime_index_years` now shifts tz-naive and fixed-offset indices
   without a Python-level pass over the index, about 43x faster on a 15-minute
   year. Indices under a zone that can have offset transitions keep the
