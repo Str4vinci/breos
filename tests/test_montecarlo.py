@@ -4,7 +4,18 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from breos.montecarlo import MonteCarloSettings, _precompute_year_caches, _sample_load_scale, run_montecarlo
+import breos.montecarlo as montecarlo_module
+from breos.app_config import resolve_app_config
+from breos.battery import align_simulation_inputs
+from breos.montecarlo import (
+    MonteCarloSettings,
+    _precompute_year_caches,
+    _prepare_pv_chains,
+    _pv_chain_cache_is_worthwhile,
+    _pv_only_battery_config,
+    _sample_load_scale,
+    run_montecarlo,
+)
 
 
 def _write_multiyear_weather(path, years=(2021, 2022)):
@@ -280,6 +291,66 @@ def test_montecarlo_carries_battery_and_pv_origin_inventory_between_years(tmp_pa
     assert result.runs.loc[0, "mean_self_consumption_kwh"] == pytest.approx(
         result.runs.loc[0, "mean_direct_pv_ac_load_kwh"] + result.runs.loc[0, "mean_pv_origin_battery_ac_load_kwh"]
     )
+
+
+def _pv_only_config():
+    cfg = _base_config()
+    cfg["battery_kwh"] = 0.0
+    return cfg
+
+
+def test_pv_chain_cache_is_declined_when_it_cannot_pay_off():
+    # Enough reuse, small enough, forkable: worth it.
+    assert _pv_chain_cache_is_worthwhile(10000, 19, 20, 35040, 19)
+    # Too few trajectories to amortise building it.
+    assert not _pv_chain_cache_is_worthwhile(8, 19, 20, 35040, 19)
+    # Over the memory budget.
+    assert not _pv_chain_cache_is_worthwhile(10000, 19, 20, 35040 * 8, 19)
+
+
+def test_pv_chain_cache_is_declined_for_a_battery_system(tmp_path):
+    """A battery run never reaches the PV-only dispatch, so it gets no cache."""
+    weather = _write_multiyear_weather(tmp_path / "multi.csv")
+    settings = MonteCarloSettings(weather_file=str(weather), n_runs=64, years_per_run=2, seed=42)
+    resolved = resolve_app_config(_base_config())
+    dc_by_year, _ = _precompute_year_caches(resolved.cfg, resolved, settings)
+    aligned = {
+        year: align_simulation_inputs(dc, pd.DataFrame({"Load": 0.0}, index=dc.index), freq="h")
+        for year, dc in dc_by_year.items()
+    }
+
+    assert _prepare_pv_chains(resolved.cfg, resolved, aligned, settings, 2) is None
+
+
+def test_pv_only_montecarlo_is_unchanged_by_the_chain_cache(tmp_path, monkeypatch):
+    """The cache is a memo, so turning it on must move no number at all."""
+    weather = _write_multiyear_weather(tmp_path / "multi.csv")
+    settings = MonteCarloSettings(weather_file=str(weather), n_runs=8, years_per_run=3, seed=42, collect_yearly=True)
+
+    # A finite AC cap, so the memoized chain covers the clipping branch
+    # rather than a pass-through, and the comparison below has teeth.
+    resolved = resolve_app_config(_pv_only_config())
+    assert _pv_only_battery_config(resolved.cfg, resolved).inverter_ac_capacity_w is not None
+
+    monkeypatch.setattr(montecarlo_module, "_PV_CHAIN_CACHE_MIN_REUSE", 1 << 30)
+    uncached = run_montecarlo(_pv_only_config(), settings)
+
+    built = []
+    original = montecarlo_module._prepare_pv_chains
+
+    def recording(*args, **kwargs):
+        chains = original(*args, **kwargs)
+        built.append(0 if chains is None else len(chains))
+        return chains
+
+    monkeypatch.setattr(montecarlo_module, "_PV_CHAIN_CACHE_MIN_REUSE", 0)
+    monkeypatch.setattr(montecarlo_module, "_prepare_pv_chains", recording)
+    cached = run_montecarlo(_pv_only_config(), settings)
+
+    # Two weather years times three project years, or the test proves nothing.
+    assert built == [6]
+    pd.testing.assert_frame_equal(uncached.runs, cached.runs)
+    pd.testing.assert_frame_equal(uncached.yearly, cached.yearly)
 
 
 def test_run_montecarlo_rejects_blast_degradation(tmp_path):

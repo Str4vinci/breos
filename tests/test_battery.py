@@ -15,6 +15,7 @@ from breos.battery import (
     _get_degradation_params,
     _ResultBuffers,
     _update_battery_soh_cyclewise_arrays,
+    align_simulation_inputs,
     apply_indoor_temperature_model,
     resistance_to_efficiency,
     simulate_energy_balance,
@@ -24,7 +25,7 @@ from breos.battery import (
 from breos.constants import LAM_EA_J_MOL, LAM_SOC_EXPONENT_N
 from breos.degradation.engine import BlastEngine
 from breos.economics import system_ac_production_power
-from breos.inverter import calculate_dc_ac_power
+from breos.inverter import _calculate_dc_ac_power_arrays, calculate_dc_ac_power
 from breos.solar import dc_to_ac
 
 
@@ -260,7 +261,8 @@ class TestSimulateEnergyBalance:
         results_df, total_pv, summary_df, _, _, _ = simulate_energy_balance(**common)
         summary = simulate_energy_balance_summary(**common)
 
-        assert isinstance(summary.column_sums, dict)
+        # The reduced buffer must not quietly drop the columns it zeroes.
+        assert set(summary.column_sums) == set(results_df.columns) - {"Datetime"}
         for column in results_df.columns:
             if column == "Datetime":
                 continue
@@ -271,6 +273,116 @@ class TestSimulateEnergyBalance:
         assert summary.carried_energy_wh == float(results_df["Battery_Energy_End"].iloc[-1])
         assert summary.opening_energy_wh == float(results_df["Battery_Energy_Beginning"].iloc[0])
         assert summary.replacement_steps == ()
+
+    def test_aligned_inputs_reproduce_the_pandas_arguments_exactly(self):
+        """Preparing once must be the same run, not an equivalent one."""
+        index = pd.date_range("2025-01-01", periods=96 * 2, freq="15min", tz="UTC")
+        step = np.arange(len(index))
+        pv_dc = pd.Series(7000.0 * np.clip(np.sin(step / 96.0 * 2.0 * np.pi), 0.0, None), index=index)
+        houseload = pd.DataFrame({"Load": 300.0 + 800.0 * (step % 5) / 5.0}, index=index)
+        temperature = pd.Series(12.0 + 8.0 * np.cos(step / 96.0 * 2.0 * np.pi), index=index)
+        config = BatteryConfig(nominal_energy_wh=8000.0, inverter_ac_capacity_w=5000.0)
+
+        direct = simulate_energy_balance_summary(
+            pv_dc=pv_dc,
+            houseload=houseload,
+            battery_config=config,
+            freq="15min",
+            temperature_series=temperature,
+        )
+        aligned = align_simulation_inputs(pv_dc, houseload, temperature, freq="15min")
+        via_aligned = simulate_energy_balance_summary(
+            battery_config=config,
+            freq="15min",
+            aligned=aligned,
+        )
+
+        assert via_aligned.column_sums == direct.column_sums
+        assert via_aligned.summary_row == direct.summary_row
+        assert via_aligned.carried_energy_wh == direct.carried_energy_wh
+        assert via_aligned.final_soh_percent == direct.final_soh_percent
+
+    @pytest.mark.parametrize("pv_factor", [1.0, 0.9])
+    @pytest.mark.parametrize("load_factor", [1.0, 1.05])
+    def test_scaling_aligned_inputs_matches_scaling_the_series(self, pv_factor, load_factor):
+        """Scaling after alignment must give the same floats as scaling before."""
+        index = pd.date_range("2025-01-01", periods=96, freq="15min", tz="UTC")
+        step = np.arange(len(index))
+        pv_dc = pd.Series(6000.0 * np.clip(np.sin(step / 96.0 * 2.0 * np.pi), 0.0, None), index=index)
+        houseload = pd.DataFrame({"Load": 250.0 + 700.0 * (step % 3) / 3.0}, index=index)
+        config = BatteryConfig(nominal_energy_wh=0.0, inverter_ac_capacity_w=4000.0)
+
+        before = simulate_energy_balance_summary(
+            pv_dc=pv_dc * pv_factor,
+            houseload=houseload * load_factor,
+            battery_config=config,
+            freq="15min",
+        )
+        after = simulate_energy_balance_summary(
+            battery_config=config,
+            freq="15min",
+            aligned=align_simulation_inputs(pv_dc, houseload, freq="15min").scaled(
+                pv_factor=pv_factor,
+                load_factor=load_factor,
+            ),
+        )
+
+        assert after.column_sums == before.column_sums
+
+    def test_memoized_pv_chain_holds_what_the_inverter_helper_returns(self):
+        index = pd.date_range("2025-01-01", periods=96, freq="15min", tz="UTC")
+        step = np.arange(len(index))
+        pv_dc = pd.Series(9000.0 * np.clip(np.sin(step / 96.0 * 2.0 * np.pi), 0.0, None), index=index)
+        houseload = pd.DataFrame({"Load": 500.0}, index=index)
+        config = BatteryConfig(nominal_energy_wh=0.0, inverter_ac_capacity_w=5000.0)
+
+        aligned = align_simulation_inputs(pv_dc, houseload, freq="15min")
+        assert aligned.pv_chain is None
+        cached = aligned.with_pv_only_chain(config, freq="15min")
+
+        expected = _calculate_dc_ac_power_arrays(
+            np.maximum(0.0, aligned.pv_dc_w * 0.25),
+            5000.0 * 0.25,
+            config.inverter_efficiency,
+        )
+        assert len(cached.pv_chain) == 3
+        for cached_part, expected_part in zip(cached.pv_chain, expected):
+            assert np.array_equal(cached_part, expected_part)
+
+    def test_scaling_load_keeps_the_pv_chain_and_scaling_pv_drops_it(self):
+        """The chain stops at the inverter, so only a PV change invalidates it."""
+        index = pd.date_range("2025-01-01", periods=96, freq="15min", tz="UTC")
+        aligned = align_simulation_inputs(
+            pd.Series(4000.0, index=index),
+            pd.DataFrame({"Load": 500.0}, index=index),
+            freq="15min",
+        ).with_pv_only_chain(BatteryConfig(nominal_energy_wh=0.0), freq="15min")
+
+        assert aligned.scaled(load_factor=1.05).pv_chain is aligned.pv_chain
+        assert aligned.scaled(pv_factor=0.995).pv_chain is None
+
+    @pytest.mark.parametrize("inverter_ac_capacity_w", [0.0, 6400.0, None])
+    def test_memoized_pv_chain_changes_no_result(self, inverter_ac_capacity_w):
+        index = pd.date_range("2025-01-01", periods=96 * 2, freq="15min", tz="UTC")
+        step = np.arange(len(index))
+        pv_dc = pd.Series(9000.0 * np.clip(np.sin(step / 96.0 * 2.0 * np.pi), 0.0, None), index=index)
+        houseload = pd.DataFrame({"Load": 400.0 + 900.0 * (step % 7) / 7.0}, index=index)
+        config = BatteryConfig(nominal_energy_wh=0.0, inverter_ac_capacity_w=inverter_ac_capacity_w)
+        aligned = align_simulation_inputs(pv_dc, houseload, freq="15min")
+
+        plain = simulate_energy_balance_summary(battery_config=config, freq="15min", aligned=aligned)
+        cached = simulate_energy_balance_summary(
+            battery_config=config,
+            freq="15min",
+            aligned=aligned.with_pv_only_chain(config, freq="15min"),
+        )
+
+        assert cached.column_sums == plain.column_sums
+        assert cached.summary_row == plain.summary_row
+
+    def test_core_requires_inputs_in_one_form_or_the_other(self):
+        with pytest.raises(ValueError, match="pv_dc and houseload, or aligned"):
+            simulate_energy_balance_summary(battery_config=BatteryConfig(nominal_energy_wh=0.0), freq="h")
 
     def test_pv_only_summary_allocates_reduced_buffers(self, monkeypatch):
         """A silent fall back to the full matrix would forfeit the whole point."""

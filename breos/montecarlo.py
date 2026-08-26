@@ -21,6 +21,7 @@ multi-year historical CSV (see ``configs/examples/montecarlo.toml``).
 from __future__ import annotations
 
 import math
+import multiprocessing
 from dataclasses import asdict, dataclass, field
 from importlib.metadata import PackageNotFoundError, version
 from multiprocessing import Pool
@@ -35,7 +36,12 @@ from breos.app_inputs import (
     build_dc_system_base,
     load_consumption_profile,
 )
-from breos.battery import BatteryConfig, simulate_energy_balance_summary
+from breos.battery import (
+    AlignedSimulationInputs,
+    BatteryConfig,
+    align_simulation_inputs,
+    simulate_energy_balance_summary,
+)
 from breos.economics import (
     calculate_lcoe_from_projection,
     cost_analysis_projection,
@@ -193,16 +199,151 @@ def _precompute_year_caches(
     return dc_by_year, temp_by_year
 
 
+def _inverter_ac_capacity_w(cfg: dict[str, Any], resolved: ResolvedAppConfig) -> float | None:
+    """Resolve the shared inverter AC nameplate from the array and loading ratio."""
+    pv_peak_w = cfg["n_modules"] * resolved.avg_module_power_w
+    loading_ratio = cfg["inverter_loading_ratio"]
+    return pv_peak_w / loading_ratio if loading_ratio and loading_ratio > 0 else None
+
+
+def _pv_only_battery_config(cfg: dict[str, Any], resolved: ResolvedAppConfig) -> BatteryConfig:
+    """Build the config a PV-only year runs under.
+
+    Both the trajectory loop and the PV chain memo go through this. If they
+    resolved the inverter separately, a drift between them would memoize a
+    conversion for one inverter and spend it on another, and nothing would
+    say so.
+    """
+    return BatteryConfig(
+        nominal_energy_wh=0,
+        inverter_efficiency=cfg["inverter_efficiency"],
+        inverter_ac_capacity_w=_inverter_ac_capacity_w(cfg, resolved),
+    )
+
+
+def _align_years(
+    cfg: dict[str, Any],
+    base_load: pd.DataFrame,
+    dc_by_year: dict[int, pd.Series],
+    temp_by_year: dict[int, pd.Series],
+    *,
+    has_battery: bool,
+) -> dict[int, AlignedSimulationInputs]:
+    """Align each weather year's inputs once for the whole study.
+
+    Every trajectory simulates the same nineteen-odd weather years against
+    the same load profile, differing only by two scalars: a PV degradation
+    factor set by the project year and a sampled load multiplier. The
+    alignment behind that -- building the calendar, reindexing three series
+    onto it and year-shifting the load profile onto the weather year -- does
+    not depend on either, so a study was deriving one of nineteen answers
+    once per simulated year of every trajectory.
+
+    Aligning here rather than in the worker matters twice: the work happens
+    once for the study instead of once per worker, and on a forking platform
+    the arrays are shared with the workers rather than copied into each.
+    """
+    freq = cfg["resolution"]
+    return {
+        year: align_simulation_inputs(
+            dc_power,
+            base_load,
+            temp_by_year[year] if has_battery else None,
+            freq=freq,
+        )
+        for year, dc_power in dc_by_year.items()
+    }
+
+
+# A PV-only study memoizes the DC-to-AC conversion for every distinct
+# (weather year, project year) pair. That is bounded work, but it is not
+# bounded memory: three arrays per pair, at eight bytes per timestep. The
+# Article's 19 weather years over a 20-year project at 15-minute resolution
+# come to about 320 MiB. Past this budget the study runs without the cache
+# rather than exhausting the machine -- same numbers, less speed.
+_PV_CHAIN_CACHE_MAX_BYTES = 1 << 30
+
+# Below this many trajectories per distinct weather year there is not enough
+# reuse to pay for building the cache at all.
+_PV_CHAIN_CACHE_MIN_REUSE = 4
+
+
+def _pv_chain_cache_is_worthwhile(
+    n_runs: int,
+    n_years: int,
+    years_per_run: int,
+    n_steps: int,
+    n_procs: int,
+) -> bool:
+    """Decide whether memoizing the PV chain pays for this study.
+
+    Three things have to hold. The study has to reuse each pair often enough
+    to earn the build; the cache has to fit the budget; and the workers have
+    to be able to share it. That last one is why the start method matters:
+    ``fork`` hands a worker the parent's pages copy-on-write, so one cache
+    serves every worker, while a start method that pickles the pool's
+    ``initargs`` would send a full copy to each one and turn a saving into a
+    per-worker cost.
+    """
+    if n_runs < _PV_CHAIN_CACHE_MIN_REUSE * n_years:
+        return False
+    if 3 * n_years * years_per_run * n_steps * 8 > _PV_CHAIN_CACHE_MAX_BYTES:
+        return False
+    return n_procs == 1 or multiprocessing.get_start_method() == "fork"
+
+
+def _prepare_pv_chains(
+    cfg: dict[str, Any],
+    resolved: ResolvedAppConfig,
+    aligned_by_year: dict[int, AlignedSimulationInputs],
+    settings: MonteCarloSettings,
+    years_per_run: int,
+) -> dict[tuple[int, int], AlignedSimulationInputs] | None:
+    """Memoize the PV-only DC-to-AC conversion per weather and project year.
+
+    A PV-only trajectory converts DC to AC before it looks at the load, so
+    the conversion depends only on which weather year was drawn and which
+    project year it is being aged to -- a few hundred distinct answers that a
+    ten-thousand-trajectory study was recomputing two hundred thousand times.
+
+    Returns ``None`` when the study is not shaped to benefit, in which case
+    every run computes its own conversion exactly as before.
+    """
+    if cfg["battery_kwh"] > 0:
+        return None
+    any_year = next(iter(aligned_by_year.values()), None)
+    if any_year is None:
+        return None
+    if not _pv_chain_cache_is_worthwhile(
+        settings.n_runs,
+        len(aligned_by_year),
+        years_per_run,
+        len(any_year.index),
+        settings.n_procs,
+    ):
+        return None
+
+    batt_cfg = _pv_only_battery_config(cfg, resolved)
+    degradation_rate = cfg["pv_degradation_rate"]
+    freq = cfg["resolution"]
+    return {
+        (year, year_idx): aligned.scaled(pv_factor=(1 - degradation_rate) ** year_idx).with_pv_only_chain(
+            batt_cfg, freq=freq
+        )
+        for year, aligned in aligned_by_year.items()
+        for year_idx in range(years_per_run)
+    }
+
+
 def _simulate_trajectory(
     cfg: dict[str, Any],
     resolved: ResolvedAppConfig,
-    base_load: pd.Series,
-    dc_by_year: dict[int, pd.Series],
-    temp_by_year: dict[int, pd.Series],
     available_years: np.ndarray,
     years_per_run: int,
     settings: MonteCarloSettings,
     rng: np.random.Generator,
+    aligned_by_year: dict[int, AlignedSimulationInputs],
+    pv_chains: dict[tuple[int, int], AlignedSimulationInputs] | None,
 ) -> tuple[dict[str, Any], pd.DataFrame]:
     """Run one Monte Carlo trajectory and return its summary metrics."""
     freq = cfg["resolution"]
@@ -213,9 +354,7 @@ def _simulate_trajectory(
     has_battery = battery_kwh > 0
 
     replacement_cost = resolved.cost_params.battery_cost_per_kwh * battery_kwh
-    pv_peak_w = cfg["n_modules"] * resolved.avg_module_power_w
-    loading_ratio = cfg["inverter_loading_ratio"]
-    inverter_ac_capacity_w = pv_peak_w / loading_ratio if loading_ratio and loading_ratio > 0 else None
+    inverter_ac_capacity_w = _inverter_ac_capacity_w(cfg, resolved)
 
     cumulative_fec = 0.0
     cumulative_cal_seconds = 0.0
@@ -232,7 +371,6 @@ def _simulate_trajectory(
     for year_idx in range(years_per_run):
         pv_degradation_factor = (1 - degradation_rate) ** year_idx
         year = int(available_years[rng.integers(len(available_years))])
-        dc_power = dc_by_year[year] * pv_degradation_factor
         load_scale = _sample_load_scale(
             rng,
             settings.load_uncertainty,
@@ -240,7 +378,17 @@ def _simulate_trajectory(
             settings.max_load_scale,
             settings.load_distribution,
         )
-        houseload = base_load * load_scale
+        # Scaling after alignment rather than before it: elementwise the same
+        # product, because reindexing only selects elements and zero-fills.
+        # With a PV chain memoized for this pair the PV side is already
+        # scaled, and scaling the load does not invalidate the chain.
+        if pv_chains is None:
+            year_inputs = aligned_by_year[year].scaled(
+                pv_factor=pv_degradation_factor,
+                load_factor=load_scale,
+            )
+        else:
+            year_inputs = pv_chains[(year, year_idx)].scaled(load_factor=load_scale)
 
         if has_battery:
             batt_kwargs: dict[str, Any] = {}
@@ -266,11 +414,7 @@ def _simulate_trajectory(
                 **batt_kwargs,
             )
         else:
-            batt_cfg = BatteryConfig(
-                nominal_energy_wh=0,
-                inverter_efficiency=cfg["inverter_efficiency"],
-                inverter_ac_capacity_w=inverter_ac_capacity_w,
-            )
+            batt_cfg = _pv_only_battery_config(cfg, resolved)
 
         state_kwargs: dict[str, float] = {}
         if carried_energy_wh is not None:
@@ -280,11 +424,9 @@ def _simulate_trajectory(
             }
 
         summary = simulate_energy_balance_summary(
-            pv_dc=dc_power,
-            houseload=houseload,
+            aligned=year_inputs,
             battery_config=batt_cfg,
             freq=freq,
-            temperature_series=temp_by_year[year] if has_battery else None,
             initial_fec=cumulative_fec,
             initial_calendar_seconds=cumulative_cal_seconds,
             initial_resistance_growth=cumulative_resistance_growth,
@@ -490,7 +632,15 @@ def _run_trajectory_index(run_idx: int) -> tuple[int, dict[str, Any], pd.DataFra
     """Evaluate one deterministic per-run random stream in a worker."""
     if _WORKER_CONTEXT is None:
         raise RuntimeError("Monte Carlo worker context was not initialized")
-    cfg, resolved, base_load, dc_by_year, temp_by_year, available_years, years_per_run, settings = _WORKER_CONTEXT
+    (
+        cfg,
+        resolved,
+        available_years,
+        years_per_run,
+        settings,
+        aligned_by_year,
+        pv_chains,
+    ) = _WORKER_CONTEXT
     # One observation window per trajectory: that is the unit of work whose
     # compile cost is being attributed. A no-op on the Python backend.
     reset_jit_cache_observation(settings.execution_backend)
@@ -499,13 +649,12 @@ def _run_trajectory_index(run_idx: int) -> tuple[int, dict[str, Any], pd.DataFra
     metrics, trajectory = _simulate_trajectory(
         cfg,
         resolved,
-        base_load,
-        dc_by_year,
-        temp_by_year,
         available_years,
         years_per_run,
         settings,
         rng,
+        aligned_by_year,
+        pv_chains,
     )
     # None from a numba run means no compiled dispatch call was observed -- a
     # trajectory can legitimately never enter the kernel. Record that as
@@ -574,16 +723,26 @@ def run_montecarlo(config: dict[str, Any], settings: MonteCarloSettings) -> Mont
 
     deps = _runtime_dependencies()
     base_load = load_consumption_profile(cfg, deps, timezone=resolved.timezone)
-
-    context = (
+    aligned_by_year = _align_years(
         cfg,
-        resolved,
         base_load,
         dc_by_year,
         temp_by_year,
+        has_battery=cfg["battery_kwh"] > 0,
+    )
+    pv_chains = _prepare_pv_chains(cfg, resolved, aligned_by_year, settings, years_per_run)
+
+    # The weather frames and the raw load profile are not passed to the
+    # workers: alignment consumed them here, and a worker only ever reads the
+    # aligned arrays.
+    context = (
+        cfg,
+        resolved,
         available_years,
         years_per_run,
         settings,
+        aligned_by_year,
+        pv_chains,
     )
     if settings.n_procs == 1:
         _initialize_worker(*context)
