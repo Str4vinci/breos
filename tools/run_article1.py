@@ -50,7 +50,8 @@ def _config_args(config_dir: Path | None, name: str) -> tuple[str, ...]:
 
 
 def _calendar_args(calendar_model: str | None) -> tuple[str, ...]:
-    """The model override, or nothing at all when the article default applies.
+    """The model override, or nothing at all when the forthcoming publication
+    study default applies.
 
     Passing nothing rather than the default name keeps an unswept run
     byte-identical to the published bundle: the tools record the flag they
@@ -181,7 +182,8 @@ def _analysis_commands(
             output_root / "load-profile-h0",
         ),
         # The two model sensitivities contrast one calendar model with the
-        # article's default. A pipeline already swept onto another model has
+        # forthcoming publication study's default. A pipeline already swept onto
+        # another model has
         # nothing left to contrast, and would file its results under a
         # directory naming a model that did not run.
         *(
@@ -323,7 +325,8 @@ def commands_for_stage(
     if stage == "verify":
         return [verify]
     if stage == "all":
-        # verify_article1_bundle.py asserts the article's own calendar model
+        # verify_article1_bundle.py asserts the forthcoming publication study's
+        # own calendar model
         # and thermal assumption, so it can only pass against a bundle that
         # ran the shipped configuration.
         if calendar_model is not None or config_dir is not None:
@@ -408,7 +411,8 @@ def main() -> int:
         type=Path,
         help=(
             f"Directory holding {DETERMINISTIC_CONFIG} and {MONTE_CARLO_CONFIG}. Omit it to run "
-            "the shipped Article configuration. Setting it drops bundle verification and "
+            "the shipped forthcoming publication configuration. Setting it drops "
+            "bundle verification and "
             "requires an explicit --output."
         ),
     )
@@ -417,7 +421,7 @@ def main() -> int:
         choices=CALENDAR_MODELS,
         help=(
             "Sweep every simulating stage onto one native calendar-degradation model. "
-            "Omit it to run the article as published. Setting it drops the two model "
+            "Omit it to run the forthcoming publication study. Setting it drops the two model "
             "sensitivities and bundle verification, and requires an explicit --output."
         ),
     )
@@ -454,7 +458,9 @@ def main() -> int:
                 f"{DEFAULT_OUTPUT_ROOT} would overwrite the published bundle"
             )
         if args.stage == "verify":
-            parser.error(f"{joined} cannot be verified: verify asserts the article's own configuration")
+            parser.error(
+                f"{joined} cannot be verified: verify asserts the forthcoming publication study's own configuration"
+            )
 
     commands = commands_for_stage(
         args.stage,

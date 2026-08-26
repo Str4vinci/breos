@@ -54,8 +54,8 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   records the resolved backend, whether the JIT cache was warm or cold for
   the run, and the installed Numba and llvmlite versions.
 - Added `breos --execution-backend` to the `montecarlo` command and to the
-  Article 1 reproduction tool, so a run can select the accelerator without
-  editing the pinned manuscript configuration.
+  reproduction tool for the forthcoming publication study, so a run can
+  select the accelerator without editing the pinned manuscript configuration.
 - Added Monte Carlo yearly diagnostics needed to compare execution paths field
   by field: separate direct-PV and battery inverter losses, charge and
   discharge input and losses, standby loss, capacity-window loss, replacement
@@ -79,7 +79,8 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 - The bundled hourly demandlib H0 profile now labels its watt-valued column as
   watts. The loader still accepts the historical kilowatt header for external
   compatibility.
-- The Article configurations now model the battery's thermal environment
+- The configurations for the forthcoming publication study now model the
+  battery's thermal environment
   rather than pinning it: battery temperature follows the weather and the
   indoor model buffers it, matching a pack installed indoors.
   `validation/article1/no-thermal-model/` keeps the flat 25 °C pair so the
