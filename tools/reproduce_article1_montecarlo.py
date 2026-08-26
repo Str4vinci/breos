@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate Article 1 Monte Carlo source tables with public BREOS APIs."""
+"""Generate Monte Carlo source tables for the forthcoming publication study with public BREOS APIs."""
 
 from __future__ import annotations
 
@@ -133,7 +133,7 @@ def main() -> int:
         provenance_path = case_directory / "provenance.json"
         result.runs.to_csv(runs_path, index=False)
         if result.yearly is None:
-            raise RuntimeError("Article 1 Monte Carlo requires collect_yearly=true")
+            raise RuntimeError("The Monte Carlo run for the forthcoming publication requires collect_yearly=true")
         result.yearly.to_csv(yearly_path, index=False)
         summary_path.write_text(json.dumps(result.summary, indent=2) + "\n")
 
