@@ -110,7 +110,8 @@ uv run python tools/fetch_weather.py historical --location porto --start 2005 --
 
 The command writes to `weather/`. Move the saved file into the input layout
 above before running the publication workflow. Open-Meteo can revise its
-archive, so preserve the exact downloaded file for reproducibility. Substitute
-`esposende` and the relevant study years for a BREOS-only Esposende run. The
-manuscript's measured, PVsyst, and Polysun comparison files remain private and
-are not part of this workflow.
+archive, so preserve the exact downloaded file for reproducibility. For a
+BREOS-only run supporting the forthcoming publication study, substitute
+`esposende` and the relevant study years. The forthcoming publication's
+measured, PVsyst, and Polysun comparison files remain private and are not part
+of this workflow.

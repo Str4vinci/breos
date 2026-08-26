@@ -61,8 +61,8 @@ an input manifest without running a simulation. The bundled Porto TMY is
 version controlled under `validation/data/weather/`.
 
 The public workflow excludes the measured, PVsyst, and Polysun comparison data
-used for the manuscript's Esposende validation. Those files remain in the
-private study archive and are not required, copied, or verified by BREOS. A
+used for the forthcoming publication's Esposende validation. Those files remain
+in the private study archive and are not required, copied, or verified by BREOS. A
 reader can still run the BREOS side with the `esposende` location preset and
 locally supplied load and weather inputs. Open-Meteo can supply historical
 weather, but an exact comparison requires the same saved weather file and load
@@ -70,7 +70,7 @@ profile used by the study.
 
 ## Archived comparison
 
-The private research reference is the Article run under
+The private research reference is the forthcoming publication study run under
 `dev/results/a1_july_rerun_tuxedo/moo_15min` at research revision
 `a0db6aae1e8d04a8260f51a34543b23bd82a1762`. Its Pareto CSV SHA-256 is
 `5334b8361b2395f0f19b6839005964b0b61bfa0d00e5ea28f450cfb4cde0a225`.
