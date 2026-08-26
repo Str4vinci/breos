@@ -299,8 +299,9 @@ def _pv_only_config():
     return cfg
 
 
-def test_pv_chain_cache_is_declined_when_it_cannot_pay_off():
+def test_pv_chain_cache_is_declined_when_it_cannot_pay_off(monkeypatch):
     # Enough reuse, small enough, forkable: worth it.
+    monkeypatch.setattr(montecarlo_module.multiprocessing, "get_start_method", lambda: "fork")
     assert _pv_chain_cache_is_worthwhile(10000, 19, 20, 35040, 19)
     # Too few trajectories to amortise building it.
     assert not _pv_chain_cache_is_worthwhile(8, 19, 20, 35040, 19)
