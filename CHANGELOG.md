@@ -79,8 +79,11 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 - The bundled hourly demandlib H0 profile now labels its watt-valued column as
   watts. The loader still accepts the historical kilowatt header for external
   compatibility.
-- The Article configurations now pin a fixed 25 °C battery temperature and
-  disable indoor remapping, matching the manuscript methodology.
+- The Article configurations now model the battery's thermal environment
+  rather than pinning it: battery temperature follows the weather and the
+  indoor model buffers it, matching a pack installed indoors.
+  `validation/article1/no-thermal-model/` keeps the flat 25 °C pair so the
+  pinned assumption can still be read on its own.
 - Withdrew the announced 0.6.0 removal of the `breos[fast]` extra. The extra
   is retained and undeprecated because it now installs the dependency for the
   optional dispatch backend.
