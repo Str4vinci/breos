@@ -25,7 +25,7 @@ The workflow generates:
 - seeded historical-weather Monte Carlo tables for C1-C5.
 
 Generated results belong under the ignored `results/article1/` directory. Do
-not commit the licensed E-REDES profile or third-party validation data.
+not commit the licensed E-REDES profile.
 
 ## Versioned inputs
 
@@ -54,13 +54,19 @@ The Article workflow requires:
 
 - the licensed `EREDES_2025_BTN_1000kwh_15min.csv` household profile;
 - the historical Porto weather CSV used by the Monte Carlo and weather
-  comparison; and
-- the monthly, weekly, and daily measured/PVsyst/Polysun comparison CSVs used
-  for Figure 2.
+  comparison.
 
 `tools/preflight_article1_inputs.py` verifies the expected hashes and writes
 an input manifest without running a simulation. The bundled Porto TMY is
 version controlled under `validation/data/weather/`.
+
+The public workflow excludes the measured, PVsyst, and Polysun comparison data
+used for the manuscript's Esposende validation. Those files remain in the
+private study archive and are not required, copied, or verified by BREOS. A
+reader can still run the BREOS side with the `esposende` location preset and
+locally supplied load and weather inputs. Open-Meteo can supply historical
+weather, but an exact comparison requires the same saved weather file and load
+profile used by the study.
 
 ## Archived comparison
 

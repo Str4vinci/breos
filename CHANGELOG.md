@@ -63,6 +63,10 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   within-year timestep indices at which the pack was replaced.
 
 ### Changed
+- Removed the manuscript-specific measured, PVsyst, and Polysun comparison
+  CSVs from the public reproduction workflow. The input preflight and bundle
+  verifier now cover only inputs and results needed to run BREOS; third-party
+  comparison output remains in the private study archive.
 - `remap_datetime_index_years` now shifts tz-naive and fixed-offset indices
   without a Python-level pass over the index, about 43x faster on a 15-minute
   year. Indices under a zone that can have offset transitions keep the

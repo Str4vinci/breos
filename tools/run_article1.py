@@ -66,10 +66,6 @@ def _preflight_command(input_root: Path, output_root: Path) -> list[str]:
         input_root / "rlp",
         "--historical-weather-file",
         input_root / "weather/porto_historical_2005_2024_openmeteo.csv",
-        "--validation-directory",
-        input_root / "validation",
-        "--copy-validation-to",
-        output_root / "external-validation",
         "--output",
         output_root / "input-manifest.json",
     )

@@ -77,8 +77,7 @@ uv run python tools/run_article1.py all
 ```
 
 The complete result bundle is in `results/article1/`. Keep that directory with
-the manuscript source data. Do not commit the licensed E-REDES profile or the
-third-party validation data.
+the manuscript source data. Do not commit the licensed E-REDES profile.
 
 ## Local input layout
 
@@ -89,10 +88,6 @@ dev/article1-inputs/
 ├── rlp/
 │   ├── EREDES_2025_BTN_1000kwh_15min.csv
 │   └── EREDES_2025_BTN_1000kwh_hourly.csv
-├── validation/
-│   ├── daily_results.csv
-│   ├── monthly_results.csv
-│   └── weekly_results.csv
 └── weather/
     └── porto_historical_2005_2024_openmeteo.csv
 ```
@@ -104,3 +99,18 @@ The historical weather file contains 2005-2024. The Article configuration
 samples 2005-2023 to match the archived workflow and the TMY source period.
 Update Section 2.7 of the manuscript, which currently says that Monte Carlo
 also samples 2024.
+
+To fetch a new historical Porto file from Open-Meteo, install the weather
+extra and run:
+
+```bash
+uv sync --extra weather
+uv run python tools/fetch_weather.py historical --location porto --start 2005 --end 2024
+```
+
+The command writes to `weather/`. Move the saved file into the input layout
+above before running the publication workflow. Open-Meteo can revise its
+archive, so preserve the exact downloaded file for reproducibility. Substitute
+`esposende` and the relevant study years for a BREOS-only Esposende run. The
+manuscript's measured, PVsyst, and Polysun comparison files remain private and
+are not part of this workflow.
