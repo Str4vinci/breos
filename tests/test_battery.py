@@ -18,6 +18,7 @@ from breos.battery import (
     apply_indoor_temperature_model,
     resistance_to_efficiency,
     simulate_energy_balance,
+    simulate_energy_balance_summary,
     update_battery_soh_cyclewise,
 )
 from breos.constants import LAM_EA_J_MOL, LAM_SOC_EXPONENT_N
@@ -233,6 +234,88 @@ class TestSimulateEnergyBalance:
         )
 
         assert np.array_equal(vectorized.matrix, reference.matrix)
+
+    @pytest.mark.parametrize("inverter_ac_capacity_w", [0.0, 6400.0, None])
+    def test_pv_only_summary_buffers_reduce_the_detailed_path_exactly(self, inverter_ac_capacity_w):
+        """The reduced PV-only buffers must report what the full matrix reports.
+
+        Twenty-four columns are served by one shared zero array and three more
+        are aliased onto a column already written, so this compares every
+        column the detailed frame exposes, not a representative few.
+        """
+        index = pd.date_range("2025-01-01", periods=96 * 3, freq="15min", tz="UTC")
+        step = np.arange(len(index))
+        pv_dc = pd.Series(9000.0 * np.clip(np.sin(step / 96.0 * 2.0 * np.pi), 0.0, None), index=index)
+        houseload = pd.DataFrame({"Load": 400.0 + 900.0 * (step % 7) / 7.0}, index=index)
+        common = dict(
+            pv_dc=pv_dc,
+            houseload=houseload,
+            battery_config=BatteryConfig(
+                nominal_energy_wh=0.0,
+                inverter_ac_capacity_w=inverter_ac_capacity_w,
+            ),
+            freq="15min",
+        )
+
+        results_df, total_pv, summary_df, _, _, _ = simulate_energy_balance(**common)
+        summary = simulate_energy_balance_summary(**common)
+
+        assert isinstance(summary.column_sums, dict)
+        for column in results_df.columns:
+            if column == "Datetime":
+                continue
+            assert summary.column_sums[column] == float(results_df[column].sum()), column
+        assert summary.total_pv_wh == float(total_pv)
+        for column in summary_df.columns:
+            assert summary.summary_row[column] == float(summary_df[column].iloc[0]), column
+        assert summary.carried_energy_wh == float(results_df["Battery_Energy_End"].iloc[-1])
+        assert summary.opening_energy_wh == float(results_df["Battery_Energy_Beginning"].iloc[0])
+        assert summary.replacement_steps == ()
+
+    def test_pv_only_summary_allocates_reduced_buffers(self, monkeypatch):
+        """A silent fall back to the full matrix would forfeit the whole point."""
+        index = pd.date_range("2025-01-01", periods=96, freq="15min", tz="UTC")
+        seen = []
+        original = battery_module._PvOnlySummaryBuffers
+
+        def recording(n_steps):
+            seen.append(n_steps)
+            return original(n_steps)
+
+        monkeypatch.setattr(battery_module, "_PvOnlySummaryBuffers", recording)
+        simulate_energy_balance_summary(
+            pv_dc=pd.Series(1000.0, index=index),
+            houseload=pd.DataFrame({"Load": 500.0}, index=index),
+            battery_config=BatteryConfig(nominal_energy_wh=0.0),
+            freq="15min",
+        )
+
+        assert seen == [96]
+
+    @pytest.mark.parametrize(
+        ("battery_config", "reason"),
+        [
+            (BatteryConfig(nominal_energy_wh=0.0), "the detailed frame owns a writable array per column"),
+            (BatteryConfig(nominal_energy_wh=10000.0), "a battery writes every column"),
+        ],
+    )
+    def test_full_buffers_are_kept_where_the_reduced_ones_are_unsafe(self, monkeypatch, battery_config, reason):
+        index = pd.date_range("2025-01-01", periods=96, freq="15min", tz="UTC")
+
+        def fail_if_called(n_steps):
+            raise AssertionError(f"reduced buffers are not usable here: {reason}")
+
+        monkeypatch.setattr(battery_module, "_PvOnlySummaryBuffers", fail_if_called)
+        results_df, *_ = simulate_energy_balance(
+            pv_dc=pd.Series(1000.0, index=index),
+            houseload=pd.DataFrame({"Load": 500.0}, index=index),
+            battery_config=battery_config,
+            freq="15min",
+        )
+
+        # Aliased columns would make these two the same array.
+        results_df.loc[0, "PV_Curtailment"] = 1234.5
+        assert results_df.loc[0, "PV_DC_Curtailed"] != 1234.5
 
     def test_python_pv_only_run_uses_vectorized_dispatch(self, monkeypatch):
         index = pd.date_range("2025-01-01", periods=24, freq="h", tz="UTC")
