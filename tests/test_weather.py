@@ -9,6 +9,7 @@ import pytest
 from breos.weather import (
     build_battery_temperature_series,
     fetch_tmy_weather_data,
+    fetch_weather_data,
     load_weather,
     parse_weather_filename,
     preload_weather_by_year,
@@ -25,6 +26,82 @@ def _write_leap_year_15min_weather(tmp_path):
     path = tmp_path / "weather.csv"
     df.to_csv(path, index=False)
     return path, df
+
+
+def test_fetch_weather_data_requests_instant_openmeteo_radiation(monkeypatch):
+    captured = {}
+
+    class FakeSession:
+        def mount(self, *_args, **_kwargs):
+            pass
+
+    class FakeVariable:
+        def __init__(self, value):
+            self.value = value
+
+        def ValuesAsNumpy(self):
+            return np.array([self.value], dtype=float)
+
+    class FakeHourly:
+        def Time(self):
+            return 0
+
+        def TimeEnd(self):
+            return 3600
+
+        def Interval(self):
+            return 3600
+
+        def Variables(self, index):
+            return FakeVariable(index)
+
+    class FakeResponse:
+        def Hourly(self):
+            return FakeHourly()
+
+    class FakeClient:
+        def __init__(self, *, session):
+            captured["session"] = session
+
+        def weather_api(self, url, *, params):
+            captured["url"] = url
+            captured["params"] = params
+            return [FakeResponse()]
+
+    monkeypatch.setattr("breos.weather.requests_cache.CachedSession", lambda *_args, **_kwargs: FakeSession())
+    monkeypatch.setattr("breos.weather.openmeteo_requests.Client", FakeClient)
+
+    weather = fetch_weather_data(
+        latitude=41.1579,
+        longitude=-8.6291,
+        start_date="2024-06-01",
+        end_date="2024-06-01",
+        tilt=0,
+        azimuth=0,
+        save_to_file=False,
+    )
+
+    assert captured["params"]["hourly"] == [
+        "temperature_2m",
+        "wind_speed_10m",
+        "shortwave_radiation_instant",
+        "direct_radiation_instant",
+        "diffuse_radiation_instant",
+        "direct_normal_irradiance_instant",
+        "global_tilted_irradiance_instant",
+        "terrestrial_radiation_instant",
+    ]
+    assert list(weather.columns) == [
+        "temperature_2m",
+        "wind_speed_10m",
+        "shortwave_radiation",
+        "direct_radiation",
+        "diffuse_radiation",
+        "direct_normal_irradiance",
+        "global_tilted_irradiance",
+        "terrestrial_radiation",
+    ]
+    assert weather.attrs["breos_weather_metadata"]["radiation_time_basis"] == "instant"
 
 
 def test_battery_temperature_helper_applies_indoor_default():

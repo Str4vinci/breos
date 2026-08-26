@@ -406,6 +406,10 @@ def fetch_weather_data(
     """
     Fetch historical weather data from the Open-Meteo API.
 
+    Radiation values use Open-Meteo's instantaneous fields at each timestamp.
+    The returned columns keep BREOS's established names without the provider's
+    ``_instant`` suffix.
+
     Args:
         latitude: Latitude of the location
         longitude: Longitude of the location
@@ -435,6 +439,17 @@ def fetch_weather_data(
             "Install with: uv add openmeteo-requests requests-cache"
         )
 
+    hourly_fields = (
+        ("temperature_2m", "temperature_2m"),
+        ("wind_speed_10m", "wind_speed_10m"),
+        ("shortwave_radiation_instant", "shortwave_radiation"),
+        ("direct_radiation_instant", "direct_radiation"),
+        ("diffuse_radiation_instant", "diffuse_radiation"),
+        ("direct_normal_irradiance_instant", "direct_normal_irradiance"),
+        ("global_tilted_irradiance_instant", "global_tilted_irradiance"),
+        ("terrestrial_radiation_instant", "terrestrial_radiation"),
+    )
+
     # Setup the Open-Meteo API client with cache and retry. Cache expires
     # after 30 days so we don't serve indefinitely-stale entries if a single
     # bad response was ever written.
@@ -450,16 +465,7 @@ def fetch_weather_data(
         "longitude": longitude,
         "start_date": start_date,
         "end_date": end_date,
-        "hourly": [
-            "temperature_2m",
-            "wind_speed_10m",
-            "shortwave_radiation",
-            "direct_radiation",
-            "diffuse_radiation",
-            "direct_normal_irradiance",
-            "global_tilted_irradiance",
-            "terrestrial_radiation",
-        ],
+        "hourly": [provider_name for provider_name, _output_name in hourly_fields],
         "wind_speed_unit": "ms",
         "timezone": "GMT",
         "tilt": tilt,
@@ -478,20 +484,18 @@ def fetch_weather_data(
             freq=pd.Timedelta(seconds=hourly.Interval()),
             inclusive="left",
         ),
-        "temperature_2m": hourly.Variables(0).ValuesAsNumpy(),
-        "wind_speed_10m": hourly.Variables(1).ValuesAsNumpy(),
-        "shortwave_radiation": hourly.Variables(2).ValuesAsNumpy(),
-        "direct_radiation": hourly.Variables(3).ValuesAsNumpy(),
-        "diffuse_radiation": hourly.Variables(4).ValuesAsNumpy(),
-        "direct_normal_irradiance": hourly.Variables(5).ValuesAsNumpy(),
-        "global_tilted_irradiance": hourly.Variables(6).ValuesAsNumpy(),
-        "terrestrial_radiation": hourly.Variables(7).ValuesAsNumpy(),
+        **{
+            output_name: hourly.Variables(index).ValuesAsNumpy()
+            for index, (_provider_name, output_name) in enumerate(hourly_fields)
+        },
     }
 
     hourly_dataframe = pd.DataFrame(data=hourly_data)
     hourly_dataframe.set_index("date", inplace=True)
     hourly_dataframe.attrs[_WEATHER_METADATA_KEY] = {
         "source": "OpenMeteo_historical",
+        "provider_hourly_fields": [provider_name for provider_name, _output_name in hourly_fields],
+        "radiation_time_basis": "instant",
         "horizon": _unknown_horizon_metadata("openmeteo"),
     }
 

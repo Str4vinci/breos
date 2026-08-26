@@ -23,11 +23,10 @@ battery_max_charge_power_w = 4352.0
 battery_temperature = "weather"
 battery_indoor_model = { enabled = true }
 inverter_efficiency = 0.96
-# Open-Meteo radiation is a preceding-hour mean. BREOS does not yet support
-# that source-specific offset; interval-start is the closer available solar
-# position convention. Use Perez transposition and Marion diffuse/ground IAM
-# instead of beam-only IAM; the beam-only default is a documented 0.5-1.5%
-# systematic overestimate.
+# The pinned Open-Meteo weather snapshot uses the provider's instantaneous
+# radiation fields, so evaluate solar position at the interval start. Use
+# Perez transposition and Marion diffuse/ground IAM instead of beam-only IAM;
+# the beam-only default is a documented 0.5-1.5% systematic overestimate.
 transposition_model = "perez"
 solar_position = "interval-start"
 diffuse_iam = "marion"

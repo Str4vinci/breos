@@ -7,6 +7,7 @@ import pytest
 from tools.preflight_article1_inputs import EXPECTED_SHA256, _checked_input
 from tools.verify_article1_bundle import (
     EXPECTED_EXTERNAL_VALIDATION_HASHES,
+    EXPECTED_HISTORICAL_WEATHER_SHA256,
     EXPECTED_MONTE_CARLO_YEARLY_COLUMNS,
     BundleAudit,
     _report_source_paths,
@@ -25,6 +26,14 @@ def test_article1_tools_pin_corrected_validation_inputs():
         filename: EXPECTED_SHA256[f"validation_{filename.removesuffix('_results.csv')}"]
         for filename in CORRECTED_VALIDATION_HASHES
     } == CORRECTED_VALIDATION_HASHES
+
+
+ARTICLE1_INSTANT_WEATHER_SHA256 = "0b2d42e6f3e2309aed3c0f65de461cab11b885173f6e45f0cd93adee29417650"
+
+
+def test_article1_tools_pin_instant_openmeteo_weather():
+    assert EXPECTED_SHA256["historical_weather"] == ARTICLE1_INSTANT_WEATHER_SHA256
+    assert EXPECTED_HISTORICAL_WEATHER_SHA256 == ARTICLE1_INSTANT_WEATHER_SHA256
 
 
 def test_article1_input_preflight_accepts_only_pinned_hash(tmp_path, monkeypatch):
