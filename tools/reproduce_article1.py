@@ -24,6 +24,11 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
 import breos  # noqa: E402
+from breos.execution import (  # noqa: E402
+    DEFAULT_EXECUTION_BACKEND,
+    EXECUTION_BACKENDS,
+    backend_provenance,
+)
 from breos.load_profiles import PROFILE_FILES, PROFILE_FILES_15MIN, load_profile  # noqa: E402
 from breos.optimization import evaluate_projected_design, optimize_system_multi_objective  # noqa: E402
 from breos.pv_modules import get_module  # noqa: E402
@@ -167,6 +172,7 @@ def _fixed_candidates(
     output_directory: Path,
     *,
     compare_reference: bool = True,
+    execution_backend: str = DEFAULT_EXECUTION_BACKEND,
 ) -> pd.DataFrame:
     rows = []
     for reference in config["reference_candidates"]:
@@ -180,6 +186,7 @@ def _fixed_candidates(
             battery_kwh=float(reference["battery_kwh"]),
             tilt=float(reference["tilt"]),
             azimuth=float(reference["azimuth"]),
+            execution_backend=execution_backend,
         )
         output = result.metrics
         reproduced_gi = float(output["Projected_Grid_Independence_%"])
@@ -251,6 +258,7 @@ def _export_pareto_representatives(
     load: pd.DataFrame,
     pareto: pd.DataFrame,
     output_directory: Path,
+    execution_backend: str = DEFAULT_EXECUTION_BACKEND,
 ) -> tuple[pd.DataFrame, dict[str, dict[str, str]]]:
     """Replay selected Pareto designs and export their plot-independent tables."""
     representatives = _select_pareto_representatives(pareto)
@@ -266,6 +274,7 @@ def _export_pareto_representatives(
             battery_kwh=float(representative["Battery_kWh"]),
             tilt=float(representative["Tilt"]),
             azimuth=float(representative["Azimuth"]),
+            execution_backend=execution_backend,
         )
         directory = output_directory / "representatives" / label
         directory.mkdir(parents=True, exist_ok=True)
@@ -317,6 +326,16 @@ def main() -> int:
     optimization_group.add_argument("--smoke-optimization", action="store_true")
     optimization_group.add_argument("--full-optimization", action="store_true")
     parser.add_argument("--n-procs", type=int, default=1, help="Optimization worker processes")
+    parser.add_argument(
+        "--execution-backend",
+        choices=EXECUTION_BACKENDS,
+        default=DEFAULT_EXECUTION_BACKEND,
+        help=(
+            "Within-day dispatch implementation. 'python' is the numerical reference and the "
+            "default; 'numba' is a compiled path that reproduces it bit for bit and needs "
+            'pip install "breos[fast]".'
+        ),
+    )
     parser.add_argument("--output", type=Path, default=PROJECT_ROOT / "results/article1")
     args = parser.parse_args()
 
@@ -356,6 +375,7 @@ def main() -> int:
                 set(args.candidate),
                 scenario_output,
                 compare_reference=compare_reference,
+                execution_backend=args.execution_backend,
             )
             fixed.to_csv(fixed_path, index=False)
             print(fixed.to_string(index=False))
@@ -367,6 +387,7 @@ def main() -> int:
             "python_version": platform.python_version(),
             "platform": platform.platform(),
             "dependency_versions": _dependency_versions(),
+            "execution": backend_provenance(args.execution_backend),
             "command": shlex.join([sys.executable, *sys.argv]),
             "battery_cost_scenario_eur_per_kwh": scenario_cost,
             "research_commit": RESEARCH_COMMIT,
@@ -427,6 +448,7 @@ def main() -> int:
                 seed=int(optimization["seed"]),
                 verbose=True,
                 n_procs=args.n_procs,
+                execution_backend=args.execution_backend,
             )
             pareto_path = scenario_output / "pareto_results.csv"
             pareto = result.details["pareto"]
@@ -437,6 +459,7 @@ def main() -> int:
                 load,
                 pareto,
                 scenario_output,
+                execution_backend=args.execution_backend,
             )
             representatives_path = scenario_output / "pareto_representatives.csv"
             representatives.to_csv(representatives_path, index=False)

@@ -53,8 +53,21 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   `"python"` remains the default and the numerical reference. Provenance
   records the resolved backend, whether the JIT cache was warm or cold for
   the run, and the installed Numba and llvmlite versions.
+- Added `breos --execution-backend` to the `montecarlo` command and to the
+  reproduction tool for the forthcoming publication study, so a run can
+  select the accelerator without editing the pinned manuscript configuration.
+- Added Monte Carlo yearly diagnostics needed to compare execution paths field
+  by field: separate direct-PV and battery inverter losses, charge and
+  discharge input and losses, standby loss, capacity-window loss, replacement
+  energy removed and added, carried battery and PV-origin energy, and the
+  within-year timestep indices at which the pack was replaced.
 
 ### Changed
+- `remap_datetime_index_years` now shifts tz-naive and fixed-offset indices
+  without a Python-level pass over the index, about 43x faster on a 15-minute
+  year. Indices under a zone that can have offset transitions keep the
+  element-wise path, which remains the authority; the fast path is bit-exact
+  where it applies.
 - Updated the Suntech STP550S-C72/Vmh catalogue temperature coefficients to
   the matching monofacial datasheet values of -0.34 %/°C for maximum power and
   -0.26 %/°C for open-circuit voltage. The configurations for the forthcoming
@@ -66,13 +79,23 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 - The bundled hourly demandlib H0 profile now labels its watt-valued column as
   watts. The loader still accepts the historical kilowatt header for external
   compatibility.
-- The configurations for the forthcoming publication now pin a fixed 25 °C
-  battery temperature and disable indoor remapping, matching the manuscript
-  methodology.
+- The configurations for the forthcoming publication study now model the
+  battery's thermal environment
+  rather than pinning it: battery temperature follows the weather and the
+  indoor model buffers it, matching a pack installed indoors.
+  `validation/article1/no-thermal-model/` keeps the flat 25 °C pair so the
+  pinned assumption can still be read on its own.
 - Withdrew the announced 0.6.0 removal of the `breos[fast]` extra. The extra
   is retained and undeprecated because it now installs the dependency for the
-  optional Monte Carlo dispatch backend. The separate removal of the
-  approximate `breos.numba_kernels` screening module proceeds as announced.
+  optional dispatch backend.
+- Withdrew the announced 0.6.0 removal of the `breos.numba_kernels` screening
+  module. The module is retained and stays deprecated: it is still not called
+  by `App` or by the supported simulation path, and its approximate cycle proxy
+  and absent replacement logic mean it must not be used for reported results.
+  No removal date is scheduled. It is unrelated to the accelerated backend
+  added in this release beyond sharing the optional dependency -- that backend
+  is private, covers the within-day dispatch only, leaves degradation in
+  Python, and is bit-identical to the reference.
 
 ### Fixed
 - Kept PV module geometry metadata for the forthcoming publication out of the
@@ -155,8 +178,9 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 ### Deprecated
 - Deprecated the unused `breos.numba_kernels` module and `breos[fast]` extra;
   the standalone approximate kernels are not used by `App` or the supported
-  simulation path and are scheduled for removal in 0.6.0. The `breos[fast]`
-  part of this announcement was later withdrawn; see Unreleased.
+  simulation path and are scheduled for removal in 0.6.0. Both removals were
+  later withdrawn: the extra is undeprecated and the module is retained while
+  staying deprecated. See Unreleased.
 - Deprecated the article-scoped, documentation-derived Wöhler/Miner comparison
   subsystem, its three plots, and its comparison-only constants for removal in
   0.6.0. Despite legacy API names, this is an independent BREOS approximation,

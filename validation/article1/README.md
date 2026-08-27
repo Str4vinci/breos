@@ -48,9 +48,11 @@ resolved module parameters, including the module power temperature
 coefficient of -0.34 %/°C and open-circuit-voltage coefficient of
 -0.26 %/°C (-0.13 V/°C after rounding at the rated Voc).
 
-Both configurations also pin battery temperature to 25 °C and disable the
-optional indoor-temperature transform. This matches the manuscript assumption
-instead of inheriting BREOS's ambient-weather default.
+Both primary configurations derive battery ambient temperature from weather
+and apply the indoor-temperature model for a residential installation. The
+`no-thermal-model/` configuration pair retains the manuscript's fixed 25 °C
+assumption as a control. Use `--calendar-model` and `--config-dir` to select a
+control run explicitly; these overrides require a separate output directory.
 
 ## External inputs
 
@@ -78,9 +80,11 @@ preserve: it repeated hourly irradiance in the nominal 15-minute run, used a
 flat unbounded inverter conversion, and sampled normally distributed load in
 the Monte Carlo despite the manuscript specifying a bounded uniform
 distribution. The archived deterministic and Monte Carlo configurations also
-omitted the manuscript's fixed 25 °C battery temperature and therefore used
-the ambient-weather default. BREOS 0.6 also fixes the final-hour Makima
-interpolation gap. These changes can alter every reported result.
+used raw ambient weather for battery temperature. BREOS 0.6 instead models the
+indoor thermal environment in the primary configurations and retains the
+manuscript's fixed 25 °C assumption as a separate control. BREOS 0.6 also fixes
+the final-hour Makima interpolation gap. These changes can alter every reported
+result.
 
 Earlier corrected values generated before the final module and resampling
 fixes are intentionally not reported here. Add final numerical comparisons

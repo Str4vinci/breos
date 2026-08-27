@@ -20,7 +20,7 @@ from tools.reproduce_article1 import (
 )
 
 EXPECTED_RLP_SHA256 = "23becc5a7bfc927b1f7604156e0e4953dcc6bb65268ca947b38db3dc4f2b28bc"
-EXPECTED_CONFIG_SHA256 = "bb0f8ecacf49795b7c769a858b64015f249807f6b7496e53bbc313d24269450c"
+EXPECTED_CONFIG_SHA256 = "66f9f2819fcdf8f966d321262ee9aa9fe340ef4abc4b2f684a0fb9617592b4fa"
 FIXED_REGRESSION_LABELS = {"C1", "C2", "C3", "C4"}
 
 
@@ -46,8 +46,8 @@ def test_article1_config_pins_projected_run_controls():
     assert config["constraints"]["enforce_zeb"] is False
     assert config["pv"]["module_width_m"] == 1.134
     assert config["pv"]["module_length_m"] == 2.278
-    assert config["battery"]["temperature"] == 25.0
-    assert config["battery"]["indoor_model"] == {"enabled": False}
+    assert config["battery"]["temperature"] == "weather"
+    assert config["battery"]["indoor_model"] == {"enabled": True}
     assert config["emissions"]["average_grid_carbon_intensity_gco2_kwh"] == 127.91
     assert len(config["reference_candidates"]) == 5
     assert config["reference_candidates"][-1] == {

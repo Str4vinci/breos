@@ -66,12 +66,13 @@ submission.
    uses the symmetric transform and still enforces zero irradiance when the
    clear-sky value is zero. The publication study's energy-conservation option
    then preserves every source hour's mean irradiance.
-8. The manuscript assumes a fixed battery temperature of 25 °C. Both archived
-   configurations for the publication study omitted that setting and therefore
-   inherited the ambient-weather default. The BREOS 0.6 configurations for the
-   forthcoming publication explicitly use 25 °C and disable indoor-temperature
-   remapping. Treat the resulting degradation and economic changes as
-   corrected-model drift.
+8. The manuscript assumes a fixed battery temperature of 25 °C, while the
+   archived configurations inherited raw ambient weather. The primary BREOS
+   0.6 configurations now use weather buffered by the indoor-temperature model
+   to represent a residential installation. A separate `no-thermal-model/`
+   configuration pair preserves the fixed 25 °C assumption as a control.
+   Update the manuscript method and every affected result from the selected
+   final configuration; do not combine results from these thermal assumptions.
 9. Section 2.7 says that Monte Carlo samples weather from 2005-2024. The July
    run, Figure 6 text, and versioned BREOS configuration use 2005-2023, with
    2024 excluded from the sampling pool. Update Section 2.7 to 2005-2023 unless

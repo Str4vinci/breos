@@ -2,6 +2,7 @@
 Utility functions for breos library.
 """
 
+import datetime
 import multiprocessing
 import os
 import re
@@ -62,6 +63,51 @@ def count_leap_years(start_year: int, num_years: int) -> int:
     return sum(1 for year in range(start_year, start_year + num_years) if is_leap_year(year))
 
 
+def _has_fixed_utc_offset(tz) -> bool:
+    """Return whether *tz* can never have an offset transition.
+
+    A whole-year shift preserves wall-clock time, so under a zone with DST it
+    can land on a nonexistent or ambiguous local time. Fixed-offset zones and
+    UTC have no transitions in any year and are always safe to shift in bulk.
+    """
+    if tz is None:
+        return True
+    if isinstance(tz, datetime.timezone):
+        return True
+    return str(tz).upper() == "UTC"
+
+
+def _remap_years_vectorized(index: "pd.DatetimeIndex", year_offset: int):
+    """Shift whole years without a Python-level pass over the index.
+
+    Returns ``(keep_mask, new_index)``, or ``None`` when the index is under a
+    zone that can have transitions, in which case the caller falls back to the
+    element-wise path. That fallback is the authority: this is an optimisation
+    for the tz-naive and fixed-offset indices the simulation actually uses,
+    where it is exact rather than merely equivalent.
+
+    The Feb. 29 entries are dropped *before* the shift, so the year offset can
+    never clamp a date onto Feb. 28 and create the duplicate labels the
+    element-wise path exists to avoid.
+    """
+    if not _has_fixed_utc_offset(index.tz):
+        return None
+
+    month = index.month.to_numpy()
+    day = index.day.to_numpy()
+    is_feb29 = (month == 2) & (day == 29)
+    if is_feb29.any():
+        target = index.year.to_numpy() + year_offset
+        # Same rule as is_leap_year, evaluated over the whole index at once.
+        target_is_leap = (target % 4 == 0) & ((target % 100 != 0) | (target % 400 == 0))
+        keep = ~(is_feb29 & ~target_is_leap)
+    else:
+        keep = np.ones(len(index), dtype=bool)
+
+    kept = index if keep.all() else index[keep]
+    return keep, kept + pd.DateOffset(years=year_offset)
+
+
 def remap_datetime_index_years(obj, year_offset: int):
     """Shift a DatetimeIndex-bearing object by whole years without Feb. 29 crashes.
 
@@ -76,16 +122,20 @@ def remap_datetime_index_years(obj, year_offset: int):
     if not isinstance(index, pd.DatetimeIndex):
         return obj
 
-    keep = np.ones(len(index), dtype=bool)
-    remapped = []
-    for pos, ts in enumerate(index):
-        target_year = ts.year + year_offset
-        if ts.month == 2 and ts.day == 29 and not is_leap_year(target_year):
-            keep[pos] = False
-            continue
-        remapped.append(ts.replace(year=target_year))
+    fast = _remap_years_vectorized(index, year_offset)
+    if fast is not None:
+        keep, new_index = fast
+    else:
+        keep = np.ones(len(index), dtype=bool)
+        remapped = []
+        for pos, ts in enumerate(index):
+            target_year = ts.year + year_offset
+            if ts.month == 2 and ts.day == 29 and not is_leap_year(target_year):
+                keep[pos] = False
+                continue
+            remapped.append(ts.replace(year=target_year))
+        new_index = pd.DatetimeIndex(remapped)
 
-    new_index = pd.DatetimeIndex(remapped)
     if isinstance(obj, pd.DatetimeIndex):
         return new_index
 

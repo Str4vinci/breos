@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import hashlib
 import json
 import subprocess
@@ -29,6 +30,73 @@ EXPECTED_EXTERNAL_VALIDATION_HASHES = {
     "weekly_results.csv": "b5ff0311df777b62f22de1111ba277321203e57e2ab5c6eac67e6673880d397b",
     "daily_results.csv": "e376382026bc266b5895ce9ba2cf3504c632351a4fe34ab0ac8a6fe86ca857b8",
 }
+EXPECTED_MONTE_CARLO_YEARLY_COLUMNS = (
+    "run",
+    "Year",
+    "PV_Production_kWh",
+    "Legacy_PV_Production_kWh",
+    "PV_DC_Generation_kWh",
+    "Direct_PV_AC_Load_kWh",
+    "PV_Origin_Battery_AC_Load_kWh",
+    "Self_Consumption_kWh",
+    "Curtailment_DC_kWh",
+    "Load_kWh",
+    "Import_kWh",
+    "Export_kWh",
+    "Grid_Independence_%",
+    "Battery_SOH_%",
+    "Battery_Cumulative_FEC",
+    "Battery_Cumulative_Calendar_Seconds",
+    "Battery_Cumulative_Cycle_Degradation",
+    "Battery_Cumulative_Calendar_Degradation",
+    "Battery_Resistance_Growth",
+    "Replacements",
+    "Replacement_Cost",
+    "PV_Degradation_Factor",
+    "Weather_Year",
+    "Load_Scale",
+    "PV_Direct_Inverter_Loss_kWh",
+    "Battery_Inverter_Loss_kWh",
+    "Battery_Charge_Input_kWh",
+    "Battery_Discharge_DC_kWh",
+    "Battery_AC_To_Load_kWh",
+    "Battery_Charge_Loss_kWh",
+    "Battery_Discharge_Loss_kWh",
+    "Battery_Standby_Loss_kWh",
+    "Capacity_Window_Loss_kWh",
+    "Replacement_Energy_Removed_kWh",
+    "Replacement_Energy_Added_kWh",
+    "Battery_Carried_Energy_Wh",
+    "Battery_Carried_PV_Origin_Energy_Wh",
+    "Replacement_Steps",
+    "Load_kWh_Financial",
+    "Cost_No_Sys_Annual",
+    "Cost_No_Sys_Cumulative",
+    "PV_Production_kWh_Financial",
+    "Export_kWh_Financial",
+    "Degradation_Factor",
+    "Cost_Import",
+    "Revenue_Export",
+    "Cost_Operation",
+    "Cost_Daily",
+    "Cost_Replacement",
+    "Cost_System_Annual",
+    "Cost_System_Cumulative",
+    "Cost_No_Sys_Annual_NPV",
+    "Cost_System_Annual_NPV",
+    "Cost_No_Sys_Cumulative_NPV",
+    "Cost_System_Cumulative_NPV",
+    "Savings_Cumulative",
+    "Savings_Cumulative_NPV",
+    "CO2_Avoided_Total_kg",
+    "CO2_Avoided_SelfConsumed_kg",
+    "CO2_Avoided_Total_Cumulative_kg",
+    "CO2_Avoided_SelfConsumed_Cumulative_kg",
+    "CO2_Avoided_CI_gCO2_kWh",
+    "CO2_Avoided_CI_Type",
+    "Average_Grid_CI_gCO2_kWh",
+    "Marginal_Grid_CI_gCO2_kWh",
+)
 
 # Publication-study generators export plot-independent source tables.
 # Presentation-only changes therefore do not invalidate previously generated
@@ -92,6 +160,32 @@ class BundleAudit:
     def expect(self, condition: bool, message: str) -> None:
         if not condition:
             self.errors.append(message)
+
+    def verify_monte_carlo_yearly_schema(self, case: str) -> None:
+        relative = f"monte-carlo-v1/{case}/yearly.csv"
+        path = self.require_file(relative)
+        if not path.is_file():
+            return
+        try:
+            with path.open(encoding="utf-8", newline="") as handle:
+                columns = tuple(next(csv.reader(handle), ()))
+        except OSError as error:
+            self.errors.append(f"cannot read Monte Carlo yearly output: {relative}: {error}")
+            return
+
+        if columns == EXPECTED_MONTE_CARLO_YEARLY_COLUMNS:
+            return
+
+        missing = [column for column in EXPECTED_MONTE_CARLO_YEARLY_COLUMNS if column not in columns]
+        unexpected = [column for column in columns if column not in EXPECTED_MONTE_CARLO_YEARLY_COLUMNS]
+        details: list[str] = []
+        if missing:
+            details.append(f"missing {missing}")
+        if unexpected:
+            details.append(f"unexpected {unexpected}")
+        if not details:
+            details.append("column order differs")
+        self.errors.append(f"wrong Monte Carlo yearly schema: {case}: {'; '.join(details)}")
 
     def _verify_common_provenance(self, payload: dict[str, Any], relative: str) -> None:
         source = payload.get("breos_source", {})
@@ -241,10 +335,13 @@ class BundleAudit:
         self.expect(
             config.get("battery", {}).get("calendar_model") == calendar_model, f"wrong calendar model: {relative}"
         )
-        self.expect(config.get("battery", {}).get("temperature") == 25.0, f"wrong battery temperature: {relative}")
         self.expect(
-            config.get("battery", {}).get("indoor_model") == {"enabled": False},
-            f"battery indoor remapping is not disabled: {relative}",
+            config.get("battery", {}).get("temperature") == "weather",
+            f"battery temperature is not weather-driven: {relative}",
+        )
+        self.expect(
+            config.get("battery", {}).get("indoor_model") == {"enabled": True},
+            f"battery indoor buffering is not enabled: {relative}",
         )
         self.expect(
             config.get("optimization", {}).get("objective_basis") == "projected", f"wrong objectives: {relative}"
@@ -329,6 +426,7 @@ class BundleAudit:
         self.load_report("orientation/provenance.json")
         self.load_report("weather-comparison/provenance.json")
         for case in ("c1", "c2", "c3", "c4", "c5"):
+            self.verify_monte_carlo_yearly_schema(case)
             payload = self.load_report(f"monte-carlo-v1/{case}/provenance.json")
             if payload:
                 settings = payload.get("settings", {})
@@ -337,10 +435,13 @@ class BundleAudit:
                 self.expect(settings.get("seed") == 42, f"wrong Monte Carlo seed: {case}")
                 self.expect(settings.get("load_distribution") == "uniform", f"wrong load distribution: {case}")
                 config = payload.get("resolved_config", {})
-                self.expect(config.get("battery_temperature") == 25.0, f"wrong battery temperature: {case}")
                 self.expect(
-                    config.get("battery_indoor_model") == {"enabled": False},
-                    f"battery indoor remapping is not disabled: {case}",
+                    config.get("battery_temperature") == "weather",
+                    f"battery temperature is not weather-driven: {case}",
+                )
+                self.expect(
+                    config.get("battery_indoor_model") == {"enabled": True},
+                    f"battery indoor buffering is not enabled: {case}",
                 )
 
         self._verify_source_compatibility(manifest)
