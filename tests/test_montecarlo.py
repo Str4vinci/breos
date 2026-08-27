@@ -57,6 +57,25 @@ def test_sample_load_scale_respects_bounds():
     assert all(0.2 <= s <= 1.5 for s in scales)
 
 
+def test_sample_load_scale_supports_bounded_uniform_distribution():
+    rng = np.random.default_rng(7)
+    scales = [
+        _sample_load_scale(
+            rng,
+            0.05,
+            min_scale=0.0,
+            max_scale=None,
+            distribution="uniform",
+        )
+        for _ in range(500)
+    ]
+
+    assert min(scales) >= 0.95
+    assert max(scales) <= 1.05
+    assert min(scales) < 0.96
+    assert max(scales) > 1.04
+
+
 def test_run_montecarlo_shapes_and_years(tmp_path):
     weather = _write_multiyear_weather(tmp_path / "multi.csv")
     settings = MonteCarloSettings(weather_file=str(weather), n_runs=3, years_per_run=2, seed=1)
@@ -70,6 +89,53 @@ def test_run_montecarlo_shapes_and_years(tmp_path):
     assert "mean_usable_ac_system_production_kwh" in result.runs
     assert "npv_savings_eur" in result.summary
     assert set(result.summary["npv_savings_eur"]) >= {"mean", "p5", "p50", "p95"}
+    assert set(result.summary["npv_savings_eur"]) >= {"p2_5", "p97_5"}
+    assert result.provenance["settings"]["load_distribution"] == "normal"
+
+
+def test_run_montecarlo_can_collect_yearly_cost_trajectories(tmp_path):
+    weather = _write_multiyear_weather(tmp_path / "multi.csv")
+    settings = MonteCarloSettings(
+        weather_file=str(weather),
+        n_runs=3,
+        years_per_run=2,
+        seed=1,
+        collect_yearly=True,
+    )
+
+    result = run_montecarlo(_base_config(), settings)
+
+    assert result.yearly is not None
+    assert len(result.yearly) == 6
+    assert set(result.yearly["run"]) == {1, 2, 3}
+    assert {
+        "Weather_Year",
+        "Load_Scale",
+        "Battery_Cumulative_FEC",
+        "Savings_Cumulative_NPV",
+        "Cost_System_Cumulative_NPV",
+    } <= set(result.yearly.columns)
+    assert "lifetime_grid_independence_pct" in result.runs
+    assert "payback_year_exact" in result.runs
+
+
+def test_run_montecarlo_filters_weather_sampling_pool(tmp_path):
+    weather = _write_multiyear_weather(tmp_path / "multi.csv", years=(2020, 2021, 2022))
+    settings = MonteCarloSettings(
+        weather_file=str(weather),
+        n_runs=1,
+        years_per_run=2,
+        seed=1,
+        weather_start_year=2021,
+        weather_end_year=2021,
+        collect_yearly=True,
+    )
+
+    result = run_montecarlo(_base_config(), settings)
+
+    assert result.available_years == [2021]
+    assert result.yearly is not None
+    assert set(result.yearly["Weather_Year"]) == {2021}
 
 
 def test_run_montecarlo_is_reproducible_with_seed(tmp_path):
@@ -78,6 +144,17 @@ def test_run_montecarlo_is_reproducible_with_seed(tmp_path):
     a = run_montecarlo(_base_config(), settings).runs["npv_savings_eur"].to_numpy()
     b = run_montecarlo(_base_config(), settings).runs["npv_savings_eur"].to_numpy()
     np.testing.assert_allclose(a, b)
+
+
+def test_run_montecarlo_parallel_workers_preserve_seeded_results(tmp_path):
+    weather = _write_multiyear_weather(tmp_path / "multi.csv")
+    serial = MonteCarloSettings(weather_file=str(weather), n_runs=2, years_per_run=1, seed=42)
+    parallel = MonteCarloSettings(weather_file=str(weather), n_runs=2, years_per_run=1, seed=42, n_procs=2)
+
+    serial_result = run_montecarlo(_base_config(), serial).runs
+    parallel_result = run_montecarlo(_base_config(), parallel).runs
+
+    pd.testing.assert_frame_equal(serial_result, parallel_result)
 
 
 def test_run_montecarlo_defaults_years_to_projection_years(tmp_path):

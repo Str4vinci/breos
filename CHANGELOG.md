@@ -22,6 +22,16 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   It returns the projected metrics, annual energy and degradation-state
   ledger, discounted financial ledger, LCOE, and configured lifetime
   avoided-emissions totals without requiring an NSGA-II run.
+- Added reproducible Monte Carlo controls for normal or bounded-uniform demand
+  sampling, historical weather-year bounds, energy-conserving 15-minute
+  interpolation, and independent trajectory workers. Opt-in yearly output
+  exposes the energy, degradation, and discounted-cost paths behind summary
+  distributions, and the CLI writes a provenance report with input and output
+  hashes. Existing normal sampling and aggregate-only output remain defaults.
+- Added a Monte Carlo configuration and BREOS orchestration command for the
+  forthcoming publication study's C1-C5 cases. It pins the manuscript's
+  uniform 0.95-1.05 load multiplier and records that the archived research
+  implementation instead used a normal draw.
 - Added opt-in hourly-energy conservation to `resample_to_15min`. It preserves
   each source hour's GHI, DNI, and DHI energy after clear-sky interpolation;
   the established resampling output remains the default.
