@@ -25,11 +25,6 @@ EXPECTED_ARTIFACT_HASH_KEYS = {
     "yearly_csv_sha256",
     "yearly_summary_sha256",
 }
-EXPECTED_EXTERNAL_VALIDATION_HASHES = {
-    "monthly_results.csv": "d2b777e2b58abdad055abe25ec45c7fd879947f498622b6f17966b8d4803d1cb",
-    "weekly_results.csv": "b5ff0311df777b62f22de1111ba277321203e57e2ab5c6eac67e6673880d397b",
-    "daily_results.csv": "e376382026bc266b5895ce9ba2cf3504c632351a4fe34ab0ac8a6fe86ca857b8",
-}
 EXPECTED_MONTE_CARLO_YEARLY_COLUMNS = (
     "run",
     "Year",
@@ -393,10 +388,6 @@ class BundleAudit:
                 == "71c26d072c09faf16dab37230cfe8b2d430bd39344333227d00c7be4e76a188a",
                 "unexpected historical-weather input hash",
             )
-        for filename, expected in EXPECTED_EXTERNAL_VALIDATION_HASHES.items():
-            path = self.require_file(f"external-validation/{filename}")
-            if path.is_file():
-                self.expect(_sha256(path) == expected, f"external validation hash mismatch: {filename}")
         self.deterministic_report(
             "base-v1/reproduction.json", optimization=False, fixed_labels={"C1", "C2", "C3", "C4", "C5"}
         )

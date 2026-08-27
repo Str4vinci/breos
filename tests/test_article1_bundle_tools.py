@@ -41,6 +41,14 @@ def test_article1_bundle_audit_reports_missing_files(tmp_path):
     assert audit.errors == ["missing file: missing.csv"]
 
 
+def test_article1_bundle_does_not_require_private_comparison_files(tmp_path):
+    audit = BundleAudit(tmp_path)
+
+    audit.verify()
+
+    assert not any("external-validation" in error for error in audit.errors)
+
+
 def test_article1_bundle_accepts_exact_monte_carlo_yearly_schema(tmp_path):
     path = tmp_path / "monte-carlo-v1/c1/yearly.csv"
     path.parent.mkdir(parents=True)
