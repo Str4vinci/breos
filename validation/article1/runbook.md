@@ -1,6 +1,7 @@
-# Run the Article 1 simulations
+# Run the publication study
 
-`tools/run_article1.py` runs the complete Article 1 workflow. It uses local
+`tools/run_article1.py` runs the complete workflow for the forthcoming
+publication. It uses local
 inputs from `dev/article1-inputs/` and writes results to `results/article1/`.
 Both directories are ignored by Git.
 
@@ -95,8 +96,9 @@ dev/article1-inputs/
 If the input bundle is elsewhere, pass `--input-root`. To change the result
 directory, pass `--output`.
 
-The historical weather file contains 2005-2024. The Article configuration
-samples 2005-2023 to match the archived workflow and the TMY source period.
+The historical weather file contains 2005-2024. The configuration for the
+forthcoming publication samples 2005-2023 to match the archived workflow and
+the TMY source period.
 Update Section 2.7 of the manuscript, which currently says that Monte Carlo
 also samples 2024.
 

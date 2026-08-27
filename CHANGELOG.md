@@ -5,18 +5,18 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 ## [Unreleased]
 
 ### Added
-- Added an opt-in projected multi-objective optimizer that evaluates each
-  candidate over a repeated-TMY project lifetime, carries battery degradation
-  and physical state between years, records actual replacements, and optimizes
-  lifetime grid independence and NPV. Existing annual three-objective behavior
-  remains the default; projected ZEB is a diagnostic or optional feasibility
-  constraint, not a third objective.
-- Added a version-controlled Article 1 configuration, deterministic
-  fixed-candidate reproduction command, per-candidate yearly and financial
-  source tables, input preflight, complete result-bundle verifier, and
-  manuscript-to-source-data audit. Generated provenance records the resolved
-  PV module and geometry as well as software, source, config, input, and output
-  hashes.
+- Added a projected multi-objective optimizer that evaluates each candidate
+  over a repeated-TMY project lifetime, carries battery degradation and
+  physical state between years, records actual replacements, and optimizes
+  lifetime grid independence and NPV. This is now the default objective basis;
+  projected ZEB is a diagnostic or optional feasibility constraint, not a third
+  objective.
+- Added a version-controlled configuration for the forthcoming publication, a
+  deterministic fixed-candidate reproduction command, per-candidate yearly and
+  financial source tables, an opt-in licensed-profile regression, input
+  preflight, a complete result-bundle verifier, and a manuscript-to-source-data
+  audit. Generated provenance records the resolved PV module and geometry as
+  well as software, source, config, input, and output hashes.
 - Added `evaluate_projected_design` for detailed evaluation of a fixed design.
   It returns the projected metrics, annual energy and degradation-state
   ledger, discounted financial ledger, LCOE, and configured lifetime
@@ -30,10 +30,10 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 - Added public battery-temperature and indoor-temperature-model configuration
   fields. Deterministic App and Monte Carlo runs now use the same resolved
   temperature input while retaining the ambient-weather default.
-- Added an Article 1 Monte Carlo configuration and BREOS orchestration command
-  for C1-C5. It pins the manuscript's uniform 0.95-1.05 load multiplier and
-  records that the archived research implementation instead used a normal
-  draw.
+- Added a Monte Carlo configuration and BREOS orchestration command for the
+  forthcoming publication's C1-C5 study. It pins the manuscript's uniform
+  0.95-1.05 load multiplier and records that the archived research
+  implementation instead used a normal draw.
 - Added `tools/run_article1.py` as the single entry point for input checks,
   deterministic analyses, Monte Carlo runs, and final bundle verification.
   It discovers ignored local inputs under `dev/article1-inputs/` by default.
@@ -54,8 +54,8 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   records the resolved backend, whether the JIT cache was warm or cold for
   the run, and the installed Numba and llvmlite versions.
 - Added `breos --execution-backend` to the `montecarlo` command and to the
-  Article 1 reproduction tool, so a run can select the accelerator without
-  editing the pinned manuscript configuration.
+  reproduction tool for the forthcoming publication study, so a run can
+  select the accelerator without editing the pinned manuscript configuration.
 - Added Monte Carlo yearly diagnostics needed to compare execution paths field
   by field: separate direct-PV and battery inverter losses, charge and
   discharge input and losses, standby loss, capacity-window loss, replacement
@@ -74,8 +74,8 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   where it applies.
 - Updated the Suntech STP550S-C72/Vmh catalogue temperature coefficients to
   the matching monofacial datasheet values of -0.34 %/°C for maximum power and
-  -0.26 %/°C for open-circuit voltage. The Article configurations also record
-  the 1.134 m by 2.278 m module frame explicitly.
+  -0.26 %/°C for open-circuit voltage. The configurations for the forthcoming
+  publication also record the 1.134 m by 2.278 m module frame explicitly.
 - Corrected power-to-energy aggregation in monthly and annual plotting helpers
   by applying the inferred timestep duration independently of pandas' internal
   datetime resolution. Hourly plots retain their prior values; 15-minute
@@ -83,8 +83,12 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 - The bundled hourly demandlib H0 profile now labels its watt-valued column as
   watts. The loader still accepts the historical kilowatt header for external
   compatibility.
-- The Article configurations now pin a fixed 25 °C battery temperature and
-  disable indoor remapping, matching the manuscript methodology.
+- The configurations for the forthcoming publication study now model the
+  battery's thermal environment
+  rather than pinning it: battery temperature follows the weather and the
+  indoor model buffers it, matching a pack installed indoors.
+  `validation/article1/no-thermal-model/` keeps the flat 25 °C pair so the
+  pinned assumption can still be read on its own.
 - Withdrew the announced 0.6.0 removal of the `breos[fast]` extra. The extra
   is retained and undeprecated because it now installs the dependency for the
   optional dispatch backend.
@@ -98,9 +102,9 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   Python, and is bit-identical to the reference.
 
 ### Fixed
-- Kept Article 1 PV module geometry metadata out of the strict BREOS runtime
-  configuration, and validate every Monte Carlo case before starting any
-  trajectories.
+- Kept PV module geometry metadata for the forthcoming publication out of the
+  strict BREOS runtime configuration, and validated every Monte Carlo case
+  before starting any trajectories.
 - Filled the final three 15-minute slots produced by Makima weather
   interpolation by holding the last source-hour state instead of returning
   NaNs that downstream simulation silently treated as zeros.
@@ -120,6 +124,17 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 - Removed an unreachable global-degradation plot branch that checked column
   names no BREOS simulation produces. The supported per-battery degradation
   plot continues to use the production cumulative-degradation columns.
+
+### Changed
+- `optimization.objective_basis` now defaults to `"projected"`. Multi-objective
+  sizing scores each candidate over the full project lifetime, with PV
+  degradation, propagated battery state, and actual replacement events, and
+  optimizes two objectives: lifetime grid independence and lifetime NPV. The
+  previous single-year basis remains available as
+  `optimization.objective_basis = "steady_state"`, which keeps the annual
+  three-objective search with ZEB ratio as a third objective. Runs that relied
+  on the implicit annual default now cost `years_projection` simulated years
+  per candidate and return a two-objective front.
 
 ## [0.5.2] - 2026-08-19
 

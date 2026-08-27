@@ -1,4 +1,4 @@
-"""Static checks for Article 1 input and result-bundle verification tools."""
+"""Static checks for forthcoming publication input and result-bundle verification tools."""
 
 import hashlib
 

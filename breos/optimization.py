@@ -391,6 +391,12 @@ DEFAULT_DISCOUNT_RATE = 0.0
 
 DEFAULT_PROJECT_LIFESPAN = 20
 
+# Candidate scoring spans the project lifetime by default. A design is chosen
+# for how it performs over 20 years of PV degradation, battery fade, and
+# replacement, not for its first year, so the cheaper annual basis is the
+# opt-in screening mode rather than the default.
+DEFAULT_OBJECTIVE_BASIS = "projected"
+
 
 def _estimate_battery_replacement_treatment(
     battery_kwh: float,
@@ -1197,7 +1203,7 @@ try:
             # Resolved once: candidate scoring is the hottest loop here.
             self.model_options = _config_model_options(config)
             self.opt_cfg = config.get("optimization", {}) or {}
-            self.objective_basis = str(self.opt_cfg.get("objective_basis", "steady_state")).strip().lower()
+            self.objective_basis = str(self.opt_cfg.get("objective_basis", DEFAULT_OBJECTIVE_BASIS)).strip().lower()
             if self.objective_basis not in {"steady_state", "projected"}:
                 raise ValueError("optimization.objective_basis must be 'steady_state' or 'projected'")
             self.projected_objectives = self.objective_basis == "projected"
@@ -1549,11 +1555,16 @@ def optimize_system_multi_objective(
     """Run NSGA-II multi-objective PV/battery sizing.
 
     This is the public wrapper around :class:`SolarDesignProblem`. It optimizes
-    module count, battery capacity, tilt, and optionally azimuth. Objectives are
-    By default, objectives are annual grid independence, NPV, and ZEB ratio.
-    With ``optimization.objective_basis = "projected"``, objectives are
-    lifetime grid independence and NPV; ZEB remains a diagnostic unless
+    module count, battery capacity, tilt, and optionally azimuth. By default
+    (``optimization.objective_basis = "projected"``) it optimizes two values:
+    projected lifetime grid independence and projected NPV, scoring every
+    candidate over the full project lifetime with PV degradation, battery state
+    propagation, and replacement events. ZEB remains a diagnostic unless
     ``constraints.enforce_zeb`` enables it as a feasibility constraint.
+    ``optimization.objective_basis = "steady_state"`` selects the cheaper
+    single-year screening basis: annual grid independence, NPV, and ZEB ratio
+    as a third objective, with battery replacement estimated from the
+    first-year SoH loss.
     Install ``breos[optimization]`` to provide the pymoo dependency.
 
     Args:

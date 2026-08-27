@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify a completed Article 1 result bundle without recalculating results."""
+"""Verify a completed result bundle for the forthcoming publication."""
 
 from __future__ import annotations
 
@@ -93,8 +93,9 @@ EXPECTED_MONTE_CARLO_YEARLY_COLUMNS = (
     "Marginal_Grid_CI_gCO2_kWh",
 )
 
-# Article generators export plot-independent source tables. Presentation-only
-# changes therefore do not invalidate previously generated numerical outputs.
+# Publication-study generators export plot-independent source tables.
+# Presentation-only changes therefore do not invalidate previously generated
+# numerical outputs.
 NON_NUMERICAL_SOURCE_PATHS = ("breos/plotting.py",)
 
 
@@ -445,11 +446,11 @@ def main() -> int:
     audit = BundleAudit(args.root)
     audit.verify()
     if audit.errors:
-        print("Article 1 bundle verification failed:")
+        print("Forthcoming publication bundle verification failed:")
         for error in audit.errors:
             print(f"- {error}")
         return 1
-    print(f"Article 1 bundle verification passed: {audit.root}")
+    print(f"Forthcoming publication bundle verification passed: {audit.root}")
     if len(audit.source_commits) == 1:
         print(f"Verified {len(audit.reports)} provenance reports from one BREOS commit.")
     else:

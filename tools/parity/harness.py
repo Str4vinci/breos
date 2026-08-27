@@ -81,7 +81,7 @@ def build(name: str):
 
     if name == "discharge_limited":
         # A hard AC discharge cap that binds most evenings, which is the one
-        # dispatch branch no Article case reaches.
+        # dispatch branch no forthcoming publication study case reaches.
         pv, load, temp = _profiles(index, 12, 7000.0, 2200.0)
         cfg = dict(
             nominal_energy_wh=14000.0,
