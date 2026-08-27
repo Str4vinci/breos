@@ -1,8 +1,11 @@
-# Article 1 projected-optimization reproduction
+# Forthcoming publication study: projected-optimization reproduction
 
-This report compares four archived Article 1 Pareto candidates with the
-corrected projected optimizer prepared for the BREOS 0.6.0 release line. The
-new results deliberately do not reproduce known errors in the research run.
+This report compares four archived Pareto candidates from the study supporting
+the forthcoming publication with the corrected projected optimizer prepared
+for the BREOS 0.6.0 release line. The new results deliberately do not reproduce
+known errors in the research run.
+
+The repository keeps `article1` as the internal identifier for this study.
 
 ## Provenance
 
@@ -10,7 +13,8 @@ new results deliberately do not reproduce known errors in the research run.
   research repository.
 - Earlier reference tag supplied for comparison: `a1_jun_26_submission`
   (`6af21cc61640da7fc003d79319527631ec7cbddd`). The later July rerun above is
-  the Article 1 result set used for the numerical comparison.
+  the result set used for the forthcoming publication study's numerical
+  comparison.
 - Research revision: `a0db6aae1e8d04a8260f51a34543b23bd82a1762`.
 - Archived Pareto SHA-256:
   `5334b8361b2395f0f19b6839005964b0b61bfa0d00e5ea28f450cfb4cde0a225`.
@@ -60,9 +64,9 @@ produced Pareto CSV SHA-256
 
 ## Full projected optimization
 
-The exact Article 1 NSGA-II configuration completed all 40 configured
-generations (2,050 evaluations) with seed 1 and eight worker processes. It
-returned 100 unique nondominated designs using only projected GI and projected
+The exact configuration used for the forthcoming publication study completed all
+40 configured generations (2,050 evaluations) with seed 1 and eight worker
+processes. It returned 100 unique nondominated designs using only projected GI and projected
 NPV as objectives. Early stopping did not trigger before the generation cap.
 
 The corrected front spans 40.825173% to 88.819590% projected GI and
@@ -97,8 +101,9 @@ calculation then constructed a 15-minute index and selected the nearest hourly
 irradiance value at every step. For C1, this repetition produces 4,943.362 kWh
 after a flat 96% inverter efficiency, which matches the archived 4,943.364 kWh.
 
-The Article 1 reproduction uses clear-sky-aware interpolation and then
-renormalizes each source hour's four GHI, DNI, and DHI values so their mean
+The reproduction for the forthcoming publication uses clear-sky-aware
+interpolation and then renormalizes each source hour's four GHI, DNI, and DHI
+values so their mean
 equals the original hourly value. This preserves the source irradiance energy
 while improving intra-hour solar shape. The energy-conserving option is
 explicit and leaves the established BREOS resampling default unchanged.

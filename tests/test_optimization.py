@@ -26,6 +26,44 @@ def test_projected_objective_basis_uses_two_objectives_and_optional_zeb_constrai
     assert problem.n_ieq_constr == 3
 
 
+def test_objective_basis_defaults_to_projected():
+    """A design is chosen for its lifetime, so lifetime scoring is the default.
+
+    The annual basis scores a candidate on its first year alone, before any PV
+    degradation, battery fade, or replacement. Leaving that as the default made
+    the cheap approximation the one a caller got without asking.
+    """
+    idx = pd.date_range("2025-01-01 00:00", periods=2, freq="h", tz="UTC")
+    tmy_data = pd.DataFrame({"temp_air": [15.0, 16.0], "ghi": [0.0, 0.0]}, index=idx)
+    houseload = pd.DataFrame({"Load": [500.0, 500.0]}, index=idx)
+    config = {
+        "location": {"latitude": 41.15, "longitude": -8.61, "timezone": "UTC"},
+        "mode": {"fixed_azimuth": 180},
+    }
+
+    problem = SolarDesignProblem(tmy_data, houseload, config, "results/_test_run/problem_default_basis")
+
+    assert problem.objective_basis == "projected"
+    assert problem.projected_objectives is True
+    assert problem.n_obj == 2
+
+
+def test_steady_state_objective_basis_is_available_as_opt_in():
+    idx = pd.date_range("2025-01-01 00:00", periods=2, freq="h", tz="UTC")
+    tmy_data = pd.DataFrame({"temp_air": [15.0, 16.0], "ghi": [0.0, 0.0]}, index=idx)
+    houseload = pd.DataFrame({"Load": [500.0, 500.0]}, index=idx)
+    config = {
+        "location": {"latitude": 41.15, "longitude": -8.61, "timezone": "UTC"},
+        "optimization": {"objective_basis": "steady_state"},
+        "mode": {"fixed_azimuth": 180},
+    }
+
+    problem = SolarDesignProblem(tmy_data, houseload, config, "results/_test_run/problem_steady_state")
+
+    assert problem.projected_objectives is False
+    assert problem.n_obj == 3
+
+
 def test_projected_objective_basis_rejects_unknown_value():
     idx = pd.date_range("2025-01-01", periods=2, freq="h", tz="UTC")
     tmy_data = pd.DataFrame({"temp_air": [15.0, 16.0], "ghi": [0.0, 0.0]}, index=idx)
@@ -96,6 +134,7 @@ def test_solar_design_problem_area_constraint_uses_pv_dimensions(monkeypatch):
         "location": {"latitude": 41.15, "longitude": -8.61, "timezone": "UTC"},
         "simulation": {"resolution": "h"},
         "constraints": {"budget_eur": 100000, "max_area_m2": 10.0, "max_modules": 5},
+        "optimization": {"objective_basis": "steady_state"},
         "mode": {"fixed_azimuth": 180},
         "pv": {
             "module": "Suntech_STP550S_STC",
@@ -145,6 +184,7 @@ def test_solar_design_problem_uses_configured_resolution(monkeypatch):
     config = {
         "location": {"latitude": 41.15, "longitude": -8.61, "timezone": "UTC"},
         "simulation": {"resolution": "15min"},
+        "optimization": {"objective_basis": "steady_state"},
         "constraints": {"budget_eur": 100000, "max_area_m2": 100.0},
         "mode": {"fixed_azimuth": 180},
         "battery": {"temperature": 20.0, "indoor_model": {"enabled": False}},
@@ -198,6 +238,7 @@ def test_solar_design_problem_scores_zeb_from_explicit_ac_ledger(monkeypatch):
         "simulation": {"resolution": "h"},
         "constraints": {"budget_eur": 100000, "max_area_m2": 100.0},
         "mode": {"fixed_azimuth": 180},
+        "optimization": {"objective_basis": "steady_state"},
         "battery": {"temperature": 20.0},
     }
 
@@ -245,6 +286,7 @@ def test_solar_design_problem_uses_simulated_load_for_objective_denominator(monk
         "simulation": {"resolution": "h"},
         "constraints": {"budget_eur": 100000, "max_area_m2": 100.0},
         "mode": {"fixed_azimuth": 180},
+        "optimization": {"objective_basis": "steady_state"},
         "battery": {"temperature": 20.0},
     }
 
@@ -285,6 +327,7 @@ def test_optimize_system_multi_objective_returns_pareto_dataframe(monkeypatch):
             "max_tilt_deg": 30.0,
         },
         "mode": {"fixed_azimuth": 180},
+        "optimization": {"objective_basis": "steady_state"},
         "battery": {"temperature": 20.0},
     }
 

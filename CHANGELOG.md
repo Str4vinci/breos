@@ -5,15 +5,16 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 ## [Unreleased]
 
 ### Added
-- Added an opt-in projected multi-objective optimizer that evaluates each
-  candidate over a repeated-TMY project lifetime, carries battery degradation
-  and physical state between years, records actual replacements, and optimizes
-  lifetime grid independence and NPV. Existing annual three-objective behavior
-  remains the default; projected ZEB is a diagnostic or optional feasibility
-  constraint, not a third objective.
-- Added a version-controlled Article 1 configuration, deterministic
-  fixed-candidate reproduction command, per-candidate yearly and financial
-  source tables, opt-in licensed-profile regression, and comparison report.
+- Added a projected multi-objective optimizer that evaluates each candidate
+  over a repeated-TMY project lifetime, carries battery degradation and
+  physical state between years, records actual replacements, and optimizes
+  lifetime grid independence and NPV. This is now the default objective basis;
+  projected ZEB is a diagnostic or optional feasibility constraint, not a third
+  objective.
+- Added a version-controlled configuration for the forthcoming publication
+  study, a deterministic fixed-candidate reproduction command, per-candidate
+  yearly and financial source tables, an opt-in licensed-profile regression,
+  and a comparison report.
   The report preserves the archived values while
   explaining corrected drift from the original hourly-to-15-minute weather
   handling and AC dispatch methodology.
@@ -34,6 +35,17 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 - Added opt-in hourly-energy conservation to `resample_to_15min`. It preserves
   each source hour's GHI, DNI, and DHI energy after clear-sky interpolation;
   the established resampling output remains the default.
+
+### Changed
+- `optimization.objective_basis` now defaults to `"projected"`. Multi-objective
+  sizing scores each candidate over the full project lifetime, with PV
+  degradation, propagated battery state, and actual replacement events, and
+  optimizes two objectives: lifetime grid independence and lifetime NPV. The
+  previous single-year basis remains available as
+  `optimization.objective_basis = "steady_state"`, which keeps the annual
+  three-objective search with ZEB ratio as a third objective. Runs that relied
+  on the implicit annual default now cost `years_projection` simulated years
+  per candidate and return a two-objective front.
 
 ## [0.5.2] - 2026-08-19
 
