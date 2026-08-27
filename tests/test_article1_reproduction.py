@@ -1,4 +1,4 @@
-"""Opt-in regression against the licensed Article 1 household profile."""
+"""Opt-in regression against the licensed profile used by the forthcoming publication."""
 
 import os
 import tomllib
@@ -109,7 +109,7 @@ def test_article1_fixed_candidates_with_licensed_rlp(tmp_path):
     """Pin deterministic v0.6 projected values when the external RLP is available."""
     rlp_value = os.environ.get("BREOS_ARTICLE1_RLP_DIRECTORY")
     if not rlp_value:
-        pytest.skip("set BREOS_ARTICLE1_RLP_DIRECTORY to run the licensed Article 1 regression")
+        pytest.skip("set BREOS_ARTICLE1_RLP_DIRECTORY to run the forthcoming publication regression")
     pytest.skip(
         "pin the final corrected C1-C4 values after the study author runs the clean 0.6 release-candidate workflow"
     )

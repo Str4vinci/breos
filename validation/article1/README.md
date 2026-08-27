@@ -1,7 +1,11 @@
-# Article 1 reproduction
+# Forthcoming publication reproduction
 
 This directory contains the versioned configurations and documentation needed
-to generate the Article 1 source-data bundle with BREOS 0.6.
+to generate the forthcoming publication's source-data bundle with BREOS 0.6.
+
+The repository keeps `article1` in internal file names and paths for
+compatibility. User-facing descriptions call this work the forthcoming
+publication.
 
 Run the complete deterministic workflow with:
 
@@ -40,7 +44,7 @@ uniform annual load multiplier from 0.95 through 1.05.
 
 Both configurations identify the Suntech module and explicitly record its
 1.134 m by 2.278 m frame. Every generated provenance file records the complete
-resolved module parameters, including the Article power temperature
+resolved module parameters, including the module power temperature
 coefficient of -0.34 %/°C and open-circuit-voltage coefficient of
 -0.26 %/°C (-0.13 V/°C after rounding at the rated Voc).
 
@@ -50,7 +54,7 @@ instead of inheriting BREOS's ambient-weather default.
 
 ## External inputs
 
-The Article workflow requires:
+The publication workflow requires:
 
 - the licensed `EREDES_2025_BTN_1000kwh_15min.csv` household profile;
 - the historical Porto weather CSV used by the Monte Carlo and weather
@@ -64,7 +68,7 @@ version controlled under `validation/data/weather/`.
 
 ## Archived comparison
 
-The private research reference is the Article run under
+The private research reference is the publication study run under
 `dev/results/a1_july_rerun_tuxedo/moo_15min` at research revision
 `a0db6aae1e8d04a8260f51a34543b23bd82a1762`. Its Pareto CSV SHA-256 is
 `5334b8361b2395f0f19b6839005964b0b61bfa0d00e5ea28f450cfb4cde0a225`.
