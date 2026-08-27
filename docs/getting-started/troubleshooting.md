@@ -37,7 +37,8 @@ weather. Check internet access and retry before changing model settings.
 
 For repeatable or offline work, seed the weather cache as shown in
 [Offline runs with cached weather](recipes.md#offline-runs-with-cached-weather).
-NSRDB access requires an NREL API key. Custom coordinate-dict locations do not
+To use NSRDB data, download it separately with your own NREL credentials and
+load the saved weather file locally. Custom coordinate-dict locations do not
 use a preset cache key and therefore fetch weather when used through `App`.
 
 ## An optional command cannot import a dependency
@@ -57,10 +58,6 @@ Set the App configuration key `execution_backend = "numba"`, set
 `[montecarlo].execution_backend = "numba"`, or pass the corresponding backend
 argument to an optimization entry point. The Python backend remains the
 default and numerical reference, so installing `fast` alone changes nothing.
-
-The deprecated standalone `breos.numba_kernels` screening module is unrelated
-to this backend and is never called by the supported simulation path. See
-[Deprecations for 0.6.0](../deprecations.md).
 
 Core imports, help, option discovery, and configuration validation do not load
 Matplotlib. If an actual plotting command reports that its configuration

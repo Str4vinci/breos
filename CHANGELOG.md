@@ -92,14 +92,6 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 - Withdrew the announced 0.6.0 removal of the `breos[fast]` extra. The extra
   is retained and undeprecated because it now installs the dependency for the
   optional dispatch backend.
-- Withdrew the announced 0.6.0 removal of the `breos.numba_kernels` screening
-  module. The module is retained and stays deprecated: it is still not called
-  by `App` or by the supported simulation path, and its approximate cycle proxy
-  and absent replacement logic mean it must not be used for reported results.
-  No removal date is scheduled. It is unrelated to the accelerated backend
-  added in this release beyond sharing the optional dependency -- that backend
-  is private, covers the within-day dispatch only, leaves degradation in
-  Python, and is bit-identical to the reference.
 
 ### Fixed
 - Kept PV module geometry metadata for the forthcoming publication out of the
@@ -135,6 +127,17 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   three-objective search with ZEB ratio as a third objective. Runs that relied
   on the implicit annual default now cost `years_projection` simulated years
   per candidate and return a two-objective front.
+
+### Removed
+
+- Removed the APIs deprecated for 0.6.0: the standalone
+  `breos.numba_kernels` screening module, the documentation-derived Polysun
+  comparison baseline, nine unverified plotting helpers, and 17 orphaned
+  helpers across `battery`, `io`, `optimization`, `solar`, `utils`, and
+  `weather`. The `breos[fast]` extra remains available for the compiled dispatch
+  backend. The archived
+  [v0.5.2 migration guide](https://github.com/Str4vinci/breos/blob/v0.5.2/docs/deprecations.md)
+  lists replacements for the removed helpers.
 
 ## [0.5.2] - 2026-08-19
 
@@ -193,7 +196,7 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   orphaned helpers across `battery`, `io`, `optimization`, `solar`, `utils`,
   and `weather` for removal in 0.6.0. Functions keep their signatures and
   behaviour throughout 0.5.x and emit `DeprecationWarning` only when called;
-  see the [deprecation guide](https://breos.readthedocs.io/en/latest/deprecations.html)
+  see the [v0.5.2 deprecation guide](https://github.com/Str4vinci/breos/blob/v0.5.2/docs/deprecations.md)
   for the complete inventory and migration paths.
 
 ### Fixed
