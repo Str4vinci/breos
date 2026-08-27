@@ -63,6 +63,11 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   within-year timestep indices at which the pack was replaced.
 
 ### Changed
+- Skip daily degradation work when battery capacity is zero, and keep the
+  native degradation loop on NumPy arrays instead of rebuilding pandas objects
+  for every simulated day. Battery simulations retain the same degradation
+  calculations. PV-only simulations no longer return degradation rows for a
+  battery that does not exist.
 - Removed the manuscript-specific measured, PVsyst, and Polysun comparison
   CSVs from the public reproduction workflow. The input preflight and bundle
   verifier now cover only inputs and results needed to run BREOS; third-party
