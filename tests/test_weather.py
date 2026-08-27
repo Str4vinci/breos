@@ -68,6 +68,31 @@ def test_resample_to_15min_keeps_all_slots_in_last_hour():
     assert resampled.index[-1] == pd.Timestamp("2025-01-01 02:45")
 
 
+def test_resample_to_15min_can_preserve_each_hours_irradiance_energy():
+    idx = pd.date_range("2025-06-21 10:00", periods=4, freq="h", tz="UTC")
+    weather = pd.DataFrame(
+        {
+            "ghi": [500.0, 700.0, 600.0, 300.0],
+            "dni": [400.0, 600.0, 500.0, 200.0],
+            "dhi": [250.0, 300.0, 350.0, 200.0],
+            "temp_air": [20.0, 21.0, 22.0, 21.0],
+        },
+        index=idx,
+    )
+
+    resampled = resample_to_15min(
+        weather,
+        method="linear",
+        latitude=41.1579,
+        longitude=-8.6291,
+        preserve_irradiance_energy=True,
+    )
+
+    for column in ("ghi", "dni", "dhi"):
+        hourly_means = resampled[column].to_numpy().reshape(len(weather), 4).mean(axis=1)
+        assert hourly_means == pytest.approx(weather[column].to_numpy())
+
+
 def test_fetch_tmy_weather_accepts_hourly_frequency_alias_and_uses_horizon_by_default(monkeypatch):
     tmy = pd.DataFrame({"ghi": [0.0]}, index=pd.date_range("2020-01-01 00:00", periods=1, freq="h"))
     captured = {}

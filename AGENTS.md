@@ -1,8 +1,10 @@
-# Agent Guide
+# BREOS
 
-This repository is the open-source core of BREOS. Keep changes scoped and preserve the `breos.App` facade as the most stable public entrypoint.
+BREOS is an open source simulator for PV and storage systems for buildings. Built with a modular architecture, it invites users to "bring-your-own" data and simulate solar systems.
 
 ## Project map
+
+Keep changes scoped and preserve the `breos.App` facade as the most stable public entrypoint.
 
 - `breos/app.py` - public facade that wires weather, PV, load, battery, economics, and emissions.
 - `breos/load_profiles.py` - bundled demandlib H0 profile support plus user-supplied external RLPs.

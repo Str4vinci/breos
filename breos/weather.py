@@ -579,6 +579,7 @@ def resample_to_15min(
     non_negative_cols: Optional[List[str]] = None,
     latitude: Optional[float] = None,
     longitude: Optional[float] = None,
+    preserve_irradiance_energy: bool = False,
 ) -> pd.DataFrame:
     """
     Resample hourly DataFrame to 15-minute intervals.
@@ -596,6 +597,9 @@ def resample_to_15min(
         non_negative_cols: Columns to clip at zero (auto-detected for solar/wind)
         latitude: Location latitude for clear-sky scaling (optional)
         longitude: Location longitude for clear-sky scaling (optional)
+        preserve_irradiance_energy: Renormalize each source hour's four
+            irradiance values so their mean equals the source-hour value.
+            This is opt-in because it changes established interpolation output.
 
     Returns:
         DataFrame with 15-minute intervals
@@ -690,6 +694,26 @@ def resample_to_15min(
     for col in non_negative_cols:
         if col in df_15min.columns:
             df_15min[col] = np.clip(df_15min[col], 0, None)
+
+    if preserve_irradiance_energy and irrad_col_map:
+        if len(df_hourly.index) > 1:
+            intervals = df_hourly.index[1:] - df_hourly.index[:-1]
+            if not np.all(intervals == pd.Timedelta(hours=1)):
+                raise ValueError("preserve_irradiance_energy requires a regular hourly index")
+        expected_rows = len(df_hourly) * 4
+        if len(df_15min) != expected_rows:
+            raise ValueError("preserve_irradiance_energy requires four 15-minute rows per source hour")
+
+        for col in irrad_col_map:
+            if col not in df_15min.columns:
+                continue
+            hourly_values = pd.to_numeric(df_hourly[col], errors="coerce").fillna(0.0).to_numpy(dtype=float)
+            blocks = df_15min[col].to_numpy(dtype=float, copy=True).reshape(len(df_hourly), 4)
+            block_sums = blocks.sum(axis=1)
+            nonzero = block_sums > 1e-12
+            blocks[nonzero] *= (4.0 * hourly_values[nonzero] / block_sums[nonzero])[:, None]
+            blocks[~nonzero] = hourly_values[~nonzero, None]
+            df_15min[col] = np.clip(blocks.reshape(-1), 0.0, None)
 
     if weather_metadata is not None:
         df_15min.attrs[_WEATHER_METADATA_KEY] = weather_metadata
