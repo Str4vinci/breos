@@ -222,9 +222,9 @@ def test_dependency_check_precedes_the_expensive_step(function, expensive):
 def test_numba_provenance_always_carries_a_cache_field():
     """A driver that cannot observe its workers still records the field.
 
-    The deterministic Article report fans work out to subprocesses and has no
-    observations to aggregate. "unknown" is provenance; a missing key reads as
-    an oversight when the run that produced it took hours.
+    The deterministic publication-study report fans work out to subprocesses
+    and has no observations to aggregate. "unknown" is provenance; a missing
+    key reads as an oversight when the run that produced it took hours.
     """
     pytest.importorskip("numba", reason="the compiled backend needs the breos[fast] extra")
 

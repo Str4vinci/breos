@@ -13,7 +13,8 @@ BREOS can fetch TMY/weather data through supported weather providers, or load
 local weather files through the lower-level weather helpers.
 
 - PVGIS-based TMY fetches do not require a user API key.
-- NSRDB fetches require your own NREL API key.
+- To use NSRDB data, download it with your own NREL credentials and load the
+  saved weather file locally. BREOS does not call the NSRDB API.
 - Open-Meteo access is subject to Open-Meteo terms; commercial use may require
   a paid subscription.
 - For reproducible or offline studies, keep the exact weather file/source

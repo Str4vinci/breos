@@ -45,17 +45,12 @@ and daily mean absolute SOC.
 
 ## Cycle detection
 
-`compute_halfcycle_energy_throughput`, `k_c_rate_Q`, `k_doc_Q`, and
-`update_battery_soc` are deprecated for removal in 0.6.0. See
-[Deprecations for 0.6.0](../deprecations.md) for migration guidance.
-
 ```{eval-rst}
 .. autosummary::
    :toctree: generated/
 
    breos.battery.detect_cycles_rainflow
    breos.battery.detect_half_cycles_from_soc_series
-   breos.battery.compute_halfcycle_energy_throughput
 ```
 
 ## Degradation primitives
@@ -68,7 +63,6 @@ degradation model.
 .. autosummary::
    :toctree: generated/
 
-   breos.battery.update_battery_soc
    breos.battery.update_battery_soh_calendar
    breos.battery.update_battery_soh_cyclewise
    breos.battery.update_battery_resistance_calendar

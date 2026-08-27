@@ -1,4 +1,4 @@
-"""Static coverage for the Article 1 workflow wrapper."""
+"""Static coverage for the forthcoming publication workflow wrapper."""
 
 from pathlib import Path
 
@@ -27,6 +27,10 @@ def test_deterministic_stage_runs_preflight_and_every_non_monte_carlo_analysis()
         "reproduce_article1_context.py",
     ]
     assert "--validate-only" in commands[1]
+    preflight = commands[0]
+    assert "--validation-directory" not in preflight
+    assert "--copy-validation-to" not in preflight
+    assert not any("external-validation" in argument for argument in preflight)
     assert any("battery-cost-sensitivity" in argument for command in commands for argument in command)
     assert any(argument == "6" for command in commands for argument in command)
 
