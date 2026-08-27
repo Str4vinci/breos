@@ -35,11 +35,20 @@ from breos.app_inputs import (
     build_dc_system_base,
     load_consumption_profile,
 )
-from breos.battery import BatteryConfig, simulate_energy_balance
+from breos.battery import BatteryConfig, simulate_energy_balance_summary
 from breos.economics import (
     calculate_lcoe_from_projection,
     cost_analysis_projection,
     find_payback_year,
+)
+from breos.execution import (
+    aggregate_jit_cache_states,
+    observed_jit_cache_state,
+    reset_jit_cache_observation,
+    validate_execution_backend,
+)
+from breos.execution import (
+    backend_provenance as _backend_provenance,
 )
 from breos.load_profiles import load_profile
 from breos.utils import get_hours_per_step
@@ -82,6 +91,10 @@ class MonteCarloSettings:
     preserve_irradiance_energy: bool = False
     collect_yearly: bool = False
     n_procs: int = 1
+    # "python" is the reference implementation and the default. "numba"
+    # selects the optional compiled within-day dispatch kernel and requires
+    # breos[fast]; it is checked before any trajectory starts.
+    execution_backend: str = "python"
 
 
 @dataclass
@@ -213,7 +226,6 @@ def _simulate_trajectory(
     total_replacements = 0
     total_replacement_cost = 0.0
     yearly_summaries: list[dict[str, Any]] = []
-    first_year_results_df: pd.DataFrame | None = None
     carried_energy_wh: float | None = None
     carried_pv_origin_energy_wh: float | None = None
 
@@ -267,7 +279,7 @@ def _simulate_trajectory(
                 "initial_pv_origin_energy_wh": carried_pv_origin_energy_wh or 0.0,
             }
 
-        results_df, total_pv, _summary_df, year_rep_cost, year_n_rep, degradation_df = simulate_energy_balance(
+        summary = simulate_energy_balance_summary(
             pv_dc=dc_power,
             houseload=houseload,
             battery_config=batt_cfg,
@@ -278,35 +290,40 @@ def _simulate_trajectory(
             initial_resistance_growth=cumulative_resistance_growth,
             initial_cumulative_cycle_deg=cumulative_cycle_deg,
             initial_cumulative_cal_deg=cumulative_cal_deg,
+            execution_backend=settings.execution_backend,
             **state_kwargs,
         )
+        year_rep_cost = summary.total_replacement_cost
+        year_n_rep = summary.n_replacements
+        totals = summary.column_sums
 
         if has_battery:
-            carried_energy_wh = float(results_df["Battery_Energy_End"].iloc[-1])
-            carried_pv_origin_energy_wh = float(results_df["Battery_PV_Origin_Energy_End"].iloc[-1])
+            carried_energy_wh = summary.carried_energy_wh
+            carried_pv_origin_energy_wh = summary.carried_pv_origin_energy_wh
 
-        if first_year_results_df is None:
-            first_year_results_df = results_df
-
-        if has_battery and not degradation_df.empty:
-            cumulative_fec = degradation_df["Cumulative_FEC"].iloc[-1]
-            cumulative_cal_seconds = degradation_df["Cumulative_Calendar_Seconds"].iloc[-1]
-            cumulative_cycle_deg = degradation_df["Cumulative_Cycle_Degradation"].iloc[-1]
-            cumulative_cal_deg = degradation_df["Cumulative_Calendar_Degradation"].iloc[-1]
-            current_soh = degradation_df["SOH"].iloc[-1]
-            if "Resistance_Growth" in degradation_df.columns:
-                cumulative_resistance_growth = degradation_df["Resistance_Growth"].iloc[-1]
+        if has_battery and summary.has_degradation_rows:
+            cumulative_fec = summary.fec_cum
+            cumulative_cal_seconds = summary.cumulative_calendar_seconds
+            cumulative_cycle_deg = summary.cumulative_cycle_degradation
+            cumulative_cal_deg = summary.cumulative_calendar_degradation
+            current_soh = summary.final_soh_percent
+            # The detailed path only reported resistance growth when the fade
+            # model was enabled; without it the carried value stays put.
+            if batt_cfg.enable_resistance_fade:
+                cumulative_resistance_growth = summary.resistance_growth
 
         total_replacements += year_n_rep
         total_replacement_cost += year_rep_cost
 
-        pv_dc_kwh = float(results_df["PV_DC"].sum() * hours_per_step / 1000)
-        legacy_pv_kwh = float(results_df["PV_Production"].sum() * hours_per_step / 1000)
-        direct_pv_ac_kwh = float(results_df["PV_AC_To_Load"].sum() * hours_per_step / 1000)
-        pv_origin_battery_ac_kwh = float(results_df["Battery_AC_To_Load_PV"].sum() * hours_per_step / 1000)
-        total_load = (results_df["Houseload"].sum() / 1000) * hours_per_step
-        total_import = (results_df["Import_From_Grid"].sum() / 1000) * hours_per_step
-        total_export = (results_df["Sell_To_Grid"].sum() / 1000) * hours_per_step
+        # Each expression keeps the scaling order the detailed path used, so
+        # these are the same floats it produced, not merely equivalent ones.
+        pv_dc_kwh = float(totals["PV_DC"] * hours_per_step / 1000)
+        legacy_pv_kwh = float(totals["PV_Production"] * hours_per_step / 1000)
+        direct_pv_ac_kwh = float(totals["PV_AC_To_Load"] * hours_per_step / 1000)
+        pv_origin_battery_ac_kwh = float(totals["Battery_AC_To_Load_PV"] * hours_per_step / 1000)
+        total_load = (totals["Houseload"] / 1000) * hours_per_step
+        total_import = (totals["Import_From_Grid"] / 1000) * hours_per_step
+        total_export = (totals["Sell_To_Grid"] / 1000) * hours_per_step
         total_pv_kwh = direct_pv_ac_kwh + pv_origin_battery_ac_kwh + total_export
         grid_indep = (1 - total_import / total_load) * 100 if total_load > 0 else 0
 
@@ -319,7 +336,7 @@ def _simulate_trajectory(
                 "Direct_PV_AC_Load_kWh": direct_pv_ac_kwh,
                 "PV_Origin_Battery_AC_Load_kWh": pv_origin_battery_ac_kwh,
                 "Self_Consumption_kWh": direct_pv_ac_kwh + pv_origin_battery_ac_kwh,
-                "Curtailment_DC_kWh": float(results_df["PV_DC_Curtailed"].sum() * hours_per_step / 1000),
+                "Curtailment_DC_kWh": float(totals["PV_DC_Curtailed"] * hours_per_step / 1000),
                 "Load_kWh": total_load,
                 "Import_kWh": total_import,
                 "Export_kWh": total_export,
@@ -335,13 +352,39 @@ def _simulate_trajectory(
                 "PV_Degradation_Factor": pv_degradation_factor,
                 "Weather_Year": year,
                 "Load_Scale": load_scale,
+                # Diagnostics. These are reductions of ledger columns the
+                # detailed frame already exposed; they are reported here so a
+                # Monte Carlo run can be compared field by field against
+                # another execution path without rerunning it.
+                "PV_Direct_Inverter_Loss_kWh": float(totals["PV_Direct_Inverter_Loss"] * hours_per_step / 1000),
+                "Battery_Inverter_Loss_kWh": float(totals["Battery_Inverter_Loss"] * hours_per_step / 1000),
+                "Battery_Charge_Input_kWh": float(totals["Battery_Charge_Input"] * hours_per_step / 1000),
+                "Battery_Discharge_DC_kWh": float(totals["Battery_Discharge_DC"] * hours_per_step / 1000),
+                "Battery_AC_To_Load_kWh": float(totals["Battery_AC_To_Load"] * hours_per_step / 1000),
+                "Battery_Charge_Loss_kWh": float(totals["Battery_Charge_Loss"] * hours_per_step / 1000),
+                "Battery_Discharge_Loss_kWh": float(totals["Battery_Discharge_Loss"] * hours_per_step / 1000),
+                "Battery_Standby_Loss_kWh": float(totals["Battery_Standby_Loss"] * hours_per_step / 1000),
+                "Capacity_Window_Loss_kWh": float(totals["Capacity_Window_Loss"] * hours_per_step / 1000),
+                "Replacement_Energy_Removed_kWh": float(
+                    totals["Battery_Replacement_Energy_Removed"] * hours_per_step / 1000
+                ),
+                "Replacement_Energy_Added_kWh": float(
+                    totals["Battery_Replacement_Energy_Added"] * hours_per_step / 1000
+                ),
+                "Battery_Carried_Energy_Wh": float(carried_energy_wh) if has_battery else None,
+                "Battery_Carried_PV_Origin_Energy_Wh": (float(carried_pv_origin_energy_wh) if has_battery else None),
+                # Within-year replacement timing, as timestep indices.
+                "Replacement_Steps": ";".join(str(step) for step in summary.replacement_steps),
             }
         )
 
     yearly_df = pd.DataFrame(yearly_summaries)
     costs = build_costs_dict(cfg, resolved)
     cost_projection = cost_analysis_projection(
-        results_df=first_year_results_df,
+        # The projection is built entirely from yearly_summary_df below; the
+        # per-timestep frame is only consulted by the legacy first-year
+        # estimation path, which a Monte Carlo run never takes.
+        results_df=None,
         costs=costs,
         num_years=years_per_run,
         inflation_rate=cfg["inflation_rate"],
@@ -403,6 +446,15 @@ def _interpolate_payback_year(cost_projection: pd.DataFrame) -> float | None:
     return None
 
 
+def _resolve_backend(execution_backend: str) -> dict[str, Any]:
+    """Check the backend is usable and record its toolchain.
+
+    Thin wrapper over :func:`breos.execution.backend_provenance` so that App
+    and Monte Carlo record the same keys from the same code.
+    """
+    return _backend_provenance(execution_backend)
+
+
 def _summarize(runs: pd.DataFrame) -> dict[str, dict[str, float]]:
     summary: dict[str, dict[str, float]] = {}
     for col in _SUMMARY_METRICS:
@@ -434,11 +486,14 @@ def _initialize_worker(*context: Any) -> None:
     _WORKER_CONTEXT = context
 
 
-def _run_trajectory_index(run_idx: int) -> tuple[int, dict[str, Any], pd.DataFrame]:
+def _run_trajectory_index(run_idx: int) -> tuple[int, dict[str, Any], pd.DataFrame, str | None]:
     """Evaluate one deterministic per-run random stream in a worker."""
     if _WORKER_CONTEXT is None:
         raise RuntimeError("Monte Carlo worker context was not initialized")
     cfg, resolved, base_load, dc_by_year, temp_by_year, available_years, years_per_run, settings = _WORKER_CONTEXT
+    # One observation window per trajectory: that is the unit of work whose
+    # compile cost is being attributed. A no-op on the Python backend.
+    reset_jit_cache_observation(settings.execution_backend)
     seed = None if settings.seed is None else settings.seed + run_idx
     rng = np.random.default_rng(seed)
     metrics, trajectory = _simulate_trajectory(
@@ -452,7 +507,23 @@ def _run_trajectory_index(run_idx: int) -> tuple[int, dict[str, Any], pd.DataFra
         settings,
         rng,
     )
-    return run_idx, metrics, trajectory
+    # None from a numba run means no compiled dispatch call was observed -- a
+    # trajectory can legitimately never enter the kernel. Record that as
+    # "unknown" rather than aborting: the trajectory's results are valid either
+    # way, and provenance that admits it could not tell is more useful than no
+    # results at all. On the Python backend there is nothing to report.
+    jit_cache_state = None
+    if settings.execution_backend == "numba":
+        jit_cache_state = observed_jit_cache_state(settings.execution_backend) or "unknown"
+    return run_idx, metrics, trajectory, jit_cache_state
+
+
+def _aggregate_jit_cache_states(states: list[str]) -> str:
+    """Summarise the workers' JIT cache observations for provenance.
+
+    Thin wrapper over :func:`breos.execution.aggregate_jit_cache_states`.
+    """
+    return aggregate_jit_cache_states(states)
 
 
 def run_montecarlo(config: dict[str, Any], settings: MonteCarloSettings) -> MonteCarloResult:
@@ -477,6 +548,7 @@ def run_montecarlo(config: dict[str, Any], settings: MonteCarloSettings) -> Mont
         raise ValueError("load_distribution must be 'normal' or 'uniform'")
     if settings.n_procs < 1:
         raise ValueError("n_procs must be at least 1")
+    validate_execution_backend(settings.execution_backend)
     if (
         settings.weather_start_year is not None
         and settings.weather_end_year is not None
@@ -491,6 +563,11 @@ def run_montecarlo(config: dict[str, Any], settings: MonteCarloSettings) -> Mont
             "terrain-horizon provenance is unknown"
         )
     years_per_run = settings.years_per_run or cfg["projection_years"]
+
+    # Resolve the dispatch backend before any input is loaded, so a missing
+    # optional dependency stops a 10,000-trajectory study immediately rather
+    # than hours into it.
+    backend_provenance = _resolve_backend(settings.execution_backend)
 
     dc_by_year, temp_by_year = _precompute_year_caches(cfg, resolved, settings)
     available_years = np.array(sorted(dc_by_year.keys()))
@@ -517,11 +594,17 @@ def run_montecarlo(config: dict[str, Any], settings: MonteCarloSettings) -> Mont
 
     rows: list[dict[str, Any]] = []
     yearly_frames: list[pd.DataFrame] = []
-    for run_idx, metrics, trajectory in outputs:
+    jit_cache_states: list[str] = []
+    for run_idx, metrics, trajectory, jit_cache_state in outputs:
         rows.append({"run": run_idx + 1, **metrics})
+        if jit_cache_state is not None:
+            jit_cache_states.append(jit_cache_state)
         if settings.collect_yearly:
             trajectory.insert(0, "run", run_idx + 1)
             yearly_frames.append(trajectory)
+
+    if settings.execution_backend == "numba":
+        backend_provenance["jit_cache"] = _aggregate_jit_cache_states(jit_cache_states)
 
     runs_df = pd.DataFrame(rows)
     yearly_df = pd.concat(yearly_frames, ignore_index=True) if yearly_frames else None
@@ -541,5 +624,6 @@ def run_montecarlo(config: dict[str, Any], settings: MonteCarloSettings) -> Mont
             "settings": asdict(settings),
             "available_weather_years": [int(y) for y in available_years],
             "random_stream": "numpy.default_rng(base_seed + zero_based_run_index)",
+            "execution": backend_provenance,
         },
     )

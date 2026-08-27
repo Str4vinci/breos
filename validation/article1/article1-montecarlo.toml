@@ -1,4 +1,5 @@
-# Article 1 historical-weather Monte Carlo source-data configuration.
+# Historical-weather Monte Carlo source-data configuration for the forthcoming
+# publication.
 #
 # The licensed E-REDES RLP and the historical weather CSV are external inputs.
 # Pass both paths to tools/reproduce_article1_montecarlo.py; do not add them to
@@ -19,9 +20,16 @@ battery_max_soc = 0.90
 battery_eol_percentage = 0.70
 battery_rte = 0.95
 battery_max_charge_power_w = 4352.0
-battery_temperature = 25.0
-battery_indoor_model = { enabled = false }
+# Weather ambient buffered by the indoor model; see the optimization config.
+battery_temperature = "weather"
+battery_indoor_model = { enabled = true }
 inverter_efficiency = 0.96
+# Best-available PV chain. Perez transposition with mid-interval solar
+# position, and Marion diffuse/ground IAM instead of beam-only -- the
+# beam-only default is a documented 0.5-1.5% systematic overestimate.
+transposition_model = "perez"
+solar_position = "mid-interval"
+diffuse_iam = "marion"
 inverter_loading_ratio = 1.25
 inflation_rate = 0.02
 sell_price_inflation = 0.0

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate Article 1 Monte Carlo source tables with public BREOS APIs."""
+"""Generate Monte Carlo source tables for the forthcoming publication."""
 
 from __future__ import annotations
 
@@ -106,6 +106,9 @@ def _settings(config: dict, args: argparse.Namespace) -> MonteCarloSettings:
         preserve_irradiance_energy=bool(values["preserve_irradiance_energy"]),
         collect_yearly=bool(values["collect_yearly"]),
         n_procs=int(args.n_procs if args.n_procs is not None else values["n_procs"]),
+        execution_backend=str(
+            args.execution_backend if args.execution_backend is not None else values.get("execution_backend", "python")
+        ),
     )
 
 
@@ -136,6 +139,14 @@ def main() -> int:
     parser.add_argument("--calendar-model", help="Override the configured native calendar-degradation model")
     parser.add_argument("--runs", type=int, help="Override the configured number of trajectories")
     parser.add_argument("--n-procs", type=int, help="Worker processes for independent trajectories")
+    parser.add_argument(
+        "--execution-backend",
+        choices=("python", "numba"),
+        help=(
+            "Within-day dispatch implementation. Defaults to the configured value, or 'python'. "
+            "'numba' requires the breos[fast] extra and is recorded in the run provenance."
+        ),
+    )
     parser.add_argument("--validate-only", action="store_true", help="Validate selected cases without simulation")
     parser.add_argument("--output", type=Path, default=PROJECT_ROOT / "results/article1-montecarlo")
     args = parser.parse_args()
@@ -159,7 +170,7 @@ def main() -> int:
     if args.validate_only:
         for case_id in selected:
             resolve_app_config(_case_config(full_config, cases[case_id]))
-        print(f"Validated Article 1 Monte Carlo configuration for: {', '.join(selected)}")
+        print(f"Validated the forthcoming publication's Monte Carlo configuration for: {', '.join(selected)}")
         return 0
 
     for case_id in selected:
@@ -174,7 +185,7 @@ def main() -> int:
         provenance_path = case_directory / "provenance.json"
         result.runs.to_csv(runs_path, index=False)
         if result.yearly is None:
-            raise RuntimeError("Article 1 Monte Carlo requires collect_yearly=true")
+            raise RuntimeError("The forthcoming publication's Monte Carlo run requires collect_yearly=true")
         result.yearly.to_csv(yearly_path, index=False)
         summary_path.write_text(json.dumps(result.summary, indent=2) + "\n")
 

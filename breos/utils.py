@@ -2,14 +2,13 @@
 Utility functions for breos library.
 """
 
+import datetime
 import multiprocessing
 import os
 import re
 
 import numpy as np
 import pandas as pd
-
-from breos._deprecations import deprecated
 
 _SAFE_SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
 
@@ -47,19 +46,49 @@ def is_leap_year(year: int) -> bool:
     return year % 4 == 0 and (year % 100 != 0 or year % 400 == 0)
 
 
-@deprecated(name="breos.utils.count_leap_years", replacement="breos.utils.is_leap_year")
-def count_leap_years(start_year: int, num_years: int) -> int:
-    """
-    Count the number of leap years in a range.
+def _has_fixed_utc_offset(tz) -> bool:
+    """Return whether *tz* can never have an offset transition.
 
-    Args:
-        start_year: Starting year
-        num_years: Number of years to count
-
-    Returns:
-        Number of leap years in the range
+    A whole-year shift preserves wall-clock time, so under a zone with DST it
+    can land on a nonexistent or ambiguous local time. Fixed-offset zones and
+    UTC have no transitions in any year and are always safe to shift in bulk.
     """
-    return sum(1 for year in range(start_year, start_year + num_years) if is_leap_year(year))
+    if tz is None:
+        return True
+    if isinstance(tz, datetime.timezone):
+        return True
+    return str(tz).upper() == "UTC"
+
+
+def _remap_years_vectorized(index: "pd.DatetimeIndex", year_offset: int):
+    """Shift whole years without a Python-level pass over the index.
+
+    Returns ``(keep_mask, new_index)``, or ``None`` when the index is under a
+    zone that can have transitions, in which case the caller falls back to the
+    element-wise path. That fallback is the authority: this is an optimisation
+    for the tz-naive and fixed-offset indices the simulation actually uses,
+    where it is exact rather than merely equivalent.
+
+    The Feb. 29 entries are dropped *before* the shift, so the year offset can
+    never clamp a date onto Feb. 28 and create the duplicate labels the
+    element-wise path exists to avoid.
+    """
+    if not _has_fixed_utc_offset(index.tz):
+        return None
+
+    month = index.month.to_numpy()
+    day = index.day.to_numpy()
+    is_feb29 = (month == 2) & (day == 29)
+    if is_feb29.any():
+        target = index.year.to_numpy() + year_offset
+        # Same rule as is_leap_year, evaluated over the whole index at once.
+        target_is_leap = (target % 4 == 0) & ((target % 100 != 0) | (target % 400 == 0))
+        keep = ~(is_feb29 & ~target_is_leap)
+    else:
+        keep = np.ones(len(index), dtype=bool)
+
+    kept = index if keep.all() else index[keep]
+    return keep, kept + pd.DateOffset(years=year_offset)
 
 
 def remap_datetime_index_years(obj, year_offset: int):
@@ -76,35 +105,26 @@ def remap_datetime_index_years(obj, year_offset: int):
     if not isinstance(index, pd.DatetimeIndex):
         return obj
 
-    keep = np.ones(len(index), dtype=bool)
-    remapped = []
-    for pos, ts in enumerate(index):
-        target_year = ts.year + year_offset
-        if ts.month == 2 and ts.day == 29 and not is_leap_year(target_year):
-            keep[pos] = False
-            continue
-        remapped.append(ts.replace(year=target_year))
+    fast = _remap_years_vectorized(index, year_offset)
+    if fast is not None:
+        keep, new_index = fast
+    else:
+        keep = np.ones(len(index), dtype=bool)
+        remapped = []
+        for pos, ts in enumerate(index):
+            target_year = ts.year + year_offset
+            if ts.month == 2 and ts.day == 29 and not is_leap_year(target_year):
+                keep[pos] = False
+                continue
+            remapped.append(ts.replace(year=target_year))
+        new_index = pd.DatetimeIndex(remapped)
 
-    new_index = pd.DatetimeIndex(remapped)
     if isinstance(obj, pd.DatetimeIndex):
         return new_index
 
     out = obj.iloc[keep].copy()
     out.index = new_index
     return out
-
-
-@deprecated(name="breos.utils.number_of_cores", replacement="os.cpu_count")
-def number_of_cores() -> int:
-    """
-    Get the number of available CPU cores for parallel processing.
-
-    Returns:
-        Number of CPU cores (leaves 1 core free for system)
-    """
-    total_cores = multiprocessing.cpu_count()
-    # Leave at least 1 core for system, use at least 1 for computation
-    return max(1, total_cores - 1)
 
 
 def get_hours_per_step(freq: str) -> float:

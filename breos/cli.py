@@ -511,6 +511,7 @@ def _montecarlo(args: argparse.Namespace) -> int:
         preserve_irradiance_energy=bool(_pick(args.preserve_irradiance_energy, "preserve_irradiance_energy", False)),
         collect_yearly=bool(_pick(args.collect_yearly, "collect_yearly", False)),
         n_procs=int(_pick(args.n_procs, "n_procs", 1)),
+        execution_backend=str(_pick(args.execution_backend, "execution_backend", "python")),
     )
 
     result = run_montecarlo(config, settings)
@@ -658,6 +659,14 @@ def build_parser() -> argparse.ArgumentParser:
     mc.add_argument("--weather-end-year", type=int, help="Last historical weather year eligible for sampling.")
     mc.add_argument("--seed", type=int, help="Base random seed for reproducible runs.")
     mc.add_argument("--n-procs", type=int, help="Worker processes for independent trajectories (default: 1).")
+    mc.add_argument(
+        "--execution-backend",
+        choices=("python", "numba"),
+        help=(
+            "Within-day dispatch implementation. 'python' (default) is the numerical reference; "
+            "'numba' is the optional compiled backend and needs: pip install \"breos[fast]\"."
+        ),
+    )
     mc.add_argument("--output", type=Path, help="Per-run results CSV path (default: monte_carlo_results.csv).")
     mc.add_argument("--yearly-output", type=Path, help="Optional per-year trajectory CSV path.")
     mc.add_argument("--provenance-output", type=Path, help="Optional provenance JSON path.")

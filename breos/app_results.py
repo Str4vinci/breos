@@ -144,6 +144,11 @@ def _provenance(cfg: dict[str, Any], resolved: ResolvedAppConfig, artifacts: Sim
         "start_date": cfg["start_date"],
         "pv_model": {"bifacial": artifacts.pv_loss_waterfall["bifacial"]},
         "degradation": artifacts.degradation_summary,
+        # Which dispatch implementation produced these numbers, and the
+        # toolchain it ran on. A bit-identity claim cannot be checked after the
+        # fact without one, so it is recorded on every run, not only on
+        # benchmarks. Same keys as the Monte Carlo block, from the same code.
+        "execution": artifacts.execution,
     }
 
 

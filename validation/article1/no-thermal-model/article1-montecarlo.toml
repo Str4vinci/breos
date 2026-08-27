@@ -1,0 +1,108 @@
+# Historical-weather Monte Carlo source-data configuration for the forthcoming
+# publication study.
+#
+# The licensed E-REDES RLP and the historical weather CSV are external inputs.
+# Pass both paths to tools/reproduce_article1_montecarlo.py; do not add them to
+# this file or commit them.
+
+annual_consumption_kwh = 5000.0
+pv_module = "Suntech_STP550S_STC"
+pv_module_width_m = 1.134
+pv_module_length_m = 2.278
+load_profile = "6"
+resolution = "15min"
+projection_years = 20
+start_date = "2025-01-01"
+pv_degradation_rate = 0.005
+calendar_model = "naumann_lam_field_calibrated"
+battery_min_soc = 0.10
+battery_max_soc = 0.90
+battery_eol_percentage = 0.70
+battery_rte = 0.95
+battery_max_charge_power_w = 4352.0
+# Control: flat bench temperature, indoor buffering off.
+battery_temperature = 25.0
+battery_indoor_model = { enabled = false }
+inverter_efficiency = 0.96
+# Best-available PV chain. Perez transposition with mid-interval solar
+# position, and Marion diffuse/ground IAM instead of beam-only -- the
+# beam-only default is a documented 0.5-1.5% systematic overestimate.
+transposition_model = "perez"
+solar_position = "mid-interval"
+diffuse_iam = "marion"
+inverter_loading_ratio = 1.25
+inflation_rate = 0.02
+sell_price_inflation = 0.0
+discount_rate = 0.05
+emissions_country = "PT"
+
+[location]
+latitude = 41.1579
+longitude = -8.6291
+timezone = "Europe/Lisbon"
+name = "Porto, Portugal"
+
+[costs]
+electricity_cost = 0.2582
+electricity_sold_cost = 0.04
+daily_power_cost = 0.30
+module_cost_per_w = 0.125
+storage_cost_per_kwh = 500.0
+inverter_cost_per_kw_hybrid = 102.58
+inverter_cost_per_kw_simple = 48.37
+installation_cost_per_module = 350.0
+installation_cost_battery = 350.0
+other_cost_per_module = 30.0
+other_costs = 0.0
+maintenance_cost_per_panel = 10.0
+maintenance_cost = 0.0
+
+[montecarlo]
+n_runs = 10000
+years_per_run = 20
+load_distribution = "uniform"
+load_uncertainty = 0.05
+target_year = 2025
+weather_start_year = 2005
+weather_end_year = 2023
+seed = 42
+min_load_scale = 0.95
+max_load_scale = 1.05
+preserve_irradiance_energy = true
+collect_yearly = true
+n_procs = 1
+
+[cases.C1]
+label = "Maximum NPV"
+n_modules = 6
+battery_kwh = 0.0
+tilt = 30.0
+azimuth = 190.0
+
+[cases.C2]
+label = "Balanced"
+n_modules = 9
+battery_kwh = 5.0
+tilt = 25.0
+azimuth = 185.0
+
+[cases.C3]
+label = "Pareto knee"
+n_modules = 9
+battery_kwh = 9.0
+tilt = 35.0
+azimuth = 190.0
+
+[cases.C4]
+label = "Maximum grid independence"
+n_modules = 9
+battery_kwh = 20.0
+tilt = 45.0
+azimuth = 175.0
+
+[cases.C5]
+label = "Low-investment benchmark"
+n_modules = 4
+battery_kwh = 0.0
+tilt = 35.0
+azimuth = 180.0

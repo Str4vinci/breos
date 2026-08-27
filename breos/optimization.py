@@ -13,7 +13,6 @@ from typing import Any, Callable, Dict, Optional, Tuple
 import numpy as np
 import pandas as pd
 
-from breos._deprecations import deprecated
 from breos.battery import BatteryConfig, simulate_energy_balance
 from breos.economics import (
     calculate_costs,
@@ -23,7 +22,13 @@ from breos.economics import (
     system_ac_production_power,
 )
 from breos.emissions import EmissionsParams
-from breos.solar import PVModuleParams, calculate_pv_production_dc, default_azimuth
+from breos.execution import DEFAULT_EXECUTION_BACKEND, require_backend, validate_execution_backend
+from breos.solar import (
+    _MODEL_OPTION_KEYS,
+    PVModuleParams,
+    calculate_pv_production_dc,
+    default_azimuth,
+)
 from breos.utils import get_hours_per_step
 
 
@@ -49,6 +54,18 @@ class ProjectedDesignResult:
     metrics: Dict[str, Any]
     yearly: pd.DataFrame
     financial: pd.DataFrame
+
+
+def _config_model_options(config: Dict[str, Any]) -> Dict[str, Any]:
+    """PV model options carried at the root of a projected config.
+
+    Absent keys are omitted so the PV model's own defaults still apply.
+    Forwarding these is what makes a configured transposition, solar-position
+    or IAM choice actually run in the optimization paths; without it the
+    options are validated and recorded in provenance while the simulation
+    silently keeps the defaults.
+    """
+    return {key: config[key] for key in _MODEL_OPTION_KEYS if key in config}
 
 
 def _serial_elementwise_runner(func: Callable[[Any], Any], args: list[Any]) -> list[Any]:
@@ -78,6 +95,7 @@ def optimize_tilt(
     weather_data: pd.DataFrame,
     location,
     n_modules: int,
+    model_options: Optional[Dict[str, Any]] = None,
     pv_params: Optional[PVModuleParams] = None,
     surface_azimuth: Optional[float] = None,
     tilt_range: Tuple[float, float] = (0.0, 60.0),
@@ -126,6 +144,7 @@ def optimize_tilt(
                 pv_params=pv_params,
                 freq=freq,
                 verbose=False,
+                **(model_options or {}),
             )
             total_production = dc_power.sum() * get_hours_per_step(freq) / 1000  # kWh (DC)
             results.append({"tilt": tilt, "production_kwh": total_production})
@@ -158,74 +177,6 @@ def optimize_tilt(
     )
 
 
-@deprecated(name="breos.optimization.optimize_tilt_brent", replacement="breos.optimization.optimize_tilt")
-def optimize_tilt_brent(
-    weather_data: pd.DataFrame,
-    location,
-    n_modules: int,
-    pv_params: Optional[PVModuleParams] = None,
-    surface_azimuth: Optional[float] = None,
-    tilt_range: Tuple[float, float] = (0.0, 60.0),
-    freq: str = "h",
-    tol: float = 1.0,
-    verbose: bool = True,
-) -> OptimizationResult:
-    """
-    Optimize panel tilt using Brent's method (faster than grid search).
-
-    Args:
-        weather_data: Weather DataFrame
-        location: pvlib Location object
-        n_modules: Number of modules
-        pv_params: PV module parameters
-        surface_azimuth: Panel azimuth
-        tilt_range: Search bounds
-        freq: Time frequency
-        tol: Optimization tolerance
-        verbose: Print progress
-
-    Returns:
-        OptimizationResult with optimal tilt
-    """
-    from scipy.optimize import minimize_scalar
-
-    if surface_azimuth is None:
-        surface_azimuth = default_azimuth(location.latitude)
-
-    iterations = [0]
-
-    def objective(tilt):
-        iterations[0] += 1
-        try:
-            dc_power = calculate_pv_production_dc(
-                weather_data=weather_data,
-                location=location,
-                tilt=tilt,
-                surface_azimuth=surface_azimuth,
-                n_modules=n_modules,
-                pv_params=pv_params,
-                freq=freq,
-                verbose=False,
-            )
-            # Negative kWh (DC) for minimization
-            production = -dc_power.sum() * get_hours_per_step(freq) / 1000
-
-            if verbose:
-                print(f"  Iteration {iterations[0]}: tilt={tilt:.2f}°, production={-production:.1f} kWh")
-
-            return production
-        except Exception as e:
-            if verbose:
-                print(f"  Iteration {iterations[0]}: tilt={tilt:.2f}° failed - {e}")
-            return np.inf
-
-    result = minimize_scalar(objective, bounds=tilt_range, method="bounded", options={"xatol": tol})
-
-    return OptimizationResult(
-        optimal_value=result.x, objective_value=-result.fun, iterations=iterations[0], details={"scipy_result": result}
-    )
-
-
 def optimize_battery_size(
     pv_dc: pd.Series,
     houseload: pd.DataFrame,
@@ -235,6 +186,7 @@ def optimize_battery_size(
     freq: str = "h",
     objective: str = "max_self_consumption",
     verbose: bool = True,
+    execution_backend: str = DEFAULT_EXECUTION_BACKEND,
 ) -> OptimizationResult:
     """
     Optimize battery size for self-consumption or grid independence.
@@ -252,6 +204,9 @@ def optimize_battery_size(
     Returns:
         OptimizationResult with optimal battery size
     """
+    # Before the first candidate, not inside the loop over battery sizes.
+    require_backend(execution_backend)
+
     results = []
 
     for size_wh in battery_sizes_wh:
@@ -266,6 +221,7 @@ def optimize_battery_size(
                 end_time=end_time,
                 freq=freq,
                 debug=False,
+                execution_backend=execution_backend,
             )
 
             grid_independence = summary["Grid Independence [%]"].iloc[0]
@@ -317,41 +273,6 @@ def optimize_battery_size(
     )
 
 
-@deprecated(name="breos.optimization.size_for_zeb")
-def size_for_zeb(houseload: pd.DataFrame, ac_loss: pd.Series, current_n_modules: int) -> Dict[str, float]:
-    """
-    Calculate PV system size needed for Zero Energy Building (ZEB).
-
-    Args:
-        houseload: Annual load profile
-        ac_loss: Usable AC system production for the current system (legacy
-            parameter name retained for compatibility)
-        current_n_modules: Current number of modules
-
-    Returns:
-        Dict with ZEB sizing requirements
-    """
-    yearly_load = houseload.iloc[:, 0].sum()
-    yearly_pv = ac_loss.sum()
-
-    if yearly_pv <= 0:
-        return {"error": "No PV production", "modules_needed": float("inf")}
-
-    pv_per_module = yearly_pv / current_n_modules if current_n_modules > 0 else yearly_pv
-    modules_for_zeb = yearly_load / pv_per_module
-
-    ratio = yearly_pv / yearly_load
-
-    return {
-        "yearly_load_wh": yearly_load,
-        "yearly_pv_wh": yearly_pv,
-        "pv_to_load_ratio": ratio,
-        "is_zeb": ratio >= 1.0,
-        "modules_needed_for_zeb": int(np.ceil(modules_for_zeb)),
-        "additional_modules_needed": int(np.ceil(modules_for_zeb - current_n_modules)),
-    }
-
-
 # ==========================================
 # 2. HELPER FUNCTIONS
 # ==========================================
@@ -363,6 +284,12 @@ DEFAULT_INFLATION_ELEC = 0.02
 DEFAULT_DISCOUNT_RATE = 0.0
 
 DEFAULT_PROJECT_LIFESPAN = 20
+
+# Candidate scoring spans the project lifetime by default. A design is chosen
+# for how it performs over 20 years of PV degradation, battery fade, and
+# replacement, not for its first year, so the cheaper annual basis is the
+# opt-in screening mode rather than the default.
+DEFAULT_OBJECTIVE_BASIS = "projected"
 
 
 def _estimate_battery_replacement_treatment(
@@ -687,6 +614,7 @@ def _evaluate_projected_design_metrics(
     inverter_ac_capacity_w: Optional[float],
     emissions_params: Optional[EmissionsParams] = None,
     return_tables: bool = False,
+    execution_backend: str = DEFAULT_EXECUTION_BACKEND,
 ) -> Dict[str, Any]:
     """Evaluate one design over repeated TMY years using production engines."""
     if years_projection < 1:
@@ -760,6 +688,7 @@ def _evaluate_projected_design_metrics(
             initial_degradation_state=degradation_state if degradation_engine == "blast" else None,
             return_degradation_state=True,
             debug=False,
+            execution_backend=execution_backend,
             **state_kwargs,
         )
         (
@@ -869,6 +798,7 @@ def evaluate_projected_design(
     battery_kwh: float,
     tilt: float,
     azimuth: float,
+    execution_backend: str = DEFAULT_EXECUTION_BACKEND,
 ) -> ProjectedDesignResult:
     """Evaluate one fixed PV-battery design over repeated TMY project years.
 
@@ -893,6 +823,11 @@ def evaluate_projected_design(
         raise ValueError("n_modules must be at least 1")
     if float(battery_kwh) < 0.0:
         raise ValueError("battery_kwh must be non-negative")
+
+    # Before the PV production model runs, not after it. Computing a year of
+    # irradiance and then failing on a missing import wastes the expensive part
+    # and reports the cheap problem late.
+    require_backend(execution_backend)
 
     from pvlib.location import Location
 
@@ -924,6 +859,7 @@ def evaluate_projected_design(
         pv_params=pv_params,
         freq=freq,
         verbose=False,
+        **_config_model_options(config),
     )
     temperature_series = _temperature_series_from_config(
         battery.get("temperature", "weather"),
@@ -934,6 +870,7 @@ def evaluate_projected_design(
     dc_ac_ratio = cost_params_from_config(config.get("costs"), financials).dc_ac_ratio
     inverter_ac_capacity_w = int(n_modules) * pv_params.Mpp / dc_ac_ratio if dc_ac_ratio > 0.0 else None
     raw_metrics = _evaluate_projected_design_metrics(
+        execution_backend=execution_backend,
         base_dc_power=base_dc_power,
         tmy_data=tmy_data,
         houseload=houseload,
@@ -1124,7 +1061,13 @@ try:
             config: Dict[str, Any],
             results_dir: str,
             elementwise_runner=None,
+            execution_backend: str = DEFAULT_EXECUTION_BACKEND,
         ):
+            # Passed explicitly by the caller, never read out of ``config``.
+            # Candidate scoring is the hottest loop in the package, which makes
+            # it exactly the place where a silently-inherited backend would be
+            # hardest to notice and hardest to attribute afterwards.
+            self.execution_backend = validate_execution_backend(execution_backend)
             self.tmy_data = tmy_data
             self.houseload = houseload
             self.config = config
@@ -1151,8 +1094,10 @@ try:
             self.max_tilt_deg = _resolve_max_tilt_deg(self.constraints, self.location["latitude"])
             self.enforce_zeb = bool(self.constraints.get("enforce_zeb", False))
             self.freq = config.get("simulation", {}).get("resolution", "h")
+            # Resolved once: candidate scoring is the hottest loop here.
+            self.model_options = _config_model_options(config)
             self.opt_cfg = config.get("optimization", {}) or {}
-            self.objective_basis = str(self.opt_cfg.get("objective_basis", "steady_state")).strip().lower()
+            self.objective_basis = str(self.opt_cfg.get("objective_basis", DEFAULT_OBJECTIVE_BASIS)).strip().lower()
             if self.objective_basis not in {"steady_state", "projected"}:
                 raise ValueError("optimization.objective_basis must be 'steady_state' or 'projected'")
             self.projected_objectives = self.objective_basis == "projected"
@@ -1270,6 +1215,7 @@ try:
                 pv_params=pv_params,
                 freq=self.freq,
                 verbose=False,
+                **self.model_options,
             )
 
             # Load alignment (timezone- and DST-aware year remapping) happens
@@ -1317,6 +1263,7 @@ try:
                 freq=self.freq,
                 temperature_series=temperature_series,
                 debug=False,
+                execution_backend=self.execution_backend,
             )
             total_import = float(summary_df["Import [kWh]"].iloc[0])
             total_export = float(summary_df["Sell [kWh]"].iloc[0])
@@ -1377,6 +1324,7 @@ try:
             objective_zeb = zeb_ratio
             if self.projected_objectives:
                 projected_metrics = _evaluate_projected_design_metrics(
+                    execution_backend=self.execution_backend,
                     base_dc_power=dc_production,
                     tmy_data=self.tmy_data,
                     houseload=houseload_df,
@@ -1496,15 +1444,21 @@ def optimize_system_multi_objective(
     seed: int = 1,
     verbose: bool = False,
     n_procs: int = 1,
+    execution_backend: str = DEFAULT_EXECUTION_BACKEND,
 ) -> OptimizationResult:
     """Run NSGA-II multi-objective PV/battery sizing.
 
     This is the public wrapper around :class:`SolarDesignProblem`. It optimizes
-    module count, battery capacity, tilt, and optionally azimuth. Objectives are
-    By default, objectives are annual grid independence, NPV, and ZEB ratio.
-    With ``optimization.objective_basis = "projected"``, objectives are
-    lifetime grid independence and NPV; ZEB remains a diagnostic unless
+    module count, battery capacity, tilt, and optionally azimuth. By default
+    (``optimization.objective_basis = "projected"``) it optimizes two values:
+    projected lifetime grid independence and projected NPV, scoring every
+    candidate over the full project lifetime with PV degradation, battery state
+    propagation, and replacement events. ZEB remains a diagnostic unless
     ``constraints.enforce_zeb`` enables it as a feasibility constraint.
+    ``optimization.objective_basis = "steady_state"`` selects the cheaper
+    single-year screening basis: annual grid independence, NPV, and ZEB ratio
+    as a third objective, with battery replacement estimated from the
+    first-year SoH loss.
     Install ``breos[optimization]`` to provide the pymoo dependency.
 
     Args:
@@ -1563,6 +1517,11 @@ def optimize_system_multi_objective(
         raise ValueError("n_procs must be a positive integer")
     n_procs = int(n_procs)
 
+    # Before the worker pool exists. An NSGA-II run is long and a missing
+    # optional dependency should not surface as a traceback from inside a pool
+    # that then has to be torn down.
+    require_backend(execution_backend)
+
     pool = None
     elementwise_runner = None
     if n_procs > 1:
@@ -1582,6 +1541,7 @@ def optimize_system_multi_objective(
         config,
         results_dir,
         elementwise_runner=elementwise_runner,
+        execution_backend=execution_backend,
     )
     termination, early_stop_metadata = _build_multi_objective_termination(
         n_gen,

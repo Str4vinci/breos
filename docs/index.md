@@ -177,5 +177,4 @@ api/index
 :caption: Project
 
 changelog
-deprecations
 ```
