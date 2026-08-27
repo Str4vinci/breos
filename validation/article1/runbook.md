@@ -78,7 +78,8 @@ uv run python tools/run_article1.py all
 ```
 
 The complete result bundle is in `results/article1/`. Keep that directory with
-the manuscript source data. Do not commit the licensed E-REDES profile.
+the manuscript source data. Do not commit the licensed E-REDES profile or
+third-party validation data.
 
 ## Local input layout
 
