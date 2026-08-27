@@ -66,6 +66,8 @@ weather/data access, load profiles, PV system data, and cost assumptions; see
 | `battery_rte` | `None` | Battery round-trip efficiency (`None` = 0.95), split evenly across charge/discharge |
 | `battery_max_charge_power_w` | `None` | Maximum DC power entering the battery charge path; `None` is unlimited |
 | `battery_max_discharge_power_w` | `None` | Maximum battery AC power delivered to load; `None` is unlimited |
+| `battery_temperature` | `"weather"` | Battery temperature used for degradation: `"weather"`, a fixed temperature in °C, or a timestamped CSV path |
+| `battery_indoor_model` | `None` | Optional indoor-temperature model settings. `None` applies the default indoor buffering; use `{"enabled": false}` to use `battery_temperature` without remapping |
 | `dc_coupled` | `True` | DC-coupled / hybrid inverter. `False` is currently unsupported and raises |
 | `inverter_efficiency` | `0.96` | Nominal inverter efficiency used by the PVWatts part-load curve |
 | `inverter_loading_ratio` | `1.25` | DC/AC oversizing ratio; also sets the inverter AC rating that clips production |
@@ -103,6 +105,24 @@ so the window also shapes degradation results — the defaults reflect the
 operating range the field-calibrated aging parameters were fit for, and
 simulating a 0–1.00 window models a battery management system that no real
 product ships.
+
+Battery temperature is also a degradation input. By default, BREOS derives it
+from the weather data and applies the indoor-buffering model. A numeric
+`battery_temperature` is treated as an outdoor or supplied temperature and is
+still buffered unless the indoor model is disabled. For a study that assumes
+an exact constant battery temperature, configure both values explicitly:
+
+```python
+breos.App({
+    # ...required project inputs...
+    "battery_temperature": 25.0,
+    "battery_indoor_model": {"enabled": False},
+})
+```
+
+The mapping also accepts `setpoint_c`, `coupling_alpha`, `floor_c`, and
+`ceiling_c`. Set `coupling_alpha` between 0 and 1, and do not set `floor_c`
+above `ceiling_c`.
 
 ## Battery degradation calibration
 

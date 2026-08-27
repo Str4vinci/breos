@@ -105,6 +105,9 @@ plans behind individual items.
 
 ## Performance and portability
 
+- Extend the optional Numba dispatch backend introduced for Monte Carlo in
+  0.6.0 to `App` and projected optimization, behind the same reference-path
+  parity requirements.
 - Worker controls (`--workers`) and conservative auto-defaults for CPU and
   memory, with care for fanless Apple Silicon machines.
 - A startup diagnostic and a benchmark/smoke mode for long runs.

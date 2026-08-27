@@ -87,7 +87,7 @@ def optimize_tilt(
     verbose: bool = True,
 ) -> OptimizationResult:
     """
-    Optimize panel tilt angle for maximum production or self-consumption.
+    Optimize panel tilt angle for maximum production.
 
     Args:
         weather_data: Weather DataFrame with solar irradiance
@@ -96,7 +96,10 @@ def optimize_tilt(
         pv_params: PV module parameters
         surface_azimuth: Panel azimuth (180=South, 0=North). If None, auto-detected from hemisphere.
         tilt_range: (min_tilt, max_tilt) in degrees
-        objective: 'max_production' or 'max_self_consumption'
+        objective: Must be ``"max_production"``. The historical
+            ``"max_self_consumption"`` label was never implemented because
+            this function has no load input; it now raises instead of silently
+            optimizing production.
         freq: Time frequency
         n_points: Number of tilt values to evaluate
         verbose: Print progress
@@ -104,10 +107,13 @@ def optimize_tilt(
     Returns:
         OptimizationResult with optimal tilt
     """
+    if objective != "max_production":
+        raise ValueError("optimize_tilt supports objective='max_production' only")
     if surface_azimuth is None:
         surface_azimuth = default_azimuth(location.latitude)
     tilts = np.linspace(tilt_range[0], tilt_range[1], n_points)
     results = []
+    successful_evaluations = 0
 
     for tilt in tilts:
         try:
@@ -123,6 +129,7 @@ def optimize_tilt(
             )
             total_production = dc_power.sum() * get_hours_per_step(freq) / 1000  # kWh (DC)
             results.append({"tilt": tilt, "production_kwh": total_production})
+            successful_evaluations += 1
 
             if verbose:
                 print(f"  Tilt {tilt:.1f}°: {total_production:.1f} kWh")
@@ -131,6 +138,9 @@ def optimize_tilt(
             if verbose:
                 print(f"  Tilt {tilt:.1f}°: Error - {e}")
             results.append({"tilt": tilt, "production_kwh": 0})
+
+    if successful_evaluations == 0:
+        raise RuntimeError("Tilt optimization failed for every evaluated angle")
 
     results_df = pd.DataFrame(results)
     optimal_idx = results_df["production_kwh"].idxmax()

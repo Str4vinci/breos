@@ -954,3 +954,9 @@ class TestPerezCoefficients:
     def test_invalid_perez_model(self, synthetic_weather, porto_location, pv_params):
         with pytest.raises(ValueError, match="Unknown Perez coefficient model"):
             self._perez(synthetic_weather, porto_location, pv_params, "not_a_set")
+
+    def test_perez_model_name_is_case_and_whitespace_insensitive(self, synthetic_weather, porto_location, pv_params):
+        canonical = self._perez(synthetic_weather, porto_location, pv_params, "allsitescomposite1990")
+        normalized = self._perez(synthetic_weather, porto_location, pv_params, " AllSitesComposite1990 ")
+
+        assert normalized.to_numpy() == pytest.approx(canonical.to_numpy())

@@ -1,9 +1,11 @@
-"""Static coverage for the forthcoming publication study Monte Carlo workflow."""
+"""Static coverage for the forthcoming publication Monte Carlo workflow."""
 
 import argparse
 import tomllib
 
-from tools.reproduce_article1_montecarlo import DEFAULT_CONFIG, _selected_cases, _settings
+import tools.reproduce_article1_montecarlo as article1_montecarlo
+from breos.app_config import resolve_app_config
+from tools.reproduce_article1_montecarlo import DEFAULT_CONFIG, _pv_module_provenance, _selected_cases, _settings
 
 
 def test_article1_montecarlo_config_pins_manuscript_method():
@@ -17,7 +19,7 @@ def test_article1_montecarlo_config_pins_manuscript_method():
         "target_year": 2025,
         "weather_start_year": 2005,
         "weather_end_year": 2023,
-        "seed": 1,
+        "seed": 42,
         "min_load_scale": 0.95,
         "max_load_scale": 1.05,
         "preserve_irradiance_energy": True,
@@ -32,6 +34,12 @@ def test_article1_montecarlo_config_pins_manuscript_method():
         "tilt": 25.0,
         "azimuth": 185.0,
     }
+    assert config["battery_temperature"] == 25.0
+    assert config["battery_indoor_model"] == {"enabled": False}
+    module = _pv_module_provenance(config)
+    assert module["parameters"]["T_Pmax_pct"] == -0.34
+    assert module["parameters"]["T_Voc_pct"] == -0.26
+    assert module["area_m2"] == 1.134 * 2.278
 
 
 def test_article1_montecarlo_cli_overrides_only_runtime_size_and_workers():
@@ -54,3 +62,26 @@ def test_article1_montecarlo_case_selection_is_explicit():
 
     assert _selected_cases(cases, ["C2"]) == ["C2"]
     assert _selected_cases(cases, ["all"]) == ["C1", "C2", "C3"]
+
+
+def test_article1_metadata_is_removed_before_app_config_validation():
+    config = tomllib.loads(DEFAULT_CONFIG.read_text())
+
+    simulation_config, cases, module = article1_montecarlo._split_article_config(config)
+    case = cases["C2"]
+    simulation_config.update(
+        {
+            "n_modules": case["n_modules"],
+            "battery_kwh": case["battery_kwh"],
+            "tilt": case["tilt"],
+            "azimuth": case["azimuth"],
+        }
+    )
+
+    resolved = resolve_app_config(simulation_config)
+
+    assert resolved.cfg["n_modules"] == 9
+    assert "pv_module_width_m" not in simulation_config
+    assert "pv_module_length_m" not in simulation_config
+    assert module["width_m"] == 1.134
+    assert module["length_m"] == 2.278

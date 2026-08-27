@@ -11,13 +11,12 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   lifetime grid independence and NPV. This is now the default objective basis;
   projected ZEB is a diagnostic or optional feasibility constraint, not a third
   objective.
-- Added a version-controlled configuration for the forthcoming publication
-  study, a deterministic fixed-candidate reproduction command, per-candidate
-  yearly and financial source tables, an opt-in licensed-profile regression,
-  and a comparison report.
-  The report preserves the archived values while
-  explaining corrected drift from the original hourly-to-15-minute weather
-  handling and AC dispatch methodology.
+- Added a version-controlled configuration for the forthcoming publication, a
+  deterministic fixed-candidate reproduction command, per-candidate yearly and
+  financial source tables, an opt-in licensed-profile regression, input
+  preflight, a complete result-bundle verifier, and a manuscript-to-source-data
+  audit. Generated provenance records the resolved PV module and geometry as
+  well as software, source, config, input, and output hashes.
 - Added `evaluate_projected_design` for detailed evaluation of a fixed design.
   It returns the projected metrics, annual energy and degradation-state
   ledger, discounted financial ledger, LCOE, and configured lifetime
@@ -28,13 +27,76 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   exposes the energy, degradation, and discounted-cost paths behind summary
   distributions, and the CLI writes a provenance report with input and output
   hashes. Existing normal sampling and aggregate-only output remain defaults.
+- Added public battery-temperature and indoor-temperature-model configuration
+  fields. Deterministic App and Monte Carlo runs now use the same resolved
+  temperature input while retaining the ambient-weather default.
 - Added a Monte Carlo configuration and BREOS orchestration command for the
-  forthcoming publication study's C1-C5 cases. It pins the manuscript's
-  uniform 0.95-1.05 load multiplier and records that the archived research
+  forthcoming publication's C1-C5 study. It pins the manuscript's uniform
+  0.95-1.05 load multiplier and records that the archived research
   implementation instead used a normal draw.
+- Added `tools/run_article1.py` as the single entry point for input checks,
+  deterministic analyses, Monte Carlo runs, and final bundle verification.
+  It discovers ignored local inputs under `dev/article1-inputs/` by default.
 - Added opt-in hourly-energy conservation to `resample_to_15min`. It preserves
   each source hour's GHI, DNI, and DHI energy after clear-sky interpolation;
-  the established resampling output remains the default.
+  energy conservation remains opt-in for general runs.
+- Added a summary-only simulation path that returns annual energy totals,
+  grid independence, degradation state, replacements, carried battery and
+  PV-origin energy, and temperature diagnostics without materialising a
+  per-timestep results frame. Monte Carlo runs through it.
+- Added an optional Numba dispatch backend for Monte Carlo, selected with
+  `[montecarlo].execution_backend = "numba"` and installed with
+  `pip install "breos[fast]"`. It compiles one day of dispatch at a time at
+  fixed state of health and resistance; rainflow counting, degradation,
+  resistance growth, and replacement stay in the Python reference path.
+  Selecting it without Numba installed fails before any trajectory starts.
+  `"python"` remains the default and the numerical reference. Provenance
+  records the resolved backend, whether the JIT cache was warm or cold for
+  the run, and the installed Numba and llvmlite versions.
+
+### Changed
+- Updated the Suntech STP550S-C72/Vmh catalogue temperature coefficients to
+  the matching monofacial datasheet values of -0.34 %/°C for maximum power and
+  -0.26 %/°C for open-circuit voltage. The configurations for the forthcoming
+  publication also record the 1.134 m by 2.278 m module frame explicitly.
+- Corrected power-to-energy aggregation in monthly and annual plotting helpers
+  by applying the inferred timestep duration independently of pandas' internal
+  datetime resolution. Hourly plots retain their prior values; 15-minute
+  energy plots are no longer four times too large.
+- The bundled hourly demandlib H0 profile now labels its watt-valued column as
+  watts. The loader still accepts the historical kilowatt header for external
+  compatibility.
+- The configurations for the forthcoming publication now pin a fixed 25 °C
+  battery temperature and disable indoor remapping, matching the manuscript
+  methodology.
+- Withdrew the announced 0.6.0 removal of the `breos[fast]` extra. The extra
+  is retained and undeprecated because it now installs the dependency for the
+  optional Monte Carlo dispatch backend. The separate removal of the
+  approximate `breos.numba_kernels` screening module proceeds as announced.
+
+### Fixed
+- Kept PV module geometry metadata for the forthcoming publication out of the
+  strict BREOS runtime configuration, and validated every Monte Carlo case
+  before starting any trajectories.
+- Filled the final three 15-minute slots produced by Makima weather
+  interpolation by holding the last source-hour state instead of returning
+  NaNs that downstream simulation silently treated as zeros.
+- Made clear-sky-index interpolation use the same low-light stabilizer during
+  division and reconstruction, avoiding systematic low-light attenuation.
+- Reject fractional-hour timezone row rolls when coercing PVGIS TMY data to a
+  sample year, because pvlib's interface accepts only whole-hour rolls. This
+  replaces silent 15-30 minute irradiance misalignment with an actionable
+  error.
+- Normalize Perez coefficient-set names consistently with the other PV model
+  selectors.
+- Reject the unimplemented `max_self_consumption` tilt objective and raise when
+  every tilt evaluation fails instead of silently returning the first angle.
+- Warn when the CEC fit returns a best-residual physical solution that does not
+  meet the requested gamma tolerance.
+- Fixed plotting legend ordering and multi-scenario break-even x-axis limits.
+- Removed an unreachable global-degradation plot branch that checked column
+  names no BREOS simulation produces. The supported per-battery degradation
+  plot continues to use the production cumulative-degradation columns.
 
 ### Changed
 - `optimization.objective_basis` now defaults to `"projected"`. Multi-objective
@@ -93,7 +155,8 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 ### Deprecated
 - Deprecated the unused `breos.numba_kernels` module and `breos[fast]` extra;
   the standalone approximate kernels are not used by `App` or the supported
-  simulation path and are scheduled for removal in 0.6.0.
+  simulation path and are scheduled for removal in 0.6.0. The `breos[fast]`
+  part of this announcement was later withdrawn; see Unreleased.
 - Deprecated the article-scoped, documentation-derived Wöhler/Miner comparison
   subsystem, its three plots, and its comparison-only constants for removal in
   0.6.0. Despite legacy API names, this is an independent BREOS approximation,

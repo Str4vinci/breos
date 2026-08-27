@@ -28,6 +28,13 @@ class TestCatalog:
         assert get_module("Generic_600W_Bifacial").Module_Efficiency == pytest.approx(0.212)
         assert "Efficiency: 21.2 %" in get_module_info("Generic_600W_Bifacial")
 
+    def test_article_module_uses_recorded_temperature_coefficients(self):
+        module = get_module("Suntech_STP550S_STC")
+
+        assert module.T_Pmax_pct == pytest.approx(-0.34)
+        assert module.T_Voc_pct == pytest.approx(-0.26)
+        assert module.beta_voc == pytest.approx(-0.13, abs=0.001)
+
     def test_catalog_efficiencies_are_physical_when_present(self):
         for key, module in MODULES.items():
             if module.Module_Efficiency is not None:

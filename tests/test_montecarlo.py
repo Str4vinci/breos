@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from breos.montecarlo import MonteCarloSettings, _sample_load_scale, run_montecarlo
+from breos.montecarlo import MonteCarloSettings, _precompute_year_caches, _sample_load_scale, run_montecarlo
 
 
 def _write_multiyear_weather(path, years=(2021, 2022)):
@@ -74,6 +74,47 @@ def test_sample_load_scale_supports_bounded_uniform_distribution():
     assert max(scales) <= 1.05
     assert min(scales) < 0.96
     assert max(scales) > 1.04
+
+
+def test_montecarlo_precompute_threads_explicit_battery_temperature(monkeypatch):
+    import breos.montecarlo as mc_module
+
+    frame = pd.DataFrame(
+        {
+            "date": pd.date_range("2021-01-01", periods=2, freq="h"),
+            "temperature_2m": [10.0, 11.0],
+        }
+    )
+    index = pd.date_range("2025-01-01", periods=2, freq="h", tz="UTC")
+    captured = {}
+    monkeypatch.setattr(mc_module, "preload_weather_by_year", lambda *args, **kwargs: {2021: frame})
+    monkeypatch.setattr(
+        mc_module,
+        "build_dc_system_base",
+        lambda *args, **kwargs: pd.Series([0.0, 1.0], index=index),
+    )
+
+    def temperature_builder(temp_config, **kwargs):
+        captured["temp_config"] = temp_config
+        captured["indoor_model"] = kwargs["indoor_model"]
+        return pd.Series(25.0, index=index)
+
+    monkeypatch.setattr(mc_module, "build_battery_temperature_series", temperature_builder)
+    cfg = {
+        "resolution": "h",
+        "battery_temperature": 25.0,
+        "battery_indoor_model": {"enabled": False},
+    }
+    settings = MonteCarloSettings(weather_file="unused.csv")
+
+    _dc, temperatures = _precompute_year_caches(
+        cfg,
+        type("Resolved", (), {"lat": 41.0, "lon": -8.0})(),
+        settings,
+    )
+
+    assert temperatures[2021].tolist() == [25.0, 25.0]
+    assert captured == {"temp_config": 25.0, "indoor_model": {"enabled": False}}
 
 
 def test_run_montecarlo_shapes_and_years(tmp_path):

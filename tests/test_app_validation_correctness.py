@@ -29,6 +29,7 @@ def _config(**overrides):
         ("projection_years", 2.5),
         ("battery_max_charge_power_w", -1.0),
         ("battery_max_discharge_power_w", math.inf),
+        ("battery_temperature", math.inf),
         ("export_emissions_factor_gco2_kwh", -1.0),
     ],
 )
@@ -55,6 +56,23 @@ def test_invalid_start_date_and_calendar_model_fail_early():
         App(_config(start_date="2024-02-30"))
     with pytest.raises(ValueError, match="calendar_model"):
         App(_config(calendar_model="invented"))
+
+
+def test_battery_temperature_and_indoor_model_validate_at_app_boundary():
+    app = App(
+        _config(
+            battery_temperature=25.0,
+            battery_indoor_model={"enabled": False},
+        )
+    )
+
+    assert app._cfg["battery_temperature"] == 25.0
+    assert app._cfg["battery_indoor_model"] == {"enabled": False}
+
+    with pytest.raises(TypeError, match="battery_indoor_model"):
+        App(_config(battery_indoor_model=False))
+    with pytest.raises(ValueError, match="coupling_alpha"):
+        App(_config(battery_indoor_model={"coupling_alpha": 1.1}))
 
 
 def test_unknown_top_level_and_array_modules_fail_early():

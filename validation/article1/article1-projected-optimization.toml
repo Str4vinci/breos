@@ -1,4 +1,4 @@
-name = "Forthcoming publication study projected optimization reproduction"
+name = "Forthcoming publication projected optimization reproduction"
 inverter_efficiency = 0.96
 
 [location]
@@ -14,6 +14,8 @@ external_filename = "EREDES_2025_BTN_1000kwh_15min.csv"
 
 [pv]
 module = "Suntech_STP550S_STC"
+module_width_m = 1.134
+module_length_m = 2.278
 degradation_rate = 0.005
 
 [battery]
@@ -25,6 +27,8 @@ charge_efficiency = 0.974679434
 discharge_efficiency = 0.974679434
 # Research input: 85 A at 51.2 V, expressed through the public power cap.
 max_charge_power_w = 4352.0
+temperature = 25.0
+indoor_model = { enabled = false }
 enable_replacement = true
 replacement_cost = "calculate"
 

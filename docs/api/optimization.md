@@ -57,6 +57,22 @@ ZEB remains a reported diagnostic in projected mode. Set
 `constraints.enforce_zeb = true` to require a projected lifetime ZEB ratio of
 at least one; this adds a feasibility constraint, not a third objective.
 
+Multi-objective sizing accepts these explicit constraint keys:
+
+| Key | Default | Meaning |
+| --- | ---: | --- |
+| `constraints.budget_eur` | 10,000 | Maximum initial system cost in EUR |
+| `constraints.max_area_m2` | 20 | Maximum PV-module frame area in m² |
+| `constraints.max_battery_kwh` | 30 | Maximum battery decision-variable value in kWh |
+| `constraints.max_modules` | 60 | Maximum PV-module decision-variable value |
+| `constraints.max_tilt_deg` | 90 | Maximum tilt, or `"adjust"` for the latitude-based bound |
+| `constraints.enforce_zeb` | `false` | Add the ZEB feasibility constraint |
+
+Set the physical and financial limits explicitly for publication runs. The
+defaults preserve earlier direct-API behavior; they are not site-specific
+recommendations. The configuration for the forthcoming publication pins every
+applicable limit.
+
 Projected results expose `SteadyState_*` and `Projected_*` diagnostics. The
 ordinary `Grid_Independence_%` and `NPV_Eur` columns mirror the values used by
 the selected objective basis. In projected mode, they therefore equal
@@ -73,16 +89,16 @@ included in the metrics, while the financial table retains their annual source
 columns. These tables are intended as stable source data for custom
 analysis and plots; BREOS does not require a particular visualization layer.
 
-## Forthcoming publication study reproduction
+## Forthcoming publication reproduction
 
 [`validation/article1/article1-projected-optimization.toml`](../../validation/article1/article1-projected-optimization.toml)
-pins the 15-minute, 20-year configuration for the forthcoming publication
-study: four archived comparison candidates plus the C5 low-investment benchmark,
-NSGA-II seed and early stopping, battery degradation, replacement, and
-financial assumptions. Its hourly TMY is interpolated with the clear-sky shape
-and opt-in hourly-energy conservation. The established general resampling
-default remains unchanged. The E-REDES household profile is licensed external
-data and is not redistributed.
+pins the forthcoming publication's 15-minute, 20-year configuration, four
+archived comparison candidates plus the C5 low-investment benchmark, NSGA-II
+seed and early stopping, battery degradation, replacement, and financial
+assumptions. Its hourly TMY is interpolated with the clear-sky shape and
+opt-in hourly-energy conservation. Energy conservation remains opt-in for
+general resampling. The E-REDES household profile is licensed external data
+and is not redistributed.
 
 Run the deterministic fixed candidates before starting NSGA-II:
 

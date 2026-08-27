@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-"""Generate Monte Carlo source tables for the forthcoming publication study with public BREOS APIs."""
+"""Generate Monte Carlo source tables for the forthcoming publication."""
 
 from __future__ import annotations
 
 import argparse
 import copy
 import hashlib
+import importlib.metadata
 import json
 import platform
 import shlex
@@ -19,7 +20,9 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
 import breos  # noqa: E402
+from breos.app_config import resolve_app_config  # noqa: E402
 from breos.montecarlo import MonteCarloSettings, run_montecarlo  # noqa: E402
+from breos.pv_modules import get_module  # noqa: E402
 
 DEFAULT_CONFIG = PROJECT_ROOT / "validation/article1/article1-montecarlo.toml"
 
@@ -48,6 +51,32 @@ def _git_revision() -> dict[str, str | bool]:
         text=True,
     ).stdout.strip()
     return {"commit": revision, "tracked_worktree_dirty": bool(status)}
+
+
+def _dependency_versions() -> dict[str, str]:
+    return {package: importlib.metadata.version(package) for package in ("numpy", "pandas", "pvlib", "scipy")}
+
+
+def _pv_module_provenance(config: dict) -> dict:
+    width = float(config.get("pv_module_width_m", 1.134))
+    length = float(config.get("pv_module_length_m", 2.278))
+    return {
+        "catalog_key": str(config["pv_module"]),
+        "parameters": asdict(get_module(str(config["pv_module"]))),
+        "width_m": width,
+        "length_m": length,
+        "area_m2": width * length,
+    }
+
+
+def _split_article_config(config: dict) -> tuple[dict, dict, dict]:
+    """Separate App inputs, case definitions, and publication metadata."""
+    simulation_config = copy.deepcopy(config)
+    module_provenance = _pv_module_provenance(simulation_config)
+    cases = simulation_config.pop("cases")
+    simulation_config.pop("pv_module_width_m", None)
+    simulation_config.pop("pv_module_length_m", None)
+    return simulation_config, cases, module_provenance
 
 
 def _selected_cases(cases: dict, requested: list[str]) -> list[str]:
@@ -80,6 +109,19 @@ def _settings(config: dict, args: argparse.Namespace) -> MonteCarloSettings:
     )
 
 
+def _case_config(base_config: dict, case: dict) -> dict:
+    config = copy.deepcopy(base_config)
+    config.update(
+        {
+            "n_modules": int(case["n_modules"]),
+            "battery_kwh": float(case["battery_kwh"]),
+            "tilt": float(case["tilt"]),
+            "azimuth": float(case["azimuth"]),
+        }
+    )
+    return config
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
@@ -94,12 +136,13 @@ def main() -> int:
     parser.add_argument("--calendar-model", help="Override the configured native calendar-degradation model")
     parser.add_argument("--runs", type=int, help="Override the configured number of trajectories")
     parser.add_argument("--n-procs", type=int, help="Worker processes for independent trajectories")
+    parser.add_argument("--validate-only", action="store_true", help="Validate selected cases without simulation")
     parser.add_argument("--output", type=Path, default=PROJECT_ROOT / "results/article1-montecarlo")
     args = parser.parse_args()
 
     config_bytes = args.config.read_bytes()
-    full_config = tomllib.loads(config_bytes.decode("utf-8"))
-    cases = full_config.pop("cases")
+    loaded_config = tomllib.loads(config_bytes.decode("utf-8"))
+    full_config, cases, module_provenance = _split_article_config(loaded_config)
     if args.calendar_model:
         full_config["calendar_model"] = args.calendar_model
     full_config["rlp_directory"] = str(args.rlp_directory.resolve())
@@ -113,17 +156,15 @@ def main() -> int:
         raise FileNotFoundError(rlp_file)
 
     selected = _selected_cases(cases, args.case)
+    if args.validate_only:
+        for case_id in selected:
+            resolve_app_config(_case_config(full_config, cases[case_id]))
+        print(f"Validated the forthcoming publication's Monte Carlo configuration for: {', '.join(selected)}")
+        return 0
+
     for case_id in selected:
         case = cases[case_id]
-        case_config = copy.deepcopy(full_config)
-        case_config.update(
-            {
-                "n_modules": int(case["n_modules"]),
-                "battery_kwh": float(case["battery_kwh"]),
-                "tilt": float(case["tilt"]),
-                "azimuth": float(case["azimuth"]),
-            }
-        )
+        case_config = _case_config(full_config, case)
         result = run_montecarlo(case_config, settings)
         case_directory = args.output / case_id.lower()
         case_directory.mkdir(parents=True, exist_ok=True)
@@ -133,7 +174,7 @@ def main() -> int:
         provenance_path = case_directory / "provenance.json"
         result.runs.to_csv(runs_path, index=False)
         if result.yearly is None:
-            raise RuntimeError("The Monte Carlo run for the forthcoming publication requires collect_yearly=true")
+            raise RuntimeError("The forthcoming publication's Monte Carlo run requires collect_yearly=true")
         result.yearly.to_csv(yearly_path, index=False)
         summary_path.write_text(json.dumps(result.summary, indent=2) + "\n")
 
@@ -146,11 +187,14 @@ def main() -> int:
             "breos_version": breos.__version__,
             "breos_source": _git_revision(),
             "python_version": platform.python_version(),
+            "platform": platform.platform(),
+            "dependency_versions": _dependency_versions(),
             "command": shlex.join([sys.executable, *sys.argv]),
             "base_config": str(args.config),
             "base_config_sha256": hashlib.sha256(config_bytes).hexdigest(),
             "resolved_config_sha256": resolved_hash,
             "resolved_config": case_config,
+            "resolved_pv_module": module_provenance,
             "settings": asdict(settings),
             "available_weather_years": result.available_years,
             "weather_file": str(weather_file),
