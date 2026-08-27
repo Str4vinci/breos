@@ -5,18 +5,18 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 ## [Unreleased]
 
 ### Added
-- Added an opt-in projected multi-objective optimizer that evaluates each
-  candidate over a repeated-TMY project lifetime, carries battery degradation
-  and physical state between years, records actual replacements, and optimizes
-  lifetime grid independence and NPV. Existing annual three-objective behavior
-  remains the default; projected ZEB is a diagnostic or optional feasibility
-  constraint, not a third objective.
+- Added a projected multi-objective optimizer that evaluates each candidate
+  over a repeated-TMY project lifetime, carries battery degradation and
+  physical state between years, records actual replacements, and optimizes
+  lifetime grid independence and NPV. This is now the default objective basis;
+  projected ZEB is a diagnostic or optional feasibility constraint, not a third
+  objective.
 - Added a version-controlled configuration for the forthcoming publication, a
   deterministic fixed-candidate reproduction command, per-candidate yearly and
-  financial source tables, input preflight, a complete result-bundle verifier,
-  and a manuscript-to-source-data audit. Generated provenance records the
-  resolved PV module and geometry as well as software, source, config, input,
-  and output hashes.
+  financial source tables, an opt-in licensed-profile regression, input
+  preflight, a complete result-bundle verifier, and a manuscript-to-source-data
+  audit. Generated provenance records the resolved PV module and geometry as
+  well as software, source, config, input, and output hashes.
 - Added `evaluate_projected_design` for detailed evaluation of a fixed design.
   It returns the projected metrics, annual energy and degradation-state
   ledger, discounted financial ledger, LCOE, and configured lifetime
@@ -97,6 +97,17 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 - Removed an unreachable global-degradation plot branch that checked column
   names no BREOS simulation produces. The supported per-battery degradation
   plot continues to use the production cumulative-degradation columns.
+
+### Changed
+- `optimization.objective_basis` now defaults to `"projected"`. Multi-objective
+  sizing scores each candidate over the full project lifetime, with PV
+  degradation, propagated battery state, and actual replacement events, and
+  optimizes two objectives: lifetime grid independence and lifetime NPV. The
+  previous single-year basis remains available as
+  `optimization.objective_basis = "steady_state"`, which keeps the annual
+  three-objective search with ZEB ratio as a third objective. Runs that relied
+  on the implicit annual default now cost `years_projection` simulated years
+  per candidate and return a two-objective front.
 
 ## [0.5.2] - 2026-08-19
 

@@ -22,13 +22,18 @@ scores. Physical size, inverter rating, and CAPEX use the selected module's
 
 `optimize_system_multi_objective` supports two objective bases:
 
-- `optimization.objective_basis = "steady_state"` is the default. It preserves
-  the established annual three-objective search: grid independence, NPV, and
-  ZEB ratio. Battery replacement is estimated from the first-year SoH loss.
-- `optimization.objective_basis = "projected"` evaluates every candidate over
-  `simulation.years_projection` years, or `financials.project_lifespan` when
-  that key is absent. It optimizes two values: projected lifetime grid
-  independence and projected NPV.
+- `optimization.objective_basis = "projected"` is the default. It evaluates
+  every candidate over `simulation.years_projection` years, or
+  `financials.project_lifespan` when that key is absent. It optimizes two
+  values: projected lifetime grid independence and projected NPV. A design is
+  selected for how it performs across the project lifetime, which is the
+  question a sizing study asks.
+- `optimization.objective_basis = "steady_state"` selects the cheaper annual
+  three-objective search: grid independence, NPV, and ZEB ratio. It scores each
+  candidate on a single simulated year and estimates battery replacement from
+  the first-year SoH loss, so it is a screening basis rather than a lifetime
+  answer. It costs one simulated year per candidate instead of
+  `years_projection`, which makes it useful for wide exploratory sweeps.
 
 Projected mode repeats the configured TMY. Each year applies the configured PV
 degradation factor and carries battery stored energy, PV-origin stored energy,
