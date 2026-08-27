@@ -49,15 +49,18 @@ by the workflow:
 pip install "breos[plots]"          # Matplotlib plotting helpers
 pip install "breos[optimization]"   # pymoo optimization
 pip install "breos[weather]"        # Open-Meteo historical weather
-pip install "breos[fast]"           # Numba accelerator for Monte Carlo
+pip install "breos[fast]"           # Numba dispatch accelerator
 ```
 
-The `fast` extra installs Numba for the optional Monte Carlo dispatch
-backend. Select it with `[montecarlo].execution_backend = "numba"`; without
-that setting, Monte Carlo uses the default Python path and installing `fast`
-changes nothing. It does not accelerate `breos.App` or multi-objective
-optimization. The earlier standalone `breos.numba_kernels` screening engine is
-removed in 0.6.0; see [Deprecations for 0.6.0](../deprecations.md).
+The `fast` extra installs Numba for the optional compiled dispatch backend.
+Set the App configuration key `execution_backend = "numba"`, set
+`[montecarlo].execution_backend = "numba"`, or pass the corresponding backend
+argument to an optimization entry point. The Python backend remains the
+default and numerical reference, so installing `fast` alone changes nothing.
+
+The deprecated standalone `breos.numba_kernels` screening module is unrelated
+to this backend and is never called by the supported simulation path. See
+[Deprecations for 0.6.0](../deprecations.md).
 
 Core imports, help, option discovery, and configuration validation do not load
 Matplotlib. If an actual plotting command reports that its configuration
