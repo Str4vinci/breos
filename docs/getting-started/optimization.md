@@ -92,9 +92,9 @@ whose balance of independence and cost matches the project.
 The optimizer does not read `pop_size`, `n_offsprings`, `n_gen`, or `seed`
 from the nested config automatically. Forward them as shown above. Set and
 record the seed because NSGA-II is stochastic. Raise the population and
-generation counts for a denser front and a longer runtime. `n_procs` above 1
-evaluates candidates in parallel processes, which is worth setting for
-anything beyond a quick look.
+generation counts for a denser front and a longer runtime. Pass `n_procs` to
+`optimize_system_multi_objective` to evaluate candidates in parallel
+processes.
 
 If no candidate satisfies the constraints, the call raises `RuntimeError`.
 Loosen `budget_eur`, `max_area_m2`, `max_modules`, or `max_battery_kwh` in
@@ -102,25 +102,32 @@ Loosen `budget_eur`, `max_area_m2`, `max_modules`, or `max_battery_kwh` in
 
 ## Score designs over their projected lifetime
 
-By default the objectives describe year one: annual grid independence, NPV, and
-ZEB ratio. A design scored this way ignores what battery degradation does to it
-by year fifteen.
-
-Setting `objective_basis` switches the objectives to the whole horizon:
+The default `projected` basis scores each candidate over the whole configured
+horizon:
 
 ```toml
 [optimization]
 objective_basis = "projected"
 ```
 
-The objectives become lifetime grid independence and lifetime NPV, both
-computed from simulated yearly values rather than a degradation factor applied
-after the fact. ZEB drops to a diagnostic. To keep it as a feasibility
-constraint, set `enforce_zeb = true` under `[constraints]`.
+The objectives are lifetime grid independence and lifetime NPV. BREOS computes
+both values from the simulated annual ledgers rather than applying a
+degradation factor after the simulation. ZEB is a diagnostic. To keep ZEB as a
+feasibility constraint, set `enforce_zeb = true` under `[constraints]`.
 
-This costs real time, because every candidate now runs the full projection
-instead of one year. Start with a small `pop_size` and `n_gen` while you check
-that the config resolves, then scale up.
+Projected scoring simulates `years_projection` years for every candidate. Start
+with a small `pop_size` and `n_gen` while you check that the config resolves,
+then scale up. To screen a wide design space at lower cost, opt into the
+single-year basis:
+
+```toml
+[optimization]
+objective_basis = "steady_state"
+```
+
+The `steady_state` basis optimizes annual grid independence, NPV, and ZEB ratio.
+It estimates battery replacement from first-year state-of-health loss instead
+of propagating battery state through the project lifetime.
 
 ## Evaluate one design in detail
 

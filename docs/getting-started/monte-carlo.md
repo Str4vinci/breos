@@ -64,10 +64,9 @@ A runnable version ships as
 breos montecarlo --config configs/examples/montecarlo.toml --runs 100 --plots
 ```
 
-Every setting in `[montecarlo]` has a command-line override, so
-`--runs`, `--seed`, `--years`, `--n-procs`, and `--weather-file` all work
-without editing the file. Start with `--runs 10` to check the config resolves,
-then raise it.
+Common settings have command-line overrides. For example, `--runs`, `--seed`,
+`--years`, `--n-procs`, and `--weather-file` work without editing the file.
+Start with `--runs 10` to check that the config resolves, then raise it.
 
 `--n-procs` runs trajectories in parallel processes and is the setting that
 matters most for wall-clock time.
