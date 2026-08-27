@@ -158,6 +158,8 @@ from breos.montecarlo import (
 # Optimization
 from breos.optimization import (
     OptimizationResult,
+    ProjectedDesignResult,
+    evaluate_projected_design,
     optimize_battery_size,
     optimize_system_multi_objective,
     optimize_tilt,
@@ -364,6 +366,8 @@ __all__ = [
     "optimize_tilt_brent",
     "optimize_battery_size",
     "optimize_system_multi_objective",
+    "evaluate_projected_design",
+    "ProjectedDesignResult",
     # Monte Carlo
     "run_montecarlo",
     "MonteCarloSettings",

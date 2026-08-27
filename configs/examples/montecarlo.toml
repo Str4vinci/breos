@@ -4,7 +4,7 @@
 #
 # Each run is a full multi-year projection; for every projection year a weather
 # year is drawn (with replacement) from the multi-year file below and demand is
-# scaled by a random factor ~ Normal(1, load_uncertainty). Aggregating the runs
+# scaled by a random factor from the configured distribution. Aggregating the runs
 # gives the spread of NPV savings, payback year, grid independence, and SoH.
 #
 # BREOS does NOT ship weather data. Provide your own multi-year historical CSV
@@ -30,5 +30,8 @@ weather_file = "weather/porto_historical_2005_2024_openmeteo.csv"  # provide you
 n_runs = 100             # number of Monte Carlo trajectories
 years_per_run = 20       # projection horizon; weather + demand resampled each year
 load_uncertainty = 0.10  # std-dev of the annual demand multiplier (Normal, mean 1.0)
+load_distribution = "normal" # backwards-compatible default; "uniform" uses 1 +/- load_uncertainty
 target_year = 2025       # calendar year the weather index is mapped to
 seed = 42                # fixed seed -> reproducible; remove for fresh randomness
+collect_yearly = false   # opt in to the per-run, per-year financial/degradation ledger
+n_procs = 1              # independent trajectory workers
