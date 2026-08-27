@@ -57,6 +57,9 @@ EXPECTED_DEFAULTS = {
     "pv_loss_overrides": None,
     "start_date": "2023-01-01",
     "horizon_profile": None,
+    "battery_temperature": "weather",
+    "battery_indoor_model": None,
+    "execution_backend": "python",
 }
 
 EXPECTED_CLI_FIELDS = [
@@ -99,6 +102,7 @@ EXPECTED_CLI_FIELDS = [
     "inverter_efficiency",
     "inverter_loading_ratio",
     "start_date",
+    "execution_backend",
 ]
 
 

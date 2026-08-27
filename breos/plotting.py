@@ -36,6 +36,19 @@ def _check_matplotlib():
         raise ImportError("matplotlib is required for plotting. Install with: uv add matplotlib")
 
 
+def _power_frame_to_energy_kwh(frame: pd.DataFrame) -> pd.DataFrame:
+    """Convert regularly sampled power columns in watts to interval energy."""
+    if not isinstance(frame.index, pd.DatetimeIndex):
+        raise ValueError("Power-to-energy plotting requires a DatetimeIndex")
+    if len(frame.index) < 2:
+        raise ValueError("Power-to-energy plotting requires at least two timestamps")
+    intervals = np.diff(frame.index.asi8)
+    if np.any(intervals <= 0) or not np.all(intervals == intervals[0]):
+        raise ValueError("Power-to-energy plotting requires a regular increasing time index")
+    hours_per_step = (frame.index[1] - frame.index[0]).total_seconds() / 3600.0
+    return frame * (hours_per_step / 1000.0)
+
+
 def set_presentation_mode(enabled: bool = True, scale: float = 1.5):
     """
     Enable presentation mode with larger fonts for all plots.
@@ -418,7 +431,7 @@ def monthly_graphs(results_df: pd.DataFrame, results_directory: str, columns: Op
     columns = [c for c in columns if c in df.columns]
 
     # Monthly aggregation
-    monthly = df[columns].resample("ME").sum() / 1000  # Convert to kWh
+    monthly = _power_frame_to_energy_kwh(df[columns]).resample("ME").sum()
 
     fig, ax = plt.subplots(figsize=(14, 6))
 
@@ -464,7 +477,7 @@ def yearly_graphs(results_df: pd.DataFrame, results_directory: str) -> None:
     columns = ["PV_Production", "Houseload", "Import_From_Grid", "Sell_To_Grid"]
     columns = [c for c in columns if c in df.columns]
 
-    yearly = df[columns].resample("Y").sum() / 1000
+    yearly = _power_frame_to_energy_kwh(df[columns]).resample("YE").sum()
 
     fig, ax = plt.subplots(figsize=(10, 6))
 
@@ -473,7 +486,13 @@ def yearly_graphs(results_df: pd.DataFrame, results_directory: str) -> None:
     ax.set_xticklabels([d.strftime("%Y") for d in yearly.index], rotation=0)
     ax.set_ylabel("Energy (kWh)")
     # ax.set_title('Yearly Energy Summary')
-    ax.legend(["PV Production", "Load", "Grid Import", "Grid Export"])
+    labels = {
+        "PV_Production": "PV Production",
+        "Houseload": "Load",
+        "Import_From_Grid": "Grid Import",
+        "Sell_To_Grid": "Grid Export",
+    }
+    ax.legend([labels[column] for column in columns])
     ax.grid(True, alpha=0.3, axis="y")
 
     plt.tight_layout()
@@ -575,7 +594,7 @@ def degradation_plots(degradation_df: pd.DataFrame, results_directory: str) -> N
     plt.savefig(f"{results_directory}/battery_degradation_soh.png", dpi=300)
     plt.close()
 
-    # 2. Degradation Components (Global / Total Lifespan and Per-Battery / Resetting)
+    # 2. Degradation components for the active battery inventory.
     def _plot_degradation_components(cycle_data, calendar_data, filename, ylabel):
         if cycle_data is None and calendar_data is None:
             return
@@ -601,15 +620,7 @@ def degradation_plots(degradation_df: pd.DataFrame, results_directory: str) -> N
         plt.savefig(os.path.join(results_directory, filename), dpi=300)
         plt.close()
 
-    # Generate Global (accumulated) plot
-    if "Global_Cycle_Degradation" in degradation_df.columns:
-        glob_cyc = degradation_df["Global_Cycle_Degradation"] * 100
-        glob_cal = degradation_df.get("Global_Calendar_Degradation", 0) * 100
-        _plot_degradation_components(
-            glob_cyc, glob_cal, "battery_degradation_components_global.png", "Global Cumulative Degradation (%)"
-        )
-
-    # Generate Per-Battery (resetting) plot
+    # These production columns reset when the battery is replaced.
     if "Cumulative_Cycle_Degradation" in degradation_df.columns:
         cum_cyc = degradation_df["Cumulative_Cycle_Degradation"] * 100
         cum_cal = degradation_df.get("Cumulative_Calendar_Degradation", 0) * 100
@@ -1315,7 +1326,7 @@ def plot_monthly_comparison(results_df: pd.DataFrame, results_directory: str, sc
     columns = ["PV_Production", "Houseload", "Import_From_Grid", "Sell_To_Grid"]
     columns = [c for c in columns if c in df.columns]
 
-    monthly = df[columns].resample("ME").sum() / 1000  # kWh
+    monthly = _power_frame_to_energy_kwh(df[columns]).resample("ME").sum()
     monthly["Month"] = monthly.index.strftime("%b")
 
     fig, ax = plt.subplots(figsize=(14, 7))
@@ -1388,15 +1399,22 @@ def plot_monthly_balance(results_df: pd.DataFrame, results_directory: str) -> No
 
     # Ensure Datetime index
     if "Datetime" in results_df.columns:
-        df = results_df.set_index("Datetime")
+        df = results_df.copy()
+        df["Datetime"] = pd.to_datetime(df["Datetime"])
+        df.set_index("Datetime", inplace=True)
     else:
         df = results_df.copy()
 
-    # Resample to monthly sums
-    monthly = df.resample("ME").sum()
+    energy_columns = ["PV_Production", "Houseload", "Import_From_Grid", "Sell_To_Grid"]
+    missing = [column for column in energy_columns if column not in df.columns]
+    if missing:
+        raise ValueError(f"Missing energy-balance column(s): {', '.join(missing)}")
+
+    # Convert power to interval energy before monthly aggregation.
+    monthly = _power_frame_to_energy_kwh(df[energy_columns]).resample("ME").sum()
 
     # Group by month (1-12) to aggregate multi-year data
-    monthly_avg = monthly.groupby(monthly.index.month).mean() / 1000.0  # Convert to kWh
+    monthly_avg = monthly.groupby(monthly.index.month).mean()
 
     # Ensure all 12 months present
     monthly_avg = monthly_avg.reindex(np.arange(1, 13), fill_value=0.0)
@@ -2229,10 +2247,10 @@ def plot_montecarlo_soh_traces(details_df: pd.DataFrame, results_directory: str,
     # ax.set_title('Detailed Degradation Traces (Sample Runs)')
     ax.grid(True, alpha=0.3)
     ax.set_ylim(0, 102)
-    ax.legend(loc="lower left")
 
     # Add reference lines
     ax.axhline(y=80, color="red", linestyle="--", alpha=0.5, label="EOL (80%)")
+    ax.legend(loc="lower left")
 
     plt.tight_layout()
     plt.savefig(f"{results_directory}/montecarlo_soh_traces{suffix}.png", dpi=300)
@@ -2427,10 +2445,10 @@ def plot_breakeven_comparison(
                 alpha=0.7,
             )
 
-    max_year = 20
+    max_year = 0
     for df, label, color in zip(cost_dfs, labels, colors):
         ax.plot(df["Year"], df["Cost_System_Cumulative_NPV"], color=color, label=label, linewidth=2)
-        max_year = int(df["Year"].max())
+        max_year = max(max_year, int(df["Year"].max()))
 
         # Break-even dotted line
         savings = df["Savings_Cumulative_NPV"].values

@@ -3,7 +3,7 @@
 Sources, loaders, and resampling utilities for solar irradiance and
 temperature time series.
 
-Local weather loading and PVGIS/NSRDB TMY helpers use the core install.
+Local weather loading and PVGIS TMY helpers use the core install.
 Open-Meteo historical fetching requires `breos[weather]`.
 
 ## Horizon provenance
@@ -80,7 +80,11 @@ filename such as `pvgis-sarah3`.
 
 Convert between hourly and 15-minute resolutions. The 15-minute path uses
 Makima interpolation on clearness indices rather than raw irradiance so
-sunrise / sunset transitions stay physically consistent.
+sunrise / sunset transitions stay physically consistent. Set
+`preserve_irradiance_energy=True` to renormalize each source hour's four GHI,
+DNI, and DHI values to the original hourly mean. This opt-in mode is useful
+when the source values represent hourly averages; the default keeps the
+established interpolation output.
 
 ```{eval-rst}
 .. autosummary::

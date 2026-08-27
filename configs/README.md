@@ -40,13 +40,22 @@ breos sweep --config configs/examples/sweep.toml --output sweep_results.csv
 ### Monte Carlo
 
 `breos montecarlo` runs the scenario as repeated multi-year projections,
-resampling a weather year and a demand multiplier for each projection year, and
-writes one row per run to `monte_carlo_results.csv`. Pass `--plots` to generate
+resampling a weather year and a demand multiplier for each projection year. It
+writes one row per run to `monte_carlo_results.csv` and a provenance JSON with
+the resolved settings and input/output hashes. Pass `--collect-yearly` to also
+write the per-run, per-year energy, degradation, and discounted-cost ledger
+needed for cost envelopes. Pass `--plots` to generate
 payback, NPV, grid-independence, final-SoH, and LCOE distributions in `plots/`.
 It needs a multi-year historical weather CSV referenced by the `[montecarlo]`
 section — BREOS does not bundle weather data. Drop your file in a local
 `weather/` directory (git-ignored) and see
 [`examples/montecarlo.toml`](examples/montecarlo.toml).
+
+The established demand multiplier is normal with `load_uncertainty` as its
+standard deviation. Set `load_distribution = "uniform"` to use
+`[1 - load_uncertainty, 1 + load_uncertainty]`. Weather-year bounds,
+energy-conserving hourly-to-15-minute interpolation, and worker count are also
+explicit `[montecarlo]` settings.
 
 The catalogue keys used in a config (`location`, `pv_module`, `cost_preset`,
 `emissions_country`, `load_profile`) come from the packaged presets. List the

@@ -5,8 +5,10 @@ from __future__ import annotations
 import argparse
 import copy
 import csv
+import hashlib
 import itertools
 import json
+import shlex
 import sys
 import tomllib
 from importlib.metadata import PackageNotFoundError, version
@@ -16,7 +18,7 @@ from typing import Any, Sequence
 from breos.app import App
 from breos.app_config import ALLOWED_CONFIG_KEYS, APP_CONFIG_FIELDS, COST_OVERRIDE_KEYS, resolve_app_config
 from breos.degradation import get_battery_model_profile, list_battery_models
-from breos.load_profiles import PROFILE_ALIASES, PROFILE_NAMES
+from breos.load_profiles import PROFILE_ALIASES, PROFILE_FILES, PROFILE_FILES_15MIN, PROFILE_NAMES
 from breos.pv_modules import MODULES
 from breos.resources import load_config_json
 from breos.solar import resolve_pvwatts_losses
@@ -27,6 +29,31 @@ def _package_version() -> str:
         return version("breos")
     except PackageNotFoundError:
         return "0.1.0"
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for block in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def _external_rlp_path(config: dict[str, Any]) -> Path | None:
+    """Resolve the external load-profile file selected by App semantics."""
+    directory = config.get("rlp_directory")
+    if directory is None:
+        return None
+    profile = PROFILE_ALIASES.get(str(config.get("load_profile", "1")).lower(), str(config.get("load_profile", "1")))
+    root = Path(directory)
+    candidates: list[Path] = []
+    if str(config.get("resolution", "h")) in {"15min", "15T"} and profile in PROFILE_FILES_15MIN:
+        candidates.append(root / PROFILE_FILES_15MIN[profile])
+    if profile in PROFILE_FILES:
+        candidates.append(root / PROFILE_FILES[profile])
+    if profile in PROFILE_FILES_15MIN:
+        candidates.append(root / PROFILE_FILES_15MIN[profile])
+    return next((path for path in candidates if path.is_file()), None)
 
 
 def _load_config(path: Path) -> dict[str, Any]:
@@ -459,6 +486,8 @@ def _montecarlo(args: argparse.Namespace) -> int:
 
     config = _load_config(args.config)
     mc_cfg = config.get("montecarlo", {}) if isinstance(config.get("montecarlo"), dict) else {}
+    if args.rlp_directory is not None:
+        config["rlp_directory"] = str(args.rlp_directory)
 
     weather_file = args.weather_file or mc_cfg.get("weather_file")
     if not weather_file:
@@ -472,16 +501,49 @@ def _montecarlo(args: argparse.Namespace) -> int:
         n_runs=int(_pick(args.runs, "n_runs", 100)),
         years_per_run=_pick(args.years, "years_per_run", None),
         load_uncertainty=float(_pick(args.load_uncertainty, "load_uncertainty", 0.10)),
+        load_distribution=str(_pick(args.load_distribution, "load_distribution", "normal")),
         target_year=int(_pick(args.target_year, "target_year", 2025)),
+        weather_start_year=_pick(args.weather_start_year, "weather_start_year", None),
+        weather_end_year=_pick(args.weather_end_year, "weather_end_year", None),
         seed=_pick(args.seed, "seed", None),
         min_load_scale=float(mc_cfg.get("min_load_scale", 0.0)),
         max_load_scale=mc_cfg.get("max_load_scale"),
+        preserve_irradiance_energy=bool(_pick(args.preserve_irradiance_energy, "preserve_irradiance_energy", False)),
+        collect_yearly=bool(_pick(args.collect_yearly, "collect_yearly", False)),
+        n_procs=int(_pick(args.n_procs, "n_procs", 1)),
+        execution_backend=str(_pick(args.execution_backend, "execution_backend", "python")),
     )
 
     result = run_montecarlo(config, settings)
 
     out_path = args.output or Path("monte_carlo_results.csv")
+    out_path.parent.mkdir(parents=True, exist_ok=True)
     result.runs.to_csv(out_path, index=False)
+    yearly_path = None
+    if result.yearly is not None:
+        yearly_path = args.yearly_output or out_path.with_name(f"{out_path.stem}_yearly.csv")
+        yearly_path.parent.mkdir(parents=True, exist_ok=True)
+        result.yearly.to_csv(yearly_path, index=False)
+
+    provenance_path = args.provenance_output or out_path.with_name(f"{out_path.stem}.provenance.json")
+    provenance = {
+        **result.provenance,
+        "command": shlex.join([sys.executable, *sys.argv]),
+        "config_file": str(args.config.resolve()),
+        "config_file_sha256": _sha256(args.config),
+        "weather_file": str(Path(settings.weather_file).resolve()),
+        "weather_file_sha256": _sha256(Path(settings.weather_file)),
+        "runs_csv": str(out_path),
+        "runs_csv_sha256": _sha256(out_path),
+        "yearly_csv": str(yearly_path) if yearly_path is not None else None,
+        "yearly_csv_sha256": _sha256(yearly_path) if yearly_path is not None else None,
+        "summary": result.summary,
+    }
+    rlp_path = _external_rlp_path(config)
+    provenance["external_rlp_file"] = str(rlp_path.resolve()) if rlp_path is not None else None
+    provenance["external_rlp_file_sha256"] = _sha256(rlp_path) if rlp_path is not None else None
+    provenance_path.parent.mkdir(parents=True, exist_ok=True)
+    provenance_path.write_text(json.dumps(provenance, indent=2, default=str) + "\n")
     plots_dir = None
     if args.plots:
         from breos.plotting import plot_montecarlo_simulation
@@ -495,6 +557,8 @@ def _montecarlo(args: argparse.Namespace) -> int:
             "summary": result.summary,
             "available_years": result.available_years,
             "results_csv": str(out_path),
+            "yearly_csv": str(yearly_path) if yearly_path is not None else None,
+            "provenance_json": str(provenance_path),
         }
         if plots_dir is not None:
             payload["plots_directory"] = str(plots_dir)
@@ -508,6 +572,9 @@ def _montecarlo(args: argparse.Namespace) -> int:
         f"({len(result.available_years)} available)"
     )
     print(f"Per-run results written to: {out_path}")
+    if yearly_path is not None:
+        print(f"Per-year trajectory results written to: {yearly_path}")
+    print(f"Provenance written to: {provenance_path}")
     print(f"{'metric':<28}{'mean':>12}{'p5':>12}{'p50':>12}{'p95':>12}")
     for metric, stats in result.summary.items():
         print(f"{metric:<28}{stats['mean']:>12.2f}{stats['p5']:>12.2f}{stats['p50']:>12.2f}{stats['p95']:>12.2f}")
@@ -572,16 +639,49 @@ def build_parser() -> argparse.ArgumentParser:
     )
     mc.add_argument("--config", type=Path, required=True, help="TOML or JSON config file with a [montecarlo] section.")
     mc.add_argument("--weather-file", help="Multi-year historical weather CSV (overrides [montecarlo].weather_file).")
+    mc.add_argument("--rlp-directory", type=Path, help="Directory containing a licensed external RLP CSV.")
     mc.add_argument("--runs", type=int, help="Number of Monte Carlo runs (trajectories).")
     mc.add_argument(
         "--years", type=int, dest="years", help="Projection years per run. Defaults to config projection_years."
     )
     mc.add_argument(
-        "--load-uncertainty", type=float, help="Std-dev of the annual demand multiplier (Normal, mean 1.0)."
+        "--load-uncertainty",
+        type=float,
+        help="Demand uncertainty: normal standard deviation or uniform half-width around 1.",
+    )
+    mc.add_argument(
+        "--load-distribution",
+        choices=("normal", "uniform"),
+        help="Demand multiplier distribution; uncertainty is sigma for normal or half-width for uniform.",
     )
     mc.add_argument("--target-year", type=int, help="Calendar year the weather index is mapped to.")
+    mc.add_argument("--weather-start-year", type=int, help="First historical weather year eligible for sampling.")
+    mc.add_argument("--weather-end-year", type=int, help="Last historical weather year eligible for sampling.")
     mc.add_argument("--seed", type=int, help="Base random seed for reproducible runs.")
+    mc.add_argument("--n-procs", type=int, help="Worker processes for independent trajectories (default: 1).")
+    mc.add_argument(
+        "--execution-backend",
+        choices=("python", "numba"),
+        help=(
+            "Within-day dispatch implementation. 'python' (default) is the numerical reference; "
+            "'numba' is the optional compiled backend and needs: pip install \"breos[fast]\"."
+        ),
+    )
     mc.add_argument("--output", type=Path, help="Per-run results CSV path (default: monte_carlo_results.csv).")
+    mc.add_argument("--yearly-output", type=Path, help="Optional per-year trajectory CSV path.")
+    mc.add_argument("--provenance-output", type=Path, help="Optional provenance JSON path.")
+    mc.add_argument(
+        "--collect-yearly",
+        action="store_true",
+        default=None,
+        help="Write one row per run and project year for cost-envelope analysis.",
+    )
+    mc.add_argument(
+        "--preserve-irradiance-energy",
+        action="store_true",
+        default=None,
+        help="Preserve each source hour's irradiance energy during 15-minute resampling.",
+    )
     mc.add_argument("--plots", action="store_true", help="Generate Monte Carlo distribution plots next to the CSV.")
     mc.add_argument("--json", action="store_true", help="Write machine-readable JSON summary to stdout.")
     mc.set_defaults(func=_montecarlo)

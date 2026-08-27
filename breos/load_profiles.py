@@ -251,9 +251,13 @@ def _load_profile_csv(csv_file: Path, profile_type: str) -> pd.DataFrame:
     """Load a profile CSV file and standardize column names."""
     try:
         if profile_type == "1":
-            # H0SLP demandlib format (hourly has 'Electrical Consumption [kW]', 15min has 'h0_dyn' in kW)
+            # H0SLP demandlib format (hourly is stored in W; 15min h0_dyn is kW).
             df = pd.read_csv(csv_file, index_col=0)
-            if "Electrical Consumption [kW]" in df.columns:
+            if "Electrical Consumption [W]" in df.columns:
+                pass
+            elif "Electrical Consumption [kW]" in df.columns:
+                # Backwards compatibility for user-supplied files with the
+                # historical bundled header.
                 df["Electrical Consumption [kW]"] *= 1000
                 df.rename(columns={"Electrical Consumption [kW]": "Electrical Consumption [W]"}, inplace=True)
             elif "h0_dyn" in df.columns:

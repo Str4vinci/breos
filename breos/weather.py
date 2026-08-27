@@ -298,6 +298,8 @@ def fetch_tmy_weather_data(
         timezone: Timezone string used to determine the location's whole-hour
             UTC offset (offset taken at Jan 1 of sample_year, i.e. standard
             time for northern-hemisphere locations). Auto-detected if None.
+            Fractional-hour offsets are rejected because pvlib's PVGIS TMY
+            row-roll interface accepts whole hours only.
         save_to_file: Whether to save the data to CSV
         use_horizon: Whether PVGIS should apply its terrain-horizon profile.
             Defaults to True, preserving the historical BREOS behavior.
@@ -309,7 +311,8 @@ def fetch_tmy_weather_data(
         correct UTC instant for its irradiance values.
 
     Raises:
-        ValueError: If sample_year is a leap year (TMY has 8760 hours)
+        ValueError: If sample_year is a leap year (TMY has 8760 hours), or
+            the selected timezone has a fractional-hour UTC offset.
     """
     roll_utc_offset = None
     if sample_year is not None:
@@ -325,7 +328,14 @@ def fetch_tmy_weather_data(
             timezone = tf.timezone_at(lat=latitude, lng=longitude)
 
         utc_offset = pd.Timestamp(f"{sample_year}-01-01", tz=timezone).utcoffset()
-        roll_utc_offset = round(utc_offset.total_seconds() / 3600)
+        offset_hours = utc_offset.total_seconds() / 3600
+        if not float(offset_hours).is_integer():
+            raise ValueError(
+                "PVGIS TMY coercion cannot safely roll a fractional-hour timezone "
+                f"({timezone}: UTC{offset_hours:+g}). Set sample_year=None to keep the "
+                "provider's UTC index, or supply separately prepared local weather."
+            )
+        roll_utc_offset = int(offset_hours)
 
     # PVGIS returns UTC-ordered rows. roll_utc_offset/coerce_year make pvlib
     # roll the data so the series starts at local midnight of sample_year
@@ -549,7 +559,11 @@ def resample_tmy_to_15min(tmy_data: pd.DataFrame, metadata: dict) -> pd.DataFram
 
             makima_k = Akima1DInterpolator(x_60, k_60, method="makima")
             k_15 = makima_k(x_15)
-            df_15[comp] = np.clip(k_15 * cs_15[comp], 0, None)
+            k_15[x_15 > x_60[-1]] = k_60[-1]
+            clear_sky = cs_15[comp].to_numpy(dtype=float)
+            reconstructed = k_15 * (clear_sky + epsilon)
+            reconstructed[clear_sky <= 0.0] = 0.0
+            df_15[comp] = np.clip(reconstructed, 0, None)
 
     # Interpolate non-irradiance columns directly with Makima
     met_cols = ["temp_air", "relative_humidity", "wind_speed"]
@@ -558,7 +572,9 @@ def resample_tmy_to_15min(tmy_data: pd.DataFrame, metadata: dict) -> pd.DataFram
         if col in df_60.columns:
             y_60 = df_60[col].values
             makima_generic = Akima1DInterpolator(x_60, y_60, method="makima")
-            df_15[col] = makima_generic(x_15)
+            interpolated = makima_generic(x_15)
+            interpolated[x_15 > x_60[-1]] = y_60[-1]
+            df_15[col] = interpolated
 
     # Physical clipping
     if "relative_humidity" in df_15:
@@ -578,6 +594,7 @@ def resample_to_15min(
     non_negative_cols: Optional[List[str]] = None,
     latitude: Optional[float] = None,
     longitude: Optional[float] = None,
+    preserve_irradiance_energy: bool = False,
 ) -> pd.DataFrame:
     """
     Resample hourly DataFrame to 15-minute intervals.
@@ -595,6 +612,9 @@ def resample_to_15min(
         non_negative_cols: Columns to clip at zero (auto-detected for solar/wind)
         latitude: Location latitude for clear-sky scaling (optional)
         longitude: Location longitude for clear-sky scaling (optional)
+        preserve_irradiance_energy: Renormalize each source hour's four
+            irradiance values so their mean equals the source-hour value.
+            This is opt-in because it changes established interpolation output.
 
     Returns:
         DataFrame with 15-minute intervals
@@ -664,7 +684,12 @@ def resample_to_15min(
 
                 interp_k = interp1d(x_original, k_hourly, kind=method, fill_value="extrapolate")
             k_15min = interp_k(x_target)
-            df_15min[col] = np.clip(k_15min * cs_15min[cs_comp].values, 0, None)
+            if method == "makima":
+                k_15min[x_target > x_original[-1]] = k_hourly[-1]
+            clear_sky = cs_15min[cs_comp].to_numpy(dtype=float)
+            reconstructed = k_15min * (clear_sky + epsilon)
+            reconstructed[clear_sky <= 0.0] = 0.0
+            df_15min[col] = np.clip(reconstructed, 0, None)
         else:
             # Direct interpolation for non-irradiance columns
             if method == "makima":
@@ -673,7 +698,10 @@ def resample_to_15min(
                 from scipy.interpolate import interp1d
 
                 interp = interp1d(x_original, y_original, kind=method, fill_value="extrapolate")
-            df_15min[col] = interp(x_target)
+            interpolated = interp(x_target)
+            if method == "makima":
+                interpolated[x_target > x_original[-1]] = y_original[-1]
+            df_15min[col] = interpolated
 
     # Auto-detect non-negative columns (solar/wind) — applies to columns not
     # already handled by clear-sky scaling
@@ -689,6 +717,26 @@ def resample_to_15min(
     for col in non_negative_cols:
         if col in df_15min.columns:
             df_15min[col] = np.clip(df_15min[col], 0, None)
+
+    if preserve_irradiance_energy and irrad_col_map:
+        if len(df_hourly.index) > 1:
+            intervals = df_hourly.index[1:] - df_hourly.index[:-1]
+            if not np.all(intervals == pd.Timedelta(hours=1)):
+                raise ValueError("preserve_irradiance_energy requires a regular hourly index")
+        expected_rows = len(df_hourly) * 4
+        if len(df_15min) != expected_rows:
+            raise ValueError("preserve_irradiance_energy requires four 15-minute rows per source hour")
+
+        for col in irrad_col_map:
+            if col not in df_15min.columns:
+                continue
+            hourly_values = pd.to_numeric(df_hourly[col], errors="coerce").fillna(0.0).to_numpy(dtype=float)
+            blocks = df_15min[col].to_numpy(dtype=float, copy=True).reshape(len(df_hourly), 4)
+            block_sums = blocks.sum(axis=1)
+            nonzero = block_sums > 1e-12
+            blocks[nonzero] *= (4.0 * hourly_values[nonzero] / block_sums[nonzero])[:, None]
+            blocks[~nonzero] = hourly_values[~nonzero, None]
+            df_15min[col] = np.clip(blocks.reshape(-1), 0.0, None)
 
     if weather_metadata is not None:
         df_15min.attrs[_WEATHER_METADATA_KEY] = weather_metadata
