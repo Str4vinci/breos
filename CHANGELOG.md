@@ -4,6 +4,8 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-08-28
+
 ### Added
 - Added a projected multi-objective optimizer that evaluates each candidate
   over a repeated-TMY project lifetime, carries battery degradation and
@@ -63,6 +65,16 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   within-year timestep indices at which the pack was replaced.
 
 ### Changed
+- `optimization.objective_basis` now defaults to `"projected"`. Multi-objective
+  sizing scores each candidate over the full project lifetime, with PV
+  degradation, propagated battery state, and actual replacement events, and
+  optimizes two objectives: lifetime grid independence and lifetime NPV. The
+  previous single-year basis remains available as
+  `optimization.objective_basis = "steady_state"`, which keeps the annual
+  three-objective search with ZEB ratio as a third objective. Runs that relied
+  on the implicit annual default now cost `years_projection` simulated years
+  per candidate and return a two-objective front.
+
 - Open-Meteo historical weather downloads now accept an explicit radiation
   time basis. Preceding-hour means remain the default, and callers can request
   the provider's instantaneous fields. Saved metadata records the selected
@@ -130,19 +142,7 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   names no BREOS simulation produces. The supported per-battery degradation
   plot continues to use the production cumulative-degradation columns.
 
-### Changed
-- `optimization.objective_basis` now defaults to `"projected"`. Multi-objective
-  sizing scores each candidate over the full project lifetime, with PV
-  degradation, propagated battery state, and actual replacement events, and
-  optimizes two objectives: lifetime grid independence and lifetime NPV. The
-  previous single-year basis remains available as
-  `optimization.objective_basis = "steady_state"`, which keeps the annual
-  three-objective search with ZEB ratio as a third objective. Runs that relied
-  on the implicit annual default now cost `years_projection` simulated years
-  per candidate and return a two-objective front.
-
 ### Removed
-
 - Removed the APIs deprecated for 0.6.0: the standalone
   `breos.numba_kernels` screening module, the documentation-derived Polysun
   comparison baseline, nine unverified plotting helpers, and 17 orphaned
