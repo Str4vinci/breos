@@ -1,0 +1,62 @@
+{
+  "breos_weather_metadata": {
+    "horizon": {
+      "profile": null,
+      "provider": "openmeteo",
+      "status": "unknown"
+    },
+    "provider_api_request": {
+      "azimuth": 0,
+      "end_date": "2024-12-31",
+      "endpoint": "https://archive-api.open-meteo.com/v1/archive",
+      "hourly": [
+        "temperature_2m",
+        "wind_speed_10m",
+        "shortwave_radiation",
+        "direct_radiation",
+        "diffuse_radiation",
+        "direct_normal_irradiance",
+        "global_tilted_irradiance",
+        "terrestrial_radiation"
+      ],
+      "latitude": 41.1579,
+      "longitude": -8.6291,
+      "start_date": "2005-01-01",
+      "tilt": 0,
+      "timezone": "GMT",
+      "wind_speed_unit": "ms"
+    },
+    "provider_hourly_fields": [
+      "temperature_2m",
+      "wind_speed_10m",
+      "shortwave_radiation",
+      "direct_radiation",
+      "diffuse_radiation",
+      "direct_normal_irradiance",
+      "global_tilted_irradiance",
+      "terrestrial_radiation"
+    ],
+    "radiation_time_basis": "interval_mean",
+    "raw_radiation_variables": [
+      "shortwave_radiation",
+      "direct_radiation",
+      "diffuse_radiation",
+      "direct_normal_irradiance",
+      "global_tilted_irradiance",
+      "terrestrial_radiation"
+    ],
+    "source": "OpenMeteo_historical",
+    "stored_radiation_variables": [
+      "shortwave_radiation",
+      "direct_radiation",
+      "diffuse_radiation",
+      "direct_normal_irradiance",
+      "global_tilted_irradiance",
+      "terrestrial_radiation"
+    ],
+    "timestamp_label_basis": "right",
+    "timestamp_timezone": "GMT"
+  },
+  "schema_version": 1,
+  "weather_sha256": "71c26d072c09faf16dab37230cfe8b2d430bd39344333227d00c7be4e76a188a"
+}

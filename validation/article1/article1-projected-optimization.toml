@@ -1,11 +1,19 @@
 name = "Forthcoming publication projected optimization reproduction"
 inverter_efficiency = 0.96
-# Best-available PV chain. Perez transposition with mid-interval solar
-# position, and Marion diffuse/ground IAM instead of beam-only -- the
+# PVGIS labels SARAH3 irradiance at HH:00 but reports the actual observation
+# offset in provider metadata. The pinned Porto offset is 0.1714 h. Use that
+# content-bound weather metadata rather than a resolution-dependent midpoint.
+# Use Perez
+# transposition and Marion diffuse/ground IAM instead of beam-only IAM; the
 # beam-only default is a documented 0.5-1.5% systematic overestimate.
 transposition_model = "perez"
-solar_position = "mid-interval"
+model_perez = "allsitescomposite1990"
+solar_position = "weather"
+iam_model = "ashrae"
 diffuse_iam = "marion"
+albedo = 0.25
+temperature_model = "faiman"
+bifacial_model = "none"
 
 [location]
 latitude = 41.1579

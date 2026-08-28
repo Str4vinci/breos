@@ -63,6 +63,14 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   within-year timestep indices at which the pack was replaced.
 
 ### Changed
+- Open-Meteo historical weather downloads now accept an explicit radiation
+  time basis. Preceding-hour means remain the default, and callers can request
+  the provider's instantaneous fields. Saved metadata records the selected
+  fields, label convention, and time basis.
+- Weather metadata can now drive solar-position timing. The forthcoming
+  publication applies the exact PVGIS SARAH3 irradiance offset and relabels
+  Open-Meteo's right-labelled preceding-hour means before energy-conserving
+  disaggregation.
 - Skip daily degradation work when battery capacity is zero, and keep the
   native degradation loop on NumPy arrays instead of rebuilding pandas objects
   for every simulated day. Battery simulations retain the same degradation

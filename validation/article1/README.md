@@ -59,7 +59,8 @@ control run explicitly; these overrides require a separate output directory.
 The publication workflow requires:
 
 - the licensed `EREDES_2025_BTN_1000kwh_15min.csv` household profile;
-- the historical Porto weather CSV used by the Monte Carlo and weather
+- the historical Porto Open-Meteo CSV with preceding-hour radiation means,
+  plus its content-bound timing sidecar, used by the Monte Carlo and weather
   comparison.
 
 `tools/preflight_article1_inputs.py` verifies the expected hashes and writes

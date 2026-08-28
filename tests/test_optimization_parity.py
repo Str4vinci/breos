@@ -294,7 +294,7 @@ def test_projected_design_forwards_pv_model_options(monkeypatch):
 
 def test_config_model_options_omits_absent_keys():
     """Absent keys stay absent so the PV model's own defaults still apply."""
-    from breos.optimization import _config_model_options
+    from breos.pv.model_options import configured_pv_model_kwargs
 
-    assert _config_model_options({}) == {}
-    assert _config_model_options({"albedo": 0.25}) == {"albedo": 0.25}
+    assert configured_pv_model_kwargs({}) == {}
+    assert configured_pv_model_kwargs({"albedo": 0.25}) == {"albedo": 0.25}

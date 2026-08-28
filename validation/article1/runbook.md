@@ -91,17 +91,27 @@ dev/article1-inputs/
 │   ├── EREDES_2025_BTN_1000kwh_15min.csv
 │   └── EREDES_2025_BTN_1000kwh_hourly.csv
 └── weather/
-    └── porto_historical_2005_2024_openmeteo.csv
+    ├── porto_historical_2005_2024_openmeteo.csv
+    └── porto_historical_2005_2024_openmeteo.csv.metadata.json
 ```
 
 If the input bundle is elsewhere, pass `--input-root`. To change the result
 directory, pass `--output`.
 
-The historical weather file contains 2005-2024. The configuration for the
-forthcoming publication samples 2005-2023 to match the archived workflow and
-the TMY source period.
-Update Section 2.7 of the manuscript, which currently says that Monte Carlo
-also samples 2024.
+The historical weather file contains 2005-2024 and uses Open-Meteo's
+preceding-hour radiation means with right-hand labels. Its metadata sidecar is
+required. BREOS moves each label to the interval start before energy-conserving
+15-minute disaggregation. The Article configuration samples 2005-2023 to
+match the archived workflow and the TMY source period. Update Section 2.7 of
+the manuscript, which currently says that Monte Carlo also samples 2024.
+
+The repository includes the timing sidecar for the pinned file. Copy it next
+to the CSV in the input bundle:
+
+```bash
+cp validation/article1/input-metadata/porto_historical_2005_2024_openmeteo.csv.metadata.json \
+  dev/article1-inputs/weather/
+```
 
 To fetch a new historical Porto file from Open-Meteo, install the weather
 extra and run:

@@ -36,6 +36,13 @@ def test_article1_montecarlo_config_pins_publication_method():
     }
     assert config["battery_temperature"] == "weather"
     assert config["battery_indoor_model"] == {"enabled": True}
+    assert config["solar_position"] == "weather"
+    assert config["model_perez"] == "allsitescomposite1990"
+    assert config["iam_model"] == "ashrae"
+    assert config["diffuse_iam"] == "marion"
+    assert config["albedo"] == 0.25
+    assert config["temperature_model"] == "faiman"
+    assert config["bifacial_model"] == "none"
     module = _pv_module_provenance(config)
     assert module["parameters"]["T_Pmax_pct"] == -0.34
     assert module["parameters"]["T_Voc_pct"] == -0.26

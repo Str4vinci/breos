@@ -31,6 +31,7 @@ from breos.pv.model_options import (
     DIFFUSE_IAM_METHODS,
     IAM_MODELS,
     PEREZ_MODELS,
+    PV_MODEL_CONFIG_KEYS,
     SOLAR_POSITION_METHODS,
     SURFACE_TYPES,
     TEMPERATURE_MODELS,
@@ -41,6 +42,7 @@ from breos.pv.model_options import (
 )
 from breos.pv.temperature import calculate_cell_temperature
 from breos.utils import get_hours_per_step
+from breos.weather import weather_representative_time_offset
 
 # Module-level cache for CEC model parameters (depends only on module specs, not weather)
 _cec_param_cache: Dict[tuple, tuple] = {}
@@ -66,20 +68,7 @@ DEFAULT_PVWATTS_LOSSES: Dict[str, float] = {
 # a misspelled option — but the wrappers that only forward the block use this
 # tuple instead of re-listing it, so adding an option is one edit here plus
 # one per signature rather than one per call site too.
-_MODEL_OPTION_KEYS = (
-    "transposition_model",
-    "albedo",
-    "surface_type",
-    "model_perez",
-    "solar_position",
-    "iam_model",
-    "diffuse_iam",
-    "temperature_model",
-    "bifacial_model",
-    "gcr",
-    "pvrow_height",
-    "pvrow_pitch",
-)
+_MODEL_OPTION_KEYS = PV_MODEL_CONFIG_KEYS
 
 # On the tracking entry points ``gcr`` is tracker row geometry with its own
 # argument slot next to ``backtrack`` and ``cross_axis_tilt``, so it is
@@ -257,9 +246,13 @@ def _prepare_solarpos_and_weather(
     method = resolve_solar_position_method(solar_position)
 
     times = pd.date_range(start=weather_data.index[0], end=weather_data.index[-1], freq=freq)
-    if method == "mid-interval":
-        half_step = pd.Timedelta(hours=get_hours_per_step(freq) / 2.0)
-        solarpos = location.get_solarposition(times=times + half_step)
+    if method in {"mid-interval", "weather"}:
+        offset = (
+            pd.Timedelta(hours=get_hours_per_step(freq) / 2.0)
+            if method == "mid-interval"
+            else weather_representative_time_offset(weather_data, freq)
+        )
+        solarpos = location.get_solarposition(times=times + offset)
         solarpos.index = times
     else:
         solarpos = location.get_solarposition(times=times)
