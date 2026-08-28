@@ -19,6 +19,7 @@ from breos.weather import (
     relabel_right_labeled_interval_means,
     resample_tmy_to_15min,
     resample_to_15min,
+    save_weather_csv,
     select_random_year_and_replace_datetime,
     weather_representative_time_offset,
 )
@@ -594,3 +595,14 @@ def test_preload_weather_by_year_accepts_15min_leap_year_after_dropping_feb_29(t
     assert dates.iloc[0] == pd.Timestamp("2025-01-01 00:00")
     assert dates.iloc[-1] == pd.Timestamp("2025-12-31 23:45")
     assert mapped_march_1 == source_march_1
+
+
+def test_save_weather_csv_writes_content_bound_metadata(tmp_path):
+    weather = _timed_weather(basis="interval_mean", label="right")
+    path = tmp_path / "weather.csv"
+
+    save_weather_csv(weather, path)
+
+    payload = json.loads(Path(f"{path}.metadata.json").read_text())
+    assert payload["weather_sha256"] == hashlib.sha256(path.read_bytes()).hexdigest()
+    assert payload["breos_weather_metadata"]["radiation_time_basis"] == "interval_mean"

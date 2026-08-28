@@ -58,8 +58,8 @@ def _json_default(value: Any) -> Any:
     raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
 
 
-def _save_weather_csv_with_metadata(weather: pd.DataFrame, filepath: str | os.PathLike[str]) -> None:
-    """Write a weather CSV and its versioned, content-bound provenance sidecar."""
+def save_weather_csv(weather: pd.DataFrame, filepath: str | os.PathLike[str]) -> None:
+    """Write a weather CSV and its content-bound provenance sidecar."""
     weather.to_csv(filepath)
     payload = {
         "schema_version": _WEATHER_METADATA_SCHEMA_VERSION,
@@ -476,7 +476,7 @@ def fetch_tmy_weather_data(
         except (KeyError, AttributeError):
             filename = f"weather/tmy_data_{sample_year if sample_year else 'original'}_{freq}.csv"
         os.makedirs(os.path.dirname(filename), exist_ok=True)
-        _save_weather_csv_with_metadata(tmy_data, filename)
+        save_weather_csv(tmy_data, filename)
         logger.info("Saved TMY data and provenance sidecar to %s", filename)
 
     return tmy_data, metadata
@@ -614,7 +614,7 @@ def fetch_weather_data(
             loc_slug = f"lat{latitude:.0f}_lon{longitude:.0f}"
         filename = os.path.join(output_dir, f"{loc_slug}_historical_{start_year}_{end_year}_openmeteo.csv")
         os.makedirs(output_dir, exist_ok=True)
-        _save_weather_csv_with_metadata(hourly_dataframe, filename)
+        save_weather_csv(hourly_dataframe, filename)
         logger.info("Saved weather data and provenance sidecar to %s", filename)
 
     return hourly_dataframe
