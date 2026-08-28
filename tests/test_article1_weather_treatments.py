@@ -1,4 +1,4 @@
-"""Regression coverage for the Article 1 radiation-treatment comparison."""
+"""Regression coverage for the forthcoming publication's radiation comparison."""
 
 import tomllib
 

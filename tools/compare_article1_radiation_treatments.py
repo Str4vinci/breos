@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compare right-labeled mean and instantaneous Article 1 radiation inputs."""
+"""Compare mean and instant radiation inputs for the forthcoming publication."""
 
 from __future__ import annotations
 
