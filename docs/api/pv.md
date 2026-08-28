@@ -32,8 +32,13 @@ model documentation and comparison data.
 
 A built-in dictionary of PV module electrical parameters lives in
 `breos.pv_modules.MODULES`. Use the accessor functions below rather than
-indexing the dict directly — `get_module` raises a clear error on
-unknown keys, and `list_modules` returns the available keys.
+indexing the dict directly. `get_module` raises a clear error on unknown keys,
+and `list_modules` returns the available keys.
+
+`add_module` registers hardware that BREOS does not ship. It writes to the
+in-memory catalogue and persists nothing, so call it once per process before
+you build an `App`. See
+[Use your own PV module](../getting-started/recipes.md) for a worked example.
 
 ```{eval-rst}
 .. autosummary::
@@ -44,6 +49,7 @@ unknown keys, and `list_modules` returns the available keys.
    breos.pv_modules.get_module
    breos.pv_modules.list_modules
    breos.pv_modules.get_module_info
+   breos.pv_modules.add_module
 ```
 
 ## Geometry

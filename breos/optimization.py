@@ -13,7 +13,6 @@ from typing import Any, Callable, Dict, Optional, Tuple
 import numpy as np
 import pandas as pd
 
-from breos._deprecations import deprecated
 from breos.battery import BatteryConfig, simulate_energy_balance
 from breos.economics import (
     calculate_costs,
@@ -178,76 +177,6 @@ def optimize_tilt(
     )
 
 
-@deprecated(name="breos.optimization.optimize_tilt_brent", replacement="breos.optimization.optimize_tilt")
-def optimize_tilt_brent(
-    weather_data: pd.DataFrame,
-    location,
-    n_modules: int,
-    model_options: Optional[Dict[str, Any]] = None,
-    pv_params: Optional[PVModuleParams] = None,
-    surface_azimuth: Optional[float] = None,
-    tilt_range: Tuple[float, float] = (0.0, 60.0),
-    freq: str = "h",
-    tol: float = 1.0,
-    verbose: bool = True,
-) -> OptimizationResult:
-    """
-    Optimize panel tilt using Brent's method (faster than grid search).
-
-    Args:
-        weather_data: Weather DataFrame
-        location: pvlib Location object
-        n_modules: Number of modules
-        pv_params: PV module parameters
-        surface_azimuth: Panel azimuth
-        tilt_range: Search bounds
-        freq: Time frequency
-        tol: Optimization tolerance
-        verbose: Print progress
-
-    Returns:
-        OptimizationResult with optimal tilt
-    """
-    from scipy.optimize import minimize_scalar
-
-    if surface_azimuth is None:
-        surface_azimuth = default_azimuth(location.latitude)
-
-    iterations = [0]
-
-    def objective(tilt):
-        iterations[0] += 1
-        try:
-            dc_power = calculate_pv_production_dc(
-                weather_data=weather_data,
-                location=location,
-                tilt=tilt,
-                surface_azimuth=surface_azimuth,
-                n_modules=n_modules,
-                pv_params=pv_params,
-                freq=freq,
-                verbose=False,
-                **(model_options or {}),
-            )
-            # Negative kWh (DC) for minimization
-            production = -dc_power.sum() * get_hours_per_step(freq) / 1000
-
-            if verbose:
-                print(f"  Iteration {iterations[0]}: tilt={tilt:.2f}°, production={-production:.1f} kWh")
-
-            return production
-        except Exception as e:
-            if verbose:
-                print(f"  Iteration {iterations[0]}: tilt={tilt:.2f}° failed - {e}")
-            return np.inf
-
-    result = minimize_scalar(objective, bounds=tilt_range, method="bounded", options={"xatol": tol})
-
-    return OptimizationResult(
-        optimal_value=result.x, objective_value=-result.fun, iterations=iterations[0], details={"scipy_result": result}
-    )
-
-
 def optimize_battery_size(
     pv_dc: pd.Series,
     houseload: pd.DataFrame,
@@ -344,41 +273,6 @@ def optimize_battery_size(
     )
 
 
-@deprecated(name="breos.optimization.size_for_zeb")
-def size_for_zeb(houseload: pd.DataFrame, ac_loss: pd.Series, current_n_modules: int) -> Dict[str, float]:
-    """
-    Calculate PV system size needed for Zero Energy Building (ZEB).
-
-    Args:
-        houseload: Annual load profile
-        ac_loss: Usable AC system production for the current system (legacy
-            parameter name retained for compatibility)
-        current_n_modules: Current number of modules
-
-    Returns:
-        Dict with ZEB sizing requirements
-    """
-    yearly_load = houseload.iloc[:, 0].sum()
-    yearly_pv = ac_loss.sum()
-
-    if yearly_pv <= 0:
-        return {"error": "No PV production", "modules_needed": float("inf")}
-
-    pv_per_module = yearly_pv / current_n_modules if current_n_modules > 0 else yearly_pv
-    modules_for_zeb = yearly_load / pv_per_module
-
-    ratio = yearly_pv / yearly_load
-
-    return {
-        "yearly_load_wh": yearly_load,
-        "yearly_pv_wh": yearly_pv,
-        "pv_to_load_ratio": ratio,
-        "is_zeb": ratio >= 1.0,
-        "modules_needed_for_zeb": int(np.ceil(modules_for_zeb)),
-        "additional_modules_needed": int(np.ceil(modules_for_zeb - current_n_modules)),
-    }
-
-
 # ==========================================
 # 2. HELPER FUNCTIONS
 # ==========================================
@@ -390,6 +284,12 @@ DEFAULT_INFLATION_ELEC = 0.02
 DEFAULT_DISCOUNT_RATE = 0.0
 
 DEFAULT_PROJECT_LIFESPAN = 20
+
+# Candidate scoring spans the project lifetime by default. A design is chosen
+# for how it performs over 20 years of PV degradation, battery fade, and
+# replacement, not for its first year, so the cheaper annual basis is the
+# opt-in screening mode rather than the default.
+DEFAULT_OBJECTIVE_BASIS = "projected"
 
 
 def _estimate_battery_replacement_treatment(
@@ -1197,7 +1097,7 @@ try:
             # Resolved once: candidate scoring is the hottest loop here.
             self.model_options = _config_model_options(config)
             self.opt_cfg = config.get("optimization", {}) or {}
-            self.objective_basis = str(self.opt_cfg.get("objective_basis", "steady_state")).strip().lower()
+            self.objective_basis = str(self.opt_cfg.get("objective_basis", DEFAULT_OBJECTIVE_BASIS)).strip().lower()
             if self.objective_basis not in {"steady_state", "projected"}:
                 raise ValueError("optimization.objective_basis must be 'steady_state' or 'projected'")
             self.projected_objectives = self.objective_basis == "projected"
@@ -1549,11 +1449,16 @@ def optimize_system_multi_objective(
     """Run NSGA-II multi-objective PV/battery sizing.
 
     This is the public wrapper around :class:`SolarDesignProblem`. It optimizes
-    module count, battery capacity, tilt, and optionally azimuth. Objectives are
-    By default, objectives are annual grid independence, NPV, and ZEB ratio.
-    With ``optimization.objective_basis = "projected"``, objectives are
-    lifetime grid independence and NPV; ZEB remains a diagnostic unless
+    module count, battery capacity, tilt, and optionally azimuth. By default
+    (``optimization.objective_basis = "projected"``) it optimizes two values:
+    projected lifetime grid independence and projected NPV, scoring every
+    candidate over the full project lifetime with PV degradation, battery state
+    propagation, and replacement events. ZEB remains a diagnostic unless
     ``constraints.enforce_zeb`` enables it as a feasibility constraint.
+    ``optimization.objective_basis = "steady_state"`` selects the cheaper
+    single-year screening basis: annual grid independence, NPV, and ZEB ratio
+    as a third objective, with battery replacement estimated from the
+    first-year SoH loss.
     Install ``breos[optimization]`` to provide the pymoo dependency.
 
     Args:
