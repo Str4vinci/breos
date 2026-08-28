@@ -10,7 +10,8 @@ already-resolved :class:`PVModelOptions` and do no validation of their own.
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
+from typing import Any, Mapping
 
 import numpy as np
 from pvlib.albedo import SURFACE_ALBEDOS
@@ -59,6 +60,9 @@ SURFACE_TYPES = tuple(sorted(SURFACE_ALBEDOS))
 # value labelled 07:00 that represents the 07:00-08:00 average pairs with the
 # 07:30 sun position. Use it when the weather source reports interval
 # averages (e.g. ERA5); keep the default for instantaneous samples.
+# ``weather`` reads the provider convention from content-bound weather
+# metadata. It supports instantaneous samples with an explicit provider
+# offset and interval means with either left or right labels.
 #
 # Applied in breos.solar._prepare_solarpos_and_weather, which shifts the
 # solar-position times before transposition, so it is resolved separately
@@ -66,6 +70,7 @@ SURFACE_TYPES = tuple(sorted(SURFACE_ALBEDOS))
 SOLAR_POSITION_METHODS = (
     "interval-start",
     "mid-interval",
+    "weather",
 )
 DEFAULT_SOLAR_POSITION = "interval-start"
 
@@ -119,6 +124,24 @@ TEMPERATURE_MODELS = (
     "noct-sam",
 )
 DEFAULT_TEMPERATURE_MODEL = "faiman"
+
+# The configuration keys accepted by every fixed-array PV production entry
+# point. Keep this list with the resolvers that define the options. Callers
+# must not maintain their own subsets.
+PV_MODEL_CONFIG_KEYS = (
+    "transposition_model",
+    "albedo",
+    "surface_type",
+    "model_perez",
+    "solar_position",
+    "iam_model",
+    "diffuse_iam",
+    "temperature_model",
+    "bifacial_model",
+    "gcr",
+    "pvrow_height",
+    "pvrow_pitch",
+)
 
 
 # --------------------------------------------------------------------------
@@ -373,3 +396,25 @@ def resolve_pv_model_options(
         pvrow_height=pvrow_height,
         pvrow_pitch=pvrow_pitch,
     )
+
+
+def configured_pv_model_kwargs(config: Mapping[str, Any]) -> dict[str, Any]:
+    """Return the PV model kwargs present in a resolved application config.
+
+    Missing keys stay missing so the public PV function owns its defaults.
+    This function is the single config-to-call mapping used by optimization
+    and manuscript reproduction tools.
+    """
+    return {key: config[key] for key in PV_MODEL_CONFIG_KEYS if key in config}
+
+
+def resolve_configured_pv_model_options(
+    config: Mapping[str, Any], *, bifaciality: float | None = None
+) -> dict[str, Any]:
+    """Resolve the effective PV model chain for runtime provenance."""
+    kwargs = configured_pv_model_kwargs(config)
+    solar_position = resolve_solar_position_method(kwargs.pop("solar_position", DEFAULT_SOLAR_POSITION))
+    resolved = resolve_pv_model_options(bifaciality=bifaciality, **kwargs)
+    effective = asdict(resolved)
+    effective["solar_position"] = solar_position
+    return effective

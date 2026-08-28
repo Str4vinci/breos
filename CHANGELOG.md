@@ -63,10 +63,13 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   within-year timestep indices at which the pack was replaced.
 
 ### Changed
-- Open-Meteo historical weather downloads now request instantaneous radiation
-  instead of preceding-hour means. The Article 1 configurations evaluate solar
-  position at the interval start, matching both the Open-Meteo timestamps and
-  the effectively instantaneous PVGIS SARAH3 TMY labels.
+- Open-Meteo historical weather downloads now accept an explicit radiation
+  time basis. Preceding-hour means remain the default, and callers can request
+  the provider's instantaneous fields. Saved metadata records the selected
+  fields, label convention, and time basis.
+- Weather metadata can now drive solar-position timing. Article 1 applies the
+  exact PVGIS SARAH3 irradiance offset and relabels Open-Meteo's right-labelled
+  preceding-hour means before energy-conserving disaggregation.
 - `remap_datetime_index_years` now shifts tz-naive and fixed-offset indices
   without a Python-level pass over the index, about 43x faster on a 15-minute
   year. Indices under a zone that can have offset transitions keep the

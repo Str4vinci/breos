@@ -53,7 +53,8 @@ instead of inheriting BREOS's ambient-weather default.
 The Article workflow requires:
 
 - the licensed `EREDES_2025_BTN_1000kwh_15min.csv` household profile;
-- the historical Porto weather CSV used by the Monte Carlo and weather
+- the historical Porto Open-Meteo CSV with preceding-hour radiation means,
+  plus its content-bound timing sidecar, used by the Monte Carlo and weather
   comparison; and
 - the monthly, weekly, and daily measured/PVsyst/Polysun comparison CSVs used
   for Figure 2.

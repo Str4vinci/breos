@@ -25,9 +25,19 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
 import breos  # noqa: E402
+from breos.pv.model_options import (  # noqa: E402
+    configured_pv_model_kwargs,
+    resolve_configured_pv_model_options,
+)
 from breos.pv_modules import get_module  # noqa: E402
 from breos.solar import calculate_pv_production_dc  # noqa: E402
-from breos.weather import preload_weather_by_year, resample_to_15min  # noqa: E402
+from breos.weather import (  # noqa: E402
+    preload_weather_by_year,
+    read_weather_csv,
+    resample_to_15min,
+    weather_metadata,
+    weather_representative_time_offset,
+)
 
 DEFAULT_CONFIG = PROJECT_ROOT / "validation/article1/article1-projected-optimization.toml"
 MONTH_NAMES = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
@@ -68,6 +78,11 @@ def _load_config(path: Path) -> tuple[dict, bytes]:
     return tomllib.loads(content.decode("utf-8")), content
 
 
+def _resolved_config_sha256(config: dict) -> str:
+    payload = json.dumps(config, sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
 def _dependency_versions() -> dict[str, str]:
     return {package: metadata.version(package) for package in ("numpy", "pandas", "pvlib", "scipy")}
 
@@ -101,15 +116,17 @@ def _load_tmy(
     weather_path = weather_override or PROJECT_ROOT / config["simulation"]["weather_file"]
     if not weather_path.is_file():
         raise FileNotFoundError(weather_path)
-    weather = pd.read_csv(weather_path, index_col=0)
-    weather.index = pd.to_datetime(weather.index, utc=True)
+    weather = read_weather_csv(weather_path)
     if resolution == "15min":
         location = config["location"]
+        resampling = str(config["simulation"].get("irradiance_resampling", "clear_sky"))
+        if resampling not in {"clear_sky", "clear_sky_energy_conserving"}:
+            raise ValueError(f"Unsupported simulation.irradiance_resampling: {resampling!r}")
         weather = resample_to_15min(
             weather,
             latitude=float(location["latitude"]),
             longitude=float(location["longitude"]),
-            preserve_irradiance_energy=True,
+            preserve_irradiance_energy=resampling == "clear_sky_energy_conserving",
         )
     return weather, weather_path
 
@@ -132,6 +149,7 @@ def _annual_module_production(
         pv_params=module,
         freq=resolution,
         verbose=False,
+        **configured_pv_model_kwargs(config),
     )
     hours_per_step = 0.25 if resolution == "15min" else 1.0
     return float(dc.sum() * hours_per_step / 1000.0)
@@ -191,6 +209,8 @@ def _orientation_source(args: argparse.Namespace, config: dict) -> dict:
         "success": bool(optimum.success),
         "message": str(optimum.message),
         "evaluations": int(optimum.nfev),
+        "iterations": int(optimum.nit),
+        "seed": int(args.seed),
     }
     optimum_path = args.output / "orientation_optimum.json"
     optimum_path.write_text(json.dumps(optimum_payload, indent=2) + "\n")
@@ -200,6 +220,16 @@ def _orientation_source(args: argparse.Namespace, config: dict) -> dict:
         "weather_file_sha256": _sha256(weather_path),
         "weather_uncompressed_sha256": _sha256(weather_path, decompress_gzip=weather_path.suffix == ".gz"),
         "resolution": args.resolution,
+        "input_resolution": "h",
+        "irradiance_resampling_method": (
+            config["simulation"].get("irradiance_resampling") if args.resolution == "15min" else "none"
+        ),
+        "weather_metadata": weather_metadata(weather),
+        "solar_position_offset_minutes": weather_representative_time_offset(weather, args.resolution).total_seconds()
+        / 60.0,
+        "effective_runtime_pv_model_options": resolve_configured_pv_model_options(
+            config, bifaciality=get_module(str(config["pv"]["module"])).bifaciality
+        ),
         "resolved_pv_module": pv_module,
         "grid": {
             "tilt_min_deg": args.tilt_min,
@@ -223,9 +253,12 @@ def _historical_weather(path: Path, start_year: int, end_year: int) -> dict[int,
     selected = {}
     for year, frame in available.items():
         if start_year <= year <= end_year:
+            metadata = weather_metadata(frame)
             weather = frame.rename(columns=HISTORICAL_COLUMN_MAP).copy()
             weather["date"] = pd.to_datetime(weather["date"], utc=True)
-            selected[year] = weather.set_index("date")
+            weather = weather.set_index("date")
+            weather.attrs["breos_weather_metadata"] = metadata
+            selected[year] = weather
     if not selected:
         raise ValueError(f"No complete historical weather years found from {start_year} through {end_year}")
     return selected
@@ -246,6 +279,7 @@ def _monthly_weather_rows(
             pv_params=module,
             freq="h",
             verbose=False,
+            **configured_pv_model_kwargs(config),
         )
         for month in range(1, 13):
             mask = weather.index.month == month
@@ -309,6 +343,19 @@ def _weather_comparison_source(args: argparse.Namespace, config: dict) -> dict:
         "tmy_weather_sha256": _sha256(tmy_path),
         "tmy_weather_uncompressed_sha256": _sha256(tmy_path, decompress_gzip=tmy_path.suffix == ".gz"),
         "historical_years": sorted(historical),
+        "input_resolution": "h",
+        "output_resolution": "h",
+        "irradiance_resampling_method": "none",
+        "historical_weather_metadata": weather_metadata(next(iter(historical.values()))),
+        "tmy_weather_metadata": weather_metadata(tmy),
+        "historical_solar_position_offset_minutes": weather_representative_time_offset(
+            next(iter(historical.values())), "h"
+        ).total_seconds()
+        / 60.0,
+        "tmy_solar_position_offset_minutes": weather_representative_time_offset(tmy, "h").total_seconds() / 60.0,
+        "effective_runtime_pv_model_options": resolve_configured_pv_model_options(
+            config, bifaciality=get_module(str(config["pv"]["module"])).bifaciality
+        ),
         "tilt_deg": args.tilt,
         "azimuth_deg": args.azimuth,
         "weather_monthly_by_year_csv": raw_path.name,
@@ -326,7 +373,7 @@ def main() -> int:
 
     orientation = subparsers.add_parser("orientation", help="Generate Figure 3 source data")
     orientation.add_argument("--weather-file", type=Path)
-    orientation.add_argument("--resolution", choices=("h", "15min"), default="h")
+    orientation.add_argument("--resolution", choices=("h", "15min"))
     orientation.add_argument("--tilt-min", type=float, default=10.0)
     orientation.add_argument("--tilt-max", type=float, default=90.0)
     orientation.add_argument("--tilt-step", type=float, default=5.0)
@@ -347,6 +394,10 @@ def main() -> int:
     args = parser.parse_args()
 
     config, config_bytes = _load_config(args.config)
+    if args.analysis == "orientation" and args.resolution is None:
+        args.resolution = str(config["simulation"]["resolution"])
+    if args.output.exists() and any(args.output.iterdir()):
+        raise FileExistsError(f"Refusing to overwrite non-empty result directory: {args.output}")
     args.output.mkdir(parents=True, exist_ok=True)
     analysis = (
         _orientation_source(args, config)
@@ -362,6 +413,8 @@ def main() -> int:
         "command": shlex.join([sys.executable, *sys.argv]),
         "config": str(args.config),
         "config_sha256": hashlib.sha256(config_bytes).hexdigest(),
+        "resolved_config": config,
+        "resolved_config_sha256": _resolved_config_sha256(config),
         "resolved_pv_module": _pv_module_provenance(config),
         **analysis,
     }

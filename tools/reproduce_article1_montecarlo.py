@@ -22,7 +22,9 @@ sys.path.insert(0, str(PROJECT_ROOT))
 import breos  # noqa: E402
 from breos.app_config import resolve_app_config  # noqa: E402
 from breos.montecarlo import MonteCarloSettings, run_montecarlo  # noqa: E402
+from breos.pv.model_options import resolve_configured_pv_model_options  # noqa: E402
 from breos.pv_modules import get_module  # noqa: E402
+from breos.weather import weather_file_metadata  # noqa: E402
 
 DEFAULT_CONFIG = PROJECT_ROOT / "validation/article1/article1-montecarlo.toml"
 
@@ -206,10 +208,16 @@ def main() -> int:
             "resolved_config_sha256": resolved_hash,
             "resolved_config": case_config,
             "resolved_pv_module": module_provenance,
+            "effective_runtime_pv_model_options": resolve_configured_pv_model_options(
+                case_config,
+                bifaciality=get_module(str(case_config["pv_module"])).bifaciality,
+            ),
             "settings": asdict(settings),
             "available_weather_years": result.available_years,
             "weather_file": str(weather_file),
             "weather_file_sha256": _sha256(weather_file),
+            "weather_metadata": weather_file_metadata(weather_file),
+            "effective_runtime_weather": result.provenance["runtime_weather"],
             "external_rlp_file": rlp_file.name,
             "external_rlp_sha256": _sha256(rlp_file),
             "runs_csv": runs_path.name,

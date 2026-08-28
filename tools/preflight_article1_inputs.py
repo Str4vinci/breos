@@ -18,8 +18,8 @@ RLP_HOURLY_FILENAME = "EREDES_2025_BTN_1000kwh_hourly.csv"
 EXPECTED_SHA256 = {
     "external_rlp_15min": "23becc5a7bfc927b1f7604156e0e4953dcc6bb65268ca947b38db3dc4f2b28bc",
     "external_rlp_hourly": "6ae15efed9b179537349ee1c1c5747065f18db876920e073e8670bf412d20d6b",
-    # Open-Meteo 2005-2024 snapshot fetched with instantaneous radiation.
-    "historical_weather": "0b2d42e6f3e2309aed3c0f65de461cab11b885173f6e45f0cd93adee29417650",
+    # Open-Meteo 2005-2024 snapshot with preceding-hour radiation means.
+    "historical_weather": "71c26d072c09faf16dab37230cfe8b2d430bd39344333227d00c7be4e76a188a",
     "bundled_tmy": "bf84e31b02ad9bf39f331a5ce8629b1ea8f80cd1597748e72a87a0fce56b4f15",
     # Corrected Esposende Figure 2 data from the provenance-clean rerun at
     # phd commit e1558f1678946c4a8d2146a4bd62ad38e068080d.
@@ -62,6 +62,31 @@ def _checked_input(label: str, path: Path) -> dict[str, str | int]:
     return {"path": str(resolved), "sha256": actual, "size_bytes": resolved.stat().st_size}
 
 
+def _checked_weather_metadata(
+    weather_path: Path, *, radiation_time_basis: str, timestamp_label_basis: str
+) -> dict[str, object]:
+    sidecar = Path(f"{weather_path}.metadata.json").resolve()
+    if not sidecar.is_file():
+        raise FileNotFoundError(f"weather metadata sidecar not found: {sidecar}")
+    payload = json.loads(sidecar.read_text())
+    weather_sha256 = _sha256(weather_path.resolve())
+    if payload.get("schema_version") != 1 or payload.get("weather_sha256") != weather_sha256:
+        raise ValueError(f"weather metadata sidecar is not bound to {weather_path.resolve()}")
+    metadata = payload.get("breos_weather_metadata")
+    if not isinstance(metadata, dict):
+        raise ValueError(f"weather metadata sidecar has no metadata object: {sidecar}")
+    if metadata.get("radiation_time_basis") != radiation_time_basis:
+        raise ValueError(f"weather metadata sidecar has the wrong radiation time basis: {sidecar}")
+    if metadata.get("timestamp_label_basis") != timestamp_label_basis:
+        raise ValueError(f"weather metadata sidecar has the wrong timestamp label basis: {sidecar}")
+    return {
+        "path": str(sidecar),
+        "sha256": _sha256(sidecar),
+        "weather_sha256": weather_sha256,
+        "metadata": metadata,
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--rlp-directory", type=Path, required=True)
@@ -93,6 +118,17 @@ def main() -> int:
         "validation_weekly": _checked_input("validation_weekly", validation / "weekly_results.csv"),
         "validation_daily": _checked_input("validation_daily", validation / "daily_results.csv"),
     }
+    inputs["historical_weather_metadata"] = _checked_weather_metadata(
+        args.historical_weather_file,
+        radiation_time_basis="interval_mean",
+        timestamp_label_basis="right",
+    )
+    bundled_tmy = PROJECT_ROOT / "validation/data/weather/porto_tmy_2005_2023_pvgis-sarah3.csv.gz"
+    inputs["bundled_tmy_metadata"] = _checked_weather_metadata(
+        bundled_tmy,
+        radiation_time_basis="instant",
+        timestamp_label_basis="provider_hour",
+    )
     if args.copy_validation_to is not None:
         args.copy_validation_to.mkdir(parents=True, exist_ok=True)
         for label, filename in (

@@ -31,8 +31,14 @@ from breos.execution import (  # noqa: E402
 )
 from breos.load_profiles import PROFILE_FILES, PROFILE_FILES_15MIN, load_profile  # noqa: E402
 from breos.optimization import evaluate_projected_design, optimize_system_multi_objective  # noqa: E402
+from breos.pv.model_options import resolve_configured_pv_model_options  # noqa: E402
 from breos.pv_modules import get_module  # noqa: E402
-from breos.weather import resample_to_15min  # noqa: E402
+from breos.weather import (  # noqa: E402
+    read_weather_csv,
+    resample_to_15min,
+    weather_metadata,
+    weather_representative_time_offset,
+)
 
 DEFAULT_CONFIG = PROJECT_ROOT / "validation/article1/article1-projected-optimization.toml"
 RESEARCH_COMMIT = "a0db6aae1e8d04a8260f51a34543b23bd82a1762"
@@ -140,8 +146,7 @@ def _load_inputs(
             f"Article 1 external RLP not found: {rlp_path}. Pass --rlp-directory with the licensed E-REDES file."
         )
 
-    weather = pd.read_csv(weather_path, index_col=0)
-    weather.index = pd.to_datetime(weather.index, utc=True)
+    weather = read_weather_csv(weather_path)
     if simulation["resolution"] == "15min":
         resampling = simulation.get("irradiance_resampling", "clear_sky")
         if resampling not in {"clear_sky", "clear_sky_energy_conserving"}:
@@ -399,6 +404,21 @@ def main() -> int:
             ).hexdigest(),
             "resolved_config": config,
             "resolved_pv_module": _pv_module_provenance(config),
+            "effective_runtime_pv_model_options": resolve_configured_pv_model_options(
+                config, bifaciality=get_module(str(config["pv"]["module"])).bifaciality
+            ),
+            "weather_metadata": weather_metadata(weather),
+            "solar_position_offset_minutes": weather_representative_time_offset(
+                weather, str(config["simulation"]["resolution"])
+            ).total_seconds()
+            / 60.0,
+            "input_weather_resolution": "h",
+            "output_weather_resolution": str(config["simulation"]["resolution"]),
+            "irradiance_resampling_method": (
+                str(config["simulation"].get("irradiance_resampling", "clear_sky"))
+                if str(config["simulation"]["resolution"]) == "15min"
+                else "none"
+            ),
             "weather": _display_path(weather_path),
             "weather_file_sha256": _sha256(weather_path),
             "weather_uncompressed_sha256": _sha256(

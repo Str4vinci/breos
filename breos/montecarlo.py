@@ -65,6 +65,8 @@ from breos.weather import (
     load_weather,
     preload_weather_by_year,
     resample_to_15min,
+    weather_metadata,
+    weather_representative_time_offset,
 )
 
 # Metrics summarized across runs (column in the per-run frame -> output label).
@@ -160,7 +162,11 @@ def _index_weather(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _precompute_year_caches(
-    cfg: dict[str, Any], resolved: ResolvedAppConfig, settings: MonteCarloSettings
+    cfg: dict[str, Any],
+    resolved: ResolvedAppConfig,
+    settings: MonteCarloSettings,
+    *,
+    runtime_weather: dict[str, Any] | None = None,
 ) -> tuple[dict[int, pd.Series], dict[int, pd.Series]]:
     """Build per-year undegraded DC production and battery temperature series."""
     freq = cfg["resolution"]
@@ -181,15 +187,35 @@ def _precompute_year_caches(
     temp_by_year: dict[int, pd.Series] = {}
     for year, df in weather_by_year.items():
         weather = _index_weather(df)
+        input_frequency = pd.infer_freq(weather.index[:10]) if len(weather.index) >= 3 else None
+        if input_frequency is None and len(weather.index) >= 2:
+            input_frequency = pd.tseries.frequencies.to_offset(weather.index[1] - weather.index[0]).freqstr
         if freq == "15min":
-            inferred = pd.infer_freq(weather.index[:10])
-            if inferred and "h" in inferred.lower() and "15" not in inferred:
+            if input_frequency and "h" in input_frequency.lower() and "15" not in input_frequency:
                 weather = resample_to_15min(
                     weather,
                     latitude=resolved.lat,
                     longitude=resolved.lon,
                     preserve_irradiance_energy=settings.preserve_irradiance_energy,
                 )
+        if runtime_weather is not None and not runtime_weather:
+            method = str(cfg.get("solar_position", "interval-start"))
+            if method == "weather":
+                offset = weather_representative_time_offset(weather, freq)
+            elif method == "mid-interval":
+                offset = pd.Timedelta(hours=get_hours_per_step(freq) / 2.0)
+            else:
+                offset = pd.Timedelta(0)
+            runtime_weather.update(
+                {
+                    "representative_source_year": int(year),
+                    "input_resolution": input_frequency,
+                    "output_resolution": str(freq),
+                    "solar_position_method": method,
+                    "solar_position_offset_minutes": offset.total_seconds() / 60.0,
+                    "metadata": weather_metadata(weather),
+                }
+            )
         dc_by_year[year] = build_dc_system_base(cfg, resolved, weather)
         temp_by_year[year] = build_battery_temperature_series(
             cfg["battery_temperature"],
@@ -734,7 +760,13 @@ def run_montecarlo(config: dict[str, Any], settings: MonteCarloSettings) -> Mont
     has_battery = _has_battery(cfg)
     backend_provenance = _resolve_backend(settings.execution_backend, pv_only=not has_battery)
 
-    dc_by_year, temp_by_year = _precompute_year_caches(cfg, resolved, settings)
+    runtime_weather: dict[str, Any] = {}
+    dc_by_year, temp_by_year = _precompute_year_caches(
+        cfg,
+        resolved,
+        settings,
+        runtime_weather=runtime_weather,
+    )
     available_years = np.array(sorted(dc_by_year.keys()))
 
     deps = _runtime_dependencies()
@@ -798,6 +830,7 @@ def run_montecarlo(config: dict[str, Any], settings: MonteCarloSettings) -> Mont
             "resolved_config": cfg,
             "settings": asdict(settings),
             "available_weather_years": [int(y) for y in available_years],
+            "runtime_weather": runtime_weather,
             "random_stream": "numpy.default_rng(base_seed + zero_based_run_index)",
             "execution": backend_provenance,
         },

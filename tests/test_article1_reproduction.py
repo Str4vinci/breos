@@ -7,6 +7,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
+from breos.weather import read_weather_csv, weather_representative_time_offset
 from tools.reproduce_article1 import (
     DEFAULT_CONFIG,
     _battery_cost_scenarios,
@@ -20,7 +21,7 @@ from tools.reproduce_article1 import (
 )
 
 EXPECTED_RLP_SHA256 = "23becc5a7bfc927b1f7604156e0e4953dcc6bb65268ca947b38db3dc4f2b28bc"
-EXPECTED_CONFIG_SHA256 = "1c8029f8d339d6bc67ab31229c4a1033e55a9ac299b9047d3a34d84b2c9b703f"
+EXPECTED_CONFIG_SHA256 = "e1e8faed56e9b7ac73a2aac3b0ae0f4958523b4c72a6468cf87319d38881c861"
 FIXED_REGRESSION_LABELS = {"C1", "C2", "C3", "C4"}
 
 
@@ -44,7 +45,13 @@ def test_article1_config_pins_projected_run_controls():
         "early_stop": {"ftol": 0.0025, "period": 10, "min_gen": 20, "n_skip": 0},
     }
     assert config["constraints"]["enforce_zeb"] is False
-    assert config["solar_position"] == "interval-start"
+    assert config["solar_position"] == "weather"
+    assert config["model_perez"] == "allsitescomposite1990"
+    assert config["iam_model"] == "ashrae"
+    assert config["diffuse_iam"] == "marion"
+    assert config["albedo"] == 0.25
+    assert config["temperature_model"] == "faiman"
+    assert config["bifacial_model"] == "none"
     assert config["pv"]["module_width_m"] == 1.134
     assert config["pv"]["module_length_m"] == 2.278
     assert config["battery"]["temperature"] == "weather"
@@ -63,6 +70,17 @@ def test_article1_config_pins_projected_run_controls():
     assert module["parameters"]["T_Pmax_pct"] == -0.34
     assert module["parameters"]["T_Voc_pct"] == -0.26
     assert module["area_m2"] == pytest.approx(1.134 * 2.278)
+
+
+def test_article1_tmy_preserves_the_exact_pvgis_irradiance_offset():
+    config = tomllib.loads(DEFAULT_CONFIG.read_text())
+    weather_path = DEFAULT_CONFIG.parents[2] / config["simulation"]["weather_file"]
+
+    weather = read_weather_csv(weather_path)
+
+    metadata = weather.attrs["breos_weather_metadata"]
+    assert metadata["irradiance_time_offset_hours"] == 0.1714
+    assert weather_representative_time_offset(weather, "h") == pd.Timedelta(hours=0.1714)
 
 
 def test_article1_battery_cost_scenarios_are_explicit_and_stable():

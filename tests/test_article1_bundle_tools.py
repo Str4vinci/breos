@@ -1,10 +1,11 @@
 """Static checks for Article 1 input and result-bundle verification tools."""
 
 import hashlib
+import json
 
 import pytest
 
-from tools.preflight_article1_inputs import EXPECTED_SHA256, _checked_input
+from tools.preflight_article1_inputs import EXPECTED_SHA256, _checked_input, _checked_weather_metadata
 from tools.verify_article1_bundle import (
     EXPECTED_EXTERNAL_VALIDATION_HASHES,
     EXPECTED_HISTORICAL_WEATHER_SHA256,
@@ -28,12 +29,12 @@ def test_article1_tools_pin_corrected_validation_inputs():
     } == CORRECTED_VALIDATION_HASHES
 
 
-ARTICLE1_INSTANT_WEATHER_SHA256 = "0b2d42e6f3e2309aed3c0f65de461cab11b885173f6e45f0cd93adee29417650"
+ARTICLE1_INTERVAL_MEAN_WEATHER_SHA256 = "71c26d072c09faf16dab37230cfe8b2d430bd39344333227d00c7be4e76a188a"
 
 
-def test_article1_tools_pin_instant_openmeteo_weather():
-    assert EXPECTED_SHA256["historical_weather"] == ARTICLE1_INSTANT_WEATHER_SHA256
-    assert EXPECTED_HISTORICAL_WEATHER_SHA256 == ARTICLE1_INSTANT_WEATHER_SHA256
+def test_article1_tools_pin_interval_mean_openmeteo_weather():
+    assert EXPECTED_SHA256["historical_weather"] == ARTICLE1_INTERVAL_MEAN_WEATHER_SHA256
+    assert EXPECTED_HISTORICAL_WEATHER_SHA256 == ARTICLE1_INTERVAL_MEAN_WEATHER_SHA256
 
 
 def test_article1_input_preflight_accepts_only_pinned_hash(tmp_path, monkeypatch):
@@ -57,12 +58,82 @@ def test_article1_input_preflight_rejects_hash_drift(tmp_path, monkeypatch):
         _checked_input("test_input", path)
 
 
+def test_article1_preflight_requires_canonical_weather_timing(tmp_path):
+    weather = tmp_path / "weather.csv"
+    weather.write_text("date,shortwave_radiation\n2025-01-01,0\n")
+    digest = hashlib.sha256(weather.read_bytes()).hexdigest()
+    sidecar = tmp_path / "weather.csv.metadata.json"
+    sidecar.write_text(
+        "{\n"
+        '  "schema_version": 1,\n'
+        f'  "weather_sha256": "{digest}",\n'
+        '  "breos_weather_metadata": {\n'
+        '    "radiation_time_basis": "instant",\n'
+        '    "timestamp_label_basis": "instant"\n'
+        "  }\n"
+        "}\n"
+    )
+
+    with pytest.raises(ValueError, match="wrong radiation time basis"):
+        _checked_weather_metadata(
+            weather,
+            radiation_time_basis="interval_mean",
+            timestamp_label_basis="right",
+        )
+
+
 def test_article1_bundle_audit_reports_missing_files(tmp_path):
     audit = BundleAudit(tmp_path)
 
     audit.require_file("missing.csv")
 
     assert audit.errors == ["missing file: missing.csv"]
+
+
+def test_article1_bundle_checks_actual_montecarlo_weather_treatment(tmp_path):
+    config = {}
+    payload = {
+        "breos_source": {"commit": "abc", "tracked_worktree_dirty": False},
+        "resolved_pv_module": {
+            "parameters": {"T_Pmax_pct": -0.34, "T_Voc_pct": -0.26},
+            "width_m": 1.134,
+            "length_m": 2.278,
+        },
+        "resolved_config": config,
+        "resolved_config_sha256": hashlib.sha256(
+            json.dumps(config, sort_keys=True, separators=(",", ":"), default=str).encode()
+        ).hexdigest(),
+        "effective_runtime_pv_model_options": {
+            "transposition_model": "perez",
+            "model_perez": "allsitescomposite1990",
+            "iam_model": "ashrae",
+            "diffuse_iam": "marion",
+            "albedo": 0.25,
+            "temperature_model": "faiman",
+            "bifacial_model": "none",
+            "solar_position": "weather",
+        },
+        "weather_metadata": {
+            "radiation_time_basis": "interval_mean",
+            "provider_hourly_fields": ["shortwave_radiation"],
+            "timestamp_timezone": "GMT",
+            "timestamp_label_basis": "right",
+        },
+        "effective_runtime_weather": {
+            "solar_position_offset_minutes": 7.5,
+            "metadata": {
+                "radiation_time_basis": "interval_mean",
+                "timestamp_label_basis": "left",
+                "source_timestamp_label_basis": "right",
+                "preserve_irradiance_energy": True,
+            },
+        },
+    }
+    audit = BundleAudit(tmp_path)
+
+    audit._verify_common_provenance(payload, "monte-carlo-v1/c1/provenance.json")
+
+    assert audit.errors == []
 
 
 def test_article1_bundle_accepts_exact_monte_carlo_yearly_schema(tmp_path):

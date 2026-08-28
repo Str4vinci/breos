@@ -128,6 +128,66 @@ def test_montecarlo_precompute_threads_explicit_battery_temperature(monkeypatch)
     assert captured == {"temp_config": 25.0, "indoor_model": {"enabled": False}}
 
 
+def test_montecarlo_records_transformed_runtime_weather_timing(monkeypatch):
+    frame = pd.DataFrame(
+        {
+            "date": pd.date_range("2025-01-01", periods=2, freq="h"),
+            "temperature_2m": [10.0, 11.0],
+        }
+    )
+    frame.attrs["breos_weather_metadata"] = {
+        "radiation_time_basis": "interval_mean",
+        "timestamp_label_basis": "left",
+        "source_timestamp_label_basis": "right",
+    }
+    index = pd.date_range("2025-01-01", periods=8, freq="15min", tz="UTC")
+
+    monkeypatch.setattr(montecarlo_module, "preload_weather_by_year", lambda *args, **kwargs: {2021: frame})
+
+    def resample(weather, **kwargs):
+        result = pd.DataFrame({"temperature_2m": 10.0}, index=index)
+        result.attrs = weather.attrs.copy()
+        result.attrs["breos_weather_metadata"].update(
+            {
+                "input_resolution": "h",
+                "output_resolution": "15min",
+                "irradiance_resampling_method": "makima_clear_sky",
+                "preserve_irradiance_energy": True,
+            }
+        )
+        return result
+
+    monkeypatch.setattr(montecarlo_module, "resample_to_15min", resample)
+    monkeypatch.setattr(
+        montecarlo_module,
+        "build_dc_system_base",
+        lambda *args, **kwargs: pd.Series(0.0, index=index),
+    )
+    monkeypatch.setattr(
+        montecarlo_module,
+        "build_battery_temperature_series",
+        lambda *args, **kwargs: pd.Series(25.0, index=index),
+    )
+    runtime_weather = {}
+
+    _precompute_year_caches(
+        {
+            "resolution": "15min",
+            "solar_position": "weather",
+            "battery_temperature": 25.0,
+            "battery_indoor_model": {"enabled": False},
+        },
+        type("Resolved", (), {"lat": 41.0, "lon": -8.0})(),
+        MonteCarloSettings(weather_file="unused.csv", preserve_irradiance_energy=True),
+        runtime_weather=runtime_weather,
+    )
+
+    assert runtime_weather["solar_position_offset_minutes"] == 7.5
+    assert runtime_weather["metadata"]["timestamp_label_basis"] == "left"
+    assert runtime_weather["metadata"]["source_timestamp_label_basis"] == "right"
+    assert runtime_weather["metadata"]["preserve_irradiance_energy"] is True
+
+
 def test_run_montecarlo_shapes_and_years(tmp_path):
     weather = _write_multiyear_weather(tmp_path / "multi.csv")
     settings = MonteCarloSettings(weather_file=str(weather), n_runs=3, years_per_run=2, seed=1)

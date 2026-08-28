@@ -24,11 +24,12 @@ from pvlib.location import Location
 from scipy.interpolate import Akima1DInterpolator
 
 from breos._deprecations import deprecated
-from breos.utils import safe_path_slug
+from breos.utils import get_hours_per_step, safe_path_slug
 
 logger = logging.getLogger(__name__)
 
-_WEATHER_METADATA_KEY = "breos_weather_metadata"
+WEATHER_METADATA_KEY = "breos_weather_metadata"
+_WEATHER_METADATA_KEY = WEATHER_METADATA_KEY
 _WEATHER_METADATA_SCHEMA_VERSION = 1
 
 
@@ -97,6 +98,90 @@ def _load_weather_metadata_sidecar(filepath: str | os.PathLike[str], weather_sha
         logger.warning("Ignoring weather metadata sidecar without a metadata object: %s", sidecar_path)
         return None
     return metadata
+
+
+def weather_metadata(weather: pd.DataFrame) -> dict[str, Any]:
+    """Return a detached copy of BREOS weather provenance."""
+    metadata = weather.attrs.get(WEATHER_METADATA_KEY, {})
+    return deepcopy(metadata) if isinstance(metadata, dict) else {}
+
+
+def weather_file_metadata(filepath: str | os.PathLike[str]) -> dict[str, Any]:
+    """Return validated sidecar metadata plus the bound file path and digest."""
+    path = os.path.abspath(os.fspath(filepath))
+    sha256 = _weather_file_sha256(path)
+    metadata = deepcopy(_load_weather_metadata_sidecar(path, sha256) or {})
+    if metadata.get("source") == "OpenMeteo_historical" and metadata.get("radiation_time_basis") == "instant":
+        metadata.setdefault("timestamp_label_basis", "instant")
+        metadata.setdefault("timestamp_timezone", "GMT")
+        metadata.setdefault("irradiance_time_offset_hours", 0.0)
+    metadata.update({"path": path, "sha256": sha256})
+    return metadata
+
+
+def read_weather_csv(filepath: str | os.PathLike[str], *, index_col: int | str = 0, utc: bool = True) -> pd.DataFrame:
+    """Read a weather CSV and restore its content-bound metadata sidecar."""
+    path = os.path.abspath(os.fspath(filepath))
+    frame = pd.read_csv(path, index_col=index_col)
+    frame.index = pd.to_datetime(frame.index, utc=utc)
+    frame.attrs[WEATHER_METADATA_KEY] = weather_file_metadata(path)
+    return frame
+
+
+def _representative_time_offset(
+    metadata: dict[str, Any], step: pd.Timedelta, *, require_metadata: bool
+) -> pd.Timedelta:
+    basis = metadata.get("radiation_time_basis")
+    if basis == "instant":
+        return pd.Timedelta(hours=float(metadata.get("irradiance_time_offset_hours", 0.0)))
+    if basis == "interval_mean":
+        label_basis = metadata.get("timestamp_label_basis")
+        if label_basis == "left":
+            return step / 2
+        if label_basis == "right":
+            return -step / 2
+        raise ValueError("interval-mean weather metadata requires timestamp_label_basis='left' or 'right'")
+    if require_metadata:
+        raise ValueError(
+            "solar_position='weather' requires radiation_time_basis metadata ('instant' or 'interval_mean')"
+        )
+    return pd.Timedelta(0)
+
+
+def weather_representative_time_offset(weather: pd.DataFrame, freq: str) -> pd.Timedelta:
+    """Return the solar-position offset implied by the weather timestamps."""
+    step = pd.Timedelta(hours=get_hours_per_step(freq))
+    return _representative_time_offset(weather_metadata(weather), step, require_metadata=True)
+
+
+def relabel_right_labeled_interval_means(weather: pd.DataFrame) -> pd.DataFrame:
+    """Move right-labeled interval means to the start of their source interval."""
+    metadata = weather_metadata(weather)
+    if metadata.get("radiation_time_basis") != "interval_mean" or metadata.get("timestamp_label_basis") != "right":
+        return weather.copy()
+    if len(weather.index) < 2:
+        raise ValueError("right-labeled interval weather needs at least two timestamps")
+    intervals = weather.index[1:] - weather.index[:-1]
+    step = intervals[0]
+    if not np.all(intervals == step):
+        raise ValueError("right-labeled interval weather requires a regular index")
+    relabeled = weather.copy()
+    relabeled.index = relabeled.index - step
+    metadata["timestamp_label_basis"] = "left"
+    metadata["source_timestamp_label_basis"] = "right"
+    metadata["timestamp_relabel_shift_seconds"] = -float(step.total_seconds())
+    relabeled.attrs[WEATHER_METADATA_KEY] = metadata
+    return relabeled
+
+
+def _relabel_weather_date_column(
+    weather: pd.DataFrame, metadata: dict[str, Any]
+) -> tuple[pd.DataFrame, dict[str, Any]]:
+    """Apply interval-label metadata to a frame whose timestamps are in ``date``."""
+    indexed = weather.set_index("date")
+    indexed.attrs[WEATHER_METADATA_KEY] = deepcopy(metadata)
+    relabeled = relabel_right_labeled_interval_means(indexed)
+    return relabeled.reset_index(), weather_metadata(relabeled)
 
 
 # Optional imports for API calls
@@ -354,9 +439,16 @@ def fetch_tmy_weather_data(
         coerce_year=sample_year,
     )
 
+    irradiance_offset = float(metadata.get("inputs", {}).get("location", {}).get("irradiance_time_offset", 0.0))
     tmy_data.attrs[_WEATHER_METADATA_KEY] = {
         "source": "PVGIS_TMY",
         "api_metadata": metadata,
+        "raw_radiation_variables": ["G(h)", "Gb(n)", "Gd(h)"],
+        "stored_radiation_variables": ["ghi", "dni", "dhi"],
+        "radiation_time_basis": "instant",
+        "timestamp_label_basis": "provider_hour",
+        "timestamp_timezone": "UTC",
+        "irradiance_time_offset_hours": irradiance_offset,
         "horizon": {
             "status": "applied" if use_horizon else "not_applied",
             "provider": "pvgis",
@@ -402,13 +494,14 @@ def fetch_weather_data(
     save_to_file: bool = True,
     location_name: Optional[str] = None,
     output_dir: str = "weather",
+    radiation_time_basis: str = "interval_mean",
 ) -> pd.DataFrame:
     """
     Fetch historical weather data from the Open-Meteo API.
 
-    Radiation values use Open-Meteo's instantaneous fields at each timestamp.
-    The returned columns keep BREOS's established names without the provider's
-    ``_instant`` suffix.
+    Radiation can use Open-Meteo's preceding-hour means (the backwards-
+    compatible default) or its instantaneous fields. The returned columns keep
+    BREOS's established names in either case.
 
     Args:
         latitude: Latitude of the location
@@ -421,6 +514,8 @@ def fetch_weather_data(
         save_to_file: Whether to save the data to CSV
         location_name: Location name for filename (e.g., 'porto'). If None, uses lat/lon.
         output_dir: Directory to save the file (default: 'weather')
+        radiation_time_basis: ``"interval_mean"`` for the provider's
+            preceding-hour means or ``"instant"`` for values at the label.
 
     Returns:
         DataFrame with weather variables
@@ -439,15 +534,18 @@ def fetch_weather_data(
             "Install with: uv add openmeteo-requests requests-cache"
         )
 
+    if radiation_time_basis not in {"interval_mean", "instant"}:
+        raise ValueError("radiation_time_basis must be 'interval_mean' or 'instant'")
+    radiation_suffix = "_instant" if radiation_time_basis == "instant" else ""
     hourly_fields = (
         ("temperature_2m", "temperature_2m"),
         ("wind_speed_10m", "wind_speed_10m"),
-        ("shortwave_radiation_instant", "shortwave_radiation"),
-        ("direct_radiation_instant", "direct_radiation"),
-        ("diffuse_radiation_instant", "diffuse_radiation"),
-        ("direct_normal_irradiance_instant", "direct_normal_irradiance"),
-        ("global_tilted_irradiance_instant", "global_tilted_irradiance"),
-        ("terrestrial_radiation_instant", "terrestrial_radiation"),
+        (f"shortwave_radiation{radiation_suffix}", "shortwave_radiation"),
+        (f"direct_radiation{radiation_suffix}", "direct_radiation"),
+        (f"diffuse_radiation{radiation_suffix}", "diffuse_radiation"),
+        (f"direct_normal_irradiance{radiation_suffix}", "direct_normal_irradiance"),
+        (f"global_tilted_irradiance{radiation_suffix}", "global_tilted_irradiance"),
+        (f"terrestrial_radiation{radiation_suffix}", "terrestrial_radiation"),
     )
 
     # Setup the Open-Meteo API client with cache and retry. Cache expires
@@ -495,7 +593,12 @@ def fetch_weather_data(
     hourly_dataframe.attrs[_WEATHER_METADATA_KEY] = {
         "source": "OpenMeteo_historical",
         "provider_hourly_fields": [provider_name for provider_name, _output_name in hourly_fields],
-        "radiation_time_basis": "instant",
+        "raw_radiation_variables": [provider_name for provider_name, _output_name in hourly_fields[2:]],
+        "stored_radiation_variables": [output_name for _provider_name, output_name in hourly_fields[2:]],
+        "radiation_time_basis": radiation_time_basis,
+        "timestamp_label_basis": "instant" if radiation_time_basis == "instant" else "right",
+        "timestamp_timezone": "GMT",
+        "irradiance_time_offset_hours": 0.0 if radiation_time_basis == "instant" else None,
         "horizon": _unknown_horizon_metadata("openmeteo"),
     }
 
@@ -531,7 +634,7 @@ def resample_tmy_to_15min(tmy_data: pd.DataFrame, metadata: dict) -> pd.DataFram
     Returns:
         DataFrame with 15-minute intervals
     """
-    weather_metadata = deepcopy(tmy_data.attrs.get(_WEATHER_METADATA_KEY))
+    weather_provenance = deepcopy(tmy_data.attrs.get(_WEATHER_METADATA_KEY))
 
     # Location setup for clear-sky model
     loc = metadata["inputs"]["location"]
@@ -550,15 +653,19 @@ def resample_tmy_to_15min(tmy_data: pd.DataFrame, metadata: dict) -> pd.DataFram
     # Clear-sky scaling for irradiance (GHI, DNI, DHI)
     # Interpolate clearness indices instead of raw irradiance to preserve
     # sunrise/sunset transitions and physical consistency between components.
-    cs_60 = site.get_clearsky(df_60.index)
-    cs_15 = site.get_clearsky(index_15)
+    source_offset = _representative_time_offset(weather_metadata(df_60), pd.Timedelta(hours=1), require_metadata=False)
+    target_offset = _representative_time_offset(
+        weather_metadata(df_60), pd.Timedelta(minutes=15), require_metadata=False
+    )
+    cs_60 = site.get_clearsky(df_60.index + source_offset)
+    cs_15 = site.get_clearsky(index_15 + target_offset)
 
     df_15 = pd.DataFrame(index=index_15)
     epsilon = 5.0  # Increased epsilon to avoid divide-by-zero spikes near dawn/dusk
 
     for comp in ("ghi", "dni", "dhi"):
         if comp in df_60.columns:
-            k_60 = (df_60[comp] / (cs_60[comp] + epsilon)).values
+            k_60 = df_60[comp].to_numpy(dtype=float) / (cs_60[comp].to_numpy(dtype=float) + epsilon)
             # Clip K multiplier to physically reasonable max (e.g. 1.5x) to avoid massive dawn/dusk spikes
             k_60 = np.clip(k_60, 0, 1.5)
 
@@ -587,8 +694,16 @@ def resample_tmy_to_15min(tmy_data: pd.DataFrame, metadata: dict) -> pd.DataFram
     if "wind_speed" in df_15:
         df_15["wind_speed"] = np.clip(df_15["wind_speed"], 0, None)
 
-    if weather_metadata is not None:
-        df_15.attrs[_WEATHER_METADATA_KEY] = weather_metadata
+    if weather_provenance is not None:
+        weather_provenance.update(
+            {
+                "input_resolution": "h",
+                "output_resolution": "15min",
+                "irradiance_resampling_method": "makima_clear_sky",
+                "preserve_irradiance_energy": False,
+            }
+        )
+        df_15.attrs[_WEATHER_METADATA_KEY] = weather_provenance
 
     return df_15
 
@@ -627,6 +742,7 @@ def resample_to_15min(
     Raises:
         ValueError: If DataFrame doesn't have DatetimeIndex
     """
+    df_hourly = relabel_right_labeled_interval_means(df_hourly)
     weather_metadata = deepcopy(df_hourly.attrs.get(_WEATHER_METADATA_KEY))
 
     # Ensure DatetimeIndex
@@ -665,8 +781,14 @@ def resample_to_15min(
 
     if use_clearsky:
         site = Location(latitude, longitude)
-        cs_hourly = site.get_clearsky(df_hourly.index)
-        cs_15min = site.get_clearsky(target_index)
+        source_offset = _representative_time_offset(
+            weather_metadata or {}, pd.Timedelta(hours=1), require_metadata=False
+        )
+        target_offset = _representative_time_offset(
+            weather_metadata or {}, pd.Timedelta(minutes=15), require_metadata=False
+        )
+        cs_hourly = site.get_clearsky(df_hourly.index + source_offset)
+        cs_15min = site.get_clearsky(target_index + target_offset)
 
     # Get numeric columns only
     numeric_df = df_hourly.select_dtypes(include=[np.number])
@@ -744,6 +866,10 @@ def resample_to_15min(
             df_15min[col] = np.clip(blocks.reshape(-1), 0.0, None)
 
     if weather_metadata is not None:
+        weather_metadata["input_resolution"] = "h"
+        weather_metadata["output_resolution"] = "15min"
+        weather_metadata["irradiance_resampling_method"] = method
+        weather_metadata["preserve_irradiance_energy"] = preserve_irradiance_energy
         df_15min.attrs[_WEATHER_METADATA_KEY] = weather_metadata
 
     return df_15min
@@ -907,6 +1033,9 @@ def select_random_year_and_replace_datetime(csv_file_path: str, target_year: int
         except ValueError:
             df["date"] = pd.to_datetime(df["date"], format="mixed")
 
+    metadata = weather_file_metadata(csv_file_path)
+    df, metadata = _relabel_weather_date_column(df, metadata)
+
     # Extract year and get available years
     df["year"] = df["date"].dt.year
     available_years = df["year"].unique()
@@ -934,6 +1063,7 @@ def select_random_year_and_replace_datetime(csv_file_path: str, target_year: int
     # Cleanup
     selected_year_data = selected_year_data.drop("year", axis=1)
     selected_year_data = selected_year_data.reset_index(drop=True)
+    selected_year_data.attrs[WEATHER_METADATA_KEY] = metadata
 
     return selected_year_data, selected_year
 
@@ -957,6 +1087,9 @@ def preload_weather_by_year(
         Dict mapping original year → DataFrame with target-year dates, indexed by 'date'
     """
     df = pd.read_csv(csv_file_path)
+    path = os.path.abspath(csv_file_path)
+    persisted_metadata = weather_file_metadata(path)
+    sha256 = persisted_metadata["sha256"]
 
     # Parse datetime once
     try:
@@ -967,6 +1100,7 @@ def preload_weather_by_year(
         except ValueError:
             df["date"] = pd.to_datetime(df["date"], format="mixed")
 
+    df, persisted_metadata = _relabel_weather_date_column(df, persisted_metadata)
     df["year"] = df["date"].dt.year
     available_years = df["year"].unique()
 
@@ -987,6 +1121,10 @@ def preload_weather_by_year(
         year_diff = target_year - yr
         yr_data["date"] = yr_data["date"] + pd.DateOffset(years=year_diff)
         yr_data = yr_data.drop("year", axis=1).reset_index(drop=True)
+        yr_data.attrs[WEATHER_METADATA_KEY] = deepcopy(persisted_metadata) | {
+            "path": path,
+            "sha256": sha256,
+        }
         result[int(yr)] = yr_data
 
     return result

@@ -100,7 +100,9 @@ dev/article1-inputs/
 If the input bundle is elsewhere, pass `--input-root`. To change the result
 directory, pass `--output`.
 
-The historical weather file contains 2005-2024. The Article configuration
-samples 2005-2023 to match the archived workflow and the TMY source period.
-Update Section 2.7 of the manuscript, which currently says that Monte Carlo
-also samples 2024.
+The historical weather file contains 2005-2024 and uses Open-Meteo's
+preceding-hour radiation means with right-hand labels. Its metadata sidecar is
+required. BREOS moves each label to the interval start before energy-conserving
+15-minute disaggregation. The Article configuration samples 2005-2023 to
+match the archived workflow and the TMY source period. Update Section 2.7 of
+the manuscript, which currently says that Monte Carlo also samples 2024.

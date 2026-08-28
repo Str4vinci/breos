@@ -25,7 +25,7 @@ EXPECTED_ARTIFACT_HASH_KEYS = {
     "yearly_csv_sha256",
     "yearly_summary_sha256",
 }
-EXPECTED_HISTORICAL_WEATHER_SHA256 = "0b2d42e6f3e2309aed3c0f65de461cab11b885173f6e45f0cd93adee29417650"
+EXPECTED_HISTORICAL_WEATHER_SHA256 = "71c26d072c09faf16dab37230cfe8b2d430bd39344333227d00c7be4e76a188a"
 EXPECTED_EXTERNAL_VALIDATION_HASHES = {
     # Corrected Esposende Figure 2 data from the provenance-clean rerun at
     # phd commit e1558f1678946c4a8d2146a4bd62ad38e068080d.
@@ -207,6 +207,68 @@ class BundleAudit:
         )
         self.expect(module.get("width_m") == 1.134, f"unexpected PV width in {relative}")
         self.expect(module.get("length_m") == 2.278, f"unexpected PV length in {relative}")
+        resolved_config = payload.get("resolved_config")
+        self.expect(isinstance(resolved_config, dict), f"missing resolved config: {relative}")
+        if isinstance(resolved_config, dict):
+            rendered = json.dumps(resolved_config, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
+            expected_hash = hashlib.sha256(rendered).hexdigest()
+            self.expect(
+                payload.get("resolved_config_sha256") == expected_hash,
+                f"resolved config hash is not recomputable: {relative}",
+            )
+        pv_options = payload.get("effective_runtime_pv_model_options", {})
+        self.expect(pv_options.get("transposition_model") == "perez", f"wrong PV transposition: {relative}")
+        self.expect(
+            pv_options.get("model_perez") == "allsitescomposite1990",
+            f"wrong Perez coefficient set: {relative}",
+        )
+        self.expect(pv_options.get("iam_model") == "ashrae", f"wrong beam IAM: {relative}")
+        self.expect(pv_options.get("diffuse_iam") == "marion", f"wrong diffuse IAM: {relative}")
+        self.expect(pv_options.get("albedo") == 0.25, f"wrong albedo: {relative}")
+        self.expect(pv_options.get("temperature_model") == "faiman", f"wrong temperature model: {relative}")
+        self.expect(pv_options.get("bifacial_model") == "none", f"wrong bifacial model: {relative}")
+        self.expect(pv_options.get("solar_position") == "weather", f"wrong solar-position treatment: {relative}")
+
+        metadata_blocks = []
+        if relative.startswith("weather-comparison/"):
+            metadata_blocks.extend(
+                [
+                    payload.get("historical_weather_metadata", {}),
+                    payload.get("tmy_weather_metadata", {}),
+                ]
+            )
+        else:
+            metadata_blocks.append(payload.get("weather_metadata", {}))
+        for metadata in metadata_blocks:
+            self.expect(
+                metadata.get("radiation_time_basis") in {"instant", "interval_mean"},
+                f"missing radiation time basis: {relative}",
+            )
+            raw_variables = metadata.get("raw_radiation_variables") or metadata.get("provider_hourly_fields")
+            self.expect(bool(raw_variables), f"missing raw radiation variables: {relative}")
+            self.expect(bool(metadata.get("timestamp_timezone")), f"missing weather timezone: {relative}")
+            self.expect(bool(metadata.get("timestamp_label_basis")), f"missing timestamp label basis: {relative}")
+
+        if relative.startswith("monte-carlo-v1/"):
+            runtime = payload.get("effective_runtime_weather", {})
+            runtime_metadata = runtime.get("metadata", {})
+            self.expect(
+                runtime_metadata.get("radiation_time_basis") == "interval_mean",
+                f"Monte Carlo did not run interval-mean weather: {relative}",
+            )
+            self.expect(
+                runtime_metadata.get("timestamp_label_basis") == "left"
+                and runtime_metadata.get("source_timestamp_label_basis") == "right",
+                f"Monte Carlo did not relabel right-labelled weather: {relative}",
+            )
+            self.expect(
+                runtime_metadata.get("preserve_irradiance_energy") is True,
+                f"Monte Carlo did not preserve hourly irradiance energy: {relative}",
+            )
+            self.expect(
+                runtime.get("solar_position_offset_minutes") == 7.5,
+                f"Monte Carlo used the wrong 15-minute solar offset: {relative}",
+            )
 
     def _verify_artifact_hashes(self, directory: Path, value: Any, report_name: str) -> None:
         if isinstance(value, dict):
@@ -393,6 +455,15 @@ class BundleAudit:
             self.expect(
                 manifest_inputs.get("historical_weather", {}).get("sha256") == EXPECTED_HISTORICAL_WEATHER_SHA256,
                 "unexpected historical-weather input hash",
+            )
+            historical_metadata = manifest_inputs.get("historical_weather_metadata", {}).get("metadata", {})
+            self.expect(
+                historical_metadata.get("radiation_time_basis") == "interval_mean",
+                "historical weather is not an interval mean",
+            )
+            self.expect(
+                historical_metadata.get("timestamp_label_basis") == "right",
+                "historical weather is not right-labelled",
             )
         for filename, expected in EXPECTED_EXTERNAL_VALIDATION_HASHES.items():
             path = self.require_file(f"external-validation/{filename}")

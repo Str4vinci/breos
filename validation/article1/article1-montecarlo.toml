@@ -23,13 +23,20 @@ battery_max_charge_power_w = 4352.0
 battery_temperature = "weather"
 battery_indoor_model = { enabled = true }
 inverter_efficiency = 0.96
-# The pinned Open-Meteo weather snapshot uses the provider's instantaneous
-# radiation fields, so evaluate solar position at the interval start. Use
+# The pinned Open-Meteo weather snapshot uses preceding-hour radiation means
+# labelled at the interval end. Weather loading moves each label back one hour;
+# the metadata-driven solar position then evaluates each 15-minute interval at
+# its centre. Hourly irradiance energy is preserved during disaggregation. Use
 # Perez transposition and Marion diffuse/ground IAM instead of beam-only IAM;
 # the beam-only default is a documented 0.5-1.5% systematic overestimate.
 transposition_model = "perez"
-solar_position = "interval-start"
+model_perez = "allsitescomposite1990"
+solar_position = "weather"
+iam_model = "ashrae"
 diffuse_iam = "marion"
+albedo = 0.25
+temperature_model = "faiman"
+bifacial_model = "none"
 inverter_loading_ratio = 1.25
 inflation_rate = 0.02
 sell_price_inflation = 0.0
