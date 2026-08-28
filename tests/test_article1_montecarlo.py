@@ -1,4 +1,4 @@
-"""Static coverage for the Article 1 Monte Carlo workflow."""
+"""Static coverage for the forthcoming publication Monte Carlo workflow."""
 
 import argparse
 import tomllib
@@ -8,7 +8,7 @@ from breos.app_config import resolve_app_config
 from tools.reproduce_article1_montecarlo import DEFAULT_CONFIG, _pv_module_provenance, _selected_cases, _settings
 
 
-def test_article1_montecarlo_config_pins_manuscript_method():
+def test_article1_montecarlo_config_pins_publication_method():
     config = tomllib.loads(DEFAULT_CONFIG.read_text())
 
     assert config["montecarlo"] == {
@@ -62,7 +62,7 @@ def test_article1_montecarlo_cli_overrides_only_runtime_size_workers_and_backend
     assert settings.collect_yearly is True
     assert settings.weather_start_year == 2005
     assert settings.weather_end_year == 2023
-    # The manuscript configuration pins no backend, so the reference path is
+    # The publication configuration pins no backend, so the reference path is
     # what runs unless a run explicitly asks for the accelerator.
     assert settings.execution_backend == "python"
 

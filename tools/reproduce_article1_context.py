@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate Article 1 orientation and weather-comparison source tables."""
+"""Generate source tables for the forthcoming publication."""
 
 from __future__ import annotations
 

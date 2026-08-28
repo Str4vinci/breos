@@ -7,8 +7,8 @@ was built for: a parity test over a scenario that never exercises the
 discharge cap passes without testing anything, so every branch case asserts
 its own precondition before asserting parity.
 
-The Article cases do not cover this ground. C1 and C5 have no battery, and
-none of C1-C5 sets a discharge power limit.
+The forthcoming publication study cases do not cover this ground. C1 and C5
+have no battery, and none of C1-C5 sets a discharge power limit.
 """
 
 from __future__ import annotations
@@ -240,9 +240,9 @@ def test_summary_path_matches_detailed_path_under_numba():
 # the loop, so the kernel cannot tell a remapped series from raw weather or a
 # pinned constant. What it does branch on is the *value*: lfp_capacity_factor
 # switches at 25 C and at 0 C and saturates at 0.5, and compute_cell_temperature
-# runs every step. These cases pin bit-identity across the range the Article
-# methodology can produce, including the constant 25 C the manuscript pins and
-# the clamp boundaries of the indoor model.
+# runs every step. These cases pin bit-identity across the range that the
+# forthcoming publication study can produce, including the fixed 25 C control
+# and the clamp boundaries of the indoor model.
 
 
 def _temperature_variant(values: np.ndarray):
@@ -270,8 +270,8 @@ def _hours(index) -> np.ndarray:
 @pytest.mark.parametrize(
     "label, make",
     [
-        # The manuscript methodology pins a constant 25 C; the harness's
-        # varying series never exercises it.
+        # The fixed-temperature control pins 25 C; the harness's varying series
+        # never exercises it.
         ("pinned 25C", lambda idx: np.full(len(idx), 25.0)),
         ("exactly at 0C boundary", lambda idx: np.full(len(idx), 0.0)),
         ("just below 25C boundary", lambda idx: np.full(len(idx), np.nextafter(25.0, 0.0))),

@@ -1,7 +1,11 @@
-# Article 1 reproduction
+# Forthcoming publication reproduction
 
 This directory contains the versioned configurations and documentation needed
-to generate the Article 1 source-data bundle with BREOS 0.6.
+to generate the forthcoming publication's source-data bundle with BREOS 0.6.
+
+The repository keeps `article1` in internal file names and paths for
+compatibility. User-facing descriptions call this work the forthcoming
+publication.
 
 Run the complete deterministic workflow with:
 
@@ -40,32 +44,40 @@ uniform annual load multiplier from 0.95 through 1.05.
 
 Both configurations identify the Suntech module and explicitly record its
 1.134 m by 2.278 m frame. Every generated provenance file records the complete
-resolved module parameters, including the Article power temperature
+resolved module parameters, including the module power temperature
 coefficient of -0.34 %/°C and open-circuit-voltage coefficient of
 -0.26 %/°C (-0.13 V/°C after rounding at the rated Voc).
 
-Both configurations also pin battery temperature to 25 °C and disable the
-optional indoor-temperature transform. This matches the manuscript assumption
-instead of inheriting BREOS's ambient-weather default.
+Both primary configurations derive battery ambient temperature from weather
+and apply the indoor-temperature model for a residential installation. The
+`no-thermal-model/` configuration pair retains the manuscript's fixed 25 °C
+assumption as a control. Use `--calendar-model` and `--config-dir` to select a
+control run explicitly; these overrides require a separate output directory.
 
 ## External inputs
 
-The Article workflow requires:
+The publication workflow requires:
 
 - the licensed `EREDES_2025_BTN_1000kwh_15min.csv` household profile;
 - the historical Porto Open-Meteo CSV with preceding-hour radiation means,
   plus its content-bound timing sidecar, used by the Monte Carlo and weather
-  comparison; and
-- the monthly, weekly, and daily measured/PVsyst/Polysun comparison CSVs used
-  for Figure 2.
+  comparison.
 
 `tools/preflight_article1_inputs.py` verifies the expected hashes and writes
 an input manifest without running a simulation. The bundled Porto TMY is
 version controlled under `validation/data/weather/`.
 
+The public workflow excludes the measured, PVsyst, and Polysun comparison data
+used for the forthcoming publication's Esposende validation. Those files remain
+in the private study archive and are not required, copied, or verified by BREOS.
+A reader can still run the BREOS side with the `esposende` location preset and
+locally supplied load and weather inputs. Open-Meteo can supply historical
+weather, but an exact comparison requires the same saved weather file and load
+profile used by the study.
+
 ## Archived comparison
 
-The private research reference is the Article run under
+The private research reference is the forthcoming publication study run under
 `dev/results/a1_july_rerun_tuxedo/moo_15min` at research revision
 `a0db6aae1e8d04a8260f51a34543b23bd82a1762`. Its Pareto CSV SHA-256 is
 `5334b8361b2395f0f19b6839005964b0b61bfa0d00e5ea28f450cfb4cde0a225`.
@@ -75,9 +87,11 @@ preserve: it repeated hourly irradiance in the nominal 15-minute run, used a
 flat unbounded inverter conversion, and sampled normally distributed load in
 the Monte Carlo despite the manuscript specifying a bounded uniform
 distribution. The archived deterministic and Monte Carlo configurations also
-omitted the manuscript's fixed 25 °C battery temperature and therefore used
-the ambient-weather default. BREOS 0.6 also fixes the final-hour Makima
-interpolation gap. These changes can alter every reported result.
+used raw ambient weather for battery temperature. BREOS 0.6 instead models the
+indoor thermal environment in the primary configurations and retains the
+manuscript's fixed 25 °C assumption as a separate control. BREOS 0.6 also fixes
+the final-hour Makima interpolation gap. These changes can alter every reported
+result.
 
 Earlier corrected values generated before the final module and resampling
 fixes are intentionally not reported here. Add final numerical comparisons

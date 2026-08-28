@@ -1,4 +1,4 @@
-"""Static checks for Article 1 input and result-bundle verification tools."""
+"""Static checks for forthcoming publication input and result-bundle verification tools."""
 
 import hashlib
 import json
@@ -7,27 +7,11 @@ import pytest
 
 from tools.preflight_article1_inputs import EXPECTED_SHA256, _checked_input, _checked_weather_metadata
 from tools.verify_article1_bundle import (
-    EXPECTED_EXTERNAL_VALIDATION_HASHES,
     EXPECTED_HISTORICAL_WEATHER_SHA256,
     EXPECTED_MONTE_CARLO_YEARLY_COLUMNS,
     BundleAudit,
     _report_source_paths,
 )
-
-CORRECTED_VALIDATION_HASHES = {
-    "monthly_results.csv": "84cce17d0d51f745895bad1c98adaa3ef3d6043f076ce69d3a1dff5ecad1a526",
-    "weekly_results.csv": "07c7b938da100ca5c5301a0ef9a6988b24616f7e5eb5166408056afd1ae79375",
-    "daily_results.csv": "2d12468d982f0b59af875841bf8b9e228a532c6f4060070245907bbb243b0bfb",
-}
-
-
-def test_article1_tools_pin_corrected_validation_inputs():
-    assert EXPECTED_EXTERNAL_VALIDATION_HASHES == CORRECTED_VALIDATION_HASHES
-    assert {
-        filename: EXPECTED_SHA256[f"validation_{filename.removesuffix('_results.csv')}"]
-        for filename in CORRECTED_VALIDATION_HASHES
-    } == CORRECTED_VALIDATION_HASHES
-
 
 ARTICLE1_INTERVAL_MEAN_WEATHER_SHA256 = "71c26d072c09faf16dab37230cfe8b2d430bd39344333227d00c7be4e76a188a"
 
@@ -134,6 +118,14 @@ def test_article1_bundle_checks_actual_montecarlo_weather_treatment(tmp_path):
     audit._verify_common_provenance(payload, "monte-carlo-v1/c1/provenance.json")
 
     assert audit.errors == []
+
+
+def test_article1_bundle_does_not_require_private_comparison_files(tmp_path):
+    audit = BundleAudit(tmp_path)
+
+    audit.verify()
+
+    assert not any("external-validation" in error for error in audit.errors)
 
 
 def test_article1_bundle_accepts_exact_monte_carlo_yearly_schema(tmp_path):

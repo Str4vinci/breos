@@ -1,8 +1,8 @@
 """Compare a Monte Carlo case directory against a preserved reference bundle.
 
-The release gate for the compiled backend: an accelerated re-run of an Article
-case must reproduce the preserved Python-path bundle exactly, field by field,
-trajectory by trajectory.
+The release gate for the compiled backend checks that an accelerated
+forthcoming publication study case reproduces the preserved Python-path bundle
+exactly, field by field and trajectory by trajectory.
 
 Both ``runs.csv`` and ``yearly.csv`` are compared. Floats are compared bitwise
 via their raw bytes rather than with a tolerance, because the claim being gated
@@ -59,10 +59,10 @@ def _identical(left: pd.Series, right: pd.Series) -> tuple[bool, str]:
 def _execution_block(directory: Path) -> dict | None:
     """Return a case's execution provenance, wherever the writer put it.
 
-    App and Monte Carlo write it at the top level; the Article reproduction
-    tool nests it under ``montecarlo_provenance``. Looking in one place only
-    reports ``null`` for a run that did record its backend, which would defeat
-    the point of checking.
+    App and Monte Carlo write it at the top level. The reproduction tool for the
+    forthcoming publication study nests it under
+    ``montecarlo_provenance``. Checking only one location would report ``null``
+    for a run that recorded its backend, which would defeat the point of checking.
     """
     provenance = json.loads((directory / "provenance.json").read_text())
     execution = provenance.get("execution")

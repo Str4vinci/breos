@@ -147,6 +147,11 @@ def _problem_config(dc_ac_ratio: float = 1.6):
         "location": {"latitude": 41.15, "longitude": -8.61, "timezone": "UTC"},
         "simulation": {"resolution": "h"},
         "constraints": {"budget_eur": 100000, "max_area_m2": 100.0, "max_modules": 5},
+        # These assert the wiring of one annual scoring pass, against a fake
+        # simulate_energy_balance. The default projected basis would run the
+        # multi-year loop instead, which is a different call signature and not
+        # what is under test here.
+        "optimization": {"objective_basis": "steady_state"},
         "mode": {"fixed_azimuth": 180},
         "pv": {"module": "Suntech_STP550S_STC"},
         "battery": {"temperature": 20.0, "indoor_model": {"enabled": False}},

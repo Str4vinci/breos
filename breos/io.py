@@ -14,8 +14,6 @@ from typing import Any, Dict, List, Optional, Union
 import numpy as np
 import pandas as pd
 
-from breos._deprecations import deprecated
-
 
 def export_results(
     results_df: pd.DataFrame,
@@ -183,89 +181,6 @@ def _economics_summary_metrics(cost_projection_df: Optional[pd.DataFrame]) -> Di
     return metrics
 
 
-@deprecated(
-    name="breos.io.save_simulation_report",
-    replacement="the focused export_results, export_summary, and export_cost_analysis functions",
-)
-def save_simulation_report(
-    results_df: pd.DataFrame,
-    summary_df: pd.DataFrame,
-    costs_dict: Optional[Dict[str, Any]] = None,
-    cost_projection_df: Optional[pd.DataFrame] = None,
-    degradation_df: Optional[pd.DataFrame] = None,
-    results_directory: str = "results",
-    scenario_name: str = "",
-    economics_metrics: Optional[Dict[str, Any]] = None,
-) -> Dict[str, str]:
-    """
-    Save complete simulation report with all outputs.
-
-    Generates these files:
-
-    - ``results_{scenario}.csv``: full simulation time series.
-    - ``summary_{scenario}.txt``: key metrics summary, including LCOE,
-      payback, and NPV when a cost projection is provided.
-    - ``costs_{scenario}.csv``: cost analysis, if provided.
-    - ``degradation_{scenario}.csv``: battery degradation data, if provided.
-
-    Args:
-        results_df: Full simulation results DataFrame
-        summary_df: Summary statistics DataFrame
-        costs_dict: Optional cost parameters dictionary
-        cost_projection_df: Optional cost projection DataFrame
-        degradation_df: Optional degradation tracking DataFrame
-        results_directory: Directory to save all files
-        scenario_name: Scenario identifier for filenames
-        economics_metrics: Optional label -> value pairs added to the summary,
-            overriding any figures auto-derived from ``cost_projection_df``.
-
-    Returns:
-        Dictionary mapping file types to saved file paths
-    """
-    os.makedirs(results_directory, exist_ok=True)
-
-    saved_files = {}
-    suffix = scenario_name if scenario_name else ""
-
-    # Save results
-    saved_files["results"] = export_results(results_df, results_directory, suffix=suffix, format="csv")
-
-    # Save summary, enriched with headline economics figures when available
-    summary_metrics = _economics_summary_metrics(cost_projection_df)
-    if economics_metrics:
-        summary_metrics.update(economics_metrics)
-    saved_files["summary"] = export_summary(
-        summary_df, results_directory, suffix=suffix, format="txt", extra_metrics=summary_metrics or None
-    )
-
-    # Save cost projection if provided
-    if cost_projection_df is not None:
-        saved_files["cost_projection"] = export_cost_analysis(
-            cost_projection_df, results_directory, suffix=suffix, format="csv"
-        )
-
-    # Save degradation data if provided
-    if degradation_df is not None:
-        filepath = os.path.join(results_directory, f"degradation_{suffix}.csv" if suffix else "degradation.csv")
-        degradation_df.to_csv(filepath, index=False)
-        saved_files["degradation"] = filepath
-
-    # Save costs dict as txt
-    if costs_dict is not None:
-        filepath = os.path.join(results_directory, f"costs_{suffix}.txt" if suffix else "costs.txt")
-        with open(filepath, "w") as f:
-            f.write("COST PARAMETERS\n")
-            f.write("=" * 40 + "\n")
-            for key, value in costs_dict.items():
-                if isinstance(value, float):
-                    f.write(f"{key}: {value:.4f}\n")
-                else:
-                    f.write(f"{key}: {value}\n")
-        saved_files["costs"] = filepath
-
-    return saved_files
-
-
 def load_results(filepath: str, parse_dates: Union[bool, List[str]] = True) -> pd.DataFrame:
     """
     Load simulation results from CSV or TXT file.
@@ -288,78 +203,3 @@ def load_results(filepath: str, parse_dates: Union[bool, List[str]] = True) -> p
         df.set_index("Datetime", inplace=True)
 
     return df
-
-
-@deprecated(name="breos.io.export_monthly_summary", replacement="pandas.DataFrame.resample")
-def export_monthly_summary(results_df: pd.DataFrame, results_directory: str, prefix: str = "", suffix: str = "") -> str:
-    """
-    Export monthly aggregated summary to CSV.
-
-    Args:
-        results_df: Full simulation results with Datetime index
-        results_directory: Directory to save the file
-        prefix: Optional prefix for filename
-        suffix: Optional suffix for filename
-
-    Returns:
-        Path to the saved file
-    """
-    os.makedirs(results_directory, exist_ok=True)
-
-    # Ensure datetime index
-    if "Datetime" in results_df.columns:
-        df = results_df.set_index("Datetime")
-    else:
-        df = results_df.copy()
-
-    df.index = pd.to_datetime(df.index)
-
-    # Define aggregation rules
-    numeric_cols = df.select_dtypes(include=[np.number]).columns
-    monthly = df[numeric_cols].resample("ME").sum()
-
-    # Add month name
-    monthly["Month"] = monthly.index.strftime("%B")
-
-    parts = [p for p in [prefix, "monthly_summary", suffix] if p]
-    filename = "_".join(parts) + ".csv"
-    filepath = os.path.join(results_directory, filename)
-
-    monthly.to_csv(filepath)
-    return filepath
-
-
-@deprecated(name="breos.io.export_yearly_summary", replacement="pandas.DataFrame.resample")
-def export_yearly_summary(results_df: pd.DataFrame, results_directory: str, prefix: str = "", suffix: str = "") -> str:
-    """
-    Export yearly aggregated summary to CSV.
-
-    Args:
-        results_df: Full simulation results with Datetime index
-        results_directory: Directory to save the file
-        prefix: Optional prefix for filename
-        suffix: Optional suffix for filename
-
-    Returns:
-        Path to the saved file
-    """
-    os.makedirs(results_directory, exist_ok=True)
-
-    # Ensure datetime index
-    if "Datetime" in results_df.columns:
-        df = results_df.set_index("Datetime")
-    else:
-        df = results_df.copy()
-
-    df.index = pd.to_datetime(df.index)
-
-    # Define aggregation rules
-    numeric_cols = df.select_dtypes(include=[np.number]).columns
-    yearly = df[numeric_cols].resample("YE").sum()
-
-    parts = [p for p in [prefix, "yearly_summary", suffix] if p]
-    filename = "_".join(parts) + ".csv"
-    filepath = os.path.join(results_directory, filename)
-
-    yearly.to_csv(filepath)
-    return filepath

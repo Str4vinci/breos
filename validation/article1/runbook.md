@@ -1,6 +1,7 @@
-# Run the Article 1 simulations
+# Run the publication study
 
-`tools/run_article1.py` runs the complete Article 1 workflow. It uses local
+`tools/run_article1.py` runs the complete workflow for the forthcoming
+publication. It uses local
 inputs from `dev/article1-inputs/` and writes results to `results/article1/`.
 Both directories are ignored by Git.
 
@@ -77,7 +78,7 @@ uv run python tools/run_article1.py all
 ```
 
 The complete result bundle is in `results/article1/`. Keep that directory with
-the manuscript source data. Do not commit the licensed E-REDES profile or the
+the manuscript source data. Do not commit the licensed E-REDES profile or
 third-party validation data.
 
 ## Local input layout
@@ -89,10 +90,6 @@ dev/article1-inputs/
 ├── rlp/
 │   ├── EREDES_2025_BTN_1000kwh_15min.csv
 │   └── EREDES_2025_BTN_1000kwh_hourly.csv
-├── validation/
-│   ├── daily_results.csv
-│   ├── monthly_results.csv
-│   └── weekly_results.csv
 └── weather/
     └── porto_historical_2005_2024_openmeteo.csv
 ```
@@ -106,3 +103,19 @@ required. BREOS moves each label to the interval start before energy-conserving
 15-minute disaggregation. The Article configuration samples 2005-2023 to
 match the archived workflow and the TMY source period. Update Section 2.7 of
 the manuscript, which currently says that Monte Carlo also samples 2024.
+
+To fetch a new historical Porto file from Open-Meteo, install the weather
+extra and run:
+
+```bash
+uv sync --extra weather
+uv run python tools/fetch_weather.py historical --location porto --start 2005 --end 2024
+```
+
+The command writes to `weather/`. Move the saved file into the input layout
+above before running the publication workflow. Open-Meteo can revise its
+archive, so preserve the exact downloaded file for reproducibility. For a
+BREOS-only run supporting the forthcoming publication study, substitute
+`esposende` and the relevant study years. The forthcoming publication's
+measured, PVsyst, and Polysun comparison files remain private and are not part
+of this workflow.

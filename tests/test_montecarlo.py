@@ -359,9 +359,20 @@ def _pv_only_config():
     return cfg
 
 
-def test_pv_chain_cache_is_declined_when_it_cannot_pay_off():
+def test_pv_chain_cache_is_declined_when_it_cannot_pay_off(monkeypatch):
     # Enough reuse, small enough, forkable: worth it.
+    monkeypatch.setattr(montecarlo_module.multiprocessing, "get_start_method", lambda: "fork")
     assert _pv_chain_cache_is_worthwhile(10000, 19, 20, 35040, 19)
+    # Python 3.14 defaults to forkserver. Multiple workers cannot share the
+    # parent-built cache through that context, so decline it rather than copy
+    # the arrays into every worker.
+    for start_method in ("forkserver", "spawn"):
+        monkeypatch.setattr(
+            montecarlo_module.multiprocessing,
+            "get_start_method",
+            lambda start_method=start_method: start_method,
+        )
+        assert not _pv_chain_cache_is_worthwhile(10000, 19, 20, 35040, 19)
     # Too few trajectories to amortise building it.
     assert not _pv_chain_cache_is_worthwhile(8, 19, 20, 35040, 19)
     # Over the memory budget.

@@ -4,8 +4,8 @@ The timestep parity tests compare the physics -- the buffer matrix, step by
 step. They say nothing about what App *builds* out of that: the yearly rollups,
 the cost projection, LCOE, NPV, payback, the monthly and financial tables, the
 degradation summary and the PV loss waterfall. Those are the numbers a reader
-of the Article actually sees, and they pass through economics and aggregation
-code that the timestep comparison never touches.
+of the forthcoming publication study actually sees, and they pass through
+economics and aggregation code that the timestep comparison never touches.
 
 So this walks the whole result dict, flattens every leaf to a comparable value,
 and requires exact equality field by field. Floats are compared bitwise via
@@ -30,10 +30,10 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PROJECT_ROOT))
 
-# Configurations shaped like the Article's cases: one with no battery and a
-# trivial dispatch branch, one balanced case with a binding charge cap, one
-# larger system, and one at 15-minute resolution where the day loop runs 96
-# steps instead of 24.
+# Configurations shaped like the forthcoming publication study's cases: one
+# with no battery and a trivial dispatch branch, one balanced case with a
+# binding charge cap, one larger system, and one at 15-minute resolution where
+# the day loop runs 96 steps instead of 24.
 SCENARIOS: dict[str, dict] = {
     "c1_no_battery": {
         "location": "porto",

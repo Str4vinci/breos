@@ -49,6 +49,7 @@ weather/data access, load profiles, PV system data, and cost assumptions; see
 | `pvrow_pitch` | `None` | Distance between adjacent PV rows; required by `"infinite_sheds"` and expressed in the same unit as `pvrow_height` |
 | `resolution` | `"h"` | Time resolution (`"h"` or `"15min"`) |
 | `projection_years` | `20` | Economic projection horizon |
+| `execution_backend` | `"python"` | Within-day dispatch implementation. `"numba"` selects the optional compiled backend installed by `breos[fast]` |
 | `cost_preset` | `None` | Cost preset key from packaged defaults |
 | `costs` | *unset* | Optional cost overrides layered over the selected preset and built-in defaults; see [below](#cost-and-emissions-presets) |
 | `inflation_rate` | `0.02` | Annual electricity price inflation |

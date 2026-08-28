@@ -1,4 +1,4 @@
-name = "Article 1 projected optimization reproduction"
+name = "Forthcoming publication projected optimization reproduction"
 inverter_efficiency = 0.96
 # PVGIS labels SARAH3 irradiance at HH:00 but reports the actual observation
 # offset in provider metadata. The pinned Porto offset is 0.1714 h. Use that

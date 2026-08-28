@@ -40,7 +40,7 @@ workflows that need heavier optional packages:
 pip install "breos[plots]"          # matplotlib plotting helpers
 pip install "breos[optimization]"   # pymoo multi-objective sizing
 pip install "breos[weather]"        # Open-Meteo historical weather fetching
-pip install "breos[fast]"           # Numba accelerator for Monte Carlo
+pip install "breos[fast]"           # Numba dispatch accelerator
 pip install "breos[location-tools]" # geocoding and timezone lookup helpers
 ```
 

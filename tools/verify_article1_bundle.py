@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify a completed Article 1 result bundle without recalculating results."""
+"""Verify a completed result bundle for the forthcoming publication."""
 
 from __future__ import annotations
 
@@ -26,13 +26,6 @@ EXPECTED_ARTIFACT_HASH_KEYS = {
     "yearly_summary_sha256",
 }
 EXPECTED_HISTORICAL_WEATHER_SHA256 = "71c26d072c09faf16dab37230cfe8b2d430bd39344333227d00c7be4e76a188a"
-EXPECTED_EXTERNAL_VALIDATION_HASHES = {
-    # Corrected Esposende Figure 2 data from the provenance-clean rerun at
-    # phd commit e1558f1678946c4a8d2146a4bd62ad38e068080d.
-    "monthly_results.csv": "84cce17d0d51f745895bad1c98adaa3ef3d6043f076ce69d3a1dff5ecad1a526",
-    "weekly_results.csv": "07c7b938da100ca5c5301a0ef9a6988b24616f7e5eb5166408056afd1ae79375",
-    "daily_results.csv": "2d12468d982f0b59af875841bf8b9e228a532c6f4060070245907bbb243b0bfb",
-}
 EXPECTED_MONTE_CARLO_YEARLY_COLUMNS = (
     "run",
     "Year",
@@ -101,8 +94,9 @@ EXPECTED_MONTE_CARLO_YEARLY_COLUMNS = (
     "Marginal_Grid_CI_gCO2_kWh",
 )
 
-# Article generators export plot-independent source tables. Presentation-only
-# changes therefore do not invalidate previously generated numerical outputs.
+# Publication-study generators export plot-independent source tables.
+# Presentation-only changes therefore do not invalidate previously generated
+# numerical outputs.
 NON_NUMERICAL_SOURCE_PATHS = ("breos/plotting.py",)
 
 
@@ -465,10 +459,6 @@ class BundleAudit:
                 historical_metadata.get("timestamp_label_basis") == "right",
                 "historical weather is not right-labelled",
             )
-        for filename, expected in EXPECTED_EXTERNAL_VALIDATION_HASHES.items():
-            path = self.require_file(f"external-validation/{filename}")
-            if path.is_file():
-                self.expect(_sha256(path) == expected, f"external validation hash mismatch: {filename}")
         self.deterministic_report(
             "base-v1/reproduction.json", optimization=False, fixed_labels={"C1", "C2", "C3", "C4", "C5"}
         )
@@ -527,11 +517,11 @@ def main() -> int:
     audit = BundleAudit(args.root)
     audit.verify()
     if audit.errors:
-        print("Article 1 bundle verification failed:")
+        print("Forthcoming publication bundle verification failed:")
         for error in audit.errors:
             print(f"- {error}")
         return 1
-    print(f"Article 1 bundle verification passed: {audit.root}")
+    print(f"Forthcoming publication bundle verification passed: {audit.root}")
     if len(audit.source_commits) == 1:
         print(f"Verified {len(audit.reports)} provenance reports from one BREOS commit.")
     else:

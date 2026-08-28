@@ -37,7 +37,8 @@ weather. Check internet access and retry before changing model settings.
 
 For repeatable or offline work, seed the weather cache as shown in
 [Offline runs with cached weather](recipes.md#offline-runs-with-cached-weather).
-NSRDB access requires an NREL API key. Custom coordinate-dict locations do not
+To use NSRDB data, download it separately with your own NREL credentials and
+load the saved weather file locally. Custom coordinate-dict locations do not
 use a preset cache key and therefore fetch weather when used through `App`.
 
 ## An optional command cannot import a dependency
@@ -49,18 +50,19 @@ by the workflow:
 pip install "breos[plots]"          # Matplotlib plotting helpers
 pip install "breos[optimization]"   # pymoo optimization
 pip install "breos[weather]"        # Open-Meteo historical weather
-pip install "breos[fast]"           # Numba accelerator for Monte Carlo
+pip install "breos[fast]"           # Numba dispatch accelerator
 ```
 
-The `fast` extra installs Numba for the optional Monte Carlo dispatch backend.
-Select it with `[montecarlo].execution_backend = "numba"`; without that
-setting, Monte Carlo uses the default Python path and installing `fast` changes
-nothing. It does not accelerate `breos.App` or multi-objective optimization.
+The `fast` extra installs Numba for the optional compiled dispatch backend.
+Set the App configuration key `execution_backend = "numba"`, set
+`[montecarlo].execution_backend = "numba"`, or pass the corresponding backend
+argument to an optimization entry point. The Python backend remains the
+default and numerical reference, so installing `fast` alone changes nothing.
 The backend chooses a battery dispatch loop and nothing else, so a PV-only
-study takes the same vectorized balance either way and selecting `numba` for
-one changes only the toolchain its provenance records. The earlier standalone
-`breos.numba_kernels` screening engine is removed in 0.6.0; see [Deprecations
-for 0.6.0](../deprecations.md).
+study takes the same vectorized balance either way; selecting `numba` for one
+changes only the toolchain recorded in its provenance. The earlier standalone
+`breos.numba_kernels` screening engine is removed in 0.6.0; replacements are
+listed in the archived v0.5.2 migration guide.
 
 Core imports, help, option discovery, and configuration validation do not load
 Matplotlib. If an actual plotting command reports that its configuration
