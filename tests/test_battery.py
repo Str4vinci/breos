@@ -6,9 +6,12 @@ import numpy as np
 import pandas as pd
 import pytest
 
+import breos.battery as battery_module
 from breos.battery import (
     BatteryConfig,
+    _datetime_index_ticks,
     _get_degradation_params,
+    _update_battery_soh_cyclewise_arrays,
     apply_indoor_temperature_model,
     resistance_to_efficiency,
     simulate_energy_balance,
@@ -110,6 +113,34 @@ class TestBatteryConfig:
         with pytest.raises(ValueError, match="supports only: lfp"):
             update_battery_soh_cyclewise(1.0, soc, 5000.0, battery_type="nca")
 
+    @pytest.mark.parametrize("freq", ["5min", "15min", "h"])
+    @pytest.mark.parametrize("unit", ["s", "ms", "us", "ns"])
+    def test_array_cycle_aging_is_bit_identical_to_public_series_path(self, freq, unit):
+        index = pd.date_range("2025-01-01", periods=48, freq=freq, tz="Europe/Lisbon").as_unit(unit)
+        values = np.asarray(
+            [0.1, 0.8, 0.7, 0.2, 0.9, 0.85, 0.3, 0.6] * 6,
+            dtype=np.float64,
+        )
+        series = pd.Series(values, index=index)
+        expected = update_battery_soh_cyclewise(
+            0.93,
+            series,
+            6000.0,
+            fec_cum=12.5,
+        )
+        time_ticks, ticks_per_second = _datetime_index_ticks(index)
+
+        actual = _update_battery_soh_cyclewise_arrays(
+            0.93,
+            values,
+            time_ticks,
+            ticks_per_second,
+            6000.0,
+            fec_cum=12.5,
+        )
+
+        assert actual == expected
+
     def test_field_calibrated_default_is_v1(self):
         assert _get_degradation_params("naumann_lam_field_calibrated") == _get_degradation_params(
             "naumann_lam_field_calibrated_v1"
@@ -154,6 +185,25 @@ class TestResistanceToEfficiency:
 
 
 class TestSimulateEnergyBalance:
+    def test_zero_battery_skips_daily_degradation(self, monkeypatch):
+        index = pd.date_range("2025-01-01", periods=24, freq="h", tz="UTC")
+
+        def fail_if_called(*args, **kwargs):
+            raise AssertionError("a zero-capacity battery cannot degrade")
+
+        monkeypatch.setattr(battery_module, "_apply_daily_degradation", fail_if_called)
+
+        results, _, _, _, _, degradation = simulate_energy_balance(
+            pv_dc=pd.Series(1000.0, index=index),
+            houseload=pd.DataFrame({"Load": 500.0}, index=index),
+            battery_config=BatteryConfig(nominal_energy_wh=0.0),
+            freq="h",
+        )
+
+        assert len(results) == 24
+        assert np.array_equal(results["Battery_SOH"].to_numpy(), np.full(24, 100.0))
+        assert degradation.empty
+
     def test_no_battery(self, dc_production, sample_load):
         results_df, total_pv, summary_df, rep_cost, n_rep, deg_df = simulate_energy_balance(
             pv_dc=dc_production * 6,

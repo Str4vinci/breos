@@ -12,7 +12,6 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal, Protocol, runtime_checkable
 
 import numpy as np
-import pandas as pd
 
 from breos.degradation.profiles import BLAST_STATE_SCHEMA_VERSION, get_battery_model_profile
 
@@ -26,7 +25,9 @@ DegradationEngineName = Literal["native", "blast"]
 class DegradationDay:
     """Inputs shared by the native and BLAST daily lifecycle steps."""
 
-    soc: pd.Series
+    soc: np.ndarray
+    time_ticks: np.ndarray
+    ticks_per_second: float
     temperature_c: np.ndarray
     step_seconds: float
     start_soc: float
@@ -34,7 +35,7 @@ class DegradationDay:
 
     @property
     def mean_soc(self) -> float:
-        return float(self.soc.mean())
+        return float(np.mean(self.soc))
 
     @property
     def mean_temperature_c(self) -> float:
@@ -128,6 +129,8 @@ class NativeDegradationAdapter:
         soh_after_cycle, cycle_degradation, self._fec = self._cycle_step(
             self._soh,
             day.soc,
+            day.time_ticks,
+            day.ticks_per_second,
             self._nominal_energy_wh,
             fec_cum=self._fec,
             battery_type=self._battery_type,
@@ -218,7 +221,7 @@ class BlastDegradationAdapter:
         previous_soh = self._soh
         t_secs, soc, temperature_c = self._build_endpoint_day(
             day.step_seconds,
-            day.soc.to_numpy(),
+            day.soc,
             day.temperature_c,
             start_soc=day.start_soc,
             start_temperature_c=day.start_temperature_c,
