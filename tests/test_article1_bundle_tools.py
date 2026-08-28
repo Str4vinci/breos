@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+from pathlib import Path
 
 import pytest
 
@@ -14,11 +15,22 @@ from tools.verify_article1_bundle import (
 )
 
 ARTICLE1_INTERVAL_MEAN_WEATHER_SHA256 = "71c26d072c09faf16dab37230cfe8b2d430bd39344333227d00c7be4e76a188a"
+ARTICLE1_INTERVAL_MEAN_SIDECAR = (
+    Path(__file__).parents[1]
+    / "validation/article1/input-metadata/porto_historical_2005_2024_openmeteo.csv.metadata.json"
+)
 
 
 def test_article1_tools_pin_interval_mean_openmeteo_weather():
     assert EXPECTED_SHA256["historical_weather"] == ARTICLE1_INTERVAL_MEAN_WEATHER_SHA256
     assert EXPECTED_HISTORICAL_WEATHER_SHA256 == ARTICLE1_INTERVAL_MEAN_WEATHER_SHA256
+
+    sidecar = json.loads(ARTICLE1_INTERVAL_MEAN_SIDECAR.read_text())
+    metadata = sidecar["breos_weather_metadata"]
+    assert sidecar["weather_sha256"] == ARTICLE1_INTERVAL_MEAN_WEATHER_SHA256
+    assert metadata["radiation_time_basis"] == "interval_mean"
+    assert metadata["timestamp_label_basis"] == "right"
+    assert metadata["timestamp_timezone"] == "GMT"
 
 
 def test_article1_input_preflight_accepts_only_pinned_hash(tmp_path, monkeypatch):
