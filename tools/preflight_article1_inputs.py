@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify and inventory Article 1 inputs without running a simulation."""
+"""Verify and inventory inputs for the forthcoming publication."""
 
 from __future__ import annotations
 
@@ -7,7 +7,6 @@ import argparse
 import hashlib
 import json
 import shlex
-import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -20,9 +19,6 @@ EXPECTED_SHA256 = {
     "external_rlp_hourly": "6ae15efed9b179537349ee1c1c5747065f18db876920e073e8670bf412d20d6b",
     "historical_weather": "71c26d072c09faf16dab37230cfe8b2d430bd39344333227d00c7be4e76a188a",
     "bundled_tmy": "bf84e31b02ad9bf39f331a5ce8629b1ea8f80cd1597748e72a87a0fce56b4f15",
-    "validation_monthly": "d2b777e2b58abdad055abe25ec45c7fd879947f498622b6f17966b8d4803d1cb",
-    "validation_weekly": "b5ff0311df777b62f22de1111ba277321203e57e2ab5c6eac67e6673880d397b",
-    "validation_daily": "e376382026bc266b5895ce9ba2cf3504c632351a4fe34ab0ac8a6fe86ca857b8",
 }
 
 
@@ -63,21 +59,9 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--rlp-directory", type=Path, required=True)
     parser.add_argument("--historical-weather-file", type=Path, required=True)
-    parser.add_argument(
-        "--validation-directory",
-        type=Path,
-        required=True,
-        help="Directory containing the external monthly, weekly, and daily Figure 2 comparison CSVs",
-    )
-    parser.add_argument(
-        "--copy-validation-to",
-        type=Path,
-        help="Copy the three verified Figure 2 CSVs into this ignored result directory",
-    )
     parser.add_argument("--output", type=Path, help="Optional JSON manifest path")
     args = parser.parse_args()
 
-    validation = args.validation_directory
     inputs = {
         "external_rlp_15min": _checked_input("external_rlp_15min", args.rlp_directory / RLP_15MIN_FILENAME),
         "external_rlp_hourly": _checked_input("external_rlp_hourly", args.rlp_directory / RLP_HOURLY_FILENAME),
@@ -86,23 +70,7 @@ def main() -> int:
             "bundled_tmy",
             PROJECT_ROOT / "validation/data/weather/porto_tmy_2005_2023_pvgis-sarah3.csv.gz",
         ),
-        "validation_monthly": _checked_input("validation_monthly", validation / "monthly_results.csv"),
-        "validation_weekly": _checked_input("validation_weekly", validation / "weekly_results.csv"),
-        "validation_daily": _checked_input("validation_daily", validation / "daily_results.csv"),
     }
-    if args.copy_validation_to is not None:
-        args.copy_validation_to.mkdir(parents=True, exist_ok=True)
-        for label, filename in (
-            ("validation_monthly", "monthly_results.csv"),
-            ("validation_weekly", "weekly_results.csv"),
-            ("validation_daily", "daily_results.csv"),
-        ):
-            destination = args.copy_validation_to / filename
-            if destination.is_file() and _sha256(destination) != EXPECTED_SHA256[label]:
-                raise ValueError(f"refusing to overwrite a different file: {destination.resolve()}")
-            if not destination.exists():
-                shutil.copy2(Path(inputs[label]["path"]), destination)
-            inputs[label]["bundle_copy"] = str(destination.resolve())
     manifest = {
         "schema": "breos-article1-input-manifest-v1",
         "breos_source": _git_revision(),
@@ -113,7 +81,7 @@ def main() -> int:
     if args.output is not None:
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(rendered)
-        print(f"Article 1 input preflight passed; wrote {args.output}")
+        print(f"Input preflight for the forthcoming publication passed; wrote {args.output}")
     else:
         print(rendered, end="")
     return 0

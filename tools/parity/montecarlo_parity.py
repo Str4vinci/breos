@@ -3,8 +3,8 @@
 Used for validation steps 4 and 6: the same seeded study must produce
 identical run metrics and identical yearly trajectories across the pre-refactor
 baseline, the summary path, and the compiled backend. The five cases mirror the
-Article's C1-C5 shape: no battery, battery only, PV only, PV plus battery, and
-a larger PV-plus-battery system.
+C1-C5 shape used by the forthcoming publication study: no battery, battery
+only, PV only, PV plus battery, and a larger PV-plus-battery system.
 """
 
 from __future__ import annotations
@@ -16,8 +16,9 @@ import numpy as np
 import pandas as pd
 
 CASES = {
-    # (n_modules, battery_kwh). Shaped like the Article set: two cases with no
-    # battery, three with one. A configuration needs at least one module, so
+    # (n_modules, battery_kwh). Shaped like the forthcoming publication study
+    # set: two cases with no battery, three with one. A configuration needs at
+    # least one module, so
     # the battery-led case uses a minimal array rather than none.
     "C1": (8, 0.0),
     "C2": (4, 5.0),

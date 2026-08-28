@@ -70,7 +70,7 @@ def test_optimization_takes_the_backend_as_an_argument_not_from_config():
 
 
 @pytest.mark.parametrize("backend", EXECUTION_BACKENDS)
-def test_app_records_the_backend_and_its_toolchain(backend):
+def test_app_records_the_backend_and_its_toolchain(backend, _patch_weather):
     if backend == "numba":
         pytest.importorskip("numba", reason="the compiled backend needs the breos[fast] extra")
     app = App({**BASE_CONFIG, "execution_backend": backend})
@@ -88,7 +88,7 @@ def test_app_records_the_backend_and_its_toolchain(backend):
         assert "jit_cache" not in execution
 
 
-def test_app_and_monte_carlo_record_the_same_execution_keys():
+def test_app_and_monte_carlo_record_the_same_execution_keys(_patch_weather):
     """Two provenance blocks built by two code paths would drift."""
     app = App({**BASE_CONFIG, "execution_backend": "python"})
     app.simulate()
@@ -222,9 +222,9 @@ def test_dependency_check_precedes_the_expensive_step(function, expensive):
 def test_numba_provenance_always_carries_a_cache_field():
     """A driver that cannot observe its workers still records the field.
 
-    The deterministic Article report fans work out to subprocesses and has no
-    observations to aggregate. "unknown" is provenance; a missing key reads as
-    an oversight when the run that produced it took hours.
+    The deterministic publication-study report fans work out to subprocesses
+    and has no observations to aggregate. "unknown" is provenance; a missing
+    key reads as an oversight when the run that produced it took hours.
     """
     pytest.importorskip("numba", reason="the compiled backend needs the breos[fast] extra")
 
@@ -241,7 +241,7 @@ def test_deterministic_article_report_records_the_cache_field():
     assert '"execution": backend_provenance(args.execution_backend)' in source
 
 
-def test_app_assembled_outputs_are_identical_on_both_backends():
+def test_app_assembled_outputs_are_identical_on_both_backends(_patch_weather):
     """The gate the timestep tests cannot provide.
 
     Timestep parity compares the buffer matrix. It says nothing about the

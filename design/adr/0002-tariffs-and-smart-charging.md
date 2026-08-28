@@ -6,8 +6,8 @@
 ## Context
 
 BREOS 0.5.x values every imported and exported kilowatt-hour at one annual
-price. The historical PhD tree contains useful time-of-use (TOU) schedules and
-smart-charging experiments, but it also contains a second battery simulator,
+price. A historical research tree contains useful time-of-use (TOU) schedules
+and smart-charging experiments, but it also contains a second battery simulator,
 tariff-specific degradation and economics paths, and supplier-price estimates.
 Porting that module would give the same configuration different physical and
 financial meanings depending on its entry point.
@@ -35,9 +35,10 @@ identifiers are:
 | `dev/docs/a2_daily_sc_oracle_handover.md` | `8383a8b40947c77cbd197ee75cf90d7ea3f27868` |
 | `dev/docs/adr/0003-real-economics-basis.md` | `8da169bb6dc68c9dadffae5370ee032e3325dc13` |
 
-The PhD worktree is dirty. Uncommitted files and notebook results are evidence,
-not implementation sources. Ports must be derived from the frozen blobs above
-or independently reimplemented against primary sources.
+The historical research worktree was dirty during review. Uncommitted files
+and notebook results are evidence, not implementation sources. Ports must be
+derived from the frozen blobs above or independently reimplemented against
+primary sources.
 
 The frozen TOU blob's 2027 Portuguese docstring incorrectly attributes the
 electricity-period decision to ERSE Directive 3/2026. ERSE's acts catalog
@@ -208,7 +209,7 @@ use the schema version to detect the additive origin and valuation fields.
 ## Implementation gates
 
 Implementation follows the delivery sequence in
-`design/architecture/0.7x-phd-porting-plan.md`. In particular:
+`design/architecture/0.7x-tariffs-and-smart-charging-plan.md`. In particular:
 
 1. tariff resolution and valuation land before dispatch changes;
 2. no-op instruction parity covers native and BLAST degradation;
