@@ -1,4 +1,4 @@
-"""Static coverage for Article 1 contextual source-data tooling."""
+"""Static coverage for forthcoming publication contextual source-data tooling."""
 
 import tomllib
 

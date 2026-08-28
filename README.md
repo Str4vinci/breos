@@ -25,7 +25,7 @@ its production pipeline on.
 
 ## Features
 
-- **Weather** — TMY from PVGIS/NSRDB and historical data from Open-Meteo, at hourly or 15-minute resolution.
+- **Weather:** TMY from PVGIS, local weather files, and historical data from Open-Meteo at hourly or 15-minute resolution.
 - **PV production** — pvlib CEC single-diode model, with a small example module catalog to get started.
 - **Multi-array systems** — combine multiple faces/orientations (e.g. an east-west roof) at the DC stage instead of one representative tilt.
 - **Battery** — energy balance with calendar + cycle aging (Naumann 2020, Lam 2025) and field-calibrated LFP parameters.
@@ -95,8 +95,8 @@ lists every option, and
 [interpreting results](docs/getting-started/interpreting-results.md)
 documents every output field.
 
-> For real studies, bring your own weather/API access where required (NSRDB
-> needs an NREL API key; PVGIS and Open-Meteo do not), licensed load profiles,
+> For real studies, bring your own weather and API access where required,
+> licensed load profiles,
 > and your own cost/tariff assumptions. The packaged defaults make the tool
 > runnable, not project-grade.
 
@@ -162,7 +162,7 @@ BREOS stands on work done by others:
 - **[demandlib](https://demandlib.readthedocs.io/)** — basis for the bundled
   example H0 load profiles.
 - **[pymoo](https://pymoo.org/)** — NSGA-II multi-objective optimization.
-- **PVGIS (EU JRC)**, **NREL NSRDB**, and **Open-Meteo** — weather and solar
+- **PVGIS (EU JRC)** and **Open-Meteo:** weather and solar
   resource data.
 
 Model choices, defaults, and any errors in how these are combined are BREOS's

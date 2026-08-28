@@ -118,8 +118,9 @@ class TestBatteryConfig:
             update_battery_soh_cyclewise(1.0, soc, 5000.0, battery_type="nca")
 
     @pytest.mark.parametrize("freq", ["5min", "15min", "h"])
-    def test_array_cycle_aging_is_bit_identical_to_public_series_path(self, freq):
-        index = pd.date_range("2025-01-01", periods=48, freq=freq, tz="Europe/Lisbon")
+    @pytest.mark.parametrize("unit", ["s", "ms", "us", "ns"])
+    def test_array_cycle_aging_is_bit_identical_to_public_series_path(self, freq, unit):
+        index = pd.date_range("2025-01-01", periods=48, freq=freq, tz="Europe/Lisbon").as_unit(unit)
         values = np.asarray(
             [0.1, 0.8, 0.7, 0.2, 0.9, 0.85, 0.3, 0.6] * 6,
             dtype=np.float64,

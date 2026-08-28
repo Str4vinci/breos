@@ -1,4 +1,4 @@
-"""Opt-in regression against the licensed Article 1 household profile."""
+"""Opt-in regression against the licensed profile used by the forthcoming publication."""
 
 import os
 import tomllib
@@ -20,7 +20,7 @@ from tools.reproduce_article1 import (
 )
 
 EXPECTED_RLP_SHA256 = "23becc5a7bfc927b1f7604156e0e4953dcc6bb65268ca947b38db3dc4f2b28bc"
-EXPECTED_CONFIG_SHA256 = "48181f462f6af8d8f25b26e480542b7ffadf9a73fd835a972d83441029c8e009"
+EXPECTED_CONFIG_SHA256 = "66f9f2819fcdf8f966d321262ee9aa9fe340ef4abc4b2f684a0fb9617592b4fa"
 FIXED_REGRESSION_LABELS = {"C1", "C2", "C3", "C4"}
 
 
@@ -109,7 +109,7 @@ def test_article1_fixed_candidates_with_licensed_rlp(tmp_path):
     """Pin deterministic v0.6 projected values when the external RLP is available."""
     rlp_value = os.environ.get("BREOS_ARTICLE1_RLP_DIRECTORY")
     if not rlp_value:
-        pytest.skip("set BREOS_ARTICLE1_RLP_DIRECTORY to run the licensed Article 1 regression")
+        pytest.skip("set BREOS_ARTICLE1_RLP_DIRECTORY to run the forthcoming publication regression")
     pytest.skip(
         "pin the final corrected C1-C4 values after the study author runs the clean 0.6 release-candidate workflow"
     )

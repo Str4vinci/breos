@@ -10,9 +10,6 @@ in [Recipes](../getting-started/recipes.md#parameter-sweep).
 Install `breos[optimization]` to use pymoo-backed multi-objective sizing.
 The one-dimensional helpers use the core scientific stack.
 
-The Brent tilt helper and both standalone ZEB sizing helpers are scheduled for
-removal in 0.6.0. See [Deprecations for 0.6.0](../deprecations.md).
-
 ZEB and financial production use usable AC system energy from the dispatch
 ledger, not raw PV DC, so inverter efficiency and clipping affect candidate
 scores. Physical size, inverter rating, and CAPEX use the selected module's
@@ -22,13 +19,18 @@ scores. Physical size, inverter rating, and CAPEX use the selected module's
 
 `optimize_system_multi_objective` supports two objective bases:
 
-- `optimization.objective_basis = "steady_state"` is the default. It preserves
-  the established annual three-objective search: grid independence, NPV, and
-  ZEB ratio. Battery replacement is estimated from the first-year SoH loss.
-- `optimization.objective_basis = "projected"` evaluates every candidate over
-  `simulation.years_projection` years, or `financials.project_lifespan` when
-  that key is absent. It optimizes two values: projected lifetime grid
-  independence and projected NPV.
+- `optimization.objective_basis = "projected"` is the default. It evaluates
+  every candidate over `simulation.years_projection` years, or
+  `financials.project_lifespan` when that key is absent. It optimizes two
+  values: projected lifetime grid independence and projected NPV. A design is
+  selected for how it performs across the project lifetime, which is the
+  question a sizing study asks.
+- `optimization.objective_basis = "steady_state"` selects the cheaper annual
+  three-objective search: grid independence, NPV, and ZEB ratio. It scores each
+  candidate on a single simulated year and estimates battery replacement from
+  the first-year SoH loss, so it is a screening basis rather than a lifetime
+  answer. It costs one simulated year per candidate instead of
+  `years_projection`, which makes it useful for wide exploratory sweeps.
 
 Projected mode repeats the configured TMY. Each year applies the configured PV
 degradation factor and carries battery stored energy, PV-origin stored energy,
@@ -65,7 +67,8 @@ Multi-objective sizing accepts these explicit constraint keys:
 
 Set the physical and financial limits explicitly for publication runs. The
 defaults preserve earlier direct-API behavior; they are not site-specific
-recommendations. The Article configuration pins every applicable limit.
+recommendations. The configuration for the forthcoming publication pins every
+applicable limit.
 
 Projected results expose `SteadyState_*` and `Projected_*` diagnostics. The
 ordinary `Grid_Independence_%` and `NPV_Eur` columns mirror the values used by
@@ -83,15 +86,16 @@ included in the metrics, while the financial table retains their annual source
 columns. These tables are intended as stable source data for custom
 analysis and plots; BREOS does not require a particular visualization layer.
 
-## Article 1 reproduction
+## Forthcoming publication reproduction
 
 [`validation/article1/article1-projected-optimization.toml`](../../validation/article1/article1-projected-optimization.toml)
-pins the Article 1 15-minute, 20-year configuration, four archived comparison
-candidates plus the C5 low-investment benchmark, NSGA-II seed and early
-stopping, battery degradation, replacement, and financial assumptions. Its hourly TMY is interpolated with the clear-sky
-shape and opt-in hourly-energy conservation; energy conservation remains
-opt-in for general resampling. The E-REDES household profile is
-licensed external data and is not redistributed.
+pins the forthcoming publication's 15-minute, 20-year configuration, four
+archived comparison candidates plus the C5 low-investment benchmark, NSGA-II
+seed and early stopping, battery degradation, replacement, and financial
+assumptions. Its hourly TMY is interpolated with the clear-sky shape and
+opt-in hourly-energy conservation. Energy conservation remains opt-in for
+general resampling. The E-REDES household profile is licensed external data
+and is not redistributed.
 
 Run the deterministic fixed candidates before starting NSGA-II:
 
@@ -123,7 +127,6 @@ explains the numerical changes caused by post-study corrections.
    :toctree: generated/
 
    breos.optimization.optimize_tilt
-   breos.optimization.optimize_tilt_brent
 ```
 
 ## Multi-objective sizing
@@ -143,7 +146,6 @@ explains the numerical changes caused by post-study corrections.
    :toctree: generated/
 
    breos.optimization.optimize_battery_size
-   breos.optimization.size_for_zeb
 ```
 
 ## Result type

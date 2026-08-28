@@ -1,4 +1,5 @@
-# Article 1 historical-weather Monte Carlo source-data configuration.
+# Historical-weather Monte Carlo source-data configuration for the forthcoming
+# publication study.
 #
 # The licensed E-REDES RLP and the historical weather CSV are external inputs.
 # Pass both paths to tools/reproduce_article1_montecarlo.py; do not add them to

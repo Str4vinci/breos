@@ -1,4 +1,4 @@
-"""Static checks for Article 1 input and result-bundle verification tools."""
+"""Static checks for forthcoming publication input and result-bundle verification tools."""
 
 import hashlib
 
@@ -39,6 +39,14 @@ def test_article1_bundle_audit_reports_missing_files(tmp_path):
     audit.require_file("missing.csv")
 
     assert audit.errors == ["missing file: missing.csv"]
+
+
+def test_article1_bundle_does_not_require_private_comparison_files(tmp_path):
+    audit = BundleAudit(tmp_path)
+
+    audit.verify()
+
+    assert not any("external-validation" in error for error in audit.errors)
 
 
 def test_article1_bundle_accepts_exact_monte_carlo_yearly_schema(tmp_path):
