@@ -17,6 +17,7 @@ from breos.execution import (
     DEFAULT_EXECUTION_BACKEND,
     aggregate_jit_cache_states,
     backend_provenance,
+    is_pv_only_dispatch,
     observed_jit_cache_state,
     reset_jit_cache_observation,
 )
@@ -294,15 +295,21 @@ def run_app_simulation(
     # callers that build a cfg dict themselves, and it is the reference
     # implementation rather than the fast one.
     execution_backend = cfg.get("execution_backend", DEFAULT_EXECUTION_BACKEND)
-    execution = backend_provenance(execution_backend)
+    battery_kwh = cfg["battery_kwh"]
+    battery_wh = battery_kwh * 1000
+    # Asked the way the dispatch asks it, so the run and its provenance agree
+    # on what counts as PV-only.
+    has_battery = not is_pv_only_dispatch(
+        battery_wh,
+        cfg.get("battery_max_soc", DEFAULTS["battery_max_soc"]),
+        cfg.get("battery_min_soc", DEFAULTS["battery_min_soc"]),
+    )
+    execution = backend_provenance(execution_backend, pv_only=not has_battery)
     jit_cache_states: list[str] = []
 
     inputs = prepare_simulation_inputs(cfg, resolved, deps)
 
     freq = cfg["resolution"]
-    battery_kwh = cfg["battery_kwh"]
-    battery_wh = battery_kwh * 1000
-    has_battery = battery_kwh > 0
     projection_years = cfg["projection_years"]
     degradation_rate = cfg["pv_degradation_rate"]
     hours_per_step = get_hours_per_step(freq)

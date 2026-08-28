@@ -58,6 +58,11 @@ Set the App configuration key `execution_backend = "numba"`, set
 `[montecarlo].execution_backend = "numba"`, or pass the corresponding backend
 argument to an optimization entry point. The Python backend remains the
 default and numerical reference, so installing `fast` alone changes nothing.
+The backend chooses a battery dispatch loop and nothing else, so a PV-only
+study takes the same vectorized balance either way; selecting `numba` for one
+changes only the toolchain recorded in its provenance. The earlier standalone
+`breos.numba_kernels` screening engine is removed in 0.6.0; replacements are
+listed in the archived v0.5.2 migration guide.
 
 Core imports, help, option discovery, and configuration validation do not load
 Matplotlib. If an actual plotting command reports that its configuration

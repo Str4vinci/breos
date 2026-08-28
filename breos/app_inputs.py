@@ -217,7 +217,7 @@ def build_pv_production_breakdown(
 
 def load_consumption_profile(
     cfg: dict[str, Any], deps: AppRuntimeDependencies, timezone: str | None = None
-) -> pd.Series:
+) -> pd.DataFrame:
     """Load and scale the configured demand profile.
 
     Profile rows describe household behavior at legal clock time, so the

@@ -90,14 +90,36 @@ def test_single_day_matches():
     _assert_identical("one_day", _run("one_day", "python"), _run("one_day", "numba"))
 
 
-def test_numba_pv_only_keeps_compiled_dispatch(monkeypatch):
-    def fail_if_vectorized(*args, **kwargs):
-        raise AssertionError("the multi-worker Numba path must not use the memory-bound vectorized dispatcher")
+def test_numba_pv_only_summary_uses_common_vectorized_path(monkeypatch):
+    pv, load, temp, cfg, sim_kwargs = build("no_battery")
+    vectorized_calls = []
+    reduced_buffer_calls = []
+    original_dispatch = battery_module._dispatch_no_battery_vectorized
+    original_buffers = battery_module._PvOnlySummaryBuffers
 
-    monkeypatch.setattr(battery_module, "_dispatch_no_battery_vectorized", fail_if_vectorized)
-    result = _run("no_battery", "numba")
+    def recording_dispatch(*args, **kwargs):
+        vectorized_calls.append(len(args[1]))
+        return original_dispatch(*args, **kwargs)
 
-    assert len(result[0]) == 35040
+    def recording_buffers(n_steps):
+        reduced_buffer_calls.append(n_steps)
+        return original_buffers(n_steps)
+
+    monkeypatch.setattr(battery_module, "_dispatch_no_battery_vectorized", recording_dispatch)
+    monkeypatch.setattr(battery_module, "_PvOnlySummaryBuffers", recording_buffers)
+    result = simulate_energy_balance_summary(
+        pv_dc=pv,
+        houseload=load,
+        battery_config=BatteryConfig(**cfg),
+        freq=FREQ,
+        temperature_series=temp,
+        execution_backend="numba",
+        **sim_kwargs,
+    )
+
+    assert vectorized_calls == [35040]
+    assert reduced_buffer_calls == [35040]
+    assert result.n_steps == 35040
 
 
 def test_trailing_partial_day_matches():

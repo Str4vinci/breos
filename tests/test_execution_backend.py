@@ -201,7 +201,13 @@ def test_montecarlo_provenance_uses_worker_observations_across_repeated_studies(
         "_precompute_year_caches",
         lambda *args: ({2021: pd.Series([0.0])}, {2021: pd.Series([25.0])}),
     )
-    monkeypatch.setattr(mc_module, "load_consumption_profile", lambda *args, **kwargs: pd.Series([0.0]))
+    # A one-column frame, which is what load_consumption_profile really
+    # returns; the study now aligns it before any trajectory runs.
+    monkeypatch.setattr(
+        mc_module,
+        "load_consumption_profile",
+        lambda *args, **kwargs: pd.DataFrame({"Load": [0.0]}),
+    )
 
     def _simulate_without_inputs(*args, **kwargs):
         _call_numba_cache_probe(dispatch)

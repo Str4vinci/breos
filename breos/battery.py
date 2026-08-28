@@ -71,6 +71,7 @@ from breos.degradation.protocol import (
 from breos.economics import BATTERY_REPLACEMENT_COST_PER_KWH
 from breos.execution import (  # noqa: F401  -- EXECUTION_BACKENDS re-exported
     EXECUTION_BACKENDS,
+    is_pv_only_dispatch,
     validate_execution_backend,
 )
 from breos.inverter import _calculate_dc_ac_power_arrays, calculate_dc_ac_power, dc_power_for_ac_output
@@ -340,7 +341,7 @@ def _dispatch_dc_step(
     return battery_energy, ledger
 
 
-def _align_simulation_inputs(
+def _align_input_arrays(
     pv_dc: pd.Series,
     houseload: pd.DataFrame,
     temperature_series: Optional[pd.Series],
@@ -399,6 +400,111 @@ def _align_simulation_inputs(
         pv_values.values.astype(np.float64),
         houseload_series.values.astype(np.float64),
         temperature_series.values.astype(np.float64),
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class AlignedSimulationInputs:
+    """PV, load and temperature already aligned onto one simulation calendar.
+
+    Both simulation entry points do this work internally on every call: they
+    build the calendar, reindex three series onto it, and year-shift the load
+    profile when it comes from a different year than the simulated window.
+    :func:`simulate_energy_balance_summary` will take the result instead, via
+    its ``aligned`` parameter.
+
+    A Monte Carlo study repeats that for every simulated year of every
+    trajectory against the same weather calendar, with a load profile that
+    differs only by a scalar -- tens of thousands of times per study for one
+    of nineteen distinct answers. Aligning the calendar once and scaling
+    afterwards is exact rather than merely equivalent: reindexing selects
+    elements and fills gaps with zero, and multiplying by a scalar commutes
+    with both, so every element is the same product either way.
+
+    Attributes:
+        index: The simulation calendar. Everything else is positional on it.
+        pv_dc_w: PV DC power (W) per step, gaps zeroed.
+        load_w: AC load (W) per step, gaps zeroed.
+        temperature_c: Battery cell temperature (C) per step, gaps at 25 C.
+    """
+
+    index: pd.DatetimeIndex
+    pv_dc_w: np.ndarray
+    load_w: np.ndarray
+    temperature_c: np.ndarray
+    pv_chain: Optional[Tuple[np.ndarray, np.ndarray, np.ndarray]] = None
+
+    def scaled(self, *, pv_factor: float = 1.0, load_factor: float = 1.0) -> "AlignedSimulationInputs":
+        """Return the same calendar with PV and load scaled by a constant.
+
+        A change in PV invalidates any memoized chain; a change in load does
+        not, because the chain stops at the inverter terminals.
+        """
+        return AlignedSimulationInputs(
+            index=self.index,
+            pv_dc_w=self.pv_dc_w * pv_factor if pv_factor != 1.0 else self.pv_dc_w,
+            load_w=self.load_w * load_factor if load_factor != 1.0 else self.load_w,
+            temperature_c=self.temperature_c,
+            pv_chain=self.pv_chain if pv_factor == 1.0 else None,
+        )
+
+    def with_pv_only_chain(self, battery_config: "BatteryConfig", *, freq: str) -> "AlignedSimulationInputs":
+        """Return the same inputs with the DC-to-AC conversion memoized.
+
+        A PV-only step converts DC to AC through the PVWatts efficiency curve
+        before it ever looks at the load, so that conversion depends only on
+        the weather year and the project year's degradation factor -- never on
+        the trajectory. A Monte Carlo study evaluates a few hundred distinct
+        (weather year, project year) pairs tens of thousands of times each,
+        recomputing the curve every time.
+
+        What is stored is exactly the tuple
+        :func:`breos.inverter._calculate_dc_ac_power_arrays` returns for these
+        inputs, so a run that uses it takes the same values through the same
+        expressions as a run that does not. There is no second arithmetic
+        path to keep in step.
+        """
+        hours_per_step = get_hours_per_step(freq)
+        cap_wh = _step_energy_cap(battery_config.inverter_ac_capacity_w, hours_per_step)
+        pv_dc_wh = np.maximum(0.0, self.pv_dc_w * hours_per_step)
+        chain = _calculate_dc_ac_power_arrays(pv_dc_wh, cap_wh, battery_config.inverter_efficiency)
+        return AlignedSimulationInputs(
+            index=self.index,
+            pv_dc_w=self.pv_dc_w,
+            load_w=self.load_w,
+            temperature_c=self.temperature_c,
+            pv_chain=chain,
+        )
+
+
+def align_simulation_inputs(
+    pv_dc: pd.Series,
+    houseload: pd.DataFrame,
+    temperature_series: Optional[pd.Series] = None,
+    *,
+    freq: str = "h",
+    start_time: Optional[pd.Timestamp] = None,
+    end_time: Optional[pd.Timestamp] = None,
+) -> AlignedSimulationInputs:
+    """Align simulation inputs once so many runs can share the result.
+
+    The arguments and their defaults match
+    :func:`simulate_energy_balance_summary`, which accepts the result through
+    its ``aligned`` parameter. A caller that runs the same calendar
+    repeatedly -- a Monte Carlo study, or any sweep over a scalar -- aligns
+    once and passes the result to every run.
+    """
+    if start_time is None:
+        start_time = pv_dc.index[0]
+    if end_time is None:
+        end_time = pv_dc.index[-1]
+    rng = pd.date_range(start=start_time, end=end_time, freq=freq)
+    pv_values, load_values, temperature_values = _align_input_arrays(pv_dc, houseload, temperature_series, rng)
+    return AlignedSimulationInputs(
+        index=rng,
+        pv_dc_w=pv_values,
+        load_w=load_values,
+        temperature_c=temperature_values,
     )
 
 
@@ -1164,17 +1270,23 @@ def _dispatch_no_battery_vectorized(
     battery_config: BatteryConfig,
     hours_per_step: float,
     cap_wh: float,
+    pv_chain: Optional[Tuple[np.ndarray, np.ndarray, np.ndarray]] = None,
 ) -> None:
     """Fill a PV-only result buffer without entering the timestep loop."""
     out.zero_fill()
 
     pv_dc_wh = np.maximum(0.0, pv_dc_values * hours_per_step)
     load_wh = load_values * hours_per_step
-    ac_wh, conversion_loss_wh, clipping_loss_dc_wh = _calculate_dc_ac_power_arrays(
-        pv_dc_wh,
-        cap_wh,
-        battery_config.inverter_efficiency,
-    )
+    if pv_chain is None:
+        ac_wh, conversion_loss_wh, clipping_loss_dc_wh = _calculate_dc_ac_power_arrays(
+            pv_dc_wh,
+            cap_wh,
+            battery_config.inverter_efficiency,
+        )
+    else:
+        # Memoized by the caller for these exact inputs. Same values, same
+        # expressions downstream; see AlignedSimulationInputs.with_pv_only_chain.
+        ac_wh, conversion_loss_wh, clipping_loss_dc_wh = pv_chain
     pv_ac_to_load_wh = np.minimum(ac_wh, load_wh)
     grid_export_wh = ac_wh - pv_ac_to_load_wh
     grid_import_wh = np.maximum(0.0, load_wh - pv_ac_to_load_wh)
@@ -1512,8 +1624,8 @@ def _build_simulation_summary(core: _CoreRun, *, return_degradation_state: bool)
 
 
 def _simulate_core(
-    pv_dc: pd.Series,
-    houseload: pd.DataFrame,
+    pv_dc: Optional[pd.Series] = None,
+    houseload: Optional[pd.DataFrame] = None,
     battery_config: Optional[BatteryConfig] = None,
     start_time: Optional[pd.Timestamp] = None,
     end_time: Optional[pd.Timestamp] = None,
@@ -1533,6 +1645,7 @@ def _simulate_core(
     initial_pv_origin_energy_wh: Optional[float] = None,
     execution_backend: str = "python",
     summary_only: bool = False,
+    aligned: Optional[AlignedSimulationInputs] = None,
 ) -> "_CoreRun":
     """
     Simulate energy balance with battery storage and degradation.
@@ -1586,20 +1699,27 @@ def _simulate_core(
     if battery_config is None:
         battery_config = BatteryConfig(nominal_energy_wh=0)
 
-    # Determine time range
-    if start_time is None:
-        start_time = pv_dc.index[0]
-    if end_time is None:
-        end_time = pv_dc.index[-1]
-
     # Calculate hours per step for energy conversion
     hours_per_step = get_hours_per_step(freq)
     steps_per_day = int(24 / hours_per_step)
 
-    # Create time range
-    rng = pd.date_range(start=start_time, end=end_time, freq=freq)
-
-    _pv_dc_vals, _load_vals, _temp_vals = _align_simulation_inputs(pv_dc, houseload, temperature_series, rng)
+    if aligned is None:
+        if pv_dc is None or houseload is None:
+            raise ValueError("pass either pv_dc and houseload, or aligned inputs")
+        # Determine time range
+        if start_time is None:
+            start_time = pv_dc.index[0]
+        if end_time is None:
+            end_time = pv_dc.index[-1]
+        # Create time range
+        rng = pd.date_range(start=start_time, end=end_time, freq=freq)
+        _pv_dc_vals, _load_vals, _temp_vals = _align_input_arrays(pv_dc, houseload, temperature_series, rng)
+    else:
+        # The caller has already built the calendar and reindexed onto it.
+        rng = aligned.index
+        _pv_dc_vals = aligned.pv_dc_w
+        _load_vals = aligned.load_w
+        _temp_vals = aligned.temperature_c
 
     degradation_engine_key = _resolve_degradation_engine(
         degradation_engine,
@@ -1643,12 +1763,16 @@ def _simulate_core(
     n_steps = len(rng)
 
     # Hoist invariant check out of the loop
-    has_battery = battery_config.nominal_energy_wh > 1 and (battery_config.max_soc - battery_config.min_soc) > 0
+    has_battery = not is_pv_only_dispatch(
+        battery_config.nominal_energy_wh,
+        battery_config.max_soc,
+        battery_config.min_soc,
+    )
     # The vectorized PV-only dispatch below is the only producer that leaves
     # most columns at zero, so it is the only one whose output can be served
     # from the reduced buffer -- and only when the caller wants a summary,
     # since the detailed frame must own a writable array per column.
-    pv_only_summary = summary_only and not has_battery and execution_backend == "python"
+    pv_only_summary = summary_only and not has_battery
 
     # Pre-allocate result arrays (avoids per-timestep dict creation)
     out = _PvOnlySummaryBuffers(n_steps) if pv_only_summary else _ResultBuffers(n_steps)
@@ -1706,7 +1830,10 @@ def _simulate_core(
 
     dispatch_day = _resolve_dispatch_day(execution_backend)
 
-    if not has_battery and execution_backend == "python":
+    # PV-only balance is already vectorized with NumPy and does not need the
+    # general per-step dispatcher. This common path is faster than either the
+    # Python or Numba day loop and keeps one numerical implementation.
+    if not has_battery:
         _dispatch_no_battery_vectorized(
             out,
             _pv_dc_vals,
@@ -1715,6 +1842,7 @@ def _simulate_core(
             battery_config=battery_config,
             hours_per_step=hours_per_step,
             cap_wh=cap_wh,
+            pv_chain=None if aligned is None else aligned.pv_chain,
         )
         return _CoreRun(
             buffers=out,
@@ -1900,8 +2028,8 @@ def simulate_energy_balance(
 
 
 def simulate_energy_balance_summary(
-    pv_dc: pd.Series,
-    houseload: pd.DataFrame,
+    pv_dc: Optional[pd.Series] = None,
+    houseload: Optional[pd.DataFrame] = None,
     battery_config: Optional[BatteryConfig] = None,
     start_time: Optional[pd.Timestamp] = None,
     end_time: Optional[pd.Timestamp] = None,
@@ -1921,6 +2049,7 @@ def simulate_energy_balance_summary(
     initial_energy_wh: Optional[float] = None,
     initial_pv_origin_energy_wh: Optional[float] = None,
     execution_backend: str = "python",
+    aligned: Optional[AlignedSimulationInputs] = None,
 ) -> SimulationSummary:
     """Simulate an energy balance and return annual totals and carry state.
 
@@ -1929,6 +2058,14 @@ def simulate_energy_balance_summary(
     results frame and the daily degradation frame. Multi-year callers such as
     Monte Carlo need the aggregates and the year-to-year seam, not the
     35,040 rows they were being reduced from.
+
+    Pass either ``pv_dc`` and ``houseload``, or a
+    :class:`AlignedSimulationInputs` built by
+    :func:`align_simulation_inputs` as ``aligned``. The second form skips
+    building the calendar and reindexing onto it, which a caller running the
+    same calendar many times has already done; ``freq``, ``start_time`` and
+    ``end_time`` are then read from the aligned inputs, and
+    ``temperature_series`` is ignored in favour of the aligned one.
     """
     core = _simulate_core(
         pv_dc=pv_dc,
@@ -1954,6 +2091,7 @@ def simulate_energy_balance_summary(
         # Reduced per-step buffers are safe here: nothing downstream of this
         # call materialises a per-timestep frame.
         summary_only=True,
+        aligned=aligned,
     )
     return _build_simulation_summary(core, return_degradation_state=return_degradation_state)
 
