@@ -4,7 +4,7 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 
 ## [Unreleased]
 
-## [0.6.0] - 2026-08-28
+## [0.6.0] - 2026-08-31
 
 ### Added
 - Added a projected multi-objective optimizer that evaluates each candidate
