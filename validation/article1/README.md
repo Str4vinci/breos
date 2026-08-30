@@ -98,6 +98,19 @@ fixes are intentionally not reported here. Add final numerical comparisons
 only after the runbook has been executed from one clean release commit and
 `tools/verify_article1_bundle.py` passes.
 
+## Completed 0.6.0 reference run
+
+The forthcoming publication workflow was completed from clean BREOS commit
+`f62f4f5bf3c14140ab189d35ea2885e6fcc60c6b` on 2026-08-29. The result bundle
+contains every deterministic stage and 10,000 Monte Carlo trajectories for
+each of C1 through C5 with seed `42`. The Monte Carlo CSV and summary outputs
+match the Python reference backend byte for byte. The complete bundle passed
+`tools/verify_article1_bundle.py`.
+
+Later 0.6.0 validation documentation does not change the runtime code or the
+versioned study configuration. The producing commit remains the correct code
+provenance for this result bundle.
+
 ## Publication provenance
 
 Each deterministic run writes `reproduction.json`; each context analysis and
