@@ -527,6 +527,16 @@ def _projected_year_summary(
     def optional_energy_kwh(column: str) -> float:
         return energy_kwh(column) if column in results_df.columns else 0.0
 
+    def optional_mean_pct(column: str) -> float:
+        """Mean of a fractional state column as a percentage, 0.0 when absent.
+
+        State columns, unlike the ledger flow columns, are already levels
+        rather than average power, so they are averaged and not integrated.
+        """
+        if column not in results_df.columns:
+            return 0.0
+        return float(pd.to_numeric(results_df[column], errors="coerce").fillna(0.0).mean() * 100.0)
+
     load_kwh = energy_kwh("Houseload")
     import_kwh = energy_kwh("Import_From_Grid")
     export_kwh = energy_kwh("Sell_To_Grid")
@@ -543,6 +553,15 @@ def _projected_year_summary(
         "Export_kWh": export_kwh,
         "Grid_Independence_%": grid_independence,
         "Battery_SOH_%": float(battery_soh),
+        # Cell-side energy in and out, so the pair reflects round-trip loss and
+        # feeds cycle ageing directly. Charge is measured after charging losses
+        # and discharge before inverter losses.
+        "Battery_Charge_Throughput_kWh": optional_energy_kwh("Battery_Charge_Stored"),
+        "Battery_Discharge_Throughput_kWh": optional_energy_kwh("Battery_Discharge_DC"),
+        # Normalized SOC is the position in the usable window; absolute SOC is
+        # the fraction of the SOH-derated pack, so it rises as the pack fades.
+        "Battery_SOC_Normalized_Mean_%": optional_mean_pct("Battery_SOC_Normalized"),
+        "Battery_SOC_Absolute_Mean_%": optional_mean_pct("Battery_SOC_Absolute"),
         "Battery_Cumulative_FEC": float(cumulative_fec),
         "Battery_Cumulative_Calendar_Seconds": float(cumulative_calendar_seconds),
         "Battery_Cumulative_Cycle_Degradation": float(cumulative_cycle_degradation),
