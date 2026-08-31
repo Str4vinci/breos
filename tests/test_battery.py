@@ -89,6 +89,22 @@ class TestBatteryConfig:
         assert cfg.max_charge_power_w == 0.0
         assert cfg.max_discharge_power_w == 0.0
 
+    @pytest.mark.parametrize("nominal_wh,rate,expected_w", [(5000.0, 1.0, 5000.0), (2000.0, 0.5, 1000.0)])
+    def test_c_rate_limit_scales_both_directions_with_capacity(self, nominal_wh, rate, expected_w):
+        cfg = BatteryConfig(nominal_energy_wh=nominal_wh, power_limit_c_rate=rate)
+        assert cfg.max_charge_power_w == pytest.approx(expected_w)
+        assert cfg.max_discharge_power_w == pytest.approx(expected_w)
+
+    @pytest.mark.parametrize("field", ["max_charge_power_w", "max_discharge_power_w"])
+    def test_c_rate_limit_rejects_a_competing_absolute_limit(self, field):
+        with pytest.raises(ValueError, match="power_limit_c_rate"):
+            BatteryConfig(nominal_energy_wh=5000, power_limit_c_rate=1.0, **{field: 4352.0})
+
+    @pytest.mark.parametrize("value", [0.0, -1.0, float("inf"), float("nan")])
+    def test_c_rate_limit_must_be_positive_and_finite(self, value):
+        with pytest.raises(ValueError, match="power_limit_c_rate"):
+            BatteryConfig(nominal_energy_wh=5000, power_limit_c_rate=value)
+
     @pytest.mark.parametrize(
         "kwargs,match",
         [

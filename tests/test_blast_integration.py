@@ -186,6 +186,7 @@ def test_blast_multiple_replacements_through_runner(monkeypatch):
         "battery_rte": None,
         "battery_max_charge_power_w": None,
         "battery_max_discharge_power_w": None,
+        "battery_power_limit_c_rate": None,
         "enable_resistance_fade": False,
         "battery_eol_percentage": 0.8,
         "battery_max_soc": max_soc,

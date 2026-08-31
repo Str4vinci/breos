@@ -454,6 +454,7 @@ def _build_battery_config_from_spec(
         inverter_ac_capacity_w=inverter_ac_capacity_w,
         max_charge_power_w=batt_spec.get("max_charge_power_w"),
         max_discharge_power_w=batt_spec.get("max_discharge_power_w"),
+        power_limit_c_rate=batt_spec.get("power_limit_c_rate"),
         dc_coupled=batt_spec.get("dc_coupled", True),
         calendar_model=batt_spec.get("calendar_model", "naumann_lam_field_calibrated"),
         enable_replacement=enable_replacement,

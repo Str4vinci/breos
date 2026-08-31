@@ -4,6 +4,17 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 
 ## [Unreleased]
 
+### Added
+- Added `battery_power_limit_c_rate` (`--battery-power-limit-c-rate`), a
+  capacity-proportional alternative to the absolute
+  `battery_max_charge_power_w` and `battery_max_discharge_power_w` limits. It
+  derives a symmetric charge and discharge limit from each candidate's own
+  capacity, so a sizing sweep holds one C-rate instead of one wattage across
+  every capacity it evaluates. Residential LFP products are specified this way:
+  the BYD Battery-Box Premium HVS family is 1.000 C at every size from 5.12 to
+  12.8 kWh. Combining it with either absolute limit raises rather than silently
+  choosing one. The absolute limits remain, and remain the default.
+
 ## [0.6.0] - 2026-08-31
 
 ### Added

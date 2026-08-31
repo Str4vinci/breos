@@ -93,7 +93,10 @@ class BatteryConfig:
 
     Power limits are nameplate powers and therefore scale with the timestep:
     ``max_charge_power_w`` limits DC input to the battery path, while
-    ``max_discharge_power_w`` limits battery AC delivered to the load.
+    ``max_discharge_power_w`` limits battery AC delivered to the load. Both are
+    absolute wattages that do not track ``nominal_energy_wh``. Set
+    ``power_limit_c_rate`` instead to derive a symmetric limit from capacity,
+    which is what a capacity sweep normally wants.
 
     ``eol_percentage`` defaults to 0.70 (replace the battery when its state
     of health falls to 70% of nominal capacity), matching the App config
@@ -129,6 +132,11 @@ class BatteryConfig:
     battery_type: str = "lfp"
     max_charge_power_w: Optional[float] = None
     max_discharge_power_w: Optional[float] = None
+    # Capacity-proportional alternative to the two absolute limits above. When
+    # set, both limits are derived as ``power_limit_c_rate * nominal_energy_wh``,
+    # so a sizing sweep keeps one C-rate instead of one wattage across capacities.
+    # Setting it together with either absolute limit raises.
+    power_limit_c_rate: Optional[float] = None
 
     def __post_init__(self):
         if not isinstance(self.dc_coupled, bool):
@@ -194,6 +202,19 @@ class BatteryConfig:
                 if not math.isfinite(value) or value < 0.0:
                     raise ValueError(f"{name} must be a finite non-negative number or None")
                 setattr(self, name, value)
+        if self.power_limit_c_rate is not None:
+            if self.max_charge_power_w is not None or self.max_discharge_power_w is not None:
+                raise ValueError(
+                    "power_limit_c_rate derives both power limits from capacity; do not also set "
+                    "max_charge_power_w or max_discharge_power_w"
+                )
+            rate = finite("power_limit_c_rate", self.power_limit_c_rate)
+            if rate <= 0.0:
+                raise ValueError("power_limit_c_rate must be greater than 0")
+            self.power_limit_c_rate = rate
+            derived = rate * self.nominal_energy_wh
+            self.max_charge_power_w = derived
+            self.max_discharge_power_w = derived
         self.battery_type = _normalise_battery_type(self.battery_type)
         # Auto-compute replacement cost
         if self.replacement_cost is None:
