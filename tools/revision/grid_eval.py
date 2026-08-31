@@ -32,6 +32,7 @@ repro = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(repro)
 
 import breos  # noqa: E402
+from breos.economics import calculate_costs, cost_params_from_config  # noqa: E402
 from breos.optimization import (  # noqa: E402
     _resolve_pv_module_and_area,
     evaluate_projected_design,
@@ -49,38 +50,97 @@ def _frange(spec: str) -> list[float]:
     return [lo + i * step for i in range(n + 1)]
 
 
-def _init(config, rlp_directory, backend):
+def _archive_format(requested: str) -> str:
+    """Resolve the archive format, preferring parquet when an engine exists.
+
+    Parquet halves the bytes and lets Task 7 project the handful of columns a
+    re-ranking needs instead of parsing every row, but it needs pyarrow, which
+    is not a declared dependency of this project. Rather than mutate the
+    environment, fall back to CSV and say so.
+    """
+    if requested == "csv":
+        return "csv"
+    try:
+        import pyarrow  # noqa: F401
+
+        return "parquet"
+    except ImportError:
+        if requested == "parquet":
+            raise SystemExit("--archive-format parquet needs pyarrow; install it or use csv")
+        print("no parquet engine (pyarrow) available; archiving as CSV instead")
+        return "csv"
+
+
+def _init(config, rlp_directory, backend, archive, archive_format):
     weather, load, _, _ = repro._load_inputs(config, Path(rlp_directory))
-    _STATE.update(config=config, weather=weather, load=load, backend=backend)
-
-
-def _run(point):
-    modules, battery_kwh, tilt, azimuth = point
-    r = evaluate_projected_design(
-        _STATE["weather"],
-        _STATE["load"],
-        _STATE["config"],
-        n_modules=int(modules),
-        battery_kwh=float(battery_kwh),
-        tilt=float(tilt),
-        azimuth=float(azimuth),
-        execution_backend=_STATE["backend"],
+    _STATE.update(
+        config=config,
+        weather=weather,
+        load=load,
+        backend=backend,
+        archive=archive,
+        archive_format=archive_format,
     )
-    m = r.metrics
-    rep = r.yearly.index[r.yearly["Replacements"] > 0]
-    return {
-        "Modules": int(modules),
-        "Battery_kWh": float(battery_kwh),
-        "Tilt": float(tilt),
-        "Azimuth": float(azimuth),
-        GI: m[GI],
-        NPV: m[NPV],
-        "Replacement_Year": None if len(rep) == 0 else int(r.yearly.loc[rep[0], "Year"]),
-        "Projected_Total_Replacements": m["Projected_Total_Replacements"],
-        "Projected_Breakeven_Year_Exact": m.get("Projected_Breakeven_Year_Exact"),
-        "Projected_Initial_Cost_Eur": m["Projected_Initial_Cost_Eur"],
-        "Projected_Final_SOH_%": m["Projected_Final_SOH_%"],
-    }
+
+
+def _run_chunk(task):
+    """Evaluate one chunk of designs, archiving the annual series as a shard.
+
+    Chunking is what gives each worker a natural shard boundary. Returning the
+    annual frames to the parent instead would push roughly 700 MB per model
+    through pickling for no gain, since nothing in the parent reads them.
+    """
+    chunk_index, points = task
+    summaries, archive_frames = [], []
+    for design_id, point in points:
+        modules, battery_kwh, tilt, azimuth = point
+        r = evaluate_projected_design(
+            _STATE["weather"],
+            _STATE["load"],
+            _STATE["config"],
+            n_modules=int(modules),
+            battery_kwh=float(battery_kwh),
+            tilt=float(tilt),
+            azimuth=float(azimuth),
+            execution_backend=_STATE["backend"],
+        )
+        m = r.metrics
+        rep = r.yearly.index[r.yearly["Replacements"] > 0]
+        summaries.append(
+            {
+                "Design_ID": design_id,
+                "Modules": int(modules),
+                "Battery_kWh": float(battery_kwh),
+                "Tilt": float(tilt),
+                "Azimuth": float(azimuth),
+                GI: m[GI],
+                NPV: m[NPV],
+                "Replacement_Year": None if len(rep) == 0 else int(r.yearly.loc[rep[0], "Year"]),
+                "Projected_Total_Replacements": m["Projected_Total_Replacements"],
+                "Projected_Breakeven_Year_Exact": m.get("Projected_Breakeven_Year_Exact"),
+                "Projected_Initial_Cost_Eur": m["Projected_Initial_Cost_Eur"],
+                "Projected_Final_SOH_%": m["Projected_Final_SOH_%"],
+            }
+        )
+
+        if _STATE["archive"] is not None:
+            # Year and Load_kWh appear in both frames and carry the same values,
+            # so the financial frame contributes only its own columns.
+            fin = r.financial.drop(columns=["Year", "Load_kWh"], errors="ignore")
+            annual = pd.concat([r.yearly.reset_index(drop=True), fin.reset_index(drop=True)], axis=1)
+            annual.insert(0, "Design_ID", design_id)
+            archive_frames.append(annual)
+
+    if _STATE["archive"] is not None and archive_frames:
+        frame = pd.concat(archive_frames, ignore_index=True)
+        if _STATE["archive_format"] == "parquet":
+            frame.to_parquet(
+                Path(_STATE["archive"]) / f"annual_{chunk_index:05d}.parquet", index=False, compression=None
+            )
+        else:
+            frame.to_csv(Path(_STATE["archive"]) / f"annual_{chunk_index:05d}.csv", index=False)
+
+    return summaries
 
 
 def pareto_mask(gi: np.ndarray, npv: np.ndarray) -> np.ndarray:
@@ -107,6 +167,9 @@ def main() -> int:
     ap.add_argument("--n-procs", type=int, default=8)
     ap.add_argument("--execution-backend", default="numba")
     ap.add_argument("--label", default="grid")
+    ap.add_argument("--archive", type=Path, help="write per-design annual series as parquet shards")
+    ap.add_argument("--chunk-size", type=int, default=500)
+    ap.add_argument("--archive-format", choices=("auto", "parquet", "csv"), default="auto")
     ap.add_argument("--output", type=Path, required=True)
     args = ap.parse_args()
 
@@ -122,29 +185,79 @@ def main() -> int:
     max_area = float(constraints.get("max_area_m2", float("inf")))
     _pv, module_area = _resolve_pv_module_and_area(config)
 
-    points = [
-        p
-        for p in itertools.product(
-            [int(x) for x in _frange(args.modules)],
-            _frange(args.battery),
-            _frange(args.tilt),
-            _frange(args.azimuth),
-        )
-        if p[0] * module_area <= max_area + 1e-9
-    ]
-    print(f"module area {module_area:.4f} m2; roof cap {max_area} m2 -> max {int(max_area // module_area)} modules")
-    print(f"{len(points)} grid points after the roof constraint; budget filter applied post-hoc")
+    module_values = [int(x) for x in _frange(args.modules)]
+    battery_values = _frange(args.battery)
+    tilt_values = _frange(args.tilt)
+    azimuth_values = _frange(args.azimuth)
 
+    # CAPEX is a function of module count and battery size alone -- tilt and
+    # azimuth never enter calculate_costs -- so the budget can be applied to the
+    # (modules, battery) pairs before the orientation axes are expanded. That is
+    # exact rather than a heuristic, and it is why the filter can run before
+    # evaluation instead of discarding a fifth of the results afterwards.
+    cost_params = cost_params_from_config(config.get("costs", {}) or {}, config.get("financials", {}) or {})
+    pv_params, _ = _resolve_pv_module_and_area(config)
+    capex_by_pair, affordable_pairs = {}, []
+    for modules in module_values:
+        if modules * module_area > max_area + 1e-9:
+            continue
+        for battery_kwh in battery_values:
+            capex = calculate_costs(
+                n_modules=modules,
+                module_power_w=pv_params.Mpp,
+                battery_capacity_wh=battery_kwh * 1000.0,
+                cost_params=cost_params,
+            )["total_initial_cost"]
+            capex_by_pair[(modules, battery_kwh)] = capex
+            if capex <= budget + 1e-9:
+                affordable_pairs.append((modules, battery_kwh))
+
+    orientations = list(itertools.product(tilt_values, azimuth_values))
+    points = [
+        (modules, battery_kwh, tilt, azimuth)
+        for modules, battery_kwh in affordable_pairs
+        for tilt, azimuth in orientations
+    ]
+    roof_ok = sum(1 for m in module_values if m * module_area <= max_area + 1e-9)
+    total_after_roof = roof_ok * len(battery_values) * len(orientations)
+    print(f"module area {module_area:.4f} m2; roof cap {max_area} m2 -> max {int(max_area // module_area)} modules")
+    print(f"{total_after_roof} grid points after the roof constraint")
+    print(
+        f"{len(affordable_pairs)} of {roof_ok * len(battery_values)} (modules, battery) pairs within "
+        f"budget {budget} -> {len(points)} evaluated, {total_after_roof - len(points)} skipped "
+        f"({100.0 * (total_after_roof - len(points)) / total_after_roof:.1f}%)"
+    )
+
+    archive_format = _archive_format(args.archive_format) if args.archive else None
+    if args.archive:
+        args.archive.mkdir(parents=True, exist_ok=True)
+
+    indexed = list(enumerate(points))
+    chunks = [(i // args.chunk_size, indexed[i : i + args.chunk_size]) for i in range(0, len(indexed), args.chunk_size)]
     with ProcessPoolExecutor(
         max_workers=args.n_procs,
         initializer=_init,
-        initargs=(config, str(args.rlp_directory), args.execution_backend),
+        initargs=(
+            config,
+            str(args.rlp_directory),
+            args.execution_backend,
+            str(args.archive) if args.archive else None,
+            archive_format,
+        ),
     ) as pool:
-        rows = list(pool.map(_run, points, chunksize=4))
+        rows = [row for batch in pool.map(_run_chunk, chunks) for row in batch]
 
     table = pd.DataFrame(rows)
-    table["Within_Budget"] = table["Projected_Initial_Cost_Eur"] <= budget + 1e-9
-    feasible = table[table["Within_Budget"]].reset_index(drop=True)
+    # The pre-filter is only sound if the CAPEX it predicted is the CAPEX the
+    # simulation reports, so check rather than trust it.
+    predicted = table.apply(lambda r: capex_by_pair[(int(r["Modules"]), float(r["Battery_kWh"]))], axis=1)
+    worst = float((predicted - table["Projected_Initial_Cost_Eur"]).abs().max())
+    assert worst < 1e-6, f"budget pre-filter CAPEX disagrees with simulated CAPEX by {worst}"
+    over = int((table["Projected_Initial_Cost_Eur"] > budget + 1e-9).sum())
+    assert over == 0, f"{over} evaluated designs exceed the budget"
+    print(f"pre-filter check: max CAPEX disagreement {worst:.3e} EUR; 0 evaluated designs over budget")
+    table["Within_Budget"] = True
+    feasible = table.reset_index(drop=True)
     mask = pareto_mask(feasible[GI].to_numpy(), feasible[NPV].to_numpy())
     feasible["On_Grid_Pareto_Front"] = mask
     print(f"{len(feasible)} within budget {budget}; {int(mask.sum())} on the exhaustive front")
@@ -173,7 +286,24 @@ def main() -> int:
         "module_area_m2": module_area,
         "constraints": {"budget_eur": budget, "max_area_m2": max_area},
         "points_evaluated": len(points),
+        "points_skipped_by_budget_prefilter": total_after_roof - len(points),
         "points_within_budget": int(len(feasible)),
+        "budget_prefilter": {
+            "basis": "CAPEX depends only on (modules, battery); tilt and azimuth do not enter calculate_costs",
+            "affordable_pairs": len(affordable_pairs),
+            "max_capex_disagreement_eur": worst,
+        },
+        "archive": (
+            None
+            if not args.archive
+            else {
+                "directory": str(args.archive),
+                "format": archive_format,
+                "shards": sorted(p.name for p in args.archive.glob(f"annual_*.{archive_format}")),
+                "compression": None,
+                "rows_per_design": "one per projected year",
+            }
+        ),
         "front_size": int(mask.sum()),
         "execution_backend": args.execution_backend,
         "outputs": {
