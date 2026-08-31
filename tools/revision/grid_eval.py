@@ -274,7 +274,10 @@ def main() -> int:
         "python_version": platform.python_version(),
         "platform": platform.platform(),
         "command": shlex.join([sys.executable, *sys.argv]),
-        "config": str(args.config.relative_to(PROJECT_ROOT)),
+        # relative_to raises on a relative --config, which is how this is
+        # normally typed; _display_path resolves first and falls back to an
+        # absolute path for a config outside the repository.
+        "config": repro._display_path(args.config),
         "config_sha256": hashlib.sha256(config_bytes).hexdigest(),
         "config_diff_vs_base": diff,
         "grid": {
