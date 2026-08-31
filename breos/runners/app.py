@@ -13,6 +13,14 @@ from breos.app_inputs import AppRuntimeDependencies, prepare_simulation_inputs
 from breos.battery import BatteryConfig, simulate_energy_balance
 from breos.degradation.results import build_degradation_summary_from_state
 from breos.economics import calculate_lcoe_from_projection, cost_analysis_projection, find_payback_year
+from breos.execution import (
+    DEFAULT_EXECUTION_BACKEND,
+    aggregate_jit_cache_states,
+    backend_provenance,
+    is_pv_only_dispatch,
+    observed_jit_cache_state,
+    reset_jit_cache_observation,
+)
 from breos.pv_modules import get_module
 from breos.solar import PVProductionBreakdown
 from breos.utils import get_hours_per_step
@@ -34,6 +42,7 @@ class SimulationArtifacts:
     pv_loss_waterfall: dict[str, Any]
     weather_metadata: dict[str, Any]
     degradation_summary: dict[str, Any]
+    execution: dict[str, Any]
 
 
 # 1.1 adds the bifacial_rear_gain PV loss-waterfall stage, relabels the iam
@@ -279,12 +288,28 @@ def run_app_simulation(
     deps: AppRuntimeDependencies,
 ) -> SimulationArtifacts:
     """Run the weather/PV/load/battery/economics simulation pipeline."""
+    # Resolve the backend before anything is fetched or computed. Input
+    # preparation can hit the network for weather, so a missing optional
+    # dependency should be reported now rather than after a download.
+    # resolve_app_config always supplies this; the default covers direct
+    # callers that build a cfg dict themselves, and it is the reference
+    # implementation rather than the fast one.
+    execution_backend = cfg.get("execution_backend", DEFAULT_EXECUTION_BACKEND)
+    battery_kwh = cfg["battery_kwh"]
+    battery_wh = battery_kwh * 1000
+    # Asked the way the dispatch asks it, so the run and its provenance agree
+    # on what counts as PV-only.
+    has_battery = not is_pv_only_dispatch(
+        battery_wh,
+        cfg.get("battery_max_soc", DEFAULTS["battery_max_soc"]),
+        cfg.get("battery_min_soc", DEFAULTS["battery_min_soc"]),
+    )
+    execution = backend_provenance(execution_backend, pv_only=not has_battery)
+    jit_cache_states: list[str] = []
+
     inputs = prepare_simulation_inputs(cfg, resolved, deps)
 
     freq = cfg["resolution"]
-    battery_kwh = cfg["battery_kwh"]
-    battery_wh = battery_kwh * 1000
-    has_battery = battery_kwh > 0
     projection_years = cfg["projection_years"]
     degradation_rate = cfg["pv_degradation_rate"]
     hours_per_step = get_hours_per_step(freq)
@@ -358,6 +383,13 @@ def run_app_simulation(
                 "initial_pv_origin_energy_wh": carried_pv_origin_energy_wh or 0.0,
             }
 
+        # App's observation boundary is one projection year, not one Monte
+        # Carlo trajectory. A multi-year App run enters the kernel once per
+        # year, so the compile is paid in year one and every later year should
+        # observe a warm cache; aggregating over the years is what makes the
+        # run-level claim honest rather than reporting only the first.
+        reset_jit_cache_observation(execution_backend)
+
         sim_result = simulate_energy_balance(
             pv_dc=dc_power,
             houseload=inputs.load_data,
@@ -374,7 +406,11 @@ def run_app_simulation(
             blast_model=blast_model,
             initial_degradation_state=degradation_state if degradation_engine == "blast" else None,
             return_degradation_state=True,
+            execution_backend=execution_backend,
         )
+        year_cache_state = observed_jit_cache_state(execution_backend)
+        if year_cache_state is not None:
+            jit_cache_states.append(year_cache_state)
         (
             results_df,
             total_pv,
@@ -470,6 +506,9 @@ def run_app_simulation(
         state=degradation_state,
     )
 
+    if execution_backend == "numba":
+        execution["jit_cache"] = aggregate_jit_cache_states(jit_cache_states)
+
     return SimulationArtifacts(
         yearly_df=yearly_df,
         first_year_results_df=first_year_results_df,
@@ -491,4 +530,5 @@ def run_app_simulation(
             )
         ),
         degradation_summary=degradation_summary,
+        execution=execution,
     )

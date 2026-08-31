@@ -128,9 +128,10 @@ else:
     # existing native cyclewise + calendar calls, unchanged
 ```
 
-This preserves the **degradation→dispatch feedback** (usable capacity shrinks via
-`update_battery_soc` as SoH drops) — a post-processing "run BLAST once over the
-whole series" approach would break that feedback and is rejected.
+This preserves the **degradation→dispatch feedback**. Usable capacity shrinks
+as SoH drops, which the former `update_battery_soc` helper also represented. A
+post-processing "run BLAST once over the whole series" approach would break
+that feedback and is rejected.
 
 ### Daily time grid (correctness)
 
@@ -311,10 +312,10 @@ and default-change rules are in
 
 ## Performance note
 
-The BLAST path does per-day rainflow + trapz; it does **not** use the
-`numba_kernels` fast path. Fine for single studies (~7300 daily calls / 20 yr).
-For Monte Carlo / NSGA-II inner loops it will be slower — defer a fast mode
-(BLAST's own `is_constant_input` repeat-accumulate, or numba) to Phase 4.
+The BLAST path does per-day rainflow and trapezoidal integration. It does not
+use the removed `numba_kernels` path. This cost is acceptable for a single
+study of about 7,300 daily calls over 20 years. Defer acceleration for Monte
+Carlo and NSGA-II inner loops to Phase 4.
 
 Monte Carlo also has its **own** year loop with separate state threading
 (`montecarlo.py:182`), which the Phase 1 runner changes do not touch. So

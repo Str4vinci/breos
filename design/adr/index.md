@@ -8,4 +8,5 @@ code shows the *what*.
 :maxdepth: 1
 
 0001-docs-architecture
+0002-tariffs-and-smart-charging
 ```

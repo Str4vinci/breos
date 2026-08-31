@@ -45,7 +45,7 @@ def resolve_location(name: str) -> dict:
 
 def fetch_tmy(args):
     from breos.utils import safe_path_slug
-    from breos.weather import fetch_tmy_weather_data, parse_weather_filename
+    from breos.weather import fetch_tmy_weather_data, parse_weather_filename, save_weather_csv
 
     loc = resolve_location(args.location)
     loc_slug = safe_path_slug(args.location)
@@ -80,14 +80,14 @@ def fetch_tmy(args):
     db_slug = f"pvgis-{rad_db.lower().replace('pvgis-', '')}"
     filename = WEATHER_DIR / f"{loc_slug}_tmy_{year_min}_{year_max}_{db_slug}.csv"
 
-    tmy_data.to_csv(filename)
+    save_weather_csv(tmy_data, filename)
     size_mb = filename.stat().st_size / 1e6
     print(f"Saved {filename.name}  ({len(tmy_data):,} rows, {size_mb:.1f} MB)")
 
 
 def fetch_historical(args):
     from breos.utils import safe_path_slug
-    from breos.weather import fetch_weather_data
+    from breos.weather import fetch_weather_data, save_weather_csv
 
     loc = resolve_location(args.location)
     loc_slug = safe_path_slug(args.location)
@@ -112,9 +112,10 @@ def fetch_historical(args):
         azimuth=0,
         freq="h",
         save_to_file=False,
+        radiation_time_basis=args.radiation_time_basis,
     )
 
-    df.to_csv(filename)
+    save_weather_csv(df, filename)
     size_mb = filename.stat().st_size / 1e6
     print(f"Saved {filename.name}  ({len(df):,} rows, {size_mb:.1f} MB)")
 
@@ -140,6 +141,12 @@ def main():
     hist_p.add_argument("--location", required=True, help="Location key (e.g., 'porto')")
     hist_p.add_argument("--start", type=int, required=True, help="Start year (e.g., 2005)")
     hist_p.add_argument("--end", type=int, required=True, help="End year (e.g., 2024)")
+    hist_p.add_argument(
+        "--radiation-time-basis",
+        choices=("interval_mean", "instant"),
+        default="interval_mean",
+        help="Open-Meteo radiation convention (default: preceding-hour interval means)",
+    )
     hist_p.add_argument("--force", action="store_true", help="Overwrite existing file")
 
     # list subcommand

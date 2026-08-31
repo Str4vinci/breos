@@ -10,13 +10,12 @@ This module handles battery energy storage simulation including:
 
 import math
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import numpy as np
 import pandas as pd
 import rainflow
 
-from breos._deprecations import deprecated
 from breos.constants import (
     A_Q,
     A_R,
@@ -70,7 +69,12 @@ from breos.degradation.protocol import (
     NativeDegradationAdapter,
 )
 from breos.economics import BATTERY_REPLACEMENT_COST_PER_KWH
-from breos.inverter import calculate_dc_ac_power, dc_power_for_ac_output
+from breos.execution import (  # noqa: F401  -- EXECUTION_BACKENDS re-exported
+    EXECUTION_BACKENDS,
+    is_pv_only_dispatch,
+    validate_execution_backend,
+)
+from breos.inverter import _calculate_dc_ac_power_arrays, calculate_dc_ac_power, dc_power_for_ac_output
 from breos.utils import get_hours_per_step, remap_datetime_index_years
 
 SUPPORTED_BATTERY_TYPES: tuple[str, ...] = ("lfp",)
@@ -337,7 +341,7 @@ def _dispatch_dc_step(
     return battery_energy, ledger
 
 
-def _align_simulation_inputs(
+def _align_input_arrays(
     pv_dc: pd.Series,
     houseload: pd.DataFrame,
     temperature_series: Optional[pd.Series],
@@ -396,6 +400,111 @@ def _align_simulation_inputs(
         pv_values.values.astype(np.float64),
         houseload_series.values.astype(np.float64),
         temperature_series.values.astype(np.float64),
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class AlignedSimulationInputs:
+    """PV, load and temperature already aligned onto one simulation calendar.
+
+    Both simulation entry points do this work internally on every call: they
+    build the calendar, reindex three series onto it, and year-shift the load
+    profile when it comes from a different year than the simulated window.
+    :func:`simulate_energy_balance_summary` will take the result instead, via
+    its ``aligned`` parameter.
+
+    A Monte Carlo study repeats that for every simulated year of every
+    trajectory against the same weather calendar, with a load profile that
+    differs only by a scalar -- tens of thousands of times per study for one
+    of nineteen distinct answers. Aligning the calendar once and scaling
+    afterwards is exact rather than merely equivalent: reindexing selects
+    elements and fills gaps with zero, and multiplying by a scalar commutes
+    with both, so every element is the same product either way.
+
+    Attributes:
+        index: The simulation calendar. Everything else is positional on it.
+        pv_dc_w: PV DC power (W) per step, gaps zeroed.
+        load_w: AC load (W) per step, gaps zeroed.
+        temperature_c: Battery cell temperature (C) per step, gaps at 25 C.
+    """
+
+    index: pd.DatetimeIndex
+    pv_dc_w: np.ndarray
+    load_w: np.ndarray
+    temperature_c: np.ndarray
+    pv_chain: Optional[Tuple[np.ndarray, np.ndarray, np.ndarray]] = None
+
+    def scaled(self, *, pv_factor: float = 1.0, load_factor: float = 1.0) -> "AlignedSimulationInputs":
+        """Return the same calendar with PV and load scaled by a constant.
+
+        A change in PV invalidates any memoized chain; a change in load does
+        not, because the chain stops at the inverter terminals.
+        """
+        return AlignedSimulationInputs(
+            index=self.index,
+            pv_dc_w=self.pv_dc_w * pv_factor if pv_factor != 1.0 else self.pv_dc_w,
+            load_w=self.load_w * load_factor if load_factor != 1.0 else self.load_w,
+            temperature_c=self.temperature_c,
+            pv_chain=self.pv_chain if pv_factor == 1.0 else None,
+        )
+
+    def with_pv_only_chain(self, battery_config: "BatteryConfig", *, freq: str) -> "AlignedSimulationInputs":
+        """Return the same inputs with the DC-to-AC conversion memoized.
+
+        A PV-only step converts DC to AC through the PVWatts efficiency curve
+        before it ever looks at the load, so that conversion depends only on
+        the weather year and the project year's degradation factor -- never on
+        the trajectory. A Monte Carlo study evaluates a few hundred distinct
+        (weather year, project year) pairs tens of thousands of times each,
+        recomputing the curve every time.
+
+        What is stored is exactly the tuple
+        :func:`breos.inverter._calculate_dc_ac_power_arrays` returns for these
+        inputs, so a run that uses it takes the same values through the same
+        expressions as a run that does not. There is no second arithmetic
+        path to keep in step.
+        """
+        hours_per_step = get_hours_per_step(freq)
+        cap_wh = _step_energy_cap(battery_config.inverter_ac_capacity_w, hours_per_step)
+        pv_dc_wh = np.maximum(0.0, self.pv_dc_w * hours_per_step)
+        chain = _calculate_dc_ac_power_arrays(pv_dc_wh, cap_wh, battery_config.inverter_efficiency)
+        return AlignedSimulationInputs(
+            index=self.index,
+            pv_dc_w=self.pv_dc_w,
+            load_w=self.load_w,
+            temperature_c=self.temperature_c,
+            pv_chain=chain,
+        )
+
+
+def align_simulation_inputs(
+    pv_dc: pd.Series,
+    houseload: pd.DataFrame,
+    temperature_series: Optional[pd.Series] = None,
+    *,
+    freq: str = "h",
+    start_time: Optional[pd.Timestamp] = None,
+    end_time: Optional[pd.Timestamp] = None,
+) -> AlignedSimulationInputs:
+    """Align simulation inputs once so many runs can share the result.
+
+    The arguments and their defaults match
+    :func:`simulate_energy_balance_summary`, which accepts the result through
+    its ``aligned`` parameter. A caller that runs the same calendar
+    repeatedly -- a Monte Carlo study, or any sweep over a scalar -- aligns
+    once and passes the result to every run.
+    """
+    if start_time is None:
+        start_time = pv_dc.index[0]
+    if end_time is None:
+        end_time = pv_dc.index[-1]
+    rng = pd.date_range(start=start_time, end=end_time, freq=freq)
+    pv_values, load_values, temperature_values = _align_input_arrays(pv_dc, houseload, temperature_series, rng)
+    return AlignedSimulationInputs(
+        index=rng,
+        pv_dc_w=pv_values,
+        load_w=load_values,
+        temperature_c=temperature_values,
     )
 
 
@@ -504,7 +613,7 @@ def _build_degradation_lifecycle(
             nominal_energy_wh=battery_config.nominal_energy_wh,
             battery_type=battery_config.battery_type,
             **_native_degradation_kwargs(battery_config.calendar_model),
-            cycle_step=update_battery_soh_cyclewise,
+            cycle_step=_update_battery_soh_cyclewise_arrays,
             calendar_step=update_battery_soh_calendar,
             debug=debug,
         )
@@ -624,6 +733,35 @@ _LEDGER_COLUMNS: Tuple[str, ...] = (
     "Battery_Energy_Delta",
 )
 
+# Per-step state columns, in their row order inside the shared buffer matrix.
+# The ledger columns occupy the rows immediately after them. The compiled
+# dispatch kernel addresses rows by these indices, so the order is part of the
+# kernel contract and must not be reordered without updating it.
+_STATE_ROWS: Tuple[str, ...] = (
+    "pv_dc",
+    "pv_production",
+    "load",
+    "pv_delta",
+    "grid_import",
+    "grid_export",
+    "battery_energy",
+    "soc_normalized",
+    "soc_absolute",
+    "soh",
+    "t_cell",
+    "pv_curtailment",
+    "charge_loss",
+    "discharge_loss",
+    "standby_loss",
+    "battery_energy_begin",
+    "pv_origin_begin",
+    "pv_origin_end",
+)
+_STATE_ROW_INDEX: Dict[str, int] = {name: row for row, name in enumerate(_STATE_ROWS)}
+_LEDGER_ROW0: int = len(_STATE_ROWS)
+_LEDGER_ROW_INDEX: Dict[str, int] = {name: _LEDGER_ROW0 + offset for offset, name in enumerate(_LEDGER_COLUMNS)}
+_N_ROWS: int = _LEDGER_ROW0 + len(_LEDGER_COLUMNS)
+
 
 class _ResultBuffers:
     """Pre-allocated per-timestep output arrays and their frame layout.
@@ -639,84 +777,163 @@ class _ResultBuffers:
     """
 
     __slots__ = (
-        "pv_dc",
-        "pv_production",
-        "load",
-        "pv_delta",
-        "grid_import",
-        "grid_export",
-        "battery_energy",
-        "soc_normalized",
-        "soc_absolute",
-        "soh",
-        "t_cell",
+        "matrix",
         "replaced",
         "replacement_cost",
-        "pv_curtailment",
-        "charge_loss",
-        "discharge_loss",
-        "standby_loss",
-        "battery_energy_begin",
-        "pv_origin_begin",
-        "pv_origin_end",
         "ledger",
-    )
+    ) + _STATE_ROWS
 
     def __init__(self, n_steps: int) -> None:
-        self.pv_dc = np.empty(n_steps)
-        self.pv_production = np.empty(n_steps)
-        self.load = np.empty(n_steps)
-        self.pv_delta = np.empty(n_steps)
-        self.grid_import = np.empty(n_steps)
-        self.grid_export = np.empty(n_steps)
-        self.battery_energy = np.empty(n_steps)
-        self.soc_normalized = np.empty(n_steps)
-        self.soc_absolute = np.empty(n_steps)
-        self.soh = np.empty(n_steps)
-        self.t_cell = np.empty(n_steps)
+        # One row per per-step column, so a whole day of every output can be
+        # handed to a compiled kernel as a single contiguous array. Each named
+        # attribute below is a view on its row, not a copy.
+        self.matrix = np.empty((_N_ROWS, n_steps))
+        for row, name in enumerate(_STATE_ROWS):
+            setattr(self, name, self.matrix[row])
         self.replaced = np.zeros(n_steps, dtype=bool)
         self.replacement_cost = np.zeros(n_steps)
-        self.pv_curtailment = np.empty(n_steps)
-        self.charge_loss = np.empty(n_steps)
-        self.discharge_loss = np.empty(n_steps)
-        self.standby_loss = np.empty(n_steps)
-        self.battery_energy_begin = np.empty(n_steps)
-        self.pv_origin_begin = np.empty(n_steps)
-        self.pv_origin_end = np.empty(n_steps)
-        self.ledger = {key: np.empty(n_steps) for key in _LEDGER_COLUMNS}
+        self.ledger = {key: self.matrix[_LEDGER_ROW0 + offset] for offset, key in enumerate(_LEDGER_COLUMNS)}
+
+    def zero_fill(self) -> None:
+        """Zero every per-step column the caller is not going to write."""
+        self.matrix.fill(0.0)
+
+    def column_arrays(self) -> Dict[str, np.ndarray]:
+        """Return every per-timestep output column, keyed by its frame name."""
+        return _column_arrays(self)
 
     def to_frame(self, rng: pd.DatetimeIndex) -> pd.DataFrame:
         """Assemble the public per-timestep results frame."""
-        return pd.DataFrame(
-            {
-                "Datetime": rng,
-                "PV_DC": self.pv_dc,
-                "PV_Production": self.pv_production,
-                "Houseload": self.load,
-                "PV_Delta": self.pv_delta,
-                "Import_From_Grid": self.grid_import,
-                "Sell_To_Grid": self.grid_export,
-                "Battery_Energy": self.battery_energy,
-                "Battery_SOC_Normalized": self.soc_normalized,
-                "Battery_SOC_Absolute": self.soc_absolute,
-                "Battery_SOH": self.soh,
-                "T_cell": self.t_cell,
-                "Battery_Replaced": self.replaced,
-                "Replacement_Cost": self.replacement_cost,
-                "PV_Curtailment": self.pv_curtailment,
-                "Battery_Charge_Loss": self.charge_loss,
-                "Battery_Discharge_Loss": self.discharge_loss,
-                "Battery_Standby_Loss": self.standby_loss,
-                # Stored-energy state columns are Wh; all explicit flow/loss
-                # ledger columns are average W over the timestep. The
-                # end-of-step energy is the same array as "Battery_Energy".
-                "Battery_Energy_Beginning": self.battery_energy_begin,
-                "Battery_Energy_End": self.battery_energy,
-                "Battery_PV_Origin_Energy_Beginning": self.pv_origin_begin,
-                "Battery_PV_Origin_Energy_End": self.pv_origin_end,
-                **self.ledger,
-            }
-        )
+        return pd.DataFrame({"Datetime": rng, **self.column_arrays()})
+
+
+def _column_arrays(buffers: Any) -> Dict[str, np.ndarray]:
+    """Return every per-timestep output column of *buffers*, keyed by frame name.
+
+    Both buffer types and both result builders read a run through this one
+    mapping, so no path can report a different column set from the one the
+    detailed frame exposes.
+    """
+    return {
+        "PV_DC": buffers.pv_dc,
+        "PV_Production": buffers.pv_production,
+        "Houseload": buffers.load,
+        "PV_Delta": buffers.pv_delta,
+        "Import_From_Grid": buffers.grid_import,
+        "Sell_To_Grid": buffers.grid_export,
+        "Battery_Energy": buffers.battery_energy,
+        "Battery_SOC_Normalized": buffers.soc_normalized,
+        "Battery_SOC_Absolute": buffers.soc_absolute,
+        "Battery_SOH": buffers.soh,
+        "T_cell": buffers.t_cell,
+        "Battery_Replaced": buffers.replaced,
+        "Replacement_Cost": buffers.replacement_cost,
+        "PV_Curtailment": buffers.pv_curtailment,
+        "Battery_Charge_Loss": buffers.charge_loss,
+        "Battery_Discharge_Loss": buffers.discharge_loss,
+        "Battery_Standby_Loss": buffers.standby_loss,
+        # Stored-energy state columns are Wh; all explicit flow/loss
+        # ledger columns are average W over the timestep. The
+        # end-of-step energy is the same array as "Battery_Energy".
+        "Battery_Energy_Beginning": buffers.battery_energy_begin,
+        "Battery_Energy_End": buffers.battery_energy,
+        "Battery_PV_Origin_Energy_Beginning": buffers.pv_origin_begin,
+        "Battery_PV_Origin_Energy_End": buffers.pv_origin_end,
+        **buffers.ledger,
+    }
+
+
+def _column_sums(columns: Dict[str, np.ndarray]) -> Dict[str, float]:
+    """Total every column, summing each distinct array only once.
+
+    Several names are served by one array: ``Battery_Energy_End`` is the same
+    array as ``Battery_Energy`` on every path, and a PV-only run additionally
+    shares one zero array between every column it never writes. Keying the
+    work by array identity rather than by column name means those columns
+    cost one reduction between them instead of one apiece, and reports the
+    same float for each, because it is literally the same reduction.
+    """
+    totals: Dict[int, float] = {}
+    sums: Dict[str, float] = {}
+    for name, values in columns.items():
+        key = id(values)
+        total = totals.get(key)
+        if total is None:
+            # Reduced over the same contiguous values, in the same order
+            # pandas would use, so a summary total is bit-identical to the
+            # detailed frame's total rather than merely close to it.
+            total = totals[key] = float(np.sum(values))
+        sums[name] = total
+    return sums
+
+
+# The per-step columns a PV-only run actually writes. Everything else in
+# :func:`_column_arrays` stays at zero when there is no battery.
+_PV_ONLY_STATE_ROWS: Tuple[str, ...] = (
+    "pv_dc",
+    "pv_production",
+    "load",
+    "pv_delta",
+    "grid_import",
+    "grid_export",
+    "soh",
+    "t_cell",
+    "pv_curtailment",
+)
+_PV_ONLY_LEDGER_COLUMNS: Tuple[str, ...] = (
+    "PV_DC_To_Inverter",
+    "PV_AC_To_Load",
+    "PV_Direct_Inverter_Loss",
+)
+
+
+class _PvOnlySummaryBuffers:
+    """Reduced per-step buffers for a PV-only run that only owes a summary.
+
+    A system with no battery leaves 24 of the columns :func:`_column_arrays`
+    reports at zero for every step, and writes three more with values it has
+    already written under another name. Allocating the full
+    ``(_N_ROWS, n_steps)`` matrix to hold that costs about three times the
+    memory such a run needs, and a Monte Carlo study pays it once per
+    simulated year in every worker at once -- which is memory traffic, not
+    arithmetic, and so is exactly what stops the study scaling across cores.
+
+    This type presents the same reading interface over twelve written arrays,
+    one shared zero array and one shared zero mask. It is deliberately a
+    summary-path type with no ``to_frame``: the detailed frame must not hand
+    a caller aliased columns it could write through.
+    """
+
+    __slots__ = ("zeros", "replaced", "replacement_cost", "ledger") + _STATE_ROWS
+
+    def __init__(self, n_steps: int) -> None:
+        self.zeros = np.zeros(n_steps)
+        written = frozenset(_PV_ONLY_STATE_ROWS)
+        for name in _STATE_ROWS:
+            # Written rows are left uninitialised; the dispatch overwrites
+            # every element of each one before anything reads it.
+            setattr(self, name, np.empty(n_steps) if name in written else self.zeros)
+        self.replaced = np.zeros(n_steps, dtype=bool)
+        self.replacement_cost = self.zeros
+
+        ledger: Dict[str, np.ndarray] = {name: np.empty(n_steps) for name in _PV_ONLY_LEDGER_COLUMNS}
+        # Three ledger columns hold, step for step, values the run has
+        # already produced under another name. Pointing them at that array
+        # keeps every reported sum identical and drops three more
+        # full-length allocations per simulated year.
+        ledger["PV_DC_Curtailed"] = self.pv_curtailment
+        ledger["PV_AC_Export"] = self.grid_export
+        ledger["Inverter_Loss"] = ledger["PV_Direct_Inverter_Loss"]
+        for name in _LEDGER_COLUMNS:
+            ledger.setdefault(name, self.zeros)
+        self.ledger = ledger
+
+    def zero_fill(self) -> None:
+        """No-op: unwritten columns are already served by the zero array."""
+
+    def column_arrays(self) -> Dict[str, np.ndarray]:
+        """Return every per-timestep output column, keyed by its frame name."""
+        return _column_arrays(self)
 
 
 @dataclass(slots=True)
@@ -754,7 +971,9 @@ class _AgingState:
 def _apply_resistance_fade(
     aging: _AgingState,
     battery_config: BatteryConfig,
-    soc_series: pd.Series,
+    soc_values: np.ndarray,
+    time_ticks: np.ndarray,
+    ticks_per_second: float,
     *,
     mean_t_cell: float,
     mean_soc_absolute: float,
@@ -767,7 +986,12 @@ def _apply_resistance_fade(
     lifecycle step has already folded them into the cumulative FEC, so they
     are subtracted back out here.
     """
-    cycles = detect_cycles_rainflow(soc_series, soc_series.index, min_doc_fraction=0.01)
+    cycles = _detect_cycles_rainflow_arrays(
+        soc_values,
+        time_ticks,
+        ticks_per_second,
+        min_doc_fraction=0.01,
+    )
     day_fec = sum(max(0.0, min(1.0, c["doc"])) * c.get("count", 1.0) for c in cycles)
     fec_before_day = aging.fec_cum - day_fec
 
@@ -846,363 +1070,43 @@ def _apply_battery_replacement(
     return battery_energy_wh, 0.0, battery_config.max_soc
 
 
-def _apply_daily_degradation(
-    aging: _AgingState,
-    lifecycle: DegradationLifecycle,
+def _dispatch_day_python(
+    out: "_ResultBuffers",
+    _pv_dc_vals: np.ndarray,
+    _load_vals: np.ndarray,
+    _temp_vals: np.ndarray,
+    lo: int,
+    hi: int,
+    *,
     battery_config: BatteryConfig,
-    out: _ResultBuffers,
-    degradation_tracking: List[Dict[str, Any]],
-    *,
-    step_index: int,
-    step_time: pd.Timestamp,
-    day_index: pd.DatetimeIndex,
-    soc_absolute_day: np.ndarray,
-    t_cell_day: np.ndarray,
-    t_cell_day_sum: float,
-    steps_per_day: int,
+    has_battery: bool,
+    battery_soh_decimal: float,
+    Battery_SOH: float,
+    Battery_Energy_Wh: float,
+    Battery_PV_Origin_Energy_Wh: float,
+    eff_charge: float,
+    eff_discharge: float,
     hours_per_step: float,
-    battery_energy_wh: float,
-    pv_origin_energy_wh: float,
-    battery_energy_beginning: float,
-    debug: bool,
-) -> Tuple[float, float]:
-    """Close out one degradation day, returning ``(energy, pv_origin)``.
+    standby_loss_per_step_wh: float,
+    cap_wh: float,
+    cap_charge_wh: float,
+    cap_discharge_wh: float,
+) -> Tuple[float, float, float, float]:
+    """Dispatch timesteps ``[lo, hi)`` at fixed health, filling *out* in place.
 
-    Runs the lifecycle step, optional resistance fade and the end-of-life
-    replacement check in that order, mutating *aging* in place and appending
-    one row to *degradation_tracking*. The two stored-energy values are
-    returned rather than carried on *aging* because the per-step loop owns
-    them and only a replacement changes them here.
+    This is the reference per-step loop, lifted out of the year loop so that a
+    whole day can be handed to one call. State of health, resistance-derived
+    efficiencies and the replacement decision are unchanged for the duration
+    of the call; the caller advances them at the day boundary.
 
-    The day's SOC and cell-temperature endpoints become the next day's
-    starting boundary; a replacement moves that endpoint to the fresh pack's
-    max SOC, since the recorded state was rewritten to match.
+    Returns ``(battery_energy, pv_origin, t_cell_day_sum, battery_energy_beginning)``,
+    where the last value is the beginning-of-step stored energy of the final
+    step in the window, which the day-close replacement path needs.
     """
-    soc_series = pd.Series(soc_absolute_day, index=day_index)
-    day_end_soc_absolute = float(soc_absolute_day[steps_per_day - 1])
-    day_end_t_cell = float(t_cell_day[steps_per_day - 1])
-
-    mean_soc_abs = float(soc_series.mean())
-    mean_t_cell = t_cell_day_sum / steps_per_day
-    effective_rte = battery_config.charge_efficiency * battery_config.discharge_efficiency
-
-    degradation_step = lifecycle.step(
-        DegradationDay(
-            soc=soc_series,
-            temperature_c=t_cell_day,
-            step_seconds=hours_per_step * 3600.0,
-            start_soc=aging.day_start_soc,
-            start_temperature_c=aging.day_start_t_cell,
-        )
-    )
-    aging.soh_fraction = degradation_step.soh_fraction
-    aging.soh_percent = aging.soh_fraction * 100.0
-    aging.fec_cum = degradation_step.fec
-    aging.cumulative_cal_seconds = degradation_step.calendar_seconds
-    aging.cumulative_cycle_deg += degradation_step.cycle_degradation
-    aging.cumulative_cal_deg += degradation_step.calendar_degradation
-
-    if battery_config.enable_resistance_fade:
-        effective_rte = _apply_resistance_fade(
-            aging,
-            battery_config,
-            soc_series,
-            mean_t_cell=mean_t_cell,
-            mean_soc_absolute=mean_soc_abs,
-            debug=debug,
-        )
-
-    if battery_config.enable_replacement and aging.soh_fraction <= battery_config.eol_percentage:
-        battery_energy_wh, pv_origin_energy_wh, day_end_soc_absolute = _apply_battery_replacement(
-            aging,
-            battery_config,
-            lifecycle,
-            out,
-            step_index=step_index,
-            hours_per_step=hours_per_step,
-            battery_energy_wh=battery_energy_wh,
-            battery_energy_beginning=battery_energy_beginning,
-        )
-        if debug:
-            print(f"\n*** BATTERY REPLACED at {step_time} ***")
-
-    degradation_record = {
-        "Datetime": step_time,
-        "SOH": aging.soh_percent,
-        "Cycle_Degradation": degradation_step.cycle_degradation,
-        "Calendar_Degradation": degradation_step.calendar_degradation,
-        "Cumulative_Cycle_Degradation": aging.cumulative_cycle_deg,
-        "Cumulative_Calendar_Degradation": aging.cumulative_cal_deg,
-        "Cumulative_FEC": aging.fec_cum,
-        "Cumulative_Calendar_Seconds": aging.cumulative_cal_seconds,
-        "Total_Degradation": 1.0 - aging.soh_fraction,
-        "Mean_SOC_Absolute": mean_soc_abs,
-    }
-    degradation_record.update(lifecycle.tracking_fields(degradation_step))
-    if battery_config.enable_resistance_fade:
-        degradation_record["Resistance_Growth"] = aging.resistance_growth
-        degradation_record["Effective_RTE"] = effective_rte
-    degradation_tracking.append(degradation_record)
-
-    aging.day_start_soc = day_end_soc_absolute
-    aging.day_start_t_cell = day_end_t_cell
-    return battery_energy_wh, pv_origin_energy_wh
-
-
-def _build_summary_frame(
-    buffers: _ResultBuffers,
-    hours_per_step: float,
-    *,
-    final_soh_percent: float,
-    n_replacements: int,
-    total_replacement_cost: float,
-) -> Tuple[pd.DataFrame, float]:
-    """Summarise a completed run, returning ``(summary_df, total_pv_wh)``.
-
-    ``total_pv`` is both a summary row and a separate public return value, so
-    it is computed once here and handed back rather than recomputed.
-    """
-    total_pv = buffers.pv_production.sum() * hours_per_step
-    total_load = buffers.load.sum() * hours_per_step
-    total_sell = buffers.grid_export.sum() * hours_per_step
-    total_import = buffers.grid_import.sum() * hours_per_step
-
-    percentage_imported = (total_import / total_load * 100) if total_load > 0 else 0
-
-    summary = {
-        "Total PV [kWh]": total_pv / 1000.0,
-        "Total Load [kWh]": total_load / 1000.0,
-        "Sell [kWh]": total_sell / 1000.0,
-        "Import [kWh]": total_import / 1000.0,
-        "Import [%]": percentage_imported,
-        "Grid Independence [%]": 100 - percentage_imported,
-        "Final SOH [%]": final_soh_percent,
-        "N_Replacements": n_replacements,
-        "Replacement_Cost": total_replacement_cost,
-    }
-    return pd.DataFrame([summary]), total_pv
-
-
-def _build_final_degradation_state(
-    degradation_lifecycle: DegradationLifecycle,
-    *,
-    day_start_soc: float,
-    day_start_temperature_c: float,
-    resistance_growth: float,
-) -> Dict[str, Any]:
-    """Assemble the carry state a follow-on run can be resumed from.
-
-    The engine-independent keys are listed first and explicitly, so the
-    schema a caller round-trips does not depend on adapter dict ordering;
-    whatever else the adapter reports (BLAST engine internals) follows.
-    Resistance growth is owned by the energy loop, not by either adapter.
-    """
-    adapter_snapshot = degradation_lifecycle.snapshot(
-        day_start_soc=day_start_soc,
-        day_start_temperature_c=day_start_temperature_c,
-    )
-    return {
-        "degradation_engine": adapter_snapshot.pop("degradation_engine"),
-        "fec_cum": float(adapter_snapshot.pop("fec_cum")),
-        "cumulative_calendar_seconds": float(adapter_snapshot.pop("cumulative_calendar_seconds")),
-        "resistance_growth": float(resistance_growth),
-        "cumulative_cycle_degradation": float(adapter_snapshot.pop("cumulative_cycle_degradation")),
-        "cumulative_calendar_degradation": float(adapter_snapshot.pop("cumulative_calendar_degradation")),
-        **adapter_snapshot,
-    }
-
-
-def simulate_energy_balance(
-    pv_dc: pd.Series,
-    houseload: pd.DataFrame,
-    battery_config: Optional[BatteryConfig] = None,
-    start_time: Optional[pd.Timestamp] = None,
-    end_time: Optional[pd.Timestamp] = None,
-    freq: str = "h",
-    temperature_series: Optional[pd.Series] = None,
-    results_directory: Optional[str] = None,
-    initial_fec: float = 0.0,
-    initial_calendar_seconds: float = 0.0,
-    initial_resistance_growth: float = 0.0,
-    initial_cumulative_cycle_deg: float = 0.0,
-    initial_cumulative_cal_deg: float = 0.0,
-    degradation_engine: str = "native",
-    blast_model: Optional[str] = None,
-    initial_degradation_state: Optional[Dict[str, Any]] = None,
-    return_degradation_state: bool = False,
-    debug: bool = False,
-    initial_energy_wh: Optional[float] = None,
-    initial_pv_origin_energy_wh: Optional[float] = None,
-) -> (
-    Tuple[pd.DataFrame, float, pd.DataFrame, float, int, pd.DataFrame]
-    | Tuple[pd.DataFrame, float, pd.DataFrame, float, int, pd.DataFrame, Dict[str, Any]]
-):
-    """
-    Simulate energy balance with battery storage and degradation.
-
-    This function processes PV DC production and load profiles to calculate
-    grid interaction, battery state, and degradation for DC-coupled hybrid
-    inverter systems. AC-coupled battery dispatch is not implemented.
-
-    Energy flow for DC-coupled (hybrid inverter) systems:
-    - PV -> Load: DC -> Inverter -> AC (one inverter loss)
-    - PV -> Battery: DC -> Battery (charge efficiency only)
-    - Battery -> Load: DC -> Inverter -> AC (discharge efficiency + inverter loss)
-    - Grid -> Load: AC (no conversion)
-
-    Args:
-        pv_dc: Series with PV DC power production (W) - before inverter
-        houseload: DataFrame with electrical load (W) - AC
-        battery_config: Battery configuration parameters
-        start_time: Simulation start time (defaults to first index of pv_dc)
-        end_time: Simulation end time (defaults to last index of pv_dc)
-        freq: Time frequency ('h' for hourly, '15min' for 15-minute)
-        temperature_series: Battery cell temperature (C), defaults to 25C
-        results_directory: Directory for saving results (optional)
-        degradation_engine: Degradation backend. ``"native"`` preserves the
-            Naumann/Lam model; ``"blast"`` uses the BLAST daily endpoint adapter.
-        blast_model: BLAST model key when ``degradation_engine="blast"``.
-        initial_degradation_state: Optional BLAST state returned by a previous
-            call with ``return_degradation_state=True``.
-        return_degradation_state: Append final degradation carry state to the
-            return tuple when True.
-        debug: Enable debug output
-        initial_energy_wh: Optional carried stored-energy state (Wh). Defaults
-            to the configured max-SOC state for first-run compatibility.
-        initial_pv_origin_energy_wh: Optional PV-origin share of the carried
-            stored energy (Wh). Defaults to zero.
-
-    Returns:
-        Tuple of:
-        - results_df: Detailed timestep results
-        - total_pv: Total PV AC production after inverter efficiency (Wh)
-        - summary_df: Summary statistics
-        - replacement_cost: Total battery replacement cost
-        - n_replacements: Number of battery replacements
-        - degradation_df: Daily degradation tracking
-    """
-    if battery_config is None:
-        battery_config = BatteryConfig(nominal_energy_wh=0)
-
-    # Determine time range
-    if start_time is None:
-        start_time = pv_dc.index[0]
-    if end_time is None:
-        end_time = pv_dc.index[-1]
-
-    # Calculate hours per step for energy conversion
-    hours_per_step = get_hours_per_step(freq)
-    steps_per_day = int(24 / hours_per_step)
-
-    # Create time range
-    rng = pd.date_range(start=start_time, end=end_time, freq=freq)
-
-    _pv_dc_vals, _load_vals, _temp_vals = _align_simulation_inputs(pv_dc, houseload, temperature_series, rng)
-
-    degradation_engine_key = _resolve_degradation_engine(
-        degradation_engine,
-        blast_model,
-        initial_degradation_state,
-        battery_config,
-    )
-
-    # Initialize state
-    battery_soh_decimal = battery_config.initial_soh / 100.0
-    Battery_SOH = battery_config.initial_soh
-    Battery_Energy_Wh, Battery_PV_Origin_Energy_Wh = _resolve_carried_energy(
-        initial_energy_wh,
-        initial_pv_origin_energy_wh,
-        battery_config,
-        battery_soh_decimal,
-    )
-
-    # Degradation day-windows are positional (fixed steps_per_day), not
-    # calendar-based: DST days and trailing partial days shift/skip windows
-    # by design; the Numba kernels share the convention.
-    soc_absolute_buffer = np.empty(steps_per_day, dtype=np.float64)
-    t_cell_day_buffer = np.empty(steps_per_day, dtype=np.float64)
-    soc_buf_idx = 0
-    # The function argument is the multi-year continuation seam (used by the
-    # App's year loop); when left at its default the battery's configured
-    # starting resistance applies.
-    resistance_growth = (
-        initial_resistance_growth if initial_resistance_growth > 0.0 else battery_config.initial_resistance_growth
-    )
-    # Charge/discharge efficiencies, derated by resistance growth when the
-    # fade model is enabled; updated after each daily degradation step.
-    eff_charge = battery_config.charge_efficiency
-    eff_discharge = battery_config.discharge_efficiency
-    if battery_config.enable_resistance_fade:
-        eff_charge, eff_discharge = resistance_to_efficiency(
-            resistance_growth,
-            battery_config.charge_efficiency,
-            battery_config.discharge_efficiency,
-        )
-
-    degradation_tracking: List[Dict[str, Any]] = []
-    T_cell_day_sum = 0.0
-
-    n_steps = len(rng)
-
-    # Pre-allocate result arrays (avoids per-timestep dict creation)
-    out = _ResultBuffers(n_steps)
     _ledger_arrays = out.ledger
-    # Hoist invariant check out of the loop
-    has_battery = battery_config.nominal_energy_wh > 1 and (battery_config.max_soc - battery_config.min_soc) > 0
-    degradation_day_start_soc = battery_config.max_soc if has_battery else 0.0
-    degradation_day_start_t_cell = float(_temp_vals[0]) if n_steps else 25.0
-
-    degradation_lifecycle, degradation_day_start_soc, degradation_day_start_t_cell = _build_degradation_lifecycle(
-        degradation_engine_key,
-        battery_config,
-        battery_soh_decimal=battery_soh_decimal,
-        has_battery=has_battery,
-        blast_model=blast_model,
-        initial_degradation_state=initial_degradation_state,
-        initial_fec=initial_fec,
-        initial_calendar_seconds=initial_calendar_seconds,
-        initial_cumulative_cycle_deg=initial_cumulative_cycle_deg,
-        initial_cumulative_cal_deg=initial_cumulative_cal_deg,
-        default_day_start_soc=degradation_day_start_soc,
-        default_day_start_t_cell=degradation_day_start_t_cell,
-        debug=debug,
-    )
-
-    battery_soh_decimal = degradation_lifecycle.soh()
-    Battery_SOH = battery_soh_decimal * 100.0
-    if degradation_engine_key == "blast" and initial_energy_wh is None:
-        Battery_Energy_Wh = battery_config.nominal_energy_wh * battery_soh_decimal * battery_config.max_soc
-
-    # Health state advanced only at daily boundaries. The loop keeps hot
-    # copies of the four fields it reads every step (SOH and the two
-    # efficiencies) and refreshes them whenever a day closes.
-    aging = _AgingState(
-        soh_fraction=battery_soh_decimal,
-        soh_percent=Battery_SOH,
-        fec_cum=initial_fec,
-        cumulative_cal_seconds=initial_calendar_seconds,
-        cumulative_cycle_deg=initial_cumulative_cycle_deg,
-        cumulative_cal_deg=initial_cumulative_cal_deg,
-        resistance_growth=resistance_growth,
-        cumulative_resistance_cycle=0.0,
-        cumulative_resistance_calendar=0.0,
-        eff_charge=eff_charge,
-        eff_discharge=eff_discharge,
-        n_replacements=0,
-        total_replacement_cost=0.0,
-        day_start_soc=degradation_day_start_soc,
-        day_start_t_cell=degradation_day_start_t_cell,
-    )
-
-    # Per-step energy caps (Wh) for the shared inverter AC nameplate and the
-    # battery's own charge/discharge power limits.
-    standby_loss_per_step_wh = battery_config.standby_loss_wh * hours_per_step
-    cap_wh = _step_energy_cap(battery_config.inverter_ac_capacity_w, hours_per_step)
-    cap_charge_wh = _step_energy_cap(battery_config.max_charge_power_w, hours_per_step)
-    cap_discharge_wh = _step_energy_cap(battery_config.max_discharge_power_w, hours_per_step)
-
-    for i in range(n_steps):
-        step_time = rng[i]
+    T_cell_day_sum = 0.0
+    battery_energy_beginning = 0.0
+    for i in range(lo, hi):
         # Get values for this timestep via fast array indexing
         # Treat negative model/data artefacts as zero generation, matching the
         # public inverter helper and preventing negative PV from being
@@ -1312,10 +1216,6 @@ def simulate_energy_balance(
         else:
             soc_normalized = 0.0
             soc_absolute = 0.0
-        soc_absolute_buffer[soc_buf_idx] = soc_absolute
-        t_cell_day_buffer[soc_buf_idx] = T_cell
-        soc_buf_idx += 1
-
         # Store results via array indexing (avoids per-timestep dict overhead)
         out.pv_dc[i] = pv_dc_power / hours_per_step
         out.pv_production[i] = pv_production / hours_per_step
@@ -1358,24 +1258,659 @@ def simulate_energy_balance(
         }
         for key, value_wh in ledger_w.items():
             _ledger_arrays[key][i] = value_wh / hours_per_step
+    return Battery_Energy_Wh, Battery_PV_Origin_Energy_Wh, T_cell_day_sum, battery_energy_beginning
 
-        # Daily degradation update
-        if soc_buf_idx >= steps_per_day:
-            # Slice the day out of the ring buffers using the rng window
-            # (avoids pd.date_range overhead); the copies outlive the buffers,
-            # which the next day overwrites in place.
-            day_start_i = i - steps_per_day + 1
+
+def _dispatch_no_battery_vectorized(
+    out: Union["_ResultBuffers", "_PvOnlySummaryBuffers"],
+    pv_dc_values: np.ndarray,
+    load_values: np.ndarray,
+    temperature_values: np.ndarray,
+    *,
+    battery_config: BatteryConfig,
+    hours_per_step: float,
+    cap_wh: float,
+    pv_chain: Optional[Tuple[np.ndarray, np.ndarray, np.ndarray]] = None,
+) -> None:
+    """Fill a PV-only result buffer without entering the timestep loop."""
+    out.zero_fill()
+
+    pv_dc_wh = np.maximum(0.0, pv_dc_values * hours_per_step)
+    load_wh = load_values * hours_per_step
+    if pv_chain is None:
+        ac_wh, conversion_loss_wh, clipping_loss_dc_wh = _calculate_dc_ac_power_arrays(
+            pv_dc_wh,
+            cap_wh,
+            battery_config.inverter_efficiency,
+        )
+    else:
+        # Memoized by the caller for these exact inputs. Same values, same
+        # expressions downstream; see AlignedSimulationInputs.with_pv_only_chain.
+        ac_wh, conversion_loss_wh, clipping_loss_dc_wh = pv_chain
+    pv_ac_to_load_wh = np.minimum(ac_wh, load_wh)
+    grid_export_wh = ac_wh - pv_ac_to_load_wh
+    grid_import_wh = np.maximum(0.0, load_wh - pv_ac_to_load_wh)
+    if math.isinf(cap_wh):
+        pv_production_wh = (pv_dc_wh - clipping_loss_dc_wh) * battery_config.inverter_efficiency
+    else:
+        # Keep the scalar reference's subtraction order. Returning ``ac_wh``
+        # here is algebraically equivalent but differs by one ULP at low load.
+        pv_production_wh = pv_dc_wh - clipping_loss_dc_wh - conversion_loss_wh
+
+    # The three columns reported twice under different names are divided
+    # once and assigned twice. On the reduced summary buffer the second
+    # assignment writes the array the first one already filled, which is
+    # what makes sharing it safe: both names carry the same values either way.
+    curtailment_w = clipping_loss_dc_wh / hours_per_step
+    grid_export_w = grid_export_wh / hours_per_step
+    conversion_w = conversion_loss_wh / hours_per_step
+
+    out.pv_dc[:] = pv_dc_wh / hours_per_step
+    out.pv_production[:] = pv_production_wh / hours_per_step
+    out.load[:] = load_wh / hours_per_step
+    out.pv_delta[:] = (pv_production_wh - load_wh) / hours_per_step
+    out.grid_import[:] = grid_import_wh / hours_per_step
+    out.grid_export[:] = grid_export_w
+    out.soh.fill(100.0)
+    out.t_cell[:] = temperature_values
+    out.pv_curtailment[:] = curtailment_w
+
+    out.ledger["PV_DC_To_Inverter"][:] = (pv_dc_wh - clipping_loss_dc_wh) / hours_per_step
+    out.ledger["PV_DC_Curtailed"][:] = curtailment_w
+    out.ledger["PV_AC_To_Load"][:] = pv_ac_to_load_wh / hours_per_step
+    out.ledger["PV_AC_Export"][:] = grid_export_w
+    out.ledger["PV_Direct_Inverter_Loss"][:] = conversion_w
+    out.ledger["Inverter_Loss"][:] = conversion_w
+
+
+def _apply_daily_degradation(
+    aging: _AgingState,
+    lifecycle: DegradationLifecycle,
+    battery_config: BatteryConfig,
+    out: _ResultBuffers,
+    degradation_tracking: List[Dict[str, Any]],
+    *,
+    step_index: int,
+    step_time: pd.Timestamp,
+    day_index: pd.DatetimeIndex,
+    soc_absolute_day: np.ndarray,
+    t_cell_day: np.ndarray,
+    t_cell_day_sum: float,
+    steps_per_day: int,
+    hours_per_step: float,
+    battery_energy_wh: float,
+    pv_origin_energy_wh: float,
+    battery_energy_beginning: float,
+    debug: bool,
+) -> Tuple[float, float]:
+    """Close out one degradation day, returning ``(energy, pv_origin)``.
+
+    Runs the lifecycle step, optional resistance fade and the end-of-life
+    replacement check in that order, mutating *aging* in place and appending
+    one row to *degradation_tracking*. The two stored-energy values are
+    returned rather than carried on *aging* because the per-step loop owns
+    them and only a replacement changes them here.
+
+    The day's SOC and cell-temperature endpoints become the next day's
+    starting boundary; a replacement moves that endpoint to the fresh pack's
+    max SOC, since the recorded state was rewritten to match.
+    """
+    time_ticks, ticks_per_second = _datetime_index_ticks(day_index)
+    day_end_soc_absolute = float(soc_absolute_day[steps_per_day - 1])
+    day_end_t_cell = float(t_cell_day[steps_per_day - 1])
+
+    mean_soc_abs = float(np.mean(soc_absolute_day))
+    mean_t_cell = t_cell_day_sum / steps_per_day
+    effective_rte = battery_config.charge_efficiency * battery_config.discharge_efficiency
+
+    degradation_step = lifecycle.step(
+        DegradationDay(
+            soc=soc_absolute_day,
+            time_ticks=time_ticks,
+            ticks_per_second=ticks_per_second,
+            temperature_c=t_cell_day,
+            step_seconds=hours_per_step * 3600.0,
+            start_soc=aging.day_start_soc,
+            start_temperature_c=aging.day_start_t_cell,
+        )
+    )
+    aging.soh_fraction = degradation_step.soh_fraction
+    aging.soh_percent = aging.soh_fraction * 100.0
+    aging.fec_cum = degradation_step.fec
+    aging.cumulative_cal_seconds = degradation_step.calendar_seconds
+    aging.cumulative_cycle_deg += degradation_step.cycle_degradation
+    aging.cumulative_cal_deg += degradation_step.calendar_degradation
+
+    if battery_config.enable_resistance_fade:
+        effective_rte = _apply_resistance_fade(
+            aging,
+            battery_config,
+            soc_absolute_day,
+            time_ticks,
+            ticks_per_second,
+            mean_t_cell=mean_t_cell,
+            mean_soc_absolute=mean_soc_abs,
+            debug=debug,
+        )
+
+    if battery_config.enable_replacement and aging.soh_fraction <= battery_config.eol_percentage:
+        battery_energy_wh, pv_origin_energy_wh, day_end_soc_absolute = _apply_battery_replacement(
+            aging,
+            battery_config,
+            lifecycle,
+            out,
+            step_index=step_index,
+            hours_per_step=hours_per_step,
+            battery_energy_wh=battery_energy_wh,
+            battery_energy_beginning=battery_energy_beginning,
+        )
+        if debug:
+            print(f"\n*** BATTERY REPLACED at {step_time} ***")
+
+    degradation_record = {
+        "Datetime": step_time,
+        "SOH": aging.soh_percent,
+        "Cycle_Degradation": degradation_step.cycle_degradation,
+        "Calendar_Degradation": degradation_step.calendar_degradation,
+        "Cumulative_Cycle_Degradation": aging.cumulative_cycle_deg,
+        "Cumulative_Calendar_Degradation": aging.cumulative_cal_deg,
+        "Cumulative_FEC": aging.fec_cum,
+        "Cumulative_Calendar_Seconds": aging.cumulative_cal_seconds,
+        "Total_Degradation": 1.0 - aging.soh_fraction,
+        "Mean_SOC_Absolute": mean_soc_abs,
+    }
+    degradation_record.update(lifecycle.tracking_fields(degradation_step))
+    if battery_config.enable_resistance_fade:
+        degradation_record["Resistance_Growth"] = aging.resistance_growth
+        degradation_record["Effective_RTE"] = effective_rte
+    degradation_tracking.append(degradation_record)
+
+    aging.day_start_soc = day_end_soc_absolute
+    aging.day_start_t_cell = day_end_t_cell
+    return battery_energy_wh, pv_origin_energy_wh
+
+
+def _build_summary_row(
+    buffers: _ResultBuffers,
+    hours_per_step: float,
+    *,
+    final_soh_percent: float,
+    n_replacements: int,
+    total_replacement_cost: float,
+) -> Tuple[Dict[str, float], float]:
+    """Summarise a completed run, returning ``(summary_row, total_pv_wh)``.
+
+    ``total_pv`` is both a summary row and a separate public return value, so
+    it is computed once here and handed back rather than recomputed.
+    """
+    total_pv = np.sum(buffers.pv_production) * hours_per_step
+    total_load = np.sum(buffers.load) * hours_per_step
+    total_sell = np.sum(buffers.grid_export) * hours_per_step
+    total_import = np.sum(buffers.grid_import) * hours_per_step
+
+    percentage_imported = (total_import / total_load * 100) if total_load > 0 else 0
+
+    summary = {
+        "Total PV [kWh]": total_pv / 1000.0,
+        "Total Load [kWh]": total_load / 1000.0,
+        "Sell [kWh]": total_sell / 1000.0,
+        "Import [kWh]": total_import / 1000.0,
+        "Import [%]": percentage_imported,
+        "Grid Independence [%]": 100 - percentage_imported,
+        "Final SOH [%]": final_soh_percent,
+        "N_Replacements": n_replacements,
+        "Replacement_Cost": total_replacement_cost,
+    }
+    return summary, total_pv
+
+
+def _build_final_degradation_state(
+    degradation_lifecycle: DegradationLifecycle,
+    *,
+    day_start_soc: float,
+    day_start_temperature_c: float,
+    resistance_growth: float,
+) -> Dict[str, Any]:
+    """Assemble the carry state a follow-on run can be resumed from.
+
+    The engine-independent keys are listed first and explicitly, so the
+    schema a caller round-trips does not depend on adapter dict ordering;
+    whatever else the adapter reports (BLAST engine internals) follows.
+    Resistance growth is owned by the energy loop, not by either adapter.
+    """
+    adapter_snapshot = degradation_lifecycle.snapshot(
+        day_start_soc=day_start_soc,
+        day_start_temperature_c=day_start_temperature_c,
+    )
+    return {
+        "degradation_engine": adapter_snapshot.pop("degradation_engine"),
+        "fec_cum": float(adapter_snapshot.pop("fec_cum")),
+        "cumulative_calendar_seconds": float(adapter_snapshot.pop("cumulative_calendar_seconds")),
+        "resistance_growth": float(resistance_growth),
+        "cumulative_cycle_degradation": float(adapter_snapshot.pop("cumulative_cycle_degradation")),
+        "cumulative_calendar_degradation": float(adapter_snapshot.pop("cumulative_calendar_degradation")),
+        **adapter_snapshot,
+    }
+
+
+def _resolve_dispatch_day(execution_backend: str) -> Any:
+    """Return the within-day dispatch implementation for a backend name.
+
+    Resolution happens once per simulated year, before any timestep runs, so
+    a missing optional dependency is reported at the start of a study rather
+    than part-way through one. The name check lives in :mod:`breos.execution`
+    so App and Monte Carlo cannot disagree about what is valid.
+    """
+    validate_execution_backend(execution_backend)
+    if execution_backend == "python":
+        return _dispatch_day_python
+    from breos._numba_dispatch import require_numba_dispatch_day
+
+    return require_numba_dispatch_day()
+
+
+@dataclass(slots=True)
+class _CoreRun:
+    """Everything one simulated span produced, before any result is shaped.
+
+    Both public entry points run the same core and then differ only in what
+    they build from this: the detailed path materialises frames, the summary
+    path reduces the buffers in place. Keeping the split here is what makes
+    the two paths comparable field by field.
+    """
+
+    buffers: _ResultBuffers
+    rng: pd.DatetimeIndex
+    aging: _AgingState
+    lifecycle: DegradationLifecycle
+    degradation_tracking: List[Dict[str, Any]]
+    hours_per_step: float
+    has_battery: bool
+    final_soh_percent: float
+
+
+@dataclass(frozen=True, slots=True)
+class SimulationSummary:
+    """Annual totals and carry state, without a per-timestep frame.
+
+    ``column_sums`` holds the plain sum of every column the detailed results
+    frame exposes, under the same names and in the same units, so a caller
+    that used to write ``results_df[col].sum()`` reads ``column_sums[col]``
+    and gets the identical value. Unit scaling stays with the caller, because
+    the order of a scaling expression is itself observable in floating point.
+
+    The remaining fields are the state a multi-year caller has to carry, plus
+    the diagnostics needed to establish parity between execution paths:
+    stored and PV-origin energy at the seam, the four cumulative degradation
+    accumulators, resistance growth, and the exact steps at which the pack
+    was replaced.
+    """
+
+    n_steps: int
+    hours_per_step: float
+    has_battery: bool
+    column_sums: Dict[str, float]
+    total_pv_wh: float
+    summary_row: Dict[str, float]
+    final_soh_percent: float
+    n_replacements: int
+    total_replacement_cost: float
+    opening_energy_wh: float
+    opening_pv_origin_energy_wh: float
+    carried_energy_wh: float
+    carried_pv_origin_energy_wh: float
+    has_degradation_rows: bool
+    fec_cum: float
+    cumulative_calendar_seconds: float
+    cumulative_cycle_degradation: float
+    cumulative_calendar_degradation: float
+    resistance_growth: float
+    replacement_steps: Tuple[int, ...]
+    final_degradation_state: Optional[Dict[str, Any]] = None
+
+
+def _build_simulation_summary(core: _CoreRun, *, return_degradation_state: bool) -> SimulationSummary:
+    """Reduce a completed core run to its annual totals and carry state."""
+    buffers = core.buffers
+    aging = core.aging
+    column_sums = _column_sums(buffers.column_arrays())
+
+    summary_row, total_pv = _build_summary_row(
+        buffers,
+        core.hours_per_step,
+        final_soh_percent=core.final_soh_percent,
+        n_replacements=aging.n_replacements,
+        total_replacement_cost=aging.total_replacement_cost,
+    )
+
+    final_state = None
+    if return_degradation_state:
+        final_state = _build_final_degradation_state(
+            core.lifecycle,
+            day_start_soc=aging.day_start_soc,
+            day_start_temperature_c=aging.day_start_t_cell,
+            resistance_growth=aging.resistance_growth,
+        )
+
+    return SimulationSummary(
+        n_steps=len(buffers.battery_energy),
+        hours_per_step=core.hours_per_step,
+        has_battery=core.has_battery,
+        column_sums=column_sums,
+        total_pv_wh=total_pv,
+        summary_row=summary_row,
+        final_soh_percent=core.final_soh_percent,
+        n_replacements=aging.n_replacements,
+        total_replacement_cost=aging.total_replacement_cost,
+        # Read from the recorded end-of-step state rather than from the loop
+        # locals: a replacement inside the closing step rewrites what the next
+        # year must resume from.
+        # The opening state makes the year-to-year seam checkable from a
+        # summary alone: the first step's beginning energy must equal what the
+        # previous year carried out.
+        opening_energy_wh=float(buffers.battery_energy_begin[0]),
+        opening_pv_origin_energy_wh=float(buffers.pv_origin_begin[0]),
+        carried_energy_wh=float(buffers.battery_energy[-1]),
+        carried_pv_origin_energy_wh=float(buffers.pv_origin_end[-1]),
+        has_degradation_rows=bool(core.degradation_tracking),
+        fec_cum=aging.fec_cum,
+        cumulative_calendar_seconds=aging.cumulative_cal_seconds,
+        cumulative_cycle_degradation=aging.cumulative_cycle_deg,
+        cumulative_calendar_degradation=aging.cumulative_cal_deg,
+        resistance_growth=aging.resistance_growth,
+        replacement_steps=tuple(int(i) for i in np.flatnonzero(buffers.replaced)),
+        final_degradation_state=final_state,
+    )
+
+
+def _simulate_core(
+    pv_dc: Optional[pd.Series] = None,
+    houseload: Optional[pd.DataFrame] = None,
+    battery_config: Optional[BatteryConfig] = None,
+    start_time: Optional[pd.Timestamp] = None,
+    end_time: Optional[pd.Timestamp] = None,
+    freq: str = "h",
+    temperature_series: Optional[pd.Series] = None,
+    results_directory: Optional[str] = None,
+    initial_fec: float = 0.0,
+    initial_calendar_seconds: float = 0.0,
+    initial_resistance_growth: float = 0.0,
+    initial_cumulative_cycle_deg: float = 0.0,
+    initial_cumulative_cal_deg: float = 0.0,
+    degradation_engine: str = "native",
+    blast_model: Optional[str] = None,
+    initial_degradation_state: Optional[Dict[str, Any]] = None,
+    debug: bool = False,
+    initial_energy_wh: Optional[float] = None,
+    initial_pv_origin_energy_wh: Optional[float] = None,
+    execution_backend: str = "python",
+    summary_only: bool = False,
+    aligned: Optional[AlignedSimulationInputs] = None,
+) -> "_CoreRun":
+    """
+    Simulate energy balance with battery storage and degradation.
+
+    This function processes PV DC production and load profiles to calculate
+    grid interaction, battery state, and degradation for DC-coupled hybrid
+    inverter systems. AC-coupled battery dispatch is not implemented.
+
+    Energy flow for DC-coupled (hybrid inverter) systems:
+    - PV -> Load: DC -> Inverter -> AC (one inverter loss)
+    - PV -> Battery: DC -> Battery (charge efficiency only)
+    - Battery -> Load: DC -> Inverter -> AC (discharge efficiency + inverter loss)
+    - Grid -> Load: AC (no conversion)
+
+    Args:
+        pv_dc: Series with PV DC power production (W) - before inverter
+        houseload: DataFrame with electrical load (W) - AC
+        battery_config: Battery configuration parameters
+        start_time: Simulation start time (defaults to first index of pv_dc)
+        end_time: Simulation end time (defaults to last index of pv_dc)
+        freq: Time frequency ('h' for hourly, '15min' for 15-minute)
+        temperature_series: Battery cell temperature (C), defaults to 25C
+        results_directory: Directory for saving results (optional)
+        degradation_engine: Degradation backend. ``"native"`` preserves the
+            Naumann/Lam model; ``"blast"`` uses the BLAST daily endpoint adapter.
+        blast_model: BLAST model key when ``degradation_engine="blast"``.
+        initial_degradation_state: Optional BLAST state returned by a previous
+            call with ``return_degradation_state=True``.
+        return_degradation_state: Append final degradation carry state to the
+            return tuple when True.
+        debug: Enable debug output
+        initial_energy_wh: Optional carried stored-energy state (Wh). Defaults
+            to the configured max-SOC state for first-run compatibility.
+        initial_pv_origin_energy_wh: Optional PV-origin share of the carried
+            stored energy (Wh). Defaults to zero.
+        execution_backend: Which implementation runs the within-day dispatch
+            arithmetic. ``"python"`` is the default and the numerical
+            reference; ``"numba"`` selects the optional compiled kernel and
+            requires ``breos[fast]``. Everything outside the day window runs
+            in Python either way.
+
+    Returns:
+        Tuple of:
+        - results_df: Detailed timestep results
+        - total_pv: Total PV AC production after inverter efficiency (Wh)
+        - summary_df: Summary statistics
+        - replacement_cost: Total battery replacement cost
+        - n_replacements: Number of battery replacements
+        - degradation_df: Daily degradation tracking
+    """
+    if battery_config is None:
+        battery_config = BatteryConfig(nominal_energy_wh=0)
+
+    # Calculate hours per step for energy conversion
+    hours_per_step = get_hours_per_step(freq)
+    steps_per_day = int(24 / hours_per_step)
+
+    if aligned is None:
+        if pv_dc is None or houseload is None:
+            raise ValueError("pass either pv_dc and houseload, or aligned inputs")
+        # Determine time range
+        if start_time is None:
+            start_time = pv_dc.index[0]
+        if end_time is None:
+            end_time = pv_dc.index[-1]
+        # Create time range
+        rng = pd.date_range(start=start_time, end=end_time, freq=freq)
+        _pv_dc_vals, _load_vals, _temp_vals = _align_input_arrays(pv_dc, houseload, temperature_series, rng)
+    else:
+        # The caller has already built the calendar and reindexed onto it.
+        rng = aligned.index
+        _pv_dc_vals = aligned.pv_dc_w
+        _load_vals = aligned.load_w
+        _temp_vals = aligned.temperature_c
+
+    degradation_engine_key = _resolve_degradation_engine(
+        degradation_engine,
+        blast_model,
+        initial_degradation_state,
+        battery_config,
+    )
+
+    # Initialize state
+    battery_soh_decimal = battery_config.initial_soh / 100.0
+    Battery_SOH = battery_config.initial_soh
+    Battery_Energy_Wh, Battery_PV_Origin_Energy_Wh = _resolve_carried_energy(
+        initial_energy_wh,
+        initial_pv_origin_energy_wh,
+        battery_config,
+        battery_soh_decimal,
+    )
+
+    # Degradation day-windows are positional (fixed steps_per_day), not
+    # calendar-based: DST days and trailing partial days shift/skip windows
+    # by design; the compiled dispatch backend shares the convention.
+    # The function argument is the multi-year continuation seam (used by the
+    # App's year loop); when left at its default the battery's configured
+    # starting resistance applies.
+    resistance_growth = (
+        initial_resistance_growth if initial_resistance_growth > 0.0 else battery_config.initial_resistance_growth
+    )
+    # Charge/discharge efficiencies, derated by resistance growth when the
+    # fade model is enabled; updated after each daily degradation step.
+    eff_charge = battery_config.charge_efficiency
+    eff_discharge = battery_config.discharge_efficiency
+    if battery_config.enable_resistance_fade:
+        eff_charge, eff_discharge = resistance_to_efficiency(
+            resistance_growth,
+            battery_config.charge_efficiency,
+            battery_config.discharge_efficiency,
+        )
+
+    degradation_tracking: List[Dict[str, Any]] = []
+
+    n_steps = len(rng)
+
+    # Hoist invariant check out of the loop
+    has_battery = not is_pv_only_dispatch(
+        battery_config.nominal_energy_wh,
+        battery_config.max_soc,
+        battery_config.min_soc,
+    )
+    # The vectorized PV-only dispatch below is the only producer that leaves
+    # most columns at zero, so it is the only one whose output can be served
+    # from the reduced buffer -- and only when the caller wants a summary,
+    # since the detailed frame must own a writable array per column.
+    pv_only_summary = summary_only and not has_battery
+
+    # Pre-allocate result arrays (avoids per-timestep dict creation)
+    out = _PvOnlySummaryBuffers(n_steps) if pv_only_summary else _ResultBuffers(n_steps)
+    degradation_day_start_soc = battery_config.max_soc if has_battery else 0.0
+    degradation_day_start_t_cell = float(_temp_vals[0]) if n_steps else 25.0
+
+    degradation_lifecycle, degradation_day_start_soc, degradation_day_start_t_cell = _build_degradation_lifecycle(
+        degradation_engine_key,
+        battery_config,
+        battery_soh_decimal=battery_soh_decimal,
+        has_battery=has_battery,
+        blast_model=blast_model,
+        initial_degradation_state=initial_degradation_state,
+        initial_fec=initial_fec,
+        initial_calendar_seconds=initial_calendar_seconds,
+        initial_cumulative_cycle_deg=initial_cumulative_cycle_deg,
+        initial_cumulative_cal_deg=initial_cumulative_cal_deg,
+        default_day_start_soc=degradation_day_start_soc,
+        default_day_start_t_cell=degradation_day_start_t_cell,
+        debug=debug,
+    )
+
+    battery_soh_decimal = degradation_lifecycle.soh()
+    Battery_SOH = battery_soh_decimal * 100.0
+    if degradation_engine_key == "blast" and initial_energy_wh is None:
+        Battery_Energy_Wh = battery_config.nominal_energy_wh * battery_soh_decimal * battery_config.max_soc
+
+    # Health state advanced only at daily boundaries. The loop keeps hot
+    # copies of the four fields it reads every step (SOH and the two
+    # efficiencies) and refreshes them whenever a day closes.
+    aging = _AgingState(
+        soh_fraction=battery_soh_decimal,
+        soh_percent=Battery_SOH,
+        fec_cum=initial_fec,
+        cumulative_cal_seconds=initial_calendar_seconds,
+        cumulative_cycle_deg=initial_cumulative_cycle_deg,
+        cumulative_cal_deg=initial_cumulative_cal_deg,
+        resistance_growth=resistance_growth,
+        cumulative_resistance_cycle=0.0,
+        cumulative_resistance_calendar=0.0,
+        eff_charge=eff_charge,
+        eff_discharge=eff_discharge,
+        n_replacements=0,
+        total_replacement_cost=0.0,
+        day_start_soc=degradation_day_start_soc,
+        day_start_t_cell=degradation_day_start_t_cell,
+    )
+
+    # Per-step energy caps (Wh) for the shared inverter AC nameplate and the
+    # battery's own charge/discharge power limits.
+    standby_loss_per_step_wh = battery_config.standby_loss_wh * hours_per_step
+    cap_wh = _step_energy_cap(battery_config.inverter_ac_capacity_w, hours_per_step)
+    cap_charge_wh = _step_energy_cap(battery_config.max_charge_power_w, hours_per_step)
+    cap_discharge_wh = _step_energy_cap(battery_config.max_discharge_power_w, hours_per_step)
+
+    dispatch_day = _resolve_dispatch_day(execution_backend)
+
+    # PV-only balance is already vectorized with NumPy and does not need the
+    # general per-step dispatcher. This common path is faster than either the
+    # Python or Numba day loop and keeps one numerical implementation.
+    if not has_battery:
+        _dispatch_no_battery_vectorized(
+            out,
+            _pv_dc_vals,
+            _load_vals,
+            _temp_vals,
+            battery_config=battery_config,
+            hours_per_step=hours_per_step,
+            cap_wh=cap_wh,
+            pv_chain=None if aligned is None else aligned.pv_chain,
+        )
+        return _CoreRun(
+            buffers=out,
+            rng=rng,
+            aging=aging,
+            lifecycle=degradation_lifecycle,
+            degradation_tracking=degradation_tracking,
+            hours_per_step=hours_per_step,
+            has_battery=False,
+            final_soh_percent=Battery_SOH,
+        )
+
+    # Dispatch advances one degradation day at a time. Health state is fixed
+    # for the whole window and advanced here, between windows, so every
+    # scientifically sensitive transition stays on this path regardless of
+    # which backend ran the arithmetic inside the window.
+    window_start = 0
+    while window_start < n_steps:
+        window_end = min(window_start + steps_per_day, n_steps)
+        (
+            Battery_Energy_Wh,
+            Battery_PV_Origin_Energy_Wh,
+            T_cell_day_sum,
+            battery_energy_beginning,
+        ) = dispatch_day(
+            out,
+            _pv_dc_vals,
+            _load_vals,
+            _temp_vals,
+            window_start,
+            window_end,
+            battery_config=battery_config,
+            has_battery=has_battery,
+            battery_soh_decimal=battery_soh_decimal,
+            Battery_SOH=Battery_SOH,
+            Battery_Energy_Wh=Battery_Energy_Wh,
+            Battery_PV_Origin_Energy_Wh=Battery_PV_Origin_Energy_Wh,
+            eff_charge=eff_charge,
+            eff_discharge=eff_discharge,
+            hours_per_step=hours_per_step,
+            standby_loss_per_step_wh=standby_loss_per_step_wh,
+            cap_wh=cap_wh,
+            cap_charge_wh=cap_charge_wh,
+            cap_discharge_wh=cap_discharge_wh,
+        )
+        if window_end - window_start < steps_per_day:
+            # Degradation windows are positional and whole-day. A trailing
+            # partial day is simulated and reported but never closes a window,
+            # which is what the per-step loop did before this was hoisted.
+            break
+
+        if has_battery:
+            last_step = window_end - 1
             Battery_Energy_Wh, Battery_PV_Origin_Energy_Wh = _apply_daily_degradation(
                 aging,
                 degradation_lifecycle,
                 battery_config,
                 out,
                 degradation_tracking,
-                step_index=i,
-                step_time=step_time,
-                day_index=rng[day_start_i : i + 1],
-                soc_absolute_day=soc_absolute_buffer[:steps_per_day].copy(),
-                t_cell_day=t_cell_day_buffer[:steps_per_day].copy(),
+                step_index=last_step,
+                # Timestamps are read once per closed day rather than once per
+                # step; nothing inside the window depends on the calendar.
+                step_time=rng[last_step],
+                day_index=rng[window_start:window_end],
+                # Copied before the call so a replacement rewriting the closing
+                # step's recorded state cannot reach the day the aging model saw.
+                soc_absolute_day=out.soc_absolute[window_start:window_end].copy(),
+                t_cell_day=out.t_cell[window_start:window_end].copy(),
                 t_cell_day_sum=T_cell_day_sum,
                 steps_per_day=steps_per_day,
                 hours_per_step=hours_per_step,
@@ -1389,32 +1924,176 @@ def simulate_energy_balance(
             Battery_SOH = aging.soh_percent
             eff_charge = aging.eff_charge
             eff_discharge = aging.eff_discharge
+        window_start = window_end
 
-            # Reset daily accumulators
-            soc_buf_idx = 0
-            T_cell_day_sum = 0.0
-
-    df = out.to_frame(rng)
-    deg_df = pd.DataFrame(degradation_tracking) if degradation_tracking else pd.DataFrame()
-    summary_df, total_pv = _build_summary_frame(
-        out,
-        hours_per_step,
+    return _CoreRun(
+        buffers=out,
+        rng=rng,
+        aging=aging,
+        lifecycle=degradation_lifecycle,
+        degradation_tracking=degradation_tracking,
+        hours_per_step=hours_per_step,
+        has_battery=has_battery,
         final_soh_percent=Battery_SOH,
-        n_replacements=aging.n_replacements,
-        total_replacement_cost=aging.total_replacement_cost,
     )
 
-    result = (df, total_pv, summary_df, aging.total_replacement_cost, aging.n_replacements, deg_df)
+
+def simulate_energy_balance(
+    pv_dc: pd.Series,
+    houseload: pd.DataFrame,
+    battery_config: Optional[BatteryConfig] = None,
+    start_time: Optional[pd.Timestamp] = None,
+    end_time: Optional[pd.Timestamp] = None,
+    freq: str = "h",
+    temperature_series: Optional[pd.Series] = None,
+    results_directory: Optional[str] = None,
+    initial_fec: float = 0.0,
+    initial_calendar_seconds: float = 0.0,
+    initial_resistance_growth: float = 0.0,
+    initial_cumulative_cycle_deg: float = 0.0,
+    initial_cumulative_cal_deg: float = 0.0,
+    degradation_engine: str = "native",
+    blast_model: Optional[str] = None,
+    initial_degradation_state: Optional[Dict[str, Any]] = None,
+    return_degradation_state: bool = False,
+    debug: bool = False,
+    initial_energy_wh: Optional[float] = None,
+    initial_pv_origin_energy_wh: Optional[float] = None,
+    execution_backend: str = "python",
+) -> (
+    Tuple[pd.DataFrame, float, pd.DataFrame, float, int, pd.DataFrame]
+    | Tuple[pd.DataFrame, float, pd.DataFrame, float, int, pd.DataFrame, Dict[str, Any]]
+):
+    """Simulate an energy balance and return the detailed per-timestep results.
+
+    This is the reference path and the full public contract; see
+    :func:`_simulate_core` for the argument semantics. Callers that only need
+    annual totals and carry state should use
+    :func:`simulate_energy_balance_summary`, which runs the same physics
+    without materialising the results frame.
+
+    Returns:
+        Tuple of:
+        - results_df: Detailed timestep results
+        - total_pv: Total PV AC production after inverter efficiency (Wh)
+        - summary_df: Summary statistics
+        - replacement_cost: Total battery replacement cost
+        - n_replacements: Number of battery replacements
+        - degradation_df: Daily degradation tracking
+    """
+    core = _simulate_core(
+        pv_dc=pv_dc,
+        houseload=houseload,
+        battery_config=battery_config,
+        start_time=start_time,
+        end_time=end_time,
+        freq=freq,
+        temperature_series=temperature_series,
+        results_directory=results_directory,
+        initial_fec=initial_fec,
+        initial_calendar_seconds=initial_calendar_seconds,
+        initial_resistance_growth=initial_resistance_growth,
+        initial_cumulative_cycle_deg=initial_cumulative_cycle_deg,
+        initial_cumulative_cal_deg=initial_cumulative_cal_deg,
+        degradation_engine=degradation_engine,
+        blast_model=blast_model,
+        initial_degradation_state=initial_degradation_state,
+        debug=debug,
+        initial_energy_wh=initial_energy_wh,
+        initial_pv_origin_energy_wh=initial_pv_origin_energy_wh,
+        execution_backend=execution_backend,
+    )
+    df = core.buffers.to_frame(core.rng)
+    deg_df = pd.DataFrame(core.degradation_tracking) if core.degradation_tracking else pd.DataFrame()
+    summary_row, total_pv = _build_summary_row(
+        core.buffers,
+        core.hours_per_step,
+        final_soh_percent=core.final_soh_percent,
+        n_replacements=core.aging.n_replacements,
+        total_replacement_cost=core.aging.total_replacement_cost,
+    )
+    summary_df = pd.DataFrame([summary_row])
+
+    result = (df, total_pv, summary_df, core.aging.total_replacement_cost, core.aging.n_replacements, deg_df)
     if not return_degradation_state:
         return result
 
     final_degradation_state = _build_final_degradation_state(
-        degradation_lifecycle,
-        day_start_soc=aging.day_start_soc,
-        day_start_temperature_c=aging.day_start_t_cell,
-        resistance_growth=aging.resistance_growth,
+        core.lifecycle,
+        day_start_soc=core.aging.day_start_soc,
+        day_start_temperature_c=core.aging.day_start_t_cell,
+        resistance_growth=core.aging.resistance_growth,
     )
     return (*result, final_degradation_state)
+
+
+def simulate_energy_balance_summary(
+    pv_dc: Optional[pd.Series] = None,
+    houseload: Optional[pd.DataFrame] = None,
+    battery_config: Optional[BatteryConfig] = None,
+    start_time: Optional[pd.Timestamp] = None,
+    end_time: Optional[pd.Timestamp] = None,
+    freq: str = "h",
+    temperature_series: Optional[pd.Series] = None,
+    results_directory: Optional[str] = None,
+    initial_fec: float = 0.0,
+    initial_calendar_seconds: float = 0.0,
+    initial_resistance_growth: float = 0.0,
+    initial_cumulative_cycle_deg: float = 0.0,
+    initial_cumulative_cal_deg: float = 0.0,
+    degradation_engine: str = "native",
+    blast_model: Optional[str] = None,
+    initial_degradation_state: Optional[Dict[str, Any]] = None,
+    return_degradation_state: bool = False,
+    debug: bool = False,
+    initial_energy_wh: Optional[float] = None,
+    initial_pv_origin_energy_wh: Optional[float] = None,
+    execution_backend: str = "python",
+    aligned: Optional[AlignedSimulationInputs] = None,
+) -> SimulationSummary:
+    """Simulate an energy balance and return annual totals and carry state.
+
+    Runs exactly the physics :func:`simulate_energy_balance` runs, with the
+    same arguments, and skips only the construction of the per-timestep
+    results frame and the daily degradation frame. Multi-year callers such as
+    Monte Carlo need the aggregates and the year-to-year seam, not the
+    35,040 rows they were being reduced from.
+
+    Pass either ``pv_dc`` and ``houseload``, or a
+    :class:`AlignedSimulationInputs` built by
+    :func:`align_simulation_inputs` as ``aligned``. The second form skips
+    building the calendar and reindexing onto it, which a caller running the
+    same calendar many times has already done; ``freq``, ``start_time`` and
+    ``end_time`` are then read from the aligned inputs, and
+    ``temperature_series`` is ignored in favour of the aligned one.
+    """
+    core = _simulate_core(
+        pv_dc=pv_dc,
+        houseload=houseload,
+        battery_config=battery_config,
+        start_time=start_time,
+        end_time=end_time,
+        freq=freq,
+        temperature_series=temperature_series,
+        results_directory=results_directory,
+        initial_fec=initial_fec,
+        initial_calendar_seconds=initial_calendar_seconds,
+        initial_resistance_growth=initial_resistance_growth,
+        initial_cumulative_cycle_deg=initial_cumulative_cycle_deg,
+        initial_cumulative_cal_deg=initial_cumulative_cal_deg,
+        degradation_engine=degradation_engine,
+        blast_model=blast_model,
+        initial_degradation_state=initial_degradation_state,
+        debug=debug,
+        initial_energy_wh=initial_energy_wh,
+        initial_pv_origin_energy_wh=initial_pv_origin_energy_wh,
+        execution_backend=execution_backend,
+        # Reduced per-step buffers are safe here: nothing downstream of this
+        # call materialises a per-timestep frame.
+        summary_only=True,
+        aligned=aligned,
+    )
+    return _build_simulation_summary(core, return_degradation_state=return_degradation_state)
 
 
 def lfp_capacity_factor(T_C: float) -> float:
@@ -1626,29 +2305,35 @@ def detect_half_cycles_from_soc_series(
     return half_cycles, soc_abs_series
 
 
-def detect_cycles_rainflow(
-    soc_abs_series: pd.Series, time_index: pd.DatetimeIndex, min_doc_fraction: float = 0.01
+_TICKS_PER_SECOND = {
+    "s": 1.0,
+    "ms": 1_000.0,
+    "us": 1_000_000.0,
+    "ns": 1_000_000_000.0,
+}
+
+
+def _datetime_index_ticks(time_index: pd.DatetimeIndex) -> Tuple[np.ndarray, float]:
+    """Return integer timestamps and their scale without changing resolution."""
+    try:
+        ticks_per_second = _TICKS_PER_SECOND[time_index.unit]
+    except KeyError as exc:
+        raise ValueError(f"Unsupported DatetimeIndex resolution: {time_index.unit}") from exc
+    return time_index.asi8, ticks_per_second
+
+
+def _detect_cycles_rainflow_arrays(
+    soc_values: np.ndarray,
+    time_ticks: np.ndarray,
+    ticks_per_second: float,
+    min_doc_fraction: float = 0.01,
 ) -> List[Dict]:
-    """
-    Detect charge/discharge cycles using rainflow counting (ASTM E1049).
-
-    Rainflow counting correctly identifies nested cycles common in residential
-    PV+storage profiles, which simple extrema-based methods miss.
-
-    Args:
-        soc_abs_series: Absolute SOC series (0-1 range)
-        time_index: Datetime index for the series
-        min_doc_fraction: Minimum depth-of-cycle to include (fraction, 0-1)
-
-    Returns:
-        List of cycle dicts with keys: 'doc', 'mean_soc', 'count',
-        'mean_c_rate', 'start_idx', 'end_idx'
-    """
-    if len(soc_abs_series) < 2:
+    """Detect rainflow cycles from arrays used by the simulation hot path."""
+    if len(soc_values) < 2:
         return []
 
     # rainflow.extract_cycles expects a sequence; multiply by 100 for percent
-    soc_pct = soc_abs_series.values * 100.0
+    soc_pct = soc_values * 100.0
 
     cycles = []
     for rng, mean, count, i_start, i_end in rainflow.extract_cycles(soc_pct):
@@ -1659,8 +2344,9 @@ def detect_cycles_rainflow(
         mean_soc = mean / 100.0
 
         # Estimate C-rate from cycle duration
-        if i_start < len(time_index) and i_end < len(time_index):
-            duration_h = (time_index[i_end] - time_index[i_start]).total_seconds() / 3600.0
+        if i_start < len(time_ticks) and i_end < len(time_ticks):
+            duration_seconds = (time_ticks[i_end] - time_ticks[i_start]) / ticks_per_second
+            duration_h = duration_seconds / 3600.0
         else:
             duration_h = 0.0
         mean_c_rate = doc / duration_h if duration_h > 0 else 0.0
@@ -1679,25 +2365,31 @@ def detect_cycles_rainflow(
     return cycles
 
 
-@deprecated(name="breos.battery.compute_halfcycle_energy_throughput")
-def compute_halfcycle_energy_throughput(hc: Dict, soc_series_absolute: pd.Series, nominal_energy_Wh: float) -> float:
-    """Compute energy throughput (Wh) for a half-cycle."""
-    s = soc_series_absolute.iloc[hc["start_idx"] : hc["end_idx"] + 1].values
-    return abs(s[-1] - s[0]) * nominal_energy_Wh
+def detect_cycles_rainflow(
+    soc_abs_series: pd.Series, time_index: pd.DatetimeIndex, min_doc_fraction: float = 0.01
+) -> List[Dict]:
+    """
+    Detect charge/discharge cycles using rainflow counting (ASTM E1049).
 
+    Rainflow counting correctly identifies nested cycles common in residential
+    PV+storage profiles, which simple extrema-based methods miss.
 
-@deprecated(name="breos.battery.k_c_rate_Q")
-def k_c_rate_Q(C_rate: float) -> float:
-    """Calculate C-rate factor for capacity fade (Naumann Eq. 8)."""
-    kC = A_Q * C_rate + B_Q
-    return max(0.0, kC)
+    Args:
+        soc_abs_series: Absolute SOC series (0-1 range)
+        time_index: Datetime index for the series
+        min_doc_fraction: Minimum depth-of-cycle to include (fraction, 0-1)
 
-
-@deprecated(name="breos.battery.k_doc_Q")
-def k_doc_Q(DOC_frac: float) -> float:
-    """Calculate DOC factor for capacity fade (Naumann Eq. 10)."""
-    kDOC = C_DOC_Q * ((DOC_frac - 0.6) ** 3) + D_DOC_Q
-    return max(0.0, kDOC)
+    Returns:
+        List of cycle dicts with keys: 'doc', 'mean_soc', 'count',
+        'mean_c_rate', 'start_idx', 'end_idx'
+    """
+    time_ticks, ticks_per_second = _datetime_index_ticks(time_index)
+    return _detect_cycles_rainflow_arrays(
+        soc_abs_series.to_numpy(),
+        time_ticks,
+        ticks_per_second,
+        min_doc_fraction=min_doc_fraction,
+    )
 
 
 # =========================================================================
@@ -1870,46 +2562,17 @@ def _get_cycle_params(battery_type: str = "lfp") -> Tuple[float, float, float, f
     return (A_Q, B_Q, C_DOC_Q, D_DOC_Q, Z_Q)
 
 
-def update_battery_soh_cyclewise(
+def _update_battery_soh_from_cycles(
     soh_start_fraction: float,
-    soc_series_absolute: pd.Series,
+    cycles: List[Dict],
     nominal_energy_Wh: float,
     fec_cum: float = 0.0,
     min_DoD_fraction: float = 0.01,
-    use_rainflow: bool = True,
     battery_type: str = "lfp",
     debug: bool = False,
 ) -> Tuple[float, float, float]:
-    """
-    Calculate cycle-induced degradation using Naumann's semi-empirical model.
-
-    Implements Equation 5-6 from Naumann 2020 paper, with technology-specific
-    cycle aging coefficients selected by battery_type.
-
-    Args:
-        soh_start_fraction: Starting SOH as fraction (0-1)
-        soc_series_absolute: SOC time series
-        nominal_energy_Wh: Nominal battery capacity
-        fec_cum: Cumulative full equivalent cycles
-        min_DoD_fraction: Minimum DoD to count as cycle
-        use_rainflow: Use rainflow counting (True) or extrema-based detection (False)
-        battery_type: Battery chemistry ('lfp')
-        debug: Enable debug output
-
-    Returns:
-        Tuple of (soh_after, qloss_cycle_fraction, fec_cum)
-    """
-    if len(soc_series_absolute) < 2:
-        return soh_start_fraction, 0.0, fec_cum
-
-    time_index = soc_series_absolute.index
-
-    if use_rainflow:
-        cycles = detect_cycles_rainflow(soc_series_absolute, time_index, min_doc_fraction=min_DoD_fraction)
-    else:
-        cycles, _ = detect_half_cycles_from_soc_series(soc_series_absolute, time_index)
-
     # Get technology-specific cycle parameters
+    del nominal_energy_Wh
     a_q, b_q, c_doc_q, d_doc_q, z_q = _get_cycle_params(battery_type)
 
     qloss_cycle_fraction = 0.0
@@ -1948,6 +2611,96 @@ def update_battery_soh_cyclewise(
 
     soh_after = max(0.0, soh_start_fraction - qloss_cycle_fraction)
     return soh_after, qloss_cycle_fraction, fec_cum
+
+
+def _update_battery_soh_cyclewise_arrays(
+    soh_start_fraction: float,
+    soc_values: np.ndarray,
+    time_ticks: np.ndarray,
+    ticks_per_second: float,
+    nominal_energy_Wh: float,
+    fec_cum: float = 0.0,
+    min_DoD_fraction: float = 0.01,
+    battery_type: str = "lfp",
+    debug: bool = False,
+) -> Tuple[float, float, float]:
+    """Run native rainflow degradation without constructing pandas objects."""
+    if len(soc_values) < 2:
+        return soh_start_fraction, 0.0, fec_cum
+    cycles = _detect_cycles_rainflow_arrays(
+        soc_values,
+        time_ticks,
+        ticks_per_second,
+        min_doc_fraction=min_DoD_fraction,
+    )
+    return _update_battery_soh_from_cycles(
+        soh_start_fraction,
+        cycles,
+        nominal_energy_Wh,
+        fec_cum=fec_cum,
+        min_DoD_fraction=min_DoD_fraction,
+        battery_type=battery_type,
+        debug=debug,
+    )
+
+
+def update_battery_soh_cyclewise(
+    soh_start_fraction: float,
+    soc_series_absolute: pd.Series,
+    nominal_energy_Wh: float,
+    fec_cum: float = 0.0,
+    min_DoD_fraction: float = 0.01,
+    use_rainflow: bool = True,
+    battery_type: str = "lfp",
+    debug: bool = False,
+) -> Tuple[float, float, float]:
+    """
+    Calculate cycle-induced degradation using Naumann's semi-empirical model.
+
+    Implements Equation 5-6 from Naumann 2020 paper, with technology-specific
+    cycle aging coefficients selected by battery_type.
+
+    Args:
+        soh_start_fraction: Starting SOH as fraction (0-1)
+        soc_series_absolute: SOC time series
+        nominal_energy_Wh: Nominal battery capacity
+        fec_cum: Cumulative full equivalent cycles
+        min_DoD_fraction: Minimum DoD to count as cycle
+        use_rainflow: Use rainflow counting (True) or extrema-based detection (False)
+        battery_type: Battery chemistry ('lfp')
+        debug: Enable debug output
+
+    Returns:
+        Tuple of (soh_after, qloss_cycle_fraction, fec_cum)
+    """
+    if len(soc_series_absolute) < 2:
+        return soh_start_fraction, 0.0, fec_cum
+
+    time_index = soc_series_absolute.index
+    if use_rainflow:
+        time_ticks, ticks_per_second = _datetime_index_ticks(time_index)
+        return _update_battery_soh_cyclewise_arrays(
+            soh_start_fraction,
+            soc_series_absolute.to_numpy(),
+            time_ticks,
+            ticks_per_second,
+            nominal_energy_Wh,
+            fec_cum=fec_cum,
+            min_DoD_fraction=min_DoD_fraction,
+            battery_type=battery_type,
+            debug=debug,
+        )
+
+    cycles, _ = detect_half_cycles_from_soc_series(soc_series_absolute, time_index)
+    return _update_battery_soh_from_cycles(
+        soh_start_fraction,
+        cycles,
+        nominal_energy_Wh,
+        fec_cum=fec_cum,
+        min_DoD_fraction=min_DoD_fraction,
+        battery_type=battery_type,
+        debug=debug,
+    )
 
 
 def update_battery_soh_calendar(
@@ -2012,26 +2765,3 @@ def update_battery_soh_calendar(
         )
 
     return soh_after, d_soh_fraction, t_new
-
-
-@deprecated(name="breos.battery.update_battery_soc")
-def update_battery_soc(
-    battery_energy_wh: float, nominal_energy_wh: float, soh_fraction: float, max_soc: float, min_soc: float
-) -> Tuple[float, float]:
-    """
-    Calculate normalized and absolute SOC.
-
-    Returns:
-        Tuple of (soc_normalized, soc_absolute)
-    """
-    usable_cap = nominal_energy_wh * soh_fraction
-    Emax = usable_cap * max_soc
-    Emin = usable_cap * min_soc
-
-    soc_normalized = (battery_energy_wh - Emin) / (Emax - Emin) if (Emax - Emin) > 0 else 0
-    soc_normalized = np.clip(soc_normalized, 0, 1)
-
-    soc_absolute = battery_energy_wh / usable_cap if usable_cap > 0 else 0
-    soc_absolute = np.clip(soc_absolute, 0, 1)
-
-    return soc_normalized, soc_absolute

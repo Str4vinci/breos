@@ -1,0 +1,112 @@
+# Projected-lifetime multi-objective sizing.
+#
+# This is NOT a `breos run` config. The nested sections below are the shape the
+# optimization API expects, which differs from the flat App config used by the
+# other files in this directory. Load it from Python:
+#
+#   import tomllib
+#   from breos.optimization import optimize_system_multi_objective
+#   with open("configs/optimization/projected-optimization.toml", "rb") as fh:
+#       config = tomllib.load(fh)
+#
+# See docs/getting-started/optimization.md for the full walkthrough, including
+# how to load the weather and load-profile DataFrames the call also needs.
+#
+# Requires the pymoo extra:  pip install "breos[optimization]"
+#
+# There is no n_modules or battery_kwh here on purpose. The optimizer searches
+# for them within the [constraints] bounds.
+
+name = "Projected-lifetime sizing example"
+inverter_efficiency = 0.96
+
+[location]
+latitude = 41.1579
+longitude = -8.6291
+timezone = "Europe/Lisbon"
+name = "Porto, Portugal"
+
+[load]
+# "1" is the bundled demandlib H0 household profile. External profiles need a
+# licensed CSV and an rlp_directory; see examples/external-rlp.toml.
+profile_type = "1"
+annual_consumption_kwh = 4000.0
+
+[pv]
+module = "Suntech_STP550S_STC"   # `breos list modules` shows the catalogue
+module_width_m = 1.134
+module_length_m = 2.278
+degradation_rate = 0.005         # fraction per year
+
+[battery]
+eol_percentage = 0.70            # replace once usable capacity drops below this
+calendar_model = "naumann_lam_field_calibrated"
+max_soc = 0.90
+min_soc = 0.10
+charge_efficiency = 0.975
+discharge_efficiency = 0.975
+temperature = 25.0
+indoor_model = { enabled = false }
+enable_replacement = true
+replacement_cost = "calculate"
+
+[optimization]
+algorithm = "nsga2"
+# "projected" scores candidates over the whole horizon using simulated yearly
+# values. Use "steady_state" for the faster year-one objectives.
+objective_basis = "projected"
+pop_size = 40
+n_offsprings = 20
+n_gen = 40
+seed = 1                         # fix this; NSGA-II is stochastic
+
+[optimization.early_stop]
+ftol = 0.0025
+period = 10
+min_gen = 20
+n_skip = 0
+
+[constraints]
+budget_eur = 15000.0
+max_area_m2 = 25.0
+max_modules = 20
+max_battery_kwh = 30.0
+max_tilt_deg = "adjust"          # or a number in degrees
+enforce_zeb = false              # true makes the ZEB ratio a hard constraint
+
+[costs]
+electricity_cost = 0.2582        # EUR/kWh imported
+electricity_sold_cost = 0.04     # EUR/kWh exported
+daily_power_cost = 0.30          # EUR/day standing charge
+module_cost_per_w = 0.125
+storage_cost_per_kwh = 500.0
+inverter_cost_per_kw_hybrid = 102.58
+inverter_cost_per_kw_simple = 48.37
+installation_cost_per_module = 350.0
+installation_cost_battery = 350.0
+other_cost_per_module = 30.0
+other_costs = 0.0
+maintenance_cost_per_panel = 10.0
+maintenance_cost = 0.0
+dc_ac_ratio = 1.25
+
+[financials]
+discount_rate = 0.05
+inflation_rate = 0.02
+sell_price_inflation = 0.0
+project_lifespan = 20
+pv_degradation_rate = 0.005
+
+[emissions]
+country = "Portugal"
+average_grid_carbon_intensity_gco2_kwh = 127.91
+source = "Ember Climate, Europe Yearly Full Release"
+year = 2025
+
+[simulation]
+resolution = "h"                 # "15min" is four times slower
+years_projection = 20
+# BREOS ships no weather data. Point this at your own TMY or historical CSV.
+# The conventional location is a local weather/ directory, which is git-ignored.
+weather_file = "weather/porto_tmy_2005_2023_pvgis-sarah3.csv"
+irradiance_resampling = "clear_sky_energy_conserving"   # only used at 15min

@@ -4,7 +4,18 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from breos.montecarlo import MonteCarloSettings, _sample_load_scale, run_montecarlo
+import breos.montecarlo as montecarlo_module
+from breos.app_config import resolve_app_config
+from breos.battery import align_simulation_inputs
+from breos.montecarlo import (
+    MonteCarloSettings,
+    _precompute_year_caches,
+    _prepare_pv_chains,
+    _pv_chain_cache_is_worthwhile,
+    _pv_only_battery_config,
+    _sample_load_scale,
+    run_montecarlo,
+)
 
 
 def _write_multiyear_weather(path, years=(2021, 2022)):
@@ -57,6 +68,126 @@ def test_sample_load_scale_respects_bounds():
     assert all(0.2 <= s <= 1.5 for s in scales)
 
 
+def test_sample_load_scale_supports_bounded_uniform_distribution():
+    rng = np.random.default_rng(7)
+    scales = [
+        _sample_load_scale(
+            rng,
+            0.05,
+            min_scale=0.0,
+            max_scale=None,
+            distribution="uniform",
+        )
+        for _ in range(500)
+    ]
+
+    assert min(scales) >= 0.95
+    assert max(scales) <= 1.05
+    assert min(scales) < 0.96
+    assert max(scales) > 1.04
+
+
+def test_montecarlo_precompute_threads_explicit_battery_temperature(monkeypatch):
+    import breos.montecarlo as mc_module
+
+    frame = pd.DataFrame(
+        {
+            "date": pd.date_range("2021-01-01", periods=2, freq="h"),
+            "temperature_2m": [10.0, 11.0],
+        }
+    )
+    index = pd.date_range("2025-01-01", periods=2, freq="h", tz="UTC")
+    captured = {}
+    monkeypatch.setattr(mc_module, "preload_weather_by_year", lambda *args, **kwargs: {2021: frame})
+    monkeypatch.setattr(
+        mc_module,
+        "build_dc_system_base",
+        lambda *args, **kwargs: pd.Series([0.0, 1.0], index=index),
+    )
+
+    def temperature_builder(temp_config, **kwargs):
+        captured["temp_config"] = temp_config
+        captured["indoor_model"] = kwargs["indoor_model"]
+        return pd.Series(25.0, index=index)
+
+    monkeypatch.setattr(mc_module, "build_battery_temperature_series", temperature_builder)
+    cfg = {
+        "resolution": "h",
+        "battery_temperature": 25.0,
+        "battery_indoor_model": {"enabled": False},
+    }
+    settings = MonteCarloSettings(weather_file="unused.csv")
+
+    _dc, temperatures = _precompute_year_caches(
+        cfg,
+        type("Resolved", (), {"lat": 41.0, "lon": -8.0})(),
+        settings,
+    )
+
+    assert temperatures[2021].tolist() == [25.0, 25.0]
+    assert captured == {"temp_config": 25.0, "indoor_model": {"enabled": False}}
+
+
+def test_montecarlo_records_transformed_runtime_weather_timing(monkeypatch):
+    frame = pd.DataFrame(
+        {
+            "date": pd.date_range("2025-01-01", periods=2, freq="h"),
+            "temperature_2m": [10.0, 11.0],
+        }
+    )
+    frame.attrs["breos_weather_metadata"] = {
+        "radiation_time_basis": "interval_mean",
+        "timestamp_label_basis": "left",
+        "source_timestamp_label_basis": "right",
+    }
+    index = pd.date_range("2025-01-01", periods=8, freq="15min", tz="UTC")
+
+    monkeypatch.setattr(montecarlo_module, "preload_weather_by_year", lambda *args, **kwargs: {2021: frame})
+
+    def resample(weather, **kwargs):
+        result = pd.DataFrame({"temperature_2m": 10.0}, index=index)
+        result.attrs = weather.attrs.copy()
+        result.attrs["breos_weather_metadata"].update(
+            {
+                "input_resolution": "h",
+                "output_resolution": "15min",
+                "irradiance_resampling_method": "makima_clear_sky",
+                "preserve_irradiance_energy": True,
+            }
+        )
+        return result
+
+    monkeypatch.setattr(montecarlo_module, "resample_to_15min", resample)
+    monkeypatch.setattr(
+        montecarlo_module,
+        "build_dc_system_base",
+        lambda *args, **kwargs: pd.Series(0.0, index=index),
+    )
+    monkeypatch.setattr(
+        montecarlo_module,
+        "build_battery_temperature_series",
+        lambda *args, **kwargs: pd.Series(25.0, index=index),
+    )
+    runtime_weather = {}
+
+    _precompute_year_caches(
+        {
+            "resolution": "15min",
+            "solar_position": "weather",
+            "battery_temperature": 25.0,
+            "battery_indoor_model": {"enabled": False},
+        },
+        type("Resolved", (), {"lat": 41.0, "lon": -8.0})(),
+        MonteCarloSettings(weather_file="unused.csv", preserve_irradiance_energy=True),
+        runtime_weather=runtime_weather,
+    )
+
+    assert runtime_weather["solar_position_offset_minutes"] == 7.5
+    assert runtime_weather["metadata"]["timestamp_label_basis"] == "left"
+    assert runtime_weather["metadata"]["source_timestamp_label_basis"] == "right"
+    assert runtime_weather["metadata"]["preserve_irradiance_energy"] is True
+
+
 def test_run_montecarlo_shapes_and_years(tmp_path):
     weather = _write_multiyear_weather(tmp_path / "multi.csv")
     settings = MonteCarloSettings(weather_file=str(weather), n_runs=3, years_per_run=2, seed=1)
@@ -70,6 +201,53 @@ def test_run_montecarlo_shapes_and_years(tmp_path):
     assert "mean_usable_ac_system_production_kwh" in result.runs
     assert "npv_savings_eur" in result.summary
     assert set(result.summary["npv_savings_eur"]) >= {"mean", "p5", "p50", "p95"}
+    assert set(result.summary["npv_savings_eur"]) >= {"p2_5", "p97_5"}
+    assert result.provenance["settings"]["load_distribution"] == "normal"
+
+
+def test_run_montecarlo_can_collect_yearly_cost_trajectories(tmp_path):
+    weather = _write_multiyear_weather(tmp_path / "multi.csv")
+    settings = MonteCarloSettings(
+        weather_file=str(weather),
+        n_runs=3,
+        years_per_run=2,
+        seed=1,
+        collect_yearly=True,
+    )
+
+    result = run_montecarlo(_base_config(), settings)
+
+    assert result.yearly is not None
+    assert len(result.yearly) == 6
+    assert set(result.yearly["run"]) == {1, 2, 3}
+    assert {
+        "Weather_Year",
+        "Load_Scale",
+        "Battery_Cumulative_FEC",
+        "Savings_Cumulative_NPV",
+        "Cost_System_Cumulative_NPV",
+    } <= set(result.yearly.columns)
+    assert "lifetime_grid_independence_pct" in result.runs
+    assert "payback_year_exact" in result.runs
+
+
+def test_run_montecarlo_filters_weather_sampling_pool(tmp_path):
+    weather = _write_multiyear_weather(tmp_path / "multi.csv", years=(2020, 2021, 2022))
+    settings = MonteCarloSettings(
+        weather_file=str(weather),
+        n_runs=1,
+        years_per_run=2,
+        seed=1,
+        weather_start_year=2021,
+        weather_end_year=2021,
+        collect_yearly=True,
+    )
+
+    result = run_montecarlo(_base_config(), settings)
+
+    assert result.available_years == [2021]
+    assert result.yearly is not None
+    assert set(result.yearly["Weather_Year"]) == {2021}
 
 
 def test_run_montecarlo_is_reproducible_with_seed(tmp_path):
@@ -78,6 +256,17 @@ def test_run_montecarlo_is_reproducible_with_seed(tmp_path):
     a = run_montecarlo(_base_config(), settings).runs["npv_savings_eur"].to_numpy()
     b = run_montecarlo(_base_config(), settings).runs["npv_savings_eur"].to_numpy()
     np.testing.assert_allclose(a, b)
+
+
+def test_run_montecarlo_parallel_workers_preserve_seeded_results(tmp_path):
+    weather = _write_multiyear_weather(tmp_path / "multi.csv")
+    serial = MonteCarloSettings(weather_file=str(weather), n_runs=2, years_per_run=1, seed=42)
+    parallel = MonteCarloSettings(weather_file=str(weather), n_runs=2, years_per_run=1, seed=42, n_procs=2)
+
+    serial_result = run_montecarlo(_base_config(), serial).runs
+    parallel_result = run_montecarlo(_base_config(), parallel).runs
+
+    pd.testing.assert_frame_equal(serial_result, parallel_result)
 
 
 def test_run_montecarlo_defaults_years_to_projection_years(tmp_path):
@@ -131,25 +320,24 @@ def test_montecarlo_carries_battery_and_pv_origin_inventory_between_years(tmp_pa
     import breos.montecarlo as mc_module
 
     weather = _write_multiyear_weather(tmp_path / "multi.csv", years=(2021,))
-    original = mc_module.simulate_energy_balance
+    original = mc_module.simulate_energy_balance_summary
     calls = []
 
     def _capture(*args, **kwargs):
         output = original(*args, **kwargs)
-        results = output[0]
         calls.append(
             {
                 "initial_energy_wh": kwargs.get("initial_energy_wh"),
                 "initial_pv_origin_energy_wh": kwargs.get("initial_pv_origin_energy_wh"),
-                "ending_energy_wh": float(results["Battery_Energy_End"].iloc[-1]),
-                "ending_pv_origin_energy_wh": float(results["Battery_PV_Origin_Energy_End"].iloc[-1]),
-                "beginning_energy_wh": float(results["Battery_Energy_Beginning"].iloc[0]),
-                "beginning_pv_origin_energy_wh": float(results["Battery_PV_Origin_Energy_Beginning"].iloc[0]),
+                "ending_energy_wh": output.carried_energy_wh,
+                "ending_pv_origin_energy_wh": output.carried_pv_origin_energy_wh,
+                "beginning_energy_wh": output.opening_energy_wh,
+                "beginning_pv_origin_energy_wh": output.opening_pv_origin_energy_wh,
             }
         )
         return output
 
-    monkeypatch.setattr(mc_module, "simulate_energy_balance", _capture)
+    monkeypatch.setattr(mc_module, "simulate_energy_balance_summary", _capture)
     settings = MonteCarloSettings(weather_file=str(weather), n_runs=1, years_per_run=2, seed=0)
     result = run_montecarlo(_base_config(), settings)
 
@@ -163,6 +351,78 @@ def test_montecarlo_carries_battery_and_pv_origin_inventory_between_years(tmp_pa
     assert result.runs.loc[0, "mean_self_consumption_kwh"] == pytest.approx(
         result.runs.loc[0, "mean_direct_pv_ac_load_kwh"] + result.runs.loc[0, "mean_pv_origin_battery_ac_load_kwh"]
     )
+
+
+def _pv_only_config():
+    cfg = _base_config()
+    cfg["battery_kwh"] = 0.0
+    return cfg
+
+
+def test_pv_chain_cache_is_declined_when_it_cannot_pay_off(monkeypatch):
+    # Enough reuse, small enough, forkable: worth it.
+    monkeypatch.setattr(montecarlo_module.multiprocessing, "get_start_method", lambda: "fork")
+    assert _pv_chain_cache_is_worthwhile(10000, 19, 20, 35040, 19)
+    # Python 3.14 defaults to forkserver. Multiple workers cannot share the
+    # parent-built cache through that context, so decline it rather than copy
+    # the arrays into every worker.
+    for start_method in ("forkserver", "spawn"):
+        monkeypatch.setattr(
+            montecarlo_module.multiprocessing,
+            "get_start_method",
+            lambda start_method=start_method: start_method,
+        )
+        assert not _pv_chain_cache_is_worthwhile(10000, 19, 20, 35040, 19)
+    # Too few trajectories to amortise building it.
+    assert not _pv_chain_cache_is_worthwhile(8, 19, 20, 35040, 19)
+    # Over the memory budget.
+    assert not _pv_chain_cache_is_worthwhile(10000, 19, 20, 35040 * 8, 19)
+
+
+def test_pv_chain_cache_is_declined_for_a_battery_system(tmp_path):
+    """A battery run never reaches the PV-only dispatch, so it gets no cache."""
+    weather = _write_multiyear_weather(tmp_path / "multi.csv")
+    settings = MonteCarloSettings(weather_file=str(weather), n_runs=64, years_per_run=2, seed=42)
+    resolved = resolve_app_config(_base_config())
+    dc_by_year, _ = _precompute_year_caches(resolved.cfg, resolved, settings)
+    aligned = {
+        year: align_simulation_inputs(dc, pd.DataFrame({"Load": 0.0}, index=dc.index), freq="h")
+        for year, dc in dc_by_year.items()
+    }
+
+    assert _prepare_pv_chains(resolved.cfg, resolved, aligned, settings, 2) is None
+
+
+def test_pv_only_montecarlo_is_unchanged_by_the_chain_cache(tmp_path, monkeypatch):
+    """The cache is a memo, so turning it on must move no number at all."""
+    weather = _write_multiyear_weather(tmp_path / "multi.csv")
+    settings = MonteCarloSettings(weather_file=str(weather), n_runs=8, years_per_run=3, seed=42, collect_yearly=True)
+
+    # A finite AC cap, so the memoized chain covers the clipping branch
+    # rather than a pass-through, and the comparison below has teeth.
+    resolved = resolve_app_config(_pv_only_config())
+    assert _pv_only_battery_config(resolved.cfg, resolved).inverter_ac_capacity_w is not None
+
+    monkeypatch.setattr(montecarlo_module, "_PV_CHAIN_CACHE_MIN_REUSE", 1 << 30)
+    uncached = run_montecarlo(_pv_only_config(), settings)
+
+    built = []
+    original = montecarlo_module._prepare_pv_chains
+
+    def recording(*args, **kwargs):
+        chains = original(*args, **kwargs)
+        built.append(0 if chains is None else len(chains))
+        return chains
+
+    monkeypatch.setattr(montecarlo_module, "_PV_CHAIN_CACHE_MIN_REUSE", 0)
+    monkeypatch.setattr(montecarlo_module, "_prepare_pv_chains", recording)
+    cached = run_montecarlo(_pv_only_config(), settings)
+
+    # Two weather years times three project years, or the test proves nothing.
+    assert built == [6]
+    pd.testing.assert_frame_equal(uncached.runs, cached.runs)
+    pd.testing.assert_frame_equal(uncached.yearly, cached.yearly)
+    assert cached.provenance["execution"]["dispatch_path"] == "pv_only_vectorized"
 
 
 def test_run_montecarlo_rejects_blast_degradation(tmp_path):

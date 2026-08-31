@@ -13,6 +13,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from breos.degradation.profiles import ENABLED_BLAST_MODEL_KEYS, apply_battery_profile_defaults
 from breos.economics import COST_CONFIG_KEY_TO_PARAM, CostParams, calculate_costs
 from breos.emissions import EmissionsParams
+from breos.execution import DEFAULT_EXECUTION_BACKEND, EXECUTION_BACKENDS, validate_execution_backend
 from breos.pv.horizon import normalise_horizon_profile
 from breos.pv.model_options import is_known_model, is_valid_albedo, is_valid_gcr, normalise_model_name
 from breos.pv.temperature import validate_temperature_inputs
@@ -364,6 +365,19 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
     "enable_resistance_fade": AppConfigField(default=False, default_order=44),
     "pv_loss_overrides": AppConfigField(default=None, default_order=48),
     "horizon_profile": AppConfigField(default=None, default_order=50),
+    "battery_temperature": AppConfigField(default="weather", default_order=51),
+    "battery_indoor_model": AppConfigField(default=None, default_order=52),
+    "execution_backend": AppConfigField(
+        default=DEFAULT_EXECUTION_BACKEND,
+        default_order=53,
+        cli_flags=("--execution-backend",),
+        cli_choices=EXECUTION_BACKENDS,
+        cli_help=(
+            "Within-day dispatch implementation. 'python' is the numerical reference; "
+            "'numba' is an optional compiled path that reproduces it bit for bit and "
+            'needs the extra: pip install "breos[fast]".'
+        ),
+    ),
     # Runner sections are accepted by App resolution so each workflow can use
     # the same base config validation. The CLI validates their own structure.
     "montecarlo": AppConfigField(),
@@ -734,6 +748,30 @@ def _validate_battery_and_degradation(cfg: dict[str, Any]) -> None:
     for key in ("battery_max_charge_power_w", "battery_max_discharge_power_w"):
         if cfg[key] is not None and _finite_real(cfg[key], key) < 0:
             raise ValueError(f"'{key}' must be >= 0 when configured")
+    battery_temperature = cfg["battery_temperature"]
+    if isinstance(battery_temperature, Real) and not isinstance(battery_temperature, bool):
+        _finite_real(battery_temperature, "battery_temperature")
+    elif not isinstance(battery_temperature, str):
+        raise TypeError("'battery_temperature' must be 'weather', a CSV path, or a finite temperature")
+    indoor_model = cfg["battery_indoor_model"]
+    if indoor_model is not None:
+        if not isinstance(indoor_model, dict):
+            raise TypeError("'battery_indoor_model' must be a mapping when configured")
+        unknown = set(indoor_model) - {"enabled", "setpoint_c", "coupling_alpha", "floor_c", "ceiling_c"}
+        if unknown:
+            raise ValueError(f"Unknown battery_indoor_model key(s): {', '.join(sorted(unknown))}")
+        if "enabled" in indoor_model and not isinstance(indoor_model["enabled"], bool):
+            raise TypeError("'battery_indoor_model.enabled' must be a boolean")
+        for key in ("setpoint_c", "coupling_alpha", "floor_c", "ceiling_c"):
+            if key in indoor_model:
+                _finite_real(indoor_model[key], f"battery_indoor_model.{key}")
+        coupling = indoor_model.get("coupling_alpha")
+        if coupling is not None and not 0 <= float(coupling) <= 1:
+            raise ValueError("'battery_indoor_model.coupling_alpha' must be between 0 and 1")
+        floor = indoor_model.get("floor_c")
+        ceiling = indoor_model.get("ceiling_c")
+        if floor is not None and ceiling is not None and float(floor) > float(ceiling):
+            raise ValueError("'battery_indoor_model.floor_c' must not exceed 'battery_indoor_model.ceiling_c'")
     if not isinstance(cfg["dc_coupled"], bool):
         raise TypeError("'dc_coupled' must be a boolean")
     if not cfg["dc_coupled"]:
@@ -757,6 +795,11 @@ def _validate_battery_and_degradation(cfg: dict[str, Any]) -> None:
 
     if not isinstance(cfg["enable_resistance_fade"], bool):
         raise TypeError("'enable_resistance_fade' must be a boolean")
+
+    # Validated through breos.execution so App and Monte Carlo cannot disagree
+    # about which names exist. The default stays "python": the compiled path is
+    # an optimisation that must be asked for, never selected by ambient state.
+    cfg["execution_backend"] = validate_execution_backend(cfg["execution_backend"])
 
     degradation_engine = str(cfg["degradation_engine"]).strip().lower()
     if degradation_engine not in ("native", "blast"):

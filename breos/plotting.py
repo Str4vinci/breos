@@ -14,8 +14,6 @@ from typing import List, Optional, Tuple
 import numpy as np
 import pandas as pd
 
-from breos._deprecations import deprecated
-
 MONTH_LABELS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
 
 # Plotting imports with backend handling
@@ -36,6 +34,19 @@ except ImportError:
 def _check_matplotlib():
     if not HAS_MATPLOTLIB:
         raise ImportError("matplotlib is required for plotting. Install with: uv add matplotlib")
+
+
+def _power_frame_to_energy_kwh(frame: pd.DataFrame) -> pd.DataFrame:
+    """Convert regularly sampled power columns in watts to interval energy."""
+    if not isinstance(frame.index, pd.DatetimeIndex):
+        raise ValueError("Power-to-energy plotting requires a DatetimeIndex")
+    if len(frame.index) < 2:
+        raise ValueError("Power-to-energy plotting requires at least two timestamps")
+    intervals = np.diff(frame.index.asi8)
+    if np.any(intervals <= 0) or not np.all(intervals == intervals[0]):
+        raise ValueError("Power-to-energy plotting requires a regular increasing time index")
+    hours_per_step = (frame.index[1] - frame.index[0]).total_seconds() / 3600.0
+    return frame * (hours_per_step / 1000.0)
 
 
 def set_presentation_mode(enabled: bool = True, scale: float = 1.5):
@@ -420,7 +431,7 @@ def monthly_graphs(results_df: pd.DataFrame, results_directory: str, columns: Op
     columns = [c for c in columns if c in df.columns]
 
     # Monthly aggregation
-    monthly = df[columns].resample("ME").sum() / 1000  # Convert to kWh
+    monthly = _power_frame_to_energy_kwh(df[columns]).resample("ME").sum()
 
     fig, ax = plt.subplots(figsize=(14, 6))
 
@@ -466,7 +477,7 @@ def yearly_graphs(results_df: pd.DataFrame, results_directory: str) -> None:
     columns = ["PV_Production", "Houseload", "Import_From_Grid", "Sell_To_Grid"]
     columns = [c for c in columns if c in df.columns]
 
-    yearly = df[columns].resample("Y").sum() / 1000
+    yearly = _power_frame_to_energy_kwh(df[columns]).resample("YE").sum()
 
     fig, ax = plt.subplots(figsize=(10, 6))
 
@@ -475,7 +486,13 @@ def yearly_graphs(results_df: pd.DataFrame, results_directory: str) -> None:
     ax.set_xticklabels([d.strftime("%Y") for d in yearly.index], rotation=0)
     ax.set_ylabel("Energy (kWh)")
     # ax.set_title('Yearly Energy Summary')
-    ax.legend(["PV Production", "Load", "Grid Import", "Grid Export"])
+    labels = {
+        "PV_Production": "PV Production",
+        "Houseload": "Load",
+        "Import_From_Grid": "Grid Import",
+        "Sell_To_Grid": "Grid Export",
+    }
+    ax.legend([labels[column] for column in columns])
     ax.grid(True, alpha=0.3, axis="y")
 
     plt.tight_layout()
@@ -577,7 +594,7 @@ def degradation_plots(degradation_df: pd.DataFrame, results_directory: str) -> N
     plt.savefig(f"{results_directory}/battery_degradation_soh.png", dpi=300)
     plt.close()
 
-    # 2. Degradation Components (Global / Total Lifespan and Per-Battery / Resetting)
+    # 2. Degradation components for the active battery inventory.
     def _plot_degradation_components(cycle_data, calendar_data, filename, ylabel):
         if cycle_data is None and calendar_data is None:
             return
@@ -603,15 +620,7 @@ def degradation_plots(degradation_df: pd.DataFrame, results_directory: str) -> N
         plt.savefig(os.path.join(results_directory, filename), dpi=300)
         plt.close()
 
-    # Generate Global (accumulated) plot
-    if "Global_Cycle_Degradation" in degradation_df.columns:
-        glob_cyc = degradation_df["Global_Cycle_Degradation"] * 100
-        glob_cal = degradation_df.get("Global_Calendar_Degradation", 0) * 100
-        _plot_degradation_components(
-            glob_cyc, glob_cal, "battery_degradation_components_global.png", "Global Cumulative Degradation (%)"
-        )
-
-    # Generate Per-Battery (resetting) plot
+    # These production columns reset when the battery is replaced.
     if "Cumulative_Cycle_Degradation" in degradation_df.columns:
         cum_cyc = degradation_df["Cumulative_Cycle_Degradation"] * 100
         cum_cal = degradation_df.get("Cumulative_Calendar_Degradation", 0) * 100
@@ -1317,7 +1326,7 @@ def plot_monthly_comparison(results_df: pd.DataFrame, results_directory: str, sc
     columns = ["PV_Production", "Houseload", "Import_From_Grid", "Sell_To_Grid"]
     columns = [c for c in columns if c in df.columns]
 
-    monthly = df[columns].resample("ME").sum() / 1000  # kWh
+    monthly = _power_frame_to_energy_kwh(df[columns]).resample("ME").sum()
     monthly["Month"] = monthly.index.strftime("%b")
 
     fig, ax = plt.subplots(figsize=(14, 7))
@@ -1390,15 +1399,22 @@ def plot_monthly_balance(results_df: pd.DataFrame, results_directory: str) -> No
 
     # Ensure Datetime index
     if "Datetime" in results_df.columns:
-        df = results_df.set_index("Datetime")
+        df = results_df.copy()
+        df["Datetime"] = pd.to_datetime(df["Datetime"])
+        df.set_index("Datetime", inplace=True)
     else:
         df = results_df.copy()
 
-    # Resample to monthly sums
-    monthly = df.resample("ME").sum()
+    energy_columns = ["PV_Production", "Houseload", "Import_From_Grid", "Sell_To_Grid"]
+    missing = [column for column in energy_columns if column not in df.columns]
+    if missing:
+        raise ValueError(f"Missing energy-balance column(s): {', '.join(missing)}")
+
+    # Convert power to interval energy before monthly aggregation.
+    monthly = _power_frame_to_energy_kwh(df[energy_columns]).resample("ME").sum()
 
     # Group by month (1-12) to aggregate multi-year data
-    monthly_avg = monthly.groupby(monthly.index.month).mean() / 1000.0  # Convert to kWh
+    monthly_avg = monthly.groupby(monthly.index.month).mean()
 
     # Ensure all 12 months present
     monthly_avg = monthly_avg.reindex(np.arange(1, 13), fill_value=0.0)
@@ -2206,137 +2222,6 @@ def plot_tariff_comparison(results_df: pd.DataFrame, results_directory: str, sce
         plt.close()
 
 
-@deprecated(name="breos.plotting.plot_smart_charging_sweep")
-def plot_smart_charging_sweep(
-    results_df: pd.DataFrame, optimal_pct: float, results_directory: str, scenario_name: str = ""
-) -> None:
-    """
-    Plot smart charging parameter sweep results.
-
-    Args:
-        results_df: DataFrame with 'Percentage' and 'Net Cost' columns
-        optimal_pct: The optimal percentage found
-        results_directory: Directory to save plots
-        scenario_name: Optional suffix for filenames
-    """
-    _check_matplotlib()
-
-    os.makedirs(results_directory, exist_ok=True)
-    suffix = f"_{scenario_name}" if scenario_name else ""
-
-    fig, ax = plt.subplots(figsize=(10, 6))
-
-    x = results_df["Percentage"] * 100
-    y = results_df["Net Cost"]
-
-    ax.plot(x, y, marker="o", linestyle="-", linewidth=2, markersize=4, label="Annual Cost")
-
-    # Mark optimal
-    optimal_row = results_df.loc[results_df["Percentage"] == optimal_pct]
-    if not optimal_row.empty:
-        opt_cost = optimal_row["Net Cost"].values[0]
-        ax.axvline(
-            x=optimal_pct * 100, color="r", linestyle="--", alpha=0.7, label=f"Optimal: {optimal_pct * 100:.0f}%"
-        )
-        ax.scatter([optimal_pct * 100], [opt_cost], color="red", s=100, zorder=5)
-
-    ax.set_xlabel("Target SOC in Off-Peak (Vazio) [%]")
-    ax.set_ylabel("Annual Net Cost (€)")
-    # ax.set_title('Smart Charging Optimization')
-    ax.grid(True, alpha=0.3)
-    ax.legend()
-
-    plt.tight_layout()
-    plt.savefig(f"{results_directory}/smart_charging_sweep{suffix}.png", dpi=300)
-    plt.close()
-
-
-@deprecated(name="breos.plotting.plot_optimization_results_3d")
-def plot_optimization_results_3d(results_df: pd.DataFrame, results_directory: str, scenario_name: str = "") -> None:
-    """
-    Create 3D scatter plot for 3-objective optimization results.
-    Axes: Modules, Battery Size, NPV (Color mapped to Grid Independence or ZEB)
-
-    Args:
-        results_df: DataFrame with 'Modules', 'Battery_kWh', 'NPV_Eur', 'Grid_Independence_%'
-        results_directory: Directory to save plots
-        scenario_name: Optional suffix
-    """
-    _check_matplotlib()
-    from mpl_toolkits.mplot3d import Axes3D
-
-    os.makedirs(results_directory, exist_ok=True)
-    suffix = f"_{scenario_name}" if scenario_name else ""
-
-    fig = plt.figure(figsize=(12, 10))
-    ax = fig.add_subplot(111, projection="3d")
-
-    # Data
-    x = results_df["Modules"]
-    y = results_df["Battery_kWh"]
-    z = results_df["NPV_Eur"]
-    c = results_df["Grid_Independence_%"]
-
-    img = ax.scatter(x, y, z, c=c, cmap="viridis", s=60, edgecolors="black", alpha=0.9)
-
-    ax.set_xlabel("PV Modules")
-    ax.set_ylabel("Battery (kWh)")
-    ax.set_zlabel("NPV (€)")
-
-    # Colorbar
-    cbar = fig.colorbar(img, ax=ax, pad=0.1)
-    cbar.set_label("Grid Independence (%)")
-
-    # ax.set_title('Pareto Front Application')
-
-    plt.tight_layout()
-    plt.savefig(f"{results_directory}/pareto_front_3d{suffix}.png", dpi=300)
-    plt.close()
-
-
-@deprecated(name="breos.plotting.plot_optimization_results_2d")
-def plot_optimization_results_2d(results_df: pd.DataFrame, results_directory: str, scenario_name: str = "") -> None:
-    """
-    Create 2D scatter plot for optimization results (Pareto Front).
-    Axes: Grid Independence vs NPV, Color: ZEB Ratio or Battery Size.
-
-    Args:
-        results_df: DataFrame with results
-        results_directory: Directory to save plots
-        scenario_name: Optional suffix
-    """
-    _check_matplotlib()
-
-    os.makedirs(results_directory, exist_ok=True)
-    suffix = f"_{scenario_name}" if scenario_name else ""
-
-    # 2D Projection (Grid Independence vs NPV, color=ZEB_Ratio)
-    fig2, ax2 = plt.subplots(figsize=(10, 8))
-
-    x_2d = results_df["Grid_Independence_%"]
-    y_2d = results_df["NPV_Eur"]
-
-    if "ZEB_Ratio" in results_df.columns:
-        c_2d = results_df["ZEB_Ratio"]
-        c_label = "ZEB Ratio"
-    else:
-        c_2d = results_df["Battery_kWh"]
-        c_label = "Battery (kWh)"
-
-    scatter2 = ax2.scatter(x_2d, y_2d, c=c_2d, cmap="viridis", s=100, edgecolors=(0, 0, 0, 0.5))
-
-    ax2.set_xlabel("Grid Independence (%)")
-    ax2.set_ylabel("Net Present Value (€)")
-    cbar2 = fig2.colorbar(scatter2, ax=ax2)
-    cbar2.set_label(c_label)
-
-    ax2.grid(True, alpha=0.3)
-
-    plt.tight_layout()
-    plt.savefig(f"{results_directory}/pareto_front{suffix}.png", dpi=300)
-    plt.close()
-
-
 def plot_montecarlo_soh_traces(details_df: pd.DataFrame, results_directory: str, suffix: str = "") -> None:
     """
     Plot detailed SOH traces for sample runs (daily resolution).
@@ -2362,10 +2247,10 @@ def plot_montecarlo_soh_traces(details_df: pd.DataFrame, results_directory: str,
     # ax.set_title('Detailed Degradation Traces (Sample Runs)')
     ax.grid(True, alpha=0.3)
     ax.set_ylim(0, 102)
-    ax.legend(loc="lower left")
 
     # Add reference lines
     ax.axhline(y=80, color="red", linestyle="--", alpha=0.5, label="EOL (80%)")
+    ax.legend(loc="lower left")
 
     plt.tight_layout()
     plt.savefig(f"{results_directory}/montecarlo_soh_traces{suffix}.png", dpi=300)
@@ -2560,10 +2445,10 @@ def plot_breakeven_comparison(
                 alpha=0.7,
             )
 
-    max_year = 20
+    max_year = 0
     for df, label, color in zip(cost_dfs, labels, colors):
         ax.plot(df["Year"], df["Cost_System_Cumulative_NPV"], color=color, label=label, linewidth=2)
-        max_year = int(df["Year"].max())
+        max_year = max(max_year, int(df["Year"].max()))
 
         # Break-even dotted line
         savings = df["Savings_Cumulative_NPV"].values
@@ -2872,173 +2757,6 @@ def plot_pareto_front_analysis(
     plt.close()
 
 
-@deprecated(name="breos.plotting.plot_loo_cv_summary")
-def plot_loo_cv_summary(
-    loo_data: dict,
-    results_directory: str,
-) -> None:
-    """
-    Plot LOO cross-validation summary: train vs held-out RMSE per fold.
-
-    Grouped bars showing train RMSE (blue) and held-out RMSE (red) for each
-    fold, with a horizontal dashed line at the mean CV RMSE.
-
-    Args:
-        loo_data: Dict from loo_cross_validation.json with 'folds' list
-        results_directory: Directory to save plot
-    """
-    _check_matplotlib()
-    os.makedirs(results_directory, exist_ok=True)
-
-    folds = loo_data["folds"]
-    system_ids = [f"Sys {f['held_out_system']}" for f in folds]
-    train_rmses = [f["train_mean_rmse"] * 100 for f in folds]
-    held_out_rmses = [f["held_out_rmse"] * 100 for f in folds]
-    mean_cv = loo_data["mean_cv_rmse"] * 100
-
-    x = np.arange(len(folds))
-    width = 0.35
-
-    fig, ax = plt.subplots(figsize=(10, 6))
-    ax.bar(x - width / 2, train_rmses, width, color="#2196F3", alpha=0.85, label="Train RMSE")
-    ax.bar(x + width / 2, held_out_rmses, width, color="#F44336", alpha=0.85, label="Held-out RMSE")
-
-    ax.axhline(
-        y=mean_cv, color="#F44336", linestyle="--", linewidth=1.5, alpha=0.7, label=f"Mean CV RMSE ({mean_cv:.1f} pp)"
-    )
-
-    ax.set_xlabel("Held-out system")
-    ax.set_ylabel("RMSE (percentage points)")
-    ax.set_xticks(x)
-    ax.set_xticklabels(system_ids)
-    ax.legend(fontsize=10)
-    ax.grid(True, alpha=0.3, axis="y")
-
-    plt.tight_layout()
-    plt.savefig(os.path.join(results_directory, "loo_cv_summary.png"), dpi=300)
-    plt.close()
-
-
-@deprecated(name="breos.plotting.plot_loo_param_stability")
-def plot_loo_param_stability(
-    loo_data: dict,
-    full_cal_params: dict,
-    results_directory: str,
-) -> None:
-    """
-    Plot parameter stability across LOO folds (one figure per parameter).
-
-    Each figure shows the fitted parameter value per fold as scatter/line,
-    with a horizontal reference line for the full-calibration value.
-
-    Args:
-        loo_data: Dict from loo_cross_validation.json with 'folds' list
-        full_cal_params: Dict with full-calibration values (k0_frac, Ea, cal_b, n)
-        results_directory: Directory to save plots
-    """
-    _check_matplotlib()
-    os.makedirs(results_directory, exist_ok=True)
-
-    folds = loo_data["folds"]
-    system_ids = [f"Sys {f['held_out_system']}" for f in folds]
-    x = np.arange(len(folds))
-
-    param_configs = [
-        ("k0_frac", "k\u2080 (frac/s^b)", True),
-        ("Ea", "E_a (J/mol)", True),
-        ("cal_b", "b (time exponent)", False),
-        ("n", "n (SOC exponent)", False),
-    ]
-
-    for param_key, ylabel, use_log in param_configs:
-        values = [f["params"][param_key] for f in folds]
-        ref_value = full_cal_params[param_key]
-
-        fig, ax = plt.subplots(figsize=(8, 5))
-        ax.plot(x, values, "o-", color="#2196F3", markersize=8, linewidth=1.5)
-        ax.axhline(
-            y=ref_value,
-            color="#F44336",
-            linestyle="--",
-            linewidth=1.5,
-            alpha=0.7,
-            label=f"Full calibration ({ref_value:.3e})",
-        )
-
-        if use_log:
-            ax.set_yscale("log")
-
-        ax.set_xlabel("Held-out system")
-        ax.set_ylabel(ylabel)
-        ax.set_xticks(x)
-        ax.set_xticklabels(system_ids)
-        ax.legend(fontsize=10)
-        ax.grid(True, alpha=0.3)
-
-        plt.tight_layout()
-        plt.savefig(os.path.join(results_directory, f"loo_param_{param_key}.png"), dpi=300)
-        plt.close()
-
-
-@deprecated(name="breos.plotting.plot_loo_predictions")
-def plot_loo_predictions(
-    systems_predictions: list,
-    results_directory: str,
-) -> None:
-    """
-    Plot held-out SOH predictions for all LOO folds on one figure.
-
-    Each system shows predicted SOH (line) and measured SOH (markers),
-    color-coded by system with RMSE annotation.
-
-    Args:
-        systems_predictions: List of dicts, each with:
-            'system_id': int
-            'dates_measured': array of datetime/timestamps
-            'soh_measured': array of measured SOH
-            'dates_predicted': array of datetime/timestamps for prediction line
-            'soh_predicted': array of predicted SOH
-            'rmse': float (RMSE for this system)
-        results_directory: Directory to save plot
-    """
-    _check_matplotlib()
-    os.makedirs(results_directory, exist_ok=True)
-
-    colors = plt.cm.tab10(np.linspace(0, 1, max(len(systems_predictions), 10)))
-
-    fig, ax = plt.subplots(figsize=(12, 7))
-
-    for i, sp in enumerate(systems_predictions):
-        color = colors[i]
-        label = f"Sys {sp['system_id']} (RMSE={sp['rmse'] * 100:.1f} pp)"
-
-        ax.plot(sp["dates_predicted"], np.array(sp["soh_predicted"]) * 100, "-", color=color, linewidth=1.5, alpha=0.8)
-        ax.scatter(
-            sp["dates_measured"],
-            np.array(sp["soh_measured"]) * 100,
-            color=color,
-            s=60,
-            zorder=5,
-            edgecolors="black",
-            linewidths=0.5,
-            label=label,
-        )
-
-    ax.set_xlabel("Date")
-    ax.set_ylabel("SOH (%)")
-    ax.legend(fontsize=9, loc="lower left")
-    ax.grid(True, alpha=0.3)
-
-    import matplotlib.dates as mdates
-
-    ax.xaxis.set_major_locator(mdates.YearLocator())
-    ax.xaxis.set_major_formatter(mdates.DateFormatter("%Y"))
-
-    plt.tight_layout()
-    plt.savefig(os.path.join(results_directory, "loo_predictions.png"), dpi=300)
-    plt.close()
-
-
 def plot_calendar_aging_sensitivity(
     soh_trajectories: dict,
     eol_threshold: float,
@@ -3330,274 +3048,3 @@ def plot_co2_savings(
 # =========================================================================
 # Deprecated documentation-derived baseline vs BREOS comparison plots
 # =========================================================================
-
-
-@deprecated(name="breos.plotting.plot_degradation_methodology_comparison")
-def plot_degradation_methodology_comparison(
-    breos_soh: "pd.DataFrame",
-    polysun_df: "pd.DataFrame",
-    results_directory: str,
-    scenario_label: str = "",
-    suffix: str = "",
-) -> None:
-    """
-    Compare BREOS continuous SOH with the documentation-derived baseline.
-
-    Produces two separate figures:
-      1. BREOS's declining SOH curve vs the baseline's illustrative equivalent
-      2. Baseline damage accumulation (D) with replacement threshold at D=1
-
-    Args:
-        breos_soh: BREOS degradation DataFrame with 'SOH' column (%) indexed by year
-            or containing a 'Year' column.
-        polysun_df: Output of the deprecated ``simulate_polysun_degradation``
-            compatibility function. The legacy parameter name is preserved.
-        results_directory: Directory to save plots.
-        scenario_label: Label for annotation (e.g., "Porto 5kWp/5kWh").
-        suffix: Filename suffix.
-    """
-    _check_matplotlib()
-    os.makedirs(results_directory, exist_ok=True)
-
-    years_breos = breos_soh["Year"].values if "Year" in breos_soh.columns else np.arange(1, len(breos_soh) + 1)
-    soh_breos = breos_soh["SOH"].values if "SOH" in breos_soh.columns else breos_soh.iloc[:, 0].values
-    years_polysun = polysun_df["Year"].values
-    soh_polysun = polysun_df["SOH_Equivalent"].values
-
-    # --- Figure 1: SOH comparison ---
-    fig, ax = plt.subplots(figsize=(12, 6))
-    ax.plot(years_breos, soh_breos, "b-", linewidth=2.5, marker="o", markersize=3, label="BREOS (Naumann)")
-    ax.plot(
-        years_polysun,
-        soh_polysun,
-        "r--",
-        linewidth=2.5,
-        marker="s",
-        markersize=3,
-        label="Documentation-derived baseline (Miner/Wöhler)",
-    )
-    ax.axhline(80, color="grey", linestyle=":", linewidth=1.5, alpha=0.7, label="EOL threshold (80%)")
-
-    # Mark replacements
-    replacements = polysun_df[polysun_df["Replacement"]]
-    for _, row in replacements.iterrows():
-        ax.axvline(row["Year"], color="red", linestyle=":", alpha=0.4, linewidth=1)
-
-    ax.set_xlabel("Year", fontsize=12)
-    ax.set_ylabel("State of Health (%)", fontsize=12)
-    ax.set_ylim(60, 102)
-    ax.set_xticks(range(int(min(years_breos[0], years_polysun[0])), int(max(years_breos[-1], years_polysun[-1])) + 1))
-    ax.legend(fontsize=11)
-    ax.grid(alpha=0.3)
-    if scenario_label:
-        ax.text(
-            0.98,
-            0.02,
-            scenario_label,
-            transform=ax.transAxes,
-            fontsize=10,
-            ha="right",
-            va="bottom",
-            style="italic",
-            alpha=0.7,
-        )
-
-    fig.tight_layout()
-    fig.savefig(
-        os.path.join(results_directory, f"polysun_breos_soh_comparison{suffix}.png"), dpi=300, bbox_inches="tight"
-    )
-    plt.close(fig)
-
-    # --- Figure 2: comparison-baseline damage accumulation ---
-    fig, ax = plt.subplots(figsize=(12, 6))
-    ax.plot(
-        years_polysun,
-        polysun_df["Damage_Cumulative"].values,
-        "r-",
-        linewidth=2.5,
-        marker="s",
-        markersize=3,
-        label="Miner's cumulative damage",
-    )
-    ax.axhline(1.0, color="grey", linestyle=":", linewidth=1.5, alpha=0.7, label="Cycle EOL (D = 1)")
-
-    # Mark replacements
-    for _, row in replacements.iterrows():
-        ax.axvline(row["Year"], color="red", linestyle=":", alpha=0.4, linewidth=1)
-
-    ax.set_xlabel("Year", fontsize=12)
-    ax.set_ylabel("Cumulative Damage D", fontsize=12)
-    ax.set_xticks(range(int(years_polysun[0]), int(years_polysun[-1]) + 1))
-    ax.legend(fontsize=11)
-    ax.grid(alpha=0.3)
-    if scenario_label:
-        ax.text(
-            0.98,
-            0.02,
-            scenario_label,
-            transform=ax.transAxes,
-            fontsize=10,
-            ha="right",
-            va="bottom",
-            style="italic",
-            alpha=0.7,
-        )
-
-    fig.tight_layout()
-    fig.savefig(os.path.join(results_directory, f"polysun_miner_damage{suffix}.png"), dpi=300, bbox_inches="tight")
-    plt.close(fig)
-
-
-@deprecated(name="breos.plotting.plot_lifetime_prediction_comparison")
-def plot_lifetime_prediction_comparison(
-    scenarios: dict,
-    results_directory: str,
-    suffix: str = "",
-) -> None:
-    """
-    Grouped bar chart: predicted lifetime per methodology per scenario.
-
-    Args:
-        scenarios: Dict mapping scenario label to dict with keys:
-            'breos_eol_year': Year BREOS hits 80% SOH (float or int).
-            'polysun_total_life': Baseline total life (years; legacy key).
-            'polysun_cycle_life': Baseline cycle life (years; legacy key).
-            'polysun_calendar_life': Baseline calendar life (years; legacy key).
-        results_directory: Directory to save plot.
-        suffix: Filename suffix.
-    """
-    _check_matplotlib()
-    os.makedirs(results_directory, exist_ok=True)
-
-    labels = list(scenarios.keys())
-    breos_years = [scenarios[s]["breos_eol_year"] for s in labels]
-    polysun_years = [scenarios[s]["polysun_total_life"] for s in labels]
-
-    x = np.arange(len(labels))
-    width = 0.35
-
-    fig, ax = plt.subplots(figsize=(10, 6))
-    bars1 = ax.bar(x - width / 2, breos_years, width, label="BREOS (Naumann)", color="#1976D2", alpha=0.85)
-    bars2 = ax.bar(
-        x + width / 2,
-        polysun_years,
-        width,
-        label="Documentation-derived baseline",
-        color="#D32F2F",
-        alpha=0.85,
-    )
-
-    # Annotate bar values
-    for bar in bars1:
-        ax.text(
-            bar.get_x() + bar.get_width() / 2,
-            bar.get_height() + 0.3,
-            f"{bar.get_height():.1f}",
-            ha="center",
-            va="bottom",
-            fontsize=10,
-        )
-    for bar in bars2:
-        ax.text(
-            bar.get_x() + bar.get_width() / 2,
-            bar.get_height() + 0.3,
-            f"{bar.get_height():.1f}",
-            ha="center",
-            va="bottom",
-            fontsize=10,
-        )
-
-    ax.set_ylabel("Predicted Battery Lifetime (years)", fontsize=12)
-    ax.set_xticks(x)
-    ax.set_xticklabels(labels, fontsize=11)
-    ax.legend(fontsize=11)
-    ax.grid(axis="y", alpha=0.3)
-
-    fig.tight_layout()
-    fig.savefig(
-        os.path.join(results_directory, f"lifetime_prediction_comparison{suffix}.png"), dpi=300, bbox_inches="tight"
-    )
-    plt.close(fig)
-
-
-@deprecated(name="breos.plotting.plot_temperature_sensitivity_comparison")
-def plot_temperature_sensitivity_comparison(
-    locations: dict,
-    results_directory: str,
-    suffix: str = "",
-) -> None:
-    """
-    Compare temperature-dependent BREOS results with the fixed-input baseline.
-
-    The baseline's lack of temperature response is a limitation of this
-    approximation, not a claim about the current Polysun product.
-
-    Args:
-        locations: Dict mapping location names to ``breos_eol_year``,
-            ``polysun_total_life``, and ``mean_temp_c`` values.
-        results_directory: Directory to save plot.
-        suffix: Filename suffix.
-    """
-    _check_matplotlib()
-    os.makedirs(results_directory, exist_ok=True)
-
-    labels = list(locations.keys())
-    breos_years = [locations[s]["breos_eol_year"] for s in labels]
-    polysun_years = [locations[s]["polysun_total_life"] for s in labels]
-    temps = [locations[s]["mean_temp_c"] for s in labels]
-
-    # Sort by temperature
-    sort_idx = np.argsort(temps)
-    labels = [labels[i] for i in sort_idx]
-    breos_years = [breos_years[i] for i in sort_idx]
-    polysun_years = [polysun_years[i] for i in sort_idx]
-    temps = [temps[i] for i in sort_idx]
-
-    x = np.arange(len(labels))
-    width = 0.35
-
-    fig, ax = plt.subplots(figsize=(10, 6))
-    bars1 = ax.bar(x - width / 2, breos_years, width, label="BREOS (Naumann)", color="#1976D2", alpha=0.85)
-    bars2 = ax.bar(
-        x + width / 2,
-        polysun_years,
-        width,
-        label="Documentation-derived baseline",
-        color="#D32F2F",
-        alpha=0.85,
-    )
-
-    # Annotate with temperature
-    for i, (bar, temp) in enumerate(zip(bars1, temps)):
-        ax.text(
-            bar.get_x() + bar.get_width() / 2,
-            bar.get_height() + 0.3,
-            f"{bar.get_height():.1f}y",
-            ha="center",
-            va="bottom",
-            fontsize=9,
-        )
-    for bar in bars2:
-        ax.text(
-            bar.get_x() + bar.get_width() / 2,
-            bar.get_height() + 0.3,
-            f"{bar.get_height():.1f}y",
-            ha="center",
-            va="bottom",
-            fontsize=9,
-        )
-
-    # Add temperature as secondary labels
-    ax2_labels = [f"{l}\n({t:.0f}°C)" for l, t in zip(labels, temps)]
-    ax.set_xticks(x)
-    ax.set_xticklabels(ax2_labels, fontsize=11)
-
-    ax.set_ylabel("Predicted Battery Lifetime (years)", fontsize=12)
-    ax.legend(fontsize=11)
-    ax.grid(axis="y", alpha=0.3)
-
-    fig.tight_layout()
-    fig.savefig(
-        os.path.join(results_directory, f"temperature_sensitivity_comparison{suffix}.png"), dpi=300, bbox_inches="tight"
-    )
-    plt.close(fig)

@@ -16,7 +16,6 @@ import pvlib
 from pvlib.albedo import SURFACE_ALBEDOS
 from pvlib.location import Location
 
-from breos._deprecations import deprecated
 from breos.cec_fit import fit_cec_params
 from breos.inverter import calculate_dc_ac_power
 from breos.pv.iam import calculate_front_effective_irradiance
@@ -32,6 +31,7 @@ from breos.pv.model_options import (
     DIFFUSE_IAM_METHODS,
     IAM_MODELS,
     PEREZ_MODELS,
+    PV_MODEL_CONFIG_KEYS,
     SOLAR_POSITION_METHODS,
     SURFACE_TYPES,
     TEMPERATURE_MODELS,
@@ -42,6 +42,7 @@ from breos.pv.model_options import (
 )
 from breos.pv.temperature import calculate_cell_temperature
 from breos.utils import get_hours_per_step
+from breos.weather import weather_representative_time_offset
 
 # Module-level cache for CEC model parameters (depends only on module specs, not weather)
 _cec_param_cache: Dict[tuple, tuple] = {}
@@ -67,20 +68,7 @@ DEFAULT_PVWATTS_LOSSES: Dict[str, float] = {
 # a misspelled option — but the wrappers that only forward the block use this
 # tuple instead of re-listing it, so adding an option is one edit here plus
 # one per signature rather than one per call site too.
-_MODEL_OPTION_KEYS = (
-    "transposition_model",
-    "albedo",
-    "surface_type",
-    "model_perez",
-    "solar_position",
-    "iam_model",
-    "diffuse_iam",
-    "temperature_model",
-    "bifacial_model",
-    "gcr",
-    "pvrow_height",
-    "pvrow_pitch",
-)
+_MODEL_OPTION_KEYS = PV_MODEL_CONFIG_KEYS
 
 # On the tracking entry points ``gcr`` is tracker row geometry with its own
 # argument slot next to ``backtrack`` and ``cross_axis_tilt``, so it is
@@ -258,9 +246,13 @@ def _prepare_solarpos_and_weather(
     method = resolve_solar_position_method(solar_position)
 
     times = pd.date_range(start=weather_data.index[0], end=weather_data.index[-1], freq=freq)
-    if method == "mid-interval":
-        half_step = pd.Timedelta(hours=get_hours_per_step(freq) / 2.0)
-        solarpos = location.get_solarposition(times=times + half_step)
+    if method in {"mid-interval", "weather"}:
+        offset = (
+            pd.Timedelta(hours=get_hours_per_step(freq) / 2.0)
+            if method == "mid-interval"
+            else weather_representative_time_offset(weather_data, freq)
+        )
+        solarpos = location.get_solarposition(times=times + offset)
         solarpos.index = times
     else:
         solarpos = location.get_solarposition(times=times)
@@ -1063,61 +1055,6 @@ def dc_to_ac(
     return pd.Series(ac_power, index=dc_power.index, name="ac_power_W")
 
 
-@deprecated(name="breos.solar.calculate_pv_production_tmy", replacement="breos.solar.calculate_pv_production_dc")
-def calculate_pv_production_tmy(
-    tmy_data: pd.DataFrame,
-    location: Location,
-    tilt: float,
-    surface_azimuth: float,
-    n_modules: int,
-    pv_params: Optional[PVModuleParams] = None,
-    freq: str = "h",
-    verbose: bool = True,
-    transposition_model: str = DEFAULT_TRANSPOSITION_MODEL,
-    albedo: Optional[float] = None,
-    surface_type: Optional[str] = None,
-    model_perez: str = DEFAULT_PEREZ_MODEL,
-    solar_position: str = DEFAULT_SOLAR_POSITION,
-    iam_model: str = DEFAULT_IAM_MODEL,
-    diffuse_iam: str = DEFAULT_DIFFUSE_IAM,
-    temperature_model: str = DEFAULT_TEMPERATURE_MODEL,
-    bifacial_model: str = DEFAULT_BIFACIAL_MODEL,
-    gcr: float = 0.35,
-    pvrow_height: Optional[float] = None,
-    pvrow_pitch: Optional[float] = None,
-) -> pd.Series:
-    """
-    Calculate PV DC production from TMY data.
-
-    This is a convenience wrapper around calculate_pv_production_dc for TMY data.
-
-    Args:
-        tmy_data: DataFrame with TMY weather data (ghi, dni, dhi, temp_air, wind_speed)
-        location: pvlib Location object
-        tilt: Panel tilt angle (degrees)
-        surface_azimuth: Panel azimuth (degrees, 180=South)
-        n_modules: Number of PV modules
-        pv_params: PV module parameters
-        freq: Time frequency ('h' or '15min')
-        verbose: Whether to print production summary
-
-    Returns:
-        pd.Series with DC power production in Watts
-    """
-    return calculate_pv_production_dc(
-        weather_data=tmy_data,
-        location=location,
-        tilt=tilt,
-        surface_azimuth=surface_azimuth,
-        n_modules=n_modules,
-        pv_params=pv_params,
-        freq=freq,
-        degradation_rate=0.0,  # TMY doesn't include degradation
-        verbose=verbose,
-        **_model_option_kwargs(locals()),
-    )
-
-
 def calculate_pv_production_ac(
     weather_data: pd.DataFrame,
     location: Location,
@@ -1278,47 +1215,6 @@ def default_azimuth(latitude: float) -> float:
         Default azimuth angle in degrees (180.0 or 0.0)
     """
     return 180.0 if latitude >= 0 else 0.0
-
-
-@deprecated(name="breos.solar.zeb_sizer")
-def zeb_sizer(houseload: pd.DataFrame, ac_loss: pd.Series, current_n_modules: int, freq: str = "h") -> Dict[str, float]:
-    """
-    Size a Zero Energy Building (ZEB) PV system.
-
-    Args:
-        houseload: DataFrame with electrical consumption in Watts
-        ac_loss: Series with PV production in Watts
-        current_n_modules: Current number of PV modules
-        freq: Time frequency ('h' or '15min')
-
-    Returns:
-        Dict with sizing results including:
-            - yearly_pv_production_Wh: Current annual PV production
-            - yearly_consumption_Wh: Annual consumption
-            - pv_to_load_ratio: Current PV-to-load ratio
-            - is_zeb: Whether current system achieves ZEB
-            - panels_needed_for_zeb: Number of panels needed for ratio=1.0
-    """
-    hours_per_step = get_hours_per_step(freq)
-    yearly_pv_production = ac_loss.sum() * hours_per_step
-    total_yearly_consumption = houseload.iloc[:, 0].sum() * hours_per_step
-
-    ratio = yearly_pv_production / total_yearly_consumption
-
-    # Calculate panels needed for ZEB (ratio = 1.0)
-    if ratio >= 1.0:
-        panels_needed_for_zeb = current_n_modules
-    else:
-        # Need to scale up: panels_needed = current_panels / ratio
-        panels_needed_for_zeb = math.ceil(current_n_modules / ratio)
-
-    return {
-        "yearly_pv_production_Wh": yearly_pv_production,
-        "yearly_consumption_Wh": total_yearly_consumption,
-        "pv_to_load_ratio": ratio,
-        "is_zeb": ratio >= 1.0,
-        "panels_needed_for_zeb": panels_needed_for_zeb,
-    }
 
 
 def _sum_pv_breakdowns(breakdowns: list[PVProductionBreakdown]) -> PVProductionBreakdown:

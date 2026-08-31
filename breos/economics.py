@@ -200,7 +200,7 @@ def calculate_costs(
 
 
 def cost_analysis_projection(
-    results_df: pd.DataFrame,
+    results_df: Optional[pd.DataFrame],
     costs: Dict[str, float],
     num_years: int = 20,
     inflation_rate: float = 0.03,
@@ -221,7 +221,10 @@ def cost_analysis_projection(
 
     Args:
         results_df: DataFrame with ``Datetime``, ``Houseload``,
-            ``Import_From_Grid``, and ``Sell_To_Grid``. System production is
+            ``Import_From_Grid``, and ``Sell_To_Grid``. Required only when
+            ``yearly_summary_df`` is not supplied, because it feeds the legacy
+            first-year estimation path alone; callers that already have actual
+            yearly totals may pass ``None``. System production is
             ``PV_AC_To_Load + Battery_AC_To_Load_PV + PV_AC_Export``
             (``Sell_To_Grid`` is the export alias); legacy ``PV_Production``
             is accepted for compatibility.
@@ -356,6 +359,11 @@ def cost_analysis_projection(
         return proj
 
     # ===== LEGACY PATH: Estimate from first year =====
+    if results_df is None:
+        raise ValueError(
+            "cost_analysis_projection requires results_df when yearly_summary_df is not provided: "
+            "the first-year estimation path has nothing to estimate from"
+        )
     df = results_df.copy()
 
     # Prepare datetime index

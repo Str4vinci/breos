@@ -39,7 +39,7 @@ weather/data access, load profiles, PV system data, and cost assumptions; see
 | `albedo` | `None` | Ground reflectance (0-1) for the ground-diffuse component; `None` uses pvlib's 0.25 default. Mutually exclusive with `surface_type` |
 | `surface_type` | `None` | Named ground cover (e.g. `"snow"`, `"sea"`, `"grass"`) mapped to an albedo; an alternative to `albedo` |
 | `model_perez` | `"allsitescomposite1990"` | Perez coefficient set; only used when `transposition_model = "perez"` |
-| `solar_position` | `"interval-start"` | Where within each timestep the sun position is evaluated. `"mid-interval"` matches the PVWatts/SAM convention for interval-averaged weather (hourly value labelled 07:00 = 07:00–08:00 average → 07:30 sun) |
+| `solar_position` | `"interval-start"` | Where within each timestep the sun position is evaluated. `"mid-interval"` adds half a timestep. `"weather"` instead reads the representative-time offset from content-bound weather metadata, including provider offsets for instantaneous irradiance and left- or right-labelled interval means. |
 | `horizon_profile` | `None` | Optional `[[azimuth_deg, elevation_deg], ...]` far-horizon profile. Points are circularly interpolated; direct beam is removed while the sun is on or below the terrain line. Requires weather explicitly marked as unshaded |
 | `iam_model` | `"ashrae"` | Beam incidence-angle modifier. `"physical"` uses pvlib's physical optics model and `"martin_ruiz"` its empirical model; the Ashrae default preserves historical results |
 | `diffuse_iam` | `"none"` | Whether the incidence-angle modifier is also applied to the diffuse POA components. `"marion"` weighs sky- and ground-diffuse with the view-factor-integrated selected IAM model (Marion 2017); the default applies IAM to beam only, a known ~0.5–1% overestimate |
@@ -49,6 +49,7 @@ weather/data access, load profiles, PV system data, and cost assumptions; see
 | `pvrow_pitch` | `None` | Distance between adjacent PV rows; required by `"infinite_sheds"` and expressed in the same unit as `pvrow_height` |
 | `resolution` | `"h"` | Time resolution (`"h"` or `"15min"`) |
 | `projection_years` | `20` | Economic projection horizon |
+| `execution_backend` | `"python"` | Within-day dispatch implementation. `"numba"` selects the optional compiled backend installed by `breos[fast]` |
 | `cost_preset` | `None` | Cost preset key from packaged defaults |
 | `costs` | *unset* | Optional cost overrides layered over the selected preset and built-in defaults; see [below](#cost-and-emissions-presets) |
 | `inflation_rate` | `0.02` | Annual electricity price inflation |
@@ -66,6 +67,8 @@ weather/data access, load profiles, PV system data, and cost assumptions; see
 | `battery_rte` | `None` | Battery round-trip efficiency (`None` = 0.95), split evenly across charge/discharge |
 | `battery_max_charge_power_w` | `None` | Maximum DC power entering the battery charge path; `None` is unlimited |
 | `battery_max_discharge_power_w` | `None` | Maximum battery AC power delivered to load; `None` is unlimited |
+| `battery_temperature` | `"weather"` | Battery temperature used for degradation: `"weather"`, a fixed temperature in °C, or a timestamped CSV path |
+| `battery_indoor_model` | `None` | Optional indoor-temperature model settings. `None` applies the default indoor buffering; use `{"enabled": false}` to use `battery_temperature` without remapping |
 | `dc_coupled` | `True` | DC-coupled / hybrid inverter. `False` is currently unsupported and raises |
 | `inverter_efficiency` | `0.96` | Nominal inverter efficiency used by the PVWatts part-load curve |
 | `inverter_loading_ratio` | `1.25` | DC/AC oversizing ratio; also sets the inverter AC rating that clips production |
@@ -103,6 +106,24 @@ so the window also shapes degradation results — the defaults reflect the
 operating range the field-calibrated aging parameters were fit for, and
 simulating a 0–1.00 window models a battery management system that no real
 product ships.
+
+Battery temperature is also a degradation input. By default, BREOS derives it
+from the weather data and applies the indoor-buffering model. A numeric
+`battery_temperature` is treated as an outdoor or supplied temperature and is
+still buffered unless the indoor model is disabled. For a study that assumes
+an exact constant battery temperature, configure both values explicitly:
+
+```python
+breos.App({
+    # ...required project inputs...
+    "battery_temperature": 25.0,
+    "battery_indoor_model": {"enabled": False},
+})
+```
+
+The mapping also accepts `setpoint_c`, `coupling_alpha`, `floor_c`, and
+`ceiling_c`. Set `coupling_alpha` between 0 and 1, and do not set `floor_c`
+above `ceiling_c`.
 
 ## Battery degradation calibration
 
@@ -158,16 +179,18 @@ For a new hourly study using interval-averaged weather, the explicit profile in
 | Choice | Compatible default | Recommended starting point |
 |---|---|---|
 | Sky transposition | `isotropic` | `perez` |
-| Solar position | `interval-start` | `mid-interval` for interval-averaged weather |
+| Solar position | `interval-start` | `weather` when the input has content-bound timing metadata; otherwise choose a label-aware explicit method |
 | Beam IAM | `ashrae` | `physical` |
 | Diffuse IAM | `none` | `marion` |
 | Cell temperature | `faiman` open rack | A mount-appropriate PVsyst or SAPM preset |
 
 These are explicit modeling assumptions, not universally correct replacements.
-Match the timestamp convention to the weather source and the temperature preset
-to the physical construction. The example uses a close rooftop mount and a
-catalog module with sourced efficiency; a free-standing array should select a
-free-standing/open-rack thermal model instead.
+Match the timestamp convention and label direction to the weather source:
+`mid-interval` only represents an interval centre when the label marks the
+interval start. Match the temperature preset to the physical construction.
+The example uses a close rooftop mount and a catalog module with sourced
+efficiency; a free-standing array should select a free-standing/open-rack
+thermal model instead.
 
 ## Incidence-angle modifier (IAM)
 

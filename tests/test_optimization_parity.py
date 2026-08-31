@@ -147,6 +147,11 @@ def _problem_config(dc_ac_ratio: float = 1.6):
         "location": {"latitude": 41.15, "longitude": -8.61, "timezone": "UTC"},
         "simulation": {"resolution": "h"},
         "constraints": {"budget_eur": 100000, "max_area_m2": 100.0, "max_modules": 5},
+        # These assert the wiring of one annual scoring pass, against a fake
+        # simulate_energy_balance. The default projected basis would run the
+        # multi-year loop instead, which is a different call signature and not
+        # what is under test here.
+        "optimization": {"objective_basis": "steady_state"},
         "mode": {"fixed_azimuth": 180},
         "pv": {"module": "Suntech_STP550S_STC"},
         "battery": {"temperature": 20.0, "indoor_model": {"enabled": False}},
@@ -235,3 +240,61 @@ def test_optimizer_passes_load_with_original_timestamps(monkeypatch):
     # The load must reach simulate_energy_balance with its real timestamps —
     # its internal alignment (UTC instants, year remap) does the rest.
     assert captured["houseload"].index.equals(load_index)
+
+
+def test_projected_design_forwards_pv_model_options(monkeypatch):
+    """A configured PV chain must reach the PV model, not just provenance.
+
+    The optimization paths once dropped ``transposition_model`` and its
+    siblings on the floor: ``app_config`` validated them and
+    ``reproduction.json`` recorded them, while every call ran the defaults. The
+    output was byte-identical to an unconfigured run, so nothing downstream
+    could notice — only the provenance record was wrong. Assert the kwargs
+    arrive rather than asserting on numbers, since the whole failure mode is
+    that the numbers do not move.
+    """
+    import breos.optimization as optimization
+
+    seen: dict[str, object] = {}
+
+    class _Stop(RuntimeError):
+        pass
+
+    def _spy(**kwargs):
+        seen.update(kwargs)
+        raise _Stop
+
+    monkeypatch.setattr(optimization, "calculate_pv_production_dc", _spy)
+
+    config = {
+        "location": {"latitude": 41.15, "longitude": -8.61, "timezone": "Europe/Lisbon"},
+        "simulation": {"resolution": "h"},
+        "pv": {"degradation_rate": 0.005},
+        "battery": {},
+        "transposition_model": "perez",
+        "solar_position": "mid-interval",
+        "diffuse_iam": "marion",
+    }
+
+    with pytest.raises(_Stop):
+        optimization.evaluate_projected_design(
+            tmy_data=pd.DataFrame(),
+            houseload=pd.DataFrame(),
+            config=config,
+            n_modules=9,
+            battery_kwh=5.0,
+            tilt=35.0,
+            azimuth=180.0,
+        )
+
+    assert seen["transposition_model"] == "perez"
+    assert seen["solar_position"] == "mid-interval"
+    assert seen["diffuse_iam"] == "marion"
+
+
+def test_config_model_options_omits_absent_keys():
+    """Absent keys stay absent so the PV model's own defaults still apply."""
+    from breos.pv.model_options import configured_pv_model_kwargs
+
+    assert configured_pv_model_kwargs({}) == {}
+    assert configured_pv_model_kwargs({"albedo": 0.25}) == {"albedo": 0.25}

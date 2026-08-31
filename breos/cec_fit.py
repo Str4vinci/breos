@@ -355,7 +355,13 @@ def fit_cec_params(
                 fallback = ((five, adjust), residual)
 
     if fallback is not None:
-        (five, adjust), _ = fallback
+        (five, adjust), residual = fallback
+        warnings.warn(
+            "CEC parameter fit returned the closest physical solution without "
+            f"meeting the gamma tolerance (absolute residual {residual:.6g} %/°C).",
+            RuntimeWarning,
+            stacklevel=2,
+        )
         i_l_ref, i_o_ref, r_s, r_sh_ref, a_ref = five
         return (i_l_ref, i_o_ref, r_s, r_sh_ref, a_ref, adjust)
 

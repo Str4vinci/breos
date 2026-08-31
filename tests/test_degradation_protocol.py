@@ -16,7 +16,9 @@ from breos.degradation.validation import BlastExperimentalRangeWarning
 def _day(*, temperature_c: float = 25.0) -> DegradationDay:
     index = pd.date_range("2025-01-01", periods=2, freq="h", tz="UTC")
     return DegradationDay(
-        soc=pd.Series([0.9, 0.1], index=index),
+        soc=np.asarray([0.9, 0.1]),
+        time_ticks=index.asi8,
+        ticks_per_second=1_000_000.0,
         temperature_c=np.asarray([temperature_c, temperature_c]),
         step_seconds=3600.0,
         start_soc=0.9,
@@ -25,8 +27,10 @@ def _day(*, temperature_c: float = 25.0) -> DegradationDay:
 
 
 def test_native_adapter_implements_lifecycle_contract_and_snapshot_shape():
-    def cycle_step(soh, soc, nominal_energy_wh, *, fec_cum, **kwargs):
+    def cycle_step(soh, soc, time_ticks, ticks_per_second, nominal_energy_wh, *, fec_cum, **kwargs):
         assert len(soc) == 2
+        assert len(time_ticks) == 2
+        assert ticks_per_second == 1_000_000.0
         assert nominal_energy_wh == 5000.0
         return soh - 0.01, 0.01, fec_cum + 0.8
 

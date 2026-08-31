@@ -1,0 +1,153 @@
+name = "Forthcoming publication projected optimization reproduction"
+inverter_efficiency = 0.96
+# PVGIS labels SARAH3 irradiance at HH:00 but reports the actual observation
+# offset in provider metadata. The pinned Porto offset is 0.1714 h. Use that
+# content-bound weather metadata rather than a resolution-dependent midpoint.
+# Use Perez
+# transposition and Marion diffuse/ground IAM instead of beam-only IAM; the
+# beam-only default is a documented 0.5-1.5% systematic overestimate.
+transposition_model = "perez"
+model_perez = "allsitescomposite1990"
+solar_position = "weather"
+iam_model = "ashrae"
+diffuse_iam = "marion"
+albedo = 0.25
+temperature_model = "faiman"
+bifacial_model = "none"
+
+[location]
+latitude = 41.1579
+longitude = -8.6291
+timezone = "Europe/Lisbon"
+name = "Porto, Portugal"
+
+[load]
+profile_type = "6"
+annual_consumption_kwh = 5000.0
+external_filename = "EREDES_2025_BTN_1000kwh_15min.csv"
+
+[pv]
+module = "Suntech_STP550S_STC"
+module_width_m = 1.134
+module_length_m = 2.278
+degradation_rate = 0.005
+
+[battery]
+eol_percentage = 0.70
+calendar_model = "naumann_lam_field_calibrated"
+max_soc = 0.90
+min_soc = 0.10
+charge_efficiency = 0.974679434
+discharge_efficiency = 0.974679434
+# Research input: 85 A at 51.2 V, expressed through the public power cap.
+max_charge_power_w = 4352.0
+# Weather ambient buffered by the indoor model (BREOS defaults: 22 C
+# setpoint, 0.3 outdoor coupling, 15-35 C clamp). A residential battery
+# sits indoors, so neither raw outdoor air nor a flat bench temperature
+# describes it.
+temperature = "weather"
+indoor_model = { enabled = true }
+enable_replacement = true
+replacement_cost = "calculate"
+
+[optimization]
+algorithm = "nsga2"
+objective_basis = "projected"
+pop_size = 100
+n_offsprings = 50
+n_gen = 40
+seed = 1
+
+[optimization.early_stop]
+ftol = 0.0025
+period = 10
+min_gen = 20
+n_skip = 0
+
+[constraints]
+budget_eur = 15000.0
+max_area_m2 = 25.0
+max_modules = 20
+max_battery_kwh = 30.0
+max_tilt_deg = "adjust"
+enforce_zeb = false
+
+[costs]
+electricity_cost = 0.2582
+electricity_sold_cost = 0.04
+daily_power_cost = 0.30
+module_cost_per_w = 0.125
+storage_cost_per_kwh = 500.0
+inverter_cost_per_kw_hybrid = 102.58
+inverter_cost_per_kw_simple = 48.37
+installation_cost_per_module = 350.0
+installation_cost_battery = 350.0
+# The projection template used to score the archived Pareto front resolved to
+# EUR 30/module. The outer MOO provenance incorrectly recorded EUR 50/module.
+other_cost_per_module = 30.0
+other_costs = 0.0
+maintenance_cost_per_panel = 10.0
+maintenance_cost = 0.0
+dc_ac_ratio = 1.25
+
+[financials]
+discount_rate = 0.05
+inflation_rate = 0.02
+sell_price_inflation = 0.0
+project_lifespan = 20
+pv_degradation_rate = 0.005
+
+[emissions]
+country = "Portugal"
+average_grid_carbon_intensity_gco2_kwh = 127.91
+source = "Ember Climate, Europe Yearly Full Release"
+year = 2025
+
+[simulation]
+resolution = "15min"
+years_projection = 20
+weather_file = "validation/data/weather/porto_tmy_2005_2023_pvgis-sarah3.csv.gz"
+irradiance_resampling = "clear_sky_energy_conserving"
+
+[[reference_candidates]]
+label = "C1"
+modules = 6
+battery_kwh = 0.0
+tilt = 30.0
+azimuth = 190.0
+projected_grid_independence_pct = 41.056152035721105
+projected_npv_eur = 5424.42676447725
+
+[[reference_candidates]]
+label = "C2"
+modules = 9
+battery_kwh = 5.0
+tilt = 25.0
+azimuth = 185.0
+projected_grid_independence_pct = 64.76832911500924
+projected_npv_eur = 3779.2543999748195
+
+[[reference_candidates]]
+label = "C3"
+modules = 9
+battery_kwh = 9.0
+tilt = 35.0
+azimuth = 190.0
+projected_grid_independence_pct = 78.68316595800997
+projected_npv_eur = 2642.017104647359
+
+[[reference_candidates]]
+label = "C4"
+modules = 9
+battery_kwh = 20.0
+tilt = 45.0
+azimuth = 175.0
+projected_grid_independence_pct = 89.39035743523462
+projected_npv_eur = -5094.0374517273485
+
+[[reference_candidates]]
+label = "C5"
+modules = 4
+battery_kwh = 0.0
+tilt = 35.0
+azimuth = 180.0

@@ -671,6 +671,45 @@ class TestSolarPosition:
         # A half-hour shift redistributes energy within the day; annual totals stay close.
         assert mid.sum() == pytest.approx(start.sum(), rel=0.05)
 
+    @pytest.mark.parametrize(
+        ("metadata", "expected_offset"),
+        [
+            (
+                {
+                    "radiation_time_basis": "instant",
+                    "timestamp_label_basis": "provider_hour",
+                    "irradiance_time_offset_hours": 0.1714,
+                },
+                pd.Timedelta(hours=0.1714),
+            ),
+            (
+                {"radiation_time_basis": "interval_mean", "timestamp_label_basis": "left"},
+                pd.Timedelta(minutes=30),
+            ),
+            (
+                {"radiation_time_basis": "interval_mean", "timestamp_label_basis": "right"},
+                pd.Timedelta(minutes=-30),
+            ),
+        ],
+    )
+    def test_weather_method_sends_the_metadata_time_to_solar_position(self, metadata, expected_offset):
+        index = pd.date_range("2025-01-01", periods=2, freq="h", tz="UTC")
+        weather = pd.DataFrame({"ghi": [0.0, 0.0]}, index=index)
+        weather.attrs["breos_weather_metadata"] = metadata
+        captured = {}
+
+        class RecordingLocation:
+            def get_solarposition(self, *, times):
+                captured["times"] = times
+                return pd.DataFrame(index=times)
+
+        labels, solar_position, _weather = solar._prepare_solarpos_and_weather(
+            weather, RecordingLocation(), "h", solar_position="weather"
+        )
+
+        assert captured["times"].equals(labels + expected_offset)
+        assert solar_position.index.equals(labels)
+
     def test_mid_interval_moves_energy_toward_morning_for_east_array(
         self, synthetic_weather, porto_location, pv_params
     ):
@@ -954,3 +993,9 @@ class TestPerezCoefficients:
     def test_invalid_perez_model(self, synthetic_weather, porto_location, pv_params):
         with pytest.raises(ValueError, match="Unknown Perez coefficient model"):
             self._perez(synthetic_weather, porto_location, pv_params, "not_a_set")
+
+    def test_perez_model_name_is_case_and_whitespace_insensitive(self, synthetic_weather, porto_location, pv_params):
+        canonical = self._perez(synthetic_weather, porto_location, pv_params, "allsitescomposite1990")
+        normalized = self._perez(synthetic_weather, porto_location, pv_params, " AllSitesComposite1990 ")
+
+        assert normalized.to_numpy() == pytest.approx(canonical.to_numpy())

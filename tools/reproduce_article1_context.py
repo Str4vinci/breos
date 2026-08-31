@@ -1,0 +1,428 @@
+#!/usr/bin/env python3
+"""Generate source tables for the forthcoming publication."""
+
+from __future__ import annotations
+
+import argparse
+import gzip
+import hashlib
+import json
+import platform
+import shlex
+import subprocess
+import sys
+import tomllib
+from dataclasses import asdict
+from importlib import metadata
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+from pvlib.location import Location
+from scipy.optimize import differential_evolution
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(PROJECT_ROOT))
+
+import breos  # noqa: E402
+from breos.pv.model_options import (  # noqa: E402
+    configured_pv_model_kwargs,
+    resolve_configured_pv_model_options,
+)
+from breos.pv_modules import get_module  # noqa: E402
+from breos.solar import calculate_pv_production_dc  # noqa: E402
+from breos.weather import (  # noqa: E402
+    preload_weather_by_year,
+    read_weather_csv,
+    resample_to_15min,
+    weather_metadata,
+    weather_representative_time_offset,
+)
+
+DEFAULT_CONFIG = PROJECT_ROOT / "validation/article1/article1-projected-optimization.toml"
+MONTH_NAMES = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+HISTORICAL_COLUMN_MAP = {
+    "shortwave_radiation": "ghi",
+    "direct_normal_irradiance": "dni",
+    "diffuse_radiation": "dhi",
+    "temperature_2m": "temp_air",
+    "wind_speed_10m": "wind_speed",
+}
+
+
+def _sha256(path: Path, *, decompress_gzip: bool = False) -> str:
+    digest = hashlib.sha256()
+    opener = gzip.open if decompress_gzip else Path.open
+    with opener(path, "rb") as handle:
+        for block in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def _git_revision() -> dict[str, str | bool]:
+    revision = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=PROJECT_ROOT, check=True, capture_output=True, text=True
+    ).stdout.strip()
+    status = subprocess.run(
+        ["git", "status", "--short", "--untracked-files=no"],
+        cwd=PROJECT_ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    return {"commit": revision, "tracked_worktree_dirty": bool(status)}
+
+
+def _load_config(path: Path) -> tuple[dict, bytes]:
+    content = path.read_bytes()
+    return tomllib.loads(content.decode("utf-8")), content
+
+
+def _resolved_config_sha256(config: dict) -> str:
+    payload = json.dumps(config, sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _dependency_versions() -> dict[str, str]:
+    return {package: metadata.version(package) for package in ("numpy", "pandas", "pvlib", "scipy")}
+
+
+def _pv_module_provenance(config: dict, *, width_m: float | None = None, length_m: float | None = None) -> dict:
+    pv = config["pv"]
+    width = float(width_m if width_m is not None else pv.get("module_width_m", 1.134))
+    length = float(length_m if length_m is not None else pv.get("module_length_m", 2.278))
+    return {
+        "catalog_key": str(pv["module"]),
+        "parameters": asdict(get_module(str(pv["module"]))),
+        "width_m": width,
+        "length_m": length,
+        "area_m2": width * length,
+    }
+
+
+def _location(config: dict) -> Location:
+    location = config["location"]
+    return Location(
+        float(location["latitude"]),
+        float(location["longitude"]),
+        tz=str(location["timezone"]),
+        name=str(location["name"]),
+    )
+
+
+def _load_tmy(
+    config: dict, weather_override: Path | None = None, *, resolution: str = "h"
+) -> tuple[pd.DataFrame, Path]:
+    weather_path = weather_override or PROJECT_ROOT / config["simulation"]["weather_file"]
+    if not weather_path.is_file():
+        raise FileNotFoundError(weather_path)
+    weather = read_weather_csv(weather_path)
+    if resolution == "15min":
+        location = config["location"]
+        resampling = str(config["simulation"].get("irradiance_resampling", "clear_sky"))
+        if resampling not in {"clear_sky", "clear_sky_energy_conserving"}:
+            raise ValueError(f"Unsupported simulation.irradiance_resampling: {resampling!r}")
+        weather = resample_to_15min(
+            weather,
+            latitude=float(location["latitude"]),
+            longitude=float(location["longitude"]),
+            preserve_irradiance_energy=resampling == "clear_sky_energy_conserving",
+        )
+    return weather, weather_path
+
+
+def _annual_module_production(
+    weather: pd.DataFrame,
+    config: dict,
+    *,
+    tilt: float,
+    azimuth: float,
+    resolution: str = "h",
+) -> float:
+    module = get_module(str(config["pv"]["module"]))
+    dc = calculate_pv_production_dc(
+        weather,
+        _location(config),
+        tilt=float(tilt),
+        surface_azimuth=float(azimuth),
+        n_modules=1,
+        pv_params=module,
+        freq=resolution,
+        verbose=False,
+        **configured_pv_model_kwargs(config),
+    )
+    hours_per_step = 0.25 if resolution == "15min" else 1.0
+    return float(dc.sum() * hours_per_step / 1000.0)
+
+
+def _inclusive_values(start: float, stop: float, step: float) -> np.ndarray:
+    if step <= 0.0:
+        raise ValueError("grid steps must be positive")
+    return np.arange(start, stop + step * 0.5, step, dtype=float)
+
+
+def _orientation_source(args: argparse.Namespace, config: dict) -> dict:
+    weather, weather_path = _load_tmy(config, args.weather_file, resolution=args.resolution)
+    pv_module = _pv_module_provenance(
+        config,
+        width_m=args.module_width_m,
+        length_m=args.module_length_m,
+    )
+    module_area = float(pv_module["area_m2"])
+    rows = []
+    for tilt in _inclusive_values(args.tilt_min, args.tilt_max, args.tilt_step):
+        for azimuth in _inclusive_values(args.azimuth_min, args.azimuth_max, args.azimuth_step):
+            production = _annual_module_production(
+                weather, config, tilt=tilt, azimuth=azimuth, resolution=args.resolution
+            )
+            rows.append(
+                {
+                    "Tilt_deg": tilt,
+                    "Azimuth_deg": azimuth,
+                    "Annual_Module_DC_Production_kWh": production,
+                    "Annual_DC_Production_kWh_m2": production / module_area,
+                }
+            )
+    grid = pd.DataFrame(rows)
+    grid_path = args.output / "orientation_grid.csv"
+    grid.to_csv(grid_path, index=False)
+
+    def objective(values: np.ndarray) -> float:
+        azimuth, tilt = values
+        return -_annual_module_production(
+            weather, config, tilt=float(tilt), azimuth=float(azimuth), resolution=args.resolution
+        )
+
+    optimum = differential_evolution(
+        objective,
+        bounds=((args.azimuth_min, args.azimuth_max), (args.tilt_min, args.tilt_max)),
+        seed=args.seed,
+        workers=1,
+        polish=True,
+        updating="immediate",
+    )
+    optimum_payload = {
+        "azimuth_deg": float(optimum.x[0]),
+        "tilt_deg": float(optimum.x[1]),
+        "annual_module_dc_production_kwh": float(-optimum.fun),
+        "annual_dc_production_kwh_m2": float(-optimum.fun / module_area),
+        "success": bool(optimum.success),
+        "message": str(optimum.message),
+        "evaluations": int(optimum.nfev),
+        "iterations": int(optimum.nit),
+        "seed": int(args.seed),
+    }
+    optimum_path = args.output / "orientation_optimum.json"
+    optimum_path.write_text(json.dumps(optimum_payload, indent=2) + "\n")
+    return {
+        "analysis": "orientation",
+        "weather_file": str(weather_path.resolve()),
+        "weather_file_sha256": _sha256(weather_path),
+        "weather_uncompressed_sha256": _sha256(weather_path, decompress_gzip=weather_path.suffix == ".gz"),
+        "resolution": args.resolution,
+        "input_resolution": "h",
+        "irradiance_resampling_method": (
+            config["simulation"].get("irradiance_resampling") if args.resolution == "15min" else "none"
+        ),
+        "weather_metadata": weather_metadata(weather),
+        "solar_position_offset_minutes": weather_representative_time_offset(weather, args.resolution).total_seconds()
+        / 60.0,
+        "effective_runtime_pv_model_options": resolve_configured_pv_model_options(
+            config, bifaciality=get_module(str(config["pv"]["module"])).bifaciality
+        ),
+        "resolved_pv_module": pv_module,
+        "grid": {
+            "tilt_min_deg": args.tilt_min,
+            "tilt_max_deg": args.tilt_max,
+            "tilt_step_deg": args.tilt_step,
+            "azimuth_min_deg": args.azimuth_min,
+            "azimuth_max_deg": args.azimuth_max,
+            "azimuth_step_deg": args.azimuth_step,
+            "rows": len(grid),
+        },
+        "orientation_grid_csv": grid_path.name,
+        "orientation_grid_sha256": _sha256(grid_path),
+        "orientation_optimum_json": optimum_path.name,
+        "orientation_optimum_sha256": _sha256(optimum_path),
+        "optimum": optimum_payload,
+    }
+
+
+def _historical_weather(path: Path, start_year: int, end_year: int) -> dict[int, pd.DataFrame]:
+    available = preload_weather_by_year(str(path), target_year=2025)
+    selected = {}
+    for year, frame in available.items():
+        if start_year <= year <= end_year:
+            metadata = weather_metadata(frame)
+            weather = frame.rename(columns=HISTORICAL_COLUMN_MAP).copy()
+            weather["date"] = pd.to_datetime(weather["date"], utc=True)
+            weather = weather.set_index("date")
+            weather.attrs["breos_weather_metadata"] = metadata
+            selected[year] = weather
+    if not selected:
+        raise ValueError(f"No complete historical weather years found from {start_year} through {end_year}")
+    return selected
+
+
+def _monthly_weather_rows(
+    weather_by_year: dict[int, pd.DataFrame], config: dict, *, tilt: float, azimuth: float
+) -> pd.DataFrame:
+    module = get_module(str(config["pv"]["module"]))
+    rows = []
+    for year, weather in sorted(weather_by_year.items()):
+        dc = calculate_pv_production_dc(
+            weather,
+            _location(config),
+            tilt=tilt,
+            surface_azimuth=azimuth,
+            n_modules=1,
+            pv_params=module,
+            freq="h",
+            verbose=False,
+            **configured_pv_model_kwargs(config),
+        )
+        for month in range(1, 13):
+            mask = weather.index.month == month
+            rows.append(
+                {
+                    "Year": year,
+                    "Month": month,
+                    "GHI_kWh_m2": float(weather.loc[mask, "ghi"].sum() / 1000.0),
+                    "Temperature_C": float(weather.loc[mask, "temp_air"].mean()),
+                    "PV_DC_kWh_kWp": float(dc.loc[mask].sum() / module.Mpp),
+                }
+            )
+    return pd.DataFrame(rows)
+
+
+def _weather_comparison_source(args: argparse.Namespace, config: dict) -> dict:
+    tmy, tmy_path = _load_tmy(config, args.tmy_weather_file, resolution="h")
+    historical_path = args.historical_weather_file.resolve()
+    if not historical_path.is_file():
+        raise FileNotFoundError(historical_path)
+    historical = _historical_weather(historical_path, args.start_year, args.end_year)
+    historical_monthly = _monthly_weather_rows(historical, config, tilt=args.tilt, azimuth=args.azimuth)
+    tmy_monthly = _monthly_weather_rows({2025: tmy}, config, tilt=args.tilt, azimuth=args.azimuth)
+
+    rows = []
+    for month in range(1, 13):
+        samples = historical_monthly[historical_monthly["Month"] == month]
+        tmy_row = tmy_monthly[tmy_monthly["Month"] == month].iloc[0]
+        row = {"Month": MONTH_NAMES[month - 1]}
+        for column, label in (
+            ("GHI_kWh_m2", "GHI_kWh_m2"),
+            ("Temperature_C", "Temperature_C"),
+            ("PV_DC_kWh_kWp", "PV_DC_kWh_kWp"),
+        ):
+            values = samples[column].to_numpy(dtype=float)
+            mean = float(np.mean(values))
+            std = float(np.std(values, ddof=1))
+            half_width = float(1.96 * std / np.sqrt(len(values)))
+            row.update(
+                {
+                    f"TMY_{label}": float(tmy_row[column]),
+                    f"Historical_{label}_Mean": mean,
+                    f"Historical_{label}_Std": std,
+                    f"Historical_{label}_CI95_Low": mean - half_width,
+                    f"Historical_{label}_CI95_High": mean + half_width,
+                    f"Historical_{label}_Min": float(np.min(values)),
+                    f"Historical_{label}_Max": float(np.max(values)),
+                }
+            )
+        rows.append(row)
+    comparison = pd.DataFrame(rows)
+    raw_path = args.output / "weather_monthly_by_year.csv"
+    comparison_path = args.output / "weather_monthly_comparison.csv"
+    historical_monthly.to_csv(raw_path, index=False)
+    comparison.to_csv(comparison_path, index=False)
+    return {
+        "analysis": "weather-comparison",
+        "historical_weather_file": str(historical_path),
+        "historical_weather_sha256": _sha256(historical_path),
+        "tmy_weather_file": str(tmy_path.resolve()),
+        "tmy_weather_sha256": _sha256(tmy_path),
+        "tmy_weather_uncompressed_sha256": _sha256(tmy_path, decompress_gzip=tmy_path.suffix == ".gz"),
+        "historical_years": sorted(historical),
+        "input_resolution": "h",
+        "output_resolution": "h",
+        "irradiance_resampling_method": "none",
+        "historical_weather_metadata": weather_metadata(next(iter(historical.values()))),
+        "tmy_weather_metadata": weather_metadata(tmy),
+        "historical_solar_position_offset_minutes": weather_representative_time_offset(
+            next(iter(historical.values())), "h"
+        ).total_seconds()
+        / 60.0,
+        "tmy_solar_position_offset_minutes": weather_representative_time_offset(tmy, "h").total_seconds() / 60.0,
+        "effective_runtime_pv_model_options": resolve_configured_pv_model_options(
+            config, bifaciality=get_module(str(config["pv"]["module"])).bifaciality
+        ),
+        "tilt_deg": args.tilt,
+        "azimuth_deg": args.azimuth,
+        "weather_monthly_by_year_csv": raw_path.name,
+        "weather_monthly_by_year_sha256": _sha256(raw_path),
+        "weather_monthly_comparison_csv": comparison_path.name,
+        "weather_monthly_comparison_sha256": _sha256(comparison_path),
+    }
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
+    parser.add_argument("--output", type=Path, default=PROJECT_ROOT / "results/article1-context")
+    subparsers = parser.add_subparsers(dest="analysis", required=True)
+
+    orientation = subparsers.add_parser("orientation", help="Generate Figure 3 source data")
+    orientation.add_argument("--weather-file", type=Path)
+    orientation.add_argument("--resolution", choices=("h", "15min"))
+    orientation.add_argument("--tilt-min", type=float, default=10.0)
+    orientation.add_argument("--tilt-max", type=float, default=90.0)
+    orientation.add_argument("--tilt-step", type=float, default=5.0)
+    orientation.add_argument("--azimuth-min", type=float, default=100.0)
+    orientation.add_argument("--azimuth-max", type=float, default=260.0)
+    orientation.add_argument("--azimuth-step", type=float, default=5.0)
+    orientation.add_argument("--module-width-m", type=float)
+    orientation.add_argument("--module-length-m", type=float)
+    orientation.add_argument("--seed", type=int, default=1)
+
+    weather = subparsers.add_parser("weather-comparison", help="Generate Figure 6 source data")
+    weather.add_argument("--historical-weather-file", type=Path, required=True)
+    weather.add_argument("--tmy-weather-file", type=Path)
+    weather.add_argument("--start-year", type=int, default=2005)
+    weather.add_argument("--end-year", type=int, default=2023)
+    weather.add_argument("--tilt", type=float, default=35.0)
+    weather.add_argument("--azimuth", type=float, default=180.0)
+    args = parser.parse_args()
+
+    config, config_bytes = _load_config(args.config)
+    if args.analysis == "orientation" and args.resolution is None:
+        args.resolution = str(config["simulation"]["resolution"])
+    if args.output.exists() and any(args.output.iterdir()):
+        raise FileExistsError(f"Refusing to overwrite non-empty result directory: {args.output}")
+    args.output.mkdir(parents=True, exist_ok=True)
+    analysis = (
+        _orientation_source(args, config)
+        if args.analysis == "orientation"
+        else _weather_comparison_source(args, config)
+    )
+    report = {
+        "breos_version": breos.__version__,
+        "breos_source": _git_revision(),
+        "python_version": platform.python_version(),
+        "platform": platform.platform(),
+        "dependency_versions": _dependency_versions(),
+        "command": shlex.join([sys.executable, *sys.argv]),
+        "config": str(args.config),
+        "config_sha256": hashlib.sha256(config_bytes).hexdigest(),
+        "resolved_config": config,
+        "resolved_config_sha256": _resolved_config_sha256(config),
+        "resolved_pv_module": _pv_module_provenance(config),
+        **analysis,
+    }
+    report_path = args.output / "provenance.json"
+    report_path.write_text(json.dumps(report, indent=2, default=str) + "\n")
+    print(f"Wrote {report_path}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

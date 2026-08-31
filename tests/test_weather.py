@@ -1,6 +1,8 @@
 """Tests for weather and weather-derived helpers."""
 
+import hashlib
 import json
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -9,14 +11,93 @@ import pytest
 from breos.weather import (
     build_battery_temperature_series,
     fetch_tmy_weather_data,
+    fetch_weather_data,
     load_weather,
     parse_weather_filename,
     preload_weather_by_year,
     read_epw_file,
+    relabel_right_labeled_interval_means,
     resample_tmy_to_15min,
     resample_to_15min,
+    save_weather_csv,
     select_random_year_and_replace_datetime,
+    weather_representative_time_offset,
 )
+
+
+def _timed_weather(*, basis: str, label: str, irradiance_offset_hours: float = 0.0):
+    index = pd.date_range("2025-01-01", periods=3, freq="h", tz="UTC")
+    weather = pd.DataFrame({"ghi": [0.0, 1.0, 0.0]}, index=index)
+    weather.attrs["breos_weather_metadata"] = {
+        "radiation_time_basis": basis,
+        "timestamp_label_basis": label,
+        "irradiance_time_offset_hours": irradiance_offset_hours,
+    }
+    return weather
+
+
+def test_weather_representative_time_offsets_cover_provider_left_and_right_labels():
+    instant = _timed_weather(basis="instant", label="provider_hour", irradiance_offset_hours=0.1714)
+    left = _timed_weather(basis="interval_mean", label="left")
+    right = _timed_weather(basis="interval_mean", label="right")
+
+    assert weather_representative_time_offset(instant, "h") == pd.Timedelta(hours=0.1714)
+    assert weather_representative_time_offset(left, "h") == pd.Timedelta(minutes=30)
+    assert weather_representative_time_offset(right, "h") == pd.Timedelta(minutes=-30)
+
+
+def test_right_labeled_interval_means_are_reindexed_to_interval_start():
+    weather = _timed_weather(basis="interval_mean", label="right")
+
+    relabeled = relabel_right_labeled_interval_means(weather)
+
+    assert relabeled.index.equals(weather.index - pd.Timedelta(hours=1))
+    metadata = relabeled.attrs["breos_weather_metadata"]
+    assert metadata["timestamp_label_basis"] == "left"
+    assert metadata["source_timestamp_label_basis"] == "right"
+    assert weather.attrs["breos_weather_metadata"]["timestamp_label_basis"] == "right"
+
+
+def test_resampling_right_labeled_means_preserves_physical_interval_start():
+    weather = _timed_weather(basis="interval_mean", label="right")
+
+    resampled = resample_to_15min(weather, method="linear")
+
+    assert resampled.index[0] == weather.index[0] - pd.Timedelta(hours=1)
+    assert weather_representative_time_offset(resampled, "15min") == pd.Timedelta(minutes=7.5)
+
+
+def test_pvgis_provider_offset_survives_resampling_exactly():
+    weather = _timed_weather(basis="instant", label="provider_hour", irradiance_offset_hours=0.1714)
+
+    resampled = resample_to_15min(weather, method="linear")
+
+    assert weather_representative_time_offset(resampled, "15min") == pd.Timedelta(hours=0.1714)
+
+
+def test_preloaded_years_restore_content_bound_timestamp_metadata(tmp_path):
+    path = tmp_path / "historical.csv"
+    dates = pd.date_range("2025-01-01 01:00", periods=8760, freq="h")
+    pd.DataFrame({"date": dates, "shortwave_radiation": 0.0}).to_csv(path, index=False)
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    sidecar = {
+        "schema_version": 1,
+        "weather_sha256": digest,
+        "breos_weather_metadata": {
+            "radiation_time_basis": "interval_mean",
+            "timestamp_label_basis": "right",
+            "raw_radiation_variables": ["shortwave_radiation"],
+        },
+    }
+    Path(f"{path}.metadata.json").write_text(json.dumps(sidecar))
+
+    loaded = preload_weather_by_year(str(path), target_year=2025)[2025]
+
+    assert loaded["date"].iloc[0] == pd.Timestamp("2025-01-01 00:00")
+    assert loaded["date"].iloc[-1] == pd.Timestamp("2025-12-31 23:00")
+    assert loaded.attrs["breos_weather_metadata"]["timestamp_label_basis"] == "left"
+    assert loaded.attrs["breos_weather_metadata"]["source_timestamp_label_basis"] == "right"
+    assert loaded.attrs["breos_weather_metadata"]["sha256"] == digest
 
 
 def _write_leap_year_15min_weather(tmp_path):
@@ -25,6 +106,105 @@ def _write_leap_year_15min_weather(tmp_path):
     path = tmp_path / "weather.csv"
     df.to_csv(path, index=False)
     return path, df
+
+
+@pytest.mark.parametrize(
+    ("radiation_time_basis", "suffix", "label_basis"),
+    [("interval_mean", "", "right"), ("instant", "_instant", "instant")],
+)
+def test_fetch_weather_data_requests_selected_openmeteo_radiation(
+    monkeypatch, radiation_time_basis, suffix, label_basis
+):
+    captured = {}
+
+    class FakeSession:
+        def mount(self, *_args, **_kwargs):
+            pass
+
+    class FakeVariable:
+        def __init__(self, value):
+            self.value = value
+
+        def ValuesAsNumpy(self):
+            return np.array([self.value], dtype=float)
+
+    class FakeHourly:
+        def Time(self):
+            return 0
+
+        def TimeEnd(self):
+            return 3600
+
+        def Interval(self):
+            return 3600
+
+        def Variables(self, index):
+            return FakeVariable(index)
+
+    class FakeResponse:
+        def Hourly(self):
+            return FakeHourly()
+
+    class FakeClient:
+        def __init__(self, *, session):
+            captured["session"] = session
+
+        def weather_api(self, url, *, params):
+            captured["url"] = url
+            captured["params"] = params
+            return [FakeResponse()]
+
+    monkeypatch.setattr("breos.weather.requests_cache.CachedSession", lambda *_args, **_kwargs: FakeSession())
+    monkeypatch.setattr("breos.weather.openmeteo_requests.Client", FakeClient)
+
+    weather = fetch_weather_data(
+        latitude=41.1579,
+        longitude=-8.6291,
+        start_date="2024-06-01",
+        end_date="2024-06-01",
+        tilt=0,
+        azimuth=0,
+        save_to_file=False,
+        radiation_time_basis=radiation_time_basis,
+    )
+
+    assert captured["params"]["hourly"] == [
+        "temperature_2m",
+        "wind_speed_10m",
+        f"shortwave_radiation{suffix}",
+        f"direct_radiation{suffix}",
+        f"diffuse_radiation{suffix}",
+        f"direct_normal_irradiance{suffix}",
+        f"global_tilted_irradiance{suffix}",
+        f"terrestrial_radiation{suffix}",
+    ]
+    assert list(weather.columns) == [
+        "temperature_2m",
+        "wind_speed_10m",
+        "shortwave_radiation",
+        "direct_radiation",
+        "diffuse_radiation",
+        "direct_normal_irradiance",
+        "global_tilted_irradiance",
+        "terrestrial_radiation",
+    ]
+    metadata = weather.attrs["breos_weather_metadata"]
+    assert metadata["radiation_time_basis"] == radiation_time_basis
+    assert metadata["timestamp_label_basis"] == label_basis
+
+
+def test_fetch_weather_data_rejects_unknown_radiation_time_basis():
+    with pytest.raises(ValueError, match="radiation_time_basis"):
+        fetch_weather_data(
+            latitude=41.1579,
+            longitude=-8.6291,
+            start_date="2024-06-01",
+            end_date="2024-06-01",
+            tilt=0,
+            azimuth=0,
+            save_to_file=False,
+            radiation_time_basis="unknown",
+        )
 
 
 def test_battery_temperature_helper_applies_indoor_default():
@@ -66,6 +246,52 @@ def test_resample_to_15min_keeps_all_slots_in_last_hour():
 
     assert len(resampled) == 12
     assert resampled.index[-1] == pd.Timestamp("2025-01-01 02:45")
+
+
+def test_resample_to_15min_makima_holds_last_observation_through_last_hour():
+    idx = pd.date_range("2025-01-01 00:00", periods=4, freq="h")
+    weather = pd.DataFrame({"temp_air": [0.0, 4.0, 8.0, 12.0]}, index=idx)
+
+    resampled = resample_to_15min(weather)
+
+    assert len(resampled) == 16
+    assert resampled.index[-1] == pd.Timestamp("2025-01-01 03:45")
+    assert resampled["temp_air"].notna().all()
+    assert resampled.loc["2025-01-01 03:00":, "temp_air"].tolist() == pytest.approx([12.0] * 4)
+
+
+def test_resample_to_15min_can_preserve_each_hours_irradiance_energy():
+    idx = pd.date_range("2025-06-21 10:00", periods=4, freq="h", tz="UTC")
+    weather = pd.DataFrame(
+        {
+            "ghi": [500.0, 700.0, 600.0, 300.0],
+            "dni": [400.0, 600.0, 500.0, 200.0],
+            "dhi": [250.0, 300.0, 350.0, 200.0],
+            "temp_air": [20.0, 21.0, 22.0, 21.0],
+        },
+        index=idx,
+    )
+
+    resampled = resample_to_15min(
+        weather,
+        method="linear",
+        latitude=41.1579,
+        longitude=-8.6291,
+        preserve_irradiance_energy=True,
+    )
+
+    for column in ("ghi", "dni", "dhi"):
+        hourly_means = resampled[column].to_numpy().reshape(len(weather), 4).mean(axis=1)
+        assert hourly_means == pytest.approx(weather[column].to_numpy())
+
+
+def test_clear_sky_resampling_does_not_attenuate_values_at_source_timestamps():
+    idx = pd.date_range("2025-06-21 10:00", periods=4, freq="h", tz="UTC")
+    weather = pd.DataFrame({"ghi": [50.0, 100.0, 75.0, 25.0]}, index=idx)
+
+    resampled = resample_to_15min(weather, latitude=41.1579, longitude=-8.6291)
+
+    assert resampled.loc[idx, "ghi"].to_numpy() == pytest.approx(weather["ghi"].to_numpy())
 
 
 def test_fetch_tmy_weather_accepts_hourly_frequency_alias_and_uses_horizon_by_default(monkeypatch):
@@ -197,8 +423,13 @@ def test_resample_to_15min_preserves_weather_metadata():
 
     resampled = resample_to_15min(weather, method="linear")
 
-    assert resampled.attrs["breos_weather_metadata"] == weather.attrs["breos_weather_metadata"]
-    assert resampled.attrs["breos_weather_metadata"] is not weather.attrs["breos_weather_metadata"]
+    metadata = resampled.attrs["breos_weather_metadata"]
+    assert metadata["source"] == "test"
+    assert metadata["horizon"] == weather.attrs["breos_weather_metadata"]["horizon"]
+    assert metadata["input_resolution"] == "h"
+    assert metadata["output_resolution"] == "15min"
+    assert metadata["irradiance_resampling_method"] == "linear"
+    assert metadata is not weather.attrs["breos_weather_metadata"]
 
 
 def test_resample_tmy_to_15min_preserves_weather_metadata():
@@ -212,8 +443,13 @@ def test_resample_tmy_to_15min_preserves_weather_metadata():
 
     resampled = resample_tmy_to_15min(weather, api_metadata)
 
-    assert resampled.attrs["breos_weather_metadata"] == weather.attrs["breos_weather_metadata"]
-    assert resampled.attrs["breos_weather_metadata"] is not weather.attrs["breos_weather_metadata"]
+    metadata = resampled.attrs["breos_weather_metadata"]
+    assert metadata["source"] == "test"
+    assert metadata["horizon"] == weather.attrs["breos_weather_metadata"]["horizon"]
+    assert metadata["input_resolution"] == "h"
+    assert metadata["output_resolution"] == "15min"
+    assert metadata["irradiance_resampling_method"] == "makima_clear_sky"
+    assert metadata is not weather.attrs["breos_weather_metadata"]
 
 
 def test_fetch_tmy_keeps_utc_instants_for_non_utc_location(monkeypatch):
@@ -275,6 +511,21 @@ def test_fetch_tmy_without_sample_year_keeps_original_index(monkeypatch):
     assert captured["roll_utc_offset"] is None
     assert captured["coerce_year"] is None
     assert weather.index[0] == tmy.index[0]
+
+
+def test_fetch_tmy_rejects_fractional_hour_timezone_before_request(monkeypatch):
+    requested = False
+
+    def fake_get_pvgis_tmy(*args, **kwargs):
+        nonlocal requested
+        requested = True
+
+    monkeypatch.setattr("breos.weather.pvlib.iotools.get_pvgis_tmy", fake_get_pvgis_tmy)
+
+    with pytest.raises(ValueError, match="fractional-hour timezone"):
+        fetch_tmy_weather_data(22.57, 88.36, sample_year=2025, timezone="Asia/Kolkata")
+
+    assert requested is False
 
 
 def test_read_epw_accepts_15t_frequency_alias(monkeypatch):
@@ -344,3 +595,14 @@ def test_preload_weather_by_year_accepts_15min_leap_year_after_dropping_feb_29(t
     assert dates.iloc[0] == pd.Timestamp("2025-01-01 00:00")
     assert dates.iloc[-1] == pd.Timestamp("2025-12-31 23:45")
     assert mapped_march_1 == source_march_1
+
+
+def test_save_weather_csv_writes_content_bound_metadata(tmp_path):
+    weather = _timed_weather(basis="interval_mean", label="right")
+    path = tmp_path / "weather.csv"
+
+    save_weather_csv(weather, path)
+
+    payload = json.loads(Path(f"{path}.metadata.json").read_text())
+    assert payload["weather_sha256"] == hashlib.sha256(path.read_bytes()).hexdigest()
+    assert payload["breos_weather_metadata"]["radiation_time_basis"] == "interval_mean"

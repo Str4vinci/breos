@@ -3,6 +3,9 @@
 import os
 import subprocess
 import sys
+from importlib import import_module
+
+import pytest
 
 import breos
 
@@ -37,8 +40,6 @@ def test_top_level_all_is_narrow_release_surface():
     intentionally_excluded = {
         "R_GAS",
         "plot_co2_savings",
-        "PolysunDegradationConfig",
-        "compute_dod_histogram",
         "build_battery_temperature_series",
         "remap_datetime_index_years",
     }
@@ -50,7 +51,12 @@ def test_top_level_all_is_narrow_release_surface():
 def test_existing_top_level_attributes_remain_importable():
     assert breos.R_GAS > 0
     assert callable(breos.build_battery_temperature_series)
-    assert callable(breos.compute_dod_histogram)
+
+
+@pytest.mark.parametrize("module", ["breos.numba_kernels", "breos.polysun_degradation"])
+def test_removed_060_modules_are_not_importable(module):
+    with pytest.raises(ModuleNotFoundError):
+        import_module(module)
 
 
 def test_top_level_plotting_compatibility_is_lazy(tmp_path):

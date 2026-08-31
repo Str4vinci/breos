@@ -6,18 +6,26 @@ import numpy as np
 import pandas as pd
 import pytest
 
+import breos.battery as battery_module
 from breos.battery import (
     BatteryConfig,
+    _datetime_index_ticks,
+    _dispatch_day_python,
+    _dispatch_no_battery_vectorized,
     _get_degradation_params,
+    _ResultBuffers,
+    _update_battery_soh_cyclewise_arrays,
+    align_simulation_inputs,
     apply_indoor_temperature_model,
     resistance_to_efficiency,
     simulate_energy_balance,
+    simulate_energy_balance_summary,
     update_battery_soh_cyclewise,
 )
 from breos.constants import LAM_EA_J_MOL, LAM_SOC_EXPONENT_N
 from breos.degradation.engine import BlastEngine
 from breos.economics import system_ac_production_power
-from breos.inverter import calculate_dc_ac_power
+from breos.inverter import _calculate_dc_ac_power_arrays, calculate_dc_ac_power
 from breos.solar import dc_to_ac
 
 
@@ -110,6 +118,34 @@ class TestBatteryConfig:
         with pytest.raises(ValueError, match="supports only: lfp"):
             update_battery_soh_cyclewise(1.0, soc, 5000.0, battery_type="nca")
 
+    @pytest.mark.parametrize("freq", ["5min", "15min", "h"])
+    @pytest.mark.parametrize("unit", ["s", "ms", "us", "ns"])
+    def test_array_cycle_aging_is_bit_identical_to_public_series_path(self, freq, unit):
+        index = pd.date_range("2025-01-01", periods=48, freq=freq, tz="Europe/Lisbon").as_unit(unit)
+        values = np.asarray(
+            [0.1, 0.8, 0.7, 0.2, 0.9, 0.85, 0.3, 0.6] * 6,
+            dtype=np.float64,
+        )
+        series = pd.Series(values, index=index)
+        expected = update_battery_soh_cyclewise(
+            0.93,
+            series,
+            6000.0,
+            fec_cum=12.5,
+        )
+        time_ticks, ticks_per_second = _datetime_index_ticks(index)
+
+        actual = _update_battery_soh_cyclewise_arrays(
+            0.93,
+            values,
+            time_ticks,
+            ticks_per_second,
+            6000.0,
+            fec_cum=12.5,
+        )
+
+        assert actual == expected
+
     def test_field_calibrated_default_is_v1(self):
         assert _get_degradation_params("naumann_lam_field_calibrated") == _get_degradation_params(
             "naumann_lam_field_calibrated_v1"
@@ -154,6 +190,286 @@ class TestResistanceToEfficiency:
 
 
 class TestSimulateEnergyBalance:
+    @pytest.mark.parametrize("inverter_ac_capacity_w", [0.0, 6400.0, None])
+    def test_vectorized_pv_only_matches_scalar_reference_exactly(self, inverter_ac_capacity_w):
+        pv_dc = np.asarray([-100.0, 0.0, 1.0, 40.1, 75.0, 500.0, 3200.0, 6400.0, 9000.0])
+        load = np.asarray([500.0, 0.0, 2.0, 20.0, 100.0, 250.0, 4000.0, 7000.0, 500.0])
+        temperature = np.asarray([-5.0, 0.0, 5.0, 10.0, 15.0, 20.0, 25.0, 30.0, 35.0])
+        config = BatteryConfig(
+            nominal_energy_wh=0.0,
+            inverter_ac_capacity_w=inverter_ac_capacity_w,
+        )
+        hours_per_step = 0.25
+        cap_wh = float("inf") if inverter_ac_capacity_w is None else inverter_ac_capacity_w * hours_per_step
+        reference = _ResultBuffers(len(pv_dc))
+        vectorized = _ResultBuffers(len(pv_dc))
+
+        _dispatch_day_python(
+            reference,
+            pv_dc,
+            load,
+            temperature,
+            0,
+            len(pv_dc),
+            battery_config=config,
+            has_battery=False,
+            battery_soh_decimal=1.0,
+            Battery_SOH=100.0,
+            Battery_Energy_Wh=0.0,
+            Battery_PV_Origin_Energy_Wh=0.0,
+            eff_charge=config.charge_efficiency,
+            eff_discharge=config.discharge_efficiency,
+            hours_per_step=hours_per_step,
+            standby_loss_per_step_wh=0.0,
+            cap_wh=cap_wh,
+            cap_charge_wh=float("inf"),
+            cap_discharge_wh=float("inf"),
+        )
+        _dispatch_no_battery_vectorized(
+            vectorized,
+            pv_dc,
+            load,
+            temperature,
+            battery_config=config,
+            hours_per_step=hours_per_step,
+            cap_wh=cap_wh,
+        )
+
+        assert np.array_equal(vectorized.matrix, reference.matrix)
+
+    @pytest.mark.parametrize("inverter_ac_capacity_w", [0.0, 6400.0, None])
+    def test_pv_only_summary_buffers_reduce_the_detailed_path_exactly(self, inverter_ac_capacity_w):
+        """The reduced PV-only buffers must report what the full matrix reports.
+
+        Twenty-four columns are served by one shared zero array and three more
+        are aliased onto a column already written, so this compares every
+        column the detailed frame exposes, not a representative few.
+        """
+        index = pd.date_range("2025-01-01", periods=96 * 3, freq="15min", tz="UTC")
+        step = np.arange(len(index))
+        pv_dc = pd.Series(9000.0 * np.clip(np.sin(step / 96.0 * 2.0 * np.pi), 0.0, None), index=index)
+        houseload = pd.DataFrame({"Load": 400.0 + 900.0 * (step % 7) / 7.0}, index=index)
+        common = dict(
+            pv_dc=pv_dc,
+            houseload=houseload,
+            battery_config=BatteryConfig(
+                nominal_energy_wh=0.0,
+                inverter_ac_capacity_w=inverter_ac_capacity_w,
+            ),
+            freq="15min",
+        )
+
+        results_df, total_pv, summary_df, _, _, _ = simulate_energy_balance(**common)
+        summary = simulate_energy_balance_summary(**common)
+
+        # The reduced buffer must not quietly drop the columns it zeroes.
+        assert set(summary.column_sums) == set(results_df.columns) - {"Datetime"}
+        for column in results_df.columns:
+            if column == "Datetime":
+                continue
+            assert summary.column_sums[column] == float(results_df[column].sum()), column
+        assert summary.total_pv_wh == float(total_pv)
+        for column in summary_df.columns:
+            assert summary.summary_row[column] == float(summary_df[column].iloc[0]), column
+        assert summary.carried_energy_wh == float(results_df["Battery_Energy_End"].iloc[-1])
+        assert summary.opening_energy_wh == float(results_df["Battery_Energy_Beginning"].iloc[0])
+        assert summary.replacement_steps == ()
+
+    def test_aligned_inputs_reproduce_the_pandas_arguments_exactly(self):
+        """Preparing once must be the same run, not an equivalent one."""
+        index = pd.date_range("2025-01-01", periods=96 * 2, freq="15min", tz="UTC")
+        step = np.arange(len(index))
+        pv_dc = pd.Series(7000.0 * np.clip(np.sin(step / 96.0 * 2.0 * np.pi), 0.0, None), index=index)
+        houseload = pd.DataFrame({"Load": 300.0 + 800.0 * (step % 5) / 5.0}, index=index)
+        temperature = pd.Series(12.0 + 8.0 * np.cos(step / 96.0 * 2.0 * np.pi), index=index)
+        config = BatteryConfig(nominal_energy_wh=8000.0, inverter_ac_capacity_w=5000.0)
+
+        direct = simulate_energy_balance_summary(
+            pv_dc=pv_dc,
+            houseload=houseload,
+            battery_config=config,
+            freq="15min",
+            temperature_series=temperature,
+        )
+        aligned = align_simulation_inputs(pv_dc, houseload, temperature, freq="15min")
+        via_aligned = simulate_energy_balance_summary(
+            battery_config=config,
+            freq="15min",
+            aligned=aligned,
+        )
+
+        assert via_aligned.column_sums == direct.column_sums
+        assert via_aligned.summary_row == direct.summary_row
+        assert via_aligned.carried_energy_wh == direct.carried_energy_wh
+        assert via_aligned.final_soh_percent == direct.final_soh_percent
+
+    @pytest.mark.parametrize("pv_factor", [1.0, 0.9])
+    @pytest.mark.parametrize("load_factor", [1.0, 1.05])
+    def test_scaling_aligned_inputs_matches_scaling_the_series(self, pv_factor, load_factor):
+        """Scaling after alignment must give the same floats as scaling before."""
+        index = pd.date_range("2025-01-01", periods=96, freq="15min", tz="UTC")
+        step = np.arange(len(index))
+        pv_dc = pd.Series(6000.0 * np.clip(np.sin(step / 96.0 * 2.0 * np.pi), 0.0, None), index=index)
+        houseload = pd.DataFrame({"Load": 250.0 + 700.0 * (step % 3) / 3.0}, index=index)
+        config = BatteryConfig(nominal_energy_wh=0.0, inverter_ac_capacity_w=4000.0)
+
+        before = simulate_energy_balance_summary(
+            pv_dc=pv_dc * pv_factor,
+            houseload=houseload * load_factor,
+            battery_config=config,
+            freq="15min",
+        )
+        after = simulate_energy_balance_summary(
+            battery_config=config,
+            freq="15min",
+            aligned=align_simulation_inputs(pv_dc, houseload, freq="15min").scaled(
+                pv_factor=pv_factor,
+                load_factor=load_factor,
+            ),
+        )
+
+        assert after.column_sums == before.column_sums
+
+    def test_memoized_pv_chain_holds_what_the_inverter_helper_returns(self):
+        index = pd.date_range("2025-01-01", periods=96, freq="15min", tz="UTC")
+        step = np.arange(len(index))
+        pv_dc = pd.Series(9000.0 * np.clip(np.sin(step / 96.0 * 2.0 * np.pi), 0.0, None), index=index)
+        houseload = pd.DataFrame({"Load": 500.0}, index=index)
+        config = BatteryConfig(nominal_energy_wh=0.0, inverter_ac_capacity_w=5000.0)
+
+        aligned = align_simulation_inputs(pv_dc, houseload, freq="15min")
+        assert aligned.pv_chain is None
+        cached = aligned.with_pv_only_chain(config, freq="15min")
+
+        expected = _calculate_dc_ac_power_arrays(
+            np.maximum(0.0, aligned.pv_dc_w * 0.25),
+            5000.0 * 0.25,
+            config.inverter_efficiency,
+        )
+        assert len(cached.pv_chain) == 3
+        for cached_part, expected_part in zip(cached.pv_chain, expected):
+            assert np.array_equal(cached_part, expected_part)
+
+    def test_scaling_load_keeps_the_pv_chain_and_scaling_pv_drops_it(self):
+        """The chain stops at the inverter, so only a PV change invalidates it."""
+        index = pd.date_range("2025-01-01", periods=96, freq="15min", tz="UTC")
+        aligned = align_simulation_inputs(
+            pd.Series(4000.0, index=index),
+            pd.DataFrame({"Load": 500.0}, index=index),
+            freq="15min",
+        ).with_pv_only_chain(BatteryConfig(nominal_energy_wh=0.0), freq="15min")
+
+        assert aligned.scaled(load_factor=1.05).pv_chain is aligned.pv_chain
+        assert aligned.scaled(pv_factor=0.995).pv_chain is None
+
+    @pytest.mark.parametrize("inverter_ac_capacity_w", [0.0, 6400.0, None])
+    def test_memoized_pv_chain_changes_no_result(self, inverter_ac_capacity_w):
+        index = pd.date_range("2025-01-01", periods=96 * 2, freq="15min", tz="UTC")
+        step = np.arange(len(index))
+        pv_dc = pd.Series(9000.0 * np.clip(np.sin(step / 96.0 * 2.0 * np.pi), 0.0, None), index=index)
+        houseload = pd.DataFrame({"Load": 400.0 + 900.0 * (step % 7) / 7.0}, index=index)
+        config = BatteryConfig(nominal_energy_wh=0.0, inverter_ac_capacity_w=inverter_ac_capacity_w)
+        aligned = align_simulation_inputs(pv_dc, houseload, freq="15min")
+
+        plain = simulate_energy_balance_summary(battery_config=config, freq="15min", aligned=aligned)
+        cached = simulate_energy_balance_summary(
+            battery_config=config,
+            freq="15min",
+            aligned=aligned.with_pv_only_chain(config, freq="15min"),
+        )
+
+        assert cached.column_sums == plain.column_sums
+        assert cached.summary_row == plain.summary_row
+
+    def test_core_requires_inputs_in_one_form_or_the_other(self):
+        with pytest.raises(ValueError, match="pv_dc and houseload, or aligned"):
+            simulate_energy_balance_summary(battery_config=BatteryConfig(nominal_energy_wh=0.0), freq="h")
+
+    def test_pv_only_summary_allocates_reduced_buffers(self, monkeypatch):
+        """A silent fall back to the full matrix would forfeit the whole point."""
+        index = pd.date_range("2025-01-01", periods=96, freq="15min", tz="UTC")
+        seen = []
+        original = battery_module._PvOnlySummaryBuffers
+
+        def recording(n_steps):
+            seen.append(n_steps)
+            return original(n_steps)
+
+        monkeypatch.setattr(battery_module, "_PvOnlySummaryBuffers", recording)
+        simulate_energy_balance_summary(
+            pv_dc=pd.Series(1000.0, index=index),
+            houseload=pd.DataFrame({"Load": 500.0}, index=index),
+            battery_config=BatteryConfig(nominal_energy_wh=0.0),
+            freq="15min",
+        )
+
+        assert seen == [96]
+
+    @pytest.mark.parametrize(
+        ("battery_config", "reason"),
+        [
+            (BatteryConfig(nominal_energy_wh=0.0), "the detailed frame owns a writable array per column"),
+            (BatteryConfig(nominal_energy_wh=10000.0), "a battery writes every column"),
+        ],
+    )
+    def test_full_buffers_are_kept_where_the_reduced_ones_are_unsafe(self, monkeypatch, battery_config, reason):
+        index = pd.date_range("2025-01-01", periods=96, freq="15min", tz="UTC")
+
+        def fail_if_called(n_steps):
+            raise AssertionError(f"reduced buffers are not usable here: {reason}")
+
+        monkeypatch.setattr(battery_module, "_PvOnlySummaryBuffers", fail_if_called)
+        results_df, *_ = simulate_energy_balance(
+            pv_dc=pd.Series(1000.0, index=index),
+            houseload=pd.DataFrame({"Load": 500.0}, index=index),
+            battery_config=battery_config,
+            freq="15min",
+        )
+
+        # Aliased columns would make these two the same array.
+        results_df.loc[0, "PV_Curtailment"] = 1234.5
+        assert results_df.loc[0, "PV_DC_Curtailed"] != 1234.5
+
+    def test_pv_only_run_uses_vectorized_dispatch(self, monkeypatch):
+        index = pd.date_range("2025-01-01", periods=24, freq="h", tz="UTC")
+        original = battery_module._dispatch_no_battery_vectorized
+        calls = 0
+
+        def recording_dispatch(*args, **kwargs):
+            nonlocal calls
+            calls += 1
+            return original(*args, **kwargs)
+
+        monkeypatch.setattr(battery_module, "_dispatch_no_battery_vectorized", recording_dispatch)
+        simulate_energy_balance(
+            pv_dc=pd.Series(1000.0, index=index),
+            houseload=pd.DataFrame({"Load": 500.0}, index=index),
+            battery_config=BatteryConfig(nominal_energy_wh=0.0),
+            freq="h",
+            execution_backend="python",
+        )
+
+        assert calls == 1
+
+    def test_zero_battery_skips_daily_degradation(self, monkeypatch):
+        index = pd.date_range("2025-01-01", periods=24, freq="h", tz="UTC")
+
+        def fail_if_called(*args, **kwargs):
+            raise AssertionError("a zero-capacity battery cannot degrade")
+
+        monkeypatch.setattr(battery_module, "_apply_daily_degradation", fail_if_called)
+
+        results, _, _, _, _, degradation = simulate_energy_balance(
+            pv_dc=pd.Series(1000.0, index=index),
+            houseload=pd.DataFrame({"Load": 500.0}, index=index),
+            battery_config=BatteryConfig(nominal_energy_wh=0.0),
+            freq="h",
+        )
+
+        assert len(results) == 24
+        assert np.array_equal(results["Battery_SOH"].to_numpy(), np.full(24, 100.0))
+        assert degradation.empty
+
     def test_no_battery(self, dc_production, sample_load):
         results_df, total_pv, summary_df, rep_cost, n_rep, deg_df = simulate_energy_balance(
             pv_dc=dc_production * 6,

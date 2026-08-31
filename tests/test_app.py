@@ -802,6 +802,9 @@ class TestAppSimulateNoBattery:
         assert self.result["n_modules"] == 6
         assert self.result["battery_kwh"] == 0.0
 
+    def test_provenance_records_the_pv_only_dispatch_path(self):
+        assert self.result["provenance"]["execution"]["dispatch_path"] == "pv_only_vectorized"
+
     def test_pv_production_positive(self):
         assert self.result["pv_production_kwh"] > 0
 

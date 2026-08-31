@@ -217,7 +217,7 @@ def build_pv_production_breakdown(
 
 def load_consumption_profile(
     cfg: dict[str, Any], deps: AppRuntimeDependencies, timezone: str | None = None
-) -> pd.Series:
+) -> pd.DataFrame:
     """Load and scale the configured demand profile.
 
     Profile rows describe household behavior at legal clock time, so the
@@ -253,9 +253,10 @@ def prepare_simulation_inputs(
     dc_system_base = pv_breakdown.dc_after_losses
     load_data = load_consumption_profile(cfg, deps, timezone=resolved.timezone)
     temperature_series = deps.build_battery_temperature_series(
-        "weather",
+        cfg["battery_temperature"],
         index=dc_system_base.index,
         weather_df=weather,
+        indoor_model=cfg["battery_indoor_model"],
     )
     return PreparedSimulationInputs(
         weather=weather,

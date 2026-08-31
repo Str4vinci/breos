@@ -23,7 +23,7 @@ PROJECT_ROOT = Path(__file__).parent.parent.resolve()
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from breos.utils import safe_path_slug
-from breos.weather import fetch_weather_data
+from breos.weather import fetch_weather_data, save_weather_csv
 
 LOCATIONS_PATH = PROJECT_ROOT / "configs" / "base" / "locations.json"
 WEATHER_DIR = PROJECT_ROOT / "weather"
@@ -82,7 +82,15 @@ def add_cities_to_locations(cities: dict[str, dict], config: dict) -> None:
         print("No new cities to add to locations.json")
 
 
-def fetch_city(city_key: str, city_info: dict, start_year: int, end_year: int, source: str, force: bool) -> bool:
+def fetch_city(
+    city_key: str,
+    city_info: dict,
+    start_year: int,
+    end_year: int,
+    source: str,
+    force: bool,
+    radiation_time_basis: str,
+) -> bool:
     """Fetch weather data for a single city. Returns True if data was fetched."""
     key_slug = safe_path_slug(city_key)
     source_slug = safe_path_slug(source)
@@ -103,10 +111,11 @@ def fetch_city(city_key: str, city_info: dict, start_year: int, end_year: int, s
         azimuth=0,
         freq="h",
         save_to_file=False,
+        radiation_time_basis=radiation_time_basis,
     )
 
     WEATHER_DIR.mkdir(exist_ok=True)
-    df.to_csv(outfile)
+    save_weather_csv(df, outfile)
     print(f"Saved {outfile.name}  ({len(df):,} rows, {outfile.stat().st_size / 1e6:.1f} MB)")
     return True
 
@@ -129,6 +138,7 @@ def main():
     end_year = config["end_year"]
     delay = config.get("delay_seconds", 5)
     source = config.get("source", "openmeteo")
+    radiation_time_basis = config.get("radiation_time_basis", "interval_mean")
 
     if args.add_locations:
         add_cities_to_locations({}, config)
@@ -141,7 +151,15 @@ def main():
 
     for i, key in enumerate(city_keys):
         city_source = cities[key].get("source", source) if isinstance(cities[key], dict) else source
-        was_fetched = fetch_city(key, cities[key], start_year, end_year, city_source, args.force)
+        was_fetched = fetch_city(
+            key,
+            cities[key],
+            start_year,
+            end_year,
+            city_source,
+            args.force,
+            radiation_time_basis,
+        )
         if was_fetched:
             fetched_count += 1
             if i < len(city_keys) - 1:
