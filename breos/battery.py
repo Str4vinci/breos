@@ -970,11 +970,18 @@ class _AgingState:
     anywhere; they are kept because they mirror the SOH accumulators, and
     dropping them would silently remove the only running total of where
     resistance growth came from.
+
+    ``fec_cum`` belongs to the pack currently installed and is reset to zero
+    when that pack is replaced, so it cannot be differenced across a
+    replacement. ``fec_lifetime`` adds up the same daily rainflow counts
+    without ever resetting, so it keeps the cycles a retired pack accumulated
+    in its final, partial period.
     """
 
     soh_fraction: float
     soh_percent: float
     fec_cum: float
+    fec_lifetime: float
     cumulative_cal_seconds: float
     cumulative_cycle_deg: float
     cumulative_cal_deg: float
@@ -1397,6 +1404,11 @@ def _apply_daily_degradation(
     )
     aging.soh_fraction = degradation_step.soh_fraction
     aging.soh_percent = aging.soh_fraction * 100.0
+    # The lifecycle reports the installed pack's running total, so the day's
+    # own rainflow count is the increment over yesterday's total. Taking it
+    # here, before the replacement check below can zero the pack counter, is
+    # what keeps a retired pack's final part-period in the lifetime figure.
+    aging.fec_lifetime += degradation_step.fec - aging.fec_cum
     aging.fec_cum = degradation_step.fec
     aging.cumulative_cal_seconds = degradation_step.calendar_seconds
     aging.cumulative_cycle_deg += degradation_step.cycle_degradation
@@ -1436,6 +1448,7 @@ def _apply_daily_degradation(
         "Cumulative_Cycle_Degradation": aging.cumulative_cycle_deg,
         "Cumulative_Calendar_Degradation": aging.cumulative_cal_deg,
         "Cumulative_FEC": aging.fec_cum,
+        "Cumulative_FEC_All_Packs": aging.fec_lifetime,
         "Cumulative_Calendar_Seconds": aging.cumulative_cal_seconds,
         "Total_Degradation": 1.0 - aging.soh_fraction,
         "Mean_SOC_Absolute": mean_soc_abs,
@@ -1828,6 +1841,10 @@ def _simulate_core(
         soh_fraction=battery_soh_decimal,
         soh_percent=Battery_SOH,
         fec_cum=initial_fec,
+        # Lifetime FEC starts this span at zero whatever the installed pack
+        # already carries, so the end-of-span value is the FEC the span itself
+        # accumulated across every pack it used.
+        fec_lifetime=0.0,
         cumulative_cal_seconds=initial_calendar_seconds,
         cumulative_cycle_deg=initial_cumulative_cycle_deg,
         cumulative_cal_deg=initial_cumulative_cal_deg,

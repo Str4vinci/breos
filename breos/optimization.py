@@ -510,6 +510,7 @@ def _projected_year_summary(
     freq: str,
     pv_degradation_factor: float,
     battery_soh: float,
+    annual_fec: float,
     cumulative_fec: float,
     cumulative_calendar_seconds: float,
     cumulative_cycle_degradation: float,
@@ -562,6 +563,12 @@ def _projected_year_summary(
         # the fraction of the SOH-derated pack, so it rises as the pack fades.
         "Battery_SOC_Normalized_Mean_%": optional_mean_pct("Battery_SOC_Normalized"),
         "Battery_SOC_Absolute_Mean_%": optional_mean_pct("Battery_SOC_Absolute"),
+        # Annual FEC is the rainflow count every pack used in this year
+        # accumulated, a retired pack's part-year included. Cumulative FEC
+        # belongs to the installed pack alone and restarts at zero on
+        # replacement, so differencing it across a replacement year loses the
+        # retired pack's final cycles.
+        "Battery_Annual_FEC": float(annual_fec),
         "Battery_Cumulative_FEC": float(cumulative_fec),
         "Battery_Cumulative_Calendar_Seconds": float(cumulative_calendar_seconds),
         "Battery_Cumulative_Cycle_Degradation": float(cumulative_cycle_degradation),
@@ -711,10 +718,14 @@ def _evaluate_projected_design_metrics(
 
         if first_year_results_df is None:
             first_year_results_df = results_df
+        annual_fec = 0.0
         if has_battery:
             carried_energy_wh = float(results_df["Battery_Energy_End"].iloc[-1])
             carried_pv_origin_energy_wh = float(results_df["Battery_PV_Origin_Energy_End"].iloc[-1])
             if not degradation_df.empty:
+                # Each project year is its own simulation span, so the span's
+                # all-pack total is exactly this year's FEC.
+                annual_fec = float(degradation_df["Cumulative_FEC_All_Packs"].iloc[-1])
                 cumulative_fec = float(degradation_df["Cumulative_FEC"].iloc[-1])
                 cumulative_cal_seconds = float(degradation_df["Cumulative_Calendar_Seconds"].iloc[-1])
                 cumulative_cycle_deg = float(degradation_df["Cumulative_Cycle_Degradation"].iloc[-1])
@@ -732,6 +743,7 @@ def _evaluate_projected_design_metrics(
                 freq=freq,
                 pv_degradation_factor=degradation_factor,
                 battery_soh=current_soh,
+                annual_fec=annual_fec,
                 cumulative_fec=cumulative_fec,
                 cumulative_calendar_seconds=cumulative_cal_seconds,
                 cumulative_cycle_degradation=cumulative_cycle_deg,
@@ -827,8 +839,12 @@ def evaluate_projected_design(
     Returns:
         Projected metrics, yearly simulation ledger, and financial ledger.
     """
-    if int(n_modules) < 1:
-        raise ValueError("n_modules must be at least 1")
+    # Zero modules is a valid grid corner, not an error: the exhaustive
+    # lattice enumerates it so the battery-only slice is measured rather than
+    # assumed dominated. It produces no PV, so its inverter rating is zero and
+    # its LCOE is undefined.
+    if int(n_modules) < 0:
+        raise ValueError("n_modules must be non-negative")
     if float(battery_kwh) < 0.0:
         raise ValueError("battery_kwh must be non-negative")
 

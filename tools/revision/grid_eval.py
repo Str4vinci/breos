@@ -34,6 +34,7 @@ _spec.loader.exec_module(repro)
 import breos  # noqa: E402
 from breos.economics import calculate_costs, cost_params_from_config  # noqa: E402
 from breos.optimization import (  # noqa: E402
+    ProjectedDesignResult,
     _resolve_pv_module_and_area,
     evaluate_projected_design,
 )
@@ -83,6 +84,43 @@ def _init(config, rlp_directory, backend, archive, archive_format):
     )
 
 
+def _annual_archive_frame(design_id: int, result: ProjectedDesignResult) -> pd.DataFrame:
+    """Join one design's annual energy ledger to its annual financial ledger.
+
+    The two frames overlap. Concatenating them unchanged emits
+    ``PV_Production_kWh`` and ``Export_kWh`` twice, which makes column
+    selection depend on which duplicate a reader's CSV parser happens to
+    keep. The financial projection copies those columns straight from the
+    yearly summary, so one canonical copy is enough -- but "should be equal"
+    is checked rather than assumed, because a silent disagreement would mean
+    the two ledgers had drifted apart and every archived cash flow would be
+    suspect. Nothing else is dropped: every itemised, undiscounted financial
+    component the projection reports is kept.
+    """
+    yearly = result.yearly.reset_index(drop=True)
+    financial = result.financial.reset_index(drop=True)
+
+    shared = [column for column in financial.columns if column in yearly.columns]
+    for column in shared:
+        left = pd.to_numeric(yearly[column], errors="coerce").to_numpy(dtype=float)
+        right = pd.to_numeric(financial[column], errors="coerce").to_numpy(dtype=float)
+        if not np.array_equal(left, right, equal_nan=True):
+            worst = float(np.nanmax(np.abs(left - right)))
+            raise ValueError(f"design {design_id}: yearly and financial ledgers disagree on {column} by up to {worst}")
+
+    annual = pd.concat([yearly, financial.drop(columns=shared)], axis=1)
+    annual.insert(0, "Design_ID", design_id)
+    return annual
+
+
+def _reject_duplicate_columns(frame: pd.DataFrame) -> None:
+    """Fail before a shard is written rather than archive an ambiguous header."""
+    counts = frame.columns.value_counts()
+    duplicated = sorted(counts[counts > 1].index)
+    if duplicated:
+        raise ValueError(f"annual archive shard has duplicate column names: {duplicated}")
+
+
 def _run_chunk(task):
     """Evaluate one chunk of designs, archiving the annual series as a shard.
 
@@ -124,15 +162,11 @@ def _run_chunk(task):
         )
 
         if _STATE["archive"] is not None:
-            # Year and Load_kWh appear in both frames and carry the same values,
-            # so the financial frame contributes only its own columns.
-            fin = r.financial.drop(columns=["Year", "Load_kWh"], errors="ignore")
-            annual = pd.concat([r.yearly.reset_index(drop=True), fin.reset_index(drop=True)], axis=1)
-            annual.insert(0, "Design_ID", design_id)
-            archive_frames.append(annual)
+            archive_frames.append(_annual_archive_frame(design_id, r))
 
     if _STATE["archive"] is not None and archive_frames:
         frame = pd.concat(archive_frames, ignore_index=True)
+        _reject_duplicate_columns(frame)
         if _STATE["archive_format"] == "parquet":
             frame.to_parquet(
                 Path(_STATE["archive"]) / f"annual_{chunk_index:05d}.parquet", index=False, compression=None
