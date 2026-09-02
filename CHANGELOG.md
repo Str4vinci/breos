@@ -4,6 +4,45 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-09-02
+
+### Added
+- Added `battery_power_limit_c_rate` (`--battery-power-limit-c-rate`), a
+  capacity-proportional alternative to the absolute
+  `battery_max_charge_power_w` and `battery_max_discharge_power_w` limits. It
+  derives a symmetric charge and discharge limit from each candidate's own
+  capacity, so a sizing sweep holds one C-rate instead of one wattage across
+  every capacity it evaluates. Residential LFP products are specified this way:
+  the BYD Battery-Box Premium HVS family is 1.000 C at every size from 5.12 to
+  12.8 kWh. Combining it with either absolute limit raises rather than silently
+  choosing one. The absolute limits remain, and remain the default.
+- Added optional year-by-year weather sequences to
+  `evaluate_projected_design`, while retaining repeated-TMY behavior by
+  default.
+- Added opt-in AC-side and DC-side PV-output scale factors for controlled
+  measured-bias sensitivity studies. Both default to no scaling.
+- Added annual battery charge throughput, discharge throughput, mean state of
+  charge, and all-pack full-equivalent-cycle fields to projected result
+  ledgers. The existing installed-pack cumulative FEC field remains unchanged.
+- Added exact annual-archive and Pareto-front checks to the Article 1 lattice
+  and representative-replay tools.
+
+### Changed
+- Projected fixed-design evaluation now accepts zero PV modules so exhaustive
+  sizing grids can evaluate the complete declared domain.
+
+### Fixed
+- Applied optional AC-output scaling consistently in scalar, vectorized, and
+  Numba inverter paths, including inverse conversion and optimization runs.
+- Fixed public projected-design evaluation with a weather sequence, which
+  previously attempted to construct a datetime index from `list.index`.
+- Removed duplicate annual energy columns when joining projected physical and
+  financial ledgers, and reject inconsistent duplicates instead of silently
+  selecting one.
+- Refuse to reuse a non-empty lattice archive directory, verify representative
+  replays against their source rows, and harden regenerated lattice provenance
+  with coordinate, Pareto, archive-schema, coverage, and shard-hash checks.
+
 ## [0.6.0] - 2026-08-31
 
 ### Added
