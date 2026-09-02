@@ -1,4 +1,4 @@
-# Article 1 validation recovery
+# Upcoming-publication validation recovery
 
 This directory preserves the drivers that generated the deleted
 external-validation packages. Sandia Task 13, PCoE, Reunion, and orientation

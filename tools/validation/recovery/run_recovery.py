@@ -1,4 +1,4 @@
-"""Run the recoverable Article 1 validation packages without CPU overlap.
+"""Run the recoverable publication validation packages without CPU overlap.
 
 The runner can wait for another process to exit, then reconstruct the local-data
 packages in a new output root. It never deletes or overwrites an existing

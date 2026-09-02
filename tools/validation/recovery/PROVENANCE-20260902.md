@@ -1,6 +1,6 @@
 # Validation recovery provenance
 
-This index points to the recovered Article 1 validation outputs and records the
+This index points to the recovered upcoming-publication validation outputs and records the
 checks run on 2026-09-02. The BREOS source revision used for every replay is
 `f62f4f5bf3c14140ab189d35ea2885e6fcc60c6b`.
 
