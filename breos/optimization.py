@@ -8,7 +8,7 @@ This module provides:
 """
 
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, Optional, Tuple
+from typing import Any, Callable, Dict, Optional, Sequence, Tuple, Union
 
 import numpy as np
 import pandas as pd
@@ -438,6 +438,7 @@ def _build_battery_config_from_spec(
     enable_replacement: bool = False,
     inverter_ac_capacity_w: Optional[float] = None,
     replacement_cost: Optional[float] = None,
+    ac_output_scale: float = 1.0,
 ) -> BatteryConfig:
     """Build a BatteryConfig for optimization paths without dropping supported settings."""
     return BatteryConfig(
@@ -460,6 +461,7 @@ def _build_battery_config_from_spec(
         enable_replacement=enable_replacement,
         replacement_cost=replacement_cost,
         enable_resistance_fade=batt_spec.get("enable_resistance_fade", False),
+        ac_output_scale=ac_output_scale,
     )
 
 
@@ -612,7 +614,7 @@ def _summarize_projected_lifetime_metrics(yearly_summary_df: pd.DataFrame) -> Di
 
 def _evaluate_projected_design_metrics(
     *,
-    base_dc_power: pd.Series,
+    base_dc_power: Union[pd.Series, Sequence[pd.Series]],
     tmy_data: pd.DataFrame,
     houseload: pd.DataFrame,
     temperature_series: pd.Series,
@@ -630,10 +632,27 @@ def _evaluate_projected_design_metrics(
     emissions_params: Optional[EmissionsParams] = None,
     return_tables: bool = False,
     execution_backend: str = DEFAULT_EXECUTION_BACKEND,
+    ac_output_scale: float = 1.0,
 ) -> Dict[str, Any]:
-    """Evaluate one design over repeated TMY years using production engines."""
+    """Evaluate one design over the projected horizon using production engines.
+
+    ``base_dc_power`` is normally one weather year, repeated for every
+    projected year and scaled by PV degradation. Passing a sequence of series
+    instead runs a real weather sequence, one entry per projected year, so a
+    study can keep observed inter-annual variability rather than repeating a
+    single year. The sequence must have exactly ``years_projection`` entries.
+    A one-year sequence is equivalent to passing that series directly.
+    """
     if years_projection < 1:
         raise ValueError("projected optimization requires at least one project year")
+    if isinstance(base_dc_power, pd.Series):
+        dc_by_year: Sequence[pd.Series] = [base_dc_power] * years_projection
+    else:
+        dc_by_year = list(base_dc_power)
+        if len(dc_by_year) != years_projection:
+            raise ValueError(f"projected weather sequence has {len(dc_by_year)} years, expected {years_projection}")
+        if not all(isinstance(series, pd.Series) for series in dc_by_year):
+            raise ValueError("every projected weather-sequence entry must be a pandas Series")
     if not 0.0 <= float(degradation_rate) < 1.0:
         raise ValueError("projected PV degradation rate must be between 0 and 1")
 
@@ -668,7 +687,7 @@ def _evaluate_projected_design_metrics(
 
     for year_idx in range(years_projection):
         degradation_factor = (1.0 - float(degradation_rate)) ** year_idx
-        dc_power = base_dc_power * degradation_factor
+        dc_power = dc_by_year[year_idx] * degradation_factor
         battery_config = _build_battery_config_from_spec(
             batt_spec,
             nominal_energy_wh=battery_kwh * 1000.0,
@@ -677,6 +696,7 @@ def _evaluate_projected_design_metrics(
             enable_replacement=bool(batt_spec.get("enable_replacement", True)) and has_battery,
             inverter_ac_capacity_w=inverter_ac_capacity_w,
             replacement_cost=replacement_cost,
+            ac_output_scale=ac_output_scale,
         )
         state_kwargs: Dict[str, float] = {}
         if carried_energy_wh is not None:
@@ -819,8 +839,9 @@ def evaluate_projected_design(
     tilt: float,
     azimuth: float,
     execution_backend: str = DEFAULT_EXECUTION_BACKEND,
+    weather_by_year: Optional[Sequence[pd.DataFrame]] = None,
 ) -> ProjectedDesignResult:
-    """Evaluate one fixed PV-battery design over repeated TMY project years.
+    """Evaluate one fixed PV-battery design over the projected horizon.
 
     This is the detailed fixed-design counterpart to projected NSGA-II
     scoring. It uses the same PV, battery, replacement, degradation, and
@@ -835,6 +856,12 @@ def evaluate_projected_design(
         battery_kwh: Installed nominal battery capacity in kWh.
         tilt: PV surface tilt in degrees.
         azimuth: PV surface azimuth in degrees.
+        weather_by_year: Optional real weather sequence, one frame per
+            projected year, replacing the repeated ``tmy_data`` year. Each
+            frame is run through the same PV model, and PV degradation still
+            applies by project year. ``tmy_data`` is still used for the
+            battery temperature series and must remain a representative year.
+            The sequence length must equal the projected horizon.
 
     Returns:
         Projected metrics, yearly simulation ledger, and financial ledger.
@@ -874,20 +901,53 @@ def evaluate_projected_design(
     )
     degradation_rate = float(pv_config.get("degradation_rate", financials.get("pv_degradation_rate", 0.005)))
     pv_params, _module_area = _resolve_pv_module_and_area(config)
-    base_dc_power = calculate_pv_production_dc(
-        weather_data=tmy_data,
-        location=loc_obj,
-        tilt=float(tilt),
-        surface_azimuth=float(azimuth),
-        n_modules=int(n_modules),
-        pv_params=pv_params,
-        freq=freq,
-        verbose=False,
-        **configured_pv_model_kwargs(config),
-    )
+
+    # A DC-side yield correction: the array itself produces this much less.
+    # Unlike ac_output_scale it is applied before dispatch, so charging,
+    # clipping and the part-load ratio all respond to it.
+    dc_output_scale = float(config.get("dc_output_scale", 1.0))
+    if not np.isfinite(dc_output_scale) or dc_output_scale <= 0.0:
+        raise ValueError("dc_output_scale must be finite and greater than 0")
+
+    def _dc_for(weather_frame: pd.DataFrame) -> pd.Series:
+        series = calculate_pv_production_dc(
+            weather_data=weather_frame,
+            location=loc_obj,
+            tilt=float(tilt),
+            surface_azimuth=float(azimuth),
+            n_modules=int(n_modules),
+            pv_params=pv_params,
+            freq=freq,
+            verbose=False,
+            **configured_pv_model_kwargs(config),
+        )
+        return series if dc_output_scale == 1.0 else series * dc_output_scale
+
+    if weather_by_year is None:
+        base_dc_power: Union[pd.Series, Sequence[pd.Series]] = _dc_for(tmy_data)
+        dc_index = base_dc_power.index
+    else:
+        frames = list(weather_by_year)
+        if len(frames) != years_projection:
+            raise ValueError(f"weather_by_year has {len(frames)} years, expected {years_projection}")
+        # Every year must land on the same intra-year index, because the load
+        # profile and the battery temperature series are aligned to it once.
+        reference = _dc_for(frames[0])
+        series = [reference]
+        for frame in frames[1:]:
+            year_dc = _dc_for(frame)
+            if len(year_dc) != len(reference):
+                raise ValueError(
+                    "every weather_by_year frame must produce the same number of "
+                    f"timesteps; got {len(year_dc)} against {len(reference)}"
+                )
+            year_dc.index = reference.index
+            series.append(year_dc)
+        base_dc_power = series
+        dc_index = reference.index
     temperature_series = _temperature_series_from_config(
         battery.get("temperature", "weather"),
-        base_dc_power.index,
+        dc_index,
         weather_df=tmy_data,
         indoor_model=battery.get("indoor_model"),
     )
@@ -914,6 +974,7 @@ def evaluate_projected_design(
         inverter_ac_capacity_w=inverter_ac_capacity_w,
         emissions_params=EmissionsParams(**emissions_config) if emissions_config else None,
         return_tables=True,
+        ac_output_scale=float(config.get("ac_output_scale", 1.0)),
     )
     yearly = raw_metrics.pop("_yearly_summary_df")
     financial = raw_metrics.pop("_cost_projection_df")
@@ -1149,6 +1210,10 @@ try:
                 "inverter_efficiency",
                 config.get("inverter", {}).get("efficiency", 0.96),
             )
+            self.ac_output_scale = float(config.get("ac_output_scale", 1.0))
+            self.dc_output_scale = float(config.get("dc_output_scale", 1.0))
+            if not np.isfinite(self.dc_output_scale) or self.dc_output_scale <= 0.0:
+                raise ValueError("dc_output_scale must be finite and greater than 0")
 
             self.battery_replacement_treatment = {
                 "method": (
@@ -1241,6 +1306,11 @@ try:
                 verbose=False,
                 **self.model_options,
             )
+            # Apply the DC-side correction before either steady-state dispatch
+            # or projected scoring. This keeps clipping, charging and the
+            # part-load ratio on the corrected raw array output.
+            if self.dc_output_scale != 1.0:
+                dc_production = dc_production * self.dc_output_scale
 
             # Load alignment (timezone- and DST-aware year remapping) happens
             # inside simulate_energy_balance — the same code path the App
@@ -1269,6 +1339,7 @@ try:
                 initial_soh=batt_spec.get("initial_soh", 100),
                 enable_replacement=False,
                 inverter_ac_capacity_w=inverter_ac_capacity_w,
+                ac_output_scale=self.ac_output_scale,
             )
             temperature_series = _temperature_series_from_config(
                 self.batt_temp_cfg,
@@ -1364,6 +1435,7 @@ try:
                     battery_kwh=float(battery_kwh),
                     inverter_efficiency=self.inverter_efficiency,
                     inverter_ac_capacity_w=inverter_ac_capacity_w,
+                    ac_output_scale=self.ac_output_scale,
                 )
                 out.update(projected_metrics)
                 objective_grid_dependence = 1.0 - float(projected_metrics["Projected_Grid_Independence_%"]) / 100.0

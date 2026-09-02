@@ -142,6 +142,7 @@ def _call_numba_cache_probe(dispatch):
             min_soc=0.1,
             inverter_efficiency=0.96,
             thermal_resistance_kw=0.05,
+            ac_output_scale=1.0,
         ),
         has_battery=False,
         battery_soh_decimal=1.0,
@@ -287,7 +288,7 @@ matrix = np.zeros((37, 96))
 kernel(
     matrix, np.zeros(96), np.zeros(96), np.full(96, 25.0), 0, 96,
     0.0, 0.0, False, 0.0, 1.0, 100.0, 0.9, 0.1, 0.0, 0.95, 0.95, 0.96,
-    np.inf, np.inf, np.inf, True, 0.05, 0.25, 2.0,
+    np.inf, np.inf, np.inf, True, 0.05, 0.25, 2.0, 1.0,
 )
 print(json.dumps({{
     "hits": int(sum(kernel.stats.cache_hits.values())),

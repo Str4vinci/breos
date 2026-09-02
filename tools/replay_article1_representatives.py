@@ -66,6 +66,29 @@ def _refuse_existing_outputs(output_directory: Path, names: set[str]) -> None:
             raise FileExistsError(f"Representative output already exists: {directory}")
 
 
+def _verify_replayed_representatives(source: pd.DataFrame, replayed: pd.DataFrame) -> dict[str, float]:
+    """Require the replay to reproduce each selected source row."""
+    comparison = source.merge(
+        replayed,
+        on="Representative",
+        suffixes=("_source", "_replay"),
+        validate="one_to_one",
+    )
+    exact_columns = ("Modules", "Battery_kWh", "Tilt", "Azimuth")
+    metric_columns = ("Projected_Grid_Independence_%", "Projected_NPV_Eur")
+    for column in exact_columns:
+        if not comparison[f"{column}_source"].eq(comparison[f"{column}_replay"]).all():
+            raise ValueError(f"Representative replay changed {column}")
+    deltas = {
+        column: float((comparison[f"{column}_source"] - comparison[f"{column}_replay"]).abs().max())
+        for column in metric_columns
+    }
+    for column, delta in deltas.items():
+        if delta > 1e-9:
+            raise ValueError(f"Representative replay changed {column} by up to {delta:.3e}")
+    return deltas
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -124,6 +147,7 @@ def main() -> int:
         execution_backend=args.execution_backend,
         representative_names=selected_names,
     )
+    source_replay_delta = _verify_replayed_representatives(selected, representatives)
     representatives.to_csv(replay_csv, index=False)
 
     report = {
@@ -145,6 +169,7 @@ def main() -> int:
         "representatives_csv": replay_csv.name,
         "representatives_sha256": _sha256(replay_csv),
         "representatives": representatives.to_dict(orient="records"),
+        "source_replay_max_abs_delta": source_replay_delta,
         "representative_artifacts": artifacts,
     }
     replay_report.write_text(json.dumps(report, indent=2, default=str) + "\n")

@@ -72,6 +72,13 @@ def _archive_format(requested: str) -> str:
         return "csv"
 
 
+def _prepare_archive_directory(path: Path) -> None:
+    """Create a new archive directory and refuse to mix in stale shards."""
+    if path.exists() and any(path.iterdir()):
+        raise FileExistsError(f"refusing to reuse nonempty archive directory: {path}")
+    path.mkdir(parents=True, exist_ok=True)
+
+
 def _init(config, rlp_directory, backend, archive, archive_format):
     weather, load, _, _ = repro._load_inputs(config, Path(rlp_directory))
     _STATE.update(
@@ -264,7 +271,7 @@ def main() -> int:
 
     archive_format = _archive_format(args.archive_format) if args.archive else None
     if args.archive:
-        args.archive.mkdir(parents=True, exist_ok=True)
+        _prepare_archive_directory(args.archive)
 
     indexed = list(enumerate(points))
     chunks = [(i // args.chunk_size, indexed[i : i + args.chunk_size]) for i in range(0, len(indexed), args.chunk_size)]

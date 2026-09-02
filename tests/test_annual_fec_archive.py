@@ -14,7 +14,7 @@ import pytest
 from breos.battery import BatteryConfig, simulate_energy_balance
 from breos.optimization import ProjectedDesignResult, _evaluate_projected_design_metrics
 from breos.pv_modules import get_module
-from tools.revision.grid_eval import _annual_archive_frame, _reject_duplicate_columns
+from tools.revision.grid_eval import _annual_archive_frame, _prepare_archive_directory, _reject_duplicate_columns
 
 # The itemised, undiscounted annual cash flows a Task 7 re-ranking needs, plus
 # the energy, battery and replacement series the schema gate requires.
@@ -208,3 +208,12 @@ def test_duplicate_columns_are_rejected_before_a_shard_is_written():
 
     with pytest.raises(ValueError, match=r"duplicate column names: \['Export_kWh'\]"):
         _reject_duplicate_columns(frame)
+
+
+def test_archive_directory_must_be_empty(tmp_path):
+    archive = tmp_path / "archive"
+    _prepare_archive_directory(archive)
+    (archive / "annual_00000.csv").write_text("Design_ID,Year\n0,1\n")
+
+    with pytest.raises(FileExistsError, match="refusing to reuse nonempty archive directory"):
+        _prepare_archive_directory(archive)

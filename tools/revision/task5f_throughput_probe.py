@@ -83,21 +83,13 @@ def main() -> int:
                 weather, load, configs[arm], execution_backend=args.execution_backend, **design
             )
             y = r.yearly.copy()
-            # Battery_Cumulative_FEC is cumulative; the annual figure is its
-            # year-over-year difference, with year one being the level itself.
-            # Battery_Cumulative_FEC counts the INSTALLED pack and resets to
-            # zero when that pack is replaced, so a plain diff reports a large
-            # negative in the replacement year and a lifetime sum equal to the
-            # final pack's count alone. A year whose cumulative value fell is a
-            # reset year, and its figure is the new pack's accumulation since
-            # replacement. That drops the retired pack's part-year, which the
-            # ledger does not expose separately, so the replacement year reads
-            # slightly low; every arm loses the same part-year, so the cross-arm
-            # comparison is unaffected.
-            cum = y["Battery_Cumulative_FEC"]
-            raw = cum.diff().fillna(cum.iloc[0])
-            y["Annual_FEC"] = raw.where(raw >= 0.0, cum)
-            y["FEC_Reset_Year"] = raw < 0.0
+            if "Battery_Annual_FEC" not in y:
+                raise RuntimeError("projected results do not expose exact Battery_Annual_FEC")
+            # This is the all-pack annual ledger. Unlike differencing the
+            # installed pack's cumulative counter, it retains the retired
+            # pack's part-year contribution when a replacement occurs.
+            y["Annual_FEC"] = y["Battery_Annual_FEC"]
+            y["FEC_Reset_Year"] = y["Replacements"] > 0
             y.insert(0, "Arm", arm)
             y.insert(0, "Design", design_label)
             yearly_rows.append(y)

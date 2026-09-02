@@ -213,6 +213,7 @@ def _dispatch_day_numba(
         float(battery_config.thermal_resistance_kw),
         float(hours_per_step),
         2.0,
+        float(battery_config.ac_output_scale),
     )
     if observe_cache:
         cache_hits_after = _cache_event_count(kernel.stats.cache_hits)

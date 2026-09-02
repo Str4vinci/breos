@@ -137,6 +137,12 @@ class BatteryConfig:
     # so a sizing sweep keeps one C-rate instead of one wattage across capacities.
     # Setting it together with either absolute limit raises.
     power_limit_c_rate: Optional[float] = None
+    # Multiplier applied to inverter AC output after the part-load curve and
+    # every inverter limit. It corrects modelled AC delivery from a measured
+    # whole-chain bias without moving the clipping threshold or the part-load
+    # ratio, which is why it is not folded into ``inverter_efficiency``. The
+    # default 1.0 is a no-op and reproduces prior behaviour bit-for-bit.
+    ac_output_scale: float = 1.0
 
     def __post_init__(self):
         if not isinstance(self.dc_coupled, bool):
@@ -215,6 +221,9 @@ class BatteryConfig:
             derived = rate * self.nominal_energy_wh
             self.max_charge_power_w = derived
             self.max_discharge_power_w = derived
+        self.ac_output_scale = finite("ac_output_scale", self.ac_output_scale)
+        if self.ac_output_scale <= 0.0:
+            raise ValueError("ac_output_scale must be greater than 0")
         self.battery_type = _normalise_battery_type(self.battery_type)
         # Auto-compute replacement cost
         if self.replacement_cost is None:
@@ -237,6 +246,7 @@ def _dispatch_dc_step(
     cap_discharge_ac_wh: float,
     inv_cap_ac_wh: float,
     has_battery: bool,
+    ac_output_scale: float = 1.0,
 ) -> Tuple[float, Dict[str, float]]:
     """Dispatch one DC-coupled timestep; inputs, outputs and ledger are Wh.
 
@@ -258,7 +268,7 @@ def _dispatch_dc_step(
         "battery_inverter_loss": 0.0,
         "grid_import": 0.0,
     }
-    pv_conversion = calculate_dc_ac_power(pv_dc, inv_cap_ac_wh, inv_eff)
+    pv_conversion = calculate_dc_ac_power(pv_dc, inv_cap_ac_wh, inv_eff, ac_output_scale)
     pv_ac_max = pv_conversion.ac_power_w
 
     def charge(surplus_dc: float) -> float:
@@ -275,11 +285,11 @@ def _dispatch_dc_step(
 
     if has_battery and pv_ac_max >= load:
         ledger["pv_ac_to_load"] = load
-        dc_to_load = dc_power_for_ac_output(load, inv_cap_ac_wh, inv_eff)
+        dc_to_load = dc_power_for_ac_output(load, inv_cap_ac_wh, inv_eff, ac_output_scale)
         surplus_dc = max(0.0, pv_dc - dc_to_load)
         drawn = charge(surplus_dc)
         remaining_dc = surplus_dc - drawn
-        direct_conversion = calculate_dc_ac_power(dc_to_load + remaining_dc, inv_cap_ac_wh, inv_eff)
+        direct_conversion = calculate_dc_ac_power(dc_to_load + remaining_dc, inv_cap_ac_wh, inv_eff, ac_output_scale)
         export_ac = max(0.0, direct_conversion.ac_power_w - load)
         dc_export = max(0.0, dc_to_load + remaining_dc - direct_conversion.clipping_loss_dc_w - dc_to_load)
         ledger["pv_ac_export"] = export_ac
@@ -301,14 +311,16 @@ def _dispatch_dc_step(
             ledger["grid_import"] = deficit
         else:
             available = max(0.0, battery_energy - emin)
-            target_total_ac = min(load, inv_cap_ac_wh)
+            # AC correction is applied after the inverter curve and nameplate
+            # limit, so the reachable AC ceiling is the scaled nameplate.
+            target_total_ac = min(load, inv_cap_ac_wh * ac_output_scale)
             if available > 0.0 and eff_discharge > 0.0 and target_total_ac > pv_ac_max:
-                total_dc_target = dc_power_for_ac_output(target_total_ac, inv_cap_ac_wh, inv_eff)
+                total_dc_target = dc_power_for_ac_output(target_total_ac, inv_cap_ac_wh, inv_eff, ac_output_scale)
                 battery_dc = min(available * eff_discharge, max(0.0, total_dc_target - pv_dc))
 
                 def combined_conversion(battery_dc_input: float) -> tuple[float, float, float]:
                     total_dc = pv_dc + battery_dc_input
-                    conversion = calculate_dc_ac_power(total_dc, inv_cap_ac_wh, inv_eff)
+                    conversion = calculate_dc_ac_power(total_dc, inv_cap_ac_wh, inv_eff, ac_output_scale)
                     if total_dc <= 0.0:
                         return 0.0, 0.0, 0.0
                     battery_ac = conversion.ac_power_w * battery_dc_input / total_dc
@@ -488,7 +500,12 @@ class AlignedSimulationInputs:
         hours_per_step = get_hours_per_step(freq)
         cap_wh = _step_energy_cap(battery_config.inverter_ac_capacity_w, hours_per_step)
         pv_dc_wh = np.maximum(0.0, self.pv_dc_w * hours_per_step)
-        chain = _calculate_dc_ac_power_arrays(pv_dc_wh, cap_wh, battery_config.inverter_efficiency)
+        chain = _calculate_dc_ac_power_arrays(
+            pv_dc_wh,
+            cap_wh,
+            battery_config.inverter_efficiency,
+            battery_config.ac_output_scale,
+        )
         return AlignedSimulationInputs(
             index=self.index,
             pv_dc_w=self.pv_dc_w,
@@ -1189,6 +1206,7 @@ def _dispatch_day_python(
             cap_discharge_wh,
             cap_wh,
             has_battery,
+            battery_config.ac_output_scale,
         )
         charge_stored = ledger["battery_charge_input"] * eff_charge
         pv_origin_discharge_dc = ledger["battery_discharge_dc"] * origin_fraction
@@ -1211,7 +1229,12 @@ def _dispatch_day_python(
         # the explicit part-load conversion loss. Public economics use the AC
         # ledger fields instead.
         if math.isinf(cap_wh):
-            pv_production = (pv_dc_power - pv_curtailment) * battery_config.inverter_efficiency
+            # The unlimited-inverter compatibility path has no explicit
+            # inverter ledger loss. Keep its reported AC production aligned
+            # with the scaled scalar inverter output.
+            pv_production = (
+                (pv_dc_power - pv_curtailment) * battery_config.inverter_efficiency * battery_config.ac_output_scale
+            )
         else:
             pv_production = pv_dc_power - pv_curtailment - ledger["pv_direct_inverter_loss"]
         battery_energy_delta = Battery_Energy_Wh - battery_energy_beginning
@@ -1310,6 +1333,7 @@ def _dispatch_no_battery_vectorized(
             pv_dc_wh,
             cap_wh,
             battery_config.inverter_efficiency,
+            battery_config.ac_output_scale,
         )
     else:
         # Memoized by the caller for these exact inputs. Same values, same
@@ -1319,7 +1343,10 @@ def _dispatch_no_battery_vectorized(
     grid_export_wh = ac_wh - pv_ac_to_load_wh
     grid_import_wh = np.maximum(0.0, load_wh - pv_ac_to_load_wh)
     if math.isinf(cap_wh):
-        pv_production_wh = (pv_dc_wh - clipping_loss_dc_wh) * battery_config.inverter_efficiency
+        # Match the scalar compatibility path, including AC-side correction.
+        pv_production_wh = (
+            (pv_dc_wh - clipping_loss_dc_wh) * battery_config.inverter_efficiency * battery_config.ac_output_scale
+        )
     else:
         # Keep the scalar reference's subtraction order. Returning ``ac_wh``
         # here is algebraically equivalent but differs by one ULP at low load.
