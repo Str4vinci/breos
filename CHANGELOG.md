@@ -24,7 +24,7 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 - Added annual battery charge throughput, discharge throughput, mean state of
   charge, and all-pack full-equivalent-cycle fields to projected result
   ledgers. The existing installed-pack cumulative FEC field remains unchanged.
-- Added exact annual-archive and Pareto-front checks to the Article 1 lattice
+- Added exact annual-archive and Pareto-front checks to the upcoming-publication lattice
   and representative-replay tools.
 
 ### Changed
