@@ -227,7 +227,7 @@ def _fixed_candidates(
 
 
 def _select_pareto_representatives(pareto: pd.DataFrame) -> pd.DataFrame:
-    """Select the five Article 1 designs used to describe the Pareto front."""
+    """Select the five designs used to describe the publication Pareto front."""
     if pareto.empty:
         raise ValueError("Cannot select representatives from an empty Pareto front")
     npv_column = "Projected_NPV_Eur"

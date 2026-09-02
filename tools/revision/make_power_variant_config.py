@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Materialise a power-limit variant of the Article 1 projected-optimization config.
+"""Materialise a power-limit variant of the publication optimization config.
 
 The constant-power base pins ``battery.max_charge_power_w`` and leaves discharge
 unbounded. A C-rate variant removes both absolute limits and sets

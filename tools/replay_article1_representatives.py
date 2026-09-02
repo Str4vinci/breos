@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Replay selected Article 1 designs from an existing Pareto result package."""
+"""Replay selected upcoming-publication designs from a Pareto result package."""
 
 from __future__ import annotations
 
@@ -44,7 +44,7 @@ def _source_files(source_directory: Path) -> tuple[Path, Path]:
     reproduction_path = source_directory / "reproduction.json"
     for path in (pareto_path, reproduction_path):
         if not path.is_file():
-            raise FileNotFoundError(f"Article 1 source result is missing: {path}")
+            raise FileNotFoundError(f"Publication source result is missing: {path}")
     return pareto_path, reproduction_path
 
 
