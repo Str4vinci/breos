@@ -1,6 +1,6 @@
 """The post-inverter AC output scale and the per-year projected weather sequence.
 
-Both were added for the Article 1 revision's PV-bias scenarios. Two properties
+Both were added for the upcoming publication's PV-bias scenarios. Two properties
 carry every result that depends on them, and both are asserted here rather than
 argued: the default reproduces prior behaviour exactly, and the compiled
 backend reproduces the Python reference exactly when the scale is active.
@@ -33,7 +33,7 @@ from harness import FREQ, build  # noqa: E402
 
 AC_RATING = 3520.0
 EFFICIENCY = 0.96
-# The Article 1 PV-bias factors, plus a no-op.
+# The upcoming-publication PV-bias factors, plus a no-op.
 SCALES = (1.0, 1.0 / 1.0857, 1.0857)
 DC_GRID = (0.0, 1e-9, 50.0, 500.0, 1800.0, 3520.0, 3666.6666666666665, 9000.0)
 
