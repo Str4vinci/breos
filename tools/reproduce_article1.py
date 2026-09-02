@@ -227,17 +227,26 @@ def _fixed_candidates(
 
 
 def _select_pareto_representatives(pareto: pd.DataFrame) -> pd.DataFrame:
-    """Select the maximum-NPV, normalized-knee, and maximum-GI designs."""
+    """Select the five Article 1 designs used to describe the Pareto front."""
     if pareto.empty:
         raise ValueError("Cannot select representatives from an empty Pareto front")
     npv_column = "Projected_NPV_Eur"
     gi_column = "Projected_Grid_Independence_%"
-    missing = {npv_column, gi_column} - set(pareto.columns)
+    battery_column = "Battery_kWh"
+    missing = {npv_column, gi_column, battery_column} - set(pareto.columns)
     if missing:
         raise ValueError(f"Pareto front is missing projected metric columns: {', '.join(sorted(missing))}")
 
     npv = pareto[npv_column].to_numpy(dtype=float)
     gi = pareto[gi_column].to_numpy(dtype=float)
+    battery = pareto[battery_column].to_numpy(dtype=float)
+
+    def maximum_position(values: np.ndarray, eligible: np.ndarray, description: str) -> int:
+        positions = np.flatnonzero(eligible)
+        if positions.size == 0:
+            raise ValueError(f"Pareto front has no {description} design")
+        return int(positions[int(np.argmax(values[positions]))])
+
     npv_span = float(np.max(npv) - np.min(npv))
     gi_span = float(np.max(gi) - np.min(gi))
     npv_normalized = (npv - np.min(npv)) / (npv_span if npv_span > 0.0 else 1.0)
@@ -245,7 +254,9 @@ def _select_pareto_representatives(pareto: pd.DataFrame) -> pd.DataFrame:
     knee_distance = np.hypot(1.0 - npv_normalized, 1.0 - gi_normalized)
     selections = (
         ("max_npv", int(np.argmax(npv))),
+        ("max_npv_battery", maximum_position(npv, battery > 0.0, "PV-plus-battery")),
         ("knee", int(np.argmin(knee_distance))),
+        ("max_gi_positive_npv", maximum_position(gi, npv > 0.0, "positive-NPV")),
         ("max_gi", int(np.argmax(gi))),
     )
 
@@ -264,9 +275,16 @@ def _export_pareto_representatives(
     pareto: pd.DataFrame,
     output_directory: Path,
     execution_backend: str = DEFAULT_EXECUTION_BACKEND,
+    representative_names: set[str] | None = None,
 ) -> tuple[pd.DataFrame, dict[str, dict[str, str]]]:
     """Replay selected Pareto designs and export their plot-independent tables."""
     representatives = _select_pareto_representatives(pareto)
+    if representative_names:
+        available = set(representatives["Representative"])
+        unknown = representative_names - available
+        if unknown:
+            raise ValueError(f"Unknown Pareto representative: {', '.join(sorted(unknown))}")
+        representatives = representatives[representatives["Representative"].isin(representative_names)]
     summaries = []
     artifacts = {}
     for representative in representatives.to_dict(orient="records"):
