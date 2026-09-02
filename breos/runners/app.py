@@ -364,6 +364,7 @@ def run_app_simulation(
                 calendar_model=cfg["calendar_model"],
                 max_charge_power_w=cfg["battery_max_charge_power_w"],
                 max_discharge_power_w=cfg["battery_max_discharge_power_w"],
+                power_limit_c_rate=cfg["battery_power_limit_c_rate"],
                 enable_resistance_fade=cfg.get("enable_resistance_fade", False),
                 **batt_kwargs,
             )
