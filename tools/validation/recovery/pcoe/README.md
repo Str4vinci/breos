@@ -95,7 +95,7 @@ The electrical channels are suitable for a data-quality check. They are not enou
 
 - Source record: [Zenodo record 15779578](https://zenodo.org/records/15779578)
 - Source DOI: `10.5281/zenodo.15779578`
-- Local source file: `/home/leo/Downloads/datasets/pcoe_pv_testbed/pcoe_pv_system_testbed.csv`
+- Local source file: `$BREOS_VALIDATION_DATA/pcoe_pv_testbed/pcoe_pv_system_testbed.csv`
 - Local MD5: `35386ee96c1a57d10f8d73dfacee858b`, matching the Zenodo record
 - BREOS worktree: `/tmp/breos-article1-0.6.0`
 - BREOS commit: `f62f4f5bf3c14140ab189d35ea2885e6fcc60c6b`
@@ -114,7 +114,9 @@ The electrical channels are suitable for a data-quality check. They are not enou
 From the clean article worktree, run:
 
 ```text
-PYTHONPATH=/tmp/breos-article1-0.6.0 /tmp/breos-article1-0.6.0/.venv/bin/python /home/leo/code/breos/tools/validation/recovery/pcoe/drivers/pcoe_validate.py --force
+BREOS_VALIDATION_ROOT=/path/to/article-worktree \
+  BREOS_VALIDATION_DATA=/path/to/datasets \
+  python tools/validation/recovery/pcoe/drivers/pcoe_validate.py --force
 ```
 
 The driver refuses to replace existing generated files unless you pass `--force`. It writes [`thermal_metrics.csv`](thermal_metrics.csv), [`thermal_sensitivity_metrics.csv`](thermal_sensitivity_metrics.csv), [`monthly_bias.csv`](monthly_bias.csv), [`electrical_checks.json`](electrical_checks.json), [`dataset_facts.json`](dataset_facts.json), and [`provenance.json`](provenance.json).

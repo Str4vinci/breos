@@ -23,7 +23,9 @@ from typing import Any
 RECOVERY_ROOT = Path(__file__).resolve().parent
 REPO_ROOT = RECOVERY_ROOT.parents[2]
 DEFAULT_BREOS_ROOT = Path("/tmp/breos-article1-0.6.0")
-DEFAULT_DKASC_RAW = Path("/home/leo/Documents/DKA_Alice_Springs")
+# The DKASC archive is downloaded separately; --dkasc-raw-dir or
+# BREOS_VALIDATION_DKASC_RAW says where it was unpacked.
+DEFAULT_DKASC_RAW = Path(os.environ.get("BREOS_VALIDATION_DKASC_RAW", "datasets/DKA_Alice_Springs")).expanduser()
 
 
 def _now() -> str:

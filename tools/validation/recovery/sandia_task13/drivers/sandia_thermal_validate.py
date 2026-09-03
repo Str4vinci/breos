@@ -22,13 +22,17 @@ import numpy as np
 import pandas as pd
 import pvlib
 
-SOURCE = Path("/home/leo/Downloads/datasets/sandia_iea_pvps_task13")
+# Raw inputs live outside the repository because of size and licensing. Point
+# BREOS_VALIDATION_DATA at the directory holding the downloaded datasets; the
+# README records which archive belongs where.
+DATA_ROOT = Path(os.environ.get("BREOS_VALIDATION_DATA", "datasets")).expanduser()
+SOURCE = DATA_ROOT / "sandia_iea_pvps_task13"
 OUTPUT = Path(
     os.environ.get(
         "BREOS_VALIDATION_OUTPUT",
-        "/home/leo/code/breos/results/validation_sandia_task13_recovered_20260902",
+        "results/validation_sandia_task13_recovered",
     )
-)
+).expanduser()
 DEFAULT_BREOS_ROOT = Path("/tmp/breos-article1-0.6.0")
 BREOS_ROOT = Path(os.environ.get("BREOS_VALIDATION_ROOT", DEFAULT_BREOS_ROOT))
 sys.path.insert(0, str(BREOS_ROOT))

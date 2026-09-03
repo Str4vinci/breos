@@ -31,12 +31,21 @@ sys.path.insert(0, str(BREOS_ROOT))
 
 from breos.solar import PVModuleParams, calculate_pv_production_dc, dc_to_ac  # noqa: E402
 
-SOURCE_DIR = Path("/home/leo/Downloads/datasets/hkust_rooftop_60stations")
+# Raw inputs live outside the repository because of size and licensing. Point
+# BREOS_VALIDATION_DATA at the directory holding the downloaded datasets; the
+# README records which archive belongs where.
+DATA_ROOT = Path(os.environ.get("BREOS_VALIDATION_DATA", "datasets")).expanduser()
+SOURCE_DIR = DATA_ROOT / "hkust_rooftop_60stations"
 DATASET_ROOT = SOURCE_DIR / "Dataset"
 METEO_ROOT = DATASET_ROOT / "Time series dataset" / "Meteorological dataset"
 PV_ROOT = DATASET_ROOT / "Time series dataset" / "PV generation dataset"
 METADATA_FILE = DATASET_ROOT / "Metadata" / "PV generation system metadata.ttl"
-DEFAULT_OUTPUT = Path("/home/leo/code/breos/results/validation_hkust_timing-corrected-exploratory_20260830")
+DEFAULT_OUTPUT = Path(
+    os.environ.get(
+        "BREOS_VALIDATION_OUTPUT",
+        "results/validation_hkust_timing-corrected-exploratory",
+    )
+).expanduser()
 TIMEZONE = "Asia/Hong_Kong"
 LOCATION = Location(22.3363, 114.2634, tz=TIMEZONE)
 DAYLIGHT_GHI_THRESHOLD = 200.0
@@ -1116,9 +1125,9 @@ Run the copied driver with a new output directory. It refuses to replace any
 generated files:
 
 ```bash
-MPLCONFIGDIR=/tmp/hkust-mpl \\
-  /home/leo/code/breos/.venv/bin/python \\
-  drivers/hkust_validate.py --output-dir /path/to/new-empty-directory
+BREOS_VALIDATION_DATA=/path/to/datasets \\
+  MPLCONFIGDIR=/tmp/hkust-mpl \\
+  python drivers/hkust_validate.py --output-dir /path/to/new-empty-directory
 ```
 
 `provenance.json` records the clean BREOS commit, dependencies, driver hash,
