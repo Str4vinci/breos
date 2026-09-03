@@ -23,10 +23,16 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   measured-bias sensitivity studies. Both default to no scaling.
   `dc_output_scale` corrects the array before dispatch, so clipping, charging
   and the part-load ratio respond to it, and it is the factor to use when the
-  model under-predicts a measured yield. `ac_output_scale` accounts for
-  AC-side losses the chain does not model and is bounded to `(0, 1]`, because
-  it lands after the inverter nameplate limit: above 1 the inverter would
-  deliver more than its nameplate and more AC than the DC entering it.
+  model under-predicts a measured yield. `ac_output_scale` is an in-dispatch
+  derate, applied inside the conversion the dispatcher calls so that discharge
+  decisions and the reachable AC ceiling respond to it, standing in for
+  AC-side shortfall the chain does not model. It is one constant approximating
+  a combined annual effect, not a model of availability, curtailment or wiring
+  individually, and while it is active the reported inverter loss covers the
+  whole DC-to-AC shortfall rather than the converter's own loss alone. It is
+  bounded to `(0, 1]`, because it lands after the inverter nameplate limit:
+  above 1 the inverter would deliver more than its nameplate and more AC than
+  the DC entering it.
 - Added annual battery charge throughput, discharge throughput, mean state of
   charge, and all-pack full-equivalent-cycle fields to projected result
   ledgers. The existing installed-pack cumulative FEC field remains unchanged.
@@ -35,7 +41,10 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 
 ### Changed
 - Projected fixed-design evaluation now accepts zero PV modules so exhaustive
-  sizing grids can evaluate the complete declared domain.
+  sizing grids can evaluate the complete declared domain. The battery-only
+  corner produces no PV and no inverter rating, imports the whole load, and
+  reports an infinite LCOE because it has no generation to spread cost over.
+  A negative module count is still rejected.
 - The recovered external-validation tree no longer keeps an unformatted second
   copy of each driver, and takes its dataset and output locations from
   `BREOS_VALIDATION_DATA`, `BREOS_VALIDATION_OUTPUT` and
