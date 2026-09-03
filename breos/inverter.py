@@ -244,14 +244,18 @@ def get_inverter_preset(name: str) -> InverterConfig:
 
 
 def _clamped_ac_output_scale(value: float) -> float:
-    """Clamp an AC-side output correction into ``[0, 1]``.
+    """Clamp an AC-side derate into ``[0, 1]``.
 
     The upper bound is the physical one: the factor is applied after the
     inverter nameplate limit, so a value above 1 would deliver more AC than
     the nameplate and more AC than the DC entering the converter.
-    :class:`~breos.battery.BatteryConfig` rejects an out-of-range value
-    outright; the helpers clamp so that a direct call cannot silently produce
-    an unphysical result.
+
+    This clamp is a backstop, not the validation. Every configured route
+    rejects an out-of-range value before reaching here, and loudly:
+    :class:`~breos.battery.BatteryConfig` for anything that dispatches, and
+    the study-config validators in :mod:`breos.optimization` for the
+    optimizer. What remains is a direct call into these helpers, where
+    clamping matches how ``inverter_efficiency`` already behaves beside it.
     """
     return min(1.0, max(0.0, float(value)))
 
@@ -271,20 +275,32 @@ def calculate_dc_ac_power(
     ``pv_dc_power * inverter_efficiency``.
 
     ``ac_output_scale`` multiplies the converted AC power *after* the
-    part-load curve and every inverter limit, so it corrects modelled AC
-    delivery without moving the clipping threshold ``pdc0`` or the part-load
-    ratio. It exists for AC-side losses the chain does not model, such as
-    availability, curtailment or downstream wiring, where the shortfall is
-    known at the AC boundary and the DC-side behaviour must not be re-derived
-    from a biased DC series.
+    part-load curve and every inverter limit, so it derates AC delivery
+    without moving the clipping threshold ``pdc0`` or the part-load ratio.
 
-    It is bounded to ``(0, 1]`` and values above 1 are clamped to 1. A factor
-    above 1 would let the inverter deliver more than its nameplate and more AC
-    than the DC entering it, leaving ``conversion_loss_w`` pinned at zero. An
-    under-predicting model is corrected on the DC side with
-    ``dc_output_scale``, which keeps clipping and the part-load ratio
-    responsive, or through ``inverter_efficiency`` when the converter itself
-    is modelled too pessimistically.
+    It is an **in-dispatch derate, not a post-processing multiplier**. It is
+    applied inside the conversion the dispatcher calls, so battery discharge
+    decisions and the reachable AC ceiling respond to it, which is the correct
+    behaviour for a derate that is really there. Multiplying a finished result
+    series instead would leave dispatch believing in AC that was never
+    delivered.
+
+    It is a single constant standing in for AC-side shortfall the chain does
+    not model, such as availability, curtailment or downstream wiring. One
+    constant approximates their combined annual effect; it is not a model of
+    any of them individually, and it cannot represent their time structure.
+
+    It is bounded to ``(0, 1]``. A factor above 1 would let the inverter
+    deliver more than its nameplate and more AC than the DC entering it,
+    leaving ``conversion_loss_w`` pinned at zero. An under-predicting model is
+    corrected on the DC side with ``dc_output_scale``, which keeps clipping
+    and the part-load ratio responsive, or through ``inverter_efficiency``
+    when the converter itself is modelled too pessimistically.
+
+    While the derate is active, ``conversion_loss_w`` is the whole DC-to-AC
+    shortfall and no longer only the inverter's own conversion loss: it
+    carries the derated energy too. Reports that attribute it specifically to
+    the converter must account for that.
 
     The default ``1.0`` is a no-op and reproduces prior behaviour
     bit-for-bit. ``dc_power_for_ac_output`` takes the same argument and stays
@@ -294,7 +310,7 @@ def calculate_dc_ac_power(
         pv_dc_power: DC power from PV array (W)
         inverter_ac_power: Inverter AC rating (W)
         inverter_efficiency: Nominal inverter efficiency
-        ac_output_scale: AC-side multiplier applied after conversion, in (0, 1]
+        ac_output_scale: In-dispatch AC-side derate applied after conversion, in (0, 1]
 
     Returns:
         InverterConversionResult with AC output and loss buckets.
