@@ -52,6 +52,29 @@ REQUIRED_SDIST_FILES = {
     "docs/getting-started/quickstart.md",
     "docs/legal/load-profile-data.md",
 }
+ALLOWED_SDIST_TOP_LEVEL = {
+    ".gitignore",
+    "ATTRIBUTIONS.md",
+    "CHANGELOG.md",
+    "CITATION.cff",
+    "CODE_OF_CONDUCT.md",
+    "CONTRIBUTING.md",
+    "LICENSE",
+    "PKG-INFO",
+    "README.md",
+    "ROADMAP.md",
+    "SECURITY.md",
+    "breos",
+    "configs",
+    "docs",
+    "maintainers",
+    "pyproject.toml",
+    "rlp",
+    "tests",
+    "tools",
+    "uv.lock",
+    "validation",
+}
 
 
 def _run(
@@ -112,6 +135,9 @@ def _assert_sdist_contents(sdist: Path) -> None:
     missing = sorted(REQUIRED_SDIST_FILES - names)
     if missing:
         raise AssertionError(f"Sdist is missing rebuildable docs source: {missing}")
+    unexpected = sorted(name for name in names if name and name.partition("/")[0] not in ALLOWED_SDIST_TOP_LEVEL)
+    if unexpected:
+        raise AssertionError(f"Sdist contains unexpected project files: {unexpected[:5]}")
     leaked_build_docs = sorted(name for name in names if name.startswith("docs/_build/"))
     if leaked_build_docs:
         raise AssertionError(f"Sdist contains generated docs: {leaked_build_docs[:5]}")
