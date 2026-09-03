@@ -4,6 +4,33 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 
 ## [Unreleased]
 
+## [0.6.2] - 2026-09-03
+
+### Added
+- Added `tools/revision/task3_eol_sweep.py`, the Task 3 end-of-life sweep. It
+  quantifies how much of storage economics follows from the battery replacement
+  assumption, by running three degradation models at their accepted knee
+  orientations against 80%, 70% and replacement-disabled settings. The sweep
+  previously existed only inside a result directory and could not be re-run from
+  a later release. The pinned commit, lattice location and output directory are
+  now options; the models, the 210-design grid, the candidate replays and the
+  verification against the accepted lattice are unchanged, and the config stays
+  pinned by hash.
+
+### Changed
+- The forthcoming publication's reproduction configurations now use the accepted
+  representative candidate set rather than the superseded manuscript set. C2
+  becomes 9 modules and 7 kWh at 35/200, the Gate 2 replacement for a manuscript
+  design that sat off the accepted front. C1, C3 and C4 move to their
+  accepted-lattice orientations. C5 is unchanged and stays an off-front
+  benchmark. Each candidate's expected values now come from the accepted
+  lattice, so reference columns compare against the accepted front.
+- Both publication configurations replace the absolute 4352 W battery power cap
+  with a symmetric 1.0 C capacity-proportional limit. The absolute cap did not
+  scale with pack size and so under-limited small packs; 1 C is the BYD
+  Battery-Box Premium HVS family rating at every size. Results generated before
+  this change reproduce the superseded candidate set and need rerunning.
+
 ## [0.6.1] - 2026-09-03
 
 ### Added

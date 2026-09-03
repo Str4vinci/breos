@@ -17,6 +17,10 @@ Use the [source-data runbook](runbook.md) for the Monte Carlo and verification
 commands. Use the [manuscript audit](manuscript-v2-audit.md) to map each result
 to the generated CSV or JSON source data.
 
+Use the [data availability and citation scope](data-availability.md) page to
+find where the generated bundles are deposited and which BREOS version to cite
+for each result.
+
 ## Scope
 
 The workflow generates:
