@@ -445,13 +445,17 @@ def _validated_dc_output_scale(config: Dict[str, Any]) -> float:
 
 
 def _validated_ac_output_scale(config: Dict[str, Any]) -> float:
-    """Read and check the AC-side output correction from a study config.
+    """Read and check the AC-side derate from a study config.
 
-    Unlike the DC-side factor this one lands after the inverter nameplate
-    limit, so it is bounded to ``(0, 1]``: above 1 the inverter would deliver
-    more than its nameplate and more AC than the DC entering it, and the
-    reported inverter loss would pin at zero. Correct an under-predicting
-    model with ``dc_output_scale`` instead.
+    The factor derates AC delivery from inside dispatch, so discharge
+    decisions respond to it. Unlike the DC-side factor it lands after the
+    inverter nameplate limit, so it is bounded to ``(0, 1]``: above 1 the
+    inverter would deliver more than its nameplate and more AC than the DC
+    entering it, and the reported inverter loss would pin at zero. Correct an
+    under-predicting model with ``dc_output_scale`` instead.
+
+    Rejecting here means an out-of-range study config fails before any
+    evaluation starts, rather than being clamped inside the inverter helpers.
     """
     scale = float(config.get("ac_output_scale", 1.0))
     if not np.isfinite(scale) or not 0.0 < scale <= 1.0:
