@@ -1,6 +1,6 @@
 [project]
 name = "breos"
-version = "0.6.0"
+version = "0.6.2"
 description = "Python library for PV and battery energy-system simulation and optimization"
 readme = "README.md"
 license = "BSD-3-Clause"
@@ -133,3 +133,29 @@ ignore = [
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.sdist]
+# Keep the source distribution independent of files that happen to be present
+# in a maintainer's checkout. Add a path here only when it belongs in the
+# published source archive.
+include = [
+    "/ATTRIBUTIONS.md",
+    "/CHANGELOG.md",
+    "/CITATION.cff",
+    "/CODE_OF_CONDUCT.md",
+    "/CONTRIBUTING.md",
+    "/LICENSE",
+    "/README.md",
+    "/ROADMAP.md",
+    "/SECURITY.md",
+    "/breos",
+    "/configs",
+    "/docs",
+    "/maintainers",
+    "/pyproject.toml",
+    "/rlp",
+    "/tests",
+    "/tools",
+    "/uv.lock",
+    "/validation",
+]

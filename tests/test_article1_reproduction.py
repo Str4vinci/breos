@@ -8,6 +8,7 @@ import pandas as pd
 import pytest
 
 from breos.weather import read_weather_csv, weather_representative_time_offset
+from tools import reproduce_article1 as article1_reproduction
 from tools.reproduce_article1 import (
     DEFAULT_CONFIG,
     _battery_cost_scenarios,
@@ -21,7 +22,7 @@ from tools.reproduce_article1 import (
 )
 
 EXPECTED_RLP_SHA256 = "23becc5a7bfc927b1f7604156e0e4953dcc6bb65268ca947b38db3dc4f2b28bc"
-EXPECTED_CONFIG_SHA256 = "d5795adf6a8741d4b927a1e677ade9ae59249c89ccb7140862243f30ca094a49"
+EXPECTED_CONFIG_SHA256 = "bb8d6535c59f3570f004738ae21b3cb90a99a33806cf5529a8405f1c574d03bc"
 FIXED_REGRESSION_LABELS = {"C1", "C2", "C3", "C4"}
 
 
@@ -56,6 +57,11 @@ def test_article1_config_pins_projected_run_controls():
     assert config["pv"]["module_length_m"] == 2.278
     assert config["battery"]["temperature"] == "weather"
     assert config["battery"]["indoor_model"] == {"enabled": True}
+    # The headline limit is capacity-proportional, so it must not be paired
+    # with an absolute cap: BatteryConfig rejects that combination.
+    assert config["battery"]["power_limit_c_rate"] == 1.0
+    assert "max_charge_power_w" not in config["battery"]
+    assert "max_discharge_power_w" not in config["battery"]
     assert config["emissions"]["average_grid_carbon_intensity_gco2_kwh"] == 127.91
     assert len(config["reference_candidates"]) == 5
     assert config["reference_candidates"][-1] == {
@@ -64,7 +70,12 @@ def test_article1_config_pins_projected_run_controls():
         "battery_kwh": 0.0,
         "tilt": 35.0,
         "azimuth": 180.0,
+        "projected_grid_independence_pct": 36.856679733778655,
+        "projected_npv_eur": 5231.641772530418,
     }
+    # C2 is the Gate 2 replacement, not the manuscript's 9 modules and 5 kWh.
+    c2 = next(c for c in config["reference_candidates"] if c["label"] == "C2")
+    assert (c2["modules"], c2["battery_kwh"], c2["tilt"], c2["azimuth"]) == (9, 7.0, 35.0, 200.0)
 
     module = _pv_module_provenance(config)
     assert module["parameters"]["T_Pmax_pct"] == -0.34
@@ -108,20 +119,119 @@ def test_article1_rlp_provenance_tracks_the_resolution_specific_file(tmp_path):
 def test_article1_pareto_representatives_use_projected_objectives():
     pareto = pd.DataFrame(
         {
-            "Modules": [6, 9, 9],
-            "Battery_kWh": [0.0, 9.0, 20.0],
-            "Tilt": [30.0, 35.0, 45.0],
-            "Azimuth": [190.0, 190.0, 175.0],
-            "Projected_Grid_Independence_%": [40.0, 75.0, 90.0],
+            "Modules": [6, 6, 9, 9, 9],
+            "Battery_kWh": [0.0, 1.0, 9.0, 13.0, 20.0],
+            "Tilt": [30.0, 30.0, 35.0, 45.0, 50.0],
+            "Azimuth": [200.0, 200.0, 195.0, 190.0, 185.0],
+            "Projected_Grid_Independence_%": [40.0, 45.0, 75.0, 85.0, 90.0],
+            "Projected_NPV_Eur": [5500.0, 5000.0, 3000.0, 300.0, -5000.0],
+        }
+    )
+
+    selected = _select_pareto_representatives(pareto).set_index("Representative")
+
+    assert list(selected.index) == [
+        "max_npv",
+        "max_npv_battery",
+        "knee",
+        "max_gi_positive_npv",
+        "max_gi",
+    ]
+    assert selected.loc["max_npv", "Battery_kWh"] == 0.0
+    assert selected.loc["max_npv_battery", "Battery_kWh"] == 1.0
+    assert selected.loc["knee", "Battery_kWh"] == 9.0
+    assert selected.loc["max_gi_positive_npv", "Battery_kWh"] == 13.0
+    assert selected.loc["max_gi", "Battery_kWh"] == 20.0
+
+
+@pytest.mark.parametrize(
+    ("battery", "npv", "error"),
+    [
+        ([0.0, 0.0], [100.0, -100.0], "PV-plus-battery"),
+        ([0.0, 1.0], [0.0, -100.0], "positive-NPV"),
+    ],
+)
+def test_article1_pareto_representatives_require_each_constrained_category(battery, npv, error):
+    pareto = pd.DataFrame(
+        {
+            "Battery_kWh": battery,
+            "Projected_Grid_Independence_%": [40.0, 80.0],
+            "Projected_NPV_Eur": npv,
+        }
+    )
+
+    with pytest.raises(ValueError, match=error):
+        _select_pareto_representatives(pareto)
+
+
+def test_article1_battery_max_npv_can_match_the_overall_maximum():
+    pareto = pd.DataFrame(
+        {
+            "Battery_kWh": [6.0, 10.0, 20.0],
+            "Projected_Grid_Independence_%": [60.0, 80.0, 90.0],
             "Projected_NPV_Eur": [5500.0, 3000.0, -5000.0],
         }
     )
 
     selected = _select_pareto_representatives(pareto).set_index("Representative")
 
-    assert selected.loc["max_npv", "Battery_kWh"] == 0.0
-    assert selected.loc["knee", "Battery_kWh"] == 9.0
-    assert selected.loc["max_gi", "Battery_kWh"] == 20.0
+    assert selected.loc["max_npv", "Battery_kWh"] == 6.0
+    assert selected.loc["max_npv_battery", "Battery_kWh"] == 6.0
+
+
+def test_article1_replays_only_requested_pareto_representatives(monkeypatch, tmp_path):
+    pareto = pd.DataFrame(
+        {
+            "Modules": [6, 6, 9, 9, 9],
+            "Battery_kWh": [0.0, 1.0, 9.0, 13.0, 20.0],
+            "Tilt": [30.0, 30.0, 35.0, 45.0, 50.0],
+            "Azimuth": [200.0, 200.0, 195.0, 190.0, 185.0],
+            "Projected_Grid_Independence_%": [40.0, 45.0, 75.0, 85.0, 90.0],
+            "Projected_NPV_Eur": [5500.0, 5000.0, 3000.0, 300.0, -5000.0],
+        }
+    )
+    calls = []
+
+    def fake_evaluate(_weather, _load, _config, *, n_modules, battery_kwh, tilt, azimuth, execution_backend):
+        calls.append((n_modules, battery_kwh, tilt, azimuth, execution_backend))
+        metrics = {
+            "Modules": n_modules,
+            "Battery_kWh": battery_kwh,
+            "Tilt": tilt,
+            "Azimuth": azimuth,
+            "Projected_Grid_Independence_%": 80.0,
+            "Projected_NPV_Eur": 100.0,
+        }
+        return type(
+            "ProjectedResult",
+            (),
+            {
+                "metrics": metrics,
+                "yearly": pd.DataFrame({"Year": [1]}),
+                "financial": pd.DataFrame({"Year": [1]}),
+            },
+        )()
+
+    monkeypatch.setattr(article1_reproduction, "evaluate_projected_design", fake_evaluate)
+    representatives, artifacts = article1_reproduction._export_pareto_representatives(
+        {},
+        pd.DataFrame(),
+        pd.DataFrame(),
+        pareto,
+        tmp_path,
+        execution_backend="numba",
+        representative_names={"max_npv_battery", "max_gi_positive_npv"},
+    )
+
+    assert list(representatives["Representative"]) == ["max_npv_battery", "max_gi_positive_npv"]
+    assert calls == [
+        (6, 1.0, 30.0, 200.0, "numba"),
+        (9, 13.0, 45.0, 190.0, "numba"),
+    ]
+    assert set(artifacts) == {"max_npv_battery", "max_gi_positive_npv"}
+    assert not (tmp_path / "representatives/max_npv").exists()
+    assert not (tmp_path / "representatives/knee").exists()
+    assert not (tmp_path / "representatives/max_gi").exists()
 
 
 def test_article1_fixed_candidates_with_licensed_rlp(tmp_path):

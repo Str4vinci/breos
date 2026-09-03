@@ -27,13 +27,18 @@ def test_article1_montecarlo_config_pins_publication_method():
         "n_procs": 1,
     }
     assert set(config["cases"]) == {"C1", "C2", "C3", "C4", "C5"}
+    # C2 is the Gate 2 replacement for the manuscript's 9 modules and 5 kWh.
     assert config["cases"]["C2"] == {
-        "label": "Balanced",
+        "label": "Best-value storage",
         "n_modules": 9,
-        "battery_kwh": 5.0,
-        "tilt": 25.0,
-        "azimuth": 185.0,
+        "battery_kwh": 7.0,
+        "tilt": 35.0,
+        "azimuth": 200.0,
     }
+    # The Monte Carlo limit must match the optimization config's 1 C rating.
+    assert config["battery_power_limit_c_rate"] == 1.0
+    assert "battery_max_charge_power_w" not in config
+    assert "battery_max_discharge_power_w" not in config
     assert config["battery_temperature"] == "weather"
     assert config["battery_indoor_model"] == {"enabled": True}
     assert config["solar_position"] == "weather"

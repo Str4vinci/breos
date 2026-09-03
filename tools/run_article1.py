@@ -26,7 +26,7 @@ DEFAULT_OUTPUT_ROOT = PROJECT_ROOT / "results/article1"
 DEFAULT_CONFIG_DIR = PROJECT_ROOT / "validation/article1"
 DETERMINISTIC_CONFIG = "article1-projected-optimization.toml"
 MONTE_CARLO_CONFIG = "article1-montecarlo.toml"
-ARTICLE_VERSION = "0.6.0"
+ARTICLE_VERSION = "0.6.2"
 CALENDAR_MODELS = (
     "naumann",
     "naumann_lam",

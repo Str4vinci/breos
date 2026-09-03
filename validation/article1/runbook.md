@@ -16,7 +16,7 @@ uv run python tools/run_article1.py check
 
 The `check` stage verifies every external input and records its SHA-256 digest.
 It does not run a simulation. The runner stops if the active BREOS version is
-not 0.6.0 or the tracked worktree is dirty.
+not 0.6.2 or the tracked worktree is dirty.
 
 ## Run the deterministic workflow
 
