@@ -98,11 +98,19 @@ class BatteryConfig:
     ``power_limit_c_rate`` instead to derive a symmetric limit from capacity,
     which is what a capacity sweep normally wants.
 
-    ``ac_output_scale`` trims AC delivery for losses the chain does not model
-    and is bounded to ``(0, 1]``. It is the AC-side half of a pair: the
-    optimizer's ``dc_output_scale`` corrects the array itself before dispatch,
-    so clipping, charging and the part-load ratio all respond to it, and it is
-    the correct knob when the model under-predicts measured yield.
+    ``ac_output_scale`` derates AC delivery for shortfall the chain does not
+    model and is bounded to ``(0, 1]``. It applies inside dispatch, not to a
+    finished result, so battery discharge decisions and the reachable AC
+    ceiling respond to it. It is one constant approximating the combined
+    annual effect of things like availability, curtailment and downstream
+    wiring, not a model of any of them individually. While it is active,
+    the reported inverter loss is the whole DC-to-AC shortfall rather than
+    the converter's own loss alone.
+
+    It is the AC-side half of a pair: the optimizer's ``dc_output_scale``
+    corrects the array itself before dispatch, so clipping, charging and the
+    part-load ratio all respond to it, and it is the correct knob when the
+    model under-predicts measured yield.
 
     ``eol_percentage`` defaults to 0.70 (replace the battery when its state
     of health falls to 70% of nominal capacity), matching the App config
@@ -143,14 +151,14 @@ class BatteryConfig:
     # so a sizing sweep keeps one C-rate instead of one wattage across capacities.
     # Setting it together with either absolute limit raises.
     power_limit_c_rate: Optional[float] = None
-    # Multiplier applied to inverter AC output after the part-load curve and
-    # every inverter limit. It accounts for AC-side losses the chain does not
-    # model without moving the clipping threshold or the part-load ratio,
-    # which is why it is not folded into ``inverter_efficiency``. Bounded to
-    # (0, 1]: above 1 the inverter would exceed its nameplate and emit more AC
-    # than the DC entering it. Correct an under-predicting model on the DC
-    # side instead. The default 1.0 is a no-op and reproduces prior behaviour
-    # bit-for-bit.
+    # In-dispatch derate applied to inverter AC output after the part-load
+    # curve and every inverter limit. It stands in for AC-side shortfall the
+    # chain does not model, without moving the clipping threshold or the
+    # part-load ratio, which is why it is not folded into
+    # ``inverter_efficiency``. Bounded to (0, 1]: above 1 the inverter would
+    # exceed its nameplate and emit more AC than the DC entering it. Correct
+    # an under-predicting model on the DC side instead. The default 1.0 is a
+    # no-op and reproduces prior behaviour bit-for-bit.
     ac_output_scale: float = 1.0
 
     def __post_init__(self):
