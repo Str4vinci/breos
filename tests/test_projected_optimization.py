@@ -277,3 +277,115 @@ def test_annual_fec_differences_the_cumulative_series_without_a_replacement():
     assert (yearly["Battery_Annual_FEC"] > 0.0).all()
     cumulative = np.concatenate([[0.0], yearly["Battery_Cumulative_FEC"].to_numpy()])
     np.testing.assert_allclose(yearly["Battery_Annual_FEC"].to_numpy(), np.diff(cumulative), atol=1e-12)
+
+
+class TestZeroModuleDesign:
+    """The battery-only corner of an exhaustive sizing lattice.
+
+    The projected evaluator used to require at least one module, so the grid
+    could not measure the no-PV slice and had to assume it dominated. It is a
+    real coordinate, and this is the boundary the relaxed contract opens.
+    """
+
+    @staticmethod
+    def _config():
+        return {
+            "location": {"latitude": 41.15, "longitude": -8.63},
+            "pv": {"module": "Suntech_STP550S_STC"},
+            "simulation": {"resolution": "h", "years_projection": 1},
+            "financials": {"project_lifespan": 1},
+            "costs": {"dc_ac_ratio": 1.25},
+        }
+
+    @staticmethod
+    def _inputs(periods: int = 48):
+        idx = pd.date_range("2025-01-01", periods=periods, freq="h", tz="UTC")
+        weather = pd.DataFrame({"temp_air": np.full(periods, 20.0)}, index=idx)
+        load = pd.DataFrame({"Load": np.full(periods, 500.0)}, index=idx)
+        return idx, weather, load
+
+    def test_a_negative_module_count_is_still_rejected(self):
+        _idx, weather, load = self._inputs(periods=2)
+        with pytest.raises(ValueError, match="n_modules must be non-negative"):
+            evaluate_projected_design(
+                weather,
+                load,
+                self._config(),
+                n_modules=-1,
+                battery_kwh=5.0,
+                tilt=35.0,
+                azimuth=180.0,
+            )
+
+    def test_zero_modules_evaluates_as_a_battery_only_design(self, monkeypatch):
+        """No PV production, no inverter rating, and an undefined LCOE.
+
+        Every kWh is imported, so the projection has no generation to spread
+        its cost over and LCOE is infinite rather than a divide-by-zero.
+        """
+        idx, weather, load = self._inputs()
+        seen = {}
+
+        def _no_pv(**kwargs):
+            seen["n_modules"] = kwargs["n_modules"]
+            return pd.Series(np.zeros(len(idx)), index=idx)
+
+        monkeypatch.setattr("breos.optimization.calculate_pv_production_dc", _no_pv)
+        monkeypatch.setattr(
+            "breos.optimization._temperature_series_from_config",
+            lambda *_args, **_kwargs: pd.Series(np.full(len(idx), 20.0), index=idx),
+        )
+
+        result = evaluate_projected_design(
+            weather,
+            load,
+            self._config(),
+            n_modules=0,
+            battery_kwh=5.0,
+            tilt=35.0,
+            azimuth=180.0,
+        )
+
+        assert seen["n_modules"] == 0
+        assert result.metrics["Modules"] == 0
+        assert result.metrics["Projected_PV_Production_Year1_kWh"] == pytest.approx(0.0)
+        assert result.metrics["Projected_PV_DC_Year1_kWh"] == pytest.approx(0.0)
+        assert np.isinf(result.metrics["Projected_LCOE_Eur_kWh"])
+        # A design that generates nothing cannot displace any import.
+        assert result.metrics["Projected_Grid_Independence_%"] == pytest.approx(0.0)
+        assert result.yearly["Import_kWh"].iloc[0] == pytest.approx(result.yearly["Load_kWh"].iloc[0], rel=1e-9)
+
+    def test_zero_modules_gives_the_inverter_no_rating(self, monkeypatch):
+        """The rating is sized from the array, so the no-PV corner has none."""
+        idx, weather, load = self._inputs(periods=2)
+        seen = {}
+
+        monkeypatch.setattr(
+            "breos.optimization.calculate_pv_production_dc",
+            lambda **_kwargs: pd.Series(np.zeros(len(idx)), index=idx),
+        )
+        monkeypatch.setattr(
+            "breos.optimization._temperature_series_from_config",
+            lambda *_args, **_kwargs: pd.Series(np.full(len(idx), 20.0), index=idx),
+        )
+
+        def _capture(**kwargs):
+            seen["inverter_ac_capacity_w"] = kwargs["inverter_ac_capacity_w"]
+            return {
+                "Projected_Grid_Independence_%": 0.0,
+                "Projected_NPV_Eur": 0.0,
+                "_yearly_summary_df": pd.DataFrame({"Year": [1]}),
+                "_cost_projection_df": pd.DataFrame({"Year": [1]}),
+            }
+
+        monkeypatch.setattr("breos.optimization._evaluate_projected_design_metrics", _capture)
+        evaluate_projected_design(
+            weather,
+            load,
+            self._config(),
+            n_modules=0,
+            battery_kwh=5.0,
+            tilt=35.0,
+            azimuth=180.0,
+        )
+        assert seen["inverter_ac_capacity_w"] == pytest.approx(0.0)

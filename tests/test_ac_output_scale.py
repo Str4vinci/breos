@@ -10,12 +10,22 @@ it corrects modelled AC delivery without moving the clipping threshold or the
 part-load ratio. Those invariances are asserted too, because folding the factor
 into ``inverter_efficiency`` instead would silently break them.
 
+The factor is an in-dispatch derate rather than a post-processing multiplier:
+it is applied inside the conversion the dispatcher calls, so the reachable AC
+ceiling and the battery discharge decisions respond to it. The ceiling test
+below asserts exactly that, and it is the reason the factor is not simply
+applied to a finished result series.
+
 Landing after the nameplate limit is also what bounds the factor to ``(0, 1]``.
 Above 1 the inverter would deliver more than its nameplate and more AC than the
 DC entering it, so the reported conversion loss would pin at zero and the AC
 ledger would stop balancing. An under-predicting model is corrected on the DC
 side with ``dc_output_scale``, which stays unbounded above because clipping and
 the part-load ratio respond to it. Both invariants are asserted below.
+
+While the derate is active the reported conversion loss covers the whole
+DC-to-AC shortfall, not the converter's own loss alone. The invariant asserted
+here is that it stays non-negative and equals the real difference.
 """
 
 from __future__ import annotations
