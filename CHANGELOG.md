@@ -21,6 +21,12 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   default.
 - Added opt-in AC-side and DC-side PV-output scale factors for controlled
   measured-bias sensitivity studies. Both default to no scaling.
+  `dc_output_scale` corrects the array before dispatch, so clipping, charging
+  and the part-load ratio respond to it, and it is the factor to use when the
+  model under-predicts a measured yield. `ac_output_scale` accounts for
+  AC-side losses the chain does not model and is bounded to `(0, 1]`, because
+  it lands after the inverter nameplate limit: above 1 the inverter would
+  deliver more than its nameplate and more AC than the DC entering it.
 - Added annual battery charge throughput, discharge throughput, mean state of
   charge, and all-pack full-equivalent-cycle fields to projected result
   ledgers. The existing installed-pack cumulative FEC field remains unchanged.
@@ -30,10 +36,19 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 ### Changed
 - Projected fixed-design evaluation now accepts zero PV modules so exhaustive
   sizing grids can evaluate the complete declared domain.
+- The recovered external-validation tree no longer keeps an unformatted second
+  copy of each driver, and takes its dataset and output locations from
+  `BREOS_VALIDATION_DATA`, `BREOS_VALIDATION_OUTPUT` and
+  `BREOS_VALIDATION_DKASC_RAW` instead of absolute paths. Every driver in the
+  tree is now linted and formatted with the rest of the repository.
 
 ### Fixed
 - Applied optional AC-output scaling consistently in scalar, vectorized, and
   Numba inverter paths, including inverse conversion and optimization runs.
+- Rejected an AC-output scale above 1, which had let the inverter exceed its
+  nameplate and report a conversion loss pinned at zero while emitting more AC
+  than the DC entering it. Delivered AC now never exceeds the nameplate or its
+  own DC input, and both invariants are asserted across the scale grid.
 - Fixed public projected-design evaluation with a weather sequence, which
   previously attempted to construct a datetime index from `list.index`.
 - Removed duplicate annual energy columns when joining projected physical and
