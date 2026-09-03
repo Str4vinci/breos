@@ -22,7 +22,7 @@ from tools.reproduce_article1 import (
 )
 
 EXPECTED_RLP_SHA256 = "23becc5a7bfc927b1f7604156e0e4953dcc6bb65268ca947b38db3dc4f2b28bc"
-EXPECTED_CONFIG_SHA256 = "d5795adf6a8741d4b927a1e677ade9ae59249c89ccb7140862243f30ca094a49"
+EXPECTED_CONFIG_SHA256 = "bb8d6535c59f3570f004738ae21b3cb90a99a33806cf5529a8405f1c574d03bc"
 FIXED_REGRESSION_LABELS = {"C1", "C2", "C3", "C4"}
 
 
@@ -57,6 +57,11 @@ def test_article1_config_pins_projected_run_controls():
     assert config["pv"]["module_length_m"] == 2.278
     assert config["battery"]["temperature"] == "weather"
     assert config["battery"]["indoor_model"] == {"enabled": True}
+    # The headline limit is capacity-proportional, so it must not be paired
+    # with an absolute cap: BatteryConfig rejects that combination.
+    assert config["battery"]["power_limit_c_rate"] == 1.0
+    assert "max_charge_power_w" not in config["battery"]
+    assert "max_discharge_power_w" not in config["battery"]
     assert config["emissions"]["average_grid_carbon_intensity_gco2_kwh"] == 127.91
     assert len(config["reference_candidates"]) == 5
     assert config["reference_candidates"][-1] == {
@@ -65,7 +70,12 @@ def test_article1_config_pins_projected_run_controls():
         "battery_kwh": 0.0,
         "tilt": 35.0,
         "azimuth": 180.0,
+        "projected_grid_independence_pct": 36.856679733778655,
+        "projected_npv_eur": 5231.641772530418,
     }
+    # C2 is the Gate 2 replacement, not the manuscript's 9 modules and 5 kWh.
+    c2 = next(c for c in config["reference_candidates"] if c["label"] == "C2")
+    assert (c2["modules"], c2["battery_kwh"], c2["tilt"], c2["azimuth"]) == (9, 7.0, 35.0, 200.0)
 
     module = _pv_module_provenance(config)
     assert module["parameters"]["T_Pmax_pct"] == -0.34
