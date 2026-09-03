@@ -98,6 +98,12 @@ class BatteryConfig:
     ``power_limit_c_rate`` instead to derive a symmetric limit from capacity,
     which is what a capacity sweep normally wants.
 
+    ``ac_output_scale`` trims AC delivery for losses the chain does not model
+    and is bounded to ``(0, 1]``. It is the AC-side half of a pair: the
+    optimizer's ``dc_output_scale`` corrects the array itself before dispatch,
+    so clipping, charging and the part-load ratio all respond to it, and it is
+    the correct knob when the model under-predicts measured yield.
+
     ``eol_percentage`` defaults to 0.70 (replace the battery when its state
     of health falls to 70% of nominal capacity), matching the App config
     default ``battery_eol_percentage``.
@@ -138,10 +144,13 @@ class BatteryConfig:
     # Setting it together with either absolute limit raises.
     power_limit_c_rate: Optional[float] = None
     # Multiplier applied to inverter AC output after the part-load curve and
-    # every inverter limit. It corrects modelled AC delivery from a measured
-    # whole-chain bias without moving the clipping threshold or the part-load
-    # ratio, which is why it is not folded into ``inverter_efficiency``. The
-    # default 1.0 is a no-op and reproduces prior behaviour bit-for-bit.
+    # every inverter limit. It accounts for AC-side losses the chain does not
+    # model without moving the clipping threshold or the part-load ratio,
+    # which is why it is not folded into ``inverter_efficiency``. Bounded to
+    # (0, 1]: above 1 the inverter would exceed its nameplate and emit more AC
+    # than the DC entering it. Correct an under-predicting model on the DC
+    # side instead. The default 1.0 is a no-op and reproduces prior behaviour
+    # bit-for-bit.
     ac_output_scale: float = 1.0
 
     def __post_init__(self):
@@ -222,8 +231,13 @@ class BatteryConfig:
             self.max_charge_power_w = derived
             self.max_discharge_power_w = derived
         self.ac_output_scale = finite("ac_output_scale", self.ac_output_scale)
-        if self.ac_output_scale <= 0.0:
-            raise ValueError("ac_output_scale must be greater than 0")
+        if not 0.0 < self.ac_output_scale <= 1.0:
+            raise ValueError(
+                "ac_output_scale must be greater than 0 and at most 1; it is applied after the "
+                "inverter nameplate limit, so a value above 1 would deliver more AC than the "
+                "nameplate and more AC than the DC entering the inverter. Scale the DC series "
+                "instead to correct an under-predicting model"
+            )
         self.battery_type = _normalise_battery_type(self.battery_type)
         # Auto-compute replacement cost
         if self.replacement_cost is None:
@@ -312,7 +326,8 @@ def _dispatch_dc_step(
         else:
             available = max(0.0, battery_energy - emin)
             # AC correction is applied after the inverter curve and nameplate
-            # limit, so the reachable AC ceiling is the scaled nameplate.
+            # limit, so the reachable AC ceiling is the scaled nameplate, which
+            # the (0, 1] bound keeps at or below the nameplate itself.
             target_total_ac = min(load, inv_cap_ac_wh * ac_output_scale)
             if available > 0.0 and eff_discharge > 0.0 and target_total_ac > pv_ac_max:
                 total_dc_target = dc_power_for_ac_output(target_total_ac, inv_cap_ac_wh, inv_eff, ac_output_scale)
