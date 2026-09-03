@@ -28,12 +28,8 @@ def _one(frame: pd.DataFrame, **conditions: Any) -> pd.Series:
     return selected.iloc[0]
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("output_root", type=Path)
-    args = parser.parse_args()
-    root = args.output_root
-
+def verify(root: Path) -> None:
+    """Verify one recovered validation output tree."""
     sandia = pd.read_csv(root / "validation_sandia_task13_recovered_20260902" / "thermal_metrics.csv")
     row = _one(sandia, model="breos_faiman_default", gpoa_threshold_W_m2=200)
     if int(row["n"]) != 26_023:
@@ -110,6 +106,13 @@ def main() -> None:
     _close("HKUST raw daylight r", pooled["r"], 0.911280, 0.000001)
 
     print("All recovered local-data validations reproduce their recorded checkpoints.")
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("output_root", type=Path)
+    args = parser.parse_args()
+    verify(args.output_root)
 
 
 if __name__ == "__main__":
