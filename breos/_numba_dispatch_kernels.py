@@ -98,7 +98,9 @@ def _dc_ac(pv_dc_power, inverter_ac_power, inverter_efficiency, pow_two, ac_outp
     pv_dc_power = max(0.0, pv_dc_power)
     inverter_ac_power = max(0.0, inverter_ac_power)
     inverter_efficiency = min(1.0, max(0.0, inverter_efficiency))
-    ac_output_scale = max(0.0, ac_output_scale)
+    # Mirror of ``_clamped_ac_output_scale``: the factor lands after the
+    # nameplate limit, so above 1 it would deliver more than nameplate.
+    ac_output_scale = min(1.0, max(0.0, ac_output_scale))
 
     if inverter_efficiency <= 0.0 or inverter_ac_power <= 0.0:
         return 0.0, 0.0, pv_dc_power
@@ -106,7 +108,7 @@ def _dc_ac(pv_dc_power, inverter_ac_power, inverter_efficiency, pow_two, ac_outp
         return 0.0, 0.0, 0.0
     if not np.isfinite(inverter_ac_power):
         ac_power = pv_dc_power * inverter_efficiency * ac_output_scale
-        return ac_power, max(0.0, pv_dc_power - ac_power), 0.0
+        return ac_power, pv_dc_power - ac_power, 0.0
 
     pdc0 = inverter_ac_power / inverter_efficiency
     dc_used = min(pv_dc_power, pdc0)
@@ -131,7 +133,7 @@ def _dc_ac(pv_dc_power, inverter_ac_power, inverter_efficiency, pow_two, ac_outp
 @njit(cache=True, fastmath=False, nogil=True)
 def _dc_for_ac(ac_power_w, inverter_ac_power, inverter_efficiency, ac_output_scale):
     """Mirror of ``dc_power_for_ac_output``."""
-    ac_output_scale = max(0.0, ac_output_scale)
+    ac_output_scale = min(1.0, max(0.0, ac_output_scale))
     if ac_output_scale <= 0.0:
         return 0.0
     ac_power_w = ac_power_w / ac_output_scale
@@ -290,7 +292,8 @@ def _dispatch_day_kernel(
             else:
                 available = max(0.0, battery_energy - emin)
                 # AC correction is applied after the inverter curve and
-                # nameplate limit, so the reachable AC ceiling is scaled.
+                # nameplate limit, so the reachable AC ceiling is the scaled
+                # nameplate, which the (0, 1] bound keeps at or below it.
                 target_total_ac = min(load, inv_cap_ac_wh * ac_output_scale)
                 if available > 0.0 and eff_discharge > 0.0 and target_total_ac > pv_ac_max:
                     total_dc_target = _dc_for_ac(target_total_ac, inv_cap_ac_wh, inv_eff, ac_output_scale)
