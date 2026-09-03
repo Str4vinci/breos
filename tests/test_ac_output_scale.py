@@ -9,6 +9,13 @@ The scale is applied *after* the part-load curve and every inverter limit, so
 it corrects modelled AC delivery without moving the clipping threshold or the
 part-load ratio. Those invariances are asserted too, because folding the factor
 into ``inverter_efficiency`` instead would silently break them.
+
+Landing after the nameplate limit is also what bounds the factor to ``(0, 1]``.
+Above 1 the inverter would deliver more than its nameplate and more AC than the
+DC entering it, so the reported conversion loss would pin at zero and the AC
+ledger would stop balancing. An under-predicting model is corrected on the DC
+side with ``dc_output_scale``, which stays unbounded above because clipping and
+the part-load ratio respond to it. Both invariants are asserted below.
 """
 
 from __future__ import annotations
@@ -33,8 +40,8 @@ from harness import FREQ, build  # noqa: E402
 
 AC_RATING = 3520.0
 EFFICIENCY = 0.96
-# The upcoming-publication PV-bias factors, plus a no-op.
-SCALES = (1.0, 1.0 / 1.0857, 1.0857)
+# The upcoming-publication AC-side factor, a deeper trim, plus a no-op.
+SCALES = (1.0, 1.0 / 1.0857, 0.5)
 DC_GRID = (0.0, 1e-9, 50.0, 500.0, 1800.0, 3520.0, 3666.6666666666665, 9000.0)
 
 
@@ -117,6 +124,42 @@ def test_battery_config_rejects_a_non_positive_scale(value):
         BatteryConfig(nominal_energy_wh=5000.0, ac_output_scale=value)
 
 
+@pytest.mark.parametrize("value", (1.0857, 1.5, 2.0, 1.0 + 1e-9))
+def test_battery_config_rejects_a_scale_above_one(value):
+    """Above 1 the factor would push the inverter past its own nameplate."""
+    with pytest.raises(ValueError, match="at most 1"):
+        BatteryConfig(nominal_energy_wh=5000.0, ac_output_scale=value)
+
+
+@pytest.mark.parametrize("scale", SCALES)
+@pytest.mark.parametrize("dc", DC_GRID)
+def test_scaled_ac_never_exceeds_the_nameplate_or_its_own_dc(scale, dc):
+    """The two invariants the (0, 1] bound exists to protect.
+
+    Delivered AC stays at or below the inverter rating, and at or below the DC
+    entering the converter, so the conversion loss the ledger reports is a
+    real non-negative quantity rather than a clamp hiding created energy.
+    """
+    result = calculate_dc_ac_power(dc, AC_RATING, EFFICIENCY, scale)
+    assert result.ac_power_w <= AC_RATING + 1e-12
+    dc_into_inverter = dc - result.clipping_loss_dc_w
+    assert result.ac_power_w <= dc_into_inverter + 1e-12
+    assert result.conversion_loss_w >= 0.0
+    assert result.conversion_loss_w == pytest.approx(dc_into_inverter - result.ac_power_w, rel=0.0, abs=1e-9)
+
+
+@pytest.mark.parametrize("dc", DC_GRID)
+def test_helpers_clamp_a_scale_above_one_to_one(dc):
+    """A direct helper call cannot produce an unphysical result either."""
+    bounded = calculate_dc_ac_power(dc, AC_RATING, EFFICIENCY, 1.0).ac_power_w
+    assert calculate_dc_ac_power(dc, AC_RATING, EFFICIENCY, 1.5).ac_power_w == bounded
+    array_scaled, _, _ = _calculate_dc_ac_power_arrays(np.array([dc]), AC_RATING, EFFICIENCY, 1.5)
+    assert array_scaled[0] == bounded
+    assert dc_power_for_ac_output(1000.0, AC_RATING, EFFICIENCY, 1.5) == dc_power_for_ac_output(
+        1000.0, AC_RATING, EFFICIENCY, 1.0
+    )
+
+
 def test_battery_config_defaults_to_one():
     assert BatteryConfig(nominal_energy_wh=5000.0).ac_output_scale == 1.0
 
@@ -172,7 +215,7 @@ class TestCompiledBackendParity:
     """The compiled kernel must mirror the reference with the scale active."""
 
     @pytest.mark.parametrize("scenario", ("one_day", "baseline", "saturating", "discharge_limited"))
-    @pytest.mark.parametrize("scale", (1.0 / 1.0857, 1.0857))
+    @pytest.mark.parametrize("scale", (1.0 / 1.0857, 0.5))
     def test_numba_matches_python_exactly(self, scenario, scale):
         pytest.importorskip("numba", reason="the compiled backend needs the breos[fast] extra")
         python_out = _simulate(scenario, "python", scale)
@@ -191,7 +234,7 @@ class TestCompiledBackendParity:
 
 
 def _scaled_battery_ceiling_run(backend: str):
-    """Run one full-load hour against a scaled 1 kW shared inverter."""
+    """Run one over-load hour against a scaled 1 kW shared inverter."""
     index = pd.date_range("2025-01-01", periods=1, freq="h", tz="UTC")
     pv = pd.Series([0.0], index=index)
     load = pd.DataFrame({"Load": [1200.0]}, index=index)
@@ -206,7 +249,7 @@ def _scaled_battery_ceiling_run(backend: str):
         enable_replacement=False,
         inverter_efficiency=1.0,
         inverter_ac_capacity_w=1000.0,
-        ac_output_scale=1.5,
+        ac_output_scale=0.8,
     )
     return simulate_energy_balance(
         pv_dc=pv,
@@ -219,14 +262,19 @@ def _scaled_battery_ceiling_run(backend: str):
     )
 
 
-def test_scaled_inverter_ceiling_is_reachable_and_backend_identical():
-    """A 1.5x AC correction raises battery delivery to the 1.2 kW load."""
+def test_scaled_inverter_ceiling_binds_and_is_backend_identical():
+    """A 0.8 AC correction caps battery delivery below the 1.2 kW load.
+
+    The 1 kW inverter scaled by 0.8 can reach 800 W, so the remaining 400 W
+    is imported. The ceiling moves down with the factor and never above the
+    nameplate, which is the behaviour the (0, 1] bound guarantees.
+    """
     pytest.importorskip("numba", reason="the compiled backend needs the breos[fast] extra")
     python_out = _scaled_battery_ceiling_run("python")
     numba_out = _scaled_battery_ceiling_run("numba")
 
-    assert python_out[0]["Battery_AC_To_Load"].iloc[0] == pytest.approx(1200.0)
-    assert python_out[0]["Import_From_Grid"].iloc[0] == pytest.approx(0.0)
+    assert python_out[0]["Battery_AC_To_Load"].iloc[0] == pytest.approx(800.0)
+    assert python_out[0]["Import_From_Grid"].iloc[0] == pytest.approx(400.0)
     for column in python_out[0].columns:
         if column != "Datetime":
             assert np.array_equal(python_out[0][column].to_numpy(), numba_out[0][column].to_numpy()), column
@@ -364,7 +412,7 @@ class TestProjectedWeatherSequence:
 class TestUnlimitedInverterAndOptimizer:
     """The two paths the original patch left the scale out of."""
 
-    @pytest.mark.parametrize("scale", [0.5, 0.9210647508519848, 1.0, 1.0857])
+    @pytest.mark.parametrize("scale", [0.5, 0.9210647508519848, 1.0])
     def test_vectorized_infinite_rating_matches_the_scalar_reference(self, scale):
         """An unlimited inverter rating must scale like every other rating.
 
@@ -411,7 +459,7 @@ class TestUnlimitedInverterAndOptimizer:
             execution_backend=backend,
         )
 
-    @pytest.mark.parametrize("scale", [0.5, 1.0, 1.5])
+    @pytest.mark.parametrize("scale", [0.5, 0.8, 1.0])
     def test_infinite_public_total_pv_and_export_follow_scaled_ac(self, scale):
         """The vectorized PV-only path reports the same AC as its export."""
         result = self._infinite_public_run("python", with_battery=False, scale=scale)
@@ -420,7 +468,7 @@ class TestUnlimitedInverterAndOptimizer:
         assert np.array_equal(result[0]["Sell_To_Grid"].to_numpy(), expected)
         assert result[1] == expected.sum()
 
-    @pytest.mark.parametrize("scale", [0.5, 1.5])
+    @pytest.mark.parametrize("scale", [0.5, 0.8])
     def test_infinite_public_scalar_and_numba_paths_match_scaled_ac(self, scale):
         """The scalar and Numba battery paths preserve the infinite-cap result."""
         pytest.importorskip("numba", reason="the compiled backend needs the breos[fast] extra")
@@ -459,6 +507,25 @@ class TestUnlimitedInverterAndOptimizer:
         del config["dc_output_scale"]
         assert SolarDesignProblem(weather, load, config, None).ac_output_scale == 1.0
         assert SolarDesignProblem(weather, load, config, None).dc_output_scale == 1.0
+
+    @pytest.mark.parametrize("scale", [0.0, -1.0, 1.0857, 2.0, float("nan"), float("inf")])
+    def test_optimizer_problem_rejects_an_out_of_range_ac_scale(self, scale):
+        """The AC factor is rejected at the config boundary, not deep in dispatch."""
+        from breos.optimization import SolarDesignProblem
+
+        idx = pd.date_range("2025-01-01", periods=2, freq="h", tz="UTC")
+        weather = pd.DataFrame({"temp_air": [20.0, 20.0]}, index=idx)
+        load = pd.DataFrame({"Load": [500.0, 500.0]}, index=idx)
+        config = {
+            "location": {"latitude": 41.15, "longitude": -8.63},
+            "pv": {"module": "Suntech_STP550S_STC"},
+            "simulation": {"resolution": "h", "years_projection": 1},
+            "financials": {"project_lifespan": 1},
+            "costs": {"dc_ac_ratio": 1.25},
+            "ac_output_scale": scale,
+        }
+        with pytest.raises(ValueError, match="ac_output_scale must be finite"):
+            SolarDesignProblem(weather, load, config, None)
 
     @pytest.mark.parametrize("scale", [0.0, -1.0, float("nan"), float("inf")])
     def test_optimizer_problem_rejects_invalid_dc_scale(self, scale):

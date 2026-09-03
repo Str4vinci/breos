@@ -430,6 +430,39 @@ def _temperature_series_from_config(
     )
 
 
+def _validated_dc_output_scale(config: Dict[str, Any]) -> float:
+    """Read and check the DC-side yield correction from a study config.
+
+    A DC-side factor is applied to the raw array output before dispatch, so
+    clipping, charging and the part-load ratio all respond to it. That makes
+    it the correct knob for a model that under-predicts measured yield, and
+    it is deliberately not bounded above.
+    """
+    scale = float(config.get("dc_output_scale", 1.0))
+    if not np.isfinite(scale) or scale <= 0.0:
+        raise ValueError("dc_output_scale must be finite and greater than 0")
+    return scale
+
+
+def _validated_ac_output_scale(config: Dict[str, Any]) -> float:
+    """Read and check the AC-side output correction from a study config.
+
+    Unlike the DC-side factor this one lands after the inverter nameplate
+    limit, so it is bounded to ``(0, 1]``: above 1 the inverter would deliver
+    more than its nameplate and more AC than the DC entering it, and the
+    reported inverter loss would pin at zero. Correct an under-predicting
+    model with ``dc_output_scale`` instead.
+    """
+    scale = float(config.get("ac_output_scale", 1.0))
+    if not np.isfinite(scale) or not 0.0 < scale <= 1.0:
+        raise ValueError(
+            "ac_output_scale must be finite, greater than 0 and at most 1; it is applied after "
+            "the inverter nameplate limit. Use dc_output_scale to correct an under-predicting "
+            "model on the DC side"
+        )
+    return scale
+
+
 def _build_battery_config_from_spec(
     batt_spec: Dict[str, Any],
     nominal_energy_wh: float,
@@ -902,12 +935,11 @@ def evaluate_projected_design(
     degradation_rate = float(pv_config.get("degradation_rate", financials.get("pv_degradation_rate", 0.005)))
     pv_params, _module_area = _resolve_pv_module_and_area(config)
 
-    # A DC-side yield correction: the array itself produces this much less.
-    # Unlike ac_output_scale it is applied before dispatch, so charging,
-    # clipping and the part-load ratio all respond to it.
-    dc_output_scale = float(config.get("dc_output_scale", 1.0))
-    if not np.isfinite(dc_output_scale) or dc_output_scale <= 0.0:
-        raise ValueError("dc_output_scale must be finite and greater than 0")
+    # A DC-side yield correction: the array itself produces this much less,
+    # or more. Unlike ac_output_scale it is applied before dispatch, so
+    # charging, clipping and the part-load ratio all respond to it, which is
+    # why it is the correction to reach for when the model under-predicts.
+    dc_output_scale = _validated_dc_output_scale(config)
 
     def _dc_for(weather_frame: pd.DataFrame) -> pd.Series:
         series = calculate_pv_production_dc(
@@ -974,7 +1006,7 @@ def evaluate_projected_design(
         inverter_ac_capacity_w=inverter_ac_capacity_w,
         emissions_params=EmissionsParams(**emissions_config) if emissions_config else None,
         return_tables=True,
-        ac_output_scale=float(config.get("ac_output_scale", 1.0)),
+        ac_output_scale=_validated_ac_output_scale(config),
     )
     yearly = raw_metrics.pop("_yearly_summary_df")
     financial = raw_metrics.pop("_cost_projection_df")
@@ -1210,10 +1242,8 @@ try:
                 "inverter_efficiency",
                 config.get("inverter", {}).get("efficiency", 0.96),
             )
-            self.ac_output_scale = float(config.get("ac_output_scale", 1.0))
-            self.dc_output_scale = float(config.get("dc_output_scale", 1.0))
-            if not np.isfinite(self.dc_output_scale) or self.dc_output_scale <= 0.0:
-                raise ValueError("dc_output_scale must be finite and greater than 0")
+            self.ac_output_scale = _validated_ac_output_scale(config)
+            self.dc_output_scale = _validated_dc_output_scale(config)
 
             self.battery_replacement_treatment = {
                 "method": (
