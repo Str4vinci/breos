@@ -89,7 +89,7 @@ The workbook coefficients produce a cooler prediction and have worse bias, MAE, 
 - NumPy version: `2.4.6`
 - pandas version: `3.0.5`
 - BREOS package metadata version: `0.6.0`
-- Source directory: `/home/leo/Downloads/datasets/sandia_iea_pvps_task13`
+- Source directory: `$BREOS_VALIDATION_DATA/sandia_iea_pvps_task13`
 - Input hashes: [`input_manifest.sha256`](input_manifest.sha256)
 - Configuration and configuration hash: [`run_config.json`](run_config.json), `4c872b61fb2f6923b1d4027a2d26c806e29be3f4910a24003d5a9bebb95394a4`
 - Driver hash and output hashes: [`provenance.json`](provenance.json)
@@ -99,7 +99,9 @@ The workbook coefficients produce a cooler prediction and have worse bias, MAE, 
 From the clean article worktree, run:
 
 ```text
-PYTHONPATH=/tmp/breos-article1-0.6.0 /tmp/breos-article1-0.6.0/.venv/bin/python /home/leo/code/breos/tools/validation/recovery/sandia_task13/drivers/sandia_thermal_validate.py --force
+BREOS_VALIDATION_ROOT=/path/to/article-worktree \
+  BREOS_VALIDATION_DATA=/path/to/datasets \
+  python tools/validation/recovery/sandia_task13/drivers/sandia_thermal_validate.py --force
 ```
 
 The driver refuses to replace existing generated files unless you pass `--force`. It writes [`thermal_metrics.csv`](thermal_metrics.csv), [`thermal_sensitivity_metrics.csv`](thermal_sensitivity_metrics.csv), [`monthly_bias.csv`](monthly_bias.csv), [`dataset_facts.json`](dataset_facts.json), and [`provenance.json`](provenance.json).

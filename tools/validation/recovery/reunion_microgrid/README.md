@@ -99,7 +99,7 @@ Worth keeping for BREOS validation, with a component-focused scope:
 - NumPy: `2.4.6`
 - pandas: `3.0.5`
 - BREOS package metadata version: `0.6.0`
-- Source directory: `/home/leo/Downloads/datasets/reunion_island_microgrid`
+- Source directory: `$BREOS_VALIDATION_DATA/reunion_island_microgrid`
 - Input hashes: [`input_manifest.sha256`](input_manifest.sha256)
 - Configuration and configuration hash: [`run_config.json`](run_config.json), `9e33ce2a47a021e72090c2c29b64d835c2d8a6b6438351a72c3620ce528c0a31`
 - Driver and output hashes: [`provenance.json`](provenance.json)
@@ -109,7 +109,9 @@ Worth keeping for BREOS validation, with a component-focused scope:
 From the clean article worktree:
 
 ```text
-PYTHONPATH=/tmp/breos-article1-0.6.0 /tmp/breos-article1-0.6.0/.venv/bin/python /home/leo/code/breos/tools/validation/recovery/reunion_microgrid/drivers/reunion_validate.py --force
+BREOS_VALIDATION_ROOT=/path/to/article-worktree \
+  BREOS_VALIDATION_DATA=/path/to/datasets \
+  python tools/validation/recovery/reunion_microgrid/drivers/reunion_validate.py --force
 ```
 
 The driver refuses to replace existing generated files unless `--force` is supplied. It writes the CSV and JSON files listed above and records input, configuration, driver, and output hashes.

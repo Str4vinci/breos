@@ -30,13 +30,17 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-SOURCE = Path("/home/leo/Downloads/datasets/reunion_island_microgrid")
+# Raw inputs live outside the repository because of size and licensing. Point
+# BREOS_VALIDATION_DATA at the directory holding the downloaded datasets; the
+# README records which archive belongs where.
+DATA_ROOT = Path(os.environ.get("BREOS_VALIDATION_DATA", "datasets")).expanduser()
+SOURCE = DATA_ROOT / "reunion_island_microgrid"
 OUTPUT = Path(
     os.environ.get(
         "BREOS_VALIDATION_OUTPUT",
-        "/home/leo/code/breos/results/validation_reunion_microgrid_recovered_20260902",
+        "results/validation_reunion_microgrid_recovered",
     )
-)
+).expanduser()
 DEFAULT_BREOS_ROOT = Path("/tmp/breos-article1-0.6.0")
 BREOS_ROOT = Path(os.environ.get("BREOS_VALIDATION_ROOT", DEFAULT_BREOS_ROOT))
 sys.path.insert(0, str(BREOS_ROOT))

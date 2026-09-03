@@ -23,15 +23,19 @@ from zipfile import ZipFile
 import numpy as np
 import pandas as pd
 
-SOURCE_DIR = Path("/home/leo/Downloads/datasets/orientation_diversity_pv")
+# Raw inputs live outside the repository because of size and licensing. Point
+# BREOS_VALIDATION_DATA at the directory holding the downloaded datasets; the
+# README records which archive belongs where.
+DATA_ROOT = Path(os.environ.get("BREOS_VALIDATION_DATA", "datasets")).expanduser()
+SOURCE_DIR = DATA_ROOT / "orientation_diversity_pv"
 WORKBOOK = SOURCE_DIR / "PV_Data.xlsx"
 SOURCE_README = SOURCE_DIR / "README.txt"
 OUTPUT = Path(
     os.environ.get(
         "BREOS_VALIDATION_OUTPUT",
-        "/home/leo/code/breos/results/validation_orientation_diversity_recovered_20260902",
+        "results/validation_orientation_diversity_recovered",
     )
-)
+).expanduser()
 BREOS_ROOT = Path(os.environ.get("BREOS_VALIDATION_ROOT", "/tmp/breos-article1-0.6.0"))
 OUTPUT_FILES = (
     "orientation_screen_metrics.csv",

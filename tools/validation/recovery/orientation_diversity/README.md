@@ -78,7 +78,7 @@ The source values also need a decision about whether panel power is W or Wh. The
 
 - Source record: [Zenodo record 19245713](https://zenodo.org/records/19245713)
 - Source DOI: `10.5281/zenodo.19245713`
-- Local source directory: `/home/leo/Downloads/datasets/orientation_diversity_pv`
+- Local source directory: `$BREOS_VALIDATION_DATA/orientation_diversity_pv`
 - Input hashes: [`input_manifest.sha256`](input_manifest.sha256)
 - BREOS worktree: `/tmp/breos-article1-0.6.0`
 - BREOS commit: `f62f4f5bf3c14140ab189d35ea2885e6fcc60c6b`
@@ -95,7 +95,9 @@ The source values also need a decision about whether panel power is W or Wh. The
 From the clean article worktree, run:
 
 ```text
-PYTHONPATH=/tmp/breos-article1-0.6.0 /tmp/breos-article1-0.6.0/.venv/bin/python /home/leo/code/breos/tools/validation/recovery/orientation_diversity/drivers/orientation_screen.py --force
+BREOS_VALIDATION_ROOT=/path/to/article-worktree \
+  BREOS_VALIDATION_DATA=/path/to/datasets \
+  python tools/validation/recovery/orientation_diversity/drivers/orientation_screen.py --force
 ```
 
 The driver refuses to replace existing generated files unless you pass `--force`. It writes [`orientation_screen_metrics.csv`](orientation_screen_metrics.csv), [`data_integrity.json`](data_integrity.json), [`dataset_facts.json`](dataset_facts.json), and [`provenance.json`](provenance.json).

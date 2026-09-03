@@ -14,7 +14,7 @@ This package records the NIST Gaithersburg Ground-array replay completed on
 - `logs/input_preflight.log` records the 366 successful input-hash checks run
   before the final replay.
 - `nist_bulk_archives.sha256` hashes the calibrated NIST bulk archives kept in
-  `/home/leo/Documents/NIST_Gaithersburg_PV/`.
+  `$NIST_RAW_ROOT/`.
 
 The PVDAQ source contains 525,847 rows from
 `system_id=4902/year=2016`. The build found all 366 daily files and retained
@@ -27,7 +27,7 @@ clean checkout at commit `f62f4f5b` when you use another checkout.
 
 ```text
 .venv/bin/python drivers/nist_build.py \
-  --raw-dir /home/leo/Documents/NIST_Gaithersburg_PV/pvdaq_system4902_2016 \
+  --raw-dir $NIST_RAW_ROOT/pvdaq_system4902_2016 \
   --out data/nist_ground_2016.csv.gz
 PYTHONPATH=$BREOS_ROOT \
   .venv/bin/python drivers/nist_validate.py \

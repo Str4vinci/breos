@@ -4,10 +4,15 @@ This index points to the recovered upcoming-publication validation outputs and r
 checks run on 2026-09-02. The BREOS source revision used for every replay is
 `f62f4f5bf3c14140ab189d35ea2885e6fcc60c6b`.
 
+`$RECOVERY_ROOT` is the output root the runner was given and `$NIST_RAW_ROOT`
+the directory holding the NIST bulk archives. Both were machine-local
+directories on the run host; the recorded hashes, not the paths, are what
+identify these artifacts.
+
 ## Find the outputs
 
 The six local-data packages are in
-`/home/leo/Documents/BREOS_validation_recovery_20260902/`:
+`$RECOVERY_ROOT/`:
 
 - `validation_sandia_task13_recovered_20260902`
 - `validation_pcoe_recovered_20260902`
@@ -22,15 +27,15 @@ Run the checkpoint verifier from the repository root:
 
 ```text
 .venv/bin/python tools/validation/recovery/verify_recovery.py \
-  /home/leo/Documents/BREOS_validation_recovery_20260902
+  $RECOVERY_ROOT
 ```
 
 That verifier passed all 17 recorded checkpoints. The complete log is
-`/home/leo/Documents/BREOS_validation_recovery_20260902/verification.log`.
+`$RECOVERY_ROOT/verification.log`.
 
 ## NIST replay
 
-The NIST raw data is in `/home/leo/Documents/NIST_Gaithersburg_PV/`.
+The NIST raw data is in `$NIST_RAW_ROOT/`.
 The three canonical 2016 bulk archives are present and match the recorded
 hashes in `SHA256SUMS.txt`:
 
@@ -41,7 +46,7 @@ fc63b434da6f86c0b8dfe96195f99ea15b4f7c0b34076d7407836652901efa1b  onemin-WS_1-20
 ```
 
 The PVDAQ daily files used by the recovered NIST PV-chain tools are in
-`/home/leo/Documents/NIST_Gaithersburg_PV/pvdaq_system4902_2016/`. The build
+`$NIST_RAW_ROOT/pvdaq_system4902_2016/`. The build
 found 366 files, 525,847 rows, and the span `2016-01-01 00:00:00-05:00` to
 `2016-12-31 23:59:00-05:00`.
 
@@ -50,7 +55,7 @@ The replay used the clean `f62f4f5b` checkout at
 
 ```text
 .venv/bin/python tools/validation/recovery/nist/nist_build.py \
-  --raw-dir /home/leo/Documents/NIST_Gaithersburg_PV/pvdaq_system4902_2016 \
+  --raw-dir $NIST_RAW_ROOT/pvdaq_system4902_2016 \
   --out <nist-run>/nist_ground_2016.csv.gz
 PYTHONPATH=/tmp/breos-validation-f62f4f5b \
   .venv/bin/python tools/validation/recovery/nist/nist_validate.py \
@@ -69,7 +74,7 @@ The NIST package's `logs/input_preflight.log` records all 366 input-hash checks
 before the final replay.
 
 The NIST replay package is
-`/home/leo/Documents/BREOS_validation_recovery_20260902/validation_nist_gaithersburg_recovered_20260902/`.
+`$RECOVERY_ROOT/validation_nist_gaithersburg_recovered_20260902/`.
 Its built dataset SHA-256 is
 `9f9e4e8a4cc18bd9fee0326ffacb3aaebb1f82d22d9d975bdeb8561ccf2cda9d`.
 
@@ -86,8 +91,8 @@ is part of the recovery archive.
 The recovery archive and its SHA-256 sidecar are:
 
 ```text
-/home/leo/Documents/BREOS_validation_recovery_20260902.tar.gz
-/home/leo/Documents/BREOS_validation_recovery_20260902.tar.gz.sha256
+$RECOVERY_ROOT.tar.gz
+$RECOVERY_ROOT.tar.gz.sha256
 ```
 
 The archive SHA-256 is

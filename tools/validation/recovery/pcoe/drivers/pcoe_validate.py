@@ -21,13 +21,17 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-SOURCE_FILE = Path("/home/leo/Downloads/datasets/pcoe_pv_testbed/pcoe_pv_system_testbed.csv")
+# Raw inputs live outside the repository because of size and licensing. Point
+# BREOS_VALIDATION_DATA at the directory holding the downloaded datasets; the
+# README records which archive belongs where.
+DATA_ROOT = Path(os.environ.get("BREOS_VALIDATION_DATA", "datasets")).expanduser()
+SOURCE_FILE = DATA_ROOT / "pcoe_pv_testbed" / "pcoe_pv_system_testbed.csv"
 OUTPUT = Path(
     os.environ.get(
         "BREOS_VALIDATION_OUTPUT",
-        "/home/leo/code/breos/results/validation_pcoe_recovered_20260902",
+        "results/validation_pcoe_recovered",
     )
-)
+).expanduser()
 DEFAULT_BREOS_ROOT = Path("/tmp/breos-article1-0.6.0")
 BREOS_ROOT = Path(os.environ.get("BREOS_VALIDATION_ROOT", DEFAULT_BREOS_ROOT))
 sys.path.insert(0, str(BREOS_ROOT))
