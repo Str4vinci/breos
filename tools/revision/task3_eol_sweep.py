@@ -362,9 +362,7 @@ def main() -> int:
         # exactly. Comparing against the accepted full-grid representatives
         # instead would be wrong: those live at their own best orientations,
         # and each model's slice is fixed at its knee orientation.
-        accepted_reps = pd.read_csv(
-            args.lattice / "representatives.csv", float_precision="round_trip"
-        )
+        accepted_reps = pd.read_csv(args.lattice / "representatives.csv", float_precision="round_trip")
         bundle_by_model = {"field-v1": "base-v1", "field-v2": "field-v2", "laboratory": "laboratory"}
         slice_rows = []
         for model_key, _cm, tilt, azimuth in MODELS:
