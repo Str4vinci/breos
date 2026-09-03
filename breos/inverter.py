@@ -243,8 +243,28 @@ def get_inverter_preset(name: str) -> InverterConfig:
     return INVERTER_PRESETS[name]
 
 
+def _clamped_ac_output_scale(value: float) -> float:
+    """Clamp an AC-side derate into ``[0, 1]``.
+
+    The upper bound is the physical one: the factor is applied after the
+    inverter nameplate limit, so a value above 1 would deliver more AC than
+    the nameplate and more AC than the DC entering the converter.
+
+    This clamp is a backstop, not the validation. Every configured route
+    rejects an out-of-range value before reaching here, and loudly:
+    :class:`~breos.battery.BatteryConfig` for anything that dispatches, and
+    the study-config validators in :mod:`breos.optimization` for the
+    optimizer. What remains is a direct call into these helpers, where
+    clamping matches how ``inverter_efficiency`` already behaves beside it.
+    """
+    return min(1.0, max(0.0, float(value)))
+
+
 def calculate_dc_ac_power(
-    pv_dc_power: float, inverter_ac_power: float, inverter_efficiency: float = 0.96
+    pv_dc_power: float,
+    inverter_ac_power: float,
+    inverter_efficiency: float = 0.96,
+    ac_output_scale: float = 1.0,
 ) -> InverterConversionResult:
     """
     Calculate AC output and loss buckets with the PVWatts part-load curve.
@@ -254,10 +274,43 @@ def calculate_dc_ac_power(
     clipping value is also exposed for reports that compare against
     ``pv_dc_power * inverter_efficiency``.
 
+    ``ac_output_scale`` multiplies the converted AC power *after* the
+    part-load curve and every inverter limit, so it derates AC delivery
+    without moving the clipping threshold ``pdc0`` or the part-load ratio.
+
+    It is an **in-dispatch derate, not a post-processing multiplier**. It is
+    applied inside the conversion the dispatcher calls, so battery discharge
+    decisions and the reachable AC ceiling respond to it, which is the correct
+    behaviour for a derate that is really there. Multiplying a finished result
+    series instead would leave dispatch believing in AC that was never
+    delivered.
+
+    It is a single constant standing in for AC-side shortfall the chain does
+    not model, such as availability, curtailment or downstream wiring. One
+    constant approximates their combined annual effect; it is not a model of
+    any of them individually, and it cannot represent their time structure.
+
+    It is bounded to ``(0, 1]``. A factor above 1 would let the inverter
+    deliver more than its nameplate and more AC than the DC entering it,
+    leaving ``conversion_loss_w`` pinned at zero. An under-predicting model is
+    corrected on the DC side with ``dc_output_scale``, which keeps clipping
+    and the part-load ratio responsive, or through ``inverter_efficiency``
+    when the converter itself is modelled too pessimistically.
+
+    While the derate is active, ``conversion_loss_w`` is the whole DC-to-AC
+    shortfall and no longer only the inverter's own conversion loss: it
+    carries the derated energy too. Reports that attribute it specifically to
+    the converter must account for that.
+
+    The default ``1.0`` is a no-op and reproduces prior behaviour
+    bit-for-bit. ``dc_power_for_ac_output`` takes the same argument and stays
+    its exact inverse.
+
     Args:
         pv_dc_power: DC power from PV array (W)
         inverter_ac_power: Inverter AC rating (W)
         inverter_efficiency: Nominal inverter efficiency
+        ac_output_scale: In-dispatch AC-side derate applied after conversion, in (0, 1]
 
     Returns:
         InverterConversionResult with AC output and loss buckets.
@@ -265,6 +318,7 @@ def calculate_dc_ac_power(
     pv_dc_power = max(0.0, float(pv_dc_power))
     inverter_ac_power = max(0.0, float(inverter_ac_power))
     inverter_efficiency = min(1.0, max(0.0, float(inverter_efficiency)))
+    ac_output_scale = _clamped_ac_output_scale(ac_output_scale)
 
     if inverter_efficiency <= 0.0 or inverter_ac_power <= 0.0:
         return InverterConversionResult(
@@ -287,7 +341,7 @@ def calculate_dc_ac_power(
     # so retain the historical unbounded flat-efficiency behavior. App always
     # supplies its sized finite AC rating.
     if not math.isfinite(inverter_ac_power):
-        ac_power = pv_dc_power * inverter_efficiency
+        ac_power = pv_dc_power * inverter_efficiency * ac_output_scale
         return InverterConversionResult(
             ac_power_w=ac_power,
             conversion_loss_w=pv_dc_power - ac_power,
@@ -312,9 +366,10 @@ def calculate_dc_ac_power(
             * (PVWATTS_CURVE_QUADRATIC * zeta**2 + PVWATTS_CURVE_LINEAR * zeta + PVWATTS_CURVE_CONSTANT),
         ),
     )
+    ac_power *= ac_output_scale
     clipping_loss_dc = max(0.0, pv_dc_power - dc_used)
     conversion_loss = max(0.0, dc_used - ac_power)
-    clipping_loss_ac_equiv = clipping_loss_dc * inverter_efficiency
+    clipping_loss_ac_equiv = clipping_loss_dc * inverter_efficiency * ac_output_scale
 
     return InverterConversionResult(
         ac_power_w=ac_power,
@@ -328,6 +383,7 @@ def _calculate_dc_ac_power_arrays(
     pv_dc_power: np.ndarray,
     inverter_ac_power: float,
     inverter_efficiency: float = 0.96,
+    ac_output_scale: float = 1.0,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Vectorized counterpart of :func:`calculate_dc_ac_power`.
 
@@ -337,13 +393,14 @@ def _calculate_dc_ac_power_arrays(
     pv_dc_power = np.maximum(0.0, np.asarray(pv_dc_power, dtype=np.float64))
     inverter_ac_power = max(0.0, float(inverter_ac_power))
     inverter_efficiency = min(1.0, max(0.0, float(inverter_efficiency)))
+    ac_output_scale = _clamped_ac_output_scale(ac_output_scale)
 
     if inverter_efficiency <= 0.0 or inverter_ac_power <= 0.0:
         zeros = np.zeros_like(pv_dc_power)
         return zeros, zeros, pv_dc_power
 
     if not math.isfinite(inverter_ac_power):
-        ac_power = pv_dc_power * inverter_efficiency
+        ac_power = pv_dc_power * inverter_efficiency * ac_output_scale
         return ac_power, pv_dc_power - ac_power, np.zeros_like(pv_dc_power)
 
     pdc0 = inverter_ac_power / inverter_efficiency
@@ -355,19 +412,35 @@ def _calculate_dc_ac_power_arrays(
         * (PVWATTS_CURVE_QUADRATIC * zeta**2 + PVWATTS_CURVE_LINEAR * zeta + PVWATTS_CURVE_CONSTANT)
     )
     ac_power = np.maximum(0.0, np.minimum(np.minimum(dc_used, inverter_ac_power), curve_power))
+    ac_power = ac_power * ac_output_scale
     clipping_loss_dc = np.maximum(0.0, pv_dc_power - dc_used)
     conversion_loss = np.maximum(0.0, dc_used - ac_power)
     return ac_power, conversion_loss, clipping_loss_dc
 
 
-def dc_power_for_ac_output(ac_power_w: float, inverter_ac_power: float, inverter_efficiency: float = 0.96) -> float:
+def dc_power_for_ac_output(
+    ac_power_w: float,
+    inverter_ac_power: float,
+    inverter_efficiency: float = 0.96,
+    ac_output_scale: float = 1.0,
+) -> float:
     """Return the minimum DC input required for a requested PVWatts AC output.
 
     The inverse is solved on the monotonic operating range up to the inverter
     nameplate. Requests above the nameplate are clamped to it. Keeping this
     inverse beside :func:`calculate_dc_ac_power` prevents dispatch from
     silently reverting to a flat-efficiency approximation.
+
+    ``ac_output_scale`` matches the forward helper, including its ``(0, 1]``
+    bound: the request is divided by it before the inverse is solved, so
+    ``calculate_dc_ac_power`` applied to the returned DC reproduces the
+    requested AC at the same scale. Dispatch must pass the same value to both,
+    or it would size DC against one boundary and deliver against another.
     """
+    ac_output_scale = _clamped_ac_output_scale(ac_output_scale)
+    if ac_output_scale <= 0.0:
+        return 0.0
+    ac_power_w = float(ac_power_w) / ac_output_scale
     ac_target = max(0.0, min(float(ac_power_w), max(0.0, float(inverter_ac_power))))
     inverter_ac_power = max(0.0, float(inverter_ac_power))
     inverter_efficiency = min(1.0, max(0.0, float(inverter_efficiency)))

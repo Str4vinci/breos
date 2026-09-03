@@ -371,6 +371,7 @@ def test_zeta_squared_must_use_libm_pow_not_the_folded_square():
         0.05,
         0.25,
         2.0,
+        1.0,
     )
     reference = calculate_dc_ac_power(dc_power, ac_rating, efficiency)
     assert matrix[_STATE_ROW_INDEX["pv_production"], 0] * 0.25 == pytest.approx(
