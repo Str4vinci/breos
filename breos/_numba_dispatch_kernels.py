@@ -84,7 +84,7 @@ def _lfp_capacity_factor(t_c):
 
 
 @njit(cache=True, fastmath=False, nogil=True)
-def _dc_ac(pv_dc_power, inverter_ac_power, inverter_efficiency, pow_two):
+def _dc_ac(pv_dc_power, inverter_ac_power, inverter_efficiency, pow_two, ac_output_scale):
     """Mirror of ``calculate_dc_ac_power``: (ac, conversion_loss, clipping_dc).
 
     ``pow_two`` carries the literal 2.0 in from the caller. CPython
@@ -98,13 +98,16 @@ def _dc_ac(pv_dc_power, inverter_ac_power, inverter_efficiency, pow_two):
     pv_dc_power = max(0.0, pv_dc_power)
     inverter_ac_power = max(0.0, inverter_ac_power)
     inverter_efficiency = min(1.0, max(0.0, inverter_efficiency))
+    # Mirror of ``_clamped_ac_output_scale``: the factor lands after the
+    # nameplate limit, so above 1 it would deliver more than nameplate.
+    ac_output_scale = min(1.0, max(0.0, ac_output_scale))
 
     if inverter_efficiency <= 0.0 or inverter_ac_power <= 0.0:
         return 0.0, 0.0, pv_dc_power
     if pv_dc_power <= 0.0:
         return 0.0, 0.0, 0.0
     if not np.isfinite(inverter_ac_power):
-        ac_power = pv_dc_power * inverter_efficiency
+        ac_power = pv_dc_power * inverter_efficiency * ac_output_scale
         return ac_power, pv_dc_power - ac_power, 0.0
 
     pdc0 = inverter_ac_power / inverter_efficiency
@@ -121,14 +124,19 @@ def _dc_ac(pv_dc_power, inverter_ac_power, inverter_efficiency, pow_two):
             ),
         ),
     )
+    ac_power *= ac_output_scale
     clipping_loss_dc = max(0.0, pv_dc_power - dc_used)
     conversion_loss = max(0.0, dc_used - ac_power)
     return ac_power, conversion_loss, clipping_loss_dc
 
 
 @njit(cache=True, fastmath=False, nogil=True)
-def _dc_for_ac(ac_power_w, inverter_ac_power, inverter_efficiency):
+def _dc_for_ac(ac_power_w, inverter_ac_power, inverter_efficiency, ac_output_scale):
     """Mirror of ``dc_power_for_ac_output``."""
+    ac_output_scale = min(1.0, max(0.0, ac_output_scale))
+    if ac_output_scale <= 0.0:
+        return 0.0
+    ac_power_w = ac_power_w / ac_output_scale
     ac_target = max(0.0, min(ac_power_w, max(0.0, inverter_ac_power)))
     inverter_ac_power = max(0.0, inverter_ac_power)
     inverter_efficiency = min(1.0, max(0.0, inverter_efficiency))
@@ -177,6 +185,7 @@ def _dispatch_day_kernel(
     thermal_resistance_kw,
     hours_per_step,
     pow_two,
+    ac_output_scale,
 ):
     t_cell_day_sum = 0.0
     battery_energy_beginning = 0.0
@@ -236,11 +245,11 @@ def _dispatch_day_kernel(
         lg_battery_inverter_loss = 0.0
         lg_grid_import = 0.0
 
-        pv_ac_max, pv_conv_loss, pv_clip_dc = _dc_ac(pv_dc_power, inv_cap_ac_wh, inv_eff, pow_two)
+        pv_ac_max, pv_conv_loss, pv_clip_dc = _dc_ac(pv_dc_power, inv_cap_ac_wh, inv_eff, pow_two, ac_output_scale)
 
         if has_battery and pv_ac_max >= load:
             lg_pv_ac_to_load = load
-            dc_to_load = _dc_for_ac(load, inv_cap_ac_wh, inv_eff)
+            dc_to_load = _dc_for_ac(load, inv_cap_ac_wh, inv_eff, ac_output_scale)
             surplus_dc = max(0.0, pv_dc_power - dc_to_load)
 
             # Inlined charge().
@@ -255,7 +264,7 @@ def _dispatch_day_kernel(
 
             remaining_dc = surplus_dc - drawn
             direct_ac, direct_conv_loss, direct_clip_dc = _dc_ac(
-                dc_to_load + remaining_dc, inv_cap_ac_wh, inv_eff, pow_two
+                dc_to_load + remaining_dc, inv_cap_ac_wh, inv_eff, pow_two, ac_output_scale
             )
             export_ac = max(0.0, direct_ac - load)
             dc_export = max(0.0, dc_to_load + remaining_dc - direct_clip_dc - dc_to_load)
@@ -282,14 +291,17 @@ def _dispatch_day_kernel(
                 lg_grid_import = deficit
             else:
                 available = max(0.0, battery_energy - emin)
-                target_total_ac = min(load, inv_cap_ac_wh)
+                # AC correction is applied after the inverter curve and
+                # nameplate limit, so the reachable AC ceiling is the scaled
+                # nameplate, which the (0, 1] bound keeps at or below it.
+                target_total_ac = min(load, inv_cap_ac_wh * ac_output_scale)
                 if available > 0.0 and eff_discharge > 0.0 and target_total_ac > pv_ac_max:
-                    total_dc_target = _dc_for_ac(target_total_ac, inv_cap_ac_wh, inv_eff)
+                    total_dc_target = _dc_for_ac(target_total_ac, inv_cap_ac_wh, inv_eff, ac_output_scale)
                     battery_dc = min(available * eff_discharge, max(0.0, total_dc_target - pv_dc_power))
 
                     if np.isfinite(cap_discharge_ac_wh):
                         total_dc = pv_dc_power + battery_dc
-                        conv_ac, _cl, _cd = _dc_ac(total_dc, inv_cap_ac_wh, inv_eff, pow_two)
+                        conv_ac, _cl, _cd = _dc_ac(total_dc, inv_cap_ac_wh, inv_eff, pow_two, ac_output_scale)
                         if total_dc <= 0.0:
                             unconstrained_battery_ac = 0.0
                         else:
@@ -300,7 +312,9 @@ def _dispatch_day_kernel(
                             for _ in range(40):
                                 midpoint = (lower + upper) / 2.0
                                 mid_total_dc = pv_dc_power + midpoint
-                                mid_ac, _mcl, _mcd = _dc_ac(mid_total_dc, inv_cap_ac_wh, inv_eff, pow_two)
+                                mid_ac, _mcl, _mcd = _dc_ac(
+                                    mid_total_dc, inv_cap_ac_wh, inv_eff, pow_two, ac_output_scale
+                                )
                                 if mid_total_dc <= 0.0:
                                     midpoint_battery_ac = 0.0
                                 else:
@@ -312,7 +326,7 @@ def _dispatch_day_kernel(
                             battery_dc = upper
 
                     total_dc = pv_dc_power + battery_dc
-                    conv_ac, conv_loss, _cd2 = _dc_ac(total_dc, inv_cap_ac_wh, inv_eff, pow_two)
+                    conv_ac, conv_loss, _cd2 = _dc_ac(total_dc, inv_cap_ac_wh, inv_eff, pow_two, ac_output_scale)
                     if total_dc <= 0.0:
                         pv_delivered_ac = 0.0
                         delivered_ac = 0.0
@@ -354,7 +368,9 @@ def _dispatch_day_kernel(
         pv_origin = min(pv_origin, battery_energy)
 
         if cap_wh_is_infinite:
-            pv_production = (pv_dc_power - lg_pv_dc_curtailed) * inv_eff
+            # Match the scalar unlimited-inverter compatibility path,
+            # including the post-inverter AC correction.
+            pv_production = (pv_dc_power - lg_pv_dc_curtailed) * inv_eff * ac_output_scale
         else:
             pv_production = pv_dc_power - lg_pv_dc_curtailed - lg_pv_direct_inverter_loss
         battery_energy_delta = battery_energy - battery_energy_beginning

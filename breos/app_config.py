@@ -115,6 +115,17 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         cli_type=float,
         cli_help="Maximum battery AC power delivered to load in W (default: unlimited).",
     ),
+    "battery_power_limit_c_rate": AppConfigField(
+        default=None,
+        default_order=44,
+        cli_flags=("--battery-power-limit-c-rate",),
+        cli_type=float,
+        cli_help=(
+            "Symmetric charge and discharge limit as a multiple of capacity, for example 1.0 for "
+            "1 C. Derives both power limits from battery_kwh; cannot be combined with the absolute "
+            "battery_max_charge_power_w or battery_max_discharge_power_w."
+        ),
+    ),
     "cost_preset": AppConfigField(
         default=None,
         default_order=28,
@@ -323,28 +334,28 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
     ),
     "dc_coupled": AppConfigField(
         default=True,
-        default_order=45,
+        default_order=46,
         cli_flags=("--dc-coupled",),
         cli_action="store_true",
         cli_help="Use the supported DC-coupled/hybrid battery model.",
     ),
     "inverter_efficiency": AppConfigField(
         default=0.96,
-        default_order=46,
+        default_order=47,
         cli_flags=("--inverter-efficiency",),
         cli_type=float,
         cli_help="Inverter efficiency.",
     ),
     "inverter_loading_ratio": AppConfigField(
         default=1.25,
-        default_order=47,
+        default_order=48,
         cli_flags=("--inverter-loading-ratio",),
         cli_type=float,
         cli_help="DC/AC oversizing ratio.",
     ),
     "start_date": AppConfigField(
         default="2023-01-01",
-        default_order=49,
+        default_order=50,
         cli_flags=("--start-date",),
         cli_help="Simulation start date, YYYY-MM-DD.",
     ),
@@ -362,14 +373,14 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
     "battery_max_soc": AppConfigField(default=0.90, default_order=39),
     "battery_eol_percentage": AppConfigField(default=0.70, default_order=40),
     "battery_rte": AppConfigField(default=None, default_order=41),
-    "enable_resistance_fade": AppConfigField(default=False, default_order=44),
-    "pv_loss_overrides": AppConfigField(default=None, default_order=48),
-    "horizon_profile": AppConfigField(default=None, default_order=50),
-    "battery_temperature": AppConfigField(default="weather", default_order=51),
-    "battery_indoor_model": AppConfigField(default=None, default_order=52),
+    "enable_resistance_fade": AppConfigField(default=False, default_order=45),
+    "pv_loss_overrides": AppConfigField(default=None, default_order=49),
+    "horizon_profile": AppConfigField(default=None, default_order=51),
+    "battery_temperature": AppConfigField(default="weather", default_order=52),
+    "battery_indoor_model": AppConfigField(default=None, default_order=53),
     "execution_backend": AppConfigField(
         default=DEFAULT_EXECUTION_BACKEND,
-        default_order=53,
+        default_order=54,
         cli_flags=("--execution-backend",),
         cli_choices=EXECUTION_BACKENDS,
         cli_help=(
@@ -748,6 +759,14 @@ def _validate_battery_and_degradation(cfg: dict[str, Any]) -> None:
     for key in ("battery_max_charge_power_w", "battery_max_discharge_power_w"):
         if cfg[key] is not None and _finite_real(cfg[key], key) < 0:
             raise ValueError(f"'{key}' must be >= 0 when configured")
+    if cfg["battery_power_limit_c_rate"] is not None:
+        if _finite_real(cfg["battery_power_limit_c_rate"], "battery_power_limit_c_rate") <= 0:
+            raise ValueError("'battery_power_limit_c_rate' must be greater than 0 when configured")
+        if cfg["battery_max_charge_power_w"] is not None or cfg["battery_max_discharge_power_w"] is not None:
+            raise ValueError(
+                "'battery_power_limit_c_rate' derives both power limits from capacity; do not also "
+                "set 'battery_max_charge_power_w' or 'battery_max_discharge_power_w'"
+            )
     battery_temperature = cfg["battery_temperature"]
     if isinstance(battery_temperature, Real) and not isinstance(battery_temperature, bool):
         _finite_real(battery_temperature, "battery_temperature")

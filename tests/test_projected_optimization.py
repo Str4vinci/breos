@@ -58,6 +58,7 @@ def test_projected_evaluator_carries_physical_and_degradation_state(monkeypatch)
         degradation = pd.DataFrame(
             {
                 "Cumulative_FEC": [10.0 * year],
+                "Cumulative_FEC_All_Packs": [4.0 * year],
                 "Cumulative_Calendar_Seconds": [1000.0 * year],
                 "Cumulative_Cycle_Degradation": [0.01 * year],
                 "Cumulative_Calendar_Degradation": [0.02 * year],
@@ -133,6 +134,7 @@ def test_projected_evaluator_carries_physical_and_degradation_state(monkeypatch)
     assert metrics["Projected_CO2_Avoided_Total_kg"] == pytest.approx(21.0)
     assert metrics["Projected_CO2_Avoided_SelfConsumed_kg"] == pytest.approx(17.0)
     assert metrics["_yearly_summary_df"]["Battery_Cumulative_FEC"].tolist() == pytest.approx([10.0, 20.0])
+    assert metrics["_yearly_summary_df"]["Battery_Annual_FEC"].tolist() == pytest.approx([4.0, 8.0])
     assert metrics["_yearly_summary_df"]["Battery_Cumulative_Calendar_Degradation"].tolist() == pytest.approx(
         [0.02, 0.04]
     )
@@ -184,3 +186,206 @@ def test_public_projected_design_evaluator_returns_plot_source_tables(monkeypatc
     assert result.metrics["Projected_NPV_Eur"] == pytest.approx(100.0)
     pd.testing.assert_frame_equal(result.yearly, yearly)
     pd.testing.assert_frame_equal(result.financial, financial)
+
+
+def _synthetic_projection_inputs(days: int = 30):
+    """A short, hard-cycled year that is cheap enough to project twice."""
+    idx = pd.date_range("2025-01-01 00:00", periods=days * 24, freq="h", tz="UTC")
+    daily_pv = [0.0] * 8 + [3000.0] * 8 + [0.0] * 8
+    daily_load = [900.0] * 8 + [0.0] * 8 + [900.0] * 8
+    base_dc = pd.Series(daily_pv * days, index=idx)
+    houseload = pd.DataFrame({"Load": daily_load * days}, index=idx)
+    temperature = pd.Series(25.0, index=idx)
+    return idx, base_dc, houseload, temperature
+
+
+def _project(batt_spec, *, battery_kwh, years=2, days=30):
+    idx, base_dc, houseload, temperature = _synthetic_projection_inputs(days)
+    return _evaluate_projected_design_metrics(
+        base_dc_power=base_dc,
+        tmy_data=pd.DataFrame({"temp_air": 20.0, "ghi": 500.0}, index=idx),
+        houseload=houseload,
+        temperature_series=temperature,
+        pv_params=get_module("Suntech_STP550S_STC"),
+        batt_spec=batt_spec,
+        costs_cfg={"storage_cost_per_kwh": 500.0},
+        fin_cfg={"project_lifespan": years},
+        freq="h",
+        years_projection=years,
+        degradation_rate=0.005,
+        n_modules=6,
+        battery_kwh=battery_kwh,
+        inverter_efficiency=0.96,
+        inverter_ac_capacity_w=2640.0,
+        return_tables=True,
+    )
+
+
+def test_annual_fec_spans_a_replacement_inside_one_projected_year():
+    # The pack starts a hair above end of life, so it retires on the first
+    # simulated day and a fresh pack carries the rest of year 1. Cumulative
+    # FEC only ever reports the pack currently installed, so the retired
+    # pack's part-year cycles survive only if annual FEC is accumulated
+    # separately.
+    metrics = _project(
+        {
+            "min_soc": 0.1,
+            "max_soc": 0.9,
+            "initial_soh": 70.000001,
+            "eol_percentage": 0.70,
+            "enable_replacement": True,
+        },
+        battery_kwh=5.0,
+    )
+    yearly = metrics["_yearly_summary_df"]
+
+    assert yearly["Replacements"].tolist() == [1, 0]
+    year1 = yearly.iloc[0]
+    # Both sides of the replacement are present: the annual figure exceeds
+    # what the post-replacement pack alone accumulated, and the excess is the
+    # retired pack's own part-year count.
+    assert year1["Battery_Annual_FEC"] > year1["Battery_Cumulative_FEC"] > 0.0
+    retired_pack_fec = year1["Battery_Annual_FEC"] - year1["Battery_Cumulative_FEC"]
+    assert retired_pack_fec > 0.0
+
+    # Year 2 has no replacement, so the annual figure is exactly the
+    # difference of the cumulative series across the year boundary.
+    year2 = yearly.iloc[1]
+    assert year2["Battery_Annual_FEC"] == pytest.approx(
+        year2["Battery_Cumulative_FEC"] - year1["Battery_Cumulative_FEC"], abs=1e-12
+    )
+
+
+def test_annual_fec_is_zero_without_a_battery():
+    metrics = _project({"min_soc": 0.1, "max_soc": 0.9, "enable_replacement": True}, battery_kwh=0.0)
+    yearly = metrics["_yearly_summary_df"]
+
+    assert "Battery_Annual_FEC" in yearly.columns
+    assert yearly["Battery_Annual_FEC"].tolist() == [0.0, 0.0]
+    assert yearly["Battery_Cumulative_FEC"].tolist() == [0.0, 0.0]
+    assert metrics["Projected_Total_Replacements"] == 0
+
+
+def test_annual_fec_differences_the_cumulative_series_without_a_replacement():
+    metrics = _project(
+        {"min_soc": 0.1, "max_soc": 0.9, "eol_percentage": 0.70, "enable_replacement": True},
+        battery_kwh=5.0,
+    )
+    yearly = metrics["_yearly_summary_df"]
+
+    assert metrics["Projected_Total_Replacements"] == 0
+    assert (yearly["Battery_Annual_FEC"] > 0.0).all()
+    cumulative = np.concatenate([[0.0], yearly["Battery_Cumulative_FEC"].to_numpy()])
+    np.testing.assert_allclose(yearly["Battery_Annual_FEC"].to_numpy(), np.diff(cumulative), atol=1e-12)
+
+
+class TestZeroModuleDesign:
+    """The battery-only corner of an exhaustive sizing lattice.
+
+    The projected evaluator used to require at least one module, so the grid
+    could not measure the no-PV slice and had to assume it dominated. It is a
+    real coordinate, and this is the boundary the relaxed contract opens.
+    """
+
+    @staticmethod
+    def _config():
+        return {
+            "location": {"latitude": 41.15, "longitude": -8.63},
+            "pv": {"module": "Suntech_STP550S_STC"},
+            "simulation": {"resolution": "h", "years_projection": 1},
+            "financials": {"project_lifespan": 1},
+            "costs": {"dc_ac_ratio": 1.25},
+        }
+
+    @staticmethod
+    def _inputs(periods: int = 48):
+        idx = pd.date_range("2025-01-01", periods=periods, freq="h", tz="UTC")
+        weather = pd.DataFrame({"temp_air": np.full(periods, 20.0)}, index=idx)
+        load = pd.DataFrame({"Load": np.full(periods, 500.0)}, index=idx)
+        return idx, weather, load
+
+    def test_a_negative_module_count_is_still_rejected(self):
+        _idx, weather, load = self._inputs(periods=2)
+        with pytest.raises(ValueError, match="n_modules must be non-negative"):
+            evaluate_projected_design(
+                weather,
+                load,
+                self._config(),
+                n_modules=-1,
+                battery_kwh=5.0,
+                tilt=35.0,
+                azimuth=180.0,
+            )
+
+    def test_zero_modules_evaluates_as_a_battery_only_design(self, monkeypatch):
+        """No PV production, no inverter rating, and an undefined LCOE.
+
+        Every kWh is imported, so the projection has no generation to spread
+        its cost over and LCOE is infinite rather than a divide-by-zero.
+        """
+        idx, weather, load = self._inputs()
+        seen = {}
+
+        def _no_pv(**kwargs):
+            seen["n_modules"] = kwargs["n_modules"]
+            return pd.Series(np.zeros(len(idx)), index=idx)
+
+        monkeypatch.setattr("breos.optimization.calculate_pv_production_dc", _no_pv)
+        monkeypatch.setattr(
+            "breos.optimization._temperature_series_from_config",
+            lambda *_args, **_kwargs: pd.Series(np.full(len(idx), 20.0), index=idx),
+        )
+
+        result = evaluate_projected_design(
+            weather,
+            load,
+            self._config(),
+            n_modules=0,
+            battery_kwh=5.0,
+            tilt=35.0,
+            azimuth=180.0,
+        )
+
+        assert seen["n_modules"] == 0
+        assert result.metrics["Modules"] == 0
+        assert result.metrics["Projected_PV_Production_Year1_kWh"] == pytest.approx(0.0)
+        assert result.metrics["Projected_PV_DC_Year1_kWh"] == pytest.approx(0.0)
+        assert np.isinf(result.metrics["Projected_LCOE_Eur_kWh"])
+        # A design that generates nothing cannot displace any import.
+        assert result.metrics["Projected_Grid_Independence_%"] == pytest.approx(0.0)
+        assert result.yearly["Import_kWh"].iloc[0] == pytest.approx(result.yearly["Load_kWh"].iloc[0], rel=1e-9)
+
+    def test_zero_modules_gives_the_inverter_no_rating(self, monkeypatch):
+        """The rating is sized from the array, so the no-PV corner has none."""
+        idx, weather, load = self._inputs(periods=2)
+        seen = {}
+
+        monkeypatch.setattr(
+            "breos.optimization.calculate_pv_production_dc",
+            lambda **_kwargs: pd.Series(np.zeros(len(idx)), index=idx),
+        )
+        monkeypatch.setattr(
+            "breos.optimization._temperature_series_from_config",
+            lambda *_args, **_kwargs: pd.Series(np.full(len(idx), 20.0), index=idx),
+        )
+
+        def _capture(**kwargs):
+            seen["inverter_ac_capacity_w"] = kwargs["inverter_ac_capacity_w"]
+            return {
+                "Projected_Grid_Independence_%": 0.0,
+                "Projected_NPV_Eur": 0.0,
+                "_yearly_summary_df": pd.DataFrame({"Year": [1]}),
+                "_cost_projection_df": pd.DataFrame({"Year": [1]}),
+            }
+
+        monkeypatch.setattr("breos.optimization._evaluate_projected_design_metrics", _capture)
+        evaluate_projected_design(
+            weather,
+            load,
+            self._config(),
+            n_modules=0,
+            battery_kwh=5.0,
+            tilt=35.0,
+            azimuth=180.0,
+        )
+        assert seen["inverter_ac_capacity_w"] == pytest.approx(0.0)

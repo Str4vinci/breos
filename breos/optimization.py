@@ -8,7 +8,7 @@ This module provides:
 """
 
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, Optional, Tuple
+from typing import Any, Callable, Dict, Optional, Sequence, Tuple, Union
 
 import numpy as np
 import pandas as pd
@@ -430,6 +430,43 @@ def _temperature_series_from_config(
     )
 
 
+def _validated_dc_output_scale(config: Dict[str, Any]) -> float:
+    """Read and check the DC-side yield correction from a study config.
+
+    A DC-side factor is applied to the raw array output before dispatch, so
+    clipping, charging and the part-load ratio all respond to it. That makes
+    it the correct knob for a model that under-predicts measured yield, and
+    it is deliberately not bounded above.
+    """
+    scale = float(config.get("dc_output_scale", 1.0))
+    if not np.isfinite(scale) or scale <= 0.0:
+        raise ValueError("dc_output_scale must be finite and greater than 0")
+    return scale
+
+
+def _validated_ac_output_scale(config: Dict[str, Any]) -> float:
+    """Read and check the AC-side derate from a study config.
+
+    The factor derates AC delivery from inside dispatch, so discharge
+    decisions respond to it. Unlike the DC-side factor it lands after the
+    inverter nameplate limit, so it is bounded to ``(0, 1]``: above 1 the
+    inverter would deliver more than its nameplate and more AC than the DC
+    entering it, and the reported inverter loss would pin at zero. Correct an
+    under-predicting model with ``dc_output_scale`` instead.
+
+    Rejecting here means an out-of-range study config fails before any
+    evaluation starts, rather than being clamped inside the inverter helpers.
+    """
+    scale = float(config.get("ac_output_scale", 1.0))
+    if not np.isfinite(scale) or not 0.0 < scale <= 1.0:
+        raise ValueError(
+            "ac_output_scale must be finite, greater than 0 and at most 1; it is applied after "
+            "the inverter nameplate limit. Use dc_output_scale to correct an under-predicting "
+            "model on the DC side"
+        )
+    return scale
+
+
 def _build_battery_config_from_spec(
     batt_spec: Dict[str, Any],
     nominal_energy_wh: float,
@@ -438,6 +475,7 @@ def _build_battery_config_from_spec(
     enable_replacement: bool = False,
     inverter_ac_capacity_w: Optional[float] = None,
     replacement_cost: Optional[float] = None,
+    ac_output_scale: float = 1.0,
 ) -> BatteryConfig:
     """Build a BatteryConfig for optimization paths without dropping supported settings."""
     return BatteryConfig(
@@ -454,11 +492,13 @@ def _build_battery_config_from_spec(
         inverter_ac_capacity_w=inverter_ac_capacity_w,
         max_charge_power_w=batt_spec.get("max_charge_power_w"),
         max_discharge_power_w=batt_spec.get("max_discharge_power_w"),
+        power_limit_c_rate=batt_spec.get("power_limit_c_rate"),
         dc_coupled=batt_spec.get("dc_coupled", True),
         calendar_model=batt_spec.get("calendar_model", "naumann_lam_field_calibrated"),
         enable_replacement=enable_replacement,
         replacement_cost=replacement_cost,
         enable_resistance_fade=batt_spec.get("enable_resistance_fade", False),
+        ac_output_scale=ac_output_scale,
     )
 
 
@@ -509,6 +549,7 @@ def _projected_year_summary(
     freq: str,
     pv_degradation_factor: float,
     battery_soh: float,
+    annual_fec: float,
     cumulative_fec: float,
     cumulative_calendar_seconds: float,
     cumulative_cycle_degradation: float,
@@ -526,6 +567,16 @@ def _projected_year_summary(
     def optional_energy_kwh(column: str) -> float:
         return energy_kwh(column) if column in results_df.columns else 0.0
 
+    def optional_mean_pct(column: str) -> float:
+        """Mean of a fractional state column as a percentage, 0.0 when absent.
+
+        State columns, unlike the ledger flow columns, are already levels
+        rather than average power, so they are averaged and not integrated.
+        """
+        if column not in results_df.columns:
+            return 0.0
+        return float(pd.to_numeric(results_df[column], errors="coerce").fillna(0.0).mean() * 100.0)
+
     load_kwh = energy_kwh("Houseload")
     import_kwh = energy_kwh("Import_From_Grid")
     export_kwh = energy_kwh("Sell_To_Grid")
@@ -542,6 +593,21 @@ def _projected_year_summary(
         "Export_kWh": export_kwh,
         "Grid_Independence_%": grid_independence,
         "Battery_SOH_%": float(battery_soh),
+        # Cell-side energy in and out, so the pair reflects round-trip loss and
+        # feeds cycle ageing directly. Charge is measured after charging losses
+        # and discharge before inverter losses.
+        "Battery_Charge_Throughput_kWh": optional_energy_kwh("Battery_Charge_Stored"),
+        "Battery_Discharge_Throughput_kWh": optional_energy_kwh("Battery_Discharge_DC"),
+        # Normalized SOC is the position in the usable window; absolute SOC is
+        # the fraction of the SOH-derated pack, so it rises as the pack fades.
+        "Battery_SOC_Normalized_Mean_%": optional_mean_pct("Battery_SOC_Normalized"),
+        "Battery_SOC_Absolute_Mean_%": optional_mean_pct("Battery_SOC_Absolute"),
+        # Annual FEC is the rainflow count every pack used in this year
+        # accumulated, a retired pack's part-year included. Cumulative FEC
+        # belongs to the installed pack alone and restarts at zero on
+        # replacement, so differencing it across a replacement year loses the
+        # retired pack's final cycles.
+        "Battery_Annual_FEC": float(annual_fec),
         "Battery_Cumulative_FEC": float(cumulative_fec),
         "Battery_Cumulative_Calendar_Seconds": float(cumulative_calendar_seconds),
         "Battery_Cumulative_Cycle_Degradation": float(cumulative_cycle_degradation),
@@ -585,7 +651,7 @@ def _summarize_projected_lifetime_metrics(yearly_summary_df: pd.DataFrame) -> Di
 
 def _evaluate_projected_design_metrics(
     *,
-    base_dc_power: pd.Series,
+    base_dc_power: Union[pd.Series, Sequence[pd.Series]],
     tmy_data: pd.DataFrame,
     houseload: pd.DataFrame,
     temperature_series: pd.Series,
@@ -603,10 +669,27 @@ def _evaluate_projected_design_metrics(
     emissions_params: Optional[EmissionsParams] = None,
     return_tables: bool = False,
     execution_backend: str = DEFAULT_EXECUTION_BACKEND,
+    ac_output_scale: float = 1.0,
 ) -> Dict[str, Any]:
-    """Evaluate one design over repeated TMY years using production engines."""
+    """Evaluate one design over the projected horizon using production engines.
+
+    ``base_dc_power`` is normally one weather year, repeated for every
+    projected year and scaled by PV degradation. Passing a sequence of series
+    instead runs a real weather sequence, one entry per projected year, so a
+    study can keep observed inter-annual variability rather than repeating a
+    single year. The sequence must have exactly ``years_projection`` entries.
+    A one-year sequence is equivalent to passing that series directly.
+    """
     if years_projection < 1:
         raise ValueError("projected optimization requires at least one project year")
+    if isinstance(base_dc_power, pd.Series):
+        dc_by_year: Sequence[pd.Series] = [base_dc_power] * years_projection
+    else:
+        dc_by_year = list(base_dc_power)
+        if len(dc_by_year) != years_projection:
+            raise ValueError(f"projected weather sequence has {len(dc_by_year)} years, expected {years_projection}")
+        if not all(isinstance(series, pd.Series) for series in dc_by_year):
+            raise ValueError("every projected weather-sequence entry must be a pandas Series")
     if not 0.0 <= float(degradation_rate) < 1.0:
         raise ValueError("projected PV degradation rate must be between 0 and 1")
 
@@ -641,7 +724,7 @@ def _evaluate_projected_design_metrics(
 
     for year_idx in range(years_projection):
         degradation_factor = (1.0 - float(degradation_rate)) ** year_idx
-        dc_power = base_dc_power * degradation_factor
+        dc_power = dc_by_year[year_idx] * degradation_factor
         battery_config = _build_battery_config_from_spec(
             batt_spec,
             nominal_energy_wh=battery_kwh * 1000.0,
@@ -650,6 +733,7 @@ def _evaluate_projected_design_metrics(
             enable_replacement=bool(batt_spec.get("enable_replacement", True)) and has_battery,
             inverter_ac_capacity_w=inverter_ac_capacity_w,
             replacement_cost=replacement_cost,
+            ac_output_scale=ac_output_scale,
         )
         state_kwargs: Dict[str, float] = {}
         if carried_energy_wh is not None:
@@ -691,10 +775,14 @@ def _evaluate_projected_design_metrics(
 
         if first_year_results_df is None:
             first_year_results_df = results_df
+        annual_fec = 0.0
         if has_battery:
             carried_energy_wh = float(results_df["Battery_Energy_End"].iloc[-1])
             carried_pv_origin_energy_wh = float(results_df["Battery_PV_Origin_Energy_End"].iloc[-1])
             if not degradation_df.empty:
+                # Each project year is its own simulation span, so the span's
+                # all-pack total is exactly this year's FEC.
+                annual_fec = float(degradation_df["Cumulative_FEC_All_Packs"].iloc[-1])
                 cumulative_fec = float(degradation_df["Cumulative_FEC"].iloc[-1])
                 cumulative_cal_seconds = float(degradation_df["Cumulative_Calendar_Seconds"].iloc[-1])
                 cumulative_cycle_deg = float(degradation_df["Cumulative_Cycle_Degradation"].iloc[-1])
@@ -712,6 +800,7 @@ def _evaluate_projected_design_metrics(
                 freq=freq,
                 pv_degradation_factor=degradation_factor,
                 battery_soh=current_soh,
+                annual_fec=annual_fec,
                 cumulative_fec=cumulative_fec,
                 cumulative_calendar_seconds=cumulative_cal_seconds,
                 cumulative_cycle_degradation=cumulative_cycle_deg,
@@ -787,8 +876,9 @@ def evaluate_projected_design(
     tilt: float,
     azimuth: float,
     execution_backend: str = DEFAULT_EXECUTION_BACKEND,
+    weather_by_year: Optional[Sequence[pd.DataFrame]] = None,
 ) -> ProjectedDesignResult:
-    """Evaluate one fixed PV-battery design over repeated TMY project years.
+    """Evaluate one fixed PV-battery design over the projected horizon.
 
     This is the detailed fixed-design counterpart to projected NSGA-II
     scoring. It uses the same PV, battery, replacement, degradation, and
@@ -803,12 +893,22 @@ def evaluate_projected_design(
         battery_kwh: Installed nominal battery capacity in kWh.
         tilt: PV surface tilt in degrees.
         azimuth: PV surface azimuth in degrees.
+        weather_by_year: Optional real weather sequence, one frame per
+            projected year, replacing the repeated ``tmy_data`` year. Each
+            frame is run through the same PV model, and PV degradation still
+            applies by project year. ``tmy_data`` is still used for the
+            battery temperature series and must remain a representative year.
+            The sequence length must equal the projected horizon.
 
     Returns:
         Projected metrics, yearly simulation ledger, and financial ledger.
     """
-    if int(n_modules) < 1:
-        raise ValueError("n_modules must be at least 1")
+    # Zero modules is a valid grid corner, not an error: the exhaustive
+    # lattice enumerates it so the battery-only slice is measured rather than
+    # assumed dominated. It produces no PV, so its inverter rating is zero and
+    # its LCOE is undefined.
+    if int(n_modules) < 0:
+        raise ValueError("n_modules must be non-negative")
     if float(battery_kwh) < 0.0:
         raise ValueError("battery_kwh must be non-negative")
 
@@ -838,20 +938,52 @@ def evaluate_projected_design(
     )
     degradation_rate = float(pv_config.get("degradation_rate", financials.get("pv_degradation_rate", 0.005)))
     pv_params, _module_area = _resolve_pv_module_and_area(config)
-    base_dc_power = calculate_pv_production_dc(
-        weather_data=tmy_data,
-        location=loc_obj,
-        tilt=float(tilt),
-        surface_azimuth=float(azimuth),
-        n_modules=int(n_modules),
-        pv_params=pv_params,
-        freq=freq,
-        verbose=False,
-        **configured_pv_model_kwargs(config),
-    )
+
+    # A DC-side yield correction: the array itself produces this much less,
+    # or more. Unlike ac_output_scale it is applied before dispatch, so
+    # charging, clipping and the part-load ratio all respond to it, which is
+    # why it is the correction to reach for when the model under-predicts.
+    dc_output_scale = _validated_dc_output_scale(config)
+
+    def _dc_for(weather_frame: pd.DataFrame) -> pd.Series:
+        series = calculate_pv_production_dc(
+            weather_data=weather_frame,
+            location=loc_obj,
+            tilt=float(tilt),
+            surface_azimuth=float(azimuth),
+            n_modules=int(n_modules),
+            pv_params=pv_params,
+            freq=freq,
+            verbose=False,
+            **configured_pv_model_kwargs(config),
+        )
+        return series if dc_output_scale == 1.0 else series * dc_output_scale
+
+    if weather_by_year is None:
+        base_dc_power: Union[pd.Series, Sequence[pd.Series]] = _dc_for(tmy_data)
+        dc_index = base_dc_power.index
+    else:
+        frames = list(weather_by_year)
+        if len(frames) != years_projection:
+            raise ValueError(f"weather_by_year has {len(frames)} years, expected {years_projection}")
+        # Every year must land on the same intra-year index, because the load
+        # profile and the battery temperature series are aligned to it once.
+        reference = _dc_for(frames[0])
+        series = [reference]
+        for frame in frames[1:]:
+            year_dc = _dc_for(frame)
+            if len(year_dc) != len(reference):
+                raise ValueError(
+                    "every weather_by_year frame must produce the same number of "
+                    f"timesteps; got {len(year_dc)} against {len(reference)}"
+                )
+            year_dc.index = reference.index
+            series.append(year_dc)
+        base_dc_power = series
+        dc_index = reference.index
     temperature_series = _temperature_series_from_config(
         battery.get("temperature", "weather"),
-        base_dc_power.index,
+        dc_index,
         weather_df=tmy_data,
         indoor_model=battery.get("indoor_model"),
     )
@@ -878,6 +1010,7 @@ def evaluate_projected_design(
         inverter_ac_capacity_w=inverter_ac_capacity_w,
         emissions_params=EmissionsParams(**emissions_config) if emissions_config else None,
         return_tables=True,
+        ac_output_scale=_validated_ac_output_scale(config),
     )
     yearly = raw_metrics.pop("_yearly_summary_df")
     financial = raw_metrics.pop("_cost_projection_df")
@@ -1113,6 +1246,8 @@ try:
                 "inverter_efficiency",
                 config.get("inverter", {}).get("efficiency", 0.96),
             )
+            self.ac_output_scale = _validated_ac_output_scale(config)
+            self.dc_output_scale = _validated_dc_output_scale(config)
 
             self.battery_replacement_treatment = {
                 "method": (
@@ -1205,6 +1340,11 @@ try:
                 verbose=False,
                 **self.model_options,
             )
+            # Apply the DC-side correction before either steady-state dispatch
+            # or projected scoring. This keeps clipping, charging and the
+            # part-load ratio on the corrected raw array output.
+            if self.dc_output_scale != 1.0:
+                dc_production = dc_production * self.dc_output_scale
 
             # Load alignment (timezone- and DST-aware year remapping) happens
             # inside simulate_energy_balance — the same code path the App
@@ -1233,6 +1373,7 @@ try:
                 initial_soh=batt_spec.get("initial_soh", 100),
                 enable_replacement=False,
                 inverter_ac_capacity_w=inverter_ac_capacity_w,
+                ac_output_scale=self.ac_output_scale,
             )
             temperature_series = _temperature_series_from_config(
                 self.batt_temp_cfg,
@@ -1328,6 +1469,7 @@ try:
                     battery_kwh=float(battery_kwh),
                     inverter_efficiency=self.inverter_efficiency,
                     inverter_ac_capacity_w=inverter_ac_capacity_w,
+                    ac_output_scale=self.ac_output_scale,
                 )
                 out.update(projected_metrics)
                 objective_grid_dependence = 1.0 - float(projected_metrics["Projected_Grid_Independence_%"]) / 100.0

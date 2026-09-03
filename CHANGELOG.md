@@ -4,6 +4,37 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-09-03
+
+### Added
+- Added `battery_power_limit_c_rate` (`--battery-power-limit-c-rate`), a
+  capacity-proportional alternative to the absolute
+  `battery_max_charge_power_w` and `battery_max_discharge_power_w` limits.
+  Combining the C-rate limit with either absolute limit raises an error. The
+  existing absolute limits remain the default.
+- Added optional year-by-year weather sequences to
+  `evaluate_projected_design`. Repeated-TMY evaluation remains the default.
+- Added opt-in AC-side and DC-side PV-output scale factors for measured-bias
+  sensitivity studies. Both factors default to no scaling.
+- Added annual battery charge throughput, discharge throughput, mean state of
+  charge, and all-pack full-equivalent-cycle fields to projected result
+  ledgers. The installed-pack cumulative FEC field remains unchanged.
+
+### Changed
+- Projected fixed-design evaluation now accepts zero PV modules. This lets an
+  exhaustive sizing grid evaluate its battery-only boundary.
+- Source distributions now use an explicit include list. Files that happen to
+  be present in a maintainer's checkout are no longer published.
+
+### Fixed
+- Applied optional AC-output scaling consistently in scalar, vectorized, and
+  Numba inverter paths, including inverse conversion and optimization runs.
+- Rejected an AC-output scale above 1. Delivered AC cannot exceed the inverter
+  nameplate or the DC input.
+- Fixed projected-design evaluation with a weather sequence.
+- Removed duplicate annual energy columns from projected physical and
+  financial ledgers. The join now rejects inconsistent duplicate values.
+
 ## [0.6.0] - 2026-08-31
 
 ### Added

@@ -167,6 +167,7 @@ def _resolved_config_summary(config: dict[str, Any]) -> dict[str, Any]:
             "capacity_kwh": cfg["battery_kwh"],
             "max_charge_power_w": cfg["battery_max_charge_power_w"],
             "max_discharge_power_w": cfg["battery_max_discharge_power_w"],
+            "power_limit_c_rate": cfg["battery_power_limit_c_rate"],
             "min_soc": cfg["battery_min_soc"],
             "max_soc": cfg["battery_max_soc"],
             "eol_percentage": cfg["battery_eol_percentage"],

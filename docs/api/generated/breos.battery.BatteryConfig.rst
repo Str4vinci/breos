@@ -23,6 +23,7 @@
 
    .. autosummary::
    
+      ~BatteryConfig.ac_output_scale
       ~BatteryConfig.battery_type
       ~BatteryConfig.calendar_model
       ~BatteryConfig.charge_efficiency
@@ -39,6 +40,7 @@
       ~BatteryConfig.max_discharge_power_w
       ~BatteryConfig.max_soc
       ~BatteryConfig.min_soc
+      ~BatteryConfig.power_limit_c_rate
       ~BatteryConfig.replacement_cost
       ~BatteryConfig.standby_loss_wh
       ~BatteryConfig.thermal_resistance_kw
