@@ -1,3 +1,17 @@
+# NSGA-II C1 variant: Monte Carlo sensitivity artifact, NOT a publication
+# configuration. The domain-corrected exhaustive enumeration (48,510 designs,
+# revision-0.6.1/task4-domain-corrected/exhaustive-1c) gives the true max-NPV
+# design as 6 PV / 0 kWh at 30 deg / 200 deg (NPV 5451.83 EUR, GI 40.705 %),
+# which is what publication case C1 uses. NSGA-II instead returned
+# 35 deg / 195 deg (NPV 5439.47 EUR, GI 40.529 %), a dominated point. This
+# config replays that NSGA-II answer so the two can be compared under the
+# same seed and trajectory count.
+#
+# Derived from validation/article1/article1-montecarlo.toml
+# sha256 2e22d026cd69b95d125c18d75b09da482fd039a6006f2f53f0955103b8d603c9
+# Every physical, economic and Monte Carlo setting below is unchanged from
+# that file; only the case block differs.
+
 # Historical-weather Monte Carlo source-data configuration for the forthcoming
 # publication.
 #
@@ -83,52 +97,10 @@ preserve_irradiance_energy = true
 collect_yearly = true
 n_procs = 1
 
-[cases.C1]
-# argmax(NPV) over the grid Pareto front.
-label = "Maximum NPV"
+[cases.C1_NSGA]
+# The NSGA-II max-NPV answer. Dominated by C1 on both objectives.
+label = "Maximum NPV (NSGA-II answer)"
 n_modules = 6
 battery_kwh = 0.0
-tilt = 30.0
-azimuth = 200.0
-
-[cases.C2]
-# Among front members carrying a battery, the largest capacity whose
-# break-even precedes its first replacement; ties broken by NPV. Two 7 kWh
-# members qualify (35/200 at 3324 EUR, 30/200 at 3313 EUR); NPV selects 35/200.
-label = "Largest battery paying back before replacement"
-n_modules = 8
-battery_kwh = 7.0
-tilt = 35.0
-azimuth = 200.0
-
-[cases.C3]
-# argmin Euclidean distance to the utopia point, on min-max normalised axes.
-label = "Pareto knee"
-n_modules = 9
-battery_kwh = 9.0
 tilt = 35.0
 azimuth = 195.0
-
-[cases.C4]
-# argmax(grid independence) subject to NPV > 0.
-label = "Maximum grid independence with positive NPV"
-n_modules = 9
-battery_kwh = 13.0
-tilt = 45.0
-azimuth = 190.0
-
-[cases.C5]
-# argmax(grid independence) over the front.
-label = "Maximum grid independence"
-n_modules = 9
-battery_kwh = 20.0
-tilt = 50.0
-azimuth = 185.0
-
-[cases.C6]
-# Off-front low-investment reference; not selected by any front criterion.
-label = "Low-investment benchmark"
-n_modules = 4
-battery_kwh = 0.0
-tilt = 35.0
-azimuth = 180.0

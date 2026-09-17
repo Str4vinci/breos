@@ -25,12 +25,12 @@ for each result.
 
 The workflow generates:
 
-- projected C1-C5 fixed-design energy, degradation, economic, emissions, and
+- projected C1-C6 fixed-design energy, degradation, economic, emissions, and
   LCOE tables;
 - projected GI-NPV Pareto fronts at EUR 350, 500, and 711 per kWh of storage;
 - hourly-resolution, H0-load, and battery-degradation sensitivities;
 - orientation and historical-weather comparison source tables; and
-- seeded historical-weather Monte Carlo tables for C1-C5.
+- seeded historical-weather Monte Carlo tables for C1-C6.
 
 Generated results belong under the ignored `results/article1/` directory. Do
 not commit the licensed E-REDES profile or third-party validation data.

@@ -26,14 +26,23 @@ def test_article1_montecarlo_config_pins_publication_method():
         "collect_yearly": True,
         "n_procs": 1,
     }
-    assert set(config["cases"]) == {"C1", "C2", "C3", "C4", "C5"}
-    # C2 is the Gate 2 replacement for the manuscript's 9 modules and 5 kWh.
+    assert set(config["cases"]) == {"C1", "C2", "C3", "C4", "C5", "C6"}
+    # C2 is the largest front battery whose break-even precedes its first
+    # replacement; NPV breaks the tie between the two qualifying 7 kWh designs.
     assert config["cases"]["C2"] == {
-        "label": "Best-value storage",
-        "n_modules": 9,
+        "label": "Largest battery paying back before replacement",
+        "n_modules": 8,
         "battery_kwh": 7.0,
         "tilt": 35.0,
         "azimuth": 200.0,
+    }
+    # C6 is the off-front low-investment benchmark; no front criterion picks it.
+    assert config["cases"]["C6"] == {
+        "label": "Low-investment benchmark",
+        "n_modules": 4,
+        "battery_kwh": 0.0,
+        "tilt": 35.0,
+        "azimuth": 180.0,
     }
     # The Monte Carlo limit must match the optimization config's 1 C rating.
     assert config["battery_power_limit_c_rate"] == 1.0

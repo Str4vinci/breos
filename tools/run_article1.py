@@ -276,6 +276,8 @@ def _monte_carlo_commands(
             "C4",
             "--case",
             "C5",
+            "--case",
+            "C6",
             *common,
         ),
     ]
@@ -362,10 +364,10 @@ def main() -> int:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""Stages:
   check          Verify and inventory the local inputs without simulation.
-  fixed          Run C1-C5 without NSGA-II.
-  analysis       Run every deterministic analysis except C1-C5.
-  deterministic Run C1-C5 and every deterministic analysis (default).
-  monte-carlo    Run C2 first, then C1, C3, C4, and C5.
+  fixed          Run C1-C6 without NSGA-II.
+  analysis       Run every deterministic analysis except C1-C6.
+  deterministic Run C1-C6 and every deterministic analysis (default).
+  monte-carlo    Run C2 first, then C1, C3, C4, C5, and C6.
   verify         Verify the completed result bundle.
   all            Run deterministic, Monte Carlo, and verification stages.
 """,

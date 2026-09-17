@@ -126,12 +126,12 @@ projected_npv_eur = 5451.832386759766
 
 [[reference_candidates]]
 label = "C2"
-modules = 9
+modules = 8
 battery_kwh = 7.0
 tilt = 35.0
 azimuth = 200.0
-projected_grid_independence_pct = 71.24346352975041
-projected_npv_eur = 3271.4943754254455
+projected_grid_independence_pct = 70.14609341198563
+projected_npv_eur = 3324.252417061154
 
 [[reference_candidates]]
 label = "C3"
@@ -145,6 +145,15 @@ projected_npv_eur = 2650.3675120267
 [[reference_candidates]]
 label = "C4"
 modules = 9
+battery_kwh = 13.0
+tilt = 45.0
+azimuth = 190.0
+projected_grid_independence_pct = 85.15118373506839
+projected_npv_eur = 348.3045025827814
+
+[[reference_candidates]]
+label = "C5"
+modules = 9
 battery_kwh = 20.0
 tilt = 50.0
 azimuth = 185.0
@@ -152,7 +161,7 @@ projected_grid_independence_pct = 89.94827542830737
 projected_npv_eur = -4937.606746837351
 
 [[reference_candidates]]
-label = "C5"
+label = "C6"
 modules = 4
 battery_kwh = 0.0
 tilt = 35.0

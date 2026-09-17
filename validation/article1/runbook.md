@@ -27,7 +27,7 @@ analyses:
 uv run python tools/run_article1.py
 ```
 
-To inspect C1-C5 before starting the longer optimizations, split the work into
+To inspect C1-C6 before starting the longer optimizations, split the work into
 two commands:
 
 ```bash
@@ -37,7 +37,7 @@ uv run python tools/run_article1.py analysis
 
 The deterministic workflow produces:
 
-- the C1-C5 fixed-design tables at EUR 500/kWh;
+- the C1-C6 fixed-design tables at EUR 500/kWh;
 - the EUR 350, 500, and 711/kWh projected Pareto fronts;
 - the hourly-resolution optimization;
 - the H0-load C2 comparison;
@@ -47,7 +47,7 @@ The deterministic workflow produces:
 
 ## Run Monte Carlo
 
-Run the configured 10,000 trajectories for C2 first, then C1, C3, C4, and C5:
+Run the configured 10,000 trajectories for C2 first, then C1, C3, C4, C5, and C6:
 
 ```bash
 uv run python tools/run_article1.py monte-carlo

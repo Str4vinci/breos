@@ -460,7 +460,7 @@ class BundleAudit:
                 "historical weather is not right-labelled",
             )
         self.deterministic_report(
-            "base-v1/reproduction.json", optimization=False, fixed_labels={"C1", "C2", "C3", "C4", "C5"}
+            "base-v1/reproduction.json", optimization=False, fixed_labels={"C1", "C2", "C3", "C4", "C5", "C6"}
         )
         for cost in (350, 500, 711):
             self.deterministic_report(
@@ -487,7 +487,7 @@ class BundleAudit:
         )
         self.load_report("orientation/provenance.json")
         self.load_report("weather-comparison/provenance.json")
-        for case in ("c1", "c2", "c3", "c4", "c5"):
+        for case in ("c1", "c2", "c3", "c4", "c5", "c6"):
             self.verify_monte_carlo_yearly_schema(case)
             payload = self.load_report(f"monte-carlo-v1/{case}/provenance.json")
             if payload:
