@@ -12,8 +12,9 @@ plans behind individual items.
   steady-state optimization remains available for lower-cost screening. See
   [design/architecture/0.6x-projected-optimization-plan.md](design/architecture/0.6x-projected-optimization-plan.md).
 - **0.7.0** — currency concept; time-of-use tariff valuation with static,
-  provenance-bound schedules; opt-in fixed-target smart charging. Flat pricing
-  and greedy self-consumption stay the compatible defaults. See
+  provenance-bound schedules; opt-in fixed-target smart charging; descriptive
+  load-profile keys replacing the numeric ones. Flat pricing and greedy
+  self-consumption stay the compatible defaults. See
   [design/architecture/0.7x-tariffs-and-smart-charging-plan.md](design/architecture/0.7x-tariffs-and-smart-charging-plan.md).
 - **0.7.x** — economic scenario and sensitivity analysis (scenarios,
   switching values, and probabilistic inputs), then broader price-aware
