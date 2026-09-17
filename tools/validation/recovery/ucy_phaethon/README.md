@@ -1,12 +1,14 @@
-# PCoE PV system test-bed validation
+# UCY PHAETHON PV system test-bed validation
 
-Result: the PCoE file is useful for a BREOS thermal check and for testing the consistency of its recorded electrical channels. The default BREOS Faiman model has a positive temperature bias against this reference. A PVsyst freestanding sensitivity run performs better, but the mounting type is not documented.
+Result: the UCY PHAETHON file is useful for a BREOS thermal check and for testing the consistency of its recorded electrical channels. The default BREOS Faiman model has a positive temperature bias against this reference. A PVsyst freestanding sensitivity run performs better, but the mounting type is not documented.
 
 At `Gpoa >= 200 W/m²`, the default BREOS Faiman model produced a bias of `+2.694 °C`, mean absolute error of `3.161 °C`, root mean square error of `3.821 °C`, and Pearson correlation of `0.972` over `12,708` observations. The PVsyst freestanding sensitivity run produced `+0.976 °C` bias, `1.986 °C` MAE, `2.619 °C` RMSE, and `0.976` correlation.
 
 ## Scope
 
-The validation uses the single downloaded PCoE CSV. The [Zenodo record](https://zenodo.org/records/15779578) describes it as photovoltaic system and weather data from a test-bed at the Smart Energy Infrastructure PHAETHON CoE, University of Cyprus.
+The validation uses the single downloaded CSV. The [Zenodo record](https://zenodo.org/records/15779578) is titled *Solar forecasting and digital twin dataset*, by George Makrides, University of Cyprus, 2025, DOI `10.5281/zenodo.15779578`, CC BY 4.0. It describes photovoltaic system and weather data from a test-bed at the Smart Energy Infrastructure, PHAETHON Centre of Excellence, University of Cyprus.
+
+**Naming.** The file inside the Zenodo record is called `PCoE-Dataset PV system test-bed.csv`, which is where the old "PCoE" shorthand in this repository came from. Do not carry it into writing: in the PV and prognostics literature PCoE means NASA Ames' Prognostics Center of Excellence, so it misattributes the data. Call it the UCY PHAETHON test-bed, and cite Makrides.
 
 The file contains 15-minute records for one year, from June 1, 2015 through May 31, 2016. The thermal reference is `Tmod`. The thermal inputs are `Gpoa`, `Tamb`, and `WS`. The file also contains `Vdc`, `Idc`, `Pdc`, and `Pac`, so the run checks the identity `Pdc ≈ Vdc × Idc` and describes the recorded `Pac/Pdc` relationship.
 
@@ -46,7 +48,7 @@ At the primary threshold, the stable-period results are:
 | Equilibrium inputs from previous 15 minutes | BREOS Faiman default | 12,708 | 2.361 | 2.866 | 3.599 | 0.976 |
 | Equilibrium inputs from previous 15 minutes | BREOS PVsyst freestanding | 12,708 | 0.618 | 2.277 | 2.965 | 0.968 |
 
-The stable-period filter does not reduce the Faiman error at this threshold. The PCoE reference behaves differently from the Sandia reference, and the positive Faiman bias persists even when irradiance changes slowly. The PVsyst freestanding model reduces the bias, but the result is conditional on an unverified mounting assumption.
+The stable-period filter does not reduce the Faiman error at this threshold. The UCY PHAETHON reference behaves differently from the Task 13 reference, and the positive Faiman bias persists even when irradiance changes slowly. The PVsyst freestanding model reduces the bias, but the result is conditional on an unverified mounting assumption.
 
 Monthly bias at `Gpoa >= 200 W/m²` is:
 
@@ -95,7 +97,8 @@ The electrical channels are suitable for a data-quality check. They are not enou
 
 - Source record: [Zenodo record 15779578](https://zenodo.org/records/15779578)
 - Source DOI: `10.5281/zenodo.15779578`
-- Local source file: `$BREOS_VALIDATION_DATA/pcoe_pv_testbed/pcoe_pv_system_testbed.csv`
+- Local source file: `$BREOS_VALIDATION_DATA/pcoe_pv_testbed/pcoe_pv_system_testbed.csv` (local input
+  path retained so existing local data layouts and the recorded input manifest keep matching)
 - Local MD5: `35386ee96c1a57d10f8d73dfacee858b`, matching the Zenodo record
 - BREOS worktree: `/tmp/breos-article1-0.6.0`
 - BREOS commit: `f62f4f5bf3c14140ab189d35ea2885e6fcc60c6b`
@@ -116,7 +119,7 @@ From the clean article worktree, run:
 ```text
 BREOS_VALIDATION_ROOT=/path/to/article-worktree \
   BREOS_VALIDATION_DATA=/path/to/datasets \
-  python tools/validation/recovery/pcoe/drivers/pcoe_validate.py --force
+  python tools/validation/recovery/ucy_phaethon/drivers/ucy_phaethon_validate.py --force
 ```
 
 The driver refuses to replace existing generated files unless you pass `--force`. It writes [`thermal_metrics.csv`](thermal_metrics.csv), [`thermal_sensitivity_metrics.csv`](thermal_sensitivity_metrics.csv), [`monthly_bias.csv`](monthly_bias.csv), [`electrical_checks.json`](electrical_checks.json), [`dataset_facts.json`](dataset_facts.json), and [`provenance.json`](provenance.json).

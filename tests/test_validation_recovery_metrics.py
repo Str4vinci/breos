@@ -4,24 +4,24 @@ import numpy as np
 import pytest
 
 from tools.validation.recovery.hkust.drivers.hkust_validate import _finite_metric
+from tools.validation.recovery.iea_pvps_task13.drivers.task13_thermal_validate import (
+    _metric_row as task13_metric,
+)
 from tools.validation.recovery.orientation_diversity.drivers.orientation_screen import (
     _metric_row as orientation_metric,
 )
-from tools.validation.recovery.pcoe.drivers.pcoe_validate import (
-    _metric_row as pcoe_metric,
-)
-from tools.validation.recovery.pcoe.drivers.pcoe_validate import _power_consistency_row
 from tools.validation.recovery.reunion_microgrid.drivers.reunion_validate import _metrics as reunion_metric
-from tools.validation.recovery.sandia_task13.drivers.sandia_thermal_validate import (
-    _metric_row as sandia_metric,
+from tools.validation.recovery.ucy_phaethon.drivers.ucy_phaethon_validate import (
+    _metric_row as phaethon_metric,
 )
+from tools.validation.recovery.ucy_phaethon.drivers.ucy_phaethon_validate import _power_consistency_row
 
 
 @pytest.mark.parametrize(
     "row",
     [
-        sandia_metric("model", 200, np.array([1.0, 2.0, 4.0]), np.array([2.0, 2.0, 5.0])),
-        pcoe_metric("current", "model", 200, np.array([1.0, 2.0, 4.0]), np.array([2.0, 2.0, 5.0])),
+        task13_metric("model", 200, np.array([1.0, 2.0, 4.0]), np.array([2.0, 2.0, 5.0])),
+        phaethon_metric("current", "model", 200, np.array([1.0, 2.0, 4.0]), np.array([2.0, 2.0, 5.0])),
     ],
 )
 def test_thermal_driver_metrics_use_prediction_minus_measurement(row):
@@ -32,7 +32,7 @@ def test_thermal_driver_metrics_use_prediction_minus_measurement(row):
     assert -1.0 <= row["r"] <= 1.0
 
 
-def test_pcoe_power_consistency_counts_large_absolute_and_relative_errors():
+def test_phaethon_power_consistency_counts_large_absolute_and_relative_errors():
     row = _power_consistency_row(
         "all",
         actual=np.array([100.0, 200.0, 300.0]),

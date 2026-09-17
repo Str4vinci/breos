@@ -351,13 +351,15 @@ def main() -> None:
             "validation_sandia_task13_recovered_20260902",
             lambda: run.run_replayed_driver(
                 "validation_sandia_task13_recovered_20260902",
-                "sandia_task13",
-                "sandia_thermal_validate.py",
+                "iea_pvps_task13",
+                "task13_thermal_validate.py",
             ),
         ),
         (
             "validation_pcoe_recovered_20260902",
-            lambda: run.run_replayed_driver("validation_pcoe_recovered_20260902", "pcoe", "pcoe_validate.py"),
+            lambda: run.run_replayed_driver(
+                "validation_pcoe_recovered_20260902", "ucy_phaethon", "ucy_phaethon_validate.py"
+            ),
         ),
         (
             "validation_reunion_microgrid_recovered_20260902",

@@ -1,7 +1,7 @@
 # Upcoming-publication validation recovery
 
 This directory preserves the drivers that generated the deleted
-external-validation packages. Sandia Task 13, PCoE, Reunion, and orientation
+external-validation packages. IEA PVPS Task 13, UCY PHAETHON, Reunion, and orientation
 diversity were reconstructed by replaying the recorded `apply_patch` calls
 from the 2026-08-29 Codex transcript. HKUST v4 was reconstructed from the
 surviving v3 driver plus the two recorded v4 patches. The DKASC and NIST

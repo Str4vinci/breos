@@ -1,4 +1,4 @@
-"""Reproduce the PCoE PV system test-bed validation.
+"""Reproduce the UCY PHAETHON PV system test-bed validation.
 
 The run validates the BREOS thermal component against measured module
 temperature and checks the internal consistency of the recorded electrical
@@ -143,7 +143,7 @@ def _power_consistency_row(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Run the PCoE PV system test-bed validation.")
+    parser = argparse.ArgumentParser(description="Run the UCY PHAETHON PV system test-bed validation.")
     parser.add_argument(
         "--force",
         action="store_true",
@@ -180,7 +180,7 @@ def main() -> None:
         errors="coerce",
     )
     if data.index.isna().any():
-        raise ValueError("Unparseable timestamps in the PCoE file")
+        raise ValueError("Unparseable timestamps in the UCY PHAETHON file")
     data = data.sort_index()
     for column in data.columns:
         data[column] = pd.to_numeric(data[column], errors="coerce")
@@ -402,7 +402,7 @@ def main() -> None:
         "input_manifest": str(input_manifest),
         "configuration_file": str(config_path),
         "configuration_sha256": _sha256(config_path),
-        "input_hashes_include": "the downloaded PCoE CSV",
+        "input_hashes_include": "the downloaded UCY PHAETHON CSV",
         "output_hashes_exclude": "provenance.json itself",
         "output_hashes": {
             name: _sha256(OUTPUT / name)

@@ -30,20 +30,20 @@ def _one(frame: pd.DataFrame, **conditions: Any) -> pd.Series:
 
 def verify(root: Path) -> None:
     """Verify one recovered validation output tree."""
-    sandia = pd.read_csv(root / "validation_sandia_task13_recovered_20260902" / "thermal_metrics.csv")
-    row = _one(sandia, model="breos_faiman_default", gpoa_threshold_W_m2=200)
+    task13 = pd.read_csv(root / "validation_sandia_task13_recovered_20260902" / "thermal_metrics.csv")
+    row = _one(task13, model="breos_faiman_default", gpoa_threshold_W_m2=200)
     if int(row["n"]) != 26_023:
-        raise AssertionError(f"Sandia n: {row['n']}")
-    _close("Sandia bias C", float(row["bias_C"]), -0.038, 0.001)
-    _close("Sandia RMSE C", float(row["rmse_C"]), 2.993, 0.001)
-    _close("Sandia r", float(row["r"]), 0.970, 0.001)
+        raise AssertionError(f"Task 13 n: {row['n']}")
+    _close("Task 13 bias C", float(row["bias_C"]), -0.038, 0.001)
+    _close("Task 13 RMSE C", float(row["rmse_C"]), 2.993, 0.001)
+    _close("Task 13 r", float(row["r"]), 0.970, 0.001)
 
-    pcoe = pd.read_csv(root / "validation_pcoe_recovered_20260902" / "thermal_metrics.csv")
-    row = _one(pcoe, model="breos_faiman_default", gpoa_threshold_W_m2=200)
+    phaethon = pd.read_csv(root / "validation_pcoe_recovered_20260902" / "thermal_metrics.csv")
+    row = _one(phaethon, model="breos_faiman_default", gpoa_threshold_W_m2=200)
     if int(row["n"]) != 12_708:
-        raise AssertionError(f"PCoE n: {row['n']}")
-    _close("PCoE bias C", float(row["bias_C"]), 2.694, 0.001)
-    _close("PCoE RMSE C", float(row["rmse_C"]), 3.821, 0.001)
+        raise AssertionError(f"PHAETHON n: {row['n']}")
+    _close("PHAETHON bias C", float(row["bias_C"]), 2.694, 0.001)
+    _close("PHAETHON RMSE C", float(row["rmse_C"]), 3.821, 0.001)
 
     reunion = pd.read_csv(root / "validation_reunion_microgrid_recovered_20260902" / "thermal_metrics.csv")
     row = _one(

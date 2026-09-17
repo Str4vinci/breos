@@ -1,4 +1,4 @@
-# Sandia/IEA PVPS Task 13 thermal validation
+# IEA PVPS Task 13 thermal validation
 
 Result: the default BREOS Faiman model follows the measured back-of-module temperature well enough to support further work with this dataset. This run is a thermal component check, not a full weather-to-PV validation.
 
@@ -8,7 +8,11 @@ At `Gpoa >= 200 W/mÂ²`, the default BREOS path produced a mean bias of `-0.038 Â
 
 The downloaded collection contains twelve monthly five-minute CSV files and a module-characterization workbook. The official dataset description also lists Pmax, Isc, Voc, a full power matrix, spectral response, IAM, and outdoor electrical measurements. This run uses only the thermal slice. The reference is `Tbom`, the measured back-of-module temperature. BREOS is run through its Faiman temperature helper with the measured `Gpoa`, `AIR_TEMP`, and `WIND_SPEED` inputs.
 
-The dataset is the [IEA PVPS Task 13 module validation dataset](https://pvpmc.sandia.gov/datasets/iea-pvps-task-13-module-validation-dataset/). The source page describes one year of five-minute outdoor operating data with module electrical measurements, irradiance, ambient conditions, and wind speed.
+The dataset is the [IEA PVPS Task 13 module validation dataset](https://pvpmc.sandia.gov/datasets/iea-pvps-task-13-module-validation-dataset/).
+It was produced by IEA PVPS Task 13 and measured at SUPSI PVLab, Switzerland; Sandia's PV
+Performance Modelling Collaborative hosts it but did not produce it. It is published as Annex 1
+of report IEA-PVPS T13-20:2020, *Climatic Rating of Photovoltaic Modules*, ISBN 978-3-907281-08-6.
+Do not describe it as a Sandia dataset. The source page describes one year of five-minute outdoor operating data with module electrical measurements, irradiance, ambient conditions, and wind speed.
 
 ## Method
 
@@ -89,7 +93,8 @@ The workbook coefficients produce a cooler prediction and have worse bias, MAE, 
 - NumPy version: `2.4.6`
 - pandas version: `3.0.5`
 - BREOS package metadata version: `0.6.0`
-- Source directory: `$BREOS_VALIDATION_DATA/sandia_iea_pvps_task13`
+- Source directory: `$BREOS_VALIDATION_DATA/sandia_iea_pvps_task13` (local input directory name
+  retained so existing local data layouts and the recorded input manifest keep matching)
 - Input hashes: [`input_manifest.sha256`](input_manifest.sha256)
 - Configuration and configuration hash: [`run_config.json`](run_config.json), `4c872b61fb2f6923b1d4027a2d26c806e29be3f4910a24003d5a9bebb95394a4`
 - Driver hash and output hashes: [`provenance.json`](provenance.json)
@@ -101,7 +106,7 @@ From the clean article worktree, run:
 ```text
 BREOS_VALIDATION_ROOT=/path/to/article-worktree \
   BREOS_VALIDATION_DATA=/path/to/datasets \
-  python tools/validation/recovery/sandia_task13/drivers/sandia_thermal_validate.py --force
+  python tools/validation/recovery/iea_pvps_task13/drivers/task13_thermal_validate.py --force
 ```
 
 The driver refuses to replace existing generated files unless you pass `--force`. It writes [`thermal_metrics.csv`](thermal_metrics.csv), [`thermal_sensitivity_metrics.csv`](thermal_sensitivity_metrics.csv), [`monthly_bias.csv`](monthly_bias.csv), [`dataset_facts.json`](dataset_facts.json), and [`provenance.json`](provenance.json).

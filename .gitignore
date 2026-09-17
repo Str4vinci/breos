@@ -12,6 +12,9 @@ coverage.xml
 results/
 dev/
 *.csv
+*.csv.gz
+*.xlsx
+*.zip
 !breos/data/rlp/*.csv
 !validation/data/weather/*.csv
 !validation/data/weather/*.csv.gz

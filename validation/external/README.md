@@ -72,8 +72,10 @@ in the current dual-axis path.
 
 ## IEA PVPS Task 13 module dataset
 
-The Sandia PV Performance Modeling Collaborative publishes the [IEA PVPS Task
-13 module validation dataset](https://pvpmc.sandia.gov/datasets/iea-pvps-task-13-module-validation-dataset/).
+The [IEA PVPS Task 13 module validation
+dataset](https://pvpmc.sandia.gov/datasets/iea-pvps-task-13-module-validation-dataset/)
+was produced by IEA PVPS Task 13 and measured at SUPSI PVLab, Switzerland. Sandia's
+PV Performance Modeling Collaborative hosts it; Sandia did not produce it.
 It contains one year of five-minute outdoor measurements, including
 plane-of-array irradiance, ambient temperature, wind speed, and back-of-module
 temperature. The dataset accompanies [IEA PVPS report

@@ -9,13 +9,24 @@ the directory holding the NIST bulk archives. Both were machine-local
 directories on the run host; the recorded hashes, not the paths, are what
 identify these artifacts.
 
+## Naming
+
+The source directories were renamed to name the producing institutions correctly:
+`sandia_task13/` became `iea_pvps_task13/` (Sandia hosts that dataset, IEA PVPS Task 13 produced it,
+SUPSI PVLab measured it) and `pcoe/` became `ucy_phaethon/` (the data is from the PHAETHON Centre of
+Excellence at the University of Cyprus, not NASA Ames' Prognostics Center of Excellence).
+
+The archived output package names below, the local input directory names, and the recorded input
+manifests keep their original wording on purpose. They identify artifacts already written and
+hash-verified on 2026-09-02; renaming them here would make this record stop matching the archive.
+
 ## Find the outputs
 
 The six local-data packages are in
 `$RECOVERY_ROOT/`:
 
-- `validation_sandia_task13_recovered_20260902`
-- `validation_pcoe_recovered_20260902`
+- `validation_sandia_task13_recovered_20260902` (IEA PVPS Task 13; source tree `iea_pvps_task13/`)
+- `validation_pcoe_recovered_20260902` (UCY PHAETHON; source tree `ucy_phaethon/`)
 - `validation_reunion_microgrid_recovered_20260902`
 - `validation_orientation_diversity_recovered_20260902`
 - `validation_hkust_timing-corrected-exploratory-v4_recovered_20260902`

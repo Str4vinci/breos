@@ -112,7 +112,7 @@ def test_recovery_verifier_rejects_numerical_drift(tmp_path):
     frame.loc[0, "bias_C"] = -0.050
     frame.to_csv(sandia, index=False)
 
-    with pytest.raises(AssertionError, match="Sandia bias C"):
+    with pytest.raises(AssertionError, match="Task 13 bias C"):
         verify(tmp_path)
 
 

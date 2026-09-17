@@ -1,4 +1,4 @@
-"""Reproduce the Sandia/IEA Task 13 BREOS thermal validation.
+"""Reproduce the IEA PVPS Task 13 BREOS thermal validation.
 
 This deliberately validates the thermal component only. The dataset supplies
 measured POA irradiance, ambient temperature, wind speed, and back-of-module
