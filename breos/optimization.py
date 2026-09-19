@@ -19,6 +19,7 @@ from breos.economics import (
     calculate_lcoe_from_projection,
     cost_analysis_projection,
     cost_params_from_config,
+    replacement_fraction_from_steps,
     system_ac_production_power,
 )
 from breos.emissions import EmissionsParams
@@ -615,6 +616,15 @@ def _projected_year_summary(
         "Battery_Resistance_Growth": float(resistance_growth),
         "Replacements": int(replacements),
         "Replacement_Cost": float(replacement_cost),
+        # Where in the year the pack was swapped, so the economics can book
+        # the outlay at that instant rather than at a year boundary. NaN in a
+        # year without a replacement.
+        "Replacement_Year_Fraction": replacement_fraction_from_steps(
+            np.flatnonzero(results_df["Battery_Replaced"].to_numpy())
+            if "Battery_Replaced" in results_df.columns
+            else [],
+            len(results_df),
+        ),
         "PV_Degradation_Factor": float(pv_degradation_factor),
     }
 
