@@ -4,6 +4,23 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 
 ## [Unreleased]
 
+### Fixed
+- Battery replacement outlays are booked at the instant the pack is swapped
+  rather than at a calendar-year boundary. The events were aggregated into a
+  replacement year and inflated by `(1 + inflation) ** (year - 1)`, valuing the
+  outlay at the start of that year, then discounted as a year-N flow, valuing it
+  at the end: inflated to one end of the year and discounted from the other,
+  with neither matching the swap. The simulation already records the swap step,
+  so the App, Monte Carlo and optimization year summaries now report
+  `Replacement_Year_Fraction` and both projection paths apply the resulting
+  project time to the inflation and the discount exponent alike. LCOE discounts
+  the same outlay from the same instant, and the projection reports the resolved
+  time in a new `Replacement_Time_Years` column. A summary carrying no fraction
+  falls back to mid-year. Present value of each replacement rises by a factor
+  between `1 + inflation_rate` and `1 + discount_rate`, so NPV and LCOE move for
+  any run that replaces a pack; a run that never replaces is bit-identical.
+  Results generated before this change carry the superseded booking.
+
 ## [0.6.2] - 2026-09-03
 
 ### Added
