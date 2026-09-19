@@ -22,7 +22,7 @@ from tools.reproduce_article1 import (
 )
 
 EXPECTED_RLP_SHA256 = "23becc5a7bfc927b1f7604156e0e4953dcc6bb65268ca947b38db3dc4f2b28bc"
-EXPECTED_CONFIG_SHA256 = "bb8d6535c59f3570f004738ae21b3cb90a99a33806cf5529a8405f1c574d03bc"
+EXPECTED_CONFIG_SHA256 = "1486db81f591bcf062d177bf4c1a5a4d75ddf1b4b9149481baeb1ac90691c1df"
 FIXED_REGRESSION_LABELS = {"C1", "C2", "C3", "C4"}
 
 
@@ -63,9 +63,9 @@ def test_article1_config_pins_projected_run_controls():
     assert "max_charge_power_w" not in config["battery"]
     assert "max_discharge_power_w" not in config["battery"]
     assert config["emissions"]["average_grid_carbon_intensity_gco2_kwh"] == 127.91
-    assert len(config["reference_candidates"]) == 5
+    assert len(config["reference_candidates"]) == 6
     assert config["reference_candidates"][-1] == {
-        "label": "C5",
+        "label": "C6",
         "modules": 4,
         "battery_kwh": 0.0,
         "tilt": 35.0,
@@ -73,9 +73,11 @@ def test_article1_config_pins_projected_run_controls():
         "projected_grid_independence_pct": 36.856679733778655,
         "projected_npv_eur": 5231.641772530418,
     }
-    # C2 is the Gate 2 replacement, not the manuscript's 9 modules and 5 kWh.
+    # C2 answers the accepted set's own criterion -- the largest battery
+    # paying back before its first replacement -- not the manuscript's 9
+    # modules and 5 kWh, and not the superseded nine-module best-value pick.
     c2 = next(c for c in config["reference_candidates"] if c["label"] == "C2")
-    assert (c2["modules"], c2["battery_kwh"], c2["tilt"], c2["azimuth"]) == (9, 7.0, 35.0, 200.0)
+    assert (c2["modules"], c2["battery_kwh"], c2["tilt"], c2["azimuth"]) == (8, 7.0, 35.0, 200.0)
 
     module = _pv_module_provenance(config)
     assert module["parameters"]["T_Pmax_pct"] == -0.34

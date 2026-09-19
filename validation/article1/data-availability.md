@@ -17,6 +17,13 @@ generated each one.
 | Task 3 end-of-life sweep | `task3-eol-0.6.2` | 0.6.2 | `30c35cb` |
 | Figure 2 gate, Task 2 Porto, the Task 4 lattice and NSGA-II validation, Tasks 5, 5b, 5f, 6 and 7, and the figures | see the 0.6.1 deposit | 0.6.1 | — |
 
+The `C1-C5` above is the five-configuration representative set as it stood at
+`b3d0034`. The set was revised to six configurations afterwards, at `186b890`:
+C2 dropped from nine modules to eight, a new C4 was inserted, and the old C4
+and C5 became C5 and C6. Deposited results therefore label designs by the
+indices of their own producing commit, and a `C4` in a 0.6.1 or `b3d0034`
+bundle is not the `C4` the current configurations define.
+
 Splitting the citation this way is what the provenance files record, not a
 convenience. Every `reproduction.json` and `provenance.json` inside the three
 0.6.2 bundles records the commit named above with

@@ -7,8 +7,11 @@ was built for: a parity test over a scenario that never exercises the
 discharge cap passes without testing anything, so every branch case asserts
 its own precondition before asserting parity.
 
-The forthcoming publication study cases do not cover this ground. C1 and C5
-have no battery, and none of C1-C5 sets a discharge power limit.
+The forthcoming publication study cases do not cover this ground. C1 and C6
+have no battery, and the rest reach their charge and discharge caps only
+through the symmetric 1 C ``power_limit_c_rate`` the configs now set, which
+derives both limits from capacity rather than exercising the absolute caps and
+the binding behaviour the scenarios below are built to vary.
 """
 
 from __future__ import annotations

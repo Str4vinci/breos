@@ -8,6 +8,14 @@ replacement year and of NPV, which is what reviewer question 6(c) asks for and
 what 6(d) needs in order to say whether the field-versus-laboratory design
 difference is separable.
 
+The candidates are resolved from the config by label, so which designs a
+re-run replays follows whichever config is passed. Against the current
+publication config that is the revised six-configuration set, where C2 is the
+eight-module design and C4 is maximum grid independence subject to positive
+NPV. The original Task 6 ran before that revision, against a C2 of nine
+modules and a C4 that is now C5, so its numbers answer 6(c) for different
+designs than a re-run would.
+
 The four calendar parameters reach the dispatch through exactly one function,
 ``breos.battery._get_degradation_params``, which maps a model name onto the
 tuple the native degradation adapter consumes. Substituting that function is

@@ -36,12 +36,25 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 
 ### Changed
 - The forthcoming publication's reproduction configurations now use the accepted
-  representative candidate set rather than the superseded manuscript set. C2
-  becomes 9 modules and 7 kWh at 35/200, the Gate 2 replacement for a manuscript
-  design that sat off the accepted front. C1, C3 and C4 move to their
-  accepted-lattice orientations. C5 is unchanged and stays an off-front
-  benchmark. Each candidate's expected values now come from the accepted
-  lattice, so reference columns compare against the accepted front.
+  representative candidate set rather than the superseded manuscript set, and
+  that set moves from five configurations to six, each answering a distinct
+  selection criterion verified against the domain-corrected exhaustive
+  enumeration:
+
+  | | design | orientation | criterion |
+  | --- | --- | --- | --- |
+  | C1 | 6 PV, no battery | 30/200 | maximum NPV |
+  | C2 | 8 PV, 7 kWh | 35/200 | largest battery paying back before replacement |
+  | C3 | 9 PV, 9 kWh | 35/195 | knee, nearest the utopia point |
+  | C4 | 9 PV, 13 kWh | 45/190 | maximum grid independence with positive NPV |
+  | C5 | 9 PV, 20 kWh | 50/185 | maximum grid independence |
+  | C6 | 4 PV, no battery | 35/180 | off-front low-investment benchmark |
+
+  C1 and C3 are unchanged. C2 gains a criterion the previous set did not express
+  and drops from nine modules to eight. C4 is new, so the previous C4 and C5
+  become C5 and C6. Each candidate's expected values now come from the accepted
+  lattice, so reference columns compare against the accepted front. Results and
+  write-ups that refer to C4 or C5 by index predate the renumbering.
 - Both publication configurations replace the absolute 4352 W battery power cap
   with a symmetric 1.0 C capacity-proportional limit. The absolute cap did not
   scale with pack size and so under-limited small packs; 1 C is the BYD

@@ -89,8 +89,8 @@ analysis and plots; BREOS does not require a particular visualization layer.
 ## Forthcoming publication reproduction
 
 [`validation/article1/article1-projected-optimization.toml`](../../validation/article1/article1-projected-optimization.toml)
-pins the forthcoming publication's 15-minute, 20-year configuration, four
-archived comparison candidates plus the C5 low-investment benchmark, NSGA-II
+pins the forthcoming publication's 15-minute, 20-year configuration, five
+archived comparison candidates plus the C6 low-investment benchmark, NSGA-II
 seed and early stopping, battery degradation, replacement, and financial
 assumptions. Its hourly TMY is interpolated with the clear-sky shape and
 opt-in hourly-energy conservation. Energy conservation remains opt-in for

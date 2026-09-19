@@ -9,7 +9,15 @@ location and the output default are now CLI options.
 
 Runs the three degradation models over a reduced exhaustive grid at each
 model's accepted knee orientation, under three end-of-life settings, and
-replays the final C1 to C5 set under every one of them.
+replays the representative set under every one of them.
+
+That set is the five-configuration one accepted at revision-0.6.1, which the
+pinned config and pinned lattice below belong to. It is not the six-
+configuration set the publication configs now carry: this C2 is the superseded
+nine-module best-value pick, and this C4 and C5 are the designs that became C5
+and C6 when the set was revised. The candidates are deliberately left alone,
+because the port's whole purpose is to re-run the original sweep unchanged --
+renumbering them here would silently compare against a different set.
 
 Nothing in `breos/` or `tools/` is modified. The evaluation, Pareto filter and
 representative selection all come from tracked source, so the results are
@@ -80,7 +88,9 @@ SETTINGS = (
     ),
 )
 
-# The final representative set, with C2 fixed by the Gate 2 decision.
+# The revision-0.6.1 representative set, with C2 fixed by the Gate 2 decision
+# of that time. Superseded for new work by the six-configuration set in
+# validation/article1/, and kept verbatim so this sweep stays reproducible.
 CANDIDATES = (
     ("C1", "maximum NPV", 6, 0.0, 30.0, 200.0),
     ("C2", "best-value storage", 9, 7.0, 35.0, 200.0),

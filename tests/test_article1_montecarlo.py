@@ -117,7 +117,7 @@ def test_article1_metadata_is_removed_before_app_config_validation():
 
     resolved = resolve_app_config(simulation_config)
 
-    assert resolved.cfg["n_modules"] == 9
+    assert resolved.cfg["n_modules"] == case["n_modules"] == 8
     assert "pv_module_width_m" not in simulation_config
     assert "pv_module_length_m" not in simulation_config
     assert module["width_m"] == 1.134
