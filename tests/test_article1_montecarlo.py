@@ -28,10 +28,11 @@ def test_article1_montecarlo_config_pins_publication_method():
     }
     assert set(config["cases"]) == {"C1", "C2", "C3", "C4", "C5", "C6"}
     # C2 is the largest front battery whose break-even precedes its first
-    # replacement; NPV breaks the tie between the two qualifying 7 kWh designs.
+    # replacement; NPV breaks the tie among the qualifying 7 kWh designs. The
+    # corrected replacement booking moves that tie to the seven-module design.
     assert config["cases"]["C2"] == {
         "label": "Largest battery paying back before replacement",
-        "n_modules": 8,
+        "n_modules": 7,
         "battery_kwh": 7.0,
         "tilt": 35.0,
         "azimuth": 200.0,
@@ -117,7 +118,7 @@ def test_article1_metadata_is_removed_before_app_config_validation():
 
     resolved = resolve_app_config(simulation_config)
 
-    assert resolved.cfg["n_modules"] == case["n_modules"] == 8
+    assert resolved.cfg["n_modules"] == case["n_modules"] == 7
     assert "pv_module_width_m" not in simulation_config
     assert "pv_module_length_m" not in simulation_config
     assert module["width_m"] == 1.134

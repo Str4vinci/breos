@@ -126,12 +126,12 @@ projected_npv_eur = 5451.832386759766
 
 [[reference_candidates]]
 label = "C2"
-modules = 8
+modules = 7
 battery_kwh = 7.0
 tilt = 35.0
 azimuth = 200.0
-projected_grid_independence_pct = 70.14609341198563
-projected_npv_eur = 3324.252417061154
+projected_grid_independence_pct = 68.71655549751222
+projected_npv_eur = 3228.001698538505
 
 [[reference_candidates]]
 label = "C3"

@@ -93,10 +93,13 @@ azimuth = 200.0
 
 [cases.C2]
 # Among front members carrying a battery, the largest capacity whose
-# break-even precedes its first replacement; ties broken by NPV. Two 7 kWh
-# members qualify (35/200 at 3324 EUR, 30/200 at 3313 EUR); NPV selects 35/200.
+# break-even precedes its first replacement; ties broken by NPV. Under the
+# corrected replacement booking three 7 kWh members qualify on the exhaustive
+# front (7 PV at 3228 EUR, 8 PV at 3222 EUR, 8 PV 30/200 at 3211 EUR); NPV
+# selects the seven-module design. The nine-module variant breaks even at
+# 14.09 y, after its year-11 replacement, so it does not qualify.
 label = "Largest battery paying back before replacement"
-n_modules = 8
+n_modules = 7
 battery_kwh = 7.0
 tilt = 35.0
 azimuth = 200.0
