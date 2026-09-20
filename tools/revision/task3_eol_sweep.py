@@ -91,13 +91,50 @@ SETTINGS = (
 # The revision-0.6.1 representative set, with C2 fixed by the Gate 2 decision
 # of that time. Superseded for new work by the six-configuration set in
 # validation/article1/, and kept verbatim so this sweep stays reproducible.
-CANDIDATES = (
+LEGACY_CANDIDATES = (
     ("C1", "maximum NPV", 6, 0.0, 30.0, 200.0),
     ("C2", "best-value storage", 9, 7.0, 35.0, 200.0),
     ("C3", "knee", 9, 9.0, 35.0, 195.0),
     ("C4", "maximum GI", 9, 20.0, 50.0, 185.0),
     ("C5", "low-investment off-front benchmark", 4, 0.0, 35.0, 180.0),
 )
+
+# Roles for the six-configuration set, which the publication configs carry but
+# do not themselves record. The criteria are those adopted in 186b890.
+SIX_CONFIG_ROLES = {
+    "C1": "maximum NPV",
+    "C2": "largest battery paying back before replacement",
+    "C3": "knee",
+    "C4": "maximum GI subject to positive NPV",
+    "C5": "maximum GI",
+    "C6": "low-investment off-front benchmark",
+}
+
+
+def _load_candidates(path):
+    """Read a representative set from a publication optimization config.
+
+    Returns the same shape as LEGACY_CANDIDATES so every downstream use, and
+    the verification counts, are unchanged.
+    """
+    import tomllib
+
+    entries = tomllib.loads(Path(path).read_bytes().decode("utf-8"))["reference_candidates"]
+    resolved = []
+    for entry in entries:
+        label = str(entry["label"])
+        resolved.append(
+            (
+                label,
+                SIX_CONFIG_ROLES.get(label, label),
+                int(entry["modules"]),
+                float(entry["battery_kwh"]),
+                float(entry["tilt"]),
+                float(entry["azimuth"]),
+            )
+        )
+    return tuple(resolved)
+
 
 MODULE_VALUES = tuple(range(0, 10))
 BATTERY_VALUES = tuple(float(k) for k in range(0, 21))
@@ -174,10 +211,25 @@ def main() -> int:
         "--expect-commit",
         help="Require HEAD to be this commit. Omitted by default so the sweep can run on a later release.",
     )
+    ap.add_argument(
+        "--candidates",
+        type=Path,
+        help=(
+            "Optimization config whose reference_candidates replace the pinned "
+            "revision-0.6.1 five-configuration set. Pass "
+            "validation/article1/article1-projected-optimization.toml to sweep "
+            "the current six-configuration set."
+        ),
+    )
     ap.add_argument("--n-procs", type=int, default=16)
     ap.add_argument("--execution-backend", default="numba")
     ap.add_argument("--chunk-size", type=int, default=30)
     args = ap.parse_args()
+    candidates_set = _load_candidates(args.candidates) if args.candidates else LEGACY_CANDIDATES
+    print(
+        f"candidate set: {len(candidates_set)} configurations from "
+        f"{args.candidates if args.candidates else 'the pinned revision-0.6.1 set'}"
+    )
 
     out = args.output
     out.mkdir(parents=True, exist_ok=True)
@@ -221,7 +273,7 @@ def main() -> int:
                     "optimization.early_stop": "removed",
                 }
                 points = [("grid", "", m, b, tilt, azimuth) for m in MODULE_VALUES for b in BATTERY_VALUES]
-                points += [("candidate", label, m, b, t, a) for label, _role, m, b, t, a in CANDIDATES]
+                points += [("candidate", label, m, b, t, a) for label, _role, m, b, t, a in candidates_set]
                 for i in range(0, len(points), args.chunk_size):
                     tasks.append((run_key, config, points[i : i + args.chunk_size]))
 
@@ -253,7 +305,7 @@ def main() -> int:
 
         grid = table[table["kind"] == "grid"].drop(columns=["label"]).reset_index(drop=True)
         candidates = table[table["kind"] == "candidate"].reset_index(drop=True)
-        candidates["role"] = candidates["label"].map({c[0]: c[1] for c in CANDIDATES})
+        candidates["role"] = candidates["label"].map({c[0]: c[1] for c in candidates_set})
 
         # Representatives, selected by the repository's own definitions.
         rep_rows, front_sizes = [], {}
@@ -275,7 +327,7 @@ def main() -> int:
         # How much of storage NPV is the replacement assumption alone.
         sens_rows = []
         for model_key, _cm, _t, _a in MODELS:
-            for label, role, modules, battery_kwh, tilt, azimuth in CANDIDATES:
+            for label, role, modules, battery_kwh, tilt, azimuth in candidates_set:
                 sel = candidates[(candidates.model == model_key) & (candidates.label == label)]
                 by = {r["setting"]: r for r in sel.to_dict(orient="records")}
                 base, none_, strict = by["eol-70"], by["no-replacement"], by["eol-80"]
@@ -340,7 +392,7 @@ def main() -> int:
         )
         check(
             "candidate replay count is exact",
-            len(candidates) == len(MODELS) * len(SETTINGS) * len(CANDIDATES),
+            len(candidates) == len(MODELS) * len(SETTINGS) * len(candidates_set),
             f"{len(candidates)} rows",
         )
         check("no evaluation returned a null objective", not (grid[GI].isna().any() or grid[NPV].isna().any()), "none")
@@ -487,9 +539,10 @@ def main() -> int:
             "rlp_directory": str(args.rlp_directory),
             "models": [{"key": k, "calendar_model": c, "tilt_deg": t, "azimuth_deg": a} for k, c, t, a in MODELS],
             "settings": [{"key": k, "overrides": o, "description": d} for k, o, d in SETTINGS],
+            "candidate_set_source": str(args.candidates) if args.candidates else "pinned revision-0.6.1 five-configuration set",
             "candidates": [
                 {"label": lbl, "role": role, "modules": m, "battery_kwh": b, "tilt_deg": t, "azimuth_deg": a}
-                for lbl, role, m, b, t, a in CANDIDATES
+                for lbl, role, m, b, t, a in candidates_set
             ],
             "grid": {
                 "modules": list(MODULE_VALUES),
