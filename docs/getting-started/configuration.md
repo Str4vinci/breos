@@ -67,6 +67,7 @@ weather/data access, load profiles, PV system data, and cost assumptions; see
 | `battery_rte` | `None` | Battery round-trip efficiency (`None` = 0.95), split evenly across charge/discharge |
 | `battery_max_charge_power_w` | `None` | Maximum DC power entering the battery charge path; `None` is unlimited |
 | `battery_max_discharge_power_w` | `None` | Maximum battery AC power delivered to load; `None` is unlimited |
+| `battery_power_limit_c_rate` | `None` | Charge and discharge limit on the stored energy, as a multiple of capacity (1.0 = 1 C); replaces both absolute limits |
 | `battery_temperature` | `"weather"` | Battery temperature used for degradation: `"weather"`, a fixed temperature in °C, or a timestamped CSV path |
 | `battery_indoor_model` | `None` | Optional indoor-temperature model settings. `None` applies the default indoor buffering; use `{"enabled": false}` to use `battery_temperature` without remapping |
 | `dc_coupled` | `True` | DC-coupled / hybrid inverter. `False` is currently unsupported and raises |
@@ -332,6 +333,14 @@ any explicit `n_modules` key is ignored.
 
 Each array may also set its own `transposition_model`, overriding the
 top-level default for that array only.
+
+Arrays inherit `tracking` and the tracker geometry (`axis_tilt`,
+`axis_azimuth`, `max_angle`, `backtrack`, `cross_axis_tilt`, and
+`dual_axis_max_tilt`) from the top level, and an array may override any of
+them. So a top-level `tracking = "single_axis"` makes every array a tracker
+unless the array sets `tracking = "fixed"`. An array entry accepts only the
+keys named in this section and the sky, ground, and bifacial keys; any other
+key, such as a misspelled `tlt`, is rejected.
 
 ## Sky-diffusion (transposition) model
 

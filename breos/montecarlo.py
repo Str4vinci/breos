@@ -693,8 +693,11 @@ def _run_trajectory_index(run_idx: int) -> tuple[int, dict[str, Any], pd.DataFra
     # One observation window per trajectory: that is the unit of work whose
     # compile cost is being attributed. A no-op on the Python backend.
     reset_jit_cache_observation(settings.execution_backend)
-    seed = None if settings.seed is None else settings.seed + run_idx
-    rng = np.random.default_rng(seed)
+    # Each run takes its own child of the base seed's SeedSequence, the same
+    # stream as SeedSequence(seed).spawn(n_runs)[run_idx], so studies under
+    # different base seeds share no trajectory. Without a seed, every run
+    # draws fresh entropy.
+    rng = np.random.default_rng(np.random.SeedSequence(settings.seed, spawn_key=(run_idx,)))
     metrics, trajectory = _simulate_trajectory(
         cfg,
         resolved,
@@ -839,7 +842,9 @@ def run_montecarlo(config: dict[str, Any], settings: MonteCarloSettings) -> Mont
             "settings": asdict(settings),
             "available_weather_years": [int(y) for y in available_years],
             "runtime_weather": runtime_weather,
-            "random_stream": "numpy.default_rng(base_seed + zero_based_run_index)",
+            "random_stream": (
+                "numpy.random.default_rng(numpy.random.SeedSequence(base_seed).spawn(n_runs)[zero_based_run_index])"
+            ),
             "execution": backend_provenance,
         },
     )

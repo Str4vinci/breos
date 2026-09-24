@@ -96,7 +96,10 @@ class BatteryConfig:
     ``max_discharge_power_w`` limits battery AC delivered to the load. Both are
     absolute wattages that do not track ``nominal_energy_wh``. Set
     ``power_limit_c_rate`` instead to derive a symmetric limit from capacity,
-    which is what a capacity sweep normally wants.
+    which is what a capacity sweep normally wants. It limits the stored
+    energy, like a cell current rating: at 1 C a 5 kWh pack stores or releases
+    at most 5 kW in either direction, so its DC input while charging and its AC
+    output while discharging differ from that by the conversion losses.
 
     ``ac_output_scale`` derates AC delivery for shortfall the chain does not
     model and is bounded to ``(0, 1]``. It applies inside dispatch, not to a
@@ -147,9 +150,10 @@ class BatteryConfig:
     max_charge_power_w: Optional[float] = None
     max_discharge_power_w: Optional[float] = None
     # Capacity-proportional alternative to the two absolute limits above. When
-    # set, both limits are derived as ``power_limit_c_rate * nominal_energy_wh``,
-    # so a sizing sweep keeps one C-rate instead of one wattage across capacities.
-    # Setting it together with either absolute limit raises.
+    # set, the stored energy changes by at most ``power_limit_c_rate *
+    # nominal_energy_wh`` per hour in either direction, so a sizing sweep keeps
+    # one C-rate instead of one wattage across capacities. The absolute limits
+    # apply at other boundaries, so setting either with it raises.
     power_limit_c_rate: Optional[float] = None
     # In-dispatch derate applied to inverter AC output after the part-load
     # curve and every inverter limit. It stands in for AC-side shortfall the
@@ -228,16 +232,13 @@ class BatteryConfig:
         if self.power_limit_c_rate is not None:
             if self.max_charge_power_w is not None or self.max_discharge_power_w is not None:
                 raise ValueError(
-                    "power_limit_c_rate derives both power limits from capacity; do not also set "
+                    "power_limit_c_rate limits both directions from capacity; do not also set "
                     "max_charge_power_w or max_discharge_power_w"
                 )
             rate = finite("power_limit_c_rate", self.power_limit_c_rate)
             if rate <= 0.0:
                 raise ValueError("power_limit_c_rate must be greater than 0")
             self.power_limit_c_rate = rate
-            derived = rate * self.nominal_energy_wh
-            self.max_charge_power_w = derived
-            self.max_discharge_power_w = derived
         self.ac_output_scale = finite("ac_output_scale", self.ac_output_scale)
         if not 0.0 < self.ac_output_scale <= 1.0:
             raise ValueError(
@@ -254,6 +255,13 @@ class BatteryConfig:
             else:
                 self.replacement_cost = 0.0
 
+    @property
+    def stored_power_limit_w(self) -> Optional[float]:
+        """The C-rate limit on stored-energy change (W), or None without one."""
+        if self.power_limit_c_rate is None:
+            return None
+        return self.power_limit_c_rate * self.nominal_energy_wh
+
 
 def _dispatch_dc_step(
     pv_dc: float,
@@ -269,11 +277,14 @@ def _dispatch_dc_step(
     inv_cap_ac_wh: float,
     has_battery: bool,
     ac_output_scale: float = 1.0,
+    cap_stored_wh: float = math.inf,
 ) -> Tuple[float, Dict[str, float]]:
     """Dispatch one DC-coupled timestep; inputs, outputs and ledger are Wh.
 
     PV serves AC load first. Surplus DC then charges the battery before any
     export. PV and battery discharge share the inverter AC nameplate.
+    ``cap_stored_wh`` limits the stored energy gained or released, on top of
+    the DC charge-input and AC discharge limits.
     """
     ledger = {
         "pv_dc_to_battery": 0.0,
@@ -298,7 +309,7 @@ def _dispatch_dc_step(
         room = max(0.0, emax - battery_energy)
         if room <= 0.0 or eff_charge <= 0.0:
             return 0.0
-        drawn = min(surplus_dc, room / eff_charge, cap_charge_in_wh)
+        drawn = min(surplus_dc, room / eff_charge, cap_charge_in_wh, cap_stored_wh / eff_charge)
         battery_energy += drawn * eff_charge
         ledger["pv_dc_to_battery"] = drawn
         ledger["battery_charge_input"] = drawn
@@ -339,7 +350,11 @@ def _dispatch_dc_step(
             target_total_ac = min(load, inv_cap_ac_wh * ac_output_scale)
             if available > 0.0 and eff_discharge > 0.0 and target_total_ac > pv_ac_max:
                 total_dc_target = dc_power_for_ac_output(target_total_ac, inv_cap_ac_wh, inv_eff, ac_output_scale)
-                battery_dc = min(available * eff_discharge, max(0.0, total_dc_target - pv_dc))
+                battery_dc = min(
+                    available * eff_discharge,
+                    max(0.0, total_dc_target - pv_dc),
+                    cap_stored_wh * eff_discharge,
+                )
 
                 def combined_conversion(battery_dc_input: float) -> tuple[float, float, float]:
                     total_dc = pv_dc + battery_dc_input
@@ -1214,6 +1229,7 @@ def _dispatch_day_python(
     cap_wh: float,
     cap_charge_wh: float,
     cap_discharge_wh: float,
+    cap_stored_wh: float = math.inf,
 ) -> Tuple[float, float, float, float]:
     """Dispatch timesteps ``[lo, hi)`` at fixed health, filling *out* in place.
 
@@ -1285,6 +1301,7 @@ def _dispatch_day_python(
             cap_wh,
             has_battery,
             battery_config.ac_output_scale,
+            cap_stored_wh,
         )
         charge_stored = ledger["battery_charge_input"] * eff_charge
         pv_origin_discharge_dc = ledger["battery_discharge_dc"] * origin_fraction
@@ -1973,6 +1990,7 @@ def _simulate_core(
     cap_wh = _step_energy_cap(battery_config.inverter_ac_capacity_w, hours_per_step)
     cap_charge_wh = _step_energy_cap(battery_config.max_charge_power_w, hours_per_step)
     cap_discharge_wh = _step_energy_cap(battery_config.max_discharge_power_w, hours_per_step)
+    cap_stored_wh = _step_energy_cap(battery_config.stored_power_limit_w, hours_per_step)
 
     dispatch_day = _resolve_dispatch_day(execution_backend)
 
@@ -2033,6 +2051,7 @@ def _simulate_core(
             cap_wh=cap_wh,
             cap_charge_wh=cap_charge_wh,
             cap_discharge_wh=cap_discharge_wh,
+            cap_stored_wh=cap_stored_wh,
         )
         if window_end - window_start < steps_per_day:
             # Degradation windows are positional and whole-day. A trailing

@@ -157,6 +157,27 @@ def _datetime_index_seconds(time_index: "pd.DatetimeIndex") -> np.ndarray:
     return whole_seconds.astype(float) + remainder / ticks_per_second
 
 
+def local_datetime_index(values) -> "pd.DatetimeIndex":
+    """Parse a result ``Datetime`` column on its own local calendar.
+
+    Month, year and day groups must follow the wall clock of the result
+    frame. A conversion to UTC moves every boundary by the UTC offset, so a
+    Berlin year starts with a one-hour stub of the previous December.
+
+    Datetime values keep their zone. Text with one UTC offset (a CSV of a
+    fixed-offset run) parses to that offset. Text with more than one offset
+    (a CSV of an IANA-zone run across DST) has no single zone to parse to, so
+    each value keeps its own wall-clock time, which is the civil time the
+    offset recorded.
+    """
+    if pd.api.types.is_datetime64_any_dtype(values):
+        return pd.DatetimeIndex(values)
+    try:
+        return pd.DatetimeIndex(pd.to_datetime(values))
+    except ValueError:
+        return pd.DatetimeIndex([pd.Timestamp(value).tz_localize(None) for value in values])
+
+
 def get_hours_per_step(freq: str) -> float:
     """
     Get the number of hours per timestep based on frequency.
