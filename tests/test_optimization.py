@@ -128,6 +128,7 @@ def test_projected_zeb_constraint_uses_projected_diagnostic(monkeypatch):
         "Projected_Grid_Independence_%": 50.0,
         "Projected_ZEB_Ratio": 0.8,
         "Projected_NPV_Eur": 1000.0,
+        "Projected_Initial_Cost_Eur": 0.0,
     }
     monkeypatch.setattr("breos.optimization.calculate_pv_production_dc", lambda **kwargs: pd.Series(0.0, index=idx))
     monkeypatch.setattr(
