@@ -82,6 +82,18 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   different year from `tmy_data`**, which ran their battery at 22.9 °C with the
   indoor model on. App runs are unchanged: the default Porto run with a 5 kWh
   battery matches develop exactly at hourly and 15-minute resolution.
+- The projected optimizer's budget constraint checks the CAPEX it reports
+  ([#157](https://github.com/Str4vinci/breos/issues/157)). With
+  `objective_basis = "projected"`, `budget_eur` was compared with the
+  steady-state CAPEX, which prices modules at `costs.panel_wp` when that key is
+  set, while `Projected_Initial_Cost_Eur` prices the selected module's `Mpp`.
+  One 550 W module under a 400 W `panel_wp` passed a €480 budget at €465.48 and
+  was reported at €490.03. The constraint now uses the projected CAPEX.
+  **Pareto fronts change for projected runs that set `costs.panel_wp` below the
+  module's `Mpp`**: designs over budget at the reported cost are now
+  infeasible. Without `panel_wp` the two CAPEX figures are identical, so other
+  runs are unchanged. On the bundled Porto TMY with the example projected
+  config, 9 modules and 20 kWh give €14,794.97 on both paths.
 
 ### Removed
 - Removed the reproduction tooling for the upcoming publication:

@@ -1467,6 +1467,9 @@ try:
             objective_grid_dependence = grid_dependence_ratio
             objective_npv = npv
             objective_zeb = zeb_ratio
+            # The budget gates the CAPEX of the basis being optimized, so the
+            # cost a feasible design reports is the cost that was checked.
+            objective_capex = capex
             if self.projected_objectives:
                 projected_metrics = _evaluate_projected_design_metrics(
                     execution_backend=self.execution_backend,
@@ -1491,6 +1494,7 @@ try:
                 objective_grid_dependence = 1.0 - float(projected_metrics["Projected_Grid_Independence_%"]) / 100.0
                 objective_npv = float(projected_metrics["Projected_NPV_Eur"])
                 objective_zeb = float(projected_metrics["Projected_ZEB_Ratio"])
+                objective_capex = float(projected_metrics["Projected_Initial_Cost_Eur"])
 
             out["ZEB_Ratio"] = objective_zeb
             out["Objective_Grid_Independence_%"] = (
@@ -1504,7 +1508,7 @@ try:
 
             # --- 4. Constraints Calculation ---
             # g1: Price <= Budget (g1 <= 0 means satisfied)
-            g1 = capex - self.budget_limit
+            g1 = objective_capex - self.budget_limit
 
             # g2: Area <= Max Area
             g2 = system_area - self.area_limit
