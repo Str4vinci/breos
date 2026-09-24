@@ -294,6 +294,60 @@ def test_clear_sky_resampling_does_not_attenuate_values_at_source_timestamps():
     assert resampled.loc[idx, "ghi"].to_numpy() == pytest.approx(weather["ghi"].to_numpy())
 
 
+def _three_day_hourly_weather(unit: str) -> pd.DataFrame:
+    idx = pd.date_range("2025-06-20", periods=72, freq="h", tz="UTC").as_unit(unit)
+    hour = np.arange(72) % 24
+    daylight = np.clip(np.sin((hour - 6) / 12 * np.pi), 0.0, None)
+    return pd.DataFrame(
+        {
+            "ghi": 800.0 * daylight,
+            "dni": 600.0 * daylight,
+            "dhi": 200.0 * daylight,
+            "temp_air": 18.0 + 6.0 * np.sin((hour - 9) / 24 * 2 * np.pi),
+            "wind_speed": 2.0 + hour / 12.0,
+        },
+        index=idx,
+    )
+
+
+_TMY_METADATA = {"inputs": {"location": {"latitude": 41.1579, "longitude": -8.6291, "elevation": 100.0}}}
+_RESAMPLERS = {
+    "clear_sky_makima": lambda df: resample_to_15min(df, latitude=41.1579, longitude=-8.6291),
+    "clear_sky_linear": lambda df: resample_to_15min(df, method="linear", latitude=41.1579, longitude=-8.6291),
+    "direct_makima": lambda df: resample_to_15min(df),
+    "tmy": lambda df: resample_tmy_to_15min(df, _TMY_METADATA),
+}
+
+
+@pytest.mark.parametrize("resampler", sorted(_RESAMPLERS))
+@pytest.mark.parametrize("unit", ["s", "ms", "us"])
+def test_resamplers_do_not_depend_on_the_index_resolution(resampler, unit):
+    """pandas 3 parses timestamps as microseconds, pandas 2 as nanoseconds.
+
+    Both resamplers used to divide the raw integers by 10**9, which jittered
+    the microsecond abscissa and made second-resolution input fail outright.
+    """
+    reference = _RESAMPLERS[resampler](_three_day_hourly_weather("ns"))
+    resampled = _RESAMPLERS[resampler](_three_day_hourly_weather(unit))
+
+    assert resampled.index.equals(reference.index)
+    assert resampled.columns.tolist() == reference.columns.tolist()
+    np.testing.assert_array_equal(resampled.to_numpy(), reference.to_numpy())
+
+
+def test_tmy_resampling_keeps_the_weather_columns_and_bounds_humidity():
+    weather = _three_day_hourly_weather("ns")
+    weather["relative_humidity"] = np.linspace(40.0, 140.0, len(weather))
+    weather["pressure"] = 101325.0
+    weather.attrs["breos_weather_metadata"] = {"source": "PVGIS_TMY", "radiation_time_basis": "instant"}
+
+    resampled = resample_tmy_to_15min(weather, _TMY_METADATA)
+
+    assert resampled.columns.tolist() == ["ghi", "dni", "dhi", "temp_air", "relative_humidity", "wind_speed"]
+    assert resampled["relative_humidity"].max() == 100.0
+    assert resampled.attrs["breos_weather_metadata"]["irradiance_resampling_method"] == "makima_clear_sky"
+
+
 def test_fetch_tmy_weather_accepts_hourly_frequency_alias_and_uses_horizon_by_default(monkeypatch):
     tmy = pd.DataFrame({"ghi": [0.0]}, index=pd.date_range("2020-01-01 00:00", periods=1, freq="h"))
     captured = {}

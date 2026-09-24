@@ -5,6 +5,7 @@ import pandas as pd
 import pytest
 
 from breos.utils import (
+    _datetime_index_seconds,
     get_hours_per_step,
     get_steps_per_day,
     get_steps_per_year,
@@ -81,3 +82,24 @@ def test_15min_frequency_aliases(freq):
     assert get_hours_per_step(freq) == pytest.approx(0.25)
     assert get_steps_per_day(freq) == 96
     assert get_steps_per_year(freq, leap_year=True) == 35136
+
+
+@pytest.mark.parametrize("unit", ["s", "ms", "us", "ns"])
+def test_datetime_index_seconds_is_the_same_at_every_resolution(unit):
+    idx = pd.DatetimeIndex(["1969-12-31 23:00", "2025-06-21 00:00", "2025-06-21 00:15"], tz="UTC")
+
+    seconds = _datetime_index_seconds(idx.as_unit(unit))
+
+    np.testing.assert_array_equal(seconds, [-3600.0, 1750464000.0, 1750464900.0])
+
+
+def test_datetime_index_seconds_keeps_sub_second_offsets_of_a_nanosecond_index():
+    # A nanosecond count this large is past float64's exact-integer range, so
+    # converting it whole would round away offsets that the split keeps.
+    idx = pd.DatetimeIndex(["2025-06-21 00:00:00.5", "2025-06-21 00:00:00.000001"]).as_unit("ns")
+
+    seconds = _datetime_index_seconds(idx)
+
+    assert seconds[0] == 1750464000.5
+    assert seconds[1] == pytest.approx(1750464000.000001, abs=1e-7)
+    assert seconds[1] > 1750464000.0
