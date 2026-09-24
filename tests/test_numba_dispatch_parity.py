@@ -7,11 +7,11 @@ was built for: a parity test over a scenario that never exercises the
 discharge cap passes without testing anything, so every branch case asserts
 its own precondition before asserting parity.
 
-The forthcoming publication study cases do not cover this ground. C1 and C6
-have no battery, and the rest reach their charge and discharge caps only
-through the symmetric 1 C ``power_limit_c_rate`` the configs now set, which
-derives both limits from capacity rather than exercising the absolute caps and
-the binding behaviour the scenarios below are built to vary.
+Typical sizing studies do not cover this ground. PV-only designs have no
+battery, and battery designs often reach their charge and discharge caps only
+through a symmetric ``power_limit_c_rate``, which derives both limits from
+capacity rather than exercising the absolute caps and the binding behaviour
+the scenarios below are built to vary.
 """
 
 from __future__ import annotations
@@ -245,9 +245,8 @@ def test_summary_path_matches_detailed_path_under_numba():
 # the loop, so the kernel cannot tell a remapped series from raw weather or a
 # pinned constant. What it does branch on is the *value*: lfp_capacity_factor
 # switches at 25 C and at 0 C and saturates at 0.5, and compute_cell_temperature
-# runs every step. These cases pin bit-identity across the range that the
-# forthcoming publication study can produce, including the fixed 25 C control
-# and the clamp boundaries of the indoor model.
+# runs every step. These cases pin bit-identity across the realistic range,
+# including a fixed 25 C control and the clamp boundaries of the indoor model.
 
 
 def _temperature_variant(values: np.ndarray):

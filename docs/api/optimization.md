@@ -65,10 +65,9 @@ Multi-objective sizing accepts these explicit constraint keys:
 | `constraints.max_tilt_deg` | 90 | Maximum tilt, or `"adjust"` for the latitude-based bound |
 | `constraints.enforce_zeb` | `false` | Add the ZEB feasibility constraint |
 
-Set the physical and financial limits explicitly for publication runs. The
-defaults preserve earlier direct-API behavior; they are not site-specific
-recommendations. The configuration for the forthcoming publication pins every
-applicable limit.
+Set the physical and financial limits explicitly for any study you intend to
+report. The defaults preserve earlier direct-API behavior; they are not
+site-specific recommendations.
 
 Projected results expose `SteadyState_*` and `Projected_*` diagnostics. The
 ordinary `Grid_Independence_%` and `NPV_Eur` columns mirror the values used by
@@ -86,39 +85,14 @@ included in the metrics, while the financial table retains their annual source
 columns. These tables are intended as stable source data for custom
 analysis and plots; BREOS does not require a particular visualization layer.
 
-## Forthcoming publication reproduction
+## Reproducing the upcoming publication
 
-[`validation/article1/article1-projected-optimization.toml`](../../validation/article1/article1-projected-optimization.toml)
-pins the forthcoming publication's 15-minute, 20-year configuration, five
-archived comparison candidates plus the C6 low-investment benchmark, NSGA-II
-seed and early stopping, battery degradation, replacement, and financial
-assumptions. Its hourly TMY is interpolated with the clear-sky shape and
-opt-in hourly-energy conservation. Energy conservation remains opt-in for
-general resampling. The E-REDES household profile is licensed external data
-and is not redistributed.
-
-Run the deterministic fixed candidates before starting NSGA-II:
-
-```bash
-uv run python tools/reproduce_article1.py \
-  --rlp-directory /path/to/licensed/rlp \
-  --output results/article1
-```
-
-Add `--full-optimization` to run the configured population. Use
-`--smoke-optimization` for a four-candidate generation and `--n-procs N` to
-evaluate NSGA-II candidates in parallel. The command writes CSV results plus
-`reproduction.json`, which records the resolved config, exact
-source revision and dirty flag, command, software versions, and input hashes.
-Each fixed candidate also gets `yearly_summary.csv`, `cost_projection.csv`,
-and `metrics.json`, with their hashes recorded in the report.
-
-Use `--calendar-model naumann_lam_field_calibrated_v2` or
-`--calendar-model naumann_lam` to repeat fixed-design or full optimization
-runs with the field-v2 or laboratory calendar-degradation parameters. Put each
-model in a separate `--output` directory.
-The [reproduction report](https://github.com/Str4vinci/breos/blob/develop/validation/article1/README.md)
-explains the numerical changes caused by post-study corrections.
+The configurations, drivers, and run records for the upcoming publication
+were removed from the repository after 0.6.2. They are preserved in the
+[BREOS 0.6.2 archive](https://doi.org/10.5281/zenodo.22938914) and at the
+[`v0.6.2` tag](https://github.com/Str4vinci/breos/tree/v0.6.2), under
+`validation/article1/` and `tools/`. Reproduce the published numbers from that
+release, not from a later version.
 
 ## Tilt
 
