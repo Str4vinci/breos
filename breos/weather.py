@@ -897,13 +897,20 @@ def _remap_weather_year(year_data: pd.DataFrame, source_year: int, target_year: 
     return remapped
 
 
-def select_random_year_and_replace_datetime(csv_file_path: str, target_year: int = 2025) -> Tuple[pd.DataFrame, int]:
+def select_random_year_and_replace_datetime(
+    csv_file_path: str,
+    target_year: int = 2025,
+    *,
+    rng: Optional[np.random.Generator] = None,
+) -> Tuple[pd.DataFrame, int]:
     """
     Load weather data, randomly select a complete year, and replace datetime with target year.
 
     Args:
         csv_file_path: Path to the CSV file
         target_year: Year to replace the selected year's datetime with
+        rng: Generator that makes the choice. Pass a seeded one to reproduce
+            it; the default draws fresh entropy.
 
     Returns:
         Tuple of (DataFrame with target year dates, selected_year)
@@ -915,8 +922,8 @@ def select_random_year_and_replace_datetime(csv_file_path: str, target_year: int
     if not by_year:
         raise ValueError(f"No complete years found in weather file: {csv_file_path}")
 
-    # Use numpy RNG so Monte Carlo's np.random.seed(...) controls this choice.
-    selected_year = int(np.random.choice(list(by_year)))
+    rng = np.random.default_rng() if rng is None else rng
+    selected_year = int(rng.choice(list(by_year)))
 
     selected_year_data = _remap_weather_year(by_year[selected_year], selected_year, target_year)
     selected_year_data.attrs[WEATHER_METADATA_KEY] = metadata

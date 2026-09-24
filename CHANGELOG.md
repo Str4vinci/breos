@@ -99,6 +99,22 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   interval-mean files fetched from now on**, which give Monte Carlo one more
   weather year. Monte Carlo on existing files is unchanged: the per-year
   weather from both Porto 2005-2024 Open-Meteo files matches develop exactly.
+- Monte Carlo studies under adjacent seeds no longer share their trajectories
+  ([#168](https://github.com/Str4vinci/breos/issues/168)). Run *k* was seeded
+  with `seed + k`, so run *k* under seed 1 was run *k*-1 under seed 2. A seed
+  sensitivity check with 42 and 43, or two such studies pooled, resampled
+  almost the same trajectories and reported too narrow a spread. Each run now
+  draws from `numpy.random.SeedSequence(seed).spawn(n_runs)[k]`, and the
+  `random_stream` provenance says so. Results are still the same for any
+  `n_procs`. `select_random_year_and_replace_datetime` takes an `rng` keyword
+  and no longer uses NumPy's global generator. **Every seeded Monte Carlo
+  result changes**, because every run draws new weather years and load scales.
+  The shift is sampling noise, not a model change. On the example
+  `montecarlo.toml` config with Porto 2005-2024 Open-Meteo weather, 40 runs of
+  20 years under seed 42: mean NPV savings 4,546.00 → 4,471.44 € (−1.6%),
+  mean exact payback 10.91 → 11.15 years, mean grid independence 73.99 →
+  74.31%, final SOH 70.73 → 70.72%. Seeds 42 and 43 used to share 39 of their
+  40 trajectories and now share none.
 
 ### Removed
 - Removed the reproduction tooling for the upcoming publication:
