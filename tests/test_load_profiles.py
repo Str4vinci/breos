@@ -121,3 +121,9 @@ def test_external_native_15min_profile_can_downsample_to_hourly(tmp_path):
 
     assert len(profile) == 8760
     assert annual_kwh == pytest.approx(1000)
+
+
+@pytest.mark.parametrize("start_date", ["2025-07-01", "2025-01-02", "2025-01-01 06:00"])
+def test_load_profile_rejects_a_start_that_would_shift_the_seasons(start_date):
+    with pytest.raises(ValueError, match=r"start_date must be 1 January at midnight"):
+        load_profile("demandlib_h0", 3500, start_date=start_date)

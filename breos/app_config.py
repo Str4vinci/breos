@@ -357,7 +357,7 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         default="2023-01-01",
         default_order=50,
         cli_flags=("--start-date",),
-        cli_help="Simulation start date, YYYY-MM-DD.",
+        cli_help="First simulated day: 1 January of the study year, YYYY-01-01.",
     ),
     # Config-file/API-only fields.
     "costs": AppConfigField(),
@@ -808,9 +808,15 @@ def _validate_battery_and_degradation(cfg: dict[str, Any]) -> None:
     if not isinstance(cfg["start_date"], str):
         raise TypeError("'start_date' must be an ISO date string (YYYY-MM-DD)")
     try:
-        date.fromisoformat(cfg["start_date"])
+        start = date.fromisoformat(cfg["start_date"])
     except ValueError as exc:
         raise ValueError("'start_date' must be a valid ISO date (YYYY-MM-DD)") from exc
+    if (start.month, start.day) != (1, 1):
+        raise ValueError(
+            f"'start_date' must be 1 January of the study year, got {cfg['start_date']!r}. BREOS simulates "
+            f"whole calendar years: weather, load and every projected year start on 1 January, so use "
+            f"'{start.year}-01-01'."
+        )
 
     if not isinstance(cfg["enable_resistance_fade"], bool):
         raise TypeError("'enable_resistance_fade' must be a boolean")

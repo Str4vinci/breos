@@ -91,7 +91,9 @@ def load_profile(
     Args:
         profile_type: Profile type key (see PROFILE_NAMES) or name
         annual_consumption_kwh: Target annual consumption in kWh
-        start_date: Start date for the profile (YYYY-MM-DD)
+        start_date: First day of the profile, 1 January of its year (YYYY-01-01).
+            Profile rows are stamped from 1 January onward, so any other date
+            would shift every season.
         freq: Time frequency ('h' for hourly, '15min' for 15-minute)
         num_years: Number of years to generate
         rlp_directory: Directory containing RLP files. When omitted, BREOS
@@ -106,8 +108,16 @@ def load_profile(
         DataFrame with 'Electrical Consumption [W]' column and DatetimeIndex
 
     Raises:
-        ValueError: If profile_type is not recognized
+        ValueError: If profile_type is not recognized, or start_date is not
+            1 January
     """
+    start_ts = pd.Timestamp(start_date)
+    if (start_ts.month, start_ts.day) != (1, 1) or start_ts != start_ts.normalize():
+        raise ValueError(
+            f"start_date must be 1 January at midnight, got {start_date!r}. The profile's first row is "
+            "1 January, so a later start would move every season; use "
+            f"'{start_ts.year}-01-01'."
+        )
     profile_type = PROFILE_ALIASES.get(str(profile_type).lower(), str(profile_type))
     if profile_type not in PROFILE_FILES:
         raise ValueError(f"Unknown profile type: {profile_type}. Valid types: {list(PROFILE_FILES.keys())}")
@@ -161,7 +171,6 @@ def load_profile(
     # afterwards.  A Jan-Dec leap year therefore has 8784 hours.
     start_year = int(start_date[:4])
     steps_per_hour = 4 if native_freq == "15min" else 1
-    start_ts = pd.Timestamp(start_date)
     end_ts = start_ts + pd.DateOffset(years=1)
     new_index = pd.date_range(start=start_ts, end=end_ts, freq=native_freq, inclusive="left")
 

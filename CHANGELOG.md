@@ -50,6 +50,15 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   hourly resolution. Those steps now take the same instant of the repeating
   annual profile, one year earlier or later. **Results change slightly for
   those runs.** PVGIS runs use the location's fixed offset and are unchanged.
+- A `start_date` other than 1 January is rejected instead of misplacing the
+  load profile ([#152](https://github.com/Str4vinci/breos/issues/152)). App
+  weather always starts on 1 January, but the load profile stamped its first
+  row (1 January) onto the configured start. So `2025-07-01` put January's
+  winter demand on July against January weather, and before #151 it also left
+  half the year at zero load. `validate_config` and `load_profile` now raise
+  `ValueError` and name the 1 January date to use. Arbitrary project start
+  dates would need weather aligned to the requested window, which is a
+  separate feature.
 
 ### Removed
 - Removed the reproduction tooling for the upcoming publication:
