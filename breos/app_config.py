@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, Callable
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from breos.constants import DEFAULT_MAX_SOC, DEFAULT_MIN_SOC
 from breos.degradation.profiles import ENABLED_BLAST_MODEL_KEYS, apply_battery_profile_defaults
 from breos.economics import COST_CONFIG_KEY_TO_PARAM, CostParams, calculate_costs
 from breos.emissions import EmissionsParams
@@ -369,8 +370,10 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
     "backtrack": AppConfigField(default=True, default_order=11),
     "cross_axis_tilt": AppConfigField(default=0.0, default_order=13),
     "dual_axis_max_tilt": AppConfigField(default=90.0, default_order=14),
-    "battery_min_soc": AppConfigField(default=0.10, default_order=38),
-    "battery_max_soc": AppConfigField(default=0.90, default_order=39),
+    # The BatteryConfig defaults, so the App and the optimizer, which leaves
+    # unset battery settings to BatteryConfig, resolve the same window.
+    "battery_min_soc": AppConfigField(default=DEFAULT_MIN_SOC, default_order=38),
+    "battery_max_soc": AppConfigField(default=DEFAULT_MAX_SOC, default_order=39),
     "battery_eol_percentage": AppConfigField(default=0.70, default_order=40),
     "battery_rte": AppConfigField(default=None, default_order=41),
     "enable_resistance_fade": AppConfigField(default=False, default_order=45),
