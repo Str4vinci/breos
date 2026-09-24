@@ -402,8 +402,7 @@ def configured_pv_model_kwargs(config: Mapping[str, Any]) -> dict[str, Any]:
     """Return the PV model kwargs present in a resolved application config.
 
     Missing keys stay missing so the public PV function owns its defaults.
-    This function is the single config-to-call mapping used by optimization
-    and manuscript reproduction tools.
+    This function is the single config-to-call mapping used by optimization.
     """
     return {key: config[key] for key in PV_MODEL_CONFIG_KEYS if key in config}
 

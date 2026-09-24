@@ -32,15 +32,11 @@ and datasheet inputs exist.
 
 ## Proposed Scope
 
-### Phase 1: Aggregate Inverter Clipping
+### Phase 1: Aggregate Inverter Clipping (shipped in 0.3.0)
 
-Apply inverter AC power limits consistently in the main simulation path.
-BREOS already has a `dc_to_ac()` helper that applies a PVWatts inverter model,
-but `App.simulate()` currently passes array DC production into the energy
-balance, where inverter efficiency is applied without an AC clipping limit.
-
-This is the highest-priority accuracy improvement because it affects normal
-simulations even when no explicit string topology is available.
+`App.simulate()` applies the inverter AC power limit in the energy pipeline,
+so aggregate clipping no longer depends on string topology. The phases below
+remain proposals.
 
 ### Phase 2: Electrical Feasibility Validation
 

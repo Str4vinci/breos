@@ -28,7 +28,3 @@ docs/api/generated/
 
 # Local-only working references (do not commit)
 pysam-removal.md
-
-# Revision working artifacts: ~900 MB of sweep archives and bundles, kept
-# locally as evidence for the upcoming publication. Never commit.
-revision-0.6.1/

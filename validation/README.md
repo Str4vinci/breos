@@ -15,7 +15,6 @@ the package.
 | `baselines/breos_baseline.json` | BREOS's own outputs, snapshotted — the drift-test anchor | yes |
 | `results/` | Freshly generated outputs | no (gitignored) |
 | `REPORT.md` | Generated comparison report snapshot | yes |
-| `external/README.md` | Measured-data component checks and source citations | yes |
 
 ## Workflow
 
@@ -60,11 +59,11 @@ The *tight* guarantee is the self-baseline regression (0.1%), which catches
 any unintended change to transposition, IAM, thermal, DC, loss, or inverter
 modeling the moment it lands.
 
-The [external measured-data checks](external/README.md) cover separate parts of
-the PV chain using the NIST Gaithersburg Ground Array, the DKA Solar Centre in
-Alice Springs, and the IEA PVPS Task 13 module dataset. These checks report the
-measurement boundary and limitations for each dataset instead of combining
-them into one accuracy score.
+The [external validation](../docs/modeling/validation.md) page covers separate
+parts of the model against measured data from NIST Gaithersburg, the DKA Solar
+Centre, IEA PVPS Task 13, the UCY PHAETHON test-bed, and a Reunion Island
+microgrid. It reports the measurement boundary and limitations for each dataset
+instead of combining them into one accuracy score.
 
 ## What the numbers mean
 
@@ -92,9 +91,8 @@ albedo 0.2, same tilt/azimuth per site.
 
 - **Add a site**: add it to `locations.json`, run the three commands above,
   commit weather + reference + baseline + report.
-- **Measured-data checks**: see [external measured-data
-  checks](external/README.md) for the completed NIST, DKA Solar Centre, and IEA
-  PVPS Task 13 analyses.
+- **Measured-data checks**: see [external
+  validation](../docs/modeling/validation.md) for the completed analyses.
 - **Same-weather oracle (future)**: run SAM/PySAM offline on the checked-in
   TMY CSVs to remove the weather-source confound entirely; store its outputs
   as another reference block.

@@ -111,51 +111,6 @@ def test_jit_cache_aggregation_never_raises():
         assert aggregate_jit_cache_states(states) in {"warm", "cold", "unknown"}
 
 
-def test_article_runner_forwards_the_backend_only_to_stages_that_simulate():
-    """A stage that never enters the dispatch loop must not claim a backend.
-
-    ``preflight_article1_inputs.py`` inventories inputs, the ``--validate-only``
-    Monte Carlo call checks configurations without simulating,
-    ``reproduce_article1_context.py`` builds orientation and weather-comparison
-    tables, and ``verify_article1_bundle.py`` checks finished outputs. Passing
-    the flag to any of them would record a claim about code that never ran.
-    """
-    run_article1 = _load_tool("run_article1.py")
-    commands = run_article1.commands_for_stage(
-        "all",
-        PROJECT_ROOT / "dev/article1-inputs",
-        PROJECT_ROOT / "results/article1",
-        n_procs=2,
-        runs=None,
-        execution_backend="numba",
-    )
-
-    non_simulating = (
-        "preflight_article1_inputs.py",
-        "reproduce_article1_context.py",
-        "verify_article1_bundle.py",
-    )
-    simulating = 0
-    for command in commands:
-        joined = " ".join(command)
-        carries_backend = "--execution-backend" in command
-        if any(tool in joined for tool in non_simulating) or "--validate-only" in command:
-            assert not carries_backend, f"backend forwarded to a non-simulating stage: {joined}"
-            continue
-        assert carries_backend, f"simulating stage did not receive the backend: {joined}"
-        assert command[command.index("--execution-backend") + 1] == "numba"
-        simulating += 1
-
-    assert simulating == 8, f"expected eight simulating commands, found {simulating}"
-
-
-def test_article_tools_default_to_the_reference_backend():
-    for name in ("run_article1.py", "reproduce_article1.py", "reproduce_article1_montecarlo.py"):
-        module = _load_tool(name)
-        parser_source = inspect.getsource(module.main)
-        assert "--execution-backend" in parser_source, f"{name} does not expose the backend"
-
-
 def test_missing_numba_is_reported_before_app_prepares_inputs(monkeypatch):
     """The dependency check must precede input preparation, which can hit the network.
 
@@ -224,8 +179,8 @@ def test_dependency_check_precedes_the_expensive_step(function, expensive):
 def test_numba_provenance_always_carries_a_cache_field():
     """A driver that cannot observe its workers still records the field.
 
-    The deterministic publication-study report fans work out to subprocesses
-    and has no observations to aggregate. "unknown" is provenance; a missing
+    A driver that fans work out to subprocesses has no observations to
+    aggregate. "unknown" is provenance; a missing
     key reads as an oversight when the run that produced it took hours.
     """
     pytest.importorskip("numba", reason="the compiled backend needs the breos[fast] extra")
@@ -262,13 +217,6 @@ def test_app_records_the_pv_only_path_for_a_battery_too_small_to_dispatch():
     app = App({**BASE_CONFIG, "battery_kwh": 0.0005})
     app.simulate()
     assert app.result()["provenance"]["execution"]["dispatch_path"] == PV_ONLY_DISPATCH_PATH
-
-
-def test_deterministic_article_report_records_the_cache_field():
-    """reproduce_article1.py writes backend_provenance straight into its report."""
-    module = _load_tool("reproduce_article1.py")
-    source = inspect.getsource(module.main)
-    assert '"execution": backend_provenance(args.execution_backend)' in source
 
 
 def test_app_assembled_outputs_are_identical_on_both_backends(_patch_weather):

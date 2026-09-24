@@ -1,10 +1,8 @@
-"""Exact annual full-equivalent cycles, and the annual-archive column join.
+"""Exact annual full-equivalent cycles in the projected yearly ledger.
 
-Two defects in the Batch B2 lattice archive are covered here. Cumulative FEC
-restarts at zero when a pack is replaced, so it cannot answer how many cycles
-a projected year actually accumulated; and concatenating the yearly and
-financial ledgers emitted two ``PV_Production_kWh`` and two ``Export_kWh``
-columns, which makes a reader's column selection depend on its CSV parser.
+Cumulative FEC restarts at zero when a pack is replaced, so it cannot answer
+how many cycles a projected year actually accumulated. The lifetime counter
+and the yearly ledger's battery fields cover that.
 """
 
 import numpy as np
@@ -14,18 +12,9 @@ import pytest
 from breos.battery import BatteryConfig, simulate_energy_balance
 from breos.optimization import ProjectedDesignResult, _evaluate_projected_design_metrics
 from breos.pv_modules import get_module
-from tools.revision.grid_eval import _annual_archive_frame, _prepare_archive_directory, _reject_duplicate_columns
 
-# The itemised, undiscounted annual cash flows a Task 7 re-ranking needs, plus
-# the energy, battery and replacement series the schema gate requires.
-REQUIRED_ARCHIVE_COLUMNS = (
-    "Design_ID",
-    "Year",
-    "PV_Production_kWh",
-    "Load_kWh",
-    "Import_kWh",
-    "Export_kWh",
-    "Grid_Independence_%",
+# The battery and replacement series the yearly ledger reports per year.
+REQUIRED_YEARLY_BATTERY_COLUMNS = (
     "Battery_SOH_%",
     "Battery_Charge_Throughput_kWh",
     "Battery_Discharge_Throughput_kWh",
@@ -34,14 +23,6 @@ REQUIRED_ARCHIVE_COLUMNS = (
     "Battery_Annual_FEC",
     "Battery_Cumulative_FEC",
     "Replacements",
-    "Replacement_Cost",
-    "Cost_Import",
-    "Revenue_Export",
-    "Cost_Operation",
-    "Cost_Daily",
-    "Cost_Replacement",
-    "Cost_System_Annual",
-    "Cost_No_Sys_Annual",
 )
 
 
@@ -152,68 +133,22 @@ def _projected_result(*, battery_kwh: float, batt_spec: dict, years: int = 2, da
     )
 
 
-def test_archive_frame_has_unique_headers_and_the_required_schema():
+def test_projected_yearly_ledger_reports_the_battery_fields():
     result = _projected_result(
         battery_kwh=5.0,
         batt_spec={"min_soc": 0.1, "max_soc": 0.9, "eol_percentage": 0.70, "enable_replacement": True},
     )
 
-    frame = _annual_archive_frame(17, result)
-
-    assert frame.columns.duplicated().sum() == 0
-    _reject_duplicate_columns(frame)
-    missing = [column for column in REQUIRED_ARCHIVE_COLUMNS if column not in frame.columns]
+    missing = [column for column in REQUIRED_YEARLY_BATTERY_COLUMNS if column not in result.yearly.columns]
     assert missing == []
-    assert frame["Design_ID"].unique().tolist() == [17]
-    assert frame["Year"].tolist() == [1, 2]
-
-    # One canonical copy, carrying the yearly ledger's values, and every
-    # financial column the projection reported is still present.
-    np.testing.assert_array_equal(frame["PV_Production_kWh"].to_numpy(), result.yearly["PV_Production_kWh"].to_numpy())
-    np.testing.assert_array_equal(frame["Export_kWh"].to_numpy(), result.yearly["Export_kWh"].to_numpy())
-    for column in result.financial.columns:
-        assert column in frame.columns
+    assert result.yearly["Year"].tolist() == [1, 2]
+    assert (result.yearly["Battery_Annual_FEC"] > 0.0).all()
 
 
-def test_archive_frame_preserves_every_column_of_both_ledgers():
+def test_projected_yearly_ledger_reports_zero_cycles_without_a_battery():
     result = _projected_result(
         battery_kwh=0.0,
         batt_spec={"min_soc": 0.1, "max_soc": 0.9, "enable_replacement": True},
     )
 
-    frame = _annual_archive_frame(0, result)
-
-    expected = (
-        ["Design_ID"]
-        + list(result.yearly.columns)
-        + [column for column in result.financial.columns if column not in result.yearly.columns]
-    )
-    assert frame.columns.tolist() == expected
-    assert frame["Battery_Annual_FEC"].tolist() == [0.0, 0.0]
-
-
-def test_archive_frame_rejects_a_disagreement_between_the_two_ledgers():
-    result = _projected_result(
-        battery_kwh=5.0,
-        batt_spec={"min_soc": 0.1, "max_soc": 0.9, "eol_percentage": 0.70, "enable_replacement": True},
-    )
-    result.financial.loc[0, "Export_kWh"] = result.financial.loc[0, "Export_kWh"] + 1.0
-
-    with pytest.raises(ValueError, match="disagree on Export_kWh"):
-        _annual_archive_frame(3, result)
-
-
-def test_duplicate_columns_are_rejected_before_a_shard_is_written():
-    frame = pd.DataFrame([[1.0, 2.0, 3.0]], columns=["Year", "Export_kWh", "Export_kWh"])
-
-    with pytest.raises(ValueError, match=r"duplicate column names: \['Export_kWh'\]"):
-        _reject_duplicate_columns(frame)
-
-
-def test_archive_directory_must_be_empty(tmp_path):
-    archive = tmp_path / "archive"
-    _prepare_archive_directory(archive)
-    (archive / "annual_00000.csv").write_text("Design_ID,Year\n0,1\n")
-
-    with pytest.raises(FileExistsError, match="refusing to reuse nonempty archive directory"):
-        _prepare_archive_directory(archive)
+    assert result.yearly["Battery_Annual_FEC"].tolist() == [0.0, 0.0]

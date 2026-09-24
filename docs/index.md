@@ -161,6 +161,7 @@ getting-started/interpreting-results
 :caption: Models and data
 
 modeling/index
+modeling/validation
 resources
 legal/load-profile-data
 ```

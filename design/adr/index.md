@@ -4,9 +4,5 @@ Short records of decisions whose context isn't visible in the code. ADRs
 exist to answer "why did you do it this way?" for future readers — the
 code shows the *what*.
 
-```{toctree}
-:maxdepth: 1
-
-0001-docs-architecture
-0002-tariffs-and-smart-charging
-```
+- [0001: Documentation architecture](0001-docs-architecture.md)
+- [0002: Tariffs and smart charging](0002-tariffs-and-smart-charging.md)
