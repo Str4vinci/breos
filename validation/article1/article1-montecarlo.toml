@@ -19,7 +19,10 @@ battery_min_soc = 0.10
 battery_max_soc = 0.90
 battery_eol_percentage = 0.70
 battery_rte = 0.95
-battery_max_charge_power_w = 4352.0
+# Symmetric 1 C limit, matching the optimization config and the BYD HVS
+# family rating. Replaces the absolute 4352 W cap, which did not scale with
+# pack size.
+battery_power_limit_c_rate = 1.0
 # Weather ambient buffered by the indoor model; see the optimization config.
 battery_temperature = "weather"
 battery_indoor_model = { enabled = true }
@@ -81,34 +84,53 @@ collect_yearly = true
 n_procs = 1
 
 [cases.C1]
+# argmax(NPV) over the grid Pareto front.
 label = "Maximum NPV"
 n_modules = 6
 battery_kwh = 0.0
 tilt = 30.0
-azimuth = 190.0
+azimuth = 200.0
 
 [cases.C2]
-label = "Balanced"
-n_modules = 9
-battery_kwh = 5.0
-tilt = 25.0
-azimuth = 185.0
+# Among front members carrying a battery, the largest capacity whose
+# break-even precedes its first replacement; ties broken by NPV. Under the
+# corrected replacement booking three 7 kWh members qualify on the exhaustive
+# front (7 PV at 3228 EUR, 8 PV at 3222 EUR, 8 PV 30/200 at 3211 EUR). C2 is
+# a named reference configuration, so it stays at the eight-module design the
+# case study carries. The nine-module variant breaks even at 14.09 y, after
+# its year-11 replacement, so it does not qualify.
+label = "Largest battery paying back before replacement"
+n_modules = 8
+battery_kwh = 7.0
+tilt = 35.0
+azimuth = 200.0
 
 [cases.C3]
+# argmin Euclidean distance to the utopia point, on min-max normalised axes.
 label = "Pareto knee"
 n_modules = 9
 battery_kwh = 9.0
 tilt = 35.0
-azimuth = 190.0
+azimuth = 195.0
 
 [cases.C4]
+# argmax(grid independence) subject to NPV > 0.
+label = "Maximum grid independence with positive NPV"
+n_modules = 9
+battery_kwh = 13.0
+tilt = 45.0
+azimuth = 190.0
+
+[cases.C5]
+# argmax(grid independence) over the front.
 label = "Maximum grid independence"
 n_modules = 9
 battery_kwh = 20.0
-tilt = 45.0
-azimuth = 175.0
+tilt = 50.0
+azimuth = 185.0
 
-[cases.C5]
+[cases.C6]
+# Off-front low-investment reference; not selected by any front criterion.
 label = "Low-investment benchmark"
 n_modules = 4
 battery_kwh = 0.0

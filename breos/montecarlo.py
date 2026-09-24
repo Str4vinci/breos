@@ -46,6 +46,7 @@ from breos.economics import (
     calculate_lcoe_from_projection,
     cost_analysis_projection,
     find_payback_year,
+    replacement_fraction_from_steps,
 )
 from breos.execution import (
     aggregate_jit_cache_states,
@@ -519,6 +520,12 @@ def _simulate_trajectory(
                 "Battery_Resistance_Growth": cumulative_resistance_growth,
                 "Replacements": year_n_rep,
                 "Replacement_Cost": year_rep_cost,
+                # The summary carries the swap steps, so the economics can
+                # book the outlay at the instant rather than at a year
+                # boundary. NaN in a year without a replacement.
+                "Replacement_Year_Fraction": replacement_fraction_from_steps(
+                    summary.replacement_steps, summary.n_steps
+                ),
                 "PV_Degradation_Factor": pv_degradation_factor,
                 "Weather_Year": year,
                 "Load_Scale": load_scale,

@@ -136,7 +136,7 @@ def main() -> int:
         "--case",
         action="append",
         required=True,
-        help="C1-C5 or all; repeat to select cases",
+        help="C1-C6 or all; repeat to select cases",
     )
     parser.add_argument("--calendar-model", help="Override the configured native calendar-degradation model")
     parser.add_argument("--runs", type=int, help="Override the configured number of trajectories")

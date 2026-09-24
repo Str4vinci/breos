@@ -6,6 +6,7 @@ import json
 import subprocess
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 from breos.degradation.engine import BLAST_MODEL_CLASSES
@@ -46,6 +47,34 @@ def _minimal_blast_checkout(tmp_path: Path) -> tuple[Path, str]:
     return checkout, _git(checkout, "rev-parse", "HEAD")
 
 
+def _assert_profiles_match(generated, committed):
+    """Compare regenerated stress profiles with the ones inside the fixture.
+
+    Structure is compared exactly; floats are compared at the ``atol=1e-12``
+    the multicondition parity test uses. The fixture was generated under
+    numpy 1.26.4, which its manifest records, and numpy 2.x returns a
+    different last bit for ``np.sin`` at ``7*pi/6``. That moves the
+    ``tvar_deep_cycle`` temperature at hour 14 by one ULP, which is not the
+    generator drifting from the fixture. A real edit to a profile definition
+    is many orders of magnitude larger than this tolerance.
+    """
+    assert generated.keys() == committed.keys()
+    for name in generated:
+        produced, stored = generated[name], committed[name]
+        assert produced.keys() == stored.keys(), f"{name}: profile fields differ"
+        for field, value in produced.items():
+            if isinstance(value, list):
+                np.testing.assert_allclose(
+                    value,
+                    stored[field],
+                    rtol=0,
+                    atol=1e-12,
+                    err_msg=f"{name}.{field} drifted from the committed fixture",
+                )
+            else:
+                assert value == stored[field], f"{name}.{field} drifted from the committed fixture"
+
+
 def test_committed_manifest_binds_fixture_and_generator_definitions():
     fixture_bytes = FIXTURE_PATH.read_bytes()
     fixture = json.loads(fixture_bytes)
@@ -54,7 +83,9 @@ def test_committed_manifest_binds_fixture_and_generator_definitions():
     validate_manifest(fixture, fixture_bytes, manifest)
     assert manifest["source"]["commit"] == BLAST_UPSTREAM_COMMIT
     assert manifest["source"]["version"] == BLAST_UPSTREAM_VERSION
-    assert build_profiles() == {name: condition["profile"] for name, condition in fixture["conditions"].items()}
+    _assert_profiles_match(
+        build_profiles(), {name: condition["profile"] for name, condition in fixture["conditions"].items()}
+    )
     assert set(MODEL_CLASS_NAMES) == set(BLAST_MODEL_CLASSES)
     assert PINNED_BLAST_COMMIT == BLAST_UPSTREAM_COMMIT
     assert PINNED_BLAST_VERSION == BLAST_UPSTREAM_VERSION

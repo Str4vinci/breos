@@ -6,13 +6,19 @@ import math
 from dataclasses import dataclass
 from typing import Any
 
+import numpy as np
 import pandas as pd
 
 from breos.app_config import DEFAULTS, ResolvedAppConfig, build_costs_dict, default_module_key
 from breos.app_inputs import AppRuntimeDependencies, prepare_simulation_inputs
 from breos.battery import BatteryConfig, simulate_energy_balance
 from breos.degradation.results import build_degradation_summary_from_state
-from breos.economics import calculate_lcoe_from_projection, cost_analysis_projection, find_payback_year
+from breos.economics import (
+    calculate_lcoe_from_projection,
+    cost_analysis_projection,
+    find_payback_year,
+    replacement_fraction_from_steps,
+)
 from breos.execution import (
     DEFAULT_EXECUTION_BACKEND,
     aggregate_jit_cache_states,
@@ -468,6 +474,15 @@ def run_app_simulation(
                 "Battery_SOH_%": current_soh if has_battery else None,
                 "Replacements": year_n_rep,
                 "Replacement_Cost": year_rep_cost,
+                # Where in the year the pack was swapped, so the economics can
+                # book the outlay at that instant rather than at a year
+                # boundary. NaN in a year without a replacement.
+                "Replacement_Year_Fraction": replacement_fraction_from_steps(
+                    np.flatnonzero(results_df["Battery_Replaced"].to_numpy())
+                    if "Battery_Replaced" in results_df.columns
+                    else [],
+                    len(results_df),
+                ),
                 "PV_Degradation_Factor": pv_degradation_factor,
             }
         )

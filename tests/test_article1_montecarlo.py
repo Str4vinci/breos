@@ -26,14 +26,29 @@ def test_article1_montecarlo_config_pins_publication_method():
         "collect_yearly": True,
         "n_procs": 1,
     }
-    assert set(config["cases"]) == {"C1", "C2", "C3", "C4", "C5"}
+    assert set(config["cases"]) == {"C1", "C2", "C3", "C4", "C5", "C6"}
+    # C2 is the largest front battery whose break-even precedes its first
+    # replacement; NPV breaks the tie among the qualifying 7 kWh designs. C2 is
+    # a named reference configuration, so it stays at the eight-module design.
     assert config["cases"]["C2"] == {
-        "label": "Balanced",
-        "n_modules": 9,
-        "battery_kwh": 5.0,
-        "tilt": 25.0,
-        "azimuth": 185.0,
+        "label": "Largest battery paying back before replacement",
+        "n_modules": 8,
+        "battery_kwh": 7.0,
+        "tilt": 35.0,
+        "azimuth": 200.0,
     }
+    # C6 is the off-front low-investment benchmark; no front criterion picks it.
+    assert config["cases"]["C6"] == {
+        "label": "Low-investment benchmark",
+        "n_modules": 4,
+        "battery_kwh": 0.0,
+        "tilt": 35.0,
+        "azimuth": 180.0,
+    }
+    # The Monte Carlo limit must match the optimization config's 1 C rating.
+    assert config["battery_power_limit_c_rate"] == 1.0
+    assert "battery_max_charge_power_w" not in config
+    assert "battery_max_discharge_power_w" not in config
     assert config["battery_temperature"] == "weather"
     assert config["battery_indoor_model"] == {"enabled": True}
     assert config["solar_position"] == "weather"
@@ -103,7 +118,7 @@ def test_article1_metadata_is_removed_before_app_config_validation():
 
     resolved = resolve_app_config(simulation_config)
 
-    assert resolved.cfg["n_modules"] == 9
+    assert resolved.cfg["n_modules"] == case["n_modules"] == 8
     assert "pv_module_width_m" not in simulation_config
     assert "pv_module_length_m" not in simulation_config
     assert module["width_m"] == 1.134

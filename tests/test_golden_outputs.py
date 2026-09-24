@@ -169,20 +169,27 @@ def test_cost_analysis_projection_golden_output():
             "CO2_Avoided_SelfConsumed_kg": 150.0,
         },
     )
+    # The replacement year books its outlay at the swap instant. This summary
+    # carries no Replacement_Year_Fraction, so the instant is the documented
+    # mid-year default: year 3 gives t = 2.5, and 800 * 1.02**2.5 = 840.60 is
+    # both inflated to and discounted from that same t.
     _assert_numeric_record(
         projection.iloc[2].to_dict(),
         {
-            "Cost_Replacement": 832.32,
-            "Cost_System_Annual": 1108.1681,
-            "Savings_Cumulative_NPV": -2088.5138282480434,
+            "Replacement_Time_Years": 2.5,
+            "Cost_Replacement": 840.6019950297525,
+            "Cost_System_Annual": 1116.4500950297524,
+            "Savings_Cumulative_NPV": -2107.5468069295575,
             "CO2_Avoided_Total_Cumulative_kg": 528.0,
             "CO2_Avoided_SelfConsumed_Cumulative_kg": 441.0,
         },
     )
+    # Years without a replacement are untouched by that booking.
+    assert projection["Replacement_Time_Years"].isna().tolist() == [True, True, False]
     assert projection.attrs["payback_year"] is None
     assert projection.attrs["total_investment"] == pytest.approx(1825.0)
     assert projection.attrs["total_replacement_cost"] == pytest.approx(800.0)
-    assert projection.attrs["final_npv_savings"] == pytest.approx(-2088.5138282480434)
+    assert projection.attrs["final_npv_savings"] == pytest.approx(-2107.5468069295575)
 
 
 def test_co2_projection_uses_marginal_intensity_golden_output():

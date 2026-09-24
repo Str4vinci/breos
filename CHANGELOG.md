@@ -4,6 +4,85 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 
 ## [Unreleased]
 
+## [0.6.2] - 2026-09-24
+
+### Added
+- Added `tools/revision/task3_eol_sweep.py`, the Task 3 end-of-life sweep. It
+  quantifies how much of storage economics follows from the battery replacement
+  assumption, by running three degradation models at their accepted knee
+  orientations against 80%, 70% and replacement-disabled settings. The sweep
+  previously existed only inside a result directory and could not be re-run from
+  a later release. The pinned commit, lattice location and output directory are
+  now options; the models, the 210-design grid, the candidate replays and the
+  verification against the accepted lattice are unchanged, and the config stays
+  pinned by hash. `--candidates` runs the sweep against the
+  `reference_candidates` of an optimization config instead of the pinned
+  five-configuration set; omitting it reproduces the pinned run exactly, and
+  the run records which set it used in `candidate_set_source`.
+- Added `tools/validation/recovery/dkasc/dkasc_ladder_chain.py`, which reruns
+  the DKASC loss ladder under Hay-Davies, Perez, and Perez with the Marion
+  diffuse IAM, so the shift between the published validation configuration and
+  the case-study chain splits into its transposition and IAM parts.
+  `run_chain` in `dkasc_validate.py` now accepts `diffuse_iam`.
+
+### Changed
+- The forthcoming publication's reproduction configurations now use the accepted
+  representative candidate set rather than the superseded manuscript set, and
+  that set moves from five configurations to six, each answering a distinct
+  selection criterion verified against the domain-corrected exhaustive
+  enumeration:
+
+  | | design | orientation | criterion |
+  | --- | --- | --- | --- |
+  | C1 | 6 PV, no battery | 30/200 | maximum NPV |
+  | C2 | 8 PV, 7 kWh | 35/200 | largest battery paying back before replacement |
+  | C3 | 9 PV, 9 kWh | 35/195 | knee, nearest the utopia point |
+  | C4 | 9 PV, 13 kWh | 45/190 | maximum grid independence with positive NPV |
+  | C5 | 9 PV, 20 kWh | 50/185 | maximum grid independence |
+  | C6 | 4 PV, no battery | 35/180 | off-front low-investment benchmark |
+
+  C1 and C3 are unchanged. C2 gains a criterion the previous set did not express
+  and drops from nine modules to eight. C4 is new, so the previous C4 and C5
+  become C5 and C6. Each candidate's expected values now come from the accepted
+  lattice, so reference columns compare against the accepted front. Results and
+  write-ups that refer to C4 or C5 by index predate the renumbering.
+- Both publication configurations replace the absolute 4352 W battery power cap
+  with a symmetric 1.0 C capacity-proportional limit. The absolute cap did not
+  scale with pack size and so under-limited small packs; 1 C is the BYD
+  Battery-Box Premium HVS family rating at every size. Results generated before
+  this change reproduce the superseded candidate set and need rerunning.
+- Renamed two external-validation packages after the institutions that
+  produced their data: `sandia_task13/` is now `iea_pvps_task13/` (IEA PVPS
+  Task 13, measured at SUPSI PVLab) and `pcoe/` is now `ucy_phaethon/` (the
+  PHAETHON Centre of Excellence, University of Cyprus). Archived output
+  packages and recorded input manifests keep their original names so they
+  still match the hash-verified archive.
+- `CITATION.cff` and the README now cite the software itself instead of the
+  SSRN preprint (`10.2139/ssrn.7032064`). The preprint's methods and results
+  predate this release.
+
+### Fixed
+- Battery replacement outlays are booked at the instant the pack is swapped
+  rather than at a calendar-year boundary. The events were aggregated into a
+  replacement year and inflated by `(1 + inflation) ** (year - 1)`, valuing the
+  outlay at the start of that year, then discounted as a year-N flow, valuing it
+  at the end: inflated to one end of the year and discounted from the other,
+  with neither matching the swap. The simulation already records the swap step,
+  so the App, Monte Carlo and optimization year summaries now report
+  `Replacement_Year_Fraction` and both projection paths apply the resulting
+  project time to the inflation and the discount exponent alike. LCOE discounts
+  the same outlay from the same instant, and the projection reports the resolved
+  time in a new `Replacement_Time_Years` column. A summary carrying no fraction
+  falls back to mid-year. Present value of each replacement rises by a factor
+  between `1 + inflation_rate` and `1 + discount_rate`, so NPV and LCOE move for
+  any run that replaces a pack; a run that never replaces is bit-identical.
+  Results generated before this change carry the superseded booking.
+- The test suite passes on numpy 2 and on macOS. The BLAST parity fixture
+  check compares floats at `atol=1e-12` instead of bitwise, since numpy 2
+  moves one fixture value by one ULP. The libm `pow` guard in the Numba
+  dispatch tests finds a platform-specific discriminating input at run time
+  instead of pinning a glibc-only literal.
+
 ## [0.6.1] - 2026-09-03
 
 ### Added

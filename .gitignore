@@ -12,6 +12,9 @@ coverage.xml
 results/
 dev/
 *.csv
+*.csv.gz
+*.xlsx
+*.zip
 !breos/data/rlp/*.csv
 !validation/data/weather/*.csv
 !validation/data/weather/*.csv.gz
@@ -25,3 +28,7 @@ docs/api/generated/
 
 # Local-only working references (do not commit)
 pysam-removal.md
+
+# Revision working artifacts: ~900 MB of sweep archives and bundles, kept
+# locally as evidence for the upcoming publication. Never commit.
+revision-0.6.1/
