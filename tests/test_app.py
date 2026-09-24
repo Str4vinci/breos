@@ -1022,7 +1022,7 @@ class TestAppBifacialConfig:
 
 class TestAppSimulateTracking:
     def test_invalid_tracking(self, _patch_weather):
-        with pytest.raises(ValueError, match="tracking must be"):
+        with pytest.raises(ValueError, match="'tracking' must be"):
             App(
                 {
                     "location": "porto",
