@@ -14,6 +14,7 @@ from breos.montecarlo import (
     _pv_chain_cache_is_worthwhile,
     _pv_only_battery_config,
     _sample_load_scale,
+    _summarize,
     run_montecarlo,
 )
 
@@ -491,3 +492,83 @@ def test_run_montecarlo_rejects_empty_weather(tmp_path):
     settings = MonteCarloSettings(weather_file=str(empty), n_runs=1)
     with pytest.raises(ValueError):
         run_montecarlo(_base_config(), settings)
+
+
+def test_summarize_reports_payback_probability_and_conditional_count():
+    runs = pd.DataFrame(
+        {
+            "npv_savings_eur": np.linspace(-900.0, 100.0, 10),
+            "payback_year": [np.nan] * 9 + [5.0],
+            "payback_year_exact": [np.nan] * 9 + [4.5],
+        }
+    )
+
+    summary = _summarize(runs)
+
+    for metric, value in (("payback_year", 5.0), ("payback_year_exact", 4.5)):
+        assert summary[metric]["count"] == 1
+        assert summary[metric]["n_runs"] == 10
+        assert summary[metric]["payback_probability"] == pytest.approx(0.1)
+        assert summary[metric]["p50"] == value
+    assert summary["npv_savings_eur"]["count"] == 10
+    assert summary["npv_savings_eur"]["n_runs"] == 10
+    assert "payback_probability" not in summary["npv_savings_eur"]
+
+
+def test_summarize_keeps_payback_entry_when_no_run_pays_back():
+    runs = pd.DataFrame(
+        {
+            "npv_savings_eur": [-500.0, -400.0],
+            "payback_year": [np.nan, np.nan],
+            "final_soh_pct": [np.nan, np.nan],
+        }
+    )
+
+    summary = _summarize(runs)
+
+    assert summary["payback_year"] == {"count": 0, "n_runs": 2, "payback_probability": 0.0}
+    assert "final_soh_pct" not in summary
+
+
+@pytest.mark.parametrize(
+    ("bounds", "message"),
+    [
+        ({"max_load_scale": -1.0}, "max_load_scale must be at least min_load_scale"),
+        ({"min_load_scale": 1.2, "max_load_scale": 1.1}, "max_load_scale must be at least min_load_scale"),
+        ({"max_load_scale": float("nan")}, "max_load_scale must be at least min_load_scale"),
+        ({"min_load_scale": -0.5}, "min_load_scale must be a finite, non-negative number"),
+        ({"min_load_scale": float("nan")}, "min_load_scale must be a finite, non-negative number"),
+        ({"load_uncertainty": float("nan")}, "load_uncertainty must be a finite, non-negative number"),
+    ],
+)
+def test_run_montecarlo_rejects_load_scale_bounds_that_allow_negative_demand(tmp_path, bounds, message):
+    weather = _write_multiyear_weather(tmp_path / "multi.csv")
+    settings = MonteCarloSettings(weather_file=str(weather), n_runs=1, years_per_run=1, seed=0, **bounds)
+
+    with pytest.raises(ValueError, match=message):
+        run_montecarlo(_base_config(), settings)
+
+
+def test_montecarlo_cli_labels_conditional_payback_statistics(monkeypatch, tmp_path, capsys):
+    from breos import cli
+    from breos.montecarlo import MonteCarloResult
+
+    weather = tmp_path / "weather.csv"
+    weather.write_text("date\n")
+    config = tmp_path / "mc.json"
+    config.write_text('{"location": "porto", "montecarlo": {"weather_file": "%s"}}' % weather)
+    runs = pd.DataFrame(
+        {"run": range(1, 11), "npv_savings_eur": np.linspace(-900.0, 100.0, 10), "payback_year": [np.nan] * 9 + [5.0]}
+    )
+
+    def fake_run(_config, settings):
+        return MonteCarloResult(runs=runs, summary=_summarize(runs), settings=settings, available_years=[2021])
+
+    monkeypatch.setattr(montecarlo_module, "run_montecarlo", fake_run)
+
+    assert cli.main(["montecarlo", "--config", str(config), "--output", str(tmp_path / "out.csv")]) == 0
+
+    out = capsys.readouterr().out
+    payback_row = next(line for line in out.splitlines() if line.startswith("payback_year "))
+    assert payback_row.split()[1] == "1/10"
+    assert "Paid back within the horizon: 1 of 10 runs (10.0%)" in out
