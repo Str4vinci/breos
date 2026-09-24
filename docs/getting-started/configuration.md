@@ -74,12 +74,14 @@ weather/data access, load profiles, PV system data, and cost assumptions; see
 | `inverter_efficiency` | `0.96` | Nominal inverter efficiency used by the PVWatts part-load curve |
 | `inverter_loading_ratio` | `1.25` | DC/AC oversizing ratio; also sets the inverter AC rating that clips production |
 | `pv_loss_overrides` | `None` | Per-component overrides (percent) for the fixed PVWatts system losses, e.g. `{"shading": 0.0}` |
-| `start_date` | `"2023-01-01"` | First simulation date |
+| `start_date` | `"2023-01-01"` | First simulated day: 1 January of the study year |
 
 Real calendar-year load profiles follow `start_date`: leap years contain
 8,784 hourly (35,136 quarter-hourly) intervals and preserve exact annual
-energy. Conventional 8,760-hour TMY weather remains a separate weather-data
-convention and is not blindly expanded to 8,784 rows.
+energy. An 8,760-hour TMY restamped onto a leap year gets the same treatment:
+29 February is a copy of 28 February, for the weather and the load alike, and
+1 March onwards keeps its own data. The result's weather provenance records
+the copied day under `leap_day`.
 
 Unknown top-level keys are rejected at load time. A misspelled key such as
 `batery_kwh` raises an error listing the offending key rather than being
