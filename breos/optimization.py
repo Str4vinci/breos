@@ -289,13 +289,17 @@ def _estimate_battery_replacement_treatment(
     project_lifespan: int,
     replacement_cost_eur: float,
 ) -> Dict[str, Any]:
-    """Approximate replacement years by repeating the simulated year-1 SOH loss.
+    """Approximate replacement instants by repeating the simulated year-1 SOH loss.
 
     The first interval starts at the candidate's configured initial SOH. Each
     replacement resets SOH to 100%, matching :class:`BatteryConfig`; later
-    intervals therefore use the full 100%-to-EOL window. This is deliberately
-    a steady-state approximation. The App's multiyear projection remains the
-    higher-fidelity path because it propagates SOH and records actual events.
+    intervals therefore use the full 100%-to-EOL window. The instants are
+    fractional project years, the moment the linear SOH path reaches EOL,
+    so the economics can book each swap when it happens rather than at a
+    year boundary. A swap at or after the end of the horizon is not booked.
+    This is deliberately a steady-state approximation. The App's multiyear
+    projection remains the higher-fidelity path because it propagates SOH and
+    records actual events.
     """
     annual_loss = max(0.0, float(annual_soh_loss_pct))
     eol_pct = float(eol_percentage) * 100.0
@@ -305,17 +309,17 @@ def _estimate_battery_replacement_treatment(
         "initial_soh_pct": float(initial_soh_pct),
         "eol_soh_pct": eol_pct,
         "replacement_cost_eur_each": float(replacement_cost_eur),
-        "replacement_years": [],
+        "replacement_times_years": [],
     }
     if battery_kwh <= 0.0 or annual_loss <= 0.0 or replacement_cost_eur <= 0.0:
         return treatment
 
-    first_interval = max(1, int(np.ceil((float(initial_soh_pct) - eol_pct) / annual_loss)))
-    repeat_interval = max(1, int(np.ceil((100.0 - eol_pct) / annual_loss)))
-    replacement_year = first_interval
-    while replacement_year <= project_lifespan:
-        treatment["replacement_years"].append(replacement_year)
-        replacement_year += repeat_interval
+    first_time = max(0.0, (float(initial_soh_pct) - eol_pct) / annual_loss)
+    repeat_interval = (100.0 - eol_pct) / annual_loss
+    replacement_time = first_time
+    while replacement_time < project_lifespan:
+        treatment["replacement_times_years"].append(replacement_time)
+        replacement_time += repeat_interval
     return treatment
 
 
@@ -511,8 +515,8 @@ def _safe_ratio(numerator: float, denominator: float) -> float:
     return float(numerator) / denominator
 
 
-def _projected_replacement_cost(batt_spec: Dict[str, Any], battery_kwh: float, storage_cost: float) -> float:
-    """Resolve a projected replacement event cost from explicit or calculated input."""
+def _replacement_event_cost(batt_spec: Dict[str, Any], battery_kwh: float, storage_cost: float) -> float:
+    """Resolve a replacement event cost from explicit or calculated input."""
     configured = batt_spec.get("replacement_cost")
     if configured is None or (isinstance(configured, str) and configured.strip().lower() in {"auto", "calculate"}):
         return float(battery_kwh) * float(storage_cost)
@@ -710,7 +714,7 @@ def _evaluate_projected_design_metrics(
         battery_capacity_wh=battery_kwh * 1000.0,
         cost_params=cost_params,
     )
-    replacement_cost = _projected_replacement_cost(
+    replacement_cost = _replacement_event_cost(
         batt_spec,
         battery_kwh,
         cost_params.battery_cost_per_kwh,
@@ -1053,6 +1057,7 @@ def calculate_financials(
     annual_battery_soh_loss_pct: float = 0.0,
     battery_initial_soh_pct: float = 100.0,
     battery_eol_percentage: float = 0.70,
+    battery_replacement_cost: Optional[float] = None,
 ) -> Tuple[float, float]:
     """Calculate initial CAPEX and lifetime NPV of savings for a design.
 
@@ -1065,7 +1070,10 @@ def calculate_financials(
     cancels out of the savings NPV and is omitted here. Battery replacement
     timing is approximated by repeating the candidate's simulated year-1 SOH
     loss until its configured EOL threshold, resetting to 100% SOH after each
-    event. The App projection remains authoritative because it propagates SOH
+    event. Each replacement is inflated and discounted at its estimated swap
+    instant, as the projection books a simulated one, and costs
+    ``battery_replacement_cost`` when given, otherwise the pack's storage
+    cost. The App projection remains authoritative because it propagates SOH
     and applies actual simulated replacement events year by year.
 
     Module power for inverter sizing and CAPEX comes from ``module_power_w``
@@ -1109,9 +1117,12 @@ def calculate_financials(
         initial_soh_pct=battery_initial_soh_pct,
         eol_percentage=battery_eol_percentage,
         project_lifespan=project_lifespan,
-        replacement_cost_eur=battery_kwh * cost_params.battery_cost_per_kwh,
+        replacement_cost_eur=(
+            battery_kwh * cost_params.battery_cost_per_kwh
+            if battery_replacement_cost is None
+            else float(battery_replacement_cost)
+        ),
     )
-    replacement_years = set(replacement_treatment["replacement_years"])
 
     # 2. Degradation apportioning: lost PV splits into lost export and extra
     # import in proportion to the year-1 self-consumption ratio — the same
@@ -1140,9 +1151,18 @@ def calculate_financials(
             import_year * electricity_cost * inflation
             - export_year * electricity_sold_cost * sell_inflation
             + annual_operation_cost * inflation
-            + (replacement_treatment["replacement_cost_eur_each"] * inflation if year in replacement_years else 0.0)
         )
         npv += (cost_no_system - cost_with_system) / ((1 + discount_rate) ** year)
+
+    # 4. Replacements. Each is one outlay on the day of the swap, so it is
+    # inflated to and discounted from that instant, as the projection books
+    # a simulated one (economics.replacement_booking_time).
+    for booked in replacement_treatment["replacement_times_years"]:
+        npv -= (
+            replacement_treatment["replacement_cost_eur_each"]
+            * (1 + inflation_rate) ** booked
+            / ((1 + discount_rate) ** booked)
+        )
 
     return capex, npv
 
@@ -1257,7 +1277,9 @@ try:
             # (economics.calculate_costs): nameplate = DC peak / dc_ac_ratio.
             # The inverter each candidate pays for is also the one that clips
             # its production — same invariant as the App runner.
-            self.dc_ac_ratio = cost_params_from_config(config.get("costs"), config.get("financials")).dc_ac_ratio
+            cost_params = cost_params_from_config(config.get("costs"), config.get("financials"))
+            self.dc_ac_ratio = cost_params.dc_ac_ratio
+            self.battery_cost_per_kwh = cost_params.battery_cost_per_kwh
             self.inverter_efficiency = config.get(
                 "inverter_efficiency",
                 config.get("inverter", {}).get("efficiency", 0.96),
@@ -1275,8 +1297,8 @@ try:
                     "Projected scoring simulates every year and records actual replacement events."
                     if self.projected_objectives
                     else "Steady-state candidate scoring repeats its simulated year-1 SOH loss, "
-                    "replaces at the configured EOL threshold, resets SOH to 100%, and applies "
-                    "the configured storage cost in each estimated replacement year."
+                    "replaces at the configured EOL threshold, resets SOH to 100%, and books "
+                    "the replacement cost at each estimated swap instant."
                 ),
                 "higher_fidelity_basis": "App multiyear SOH propagation",
             }
@@ -1454,6 +1476,7 @@ try:
                 annual_battery_soh_loss_pct=annual_soh_loss_pct,
                 battery_initial_soh_pct=battery_config.initial_soh,
                 battery_eol_percentage=battery_config.eol_percentage,
+                battery_replacement_cost=_replacement_event_cost(batt_spec, battery_kwh, self.battery_cost_per_kwh),
             )
 
             # Obj 3: ZEB Status (Maximize Ratio -> Minimize Negative)

@@ -137,6 +137,87 @@ def test_replacement_prone_design_scores_worse_than_replacement_free():
     assert npv_free - npv_replacement == pytest.approx(800.0)
 
 
+def test_calculate_financials_books_replacements_like_the_projection_engine():
+    """Estimated replacements are booked at the swap instant, as simulated ones are.
+
+    3.2 SOH points a year from 100% reach the 70% EOL at t = 9.375 and again
+    at t = 18.75: 3/8 into year 10 and 3/4 into year 19. The projection
+    inflates and discounts each outlay at that instant; the steady-state
+    estimate used to inflate at the start of year 10 and discount at the end.
+    The explicit replacement cost also differs from 5 kWh x EUR 400/kWh.
+    """
+    financials = dict(FINANCIALS_CONFIG, inflation_rate=0.02, discount_rate=0.05)
+    n_modules, battery_kwh = 10, 5.0
+    pv_kwh, load_kwh, import_kwh, export_kwh = 8760.0, 4380.0, 1752.0, 2628.0
+    self_consumption = 1.0 - export_kwh / pv_kwh
+    degradation = financials["pv_degradation_rate"]
+    years = np.arange(1, financials["project_lifespan"] + 1)
+    pv_year = pv_kwh * (1.0 - degradation) ** (years - 1)
+    yearly = pd.DataFrame(
+        {
+            "Year": years,
+            "Load_kWh": load_kwh,
+            "PV_Production_kWh": pv_year,
+            "Export_kWh": pv_year * (1.0 - self_consumption),
+            "Import_kWh": import_kwh + (pv_kwh - pv_year) * self_consumption,
+            "PV_Degradation_Factor": (1.0 - degradation) ** (years - 1),
+            "Replacement_Cost": np.where(np.isin(years, [10, 19]), 4000.0, 0.0),
+            "Replacement_Year_Fraction": np.select([years == 10, years == 19], [0.375, 0.75], np.nan),
+        }
+    )
+    cost_params = cost_params_from_config(COSTS_CONFIG, financials)
+    costs = calculate_costs(
+        n_modules=n_modules,
+        module_power_w=COSTS_CONFIG["panel_wp"],
+        battery_capacity_wh=battery_kwh * 1000,
+        cost_params=cost_params,
+    )
+    projection = cost_analysis_projection(
+        results_df=None,
+        costs=costs,
+        num_years=financials["project_lifespan"],
+        inflation_rate=financials["inflation_rate"],
+        sell_price_inflation=financials["sell_price_inflation"],
+        discount_rate=financials["discount_rate"],
+        freq="h",
+        yearly_summary_df=yearly,
+    )
+
+    _, npv = calculate_financials(
+        n_modules,
+        battery_kwh,
+        import_kwh,
+        export_kwh,
+        load_kwh,
+        costs_config=COSTS_CONFIG,
+        financials_config=financials,
+        annual_pv_kwh=pv_kwh,
+        annual_battery_soh_loss_pct=3.2,
+        battery_eol_percentage=0.70,
+        battery_replacement_cost=4000.0,
+    )
+
+    assert npv == pytest.approx(float(projection["Savings_Cumulative_NPV"].iloc[-1]), rel=1e-9)
+
+
+def test_calculate_financials_books_the_issue_replacement_at_its_instant():
+    """The #173 case: EUR 4000 at t = 9.375, inflation 2%, discount 5%.
+
+    Year-boundary booking gave 4000 x 1.02**9 / 1.05**10 = EUR 2934.73.
+    """
+    financials = {"project_lifespan": 10, "inflation_rate": 0.02, "discount_rate": 0.05}
+    common = dict(
+        costs_config={"storage_cost_per_kwh": 400.0},
+        financials_config=financials,
+        battery_eol_percentage=0.70,
+    )
+    _, npv_free = calculate_financials(1, 10.0, 0.0, 0.0, 0.0, annual_battery_soh_loss_pct=0.0, **common)
+    _, npv_swap = calculate_financials(1, 10.0, 0.0, 0.0, 0.0, annual_battery_soh_loss_pct=3.2, **common)
+
+    assert npv_free - npv_swap == pytest.approx(4000.0 * (1.02 / 1.05) ** 9.375)
+    assert npv_free - npv_swap == pytest.approx(3048.15, abs=0.01)
+
+
 # ---------------------------------------------------------------------------
 # SolarDesignProblem wiring (requires pymoo)
 # ---------------------------------------------------------------------------
@@ -298,3 +379,17 @@ def test_config_model_options_omits_absent_keys():
 
     assert configured_pv_model_kwargs({}) == {}
     assert configured_pv_model_kwargs({"albedo": 0.25}) == {"albedo": 0.25}
+
+
+def test_optimizer_honours_an_explicit_replacement_cost(monkeypatch):
+    idx = pd.date_range("2025-01-01 00:00", periods=2, freq="h", tz="UTC")
+    houseload = pd.DataFrame({"Load": [500.0, 500.0]}, index=idx)
+
+    calculated = _run_evaluate(monkeypatch, _problem_config(), houseload, idx)
+    config = _problem_config()
+    config["battery"]["replacement_cost"] = 1234.0
+    explicit = _run_evaluate(monkeypatch, config, houseload, idx)
+
+    # 1 kWh at the configured EUR 400/kWh, unless the config names a cost.
+    assert calculated["financials_kwargs"]["battery_replacement_cost"] == pytest.approx(400.0)
+    assert explicit["financials_kwargs"]["battery_replacement_cost"] == pytest.approx(1234.0)

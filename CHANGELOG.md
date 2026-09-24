@@ -82,6 +82,23 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   different year from `tmy_data`**, which ran their battery at 22.9 °C with the
   indoor model on. App runs are unchanged: the default Porto run with a 5 kWh
   battery matches develop exactly at hourly and 15-minute resolution.
+- The steady-state optimizer books battery replacements at the swap instant
+  ([#173](https://github.com/Str4vinci/breos/issues/173)), as the App, Monte
+  Carlo and projected paths have since the replacement-timing fix.
+  `calculate_financials` rounded each estimated end of life up to a whole
+  year, inflated the outlay to the start of that year and discounted it from
+  the end. It now books each swap at its fractional time, the moment the
+  repeated year-one SOH loss reaches EOL, and inflates and discounts from
+  there. A swap at or after the end of the horizon is no longer booked. It
+  also honours an explicit `battery.replacement_cost`, which it ignored in
+  favour of the storage cost. A €4,000 swap at t = 9.375 with 2% inflation and
+  5% discount now costs €3,048.15, as in the projection, instead of €2,934.73.
+  **Results change for `objective_basis = "steady_state"` and for
+  `SteadyState_NPV_Eur` in projected runs, for designs with a battery.** On the
+  bundled Porto PVGIS TMY with the example config at 35° south, steady-state
+  NPV moves from −€2,035.82 to −€2,238.85 for 8 modules and 5 kWh, and from
+  −€21,697.74 to −€22,720.60 for 9 modules and 20 kWh. PV-only designs and
+  projected objectives are unchanged.
 - `power_limit_c_rate` limits the stored energy in both directions, as a cell
   current rating does ([#155](https://github.com/Str4vinci/breos/issues/155)).
   It used to set `max_charge_power_w` and `max_discharge_power_w` to the same
