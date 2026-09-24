@@ -67,6 +67,7 @@ weather/data access, load profiles, PV system data, and cost assumptions; see
 | `battery_rte` | `None` | Battery round-trip efficiency (`None` = 0.95), split evenly across charge/discharge |
 | `battery_max_charge_power_w` | `None` | Maximum DC power entering the battery charge path; `None` is unlimited |
 | `battery_max_discharge_power_w` | `None` | Maximum battery AC power delivered to load; `None` is unlimited |
+| `battery_power_limit_c_rate` | `None` | Charge and discharge limit on the stored energy, as a multiple of capacity (1.0 = 1 C); replaces both absolute limits |
 | `battery_temperature` | `"weather"` | Battery temperature used for degradation: `"weather"`, a fixed temperature in °C, or a timestamped CSV path |
 | `battery_indoor_model` | `None` | Optional indoor-temperature model settings. `None` applies the default indoor buffering; use `{"enabled": false}` to use `battery_temperature` without remapping |
 | `dc_coupled` | `True` | DC-coupled / hybrid inverter. `False` is currently unsupported and raises |

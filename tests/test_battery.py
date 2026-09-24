@@ -90,10 +90,13 @@ class TestBatteryConfig:
         assert cfg.max_discharge_power_w == 0.0
 
     @pytest.mark.parametrize("nominal_wh,rate,expected_w", [(5000.0, 1.0, 5000.0), (2000.0, 0.5, 1000.0)])
-    def test_c_rate_limit_scales_both_directions_with_capacity(self, nominal_wh, rate, expected_w):
+    def test_c_rate_limit_scales_with_capacity_at_the_stored_energy(self, nominal_wh, rate, expected_w):
         cfg = BatteryConfig(nominal_energy_wh=nominal_wh, power_limit_c_rate=rate)
-        assert cfg.max_charge_power_w == pytest.approx(expected_w)
-        assert cfg.max_discharge_power_w == pytest.approx(expected_w)
+        assert cfg.stored_power_limit_w == pytest.approx(expected_w)
+        # The absolute limits sit at the DC input and the AC output, a
+        # different boundary, so the C-rate does not fill them in.
+        assert cfg.max_charge_power_w is None
+        assert cfg.max_discharge_power_w is None
 
     @pytest.mark.parametrize("field", ["max_charge_power_w", "max_discharge_power_w"])
     def test_c_rate_limit_rejects_a_competing_absolute_limit(self, field):
