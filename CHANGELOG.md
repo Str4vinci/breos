@@ -82,6 +82,23 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   different year from `tmy_data`**, which ran their battery at 22.9 °C with the
   indoor model on. App runs are unchanged: the default Porto run with a 5 kWh
   battery matches develop exactly at hourly and 15-minute resolution.
+- The optimizer resolves an unset battery setting to the App's default
+  ([#156](https://github.com/Str4vinci/breos/issues/156)).
+  `optimize_system_multi_objective` and `evaluate_projected_design` used their
+  own fallbacks: a 20-80% SOC window instead of 10-90%, and 0.9795 each way
+  (95.9% round trip) instead of 95%. So a battery section that omitted them
+  gave a 5 kWh pack a 3 kWh window where the App gives it 4 kWh. Unset keys now
+  take the `BatteryConfig` defaults, which the App's `battery_min_soc` and
+  `battery_max_soc` defaults now reference. **Results change for optimizer
+  configs that omit `min_soc`, `max_soc`, `charge_efficiency` or
+  `discharge_efficiency`.** On the bundled Porto PVGIS TMY with the example
+  projected config minus those four keys, 8 modules and 5 kWh at 35° south,
+  projected grid independence rises from 67.35% to 73.08% and projected NPV
+  from €733.87 to €1,426.86. Steady-state grid independence rises from 70.77%
+  to 77.20%, but steady-state NPV falls from −€1,159.56 to −€2,037.31: the
+  wider window raises the year-one SOH loss from 5.92 to 6.17 points, and the
+  replacement estimate books four swaps instead of three. App runs and configs
+  that set all four keys, such as the example config, are unchanged.
 
 ### Removed
 - Removed the reproduction tooling for the upcoming publication:

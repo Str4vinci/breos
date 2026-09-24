@@ -468,6 +468,24 @@ def _validated_ac_output_scale(config: Dict[str, Any]) -> float:
     return scale
 
 
+# Battery-section keys forwarded to BatteryConfig under the same name.
+_BATTERY_SPEC_KEYS = (
+    "battery_type",
+    "min_soc",
+    "max_soc",
+    "charge_efficiency",
+    "discharge_efficiency",
+    "standby_loss_wh",
+    "eol_percentage",
+    "max_charge_power_w",
+    "max_discharge_power_w",
+    "power_limit_c_rate",
+    "dc_coupled",
+    "calendar_model",
+    "enable_resistance_fade",
+)
+
+
 def _build_battery_config_from_spec(
     batt_spec: Dict[str, Any],
     nominal_energy_wh: float,
@@ -478,28 +496,23 @@ def _build_battery_config_from_spec(
     replacement_cost: Optional[float] = None,
     ac_output_scale: float = 1.0,
 ) -> BatteryConfig:
-    """Build a BatteryConfig for optimization paths without dropping supported settings."""
+    """Build a BatteryConfig for optimization paths without dropping supported settings.
+
+    Only the settings the spec names are forwarded. Everything it leaves out
+    takes the :class:`BatteryConfig` default, which is the same default the
+    App resolves, so the two entry points evaluate the same battery when a
+    caller omits a setting.
+    """
+    configured = {key: batt_spec[key] for key in _BATTERY_SPEC_KEYS if key in batt_spec}
     return BatteryConfig(
         nominal_energy_wh=nominal_energy_wh,
-        battery_type=batt_spec.get("battery_type", "lfp"),
-        min_soc=batt_spec.get("min_soc", 0.2),
-        max_soc=batt_spec.get("max_soc", 0.8),
-        charge_efficiency=batt_spec.get("charge_efficiency", 0.9795),
-        discharge_efficiency=batt_spec.get("discharge_efficiency", 0.9795),
-        standby_loss_wh=batt_spec.get("standby_loss_wh", 5.0),
         initial_soh=initial_soh,
-        eol_percentage=batt_spec.get("eol_percentage", 0.7),
         inverter_efficiency=inverter_efficiency,
         inverter_ac_capacity_w=inverter_ac_capacity_w,
-        max_charge_power_w=batt_spec.get("max_charge_power_w"),
-        max_discharge_power_w=batt_spec.get("max_discharge_power_w"),
-        power_limit_c_rate=batt_spec.get("power_limit_c_rate"),
-        dc_coupled=batt_spec.get("dc_coupled", True),
-        calendar_model=batt_spec.get("calendar_model", "naumann_lam_field_calibrated"),
         enable_replacement=enable_replacement,
         replacement_cost=replacement_cost,
-        enable_resistance_fade=batt_spec.get("enable_resistance_fade", False),
         ac_output_scale=ac_output_scale,
+        **configured,
     )
 
 
