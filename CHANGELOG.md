@@ -152,6 +152,24 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   wider window raises the year-one SOH loss from 5.92 to 6.17 points, and the
   replacement estimate books four swaps instead of three. App runs and configs
   that set all four keys, such as the example config, are unchanged.
+- Monthly result rows and the first-year cost projection group on the local
+  calendar of the result frame instead of UTC
+  ([#166](https://github.com/Str4vinci/breos/issues/166)). Both converted the
+  `Datetime` column to UTC before grouping, so east of UTC the local year
+  started with a stub of the previous December and every month boundary moved
+  by the UTC offset. **The `monthly` result changes for App runs east of
+  UTC.** A PVGIS run for Berlin or Melbourne returned 13 rows, the first a
+  1-hour or 11-hour December stub. It now returns the 12 local months. With
+  10 modules and a 5 kWh battery, Berlin monthly PV is unchanged because the
+  moved hour is at night, and monthly consumption moves by up to 0.27 kWh.
+  Melbourne monthly PV moves by up to 6.6 kWh and consumption by up to
+  4.0 kWh. Yearly totals, NPV, payback and LCOE of App runs do not use these
+  paths and are unchanged, and Porto is unchanged.
+  `cost_analysis_projection` without `yearly_summary_df` built the whole
+  projection from the stub: for a constant 1 kW Berlin year at 0.20 €/kWh and
+  0.20 €/day, the year-1 no-system cost was 0.40 € instead of 1,825 €. A
+  `Datetime` column read back from a CSV of an IANA-zone run, which has two
+  UTC offsets, groups on each row's own wall-clock time.
 
 ### Removed
 - Removed the reproduction tooling for the upcoming publication:
