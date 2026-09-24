@@ -533,3 +533,42 @@ class TestReplacementBookingInProjection:
         expected = (12000.0 + operation + outlay / (1 + self.DISCOUNT) ** booked_at) / production
 
         assert lcoe == pytest.approx(expected)
+
+
+class TestFirstYearProjectionCalendar:
+    """The first-year path groups the ledger on its own local calendar."""
+
+    COSTS = {
+        "electricity_cost": 0.20,
+        "electricity_sold_cost": 0.05,
+        "daily_power_cost": 0.30,
+        "annual_operation_cost": 0.0,
+        "total_initial_cost": 5000.0,
+    }
+
+    @pytest.mark.parametrize("tz", ["Europe/Berlin", "Australia/Sydney"])
+    def test_year_one_is_the_whole_local_year_east_of_utc(self, tz):
+        # East of UTC the first local hours fall in the previous UTC year.
+        # Grouping in UTC built the projection from that stub alone.
+        index = pd.date_range("2023-01-01", periods=8760, freq="h", tz=tz)
+        results = pd.DataFrame(
+            {
+                "Datetime": index,
+                "PV_AC_To_Load": 500.0,
+                "Battery_AC_To_Load_PV": 0.0,
+                "PV_AC_Export": 300.0,
+                "Houseload": 1000.0,
+                "Import_From_Grid": 500.0,
+                "Sell_To_Grid": 300.0,
+            }
+        )
+
+        projection = cost_analysis_projection(
+            results, self.COSTS, num_years=2, inflation_rate=0.0, discount_rate=0.0, degradation_rate=0.0
+        )
+
+        year_one = projection.iloc[0]
+        assert year_one["Cost_No_Sys_Annual"] == pytest.approx(8760.0 * 0.20 + 365 * 0.30)
+        assert year_one["Cost_Import"] == pytest.approx(8760.0 * 0.5 * 0.20)
+        assert year_one["Revenue_Export"] == pytest.approx(8760.0 * 0.3 * 0.05)
+        assert year_one["Cost_Daily"] == pytest.approx(365 * 0.30)

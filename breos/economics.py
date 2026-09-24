@@ -14,7 +14,7 @@ from typing import Any, Dict, Optional
 import numpy as np
 import pandas as pd
 
-from breos.utils import get_hours_per_step
+from breos.utils import get_hours_per_step, local_datetime_index
 
 # Default battery and replacement cost per kWh of battery capacity (€/kWh)
 BATTERY_REPLACEMENT_COST_PER_KWH: float = 500.0
@@ -512,8 +512,7 @@ def cost_analysis_projection(
 
     # Prepare datetime index
     if "Datetime" in df.columns:
-        df["Datetime"] = pd.to_datetime(df["Datetime"], utc=True)
-        df.set_index("Datetime", inplace=True)
+        df.index = local_datetime_index(df.pop("Datetime"))
 
     df["Year"] = df.index.year
     df["Date"] = df.index.normalize()

@@ -11,7 +11,7 @@ import pandas as pd
 from breos.app_config import ResolvedAppConfig
 from breos.emissions import calculate_co2_savings
 from breos.runners.app import LEDGER_SCHEMA_VERSION, SimulationArtifacts
-from breos.utils import get_hours_per_step
+from breos.utils import get_hours_per_step, local_datetime_index
 
 
 def monthly_to_dicts(results_df: pd.DataFrame, freq: str) -> list[dict[str, Any]]:
@@ -20,8 +20,7 @@ def monthly_to_dicts(results_df: pd.DataFrame, freq: str) -> list[dict[str, Any]
     df = results_df.copy()
     if not isinstance(df.index, pd.DatetimeIndex):
         if "Datetime" in df.columns:
-            df["Datetime"] = pd.to_datetime(df["Datetime"], utc=True)
-            df.set_index("Datetime", inplace=True)
+            df.index = local_datetime_index(df.pop("Datetime"))
         else:
             raise ValueError("results_df must have a DatetimeIndex or Datetime column")
 

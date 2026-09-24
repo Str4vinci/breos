@@ -48,6 +48,12 @@ battery has not crossed the inverter and is never classified as clipping.
 inverter losses. Both limits scale with the timestep. `None` means unlimited
 for backward compatibility; users should configure product nameplate limits.
 
+`power_limit_c_rate` replaces both with one limit on the stored energy, the
+way a cell current rating works. At 1 C a 5 kWh pack stores or releases at
+most 5 kW in either direction. Its DC input while charging is higher by the
+charge loss, and its AC output while discharging is lower by the discharge and
+inverter losses.
+
 ## Ledger schema
 
 | Column | Unit/basis | Definition |

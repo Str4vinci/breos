@@ -108,42 +108,44 @@ def _write_leap_year_15min_weather(tmp_path):
     return path, df
 
 
-@pytest.mark.parametrize(
-    ("radiation_time_basis", "suffix", "label_basis"),
-    [("interval_mean", "", "right"), ("instant", "_instant", "instant")],
-)
-def test_fetch_weather_data_requests_selected_openmeteo_radiation(
-    monkeypatch, radiation_time_basis, suffix, label_basis
-):
-    captured = {}
+def _install_fake_openmeteo(monkeypatch, captured):
+    """Serve hourly labels from start_date 00:00 to end_date 23:00, as Open-Meteo does."""
 
     class FakeSession:
         def mount(self, *_args, **_kwargs):
             pass
 
     class FakeVariable:
-        def __init__(self, value):
-            self.value = value
+        def __init__(self, values):
+            self.values = values
 
         def ValuesAsNumpy(self):
-            return np.array([self.value], dtype=float)
+            return self.values
 
     class FakeHourly:
+        def __init__(self, params):
+            self.start = pd.Timestamp(params["start_date"])
+            self.end = pd.Timestamp(params["end_date"]) + pd.Timedelta(days=1)
+
         def Time(self):
-            return 0
+            return int(self.start.timestamp())
 
         def TimeEnd(self):
-            return 3600
+            return int(self.end.timestamp())
 
         def Interval(self):
             return 3600
 
         def Variables(self, index):
-            return FakeVariable(index)
+            hours = int((self.end - self.start) / pd.Timedelta(hours=1))
+            return FakeVariable(np.arange(hours, dtype=float) + 1000.0 * index)
 
     class FakeResponse:
+        def __init__(self, params):
+            self.params = params
+
         def Hourly(self):
-            return FakeHourly()
+            return FakeHourly(self.params)
 
     class FakeClient:
         def __init__(self, *, session):
@@ -152,10 +154,21 @@ def test_fetch_weather_data_requests_selected_openmeteo_radiation(
         def weather_api(self, url, *, params):
             captured["url"] = url
             captured["params"] = params
-            return [FakeResponse()]
+            return [FakeResponse(params)]
 
     monkeypatch.setattr("breos.weather.requests_cache.CachedSession", lambda *_args, **_kwargs: FakeSession())
     monkeypatch.setattr("breos.weather.openmeteo_requests.Client", FakeClient)
+
+
+@pytest.mark.parametrize(
+    ("radiation_time_basis", "suffix", "label_basis"),
+    [("interval_mean", "", "right"), ("instant", "_instant", "instant")],
+)
+def test_fetch_weather_data_requests_selected_openmeteo_radiation(
+    monkeypatch, radiation_time_basis, suffix, label_basis
+):
+    captured = {}
+    _install_fake_openmeteo(monkeypatch, captured)
 
     weather = fetch_weather_data(
         latitude=41.1579,
@@ -205,6 +218,114 @@ def test_fetch_weather_data_rejects_unknown_radiation_time_basis():
             save_to_file=False,
             radiation_time_basis="unknown",
         )
+
+
+@pytest.mark.parametrize(
+    ("radiation_time_basis", "requested_end", "first_label", "last_label"),
+    [
+        ("interval_mean", "2025-01-01", "2024-01-01 01:00", "2025-01-01 00:00"),
+        ("instant", "2024-12-31", "2024-01-01 00:00", "2024-12-31 23:00"),
+    ],
+)
+def test_fetch_weather_data_covers_the_requested_hours(
+    monkeypatch, radiation_time_basis, requested_end, first_label, last_label
+):
+    captured = {}
+    _install_fake_openmeteo(monkeypatch, captured)
+
+    weather = fetch_weather_data(
+        latitude=41.1579,
+        longitude=-8.6291,
+        start_date="2024-01-01",
+        end_date="2024-12-31",
+        tilt=0,
+        azimuth=0,
+        save_to_file=False,
+        radiation_time_basis=radiation_time_basis,
+    )
+
+    assert captured["params"]["end_date"] == requested_end
+    assert len(weather) == 8784
+    assert weather.index[0] == pd.Timestamp(first_label)
+    assert weather.index[-1] == pd.Timestamp(last_label)
+
+
+def test_fetched_right_labelled_file_keeps_its_last_year(monkeypatch, tmp_path):
+    captured = {}
+    _install_fake_openmeteo(monkeypatch, captured)
+    fetched = fetch_weather_data(
+        latitude=41.1579,
+        longitude=-8.6291,
+        start_date="2022-01-01",
+        end_date="2024-12-31",
+        tilt=0,
+        azimuth=0,
+        location_name="porto",
+        output_dir=str(tmp_path),
+    )
+    path = tmp_path / "porto_historical_2022_2024_openmeteo.csv"
+
+    by_year = preload_weather_by_year(str(path), target_year=2025)
+
+    assert sorted(by_year) == [2022, 2023, 2024]
+    last = by_year[2024]
+    assert len(last) == 8760
+    assert last["date"].iloc[-1] == pd.Timestamp("2025-12-31 23:00")
+    # The mean over 2024-12-31 23:00-24:00 is labelled at the following midnight.
+    midnight_mean = fetched.loc[pd.Timestamp("2025-01-01 00:00"), "shortwave_radiation"]
+    assert last["shortwave_radiation"].iloc[-1] == midnight_mean
+
+
+def _write_right_labelled_file_without_trailing_midnight(tmp_path):
+    path = tmp_path / "historical.csv"
+    dates = pd.date_range("2022-01-01 00:00", "2024-12-31 23:00", freq="h")
+    pd.DataFrame({"date": dates, "shortwave_radiation": 0.0}).to_csv(path, index=False)
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    sidecar = {
+        "schema_version": 1,
+        "weather_sha256": digest,
+        "breos_weather_metadata": {"radiation_time_basis": "interval_mean", "timestamp_label_basis": "right"},
+    }
+    Path(f"{path}.metadata.json").write_text(json.dumps(sidecar))
+    return path
+
+
+def test_preload_weather_by_year_warns_about_the_years_it_skips(tmp_path, caplog):
+    path = _write_right_labelled_file_without_trailing_midnight(tmp_path)
+
+    with caplog.at_level("WARNING", logger="breos.weather"):
+        by_year = preload_weather_by_year(str(path), target_year=2025)
+
+    assert sorted(by_year) == [2022, 2023]
+    assert "2021 (1 of 8760 rows), 2024 (8759 of 8760 rows)" in caplog.text
+    assert "midnight after the last day" in caplog.text
+
+
+def test_select_random_year_only_picks_complete_years(tmp_path):
+    path = _write_right_labelled_file_without_trailing_midnight(tmp_path)
+
+    picked = set()
+    for seed in range(20):
+        rng = np.random.default_rng(seed)
+        selected, selected_year = select_random_year_and_replace_datetime(str(path), target_year=2025, rng=rng)
+        assert len(selected) == 8760
+        picked.add(selected_year)
+
+    assert picked == {2022, 2023}
+
+
+def test_select_random_year_draws_from_the_given_generator(tmp_path):
+    path = _write_right_labelled_file_without_trailing_midnight(tmp_path)
+    np.random.seed(0)
+    global_state = np.random.get_state()[1].copy()
+
+    picks = [
+        select_random_year_and_replace_datetime(str(path), rng=np.random.default_rng(seed))[1] for seed in range(8)
+    ]
+
+    assert picks == [int(np.random.default_rng(seed).choice([2022, 2023])) for seed in range(8)]
+    assert set(picks) == {2022, 2023}
+    np.testing.assert_array_equal(np.random.get_state()[1], global_state)
 
 
 def test_battery_temperature_helper_applies_indoor_default():

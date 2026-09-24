@@ -2,6 +2,7 @@
 
 import json
 
+import pandas as pd
 import pytest
 
 import breos
@@ -887,6 +888,38 @@ class TestAppSimulateNoBattery:
         assert self.result["lcoe_eur_kwh"] > 0
 
 
+def test_monthly_rows_follow_the_local_year_of_fixed_offset_weather(monkeypatch, synthetic_weather):
+    # PVGIS weather for a zone east of UTC arrives as Etc/GMT-N, so the local
+    # year starts on 31 December in UTC. Monthly rows must still be the twelve
+    # local months and add up to the first simulated year.
+    weather = synthetic_weather.copy()
+    weather.index = pd.date_range("2023-01-01", periods=len(weather), freq="h", tz="Etc/GMT-1")
+
+    def _fake_fetch(*args, **kwargs):
+        return weather.copy(), {"inputs": {"location": {"latitude": 52.52, "longitude": 13.40, "elevation": 0}}}
+
+    monkeypatch.setattr("breos.app.fetch_tmy_weather_data", _fake_fetch)
+    monkeypatch.setattr("breos.app.load_weather", lambda **kw: None)
+    app = App(
+        {
+            "location": {"latitude": 52.52, "longitude": 13.40, "timezone": "Europe/Berlin"},
+            "n_modules": 6,
+            "annual_consumption_kwh": 3000,
+            "projection_years": 2,
+        }
+    )
+    app.simulate()
+    result = app.result()
+
+    monthly = result["monthly"]
+    assert [row["month"] for row in monthly] == [
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"
+    ]  # fmt: skip
+    year_one = result["yearly"][0]
+    for key in ("pv_kwh", "consumption_kwh", "import_kwh", "export_kwh"):
+        assert sum(row[key] for row in monthly) == pytest.approx(year_one[key], abs=0.1)
+
+
 class TestAppSimulateMultiArray:
     @pytest.fixture(autouse=True)
     def _setup(self, _patch_weather):
@@ -1022,7 +1055,7 @@ class TestAppBifacialConfig:
 
 class TestAppSimulateTracking:
     def test_invalid_tracking(self, _patch_weather):
-        with pytest.raises(ValueError, match="tracking must be"):
+        with pytest.raises(ValueError, match="'tracking' must be"):
             App(
                 {
                     "location": "porto",
