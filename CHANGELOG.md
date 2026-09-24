@@ -82,6 +82,135 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   different year from `tmy_data`**, which ran their battery at 22.9 °C with the
   indoor model on. App runs are unchanged: the default Porto run with a 5 kWh
   battery matches develop exactly at hourly and 15-minute resolution.
+- `power_limit_c_rate` limits the stored energy in both directions, as a cell
+  current rating does ([#155](https://github.com/Str4vinci/breos/issues/155)).
+  It used to set `max_charge_power_w` and `max_discharge_power_w` to the same
+  wattage, but those apply at the DC charge input and at the AC discharge
+  output. So 1 C on a 5 kWh pack stored at most 4,873 W (0.97 C) and drew up to
+  5,553 W (1.11 C) from the cells, a 14% spread. Both directions now stop at
+  5,000 W of stored-energy change. Charging accepts up to 5,130 W of DC, and
+  discharge delivers up to about 4,500 W of AC, depending on the inverter's
+  part-load efficiency. `BatteryConfig` no longer fills
+  in the two absolute limits from the C-rate; the limit is
+  `BatteryConfig.stored_power_limit_w`. To reproduce the old behaviour, set
+  `max_charge_power_w` and `max_discharge_power_w` to the C-rate times the
+  capacity. **Results change only where the limit binds.** For Porto with
+  8,000 kWh/yr and 14 modules, grid import falls by 0.002% with 5 kWh at
+  0.5 C and by 0.045% with 10 kWh at 0.25 C. It is unchanged with 3,500 kWh/yr,
+  8 modules, and 5 kWh at 1 C or 0.5 C. Charging binds more often than
+  discharge, so the gain in stored PV outweighs the lower discharge ceiling.
+  The upcoming publication's C-rate never binds, so its results are unaffected.
+- `pv_arrays` inherit the top-level tracker settings, and tracker keys and
+  array entries are validated
+  ([#167](https://github.com/Str4vinci/breos/issues/167)). An array inherited
+  `module`, `tilt`, and `azimuth` from the top level but not `tracking`,
+  `max_angle`, or the other tracker keys, so the PV model's own fallbacks
+  applied: a top-level single-axis tracker ran fixed-tilt once `pv_arrays` was
+  set, and a top-level `max_angle` did not reach a tracking array. Arrays now
+  inherit every tracker key, and the result reports each array's resolved
+  `tracking` and tracker geometry. Tracker keys are range-checked at the top
+  level and per array, `backtrack` must be a bool (the string `"no"` is
+  truthy, so it used to leave backtracking on), a misspelled array `tracking`
+  fails before the weather fetch, and an unknown array key such as `tlt` is
+  rejected instead of silently dropped. **Results change for arrays under a
+  top-level tracker setting.** On the Porto PVGIS TMY with 10 modules,
+  `tracking = "single_axis"` with `pv_arrays = [{modules = 10}]` gives
+  9,700.6 kWh of DC instead of 8,672.0 (+11.9%), the same as without
+  `pv_arrays`. A single-axis array under a top-level `max_angle = 20` gives
+  8,983.4 kWh instead of 9,700.6 (−7.4%). Fixed-tilt arrays are unchanged.
+- Open-Meteo interval-mean weather fetched for Monte Carlo keeps its last year
+  ([#169](https://github.com/Str4vinci/breos/issues/169)). Those means are
+  labelled at the end of their hour, and `fetch_weather_data` stopped at
+  23:00 on `end_date`. Once BREOS moved each label to the start of its hour,
+  the last year was one step short, and `preload_weather_by_year` dropped it
+  without saying so: a 2022-2024 file gave Monte Carlo only 2022 and 2023.
+  The fetch now runs through the midnight after `end_date` and starts at
+  01:00 on `start_date`, so it covers exactly the requested hours.
+  Instantaneous fetches are unchanged. `preload_weather_by_year` now warns
+  about each year it skips, and `select_random_year_and_replace_datetime`
+  picks only complete years; it used to pick a short year with a warning. The
+  two share one year-splitting helper, which takes the step size from the
+  whole file. Files fetched before this fix still lose their last year, now
+  with a warning; fetch them again to keep it. **Results change only for
+  interval-mean files fetched from now on**, which give Monte Carlo one more
+  weather year. Monte Carlo on existing files is unchanged: the per-year
+  weather from both Porto 2005-2024 Open-Meteo files matches develop exactly.
+- The optimizer resolves an unset battery setting to the App's default
+  ([#156](https://github.com/Str4vinci/breos/issues/156)).
+  `optimize_system_multi_objective` and `evaluate_projected_design` used their
+  own fallbacks: a 20-80% SOC window instead of 10-90%, and 0.9795 each way
+  (95.9% round trip) instead of 95%. So a battery section that omitted them
+  gave a 5 kWh pack a 3 kWh window where the App gives it 4 kWh. Unset keys now
+  take the `BatteryConfig` defaults, which the App's `battery_min_soc` and
+  `battery_max_soc` defaults now reference. **Results change for optimizer
+  configs that omit `min_soc`, `max_soc`, `charge_efficiency` or
+  `discharge_efficiency`.** On the bundled Porto PVGIS TMY with the example
+  projected config minus those four keys, 8 modules and 5 kWh at 35° south,
+  projected grid independence rises from 67.35% to 73.08% and projected NPV
+  from €733.87 to €1,426.86. Steady-state grid independence rises from 70.77%
+  to 77.20%, but steady-state NPV falls from −€1,159.56 to −€2,037.31: the
+  wider window raises the year-one SOH loss from 5.92 to 6.17 points, and the
+  replacement estimate books four swaps instead of three. App runs and configs
+  that set all four keys, such as the example config, are unchanged.
+- Monthly result rows and the first-year cost projection group on the local
+  calendar of the result frame instead of UTC
+  ([#166](https://github.com/Str4vinci/breos/issues/166)). Both converted the
+  `Datetime` column to UTC before grouping, so east of UTC the local year
+  started with a stub of the previous December and every month boundary moved
+  by the UTC offset. **The `monthly` result changes for App runs east of
+  UTC.** A PVGIS run for Berlin or Melbourne returned 13 rows, the first a
+  1-hour or 11-hour December stub. It now returns the 12 local months. With
+  10 modules and a 5 kWh battery, Berlin monthly PV is unchanged because the
+  moved hour is at night, and monthly consumption moves by up to 0.27 kWh.
+  Melbourne monthly PV moves by up to 6.6 kWh and consumption by up to
+  4.0 kWh. Yearly totals, NPV, payback and LCOE of App runs do not use these
+  paths and are unchanged, and Porto is unchanged.
+  `cost_analysis_projection` without `yearly_summary_df` built the whole
+  projection from the stub: for a constant 1 kW Berlin year at 0.20 €/kWh and
+  0.20 €/day, the year-1 no-system cost was 0.40 € instead of 1,825 €. A
+  `Datetime` column read back from a CSV of an IANA-zone run, which has two
+  UTC offsets, groups on each row's own wall-clock time.
+- The projected optimizer's budget constraint checks the CAPEX it reports
+  ([#157](https://github.com/Str4vinci/breos/issues/157)). With
+  `objective_basis = "projected"`, `budget_eur` was compared with the
+  steady-state CAPEX, which prices modules at `costs.panel_wp` when that key is
+  set, while `Projected_Initial_Cost_Eur` prices the selected module's `Mpp`.
+  One 550 W module under a 400 W `panel_wp` passed a €480 budget at €465.48 and
+  was reported at €490.03. The constraint now uses the projected CAPEX.
+  **Pareto fronts change for projected runs that set `costs.panel_wp` below the
+  module's `Mpp`**: designs over budget at the reported cost are now
+  infeasible. Without `panel_wp` the two CAPEX figures are identical, so other
+  runs are unchanged. On the bundled Porto TMY with the example projected
+  config, 9 modules and 20 kWh give €14,794.97 on both paths.
+- Terrain shading from `horizon_profile` honours `solar_position="weather"`
+  ([#159](https://github.com/Str4vinci/breos/issues/159)). The shading step
+  evaluated the sun at the timestamp itself, while transposition used the
+  offset the weather metadata declares. So the terrain mask and the
+  irradiance model could disagree about where the sun was, and beam that
+  cleared the horizon at the interval midpoint was removed. Both now take the
+  offset from one resolver, `solar_position_time_offset`, and shading with
+  `"weather"` raises, as transposition does, when the metadata has no
+  radiation time basis. **Results change for runs with a `horizon_profile`
+  and `solar_position="weather"`.** For Porto with 10 modules and a
+  six-point horizon of 4 to 12 degrees, annual AC production changes from
+  8,260.44 to 8,253.78 kWh (−0.08%) on the PVGIS TMY, whose instants are
+  offset by about 10 minutes, and from 7,983.21 to 8,003.96 kWh (+0.26%) on
+  Open-Meteo 2023 interval means. On the Open-Meteo year the horizon loss
+  falls from 96.9 to 76.2 kWh. Other `solar_position` methods and runs
+  without a `horizon_profile` are unchanged.
+- The optimizer's discrete repair keeps candidates inside the configured
+  bounds ([#158](https://github.com/Str4vinci/breos/issues/158)). It rounded
+  modules and battery kWh to integers and tilt and azimuth to 5° with no bound
+  check, so 62.9° became 65° under a 63° `max_tilt_deg`, and 4.6 kWh became
+  5 kWh under a 4.9 kWh `max_battery_kwh`. A value that rounds past a bound now
+  takes the grid point just inside it. **Pareto fronts change for runs whose
+  `max_modules`, `max_battery_kwh` or `max_tilt_deg` is off the grid.** On the
+  bundled Porto PVGIS TMY with the example config on the steady-state basis,
+  `max_tilt_deg = 24`, `max_battery_kwh = 4.9`, 20 candidates for 10
+  generations and seed 1, develop evaluated 38 of 200 candidates at 5 kWh and
+  1 at 25°, and returned 6 of 20 Pareto designs at 5 kWh. Now none leave the
+  bounds. Bounds on the grid, including `max_tilt_deg = "adjust"`, are
+  unchanged.
 - The Monte Carlo summary says how many runs paid back
   ([#160](https://github.com/Str4vinci/breos/issues/160)). A run that never
   pays back within the horizon has no payback year, and the summary dropped it

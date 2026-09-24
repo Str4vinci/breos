@@ -259,6 +259,43 @@ def test_run_montecarlo_is_reproducible_with_seed(tmp_path):
     np.testing.assert_allclose(a, b)
 
 
+def _load_scale_paths(result):
+    return [tuple(group["Load_Scale"]) for _run, group in result.yearly.groupby("run")]
+
+
+def test_run_montecarlo_adjacent_seeds_share_no_trajectory(tmp_path):
+    weather = _write_multiyear_weather(tmp_path / "multi.csv")
+
+    def paths(seed):
+        settings = MonteCarloSettings(
+            weather_file=str(weather), n_runs=4, years_per_run=3, seed=seed, collect_yearly=True
+        )
+        return _load_scale_paths(run_montecarlo(_base_config(), settings))
+
+    first, second = paths(1), paths(2)
+
+    assert len(set(first)) == 4
+    assert not set(first) & set(second)
+
+
+def test_run_montecarlo_run_streams_are_spawned_from_the_base_seed(tmp_path):
+    weather = _write_multiyear_weather(tmp_path / "multi.csv")
+    settings = MonteCarloSettings(weather_file=str(weather), n_runs=3, years_per_run=2, seed=7, collect_yearly=True)
+
+    result = run_montecarlo(_base_config(), settings)
+
+    for run_idx, stream in enumerate(np.random.SeedSequence(7).spawn(3)):
+        rng = np.random.default_rng(stream)
+        yearly = result.yearly[result.yearly["run"] == run_idx + 1]
+        for _year_idx in range(2):
+            year = result.available_years[rng.integers(len(result.available_years))]
+            scale = _sample_load_scale(rng, settings.load_uncertainty, settings.min_load_scale, None)
+            row = yearly.iloc[_year_idx]
+            assert row["Weather_Year"] == year
+            assert row["Load_Scale"] == scale
+    assert "SeedSequence(base_seed).spawn(n_runs)" in result.provenance["random_stream"]
+
+
 def test_run_montecarlo_parallel_workers_preserve_seeded_results(tmp_path):
     weather = _write_multiyear_weather(tmp_path / "multi.csv")
     serial = MonteCarloSettings(weather_file=str(weather), n_runs=2, years_per_run=1, seed=42)

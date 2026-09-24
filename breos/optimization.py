@@ -468,6 +468,24 @@ def _validated_ac_output_scale(config: Dict[str, Any]) -> float:
     return scale
 
 
+# Battery-section keys forwarded to BatteryConfig under the same name.
+_BATTERY_SPEC_KEYS = (
+    "battery_type",
+    "min_soc",
+    "max_soc",
+    "charge_efficiency",
+    "discharge_efficiency",
+    "standby_loss_wh",
+    "eol_percentage",
+    "max_charge_power_w",
+    "max_discharge_power_w",
+    "power_limit_c_rate",
+    "dc_coupled",
+    "calendar_model",
+    "enable_resistance_fade",
+)
+
+
 def _build_battery_config_from_spec(
     batt_spec: Dict[str, Any],
     nominal_energy_wh: float,
@@ -478,28 +496,23 @@ def _build_battery_config_from_spec(
     replacement_cost: Optional[float] = None,
     ac_output_scale: float = 1.0,
 ) -> BatteryConfig:
-    """Build a BatteryConfig for optimization paths without dropping supported settings."""
+    """Build a BatteryConfig for optimization paths without dropping supported settings.
+
+    Only the settings the spec names are forwarded. Everything it leaves out
+    takes the :class:`BatteryConfig` default, which is the same default the
+    App resolves, so the two entry points evaluate the same battery when a
+    caller omits a setting.
+    """
+    configured = {key: batt_spec[key] for key in _BATTERY_SPEC_KEYS if key in batt_spec}
     return BatteryConfig(
         nominal_energy_wh=nominal_energy_wh,
-        battery_type=batt_spec.get("battery_type", "lfp"),
-        min_soc=batt_spec.get("min_soc", 0.2),
-        max_soc=batt_spec.get("max_soc", 0.8),
-        charge_efficiency=batt_spec.get("charge_efficiency", 0.9795),
-        discharge_efficiency=batt_spec.get("discharge_efficiency", 0.9795),
-        standby_loss_wh=batt_spec.get("standby_loss_wh", 5.0),
         initial_soh=initial_soh,
-        eol_percentage=batt_spec.get("eol_percentage", 0.7),
         inverter_efficiency=inverter_efficiency,
         inverter_ac_capacity_w=inverter_ac_capacity_w,
-        max_charge_power_w=batt_spec.get("max_charge_power_w"),
-        max_discharge_power_w=batt_spec.get("max_discharge_power_w"),
-        power_limit_c_rate=batt_spec.get("power_limit_c_rate"),
-        dc_coupled=batt_spec.get("dc_coupled", True),
-        calendar_model=batt_spec.get("calendar_model", "naumann_lam_field_calibrated"),
         enable_replacement=enable_replacement,
         replacement_cost=replacement_cost,
-        enable_resistance_fade=batt_spec.get("enable_resistance_fade", False),
         ac_output_scale=ac_output_scale,
+        **configured,
     )
 
 
@@ -1151,6 +1164,19 @@ def calculate_financials(
 # 3. PYMOO OPTIMIZATION CLASSES
 # ==========================================
 
+
+def _snap_to_grid_within_bounds(values: np.ndarray, step: float, lower: float, upper: float) -> np.ndarray:
+    """Round to the nearest multiple of ``step`` that lies inside the bounds.
+
+    Rounding alone can leave the bounds: 62.9 degrees rounds to 65 under a
+    63 degree maximum. A value that rounds past a bound takes the grid point
+    just inside it instead, 60 in that example.
+    """
+    lowest = np.ceil(lower / step) * step
+    highest = np.floor(upper / step) * step
+    return np.clip(np.round(values / step) * step, lowest, highest)
+
+
 # Only import pymoo if this module is used for full optimization to avoid overhead
 try:
     from pymoo.core.problem import ElementwiseProblem
@@ -1168,20 +1194,11 @@ try:
 
             # --- 2. Apply Rounding Logic ---
 
-            # Col 0: Modules (Round to integer)
-            X[:, 0] = np.round(X[:, 0])
-
-            # Col 1: Battery (Round to nearest 1 kWh - Discrete)
-            X[:, 1] = np.round(X[:, 1])
-
-            # Col 2: Tilt (Round to nearest 5 degrees)
-            tilt_step = 5.0
-            X[:, 2] = np.round(X[:, 2] / tilt_step) * tilt_step
-
-            # Col 3: Azimuth (If it exists, round to nearest 5)
-            if X.shape[1] > 3:
-                azimuth_step = 5.0
-                X[:, 3] = np.round(X[:, 3] / azimuth_step) * azimuth_step
+            # Modules and battery kWh snap to integers, tilt and azimuth to
+            # 5 degrees. Every column stays inside the problem bounds.
+            steps = (1.0, 1.0, 5.0, 5.0)
+            for col in range(X.shape[1]):
+                X[:, col] = _snap_to_grid_within_bounds(X[:, col], steps[col], problem.xl[col], problem.xu[col])
 
             # --- 3. Return Correct Format ---
             if is_population:
@@ -1467,6 +1484,9 @@ try:
             objective_grid_dependence = grid_dependence_ratio
             objective_npv = npv
             objective_zeb = zeb_ratio
+            # The budget gates the CAPEX of the basis being optimized, so the
+            # cost a feasible design reports is the cost that was checked.
+            objective_capex = capex
             if self.projected_objectives:
                 projected_metrics = _evaluate_projected_design_metrics(
                     execution_backend=self.execution_backend,
@@ -1491,6 +1511,7 @@ try:
                 objective_grid_dependence = 1.0 - float(projected_metrics["Projected_Grid_Independence_%"]) / 100.0
                 objective_npv = float(projected_metrics["Projected_NPV_Eur"])
                 objective_zeb = float(projected_metrics["Projected_ZEB_Ratio"])
+                objective_capex = float(projected_metrics["Projected_Initial_Cost_Eur"])
 
             out["ZEB_Ratio"] = objective_zeb
             out["Objective_Grid_Independence_%"] = (
@@ -1504,7 +1525,7 @@ try:
 
             # --- 4. Constraints Calculation ---
             # g1: Price <= Budget (g1 <= 0 means satisfied)
-            g1 = capex - self.budget_limit
+            g1 = objective_capex - self.budget_limit
 
             # g2: Area <= Max Area
             g2 = system_area - self.area_limit

@@ -589,6 +589,7 @@ class TestUnlimitedInverterAndOptimizer:
                 "Projected_Grid_Independence_%": 100.0,
                 "Projected_NPV_Eur": 0.0,
                 "Projected_ZEB_Ratio": 1.0,
+                "Projected_Initial_Cost_Eur": 0.0,
             }
 
         monkeypatch.setattr("breos.optimization._evaluate_projected_design_metrics", fake_projected)

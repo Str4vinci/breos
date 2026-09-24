@@ -97,6 +97,11 @@ Set `seed` and keep it with the results. Without it, each study draws fresh
 randomness and the numbers move between runs, which makes a figure impossible to
 reproduce. The seed is recorded in the provenance JSON.
 
+Each run draws from its own stream, spawned from the seed with NumPy's
+`SeedSequence`. Studies under different seeds, even adjacent ones such as 42
+and 43, share no trajectory, so they can be compared or pooled as independent
+samples. The results do not depend on `n_procs`.
+
 ## The optional Numba backend
 
 Monte Carlo repeats the daily dispatch loop millions of times, which is where
