@@ -8,10 +8,10 @@ discharge cap passes without testing anything, so every branch case asserts
 its own precondition before asserting parity.
 
 Typical sizing studies do not cover this ground. PV-only designs have no
-battery, and battery designs often reach their charge and discharge caps only
-through a symmetric ``power_limit_c_rate``, which derives both limits from
-capacity rather than exercising the absolute caps and the binding behaviour
-the scenarios below are built to vary.
+battery, and battery designs often reach their power limits only through a
+symmetric ``power_limit_c_rate``, which caps the stored energy rather than
+exercising the absolute caps and the binding behaviour the scenarios below
+are built to vary.
 """
 
 from __future__ import annotations
@@ -468,6 +468,7 @@ def test_zeta_squared_must_use_libm_pow_not_the_folded_square():
         0.25,
         2.0,
         1.0,
+        np.inf,
     )
     reference = calculate_dc_ac_power(dc_power, ac_rating, efficiency)
     assert matrix[_STATE_ROW_INDEX["pv_production"], 0] * 0.25 == pytest.approx(

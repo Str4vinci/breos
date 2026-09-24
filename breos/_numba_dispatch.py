@@ -176,6 +176,7 @@ def _dispatch_day_numba(
     cap_wh: float,
     cap_charge_wh: float,
     cap_discharge_wh: float,
+    cap_stored_wh: float = float("inf"),
 ) -> Tuple[float, float, float, float]:
     """Compiled counterpart of ``_dispatch_day_python`` with the same contract."""
     global _JIT_CACHE_STATE
@@ -214,6 +215,7 @@ def _dispatch_day_numba(
         float(hours_per_step),
         2.0,
         float(battery_config.ac_output_scale),
+        float(cap_stored_wh),
     )
     if observe_cache:
         cache_hits_after = _cache_event_count(kernel.stats.cache_hits)
