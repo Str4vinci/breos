@@ -32,6 +32,14 @@ Native and BLAST degradation models, selection rules, provenance, and known
 limitations.
 :::
 
+:::{grid-item-card} External validation
+:link: validation
+:link-type: doc
+
+Checks against measured PV, module-temperature, and battery-temperature data,
+with the boundary each dataset supports.
+:::
+
 :::{grid-item-card} Required inputs
 :link: ../getting-started/inputs
 :link-type: doc
