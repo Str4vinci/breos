@@ -539,7 +539,9 @@ def main() -> int:
             "rlp_directory": str(args.rlp_directory),
             "models": [{"key": k, "calendar_model": c, "tilt_deg": t, "azimuth_deg": a} for k, c, t, a in MODELS],
             "settings": [{"key": k, "overrides": o, "description": d} for k, o, d in SETTINGS],
-            "candidate_set_source": str(args.candidates) if args.candidates else "pinned revision-0.6.1 five-configuration set",
+            "candidate_set_source": str(args.candidates)
+            if args.candidates
+            else "pinned revision-0.6.1 five-configuration set",
             "candidates": [
                 {"label": lbl, "role": role, "modules": m, "battery_kwh": b, "tilt_deg": t, "azimuth_deg": a}
                 for lbl, role, m, b, t, a in candidates_set
