@@ -18,10 +18,9 @@ import pandas as pd
 import pytest
 
 from breos.economics import calculate_costs, cost_analysis_projection, cost_params_from_config
-from breos.optimization import calculate_financials
+from breos.optimization import DEFAULT_PANEL_WP, calculate_financials
 
 COSTS_CONFIG = {
-    "panel_wp": 400,
     "electricity_cost": 0.25,
     "electricity_sold_cost": 0.07,
     "daily_power_cost": 0.50,  # cancels out of savings; nonzero to prove it
@@ -69,7 +68,7 @@ def test_calculate_financials_matches_projection_engine():
     cost_params = cost_params_from_config(COSTS_CONFIG, FINANCIALS_CONFIG)
     costs = calculate_costs(
         n_modules=n_modules,
-        module_power_w=COSTS_CONFIG["panel_wp"],
+        module_power_w=DEFAULT_PANEL_WP,
         battery_capacity_wh=battery_kwh * 1000,
         cost_params=cost_params,
     )
@@ -168,7 +167,7 @@ def test_calculate_financials_books_replacements_like_the_projection_engine():
     cost_params = cost_params_from_config(COSTS_CONFIG, financials)
     costs = calculate_costs(
         n_modules=n_modules,
-        module_power_w=COSTS_CONFIG["panel_wp"],
+        module_power_w=DEFAULT_PANEL_WP,
         battery_capacity_wh=battery_kwh * 1000,
         cost_params=cost_params,
     )
@@ -426,10 +425,10 @@ def test_optimizer_scores_an_unset_battery_window_with_app_defaults(monkeypatch)
 def test_projected_budget_constraint_gates_the_reported_capex(synthetic_weather, sample_load):
     """The budget checks the CAPEX the projected result reports.
 
-    ``costs.panel_wp`` prices the steady-state CAPEX at 400 W while projected
-    evaluation prices the selected 550 W module. The constraint used the
-    steady-state figure, so a EUR 480 budget accepted a design reported at
-    EUR 490.03.
+    The constraint used the steady-state CAPEX, which the removed
+    ``costs.panel_wp`` could price at 400 W while the reported figure priced
+    the selected 550 W module, so a EUR 480 budget accepted a design reported
+    at EUR 490.03.
     """
     pytest.importorskip("pymoo")
     from breos.optimization import SolarDesignProblem
@@ -442,7 +441,6 @@ def test_projected_budget_constraint_gates_the_reported_capex(synthetic_weather,
         "mode": {"fixed_azimuth": 180},
         "pv": {"module": "Suntech_STP550S_STC"},
         "battery": {"temperature": 20.0, "indoor_model": {"enabled": False}},
-        "costs": {"panel_wp": 400},
     }
     problem = SolarDesignProblem(synthetic_weather, sample_load, config, "results/_test_run/budget")
     out: dict = {}
