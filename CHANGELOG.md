@@ -4,6 +4,26 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 
 ## [Unreleased]
 
+### Added
+- Added the external validation page to the documentation. It collects the
+  measured-data checks against NIST Gaithersburg, the DKA Solar Centre, IEA PVPS
+  Task 13, the UCY PHAETHON test-bed, and a Reunion Island microgrid, with the
+  measurement boundary each dataset supports. It replaces
+  `validation/external/README.md`.
+
+### Removed
+- Removed the reproduction tooling for the upcoming publication:
+  `validation/article1/`, `run-logs/`, `tools/revision/`,
+  `tools/validation/recovery/`, the eight `tools/*article1*.py` drivers, and
+  their tests. They are preserved in the
+  [BREOS 0.6.2 archive](https://doi.org/10.5281/zenodo.22938914); reproduce the
+  published numbers from that release. No engine behaviour changes.
+- Removed the finished 0.4.x, 0.5.x, and 0.6.x delivery plans and the
+  third-party wrapping proposal from `design/architecture/`. The wrapping
+  proposal is declined ([#11](https://github.com/Str4vinci/breos/issues/11)).
+- Stopped tracking the generated autosummary stubs under `docs/api/generated/`,
+  which Sphinx rebuilds on every run.
+
 ## [0.6.2] - 2026-09-24
 
 ### Added
