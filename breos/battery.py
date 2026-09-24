@@ -397,6 +397,48 @@ def _dispatch_dc_step(
     return battery_energy, ledger
 
 
+def _require_complete_series(values: pd.Series, name: str) -> None:
+    """Reject a series that leaves any simulation step without a finite value.
+
+    A missing reading is not a zero. Filling it would turn incomplete input
+    into a plausible-looking result, so gaps must be filled explicitly by the
+    caller, where the choice stays visible.
+    """
+    numeric = pd.to_numeric(values, errors="coerce").to_numpy(dtype=float)
+    invalid = ~np.isfinite(numeric)
+    if invalid.any():
+        first = values.index[int(np.argmax(invalid))]
+        raise ValueError(
+            f"{name} has no finite value for {int(invalid.sum())} of {len(values)} simulation steps "
+            f"(first at {first}). Supply input that covers the whole simulation range at its "
+            "interval, or fill the gaps explicitly before simulating."
+        )
+
+
+def _repeat_annual_load_across_year_edges(load_utc: pd.Series, rng_utc: pd.DatetimeIndex) -> pd.Series:
+    """Extend an annual load profile by one year on each side the window needs.
+
+    A load profile covers one civil year in its own timezone, while weather
+    read from UTC covers one UTC year. East of UTC the last simulated hours
+    fall in the next civil year; west of UTC the first ones fall in the
+    previous year. Those steps take the profile's value one year earlier or
+    later, which is the same instant of a repeating annual profile. The
+    original values always win, so a gap inside the data is not covered and
+    still fails validation.
+    """
+    if load_utc.empty:
+        return load_utc
+    parts = [load_utc]
+    if rng_utc[0] < load_utc.index[0]:
+        parts.append(remap_datetime_index_years(load_utc, -1))
+    if rng_utc[-1] > load_utc.index[-1]:
+        parts.append(remap_datetime_index_years(load_utc, 1))
+    if len(parts) == 1:
+        return load_utc
+    combined = pd.concat(parts)
+    return combined[~combined.index.duplicated(keep="first")].sort_index()
+
+
 def _align_input_arrays(
     pv_dc: pd.Series,
     houseload: pd.DataFrame,
@@ -406,11 +448,14 @@ def _align_input_arrays(
     """Reindex PV, load and temperature onto ``rng`` as float64 arrays.
 
     The loop indexes these positionally, so everything the simulation reads
-    per step is settled here: gaps become zero generation / zero load / 25C,
-    and the load profile is year-shifted when it comes from a different year
-    than the simulation window.
+    per step is settled here. PV and load must cover every step with a finite
+    value, and load must not be negative; missing temperature steps become
+    25C. The load profile is year-shifted when it comes from a different year
+    than the simulation window, and it repeats across the year edge (see
+    :func:`_repeat_annual_load_across_year_edges`).
     """
-    pv_values = pv_dc.reindex(rng).fillna(0.0)
+    pv_values = pv_dc.reindex(rng)
+    _require_complete_series(pv_values, "pv_dc")
 
     if isinstance(houseload.index, pd.DatetimeIndex):
         houseload_series = houseload.iloc[:, 0].copy()
@@ -430,11 +475,12 @@ def _align_input_arrays(
         # span two calendar years in UTC (e.g., CET midnight = UTC 23:00 prev day).
         load_dominant_year = load_utc.year.value_counts().idxmax()
         sim_dominant_year = rng_utc.year.value_counts().idxmax()
+        houseload_series.index = load_utc
         if load_dominant_year != sim_dominant_year:
             year_offset = sim_dominant_year - load_dominant_year
-            houseload_series.index = load_utc
             houseload_series = remap_datetime_index_years(houseload_series, year_offset)
-            load_utc = houseload_series.index
+        houseload_series = _repeat_annual_load_across_year_edges(houseload_series, rng_utc)
+        load_utc = houseload_series.index
 
         # Convert back to target timezone (UTC→local is always unambiguous)
         if rng.tz is not None:
@@ -445,7 +491,15 @@ def _align_input_arrays(
     else:
         houseload_series = houseload.iloc[:, 0].copy()
         houseload_series.index = pv_values.index
-    houseload_series = houseload_series.reindex(rng).fillna(0.0)
+    houseload_series = houseload_series.reindex(rng)
+    _require_complete_series(houseload_series, "houseload")
+    negative = houseload_series.to_numpy(dtype=float) < 0.0
+    if negative.any():
+        raise ValueError(
+            f"houseload is negative at {int(negative.sum())} simulation steps "
+            f"(minimum {float(houseload_series.min()):.6g} W). Load must be gross building "
+            "demand; a net-meter reading that includes on-site generation cannot stand in for it."
+        )
 
     if temperature_series is None:
         temperature_series = pd.Series(25.0, index=rng)
@@ -473,14 +527,14 @@ class AlignedSimulationInputs:
     trajectory against the same weather calendar, with a load profile that
     differs only by a scalar -- tens of thousands of times per study for one
     of nineteen distinct answers. Aligning the calendar once and scaling
-    afterwards is exact rather than merely equivalent: reindexing selects
-    elements and fills gaps with zero, and multiplying by a scalar commutes
-    with both, so every element is the same product either way.
+    afterwards is exact rather than merely equivalent: reindexing only
+    selects elements, and multiplying by a scalar commutes with that, so every
+    element is the same product either way.
 
     Attributes:
         index: The simulation calendar. Everything else is positional on it.
-        pv_dc_w: PV DC power (W) per step, gaps zeroed.
-        load_w: AC load (W) per step, gaps zeroed.
+        pv_dc_w: PV DC power (W) per step. Every step has a finite value.
+        load_w: AC load (W) per step. Every step is finite and non-negative.
         temperature_c: Battery cell temperature (C) per step, gaps at 25 C.
     """
 
@@ -1745,8 +1799,11 @@ def _simulate_core(
     - Grid -> Load: AC (no conversion)
 
     Args:
-        pv_dc: Series with PV DC power production (W) - before inverter
-        houseload: DataFrame with electrical load (W) - AC
+        pv_dc: Series with PV DC power production (W) - before inverter.
+            It must have a finite value at every simulation step.
+        houseload: DataFrame with electrical load (W) - AC. It must have a
+            finite, non-negative value at every simulation step; gaps raise
+            ``ValueError`` rather than being read as zero load.
         battery_config: Battery configuration parameters
         start_time: Simulation start time (defaults to first index of pv_dc)
         end_time: Simulation end time (defaults to last index of pv_dc)
