@@ -57,6 +57,9 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   PHAETHON Centre of Excellence, University of Cyprus). Archived output
   packages and recorded input manifests keep their original names so they
   still match the hash-verified archive.
+- `CITATION.cff` and the README now cite the software itself instead of the
+  SSRN preprint (`10.2139/ssrn.7032064`). The preprint's methods and results
+  predate this release.
 
 ### Fixed
 - Battery replacement outlays are booked at the instant the pack is swapped
