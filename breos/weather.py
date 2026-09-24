@@ -23,7 +23,7 @@ import pvlib
 from pvlib.location import Location
 from scipy.interpolate import Akima1DInterpolator
 
-from breos.utils import get_hours_per_step, safe_path_slug
+from breos.utils import _datetime_index_seconds, get_hours_per_step, safe_path_slug
 
 logger = logging.getLogger(__name__)
 
@@ -620,11 +620,16 @@ def fetch_weather_data(
     return hourly_dataframe
 
 
+_TMY_RESAMPLED_COLUMNS = ("ghi", "dni", "dhi", "temp_air", "relative_humidity", "wind_speed")
+
+
 def resample_tmy_to_15min(tmy_data: pd.DataFrame, metadata: dict) -> pd.DataFrame:
     """
-    Resample TMY data from hourly to 15-minute intervals using Makima interpolation.
+    Resample PVGIS TMY data from hourly to 15-minute intervals.
 
-    Uses clear-sky scaling for GHI to preserve solar physics.
+    A thin wrapper over :func:`resample_to_15min` with Makima interpolation
+    and clear-sky scaling at the PVGIS site, including its elevation. Only
+    irradiance, temperature, humidity, and wind columns are kept.
 
     Args:
         tmy_data: DataFrame with hourly TMY data
@@ -633,77 +638,21 @@ def resample_tmy_to_15min(tmy_data: pd.DataFrame, metadata: dict) -> pd.DataFram
     Returns:
         DataFrame with 15-minute intervals
     """
-    weather_provenance = deepcopy(tmy_data.attrs.get(_WEATHER_METADATA_KEY))
-
-    # Location setup for clear-sky model
     loc = metadata["inputs"]["location"]
-    site = Location(loc["latitude"], loc["longitude"], altitude=loc["elevation"])
-
-    # Time handling
-    df_60 = tmy_data.copy()
-    start = df_60.index[0]
-    end = df_60.index[-1] + pd.Timedelta(minutes=45)
-    index_15 = pd.date_range(start, end, freq="15min", tz=df_60.index.tz)
-
-    # Convert timestamps to unix floats for Scipy
-    x_60 = df_60.index.view(np.int64) // 10**9
-    x_15 = index_15.view(np.int64) // 10**9
-
-    # Clear-sky scaling for irradiance (GHI, DNI, DHI)
-    # Interpolate clearness indices instead of raw irradiance to preserve
-    # sunrise/sunset transitions and physical consistency between components.
-    source_offset = _representative_time_offset(weather_metadata(df_60), pd.Timedelta(hours=1), require_metadata=False)
-    target_offset = _representative_time_offset(
-        weather_metadata(df_60), pd.Timedelta(minutes=15), require_metadata=False
+    columns = [column for column in _TMY_RESAMPLED_COLUMNS if column in tmy_data.columns]
+    df_15 = resample_to_15min(
+        tmy_data[columns],
+        method="makima",
+        latitude=loc["latitude"],
+        longitude=loc["longitude"],
+        altitude=loc["elevation"],
     )
-    cs_60 = site.get_clearsky(df_60.index + source_offset)
-    cs_15 = site.get_clearsky(index_15 + target_offset)
-
-    df_15 = pd.DataFrame(index=index_15)
-    epsilon = 5.0  # Increased epsilon to avoid divide-by-zero spikes near dawn/dusk
-
-    for comp in ("ghi", "dni", "dhi"):
-        if comp in df_60.columns:
-            k_60 = df_60[comp].to_numpy(dtype=float) / (cs_60[comp].to_numpy(dtype=float) + epsilon)
-            # Clip K multiplier to physically reasonable max (e.g. 1.5x) to avoid massive dawn/dusk spikes
-            k_60 = np.clip(k_60, 0, 1.5)
-
-            makima_k = Akima1DInterpolator(x_60, k_60, method="makima")
-            k_15 = makima_k(x_15)
-            k_15[x_15 > x_60[-1]] = k_60[-1]
-            clear_sky = cs_15[comp].to_numpy(dtype=float)
-            reconstructed = k_15 * (clear_sky + epsilon)
-            reconstructed[clear_sky <= 0.0] = 0.0
-            df_15[comp] = np.clip(reconstructed, 0, None)
-
-    # Interpolate non-irradiance columns directly with Makima
-    met_cols = ["temp_air", "relative_humidity", "wind_speed"]
-
-    for col in met_cols:
-        if col in df_60.columns:
-            y_60 = df_60[col].values
-            makima_generic = Akima1DInterpolator(x_60, y_60, method="makima")
-            interpolated = makima_generic(x_15)
-            interpolated[x_15 > x_60[-1]] = y_60[-1]
-            df_15[col] = interpolated
-
-    # Physical clipping
     if "relative_humidity" in df_15:
         df_15["relative_humidity"] = df_15["relative_humidity"].clip(0, 100)
-    if "wind_speed" in df_15:
-        df_15["wind_speed"] = np.clip(df_15["wind_speed"], 0, None)
 
+    weather_provenance = df_15.attrs.get(_WEATHER_METADATA_KEY)
     if weather_provenance is not None:
-        weather_provenance.update(
-            {
-                "input_resolution": "h",
-                "output_resolution": "15min",
-                "irradiance_resampling_method": "makima_clear_sky",
-                "preserve_irradiance_energy": False,
-            }
-        )
-        df_15.attrs[_WEATHER_METADATA_KEY] = weather_provenance
-
+        weather_provenance["irradiance_resampling_method"] = "makima_clear_sky"
     return df_15
 
 
@@ -714,6 +663,7 @@ def resample_to_15min(
     latitude: Optional[float] = None,
     longitude: Optional[float] = None,
     preserve_irradiance_energy: bool = False,
+    altitude: Optional[float] = None,
 ) -> pd.DataFrame:
     """
     Resample hourly DataFrame to 15-minute intervals.
@@ -734,6 +684,8 @@ def resample_to_15min(
         preserve_irradiance_energy: Renormalize each source hour's four
             irradiance values so their mean equals the source-hour value.
             This is opt-in because it changes established interpolation output.
+        altitude: Site elevation in metres for the clear-sky model (optional;
+            pvlib looks it up from the coordinates when omitted)
 
     Returns:
         DataFrame with 15-minute intervals
@@ -758,8 +710,8 @@ def resample_to_15min(
     )
 
     # Convert timestamps to seconds for interpolation
-    x_original = df_hourly.index.astype("int64") // 10**9
-    x_target = target_index.astype("int64") // 10**9
+    x_original = _datetime_index_seconds(df_hourly.index)
+    x_target = _datetime_index_seconds(target_index)
 
     # Map column names to irradiance type (supports TMY and Open-Meteo conventions)
     irrad_col_map = {}  # column_name -> clear-sky component ('ghi', 'dni', 'dhi')
@@ -779,7 +731,7 @@ def resample_to_15min(
     epsilon = 5.0  # Increased epsilon to avoid divide-by-zero spikes near dawn/dusk
 
     if use_clearsky:
-        site = Location(latitude, longitude)
+        site = Location(latitude, longitude, altitude=altitude)
         source_offset = _representative_time_offset(
             weather_metadata or {}, pd.Timedelta(hours=1), require_metadata=False
         )

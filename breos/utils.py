@@ -127,6 +127,36 @@ def remap_datetime_index_years(obj, year_offset: int):
     return out
 
 
+_TICKS_PER_SECOND = {
+    "s": 1.0,
+    "ms": 1_000.0,
+    "us": 1_000_000.0,
+    "ns": 1_000_000_000.0,
+}
+
+
+def _datetime_index_ticks(time_index: "pd.DatetimeIndex") -> "tuple[np.ndarray, float]":
+    """Return integer timestamps and their scale without changing resolution."""
+    try:
+        ticks_per_second = _TICKS_PER_SECOND[time_index.unit]
+    except KeyError as exc:
+        raise ValueError(f"Unsupported DatetimeIndex resolution: {time_index.unit}") from exc
+    return time_index.asi8, ticks_per_second
+
+
+def _datetime_index_seconds(time_index: "pd.DatetimeIndex") -> np.ndarray:
+    """Return Unix-epoch seconds as floats, whatever the index resolution.
+
+    pandas 2 builds nanosecond indexes and pandas 3 defaults to microseconds,
+    so the raw integers cannot be divided by one fixed constant. The whole
+    seconds are split off in integer arithmetic first, because a nanosecond
+    count near the present exceeds float64's exact-integer range.
+    """
+    ticks, ticks_per_second = _datetime_index_ticks(time_index)
+    whole_seconds, remainder = np.divmod(ticks, int(ticks_per_second))
+    return whole_seconds.astype(float) + remainder / ticks_per_second
+
+
 def get_hours_per_step(freq: str) -> float:
     """
     Get the number of hours per timestep based on frequency.

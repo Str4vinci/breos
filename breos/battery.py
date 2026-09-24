@@ -75,7 +75,7 @@ from breos.execution import (  # noqa: F401  -- EXECUTION_BACKENDS re-exported
     validate_execution_backend,
 )
 from breos.inverter import _calculate_dc_ac_power_arrays, calculate_dc_ac_power, dc_power_for_ac_output
-from breos.utils import get_hours_per_step, remap_datetime_index_years
+from breos.utils import _datetime_index_ticks, get_hours_per_step, remap_datetime_index_years
 
 SUPPORTED_BATTERY_TYPES: tuple[str, ...] = ("lfp",)
 
@@ -2391,23 +2391,6 @@ def detect_half_cycles_from_soc_series(
         )
 
     return half_cycles, soc_abs_series
-
-
-_TICKS_PER_SECOND = {
-    "s": 1.0,
-    "ms": 1_000.0,
-    "us": 1_000_000.0,
-    "ns": 1_000_000_000.0,
-}
-
-
-def _datetime_index_ticks(time_index: pd.DatetimeIndex) -> Tuple[np.ndarray, float]:
-    """Return integer timestamps and their scale without changing resolution."""
-    try:
-        ticks_per_second = _TICKS_PER_SECOND[time_index.unit]
-    except KeyError as exc:
-        raise ValueError(f"Unsupported DatetimeIndex resolution: {time_index.unit}") from exc
-    return time_index.asi8, ticks_per_second
 
 
 def _detect_cycles_rainflow_arrays(

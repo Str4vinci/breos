@@ -10,6 +10,28 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   Task 13, the UCY PHAETHON test-bed, and a Reunion Island microgrid, with the
   measurement boundary each dataset supports. It replaces
   `validation/external/README.md`.
+- `resample_to_15min` accepts `altitude` for the clear-sky model. When it is
+  omitted, pvlib still looks the elevation up from the coordinates, as before.
+
+### Changed
+- `resample_tmy_to_15min` is now a thin wrapper over `resample_to_15min`, so
+  the two share one interpolation path. Its output is unchanged: the same
+  columns, values, and provenance.
+
+### Fixed
+- The 15-minute weather resamplers no longer depend on the timestamp resolution
+  of the input index ([#150](https://github.com/Str4vinci/breos/issues/150)).
+  Both divided the raw integers by `10**9`, which is only correct for
+  nanosecond indexes. pandas 3, which the lockfile pins, parses CSV timestamps
+  as microseconds, so the interpolation grid was jittered and some quarter-hours
+  collapsed onto the same point. Second-resolution input failed with
+  `ValueError`. **Results change for 15-minute runs under pandas 3** and now
+  match pandas 2. On the bundled Porto PVGIS TMY, annual GHI falls by 0.05%,
+  DNI by 0.04%, and DHI by 0.01%. Daytime GHI moves by 2.4 W/m² on average,
+  and by up to 220 W/m² at individual steps. The same applies to a 15-minute
+  load profile built from an external hourly file because its 15-minute file is
+  missing. Hourly runs, nanosecond input, and profiles loaded from native
+  15-minute files are unchanged.
 
 ### Removed
 - Removed the reproduction tooling for the upcoming publication:
