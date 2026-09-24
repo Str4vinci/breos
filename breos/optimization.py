@@ -314,12 +314,18 @@ def _estimate_battery_replacement_treatment(
     if battery_kwh <= 0.0 or annual_loss <= 0.0 or replacement_cost_eur <= 0.0:
         return treatment
 
+    if eol_pct >= 100.0:
+        # A fresh pack would already be at EOL, so the interval between swaps
+        # is zero and the schedule never ends.
+        raise ValueError("eol_percentage must be below 1 to estimate steady-state battery replacements")
     first_time = max(0.0, (float(initial_soh_pct) - eol_pct) / annual_loss)
     repeat_interval = (100.0 - eol_pct) / annual_loss
-    replacement_time = first_time
-    while replacement_time < project_lifespan:
+    # Each instant is computed from the first rather than accumulated, so
+    # rounding drift cannot book an extra swap just inside the horizon.
+    k = 0
+    while (replacement_time := first_time + k * repeat_interval) < project_lifespan:
         treatment["replacement_times_years"].append(replacement_time)
-        replacement_time += repeat_interval
+        k += 1
     return treatment
 
 

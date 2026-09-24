@@ -393,3 +393,23 @@ def test_optimizer_honours_an_explicit_replacement_cost(monkeypatch):
     # 1 kWh at the configured EUR 400/kWh, unless the config names a cost.
     assert calculated["financials_kwargs"]["battery_replacement_cost"] == pytest.approx(400.0)
     assert explicit["financials_kwargs"]["battery_replacement_cost"] == pytest.approx(1234.0)
+
+
+def test_steady_state_replacement_schedule_rejects_eol_at_full_health():
+    """An EOL of 100% gives a zero swap interval, which used to loop forever."""
+    from breos.optimization import _estimate_battery_replacement_treatment
+
+    with pytest.raises(ValueError, match="eol_percentage must be below 1"):
+        _estimate_battery_replacement_treatment(10.0, 3.2, 100.0, 1.0, 10, 4000.0)
+
+
+def test_steady_state_replacement_instants_do_not_drift_past_the_horizon():
+    """An interval of 20/9 years fits eight swaps in 20 years, not nine."""
+    from breos.optimization import _estimate_battery_replacement_treatment
+
+    # 100% to 70% at 13.5 points a year: an interval of exactly 20/9 years.
+    treatment = _estimate_battery_replacement_treatment(10.0, 13.5, 100.0, 0.7, 20, 4000.0)
+
+    times = treatment["replacement_times_years"]
+    assert len(times) == 8
+    assert times[-1] == pytest.approx(8 * 20 / 9)
