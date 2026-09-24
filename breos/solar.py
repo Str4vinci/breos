@@ -39,10 +39,10 @@ from breos.pv.model_options import (
     PVModelOptions,
     resolve_pv_model_options,
     resolve_solar_position_method,
+    solar_position_time_offset,
 )
 from breos.pv.temperature import calculate_cell_temperature
 from breos.utils import get_hours_per_step
-from breos.weather import weather_representative_time_offset
 
 # Module-level cache for CEC model parameters (depends only on module specs, not weather)
 _cec_param_cache: Dict[tuple, tuple] = {}
@@ -247,11 +247,7 @@ def _prepare_solarpos_and_weather(
 
     times = pd.date_range(start=weather_data.index[0], end=weather_data.index[-1], freq=freq)
     if method in {"mid-interval", "weather"}:
-        offset = (
-            pd.Timedelta(hours=get_hours_per_step(freq) / 2.0)
-            if method == "mid-interval"
-            else weather_representative_time_offset(weather_data, freq)
-        )
+        offset = solar_position_time_offset(method, weather_data, freq)
         solarpos = location.get_solarposition(times=times + offset)
         solarpos.index = times
     else:

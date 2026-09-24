@@ -182,6 +182,22 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   infeasible. Without `panel_wp` the two CAPEX figures are identical, so other
   runs are unchanged. On the bundled Porto TMY with the example projected
   config, 9 modules and 20 kWh give €14,794.97 on both paths.
+- Terrain shading from `horizon_profile` honours `solar_position="weather"`
+  ([#159](https://github.com/Str4vinci/breos/issues/159)). The shading step
+  evaluated the sun at the timestamp itself, while transposition used the
+  offset the weather metadata declares. So the terrain mask and the
+  irradiance model could disagree about where the sun was, and beam that
+  cleared the horizon at the interval midpoint was removed. Both now take the
+  offset from one resolver, `solar_position_time_offset`, and shading with
+  `"weather"` raises, as transposition does, when the metadata has no
+  radiation time basis. **Results change for runs with a `horizon_profile`
+  and `solar_position="weather"`.** For Porto with 10 modules and a
+  six-point horizon of 4 to 12 degrees, annual AC production changes from
+  8,260.44 to 8,253.78 kWh (−0.08%) on the PVGIS TMY, whose instants are
+  offset by about 10 minutes, and from 7,983.21 to 8,003.96 kWh (+0.26%) on
+  Open-Meteo 2023 interval means. On the Open-Meteo year the horizon loss
+  falls from 96.9 to 76.2 kWh. Other `solar_position` methods and runs
+  without a `horizon_profile` are unchanged.
 
 ### Removed
 - Removed the reproduction tooling for the upcoming publication:
