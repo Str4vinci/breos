@@ -82,6 +82,19 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   different year from `tmy_data`**, which ran their battery at 22.9 °C with the
   indoor model on. App runs are unchanged: the default Porto run with a 5 kWh
   battery matches develop exactly at hourly and 15-minute resolution.
+- The optimizer's discrete repair keeps candidates inside the configured
+  bounds ([#158](https://github.com/Str4vinci/breos/issues/158)). It rounded
+  modules and battery kWh to integers and tilt and azimuth to 5° with no bound
+  check, so 62.9° became 65° under a 63° `max_tilt_deg`, and 4.6 kWh became
+  5 kWh under a 4.9 kWh `max_battery_kwh`. A value that rounds past a bound now
+  takes the grid point just inside it. **Pareto fronts change for runs whose
+  `max_modules`, `max_battery_kwh` or `max_tilt_deg` is off the grid.** On the
+  bundled Porto PVGIS TMY with the example config on the steady-state basis,
+  `max_tilt_deg = 24`, `max_battery_kwh = 4.9`, 20 candidates for 10
+  generations and seed 1, develop evaluated 38 of 200 candidates at 5 kWh and
+  1 at 25°, and returned 6 of 20 Pareto designs at 5 kWh. Now none leave the
+  bounds. Bounds on the grid, including `max_tilt_deg = "adjust"`, are
+  unchanged.
 
 ### Removed
 - Removed the reproduction tooling for the upcoming publication:

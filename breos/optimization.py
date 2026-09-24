@@ -1151,6 +1151,19 @@ def calculate_financials(
 # 3. PYMOO OPTIMIZATION CLASSES
 # ==========================================
 
+
+def _snap_to_grid_within_bounds(values: np.ndarray, step: float, lower: float, upper: float) -> np.ndarray:
+    """Round to the nearest multiple of ``step`` that lies inside the bounds.
+
+    Rounding alone can leave the bounds: 62.9 degrees rounds to 65 under a
+    63 degree maximum. A value that rounds past a bound takes the grid point
+    just inside it instead, 60 in that example.
+    """
+    lowest = np.ceil(lower / step) * step
+    highest = np.floor(upper / step) * step
+    return np.clip(np.round(values / step) * step, lowest, highest)
+
+
 # Only import pymoo if this module is used for full optimization to avoid overhead
 try:
     from pymoo.core.problem import ElementwiseProblem
@@ -1168,20 +1181,11 @@ try:
 
             # --- 2. Apply Rounding Logic ---
 
-            # Col 0: Modules (Round to integer)
-            X[:, 0] = np.round(X[:, 0])
-
-            # Col 1: Battery (Round to nearest 1 kWh - Discrete)
-            X[:, 1] = np.round(X[:, 1])
-
-            # Col 2: Tilt (Round to nearest 5 degrees)
-            tilt_step = 5.0
-            X[:, 2] = np.round(X[:, 2] / tilt_step) * tilt_step
-
-            # Col 3: Azimuth (If it exists, round to nearest 5)
-            if X.shape[1] > 3:
-                azimuth_step = 5.0
-                X[:, 3] = np.round(X[:, 3] / azimuth_step) * azimuth_step
+            # Modules and battery kWh snap to integers, tilt and azimuth to
+            # 5 degrees. Every column stays inside the problem bounds.
+            steps = (1.0, 1.0, 5.0, 5.0)
+            for col in range(X.shape[1]):
+                X[:, col] = _snap_to_grid_within_bounds(X[:, col], steps[col], problem.xl[col], problem.xu[col])
 
             # --- 3. Return Correct Format ---
             if is_population:
