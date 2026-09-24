@@ -49,11 +49,12 @@ uv run --extra docs sphinx-build -W -b html docs docs/_build/html
 
 - `main` — stable, release-ready code. Do not push directly.
 - `develop` — integration branch for ongoing work.
-- Feature branches — create off `develop` for your work.
+- Feature branches — create off `develop` for your work, named with a
+  change-type prefix such as `feat/`, `fix/`, `refactor/`, or `docs/`.
 
 ```bash
 git checkout develop
-git checkout -b feature/your-feature-name
+git checkout -b feat/your-feature-name
 ```
 
 ## Making Changes

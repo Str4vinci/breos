@@ -1,6 +1,6 @@
 # Design notes
 
-This directory keeps proposed designs, completed refactor plans, and
+This directory keeps proposed designs, implementation records, and
 architecture decision records in the repository without publishing them as
 BREOS user documentation.
 
@@ -10,4 +10,4 @@ Current capabilities belong in `docs/`; future release intent belongs in
 `ROADMAP.md`.
 
 - [`architecture/`](architecture/README.md) — design proposals and implementation plans
-- [`adr/`](adr/) — architecture decision records
+- [`adr/`](adr/index.md) — architecture decision records

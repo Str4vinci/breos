@@ -23,3 +23,10 @@ doesn't drown the practical battery-configuration page.
 - Curated `autosummary` blocks keep the primary user-facing names on the
   index while the appendix still surfaces additional module APIs through a
   recursive crawl.
+
+## Update (0.7.0)
+
+The reference now has nine domain areas: battery degradation models gained
+their own page. Narrative guides live in `docs/getting-started/`, and model
+boundaries and validation live in `docs/modeling/`, instead of the
+`user-guide/` and `concepts/` folders this record anticipated.

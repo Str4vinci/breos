@@ -20,8 +20,8 @@ Keep changes scoped and preserve the `breos.App` facade as the most stable publi
 ```bash
 uv sync --extra dev --extra docs
 uv run pytest -q
-uv run ruff check breos tests
-uv run ruff format --check breos tests
+uv run ruff check breos tests tools
+uv run ruff format --check breos tests tools
 uv build
 ```
 
