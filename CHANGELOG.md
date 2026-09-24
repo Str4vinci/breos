@@ -82,6 +82,41 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   different year from `tmy_data`**, which ran their battery at 22.9 °C with the
   indoor model on. App runs are unchanged: the default Porto run with a 5 kWh
   battery matches develop exactly at hourly and 15-minute resolution.
+- `power_limit_c_rate` limits the stored energy in both directions, as a cell
+  current rating does ([#155](https://github.com/Str4vinci/breos/issues/155)).
+  It used to set `max_charge_power_w` and `max_discharge_power_w` to the same
+  wattage, but those apply at the DC charge input and at the AC discharge
+  output. So 1 C on a 5 kWh pack stored at most 4,873 W (0.97 C) and drew up to
+  5,553 W (1.11 C) from the cells, a 14% spread. Both directions now stop at
+  5,000 W of stored-energy change. Charging accepts up to 5,130 W of DC, and
+  discharge delivers up to about 4,500 W of AC, depending on the inverter's
+  part-load efficiency. `BatteryConfig` no longer fills
+  in the two absolute limits from the C-rate; the limit is
+  `BatteryConfig.stored_power_limit_w`. To reproduce the old behaviour, set
+  `max_charge_power_w` and `max_discharge_power_w` to the C-rate times the
+  capacity. **Results change only where the limit binds.** For Porto with
+  8,000 kWh/yr and 14 modules, grid import falls by 0.002% with 5 kWh at
+  0.5 C and by 0.045% with 10 kWh at 0.25 C. It is unchanged with 3,500 kWh/yr,
+  8 modules, and 5 kWh at 1 C or 0.5 C. Charging binds more often than
+  discharge, so the gain in stored PV outweighs the lower discharge ceiling.
+  The upcoming publication's C-rate never binds, so its results are unaffected.
+- Open-Meteo interval-mean weather fetched for Monte Carlo keeps its last year
+  ([#169](https://github.com/Str4vinci/breos/issues/169)). Those means are
+  labelled at the end of their hour, and `fetch_weather_data` stopped at
+  23:00 on `end_date`. Once BREOS moved each label to the start of its hour,
+  the last year was one step short, and `preload_weather_by_year` dropped it
+  without saying so: a 2022-2024 file gave Monte Carlo only 2022 and 2023.
+  The fetch now runs through the midnight after `end_date` and starts at
+  01:00 on `start_date`, so it covers exactly the requested hours.
+  Instantaneous fetches are unchanged. `preload_weather_by_year` now warns
+  about each year it skips, and `select_random_year_and_replace_datetime`
+  picks only complete years; it used to pick a short year with a warning. The
+  two share one year-splitting helper, which takes the step size from the
+  whole file. Files fetched before this fix still lose their last year, now
+  with a warning; fetch them again to keep it. **Results change only for
+  interval-mean files fetched from now on**, which give Monte Carlo one more
+  weather year. Monte Carlo on existing files is unchanged: the per-year
+  weather from both Porto 2005-2024 Open-Meteo files matches develop exactly.
 - The optimizer resolves an unset battery setting to the App's default
   ([#156](https://github.com/Str4vinci/breos/issues/156)).
   `optimize_system_multi_objective` and `evaluate_projected_design` used their
