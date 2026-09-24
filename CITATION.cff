@@ -6,6 +6,8 @@ authors:
   - given-names: Leonardo
     family-names: Rodrigues
     email: lrodrigues@fe.up.pt
+    affiliation: "Faculty of Engineering of the University of Porto (FEUP)"
+    orcid: "https://orcid.org/0000-0002-3228-6977"
 repository-code: "https://github.com/Str4vinci/breos"
 url: "https://github.com/Str4vinci/breos"
 abstract: >-
