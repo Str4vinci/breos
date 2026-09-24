@@ -134,6 +134,17 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   wider window raises the year-one SOH loss from 5.92 to 6.17 points, and the
   replacement estimate books four swaps instead of three. App runs and configs
   that set all four keys, such as the example config, are unchanged.
+- A leap-year `start_date` runs instead of failing after validation
+  ([#170](https://github.com/Str4vinci/breos/issues/170)). The PVGIS fetch
+  rejected leap sample years, because a TMY has 8,760 hours, so
+  `App({"start_date": "2028-01-01", ...})` constructed and then failed in
+  `simulate()`. `fetch_tmy_weather_data` now fetches a leap year on the
+  preceding year's calendar and restamps it, and `remap_tmy_year` does the
+  same for local TMY files. Both give the weather a 29 February copied from 28
+  February, which is what the load profile already did, and record it in the
+  weather metadata as `leap_day`. The new `fill_leap_day` does the copy.
+  Non-leap years are unchanged. A 2028 Porto run with 8 modules and 5 kWh
+  yields 19.4 kWh more PV than 2027, from the extra day.
 
 ### Removed
 - Removed the reproduction tooling for the upcoming publication:

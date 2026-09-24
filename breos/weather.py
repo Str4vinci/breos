@@ -23,7 +23,7 @@ import pvlib
 from pvlib.location import Location
 from scipy.interpolate import Akima1DInterpolator
 
-from breos.utils import _datetime_index_seconds, get_hours_per_step, safe_path_slug
+from breos.utils import _datetime_index_seconds, get_hours_per_step, is_leap_year, safe_path_slug
 
 logger = logging.getLogger(__name__)
 
@@ -363,6 +363,40 @@ def load_weather(
     return df
 
 
+def fill_leap_day(weather: pd.DataFrame) -> pd.DataFrame:
+    """Give one year of weather on a leap-year calendar its 29 February.
+
+    A TMY has 8,760 hours, so restamped onto a leap year it has no 29
+    February and 1 March follows 28 February directly. The load profile fills
+    that day with a copy of 28 February, and so does this, so weather, PV,
+    battery temperature and load all cover the leap year's 8,784 hours. The
+    day is taken on the index's own clock, which for a PVGIS TMY is the
+    location's fixed offset. The weather metadata records the fill.
+
+    A frame that is not in a leap year, or already has 29 February, is
+    returned unchanged.
+    """
+    index = weather.index
+    if not isinstance(index, pd.DatetimeIndex) or index.empty:
+        return weather
+    year = int(index.year.value_counts().idxmax())
+    february = index.month == 2
+    if not is_leap_year(year) or (february & (index.day == 29)).any():
+        return weather
+    source = weather[february & (index.day == 28) & (index.year == year)]
+    if source.empty:
+        return weather
+
+    leap_day = source.copy()
+    leap_day.index = source.index + pd.Timedelta(days=1)
+    filled = pd.concat([weather, leap_day]).sort_index()
+    filled.attrs = deepcopy(weather.attrs)
+    metadata = filled.attrs.get(_WEATHER_METADATA_KEY)
+    if isinstance(metadata, dict):
+        metadata["leap_day"] = {"year": year, "filled_from": f"{year}-02-28"}
+    return filled
+
+
 def fetch_tmy_weather_data(
     latitude: float,
     longitude: float,
@@ -379,6 +413,9 @@ def fetch_tmy_weather_data(
         latitude: Latitude of the location
         longitude: Longitude of the location
         sample_year: Year to use for index (default: 2025). Set to None to keep original TMY index.
+            For a leap year the TMY is fetched on the preceding year's
+            calendar, restamped, and given a 29 February copied from 28
+            February (see :func:`fill_leap_day`).
         freq: Frequency for output data ('h' for hourly, '15min' for 15-minute)
         timezone: Timezone string used to determine the location's whole-hour
             UTC offset (offset taken at Jan 1 of sample_year, i.e. standard
@@ -396,14 +433,16 @@ def fetch_tmy_weather_data(
         correct UTC instant for its irradiance values.
 
     Raises:
-        ValueError: If sample_year is a leap year (TMY has 8760 hours), or
-            the selected timezone has a fractional-hour UTC offset.
+        ValueError: If the selected timezone has a fractional-hour UTC offset.
     """
     roll_utc_offset = None
+    coerce_year = sample_year
     if sample_year is not None:
-        # Check for leap year
-        if sample_year % 4 == 0 and (sample_year % 100 != 0 or sample_year % 400 == 0):
-            raise ValueError(f"Sample year {sample_year} is a leap year. TMY has 8760 hours. Use non-leap year.")
+        # pvlib coerces the 8,760 TMY hours onto one calendar year, which
+        # must not be a leap year. Fetch a leap year on the preceding year's
+        # calendar and restamp it below.
+        if is_leap_year(sample_year):
+            coerce_year = sample_year - 1
 
         # Auto-detect timezone if not provided
         if timezone is None:
@@ -435,7 +474,7 @@ def fetch_tmy_weather_data(
         url="https://re.jrc.ec.europa.eu/api/v5_3/",
         timeout=120,
         roll_utc_offset=roll_utc_offset,
-        coerce_year=sample_year,
+        coerce_year=coerce_year,
     )
 
     irradiance_offset = float(metadata.get("inputs", {}).get("location", {}).get("irradiance_time_offset", 0.0))
@@ -454,6 +493,13 @@ def fetch_tmy_weather_data(
             "profile": "provider_default" if use_horizon else None,
         },
     }
+
+    if coerce_year != sample_year:
+        attrs = deepcopy(tmy_data.attrs)
+        tmy_data = tmy_data.copy()
+        tmy_data.index = tmy_data.index + pd.DateOffset(years=sample_year - coerce_year)
+        tmy_data.attrs = attrs
+        tmy_data = fill_leap_day(tmy_data)
 
     # Resample to 15-min if requested
     if freq in ("15min", "15T", "15m"):

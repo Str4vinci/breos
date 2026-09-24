@@ -20,6 +20,7 @@ from breos.solar import (
     calculate_pv_production_tracking_breakdown,
 )
 from breos.utils import remap_datetime_index_years
+from breos.weather import fill_leap_day
 
 
 @dataclass(frozen=True)
@@ -64,7 +65,11 @@ def _ensure_weather_horizon_metadata(weather: pd.DataFrame) -> None:
 
 
 def remap_tmy_year(df: pd.DataFrame, target_year: int) -> pd.DataFrame:
-    """Remap a TMY DatetimeIndex to target_year."""
+    """Remap a TMY DatetimeIndex to target_year.
+
+    A leap target year gets a 29 February copied from 28 February, so a
+    non-leap TMY covers the leap year the load profile already covers.
+    """
     idx = df.index
     if not isinstance(idx, pd.DatetimeIndex) or len(idx) == 0:
         return df
@@ -73,7 +78,7 @@ def remap_tmy_year(df: pd.DataFrame, target_year: int) -> pd.DataFrame:
     dominant_year = idx_utc.year.value_counts().idxmax()
     offset = target_year - dominant_year
     if offset == 0:
-        return df
+        return fill_leap_day(df)
     weather_metadata = deepcopy(df.attrs.get("breos_weather_metadata"))
     remapped = df.copy()
     remapped.index = idx_utc
@@ -83,7 +88,7 @@ def remap_tmy_year(df: pd.DataFrame, target_year: int) -> pd.DataFrame:
     remapped.index = new_idx
     if weather_metadata is not None:
         remapped.attrs["breos_weather_metadata"] = weather_metadata
-    return remapped
+    return fill_leap_day(remapped)
 
 
 def load_weather_for_simulation(
