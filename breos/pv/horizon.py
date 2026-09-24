@@ -11,8 +11,7 @@ import numpy as np
 import pandas as pd
 from pvlib.location import Location
 
-from breos.pv.model_options import DEFAULT_SOLAR_POSITION, resolve_solar_position_method
-from breos.utils import get_hours_per_step
+from breos.pv.model_options import DEFAULT_SOLAR_POSITION, resolve_solar_position_method, solar_position_time_offset
 
 
 def normalise_horizon_profile(profile: Any) -> list[list[float]] | None:
@@ -78,16 +77,14 @@ def _weather_column(weather: pd.DataFrame, lower: str, upper: str) -> str:
 
 def _solar_position_at_labels(
     location: Location,
-    index: pd.DatetimeIndex,
+    weather: pd.DataFrame,
     freq: str,
     solar_position: str,
 ) -> tuple[pd.DataFrame, str]:
     method = resolve_solar_position_method(solar_position)
-    evaluation_index = index
-    if method == "mid-interval":
-        evaluation_index = index + pd.Timedelta(hours=get_hours_per_step(freq) / 2.0)
-    solarpos = location.get_solarposition(times=evaluation_index)
-    solarpos.index = index
+    offset = solar_position_time_offset(method, weather, freq)
+    solarpos = location.get_solarposition(times=weather.index + offset)
+    solarpos.index = weather.index
     return solarpos, method
 
 
@@ -132,7 +129,7 @@ def apply_terrain_horizon_profile(
     ghi_column = _weather_column(weather, "ghi", "GHI")
     dni_column = _weather_column(weather, "dni", "DNI")
     dhi_column = _weather_column(weather, "dhi", "DHI")
-    solarpos, position_method = _solar_position_at_labels(location, weather.index, freq, solar_position)
+    solarpos, position_method = _solar_position_at_labels(location, weather, freq, solar_position)
     if "apparent_elevation" in solarpos:
         solar_elevation = np.asarray(solarpos["apparent_elevation"], dtype=float)
     else:

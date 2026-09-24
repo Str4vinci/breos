@@ -65,9 +65,9 @@ boundary receive no credit.
 
 ## Multi-array systems
 
-When `pv_arrays` is set, the result also contains a `pv_arrays` list
-echoing each array's configuration (`modules`, `module`, `tilt`,
-`azimuth`).
+When `pv_arrays` is set, the result also contains a `pv_arrays` list with
+each array's resolved configuration: `modules`, `module`, `tilt`, `azimuth`,
+and `tracking`, plus the resolved tracker geometry for a tracking array.
 
 ## PV loss waterfall
 

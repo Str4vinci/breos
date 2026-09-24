@@ -576,9 +576,22 @@ def _montecarlo(args: argparse.Namespace) -> int:
     if yearly_path is not None:
         print(f"Per-year trajectory results written to: {yearly_path}")
     print(f"Provenance written to: {provenance_path}")
-    print(f"{'metric':<28}{'mean':>12}{'p5':>12}{'p50':>12}{'p95':>12}")
+    print(f"{'metric':<28}{'runs':>12}{'mean':>12}{'p5':>12}{'p50':>12}{'p95':>12}")
     for metric, stats in result.summary.items():
-        print(f"{metric:<28}{stats['mean']:>12.2f}{stats['p5']:>12.2f}{stats['p50']:>12.2f}{stats['p95']:>12.2f}")
+        runs = f"{stats['count']}/{stats['n_runs']}"
+        if "mean" not in stats:
+            print(f"{metric:<28}{runs:>12}{'-':>12}{'-':>12}{'-':>12}{'-':>12}")
+            continue
+        print(
+            f"{metric:<28}{runs:>12}{stats['mean']:>12.2f}{stats['p5']:>12.2f}{stats['p50']:>12.2f}{stats['p95']:>12.2f}"
+        )
+    payback = result.summary.get("payback_year")
+    if payback is not None:
+        print(
+            f"Paid back within the horizon: {payback['count']} of {payback['n_runs']} runs "
+            f"({100.0 * payback['payback_probability']:.1f}%). "
+            "Payback statistics cover those runs only."
+        )
     return 0
 
 

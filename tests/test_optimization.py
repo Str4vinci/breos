@@ -128,6 +128,7 @@ def test_projected_zeb_constraint_uses_projected_diagnostic(monkeypatch):
         "Projected_Grid_Independence_%": 50.0,
         "Projected_ZEB_Ratio": 0.8,
         "Projected_NPV_Eur": 1000.0,
+        "Projected_Initial_Cost_Eur": 0.0,
     }
     monkeypatch.setattr("breos.optimization.calculate_pv_production_dc", lambda **kwargs: pd.Series(0.0, index=idx))
     monkeypatch.setattr(
@@ -201,6 +202,40 @@ def test_solar_design_problem_honors_module_and_tilt_bounds():
     assert problem.xu[0] == pytest.approx(5.0)
     assert problem.xu[1] == pytest.approx(7.0)
     assert problem.xu[2] == pytest.approx(45.0)
+
+
+def test_discrete_repair_keeps_candidates_inside_the_bounds():
+    """Snapping to the grid must not round a candidate past a bound.
+
+    Plain rounding took 62.9 degrees to 65 under a 63 degree maximum, and
+    29.5 kWh to 30 under a 29.5 kWh cap.
+    """
+    from breos.optimization import DiscreteGridRepair
+
+    idx = pd.date_range("2025-01-01 00:00", periods=2, freq="h", tz="UTC")
+    tmy_data = pd.DataFrame({"temp_air": [15.0, 16.0], "ghi": [0.0, 0.0]}, index=idx)
+    houseload = pd.DataFrame({"Load": [500.0, 500.0]}, index=idx)
+    config = {
+        "location": {"latitude": 41.15, "longitude": -8.61, "timezone": "UTC"},
+        "constraints": {"max_modules": 7.5, "max_battery_kwh": 29.5, "max_tilt_deg": 63.0},
+    }
+    problem = SolarDesignProblem(tmy_data, houseload, config, "results/_test_run/repair_bounds")
+
+    X = np.array(
+        [
+            [7.5, 29.5, 62.9, 268.0],
+            [1.0, 0.0, 10.0, 90.0],
+            [3.4, 12.6, 37.4, 181.0],
+        ]
+    )
+    repaired = DiscreteGridRepair()._do(problem, X.copy())
+
+    assert repaired.tolist() == [
+        [7.0, 29.0, 60.0, 270.0],
+        [1.0, 0.0, 10.0, 90.0],
+        [3.0, 13.0, 35.0, 180.0],
+    ]
+    assert np.all(repaired >= problem.xl) and np.all(repaired <= problem.xu)
 
 
 def test_solar_design_problem_uses_configured_resolution(monkeypatch):

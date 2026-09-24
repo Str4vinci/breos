@@ -381,6 +381,76 @@ def test_config_model_options_omits_absent_keys():
     assert configured_pv_model_kwargs({"albedo": 0.25}) == {"albedo": 0.25}
 
 
+def test_optimizer_battery_defaults_match_app_defaults():
+    """An unset battery setting resolves to the App's default, not a local one.
+
+    The optimizer used to carry its own fallbacks (10-90% became 20-80%, and
+    0.9795 each way instead of a 95% round trip), so a spec that omitted them
+    gave a 5 kWh pack a 3 kWh window against the App's 4 kWh.
+    """
+    from breos.app_config import DEFAULTS
+    from breos.battery import BatteryConfig
+    from breos.optimization import _build_battery_config_from_spec
+
+    optimizer = _build_battery_config_from_spec({}, nominal_energy_wh=5000.0)
+    reference = BatteryConfig(nominal_energy_wh=5000.0)
+
+    assert optimizer.min_soc == DEFAULTS["battery_min_soc"] == reference.min_soc
+    assert optimizer.max_soc == DEFAULTS["battery_max_soc"] == reference.max_soc
+    assert optimizer.eol_percentage == DEFAULTS["battery_eol_percentage"] == reference.eol_percentage
+    # The App leaves efficiency to BatteryConfig unless battery_rte is set.
+    assert DEFAULTS["battery_rte"] is None
+    assert optimizer.charge_efficiency * optimizer.discharge_efficiency == pytest.approx(0.95)
+    for field in (
+        "charge_efficiency",
+        "discharge_efficiency",
+        "standby_loss_wh",
+        "battery_type",
+        "dc_coupled",
+        "calendar_model",
+        "enable_resistance_fade",
+    ):
+        assert getattr(optimizer, field) == getattr(reference, field), field
+
+
+def test_optimizer_scores_an_unset_battery_window_with_app_defaults(monkeypatch):
+    idx = pd.date_range("2025-01-01 00:00", periods=2, freq="h", tz="UTC")
+    houseload = pd.DataFrame({"Load": [500.0, 500.0]}, index=idx)
+
+    captured = _run_evaluate(monkeypatch, _problem_config(), houseload, idx)
+
+    assert captured["battery_config"].min_soc == pytest.approx(0.10)
+    assert captured["battery_config"].max_soc == pytest.approx(0.90)
+
+
+def test_projected_budget_constraint_gates_the_reported_capex(synthetic_weather, sample_load):
+    """The budget checks the CAPEX the projected result reports.
+
+    ``costs.panel_wp`` prices the steady-state CAPEX at 400 W while projected
+    evaluation prices the selected 550 W module. The constraint used the
+    steady-state figure, so a EUR 480 budget accepted a design reported at
+    EUR 490.03.
+    """
+    pytest.importorskip("pymoo")
+    from breos.optimization import SolarDesignProblem
+
+    config = {
+        "location": {"latitude": 41.15, "longitude": -8.61, "timezone": "UTC"},
+        "simulation": {"resolution": "h", "years_projection": 1},
+        "constraints": {"budget_eur": 480.0, "max_area_m2": 100.0, "max_modules": 5},
+        "optimization": {"objective_basis": "projected"},
+        "mode": {"fixed_azimuth": 180},
+        "pv": {"module": "Suntech_STP550S_STC"},
+        "battery": {"temperature": 20.0, "indoor_model": {"enabled": False}},
+        "costs": {"panel_wp": 400},
+    }
+    problem = SolarDesignProblem(synthetic_weather, sample_load, config, "results/_test_run/budget")
+    out: dict = {}
+    problem._evaluate(np.array([1.0, 0.0, 35.0], dtype=float), out)
+
+    assert out["Projected_Initial_Cost_Eur"] == pytest.approx(490.03, abs=0.01)
+    assert out["G"][0] == pytest.approx(out["Projected_Initial_Cost_Eur"] - 480.0)
+    assert out["G"][0] > 0.0
 def test_optimizer_honours_an_explicit_replacement_cost(monkeypatch):
     idx = pd.date_range("2025-01-01 00:00", periods=2, freq="h", tz="UTC")
     houseload = pd.DataFrame({"Load": [500.0, 500.0]}, index=idx)

@@ -85,11 +85,22 @@ fan charts need it, and it is off by default because it is much larger.
 distributions into `plots/`. `--json` prints a machine-readable summary to
 stdout for scripting.
 
+Each summary entry gives `count`, the number of runs its statistics cover, out
+of `n_runs`. A run that never pays back within the horizon has no payback year,
+so the payback statistics cover only the runs that paid back.
+`payback_probability` gives the share of runs that did. Read the two together:
+a payback median of 9.8 years means little if only 60% of runs pay back.
+
 ## Fix the seed
 
 Set `seed` and keep it with the results. Without it, each study draws fresh
 randomness and the numbers move between runs, which makes a figure impossible to
 reproduce. The seed is recorded in the provenance JSON.
+
+Each run draws from its own stream, spawned from the seed with NumPy's
+`SeedSequence`. Studies under different seeds, even adjacent ones such as 42
+and 43, share no trajectory, so they can be compared or pooled as independent
+samples. The results do not depend on `n_procs`.
 
 ## The optional Numba backend
 

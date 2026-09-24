@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, Callable
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from breos.constants import DEFAULT_MAX_SOC, DEFAULT_MIN_SOC
 from breos.degradation.profiles import ENABLED_BLAST_MODEL_KEYS, apply_battery_profile_defaults
 from breos.economics import COST_CONFIG_KEY_TO_PARAM, CostParams, calculate_costs
 from breos.emissions import EmissionsParams
@@ -369,8 +370,10 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
     "backtrack": AppConfigField(default=True, default_order=11),
     "cross_axis_tilt": AppConfigField(default=0.0, default_order=13),
     "dual_axis_max_tilt": AppConfigField(default=90.0, default_order=14),
-    "battery_min_soc": AppConfigField(default=0.10, default_order=38),
-    "battery_max_soc": AppConfigField(default=0.90, default_order=39),
+    # The BatteryConfig defaults, so the App and the optimizer, which leaves
+    # unset battery settings to BatteryConfig, resolve the same window.
+    "battery_min_soc": AppConfigField(default=DEFAULT_MIN_SOC, default_order=38),
+    "battery_max_soc": AppConfigField(default=DEFAULT_MAX_SOC, default_order=39),
     "battery_eol_percentage": AppConfigField(default=0.70, default_order=40),
     "battery_rte": AppConfigField(default=None, default_order=41),
     "enable_resistance_fade": AppConfigField(default=False, default_order=45),
@@ -485,6 +488,60 @@ def _validate_sky_settings(
     if model_perez is not None and model_perez not in PEREZ_MODELS:
         valid = ", ".join(PEREZ_MODELS)
         raise ValueError(f"'{prefix}model_perez' must be one of: {valid}")
+
+
+_TRACKING_MODES = ("fixed", "single_axis", "dual_axis")
+# Tracker geometry, inherited by every tracking array that does not set it.
+_TRACKER_GEOMETRY_KEYS = (
+    "axis_tilt",
+    "axis_azimuth",
+    "max_angle",
+    "backtrack",
+    "cross_axis_tilt",
+    "dual_axis_max_tilt",
+)
+_TRACKER_ANGLE_RANGES = {
+    "axis_tilt": (0.0, 90.0),
+    "axis_azimuth": (0.0, 360.0),
+    "max_angle": (0.0, 90.0),
+    "cross_axis_tilt": (-90.0, 90.0),
+    "dual_axis_max_tilt": (0.0, 90.0),
+}
+# Per-array settings passed through to the PV model when an array sets them.
+_PV_ARRAY_OPTION_KEYS = (
+    "gcr",
+    "transposition_model",
+    "albedo",
+    "surface_type",
+    "model_perez",
+    "bifacial_model",
+    "pvrow_height",
+    "pvrow_pitch",
+)
+_PV_ARRAY_KEYS = frozenset(
+    ("modules", "module", "tilt", "azimuth", "tracking", *_TRACKER_GEOMETRY_KEYS, *_PV_ARRAY_OPTION_KEYS)
+)
+
+
+def _validate_tracker_settings(settings: dict[str, Any], where: str = "") -> None:
+    """Validate the tracker keys shared by the top level and arrays.
+
+    ``None`` means "not set" and is skipped, so an array only validates the
+    keys it provides; the rest are inherited from the already-checked top
+    level. ``backtrack`` must be a real bool, because a string such as
+    ``"no"`` is truthy and would leave backtracking on.
+    """
+    prefix = f"{where}." if where else ""
+    tracking = settings.get("tracking")
+    if tracking is not None and tracking not in _TRACKING_MODES:
+        raise ValueError(f"'{prefix}tracking' must be 'fixed', 'single_axis', or 'dual_axis', got {tracking!r}")
+    for key, (low, high) in _TRACKER_ANGLE_RANGES.items():
+        value = settings.get(key)
+        if value is not None and not low <= _finite_real(value, f"{prefix}{key}") <= high:
+            raise ValueError(f"'{prefix}{key}' must be between {low:g} and {high:g}")
+    backtrack = settings.get("backtrack")
+    if backtrack is not None and not isinstance(backtrack, bool):
+        raise TypeError(f"'{prefix}backtrack' must be true or false, got {backtrack!r}")
 
 
 def _validate_gcr(gcr: Any, prefix: str = "") -> None:
@@ -626,12 +683,20 @@ def _validate_pv_and_inverter(cfg: dict[str, Any], has_arrays: bool) -> None:
     """Validate PV sizing, array geometry, sky models, and inverter inputs."""
     if not has_arrays and (not _is_int(cfg["n_modules"]) or cfg["n_modules"] < 1):
         raise ValueError("'n_modules' must be >= 1")
+    _validate_tracker_settings(cfg)
     if has_arrays:
         if not isinstance(cfg["pv_arrays"], list):
             raise TypeError("'pv_arrays' must be a list")
         for i, arr in enumerate(cfg["pv_arrays"]):
             if not isinstance(arr, dict):
                 raise TypeError(f"'pv_arrays[{i}]' must be a dict")
+            unknown = set(arr) - _PV_ARRAY_KEYS
+            if unknown:
+                raise ValueError(
+                    f"Unknown key(s) in pv_arrays[{i}]: {', '.join(sorted(map(str, unknown)))}. "
+                    f"Available: {', '.join(sorted(_PV_ARRAY_KEYS))}"
+                )
+            _validate_tracker_settings(arr, where=f"pv_arrays[{i}]")
             modules = arr.get("modules", 0)
             if not _is_int(modules) or modules < 1:
                 raise ValueError(f"'pv_arrays[{i}].modules' must be >= 1")
@@ -882,23 +947,13 @@ def normalise_pv_arrays(arrays: list[dict[str, Any]] | None, cfg: dict[str, Any]
     default_tilt = cfg.get("tilt") if cfg.get("tilt") is not None else estimate_optimal_tilt(lat)
     default_azimuth = cfg.get("azimuth") if cfg.get("azimuth") is not None else default_azimuth_fn(lat)
 
-    passthrough_keys = (
-        "tracking",
-        "axis_tilt",
-        "axis_azimuth",
-        "max_angle",
-        "backtrack",
-        "gcr",
-        "cross_axis_tilt",
-        "dual_axis_max_tilt",
-        "transposition_model",
-        "albedo",
-        "surface_type",
-        "model_perez",
-        "bifacial_model",
-        "pvrow_height",
-        "pvrow_pitch",
-    )
+    # Tracker settings are inherited from the top level like module, tilt and
+    # azimuth. The PV model has its own fallbacks for an array without them,
+    # and those used to win: a top-level single-axis tracker ran fixed-tilt
+    # once pv_arrays was set.
+    tracker_defaults = {key: cfg.get(key, DEFAULTS[key]) for key in ("tracking", *_TRACKER_GEOMETRY_KEYS)}
+    if tracker_defaults["axis_azimuth"] is None:
+        tracker_defaults["axis_azimuth"] = default_azimuth_fn(lat)
 
     normalized: list[dict[str, Any]] = []
     for arr in arrays:
@@ -907,8 +962,13 @@ def normalise_pv_arrays(arrays: list[dict[str, Any]] | None, cfg: dict[str, Any]
             "module": arr.get("module") or default_module,
             "tilt": float(arr.get("tilt", default_tilt)),
             "azimuth": float(arr.get("azimuth", default_azimuth)),
+            "tracking": arr.get("tracking", tracker_defaults["tracking"]),
         }
-        for key in passthrough_keys:
+        if entry["tracking"] != "fixed":
+            for key in _TRACKER_GEOMETRY_KEYS:
+                value = arr.get(key)
+                entry[key] = tracker_defaults[key] if value is None else value
+        for key in _PV_ARRAY_OPTION_KEYS:
             if key in arr:
                 entry[key] = arr[key]
         normalized.append(entry)
@@ -968,7 +1028,7 @@ def validate_temperature_module_metadata(
 def resolve_tracking(cfg: dict[str, Any], lat: float) -> tuple[str, float]:
     """Resolve tracker mode and orientation defaults."""
     tracking = cfg["tracking"]
-    if tracking not in ("fixed", "single_axis", "dual_axis"):
+    if tracking not in _TRACKING_MODES:
         raise ValueError(f"tracking must be 'fixed', 'single_axis', or 'dual_axis', got {tracking!r}")
     axis_azimuth = cfg["axis_azimuth"] if cfg["axis_azimuth"] is not None else default_azimuth_fn(lat)
     return tracking, axis_azimuth
