@@ -125,6 +125,14 @@ The mapping also accepts `setpoint_c`, `coupling_alpha`, `floor_c`, and
 `ceiling_c`. Set `coupling_alpha` between 0 and 1, and do not set `floor_c`
 above `ceiling_c`.
 
+A CSV `battery_temperature` needs a timestamp column (`date`, `datetime`, or
+`time`) and a temperature column (`temp`, `temperature`, `t_cell`, or `t_amb`)
+that cover the simulated year. Naive timestamps are read as UTC. Each step
+takes the latest reading within the file's own sampling interval, so hourly
+readings can drive a 15-minute run. A file that is missing or unreadable, that
+comes from another calendar year, or that has gaps raises an error instead of
+falling back to a default temperature.
+
 ## Battery degradation calibration
 
 `calendar_model = "naumann_lam_field_calibrated"` is the stable default and

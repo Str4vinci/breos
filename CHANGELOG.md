@@ -41,8 +41,8 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   load and export PV that did not exist. They now raise `ValueError` for PV or
   load that does not cover every step with a finite value, for load
   timestamps off the simulation interval, and for negative load. Fill gaps
-  explicitly before simulating if that is the intent. Missing temperature
-  steps still default to 25 °C; that is
+  explicitly before simulating if that is the intent. A supplied temperature
+  series gets the same check since
   [#153](https://github.com/Str4vinci/breos/issues/153).
 - A civil-year load profile on a UTC-year weather calendar no longer gets
   zero-load steps at the year edge. This affects Monte Carlo and CSV weather
@@ -59,6 +59,29 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   `ValueError` and name the 1 January date to use. Arbitrary project start
   dates would need weather aligned to the requested window, which is a
   separate feature.
+- Battery temperature input that cannot be used raises instead of becoming
+  25 °C ([#153](https://github.com/Str4vinci/breos/issues/153)).
+  `build_battery_temperature_series` used to substitute 25 °C, or 22.9 °C
+  after the indoor model, for a missing or unreadable `battery_temperature`
+  CSV, a CSV without recognised columns, and readings that did not line up
+  with the simulation index. A CSV from another calendar year, or with naive
+  timestamps on the UTC simulation index, matched no step, so the whole year
+  ran at 25 °C. These now raise `FileNotFoundError` or `ValueError` and name
+  the file, the missing columns, or the uncovered steps. Naive CSV timestamps
+  are read as UTC, as naive weather timestamps are. Readings hold within their
+  own sampling interval, so hourly readings still drive a 15-minute run, but a
+  gap or a non-finite reading is an error. A bool, a non-finite number, or
+  another unsupported `battery_temperature` value raises too, and so does a
+  `temperature_series` passed to the simulation that leaves steps uncovered.
+  Omitting the temperature still means 25 °C, as does weather without a
+  temperature column; that case belongs to
+  [#172](https://github.com/Str4vinci/breos/issues/172).
+  `evaluate_projected_design` with `weather_by_year` now restamps the
+  representative year's temperatures onto the sequence's calendar year, via
+  the new `align_weather_year` keyword. **Results change for sequences in a
+  different year from `tmy_data`**, which ran their battery at 22.9 °C with the
+  indoor model on. App runs are unchanged: the default Porto run with a 5 kWh
+  battery matches develop exactly at hourly and 15-minute resolution.
 
 ### Removed
 - Removed the reproduction tooling for the upcoming publication:

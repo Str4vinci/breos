@@ -449,8 +449,8 @@ def _align_input_arrays(
 
     The loop indexes these positionally, so everything the simulation reads
     per step is settled here. PV and load must cover every step with a finite
-    value, and load must not be negative; missing temperature steps become
-    25C. The load profile is year-shifted when it comes from a different year
+    value, and load must not be negative. A temperature series must cover
+    every step too; only an omitted one defaults to 25C. The load profile is year-shifted when it comes from a different year
     than the simulation window, and it repeats across the year edge (see
     :func:`_repeat_annual_load_across_year_edges`).
     """
@@ -504,7 +504,8 @@ def _align_input_arrays(
     if temperature_series is None:
         temperature_series = pd.Series(25.0, index=rng)
     else:
-        temperature_series = temperature_series.reindex(rng).fillna(25.0)
+        temperature_series = temperature_series.reindex(rng)
+        _require_complete_series(temperature_series, "temperature_series")
 
     return (
         pv_values.values.astype(np.float64),
@@ -535,7 +536,7 @@ class AlignedSimulationInputs:
         index: The simulation calendar. Everything else is positional on it.
         pv_dc_w: PV DC power (W) per step. Every step has a finite value.
         load_w: AC load (W) per step. Every step is finite and non-negative.
-        temperature_c: Battery cell temperature (C) per step, gaps at 25 C.
+        temperature_c: Battery cell temperature (C) per step, 25 C if none was given.
     """
 
     index: pd.DatetimeIndex

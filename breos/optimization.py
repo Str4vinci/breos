@@ -417,7 +417,7 @@ def _temperature_series_from_config(
     index: pd.DatetimeIndex,
     weather_df: Optional[pd.DataFrame] = None,
     indoor_model: Optional[Dict[str, Any]] = None,
-    default_temp: float = 25.0,
+    align_weather_year: bool = False,
 ) -> pd.Series:
     """Build a battery temperature series from config, weather, or a fixed value."""
     from breos.weather import build_battery_temperature_series
@@ -427,7 +427,7 @@ def _temperature_series_from_config(
         index=index,
         weather_df=weather_df,
         indoor_model=indoor_model,
-        default_temp=default_temp,
+        align_weather_year=align_weather_year,
     )
 
 
@@ -907,7 +907,9 @@ def evaluate_projected_design(
             projected year, replacing the repeated ``tmy_data`` year. Each
             frame is run through the same PV model, and PV degradation still
             applies by project year. ``tmy_data`` is still used for the
-            battery temperature series and must remain a representative year.
+            battery temperature series and must remain a representative year;
+            its temperatures are restamped onto the calendar year of the
+            first sequence frame.
             The sequence length must equal the projected horizon.
 
     Returns:
@@ -991,11 +993,15 @@ def evaluate_projected_design(
             series.append(year_dc)
         base_dc_power = series
         dc_index = reference.index
+    # A weather sequence keeps the representative year's temperatures, so they
+    # are restamped onto the sequence's calendar year rather than reindexed
+    # across years, which found no match and used to fall back to 25 C.
     temperature_series = _temperature_series_from_config(
         battery.get("temperature", "weather"),
         dc_index,
         weather_df=tmy_data,
         indoor_model=battery.get("indoor_model"),
+        align_weather_year=weather_by_year is not None,
     )
     dc_ac_ratio = cost_params_from_config(config.get("costs"), financials).dc_ac_ratio
     inverter_ac_capacity_w = int(n_modules) * pv_params.Mpp / dc_ac_ratio if dc_ac_ratio > 0.0 else None
