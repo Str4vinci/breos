@@ -121,8 +121,8 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         cli_flags=("--battery-power-limit-c-rate",),
         cli_type=float,
         cli_help=(
-            "Symmetric charge and discharge limit as a multiple of capacity, for example 1.0 for "
-            "1 C. Derives both power limits from battery_kwh; cannot be combined with the absolute "
+            "Symmetric charge and discharge limit on the stored energy as a multiple of capacity, "
+            "for example 1.0 for 1 C. Scales with battery_kwh; cannot be combined with the absolute "
             "battery_max_charge_power_w or battery_max_discharge_power_w."
         ),
     ),
@@ -764,7 +764,7 @@ def _validate_battery_and_degradation(cfg: dict[str, Any]) -> None:
             raise ValueError("'battery_power_limit_c_rate' must be greater than 0 when configured")
         if cfg["battery_max_charge_power_w"] is not None or cfg["battery_max_discharge_power_w"] is not None:
             raise ValueError(
-                "'battery_power_limit_c_rate' derives both power limits from capacity; do not also "
+                "'battery_power_limit_c_rate' limits both directions from capacity; do not also "
                 "set 'battery_max_charge_power_w' or 'battery_max_discharge_power_w'"
             )
     battery_temperature = cfg["battery_temperature"]
