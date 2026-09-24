@@ -451,6 +451,8 @@ def test_projected_budget_constraint_gates_the_reported_capex(synthetic_weather,
     assert out["Projected_Initial_Cost_Eur"] == pytest.approx(490.03, abs=0.01)
     assert out["G"][0] == pytest.approx(out["Projected_Initial_Cost_Eur"] - 480.0)
     assert out["G"][0] > 0.0
+
+
 def test_optimizer_honours_an_explicit_replacement_cost(monkeypatch):
     idx = pd.date_range("2025-01-01 00:00", periods=2, freq="h", tz="UTC")
     houseload = pd.DataFrame({"Load": [500.0, 500.0]}, index=idx)
