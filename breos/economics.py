@@ -117,6 +117,11 @@ def cost_params_from_config(
     """
     costs_config = costs_config or {}
     financials_config = financials_config or {}
+    if "panel_wp" in costs_config:
+        raise ValueError(
+            "costs.panel_wp was removed in 0.7.0: CAPEX is priced at the selected module's own "
+            "rating. Remove the key, or select a module with the wattage you meant."
+        )
     defaults = CostParams()
 
     params = {

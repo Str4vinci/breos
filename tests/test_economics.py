@@ -204,7 +204,7 @@ class TestCalculateCosts:
         assert capex_b > capex_a
         assert npv_b != npv_a
 
-    def test_optimizer_financials_use_selected_module_mpp_unless_overridden(self):
+    def test_optimizer_financials_use_selected_module_mpp(self):
         base = {
             "module_cost_per_w": 0.20,
             "inverter_cost_per_kw_simple": 0.0,
@@ -217,10 +217,10 @@ class TestCalculateCosts:
         capex_550, _ = calculate_financials(10, 0.0, 0.0, 0.0, 0.0, base, financials, module_power_w=550.0)
         assert capex_550 - capex_400 == pytest.approx(10 * 150 * 0.20)
 
-        override = dict(base, panel_wp=500.0)
-        capex_override, _ = calculate_financials(10, 0.0, 0.0, 0.0, 0.0, override, financials, module_power_w=400.0)
-        capex_500, _ = calculate_financials(10, 0.0, 0.0, 0.0, 0.0, base, financials, module_power_w=500.0)
-        assert capex_override == pytest.approx(capex_500)
+        # The removed costs.panel_wp priced CAPEX at a wattage other than the
+        # module's, which let the budget pass a design over budget (#157).
+        with pytest.raises(ValueError, match="costs.panel_wp was removed"):
+            calculate_financials(10, 0.0, 0.0, 0.0, 0.0, dict(base, panel_wp=500.0), financials, module_power_w=400.0)
 
 
 def test_system_ac_production_prefers_explicit_ledger_over_legacy_field():

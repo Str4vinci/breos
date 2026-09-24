@@ -1096,8 +1096,7 @@ def calculate_financials(
     and applies actual simulated replacement events year by year.
 
     Module power for inverter sizing and CAPEX comes from ``module_power_w``
-    (pass the selected ``pv_params.Mpp``). An explicitly configured
-    ``costs.panel_wp`` remains a cost-model override.
+    (pass the selected ``pv_params.Mpp``).
 
     ``annual_pv_kwh`` apportions degradation between lost export and extra
     import via the year-1 self-consumption ratio. When ``None``, year-1
@@ -1108,10 +1107,7 @@ def calculate_financials(
     if financials_config is None:
         financials_config = {}
 
-    panel_wp = costs_config.get(
-        "panel_wp",
-        module_power_w if module_power_w is not None else DEFAULT_PANEL_WP,
-    )
+    module_w = module_power_w if module_power_w is not None else DEFAULT_PANEL_WP
     cost_params = cost_params_from_config(costs_config, financials_config)
     electricity_cost = cost_params.electricity_cost
     electricity_sold_cost = cost_params.electricity_sold_cost
@@ -1124,7 +1120,7 @@ def calculate_financials(
     # 1. CAPEX and yearly O&M (same cost model as the App's build_costs_dict)
     costs = calculate_costs(
         n_modules=n_modules,
-        module_power_w=panel_wp,
+        module_power_w=module_w,
         battery_capacity_wh=battery_kwh * 1000,
         cost_params=cost_params,
     )

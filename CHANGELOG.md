@@ -258,6 +258,15 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   yields 19.4 kWh more PV than 2027, from the extra day.
 
 ### Removed
+- Removed the optimizer's `costs.panel_wp` override. It priced the steady-state
+  CAPEX at a nominal wattage instead of the selected module's rating, so the
+  optimizer carried two CAPEX figures for one design: this is how the budget
+  constraint passed designs over budget in
+  [#157](https://github.com/Str4vinci/breos/issues/157). The App never accepted
+  the key. CAPEX is now always priced at the selected module's `Mpp`, and a
+  config that still sets `costs.panel_wp` raises `ValueError` rather than being
+  silently ignored. Results are unchanged for configs without it, which
+  includes every bundled config and the upcoming publication's.
 - Removed the reproduction tooling for the upcoming publication:
   `validation/article1/`, `run-logs/`, `tools/revision/`,
   `tools/validation/recovery/`, the eight `tools/*article1*.py` drivers, and
