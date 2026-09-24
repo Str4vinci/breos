@@ -82,6 +82,23 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   different year from `tmy_data`**, which ran their battery at 22.9 °C with the
   indoor model on. App runs are unchanged: the default Porto run with a 5 kWh
   battery matches develop exactly at hourly and 15-minute resolution.
+- The Monte Carlo summary says how many runs paid back
+  ([#160](https://github.com/Str4vinci/breos/issues/160)). A run that never
+  pays back within the horizon has no payback year, and the summary dropped it
+  without saying so. Nine runs that never paid back and one that paid back in
+  year five gave a payback summary of five years at every statistic. Each
+  summary entry now gives `count`, the runs its statistics cover, and
+  `n_runs`. `payback_year` and `payback_year_exact` also give
+  `payback_probability`, and they are kept with only these counts when no run
+  pays back; they used to be left out. The CLI table shows the run count per
+  metric and prints the share that paid back. Reported statistics do not
+  change. On the example `montecarlo.toml` config with Porto Open-Meteo
+  weather, a 10-year horizon, seed 42 and 40 runs, the exact payback is still
+  9.69-9.90 years from p5 to p95, and the summary now adds that 27 of the 40
+  runs (67.5%) paid back. `run_montecarlo` also rejects load-scale bounds
+  that would make demand negative: a negative or non-finite `min_load_scale`,
+  a `max_load_scale` below `min_load_scale`, and a non-finite
+  `load_uncertainty`. `max_load_scale=-1` used to run with negative demand.
 
 ### Removed
 - Removed the reproduction tooling for the upcoming publication:
