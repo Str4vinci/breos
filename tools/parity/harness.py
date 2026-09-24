@@ -162,6 +162,18 @@ def build(name: str):
         )
         return pv, load, temp, cfg, {}
 
+    if name == "c_rate_limited":
+        # A C-rate that binds in both directions: the stored-energy cap, not
+        # the absolute DC-input or AC-output limits.
+        pv, load, temp = _profiles(index, 19, 12000.0, 3000.0)
+        cfg = dict(
+            nominal_energy_wh=6000.0,
+            inverter_ac_capacity_w=9000.0,
+            power_limit_c_rate=0.4,
+            **common,
+        )
+        return pv, load, temp, cfg, {}
+
     # "baseline", "one_day", "partial_day"
     pv, load, temp = _profiles(index, 18, 9000.0, 2100.0)
     cfg = dict(
@@ -185,6 +197,7 @@ SCENARIOS = (
     "replacement",
     "carried_state",
     "no_inverter_cap",
+    "c_rate_limited",
 )
 
 

@@ -186,6 +186,7 @@ def _dispatch_day_kernel(
     hours_per_step,
     pow_two,
     ac_output_scale,
+    cap_stored_wh,
 ):
     t_cell_day_sum = 0.0
     battery_energy_beginning = 0.0
@@ -256,7 +257,7 @@ def _dispatch_day_kernel(
             drawn = 0.0
             room = max(0.0, emax - battery_energy)
             if not (room <= 0.0 or eff_charge <= 0.0):
-                drawn = min(min(surplus_dc, room / eff_charge), cap_charge_in_wh)
+                drawn = min(min(min(surplus_dc, room / eff_charge), cap_charge_in_wh), cap_stored_wh / eff_charge)
                 battery_energy += drawn * eff_charge
                 lg_pv_dc_to_battery = drawn
                 lg_battery_charge_input = drawn
@@ -282,7 +283,7 @@ def _dispatch_day_kernel(
                 drawn = 0.0
                 room = max(0.0, emax - battery_energy)
                 if not (room <= 0.0 or eff_charge <= 0.0):
-                    drawn = min(min(excess_dc, room / eff_charge), cap_charge_in_wh)
+                    drawn = min(min(min(excess_dc, room / eff_charge), cap_charge_in_wh), cap_stored_wh / eff_charge)
                     battery_energy += drawn * eff_charge
                     lg_pv_dc_to_battery = drawn
                     lg_battery_charge_input = drawn
@@ -297,7 +298,10 @@ def _dispatch_day_kernel(
                 target_total_ac = min(load, inv_cap_ac_wh * ac_output_scale)
                 if available > 0.0 and eff_discharge > 0.0 and target_total_ac > pv_ac_max:
                     total_dc_target = _dc_for_ac(target_total_ac, inv_cap_ac_wh, inv_eff, ac_output_scale)
-                    battery_dc = min(available * eff_discharge, max(0.0, total_dc_target - pv_dc_power))
+                    battery_dc = min(
+                        min(available * eff_discharge, max(0.0, total_dc_target - pv_dc_power)),
+                        cap_stored_wh * eff_discharge,
+                    )
 
                     if np.isfinite(cap_discharge_ac_wh):
                         total_dc = pv_dc_power + battery_dc

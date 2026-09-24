@@ -500,7 +500,10 @@ def fetch_weather_data(
 
     Radiation can use Open-Meteo's preceding-hour means (the backwards-
     compatible default) or its instantaneous fields. The returned columns keep
-    BREOS's established names in either case.
+    BREOS's established names in either case. Preceding-hour means are
+    labelled at the end of their hour, so they run from ``start_date`` 01:00
+    to the midnight after ``end_date``. Instantaneous values run from
+    ``start_date`` 00:00 to ``end_date`` 23:00.
 
     Args:
         latitude: Latitude of the location
@@ -556,12 +559,21 @@ def fetch_weather_data(
     cache_session.mount("http://", HTTPAdapter(max_retries=retries))
     openmeteo = openmeteo_requests.Client(session=cache_session)
 
+    # Preceding-hour means are labelled at the end of their hour, so the
+    # hours of [start_date, end_date] carry the labels from start_date 01:00
+    # through the midnight after end_date. Fetch one extra day to get that
+    # last label and trim to the requested hours below.
+    right_labelled = radiation_time_basis == "interval_mean"
+    first_label = pd.Timestamp(start_date)
+    last_label = pd.Timestamp(end_date) + pd.Timedelta(days=1)
+    request_end_date = last_label.strftime("%Y-%m-%d") if right_labelled else end_date
+
     url = "https://archive-api.open-meteo.com/v1/archive"
     params = {
         "latitude": latitude,
         "longitude": longitude,
         "start_date": start_date,
-        "end_date": end_date,
+        "end_date": request_end_date,
         "hourly": [provider_name for provider_name, _output_name in hourly_fields],
         "wind_speed_unit": "ms",
         "timezone": "GMT",
@@ -589,6 +601,9 @@ def fetch_weather_data(
 
     hourly_dataframe = pd.DataFrame(data=hourly_data)
     hourly_dataframe.set_index("date", inplace=True)
+    if right_labelled:
+        index = hourly_dataframe.index
+        hourly_dataframe = hourly_dataframe[(index > first_label) & (index <= last_label)]
     hourly_dataframe.attrs[_WEATHER_METADATA_KEY] = {
         "source": "OpenMeteo_historical",
         "provider_hourly_fields": [provider_name for provider_name, _output_name in hourly_fields],
@@ -826,33 +841,18 @@ def resample_to_15min(
     return df_15min
 
 
-def _derive_steps_per_year(dates: pd.Series) -> int:
-    """Derive expected rows per non-leap year from the median timestep."""
-    if len(dates) < 2:
-        return 8760
+def _complete_weather_years(csv_file_path: str) -> Tuple[Dict[int, pd.DataFrame], Dict[str, Any]]:
+    """Read a multi-year weather CSV and split it into its complete years.
 
-    step = dates.diff().median()
-    if pd.isna(step) or step.total_seconds() <= 0:
-        return 8760
-
-    hours_per_step = step.total_seconds() / 3600.0
-    return int(round(8760.0 / hours_per_step))
-
-
-def select_random_year_and_replace_datetime(csv_file_path: str, target_year: int = 2025) -> Tuple[pd.DataFrame, int]:
-    """
-    Load weather data, randomly select a year, and replace datetime with target year.
-
-    Args:
-        csv_file_path: Path to the CSV file
-        target_year: Year to replace the selected year's datetime with
+    Right-labelled interval means are first moved to the start of their
+    interval. 29 February is dropped, so a complete year has the step count of
+    a non-leap year at the file's own step size. Incomplete years are left out
+    with a warning.
 
     Returns:
-        Tuple of (DataFrame with target year dates, selected_year)
+        Tuple of (source year -> frame with a ``date`` column, file metadata)
     """
     df = pd.read_csv(csv_file_path)
-
-    # Parse datetime with format detection
     try:
         df["date"] = pd.to_datetime(df["date"], format="ISO8601")
     except ValueError:
@@ -863,36 +863,70 @@ def select_random_year_and_replace_datetime(csv_file_path: str, target_year: int
 
     metadata = weather_file_metadata(csv_file_path)
     df, metadata = _relabel_weather_date_column(df, metadata)
+    df = df[~((df["date"].dt.month == 2) & (df["date"].dt.day == 29))]
 
-    # Extract year and get available years
-    df["year"] = df["date"].dt.year
-    available_years = df["year"].unique()
+    step = df["date"].diff().median()
+    if len(df) < 2 or pd.isna(step) or step <= pd.Timedelta(0):
+        logger.warning("Weather file %s has no usable timestep, so it has no complete year", csv_file_path)
+        return {}, metadata
+    expected_rows = int(round(pd.Timedelta(days=365) / step))
 
-    # Use numpy RNG so Monte Carlo's np.random.seed(...) controls this choice.
-    selected_year = int(np.random.choice(available_years))
+    years = df["date"].dt.year
+    complete: Dict[int, pd.DataFrame] = {}
+    incomplete: List[str] = []
+    for year in years.unique():
+        year_data = df[years == year].reset_index(drop=True)
+        if len(year_data) == expected_rows:
+            complete[int(year)] = year_data
+        else:
+            incomplete.append(f"{year} ({len(year_data)} of {expected_rows} rows)")
+    if incomplete:
+        hint = ""
+        if metadata.get("source_timestamp_label_basis") == "right":
+            hint = (
+                ". Right-labelled interval means end at the midnight after the last day;"
+                " a file without that label is one step short"
+            )
+        logger.warning("Skipping incomplete weather years in %s: %s%s", csv_file_path, ", ".join(incomplete), hint)
+    return complete, metadata
 
-    # Filter data for selected year
-    selected_year_data = df[df["year"] == selected_year].copy()
 
-    # Drop Feb 29 by date, not by row count, so this works at any resolution.
-    feb_29_mask = (selected_year_data["date"].dt.month == 2) & (selected_year_data["date"].dt.day == 29)
-    if feb_29_mask.any():
-        selected_year_data = selected_year_data[~feb_29_mask]
+def _remap_weather_year(year_data: pd.DataFrame, source_year: int, target_year: int) -> pd.DataFrame:
+    remapped = year_data.copy()
+    remapped["date"] = remapped["date"] + pd.DateOffset(years=target_year - source_year)
+    return remapped
 
-    # Validate against the data's own step size instead of assuming hourly data.
-    expected_rows = _derive_steps_per_year(selected_year_data["date"])
-    if len(selected_year_data) != expected_rows:
-        logger.warning("Year %s has %d rows, expected %d", selected_year, len(selected_year_data), expected_rows)
 
-    # Replace year in datetime
-    year_diff = target_year - selected_year
-    selected_year_data["date"] = selected_year_data["date"] + pd.DateOffset(years=year_diff)
+def select_random_year_and_replace_datetime(
+    csv_file_path: str,
+    target_year: int = 2025,
+    *,
+    rng: Optional[np.random.Generator] = None,
+) -> Tuple[pd.DataFrame, int]:
+    """
+    Load weather data, randomly select a complete year, and replace datetime with target year.
 
-    # Cleanup
-    selected_year_data = selected_year_data.drop("year", axis=1)
-    selected_year_data = selected_year_data.reset_index(drop=True)
+    Args:
+        csv_file_path: Path to the CSV file
+        target_year: Year to replace the selected year's datetime with
+        rng: Generator that makes the choice. Pass a seeded one to reproduce
+            it; the default draws fresh entropy.
+
+    Returns:
+        Tuple of (DataFrame with target year dates, selected_year)
+
+    Raises:
+        ValueError: If the file has no complete year
+    """
+    by_year, metadata = _complete_weather_years(csv_file_path)
+    if not by_year:
+        raise ValueError(f"No complete years found in weather file: {csv_file_path}")
+
+    rng = np.random.default_rng() if rng is None else rng
+    selected_year = int(rng.choice(list(by_year)))
+
+    selected_year_data = _remap_weather_year(by_year[selected_year], selected_year, target_year)
     selected_year_data.attrs[WEATHER_METADATA_KEY] = metadata
-
     return selected_year_data, selected_year
 
 
@@ -905,7 +939,8 @@ def preload_weather_by_year(
 
     Each year's dates are remapped to *target_year* so the resulting
     DataFrames can be used directly in simulation (same datetime grid as
-    ``select_random_year_and_replace_datetime`` would produce).
+    ``select_random_year_and_replace_datetime`` would produce). Incomplete
+    years are skipped with a warning.
 
     Args:
         csv_file_path: Path to the multi-year weather CSV
@@ -914,47 +949,12 @@ def preload_weather_by_year(
     Returns:
         Dict mapping original year → DataFrame with target-year dates, indexed by 'date'
     """
-    df = pd.read_csv(csv_file_path)
-    path = os.path.abspath(csv_file_path)
-    persisted_metadata = weather_file_metadata(path)
-    sha256 = persisted_metadata["sha256"]
-
-    # Parse datetime once
-    try:
-        df["date"] = pd.to_datetime(df["date"], format="ISO8601")
-    except ValueError:
-        try:
-            df["date"] = pd.to_datetime(df["date"], format="%d/%m/%Y %H:%M")
-        except ValueError:
-            df["date"] = pd.to_datetime(df["date"], format="mixed")
-
-    df, persisted_metadata = _relabel_weather_date_column(df, persisted_metadata)
-    df["year"] = df["date"].dt.year
-    available_years = df["year"].unique()
-
+    by_year, metadata = _complete_weather_years(csv_file_path)
     result: Dict[int, pd.DataFrame] = {}
-    for yr in available_years:
-        yr_data = df[df["year"] == yr].copy()
-
-        # Drop Feb 29 by date, not by row count, so this works at any resolution.
-        feb_29_mask = (yr_data["date"].dt.month == 2) & (yr_data["date"].dt.day == 29)
-        if feb_29_mask.any():
-            yr_data = yr_data[~feb_29_mask]
-
-        expected_rows = _derive_steps_per_year(yr_data["date"])
-        if len(yr_data) != expected_rows:
-            continue  # skip incomplete years
-
-        # Remap to target year
-        year_diff = target_year - yr
-        yr_data["date"] = yr_data["date"] + pd.DateOffset(years=year_diff)
-        yr_data = yr_data.drop("year", axis=1).reset_index(drop=True)
-        yr_data.attrs[WEATHER_METADATA_KEY] = deepcopy(persisted_metadata) | {
-            "path": path,
-            "sha256": sha256,
-        }
-        result[int(yr)] = yr_data
-
+    for year, year_data in by_year.items():
+        remapped = _remap_weather_year(year_data, year, target_year)
+        remapped.attrs[WEATHER_METADATA_KEY] = deepcopy(metadata)
+        result[year] = remapped
     return result
 
 
