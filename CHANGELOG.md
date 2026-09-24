@@ -100,6 +100,24 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   8 modules, and 5 kWh at 1 C or 0.5 C. Charging binds more often than
   discharge, so the gain in stored PV outweighs the lower discharge ceiling.
   The upcoming publication's C-rate never binds, so its results are unaffected.
+- `pv_arrays` inherit the top-level tracker settings, and tracker keys and
+  array entries are validated
+  ([#167](https://github.com/Str4vinci/breos/issues/167)). An array inherited
+  `module`, `tilt`, and `azimuth` from the top level but not `tracking`,
+  `max_angle`, or the other tracker keys, so the PV model's own fallbacks
+  applied: a top-level single-axis tracker ran fixed-tilt once `pv_arrays` was
+  set, and a top-level `max_angle` did not reach a tracking array. Arrays now
+  inherit every tracker key, and the result reports each array's resolved
+  `tracking` and tracker geometry. Tracker keys are range-checked at the top
+  level and per array, `backtrack` must be a bool (the string `"no"` is
+  truthy, so it used to leave backtracking on), a misspelled array `tracking`
+  fails before the weather fetch, and an unknown array key such as `tlt` is
+  rejected instead of silently dropped. **Results change for arrays under a
+  top-level tracker setting.** On the Porto PVGIS TMY with 10 modules,
+  `tracking = "single_axis"` with `pv_arrays = [{modules = 10}]` gives
+  9,700.6 kWh of DC instead of 8,672.0 (+11.9%), the same as without
+  `pv_arrays`. A single-axis array under a top-level `max_angle = 20` gives
+  8,983.4 kWh instead of 9,700.6 (−7.4%). Fixed-tilt arrays are unchanged.
 - Open-Meteo interval-mean weather fetched for Monte Carlo keeps its last year
   ([#169](https://github.com/Str4vinci/breos/issues/169)). Those means are
   labelled at the end of their hour, and `fetch_weather_data` stopped at
