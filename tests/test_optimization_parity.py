@@ -340,3 +340,33 @@ def test_optimizer_scores_an_unset_battery_window_with_app_defaults(monkeypatch)
 
     assert captured["battery_config"].min_soc == pytest.approx(0.10)
     assert captured["battery_config"].max_soc == pytest.approx(0.90)
+
+
+def test_projected_budget_constraint_gates_the_reported_capex(synthetic_weather, sample_load):
+    """The budget checks the CAPEX the projected result reports.
+
+    ``costs.panel_wp`` prices the steady-state CAPEX at 400 W while projected
+    evaluation prices the selected 550 W module. The constraint used the
+    steady-state figure, so a EUR 480 budget accepted a design reported at
+    EUR 490.03.
+    """
+    pytest.importorskip("pymoo")
+    from breos.optimization import SolarDesignProblem
+
+    config = {
+        "location": {"latitude": 41.15, "longitude": -8.61, "timezone": "UTC"},
+        "simulation": {"resolution": "h", "years_projection": 1},
+        "constraints": {"budget_eur": 480.0, "max_area_m2": 100.0, "max_modules": 5},
+        "optimization": {"objective_basis": "projected"},
+        "mode": {"fixed_azimuth": 180},
+        "pv": {"module": "Suntech_STP550S_STC"},
+        "battery": {"temperature": 20.0, "indoor_model": {"enabled": False}},
+        "costs": {"panel_wp": 400},
+    }
+    problem = SolarDesignProblem(synthetic_weather, sample_load, config, "results/_test_run/budget")
+    out: dict = {}
+    problem._evaluate(np.array([1.0, 0.0, 35.0], dtype=float), out)
+
+    assert out["Projected_Initial_Cost_Eur"] == pytest.approx(490.03, abs=0.01)
+    assert out["G"][0] == pytest.approx(out["Projected_Initial_Cost_Eur"] - 480.0)
+    assert out["G"][0] > 0.0

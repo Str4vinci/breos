@@ -306,12 +306,26 @@ def test_select_random_year_only_picks_complete_years(tmp_path):
 
     picked = set()
     for seed in range(20):
-        np.random.seed(seed)
-        selected, selected_year = select_random_year_and_replace_datetime(str(path), target_year=2025)
+        rng = np.random.default_rng(seed)
+        selected, selected_year = select_random_year_and_replace_datetime(str(path), target_year=2025, rng=rng)
         assert len(selected) == 8760
         picked.add(selected_year)
 
     assert picked == {2022, 2023}
+
+
+def test_select_random_year_draws_from_the_given_generator(tmp_path):
+    path = _write_right_labelled_file_without_trailing_midnight(tmp_path)
+    np.random.seed(0)
+    global_state = np.random.get_state()[1].copy()
+
+    picks = [
+        select_random_year_and_replace_datetime(str(path), rng=np.random.default_rng(seed))[1] for seed in range(8)
+    ]
+
+    assert picks == [int(np.random.default_rng(seed).choice([2022, 2023])) for seed in range(8)]
+    assert set(picks) == {2022, 2023}
+    np.testing.assert_array_equal(np.random.get_state()[1], global_state)
 
 
 def test_battery_temperature_helper_applies_indoor_default():

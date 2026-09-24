@@ -14,7 +14,11 @@ from dataclasses import asdict, dataclass
 from typing import Any, Mapping
 
 import numpy as np
+import pandas as pd
 from pvlib.albedo import SURFACE_ALBEDOS
+
+from breos.utils import get_hours_per_step
+from breos.weather import weather_representative_time_offset
 
 # Sky-diffusion (transposition) models for projecting GHI/DHI/DNI onto the
 # plane of array, as supported by pvlib.irradiance.get_total_irradiance.
@@ -64,9 +68,11 @@ SURFACE_TYPES = tuple(sorted(SURFACE_ALBEDOS))
 # metadata. It supports instantaneous samples with an explicit provider
 # offset and interval means with either left or right labels.
 #
-# Applied in breos.solar._prepare_solarpos_and_weather, which shifts the
-# solar-position times before transposition, so it is resolved separately
-# from PVModelOptions rather than carried on it.
+# Resolved by solar_position_time_offset, which both transposition
+# (breos.solar._prepare_solarpos_and_weather) and terrain shading
+# (breos.pv.horizon) call, so the two cannot disagree about where the sun is.
+# It depends on the weather, so it is resolved separately from
+# PVModelOptions rather than carried on it.
 SOLAR_POSITION_METHODS = (
     "interval-start",
     "mid-interval",
@@ -243,6 +249,21 @@ def resolve_solar_position_method(method: str) -> str:
         valid = ", ".join(SOLAR_POSITION_METHODS)
         raise ValueError(f"Unknown solar position method {method!r}. Valid methods: {valid}")
     return normalise_model_name(method)
+
+
+def solar_position_time_offset(method: str, weather: pd.DataFrame, freq: str) -> pd.Timedelta:
+    """Return how far after each weather label the sun position is evaluated.
+
+    ``interval-start`` gives zero and ``mid-interval`` half a step. ``weather``
+    reads the offset from the weather metadata and raises when the metadata
+    does not state its radiation time basis.
+    """
+    method = resolve_solar_position_method(method)
+    if method == "mid-interval":
+        return pd.Timedelta(hours=get_hours_per_step(freq) / 2.0)
+    if method == "weather":
+        return weather_representative_time_offset(weather, freq)
+    return pd.Timedelta(0)
 
 
 def resolve_iam_model(model: str) -> str:

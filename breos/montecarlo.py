@@ -81,6 +81,8 @@ _SUMMARY_METRICS = {
     "lifetime_grid_independence_pct": "lifetime_grid_independence_pct",
     "total_replacements": "total_replacements",
 }
+# A run without a payback year did not pay back within the horizon.
+_PAYBACK_METRICS = ("payback_year", "payback_year_exact")
 
 
 @dataclass(frozen=True)
@@ -647,24 +649,42 @@ def _resolve_backend(execution_backend: str, *, pv_only: bool = False) -> dict[s
 
 
 def _summarize(runs: pd.DataFrame) -> dict[str, dict[str, float]]:
+    """Describe each metric across runs.
+
+    Each entry gives ``count``, the number of runs its statistics cover, out
+    of ``n_runs``. Runs without a value are left out of the statistics. For
+    the payback metrics, such a run did not pay back within the horizon, so
+    their statistics are conditional on payback. ``payback_probability`` is
+    the unconditional share of runs that paid back. A payback entry is kept
+    with only these counts when no run paid back.
+    """
     summary: dict[str, dict[str, float]] = {}
+    n_runs = len(runs)
     for col in _SUMMARY_METRICS:
         if col not in runs.columns:
             continue
         series = runs[col].dropna()
-        if series.empty:
+        is_payback = col in _PAYBACK_METRICS
+        if series.empty and not is_payback:
             continue
-        summary[col] = {
-            "mean": float(series.mean()),
-            "std": 0.0 if len(series) == 1 else float(series.std()),
-            "p5": float(series.quantile(0.05)),
-            "p2_5": float(series.quantile(0.025)),
-            "p50": float(series.quantile(0.50)),
-            "p95": float(series.quantile(0.95)),
-            "p97_5": float(series.quantile(0.975)),
-            "min": float(series.min()),
-            "max": float(series.max()),
-        }
+        entry: dict[str, float] = {}
+        if not series.empty:
+            entry = {
+                "mean": float(series.mean()),
+                "std": 0.0 if len(series) == 1 else float(series.std()),
+                "p5": float(series.quantile(0.05)),
+                "p2_5": float(series.quantile(0.025)),
+                "p50": float(series.quantile(0.50)),
+                "p95": float(series.quantile(0.95)),
+                "p97_5": float(series.quantile(0.975)),
+                "min": float(series.min()),
+                "max": float(series.max()),
+            }
+        entry["count"] = len(series)
+        entry["n_runs"] = n_runs
+        if is_payback:
+            entry["payback_probability"] = len(series) / n_runs
+        summary[col] = entry
     return summary
 
 
@@ -693,8 +713,11 @@ def _run_trajectory_index(run_idx: int) -> tuple[int, dict[str, Any], pd.DataFra
     # One observation window per trajectory: that is the unit of work whose
     # compile cost is being attributed. A no-op on the Python backend.
     reset_jit_cache_observation(settings.execution_backend)
-    seed = None if settings.seed is None else settings.seed + run_idx
-    rng = np.random.default_rng(seed)
+    # Each run takes its own child of the base seed's SeedSequence, the same
+    # stream as SeedSequence(seed).spawn(n_runs)[run_idx], so studies under
+    # different base seeds share no trajectory. Without a seed, every run
+    # draws fresh entropy.
+    rng = np.random.default_rng(np.random.SeedSequence(settings.seed, spawn_key=(run_idx,)))
     metrics, trajectory = _simulate_trajectory(
         cfg,
         resolved,
@@ -740,8 +763,15 @@ def run_montecarlo(config: dict[str, Any], settings: MonteCarloSettings) -> Mont
         raise ValueError("n_runs must be at least 1")
     if settings.years_per_run is not None and settings.years_per_run < 1:
         raise ValueError("years_per_run must be at least 1")
-    if settings.load_uncertainty < 0.0:
-        raise ValueError("load_uncertainty must be non-negative")
+    if not (math.isfinite(settings.load_uncertainty) and settings.load_uncertainty >= 0.0):
+        raise ValueError("load_uncertainty must be a finite, non-negative number")
+    # The load scale multiplies demand, so a negative bound would make demand negative.
+    if not (math.isfinite(settings.min_load_scale) and settings.min_load_scale >= 0.0):
+        raise ValueError(f"min_load_scale must be a finite, non-negative number, got {settings.min_load_scale}")
+    if settings.max_load_scale is not None and not settings.max_load_scale >= settings.min_load_scale:
+        raise ValueError(
+            f"max_load_scale must be at least min_load_scale ({settings.min_load_scale}), got {settings.max_load_scale}"
+        )
     if settings.load_distribution not in {"normal", "uniform"}:
         raise ValueError("load_distribution must be 'normal' or 'uniform'")
     if settings.n_procs < 1:
@@ -839,7 +869,9 @@ def run_montecarlo(config: dict[str, Any], settings: MonteCarloSettings) -> Mont
             "settings": asdict(settings),
             "available_weather_years": [int(y) for y in available_years],
             "runtime_weather": runtime_weather,
-            "random_stream": "numpy.default_rng(base_seed + zero_based_run_index)",
+            "random_stream": (
+                "numpy.random.default_rng(numpy.random.SeedSequence(base_seed).spawn(n_runs)[zero_based_run_index])"
+            ),
             "execution": backend_provenance,
         },
     )

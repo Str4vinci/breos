@@ -336,6 +336,14 @@ any explicit `n_modules` key is ignored.
 Each array may also set its own `transposition_model`, overriding the
 top-level default for that array only.
 
+Arrays inherit `tracking` and the tracker geometry (`axis_tilt`,
+`axis_azimuth`, `max_angle`, `backtrack`, `cross_axis_tilt`, and
+`dual_axis_max_tilt`) from the top level, and an array may override any of
+them. So a top-level `tracking = "single_axis"` makes every array a tracker
+unless the array sets `tracking = "fixed"`. An array entry accepts only the
+keys named in this section and the sky, ground, and bifacial keys; any other
+key, such as a misspelled `tlt`, is rejected.
+
 ## Sky-diffusion (transposition) model
 
 To compute plane-of-array (POA) irradiance, BREOS transposes the horizontal
