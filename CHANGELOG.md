@@ -20,7 +20,7 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   published numbers from that release. No engine behaviour changes.
 - Removed the finished 0.4.x, 0.5.x, and 0.6.x delivery plans and the
   third-party wrapping proposal from `design/architecture/`. The wrapping
-  proposal is declined ([#11](https://github.com/Str4vinci/breos/issues/11)).
+  idea stays open as [#11](https://github.com/Str4vinci/breos/issues/11).
 - Stopped tracking the generated autosummary stubs under `docs/api/generated/`,
   which Sphinx rebuilds on every run.
 
