@@ -82,6 +82,23 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   different year from `tmy_data`**, which ran their battery at 22.9 °C with the
   indoor model on. App runs are unchanged: the default Porto run with a 5 kWh
   battery matches develop exactly at hourly and 15-minute resolution.
+- Open-Meteo interval-mean weather fetched for Monte Carlo keeps its last year
+  ([#169](https://github.com/Str4vinci/breos/issues/169)). Those means are
+  labelled at the end of their hour, and `fetch_weather_data` stopped at
+  23:00 on `end_date`. Once BREOS moved each label to the start of its hour,
+  the last year was one step short, and `preload_weather_by_year` dropped it
+  without saying so: a 2022-2024 file gave Monte Carlo only 2022 and 2023.
+  The fetch now runs through the midnight after `end_date` and starts at
+  01:00 on `start_date`, so it covers exactly the requested hours.
+  Instantaneous fetches are unchanged. `preload_weather_by_year` now warns
+  about each year it skips, and `select_random_year_and_replace_datetime`
+  picks only complete years; it used to pick a short year with a warning. The
+  two share one year-splitting helper, which takes the step size from the
+  whole file. Files fetched before this fix still lose their last year, now
+  with a warning; fetch them again to keep it. **Results change only for
+  interval-mean files fetched from now on**, which give Monte Carlo one more
+  weather year. Monte Carlo on existing files is unchanged: the per-year
+  weather from both Porto 2005-2024 Open-Meteo files matches develop exactly.
 
 ### Removed
 - Removed the reproduction tooling for the upcoming publication:
