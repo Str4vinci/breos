@@ -32,6 +32,24 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   load profile built from an external hourly file because its 15-minute file is
   missing. Hourly runs, nanosecond input, and profiles loaded from native
   15-minute files are unchanged.
+- The simulation boundary rejects invalid PV and load input instead of
+  repairing it ([#151](https://github.com/Str4vinci/breos/issues/151)).
+  `simulate_energy_balance`, `simulate_energy_balance_summary`, and
+  `align_simulation_inputs` used to fill every PV or load step without a value
+  with zero and accepted negative load. So a load covering half the window
+  halved consumption, and a −100 W load made PV deliver negative energy to the
+  load and export PV that did not exist. They now raise `ValueError` for PV or
+  load that does not cover every step with a finite value, for load
+  timestamps off the simulation interval, and for negative load. Fill gaps
+  explicitly before simulating if that is the intent. Missing temperature
+  steps still default to 25 °C; that is
+  [#153](https://github.com/Str4vinci/breos/issues/153).
+- A civil-year load profile on a UTC-year weather calendar no longer gets
+  zero-load steps at the year edge. This affects Monte Carlo and CSV weather
+  outside UTC±0: 1 step for Berlin, 5 for New York, and 11 for Sydney at
+  hourly resolution. Those steps now take the same instant of the repeating
+  annual profile, one year earlier or later. **Results change slightly for
+  those runs.** PVGIS runs use the location's fixed offset and are unchanged.
 
 ### Removed
 - Removed the reproduction tooling for the upcoming publication:

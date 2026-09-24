@@ -1495,3 +1495,108 @@ class TestIndoorTemperatureModel:
         indoor_low = apply_indoor_temperature_model(outdoor, setpoint_c=22.0, coupling_alpha=0.0)
         indoor_high = apply_indoor_temperature_model(outdoor, setpoint_c=22.0, coupling_alpha=1.0)
         assert indoor_low.iloc[0] > indoor_high.iloc[0]  # setpoint > outdoor, so less coupling = warmer
+
+
+# ---------------------------------------------------------------------------
+# Input validation at the simulation boundary
+# ---------------------------------------------------------------------------
+
+
+def _day_inputs(load_w=1000.0, pv_w=0.0):
+    idx = pd.date_range("2025-06-01", periods=24, freq="h")
+    return pd.Series(pv_w, index=idx), pd.DataFrame({"Load": load_w}, index=idx)
+
+
+def test_complete_input_still_simulates():
+    pv, load = _day_inputs()
+
+    result, *_ = simulate_energy_balance(pv, load, BatteryConfig(nominal_energy_wh=0), freq="h")
+
+    assert result["Houseload"].sum() == pytest.approx(24_000.0)
+    assert result["Import_From_Grid"].sum() == pytest.approx(24_000.0)
+
+
+def test_load_that_covers_half_the_range_is_rejected_not_zero_filled():
+    pv, load = _day_inputs()
+
+    with pytest.raises(ValueError, match=r"houseload has no finite value for 12 of 24 simulation steps"):
+        simulate_energy_balance(pv, load.iloc[:12], BatteryConfig(nominal_energy_wh=0), freq="h")
+
+
+def test_negative_load_is_rejected():
+    """A negative load used to deliver negative PV to load and export PV that did not exist."""
+    pv, load = _day_inputs(load_w=-100.0)
+
+    with pytest.raises(ValueError, match=r"houseload is negative at 24 simulation steps"):
+        simulate_energy_balance(pv, load, BatteryConfig(nominal_energy_wh=0), freq="h")
+
+
+@pytest.mark.parametrize("bad", [np.nan, np.inf])
+def test_non_finite_pv_and_load_are_rejected(bad):
+    pv, load = _day_inputs()
+    pv.iloc[5] = bad
+    with pytest.raises(ValueError, match=r"pv_dc has no finite value for 1 of 24"):
+        align_simulation_inputs(pv, load, freq="h")
+
+    pv, load = _day_inputs()
+    load.iloc[5, 0] = bad
+    with pytest.raises(ValueError, match=r"houseload has no finite value for 1 of 24"):
+        align_simulation_inputs(pv, load, freq="h")
+
+
+def test_pv_that_ends_before_the_requested_range_is_rejected():
+    pv, load = _day_inputs()
+
+    with pytest.raises(ValueError, match=r"pv_dc has no finite value for 1 of 25 simulation steps"):
+        simulate_energy_balance_summary(
+            pv,
+            load,
+            BatteryConfig(nominal_energy_wh=0),
+            freq="h",
+            end_time=pv.index[-1] + pd.Timedelta(hours=1),
+        )
+
+
+def test_off_grid_timestamps_are_rejected_rather_than_dropped():
+    pv, load = _day_inputs()
+    shifted = load.copy()
+    shifted.index = shifted.index + pd.Timedelta(minutes=30)
+
+    with pytest.raises(ValueError, match=r"houseload has no finite value for 24 of 24"):
+        simulate_energy_balance(pv, shifted, BatteryConfig(nominal_energy_wh=0), freq="h")
+
+
+@pytest.mark.parametrize(
+    ("timezone", "edge_steps"),
+    [("Europe/Berlin", 1), ("America/New_York", 5), ("Australia/Sydney", 11)],
+)
+def test_civil_year_load_repeats_across_the_utc_year_edge(timezone, edge_steps):
+    """A civil-year load profile on a UTC-year calendar used to leave zero-load steps.
+
+    East of UTC the last UTC hours of the year are next year's first civil
+    hours; west of UTC the first UTC hours are last year's final ones. Those
+    steps take the same instant of the repeating annual profile.
+    """
+    civil = pd.date_range("2025-01-01", "2025-12-31 23:00", freq="h", tz=timezone)
+    load = pd.DataFrame({"Load": np.arange(len(civil), dtype=float) + 100.0}, index=civil)
+    rng = pd.date_range("2025-01-01", "2025-12-31 23:00", freq="h", tz="UTC")
+    pv = pd.Series(0.0, index=rng)
+
+    aligned = align_simulation_inputs(pv, load, freq="h")
+    load_utc = load["Load"].tz_convert("UTC")
+    outside = ~rng.isin(load_utc.index)
+
+    assert int(outside.sum()) == edge_steps
+    inside = aligned.load_w[~outside]
+    np.testing.assert_array_equal(inside, load_utc.reindex(rng[~outside]).to_numpy())
+    one_year = rng[outside] + pd.DateOffset(years=-1 if rng[outside][0] > load_utc.index[-1] else 1)
+    np.testing.assert_array_equal(aligned.load_w[outside], load_utc.reindex(one_year).to_numpy())
+
+
+def test_repeating_the_year_edge_does_not_fill_a_gap_inside_the_data():
+    civil = pd.date_range("2025-01-01", "2025-12-31 23:00", freq="h", tz="Europe/Berlin")
+    load = pd.DataFrame({"Load": 500.0}, index=civil).drop(civil[3000:3010])
+    rng = pd.date_range("2025-01-01", "2025-12-31 23:00", freq="h", tz="UTC")
+
+    with pytest.raises(ValueError, match=r"houseload has no finite value for 10 of 8760"):
+        align_simulation_inputs(pd.Series(0.0, index=rng), load, freq="h")
