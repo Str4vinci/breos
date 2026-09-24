@@ -1026,6 +1026,109 @@ def extract_ambient_temperature(weather_df: pd.DataFrame) -> Optional[pd.Series]
     return None
 
 
+_TEMPERATURE_FILE_DATE_COLUMNS = ("date", "datetime", "time")
+_TEMPERATURE_FILE_VALUE_COLUMNS = ("temp", "temperature", "t_cell", "t_amb")
+
+
+def _shift_to_calendar_year(series: pd.Series, year: int) -> pd.Series:
+    """Restamp a one-year series onto ``year``, keeping month, day, and time.
+
+    29 February is dropped from a leap-year source, as the weather loaders do.
+    A non-leap source restamped onto a leap year has no 29 February, which the
+    coverage check then reports.
+    """
+    index = series.index
+    series = series[~((index.month == 2) & (index.day == 29))]
+    shifted = series.copy()
+    shifted.index = series.index + pd.DateOffset(years=year - int(series.index[0].year))
+    return shifted
+
+
+def _align_temperature_to_index(
+    source: pd.Series,
+    index: pd.DatetimeIndex,
+    *,
+    label: str,
+    align_calendar_year: bool = False,
+) -> pd.Series:
+    """Place a timestamped temperature series onto the simulation index.
+
+    Each simulation step takes the latest reading at or before it, and only
+    within the source's own sampling interval, so hourly readings can drive a
+    15-minute simulation but a gap is never bridged. A step with no reading is
+    an error, never a default: a reindex across calendar years used to empty
+    the whole series and replace it with 25 °C.
+    """
+    if not isinstance(source.index, pd.DatetimeIndex):
+        raise ValueError(f"{label} has no timestamps to align with the simulation index")
+    values = pd.to_numeric(source, errors="coerce").astype(float)
+    finite = np.isfinite(values.to_numpy())
+    if not finite.all():
+        first = source.index[int(np.argmin(finite))]
+        raise ValueError(f"{label} has {int((~finite).sum())} readings that are not finite numbers (first at {first})")
+    # Naive timestamps are read as UTC, as naive weather timestamps are.
+    if index.tz is not None:
+        stamps = source.index if source.index.tz is not None else source.index.tz_localize("UTC")
+        values.index = stamps.tz_convert(index.tz)
+    elif source.index.tz is not None:
+        values.index = source.index.tz_convert("UTC").tz_localize(None)
+    if not values.index.is_unique:
+        raise ValueError(f"{label} has duplicate timestamps")
+    values = values.sort_index()
+    if values.empty:
+        raise ValueError(f"{label} has no readings")
+
+    source_years = values.index.year.unique()
+    index_years = index.year.unique()
+    years_differ = len(source_years) == 1 and len(index_years) == 1 and source_years[0] != index_years[0]
+    if align_calendar_year and years_differ:
+        values = _shift_to_calendar_year(values, int(index_years[0]))
+
+    stamps = values.index
+    step = (stamps[1:] - stamps[:-1]).median() if len(stamps) > 1 else pd.Timedelta(0)
+    position = stamps.searchsorted(index, side="right") - 1
+    held_from = stamps[np.clip(position, 0, None)]
+    lag = index - held_from
+    covered = (position >= 0) & ((lag < step) | (lag == pd.Timedelta(0)))
+    if not covered.all():
+        first = index[int(np.argmin(covered))]
+        hint = ""
+        if years_differ and not align_calendar_year:
+            hint = (
+                f" It is from {source_years[0]} and the simulation runs in {index_years[0]};"
+                f" restamp it to {index_years[0]}."
+            )
+        raise ValueError(
+            f"{label} does not cover {int((~covered).sum())} of {len(index)} simulation steps "
+            f"(first at {first}). It spans {stamps[0]} to {stamps[-1]}; the simulation spans "
+            f"{index[0]} to {index[-1]}.{hint}"
+        )
+    return pd.Series(values.to_numpy()[position], index=index, name=source.name)
+
+
+def _read_temperature_file(path: str) -> pd.Series:
+    """Read a timestamped battery-temperature CSV, or say why it cannot be used."""
+    if not os.path.exists(path):
+        raise FileNotFoundError(f"battery temperature file not found: {path}")
+    try:
+        df = pd.read_csv(path)
+    except Exception as exc:
+        raise ValueError(f"could not read battery temperature file {path}: {exc}") from exc
+    date_col = next((c for c in df.columns if str(c).lower() in _TEMPERATURE_FILE_DATE_COLUMNS), None)
+    val_col = next((c for c in df.columns if str(c).lower() in _TEMPERATURE_FILE_VALUE_COLUMNS), None)
+    if date_col is None or val_col is None:
+        raise ValueError(
+            f"battery temperature file {path} needs a timestamp column "
+            f"({', '.join(_TEMPERATURE_FILE_DATE_COLUMNS)}) and a temperature column "
+            f"({', '.join(_TEMPERATURE_FILE_VALUE_COLUMNS)}); it has {', '.join(map(str, df.columns))}"
+        )
+    try:
+        stamps = pd.to_datetime(df[date_col])
+    except (ValueError, TypeError) as exc:
+        raise ValueError(f"battery temperature file {path} has unreadable timestamps: {exc}") from exc
+    return pd.Series(df[val_col].to_numpy(), index=pd.DatetimeIndex(stamps), name=val_col)
+
+
 def build_battery_temperature_series(
     temp_config: Any = None,
     index: Optional[pd.DatetimeIndex] = None,
@@ -1036,6 +1139,7 @@ def build_battery_temperature_series(
     default_temp: float = 25.0,
     weather_df: Optional[pd.DataFrame] = None,
     indoor_model: Optional[Dict[str, Any]] = None,
+    align_weather_year: bool = False,
 ) -> pd.Series:
     """Build the battery-temperature series used by degradation models.
 
@@ -1043,6 +1147,14 @@ def build_battery_temperature_series(
     ``None``/``"weather"`` uses weather data, a number is a fixed temperature,
     and a string is treated as a CSV path. The indoor buffering model is applied
     by default and can be disabled with ``indoor_model={"enabled": False}``.
+
+    Temperatures that cannot cover ``index`` raise instead of defaulting: a
+    missing file raises ``FileNotFoundError``, and an unreadable file, a file
+    without recognised columns, and readings from another calendar year or
+    with gaps raise ``ValueError``. ``default_temp`` applies only when
+    ``weather_df`` is absent or has no temperature column. Pass
+    ``align_weather_year=True`` when ``weather_df`` is a representative year
+    whose temperatures should be restamped onto the calendar year of ``index``.
     """
     if index is None:
         if start_time is None or end_time is None:
@@ -1050,8 +1162,6 @@ def build_battery_temperature_series(
         index = pd.date_range(start=start_time, end=end_time, freq=freq)
     else:
         index = pd.DatetimeIndex(index)
-
-    result: Optional[pd.Series] = None
 
     weather_indexed = weather_df
     if weather_indexed is not None and not isinstance(weather_indexed.index, pd.DatetimeIndex):
@@ -1070,27 +1180,26 @@ def build_battery_temperature_series(
             ambient = ambient.copy()
             if not isinstance(ambient.index, pd.DatetimeIndex) and len(ambient) == len(index):
                 ambient.index = index
-            result = ambient.reindex(index).ffill().fillna(default_temp)
+            result = _align_temperature_to_index(
+                ambient, index, label="weather temperature", align_calendar_year=align_weather_year
+            )
         else:
             result = pd.Series(default_temp, index=index)
+    elif isinstance(temp_config, bool):
+        raise TypeError("battery temperature must be 'weather', a CSV path, or a number, not a bool")
     elif isinstance(temp_config, (int, float)):
+        if not np.isfinite(temp_config):
+            raise ValueError(f"fixed battery temperature must be finite, got {temp_config}")
         result = pd.Series(float(temp_config), index=index)
-    elif isinstance(temp_config, str):
-        if os.path.exists(temp_config):
-            try:
-                df = pd.read_csv(temp_config)
-                date_col = next((c for c in df.columns if c.lower() in ["date", "datetime", "time"]), None)
-                val_col = next((c for c in df.columns if c.lower() in ["temp", "temperature", "t_cell", "t_amb"]), None)
-                if date_col and val_col:
-                    df[date_col] = pd.to_datetime(df[date_col])
-                    df.set_index(date_col, inplace=True)
-                    result = df[val_col].reindex(index).ffill().fillna(default_temp)
-            except Exception:
-                result = None
-        if result is None:
-            result = pd.Series(default_temp, index=index)
+    elif isinstance(temp_config, (str, os.PathLike)):
+        path = os.fspath(temp_config)
+        result = _align_temperature_to_index(
+            _read_temperature_file(path), index, label=f"battery temperature file {path}"
+        )
     else:
-        result = pd.Series(default_temp, index=index)
+        raise TypeError(
+            f"battery temperature must be 'weather', a CSV path, or a number, got {type(temp_config).__name__}"
+        )
 
     indoor_model = indoor_model or {}
     from breos.constants import (
