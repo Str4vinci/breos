@@ -58,6 +58,17 @@ def test_invalid_start_date_and_calendar_model_fail_early():
         App(_config(calendar_model="invented"))
 
 
+@pytest.mark.parametrize("start_date", ["2025-07-01", "2025-01-15", "2025-12-31"])
+def test_start_date_other_than_1_january_fails_early(start_date):
+    """Weather starts on 1 January, so a later start used to misplace the load.
+
+    The load profile's first row is 1 January. A July start stamped January's
+    winter demand onto July, against weather that still began in January.
+    """
+    with pytest.raises(ValueError, match=r"'start_date' must be 1 January .* use '2025-01-01'"):
+        App(_config(start_date=start_date))
+
+
 def test_battery_temperature_and_indoor_model_validate_at_app_boundary():
     app = App(
         _config(
