@@ -19,6 +19,15 @@ from breos.utils import get_hours_per_step
 # Default battery and replacement cost per kWh of battery capacity (€/kWh)
 BATTERY_REPLACEMENT_COST_PER_KWH: float = 500.0
 
+# Where a replacement year carries no recorded instant, the outlay is booked
+# at the middle of that year. The simulation records the real instant and the
+# runners carry it through, so this covers summaries built before the instant
+# was carried and callers that supply none; mid-year is the least biased
+# choice for an unknown day. The resolved time is reported back in the
+# projection's ``Replacement_Time_Years`` column, so the assumption is visible
+# rather than buried here.
+DEFAULT_REPLACEMENT_YEAR_FRACTION: float = 0.5
+
 SYSTEM_AC_PRODUCTION_COLUMNS = ("PV_AC_To_Load", "Battery_AC_To_Load_PV")
 
 # Canonical translation from the public cost-catalogue/config vocabulary to
@@ -199,6 +208,120 @@ def calculate_costs(
     }
 
 
+def replacement_booking_time(
+    relative_years,
+    year_fractions=None,
+    has_replacement=None,
+) -> np.ndarray:
+    """Project time, in years from commissioning, at which replacements are booked.
+
+    A battery replacement is a single transaction on the day the pack is
+    swapped, not a flow spread over the year it falls in. Booking it at a
+    calendar-year granularity is what makes the inflation and the discount
+    disagree: inflating by ``(1 + i) ** (year - 1)`` values the outlay at the
+    start of the year while discounting by ``(1 + d) ** year`` values it at
+    the end, so neither matches the swap. This returns the instant both should
+    use.
+
+    Args:
+        relative_years: 1-based projection years.
+        year_fractions: Position of the swap within its year, in ``[0, 1)``.
+            ``None`` or a non-finite entry falls back to
+            :data:`DEFAULT_REPLACEMENT_YEAR_FRACTION`. Where a year holds more
+            than one replacement, the caller supplies the cost-weighted mean
+            instant; discounting is not linear in time, so that aggregate is
+            exact only when the events share a year-fraction, which is
+            adequate for the sub-annual pack lives it would take to reach it.
+        has_replacement: Mask of years that carry a replacement. Years outside
+            it return NaN.
+
+    Returns:
+        Array of project times. A swap 109 days into year 11 gives 10.299.
+    """
+    years = np.asarray(relative_years, dtype=float)
+    if year_fractions is None:
+        fractions = np.full(years.shape, np.nan, dtype=float)
+    else:
+        fractions = np.asarray(year_fractions, dtype=float)
+    fractions = np.where(np.isfinite(fractions), fractions, DEFAULT_REPLACEMENT_YEAR_FRACTION)
+    booked = years - 1.0 + fractions
+    if has_replacement is None:
+        return booked
+    return np.where(np.asarray(has_replacement, dtype=bool), booked, np.nan)
+
+
+def _booking_exponents(replacement_time: np.ndarray, relative_years) -> np.ndarray:
+    """Fill the NaN of non-replacement years so the power is finite.
+
+    Those years carry a zero outlay, so the exponent cannot reach the result;
+    it only has to not be NaN.
+    """
+    years = np.asarray(relative_years, dtype=float)
+    return np.where(np.isfinite(replacement_time), replacement_time, years)
+
+
+def replacement_fraction_from_steps(replacement_steps, n_steps: int) -> float:
+    """Mean within-year position of the steps at which a pack was swapped.
+
+    The step index over the year's step count is the fraction of the year
+    elapsed at the swap, on any regular timebase: a swap on day 109 of an
+    hourly year is step 2616 of 8760, or 0.2986.
+
+    Returns:
+        Fraction in ``[0, 1)``, or NaN when the year holds no replacement.
+    """
+    steps = np.asarray(replacement_steps, dtype=float)
+    if steps.size == 0 or n_steps <= 0:
+        return float("nan")
+    return float(np.mean(steps / float(n_steps)))
+
+
+def replacement_fraction_by_year(years, replaced) -> pd.Series:
+    """Within-year position of each year's replacement steps, from the ledger.
+
+    ``Battery_Replaced`` marks the step in which the pack was swapped, so the
+    step's position in its year is the fraction the economics needs. A year
+    holding more than one swap reports the mean position; see
+    :func:`replacement_booking_time` for what that aggregate costs.
+
+    Returns:
+        Series of fractions in ``[0, 1)`` indexed by the year label, holding
+        only the years that carry a replacement.
+    """
+    frame = pd.DataFrame(
+        {
+            "Year": np.asarray(years),
+            "Replaced": np.asarray(replaced, dtype=bool),
+        }
+    )
+    fractions: Dict[Any, float] = {}
+    for year, block in frame.groupby("Year", sort=True):
+        fraction = replacement_fraction_from_steps(np.flatnonzero(block["Replaced"].to_numpy()), len(block))
+        if np.isfinite(fraction):
+            fractions[year] = fraction
+    return pd.Series(fractions, dtype=float)
+
+
+def _discount_annual_with_replacement(
+    annual: pd.Series,
+    replacement: pd.Series,
+    discount_factors: pd.Series,
+    replacement_exponents: np.ndarray,
+    discount_rate: float,
+) -> pd.Series:
+    """Discount the annual system cost, taking the replacement from its own instant.
+
+    Every other component is a flow spread over its year and keeps the
+    year-end convention it has always had; the replacement is a single dated
+    transaction, so it is pulled out, discounted from the swap, and added
+    back.
+    """
+    exponents = np.asarray(replacement_exponents, dtype=float)
+    replacement_discount = 1.0 / ((1.0 + discount_rate) ** exponents)
+    outlay = pd.Series(np.asarray(replacement, dtype=float), index=annual.index)
+    return (annual - outlay) * discount_factors + outlay * replacement_discount
+
+
 def cost_analysis_projection(
     results_df: Optional[pd.DataFrame],
     costs: Dict[str, float],
@@ -282,8 +405,23 @@ def cost_analysis_projection(
         proj["Cost_Operation"] = costs["annual_operation_cost"] * inflation_factors
         proj["Cost_Daily"] = first_year_days * costs["daily_power_cost"] * inflation_factors
 
-        # Battery replacement costs from propagation
-        proj["Cost_Replacement"] = yearly_data["Replacement_Cost"].values * inflation_factors
+        # Battery replacement costs from propagation. The outlay is booked at
+        # the instant the pack is swapped: inflated to it and, below,
+        # discounted from it. The surrounding annual flows keep the year-end
+        # convention they have always had.
+        replacement_base = pd.to_numeric(yearly_data["Replacement_Cost"], errors="coerce").fillna(0.0).to_numpy()
+        replacement_time = replacement_booking_time(
+            proj["Year"].to_numpy(dtype=float),
+            (
+                pd.to_numeric(yearly_data["Replacement_Year_Fraction"], errors="coerce").to_numpy()
+                if "Replacement_Year_Fraction" in yearly_data.columns
+                else None
+            ),
+            replacement_base > 0.0,
+        )
+        replacement_exponents = _booking_exponents(replacement_time, proj["Year"].to_numpy(dtype=float))
+        proj["Replacement_Time_Years"] = replacement_time
+        proj["Cost_Replacement"] = replacement_base * (1 + inflation_rate) ** replacement_exponents
 
         proj["Cost_System_Annual"] = (
             proj["Cost_Import"]
@@ -297,7 +435,13 @@ def cost_analysis_projection(
 
         # Discounted values (NPV)
         proj["Cost_No_Sys_Annual_NPV"] = proj["Cost_No_Sys_Annual"] * discount_factors
-        proj["Cost_System_Annual_NPV"] = proj["Cost_System_Annual"] * discount_factors
+        proj["Cost_System_Annual_NPV"] = _discount_annual_with_replacement(
+            proj["Cost_System_Annual"],
+            proj["Cost_Replacement"],
+            discount_factors,
+            replacement_exponents,
+            discount_rate,
+        )
         proj["Cost_No_Sys_Cumulative_NPV"] = proj["Cost_No_Sys_Annual_NPV"].cumsum()
         proj["Cost_System_Cumulative_NPV"] = costs["total_initial_cost"] + proj["Cost_System_Annual_NPV"].cumsum()
 
@@ -400,6 +544,14 @@ def cost_analysis_projection(
     else:
         yearly_replacement = pd.DataFrame(0.0, index=yearly.index, columns=["Replacement_Cost"])
 
+    # The ledger marks the swap step, so the instant does not have to be
+    # reconstructed downstream. Without the column the booking falls back to
+    # the documented mid-year default.
+    if "Battery_Replaced" in df.columns:
+        replacement_year_fractions = replacement_fraction_by_year(df["Year"], df["Battery_Replaced"])
+    else:
+        replacement_year_fractions = pd.Series(dtype=float)
+
     # Scale to Energy (kWh)
     yearly = yearly * hours_per_step / 1000.0
 
@@ -450,20 +602,30 @@ def cost_analysis_projection(
     # multi-year loop provides per-year replacement events for every
     # projection year, while a single-year run provides at most year 1 and
     # leaves later projection years without replacement costs.
-    proj["Cost_Replacement"] = 0.0
-
+    #
     # yearly_replacement is indexed by calendar year; proj['Year'] is the
     # relative year (1, 2, ...), so align via the simulation start year.
     start_year = df["Year"].min()
 
-    for relative_year in proj["Year"]:
+    replacement_base = np.zeros(len(proj), dtype=float)
+    replacement_fraction = np.full(len(proj), np.nan, dtype=float)
+    for position, relative_year in enumerate(proj["Year"]):
         actual_year = start_year + relative_year - 1
         if actual_year in yearly_replacement.index:
-            cost = yearly_replacement.loc[actual_year, "Replacement_Cost"]
-            # The simulation logs replacement at the base (year-1) cost
-            # input, so inflate to the replacement year here.
-            inflation_factor = (1 + inflation_rate) ** (relative_year - 1)
-            proj.loc[proj["Year"] == relative_year, "Cost_Replacement"] += cost * inflation_factor
+            replacement_base[position] = float(yearly_replacement.loc[actual_year, "Replacement_Cost"])
+            if actual_year in replacement_year_fractions.index:
+                replacement_fraction[position] = float(replacement_year_fractions.loc[actual_year])
+
+    replacement_time = replacement_booking_time(
+        proj["Year"].to_numpy(dtype=float),
+        replacement_fraction,
+        replacement_base > 0.0,
+    )
+    replacement_exponents = _booking_exponents(replacement_time, proj["Year"].to_numpy(dtype=float))
+    proj["Replacement_Time_Years"] = replacement_time
+    # The simulation logs replacement at the base (year-1) cost input, so
+    # inflate to the swap instant here, and discount from the same instant.
+    proj["Cost_Replacement"] = replacement_base * (1 + inflation_rate) ** replacement_exponents
 
     # Add to annual system cost
     proj["Cost_System_Annual"] += proj["Cost_Replacement"]
@@ -472,7 +634,13 @@ def cost_analysis_projection(
 
     # Discounted values (NPV)
     proj["Cost_No_Sys_Annual_NPV"] = proj["Cost_No_Sys_Annual"] * discount_factors
-    proj["Cost_System_Annual_NPV"] = proj["Cost_System_Annual"] * discount_factors
+    proj["Cost_System_Annual_NPV"] = _discount_annual_with_replacement(
+        proj["Cost_System_Annual"],
+        proj["Cost_Replacement"],
+        discount_factors,
+        replacement_exponents,
+        discount_rate,
+    )
     proj["Cost_No_Sys_Cumulative_NPV"] = proj["Cost_No_Sys_Annual_NPV"].cumsum()
     proj["Cost_System_Cumulative_NPV"] = costs["total_initial_cost"] + proj["Cost_System_Annual_NPV"].cumsum()
 
@@ -652,7 +820,17 @@ def calculate_lcoe_from_projection(
         else pd.Series(0.0, index=cost_projection.index)
     )
 
-    npv_costs = float(total_investment) + float(((operation + replacement) * discount_factors).sum())
+    # The replacement is discounted from the swap instant when the projection
+    # carries it, matching how the NPV above books the same outlay.
+    if "Replacement_Time_Years" in cost_projection.columns:
+        replacement_time = pd.to_numeric(cost_projection["Replacement_Time_Years"], errors="coerce")
+        replacement_discount_factors = 1 / ((1 + discount_rate) ** replacement_time.fillna(years))
+    else:
+        replacement_discount_factors = discount_factors
+
+    npv_costs = float(total_investment) + float(
+        ((operation * discount_factors) + (replacement * replacement_discount_factors)).sum()
+    )
     npv_production = float((production * discount_factors).sum())
 
     return npv_costs / npv_production if npv_production > 0 else float("inf")

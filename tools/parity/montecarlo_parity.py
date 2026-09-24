@@ -3,8 +3,10 @@
 Used for validation steps 4 and 6: the same seeded study must produce
 identical run metrics and identical yearly trajectories across the pre-refactor
 baseline, the summary path, and the compiled backend. The five cases mirror the
-C1-C5 shape used by the forthcoming publication study: no battery, battery
-only, PV only, PV plus battery, and a larger PV-plus-battery system.
+range of system shapes the forthcoming publication study spans: no battery,
+battery only, PV only, PV plus battery, and a larger PV-plus-battery system.
+They are shapes, not that study's representative configurations, so they do not
+track its set as it is revised.
 """
 
 from __future__ import annotations

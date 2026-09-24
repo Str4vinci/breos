@@ -1,11 +1,13 @@
 cff-version: 1.2.0
 title: "BREOS: Building Renewable Energy Optimization Software"
-message: "If you use BREOS in your research, please cite the SSRN preprint below."
+message: "If you use BREOS in your research, please cite it using the metadata below."
 type: software
 authors:
   - given-names: Leonardo
     family-names: Rodrigues
     email: lrodrigues@fe.up.pt
+    affiliation: "Faculty of Engineering of the University of Porto (FEUP)"
+    orcid: "https://orcid.org/0000-0002-3228-6977"
 repository-code: "https://github.com/Str4vinci/breos"
 url: "https://github.com/Str4vinci/breos"
 abstract: >-
@@ -20,25 +22,8 @@ keywords:
   - solar
   - degradation
 license: BSD-3-Clause
-version: 0.6.0
-date-released: "2026-08-31"
-preferred-citation:
-  type: article
-  title: "A Modular, Open-Source Python Framework for Household PV-Battery Sizing: Validation, Multi-Objective Optimisation, and Uncertainty Analysis"
-  authors:
-    - given-names: L.
-      family-names: Rodrigues
-      email: lrodrigues@fe.up.pt
-    - given-names: "J. M. P. Q."
-      family-names: Delgado
-    - given-names: A.
-      family-names: Mendes
-    - given-names: "A. S."
-      family-names: Guimarães
-  year: 2026
-  doi: "10.2139/ssrn.7032064"
-  url: "https://papers.ssrn.com/sol3/papers.cfm?abstract_id=7032064"
-  notes: "SSRN preprint."
+version: 0.6.2
+date-released: "2026-09-24"
 references:
   - type: article
     title: "pvlib python: 2023 project update"

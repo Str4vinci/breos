@@ -1,9 +1,11 @@
 """Tests for the economics module."""
 
+import numpy as np
 import pandas as pd
 import pytest
 
 from breos.economics import (
+    DEFAULT_REPLACEMENT_YEAR_FRACTION,
     CostParams,
     calculate_costs,
     calculate_lcoe,
@@ -11,6 +13,9 @@ from breos.economics import (
     cost_analysis_projection,
     cost_params_from_config,
     find_payback_year,
+    replacement_booking_time,
+    replacement_fraction_by_year,
+    replacement_fraction_from_steps,
     system_ac_production_power,
 )
 from breos.optimization import calculate_financials
@@ -385,3 +390,146 @@ class TestLCOE:
                 2000.0 * costs["electricity_cost"] + daily,
             ]
         )
+
+
+class TestReplacementBookingTime:
+    """A replacement is a dated transaction, not a flow spread over its year.
+
+    Booking it at year granularity is what made the two rates disagree: the
+    old code inflated by ``(1 + i) ** (year - 1)``, valuing the outlay at the
+    start of the replacement year, and discounted by ``(1 + d) ** year``,
+    valuing it at the end. Neither is the day the pack was swapped.
+    """
+
+    def test_step_fraction_locates_the_swap_within_its_year(self):
+        # Hourly year, swap on day 109: step 2616 of 8760.
+        assert replacement_fraction_from_steps([2616], 8760) == pytest.approx(0.29863, abs=1e-5)
+        # The same instant on a 15-minute timebase is the same fraction.
+        assert replacement_fraction_from_steps([2616 * 4], 8760 * 4) == pytest.approx(0.29863, abs=1e-5)
+
+    def test_year_without_a_swap_has_no_fraction(self):
+        assert np.isnan(replacement_fraction_from_steps([], 8760))
+
+    def test_booking_time_is_measured_from_commissioning(self):
+        # The instant the deferred-fix note pins: a swap 109 days into
+        # projection year 11 is t = 10.299, not 10 and not 11.
+        booked = replacement_booking_time([11], [replacement_fraction_from_steps([2616], 8760)], [True])
+
+        assert booked[0] == pytest.approx(10.299, abs=1e-3)
+
+    def test_years_without_a_replacement_are_not_booked(self):
+        booked = replacement_booking_time([1, 2, 3], [np.nan, np.nan, 0.25], [False, False, True])
+
+        assert np.isnan(booked[:2]).all()
+        assert booked[2] == pytest.approx(2.25)
+
+    def test_missing_fraction_falls_back_to_the_documented_default(self):
+        booked = replacement_booking_time([3], None, [True])
+
+        assert booked[0] == pytest.approx(2.0 + DEFAULT_REPLACEMENT_YEAR_FRACTION)
+
+    def test_fraction_by_year_reads_the_ledger_column(self):
+        years = [2025] * 4 + [2026] * 4
+        replaced = [False, False, True, False, False, False, False, False]
+
+        fractions = replacement_fraction_by_year(years, replaced)
+
+        assert fractions.index.tolist() == [2025]
+        assert fractions.loc[2025] == pytest.approx(0.5)
+
+
+class TestReplacementBookingInProjection:
+    INFLATION = 0.03
+    DISCOUNT = 0.02
+    COST = 5000.0
+
+    def _projection(self, fraction):
+        years = list(range(1, 13))
+        yearly = pd.DataFrame(
+            {
+                "Year": years,
+                "Load_kWh": [4000.0] * 12,
+                "PV_Production_kWh": [5000.0] * 12,
+                "Import_kWh": [1500.0] * 12,
+                "Export_kWh": [2000.0] * 12,
+                "PV_Degradation_Factor": [1.0] * 12,
+                "Replacement_Cost": [self.COST if y == 11 else 0.0 for y in years],
+                "Replacement_Year_Fraction": [fraction if y == 11 else np.nan for y in years],
+            }
+        )
+        return cost_analysis_projection(
+            results_df=None,
+            costs={
+                "electricity_cost": 0.22,
+                "electricity_sold_cost": 0.05,
+                "daily_power_cost": 0.30,
+                "annual_operation_cost": 100.0,
+                "total_initial_cost": 12000.0,
+            },
+            num_years=12,
+            inflation_rate=self.INFLATION,
+            discount_rate=self.DISCOUNT,
+            yearly_summary_df=yearly,
+        )
+
+    def test_both_rates_are_applied_at_the_same_instant(self):
+        fraction = replacement_fraction_from_steps([2616], 8760)
+        projection = self._projection(fraction)
+        row = projection[projection["Year"] == 11].iloc[0]
+        booked_at = row["Replacement_Time_Years"]
+
+        assert booked_at == pytest.approx(10.299, abs=1e-3)
+        assert row["Cost_Replacement"] == pytest.approx(self.COST * (1 + self.INFLATION) ** booked_at)
+
+        # The annual NPV carries that same outlay discounted from the same
+        # instant; every other component keeps the year-end convention.
+        others = row["Cost_System_Annual"] - row["Cost_Replacement"]
+        discounted_outlay = row["Cost_System_Annual_NPV"] - others / (1 + self.DISCOUNT) ** 11
+        assert discounted_outlay == pytest.approx(row["Cost_Replacement"] / (1 + self.DISCOUNT) ** booked_at)
+
+    def test_non_replacement_years_keep_the_year_end_convention(self):
+        projection = self._projection(0.25)
+
+        assert projection["Replacement_Time_Years"].notna().sum() == 1
+        for year in (1, 5, 12):
+            row = projection[projection["Year"] == year].iloc[0]
+            assert row["Cost_System_Annual_NPV"] == pytest.approx(
+                row["Cost_System_Annual"] / (1 + self.DISCOUNT) ** year
+            )
+
+    def _present_value(self, projection):
+        row = projection[projection["Year"] == 11].iloc[0]
+        return row["Cost_Replacement"] / (1 + self.DISCOUNT) ** row["Replacement_Time_Years"]
+
+    def test_booking_at_the_instant_reduces_to_the_two_rates_net_of_each_other(self):
+        # Applying both rates at the same t collapses to C * ((1+i)/(1+d))**t,
+        # so which way the instant moves the outlay is the sign of i - d and
+        # not a property of the calendar.
+        for fraction in (0.1, 0.5, 0.9):
+            booked_at = 10.0 + fraction
+            expected = self.COST * ((1 + self.INFLATION) / (1 + self.DISCOUNT)) ** booked_at
+            assert self._present_value(self._projection(fraction)) == pytest.approx(expected)
+
+    def test_the_correction_always_raises_the_outlay_against_the_old_booking(self):
+        # The old booking inflated to the start of the replacement year and
+        # discounted from its end, so it undervalued the outlay wherever in
+        # the year the swap fell. Correcting it cannot make the pack cheaper.
+        old_booking = self.COST * (1 + self.INFLATION) ** 10 / (1 + self.DISCOUNT) ** 11
+
+        for fraction in (0.0, 0.1, 0.5, 0.9):
+            assert self._present_value(self._projection(fraction)) > old_booking
+
+    def test_lcoe_discounts_the_replacement_from_the_same_instant(self):
+        projection = self._projection(replacement_fraction_from_steps([2616], 8760))
+        booked_at = projection["Replacement_Time_Years"].dropna().iloc[0]
+        outlay = projection["Cost_Replacement"].sum()
+
+        lcoe = calculate_lcoe_from_projection(projection, total_investment=12000.0, discount_rate=self.DISCOUNT)
+
+        years = projection["Year"].to_numpy(dtype=float)
+        discount_factors = 1 / (1 + self.DISCOUNT) ** years
+        production = float((projection["PV_Production_kWh"].to_numpy() * discount_factors).sum())
+        operation = float((projection["Cost_Operation"].to_numpy() * discount_factors).sum())
+        expected = (12000.0 + operation + outlay / (1 + self.DISCOUNT) ** booked_at) / production
+
+        assert lcoe == pytest.approx(expected)

@@ -116,16 +116,16 @@ The CLI also drives config files, parameter sweeps, and Monte Carlo studies, and
 
 ## Citation
 
-If you use BREOS in your research, please cite the preprint:
+If you use BREOS in your research, please cite the software and the version you
+used. GitHub's "Cite this repository" button reads the metadata in
+[`CITATION.cff`](CITATION.cff), or use:
 
 ```bibtex
-@misc{rodrigues2026breos,
-  author = {Rodrigues, L. and Delgado, J. M. P. Q. and Mendes, A. and Guimar{\~a}es, A. S.},
-  title  = {A Modular, Open-Source Python Framework for Household PV-Battery Sizing: Validation, Multi-Objective Optimisation, and Uncertainty Analysis},
-  year   = {2026},
-  doi    = {10.2139/ssrn.7032064},
-  url    = {https://papers.ssrn.com/sol3/papers.cfm?abstract_id=7032064},
-  note   = {SSRN preprint}
+@software{rodrigues_breos,
+  author = {Rodrigues, Leonardo},
+  title  = {{BREOS}: Building Renewable Energy Optimization Software},
+  url    = {https://github.com/Str4vinci/breos},
+  note   = {Version X.Y.Z}
 }
 ```
 

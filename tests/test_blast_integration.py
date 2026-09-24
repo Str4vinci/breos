@@ -229,11 +229,20 @@ def test_blast_multiple_replacements_through_runner(monkeypatch):
     assert artifacts.degradation_summary["replacement_events"] == expected_events
     assert len(expected_events) >= 5
 
-    # cost_projection replacement column carries the per-year cost with the
-    # configured inflation treatment: cost * (1 + inflation)^(year - 1).
+    # cost_projection replacement column carries the per-year cost inflated to
+    # the instant the pack was swapped, not to a year boundary:
+    # cost * (1 + inflation)^t, where t is the project time of the swap.
     cost_projection = artifacts.cost_projection
-    inflation_factors = (1 + inflation_rate) ** (cost_projection["Year"].to_numpy() - 1)
-    expected_replacement_cost = artifacts.yearly_df["Replacement_Cost"].to_numpy() * inflation_factors
+    booked_at = cost_projection["Replacement_Time_Years"].to_numpy()
+    replacement_years = artifacts.yearly_df["Replacement_Cost"].to_numpy() > 0.0
+    # Every replacement year has an instant, and it lies inside that year.
+    np.testing.assert_array_equal(np.isfinite(booked_at), replacement_years)
+    year_index = cost_projection["Year"].to_numpy() - 1
+    assert np.all(booked_at[replacement_years] >= year_index[replacement_years])
+    assert np.all(booked_at[replacement_years] < year_index[replacement_years] + 1)
+
+    exponents = np.where(np.isfinite(booked_at), booked_at, year_index)
+    expected_replacement_cost = artifacts.yearly_df["Replacement_Cost"].to_numpy() * (1 + inflation_rate) ** exponents
     np.testing.assert_allclose(cost_projection["Cost_Replacement"].to_numpy(), expected_replacement_cost, atol=1e-9)
 
     replacement_reset_energy = battery_kwh * 1000.0 * max_soc

@@ -294,15 +294,6 @@ def test_scaled_inverter_ceiling_binds_and_is_backend_identical():
 class TestProjectedWeatherSequence:
     """A per-year weather sequence, used by the historical-weather scenarios."""
 
-    @staticmethod
-    def _inputs():
-        import tomllib
-
-        root = Path(__file__).resolve().parents[1]
-        config = tomllib.loads((root / "validation/article1/revision-0.6.1/article1-power-1c.toml").read_text())
-        config["simulation"]["years_projection"] = 2
-        return config
-
     def test_repeating_one_year_reproduces_the_repeated_tmy_run(self):
         """A sequence of identical years must be bit-identical to the default."""
         from breos.optimization import _evaluate_projected_design_metrics

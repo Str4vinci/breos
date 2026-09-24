@@ -7,12 +7,17 @@ was built for: a parity test over a scenario that never exercises the
 discharge cap passes without testing anything, so every branch case asserts
 its own precondition before asserting parity.
 
-The forthcoming publication study cases do not cover this ground. C1 and C5
-have no battery, and none of C1-C5 sets a discharge power limit.
+The forthcoming publication study cases do not cover this ground. C1 and C6
+have no battery, and the rest reach their charge and discharge caps only
+through the symmetric 1 C ``power_limit_c_rate`` the configs now set, which
+derives both limits from capacity rather than exercising the absolute caps and
+the binding behaviour the scenarios below are built to vary.
 """
 
 from __future__ import annotations
 
+import math
+import random
 import sys
 from pathlib import Path
 
@@ -323,22 +328,114 @@ def test_derating_floor_is_actually_reached_at_extreme_cold():
     assert python_out[0]["Battery_Energy"].max() < warm_out[0]["Battery_Energy"].max() * 0.6
 
 
+_FOLDED_SQUARE_SEED = 20260915
+_FOLDED_SQUARE_ATTEMPTS = 4_000_000
+
+
+def _reference_square(value: float) -> float:
+    """The spelling ``calculate_dc_ac_power`` uses; CPython routes it to libm ``pow``."""
+    return value**2
+
+
+def _folded_square(value: float) -> float:
+    """The spelling LLVM folds a constant exponent down to."""
+    return value * value
+
+
+def _pvwatts_ac_power(dc_power: float, ac_rating: float, efficiency: float, square) -> float:
+    """Mirror of the reference part-load curve with the square left pluggable.
+
+    The square is the only thing that differs between the two spellings, so
+    running a candidate input through both says whether the disagreement
+    reaches the AC power the parity assertion compares or is swallowed on the
+    way by the curve and the clamps.
+    """
+    from breos.inverter import (
+        PVWATTS_CURVE_CONSTANT,
+        PVWATTS_CURVE_LINEAR,
+        PVWATTS_CURVE_QUADRATIC,
+        PVWATTS_REFERENCE_EFFICIENCY,
+    )
+
+    pdc0 = ac_rating / efficiency
+    dc_used = min(dc_power, pdc0)
+    zeta = dc_used / pdc0
+    return max(
+        0.0,
+        min(
+            dc_used,
+            ac_rating,
+            (efficiency / PVWATTS_REFERENCE_EFFICIENCY)
+            * pdc0
+            * (PVWATTS_CURVE_QUADRATIC * square(zeta) + PVWATTS_CURVE_LINEAR * zeta + PVWATTS_CURVE_CONSTANT),
+        ),
+    )
+
+
+def _find_folded_square_discriminator(ac_rating: float, efficiency: float) -> float | None:
+    """Search for a ``dc_power`` whose zeta separates libm ``pow`` from ``x * x``.
+
+    Which inputs separate the two is a property of the platform's libm, so a
+    pinned literal only discriminates on the machine it was found on. The
+    input this test used to carry separates them under glibc and not under
+    Apple's libm, where all three spellings agree. Both libms do have
+    separating inputs -- on the order of one zeta in a thousand -- so search
+    for one on the machine running the test rather than ship one.
+
+    A candidate clears three bars. The reference spelling ``zeta ** 2`` has to
+    agree with the explicit ``math.pow`` the kernel calls, or the backends
+    would part company for a reason this guard is not about. The folded square
+    has to disagree with it, which is the fold being observable at all. And
+    the disagreement has to survive into the AC power, which costs about two
+    orders of magnitude: roughly one candidate in 10^5 gets through.
+    """
+    pdc0 = ac_rating / efficiency
+    rng = random.Random(_FOLDED_SQUARE_SEED)
+    for _ in range(_FOLDED_SQUARE_ATTEMPTS):
+        # Below pdc0 so zeta stays on the curve, and clear of the low end where
+        # the curve is clamped flat at zero and discriminates nothing.
+        dc_power = rng.uniform(0.05 * pdc0, pdc0)
+        zeta = min(dc_power, pdc0) / pdc0
+        if _reference_square(zeta) != math.pow(zeta, 2.0) or _reference_square(zeta) == _folded_square(zeta):
+            continue
+        if _pvwatts_ac_power(dc_power, ac_rating, efficiency, _reference_square) != _pvwatts_ac_power(
+            dc_power, ac_rating, efficiency, _folded_square
+        ):
+            return dc_power
+    return None
+
+
 def test_zeta_squared_must_use_libm_pow_not_the_folded_square():
     """Pin the operation the bit-identity claim depends on.
 
     CPython evaluates ``zeta ** 2`` as a libm ``pow`` call. LLVM rewrites a
-    constant-exponent ``pow`` into ``x * x``, and for this input glibc's ``pow``
-    and the correctly rounded square differ by one ULP. Simplifying the kernel
-    back to ``zeta ** 2`` would reintroduce that difference, so this test fails
-    on exactly the input where it shows up.
+    constant-exponent ``pow`` into ``x * x``, and for some inputs libm's
+    ``pow`` and the correctly rounded square differ by one ULP. Simplifying
+    the kernel back to ``zeta ** 2`` would reintroduce that difference, so
+    this test drives the kernel with an input where it shows up.
+
+    BREOS promises no bit identity across platforms or libm versions. It does
+    promise it between the Python and numba backends on one machine, and that
+    is the claim this defends. A trajectory-level test will not do it: the bad
+    zeta rate is around 2.5e-6 and the outer clamps absorb most of what lands,
+    so whole simulated years stay bit-identical with the guard removed.
     """
     from breos.inverter import calculate_dc_ac_power
 
-    dc_power, ac_rating, efficiency = 5603.62164507142, 5400.0, 0.96
-    pdc0 = ac_rating / efficiency
-    zeta = min(dc_power, pdc0) / pdc0
-    # The premise: on this input the two spellings genuinely disagree.
-    assert zeta**2 != zeta * zeta, "input no longer distinguishes libm pow from the folded square"
+    ac_rating, efficiency = 5400.0, 0.96
+    dc_power = _find_folded_square_discriminator(ac_rating, efficiency)
+    if dc_power is None:
+        pytest.skip(
+            f"no input among {_FOLDED_SQUARE_ATTEMPTS} candidates separates this libm's pow from the "
+            "folded square; glibc and Apple libm both have such inputs, so this is worth looking into "
+            "rather than accepting"
+        )
+
+    # The premise: on this input the two spellings genuinely disagree, and the
+    # disagreement reaches the value asserted below.
+    assert _pvwatts_ac_power(dc_power, ac_rating, efficiency, _reference_square) != _pvwatts_ac_power(
+        dc_power, ac_rating, efficiency, _folded_square
+    ), "input no longer distinguishes libm pow from the folded square"
 
     kernel = _build_kernel()
     matrix = np.zeros((37, 1))
