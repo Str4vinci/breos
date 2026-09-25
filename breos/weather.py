@@ -1040,15 +1040,21 @@ def read_epw_file(
     if longitude is None:
         longitude = meta.get("longitude")
 
-    # Resample to 15-min if requested
-    if freq in ("15min", "15T", "15m"):
-        df = resample_to_15min(df, method="makima", latitude=latitude, longitude=longitude)
-
+    # EPW radiation is energy over the hour ending at the record's hour field
+    # (1-24); pvlib labels that hour at its start (0-23). Record the basis
+    # before resampling, so the 15-minute clear-sky scaling evaluates each
+    # hour at its midpoint and keeps the resampling provenance.
     df.attrs[_WEATHER_METADATA_KEY] = {
         "source": "EPW_file",
         "path": os.path.abspath(filepath),
+        "radiation_time_basis": "interval_mean",
+        "timestamp_label_basis": "left",
         "horizon": _unknown_horizon_metadata("epw"),
     }
+
+    # Resample to 15-min if requested
+    if freq in ("15min", "15T", "15m"):
+        df = resample_to_15min(df, method="makima", latitude=latitude, longitude=longitude)
 
     return df
 

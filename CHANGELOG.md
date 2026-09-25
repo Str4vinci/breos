@@ -257,6 +257,21 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   Non-leap years are unchanged. A 2028 Porto run with 8 modules and 5 kWh
   yields 19.4 kWh more PV than 2027, from the extra day.
 
+- EPW weather records its radiation time basis
+  ([#213](https://github.com/Str4vinci/breos/issues/213)). EPW radiation is
+  energy over the hour that ends at each record, and pvlib labels that hour at
+  its start, but `read_epw_file` recorded neither fact. The 15-minute
+  clear-sky resampling therefore evaluated each hour at its label rather than
+  its midpoint, `solar_position = "weather"` raised on EPW input, and the
+  metadata was attached after resampling, which lost the resampling
+  provenance. `read_epw_file` now records `radiation_time_basis =
+  "interval_mean"` and `timestamp_label_basis = "left"` before resampling.
+  **Results change for 15-minute EPW weather.** On a synthetic clear-sky EPW,
+  the mean error against the true 15-minute GHI falls from 27 to 1.6 W/m². On
+  the Amsterdam IWEC file with 10 modules, annual 15-minute GHI rises by 0.64%
+  and DC by 0.92% (4,425.96 to 4,466.35 kWh), with steps moving by up to
+  71 W/m². Hourly EPW runs with the default solar position are unchanged.
+
 ### Removed
 - Removed the optimizer's `costs.panel_wp` override. It priced the steady-state
   CAPEX at a nominal wattage instead of the selected module's rating, so the
