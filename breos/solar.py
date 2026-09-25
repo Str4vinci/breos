@@ -1065,6 +1065,7 @@ def calculate_pv_production_ac(
     inverter_loading_ratio: float = 1.25,
     inverter_efficiency: float = 0.96,
     verbose: bool = False,
+    loss_overrides: Optional[Dict[str, float]] = None,
     transposition_model: str = DEFAULT_TRANSPOSITION_MODEL,
     albedo: Optional[float] = None,
     surface_type: Optional[str] = None,
@@ -1098,6 +1099,8 @@ def calculate_pv_production_ac(
         inverter_loading_ratio: DC/AC ratio for inverter sizing
         inverter_efficiency: Nominal inverter efficiency
         verbose: Whether to print production summary
+        loss_overrides: Per-component PVWatts loss overrides (percent), as
+            for :func:`calculate_pv_production_dc`
 
     Returns:
         pd.Series with AC power production in Watts
@@ -1121,6 +1124,7 @@ def calculate_pv_production_ac(
         current_year=current_year,
         start_year=start_year,
         verbose=False,
+        loss_overrides=loss_overrides,
         **model_kwargs,
     )
 
@@ -1275,6 +1279,9 @@ def calculate_multi_array_production_breakdown(
     """Calculate combined DC production breakdown from multiple PV arrays.
 
     Each array is either fixed-tilt or tracking. Mixed configurations are supported.
+    An array with ``modules = 0`` contributes nothing, and a negative module
+    count raises ``ValueError``. When every array is empty, the result is zero
+    on the same time grid a non-empty array would use.
     """
     defaults = _model_option_kwargs(locals())
 
@@ -1288,7 +1295,10 @@ def calculate_multi_array_production_breakdown(
 
     for i, arr in enumerate(arrays):
         n_mod = arr.get("modules", 0)
-        if n_mod <= 0:
+        if n_mod < 0:
+            raise ValueError(f"Array {i + 1}: modules must be zero or positive, got {n_mod}")
+        if n_mod == 0:
+            # An empty array contributes nothing.
             continue
 
         mod_name = arr.get("module", "Generic_400W")
@@ -1363,7 +1373,10 @@ def calculate_multi_array_production_breakdown(
         breakdowns.append(breakdown)
 
     if not breakdowns:
-        zeros = pd.Series(0.0, index=weather_data.index, name="dc_power_W")
+        # The same grid a non-empty array is computed on, so an empty system
+        # lines up with the rest of the run.
+        times, _, _ = _prepare_solarpos_and_weather(weather_data, location, freq, solar_position)
+        zeros = pd.Series(0.0, index=times, name="dc_power_W")
         static_loss_info = resolve_pvwatts_losses(loss_overrides)
         return PVProductionBreakdown(
             horizontal_reference_dc=zeros.rename("horizontal_reference_dc_W"),

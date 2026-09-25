@@ -257,6 +257,14 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   Non-leap years are unchanged. A 2028 Porto run with 8 modules and 5 kWh
   yields 19.4 kWh more PV than 2027, from the extra day.
 
+- Two PV API gaps ([#220](https://github.com/Str4vinci/breos/issues/220)).
+  When every array in `calculate_multi_array_production_breakdown` is empty,
+  the zero result now uses the time grid a non-empty array uses; it kept the
+  weather's own index, so hourly weather at `freq="15min"` gave hourly
+  zeros. A negative module count raises instead of being skipped.
+  `calculate_pv_production_ac` accepts and forwards `loss_overrides`, like
+  every other production entry point. App results are unchanged.
+
 ### Removed
 - Removed the optimizer's `costs.panel_wp` override. It priced the steady-state
   CAPEX at a nominal wattage instead of the selected module's rating, so the
