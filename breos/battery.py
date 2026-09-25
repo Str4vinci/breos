@@ -1790,7 +1790,7 @@ def _simulate_core(
     results_directory: Optional[str] = None,
     initial_fec: float = 0.0,
     initial_calendar_seconds: float = 0.0,
-    initial_resistance_growth: float = 0.0,
+    initial_resistance_growth: Optional[float] = None,
     initial_cumulative_cycle_deg: float = 0.0,
     initial_cumulative_cal_deg: float = 0.0,
     degradation_engine: str = "native",
@@ -1901,10 +1901,11 @@ def _simulate_core(
     # calendar-based: DST days and trailing partial days shift/skip windows
     # by design; the compiled dispatch backend shares the convention.
     # The function argument is the multi-year continuation seam (used by the
-    # App's year loop); when left at its default the battery's configured
-    # starting resistance applies.
+    # App's year loop); when omitted the battery's configured starting
+    # resistance applies. A carried 0.0 is a value, not an omission: a
+    # replaced pack restarts at zero growth, not at the configured value.
     resistance_growth = (
-        initial_resistance_growth if initial_resistance_growth > 0.0 else battery_config.initial_resistance_growth
+        battery_config.initial_resistance_growth if initial_resistance_growth is None else initial_resistance_growth
     )
     # Charge/discharge efficiencies, derated by resistance growth when the
     # fade model is enabled; updated after each daily degradation step.
@@ -2114,7 +2115,7 @@ def simulate_energy_balance(
     results_directory: Optional[str] = None,
     initial_fec: float = 0.0,
     initial_calendar_seconds: float = 0.0,
-    initial_resistance_growth: float = 0.0,
+    initial_resistance_growth: Optional[float] = None,
     initial_cumulative_cycle_deg: float = 0.0,
     initial_cumulative_cal_deg: float = 0.0,
     degradation_engine: str = "native",
@@ -2203,7 +2204,7 @@ def simulate_energy_balance_summary(
     results_directory: Optional[str] = None,
     initial_fec: float = 0.0,
     initial_calendar_seconds: float = 0.0,
-    initial_resistance_growth: float = 0.0,
+    initial_resistance_growth: Optional[float] = None,
     initial_cumulative_cycle_deg: float = 0.0,
     initial_cumulative_cal_deg: float = 0.0,
     degradation_engine: str = "native",

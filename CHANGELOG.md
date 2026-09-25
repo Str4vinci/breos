@@ -257,6 +257,18 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   Non-leap years are unchanged. A 2028 Porto run with 8 modules and 5 kWh
   yields 19.4 kWh more PV than 2027, from the extra day.
 
+- Three small fixes from the 0.7 audit
+  ([#175](https://github.com/Str4vinci/breos/issues/175)). The CLI reports a
+  missing optional extra (such as Numba for `execution_backend = "numba"`) as
+  an error line instead of a traceback. A carried resistance growth of 0.0,
+  which a replaced pack starts from, is used as given: it was read as "not
+  supplied" and replaced by `BatteryConfig.initial_resistance_growth`, so
+  a direct API caller chaining years restarted the new pack at the old
+  pack's resistance. App, Monte Carlo and the optimizer use a configured
+  value of 0 and are unchanged. Monte Carlo summaries leave out infinite
+  values as they do NaN, so an infinite LCOE no longer makes the mean
+  infinite and the spread NaN; `count` shows how many runs remain.
+
 ### Removed
 - Removed the optimizer's `costs.panel_wp` override. It priced the steady-state
   CAPEX at a nominal wattage instead of the selected module's rating, so the
