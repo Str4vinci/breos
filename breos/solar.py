@@ -1065,7 +1065,6 @@ def calculate_pv_production_ac(
     inverter_loading_ratio: float = 1.25,
     inverter_efficiency: float = 0.96,
     verbose: bool = False,
-    loss_overrides: Optional[Dict[str, float]] = None,
     transposition_model: str = DEFAULT_TRANSPOSITION_MODEL,
     albedo: Optional[float] = None,
     surface_type: Optional[str] = None,
@@ -1078,6 +1077,7 @@ def calculate_pv_production_ac(
     gcr: float = 0.35,
     pvrow_height: Optional[float] = None,
     pvrow_pitch: Optional[float] = None,
+    loss_overrides: Optional[Dict[str, float]] = None,
 ) -> pd.Series:
     """
     Calculate PV AC production from weather data.
