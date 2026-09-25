@@ -257,6 +257,20 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   Non-leap years are unchanged. A 2028 Porto run with 8 modules and 5 kWh
   yields 19.4 kWh more PV than 2027, from the extra day.
 
+- Payback has one rule across the library, the plots and the tools
+  ([#218](https://github.com/Str4vinci/breos/issues/218)). The new
+  `economics.find_payback_year_exact` interpolates where cumulative
+  discounted savings cross zero; Monte Carlo and the optimizer each had a
+  private copy of it, and `plot_breakeven`, `plot_breakeven_comparison`,
+  `tools/compare_results.py` and `tools/batch_compare_locations.py` had
+  three more rules. `create_cost_plots` uses `find_payback_year`. The Monte
+  Carlo payback distribution and CDF plot `payback_year_exact` instead of
+  the integer year, so a run that pays back at 4.2 years is binned at 4.2,
+  not 5. `plot_breakeven_comparison` now marks a design that pays back in
+  its first row. `format_years_months` in `breos.utils` replaces two copies
+  of the "4y 2m" formatter. Reported App, Monte Carlo and optimizer numbers
+  are unchanged.
+
 ### Removed
 - Removed the optimizer's `costs.panel_wp` override. It priced the steady-state
   CAPEX at a nominal wattage instead of the selected module's rating, so the

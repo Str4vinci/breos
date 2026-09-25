@@ -232,3 +232,12 @@ def get_steps_per_year(freq: str, leap_year: bool = False) -> int:
     """
     days = 366 if leap_year else 365
     return get_steps_per_day(freq) * days
+
+
+def format_years_months(years_decimal) -> str:
+    """Format a decimal number of years as ``"4y"`` or ``"4y 2m"``; None is ``"N/A"``."""
+    if years_decimal is None:
+        return "N/A"
+    years = int(years_decimal)
+    months = int((years_decimal - years) * 12)
+    return f"{years}y" if months == 0 else f"{years}y {months}m"

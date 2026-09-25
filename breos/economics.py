@@ -726,6 +726,31 @@ def find_payback_year(cost_projection: pd.DataFrame) -> Optional[int]:
     return None
 
 
+def find_payback_year_exact(cost_projection: pd.DataFrame) -> Optional[float]:
+    """Return the discounted payback year, interpolated linearly between years.
+
+    The fractional counterpart of :func:`find_payback_year`: where cumulative
+    discounted savings cross zero. A projection whose first row already has
+    non-negative savings pays back at that row's year. Returns None when the
+    savings never cross zero, or the projection has no savings column.
+    """
+    if "Savings_Cumulative_NPV" not in cost_projection.columns or cost_projection.empty:
+        return None
+
+    savings = cost_projection["Savings_Cumulative_NPV"].to_numpy(dtype=float)
+    years = cost_projection["Year"].to_numpy(dtype=float)
+    if savings[0] >= 0.0:
+        return float(years[0])
+
+    for idx in range(1, len(savings)):
+        if savings[idx] >= 0.0 and savings[idx - 1] < 0.0:
+            delta = savings[idx] - savings[idx - 1]
+            if abs(delta) < 1e-12:
+                return float(years[idx])
+            return float(years[idx - 1] - savings[idx - 1] / delta)
+    return None
+
+
 def calculate_lcoe(
     total_investment: float,
     annual_production_kwh: float,

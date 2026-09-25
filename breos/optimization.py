@@ -19,6 +19,7 @@ from breos.economics import (
     calculate_lcoe_from_projection,
     cost_analysis_projection,
     cost_params_from_config,
+    find_payback_year_exact,
     replacement_fraction_from_steps,
     system_ac_production_power,
 )
@@ -547,25 +548,6 @@ def _replacement_event_cost(batt_spec: Dict[str, Any], battery_kwh: float, stora
     return replacement_cost
 
 
-def _interpolate_payback_year(cost_projection: pd.DataFrame) -> Optional[float]:
-    """Interpolate discounted payback from cumulative NPV savings."""
-    if "Savings_Cumulative_NPV" not in cost_projection.columns or cost_projection.empty:
-        return None
-
-    savings = cost_projection["Savings_Cumulative_NPV"].to_numpy(dtype=float)
-    years = cost_projection["Year"].to_numpy(dtype=float)
-    if savings[0] >= 0.0:
-        return float(years[0])
-
-    for idx in range(1, len(savings)):
-        if savings[idx] >= 0.0 and savings[idx - 1] < 0.0:
-            delta = savings[idx] - savings[idx - 1]
-            if abs(delta) < 1e-12:
-                return float(years[idx])
-            return float(years[idx - 1] - savings[idx - 1] / delta)
-    return None
-
-
 def _projected_year_summary(
     *,
     year: int,
@@ -860,7 +842,7 @@ def _evaluate_projected_design_metrics(
         emissions_params=emissions_params,
     )
     payback_year = cost_projection.attrs.get("payback_year")
-    payback_exact = _interpolate_payback_year(cost_projection)
+    payback_exact = find_payback_year_exact(cost_projection)
     metrics: Dict[str, Any] = {
         **_summarize_projected_lifetime_metrics(yearly_summary_df),
         "Projected_NPV_Eur": float(cost_projection["Savings_Cumulative_NPV"].iloc[-1]),
