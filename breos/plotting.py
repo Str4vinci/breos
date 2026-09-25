@@ -39,12 +39,19 @@ def _check_matplotlib():
 
 
 def _result_instants(results_df: pd.DataFrame) -> pd.DatetimeIndex:
-    """Return the absolute time of each results row, from ``Datetime`` or the index.
+    """Return the absolute time of each results row.
 
-    A CSV of a run in a DST zone mixes UTC offsets; those rows are read as UTC
+    Read from a ``Datetime`` column, else the ``Datetime_UTC`` column that
+    :func:`breos.io.load_results` adds to a DST-zone CSV, else the index. A
+    CSV of a run in a DST zone mixes UTC offsets; those rows are read as UTC
     instants, which step evenly where their wall-clock labels do not.
     """
-    values = results_df["Datetime"] if "Datetime" in results_df.columns else results_df.index
+    if "Datetime" in results_df.columns:
+        values = results_df["Datetime"]
+    elif "Datetime_UTC" in results_df.columns:
+        values = results_df["Datetime_UTC"]
+    else:
+        values = results_df.index
     if pd.api.types.is_datetime64_any_dtype(values):
         return pd.DatetimeIndex(values)
     try:

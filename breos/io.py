@@ -194,7 +194,10 @@ def load_results(filepath: Union[str, os.PathLike], parse_dates: Union[bool, Lis
     Returns:
         DataFrame with loaded results. A ``Datetime`` column becomes the index,
         on the results' own calendar: a run in a DST zone, whose CSV mixes
-        UTC offsets, keeps each row's wall-clock time.
+        UTC offsets, keeps each row's wall-clock time. That index repeats an
+        hour in autumn and skips one in spring, so such a file also gets a
+        ``Datetime_UTC`` column with each row's absolute time, which the
+        energy plots use to find the step length.
     """
     if Path(filepath).suffix == ".txt":
         df = pd.read_csv(filepath, sep="\t", parse_dates=parse_dates)
@@ -203,7 +206,14 @@ def load_results(filepath: Union[str, os.PathLike], parse_dates: Union[bool, Lis
 
     # Try to set Datetime as index if present
     if "Datetime" in df.columns:
-        df["Datetime"] = local_datetime_index(df["Datetime"])
+        raw = df["Datetime"]
+        df["Datetime"] = local_datetime_index(raw)
+        if df["Datetime"].dt.tz is None and not pd.api.types.is_datetime64_any_dtype(raw):
+            # Naive text parses to the same values as UTC; text with mixed
+            # offsets does not, and its wall-clock index loses the instants.
+            instants = pd.to_datetime(raw, utc=True)
+            if not (instants.dt.tz_localize(None).to_numpy() == df["Datetime"].to_numpy()).all():
+                df["Datetime_UTC"] = instants
         df.set_index("Datetime", inplace=True)
 
     return df

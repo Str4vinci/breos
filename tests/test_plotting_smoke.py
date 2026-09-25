@@ -587,3 +587,42 @@ def test_load_results_reads_dst_csvs_and_path_inputs(battery_run, tmp_path):
         loaded.index.to_numpy(), pd.DatetimeIndex(berlin["Datetime"]).tz_localize(None).to_numpy()
     )
     assert load_results(str(path)).index.equals(loaded.index)
+    # Mixed offsets: the wall-clock index repeats an hour, so the instants are kept.
+    assert loaded["Datetime_UTC"].is_monotonic_increasing
+    assert loaded["Datetime_UTC"].diff().dropna().nunique() == 1
+
+
+def test_load_results_keeps_one_zone_files_as_they_were(battery_run, tmp_path):
+    from breos.io import load_results
+
+    path = tmp_path / "results.csv"
+    battery_run.results.to_csv(path, index=False)
+
+    loaded = load_results(path)
+
+    assert "Datetime_UTC" not in loaded.columns
+    assert str(loaded.index.tz) == "UTC"
+
+
+@pytest.mark.parametrize(
+    ("call", "expected"),
+    [
+        (lambda r, d: plotting.monthly_graphs(r, d), "monthly_energy.png"),
+        (lambda r, d: plotting.yearly_graphs(r, d), "yearly_energy.png"),
+        (lambda r, d: plotting.plot_monthly_comparison(r, d, scenario_name="dst"), "monthly_comparison_dst.png"),
+        (lambda r, d: plotting.plot_monthly_balance(r, d), "monthly_balance.png"),
+    ],
+    ids=["monthly", "yearly", "monthly_comparison", "monthly_balance"],
+)
+def test_energy_plots_read_dst_csvs_loaded_with_load_results(battery_run, tmp_path, call, expected):
+    # load_results turns the Datetime column into a wall-clock index, which
+    # repeats an hour in autumn; the plots used to find no regular step.
+    from breos.io import load_results
+
+    berlin = battery_run.results.copy()
+    berlin["Datetime"] = pd.DatetimeIndex(berlin["Datetime"]).tz_convert("Europe/Berlin")
+    path = tmp_path / "results.csv"
+    berlin.to_csv(path, index=False)
+
+    call(load_results(path), str(tmp_path))
+    _assert_written(tmp_path, expected)
