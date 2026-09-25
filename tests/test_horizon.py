@@ -257,3 +257,26 @@ def test_interval_mean_beam_is_kept_while_the_mid_interval_sun_clears_the_horizo
     assert by_label["dni"].iloc[0] == 0.0
     assert by_midpoint["dni"].iloc[0] == 600.0
     assert by_metadata["dni"].iloc[0] == 600.0
+
+
+@pytest.mark.parametrize("dtype", ["float64", "float32", "int64"])
+def test_apply_horizon_accepts_any_numeric_irradiance_dtype(dtype):
+    # Open-Meteo returns float32 columns; pandas 3 refused to write the
+    # float64 shaded GHI into them (#210).
+    idx = pd.date_range("2025-06-01", periods=48, freq="h", tz="UTC")
+    location = Location(41.15, -8.61)
+    reference = location.get_clearsky(idx)[["ghi", "dni", "dhi"]]
+    reference.attrs["breos_weather_metadata"] = {"horizon": {"status": "not_applied"}}
+    weather = reference.round().astype(dtype)
+    weather.attrs = reference.attrs
+    profile = [[0, 30], [90, 30], [180, 30], [270, 30]]
+
+    shaded = apply_terrain_horizon_profile(weather, location, profile, freq="h")
+    expected = apply_terrain_horizon_profile(weather.astype("float64"), location, profile, freq="h")
+
+    assert shaded.attrs["breos_weather_metadata"]["horizon"]["profile"]["shaded_timesteps"] == 9
+    assert shaded["dhi"].dtype == weather["dhi"].dtype
+    assert shaded["ghi"].dtype == ("float32" if dtype == "float32" else "float64")
+    np.testing.assert_allclose(
+        shaded[["ghi", "dni", "dhi"]].to_numpy(dtype=float), expected[["ghi", "dni", "dhi"]], rtol=1e-6
+    )
