@@ -268,7 +268,8 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   or 35,136 at 15 minutes). A leap-year file on a common-year run drops its
   29 February instead of losing 31 December. Profiles are also checked when
   they load: values must be finite and non-negative, and a timestamp column,
-  when present, must step evenly, so a local-clock file with a DST gap raises.
+  when present, must parse on every row and step evenly, so a local-clock file
+  with a DST gap, or one malformed stamp, raises.
   E-REDES profiles 4, 5, and 6 select their own `BTN A/B/C - Wh` column by exact
   name; profile 6 used to fall back to the first `BTN` column, which is BTN A.
   **Results change for leap-year runs on the E-REDES 15-minute file.** On

@@ -332,7 +332,7 @@ def _validate_profile_rows(df: pd.DataFrame, timestamps: pd.Series, native_freq:
     # or a missing row would otherwise move later rows by one step.
     if pd.api.types.is_numeric_dtype(timestamps):
         return
-    stamps = _parse_profile_timestamps(timestamps)
+    stamps = _parse_profile_timestamps(timestamps, csv_file)
     if stamps is None:
         return
     step = pd.Timedelta(pd.tseries.frequencies.to_offset(native_freq))
@@ -345,13 +345,30 @@ def _validate_profile_rows(df: pd.DataFrame, timestamps: pd.Series, native_freq:
         )
 
 
-def _parse_profile_timestamps(timestamps: pd.Series) -> Optional[pd.Series]:
-    """Parse ISO or day-first (E-REDES) timestamps; None if neither fits every row."""
+def _parse_profile_timestamps(timestamps: pd.Series, csv_file: Path) -> Optional[pd.Series]:
+    """Parse ISO or day-first (E-REDES) timestamps.
+
+    Returns None when no row parses as a timestamp in either format: the first
+    column is then a label, not a time column. Raises when some rows parse and
+    others do not, because a damaged time column cannot be checked for gaps.
+    """
+    best = None
     for kwargs in ({"format": "ISO8601"}, {"format": "%d/%m/%Y %H:%M"}):
-        stamps = pd.to_datetime(timestamps, errors="coerce", **kwargs)
-        if stamps.notna().all():
-            return stamps
-    return None
+        # utc=True compares offset-aware stamps as instants, so a file whose
+        # offsets change at DST is evenly spaced; naive stamps are unchanged.
+        stamps = pd.to_datetime(timestamps, errors="coerce", utc=True, **kwargs)
+        if best is None or stamps.notna().sum() > best.notna().sum():
+            best = stamps
+    if not best.notna().any():
+        return None
+    malformed = np.flatnonzero(best.isna().to_numpy())
+    if malformed.size:
+        row = int(malformed[0])
+        raise ValueError(
+            f"Load profile {csv_file} has {malformed.size} timestamps that do not parse "
+            f"(first at data row {row}: {timestamps.iloc[row]!r})."
+        )
+    return best
 
 
 def scale_to_annual_consumption(

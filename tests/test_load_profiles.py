@@ -222,3 +222,31 @@ def test_external_profile_rejects_irregular_timestamps(tmp_path):
 
     with pytest.raises(ValueError, match="not evenly spaced at h: data row 2000"):
         load_profile("8", 1000, rlp_directory=str(tmp_path))
+
+
+def test_external_profile_rejects_a_damaged_timestamp_column(tmp_path):
+    # One malformed stamp used to switch the spacing check off, so this file's
+    # missing hour went through.
+    stamps = pd.date_range("2025-01-01", periods=8761, freq="h").delete(2000).strftime("%Y-%m-%d %H:%M:%S").tolist()
+    stamps[5000] = "not a time"
+    lines = ["DateTime,Electrical Consumption [W]", *(f"{t},100" for t in stamps)]
+    (tmp_path / "REE_2026_2.0TD_1000kwh_hourly.csv").write_text("\n".join(lines) + "\n")
+
+    with pytest.raises(ValueError, match="1 timestamps that do not parse.*data row 5000: 'not a time'"):
+        load_profile("8", 1000, rlp_directory=str(tmp_path))
+
+
+def test_external_profile_with_a_label_column_skips_the_spacing_check(tmp_path):
+    lines = ["Label,Electrical Consumption [W]", *(f"row{i},100" for i in range(8760))]
+    (tmp_path / "REE_2026_2.0TD_1000kwh_hourly.csv").write_text("\n".join(lines) + "\n")
+
+    assert len(load_profile("8", 1000, rlp_directory=str(tmp_path))) == 8760
+
+
+def test_external_profile_with_dst_offsets_is_evenly_spaced(tmp_path):
+    # Offsets change at DST; the instants still step by one hour.
+    stamps = pd.date_range("2025-01-01", periods=8760, freq="h", tz="Europe/Lisbon").astype(str)
+    lines = ["DateTime,Electrical Consumption [W]", *(f"{t},100" for t in stamps)]
+    (tmp_path / "REE_2026_2.0TD_1000kwh_hourly.csv").write_text("\n".join(lines) + "\n")
+
+    assert len(load_profile("8", 1000, rlp_directory=str(tmp_path))) == 8760
