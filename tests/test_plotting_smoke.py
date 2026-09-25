@@ -203,11 +203,6 @@ def test_plot_battery_soh_timeseries(battery_run, tmp_path):
     _assert_written(tmp_path, "battery_soh_timeseries_battery.png")
 
 
-@pytest.mark.xfail(
-    raises=TypeError,
-    strict=True,
-    reason="start_date/end_date are compared as naive timestamps against the tz-aware App index; not yet filed",
-)
 def test_plot_battery_soh_timeseries_date_window(battery_run, tmp_path):
     plotting.plot_battery_soh_timeseries(
         battery_run.results, str(tmp_path), start_date="2023-03-01", end_date="2023-06-30"
@@ -531,3 +526,64 @@ def test_plot_tariff_comparison():
 @pytest.mark.skip(reason=_DEAD_PVBAT_REASON)
 def test_plot_tariff_comparison_manual():
     pass
+
+
+def _berlin_csv_frame(frame, tmp_path, name):
+    """Round-trip a results frame through CSV on Berlin time: text with two UTC offsets."""
+    berlin = frame.copy()
+    berlin["Datetime"] = pd.DatetimeIndex(berlin["Datetime"]).tz_convert("Europe/Berlin")
+    path = tmp_path / f"{name}.csv"
+    berlin.to_csv(path, index=False)
+    return pd.read_csv(path)
+
+
+@pytest.mark.parametrize(
+    ("call", "expected"),
+    [
+        (lambda r, d: plotting.monthly_graphs(r, d), "monthly_energy.png"),
+        (lambda r, d: plotting.yearly_graphs(r, d), "yearly_energy.png"),
+        (lambda r, d: plotting.weekly_graphs(r, 13, d), "week_13_profile.png"),
+        (lambda r, d: plotting.plot_cell_temperature(r, d), "battery_cell_temperature.png"),
+        (
+            lambda r, d: plotting.plot_battery_soh_timeseries(r, d, scenario_name="dst"),
+            "battery_soh_timeseries_dst.png",
+        ),
+        (lambda r, d: plotting.plot_monthly_comparison(r, d, scenario_name="dst"), "monthly_comparison_dst.png"),
+        (lambda r, d: plotting.plot_monthly_balance(r, d), "monthly_balance.png"),
+    ],
+    ids=["monthly", "yearly", "weekly", "cell_temperature", "soh", "monthly_comparison", "monthly_balance"],
+)
+def test_plots_read_dst_crossing_result_csvs(battery_run, tmp_path, call, expected):
+    # A DST-zone run writes two UTC offsets, and pandas 3 refused to parse
+    # them as one column (#216).
+    results = _berlin_csv_frame(battery_run.results, tmp_path, "results")
+    assert results["Datetime"].str.endswith("+02:00").any() and results["Datetime"].str.endswith("+01:00").any()
+
+    call(results, str(tmp_path))
+    _assert_written(tmp_path, expected)
+
+
+def test_degradation_plots_read_dst_crossing_csvs(battery_run, tmp_path):
+    degradation = _berlin_csv_frame(battery_run.degradation, tmp_path, "degradation")
+
+    plotting.degradation_plots(degradation, str(tmp_path))
+    plotting.plot_resistance_and_efficiency(degradation, str(tmp_path))
+    _assert_written(tmp_path, "battery_degradation_soh.png", "battery_resistance_growth.png")
+
+
+def test_load_results_reads_dst_csvs_and_path_inputs(battery_run, tmp_path):
+    from breos.io import load_results
+
+    berlin = battery_run.results.copy()
+    berlin["Datetime"] = pd.DatetimeIndex(berlin["Datetime"]).tz_convert("Europe/Berlin")
+    path = tmp_path / "results.csv"
+    berlin.to_csv(path, index=False)
+
+    loaded = load_results(path)  # a Path, which used to raise AttributeError
+
+    assert len(loaded) == len(berlin)
+    # Each row keeps its Berlin wall-clock time.
+    np.testing.assert_array_equal(
+        loaded.index.to_numpy(), pd.DatetimeIndex(berlin["Datetime"]).tz_localize(None).to_numpy()
+    )
+    assert load_results(str(path)).index.equals(loaded.index)

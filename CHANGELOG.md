@@ -257,6 +257,17 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   Non-leap years are unchanged. A 2028 Porto run with 8 modules and 5 kWh
   yields 19.4 kWh more PV than 2027, from the extra day.
 
+- `load_results` and the plotting functions read result CSVs from a run in a
+  DST zone, and `load_results` accepts a path-like
+  ([#216](https://github.com/Str4vinci/breos/issues/216)). Such a CSV mixes UTC
+  offsets, and pandas 3 refused to parse it as one column, so
+  `load_results` and nine plotting call sites raised. They now parse it on
+  the results' own wall clock through `utils.local_datetime_index`, and the
+  energy plots take their step length from the rows' UTC instants.
+  `plot_battery_soh_timeseries` reads `start_date` and `end_date` on the
+  results' clock; with a timezone-aware index they used to raise. Results
+  are unchanged.
+
 ### Removed
 - Removed the optimizer's `costs.panel_wp` override. It priced the steady-state
   CAPEX at a nominal wattage instead of the selected module's rating, so the

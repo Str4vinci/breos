@@ -14,6 +14,8 @@ from typing import Any, Dict, List, Optional, Union
 import numpy as np
 import pandas as pd
 
+from breos.utils import local_datetime_index
+
 
 def export_results(
     results_df: pd.DataFrame,
@@ -181,25 +183,27 @@ def _economics_summary_metrics(cost_projection_df: Optional[pd.DataFrame]) -> Di
     return metrics
 
 
-def load_results(filepath: str, parse_dates: Union[bool, List[str]] = True) -> pd.DataFrame:
+def load_results(filepath: Union[str, os.PathLike], parse_dates: Union[bool, List[str]] = True) -> pd.DataFrame:
     """
     Load simulation results from CSV or TXT file.
 
     Args:
-        filepath: Path to the results file
+        filepath: Path to the results file, as a string or path-like
         parse_dates: Whether to parse datetime columns (True, False, or list of column names)
 
     Returns:
-        DataFrame with loaded results
+        DataFrame with loaded results. A ``Datetime`` column becomes the index,
+        on the results' own calendar: a run in a DST zone, whose CSV mixes
+        UTC offsets, keeps each row's wall-clock time.
     """
-    if filepath.endswith(".txt"):
+    if Path(filepath).suffix == ".txt":
         df = pd.read_csv(filepath, sep="\t", parse_dates=parse_dates)
     else:
         df = pd.read_csv(filepath, parse_dates=parse_dates)
 
     # Try to set Datetime as index if present
     if "Datetime" in df.columns:
-        df["Datetime"] = pd.to_datetime(df["Datetime"])
+        df["Datetime"] = local_datetime_index(df["Datetime"])
         df.set_index("Datetime", inplace=True)
 
     return df
