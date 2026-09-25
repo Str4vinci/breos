@@ -257,6 +257,14 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   Non-leap years are unchanged. A 2028 Porto run with 8 modules and 5 kWh
   yields 19.4 kWh more PV than 2027, from the extra day.
 
+- `apply_terrain_horizon_profile` finds irradiance under the same names as
+  the resampler and the PV model
+  ([#211](https://github.com/Str4vinci/breos/issues/211)), so BREOS's own
+  Open-Meteo output (`shortwave_radiation`, `direct_normal_irradiance`,
+  `diffuse_radiation`) no longer raises there. The three copies of the alias
+  list are now one, `breos.utils.IRRADIANCE_COLUMN_ALIASES`, matched without
+  regard to case. Results are unchanged.
+
 ### Removed
 - Removed the optimizer's `costs.panel_wp` override. It priced the steady-state
   CAPEX at a nominal wattage instead of the selected module's rating, so the
