@@ -27,6 +27,7 @@ from breos.degradation.engine import BlastEngine
 from breos.economics import system_ac_production_power
 from breos.inverter import _calculate_dc_ac_power_arrays, calculate_dc_ac_power
 from breos.solar import dc_to_ac
+from tests.energy_conservation import assert_energy_conservation
 
 
 class TestBatteryConfig:
@@ -1159,59 +1160,6 @@ class TestEnergyLedger:
         )
         return results, total_pv, config
 
-    @staticmethod
-    def _assert_conservation(results, config):
-        np.testing.assert_allclose(
-            results["PV_DC"],
-            results["PV_DC_To_Battery"] + results["PV_DC_To_Inverter"] + results["PV_DC_Curtailed"],
-            atol=1e-8,
-        )
-        np.testing.assert_allclose(
-            results["Houseload"],
-            results["PV_AC_To_Load"] + results["Battery_AC_To_Load"] + results["Import_From_Grid"],
-            atol=1e-8,
-        )
-        np.testing.assert_allclose(results["PV_AC_Export"], results["Sell_To_Grid"], atol=1e-8)
-        np.testing.assert_allclose(
-            results["Battery_Charge_Stored"],
-            results["Battery_Charge_Input"] * config.charge_efficiency,
-            atol=1e-8,
-        )
-        np.testing.assert_allclose(
-            results["Battery_Energy_Delta"],
-            results["Battery_Charge_Stored"]
-            - results["Battery_Discharge_DC"]
-            - results["Standby_Loss"]
-            - results["Capacity_Window_Loss"]
-            - results["Battery_Replacement_Energy_Removed"]
-            + results["Battery_Replacement_Energy_Added"],
-            atol=1e-8,
-        )
-        np.testing.assert_allclose(
-            results["Inverter_Loss"],
-            results["PV_Direct_Inverter_Loss"] + results["Battery_Inverter_Loss"],
-            atol=1e-8,
-        )
-        # PV and replacement-added energy are the external inputs. Delivered
-        # energy, losses, net battery movement, and energy removed with a
-        # replaced pack are outputs.
-        rhs = (
-            results["PV_AC_To_Load"]
-            + results["PV_AC_Export"]
-            + results["Battery_AC_To_Load"]
-            + results["PV_DC_Curtailed"]
-            + results["Battery_Charge_Loss"]
-            + results["Battery_Discharge_Loss"]
-            + results["PV_Direct_Inverter_Loss"]
-            + results["Battery_Inverter_Loss"]
-            + results["Standby_Loss"]
-            + results["Capacity_Window_Loss"]
-            + results["Battery_Replacement_Energy_Removed"]
-            + results["Battery_Energy_Delta"]
-        )
-        lhs = results["PV_DC"] + results["Battery_Replacement_Energy_Added"]
-        np.testing.assert_allclose(lhs, rhs, atol=1e-7)
-
     @pytest.mark.parametrize("freq,repeats", [("h", 1), ("15min", 4)])
     def test_per_step_and_annual_conservation(self, freq, repeats):
         pv = np.repeat([0.0, 7000.0, 2000.0, 0.0, 9000.0, 0.0], repeats)
@@ -1224,7 +1172,7 @@ class TestEnergyLedger:
             max_charge_power_w=1200.0,
             max_discharge_power_w=900.0,
         )
-        self._assert_conservation(results, config)
+        assert_energy_conservation(results, config)
         hours = 0.25 if freq == "15min" else 1.0
         assert total_pv == pytest.approx(results["PV_Production"].sum() * hours)
         assert total_pv == pytest.approx(
@@ -1238,7 +1186,7 @@ class TestEnergyLedger:
             nominal_energy_wh=2000.0,
             inverter_ac_capacity_w=2000.0,
         )
-        self._assert_conservation(results, config)
+        assert_energy_conservation(results, config)
         assert results["PV_DC_To_Battery"].iloc[1] > 0.0
         assert results["PV_AC_Export"].iloc[1] > 0.0
         assert results["PV_DC_Curtailed"].iloc[1] > 0.0
@@ -1252,7 +1200,7 @@ class TestEnergyLedger:
             max_charge_power_w=1000.0,
             max_discharge_power_w=700.0,
         )
-        self._assert_conservation(results, config)
+        assert_energy_conservation(results, config)
         inverter_output = results["PV_AC_To_Load"] + results["PV_AC_Export"] + results["Battery_AC_To_Load"]
         assert inverter_output.max() <= 2000.0 + 1e-8
         assert results["PV_DC_To_Battery"].max() <= 1000.0 + 1e-8
@@ -1302,7 +1250,7 @@ class TestEnergyLedger:
             discharge_efficiency=0.9,
             inverter_efficiency=0.8,
         )
-        self._assert_conservation(results, config)
+        assert_energy_conservation(results, config)
         assert results["Battery_PV_Origin_Energy_Beginning"].iloc[0] == 0.0
         assert results["Battery_PV_Origin_Energy_End"].iloc[1] > 0.0
         assert results["PV_Origin_Battery_AC_To_Load"].iloc[2] > 0.0
@@ -1314,7 +1262,7 @@ class TestEnergyLedger:
 
     def test_standby_is_separate_from_capacity_window_loss(self):
         results, _, config = self._run([0.0], [0.0], standby_loss_wh=20.0)
-        self._assert_conservation(results, config)
+        assert_energy_conservation(results, config)
         assert results["Standby_Loss"].iloc[0] == pytest.approx(20.0)
         assert results["Battery_Standby_Loss"].iloc[0] == pytest.approx(20.0)
         assert results["Capacity_Window_Loss"].iloc[0] == 0.0
@@ -1330,7 +1278,7 @@ class TestEnergyLedger:
             temperature_series=pd.Series([25.0, 0.0], index=idx),
             freq="h",
         )
-        self._assert_conservation(results, config)
+        assert_energy_conservation(results, config)
         assert results["Capacity_Window_Loss"].iloc[1] > 0.0
         assert results["Battery_Energy_End"].iloc[1] < results["Battery_Energy_Beginning"].iloc[1]
 
@@ -1373,7 +1321,7 @@ class TestEnergyLedger:
             enable_replacement=True,
             eol_percentage=0.7,
         )
-        self._assert_conservation(results, config)
+        assert_energy_conservation(results, config)
         final = results.iloc[-1]
         assert bool(final["Battery_Replaced"])
         assert final["Battery_Replacement_Energy_Removed"] == pytest.approx(400.0)
@@ -1439,7 +1387,7 @@ class TestEnergyLedger:
         assert results["Battery_Energy_End"].iloc[0] == pytest.approx(450.0)
         assert results["Battery_Energy_Delta"].iloc[0] == pytest.approx(-250.0)
         assert results["Battery_PV_Origin_Energy_End"].iloc[0] == pytest.approx(225.0)
-        self._assert_conservation(results, config)
+        assert_energy_conservation(results, config)
 
     def test_passed_energy_and_pv_origin_continue_exactly(self):
         config = BatteryConfig(
