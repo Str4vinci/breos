@@ -29,6 +29,10 @@ def _projection(savings, first_year=1):
         ([-300.0, -100.0, 200.0], 2 + 1 / 3, 3),
         ([50.0, 100.0], 1.0, 1),
         ([-300.0, -200.0], None, None),
+        # Zero savings is not payback, under either rule.
+        ([-100.0, 0.0, -10.0], None, None),
+        ([0.0, -10.0], None, None),
+        ([-100.0, 0.0, 0.0, 50.0], 3.0, 4),
     ],
 )
 def test_exact_and_integer_payback_agree_on_the_crossing(savings, exact, integer):
@@ -37,6 +41,13 @@ def test_exact_and_integer_payback_agree_on_the_crossing(savings, exact, integer
     assert find_payback_year_exact(projection) == (pytest.approx(exact) if exact is not None else None)
     assert find_payback_year(projection) == integer
     assert find_payback_year_exact(projection.drop(columns="Savings_Cumulative_NPV")) is None
+
+
+def test_exact_payback_scales_the_crossing_by_the_year_spacing():
+    projection = pd.DataFrame({"Year": [1, 3], "Savings_Cumulative_NPV": [-100.0, 100.0]})
+
+    assert find_payback_year_exact(projection) == pytest.approx(2.0)
+    assert find_payback_year(projection) == 3
 
 
 def _captured_vlines(monkeypatch):
