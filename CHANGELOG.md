@@ -257,6 +257,11 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   Non-leap years are unchanged. A 2028 Porto run with 8 modules and 5 kWh
   yields 19.4 kWh more PV than 2027, from the extra day.
 
+- Two plotting defects ([#219](https://github.com/Str4vinci/breos/issues/219)).
+  `plot_validation_multi_system` called `plt.cm.get_cmap`, which matplotlib
+  3.11 removed, and now uses the colormap registry. `plot_cell_temperature`
+  drew months without data at 0 °C; they are now gaps.
+
 ### Removed
 - Removed the optimizer's `costs.panel_wp` override. It priced the steady-state
   CAPEX at a nominal wattage instead of the selected module's rating, so the
