@@ -181,7 +181,6 @@ def _dispatch_day_kernel(
     cap_charge_in_wh,
     cap_discharge_ac_wh,
     inv_cap_ac_wh,
-    cap_wh_is_infinite,
     thermal_resistance_kw,
     hours_per_step,
     pow_two,
@@ -371,12 +370,7 @@ def _dispatch_day_kernel(
         pv_origin = max(0.0, origin_before_dispatch - pv_origin_discharge_dc + charge_stored)
         pv_origin = min(pv_origin, battery_energy)
 
-        if cap_wh_is_infinite:
-            # Match the scalar unlimited-inverter compatibility path,
-            # including the post-inverter AC correction.
-            pv_production = (pv_dc_power - lg_pv_dc_curtailed) * inv_eff * ac_output_scale
-        else:
-            pv_production = pv_dc_power - lg_pv_dc_curtailed - lg_pv_direct_inverter_loss
+        pv_production = pv_dc_power - lg_pv_dc_curtailed - lg_pv_direct_inverter_loss
         battery_energy_delta = battery_energy - battery_energy_beginning
 
         if has_battery and thermal_resistance_kw > 0:
