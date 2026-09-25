@@ -120,35 +120,26 @@ def optimize_tilt(
         surface_azimuth = default_azimuth(location.latitude)
     tilts = np.linspace(tilt_range[0], tilt_range[1], n_points)
     results = []
-    successful_evaluations = 0
 
+    # A failing candidate raises: scoring it as zero production, as this used
+    # to, could move the reported optimum.
     for tilt in tilts:
-        try:
-            dc_power = calculate_pv_production_dc(
-                weather_data=weather_data,
-                location=location,
-                tilt=tilt,
-                surface_azimuth=surface_azimuth,
-                n_modules=n_modules,
-                pv_params=pv_params,
-                freq=freq,
-                verbose=False,
-                **(model_options or {}),
-            )
-            total_production = dc_power.sum() * get_hours_per_step(freq) / 1000  # kWh (DC)
-            results.append({"tilt": tilt, "production_kwh": total_production})
-            successful_evaluations += 1
+        dc_power = calculate_pv_production_dc(
+            weather_data=weather_data,
+            location=location,
+            tilt=tilt,
+            surface_azimuth=surface_azimuth,
+            n_modules=n_modules,
+            pv_params=pv_params,
+            freq=freq,
+            verbose=False,
+            **(model_options or {}),
+        )
+        total_production = dc_power.sum() * get_hours_per_step(freq) / 1000  # kWh (DC)
+        results.append({"tilt": tilt, "production_kwh": total_production})
 
-            if verbose:
-                print(f"  Tilt {tilt:.1f}°: {total_production:.1f} kWh")
-
-        except Exception as e:
-            if verbose:
-                print(f"  Tilt {tilt:.1f}°: Error - {e}")
-            results.append({"tilt": tilt, "production_kwh": 0})
-
-    if successful_evaluations == 0:
-        raise RuntimeError("Tilt optimization failed for every evaluated angle")
+        if verbose:
+            print(f"  Tilt {tilt:.1f}°: {total_production:.1f} kWh")
 
     results_df = pd.DataFrame(results)
     optimal_idx = results_df["production_kwh"].idxmax()
@@ -198,47 +189,43 @@ def optimize_battery_size(
 
     results = []
 
+    # A failing candidate raises rather than being dropped from the comparison.
     for size_wh in battery_sizes_wh:
         config = BatteryConfig(nominal_energy_wh=size_wh)
 
-        try:
-            df, total_pv, summary, _, _, _ = simulate_energy_balance(
-                pv_dc=pv_dc,
-                houseload=houseload,
-                battery_config=config,
-                start_time=start_time,
-                end_time=end_time,
-                freq=freq,
-                debug=False,
-                execution_backend=execution_backend,
-            )
+        df, total_pv, summary, _, _, _ = simulate_energy_balance(
+            pv_dc=pv_dc,
+            houseload=houseload,
+            battery_config=config,
+            start_time=start_time,
+            end_time=end_time,
+            freq=freq,
+            debug=False,
+            execution_backend=execution_backend,
+        )
 
-            grid_independence = summary["Grid Independence [%]"].iloc[0]
-            import_pct = summary["Import [%]"].iloc[0]
-            total_pv_kwh = summary["Total PV [kWh]"].iloc[0]
-            export_kwh = summary["Sell [kWh]"].iloc[0]
-            self_consumption_pct = ((total_pv_kwh - export_kwh) / total_pv_kwh) * 100 if total_pv_kwh > 0 else 0.0
+        grid_independence = summary["Grid Independence [%]"].iloc[0]
+        import_pct = summary["Import [%]"].iloc[0]
+        total_pv_kwh = summary["Total PV [kWh]"].iloc[0]
+        export_kwh = summary["Sell [kWh]"].iloc[0]
+        self_consumption_pct = ((total_pv_kwh - export_kwh) / total_pv_kwh) * 100 if total_pv_kwh > 0 else 0.0
 
-            results.append(
-                {
-                    "battery_size_wh": size_wh,
-                    "battery_size_kwh": size_wh / 1000,
-                    "grid_independence": grid_independence,
-                    "import_percent": import_pct,
-                    "self_consumption": self_consumption_pct,
-                }
-            )
+        results.append(
+            {
+                "battery_size_wh": size_wh,
+                "battery_size_kwh": size_wh / 1000,
+                "grid_independence": grid_independence,
+                "import_percent": import_pct,
+                "self_consumption": self_consumption_pct,
+            }
+        )
 
-            if verbose:
-                print(f"  {size_wh / 1000:.1f} kWh: {grid_independence:.1f}% grid independence")
-
-        except Exception as e:
-            if verbose:
-                print(f"  {size_wh / 1000:.1f} kWh: Error - {e}")
+        if verbose:
+            print(f"  {size_wh / 1000:.1f} kWh: {grid_independence:.1f}% grid independence")
 
     results_df = pd.DataFrame(results)
     if results_df.empty:
-        raise RuntimeError("No battery sizes could be evaluated.")
+        raise ValueError("battery_sizes_wh must name at least one battery size")
 
     if objective == "max_self_consumption":
         optimal_idx = results_df["self_consumption"].idxmax()
@@ -1203,6 +1190,22 @@ def _snap_to_grid_within_bounds(values: np.ndarray, step: float, lower: float, u
 try:
     from pymoo.core.problem import ElementwiseProblem
     from pymoo.core.repair import Repair
+    from pymoo.core.termination import Termination
+
+    class _MinGenerationTermination(Termination):
+        """Hold another termination's progress at zero until ``minimum`` generations.
+
+        Defined at module level so an optimizer result that stores it pickles.
+        """
+
+        def __init__(self, termination, minimum: int) -> None:
+            super().__init__()
+            self.termination = termination
+            self.minimum = max(1, int(minimum))
+
+        def _update(self, algorithm):
+            progress = self.termination.update(algorithm)
+            return 0.0 if algorithm.n_gen < self.minimum else progress
 
     class DiscreteGridRepair(Repair):
         def _do(self, problem, pop, **kwargs):
@@ -1581,21 +1584,10 @@ def _build_multi_objective_termination(n_gen: int, early_stop: Any):
     if early_stop.get("enabled", True) is False:
         return ("n_gen", n_gen), None
 
-    from pymoo.core.termination import Termination
     from pymoo.termination.collection import TerminationCollection
     from pymoo.termination.ftol import MultiObjectiveSpaceTermination
     from pymoo.termination.max_gen import MaximumGenerationTermination
     from pymoo.termination.robust import RobustTermination
-
-    class _MinGenerationTermination(Termination):
-        def __init__(self, termination, minimum: int) -> None:
-            super().__init__()
-            self.termination = termination
-            self.minimum = max(1, int(minimum))
-
-        def _update(self, algorithm):
-            progress = self.termination.update(algorithm)
-            return 0.0 if algorithm.n_gen < self.minimum else progress
 
     ftol = float(early_stop.get("ftol", 0.0025))
     if ftol <= 0.0:

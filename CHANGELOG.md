@@ -257,6 +257,16 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   Non-leap years are unchanged. A 2028 Porto run with 8 modules and 5 kWh
   yields 19.4 kWh more PV than 2027, from the extra day.
 
+- `optimize_tilt` and `optimize_battery_size` raise when a candidate fails,
+  and an optimizer result run with early stopping pickles
+  ([#217](https://github.com/Str4vinci/breos/issues/217)). The sweep helpers
+  scored a failing tilt as zero production and dropped a failing battery
+  size, so one PV-chain error could move the reported optimum without a
+  message. The early-stopping termination was a local class, so
+  `details["pymoo_result"]` could not be pickled. Results of sweeps whose
+  candidates all run are unchanged. `optimize_battery_size` with no sizes
+  raises `ValueError` instead of `RuntimeError`.
+
 ### Removed
 - Removed the optimizer's `costs.panel_wp` override. It priced the steady-state
   CAPEX at a nominal wattage instead of the selected module's rating, so the
