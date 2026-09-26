@@ -63,6 +63,27 @@ class TestPVModuleParams:
         params = _module_params(gamma_pmp=-0.30)
         assert params.gamma_pmp == -0.30
 
+    def test_derived_temperature_coefficients_follow_supported_mutation(self):
+        # get_module() returns the documented mutable copy, so derived CEC
+        # inputs must continue to reflect edits made to its datasheet fields.
+        params = get_module("Suntech_STP550S_STC")
+        params.Isc = 15.0
+        params.Voc = 50.0
+        params.T_Pmax_pct = -0.4
+
+        assert params.alpha_sc == pytest.approx(0.05 * 15.0 / 100.0)
+        assert params.beta_voc == pytest.approx(-0.26 * 50.0 / 100.0)
+        assert params.gamma_pmp == pytest.approx(-0.4)
+
+        params.alpha_sc_abs = 0.6
+        assert params.alpha_sc == pytest.approx(0.6)
+        params.alpha_sc_abs = None
+        assert params.alpha_sc == pytest.approx(0.05 * 15.0 / 100.0)
+
+        explicit = _module_params(gamma_pmp=-0.30)
+        explicit.T_Pmax_pct = -0.4
+        assert explicit.gamma_pmp == pytest.approx(-0.30)
+
     def test_bifaciality_is_optional_metadata(self):
         assert _module_params().bifaciality is None
         assert _module_params(bifaciality=0.8).bifaciality == 0.8
@@ -86,6 +107,40 @@ class TestPVModuleParams:
     def test_bifaciality_must_be_a_physical_ratio(self, bifaciality):
         with pytest.raises(ValueError, match="bifaciality must be between"):
             _module_params(bifaciality=bifaciality)
+
+    @pytest.mark.parametrize(
+        ("field", "value"),
+        [
+            ("Mpp", 0.0),
+            ("Vmp", float("inf")),
+            ("Imp", float("nan")),
+            ("Voc", -1.0),
+            ("Isc", True),
+            ("T_Pmax_pct", float("nan")),
+            ("T_Pmax_pct", 0.0),
+            ("Mpp", 500.0),
+            ("alpha_sc_abs", float("inf")),
+            ("gamma_pmp", float("nan")),
+            ("N_Cells", 0),
+            ("N_Cells", 144.5),
+            ("Module_Efficiency", 0.0),
+            ("Module_Efficiency", 1.01),
+            ("NOCT", 101.0),
+            ("bifaciality", float("nan")),
+            ("celltype", ""),
+        ],
+    )
+    def test_datasheet_values_are_validated(self, field, value):
+        with pytest.raises(ValueError, match=field):
+            _module_params(**{field: value})
+
+    def test_invalid_mutation_is_rejected_before_it_changes_the_module(self):
+        params = _module_params()
+
+        with pytest.raises(ValueError, match="Mpp"):
+            params.Mpp = float("nan")
+
+        assert params.Mpp == 400
 
 
 class TestDcToAc:

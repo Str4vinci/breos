@@ -8,6 +8,7 @@ using pvlib, with support for both hourly and 15-minute time resolutions.
 import math
 import warnings
 from dataclasses import dataclass
+from numbers import Integral, Real
 from typing import Any, Dict, List, Optional
 
 import numpy as np
@@ -167,29 +168,94 @@ class PVModuleParams:
     bifaciality: Optional[float] = None  # Metadata: rear/front maximum-power ratio (inert by itself)
     NOCT: Optional[float] = None  # Metadata: nominal operating cell temperature (°C), required by noct-sam
 
-    def __post_init__(self):
-        if self.bifaciality is not None and not 0.0 < self.bifaciality <= 1.0:
-            raise ValueError("bifaciality must be between 0 (exclusive) and 1 (inclusive)")
+    _POSITIVE_FIELDS = frozenset({"Mpp", "Vmp", "Imp", "Voc", "Isc"})
+    _FINITE_FIELDS = frozenset({"T_Pmax_pct", "T_Voc_pct", "T_Isc_pct", "alpha_sc_abs", "beta_voc_abs", "gamma_pmp"})
+    _MPP_RELATIVE_TOLERANCE = 0.02
 
-        # 1. HANDLE CURRENT (alpha_sc)
+    def __setattr__(self, name: str, value) -> None:
+        """Keep mutable datasheet fields and their derived coefficients in sync."""
+        ready = getattr(self, "_module_params_ready", False)
+        if name in self._POSITIVE_FIELDS:
+            self._validate_number(name, value, minimum=0.0, minimum_strict=True)
+        elif name in self._FINITE_FIELDS:
+            if value is not None or name in {"T_Pmax_pct", "T_Voc_pct", "T_Isc_pct"}:
+                self._validate_number(name, value)
+            if name == "T_Pmax_pct" and value is not None and value >= 0:
+                raise ValueError("T_Pmax_pct must be negative")
+        elif name == "N_Cells":
+            if isinstance(value, (bool, np.bool_)) or not isinstance(value, Integral) or value <= 0:
+                raise ValueError("N_Cells must be a positive integer")
+        elif name == "Module_Efficiency" and value is not None:
+            self._validate_number(name, value, minimum=0.0, maximum=1.0, minimum_strict=True)
+        elif name == "NOCT" and value is not None:
+            self._validate_number(name, value, minimum=0.0, maximum=100.0, minimum_strict=True)
+        elif name == "bifaciality" and value is not None:
+            try:
+                self._validate_number(name, value, minimum=0.0, maximum=1.0, minimum_strict=True)
+            except ValueError as exc:
+                raise ValueError("bifaciality must be between 0 (exclusive) and 1 (inclusive)") from exc
+        elif name == "celltype" and (not isinstance(value, str) or not value.strip()):
+            raise ValueError("celltype must be a non-empty string")
+
+        object.__setattr__(self, name, value)
+        if not ready:
+            return
+
+        if name in {"Isc", "T_Isc_pct", "alpha_sc_abs"}:
+            object.__setattr__(self, "alpha_sc", self._resolved_alpha_sc())
+        elif name in {"Voc", "T_Voc_pct", "beta_voc_abs"}:
+            object.__setattr__(self, "beta_voc", self._resolved_beta_voc())
+
+        if name == "gamma_pmp":
+            explicit = value is not None
+            object.__setattr__(self, "_gamma_pmp_explicit", explicit)
+            if not explicit:
+                object.__setattr__(self, "gamma_pmp", self.T_Pmax_pct)
+        elif name == "T_Pmax_pct" and not self._gamma_pmp_explicit:
+            object.__setattr__(self, "gamma_pmp", value)
+
+    @staticmethod
+    def _validate_number(
+        name: str,
+        value,
+        *,
+        minimum: Optional[float] = None,
+        maximum: Optional[float] = None,
+        minimum_strict: bool = False,
+        maximum_strict: bool = False,
+    ) -> None:
+        if isinstance(value, (bool, np.bool_)) or not isinstance(value, Real) or not math.isfinite(float(value)):
+            raise ValueError(f"{name} must be a finite number")
+        if minimum is not None and (value <= minimum if minimum_strict else value < minimum):
+            bracket = "greater than" if minimum_strict else "at least"
+            raise ValueError(f"{name} must be {bracket} {minimum}")
+        if maximum is not None and (value >= maximum if maximum_strict else value > maximum):
+            bracket = "less than" if maximum_strict else "at most"
+            raise ValueError(f"{name} must be {bracket} {maximum}")
+
+    def _resolved_alpha_sc(self) -> float:
         if self.alpha_sc_abs is not None:
-            # User provided absolute A/C directly
-            self.alpha_sc = self.alpha_sc_abs
-        else:
-            # Convert from %/C
-            self.alpha_sc = (self.T_Isc_pct * self.Isc) / 100
-        # 2. HANDLE VOLTAGE (beta_voc)
-        if self.beta_voc_abs is not None:
-            # User provided absolute V/C directly
-            self.beta_voc = self.beta_voc_abs
-        else:
-            # Convert from %/C
-            self.beta_voc = (self.T_Voc_pct * self.Voc) / 100
+            return float(self.alpha_sc_abs)
+        return float((self.T_Isc_pct * self.Isc) / 100)
 
-        # 3. HANDLE POWER (gamma_pmp)
-        # Power is almost always used as %/C in pvlib models, passed as unitless decimal or %
-        if self.gamma_pmp is None:
-            self.gamma_pmp = self.T_Pmax_pct
+    def _resolved_beta_voc(self) -> float:
+        if self.beta_voc_abs is not None:
+            return float(self.beta_voc_abs)
+        return float((self.T_Voc_pct * self.Voc) / 100)
+
+    def __post_init__(self):
+        mpp_from_datasheet = self.Vmp * self.Imp
+        if not math.isclose(self.Mpp, mpp_from_datasheet, rel_tol=self._MPP_RELATIVE_TOLERANCE):
+            raise ValueError(
+                f"Mpp must match Vmp * Imp within {self._MPP_RELATIVE_TOLERANCE:.0%} for a datasheet STC point"
+            )
+        explicit_gamma = self.gamma_pmp is not None
+        object.__setattr__(self, "_gamma_pmp_explicit", explicit_gamma)
+        if not explicit_gamma:
+            object.__setattr__(self, "gamma_pmp", self.T_Pmax_pct)
+        object.__setattr__(self, "alpha_sc", self._resolved_alpha_sc())
+        object.__setattr__(self, "beta_voc", self._resolved_beta_voc())
+        object.__setattr__(self, "_module_params_ready", True)
 
 
 @dataclass(frozen=True)

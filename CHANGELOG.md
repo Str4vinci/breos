@@ -450,6 +450,10 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   values as they do NaN, so an infinite LCOE no longer makes the mean
   infinite and the spread NaN; `count` shows how many runs remain.
 
+- Four more findings from the 0.7 audit ([#175](https://github.com/Str4vinci/breos/issues/175)) are fixed. Importing `breos.plotting` no longer changes Matplotlib's process-wide backend. The replacement fraction now points to the end of the interval in which the old pack ran. Several reported financial values in the hourly App golden change by €0.01.
+
+  `PVModuleParams` rejects non-finite or nonphysical datasheet values, checks that `Mpp` matches `Vmp * Imp` within 2%, and requires `T_Pmax_pct < 0`. Edits to source fields keep `alpha_sc`, `beta_voc`, and the default `gamma_pmp` current. The PV-only Monte Carlo cache records its PV arrays and inverter settings, and rejects a mismatched inverter at simulation time. It keeps read-only copies of the PV input and conversion arrays. Load-only scaling keeps the cache. PV scaling clears it.
+
 ### Removed
 - Removed the optimizer's `costs.panel_wp` override. It priced the steady-state
   CAPEX at a nominal wattage instead of the selected module's rating, so the

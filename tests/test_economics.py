@@ -402,10 +402,12 @@ class TestReplacementBookingTime:
     """
 
     def test_step_fraction_locates_the_swap_within_its_year(self):
-        # Hourly year, swap on day 109: step 2616 of 8760.
-        assert replacement_fraction_from_steps([2616], 8760) == pytest.approx(0.29863, abs=1e-5)
+        # A replacement flagged on an interval happens at that interval's end.
+        assert replacement_fraction_from_steps([0], 4) == pytest.approx(0.25)
+        # Hourly year, the interval at index 2616 ends at step 2617 of 8760.
+        assert replacement_fraction_from_steps([2616], 8760) == pytest.approx(2617 / 8760)
         # The same instant on a 15-minute timebase is the same fraction.
-        assert replacement_fraction_from_steps([2616 * 4], 8760 * 4) == pytest.approx(0.29863, abs=1e-5)
+        assert replacement_fraction_from_steps([2616 * 4 + 3], 8760 * 4) == pytest.approx(2617 / 8760)
 
     def test_year_without_a_swap_has_no_fraction(self):
         assert np.isnan(replacement_fraction_from_steps([], 8760))
@@ -435,7 +437,7 @@ class TestReplacementBookingTime:
         fractions = replacement_fraction_by_year(years, replaced)
 
         assert fractions.index.tolist() == [2025]
-        assert fractions.loc[2025] == pytest.approx(0.5)
+        assert fractions.loc[2025] == pytest.approx(0.75)
 
 
 class TestReplacementBookingInProjection:
