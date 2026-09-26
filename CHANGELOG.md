@@ -356,6 +356,15 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   unchanged: the App always rates the inverter, and the optimizer scores
   from the AC ledger even with `dc_ac_ratio = 0`.
 
+- `apply_terrain_horizon_profile` accepts `float32` and integer irradiance
+  columns ([#210](https://github.com/Str4vinci/breos/issues/210)). Open-Meteo
+  data arrives as `float32`, and pandas 3 raised `TypeError` when the shaded
+  `float64` GHI was written back. A float column now keeps its dtype,
+  including the nullable pandas `Float32` and `Float64`, and an integer
+  column is widened to `float64` (nullable `Int64` to `Float64`). Missing
+  nullable values count as zero irradiance, like `NaN`. Results for `float64`
+  weather, which is what the App passes, are unchanged.
+
 ### Removed
 - Removed the optimizer's `costs.panel_wp` override. It priced the steady-state
   CAPEX at a nominal wattage instead of the selected module's rating, so the
