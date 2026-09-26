@@ -1,6 +1,7 @@
 """Tests for the public API facade (breos.App)."""
 
 import json
+import math
 
 import pandas as pd
 import pytest
@@ -8,6 +9,7 @@ import pytest
 import breos
 import breos.app as app_module
 from breos.app import App
+from breos.app_config import merge_defaults, validate_config
 from breos.load_profiles import load_profile as real_load_profile
 
 # ---------------------------------------------------------------------------
@@ -16,64 +18,280 @@ from breos.load_profiles import load_profile as real_load_profile
 
 
 class TestAppValidation:
-    def test_missing_location(self):
-        with pytest.raises(ValueError, match="location"):
-            App({"n_modules": 10, "annual_consumption_kwh": 4000})
+    BASE = {"location": "porto", "n_modules": 10, "annual_consumption_kwh": 4000}
 
-    def test_missing_n_modules(self):
-        with pytest.raises(ValueError, match="n_modules"):
-            App({"location": "porto", "annual_consumption_kwh": 4000})
+    @pytest.mark.parametrize("key", ["location", "n_modules", "annual_consumption_kwh"])
+    def test_missing_required_key(self, key):
+        with pytest.raises(ValueError, match=key):
+            App({k: v for k, v in self.BASE.items() if k != key})
 
-    def test_missing_consumption(self):
-        with pytest.raises(ValueError, match="annual_consumption_kwh"):
-            App({"location": "porto", "n_modules": 10})
-
-    def test_invalid_location_key(self):
-        with pytest.raises(ValueError, match="Unknown location"):
-            App({"location": "atlantis", "n_modules": 10, "annual_consumption_kwh": 4000})
-
-    def test_invalid_n_modules_zero(self):
-        with pytest.raises(ValueError, match="n_modules"):
-            App({"location": "porto", "n_modules": 0, "annual_consumption_kwh": 4000})
-
-    def test_invalid_consumption_negative(self):
-        with pytest.raises(ValueError, match="annual_consumption_kwh"):
-            App({"location": "porto", "n_modules": 10, "annual_consumption_kwh": -100})
-
-    def test_invalid_resolution(self):
-        with pytest.raises(ValueError, match="resolution"):
-            App({"location": "porto", "n_modules": 10, "annual_consumption_kwh": 4000, "resolution": "30min"})
-
-    def test_noct_sam_requires_module_metadata_during_config_resolution(self):
-        with pytest.raises(ValueError, match="NOCT metadata"):
-            App(
+    @pytest.mark.parametrize(
+        ("overrides", "error", "match"),
+        [
+            pytest.param({"location": "atlantis"}, ValueError, "Unknown location", id="location-key"),
+            pytest.param({"location": {"longitude": -8.6}}, ValueError, "latitude", id="location-missing-latitude"),
+            pytest.param(
+                {"location": {"latitude": 91, "longitude": 0, "timezone": "UTC"}},
+                (TypeError, ValueError),
+                "location.latitude",
+                id="location-latitude",
+            ),
+            pytest.param(
+                {"location": {"latitude": 0, "longitude": -181, "timezone": "UTC"}},
+                (TypeError, ValueError),
+                "location.longitude",
+                id="location-longitude",
+            ),
+            pytest.param(
+                {"location": {"latitude": 0, "longitude": 0, "timezone": "Mars/Olympus"}},
+                (TypeError, ValueError),
+                "timezone",
+                id="location-timezone",
+            ),
+            pytest.param({"n_modules": 0}, ValueError, "n_modules", id="n_modules"),
+            pytest.param({"annual_consumption_kwh": -100}, ValueError, "annual_consumption_kwh", id="consumption"),
+            pytest.param(
+                {"annual_consumption_kwh": math.nan},
+                (TypeError, ValueError),
+                "annual_consumption_kwh",
+                id="consumption-nan",
+            ),
+            pytest.param({"resolution": "30min"}, ValueError, "resolution", id="resolution"),
+            pytest.param({"start_date": "2024-02-30"}, ValueError, "start_date", id="start_date"),
+            pytest.param({"calendar_model": "invented"}, ValueError, "calendar_model", id="calendar_model"),
+            pytest.param(
+                {"pv_module": "Suntech_STP550S_STC", "temperature_model": "noct-sam"},
+                ValueError,
+                "NOCT metadata",
+                id="noct-sam-metadata",
+            ),
+            pytest.param({"pv_module": "Imaginary_900W"}, ValueError, "Unknown PV module", id="pv_module"),
+            pytest.param(
+                {"pv_arrays": [{"modules": 4, "module": "Imaginary_900W"}]},
+                ValueError,
+                r"pv_arrays\[0\]",
+                id="pv_arrays-module",
+            ),
+            pytest.param({"cost_preset": "fake_preset"}, ValueError, "Unknown cost preset", id="cost_preset"),
+            pytest.param({"costs": 0.25}, TypeError, "'costs' must be a table/dict", id="costs-type"),
+            pytest.param(
+                {"costs": {"electricty_cost": 0.25}},
+                ValueError,
+                r"Unknown key 'costs\.electricty_cost'.*costs\.electricity_cost",
+                id="costs-unknown-key",
+            ),
+            *[
+                pytest.param(
+                    {"costs": {"electricity_cost": value}},
+                    (TypeError, ValueError),
+                    r"costs\.electricity_cost",
+                    id=f"costs-electricity_cost-{value}",
+                )
+                for value in (-0.01, float("inf"), True)
+            ],
+            pytest.param({"emissions_country": "XX"}, ValueError, "Unknown emissions country", id="emissions_country"),
+            pytest.param(
+                {"export_emissions_factor_gco2_kwh": -1.0},
+                (TypeError, ValueError),
+                "export_emissions_factor_gco2_kwh",
+                id="export_emissions_factor_gco2_kwh",
+            ),
+            # A negative battery must not silently reduce CAPEX
+            pytest.param({"battery_kwh": -5}, ValueError, "battery_kwh", id="battery_kwh"),
+            pytest.param({"battery_kwh": math.inf}, (TypeError, ValueError), "battery_kwh", id="battery_kwh-inf"),
+            pytest.param({"tilt": 120}, ValueError, "tilt", id="tilt"),
+            pytest.param({"azimuth": 400}, ValueError, "azimuth", id="azimuth"),
+            pytest.param({"transposition_model": "not_a_model"}, ValueError, "transposition_model", id="transposition"),
+            pytest.param({"iam_model": "not_a_model"}, ValueError, "iam_model", id="iam_model"),
+            pytest.param(
+                {"pv_arrays": [{"modules": 5, "transposition_model": "not_a_model"}]},
+                ValueError,
+                r"pv_arrays\[0\].transposition_model",
+                id="pv_arrays-transposition",
+            ),
+            pytest.param({"albedo": 1.5}, ValueError, "albedo", id="albedo"),
+            pytest.param({"surface_type": "lava"}, ValueError, "surface_type", id="surface_type"),
+            pytest.param({"albedo": 0.3, "surface_type": "snow"}, ValueError, "either", id="albedo-surface-conflict"),
+            pytest.param({"model_perez": "nope"}, ValueError, "model_perez", id="model_perez"),
+            pytest.param(
+                {"pv_arrays": [{"modules": 5, "albedo": 9}]},
+                ValueError,
+                r"pv_arrays\[0\].albedo",
+                id="pv_arrays-albedo",
+            ),
+            pytest.param({"inverter_efficiency": 1.5}, ValueError, "inverter_efficiency", id="inverter_efficiency"),
+            pytest.param(
+                {"inverter_efficiency": "0.96"},
+                (TypeError, ValueError),
+                "inverter_efficiency",
+                id="inverter_efficiency-str",
+            ),
+            pytest.param({"inverter_loading_ratio": 0}, ValueError, "inverter_loading_ratio", id="loading_ratio"),
+            pytest.param(
+                {"inverter_loading_ratio": True},
+                (TypeError, ValueError),
+                "inverter_loading_ratio",
+                id="loading_ratio-bool",
+            ),
+            pytest.param({"dc_coupled": False}, NotImplementedError, "DC-coupled", id="ac-coupled"),
+            pytest.param({"dc_coupled": "true"}, TypeError, "dc_coupled", id="dc_coupled-type"),
+            # Must fail at config load, not with a late RuntimeError mid-simulation
+            pytest.param({"projection_years": 0}, ValueError, "projection_years", id="projection_years"),
+            pytest.param(
+                {"projection_years": 2.5},
+                (TypeError, ValueError),
+                "projection_years",
+                id="projection_years-fraction",
+            ),
+            pytest.param({"inflation_rate": -1.0}, (TypeError, ValueError), "inflation_rate", id="inflation_rate"),
+            pytest.param({"discount_rate": -1.0}, (TypeError, ValueError), "discount_rate", id="discount_rate"),
+            pytest.param({"sell_price_inflation": 1.0}, ValueError, "sell_price_inflation", id="sell_price_inflation"),
+            pytest.param({"pv_degradation_rate": 1.5}, ValueError, "pv_degradation_rate", id="pv_degradation_rate"),
+            pytest.param({"pv_loss_overrides": {"shading": 200}}, ValueError, "pv_loss_overrides", id="loss-value"),
+            pytest.param({"pv_loss_overrides": 5.0}, TypeError, "pv_loss_overrides", id="loss-type"),
+            pytest.param(
+                {"battery_min_soc": 0.9, "battery_max_soc": 0.2},
+                ValueError,
+                "battery_min_soc",
+                id="battery-soc-window",
+            ),
+            pytest.param({"battery_rte": 1.5}, ValueError, "battery_rte", id="battery_rte"),
+            pytest.param({"battery_eol_percentage": 0.0}, ValueError, "battery_eol_percentage", id="battery_eol"),
+            pytest.param(
+                {"battery_max_charge_power_w": -1.0},
+                (TypeError, ValueError),
+                "battery_max_charge_power_w",
+                id="battery_max_charge_power_w",
+            ),
+            pytest.param(
+                {"battery_max_discharge_power_w": math.inf},
+                (TypeError, ValueError),
+                "battery_max_discharge_power_w",
+                id="battery_max_discharge_power_w",
+            ),
+            pytest.param(
+                {"battery_temperature": math.inf},
+                (TypeError, ValueError),
+                "battery_temperature",
+                id="battery_temperature",
+            ),
+            pytest.param({"battery_indoor_model": False}, TypeError, "battery_indoor_model", id="indoor-model-type"),
+            pytest.param(
+                {"battery_indoor_model": {"coupling_alpha": 1.1}},
+                ValueError,
+                "coupling_alpha",
+                id="indoor-model-coupling_alpha",
+            ),
+            # A typo such as `batery_kwh` must fail loudly instead of being silently
+            # dropped by merge_defaults (which would default the battery to 0).
+            pytest.param({"batery_kwh": 5.0}, ValueError, "Unknown config key.*batery_kwh", id="unknown-key"),
+            pytest.param({"degradation_engine": "magic"}, ValueError, "degradation_engine", id="degradation_engine"),
+            *[
+                pytest.param(
+                    {"battery_kwh": 5.0, "blast_model": "lfp_gr_250ah_prismatic", **engine},
+                    ValueError,
+                    "blast_model.*requires.*degradation_engine=blast",
+                    id=f"blast_model-without-blast-engine-{name}",
+                )
+                for name, engine in (("unset", {}), ("native", {"degradation_engine": "native"}))
+            ],
+            pytest.param(
                 {
-                    "location": "porto",
-                    "n_modules": 10,
-                    "annual_consumption_kwh": 4000,
-                    "pv_module": "Suntech_STP550S_STC",
-                    "temperature_model": "noct-sam",
-                }
-            )
-
-    def test_invalid_cost_preset(self):
-        with pytest.raises(ValueError, match="Unknown cost preset"):
-            App({"location": "porto", "n_modules": 10, "annual_consumption_kwh": 4000, "cost_preset": "fake_preset"})
-
-    def test_cost_overrides_must_be_a_table(self):
-        with pytest.raises(TypeError, match="'costs' must be a table/dict"):
-            App({"location": "porto", "n_modules": 10, "annual_consumption_kwh": 4000, "costs": 0.25})
-
-    def test_unknown_cost_override_is_actionable(self):
-        with pytest.raises(ValueError, match=r"Unknown key 'costs\.electricty_cost'.*costs\.electricity_cost"):
-            App(
+                    "battery_kwh": 5.0,
+                    "degradation_engine": "blast",
+                    "blast_model": "lfp_gr_250ah_prismatic",
+                    "montecarlo": {"n_runs": 10, "weather_file": "weather.csv"},
+                },
+                ValueError,
+                "Monte Carlo",
+                id="blast-montecarlo",
+            ),
+            pytest.param(
                 {
-                    "location": "porto",
-                    "n_modules": 10,
-                    "annual_consumption_kwh": 4000,
-                    "costs": {"electricty_cost": 0.25},
-                }
-            )
+                    "battery_kwh": 5.0,
+                    "degradation_engine": "blast",
+                    "blast_model": "lfp_gr_250ah_prismatic",
+                    "enable_resistance_fade": True,
+                },
+                ValueError,
+                "enable_resistance_fade",
+                id="blast-resistance-fade",
+            ),
+        ],
+    )
+    def test_invalid_config_fails_at_app_boundary(self, overrides, error, match):
+        with pytest.raises(error, match=match):
+            App({**self.BASE, **overrides})
+
+    @pytest.mark.parametrize("start_date", ["2025-07-01", "2025-01-15", "2025-12-31"])
+    def test_start_date_other_than_1_january_fails_early(self, start_date):
+        """Weather starts on 1 January, so a later start used to misplace the load.
+
+        The load profile's first row is 1 January. A July start stamped January's
+        winter demand onto July, against weather that still began in January.
+        """
+        with pytest.raises(ValueError, match=r"'start_date' must be 1 January .* use '2025-01-01'"):
+            App({**self.BASE, "start_date": start_date})
+
+    @pytest.mark.parametrize(
+        ("overrides", "error_type", "message"),
+        [
+            (
+                {"location": {"latitude": 91, "longitude": 0, "timezone": "UTC"}},
+                ValueError,
+                "'location.latitude' must be between -90 and 90",
+            ),
+            ({"pv_arrays": [{"modules": 0}]}, ValueError, "'pv_arrays[0].modules' must be >= 1"),
+            (
+                {"inverter_efficiency": 0},
+                ValueError,
+                "'inverter_efficiency' must be between 0 (exclusive) and 1 (inclusive)",
+            ),
+            ({"resolution": "30min"}, ValueError, "'resolution' must be 'h' or '15min'"),
+            ({"discount_rate": -1}, ValueError, "'discount_rate' must be greater than -1"),
+            (
+                {"battery_min_soc": 0.9, "battery_max_soc": 0.2},
+                ValueError,
+                "'battery_min_soc' and 'battery_max_soc' must satisfy 0 <= min < max <= 1",
+            ),
+        ],
+    )
+    def test_validation_subsystems_preserve_public_error_contract(self, overrides, error_type, message):
+        """Characterize exact public errors at each validation subsystem boundary."""
+        cfg = merge_defaults({**self.BASE, **overrides})
+
+        with pytest.raises(error_type) as exc_info:
+            validate_config(cfg)
+
+        assert str(exc_info.value) == message
+
+    def test_validation_preserves_blast_normalization_and_conflict_errors(self):
+        cfg = merge_defaults(
+            {**self.BASE, "degradation_engine": " BLAST ", "blast_model": "lfp_gr_250ah_prismatic", "battery_kwh": 5.0}
+        )
+
+        validate_config(cfg)
+
+        assert cfg["degradation_engine"] == "blast"
+
+        invalid = merge_defaults(
+            {
+                **self.BASE,
+                "degradation_engine": "blast",
+                "blast_model": "lfp_gr_250ah_prismatic",
+                "battery_kwh": 5.0,
+                "montecarlo": {},
+            }
+        )
+        with pytest.raises(ValueError) as exc_info:
+            validate_config(invalid)
+        assert str(exc_info.value) == "'degradation_engine=blast' is not supported with Monte Carlo yet"
+
+    def test_battery_temperature_and_indoor_model_are_accepted(self):
+        app = App({**self.BASE, "battery_temperature": 25.0, "battery_indoor_model": {"enabled": False}})
+
+        assert app._cfg["battery_temperature"] == 25.0
+        assert app._cfg["battery_indoor_model"] == {"enabled": False}
 
     def test_cost_overrides_resolve_through_app_facade(self):
         app = App(
@@ -94,206 +312,6 @@ class TestAppValidation:
         assert app._resolved.cost_params.battery_cost_per_kwh == 425.0
         assert app._resolved.cost_params.land_cost == 1000.0
         assert app._resolved.cost_params.module_cost_per_w == 0.125
-
-    @pytest.mark.parametrize("value", [-0.01, float("inf"), True])
-    def test_cost_overrides_must_be_non_negative_finite_numbers(self, value):
-        with pytest.raises((TypeError, ValueError), match=r"costs\.electricity_cost"):
-            App(
-                {
-                    "location": "porto",
-                    "n_modules": 10,
-                    "annual_consumption_kwh": 4000,
-                    "costs": {"electricity_cost": value},
-                }
-            )
-
-    def test_invalid_emissions_country(self):
-        with pytest.raises(ValueError, match="Unknown emissions country"):
-            App({"location": "porto", "n_modules": 10, "annual_consumption_kwh": 4000, "emissions_country": "XX"})
-
-    def test_custom_location_missing_fields(self):
-        with pytest.raises(ValueError, match="latitude"):
-            App({"location": {"longitude": -8.6}, "n_modules": 10, "annual_consumption_kwh": 4000})
-
-    def test_invalid_negative_battery_kwh(self):
-        # A negative battery must not silently reduce CAPEX
-        with pytest.raises(ValueError, match="battery_kwh"):
-            App({"location": "porto", "n_modules": 10, "annual_consumption_kwh": 4000, "battery_kwh": -5})
-
-    def test_invalid_top_level_tilt(self):
-        with pytest.raises(ValueError, match="tilt"):
-            App({"location": "porto", "n_modules": 10, "annual_consumption_kwh": 4000, "tilt": 120})
-
-    def test_invalid_top_level_azimuth(self):
-        with pytest.raises(ValueError, match="azimuth"):
-            App({"location": "porto", "n_modules": 10, "annual_consumption_kwh": 4000, "azimuth": 400})
-
-    def test_invalid_transposition_model(self):
-        with pytest.raises(ValueError, match="transposition_model"):
-            App(
-                {
-                    "location": "porto",
-                    "n_modules": 10,
-                    "annual_consumption_kwh": 4000,
-                    "transposition_model": "not_a_model",
-                }
-            )
-
-    def test_invalid_iam_model(self):
-        with pytest.raises(ValueError, match="iam_model"):
-            App(
-                {
-                    "location": "porto",
-                    "n_modules": 10,
-                    "annual_consumption_kwh": 4000,
-                    "iam_model": "not_a_model",
-                }
-            )
-
-    def test_invalid_per_array_transposition_model(self):
-        with pytest.raises(ValueError, match=r"pv_arrays\[0\].transposition_model"):
-            App(
-                {
-                    "location": "porto",
-                    "annual_consumption_kwh": 4000,
-                    "pv_arrays": [{"modules": 5, "transposition_model": "not_a_model"}],
-                }
-            )
-
-    def test_invalid_albedo(self):
-        with pytest.raises(ValueError, match="albedo"):
-            App({"location": "porto", "n_modules": 10, "annual_consumption_kwh": 4000, "albedo": 1.5})
-
-    def test_invalid_surface_type(self):
-        with pytest.raises(ValueError, match="surface_type"):
-            App({"location": "porto", "n_modules": 10, "annual_consumption_kwh": 4000, "surface_type": "lava"})
-
-    def test_albedo_and_surface_type_conflict(self):
-        with pytest.raises(ValueError, match="either"):
-            App(
-                {
-                    "location": "porto",
-                    "n_modules": 10,
-                    "annual_consumption_kwh": 4000,
-                    "albedo": 0.3,
-                    "surface_type": "snow",
-                }
-            )
-
-    def test_invalid_model_perez(self):
-        with pytest.raises(ValueError, match="model_perez"):
-            App({"location": "porto", "n_modules": 10, "annual_consumption_kwh": 4000, "model_perez": "nope"})
-
-    def test_invalid_per_array_albedo(self):
-        with pytest.raises(ValueError, match=r"pv_arrays\[0\].albedo"):
-            App(
-                {
-                    "location": "porto",
-                    "annual_consumption_kwh": 4000,
-                    "pv_arrays": [{"modules": 5, "albedo": 9}],
-                }
-            )
-
-    def test_invalid_inverter_efficiency(self):
-        with pytest.raises(ValueError, match="inverter_efficiency"):
-            App({"location": "porto", "n_modules": 10, "annual_consumption_kwh": 4000, "inverter_efficiency": 1.5})
-
-    def test_invalid_inverter_loading_ratio(self):
-        with pytest.raises(ValueError, match="inverter_loading_ratio"):
-            App({"location": "porto", "n_modules": 10, "annual_consumption_kwh": 4000, "inverter_loading_ratio": 0})
-
-    def test_invalid_projection_years(self):
-        # Must fail at config load, not with a late RuntimeError mid-simulation
-        with pytest.raises(ValueError, match="projection_years"):
-            App({"location": "porto", "n_modules": 10, "annual_consumption_kwh": 4000, "projection_years": 0})
-
-    def test_invalid_pv_degradation_rate(self):
-        with pytest.raises(ValueError, match="pv_degradation_rate"):
-            App({"location": "porto", "n_modules": 10, "annual_consumption_kwh": 4000, "pv_degradation_rate": 1.5})
-
-    def test_invalid_battery_soc_window(self):
-        with pytest.raises(ValueError, match="battery_min_soc"):
-            App(
-                {
-                    "location": "porto",
-                    "n_modules": 10,
-                    "annual_consumption_kwh": 4000,
-                    "battery_min_soc": 0.9,
-                    "battery_max_soc": 0.2,
-                }
-            )
-
-    def test_invalid_battery_rte(self):
-        with pytest.raises(ValueError, match="battery_rte"):
-            App(
-                {
-                    "location": "porto",
-                    "n_modules": 10,
-                    "annual_consumption_kwh": 4000,
-                    "battery_rte": 1.5,
-                }
-            )
-
-    def test_invalid_battery_eol(self):
-        with pytest.raises(ValueError, match="battery_eol_percentage"):
-            App(
-                {
-                    "location": "porto",
-                    "n_modules": 10,
-                    "annual_consumption_kwh": 4000,
-                    "battery_eol_percentage": 0.0,
-                }
-            )
-
-    def test_invalid_sell_price_inflation(self):
-        with pytest.raises(ValueError, match="sell_price_inflation"):
-            App(
-                {
-                    "location": "porto",
-                    "n_modules": 10,
-                    "annual_consumption_kwh": 4000,
-                    "sell_price_inflation": 1.0,
-                }
-            )
-
-    def test_invalid_pv_loss_overrides_value(self):
-        with pytest.raises(ValueError, match="pv_loss_overrides"):
-            App(
-                {
-                    "location": "porto",
-                    "n_modules": 10,
-                    "annual_consumption_kwh": 4000,
-                    "pv_loss_overrides": {"shading": 200},
-                }
-            )
-
-    def test_invalid_pv_loss_overrides_type(self):
-        with pytest.raises(TypeError, match="pv_loss_overrides"):
-            App(
-                {
-                    "location": "porto",
-                    "n_modules": 10,
-                    "annual_consumption_kwh": 4000,
-                    "pv_loss_overrides": 5.0,
-                }
-            )
-
-    def test_unknown_config_key_rejected(self):
-        # A typo such as `batery_kwh` must fail loudly instead of being silently
-        # dropped by merge_defaults (which would default the battery to 0).
-        with pytest.raises(ValueError, match="Unknown config key"):
-            App(
-                {
-                    "location": "porto",
-                    "n_modules": 10,
-                    "annual_consumption_kwh": 4000,
-                    "batery_kwh": 5.0,
-                }
-            )
-
-    def test_unknown_config_key_lists_the_offending_key(self):
-        with pytest.raises(ValueError, match="batery_kwh"):
-            App({"location": "porto", "n_modules": 10, "annual_consumption_kwh": 4000, "batery_kwh": 5.0})
 
     def test_montecarlo_section_is_allowed(self):
         # MC configs carry a [montecarlo] section and validate through the same
@@ -323,32 +341,6 @@ class TestAppValidation:
             assert app._cfg["degradation_engine"] == "blast"
             assert app._cfg["blast_model"] == blast_model
 
-    @pytest.mark.parametrize("degradation_engine", [None, "native"])
-    def test_blast_model_requires_explicit_blast_engine(self, degradation_engine):
-        config = {
-            "location": "porto",
-            "n_modules": 10,
-            "annual_consumption_kwh": 4000,
-            "battery_kwh": 5.0,
-            "blast_model": "lfp_gr_250ah_prismatic",
-        }
-        if degradation_engine is not None:
-            config["degradation_engine"] = degradation_engine
-
-        with pytest.raises(ValueError, match="blast_model.*requires.*degradation_engine=blast"):
-            App(config)
-
-    def test_invalid_degradation_engine_rejected(self):
-        with pytest.raises(ValueError, match="degradation_engine"):
-            App(
-                {
-                    "location": "porto",
-                    "n_modules": 10,
-                    "annual_consumption_kwh": 4000,
-                    "degradation_engine": "magic",
-                }
-            )
-
     def test_blast_config_enables_phase3_models(self):
         app = App(
             {
@@ -361,34 +353,6 @@ class TestAppValidation:
             }
         )
         assert app._cfg["blast_model"] == "nmc811_grsi_lgm50_5ah"
-
-    def test_blast_config_rejects_montecarlo_section(self):
-        with pytest.raises(ValueError, match="Monte Carlo"):
-            App(
-                {
-                    "location": "porto",
-                    "n_modules": 10,
-                    "annual_consumption_kwh": 4000,
-                    "battery_kwh": 5.0,
-                    "degradation_engine": "blast",
-                    "blast_model": "lfp_gr_250ah_prismatic",
-                    "montecarlo": {"n_runs": 10, "weather_file": "weather.csv"},
-                }
-            )
-
-    def test_blast_config_rejects_resistance_fade(self):
-        with pytest.raises(ValueError, match="enable_resistance_fade"):
-            App(
-                {
-                    "location": "porto",
-                    "n_modules": 10,
-                    "annual_consumption_kwh": 4000,
-                    "battery_kwh": 5.0,
-                    "degradation_engine": "blast",
-                    "blast_model": "lfp_gr_250ah_prismatic",
-                    "enable_resistance_fade": True,
-                }
-            )
 
     def test_custom_location_valid(self):
         app = App(

@@ -89,9 +89,72 @@ jobs:
         run: >-
           uv run pytest
           tests/test_public_api.py
-          tests/test_cli_correctness.py
+          tests/test_cli.py::test_cli_threads_battery_power_limits tests/test_cli.py::test_cli_does_not_advertise_unsupported_ac_coupling
           tests/test_release_smoke.py::test_readme_quickstart_smoke
           -q
+
+      - name: Check backend bit identity on this platform
+        # Bit identity between the Python and Numba backends depends on the
+        # platform's libm (see the zeta-pow test), so check it off Linux too.
+        run: uv run pytest tests/test_numba_dispatch_parity.py -q
+
+  floors:
+    # The declared dependency floors (numpy 2.0, pandas 2.3.3, pvlib 0.14,
+    # scipy 1.14) on the oldest supported Python. The lock pins much newer
+    # releases, so without this job a floor could break unnoticed (#150 was
+    # a pandas-version bug).
+    if: github.event_name == 'push' || github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+
+    env:
+      UV_PYTHON: "3.11"
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+
+      - name: Set up Python
+        run: uv python install 3.11
+
+      - name: Install the lowest direct dependencies
+        # Re-resolves instead of using uv.lock; the rewritten lock is discarded.
+        run: uv sync --extra dev --resolution lowest-direct
+
+      - name: Show the resolved floors
+        run: uv run --no-sync python -c "import numpy, pandas, pvlib, scipy; print(numpy.__version__, pandas.__version__, pvlib.__version__, scipy.__version__)"
+
+      - name: Run tests
+        run: uv run --no-sync pytest tests/ -q
+
+  no-numba:
+    # Numba is an optional extra, and importing BREOS must not need it. The
+    # dev extra installs it, so remove it and run the whole suite: backend
+    # tests skip, and everything else runs on the Python path.
+    if: github.event_name == 'push' || github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+
+    env:
+      UV_PYTHON: "3.12"
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Install dependencies without Numba
+        run: |
+          uv sync --extra dev
+          uv pip uninstall numba llvmlite
+          uv run --no-sync python -c "import importlib.util, sys; sys.exit(importlib.util.find_spec('numba') is not None)"
+
+      - name: Run tests
+        run: uv run --no-sync pytest tests/ -q
 
   slow-tests:
     # Long-running endurance tests on Python 3.12. Release pushes and PRs run

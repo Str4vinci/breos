@@ -143,16 +143,26 @@ def apply_terrain_horizon_profile(
     horizon_elevation = interpolate_horizon_elevation(normalised, solarpos["azimuth"])
 
     result = weather.copy()
-    dni = np.nan_to_num(result[dni_column].to_numpy(dtype=float), nan=0.0)
-    ghi = np.nan_to_num(result[ghi_column].to_numpy(dtype=float), nan=0.0)
-    dhi = np.nan_to_num(result[dhi_column].to_numpy(dtype=float), nan=0.0)
+    # Shaded values are written back into these columns, so they must hold
+    # floats: an integer column is widened to float64 (nullable Int to
+    # Float64), and a float column keeps its dtype, with the values cast to
+    # it. Open-Meteo returns float32.
+    for column in (dni_column, ghi_column):
+        if not pd.api.types.is_float_dtype(result[column]):
+            nullable = isinstance(result[column].dtype, pd.api.extensions.ExtensionDtype)
+            result[column] = result[column].astype("Float64" if nullable else float)
+    dni = np.nan_to_num(result[dni_column].to_numpy(dtype=float, na_value=np.nan), nan=0.0)
+    ghi = np.nan_to_num(result[ghi_column].to_numpy(dtype=float, na_value=np.nan), nan=0.0)
+    dhi = np.nan_to_num(result[dhi_column].to_numpy(dtype=float, na_value=np.nan), nan=0.0)
     shaded = np.isfinite(solar_elevation) & np.isfinite(horizon_elevation) & (solar_elevation <= horizon_elevation)
     shaded &= dni > 0.0
 
     zenith = np.asarray(solarpos["apparent_zenith"], dtype=float)
     direct_horizontal = dni * np.clip(np.cos(np.radians(zenith)), 0.0, None)
     result.loc[shaded, dni_column] = 0.0
-    result.loc[shaded, ghi_column] = np.maximum(dhi[shaded], ghi[shaded] - direct_horizontal[shaded])
+    shaded_ghi = np.maximum(dhi[shaded], ghi[shaded] - direct_horizontal[shaded])
+    # pd.array casts to NumPy and pandas extension dtypes (Float64) alike.
+    result.loc[shaded, ghi_column] = pd.array(shaded_ghi, dtype=result[ghi_column].dtype)
 
     profile_metadata = {
         "type": "azimuth_elevation_pairs",

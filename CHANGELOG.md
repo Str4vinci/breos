@@ -256,6 +256,132 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   weather metadata as `leap_day`. The new `fill_leap_day` does the copy.
   Non-leap years are unchanged. A 2028 Porto run with 8 modules and 5 kWh
   yields 19.4 kWh more PV than 2027, from the extra day.
+- External load profiles of the wrong length raise instead of being repeated
+  or cut ([#171](https://github.com/Str4vinci/breos/issues/171)).
+  `load_profile` places rows on the calendar by position, and used to repeat a
+  short file or truncate a long one without a message. The E-REDES 15-minute
+  exports end with a blank `,,,` row, so a 2024 run saw 35,041 rows, skipped the
+  leap-day insertion, and repeated the file: 29 February took 1 March's load,
+  the rest of the year ran a day early, and 31 December took 1 January's load.
+  Fully blank rows are now dropped, and a profile must then have exactly one
+  common or leap year of rows at its resolution (8,760 or 8,784 hourly; 35,040
+  or 35,136 at 15 minutes). A leap-year file on a common-year run drops its
+  29 February instead of losing 31 December. Profiles are also checked when
+  they load: values must be finite and non-negative, and a timestamp column,
+  when present, must parse on every row and step evenly, so a local-clock file
+  with a DST gap, or one malformed stamp, raises.
+  E-REDES profiles 4, 5, and 6 select their own `BTN A/B/C - Wh` column by exact
+  name; profile 6 used to fall back to the first `BTN` column, which is BTN A.
+  **Results change for leap-year runs on the E-REDES 15-minute file.** On
+  Porto 2024 with profile 6, 10 modules, and 4,000 kWh/yr, the load at each
+  step moves by 2.6% on average (5.1% for BTN A). Grid import rises by 0.54 kWh
+  (+0.02%) without a battery and falls by 0.45 kWh (−0.04%) with 5 kWh, and
+  NPV moves by −€2.23 and +€0.71. Hourly E-REDES runs, common-year runs, and
+  the bundled profiles are unchanged.
+
+- PV weather input with gaps, at the wrong resolution, or without air
+  temperature or wind speed raises instead of being repaired
+  ([#172](https://github.com/Str4vinci/breos/issues/172)), the PV-side
+  counterpart of #151 and #153. The PV model filled every simulation step from
+  the nearest weather row, so weather with June removed gave June zero PV,
+  a truncated file shortened the year, and 15-minute weather run at
+  `freq="h"` was thinned to hourly, all without a message. Weather must now
+  step evenly at `freq` from its first row to its last. A missing air
+  temperature or wind speed column used to become 25 °C and 1 m/s, and a NaN
+  air temperature a 25 °C cell; both now raise, and the message shows how to
+  add a constant column explicitly. Battery temperature in `"weather"` mode
+  raises the same way when the weather has no temperature column; a fixed
+  `battery_temperature` is the explicit alternative. Weather files whose
+  timestamps have no timezone are still read as UTC, but now log a warning,
+  unless their metadata sidecar records the timezone, as files BREOS writes
+  do. Results for complete, regular weather with both columns are unchanged.
+
+- The optimizer's steady-state scoring uses the same horizon, PV degradation,
+  and battery degradation engine as projected scoring
+  ([#212](https://github.com/Str4vinci/breos/issues/212)). Steady-state NPV
+  read `financials.project_lifespan` and `financials.pv_degradation_rate`,
+  while projected scoring reads `simulation.years_projection` and
+  `pv.degradation_rate` first, so the `SteadyState_*` diagnostics next to
+  `Projected_*` could rest on another horizon. Both now resolve through one
+  helper. The steady-state simulation also ignored `battery.degradation_engine`
+  and `blast_model`, so it always ran native aging, and ran even with an
+  invalid `blast_model`. It now uses the configured engine, and
+  `SolarDesignProblem` validates both keys when it is built, on either basis.
+  PV-only candidates run native aging on both bases: a projected BLAST
+  optimization used to raise on every 0 kWh candidate. **Steady-state
+  results change for configs whose key pairs disagree, including a
+  `years_projection` set without `project_lifespan` (default 20), and for
+  BLAST configs.** On synthetic test weather with 8 modules and 5 kWh, a
+  config with 3 years / 10% for projected and 2 years / 2% under `financials`
+  moves steady-state NPV from −€5,648.44 to −€5,172.08. With BLAST
+  `nmc_gr_50ah_b1` over 20 years, steady-state grid independence moves from
+  69.90% to 70.10% and NPV from −€1,547.61 to €1,374.77. Projected results
+  are unchanged, apart from 0 kWh BLAST candidates, which now run. The example
+  optimization config sets both pairs equal and uses native aging, so it is
+  unaffected.
+
+- EPW weather records its radiation time basis
+  ([#213](https://github.com/Str4vinci/breos/issues/213)). EPW radiation is
+  energy over the hour that ends at each record, and pvlib labels that hour at
+  its start, but `read_epw_file` recorded neither fact. The 15-minute
+  clear-sky resampling therefore evaluated each hour at its label rather than
+  its midpoint, `solar_position = "weather"` raised on EPW input, and the
+  metadata was attached after resampling, which lost the resampling
+  provenance. `read_epw_file` now records `radiation_time_basis =
+  "interval_mean"` and `timestamp_label_basis = "left"` before resampling.
+  **Results change for 15-minute EPW weather.** On a synthetic clear-sky EPW,
+  the mean error against the true 15-minute GHI falls from 27 to 1.6 W/m². On
+  the Amsterdam IWEC file with 10 modules, annual 15-minute GHI rises by 0.64%
+  and DC by 0.92% (4,425.96 to 4,466.35 kWh), with steps moving by up to
+  71 W/m². Hourly EPW runs with the default solar position are unchanged.
+
+- Aligned simulation inputs carry their own resolution, and `PV_Production`
+  has one definition ([#214](https://github.com/Str4vinci/breos/issues/214)).
+  `simulate_energy_balance_summary(aligned=...)` converted power to energy with
+  its `freq` argument, default `"h"`, so an aligned 15-minute input reported
+  96 kWh of load where it had 24 kWh. `AlignedSimulationInputs` now stores
+  `freq`, runs on aligned inputs use it, and a `freq` that disagrees raises
+  `ValueError`; `with_pv_only_chain` does the same. App and Monte Carlo passed
+  `freq` explicitly and are unchanged. Without an inverter rating,
+  `PV_Production` counted DC sent to the battery at the inverter efficiency;
+  with one, at its DC value. All three copies (scalar, vectorised PV-only,
+  and numba) now use `PV_DC − PV_DC_Curtailed − PV_Direct_Inverter_Loss`, which
+  equals AC to load and export plus DC to the battery, and the kernel's
+  `cap_wh_is_infinite` argument is gone. **`PV_Production`, `Total PV [kWh]`,
+  and the returned total PV change for unrated runs with a battery.** On the
+  48-hour golden fixture (3 kWh), total PV rises from 22.272 to 22.473 kWh
+  (+0.90%). `optimize_battery_size`, which runs unrated, reports a higher
+  self-consumption: 71.07% instead of 70.71% for a 10 kWh battery on
+  synthetic weather. App, Monte Carlo, and `SolarDesignProblem` results are
+  unchanged: the App always rates the inverter, and the optimizer scores
+  from the AC ledger even with `dc_ac_ratio = 0`.
+
+- `apply_terrain_horizon_profile` accepts `float32` and integer irradiance
+  columns ([#210](https://github.com/Str4vinci/breos/issues/210)). Open-Meteo
+  data arrives as `float32`, and pandas 3 raised `TypeError` when the shaded
+  `float64` GHI was written back. A float column now keeps its dtype,
+  including the nullable pandas `Float32` and `Float64`, and an integer
+  column is widened to `float64` (nullable `Int64` to `Float64`). Missing
+  nullable values count as zero irradiance, like `NaN`. Results for `float64`
+  weather, which is what the App passes, are unchanged.
+
+- Two plotting defects ([#219](https://github.com/Str4vinci/breos/issues/219)).
+  `plot_validation_multi_system` called `plt.cm.get_cmap`, which matplotlib
+  3.11 removed, and now uses the colormap registry. `plot_cell_temperature`
+  drew months without data at 0 °C; they are now gaps.
+
+- `load_results` and the plotting functions read result CSVs from a run in a
+  DST zone, and `load_results` accepts a path-like
+  ([#216](https://github.com/Str4vinci/breos/issues/216)). Such a CSV mixes UTC
+  offsets, and pandas 3 refused to parse it as one column, so
+  `load_results` and nine plotting call sites raised. They now parse it on
+  the results' own wall clock through `utils.local_datetime_index`, and the
+  energy plots take their step length from the rows' UTC instants. Because
+  the wall-clock index repeats an hour in autumn, `load_results` also keeps
+  those instants in a `Datetime_UTC` column for a file with mixed offsets,
+  so its output can go straight to the plots. `plot_battery_soh_timeseries` reads `start_date` and `end_date` on the
+  results' clock; with a timezone-aware index they used to raise. Results
+  are unchanged.
 
 - `apply_terrain_horizon_profile` finds irradiance under the same names as
   the resampler and the PV model
