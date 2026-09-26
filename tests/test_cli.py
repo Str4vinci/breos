@@ -3,6 +3,7 @@
 import csv
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -67,6 +68,81 @@ def test_run_from_flags_outputs_json(monkeypatch, capsys):
 
     output = json.loads(capsys.readouterr().out)
     assert output["grid_independence_pct"] == 42.0
+
+
+def test_run_warns_and_ignores_unused_runner_sections(tmp_path, capsys):
+    config_path = tmp_path / "runner-sections.toml"
+    config_path.write_text(
+        'location = "porto"\n'
+        "n_modules = 10\n"
+        "annual_consumption_kwh = 4000\n"
+        "battery_kwh = 5.0\n"
+        'degradation_engine = "blast"\n'
+        'blast_model = "lfp_gr_250ah_prismatic"\n'
+        "\n[montecarlo]\n"
+        'weather_file = "unused.csv"\n'
+        "n_runs = 1\n"
+        "\n[sweep]\n"
+        "battery_kwh = [5.0]\n",
+        encoding="utf-8",
+    )
+
+    with pytest.warns(UserWarning, match=r"breos run does not use \[montecarlo\], \[sweep\]"):
+        assert cli.main(["run", "--config", str(config_path), "--dry-run"]) == 0
+    assert '"degradation_engine": "blast"' in capsys.readouterr().out
+
+
+def test_montecarlo_uses_top_level_execution_backend(tmp_path, monkeypatch, capsys):
+    import breos.montecarlo as montecarlo
+
+    weather_file = tmp_path / "weather.csv"
+    weather_file.write_text("weather", encoding="utf-8")
+    config_path = tmp_path / "montecarlo.toml"
+    config_path.write_text(
+        'location = "porto"\n'
+        "n_modules = 10\n"
+        "annual_consumption_kwh = 4000\n"
+        'execution_backend = "numba"\n'
+        "\n[montecarlo]\n"
+        f'weather_file = "{weather_file}"\n',
+        encoding="utf-8",
+    )
+    observed = {}
+
+    class _Frame:
+        def to_csv(self, path, index=False):
+            Path(path).write_text("result\n", encoding="utf-8")
+
+    def fake_run_montecarlo(config, settings):
+        observed["execution_backend"] = settings.execution_backend
+        return SimpleNamespace(runs=_Frame(), yearly=None, provenance={}, summary={}, available_years=[2025])
+
+    monkeypatch.setattr(montecarlo, "run_montecarlo", fake_run_montecarlo)
+
+    assert (
+        cli.main(
+            [
+                "montecarlo",
+                "--config",
+                str(config_path),
+                "--output",
+                str(tmp_path / "runs.csv"),
+                "--provenance-output",
+                str(tmp_path / "provenance.json"),
+            ]
+        )
+        == 0
+    )
+    capsys.readouterr()
+    assert observed["execution_backend"] == "numba"
+
+
+def test_montecarlo_reports_unknown_setting_before_weather_lookup(tmp_path, capsys):
+    config_path = tmp_path / "montecarlo.toml"
+    config_path.write_text('location = "porto"\n\n[montecarlo]\nweather_fille = "missing.csv"\n', encoding="utf-8")
+
+    assert cli.main(["montecarlo", "--config", str(config_path)]) == 1
+    assert "Unknown Monte Carlo config key(s): montecarlo.weather_fille" in capsys.readouterr().err
 
 
 def test_run_flag_sell_price_inflation_reaches_config(monkeypatch, capsys):

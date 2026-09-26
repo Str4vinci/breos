@@ -11,12 +11,20 @@ import json
 import shlex
 import sys
 import tomllib
+import warnings
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Any, Sequence
 
 from breos.app import App
-from breos.app_config import ALLOWED_CONFIG_KEYS, APP_CONFIG_FIELDS, COST_OVERRIDE_KEYS, resolve_app_config
+from breos.app_config import (
+    ALLOWED_CONFIG_KEYS,
+    APP_CONFIG_FIELDS,
+    COST_OVERRIDE_KEYS,
+    normalize_config_keys,
+    resolve_app_config,
+    validate_montecarlo_config,
+)
 from breos.degradation import get_battery_model_profile, list_battery_models
 from breos.load_profiles import PROFILE_ALIASES, PROFILE_FILES, PROFILE_FILES_15MIN, PROFILE_NAMES
 from breos.pv_modules import MODULES
@@ -73,7 +81,7 @@ def _load_config(path: Path) -> dict[str, Any]:
 
     if not isinstance(data, dict):
         raise ValueError("Config file must contain an object at the top level")
-    return {key.replace("-", "_"): value for key, value in data.items()}
+    return normalize_config_keys(data)
 
 
 def _build_config(args: argparse.Namespace) -> dict[str, Any]:
@@ -86,9 +94,9 @@ def _build_config(args: argparse.Namespace) -> dict[str, Any]:
         value = getattr(args, key)
         if value is None:
             continue
-        if field.cli_normalizer is not None:
-            value = field.cli_normalizer(value)
-        if value is None:
+        if field.normalizer is not None:
+            value = field.normalizer(value)
+        if value is None or value == "":
             continue
         overrides[key] = value
 
@@ -97,6 +105,7 @@ def _build_config(args: argparse.Namespace) -> dict[str, Any]:
 
 def _run(args: argparse.Namespace) -> int:
     config = _build_config(args)
+    _ignore_unused_runner_sections(config, command="run")
     if args.dry_run:
         return _write_payload(_resolved_config_summary(config), args)
 
@@ -339,6 +348,26 @@ def _validate_config(args: argparse.Namespace) -> int:
     return 0
 
 
+def _ignore_unused_runner_sections(
+    config: dict[str, Any],
+    *,
+    command: str,
+    used_sections: frozenset[str] = frozenset(),
+) -> None:
+    """Warn about and remove runner tables that this command cannot use."""
+    unused = sorted(({"montecarlo", "sweep"} - used_sections) & config.keys())
+    if not unused:
+        return
+    section_names = ", ".join(f"[{name}]" for name in unused)
+    warnings.warn(
+        f"breos {command} does not use {section_names}; ignoring these runner sections",
+        UserWarning,
+        stacklevel=2,
+    )
+    for name in unused:
+        config.pop(name, None)
+
+
 def _normalise_sweep_grid(raw_grid: Any) -> dict[str, list[Any]]:
     """Validate and normalise a ``[sweep]`` section into parameter lists."""
     if not isinstance(raw_grid, dict):
@@ -439,6 +468,7 @@ def _write_sweep_csv(rows: list[dict[str, Any]], output: Path) -> None:
 
 def _sweep(args: argparse.Namespace) -> int:
     config = _load_config(args.config)
+    _ignore_unused_runner_sections(config, command="sweep", used_sections=frozenset({"sweep"}))
     raw_grid = config.pop("sweep", None)
     if raw_grid is None:
         raise ValueError("Sweep config must include a [sweep] section.")
@@ -486,16 +516,27 @@ def _montecarlo(args: argparse.Namespace) -> int:
     from breos.montecarlo import MonteCarloSettings, run_montecarlo
 
     config = _load_config(args.config)
-    mc_cfg = config.get("montecarlo", {}) if isinstance(config.get("montecarlo"), dict) else {}
+    _ignore_unused_runner_sections(config, command="montecarlo", used_sections=frozenset({"montecarlo"}))
     if args.rlp_directory is not None:
         config["rlp_directory"] = str(args.rlp_directory)
+
+    # Report a typo such as [montecarlo].weather_fille before a missing-file
+    # error. The runner validates the full App config before weather access.
+    validate_montecarlo_config(config)
+    mc_cfg = config.get("montecarlo", {})
 
     weather_file = args.weather_file or mc_cfg.get("weather_file")
     if not weather_file:
         raise ValueError("Monte Carlo needs a weather file: set [montecarlo].weather_file or pass --weather-file.")
 
     def _pick(cli_value: Any, key: str, default: Any) -> Any:
-        return cli_value if cli_value is not None else mc_cfg.get(key, default)
+        if cli_value is not None:
+            return cli_value
+        if key in mc_cfg:
+            return mc_cfg[key]
+        if key == "execution_backend":
+            return config.get(key, default)
+        return default
 
     settings = MonteCarloSettings(
         weather_file=str(weather_file),
