@@ -23,12 +23,19 @@ def test_extend_to_years_duplicates_feb_28_for_leap_day_without_shifting_rest():
     assert mar_1 == pytest.approx(source_mar_1)
 
 
-def test_load_profile_accepts_aliases_and_15t_frequency():
-    profile = load_profile("bdew_h0", 1000, freq="15T")
+def test_load_profile_accepts_profile_aliases_at_15min():
+    profile = load_profile("bdew_h0", 1000, freq="15min")
     annual_kwh = profile["Electrical Consumption [W]"].sum() * 0.25 / 1000
 
     assert len(profile) == 35040
     assert annual_kwh == pytest.approx(1000)
+
+
+@pytest.mark.parametrize("freq", ["30min", "15T", "H"])
+def test_load_profile_rejects_unsupported_frequency(freq):
+    # 30min used to return the hourly profile unchanged.
+    with pytest.raises(ValueError, match="Unsupported frequency"):
+        load_profile("1", 1000, freq=freq)
 
 
 def test_load_profile_pins_rows_to_local_wall_clock_across_dst():
