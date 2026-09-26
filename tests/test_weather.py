@@ -109,6 +109,9 @@ def _write_leap_year_15min_weather(tmp_path):
 
 
 def _install_fake_openmeteo(monkeypatch, captured):
+    # The fake replaces attributes of the optional Open-Meteo client modules.
+    pytest.importorskip("requests_cache", reason="the Open-Meteo client needs the breos[weather] extra")
+    pytest.importorskip("openmeteo_requests", reason="the Open-Meteo client needs the breos[weather] extra")
     """Serve hourly labels from start_date 00:00 to end_date 23:00, as Open-Meteo does."""
 
     class FakeSession:

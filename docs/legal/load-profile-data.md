@@ -73,7 +73,9 @@ BREOS selects files by profile key and requested resolution:
 | `"7"` | BDEW H0 2025 | `bdew_h0_2025_15min.csv` | `bdew_h0_2025_15min.csv` | Native 15-minute file; BREOS can downsample to hourly. |
 | `"8"` / `"ree_2.0td"` | REE 2.0TD | `REE_2026_2.0TD_1000kwh_hourly.csv` | `REE_2026_2.0TD_1000kwh_15min.csv` | Generic single-column CSV format. |
 
-For E-REDES, the same CSV can contain BTN A, BTN B, and BTN C columns; BREOS chooses the column based on the profile key.
+For E-REDES, the same CSV can contain BTN A, BTN B, and BTN C columns; BREOS chooses the column by its exact name, based on the profile key.
+
+BREOS places the rows on the calendar by position, starting on 1 January, so every file must hold exactly one calendar year. After fully blank rows are dropped, an hourly file needs 8,760 or 8,784 rows and a 15-minute file 35,040 or 35,136. A common-year file on a leap-year run repeats 28 February; a leap-year file on a common-year run drops its 29 February. Values must be finite and non-negative. The first column may hold timestamps (ISO, or `dd/mm/yyyy HH:MM` as in the E-REDES exports); if it does, they must step evenly, so a file on a local clock with DST gaps is refused. Any other file raises `ValueError` when it loads.
 
 ## If redistribution permission is granted
 

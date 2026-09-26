@@ -552,13 +552,24 @@ class AlignedSimulationInputs:
         pv_dc_w: PV DC power (W) per step. Every step has a finite value.
         load_w: AC load (W) per step. Every step is finite and non-negative.
         temperature_c: Battery cell temperature (C) per step, 25 C if none was given.
+        freq: The calendar's step, which converts power to energy. A run on
+            these inputs takes it from here.
     """
 
     index: pd.DatetimeIndex
     pv_dc_w: np.ndarray
     load_w: np.ndarray
     temperature_c: np.ndarray
+    freq: str
     pv_chain: Optional[Tuple[np.ndarray, np.ndarray, np.ndarray]] = None
+
+    def resolve_freq(self, freq: Optional[str]) -> str:
+        """Return the inputs' own step, refusing a ``freq`` that disagrees with it."""
+        if freq is not None and get_hours_per_step(freq) != get_hours_per_step(self.freq):
+            raise ValueError(
+                f"freq={freq!r} disagrees with the aligned inputs, which step at {self.freq!r}; omit freq to use theirs"
+            )
+        return self.freq
 
     def scaled(self, *, pv_factor: float = 1.0, load_factor: float = 1.0) -> "AlignedSimulationInputs":
         """Return the same calendar with PV and load scaled by a constant.
@@ -571,10 +582,13 @@ class AlignedSimulationInputs:
             pv_dc_w=self.pv_dc_w * pv_factor if pv_factor != 1.0 else self.pv_dc_w,
             load_w=self.load_w * load_factor if load_factor != 1.0 else self.load_w,
             temperature_c=self.temperature_c,
+            freq=self.freq,
             pv_chain=self.pv_chain if pv_factor == 1.0 else None,
         )
 
-    def with_pv_only_chain(self, battery_config: "BatteryConfig", *, freq: str) -> "AlignedSimulationInputs":
+    def with_pv_only_chain(
+        self, battery_config: "BatteryConfig", *, freq: Optional[str] = None
+    ) -> "AlignedSimulationInputs":
         """Return the same inputs with the DC-to-AC conversion memoized.
 
         A PV-only step converts DC to AC through the PVWatts efficiency curve
@@ -590,7 +604,7 @@ class AlignedSimulationInputs:
         expressions as a run that does not. There is no second arithmetic
         path to keep in step.
         """
-        hours_per_step = get_hours_per_step(freq)
+        hours_per_step = get_hours_per_step(self.resolve_freq(freq))
         cap_wh = _step_energy_cap(battery_config.inverter_ac_capacity_w, hours_per_step)
         pv_dc_wh = np.maximum(0.0, self.pv_dc_w * hours_per_step)
         chain = _calculate_dc_ac_power_arrays(
@@ -604,6 +618,7 @@ class AlignedSimulationInputs:
             pv_dc_w=self.pv_dc_w,
             load_w=self.load_w,
             temperature_c=self.temperature_c,
+            freq=self.freq,
             pv_chain=chain,
         )
 
@@ -636,6 +651,7 @@ def align_simulation_inputs(
         pv_dc_w=pv_values,
         load_w=load_values,
         temperature_c=temperature_values,
+        freq=freq,
     )
 
 
@@ -1319,19 +1335,9 @@ def _dispatch_day_python(
         pv_curtailment = ledger["pv_dc_curtailed"]
         battery_charge_loss = ledger["battery_charge_loss"]
         battery_discharge_loss = ledger["battery_discharge_loss"]
-        # Compatibility field: retain the exact 0.3.4 result when a lower-
-        # level caller omits the inverter rating. With a finite inverter, use
-        # the explicit part-load conversion loss. Public economics use the AC
-        # ledger fields instead.
-        if math.isinf(cap_wh):
-            # The unlimited-inverter compatibility path has no explicit
-            # inverter ledger loss. Keep its reported AC production aligned
-            # with the scaled scalar inverter output.
-            pv_production = (
-                (pv_dc_power - pv_curtailment) * battery_config.inverter_efficiency * battery_config.ac_output_scale
-            )
-        else:
-            pv_production = pv_dc_power - pv_curtailment - ledger["pv_direct_inverter_loss"]
+        # PV output after clipping and the direct PV inverter loss: AC to load
+        # and export plus DC to the battery, with or without an inverter rating.
+        pv_production = pv_dc_power - pv_curtailment - ledger["pv_direct_inverter_loss"]
         battery_energy_delta = Battery_Energy_Wh - battery_energy_beginning
 
         # Compute cell temperature via lumped thermal model
@@ -1437,15 +1443,9 @@ def _dispatch_no_battery_vectorized(
     pv_ac_to_load_wh = np.minimum(ac_wh, load_wh)
     grid_export_wh = ac_wh - pv_ac_to_load_wh
     grid_import_wh = np.maximum(0.0, load_wh - pv_ac_to_load_wh)
-    if math.isinf(cap_wh):
-        # Match the scalar compatibility path, including AC-side correction.
-        pv_production_wh = (
-            (pv_dc_wh - clipping_loss_dc_wh) * battery_config.inverter_efficiency * battery_config.ac_output_scale
-        )
-    else:
-        # Keep the scalar reference's subtraction order. Returning ``ac_wh``
-        # here is algebraically equivalent but differs by one ULP at low load.
-        pv_production_wh = pv_dc_wh - clipping_loss_dc_wh - conversion_loss_wh
+    # Keep the scalar reference's subtraction order. Returning ``ac_wh``
+    # here is algebraically equivalent but differs by one ULP at low load.
+    pv_production_wh = pv_dc_wh - clipping_loss_dc_wh - conversion_loss_wh
 
     # The three columns reported twice under different names are divided
     # once and assigned twice. On the reduced summary buffer the second
@@ -2198,7 +2198,7 @@ def simulate_energy_balance_summary(
     battery_config: Optional[BatteryConfig] = None,
     start_time: Optional[pd.Timestamp] = None,
     end_time: Optional[pd.Timestamp] = None,
-    freq: str = "h",
+    freq: Optional[str] = None,
     temperature_series: Optional[pd.Series] = None,
     results_directory: Optional[str] = None,
     initial_fec: float = 0.0,
@@ -2230,8 +2230,11 @@ def simulate_energy_balance_summary(
     building the calendar and reindexing onto it, which a caller running the
     same calendar many times has already done; ``freq``, ``start_time`` and
     ``end_time`` are then read from the aligned inputs, and
-    ``temperature_series`` is ignored in favour of the aligned one.
+    ``temperature_series`` is ignored in favour of the aligned one. A
+    ``freq`` that disagrees with the aligned inputs raises ``ValueError``.
+    Without aligned inputs, ``freq`` defaults to ``"h"``.
     """
+    freq = aligned.resolve_freq(freq) if aligned is not None else (freq or "h")
     core = _simulate_core(
         pv_dc=pv_dc,
         houseload=houseload,
