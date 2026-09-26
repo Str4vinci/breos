@@ -421,6 +421,23 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   `calculate_pv_production_ac` accepts and forwards `loss_overrides`, like
   every other production entry point. App results are unchanged.
 
+- Payback has one rule across the library, the plots and the tools
+  ([#218](https://github.com/Str4vinci/breos/issues/218)). The new
+  `economics.find_payback_year_exact` interpolates where cumulative
+  discounted savings first turn positive, the rule `find_payback_year`
+  already used, scaled by the spacing between the two years; Monte Carlo and the optimizer each had a
+  private copy of it, and `plot_breakeven`, `plot_breakeven_comparison`,
+  `tools/compare_results.py` and `tools/batch_compare_locations.py` had
+  three more rules. `create_cost_plots` uses `find_payback_year`. The Monte
+  Carlo payback distribution and CDF plot `payback_year_exact` instead of
+  the integer year, so a run that pays back at 4.2 years is binned at 4.2,
+  not 5. `plot_breakeven_comparison` now marks a design that pays back in
+  its first row. `format_years_months` in `breos.utils` replaces two copies
+  of the "4y 2m" formatter. The interpolator Monte Carlo and the optimizer
+  used counted zero savings as payback; it no longer does, which changes
+  `payback_year_exact` only when cumulative savings land on exactly zero.
+  Reported App, Monte Carlo and optimizer numbers are otherwise unchanged.
+
 ### Removed
 - Removed the optimizer's `costs.panel_wp` override. It priced the steady-state
   CAPEX at a nominal wattage instead of the selected module's rating, so the

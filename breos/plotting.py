@@ -14,7 +14,8 @@ from typing import List, Optional, Tuple
 import numpy as np
 import pandas as pd
 
-from breos.utils import local_datetime_index
+from breos.economics import find_payback_year, find_payback_year_exact
+from breos.utils import format_years_months, local_datetime_index
 
 MONTH_LABELS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
 
@@ -415,14 +416,12 @@ def create_cost_plots(
         )
 
     # Find and mark payback
-    if "Savings_Cumulative_NPV" in cost_projection.columns:
-        payback = cost_projection[cost_projection["Savings_Cumulative_NPV"] > 0]
-        if not payback.empty:
-            payback_year = payback["Year"].iloc[0]
-            ax.axvline(x=payback_year, color="blue", linestyle=":", alpha=0.7)
-            ax.annotate(
-                f"Payback: Year {payback_year}", xy=(payback_year, ax.get_ylim()[1] * 0.9), fontsize=10, color="blue"
-            )
+    payback_year = find_payback_year(cost_projection)
+    if payback_year is not None:
+        ax.axvline(x=payback_year, color="blue", linestyle=":", alpha=0.7)
+        ax.annotate(
+            f"Payback: Year {payback_year}", xy=(payback_year, ax.get_ylim()[1] * 0.9), fontsize=10, color="blue"
+        )
 
     ax.set_xlabel("Year")
     ax.set_ylabel("Cumulative Cost (€)")
@@ -1109,31 +1108,15 @@ def plot_breakeven(cost_projection: pd.DataFrame, results_directory: str, scenar
         with_sys = cost_projection["Cost_System_Cumulative"]
         label_suffix = ""
 
-    # Calculate break-even point with MONTH precision using linear interpolation
-    savings = no_sys.values - with_sys.values
-    breakeven_idx = np.where(savings > 0)[0]
-
-    be_years = None
-    be_months = None
+    # Break-even with month precision, by the same interpolation Monte Carlo
+    # and the optimizer report.
+    savings = pd.DataFrame({"Year": years.to_numpy(), "Savings_Cumulative_NPV": no_sys.values - with_sys.values})
+    be_year_exact = find_payback_year_exact(savings)
     be_text = "Not reached"
-    be_year_exact = None
-
-    if len(breakeven_idx) > 0:
-        idx = breakeven_idx[0]
-        if idx > 0:
-            # Linear interpolation between year (idx-1) and year (idx)
-            y0, y1 = savings[idx - 1], savings[idx]
-            x0, x1 = years.iloc[idx - 1], years.iloc[idx]
-            # Find where savings crosses zero
-            be_year_exact = x0 + (0 - y0) * (x1 - x0) / (y1 - y0)
-            be_years = int(be_year_exact)
-            be_months = int((be_year_exact - be_years) * 12)
-            be_text = f"{be_years} years {be_months} months"
-        else:
-            be_year_exact = years.iloc[0]
-            be_years = int(be_year_exact)
-            be_months = 0
-            be_text = f"{be_years} years 0 months"
+    if be_year_exact is not None:
+        be_years = int(be_year_exact)
+        be_months = int((be_year_exact - be_years) * 12)
+        be_text = f"{be_years} years {be_months} months"
 
     # =========================================================================
     # GRAPH 1: Cumulative costs comparison
@@ -1556,7 +1539,9 @@ def _plot_montecarlo_payback_summary(df: pd.DataFrame, results_directory: str, s
     _check_matplotlib()
 
     total_runs = len(df)
-    payback = _finite_numeric_series(df, "payback_year")
+    # The fractional year, which the distribution's 0.1-year bins and mean need;
+    # older run tables carry only the integer year.
+    payback = _finite_numeric_series(df, "payback_year_exact" if "payback_year_exact" in df.columns else "payback_year")
     achieved_count = len(payback)
 
     if achieved_count:
@@ -2436,15 +2421,6 @@ def plot_weather_annual_ghi_distribution(
     plt.close(fig)
 
 
-def _fmt_years_months(years_decimal) -> str:
-    """Convert decimal years to 'Xy Ym' label."""
-    if years_decimal is None:
-        return "N/A"
-    y = int(years_decimal)
-    m = int((years_decimal - y) * 12)
-    return f"{y}y" if m == 0 else f"{y}y {m}m"
-
-
 def plot_breakeven_comparison(
     cost_dfs: "List[pd.DataFrame]",
     labels: "List[str]",
@@ -2493,13 +2469,9 @@ def plot_breakeven_comparison(
         max_year = max(max_year, int(df["Year"].max()))
 
         # Break-even dotted line
-        savings = df["Savings_Cumulative_NPV"].values
-        years = df["Year"].values
-        for i in range(1, len(savings)):
-            if savings[i] >= 0 and savings[i - 1] < 0:
-                be = years[i - 1] + (-savings[i - 1] / (savings[i] - savings[i - 1]))
-                ax.axvline(x=be, color=color, linestyle=":", alpha=0.5, linewidth=1)
-                break
+        be = find_payback_year_exact(df)
+        if be is not None:
+            ax.axvline(x=be, color=color, linestyle=":", alpha=0.5, linewidth=1)
 
     ax.set_xlabel("Year")
     ax.set_ylabel("Cumulative Cost (€)")
@@ -2558,10 +2530,10 @@ def plot_breakeven_two(
     y_pos = ylim[1] * 0.85
     if be1:
         ax.axvline(x=be1, color="blue", linestyle=":", alpha=0.7, linewidth=1.5)
-        ax.annotate(f"{label1}: {_fmt_years_months(be1)}", xy=(be1 + 0.3, y_pos), fontsize=10, color="blue")
+        ax.annotate(f"{label1}: {format_years_months(be1)}", xy=(be1 + 0.3, y_pos), fontsize=10, color="blue")
     if be2:
         ax.axvline(x=be2, color="green", linestyle=":", alpha=0.7, linewidth=1.5)
-        ax.annotate(f"{label2}: {_fmt_years_months(be2)}", xy=(be2 + 0.3, y_pos * 0.92), fontsize=10, color="green")
+        ax.annotate(f"{label2}: {format_years_months(be2)}", xy=(be2 + 0.3, y_pos * 0.92), fontsize=10, color="green")
 
     plt.tight_layout()
     plt.savefig(os.path.join(results_dir, filename), dpi=300)

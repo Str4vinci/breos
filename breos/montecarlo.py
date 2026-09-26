@@ -46,6 +46,7 @@ from breos.economics import (
     calculate_lcoe_from_projection,
     cost_analysis_projection,
     find_payback_year,
+    find_payback_year_exact,
     replacement_fraction_from_steps,
 )
 from breos.execution import (
@@ -578,7 +579,7 @@ def _simulate_trajectory(
         discount_rate=cfg["discount_rate"],
     )
     payback_year = find_payback_year(cost_projection)
-    payback_year_exact = _interpolate_payback_year(cost_projection)
+    payback_year_exact = find_payback_year_exact(cost_projection)
     npv_savings = float(cost_projection["Savings_Cumulative_NPV"].iloc[-1])
 
     trajectory = yearly_df.merge(cost_projection, on="Year", how="left", suffixes=("", "_Financial"))
@@ -606,21 +607,6 @@ def _simulate_trajectory(
         "mean_export_kwh": float(yearly_df["Export_kWh"].mean()),
     }
     return metrics, trajectory
-
-
-def _interpolate_payback_year(cost_projection: pd.DataFrame) -> float | None:
-    """Return the linearly interpolated discounted-payback year."""
-    savings = cost_projection["Savings_Cumulative_NPV"].to_numpy(dtype=float)
-    years = cost_projection["Year"].to_numpy(dtype=float)
-    if len(savings) == 0:
-        return None
-    if savings[0] >= 0.0:
-        return float(years[0])
-    for idx in range(1, len(savings)):
-        if savings[idx] >= 0.0 and savings[idx - 1] < 0.0:
-            change = savings[idx] - savings[idx - 1]
-            return float(years[idx]) if abs(change) < 1e-12 else float(years[idx - 1] - savings[idx - 1] / change)
-    return None
 
 
 def _has_battery(cfg: dict[str, Any]) -> bool:

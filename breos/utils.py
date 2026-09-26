@@ -267,3 +267,12 @@ def find_irradiance_column(columns, component: str) -> str | None:
             if str(column).lower() == alias:
                 return column
     return None
+
+
+def format_years_months(years_decimal) -> str:
+    """Format a decimal number of years as ``"4y"`` or ``"4y 2m"``; None is ``"N/A"``."""
+    if years_decimal is None:
+        return "N/A"
+    years = int(years_decimal)
+    months = int((years_decimal - years) * 12)
+    return f"{years}y" if months == 0 else f"{years}y {months}m"

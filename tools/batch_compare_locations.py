@@ -34,7 +34,12 @@ from breos.battery import (
     apply_indoor_temperature_model,
     simulate_energy_balance,
 )
-from breos.economics import calculate_lcoe_from_projection, cost_analysis_projection, find_payback_year
+from breos.economics import (
+    calculate_lcoe_from_projection,
+    cost_analysis_projection,
+    find_payback_year,
+    find_payback_year_exact,
+)
 from breos.inverter import InverterConfig
 from breos.load_profiles import load_profile
 from breos.plotting import (
@@ -469,19 +474,6 @@ def _print_sim_progress(idx, total, row, elapsed, eta_min=None):
         f"payback={'N/A' if payback is None else f'{payback:2d}y'} | "
         f"{elapsed:.1f}s{eta_str}"
     )
-
-
-def _interpolate_breakeven(df):
-    """Interpolate break-even year from cost projection DataFrame."""
-    if "Savings_Cumulative_NPV" not in df.columns:
-        return None
-    savings = df["Savings_Cumulative_NPV"].values
-    years = df["Year"].values
-    for i in range(1, len(savings)):
-        if savings[i] >= 0 and savings[i - 1] < 0:
-            frac = -savings[i - 1] / (savings[i] - savings[i - 1])
-            return years[i - 1] + frac
-    return None
 
 
 def _compute_marginal_returns(results_df, locations):
