@@ -335,6 +335,27 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   and DC by 0.92% (4,425.96 to 4,466.35 kWh), with steps moving by up to
   71 W/m². Hourly EPW runs with the default solar position are unchanged.
 
+- Aligned simulation inputs carry their own resolution, and `PV_Production`
+  has one definition ([#214](https://github.com/Str4vinci/breos/issues/214)).
+  `simulate_energy_balance_summary(aligned=...)` converted power to energy with
+  its `freq` argument, default `"h"`, so an aligned 15-minute input reported
+  96 kWh of load where it had 24 kWh. `AlignedSimulationInputs` now stores
+  `freq`, runs on aligned inputs use it, and a `freq` that disagrees raises
+  `ValueError`; `with_pv_only_chain` does the same. App and Monte Carlo passed
+  `freq` explicitly and are unchanged. Without an inverter rating,
+  `PV_Production` counted DC sent to the battery at the inverter efficiency;
+  with one, at its DC value. All three copies (scalar, vectorised PV-only,
+  and numba) now use `PV_DC − PV_DC_Curtailed − PV_Direct_Inverter_Loss`, which
+  equals AC to load and export plus DC to the battery, and the kernel's
+  `cap_wh_is_infinite` argument is gone. **`PV_Production`, `Total PV [kWh]`,
+  and the returned total PV change for unrated runs with a battery.** On the
+  48-hour golden fixture (3 kWh), total PV rises from 22.272 to 22.473 kWh
+  (+0.90%). `optimize_battery_size`, which runs unrated, reports a higher
+  self-consumption: 71.07% instead of 70.71% for a 10 kWh battery on
+  synthetic weather. App, Monte Carlo, and `SolarDesignProblem` results are
+  unchanged: the App always rates the inverter, and the optimizer scores
+  from the AC ledger even with `dc_ac_ratio = 0`.
+
 ### Removed
 - Removed the optimizer's `costs.panel_wp` override. It priced the steady-state
   CAPEX at a nominal wattage instead of the selected module's rating, so the

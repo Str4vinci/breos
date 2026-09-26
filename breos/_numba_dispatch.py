@@ -210,7 +210,6 @@ def _dispatch_day_numba(
         float(cap_charge_wh),
         float(cap_discharge_wh),
         float(cap_wh),
-        bool(np.isinf(cap_wh)),
         float(battery_config.thermal_resistance_kw),
         float(hours_per_step),
         2.0,

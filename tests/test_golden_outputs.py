@@ -51,7 +51,10 @@ def test_simulate_energy_balance_battery_golden_output():
     _assert_numeric_record(
         summary_df.iloc[0].to_dict(),
         {
-            "Total PV [kWh]": 22.272,
+            # Without an inverter rating, DC sent to the battery counts at its DC
+            # value, as it does with a rating (#214); it used to be scaled by the
+            # inverter efficiency, which gave 22.272.
+            "Total PV [kWh]": 22.47272691365348,
             "Total Load [kWh]": 36.0,
             "Sell [kWh]": 7.042554072316412,
             "Import [kWh]": 19.06413916898237,
@@ -62,7 +65,7 @@ def test_simulate_energy_balance_battery_golden_output():
             "Replacement_Cost": 0.0,
         },
     )
-    assert total_pv == pytest.approx(22272.0)
+    assert total_pv == pytest.approx(22472.72691365348)
     assert replacement_cost == pytest.approx(0.0)
     assert n_replacements == 0
     assert len(degradation_df) == 2
