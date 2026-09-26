@@ -122,6 +122,41 @@ def test_run_bifacial_flags_reach_config(monkeypatch, capsys):
     assert FakeApp.seen_config["pvrow_pitch"] == 6.0
 
 
+def test_cli_threads_battery_power_limits(monkeypatch, capsys):
+    monkeypatch.setattr(cli, "App", FakeApp)
+
+    assert (
+        cli.main(
+            [
+                "run",
+                "--location",
+                "porto",
+                "--n-modules",
+                "10",
+                "--annual-consumption-kwh",
+                "4000",
+                "--battery-max-charge-power-w",
+                "2500",
+                "--battery-max-discharge-power-w",
+                "1800",
+                "--export-emissions-factor-gco2-kwh",
+                "120",
+            ]
+        )
+        == 0
+    )
+    capsys.readouterr()
+    assert FakeApp.seen_config["battery_max_charge_power_w"] == 2500
+    assert FakeApp.seen_config["battery_max_discharge_power_w"] == 1800
+    assert FakeApp.seen_config["export_emissions_factor_gco2_kwh"] == 120
+
+
+def test_cli_does_not_advertise_unsupported_ac_coupling(capsys):
+    with pytest.raises(SystemExit):
+        cli.main(["run", "--ac-coupled"])
+    assert "unrecognized arguments: --ac-coupled" in capsys.readouterr().err
+
+
 def test_run_from_toml_config_with_cli_override(monkeypatch, tmp_path):
     monkeypatch.setattr(cli, "App", FakeApp)
     config_path = tmp_path / "experiment.toml"

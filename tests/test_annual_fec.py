@@ -97,6 +97,7 @@ def test_lifetime_fec_equals_cumulative_fec_when_no_pack_is_replaced():
 
 
 def test_lifetime_fec_is_backend_independent():
+    pytest.importorskip("numba", reason="the compiled backend needs the breos[fast] extra")
     python_run = _run_span(4, _near_eol_config(), backend="python")
     numba_run = _run_span(4, _near_eol_config(), backend="numba")
 

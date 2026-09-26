@@ -14,6 +14,8 @@ from typing import List, Optional, Tuple
 import numpy as np
 import pandas as pd
 
+from breos.utils import local_datetime_index
+
 MONTH_LABELS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
 
 # Plotting imports with backend handling
@@ -36,16 +38,43 @@ def _check_matplotlib():
         raise ImportError("matplotlib is required for plotting. Install with: uv add matplotlib")
 
 
-def _power_frame_to_energy_kwh(frame: pd.DataFrame) -> pd.DataFrame:
-    """Convert regularly sampled power columns in watts to interval energy."""
-    if not isinstance(frame.index, pd.DatetimeIndex):
+def _result_instants(results_df: pd.DataFrame) -> pd.DatetimeIndex:
+    """Return the absolute time of each results row.
+
+    Read from a ``Datetime`` column, else the ``Datetime_UTC`` column that
+    :func:`breos.io.load_results` adds to a DST-zone CSV, else the index. A
+    CSV of a run in a DST zone mixes UTC offsets; those rows are read as UTC
+    instants, which step evenly where their wall-clock labels do not.
+    """
+    if "Datetime" in results_df.columns:
+        values = results_df["Datetime"]
+    elif "Datetime_UTC" in results_df.columns:
+        values = results_df["Datetime_UTC"]
+    else:
+        values = results_df.index
+    if pd.api.types.is_datetime64_any_dtype(values):
+        return pd.DatetimeIndex(values)
+    try:
+        return pd.DatetimeIndex(pd.to_datetime(values))
+    except ValueError:
+        return pd.DatetimeIndex(pd.to_datetime(values, utc=True))
+
+
+def _power_frame_to_energy_kwh(frame: pd.DataFrame, instants: Optional[pd.DatetimeIndex] = None) -> pd.DataFrame:
+    """Convert regularly sampled power columns in watts to interval energy.
+
+    ``instants`` gives each row's absolute time when the frame's index is a
+    wall-clock calendar, which has a gap and a repeat at the DST transitions.
+    """
+    index = frame.index if instants is None else instants
+    if not isinstance(index, pd.DatetimeIndex):
         raise ValueError("Power-to-energy plotting requires a DatetimeIndex")
-    if len(frame.index) < 2:
+    if len(index) < 2:
         raise ValueError("Power-to-energy plotting requires at least two timestamps")
-    intervals = np.diff(frame.index.asi8)
+    intervals = np.diff(index.asi8)
     if np.any(intervals <= 0) or not np.all(intervals == intervals[0]):
         raise ValueError("Power-to-energy plotting requires a regular increasing time index")
-    hours_per_step = (frame.index[1] - frame.index[0]).total_seconds() / 3600.0
+    hours_per_step = (index[1] - index[0]).total_seconds() / 3600.0
     return frame * (hours_per_step / 1000.0)
 
 
@@ -421,7 +450,7 @@ def monthly_graphs(results_df: pd.DataFrame, results_directory: str, columns: Op
 
     df = results_df.copy()
     if "Datetime" in df.columns:
-        df["Datetime"] = pd.to_datetime(df["Datetime"])
+        df["Datetime"] = local_datetime_index(df["Datetime"])
         df.set_index("Datetime", inplace=True)
 
     if columns is None:
@@ -431,7 +460,7 @@ def monthly_graphs(results_df: pd.DataFrame, results_directory: str, columns: Op
     columns = [c for c in columns if c in df.columns]
 
     # Monthly aggregation
-    monthly = _power_frame_to_energy_kwh(df[columns]).resample("ME").sum()
+    monthly = _power_frame_to_energy_kwh(df[columns], _result_instants(results_df)).resample("ME").sum()
 
     fig, ax = plt.subplots(figsize=(14, 6))
 
@@ -471,13 +500,13 @@ def yearly_graphs(results_df: pd.DataFrame, results_directory: str) -> None:
 
     df = results_df.copy()
     if "Datetime" in df.columns:
-        df["Datetime"] = pd.to_datetime(df["Datetime"])
+        df["Datetime"] = local_datetime_index(df["Datetime"])
         df.set_index("Datetime", inplace=True)
 
     columns = ["PV_Production", "Houseload", "Import_From_Grid", "Sell_To_Grid"]
     columns = [c for c in columns if c in df.columns]
 
-    yearly = _power_frame_to_energy_kwh(df[columns]).resample("YE").sum()
+    yearly = _power_frame_to_energy_kwh(df[columns], _result_instants(results_df)).resample("YE").sum()
 
     fig, ax = plt.subplots(figsize=(10, 6))
 
@@ -515,7 +544,7 @@ def weekly_graphs(results_df: pd.DataFrame, week_number: int, results_directory:
 
     df = results_df.copy()
     if "Datetime" in df.columns:
-        df["Datetime"] = pd.to_datetime(df["Datetime"])
+        df["Datetime"] = local_datetime_index(df["Datetime"])
         df.set_index("Datetime", inplace=True)
 
     # Filter to specific week
@@ -573,7 +602,7 @@ def degradation_plots(degradation_df: pd.DataFrame, results_directory: str) -> N
         x_years = x / 365.0  # Convert to years for tick labels
         use_years_axis = True
     elif "Datetime" in degradation_df.columns:
-        x = pd.to_datetime(degradation_df["Datetime"])
+        x = local_datetime_index(degradation_df["Datetime"])
         use_years_axis = False
     else:
         x = degradation_df.index
@@ -669,7 +698,7 @@ def plot_resistance_and_efficiency(degradation_df: pd.DataFrame, results_directo
         x_years = x / 365.0
         use_years_axis = True
     elif "Datetime" in degradation_df.columns:
-        x = pd.to_datetime(degradation_df["Datetime"])
+        x = local_datetime_index(degradation_df["Datetime"])
         use_years_axis = False
     else:
         x = degradation_df.index
@@ -866,7 +895,8 @@ def plot_validation_multi_system(
     if n_systems == 0:
         return
 
-    cmap = plt.cm.get_cmap("tab20", max(n_systems, 2))
+    # plt.cm.get_cmap was removed in matplotlib 3.11; the registry works on the floor too.
+    cmap = matplotlib.colormaps["tab20"].resampled(max(n_systems, 2))
 
     fig, ax = plt.subplots(figsize=(12, 7))
 
@@ -971,7 +1001,7 @@ def plot_cell_temperature(
 
     df = results_df.copy()
     if "Datetime" in df.columns:
-        df["Datetime"] = pd.to_datetime(df["Datetime"])
+        df["Datetime"] = local_datetime_index(df["Datetime"])
         df = df.set_index("Datetime")
 
     # Monthly aggregation
@@ -984,11 +1014,11 @@ def plot_cell_temperature(
     min_by_month = monthly_min.groupby(monthly_min.index.month).min()
     max_by_month = monthly_max.groupby(monthly_max.index.month).max()
 
-    # Ensure all 12 months
+    # Ensure all 12 months; a month without data is a gap, not 0 °C.
     months = np.arange(1, 13)
-    mean_by_month = mean_by_month.reindex(months, fill_value=0.0)
-    min_by_month = min_by_month.reindex(months, fill_value=0.0)
-    max_by_month = max_by_month.reindex(months, fill_value=0.0)
+    mean_by_month = mean_by_month.reindex(months)
+    min_by_month = min_by_month.reindex(months)
+    max_by_month = max_by_month.reindex(months)
 
     month_names = MONTH_LABELS
 
@@ -1166,6 +1196,17 @@ def plot_breakeven(cost_projection: pd.DataFrame, results_directory: str, scenar
     print(f"   Break-even point: {be_text}")
 
 
+def _on_index_clock(value, index: pd.Index) -> pd.Timestamp:
+    """Return ``value`` as a timestamp comparable with ``index``: naive dates take its zone."""
+    stamp = pd.Timestamp(value)
+    zone = getattr(index, "tz", None)
+    if zone is not None and stamp.tz is None:
+        return stamp.tz_localize(zone)
+    if zone is None and stamp.tz is not None:
+        return stamp.tz_localize(None)
+    return stamp
+
+
 def plot_battery_soh_timeseries(
     results_df: pd.DataFrame,
     results_directory: str,
@@ -1192,14 +1233,15 @@ def plot_battery_soh_timeseries(
 
     # Ensure datetime index
     if "Datetime" in df.columns:
-        df["Datetime"] = pd.to_datetime(df["Datetime"])
+        df["Datetime"] = local_datetime_index(df["Datetime"])
         df.set_index("Datetime", inplace=True)
 
-    # Filter date range if specified
+    # Filter date range if specified. The bounds are civil dates, read on the
+    # results' own clock, so a naive date compares with a tz-aware index.
     if start_date:
-        df = df[df.index >= pd.to_datetime(start_date)]
+        df = df[df.index >= _on_index_clock(start_date, df.index)]
     if end_date:
-        df = df[df.index <= pd.to_datetime(end_date)]
+        df = df[df.index <= _on_index_clock(end_date, df.index)]
 
     if "Battery_SOH" not in df.columns:
         print("Warning: Battery_SOH column not found in results")
@@ -1319,14 +1361,14 @@ def plot_monthly_comparison(results_df: pd.DataFrame, results_directory: str, sc
 
     df = results_df.copy()
     if "Datetime" in df.columns:
-        df["Datetime"] = pd.to_datetime(df["Datetime"])
+        df["Datetime"] = local_datetime_index(df["Datetime"])
         df.set_index("Datetime", inplace=True)
 
     # Monthly aggregation
     columns = ["PV_Production", "Houseload", "Import_From_Grid", "Sell_To_Grid"]
     columns = [c for c in columns if c in df.columns]
 
-    monthly = _power_frame_to_energy_kwh(df[columns]).resample("ME").sum()
+    monthly = _power_frame_to_energy_kwh(df[columns], _result_instants(results_df)).resample("ME").sum()
     monthly["Month"] = monthly.index.strftime("%b")
 
     fig, ax = plt.subplots(figsize=(14, 7))
@@ -1400,7 +1442,7 @@ def plot_monthly_balance(results_df: pd.DataFrame, results_directory: str) -> No
     # Ensure Datetime index
     if "Datetime" in results_df.columns:
         df = results_df.copy()
-        df["Datetime"] = pd.to_datetime(df["Datetime"])
+        df["Datetime"] = local_datetime_index(df["Datetime"])
         df.set_index("Datetime", inplace=True)
     else:
         df = results_df.copy()
@@ -1411,7 +1453,7 @@ def plot_monthly_balance(results_df: pd.DataFrame, results_directory: str) -> No
         raise ValueError(f"Missing energy-balance column(s): {', '.join(missing)}")
 
     # Convert power to interval energy before monthly aggregation.
-    monthly = _power_frame_to_energy_kwh(df[energy_columns]).resample("ME").sum()
+    monthly = _power_frame_to_energy_kwh(df[energy_columns], _result_instants(results_df)).resample("ME").sum()
 
     # Group by month (1-12) to aggregate multi-year data
     monthly_avg = monthly.groupby(monthly.index.month).mean()

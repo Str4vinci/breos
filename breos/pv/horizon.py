@@ -12,6 +12,7 @@ import pandas as pd
 from pvlib.location import Location
 
 from breos.pv.model_options import DEFAULT_SOLAR_POSITION, resolve_solar_position_method, solar_position_time_offset
+from breos.utils import IRRADIANCE_COLUMN_ALIASES, find_irradiance_column
 
 
 def normalise_horizon_profile(profile: Any) -> list[list[float]] | None:
@@ -67,12 +68,12 @@ def interpolate_horizon_elevation(profile: list[list[float]], solar_azimuth: Any
     return np.interp(np.mod(np.asarray(solar_azimuth, dtype=float), 360.0), extended_azimuths, extended_elevations)
 
 
-def _weather_column(weather: pd.DataFrame, lower: str, upper: str) -> str:
-    if lower in weather.columns:
-        return lower
-    if upper in weather.columns:
-        return upper
-    raise ValueError(f"weather_data must contain '{lower}' or '{upper}'")
+def _weather_column(weather: pd.DataFrame, component: str) -> str:
+    column = find_irradiance_column(weather.columns, component)
+    if column is None:
+        names = ", ".join(repr(alias) for alias in IRRADIANCE_COLUMN_ALIASES[component])
+        raise ValueError(f"weather_data must contain a {component.upper()} column ({names}, in any case)")
+    return column
 
 
 def _solar_position_at_labels(
@@ -103,6 +104,11 @@ def apply_terrain_horizon_profile(
     interpolated terrain line. The corresponding direct-horizontal component
     is removed from GHI; DHI is retained because this v1 profile models far-
     horizon beam obstruction, not diffuse sky-view loss.
+
+    Irradiance columns are found under any name in
+    :data:`breos.utils.IRRADIANCE_COLUMN_ALIASES`, in any case: ``ghi`` or
+    ``shortwave_radiation``, ``dni`` or ``direct_normal_irradiance``, ``dhi``
+    or ``diffuse_radiation``, among others.
     """
     normalised = normalise_horizon_profile(profile)
     if normalised is None:
@@ -126,9 +132,9 @@ def apply_terrain_horizon_profile(
             "so BREOS can fetch fresh PVGIS data with use_horizon=False."
         )
 
-    ghi_column = _weather_column(weather, "ghi", "GHI")
-    dni_column = _weather_column(weather, "dni", "DNI")
-    dhi_column = _weather_column(weather, "dhi", "DHI")
+    ghi_column = _weather_column(weather, "ghi")
+    dni_column = _weather_column(weather, "dni")
+    dhi_column = _weather_column(weather, "dhi")
     solarpos, position_method = _solar_position_at_labels(location, weather, freq, solar_position)
     if "apparent_elevation" in solarpos:
         solar_elevation = np.asarray(solarpos["apparent_elevation"], dtype=float)
@@ -137,16 +143,26 @@ def apply_terrain_horizon_profile(
     horizon_elevation = interpolate_horizon_elevation(normalised, solarpos["azimuth"])
 
     result = weather.copy()
-    dni = np.nan_to_num(result[dni_column].to_numpy(dtype=float), nan=0.0)
-    ghi = np.nan_to_num(result[ghi_column].to_numpy(dtype=float), nan=0.0)
-    dhi = np.nan_to_num(result[dhi_column].to_numpy(dtype=float), nan=0.0)
+    # Shaded values are written back into these columns, so they must hold
+    # floats: an integer column is widened to float64 (nullable Int to
+    # Float64), and a float column keeps its dtype, with the values cast to
+    # it. Open-Meteo returns float32.
+    for column in (dni_column, ghi_column):
+        if not pd.api.types.is_float_dtype(result[column]):
+            nullable = isinstance(result[column].dtype, pd.api.extensions.ExtensionDtype)
+            result[column] = result[column].astype("Float64" if nullable else float)
+    dni = np.nan_to_num(result[dni_column].to_numpy(dtype=float, na_value=np.nan), nan=0.0)
+    ghi = np.nan_to_num(result[ghi_column].to_numpy(dtype=float, na_value=np.nan), nan=0.0)
+    dhi = np.nan_to_num(result[dhi_column].to_numpy(dtype=float, na_value=np.nan), nan=0.0)
     shaded = np.isfinite(solar_elevation) & np.isfinite(horizon_elevation) & (solar_elevation <= horizon_elevation)
     shaded &= dni > 0.0
 
     zenith = np.asarray(solarpos["apparent_zenith"], dtype=float)
     direct_horizontal = dni * np.clip(np.cos(np.radians(zenith)), 0.0, None)
     result.loc[shaded, dni_column] = 0.0
-    result.loc[shaded, ghi_column] = np.maximum(dhi[shaded], ghi[shaded] - direct_horizontal[shaded])
+    shaded_ghi = np.maximum(dhi[shaded], ghi[shaded] - direct_horizontal[shaded])
+    # pd.array casts to NumPy and pandas extension dtypes (Float64) alike.
+    result.loc[shaded, ghi_column] = pd.array(shaded_ghi, dtype=result[ghi_column].dtype)
 
     profile_metadata = {
         "type": "azimuth_elevation_pairs",

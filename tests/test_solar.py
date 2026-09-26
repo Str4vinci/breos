@@ -614,15 +614,6 @@ class TestTranspositionModel:
         perez = self._dc(synthetic_weather, porto_location, pv_params, transposition_model="perez").sum()
         assert perez > isotropic
 
-    def test_case_insensitive(self, synthetic_weather, porto_location, pv_params):
-        lower = self._dc(synthetic_weather, porto_location, pv_params, transposition_model="haydavies")
-        upper = self._dc(synthetic_weather, porto_location, pv_params, transposition_model="HayDavies")
-        pd.testing.assert_series_equal(lower, upper)
-
-    def test_invalid_model_raises(self, synthetic_weather, porto_location, pv_params):
-        with pytest.raises(ValueError, match="Unknown transposition model"):
-            self._dc(synthetic_weather, porto_location, pv_params, transposition_model="bogus")
-
     def test_per_array_override(self, synthetic_weather, porto_location):
         # A per-array transposition_model overrides the function-level default.
         arrays = [{"modules": 50, "tilt": 30, "azimuth": 180, "transposition_model": "perez"}]
@@ -732,15 +723,6 @@ class TestSolarPosition:
 
         assert split("mid-interval") != pytest.approx(split("interval-start"), rel=1e-3)
 
-    def test_case_insensitive(self, synthetic_weather, porto_location, pv_params):
-        lower = self._dc(synthetic_weather, porto_location, pv_params, solar_position="mid-interval")
-        upper = self._dc(synthetic_weather, porto_location, pv_params, solar_position="Mid-Interval")
-        pd.testing.assert_series_equal(lower, upper)
-
-    def test_invalid_method_raises(self, synthetic_weather, porto_location, pv_params):
-        with pytest.raises(ValueError, match="Unknown solar position method"):
-            self._dc(synthetic_weather, porto_location, pv_params, solar_position="midpoint")
-
     def test_tracking_accepts_mid_interval(self, synthetic_weather, porto_location, pv_params):
         dc = calculate_pv_production_dc_tracking(
             weather_data=synthetic_weather,
@@ -783,15 +765,6 @@ class TestDiffuseIAM:
         assert marion < none
         assert 0.002 < 1 - marion / none < 0.03
 
-    def test_case_insensitive(self, synthetic_weather, porto_location, pv_params):
-        lower = self._dc(synthetic_weather, porto_location, pv_params, diffuse_iam="marion")
-        upper = self._dc(synthetic_weather, porto_location, pv_params, diffuse_iam="Marion")
-        pd.testing.assert_series_equal(lower, upper)
-
-    def test_invalid_method_raises(self, synthetic_weather, porto_location, pv_params):
-        with pytest.raises(ValueError, match="Unknown diffuse IAM method"):
-            self._dc(synthetic_weather, porto_location, pv_params, diffuse_iam="martin")
-
     def test_tracking_accepts_marion(self, synthetic_weather, porto_location, pv_params):
         dc = calculate_pv_production_dc_tracking(
             weather_data=synthetic_weather,
@@ -829,10 +802,6 @@ class TestIAMModel:
         ashrae = self._annual(synthetic_weather, porto_location, pv_params, iam_model="ashrae")
         selected = self._annual(synthetic_weather, porto_location, pv_params, iam_model=iam_model)
         assert selected != pytest.approx(ashrae)
-
-    def test_invalid_model_raises(self, synthetic_weather, porto_location, pv_params):
-        with pytest.raises(ValueError, match="Unknown IAM model"):
-            self._annual(synthetic_weather, porto_location, pv_params, iam_model="not-an-iam")
 
 
 class TestTemperatureModel:
@@ -885,15 +854,6 @@ class TestTemperatureModel:
         semi = self._annual(synthetic_weather, porto_location, pv_params, temperature_model="pvsyst-semi-integrated")
         assert semi < faiman
         assert 0.001 < 1 - semi / faiman < 0.10
-
-    def test_case_insensitive(self, synthetic_weather, porto_location, pv_params):
-        lower = self._annual(synthetic_weather, porto_location, pv_params, temperature_model="pvsyst-insulated")
-        upper = self._annual(synthetic_weather, porto_location, pv_params, temperature_model="PVsyst-Insulated")
-        assert lower == upper
-
-    def test_invalid_model_raises(self, synthetic_weather, porto_location, pv_params):
-        with pytest.raises(ValueError, match="Unknown temperature model"):
-            self._annual(synthetic_weather, porto_location, pv_params, temperature_model="sapm")
 
     def test_noct_sam_requires_complete_module_metadata(self, synthetic_weather, porto_location, pv_params):
         # The shared fixture is the catalog Suntech module: it has sourced
@@ -990,12 +950,57 @@ class TestPerezCoefficients:
             dc = self._perez(synthetic_weather, porto_location, pv_params, model_perez)
             assert dc.sum() > 0, model_perez
 
-    def test_invalid_perez_model(self, synthetic_weather, porto_location, pv_params):
-        with pytest.raises(ValueError, match="Unknown Perez coefficient model"):
-            self._perez(synthetic_weather, porto_location, pv_params, "not_a_set")
 
-    def test_perez_model_name_is_case_and_whitespace_insensitive(self, synthetic_weather, porto_location, pv_params):
-        canonical = self._perez(synthetic_weather, porto_location, pv_params, "allsitescomposite1990")
-        normalized = self._perez(synthetic_weather, porto_location, pv_params, " AllSitesComposite1990 ")
+class TestModelOptionNames:
+    """Every named PV model option is normalised the same way and rejects unknown names.
 
-        assert normalized.to_numpy() == pytest.approx(canonical.to_numpy())
+    Names match case- and whitespace-insensitively (``normalise_model_name``),
+    so a padded upper-case spelling must give the same series as the canonical
+    one. Each valid value is a non-default choice, so a spelling that silently
+    fell back to the default would not match. ``surface_type`` is left out on
+    purpose: it is matched case-sensitively against pvlib's table.
+    """
+
+    @pytest.mark.parametrize(
+        ("option_name", "valid_value", "invalid_value", "message", "extra"),
+        [
+            pytest.param(
+                "transposition_model", "haydavies", "bogus", "Unknown transposition model", {}, id="transposition_model"
+            ),
+            pytest.param(
+                "solar_position", "mid-interval", "midpoint", "Unknown solar position method", {}, id="solar_position"
+            ),
+            pytest.param("diffuse_iam", "marion", "martin", "Unknown diffuse IAM method", {}, id="diffuse_iam"),
+            pytest.param("iam_model", "physical", "not-an-iam", "Unknown IAM model", {}, id="iam_model"),
+            pytest.param(
+                "temperature_model", "pvsyst-insulated", "sapm", "Unknown temperature model", {}, id="temperature_model"
+            ),
+            pytest.param(
+                "model_perez",
+                "france1988",
+                "not_a_set",
+                "Unknown Perez coefficient model",
+                {"transposition_model": "perez"},
+                id="model_perez",
+            ),
+        ],
+    )
+    def test_option_name_is_normalised_and_validated(
+        self, synthetic_weather, porto_location, pv_params, option_name, valid_value, invalid_value, message, extra
+    ):
+        def dc(value):
+            return calculate_pv_production_dc(
+                weather_data=synthetic_weather,
+                location=porto_location,
+                tilt=35,
+                surface_azimuth=180,
+                n_modules=1,
+                pv_params=pv_params,
+                freq="h",
+                **extra,
+                **{option_name: value},
+            )
+
+        pd.testing.assert_series_equal(dc(valid_value), dc(f" {valid_value.upper()} "))
+        with pytest.raises(ValueError, match=message):
+            dc(invalid_value)
