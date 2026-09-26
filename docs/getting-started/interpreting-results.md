@@ -24,7 +24,7 @@ flag.
 | `grid_independence_pct` | Year 1 grid independence ratio |
 | `self_consumption_pct` | Year 1 self-consumption ratio |
 | `total_investment_eur` | Total CAPEX |
-| `payback_year` | First year with positive cumulative NPV (`None` if not reached) |
+| `payback_year` | Sustained discounted payback within the simulated period, as a whole year: the year from which cumulative NPV savings are zero or above and stay so to the horizon (`None` if not reached) |
 | `npv_savings_eur` | Cumulative NPV savings over the projection horizon |
 | `lcoe_eur_kwh` | Levelized cost of electricity from system CAPEX, O&M, simulated replacements, and discounted PV production |
 | `monthly` | Year 1 monthly energy balance rows |
@@ -130,5 +130,12 @@ A list of dicts with one row per year (year 0 is the investment row):
 
 `balance` is the cumulative NPV savings; `cost_with_system` and
 `cost_without_system` are the cumulative discounted costs of operating with
-and without the BREOS-sized system. The crossover point of `balance ≥ 0`
-defines `payback_year`.
+and without the BREOS-sized system. `payback_year` is the sustained discounted
+payback within the simulated period: the year from which `balance ≥ 0` holds
+to the end of the horizon. The series starts at year 0, so a system that
+recovers its investment during year 1 reports 1. If a battery replacement
+turns `balance` negative again, payback is the later recovery, and a
+`balance` that is negative in the last year means no payback.
+`economics.find_payback_year_exact` gives the same crossing as a fractional
+year, interpolated linearly between the annual points; it is an estimate
+from year-end values, not an exact date.
