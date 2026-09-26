@@ -274,12 +274,6 @@ def test_plot_validation_parity(soh_pair, tmp_path):
     _assert_written(tmp_path, "validation_parity.png")
 
 
-@pytest.mark.xfail(
-    not hasattr(matplotlib.cm, "get_cmap"),
-    raises=AttributeError,
-    strict=True,
-    reason="#219: plt.cm.get_cmap was removed in matplotlib 3.11",
-)
 def test_plot_validation_multi_system(soh_pair, tmp_path):
     measured, predicted = soh_pair
     system = {
@@ -531,3 +525,19 @@ def test_plot_tariff_comparison():
 @pytest.mark.skip(reason=_DEAD_PVBAT_REASON)
 def test_plot_tariff_comparison_manual():
     pass
+
+
+def test_plot_cell_temperature_leaves_months_without_data_empty(tmp_path, monkeypatch):
+    # Months without data used to be drawn at 0 °C (#219).
+    index = pd.date_range("2025-06-01", "2025-06-30 23:00", freq="h", tz="UTC")
+    results = pd.DataFrame({"Datetime": index, "T_cell": 20.0})
+    drawn = []
+    monkeypatch.setattr(plotting.plt, "close", lambda *args, **kwargs: drawn.append(plotting.plt.gcf()))
+
+    plotting.plot_cell_temperature(results, str(tmp_path))
+
+    mean_line = drawn[0].axes[0].lines[0]
+    y = np.asarray(mean_line.get_ydata(), dtype=float)
+    assert y[5] == pytest.approx(20.0)
+    assert np.isnan(np.delete(y, 5)).all()
+    plotting.plt.close("all")
