@@ -427,6 +427,10 @@ class ResolvedAppConfig:
     loc_key: str | None
     pv_arrays: list[dict[str, Any]]
     pv_params: PVModuleParams
+    # Catalogue key of ``pv_params`` (the first array's module with pv_arrays),
+    # which App accepts back as ``pv_module``; ``pv_params.Name`` is a display
+    # name and is not.
+    pv_module_key: str
     avg_module_power_w: float
     system_kwp: float
     tilt: float
@@ -977,8 +981,10 @@ def normalise_pv_arrays(arrays: list[dict[str, Any]] | None, cfg: dict[str, Any]
 
 def resolve_pv_system(
     cfg: dict[str, Any], lat: float
-) -> tuple[list[dict[str, Any]], PVModuleParams, int, float, float, float, float]:
+) -> tuple[list[dict[str, Any]], str, PVModuleParams, int, float, float, float, float]:
     """Resolve PV module, array, tilt, azimuth, and system sizing details.
+
+    The module is returned twice: as its catalogue key and as its parameters.
 
     Returns the resolved module count rather than writing it back into ``cfg``;
     the caller materialises it so the dict wrapped by the frozen
@@ -1005,7 +1011,7 @@ def resolve_pv_system(
 
     tilt = cfg["tilt"] if cfg["tilt"] is not None else estimate_optimal_tilt(lat)
     azimuth = cfg["azimuth"] if cfg["azimuth"] is not None else default_azimuth_fn(lat)
-    return pv_arrays, pv_params, n_modules, avg_module_power_w, system_kwp, tilt, azimuth
+    return pv_arrays, module_name, pv_params, n_modules, avg_module_power_w, system_kwp, tilt, azimuth
 
 
 def validate_temperature_module_metadata(
@@ -1101,7 +1107,9 @@ def resolve_app_config(config: dict[str, Any]) -> ResolvedAppConfig:
     validate_config(cfg)
 
     lat, lon, timezone, loc_key = resolve_location(cfg)
-    pv_arrays, pv_params, n_modules, avg_module_power_w, system_kwp, tilt, azimuth = resolve_pv_system(cfg, lat)
+    pv_arrays, pv_module_key, pv_params, n_modules, avg_module_power_w, system_kwp, tilt, azimuth = resolve_pv_system(
+        cfg, lat
+    )
     validate_temperature_module_metadata(cfg["temperature_model"], pv_arrays, pv_params)
     tracking, axis_azimuth = resolve_tracking(cfg, lat)
 
@@ -1117,6 +1125,7 @@ def resolve_app_config(config: dict[str, Any]) -> ResolvedAppConfig:
         loc_key=loc_key,
         pv_arrays=pv_arrays,
         pv_params=pv_params,
+        pv_module_key=pv_module_key,
         avg_module_power_w=avg_module_power_w,
         system_kwp=system_kwp,
         tilt=tilt,

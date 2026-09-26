@@ -284,7 +284,7 @@
   "provenance.resolved_config.pv_arrays": null,
   "provenance.resolved_config.pv_degradation_rate": 0.005,
   "provenance.resolved_config.pv_loss_overrides": null,
-  "provenance.resolved_config.pv_module": "Suntech_STP550S-C72/Vmh",
+  "provenance.resolved_config.pv_module": "Suntech_STP550S_STC",
   "provenance.resolved_config.pvrow_height": null,
   "provenance.resolved_config.pvrow_pitch": null,
   "provenance.resolved_config.resolution": "h",
@@ -450,7 +450,7 @@
   "yearly[2].year": 3
  },
  "generated_with": {
-  "breos_commit": "3f95754ccc14823497f740d3ccbdddfc9c6643b1",
+  "breos_commit": "97eac4262a65835efc118d40385ea43b2cc3d7db",
   "numpy": "2.4.6",
   "pandas": "3.0.5",
   "pvlib": "0.15.2",

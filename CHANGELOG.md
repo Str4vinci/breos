@@ -391,6 +391,18 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   list are now one, `breos.utils.IRRADIANCE_COLUMN_ALIASES`, matched without
   regard to case. Results are unchanged.
 
+- Provenance records what the model did
+  ([#215](https://github.com/Str4vinci/breos/issues/215)). A 15-minute App
+  run kept `input_resolution`, `output_resolution` and the resampling method
+  out of `provenance.weather`, because App wrote the pre-resampling metadata
+  back over the resampler's. With no `pv_module` set,
+  `provenance.resolved_config.pv_module` and the CLI dry run recorded the
+  module's display name, which App rejects; they now record its catalogue key,
+  so the recorded config replays to the same result. Monte Carlo now records
+  the solar-position method and offset the PV model applies: `"Mid-Interval"`
+  used to be recorded with a 0-minute offset while 30 minutes were applied
+  at hourly resolution. Simulated numbers are unchanged.
+
 ### Removed
 - Removed the optimizer's `costs.panel_wp` override. It priced the steady-state
   CAPEX at a nominal wattage instead of the selected module's rating, so the

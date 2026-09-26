@@ -131,14 +131,12 @@ def load_weather_for_simulation(
         )
         weather.index = weather.index.tz_localize("UTC")
     weather = remap_tmy_year(weather, start_year)
-    weather_metadata = weather.attrs.get("breos_weather_metadata")
-
     if freq == "15min":
         inferred = pd.infer_freq(weather.index[:10])
         if inferred and "h" in inferred.lower() and "15" not in inferred:
+            # The resampler carries the weather metadata over and adds its own
+            # resolution and method fields to it.
             weather = deps.resample_to_15min(weather, latitude=resolved.lat, longitude=resolved.lon)
-            if weather_metadata is not None:
-                weather.attrs["breos_weather_metadata"] = weather_metadata
 
     if horizon_profile is not None:
         weather = apply_terrain_horizon_profile(
