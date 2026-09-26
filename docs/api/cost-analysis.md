@@ -34,7 +34,14 @@ energy balance.
    breos.economics.calculate_lcoe
    breos.economics.calculate_lcoe_from_projection
    breos.economics.find_payback_year
+   breos.economics.find_payback_year_exact
 ```
+
+`find_payback_year` and `find_payback_year_exact` give the sustained
+discounted payback within the simulated period: the first time cumulative
+discounted savings, starting at minus the investment in year 0, reach zero and
+stay nonnegative to the horizon. The fractional value is interpolated linearly
+between annual points.
 
 ## Emissions
 

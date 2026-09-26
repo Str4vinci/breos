@@ -86,8 +86,13 @@ distributions into `plots/`. `--json` prints a machine-readable summary to
 stdout for scripting.
 
 Each summary entry gives `count`, the number of runs its statistics cover, out
-of `n_runs`. A run that never pays back within the horizon has no payback year,
-so the payback statistics cover only the runs that paid back.
+of `n_runs`. `payback_year` and `payback_year_exact` are the sustained
+discounted payback within the simulated period, as a whole and as an
+interpolated fractional year: the time from which cumulative discounted savings
+stay zero or above to the horizon (see
+[Interpreting results](interpreting-results.md)). A run that never pays back
+within the horizon has no payback year, so the payback statistics cover only
+the runs that paid back.
 `payback_probability` gives the share of runs that did. Read the two together:
 a payback median of 9.8 years means little if only 60% of runs pay back.
 

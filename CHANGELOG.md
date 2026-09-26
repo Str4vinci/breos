@@ -450,6 +450,27 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   values as they do NaN, so an infinite LCOE no longer makes the mean
   infinite and the spread NaN; `count` shows how many runs remain.
 
+- Payback is the sustained discounted payback within the simulated period
+  ([#175](https://github.com/Str4vinci/breos/issues/175)): the earliest time
+  cumulative discounted savings reach zero or above and stay nonnegative to the
+  end of the horizon. `find_payback_year` and `find_payback_year_exact` now
+  start the savings at year 0 with minus the investment, taken from
+  `attrs["total_investment"]` or, for a projection read back from CSV, from the
+  first row of the system cost; both accept an optional `initial_investment`.
+  The fractional value interpolates between years 0 and 1 too, so a system
+  that pays back after 0.21 years reports 0.21 instead of 1.0. A system whose
+  savings turn positive and then negative again after a battery replacement
+  pays back at the later recovery, or not at all if the savings end negative;
+  it used to report the first crossing. Savings of exactly zero that hold to
+  the horizon count as payback. The integer year follows the same rule, and
+  the projection's `attrs["payback_year"]` comes from `find_payback_year`.
+  **Results change** for App, Monte Carlo and optimizer runs whose savings dip
+  below zero after first turning positive, or reach exactly zero; in addition,
+  `payback_year_exact` and `Projected_Breakeven_Year_Exact` change for runs
+  that pay back within the first year. Other runs, and the App golden
+  baseline, are unchanged. The break-even plots mark a first-year payback
+  from the year-0 investment and widen the axis to show it.
+
 ### Removed
 - Removed the optimizer's `costs.panel_wp` override. It priced the steady-state
   CAPEX at a nominal wattage instead of the selected module's rating, so the

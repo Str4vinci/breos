@@ -9,7 +9,7 @@ This module handles:
 """
 
 from dataclasses import dataclass
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -454,15 +454,8 @@ def cost_analysis_projection(
         proj["Savings_Cumulative"] = proj["Cost_No_Sys_Cumulative"] - proj["Cost_System_Cumulative"]
         proj["Savings_Cumulative_NPV"] = proj["Cost_No_Sys_Cumulative_NPV"] - proj["Cost_System_Cumulative_NPV"]
 
-        # Find payback year
-        payback_mask = proj["Savings_Cumulative_NPV"] > 0
-        if payback_mask.any():
-            payback_year = proj.loc[payback_mask, "Year"].iloc[0]
-            proj.attrs["payback_year"] = payback_year
-        else:
-            proj.attrs["payback_year"] = None
-
         proj.attrs["total_investment"] = costs["total_initial_cost"]
+        proj.attrs["payback_year"] = find_payback_year(proj)
         proj.attrs["final_npv_savings"] = proj["Savings_Cumulative_NPV"].iloc[-1]
         if total_replacement_cost is not None:
             proj.attrs["total_replacement_cost"] = total_replacement_cost
@@ -657,15 +650,8 @@ def cost_analysis_projection(
     proj["Export_kWh"] = export_degraded
     proj["Degradation_Factor"] = degradation_factors
 
-    # Find payback year
-    payback_mask = proj["Savings_Cumulative_NPV"] > 0
-    if payback_mask.any():
-        payback_year = proj.loc[payback_mask, "Year"].iloc[0]
-        proj.attrs["payback_year"] = payback_year
-    else:
-        proj.attrs["payback_year"] = None
-
     proj.attrs["total_investment"] = costs["total_initial_cost"]
+    proj.attrs["payback_year"] = find_payback_year(proj)
     proj.attrs["final_npv_savings"] = proj["Savings_Cumulative_NPV"].iloc[-1]
     proj.attrs["lcoe_eur_kwh"] = calculate_lcoe_from_projection(
         proj,
@@ -709,48 +695,140 @@ def cost_analysis_projection(
     return proj
 
 
-def find_payback_year(cost_projection: pd.DataFrame) -> Optional[int]:
+def _initial_investment(cost_projection: pd.DataFrame) -> Optional[float]:
+    """Return the year-0 investment a projection starts from, if it records one.
+
+    ``cost_analysis_projection`` stores it in ``attrs["total_investment"]``.
+    A projection read back from CSV has no attrs, so the investment is
+    recovered from the first row of the cumulative system cost, which is the
+    investment plus that year's cost.
     """
-    Find the payback year from a cost projection DataFrame.
+    investment = cost_projection.attrs.get("total_investment")
+    for cumulative, annual in (
+        ("Cost_System_Cumulative_NPV", "Cost_System_Annual_NPV"),
+        ("Cost_System_Cumulative", "Cost_System_Annual"),
+    ):
+        if investment is None and {cumulative, annual} <= set(cost_projection.columns):
+            investment = cost_projection[cumulative].iloc[0] - cost_projection[annual].iloc[0]
+    if investment is None:
+        return None
+    investment = float(investment)
+    return investment if np.isfinite(investment) else None
 
-    Args:
-        cost_projection: DataFrame from cost_analysis_projection()
 
-    Returns:
-        Year number when payback is achieved, or None if never
+def _payback_points(
+    cost_projection: pd.DataFrame, initial_investment: Optional[float]
+) -> Optional[Tuple[np.ndarray, np.ndarray]]:
+    """Return the years and cumulative discounted savings payback is read from.
+
+    When the projection starts after year 0 and the investment is known, a
+    year-0 point with savings of minus the investment is prepended.
     """
-    if "Savings_Cumulative_NPV" in cost_projection.columns:
-        payback = cost_projection[cost_projection["Savings_Cumulative_NPV"] > 0]
-        if not payback.empty:
-            return int(payback["Year"].iloc[0])
-    return None
-
-
-def find_payback_year_exact(cost_projection: pd.DataFrame) -> Optional[float]:
-    """Return the discounted payback year, interpolated linearly between years.
-
-    The fractional counterpart of :func:`find_payback_year`, under the same
-    rule: payback is where cumulative discounted savings first turn positive.
-    A projection whose first row already has positive savings pays back at
-    that row's year. A row of exactly zero savings is not payback; if the
-    next row is positive, the crossing is at the zero row's year. Returns None
-    when the savings never turn positive, or the projection has no savings
-    column.
-    """
-    if "Savings_Cumulative_NPV" not in cost_projection.columns or cost_projection.empty:
+    if (
+        "Savings_Cumulative_NPV" not in cost_projection.columns
+        or "Year" not in cost_projection.columns
+        or cost_projection.empty
+    ):
         return None
 
-    savings = cost_projection["Savings_Cumulative_NPV"].to_numpy(dtype=float)
     years = cost_projection["Year"].to_numpy(dtype=float)
-    if savings[0] > 0.0:
-        return float(years[0])
+    savings = cost_projection["Savings_Cumulative_NPV"].to_numpy(dtype=float)
+    if initial_investment is None:
+        initial_investment = _initial_investment(cost_projection)
+    if initial_investment is not None and years[0] > 0.0:
+        years = np.concatenate(([0.0], years))
+        savings = np.concatenate(([-float(initial_investment)], savings))
+    return years, savings
 
-    for idx in range(1, len(savings)):
-        if savings[idx] > 0.0:
-            # savings[idx - 1] <= 0 < savings[idx], so the fraction is in [0, 1).
-            fraction = -savings[idx - 1] / (savings[idx] - savings[idx - 1])
-            return float(years[idx - 1] + fraction * (years[idx] - years[idx - 1]))
-    return None
+
+def _sustained_payback_index(savings: np.ndarray) -> Optional[int]:
+    """Index of the first point from which savings stay >= 0 to the horizon.
+
+    Non-finite savings count as negative. Returns None when the last point is
+    negative, that is when the savings never recover for good.
+    """
+    negative = np.flatnonzero(~(savings >= 0.0))
+    if negative.size == 0:
+        return 0
+    last_negative = int(negative[-1])
+    if last_negative == len(savings) - 1:
+        return None
+    return last_negative + 1
+
+
+def find_payback_year(cost_projection: pd.DataFrame, initial_investment: Optional[float] = None) -> Optional[int]:
+    """Return the sustained discounted payback year, as a whole year.
+
+    The integer counterpart of :func:`find_payback_year_exact`, under the same
+    rule: the first year from which cumulative discounted savings
+    (``Savings_Cumulative_NPV``) are zero or above and stay so to the end of
+    the simulated period. The series starts at year 0 with minus the
+    investment (see :func:`find_payback_year_exact`), so it is the whole year
+    in which the savings cross zero for the last time, and a system that pays
+    back within its first year reports 1. If a battery replacement turns the
+    savings negative again, payback is the later recovery.
+
+    Args:
+        cost_projection: DataFrame from :func:`cost_analysis_projection`.
+        initial_investment: Year-0 investment. Defaults to
+            ``cost_projection.attrs["total_investment"]``, or to the value
+            recovered from the system cost columns.
+
+    Returns:
+        The payback year, or None when the savings do not stay nonnegative
+        through the last projected year, or the projection has no savings
+        column.
+    """
+    points = _payback_points(cost_projection, initial_investment)
+    if points is None:
+        return None
+    years, savings = points
+    index = _sustained_payback_index(savings)
+    return None if index is None else int(years[index])
+
+
+def find_payback_year_exact(
+    cost_projection: pd.DataFrame, initial_investment: Optional[float] = None
+) -> Optional[float]:
+    """Return the sustained discounted payback, interpolated between years.
+
+    Sustained discounted payback within the simulated period: the earliest
+    time at which cumulative discounted savings (``Savings_Cumulative_NPV``)
+    reach zero or above and remain nonnegative through the end of the
+    projection. The series starts at year 0 with minus the initial
+    investment, and the crossing is interpolated linearly between the annual
+    points, including between years 0 and 1. If a battery replacement turns
+    the savings negative again, payback is the later recovery.
+
+    The result is fractional, not exact: a straight line between year-end
+    points only approximates when within the year the savings cross zero.
+
+    The year-0 point is taken from ``initial_investment`` when given, else
+    from ``cost_projection.attrs["total_investment"]``, else from the first
+    row of ``Cost_System_Cumulative_NPV`` minus ``Cost_System_Annual_NPV``
+    (or their nominal counterparts), as in a projection read back from CSV.
+    A projection that already has a year-0 row, or records no investment, is
+    read as it is; its first row then pays back at that row's year if the
+    savings stay nonnegative from it.
+
+    Returns:
+        The payback in years, or None when the savings do not stay
+        nonnegative through the last projected year, or the projection has no
+        savings column.
+    """
+    points = _payback_points(cost_projection, initial_investment)
+    if points is None:
+        return None
+    years, savings = points
+    index = _sustained_payback_index(savings)
+    if index is None:
+        return None
+    if index == 0:
+        return float(years[0])
+    # savings[index - 1] < 0 <= savings[index], so the fraction is in (0, 1].
+    before, after = savings[index - 1], savings[index]
+    fraction = -before / (after - before)
+    return float(years[index - 1] + fraction * (years[index] - years[index - 1]))
 
 
 def calculate_lcoe(
