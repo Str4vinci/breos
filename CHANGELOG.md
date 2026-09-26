@@ -470,6 +470,12 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   that pay back within the first year. Other runs, and the App golden
   baseline, are unchanged. The break-even plots mark a first-year payback
   from the year-0 investment and widen the axis to show it.
+- `calculate_lcoe` is documented as a real-terms (constant-price) LCOE
+  ([#175](https://github.com/Str4vinci/breos/issues/175)). It holds O&M at
+  first-year prices, while `calculate_lcoe_from_projection`, which App,
+  Monte Carlo and the optimizer report, escalates it with inflation, so the
+  two differ whenever inflation is not zero. Its numbers are unchanged; a test
+  pins that the two agree at zero inflation.
 
 ### Removed
 - Removed the optimizer's `costs.panel_wp` override. It priced the steady-state

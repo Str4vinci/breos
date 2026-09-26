@@ -840,14 +840,22 @@ def calculate_lcoe(
     degradation_rate: float = 0.005,
 ) -> float:
     """
-    Calculate Levelized Cost of Electricity (LCOE).
+    Calculate a real-terms (constant-price) Levelized Cost of Electricity.
+
+    O&M is held at ``annual_operation_cost`` in every year: no inflation is
+    applied, so costs are in first-year prices and ``discount_rate`` should be
+    a real rate. :func:`calculate_lcoe_from_projection`, which the App,
+    Monte Carlo and the optimizer report, instead takes O&M from a projection
+    that escalates it by the inflation rate. The two agree when inflation is
+    zero and there is no replacement; with inflation this function gives the
+    lower value.
 
     Args:
         total_investment: Total CAPEX (€)
         annual_production_kwh: First year production (kWh)
-        annual_operation_cost: Annual O&M cost (€)
+        annual_operation_cost: Annual O&M cost (€), in first-year prices
         lifetime_years: System lifetime
-        discount_rate: Discount rate
+        discount_rate: Discount rate (real)
         degradation_rate: Annual degradation
 
     Returns:
