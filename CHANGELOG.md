@@ -279,6 +279,23 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   NPV moves by −€2.23 and +€0.71. Hourly E-REDES runs, common-year runs, and
   the bundled profiles are unchanged.
 
+- PV weather input with gaps, at the wrong resolution, or without air
+  temperature or wind speed raises instead of being repaired
+  ([#172](https://github.com/Str4vinci/breos/issues/172)), the PV-side
+  counterpart of #151 and #153. The PV model filled every simulation step from
+  the nearest weather row, so weather with June removed gave June zero PV,
+  a truncated file shortened the year, and 15-minute weather run at
+  `freq="h"` was thinned to hourly, all without a message. Weather must now
+  step evenly at `freq` from its first row to its last. A missing air
+  temperature or wind speed column used to become 25 °C and 1 m/s, and a NaN
+  air temperature a 25 °C cell; both now raise, and the message shows how to
+  add a constant column explicitly. Battery temperature in `"weather"` mode
+  raises the same way when the weather has no temperature column; a fixed
+  `battery_temperature` is the explicit alternative. Weather files whose
+  timestamps have no timezone are still read as UTC, but now log a warning,
+  unless their metadata sidecar records the timezone, as files BREOS writes
+  do. Results for complete, regular weather with both columns are unchanged.
+
 ### Removed
 - Removed the optimizer's `costs.panel_wp` override. It priced the steady-state
   CAPEX at a nominal wattage instead of the selected module's rating, so the
