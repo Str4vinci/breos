@@ -182,8 +182,8 @@ def plot_pv_loss_waterfall(
         color="#4b5563",
     )
 
-    flow_points = [(left[0], y_positions[0]), *zip(left[1:], y_positions[1:])]
-    flow_points += [(right[-1], y_positions[-1]), *zip(right[-2::-1], y_positions[-2::-1])]
+    flow_points = [(left[0], y_positions[0]), *zip(left[1:], y_positions[1:], strict=True)]
+    flow_points += [(right[-1], y_positions[-1]), *zip(right[-2::-1], y_positions[-2::-1], strict=True)]
     ax.add_patch(Polygon(flow_points, closed=True, facecolor="#eef6ff", edgecolor="none", zorder=1))
 
     # Hatch (rather than solid-fill) the area gained/lost between consecutive
@@ -212,7 +212,7 @@ def plot_pv_loss_waterfall(
 
     ax.add_patch(Polygon(flow_points, closed=True, facecolor="none", edgecolor="#1f2937", linewidth=1.2, zorder=4))
 
-    for idx, (stage, y) in enumerate(zip(stages, y_positions)):
+    for idx, (stage, y) in enumerate(zip(stages, y_positions, strict=True)):
         is_edge = idx in (0, n_stages - 1)
         ax.plot([left[idx], right[idx]], [y, y], color="#1f2937", linewidth=0.7, alpha=0.35, zorder=3)
 
@@ -469,7 +469,7 @@ def monthly_graphs(results_df: pd.DataFrame, results_directory: str, columns: Op
     colors = ["gold", "steelblue", "coral", "lightgreen"]
     labels = ["PV Production", "Load", "Grid Import", "Grid Export"]
 
-    for i, (col, color, label) in enumerate(zip(columns, colors, labels)):
+    for i, (col, color, label) in enumerate(zip(columns, colors, labels, strict=False)):
         if col in monthly.columns:
             ax.bar([xi + i * width for xi in x], monthly[col], width, label=label, color=color, alpha=0.8)
 
@@ -1766,7 +1766,7 @@ def plot_breakeven_cdf(breakeven_steps: List[float], results_directory: str, suf
     quantiles = [0.025, 0.25, 0.5, 0.75, 0.975]
     colors = ["red", "gray", "black", "gray", "red"]
 
-    for q, color in zip(quantiles, colors):
+    for q, color in zip(quantiles, colors, strict=True):
         val = np.quantile(x, q)
         ax.axvline(val, color=color, linestyle="--", alpha=0.6, linewidth=1)
         ax.scatter([val], [q], color=color, zorder=5)
@@ -1795,7 +1795,7 @@ def plot_breakeven_summary_bar(achieved_count: int, total_runs: int, results_dir
 
     bars = ax.bar(categories, counts, color=colors, alpha=0.7, edgecolor="black")
 
-    for bar, count in zip(bars, counts):
+    for bar, count in zip(bars, counts, strict=True):
         if total_runs > 0:
             height = bar.get_height()
             ax.text(
@@ -2145,7 +2145,7 @@ def plot_tariff_comparison(results_df: pd.DataFrame, results_directory: str, sce
         bars = ax.bar(tariffs, values, color=colors, alpha=0.9, edgecolor="black", linewidth=0.6)
 
         # Add value labels (rounded to cents)
-        for bar, val in zip(bars, values):
+        for bar, val in zip(bars, values, strict=True):
             height = bar.get_height()
             label_text = f"€{val:.2f}"
 
@@ -2448,7 +2448,7 @@ def plot_breakeven_comparison(
     # Plot No-System baseline for each scenario
     # Track unique baselines to avoid duplicate lines when scenarios share the same baseline
     seen_baselines = {}
-    for df, label, color in zip(cost_dfs, labels, colors):
+    for df, label, color in zip(cost_dfs, labels, colors, strict=False):
         no_sys_values = tuple(df["Cost_No_Sys_Cumulative_NPV"].round(0).values)
         if no_sys_values not in seen_baselines:
             seen_baselines[no_sys_values] = label
@@ -2464,7 +2464,7 @@ def plot_breakeven_comparison(
             )
 
     max_year = 0
-    for df, label, color in zip(cost_dfs, labels, colors):
+    for df, label, color in zip(cost_dfs, labels, colors, strict=False):
         ax.plot(df["Year"], df["Cost_System_Cumulative_NPV"], color=color, label=label, linewidth=2)
         max_year = max(max_year, int(df["Year"].max()))
 

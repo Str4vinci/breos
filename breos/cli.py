@@ -448,7 +448,7 @@ def _sweep(args: argparse.Namespace) -> int:
     rows: list[dict[str, Any]] = []
 
     for run_idx, values in enumerate(itertools.product(*(grid[key] for key in param_keys)), start=1):
-        varied = dict(zip(param_keys, values))
+        varied = dict(zip(param_keys, values, strict=True))
         run_config = _apply_sweep_values(config, varied)
         resolved = _resolved_config_summary(run_config)
 
