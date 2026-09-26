@@ -483,3 +483,103 @@ def test_steady_state_replacement_instants_do_not_drift_past_the_horizon():
     times = treatment["replacement_times_years"]
     assert len(times) == 8
     assert times[-1] == pytest.approx(8 * 20 / 9)
+
+
+def test_projected_optimizer_candidate_matches_app(open_meteo_weather, monkeypatch):
+    """A returned projected design reproduces through the public App facade.
+
+    The one-year horizon makes the optimizer's aggregate projected grid
+    independence the same basis as App's first-year headline. App rounds its
+    public JSON-facing values to two decimals, so 0.0051 is the serialization
+    bound in percentage points or euros, not a model tolerance.
+    """
+    pytest.importorskip("pymoo")
+
+    from breos.app import App
+    from breos.app_inputs import AppRuntimeDependencies
+    from breos.optimization import optimize_system_multi_objective
+    from breos.weather import build_battery_temperature_series
+
+    idx = pd.date_range("2023-01-01", periods=24, freq="h", tz="UTC")
+    weather = open_meteo_weather(idx)
+    houseload = pd.DataFrame({"Load": [500.0] * len(idx)}, index=idx)
+    financials = dict(FINANCIALS_CONFIG, project_lifespan=1)
+    optimizer_config = {
+        "location": {"latitude": 41.15, "longitude": -8.61, "timezone": "UTC"},
+        "simulation": {"resolution": "h", "years_projection": 1},
+        "constraints": {
+            "budget_eur": 100000.0,
+            "max_area_m2": 100.0,
+            "max_modules": 4,
+            "max_battery_kwh": 2.0,
+            "max_tilt_deg": 30.0,
+        },
+        "optimization": {"objective_basis": "projected", "early_stop": False},
+        "mode": {"fixed_azimuth": 180},
+        "pv": {"module": "Suntech_STP550S_STC", "degradation_rate": financials["pv_degradation_rate"]},
+        # Leave battery window, efficiency, and degradation settings unset in
+        # both paths so the public defaults resolve the candidate identically.
+        "battery": {"temperature": 20.0, "indoor_model": {"enabled": False}},
+        "costs": COSTS_CONFIG,
+        "financials": financials,
+        "execution_backend": "python",
+    }
+    optimized = optimize_system_multi_objective(
+        weather,
+        houseload,
+        optimizer_config,
+        "results/_test_run/optimizer_app_parity",
+        pop_size=8,
+        n_gen=1,
+        seed=42,
+        verbose=False,
+    )
+    pareto = optimized.details["pareto"]
+    battery_candidates = pareto.loc[pareto["Battery_kWh"] > 0.0]
+    assert not battery_candidates.empty
+    candidate = battery_candidates.iloc[0]
+
+    # The App facade normally gets these inputs from its weather and load
+    # providers. Injecting the same short frames keeps this end-to-end check
+    # offline and makes both workflows simulate exactly the same interval.
+    dependencies = AppRuntimeDependencies(
+        load_profile=lambda **kwargs: houseload.copy(),
+        load_weather=lambda **kwargs: None,
+        fetch_tmy_weather_data=lambda **kwargs: (weather.copy(), {}),
+        resample_to_15min=lambda frame, **kwargs: frame,
+        build_battery_temperature_series=build_battery_temperature_series,
+    )
+    monkeypatch.setattr(App, "_runtime_dependencies", staticmethod(lambda: dependencies))
+
+    app_costs = {key: value for key, value in COSTS_CONFIG.items() if key != "dc_ac_ratio"}
+    app_config = {
+        "location": optimizer_config["location"],
+        "n_modules": int(candidate["Modules"]),
+        "annual_consumption_kwh": float(houseload["Load"].sum() / 1000.0),
+        "battery_kwh": float(candidate["Battery_kWh"]),
+        "pv_module": optimizer_config["pv"]["module"],
+        "tilt": float(candidate["Tilt"]),
+        "azimuth": float(candidate["Azimuth"]),
+        "projection_years": financials["project_lifespan"],
+        "resolution": "h",
+        "start_date": "2023-01-01",
+        "costs": app_costs,
+        "inverter_loading_ratio": COSTS_CONFIG["dc_ac_ratio"],
+        "inflation_rate": financials["inflation_rate"],
+        "sell_price_inflation": financials["sell_price_inflation"],
+        "discount_rate": financials["discount_rate"],
+        "pv_degradation_rate": financials["pv_degradation_rate"],
+        "battery_temperature": optimizer_config["battery"]["temperature"],
+        "battery_indoor_model": optimizer_config["battery"]["indoor_model"],
+        "execution_backend": "python",
+    }
+    app = App(app_config)
+    app.simulate()
+    app_result = app.result()
+
+    app_rounding = {"abs": 0.0051, "rel": 0.0}
+    assert app_result["grid_independence_pct"] == pytest.approx(
+        candidate["Projected_Grid_Independence_%"], **app_rounding
+    )
+    assert app_result["npv_savings_eur"] == pytest.approx(candidate["Projected_NPV_Eur"], **app_rounding)
+    assert app_result["total_investment_eur"] == pytest.approx(candidate["Projected_Initial_Cost_Eur"], **app_rounding)
