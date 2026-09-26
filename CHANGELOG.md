@@ -403,6 +403,16 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   used to be recorded with a 0-minute offset while 30 minutes were applied
   at hourly resolution. Simulated numbers are unchanged.
 
+- `optimize_tilt` and `optimize_battery_size` raise when a candidate fails,
+  and an optimizer result run with early stopping pickles
+  ([#217](https://github.com/Str4vinci/breos/issues/217)). The sweep helpers
+  scored a failing tilt as zero production and dropped a failing battery
+  size, so one PV-chain error could move the reported optimum without a
+  message. The early-stopping termination was a local class, so
+  `details["pymoo_result"]` could not be pickled. Results of sweeps whose
+  candidates all run are unchanged. `optimize_battery_size` with no sizes
+  raises `ValueError` instead of `RuntimeError`.
+
 ### Removed
 - Removed the optimizer's `costs.panel_wp` override. It priced the steady-state
   CAPEX at a nominal wattage instead of the selected module's rating, so the

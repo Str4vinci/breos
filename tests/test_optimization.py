@@ -27,13 +27,13 @@ def test_optimize_tilt_rejects_unimplemented_objective():
         )
 
 
-def test_optimize_tilt_raises_when_every_evaluation_fails(monkeypatch):
+def test_optimize_tilt_propagates_a_failing_evaluation(monkeypatch):
     monkeypatch.setattr(
         "breos.optimization.calculate_pv_production_dc",
         lambda **kwargs: (_ for _ in ()).throw(RuntimeError("invalid weather")),
     )
 
-    with pytest.raises(RuntimeError, match="failed for every"):
+    with pytest.raises(RuntimeError, match="invalid weather"):
         optimize_tilt(
             pd.DataFrame(),
             SimpleNamespace(latitude=41.0),
@@ -665,3 +665,81 @@ def test_projected_blast_scores_a_pv_only_candidate(synthetic_weather):
 
     assert np.isfinite(out["Projected_NPV_Eur"])
     assert 0.0 < out["Projected_Grid_Independence_%"] < 100.0
+
+
+def test_optimize_tilt_raises_when_one_angle_fails(monkeypatch):
+    # One failing tilt used to be scored as zero production (#217), which
+    # could move the reported optimum without a message.
+    idx = pd.date_range("2025-01-01", periods=2, freq="h", tz="UTC")
+
+    def production(**kwargs):
+        if kwargs["tilt"] == 20.0:
+            raise RuntimeError("PV chain failed at 20 degrees")
+        return pd.Series(1000.0, index=idx)
+
+    monkeypatch.setattr("breos.optimization.calculate_pv_production_dc", production)
+
+    with pytest.raises(RuntimeError, match="PV chain failed at 20 degrees"):
+        optimize_tilt(pd.DataFrame(), SimpleNamespace(latitude=41.0), 1, tilt_range=(0, 40), n_points=3, verbose=False)
+
+
+def test_optimize_battery_size_raises_when_one_size_fails(monkeypatch):
+    # A failing size used to be dropped from the comparison (#217).
+    from breos.optimization import optimize_battery_size
+
+    idx = pd.date_range("2025-01-01", periods=2, freq="h", tz="UTC")
+    summary = pd.DataFrame(
+        {"Grid Independence [%]": [50.0], "Import [%]": [50.0], "Total PV [kWh]": [1.0], "Sell [kWh]": [0.2]}
+    )
+
+    def balance(**kwargs):
+        if kwargs["battery_config"].nominal_energy_wh == 5000:
+            raise RuntimeError("dispatch failed for 5 kWh")
+        return pd.DataFrame(), 0.0, summary, 0.0, 0, pd.DataFrame()
+
+    monkeypatch.setattr("breos.optimization.simulate_energy_balance", balance)
+
+    with pytest.raises(RuntimeError, match="dispatch failed for 5 kWh"):
+        optimize_battery_size(
+            pd.Series(0.0, index=idx), pd.DataFrame({"Load": 1.0}, index=idx), [0, 5000, 10000], verbose=False
+        )
+    with pytest.raises(ValueError, match="at least one battery size"):
+        optimize_battery_size(pd.Series(0.0, index=idx), pd.DataFrame({"Load": 1.0}, index=idx), [], verbose=False)
+
+
+def test_early_stopping_optimizer_result_pickles(monkeypatch):
+    # The minimum-generation wrapper was a local class, so a result run with
+    # early stopping could not be pickled (#217).
+    import pickle
+
+    idx = pd.date_range("2025-01-01 00:00", periods=4, freq="h", tz="UTC")
+    summary = pd.DataFrame({"Import [kWh]": [1.0], "Sell [kWh]": [0.25]})
+    monkeypatch.setattr(
+        "breos.optimization.calculate_pv_production_dc", lambda **kwargs: pd.Series([0.0, 1e3, 1e3, 0.0], index=idx)
+    )
+    monkeypatch.setattr(
+        "breos.optimization.simulate_energy_balance",
+        lambda **kwargs: (pd.DataFrame(), 0.0, summary, 0.0, 0, pd.DataFrame()),
+    )
+    monkeypatch.setattr("breos.optimization.calculate_financials", lambda *args, **kwargs: (1000.0, 2500.0))
+    config = {
+        "location": {"latitude": 41.15, "longitude": -8.61, "timezone": "UTC"},
+        "simulation": {"resolution": "h"},
+        "constraints": {"budget_eur": 1e5, "max_area_m2": 100.0, "max_modules": 4, "max_battery_kwh": 3.0},
+        "mode": {"fixed_azimuth": 180},
+        "optimization": {"objective_basis": "steady_state", "early_stop": {"min_gen": 1}},
+        "battery": {"temperature": 20.0},
+    }
+
+    result = optimize_system_multi_objective(
+        pd.DataFrame({"temp_air": 15.0, "ghi": 0.0}, index=idx),
+        pd.DataFrame({"Load": 500.0}, index=idx),
+        config,
+        pop_size=4,
+        n_gen=2,
+        seed=1,
+        verbose=False,
+    )
+
+    restored = pickle.loads(pickle.dumps(result.details["pymoo_result"]))
+    assert restored.X.shape == result.details["pymoo_result"].X.shape
