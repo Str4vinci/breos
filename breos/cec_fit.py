@@ -265,7 +265,7 @@ def _solve_adjust(v_mp, i_mp, v_oc, i_sc, alpha_sc, beta_voc, gamma_pmp, x0, tem
         return None
     samples.sort(key=lambda s: s[0])
 
-    for (a_lo, r_lo, five_lo), (a_hi, r_hi, _five_hi) in zip(samples, samples[1:]):
+    for (a_lo, r_lo, five_lo), (a_hi, r_hi, _five_hi) in zip(samples, samples[1:], strict=False):
         if r_lo == 0.0:
             return a_lo, five_lo
         if r_lo * r_hi < 0.0:
