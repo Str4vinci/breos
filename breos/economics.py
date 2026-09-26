@@ -266,27 +266,28 @@ def _booking_exponents(replacement_time: np.ndarray, relative_years) -> np.ndarr
 
 
 def replacement_fraction_from_steps(replacement_steps, n_steps: int) -> float:
-    """Mean within-year position of the steps at which a pack was swapped.
+    """Mean within-year position of the interval ends where a pack was swapped.
 
-    The step index over the year's step count is the fraction of the year
-    elapsed at the swap, on any regular timebase: a swap on day 109 of an
-    hourly year is step 2616 of 8760, or 0.2986.
+    ``Battery_Replaced`` flags the last interval run by the old pack. The swap
+    occurs at that interval's end, so the zero-based step index advances by
+    one before it is divided by the year's step count. On an hourly year, the
+    interval at index 2616 ends at step boundary 2617 of 8760.
 
     Returns:
-        Fraction in ``[0, 1)``, or NaN when the year holds no replacement.
+        Fraction in ``[0, 1]``, or NaN when the year holds no replacement.
     """
     steps = np.asarray(replacement_steps, dtype=float)
     if steps.size == 0 or n_steps <= 0:
         return float("nan")
-    return float(np.mean(steps / float(n_steps)))
+    return float(np.mean((steps + 1.0) / float(n_steps)))
 
 
 def replacement_fraction_by_year(years, replaced) -> pd.Series:
     """Within-year position of each year's replacement steps, from the ledger.
 
-    ``Battery_Replaced`` marks the step in which the pack was swapped, so the
-    step's position in its year is the fraction the economics needs. A year
-    holding more than one swap reports the mean position; see
+    ``Battery_Replaced`` marks the final interval run by the old pack, so the
+    swap position is its ending boundary. A year holding more than one swap
+    reports the mean position; see
     :func:`replacement_booking_time` for what that aggregate costs.
 
     Returns:

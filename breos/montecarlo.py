@@ -286,9 +286,10 @@ def _align_years(
 
 # A PV-only study memoizes the DC-to-AC conversion for every distinct
 # (weather year, project year) pair. That is bounded work, but it is not
-# bounded memory: three arrays per pair, at eight bytes per timestep. The
-# Article's 19 weather years over a 20-year project at 15-minute resolution
-# come to about 320 MiB. Past this budget the study runs without the cache
+# bounded memory: four arrays per pair (the PV input and three conversion
+# outputs), at eight bytes per timestep. The Article's 19 weather years over a
+# 20-year project at 15-minute resolution come to about 407 MiB. Past this
+# budget the study runs without the cache
 # rather than exhausting the machine -- same numbers, less speed.
 _PV_CHAIN_CACHE_MAX_BYTES = 1 << 30
 
@@ -316,7 +317,7 @@ def _pv_chain_cache_is_worthwhile(
     """
     if n_runs < _PV_CHAIN_CACHE_MIN_REUSE * n_years:
         return False
-    if 3 * n_years * years_per_run * n_steps * 8 > _PV_CHAIN_CACHE_MAX_BYTES:
+    if 4 * n_years * years_per_run * n_steps * 8 > _PV_CHAIN_CACHE_MAX_BYTES:
         return False
     return n_procs == 1 or multiprocessing.get_start_method() == "fork"
 
