@@ -17,8 +17,21 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 - `resample_tmy_to_15min` is now a thin wrapper over `resample_to_15min`, so
   the two share one interpolation path. Its output is unchanged: the same
   columns, values, and provenance.
+- One frequency check, `breos.utils.normalise_frequency`, now serves the step
+  helpers, the weather readers, `load_profile` and the CLI
+  ([#175](https://github.com/Str4vinci/breos/issues/175)). It accepts `"h"`,
+  `"1h"` and `"15min"`, returns `"h"` or `"15min"`, and raises `ValueError`
+  naming those spellings for anything else. **The aliases `"H"`, `"1H"`,
+  `"15T"` and `"15m"` are no longer accepted.** pandas 3 rejects the first
+  three, and `"m"` is not a minute alias, so each one used to pass the step
+  helpers and then fail later in `pd.date_range`. Use `"h"` or `"15min"`.
 
 ### Fixed
+- `fetch_weather_data`, `read_epw_file` and `load_profile` raise `ValueError`
+  for a frequency other than hourly or 15-minute, as `fetch_tmy_weather_data`
+  already did ([#175](https://github.com/Str4vinci/breos/issues/175)). They
+  used to return hourly data for `freq="30min"`. The weather readers check the
+  frequency before any request or file read.
 - The 15-minute weather resamplers no longer depend on the timestamp resolution
   of the input index ([#150](https://github.com/Str4vinci/breos/issues/150)).
   Both divided the raw integers by `10**9`, which is only correct for

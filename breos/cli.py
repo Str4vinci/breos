@@ -22,6 +22,7 @@ from breos.load_profiles import PROFILE_ALIASES, PROFILE_FILES, PROFILE_FILES_15
 from breos.pv_modules import MODULES
 from breos.resources import load_config_json
 from breos.solar import resolve_pvwatts_losses
+from breos.utils import normalise_frequency
 
 
 def _package_version() -> str:
@@ -47,7 +48,7 @@ def _external_rlp_path(config: dict[str, Any]) -> Path | None:
     profile = PROFILE_ALIASES.get(str(config.get("load_profile", "1")).lower(), str(config.get("load_profile", "1")))
     root = Path(directory)
     candidates: list[Path] = []
-    if str(config.get("resolution", "h")) in {"15min", "15T"} and profile in PROFILE_FILES_15MIN:
+    if normalise_frequency(str(config.get("resolution", "h"))) == "15min" and profile in PROFILE_FILES_15MIN:
         candidates.append(root / PROFILE_FILES_15MIN[profile])
     if profile in PROFILE_FILES:
         candidates.append(root / PROFILE_FILES[profile])

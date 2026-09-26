@@ -28,6 +28,7 @@ from breos.utils import (
     get_hours_per_step,
     irradiance_component,
     is_leap_year,
+    normalise_frequency,
     safe_path_slug,
 )
 
@@ -457,6 +458,7 @@ def fetch_tmy_weather_data(
     Raises:
         ValueError: If the selected timezone has a fractional-hour UTC offset.
     """
+    freq = normalise_frequency(freq)
     roll_utc_offset = None
     coerce_year = sample_year
     if sample_year is not None:
@@ -524,10 +526,8 @@ def fetch_tmy_weather_data(
         tmy_data = fill_leap_day(tmy_data)
 
     # Resample to 15-min if requested
-    if freq in ("15min", "15T", "15m"):
+    if freq == "15min":
         tmy_data = resample_tmy_to_15min(tmy_data, metadata)
-    elif freq not in ("h", "H", "1h", "1H"):
-        raise ValueError("freq must be 'h' or '15min'")
 
     if save_to_file:
         # Encode metadata in filename: {location}_tmy_{year_min}_{year_max}_{db}.csv
@@ -598,6 +598,7 @@ def fetch_weather_data(
         current working directory (30-day expiry). Delete it to force
         fresh API responses.
     """
+    freq = normalise_frequency(freq)
     if not HAS_OPENMETEO:
         raise ImportError(
             "openmeteo_requests is required for historical weather data. "
@@ -685,7 +686,7 @@ def fetch_weather_data(
     }
 
     # Resample to 15-min if requested (pass location for clear-sky scaling)
-    if freq in ("15min", "15T", "15m"):
+    if freq == "15min":
         hourly_dataframe = resample_to_15min(hourly_dataframe, method="makima", latitude=latitude, longitude=longitude)
 
     if save_to_file:
@@ -1040,6 +1041,7 @@ def read_epw_file(
     Returns:
         DataFrame with standardized column names (ghi, dni, dhi, temp_air, wind_speed)
     """
+    freq = normalise_frequency(freq)
     df, meta = pvlib.iotools.read_epw(filepath)
 
     # Standardize column names
@@ -1072,7 +1074,7 @@ def read_epw_file(
     }
 
     # Resample to 15-min if requested
-    if freq in ("15min", "15T", "15m"):
+    if freq == "15min":
         df = resample_to_15min(df, method="makima", latitude=latitude, longitude=longitude)
 
     return df

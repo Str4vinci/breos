@@ -9,6 +9,7 @@ from breos.utils import (
     get_hours_per_step,
     get_steps_per_day,
     get_steps_per_year,
+    normalise_frequency,
     remap_datetime_index_years,
     safe_path_slug,
 )
@@ -70,18 +71,38 @@ def test_remap_datetime_index_years_drops_invalid_feb_29():
     assert pd.Timestamp("2025-03-01 00:00", tz="UTC") in remapped.index
 
 
-@pytest.mark.parametrize("freq", ["h", "H", "1h", "1H"])
-def test_hourly_frequency_aliases(freq):
+@pytest.mark.parametrize(("freq", "canonical"), [("h", "h"), ("1h", "h"), ("15min", "15min")])
+def test_normalise_frequency_returns_the_canonical_pandas_string(freq, canonical):
+    assert normalise_frequency(freq) == canonical
+    # The canonical string is one pandas itself accepts.
+    assert len(pd.date_range("2025-01-01", periods=2, freq=normalise_frequency(freq))) == 2
+
+
+@pytest.mark.parametrize("freq", ["H", "1H", "15T", "15m", "30min", "60min", "D", "", None, 15])
+def test_normalise_frequency_rejects_other_values_and_names_the_accepted_ones(freq):
+    with pytest.raises(ValueError, match=r"Unsupported frequency.*'h', '1h', '15min'"):
+        normalise_frequency(freq)
+
+
+@pytest.mark.parametrize("freq", ["h", "1h"])
+def test_hourly_frequency_spellings(freq):
     assert get_hours_per_step(freq) == pytest.approx(1.0)
     assert get_steps_per_day(freq) == 24
     assert get_steps_per_year(freq) == 8760
 
 
-@pytest.mark.parametrize("freq", ["15min", "15T", "15m"])
-def test_15min_frequency_aliases(freq):
-    assert get_hours_per_step(freq) == pytest.approx(0.25)
-    assert get_steps_per_day(freq) == 96
-    assert get_steps_per_year(freq, leap_year=True) == 35136
+def test_15min_frequency_spelling():
+    assert get_hours_per_step("15min") == pytest.approx(0.25)
+    assert get_steps_per_day("15min") == 96
+    assert get_steps_per_year("15min", leap_year=True) == 35136
+
+
+@pytest.mark.parametrize("freq", ["H", "1H", "15T", "15m", "30min"])
+def test_step_helpers_reject_pandas_2_aliases_and_unsupported_steps(freq):
+    with pytest.raises(ValueError, match="Unsupported frequency"):
+        get_hours_per_step(freq)
+    with pytest.raises(ValueError, match="Unsupported frequency"):
+        get_steps_per_day(freq)
 
 
 @pytest.mark.parametrize("unit", ["s", "ms", "us", "ns"])
