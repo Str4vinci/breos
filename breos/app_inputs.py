@@ -20,7 +20,7 @@ from breos.solar import (
     calculate_pv_production_tracking_breakdown,
 )
 from breos.utils import remap_datetime_index_years
-from breos.weather import fill_leap_day
+from breos.weather import fill_leap_day, warn_if_naive_weather_timestamps
 
 
 @dataclass(frozen=True)
@@ -126,6 +126,9 @@ def load_weather_for_simulation(
 
     _ensure_weather_horizon_metadata(weather)
     if weather.index.tz is None:
+        warn_if_naive_weather_timestamps(
+            weather.index, weather.attrs.get("breos_weather_metadata") or {}, "Local weather"
+        )
         weather.index = weather.index.tz_localize("UTC")
     weather = remap_tmy_year(weather, start_year)
     weather_metadata = weather.attrs.get("breos_weather_metadata")
