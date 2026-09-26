@@ -89,7 +89,7 @@ jobs:
         run: >-
           uv run pytest
           tests/test_public_api.py
-          tests/test_cli_correctness.py
+          tests/test_cli.py::test_cli_threads_battery_power_limits tests/test_cli.py::test_cli_does_not_advertise_unsupported_ac_coupling
           tests/test_release_smoke.py::test_readme_quickstart_smoke
           -q
 

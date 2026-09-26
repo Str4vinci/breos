@@ -12,30 +12,6 @@ from breos.battery import EXECUTION_BACKENDS, _dispatch_day_python, _resolve_dis
 from breos.montecarlo import MonteCarloSettings, _aggregate_jit_cache_states, run_montecarlo
 
 
-def _write_multiyear_weather(path, years=(2021, 2022)):
-    frames = []
-    for year in years:
-        idx = pd.date_range(f"{year}-01-01", f"{year}-12-31 23:00", freq="h")
-        idx = idx[~((idx.month == 2) & (idx.day == 29))]
-        hour = idx.hour.to_numpy()
-        daylight = np.clip(np.sin((hour - 6) / 12 * np.pi), 0, None)
-        ghi = 700.0 * daylight
-        frames.append(
-            pd.DataFrame(
-                {
-                    "date": idx,
-                    "temperature_2m": 15.0 + 8.0 * daylight,
-                    "wind_speed_10m": 2.0,
-                    "shortwave_radiation": ghi,
-                    "direct_normal_irradiance": 0.8 * ghi,
-                    "diffuse_radiation": 0.2 * ghi,
-                }
-            )
-        )
-    pd.concat(frames, ignore_index=True).to_csv(path, index=False)
-    return path
-
-
 def _base_config():
     return {
         "location": "porto",
@@ -66,11 +42,11 @@ def test_montecarlo_rejects_unknown_backend_before_loading_inputs(tmp_path):
         run_montecarlo(_base_config(), settings)
 
 
-def test_missing_numba_fails_before_any_trajectory_runs(tmp_path, monkeypatch):
+def test_missing_numba_fails_before_any_trajectory_runs(tmp_path, monkeypatch, write_multiyear_weather):
     import breos._numba_dispatch as dispatch
     import breos.montecarlo as mc_module
 
-    weather = _write_multiyear_weather(tmp_path / "multi.csv")
+    weather = write_multiyear_weather(tmp_path / "multi.csv")
     monkeypatch.setattr(dispatch, "numba_available", lambda: False)
 
     def _must_not_run(*args, **kwargs):
@@ -83,8 +59,8 @@ def test_missing_numba_fails_before_any_trajectory_runs(tmp_path, monkeypatch):
         run_montecarlo(_base_config(), settings)
 
 
-def test_provenance_records_the_python_backend_and_versions(tmp_path):
-    weather = _write_multiyear_weather(tmp_path / "multi.csv")
+def test_provenance_records_the_python_backend_and_versions(tmp_path, write_multiyear_weather):
+    weather = write_multiyear_weather(tmp_path / "multi.csv")
     settings = MonteCarloSettings(weather_file=str(weather), n_runs=1, years_per_run=1, seed=3)
     result = run_montecarlo(_base_config(), settings)
 
@@ -98,12 +74,12 @@ def test_provenance_records_the_python_backend_and_versions(tmp_path):
     assert "jit_cache" not in execution
 
 
-def test_provenance_records_the_compiler_versions_and_cache_state(tmp_path):
+def test_provenance_records_the_compiler_versions_and_cache_state(tmp_path, write_multiyear_weather):
     pytest.importorskip("numba", reason="the compiled backend needs the breos[fast] extra")
     import llvmlite
     import numba
 
-    weather = _write_multiyear_weather(tmp_path / "multi.csv")
+    weather = write_multiyear_weather(tmp_path / "multi.csv")
     settings = MonteCarloSettings(
         weather_file=str(weather), n_runs=1, years_per_run=1, seed=3, execution_backend="numba"
     )
@@ -256,9 +232,9 @@ def test_unclassifiable_jit_cache_observations_degrade_to_unknown(states):
     assert _aggregate_jit_cache_states(states) == "unknown"
 
 
-def test_both_backends_agree_on_a_seeded_study(tmp_path):
+def test_both_backends_agree_on_a_seeded_study(tmp_path, write_multiyear_weather):
     pytest.importorskip("numba", reason="the compiled backend needs the breos[fast] extra")
-    weather = _write_multiyear_weather(tmp_path / "multi.csv")
+    weather = write_multiyear_weather(tmp_path / "multi.csv")
 
     def run(backend):
         return run_montecarlo(
