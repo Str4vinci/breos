@@ -370,6 +370,19 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   3.11 removed, and now uses the colormap registry. `plot_cell_temperature`
   drew months without data at 0 °C; they are now gaps.
 
+- `load_results` and the plotting functions read result CSVs from a run in a
+  DST zone, and `load_results` accepts a path-like
+  ([#216](https://github.com/Str4vinci/breos/issues/216)). Such a CSV mixes UTC
+  offsets, and pandas 3 refused to parse it as one column, so
+  `load_results` and nine plotting call sites raised. They now parse it on
+  the results' own wall clock through `utils.local_datetime_index`, and the
+  energy plots take their step length from the rows' UTC instants. Because
+  the wall-clock index repeats an hour in autumn, `load_results` also keeps
+  those instants in a `Datetime_UTC` column for a file with mixed offsets,
+  so its output can go straight to the plots. `plot_battery_soh_timeseries` reads `start_date` and `end_date` on the
+  results' clock; with a timezone-aware index they used to raise. Results
+  are unchanged.
+
 ### Removed
 - Removed the optimizer's `costs.panel_wp` override. It priced the steady-state
   CAPEX at a nominal wattage instead of the selected module's rating, so the
