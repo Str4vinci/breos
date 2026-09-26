@@ -42,7 +42,7 @@ from breos.pv.model_options import (
     solar_position_time_offset,
 )
 from breos.pv.temperature import calculate_cell_temperature
-from breos.utils import get_hours_per_step
+from breos.utils import IRRADIANCE_COLUMN_ALIASES, find_irradiance_column, get_hours_per_step
 
 # Module-level cache for CEC model parameters (depends only on module specs, not weather)
 _cec_param_cache: Dict[tuple, tuple] = {}
@@ -1158,17 +1158,14 @@ def calculate_pv_production_ac(
 
 
 def _extract_irradiance(weather_df: pd.DataFrame):
-    """Extract DNI, GHI, DHI from weather DataFrame with flexible column names."""
-    # Try different column naming conventions
-    dni_cols = ["dni", "DNI", "direct_normal_irradiance"]
-    ghi_cols = ["ghi", "GHI", "shortwave_radiation", "global_horizontal_irradiance"]
-    dhi_cols = ["dhi", "DHI", "diffuse_radiation", "diffuse_horizontal_irradiance"]
-
-    dni = _get_column(weather_df, dni_cols)
-    ghi = _get_column(weather_df, ghi_cols)
-    dhi = _get_column(weather_df, dhi_cols)
-
-    return dni, ghi, dhi
+    """Extract DNI, GHI, DHI under any name in ``IRRADIANCE_COLUMN_ALIASES``."""
+    values = []
+    for component in ("dni", "ghi", "dhi"):
+        column = find_irradiance_column(weather_df.columns, component)
+        if column is None:
+            raise KeyError(f"Could not find column. Tried: {list(IRRADIANCE_COLUMN_ALIASES[component])}")
+        values.append(weather_df[column].values)
+    return tuple(values)
 
 
 def _extract_met_data(weather_df: pd.DataFrame):

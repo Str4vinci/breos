@@ -260,6 +260,39 @@ def test_interval_mean_beam_is_kept_while_the_mid_interval_sun_clears_the_horizo
 
 
 @pytest.mark.parametrize(
+    "names",
+    [
+        ("ghi", "dni", "dhi"),
+        ("GHI", "DNI", "DHI"),
+        ("shortwave_radiation", "direct_normal_irradiance", "diffuse_radiation"),
+        ("global_horizontal_irradiance", "direct_normal_irradiance", "diffuse_horizontal_irradiance"),
+    ],
+)
+def test_apply_horizon_finds_irradiance_under_every_recognised_name(names):
+    # BREOS's own Open-Meteo fetch returns the long names; they used to raise (#211).
+    idx = pd.date_range("2025-06-01", periods=48, freq="h", tz="UTC")
+    location = Location(41.15, -8.61)
+    weather = location.get_clearsky(idx)[["ghi", "dni", "dhi"]]
+    weather.columns = list(names)
+    weather.attrs["breos_weather_metadata"] = {"horizon": {"status": "not_applied"}}
+
+    shaded = apply_terrain_horizon_profile(weather, location, [[0, 30], [90, 30], [180, 30], [270, 30]], freq="h")
+
+    assert list(shaded.columns) == list(names)
+    assert shaded.attrs["breos_weather_metadata"]["horizon"]["profile"]["shaded_timesteps"] == 9
+    assert (shaded[names[1]] == 0).sum() >= 9
+
+
+def test_apply_horizon_names_every_accepted_column_when_one_is_missing():
+    idx = pd.date_range("2025-06-01", periods=4, freq="h", tz="UTC")
+    weather = pd.DataFrame({"ghi": 0.0, "dni": 0.0}, index=idx)
+    weather.attrs["breos_weather_metadata"] = {"horizon": {"status": "not_applied"}}
+
+    with pytest.raises(ValueError, match=r"DHI column \('dhi', 'diffuse_radiation', 'diffuse_horizontal_irradiance'"):
+        apply_terrain_horizon_profile(weather, Location(41.15, -8.61), [[0, 30], [180, 30]], freq="h")
+
+
+@pytest.mark.parametrize(
     ("dtype", "shaded_ghi_dtype"),
     [
         ("float64", "float64"),

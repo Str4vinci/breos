@@ -383,6 +383,14 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   results' clock; with a timezone-aware index they used to raise. Results
   are unchanged.
 
+- `apply_terrain_horizon_profile` finds irradiance under the same names as
+  the resampler and the PV model
+  ([#211](https://github.com/Str4vinci/breos/issues/211)), so BREOS's own
+  Open-Meteo output (`shortwave_radiation`, `direct_normal_irradiance`,
+  `diffuse_radiation`) no longer raises there. The three copies of the alias
+  list are now one, `breos.utils.IRRADIANCE_COLUMN_ALIASES`, matched without
+  regard to case. Results are unchanged.
+
 ### Removed
 - Removed the optimizer's `costs.panel_wp` override. It priced the steady-state
   CAPEX at a nominal wattage instead of the selected module's rating, so the

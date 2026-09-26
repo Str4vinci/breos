@@ -12,6 +12,7 @@ import pandas as pd
 from pvlib.location import Location
 
 from breos.pv.model_options import DEFAULT_SOLAR_POSITION, resolve_solar_position_method, solar_position_time_offset
+from breos.utils import IRRADIANCE_COLUMN_ALIASES, find_irradiance_column
 
 
 def normalise_horizon_profile(profile: Any) -> list[list[float]] | None:
@@ -67,12 +68,12 @@ def interpolate_horizon_elevation(profile: list[list[float]], solar_azimuth: Any
     return np.interp(np.mod(np.asarray(solar_azimuth, dtype=float), 360.0), extended_azimuths, extended_elevations)
 
 
-def _weather_column(weather: pd.DataFrame, lower: str, upper: str) -> str:
-    if lower in weather.columns:
-        return lower
-    if upper in weather.columns:
-        return upper
-    raise ValueError(f"weather_data must contain '{lower}' or '{upper}'")
+def _weather_column(weather: pd.DataFrame, component: str) -> str:
+    column = find_irradiance_column(weather.columns, component)
+    if column is None:
+        names = ", ".join(repr(alias) for alias in IRRADIANCE_COLUMN_ALIASES[component])
+        raise ValueError(f"weather_data must contain a {component.upper()} column ({names}, in any case)")
+    return column
 
 
 def _solar_position_at_labels(
@@ -103,6 +104,11 @@ def apply_terrain_horizon_profile(
     interpolated terrain line. The corresponding direct-horizontal component
     is removed from GHI; DHI is retained because this v1 profile models far-
     horizon beam obstruction, not diffuse sky-view loss.
+
+    Irradiance columns are found under any name in
+    :data:`breos.utils.IRRADIANCE_COLUMN_ALIASES`, in any case: ``ghi`` or
+    ``shortwave_radiation``, ``dni`` or ``direct_normal_irradiance``, ``dhi``
+    or ``diffuse_radiation``, among others.
     """
     normalised = normalise_horizon_profile(profile)
     if normalised is None:
@@ -126,9 +132,9 @@ def apply_terrain_horizon_profile(
             "so BREOS can fetch fresh PVGIS data with use_horizon=False."
         )
 
-    ghi_column = _weather_column(weather, "ghi", "GHI")
-    dni_column = _weather_column(weather, "dni", "DNI")
-    dhi_column = _weather_column(weather, "dhi", "DHI")
+    ghi_column = _weather_column(weather, "ghi")
+    dni_column = _weather_column(weather, "dni")
+    dhi_column = _weather_column(weather, "dhi")
     solarpos, position_method = _solar_position_at_labels(location, weather, freq, solar_position)
     if "apparent_elevation" in solarpos:
         solar_elevation = np.asarray(solarpos["apparent_elevation"], dtype=float)

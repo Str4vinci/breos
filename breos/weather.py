@@ -23,7 +23,13 @@ import pvlib
 from pvlib.location import Location
 from scipy.interpolate import Akima1DInterpolator
 
-from breos.utils import _datetime_index_seconds, get_hours_per_step, is_leap_year, safe_path_slug
+from breos.utils import (
+    _datetime_index_seconds,
+    get_hours_per_step,
+    irradiance_component,
+    is_leap_year,
+    safe_path_slug,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -793,13 +799,9 @@ def resample_to_15min(
     # Map column names to irradiance type (supports TMY and Open-Meteo conventions)
     irrad_col_map = {}  # column_name -> clear-sky component ('ghi', 'dni', 'dhi')
     for col in df_hourly.columns:
-        col_lower = col.lower()
-        if col_lower in ("ghi", "shortwave_radiation", "global_horizontal_irradiance"):
-            irrad_col_map[col] = "ghi"
-        elif col_lower in ("dni", "direct_normal_irradiance"):
-            irrad_col_map[col] = "dni"
-        elif col_lower in ("dhi", "diffuse_radiation", "diffuse_horizontal_irradiance"):
-            irrad_col_map[col] = "dhi"
+        component = irradiance_component(col)
+        if component is not None:
+            irrad_col_map[col] = component
 
     # Use clear-sky scaling if location is provided and we found irradiance columns
     use_clearsky = latitude is not None and longitude is not None and len(irrad_col_map) > 0
