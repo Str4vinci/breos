@@ -7,7 +7,7 @@ import pandas as pd
 import pytest
 
 from breos.battery import BatteryConfig, simulate_energy_balance
-from tests.energy_conservation import assert_energy_conservation
+from tests.energy_conservation import LEDGER_COLUMNS, assert_energy_conservation
 
 _BACKENDS = [
     "python",
@@ -78,7 +78,7 @@ def test_15min_year_conserves_energy_at_every_step(backend):
     assert_energy_conservation(results, config, atol=1e-7)
 
 
-def test_checker_counts_grid_charging_as_an_input():
+def _two_days():
     pv, load, temperature = _year()
     config = BatteryConfig(nominal_energy_wh=5000.0, inverter_ac_capacity_w=4000.0)
     results, *_ = simulate_energy_balance(
@@ -88,6 +88,11 @@ def test_checker_counts_grid_charging_as_an_input():
         freq="h",
         temperature_series=temperature.iloc[:48],
     )
+    return results, config
+
+
+def test_checker_counts_grid_charging_as_an_input():
+    results, config = _two_days()
     # Grid charging that is imported and stored balances; one that is only
     # imported does not.
     drawn = 100.0 / config.charge_efficiency  # grid energy that stores 100 Wh
@@ -104,3 +109,33 @@ def test_checker_counts_grid_charging_as_an_input():
     leaked["Import_From_Grid"] += 100.0
     with pytest.raises(AssertionError, match="load supply"):
         assert_energy_conservation(leaked, config)
+
+
+@pytest.mark.parametrize("value", [np.nan, np.inf, -np.inf])
+def test_checker_rejects_non_finite_ledger_rows(value):
+    results, config = _two_days()
+    assert_energy_conservation(results, config)
+    # A row that is non-finite in every column satisfies each identity
+    # under assert_allclose's equal_nan, so it must be caught up front.
+    corrupted = results.copy()
+    corrupted.loc[corrupted.index[12], list(LEDGER_COLUMNS)] = value
+    with pytest.raises(AssertionError, match="non-finite ledger values"):
+        assert_energy_conservation(corrupted, config)
+
+    one_cell = results.copy()
+    one_cell.iloc[12, one_cell.columns.get_loc("Battery_Charge_Loss")] = value
+    with pytest.raises(AssertionError, match="Battery_Charge_Loss"):
+        assert_energy_conservation(one_cell, config)
+
+
+def test_checker_applies_atol_as_an_absolute_bound():
+    results, config = _two_days()
+    step = results["PV_DC"].idxmax()
+    # Above 1 kW, NumPy's default rtol of 1e-7 alone would allow the 1e-4 W
+    # discrepancy below.
+    assert results.loc[step, "PV_DC"] > 1000.0
+    off = results.copy()
+    off.loc[step, "PV_DC_Curtailed"] += 1e-4
+    with pytest.raises(AssertionError, match="PV DC split"):
+        assert_energy_conservation(off, config, atol=1e-7)
+    assert_energy_conservation(off, config, atol=1e-3)
