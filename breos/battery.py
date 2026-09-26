@@ -672,8 +672,12 @@ def _resolve_degradation_engine(
 
     if engine_key == "native" and blast_model is not None:
         raise ValueError("blast_model requires degradation_engine='blast'")
-    if engine_key == "native" and initial_degradation_state is not None:
-        raise ValueError("initial_degradation_state requires degradation_engine='blast'")
+    if initial_degradation_state is not None:
+        state_engine = initial_degradation_state.get("degradation_engine")
+        if (engine_key == "native" and state_engine != "native") or (
+            engine_key == "blast" and state_engine not in (None, "blast")
+        ):
+            raise ValueError(f"initial_degradation_state requires degradation_engine={state_engine!r}")
     if engine_key == "blast" and not blast_model:
         raise ValueError("blast_model is required when degradation_engine='blast'")
     if engine_key == "blast" and battery_config.enable_resistance_fade:
@@ -744,27 +748,35 @@ def _build_degradation_lifecycle(
     """Construct the degradation backend and its first day-boundary state.
 
     Returns the lifecycle adapter plus the SOC and cell temperature the first
-    daily step should treat as the previous day's endpoint. BLAST consumes
-    that boundary pair (its daily endpoint model spans midnight); the native
-    adapter ignores it, so the defaults only matter for the BLAST path, where
-    a carried snapshot overrides them.
+    step should treat as the preceding endpoint. Both adapters consume that
+    boundary pair, and a carried snapshot overrides the defaults.
     """
     if engine_key != "blast":
+        state_payload = initial_degradation_state or {}
         lifecycle: DegradationLifecycle = NativeDegradationAdapter(
             model_key=battery_config.calendar_model,
             initial_soh_fraction=battery_soh_decimal,
-            initial_fec=initial_fec,
-            initial_calendar_seconds=initial_calendar_seconds,
-            initial_cumulative_cycle_degradation=initial_cumulative_cycle_deg,
-            initial_cumulative_calendar_degradation=initial_cumulative_cal_deg,
+            initial_fec=float(state_payload.get("fec_cum", initial_fec)),
+            initial_calendar_seconds=float(state_payload.get("cumulative_calendar_seconds", initial_calendar_seconds)),
+            initial_cumulative_cycle_degradation=float(
+                state_payload.get("cumulative_cycle_degradation", initial_cumulative_cycle_deg)
+            ),
+            initial_cumulative_calendar_degradation=float(
+                state_payload.get("cumulative_calendar_degradation", initial_cumulative_cal_deg)
+            ),
             nominal_energy_wh=battery_config.nominal_energy_wh,
             battery_type=battery_config.battery_type,
             **_native_degradation_kwargs(battery_config.calendar_model),
-            cycle_step=_update_battery_soh_cyclewise_arrays,
+            cycle_step=_update_battery_soh_from_cycles,
             calendar_step=update_battery_soh_calendar,
+            initial_rainflow_state=state_payload.get("native_rainflow_state"),
             debug=debug,
         )
-        return lifecycle, default_day_start_soc, default_day_start_t_cell
+        return (
+            lifecycle,
+            float(state_payload.get("day_start_soc_absolute", default_day_start_soc)),
+            float(state_payload.get("day_start_temperature_c", default_day_start_t_cell)),
+        )
 
     if not has_battery:
         raise ValueError("degradation_engine='blast' requires a configured battery")
@@ -1087,9 +1099,9 @@ class _PvOnlySummaryBuffers:
 class _AgingState:
     """Battery health state that only changes at a daily boundary.
 
-    Everything here is read by the per-step loop but written once per day by
+    Everything here is read by the per-step loop but written once per period by
     :func:`_apply_daily_degradation`, so the loop can keep hot copies in
-    locals and refresh them when a day closes.
+    locals and refresh them when a period closes.
 
     ``cumulative_resistance_cycle`` and ``cumulative_resistance_calendar`` are
     accumulated and reset with the rest of the fade state but are not reported
@@ -1099,9 +1111,8 @@ class _AgingState:
 
     ``fec_cum`` belongs to the pack currently installed and is reset to zero
     when that pack is replaced, so it cannot be differenced across a
-    replacement. ``fec_lifetime`` adds up the same daily rainflow counts
-    without ever resetting, so it keeps the cycles a retired pack accumulated
-    in its final, partial period.
+    replacement. ``fec_lifetime`` adds up rainflow counts across packs without
+    resetting, so a retired pack's final period remains in the run total.
     """
 
     soh_fraction: float
@@ -1125,27 +1136,20 @@ class _AgingState:
 def _apply_resistance_fade(
     aging: _AgingState,
     battery_config: BatteryConfig,
-    soc_values: np.ndarray,
-    time_ticks: np.ndarray,
-    ticks_per_second: float,
+    cycles: tuple[Dict[str, Any], ...],
     *,
     mean_t_cell: float,
     mean_soc_absolute: float,
+    dt_days: float,
     debug: bool,
 ) -> float:
-    """Grow internal resistance for one day and return the effective RTE.
+    """Grow internal resistance for one period and return the effective RTE.
 
     The cycle term is charged against the FEC standing at the *start* of the
-    day, so today's own cycles do not count towards their own aging; the
+    period, so this period's cycles do not count towards their own aging; the
     lifecycle step has already folded them into the cumulative FEC, so they
     are subtracted back out here.
     """
-    cycles = _detect_cycles_rainflow_arrays(
-        soc_values,
-        time_ticks,
-        ticks_per_second,
-        min_doc_fraction=0.01,
-    )
     day_fec = sum(max(0.0, min(1.0, c["doc"])) * c.get("count", 1.0) for c in cycles)
     fec_before_day = aging.fec_cum - day_fec
 
@@ -1156,7 +1160,7 @@ def _apply_resistance_fade(
         aging.resistance_growth,
         T_cell_C=mean_t_cell,
         cumulative_cal_seconds=aging.cumulative_cal_seconds,
-        dt_days=1.0,
+        dt_days=dt_days,
         mean_soc_absolute=mean_soc_absolute,
         debug=debug,
     )
@@ -1485,15 +1489,14 @@ def _apply_daily_degradation(
     day_index: pd.DatetimeIndex,
     soc_absolute_day: np.ndarray,
     t_cell_day: np.ndarray,
-    t_cell_day_sum: float,
-    steps_per_day: int,
+    finalize_cycles: bool,
     hours_per_step: float,
     battery_energy_wh: float,
     pv_origin_energy_wh: float,
     battery_energy_beginning: float,
     debug: bool,
 ) -> Tuple[float, float]:
-    """Close out one degradation day, returning ``(energy, pv_origin)``.
+    """Close out one degradation period, returning ``(energy, pv_origin)``.
 
     Runs the lifecycle step, optional resistance fade and the end-of-life
     replacement check in that order, mutating *aging* in place and appending
@@ -1501,16 +1504,19 @@ def _apply_daily_degradation(
     returned rather than carried on *aging* because the per-step loop owns
     them and only a replacement changes them here.
 
-    The day's SOC and cell-temperature endpoints become the next day's
-    starting boundary; a replacement moves that endpoint to the fresh pack's
+    The period's SOC and cell-temperature endpoints become the next starting
+    boundary; a replacement moves that endpoint to the fresh pack's
     max SOC, since the recorded state was rewritten to match.
     """
     time_ticks, ticks_per_second = _datetime_index_ticks(day_index)
-    day_end_soc_absolute = float(soc_absolute_day[steps_per_day - 1])
-    day_end_t_cell = float(t_cell_day[steps_per_day - 1])
+    period_steps = len(soc_absolute_day)
+    period_seconds = period_steps * hours_per_step * 3600.0
+    dt_days = period_seconds / 86400.0
+    day_end_soc_absolute = float(soc_absolute_day[-1])
+    day_end_t_cell = float(t_cell_day[-1])
 
     mean_soc_abs = float(np.mean(soc_absolute_day))
-    mean_t_cell = t_cell_day_sum / steps_per_day
+    mean_t_cell = float(np.mean(t_cell_day))
     effective_rte = battery_config.charge_efficiency * battery_config.discharge_efficiency
 
     degradation_step = lifecycle.step(
@@ -1522,6 +1528,7 @@ def _apply_daily_degradation(
             step_seconds=hours_per_step * 3600.0,
             start_soc=aging.day_start_soc,
             start_temperature_c=aging.day_start_t_cell,
+            finalize_cycles=finalize_cycles,
         )
     )
     aging.soh_fraction = degradation_step.soh_fraction
@@ -1540,15 +1547,24 @@ def _apply_daily_degradation(
         effective_rte = _apply_resistance_fade(
             aging,
             battery_config,
-            soc_absolute_day,
-            time_ticks,
-            ticks_per_second,
+            degradation_step.cycle_records,
             mean_t_cell=mean_t_cell,
             mean_soc_absolute=mean_soc_abs,
+            dt_days=dt_days,
             debug=debug,
         )
 
     if battery_config.enable_replacement and aging.soh_fraction <= battery_config.eol_percentage:
+        # A retired native pack owns its unresolved terminal half cycles.
+        # Settle them before reset so its lifetime FEC remains complete while
+        # the replacement starts with a clean rainflow residue.
+        terminal_cycles = lifecycle.finalize_cycles()
+        aging.fec_lifetime += terminal_cycles.fec - aging.fec_cum
+        aging.fec_cum = terminal_cycles.fec
+        aging.soh_fraction = terminal_cycles.soh_fraction
+        aging.soh_percent = aging.soh_fraction * 100.0
+        aging.cumulative_cycle_deg += terminal_cycles.cycle_degradation
+        cycle_degradation_for_row = degradation_step.cycle_degradation + terminal_cycles.cycle_degradation
         battery_energy_wh, pv_origin_energy_wh, day_end_soc_absolute = _apply_battery_replacement(
             aging,
             battery_config,
@@ -1561,11 +1577,13 @@ def _apply_daily_degradation(
         )
         if debug:
             print(f"\n*** BATTERY REPLACED at {step_time} ***")
+    else:
+        cycle_degradation_for_row = degradation_step.cycle_degradation
 
     degradation_record = {
         "Datetime": step_time,
         "SOH": aging.soh_percent,
-        "Cycle_Degradation": degradation_step.cycle_degradation,
+        "Cycle_Degradation": cycle_degradation_for_row,
         "Calendar_Degradation": degradation_step.calendar_degradation,
         "Cumulative_Cycle_Degradation": aging.cumulative_cycle_deg,
         "Cumulative_Calendar_Degradation": aging.cumulative_cal_deg,
@@ -1779,6 +1797,15 @@ def _build_simulation_summary(core: _CoreRun, *, return_degradation_state: bool)
     )
 
 
+def _resolve_finalize_degradation(finalize_degradation: Optional[bool], return_degradation_state: bool) -> bool:
+    """Resolve whether terminal rainflow residue belongs to this span."""
+    if finalize_degradation is None:
+        return not return_degradation_state
+    if not finalize_degradation and not return_degradation_state:
+        raise ValueError("finalize_degradation=False requires return_degradation_state=True")
+    return bool(finalize_degradation)
+
+
 def _simulate_core(
     pv_dc: Optional[pd.Series] = None,
     houseload: Optional[pd.DataFrame] = None,
@@ -1796,6 +1823,7 @@ def _simulate_core(
     degradation_engine: str = "native",
     blast_model: Optional[str] = None,
     initial_degradation_state: Optional[Dict[str, Any]] = None,
+    finalize_degradation: bool = True,
     debug: bool = False,
     initial_energy_wh: Optional[float] = None,
     initial_pv_origin_energy_wh: Optional[float] = None,
@@ -1831,8 +1859,11 @@ def _simulate_core(
         degradation_engine: Degradation backend. ``"native"`` preserves the
             Naumann/Lam model; ``"blast"`` uses the BLAST daily endpoint adapter.
         blast_model: BLAST model key when ``degradation_engine="blast"``.
-        initial_degradation_state: Optional BLAST state returned by a previous
-            call with ``return_degradation_state=True``.
+        initial_degradation_state: Optional native or BLAST state returned by
+            a previous call with ``return_degradation_state=True``.
+        finalize_degradation: Count any remaining rainflow half cycles at the
+            end of this span. Set False only when returning state for a later
+            span to continue.
         return_degradation_state: Append final degradation carry state to the
             return tuple when True.
         debug: Enable debug output
@@ -1887,9 +1918,22 @@ def _simulate_core(
         battery_config,
     )
 
+    state_payload = initial_degradation_state or {}
+    if degradation_engine_key == "native" and initial_degradation_state is not None:
+        initial_fec = float(state_payload.get("fec_cum", initial_fec))
+        initial_calendar_seconds = float(state_payload.get("cumulative_calendar_seconds", initial_calendar_seconds))
+        initial_cumulative_cycle_deg = float(
+            state_payload.get("cumulative_cycle_degradation", initial_cumulative_cycle_deg)
+        )
+        initial_cumulative_cal_deg = float(
+            state_payload.get("cumulative_calendar_degradation", initial_cumulative_cal_deg)
+        )
+
     # Initialize state
     battery_soh_decimal = battery_config.initial_soh / 100.0
-    Battery_SOH = battery_config.initial_soh
+    if degradation_engine_key == "native" and initial_degradation_state is not None:
+        battery_soh_decimal = float(state_payload.get("soh_fraction", battery_soh_decimal))
+    Battery_SOH = battery_soh_decimal * 100.0
     Battery_Energy_Wh, Battery_PV_Origin_Energy_Wh = _resolve_carried_energy(
         initial_energy_wh,
         initial_pv_origin_energy_wh,
@@ -1897,16 +1941,18 @@ def _simulate_core(
         battery_soh_decimal,
     )
 
-    # Degradation day-windows are positional (fixed steps_per_day), not
-    # calendar-based: DST days and trailing partial days shift/skip windows
-    # by design; the compiled dispatch backend shares the convention.
+    # Degradation windows are positional (fixed steps_per_day), not
+    # calendar-based: DST days shift the windows by design, and a trailing
+    # partial window is processed at the end. Dispatch shares this convention.
     # The function argument is the multi-year continuation seam (used by the
-    # App's year loop); when omitted the battery's configured starting
-    # resistance applies. A carried 0.0 is a value, not an omission: a
-    # replaced pack restarts at zero growth, not at the configured value.
-    resistance_growth = (
-        battery_config.initial_resistance_growth if initial_resistance_growth is None else initial_resistance_growth
-    )
+    # App's year loop). A native state snapshot takes precedence; otherwise
+    # None means to use the battery's configured starting resistance.
+    if degradation_engine_key == "native" and "resistance_growth" in state_payload:
+        resistance_growth = float(state_payload["resistance_growth"])
+    else:
+        resistance_growth = (
+            battery_config.initial_resistance_growth if initial_resistance_growth is None else initial_resistance_growth
+        )
     # Charge/discharge efficiencies, derated by resistance growth when the
     # fade model is enabled; updated after each daily degradation step.
     eff_charge = battery_config.charge_efficiency
@@ -1936,7 +1982,13 @@ def _simulate_core(
 
     # Pre-allocate result arrays (avoids per-timestep dict creation)
     out = _PvOnlySummaryBuffers(n_steps) if pv_only_summary else _ResultBuffers(n_steps)
-    degradation_day_start_soc = battery_config.max_soc if has_battery else 0.0
+    if has_battery and battery_soh_decimal > 0.0:
+        degradation_day_start_soc = min(
+            1.0,
+            max(0.0, Battery_Energy_Wh / (battery_config.nominal_energy_wh * battery_soh_decimal)),
+        )
+    else:
+        degradation_day_start_soc = 0.0
     degradation_day_start_t_cell = float(_temp_vals[0]) if n_steps else 25.0
 
     degradation_lifecycle, degradation_day_start_soc, degradation_day_start_t_cell = _build_degradation_lifecycle(
@@ -2030,7 +2082,7 @@ def _simulate_core(
         (
             Battery_Energy_Wh,
             Battery_PV_Origin_Energy_Wh,
-            T_cell_day_sum,
+            _,
             battery_energy_beginning,
         ) = dispatch_day(
             out,
@@ -2054,12 +2106,6 @@ def _simulate_core(
             cap_discharge_wh=cap_discharge_wh,
             cap_stored_wh=cap_stored_wh,
         )
-        if window_end - window_start < steps_per_day:
-            # Degradation windows are positional and whole-day. A trailing
-            # partial day is simulated and reported but never closes a window,
-            # which is what the per-step loop did before this was hoisted.
-            break
-
         if has_battery:
             last_step = window_end - 1
             Battery_Energy_Wh, Battery_PV_Origin_Energy_Wh = _apply_daily_degradation(
@@ -2077,8 +2123,7 @@ def _simulate_core(
                 # step's recorded state cannot reach the day the aging model saw.
                 soc_absolute_day=out.soc_absolute[window_start:window_end].copy(),
                 t_cell_day=out.t_cell[window_start:window_end].copy(),
-                t_cell_day_sum=T_cell_day_sum,
-                steps_per_day=steps_per_day,
+                finalize_cycles=finalize_degradation and window_end == n_steps,
                 hours_per_step=hours_per_step,
                 battery_energy_wh=Battery_Energy_Wh,
                 pv_origin_energy_wh=Battery_PV_Origin_Energy_Wh,
@@ -2090,6 +2135,8 @@ def _simulate_core(
             Battery_SOH = aging.soh_percent
             eff_charge = aging.eff_charge
             eff_discharge = aging.eff_discharge
+        if window_end - window_start < steps_per_day:
+            break
         window_start = window_end
 
     return _CoreRun(
@@ -2126,6 +2173,7 @@ def simulate_energy_balance(
     initial_energy_wh: Optional[float] = None,
     initial_pv_origin_energy_wh: Optional[float] = None,
     execution_backend: str = "python",
+    finalize_degradation: Optional[bool] = None,
 ) -> (
     Tuple[pd.DataFrame, float, pd.DataFrame, float, int, pd.DataFrame]
     | Tuple[pd.DataFrame, float, pd.DataFrame, float, int, pd.DataFrame, Dict[str, Any]]
@@ -2137,6 +2185,11 @@ def simulate_energy_balance(
     annual totals and carry state should use
     :func:`simulate_energy_balance_summary`, which runs the same physics
     without materialising the results frame.
+
+    Native rainflow state carries unresolved cycles between daily windows. By
+    default, terminal half cycles are counted when no carry state is returned;
+    set ``return_degradation_state=True`` to preserve that residue for a later
+    span, or set ``finalize_degradation=True`` to count it at this span's end.
 
     Returns:
         Tuple of:
@@ -2164,6 +2217,7 @@ def simulate_energy_balance(
         degradation_engine=degradation_engine,
         blast_model=blast_model,
         initial_degradation_state=initial_degradation_state,
+        finalize_degradation=_resolve_finalize_degradation(finalize_degradation, return_degradation_state),
         debug=debug,
         initial_energy_wh=initial_energy_wh,
         initial_pv_origin_energy_wh=initial_pv_origin_energy_wh,
@@ -2216,6 +2270,7 @@ def simulate_energy_balance_summary(
     initial_pv_origin_energy_wh: Optional[float] = None,
     execution_backend: str = "python",
     aligned: Optional[AlignedSimulationInputs] = None,
+    finalize_degradation: Optional[bool] = None,
 ) -> SimulationSummary:
     """Simulate an energy balance and return annual totals and carry state.
 
@@ -2224,6 +2279,10 @@ def simulate_energy_balance_summary(
     results frame and the daily degradation frame. Multi-year callers such as
     Monte Carlo need the aggregates and the year-to-year seam, not the
     35,040 rows they were being reduced from.
+
+    The ``finalize_degradation`` option controls whether the native rainflow
+    residue is charged as terminal half cycles. It defaults to False when a
+    degradation state is returned so a later span can continue the same trace.
 
     Pass either ``pv_dc`` and ``houseload``, or a
     :class:`AlignedSimulationInputs` built by
@@ -2253,6 +2312,7 @@ def simulate_energy_balance_summary(
         degradation_engine=degradation_engine,
         blast_model=blast_model,
         initial_degradation_state=initial_degradation_state,
+        finalize_degradation=_resolve_finalize_degradation(finalize_degradation, return_degradation_state),
         debug=debug,
         initial_energy_wh=initial_energy_wh,
         initial_pv_origin_energy_wh=initial_pv_origin_energy_wh,

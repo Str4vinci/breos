@@ -38,6 +38,7 @@ def _golden_battery_inputs():
 
 
 def test_simulate_energy_balance_battery_golden_output():
+    # This two-day dispatch includes cycles that span the daily boundaries.
     pv_dc, load, temperature, config = _golden_battery_inputs()
 
     results_df, total_pv, summary_df, replacement_cost, n_replacements, degradation_df = simulate_energy_balance(
@@ -54,22 +55,22 @@ def test_simulate_energy_balance_battery_golden_output():
             # Without an inverter rating, DC sent to the battery counts at its DC
             # value, as it does with a rating (#214); it used to be scaled by the
             # inverter efficiency, which gave 22.272.
-            "Total PV [kWh]": 22.47272691365348,
+            "Total PV [kWh]": 22.472847970810438,
             "Total Load [kWh]": 36.0,
-            "Sell [kWh]": 7.042554072316412,
-            "Import [kWh]": 19.06413916898237,
-            "Import [%]": 52.95594213606214,
-            "Grid Independence [%]": 47.04405786393786,
-            "Final SOH [%]": 99.76714723691977,
+            "Sell [kWh]": 7.039648700549445,
+            "Import [kWh]": 19.061844833215137,
+            "Import [%]": 52.94956898115316,
+            "Grid Independence [%]": 47.05043101884684,
+            "Final SOH [%]": 99.75909416992017,
             "N_Replacements": 0,
             "Replacement_Cost": 0.0,
         },
     )
-    assert total_pv == pytest.approx(22472.72691365348)
+    assert total_pv == pytest.approx(22472.84797081044)
     assert replacement_cost == pytest.approx(0.0)
     assert n_replacements == 0
     assert len(degradation_df) == 2
-    assert results_df["Battery_Energy"].iloc[-1] == pytest.approx(297.70796832641753)
+    assert results_df["Battery_Energy"].iloc[-1] == pytest.approx(298.067413343493)
 
 
 def test_simulate_energy_balance_15min_golden_output():
