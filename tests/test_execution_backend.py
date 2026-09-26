@@ -291,7 +291,7 @@ matrix = np.zeros((37, 96))
 kernel(
     matrix, np.zeros(96), np.zeros(96), np.full(96, 25.0), 0, 96,
     0.0, 0.0, False, 0.0, 1.0, 100.0, 0.9, 0.1, 0.0, 0.95, 0.95, 0.96,
-    np.inf, np.inf, np.inf, True, 0.05, 0.25, 2.0, 1.0, np.inf,
+    np.inf, np.inf, np.inf, 0.05, 0.25, 2.0, 1.0, np.inf,
 )
 print(json.dumps({{
     "hits": int(sum(kernel.stats.cache_hits.values())),
