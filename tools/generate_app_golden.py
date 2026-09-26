@@ -2,9 +2,19 @@
 
 The baseline pins what ``App.result()`` returns for a handful of fixed
 configurations, field by field, so a refactor of the dispatch or the year loop
-can be checked against the numbers the App reported before it. It records
-every float by its bit pattern, as ``tools/parity/app_parity.py`` compares
-them, next to its ``repr`` for a human reader.
+can be checked against the numbers the App reported before it. Each scenario
+is one JSON file with one line per field. Floats are written by their ``repr``,
+which reads back to the same bits.
+
+It pins calculated outputs and the identifiers that say what was run.
+Descriptive text is left out, so a wording fix does not fail it: warning
+messages, waterfall stage labels, and the BLAST model profile, which is
+registry metadata that ``tests/test_battery_profiles.py`` covers.
+
+Many ``App.result()`` fields are rounded for reporting, and storing them
+exactly does not recover the precision the rounding dropped. This is a baseline
+for reported results; the conservation and parity checks in #184 test the
+underlying series.
 
 The runs never touch the network. Weather is a deterministic synthetic year
 (the test suite's own builder), passed in where the App would fetch PVGIS.
@@ -24,6 +34,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import re
 import struct
 import subprocess
 import sys
@@ -39,11 +50,13 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 from tools.parity.app_parity import flatten  # noqa: E402
 
-GOLDEN_PATH = PROJECT_ROOT / "tests" / "fixtures" / "app_golden" / "app_golden.json"
+GOLDEN_DIR = PROJECT_ROOT / "tests" / "fixtures" / "app_golden"
 SCHEMA = "breos-app-golden-v1"
 
 # Fields that record where and how a run happened rather than what it found.
 EXCLUDED_PREFIXES = ("provenance.execution", "provenance.breos_version")
+# Descriptive text: warning messages, stage labels and the model profile.
+EXCLUDED_PATTERN = re.compile(r"(?:^|\.)model_profile\.|\.(?:message|label)$")
 
 _COMMON = {
     "location": "porto",
@@ -122,28 +135,37 @@ def run_scenario(name: str) -> dict[str, Any]:
         app = App({**SCENARIOS[name], "execution_backend": "python"})
         app.simulate()
         result = app.result()
-    return {key: value for key, value in flatten(result).items() if not key.startswith(EXCLUDED_PREFIXES)}
+    return {
+        key: value
+        for key, value in flatten(result).items()
+        if not key.startswith(EXCLUDED_PREFIXES) and not EXCLUDED_PATTERN.search(key)
+    }
 
 
-def _bits(value: float) -> str:
-    return f"0x{struct.unpack('<Q', struct.pack('<d', value))[0]:016x}"
+def golden_path(name: str) -> Path:
+    return GOLDEN_DIR / f"{name}.json"
+
+
+def load_golden(name: str) -> dict[str, Any]:
+    """Return the committed fields of one scenario."""
+    return json.loads(golden_path(name).read_text())["fields"]
+
+
+def _bits(value: float) -> int:
+    return struct.unpack("<Q", struct.pack("<d", value))[0]
 
 
 def encode(value: Any) -> Any:
-    """Encode one leaf for JSON; floats keep their exact bits."""
-    if isinstance(value, (float, np.floating)):
-        return {"float": repr(float(value)), "bits": _bits(float(value))}
+    """Return one leaf as a JSON scalar; a float's ``repr`` reads back to the same bits."""
     if isinstance(value, (bool, np.bool_)):
         return bool(value)
+    if isinstance(value, (float, np.floating)):
+        return float(value)
     if isinstance(value, (int, np.integer)):
         return int(value)
     if value is None or isinstance(value, str):
         return value
-    return {"repr": repr(value)}
-
-
-def decode_float(entry: dict[str, str]) -> float:
-    return struct.unpack("<d", struct.pack("<Q", int(entry["bits"], 16)))[0]
+    raise TypeError(f"no golden encoding for {type(value).__name__}: {value!r}")
 
 
 def compare(name: str, actual: dict[str, Any], expected: dict[str, Any], *, rel: float = 0.0) -> list[str]:
@@ -152,16 +174,14 @@ def compare(name: str, actual: dict[str, Any], expected: dict[str, Any], *, rel:
     differences += [f"{name}: unexpected {key}" for key in sorted(set(actual) - set(expected))]
     for key in sorted(set(actual) & set(expected)):
         got, want = encode(actual[key]), expected[key]
-        if isinstance(want, dict) and "bits" in want:
-            if not (isinstance(got, dict) and "bits" in got):
-                differences.append(f"{name}: {key}: expected a float, got {got!r}")
+        if type(got) is not type(want):
+            differences.append(f"{name}: {key}: expected {type(want).__name__} {want!r}, got {got!r}")
+        elif isinstance(want, float):
+            if _bits(got) == _bits(want):
                 continue
-            if got["bits"] == want["bits"]:
+            if rel and (math.isclose(got, want, rel_tol=rel, abs_tol=rel) or (math.isnan(got) and math.isnan(want))):
                 continue
-            new, old = float(got["float"]), decode_float(want)
-            if rel and (math.isclose(new, old, rel_tol=rel, abs_tol=rel) or (math.isnan(new) and math.isnan(old))):
-                continue
-            differences.append(f"{name}: {key}: {new!r} != {old!r}")
+            differences.append(f"{name}: {key}: {got!r} != {want!r}")
         elif got != want:
             differences.append(f"{name}: {key}: {got!r} != {want!r}")
     return differences
@@ -192,23 +212,26 @@ def main(argv: list[str] | None = None) -> int:
 
     results = {name: run_scenario(name) for name in SCENARIOS}
     if args.check:
-        golden = json.loads(GOLDEN_PATH.read_text())
-        differences = [
-            line for name in SCENARIOS for line in compare(name, results[name], golden["scenarios"].get(name, {}))
-        ]
+        differences = [line for name in SCENARIOS for line in compare(name, results[name], load_golden(name))]
         for line in differences:
             print(line)
         print(f"{'FAIL' if differences else 'PASS'}: {len(differences)} difference(s)")
         return 1 if differences else 0
 
-    payload = {
-        "schema": SCHEMA,
-        "generated_with": _environment(),
-        "scenarios": {name: {key: encode(value) for key, value in results[name].items()} for name in SCENARIOS},
-    }
-    GOLDEN_PATH.parent.mkdir(parents=True, exist_ok=True)
-    GOLDEN_PATH.write_text(json.dumps(payload, indent=1, sort_keys=True) + "\n")
-    print(f"wrote {GOLDEN_PATH.relative_to(PROJECT_ROOT)}: {sum(len(r) for r in results.values())} fields")
+    environment = _environment()
+    GOLDEN_DIR.mkdir(parents=True, exist_ok=True)
+    for stale in GOLDEN_DIR.glob("*.json"):
+        if stale.stem not in SCENARIOS:
+            stale.unlink()
+    for name, fields in results.items():
+        payload = {
+            "schema": SCHEMA,
+            "scenario": name,
+            "generated_with": environment,
+            "fields": {key: encode(value) for key, value in fields.items()},
+        }
+        golden_path(name).write_text(json.dumps(payload, indent=1, sort_keys=True) + "\n")
+    print(f"wrote {GOLDEN_DIR.relative_to(PROJECT_ROOT)}: {sum(len(r) for r in results.values())} fields")
     return 0
 
 
