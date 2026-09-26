@@ -26,28 +26,13 @@ import pandas as pd
 PROJECT_ROOT = Path(__file__).parent.parent.resolve()
 sys.path.insert(0, str(PROJECT_ROOT))
 
+from breos.economics import find_payback_year_exact
 from breos.plotting import plot_breakeven_comparison
+from breos.utils import format_years_months
 
 # Keep script presentation choices local instead of importing a private symbol
 # from the public plotting module.
 BREAKEVEN_COLORS = ("#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd", "#8c564b")
-
-
-def _interpolate_breakeven(df: pd.DataFrame):
-    savings = df["Savings_Cumulative_NPV"].values
-    years = df["Year"].values
-    for i in range(1, len(savings)):
-        if savings[i] >= 0 and savings[i - 1] < 0:
-            frac = -savings[i - 1] / (savings[i] - savings[i - 1])
-            return years[i - 1] + frac
-    return None
-
-
-def _fmt(be):
-    if be is None:
-        return "N/A"
-    y, m = int(be), int((be - int(be)) * 12)
-    return f"{y}y" if m == 0 else f"{y}y {m}m"
 
 
 def compare_results(folders: list, labels: list = None, output_dir: str = "results/comparison"):
@@ -92,12 +77,12 @@ def compare_results(folders: list, labels: list = None, output_dir: str = "resul
     print("-" * 77)
     summary = []
     for df, label in zip(cost_dfs, valid_labels):
-        be = _interpolate_breakeven(df)
+        be = find_payback_year_exact(df)
         cost = df.loc[df["Year"] == max_year, "Cost_System_Cumulative_NPV"].values[0]
         no_sys_cost = df.loc[df["Year"] == max_year, "Cost_No_Sys_Cumulative_NPV"].values[0]
         summary.append((label, be, cost, no_sys_cost))
     for label, be, cost, no_sys_cost in sorted(summary, key=lambda x: x[2]):
-        print(f"{label:<35} {_fmt(be):<12} {cost:>12,.0f}€  {no_sys_cost:>12,.0f}€")
+        print(f"{label:<35} {format_years_months(be):<12} {cost:>12,.0f}€  {no_sys_cost:>12,.0f}€")
 
     return output_path
 

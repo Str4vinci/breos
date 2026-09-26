@@ -42,7 +42,7 @@ from breos.pv.model_options import (
     solar_position_time_offset,
 )
 from breos.pv.temperature import calculate_cell_temperature
-from breos.utils import get_hours_per_step
+from breos.utils import IRRADIANCE_COLUMN_ALIASES, find_irradiance_column, get_hours_per_step
 
 # Module-level cache for CEC model parameters (depends only on module specs, not weather)
 _cec_param_cache: Dict[tuple, tuple] = {}
@@ -245,15 +245,37 @@ def _prepare_solarpos_and_weather(
         raise ValueError("weather_data must have a DatetimeIndex")
     method = resolve_solar_position_method(solar_position)
 
-    times = pd.date_range(start=weather_data.index[0], end=weather_data.index[-1], freq=freq)
+    times = _require_weather_grid(weather_data.index, freq)
     if method in {"mid-interval", "weather"}:
         offset = solar_position_time_offset(method, weather_data, freq)
         solarpos = location.get_solarposition(times=times + offset)
         solarpos.index = times
     else:
         solarpos = location.get_solarposition(times=times)
-    weather_aligned = weather_data.reindex(times, method="nearest")
+    weather_aligned = weather_data.set_axis(times)
     return times, solarpos, weather_aligned
+
+
+def _require_weather_grid(index: pd.DatetimeIndex, freq: str) -> pd.DatetimeIndex:
+    """Return the simulation grid, which must be the weather's own timestamps.
+
+    PV is computed at each weather timestamp, so the weather must step evenly
+    at ``freq`` from its first timestamp to its last. A gap, or weather at
+    another resolution, raises instead of being filled from the nearest row.
+    """
+    if len(index) == 0:
+        raise ValueError("weather_data has no rows")
+    times = pd.date_range(start=index[0], periods=len(index), freq=freq)
+    mismatch = np.flatnonzero(index.as_unit("ns").asi8 != times.as_unit("ns").asi8)
+    if mismatch.size:
+        row = int(mismatch[0])
+        step = index[row] - index[row - 1] if row else None
+        raise ValueError(
+            f"weather_data must step evenly at freq={freq!r}: row {row} is {index[row]}, "
+            f"{step} after the previous row, where {times[row]} was expected. Resample or fill "
+            "the weather explicitly before computing PV."
+        )
+    return times
 
 
 def _compute_irradiance_and_cell_temp_detail(
@@ -389,7 +411,7 @@ def _compute_irradiance_and_cell_temp_detail(
         front_effective_irradiance=front_effective_irradiance,
         rear_effective_irradiance=rear_effective_irradiance,
         effective_irradiance=effective_irradiance,
-        temp_cell=np.nan_to_num(np.asarray(temp_cell, dtype=float), nan=25.0),
+        temp_cell=np.asarray(temp_cell, dtype=float),
     )
 
 
@@ -1077,6 +1099,7 @@ def calculate_pv_production_ac(
     gcr: float = 0.35,
     pvrow_height: Optional[float] = None,
     pvrow_pitch: Optional[float] = None,
+    loss_overrides: Optional[Dict[str, float]] = None,
 ) -> pd.Series:
     """
     Calculate PV AC production from weather data.
@@ -1098,6 +1121,8 @@ def calculate_pv_production_ac(
         inverter_loading_ratio: DC/AC ratio for inverter sizing
         inverter_efficiency: Nominal inverter efficiency
         verbose: Whether to print production summary
+        loss_overrides: Per-component PVWatts loss overrides (percent), as
+            for :func:`calculate_pv_production_dc`
 
     Returns:
         pd.Series with AC power production in Watts
@@ -1121,6 +1146,7 @@ def calculate_pv_production_ac(
         current_year=current_year,
         start_year=start_year,
         verbose=False,
+        loss_overrides=loss_overrides,
         **model_kwargs,
     )
 
@@ -1136,28 +1162,44 @@ def calculate_pv_production_ac(
 
 
 def _extract_irradiance(weather_df: pd.DataFrame):
-    """Extract DNI, GHI, DHI from weather DataFrame with flexible column names."""
-    # Try different column naming conventions
-    dni_cols = ["dni", "DNI", "direct_normal_irradiance"]
-    ghi_cols = ["ghi", "GHI", "shortwave_radiation", "global_horizontal_irradiance"]
-    dhi_cols = ["dhi", "DHI", "diffuse_radiation", "diffuse_horizontal_irradiance"]
-
-    dni = _get_column(weather_df, dni_cols)
-    ghi = _get_column(weather_df, ghi_cols)
-    dhi = _get_column(weather_df, dhi_cols)
-
-    return dni, ghi, dhi
+    """Extract DNI, GHI, DHI under any name in ``IRRADIANCE_COLUMN_ALIASES``."""
+    values = []
+    for component in ("dni", "ghi", "dhi"):
+        column = find_irradiance_column(weather_df.columns, component)
+        if column is None:
+            raise KeyError(f"Could not find column. Tried: {list(IRRADIANCE_COLUMN_ALIASES[component])}")
+        values.append(weather_df[column].values)
+    return tuple(values)
 
 
 def _extract_met_data(weather_df: pd.DataFrame):
-    """Extract temperature and wind speed from weather DataFrame."""
-    temp_cols = ["temp_air", "temperature_2m", "temp", "air_temperature"]
-    wind_cols = ["wind_speed", "wind_speed_10m", "ws", "WS10m"]
+    """Extract air temperature and wind speed from a weather DataFrame.
 
-    temp_air = _get_column(weather_df, temp_cols, default=25.0)
-    wind_speed = _get_column(weather_df, wind_cols, default=1.0)
-
-    return temp_air, wind_speed
+    Both drive the cell temperature, so a missing column or a value that is
+    not finite raises instead of defaulting (it used to become 25 °C and
+    1 m/s). To run with fixed values, add them as columns, for example
+    ``weather["temp_air"] = 25.0`` and ``weather["wind_speed"] = 1.0``.
+    """
+    met = []
+    for quantity, names, example in (
+        ("air temperature", ["temp_air", "temperature_2m", "temp", "air_temperature"], 'weather["temp_air"] = 25.0'),
+        ("wind speed", ["wind_speed", "wind_speed_10m", "ws", "WS10m"], 'weather["wind_speed"] = 1.0'),
+    ):
+        name = next((n for n in names if n in weather_df.columns), None)
+        if name is None:
+            raise ValueError(
+                f"weather has no {quantity} column (tried {names}). The cell temperature needs it; "
+                f"to run with a fixed value, add it explicitly, e.g. {example}."
+            )
+        values = pd.to_numeric(weather_df[name], errors="coerce").to_numpy(dtype=float)
+        bad = ~np.isfinite(values)
+        if bad.any():
+            raise ValueError(
+                f"weather column {name!r} has {int(bad.sum())} values that are not finite numbers "
+                f"(first at {weather_df.index[int(np.flatnonzero(bad)[0])]}). Fill them explicitly before computing PV."
+            )
+        met.append(values)
+    return tuple(met)
 
 
 def _get_column(df: pd.DataFrame, possible_names: list, default=None):
@@ -1275,6 +1317,9 @@ def calculate_multi_array_production_breakdown(
     """Calculate combined DC production breakdown from multiple PV arrays.
 
     Each array is either fixed-tilt or tracking. Mixed configurations are supported.
+    An array with ``modules = 0`` contributes nothing, and a negative module
+    count raises ``ValueError``. When every array is empty, the result is zero
+    on the same time grid a non-empty array would use.
     """
     defaults = _model_option_kwargs(locals())
 
@@ -1288,7 +1333,10 @@ def calculate_multi_array_production_breakdown(
 
     for i, arr in enumerate(arrays):
         n_mod = arr.get("modules", 0)
-        if n_mod <= 0:
+        if n_mod < 0:
+            raise ValueError(f"Array {i + 1}: modules must be zero or positive, got {n_mod}")
+        if n_mod == 0:
+            # An empty array contributes nothing.
             continue
 
         mod_name = arr.get("module", "Generic_400W")
@@ -1363,7 +1411,10 @@ def calculate_multi_array_production_breakdown(
         breakdowns.append(breakdown)
 
     if not breakdowns:
-        zeros = pd.Series(0.0, index=weather_data.index, name="dc_power_W")
+        # The same grid a non-empty array is computed on, so an empty system
+        # lines up with the rest of the run.
+        times, _, _ = _prepare_solarpos_and_weather(weather_data, location, freq, solar_position)
+        zeros = pd.Series(0.0, index=times, name="dc_power_W")
         static_loss_info = resolve_pvwatts_losses(loss_overrides)
         return PVProductionBreakdown(
             horizontal_reference_dc=zeros.rename("horizontal_reference_dc_W"),

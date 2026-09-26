@@ -164,7 +164,7 @@ def load_profile(
     # Load the profile
     path_context = as_file(csv_resource) if packaged else nullcontext(csv_resource)
     with path_context as csv_file:
-        df = _load_profile_csv(Path(csv_file), profile_type)
+        df = _load_profile_csv(Path(csv_file), profile_type, native_freq)
 
     # Create a naive wall-clock index for one real calendar year; rows describe
     # household behavior at local clock time and are pinned to the timezone
@@ -174,28 +174,7 @@ def load_profile(
     end_ts = start_ts + pd.DateOffset(years=1)
     new_index = pd.date_range(start=start_ts, end=end_ts, freq=native_freq, inclusive="left")
 
-    # Adjust if profile has different length
-    if len(df) < len(new_index):
-        steps_per_day = 24 * steps_per_hour
-        deficit = len(new_index) - len(df)
-        feb29_positions = np.flatnonzero((new_index.month == 2) & (new_index.day == 29))
-        if len(feb29_positions) == steps_per_day and deficit == steps_per_day:
-            # An 8760-hour source has no Feb 29. Duplicate the immediately
-            # preceding calendar day at the leap-day position so March and all
-            # later seasons retain their original alignment.
-            insertion = int(feb29_positions[0])
-            previous_day = df.iloc[insertion - steps_per_day : insertion]
-            df = pd.concat(
-                [df.iloc[:insertion], previous_day, df.iloc[insertion:]],
-                ignore_index=True,
-            )
-        else:
-            # Generic fill for non-calendar input lengths.
-            repeats = (len(new_index) // len(df)) + 1
-            df = pd.concat([df] * repeats, ignore_index=True).iloc[: len(new_index)]
-    elif len(df) > len(new_index):
-        df = df.iloc[: len(new_index)]
-
+    df = _fit_profile_to_calendar(df, new_index, steps_per_hour, csv_resource)
     df.index = new_index
     df.index.name = "DateTime"
 
@@ -256,45 +235,140 @@ def _localize_wall_clock_index(df: pd.DataFrame, timezone: Optional[str], freq: 
     return localized
 
 
-def _load_profile_csv(csv_file: Path, profile_type: str) -> pd.DataFrame:
-    """Load a profile CSV file and standardize column names."""
+def _fit_profile_to_calendar(
+    df: pd.DataFrame, new_index: pd.DatetimeIndex, steps_per_hour: int, source
+) -> pd.DataFrame:
+    """Fit one calendar year of profile rows to the target year's calendar.
+
+    A profile must hold exactly one common or leap year at its native
+    resolution. A common-year profile on a leap-year target duplicates
+    28 February at the leap-day position, and a leap-year profile on a
+    common-year target drops its 29 February, so March onward keeps its
+    alignment either way. Any other length raises: repeating or cutting it
+    would shift the seasons without a message.
+    """
+    steps_per_day = 24 * steps_per_hour
+    common, leap = 365 * steps_per_day, 366 * steps_per_day
+    if len(df) not in (common, leap):
+        resolution = "hourly" if steps_per_hour == 1 else "15-minute"
+        raise ValueError(
+            f"Load profile {source} has {len(df)} data rows; a {resolution} profile must "
+            f"have {common} (common year) or {leap} (leap year). Rows are placed on the "
+            "calendar by position, so a shorter or longer file would shift the seasons."
+        )
+    if len(df) == len(new_index):
+        return df
+    # Day 59 (0-based) is 29 February in a leap year and 1 March otherwise.
+    leap_day = 59 * steps_per_day
+    if len(df) == common:
+        previous_day = df.iloc[leap_day - steps_per_day : leap_day]
+        return pd.concat([df.iloc[:leap_day], previous_day, df.iloc[leap_day:]], ignore_index=True)
+    return pd.concat([df.iloc[:leap_day], df.iloc[leap_day + steps_per_day :]], ignore_index=True)
+
+
+def _load_profile_csv(csv_file: Path, profile_type: str, native_freq: str = "h") -> pd.DataFrame:
+    """Load a profile CSV file, standardize its column name, and validate it.
+
+    Fully blank rows (such as the trailing ``,,,`` row of E-REDES exports)
+    are dropped. The remaining rows must be finite and non-negative, and a
+    leading timestamp column, when present, must step at ``native_freq``.
+    """
     try:
+        # Read without an index column so a blank row is blank in every
+        # column, including the timestamp, before it is dropped.
+        raw = pd.read_csv(csv_file).dropna(how="all").reset_index(drop=True)
+        timestamps = raw.iloc[:, 0]
         if profile_type == "1":
             # H0SLP demandlib format (hourly is stored in W; 15min h0_dyn is kW).
-            df = pd.read_csv(csv_file, index_col=0)
+            df = raw.iloc[:, 1:]
             if "Electrical Consumption [W]" in df.columns:
                 pass
             elif "Electrical Consumption [kW]" in df.columns:
                 # Backwards compatibility for user-supplied files with the
                 # historical bundled header.
-                df["Electrical Consumption [kW]"] *= 1000
-                df.rename(columns={"Electrical Consumption [kW]": "Electrical Consumption [W]"}, inplace=True)
+                df = df.rename(columns={"Electrical Consumption [kW]": "Electrical Consumption [W]"})
+                df["Electrical Consumption [W]"] *= 1000
             elif "h0_dyn" in df.columns:
-                df["h0_dyn"] *= 1000
-                df.rename(columns={"h0_dyn": "Electrical Consumption [W]"}, inplace=True)
+                df = df.rename(columns={"h0_dyn": "Electrical Consumption [W]"})
+                df["Electrical Consumption [W]"] *= 1000
 
-        elif profile_type in ("4", "5", "6"):
-            # E-Redes format
-            df = pd.read_csv(csv_file)
+        elif profile_type in EREDES_COLUMNS:
+            # E-Redes format: one file holds BTN A, B and C, so select by exact name.
             col_name = EREDES_COLUMNS[profile_type]
-            if col_name in df.columns:
-                df = df[[col_name]].copy()
-                df.rename(columns={col_name: "Electrical Consumption [W]"}, inplace=True)
-            else:
-                # Try to find the column
-                for col in df.columns:
-                    if "BTN" in col:
-                        df = df[[col]].copy()
-                        df.rename(columns={col: "Electrical Consumption [W]"}, inplace=True)
-                        break
+            if col_name not in raw.columns:
+                raise ValueError(f"profile {profile_type} needs the column {col_name!r}; found {list(raw.columns)}")
+            df = raw[[col_name]].rename(columns={col_name: "Electrical Consumption [W]"})
         else:
-            df = pd.read_csv(csv_file, index_col=0)
+            df = raw.iloc[:, 1:]
             df.columns = ["Electrical Consumption [W]"]
 
-        return df[["Electrical Consumption [W]"]].copy()
-
+        df = df[["Electrical Consumption [W]"]].copy()
     except Exception as e:
-        raise ValueError(f"Error loading profile from {csv_file}: {e}")
+        raise ValueError(f"Error loading profile from {csv_file}: {e}") from e
+
+    _validate_profile_rows(df, timestamps, native_freq, csv_file)
+    return df
+
+
+def _validate_profile_rows(df: pd.DataFrame, timestamps: pd.Series, native_freq: str, csv_file: Path) -> None:
+    """Refuse non-numeric, non-finite, negative, or irregularly stamped rows."""
+    values = pd.to_numeric(df["Electrical Consumption [W]"], errors="coerce").to_numpy(dtype=float)
+    bad = ~np.isfinite(values)
+    if bad.any():
+        raise ValueError(
+            f"Load profile {csv_file} has {int(bad.sum())} missing, non-numeric, or infinite "
+            f"values (first at data row {int(np.flatnonzero(bad)[0])})."
+        )
+    negative = values < 0
+    if negative.any():
+        raise ValueError(
+            f"Load profile {csv_file} has {int(negative.sum())} negative values "
+            f"(first at data row {int(np.flatnonzero(negative)[0])}); load must be non-negative."
+        )
+    df["Electrical Consumption [W]"] = values
+
+    # Rows are placed by position, so a timestamp column is optional. When the
+    # file has one, it must step evenly at the profile's resolution; a DST gap
+    # or a missing row would otherwise move later rows by one step.
+    if pd.api.types.is_numeric_dtype(timestamps):
+        return
+    stamps = _parse_profile_timestamps(timestamps, csv_file)
+    if stamps is None:
+        return
+    step = pd.Timedelta(pd.tseries.frequencies.to_offset(native_freq))
+    irregular = np.flatnonzero(stamps.diff().iloc[1:].to_numpy() != step.to_timedelta64())
+    if irregular.size:
+        row = int(irregular[0]) + 1
+        raise ValueError(
+            f"Load profile {csv_file} is not evenly spaced at {native_freq}: data row {row} "
+            f"({timestamps.iloc[row]}) follows {timestamps.iloc[row - 1]}."
+        )
+
+
+def _parse_profile_timestamps(timestamps: pd.Series, csv_file: Path) -> Optional[pd.Series]:
+    """Parse ISO or day-first (E-REDES) timestamps.
+
+    Returns None when no row parses as a timestamp in either format: the first
+    column is then a label, not a time column. Raises when some rows parse and
+    others do not, because a damaged time column cannot be checked for gaps.
+    """
+    best = None
+    for kwargs in ({"format": "ISO8601"}, {"format": "%d/%m/%Y %H:%M"}):
+        # utc=True compares offset-aware stamps as instants, so a file whose
+        # offsets change at DST is evenly spaced; naive stamps are unchanged.
+        stamps = pd.to_datetime(timestamps, errors="coerce", utc=True, **kwargs)
+        if best is None or stamps.notna().sum() > best.notna().sum():
+            best = stamps
+    if not best.notna().any():
+        return None
+    malformed = np.flatnonzero(best.isna().to_numpy())
+    if malformed.size:
+        row = int(malformed[0])
+        raise ValueError(
+            f"Load profile {csv_file} has {malformed.size} timestamps that do not parse "
+            f"(first at data row {row}: {timestamps.iloc[row]!r})."
+        )
+    return best
 
 
 def scale_to_annual_consumption(

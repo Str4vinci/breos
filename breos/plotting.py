@@ -14,6 +14,9 @@ from typing import List, Optional, Tuple
 import numpy as np
 import pandas as pd
 
+from breos.economics import find_payback_year, find_payback_year_exact
+from breos.utils import format_years_months, local_datetime_index
+
 MONTH_LABELS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
 
 # Plotting imports with backend handling
@@ -36,16 +39,43 @@ def _check_matplotlib():
         raise ImportError("matplotlib is required for plotting. Install with: uv add matplotlib")
 
 
-def _power_frame_to_energy_kwh(frame: pd.DataFrame) -> pd.DataFrame:
-    """Convert regularly sampled power columns in watts to interval energy."""
-    if not isinstance(frame.index, pd.DatetimeIndex):
+def _result_instants(results_df: pd.DataFrame) -> pd.DatetimeIndex:
+    """Return the absolute time of each results row.
+
+    Read from a ``Datetime`` column, else the ``Datetime_UTC`` column that
+    :func:`breos.io.load_results` adds to a DST-zone CSV, else the index. A
+    CSV of a run in a DST zone mixes UTC offsets; those rows are read as UTC
+    instants, which step evenly where their wall-clock labels do not.
+    """
+    if "Datetime" in results_df.columns:
+        values = results_df["Datetime"]
+    elif "Datetime_UTC" in results_df.columns:
+        values = results_df["Datetime_UTC"]
+    else:
+        values = results_df.index
+    if pd.api.types.is_datetime64_any_dtype(values):
+        return pd.DatetimeIndex(values)
+    try:
+        return pd.DatetimeIndex(pd.to_datetime(values))
+    except ValueError:
+        return pd.DatetimeIndex(pd.to_datetime(values, utc=True))
+
+
+def _power_frame_to_energy_kwh(frame: pd.DataFrame, instants: Optional[pd.DatetimeIndex] = None) -> pd.DataFrame:
+    """Convert regularly sampled power columns in watts to interval energy.
+
+    ``instants`` gives each row's absolute time when the frame's index is a
+    wall-clock calendar, which has a gap and a repeat at the DST transitions.
+    """
+    index = frame.index if instants is None else instants
+    if not isinstance(index, pd.DatetimeIndex):
         raise ValueError("Power-to-energy plotting requires a DatetimeIndex")
-    if len(frame.index) < 2:
+    if len(index) < 2:
         raise ValueError("Power-to-energy plotting requires at least two timestamps")
-    intervals = np.diff(frame.index.asi8)
+    intervals = np.diff(index.asi8)
     if np.any(intervals <= 0) or not np.all(intervals == intervals[0]):
         raise ValueError("Power-to-energy plotting requires a regular increasing time index")
-    hours_per_step = (frame.index[1] - frame.index[0]).total_seconds() / 3600.0
+    hours_per_step = (index[1] - index[0]).total_seconds() / 3600.0
     return frame * (hours_per_step / 1000.0)
 
 
@@ -386,14 +416,12 @@ def create_cost_plots(
         )
 
     # Find and mark payback
-    if "Savings_Cumulative_NPV" in cost_projection.columns:
-        payback = cost_projection[cost_projection["Savings_Cumulative_NPV"] > 0]
-        if not payback.empty:
-            payback_year = payback["Year"].iloc[0]
-            ax.axvline(x=payback_year, color="blue", linestyle=":", alpha=0.7)
-            ax.annotate(
-                f"Payback: Year {payback_year}", xy=(payback_year, ax.get_ylim()[1] * 0.9), fontsize=10, color="blue"
-            )
+    payback_year = find_payback_year(cost_projection)
+    if payback_year is not None:
+        ax.axvline(x=payback_year, color="blue", linestyle=":", alpha=0.7)
+        ax.annotate(
+            f"Payback: Year {payback_year}", xy=(payback_year, ax.get_ylim()[1] * 0.9), fontsize=10, color="blue"
+        )
 
     ax.set_xlabel("Year")
     ax.set_ylabel("Cumulative Cost (€)")
@@ -421,7 +449,7 @@ def monthly_graphs(results_df: pd.DataFrame, results_directory: str, columns: Op
 
     df = results_df.copy()
     if "Datetime" in df.columns:
-        df["Datetime"] = pd.to_datetime(df["Datetime"])
+        df["Datetime"] = local_datetime_index(df["Datetime"])
         df.set_index("Datetime", inplace=True)
 
     if columns is None:
@@ -431,7 +459,7 @@ def monthly_graphs(results_df: pd.DataFrame, results_directory: str, columns: Op
     columns = [c for c in columns if c in df.columns]
 
     # Monthly aggregation
-    monthly = _power_frame_to_energy_kwh(df[columns]).resample("ME").sum()
+    monthly = _power_frame_to_energy_kwh(df[columns], _result_instants(results_df)).resample("ME").sum()
 
     fig, ax = plt.subplots(figsize=(14, 6))
 
@@ -471,13 +499,13 @@ def yearly_graphs(results_df: pd.DataFrame, results_directory: str) -> None:
 
     df = results_df.copy()
     if "Datetime" in df.columns:
-        df["Datetime"] = pd.to_datetime(df["Datetime"])
+        df["Datetime"] = local_datetime_index(df["Datetime"])
         df.set_index("Datetime", inplace=True)
 
     columns = ["PV_Production", "Houseload", "Import_From_Grid", "Sell_To_Grid"]
     columns = [c for c in columns if c in df.columns]
 
-    yearly = _power_frame_to_energy_kwh(df[columns]).resample("YE").sum()
+    yearly = _power_frame_to_energy_kwh(df[columns], _result_instants(results_df)).resample("YE").sum()
 
     fig, ax = plt.subplots(figsize=(10, 6))
 
@@ -515,7 +543,7 @@ def weekly_graphs(results_df: pd.DataFrame, week_number: int, results_directory:
 
     df = results_df.copy()
     if "Datetime" in df.columns:
-        df["Datetime"] = pd.to_datetime(df["Datetime"])
+        df["Datetime"] = local_datetime_index(df["Datetime"])
         df.set_index("Datetime", inplace=True)
 
     # Filter to specific week
@@ -573,7 +601,7 @@ def degradation_plots(degradation_df: pd.DataFrame, results_directory: str) -> N
         x_years = x / 365.0  # Convert to years for tick labels
         use_years_axis = True
     elif "Datetime" in degradation_df.columns:
-        x = pd.to_datetime(degradation_df["Datetime"])
+        x = local_datetime_index(degradation_df["Datetime"])
         use_years_axis = False
     else:
         x = degradation_df.index
@@ -669,7 +697,7 @@ def plot_resistance_and_efficiency(degradation_df: pd.DataFrame, results_directo
         x_years = x / 365.0
         use_years_axis = True
     elif "Datetime" in degradation_df.columns:
-        x = pd.to_datetime(degradation_df["Datetime"])
+        x = local_datetime_index(degradation_df["Datetime"])
         use_years_axis = False
     else:
         x = degradation_df.index
@@ -866,7 +894,8 @@ def plot_validation_multi_system(
     if n_systems == 0:
         return
 
-    cmap = plt.cm.get_cmap("tab20", max(n_systems, 2))
+    # plt.cm.get_cmap was removed in matplotlib 3.11; the registry works on the floor too.
+    cmap = matplotlib.colormaps["tab20"].resampled(max(n_systems, 2))
 
     fig, ax = plt.subplots(figsize=(12, 7))
 
@@ -971,7 +1000,7 @@ def plot_cell_temperature(
 
     df = results_df.copy()
     if "Datetime" in df.columns:
-        df["Datetime"] = pd.to_datetime(df["Datetime"])
+        df["Datetime"] = local_datetime_index(df["Datetime"])
         df = df.set_index("Datetime")
 
     # Monthly aggregation
@@ -984,11 +1013,11 @@ def plot_cell_temperature(
     min_by_month = monthly_min.groupby(monthly_min.index.month).min()
     max_by_month = monthly_max.groupby(monthly_max.index.month).max()
 
-    # Ensure all 12 months
+    # Ensure all 12 months; a month without data is a gap, not 0 °C.
     months = np.arange(1, 13)
-    mean_by_month = mean_by_month.reindex(months, fill_value=0.0)
-    min_by_month = min_by_month.reindex(months, fill_value=0.0)
-    max_by_month = max_by_month.reindex(months, fill_value=0.0)
+    mean_by_month = mean_by_month.reindex(months)
+    min_by_month = min_by_month.reindex(months)
+    max_by_month = max_by_month.reindex(months)
 
     month_names = MONTH_LABELS
 
@@ -1079,31 +1108,15 @@ def plot_breakeven(cost_projection: pd.DataFrame, results_directory: str, scenar
         with_sys = cost_projection["Cost_System_Cumulative"]
         label_suffix = ""
 
-    # Calculate break-even point with MONTH precision using linear interpolation
-    savings = no_sys.values - with_sys.values
-    breakeven_idx = np.where(savings > 0)[0]
-
-    be_years = None
-    be_months = None
+    # Break-even with month precision, by the same interpolation Monte Carlo
+    # and the optimizer report.
+    savings = pd.DataFrame({"Year": years.to_numpy(), "Savings_Cumulative_NPV": no_sys.values - with_sys.values})
+    be_year_exact = find_payback_year_exact(savings)
     be_text = "Not reached"
-    be_year_exact = None
-
-    if len(breakeven_idx) > 0:
-        idx = breakeven_idx[0]
-        if idx > 0:
-            # Linear interpolation between year (idx-1) and year (idx)
-            y0, y1 = savings[idx - 1], savings[idx]
-            x0, x1 = years.iloc[idx - 1], years.iloc[idx]
-            # Find where savings crosses zero
-            be_year_exact = x0 + (0 - y0) * (x1 - x0) / (y1 - y0)
-            be_years = int(be_year_exact)
-            be_months = int((be_year_exact - be_years) * 12)
-            be_text = f"{be_years} years {be_months} months"
-        else:
-            be_year_exact = years.iloc[0]
-            be_years = int(be_year_exact)
-            be_months = 0
-            be_text = f"{be_years} years 0 months"
+    if be_year_exact is not None:
+        be_years = int(be_year_exact)
+        be_months = int((be_year_exact - be_years) * 12)
+        be_text = f"{be_years} years {be_months} months"
 
     # =========================================================================
     # GRAPH 1: Cumulative costs comparison
@@ -1166,6 +1179,17 @@ def plot_breakeven(cost_projection: pd.DataFrame, results_directory: str, scenar
     print(f"   Break-even point: {be_text}")
 
 
+def _on_index_clock(value, index: pd.Index) -> pd.Timestamp:
+    """Return ``value`` as a timestamp comparable with ``index``: naive dates take its zone."""
+    stamp = pd.Timestamp(value)
+    zone = getattr(index, "tz", None)
+    if zone is not None and stamp.tz is None:
+        return stamp.tz_localize(zone)
+    if zone is None and stamp.tz is not None:
+        return stamp.tz_localize(None)
+    return stamp
+
+
 def plot_battery_soh_timeseries(
     results_df: pd.DataFrame,
     results_directory: str,
@@ -1192,14 +1216,15 @@ def plot_battery_soh_timeseries(
 
     # Ensure datetime index
     if "Datetime" in df.columns:
-        df["Datetime"] = pd.to_datetime(df["Datetime"])
+        df["Datetime"] = local_datetime_index(df["Datetime"])
         df.set_index("Datetime", inplace=True)
 
-    # Filter date range if specified
+    # Filter date range if specified. The bounds are civil dates, read on the
+    # results' own clock, so a naive date compares with a tz-aware index.
     if start_date:
-        df = df[df.index >= pd.to_datetime(start_date)]
+        df = df[df.index >= _on_index_clock(start_date, df.index)]
     if end_date:
-        df = df[df.index <= pd.to_datetime(end_date)]
+        df = df[df.index <= _on_index_clock(end_date, df.index)]
 
     if "Battery_SOH" not in df.columns:
         print("Warning: Battery_SOH column not found in results")
@@ -1319,14 +1344,14 @@ def plot_monthly_comparison(results_df: pd.DataFrame, results_directory: str, sc
 
     df = results_df.copy()
     if "Datetime" in df.columns:
-        df["Datetime"] = pd.to_datetime(df["Datetime"])
+        df["Datetime"] = local_datetime_index(df["Datetime"])
         df.set_index("Datetime", inplace=True)
 
     # Monthly aggregation
     columns = ["PV_Production", "Houseload", "Import_From_Grid", "Sell_To_Grid"]
     columns = [c for c in columns if c in df.columns]
 
-    monthly = _power_frame_to_energy_kwh(df[columns]).resample("ME").sum()
+    monthly = _power_frame_to_energy_kwh(df[columns], _result_instants(results_df)).resample("ME").sum()
     monthly["Month"] = monthly.index.strftime("%b")
 
     fig, ax = plt.subplots(figsize=(14, 7))
@@ -1400,7 +1425,7 @@ def plot_monthly_balance(results_df: pd.DataFrame, results_directory: str) -> No
     # Ensure Datetime index
     if "Datetime" in results_df.columns:
         df = results_df.copy()
-        df["Datetime"] = pd.to_datetime(df["Datetime"])
+        df["Datetime"] = local_datetime_index(df["Datetime"])
         df.set_index("Datetime", inplace=True)
     else:
         df = results_df.copy()
@@ -1411,7 +1436,7 @@ def plot_monthly_balance(results_df: pd.DataFrame, results_directory: str) -> No
         raise ValueError(f"Missing energy-balance column(s): {', '.join(missing)}")
 
     # Convert power to interval energy before monthly aggregation.
-    monthly = _power_frame_to_energy_kwh(df[energy_columns]).resample("ME").sum()
+    monthly = _power_frame_to_energy_kwh(df[energy_columns], _result_instants(results_df)).resample("ME").sum()
 
     # Group by month (1-12) to aggregate multi-year data
     monthly_avg = monthly.groupby(monthly.index.month).mean()
@@ -1514,7 +1539,9 @@ def _plot_montecarlo_payback_summary(df: pd.DataFrame, results_directory: str, s
     _check_matplotlib()
 
     total_runs = len(df)
-    payback = _finite_numeric_series(df, "payback_year")
+    # The fractional year, which the distribution's 0.1-year bins and mean need;
+    # older run tables carry only the integer year.
+    payback = _finite_numeric_series(df, "payback_year_exact" if "payback_year_exact" in df.columns else "payback_year")
     achieved_count = len(payback)
 
     if achieved_count:
@@ -2394,15 +2421,6 @@ def plot_weather_annual_ghi_distribution(
     plt.close(fig)
 
 
-def _fmt_years_months(years_decimal) -> str:
-    """Convert decimal years to 'Xy Ym' label."""
-    if years_decimal is None:
-        return "N/A"
-    y = int(years_decimal)
-    m = int((years_decimal - y) * 12)
-    return f"{y}y" if m == 0 else f"{y}y {m}m"
-
-
 def plot_breakeven_comparison(
     cost_dfs: "List[pd.DataFrame]",
     labels: "List[str]",
@@ -2451,13 +2469,9 @@ def plot_breakeven_comparison(
         max_year = max(max_year, int(df["Year"].max()))
 
         # Break-even dotted line
-        savings = df["Savings_Cumulative_NPV"].values
-        years = df["Year"].values
-        for i in range(1, len(savings)):
-            if savings[i] >= 0 and savings[i - 1] < 0:
-                be = years[i - 1] + (-savings[i - 1] / (savings[i] - savings[i - 1]))
-                ax.axvline(x=be, color=color, linestyle=":", alpha=0.5, linewidth=1)
-                break
+        be = find_payback_year_exact(df)
+        if be is not None:
+            ax.axvline(x=be, color=color, linestyle=":", alpha=0.5, linewidth=1)
 
     ax.set_xlabel("Year")
     ax.set_ylabel("Cumulative Cost (€)")
@@ -2516,10 +2530,10 @@ def plot_breakeven_two(
     y_pos = ylim[1] * 0.85
     if be1:
         ax.axvline(x=be1, color="blue", linestyle=":", alpha=0.7, linewidth=1.5)
-        ax.annotate(f"{label1}: {_fmt_years_months(be1)}", xy=(be1 + 0.3, y_pos), fontsize=10, color="blue")
+        ax.annotate(f"{label1}: {format_years_months(be1)}", xy=(be1 + 0.3, y_pos), fontsize=10, color="blue")
     if be2:
         ax.axvline(x=be2, color="green", linestyle=":", alpha=0.7, linewidth=1.5)
-        ax.annotate(f"{label2}: {_fmt_years_months(be2)}", xy=(be2 + 0.3, y_pos * 0.92), fontsize=10, color="green")
+        ax.annotate(f"{label2}: {format_years_months(be2)}", xy=(be2 + 0.3, y_pos * 0.92), fontsize=10, color="green")
 
     plt.tight_layout()
     plt.savefig(os.path.join(results_dir, filename), dpi=300)

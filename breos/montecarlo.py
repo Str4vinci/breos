@@ -46,6 +46,7 @@ from breos.economics import (
     calculate_lcoe_from_projection,
     cost_analysis_projection,
     find_payback_year,
+    find_payback_year_exact,
     replacement_fraction_from_steps,
 )
 from breos.execution import (
@@ -59,6 +60,7 @@ from breos.execution import (
     backend_provenance as _backend_provenance,
 )
 from breos.load_profiles import load_profile
+from breos.pv.model_options import DEFAULT_SOLAR_POSITION, resolve_solar_position_method, solar_position_time_offset
 from breos.utils import get_hours_per_step
 from breos.weather import (
     build_battery_temperature_series,
@@ -202,13 +204,10 @@ def _precompute_year_caches(
                     preserve_irradiance_energy=settings.preserve_irradiance_energy,
                 )
         if runtime_weather is not None and not runtime_weather:
-            method = str(cfg.get("solar_position", "interval-start"))
-            if method == "weather":
-                offset = weather_representative_time_offset(weather, freq)
-            elif method == "mid-interval":
-                offset = pd.Timedelta(hours=get_hours_per_step(freq) / 2.0)
-            else:
-                offset = pd.Timedelta(0)
+            # The same resolution the PV model applies, so a spelling such as
+            # "Mid-Interval" is recorded with the offset it actually gets.
+            method = resolve_solar_position_method(cfg.get("solar_position", DEFAULT_SOLAR_POSITION))
+            offset = solar_position_time_offset(method, weather, freq)
             runtime_weather.update(
                 {
                     "representative_source_year": int(year),
@@ -580,7 +579,7 @@ def _simulate_trajectory(
         discount_rate=cfg["discount_rate"],
     )
     payback_year = find_payback_year(cost_projection)
-    payback_year_exact = _interpolate_payback_year(cost_projection)
+    payback_year_exact = find_payback_year_exact(cost_projection)
     npv_savings = float(cost_projection["Savings_Cumulative_NPV"].iloc[-1])
 
     trajectory = yearly_df.merge(cost_projection, on="Year", how="left", suffixes=("", "_Financial"))
@@ -608,21 +607,6 @@ def _simulate_trajectory(
         "mean_export_kwh": float(yearly_df["Export_kWh"].mean()),
     }
     return metrics, trajectory
-
-
-def _interpolate_payback_year(cost_projection: pd.DataFrame) -> float | None:
-    """Return the linearly interpolated discounted-payback year."""
-    savings = cost_projection["Savings_Cumulative_NPV"].to_numpy(dtype=float)
-    years = cost_projection["Year"].to_numpy(dtype=float)
-    if len(savings) == 0:
-        return None
-    if savings[0] >= 0.0:
-        return float(years[0])
-    for idx in range(1, len(savings)):
-        if savings[idx] >= 0.0 and savings[idx - 1] < 0.0:
-            change = savings[idx] - savings[idx - 1]
-            return float(years[idx]) if abs(change) < 1e-12 else float(years[idx - 1] - savings[idx - 1] / change)
-    return None
 
 
 def _has_battery(cfg: dict[str, Any]) -> bool:

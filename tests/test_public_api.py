@@ -69,6 +69,7 @@ import breos
 
 assert "breos.plotting" not in sys.modules
 assert "matplotlib" not in sys.modules
+assert "numba" not in sys.modules
 assert "plot_co2_savings" in dir(breos)
 """
     plotting_import_code = """
