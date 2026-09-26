@@ -17,6 +17,14 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 - `resample_tmy_to_15min` is now a thin wrapper over `resample_to_15min`, so
   the two share one interpolation path. Its output is unchanged: the same
   columns, values, and provenance.
+- Removed the "Year 1 PV degradation" stage (`year_1_degradation`) from the
+  App `pv_loss_waterfall` ([#175](https://github.com/Str4vinci/breos/issues/175)).
+  Year 1 has no degradation, so the stage was always 0 kWh.
+  `pvwatts_static` is now the last stage and equals
+  `energy_balance.pv_dc.generation_kwh`. `provenance.ledger_schema_version`
+  and `pv_loss_waterfall.ledger_schema_version` move to `1.2`. Consumers that
+  look the stage up by key, or index `stages[6]`, need updating. These are
+  the only changes to the App golden baseline.
 
 ### Fixed
 - The 15-minute weather resamplers no longer depend on the timestamp resolution
@@ -462,9 +470,8 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   with a nonzero `degradation_rate`.** At 0.5%/year their DC output rises by
   0.25% at every age: age 10 is scaled by 0.9511 instead of 0.9487. A
   `current_year` before `start_year` now raises `ValueError` instead of
-  adding production. App, Monte Carlo and optimizer results, and the App
-  golden baseline, are unchanged. The convention is documented under Module
-  aging on the PV API page.
+  adding production. App, Monte Carlo and optimizer results are unchanged.
+  The convention is documented under Module aging on the PV API page.
 
 ### Removed
 - Removed the optimizer's `costs.panel_wp` override. It priced the steady-state

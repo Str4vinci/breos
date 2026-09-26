@@ -74,7 +74,9 @@ and `tracking`, plus the resolved tracker geometry for a tracking array.
 `pv_loss_waterfall` reports the year 1 PV production chain in kWh. Its
 ordered `stages` cover only the linear PV-model chain: horizontal reference,
 transposition, front-side incidence-angle modifier, optional bifacial rear
-gain, cell temperature, static PVWatts losses, and year 1 degradation. Dispatch
+gain, cell temperature, and static PVWatts losses. There is no degradation
+stage because year 1 has none (see [Module aging](../api/pv.md#module-aging)),
+so the last stage equals `energy_balance.pv_dc.generation_kwh`. Dispatch
 is a branching flow and is therefore reported under `energy_balance`, not
 forced into a misleading linear stage.
 

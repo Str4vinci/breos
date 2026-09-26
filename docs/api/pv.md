@@ -41,7 +41,8 @@ App, Monte Carlo, the optimizer and the economics projection all apply this
 rule. The `breos.solar` production functions apply it through `current_year`
 and `start_year`: the modules are `current_year - start_year` years old, and
 `current_year == start_year` is the installation year. Without both
-arguments there is no age loss.
+arguments there is no age loss. The year 1 PV loss waterfall therefore has
+no degradation stage.
 
 ## Module catalogue
 

@@ -792,6 +792,16 @@ class TestAppSimulateNoBattery:
         rear_stage = next(stage for stage in waterfall["stages"] if stage["key"] == "bifacial_rear_gain")
         assert rear_stage["delta_kwh"] == 0.0
 
+    def test_pv_loss_waterfall_ends_at_static_losses_without_a_year_1_degradation_stage(self):
+        # Module age is counted at the start of each year, so year 1 has no PV
+        # degradation and the stage that reported it was always 0 (#175).
+        waterfall = self.result["pv_loss_waterfall"]
+        keys = [stage["key"] for stage in waterfall["stages"]]
+        assert "year_1_degradation" not in keys
+        assert keys[-1] == "pvwatts_static"
+        assert waterfall["stages"][-1]["energy_kwh"] == waterfall["energy_balance"]["pv_dc"]["generation_kwh"]
+        assert waterfall["ledger_schema_version"] == "1.2"
+
     def test_grid_independence_range(self):
         gi = self.result["grid_independence_pct"]
         assert 0 <= gi <= 100
@@ -809,7 +819,7 @@ class TestAppSimulateNoBattery:
         assert r["usable_ac_system_production_kwh"] == pytest.approx(
             r["self_consumption_kwh"] + r["grid_export_kwh"], abs=0.02
         )
-        assert r["provenance"]["ledger_schema_version"] == "1.1"
+        assert r["provenance"]["ledger_schema_version"] == "1.2"
         assert r["provenance"]["timezone"] == "Europe/Lisbon"
         json.dumps(r["provenance"])
 
