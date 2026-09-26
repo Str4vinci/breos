@@ -183,6 +183,7 @@ def test_jit_cache_state_reports_miss_then_in_memory_reuse(monkeypatch):
 
 
 def test_montecarlo_provenance_uses_worker_observations_across_repeated_studies(monkeypatch):
+    pytest.importorskip("numba", reason="the compiled backend needs the breos[fast] extra")
     import breos._numba_dispatch as dispatch
     import breos.montecarlo as mc_module
 
