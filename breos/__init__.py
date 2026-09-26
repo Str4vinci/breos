@@ -128,10 +128,13 @@ from breos.inverter import (
 
 # I/O (export/import functions)
 from breos.io import (
+    InputRepairReport,
+    RepairEvent,
     export_cost_analysis,
     export_results,
     export_summary,
     load_results,
+    repair_series,
 )
 
 # Load Profiles
@@ -333,4 +336,7 @@ __all__ = [
     "export_results",
     "export_summary",
     "load_results",
+    # Input repair
+    "repair_series",
+    "InputRepairReport",
 ]

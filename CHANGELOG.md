@@ -12,6 +12,23 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   `validation/external/README.md`.
 - `resample_to_15min` accepts `altitude` for the clear-sky model. When it is
   omitted, pvlib still looks the elevation up from the coordinates, as before.
+- `breos.io.repair_series`, an explicit repair step for measured load and PV
+  power series, run before a simulation
+  ([#194](https://github.com/Str4vinci/breos/issues/194)). The simulation
+  still rejects gaps, non-finite values, and negative load (#151); this is the
+  opt-in way to clean such data with a record. It clips small negative
+  readings to zero (down to `negative_clip_w=10.0` W, for at most
+  `max_negative_run="1h"`) and refuses larger or sustained ones, which for
+  load usually mean a net-meter reading. Gaps (missing timestamps, NaN, ±inf)
+  raise by default; `gap_fill="nearby_days"` fills each step with the mean of
+  the same time of day on the nearest valid days, preferring the same day type
+  for load, within `window_days=7`, and raises if none is in reach. Duplicate
+  timestamps and an irregular index raise. It returns the repaired series and
+  an `InputRepairReport` listing every repaired run, its method, the values
+  written, and the energy added, with a strict-JSON `to_dict()`. Pass the
+  reports as `App(config, input_repairs=[report])` to record them under
+  `provenance.input_repairs`. Runs without them are unchanged and have no such
+  key. There is no config key or CLI option for repair yet.
 
 ### Changed
 - `resample_tmy_to_15min` is now a thin wrapper over `resample_to_15min`, so

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from copy import deepcopy
 from importlib.metadata import PackageNotFoundError, version
 from typing import Any
 
@@ -114,7 +115,12 @@ def _package_version() -> str:
         return "unknown"
 
 
-def _provenance(cfg: dict[str, Any], resolved: ResolvedAppConfig, artifacts: SimulationArtifacts) -> dict[str, Any]:
+def _provenance(
+    cfg: dict[str, Any],
+    resolved: ResolvedAppConfig,
+    artifacts: SimulationArtifacts,
+    input_repairs: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     normalized_cfg = {
         **cfg,
         "location": {
@@ -133,7 +139,7 @@ def _provenance(cfg: dict[str, Any], resolved: ResolvedAppConfig, artifacts: Sim
     weather = json.loads(json.dumps(artifacts.weather_metadata, default=str))
     weather.setdefault("latitude", resolved.lat)
     weather.setdefault("longitude", resolved.lon)
-    return {
+    provenance = {
         "breos_version": _package_version(),
         "ledger_schema_version": LEDGER_SCHEMA_VERSION,
         "resolved_config": normalized_cfg,
@@ -149,14 +155,25 @@ def _provenance(cfg: dict[str, Any], resolved: ResolvedAppConfig, artifacts: Sim
         # benchmarks. Same keys as the Monte Carlo block, from the same code.
         "execution": artifacts.execution,
     }
+    # Only runs given repair reports carry the key, so existing results are
+    # unchanged. An empty list is recorded as given.
+    if input_repairs is not None:
+        provenance["input_repairs"] = deepcopy(input_repairs)
+    return provenance
 
 
 def build_result(
     cfg: dict[str, Any],
     resolved: ResolvedAppConfig,
     artifacts: SimulationArtifacts,
+    *,
+    input_repairs: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """Build the public JSON-serializable App result dictionary."""
+    """Build the public JSON-serializable App result dictionary.
+
+    ``input_repairs`` holds strict-JSON repair reports (see
+    :func:`breos.repair.input_repair_records`) for ``provenance``.
+    """
     year1 = artifacts.yearly_df.iloc[0]
     yr1_pv = year1["PV_Production_kWh"]
     legacy_yr1_pv = year1["Legacy_PV_Production_kWh"]
@@ -195,7 +212,7 @@ def build_result(
         "monthly": monthly_to_dicts(artifacts.first_year_results_df, cfg["resolution"]),
         "financial": financial_to_dicts(artifacts.cost_projection, total_initial),
         "pv_loss_waterfall": artifacts.pv_loss_waterfall,
-        "provenance": _provenance(cfg, resolved, artifacts),
+        "provenance": _provenance(cfg, resolved, artifacts, input_repairs),
         "degradation": artifacts.degradation_summary,
     }
 
