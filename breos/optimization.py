@@ -120,35 +120,26 @@ def optimize_tilt(
         surface_azimuth = default_azimuth(location.latitude)
     tilts = np.linspace(tilt_range[0], tilt_range[1], n_points)
     results = []
-    successful_evaluations = 0
 
+    # A failing candidate raises: scoring it as zero production, as this used
+    # to, could move the reported optimum.
     for tilt in tilts:
-        try:
-            dc_power = calculate_pv_production_dc(
-                weather_data=weather_data,
-                location=location,
-                tilt=tilt,
-                surface_azimuth=surface_azimuth,
-                n_modules=n_modules,
-                pv_params=pv_params,
-                freq=freq,
-                verbose=False,
-                **(model_options or {}),
-            )
-            total_production = dc_power.sum() * get_hours_per_step(freq) / 1000  # kWh (DC)
-            results.append({"tilt": tilt, "production_kwh": total_production})
-            successful_evaluations += 1
+        dc_power = calculate_pv_production_dc(
+            weather_data=weather_data,
+            location=location,
+            tilt=tilt,
+            surface_azimuth=surface_azimuth,
+            n_modules=n_modules,
+            pv_params=pv_params,
+            freq=freq,
+            verbose=False,
+            **(model_options or {}),
+        )
+        total_production = dc_power.sum() * get_hours_per_step(freq) / 1000  # kWh (DC)
+        results.append({"tilt": tilt, "production_kwh": total_production})
 
-            if verbose:
-                print(f"  Tilt {tilt:.1f}°: {total_production:.1f} kWh")
-
-        except Exception as e:
-            if verbose:
-                print(f"  Tilt {tilt:.1f}°: Error - {e}")
-            results.append({"tilt": tilt, "production_kwh": 0})
-
-    if successful_evaluations == 0:
-        raise RuntimeError("Tilt optimization failed for every evaluated angle")
+        if verbose:
+            print(f"  Tilt {tilt:.1f}°: {total_production:.1f} kWh")
 
     results_df = pd.DataFrame(results)
     optimal_idx = results_df["production_kwh"].idxmax()
@@ -198,47 +189,43 @@ def optimize_battery_size(
 
     results = []
 
+    # A failing candidate raises rather than being dropped from the comparison.
     for size_wh in battery_sizes_wh:
         config = BatteryConfig(nominal_energy_wh=size_wh)
 
-        try:
-            df, total_pv, summary, _, _, _ = simulate_energy_balance(
-                pv_dc=pv_dc,
-                houseload=houseload,
-                battery_config=config,
-                start_time=start_time,
-                end_time=end_time,
-                freq=freq,
-                debug=False,
-                execution_backend=execution_backend,
-            )
+        df, total_pv, summary, _, _, _ = simulate_energy_balance(
+            pv_dc=pv_dc,
+            houseload=houseload,
+            battery_config=config,
+            start_time=start_time,
+            end_time=end_time,
+            freq=freq,
+            debug=False,
+            execution_backend=execution_backend,
+        )
 
-            grid_independence = summary["Grid Independence [%]"].iloc[0]
-            import_pct = summary["Import [%]"].iloc[0]
-            total_pv_kwh = summary["Total PV [kWh]"].iloc[0]
-            export_kwh = summary["Sell [kWh]"].iloc[0]
-            self_consumption_pct = ((total_pv_kwh - export_kwh) / total_pv_kwh) * 100 if total_pv_kwh > 0 else 0.0
+        grid_independence = summary["Grid Independence [%]"].iloc[0]
+        import_pct = summary["Import [%]"].iloc[0]
+        total_pv_kwh = summary["Total PV [kWh]"].iloc[0]
+        export_kwh = summary["Sell [kWh]"].iloc[0]
+        self_consumption_pct = ((total_pv_kwh - export_kwh) / total_pv_kwh) * 100 if total_pv_kwh > 0 else 0.0
 
-            results.append(
-                {
-                    "battery_size_wh": size_wh,
-                    "battery_size_kwh": size_wh / 1000,
-                    "grid_independence": grid_independence,
-                    "import_percent": import_pct,
-                    "self_consumption": self_consumption_pct,
-                }
-            )
+        results.append(
+            {
+                "battery_size_wh": size_wh,
+                "battery_size_kwh": size_wh / 1000,
+                "grid_independence": grid_independence,
+                "import_percent": import_pct,
+                "self_consumption": self_consumption_pct,
+            }
+        )
 
-            if verbose:
-                print(f"  {size_wh / 1000:.1f} kWh: {grid_independence:.1f}% grid independence")
-
-        except Exception as e:
-            if verbose:
-                print(f"  {size_wh / 1000:.1f} kWh: Error - {e}")
+        if verbose:
+            print(f"  {size_wh / 1000:.1f} kWh: {grid_independence:.1f}% grid independence")
 
     results_df = pd.DataFrame(results)
     if results_df.empty:
-        raise RuntimeError("No battery sizes could be evaluated.")
+        raise ValueError("battery_sizes_wh must name at least one battery size")
 
     if objective == "max_self_consumption":
         optimal_idx = results_df["self_consumption"].idxmax()
@@ -439,6 +426,44 @@ def _temperature_series_from_config(
         indoor_model=indoor_model,
         align_weather_year=align_weather_year,
     )
+
+
+def _resolve_horizon_and_pv_degradation(config: Dict[str, Any]) -> Tuple[int, float]:
+    """Return the scoring horizon (years) and annual PV degradation rate.
+
+    Both objective bases read these from here, so a design's steady-state and
+    projected scores rest on the same assumptions: ``simulation.years_projection``
+    and ``pv.degradation_rate``, falling back to ``financials.project_lifespan``
+    and ``financials.pv_degradation_rate``.
+    """
+    simulation = config.get("simulation", {}) or {}
+    financials = config.get("financials", {}) or {}
+    pv_config = config.get("pv", {}) or {}
+    years = int(simulation.get("years_projection", financials.get("project_lifespan", DEFAULT_PROJECT_LIFESPAN)))
+    degradation_rate = float(pv_config.get("degradation_rate", financials.get("pv_degradation_rate", 0.005)))
+    return years, degradation_rate
+
+
+def _resolve_degradation_engine_spec(batt_spec: Dict[str, Any]) -> Tuple[str, Optional[str]]:
+    """Validate ``battery.degradation_engine`` and ``battery.blast_model`` once.
+
+    The same rules as the App's config validation, applied when the problem is
+    built, so an invalid BLAST setting fails on either objective basis before
+    any candidate is scored.
+    """
+    engine = str(batt_spec.get("degradation_engine", "native")).strip().lower()
+    blast_model = batt_spec.get("blast_model")
+    if engine not in ("native", "blast"):
+        raise ValueError("battery.degradation_engine must be one of: native, blast")
+    if engine == "blast":
+        from breos.degradation.profiles import ENABLED_BLAST_MODEL_KEYS
+
+        if blast_model not in ENABLED_BLAST_MODEL_KEYS:
+            available = ", ".join(ENABLED_BLAST_MODEL_KEYS)
+            raise ValueError(f"Unknown battery.blast_model {blast_model!r}. Available: {available}")
+    elif blast_model is not None:
+        raise ValueError("battery.blast_model requires battery.degradation_engine = 'blast'")
+    return engine, blast_model
 
 
 def _validated_dc_output_scale(config: Dict[str, Any]) -> float:
@@ -747,8 +772,10 @@ def _evaluate_projected_design_metrics(
     cumulative_cal_deg = 0.0
     carried_energy_wh: Optional[float] = None
     carried_pv_origin_energy_wh: Optional[float] = None
-    degradation_engine = str(batt_spec.get("degradation_engine", "native")).strip().lower()
-    blast_model = batt_spec.get("blast_model")
+    degradation_engine, blast_model = _resolve_degradation_engine_spec(batt_spec)
+    if not has_battery:
+        # Without a battery there is nothing to age, and BLAST needs a pack.
+        degradation_engine, blast_model = "native", None
     degradation_state: Optional[Dict[str, Any]] = None
     total_replacements = 0
     total_replacement_cost = 0.0
@@ -965,13 +992,9 @@ def evaluate_projected_design(
     simulation = config.get("simulation", {}) or {}
     financials = config.get("financials", {}) or {}
     emissions_config = config.get("emissions")
-    pv_config = config.get("pv", {}) or {}
     battery = config.get("battery", {}) or {}
     freq = str(simulation.get("resolution", "h"))
-    years_projection = int(
-        simulation.get("years_projection", financials.get("project_lifespan", DEFAULT_PROJECT_LIFESPAN))
-    )
-    degradation_rate = float(pv_config.get("degradation_rate", financials.get("pv_degradation_rate", 0.005)))
+    years_projection, degradation_rate = _resolve_horizon_and_pv_degradation(config)
     pv_params, _module_area = _resolve_pv_module_and_area(config)
 
     # A DC-side yield correction: the array itself produces this much less,
@@ -1203,6 +1226,22 @@ def _snap_to_grid_within_bounds(values: np.ndarray, step: float, lower: float, u
 try:
     from pymoo.core.problem import ElementwiseProblem
     from pymoo.core.repair import Repair
+    from pymoo.core.termination import Termination
+
+    class _MinGenerationTermination(Termination):
+        """Hold another termination's progress at zero until ``minimum`` generations.
+
+        Defined at module level so an optimizer result that stores it pickles.
+        """
+
+        def __init__(self, termination, minimum: int) -> None:
+            super().__init__()
+            self.termination = termination
+            self.minimum = max(1, int(minimum))
+
+        def _update(self, algorithm):
+            progress = self.termination.update(algorithm)
+            return 0.0 if algorithm.n_gen < self.minimum else progress
 
     class DiscreteGridRepair(Repair):
         def _do(self, problem, pop, **kwargs):
@@ -1277,17 +1316,10 @@ try:
             if self.objective_basis not in {"steady_state", "projected"}:
                 raise ValueError("optimization.objective_basis must be 'steady_state' or 'projected'")
             self.projected_objectives = self.objective_basis == "projected"
-            self.projected_years = int(
-                config.get("simulation", {}).get(
-                    "years_projection",
-                    config.get("financials", {}).get("project_lifespan", DEFAULT_PROJECT_LIFESPAN),
-                )
-            )
-            self.projected_degradation_rate = float(
-                config.get("pv", {}).get(
-                    "degradation_rate",
-                    config.get("financials", {}).get("pv_degradation_rate", 0.005),
-                )
+            # One horizon and PV degradation rate for both objective bases.
+            self.projected_years, self.projected_degradation_rate = _resolve_horizon_and_pv_degradation(config)
+            self.degradation_engine, self.blast_model = _resolve_degradation_engine_spec(
+                config.get("battery", {}) or {}
             )
             self.pv_params, self.module_area_m2 = _resolve_pv_module_and_area(config)
             self.batt_temp_cfg = config.get("battery", {}).get("temperature", "weather")
@@ -1448,6 +1480,10 @@ try:
                 end_time=self.end_h,
                 freq=self.freq,
                 temperature_series=temperature_series,
+                # Without a battery there is nothing to age, and BLAST
+                # needs a pack, so PV-only candidates run native.
+                degradation_engine=self.degradation_engine if battery_kwh > 0 else "native",
+                blast_model=self.blast_model if battery_kwh > 0 else None,
                 debug=False,
                 execution_backend=self.execution_backend,
             )
@@ -1489,7 +1525,11 @@ try:
                 total_export,
                 total_load,
                 costs_config=self.config.get("costs"),
-                financials_config=self.config.get("financials"),
+                financials_config={
+                    **(self.config.get("financials") or {}),
+                    "project_lifespan": self.projected_years,
+                    "pv_degradation_rate": self.projected_degradation_rate,
+                },
                 annual_pv_kwh=total_ac_prod,
                 module_power_w=pv_params.Mpp,
                 annual_battery_soh_loss_pct=annual_soh_loss_pct,
@@ -1581,21 +1621,10 @@ def _build_multi_objective_termination(n_gen: int, early_stop: Any):
     if early_stop.get("enabled", True) is False:
         return ("n_gen", n_gen), None
 
-    from pymoo.core.termination import Termination
     from pymoo.termination.collection import TerminationCollection
     from pymoo.termination.ftol import MultiObjectiveSpaceTermination
     from pymoo.termination.max_gen import MaximumGenerationTermination
     from pymoo.termination.robust import RobustTermination
-
-    class _MinGenerationTermination(Termination):
-        def __init__(self, termination, minimum: int) -> None:
-            super().__init__()
-            self.termination = termination
-            self.minimum = max(1, int(minimum))
-
-        def _update(self, algorithm):
-            progress = self.termination.update(algorithm)
-            return 0.0 if algorithm.n_gen < self.minimum else progress
 
     ftol = float(early_stop.get("ftol", 0.0025))
     if ftol <= 0.0:
