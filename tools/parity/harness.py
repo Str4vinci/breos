@@ -19,10 +19,17 @@ import pandas as pd
 
 FREQ = "15min"
 STEPS_PER_DAY = 96
+# Every scenario runs at both resolutions: the day loop takes 96 steps or 24,
+# and hours_per_step enters every energy conversion.
+RESOLUTIONS = ("15min", "h")
 
 
-def _index(days: int, start: str = "2024-01-01") -> pd.DatetimeIndex:
-    return pd.date_range(start=start, periods=days * STEPS_PER_DAY, freq=FREQ, tz="UTC")
+def _steps_per_day(freq: str) -> int:
+    return {"15min": 96, "h": 24}[freq]
+
+
+def _index(days: int, start: str = "2024-01-01", freq: str = FREQ) -> pd.DatetimeIndex:
+    return pd.date_range(start=start, periods=days * _steps_per_day(freq), freq=freq, tz="UTC")
 
 
 def _profiles(index: pd.DatetimeIndex, seed: int, pv_peak_w: float, load_base_w: float):
@@ -35,7 +42,8 @@ def _profiles(index: pd.DatetimeIndex, seed: int, pv_peak_w: float, load_base_w:
     # Diurnal PV with a seasonal envelope and per-day cloud variability.
     daylight = np.clip(np.sin((hour - 6.0) / 12.0 * np.pi), 0.0, None)
     seasonal = 0.65 + 0.35 * np.cos((doy - 172) / 365.0 * 2.0 * np.pi)
-    cloud = np.repeat(rng.uniform(0.15, 1.0, size=n // STEPS_PER_DAY + 1), STEPS_PER_DAY)[:n]
+    steps_per_day = int(pd.Timedelta(days=1) / (index[1] - index[0]))
+    cloud = np.repeat(rng.uniform(0.15, 1.0, size=n // steps_per_day + 1), steps_per_day)[:n]
     pv = pv_peak_w * daylight * seasonal * cloud
     pv[rng.random(n) < 0.004] = 0.0
 
@@ -55,14 +63,14 @@ def _profiles(index: pd.DatetimeIndex, seed: int, pv_peak_w: float, load_base_w:
     )
 
 
-def build(name: str):
+def build(name: str, freq: str = FREQ):
     """Return ``(pv_dc, houseload, temperature, battery_kwargs, sim_kwargs)``."""
-    from breos.battery import BatteryConfig
-
     days = {"one_day": 1, "partial_day": 2}.get(name, 365)
-    index = _index(days)
+    index = _index(days, freq=freq)
     if name == "partial_day":
-        index = index[: STEPS_PER_DAY + 37]  # a full day plus a trailing stub
+        steps_per_day = _steps_per_day(freq)
+        # A full day plus a trailing stub of about nine hours.
+        index = index[: steps_per_day + 37 * steps_per_day // 96]
 
     common = dict(
         max_soc=0.95,
@@ -162,6 +170,19 @@ def build(name: str):
         )
         return pv, load, temp, cfg, {}
 
+    if name == "blast":
+        # BLAST aging instead of the native models; it cannot be combined with
+        # resistance fade. The degradation_engine keyword exists since 0.6.0.
+        pv, load, temp = _profiles(index, 20, 9000.0, 2100.0)
+        cfg = dict(
+            nominal_energy_wh=10000.0,
+            inverter_ac_capacity_w=5400.0,
+            max_charge_power_w=4500.0,
+            max_discharge_power_w=3500.0,
+            **{**common, "enable_resistance_fade": False},
+        )
+        return pv, load, temp, cfg, {"degradation_engine": "blast", "blast_model": "nmc_gr_50ah_b1"}
+
     if name == "c_rate_limited":
         # A C-rate that binds in both directions: the stored-energy cap, not
         # the absolute DC-input or AC-output limits.
@@ -198,13 +219,14 @@ SCENARIOS = (
     "carried_state",
     "no_inverter_cap",
     "c_rate_limited",
+    "blast",
 )
 
 
-def run(name: str, backend: str = "python"):
+def run(name: str, backend: str = "python", freq: str = FREQ):
     from breos.battery import BatteryConfig, simulate_energy_balance
 
-    pv, load, temp, cfg, sim_kwargs = build(name)
+    pv, load, temp, cfg, sim_kwargs = build(name, freq)
     battery_config = BatteryConfig(**cfg)
     kwargs = dict(sim_kwargs)
     if backend != "python":
@@ -213,7 +235,7 @@ def run(name: str, backend: str = "python"):
         pv_dc=pv,
         houseload=load,
         battery_config=battery_config,
-        freq=FREQ,
+        freq=freq,
         temperature_series=temp,
         **kwargs,
     )
@@ -222,22 +244,24 @@ def run(name: str, backend: str = "python"):
 
 def dump(path: str, backend: str = "python") -> None:
     payload: dict[str, np.ndarray] = {}
-    for name in SCENARIOS:
-        results_df, total_pv, summary_df, rep_cost, n_rep, deg_df = run(name, backend)
-        for col in results_df.columns:
-            if col == "Datetime":
-                continue
-            payload[f"{name}::results::{col}"] = results_df[col].to_numpy(dtype=np.float64)
-        for col in deg_df.columns:
-            if col == "Datetime":
-                continue
-            payload[f"{name}::degradation::{col}"] = deg_df[col].to_numpy(dtype=np.float64)
-        for col in summary_df.columns:
-            payload[f"{name}::summary::{col}"] = summary_df[col].to_numpy(dtype=np.float64)
-        payload[f"{name}::scalar::total_pv"] = np.array([total_pv], dtype=np.float64)
-        payload[f"{name}::scalar::replacement_cost"] = np.array([rep_cost], dtype=np.float64)
-        payload[f"{name}::scalar::n_replacements"] = np.array([n_rep], dtype=np.float64)
-        print(f"  {name}: {len(results_df)} steps, {n_rep} replacement(s)", flush=True)
+    for freq in RESOLUTIONS:
+        for name in SCENARIOS:
+            results_df, total_pv, summary_df, rep_cost, n_rep, deg_df = run(name, backend, freq)
+            key = f"{name}@{freq}"
+            for col in results_df.columns:
+                if col == "Datetime":
+                    continue
+                payload[f"{key}::results::{col}"] = results_df[col].to_numpy(dtype=np.float64)
+            for col in deg_df.columns:
+                if col == "Datetime":
+                    continue
+                payload[f"{key}::degradation::{col}"] = deg_df[col].to_numpy(dtype=np.float64)
+            for col in summary_df.columns:
+                payload[f"{key}::summary::{col}"] = summary_df[col].to_numpy(dtype=np.float64)
+            payload[f"{key}::scalar::total_pv"] = np.array([total_pv], dtype=np.float64)
+            payload[f"{key}::scalar::replacement_cost"] = np.array([rep_cost], dtype=np.float64)
+            payload[f"{key}::scalar::n_replacements"] = np.array([n_rep], dtype=np.float64)
+            print(f"  {key}: {len(results_df)} steps, {n_rep} replacement(s)", flush=True)
     np.savez(path, **payload)
     print(f"wrote {path} ({len(payload)} arrays)")
 
