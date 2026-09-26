@@ -256,6 +256,45 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   weather metadata as `leap_day`. The new `fill_leap_day` does the copy.
   Non-leap years are unchanged. A 2028 Porto run with 8 modules and 5 kWh
   yields 19.4 kWh more PV than 2027, from the extra day.
+- External load profiles of the wrong length raise instead of being repeated
+  or cut ([#171](https://github.com/Str4vinci/breos/issues/171)).
+  `load_profile` places rows on the calendar by position, and used to repeat a
+  short file or truncate a long one without a message. The E-REDES 15-minute
+  exports end with a blank `,,,` row, so a 2024 run saw 35,041 rows, skipped the
+  leap-day insertion, and repeated the file: 29 February took 1 March's load,
+  the rest of the year ran a day early, and 31 December took 1 January's load.
+  Fully blank rows are now dropped, and a profile must then have exactly one
+  common or leap year of rows at its resolution (8,760 or 8,784 hourly; 35,040
+  or 35,136 at 15 minutes). A leap-year file on a common-year run drops its
+  29 February instead of losing 31 December. Profiles are also checked when
+  they load: values must be finite and non-negative, and a timestamp column,
+  when present, must parse on every row and step evenly, so a local-clock file
+  with a DST gap, or one malformed stamp, raises.
+  E-REDES profiles 4, 5, and 6 select their own `BTN A/B/C - Wh` column by exact
+  name; profile 6 used to fall back to the first `BTN` column, which is BTN A.
+  **Results change for leap-year runs on the E-REDES 15-minute file.** On
+  Porto 2024 with profile 6, 10 modules, and 4,000 kWh/yr, the load at each
+  step moves by 2.6% on average (5.1% for BTN A). Grid import rises by 0.54 kWh
+  (+0.02%) without a battery and falls by 0.45 kWh (−0.04%) with 5 kWh, and
+  NPV moves by −€2.23 and +€0.71. Hourly E-REDES runs, common-year runs, and
+  the bundled profiles are unchanged.
+
+- PV weather input with gaps, at the wrong resolution, or without air
+  temperature or wind speed raises instead of being repaired
+  ([#172](https://github.com/Str4vinci/breos/issues/172)), the PV-side
+  counterpart of #151 and #153. The PV model filled every simulation step from
+  the nearest weather row, so weather with June removed gave June zero PV,
+  a truncated file shortened the year, and 15-minute weather run at
+  `freq="h"` was thinned to hourly, all without a message. Weather must now
+  step evenly at `freq` from its first row to its last. A missing air
+  temperature or wind speed column used to become 25 °C and 1 m/s, and a NaN
+  air temperature a 25 °C cell; both now raise, and the message shows how to
+  add a constant column explicitly. Battery temperature in `"weather"` mode
+  raises the same way when the weather has no temperature column; a fixed
+  `battery_temperature` is the explicit alternative. Weather files whose
+  timestamps have no timezone are still read as UTC, but now log a warning,
+  unless their metadata sidecar records the timezone, as files BREOS writes
+  do. Results for complete, regular weather with both columns are unchanged.
 
 - The optimizer's steady-state scoring uses the same horizon, PV degradation,
   and battery degradation engine as projected scoring
