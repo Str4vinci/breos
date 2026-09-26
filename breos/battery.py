@@ -562,6 +562,7 @@ class AlignedSimulationInputs:
     temperature_c: np.ndarray
     freq: str
     pv_chain: Optional[Tuple[np.ndarray, np.ndarray, np.ndarray]] = None
+    pv_chain_key: Optional[Tuple[int, int, int, float, float, float, float]] = None
 
     def resolve_freq(self, freq: Optional[str]) -> str:
         """Return the inputs' own step, refusing a ``freq`` that disagrees with it."""
@@ -584,6 +585,27 @@ class AlignedSimulationInputs:
             temperature_c=self.temperature_c,
             freq=self.freq,
             pv_chain=self.pv_chain if pv_factor == 1.0 else None,
+            pv_chain_key=self.pv_chain_key if pv_factor == 1.0 else None,
+        )
+
+    def _pv_chain_cache_key(
+        self,
+        battery_config: "BatteryConfig",
+        hours_per_step: float,
+        *,
+        pv_dc_w: Optional[np.ndarray] = None,
+    ) -> Tuple[int, int, int, float, float, float, float]:
+        """Identify the aligned PV values and inverter settings used by the memo."""
+        cap_wh = _step_energy_cap(battery_config.inverter_ac_capacity_w, hours_per_step)
+        pv_values = self.pv_dc_w if pv_dc_w is None else pv_dc_w
+        return (
+            id(self.index),
+            id(pv_values),
+            len(pv_values),
+            float(hours_per_step),
+            float(cap_wh),
+            float(battery_config.inverter_efficiency),
+            float(battery_config.ac_output_scale),
         )
 
     def with_pv_only_chain(
@@ -603,23 +625,33 @@ class AlignedSimulationInputs:
         inputs, so a run that uses it takes the same values through the same
         expressions as a run that does not. There is no second arithmetic
         path to keep in step.
+
+        The returned inputs own a read-only copy of the PV array and
+        read-only conversion arrays. That keeps the memo stable without
+        changing write access to the caller's aligned arrays.
         """
         hours_per_step = get_hours_per_step(self.resolve_freq(freq))
         cap_wh = _step_energy_cap(battery_config.inverter_ac_capacity_w, hours_per_step)
-        pv_dc_wh = np.maximum(0.0, self.pv_dc_w * hours_per_step)
+        pv_dc_w = self.pv_dc_w.copy()
+        pv_dc_w.setflags(write=False)
+        pv_dc_wh = np.maximum(0.0, pv_dc_w * hours_per_step)
         chain = _calculate_dc_ac_power_arrays(
             pv_dc_wh,
             cap_wh,
             battery_config.inverter_efficiency,
             battery_config.ac_output_scale,
         )
+        for values in chain:
+            values.setflags(write=False)
+        pv_chain_key = self._pv_chain_cache_key(battery_config, hours_per_step, pv_dc_w=pv_dc_w)
         return AlignedSimulationInputs(
             index=self.index,
-            pv_dc_w=self.pv_dc_w,
+            pv_dc_w=pv_dc_w,
             load_w=self.load_w,
             temperature_c=self.temperature_c,
             freq=self.freq,
             pv_chain=chain,
+            pv_chain_key=pv_chain_key,
         )
 
 
@@ -1928,6 +1960,10 @@ def _simulate_core(
         battery_config.max_soc,
         battery_config.min_soc,
     )
+    if not has_battery and aligned is not None and aligned.pv_chain is not None:
+        expected_chain_key = aligned._pv_chain_cache_key(battery_config, hours_per_step)
+        if aligned.pv_chain_key != expected_chain_key:
+            raise ValueError("memoized PV chain does not match the aligned PV inputs or inverter settings")
     # The vectorized PV-only dispatch below is the only producer that leaves
     # most columns at zero, so it is the only one whose output can be served
     # from the reduced buffer -- and only when the caller wants a summary,

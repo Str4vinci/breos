@@ -18,7 +18,7 @@ Usage:
     custom.Mpp = 545  # Slightly different power
 """
 
-from dataclasses import replace
+from copy import copy
 from typing import Dict, List, Optional
 
 from breos.solar import PVModuleParams
@@ -142,7 +142,7 @@ def get_module(name: str) -> PVModuleParams:
     for key, value in MODULES.items():
         if key.lower() == name_lower:
             # Return a copy so user can modify without affecting catalog
-            return replace(value)
+            return copy(value)
 
     available = ", ".join(MODULES.keys())
     raise KeyError(f"Module '{name}' not found. Available: {available}")
