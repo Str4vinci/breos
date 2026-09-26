@@ -450,6 +450,22 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   values as they do NaN, so an infinite LCOE no longer makes the mean
   infinite and the spread NaN; `count` shows how many runs remain.
 
+- PV module age is counted at the start of each simulated year everywhere
+  ([#175](https://github.com/Str4vinci/breos/issues/175)). Year 1 has no
+  degradation and year `n` is degraded by `n - 1` full years, compounded.
+  App, Monte Carlo, the optimizer and the economics projection already did
+  this, but the `breos.solar` production functions added half a year to
+  `current_year - start_year`. A direct call at `current_year == start_year`
+  lost 0.25% at the default 0.5%/year, and a module `N` years old was
+  degraded for `N + 0.5` years where App uses `N`. **Results change only for
+  direct `breos.solar` calls that pass both `current_year` and `start_year`
+  with a nonzero `degradation_rate`.** At 0.5%/year their DC output rises by
+  0.25% at every age: age 10 is scaled by 0.9511 instead of 0.9487. A
+  `current_year` before `start_year` now raises `ValueError` instead of
+  adding production. App, Monte Carlo and optimizer results, and the App
+  golden baseline, are unchanged. The convention is documented under Module
+  aging on the PV API page.
+
 ### Removed
 - Removed the optimizer's `costs.panel_wp` override. It priced the steady-state
   CAPEX at a nominal wattage instead of the selected module's rating, so the

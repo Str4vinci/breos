@@ -116,7 +116,10 @@ def resolve_pvwatts_losses(
 
     ``loss_overrides`` replaces named BREOS default components. Age-based
     degradation is reported separately because App applies annual degradation
-    outside the static PVWatts component stack.
+    outside the static PVWatts component stack. ``age_degradation_percent`` is
+    already a loss percentage, not an age: for a module ``age`` full years old
+    at the start of the simulated year it is
+    ``100 * (1 - (1 - degradation_rate) ** age)``.
     """
     components = dict(DEFAULT_PVWATTS_LOSSES)
     if loss_overrides:
@@ -199,6 +202,8 @@ class PVProductionBreakdown:
     All series are DC power in watts, indexed like the production series.
     ``dc_after_losses`` is the same output returned by
     :func:`calculate_pv_production_dc` for the same inputs.
+    ``age_degradation_pct`` is the start-of-year module-age loss applied after
+    ``dc_after_static_losses``; it is 0 in the installation year.
     """
 
     horizontal_reference_dc: pd.Series
@@ -451,11 +456,22 @@ def _age_degradation_percent(
     current_year: Optional[int] = None,
     start_year: Optional[int] = None,
 ) -> float:
-    """Return the age-based PVWatts degradation percentage for this year."""
-    if current_year is not None and start_year is not None:
-        years_operating = current_year - start_year + 0.5
-        return float(100 * (1 - (1 - degradation_rate) ** years_operating))
-    return 0.0
+    """Return the age-based PVWatts degradation percentage for ``current_year``.
+
+    Age is counted at the start of the simulated year: the modules are
+    ``current_year - start_year`` full years old, so the installation year has
+    no age loss and year ``n`` of operation is degraded by ``n - 1`` years.
+    Degradation compounds, so the DC output after static losses is scaled by
+    ``(1 - degradation_rate) ** (current_year - start_year)``. App, Monte Carlo,
+    the optimizer and the economics projection use the same convention.
+    Without both years there is no age loss.
+    """
+    if current_year is None or start_year is None:
+        return 0.0
+    years_operating = current_year - start_year
+    if years_operating < 0:
+        raise ValueError(f"current_year ({current_year}) must not be earlier than start_year ({start_year})")
+    return float(100 * (1 - (1 - degradation_rate) ** years_operating))
 
 
 def _module_dc_before_losses(
@@ -613,48 +629,6 @@ def _build_pv_production_breakdown(
     )
 
 
-def _dc_from_poa(
-    effective_irradiance: np.ndarray,
-    temp_cell: np.ndarray,
-    pv_params: "PVModuleParams",
-    n_modules: int,
-    times: pd.DatetimeIndex,
-    degradation_rate: float = 0.0,
-    current_year: Optional[int] = None,
-    start_year: Optional[int] = None,
-    loss_overrides: Optional[Dict[str, float]] = None,
-) -> pd.Series:
-    """Run CEC single-diode + pvwatts loss model and scale to array.
-
-    Shared between fixed-tilt and tracking DC paths. System losses default
-    to DEFAULT_PVWATTS_LOSSES; ``loss_overrides`` replaces individual
-    components (percent).
-    """
-    I_L_ref, I_o_ref, R_s, R_sh_ref, a_ref, Adjust = _get_cec_params(pv_params)
-
-    with warnings.catch_warnings():
-        warnings.filterwarnings("ignore", category=RuntimeWarning)
-        cec = pvlib.pvsystem.calcparams_cec(
-            effective_irradiance, temp_cell, pv_params.alpha_sc, a_ref, I_L_ref, I_o_ref, R_sh_ref, R_s, Adjust
-        )
-        mpp = pvlib.pvsystem.max_power_point(*cec, method="newton")
-
-    if current_year is not None and start_year is not None:
-        years_operating = current_year - start_year + 0.5
-        age_degradation_factor = 100 * (1 - (1 - degradation_rate) ** years_operating)
-    else:
-        age_degradation_factor = 0.0
-
-    total_losses_percent = resolve_pvwatts_losses(
-        loss_overrides,
-        age_degradation_percent=age_degradation_factor,
-    )["combined_pct"]
-
-    p_mp = mpp["p_mp"] if isinstance(mpp, dict) else mpp.p_mp
-    dc_power = np.asarray(p_mp) * n_modules * (1 - total_losses_percent / 100)
-    return pd.Series(dc_power, index=times, name="dc_power_W")
-
-
 def calculate_pv_production_breakdown(
     weather_data: pd.DataFrame,
     location: Location,
@@ -681,7 +655,13 @@ def calculate_pv_production_breakdown(
     pvrow_height: Optional[float] = None,
     pvrow_pitch: Optional[float] = None,
 ) -> PVProductionBreakdown:
-    """Calculate fixed-tilt PV production with intermediate loss stages."""
+    """Calculate fixed-tilt PV production with intermediate loss stages.
+
+    Module age is counted at the start of ``current_year``: ``current_year -
+    start_year`` full years of compound ``degradation_rate``, and none in the
+    installation year. See :func:`calculate_pv_production_dc` for the
+    parameters.
+    """
     if pv_params is None:
         from breos.pv_modules import get_module
 
@@ -776,9 +756,14 @@ def calculate_pv_production_dc(
         n_modules: Number of PV modules
         pv_params: PV module parameters (uses defaults if None)
         freq: Time frequency ('h' or '15min')
-        degradation_rate: Annual degradation rate (0.005 = 0.5%/year)
-        current_year: Current simulation year (for age-based degradation)
-        start_year: Year system was installed (for age calculation)
+        degradation_rate: Annual compound PV degradation rate (0.005 = 0.5%/year).
+        current_year: Calendar year being simulated. Module age is counted at
+            the start of this year, ``current_year - start_year`` full years,
+            and DC output after static losses is scaled by
+            ``(1 - degradation_rate) ** age``. ``None`` means no age loss.
+        start_year: Installation year, the first year of operation. At
+            ``current_year == start_year`` the modules are new and have no age
+            loss. ``None`` means no age loss.
         verbose: Whether to print production summary
         loss_overrides: Per-component PVWatts loss overrides (percent)
         transposition_model: Sky-diffusion model for POA transposition
@@ -865,6 +850,11 @@ def calculate_pv_production_tracking_breakdown(
     Single-axis (horizontal or tilted) trackers are the dominant configuration in
     utility-scale PV. Dual-axis trackers gain slightly more energy but at higher
     cost; they are common in CPV and high-latitude installations.
+
+    Module age is counted at the start of ``current_year``: ``current_year -
+    start_year`` full years of compound ``degradation_rate``, and none in the
+    installation year. See :func:`calculate_pv_production_dc_tracking` for the
+    parameters.
     """
     if tracking not in ("single_axis", "dual_axis"):
         raise ValueError(f"tracking must be 'single_axis' or 'dual_axis', got {tracking!r}")
@@ -993,9 +983,14 @@ def calculate_pv_production_dc_tracking(
         dual_axis_max_tilt: Maximum panel tilt for dual-axis. ``90`` = unlimited.
         pv_params: PV module parameters (uses defaults if None).
         freq: Time frequency (``"h"`` or ``"15min"``).
-        degradation_rate: Annual degradation rate.
-        current_year: Current simulation year (for age-based degradation).
-        start_year: Year system was installed.
+        degradation_rate: Annual compound PV degradation rate (0.005 = 0.5%/year).
+        current_year: Calendar year being simulated. Module age is counted at
+            the start of this year, ``current_year - start_year`` full years,
+            and DC output after static losses is scaled by
+            ``(1 - degradation_rate) ** age``. ``None`` means no age loss.
+        start_year: Installation year, the first year of operation. At
+            ``current_year == start_year`` the modules are new and have no age
+            loss. ``None`` means no age loss.
         verbose: Whether to print production summary.
         loss_overrides: Per-component PVWatts loss overrides (percent).
         transposition_model: Sky-diffusion model for POA transposition
@@ -1115,9 +1110,14 @@ def calculate_pv_production_ac(
         n_modules: Number of PV modules
         pv_params: PV module parameters (uses defaults if None)
         freq: Time frequency ('h' or '15min')
-        degradation_rate: Annual degradation rate (0.005 = 0.5%/year)
-        current_year: Current simulation year (for age-based degradation)
-        start_year: Year system was installed (for age calculation)
+        degradation_rate: Annual compound PV degradation rate (0.005 = 0.5%/year).
+        current_year: Calendar year being simulated. Module age is counted at
+            the start of this year, ``current_year - start_year`` full years,
+            and DC output after static losses is scaled by
+            ``(1 - degradation_rate) ** age``. ``None`` means no age loss.
+        start_year: Installation year, the first year of operation. At
+            ``current_year == start_year`` the modules are new and have no age
+            loss. ``None`` means no age loss.
         inverter_loading_ratio: DC/AC ratio for inverter sizing
         inverter_efficiency: Nominal inverter efficiency
         verbose: Whether to print production summary
@@ -1320,6 +1320,11 @@ def calculate_multi_array_production_breakdown(
     An array with ``modules = 0`` contributes nothing, and a negative module
     count raises ``ValueError``. When every array is empty, the result is zero
     on the same time grid a non-empty array would use.
+
+    Module age is counted at the start of ``current_year``: ``current_year -
+    start_year`` full years of compound ``degradation_rate``, and none in the
+    installation year. See :func:`calculate_multi_array_production` for the
+    parameters.
     """
     defaults = _model_option_kwargs(locals())
 
@@ -1484,9 +1489,14 @@ def calculate_multi_array_production(
             ``transposition_model``, ``albedo``/``surface_type``, or
             ``model_perez`` to override the function-level defaults.
         freq: Time frequency ('h' or '15min')
-        degradation_rate: Annual degradation rate
-        current_year: Current simulation year
-        start_year: Installation year
+        degradation_rate: Annual compound PV degradation rate (0.005 = 0.5%/year).
+        current_year: Calendar year being simulated. Module age is counted at
+            the start of this year, ``current_year - start_year`` full years,
+            and DC output after static losses is scaled by
+            ``(1 - degradation_rate) ** age``. ``None`` means no age loss.
+        start_year: Installation year, the first year of operation. At
+            ``current_year == start_year`` the modules are new and have no age
+            loss. ``None`` means no age loss.
         verbose: Print summary
         loss_overrides: Per-component PVWatts loss overrides (percent)
         transposition_model: Default sky-diffusion model for arrays that do
