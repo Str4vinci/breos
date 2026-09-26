@@ -710,10 +710,11 @@ class TestSimulateEnergyBalance:
 
     def test_native_degradation_engine_preserves_final_state_shape(self):
         idx = pd.date_range("2025-01-01 00:00", periods=1, freq="h", tz="UTC")
+        config = BatteryConfig(nominal_energy_wh=5000, enable_replacement=False)
         result = simulate_energy_balance(
             pv_dc=pd.Series(0.0, index=idx),
             houseload=pd.DataFrame({"Load": 0.0}, index=idx),
-            battery_config=BatteryConfig(nominal_energy_wh=5000, enable_replacement=False),
+            battery_config=config,
             freq="h",
             initial_fec=3.0,
             initial_calendar_seconds=86400.0,
@@ -724,14 +725,180 @@ class TestSimulateEnergyBalance:
             return_degradation_state=True,
         )
 
-        assert result[-1] == {
-            "degradation_engine": "native",
-            "fec_cum": 3.0,
-            "cumulative_calendar_seconds": 86400.0,
-            "resistance_growth": 0.05,
-            "cumulative_cycle_degradation": 0.1,
-            "cumulative_calendar_degradation": 0.2,
-        }
+        state = result[-1]
+        assert state["degradation_engine"] == "native"
+        assert state["fec_cum"] == 3.0
+        assert state["cumulative_calendar_seconds"] == 90000.0
+        assert state["resistance_growth"] == 0.05
+        assert state["cumulative_cycle_degradation"] == 0.1
+        assert state["cumulative_calendar_degradation"] > 0.2
+        assert state["native_rainflow_state"]["schema_version"] == 1
+        assert state["soh_fraction"] < 1.0
+        assert state["day_start_soc_absolute"] == pytest.approx(result[0]["Battery_SOC_Absolute"].iloc[-1])
+
+    def test_native_trailing_partial_period_counts_cycles_and_calendar_time(self):
+        idx = pd.date_range("2025-01-01 00:00", periods=30, freq="h", tz="UTC")
+        pv_values = np.zeros(len(idx))
+        load_values = np.zeros(len(idx))
+        load_values[:8] = 900.0
+        pv_values[8:16] = 1200.0
+        load_values[16:24] = 900.0
+        pv_values[24:] = 1200.0
+        config = BatteryConfig(
+            nominal_energy_wh=5000,
+            standby_loss_wh=0.0,
+            enable_replacement=False,
+            max_charge_power_w=2500.0,
+            max_discharge_power_w=2500.0,
+        )
+
+        results, _, _, _, _, degradation, state = simulate_energy_balance(
+            pv_dc=pd.Series(pv_values, index=idx),
+            houseload=pd.DataFrame({"Load": load_values}, index=idx),
+            battery_config=config,
+            temperature_series=pd.Series(25.0, index=idx),
+            freq="h",
+            return_degradation_state=True,
+            finalize_degradation=True,
+        )
+
+        ticks, ticks_per_second = _datetime_index_ticks(idx)
+        anchor_tick = int(ticks[0]) - round(3600 * ticks_per_second)
+        continuous_ticks = np.concatenate(([anchor_tick], ticks))
+        continuous_soc = np.concatenate(([config.max_soc], results["Battery_SOC_Absolute"].to_numpy()))
+        cycles = battery_module._detect_cycles_rainflow_arrays(
+            continuous_soc,
+            continuous_ticks,
+            ticks_per_second,
+        )
+        expected_fec = sum(cycle["doc"] * cycle["count"] for cycle in cycles)
+
+        assert len(degradation) == 2
+        assert degradation["Datetime"].iloc[-1] == idx[-1]
+        assert degradation["Cumulative_FEC"].iloc[-1] == pytest.approx(expected_fec)
+        assert degradation["Cumulative_FEC"].iloc[-1] > 0.0
+        assert degradation["Cumulative_Calendar_Seconds"].iloc[-1] == pytest.approx(30 * 3600.0)
+        assert state["native_rainflow_state"]["residue"] == []
+
+    def test_native_rainflow_residue_continues_across_simulation_calls(self):
+        idx = pd.date_range("2025-01-01 00:00", periods=48, freq="h", tz="UTC")
+        pv_values = np.tile(np.asarray([0.0] * 8 + [1200.0] * 8 + [0.0] * 8), 2)
+        load_values = np.tile(np.asarray([900.0] * 8 + [0.0] * 8 + [900.0] * 8), 2)
+        config = BatteryConfig(
+            nominal_energy_wh=5000,
+            standby_loss_wh=0.0,
+            enable_replacement=False,
+            max_charge_power_w=2500.0,
+            max_discharge_power_w=2500.0,
+        )
+        pv = pd.Series(pv_values, index=idx)
+        load = pd.DataFrame({"Load": load_values}, index=idx)
+        temperature = pd.Series(25.0, index=idx)
+
+        full = simulate_energy_balance(
+            pv_dc=pv,
+            houseload=load,
+            battery_config=config,
+            temperature_series=temperature,
+            freq="h",
+        )
+        first = simulate_energy_balance(
+            pv_dc=pv.iloc[:24],
+            houseload=load.iloc[:24],
+            battery_config=config,
+            temperature_series=temperature.iloc[:24],
+            freq="h",
+            return_degradation_state=True,
+        )
+        first_results, *_, state = first
+        second = simulate_energy_balance(
+            pv_dc=pv.iloc[24:],
+            houseload=load.iloc[24:],
+            battery_config=config,
+            temperature_series=temperature.iloc[24:],
+            freq="h",
+            initial_energy_wh=float(first_results["Battery_Energy_End"].iloc[-1]),
+            initial_pv_origin_energy_wh=float(first_results["Battery_PV_Origin_Energy_End"].iloc[-1]),
+            initial_degradation_state=state,
+        )
+
+        full_results, _, _, _, _, full_degradation = full
+        second_results, _, _, _, _, second_degradation = second
+        assert second_degradation["Cumulative_FEC"].iloc[-1] == pytest.approx(
+            full_degradation["Cumulative_FEC"].iloc[-1], abs=1e-12
+        )
+        assert second_degradation["SOH"].iloc[-1] == pytest.approx(full_degradation["SOH"].iloc[-1], abs=1e-12)
+        np.testing.assert_allclose(
+            second_results["Battery_Energy_End"],
+            full_results["Battery_Energy_End"].iloc[24:],
+            rtol=0.0,
+            atol=1e-9,
+        )
+
+    def test_native_replacement_discards_residue_after_retired_fec_is_counted(self, monkeypatch):
+        idx = pd.date_range("2025-01-01 00:00", periods=48, freq="h", tz="UTC")
+        pv_values = np.zeros(len(idx))
+        load_values = np.zeros(len(idx))
+        load_values[:8] = 900.0
+        pv_values[8:16] = 1200.0
+        load_values[16:24] = 900.0
+
+        def force_replacement_on_cycle(soh, cycles, nominal_energy_wh, *, fec_cum, **kwargs):
+            del nominal_energy_wh, kwargs
+            cycle_fec = sum(cycle["doc"] * cycle["count"] for cycle in cycles)
+            if cycle_fec > 0.0 and soh > 0.95:
+                return soh - 0.1, 0.1, fec_cum + cycle_fec
+            return soh, 0.0, fec_cum + cycle_fec
+
+        monkeypatch.setattr(battery_module, "_update_battery_soh_from_cycles", force_replacement_on_cycle)
+        config = BatteryConfig(
+            nominal_energy_wh=5000,
+            standby_loss_wh=0.0,
+            eol_percentage=0.95,
+            enable_replacement=True,
+            max_charge_power_w=2500.0,
+            max_discharge_power_w=2500.0,
+        )
+        retired_pack_baseline_config = BatteryConfig(
+            nominal_energy_wh=5000,
+            standby_loss_wh=0.0,
+            enable_replacement=False,
+            max_charge_power_w=2500.0,
+            max_discharge_power_w=2500.0,
+        )
+        baseline = simulate_energy_balance(
+            pv_dc=pd.Series(pv_values[:24], index=idx[:24]),
+            houseload=pd.DataFrame({"Load": load_values[:24]}, index=idx[:24]),
+            battery_config=retired_pack_baseline_config,
+            temperature_series=pd.Series(25.0, index=idx[:24]),
+            freq="h",
+            return_degradation_state=True,
+            finalize_degradation=True,
+        )
+        results, _, _, _, replacements, degradation, state = simulate_energy_balance(
+            pv_dc=pd.Series(pv_values, index=idx),
+            houseload=pd.DataFrame({"Load": load_values}, index=idx),
+            battery_config=config,
+            temperature_series=pd.Series(25.0, index=idx),
+            freq="h",
+            return_degradation_state=True,
+        )
+
+        assert replacements == 1
+        assert bool(results["Battery_Replaced"].iloc[23]) is True
+        assert degradation["Cumulative_FEC_All_Packs"].iloc[0] > 0.0
+        assert degradation["Cumulative_FEC_All_Packs"].iloc[0] == pytest.approx(
+            baseline[-2]["Cumulative_FEC"].iloc[-1], abs=1e-12
+        )
+        assert degradation["Cumulative_FEC"].iloc[0] == pytest.approx(0.0)
+        assert degradation["Cumulative_FEC"].iloc[-1] == pytest.approx(0.0)
+        assert degradation["Cumulative_FEC_All_Packs"].iloc[-1] == pytest.approx(
+            degradation["Cumulative_FEC_All_Packs"].iloc[0]
+        )
+        residue = state["native_rainflow_state"]["residue"]
+        assert len(residue) == 1
+        assert residue[0][0] == pytest.approx(config.max_soc)
+        assert residue[0][2] == 0
 
     def test_blast_degradation_engine_returns_final_state(self):
         idx = pd.date_range("2025-01-01 00:00", periods=48, freq="h", tz="UTC")

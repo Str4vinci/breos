@@ -411,8 +411,9 @@ def run_app_simulation(
             **state_kwargs,
             degradation_engine=degradation_engine,
             blast_model=blast_model,
-            initial_degradation_state=degradation_state if degradation_engine == "blast" else None,
+            initial_degradation_state=degradation_state,
             return_degradation_state=True,
+            finalize_degradation=year_idx == projection_years - 1,
             execution_backend=execution_backend,
         )
         year_cache_state = observed_jit_cache_state(execution_backend)

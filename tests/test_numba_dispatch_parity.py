@@ -154,11 +154,12 @@ def test_numba_pv_only_summary_uses_common_vectorized_path(monkeypatch):
 
 
 def test_trailing_partial_day_matches():
-    """A day window that does not close must still dispatch identically."""
+    """A trailing partial day must age the battery identically in both backends."""
     python_out = _run("partial_day", "python")
     assert len(python_out[0]) % 96 != 0, "scenario no longer has a trailing partial day"
-    # One closed day only: the stub contributes no degradation row.
-    assert len(python_out[5]) == 1
+    assert len(python_out[5]) == 2
+    assert python_out[5]["Datetime"].iloc[-1] == python_out[0]["Datetime"].iloc[-1]
+    assert python_out[5]["Cumulative_Calendar_Seconds"].iloc[-1] == pytest.approx(len(python_out[0]) * 900.0)
     _assert_identical("partial_day", python_out, _run("partial_day", "numba"))
 
 
