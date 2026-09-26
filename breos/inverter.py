@@ -8,6 +8,7 @@ This module handles:
 """
 
 import math
+from copy import deepcopy
 from dataclasses import dataclass
 from numbers import Integral, Real
 from typing import Optional
@@ -240,7 +241,7 @@ def get_inverter_preset(name: str) -> InverterConfig:
     if name not in INVERTER_PRESETS:
         available = ", ".join(INVERTER_PRESETS.keys())
         raise KeyError(f"Preset '{name}' not found. Available: {available}")
-    return INVERTER_PRESETS[name]
+    return deepcopy(INVERTER_PRESETS[name])
 
 
 def _clamped_ac_output_scale(value: float) -> float:

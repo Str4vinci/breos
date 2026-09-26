@@ -376,12 +376,27 @@ def cost_analysis_projection(
 
     # If yearly_summary_df provided (from propagation), use actual yearly data
     if yearly_summary_df is not None and not yearly_summary_df.empty:
-        # Build projection from actual yearly simulation data
-        proj = pd.DataFrame()
-        proj["Year"] = range(1, num_years + 1)
+        expected_years = pd.Index(range(1, num_years + 1), name="Year")
+        numeric_years = pd.to_numeric(yearly_summary_df["Year"], errors="coerce").to_numpy(dtype=float)
+        if not np.isfinite(numeric_years).all() or not np.equal(numeric_years, np.floor(numeric_years)).all():
+            raise ValueError("yearly_summary_df Year values must be finite integers")
 
-        # Map yearly_summary_df to projection (it should already have num_years rows)
-        yearly_data = yearly_summary_df.set_index("Year")
+        yearly_index = pd.Index(numeric_years.astype(int), name="Year")
+        if yearly_index.has_duplicates:
+            raise ValueError("yearly_summary_df Year values must be unique")
+        if not yearly_index.difference(expected_years).empty or not expected_years.difference(yearly_index).empty:
+            raise ValueError(f"yearly_summary_df Year values must cover exactly 1 through {num_years}")
+
+        # Reorder the summary by its validated year labels so each financial
+        # row stays attached to the simulation year it describes.
+        yearly_data = yearly_summary_df.drop(columns="Year").copy()
+        yearly_data.index = yearly_index
+        yearly_data = yearly_data.reindex(expected_years)
+
+        # Keep the year labels as the working index while pandas aligns every
+        # yearly series below. Reset to the usual RangeIndex before returning.
+        proj = pd.DataFrame(index=expected_years)
+        proj["Year"] = expected_years
 
         first_year_days = 365  # Assume full year
 
@@ -391,22 +406,20 @@ def cost_analysis_projection(
         discount_factors = 1 / ((1 + discount_rate) ** proj["Year"])
 
         # Baseline (no system) - use the actual yearly demand from propagation.
-        proj["Load_kWh"] = yearly_data["Load_kWh"].values
+        proj["Load_kWh"] = yearly_data["Load_kWh"]
         proj["Cost_No_Sys_Annual"] = (
             proj["Load_kWh"] * costs["electricity_cost"] + first_year_days * costs["daily_power_cost"]
         ) * inflation_factors
         proj["Cost_No_Sys_Cumulative"] = proj["Cost_No_Sys_Annual"].cumsum()
 
         # With PV system - Use ACTUAL yearly values from propagation
-        proj["PV_Production_kWh"] = yearly_data["PV_Production_kWh"].values
-        proj["Export_kWh"] = yearly_data["Export_kWh"].values
-        proj["Degradation_Factor"] = yearly_data["PV_Degradation_Factor"].values
+        proj["PV_Production_kWh"] = yearly_data["PV_Production_kWh"]
+        proj["Export_kWh"] = yearly_data["Export_kWh"]
+        proj["Degradation_Factor"] = yearly_data["PV_Degradation_Factor"]
 
         # Cost calculations using actual data
-        proj["Cost_Import"] = yearly_data["Import_kWh"].values * costs["electricity_cost"] * inflation_factors
-        proj["Revenue_Export"] = (
-            yearly_data["Export_kWh"].values * costs["electricity_sold_cost"] * sell_inflation_factors
-        )
+        proj["Cost_Import"] = yearly_data["Import_kWh"] * costs["electricity_cost"] * inflation_factors
+        proj["Revenue_Export"] = yearly_data["Export_kWh"] * costs["electricity_sold_cost"] * sell_inflation_factors
         proj["Cost_Operation"] = costs["annual_operation_cost"] * inflation_factors
         proj["Cost_Daily"] = first_year_days * costs["daily_power_cost"] * inflation_factors
 
@@ -505,7 +518,7 @@ def cost_analysis_projection(
             suffix = f"_{scenario_name}" if scenario_name else ""
             proj.to_csv(f"{results_directory}/cost_projection{suffix}.csv", index=False)
 
-        return proj
+        return proj.reset_index(drop=True)
 
     # ===== LEGACY PATH: Estimate from first year =====
     if results_df is None:
