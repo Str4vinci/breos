@@ -5,7 +5,7 @@ from __future__ import annotations
 from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, cast
 
 import pandas as pd
 from pvlib.location import Location
@@ -41,7 +41,7 @@ class PreparedSimulationInputs:
     weather: pd.DataFrame
     dc_system_base: pd.Series
     pv_breakdown: PVProductionBreakdown
-    load_data: pd.Series
+    load_data: pd.DataFrame
     temperature_series: pd.Series
 
 
@@ -75,7 +75,7 @@ def remap_tmy_year(df: pd.DataFrame, target_year: int) -> pd.DataFrame:
         return df
     was_tz = idx.tz
     idx_utc = idx.tz_convert("UTC") if was_tz is not None else idx.tz_localize("UTC")
-    dominant_year = idx_utc.year.value_counts().idxmax()
+    dominant_year = cast(int, idx_utc.year.value_counts().idxmax())
     offset = target_year - dominant_year
     if offset == 0:
         return fill_leap_day(df)
@@ -125,14 +125,16 @@ def load_weather_for_simulation(
         )
 
     _ensure_weather_horizon_metadata(weather)
-    if weather.index.tz is None:
+    # Both weather loaders return a DatetimeIndex.
+    weather_index = cast(pd.DatetimeIndex, weather.index)
+    if weather_index.tz is None:
         warn_if_naive_weather_timestamps(
-            weather.index, weather.attrs.get("breos_weather_metadata") or {}, "Local weather"
+            weather_index, weather.attrs.get("breos_weather_metadata") or {}, "Local weather"
         )
-        weather.index = weather.index.tz_localize("UTC")
+        weather.index = weather_index.tz_localize("UTC")
     weather = remap_tmy_year(weather, start_year)
     if freq == "15min":
-        inferred = pd.infer_freq(weather.index[:10])
+        inferred = pd.infer_freq(cast(pd.DatetimeIndex, weather.index)[:10])
         if inferred and "h" in inferred.lower() and "15" not in inferred:
             # The resampler carries the weather metadata over and adds its own
             # resolution and method fields to it.

@@ -266,7 +266,7 @@ def _require_weather_grid(index: pd.DatetimeIndex, freq: str) -> pd.DatetimeInde
     if len(index) == 0:
         raise ValueError("weather_data has no rows")
     times = pd.date_range(start=index[0], periods=len(index), freq=freq)
-    mismatch = np.flatnonzero(index.as_unit("ns").asi8 != times.as_unit("ns").asi8)
+    mismatch = np.flatnonzero(index.as_unit("ns").asi8 != times.as_unit("ns").asi8)  # type: ignore[attr-defined]  # pandas-stubs omits asi8
     if mismatch.size:
         row = int(mismatch[0])
         step = index[row] - index[row - 1] if row else None
@@ -365,14 +365,16 @@ def _compute_irradiance_and_cell_temp_detail(
             if model_options.albedo is not None
             else float(SURFACE_ALBEDOS.get(model_options.surface_type, 0.25))
         )
+        # resolve_pv_model_options guarantees the row geometry and bifaciality
+        # are set whenever a rear-side model is selected.
         rear = pvlib.bifacial.infinite_sheds.get_irradiance_poa(
             surface_tilt=back_tilt,
             surface_azimuth=back_azimuth,
             solar_zenith=np.asarray(solarpos.apparent_zenith, dtype=float),
             solar_azimuth=np.asarray(solarpos.azimuth, dtype=float),
             gcr=float(model_options.gcr),
-            height=float(model_options.pvrow_height),
-            pitch=float(model_options.pvrow_pitch),
+            height=float(model_options.pvrow_height),  # type: ignore[arg-type]
+            pitch=float(model_options.pvrow_pitch),  # type: ignore[arg-type]
             ghi=np.asarray(ghi, dtype=float),
             dhi=np.asarray(dhi, dtype=float),
             dni=np.asarray(dni, dtype=float),
@@ -382,7 +384,7 @@ def _compute_irradiance_and_cell_temp_detail(
             vectorize=tilt.ndim > 0 and tilt.size > 1,
         )
         rear_poa = np.clip(np.nan_to_num(np.asarray(rear["poa_global"], dtype=float), nan=0.0), 0.0, None)
-        rear_effective_irradiance = float(model_options.bifaciality) * rear_poa
+        rear_effective_irradiance = float(model_options.bifaciality) * rear_poa  # type: ignore[arg-type]
         effective_irradiance = front_effective_irradiance + rear_effective_irradiance
     else:
         rear_effective_irradiance = np.zeros_like(front_effective_irradiance)
@@ -439,7 +441,7 @@ def _get_cec_params(pv_params: "PVModuleParams"):
         Isc=pv_params.Isc,
         alpha_sc=pv_params.alpha_sc,
         beta_voc=pv_params.beta_voc,
-        gamma_pmp=pv_params.gamma_pmp,
+        gamma_pmp=pv_params.gamma_pmp,  # type: ignore[arg-type]  # set in PVModuleParams.__post_init__
         cells_in_series=pv_params.N_Cells,
     )
     _cec_param_cache[key] = cec
@@ -560,7 +562,7 @@ def _build_pv_production_breakdown(
         times,
         name="module_dc_W",
     )
-    gamma_per_c = float(pv_params.gamma_pmp) / 100.0
+    gamma_per_c = float(pv_params.gamma_pmp) / 100.0  # type: ignore[arg-type]  # set in __post_init__
     temperature_factor = 1.0 + gamma_per_c * (detail.temp_cell - 25.0)
     safe_temperature_factor = np.where(np.abs(temperature_factor) > 1e-6, temperature_factor, 1.0)
     effective_irradiance_dc = (module_dc / pd.Series(safe_temperature_factor, index=times)).rename(

@@ -12,6 +12,14 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   `validation/external/README.md`.
 - `resample_to_15min` accepts `altitude` for the clear-sky model. When it is
   omitted, pvlib still looks the elevation up from the coordinates, as before.
+- The package ships a `py.typed` marker, so mypy, pyright and IDEs now use
+  BREOS's own annotations when checking code that calls it, instead of
+  treating the package as untyped. Downstream type checks may report new
+  errors where calls did not match the annotated signatures.
+- A baseline mypy configuration in `pyproject.toml`; `uv run mypy breos` passes
+  with the `dev` extra, which now includes mypy and pandas-stubs
+  ([#185](https://github.com/Str4vinci/breos/issues/185)). Six modules are
+  still excluded from error reporting until their annotations are fixed.
 
 ### Changed
 - `resample_tmy_to_15min` is now a thin wrapper over `resample_to_15min`, so

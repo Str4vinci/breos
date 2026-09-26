@@ -8,7 +8,7 @@ This module handles:
 """
 
 from dataclasses import dataclass
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 
 import numpy as np
 import pandas as pd
@@ -62,7 +62,7 @@ def calculate_co2_savings(
     total_pv_kwh: float,
     self_consumed_kwh: float,
     emissions_params: EmissionsParams,
-) -> Dict[str, float]:
+) -> Dict[str, Any]:
     """
     Calculate CO2 emissions avoided by PV production.
 

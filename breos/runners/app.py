@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 import pandas as pd
@@ -12,7 +12,7 @@ import pandas as pd
 from breos.app_config import DEFAULTS, ResolvedAppConfig, build_costs_dict, default_module_key
 from breos.app_inputs import AppRuntimeDependencies, prepare_simulation_inputs
 from breos.battery import BatteryConfig, simulate_energy_balance
-from breos.degradation.results import build_degradation_summary_from_state
+from breos.degradation.results import DegradationEngineName, build_degradation_summary_from_state
 from breos.economics import (
     calculate_lcoe_from_projection,
     cost_analysis_projection,
@@ -183,7 +183,7 @@ def _build_pv_loss_waterfall(
         name: _rounded(_series_energy_kwh(loss, freq)) for name, loss in pv_breakdown.pvwatts_component_losses.items()
     }
     empty_series = pd.Series(dtype=float)
-    dispatch = {
+    dispatch: dict[str, Any] = {
         "curtailment_kwh": _rounded(curtailment),
         "battery_charge_loss_kwh": _rounded(
             _series_energy_kwh(first_year_results_df.get("Battery_Charge_Loss", empty_series), freq)
@@ -383,7 +383,7 @@ def run_app_simulation(
                 inverter_ac_capacity_w=inverter_ac_capacity_w,
             )
 
-        state_kwargs: dict[str, float] = {}
+        state_kwargs: dict[str, Any] = {}
         if carried_energy_wh is not None:
             state_kwargs = {
                 "initial_energy_wh": carried_energy_wh,
@@ -426,7 +426,10 @@ def run_app_simulation(
             year_n_rep,
             degradation_df,
             degradation_state,
-        ) = sim_result
+        ) = cast(
+            "tuple[pd.DataFrame, float, pd.DataFrame, float, int, pd.DataFrame, dict[str, Any]]",
+            sim_result,  # return_degradation_state=True selects the 7-tuple
+        )
 
         if has_battery:
             carried_energy_wh = float(results_df["Battery_Energy_End"].iloc[-1])
@@ -515,7 +518,7 @@ def run_app_simulation(
         {"year": int(row["Year"]), "count": int(row["Replacements"])} for row in yearly_summaries if row["Replacements"]
     ]
     degradation_summary = build_degradation_summary_from_state(
-        engine=degradation_engine,
+        engine=cast(DegradationEngineName, degradation_engine),
         model_key=str(blast_model) if blast_model is not None else cfg["calendar_model"],
         final_soh_pct=current_soh,
         replacement_events=replacement_events,
