@@ -708,7 +708,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         return args.func(args)
-    except (OSError, TypeError, ValueError, RuntimeError) as exc:
+    # ImportError covers a missing optional extra, such as numba for
+    # execution_backend="numba".
+    except (ImportError, OSError, TypeError, ValueError, RuntimeError) as exc:
         print(f"breos: error: {exc}", file=sys.stderr)
         return 1
 

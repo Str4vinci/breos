@@ -647,7 +647,10 @@ def _summarize(runs: pd.DataFrame) -> dict[str, dict[str, float]]:
     for col in _SUMMARY_METRICS:
         if col not in runs.columns:
             continue
-        series = runs[col].dropna()
+        # A non-finite value (an infinite LCOE with no production) is no
+        # value, like NaN: it would make the mean infinite and the spread NaN.
+        values = pd.to_numeric(runs[col], errors="coerce")
+        series = values[np.isfinite(values)]
         is_payback = col in _PAYBACK_METRICS
         if series.empty and not is_payback:
             continue
