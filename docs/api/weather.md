@@ -80,7 +80,11 @@ filename such as `pvgis-sarah3`.
 
 Convert between hourly and 15-minute resolutions. The 15-minute path uses
 Makima interpolation on clearness indices rather than raw irradiance so
-sunrise / sunset transitions stay physically consistent. Set
+sunrise / sunset transitions stay physically consistent. Every column is
+interpolated at each row's representative time from the weather metadata:
+hourly means at the middle of their hour, read back at the middle of each
+quarter-hour, and instant samples at their label plus any recorded provider
+offset. Set
 `preserve_irradiance_energy=True` to renormalize each source hour's four GHI,
 DNI, and DHI values to the original hourly mean. This opt-in mode is useful
 when the source values represent hourly averages; the default keeps the
