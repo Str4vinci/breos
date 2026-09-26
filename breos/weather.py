@@ -23,7 +23,13 @@ import pvlib
 from pvlib.location import Location
 from scipy.interpolate import Akima1DInterpolator
 
-from breos.utils import _datetime_index_seconds, get_hours_per_step, is_leap_year, safe_path_slug
+from breos.utils import (
+    _datetime_index_seconds,
+    get_hours_per_step,
+    irradiance_component,
+    is_leap_year,
+    safe_path_slug,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -97,6 +103,22 @@ def _load_weather_metadata_sidecar(filepath: str | os.PathLike[str], weather_sha
         logger.warning("Ignoring weather metadata sidecar without a metadata object: %s", sidecar_path)
         return None
     return metadata
+
+
+def warn_if_naive_weather_timestamps(timestamps, metadata: dict[str, Any], label: str) -> None:
+    """Log a warning when weather timestamps carry no timezone BREOS knows of.
+
+    Naive weather timestamps are read as UTC. That is right for files BREOS
+    wrote itself, whose metadata records ``timestamp_timezone``, but a file on
+    a local clock would shift the sun by its UTC offset.
+    """
+    if getattr(timestamps, "tz", None) is None and not metadata.get("timestamp_timezone"):
+        logger.warning(
+            "%s has timestamps without a timezone; BREOS reads them as UTC. If they are local clock "
+            "times, the sun is shifted by the UTC offset: write them with their offset "
+            "(for example 2025-01-01T00:00+00:00).",
+            label,
+        )
 
 
 def weather_metadata(weather: pd.DataFrame) -> dict[str, Any]:
@@ -777,13 +799,9 @@ def resample_to_15min(
     # Map column names to irradiance type (supports TMY and Open-Meteo conventions)
     irrad_col_map = {}  # column_name -> clear-sky component ('ghi', 'dni', 'dhi')
     for col in df_hourly.columns:
-        col_lower = col.lower()
-        if col_lower in ("ghi", "shortwave_radiation", "global_horizontal_irradiance"):
-            irrad_col_map[col] = "ghi"
-        elif col_lower in ("dni", "direct_normal_irradiance"):
-            irrad_col_map[col] = "dni"
-        elif col_lower in ("dhi", "diffuse_radiation", "diffuse_horizontal_irradiance"):
-            irrad_col_map[col] = "dhi"
+        component = irradiance_component(col)
+        if component is not None:
+            irrad_col_map[col] = component
 
     # Use clear-sky scaling if location is provided and we found irradiance columns
     use_clearsky = latitude is not None and longitude is not None and len(irrad_col_map) > 0
@@ -908,6 +926,7 @@ def _complete_weather_years(csv_file_path: str) -> Tuple[Dict[int, pd.DataFrame]
             df["date"] = pd.to_datetime(df["date"], format="mixed")
 
     metadata = weather_file_metadata(csv_file_path)
+    warn_if_naive_weather_timestamps(df["date"].dt, metadata, f"Weather file {csv_file_path}")
     df, metadata = _relabel_weather_date_column(df, metadata)
     df = df[~((df["date"].dt.month == 2) & (df["date"].dt.day == 29))]
 
@@ -1040,15 +1059,21 @@ def read_epw_file(
     if longitude is None:
         longitude = meta.get("longitude")
 
-    # Resample to 15-min if requested
-    if freq in ("15min", "15T", "15m"):
-        df = resample_to_15min(df, method="makima", latitude=latitude, longitude=longitude)
-
+    # EPW radiation is energy over the hour ending at the record's hour field
+    # (1-24); pvlib labels that hour at its start (0-23). Record the basis
+    # before resampling, so the 15-minute clear-sky scaling evaluates each
+    # hour at its midpoint and keeps the resampling provenance.
     df.attrs[_WEATHER_METADATA_KEY] = {
         "source": "EPW_file",
         "path": os.path.abspath(filepath),
+        "radiation_time_basis": "interval_mean",
+        "timestamp_label_basis": "left",
         "horizon": _unknown_horizon_metadata("epw"),
     }
+
+    # Resample to 15-min if requested
+    if freq in ("15min", "15T", "15m"):
+        df = resample_to_15min(df, method="makima", latitude=latitude, longitude=longitude)
 
     return df
 
@@ -1197,8 +1222,9 @@ def build_battery_temperature_series(
     Temperatures that cannot cover ``index`` raise instead of defaulting: a
     missing file raises ``FileNotFoundError``, and an unreadable file, a file
     without recognised columns, and readings from another calendar year or
-    with gaps raise ``ValueError``. ``default_temp`` applies only when
-    ``weather_df`` is absent or has no temperature column. Pass
+    with gaps raise ``ValueError``, as does ``"weather"`` mode when
+    ``weather_df`` has no temperature column. ``default_temp`` applies only
+    when ``weather_df`` is absent. Pass
     ``align_weather_year=True`` when ``weather_df`` is a representative year
     whose temperatures should be restamped onto the calendar year of ``index``.
     """
@@ -1228,6 +1254,11 @@ def build_battery_temperature_series(
                 ambient.index = index
             result = _align_temperature_to_index(
                 ambient, index, label="weather temperature", align_calendar_year=align_weather_year
+            )
+        elif weather_indexed is not None:
+            raise ValueError(
+                "battery temperature 'weather' needs an air temperature column, and the weather has none. "
+                "Add one, or set a fixed battery temperature (for example battery_temperature = 25)."
             )
         else:
             result = pd.Series(default_temp, index=index)

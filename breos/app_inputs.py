@@ -20,7 +20,7 @@ from breos.solar import (
     calculate_pv_production_tracking_breakdown,
 )
 from breos.utils import remap_datetime_index_years
-from breos.weather import fill_leap_day
+from breos.weather import fill_leap_day, warn_if_naive_weather_timestamps
 
 
 @dataclass(frozen=True)
@@ -126,16 +126,17 @@ def load_weather_for_simulation(
 
     _ensure_weather_horizon_metadata(weather)
     if weather.index.tz is None:
+        warn_if_naive_weather_timestamps(
+            weather.index, weather.attrs.get("breos_weather_metadata") or {}, "Local weather"
+        )
         weather.index = weather.index.tz_localize("UTC")
     weather = remap_tmy_year(weather, start_year)
-    weather_metadata = weather.attrs.get("breos_weather_metadata")
-
     if freq == "15min":
         inferred = pd.infer_freq(weather.index[:10])
         if inferred and "h" in inferred.lower() and "15" not in inferred:
+            # The resampler carries the weather metadata over and adds its own
+            # resolution and method fields to it.
             weather = deps.resample_to_15min(weather, latitude=resolved.lat, longitude=resolved.lon)
-            if weather_metadata is not None:
-                weather.attrs["breos_weather_metadata"] = weather_metadata
 
     if horizon_profile is not None:
         weather = apply_terrain_horizon_profile(

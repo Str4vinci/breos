@@ -36,18 +36,18 @@ from breos.battery import (
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools" / "parity"))
 
-from harness import FREQ, SCENARIOS, build  # noqa: E402
+from harness import FREQ, RESOLUTIONS, SCENARIOS, build  # noqa: E402
 
 numba = pytest.importorskip("numba", reason="the compiled backend needs the breos[fast] extra")
 
 
-def _run(name: str, backend: str):
-    pv, load, temp, cfg, sim_kwargs = build(name)
+def _run(name: str, backend: str, freq: str = FREQ):
+    pv, load, temp, cfg, sim_kwargs = build(name, freq)
     return simulate_energy_balance(
         pv_dc=pv,
         houseload=load,
         battery_config=BatteryConfig(**cfg),
-        freq=FREQ,
+        freq=freq,
         temperature_series=temp,
         return_degradation_state=True,
         execution_backend=backend,
@@ -82,12 +82,38 @@ def _assert_identical(name: str, python_out, numba_out) -> None:
         assert np.array_equal(py_deg[column].to_numpy(), nb_deg[column].to_numpy()), f"{name}: degradation {column}"
     for column in py_summary.columns:
         assert py_summary[column].iloc[0] == nb_summary[column].iloc[0], f"{name}: summary {column}"
-    assert python_out[6] == numba_out[6]
+    assert _same_state(python_out[6], numba_out[6]), f"{name}: degradation state differs"
 
 
+def _same_state(left, right) -> bool:
+    """Compare nested degradation state exactly, with NaN equal to NaN.
+
+    The BLAST state carries NaN placeholders in its stressor and rate
+    histories, and ``nan == nan`` is false even for identical states.
+    """
+    if isinstance(left, dict):
+        return (
+            isinstance(right, dict)
+            and left.keys() == right.keys()
+            and all(_same_state(left[key], right[key]) for key in left)
+        )
+    if isinstance(left, (list, tuple)):
+        return (
+            isinstance(right, (list, tuple))
+            and len(left) == len(right)
+            and all(_same_state(a, b) for a, b in zip(left, right))
+        )
+    if isinstance(left, np.ndarray):
+        return isinstance(right, np.ndarray) and np.array_equal(left, right, equal_nan=True)
+    if isinstance(left, float) and isinstance(right, float) and np.isnan(left) and np.isnan(right):
+        return True
+    return type(left) is type(right) and left == right
+
+
+@pytest.mark.parametrize("freq", RESOLUTIONS)
 @pytest.mark.parametrize("scenario", SCENARIOS)
-def test_numba_matches_python_exactly(scenario):
-    _assert_identical(scenario, _run(scenario, "python"), _run(scenario, "numba"))
+def test_numba_matches_python_exactly(scenario, freq):
+    _assert_identical(f"{scenario}@{freq}", _run(scenario, "python", freq), _run(scenario, "numba", freq))
 
 
 def test_single_day_matches():
@@ -463,7 +489,6 @@ def test_zeta_squared_must_use_libm_pow_not_the_folded_square():
         np.inf,
         np.inf,
         ac_rating,
-        False,
         0.05,
         0.25,
         2.0,

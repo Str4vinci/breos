@@ -428,6 +428,44 @@ def _temperature_series_from_config(
     )
 
 
+def _resolve_horizon_and_pv_degradation(config: Dict[str, Any]) -> Tuple[int, float]:
+    """Return the scoring horizon (years) and annual PV degradation rate.
+
+    Both objective bases read these from here, so a design's steady-state and
+    projected scores rest on the same assumptions: ``simulation.years_projection``
+    and ``pv.degradation_rate``, falling back to ``financials.project_lifespan``
+    and ``financials.pv_degradation_rate``.
+    """
+    simulation = config.get("simulation", {}) or {}
+    financials = config.get("financials", {}) or {}
+    pv_config = config.get("pv", {}) or {}
+    years = int(simulation.get("years_projection", financials.get("project_lifespan", DEFAULT_PROJECT_LIFESPAN)))
+    degradation_rate = float(pv_config.get("degradation_rate", financials.get("pv_degradation_rate", 0.005)))
+    return years, degradation_rate
+
+
+def _resolve_degradation_engine_spec(batt_spec: Dict[str, Any]) -> Tuple[str, Optional[str]]:
+    """Validate ``battery.degradation_engine`` and ``battery.blast_model`` once.
+
+    The same rules as the App's config validation, applied when the problem is
+    built, so an invalid BLAST setting fails on either objective basis before
+    any candidate is scored.
+    """
+    engine = str(batt_spec.get("degradation_engine", "native")).strip().lower()
+    blast_model = batt_spec.get("blast_model")
+    if engine not in ("native", "blast"):
+        raise ValueError("battery.degradation_engine must be one of: native, blast")
+    if engine == "blast":
+        from breos.degradation.profiles import ENABLED_BLAST_MODEL_KEYS
+
+        if blast_model not in ENABLED_BLAST_MODEL_KEYS:
+            available = ", ".join(ENABLED_BLAST_MODEL_KEYS)
+            raise ValueError(f"Unknown battery.blast_model {blast_model!r}. Available: {available}")
+    elif blast_model is not None:
+        raise ValueError("battery.blast_model requires battery.degradation_engine = 'blast'")
+    return engine, blast_model
+
+
 def _validated_dc_output_scale(config: Dict[str, Any]) -> float:
     """Read and check the DC-side yield correction from a study config.
 
@@ -734,8 +772,10 @@ def _evaluate_projected_design_metrics(
     cumulative_cal_deg = 0.0
     carried_energy_wh: Optional[float] = None
     carried_pv_origin_energy_wh: Optional[float] = None
-    degradation_engine = str(batt_spec.get("degradation_engine", "native")).strip().lower()
-    blast_model = batt_spec.get("blast_model")
+    degradation_engine, blast_model = _resolve_degradation_engine_spec(batt_spec)
+    if not has_battery:
+        # Without a battery there is nothing to age, and BLAST needs a pack.
+        degradation_engine, blast_model = "native", None
     degradation_state: Optional[Dict[str, Any]] = None
     total_replacements = 0
     total_replacement_cost = 0.0
@@ -952,13 +992,9 @@ def evaluate_projected_design(
     simulation = config.get("simulation", {}) or {}
     financials = config.get("financials", {}) or {}
     emissions_config = config.get("emissions")
-    pv_config = config.get("pv", {}) or {}
     battery = config.get("battery", {}) or {}
     freq = str(simulation.get("resolution", "h"))
-    years_projection = int(
-        simulation.get("years_projection", financials.get("project_lifespan", DEFAULT_PROJECT_LIFESPAN))
-    )
-    degradation_rate = float(pv_config.get("degradation_rate", financials.get("pv_degradation_rate", 0.005)))
+    years_projection, degradation_rate = _resolve_horizon_and_pv_degradation(config)
     pv_params, _module_area = _resolve_pv_module_and_area(config)
 
     # A DC-side yield correction: the array itself produces this much less,
@@ -1280,17 +1316,10 @@ try:
             if self.objective_basis not in {"steady_state", "projected"}:
                 raise ValueError("optimization.objective_basis must be 'steady_state' or 'projected'")
             self.projected_objectives = self.objective_basis == "projected"
-            self.projected_years = int(
-                config.get("simulation", {}).get(
-                    "years_projection",
-                    config.get("financials", {}).get("project_lifespan", DEFAULT_PROJECT_LIFESPAN),
-                )
-            )
-            self.projected_degradation_rate = float(
-                config.get("pv", {}).get(
-                    "degradation_rate",
-                    config.get("financials", {}).get("pv_degradation_rate", 0.005),
-                )
+            # One horizon and PV degradation rate for both objective bases.
+            self.projected_years, self.projected_degradation_rate = _resolve_horizon_and_pv_degradation(config)
+            self.degradation_engine, self.blast_model = _resolve_degradation_engine_spec(
+                config.get("battery", {}) or {}
             )
             self.pv_params, self.module_area_m2 = _resolve_pv_module_and_area(config)
             self.batt_temp_cfg = config.get("battery", {}).get("temperature", "weather")
@@ -1451,6 +1480,10 @@ try:
                 end_time=self.end_h,
                 freq=self.freq,
                 temperature_series=temperature_series,
+                # Without a battery there is nothing to age, and BLAST
+                # needs a pack, so PV-only candidates run native.
+                degradation_engine=self.degradation_engine if battery_kwh > 0 else "native",
+                blast_model=self.blast_model if battery_kwh > 0 else None,
                 debug=False,
                 execution_backend=self.execution_backend,
             )
@@ -1492,7 +1525,11 @@ try:
                 total_export,
                 total_load,
                 costs_config=self.config.get("costs"),
-                financials_config=self.config.get("financials"),
+                financials_config={
+                    **(self.config.get("financials") or {}),
+                    "project_lifespan": self.projected_years,
+                    "pv_degradation_rate": self.projected_degradation_rate,
+                },
                 annual_pv_kwh=total_ac_prod,
                 module_power_w=pv_params.Mpp,
                 annual_battery_soh_loss_pct=annual_soh_loss_pct,

@@ -131,7 +131,7 @@ def _resolved_config_summary(config: dict[str, Any]) -> dict[str, Any]:
         "pv": {
             "n_modules": cfg["n_modules"],
             "system_kwp": resolved.system_kwp,
-            "module": resolved.pv_params.Name,
+            "module": resolved.pv_module_key,
             "arrays": resolved.pv_arrays or None,
             "tilt": resolved.tilt,
             "azimuth": resolved.azimuth,

@@ -62,6 +62,59 @@ def synthetic_weather_15min():
 
 
 # ---------------------------------------------------------------------------
+# Synthetic multi-year historical weather (Open-Meteo columns, no API call)
+# ---------------------------------------------------------------------------
+
+
+def _build_open_meteo_weather(index: pd.DatetimeIndex) -> pd.DataFrame:
+    """Build a daytime-bell weather frame on *index* with Open-Meteo column names.
+
+    breos.solar recognizes these names (shortwave_radiation /
+    direct_normal_irradiance / diffuse_radiation + temperature_2m /
+    wind_speed_10m), as it does for a historical Open-Meteo download.
+    """
+    hour = index.hour.to_numpy()
+    # Simple daytime bell centered at noon.
+    daylight = np.clip(np.sin((hour - 6) / 12 * np.pi), 0, None)
+    ghi = 700.0 * daylight
+    return pd.DataFrame(
+        {
+            "temperature_2m": 15.0 + 8.0 * daylight,
+            "wind_speed_10m": 2.0,
+            "shortwave_radiation": ghi,
+            "direct_normal_irradiance": 0.8 * ghi,
+            "diffuse_radiation": 0.2 * ghi,
+        },
+        index=index,
+    )
+
+
+def _write_multiyear_weather(path, years=(2021, 2022)):
+    """Write a small synthetic multi-year hourly weather CSV with a ``date`` column."""
+    frames = []
+    for year in years:
+        idx = pd.date_range(f"{year}-01-01", f"{year}-12-31 23:00", freq="h")
+        idx = idx[~((idx.month == 2) & (idx.day == 29))]  # keep 8760 rows/year
+        weather = _build_open_meteo_weather(idx)
+        weather.insert(0, "date", idx)
+        frames.append(weather)
+    pd.concat(frames, ignore_index=True).to_csv(path, index=False)
+    return path
+
+
+@pytest.fixture
+def open_meteo_weather():
+    """Return the builder: ``open_meteo_weather(index) -> DataFrame``."""
+    return _build_open_meteo_weather
+
+
+@pytest.fixture
+def write_multiyear_weather():
+    """Return the writer: ``write_multiyear_weather(path, years=(2021, 2022)) -> path``."""
+    return _write_multiyear_weather
+
+
+# ---------------------------------------------------------------------------
 # Location
 # ---------------------------------------------------------------------------
 
