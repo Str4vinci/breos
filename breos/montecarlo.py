@@ -60,6 +60,7 @@ from breos.execution import (
     backend_provenance as _backend_provenance,
 )
 from breos.load_profiles import load_profile
+from breos.pv.model_options import DEFAULT_SOLAR_POSITION, resolve_solar_position_method, solar_position_time_offset
 from breos.utils import get_hours_per_step
 from breos.weather import (
     build_battery_temperature_series,
@@ -203,13 +204,10 @@ def _precompute_year_caches(
                     preserve_irradiance_energy=settings.preserve_irradiance_energy,
                 )
         if runtime_weather is not None and not runtime_weather:
-            method = str(cfg.get("solar_position", "interval-start"))
-            if method == "weather":
-                offset = weather_representative_time_offset(weather, freq)
-            elif method == "mid-interval":
-                offset = pd.Timedelta(hours=get_hours_per_step(freq) / 2.0)
-            else:
-                offset = pd.Timedelta(0)
+            # The same resolution the PV model applies, so a spelling such as
+            # "Mid-Interval" is recorded with the offset it actually gets.
+            method = resolve_solar_position_method(cfg.get("solar_position", DEFAULT_SOLAR_POSITION))
+            offset = solar_position_time_offset(method, weather, freq)
             runtime_weather.update(
                 {
                     "representative_source_year": int(year),

@@ -126,7 +126,7 @@ def _provenance(cfg: dict[str, Any], resolved: ResolvedAppConfig, artifacts: Sim
         "tilt": resolved.tilt,
         "azimuth": resolved.azimuth,
         "axis_azimuth": resolved.axis_azimuth,
-        "pv_module": cfg.get("pv_module") or resolved.pv_params.Name,
+        "pv_module": cfg.get("pv_module") or resolved.pv_module_key,
     }
     # Round-trip through JSON to guarantee only public, serializable scalar types.
     normalized_cfg = json.loads(json.dumps(normalized_cfg, default=str))

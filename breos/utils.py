@@ -234,6 +234,41 @@ def get_steps_per_year(freq: str, leap_year: bool = False) -> int:
     return get_steps_per_day(freq) * days
 
 
+# Irradiance column names BREOS recognises, per component, in order of
+# preference: pvlib/PVGIS names first, then the Open-Meteo and long-form
+# names. Matching is case-insensitive, so ``GHI`` is ``ghi``.
+IRRADIANCE_COLUMN_ALIASES = {
+    "ghi": ("ghi", "shortwave_radiation", "global_horizontal_irradiance"),
+    "dni": ("dni", "direct_normal_irradiance"),
+    "dhi": ("dhi", "diffuse_radiation", "diffuse_horizontal_irradiance"),
+}
+
+
+def irradiance_component(column: object) -> str | None:
+    """Return ``"ghi"``, ``"dni"`` or ``"dhi"`` for a recognised column name, else None."""
+    name = str(column).lower()
+    for component, aliases in IRRADIANCE_COLUMN_ALIASES.items():
+        if name in aliases:
+            return component
+    return None
+
+
+def find_irradiance_column(columns, component: str) -> str | None:
+    """Return the column holding ``component``, preferring the earlier aliases.
+
+    An exact-case match wins over a case-insensitive one, so a frame with both
+    ``ghi`` and ``GHI`` resolves to ``ghi``.
+    """
+    columns = list(columns)
+    for alias in IRRADIANCE_COLUMN_ALIASES[component]:
+        if alias in columns:
+            return alias
+        for column in columns:
+            if str(column).lower() == alias:
+                return column
+    return None
+
+
 def format_years_months(years_decimal) -> str:
     """Format a decimal number of years as ``"4y"`` or ``"4y 2m"``; None is ``"N/A"``."""
     if years_decimal is None:
