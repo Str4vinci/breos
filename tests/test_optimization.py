@@ -559,3 +559,109 @@ def test_projected_optimization_smoke_reports_two_objective_semantics(monkeypatc
     assert np.allclose(pareto["Objective_NPV_Eur"], pareto["Projected_NPV_Eur"])
     assert "Objective_ZEB_Ratio" not in pareto
     assert result.details["objective_names"] == ["Projected_Grid_Independence_%", "Projected_NPV_Eur"]
+
+
+def _steady_state_capture(monkeypatch, config, x):
+    """Score one design on stubbed physics; return the calls the scorer made."""
+    idx = pd.date_range("2025-01-01 00:00", periods=2, freq="h", tz="UTC")
+    tmy_data = pd.DataFrame({"temp_air": [15.0, 16.0], "ghi": [0.0, 0.0]}, index=idx)
+    houseload = pd.DataFrame({"Load": [500.0, 500.0]}, index=idx)
+    summary = pd.DataFrame({"Import [kWh]": [1.0], "Sell [kWh]": [0.0]})
+    captured: dict = {}
+
+    def fake_balance(**kwargs):
+        captured["balance"] = kwargs
+        return pd.DataFrame(), 0.0, summary, 0.0, 0, pd.DataFrame()
+
+    def fake_financials(*args, **kwargs):
+        captured["financials_config"] = kwargs["financials_config"]
+        return 0.0, 0.0
+
+    monkeypatch.setattr("breos.optimization.calculate_pv_production_dc", lambda **kwargs: pd.Series(0.0, index=idx))
+    monkeypatch.setattr("breos.optimization.simulate_energy_balance", fake_balance)
+    monkeypatch.setattr("breos.optimization.calculate_financials", fake_financials)
+    base = {
+        "location": {"latitude": 41.15, "longitude": -8.61, "timezone": "UTC"},
+        "optimization": {"objective_basis": "steady_state"},
+        "constraints": {"budget_eur": 100000.0, "max_area_m2": 100.0},
+        "mode": {"fixed_azimuth": 180},
+    }
+    problem = SolarDesignProblem(tmy_data, houseload, {**base, **config}, "results/_test_run/problem_settings")
+    problem._evaluate(np.array(x, dtype=float), {})
+    return captured
+
+
+def test_steady_state_scores_on_the_projected_horizon_and_pv_degradation(monkeypatch):
+    # The projected basis reads simulation.years_projection and
+    # pv.degradation_rate; steady-state NPV used to read the financials pair.
+    captured = _steady_state_capture(
+        monkeypatch,
+        {
+            "simulation": {"resolution": "h", "years_projection": 3},
+            "pv": {"degradation_rate": 0.10},
+            "financials": {"project_lifespan": 2, "pv_degradation_rate": 0.02, "discount_rate": 0.04},
+        },
+        [2.0, 0.0, 10.0],
+    )
+
+    assert captured["financials_config"]["project_lifespan"] == 3
+    assert captured["financials_config"]["pv_degradation_rate"] == pytest.approx(0.10)
+    assert captured["financials_config"]["discount_rate"] == pytest.approx(0.04)
+
+
+@pytest.mark.parametrize(("battery_kwh", "engine", "model"), [(5.0, "blast", "nmc_gr_50ah_b1"), (0.0, "native", None)])
+def test_steady_state_simulation_uses_the_configured_degradation_engine(monkeypatch, battery_kwh, engine, model):
+    captured = _steady_state_capture(
+        monkeypatch,
+        {"battery": {"degradation_engine": "blast", "blast_model": "nmc_gr_50ah_b1", "temperature": 20.0}},
+        [2.0, battery_kwh, 10.0],
+    )
+
+    # A PV-only candidate has no pack for BLAST to age.
+    assert captured["balance"]["degradation_engine"] == engine
+    assert captured["balance"]["blast_model"] == model
+
+
+@pytest.mark.parametrize("basis", ["steady_state", "projected"])
+@pytest.mark.parametrize(
+    ("battery", "match"),
+    [
+        ({"degradation_engine": "blast", "blast_model": "nope"}, "Unknown battery.blast_model 'nope'"),
+        ({"degradation_engine": "blast"}, "Unknown battery.blast_model None"),
+        ({"blast_model": "nmc_gr_50ah_b1"}, "requires battery.degradation_engine = 'blast'"),
+        ({"degradation_engine": "physics"}, "must be one of: native, blast"),
+    ],
+)
+def test_invalid_degradation_settings_raise_on_both_bases(basis, battery, match):
+    idx = pd.date_range("2025-01-01 00:00", periods=2, freq="h", tz="UTC")
+    tmy_data = pd.DataFrame({"temp_air": [15.0, 16.0], "ghi": [0.0, 0.0]}, index=idx)
+    houseload = pd.DataFrame({"Load": [500.0, 500.0]}, index=idx)
+    config = {
+        "location": {"latitude": 41.15, "longitude": -8.61, "timezone": "UTC"},
+        "optimization": {"objective_basis": basis},
+        "battery": battery,
+    }
+
+    with pytest.raises(ValueError, match=match):
+        SolarDesignProblem(tmy_data, houseload, config, "results/_test_run/problem_bad_blast")
+
+
+def test_projected_blast_scores_a_pv_only_candidate(synthetic_weather):
+    from breos.load_profiles import load_profile
+
+    load = load_profile("1", 3500, start_date="2023-01-01", timezone="UTC")
+    config = {
+        "location": {"latitude": 41.15, "longitude": -8.61, "timezone": "UTC"},
+        "optimization": {"objective_basis": "projected"},
+        "constraints": {"budget_eur": 100000.0, "max_area_m2": 100.0},
+        "simulation": {"resolution": "h", "years_projection": 1},
+        "mode": {"fixed_azimuth": 180},
+        "battery": {"degradation_engine": "blast", "blast_model": "nmc_gr_50ah_b1"},
+    }
+    problem = SolarDesignProblem(synthetic_weather, load, config, "results/_test_run/problem_blast_pv_only")
+    out: dict = {}
+    # This used to raise "degradation_engine='blast' requires a configured battery".
+    problem._evaluate(np.array([6.0, 0.0, 35.0], dtype=float), out)
+
+    assert np.isfinite(out["Projected_NPV_Eur"])
+    assert 0.0 < out["Projected_Grid_Independence_%"] < 100.0
