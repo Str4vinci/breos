@@ -895,7 +895,8 @@ def plot_validation_multi_system(
     if n_systems == 0:
         return
 
-    cmap = plt.cm.get_cmap("tab20", max(n_systems, 2))
+    # plt.cm.get_cmap was removed in matplotlib 3.11; the registry works on the floor too.
+    cmap = matplotlib.colormaps["tab20"].resampled(max(n_systems, 2))
 
     fig, ax = plt.subplots(figsize=(12, 7))
 
@@ -1013,11 +1014,11 @@ def plot_cell_temperature(
     min_by_month = monthly_min.groupby(monthly_min.index.month).min()
     max_by_month = monthly_max.groupby(monthly_max.index.month).max()
 
-    # Ensure all 12 months
+    # Ensure all 12 months; a month without data is a gap, not 0 °C.
     months = np.arange(1, 13)
-    mean_by_month = mean_by_month.reindex(months, fill_value=0.0)
-    min_by_month = min_by_month.reindex(months, fill_value=0.0)
-    max_by_month = max_by_month.reindex(months, fill_value=0.0)
+    mean_by_month = mean_by_month.reindex(months)
+    min_by_month = min_by_month.reindex(months)
+    max_by_month = max_by_month.reindex(months)
 
     month_names = MONTH_LABELS
 
