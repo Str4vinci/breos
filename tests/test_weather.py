@@ -7,6 +7,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import pytest
+from pvlib.location import Location
 
 from breos.weather import (
     build_battery_temperature_series,
@@ -478,6 +479,75 @@ def test_resamplers_do_not_depend_on_the_index_resolution(resampler, unit):
     assert resampled.index.equals(reference.index)
     assert resampled.columns.tolist() == reference.columns.tolist()
     np.testing.assert_array_equal(resampled.to_numpy(), reference.to_numpy())
+
+
+def _hourly_ramp_weather(metadata):
+    """Hourly frame whose columns are linear in time, so Makima reproduces them exactly."""
+    idx = pd.date_range("2025-06-20", periods=48, freq="h", tz="UTC")
+    hours = np.arange(48, dtype=float)
+    if metadata.get("radiation_time_basis") == "interval_mean":
+        # The mean of a linear function over [t, t + 1 h] is its value at t + 30 min.
+        hours = hours + 0.5
+    weather = pd.DataFrame({"temp_air": 10.0 + hours, "wind_speed": 1.0 + 0.1 * hours}, index=idx)
+    weather.attrs["breos_weather_metadata"] = dict(metadata)
+    return weather
+
+
+@pytest.mark.parametrize(
+    ("metadata", "quarter_offset_hours"),
+    [
+        # Left-labelled hourly means: each quarter-hour is the mean over its own
+        # 15 minutes, the ramp's value at the quarter's midpoint.
+        ({"radiation_time_basis": "interval_mean", "timestamp_label_basis": "left"}, 0.125),
+        # Instant samples stay at their labels.
+        ({"radiation_time_basis": "instant", "irradiance_time_offset_hours": 0.0}, 0.0),
+        ({}, 0.0),
+    ],
+)
+def test_resample_interpolates_weather_at_representative_times(metadata, quarter_offset_hours):
+    resampled = resample_to_15min(_hourly_ramp_weather(metadata))
+
+    elapsed_hours = (resampled.index - resampled.index[0]) / pd.Timedelta(hours=1)
+    target_hours = elapsed_hours.to_numpy() + quarter_offset_hours
+    # Leave out the edge quarter-hours, which hold the first or last value.
+    inner = (target_hours >= 1.0) & (target_hours <= 46.0)
+    np.testing.assert_allclose(resampled["temp_air"].to_numpy()[inner], 10.0 + target_hours[inner], atol=1e-9)
+    np.testing.assert_allclose(resampled["wind_speed"].to_numpy()[inner], 1.0 + 0.1 * target_hours[inner], atol=1e-9)
+
+
+def test_resample_moves_right_labelled_means_to_their_interval_before_interpolating():
+    left = _hourly_ramp_weather({"radiation_time_basis": "interval_mean", "timestamp_label_basis": "left"})
+    right = left.copy()
+    right.index = right.index + pd.Timedelta(hours=1)
+    right.attrs["breos_weather_metadata"] = {"radiation_time_basis": "interval_mean", "timestamp_label_basis": "right"}
+
+    from_left = resample_to_15min(left)
+    from_right = resample_to_15min(right)
+
+    assert from_right.index.equals(from_left.index)
+    np.testing.assert_allclose(from_right.to_numpy(), from_left.to_numpy(), atol=1e-12)
+
+
+def test_resample_interpolates_clearness_index_at_interval_midpoints():
+    site = Location(41.1579, -8.6291, altitude=0.0)
+    idx = pd.date_range("2025-06-20", periods=48, freq="h", tz="UTC")
+    epsilon = 5.0  # the resampler's clear-sky guard
+
+    def clearness(hours):
+        return 0.4 + 0.005 * hours
+
+    hour_mid = np.arange(48, dtype=float) + 0.5
+    clear_hourly = site.get_clearsky(idx + pd.Timedelta(minutes=30))["ghi"].to_numpy()
+    weather = pd.DataFrame({"ghi": clearness(hour_mid) * (clear_hourly + epsilon)}, index=idx)
+    weather.attrs["breos_weather_metadata"] = {"radiation_time_basis": "interval_mean", "timestamp_label_basis": "left"}
+
+    resampled = resample_to_15min(weather, latitude=41.1579, longitude=-8.6291, altitude=0.0)
+
+    quarter_mid = ((resampled.index - idx[0]) / pd.Timedelta(hours=1)).to_numpy() + 0.125
+    clear_15 = site.get_clearsky(resampled.index + pd.Timedelta(minutes=7.5))["ghi"].to_numpy()
+    expected = np.where(clear_15 > 0.0, clearness(quarter_mid) * (clear_15 + epsilon), 0.0)
+    inner = (quarter_mid >= 1.0) & (quarter_mid <= 46.0)
+    np.testing.assert_allclose(resampled["ghi"].to_numpy()[inner], expected[inner], atol=1e-9)
 
 
 def test_tmy_resampling_keeps_the_weather_columns_and_bounds_humidity():

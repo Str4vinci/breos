@@ -45,6 +45,23 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   load profile built from an external hourly file because its 15-minute file is
   missing. Hourly runs, nanosecond input, and profiles loaded from native
   15-minute files are unchanged.
+- Hourly-to-15-minute resampling places hourly means at the middle of their
+  hour ([#175](https://github.com/Str4vinci/breos/issues/175)).
+  `resample_to_15min` evaluated only the clear-sky reference at the
+  representative time; the clearness index, temperature and wind were
+  interpolated at the labels, so interval-mean weather came out 22.5 minutes
+  early. All columns are now interpolated at the representative times the
+  weather metadata records. A load profile built from an hourly file was
+  interpolated the same way and its hours kept their mean only in the annual
+  total: the bundled H0 profile averaged to hours and resampled back ran about
+  22.5 minutes early (RMSE 8.18 W against the native 15-minute profile, 3.08 W
+  one step later) and missed each hour's mean by 5.95 W on average. It is now
+  interpolated between hour midpoints and scaled per hour, so each hour keeps
+  its mean exactly (RMSE 1.16 W, no lag). **Results change for 15-minute runs
+  from interval-mean weather (EPW, Open-Meteo means, files whose metadata says
+  `interval_mean`) and from external load profiles supplied only as hourly
+  files.** PVGIS TMY weather (instant samples), weather without metadata, and
+  native 15-minute load profiles are unchanged.
 - The simulation boundary rejects invalid PV and load input instead of
   repairing it ([#151](https://github.com/Str4vinci/breos/issues/151)).
   `simulate_energy_balance`, `simulate_energy_balance_summary`, and
