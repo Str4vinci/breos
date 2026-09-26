@@ -326,16 +326,18 @@ def validate_bifacial_inputs(
         "pvrow_height": pvrow_height,
         "pvrow_pitch": pvrow_pitch,
     }
+    checked: dict[str, float] = {}
     for name, value in geometry.items():
         if isinstance(value, bool) or not isinstance(value, (int, float, np.number)):
             raise TypeError(f"{name} must be a finite number for bifacial modeling")
-        if not math.isfinite(float(value)):
+        checked[name] = float(value)
+        if not math.isfinite(checked[name]):
             raise ValueError(f"{name} must be a finite number for bifacial modeling")
     if not is_valid_gcr(gcr):
         raise ValueError("gcr must be between 0 (exclusive) and 1 (inclusive) for bifacial modeling")
-    if float(pvrow_height) <= 0.0:
+    if checked["pvrow_height"] <= 0.0:
         raise ValueError("pvrow_height must be > 0 for bifacial modeling")
-    if float(pvrow_pitch) <= 0.0:
+    if checked["pvrow_pitch"] <= 0.0:
         raise ValueError("pvrow_pitch must be > 0 for bifacial modeling")
     return model
 

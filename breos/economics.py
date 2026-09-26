@@ -9,7 +9,7 @@ This module handles:
 """
 
 from dataclasses import dataclass
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, cast
 
 import numpy as np
 import pandas as pd
@@ -403,9 +403,9 @@ def cost_analysis_projection(
         proj["Degradation_Factor"] = yearly_data["PV_Degradation_Factor"].values
 
         # Cost calculations using actual data
-        proj["Cost_Import"] = yearly_data["Import_kWh"].values * costs["electricity_cost"] * inflation_factors
+        proj["Cost_Import"] = yearly_data["Import_kWh"].to_numpy() * costs["electricity_cost"] * inflation_factors
         proj["Revenue_Export"] = (
-            yearly_data["Export_kWh"].values * costs["electricity_sold_cost"] * sell_inflation_factors
+            yearly_data["Export_kWh"].to_numpy() * costs["electricity_sold_cost"] * sell_inflation_factors
         )
         proj["Cost_Operation"] = costs["annual_operation_cost"] * inflation_factors
         proj["Cost_Daily"] = first_year_days * costs["daily_power_cost"] * inflation_factors
@@ -477,8 +477,8 @@ def cost_analysis_projection(
             from breos.emissions import calculate_co2_projection
 
             co2_proj = calculate_co2_projection(
-                proj["PV_Production_kWh"].values,
-                proj["Export_kWh"].values,
+                proj["PV_Production_kWh"].to_numpy(),
+                proj["Export_kWh"].to_numpy(),
                 emissions_params,
             )
             proj["CO2_Avoided_Total_kg"] = co2_proj["CO2_Avoided_Total_kg"].values
@@ -519,8 +519,9 @@ def cost_analysis_projection(
     if "Datetime" in df.columns:
         df.index = local_datetime_index(df.pop("Datetime"))
 
-    df["Year"] = df.index.year
-    df["Date"] = df.index.normalize()
+    time_index = cast(pd.DatetimeIndex, df.index)
+    df["Year"] = time_index.year
+    df["Date"] = time_index.normalize()
 
     # Calculate hours per step for energy conversion
     hours_per_step = get_hours_per_step(freq)
@@ -678,8 +679,8 @@ def cost_analysis_projection(
         from breos.emissions import calculate_co2_projection
 
         co2_proj = calculate_co2_projection(
-            proj["PV_Production_kWh"].values,
-            proj["Export_kWh"].values,
+            proj["PV_Production_kWh"].to_numpy(),
+            proj["Export_kWh"].to_numpy(),
             emissions_params,
         )
         proj["CO2_Avoided_Total_kg"] = co2_proj["CO2_Avoided_Total_kg"].values

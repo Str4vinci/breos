@@ -948,8 +948,10 @@ def normalise_pv_arrays(arrays: list[dict[str, Any]] | None, cfg: dict[str, Any]
         return []
 
     default_module = cfg.get("pv_module") or default_module_key()
-    default_tilt = cfg.get("tilt") if cfg.get("tilt") is not None else estimate_optimal_tilt(lat)
-    default_azimuth = cfg.get("azimuth") if cfg.get("azimuth") is not None else default_azimuth_fn(lat)
+    configured_tilt = cfg.get("tilt")
+    configured_azimuth = cfg.get("azimuth")
+    default_tilt = configured_tilt if configured_tilt is not None else estimate_optimal_tilt(lat)
+    default_azimuth = configured_azimuth if configured_azimuth is not None else default_azimuth_fn(lat)
 
     # Tracker settings are inherited from the top level like module, tilt and
     # azimuth. The PV model has its own fallbacks for an array without them,
