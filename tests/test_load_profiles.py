@@ -127,3 +127,126 @@ def test_external_native_15min_profile_can_downsample_to_hourly(tmp_path):
 def test_load_profile_rejects_a_start_that_would_shift_the_seasons(start_date):
     with pytest.raises(ValueError, match=r"start_date must be 1 January at midnight"):
         load_profile("demandlib_h0", 3500, start_date=start_date)
+
+
+def _write_eredes(path, n_rows, start="2025-01-01", freq="15min", trailing_blank=True):
+    stamps = pd.date_range(start, periods=n_rows, freq=freq)
+    day = np.arange(n_rows) // (96 if freq == "15min" else 24)
+    frame = pd.DataFrame(
+        {
+            "Datetime": stamps.strftime("%d/%m/%Y %H:%M"),
+            "BTN A - Wh": 1.0 + day,
+            "BTN B - Wh": 2.0 + day,
+            "BTN C - Wh": 1000.0 + day,
+        }
+    )
+    text = frame.to_csv(index=False)
+    if trailing_blank:
+        text += ",,,\n"
+    path.write_text(text)
+
+
+@pytest.mark.parametrize("timezone", ["UTC", "Europe/Lisbon"])
+def test_eredes_file_with_trailing_blank_row_keeps_leap_calendar(tmp_path, timezone):
+    # The E-REDES exports carry 35040 intervals plus a trailing ",,," row.
+    # Column BTN C is 1000 + day-of-year, so each day is identifiable.
+    _write_eredes(tmp_path / "EREDES_2025_BTN_1000kwh_15min.csv", 35040)
+
+    load = load_profile(
+        "6", 1000, start_date="2024-01-01", freq="15min", rlp_directory=str(tmp_path), timezone=timezone
+    ).iloc[:, 0]
+    daily = load.groupby(load.index.date).mean()
+    reference = daily.iloc[0] / 1000.0  # scale of the source's first day
+
+    assert len(load) == 35136
+    assert np.isfinite(load).all()
+    assert daily[pd.Timestamp("2024-02-29").date()] == pytest.approx(daily[pd.Timestamp("2024-02-28").date()])
+    # 1 March and 31 December keep the source's own days (day 59 and day 364).
+    assert daily[pd.Timestamp("2024-03-01").date()] == pytest.approx(1059 * reference, rel=1e-3)
+    assert daily[pd.Timestamp("2024-12-31").date()] == pytest.approx(1364 * reference, rel=1e-3)
+
+
+def test_eredes_profile_selects_its_own_column_by_exact_name(tmp_path):
+    _write_eredes(tmp_path / "EREDES_2025_BTN_1000kwh_hourly.csv", 8760, freq="h")
+    text = (tmp_path / "EREDES_2025_BTN_1000kwh_hourly.csv").read_text()
+    (tmp_path / "EREDES_2025_BTN_1000kwh_hourly.csv").write_text(text.replace("BTN C - Wh", "Other"))
+
+    with pytest.raises(ValueError, match="needs the column 'BTN C - Wh'"):
+        load_profile("6", 1000, rlp_directory=str(tmp_path))
+    assert len(load_profile("4", 1000, rlp_directory=str(tmp_path))) == 8760
+
+
+@pytest.mark.parametrize(("freq", "n_rows"), [("h", 8759), ("h", 8761), ("15min", 35037), ("15min", 35137)])
+def test_external_profile_of_the_wrong_length_raises(tmp_path, freq, n_rows):
+    name = "EREDES_2025_BTN_1000kwh_15min.csv" if freq == "15min" else "EREDES_2025_BTN_1000kwh_hourly.csv"
+    _write_eredes(tmp_path / name, n_rows, freq=freq)
+
+    with pytest.raises(ValueError, match=f"has {n_rows} data rows"):
+        load_profile("6", 1000, freq=freq, rlp_directory=str(tmp_path))
+
+
+def test_leap_year_profile_on_common_year_drops_its_leap_day(tmp_path):
+    _write_eredes(tmp_path / "EREDES_2025_BTN_1000kwh_hourly.csv", 8784, start="2024-01-01", freq="h")
+
+    load = load_profile("6", 1000, start_date="2025-01-01", rlp_directory=str(tmp_path)).iloc[:, 0]
+    daily = load.groupby(load.index.date).mean()
+    reference = daily.iloc[0] / 1000.0
+
+    assert len(load) == 8760
+    assert daily[pd.Timestamp("2025-02-28").date()] == pytest.approx(1058 * reference)
+    assert daily[pd.Timestamp("2025-03-01").date()] == pytest.approx(1060 * reference)
+    assert daily[pd.Timestamp("2025-12-31").date()] == pytest.approx(1365 * reference)
+
+
+@pytest.mark.parametrize(
+    ("value", "message"),
+    [("", "missing, non-numeric, or infinite"), ("inf", "missing, non-numeric, or infinite"), ("-1", "negative")],
+)
+def test_external_profile_rejects_bad_values(tmp_path, value, message):
+    values = ["100"] * 8760
+    values[1234] = value
+    stamps = pd.date_range("2025-01-01", periods=8760, freq="h").strftime("%Y-%m-%d %H:%M:%S")
+    lines = ["DateTime,Electrical Consumption [W]", *(f"{t},{v}" for t, v in zip(stamps, values))]
+    (tmp_path / "REE_2026_2.0TD_1000kwh_hourly.csv").write_text("\n".join(lines) + "\n")
+
+    with pytest.raises(ValueError, match=rf"{message}.*data row 1234"):
+        load_profile("8", 1000, rlp_directory=str(tmp_path))
+
+
+def test_external_profile_rejects_irregular_timestamps(tmp_path):
+    # A local-clock file with a DST gap has the right length but moves every
+    # later row by one hour.
+    stamps = pd.date_range("2025-01-01", periods=8761, freq="h").delete(2000)
+    frame = pd.DataFrame({"Electrical Consumption [W]": np.ones(8760)}, index=stamps)
+    frame.to_csv(tmp_path / "REE_2026_2.0TD_1000kwh_hourly.csv")
+
+    with pytest.raises(ValueError, match="not evenly spaced at h: data row 2000"):
+        load_profile("8", 1000, rlp_directory=str(tmp_path))
+
+
+def test_external_profile_rejects_a_damaged_timestamp_column(tmp_path):
+    # One malformed stamp used to switch the spacing check off, so this file's
+    # missing hour went through.
+    stamps = pd.date_range("2025-01-01", periods=8761, freq="h").delete(2000).strftime("%Y-%m-%d %H:%M:%S").tolist()
+    stamps[5000] = "not a time"
+    lines = ["DateTime,Electrical Consumption [W]", *(f"{t},100" for t in stamps)]
+    (tmp_path / "REE_2026_2.0TD_1000kwh_hourly.csv").write_text("\n".join(lines) + "\n")
+
+    with pytest.raises(ValueError, match="1 timestamps that do not parse.*data row 5000: 'not a time'"):
+        load_profile("8", 1000, rlp_directory=str(tmp_path))
+
+
+def test_external_profile_with_a_label_column_skips_the_spacing_check(tmp_path):
+    lines = ["Label,Electrical Consumption [W]", *(f"row{i},100" for i in range(8760))]
+    (tmp_path / "REE_2026_2.0TD_1000kwh_hourly.csv").write_text("\n".join(lines) + "\n")
+
+    assert len(load_profile("8", 1000, rlp_directory=str(tmp_path))) == 8760
+
+
+def test_external_profile_with_dst_offsets_is_evenly_spaced(tmp_path):
+    # Offsets change at DST; the instants still step by one hour.
+    stamps = pd.date_range("2025-01-01", periods=8760, freq="h", tz="Europe/Lisbon").astype(str)
+    lines = ["DateTime,Electrical Consumption [W]", *(f"{t},100" for t in stamps)]
+    (tmp_path / "REE_2026_2.0TD_1000kwh_hourly.csv").write_text("\n".join(lines) + "\n")
+
+    assert len(load_profile("8", 1000, rlp_directory=str(tmp_path))) == 8760

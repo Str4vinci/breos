@@ -489,7 +489,6 @@ def test_zeta_squared_must_use_libm_pow_not_the_folded_square():
         np.inf,
         np.inf,
         ac_rating,
-        False,
         0.05,
         0.25,
         2.0,
