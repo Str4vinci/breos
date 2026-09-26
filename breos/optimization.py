@@ -1780,21 +1780,22 @@ def optimize_system_multi_objective(
     pareto["Grid_Independence_%"] = (1 - f[:, 0]) * 100
     pareto["NPV_Eur"] = -f[:, 1]
     if problem.projected_objectives:
-        diagnostic_rows: list[Dict[str, Any]] = []
-        for candidate in x:
-            diagnostics: Dict[str, Any] = {}
-            problem._evaluate(candidate.copy(), diagnostics)
-            diagnostic_rows.append(
-                {
-                    key: value
-                    for key, value in diagnostics.items()
-                    if key.startswith("SteadyState_")
-                    or key.startswith("Projected_")
-                    or key.startswith("Objective_")
-                    or key == "ZEB_Ratio"
-                }
-            )
-        diagnostics_df = pd.DataFrame(diagnostic_rows)
+        # pymoo stores every ``out`` value on the evaluated individual, so the
+        # Pareto diagnostics are already available even when workers performed
+        # the scoring. Enumerate custom data keys to keep optional diagnostics
+        # (such as emissions) without re-running each expensive projection.
+        diagnostic_keys = sorted(
+            {
+                key
+                for individual in result.opt
+                for key in individual.data
+                if key.startswith("SteadyState_")
+                or key.startswith("Projected_")
+                or key.startswith("Objective_")
+                or key == "ZEB_Ratio"
+            }
+        )
+        diagnostics_df = pd.DataFrame({key: result.opt.get(key) for key in diagnostic_keys})
         for column in diagnostics_df.columns:
             pareto[column] = diagnostics_df[column].to_numpy()
         pareto["Grid_Independence_%"] = pareto["Projected_Grid_Independence_%"]
