@@ -1,9 +1,12 @@
 """Characterization tests for declarative App configuration metadata."""
 
 import argparse
+from datetime import date
+
+import pytest
 
 from breos import cli
-from breos.app_config import ALLOWED_CONFIG_KEYS, APP_CONFIG_FIELDS, DEFAULTS
+from breos.app_config import ALLOWED_CONFIG_KEYS, APP_CONFIG_FIELDS, DEFAULTS, resolve_app_config
 
 EXPECTED_DEFAULTS = {
     "battery_kwh": 0.0,
@@ -157,13 +160,11 @@ def test_registry_generates_every_app_config_cli_option():
 
 def test_registry_generated_cli_values_all_reach_config_overrides():
     argv = ["run"]
-    expected: dict[str, object] = {}
     for key, field in APP_CONFIG_FIELDS.items():
         if not field.cli_flags:
             continue
         argv.append(field.cli_flags[0])
         if field.cli_action == "store_true":
-            expected[key] = True
             continue
         if field.cli_choices is not None:
             raw: object = field.cli_choices[0]
@@ -180,11 +181,68 @@ def test_registry_generated_cli_values_all_reach_config_overrides():
         else:
             raw = "/tmp/value" if field.cli_type is not None else "value"
         argv.append(str(raw))
-        expected[key] = field.cli_normalizer(raw) if field.cli_normalizer is not None else raw
 
     args = cli.build_parser().parse_args(argv)
+    expected = {
+        key: field.normalizer(getattr(args, key)) if field.normalizer is not None else getattr(args, key)
+        for key, field in APP_CONFIG_FIELDS.items()
+        if field.cli_flags
+    }
 
     assert cli._build_config(args) == expected
+
+
+def test_value_and_nested_key_normalization_is_shared_by_api_and_toml(tmp_path):
+    api_config = {
+        "location": "PORTO",
+        "n_modules": 10,
+        "annual_consumption_kwh": 4000,
+        "cost_preset": "residential-pt",
+        "emissions_country": "pt",
+        "start_date": date(2023, 1, 1),
+        "costs": {"electricity-cost": 0.31},
+    }
+
+    api_cfg = resolve_app_config(api_config).cfg
+
+    assert api_cfg["location"] == "porto"
+    assert api_cfg["cost_preset"] == "residential_pt"
+    assert api_cfg["emissions_country"] == "PT"
+    assert api_cfg["start_date"] == "2023-01-01"
+    assert api_cfg["costs"] == {"electricity_cost": 0.31}
+
+    config_path = tmp_path / "normalization.toml"
+    config_path.write_text(
+        'location = "PORTO"\n'
+        "n_modules = 10\n"
+        "annual_consumption_kwh = 4000\n"
+        'cost_preset = "residential-pt"\n'
+        'emissions_country = "pt"\n'
+        "start_date = 2023-01-01\n"
+        "\n[costs]\n"
+        "electricity-cost = 0.31\n",
+        encoding="utf-8",
+    )
+
+    toml_cfg = resolve_app_config(cli._load_config(config_path)).cfg
+
+    assert toml_cfg["location"] == api_cfg["location"]
+    assert toml_cfg["cost_preset"] == api_cfg["cost_preset"]
+    assert toml_cfg["emissions_country"] == api_cfg["emissions_country"]
+    assert toml_cfg["start_date"] == api_cfg["start_date"]
+    assert toml_cfg["costs"] == api_cfg["costs"]
+
+
+def test_key_normalization_rejects_ambiguous_spellings():
+    with pytest.raises(ValueError, match="Duplicate config key 'electricity_cost'"):
+        resolve_app_config(
+            {
+                "location": "porto",
+                "n_modules": 10,
+                "annual_consumption_kwh": 4000,
+                "costs": {"electricity-cost": 0.31, "electricity_cost": 0.32},
+            }
+        )
 
 
 def test_empty_normalized_cli_values_do_not_overwrite_config_file(tmp_path):
