@@ -296,6 +296,30 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   unless their metadata sidecar records the timezone, as files BREOS writes
   do. Results for complete, regular weather with both columns are unchanged.
 
+- The optimizer's steady-state scoring uses the same horizon, PV degradation,
+  and battery degradation engine as projected scoring
+  ([#212](https://github.com/Str4vinci/breos/issues/212)). Steady-state NPV
+  read `financials.project_lifespan` and `financials.pv_degradation_rate`,
+  while projected scoring reads `simulation.years_projection` and
+  `pv.degradation_rate` first, so the `SteadyState_*` diagnostics next to
+  `Projected_*` could rest on another horizon. Both now resolve through one
+  helper. The steady-state simulation also ignored `battery.degradation_engine`
+  and `blast_model`, so it always ran native aging, and ran even with an
+  invalid `blast_model`. It now uses the configured engine, and
+  `SolarDesignProblem` validates both keys when it is built, on either basis.
+  PV-only candidates run native aging on both bases: a projected BLAST
+  optimization used to raise on every 0 kWh candidate. **Steady-state
+  results change for configs whose key pairs disagree, including a
+  `years_projection` set without `project_lifespan` (default 20), and for
+  BLAST configs.** On synthetic test weather with 8 modules and 5 kWh, a
+  config with 3 years / 10% for projected and 2 years / 2% under `financials`
+  moves steady-state NPV from −€5,648.44 to −€5,172.08. With BLAST
+  `nmc_gr_50ah_b1` over 20 years, steady-state grid independence moves from
+  69.90% to 70.10% and NPV from −€1,547.61 to €1,374.77. Projected results
+  are unchanged, apart from 0 kWh BLAST candidates, which now run. The example
+  optimization config sets both pairs equal and uses native aging, so it is
+  unaffected.
+
 ### Removed
 - Removed the optimizer's `costs.panel_wp` override. It priced the steady-state
   CAPEX at a nominal wattage instead of the selected module's rating, so the
