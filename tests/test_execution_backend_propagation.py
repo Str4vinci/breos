@@ -207,7 +207,7 @@ def test_pv_only_dispatch_path_agrees_with_the_dispatch_itself():
     assert "dispatch_path" not in backend_provenance("python")
 
 
-def test_app_records_the_pv_only_path_for_a_battery_too_small_to_dispatch():
+def test_app_records_the_pv_only_path_for_a_battery_too_small_to_dispatch(_patch_weather):
     """The disagreement this centralisation removes, at the App boundary.
 
     Half a watt-hour is below what the dispatch will move, so the run takes
