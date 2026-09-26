@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 from importlib.metadata import PackageNotFoundError, version
 from typing import Any
 
@@ -169,6 +170,7 @@ def build_result(
 
     total_initial = artifacts.costs["total_initial_cost"]
     npv_savings = float(artifacts.cost_projection["Savings_Cumulative_NPV"].iloc[-1])
+    lcoe = float(artifacts.lcoe)
 
     result: dict[str, Any] = {
         "n_modules": cfg["n_modules"],
@@ -190,7 +192,7 @@ def build_result(
         "total_investment_eur": round(float(total_initial), 2),
         "payback_year": int(artifacts.payback_year) if artifacts.payback_year is not None else None,
         "npv_savings_eur": round(float(npv_savings), 2),
-        "lcoe_eur_kwh": round(float(artifacts.lcoe), 4),
+        "lcoe_eur_kwh": round(lcoe, 4) if math.isfinite(lcoe) else None,
         "yearly": yearly_to_dicts(artifacts.yearly_df),
         "monthly": monthly_to_dicts(artifacts.first_year_results_df, cfg["resolution"]),
         "financial": financial_to_dicts(artifacts.cost_projection, total_initial),

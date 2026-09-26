@@ -364,13 +364,13 @@ class TestLCOE:
         }
         yearly_summary = pd.DataFrame(
             {
-                "Year": [1, 2],
-                "Load_kWh": [1000.0, 2000.0],
-                "PV_Production_kWh": [800.0, 800.0],
-                "Import_kWh": [300.0, 600.0],
-                "Export_kWh": [100.0, 100.0],
-                "PV_Degradation_Factor": [1.0, 1.0],
-                "Replacement_Cost": [0.0, 0.0],
+                "Year": [2, 1],
+                "Load_kWh": [2000.0, 1000.0],
+                "PV_Production_kWh": [800.0, 900.0],
+                "Import_kWh": [600.0, 300.0],
+                "Export_kWh": [100.0, 200.0],
+                "PV_Degradation_Factor": [0.9, 1.0],
+                "Replacement_Cost": [500.0, 0.0],
             }
         )
 
@@ -384,12 +384,27 @@ class TestLCOE:
         )
 
         daily = 365 * costs["daily_power_cost"]
+        assert projection["Load_kWh"].tolist() == [1000.0, 2000.0]
         assert projection["Cost_No_Sys_Annual"].tolist() == pytest.approx(
             [
                 1000.0 * costs["electricity_cost"] + daily,
                 2000.0 * costs["electricity_cost"] + daily,
             ]
         )
+        assert projection["PV_Production_kWh"].tolist() == [900.0, 800.0]
+        assert projection["Export_kWh"].tolist() == [200.0, 100.0]
+        assert projection["Cost_Import"].tolist() == [90.0, 180.0]
+        assert projection["Cost_Replacement"].tolist() == [0.0, 500.0]
+
+    @pytest.mark.parametrize("years", [[1, 1], [1, 3]])
+    def test_cost_projection_rejects_duplicate_or_incomplete_year_labels(self, years):
+        with pytest.raises(ValueError, match="yearly_summary_df Year values"):
+            cost_analysis_projection(
+                results_df=None,
+                costs={},
+                num_years=2,
+                yearly_summary_df=pd.DataFrame({"Year": years}),
+            )
 
 
 class TestReplacementBookingTime:

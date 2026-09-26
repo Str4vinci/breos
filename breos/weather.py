@@ -288,7 +288,13 @@ def load_weather(
         weather_dir: Directory to scan for weather files
 
     Returns:
-        DataFrame if a matching file is found, None otherwise.
+        DataFrame if one matching file is found, None if no file matches or
+        covers the requested range.
+
+    Raises:
+        ValueError: If multiple files match the filters and date range. Set
+            ``data_type`` or ``source`` to narrow the selection, or leave one
+            matching file in ``weather_dir``.
     """
     if not os.path.isdir(weather_dir):
         return None
@@ -310,20 +316,26 @@ def load_weather(
     if not candidates:
         return None
 
-    # If date range is specified, filter by coverage
+    # If a date range is specified, historical files must cover it. TMY files
+    # remain eligible because they represent a typical year rather than a
+    # dated range; an uncovered historical file is never a fallback.
     if start_year is not None and end_year is not None:
-        covered = []
-        for c in candidates:
-            file_start = int(c["year_start"])
-            file_end = int(c["year_end"])
-            if file_start <= start_year and file_end >= end_year:
-                covered.append(c)
-            elif c["type"] == "tmy":
-                # TMY files don't need date coverage — they represent a typical year
-                covered.append(c)
-        candidates = covered if covered else candidates
+        candidates = [
+            candidate
+            for candidate in candidates
+            if candidate["type"] == "tmy"
+            or (int(candidate["year_start"]) <= start_year and int(candidate["year_end"]) >= end_year)
+        ]
 
-    # Prefer the first match (could be refined with priority logic)
+    if not candidates:
+        return None
+    if len(candidates) > 1:
+        filenames = ", ".join(sorted(os.path.basename(candidate["filepath"]) for candidate in candidates))
+        raise ValueError(
+            f"Multiple weather files match location {location!r} and the requested filters: {filenames}. "
+            "Set data_type or source to narrow the selection, or leave one matching file in weather_dir."
+        )
+
     best = candidates[0]
     filepath = best["filepath"]
 

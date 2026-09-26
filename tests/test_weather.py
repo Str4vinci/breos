@@ -362,6 +362,32 @@ def test_weather_filename_parser_accepts_locations_with_underscores():
     }
 
 
+def test_historical_weather_without_requested_year_coverage_is_not_selected(tmp_path):
+    path = tmp_path / "porto_historical_2020_2021_openmeteo.csv"
+    pd.DataFrame(
+        {"ghi": [0.0, 1.0]},
+        index=pd.date_range("2020-01-01", periods=2, freq="h", tz="UTC"),
+    ).to_csv(path)
+
+    loaded = load_weather("porto", data_type="historical", start_year=2022, end_year=2023, weather_dir=str(tmp_path))
+
+    assert loaded is None
+
+
+def test_ambiguous_weather_files_are_rejected(tmp_path):
+    for filename in (
+        "porto_historical_2018_2024_openmeteo.csv",
+        "porto_historical_2020_2024_openmeteo.csv",
+    ):
+        pd.DataFrame(
+            {"ghi": [0.0, 1.0]},
+            index=pd.date_range("2020-01-01", periods=2, freq="h", tz="UTC"),
+        ).to_csv(tmp_path / filename)
+
+    with pytest.raises(ValueError, match="Multiple weather files match"):
+        load_weather("porto", data_type="historical", start_year=2021, end_year=2022, weather_dir=str(tmp_path))
+
+
 def test_resample_to_15min_keeps_all_slots_in_last_hour():
     idx = pd.date_range("2025-01-01 00:00", periods=3, freq="h")
     weather = pd.DataFrame({"temp_air": [0.0, 4.0, 8.0]}, index=idx)
