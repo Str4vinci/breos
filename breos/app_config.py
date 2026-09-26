@@ -312,7 +312,7 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         default_order=34,
         cli_flags=("--pv-degradation-rate",),
         cli_type=float,
-        cli_help="Annual PV degradation rate.",
+        cli_help="Annual compound PV degradation rate; year 1 has none.",
     ),
     "calendar_model": AppConfigField(
         default="naumann_lam_field_calibrated",

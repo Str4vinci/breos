@@ -361,7 +361,10 @@ def cost_analysis_projection(
         inflation_rate: Annual inflation for electricity/operation costs
         sell_price_inflation: Annual inflation for sell price
         discount_rate: Discount rate for NPV calculations
-        degradation_rate: Annual PV degradation rate
+        degradation_rate: Annual compound PV degradation rate, counted from
+            the start of each year: year ``n`` production is scaled by
+            ``(1 - degradation_rate) ** (n - 1)``, so year 1 has none. Used
+            only when ``yearly_summary_df`` is not supplied.
         results_directory: Optional directory to save results
         scenario_name: Optional name suffix for saved files
         freq: Simulation frequency string ('h', '15min')
@@ -770,7 +773,9 @@ def calculate_lcoe(
         annual_operation_cost: Annual O&M cost (€)
         lifetime_years: System lifetime
         discount_rate: Discount rate
-        degradation_rate: Annual degradation
+        degradation_rate: Annual compound PV degradation rate, counted from
+            the start of each year: year ``t`` produces
+            ``annual_production_kwh * (1 - degradation_rate) ** (t - 1)``.
 
     Returns:
         LCOE in €/kWh
