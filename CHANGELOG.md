@@ -469,7 +469,9 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   `payback_year_exact` and `Projected_Breakeven_Year_Exact` change for runs
   that pay back within the first year. Other runs, and the App golden
   baseline, are unchanged. The break-even plots mark a first-year payback
-  from the year-0 investment and widen the axis to show it.
+  from the year-0 investment and widen the axis to show it. Both functions
+  raise `ValueError` when the years, the savings or the investment contain
+  NaN or infinite values, instead of reporting NaN or a false crossing.
 - `calculate_lcoe` is documented as a real-terms (constant-price) LCOE
   ([#175](https://github.com/Str4vinci/breos/issues/175)). It holds O&M at
   first-year prices, while `calculate_lcoe_from_projection`, which App,

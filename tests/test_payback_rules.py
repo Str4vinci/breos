@@ -5,6 +5,8 @@ earliest time cumulative discounted savings reach zero or above and stay
 nonnegative to the horizon, from a year-0 point at minus the investment.
 """
 
+import math
+
 import pandas as pd
 import pytest
 
@@ -92,6 +94,27 @@ def test_explicit_investment_overrides_the_attrs():
 
     assert find_payback_year_exact(projection, initial_investment=21.0) == pytest.approx(0.21)
     assert find_payback_year(projection, initial_investment=21.0) == 1
+
+
+@pytest.mark.parametrize("bad", [math.nan, math.inf, -math.inf])
+@pytest.mark.parametrize("investment", [None, 100.0])
+def test_non_finite_savings_are_rejected(bad, investment):
+    # NaN used to propagate into the interpolated payback, and +inf passed
+    # the >= 0 test and reported a false crossing.
+    projection = _projection([-100.0, bad, 10.0], investment=investment)
+
+    for find in (find_payback_year_exact, find_payback_year):
+        with pytest.raises(ValueError, match="NaN or infinite"):
+            find(projection)
+
+
+@pytest.mark.parametrize("bad", [math.nan, math.inf])
+def test_a_non_finite_investment_is_rejected(bad):
+    projection = _projection([-50.0, 10.0])
+
+    for find in (find_payback_year_exact, find_payback_year):
+        with pytest.raises(ValueError, match="NaN or infinite"):
+            find(projection, initial_investment=bad)
 
 
 def test_a_year_zero_row_is_not_anchored_twice():

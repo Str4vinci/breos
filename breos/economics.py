@@ -712,8 +712,7 @@ def _initial_investment(cost_projection: pd.DataFrame) -> Optional[float]:
             investment = cost_projection[cumulative].iloc[0] - cost_projection[annual].iloc[0]
     if investment is None:
         return None
-    investment = float(investment)
-    return investment if np.isfinite(investment) else None
+    return float(investment)
 
 
 def _payback_points(
@@ -723,6 +722,11 @@ def _payback_points(
 
     When the projection starts after year 0 and the investment is known, a
     year-0 point with savings of minus the investment is prepended.
+
+    Raises:
+        ValueError: If a year, a savings value or the investment is NaN or
+            infinite. Payback is undefined on such a series, and reading it
+            anyway would report NaN or a false crossing.
     """
     if (
         "Savings_Cumulative_NPV" not in cost_projection.columns
@@ -738,16 +742,22 @@ def _payback_points(
     if initial_investment is not None and years[0] > 0.0:
         years = np.concatenate(([0.0], years))
         savings = np.concatenate(([-float(initial_investment)], savings))
+    if not (np.isfinite(years).all() and np.isfinite(savings).all()):
+        raise ValueError(
+            "Payback needs finite years, Savings_Cumulative_NPV and initial investment; "
+            "the projection contains NaN or infinite values"
+        )
     return years, savings
 
 
 def _sustained_payback_index(savings: np.ndarray) -> Optional[int]:
     """Index of the first point from which savings stay >= 0 to the horizon.
 
-    Non-finite savings count as negative. Returns None when the last point is
-    negative, that is when the savings never recover for good.
+    ``savings`` must be finite (see :func:`_payback_points`). Returns None
+    when the last point is negative, that is when the savings never recover
+    for good.
     """
-    negative = np.flatnonzero(~(savings >= 0.0))
+    negative = np.flatnonzero(savings < 0.0)
     if negative.size == 0:
         return 0
     last_negative = int(negative[-1])
@@ -778,6 +788,10 @@ def find_payback_year(cost_projection: pd.DataFrame, initial_investment: Optiona
         The payback year, or None when the savings do not stay nonnegative
         through the last projected year, or the projection has no savings
         column.
+
+    Raises:
+        ValueError: If the years, the savings or the investment contain NaN
+            or infinite values.
     """
     points = _payback_points(cost_projection, initial_investment)
     if points is None:
@@ -815,6 +829,10 @@ def find_payback_year_exact(
         The payback in years, or None when the savings do not stay
         nonnegative through the last projected year, or the projection has no
         savings column.
+
+    Raises:
+        ValueError: If the years, the savings or the investment contain NaN
+            or infinite values.
     """
     points = _payback_points(cost_projection, initial_investment)
     if points is None:
