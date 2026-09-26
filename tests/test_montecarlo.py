@@ -57,6 +57,25 @@ def test_sample_load_scale_supports_bounded_uniform_distribution():
     assert max(scales) > 1.04
 
 
+def test_montecarlo_worker_omits_uncollected_trajectory(monkeypatch):
+    settings = MonteCarloSettings(weather_file="unused.csv", collect_yearly=False, seed=7)
+    trajectory = pd.DataFrame({"Year": range(20), "Load_kWh": np.arange(20, dtype=float)})
+    monkeypatch.setattr(montecarlo_module, "_WORKER_CONTEXT", None)
+    monkeypatch.setattr(
+        montecarlo_module,
+        "_simulate_trajectory",
+        lambda *args: ({"npv_savings_eur": 1.0}, trajectory),
+    )
+    montecarlo_module._initialize_worker({}, None, np.array([2021]), 1, settings, {}, {})
+
+    run_idx, metrics, returned_trajectory, jit_cache_state = montecarlo_module._run_trajectory_index(0)
+
+    assert run_idx == 0
+    assert metrics == {"npv_savings_eur": 1.0}
+    assert returned_trajectory is None
+    assert jit_cache_state is None
+
+
 def test_montecarlo_precompute_threads_explicit_battery_temperature(monkeypatch):
     import breos.montecarlo as mc_module
 
