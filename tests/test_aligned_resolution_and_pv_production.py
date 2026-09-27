@@ -36,8 +36,10 @@ def test_aligned_inputs_run_at_their_own_resolution():
     assert aligned.freq == "15min"
     assert summary.hours_per_step == 0.25
     assert summary.summary_row["Total Load [kWh]"] == pytest.approx(24.0)
-    # An alias for the same step is accepted.
-    assert simulate_energy_balance_summary(aligned=aligned, freq="15T").summary_row == summary.summary_row
+    # The same step given explicitly is accepted; a pandas 2 alias is not.
+    assert simulate_energy_balance_summary(aligned=aligned, freq="15min").summary_row == summary.summary_row
+    with pytest.raises(ValueError, match="Unsupported frequency"):
+        simulate_energy_balance_summary(aligned=aligned, freq="15T")
 
 
 def test_a_freq_that_disagrees_with_aligned_inputs_raises():

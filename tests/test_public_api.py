@@ -36,6 +36,8 @@ def test_top_level_all_is_narrow_release_surface():
         "optimize_system_multi_objective",
         "export_results",
         "load_results",
+        "repair_series",
+        "InputRepairReport",
     }
     intentionally_excluded = {
         "R_GAS",
