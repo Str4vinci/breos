@@ -968,12 +968,15 @@ def _validate_battery_and_degradation(cfg: dict[str, Any]) -> None:
     calendar_model = str(cfg["calendar_model"]).strip().lower().replace("-", "_")
     if calendar_model not in valid_calendar_models:
         raise ValueError(f"'calendar_model' must be one of: {', '.join(sorted(valid_calendar_models))}")
-    if type(cfg["start_date"]) is date:
-        cfg["start_date"] = cfg["start_date"].isoformat()
-    elif isinstance(cfg["start_date"], datetime) or not isinstance(cfg["start_date"], str):
+    start_date = cfg["start_date"]
+    # datetime subclasses date, so it is excluded before the date case.
+    if isinstance(start_date, date) and not isinstance(start_date, datetime):
+        start_date = start_date.isoformat()
+        cfg["start_date"] = start_date
+    elif not isinstance(start_date, str):
         raise TypeError("'start_date' must be an ISO date string or datetime.date (YYYY-MM-DD)")
     try:
-        start = date.fromisoformat(cfg["start_date"])
+        start = date.fromisoformat(start_date)
     except ValueError as exc:
         raise ValueError("'start_date' must be a valid ISO date (YYYY-MM-DD)") from exc
     if (start.month, start.day) != (1, 1):

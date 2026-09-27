@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import math
 import multiprocessing
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from importlib.metadata import PackageNotFoundError, version
 from multiprocessing import Pool
 from typing import Any
@@ -107,8 +107,10 @@ class MonteCarloSettings:
     n_procs: int = 1
     # "python" is the reference implementation and the default. "numba"
     # selects the optional compiled within-day dispatch kernel and requires
-    # breos[fast]; it is checked before any trajectory starts.
-    execution_backend: str = "python"
+    # breos[fast]; it is checked before any trajectory starts. None inherits
+    # the App config's top-level ``execution_backend``, which itself defaults
+    # to "python"; see :func:`run_montecarlo`.
+    execution_backend: str | None = None
 
 
 @dataclass
@@ -741,11 +743,20 @@ def run_montecarlo(config: dict[str, Any], settings: MonteCarloSettings) -> Mont
         config: An App configuration dict (same keys as :class:`breos.App`).
         settings: Monte Carlo controls (weather file, runs, uncertainty, seed).
 
+    The dispatch backend is ``settings.execution_backend`` when set, else the
+    config's top-level ``execution_backend``, else ``"python"``. The CLI
+    applies the same order after its own ``--execution-backend`` flag and
+    ``[montecarlo].execution_backend``, so a study selects the same backend
+    from Python and from ``breos montecarlo``. The returned result's
+    ``settings`` records the backend that ran.
+
     Returns:
         A :class:`MonteCarloResult` with one row per run and summary statistics.
     """
     resolved = resolve_app_config(config)
     cfg = resolved.cfg
+    if settings.execution_backend is None:
+        settings = replace(settings, execution_backend=cfg["execution_backend"])
     if settings.n_runs < 1:
         raise ValueError("n_runs must be at least 1")
     if settings.years_per_run is not None and settings.years_per_run < 1:

@@ -534,8 +534,6 @@ def _montecarlo(args: argparse.Namespace) -> int:
             return cli_value
         if key in mc_cfg:
             return mc_cfg[key]
-        if key == "execution_backend":
-            return config.get(key, default)
         return default
 
     settings = MonteCarloSettings(
@@ -553,7 +551,9 @@ def _montecarlo(args: argparse.Namespace) -> int:
         preserve_irradiance_energy=bool(_pick(args.preserve_irradiance_energy, "preserve_irradiance_energy", False)),
         collect_yearly=bool(_pick(args.collect_yearly, "collect_yearly", False)),
         n_procs=int(_pick(args.n_procs, "n_procs", 1)),
-        execution_backend=str(_pick(args.execution_backend, "execution_backend", "python")),
+        # None lets run_montecarlo fall back to the top-level key, the same
+        # order a Python caller gets.
+        execution_backend=_pick(args.execution_backend, "execution_backend", None),
     )
 
     result = run_montecarlo(config, settings)

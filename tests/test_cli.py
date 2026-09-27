@@ -92,49 +92,70 @@ def test_run_warns_and_ignores_unused_runner_sections(tmp_path, capsys):
     assert '"degradation_engine": "blast"' in capsys.readouterr().out
 
 
-def test_montecarlo_uses_top_level_execution_backend(tmp_path, monkeypatch, capsys):
+class _BackendChosen(Exception):
+    pass
+
+
+def _record_montecarlo_backend(monkeypatch):
+    """Stop run_montecarlo where it resolves the backend, and record it."""
     import breos.montecarlo as montecarlo
 
-    weather_file = tmp_path / "weather.csv"
-    weather_file.write_text("weather", encoding="utf-8")
-    config_path = tmp_path / "montecarlo.toml"
-    config_path.write_text(
-        'location = "porto"\n'
-        "n_modules = 10\n"
-        "annual_consumption_kwh = 4000\n"
-        'execution_backend = "numba"\n'
-        "\n[montecarlo]\n"
-        f'weather_file = "{weather_file}"\n',
-        encoding="utf-8",
-    )
     observed = {}
 
-    class _Frame:
-        def to_csv(self, path, index=False):
-            Path(path).write_text("result\n", encoding="utf-8")
+    def fake_resolve_backend(execution_backend, *, pv_only=False):
+        observed["execution_backend"] = execution_backend
+        raise _BackendChosen
 
-    def fake_run_montecarlo(config, settings):
-        observed["execution_backend"] = settings.execution_backend
-        return SimpleNamespace(runs=_Frame(), yearly=None, provenance={}, summary={}, available_years=[2025])
+    monkeypatch.setattr(montecarlo, "_resolve_backend", fake_resolve_backend)
+    return observed
 
-    monkeypatch.setattr(montecarlo, "run_montecarlo", fake_run_montecarlo)
 
-    assert (
-        cli.main(
-            [
-                "montecarlo",
-                "--config",
-                str(config_path),
-                "--output",
-                str(tmp_path / "runs.csv"),
-                "--provenance-output",
-                str(tmp_path / "provenance.json"),
-            ]
-        )
-        == 0
-    )
-    capsys.readouterr()
-    assert observed["execution_backend"] == "numba"
+def _montecarlo_config(tmp_path, *, top_level=None, section=None):
+    weather_file = tmp_path / "weather.csv"
+    weather_file.write_text("weather", encoding="utf-8")
+    lines = ['location = "porto"', "n_modules = 10", "annual_consumption_kwh = 4000"]
+    if top_level is not None:
+        lines.append(f'execution_backend = "{top_level}"')
+    lines += ["", "[montecarlo]", f'weather_file = "{weather_file}"']
+    if section is not None:
+        lines.append(f'execution_backend = "{section}"')
+    config_path = tmp_path / "montecarlo.toml"
+    config_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return config_path
+
+
+@pytest.mark.parametrize(
+    ("top_level", "section", "flag", "expected"),
+    [
+        (None, None, None, "python"),
+        ("numba", None, None, "numba"),
+        ("numba", "python", None, "python"),
+        ("python", None, "numba", "numba"),
+        ("numba", "numba", "python", "python"),
+    ],
+)
+def test_montecarlo_backend_precedence_matches_python_api(tmp_path, monkeypatch, top_level, section, flag, expected):
+    # Flag, then [montecarlo], then the top-level key, then "python"; the
+    # Python API must pick the same backend for the same config.
+    import tomllib
+
+    from breos.montecarlo import MonteCarloSettings, run_montecarlo
+
+    config_path = _montecarlo_config(tmp_path, top_level=top_level, section=section)
+    observed = _record_montecarlo_backend(monkeypatch)
+    argv = ["montecarlo", "--config", str(config_path), "--output", str(tmp_path / "runs.csv")]
+    if flag is not None:
+        argv += ["--execution-backend", flag]
+    with pytest.raises(_BackendChosen):
+        cli._montecarlo(cli.build_parser().parse_args(argv))
+    assert observed.pop("execution_backend") == expected
+
+    if flag is None:
+        config = tomllib.loads(config_path.read_text(encoding="utf-8"))
+        settings = MonteCarloSettings(**config.pop("montecarlo"))
+        with pytest.raises(_BackendChosen):
+            run_montecarlo(config, settings)
+        assert observed["execution_backend"] == expected
 
 
 def test_montecarlo_reports_unknown_setting_before_weather_lookup(tmp_path, capsys):
