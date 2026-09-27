@@ -31,7 +31,7 @@ flag.
 | `financial` | Yearly financial projection rows (year 0 = investment) |
 | `yearly` | Per-year breakdown of production, load, imports, exports |
 | `pv_loss_waterfall` | Year 1 PV loss waterfall from irradiance reference through PVWatts losses, inverter losses, and dispatch losses |
-| `provenance` | BREOS version, normalized resolved config, ledger schema version, weather/location metadata, resolution, timezone, and start date |
+| `provenance` | BREOS version, normalized resolved config, ledger schema version, weather/location metadata, resolution, timezone, and start date; `input_repairs` holds the reports passed as `App(..., input_repairs=...)`, and is present only then (see [Repairing measured data](inputs.md#repairing-measured-data)) |
 
 ## Battery-specific keys
 
