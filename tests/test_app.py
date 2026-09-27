@@ -541,6 +541,22 @@ class TestAppValidation:
         # fixed 1 / 0.97 ratio because inverter efficiency varies with load.
         assert no_shading > base
 
+    def test_undefined_lcoe_uses_json_null(self, _patch_weather):
+        app = App(
+            {
+                "location": "porto",
+                "n_modules": 6,
+                "annual_consumption_kwh": 3000,
+                "projection_years": 1,
+                "pv_loss_overrides": {"shading": 100.0},
+            }
+        )
+        app.simulate()
+        result = app.result()
+
+        assert result["lcoe_eur_kwh"] is None
+        json.dumps(result, allow_nan=False)
+
     def test_horizon_profile_reduces_generation_and_is_serialized(self, _patch_weather):
         common = {
             "location": "porto",

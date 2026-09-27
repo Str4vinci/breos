@@ -12,6 +12,14 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   `validation/external/README.md`.
 - `resample_to_15min` accepts `altitude` for the clear-sky model. When it is
   omitted, pvlib still looks the elevation up from the coordinates, as before.
+- The `weather_source` App config key, also `--weather-source` on the CLI,
+  picks one cached TMY file when `weather/` holds several for a location
+  preset. It names the filename's source part, as in
+  `porto_tmy_2005_2023_pvgis-sarah3.csv`. The default, `None`, uses the only
+  matching file as before. App rejects a malformed value, or one set with a
+  coordinate-dict location, at construction. A source with no matching file
+  raises instead of fetching PVGIS weather. The file used is recorded under
+  `provenance.weather`, as before.
 
 ### Changed
 - `resample_tmy_to_15min` is now a thin wrapper over `resample_to_15min`, so
@@ -449,6 +457,23 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   value of 0 and are unchanged. Monte Carlo summaries leave out infinite
   values as they do NaN, so an infinite LCOE no longer makes the mean
   infinite and the spread NaN; `count` shows how many runs remain.
+
+- Four small fixes from the 0.6.2 audit
+  ([#161](https://github.com/Str4vinci/breos/issues/161)).
+  `get_inverter_preset` returns a copy, so changing one caller's
+  `InverterConfig` no longer changes the preset for every later caller.
+  `cost_analysis_projection` matches yearly rows to projection years by their
+  `Year` labels instead of by position, so rows in a different order give the
+  same projection; labels that are not exactly 1 through the projection length
+  raise. App results report an undefined LCOE, such as a run with 100% PV
+  losses, as `null` instead of `Infinity`, so they pass
+  `json.dumps(..., allow_nan=False)`. `load_weather` no longer falls back to a
+  historical file that does not cover the requested years, and raises the new
+  `AmbiguousWeatherError`, a `ValueError`, when several files match instead of
+  taking whichever the directory listed first. **An App run whose `weather/`
+  directory holds two TMY files for its location preset now stops** with the
+  candidates and asks for `weather_source`. With one file, App results are
+  unchanged.
 
 ### Removed
 - Removed the optimizer's `costs.panel_wp` override. It priced the steady-state

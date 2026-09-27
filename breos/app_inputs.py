@@ -20,7 +20,7 @@ from breos.solar import (
     calculate_pv_production_tracking_breakdown,
 )
 from breos.utils import remap_datetime_index_years
-from breos.weather import fill_leap_day, warn_if_naive_weather_timestamps
+from breos.weather import AmbiguousWeatherError, fill_leap_day, warn_if_naive_weather_timestamps
 
 
 @dataclass(frozen=True)
@@ -100,6 +100,7 @@ def load_weather_for_simulation(
     *,
     horizon_profile: Any = None,
     solar_position: str = DEFAULT_SOLAR_POSITION,
+    weather_source: str | None = None,
 ) -> pd.DataFrame:
     """Load TMY weather, falling back to PVGIS fetch.
 
@@ -107,12 +108,36 @@ def load_weather_for_simulation(
     current working directory is scanned first: a file matching the
     location preset key takes precedence over the PVGIS fetch. Remove or
     rename the directory (or its files) to force a fresh fetch.
+
+    Several matching TMY files are an error rather than a guess;
+    ``weather_source`` (the App ``weather_source`` key) picks one by the
+    filename's source part. A requested source with no matching file is also
+    an error, so it never silently becomes a PVGIS fetch.
     """
     weather = None
     weather_path = weather_dir or Path.cwd() / "weather"
 
     if resolved.loc_key and weather_path.is_dir():
-        weather = deps.load_weather(location=resolved.loc_key, data_type="tmy", weather_dir=str(weather_path))
+        try:
+            weather = deps.load_weather(
+                location=resolved.loc_key,
+                data_type="tmy",
+                source=weather_source,
+                weather_dir=str(weather_path),
+            )
+        except AmbiguousWeatherError as exc:
+            raise ValueError(
+                f"Several cached TMY weather files match location {resolved.loc_key!r} in {weather_path}: "
+                f"{', '.join(exc.filenames)}. Set the 'weather_source' config key (CLI: --weather-source) "
+                f"to one of: {', '.join(exc.sources)}; or leave one matching file in the directory."
+            ) from exc
+
+    if weather is None and weather_source is not None:
+        raise FileNotFoundError(
+            f"'weather_source' is {weather_source!r}, but no cached TMY weather file "
+            f"{resolved.loc_key}_tmy_<years>_{weather_source}.csv was found in {weather_path}. "
+            "Add the file, or unset 'weather_source' to fetch PVGIS weather."
+        )
 
     if weather is None:
         weather, _ = deps.fetch_tmy_weather_data(
@@ -254,6 +279,7 @@ def prepare_simulation_inputs(
         deps,
         horizon_profile=cfg["horizon_profile"],
         solar_position=cfg["solar_position"],
+        weather_source=cfg["weather_source"],
     )
     pv_breakdown = build_pv_production_breakdown(cfg, resolved, weather)
     dc_system_base = pv_breakdown.dc_after_losses

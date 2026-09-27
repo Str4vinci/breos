@@ -61,6 +61,7 @@ EXPECTED_DEFAULTS = {
     "battery_temperature": "weather",
     "battery_indoor_model": None,
     "execution_backend": "python",
+    "weather_source": None,
 }
 
 EXPECTED_CLI_FIELDS = [
@@ -104,6 +105,7 @@ EXPECTED_CLI_FIELDS = [
     "inverter_efficiency",
     "inverter_loading_ratio",
     "start_date",
+    "weather_source",
     "execution_backend",
 ]
 
