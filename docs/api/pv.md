@@ -28,6 +28,22 @@ model documentation and comparison data.
    breos.solar.dc_to_ac
 ```
 
+## Module aging
+
+PV module degradation is counted at the start of each simulated year and
+compounds. Year 1 of operation, age 0, has no degradation. Year `n` is
+degraded by `n - 1` full years, so its DC output after the static PVWatts
+losses is scaled by `(1 - degradation_rate) ** (n - 1)`. With the default
+`pv_degradation_rate = 0.005`, year 2 produces 99.5% of year 1 and year 20
+produces 90.9%.
+
+App, Monte Carlo, the optimizer and the economics projection all apply this
+rule. The `breos.solar` production functions apply it through `current_year`
+and `start_year`: the modules are `current_year - start_year` years old, and
+`current_year == start_year` is the installation year. Without both
+arguments there is no age loss. The year 1 PV loss waterfall therefore has
+no degradation stage.
+
 ## Module catalogue
 
 A built-in dictionary of PV module electrical parameters lives in

@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import json
+import math
+from copy import deepcopy
 from importlib.metadata import PackageNotFoundError, version
-from typing import Any
+from typing import Any, cast
 
 import pandas as pd
 
@@ -50,7 +52,7 @@ def monthly_to_dicts(results_df: pd.DataFrame, freq: str) -> list[dict[str, Any]
         self_consumption = direct + battery
         rows.append(
             {
-                "month": idx.strftime("%b"),
+                "month": cast(pd.Timestamp, idx).strftime("%b"),
                 "pv_kwh": round(legacy_pv, 2),
                 "pv_dc_generation_kwh": round(pv_dc, 2),
                 "direct_pv_ac_load_kwh": round(direct, 2),
@@ -114,7 +116,12 @@ def _package_version() -> str:
         return "unknown"
 
 
-def _provenance(cfg: dict[str, Any], resolved: ResolvedAppConfig, artifacts: SimulationArtifacts) -> dict[str, Any]:
+def _provenance(
+    cfg: dict[str, Any],
+    resolved: ResolvedAppConfig,
+    artifacts: SimulationArtifacts,
+    input_repairs: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     normalized_cfg = {
         **cfg,
         "location": {
@@ -133,7 +140,7 @@ def _provenance(cfg: dict[str, Any], resolved: ResolvedAppConfig, artifacts: Sim
     weather = json.loads(json.dumps(artifacts.weather_metadata, default=str))
     weather.setdefault("latitude", resolved.lat)
     weather.setdefault("longitude", resolved.lon)
-    return {
+    provenance = {
         "breos_version": _package_version(),
         "ledger_schema_version": LEDGER_SCHEMA_VERSION,
         "resolved_config": normalized_cfg,
@@ -149,14 +156,25 @@ def _provenance(cfg: dict[str, Any], resolved: ResolvedAppConfig, artifacts: Sim
         # benchmarks. Same keys as the Monte Carlo block, from the same code.
         "execution": artifacts.execution,
     }
+    # Only runs given repair reports carry the key, so existing results are
+    # unchanged. An empty list is recorded as given.
+    if input_repairs is not None:
+        provenance["input_repairs"] = deepcopy(input_repairs)
+    return provenance
 
 
 def build_result(
     cfg: dict[str, Any],
     resolved: ResolvedAppConfig,
     artifacts: SimulationArtifacts,
+    *,
+    input_repairs: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """Build the public JSON-serializable App result dictionary."""
+    """Build the public JSON-serializable App result dictionary.
+
+    ``input_repairs`` holds strict-JSON repair reports (see
+    :func:`breos.repair.input_repair_records`) for ``provenance``.
+    """
     year1 = artifacts.yearly_df.iloc[0]
     yr1_pv = year1["PV_Production_kWh"]
     legacy_yr1_pv = year1["Legacy_PV_Production_kWh"]
@@ -169,6 +187,7 @@ def build_result(
 
     total_initial = artifacts.costs["total_initial_cost"]
     npv_savings = float(artifacts.cost_projection["Savings_Cumulative_NPV"].iloc[-1])
+    lcoe = float(artifacts.lcoe)
 
     result: dict[str, Any] = {
         "n_modules": cfg["n_modules"],
@@ -190,12 +209,12 @@ def build_result(
         "total_investment_eur": round(float(total_initial), 2),
         "payback_year": int(artifacts.payback_year) if artifacts.payback_year is not None else None,
         "npv_savings_eur": round(float(npv_savings), 2),
-        "lcoe_eur_kwh": round(float(artifacts.lcoe), 4),
+        "lcoe_eur_kwh": round(lcoe, 4) if math.isfinite(lcoe) else None,
         "yearly": yearly_to_dicts(artifacts.yearly_df),
         "monthly": monthly_to_dicts(artifacts.first_year_results_df, cfg["resolution"]),
         "financial": financial_to_dicts(artifacts.cost_projection, total_initial),
         "pv_loss_waterfall": artifacts.pv_loss_waterfall,
-        "provenance": _provenance(cfg, resolved, artifacts),
+        "provenance": _provenance(cfg, resolved, artifacts, input_repairs),
         "degradation": artifacts.degradation_summary,
     }
 

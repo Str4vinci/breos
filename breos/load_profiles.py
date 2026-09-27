@@ -13,9 +13,10 @@ from typing import Dict, Optional, Union
 
 import numpy as np
 import pandas as pd
+from scipy.interpolate import Akima1DInterpolator
 
 from breos.resources import rlp_resource
-from breos.weather import resample_to_15min
+from breos.utils import _datetime_index_seconds, normalise_frequency
 
 # Profile type mappings
 PROFILE_FILES = {
@@ -111,6 +112,7 @@ def load_profile(
         ValueError: If profile_type is not recognized, or start_date is not
             1 January
     """
+    freq = normalise_frequency(freq)
     start_ts = pd.Timestamp(start_date)
     if (start_ts.month, start_ts.day) != (1, 1) or start_ts != start_ts.normalize():
         raise ValueError(
@@ -134,7 +136,7 @@ def load_profile(
     # Prefer native 15-minute files when requested. If only a native
     # 15-minute external profile is available, load it and downsample later.
     native_candidate = _candidate(PROFILE_FILES_15MIN[profile_type]) if profile_type in PROFILE_FILES_15MIN else None
-    use_native_15min = freq in ("15min", "15T") and profile_type in PROFILE_FILES_15MIN and _exists(native_candidate)
+    use_native_15min = freq == "15min" and profile_type in PROFILE_FILES_15MIN and _exists(native_candidate)
 
     if use_native_15min:
         csv_resource = native_candidate
@@ -190,7 +192,7 @@ def load_profile(
     df = _localize_wall_clock_index(df, timezone, native_freq)
 
     # Resample if needed (hourly to 15-min)
-    if freq in ("15min", "15T") and native_freq == "h":
+    if freq == "15min" and native_freq == "h":
         df = _resample_load_to_15min(df)
     elif freq == "h" and native_freq == "15min":
         df = df.resample("h").mean()
@@ -470,15 +472,36 @@ def _extend_to_years(df: pd.DataFrame, start_year: int, num_years: int) -> pd.Da
 
 
 def _resample_load_to_15min(df: pd.DataFrame) -> pd.DataFrame:
-    """Resample hourly load to 15-minute using interpolation."""
-    # For load, we typically want to interpolate (not sum)
-    # because the values represent average power in W
-    df_15min = resample_to_15min(df, method="makima")
+    """Resample hourly mean load to 15-minute steps, keeping each hour's mean.
 
-    # Ensure no negative values
-    for col in df_15min.columns:
-        df_15min[col] = df_15min[col].clip(lower=0)
+    Each row is the mean power over the hour that starts at its label. The
+    values are placed at the middle of their hour, interpolated with Makima
+    at the middle of each quarter-hour, clipped at zero, and then scaled per
+    hour so the four quarter-hours average exactly to the source value. The
+    energy of every hour, and so of the year, is unchanged.
+    """
+    if len(df.index) > 1 and not np.all(df.index[1:] - df.index[:-1] == pd.Timedelta(hours=1)):
+        raise ValueError("Hourly load must have a regular hourly index to resample to 15 minutes")
+    target_index = pd.date_range(start=df.index[0], periods=4 * len(df.index), freq="15min", name=df.index.name)
+    x_source = _datetime_index_seconds(df.index) + 1800.0
+    x_target = _datetime_index_seconds(target_index) + 450.0
+    # Makima does not extrapolate: the first and last quarter-hours outside
+    # the span of hour midpoints hold the edge hour's value.
+    x_target = np.clip(x_target, x_source[0], x_source[-1])
 
+    df_15min = pd.DataFrame(index=target_index)
+    for col in df.columns:
+        hourly = df[col].to_numpy(dtype=float)
+        if len(hourly) > 1:
+            quarters = Akima1DInterpolator(x_source, hourly, method="makima")(x_target)
+        else:
+            quarters = np.repeat(hourly, 4)
+        blocks = np.clip(quarters, 0.0, None).reshape(len(hourly), 4)
+        block_means = blocks.mean(axis=1)
+        scalable = block_means > 0.0
+        blocks[scalable] *= (hourly[scalable] / block_means[scalable])[:, None]
+        blocks[~scalable] = hourly[~scalable, None]
+        df_15min[col] = blocks.reshape(-1)
     return df_15min
 
 

@@ -15,10 +15,14 @@ Usage:
 
     # Override a parameter
     custom = get_module("Suntech_STP550S_STC")
-    custom.Mpp = 545  # Slightly different power
+    custom.Mpp = 545  # Slightly different power (must stay within 2% of Vmp * Imp)
+
+    # Change the STC point together
+    from dataclasses import replace
+    resized = replace(custom, Mpp=560, Vmp=42.4, Imp=13.21)
 """
 
-from dataclasses import replace
+from copy import copy
 from typing import Dict, List, Optional
 
 from breos.solar import PVModuleParams
@@ -142,7 +146,7 @@ def get_module(name: str) -> PVModuleParams:
     for key, value in MODULES.items():
         if key.lower() == name_lower:
             # Return a copy so user can modify without affecting catalog
-            return replace(value)
+            return copy(value)
 
     available = ", ".join(MODULES.keys())
     raise KeyError(f"Module '{name}' not found. Available: {available}")

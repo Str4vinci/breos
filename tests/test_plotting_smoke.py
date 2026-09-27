@@ -150,11 +150,12 @@ def test_every_public_plotting_function_has_a_smoke_test():
 
 def test_set_presentation_mode():
     with matplotlib.rc_context():
+        backend = matplotlib.get_backend()
         plotting.set_presentation_mode(True, scale=2.0)
         assert plt.rcParams["font.size"] == 28
         plotting.set_presentation_mode(False)
         assert plt.rcParams["font.size"] == matplotlib.rcParamsDefault["font.size"]
-        assert matplotlib.get_backend().lower() == "agg"
+        assert matplotlib.get_backend() == backend
 
 
 # ---------------------------------------------------------------------------

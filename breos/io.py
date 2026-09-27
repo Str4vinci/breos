@@ -6,6 +6,10 @@ This module provides functions for:
 - Saving cost analysis reports
 - Generating formatted summary reports
 - Preparing result payloads for strict JSON
+- Repairing measured load and PV series before a simulation
+
+``repair_series``, ``InputRepairReport`` and ``RepairEvent`` are re-exported
+from :mod:`breos.repair`.
 """
 
 import math
@@ -16,6 +20,7 @@ from typing import Any, Dict, List, Optional, Union
 import numpy as np
 import pandas as pd
 
+from breos.repair import InputRepairReport, RepairEvent, repair_series  # noqa: F401 - public re-export
 from breos.utils import local_datetime_index
 
 
