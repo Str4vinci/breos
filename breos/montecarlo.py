@@ -684,7 +684,7 @@ def _initialize_worker(*context: Any) -> None:
     _WORKER_CONTEXT = context
 
 
-def _run_trajectory_index(run_idx: int) -> tuple[int, dict[str, Any], pd.DataFrame, str | None]:
+def _run_trajectory_index(run_idx: int) -> tuple[int, dict[str, Any], pd.DataFrame | None, str | None]:
     """Evaluate one deterministic per-run random stream in a worker."""
     if _WORKER_CONTEXT is None:
         raise RuntimeError("Monte Carlo worker context was not initialized")
@@ -723,7 +723,7 @@ def _run_trajectory_index(run_idx: int) -> tuple[int, dict[str, Any], pd.DataFra
     jit_cache_state = None
     if settings.execution_backend == "numba":
         jit_cache_state = observed_jit_cache_state(settings.execution_backend) or "unknown"
-    return run_idx, metrics, trajectory, jit_cache_state
+    return run_idx, metrics, trajectory if settings.collect_yearly else None, jit_cache_state
 
 
 def _aggregate_jit_cache_states(states: list[str]) -> str:
@@ -831,7 +831,7 @@ def run_montecarlo(config: dict[str, Any], settings: MonteCarloSettings) -> Mont
         rows.append({"run": run_idx + 1, **metrics})
         if jit_cache_state is not None:
             jit_cache_states.append(jit_cache_state)
-        if settings.collect_yearly:
+        if trajectory is not None:
             trajectory.insert(0, "run", run_idx + 1)
             yearly_frames.append(trajectory)
 
