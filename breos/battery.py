@@ -1772,6 +1772,9 @@ class SimulationSummary:
     cumulative_calendar_degradation: float
     resistance_growth: float
     replacement_steps: Tuple[int, ...]
+    # Rainflow cycles every pack accumulated in the span, a retired pack's
+    # part-period included; ``fec_cum`` restarts at zero on replacement.
+    fec_all_packs: float = 0.0
     final_degradation_state: Optional[Dict[str, Any]] = None
 
 
@@ -1825,6 +1828,7 @@ def _build_simulation_summary(core: _CoreRun, *, return_degradation_state: bool)
         cumulative_calendar_degradation=aging.cumulative_cal_deg,
         resistance_growth=aging.resistance_growth,
         replacement_steps=tuple(int(i) for i in np.flatnonzero(buffers.replaced)),
+        fec_all_packs=aging.fec_lifetime,
         final_degradation_state=final_state,
     )
 

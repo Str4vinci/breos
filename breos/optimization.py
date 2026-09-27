@@ -26,6 +26,7 @@ from breos.economics import (
 from breos.emissions import EmissionsParams
 from breos.execution import DEFAULT_EXECUTION_BACKEND, require_backend, validate_execution_backend
 from breos.inverter import inverter_ac_capacity_w as inverter_ac_capacity_w_for
+from breos.projection import CarryState, ProjectionYear, project_years
 from breos.pv.model_options import configured_pv_model_kwargs
 from breos.solar import (
     PVModuleParams,
@@ -574,92 +575,6 @@ def _replacement_event_cost(batt_spec: Dict[str, Any], battery_kwh: float, stora
     return replacement_cost
 
 
-def _projected_year_summary(
-    *,
-    year: int,
-    results_df: pd.DataFrame,
-    freq: str,
-    pv_degradation_factor: float,
-    battery_soh: float,
-    annual_fec: float,
-    cumulative_fec: float,
-    cumulative_calendar_seconds: float,
-    cumulative_cycle_degradation: float,
-    cumulative_calendar_degradation: float,
-    resistance_growth: float,
-    replacements: int,
-    replacement_cost: float,
-) -> Dict[str, Any]:
-    """Aggregate one simulated project year from the canonical energy ledger."""
-    hours_per_step = get_hours_per_step(freq)
-
-    def energy_kwh(column: str) -> float:
-        return float(pd.to_numeric(results_df[column], errors="coerce").fillna(0.0).sum() * hours_per_step / 1000.0)
-
-    def optional_energy_kwh(column: str) -> float:
-        return energy_kwh(column) if column in results_df.columns else 0.0
-
-    def optional_mean_pct(column: str) -> float:
-        """Mean of a fractional state column as a percentage, 0.0 when absent.
-
-        State columns, unlike the ledger flow columns, are already levels
-        rather than average power, so they are averaged and not integrated.
-        """
-        if column not in results_df.columns:
-            return 0.0
-        return float(pd.to_numeric(results_df[column], errors="coerce").fillna(0.0).mean() * 100.0)
-
-    load_kwh = energy_kwh("Houseload")
-    import_kwh = energy_kwh("Import_From_Grid")
-    export_kwh = energy_kwh("Sell_To_Grid")
-    pv_kwh = float(system_ac_production_power(results_df).sum() * hours_per_step / 1000.0)
-    grid_independence = 100.0 * (1.0 - _safe_ratio(import_kwh, load_kwh)) if load_kwh > 0.0 else 0.0
-    return {
-        "Year": int(year),
-        "PV_Production_kWh": pv_kwh,
-        "PV_DC_kWh": optional_energy_kwh("PV_DC"),
-        "PV_DC_Curtailed_kWh": optional_energy_kwh("PV_DC_Curtailed"),
-        "Inverter_Loss_kWh": optional_energy_kwh("Inverter_Loss"),
-        "Load_kWh": load_kwh,
-        "Import_kWh": import_kwh,
-        "Export_kWh": export_kwh,
-        "Grid_Independence_%": grid_independence,
-        "Battery_SOH_%": float(battery_soh),
-        # Cell-side energy in and out, so the pair reflects round-trip loss and
-        # feeds cycle ageing directly. Charge is measured after charging losses
-        # and discharge before inverter losses.
-        "Battery_Charge_Throughput_kWh": optional_energy_kwh("Battery_Charge_Stored"),
-        "Battery_Discharge_Throughput_kWh": optional_energy_kwh("Battery_Discharge_DC"),
-        # Normalized SOC is the position in the usable window; absolute SOC is
-        # the fraction of the SOH-derated pack, so it rises as the pack fades.
-        "Battery_SOC_Normalized_Mean_%": optional_mean_pct("Battery_SOC_Normalized"),
-        "Battery_SOC_Absolute_Mean_%": optional_mean_pct("Battery_SOC_Absolute"),
-        # Annual FEC is the rainflow count every pack used in this year
-        # accumulated, a retired pack's part-year included. Cumulative FEC
-        # belongs to the installed pack alone and restarts at zero on
-        # replacement, so differencing it across a replacement year loses the
-        # retired pack's final cycles.
-        "Battery_Annual_FEC": float(annual_fec),
-        "Battery_Cumulative_FEC": float(cumulative_fec),
-        "Battery_Cumulative_Calendar_Seconds": float(cumulative_calendar_seconds),
-        "Battery_Cumulative_Cycle_Degradation": float(cumulative_cycle_degradation),
-        "Battery_Cumulative_Calendar_Degradation": float(cumulative_calendar_degradation),
-        "Battery_Resistance_Growth": float(resistance_growth),
-        "Replacements": int(replacements),
-        "Replacement_Cost": float(replacement_cost),
-        # Where in the year the pack was swapped, so the economics can book
-        # the outlay at that instant rather than at a year boundary. NaN in a
-        # year without a replacement.
-        "Replacement_Year_Fraction": replacement_fraction_from_steps(
-            np.flatnonzero(results_df["Battery_Replaced"].to_numpy())
-            if "Battery_Replaced" in results_df.columns
-            else [],
-            len(results_df),
-        ),
-        "PV_Degradation_Factor": float(pv_degradation_factor),
-    }
-
-
 def _summarize_projected_lifetime_metrics(yearly_summary_df: pd.DataFrame) -> Dict[str, float]:
     """Summarize lifetime metrics from actual simulated yearly values."""
     if yearly_summary_df.empty:
@@ -747,119 +662,48 @@ def _evaluate_projected_design_metrics(
         cost_params.battery_cost_per_kwh,
     )
     has_battery = battery_kwh > 0.0
-    current_soh = float(batt_spec.get("initial_soh", 100.0)) if has_battery else 100.0
-    cumulative_fec = 0.0
-    cumulative_cal_seconds = 0.0
-    cumulative_resistance_growth = 0.0
-    cumulative_cycle_deg = 0.0
-    cumulative_cal_deg = 0.0
-    carried_energy_wh: Optional[float] = None
-    carried_pv_origin_energy_wh: Optional[float] = None
     degradation_engine, blast_model = _resolve_degradation_engine_spec(batt_spec)
     if not has_battery:
         # Without a battery there is nothing to age, and BLAST needs a pack.
         degradation_engine, blast_model = "native", None
-    degradation_state: Optional[Dict[str, Any]] = None
-    total_replacements = 0
-    total_replacement_cost = 0.0
-    yearly_summaries: list[Dict[str, Any]] = []
-    first_year_results_df: Optional[pd.DataFrame] = None
 
-    for year_idx in range(years_projection):
-        degradation_factor = (1.0 - float(degradation_rate)) ** year_idx
-        dc_power = dc_by_year[year_idx] * degradation_factor
-        battery_config = _build_battery_config_from_spec(
+    def battery_config(soh_pct: float) -> BatteryConfig:
+        return _build_battery_config_from_spec(
             batt_spec,
             nominal_energy_wh=battery_kwh * 1000.0,
             inverter_efficiency=inverter_efficiency,
-            initial_soh=current_soh,
+            initial_soh=soh_pct,
             enable_replacement=bool(batt_spec.get("enable_replacement", True)) and has_battery,
             inverter_ac_capacity_w=inverter_ac_capacity_w,
             replacement_cost=replacement_cost,
             ac_output_scale=ac_output_scale,
         )
-        state_kwargs: Dict[str, float] = {}
-        if carried_energy_wh is not None:
-            state_kwargs = {
-                "initial_energy_wh": carried_energy_wh,
-                "initial_pv_origin_energy_wh": carried_pv_origin_energy_wh or 0.0,
-            }
 
-        simulation = simulate_energy_balance(
-            pv_dc=dc_power,
+    def year_inputs(year_idx: int) -> ProjectionYear:
+        degradation_factor = (1.0 - float(degradation_rate)) ** year_idx
+        return ProjectionYear(
+            pv_degradation_factor=degradation_factor,
+            pv_dc=dc_by_year[year_idx] * degradation_factor,
             houseload=houseload,
-            battery_config=battery_config,
-            start_time=dc_power.index[0],
-            end_time=dc_power.index[-1],
-            freq=freq,
-            temperature_series=temperature_series if has_battery else None,
-            initial_fec=cumulative_fec,
-            initial_calendar_seconds=cumulative_cal_seconds,
-            initial_resistance_growth=cumulative_resistance_growth,
-            initial_cumulative_cycle_deg=cumulative_cycle_deg,
-            initial_cumulative_cal_deg=cumulative_cal_deg,
-            degradation_engine=degradation_engine,
-            blast_model=blast_model,
-            initial_degradation_state=degradation_state,
-            return_degradation_state=True,
-            # Leave native rainflow residue open between project years, as
-            # the App loop does, and count it once at the end of the horizon.
-            finalize_degradation=year_idx == years_projection - 1,
-            debug=False,
-            execution_backend=execution_backend,
-            **state_kwargs,
-        )
-        (
-            results_df,
-            _total_pv_wh,
-            _summary_df,
-            year_replacement_cost,
-            year_replacements,
-            degradation_df,
-            degradation_state,
-        ) = simulation
-
-        if first_year_results_df is None:
-            first_year_results_df = results_df
-        annual_fec = 0.0
-        if has_battery:
-            carried_energy_wh = float(results_df["Battery_Energy_End"].iloc[-1])
-            carried_pv_origin_energy_wh = float(results_df["Battery_PV_Origin_Energy_End"].iloc[-1])
-            if not degradation_df.empty:
-                # Each project year is its own simulation span, so the span's
-                # all-pack total is exactly this year's FEC.
-                annual_fec = float(degradation_df["Cumulative_FEC_All_Packs"].iloc[-1])
-                cumulative_fec = float(degradation_df["Cumulative_FEC"].iloc[-1])
-                cumulative_cal_seconds = float(degradation_df["Cumulative_Calendar_Seconds"].iloc[-1])
-                cumulative_cycle_deg = float(degradation_df["Cumulative_Cycle_Degradation"].iloc[-1])
-                cumulative_cal_deg = float(degradation_df["Cumulative_Calendar_Degradation"].iloc[-1])
-                current_soh = float(degradation_df["SOH"].iloc[-1])
-                if "Resistance_Growth" in degradation_df.columns:
-                    cumulative_resistance_growth = float(degradation_df["Resistance_Growth"].iloc[-1])
-
-        total_replacements += int(year_replacements)
-        total_replacement_cost += float(year_replacement_cost)
-        yearly_summaries.append(
-            _projected_year_summary(
-                year=year_idx + 1,
-                results_df=results_df,
-                freq=freq,
-                pv_degradation_factor=degradation_factor,
-                battery_soh=current_soh,
-                annual_fec=annual_fec,
-                cumulative_fec=cumulative_fec,
-                cumulative_calendar_seconds=cumulative_cal_seconds,
-                cumulative_cycle_degradation=cumulative_cycle_deg,
-                cumulative_calendar_degradation=cumulative_cal_deg,
-                resistance_growth=cumulative_resistance_growth,
-                replacements=int(year_replacements),
-                replacement_cost=float(year_replacement_cost),
-            )
+            temperature_series=temperature_series,
         )
 
-    yearly_summary_df = pd.DataFrame(yearly_summaries)
-    if first_year_results_df is None:
-        raise RuntimeError("projected design evaluation produced no simulation years")
+    projection = project_years(
+        years_projection,
+        year_inputs,
+        battery_config=battery_config,
+        freq=freq,
+        has_battery=has_battery,
+        execution_backend=execution_backend,
+        degradation_engine=degradation_engine,
+        blast_model=blast_model,
+        initial_carry=CarryState(soh_pct=float(batt_spec.get("initial_soh", 100.0)) if has_battery else 100.0),
+    )
+    yearly_summary_df = projection.yearly_df
+    first_year_results_df = projection.first_year_results_df
+    total_replacements = projection.total_replacements
+    total_replacement_cost = projection.total_replacement_cost
+    current_soh = float(projection.carry.soh_pct)
     cost_projection = cost_analysis_projection(
         results_df=first_year_results_df,
         costs=costs,
@@ -885,9 +729,9 @@ def _evaluate_projected_design_metrics(
         "Projected_Final_SOH_%": float(current_soh),
         "Projected_PV_Production_Year1_kWh": float(yearly_summary_df["PV_Production_kWh"].iloc[0]),
         "Projected_PV_Production_FinalYear_kWh": float(yearly_summary_df["PV_Production_kWh"].iloc[-1]),
-        "Projected_PV_DC_Year1_kWh": float(yearly_summary_df["PV_DC_kWh"].iloc[0]),
-        "Projected_PV_DC_FinalYear_kWh": float(yearly_summary_df["PV_DC_kWh"].iloc[-1]),
-        "Projected_PV_DC_Curtailed_Year1_kWh": float(yearly_summary_df["PV_DC_Curtailed_kWh"].iloc[0]),
+        "Projected_PV_DC_Year1_kWh": float(yearly_summary_df["PV_DC_Generation_kWh"].iloc[0]),
+        "Projected_PV_DC_FinalYear_kWh": float(yearly_summary_df["PV_DC_Generation_kWh"].iloc[-1]),
+        "Projected_PV_DC_Curtailed_Year1_kWh": float(yearly_summary_df["Curtailment_DC_kWh"].iloc[0]),
         "Projected_Inverter_Loss_Year1_kWh": float(yearly_summary_df["Inverter_Loss_kWh"].iloc[0]),
         "Projected_LCOE_Eur_kWh": float(
             calculate_lcoe_from_projection(
