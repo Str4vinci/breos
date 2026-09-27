@@ -20,6 +20,7 @@ matplotlib = pytest.importorskip("matplotlib")
 import matplotlib.pyplot as plt  # noqa: E402
 
 import breos.app as app_module  # noqa: E402
+import breos.projection as projection_module  # noqa: E402
 import breos.runners.app as app_runner  # noqa: E402
 from breos import App, plotting  # noqa: E402
 from breos.montecarlo import MonteCarloSettings, run_montecarlo  # noqa: E402
@@ -58,7 +59,7 @@ def _run_app(config, weather):
     """Run App offline and keep the frames it builds its result from."""
     captured = {"degradation": []}
     run_simulation = app_runner.run_app_simulation
-    simulate_energy_balance = app_runner.simulate_energy_balance
+    simulate_energy_balance = projection_module.simulate_energy_balance
 
     def _capture_run(*args):
         captured["artifacts"] = run_simulation(*args)
@@ -73,7 +74,7 @@ def _run_app(config, weather):
         mp.setattr(app_module, "fetch_tmy_weather_data", _fake_tmy(weather))
         mp.setattr(app_module, "load_weather", lambda **kw: None)
         mp.setattr(app_module, "run_app_simulation", _capture_run)
-        mp.setattr(app_runner, "simulate_energy_balance", _capture_year)
+        mp.setattr(projection_module, "simulate_energy_balance", _capture_year)
         App(config).simulate()
 
     artifacts = captured["artifacts"]
