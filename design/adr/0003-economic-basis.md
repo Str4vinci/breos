@@ -1,7 +1,8 @@
 # 0003 — Economic basis, escalators, and currency-neutral results
 
-- **Status:** E1, E6 and E8 Accepted; E2–E5, E7 and E9 Proposed
-- **Date:** 2026-09-26; E1, E6 and E8 accepted 2026-09-26
+- **Status:** Accepted (E1–E9)
+- **Date:** 2026-09-26; E1, E6 and E8 accepted 2026-09-26; E2–E5, E7, E9 and
+  the E6 inflation default accepted 2026-09-27
 
 ## Context
 
@@ -51,8 +52,9 @@ unless stated:
 
 ## Decision
 
-E1, E6 and E8 are **Accepted** (2026-09-26). The other items are
-**Proposed**.
+E1, E6 and E8 were **Accepted** on 2026-09-26. E2–E5, E7, E9 and the E6
+inflation default were **Accepted** on 2026-09-27. The code changes they call
+for are still to be made.
 
 ### E1. Nominal basis for the projection APIs — Accepted 2026-09-26
 
@@ -76,24 +78,27 @@ distinguish a nominal study from a real one; that would need an explicit
 basis setting, which is not part of 0.7.0. Real-terms outputs are not added
 in 0.7.0.
 
-### E2. Separate escalators, defaulting to today's behaviour — Proposed
+### E2. Separate escalators, defaulting to today's behaviour — Accepted 2026-09-27
 
-`inflation_rate` becomes general inflation, the default for every component
-without its own rate. New keys (spelling settled in the config registry):
+`inflation_rate` becomes general inflation. Import energy, the fixed charge
+and O&M escalate at it unless their own rate is set. Export keeps its
+existing rate. Replacement prices always inflate at `inflation_rate`, and an
+explicitly configured learning rate reduces them; learning defaults to 0.0,
+not to `inflation_rate`. New keys (spelling settled in the config registry):
 
 | Component | Key | Default |
 |---|---|---|
 | Import energy and fixed charge | `import_price_escalation` | `inflation_rate` |
 | Export energy | `sell_price_inflation` (existing) | 0.0 |
 | O&M | `om_escalation` | `inflation_rate` |
-| Replacement price | `replacement_cost_learning` | 0.0 |
+| Replacement price reduction (learning) | `replacement_cost_learning` | 0.0 |
 
 A replacement at time `t` years costs `C0 × (1 + inflation_rate)^t ×
-(1 − learning)^t`. With every new key omitted the arithmetic is today's, so
-the App golden baseline does not move. The CLI help for `inflation_rate`
+(1 − replacement_cost_learning)^t`. With every new key omitted the arithmetic
+is today's, so the App golden baseline does not move. The CLI help for `inflation_rate`
 changes to match.
 
-### E3. Timing conventions kept and documented — Proposed
+### E3. Timing conventions kept and documented — Accepted 2026-09-27
 
 Energy, fixed-charge and O&M flows stay at year-1 prices, booked at year end.
 Replacements stay at t = 0 prices, inflated to and discounted from the swap
@@ -102,14 +107,14 @@ every NPV for no gain in correctness; the user documentation states it,
 including the year of discounting that remains when escalation equals the
 discount rate.
 
-### E4. Economics prices replacements — Proposed
+### E4. Economics prices replacements — Accepted 2026-09-27
 
 The physics layer reports replacement events (instant and replaced kWh);
 economics prices them. `BatteryConfig.replacement_cost` leaves the physics
 path. Learning rates and price revaluation then need no re-simulation, and
 App and optimization price replacements the same way.
 
-### E5. Fixed charge by simulated duration — Proposed
+### E5. Fixed charge by simulated duration — Accepted 2026-09-27
 
 The daily charge is `fixed_charge_per_day × simulated hours / 24`. A whole
 non-leap year is still exactly 365 days, so those results do not change; leap
@@ -117,7 +122,7 @@ years and partial runs (#242) are charged for their actual length. The count
 does not depend on the index timezone. Per-day charges that differ by day
 type use the civil-day array of ADR 0002 A1.
 
-### E6. One default set — Accepted 2026-09-26
+### E6. One default set — Accepted 2026-09-26; inflation default 2026-09-27
 
 The default discount rate is 0.03 everywhere: the value App users already
 get. It is defined once, beside `CostParams`, and read by the App registry, `CostParams`, optimization
@@ -133,16 +138,17 @@ NPVs, LCOEs, objectives and selected designs change; a direct
 `cost_analysis_projection` call defaulted to 0.02. App results do not change.
 The release notes name these entry points and the old default.
 
-An explicitly supplied 0.0 stays valid and is used as given. Defaults apply
-only when the key or argument is absent, never when its value is falsy, and a
-test pins `discount_rate = 0.0` for each entry point.
+The default inflation rate is 0.02 everywhere, by the same rule. It is 0.02
+in the App registry, `CostParams` and optimization today; only the
+`cost_analysis_projection` signature uses 0.03, so a direct call that omits
+it changes.
 
-*Proposed, not part of the accepted decision:* the default inflation rate
-becomes 0.02 everywhere by the same rule. It is 0.02 in the App registry,
-`CostParams` and optimization today; only the `cost_analysis_projection`
-signature uses 0.03.
+An explicitly supplied 0.0 stays valid and is used as given, for either rate.
+Defaults apply only when the key or argument is absent, never when its value
+is falsy, and a test pins `discount_rate = 0.0` and `inflation_rate = 0.0`
+for each entry point.
 
-### E7. Year rows carry money at year-1 prices — Proposed
+### E7. Year rows carry money at year-1 prices — Accepted 2026-09-27
 
 The year loop adds import cost, export revenue, fixed charge and no-system
 import cost, at year-1 prices, to each year row. Economics applies
@@ -179,7 +185,7 @@ points, so the fractional payback becomes "interpolated". It has no aliases
 either.
 
 Results that use the new names report `result_schema_version = "1.0"`, the
-first result schema version; E9 proposes where the field is carried and how
+first result schema version; E9 sets where the field is carried and how
 it is bumped. A result without the field predates the rename.
 
 The migration table below was built by searching `breos/` for `eur`, `Eur`,
@@ -230,7 +236,7 @@ are renamed too but are not public. Hard-coded `€` and `EUR` in plot axis
 labels, the `breos list cost-presets` text output and docstrings read the
 currency or say "currency". The changelog carries this table.
 
-### E9. Result schema version — Proposed
+### E9. Result schema version — Accepted 2026-09-27
 
 `App.result()`, Monte Carlo summaries and optimization provenance gain a
 top-level `result_schema_version`, independent of the ledger schema. It
@@ -241,7 +247,9 @@ version; an added field bumps the minor.
 
 - With no new keys, flat App results match the golden baseline except for
   leap-year and partial runs (E5). Optimization, `CostParams` and LCOE
-  callers that omit the discount rate change with the 0.03 default (E6).
+  callers that omit the discount rate change with the 0.03 default, and
+  direct `cost_analysis_projection` calls that omit either rate change with
+  the 0.03 and 0.02 defaults (E6).
 - TOU valuation, escalator scenarios and replacement learning share one
   valuation step and need no re-simulation for price-blind dispatch.
 - Downstream code moves to the neutral names and the interpolated payback

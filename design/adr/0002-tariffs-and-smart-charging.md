@@ -1,8 +1,8 @@
 # 0002 — Tariffs are resolved values; smart charging is an instruction layer
 
-- **Status:** Accepted for 0.7.x implementation; amendment A6 Accepted;
-  amendments A1–A5 and A7–A10 Proposed
-- **Date:** 2026-08-20; amendments 2026-09-26; A6 accepted 2026-09-26
+- **Status:** Accepted for 0.7.x implementation; amendments A1–A10 Accepted
+- **Date:** 2026-08-20; amendments 2026-09-26; A6 accepted 2026-09-26;
+  A1–A5 and A7–A10 accepted 2026-09-27
 
 ## Context
 
@@ -56,6 +56,7 @@ prices are separate, dated inputs and are never implied by those schedules.
 Omitting `tariff` preserves the 0.5.x flat-price path exactly, including its
 EUR interpretation and existing `costs.electricity_cost`,
 `costs.electricity_sold_cost`, and `costs.daily_power_cost` inputs.
+*(Replaced by A4, accepted 2026-09-27.)*
 
 TOU valuation uses one nested top-level `tariff` table:
 
@@ -122,7 +123,7 @@ pretending the schedule changed.
 ### Valuation and cashflows
 
 Each project-year simulation is valued inside the existing App year loop.
-Annual import cost and export revenue are sums of timestep energy multiplied by
+*(Replaced by A5, accepted 2026-09-27.)* Annual import cost and export revenue are sums of timestep energy multiplied by
 the resolved price arrays; the no-system baseline uses the same arrays and
 calendar. Annual energy totals remain alongside monetary components.
 
@@ -184,7 +185,9 @@ proportionally to its share at the beginning of that operation. Replacement
 removes both origins and initializes replacement energy under the existing
 battery-state convention. The ledger records both origin balances; only
 PV-origin discharge contributes to PV self-consumption and avoided-grid
-emissions.
+emissions. *(Amended by A8 and A10, accepted 2026-09-27: initial and
+replacement energy form a third, unattributed origin, and avoided emissions
+use net exchange.)*
 
 ### Boundary and terminal conventions
 
@@ -197,6 +200,8 @@ declare a terminal convention. Smart-charging oracle comparisons default to
 Adding grid-origin flows and component cashflows advances the ledger schema to
 2.0. The default greedy path remains numerically compatible, but consumers can
 use the schema version to detect the additive origin and valuation fields.
+*(Amended by A9, accepted 2026-09-27: schema 2.0 also drops four duplicate
+columns.)*
 
 ## Consequences
 
@@ -222,16 +227,19 @@ Implementation follows the delivery sequence in
 4. persistence controllers and perfect-information oracles remain experimental
    or tooling-only and replay every schedule through production physics.
 
-## Amendments proposed for 0.7 readiness
+## Amendments for 0.7 readiness
 
 The 0.7 readiness audit (#187) found details the decision above leaves open
-and statements the code has since outgrown. A6 is **Accepted** (2026-09-26);
-every other amendment below is **Proposed**. Accepting one replaces the text
-it names; until then the original text stands. Economic conventions and
-money naming are in
+and statements the code has since outgrown. A6 was **Accepted** on 2026-09-26
+and every other amendment below on 2026-09-27. Each one replaces the text it
+names, and that text is marked in place above. Accepting A6–A10 accepts the
+design for the dispatch-seam and ledger work, not its implementation: grid
+charging, origin accounting, ledger schema 2.0 and net-exchange emissions do
+not exist yet and must still be implemented and validated. Economic
+conventions and money naming are in
 [ADR 0003](0003-economic-basis.md).
 
-### A1. Civil time comes from the configuration, not the index (#180) — Proposed
+### A1. Civil time comes from the configuration, not the index (#180) — Accepted 2026-09-27
 
 The simulation index is not in civil time. PVGIS weather keeps the UTC offset
 of 1 January of the sample year (`fetch_tmy_weather_data`), so a Berlin run's
@@ -264,7 +272,7 @@ source (PVGIS fetch, preset-named local file, naive CSV, timezone-aware CSV,
 injected weather and Monte Carlo), so a change in a source's offset fails a
 test before it moves tariff periods.
 
-### A2. Project years replay the start-year calendar (#180) — Proposed
+### A2. Project years replay the start-year calendar (#180) — Accepted 2026-09-27
 
 Every year loop replays one year of inputs. The App reuses its `start_year`
 load and PV series each year, projected optimization repeats one weather year
@@ -278,19 +286,22 @@ belongs to the shared projection loop of #179, and the inputs do not support
 it yet: weather is a typical year and the standard load profiles are built on
 one calendar. The 2027 Portuguese schedules are selected explicitly, never by
 date, so one calendar does not silently misprice them. Provenance records
-`calendar_policy = "replay_start_year"` and the calendar year. A leap
-`start_year` makes every project year 366 days.
+`calendar_policy = "replay_start_year"` and the calendar year: every project
+year replays the start-year calendar, and future weekdays, holidays and
+tariff effective dates do not advance. A leap `start_year` makes every
+project year 366 days.
 
-### A3. Half-hour boundaries need 15-minute input (#180) — Proposed
+### A3. Half-hour boundaries need 15-minute input (#180) — Accepted 2026-09-27
 
-0.7.0 resolutions stay `h` and `15min`. Config validation and
-`utils.get_hours_per_step` accept only those, and 30 minutes would also need
-load-profile, weather-resampling and kernel support. It is not needed for
-exactness: 15-minute steps represent every half-hour boundary. Under
+0.7.0 accepts hourly and 15-minute input only (`h` and `15min`). Config
+validation and `utils.get_hours_per_step` accept only those, and 30 minutes
+would also need load-profile, weather-resampling and kernel support. It is not
+needed for exactness: 15-minute steps represent every half-hour boundary, so
+exact half-hour tariff boundaries require 15-minute input. Under
 `boundary_policy = "strict"`, hourly input with half-hour boundaries is
 rejected. 30-minute input is later work.
 
-### A4. The flat-path baseline is the App golden fixture (#187) — Proposed
+### A4. The flat-path baseline is the App golden fixture (#187) — Accepted 2026-09-27
 
 Replaces "preserves the 0.5.x flat-price path exactly". Unreleased fixes,
 including replacement booking at the swap instant, have already moved flat
@@ -299,7 +310,7 @@ by `tools/generate_app_golden.py` and checked by `tests/test_app_golden.py`.
 Omitting `tariff` must leave it unchanged. A change that moves it regenerates
 it in its own commit, with the reason.
 
-### A5. Valuation reaches every year loop (#179) — Proposed
+### A5. Valuation reaches every year loop (#179) — Accepted 2026-09-27
 
 Replaces "valued inside the existing App year loop". Projects are simulated in
 three loops: `run_app_simulation`, Monte Carlo's `_simulate_trajectory`, and
@@ -349,7 +360,7 @@ calculation for the netted flows, and origin accounting for energy that is
 redirected rather than converted. Subtracting one AC flow from the other
 before applying the rating would supply none of these.
 
-### A7. The target moves with temperature and health (#178) — Proposed
+### A7. The target moves with temperature and health (#178) — Accepted 2026-09-27
 
 `target_usable_fraction` applies each step to that step's capacity window: the
 target energy is `emin + f × (emax − emin)`. `emin` and `emax` scale with the
@@ -361,7 +372,7 @@ Results report the configured fraction and the stored energy reached. With a
 zero instruction the target is `emin` exactly, which keeps no-op parity
 reachable.
 
-### A8. Stored energy has three origins (#178) — Proposed
+### A8. Stored energy has three origins (#178) — Accepted 2026-09-27
 
 Stored energy is PV origin, grid origin and an unattributed remainder. The
 initial energy of a fresh run (full at max SOC) and a replacement pack's
@@ -374,7 +385,7 @@ operation. Only PV-origin discharge counts as self-consumption, as today.
 either charges or discharges. That keeps exact the single origin fraction the
 step takes before dispatch; the step asserts it.
 
-### A9. Ledger schema 2.0 reconciles origins from output (#178) — Proposed
+### A9. Ledger schema 2.0 reconciles origins from output (#178) — Accepted 2026-09-27
 
 Schema 2.0 adds, per origin, battery discharge (DC, and AC to load) and
 removal by standby, capacity window and replacement, plus grid-charge AC
@@ -387,7 +398,7 @@ discharge minus removals. Of the duplicate pairs `Battery_AC_To_Load_PV` /
 `breos/runners/app.py` to sit beside `_LEDGER_COLUMNS`, and
 `SimulationSummary` and Monte Carlo output report it as App provenance does.
 
-### A10. Avoided emissions use net exchange (#178) — Proposed
+### A10. Avoided emissions use net exchange (#178) — Accepted 2026-09-27
 
 Avoided emissions are
 `(Load − Import − B_u) × CI + PV_AC_Export × CI_export`, where `B_u` is
