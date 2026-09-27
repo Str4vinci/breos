@@ -354,6 +354,57 @@ class TestLCOE:
 
         assert projection.attrs["lcoe_eur_kwh"] == pytest.approx((1000 + 100 + 100 + 500) / (1000 + 900))
 
+    @staticmethod
+    def _projection_lcoe(inflation_rate, years=20, degradation=0.005, discount=0.05):
+        costs = {
+            "electricity_cost": 0.30,
+            "electricity_sold_cost": 0.05,
+            "daily_power_cost": 0.20,
+            "total_initial_cost": 5000.0,
+            "annual_operation_cost": 75.0,
+        }
+        production = 4000.0 * (1.0 - degradation) ** np.arange(years)
+        yearly_summary = pd.DataFrame(
+            {
+                "Year": range(1, years + 1),
+                "Load_kWh": 5000.0,
+                "PV_Production_kWh": production,
+                "Import_kWh": 2500.0,
+                "Export_kWh": 1500.0,
+                "PV_Degradation_Factor": production / production[0],
+                "Replacement_Cost": 0.0,
+            }
+        )
+        projection = cost_analysis_projection(
+            None,
+            costs,
+            num_years=years,
+            inflation_rate=inflation_rate,
+            discount_rate=discount,
+            yearly_summary_df=yearly_summary,
+        )
+        real_terms = calculate_lcoe(
+            total_investment=costs["total_initial_cost"],
+            annual_production_kwh=float(production[0]),
+            annual_operation_cost=costs["annual_operation_cost"],
+            lifetime_years=years,
+            discount_rate=discount,
+            degradation_rate=degradation,
+        )
+        return real_terms, projection.attrs["lcoe_eur_kwh"]
+
+    def test_real_terms_lcoe_matches_the_projection_without_inflation(self):
+        # calculate_lcoe holds O&M at first-year prices (#175); without
+        # inflation there is nothing to escalate and the two must agree.
+        real_terms, from_projection = self._projection_lcoe(inflation_rate=0.0)
+
+        assert real_terms == pytest.approx(from_projection, rel=1e-12)
+
+    def test_real_terms_lcoe_does_not_escalate_operation_cost(self):
+        real_terms, from_projection = self._projection_lcoe(inflation_rate=0.02)
+
+        assert real_terms < from_projection
+
     def test_cost_projection_uses_yearly_load_for_no_system_baseline(self):
         costs = {
             "electricity_cost": 0.30,
