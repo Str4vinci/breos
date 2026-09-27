@@ -58,6 +58,33 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   offset written in its stamps and is read as UTC otherwise; Monte Carlo
   weather is UTC. No behaviour changes.
 
+- **Load-profile registry** ([#182](https://github.com/Str4vinci/breos/issues/182)).
+  `breos.load_profiles.PROFILES` holds one `ProfileSpec` per profile family:
+  its filename patterns per resolution, the accepted columns and their units,
+  and whether it is bundled. `resolve_profile_key()` makes a key canonical,
+  and `resolve_profile_file()` finds the CSV. App config validation,
+  `load_profile` and the CLI all go through them. The canonical keys are
+  `demandlib_h0` (bundled, the default), `eredes_btn_a`, `eredes_btn_b`,
+  `eredes_btn_c`, `bdew_h0`, `ree_2.0td` and `custom`; keys are
+  case-insensitive.
+  - External files are found by pattern in `rlp_directory`, with the year as
+    `*` (`EREDES_*_BTN_1000kwh_15min.csv`, `bdew_h0_*_15min.csv`,
+    `REE_*_2.0TD_1000kwh_hourly.csv`, ...), so one key covers every vintage.
+    The pattern must match exactly one file: when several match, the error
+    lists them instead of picking one. The new `load_profile_file` key (CLI
+    `--load-profile-file`) names the file explicitly; a relative path is
+    taken inside `rlp_directory`.
+  - `load_profile = "custom"` reads any CSV named by `load_profile_file`, with
+    `load_profile_unit` (`W` or `kW` mean power, `Wh` or `kWh` energy per row)
+    and, when the file has several value columns, `load_profile_column`. Its
+    resolution comes from its row count. The column and unit keys are
+    rejected for the other profiles, which fix their own.
+  - `result()["provenance"]["load_profile"]` records the canonical key, the
+    file read (packaged filename or absolute path), its SHA-256, its native
+    resolution, and the column and unit read. Monte Carlo provenance has the
+    same block. `breos validate-config` prints the file it resolved, or says
+    it is not there yet.
+
 ### Changed
 - `resample_tmy_to_15min` is now a thin wrapper over `resample_to_15min`, so
   the two share one interpolation path. Its output is unchanged: the same
@@ -80,6 +107,18 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   `"15T"` and `"15m"` are no longer accepted.** pandas 3 rejects the first
   three, and `"m"` is not a minute alias, so each one used to pass the step
   helpers and then fail later in `pd.date_range`. Use `"h"` or `"15min"`.
+- E-REDES columns are read as what they are, Wh per interval, and converted
+  to W, instead of being relabelled W
+  ([#182](https://github.com/Str4vinci/breos/issues/182)). Every profile is
+  scaled to `annual_consumption_kwh`, so results do not change.
+- **`bdew_h0` now loads the BDEW H0 publication** (external file
+  `bdew_h0_*_15min.csv`, formerly key `"7"`). It used to be an alias of the
+  bundled demandlib profile. A config that set `load_profile = "bdew_h0"`
+  without `rlp_directory` now raises; use `demandlib_h0` for the bundled
+  profile, which is the same standard shape.
+- The App golden baseline gains the `provenance.load_profile` block and the
+  three new `resolved_config` keys, and `resolved_config.load_profile` reads
+  `demandlib_h0` instead of `"1"`. No numbers change.
 
 ### Fixed
 - App weather that does not cover the whole calendar year of `start_date`
@@ -708,6 +747,18 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   idea stays open as [#11](https://github.com/Str4vinci/breos/issues/11).
 - Stopped tracking the generated autosummary stubs under `docs/api/generated/`,
   which Sphinx rebuilds on every run.
+- **Numeric load-profile keys and the aliases `h0`, `default` and `crest`**
+  ([#182](https://github.com/Str4vinci/breos/issues/182)), with no
+  deprecation period. `"1"` is `demandlib_h0`, `"4"`/`"5"`/`"6"` are
+  `eredes_btn_a`/`_b`/`_c`, `"7"` is `bdew_h0` and `"8"` is `ree_2.0td`; the
+  error names the replacement. `crest` loaded the demandlib H0 profile under
+  the name of a different model; use `custom` for a CREST export. The 0.6.2
+  reproduction bundle for the upcoming publication uses the numeric keys and
+  stays valid on its own release.
+- `breos.load_profiles.PROFILE_FILES`, `PROFILE_FILES_15MIN`,
+  `PROFILE_FILE_NATIVE_FREQ`, `PROFILE_NAMES`, `PROFILE_ALIASES` and
+  `EREDES_COLUMNS`. Read `PROFILES` instead. `breos list load-profiles` drops
+  its `aliases` field and gains `files` and `requires_load_profile_file`.
 
 ### Documentation
 - The release checklist records that `v0.5.0`, `v0.5.1` and `v0.6.0` are

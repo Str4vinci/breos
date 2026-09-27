@@ -23,17 +23,26 @@ local weather files through the lower-level weather helpers.
 ## Load profiles
 
 BREOS bundles only the demandlib-derived H0 example profile. It is suitable
-for examples and baseline residential simulations. Use
-`load_profile = "demandlib_h0"` or the equivalent canonical key `"1"` for that
-bundled profile.
+for examples and baseline residential simulations, and is the default,
+`load_profile = "demandlib_h0"`.
 
-For E-REDES, REE, direct BDEW, measured smart-meter data, or any other custom
-profile, provide licensed local CSV files and pass `rlp_directory`:
+For E-REDES, REE or the BDEW publication, provide licensed local CSV files
+and pass `rlp_directory`:
 
 ```toml
-load_profile = "6"
+load_profile = "eredes_btn_c"
 rlp_directory = "/path/to/licensed/rlp/files"
 resolution = "15min"
+```
+
+For measured smart-meter data or any other CSV, use `load_profile = "custom"`
+and name the file, its column and its unit:
+
+```toml
+load_profile = "custom"
+load_profile_file = "meter.csv"     # inside rlp_directory if that is set
+load_profile_column = "meter_kw"    # needed only if the file has several value columns
+load_profile_unit = "kW"            # W or kW (mean power), Wh or kWh (energy per row)
 ```
 
 See [Load Profile Data](../legal/load-profile-data.md) for expected filenames
@@ -55,15 +64,17 @@ from breos.io import repair_series
 
 measured = pd.read_csv("meter.csv", index_col=0, parse_dates=True)["W"]
 repaired, report = repair_series(measured, kind="load", gap_fill="nearby_days")
-repaired.to_csv("external_rlp/REE_2026_2.0TD_1000kwh_hourly.csv")
+repaired.to_csv("external_rlp/meter.csv")
 
 app = App(
     {
         "location": "porto",
         "n_modules": 10,
         "annual_consumption_kwh": 4000,
-        "load_profile": "8",
+        "load_profile": "custom",
         "rlp_directory": "external_rlp",
+        "load_profile_file": "meter.csv",
+        "load_profile_unit": "W",
     },
     input_repairs=[report],
 )
@@ -71,8 +82,8 @@ app.simulate()
 app.result()["provenance"]["input_repairs"]  # the report, as JSON
 ```
 
-The file name and profile key `"8"` select the generic single-column format
-described in [Load Profile Data](../legal/load-profile-data.md). The App still
+`custom` reads the file's one value column, here in W; see
+[Load Profile Data](../legal/load-profile-data.md). The App still
 scales that profile to `annual_consumption_kwh`, so the energies in the report
 are those of the measured series before scaling.
 

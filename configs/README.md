@@ -108,9 +108,8 @@ Load it from Python and pass it to
 
 ## Notes
 
-- Keep public examples on the bundled `load_profile = "demandlib_h0"` (canonical
-  key `"1"`) unless the example explicitly documents an external, user-licensed
-  RLP directory.
+- Keep public examples on the bundled `load_profile = "demandlib_h0"` unless the
+  example explicitly documents an external, user-licensed RLP directory.
 - For external RLPs, use [`examples/external-rlp.toml`](examples/external-rlp.toml)
   as a template and put the licensed CSV files in a local directory such as
   `external_rlp/` (do not commit third-party RLPs).

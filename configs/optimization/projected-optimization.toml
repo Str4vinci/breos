@@ -27,9 +27,9 @@ timezone = "Europe/Lisbon"
 name = "Porto, Portugal"
 
 [load]
-# "1" is the bundled demandlib H0 household profile. External profiles need a
+# "demandlib_h0" is the bundled H0 household profile. External profiles need a
 # licensed CSV and an rlp_directory; see examples/external-rlp.toml.
-profile_type = "1"
+profile_type = "demandlib_h0"
 annual_consumption_kwh = 4000.0
 
 [pv]

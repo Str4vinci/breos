@@ -24,7 +24,7 @@ degradation_engine = "native"      # ["native"] Naumann/Lam; use "blast" explici
 pv_module = "Suntech_STP550S_STC"  # [first catalogue module]; `breos list modules`
 cost_preset = "residential_pt"     # [none] tariffs + capex; `breos list cost-presets`
 emissions_country = "PT"           # [none] grid carbon intensity; `breos list emissions`
-load_profile = "demandlib_h0"      # ["1"] bundled H0 profile; `breos list load-profiles`
+load_profile = "demandlib_h0"      # bundled H0 profile; `breos list load-profiles`
 # rlp_directory = "external_rlp"   # only needed for external (non-bundled) profiles
 
 # --- Array geometry ---------------------------------------------------------

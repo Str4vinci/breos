@@ -223,7 +223,7 @@ def _smoke_test_installed_wheel(wheel: Path, work_dir: Path) -> None:
         if not hourly.is_file():
             raise AssertionError(f"packaged RLP file is missing: {hourly}")
 
-        profile = load_profile("1", 1000, start_date="2025-01-01", freq="h", timezone="UTC")
+        profile = load_profile("demandlib_h0", 1000, start_date="2025-01-01", freq="h", timezone="UTC")
         if len(profile) != 8760:
             raise AssertionError(f"unexpected hourly load profile length: {len(profile)}")
 

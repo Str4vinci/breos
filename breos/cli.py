@@ -27,7 +27,7 @@ from breos.app_config import (
 )
 from breos.degradation import get_battery_model_profile, list_battery_models
 from breos.io import nonfinite_to_none
-from breos.load_profiles import PROFILE_ALIASES, PROFILE_FILES, PROFILE_FILES_15MIN, PROFILE_NAMES
+from breos.load_profiles import PROFILES, resolve_profile_file
 from breos.pv_modules import MODULES
 from breos.resources import load_config_json
 from breos.solar import resolve_pvwatts_losses
@@ -47,23 +47,6 @@ def _sha256(path: Path) -> str:
         for block in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(block)
     return digest.hexdigest()
-
-
-def _external_rlp_path(config: dict[str, Any]) -> Path | None:
-    """Resolve the external load-profile file selected by App semantics."""
-    directory = config.get("rlp_directory")
-    if directory is None:
-        return None
-    profile = PROFILE_ALIASES.get(str(config.get("load_profile", "1")).lower(), str(config.get("load_profile", "1")))
-    root = Path(directory)
-    candidates: list[Path] = []
-    if normalise_frequency(str(config.get("resolution", "h"))) == "15min" and profile in PROFILE_FILES_15MIN:
-        candidates.append(root / PROFILE_FILES_15MIN[profile])
-    if profile in PROFILE_FILES:
-        candidates.append(root / PROFILE_FILES[profile])
-    if profile in PROFILE_FILES_15MIN:
-        candidates.append(root / PROFILE_FILES_15MIN[profile])
-    return next((path for path in candidates if path.is_file()), None)
 
 
 def _load_config(path: Path) -> dict[str, Any]:
@@ -146,6 +129,15 @@ def _resolved_config_summary(config: dict[str, Any]) -> dict[str, Any]:
     resolved = resolve_app_config(config)
     cfg = resolved.cfg
     inverter_ac_kw = resolved.system_kwp / cfg["inverter_loading_ratio"]
+    # A config is valid before its external profile file is in place, so a
+    # missing file is reported rather than raised; several matches still raise.
+    try:
+        profile_file: str | None = resolve_profile_file(
+            cfg["load_profile"], cfg["resolution"], cfg["rlp_directory"], cfg["load_profile_file"]
+        ).label
+        profile_file_error = None
+    except FileNotFoundError as exc:
+        profile_file, profile_file_error = None, str(exc)
     return {
         "valid": True,
         "location": {
@@ -185,6 +177,8 @@ def _resolved_config_summary(config: dict[str, Any]) -> dict[str, Any]:
         "load": {
             "annual_consumption_kwh": cfg["annual_consumption_kwh"],
             "load_profile": cfg["load_profile"],
+            "load_profile_file": profile_file,
+            "load_profile_file_error": profile_file_error,
             "rlp_directory": cfg["rlp_directory"],
             "resolution": cfg["resolution"],
             "start_date": cfg["start_date"],
@@ -276,19 +270,16 @@ def _load_options(category: str) -> list[dict[str, Any]]:
         ]
 
     if category == "load-profiles":
-        bundled = {"1"}
-        aliases_by_key: dict[str, list[str]] = {}
-        for alias, key in PROFILE_ALIASES.items():
-            aliases_by_key.setdefault(key, []).append(alias)
         return [
             {
                 "key": key,
-                "name": name,
-                "aliases": ", ".join(sorted(aliases_by_key.get(key, []))) or None,
-                "bundled": key in bundled,
-                "requires_rlp_directory": key not in bundled,
+                "name": spec.name,
+                "bundled": spec.bundled,
+                "files": sorted(set(spec.files.values())),
+                "requires_rlp_directory": not spec.bundled and key != "custom",
+                "requires_load_profile_file": key == "custom",
             }
-            for key, name in sorted(PROFILE_NAMES.items())
+            for key, spec in PROFILES.items()
         ]
 
     if category == "battery-models":
@@ -324,10 +315,13 @@ def _format_options(category: str, rows: list[dict[str, Any]]) -> str:
     if category == "load-profiles":
         lines = []
         for row in rows:
-            name = row["name"].replace(" (external file required)", "")
-            status = "bundled" if row["bundled"] else "external CSV required via rlp_directory"
-            alias_text = f"; aliases: {row['aliases']}" if row.get("aliases") else ""
-            lines.append(f"{row['key']}: {name} ({status}{alias_text})")
+            if row["bundled"]:
+                status = "bundled"
+            elif row["requires_load_profile_file"]:
+                status = "your CSV via load_profile_file"
+            else:
+                status = f"external CSV via rlp_directory: {' or '.join(row['files'])}"
+            lines.append(f"{row['key']}: {row['name']} ({status})")
         return "\n".join(lines)
     if category == "battery-models":
         return "\n".join(
@@ -358,7 +352,9 @@ def _validate_config(args: argparse.Namespace) -> int:
         print(f"Location: {payload['location']['key'] or 'custom'} ({payload['location']['timezone']})")
         print(f"PV: {payload['pv']['n_modules']} modules, {payload['pv']['system_kwp']:.3f} kWp")
         print(f"Inverter AC rating: {payload['inverter']['ac_rating_kw']:.3f} kW")
-        print(f"Load profile: {payload['load']['load_profile']} at {payload['load']['resolution']}")
+        load = payload["load"]
+        source = load["load_profile_file"] or f"file not found yet: {load['load_profile_file_error']}"
+        print(f"Load profile: {load['load_profile']} at {load['resolution']}, from {source}")
         print(f"Battery: {payload['battery']['capacity_kwh']} kWh")
         print(f"Cost preset: {payload['economics']['cost_preset'] or 'none'}")
         print(f"Emissions: {payload['emissions']['country'] or 'disabled'}")
@@ -600,9 +596,13 @@ def _montecarlo(args: argparse.Namespace) -> int:
         # A statistic with no defined value is written as null.
         "summary": nonfinite_to_none(result.summary),
     }
-    rlp_path = _external_rlp_path(config)
-    provenance["external_rlp_file"] = str(rlp_path.resolve()) if rlp_path is not None else None
-    provenance["external_rlp_file_sha256"] = _sha256(rlp_path) if rlp_path is not None else None
+    # The load profile's file and hash come from the run's provenance
+    # (load_profile.file, load_profile.sha256); these keys repeat them for an
+    # external file.
+    profile = result.provenance.get("load_profile", {})
+    external = profile.get("file") if profile.get("packaged") is False else None
+    provenance["external_rlp_file"] = external
+    provenance["external_rlp_file_sha256"] = profile.get("sha256") if external is not None else None
     provenance_path.parent.mkdir(parents=True, exist_ok=True)
     provenance_path.write_text(_json_text(provenance, "the Monte Carlo provenance", indent=2, default=str) + "\n")
     plots_dir = None

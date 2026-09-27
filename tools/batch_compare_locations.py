@@ -59,11 +59,11 @@ BREAKEVEN_COLORS = ("#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd", "#8c5
 # Location registry
 # ---------------------------------------------------------------------------
 LOCATION_REGISTRY = {
-    "porto": {"costs": "residential_pt", "tilt": 35, "azimuth": 180, "load_profile": "1"},
-    "berlin": {"costs": "residential_de", "tilt": 40, "azimuth": 160, "load_profile": "1"},
-    "lisbon": {"costs": "residential_pt", "tilt": 35, "azimuth": 180, "load_profile": "1"},
-    "erlangen": {"costs": "residential_de", "tilt": 40, "azimuth": 160, "load_profile": "1"},
-    "esposende": {"costs": "residential_pt", "tilt": 35, "azimuth": 180, "load_profile": "1"},
+    "porto": {"costs": "residential_pt", "tilt": 35, "azimuth": 180, "load_profile": "demandlib_h0"},
+    "berlin": {"costs": "residential_de", "tilt": 40, "azimuth": 160, "load_profile": "demandlib_h0"},
+    "lisbon": {"costs": "residential_pt", "tilt": 35, "azimuth": 180, "load_profile": "demandlib_h0"},
+    "erlangen": {"costs": "residential_de", "tilt": 40, "azimuth": 160, "load_profile": "demandlib_h0"},
+    "esposende": {"costs": "residential_pt", "tilt": 35, "azimuth": 180, "load_profile": "demandlib_h0"},
 }
 
 # Fixed system parameters
