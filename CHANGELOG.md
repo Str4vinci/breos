@@ -553,6 +553,20 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   value of 0 and are unchanged. Monte Carlo summaries leave out infinite
   values as they do NaN, so an infinite LCOE no longer makes the mean
   infinite and the spread NaN; `count` shows how many runs remain.
+- The CLI writes only standard JSON
+  ([#175](https://github.com/Str4vinci/breos/issues/175)). Python's
+  `json.dumps` writes NaN and infinity as `NaN` and `Infinity`, which are not
+  JSON, so strict parsers (`jq`, JavaScript, most non-Python readers) rejected
+  a `run` result with an infinite LCOE, a sweep summary, or a Monte Carlo
+  summary and provenance file holding such a value. An undefined metric or
+  summary statistic is now written as `null`, and every JSON output is
+  written with `allow_nan=False`, so any other non-finite number fails with
+  an error line instead of producing an invalid file. `breos.io` gains
+  `nonfinite_to_none`, which does this conversion. The Monte Carlo
+  `max_load_scale` must now be finite: `inf` passed the check and was
+  written to the provenance file as `Infinity`. Leave it unset (`None`) for
+  an unbounded load scale, as before. The sweep CSV still spells an
+  undefined value `inf`, and numbers are otherwise unchanged.
 
 - Four more findings from the 0.7 audit
   ([#175](https://github.com/Str4vinci/breos/issues/175)) are fixed.

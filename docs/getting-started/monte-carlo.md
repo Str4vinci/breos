@@ -95,6 +95,8 @@ within the horizon has no payback year, so the payback statistics cover only
 the runs that paid back.
 `payback_probability` gives the share of runs that did. Read the two together:
 a payback median of 9.8 years means little if only 60% of runs pay back.
+The provenance file and the `--json` output are standard JSON, so a statistic
+with no defined value is written as `null`, never as `NaN` or `Infinity`.
 
 ## Fix the seed
 
