@@ -15,22 +15,16 @@ ledger, not raw PV DC, so inverter efficiency and clipping affect candidate
 scores. Physical size, inverter rating, and CAPEX use the selected module's
 `Mpp`.
 
-## Annual and projected objectives
+## Projected objectives
 
-`optimize_system_multi_objective` supports two objective bases:
-
-- `optimization.objective_basis = "projected"` is the default. It evaluates
-  every candidate over `simulation.years_projection` years, or
-  `financials.project_lifespan` when that key is absent. It optimizes two
-  values: projected lifetime grid independence and projected NPV. A design is
-  selected for how it performs across the project lifetime, which is the
-  question a sizing study asks.
-- `optimization.objective_basis = "steady_state"` selects the cheaper annual
-  three-objective search: grid independence, NPV, and ZEB ratio. It scores each
-  candidate on a single simulated year and estimates battery replacement from
-  the first-year SoH loss, so it is a screening basis rather than a lifetime
-  answer. It costs one simulated year per candidate instead of
-  `years_projection`, which makes it useful for wide exploratory sweeps.
+`optimize_system_multi_objective` evaluates every candidate over
+`simulation.years_projection` years, or `financials.project_lifespan` when that
+key is absent. It optimizes two values: projected lifetime grid independence
+and projected NPV. A design is selected for how it performs across the project
+lifetime, which is the question a sizing study asks.
+`optimization.objective_basis = "projected"` names this basis and is the only
+accepted value. The annual `"steady_state"` basis was removed in 0.7.0, and a
+config that still sets it raises an error.
 
 Projected mode repeats the configured TMY. Each year applies the configured PV
 degradation factor and carries battery stored energy, PV-origin stored energy,
@@ -69,13 +63,11 @@ Set the physical and financial limits explicitly for any study you intend to
 report. The defaults preserve earlier direct-API behavior; they are not
 site-specific recommendations.
 
-Projected results expose `SteadyState_*` and `Projected_*` diagnostics. The
-ordinary `Grid_Independence_%` and `NPV_Eur` columns mirror the values used by
-the selected objective basis. In projected mode, they therefore equal
-`Projected_Grid_Independence_%` and `Projected_NPV_Eur`. `ZEB_Ratio` mirrors
-the corresponding diagnostic but is not an objective. `Objective_*` columns
-identify the metrics sent to NSGA-II explicitly; projected output has no
-`Objective_ZEB_Ratio` column.
+Results expose `Projected_*` diagnostics. The ordinary `Grid_Independence_%`
+and `NPV_Eur` columns equal `Projected_Grid_Independence_%` and
+`Projected_NPV_Eur`. `ZEB_Ratio` mirrors `Projected_ZEB_Ratio` but is not an
+objective. `Objective_Grid_Independence_%` and `Objective_NPV_Eur` identify the
+metrics sent to NSGA-II explicitly.
 
 Use `evaluate_projected_design` when you need the detailed result for one
 fixed design instead of a Pareto search. It returns the projected metrics, the

@@ -18,7 +18,6 @@ from breos.economics import (
     replacement_fraction_from_steps,
     system_ac_production_power,
 )
-from breos.optimization import calculate_financials
 
 
 class TestCostDefaultsSingleSource:
@@ -171,56 +170,23 @@ class TestCalculateCosts:
         )
         assert costs["total_initial_cost"] == pytest.approx(parts, rel=0.001)
 
-    def test_optimizer_financials_honor_modern_cost_keys(self):
-        base = dict(
-            n_modules=10,
-            battery_kwh=5.0,
-            annual_import_kwh=2000.0,
-            annual_export_kwh=1000.0,
-            annual_load_kwh=4000.0,
-            costs_config={
-                "module_cost_per_w": 0.10,
-                "storage_cost_per_kwh": 400.0,
-                "installation_cost_per_module": 200.0,
-                "installation_cost_battery": 500.0,
-                "other_costs": 100.0,
-            },
-            financials_config={
-                "electricity_cost": 0.30,
-                "electricity_sold_cost": 0.05,
-                "inflation_rate": 0.01,
-                "discount_rate": 0.0,
-                "project_lifespan": 5,
-            },
-        )
-
-        capex_a, npv_a = calculate_financials(**base)
-
-        modified = dict(base)
-        modified["costs_config"] = dict(base["costs_config"], module_cost_per_w=0.30)
-        modified["financials_config"] = dict(base["financials_config"], electricity_cost=0.45)
-        capex_b, npv_b = calculate_financials(**modified)
-
-        assert capex_b > capex_a
-        assert npv_b != npv_a
-
-    def test_optimizer_financials_use_selected_module_mpp(self):
+    def test_capex_uses_selected_module_mpp(self):
         base = {
             "module_cost_per_w": 0.20,
             "inverter_cost_per_kw_simple": 0.0,
             "installation_cost_per_module": 0.0,
             "other_cost_per_module": 0.0,
         }
-        financials = {"project_lifespan": 1}
+        cost_params = cost_params_from_config(base, {"project_lifespan": 1})
 
-        capex_400, _ = calculate_financials(10, 0.0, 0.0, 0.0, 0.0, base, financials, module_power_w=400.0)
-        capex_550, _ = calculate_financials(10, 0.0, 0.0, 0.0, 0.0, base, financials, module_power_w=550.0)
+        capex_400 = calculate_costs(10, 400.0, 0.0, cost_params)["total_initial_cost"]
+        capex_550 = calculate_costs(10, 550.0, 0.0, cost_params)["total_initial_cost"]
         assert capex_550 - capex_400 == pytest.approx(10 * 150 * 0.20)
 
         # The removed costs.panel_wp priced CAPEX at a wattage other than the
         # module's, which let the budget pass a design over budget (#157).
         with pytest.raises(ValueError, match="costs.panel_wp was removed"):
-            calculate_financials(10, 0.0, 0.0, 0.0, 0.0, dict(base, panel_wp=500.0), financials, module_power_w=400.0)
+            cost_params_from_config(dict(base, panel_wp=500.0), {"project_lifespan": 1})
 
 
 def test_system_ac_production_prefers_explicit_ledger_over_legacy_field():
