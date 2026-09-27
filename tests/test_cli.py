@@ -3,6 +3,7 @@
 import csv
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -67,6 +68,102 @@ def test_run_from_flags_outputs_json(monkeypatch, capsys):
 
     output = json.loads(capsys.readouterr().out)
     assert output["grid_independence_pct"] == 42.0
+
+
+def test_run_warns_and_ignores_unused_runner_sections(tmp_path, capsys):
+    config_path = tmp_path / "runner-sections.toml"
+    config_path.write_text(
+        'location = "porto"\n'
+        "n_modules = 10\n"
+        "annual_consumption_kwh = 4000\n"
+        "battery_kwh = 5.0\n"
+        'degradation_engine = "blast"\n'
+        'blast_model = "lfp_gr_250ah_prismatic"\n'
+        "\n[montecarlo]\n"
+        'weather_file = "unused.csv"\n'
+        "n_runs = 1\n"
+        "\n[sweep]\n"
+        "battery_kwh = [5.0]\n",
+        encoding="utf-8",
+    )
+
+    with pytest.warns(UserWarning, match=r"breos run does not use \[montecarlo\], \[sweep\]"):
+        assert cli.main(["run", "--config", str(config_path), "--dry-run"]) == 0
+    assert '"degradation_engine": "blast"' in capsys.readouterr().out
+
+
+class _BackendChosen(Exception):
+    pass
+
+
+def _record_montecarlo_backend(monkeypatch):
+    """Stop run_montecarlo where it resolves the backend, and record it."""
+    import breos.montecarlo as montecarlo
+
+    observed = {}
+
+    def fake_resolve_backend(execution_backend, *, pv_only=False):
+        observed["execution_backend"] = execution_backend
+        raise _BackendChosen
+
+    monkeypatch.setattr(montecarlo, "_resolve_backend", fake_resolve_backend)
+    return observed
+
+
+def _montecarlo_config(tmp_path, *, top_level=None, section=None):
+    weather_file = tmp_path / "weather.csv"
+    weather_file.write_text("weather", encoding="utf-8")
+    lines = ['location = "porto"', "n_modules = 10", "annual_consumption_kwh = 4000"]
+    if top_level is not None:
+        lines.append(f'execution_backend = "{top_level}"')
+    lines += ["", "[montecarlo]", f'weather_file = "{weather_file}"']
+    if section is not None:
+        lines.append(f'execution_backend = "{section}"')
+    config_path = tmp_path / "montecarlo.toml"
+    config_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return config_path
+
+
+@pytest.mark.parametrize(
+    ("top_level", "section", "flag", "expected"),
+    [
+        (None, None, None, "python"),
+        ("numba", None, None, "numba"),
+        ("numba", "python", None, "python"),
+        ("python", None, "numba", "numba"),
+        ("numba", "numba", "python", "python"),
+    ],
+)
+def test_montecarlo_backend_precedence_matches_python_api(tmp_path, monkeypatch, top_level, section, flag, expected):
+    # Flag, then [montecarlo], then the top-level key, then "python"; the
+    # Python API must pick the same backend for the same config.
+    import tomllib
+
+    from breos.montecarlo import MonteCarloSettings, run_montecarlo
+
+    config_path = _montecarlo_config(tmp_path, top_level=top_level, section=section)
+    observed = _record_montecarlo_backend(monkeypatch)
+    argv = ["montecarlo", "--config", str(config_path), "--output", str(tmp_path / "runs.csv")]
+    if flag is not None:
+        argv += ["--execution-backend", flag]
+    with pytest.raises(_BackendChosen):
+        cli._montecarlo(cli.build_parser().parse_args(argv))
+    assert observed.pop("execution_backend") == expected
+
+    if flag is None:
+        config = tomllib.loads(config_path.read_text(encoding="utf-8"))
+        settings = MonteCarloSettings(**config.pop("montecarlo"))
+        with pytest.raises(_BackendChosen):
+            run_montecarlo(config, settings)
+        assert observed["execution_backend"] == expected
+
+
+def test_montecarlo_reports_unknown_setting_before_weather_lookup(tmp_path, capsys):
+    config_path = tmp_path / "montecarlo.toml"
+    config_path.write_text('location = "porto"\n\n[montecarlo]\nweather_fille = "missing.csv"\n', encoding="utf-8")
+
+    assert cli.main(["montecarlo", "--config", str(config_path)]) == 1
+    assert "Unknown Monte Carlo config key(s): montecarlo.weather_fille" in capsys.readouterr().err
 
 
 def test_run_flag_sell_price_inflation_reaches_config(monkeypatch, capsys):

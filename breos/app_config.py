@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import math
+import re
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 from numbers import Real
 from pathlib import Path
 from typing import Any, Callable
@@ -15,6 +16,7 @@ from breos.degradation.profiles import ENABLED_BLAST_MODEL_KEYS, apply_battery_p
 from breos.economics import COST_CONFIG_KEY_TO_PARAM, CostParams, calculate_costs
 from breos.emissions import EmissionsParams
 from breos.execution import DEFAULT_EXECUTION_BACKEND, EXECUTION_BACKENDS, validate_execution_backend
+from breos.load_profiles import PROFILE_ALIASES, PROFILE_FILES
 from breos.pv.horizon import normalise_horizon_profile
 from breos.pv.model_options import is_known_model, is_valid_albedo, is_valid_gcr, normalise_model_name
 from breos.pv.temperature import validate_temperature_inputs
@@ -37,6 +39,7 @@ from breos.solar import (
     TEMPERATURE_MODELS,
     TRANSPOSITION_MODELS,
     estimate_optimal_tilt,
+    resolve_pvwatts_losses,
 )
 from breos.solar import default_azimuth as default_azimuth_fn
 
@@ -60,23 +63,27 @@ class AppConfigField:
     cli_choices: tuple[str, ...] | None = None
     cli_action: str | None = None
     cli_help: str | None = None
-    cli_normalizer: Callable[[Any], Any] | None = None
+    normalizer: Callable[[Any], Any] | None = None
 
     @property
     def has_default(self) -> bool:
         return self.default is not _NO_DEFAULT
 
 
-def _lower(value: str) -> str | None:
-    return value.lower() if value else None
+def _lower(value: Any) -> Any:
+    return value.lower() if isinstance(value, str) and value else value
 
 
-def _upper(value: str) -> str | None:
-    return value.upper() if value else None
+def _upper(value: Any) -> Any:
+    return value.upper() if isinstance(value, str) and value else value
 
 
-def _underscored(value: str) -> str | None:
-    return value.replace("-", "_") if value else None
+def _underscored(value: Any) -> Any:
+    return value.replace("-", "_") if isinstance(value, str) and value else value
+
+
+def _path_string(value: Any) -> str | None:
+    return str(value) if value is not None else None
 
 
 APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
@@ -87,7 +94,7 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
     "location": AppConfigField(
         cli_flags=("--location",),
         cli_help="Location preset key, for example 'porto'.",
-        cli_normalizer=_lower,
+        normalizer=_lower,
     ),
     "n_modules": AppConfigField(cli_flags=("--n-modules",), cli_type=int, cli_help="Number of PV modules."),
     "annual_consumption_kwh": AppConfigField(
@@ -132,14 +139,14 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         default_order=28,
         cli_flags=("--cost-preset",),
         cli_help="Cost preset key, for example 'residential-pt'.",
-        cli_normalizer=_underscored,
+        normalizer=_underscored,
     ),
     "emissions_country": AppConfigField(
         default=None,
         default_order=32,
         cli_flags=("--emissions-country",),
         cli_help="Country code for emissions, for example 'pt'.",
-        cli_normalizer=_upper,
+        normalizer=_upper,
     ),
     "pv_module": AppConfigField(
         default=None, default_order=2, cli_flags=("--pv-module",), cli_help="PV module catalogue key."
@@ -153,7 +160,7 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         cli_flags=("--rlp-directory",),
         cli_type=Path,
         cli_help="Directory containing licensed external RLP CSV files.",
-        cli_normalizer=str,
+        normalizer=_path_string,
     ),
     "tilt": AppConfigField(
         default=None,
@@ -312,7 +319,7 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         default_order=34,
         cli_flags=("--pv-degradation-rate",),
         cli_type=float,
-        cli_help="Annual PV degradation rate.",
+        cli_help="Annual compound PV degradation rate; year 1 has none.",
     ),
     "calendar_model": AppConfigField(
         default="naumann_lam_field_calibrated",
@@ -359,6 +366,15 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         default_order=50,
         cli_flags=("--start-date",),
         cli_help="First simulated day: 1 January of the study year, YYYY-01-01.",
+    ),
+    "weather_source": AppConfigField(
+        default=None,
+        default_order=55,
+        cli_flags=("--weather-source",),
+        cli_help=(
+            "Source part of the cached weather/<location>_tmy_*_<source>.csv file to use when several "
+            "TMY files exist for the location preset, for example 'pvgis-sarah3'."
+        ),
     ),
     # Config-file/API-only fields.
     "costs": AppConfigField(),
@@ -415,6 +431,42 @@ ALLOWED_CONFIG_KEYS: frozenset[str] = frozenset(APP_CONFIG_FIELDS)
 # App and lower-level construction helper cannot drift.
 COST_OVERRIDE_KEYS: frozenset[str] = frozenset(COST_CONFIG_KEY_TO_PARAM)
 
+# Keep runner-table keys explicit until the shared configuration schema from
+# #181 can describe these sections alongside App fields.
+MONTECARLO_CONFIG_KEYS: frozenset[str] = frozenset(
+    {
+        "weather_file",
+        "n_runs",
+        "years_per_run",
+        "load_uncertainty",
+        "load_distribution",
+        "target_year",
+        "weather_start_year",
+        "weather_end_year",
+        "seed",
+        "min_load_scale",
+        "max_load_scale",
+        "preserve_irradiance_energy",
+        "collect_yearly",
+        "n_procs",
+        "execution_backend",
+    }
+)
+
+
+def validate_montecarlo_config(cfg: dict[str, Any]) -> None:
+    """Reject unknown Monte Carlo settings before runner setup or weather access."""
+    if "montecarlo" not in cfg:
+        return
+    montecarlo = cfg["montecarlo"]
+    if not isinstance(montecarlo, dict):
+        raise TypeError("'montecarlo' must be a table/dict of Monte Carlo settings")
+    unknown_mc = set(montecarlo) - MONTECARLO_CONFIG_KEYS
+    if unknown_mc:
+        available = ", ".join(sorted(f"montecarlo.{key}" for key in MONTECARLO_CONFIG_KEYS))
+        unknown_text = ", ".join(sorted(f"montecarlo.{key}" for key in unknown_mc))
+        raise ValueError(f"Unknown Monte Carlo config key(s): {unknown_text}. Available: {available}")
+
 
 @dataclass(frozen=True)
 class ResolvedAppConfig:
@@ -444,6 +496,39 @@ class ResolvedAppConfig:
 def load_json(name: str) -> dict[str, Any]:
     """Load a packaged App configuration resource."""
     return load_config_json(name)
+
+
+def normalize_config_keys(config: dict[str, Any]) -> dict[str, Any]:
+    """Return a copy with hyphens changed to underscores in every table key.
+
+    TOML and JSON input, Python mappings, and CLI overrides all pass through
+    this normalization before schema validation. Reject collisions rather
+    than silently picking whichever spelling happened to be visited last.
+    """
+    if not isinstance(config, dict):
+        raise TypeError("'config' must be a dict")
+
+    def normalize_value(value: Any, path: str) -> Any:
+        if isinstance(value, dict):
+            normalized: dict[str, Any] = {}
+            for key, child in value.items():
+                if not isinstance(key, str):
+                    raise TypeError(f"Configuration table '{path}' must use string keys")
+                normalized_key = key.replace("-", "_")
+                if normalized_key in normalized:
+                    raise ValueError(
+                        f"Duplicate config key '{normalized_key}' in '{path}' after replacing hyphens with underscores"
+                    )
+                child_path = f"{path}.{normalized_key}" if path else normalized_key
+                normalized[normalized_key] = normalize_value(child, child_path)
+            return normalized
+        if isinstance(value, list):
+            return [normalize_value(child, f"{path}[{index}]") for index, child in enumerate(value)]
+        if isinstance(value, tuple):
+            return tuple(normalize_value(child, f"{path}[{index}]") for index, child in enumerate(value))
+        return value
+
+    return normalize_value(config, "")
 
 
 def merge_defaults(config: dict[str, Any]) -> dict[str, Any]:
@@ -652,6 +737,8 @@ def _validate_structure_and_location(cfg: dict[str, Any]) -> bool:
         available = ", ".join(sorted(ALLOWED_CONFIG_KEYS))
         raise ValueError(f"Unknown config key(s): {', '.join(sorted(unknown))}. Available: {available}")
 
+    validate_montecarlo_config(cfg)
+
     for key in ("location", "annual_consumption_kwh"):
         if key not in cfg:
             raise ValueError(f"Missing required config key: '{key}'")
@@ -680,7 +767,19 @@ def _validate_structure_and_location(cfg: dict[str, Any]) -> bool:
     elif not isinstance(loc, str):
         raise TypeError("'location' must be a string key or a dict with latitude/longitude/timezone")
 
+    _validate_load_profile(cfg)
+
     return has_arrays
+
+
+def _validate_load_profile(cfg: dict[str, Any]) -> None:
+    """Resolve a profile alias and reject unknown profiles during config validation."""
+    raw_profile = str(cfg["load_profile"])
+    profile = PROFILE_ALIASES.get(raw_profile.lower(), raw_profile)
+    if profile not in PROFILE_FILES:
+        available = ", ".join(sorted({*PROFILE_FILES, *PROFILE_ALIASES}))
+        raise ValueError(f"Unknown load_profile {raw_profile!r}. Available profile keys and aliases: {available}")
+    cfg["load_profile"] = profile
 
 
 def _validate_pv_and_inverter(cfg: dict[str, Any], has_arrays: bool) -> None:
@@ -764,6 +863,7 @@ def _validate_time_and_weather(cfg: dict[str, Any]) -> None:
         raise ValueError("'pv_degradation_rate' must be between 0 (inclusive) and 1 (exclusive)")
     if cfg["resolution"] not in ("h", "15min"):
         raise ValueError("'resolution' must be 'h' or '15min'")
+    _validate_weather_source(cfg)
     cfg["horizon_profile"] = normalise_horizon_profile(cfg["horizon_profile"])
     _validate_sky_settings(cfg["transposition_model"], cfg["albedo"], cfg["surface_type"], cfg["model_perez"])
     if not is_known_model(cfg["solar_position"], SOLAR_POSITION_METHODS):
@@ -784,8 +884,34 @@ def _validate_time_and_weather(cfg: dict[str, Any]) -> None:
         if not isinstance(overrides, dict):
             raise TypeError("'pv_loss_overrides' must be a dict of loss component percentages")
         for name, value in overrides.items():
-            if not isinstance(value, (int, float)) or not 0 <= value <= 100:
+            if not 0 <= _finite_real(value, f"pv_loss_overrides[{name!r}]") <= 100:
                 raise ValueError(f"'pv_loss_overrides[{name!r}]' must be a percentage between 0 and 100")
+        # Resolve the component names here so a typo cannot survive App
+        # construction and fail after a TMY weather request.
+        resolve_pvwatts_losses(overrides)
+
+
+def _validate_weather_source(cfg: dict[str, Any]) -> None:
+    """Check ``weather_source`` can name a cached TMY file for a location preset.
+
+    The value is matched against the ``<source>`` part of
+    ``<location>_tmy_<years>_<source>.csv`` in the ``weather/`` cache, which
+    only location presets consult; coordinate-dict locations always fetch.
+    Whether a matching file exists is checked when the weather is loaded.
+    """
+    source = cfg["weather_source"]
+    if source is None:
+        return
+    if not isinstance(source, str) or re.fullmatch(r"[\w-]+", source) is None:
+        raise ValueError(
+            "'weather_source' must be the source part of a cached weather filename, such as "
+            f"'pvgis-sarah3' (letters, digits, '_' or '-'), got {source!r}"
+        )
+    if isinstance(cfg["location"], dict):
+        raise ValueError(
+            "'weather_source' selects a cached weather file by location preset key; "
+            "coordinate-dict locations have no cache key and always fetch PVGIS weather"
+        )
 
 
 def _validate_economics(cfg: dict[str, Any]) -> None:
@@ -841,6 +967,8 @@ def _validate_battery_and_degradation(cfg: dict[str, Any]) -> None:
         _finite_real(battery_temperature, "battery_temperature")
     elif not isinstance(battery_temperature, str):
         raise TypeError("'battery_temperature' must be 'weather', a CSV path, or a finite temperature")
+    elif battery_temperature.lower() != "weather" and not Path(battery_temperature).is_file():
+        raise FileNotFoundError(f"battery_temperature file not found: {battery_temperature}")
     indoor_model = cfg["battery_indoor_model"]
     if indoor_model is not None:
         if not isinstance(indoor_model, dict):
@@ -874,10 +1002,15 @@ def _validate_battery_and_degradation(cfg: dict[str, Any]) -> None:
     calendar_model = str(cfg["calendar_model"]).strip().lower().replace("-", "_")
     if calendar_model not in valid_calendar_models:
         raise ValueError(f"'calendar_model' must be one of: {', '.join(sorted(valid_calendar_models))}")
-    if not isinstance(cfg["start_date"], str):
-        raise TypeError("'start_date' must be an ISO date string (YYYY-MM-DD)")
+    start_date = cfg["start_date"]
+    # datetime subclasses date, so it is excluded before the date case.
+    if isinstance(start_date, date) and not isinstance(start_date, datetime):
+        start_date = start_date.isoformat()
+        cfg["start_date"] = start_date
+    elif not isinstance(start_date, str):
+        raise TypeError("'start_date' must be an ISO date string or datetime.date (YYYY-MM-DD)")
     try:
-        start = date.fromisoformat(cfg["start_date"])
+        start = date.fromisoformat(start_date)
     except ValueError as exc:
         raise ValueError("'start_date' must be a valid ISO date (YYYY-MM-DD)") from exc
     if (start.month, start.day) != (1, 1):
@@ -1101,9 +1234,18 @@ def build_costs_dict(cfg: dict[str, Any], resolved: ResolvedAppConfig) -> dict[s
     )
 
 
+def _normalise_config_values(cfg: dict[str, Any]) -> dict[str, Any]:
+    """Apply registry-owned value normalizers to config files and API input."""
+    for key, field in APP_CONFIG_FIELDS.items():
+        if field.normalizer is not None and key in cfg:
+            cfg[key] = field.normalizer(cfg[key])
+    return cfg
+
+
 def resolve_app_config(config: dict[str, Any]) -> ResolvedAppConfig:
     """Merge, validate, and resolve App configuration."""
-    cfg = merge_defaults(config)
+    cfg = merge_defaults(normalize_config_keys(config))
+    _normalise_config_values(cfg)
     validate_config(cfg)
 
     lat, lon, timezone, loc_key = resolve_location(cfg)
