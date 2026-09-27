@@ -75,6 +75,16 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   helpers and then fail later in `pd.date_range`. Use `"h"` or `"15min"`.
 
 ### Fixed
+- The optimizer now models the site at its real elevation, as App does.
+  `evaluate_projected_design` and `SolarDesignProblem` built their pvlib
+  location with `altitude=0` unless the config set one, while App leaves the
+  altitude to pvlib's lookup (82 m for Porto). Elevation sets the air pressure
+  in the refraction correction of the solar position, so the same design gave
+  slightly different PV output in the two paths. An explicit
+  `location.altitude` is still used as given. **Results change** slightly for
+  optimizer runs without `location.altitude`: in the App parity case, year-1
+  PV DC falls by 10 Wh of 2021 kWh and grid independence from 39.5956% to
+  39.5947%, now equal to App.
 - `fetch_weather_data`, `read_epw_file` and `load_profile` raise `ValueError`
   for a frequency other than hourly or 15-minute, as `fetch_tmy_weather_data`
   already did ([#175](https://github.com/Str4vinci/breos/issues/175)). They

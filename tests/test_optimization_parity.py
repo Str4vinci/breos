@@ -500,7 +500,10 @@ def test_projected_optimizer_candidate_matches_app(open_meteo_weather, monkeypat
     from breos.optimization import optimize_system_multi_objective
     from breos.weather import build_battery_temperature_series
 
-    idx = pd.date_range("2023-01-01", periods=24, freq="h", tz="UTC")
+    # A full year: over a single January day the site-altitude difference
+    # between App and the optimizer (0 m instead of pvlib's elevation lookup)
+    # stayed inside App's rounding and went unnoticed.
+    idx = pd.date_range("2023-01-01", periods=8760, freq="h", tz="UTC")
     weather = open_meteo_weather(idx)
     houseload = pd.DataFrame({"Load": [500.0] * len(idx)}, index=idx)
     financials = dict(FINANCIALS_CONFIG, project_lifespan=1)
@@ -540,7 +543,7 @@ def test_projected_optimizer_candidate_matches_app(open_meteo_weather, monkeypat
     candidate = battery_candidates.iloc[0]
 
     # The App facade normally gets these inputs from its weather and load
-    # providers. Injecting the same short frames keeps this end-to-end check
+    # providers. Injecting the same frames keeps this end-to-end check
     # offline and makes both workflows simulate exactly the same interval.
     dependencies = AppRuntimeDependencies(
         load_profile=lambda **kwargs: houseload.copy(),
@@ -583,3 +586,16 @@ def test_projected_optimizer_candidate_matches_app(open_meteo_weather, monkeypat
     )
     assert app_result["npv_savings_eur"] == pytest.approx(candidate["Projected_NPV_Eur"], **app_rounding)
     assert app_result["total_investment_eur"] == pytest.approx(candidate["Projected_Initial_Cost_Eur"], **app_rounding)
+
+
+def test_optimizer_site_uses_the_same_altitude_as_app():
+    pvlib_location = pytest.importorskip("pvlib.location")
+    from breos.optimization import _site_location
+
+    looked_up = _site_location({"latitude": 41.15, "longitude": -8.61, "timezone": "Europe/Lisbon"})
+    app_site = pvlib_location.Location(41.15, -8.61, tz="Europe/Lisbon")
+    assert looked_up.altitude == app_site.altitude
+    assert looked_up.altitude > 0.0  # Porto is not at sea level
+
+    explicit = _site_location({"latitude": 41.15, "longitude": -8.61, "altitude": 0})
+    assert explicit.altitude == 0.0
