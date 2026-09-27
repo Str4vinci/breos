@@ -127,7 +127,8 @@ def test_app_montecarlo_and_projected_optimization_age_the_battery_identically(m
         resolved,
         np.array([2025]),
         PROJECTION_YEARS,
-        MonteCarloSettings(weather_file="unused.csv", load_uncertainty=0.0),
+        # run_montecarlo resolves an unset backend; this calls the trajectory directly.
+        MonteCarloSettings(weather_file="unused.csv", load_uncertainty=0.0, execution_backend="python"),
         np.random.default_rng(0),
         {2025: align_simulation_inputs(pv, load, temperature, freq="h")},
         None,
