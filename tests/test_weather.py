@@ -7,6 +7,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import pytest
+from pvlib.location import Location
 
 from breos.weather import (
     AmbiguousWeatherError,
@@ -222,6 +223,27 @@ def test_fetch_weather_data_rejects_unknown_radiation_time_basis():
             save_to_file=False,
             radiation_time_basis="unknown",
         )
+
+
+@pytest.mark.parametrize("freq", ["30min", "15T", "H"])
+def test_fetch_weather_data_rejects_unsupported_frequency_before_fetching(monkeypatch, freq):
+    # 30min used to return hourly data without a warning.
+    captured = {}
+    _install_fake_openmeteo(monkeypatch, captured)
+
+    with pytest.raises(ValueError, match="Unsupported frequency"):
+        fetch_weather_data(
+            latitude=41.1579,
+            longitude=-8.6291,
+            start_date="2024-06-01",
+            end_date="2024-06-01",
+            tilt=0,
+            azimuth=0,
+            freq=freq,
+            save_to_file=False,
+        )
+
+    assert "params" not in captured
 
 
 @pytest.mark.parametrize(
@@ -493,6 +515,75 @@ def test_resamplers_do_not_depend_on_the_index_resolution(resampler, unit):
     np.testing.assert_array_equal(resampled.to_numpy(), reference.to_numpy())
 
 
+def _hourly_ramp_weather(metadata):
+    """Hourly frame whose columns are linear in time, so Makima reproduces them exactly."""
+    idx = pd.date_range("2025-06-20", periods=48, freq="h", tz="UTC")
+    hours = np.arange(48, dtype=float)
+    if metadata.get("radiation_time_basis") == "interval_mean":
+        # The mean of a linear function over [t, t + 1 h] is its value at t + 30 min.
+        hours = hours + 0.5
+    weather = pd.DataFrame({"temp_air": 10.0 + hours, "wind_speed": 1.0 + 0.1 * hours}, index=idx)
+    weather.attrs["breos_weather_metadata"] = dict(metadata)
+    return weather
+
+
+@pytest.mark.parametrize(
+    ("metadata", "quarter_offset_hours"),
+    [
+        # Left-labelled hourly means: each quarter-hour is the mean over its own
+        # 15 minutes, the ramp's value at the quarter's midpoint.
+        ({"radiation_time_basis": "interval_mean", "timestamp_label_basis": "left"}, 0.125),
+        # Instant samples stay at their labels.
+        ({"radiation_time_basis": "instant", "irradiance_time_offset_hours": 0.0}, 0.0),
+        ({}, 0.0),
+    ],
+)
+def test_resample_interpolates_weather_at_representative_times(metadata, quarter_offset_hours):
+    resampled = resample_to_15min(_hourly_ramp_weather(metadata))
+
+    elapsed_hours = (resampled.index - resampled.index[0]) / pd.Timedelta(hours=1)
+    target_hours = elapsed_hours.to_numpy() + quarter_offset_hours
+    # Leave out the edge quarter-hours, which hold the first or last value.
+    inner = (target_hours >= 1.0) & (target_hours <= 46.0)
+    np.testing.assert_allclose(resampled["temp_air"].to_numpy()[inner], 10.0 + target_hours[inner], atol=1e-9)
+    np.testing.assert_allclose(resampled["wind_speed"].to_numpy()[inner], 1.0 + 0.1 * target_hours[inner], atol=1e-9)
+
+
+def test_resample_moves_right_labelled_means_to_their_interval_before_interpolating():
+    left = _hourly_ramp_weather({"radiation_time_basis": "interval_mean", "timestamp_label_basis": "left"})
+    right = left.copy()
+    right.index = right.index + pd.Timedelta(hours=1)
+    right.attrs["breos_weather_metadata"] = {"radiation_time_basis": "interval_mean", "timestamp_label_basis": "right"}
+
+    from_left = resample_to_15min(left)
+    from_right = resample_to_15min(right)
+
+    assert from_right.index.equals(from_left.index)
+    np.testing.assert_allclose(from_right.to_numpy(), from_left.to_numpy(), atol=1e-12)
+
+
+def test_resample_interpolates_clearness_index_at_interval_midpoints():
+    site = Location(41.1579, -8.6291, altitude=0.0)
+    idx = pd.date_range("2025-06-20", periods=48, freq="h", tz="UTC")
+    epsilon = 5.0  # the resampler's clear-sky guard
+
+    def clearness(hours):
+        return 0.4 + 0.005 * hours
+
+    hour_mid = np.arange(48, dtype=float) + 0.5
+    clear_hourly = site.get_clearsky(idx + pd.Timedelta(minutes=30))["ghi"].to_numpy()
+    weather = pd.DataFrame({"ghi": clearness(hour_mid) * (clear_hourly + epsilon)}, index=idx)
+    weather.attrs["breos_weather_metadata"] = {"radiation_time_basis": "interval_mean", "timestamp_label_basis": "left"}
+
+    resampled = resample_to_15min(weather, latitude=41.1579, longitude=-8.6291, altitude=0.0)
+
+    quarter_mid = ((resampled.index - idx[0]) / pd.Timedelta(hours=1)).to_numpy() + 0.125
+    clear_15 = site.get_clearsky(resampled.index + pd.Timedelta(minutes=7.5))["ghi"].to_numpy()
+    expected = np.where(clear_15 > 0.0, clearness(quarter_mid) * (clear_15 + epsilon), 0.0)
+    inner = (quarter_mid >= 1.0) & (quarter_mid <= 46.0)
+    np.testing.assert_allclose(resampled["ghi"].to_numpy()[inner], expected[inner], atol=1e-9)
+
+
 def test_tmy_resampling_keeps_the_weather_columns_and_bounds_humidity():
     weather = _three_day_hourly_weather("ns")
     weather["relative_humidity"] = np.linspace(40.0, 140.0, len(weather))
@@ -506,7 +597,7 @@ def test_tmy_resampling_keeps_the_weather_columns_and_bounds_humidity():
     assert resampled.attrs["breos_weather_metadata"]["irradiance_resampling_method"] == "makima_clear_sky"
 
 
-def test_fetch_tmy_weather_accepts_hourly_frequency_alias_and_uses_horizon_by_default(monkeypatch):
+def test_fetch_tmy_weather_accepts_1h_spelling_and_uses_horizon_by_default(monkeypatch):
     tmy = pd.DataFrame({"ghi": [0.0]}, index=pd.date_range("2020-01-01 00:00", periods=1, freq="h"))
     captured = {}
 
@@ -516,7 +607,7 @@ def test_fetch_tmy_weather_accepts_hourly_frequency_alias_and_uses_horizon_by_de
 
     monkeypatch.setattr("breos.weather.pvlib.iotools.get_pvgis_tmy", fake_get_pvgis_tmy)
 
-    weather, _metadata = fetch_tmy_weather_data(41.0, -8.0, sample_year=None, freq="H")
+    weather, _metadata = fetch_tmy_weather_data(41.0, -8.0, sample_year=None, freq="1h")
 
     assert len(weather) == 1
     assert captured["usehorizon"] is True
@@ -740,7 +831,7 @@ def test_fetch_tmy_rejects_fractional_hour_timezone_before_request(monkeypatch):
     assert requested is False
 
 
-def test_read_epw_accepts_15t_frequency_alias(monkeypatch):
+def test_read_epw_resamples_when_15min_is_requested(monkeypatch):
     epw = pd.DataFrame(
         {
             "ghi": [0.0, 10.0],
@@ -765,7 +856,7 @@ def test_read_epw_accepts_15t_frequency_alias(monkeypatch):
     monkeypatch.setattr("breos.weather.pvlib.iotools.read_epw", fake_read_epw)
     monkeypatch.setattr("breos.weather.resample_to_15min", fake_resample)
 
-    weather = read_epw_file("dummy.epw", freq="15T")
+    weather = read_epw_file("dummy.epw", freq="15min")
 
     assert calls == {"method": "makima", "latitude": 41.0, "longitude": -8.0}
     assert weather.attrs["breos_weather_metadata"]["horizon"] == {
@@ -773,6 +864,29 @@ def test_read_epw_accepts_15t_frequency_alias(monkeypatch):
         "provider": "epw",
         "profile": None,
     }
+
+
+@pytest.mark.parametrize("freq", ["30min", "15T", "H"])
+def test_read_epw_rejects_unsupported_frequency_before_reading(monkeypatch, freq):
+    # 30min used to return the hourly file unchanged.
+    def fail_read_epw(_filepath):
+        raise AssertionError("the file must not be read for an unsupported frequency")
+
+    monkeypatch.setattr("breos.weather.pvlib.iotools.read_epw", fail_read_epw)
+
+    with pytest.raises(ValueError, match="Unsupported frequency"):
+        read_epw_file("dummy.epw", freq=freq)
+
+
+@pytest.mark.parametrize("freq", ["30min", "15T", "H"])
+def test_fetch_tmy_weather_rejects_unsupported_frequency_before_fetching(monkeypatch, freq):
+    def fail_get_pvgis_tmy(*_args, **_kwargs):
+        raise AssertionError("PVGIS must not be called for an unsupported frequency")
+
+    monkeypatch.setattr("breos.weather.pvlib.iotools.get_pvgis_tmy", fail_get_pvgis_tmy)
+
+    with pytest.raises(ValueError, match="Unsupported frequency"):
+        fetch_tmy_weather_data(41.0, -8.0, sample_year=None, freq=freq)
 
 
 def test_select_random_year_accepts_15min_leap_year_after_dropping_feb_29(tmp_path):

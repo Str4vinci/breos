@@ -225,7 +225,9 @@ over objectives and constraints.
 ## 15-minute resolution
 
 Hourly weather is interpolated to 15-minute steps (Makima), and the bundled
-H0 profile has a native 15-minute variant. Simulations take correspondingly
+H0 profile has a native 15-minute variant. An external profile supplied only
+as hourly means is interpolated between hour midpoints and keeps each hour's
+mean exactly. Simulations take correspondingly
 longer:
 
 ```toml

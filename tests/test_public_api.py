@@ -36,6 +36,8 @@ def test_top_level_all_is_narrow_release_surface():
         "optimize_system_multi_objective",
         "export_results",
         "load_results",
+        "repair_series",
+        "InputRepairReport",
     }
     intentionally_excluded = {
         "R_GAS",
@@ -83,6 +85,16 @@ assert callable(breos.plot_co2_savings)
 assert "breos.plotting" in sys.modules
 assert "matplotlib" in sys.modules
 """
+    preserve_backend_code = """
+import matplotlib
+
+matplotlib.use("svg")
+before = matplotlib.get_backend()
+
+import breos.plotting
+
+assert matplotlib.get_backend() == before
+"""
     env = os.environ.copy()
     env["MPLCONFIGDIR"] = str(tmp_path)
     core_import = subprocess.run(
@@ -109,3 +121,14 @@ assert "matplotlib" in sys.modules
     # A fresh Matplotlib installation may announce font-cache creation on
     # stderr. The quiet-import contract applies before plotting is requested.
     assert plotting_import.returncode == 0, plotting_import.stderr
+
+    preserve_backend = subprocess.run(
+        [sys.executable, "-c", preserve_backend_code],
+        cwd=tmp_path,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert preserve_backend.returncode == 0, preserve_backend.stderr

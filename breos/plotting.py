@@ -22,8 +22,6 @@ MONTH_LABELS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "
 # Plotting imports with backend handling
 try:
     import matplotlib
-
-    matplotlib.use("Agg")  # Non-interactive backend
     import matplotlib.dates as mdates
     import matplotlib.pyplot as plt
     from matplotlib.patches import Polygon, Rectangle
@@ -108,7 +106,6 @@ def set_presentation_mode(enabled: bool = True, scale: float = 1.5):
         )
     else:
         plt.rcdefaults()
-        matplotlib.use("Agg")
 
 
 def _format_loss_energy(value_kwh: float) -> str:
@@ -1102,16 +1099,23 @@ def plot_breakeven(cost_projection: pd.DataFrame, results_directory: str, scenar
     if "Cost_No_Sys_Cumulative_NPV" in cost_projection.columns:
         no_sys = cost_projection["Cost_No_Sys_Cumulative_NPV"]
         with_sys = cost_projection["Cost_System_Cumulative_NPV"]
+        annual_column = "Cost_System_Annual_NPV"
         label_suffix = " (NPV)"
     else:
         no_sys = cost_projection["Cost_No_Sys_Cumulative"]
         with_sys = cost_projection["Cost_System_Cumulative"]
+        annual_column = "Cost_System_Annual"
         label_suffix = ""
+
+    # The year-0 investment anchors the break-even curve, as in the library.
+    initial_investment = cost_projection.attrs.get("total_investment")
+    if initial_investment is None and annual_column in cost_projection.columns:
+        initial_investment = float(with_sys.iloc[0] - cost_projection[annual_column].iloc[0])
 
     # Break-even with month precision, by the same interpolation Monte Carlo
     # and the optimizer report.
     savings = pd.DataFrame({"Year": years.to_numpy(), "Savings_Cumulative_NPV": no_sys.values - with_sys.values})
-    be_year_exact = find_payback_year_exact(savings)
+    be_year_exact = find_payback_year_exact(savings, initial_investment=initial_investment)
     be_text = "Not reached"
     if be_year_exact is not None:
         be_years = int(be_year_exact)
@@ -1128,8 +1132,13 @@ def plot_breakeven(cost_projection: pd.DataFrame, results_directory: str, scenar
 
     # Mark break-even point
     if be_year_exact is not None:
-        # Interpolate the cost at break-even
-        be_cost = np.interp(be_year_exact, years, with_sys)
+        # Interpolate the cost at break-even, from the year-0 investment when
+        # the break-even falls inside the first year.
+        curve_years, curve_cost = years.to_numpy(dtype=float), with_sys.to_numpy(dtype=float)
+        if initial_investment is not None and curve_years[0] > 0.0:
+            curve_years = np.concatenate(([0.0], curve_years))
+            curve_cost = np.concatenate(([float(initial_investment)], curve_cost))
+        be_cost = np.interp(be_year_exact, curve_years, curve_cost)
         ax1.axvline(x=be_year_exact, color="blue", linestyle="--", alpha=0.7, linewidth=1.5)
         ax1.scatter([be_year_exact], [be_cost], s=120, c="blue", zorder=5, edgecolors="white", linewidth=2)
         ax1.annotate(
@@ -2421,6 +2430,11 @@ def plot_weather_annual_ghi_distribution(
     plt.close(fig)
 
 
+def _breakeven_left_limit(break_evens: "List[float]") -> float:
+    """Left x-limit of a break-even comparison: 0 when a line falls in the first half-year."""
+    return 0.0 if break_evens and min(break_evens) < 0.5 else 0.5
+
+
 def plot_breakeven_comparison(
     cost_dfs: "List[pd.DataFrame]",
     labels: "List[str]",
@@ -2464,6 +2478,7 @@ def plot_breakeven_comparison(
             )
 
     max_year = 0
+    break_evens = []
     for df, label, color in zip(cost_dfs, labels, colors, strict=False):
         ax.plot(df["Year"], df["Cost_System_Cumulative_NPV"], color=color, label=label, linewidth=2)
         max_year = max(max_year, int(df["Year"].max()))
@@ -2472,6 +2487,7 @@ def plot_breakeven_comparison(
         be = find_payback_year_exact(df)
         if be is not None:
             ax.axvline(x=be, color=color, linestyle=":", alpha=0.5, linewidth=1)
+            break_evens.append(be)
 
     ax.set_xlabel("Year")
     ax.set_ylabel("Cumulative Cost (€)")
@@ -2479,7 +2495,7 @@ def plot_breakeven_comparison(
     ax.grid(True, alpha=0.3)
     ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, _: f"{x:,.0f}€"))
     ax.set_xticks(range(1, max_year + 1))
-    ax.set_xlim(0.5, max_year + 0.5)
+    ax.set_xlim(_breakeven_left_limit(break_evens), max_year + 0.5)
 
     plt.tight_layout()
     plt.savefig(os.path.join(results_dir, filename), dpi=300)
@@ -2524,14 +2540,14 @@ def plot_breakeven_two(
 
     max_year = int(df1["Year"].max())
     ax.set_xticks(range(1, max_year + 1))
-    ax.set_xlim(0.5, max_year + 0.5)
+    ax.set_xlim(_breakeven_left_limit([be for be in (be1, be2) if be is not None]), max_year + 0.5)
 
     ylim = ax.get_ylim()
     y_pos = ylim[1] * 0.85
-    if be1:
+    if be1 is not None:
         ax.axvline(x=be1, color="blue", linestyle=":", alpha=0.7, linewidth=1.5)
         ax.annotate(f"{label1}: {format_years_months(be1)}", xy=(be1 + 0.3, y_pos), fontsize=10, color="blue")
-    if be2:
+    if be2 is not None:
         ax.axvline(x=be2, color="green", linestyle=":", alpha=0.7, linewidth=1.5)
         ax.annotate(f"{label2}: {format_years_months(be2)}", xy=(be2 + 0.3, y_pos * 0.92), fontsize=10, color="green")
 

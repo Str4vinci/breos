@@ -28,6 +28,7 @@ from breos.utils import (
     get_hours_per_step,
     irradiance_component,
     is_leap_year,
+    normalise_frequency,
     safe_path_slug,
 )
 
@@ -488,6 +489,7 @@ def fetch_tmy_weather_data(
     Raises:
         ValueError: If the selected timezone has a fractional-hour UTC offset.
     """
+    freq = normalise_frequency(freq)
     roll_utc_offset = None
     coerce_year = sample_year
     if sample_year is not None:
@@ -555,10 +557,8 @@ def fetch_tmy_weather_data(
         tmy_data = fill_leap_day(tmy_data)
 
     # Resample to 15-min if requested
-    if freq in ("15min", "15T", "15m"):
+    if freq == "15min":
         tmy_data = resample_tmy_to_15min(tmy_data, metadata)
-    elif freq not in ("h", "H", "1h", "1H"):
-        raise ValueError("freq must be 'h' or '15min'")
 
     if save_to_file:
         # Encode metadata in filename: {location}_tmy_{year_min}_{year_max}_{db}.csv
@@ -629,6 +629,7 @@ def fetch_weather_data(
         current working directory (30-day expiry). Delete it to force
         fresh API responses.
     """
+    freq = normalise_frequency(freq)
     if not HAS_OPENMETEO:
         raise ImportError(
             "openmeteo_requests is required for historical weather data. "
@@ -716,7 +717,7 @@ def fetch_weather_data(
     }
 
     # Resample to 15-min if requested (pass location for clear-sky scaling)
-    if freq in ("15min", "15T", "15m"):
+    if freq == "15min":
         hourly_dataframe = resample_to_15min(hourly_dataframe, method="makima", latitude=latitude, longitude=longitude)
 
     if save_to_file:
@@ -789,6 +790,14 @@ def resample_to_15min(
     Supports both TMY column names (ghi, dni, dhi) and Open-Meteo column names
     (shortwave_radiation, direct_normal_irradiance, diffuse_radiation).
 
+    Every column is interpolated at each row's representative time, read from
+    the weather metadata: interval means (``radiation_time_basis=
+    "interval_mean"``) at the middle of their hour, read back at the middle of
+    each quarter-hour; instant samples at their label plus any recorded
+    ``irradiance_time_offset_hours``. Right-labelled interval means are first
+    moved to the start of their hour. Without metadata the rows are treated
+    as instant samples at their labels.
+
     Args:
         df_hourly: DataFrame with hourly DatetimeIndex
         method: Interpolation method ('makima', 'linear', 'cubic')
@@ -823,9 +832,23 @@ def resample_to_15min(
         freq="15min",
     )
 
-    # Convert timestamps to seconds for interpolation
-    x_original = _datetime_index_seconds(df_hourly.index)
+    # Each row stands for its representative time: the label for instant
+    # samples (plus any recorded provider offset), the interval midpoint for
+    # interval means. Interpolating at the labels would place a left-labelled
+    # hourly mean at the start of its hour and read each quarter-hour at its
+    # start, so the result would run 22.5 minutes early. Shifting only the
+    # source points by the difference keeps the target grid on the output
+    # labels; for instant samples the difference is zero.
+    source_offset = _representative_time_offset(weather_metadata or {}, pd.Timedelta(hours=1), require_metadata=False)
+    target_offset = _representative_time_offset(
+        weather_metadata or {}, pd.Timedelta(minutes=15), require_metadata=False
+    )
+    x_original = _datetime_index_seconds(df_hourly.index) + (source_offset - target_offset).total_seconds()
     x_target = _datetime_index_seconds(target_index)
+    # Makima does not extrapolate: quarter-hours before the first or after the
+    # last representative time hold the edge value.
+    before_first = x_target < x_original[0]
+    after_last = x_target > x_original[-1]
 
     # Map column names to irradiance type (supports TMY and Open-Meteo conventions)
     irrad_col_map = {}  # column_name -> clear-sky component ('ghi', 'dni', 'dhi')
@@ -842,12 +865,6 @@ def resample_to_15min(
 
     if use_clearsky:
         site = Location(latitude, longitude, altitude=altitude)
-        source_offset = _representative_time_offset(
-            weather_metadata or {}, pd.Timedelta(hours=1), require_metadata=False
-        )
-        target_offset = _representative_time_offset(
-            weather_metadata or {}, pd.Timedelta(minutes=15), require_metadata=False
-        )
         cs_hourly = site.get_clearsky(df_hourly.index + source_offset)
         cs_15min = site.get_clearsky(target_index + target_offset)
 
@@ -873,7 +890,8 @@ def resample_to_15min(
                 interp_k = interp1d(x_original, k_hourly, kind=method, fill_value="extrapolate")
             k_15min = interp_k(x_target)
             if method == "makima":
-                k_15min[x_target > x_original[-1]] = k_hourly[-1]
+                k_15min[before_first] = k_hourly[0]
+                k_15min[after_last] = k_hourly[-1]
             clear_sky = cs_15min[cs_comp].to_numpy(dtype=float)
             reconstructed = k_15min * (clear_sky + epsilon)
             reconstructed[clear_sky <= 0.0] = 0.0
@@ -888,7 +906,8 @@ def resample_to_15min(
                 interp = interp1d(x_original, y_original, kind=method, fill_value="extrapolate")
             interpolated = interp(x_target)
             if method == "makima":
-                interpolated[x_target > x_original[-1]] = y_original[-1]
+                interpolated[before_first] = y_original[0]
+                interpolated[after_last] = y_original[-1]
             df_15min[col] = interpolated
 
     # Auto-detect non-negative columns (solar/wind) — applies to columns not
@@ -1071,6 +1090,7 @@ def read_epw_file(
     Returns:
         DataFrame with standardized column names (ghi, dni, dhi, temp_air, wind_speed)
     """
+    freq = normalise_frequency(freq)
     df, meta = pvlib.iotools.read_epw(filepath)
 
     # Standardize column names
@@ -1103,7 +1123,7 @@ def read_epw_file(
     }
 
     # Resample to 15-min if requested
-    if freq in ("15min", "15T", "15m"):
+    if freq == "15min":
         df = resample_to_15min(df, method="makima", latitude=latitude, longitude=longitude)
 
     return df

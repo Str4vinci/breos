@@ -114,7 +114,7 @@ class TestCatalogModules:
             Isc=module.Isc,
             alpha_sc=module.alpha_sc,
             beta_voc=module.beta_voc,
-            gamma_pmp=module.gamma_pmp,
+            gamma_pmp=module.gamma_pmp_effective,
             cells_in_series=module.N_Cells,
         )
         assert all(np.isfinite(v) for v in params)
@@ -123,4 +123,4 @@ class TestCatalogModules:
         assert mpp["p_mp"] == pytest.approx(module.Vmp * module.Imp, rel=2e-3)
 
         gamma = _modeled_gamma(params[:5], params[5], module.alpha_sc)
-        assert gamma == pytest.approx(module.gamma_pmp, abs=5e-3)
+        assert gamma == pytest.approx(module.gamma_pmp_effective, abs=5e-3)
