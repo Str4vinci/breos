@@ -75,6 +75,7 @@ weather/data access, load profiles, PV system data, and cost assumptions; see
 | `inverter_loading_ratio` | `1.25` | DC/AC oversizing ratio; also sets the inverter AC rating that clips production |
 | `pv_loss_overrides` | `None` | Per-component overrides (percent) for the fixed PVWatts system losses, e.g. `{"shading": 0.0}` |
 | `start_date` | `"2023-01-01"` | First simulated day: 1 January of the study year |
+| `weather_source` | `None` | Source part of the cached `weather/<location>_tmy_<years>_<source>.csv` file to load, e.g. `"pvgis-sarah3"`. Needed only when several TMY files exist for a location preset; see [Offline runs with cached weather](recipes.md#offline-runs-with-cached-weather) |
 
 Real calendar-year load profiles follow `start_date`: leap years contain
 8,784 hourly (35,136 quarter-hourly) intervals and preserve exact annual
