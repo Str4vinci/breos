@@ -24,7 +24,12 @@ from breos.battery import (
     simulate_energy_balance,
     simulate_energy_balance_summary,
 )
-from breos.economics import calculate_lcoe_from_projection, cost_analysis_projection, replacement_fraction_from_steps
+from breos.economics import (
+    calculate_lcoe_from_projection,
+    cost_analysis_projection,
+    price_year_rows,
+    replacement_fraction_from_steps,
+)
 from breos.execution import observed_jit_cache_state, reset_jit_cache_observation
 from breos.utils import get_hours_per_step
 
@@ -258,6 +263,9 @@ def build_year_row(
         # year without a replacement.
         "Replacement_Year_Fraction": replacement_fraction_from_steps(replacement_steps, n_steps),
         "PV_Degradation_Factor": pv_degradation_factor,
+        # The simulated duration, which the fixed charge is billed on (ADR 0003
+        # E5): 8760 hours for a common year, 8784 for a leap year.
+        "Simulated_Hours": n_steps * hours_per_step,
         **(extra or {}),
     }
     # Diagnostics: reductions of ledger columns, so one execution path can be
@@ -475,24 +483,33 @@ def run_projection(
     )
 
 
-def value_projection(
-    cfg: dict[str, Any], resolved: ResolvedAppConfig, run: ProjectionRun
-) -> tuple[dict[str, float], pd.DataFrame, float]:
-    """Price a projection: the cost dict, the year-by-year cost projection, and LCOE.
+@dataclass(frozen=True)
+class ProjectionValue:
+    """A priced projection: the cost dict, the priced year rows, the cost projection, and LCOE."""
 
-    The projection is built from the year rows alone; App and Monte Carlo
-    value their runs the same way.
+    costs: dict[str, float]
+    yearly_df: pd.DataFrame
+    cost_projection: pd.DataFrame
+    lcoe: float
+
+
+def value_projection(cfg: dict[str, Any], resolved: ResolvedAppConfig, run: ProjectionRun) -> ProjectionValue:
+    """Price a projection from its year rows; App and Monte Carlo value their runs the same way.
+
+    The rows gain the year-1-price money columns (ADR 0003 E7) before the
+    projection escalates and discounts them.
     """
     costs = build_costs_dict(cfg, resolved)
+    yearly_df = price_year_rows(run.yearly_df, costs)
     cost_projection = cost_analysis_projection(
         results_df=None,
         costs=costs,
-        num_years=len(run.yearly_df),
+        num_years=len(yearly_df),
         inflation_rate=cfg["inflation_rate"],
         sell_price_inflation=cfg["sell_price_inflation"],
         discount_rate=cfg["discount_rate"],
         freq=cfg["resolution"],
-        yearly_summary_df=run.yearly_df,
+        yearly_summary_df=yearly_df,
         total_replacement_cost=run.total_replacement_cost,
         emissions_params=resolved.emissions_params,
     )
@@ -501,4 +518,4 @@ def value_projection(
         total_investment=costs["total_initial_cost"],
         discount_rate=cfg["discount_rate"],
     )
-    return costs, cost_projection, lcoe
+    return ProjectionValue(costs=costs, yearly_df=yearly_df, cost_projection=cost_projection, lcoe=lcoe)

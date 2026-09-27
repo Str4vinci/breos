@@ -71,7 +71,7 @@ def monthly_to_dicts(results_df: pd.DataFrame, freq: str) -> list[dict[str, Any]
 
 def financial_to_dicts(cost_proj: pd.DataFrame, total_initial_cost: float) -> list[dict[str, Any]]:
     """Convert BREOS cost projection into the dashboard line-chart shape."""
-    rows = [{"year": 0, "balance": round(-float(total_initial_cost), 2), "reference": 0.0}]
+    rows: list[dict[str, Any]] = [{"year": 0, "balance": round(-float(total_initial_cost), 2), "reference": 0.0}]
     for _, row in cost_proj.iterrows():
         rows.append(
             {
@@ -80,6 +80,16 @@ def financial_to_dicts(cost_proj: pd.DataFrame, total_initial_cost: float) -> li
                 "reference": 0.0,
                 "cost_with_system": round(float(row["Cost_System_Cumulative_NPV"]), 2),
                 "cost_without_system": round(float(row["Cost_No_Sys_Cumulative_NPV"]), 2),
+                # The year's component cashflows, escalated and not discounted
+                # (ADR 0003 E7); a replacement is booked at its swap instant.
+                "cost_import": round(float(row["Cost_Import"]), 2),
+                "revenue_export": round(float(row["Revenue_Export"]), 2),
+                "cost_operation": round(float(row["Cost_Operation"]), 2),
+                "cost_fixed_charge": round(float(row["Cost_Daily"]), 2),
+                "cost_replacement": round(float(row["Cost_Replacement"]), 2),
+                "replacement_time_years": (
+                    round(float(row["Replacement_Time_Years"]), 4) if pd.notna(row["Replacement_Time_Years"]) else None
+                ),
             }
         )
     return rows
