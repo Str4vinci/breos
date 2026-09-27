@@ -1326,8 +1326,8 @@ def calculate_multi_array_production_breakdown(
     # Import locally to avoid circular dependencies (if solar imported by pv_modules)
     try:
         from breos.pv_modules import get_module
-    except ImportError:
-        raise ImportError("breos.pv_modules is required for multi-array production")
+    except ImportError as err:
+        raise ImportError("breos.pv_modules is required for multi-array production") from err
 
     breakdowns: list[PVProductionBreakdown] = []
 
