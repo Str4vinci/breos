@@ -85,6 +85,7 @@ def test_prepare_inputs_threads_explicit_battery_temperature(monkeypatch):
         "start_date": "2025-01-01",
         "horizon_profile": None,
         "solar_position": "interval-start",
+        "weather_source": None,
         "battery_temperature": 25.0,
         "battery_indoor_model": {"enabled": False},
     }

@@ -799,8 +799,11 @@ def _evaluate_projected_design_metrics(
             initial_cumulative_cal_deg=cumulative_cal_deg,
             degradation_engine=degradation_engine,
             blast_model=blast_model,
-            initial_degradation_state=degradation_state if degradation_engine == "blast" else None,
+            initial_degradation_state=degradation_state,
             return_degradation_state=True,
+            # Leave native rainflow residue open between project years, as
+            # the App loop does, and count it once at the end of the horizon.
+            finalize_degradation=year_idx == years_projection - 1,
             debug=False,
             execution_backend=execution_backend,
             **state_kwargs,
@@ -908,6 +911,28 @@ def _evaluate_projected_design_metrics(
     return metrics
 
 
+def _site_location(location: dict[str, Any]) -> Any:
+    """Build the pvlib site the optimizer simulates, the way App does.
+
+    Without an ``altitude`` key pvlib looks the elevation up from the
+    coordinates, exactly as App's ``Location(lat, lon, tz=...)`` does. The
+    elevation sets the air pressure behind the refraction correction of the
+    solar position, so modelling every site at sea level (the old default of
+    0 m) gave the optimizer slightly different PV output from App for the same
+    design.
+    """
+    from pvlib.location import Location
+
+    altitude = location.get("altitude")
+    return Location(
+        float(location["latitude"]),
+        float(location["longitude"]),
+        tz=location.get("timezone", "UTC"),
+        altitude=None if altitude is None else float(altitude),
+        name=str(location.get("name", "")),
+    )
+
+
 def evaluate_projected_design(
     tmy_data: pd.DataFrame,
     houseload: pd.DataFrame,
@@ -961,16 +986,8 @@ def evaluate_projected_design(
     # and reports the cheap problem late.
     require_backend(execution_backend)
 
-    from pvlib.location import Location
-
     location = config["location"]
-    loc_obj = Location(
-        float(location["latitude"]),
-        float(location["longitude"]),
-        tz=location.get("timezone", "UTC"),
-        altitude=float(location.get("altitude", 0.0)),
-        name=str(location.get("name", "")),
-    )
+    loc_obj = _site_location(location)
     simulation = config.get("simulation", {}) or {}
     financials = config.get("financials", {}) or {}
     emissions_config = config.get("emissions")
@@ -1273,15 +1290,7 @@ try:
             self.location = config["location"]
             # config['location'] is a plain dict; the pvlib Location that
             # calculate_pv_production_dc needs is constructed once here.
-            from pvlib.location import Location
-
-            self.loc_obj = Location(
-                self.location["latitude"],
-                self.location["longitude"],
-                tz=self.location.get("timezone", "UTC"),
-                altitude=self.location.get("altitude", 0),
-                name=self.location.get("name", ""),
-            )
+            self.loc_obj = _site_location(self.location)
 
             self.constraints = config.get("constraints", {})
             self.budget_limit = self.constraints.get("budget_eur", 10000)

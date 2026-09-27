@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 import pandas as pd
@@ -12,7 +12,7 @@ import pandas as pd
 from breos.app_config import DEFAULTS, ResolvedAppConfig, build_costs_dict, default_module_key
 from breos.app_inputs import AppRuntimeDependencies, prepare_simulation_inputs
 from breos.battery import BatteryConfig, simulate_energy_balance
-from breos.degradation.results import build_degradation_summary_from_state
+from breos.degradation.results import DegradationEngineName, build_degradation_summary_from_state
 from breos.economics import (
     calculate_lcoe_from_projection,
     cost_analysis_projection,
@@ -55,7 +55,10 @@ class SimulationArtifacts:
 # stage to name the front side explicitly, and adds the pv_model provenance
 # block. All three are additive, so 1.0 consumers keep reading the fields they
 # already knew.
-LEDGER_SCHEMA_VERSION = "1.1"
+# 1.2 removes the year_1_degradation loss-waterfall stage. PV module age is
+# counted at the start of each year, so year 1 has no degradation and the stage
+# was always 0; pvwatts_static is now the last stage.
+LEDGER_SCHEMA_VERSION = "1.2"
 
 
 def _series_energy_kwh(series: pd.Series, freq: str) -> float:
@@ -159,7 +162,9 @@ def _build_pv_loss_waterfall(
     effective_dc = _series_energy_kwh(pv_breakdown.effective_irradiance_dc, freq)
     module_dc = _series_energy_kwh(pv_breakdown.module_dc, freq)
     dc_after_static = _series_energy_kwh(pv_breakdown.dc_after_static_losses, freq)
-    dc_after_degradation = _series_energy_kwh(first_year_results_df["PV_DC"], freq)
+    # Module age is counted at the start of each year, so year 1 has no PV
+    # degradation and its dispatched PV DC equals the static-loss stage.
+    pv_dc_generation = _series_energy_kwh(first_year_results_df["PV_DC"], freq)
 
     pv_peak_w = cfg["n_modules"] * resolved.avg_module_power_w
     loading_ratio = cfg["inverter_loading_ratio"]
@@ -183,7 +188,7 @@ def _build_pv_loss_waterfall(
         name: _rounded(_series_energy_kwh(loss, freq)) for name, loss in pv_breakdown.pvwatts_component_losses.items()
     }
     empty_series = pd.Series(dtype=float)
-    dispatch = {
+    dispatch: dict[str, Any] = {
         "curtailment_kwh": _rounded(curtailment),
         "battery_charge_loss_kwh": _rounded(
             _series_energy_kwh(first_year_results_df.get("Battery_Charge_Loss", empty_series), freq)
@@ -206,7 +211,6 @@ def _build_pv_loss_waterfall(
         _waterfall_stage("bifacial_rear_gain", "Bifacial rear gain", effective_dc, front_effective_dc),
         _waterfall_stage("temperature", "Cell temperature", module_dc, effective_dc),
         _waterfall_stage("pvwatts_static", "Static PVWatts losses", dc_after_static, module_dc),
-        _waterfall_stage("year_1_degradation", "Year 1 PV degradation", dc_after_degradation, dc_after_static),
     ]
 
     battery_begin = float(first_year_results_df["Battery_Energy_Beginning"].iloc[0]) / 1000.0
@@ -260,11 +264,11 @@ def _build_pv_loss_waterfall(
         "dispatch": dispatch,
         "energy_balance": {
             "pv_dc": {
-                "generation_kwh": _rounded(dc_after_degradation),
+                "generation_kwh": _rounded(pv_dc_generation),
                 "to_inverter_kwh": _rounded(pv_dc_to_inverter),
                 "to_battery_kwh": _rounded(pv_dc_to_battery),
                 "curtailed_kwh": _rounded(curtailment),
-                "residual_kwh": _rounded(dc_after_degradation - pv_dc_to_inverter - pv_dc_to_battery - curtailment, 6),
+                "residual_kwh": _rounded(pv_dc_generation - pv_dc_to_inverter - pv_dc_to_battery - curtailment, 6),
             },
             "ac_delivery": {
                 "direct_pv_to_load_kwh": _rounded(direct_pv_ac),
@@ -383,7 +387,7 @@ def run_app_simulation(
                 inverter_ac_capacity_w=inverter_ac_capacity_w,
             )
 
-        state_kwargs: dict[str, float] = {}
+        state_kwargs: dict[str, Any] = {}
         if carried_energy_wh is not None:
             state_kwargs = {
                 "initial_energy_wh": carried_energy_wh,
@@ -411,8 +415,9 @@ def run_app_simulation(
             **state_kwargs,
             degradation_engine=degradation_engine,
             blast_model=blast_model,
-            initial_degradation_state=degradation_state if degradation_engine == "blast" else None,
+            initial_degradation_state=degradation_state,
             return_degradation_state=True,
+            finalize_degradation=year_idx == projection_years - 1,
             execution_backend=execution_backend,
         )
         year_cache_state = observed_jit_cache_state(execution_backend)
@@ -426,7 +431,10 @@ def run_app_simulation(
             year_n_rep,
             degradation_df,
             degradation_state,
-        ) = sim_result
+        ) = cast(
+            "tuple[pd.DataFrame, float, pd.DataFrame, float, int, pd.DataFrame, dict[str, Any]]",
+            sim_result,  # return_degradation_state=True selects the 7-tuple
+        )
 
         if has_battery:
             carried_energy_wh = float(results_df["Battery_Energy_End"].iloc[-1])
@@ -515,7 +523,7 @@ def run_app_simulation(
         {"year": int(row["Year"]), "count": int(row["Replacements"])} for row in yearly_summaries if row["Replacements"]
     ]
     degradation_summary = build_degradation_summary_from_state(
-        engine=degradation_engine,
+        engine=cast(DegradationEngineName, degradation_engine),
         model_key=str(blast_model) if blast_model is not None else cfg["calendar_model"],
         final_soh_pct=current_soh,
         replacement_events=replacement_events,

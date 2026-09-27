@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import math
 import multiprocessing
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from importlib.metadata import PackageNotFoundError, version
 from multiprocessing import Pool
 from typing import Any
@@ -107,8 +107,10 @@ class MonteCarloSettings:
     n_procs: int = 1
     # "python" is the reference implementation and the default. "numba"
     # selects the optional compiled within-day dispatch kernel and requires
-    # breos[fast]; it is checked before any trajectory starts.
-    execution_backend: str = "python"
+    # breos[fast]; it is checked before any trajectory starts. None inherits
+    # the App config's top-level ``execution_backend``, which itself defaults
+    # to "python"; see :func:`run_montecarlo`.
+    execution_backend: str | None = None
 
 
 @dataclass
@@ -286,9 +288,10 @@ def _align_years(
 
 # A PV-only study memoizes the DC-to-AC conversion for every distinct
 # (weather year, project year) pair. That is bounded work, but it is not
-# bounded memory: three arrays per pair, at eight bytes per timestep. The
-# Article's 19 weather years over a 20-year project at 15-minute resolution
-# come to about 320 MiB. Past this budget the study runs without the cache
+# bounded memory: four arrays per pair (the PV input and three conversion
+# outputs), at eight bytes per timestep. The Article's 19 weather years over a
+# 20-year project at 15-minute resolution come to about 407 MiB. Past this
+# budget the study runs without the cache
 # rather than exhausting the machine -- same numbers, less speed.
 _PV_CHAIN_CACHE_MAX_BYTES = 1 << 30
 
@@ -316,7 +319,7 @@ def _pv_chain_cache_is_worthwhile(
     """
     if n_runs < _PV_CHAIN_CACHE_MIN_REUSE * n_years:
         return False
-    if 3 * n_years * years_per_run * n_steps * 8 > _PV_CHAIN_CACHE_MAX_BYTES:
+    if 4 * n_years * years_per_run * n_steps * 8 > _PV_CHAIN_CACHE_MAX_BYTES:
         return False
     return n_procs == 1 or multiprocessing.get_start_method() == "fork"
 
@@ -396,6 +399,7 @@ def _simulate_trajectory(
     yearly_summaries: list[dict[str, Any]] = []
     carried_energy_wh: float | None = None
     carried_pv_origin_energy_wh: float | None = None
+    degradation_state: dict[str, Any] | None = None
 
     for year_idx in range(years_per_run):
         pv_degradation_factor = (1 - degradation_rate) ** year_idx
@@ -463,8 +467,14 @@ def _simulate_trajectory(
             initial_cumulative_cycle_deg=cumulative_cycle_deg,
             initial_cumulative_cal_deg=cumulative_cal_deg,
             execution_backend=settings.execution_backend,
+            initial_degradation_state=degradation_state,
+            return_degradation_state=True,
+            # Match App: native rainflow residue continues across project
+            # years and is counted once, at the end of the trajectory.
+            finalize_degradation=year_idx == years_per_run - 1,
             **state_kwargs,
         )
+        degradation_state = summary.final_degradation_state
         year_rep_cost = summary.total_replacement_cost
         year_n_rep = summary.n_replacements
         totals = summary.column_sums
@@ -741,11 +751,20 @@ def run_montecarlo(config: dict[str, Any], settings: MonteCarloSettings) -> Mont
         config: An App configuration dict (same keys as :class:`breos.App`).
         settings: Monte Carlo controls (weather file, runs, uncertainty, seed).
 
+    The dispatch backend is ``settings.execution_backend`` when set, else the
+    config's top-level ``execution_backend``, else ``"python"``. The CLI
+    applies the same order after its own ``--execution-backend`` flag and
+    ``[montecarlo].execution_backend``, so a study selects the same backend
+    from Python and from ``breos montecarlo``. The returned result's
+    ``settings`` records the backend that ran.
+
     Returns:
         A :class:`MonteCarloResult` with one row per run and summary statistics.
     """
     resolved = resolve_app_config(config)
     cfg = resolved.cfg
+    if settings.execution_backend is None:
+        settings = replace(settings, execution_backend=cfg["execution_backend"])
     if settings.n_runs < 1:
         raise ValueError("n_runs must be at least 1")
     if settings.years_per_run is not None and settings.years_per_run < 1:
@@ -755,6 +774,13 @@ def run_montecarlo(config: dict[str, Any], settings: MonteCarloSettings) -> Mont
     # The load scale multiplies demand, so a negative bound would make demand negative.
     if not (math.isfinite(settings.min_load_scale) and settings.min_load_scale >= 0.0):
         raise ValueError(f"min_load_scale must be a finite, non-negative number, got {settings.min_load_scale}")
+    # None is the way to leave demand unbounded above. An infinite bound would
+    # say the same thing, but it cannot be written to strict JSON provenance.
+    if settings.max_load_scale is not None and not math.isfinite(settings.max_load_scale):
+        raise ValueError(
+            "max_load_scale must be a finite number, or None to leave the load scale unbounded, "
+            f"got {settings.max_load_scale}"
+        )
     if settings.max_load_scale is not None and not settings.max_load_scale >= settings.min_load_scale:
         raise ValueError(
             f"max_load_scale must be at least min_load_scale ({settings.min_load_scale}), got {settings.max_load_scale}"

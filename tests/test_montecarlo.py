@@ -525,7 +525,7 @@ def test_summarize_keeps_payback_entry_when_no_run_pays_back():
     [
         ({"max_load_scale": -1.0}, "max_load_scale must be at least min_load_scale"),
         ({"min_load_scale": 1.2, "max_load_scale": 1.1}, "max_load_scale must be at least min_load_scale"),
-        ({"max_load_scale": float("nan")}, "max_load_scale must be at least min_load_scale"),
+        ({"max_load_scale": float("nan")}, "max_load_scale must be a finite number, or None"),
         ({"min_load_scale": -0.5}, "min_load_scale must be a finite, non-negative number"),
         ({"min_load_scale": float("nan")}, "min_load_scale must be a finite, non-negative number"),
         ({"load_uncertainty": float("nan")}, "load_uncertainty must be a finite, non-negative number"),

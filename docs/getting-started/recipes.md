@@ -225,7 +225,9 @@ over objectives and constraints.
 ## 15-minute resolution
 
 Hourly weather is interpolated to 15-minute steps (Makima), and the bundled
-H0 profile has a native 15-minute variant. Simulations take correspondingly
+H0 profile has a native 15-minute variant. An external profile supplied only
+as hourly means is interpolated between hour midpoints and keeps each hour's
+mean exactly. Simulations take correspondingly
 longer:
 
 ```toml
@@ -320,8 +322,23 @@ to a location preset.
 Subsequent runs from the same working directory work without network access
 (the log line `Found local weather file` confirms the cache hit). Custom
 coordinate-dict locations always fetch; delete or rename the file to force a
-fresh fetch. The filename's year and source parts only need to match the
-pattern — they are metadata, not lookup keys.
+fresh fetch. The filename's year part only needs to match the pattern; it is
+metadata, not a lookup key.
+
+If the directory holds more than one TMY file for the location, for example a
+PVGIS and an NSRDB export for Porto, BREOS does not pick one: the run stops and
+lists the candidates. Set `weather_source` to the filename's source part to
+choose one:
+
+```python
+App({"location": "porto", "n_modules": 10, "annual_consumption_kwh": 4000,
+     "weather_source": "pvgis-sarah3"})
+```
+
+or `breos run --config config.toml --weather-source pvgis-sarah3` from the
+command line. A `weather_source` with no matching file is an error rather than
+a PVGIS fetch. The file that was used, with its SHA-256 digest and the parsed
+filename (including the source), is recorded under `provenance.weather`.
 
 The file is restamped onto the year of `start_date` and must then cover that
 whole calendar year. A file missing its first or last rows raises `ValueError`
