@@ -1,10 +1,16 @@
 """Tests for load profile helpers."""
 
+import shutil
+from importlib.resources import as_file
+
 import numpy as np
 import pandas as pd
 import pytest
 
-from breos.load_profiles import _extend_to_years, load_profile
+from breos.load_profiles import PROFILE_FILES, _extend_to_years, _resample_load_to_15min, load_profile
+from breos.resources import rlp_resource
+
+_LOAD_COLUMN = "Electrical Consumption [W]"
 
 
 def test_extend_to_years_duplicates_feb_28_for_leap_day_without_shifting_rest():
@@ -257,3 +263,54 @@ def test_external_profile_with_dst_offsets_is_evenly_spaced(tmp_path):
     (tmp_path / "REE_2026_2.0TD_1000kwh_hourly.csv").write_text("\n".join(lines) + "\n")
 
     assert len(load_profile("8", 1000, rlp_directory=str(tmp_path))) == 8760
+
+
+def _hourly_only_rlp_directory(tmp_path):
+    """An external profile directory with the bundled hourly H0 file and no 15-minute file."""
+    with as_file(rlp_resource(PROFILE_FILES["1"])) as source:
+        shutil.copy(source, tmp_path / PROFILE_FILES["1"])
+    return str(tmp_path)
+
+
+def _lag_in_steps(resampled, reference):
+    """Vertex of the mean squared error over shifts of -1, 0 and +1 step; > 0 means late."""
+    early = np.mean((resampled[:-1] - reference[1:]) ** 2)
+    aligned = np.mean((resampled - reference) ** 2)
+    late = np.mean((resampled[1:] - reference[:-1]) ** 2)
+    return (early - late) / (2.0 * (early - 2.0 * aligned + late)), early, aligned, late
+
+
+def test_hourly_h0_resampled_to_15min_has_no_lag_and_keeps_each_hours_mean():
+    # The bundled 15-minute H0 profile, averaged to hours and resampled back,
+    # used to run about 22.5 minutes early and miss each hour's mean by 6 W.
+    native = load_profile("1", 1000, freq="15min")[_LOAD_COLUMN]
+    hourly = native.resample("h").mean().to_frame()
+
+    resampled = _resample_load_to_15min(hourly)[_LOAD_COLUMN]
+
+    assert resampled.index.equals(native.index)
+    lag, early, aligned, late = _lag_in_steps(resampled.to_numpy(), native.to_numpy())
+    assert abs(lag) < 0.05
+    assert aligned < early and aligned < late
+    hour_means = resampled.to_numpy().reshape(-1, 4).mean(axis=1)
+    np.testing.assert_allclose(hour_means, hourly[_LOAD_COLUMN].to_numpy(), rtol=0, atol=1e-9)
+    assert resampled.min() >= 0.0
+
+
+@pytest.mark.parametrize("timezone", ["UTC", "Europe/Berlin"])
+def test_load_profile_from_an_hourly_file_keeps_each_hours_mean_at_15min(tmp_path, timezone):
+    directory = _hourly_only_rlp_directory(tmp_path)
+    hourly = load_profile("1", 3500, freq="h", rlp_directory=directory, timezone=timezone)[_LOAD_COLUMN]
+
+    quarter = load_profile("1", 3500, freq="15min", rlp_directory=directory, timezone=timezone)[_LOAD_COLUMN]
+
+    assert len(quarter) == 4 * len(hourly)
+    assert quarter.index[0] == hourly.index[0]
+    np.testing.assert_allclose(quarter.to_numpy().reshape(-1, 4).mean(axis=1), hourly.to_numpy(), rtol=0, atol=1e-9)
+    assert quarter.sum() * 0.25 / 1000 == pytest.approx(3500, rel=1e-12)
+
+
+def test_resample_load_rejects_an_irregular_index():
+    idx = pd.DatetimeIndex(["2025-01-01 00:00", "2025-01-01 01:00", "2025-01-01 03:00"], tz="UTC")
+    with pytest.raises(ValueError, match="regular hourly index"):
+        _resample_load_to_15min(pd.DataFrame({_LOAD_COLUMN: [1.0, 2.0, 3.0]}, index=idx))
