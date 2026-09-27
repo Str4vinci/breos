@@ -57,7 +57,7 @@ weather/data access, load profiles, PV system data, and cost assumptions; see
 | `discount_rate` | `0.03` | Discount rate for NPV |
 | `emissions_country` | `None` | Country code for CO2 calculations (`"PT"`, `"DE"`, `"ES"`, ...) |
 | `export_emissions_factor_gco2_kwh` | `None` | Optional displacement factor for exported PV. `None` uses the preset's avoided-grid factor and reports that fallback explicitly |
-| `pv_degradation_rate` | `0.005` | Annual PV degradation rate (0.5% / year) |
+| `pv_degradation_rate` | `0.005` | Annual PV degradation rate (0.5% / year), compounded and counted from the start of each year, so year 1 has none; see [Module aging](../api/pv.md#module-aging) |
 | `calendar_model` | `"naumann_lam_field_calibrated"` | Battery calendar aging model. Default is the v1 field calibration; use `"naumann_lam_field_calibrated_v2"` for the v2 field-calibrated fit with Lam `Ea`/`n` fixed and `k0`/`b` fitted |
 | `degradation_engine` | `"native"` | `"native"` keeps Naumann/Lam; `"blast"` explicitly opts into a vendored BLAST cell model |
 | `blast_model` | `None` | Stable BLAST model key; required with `degradation_engine="blast"` and invalid with the native engine |
