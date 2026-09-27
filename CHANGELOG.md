@@ -111,6 +111,26 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   boundaries hourly input cannot represent is rejected at that resolution
   (A3). Nothing in App, Monte Carlo or the optimizer uses tariffs yet, so no
   result changes; the `[tariff]` config table comes with TOU valuation.
+- **Time-of-use valuation** through a `[tariff]` App table (ADR 0002): a
+  bundled `schedule`, a `currency` (EUR), per-period `import_prices` and
+  `export_prices` (or an `all` price), an optional `fixed_charge_per_day`,
+  `boundary_policy = "strict"` and, for a 2027 schedule on an earlier year, a
+  `study_date`. It is checked when App is built: unknown schedules,
+  currencies and periods, unpriced periods, a schedule from another timezone,
+  a resolution too coarse for the schedule's boundaries, and flat
+  `costs.electricity_cost`, `electricity_sold_cost` or `daily_power_cost`
+  set as well all raise. The tariff is resolved once on the simulated
+  calendar and every project year replays it (A2). The shared projection
+  loop prices each year as step energy times step price, from per-step
+  frames (App) or weighted summary sums (Monte Carlo, through the new
+  `weights` argument of `simulate_energy_balance_summary`), into the year
+  rows' `Import_Cost`, `Export_Revenue`, `Baseline_Import_Cost` and
+  `Fixed_Charge`. Dispatch does not change. `result()["provenance"]["tariff"]`
+  and the Monte Carlo provenance record the schedule and its source, the
+  prices, both hashes, the timezone and `calendar_policy =
+  "replay_start_year"`. Projected optimization does not read a tariff yet.
+  Flat-price runs are unchanged; their `resolved_config` gains `tariff: null`.
+  New example: `configs/examples/time-of-use-portugal.toml`.
 
 ### Changed
 - `resample_tmy_to_15min` is now a thin wrapper over `resample_to_15min`, so

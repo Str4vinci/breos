@@ -735,3 +735,57 @@ def resolve_flat_tariff(
         version="1",
     )
     return resolve_tariff(index, ("all",) * len(index), FLAT_SCHEDULE, prices, timezone=timezone)
+
+
+@dataclass(frozen=True)
+class TariffSpec:
+    """A configured tariff before it meets a simulation index: the App's ``[tariff]`` table.
+
+    ``resolve`` classifies and prices one index. Every project year replays
+    the start-year calendar (ADR 0002 A2), so a run resolves once and reuses
+    the result for every year.
+    """
+
+    schedule: str
+    prices: TariffPrices
+    boundary_policy: str = "strict"
+    study_date: date | None = None
+
+    def resolve(self, index: pd.DatetimeIndex, timezone: str) -> ResolvedTariff:
+        return resolve_named_tariff(
+            index,
+            self.schedule,
+            self.prices,
+            timezone=timezone,
+            study_date=self.study_date,
+            boundary_policy=self.boundary_policy,
+        )
+
+
+def tariff_provenance(resolved: ResolvedTariff, *, calendar_year: int) -> dict[str, Any]:
+    """A JSON-safe record of a resolved tariff for run provenance."""
+    schedule, prices = resolved.schedule, resolved.prices
+    return {
+        "schedule": schedule.identifier,
+        "schedule_version": schedule.version,
+        "schedule_source": schedule.source,
+        "schedule_source_url": schedule.source_url,
+        "timezone": resolved.timezone,
+        "currency": prices.currency,
+        "import_prices": dict(prices.import_prices),
+        "export_prices": dict(prices.export_prices),
+        "fixed_charge_per_day": prices.fixed_charge_per_day,
+        "boundary_policy": resolved.boundary_policy,
+        "schedule_hash": resolved.schedule_hash,
+        "price_hash": resolved.price_hash,
+        # ADR 0002 A2: every project year replays this calendar; weekdays,
+        # holidays and effective dates do not advance.
+        "calendar_policy": "replay_start_year",
+        "calendar_year": int(calendar_year),
+    }
+
+
+def schedule_resolution_minutes(identifier: str) -> int:
+    """The finest boundary step of a bundled schedule, in minutes: input must be at least this fine."""
+    schedule = get_tariff_schedule(identifier)
+    return int(_schedule_catalog()[schedule.identifier]["required_resolution_minutes"])

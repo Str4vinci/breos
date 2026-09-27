@@ -22,6 +22,7 @@ from breos.load_profiles import LOAD_PROFILE_METADATA_KEY
 from breos.projection import ProjectionYear, run_projection, value_projection
 from breos.pv_modules import get_module
 from breos.solar import PVProductionBreakdown
+from breos.tariffs import tariff_provenance
 from breos.utils import get_hours_per_step
 
 
@@ -43,6 +44,8 @@ class SimulationArtifacts:
     load_profile_metadata: dict[str, Any]
     degradation_summary: dict[str, Any]
     execution: dict[str, Any]
+    # The resolved tariff's provenance; None on flat prices.
+    tariff: dict[str, Any] | None = None
 
 
 # 1.1 adds the bifacial_rear_gain PV loss-waterfall stage, relabels the iam
@@ -322,6 +325,13 @@ def run_app_simulation(
             temperature_series=inputs.temperature_series,
         )
 
+    # Every project year replays the start-year calendar (ADR 0002 A2), so the
+    # tariff is resolved once, on the simulated index.
+    tariff = (
+        resolved.tariff.resolve(pd.DatetimeIndex(inputs.dc_system_base.index), resolved.timezone)
+        if resolved.tariff
+        else None
+    )
     projection = run_projection(
         cfg,
         resolved,
@@ -330,6 +340,7 @@ def run_app_simulation(
         has_battery=has_battery,
         execution_backend=execution_backend,
         observe_jit_per_year=True,
+        tariff=tariff,
     )
     first_year_results_df = cast(pd.DataFrame, projection.first_year_results_df)
     current_soh = projection.carry.soh_pct
@@ -390,4 +401,5 @@ def run_app_simulation(
         ),
         degradation_summary=degradation_summary,
         execution=execution,
+        tariff=tariff_provenance(tariff, calendar_year=int(cfg["start_date"][:4])) if tariff is not None else None,
     )

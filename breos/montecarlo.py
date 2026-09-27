@@ -51,6 +51,7 @@ from breos.execution import (
 from breos.load_profiles import LOAD_PROFILE_METADATA_KEY, load_profile
 from breos.projection import ProjectionYear, build_pv_only_battery_config, run_projection, value_projection
 from breos.pv.model_options import DEFAULT_SOLAR_POSITION, resolve_solar_position_method, solar_position_time_offset
+from breos.tariffs import ResolvedTariff, tariff_provenance
 from breos.weather import (
     build_battery_temperature_series,
     fetch_tmy_weather_data,
@@ -343,6 +344,7 @@ def _simulate_trajectory(
     rng: np.random.Generator,
     aligned_by_year: dict[int, AlignedSimulationInputs],
     pv_chains: dict[tuple[int, int], AlignedSimulationInputs] | None,
+    tariff: ResolvedTariff | None = None,
 ) -> tuple[dict[str, Any], pd.DataFrame]:
     """Run one Monte Carlo trajectory and return its summary metrics."""
     degradation_rate = cfg["pv_degradation_rate"]
@@ -379,6 +381,7 @@ def _simulate_trajectory(
         year_inputs,
         has_battery=has_battery,
         execution_backend=cast(str, settings.execution_backend),
+        tariff=tariff,
     )
     current_soh = projection.carry.soh_pct
     total_replacements = projection.total_replacements
@@ -485,6 +488,23 @@ def _summarize(runs: pd.DataFrame) -> dict[str, dict[str, float]]:
 _WORKER_CONTEXT: tuple[Any, ...] | None = None
 
 
+def _resolve_study_tariff(
+    resolved: ResolvedAppConfig, aligned_by_year: dict[int, AlignedSimulationInputs]
+) -> ResolvedTariff | None:
+    """Resolve the configured tariff once for the whole study.
+
+    Every sampled weather year is restamped to the target year, so all of them
+    share one calendar and one resolved tariff (ADR 0002 A2).
+    """
+    if resolved.tariff is None:
+        return None
+    calendars = [inputs.index for inputs in aligned_by_year.values()]
+    reference = calendars[0]
+    if any(not calendar.equals(reference) for calendar in calendars[1:]):
+        raise ValueError("Monte Carlo weather years do not share one calendar, so one tariff cannot price them")
+    return resolved.tariff.resolve(reference, resolved.timezone)
+
+
 def _initialize_worker(*context: Any) -> None:
     """Install read-only trajectory inputs once per worker process."""
     global _WORKER_CONTEXT
@@ -503,6 +523,7 @@ def _run_trajectory_index(run_idx: int) -> tuple[int, dict[str, Any], pd.DataFra
         settings,
         aligned_by_year,
         pv_chains,
+        tariff,
     ) = _WORKER_CONTEXT
     # One observation window per trajectory: that is the unit of work whose
     # compile cost is being attributed. A no-op on the Python backend.
@@ -521,6 +542,7 @@ def _run_trajectory_index(run_idx: int) -> tuple[int, dict[str, Any], pd.DataFra
         rng,
         aligned_by_year,
         pv_chains,
+        tariff,
     )
     # None from a numba run means no compiled dispatch call was observed -- a
     # trajectory can legitimately never enter the kernel. Record that as
@@ -627,6 +649,7 @@ def run_montecarlo(config: dict[str, Any], settings: MonteCarloSettings) -> Mont
         has_battery=has_battery,
     )
     pv_chains = _prepare_pv_chains(cfg, resolved, aligned_by_year, settings, years_per_run)
+    tariff = _resolve_study_tariff(resolved, aligned_by_year)
 
     # The weather frames and the raw load profile are not passed to the
     # workers: alignment consumed them here, and a worker only ever reads the
@@ -639,6 +662,7 @@ def run_montecarlo(config: dict[str, Any], settings: MonteCarloSettings) -> Mont
         settings,
         aligned_by_year,
         pv_chains,
+        tariff,
     )
     if settings.n_procs == 1:
         _initialize_worker(*context)
@@ -684,5 +708,6 @@ def run_montecarlo(config: dict[str, Any], settings: MonteCarloSettings) -> Mont
                 "numpy.random.default_rng(numpy.random.SeedSequence(base_seed).spawn(n_runs)[zero_based_run_index])"
             ),
             "execution": backend_provenance,
+            **({"tariff": tariff_provenance(tariff, calendar_year=settings.target_year)} if tariff is not None else {}),
         },
     )
