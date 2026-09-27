@@ -6,7 +6,9 @@ ledger schema (``LEDGER_SCHEMA_VERSION``). A renamed or removed field bumps
 the major version; an added field bumps the minor. A result without the field
 predates the currency-neutral names of 1.0. 1.1 adds the App result's
 top-level year-1 money components (``grid_import_cost_year1_prices`` and its
-neighbours).
+neighbours). 1.2 adds ``provenance.economics``, the rates a projection used
+(ADR 0003 E1, E2), to App and Monte Carlo results, and the escalator keys to
+``resolved_config``.
 """
 
-RESULT_SCHEMA_VERSION = "1.1"
+RESULT_SCHEMA_VERSION = "1.2"

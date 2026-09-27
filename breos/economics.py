@@ -384,6 +384,50 @@ def _grid_shift_kwh(yearly: pd.DataFrame) -> Optional[np.ndarray]:
     return (yearly[columns[0]] - yearly[columns[1]]).to_numpy(dtype=float)
 
 
+def resolve_escalation_rates(
+    inflation_rate: float, import_price_escalation: Optional[float] = None, om_escalation: Optional[float] = None
+) -> Dict[str, float]:
+    """The escalation rate of each flow (ADR 0003 E2).
+
+    Import energy and the fixed charge escalate at ``import_price_escalation``
+    and O&M at ``om_escalation``; either left as None inherits
+    ``inflation_rate``, today's single escalator.
+    """
+    return {
+        "import_price_escalation": inflation_rate if import_price_escalation is None else import_price_escalation,
+        "om_escalation": inflation_rate if om_escalation is None else om_escalation,
+    }
+
+
+def projection_rates_record(cfg: Dict[str, Any]) -> Dict[str, float]:
+    """The rates a projection used, for provenance (ADR 0003 E1, E2).
+
+    All are nominal annual rates. ``real_discount_rate`` is the discount rate
+    net of general inflation, ``(1 + d) / (1 + inflation) - 1``; BREOS records
+    the rates it used, not whether the user meant a nominal or real study.
+    """
+    rates = resolve_escalation_rates(
+        cfg["inflation_rate"], cfg.get("import_price_escalation"), cfg.get("om_escalation")
+    )
+    return {
+        "basis": "nominal",
+        "inflation_rate": float(cfg["inflation_rate"]),
+        "import_price_escalation": float(rates["import_price_escalation"]),
+        "export_price_escalation": float(cfg["sell_price_inflation"]),
+        "om_escalation": float(rates["om_escalation"]),
+        "replacement_cost_learning": float(cfg.get("replacement_cost_learning", 0.0)),
+        "discount_rate": float(cfg["discount_rate"]),
+        "real_discount_rate": (1 + cfg["discount_rate"]) / (1 + cfg["inflation_rate"]) - 1,
+    }
+
+
+def _replacement_outlay(base: np.ndarray, exponents: np.ndarray, inflation_rate: float, learning: float) -> np.ndarray:
+    """``C0 × (1 + inflation)^t × (1 − learning)^t`` at each swap instant ``t`` (ADR 0003 E2)."""
+    outlay = base * (1 + inflation_rate) ** exponents
+    # Without learning the result is the pre-E2 expression, the same floats.
+    return outlay if learning == 0.0 else outlay * (1 - learning) ** exponents
+
+
 def cost_analysis_projection(
     results_df: Optional[pd.DataFrame],
     costs: Dict[str, float],
@@ -399,6 +443,9 @@ def cost_analysis_projection(
     total_replacement_cost: Optional[float] = None,
     emissions_params=None,
     currency: str = DEFAULT_CURRENCY,
+    import_price_escalation: Optional[float] = None,
+    om_escalation: Optional[float] = None,
+    replacement_cost_learning: float = 0.0,
 ) -> pd.DataFrame:
     """
     Perform multi-year cost projection analysis.
@@ -417,9 +464,11 @@ def cost_analysis_projection(
             2.0 named it ``Sell_To_Grid`` and must be renamed first.
         costs: Dictionary with cost parameters (from calculate_costs())
         num_years: Number of years to project
-        inflation_rate: Annual inflation for electricity/operation costs
-        sell_price_inflation: Annual inflation for sell price
-        discount_rate: Discount rate for NPV calculations
+        inflation_rate: General annual inflation. Import energy, the fixed
+            charge and O&M escalate at it unless their own rate is given,
+            and replacement prices always inflate at it (ADR 0003 E2).
+        sell_price_inflation: Annual escalation of the export price
+        discount_rate: Nominal discount rate for NPV calculations
         degradation_rate: Annual compound PV degradation rate, counted from
             the start of each year: year ``n`` production is scaled by
             ``(1 - degradation_rate) ** (n - 1)``, so year 1 has none. Used
@@ -463,7 +512,9 @@ def cost_analysis_projection(
         proj["Year"] = expected_years
 
         # Factors
-        inflation_factors = (1 + inflation_rate) ** (proj["Year"] - 1)
+        rates = resolve_escalation_rates(inflation_rate, import_price_escalation, om_escalation)
+        inflation_factors = (1 + rates["import_price_escalation"]) ** (proj["Year"] - 1)
+        om_factors = (1 + rates["om_escalation"]) ** (proj["Year"] - 1)
         sell_inflation_factors = (1 + sell_price_inflation) ** (proj["Year"] - 1)
         discount_factors = 1 / ((1 + discount_rate) ** proj["Year"])
 
@@ -482,7 +533,7 @@ def cost_analysis_projection(
         # Cost calculations using actual data
         proj["Cost_Import"] = yearly_data["Import_Cost"] * inflation_factors
         proj["Revenue_Export"] = yearly_data["Export_Revenue"] * sell_inflation_factors
-        proj["Cost_Operation"] = costs["annual_operation_cost"] * inflation_factors
+        proj["Cost_Operation"] = costs["annual_operation_cost"] * om_factors
         proj["Cost_Daily"] = yearly_data["Fixed_Charge"] * inflation_factors
 
         # Battery replacement costs from propagation. The outlay is booked at
@@ -501,7 +552,9 @@ def cost_analysis_projection(
         )
         replacement_exponents = _booking_exponents(replacement_time, proj["Year"].to_numpy(dtype=float))
         proj["Replacement_Time_Years"] = replacement_time
-        proj["Cost_Replacement"] = replacement_base * (1 + inflation_rate) ** replacement_exponents
+        proj["Cost_Replacement"] = _replacement_outlay(
+            replacement_base, replacement_exponents, inflation_rate, replacement_cost_learning
+        )
 
         proj["Cost_System_Annual"] = (
             proj["Cost_Import"]
@@ -653,7 +706,9 @@ def cost_analysis_projection(
     proj["Year"] = range(1, num_years + 1)
 
     # Factors
-    inflation_factors = (1 + inflation_rate) ** (proj["Year"] - 1)
+    rates = resolve_escalation_rates(inflation_rate, import_price_escalation, om_escalation)
+    inflation_factors = (1 + rates["import_price_escalation"]) ** (proj["Year"] - 1)
+    om_factors = (1 + rates["om_escalation"]) ** (proj["Year"] - 1)
     sell_inflation_factors = (1 + sell_price_inflation) ** (proj["Year"] - 1)
     discount_factors = 1 / ((1 + discount_rate) ** proj["Year"])
     degradation_factors = (1 - degradation_rate) ** (proj["Year"] - 1)
@@ -673,7 +728,7 @@ def cost_analysis_projection(
 
     proj["Cost_Import"] = import_adjusted * costs["electricity_cost"] * inflation_factors
     proj["Revenue_Export"] = export_degraded * costs["electricity_sold_cost"] * sell_inflation_factors
-    proj["Cost_Operation"] = costs["annual_operation_cost"] * inflation_factors
+    proj["Cost_Operation"] = costs["annual_operation_cost"] * om_factors
     proj["Cost_Daily"] = first_year_days * costs["daily_power_cost"] * inflation_factors
 
     proj["Cost_System_Annual"] = (
@@ -710,7 +765,9 @@ def cost_analysis_projection(
     proj["Replacement_Time_Years"] = replacement_time
     # The simulation logs replacement at the base (year-1) cost input, so
     # inflate to the swap instant here, and discount from the same instant.
-    proj["Cost_Replacement"] = replacement_base * (1 + inflation_rate) ** replacement_exponents
+    proj["Cost_Replacement"] = _replacement_outlay(
+        replacement_base, replacement_exponents, inflation_rate, replacement_cost_learning
+    )
 
     # Add to annual system cost
     proj["Cost_System_Annual"] += proj["Cost_Replacement"]

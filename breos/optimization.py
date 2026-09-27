@@ -23,6 +23,7 @@ from breos.economics import (
     cost_analysis_projection,
     cost_params_from_config,
     find_payback_year_interpolated,
+    projection_rates_record,
 )
 from breos.emissions import EmissionsParams
 from breos.execution import DEFAULT_EXECUTION_BACKEND, require_backend, validate_execution_backend
@@ -532,6 +533,26 @@ def _summarize_projected_lifetime_metrics(yearly_summary_df: pd.DataFrame) -> Di
     }
 
 
+def _projection_rates(fin_cfg: Dict[str, Any]) -> Dict[str, Any]:
+    """The ``financials`` rates as ``cost_analysis_projection`` arguments (ADR 0003 E2).
+
+    The escalators stay None when unset, so they inherit ``inflation_rate``.
+    """
+
+    def optional(key: str) -> Optional[float]:
+        value = fin_cfg.get(key)
+        return None if value is None else float(value)
+
+    return {
+        "inflation_rate": float(fin_cfg.get("inflation_rate", DEFAULT_INFLATION_RATE)),
+        "sell_price_inflation": float(fin_cfg.get("sell_price_inflation", 0.0)),
+        "import_price_escalation": optional("import_price_escalation"),
+        "om_escalation": optional("om_escalation"),
+        "replacement_cost_learning": float(fin_cfg.get("replacement_cost_learning", 0.0)),
+        "discount_rate": float(fin_cfg.get("discount_rate", DEFAULT_DISCOUNT_RATE)),
+    }
+
+
 def _evaluate_projected_design_metrics(
     *,
     base_dc_power: Union[pd.Series, Sequence[pd.Series]],
@@ -639,9 +660,7 @@ def _evaluate_projected_design_metrics(
         results_df=first_year_results_df,
         costs=costs,
         num_years=years_projection,
-        inflation_rate=float(fin_cfg.get("inflation_rate", DEFAULT_INFLATION_RATE)),
-        sell_price_inflation=float(fin_cfg.get("sell_price_inflation", 0.0)),
-        discount_rate=float(fin_cfg.get("discount_rate", DEFAULT_DISCOUNT_RATE)),
+        **_projection_rates(fin_cfg),
         freq=freq,
         yearly_summary_df=yearly_summary_df,
         total_replacement_cost=total_replacement_cost,
@@ -922,7 +941,8 @@ def evaluate_projected_design(
         "Azimuth": float(azimuth),
         **raw_metrics,
     }
-    return ProjectedDesignResult(metrics=metrics, yearly=yearly, financial=financial, provenance=pricing.provenance())
+    provenance = {**pricing.provenance(), "economics": projection_rates_record(_projection_rates(financials))}
+    return ProjectedDesignResult(metrics=metrics, yearly=yearly, financial=financial, provenance=provenance)
 
 
 # ==========================================
@@ -1431,7 +1451,10 @@ def optimize_system_multi_objective(
     # pymoo advances the counter after its termination update. Report the last
     # completed generation, matching the research workflow's saved metadata.
     actual_generations = max(0, int(getattr(result.algorithm, "n_gen", n_gen + 1)) - 1)
-    provenance = problem.pricing.provenance()
+    provenance = {
+        **problem.pricing.provenance(),
+        "economics": projection_rates_record(_projection_rates(problem.config.get("financials", {}) or {})),
+    }
     pareto.attrs["currency"] = provenance["currency"]
     return OptimizationResult(
         optimal_value=float("nan"),

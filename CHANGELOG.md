@@ -196,6 +196,19 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   hourly system under the bi-hourly tariff (0.28/0.11 €/kWh, 25 years), a
   50% off-peak target raises NPV savings from 1,906 € to 2,346 € and imports
   from 1,431 to 1,823 kWh in year 1; 387 kWh of that is grid charge.
+- **Separate escalators** (ADR 0003 E2): `import_price_escalation` (import
+  energy and the fixed charge), `om_escalation` (O&M) and
+  `replacement_cost_learning`, as App config keys and CLI flags, as
+  `cost_analysis_projection` arguments and in the optimizer's `financials`
+  table. The two escalators inherit `inflation_rate` when unset, which becomes
+  general inflation, and learning defaults to 0, so a run that sets none of
+  them prices exactly as before: the App golden baseline is bit-identical. A
+  replacement at `t` years costs `C0 × (1 + inflation_rate)^t × (1 −
+  learning)^t`. `result()["provenance"]["economics"]` and the Monte Carlo
+  provenance record the rates used and the implied real discount rate
+  (E1); the result schema version becomes `"1.2"`. `breos sweep` treats the
+  three keys as input-independent, so sweeping them reuses the prepared
+  inputs. The docs state the timing conventions (E3).
 
 ### Changed
 - `breos sweep` prepares weather, PV, load and battery temperature once per
@@ -281,8 +294,8 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   `App.result()`, Monte Carlo provenance and `--json` output, and optimizer
   provenance carry `result_schema_version`
   (`breos.result_schema.RESULT_SCHEMA_VERSION`), independent of the ledger
-  schema: `"1.0"` for these names, `"1.1"` in 0.7.0 with the year-1 money
-  keys above. A renamed or removed field bumps the major version, an added
+  schema: `"1.0"` for these names, `"1.1"` with the year-1 money keys above,
+  `"1.2"` in 0.7.0 with `provenance.economics`. A renamed or removed field bumps the major version, an added
   field the minor. A result without it predates these names.
 - **Avoided emissions use net exchange** (ADR 0002 A10,
   [#178](https://github.com/Str4vinci/breos/issues/178)). The self-consumed

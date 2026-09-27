@@ -584,6 +584,10 @@ def value_projection(cfg: dict[str, Any], resolved: ResolvedAppConfig, run: Proj
         num_years=len(yearly_df),
         inflation_rate=cfg["inflation_rate"],
         sell_price_inflation=cfg["sell_price_inflation"],
+        # Absent from a hand-built cfg: then the escalators inherit inflation.
+        import_price_escalation=cfg.get("import_price_escalation"),
+        om_escalation=cfg.get("om_escalation"),
+        replacement_cost_learning=cfg.get("replacement_cost_learning", 0.0),
         discount_rate=cfg["discount_rate"],
         freq=cfg["resolution"],
         yearly_summary_df=yearly_df,
