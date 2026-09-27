@@ -25,6 +25,7 @@ from types import MappingProxyType
 from typing import Any, Mapping, Sequence, cast
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+import numpy as np
 import pandas as pd
 
 from breos.resources import load_config_json
@@ -100,6 +101,9 @@ class TariffSchedule:
     cycle: str
     periods: tuple[str, ...]
     source_url: str | None = None
+    # The regulatory citation behind the periods, and caveats on applying them.
+    source: str | None = None
+    note: str | None = None
     effective_from: date | None = None
     effective_to: date | None = None
 
@@ -127,8 +131,10 @@ class TariffSchedule:
             raise ValueError("'schedule.periods' must not contain duplicates")
         object.__setattr__(self, "periods", periods)
 
-        if self.source_url is not None:
-            object.__setattr__(self, "source_url", _nonempty_text(self.source_url, "schedule.source_url"))
+        for name in ("source_url", "source", "note"):
+            value = getattr(self, name)
+            if value is not None:
+                object.__setattr__(self, name, _nonempty_text(value, f"schedule.{name}"))
         _date_range(self.effective_from, self.effective_to, "schedule")
 
 
@@ -305,6 +311,8 @@ def _schedule_catalog() -> Mapping[str, Mapping[str, Any]]:
             cycle=cast(str, raw_definition.get("cycle")),
             periods=periods,
             source_url=raw_definition.get("source_url"),
+            source=raw_definition.get("source"),
+            note=raw_definition.get("note"),
             effective_from=_parse_date(
                 raw_definition.get("effective_from"), f"tariffs.json schedules.{identifier}.effective_from"
             ),
@@ -360,6 +368,7 @@ def _schedule_catalog() -> Mapping[str, Mapping[str, Any]]:
                 "schedule": schedule,
                 "required_resolution_minutes": resolution,
                 "rules": tuple(rules),
+                "holidays": _parse_holidays(identifier, raw_definition.get("holidays")),
             }
         )
     return MappingProxyType(catalog)
@@ -414,7 +423,47 @@ def _validate_schedule_resolution(
         )
 
 
-def _day_type(timestamp: pd.Timestamp) -> str:
+def _parse_holidays(identifier: str, raw: object) -> Mapping[str, Any] | None:
+    """Read a schedule's holiday calendar: the day type holidays take, and dates by year."""
+    if raw is None:
+        return None
+    where = f"tariffs.json schedules.{identifier}.holidays"
+    if not isinstance(raw, dict):
+        raise TypeError(f"'{where}' must be a mapping")
+    day_type = raw.get("day_type")
+    if day_type not in _DAY_TYPES:
+        raise ValueError(f"'{where}.day_type' must be one of: {', '.join(_DAY_TYPES)}")
+    raw_dates = raw.get("dates")
+    if not isinstance(raw_dates, dict) or not raw_dates:
+        raise TypeError(f"'{where}.dates' must map years to lists of ISO dates")
+    by_year: dict[int, frozenset[date]] = {}
+    for year, values in raw_dates.items():
+        parsed = frozenset(_parse_date(value, f"{where}.dates.{year}") for value in values)
+        if any(day is None or day.year != int(year) for day in parsed):
+            raise ValueError(f"'{where}.dates.{year}' must hold dates in {year}")
+        by_year[int(year)] = cast(frozenset[date], parsed)
+    return MappingProxyType({"day_type": day_type, "source": raw.get("source"), "dates": MappingProxyType(by_year)})
+
+
+def _holiday_dates(identifier: str, holidays: Mapping[str, Any] | None, years: set[int]) -> frozenset[date]:
+    if holidays is None:
+        return frozenset()
+    missing = sorted(years - set(holidays["dates"]))
+    if missing:
+        known = ", ".join(str(year) for year in sorted(holidays["dates"]))
+        raise ValueError(
+            f"Schedule {identifier!r} treats national holidays as {holidays['day_type']}s, but BREOS has no "
+            f"holiday calendar for {', '.join(map(str, missing))} (it has {known}). The calendar is published "
+            "every year; simulate a year it covers."
+        )
+    return frozenset().union(*(holidays["dates"][year] for year in years))
+
+
+def _day_type(
+    timestamp: pd.Timestamp, holidays: frozenset[date] = frozenset(), holiday_day_type: str = "sunday"
+) -> str:
+    if timestamp.date() in holidays:
+        return holiday_day_type
     if timestamp.weekday() < 5:
         return "weekday"
     return "saturday" if timestamp.weekday() == 5 else "sunday"
@@ -500,9 +549,19 @@ def classify_tariff_periods(
     _validate_schedule_resolution(resolved_index, schedule.identifier, definition["required_resolution_minutes"], zone)
     _validate_study_date(schedule, resolved_index, study_date, zone)
 
+    local_index = resolved_index.tz_convert(zone)
+    holidays = definition["holidays"]
+    # A year the index only grazes (the last UTC hour of a year is already the
+    # next local year east of UTC) needs no calendar: its steps are fewer than
+    # one civil day. Every year the index covers for a day or more does.
+    years, counts = np.unique(local_index.year, return_counts=True)
+    step_hours = (local_index[1] - local_index[0]).total_seconds() / 3600 if len(local_index) > 1 else 24.0
+    covered = {int(year) for year, count in zip(years, counts, strict=True) if count * step_hours >= 24}
+    holiday_dates = _holiday_dates(schedule.identifier, holidays, covered)
+    holiday_day_type = holidays["day_type"] if holidays is not None else "sunday"
     labels: list[str] = []
-    for timestamp in resolved_index.tz_convert(zone):
-        day_type = _day_type(timestamp)
+    for timestamp in local_index:
+        day_type = _day_type(timestamp, holiday_dates, holiday_day_type)
         season = _season(timestamp)
         rule = next(
             rule

@@ -221,7 +221,7 @@ def _smoke_test_installed_wheel(wheel: Path, work_dir: Path) -> None:
             raise AssertionError("packaged locations.json did not contain porto")
 
         tariff_catalog = load_config_json("tariffs.json")
-        if len(tariff_catalog.get("schedules", {})) != 8:
+        if len(tariff_catalog.get("schedules", {})) != 9:
             raise AssertionError("packaged tariffs.json did not contain the expected schedules")
 
         hourly = rlp_resource("h0SLP_demandlib_1000kwh_hourly.csv")
