@@ -23,7 +23,6 @@ REQUIRED_WHEEL_FILES = {
     "breos/data/configs/costs.json",
     "breos/data/configs/electricity.json",
     "breos/data/configs/emissions.json",
-    "breos/data/configs/financials.json",
     "breos/data/configs/tariffs.json",
     "breos/data/rlp/h0SLP_demandlib_1000kwh_hourly.csv",
     "breos/data/rlp/h0SLP_demandlib_1000kwh_15min.csv",

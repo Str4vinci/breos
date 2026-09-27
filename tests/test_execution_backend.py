@@ -47,7 +47,7 @@ def test_montecarlo_rejects_unknown_backend_before_loading_inputs(tmp_path):
 
 def test_missing_numba_fails_before_any_trajectory_runs(tmp_path, monkeypatch, write_multiyear_weather):
     import breos._numba_dispatch as dispatch
-    import breos.montecarlo as mc_module
+    import breos.projection as projection_module
 
     weather = write_multiyear_weather(tmp_path / "multi.csv")
     monkeypatch.setattr(dispatch, "numba_available", lambda: False)
@@ -55,7 +55,8 @@ def test_missing_numba_fails_before_any_trajectory_runs(tmp_path, monkeypatch, w
     def _must_not_run(*args, **kwargs):
         raise AssertionError("a trajectory started despite the missing dependency")
 
-    monkeypatch.setattr(mc_module, "simulate_energy_balance_summary", _must_not_run)
+    # Trajectories run through the shared projection loop.
+    monkeypatch.setattr(projection_module, "simulate_energy_balance_summary", _must_not_run)
 
     settings = MonteCarloSettings(weather_file=str(weather), n_runs=4, execution_backend="numba")
     with pytest.raises(dispatch.NumbaUnavailableError, match=r"breos\[fast\]"):

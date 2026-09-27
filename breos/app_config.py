@@ -11,9 +11,16 @@ from pathlib import Path
 from typing import Any, Callable
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from breos.config_schema import TableSpec, anything, boolean, number
 from breos.constants import DEFAULT_MAX_SOC, DEFAULT_MIN_SOC
 from breos.degradation.profiles import ENABLED_BLAST_MODEL_KEYS, apply_battery_profile_defaults
-from breos.economics import COST_CONFIG_KEY_TO_PARAM, CostParams, calculate_costs
+from breos.economics import (
+    COST_CONFIG_KEY_TO_PARAM,
+    DEFAULT_DISCOUNT_RATE,
+    DEFAULT_INFLATION_RATE,
+    CostParams,
+    calculate_costs,
+)
 from breos.emissions import EmissionsParams
 from breos.execution import DEFAULT_EXECUTION_BACKEND, EXECUTION_BACKENDS, validate_execution_backend
 from breos.inverter import inverter_ac_capacity_w
@@ -315,7 +322,7 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         cli_help="Economic projection horizon.",
     ),
     "inflation_rate": AppConfigField(
-        default=0.02,
+        default=DEFAULT_INFLATION_RATE,
         default_order=29,
         cli_flags=("--inflation-rate",),
         cli_type=float,
@@ -336,7 +343,7 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         cli_help="Exported-generation displacement factor in gCO2/kWh (default: grid avoided factor).",
     ),
     "discount_rate": AppConfigField(
-        default=0.03,
+        default=DEFAULT_DISCOUNT_RATE,
         default_order=31,
         cli_flags=("--discount-rate",),
         cli_type=float,
@@ -458,6 +465,26 @@ ALLOWED_CONFIG_KEYS: frozenset[str] = frozenset(APP_CONFIG_FIELDS)
 # the canonical translation to CostParams lives in ``breos.economics`` so the
 # App and lower-level construction helper cannot drift.
 COST_OVERRIDE_KEYS: frozenset[str] = frozenset(COST_CONFIG_KEY_TO_PARAM)
+COSTS_TABLE = TableSpec("costs", keys=dict.fromkeys(COST_OVERRIDE_KEYS, number(minimum=0)))
+
+
+def _check_indoor_temperature_band(model: dict[str, Any], where: str) -> None:
+    floor, ceiling = model.get("floor_c"), model.get("ceiling_c")
+    if floor is not None and ceiling is not None and floor > ceiling:
+        raise ValueError(f"'{where}.floor_c' must not exceed '{where}.ceiling_c'")
+
+
+INDOOR_MODEL_TABLE = TableSpec(
+    "battery_indoor_model",
+    keys={
+        "enabled": boolean,
+        "setpoint_c": number(),
+        "coupling_alpha": number(minimum=0, maximum=1),
+        "floor_c": number(),
+        "ceiling_c": number(),
+    },
+    check=_check_indoor_temperature_band,
+)
 
 # Keep runner-table keys explicit until the shared configuration schema from
 # #181 can describe these sections alongside App fields.
@@ -641,6 +668,7 @@ _PV_ARRAY_OPTION_KEYS = (
 _PV_ARRAY_KEYS = frozenset(
     ("modules", "module", "tilt", "azimuth", "tracking", *_TRACKER_GEOMETRY_KEYS, *_PV_ARRAY_OPTION_KEYS)
 )
+PV_ARRAY_TABLE = TableSpec("pv_arrays[i]", keys=dict.fromkeys(_PV_ARRAY_KEYS, anything))
 
 
 def _validate_tracker_settings(settings: dict[str, Any], where: str = "") -> None:
@@ -823,14 +851,9 @@ def _validate_pv_and_inverter(cfg: dict[str, Any], has_arrays: bool) -> None:
         if not isinstance(cfg["pv_arrays"], list):
             raise TypeError("'pv_arrays' must be a list")
         for i, arr in enumerate(cfg["pv_arrays"]):
-            if not isinstance(arr, dict):
-                raise TypeError(f"'pv_arrays[{i}]' must be a dict")
-            unknown = set(arr) - _PV_ARRAY_KEYS
-            if unknown:
-                raise ValueError(
-                    f"Unknown key(s) in pv_arrays[{i}]: {', '.join(sorted(map(str, unknown)))}. "
-                    f"Available: {', '.join(sorted(_PV_ARRAY_KEYS))}"
-                )
+            # Only the key set is checked here; the values are checked below
+            # with the top-level rules they share.
+            PV_ARRAY_TABLE.validate(arr, f"pv_arrays[{i}]")
             _validate_tracker_settings(arr, where=f"pv_arrays[{i}]")
             modules = arr.get("modules", 0)
             if not _is_int(modules) or modules < 1:
@@ -954,20 +977,7 @@ def _validate_economics(cfg: dict[str, Any]) -> None:
     if not -1 < _finite_real(cfg["sell_price_inflation"], "sell_price_inflation") < 1:
         raise ValueError("'sell_price_inflation' must be between -1 and 1 (exclusive)")
     if "costs" in cfg:
-        overrides = cfg["costs"]
-        if not isinstance(overrides, dict):
-            raise TypeError("'costs' must be a table/dict of cost overrides")
-        unknown = set(overrides) - COST_OVERRIDE_KEYS
-        if unknown:
-            available = ", ".join(f"costs.{key}" for key in sorted(COST_OVERRIDE_KEYS))
-            if len(unknown) == 1:
-                unknown_text = f"Unknown key 'costs.{next(iter(unknown))}'"
-            else:
-                unknown_text = "Unknown keys " + ", ".join(f"'costs.{key}'" for key in sorted(unknown))
-            raise ValueError(f"{unknown_text}. Available: {available}")
-        for key, value in overrides.items():
-            if _finite_real(value, f"costs.{key}") < 0:
-                raise ValueError(f"'costs.{key}' must be >= 0")
+        COSTS_TABLE.validate(cfg["costs"])
     if cfg["export_emissions_factor_gco2_kwh"] is not None:
         if _finite_real(cfg["export_emissions_factor_gco2_kwh"], "export_emissions_factor_gco2_kwh") < 0:
             raise ValueError("'export_emissions_factor_gco2_kwh' must be >= 0 when configured")
@@ -1001,25 +1011,8 @@ def _validate_battery_and_degradation(cfg: dict[str, Any]) -> None:
         raise TypeError("'battery_temperature' must be 'weather', a CSV path, or a finite temperature")
     elif battery_temperature.lower() != "weather" and not Path(battery_temperature).is_file():
         raise FileNotFoundError(f"battery_temperature file not found: {battery_temperature}")
-    indoor_model = cfg["battery_indoor_model"]
-    if indoor_model is not None:
-        if not isinstance(indoor_model, dict):
-            raise TypeError("'battery_indoor_model' must be a mapping when configured")
-        unknown = set(indoor_model) - {"enabled", "setpoint_c", "coupling_alpha", "floor_c", "ceiling_c"}
-        if unknown:
-            raise ValueError(f"Unknown battery_indoor_model key(s): {', '.join(sorted(unknown))}")
-        if "enabled" in indoor_model and not isinstance(indoor_model["enabled"], bool):
-            raise TypeError("'battery_indoor_model.enabled' must be a boolean")
-        for key in ("setpoint_c", "coupling_alpha", "floor_c", "ceiling_c"):
-            if key in indoor_model:
-                _finite_real(indoor_model[key], f"battery_indoor_model.{key}")
-        coupling = indoor_model.get("coupling_alpha")
-        if coupling is not None and not 0 <= float(coupling) <= 1:
-            raise ValueError("'battery_indoor_model.coupling_alpha' must be between 0 and 1")
-        floor = indoor_model.get("floor_c")
-        ceiling = indoor_model.get("ceiling_c")
-        if floor is not None and ceiling is not None and float(floor) > float(ceiling):
-            raise ValueError("'battery_indoor_model.floor_c' must not exceed 'battery_indoor_model.ceiling_c'")
+    if cfg["battery_indoor_model"] is not None:
+        INDOOR_MODEL_TABLE.validate(cfg["battery_indoor_model"])
     if not isinstance(cfg["dc_coupled"], bool):
         raise TypeError("'dc_coupled' must be a boolean")
     if not cfg["dc_coupled"]:

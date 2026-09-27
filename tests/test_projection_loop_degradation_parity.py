@@ -16,6 +16,7 @@ import pytest
 
 import breos.montecarlo as montecarlo_module
 import breos.optimization as optimization_module
+import breos.projection as projection_module
 from breos.app_config import resolve_app_config
 from breos.app_inputs import PreparedSimulationInputs
 from breos.battery import align_simulation_inputs
@@ -115,13 +116,16 @@ def test_app_montecarlo_and_projected_optimization_age_the_battery_identically(m
         pv_breakdown=_pv_breakdown(pv),
     )
     monkeypatch.setattr(app_runner, "prepare_simulation_inputs", lambda cfg, resolved, deps: inputs)
-    _spy(monkeypatch, app_runner, "simulate_energy_balance", app_records, app_calls)
-    app_artifacts = app_runner.run_app_simulation(cfg, resolved, deps=SimpleNamespace())
+    # App and the optimizer both run the shared loop's simulate_energy_balance,
+    # so each run gets its own spy.
+    with monkeypatch.context() as patch:
+        _spy(patch, projection_module, "simulate_energy_balance", app_records, app_calls)
+        app_artifacts = app_runner.run_app_simulation(cfg, resolved, deps=SimpleNamespace())
 
     # Monte Carlo: one trajectory with a single weather year and no load
     # uncertainty, so the draw is the App's inputs exactly.
     mc_records, mc_calls = [], []
-    _spy(monkeypatch, montecarlo_module, "simulate_energy_balance_summary", mc_records, mc_calls)
+    _spy(monkeypatch, projection_module, "simulate_energy_balance_summary", mc_records, mc_calls)
     mc_metrics, _trajectory = _simulate_trajectory(
         cfg,
         resolved,
@@ -136,7 +140,7 @@ def test_app_montecarlo_and_projected_optimization_age_the_battery_identically(m
 
     # Projected optimization: the year loop behind evaluate_projected_design.
     opt_records, opt_calls = [], []
-    _spy(monkeypatch, optimization_module, "simulate_energy_balance", opt_records, opt_calls)
+    _spy(monkeypatch, projection_module, "simulate_energy_balance", opt_records, opt_calls)
     batt_spec = {
         "min_soc": cfg["battery_min_soc"],
         "max_soc": cfg["battery_max_soc"],

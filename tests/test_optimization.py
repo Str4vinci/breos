@@ -14,6 +14,7 @@ from breos.optimization import (
     optimize_system_multi_objective,
     optimize_tilt,
 )
+from tests.conftest import _stub_projection_balance
 
 
 def test_optimize_tilt_rejects_unimplemented_objective():
@@ -115,11 +116,11 @@ def test_objective_basis_defaults_to_projected():
     problem = SolarDesignProblem(tmy_data, houseload, config, "results/_test_run/problem_default_basis")
 
     assert problem.objective_basis == "projected"
-    assert problem.projected_objectives is True
     assert problem.n_obj == 2
 
 
-def test_steady_state_objective_basis_is_available_as_opt_in():
+def test_steady_state_objective_basis_was_removed():
+    """The annual basis is gone, and naming it fails instead of falling back."""
     idx = pd.date_range("2025-01-01 00:00", periods=2, freq="h", tz="UTC")
     tmy_data = pd.DataFrame({"temp_air": [15.0, 16.0], "ghi": [0.0, 0.0]}, index=idx)
     houseload = pd.DataFrame({"Load": [500.0, 500.0]}, index=idx)
@@ -129,10 +130,8 @@ def test_steady_state_objective_basis_is_available_as_opt_in():
         "mode": {"fixed_azimuth": 180},
     }
 
-    problem = SolarDesignProblem(tmy_data, houseload, config, "results/_test_run/problem_steady_state")
-
-    assert problem.projected_objectives is False
-    assert problem.n_obj == 3
+    with pytest.raises(ValueError, match=r"'steady_state' was removed in 0\.7\.0.*Use 'projected'"):
+        SolarDesignProblem(tmy_data, houseload, config, "results/_test_run/problem_steady_state")
 
 
 def test_projected_objective_basis_rejects_unknown_value():
@@ -152,20 +151,19 @@ def test_projected_objective_basis_rejects_unknown_value():
         )
 
 
+# The four metrics candidate scoring reads, for tests that stub the projection.
+_PROJECTED_STUB = {
+    "Projected_Grid_Independence_%": 50.0,
+    "Projected_ZEB_Ratio": 0.5,
+    "Projected_NPV_Eur": 1000.0,
+    "Projected_Initial_Cost_Eur": 500.0,
+}
+
+
 def test_projected_zeb_constraint_uses_projected_diagnostic(monkeypatch):
     idx = pd.date_range("2025-01-01", periods=2, freq="h", tz="UTC")
     tmy_data = pd.DataFrame({"temp_air": [15.0, 16.0], "ghi": [0.0, 0.0]}, index=idx)
     houseload = pd.DataFrame({"Load": [500.0, 500.0]}, index=idx)
-    results = pd.DataFrame(
-        {
-            "Houseload": [500.0, 500.0],
-            "PV_AC_To_Load": [0.0, 0.0],
-            "Battery_AC_To_Load_PV": [0.0, 0.0],
-            "PV_AC_Export": [0.0, 0.0],
-        },
-        index=idx,
-    )
-    summary = pd.DataFrame({"Import [kWh]": [1.0], "Sell [kWh]": [0.0]})
     projected = {
         "Projected_Grid_Independence_%": 50.0,
         "Projected_ZEB_Ratio": 0.8,
@@ -173,11 +171,6 @@ def test_projected_zeb_constraint_uses_projected_diagnostic(monkeypatch):
         "Projected_Initial_Cost_Eur": 0.0,
     }
     monkeypatch.setattr("breos.optimization.calculate_pv_production_dc", lambda **kwargs: pd.Series(0.0, index=idx))
-    monkeypatch.setattr(
-        "breos.optimization.simulate_energy_balance",
-        lambda **kwargs: (results, 0.0, summary, 0.0, 0, pd.DataFrame()),
-    )
-    monkeypatch.setattr("breos.optimization.calculate_financials", lambda *args, **kwargs: (0.0, 0.0))
     monkeypatch.setattr("breos.optimization._evaluate_projected_design_metrics", lambda **kwargs: projected)
     config = {
         "location": {"latitude": 41.15, "longitude": -8.61, "timezone": "UTC"},
@@ -201,12 +194,10 @@ def test_solar_design_problem_area_constraint_uses_pv_dimensions(monkeypatch):
     tmy_data = pd.DataFrame({"temp_air": [15.0, 16.0], "ghi": [0.0, 0.0]}, index=idx)
     houseload = pd.DataFrame({"Load": [500.0, 500.0]}, index=idx)
     dc = pd.Series([0.0, 0.0], index=idx)
-    summary = pd.DataFrame({"Import [kWh]": [1.0], "Sell [kWh]": [0.0]})
     config = {
         "location": {"latitude": 41.15, "longitude": -8.61, "timezone": "UTC"},
         "simulation": {"resolution": "h"},
         "constraints": {"budget_eur": 100000, "max_area_m2": 10.0, "max_modules": 5},
-        "optimization": {"objective_basis": "steady_state"},
         "mode": {"fixed_azimuth": 180},
         "pv": {
             "module": "Suntech_STP550S_STC",
@@ -216,11 +207,7 @@ def test_solar_design_problem_area_constraint_uses_pv_dimensions(monkeypatch):
     }
 
     monkeypatch.setattr("breos.optimization.calculate_pv_production_dc", lambda **kwargs: dc)
-    monkeypatch.setattr(
-        "breos.optimization.simulate_energy_balance",
-        lambda **kwargs: (pd.DataFrame(), 0.0, summary, 0.0, 0, pd.DataFrame()),
-    )
-    monkeypatch.setattr("breos.optimization.calculate_financials", lambda *args, **kwargs: (0.0, 0.0))
+    monkeypatch.setattr("breos.optimization._evaluate_projected_design_metrics", lambda **kwargs: _PROJECTED_STUB)
 
     problem = SolarDesignProblem(tmy_data, houseload, config, "results/_test_run/problem_area")
     out: dict = {}
@@ -285,12 +272,10 @@ def test_solar_design_problem_uses_configured_resolution(monkeypatch):
     tmy_data = pd.DataFrame({"temp_air": [15.0, 16.0], "ghi": [0.0, 0.0]}, index=idx)
     houseload = pd.DataFrame({"Load": [1000.0, 1000.0]}, index=idx)
     dc = pd.Series([0.0, 0.0], index=idx)
-    summary = pd.DataFrame({"Import [kWh]": [0.5], "Sell [kWh]": [0.0]})
     captured: dict = {}
     config = {
         "location": {"latitude": 41.15, "longitude": -8.61, "timezone": "UTC"},
-        "simulation": {"resolution": "15min"},
-        "optimization": {"objective_basis": "steady_state"},
+        "simulation": {"resolution": "15min", "years_projection": 1},
         "constraints": {"budget_eur": 100000, "max_area_m2": 100.0},
         "mode": {"fixed_azimuth": 180},
         "battery": {"temperature": 20.0, "indoor_model": {"enabled": False}},
@@ -300,26 +285,17 @@ def test_solar_design_problem_uses_configured_resolution(monkeypatch):
         captured["pv_freq"] = kwargs["freq"]
         return dc
 
-    def fake_balance(**kwargs):
-        captured["balance_freq"] = kwargs["freq"]
-        captured["temperature_series"] = kwargs["temperature_series"]
-        return pd.DataFrame(), 0.0, summary, 0.0, 0, pd.DataFrame()
-
-    def fake_financials(*args, **kwargs):
-        captured["annual_load_kwh"] = args[4]
-        return 0.0, 0.0
-
     monkeypatch.setattr("breos.optimization.calculate_pv_production_dc", fake_pv)
-    monkeypatch.setattr("breos.optimization.simulate_energy_balance", fake_balance)
-    monkeypatch.setattr("breos.optimization.calculate_financials", fake_financials)
+    _stub_projection_balance(monkeypatch, idx, captured, Houseload=1000.0, Import_From_Grid=600.0, PV_AC_To_Load=400.0)
 
     problem = SolarDesignProblem(tmy_data, houseload, config, "results/_test_run/problem_resolution")
     out: dict = {}
-    problem._evaluate(np.array([2.0, 0.0, 10.0], dtype=float), out)
+    problem._evaluate(np.array([2.0, 1.0, 10.0], dtype=float), out)
 
     assert captured["pv_freq"] == "15min"
-    assert captured["balance_freq"] == "15min"
-    assert captured["annual_load_kwh"] == pytest.approx(0.5)
+    assert captured["freq"] == "15min"
+    # Two 15-minute steps at 400 W are 0.2 kWh, not the 0.8 kWh of two hours.
+    assert out["Projected_PV_Production_Year1_kWh"] == pytest.approx(0.2)
     assert list(captured["temperature_series"]) == [20.0, 20.0]
 
 
@@ -328,46 +304,33 @@ def test_solar_design_problem_scores_zeb_from_explicit_ac_ledger(monkeypatch):
     tmy_data = pd.DataFrame({"temp_air": [15.0, 16.0], "ghi": [500.0, 500.0]}, index=idx)
     houseload = pd.DataFrame({"Load": [500.0, 500.0]}, index=idx)  # 1 kWh
     dc = pd.Series([1000.0, 1000.0], index=idx)  # 2 kWh raw DC
-    results = pd.DataFrame(
-        {
-            "PV_AC_To_Load": [300.0, 300.0],
-            "Battery_AC_To_Load_PV": [50.0, 50.0],
-            "PV_AC_Export": [75.0, 75.0],
-            "PV_Production": [1000.0, 1000.0],
-        },
-        index=idx,
-    )  # 0.85 kWh usable AC
-    summary = pd.DataFrame({"Import [kWh]": [0.3], "Sell [kWh]": [0.15], "Final SOH [%]": [85.0]})
-    captured = {}
     config = {
         "location": {"latitude": 41.15, "longitude": -8.61, "timezone": "UTC"},
-        "simulation": {"resolution": "h"},
+        "simulation": {"resolution": "h", "years_projection": 1},
         "constraints": {"budget_eur": 100000, "max_area_m2": 100.0},
         "mode": {"fixed_azimuth": 180},
-        "optimization": {"objective_basis": "steady_state"},
         "battery": {"temperature": 20.0},
     }
 
     monkeypatch.setattr("breos.optimization.calculate_pv_production_dc", lambda **kwargs: dc)
-    monkeypatch.setattr(
-        "breos.optimization.simulate_energy_balance",
-        lambda **kwargs: (results, 2000.0, summary, 0.0, 0, pd.DataFrame()),
+    # 0.85 kWh usable AC; the legacy PV_Production field must not drive ZEB.
+    _stub_projection_balance(
+        monkeypatch,
+        idx,
+        Houseload=500.0,
+        PV_AC_To_Load=300.0,
+        Battery_AC_To_Load_PV=50.0,
+        Sell_To_Grid=75.0,
+        PV_Production=1000.0,
     )
-
-    def fake_financials(*args, **kwargs):
-        captured.update(kwargs)
-        return 0.0, 0.0
-
-    monkeypatch.setattr("breos.optimization.calculate_financials", fake_financials)
 
     problem = SolarDesignProblem(tmy_data, houseload, config, "results/_test_run/problem_zeb_ac")
     out = {}
     problem._evaluate(np.array([2.0, 1.0, 10.0], dtype=float), out)
 
-    assert -out["F"][2] == pytest.approx(0.85)
-    assert captured["annual_pv_kwh"] == pytest.approx(0.85)
-    assert captured["annual_battery_soh_loss_pct"] == pytest.approx(15.0)
-    assert problem.battery_replacement_treatment["method"] == "repeat_simulated_year_1_soh_loss_to_eol"
+    assert out["ZEB_Ratio"] == pytest.approx(0.85)
+    assert out["Projected_ZEB_Ratio"] == pytest.approx(0.85)
+    assert problem.battery_replacement_treatment["method"] == "simulated_yearly_state_propagation"
 
 
 def test_solar_design_problem_uses_simulated_load_for_objective_denominator(monkeypatch):
@@ -376,44 +339,26 @@ def test_solar_design_problem_uses_simulated_load_for_objective_denominator(monk
     tmy_data = pd.DataFrame({"temp_air": [15.0, 16.0], "ghi": [0.0, 0.0]}, index=idx)
     houseload = pd.DataFrame({"Load": [500.0, 500.0, 500.0]}, index=load_idx)
     dc = pd.Series([0.0, 0.0], index=idx)
-    results = pd.DataFrame(
-        {
-            "Houseload": [500.0, 500.0],
-            "PV_AC_To_Load": [0.0, 0.0],
-            "Battery_AC_To_Load_PV": [0.0, 0.0],
-            "PV_AC_Export": [0.0, 0.0],
-        },
-        index=idx,
-    )
-    summary = pd.DataFrame({"Import [kWh]": [1.0], "Sell [kWh]": [0.0]})
-    captured = {}
     config = {
         "location": {"latitude": 41.15, "longitude": -8.61, "timezone": "UTC"},
-        "simulation": {"resolution": "h"},
+        "simulation": {"resolution": "h", "years_projection": 1},
         "constraints": {"budget_eur": 100000, "max_area_m2": 100.0},
         "mode": {"fixed_azimuth": 180},
-        "optimization": {"objective_basis": "steady_state"},
         "battery": {"temperature": 20.0},
     }
 
     monkeypatch.setattr("breos.optimization.calculate_pv_production_dc", lambda **kwargs: dc)
-    monkeypatch.setattr(
-        "breos.optimization.simulate_energy_balance",
-        lambda **kwargs: (results, 0.0, summary, 0.0, 0, pd.DataFrame()),
-    )
-
-    def fake_financials(*args, **kwargs):
-        captured["annual_load_kwh"] = args[4]
-        return 0.0, 0.0
-
-    monkeypatch.setattr("breos.optimization.calculate_financials", fake_financials)
+    # The simulation aligned the three-hour input onto two steps: 1 kWh of
+    # load, of which 0.5 kWh was imported.
+    _stub_projection_balance(monkeypatch, idx, Houseload=500.0, Import_From_Grid=250.0)
 
     problem = SolarDesignProblem(tmy_data, houseload, config, "results/_test_run/problem_aligned_load")
     out = {}
     problem._evaluate(np.array([2.0, 0.0, 10.0], dtype=float), out)
 
-    assert captured["annual_load_kwh"] == pytest.approx(1.0)
-    assert out["F"][0] == pytest.approx(1.0)
+    # 0.5 / 1.0 kWh simulated, not 0.5 / 1.5 kWh of raw input.
+    assert out["F"][0] == pytest.approx(0.5)
+    assert out["Projected_Grid_Independence_%"] == pytest.approx(50.0)
 
 
 def test_optimize_system_multi_objective_returns_pareto_dataframe(monkeypatch):
@@ -421,7 +366,6 @@ def test_optimize_system_multi_objective_returns_pareto_dataframe(monkeypatch):
     tmy_data = pd.DataFrame({"temp_air": [15.0, 16.0, 17.0, 18.0], "ghi": [0.0, 500.0, 500.0, 0.0]}, index=idx)
     houseload = pd.DataFrame({"Load": [500.0, 500.0, 500.0, 500.0]}, index=idx)
     dc = pd.Series([0.0, 1000.0, 1000.0, 0.0], index=idx)
-    summary = pd.DataFrame({"Import [kWh]": [1.0], "Sell [kWh]": [0.25]})
     config = {
         "location": {"latitude": 41.15, "longitude": -8.61, "timezone": "UTC"},
         "simulation": {"resolution": "h"},
@@ -433,16 +377,11 @@ def test_optimize_system_multi_objective_returns_pareto_dataframe(monkeypatch):
             "max_tilt_deg": 30.0,
         },
         "mode": {"fixed_azimuth": 180},
-        "optimization": {"objective_basis": "steady_state"},
         "battery": {"temperature": 20.0},
     }
 
     monkeypatch.setattr("breos.optimization.calculate_pv_production_dc", lambda **kwargs: dc)
-    monkeypatch.setattr(
-        "breos.optimization.simulate_energy_balance",
-        lambda **kwargs: (pd.DataFrame(), 0.0, summary, 0.0, 0, pd.DataFrame()),
-    )
-    monkeypatch.setattr("breos.optimization.calculate_financials", lambda *args, **kwargs: (1000.0, 2500.0))
+    monkeypatch.setattr("breos.optimization._evaluate_projected_design_metrics", lambda **kwargs: _PROJECTED_STUB)
 
     result = optimize_system_multi_objective(
         tmy_data,
@@ -466,7 +405,8 @@ def test_optimize_system_multi_objective_returns_pareto_dataframe(monkeypatch):
         "NPV_Eur",
         "ZEB_Ratio",
     }
-    assert result.details["battery_replacement_treatment"]["method"] == ("repeat_simulated_year_1_soh_loss_to_eol")
+    assert not [column for column in pareto.columns if column.startswith("SteadyState_")]
+    assert result.details["battery_replacement_treatment"]["method"] == "simulated_yearly_state_propagation"
 
 
 def test_projected_optimization_smoke_reports_two_objective_semantics(monkeypatch):
@@ -480,16 +420,6 @@ def test_projected_optimization_smoke_reports_two_objective_semantics(monkeypatc
     )
     houseload = pd.DataFrame({"Load": [500.0] * 4}, index=idx)
     dc = pd.Series([0.0, 1000.0, 1000.0, 0.0], index=idx)
-    results = pd.DataFrame(
-        {
-            "Houseload": [500.0] * 4,
-            "PV_AC_To_Load": [0.0, 400.0, 400.0, 0.0],
-            "Battery_AC_To_Load_PV": [0.0] * 4,
-            "PV_AC_Export": [0.0, 100.0, 100.0, 0.0],
-        },
-        index=idx,
-    )
-    summary = pd.DataFrame({"Import [kWh]": [1.2], "Sell [kWh]": [0.2]})
 
     def fake_projected(**kwargs):
         modules = kwargs["n_modules"]
@@ -516,11 +446,6 @@ def test_projected_optimization_smoke_reports_two_objective_semantics(monkeypatc
         }
 
     monkeypatch.setattr("breos.optimization.calculate_pv_production_dc", lambda **kwargs: dc)
-    monkeypatch.setattr(
-        "breos.optimization.simulate_energy_balance",
-        lambda **kwargs: (results, 1000.0, summary, 0.0, 0, pd.DataFrame()),
-    )
-    monkeypatch.setattr("breos.optimization.calculate_financials", lambda *args, **kwargs: (500.0, 750.0))
     monkeypatch.setattr("breos.optimization._evaluate_projected_design_metrics", fake_projected)
 
     config = {
@@ -558,6 +483,7 @@ def test_projected_optimization_smoke_reports_two_objective_semantics(monkeypatc
     assert np.allclose(pareto["Objective_Grid_Independence_%"], pareto["Projected_Grid_Independence_%"])
     assert np.allclose(pareto["Objective_NPV_Eur"], pareto["Projected_NPV_Eur"])
     assert "Objective_ZEB_Ratio" not in pareto
+    assert not [column for column in pareto.columns if column.startswith("SteadyState_")]
     assert result.details["objective_names"] == ["Projected_Grid_Independence_%", "Projected_NPV_Eur"]
 
 
@@ -627,40 +553,38 @@ def test_projected_optimization_uses_worker_diagnostics_without_parent_rescoring
     assert parent_metric_calls == 0
 
 
-def _steady_state_capture(monkeypatch, config, x):
-    """Score one design on stubbed physics; return the calls the scorer made."""
+def _projected_capture(monkeypatch, config, x):
+    """Score one design on a stubbed projection; return the calls the scorer made."""
     idx = pd.date_range("2025-01-01 00:00", periods=2, freq="h", tz="UTC")
     tmy_data = pd.DataFrame({"temp_air": [15.0, 16.0], "ghi": [0.0, 0.0]}, index=idx)
     houseload = pd.DataFrame({"Load": [500.0, 500.0]}, index=idx)
-    summary = pd.DataFrame({"Import [kWh]": [1.0], "Sell [kWh]": [0.0]})
-    captured: dict = {}
-
-    def fake_balance(**kwargs):
-        captured["balance"] = kwargs
-        return pd.DataFrame(), 0.0, summary, 0.0, 0, pd.DataFrame()
-
-    def fake_financials(*args, **kwargs):
-        captured["financials_config"] = kwargs["financials_config"]
-        return 0.0, 0.0
+    captured: dict = {"balance": {}}
 
     monkeypatch.setattr("breos.optimization.calculate_pv_production_dc", lambda **kwargs: pd.Series(0.0, index=idx))
-    monkeypatch.setattr("breos.optimization.simulate_energy_balance", fake_balance)
-    monkeypatch.setattr("breos.optimization.calculate_financials", fake_financials)
+    _stub_projection_balance(monkeypatch, idx, captured["balance"], Houseload=500.0, Import_From_Grid=500.0)
     base = {
         "location": {"latitude": 41.15, "longitude": -8.61, "timezone": "UTC"},
-        "optimization": {"objective_basis": "steady_state"},
         "constraints": {"budget_eur": 100000.0, "max_area_m2": 100.0},
         "mode": {"fixed_azimuth": 180},
     }
     problem = SolarDesignProblem(tmy_data, houseload, {**base, **config}, "results/_test_run/problem_settings")
-    problem._evaluate(np.array(x, dtype=float), {})
+    out: dict = {}
+    problem._evaluate(np.array(x, dtype=float), out)
+    captured["out"] = out
     return captured
 
 
-def test_steady_state_scores_on_the_projected_horizon_and_pv_degradation(monkeypatch):
-    # The projected basis reads simulation.years_projection and
-    # pv.degradation_rate; steady-state NPV used to read the financials pair.
-    captured = _steady_state_capture(
+def test_projected_scoring_uses_the_projected_horizon_and_pv_degradation(monkeypatch):
+    # simulation.years_projection and pv.degradation_rate win over the
+    # financials pair.
+    seen: dict = {}
+
+    def fake_projected(**kwargs):
+        seen.update(kwargs)
+        return _PROJECTED_STUB
+
+    monkeypatch.setattr("breos.optimization._evaluate_projected_design_metrics", fake_projected)
+    _projected_capture(
         monkeypatch,
         {
             "simulation": {"resolution": "h", "years_projection": 3},
@@ -670,16 +594,19 @@ def test_steady_state_scores_on_the_projected_horizon_and_pv_degradation(monkeyp
         [2.0, 0.0, 10.0],
     )
 
-    assert captured["financials_config"]["project_lifespan"] == 3
-    assert captured["financials_config"]["pv_degradation_rate"] == pytest.approx(0.10)
-    assert captured["financials_config"]["discount_rate"] == pytest.approx(0.04)
+    assert seen["years_projection"] == 3
+    assert seen["degradation_rate"] == pytest.approx(0.10)
+    assert seen["fin_cfg"]["discount_rate"] == pytest.approx(0.04)
 
 
 @pytest.mark.parametrize(("battery_kwh", "engine", "model"), [(5.0, "blast", "nmc_gr_50ah_b1"), (0.0, "native", None)])
-def test_steady_state_simulation_uses_the_configured_degradation_engine(monkeypatch, battery_kwh, engine, model):
-    captured = _steady_state_capture(
+def test_projected_simulation_uses_the_configured_degradation_engine(monkeypatch, battery_kwh, engine, model):
+    captured = _projected_capture(
         monkeypatch,
-        {"battery": {"degradation_engine": "blast", "blast_model": "nmc_gr_50ah_b1", "temperature": 20.0}},
+        {
+            "simulation": {"resolution": "h", "years_projection": 1},
+            "battery": {"degradation_engine": "blast", "blast_model": "nmc_gr_50ah_b1", "temperature": 20.0},
+        },
         [2.0, battery_kwh, 10.0],
     )
 
@@ -688,7 +615,6 @@ def test_steady_state_simulation_uses_the_configured_degradation_engine(monkeypa
     assert captured["balance"]["blast_model"] == model
 
 
-@pytest.mark.parametrize("basis", ["steady_state", "projected"])
 @pytest.mark.parametrize(
     ("battery", "match"),
     [
@@ -698,13 +624,12 @@ def test_steady_state_simulation_uses_the_configured_degradation_engine(monkeypa
         ({"degradation_engine": "physics"}, "must be one of: native, blast"),
     ],
 )
-def test_invalid_degradation_settings_raise_on_both_bases(basis, battery, match):
+def test_invalid_degradation_settings_raise_when_the_problem_is_built(battery, match):
     idx = pd.date_range("2025-01-01 00:00", periods=2, freq="h", tz="UTC")
     tmy_data = pd.DataFrame({"temp_air": [15.0, 16.0], "ghi": [0.0, 0.0]}, index=idx)
     houseload = pd.DataFrame({"Load": [500.0, 500.0]}, index=idx)
     config = {
         "location": {"latitude": 41.15, "longitude": -8.61, "timezone": "UTC"},
-        "optimization": {"objective_basis": basis},
         "battery": battery,
     }
 
@@ -779,21 +704,16 @@ def test_early_stopping_optimizer_result_pickles(monkeypatch):
     import pickle
 
     idx = pd.date_range("2025-01-01 00:00", periods=4, freq="h", tz="UTC")
-    summary = pd.DataFrame({"Import [kWh]": [1.0], "Sell [kWh]": [0.25]})
     monkeypatch.setattr(
         "breos.optimization.calculate_pv_production_dc", lambda **kwargs: pd.Series([0.0, 1e3, 1e3, 0.0], index=idx)
     )
-    monkeypatch.setattr(
-        "breos.optimization.simulate_energy_balance",
-        lambda **kwargs: (pd.DataFrame(), 0.0, summary, 0.0, 0, pd.DataFrame()),
-    )
-    monkeypatch.setattr("breos.optimization.calculate_financials", lambda *args, **kwargs: (1000.0, 2500.0))
+    monkeypatch.setattr("breos.optimization._evaluate_projected_design_metrics", lambda **kwargs: _PROJECTED_STUB)
     config = {
         "location": {"latitude": 41.15, "longitude": -8.61, "timezone": "UTC"},
         "simulation": {"resolution": "h"},
         "constraints": {"budget_eur": 1e5, "max_area_m2": 100.0, "max_modules": 4, "max_battery_kwh": 3.0},
         "mode": {"fixed_azimuth": 180},
-        "optimization": {"objective_basis": "steady_state", "early_stop": {"min_gen": 1}},
+        "optimization": {"early_stop": {"min_gen": 1}},
         "battery": {"temperature": 20.0},
     }
 
