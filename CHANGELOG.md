@@ -50,6 +50,13 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   coordinate-dict location, at construction. A source with no matching file
   raises instead of fetching PVGIS weather. The file used is recorded under
   `provenance.weather`, as before.
+- A test that pins the timezone of the App result index for each weather
+  source ([#180](https://github.com/Str4vinci/breos/issues/180)). The index
+  takes the weather's clock, not the configured timezone: a PVGIS fetch runs
+  on the fixed offset of 1 January all year (`Etc/GMT-1` for Berlin,
+  `Etc/GMT-11` for Melbourne); a cached weather CSV keeps a single fixed
+  offset written in its stamps and is read as UTC otherwise; Monte Carlo
+  weather is UTC. No behaviour changes.
 
 ### Changed
 - `resample_tmy_to_15min` is now a thin wrapper over `resample_to_15min`, so
