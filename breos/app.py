@@ -24,6 +24,7 @@ from breos.app_config import resolve_app_config
 from breos.app_inputs import AppRuntimeDependencies
 from breos.app_results import build_result as build_app_result
 from breos.load_profiles import load_profile
+from breos.repair import input_repair_records
 from breos.runners.app import run_app_simulation
 from breos.weather import build_battery_temperature_series, fetch_tmy_weather_data, load_weather, resample_to_15min
 
@@ -49,17 +50,26 @@ class App:
         opt-in bifacial rear gain (``bifacial_model`` plus row geometry),
         resolution, projection years, cost and emissions presets, degradation,
         and inverter assumptions.
+    input_repairs : InputRepairReport, dict, or list of them, optional
+        Reports from :func:`breos.io.repair_series <breos.repair.repair_series>` for input series repaired
+        before this run, for example a measured load written to the
+        ``rlp_directory`` file the config points at. They are recorded
+        unchanged in ``result()["provenance"]["input_repairs"]``. App does not
+        repair anything itself and does not check the reports against the
+        input it loads. Omitted (None), provenance has no ``input_repairs``
+        key, exactly as before.
     """
 
-    def __init__(self, config: dict) -> None:
+    def __init__(self, config: dict, *, input_repairs: Any = None) -> None:
         self._resolved = resolve_app_config(config)
         self._cfg = self._resolved.cfg
+        self._input_repairs = input_repair_records(input_repairs)
         self._result: dict[str, Any] | None = None
 
     def simulate(self) -> None:
         """Run the full simulation pipeline."""
         artifacts = run_app_simulation(self._cfg, self._resolved, self._runtime_dependencies())
-        self._result = build_app_result(self._cfg, self._resolved, artifacts)
+        self._result = build_app_result(self._cfg, self._resolved, artifacts, input_repairs=self._input_repairs)
 
     def result(self) -> dict[str, Any]:
         """

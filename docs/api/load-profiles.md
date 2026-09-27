@@ -53,3 +53,18 @@ Expected filenames are documented in [Load Profile Data](../legal/load-profile-d
 
    breos.load_profiles.align_load_to_pv
 ```
+
+## Repairing measured input
+
+An explicit, reported repair step for measured load and PV power series, run
+before a simulation. See [Repairing measured data](../getting-started/inputs.md#repairing-measured-data).
+The same names are available from `breos.io`.
+
+```{eval-rst}
+.. autosummary::
+   :toctree: generated/
+
+   breos.repair.repair_series
+   breos.repair.InputRepairReport
+   breos.repair.RepairEvent
+```

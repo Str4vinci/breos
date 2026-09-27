@@ -57,7 +57,7 @@ weather/data access, load profiles, PV system data, and cost assumptions; see
 | `discount_rate` | `0.03` | Discount rate for NPV |
 | `emissions_country` | `None` | Country code for CO2 calculations (`"PT"`, `"DE"`, `"ES"`, ...) |
 | `export_emissions_factor_gco2_kwh` | `None` | Optional displacement factor for exported PV. `None` uses the preset's avoided-grid factor and reports that fallback explicitly |
-| `pv_degradation_rate` | `0.005` | Annual PV degradation rate (0.5% / year) |
+| `pv_degradation_rate` | `0.005` | Annual PV degradation rate (0.5% / year), compounded and counted from the start of each year, so year 1 has none; see [Module aging](../api/pv.md#module-aging) |
 | `calendar_model` | `"naumann_lam_field_calibrated"` | Battery calendar aging model. Default is the v1 field calibration; use `"naumann_lam_field_calibrated_v2"` for the v2 field-calibrated fit with Lam `Ea`/`n` fixed and `k0`/`b` fitted |
 | `degradation_engine` | `"native"` | `"native"` keeps Naumann/Lam; `"blast"` explicitly opts into a vendored BLAST cell model |
 | `blast_model` | `None` | Stable BLAST model key; required with `degradation_engine="blast"` and invalid with the native engine |
@@ -75,6 +75,7 @@ weather/data access, load profiles, PV system data, and cost assumptions; see
 | `inverter_loading_ratio` | `1.25` | DC/AC oversizing ratio; also sets the inverter AC rating that clips production |
 | `pv_loss_overrides` | `None` | Per-component overrides (percent) for the fixed PVWatts system losses, e.g. `{"shading": 0.0}` |
 | `start_date` | `"2023-01-01"` | First simulated day: 1 January of the study year |
+| `weather_source` | `None` | Source part of the cached `weather/<location>_tmy_<years>_<source>.csv` file to load, e.g. `"pvgis-sarah3"`. Needed only when several TMY files exist for a location preset; see [Offline runs with cached weather](recipes.md#offline-runs-with-cached-weather) |
 
 Real calendar-year load profiles follow `start_date`: leap years contain
 8,784 hourly (35,136 quarter-hourly) intervals and preserve exact annual
