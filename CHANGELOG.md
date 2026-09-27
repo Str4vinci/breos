@@ -47,6 +47,16 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 - `resample_tmy_to_15min` is now a thin wrapper over `resample_to_15min`, so
   the two share one interpolation path. Its output is unchanged: the same
   columns, values, and provenance.
+- **`PVModuleParams.gamma_pmp` now holds only what the user supplied.** It
+  stays `None` when the power coefficient is left to default, instead of
+  being overwritten with `T_Pmax_pct` on construction. Read the coefficient
+  the models use from the new read-only `gamma_pmp_effective`, which is
+  `gamma_pmp` when set and `T_Pmax_pct` otherwise. Code that reads
+  `module.gamma_pmp` from a catalogue module, for example to pass it to
+  `fit_cec_params`, needs to switch to `gamma_pmp_effective`. Setting
+  `gamma_pmp` explicitly behaves as before. `alpha_sc` and `beta_voc` are now
+  read-only properties; assign `alpha_sc_abs` or `beta_voc_abs` to override
+  them.
 - One frequency check, `breos.utils.normalise_frequency`, now serves the step
   helpers, the weather readers, `load_profile` and the CLI
   ([#175](https://github.com/Str4vinci/breos/issues/175)). It accepts `"h"`,
@@ -536,6 +546,34 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   values as they do NaN, so an infinite LCOE no longer makes the mean
   infinite and the spread NaN; `count` shows how many runs remain.
 
+- Four more findings from the 0.7 audit
+  ([#175](https://github.com/Str4vinci/breos/issues/175)) are fixed.
+  - Importing `breos.plotting`, and resetting it with
+    `set_presentation_mode(False)`, no longer switches Matplotlib's
+    process-wide backend to Agg.
+  - A battery replacement is booked at the end of the interval flagged in
+    `Battery_Replaced`, the last one the old pack ran, instead of at its
+    start. The within-year replacement fraction is now `(step + 1) / n_steps`,
+    in `(0, 1]`. Several reported financial values in the hourly App golden
+    change by €0.01.
+  - `PVModuleParams` rejects non-finite or nonphysical datasheet values,
+    requires `T_Pmax_pct < 0`, and checks that `Mpp` matches `Vmp * Imp`
+    within 2%. The checks run on construction and on every field assignment,
+    and a rejected assignment leaves the module unchanged. To move the STC
+    point further than 2% in one go, use
+    `dataclasses.replace(module, Mpp=..., Vmp=..., Imp=...)`. `alpha_sc`,
+    `beta_voc`, and the new `gamma_pmp_effective` are read-only properties
+    computed from the current fields, so they stay current after in-place
+    edits, `dataclasses.replace`, a `dataclasses.asdict` round trip, copies
+    and pickles. Before, `replace(module, T_Pmax_pct=...)` kept the old
+    power coefficient. See Changed for what `gamma_pmp` now holds.
+  - The PV-only Monte Carlo cache records the PV array and inverter settings
+    it was built for, and a mismatched inverter raises at simulation time. It
+    keeps read-only copies of the PV input and the conversion arrays, so the
+    caller's arrays stay writable. Load-only scaling keeps the cache and PV
+    scaling clears it. Storing the PV input adds a fourth array per weather
+    and project year pair, so a study now skips the cache from three quarters
+    of the size it did before.
 - PV module age is counted at the start of each simulated year everywhere
   ([#175](https://github.com/Str4vinci/breos/issues/175)). Year 1 has no
   degradation and year `n` is degraded by `n - 1` full years, compounded.

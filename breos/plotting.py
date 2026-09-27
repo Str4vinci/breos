@@ -22,8 +22,6 @@ MONTH_LABELS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "
 # Plotting imports with backend handling
 try:
     import matplotlib
-
-    matplotlib.use("Agg")  # Non-interactive backend
     import matplotlib.dates as mdates
     import matplotlib.pyplot as plt
     from matplotlib.patches import Polygon, Rectangle
@@ -108,7 +106,6 @@ def set_presentation_mode(enabled: bool = True, scale: float = 1.5):
         )
     else:
         plt.rcdefaults()
-        matplotlib.use("Agg")
 
 
 def _format_loss_energy(value_kwh: float) -> str:

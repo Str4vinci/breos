@@ -8,8 +8,10 @@ from breos.pv_modules import MODULES, get_module, get_module_info, list_modules
 class TestCatalog:
     def test_get_module_is_case_insensitive_copy(self):
         module = get_module("suntech_stp550s_stc")
-        module.Mpp = 1
+        module.Mpp = 545
+        module.T_Pmax_pct = -0.5
         assert MODULES["Suntech_STP550S_STC"].Mpp == 550
+        assert MODULES["Suntech_STP550S_STC"].gamma_pmp_effective == pytest.approx(-0.34)
 
     def test_unknown_module_error_lists_available(self):
         with pytest.raises(KeyError, match="not found. Available:"):
