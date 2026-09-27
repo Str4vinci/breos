@@ -28,6 +28,7 @@ from breos.execution import (
     reset_jit_cache_observation,
 )
 from breos.load_profiles import LOAD_PROFILE_METADATA_KEY
+from breos.projection import build_battery_config, build_pv_only_battery_config
 from breos.pv_modules import get_module
 from breos.solar import PVProductionBreakdown
 from breos.utils import get_hours_per_step
@@ -168,9 +169,7 @@ def _build_pv_loss_waterfall(
     # degradation and its dispatched PV DC equals the static-loss stage.
     pv_dc_generation = _series_energy_kwh(first_year_results_df["PV_DC"], freq)
 
-    pv_peak_w = cfg["n_modules"] * resolved.avg_module_power_w
-    loading_ratio = cfg["inverter_loading_ratio"]
-    inverter_ac_capacity_w = pv_peak_w / loading_ratio if loading_ratio and loading_ratio > 0 else 0.0
+    inverter_ac_capacity_w = resolved.inverter_ac_capacity_w or 0.0
 
     def e(column: str) -> float:
         return _series_energy_kwh(first_year_results_df[column], freq)
@@ -326,14 +325,6 @@ def run_app_simulation(
     degradation_rate = cfg["pv_degradation_rate"]
     hours_per_step = get_hours_per_step(freq)
 
-    replacement_cost = resolved.cost_params.battery_cost_per_kwh * battery_kwh
-
-    # Size the inverter AC rating the same way CAPEX does (economics
-    # calculate_costs), so the paid-for inverter also clips production.
-    pv_peak_w = cfg["n_modules"] * resolved.avg_module_power_w
-    loading_ratio = cfg["inverter_loading_ratio"]
-    inverter_ac_capacity_w = pv_peak_w / loading_ratio if loading_ratio and loading_ratio > 0 else None
-
     cumulative_fec = 0.0
     cumulative_cal_seconds = 0.0
     cumulative_resistance_growth = 0.0
@@ -355,39 +346,9 @@ def run_app_simulation(
         dc_power = inputs.dc_system_base * pv_degradation_factor
 
         if has_battery:
-            batt_kwargs: dict[str, Any] = {}
-            if cfg["battery_rte"] is not None:
-                # Split the round-trip efficiency evenly across charge and
-                # discharge, matching the BatteryConfig default convention.
-                one_way = math.sqrt(cfg["battery_rte"])
-                batt_kwargs["charge_efficiency"] = one_way
-                batt_kwargs["discharge_efficiency"] = one_way
-            batt_cfg = BatteryConfig(
-                nominal_energy_wh=battery_wh,
-                initial_soh=current_soh,
-                eol_percentage=cfg["battery_eol_percentage"],
-                max_soc=cfg["battery_max_soc"],
-                min_soc=cfg["battery_min_soc"],
-                dc_coupled=cfg["dc_coupled"],
-                inverter_efficiency=cfg["inverter_efficiency"],
-                inverter_ac_capacity_w=inverter_ac_capacity_w,
-                enable_replacement=True,
-                replacement_cost=replacement_cost,
-                calendar_model=cfg["calendar_model"],
-                max_charge_power_w=cfg["battery_max_charge_power_w"],
-                max_discharge_power_w=cfg["battery_max_discharge_power_w"],
-                power_limit_c_rate=cfg["battery_power_limit_c_rate"],
-                enable_resistance_fade=cfg.get("enable_resistance_fade", False),
-                **batt_kwargs,
-            )
+            batt_cfg = build_battery_config(cfg, resolved, initial_soh=current_soh)
         else:
-            # PV-only runs still flow through the same inverter model so the
-            # configured efficiency and AC clipping apply consistently.
-            batt_cfg = BatteryConfig(
-                nominal_energy_wh=0,
-                inverter_efficiency=cfg["inverter_efficiency"],
-                inverter_ac_capacity_w=inverter_ac_capacity_w,
-            )
+            batt_cfg = build_pv_only_battery_config(cfg, resolved)
 
         state_kwargs: dict[str, Any] = {}
         if carried_energy_wh is not None:

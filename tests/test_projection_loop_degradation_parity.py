@@ -103,7 +103,7 @@ def test_app_montecarlo_and_projected_optimization_age_the_battery_identically(m
     )
     cfg = resolved.cfg
     assert cfg["degradation_engine"] == "native"
-    inverter_ac_capacity_w = cfg["n_modules"] * resolved.avg_module_power_w / cfg["inverter_loading_ratio"]
+    inverter_ac_capacity_w = resolved.inverter_ac_capacity_w
 
     # App: its own year loop over the prepared inputs.
     app_records, app_calls = [], []

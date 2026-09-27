@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import pandas as pd
 import pytest
 
+import breos.projection as projection_module
 from breos.app_inputs import PreparedSimulationInputs
 from breos.battery import BatteryConfig, simulate_energy_balance
 from breos.runners import SimulationArtifacts, run_app_simulation
@@ -82,6 +83,7 @@ def test_app_runner_native_default_matches_explicit_native(monkeypatch):
     resolved = SimpleNamespace(
         cost_params=SimpleNamespace(battery_cost_per_kwh=500.0),
         avg_module_power_w=400.0,
+        inverter_ac_capacity_w=400.0 / 1.25,
         emissions_params=None,
     )
 
@@ -127,13 +129,13 @@ def test_app_runner_threads_blast_state_across_projection_years(monkeypatch):
     monkeypatch.setattr(app_runner, "cost_analysis_projection", lambda **kwargs: pd.DataFrame())
     monkeypatch.setattr(app_runner, "calculate_lcoe_from_projection", lambda *args, **kwargs: 0.0)
     monkeypatch.setattr(app_runner, "find_payback_year", lambda projection: None)
-    real_battery_config = app_runner.BatteryConfig
+    real_battery_config = projection_module.BatteryConfig
 
     def _battery_config_without_standby(**kwargs):
         kwargs.setdefault("standby_loss_wh", 0.0)
         return real_battery_config(**kwargs)
 
-    monkeypatch.setattr(app_runner, "BatteryConfig", _battery_config_without_standby)
+    monkeypatch.setattr(projection_module, "BatteryConfig", _battery_config_without_standby)
 
     cfg = {
         "resolution": "h",
@@ -162,6 +164,7 @@ def test_app_runner_threads_blast_state_across_projection_years(monkeypatch):
     resolved = SimpleNamespace(
         cost_params=SimpleNamespace(battery_cost_per_kwh=500.0),
         avg_module_power_w=400.0,
+        inverter_ac_capacity_w=400.0 / 1.25,
         emissions_params=None,
     )
 

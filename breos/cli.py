@@ -128,7 +128,7 @@ def _write_payload(data: dict[str, Any], args: argparse.Namespace, what: str) ->
 def _resolved_config_summary(config: dict[str, Any]) -> dict[str, Any]:
     resolved = resolve_app_config(config)
     cfg = resolved.cfg
-    inverter_ac_kw = resolved.system_kwp / cfg["inverter_loading_ratio"]
+    inverter_ac_kw = (resolved.inverter_ac_capacity_w or 0.0) / 1000
     # A config is valid before its external profile file is in place, so a
     # missing file is reported rather than raised; several matches still raise.
     try:

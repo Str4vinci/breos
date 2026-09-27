@@ -203,6 +203,7 @@ def test_blast_multiple_replacements_through_runner(monkeypatch):
     resolved = SimpleNamespace(
         cost_params=SimpleNamespace(battery_cost_per_kwh=500.0),
         avg_module_power_w=400.0,
+        inverter_ac_capacity_w=cfg["n_modules"] * 400.0 / cfg["inverter_loading_ratio"],
         emissions_params=None,
     )
 

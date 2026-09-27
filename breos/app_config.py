@@ -16,6 +16,7 @@ from breos.degradation.profiles import ENABLED_BLAST_MODEL_KEYS, apply_battery_p
 from breos.economics import COST_CONFIG_KEY_TO_PARAM, CostParams, calculate_costs
 from breos.emissions import EmissionsParams
 from breos.execution import DEFAULT_EXECUTION_BACKEND, EXECUTION_BACKENDS, validate_execution_backend
+from breos.inverter import inverter_ac_capacity_w
 from breos.load_profiles import PROFILE_UNITS, resolve_profile_key, validate_profile_options
 from breos.pv.horizon import normalise_horizon_profile
 from breos.pv.model_options import is_known_model, is_valid_albedo, is_valid_gcr, normalise_model_name
@@ -516,6 +517,9 @@ class ResolvedAppConfig:
     azimuth: float
     tracking: str
     axis_azimuth: float
+    # AC nameplate that clips dispatch, sized like the inverter CAPEX: the DC
+    # peak over inverter_loading_ratio.
+    inverter_ac_capacity_w: float | None
     cost_params: CostParams
     emissions_params: EmissionsParams | None
 
@@ -1304,6 +1308,7 @@ def resolve_app_config(config: dict[str, Any]) -> ResolvedAppConfig:
         azimuth=azimuth,
         tracking=tracking,
         axis_azimuth=axis_azimuth,
+        inverter_ac_capacity_w=inverter_ac_capacity_w(n_modules * avg_module_power_w, cfg["inverter_loading_ratio"]),
         cost_params=resolve_costs(cfg),
         emissions_params=resolve_emissions(cfg),
     )
