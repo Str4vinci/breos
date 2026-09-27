@@ -73,6 +73,13 @@ def system_ac_production_power(results_df: pd.DataFrame) -> pd.Series:
     raise KeyError(f"Results do not contain the AC system-production ledger ({required}) or legacy PV_Production")
 
 
+# The one default set for every projection entry point (ADR 0003 E6). Both are
+# nominal annual rates; an explicit 0.0 is valid and used as given, so callers
+# test for an absent key, never a falsy value.
+DEFAULT_DISCOUNT_RATE = 0.03
+DEFAULT_INFLATION_RATE = 0.02
+
+
 @dataclass
 class CostParams:
     """Cost parameters for economic analysis."""
@@ -100,9 +107,9 @@ class CostParams:
     operation_cost: float = 0.0  # € additional /year
 
     # Analysis parameters
-    inflation_rate: float = 0.02
+    inflation_rate: float = DEFAULT_INFLATION_RATE
     sell_price_inflation: float = 0.0
-    discount_rate: float = 0.0
+    discount_rate: float = DEFAULT_DISCOUNT_RATE
     pv_degradation_rate: float = 0.005
 
 
@@ -364,9 +371,9 @@ def cost_analysis_projection(
     results_df: Optional[pd.DataFrame],
     costs: Dict[str, float],
     num_years: int = 20,
-    inflation_rate: float = 0.03,
+    inflation_rate: float = DEFAULT_INFLATION_RATE,
     sell_price_inflation: float = 0.0,
-    discount_rate: float = 0.02,
+    discount_rate: float = DEFAULT_DISCOUNT_RATE,
     degradation_rate: float = 0.005,
     results_directory: Optional[str] = None,
     scenario_name: str = "",
@@ -902,7 +909,7 @@ def calculate_lcoe(
     annual_production_kwh: float,
     annual_operation_cost: float,
     lifetime_years: int = 25,
-    discount_rate: float = 0.0,
+    discount_rate: float = DEFAULT_DISCOUNT_RATE,
     degradation_rate: float = 0.005,
 ) -> float:
     """
@@ -946,7 +953,7 @@ def calculate_lcoe(
 def calculate_lcoe_from_projection(
     cost_projection: pd.DataFrame,
     total_investment: Optional[float] = None,
-    discount_rate: float = 0.0,
+    discount_rate: float = DEFAULT_DISCOUNT_RATE,
     production_column: str = "PV_Production_kWh",
 ) -> float:
     """Calculate LCOE from a simulated multi-year projection.

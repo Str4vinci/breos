@@ -95,6 +95,22 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   cashflows, escalated and not discounted: `cost_import`, `revenue_export`,
   `cost_operation`, `cost_fixed_charge`, `cost_replacement` and
   `replacement_time_years`.
+- **Tariff domain**, `breos.tariffs` (ADR 0002). A `TariffSchedule` assigns
+  instants to named periods in local civil time and records its regulatory
+  source; `TariffPrices` holds per-kWh import and export prices per period and
+  a daily fixed charge in one currency (EUR in 0.7.0); a `ResolvedTariff`
+  aligns both to a simulation index, with period labels and codes, price
+  arrays, the civil-day boundaries (`day_starts`: 23-, 24- and 25-hour days),
+  and separate schedule and price hashes. Periods are classified in the
+  timezone passed in, never the index's own (A1), and a schedule is not moved
+  to another zone. Nine schedules are bundled, checked against their primary
+  sources: the Portuguese mainland BTN daily and weekly bi- and tri-hourly
+  cycles of 2026 (Diretiva ERSE n.º 1/2026) and of the 2027 reform (Diretiva
+  ERSE n.º 3/2026, de 19 de agosto), and the Spanish 2.0TD access tariff (CNMC
+  Circular 3/2020) with its 2026 national holidays. A schedule whose
+  boundaries hourly input cannot represent is rejected at that resolution
+  (A3). Nothing in App, Monte Carlo or the optimizer uses tariffs yet, so no
+  result changes; the `[tariff]` config table comes with TOU valuation.
 
 ### Changed
 - `resample_tmy_to_15min` is now a thin wrapper over `resample_to_15min`, so
@@ -188,6 +204,20 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   system both rise by 6.49 €, and the NPV of savings is unchanged because the
   charge is paid either way. Year rows without `Simulated_Hours`, from direct
   callers, are billed as 365-day years, as before.
+- **One default discount and inflation rate everywhere** (ADR 0003 E6): a
+  discount rate of 0.03 and an inflation rate of 0.02, defined once as
+  `breos.economics.DEFAULT_DISCOUNT_RATE` and `DEFAULT_INFLATION_RATE` and
+  read by the App registry, `CostParams`, `cost_params_from_config`,
+  optimization, `cost_analysis_projection`, `calculate_lcoe_from_projection`
+  and `calculate_lcoe`. **Callers that omit the discount rate get different
+  results:** `CostParams`, `cost_params_from_config`, the optimizer and both
+  LCOE functions used 0.0, and a direct `cost_analysis_projection` call used
+  0.02 (with inflation 0.03). On three projected-optimizer designs without a
+  `financials.discount_rate`, NPV moves from 6430.77 to 3941.12 €, −1736.96 to
+  −2690.35 € and −12091.27 to −11013.42 €, and LCOE rises by 0.017–0.021
+  €/kWh; energy and battery results are unchanged. App results do not
+  change, since App already used 0.03 and 0.02. An explicit 0.0 is used as
+  given.
 
 ### Fixed
 - App weather that does not cover the whole calendar year of `start_date`
@@ -828,6 +858,26 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   `PROFILE_FILE_NATIVE_FREQ`, `PROFILE_NAMES`, `PROFILE_ALIASES` and
   `EREDES_COLUMNS`. Read `PROFILES` instead. `breos list load-profiles` drops
   its `aliases` field and gains `files` and `requires_load_profile_file`.
+- **The steady-state optimizer scoring basis and `calculate_financials`**
+  ([#179](https://github.com/Str4vinci/breos/issues/179)), with no
+  deprecation period. `optimization.objective_basis = "steady_state"` scored a
+  candidate on one simulated year, with NPV from `calculate_financials` and
+  battery replacements extrapolated from the year-one SOH loss. Candidates are
+  now scored over the projected lifetime only, and a config that still sets
+  `"steady_state"` raises `ValueError`; `"projected"` stays accepted. The
+  default projected scoring also ran that year-one pass on every candidate for
+  diagnostics, so the `SteadyState_Grid_Independence_%`,
+  `SteadyState_NPV_Eur` and `SteadyState_ZEB_Ratio` values and Pareto columns
+  are gone, along with the private helpers `_year_one_soh_loss_pct` and
+  `_estimate_battery_replacement_treatment` and the constants
+  `DEFAULT_PANEL_WP` and `DEFAULT_OBJECTIVE_BASIS`.
+  `SolarDesignProblem.projected_objectives` is gone too;
+  `objective_basis` remains and is always `"projected"`. Projected results are
+  unchanged bit for bit, and each candidate evaluation skips one simulated
+  year: 22% faster on a three-year horizon and 4% on twenty years.
+- The packaged `breos/data/configs/financials.json`, which nothing loaded and
+  which said discount 0.05 against the App's 0.03 (ADR 0003 E6,
+  [#186](https://github.com/Str4vinci/breos/issues/186)).
 
 ### Documentation
 - The release checklist records that `v0.5.0`, `v0.5.1` and `v0.6.0` are

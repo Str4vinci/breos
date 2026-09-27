@@ -545,8 +545,8 @@ class TestUnlimitedInverterAndOptimizer:
         with pytest.raises(ValueError, match="dc_output_scale must be finite and greater than 0"):
             SolarDesignProblem(weather, load, config, None)
 
-    def test_optimizer_problem_scales_dc_for_steady_and_projected_paths(self, monkeypatch):
-        """NSGA candidate scoring sends corrected raw DC to both evaluators."""
+    def test_optimizer_problem_scales_dc_before_projected_scoring(self, monkeypatch):
+        """NSGA candidate scoring sends corrected raw DC to the projection."""
         from breos.optimization import SolarDesignProblem
 
         idx = pd.date_range("2025-01-01", periods=3, freq="h", tz="UTC")
@@ -560,28 +560,6 @@ class TestUnlimitedInverterAndOptimizer:
             "breos.optimization._temperature_series_from_config",
             lambda *_args, **_kwargs: pd.Series(np.full(3, 20.0), index=idx),
         )
-
-        def fake_simulate(*, pv_dc, houseload, **_kwargs):
-            seen["steady"] = pv_dc.copy()
-            frame = pd.DataFrame(
-                {
-                    "Houseload": houseload.iloc[:, 0].to_numpy(),
-                    "PV_Production": pv_dc.to_numpy(),
-                    "Battery_SOH": np.full(len(pv_dc), 100.0),
-                },
-                index=pv_dc.index,
-            )
-            summary = pd.DataFrame(
-                {
-                    "Import [kWh]": [0.0],
-                    "Sell [kWh]": [float(pv_dc.sum() / 1000.0)],
-                    "Total Load [kWh]": [float(houseload.iloc[:, 0].sum() / 1000.0)],
-                }
-            )
-            return frame, float(pv_dc.sum()), summary, 0.0, 0, pd.DataFrame()
-
-        monkeypatch.setattr("breos.optimization.simulate_energy_balance", fake_simulate)
-        monkeypatch.setattr("breos.optimization.calculate_financials", lambda *_args, **_kwargs: (0.0, 0.0))
 
         def fake_projected(**kwargs):
             seen["projected"] = kwargs["base_dc_power"].copy()
@@ -607,7 +585,6 @@ class TestUnlimitedInverterAndOptimizer:
         problem._evaluate(np.array([1.0, 1.0, 35.0, 180.0]), out)
 
         expected = raw * 0.5
-        assert np.array_equal(seen["steady"].to_numpy(), expected.to_numpy())
         assert np.array_equal(seen["projected"].to_numpy(), expected.to_numpy())
 
 

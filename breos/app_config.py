@@ -14,7 +14,13 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from breos.config_schema import TableSpec, anything, boolean, number
 from breos.constants import DEFAULT_MAX_SOC, DEFAULT_MIN_SOC
 from breos.degradation.profiles import ENABLED_BLAST_MODEL_KEYS, apply_battery_profile_defaults
-from breos.economics import COST_CONFIG_KEY_TO_PARAM, CostParams, calculate_costs
+from breos.economics import (
+    COST_CONFIG_KEY_TO_PARAM,
+    DEFAULT_DISCOUNT_RATE,
+    DEFAULT_INFLATION_RATE,
+    CostParams,
+    calculate_costs,
+)
 from breos.emissions import EmissionsParams
 from breos.execution import DEFAULT_EXECUTION_BACKEND, EXECUTION_BACKENDS, validate_execution_backend
 from breos.inverter import inverter_ac_capacity_w
@@ -316,7 +322,7 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         cli_help="Economic projection horizon.",
     ),
     "inflation_rate": AppConfigField(
-        default=0.02,
+        default=DEFAULT_INFLATION_RATE,
         default_order=29,
         cli_flags=("--inflation-rate",),
         cli_type=float,
@@ -337,7 +343,7 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         cli_help="Exported-generation displacement factor in gCO2/kWh (default: grid avoided factor).",
     ),
     "discount_rate": AppConfigField(
-        default=0.03,
+        default=DEFAULT_DISCOUNT_RATE,
         default_order=31,
         cli_flags=("--discount-rate",),
         cli_type=float,
