@@ -75,6 +75,21 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   helpers and then fail later in `pd.date_range`. Use `"h"` or `"15min"`.
 
 ### Fixed
+- App weather that does not cover the whole calendar year of `start_date`
+  raises `ValueError` instead of simulating a shorter year
+  ([#242](https://github.com/Str4vinci/breos/issues/242)). The simulation
+  calendar ran from the first to the last weather row, so a cached TMY file
+  starting on 8 January simulated about 51 weeks: consumption came out at
+  3,908 kWh instead of the configured 4,000, and the economics still treated
+  the run as a full year. A gap in the middle of the weather was already an
+  error; missing leading or trailing rows now are too, and the message names
+  the weather file or source and the missing span. The year may be complete on
+  the weather's own clock, on UTC, or on the location's timezone, so PVGIS
+  fixed-offset years, UTC-year CSV weather, and civil-year local weather all
+  still run, as do leap years and 15-minute runs on resampled hourly weather.
+  **Results change only for truncated weather, which now raises.** Monte Carlo
+  already skips incomplete weather years, and the optimizer simulates the
+  window its caller supplies.
 - The optimizer now models the site at its real elevation, as App does.
   `evaluate_projected_design` and `SolarDesignProblem` built their pvlib
   location with `altitude=0` unless the config set one, while App leaves the

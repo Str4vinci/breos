@@ -500,9 +500,10 @@ def test_projected_optimizer_candidate_matches_app(open_meteo_weather, monkeypat
     from breos.optimization import optimize_system_multi_objective
     from breos.weather import build_battery_temperature_series
 
-    # A full year: over a single January day the site-altitude difference
-    # between App and the optimizer (0 m instead of pvlib's elevation lookup)
-    # stayed inside App's rounding and went unnoticed.
+    # A full year: App rejects weather that does not cover the calendar year
+    # of start_date, and over a single January day the site-altitude
+    # difference between App and the optimizer (0 m instead of pvlib's
+    # elevation lookup) stayed inside App's rounding and went unnoticed.
     idx = pd.date_range("2023-01-01", periods=8760, freq="h", tz="UTC")
     weather = open_meteo_weather(idx)
     houseload = pd.DataFrame({"Load": [500.0] * len(idx)}, index=idx)

@@ -339,3 +339,8 @@ or `breos run --config config.toml --weather-source pvgis-sarah3` from the
 command line. A `weather_source` with no matching file is an error rather than
 a PVGIS fetch. The file that was used, with its SHA-256 digest and the parsed
 filename (including the source), is recorded under `provenance.weather`.
+
+The file is restamped onto the year of `start_date` and must then cover that
+whole calendar year. A file missing its first or last rows raises `ValueError`
+that names the file and the missing span, rather than simulating a shorter
+year.

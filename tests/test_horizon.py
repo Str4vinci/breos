@@ -157,7 +157,10 @@ def test_app_config_accepts_and_normalises_inline_horizon_pairs():
 
 
 def test_active_profile_requests_unshaded_pvgis_weather(monkeypatch, tmp_path):
-    weather = _weather()
+    # App weather must cover the whole simulated year, so the three test rows
+    # are repeated across 2025.
+    index = pd.date_range("2025-01-01", periods=8760, freq="h", tz="UTC")
+    weather = _weather().iloc[np.arange(len(index)) % 3].set_axis(index)
     captured = {}
 
     def fetch(**kwargs):
@@ -172,7 +175,7 @@ def test_active_profile_requests_unshaded_pvgis_weather(monkeypatch, tmp_path):
         build_battery_temperature_series=lambda **kwargs: None,
     )
     resolved = SimpleNamespace(loc_key="porto", lat=41.0, lon=-8.0, timezone="UTC")
-    solar_position = _solar_position(weather.index)
+    solar_position = _solar_position(weather.index[:3]).iloc[np.arange(len(index)) % 3]
     monkeypatch.setattr(
         "breos.pv.horizon.Location.get_solarposition", lambda self, times: solar_position.set_axis(times)
     )

@@ -19,7 +19,7 @@ from breos.solar import (
     calculate_pv_production_breakdown,
     calculate_pv_production_tracking_breakdown,
 )
-from breos.utils import remap_datetime_index_years
+from breos.utils import get_hours_per_step, remap_datetime_index_years
 from breos.weather import AmbiguousWeatherError, fill_leap_day, warn_if_naive_weather_timestamps
 
 
@@ -89,6 +89,70 @@ def remap_tmy_year(df: pd.DataFrame, target_year: int) -> pd.DataFrame:
     if weather_metadata is not None:
         remapped.attrs["breos_weather_metadata"] = weather_metadata
     return fill_leap_day(remapped)
+
+
+def _weather_source_label(weather: pd.DataFrame) -> str:
+    """Name the weather's origin for an error message: its file, else its source."""
+    metadata = weather.attrs.get("breos_weather_metadata")
+    if isinstance(metadata, dict):
+        if metadata.get("path"):
+            return str(metadata["path"])
+        if metadata.get("source") and metadata["source"] != "runtime_dependency_or_unknown":
+            return str(metadata["source"])
+    return "the injected weather provider"
+
+
+def require_full_year_weather(weather: pd.DataFrame, year: int, freq: str, timezone: str) -> None:
+    """Raise unless the weather covers the whole calendar year the App simulates.
+
+    The simulation calendar runs from the first to the last weather row, so
+    weather missing its first or last days would quietly simulate a shorter
+    year against a full year of economics. A gap in the middle is already an
+    error in the PV model; this rejects missing leading and trailing rows.
+
+    The year may be read on three clocks: the weather index's own, UTC, and
+    the location's ``timezone``. A PVGIS TMY covers one fixed-offset year,
+    CSV weather often one UTC year, and local weather one civil year, and all
+    three are complete. The weather must cover the year on at least one of
+    them, to within one simulation step at each end, so labels offset from
+    the hour by less than a step still count.
+    """
+    index = weather.index
+    if not isinstance(index, pd.DatetimeIndex) or index.empty:
+        raise ValueError(f"Weather from {_weather_source_label(weather)} has no timestamped rows")
+    step = pd.Timedelta(hours=get_hours_per_step(freq))
+    first, last = index.min(), index.max()
+
+    shortfalls = []
+    clocks = {str(clock): clock for clock in (index.tz, "UTC", timezone)}
+    for clock in clocks.values():
+        year_start = pd.Timestamp(f"{year}-01-01", tz=clock)
+        year_end = pd.Timestamp(f"{year + 1}-01-01", tz=clock)
+        leading = max(first - year_start, pd.Timedelta(0))
+        trailing = max(year_end - (last + step), pd.Timedelta(0))
+        if leading < step and trailing < step:
+            return
+        shortfalls.append((max(leading, trailing), leading, trailing, year_start, year_end))
+
+    # Report on the clock the weather comes closest to covering.
+    _, leading, trailing, year_start, year_end = min(shortfalls, key=lambda item: item[0])
+    missing = []
+    if leading >= step:
+        missing.append(
+            f"the leading {leading} ({int(leading // step)} steps, {year_start} to "
+            f"{first.tz_convert(year_start.tz) - step})"
+        )
+    if trailing >= step:
+        missing.append(
+            f"the trailing {trailing} ({int(trailing // step)} steps, "
+            f"{last.tz_convert(year_end.tz) + step} to {year_end - step})"
+        )
+    raise ValueError(
+        f"Weather from {_weather_source_label(weather)} does not cover the simulated year {year}: "
+        f"after restamping onto {year} it runs from {first} to {last}, so {' and '.join(missing)} "
+        f"{'is' if len(missing) == 1 else 'are'} missing. The App simulates the whole calendar year "
+        "of start_date; supply weather for the full year, or fill the missing rows explicitly."
+    )
 
 
 def load_weather_for_simulation(
@@ -164,6 +228,7 @@ def load_weather_for_simulation(
             # The resampler carries the weather metadata over and adds its own
             # resolution and method fields to it.
             weather = deps.resample_to_15min(weather, latitude=resolved.lat, longitude=resolved.lon)
+    require_full_year_weather(weather, start_year, freq, resolved.timezone)
 
     if horizon_profile is not None:
         weather = apply_terrain_horizon_profile(
