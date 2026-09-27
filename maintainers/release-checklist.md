@@ -50,7 +50,8 @@ misleads anyone later diffing it against the release it names.
 ## Release Validation Matrix
 
 The `Tests` workflow runs the complete matrix on Python 3.11, 3.12, 3.13, and
-3.14, while macOS and Windows run a focused public-entrypoint smoke suite. A
+3.14, while macOS and Windows run a focused public-entrypoint smoke suite on
+PRs into and pushes to `main` and `release/**`, and nightly. A
 separate `coverage-report` job publishes branch-aware core-package coverage on
 Python 3.12, excluding the vendored BLAST-Lite implementation; it runs nightly,
 on demand, and on `release/**`, so a release build produces a coverage snapshot

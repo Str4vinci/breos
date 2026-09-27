@@ -52,6 +52,12 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   `provenance.weather`, as before.
 
 ### Changed
+- Cut CI runner time without dropping a check. Merges into `develop` no
+  longer re-run the workflow, since branch protection already requires each PR
+  to be tested up to date with `develop`. The macOS/Windows smoke suite runs
+  nightly and at the release gates instead of on every PR commit. The
+  full-suite jobs run under pytest-xdist (`-n auto`), now in the `dev` extra.
+  A new push to a PR cancels that PR's run still in progress.
 - `resample_tmy_to_15min` is now a thin wrapper over `resample_to_15min`, so
   the two share one interpolation path. Its output is unchanged: the same
   columns, values, and provenance.
