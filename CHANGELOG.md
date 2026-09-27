@@ -27,6 +27,22 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   columns, values, and provenance.
 
 ### Fixed
+- Config errors that surfaced only after the weather fetch are reported when
+  the App is built, and CLI, TOML and Python config are normalised the same
+  way ([#176](https://github.com/Str4vinci/breos/issues/176)). Load-profile
+  aliases, PV loss component names and a missing battery temperature CSV fail
+  during construction. Unknown `[montecarlo]` keys are rejected before the
+  weather file is checked. Hyphenated keys in nested tables and native TOML
+  `date` values are normalised, and conflicting spellings of one key in a
+  table raise. `breos run`, `breos sweep` and `breos montecarlo` warn about a
+  runner section they do not use.
+- Monte Carlo selects its dispatch backend by one rule from the CLI and from
+  Python: `--execution-backend`, then `[montecarlo].execution_backend` (or
+  `MonteCarloSettings.execution_backend`), then the top-level
+  `execution_backend`, then `"python"`. `MonteCarloSettings.execution_backend`
+  now defaults to `None`, meaning inherit; `run_montecarlo` returns the
+  resolved backend in `result.settings`. Before, the CLI honoured the
+  top-level key but a Python `run_montecarlo` call ignored it.
 - The 15-minute weather resamplers no longer depend on the timestamp resolution
   of the input index ([#150](https://github.com/Str4vinci/breos/issues/150)).
   Both divided the raw integers by `10**9`, which is only correct for

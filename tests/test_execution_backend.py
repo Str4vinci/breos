@@ -8,6 +8,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from breos.app_config import APP_CONFIG_FIELDS
 from breos.battery import EXECUTION_BACKENDS, _dispatch_day_python, _resolve_dispatch_day
 from breos.montecarlo import MonteCarloSettings, _aggregate_jit_cache_states, run_montecarlo
 
@@ -27,7 +28,9 @@ def _base_config():
 
 def test_python_is_the_default_and_the_reference():
     assert EXECUTION_BACKENDS == ("python", "numba")
-    assert MonteCarloSettings(weather_file="x").execution_backend == "python"
+    # Unset Monte Carlo settings inherit the App key, whose default is python.
+    assert MonteCarloSettings(weather_file="x").execution_backend is None
+    assert APP_CONFIG_FIELDS["execution_backend"].default == "python"
     assert _resolve_dispatch_day("python") is _dispatch_day_python
 
 
