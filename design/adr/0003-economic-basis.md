@@ -119,9 +119,8 @@ type use the civil-day array of ADR 0002 A1.
 
 ### E6. One default set — Accepted 2026-09-26
 
-The default discount rate is 0.03 everywhere, and the default inflation rate
-is 0.02: the values App users already get. They are defined once, beside
-`CostParams`, and read by the App registry, `CostParams`, optimization
+The default discount rate is 0.03 everywhere: the value App users already
+get. It is defined once, beside `CostParams`, and read by the App registry, `CostParams`, optimization
 (`DEFAULT_DISCOUNT_RATE`), Monte Carlo, `cost_analysis_projection`,
 `calculate_lcoe_from_projection` and `calculate_lcoe`. For `calculate_lcoe`
 the 0.03 is a real rate, under its E1 contract. `financials.json` is
@@ -137,6 +136,11 @@ The release notes name these entry points and the old default.
 An explicitly supplied 0.0 stays valid and is used as given. Defaults apply
 only when the key or argument is absent, never when its value is falsy, and a
 test pins `discount_rate = 0.0` for each entry point.
+
+*Proposed, not part of the accepted decision:* the default inflation rate
+becomes 0.02 everywhere by the same rule. It is 0.02 in the App registry,
+`CostParams` and optimization today; only the `cost_analysis_projection`
+signature uses 0.03.
 
 ### E7. Year rows carry money at year-1 prices — Proposed
 
