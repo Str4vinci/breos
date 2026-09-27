@@ -15,6 +15,8 @@ import pandas as pd
 
 from breos.battery import BatteryConfig, simulate_energy_balance
 from breos.economics import (
+    DEFAULT_DISCOUNT_RATE,
+    DEFAULT_INFLATION_RATE,
     calculate_costs,
     calculate_lcoe_from_projection,
     cost_analysis_projection,
@@ -256,8 +258,6 @@ def optimize_battery_size(
 
 # Constants for defaults (can be overridden by config)
 DEFAULT_MODULE_AREA = 1.134 * 2.278
-DEFAULT_INFLATION_ELEC = 0.02
-DEFAULT_DISCOUNT_RATE = 0.0
 
 DEFAULT_PROJECT_LIFESPAN = 20
 
@@ -630,7 +630,7 @@ def _evaluate_projected_design_metrics(
         results_df=first_year_results_df,
         costs=costs,
         num_years=years_projection,
-        inflation_rate=float(fin_cfg.get("inflation_rate", DEFAULT_INFLATION_ELEC)),
+        inflation_rate=float(fin_cfg.get("inflation_rate", DEFAULT_INFLATION_RATE)),
         sell_price_inflation=float(fin_cfg.get("sell_price_inflation", 0.0)),
         discount_rate=float(fin_cfg.get("discount_rate", DEFAULT_DISCOUNT_RATE)),
         freq=freq,

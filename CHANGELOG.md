@@ -169,6 +169,20 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   `pv_arrays` messages used to differ, and a non-boolean
   `battery_indoor_model.enabled` now says "must be true or false". Valid
   configs behave exactly as before.
+- **One default discount and inflation rate everywhere** (ADR 0003 E6): a
+  discount rate of 0.03 and an inflation rate of 0.02, defined once as
+  `breos.economics.DEFAULT_DISCOUNT_RATE` and `DEFAULT_INFLATION_RATE` and
+  read by the App registry, `CostParams`, `cost_params_from_config`,
+  optimization, `cost_analysis_projection`, `calculate_lcoe_from_projection`
+  and `calculate_lcoe`. **Callers that omit the discount rate get different
+  results:** `CostParams`, `cost_params_from_config`, the optimizer and both
+  LCOE functions used 0.0, and a direct `cost_analysis_projection` call used
+  0.02 (with inflation 0.03). On three projected-optimizer designs without a
+  `financials.discount_rate`, NPV moves from 6430.77 to 3941.12 €, −1736.96 to
+  −2690.35 € and −12091.27 to −11013.42 €, and LCOE rises by 0.017–0.021
+  €/kWh; energy and battery results are unchanged. App results do not
+  change, since App already used 0.03 and 0.02. An explicit 0.0 is used as
+  given.
 
 ### Fixed
 - App weather that does not cover the whole calendar year of `start_date`
@@ -826,6 +840,9 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   `objective_basis` remains and is always `"projected"`. Projected results are
   unchanged bit for bit, and each candidate evaluation skips one simulated
   year: 22% faster on a three-year horizon and 4% on twenty years.
+- The packaged `breos/data/configs/financials.json`, which nothing loaded and
+  which said discount 0.05 against the App's 0.03 (ADR 0003 E6,
+  [#186](https://github.com/Str4vinci/breos/issues/186)).
 
 ### Documentation
 - The release checklist records that `v0.5.0`, `v0.5.1` and `v0.6.0` are
