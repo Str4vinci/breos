@@ -59,7 +59,7 @@ from breos.execution import (
 from breos.execution import (
     backend_provenance as _backend_provenance,
 )
-from breos.load_profiles import load_profile
+from breos.load_profiles import LOAD_PROFILE_METADATA_KEY, load_profile
 from breos.pv.model_options import DEFAULT_SOLAR_POSITION, resolve_solar_position_method, solar_position_time_offset
 from breos.utils import get_hours_per_step
 from breos.weather import (
@@ -882,6 +882,7 @@ def run_montecarlo(config: dict[str, Any], settings: MonteCarloSettings) -> Mont
             "settings": asdict(settings),
             "available_weather_years": [int(y) for y in available_years],
             "runtime_weather": runtime_weather,
+            "load_profile": dict(base_load.attrs.get(LOAD_PROFILE_METADATA_KEY, {})),
             "random_stream": (
                 "numpy.random.default_rng(numpy.random.SeedSequence(base_seed).spawn(n_runs)[zero_based_run_index])"
             ),

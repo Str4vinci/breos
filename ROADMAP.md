@@ -63,10 +63,8 @@ plans behind individual items.
     extra row, but calling `.sum()` on those files returns NaN.
   - Values are already normalised to exactly 1000 kWh/yr, in kWh per interval.
     The repository format multiplies these values by 1000 and labels the column
-    `- Wh`. `_load_profile_csv` then renames the column to `Electrical
-    Consumption [W]`, although Wh per 15 minutes is not W. The converter should
-    correct the label. This label does not affect current calculations because
-    `scale_to_annual_consumption` renormalises the values afterwards.
+    `- Wh`. The profile registry reads that column as Wh per interval and
+    converts it to W, so the converter only needs to keep the label.
   - The source file also contains `RESP (MW)`, `IP`, `MP`, and six UPAC
     self-consumption and injection profiles that BREOS does not currently
     expose. These profiles may support later self-consumption work.
@@ -210,14 +208,14 @@ for and against, not designs.
   for buildings" currently means grid-connected buildings throughout the code,
   and declining this is a legitimate answer.
 
-## Reference load profiles pending license verification
+## Reference load profiles
 
-These sample profiles were removed from `rlp/` and `breos.load_profiles` before
-the open-source release because their redistribution terms were not confirmed.
-They can return once written permission or a clear license is obtained.
+The profile set is settled for 0.7.0 (#182): demandlib H0 (bundled), E-REDES
+BTN A/B/C, the BDEW H0 publication and REE 2.0TD (external files only), plus
+`custom` for any other CSV.
 
-- **SynPRO Family profile** (Fraunhofer ISE) — was profile key `"2"` /
-  `family_profile_SynPro.csv`. Contact: synpro@ise.fraunhofer.de.
-- **LoadProfileGenerator family-with-3-kids profile** (Noah Pflugradt, FZJ
-  IEK-3) — was profile key `"3"` / `LoadProfileGenerator_family_3kids.csv`. Tool
-  is MIT-licensed; output redistribution policy needs author confirmation.
+- **SynPRO Family profile** (Fraunhofer ISE), once profile key `"2"`, is
+  dropped for good.
+- **LoadProfileGenerator** output (Noah Pflugradt, FZJ IEK-3), once profile key
+  `"3"`, is user input through `load_profile = "custom"`, as are CREST exports
+  and measured data. A named LoadProfileGenerator adapter can follow later.

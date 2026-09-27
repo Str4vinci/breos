@@ -351,7 +351,7 @@ _CONFIG = {
     "location": "porto",
     "n_modules": 4,
     "annual_consumption_kwh": 3000,
-    "load_profile": "8",
+    "load_profile": "ree_2.0td",
     "projection_years": 1,
 }
 

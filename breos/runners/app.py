@@ -27,6 +27,7 @@ from breos.execution import (
     observed_jit_cache_state,
     reset_jit_cache_observation,
 )
+from breos.load_profiles import LOAD_PROFILE_METADATA_KEY
 from breos.pv_modules import get_module
 from breos.solar import PVProductionBreakdown
 from breos.utils import get_hours_per_step
@@ -47,6 +48,7 @@ class SimulationArtifacts:
     total_replacement_cost: float
     pv_loss_waterfall: dict[str, Any]
     weather_metadata: dict[str, Any]
+    load_profile_metadata: dict[str, Any]
     degradation_summary: dict[str, Any]
     execution: dict[str, Any]
 
@@ -550,6 +552,15 @@ def run_app_simulation(
                 {
                     "source": "runtime_dependency_or_unknown",
                     "note": "The injected weather provider did not expose source metadata.",
+                },
+            )
+        ),
+        load_profile_metadata=dict(
+            inputs.load_data.attrs.get(
+                LOAD_PROFILE_METADATA_KEY,
+                {
+                    "source": "runtime_dependency_or_unknown",
+                    "note": "The injected load-profile provider did not expose source metadata.",
                 },
             )
         ),

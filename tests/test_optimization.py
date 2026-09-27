@@ -715,7 +715,7 @@ def test_invalid_degradation_settings_raise_on_both_bases(basis, battery, match)
 def test_projected_blast_scores_a_pv_only_candidate(synthetic_weather):
     from breos.load_profiles import load_profile
 
-    load = load_profile("1", 3500, start_date="2023-01-01", timezone="UTC")
+    load = load_profile("demandlib_h0", 3500, start_date="2023-01-01", timezone="UTC")
     config = {
         "location": {"latitude": 41.15, "longitude": -8.61, "timezone": "UTC"},
         "optimization": {"objective_basis": "projected"},

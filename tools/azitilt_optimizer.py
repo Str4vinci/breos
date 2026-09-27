@@ -293,10 +293,10 @@ def main():
         if not load_cfg:
             # Try to infer default load
             print("Warning: No load config found for grid independence. Using default 4000kWh/yr.")
-            load_data = load_profile(profile_type="crest", annual_consumption_kwh=4000, freq="h")
+            load_data = load_profile(profile_type="demandlib_h0", annual_consumption_kwh=4000, freq="h")
         else:
             load_data = load_profile(
-                profile_type=load_cfg.get("source", "crest"),
+                profile_type=load_cfg.get("source", "demandlib_h0"),
                 annual_consumption_kwh=load_cfg.get("annual_consumption_kwh", 4000),
                 freq="h",
             )

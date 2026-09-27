@@ -25,7 +25,7 @@ _DESIGNS = [(6, 0.0, 30.0), (8, 5.0, 35.0), (12, 10.0, 25.0)]
 def _inputs():
     from tests.conftest import _build_synthetic_weather
 
-    return _build_synthetic_weather(2023), load_profile("1", 3500, start_date="2023-01-01", timezone="UTC")
+    return _build_synthetic_weather(2023), load_profile("demandlib_h0", 3500, start_date="2023-01-01", timezone="UTC")
 
 
 def _problem_metrics(weather, load, backend, design):

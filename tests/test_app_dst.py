@@ -54,7 +54,9 @@ def _civil_days(frame):
 def test_berlin_15min_run_keeps_civil_days_across_both_transitions(synthetic_weather):
     _, results = _run(synthetic_weather)
     local, steps_per_day = _civil_days(results)
-    profile = load_profile("1", 4000, start_date="2025-01-01", freq="15min", timezone="Europe/Berlin").iloc[:, 0]
+    profile = load_profile("demandlib_h0", 4000, start_date="2025-01-01", freq="15min", timezone="Europe/Berlin").iloc[
+        :, 0
+    ]
 
     spring, autumn, summer = (pd.Timestamp(d).date() for d in ("2025-03-30", "2025-10-26", "2025-06-15"))
     assert steps_per_day[spring] == 92

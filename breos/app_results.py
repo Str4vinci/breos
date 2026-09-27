@@ -145,6 +145,7 @@ def _provenance(
         "ledger_schema_version": LEDGER_SCHEMA_VERSION,
         "resolved_config": normalized_cfg,
         "weather": weather,
+        "load_profile": json.loads(json.dumps(artifacts.load_profile_metadata, default=str)),
         "resolution": cfg["resolution"],
         "timezone": resolved.timezone,
         "start_date": cfg["start_date"],

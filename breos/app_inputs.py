@@ -330,6 +330,9 @@ def load_consumption_profile(
         num_years=1,
         rlp_directory=cfg["rlp_directory"],
         timezone=timezone or "UTC",
+        profile_file=cfg["load_profile_file"],
+        profile_column=cfg["load_profile_column"],
+        profile_unit=cfg["load_profile_unit"],
     )
 
 
