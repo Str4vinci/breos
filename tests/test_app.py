@@ -2,6 +2,7 @@
 
 import json
 import math
+from datetime import date
 
 import pandas as pd
 import pytest
@@ -11,6 +12,35 @@ import breos.app as app_module
 from breos.app import App
 from breos.app_config import merge_defaults, validate_config
 from breos.load_profiles import load_profile as real_load_profile
+
+
+def test_app_rejects_invalid_profile_losses_temperature_and_montecarlo_keys():
+    base = {"location": "porto", "n_modules": 10, "annual_consumption_kwh": 4000}
+
+    with pytest.raises(ValueError, match="Unknown load_profile 'nonexistent'"):
+        App({**base, "load_profile": "nonexistent"})
+    with pytest.raises(ValueError, match="Unknown loss component"):
+        App({**base, "pv_loss_overrides": {"soiling_typo": 2.0}})
+    with pytest.raises(FileNotFoundError, match="battery_temperature file not found: wether"):
+        App({**base, "battery_temperature": "wether"})
+    with pytest.raises(ValueError, match="Unknown Monte Carlo config key.*montecarlo.nruns"):
+        App({**base, "montecarlo": {"nruns": 10, "weather_file": "weather.csv"}})
+
+
+def test_app_resolves_profile_alias_and_native_date_during_construction():
+    app = App(
+        {
+            "location": "porto",
+            "n_modules": 10,
+            "annual_consumption_kwh": 4000,
+            "load_profile": "BDEW_H0",
+            "start_date": date(2023, 1, 1),
+        }
+    )
+
+    assert app._cfg["load_profile"] == "1"
+    assert app._cfg["start_date"] == "2023-01-01"
+
 
 # ---------------------------------------------------------------------------
 # Config validation
@@ -540,6 +570,22 @@ class TestAppValidation:
         # Removing a DC loss increases production. The AC increase is not a
         # fixed 1 / 0.97 ratio because inverter efficiency varies with load.
         assert no_shading > base
+
+    def test_undefined_lcoe_uses_json_null(self, _patch_weather):
+        app = App(
+            {
+                "location": "porto",
+                "n_modules": 6,
+                "annual_consumption_kwh": 3000,
+                "projection_years": 1,
+                "pv_loss_overrides": {"shading": 100.0},
+            }
+        )
+        app.simulate()
+        result = app.result()
+
+        assert result["lcoe_eur_kwh"] is None
+        json.dumps(result, allow_nan=False)
 
     def test_horizon_profile_reduces_generation_and_is_serialized(self, _patch_weather):
         common = {

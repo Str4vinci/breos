@@ -20,6 +20,14 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   with the `dev` extra, which now includes mypy and pandas-stubs
   ([#185](https://github.com/Str4vinci/breos/issues/185)). Six modules are
   still excluded from error reporting until their annotations are fixed.
+- The `weather_source` App config key, also `--weather-source` on the CLI,
+  picks one cached TMY file when `weather/` holds several for a location
+  preset. It names the filename's source part, as in
+  `porto_tmy_2005_2023_pvgis-sarah3.csv`. The default, `None`, uses the only
+  matching file as before. App rejects a malformed value, or one set with a
+  coordinate-dict location, at construction. A source with no matching file
+  raises instead of fetching PVGIS weather. The file used is recorded under
+  `provenance.weather`, as before.
 
 ### Changed
 - `resample_tmy_to_15min` is now a thin wrapper over `resample_to_15min`, so
@@ -27,6 +35,22 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   columns, values, and provenance.
 
 ### Fixed
+- Config errors that surfaced only after the weather fetch are reported when
+  the App is built, and CLI, TOML and Python config are normalised the same
+  way ([#176](https://github.com/Str4vinci/breos/issues/176)). Load-profile
+  aliases, PV loss component names and a missing battery temperature CSV fail
+  during construction. Unknown `[montecarlo]` keys are rejected before the
+  weather file is checked. Hyphenated keys in nested tables and native TOML
+  `date` values are normalised, and conflicting spellings of one key in a
+  table raise. `breos run`, `breos sweep` and `breos montecarlo` warn about a
+  runner section they do not use.
+- Monte Carlo selects its dispatch backend by one rule from the CLI and from
+  Python: `--execution-backend`, then `[montecarlo].execution_backend` (or
+  `MonteCarloSettings.execution_backend`), then the top-level
+  `execution_backend`, then `"python"`. `MonteCarloSettings.execution_backend`
+  now defaults to `None`, meaning inherit; `run_montecarlo` returns the
+  resolved backend in `result.settings`. Before, the CLI honoured the
+  top-level key but a Python `run_montecarlo` call ignored it.
 - The 15-minute weather resamplers no longer depend on the timestamp resolution
   of the input index ([#150](https://github.com/Str4vinci/breos/issues/150)).
   Both divided the raw integers by `10**9`, which is only correct for
@@ -457,6 +481,23 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   value of 0 and are unchanged. Monte Carlo summaries leave out infinite
   values as they do NaN, so an infinite LCOE no longer makes the mean
   infinite and the spread NaN; `count` shows how many runs remain.
+
+- Four small fixes from the 0.6.2 audit
+  ([#161](https://github.com/Str4vinci/breos/issues/161)).
+  `get_inverter_preset` returns a copy, so changing one caller's
+  `InverterConfig` no longer changes the preset for every later caller.
+  `cost_analysis_projection` matches yearly rows to projection years by their
+  `Year` labels instead of by position, so rows in a different order give the
+  same projection; labels that are not exactly 1 through the projection length
+  raise. App results report an undefined LCOE, such as a run with 100% PV
+  losses, as `null` instead of `Infinity`, so they pass
+  `json.dumps(..., allow_nan=False)`. `load_weather` no longer falls back to a
+  historical file that does not cover the requested years, and raises the new
+  `AmbiguousWeatherError`, a `ValueError`, when several files match instead of
+  taking whichever the directory listed first. **An App run whose `weather/`
+  directory holds two TMY files for its location preset now stops** with the
+  candidates and asks for `weather_source`. With one file, App results are
+  unchanged.
 
 ### Removed
 - Removed the optimizer's `costs.panel_wp` override. It priced the steady-state
