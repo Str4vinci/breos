@@ -84,22 +84,37 @@ What it does:
   timezone-aware index is stepped in absolute time, so a local index with a
   23-hour and a 25-hour day is regular. Pass `index=` (for example the
   simulation year) to also treat missing steps at the start or end as gaps.
-- **Small negative readings** are clipped to zero. The default threshold is
-  `negative_clip_w=10.0` W, and a negative stretch may last at most
-  `max_negative_run="1h"`. More negative readings, or a longer stretch, raise:
-  for load they usually mean the meter recorded net flow (load minus on-site
-  PV), and gross demand cannot be recovered without the PV data.
+- **Negative readings within the repair tolerance** are clipped to zero. By
+  default, readings down to −10 W (`negative_clip_w=10.0`) are within the
+  tolerance, in stretches lasting at most one hour (`max_negative_run="1h"`).
+  This is a tolerance, not evidence that the readings are noise. A stretch's
+  duration is its number of steps times the step length: four negative
+  quarter-hours last exactly one hour and are clipped, five are refused; at
+  hourly resolution one negative hour is clipped and two are refused. More
+  negative readings, or a longer stretch, raise: for load they usually mean
+  the meter recorded net flow (load minus on-site PV), and gross demand
+  cannot be recovered without the PV data. Investigate such data, or raise
+  `negative_clip_w` or `max_negative_run` explicitly.
 - **Gaps** (missing timestamps, NaN, and ±inf) raise by default
   (`gap_fill="raise"`). With `gap_fill="nearby_days"`, each missing step gets
-  the mean of the same time of day on the `neighbour_days=2` nearest days,
-  within `window_days=7` either side, that have a valid reading there. Load
-  prefers days of the same type (weekday or weekend) and uses the other type
-  only when no same-type day is in the window. Load follows the index's own
-  clock, so 08:00 is 08:00 on both sides of a DST change; PV
-  (`kind="pv"`) follows UTC, which is closer to solar time, and ignores the
-  day type. Only original readings are used to fill, never filled ones. A step
-  with no valid day in the window raises. Linear interpolation and zero fill
-  are not offered.
+  the mean of the same time of day on up to `neighbour_days=2` donor days: the
+  nearest days, within `window_days=7` either side of that step, that have a
+  valid reading there. Load prefers days of the same type (weekday or
+  weekend) and uses the other type only when no same-type day is in the
+  window. Load follows the index's own clock, so 08:00 is 08:00 on both sides
+  of a DST change; PV (`kind="pv"`) follows UTC, which is closer to solar
+  time, and ignores the day type. Only original readings are donors, never
+  filled ones. A step with no valid day in the window raises. Linear
+  interpolation and zero fill are not offered.
+
+  `window_days` bounds the donor search, not the length of missing data. With
+  valid readings on both sides, a time of day can be missing on up to 14
+  consecutive days (`2 * window_days`) and still be filled; a 15-day gap
+  raises. In the middle of a long gap each step has a single donor day up to
+  7 days away, of the other day type when no same-type day is in reach, so
+  check whether that fill is acceptable before relying on it. A gap at the
+  start or end of the series has donors on one side only and can be at most
+  7 days long.
 
 The report ({py:class}`~breos.repair.InputRepairReport`) lists each repaired run:
 its issue (`"gap"` or `"negative"`), first and last timestamp, number of

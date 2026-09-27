@@ -114,6 +114,32 @@ def test_gap_without_a_valid_day_in_the_window_raises():
         repair_series(load, gap_fill="nearby_days")
 
 
+def test_window_days_bounds_the_donor_search_not_the_gap_length():
+    # Days 7-20 (Mon 13 to Sun 26 January) missing: 14 days, 2 * window_days.
+    load = _load(days=35)
+    day = (load.index.normalize() - pd.Timestamp(_MONDAY)).days
+    long_gap = load.copy()
+    long_gap[(day >= 7) & (day <= 20)] = np.nan
+
+    repaired, report = repair_series(long_gap, gap_fill="nearby_days")
+    assert report.steps_repaired == 14 * 24
+    # Mid-gap steps have one donor, exactly 7 days away: Sunday 19 January
+    # takes Sunday day 6, Monday 20 January takes Monday day 21.
+    assert repaired["2025-01-19 08:00"] == _value(6, 8)
+    assert repaired["2025-01-20 08:00"] == _value(21, 8)
+    # Sunday 26 January skips five nearer weekdays for the next weekend.
+    assert repaired["2025-01-26 08:00"] == np.mean([_value(d, 8) for d in (26, 27)])
+    # The first gap day still averages two donors.
+    assert repaired["2025-01-13 08:00"] == np.mean([_value(d, 8) for d in (4, 3)])
+
+    # One more missing day (15 in a row) puts day 14, Monday 20 January, 8 days
+    # from the nearest valid reading on either side.
+    longer = long_gap.copy()
+    longer[day == 21] = np.nan
+    with pytest.raises(ValueError, match=r"24 gap steps .*within 7 days.*first at 2025-01-20T00:00"):
+        repair_series(longer, gap_fill="nearby_days")
+
+
 def test_target_index_turns_missing_leading_steps_into_gaps():
     load = _load()
     target = pd.date_range("2025-01-05", periods=len(load) + 24, freq="h")
@@ -221,6 +247,25 @@ def test_sustained_small_negative_load_raises():
     load.iloc[104] = 5.0  # 60 minutes is allowed
     _, report = repair_series(load)
     assert report.events[0].steps == 4
+
+
+def test_negative_run_limit_is_interval_duration_at_hourly_resolution():
+    load = _load()
+    load.iloc[40] = -2.0  # one hour: exactly the limit, so it is clipped
+    repaired, report = repair_series(load)
+    assert repaired.iloc[40] == 0.0
+    assert report.events[0].steps == 1
+    assert report.max_negative_run_minutes == 60.0
+
+    load.iloc[41] = -2.0  # two hours: longer than the limit
+    with pytest.raises(
+        ValueError, match=r"negative for 2 consecutive steps \(0 days 02:00:00\).*raise max_negative_run"
+    ):
+        repair_series(load)
+    # Raising the limit is the caller's explicit choice.
+    _, report = repair_series(load, max_negative_run="2h")
+    assert report.events[0].steps == 2
+    assert report.max_negative_run_minutes == 120.0
 
 
 def test_large_negative_pv_raises():

@@ -10,14 +10,18 @@ input stays visible in the run's provenance.
 
 Two repairs exist in this version:
 
-- Small negative readings (sensor noise around zero) are clipped to zero.
-  Larger or sustained negative readings are refused: for load they usually
-  mean the meter recorded net flow (load minus on-site PV), and gross demand
-  cannot be recovered without the PV data.
+- Negative readings within a repair tolerance are clipped to zero. By
+  default readings down to -10 W, in stretches lasting at most one hour, are
+  within the tolerance. This is a tolerance, not evidence that the readings
+  are noise. More negative or longer stretches are refused: for load they
+  usually mean the meter recorded net flow (load minus on-site PV), and gross
+  demand cannot be recovered without the PV data. The caller investigates
+  them, or raises the limits explicitly.
 - Gaps (missing timestamps on an otherwise regular index, NaN, and ±inf) are
   refused by default. ``gap_fill="nearby_days"`` fills each missing step with
   the mean of the same time of day on the nearest days that have a valid
-  reading, within a bounded window.
+  original reading. The donor search is bounded to a window of days either
+  side of the step; the gap itself may be longer than one window.
 
 Duplicate timestamps and an irregular index are refused, not repaired.
 """
@@ -35,16 +39,20 @@ import pandas as pd
 GAP_FILL_METHODS = ("raise", "nearby_days")
 SERIES_KINDS = ("load", "pv")
 
-# Readings down to -10 W are treated as sensor noise and clipped to zero. A
-# building never draws negative power, and its standby baseload is normally
-# well above this. One register count of a 1 Wh meter is 4 W at 15-minute
-# resolution, so 10 W covers two counts of interval rounding, while a net-meter
-# reading during any useful PV output is far more negative.
+# Repair tolerance for negative readings: readings down to -10 W are within
+# it and clipped to zero. This is a tolerance, not evidence that a reading is
+# noise. It is an absolute value: one register count of a 1 Wh meter is 4 W at
+# 15-minute resolution, so 10 W covers two counts of interval rounding, while
+# a net-meter reading during useful PV output is far more negative.
 DEFAULT_NEGATIVE_CLIP_W = 10.0
-# A negative stretch longer than this is refused even when every reading is
-# within the clip threshold. Noise flickers around zero; hours of negative
-# readings look like net flow on a day when PV roughly matches load.
+# Longest negative stretch within the tolerance, measured as interval duration
+# (steps x step length). A longer stretch is refused even when every reading
+# is within DEFAULT_NEGATIVE_CLIP_W; the caller investigates the data or raises
+# max_negative_run explicitly.
 DEFAULT_MAX_NEGATIVE_RUN = "1h"
+# Donor search for gap_fill="nearby_days": days either side of each gap step,
+# and how many donor days are averaged. window_days bounds where donors are
+# looked for, not how long a gap may be.
 DEFAULT_WINDOW_DAYS = 7
 DEFAULT_NEIGHBOUR_DAYS = 2
 
@@ -59,7 +67,7 @@ class RepairEvent:
 
     Attributes:
         issue: ``"gap"`` (missing timestamps, NaN or ±inf) or
-            ``"negative"`` (small negative readings).
+            ``"negative"`` (negative readings within the repair tolerance).
         start: ISO timestamp of the first repaired step.
         end: ISO timestamp of the last repaired step (inclusive).
         steps: Number of repaired steps.
@@ -106,12 +114,13 @@ class InputRepairReport:
         end: ISO timestamp of the last step of the repaired series.
         steps: Number of steps in the repaired series.
         gap_fill: Gap strategy requested, ``"raise"`` or ``"nearby_days"``.
-        negative_clip_w: Negative readings down to minus this many watts
-            were clipped to zero.
-        max_negative_run_minutes: Longest negative stretch allowed to be
-            clipped, in minutes.
-        window_days: Search window for ``nearby_days``, in days either side.
-        neighbour_days: Number of nearest valid days averaged per step.
+        negative_clip_w: Repair tolerance in W: negative readings down to
+            minus this value were within it and clipped to zero.
+        max_negative_run_minutes: Longest negative stretch within the
+            tolerance, in minutes of interval duration.
+        window_days: Donor search window for ``nearby_days``, in days either
+            side of each gap step. It does not limit the gap length.
+        neighbour_days: Largest number of donor days averaged per step.
         same_day_type: Whether ``nearby_days`` preferred days of the same
             type (weekday or weekend).
         clock: Time-of-day basis for ``nearby_days``: ``"local"`` is the
@@ -189,22 +198,38 @@ def repair_series(
        that grid are gaps. A tz-aware index is stepped in absolute time, so a
        local index across a DST change is regular.
     2. Negative readings. Readings from ``-negative_clip_w`` up to zero are
-       clipped to zero, unless a negative stretch lasts longer than
-       ``max_negative_run``. Anything more negative, or a longer stretch,
-       raises ``ValueError``: for load it usually means net flow (load minus
-       on-site PV), which cannot be turned into gross demand without the PV
-       data.
+       within the repair tolerance and clipped to zero, unless a negative
+       stretch lasts longer than ``max_negative_run``. The tolerance is not
+       evidence that the readings are noise. A stretch's duration is its
+       number of steps times the step length, so four negative quarter-hours
+       last exactly one hour and are within the default limit, and five are
+       refused; at hourly resolution one negative hour is within it and two
+       are refused. Anything more negative, or a longer stretch, raises
+       ``ValueError``: for load it usually means net flow (load minus on-site
+       PV), which cannot be turned into gross demand without the PV data.
+       Investigate such data, or raise ``negative_clip_w`` or
+       ``max_negative_run`` explicitly.
     3. Gaps: missing timestamps, NaN and ±inf. ``gap_fill="raise"`` (the
        default) raises ``ValueError``. ``gap_fill="nearby_days"`` fills each
-       gap step with the mean of the same time of day on the
-       ``neighbour_days`` nearest days within ``window_days`` either side that
-       have a valid reading there. Only original readings (after clipping)
-       are used, never filled ones. With ``same_day_type``, days of the same
-       type as the gap (weekday or weekend) are used when any is available,
-       and other days only when none is. Nearer days come first, and the
-       earlier of two equally near days. A gap step without any valid day in
-       the window raises ``ValueError``. Public holidays are not treated
-       separately.
+       gap step with the mean of the same time of day on up to
+       ``neighbour_days`` donor days, the nearest days within ``window_days``
+       either side of that step that have a valid reading there. Only
+       original readings (after clipping) are donors, never filled ones.
+       With ``same_day_type``, days of the same type as the gap (weekday or
+       weekend) are used when any is in the window, and other days only when
+       none is. Nearer days come first, and the earlier of two equally near
+       days. Fewer than ``neighbour_days`` donors are used when fewer are in
+       the window. A gap step without any valid day in the window raises
+       ``ValueError``. Public holidays are not treated separately.
+
+       ``window_days`` bounds the donor search, not the gap length. With
+       valid readings on both sides, a time of day can be missing on up to
+       ``2 * window_days`` consecutive days (14 by default) and still be
+       filled; the steps in the middle of such a gap then use a single donor
+       day up to ``window_days`` away, of the other day type when no
+       same-type day is in reach. One more missing day raises. A gap at the
+       start or end of the series has donors on one side only, so there the
+       limit is ``window_days`` days.
 
     Args:
         series: Power in W on a DatetimeIndex, for example a measured load
@@ -221,12 +246,16 @@ def repair_series(
             repaired series must cover (for example the simulation year).
             Its timestamps missing from ``series`` are gaps. Every timestamp
             of ``series`` must be on it.
-        negative_clip_w: Clip threshold in W, non-negative. 0 refuses every
+        negative_clip_w: Repair tolerance in W, non-negative: negative
+            readings down to minus this value may be clipped. 0 refuses every
             negative reading.
-        max_negative_run: Longest negative stretch that is clipped, as a
-            :class:`pandas.Timedelta` or a string such as ``"1h"``.
-        window_days: Days either side searched by ``nearby_days``.
-        neighbour_days: Number of nearest valid days averaged per step.
+        max_negative_run: Longest negative stretch within the tolerance, as
+            interval duration (steps times step length): a
+            :class:`pandas.Timedelta` or a string such as ``"1h"``. A stretch
+            of exactly this duration is clipped; a longer one raises.
+        window_days: Days either side of each gap step searched for donors by
+            ``nearby_days``. It bounds the donor search, not the gap length.
+        neighbour_days: Largest number of donor days averaged per step.
         same_day_type: Prefer days of the same type. Defaults to True for
             load and False for PV.
 
@@ -507,15 +536,18 @@ def _refuse_large_negatives(
         first = int(np.flatnonzero(large)[0])
         raise ValueError(
             f"{kind} series is below -{clip_w:g} W at {int(large.sum())} steps (minimum "
-            f"{float(values[large].min()):.6g} W, first at {full[first].isoformat()}). {cause}"
+            f"{float(values[large].min()):.6g} W, first at {full[first].isoformat()}), outside the "
+            f"repair tolerance (negative_clip_w). {cause} Investigate the data, or raise negative_clip_w "
+            "explicitly if these readings are within your repair tolerance."
         )
     for first, last in _runs(negative):
         duration = (last - first + 1) * step
         if duration > max_run:
             raise ValueError(
                 f"{kind} series is negative for {last - first + 1} consecutive steps ({duration}) from "
-                f"{full[first].isoformat()}, longer than max_negative_run ({max_run}). Sensor noise "
-                f"flickers around zero; a sustained negative reading does not. {cause}"
+                f"{full[first].isoformat()}, longer than max_negative_run ({max_run}). {cause} "
+                "Investigate the data, or raise max_negative_run explicitly if a longer stretch is "
+                "within your repair tolerance."
             )
 
 

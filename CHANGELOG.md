@@ -16,19 +16,24 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   power series, run before a simulation
   ([#194](https://github.com/Str4vinci/breos/issues/194)). The simulation
   still rejects gaps, non-finite values, and negative load (#151); this is the
-  opt-in way to clean such data with a record. It clips small negative
-  readings to zero (down to `negative_clip_w=10.0` W, for at most
-  `max_negative_run="1h"`) and refuses larger or sustained ones, which for
-  load usually mean a net-meter reading. Gaps (missing timestamps, NaN, ±inf)
-  raise by default; `gap_fill="nearby_days"` fills each step with the mean of
-  the same time of day on the nearest valid days, preferring the same day type
-  for load, within `window_days=7`, and raises if none is in reach. Duplicate
-  timestamps and an irregular index raise. It returns the repaired series and
-  an `InputRepairReport` listing every repaired run, its method, the values
-  written, and the energy added, with a strict-JSON `to_dict()`. Pass the
-  reports as `App(config, input_repairs=[report])` to record them under
-  `provenance.input_repairs`. Runs without them are unchanged and have no such
-  key. There is no config key or CLI option for repair yet.
+  opt-in way to clean such data with a record. Negative readings within a
+  repair tolerance are clipped to zero: by default down to −10 W
+  (`negative_clip_w=10.0`), in stretches lasting at most one hour of interval
+  duration (`max_negative_run="1h"`). The tolerance is not evidence that the
+  readings are noise. More negative or longer stretches raise, since for load
+  they usually mean a net-meter reading; the caller investigates the data or
+  raises the limits explicitly. Gaps (missing timestamps, NaN, ±inf) raise by
+  default; `gap_fill="nearby_days"` fills each step with the mean of the same
+  time of day on up to two nearest valid days, preferring the same day type
+  for load, and raises if none is in reach. `window_days=7` bounds that donor
+  search either side of each step, not the gap length: a gap of up to 14 days
+  with valid data on both sides is filled, its middle from a single day.
+  Duplicate timestamps and an irregular index raise. It returns the repaired
+  series and an `InputRepairReport` listing every repaired run, its method,
+  the values written, and the energy added, with a strict-JSON `to_dict()`.
+  Pass the reports as `App(config, input_repairs=[report])` to record them
+  under `provenance.input_repairs`. Runs without them are unchanged and have
+  no such key. There is no config key or CLI option for repair yet.
 
 ### Changed
 - `resample_tmy_to_15min` is now a thin wrapper over `resample_to_15min`, so
