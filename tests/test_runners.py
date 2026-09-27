@@ -53,7 +53,16 @@ def test_app_runner_native_default_matches_explicit_native(monkeypatch):
     )
 
     monkeypatch.setattr(app_runner, "prepare_simulation_inputs", lambda cfg, resolved, deps: inputs)
-    monkeypatch.setattr(projection_module, "build_costs_dict", lambda cfg, resolved: {"total_initial_cost": 0.0})
+    monkeypatch.setattr(
+        projection_module,
+        "build_costs_dict",
+        lambda cfg, resolved: {
+            "total_initial_cost": 0.0,
+            "electricity_cost": 0.0,
+            "electricity_sold_cost": 0.0,
+            "daily_power_cost": 0.0,
+        },
+    )
     monkeypatch.setattr(projection_module, "cost_analysis_projection", lambda **kwargs: pd.DataFrame())
     monkeypatch.setattr(projection_module, "calculate_lcoe_from_projection", lambda *args, **kwargs: 0.0)
     monkeypatch.setattr(app_runner, "find_payback_year", lambda projection: None)
@@ -125,7 +134,16 @@ def test_app_runner_threads_blast_state_across_projection_years(monkeypatch):
     )
 
     monkeypatch.setattr(app_runner, "prepare_simulation_inputs", lambda cfg, resolved, deps: inputs)
-    monkeypatch.setattr(projection_module, "build_costs_dict", lambda cfg, resolved: {"total_initial_cost": 0.0})
+    monkeypatch.setattr(
+        projection_module,
+        "build_costs_dict",
+        lambda cfg, resolved: {
+            "total_initial_cost": 0.0,
+            "electricity_cost": 0.0,
+            "electricity_sold_cost": 0.0,
+            "daily_power_cost": 0.0,
+        },
+    )
     monkeypatch.setattr(projection_module, "cost_analysis_projection", lambda **kwargs: pd.DataFrame())
     monkeypatch.setattr(projection_module, "calculate_lcoe_from_projection", lambda *args, **kwargs: 0.0)
     monkeypatch.setattr(app_runner, "find_payback_year", lambda projection: None)

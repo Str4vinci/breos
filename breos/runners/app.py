@@ -331,7 +331,6 @@ def run_app_simulation(
         execution_backend=execution_backend,
         observe_jit_per_year=True,
     )
-    yearly_df = projection.yearly_df
     first_year_results_df = cast(pd.DataFrame, projection.first_year_results_df)
     current_soh = projection.carry.soh_pct
     degradation_state = projection.carry.degradation_state
@@ -341,7 +340,8 @@ def run_app_simulation(
     degradation_engine = str(cfg.get("degradation_engine", "native")).strip().lower()
     blast_model = cfg.get("blast_model")
 
-    costs, cost_projection, lcoe = value_projection(cfg, resolved, projection)
+    value = value_projection(cfg, resolved, projection)
+    costs, cost_projection, lcoe, yearly_df = value.costs, value.cost_projection, value.lcoe, value.yearly_df
 
     replacement_events = [
         {"year": int(year), "count": int(count)}

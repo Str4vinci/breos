@@ -84,6 +84,17 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
     resolution, and the column and unit read. Monte Carlo provenance has the
     same block. `breos validate-config` prints the file it resolved, or says
     it is not there yet.
+- Year rows carry money at year-1 prices (ADR 0003 E7): `Import_Cost`,
+  `Export_Revenue`, `Fixed_Charge` and `Baseline_Import_Cost` (the load bought
+  without a system), added by `breos.economics.price_year_rows`, plus the
+  simulated duration, `Simulated_Hours`. `cost_analysis_projection`
+  escalates, times and discounts these columns, and keeps any a caller
+  supplies, which is how TOU valuation will fill them. The flat case
+  multiplies in the same order as before, so every App golden number is the
+  same float. The App result's `financial` rows gain each year's component
+  cashflows, escalated and not discounted: `cost_import`, `revenue_export`,
+  `cost_operation`, `cost_fixed_charge`, `cost_replacement` and
+  `replacement_time_years`.
 - **Tariff domain**, `breos.tariffs` (ADR 0002). A `TariffSchedule` assigns
   instants to named periods in local civil time and records its regulatory
   source; `TariffPrices` holds per-kWh import and export prices per period and
@@ -185,6 +196,14 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   `pv_arrays` messages used to differ, and a non-boolean
   `battery_indoor_model.enabled` now says "must be true or false". Valid
   configs behave exactly as before.
+- The daily fixed charge is billed on the simulated duration,
+  `Simulated_Hours / 24` days, instead of 365 days (ADR 0003 E5). A common
+  year is exactly 365 days, so its results do not change. A leap-year run is
+  now billed 366 days: for a Porto run starting in 2024 (25 years,
+  `residential_pt`, 0.30 €/day) the discounted cost with and without the
+  system both rise by 6.49 €, and the NPV of savings is unchanged because the
+  charge is paid either way. Year rows without `Simulated_Hours`, from direct
+  callers, are billed as 365-day years, as before.
 - **One default discount and inflation rate everywhere** (ADR 0003 E6): a
   discount rate of 0.03 and an inflation rate of 0.02, defined once as
   `breos.economics.DEFAULT_DISCOUNT_RATE` and `DEFAULT_INFLATION_RATE` and

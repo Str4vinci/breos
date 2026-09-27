@@ -335,6 +335,38 @@ def _discount_annual_with_replacement(
     return (annual - outlay) * discount_factors + outlay * replacement_discount
 
 
+# Year-row money columns at year-1 prices (ADR 0003 E7). The projection
+# escalates, times and discounts them; TOU valuation fills them from per-step
+# energy and prices in the year loop.
+YEAR_ROW_MONEY_COLUMNS = ("Import_Cost", "Export_Revenue", "Fixed_Charge", "Baseline_Import_Cost")
+
+
+def price_year_rows(yearly_summary_df: pd.DataFrame, costs: Dict[str, float]) -> pd.DataFrame:
+    """Add the year-1-price money columns to flat-priced year rows.
+
+    ``Import_Cost`` is ``Import_kWh`` times the import price, ``Export_Revenue``
+    ``Export_kWh`` times the export price, ``Baseline_Import_Cost`` the load
+    bought without a system, and ``Fixed_Charge`` the daily charge for the
+    simulated duration, ``Simulated_Hours / 24`` days (E5). A row without
+    ``Simulated_Hours`` is billed as a 365-day year. Columns already present
+    (TOU valuation sets them) are kept. The operation order is the one the
+    projection used before these columns existed, so flat results are the
+    same floats.
+    """
+    priced = yearly_summary_df.copy()
+    days = priced["Simulated_Hours"] / 24 if "Simulated_Hours" in priced.columns else 365
+    computed = {
+        "Import_Cost": lambda: priced["Import_kWh"] * costs["electricity_cost"],
+        "Export_Revenue": lambda: priced["Export_kWh"] * costs["electricity_sold_cost"],
+        "Fixed_Charge": lambda: days * costs["daily_power_cost"],
+        "Baseline_Import_Cost": lambda: priced["Load_kWh"] * costs["electricity_cost"],
+    }
+    for column, value in computed.items():
+        if column not in priced.columns:
+            priced[column] = value()
+    return priced
+
+
 def cost_analysis_projection(
     results_df: Optional[pd.DataFrame],
     costs: Dict[str, float],
@@ -400,7 +432,7 @@ def cost_analysis_projection(
 
         # Reorder the summary by its validated year labels so each financial
         # row stays attached to the simulation year it describes.
-        yearly_data = yearly_summary_df.drop(columns="Year").copy()
+        yearly_data = price_year_rows(yearly_summary_df, costs).drop(columns="Year")
         yearly_data.index = yearly_index
         yearly_data = yearly_data.reindex(expected_years)
 
@@ -408,8 +440,6 @@ def cost_analysis_projection(
         # yearly series below. Reset to the usual RangeIndex before returning.
         proj = pd.DataFrame(index=expected_years)
         proj["Year"] = expected_years
-
-        first_year_days = 365  # Assume full year
 
         # Factors
         inflation_factors = (1 + inflation_rate) ** (proj["Year"] - 1)
@@ -419,7 +449,7 @@ def cost_analysis_projection(
         # Baseline (no system) - use the actual yearly demand from propagation.
         proj["Load_kWh"] = yearly_data["Load_kWh"]
         proj["Cost_No_Sys_Annual"] = (
-            proj["Load_kWh"] * costs["electricity_cost"] + first_year_days * costs["daily_power_cost"]
+            yearly_data["Baseline_Import_Cost"] + yearly_data["Fixed_Charge"]
         ) * inflation_factors
         proj["Cost_No_Sys_Cumulative"] = proj["Cost_No_Sys_Annual"].cumsum()
 
@@ -429,10 +459,10 @@ def cost_analysis_projection(
         proj["Degradation_Factor"] = yearly_data["PV_Degradation_Factor"]
 
         # Cost calculations using actual data
-        proj["Cost_Import"] = yearly_data["Import_kWh"] * costs["electricity_cost"] * inflation_factors
-        proj["Revenue_Export"] = yearly_data["Export_kWh"] * costs["electricity_sold_cost"] * sell_inflation_factors
+        proj["Cost_Import"] = yearly_data["Import_Cost"] * inflation_factors
+        proj["Revenue_Export"] = yearly_data["Export_Revenue"] * sell_inflation_factors
         proj["Cost_Operation"] = costs["annual_operation_cost"] * inflation_factors
-        proj["Cost_Daily"] = first_year_days * costs["daily_power_cost"] * inflation_factors
+        proj["Cost_Daily"] = yearly_data["Fixed_Charge"] * inflation_factors
 
         # Battery replacement costs from propagation. The outlay is booked at
         # the instant the pack is swapped: inflated to it and, below,
