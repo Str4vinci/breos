@@ -39,6 +39,97 @@ resolution = "15min"
 See [Load Profile Data](../legal/load-profile-data.md) for expected filenames
 and the redistribution policy.
 
+## Repairing measured data
+
+The simulation refuses PV and load input with a gap, a NaN or infinite value,
+or negative load. It does not fill them with zero, because a missing reading
+is not a real zero. Measured data often has such readings, so BREOS provides
+an explicit repair step, {py:func}`breos.io.repair_series <breos.repair.repair_series>`, that you run
+before the simulation. It changes only what you ask it to change, refuses
+what it cannot repair safely, and returns a report of every change.
+
+```python
+import pandas as pd
+from breos import App
+from breos.io import repair_series
+
+measured = pd.read_csv("meter.csv", index_col=0, parse_dates=True)["W"]
+repaired, report = repair_series(measured, kind="load", gap_fill="nearby_days")
+repaired.to_csv("external_rlp/REE_2026_2.0TD_1000kwh_hourly.csv")
+
+app = App(
+    {
+        "location": "porto",
+        "n_modules": 10,
+        "annual_consumption_kwh": 4000,
+        "load_profile": "8",
+        "rlp_directory": "external_rlp",
+    },
+    input_repairs=[report],
+)
+app.simulate()
+app.result()["provenance"]["input_repairs"]  # the report, as JSON
+```
+
+The file name and profile key `"8"` select the generic single-column format
+described in [Load Profile Data](../legal/load-profile-data.md). The App still
+scales that profile to `annual_consumption_kwh`, so the energies in the report
+are those of the measured series before scaling.
+
+What it does:
+
+- **Index.** The index must be regular at one step (`freq`, inferred when
+  omitted). Timestamps missing from that grid count as gaps; duplicate
+  timestamps, an unsorted index, or timestamps off the grid raise. A
+  timezone-aware index is stepped in absolute time, so a local index with a
+  23-hour and a 25-hour day is regular. Pass `index=` (for example the
+  simulation year) to also treat missing steps at the start or end as gaps.
+- **Negative readings within the repair tolerance** are clipped to zero. By
+  default, readings down to −10 W (`negative_clip_w=10.0`) are within the
+  tolerance, in stretches lasting at most one hour (`max_negative_run="1h"`).
+  This is a tolerance, not evidence that the readings are noise. A stretch's
+  duration is its number of steps times the step length: four negative
+  quarter-hours last exactly one hour and are clipped, five are refused; at
+  hourly resolution one negative hour is clipped and two are refused. More
+  negative readings, or a longer stretch, raise: for load they usually mean
+  the meter recorded net flow (load minus on-site PV), and gross demand
+  cannot be recovered without the PV data. Investigate such data, or raise
+  `negative_clip_w` or `max_negative_run` explicitly.
+- **Gaps** (missing timestamps, NaN, and ±inf) raise by default
+  (`gap_fill="raise"`). With `gap_fill="nearby_days"`, each missing step gets
+  the mean of the same time of day on up to `neighbour_days=2` donor days: the
+  nearest days, within `window_days=7` either side of that step, that have a
+  valid reading there. Load prefers days of the same type (weekday or
+  weekend) and uses the other type only when no same-type day is in the
+  window. Load follows the index's own clock, so 08:00 is 08:00 on both sides
+  of a DST change; PV (`kind="pv"`) follows UTC, which is closer to solar
+  time, and ignores the day type. Only original readings are donors, never
+  filled ones. A step with no valid day in the window raises. Linear
+  interpolation and zero fill are not offered.
+
+  `window_days` bounds the donor search, not the length of missing data. With
+  valid readings on both sides, a time of day can be missing on up to 14
+  consecutive days (`2 * window_days`) and still be filled; a 15-day gap
+  raises. In the middle of a long gap each step has a single donor day up to
+  7 days away, of the other day type when no same-type day is in reach, so
+  check whether that fill is acceptable before relying on it. A gap at the
+  start or end of the series has donors on one side only and can be at most
+  7 days long.
+
+The report ({py:class}`~breos.repair.InputRepairReport`) lists each repaired run:
+its issue (`"gap"` or `"negative"`), first and last timestamp, number of
+steps, how many timestamps were missing and how many values were non-finite,
+the method, the minimum, mean, and maximum value written, and the energy
+added in Wh (a gap counts as zero before the repair). It also carries the
+options used and the series energy before and after. `report.to_dict()` is
+strict JSON. `App` records the reports it is given, unchanged, under
+`provenance.input_repairs`; it does not check them against the file it loads.
+Runs without `input_repairs` have no such key.
+
+Weather files are not repaired by this step: the PV path has its own rules for
+weather gaps. There is no config key or CLI option for repair yet, so it is a
+Python step.
+
 ## PV system data
 
 At minimum, provide the module count and either a module key from the built-in

@@ -367,8 +367,12 @@ class TestSimulateEnergyBalance:
             config.inverter_efficiency,
         )
         assert len(cached.pv_chain) == 3
+        assert cached.pv_dc_w is not aligned.pv_dc_w
+        assert aligned.pv_dc_w.flags.writeable
+        assert not cached.pv_dc_w.flags.writeable
         for cached_part, expected_part in zip(cached.pv_chain, expected):
             assert np.array_equal(cached_part, expected_part)
+            assert not cached_part.flags.writeable
 
     def test_scaling_load_keeps_the_pv_chain_and_scaling_pv_drops_it(self):
         """The chain stops at the inverter, so only a PV change invalidates it."""
@@ -377,10 +381,29 @@ class TestSimulateEnergyBalance:
             pd.Series(4000.0, index=index),
             pd.DataFrame({"Load": 500.0}, index=index),
             freq="15min",
-        ).with_pv_only_chain(BatteryConfig(nominal_energy_wh=0.0), freq="15min")
+        )
+        cached = aligned.with_pv_only_chain(BatteryConfig(nominal_energy_wh=0.0), freq="15min")
 
-        assert aligned.scaled(load_factor=1.05).pv_chain is aligned.pv_chain
-        assert aligned.scaled(pv_factor=0.995).pv_chain is None
+        load_scaled = cached.scaled(load_factor=1.05)
+        pv_scaled = cached.scaled(pv_factor=0.995)
+        assert load_scaled.pv_chain is cached.pv_chain
+        assert load_scaled.pv_chain_key == cached.pv_chain_key
+        assert pv_scaled.pv_chain is None
+        assert pv_scaled.pv_chain_key is None
+        aligned.pv_dc_w[0] = 1.0
+        with pytest.raises(ValueError, match="read-only"):
+            cached.pv_dc_w[0] = 1.0
+
+    def test_memoized_pv_chain_rejects_a_different_inverter_config(self):
+        index = pd.date_range("2025-01-01", periods=48, freq="h", tz="UTC")
+        pv_dc = pd.Series(4000.0, index=index)
+        houseload = pd.DataFrame({"Load": 500.0}, index=index)
+        cached_config = BatteryConfig(nominal_energy_wh=0.0, inverter_efficiency=0.96)
+        other_config = BatteryConfig(nominal_energy_wh=0.0, inverter_efficiency=0.90)
+        cached = align_simulation_inputs(pv_dc, houseload, freq="h").with_pv_only_chain(cached_config)
+
+        with pytest.raises(ValueError, match="memoized PV chain does not match"):
+            simulate_energy_balance_summary(battery_config=other_config, aligned=cached)
 
     @pytest.mark.parametrize("inverter_ac_capacity_w", [0.0, 6400.0, None])
     def test_memoized_pv_chain_changes_no_result(self, inverter_ac_capacity_w):

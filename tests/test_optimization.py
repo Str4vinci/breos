@@ -561,6 +561,72 @@ def test_projected_optimization_smoke_reports_two_objective_semantics(monkeypatc
     assert result.details["objective_names"] == ["Projected_Grid_Independence_%", "Projected_NPV_Eur"]
 
 
+def test_projected_optimization_uses_worker_diagnostics_without_parent_rescoring(monkeypatch):
+    import os
+
+    import breos.optimization as optimization_module
+
+    idx = pd.date_range("2025-06-21", periods=24, freq="h", tz="UTC")
+    ghi = [0, 0, 0, 0, 0, 0, 100, 250, 400, 550, 700, 800, 850, 800, 700, 550, 400, 250, 100, 0, 0, 0, 0, 0]
+    tmy_data = pd.DataFrame(
+        {
+            "temp_air": [20.0] * len(idx),
+            "ghi": ghi,
+            "dni": [value * 0.75 for value in ghi],
+            "dhi": [value * 0.25 for value in ghi],
+            "wind_speed": [2.0] * len(idx),
+        },
+        index=idx,
+    )
+    houseload = pd.DataFrame({"Load": [500.0] * len(idx)}, index=idx)
+    config = {
+        "location": {"latitude": 41.15, "longitude": -8.61, "timezone": "UTC"},
+        "simulation": {"resolution": "h", "years_projection": 1},
+        "optimization": {"objective_basis": "projected", "early_stop": False},
+        "constraints": {
+            "budget_eur": 100000.0,
+            "max_area_m2": 100.0,
+            "max_modules": 4,
+            "max_battery_kwh": 3.0,
+            "max_tilt_deg": 30.0,
+        },
+        "mode": {"fixed_azimuth": 180},
+        "battery": {"temperature": 20.0},
+        "financials": {"project_lifespan": 1},
+    }
+
+    parent_pid = os.getpid()
+    parent_metric_calls = 0
+    original_evaluator = optimization_module._evaluate_projected_design_metrics
+
+    def count_parent_evaluations(**kwargs):
+        nonlocal parent_metric_calls
+        if os.getpid() == parent_pid:
+            parent_metric_calls += 1
+        return original_evaluator(**kwargs)
+
+    monkeypatch.setattr(optimization_module, "_evaluate_projected_design_metrics", count_parent_evaluations)
+    result = optimize_system_multi_objective(
+        tmy_data,
+        houseload,
+        config,
+        pop_size=4,
+        n_gen=1,
+        seed=1,
+        verbose=False,
+        n_procs=2,
+    )
+
+    pareto = result.details["pareto"]
+    assert not pareto.empty
+    assert {"Projected_NPV_Eur", "Projected_Grid_Independence_%"} <= set(pareto.columns)
+    np.testing.assert_array_equal(
+        pareto["Projected_NPV_Eur"].to_numpy(),
+        result.details["pymoo_result"].opt.get("Projected_NPV_Eur"),
+    )
+    assert parent_metric_calls == 0
+
+
 def _steady_state_capture(monkeypatch, config, x):
     """Score one design on stubbed physics; return the calls the scorer made."""
     idx = pd.date_range("2025-01-01 00:00", periods=2, freq="h", tz="UTC")

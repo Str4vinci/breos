@@ -354,6 +354,57 @@ class TestLCOE:
 
         assert projection.attrs["lcoe_eur_kwh"] == pytest.approx((1000 + 100 + 100 + 500) / (1000 + 900))
 
+    @staticmethod
+    def _projection_lcoe(inflation_rate, years=20, degradation=0.005, discount=0.05):
+        costs = {
+            "electricity_cost": 0.30,
+            "electricity_sold_cost": 0.05,
+            "daily_power_cost": 0.20,
+            "total_initial_cost": 5000.0,
+            "annual_operation_cost": 75.0,
+        }
+        production = 4000.0 * (1.0 - degradation) ** np.arange(years)
+        yearly_summary = pd.DataFrame(
+            {
+                "Year": range(1, years + 1),
+                "Load_kWh": 5000.0,
+                "PV_Production_kWh": production,
+                "Import_kWh": 2500.0,
+                "Export_kWh": 1500.0,
+                "PV_Degradation_Factor": production / production[0],
+                "Replacement_Cost": 0.0,
+            }
+        )
+        projection = cost_analysis_projection(
+            None,
+            costs,
+            num_years=years,
+            inflation_rate=inflation_rate,
+            discount_rate=discount,
+            yearly_summary_df=yearly_summary,
+        )
+        real_terms = calculate_lcoe(
+            total_investment=costs["total_initial_cost"],
+            annual_production_kwh=float(production[0]),
+            annual_operation_cost=costs["annual_operation_cost"],
+            lifetime_years=years,
+            discount_rate=discount,
+            degradation_rate=degradation,
+        )
+        return real_terms, projection.attrs["lcoe_eur_kwh"]
+
+    def test_real_terms_lcoe_matches_the_projection_without_inflation(self):
+        # calculate_lcoe holds O&M at first-year prices (#175); without
+        # inflation there is nothing to escalate and the two must agree.
+        real_terms, from_projection = self._projection_lcoe(inflation_rate=0.0)
+
+        assert real_terms == pytest.approx(from_projection, rel=1e-12)
+
+    def test_real_terms_lcoe_does_not_escalate_operation_cost(self):
+        real_terms, from_projection = self._projection_lcoe(inflation_rate=0.02)
+
+        assert real_terms < from_projection
+
     def test_cost_projection_uses_yearly_load_for_no_system_baseline(self):
         costs = {
             "electricity_cost": 0.30,
@@ -364,13 +415,13 @@ class TestLCOE:
         }
         yearly_summary = pd.DataFrame(
             {
-                "Year": [1, 2],
-                "Load_kWh": [1000.0, 2000.0],
-                "PV_Production_kWh": [800.0, 800.0],
-                "Import_kWh": [300.0, 600.0],
-                "Export_kWh": [100.0, 100.0],
-                "PV_Degradation_Factor": [1.0, 1.0],
-                "Replacement_Cost": [0.0, 0.0],
+                "Year": [2, 1],
+                "Load_kWh": [2000.0, 1000.0],
+                "PV_Production_kWh": [800.0, 900.0],
+                "Import_kWh": [600.0, 300.0],
+                "Export_kWh": [100.0, 200.0],
+                "PV_Degradation_Factor": [0.9, 1.0],
+                "Replacement_Cost": [500.0, 0.0],
             }
         )
 
@@ -384,12 +435,27 @@ class TestLCOE:
         )
 
         daily = 365 * costs["daily_power_cost"]
+        assert projection["Load_kWh"].tolist() == [1000.0, 2000.0]
         assert projection["Cost_No_Sys_Annual"].tolist() == pytest.approx(
             [
                 1000.0 * costs["electricity_cost"] + daily,
                 2000.0 * costs["electricity_cost"] + daily,
             ]
         )
+        assert projection["PV_Production_kWh"].tolist() == [900.0, 800.0]
+        assert projection["Export_kWh"].tolist() == [200.0, 100.0]
+        assert projection["Cost_Import"].tolist() == [90.0, 180.0]
+        assert projection["Cost_Replacement"].tolist() == [0.0, 500.0]
+
+    @pytest.mark.parametrize("years", [[1, 1], [1, 3]])
+    def test_cost_projection_rejects_duplicate_or_incomplete_year_labels(self, years):
+        with pytest.raises(ValueError, match="yearly_summary_df Year values"):
+            cost_analysis_projection(
+                results_df=None,
+                costs={},
+                num_years=2,
+                yearly_summary_df=pd.DataFrame({"Year": years}),
+            )
 
 
 class TestReplacementBookingTime:
@@ -402,10 +468,12 @@ class TestReplacementBookingTime:
     """
 
     def test_step_fraction_locates_the_swap_within_its_year(self):
-        # Hourly year, swap on day 109: step 2616 of 8760.
-        assert replacement_fraction_from_steps([2616], 8760) == pytest.approx(0.29863, abs=1e-5)
+        # A replacement flagged on an interval happens at that interval's end.
+        assert replacement_fraction_from_steps([0], 4) == pytest.approx(0.25)
+        # Hourly year, the interval at index 2616 ends at step 2617 of 8760.
+        assert replacement_fraction_from_steps([2616], 8760) == pytest.approx(2617 / 8760)
         # The same instant on a 15-minute timebase is the same fraction.
-        assert replacement_fraction_from_steps([2616 * 4], 8760 * 4) == pytest.approx(0.29863, abs=1e-5)
+        assert replacement_fraction_from_steps([2616 * 4 + 3], 8760 * 4) == pytest.approx(2617 / 8760)
 
     def test_year_without_a_swap_has_no_fraction(self):
         assert np.isnan(replacement_fraction_from_steps([], 8760))
@@ -435,7 +503,7 @@ class TestReplacementBookingTime:
         fractions = replacement_fraction_by_year(years, replaced)
 
         assert fractions.index.tolist() == [2025]
-        assert fractions.loc[2025] == pytest.approx(0.5)
+        assert fractions.loc[2025] == pytest.approx(0.75)
 
 
 class TestReplacementBookingInProjection:

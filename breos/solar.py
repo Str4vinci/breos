@@ -8,7 +8,8 @@ using pvlib, with support for both hourly and 15-minute time resolutions.
 import math
 import warnings
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from numbers import Integral, Real
+from typing import Any, ClassVar, Dict, List, Optional
 
 import numpy as np
 import pandas as pd
@@ -116,7 +117,10 @@ def resolve_pvwatts_losses(
 
     ``loss_overrides`` replaces named BREOS default components. Age-based
     degradation is reported separately because App applies annual degradation
-    outside the static PVWatts component stack.
+    outside the static PVWatts component stack. ``age_degradation_percent`` is
+    already a loss percentage, not an age: for a module ``age`` full years old
+    at the start of the simulated year it is
+    ``100 * (1 - (1 - degradation_rate) ** age)``.
     """
     components = dict(DEFAULT_PVWATTS_LOSSES)
     if loss_overrides:
@@ -139,7 +143,23 @@ def resolve_pvwatts_losses(
 
 @dataclass
 class PVModuleParams:
-    """Parameters for a PV module."""
+    """Datasheet parameters for a PV module.
+
+    Every field holds what the user supplied. The temperature coefficients the
+    models use are read-only properties resolved from the current field
+    values: ``alpha_sc`` (A/°C), ``beta_voc`` (V/°C) and ``gamma_pmp_effective``
+    (%/°C). ``gamma_pmp`` stays ``None`` unless it was given, and
+    ``gamma_pmp_effective`` then follows ``T_Pmax_pct``. Because nothing
+    derived is stored, in-place edits, ``dataclasses.replace``, a
+    ``dataclasses.asdict`` round trip, copies and pickles all see current
+    coefficients.
+
+    Field values are validated on construction and on every assignment. A
+    rejected assignment leaves the module unchanged. ``Mpp`` must match
+    ``Vmp * Imp`` within 2%, so change the STC point together with
+    ``dataclasses.replace(module, Mpp=..., Vmp=..., Imp=...)`` when a single
+    edit would leave it inconsistent.
+    """
 
     Mpp: float  # W (STC power)
     Vmp: float  # V
@@ -162,34 +182,105 @@ class PVModuleParams:
 
     alpha_sc_abs: Optional[float] = None  # A/°C - if provided, overrides T_Isc_pct conversion
     beta_voc_abs: Optional[float] = None  # V/°C - if provided, overrides T_Voc_pct conversion
-    gamma_pmp: Optional[float] = None
+    gamma_pmp: Optional[float] = None  # %/°C - if provided, overrides T_Pmax_pct
     # Appended after all pre-0.5 fields to preserve positional construction.
     bifaciality: Optional[float] = None  # Metadata: rear/front maximum-power ratio (inert by itself)
     NOCT: Optional[float] = None  # Metadata: nominal operating cell temperature (°C), required by noct-sam
 
-    def __post_init__(self):
-        if self.bifaciality is not None and not 0.0 < self.bifaciality <= 1.0:
-            raise ValueError("bifaciality must be between 0 (exclusive) and 1 (inclusive)")
+    _POSITIVE_FIELDS = frozenset({"Mpp", "Vmp", "Imp", "Voc", "Isc"})
+    _STC_POINT_FIELDS = ("Mpp", "Vmp", "Imp")
+    _FINITE_FIELDS = frozenset({"T_Pmax_pct", "T_Voc_pct", "T_Isc_pct", "alpha_sc_abs", "beta_voc_abs", "gamma_pmp"})
+    _MPP_RELATIVE_TOLERANCE = 0.02
 
-        # 1. HANDLE CURRENT (alpha_sc)
+    # Set per instance once __post_init__ has checked the STC point.
+    _module_params_ready: ClassVar[bool] = False
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        """Validate a field before it is stored; a rejected edit changes nothing."""
+        if name in self._POSITIVE_FIELDS:
+            self._validate_number(name, value, minimum=0.0, minimum_strict=True)
+        elif name in self._FINITE_FIELDS:
+            if value is not None or name in {"T_Pmax_pct", "T_Voc_pct", "T_Isc_pct"}:
+                self._validate_number(name, value)
+            if name == "T_Pmax_pct" and float(value) >= 0:
+                raise ValueError("T_Pmax_pct must be negative")
+        elif name == "N_Cells":
+            if isinstance(value, (bool, np.bool_)) or not isinstance(value, Integral) or value <= 0:
+                raise ValueError("N_Cells must be a positive integer")
+        elif name == "Module_Efficiency" and value is not None:
+            self._validate_number(name, value, minimum=0.0, maximum=1.0, minimum_strict=True)
+        elif name == "NOCT" and value is not None:
+            self._validate_number(name, value, minimum=0.0, maximum=100.0, minimum_strict=True)
+        elif name == "bifaciality" and value is not None:
+            try:
+                self._validate_number(name, value, minimum=0.0, maximum=1.0, minimum_strict=True)
+            except ValueError as exc:
+                raise ValueError("bifaciality must be between 0 (exclusive) and 1 (inclusive)") from exc
+        elif name == "celltype" and (not isinstance(value, str) or not value.strip()):
+            raise ValueError("celltype must be a non-empty string")
+
+        # During __init__ the STC point is checked once, in __post_init__,
+        # after all three fields exist.
+        if name in self._STC_POINT_FIELDS and self._module_params_ready:
+            point = {field: getattr(self, field) for field in self._STC_POINT_FIELDS}
+            point[name] = value
+            self._validate_stc_point(point["Mpp"], point["Vmp"], point["Imp"])
+
+        object.__setattr__(self, name, value)
+
+    @staticmethod
+    def _validate_number(
+        name: str,
+        value: Any,
+        *,
+        minimum: Optional[float] = None,
+        maximum: Optional[float] = None,
+        minimum_strict: bool = False,
+        maximum_strict: bool = False,
+    ) -> None:
+        if isinstance(value, (bool, np.bool_)) or not isinstance(value, Real) or not math.isfinite(float(value)):
+            raise ValueError(f"{name} must be a finite number")
+        number = float(value)
+        if minimum is not None and (number <= minimum if minimum_strict else number < minimum):
+            bracket = "greater than" if minimum_strict else "at least"
+            raise ValueError(f"{name} must be {bracket} {minimum}")
+        if maximum is not None and (number >= maximum if maximum_strict else number > maximum):
+            bracket = "less than" if maximum_strict else "at most"
+            raise ValueError(f"{name} must be {bracket} {maximum}")
+
+    @classmethod
+    def _validate_stc_point(cls, mpp: float, vmp: float, imp: float) -> None:
+        if not math.isclose(mpp, vmp * imp, rel_tol=cls._MPP_RELATIVE_TOLERANCE):
+            raise ValueError(
+                f"Mpp must match Vmp * Imp within {cls._MPP_RELATIVE_TOLERANCE:.0%} for a datasheet STC point "
+                f"(Mpp={mpp}, Vmp * Imp={vmp * imp:.6g}); use dataclasses.replace() to change "
+                "Mpp, Vmp and Imp together"
+            )
+
+    @property
+    def alpha_sc(self) -> float:
+        """Short-circuit-current temperature coefficient in A/°C."""
         if self.alpha_sc_abs is not None:
-            # User provided absolute A/C directly
-            self.alpha_sc = self.alpha_sc_abs
-        else:
-            # Convert from %/C
-            self.alpha_sc = (self.T_Isc_pct * self.Isc) / 100
-        # 2. HANDLE VOLTAGE (beta_voc)
-        if self.beta_voc_abs is not None:
-            # User provided absolute V/C directly
-            self.beta_voc = self.beta_voc_abs
-        else:
-            # Convert from %/C
-            self.beta_voc = (self.T_Voc_pct * self.Voc) / 100
+            return float(self.alpha_sc_abs)
+        return float((self.T_Isc_pct * self.Isc) / 100)
 
-        # 3. HANDLE POWER (gamma_pmp)
-        # Power is almost always used as %/C in pvlib models, passed as unitless decimal or %
-        if self.gamma_pmp is None:
-            self.gamma_pmp = self.T_Pmax_pct
+    @property
+    def beta_voc(self) -> float:
+        """Open-circuit-voltage temperature coefficient in V/°C."""
+        if self.beta_voc_abs is not None:
+            return float(self.beta_voc_abs)
+        return float((self.T_Voc_pct * self.Voc) / 100)
+
+    @property
+    def gamma_pmp_effective(self) -> float:
+        """Maximum-power temperature coefficient in %/°C: ``gamma_pmp`` if set, else ``T_Pmax_pct``."""
+        if self.gamma_pmp is not None:
+            return float(self.gamma_pmp)
+        return float(self.T_Pmax_pct)
+
+    def __post_init__(self) -> None:
+        self._validate_stc_point(self.Mpp, self.Vmp, self.Imp)
+        object.__setattr__(self, "_module_params_ready", True)
 
 
 @dataclass(frozen=True)
@@ -199,6 +290,8 @@ class PVProductionBreakdown:
     All series are DC power in watts, indexed like the production series.
     ``dc_after_losses`` is the same output returned by
     :func:`calculate_pv_production_dc` for the same inputs.
+    ``age_degradation_pct`` is the start-of-year module-age loss applied after
+    ``dc_after_static_losses``; it is 0 in the installation year.
     """
 
     horizontal_reference_dc: pd.Series
@@ -425,7 +518,7 @@ def _get_cec_params(pv_params: "PVModuleParams"):
         pv_params.Isc,
         pv_params.alpha_sc,
         pv_params.beta_voc,
-        pv_params.gamma_pmp,
+        pv_params.gamma_pmp_effective,
         pv_params.N_Cells,
     )
     if key in _cec_param_cache:
@@ -439,7 +532,7 @@ def _get_cec_params(pv_params: "PVModuleParams"):
         Isc=pv_params.Isc,
         alpha_sc=pv_params.alpha_sc,
         beta_voc=pv_params.beta_voc,
-        gamma_pmp=pv_params.gamma_pmp,
+        gamma_pmp=pv_params.gamma_pmp_effective,
         cells_in_series=pv_params.N_Cells,
     )
     _cec_param_cache[key] = cec
@@ -451,11 +544,22 @@ def _age_degradation_percent(
     current_year: Optional[int] = None,
     start_year: Optional[int] = None,
 ) -> float:
-    """Return the age-based PVWatts degradation percentage for this year."""
-    if current_year is not None and start_year is not None:
-        years_operating = current_year - start_year + 0.5
-        return float(100 * (1 - (1 - degradation_rate) ** years_operating))
-    return 0.0
+    """Return the age-based PVWatts degradation percentage for ``current_year``.
+
+    Age is counted at the start of the simulated year: the modules are
+    ``current_year - start_year`` full years old, so the installation year has
+    no age loss and year ``n`` of operation is degraded by ``n - 1`` years.
+    Degradation compounds, so the DC output after static losses is scaled by
+    ``(1 - degradation_rate) ** (current_year - start_year)``. App, Monte Carlo,
+    the optimizer and the economics projection use the same convention.
+    Without both years there is no age loss.
+    """
+    if current_year is None or start_year is None:
+        return 0.0
+    years_operating = current_year - start_year
+    if years_operating < 0:
+        raise ValueError(f"current_year ({current_year}) must not be earlier than start_year ({start_year})")
+    return float(100 * (1 - (1 - degradation_rate) ** years_operating))
 
 
 def _module_dc_before_losses(
@@ -560,7 +664,7 @@ def _build_pv_production_breakdown(
         times,
         name="module_dc_W",
     )
-    gamma_per_c = float(pv_params.gamma_pmp) / 100.0
+    gamma_per_c = pv_params.gamma_pmp_effective / 100.0
     temperature_factor = 1.0 + gamma_per_c * (detail.temp_cell - 25.0)
     safe_temperature_factor = np.where(np.abs(temperature_factor) > 1e-6, temperature_factor, 1.0)
     effective_irradiance_dc = (module_dc / pd.Series(safe_temperature_factor, index=times)).rename(
@@ -613,48 +717,6 @@ def _build_pv_production_breakdown(
     )
 
 
-def _dc_from_poa(
-    effective_irradiance: np.ndarray,
-    temp_cell: np.ndarray,
-    pv_params: "PVModuleParams",
-    n_modules: int,
-    times: pd.DatetimeIndex,
-    degradation_rate: float = 0.0,
-    current_year: Optional[int] = None,
-    start_year: Optional[int] = None,
-    loss_overrides: Optional[Dict[str, float]] = None,
-) -> pd.Series:
-    """Run CEC single-diode + pvwatts loss model and scale to array.
-
-    Shared between fixed-tilt and tracking DC paths. System losses default
-    to DEFAULT_PVWATTS_LOSSES; ``loss_overrides`` replaces individual
-    components (percent).
-    """
-    I_L_ref, I_o_ref, R_s, R_sh_ref, a_ref, Adjust = _get_cec_params(pv_params)
-
-    with warnings.catch_warnings():
-        warnings.filterwarnings("ignore", category=RuntimeWarning)
-        cec = pvlib.pvsystem.calcparams_cec(
-            effective_irradiance, temp_cell, pv_params.alpha_sc, a_ref, I_L_ref, I_o_ref, R_sh_ref, R_s, Adjust
-        )
-        mpp = pvlib.pvsystem.max_power_point(*cec, method="newton")
-
-    if current_year is not None and start_year is not None:
-        years_operating = current_year - start_year + 0.5
-        age_degradation_factor = 100 * (1 - (1 - degradation_rate) ** years_operating)
-    else:
-        age_degradation_factor = 0.0
-
-    total_losses_percent = resolve_pvwatts_losses(
-        loss_overrides,
-        age_degradation_percent=age_degradation_factor,
-    )["combined_pct"]
-
-    p_mp = mpp["p_mp"] if isinstance(mpp, dict) else mpp.p_mp
-    dc_power = np.asarray(p_mp) * n_modules * (1 - total_losses_percent / 100)
-    return pd.Series(dc_power, index=times, name="dc_power_W")
-
-
 def calculate_pv_production_breakdown(
     weather_data: pd.DataFrame,
     location: Location,
@@ -681,7 +743,13 @@ def calculate_pv_production_breakdown(
     pvrow_height: Optional[float] = None,
     pvrow_pitch: Optional[float] = None,
 ) -> PVProductionBreakdown:
-    """Calculate fixed-tilt PV production with intermediate loss stages."""
+    """Calculate fixed-tilt PV production with intermediate loss stages.
+
+    Module age is counted at the start of ``current_year``: ``current_year -
+    start_year`` full years of compound ``degradation_rate``, and none in the
+    installation year. See :func:`calculate_pv_production_dc` for the
+    parameters.
+    """
     if pv_params is None:
         from breos.pv_modules import get_module
 
@@ -776,9 +844,14 @@ def calculate_pv_production_dc(
         n_modules: Number of PV modules
         pv_params: PV module parameters (uses defaults if None)
         freq: Time frequency ('h' or '15min')
-        degradation_rate: Annual degradation rate (0.005 = 0.5%/year)
-        current_year: Current simulation year (for age-based degradation)
-        start_year: Year system was installed (for age calculation)
+        degradation_rate: Annual compound PV degradation rate (0.005 = 0.5%/year).
+        current_year: Calendar year being simulated. Module age is counted at
+            the start of this year, ``current_year - start_year`` full years,
+            and DC output after static losses is scaled by
+            ``(1 - degradation_rate) ** age``. ``None`` means no age loss.
+        start_year: Installation year, the first year of operation. At
+            ``current_year == start_year`` the modules are new and have no age
+            loss. ``None`` means no age loss.
         verbose: Whether to print production summary
         loss_overrides: Per-component PVWatts loss overrides (percent)
         transposition_model: Sky-diffusion model for POA transposition
@@ -865,6 +938,11 @@ def calculate_pv_production_tracking_breakdown(
     Single-axis (horizontal or tilted) trackers are the dominant configuration in
     utility-scale PV. Dual-axis trackers gain slightly more energy but at higher
     cost; they are common in CPV and high-latitude installations.
+
+    Module age is counted at the start of ``current_year``: ``current_year -
+    start_year`` full years of compound ``degradation_rate``, and none in the
+    installation year. See :func:`calculate_pv_production_dc_tracking` for the
+    parameters.
     """
     if tracking not in ("single_axis", "dual_axis"):
         raise ValueError(f"tracking must be 'single_axis' or 'dual_axis', got {tracking!r}")
@@ -993,9 +1071,14 @@ def calculate_pv_production_dc_tracking(
         dual_axis_max_tilt: Maximum panel tilt for dual-axis. ``90`` = unlimited.
         pv_params: PV module parameters (uses defaults if None).
         freq: Time frequency (``"h"`` or ``"15min"``).
-        degradation_rate: Annual degradation rate.
-        current_year: Current simulation year (for age-based degradation).
-        start_year: Year system was installed.
+        degradation_rate: Annual compound PV degradation rate (0.005 = 0.5%/year).
+        current_year: Calendar year being simulated. Module age is counted at
+            the start of this year, ``current_year - start_year`` full years,
+            and DC output after static losses is scaled by
+            ``(1 - degradation_rate) ** age``. ``None`` means no age loss.
+        start_year: Installation year, the first year of operation. At
+            ``current_year == start_year`` the modules are new and have no age
+            loss. ``None`` means no age loss.
         verbose: Whether to print production summary.
         loss_overrides: Per-component PVWatts loss overrides (percent).
         transposition_model: Sky-diffusion model for POA transposition
@@ -1115,9 +1198,14 @@ def calculate_pv_production_ac(
         n_modules: Number of PV modules
         pv_params: PV module parameters (uses defaults if None)
         freq: Time frequency ('h' or '15min')
-        degradation_rate: Annual degradation rate (0.005 = 0.5%/year)
-        current_year: Current simulation year (for age-based degradation)
-        start_year: Year system was installed (for age calculation)
+        degradation_rate: Annual compound PV degradation rate (0.005 = 0.5%/year).
+        current_year: Calendar year being simulated. Module age is counted at
+            the start of this year, ``current_year - start_year`` full years,
+            and DC output after static losses is scaled by
+            ``(1 - degradation_rate) ** age``. ``None`` means no age loss.
+        start_year: Installation year, the first year of operation. At
+            ``current_year == start_year`` the modules are new and have no age
+            loss. ``None`` means no age loss.
         inverter_loading_ratio: DC/AC ratio for inverter sizing
         inverter_efficiency: Nominal inverter efficiency
         verbose: Whether to print production summary
@@ -1320,14 +1408,19 @@ def calculate_multi_array_production_breakdown(
     An array with ``modules = 0`` contributes nothing, and a negative module
     count raises ``ValueError``. When every array is empty, the result is zero
     on the same time grid a non-empty array would use.
+
+    Module age is counted at the start of ``current_year``: ``current_year -
+    start_year`` full years of compound ``degradation_rate``, and none in the
+    installation year. See :func:`calculate_multi_array_production` for the
+    parameters.
     """
     defaults = _model_option_kwargs(locals())
 
     # Import locally to avoid circular dependencies (if solar imported by pv_modules)
     try:
         from breos.pv_modules import get_module
-    except ImportError:
-        raise ImportError("breos.pv_modules is required for multi-array production")
+    except ImportError as err:
+        raise ImportError("breos.pv_modules is required for multi-array production") from err
 
     breakdowns: list[PVProductionBreakdown] = []
 
@@ -1484,9 +1577,14 @@ def calculate_multi_array_production(
             ``transposition_model``, ``albedo``/``surface_type``, or
             ``model_perez`` to override the function-level defaults.
         freq: Time frequency ('h' or '15min')
-        degradation_rate: Annual degradation rate
-        current_year: Current simulation year
-        start_year: Installation year
+        degradation_rate: Annual compound PV degradation rate (0.005 = 0.5%/year).
+        current_year: Calendar year being simulated. Module age is counted at
+            the start of this year, ``current_year - start_year`` full years,
+            and DC output after static losses is scaled by
+            ``(1 - degradation_rate) ** age``. ``None`` means no age loss.
+        start_year: Installation year, the first year of operation. At
+            ``current_year == start_year`` the modules are new and have no age
+            loss. ``None`` means no age loss.
         verbose: Print summary
         loss_overrides: Per-component PVWatts loss overrides (percent)
         transposition_model: Default sky-diffusion model for arrays that do
