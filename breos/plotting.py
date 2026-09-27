@@ -182,8 +182,8 @@ def plot_pv_loss_waterfall(
         color="#4b5563",
     )
 
-    flow_points = [(left[0], y_positions[0]), *zip(left[1:], y_positions[1:])]
-    flow_points += [(right[-1], y_positions[-1]), *zip(right[-2::-1], y_positions[-2::-1])]
+    flow_points = [(left[0], y_positions[0]), *zip(left[1:], y_positions[1:], strict=True)]
+    flow_points += [(right[-1], y_positions[-1]), *zip(right[-2::-1], y_positions[-2::-1], strict=True)]
     ax.add_patch(Polygon(flow_points, closed=True, facecolor="#eef6ff", edgecolor="none", zorder=1))
 
     # Hatch (rather than solid-fill) the area gained/lost between consecutive
@@ -212,7 +212,7 @@ def plot_pv_loss_waterfall(
 
     ax.add_patch(Polygon(flow_points, closed=True, facecolor="none", edgecolor="#1f2937", linewidth=1.2, zorder=4))
 
-    for idx, (stage, y) in enumerate(zip(stages, y_positions)):
+    for idx, (stage, y) in enumerate(zip(stages, y_positions, strict=True)):
         is_edge = idx in (0, n_stages - 1)
         ax.plot([left[idx], right[idx]], [y, y], color="#1f2937", linewidth=0.7, alpha=0.35, zorder=3)
 
@@ -469,7 +469,7 @@ def monthly_graphs(results_df: pd.DataFrame, results_directory: str, columns: Op
     colors = ["gold", "steelblue", "coral", "lightgreen"]
     labels = ["PV Production", "Load", "Grid Import", "Grid Export"]
 
-    for i, (col, color, label) in enumerate(zip(columns, colors, labels)):
+    for i, (col, color, label) in enumerate(zip(columns, colors, labels, strict=False)):
         if col in monthly.columns:
             ax.bar([xi + i * width for xi in x], monthly[col], width, label=label, color=color, alpha=0.8)
 
@@ -1102,16 +1102,23 @@ def plot_breakeven(cost_projection: pd.DataFrame, results_directory: str, scenar
     if "Cost_No_Sys_Cumulative_NPV" in cost_projection.columns:
         no_sys = cost_projection["Cost_No_Sys_Cumulative_NPV"]
         with_sys = cost_projection["Cost_System_Cumulative_NPV"]
+        annual_column = "Cost_System_Annual_NPV"
         label_suffix = " (NPV)"
     else:
         no_sys = cost_projection["Cost_No_Sys_Cumulative"]
         with_sys = cost_projection["Cost_System_Cumulative"]
+        annual_column = "Cost_System_Annual"
         label_suffix = ""
+
+    # The year-0 investment anchors the break-even curve, as in the library.
+    initial_investment = cost_projection.attrs.get("total_investment")
+    if initial_investment is None and annual_column in cost_projection.columns:
+        initial_investment = float(with_sys.iloc[0] - cost_projection[annual_column].iloc[0])
 
     # Break-even with month precision, by the same interpolation Monte Carlo
     # and the optimizer report.
     savings = pd.DataFrame({"Year": years.to_numpy(), "Savings_Cumulative_NPV": no_sys.values - with_sys.values})
-    be_year_exact = find_payback_year_exact(savings)
+    be_year_exact = find_payback_year_exact(savings, initial_investment=initial_investment)
     be_text = "Not reached"
     if be_year_exact is not None:
         be_years = int(be_year_exact)
@@ -1128,8 +1135,13 @@ def plot_breakeven(cost_projection: pd.DataFrame, results_directory: str, scenar
 
     # Mark break-even point
     if be_year_exact is not None:
-        # Interpolate the cost at break-even
-        be_cost = np.interp(be_year_exact, years, with_sys)
+        # Interpolate the cost at break-even, from the year-0 investment when
+        # the break-even falls inside the first year.
+        curve_years, curve_cost = years.to_numpy(dtype=float), with_sys.to_numpy(dtype=float)
+        if initial_investment is not None and curve_years[0] > 0.0:
+            curve_years = np.concatenate(([0.0], curve_years))
+            curve_cost = np.concatenate(([float(initial_investment)], curve_cost))
+        be_cost = np.interp(be_year_exact, curve_years, curve_cost)
         ax1.axvline(x=be_year_exact, color="blue", linestyle="--", alpha=0.7, linewidth=1.5)
         ax1.scatter([be_year_exact], [be_cost], s=120, c="blue", zorder=5, edgecolors="white", linewidth=2)
         ax1.annotate(
@@ -1766,7 +1778,7 @@ def plot_breakeven_cdf(breakeven_steps: List[float], results_directory: str, suf
     quantiles = [0.025, 0.25, 0.5, 0.75, 0.975]
     colors = ["red", "gray", "black", "gray", "red"]
 
-    for q, color in zip(quantiles, colors):
+    for q, color in zip(quantiles, colors, strict=True):
         val = np.quantile(x, q)
         ax.axvline(val, color=color, linestyle="--", alpha=0.6, linewidth=1)
         ax.scatter([val], [q], color=color, zorder=5)
@@ -1795,7 +1807,7 @@ def plot_breakeven_summary_bar(achieved_count: int, total_runs: int, results_dir
 
     bars = ax.bar(categories, counts, color=colors, alpha=0.7, edgecolor="black")
 
-    for bar, count in zip(bars, counts):
+    for bar, count in zip(bars, counts, strict=True):
         if total_runs > 0:
             height = bar.get_height()
             ax.text(
@@ -2145,7 +2157,7 @@ def plot_tariff_comparison(results_df: pd.DataFrame, results_directory: str, sce
         bars = ax.bar(tariffs, values, color=colors, alpha=0.9, edgecolor="black", linewidth=0.6)
 
         # Add value labels (rounded to cents)
-        for bar, val in zip(bars, values):
+        for bar, val in zip(bars, values, strict=True):
             height = bar.get_height()
             label_text = f"€{val:.2f}"
 
@@ -2421,6 +2433,11 @@ def plot_weather_annual_ghi_distribution(
     plt.close(fig)
 
 
+def _breakeven_left_limit(break_evens: "List[float]") -> float:
+    """Left x-limit of a break-even comparison: 0 when a line falls in the first half-year."""
+    return 0.0 if break_evens and min(break_evens) < 0.5 else 0.5
+
+
 def plot_breakeven_comparison(
     cost_dfs: "List[pd.DataFrame]",
     labels: "List[str]",
@@ -2448,7 +2465,7 @@ def plot_breakeven_comparison(
     # Plot No-System baseline for each scenario
     # Track unique baselines to avoid duplicate lines when scenarios share the same baseline
     seen_baselines = {}
-    for df, label, color in zip(cost_dfs, labels, colors):
+    for df, label, color in zip(cost_dfs, labels, colors, strict=False):
         no_sys_values = tuple(df["Cost_No_Sys_Cumulative_NPV"].round(0).values)
         if no_sys_values not in seen_baselines:
             seen_baselines[no_sys_values] = label
@@ -2464,7 +2481,8 @@ def plot_breakeven_comparison(
             )
 
     max_year = 0
-    for df, label, color in zip(cost_dfs, labels, colors):
+    break_evens = []
+    for df, label, color in zip(cost_dfs, labels, colors, strict=False):
         ax.plot(df["Year"], df["Cost_System_Cumulative_NPV"], color=color, label=label, linewidth=2)
         max_year = max(max_year, int(df["Year"].max()))
 
@@ -2472,6 +2490,7 @@ def plot_breakeven_comparison(
         be = find_payback_year_exact(df)
         if be is not None:
             ax.axvline(x=be, color=color, linestyle=":", alpha=0.5, linewidth=1)
+            break_evens.append(be)
 
     ax.set_xlabel("Year")
     ax.set_ylabel("Cumulative Cost (€)")
@@ -2479,7 +2498,7 @@ def plot_breakeven_comparison(
     ax.grid(True, alpha=0.3)
     ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, _: f"{x:,.0f}€"))
     ax.set_xticks(range(1, max_year + 1))
-    ax.set_xlim(0.5, max_year + 0.5)
+    ax.set_xlim(_breakeven_left_limit(break_evens), max_year + 0.5)
 
     plt.tight_layout()
     plt.savefig(os.path.join(results_dir, filename), dpi=300)
@@ -2524,14 +2543,14 @@ def plot_breakeven_two(
 
     max_year = int(df1["Year"].max())
     ax.set_xticks(range(1, max_year + 1))
-    ax.set_xlim(0.5, max_year + 0.5)
+    ax.set_xlim(_breakeven_left_limit([be for be in (be1, be2) if be is not None]), max_year + 0.5)
 
     ylim = ax.get_ylim()
     y_pos = ylim[1] * 0.85
-    if be1:
+    if be1 is not None:
         ax.axvline(x=be1, color="blue", linestyle=":", alpha=0.7, linewidth=1.5)
         ax.annotate(f"{label1}: {format_years_months(be1)}", xy=(be1 + 0.3, y_pos), fontsize=10, color="blue")
-    if be2:
+    if be2 is not None:
         ax.axvline(x=be2, color="green", linestyle=":", alpha=0.7, linewidth=1.5)
         ax.annotate(f"{label2}: {format_years_months(be2)}", xy=(be2 + 0.3, y_pos * 0.92), fontsize=10, color="green")
 

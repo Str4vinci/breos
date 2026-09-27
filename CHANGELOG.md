@@ -34,13 +34,60 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   Pass the reports as `App(config, input_repairs=[report])` to record them
   under `provenance.input_repairs`. Runs without them are unchanged and have
   no such key. There is no config key or CLI option for repair yet.
+- The `weather_source` App config key, also `--weather-source` on the CLI,
+  picks one cached TMY file when `weather/` holds several for a location
+  preset. It names the filename's source part, as in
+  `porto_tmy_2005_2023_pvgis-sarah3.csv`. The default, `None`, uses the only
+  matching file as before. App rejects a malformed value, or one set with a
+  coordinate-dict location, at construction. A source with no matching file
+  raises instead of fetching PVGIS weather. The file used is recorded under
+  `provenance.weather`, as before.
 
 ### Changed
 - `resample_tmy_to_15min` is now a thin wrapper over `resample_to_15min`, so
   the two share one interpolation path. Its output is unchanged: the same
   columns, values, and provenance.
+- One frequency check, `breos.utils.normalise_frequency`, now serves the step
+  helpers, the weather readers, `load_profile` and the CLI
+  ([#175](https://github.com/Str4vinci/breos/issues/175)). It accepts `"h"`,
+  `"1h"` and `"15min"`, returns `"h"` or `"15min"`, and raises `ValueError`
+  naming those spellings for anything else. **The aliases `"H"`, `"1H"`,
+  `"15T"` and `"15m"` are no longer accepted.** pandas 3 rejects the first
+  three, and `"m"` is not a minute alias, so each one used to pass the step
+  helpers and then fail later in `pd.date_range`. Use `"h"` or `"15min"`.
 
 ### Fixed
+- `fetch_weather_data`, `read_epw_file` and `load_profile` raise `ValueError`
+  for a frequency other than hourly or 15-minute, as `fetch_tmy_weather_data`
+  already did ([#175](https://github.com/Str4vinci/breos/issues/175)). They
+  used to return hourly data for `freq="30min"`. The weather readers check the
+  frequency before any request or file read.
+- Removed the "Year 1 PV degradation" stage (`year_1_degradation`) from the
+  App `pv_loss_waterfall` ([#175](https://github.com/Str4vinci/breos/issues/175)).
+  Year 1 has no degradation, so the stage was always 0 kWh.
+  `pvwatts_static` is now the last stage and equals
+  `energy_balance.pv_dc.generation_kwh`. `provenance.ledger_schema_version`
+  and `pv_loss_waterfall.ledger_schema_version` move to `1.2`. Consumers that
+  look the stage up by key, or index `stages[6]`, need updating. These are
+  the only changes to the App golden baseline.
+
+### Fixed
+- Config errors that surfaced only after the weather fetch are reported when
+  the App is built, and CLI, TOML and Python config are normalised the same
+  way ([#176](https://github.com/Str4vinci/breos/issues/176)). Load-profile
+  aliases, PV loss component names and a missing battery temperature CSV fail
+  during construction. Unknown `[montecarlo]` keys are rejected before the
+  weather file is checked. Hyphenated keys in nested tables and native TOML
+  `date` values are normalised, and conflicting spellings of one key in a
+  table raise. `breos run`, `breos sweep` and `breos montecarlo` warn about a
+  runner section they do not use.
+- Monte Carlo selects its dispatch backend by one rule from the CLI and from
+  Python: `--execution-backend`, then `[montecarlo].execution_backend` (or
+  `MonteCarloSettings.execution_backend`), then the top-level
+  `execution_backend`, then `"python"`. `MonteCarloSettings.execution_backend`
+  now defaults to `None`, meaning inherit; `run_montecarlo` returns the
+  resolved backend in `result.settings`. Before, the CLI honoured the
+  top-level key but a Python `run_montecarlo` call ignored it.
 - The 15-minute weather resamplers no longer depend on the timestamp resolution
   of the input index ([#150](https://github.com/Str4vinci/breos/issues/150)).
   Both divided the raw integers by `10**9`, which is only correct for
@@ -54,6 +101,23 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   load profile built from an external hourly file because its 15-minute file is
   missing. Hourly runs, nanosecond input, and profiles loaded from native
   15-minute files are unchanged.
+- Hourly-to-15-minute resampling places hourly means at the middle of their
+  hour ([#175](https://github.com/Str4vinci/breos/issues/175)).
+  `resample_to_15min` evaluated only the clear-sky reference at the
+  representative time; the clearness index, temperature and wind were
+  interpolated at the labels, so interval-mean weather came out 22.5 minutes
+  early. All columns are now interpolated at the representative times the
+  weather metadata records. A load profile built from an hourly file was
+  interpolated the same way and its hours kept their mean only in the annual
+  total: the bundled H0 profile averaged to hours and resampled back ran about
+  22.5 minutes early (RMSE 8.18 W against the native 15-minute profile, 3.08 W
+  one step later) and missed each hour's mean by 5.95 W on average. It is now
+  interpolated between hour midpoints and scaled per hour, so each hour keeps
+  its mean exactly (RMSE 1.16 W, no lag). **Results change for 15-minute runs
+  from interval-mean weather (EPW, Open-Meteo means, files whose metadata says
+  `interval_mean`) and from external load profiles supplied only as hourly
+  files.** PVGIS TMY weather (instant samples), weather without metadata, and
+  native 15-minute load profiles are unchanged.
 - The simulation boundary rejects invalid PV and load input instead of
   repairing it ([#151](https://github.com/Str4vinci/breos/issues/151)).
   `simulate_energy_balance`, `simulate_energy_balance_summary`, and
@@ -471,6 +535,65 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   value of 0 and are unchanged. Monte Carlo summaries leave out infinite
   values as they do NaN, so an infinite LCOE no longer makes the mean
   infinite and the spread NaN; `count` shows how many runs remain.
+
+- PV module age is counted at the start of each simulated year everywhere
+  ([#175](https://github.com/Str4vinci/breos/issues/175)). Year 1 has no
+  degradation and year `n` is degraded by `n - 1` full years, compounded.
+  App, Monte Carlo, the optimizer and the economics projection already did
+  this, but the `breos.solar` production functions added half a year to
+  `current_year - start_year`. A direct call at `current_year == start_year`
+  lost 0.25% at the default 0.5%/year, and a module `N` years old was
+  degraded for `N + 0.5` years where App uses `N`. **Results change only for
+  direct `breos.solar` calls that pass both `current_year` and `start_year`
+  with a nonzero `degradation_rate`.** At 0.5%/year their DC output rises by
+  0.25% at every age: age 10 is scaled by 0.9511 instead of 0.9487. A
+  `current_year` before `start_year` now raises `ValueError` instead of
+  adding production. App, Monte Carlo and optimizer results are unchanged.
+  The convention is documented under Module aging on the PV API page.
+- Payback is the sustained discounted payback within the simulated period
+  ([#175](https://github.com/Str4vinci/breos/issues/175)): the earliest time
+  cumulative discounted savings reach zero or above and stay nonnegative to the
+  end of the horizon. `find_payback_year` and `find_payback_year_exact` now
+  start the savings at year 0 with minus the investment, taken from
+  `attrs["total_investment"]` or, for a projection read back from CSV, from the
+  first row of the system cost; both accept an optional `initial_investment`.
+  The fractional value interpolates between years 0 and 1 too, so a system
+  that pays back after 0.21 years reports 0.21 instead of 1.0. A system whose
+  savings turn positive and then negative again after a battery replacement
+  pays back at the later recovery, or not at all if the savings end negative;
+  it used to report the first crossing. Savings of exactly zero that hold to
+  the horizon count as payback. The integer year follows the same rule, and
+  the projection's `attrs["payback_year"]` comes from `find_payback_year`.
+  **Results change** for App, Monte Carlo and optimizer runs whose savings dip
+  below zero after first turning positive, or reach exactly zero; in addition,
+  `payback_year_exact` and `Projected_Breakeven_Year_Exact` change for runs
+  that pay back within the first year. Other runs, and the App golden
+  baseline, are unchanged. The break-even plots mark a first-year payback
+  from the year-0 investment and widen the axis to show it. Both functions
+  raise `ValueError` when the years, the savings or the investment contain
+  NaN or infinite values, instead of reporting NaN or a false crossing.
+- `calculate_lcoe` is documented as a real-terms (constant-price) LCOE
+  ([#175](https://github.com/Str4vinci/breos/issues/175)). It holds O&M at
+  first-year prices, while `calculate_lcoe_from_projection`, which App,
+  Monte Carlo and the optimizer report, escalates it with inflation, so the
+  two differ whenever inflation is not zero. Its numbers are unchanged; a test
+  pins that the two agree at zero inflation.
+- Four small fixes from the 0.6.2 audit
+  ([#161](https://github.com/Str4vinci/breos/issues/161)).
+  `get_inverter_preset` returns a copy, so changing one caller's
+  `InverterConfig` no longer changes the preset for every later caller.
+  `cost_analysis_projection` matches yearly rows to projection years by their
+  `Year` labels instead of by position, so rows in a different order give the
+  same projection; labels that are not exactly 1 through the projection length
+  raise. App results report an undefined LCOE, such as a run with 100% PV
+  losses, as `null` instead of `Infinity`, so they pass
+  `json.dumps(..., allow_nan=False)`. `load_weather` no longer falls back to a
+  historical file that does not cover the requested years, and raises the new
+  `AmbiguousWeatherError`, a `ValueError`, when several files match instead of
+  taking whichever the directory listed first. **An App run whose `weather/`
+  directory holds two TMY files for its location preset now stops** with the
+  candidates and asks for `weather_source`. With one file, App results are
+  unchanged.
 
 ### Removed
 - Removed the optimizer's `costs.panel_wp` override. It priced the steady-state

@@ -178,12 +178,53 @@ def local_datetime_index(values) -> "pd.DatetimeIndex":
         return pd.DatetimeIndex([pd.Timestamp(value).tz_localize(None) for value in values])
 
 
+# Time-step spellings BREOS accepts, mapped to the canonical pandas 3 string.
+# Only spellings that pandas 3 itself parses are listed, so a value accepted
+# here cannot fail later in ``pd.date_range``. The pandas 2 aliases ``"H"``,
+# ``"1H"``, ``"15T"`` and ``"15m"`` are rejected: pandas 3 no longer parses
+# the first three, and ``"m"`` is not a minute alias.
+_FREQUENCY_SPELLINGS = {
+    "h": "h",
+    "1h": "h",
+    "15min": "15min",
+}
+_HOURS_PER_STEP = {"h": 1.0, "15min": 0.25}
+
+
+def normalise_frequency(freq: str) -> str:
+    """
+    Return the canonical time-step string for a supported frequency.
+
+    BREOS simulates at two resolutions: hourly (``"h"``) and 15-minute
+    (``"15min"``). ``"1h"`` is also accepted and returns ``"h"``.
+
+    Args:
+        freq: Frequency string.
+
+    Returns:
+        ``"h"`` or ``"15min"``.
+
+    Raises:
+        ValueError: If ``freq`` is any other value, including the pandas 2
+            aliases ``"H"``, ``"1H"``, ``"15T"`` and ``"15m"``.
+    """
+    canonical = _FREQUENCY_SPELLINGS.get(freq) if isinstance(freq, str) else None
+    if canonical is None:
+        accepted = ", ".join(repr(spelling) for spelling in _FREQUENCY_SPELLINGS)
+        raise ValueError(
+            f"Unsupported frequency: {freq!r}. Use 'h' for hourly or '15min' for 15-minute steps "
+            f"(accepted spellings: {accepted})."
+        )
+    return canonical
+
+
 def get_hours_per_step(freq: str) -> float:
     """
     Get the number of hours per timestep based on frequency.
 
     Args:
-        freq: Frequency string ('h' for hourly, '15min' for 15-minute)
+        freq: Frequency string ('h' for hourly, '15min' for 15-minute); see
+            :func:`normalise_frequency` for the accepted spellings.
 
     Returns:
         Hours per timestep (1.0 for hourly, 0.25 for 15-min)
@@ -191,18 +232,7 @@ def get_hours_per_step(freq: str) -> float:
     Raises:
         ValueError: If freq is not recognized
     """
-    freq_map = {
-        "h": 1.0,
-        "H": 1.0,
-        "1h": 1.0,
-        "1H": 1.0,
-        "15min": 0.25,
-        "15T": 0.25,
-        "15m": 0.25,
-    }
-    if freq not in freq_map:
-        raise ValueError(f"Unsupported frequency: {freq}. Use 'h' or '15min'.")
-    return freq_map[freq]
+    return _HOURS_PER_STEP[normalise_frequency(freq)]
 
 
 def get_steps_per_day(freq: str) -> int:
