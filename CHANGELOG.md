@@ -84,6 +84,22 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
     resolution, and the column and unit read. Monte Carlo provenance has the
     same block. `breos validate-config` prints the file it resolved, or says
     it is not there yet.
+- **Tariff domain**, `breos.tariffs` (ADR 0002). A `TariffSchedule` assigns
+  instants to named periods in local civil time and records its regulatory
+  source; `TariffPrices` holds per-kWh import and export prices per period and
+  a daily fixed charge in one currency (EUR in 0.7.0); a `ResolvedTariff`
+  aligns both to a simulation index, with period labels and codes, price
+  arrays, the civil-day boundaries (`day_starts`: 23-, 24- and 25-hour days),
+  and separate schedule and price hashes. Periods are classified in the
+  timezone passed in, never the index's own (A1), and a schedule is not moved
+  to another zone. Nine schedules are bundled, checked against their primary
+  sources: the Portuguese mainland BTN daily and weekly bi- and tri-hourly
+  cycles of 2026 (Diretiva ERSE n.º 1/2026) and of the 2027 reform (Diretiva
+  ERSE n.º 3/2026, de 19 de agosto), and the Spanish 2.0TD access tariff (CNMC
+  Circular 3/2020) with its 2026 national holidays. A schedule whose
+  boundaries hourly input cannot represent is rejected at that resolution
+  (A3). Nothing in App, Monte Carlo or the optimizer uses tariffs yet, so no
+  result changes; the `[tariff]` config table comes with TOU valuation.
 
 ### Changed
 - `resample_tmy_to_15min` is now a thin wrapper over `resample_to_15min`, so
