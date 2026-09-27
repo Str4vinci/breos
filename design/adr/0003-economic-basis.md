@@ -1,7 +1,7 @@
 # 0003 — Economic basis, escalators, and currency-neutral results
 
-- **Status:** Proposed
-- **Date:** 2026-09-26
+- **Status:** E1, E6 and E8 Accepted; E2–E5, E7 and E9 Proposed
+- **Date:** 2026-09-26; E1, E6 and E8 accepted 2026-09-26
 
 ## Context
 
@@ -25,12 +25,16 @@ unless stated:
   discounted from it.
 - The daily charge assumes 365 days (`first_year_days = 365`), ignoring leap
   and partial years.
-- Nothing says whether `discount_rate` is nominal or real.
+- Nothing says whether the projection's `discount_rate` is nominal or real.
+  The standalone `calculate_lcoe` holds O&M at first-year prices, and #251
+  documents it as a real-terms (constant-price) LCOE.
 - Defaults disagree. The App registry uses discount 0.03 and inflation 0.02;
   `CostParams` and optimization (`DEFAULT_DISCOUNT_RATE`,
   `DEFAULT_INFLATION_ELEC`) use 0.0 and 0.02; the `cost_analysis_projection`
-  signature uses 0.02 and 0.03. `breos/data/configs/financials.json` says
-  0.05 and 0.02 but is never read at runtime.
+  signature uses discount 0.02 and inflation 0.03; `calculate_lcoe` and
+  `calculate_lcoe_from_projection` default the discount rate to 0.0.
+  `breos/data/configs/financials.json` says 0.05 and 0.02 but is never read
+  at runtime.
 - Replacement cost is money inside the physics layer: the App sets
   `BatteryConfig.replacement_cost` from the storage cost per kWh, and only
   optimization can override it (`_replacement_event_cost`).
@@ -47,19 +51,32 @@ unless stated:
 
 ## Decision
 
-Every item is **Proposed**.
+E1, E6 and E8 are **Accepted** (2026-09-26). The other items are
+**Proposed**.
 
-### E1. Nominal basis, stated
+### E1. Nominal basis for the projection APIs — Accepted 2026-09-26
 
-All rates are nominal annual rates, and `discount_rate` is a nominal discount
-rate. This is the arithmetic BREOS already performs and how tariff and
-financing inputs are usually quoted. Provenance records the basis and the
-implied real discount rate, `(1 + d) / (1 + inflation_rate) − 1`. A
-real-terms study enters real rates and zero inflation; the arithmetic is the
-same, and the recorded basis is how a reader tells the two apart. Real-terms
-outputs are not added in 0.7.0.
+The projection APIs escalate cashflows, so their rates are nominal annual
+rates and `discount_rate` is a nominal discount rate. They are
+`cost_analysis_projection`, `calculate_lcoe_from_projection`, which reads the
+escalated projection, the steady-state `calculate_financials`, which mirrors
+it, and the App, Monte Carlo and optimization paths built on them. This is
+the arithmetic BREOS already performs and how tariff and financing inputs are
+usually quoted.
 
-### E2. Separate escalators, defaulting to today's behaviour
+The standalone `calculate_lcoe` keeps its documented real-terms contract
+(#251): it holds O&M at first-year prices, so its `discount_rate` is a real
+rate. It is not a projection API and does not change.
+
+Provenance records the rates the projection used and the implied real
+discount rate, `(1 + d) / (1 + inflation_rate) − 1`. A user can enter real
+rates and zero inflation, and the arithmetic runs unchanged. BREOS records
+the rates it used, not the basis the user intended, so the record does not
+distinguish a nominal study from a real one; that would need an explicit
+basis setting, which is not part of 0.7.0. Real-terms outputs are not added
+in 0.7.0.
+
+### E2. Separate escalators, defaulting to today's behaviour — Proposed
 
 `inflation_rate` becomes general inflation, the default for every component
 without its own rate. New keys (spelling settled in the config registry):
@@ -76,7 +93,7 @@ A replacement at time `t` years costs `C0 × (1 + inflation_rate)^t ×
 the App golden baseline does not move. The CLI help for `inflation_rate`
 changes to match.
 
-### E3. Timing conventions kept and documented
+### E3. Timing conventions kept and documented — Proposed
 
 Energy, fixed-charge and O&M flows stay at year-1 prices, booked at year end.
 Replacements stay at t = 0 prices, inflated to and discounted from the swap
@@ -85,14 +102,14 @@ every NPV for no gain in correctness; the user documentation states it,
 including the year of discounting that remains when escalation equals the
 discount rate.
 
-### E4. Economics prices replacements
+### E4. Economics prices replacements — Proposed
 
 The physics layer reports replacement events (instant and replaced kWh);
 economics prices them. `BatteryConfig.replacement_cost` leaves the physics
 path. Learning rates and price revaluation then need no re-simulation, and
 App and optimization price replacements the same way.
 
-### E5. Fixed charge by simulated duration
+### E5. Fixed charge by simulated duration — Proposed
 
 The daily charge is `fixed_charge_per_day × simulated hours / 24`. A whole
 non-leap year is still exactly 365 days, so those results do not change; leap
@@ -100,16 +117,28 @@ years and partial runs (#242) are charged for their actual length. The count
 does not depend on the index timezone. Per-day charges that differ by day
 type use the civil-day array of ADR 0002 A1.
 
-### E6. One default set
+### E6. One default set — Accepted 2026-09-26
 
-Defaults are discount 0.03 and inflation 0.02, the values App users already
-get. They are defined once, beside `CostParams`, and read by the App registry,
-optimization and Monte Carlo. The rate parameters of
-`cost_analysis_projection` lose their own defaults. `financials.json` is
-deleted. Configurations that relied on the optimization default of 0.0 change
-and get a release note.
+The default discount rate is 0.03 everywhere, and the default inflation rate
+is 0.02: the values App users already get. They are defined once, beside
+`CostParams`, and read by the App registry, `CostParams`, optimization
+(`DEFAULT_DISCOUNT_RATE`), Monte Carlo, `cost_analysis_projection`,
+`calculate_lcoe_from_projection` and `calculate_lcoe`. For `calculate_lcoe`
+the 0.03 is a real rate, under its E1 contract. `financials.json` is
+deleted.
 
-### E7. Year rows carry money at year-1 prices
+Callers who omit the discount rate get different results. `CostParams`,
+`cost_params_from_config`, optimization (`calculate_financials` and the
+projected objectives) and both LCOE functions defaulted to 0.0, so their
+NPVs, LCOEs, objectives and selected designs change; a direct
+`cost_analysis_projection` call defaulted to 0.02. App results do not change.
+The release notes name these entry points and the old default.
+
+An explicitly supplied 0.0 stays valid and is used as given. Defaults apply
+only when the key or argument is absent, never when its value is falsy, and a
+test pins `discount_rate = 0.0` for each entry point.
+
+### E7. Year rows carry money at year-1 prices — Proposed
 
 The year loop adds import cost, export revenue, fixed charge and no-system
 import cost, at year-1 prices, to each year row. Economics applies
@@ -121,24 +150,83 @@ The App `financial` rows gain the component cashflows the projection already
 computes: `Cost_Import`, `Revenue_Export`, `Cost_Operation`, `Cost_Daily`,
 `Cost_Replacement` and `Replacement_Time_Years`.
 
-### E8. Currency-neutral names, no aliases
+### E8. Currency-neutral names, no aliases — Accepted 2026-09-26
 
-Money keys drop the currency token: `total_investment`, `npv_savings`,
-`lcoe_per_kwh`, `Projected_NPV`, and so on. The resolved currency is recorded
-once in result metadata and provenance, and plot labels read it. The
-replacement total's name states its basis
-(`battery_replacement_cost_t0_prices`), with the discounted total beside it.
+Money keys drop the currency token. The resolved currency is recorded once in
+result metadata and provenance, and plot and export labels read it.
+Replacement totals state their basis: `_t0_prices` means t = 0 prices,
+neither inflated nor discounted. The App result also gains the discounted
+total, `battery_replacement_cost_npv`, beside the renamed one.
 
-The `*_eur` keys are renamed in 0.7.0 without aliases. This amends ADR 0002's
-"compatibility aliases only while the resolved currency is EUR". Aliases would
-give EUR and non-EUR runs different key sets, double every money field in the
-App result, the golden fixture and the Monte Carlo and optimization frames,
-and still need a removal release later. BREOS removes superseded APIs rather
-than deprecating them (#164), and ledger schema 2.0 already drops duplicate
-columns the same way. The cost is that scripts reading `*_eur` keys break
-once, loudly; the changelog carries an old-to-new table.
+The keys are renamed in 0.7.0 with no aliases, following the repository's
+removal policy: BREOS removes superseded APIs rather than deprecating them
+(#164), and ledger schema 2.0 drops its duplicate columns the same way. This
+replaces ADR 0002's "compatibility aliases only while the resolved currency
+is EUR". Aliases would give EUR and non-EUR runs different key sets, double
+every money field in the App result, the golden fixture and the Monte Carlo
+and optimization frames, and still need a removal release later. The cost is
+that scripts reading the old names break once. A removed output key is simply
+absent; a removed input key (`budget_eur`) raises an error that names its
+replacement rather than silently falling back to the default budget.
 
-### E9. Result schema version
+The payback rename left open by #251 lands in the same change, so users
+migrate once. "Exact" overstates a linear interpolation between year-end
+points, so the fractional payback becomes "interpolated". It has no aliases
+either.
+
+Results that use the new names report `result_schema_version = "1.0"`, the
+first result schema version; E9 proposes where the field is carried and how
+it is bumped. A result without the field predates the rename.
+
+The migration table below was built by searching `breos/` for `eur`, `Eur`,
+`EUR`, `€` and `_exact` at `origin/develop` 79bffcf. It lists every public
+result key, column, label and parameter that carries the currency or the
+payback "exact". The `breos sweep` CSV repeats the App result's scalar keys,
+so rows 1–4 also apply to it.
+
+| # | Surface | Old | New |
+|---|---|---|---|
+| 1 | `App.result()` | `total_investment_eur` | `total_investment` |
+| 2 | `App.result()` | `npv_savings_eur` | `npv_savings` |
+| 3 | `App.result()` | `lcoe_eur_kwh` | `lcoe_per_kwh` |
+| 4 | `App.result()` | `battery_replacement_cost_eur` | `battery_replacement_cost_t0_prices` |
+| 5 | `cost_analysis_projection` `attrs` | `lcoe_eur_kwh` | `lcoe_per_kwh` |
+| 6 | Monte Carlo `runs` column, `summary` key | `npv_savings_eur` | `npv_savings` |
+| 7 | Monte Carlo `runs` column, `summary` key | `lcoe_eur_kwh` | `lcoe_per_kwh` |
+| 8 | Monte Carlo `runs` column | `total_replacement_cost_eur` | `total_replacement_cost_t0_prices` |
+| 9 | Monte Carlo `runs` column, `summary` key | `payback_year_exact` | `payback_year_interpolated` |
+| 10 | Optimization Pareto column | `NPV_Eur` | `NPV` |
+| 11 | Optimization Pareto column | `Objective_NPV_Eur` | `Objective_NPV` |
+| 12 | Optimization Pareto column, `objective_names` | `SteadyState_NPV_Eur` | `SteadyState_NPV` |
+| 13 | Optimization Pareto column, `objective_names` | `Projected_NPV_Eur` | `Projected_NPV` |
+| 14 | Optimization Pareto column | `Projected_Initial_Cost_Eur` | `Projected_Initial_Cost` |
+| 15 | Optimization Pareto column | `Projected_Replacement_Cost_Eur` | `Projected_Replacement_Cost_T0_Prices` |
+| 16 | Optimization Pareto column | `Projected_LCOE_Eur_kWh` | `Projected_LCOE_per_kWh` |
+| 17 | Optimization Pareto column | `Projected_Breakeven_Year_Exact` | `Projected_Breakeven_Year_Interpolated` |
+| 18 | Optimization `details["battery_replacement_treatment"]` | `replacement_cost_eur_each` | `replacement_cost_each_t0_prices` |
+| 19 | Optimization config, `constraints` | `budget_eur` | `budget` |
+| 20 | `breos.economics` function | `find_payback_year_exact` | `find_payback_year_interpolated` |
+| 21 | `breos list cost-presets --json` | `electricity_cost_eur_kwh` | `electricity_cost_per_kwh` |
+| 22 | `breos list cost-presets --json` | `export_price_eur_kwh` | `export_price_per_kwh` |
+| 23 | `breos list cost-presets --json` | `storage_cost_eur_kwh` | `storage_cost_per_kwh` |
+| 24 | `breos.io` summary label | `LCOE [EUR/kWh]` | `LCOE [<currency>/kWh]` |
+| 25 | `breos.io` summary label | `Total Investment [EUR]` | `Total Investment [<currency>]` |
+| 26 | `breos.io` summary label | `NPV Savings [EUR]` | `NPV Savings [<currency>]` |
+| 27 | `plot_pareto_front_analysis` input column | `Net_Cost_Eur` | `Net_Cost` |
+| 28 | `plot_tariff_comparison` input column | `Net Cost (€)` | `Net Cost` |
+| 29 | `plot_tariff_comparison` input column | `No System Cost (€)` | `No System Cost` |
+
+Rows 24–26 substitute the resolved currency code, so an EUR run writes the
+same text as today. Names that are already neutral keep them: the projection
+columns (`Cost_Import`, `Revenue_Export`, the `*_NPV` columns),
+`attrs["total_investment"]` and `attrs["final_npv_savings"]`. The private
+argument `_estimate_battery_replacement_treatment(replacement_cost_eur=...)`
+and the locals `payback_exact` (optimization) and `be_year_exact` (plotting)
+are renamed too but are not public. Hard-coded `€` and `EUR` in plot axis
+labels, the `breos list cost-presets` text output and docstrings read the
+currency or say "currency". The changelog carries this table.
+
+### E9. Result schema version — Proposed
 
 `App.result()`, Monte Carlo summaries and optimization provenance gain a
 top-level `result_schema_version`, independent of the ledger schema. It
@@ -148,11 +236,12 @@ version; an added field bumps the minor.
 ## Consequences
 
 - With no new keys, flat App results match the golden baseline except for
-  leap-year and partial runs (E5). Optimization without explicit financials
-  changes with the default discount rate (E6).
+  leap-year and partial runs (E5). Optimization, `CostParams` and LCOE
+  callers that omit the discount rate change with the 0.03 default (E6).
 - TOU valuation, escalator scenarios and replacement learning share one
   valuation step and need no re-simulation for price-blind dispatch.
-- Downstream code must move to the neutral names in one release.
+- Downstream code moves to the neutral names and the interpolated payback
+  names once, in 0.7.0, using the E8 table.
 - Splitting `cost_analysis_projection` into valuation, discounting and
   metrics, emissions, and file output, and computing LCOE and lifetime CO2
   once rather than again in each runner, are implementation work under #183.

@@ -1,7 +1,8 @@
 # 0002 — Tariffs are resolved values; smart charging is an instruction layer
 
-- **Status:** Accepted for 0.7.x implementation; amendments A1–A10 Proposed
-- **Date:** 2026-08-20; amendments 2026-09-26
+- **Status:** Accepted for 0.7.x implementation; amendment A6 Accepted;
+  amendments A1–A5 and A7–A10 Proposed
+- **Date:** 2026-08-20; amendments 2026-09-26; A6 accepted 2026-09-26
 
 ## Context
 
@@ -126,7 +127,9 @@ the resolved price arrays; the no-system baseline uses the same arrays and
 calendar. Annual energy totals remain alongside monetary components.
 
 New monetary names are currency-neutral. Existing `*_eur` results remain
-compatibility aliases only while the resolved currency is EUR. Mixed-currency
+compatibility aliases only while the resolved currency is EUR. *(Replaced by
+[ADR 0003](0003-economic-basis.md) E8, accepted 2026-09-26: the `*_eur` names
+are renamed in 0.7.0 with no aliases.)* Mixed-currency
 inputs fail before simulation. Initial CAPEX, imports, exports, fixed charges,
 O&M, and replacements remain distinct annual cashflow components. Simple and
 sustained discounted payback are separate outputs; NPV remains the financial
@@ -156,7 +159,8 @@ requires a tariff and a positive-capacity battery.
 `grid_import_limit_w` caps total site import, including simultaneous load. Grid
 charging is also bounded by battery charge power and the hybrid inverter's AC
 rating. The configured `grid_charge_efficiency` is the AC-to-stored-DC
-efficiency and is independent of the DC-to-AC discharge efficiency. The first
+efficiency and is independent of the DC-to-AC discharge efficiency. *(Replaced
+by A6, accepted 2026-09-26.)* The first
 supported strategy does not grid-charge while PV is being exported.
 
 ### Dispatch instructions and origin accounting
@@ -221,9 +225,10 @@ Implementation follows the delivery sequence in
 ## Amendments proposed for 0.7 readiness
 
 The 0.7 readiness audit (#187) found details the decision above leaves open
-and statements the code has since outgrown. Each amendment below is
-**Proposed**. Accepting one replaces the text it names; until then the
-original text stands. Economic conventions and money naming are in
+and statements the code has since outgrown. A6 is **Accepted** (2026-09-26);
+every other amendment below is **Proposed**. Accepting one replaces the text
+it names; until then the original text stands. Economic conventions and
+money naming are in
 [ADR 0003](0003-economic-basis.md).
 
 ### A1. Civil time comes from the configuration, not the index (#180) — Proposed
@@ -308,7 +313,7 @@ prices.
 until #179 retires `calculate_financials`, which values one year at scalar
 prices.
 
-### A6. Grid-charge conversion and shared limits (#178) — Proposed
+### A6. Grid-charge conversion and shared limits (#178) — Accepted 2026-09-26
 
 Replaces "`grid_charge_efficiency` is the AC-to-stored-DC efficiency".
 `grid_charge_efficiency` is the AC-to-DC conversion of the hybrid inverter's
@@ -326,13 +331,23 @@ self-consumption:
 
 - charge input: `cap_charge_in_wh` bounds PV and grid charge input together;
 - inverter: grid-charge AC input is at most the AC nameplate minus the step's
-  PV AC output, so AC throughput in both directions never exceeds the rating;
-  and
+  PV AC output; and
 - site: grid-charge import is at most `grid_import_limit_w` minus the step's
   load import.
 
-Netting inside the converter, where PV DC goes to the battery while the grid
-serves the load, is not modelled; it would change origin attribution.
+The inverter limit is an explicit, conservative modelling assumption for 0.7:
+summed AC throughput. In each step, PV AC output and grid-charge AC input
+both count against the inverter's AC rating, so their sum never exceeds it.
+A real hybrid inverter may net the two inside the converter, sending PV DC to
+the battery while the grid serves the load, and so charge more than this rule
+allows. The assumption can understate grid charging but never exceeds the
+rating.
+
+Netting is deferred because it needs three things 0.7 does not define: a
+converter topology that says which paths share which power stage, a loss
+calculation for the netted flows, and origin accounting for energy that is
+redirected rather than converted. Subtracting one AC flow from the other
+before applying the rating would supply none of these.
 
 ### A7. The target moves with temperature and health (#178) — Proposed
 
