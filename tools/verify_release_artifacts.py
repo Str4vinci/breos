@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import shutil
@@ -88,6 +89,16 @@ def _run(
         raise
 
 
+def _artifact_paths(dist_dir: Path) -> tuple[Path, Path]:
+    wheels = sorted(dist_dir.glob("*.whl"))
+    sdists = sorted(dist_dir.glob("*.tar.gz"))
+    if len(wheels) != 1:
+        raise AssertionError(f"Expected exactly one wheel, found {len(wheels)}")
+    if len(sdists) != 1:
+        raise AssertionError(f"Expected exactly one sdist, found {len(sdists)}")
+    return wheels[0], sdists[0]
+
+
 def _build_artifacts(dist_dir: Path) -> tuple[Path, Path]:
     uv = shutil.which("uv")
     if uv is None:
@@ -97,13 +108,7 @@ def _build_artifacts(dist_dir: Path) -> tuple[Path, Path]:
     sys.stdout.write(result.stdout)
     sys.stderr.write(result.stderr)
 
-    wheels = sorted(dist_dir.glob("*.whl"))
-    sdists = sorted(dist_dir.glob("*.tar.gz"))
-    if len(wheels) != 1:
-        raise AssertionError(f"Expected exactly one wheel, found {len(wheels)}")
-    if len(sdists) != 1:
-        raise AssertionError(f"Expected exactly one sdist, found {len(sdists)}")
-    return wheels[0], sdists[0]
+    return _artifact_paths(dist_dir)
 
 
 def _assert_wheel_contents(wheel: Path) -> None:
@@ -194,6 +199,11 @@ def _smoke_test_installed_wheel(wheel: Path, work_dir: Path) -> None:
             if dep_path not in sys.path:
                 sys.path.append(dep_path)
 
+        import numpy as np
+        import pandas as pd
+
+        import breos.app as app_module
+
         import breos
         from breos.app import App
         from breos.degradation.engine import BLAST_MODEL_CLASSES
@@ -217,7 +227,41 @@ def _smoke_test_installed_wheel(wheel: Path, work_dir: Path) -> None:
         if len(profile) != 8760:
             raise AssertionError(f"unexpected hourly load profile length: {len(profile)}")
 
-        app = App({"location": "porto", "n_modules": 1, "annual_consumption_kwh": 1000})
+        idx = pd.date_range("2023-01-01", periods=8760, freq="h", tz="UTC")
+        hours = np.arange(len(idx), dtype=float)
+        day_of_year = hours / 24.0
+        hour_of_day = hours % 24
+        solar_angle = np.clip(np.sin((hour_of_day - 6) / 12 * np.pi), 0, 1)
+        seasonal = 0.6 + 0.4 * np.sin((day_of_year - 80) / 365 * 2 * np.pi)
+        ghi = solar_angle * seasonal * 800
+        weather = pd.DataFrame(
+            {
+                "ghi": ghi,
+                "dni": ghi * 0.7,
+                "dhi": ghi * 0.3,
+                "temp_air": 15 + 8 * np.sin((day_of_year - 80) / 365 * 2 * np.pi),
+                "wind_speed": 3.0,
+            },
+            index=idx,
+        )
+        app_module.load_weather = lambda **kwargs: None
+        app_module.fetch_tmy_weather_data = lambda **kwargs: (
+            weather.copy(),
+            {"inputs": {"location": {"latitude": 41.15, "longitude": -8.63, "elevation": 0}}},
+        )
+
+        app = App(
+            {
+                "location": "porto",
+                "n_modules": 1,
+                "annual_consumption_kwh": 1000,
+                "projection_years": 1,
+            }
+        )
+        app.simulate()
+        result = app.result()
+        if len(result["yearly"]) != 1 or result["pv_production_kwh"] <= 0:
+            raise AssertionError("installed wheel did not produce a simulated PV result")
         if app._cfg["location"] != "porto":
             raise AssertionError("App did not resolve packaged configuration")
 
@@ -247,6 +291,7 @@ def _smoke_test_installed_wheel(wheel: Path, work_dir: Path) -> None:
                 {
                     "breos_file": str(breos_file),
                     "profile_rows": len(profile),
+                    "simulated_pv_production_kwh": result["pv_production_kwh"],
                     "blast_models": len(profiles),
                     "blast_upstream": f"{BLAST_UPSTREAM_VERSION}@{BLAST_UPSTREAM_COMMIT}",
                 }
@@ -263,12 +308,23 @@ def _smoke_test_installed_wheel(wheel: Path, work_dir: Path) -> None:
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--dist-dir",
+        type=Path,
+        help="verify artifacts already built in this directory instead of building a fresh pair",
+    )
+    args = parser.parse_args()
+
     with tempfile.TemporaryDirectory(prefix="breos-release-") as tmp:
         work_dir = Path(tmp)
-        dist_dir = work_dir / "dist"
-        dist_dir.mkdir()
+        if args.dist_dir is None:
+            dist_dir = work_dir / "dist"
+            dist_dir.mkdir()
+            wheel, sdist = _build_artifacts(dist_dir)
+        else:
+            wheel, sdist = _artifact_paths(args.dist_dir.resolve())
 
-        wheel, sdist = _build_artifacts(dist_dir)
         _assert_wheel_contents(wheel)
         _assert_sdist_contents(sdist)
         _smoke_test_installed_wheel(wheel, work_dir)

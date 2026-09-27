@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import math
 import multiprocessing
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from importlib.metadata import PackageNotFoundError, version
 from multiprocessing import Pool
 from typing import Any
@@ -107,8 +107,10 @@ class MonteCarloSettings:
     n_procs: int = 1
     # "python" is the reference implementation and the default. "numba"
     # selects the optional compiled within-day dispatch kernel and requires
-    # breos[fast]; it is checked before any trajectory starts.
-    execution_backend: str = "python"
+    # breos[fast]; it is checked before any trajectory starts. None inherits
+    # the App config's top-level ``execution_backend``, which itself defaults
+    # to "python"; see :func:`run_montecarlo`.
+    execution_backend: str | None = None
 
 
 @dataclass
@@ -684,7 +686,7 @@ def _initialize_worker(*context: Any) -> None:
     _WORKER_CONTEXT = context
 
 
-def _run_trajectory_index(run_idx: int) -> tuple[int, dict[str, Any], pd.DataFrame, str | None]:
+def _run_trajectory_index(run_idx: int) -> tuple[int, dict[str, Any], pd.DataFrame | None, str | None]:
     """Evaluate one deterministic per-run random stream in a worker."""
     if _WORKER_CONTEXT is None:
         raise RuntimeError("Monte Carlo worker context was not initialized")
@@ -723,7 +725,7 @@ def _run_trajectory_index(run_idx: int) -> tuple[int, dict[str, Any], pd.DataFra
     jit_cache_state = None
     if settings.execution_backend == "numba":
         jit_cache_state = observed_jit_cache_state(settings.execution_backend) or "unknown"
-    return run_idx, metrics, trajectory, jit_cache_state
+    return run_idx, metrics, trajectory if settings.collect_yearly else None, jit_cache_state
 
 
 def _aggregate_jit_cache_states(states: list[str]) -> str:
@@ -741,11 +743,20 @@ def run_montecarlo(config: dict[str, Any], settings: MonteCarloSettings) -> Mont
         config: An App configuration dict (same keys as :class:`breos.App`).
         settings: Monte Carlo controls (weather file, runs, uncertainty, seed).
 
+    The dispatch backend is ``settings.execution_backend`` when set, else the
+    config's top-level ``execution_backend``, else ``"python"``. The CLI
+    applies the same order after its own ``--execution-backend`` flag and
+    ``[montecarlo].execution_backend``, so a study selects the same backend
+    from Python and from ``breos montecarlo``. The returned result's
+    ``settings`` records the backend that ran.
+
     Returns:
         A :class:`MonteCarloResult` with one row per run and summary statistics.
     """
     resolved = resolve_app_config(config)
     cfg = resolved.cfg
+    if settings.execution_backend is None:
+        settings = replace(settings, execution_backend=cfg["execution_backend"])
     if settings.n_runs < 1:
         raise ValueError("n_runs must be at least 1")
     if settings.years_per_run is not None and settings.years_per_run < 1:
@@ -831,7 +842,7 @@ def run_montecarlo(config: dict[str, Any], settings: MonteCarloSettings) -> Mont
         rows.append({"run": run_idx + 1, **metrics})
         if jit_cache_state is not None:
             jit_cache_states.append(jit_cache_state)
-        if settings.collect_yearly:
+        if trajectory is not None:
             trajectory.insert(0, "run", run_idx + 1)
             yearly_frames.append(trajectory)
 
