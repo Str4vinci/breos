@@ -380,11 +380,11 @@ def _simulate_trajectory(
         has_battery=has_battery,
         execution_backend=cast(str, settings.execution_backend),
     )
-    yearly_df = projection.yearly_df
     current_soh = projection.carry.soh_pct
     total_replacements = projection.total_replacements
     total_replacement_cost = projection.total_replacement_cost
-    costs, cost_projection, lcoe = value_projection(cfg, resolved, projection)
+    value = value_projection(cfg, resolved, projection)
+    cost_projection, lcoe, yearly_df = value.cost_projection, value.lcoe, value.yearly_df
     payback_year = find_payback_year(cost_projection)
     payback_year_exact = find_payback_year_exact(cost_projection)
     npv_savings = float(cost_projection["Savings_Cumulative_NPV"].iloc[-1])

@@ -104,7 +104,9 @@ def test_value_projection_prices_the_year_rows():
     resolved = _resolved()
     run = _run(resolved, summary=True)
 
-    costs, projection, lcoe = value_projection(resolved.cfg, resolved, run)
+    value = value_projection(resolved.cfg, resolved, run)
+    costs, projection, lcoe = value.costs, value.cost_projection, value.lcoe
+    assert {"Import_Cost", "Export_Revenue", "Fixed_Charge", "Baseline_Import_Cost"} <= set(value.yearly_df)
 
     assert list(projection["Year"]) == [1, 2, 3]
     assert costs["total_initial_cost"] > 0
