@@ -189,6 +189,10 @@ _ROW_SUM_COLUMNS = (
     "Import_From_Grid",
     "Sell_To_Grid",
     "PV_DC_Curtailed",
+    "Inverter_Loss",
+    "Battery_Charge_Stored",
+    "Battery_SOC_Normalized",
+    "Battery_SOC_Absolute",
     *_DIAGNOSTIC_COLUMNS.values(),
 )
 
@@ -205,14 +209,17 @@ def build_year_row(
     replacement_steps: Sequence[int],
     n_steps: int,
     pv_degradation_factor: float,
+    annual_fec: float = 0.0,
     extra: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Build the one year-row schema App and Monte Carlo report.
+    """Build the one year-row schema App, Monte Carlo and the optimizer report.
 
-    ``sums_w`` holds each ledger column's sum of average-W steps; a summary's
-    ``column_sums`` and a frame's column sums are the same floats. ``carry``
-    is the state at the end of the year. ``extra`` columns (Monte Carlo's
-    sampled weather year and load scale) follow ``PV_Degradation_Factor``.
+    ``sums_w`` holds each results column's sum over the year's steps; a
+    summary's ``column_sums`` and a frame's column sums are the same floats.
+    ``carry`` is the state at the end of the year and ``annual_fec`` the
+    rainflow cycles every pack accumulated in it. ``extra`` columns (Monte
+    Carlo's sampled weather year and load scale) follow
+    ``PV_Degradation_Factor``.
     """
 
     def kwh(column: str) -> float:
@@ -261,6 +268,20 @@ def build_year_row(
         float(carry.pv_origin_energy_wh) if has_battery and carry.pv_origin_energy_wh is not None else None
     )
     row["Replacement_Steps"] = ";".join(str(step) for step in replacement_steps)
+    row["Inverter_Loss_kWh"] = kwh("Inverter_Loss")
+    # Cell-side energy in and out, so the pair reflects round-trip loss and
+    # feeds cycle ageing directly. Charge is measured after charging losses
+    # and discharge before inverter losses.
+    row["Battery_Charge_Throughput_kWh"] = kwh("Battery_Charge_Stored")
+    row["Battery_Discharge_Throughput_kWh"] = kwh("Battery_Discharge_DC")
+    # State levels are averaged, not integrated. Normalized SOC is the
+    # position in the usable window; absolute SOC is the fraction of the
+    # SOH-derated pack, so it rises as the pack fades.
+    row["Battery_SOC_Normalized_Mean_%"] = float(sums_w["Battery_SOC_Normalized"] / n_steps * 100.0)
+    row["Battery_SOC_Absolute_Mean_%"] = float(sums_w["Battery_SOC_Absolute"] / n_steps * 100.0)
+    # Cumulative FEC belongs to the installed pack and restarts at zero on
+    # replacement, so the year's own count comes from the all-pack total.
+    row["Battery_Annual_FEC"] = float(annual_fec)
     return row
 
 
@@ -294,29 +315,29 @@ class ProjectionRun:
     jit_cache_states: list[str]
 
 
-def run_projection(
-    cfg: dict[str, Any],
-    resolved: ResolvedAppConfig,
+def project_years(
     years: int,
     year_inputs: Callable[[int], ProjectionYear],
     *,
+    battery_config: Callable[[float], BatteryConfig],
+    freq: str,
     has_battery: bool,
     execution_backend: str,
+    degradation_engine: str = "native",
+    blast_model: str | None = None,
+    initial_carry: CarryState | None = None,
     observe_jit_per_year: bool = False,
 ) -> ProjectionRun:
     """Simulate ``years`` project years, carrying the battery from one to the next.
 
-    App and Monte Carlo both run this loop. ``year_inputs(year_idx)`` supplies
-    each year; the battery is rebuilt at the carried SOH, and the rainflow
-    residue is counted once, at the end of the last year.
-    ``observe_jit_per_year`` records the Numba cache state of every year, as
-    App reports it.
+    App, Monte Carlo and the projected optimizer all run this loop.
+    ``year_inputs(year_idx)`` supplies each year, and ``battery_config(soh)``
+    builds the battery at the carried SOH. The rainflow residue is counted
+    once, at the end of the last year. ``observe_jit_per_year`` records the
+    Numba cache state of every year, as App reports it.
     """
-    degradation_engine = str(cfg.get("degradation_engine", "native")).strip().lower()
-    blast_model = cfg.get("blast_model")
-    freq = cfg["resolution"]
     hours_per_step = get_hours_per_step(freq)
-    carry = CarryState()
+    carry = initial_carry or CarryState()
     rows: list[dict[str, Any]] = []
     total_replacements = 0
     total_replacement_cost = 0.0
@@ -325,10 +346,7 @@ def run_projection(
 
     for year_idx in range(years):
         year = year_inputs(year_idx)
-        if has_battery:
-            batt_cfg = build_battery_config(cfg, resolved, initial_soh=carry.soh_pct)
-        else:
-            batt_cfg = build_pv_only_battery_config(cfg, resolved)
+        batt_cfg = battery_config(carry.soh_pct)
         common = {
             **carry.simulation_kwargs(),
             "battery_config": batt_cfg,
@@ -356,6 +374,7 @@ def run_projection(
             n_rep, rep_cost = summary.n_replacements, summary.total_replacement_cost
             replacement_steps: Sequence[int] = summary.replacement_steps
             n_steps = summary.n_steps
+            annual_fec = summary.fec_all_packs if has_battery and summary.has_degradation_rows else 0.0
         else:
             if year.pv_dc is None or year.houseload is None:
                 raise ValueError("a projection year needs aligned inputs, or pv_dc and houseload")
@@ -376,6 +395,13 @@ def run_projection(
                 else []
             )
             n_steps = len(results_df)
+            # Each project year is its own simulation span, so the span's
+            # all-pack total is exactly this year's FEC.
+            annual_fec = (
+                float(degradation_df["Cumulative_FEC_All_Packs"].iloc[-1])
+                if has_battery and not degradation_df.empty
+                else 0.0
+            )
             if first_year_results_df is None:
                 first_year_results_df = results_df
 
@@ -398,6 +424,7 @@ def run_projection(
                 replacement_steps=replacement_steps,
                 n_steps=n_steps,
                 pv_degradation_factor=year.pv_degradation_factor,
+                annual_fec=annual_fec,
                 extra=year.extra,
             )
         )
@@ -411,6 +438,40 @@ def run_projection(
         total_replacement_cost=total_replacement_cost,
         first_year_results_df=first_year_results_df,
         jit_cache_states=jit_cache_states,
+    )
+
+
+def run_projection(
+    cfg: dict[str, Any],
+    resolved: ResolvedAppConfig,
+    years: int,
+    year_inputs: Callable[[int], ProjectionYear],
+    *,
+    has_battery: bool,
+    execution_backend: str,
+    observe_jit_per_year: bool = False,
+) -> ProjectionRun:
+    """Run :func:`project_years` for an App configuration.
+
+    The battery, the degradation engine and the resolution come from the
+    configuration; App and Monte Carlo call this.
+    """
+
+    def battery_config(soh_pct: float) -> BatteryConfig:
+        if has_battery:
+            return build_battery_config(cfg, resolved, initial_soh=soh_pct)
+        return build_pv_only_battery_config(cfg, resolved)
+
+    return project_years(
+        years,
+        year_inputs,
+        battery_config=battery_config,
+        freq=cfg["resolution"],
+        has_battery=has_battery,
+        execution_backend=execution_backend,
+        degradation_engine=str(cfg.get("degradation_engine", "native")).strip().lower(),
+        blast_model=cfg.get("blast_model"),
+        observe_jit_per_year=observe_jit_per_year,
     )
 
 
