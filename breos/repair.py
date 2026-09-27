@@ -611,7 +611,7 @@ def _runs(mask: np.ndarray) -> list[tuple[int, int]]:
     edges = np.diff(padded)
     starts = np.flatnonzero(edges == 1)
     ends = np.flatnonzero(edges == -1) - 1
-    return [(int(a), int(b)) for a, b in zip(starts, ends)]
+    return [(int(a), int(b)) for a, b in zip(starts, ends, strict=True)]
 
 
 def _event(
