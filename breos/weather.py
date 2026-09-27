@@ -263,6 +263,20 @@ def parse_weather_filename(filename: str) -> Optional[Dict[str, str]]:
     return None
 
 
+class AmbiguousWeatherError(ValueError):
+    """Several local weather files match a :func:`load_weather` request.
+
+    ``filenames`` lists the eligible files and ``sources`` their distinct
+    filename sources, both sorted, so a caller can tell its own users how to
+    narrow the selection.
+    """
+
+    def __init__(self, message: str, filenames: list[str], sources: list[str]) -> None:
+        super().__init__(message)
+        self.filenames = filenames
+        self.sources = sources
+
+
 def load_weather(
     location: str,
     data_type: Optional[str] = None,
@@ -292,9 +306,10 @@ def load_weather(
         covers the requested range.
 
     Raises:
-        ValueError: If multiple files match the filters and date range. Set
-            ``data_type`` or ``source`` to narrow the selection, or leave one
-            matching file in ``weather_dir``.
+        AmbiguousWeatherError: If multiple files match the filters and date
+            range. Set ``data_type`` or ``source`` to narrow the selection, or
+            leave one matching file in ``weather_dir``. It subclasses
+            ``ValueError``.
     """
     if not os.path.isdir(weather_dir):
         return None
@@ -330,10 +345,14 @@ def load_weather(
     if not candidates:
         return None
     if len(candidates) > 1:
-        filenames = ", ".join(sorted(os.path.basename(candidate["filepath"]) for candidate in candidates))
-        raise ValueError(
-            f"Multiple weather files match location {location!r} and the requested filters: {filenames}. "
-            "Set data_type or source to narrow the selection, or leave one matching file in weather_dir."
+        filenames = sorted(os.path.basename(candidate["filepath"]) for candidate in candidates)
+        sources = sorted({candidate["source"] for candidate in candidates})
+        raise AmbiguousWeatherError(
+            f"Multiple weather files match location {location!r} and the requested filters: "
+            f"{', '.join(filenames)}. "
+            "Set data_type or source to narrow the selection, or leave one matching file in weather_dir.",
+            filenames=filenames,
+            sources=sources,
         )
 
     best = candidates[0]

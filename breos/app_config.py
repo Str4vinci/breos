@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import re
 from dataclasses import dataclass
 from datetime import date
 from numbers import Real
@@ -359,6 +360,15 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         default_order=50,
         cli_flags=("--start-date",),
         cli_help="First simulated day: 1 January of the study year, YYYY-01-01.",
+    ),
+    "weather_source": AppConfigField(
+        default=None,
+        default_order=55,
+        cli_flags=("--weather-source",),
+        cli_help=(
+            "Source part of the cached weather/<location>_tmy_*_<source>.csv file to use when several "
+            "TMY files exist for the location preset, for example 'pvgis-sarah3'."
+        ),
     ),
     # Config-file/API-only fields.
     "costs": AppConfigField(),
@@ -764,6 +774,7 @@ def _validate_time_and_weather(cfg: dict[str, Any]) -> None:
         raise ValueError("'pv_degradation_rate' must be between 0 (inclusive) and 1 (exclusive)")
     if cfg["resolution"] not in ("h", "15min"):
         raise ValueError("'resolution' must be 'h' or '15min'")
+    _validate_weather_source(cfg)
     cfg["horizon_profile"] = normalise_horizon_profile(cfg["horizon_profile"])
     _validate_sky_settings(cfg["transposition_model"], cfg["albedo"], cfg["surface_type"], cfg["model_perez"])
     if not is_known_model(cfg["solar_position"], SOLAR_POSITION_METHODS):
@@ -786,6 +797,29 @@ def _validate_time_and_weather(cfg: dict[str, Any]) -> None:
         for name, value in overrides.items():
             if not isinstance(value, (int, float)) or not 0 <= value <= 100:
                 raise ValueError(f"'pv_loss_overrides[{name!r}]' must be a percentage between 0 and 100")
+
+
+def _validate_weather_source(cfg: dict[str, Any]) -> None:
+    """Check ``weather_source`` can name a cached TMY file for a location preset.
+
+    The value is matched against the ``<source>`` part of
+    ``<location>_tmy_<years>_<source>.csv`` in the ``weather/`` cache, which
+    only location presets consult; coordinate-dict locations always fetch.
+    Whether a matching file exists is checked when the weather is loaded.
+    """
+    source = cfg["weather_source"]
+    if source is None:
+        return
+    if not isinstance(source, str) or re.fullmatch(r"[\w-]+", source) is None:
+        raise ValueError(
+            "'weather_source' must be the source part of a cached weather filename, such as "
+            f"'pvgis-sarah3' (letters, digits, '_' or '-'), got {source!r}"
+        )
+    if isinstance(cfg["location"], dict):
+        raise ValueError(
+            "'weather_source' selects a cached weather file by location preset key; "
+            "coordinate-dict locations have no cache key and always fetch PVGIS weather"
+        )
 
 
 def _validate_economics(cfg: dict[str, Any]) -> None:

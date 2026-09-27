@@ -9,6 +9,7 @@ import pandas as pd
 import pytest
 
 from breos.weather import (
+    AmbiguousWeatherError,
     build_battery_temperature_series,
     fetch_tmy_weather_data,
     fetch_weather_data,
@@ -384,8 +385,15 @@ def test_ambiguous_weather_files_are_rejected(tmp_path):
             index=pd.date_range("2020-01-01", periods=2, freq="h", tz="UTC"),
         ).to_csv(tmp_path / filename)
 
-    with pytest.raises(ValueError, match="Multiple weather files match"):
+    with pytest.raises(AmbiguousWeatherError, match="Multiple weather files match") as excinfo:
         load_weather("porto", data_type="historical", start_year=2021, end_year=2022, weather_dir=str(tmp_path))
+
+    assert isinstance(excinfo.value, ValueError)
+    assert excinfo.value.filenames == [
+        "porto_historical_2018_2024_openmeteo.csv",
+        "porto_historical_2020_2024_openmeteo.csv",
+    ]
+    assert excinfo.value.sources == ["openmeteo"]
 
 
 def test_resample_to_15min_keeps_all_slots_in_last_hour():
