@@ -26,6 +26,7 @@ from breos.app_config import (
     validate_montecarlo_config,
 )
 from breos.degradation import get_battery_model_profile, list_battery_models
+from breos.io import nonfinite_to_none
 from breos.load_profiles import PROFILE_ALIASES, PROFILE_FILES, PROFILE_FILES_15MIN, PROFILE_NAMES
 from breos.pv_modules import MODULES
 from breos.resources import load_config_json
@@ -104,20 +105,35 @@ def _build_config(args: argparse.Namespace) -> dict[str, Any]:
     return {**config, **overrides}
 
 
+def _json_text(data: Any, what: str, **kwargs: Any) -> str:
+    """Serialise user-facing output as strict JSON.
+
+    ``NaN`` and ``Infinity`` are not JSON, and many parsers reject them. A
+    payload whose metrics can be undefined goes through
+    :func:`breos.io.nonfinite_to_none` first; any non-finite value left after
+    that is a bug, so it fails here instead of writing an invalid file.
+    """
+    try:
+        return json.dumps(data, allow_nan=False, **kwargs)
+    except ValueError as exc:
+        raise ValueError(f"Cannot write {what} as JSON: it contains a non-finite number (NaN or Infinity)") from exc
+
+
 def _run(args: argparse.Namespace) -> int:
     config = _build_config(args)
     _ignore_unused_runner_sections(config, command="run")
     if args.dry_run:
-        return _write_payload(_resolved_config_summary(config), args)
+        return _write_payload(_resolved_config_summary(config), args, "the resolved config")
 
     app = App(config)
     app.simulate()
-    return _write_payload(app.result(), args)
+    # An undefined metric (an LCOE with no production) is reported as null.
+    return _write_payload(nonfinite_to_none(app.result()), args, "the run result")
 
 
-def _write_payload(data: dict[str, Any], args: argparse.Namespace) -> int:
+def _write_payload(data: dict[str, Any], args: argparse.Namespace, what: str) -> int:
     indent = args.indent if args.indent > 0 else None
-    payload = json.dumps(data, indent=indent)
+    payload = _json_text(data, what, indent=indent)
 
     if args.output:
         args.output.write_text(payload + "\n", encoding="utf-8")
@@ -324,7 +340,7 @@ def _format_options(category: str, rows: list[dict[str, Any]]) -> str:
 def _list_options_command(args: argparse.Namespace) -> int:
     rows = _load_options(args.category)
     if args.json:
-        print(json.dumps(rows, indent=2))
+        print(_json_text(rows, f"the {args.category} list", indent=2))
     else:
         print(_format_options(args.category, rows))
     return 0
@@ -336,7 +352,7 @@ def _validate_config(args: argparse.Namespace) -> int:
         _normalise_sweep_grid(config["sweep"])
     payload = _resolved_config_summary(config)
     if args.json:
-        print(json.dumps(payload, indent=2))
+        print(_json_text(payload, "the config summary", indent=2))
     else:
         print(f"Config OK: {args.config}")
         print(f"Location: {payload['location']['key'] or 'custom'} ({payload['location']['timezone']})")
@@ -507,7 +523,8 @@ def _sweep(args: argparse.Namespace) -> int:
     _write_sweep_csv(rows, args.output)
 
     if args.json:
-        print(json.dumps({"runs": len(rows), "results_csv": str(args.output), "rows": rows}, indent=2))
+        payload = {"runs": len(rows), "results_csv": str(args.output), "rows": nonfinite_to_none(rows)}
+        print(_json_text(payload, "the sweep summary", indent=2))
     else:
         print(f"Sweep: {len(rows)} runs written to {args.output}")
     return 0
@@ -580,13 +597,14 @@ def _montecarlo(args: argparse.Namespace) -> int:
         "runs_csv_sha256": _sha256(out_path),
         "yearly_csv": str(yearly_path) if yearly_path is not None else None,
         "yearly_csv_sha256": _sha256(yearly_path) if yearly_path is not None else None,
-        "summary": result.summary,
+        # A statistic with no defined value is written as null.
+        "summary": nonfinite_to_none(result.summary),
     }
     rlp_path = _external_rlp_path(config)
     provenance["external_rlp_file"] = str(rlp_path.resolve()) if rlp_path is not None else None
     provenance["external_rlp_file_sha256"] = _sha256(rlp_path) if rlp_path is not None else None
     provenance_path.parent.mkdir(parents=True, exist_ok=True)
-    provenance_path.write_text(json.dumps(provenance, indent=2, default=str) + "\n")
+    provenance_path.write_text(_json_text(provenance, "the Monte Carlo provenance", indent=2, default=str) + "\n")
     plots_dir = None
     if args.plots:
         from breos.plotting import plot_montecarlo_simulation
@@ -597,7 +615,7 @@ def _montecarlo(args: argparse.Namespace) -> int:
     if args.json:
         payload = {
             "settings": settings.__dict__,
-            "summary": result.summary,
+            "summary": nonfinite_to_none(result.summary),
             "available_years": result.available_years,
             "results_csv": str(out_path),
             "yearly_csv": str(yearly_path) if yearly_path is not None else None,
@@ -605,7 +623,7 @@ def _montecarlo(args: argparse.Namespace) -> int:
         }
         if plots_dir is not None:
             payload["plots_directory"] = str(plots_dir)
-        print(json.dumps(payload, indent=2))
+        print(_json_text(payload, "the Monte Carlo summary", indent=2))
         return 0
 
     print(

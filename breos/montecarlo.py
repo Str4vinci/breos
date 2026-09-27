@@ -774,6 +774,13 @@ def run_montecarlo(config: dict[str, Any], settings: MonteCarloSettings) -> Mont
     # The load scale multiplies demand, so a negative bound would make demand negative.
     if not (math.isfinite(settings.min_load_scale) and settings.min_load_scale >= 0.0):
         raise ValueError(f"min_load_scale must be a finite, non-negative number, got {settings.min_load_scale}")
+    # None is the way to leave demand unbounded above. An infinite bound would
+    # say the same thing, but it cannot be written to strict JSON provenance.
+    if settings.max_load_scale is not None and not math.isfinite(settings.max_load_scale):
+        raise ValueError(
+            "max_load_scale must be a finite number, or None to leave the load scale unbounded, "
+            f"got {settings.max_load_scale}"
+        )
     if settings.max_load_scale is not None and not settings.max_load_scale >= settings.min_load_scale:
         raise ValueError(
             f"max_load_scale must be at least min_load_scale ({settings.min_load_scale}), got {settings.max_load_scale}"

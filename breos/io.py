@@ -5,12 +5,14 @@ This module provides functions for:
 - Exporting simulation results to CSV/TXT
 - Saving cost analysis reports
 - Generating formatted summary reports
+- Preparing result payloads for strict JSON
 - Repairing measured load and PV series before a simulation
 
 ``repair_series``, ``InputRepairReport`` and ``RepairEvent`` are re-exported
 from :mod:`breos.repair`.
 """
 
+import math
 import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
@@ -20,6 +22,27 @@ import pandas as pd
 
 from breos.repair import InputRepairReport, RepairEvent, repair_series  # noqa: F401 - public re-export
 from breos.utils import local_datetime_index
+
+
+def nonfinite_to_none(value: Any) -> Any:
+    """Return ``value`` with every non-finite float replaced by ``None``.
+
+    Walks dicts, lists and tuples (tuples become lists, as JSON writes them).
+    Python and NumPy floats that are NaN or infinite become ``None``; finite
+    NumPy floats become Python floats. Everything else is returned unchanged.
+
+    Use it on result payloads where a metric can be legitimately undefined,
+    such as the LCOE of a system with no production, so the payload can be
+    written as strict JSON (``allow_nan=False``), where ``null`` is the only
+    way to say "no value".
+    """
+    if isinstance(value, dict):
+        return {key: nonfinite_to_none(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [nonfinite_to_none(item) for item in value]
+    if isinstance(value, (float, np.floating)):
+        return float(value) if math.isfinite(value) else None
+    return value
 
 
 def export_results(
