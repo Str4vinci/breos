@@ -6,6 +6,7 @@ import math
 import pytest
 
 import breos.montecarlo as montecarlo_module
+import breos.projection as projection_module
 import breos.runners.app as app_runner
 from breos.app_config import resolve_app_config
 from breos.inverter import inverter_ac_capacity_w
@@ -64,11 +65,11 @@ def test_pv_only_config_keeps_the_inverter():
     assert battery.inverter_ac_capacity_w == resolved.inverter_ac_capacity_w
 
 
-def test_app_and_montecarlo_import_the_same_builders():
-    # Both loops call the shared functions rather than a copy of them.
+def test_app_and_montecarlo_run_the_shared_projection():
+    # Both year loops are the one in breos.projection, not copies of it.
     for module in (app_runner, montecarlo_module):
-        assert module.build_battery_config is build_battery_config
-        assert module.build_pv_only_battery_config is build_pv_only_battery_config
+        assert module.run_projection is projection_module.run_projection
+        assert module.value_projection is projection_module.value_projection
 
 
 def test_battery_config_without_rte_keeps_the_dataclass_efficiencies():

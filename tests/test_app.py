@@ -9,6 +9,7 @@ import pytest
 
 import breos
 import breos.app as app_module
+import breos.projection as projection_module
 from breos.app import App
 from breos.app_config import merge_defaults, validate_config
 from breos.load_profiles import load_profile as real_load_profile
@@ -1241,7 +1242,7 @@ class TestAppSimulateWithBattery:
 def test_multiyear_battery_inventory_and_pv_origin_cross_year_boundary(_patch_weather, monkeypatch):
     import breos.runners.app as runner_module
 
-    original = runner_module.simulate_energy_balance
+    original = projection_module.simulate_energy_balance
     calls = []
 
     def _capture(*args, **kwargs):
@@ -1259,7 +1260,7 @@ def test_multiyear_battery_inventory_and_pv_origin_cross_year_boundary(_patch_we
         )
         return output
 
-    monkeypatch.setattr(runner_module, "simulate_energy_balance", _capture)
+    monkeypatch.setattr(projection_module, "simulate_energy_balance", _capture)
     app = App(
         {
             "location": "porto",

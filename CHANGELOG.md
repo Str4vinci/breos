@@ -130,6 +130,19 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   optimizer paths. Results are unchanged. The optimizer's two paths no longer
   raise `TypeError` when `dc_ac_ratio` is `None`; they run without AC
   clipping, as App does.
+- App and Monte Carlo run one multi-year projection loop,
+  `breos.projection.run_projection`
+  ([#179](https://github.com/Str4vinci/breos/issues/179)). The battery state
+  a year hands the next is one `CarryState` (stored energy, PV-origin energy,
+  throughput, calendar time, degradation, SOH, resistance, and the engine's
+  native degradation payload), and every year row has one schema, built by
+  `build_year_row` from column sums that are the same floats whether the year
+  ran with per-step frames (App) or as a summary (Monte Carlo). Both price the
+  rows through `value_projection`. App's `SimulationArtifacts.yearly_df`
+  gains the columns Monte Carlo rows already had (cumulative battery state,
+  loss diagnostics, carried energy, replacement steps); `App.result()` is
+  unchanged, and so are all numbers: the App golden baseline matches bit for
+  bit.
 
 ### Fixed
 - App weather that does not cover the whole calendar year of `start_date`
