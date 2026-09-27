@@ -25,6 +25,7 @@ from breos.economics import (
 )
 from breos.emissions import EmissionsParams
 from breos.execution import DEFAULT_EXECUTION_BACKEND, require_backend, validate_execution_backend
+from breos.inverter import inverter_ac_capacity_w as inverter_ac_capacity_w_for
 from breos.pv.model_options import configured_pv_model_kwargs
 from breos.solar import (
     PVModuleParams,
@@ -1049,7 +1050,7 @@ def evaluate_projected_design(
         align_weather_year=weather_by_year is not None,
     )
     dc_ac_ratio = cost_params_from_config(config.get("costs"), financials).dc_ac_ratio
-    inverter_ac_capacity_w = int(n_modules) * pv_params.Mpp / dc_ac_ratio if dc_ac_ratio > 0.0 else None
+    inverter_ac_capacity_w = inverter_ac_capacity_w_for(int(n_modules) * pv_params.Mpp, dc_ac_ratio)
     raw_metrics = _evaluate_projected_design_metrics(
         execution_backend=execution_backend,
         base_dc_power=base_dc_power,
@@ -1443,7 +1444,7 @@ try:
 
             # Inverter AC nameplate shared by PV export and battery discharge
             pv_peak_w = n_modules * pv_params.Mpp
-            inverter_ac_capacity_w = pv_peak_w / self.dc_ac_ratio if self.dc_ac_ratio > 0 else None
+            inverter_ac_capacity_w = inverter_ac_capacity_w_for(pv_peak_w, self.dc_ac_ratio)
 
             # Configure Battery
             battery_config = _build_battery_config_from_spec(

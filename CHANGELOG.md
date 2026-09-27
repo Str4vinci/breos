@@ -119,6 +119,17 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 - The App golden baseline gains the `provenance.load_profile` block and the
   three new `resolved_config` keys, and `resolved_config.load_profile` reads
   `demandlib_h0` instead of `"1"`. No numbers change.
+- App and Monte Carlo build the battery a projection year runs through one
+  function, `breos.projection.build_battery_config`, and the PV-only
+  configuration through `build_pv_only_battery_config`, instead of two copies
+  each ([#179](https://github.com/Str4vinci/breos/issues/179)). The inverter
+  AC nameplate is sized by one rule, `breos.inverter.inverter_ac_capacity_w`
+  (DC peak over the loading ratio; none when the ratio is not positive),
+  resolved once as `ResolvedAppConfig.inverter_ac_capacity_w` and read by App,
+  Monte Carlo, the PV loss waterfall, `breos validate-config` and both
+  optimizer paths. Results are unchanged. The optimizer's two paths no longer
+  raise `TypeError` when `dc_ac_ratio` is `None`; they run without AC
+  clipping, as App does.
 
 ### Fixed
 - App weather that does not cover the whole calendar year of `start_date`

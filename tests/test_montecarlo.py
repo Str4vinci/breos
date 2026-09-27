@@ -12,11 +12,11 @@ from breos.montecarlo import (
     _precompute_year_caches,
     _prepare_pv_chains,
     _pv_chain_cache_is_worthwhile,
-    _pv_only_battery_config,
     _sample_load_scale,
     _summarize,
     run_montecarlo,
 )
+from breos.projection import build_pv_only_battery_config
 
 
 def _base_config():
@@ -323,17 +323,18 @@ def test_run_montecarlo_threads_sell_price_inflation(tmp_path, monkeypatch, writ
 
 
 def test_run_montecarlo_threads_battery_power_limits(tmp_path, monkeypatch, write_multiyear_weather):
-    import breos.montecarlo as mc_module
+    # Monte Carlo builds its battery through the shared projection builder.
+    import breos.projection as projection_module
 
     weather = write_multiyear_weather(tmp_path / "multi.csv", years=(2021,))
     seen = []
-    original = mc_module.BatteryConfig
+    original = projection_module.BatteryConfig
 
     def _capture(*args, **kwargs):
         seen.append((kwargs.get("max_charge_power_w"), kwargs.get("max_discharge_power_w")))
         return original(*args, **kwargs)
 
-    monkeypatch.setattr(mc_module, "BatteryConfig", _capture)
+    monkeypatch.setattr(projection_module, "BatteryConfig", _capture)
     settings = MonteCarloSettings(weather_file=str(weather), n_runs=1, years_per_run=1, seed=0)
     run_montecarlo(
         {**_base_config(), "battery_max_charge_power_w": 321.0, "battery_max_discharge_power_w": 456.0},
@@ -429,7 +430,7 @@ def test_pv_only_montecarlo_is_unchanged_by_the_chain_cache(tmp_path, monkeypatc
     # A finite AC cap, so the memoized chain covers the clipping branch
     # rather than a pass-through, and the comparison below has teeth.
     resolved = resolve_app_config(_pv_only_config())
-    assert _pv_only_battery_config(resolved.cfg, resolved).inverter_ac_capacity_w is not None
+    assert build_pv_only_battery_config(resolved.cfg, resolved).inverter_ac_capacity_w is not None
 
     monkeypatch.setattr(montecarlo_module, "_PV_CHAIN_CACHE_MIN_REUSE", 1 << 30)
     uncached = run_montecarlo(_pv_only_config(), settings)
