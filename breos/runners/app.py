@@ -2,33 +2,24 @@
 
 from __future__ import annotations
 
-import math
 from dataclasses import dataclass
 from typing import Any, cast
 
 import numpy as np
 import pandas as pd
 
-from breos.app_config import DEFAULTS, ResolvedAppConfig, build_costs_dict, default_module_key
+from breos.app_config import DEFAULTS, ResolvedAppConfig, default_module_key
 from breos.app_inputs import AppRuntimeDependencies, prepare_simulation_inputs
-from breos.battery import BatteryConfig, simulate_energy_balance
 from breos.degradation.results import DegradationEngineName, build_degradation_summary_from_state
-from breos.economics import (
-    calculate_lcoe_from_projection,
-    cost_analysis_projection,
-    find_payback_year,
-    replacement_fraction_from_steps,
-)
+from breos.economics import find_payback_year
 from breos.execution import (
     DEFAULT_EXECUTION_BACKEND,
     aggregate_jit_cache_states,
     backend_provenance,
     is_pv_only_dispatch,
-    observed_jit_cache_state,
-    reset_jit_cache_observation,
 )
 from breos.load_profiles import LOAD_PROFILE_METADATA_KEY
-from breos.projection import build_battery_config, build_pv_only_battery_config
+from breos.projection import ProjectionYear, run_projection, value_projection
 from breos.pv_modules import get_module
 from breos.solar import PVProductionBreakdown
 from breos.utils import get_hours_per_step
@@ -316,174 +307,46 @@ def run_app_simulation(
         cfg.get("battery_min_soc", DEFAULTS["battery_min_soc"]),
     )
     execution = backend_provenance(execution_backend, pv_only=not has_battery)
-    jit_cache_states: list[str] = []
 
     inputs = prepare_simulation_inputs(cfg, resolved, deps)
 
-    freq = cfg["resolution"]
     projection_years = cfg["projection_years"]
     degradation_rate = cfg["pv_degradation_rate"]
-    hours_per_step = get_hours_per_step(freq)
 
-    cumulative_fec = 0.0
-    cumulative_cal_seconds = 0.0
-    cumulative_resistance_growth = 0.0
-    cumulative_cycle_deg = 0.0
-    cumulative_cal_deg = 0.0
-    current_soh = 100.0
+    def year_inputs(year_idx: int) -> ProjectionYear:
+        pv_degradation_factor = (1 - degradation_rate) ** year_idx
+        return ProjectionYear(
+            pv_degradation_factor=pv_degradation_factor,
+            pv_dc=inputs.dc_system_base * pv_degradation_factor,
+            houseload=inputs.load_data,
+            temperature_series=inputs.temperature_series,
+        )
+
+    projection = run_projection(
+        cfg,
+        resolved,
+        projection_years,
+        year_inputs,
+        has_battery=has_battery,
+        execution_backend=execution_backend,
+        observe_jit_per_year=True,
+    )
+    yearly_df = projection.yearly_df
+    first_year_results_df = cast(pd.DataFrame, projection.first_year_results_df)
+    current_soh = projection.carry.soh_pct
+    degradation_state = projection.carry.degradation_state
+    total_replacements = projection.total_replacements
+    total_replacement_cost = projection.total_replacement_cost
+    jit_cache_states = projection.jit_cache_states
     degradation_engine = str(cfg.get("degradation_engine", "native")).strip().lower()
     blast_model = cfg.get("blast_model")
-    degradation_state: dict[str, Any] | None = None
-    total_replacements = 0
-    total_replacement_cost = 0.0
-    yearly_summaries: list[dict[str, Any]] = []
-    first_year_results_df: pd.DataFrame | None = None
-    carried_energy_wh: float | None = None
-    carried_pv_origin_energy_wh: float | None = None
 
-    for year_idx in range(projection_years):
-        pv_degradation_factor = (1 - degradation_rate) ** year_idx
-        dc_power = inputs.dc_system_base * pv_degradation_factor
-
-        if has_battery:
-            batt_cfg = build_battery_config(cfg, resolved, initial_soh=current_soh)
-        else:
-            batt_cfg = build_pv_only_battery_config(cfg, resolved)
-
-        state_kwargs: dict[str, Any] = {}
-        if carried_energy_wh is not None:
-            state_kwargs = {
-                "initial_energy_wh": carried_energy_wh,
-                "initial_pv_origin_energy_wh": carried_pv_origin_energy_wh or 0.0,
-            }
-
-        # App's observation boundary is one projection year, not one Monte
-        # Carlo trajectory. A multi-year App run enters the kernel once per
-        # year, so the compile is paid in year one and every later year should
-        # observe a warm cache; aggregating over the years is what makes the
-        # run-level claim honest rather than reporting only the first.
-        reset_jit_cache_observation(execution_backend)
-
-        sim_result = simulate_energy_balance(
-            pv_dc=dc_power,
-            houseload=inputs.load_data,
-            battery_config=batt_cfg,
-            freq=freq,
-            temperature_series=inputs.temperature_series if has_battery else None,
-            initial_fec=cumulative_fec,
-            initial_calendar_seconds=cumulative_cal_seconds,
-            initial_resistance_growth=cumulative_resistance_growth,
-            initial_cumulative_cycle_deg=cumulative_cycle_deg,
-            initial_cumulative_cal_deg=cumulative_cal_deg,
-            **state_kwargs,
-            degradation_engine=degradation_engine,
-            blast_model=blast_model,
-            initial_degradation_state=degradation_state,
-            return_degradation_state=True,
-            finalize_degradation=year_idx == projection_years - 1,
-            execution_backend=execution_backend,
-        )
-        year_cache_state = observed_jit_cache_state(execution_backend)
-        if year_cache_state is not None:
-            jit_cache_states.append(year_cache_state)
-        (
-            results_df,
-            total_pv,
-            _summary_df,
-            year_rep_cost,
-            year_n_rep,
-            degradation_df,
-            degradation_state,
-        ) = cast(
-            "tuple[pd.DataFrame, float, pd.DataFrame, float, int, pd.DataFrame, dict[str, Any]]",
-            sim_result,  # return_degradation_state=True selects the 7-tuple
-        )
-
-        if has_battery:
-            carried_energy_wh = float(results_df["Battery_Energy_End"].iloc[-1])
-            carried_pv_origin_energy_wh = float(results_df["Battery_PV_Origin_Energy_End"].iloc[-1])
-
-        if first_year_results_df is None:
-            first_year_results_df = results_df
-
-        if has_battery and not degradation_df.empty:
-            cumulative_fec = degradation_df["Cumulative_FEC"].iloc[-1]
-            cumulative_cal_seconds = degradation_df["Cumulative_Calendar_Seconds"].iloc[-1]
-            cumulative_cycle_deg = degradation_df["Cumulative_Cycle_Degradation"].iloc[-1]
-            cumulative_cal_deg = degradation_df["Cumulative_Calendar_Degradation"].iloc[-1]
-            current_soh = degradation_df["SOH"].iloc[-1]
-            if "Resistance_Growth" in degradation_df.columns:
-                cumulative_resistance_growth = degradation_df["Resistance_Growth"].iloc[-1]
-
-        total_replacements += year_n_rep
-        total_replacement_cost += year_rep_cost
-
-        pv_dc_kwh = _series_energy_kwh(results_df["PV_DC"], freq)
-        legacy_pv_kwh = _series_energy_kwh(results_df["PV_Production"], freq)
-        direct_pv_ac_kwh = _series_energy_kwh(results_df["PV_AC_To_Load"], freq)
-        pv_origin_battery_ac_kwh = _series_energy_kwh(results_df["Battery_AC_To_Load_PV"], freq)
-        total_load = (results_df["Houseload"].sum() / 1000) * hours_per_step
-        total_import = (results_df["Import_From_Grid"].sum() / 1000) * hours_per_step
-        total_export = (results_df["Sell_To_Grid"].sum() / 1000) * hours_per_step
-        total_pv_kwh = direct_pv_ac_kwh + pv_origin_battery_ac_kwh + total_export
-        grid_indep = (1 - total_import / total_load) * 100 if total_load > 0 else 0
-
-        yearly_summaries.append(
-            {
-                "Year": year_idx + 1,
-                "PV_Production_kWh": total_pv_kwh,
-                "Legacy_PV_Production_kWh": legacy_pv_kwh,
-                "PV_DC_Generation_kWh": pv_dc_kwh,
-                "Direct_PV_AC_Load_kWh": direct_pv_ac_kwh,
-                "PV_Origin_Battery_AC_Load_kWh": pv_origin_battery_ac_kwh,
-                "Self_Consumption_kWh": direct_pv_ac_kwh + pv_origin_battery_ac_kwh,
-                "Curtailment_DC_kWh": _series_energy_kwh(results_df["PV_DC_Curtailed"], freq),
-                "Load_kWh": total_load,
-                "Import_kWh": total_import,
-                "Export_kWh": total_export,
-                "Grid_Independence_%": grid_indep,
-                "Battery_SOH_%": current_soh if has_battery else None,
-                "Replacements": year_n_rep,
-                "Replacement_Cost": year_rep_cost,
-                # Where in the year the pack was swapped, so the economics can
-                # book the outlay at that instant rather than at a year
-                # boundary. NaN in a year without a replacement.
-                "Replacement_Year_Fraction": replacement_fraction_from_steps(
-                    np.flatnonzero(results_df["Battery_Replaced"].to_numpy())
-                    if "Battery_Replaced" in results_df.columns
-                    else [],
-                    len(results_df),
-                ),
-                "PV_Degradation_Factor": pv_degradation_factor,
-            }
-        )
-
-    yearly_df = pd.DataFrame(yearly_summaries)
-    if first_year_results_df is None:
-        raise RuntimeError("projection_years must be at least 1")
-
-    costs = build_costs_dict(cfg, resolved)
-    cost_projection = cost_analysis_projection(
-        results_df=first_year_results_df,
-        costs=costs,
-        num_years=projection_years,
-        inflation_rate=cfg["inflation_rate"],
-        sell_price_inflation=cfg["sell_price_inflation"],
-        discount_rate=cfg["discount_rate"],
-        freq=freq,
-        yearly_summary_df=yearly_df,
-        total_replacement_cost=total_replacement_cost,
-        emissions_params=resolved.emissions_params,
-    )
-
-    lcoe = calculate_lcoe_from_projection(
-        cost_projection,
-        total_investment=costs["total_initial_cost"],
-        discount_rate=cfg["discount_rate"],
-    )
+    costs, cost_projection, lcoe = value_projection(cfg, resolved, projection)
 
     replacement_events = [
-        {"year": int(row["Year"]), "count": int(row["Replacements"])} for row in yearly_summaries if row["Replacements"]
+        {"year": int(year), "count": int(count)}
+        for year, count in zip(yearly_df["Year"], yearly_df["Replacements"], strict=True)
+        if count
     ]
     degradation_summary = build_degradation_summary_from_state(
         engine=cast(DegradationEngineName, degradation_engine),

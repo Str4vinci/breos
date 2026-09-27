@@ -14,6 +14,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+import breos.projection as projection_module
 from breos.app_inputs import PreparedSimulationInputs
 from breos.battery import BatteryConfig, simulate_energy_balance
 from breos.runners import app as app_runner
@@ -160,18 +161,18 @@ def test_blast_multiple_replacements_through_runner(monkeypatch):
         "total_initial_cost": 12000.0,
     }
     monkeypatch.setattr(app_runner, "prepare_simulation_inputs", lambda cfg, resolved, deps: inputs)
-    monkeypatch.setattr(app_runner, "build_costs_dict", lambda cfg, resolved: costs)
+    monkeypatch.setattr(projection_module, "build_costs_dict", lambda cfg, resolved: costs)
 
     # Wrap (do not mock) the real degradation call to retain each year's frames.
     captured_years: list[tuple] = []
-    real_simulate = app_runner.simulate_energy_balance
+    real_simulate = projection_module.simulate_energy_balance
 
     def _capturing_simulate(*args, **kwargs):
         result = real_simulate(*args, **kwargs)
         captured_years.append(result)
         return result
 
-    monkeypatch.setattr(app_runner, "simulate_energy_balance", _capturing_simulate)
+    monkeypatch.setattr(projection_module, "simulate_energy_balance", _capturing_simulate)
 
     inflation_rate = 0.03
     max_soc = 0.9
