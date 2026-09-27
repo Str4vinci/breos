@@ -702,6 +702,13 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 - Stopped tracking the generated autosummary stubs under `docs/api/generated/`,
   which Sphinx rebuilds on every run.
 
+### Documentation
+- The release checklist records that `v0.5.0`, `v0.5.1` and `v0.6.0` are
+  lightweight tags, while every other release tag is annotated, and says to
+  leave them in place rather than re-push them
+  ([#185](https://github.com/Str4vinci/breos/issues/185)). The release flow
+  now creates annotated tags.
+
 ## [0.6.2] - 2026-09-24
 
 ### Added
