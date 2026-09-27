@@ -500,7 +500,9 @@ def test_projected_optimizer_candidate_matches_app(open_meteo_weather, monkeypat
     from breos.optimization import optimize_system_multi_objective
     from breos.weather import build_battery_temperature_series
 
-    idx = pd.date_range("2023-01-01", periods=24, freq="h", tz="UTC")
+    # A full year, because App rejects weather that does not cover the whole
+    # calendar year of start_date.
+    idx = pd.date_range("2023-01-01", periods=8760, freq="h", tz="UTC")
     weather = open_meteo_weather(idx)
     houseload = pd.DataFrame({"Load": [500.0] * len(idx)}, index=idx)
     financials = dict(FINANCIALS_CONFIG, project_lifespan=1)
@@ -540,7 +542,7 @@ def test_projected_optimizer_candidate_matches_app(open_meteo_weather, monkeypat
     candidate = battery_candidates.iloc[0]
 
     # The App facade normally gets these inputs from its weather and load
-    # providers. Injecting the same short frames keeps this end-to-end check
+    # providers. Injecting the same frames keeps this end-to-end check
     # offline and makes both workflows simulate exactly the same interval.
     dependencies = AppRuntimeDependencies(
         load_profile=lambda **kwargs: houseload.copy(),

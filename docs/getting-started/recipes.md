@@ -322,3 +322,8 @@ Subsequent runs from the same working directory work without network access
 coordinate-dict locations always fetch; delete or rename the file to force a
 fresh fetch. The filename's year and source parts only need to match the
 pattern — they are metadata, not lookup keys.
+
+The file is restamped onto the year of `start_date` and must then cover that
+whole calendar year. A file missing its first or last rows raises `ValueError`
+that names the file and the missing span, rather than simulating a shorter
+year.

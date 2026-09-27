@@ -31,8 +31,8 @@ def test_remap_tmy_year_preserves_weather_metadata():
 
 def test_load_weather_for_simulation_marks_injected_weather_horizon_unknown(tmp_path):
     weather = pd.DataFrame(
-        {"ghi": [0.0, 1.0]},
-        index=pd.date_range("2020-01-01", periods=2, freq="h", tz="UTC"),
+        {"ghi": 0.0},
+        index=pd.date_range("2021-01-01", periods=8760, freq="h", tz="UTC"),
     )
     deps = AppRuntimeDependencies(
         load_profile=lambda **kwargs: None,
