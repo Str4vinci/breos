@@ -396,6 +396,7 @@ def _simulate_trajectory(
     yearly_summaries: list[dict[str, Any]] = []
     carried_energy_wh: float | None = None
     carried_pv_origin_energy_wh: float | None = None
+    degradation_state: dict[str, Any] | None = None
 
     for year_idx in range(years_per_run):
         pv_degradation_factor = (1 - degradation_rate) ** year_idx
@@ -463,8 +464,14 @@ def _simulate_trajectory(
             initial_cumulative_cycle_deg=cumulative_cycle_deg,
             initial_cumulative_cal_deg=cumulative_cal_deg,
             execution_backend=settings.execution_backend,
+            initial_degradation_state=degradation_state,
+            return_degradation_state=True,
+            # Match App: native rainflow residue continues across project
+            # years and is counted once, at the end of the trajectory.
+            finalize_degradation=year_idx == years_per_run - 1,
             **state_kwargs,
         )
+        degradation_state = summary.final_degradation_state
         year_rep_cost = summary.total_replacement_cost
         year_n_rep = summary.n_replacements
         totals = summary.column_sums
