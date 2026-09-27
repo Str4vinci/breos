@@ -10,6 +10,7 @@ from breos.optimization import (
     _summarize_projected_lifetime_metrics,
     evaluate_projected_design,
 )
+from breos.projection import _ROW_SUM_COLUMNS
 from breos.pv_modules import get_module
 
 
@@ -44,6 +45,8 @@ def test_projected_evaluator_carries_physical_and_degradation_state(monkeypatch)
         year = len(calls)
         results = pd.DataFrame(
             {
+                # Every column the year row reads, zero unless set below.
+                **{column: [0.0, 0.0] for column in _ROW_SUM_COLUMNS},
                 "PV_AC_To_Load": [300.0, 300.0],
                 "Battery_AC_To_Load_PV": [50.0, 50.0],
                 "PV_AC_Export": [50.0, 50.0],
@@ -85,7 +88,7 @@ def test_projected_evaluator_carries_physical_and_degradation_state(monkeypatch)
         projection.attrs["payback_year"] = 2
         return projection
 
-    monkeypatch.setattr("breos.optimization.simulate_energy_balance", fake_balance)
+    monkeypatch.setattr("breos.projection.simulate_energy_balance", fake_balance)
     monkeypatch.setattr("breos.optimization.cost_analysis_projection", fake_projection)
     monkeypatch.setattr("breos.optimization.calculate_lcoe_from_projection", lambda *_args, **_kwargs: 0.123)
 
