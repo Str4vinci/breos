@@ -54,7 +54,7 @@ DEFAULT_MODULE_EFFICIENCY = 0.20
 
 def _valid_efficiency(module_efficiency) -> bool:
     """Return whether a supplied module efficiency is a usable fraction."""
-    return (
+    return bool(
         not isinstance(module_efficiency, (bool, np.bool_))
         and isinstance(module_efficiency, (int, float, np.number))
         and np.isfinite(module_efficiency)
@@ -64,7 +64,7 @@ def _valid_efficiency(module_efficiency) -> bool:
 
 def _valid_noct(noct) -> bool:
     """Return whether a supplied datasheet NOCT is a plausible finite °C value."""
-    return (
+    return bool(
         not isinstance(noct, (bool, np.bool_))
         and isinstance(noct, (int, float, np.number))
         and np.isfinite(noct)

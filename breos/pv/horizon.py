@@ -119,7 +119,7 @@ def apply_terrain_horizon_profile(
     metadata = deepcopy(weather.attrs.get("breos_weather_metadata"))
     horizon = metadata.get("horizon") if isinstance(metadata, dict) else None
     status = horizon.get("status") if isinstance(horizon, dict) else "unknown"
-    if status == "applied":
+    if isinstance(horizon, dict) and status == "applied":
         provider = horizon.get("provider") or "an upstream provider"
         raise ValueError(
             "Cannot apply 'horizon_profile': weather already has terrain-horizon shading "

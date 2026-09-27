@@ -141,7 +141,7 @@ def _datetime_index_ticks(time_index: "pd.DatetimeIndex") -> "tuple[np.ndarray, 
         ticks_per_second = _TICKS_PER_SECOND[time_index.unit]
     except KeyError as exc:
         raise ValueError(f"Unsupported DatetimeIndex resolution: {time_index.unit}") from exc
-    return time_index.asi8, ticks_per_second
+    return time_index.asi8, ticks_per_second  # type: ignore[attr-defined]  # pandas-stubs omits asi8
 
 
 def _datetime_index_seconds(time_index: "pd.DatetimeIndex") -> np.ndarray:

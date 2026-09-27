@@ -6,7 +6,7 @@ import json
 import math
 from copy import deepcopy
 from importlib.metadata import PackageNotFoundError, version
-from typing import Any
+from typing import Any, cast
 
 import pandas as pd
 
@@ -52,7 +52,7 @@ def monthly_to_dicts(results_df: pd.DataFrame, freq: str) -> list[dict[str, Any]
         self_consumption = direct + battery
         rows.append(
             {
-                "month": idx.strftime("%b"),
+                "month": cast(pd.Timestamp, idx).strftime("%b"),
                 "pv_kwh": round(legacy_pv, 2),
                 "pv_dc_generation_kwh": round(pv_dc, 2),
                 "direct_pv_ac_load_kwh": round(direct, 2),

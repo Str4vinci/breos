@@ -61,14 +61,14 @@ def _marion_diffuse(surface_tilt, iam_model: str):
 
     if key not in _marion_diffuse_grid_cache:
         grid = np.arange(lo, hi + step / 2.0, step)
-        values = {"sky": [], "ground": []}
+        samples: dict[str, list[float]] = {"sky": [], "ground": []}
         for tilt in grid:
             exact = pvlib.iam.marion_diffuse(iam_model, float(tilt))
-            values["sky"].append(float(exact["sky"]))
-            values["ground"].append(float(exact["ground"]))
+            samples["sky"].append(float(exact["sky"]))
+            samples["ground"].append(float(exact["ground"]))
         _marion_diffuse_grid_cache[key] = (
             grid,
-            {region: np.asarray(region_values) for region, region_values in values.items()},
+            {region: np.asarray(region_values) for region, region_values in samples.items()},
         )
 
     grid, values = _marion_diffuse_grid_cache[key]

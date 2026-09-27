@@ -50,6 +50,9 @@ jobs:
       - name: Check formatting
         run: uv run ruff format --check breos/ tests/ tools/
 
+      - name: Type check
+        run: uv run mypy breos
+
       - name: Run tests
         # Slow tests are deselected by default (pyproject addopts: -m "not slow").
         run: uv run pytest tests/ -v

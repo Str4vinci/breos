@@ -799,8 +799,11 @@ def _evaluate_projected_design_metrics(
             initial_cumulative_cal_deg=cumulative_cal_deg,
             degradation_engine=degradation_engine,
             blast_model=blast_model,
-            initial_degradation_state=degradation_state if degradation_engine == "blast" else None,
+            initial_degradation_state=degradation_state,
             return_degradation_state=True,
+            # Leave native rainflow residue open between project years, as
+            # the App loop does, and count it once at the end of the horizon.
+            finalize_degradation=year_idx == years_projection - 1,
             debug=False,
             execution_backend=execution_backend,
             **state_kwargs,

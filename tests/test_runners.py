@@ -85,9 +85,22 @@ def test_app_runner_native_default_matches_explicit_native(monkeypatch):
         emissions_params=None,
     )
 
+    real_simulate_energy_balance = app_runner.simulate_energy_balance
+    native_states = []
+
+    def _record_native_state(**kwargs):
+        if kwargs["degradation_engine"] == "native":
+            native_states.append(kwargs.get("initial_degradation_state"))
+        return real_simulate_energy_balance(**kwargs)
+
+    monkeypatch.setattr(app_runner, "simulate_energy_balance", _record_native_state)
     default_artifacts = run_app_runner(cfg, resolved, deps=SimpleNamespace())
+    native_states.clear()
     native_artifacts = run_app_runner({**cfg, "degradation_engine": "native"}, resolved, deps=SimpleNamespace())
 
+    assert native_states[0] is None
+    assert native_states[1]["degradation_engine"] == "native"
+    assert native_states[1]["native_rainflow_state"]["current"] is not None
     pd.testing.assert_frame_equal(default_artifacts.yearly_df, native_artifacts.yearly_df, check_exact=True)
     pd.testing.assert_frame_equal(
         default_artifacts.first_year_results_df,

@@ -9,7 +9,7 @@ This module handles:
 """
 
 from dataclasses import dataclass
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple, cast
 
 import numpy as np
 import pandas as pd
@@ -487,8 +487,8 @@ def cost_analysis_projection(
             from breos.emissions import calculate_co2_projection
 
             co2_proj = calculate_co2_projection(
-                proj["PV_Production_kWh"].values,
-                proj["Export_kWh"].values,
+                proj["PV_Production_kWh"].to_numpy(),
+                proj["Export_kWh"].to_numpy(),
                 emissions_params,
             )
             proj["CO2_Avoided_Total_kg"] = co2_proj["CO2_Avoided_Total_kg"].values
@@ -529,8 +529,9 @@ def cost_analysis_projection(
     if "Datetime" in df.columns:
         df.index = local_datetime_index(df.pop("Datetime"))
 
-    df["Year"] = df.index.year
-    df["Date"] = df.index.normalize()
+    time_index = cast(pd.DatetimeIndex, df.index)
+    df["Year"] = time_index.year
+    df["Date"] = time_index.normalize()
 
     # Calculate hours per step for energy conversion
     hours_per_step = get_hours_per_step(freq)
@@ -681,8 +682,8 @@ def cost_analysis_projection(
         from breos.emissions import calculate_co2_projection
 
         co2_proj = calculate_co2_projection(
-            proj["PV_Production_kWh"].values,
-            proj["Export_kWh"].values,
+            proj["PV_Production_kWh"].to_numpy(),
+            proj["Export_kWh"].to_numpy(),
             emissions_params,
         )
         proj["CO2_Avoided_Total_kg"] = co2_proj["CO2_Avoided_Total_kg"].values
