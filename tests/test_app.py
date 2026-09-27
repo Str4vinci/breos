@@ -27,7 +27,7 @@ def test_app_rejects_invalid_profile_losses_temperature_and_montecarlo_keys():
         App({**base, "montecarlo": {"nruns": 10, "weather_file": "weather.csv"}})
 
 
-def test_app_resolves_profile_alias_and_native_date_during_construction():
+def test_app_resolves_profile_key_case_and_native_date_during_construction():
     app = App(
         {
             "location": "porto",
@@ -38,7 +38,7 @@ def test_app_resolves_profile_alias_and_native_date_during_construction():
         }
     )
 
-    assert app._cfg["load_profile"] == "1"
+    assert app._cfg["load_profile"] == "bdew_h0"
     assert app._cfg["start_date"] == "2023-01-01"
 
 
@@ -433,7 +433,7 @@ class TestAppValidation:
         def _fake_load_profile(**kwargs):
             seen["rlp_directory"] = kwargs["rlp_directory"]
             return real_load_profile(
-                profile_type="1",
+                profile_type="demandlib_h0",
                 annual_consumption_kwh=kwargs["annual_consumption_kwh"],
                 start_date=kwargs["start_date"],
                 freq=kwargs["freq"],
@@ -633,7 +633,7 @@ class TestAppValidation:
         def _fake_load_profile(**kwargs):
             seen["timezone"] = kwargs["timezone"]
             return real_load_profile(
-                profile_type="1",
+                profile_type="demandlib_h0",
                 annual_consumption_kwh=kwargs["annual_consumption_kwh"],
                 start_date=kwargs["start_date"],
                 freq=kwargs["freq"],

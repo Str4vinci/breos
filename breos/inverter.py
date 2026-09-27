@@ -467,3 +467,15 @@ def dc_power_for_ac_output(
     # caps AC output at DC input to preserve energy conservation, so its
     # inverse must also request at least the target amount of DC.
     return min(upper, max(ac_target, zeta * upper))
+
+
+def inverter_ac_capacity_w(pv_peak_w: float, loading_ratio: Optional[float]) -> Optional[float]:
+    """Return the inverter AC nameplate in W for a DC peak and DC/AC loading ratio.
+
+    This is the one sizing rule the App, Monte Carlo and the optimizer share.
+    A loading ratio that is unset or not positive gives None, which the
+    dispatch reads as no AC clipping.
+    """
+    if loading_ratio is None or not loading_ratio > 0:
+        return None
+    return pv_peak_w / loading_ratio

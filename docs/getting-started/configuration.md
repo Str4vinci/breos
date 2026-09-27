@@ -449,18 +449,21 @@ functions documented in the [Cost and emissions API](../api/cost-analysis.md).
 
 ## Load profiles
 
-The public package default is `load_profile = "1"`, a demandlib-derived H0
-example bundled with BREOS. `load_profile = "demandlib_h0"` is the same
-profile under a readable alias and is preferred in examples. Other standard
-profile keys remain supported when you provide the required CSV files yourself
-through `rlp_directory`:
+The public package default is `load_profile = "demandlib_h0"`, a
+demandlib-derived H0 example bundled with BREOS. The other standard profiles,
+`eredes_btn_a`, `eredes_btn_b`, `eredes_btn_c`, `bdew_h0` and `ree_2.0td`, are
+supported when you provide the required CSV files yourself through
+`rlp_directory`. `load_profile = "custom"` reads any CSV you name with
+`load_profile_file`, `load_profile_column` and `load_profile_unit`. Keys are
+case-insensitive; the numeric keys (`"1"` to `"8"`) and the aliases `h0`,
+`default` and `crest` were removed in 0.7.0.
 
 ```python
 breos.App({
     "location": "porto",
     "n_modules": 10,
     "annual_consumption_kwh": 4000,
-    "load_profile": "6",
+    "load_profile": "eredes_btn_c",
     "rlp_directory": "/path/to/licensed/rlp/files",
     "resolution": "15min",
 })

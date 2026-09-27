@@ -59,7 +59,8 @@ from breos.execution import (
 from breos.execution import (
     backend_provenance as _backend_provenance,
 )
-from breos.load_profiles import load_profile
+from breos.load_profiles import LOAD_PROFILE_METADATA_KEY, load_profile
+from breos.projection import build_battery_config, build_pv_only_battery_config
 from breos.pv.model_options import DEFAULT_SOLAR_POSITION, resolve_solar_position_method, solar_position_time_offset
 from breos.utils import get_hours_per_step
 from breos.weather import (
@@ -230,28 +231,6 @@ def _precompute_year_caches(
     return dc_by_year, temp_by_year
 
 
-def _inverter_ac_capacity_w(cfg: dict[str, Any], resolved: ResolvedAppConfig) -> float | None:
-    """Resolve the shared inverter AC nameplate from the array and loading ratio."""
-    pv_peak_w = cfg["n_modules"] * resolved.avg_module_power_w
-    loading_ratio = cfg["inverter_loading_ratio"]
-    return pv_peak_w / loading_ratio if loading_ratio and loading_ratio > 0 else None
-
-
-def _pv_only_battery_config(cfg: dict[str, Any], resolved: ResolvedAppConfig) -> BatteryConfig:
-    """Build the config a PV-only year runs under.
-
-    Both the trajectory loop and the PV chain memo go through this. If they
-    resolved the inverter separately, a drift between them would memoize a
-    conversion for one inverter and spend it on another, and nothing would
-    say so.
-    """
-    return BatteryConfig(
-        nominal_energy_wh=0,
-        inverter_efficiency=cfg["inverter_efficiency"],
-        inverter_ac_capacity_w=_inverter_ac_capacity_w(cfg, resolved),
-    )
-
-
 def _align_years(
     cfg: dict[str, Any],
     base_load: pd.DataFrame,
@@ -355,7 +334,7 @@ def _prepare_pv_chains(
     ):
         return None
 
-    batt_cfg = _pv_only_battery_config(cfg, resolved)
+    batt_cfg = build_pv_only_battery_config(cfg, resolved)
     degradation_rate = cfg["pv_degradation_rate"]
     freq = cfg["resolution"]
     return {
@@ -381,12 +360,7 @@ def _simulate_trajectory(
     freq = cfg["resolution"]
     hours_per_step = get_hours_per_step(freq)
     degradation_rate = cfg["pv_degradation_rate"]
-    battery_kwh = cfg["battery_kwh"]
-    battery_wh = battery_kwh * 1000
     has_battery = _has_battery(cfg)
-
-    replacement_cost = resolved.cost_params.battery_cost_per_kwh * battery_kwh
-    inverter_ac_capacity_w = _inverter_ac_capacity_w(cfg, resolved)
 
     cumulative_fec = 0.0
     cumulative_cal_seconds = 0.0
@@ -424,31 +398,9 @@ def _simulate_trajectory(
             year_inputs = pv_chains[(year, year_idx)].scaled(load_factor=load_scale)
 
         if has_battery:
-            batt_kwargs: dict[str, Any] = {}
-            if cfg["battery_rte"] is not None:
-                one_way = math.sqrt(cfg["battery_rte"])
-                batt_kwargs["charge_efficiency"] = one_way
-                batt_kwargs["discharge_efficiency"] = one_way
-            batt_cfg = BatteryConfig(
-                nominal_energy_wh=battery_wh,
-                initial_soh=current_soh,
-                eol_percentage=cfg["battery_eol_percentage"],
-                max_soc=cfg["battery_max_soc"],
-                min_soc=cfg["battery_min_soc"],
-                dc_coupled=cfg["dc_coupled"],
-                inverter_efficiency=cfg["inverter_efficiency"],
-                inverter_ac_capacity_w=inverter_ac_capacity_w,
-                enable_replacement=True,
-                replacement_cost=replacement_cost,
-                calendar_model=cfg["calendar_model"],
-                max_charge_power_w=cfg["battery_max_charge_power_w"],
-                max_discharge_power_w=cfg["battery_max_discharge_power_w"],
-                power_limit_c_rate=cfg["battery_power_limit_c_rate"],
-                enable_resistance_fade=cfg.get("enable_resistance_fade", False),
-                **batt_kwargs,
-            )
+            batt_cfg = build_battery_config(cfg, resolved, initial_soh=current_soh)
         else:
-            batt_cfg = _pv_only_battery_config(cfg, resolved)
+            batt_cfg = build_pv_only_battery_config(cfg, resolved)
 
         state_kwargs: dict[str, float] = {}
         if carried_energy_wh is not None:
@@ -882,6 +834,7 @@ def run_montecarlo(config: dict[str, Any], settings: MonteCarloSettings) -> Mont
             "settings": asdict(settings),
             "available_weather_years": [int(y) for y in available_years],
             "runtime_weather": runtime_weather,
+            "load_profile": dict(base_load.attrs.get(LOAD_PROFILE_METADATA_KEY, {})),
             "random_stream": (
                 "numpy.random.default_rng(numpy.random.SeedSequence(base_seed).spawn(n_runs)[zero_based_run_index])"
             ),

@@ -16,7 +16,8 @@ from breos.degradation.profiles import ENABLED_BLAST_MODEL_KEYS, apply_battery_p
 from breos.economics import COST_CONFIG_KEY_TO_PARAM, CostParams, calculate_costs
 from breos.emissions import EmissionsParams
 from breos.execution import DEFAULT_EXECUTION_BACKEND, EXECUTION_BACKENDS, validate_execution_backend
-from breos.load_profiles import PROFILE_ALIASES, PROFILE_FILES
+from breos.inverter import inverter_ac_capacity_w
+from breos.load_profiles import PROFILE_UNITS, resolve_profile_key, validate_profile_options
 from breos.pv.horizon import normalise_horizon_profile
 from breos.pv.model_options import is_known_model, is_valid_albedo, is_valid_gcr, normalise_model_name
 from breos.pv.temperature import validate_temperature_inputs
@@ -152,7 +153,10 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         default=None, default_order=2, cli_flags=("--pv-module",), cli_help="PV module catalogue key."
     ),
     "load_profile": AppConfigField(
-        default="1", default_order=3, cli_flags=("--load-profile",), cli_help="Load profile type."
+        default="demandlib_h0",
+        default_order=3,
+        cli_flags=("--load-profile",),
+        cli_help="Load profile key; see 'breos list load-profiles'.",
     ),
     "rlp_directory": AppConfigField(
         default=None,
@@ -161,6 +165,30 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         cli_type=Path,
         cli_help="Directory containing licensed external RLP CSV files.",
         normalizer=_path_string,
+    ),
+    "load_profile_file": AppConfigField(
+        default=None,
+        default_order=56,
+        cli_flags=("--load-profile-file",),
+        cli_type=Path,
+        cli_help=(
+            "Load-profile CSV to read instead of the key's filename pattern; required for 'custom'. "
+            "A relative path is taken inside rlp_directory when that is set."
+        ),
+        normalizer=_path_string,
+    ),
+    "load_profile_column": AppConfigField(
+        default=None,
+        default_order=57,
+        cli_flags=("--load-profile-column",),
+        cli_help="For load_profile 'custom': the CSV column holding the load, if the file has several.",
+    ),
+    "load_profile_unit": AppConfigField(
+        default=None,
+        default_order=58,
+        cli_flags=("--load-profile-unit",),
+        cli_choices=PROFILE_UNITS,
+        cli_help="For load_profile 'custom': W or kW (mean power per row), or Wh or kWh (energy per row).",
     ),
     "tilt": AppConfigField(
         default=None,
@@ -489,6 +517,9 @@ class ResolvedAppConfig:
     azimuth: float
     tracking: str
     axis_azimuth: float
+    # AC nameplate that clips dispatch, sized like the inverter CAPEX: the DC
+    # peak over inverter_loading_ratio.
+    inverter_ac_capacity_w: float | None
     cost_params: CostParams
     emissions_params: EmissionsParams | None
 
@@ -773,13 +804,14 @@ def _validate_structure_and_location(cfg: dict[str, Any]) -> bool:
 
 
 def _validate_load_profile(cfg: dict[str, Any]) -> None:
-    """Resolve a profile alias and reject unknown profiles during config validation."""
-    raw_profile = str(cfg["load_profile"])
-    profile = PROFILE_ALIASES.get(raw_profile.lower(), raw_profile)
-    if profile not in PROFILE_FILES:
-        available = ", ".join(sorted({*PROFILE_FILES, *PROFILE_ALIASES}))
-        raise ValueError(f"Unknown load_profile {raw_profile!r}. Available profile keys and aliases: {available}")
-    cfg["load_profile"] = profile
+    """Make the profile key canonical and check the options that go with it.
+
+    The file itself is resolved when the profile is loaded.
+    """
+    cfg["load_profile"] = resolve_profile_key(cfg["load_profile"])
+    validate_profile_options(cfg["load_profile"], cfg["load_profile_column"], cfg["load_profile_unit"])
+    if cfg["load_profile"] == "custom" and cfg["load_profile_file"] is None:
+        raise ValueError("load_profile 'custom' needs load_profile_file, the CSV to read.")
 
 
 def _validate_pv_and_inverter(cfg: dict[str, Any], has_arrays: bool) -> None:
@@ -1276,6 +1308,7 @@ def resolve_app_config(config: dict[str, Any]) -> ResolvedAppConfig:
         azimuth=azimuth,
         tracking=tracking,
         axis_azimuth=axis_azimuth,
+        inverter_ac_capacity_w=inverter_ac_capacity_w(n_modules * avg_module_power_w, cfg["inverter_loading_ratio"]),
         cost_params=resolve_costs(cfg),
         emissions_params=resolve_emissions(cfg),
     )

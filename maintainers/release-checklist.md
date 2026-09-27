@@ -149,9 +149,10 @@ Release flow:
    uv's default `first-index` strategy: if an unexpected TestPyPI package
    shadows a dependency, investigate it rather than enabling an `unsafe-*`
    index strategy.
-3. Tag the release commit on `main` (`git tag vX.Y.Z && git push origin vX.Y.Z`).
-   The workflow refuses tags whose commit is not on `main`, then publishes to
-   PyPI.
+3. Tag the release commit on `main` with an annotated tag
+   (`git tag -a vX.Y.Z -m "BREOS X.Y.Z" && git push origin vX.Y.Z`). The
+   workflow refuses tags whose commit is not on `main`, then publishes to
+   PyPI. See [Release tags](#release-tags) for the historical exceptions.
 4. Create the GitHub Release from the tag and confirm the published release
    installs from a clean environment:
 
@@ -161,6 +162,24 @@ Release flow:
    VIRTUAL_ENV=/tmp/breos-pypi uv pip show breos
    VIRTUAL_ENV=/tmp/breos-pypi uv pip check
    ```
+
+## Release Tags
+
+Release tags are annotated, with the message `BREOS X.Y.Z`. Three historical
+tags are lightweight instead:
+
+| Tag | Commit | Date |
+| --- | --- | --- |
+| `v0.5.0` | `134c99e` (merge of #108) | 2026-08-05 |
+| `v0.5.1` | `62ab4f4` (merge of #117) | 2026-08-11 |
+| `v0.6.0` | `c1a641d` (merge of #140) | 2026-08-31 |
+
+Each points at the release merge commit and was published from it, so the
+commit is correct; only the tag object is missing. Leave them as they are. Do
+not delete and re-push them as annotated tags: that rewrites a published ref,
+and anyone who fetched the old tag keeps it. `git describe` skips lightweight
+tags unless `--tags` is passed, so use `git describe --tags` when these
+releases matter.
 
 ## Data And Docs
 

@@ -49,7 +49,7 @@ def test_run_from_flags_outputs_json(monkeypatch, capsys):
             "--emissions-country",
             "pt",
             "--load-profile",
-            "6",
+            "eredes_btn_c",
             "--rlp-directory",
             "/tmp/external-rlp",
         ]
@@ -63,7 +63,7 @@ def test_run_from_flags_outputs_json(monkeypatch, capsys):
     assert FakeApp.seen_config["battery_kwh"] == 5.0
     assert FakeApp.seen_config["cost_preset"] == "residential_pt"
     assert FakeApp.seen_config["emissions_country"] == "PT"
-    assert FakeApp.seen_config["load_profile"] == "6"
+    assert FakeApp.seen_config["load_profile"] == "eredes_btn_c"
     assert FakeApp.seen_config["rlp_directory"] == "/tmp/external-rlp"
 
     output = json.loads(capsys.readouterr().out)

@@ -6,70 +6,240 @@ including loading from CSV files, scaling to annual consumption,
 and resampling between hourly and 15-minute intervals.
 """
 
+import hashlib
+import os
 from contextlib import nullcontext
+from dataclasses import dataclass
 from importlib.resources import as_file
 from pathlib import Path
-from typing import Dict, Optional, Union
+from typing import Any, Dict, Mapping, Optional, Union
 
 import numpy as np
 import pandas as pd
 from scipy.interpolate import Akima1DInterpolator
 
 from breos.resources import rlp_resource
-from breos.utils import _datetime_index_seconds, normalise_frequency
+from breos.utils import _datetime_index_seconds, get_hours_per_step, normalise_frequency
 
-# Profile type mappings
-PROFILE_FILES = {
-    "1": "h0SLP_demandlib_1000kwh_hourly.csv",
-    "4": "EREDES_2025_BTN_1000kwh_hourly.csv",
-    "5": "EREDES_2025_BTN_1000kwh_hourly.csv",
-    "6": "EREDES_2025_BTN_1000kwh_hourly.csv",
-    "7": "bdew_h0_2025_15min.csv",
-    "8": "REE_2026_2.0TD_1000kwh_hourly.csv",
+LOAD_COLUMN = "Electrical Consumption [W]"
+
+# Units a profile CSV can declare. W and kW are the mean power over each row's
+# interval; Wh and kWh are the energy delivered in it.
+PROFILE_UNITS = ("W", "kW", "Wh", "kWh")
+_UNIT_TO_W = {"W": 1.0, "kW": 1000.0}
+_ENERGY_UNIT_TO_WH = {"Wh": 1.0, "kWh": 1000.0}
+
+CUSTOM_PROFILE = "custom"
+LOAD_PROFILE_METADATA_KEY = "breos_load_profile"
+
+
+@dataclass(frozen=True)
+class ProfileSpec:
+    """One load-profile family: where its CSV comes from and how to read it.
+
+    ``files`` maps a native resolution (``"h"`` or ``"15min"``) to a filename
+    pattern in ``rlp_directory``. For a bundled profile the pattern is also the
+    packaged filename. The year belongs to the file, so external patterns
+    leave it as ``*``. ``columns`` lists the accepted ``(column, unit)``
+    pairs, tried in order; when it is empty the file must have exactly one
+    value column, in ``unit``.
+    """
+
+    key: str
+    name: str
+    files: Mapping[str, str]
+    columns: tuple[tuple[str, str], ...] = ()
+    unit: str = "W"
+    bundled: bool = False
+
+
+def _eredes(key: str, variant: str) -> ProfileSpec:
+    return ProfileSpec(
+        key=key,
+        name=f"E-REDES BTN {variant}",
+        files={"h": "EREDES_*_BTN_1000kwh_hourly.csv", "15min": "EREDES_*_BTN_1000kwh_15min.csv"},
+        columns=((f"BTN {variant} - Wh", "Wh"),),
+    )
+
+
+PROFILES: dict[str, ProfileSpec] = {
+    spec.key: spec
+    for spec in (
+        ProfileSpec(
+            key="demandlib_h0",
+            name="H0 standard load profile (demandlib)",
+            files={"h": "h0SLP_demandlib_1000kwh_hourly.csv", "15min": "h0SLP_demandlib_1000kwh_15min.csv"},
+            # The hourly file is in W and the 15-minute h0_dyn file in kW. The
+            # kW header is the one older copies of the hourly file carry.
+            columns=(
+                ("Electrical Consumption [W]", "W"),
+                ("Electrical Consumption [kW]", "kW"),
+                ("h0_dyn", "kW"),
+            ),
+            bundled=True,
+        ),
+        _eredes("eredes_btn_a", "A"),
+        _eredes("eredes_btn_b", "B"),
+        _eredes("eredes_btn_c", "C"),
+        ProfileSpec(key="bdew_h0", name="BDEW H0 (BDEW publication)", files={"15min": "bdew_h0_*_15min.csv"}),
+        ProfileSpec(
+            key="ree_2.0td",
+            name="REE 2.0TD",
+            files={"h": "REE_*_2.0TD_1000kwh_hourly.csv", "15min": "REE_*_2.0TD_1000kwh_15min.csv"},
+        ),
+        ProfileSpec(key=CUSTOM_PROFILE, name="Custom CSV (load_profile_file)", files={}),
+    )
+}
+PROFILE_KEYS: tuple[str, ...] = tuple(PROFILES)
+
+# Keys removed in 0.7.0. They are not accepted; they only make the error say
+# which key replaces them.
+_REMOVED_KEYS = {
+    "1": "'demandlib_h0'",
+    "4": "'eredes_btn_a'",
+    "5": "'eredes_btn_b'",
+    "6": "'eredes_btn_c'",
+    "7": "'bdew_h0'",
+    "8": "'ree_2.0td'",
+    "h0": "'demandlib_h0' (bundled) or 'bdew_h0' (the BDEW publication)",
+    "default": "'demandlib_h0'",
+    "crest": "'custom' with load_profile_file for a CREST export ('crest' loaded the demandlib H0 profile)",
 }
 
-PROFILE_FILES_15MIN = {
-    "1": "h0SLP_demandlib_1000kwh_15min.csv",
-    "4": "EREDES_2025_BTN_1000kwh_15min.csv",
-    "5": "EREDES_2025_BTN_1000kwh_15min.csv",
-    "6": "EREDES_2025_BTN_1000kwh_15min.csv",
-    "7": "bdew_h0_2025_15min.csv",
-    "8": "REE_2026_2.0TD_1000kwh_15min.csv",
-}
 
-PROFILE_FILE_NATIVE_FREQ = {
-    "7": "15min",
-}
+def resolve_profile_key(profile_type: Any) -> str:
+    """Return the canonical key for a load-profile name.
 
-PROFILE_NAMES = {
-    "1": "H0SLP (demandlib)",
-    "4": "E-Redes 2025 - BTN A (external file required)",
-    "5": "E-Redes 2025 - BTN B (external file required)",
-    "6": "E-Redes 2025 - BTN C (external file required)",
-    "7": "BDEW H0 2025 (external file required)",
-    "8": "REE 2026 - 2.0TD (external file required)",
-}
+    Keys are case-insensitive. The numeric keys and the aliases ``h0``,
+    ``default`` and ``crest`` were removed in 0.7.0 and raise, naming the key
+    that replaces them.
 
-# Note: "bdew_h0" maps to the bundled demandlib profile "1", which
-# implements the BDEW H0 standard shape. Profile "7" is the externally
-# published BDEW H0 2025 file and must be supplied via rlp_directory —
-# request it explicitly as "7" if that exact dataset is needed.
-PROFILE_ALIASES = {
-    "default": "1",
-    "demandlib_h0": "1",
-    "h0": "1",
-    "bdew_h0": "1",
-    "crest": "1",
-    "eredes_btn_c": "6",
-    "ree_2.0td": "8",
-}
+    Raises:
+        ValueError: If the key is unknown or removed.
+    """
+    key = str(profile_type).strip().lower()
+    if key in PROFILES:
+        return key
+    if key in _REMOVED_KEYS:
+        raise ValueError(
+            f"load_profile {profile_type!r} was removed in BREOS 0.7.0; use {_REMOVED_KEYS[key]}. "
+            f"Valid keys: {', '.join(PROFILE_KEYS)}."
+        )
+    raise ValueError(f"Unknown load_profile {profile_type!r}. Valid keys: {', '.join(PROFILE_KEYS)}.")
 
-# Column mappings for E-Redes profiles
-EREDES_COLUMNS = {
-    "4": "BTN A - Wh",
-    "5": "BTN B - Wh",
-    "6": "BTN C - Wh",
-}
+
+@dataclass(frozen=True)
+class ProfileSource:
+    """The CSV a load profile is read from.
+
+    ``native_freq`` is None for an explicitly named file; its resolution is
+    then taken from its row count.
+    """
+
+    key: str
+    source: Any
+    packaged: bool
+    native_freq: str | None
+
+    @property
+    def label(self) -> str:
+        """The packaged filename, or the external file's absolute path."""
+        if self.packaged:
+            return str(self.source.name)
+        return str(Path(self.source).resolve())
+
+
+def _resolution_preference(spec: ProfileSpec, freq: str) -> list[str]:
+    # Prefer the requested resolution; otherwise resample from the other one.
+    return [resolution for resolution in (freq, "15min" if freq == "h" else "h") if resolution in spec.files]
+
+
+def resolve_profile_file(
+    profile_type: Any,
+    freq: str = "h",
+    rlp_directory: str | os.PathLike[str] | None = None,
+    profile_file: str | os.PathLike[str] | None = None,
+) -> ProfileSource:
+    """Select the CSV for a load profile.
+
+    An explicit ``profile_file`` wins; a relative path is taken inside
+    ``rlp_directory`` when that is set. Otherwise a bundled profile is read
+    from the package, or from ``rlp_directory`` when one is given, and an
+    external profile's filename pattern must match exactly one file in
+    ``rlp_directory``. The requested resolution is preferred; a profile that
+    has only the other one is resampled.
+
+    Raises:
+        ValueError: If the key is unknown, a ``custom`` profile has no file,
+            an external profile has no ``rlp_directory``, or a pattern
+            matches several files (they are listed).
+        FileNotFoundError: If the named file or a matching file is missing.
+    """
+    key = resolve_profile_key(profile_type)
+    spec = PROFILES[key]
+    freq = normalise_frequency(freq)
+
+    if profile_file is not None:
+        path = Path(profile_file)
+        if not path.is_absolute() and rlp_directory is not None:
+            path = Path(rlp_directory) / path
+        if not path.is_file():
+            raise FileNotFoundError(f"Load profile file not found: {path}")
+        return ProfileSource(key, path, packaged=False, native_freq=None)
+
+    if key == CUSTOM_PROFILE:
+        raise ValueError("load_profile 'custom' needs load_profile_file, the CSV to read.")
+
+    resolutions = _resolution_preference(spec, freq)
+    if rlp_directory is None:
+        if not spec.bundled:
+            patterns = " or ".join(spec.files[resolution] for resolution in resolutions)
+            raise ValueError(
+                f"Load profile {key!r} ({spec.name}) is not bundled with BREOS: its upstream redistribution "
+                f"terms are not confirmed for package release. Pass rlp_directory holding a licensed copy "
+                f"named {patterns}, or load_profile_file, or use 'demandlib_h0'."
+            )
+        resolution = resolutions[0]
+        return ProfileSource(key, rlp_resource(spec.files[resolution]), packaged=True, native_freq=resolution)
+
+    root = Path(rlp_directory)
+    for resolution in resolutions:
+        pattern = spec.files[resolution]
+        matches = sorted(path for path in root.glob(pattern) if path.is_file())
+        if len(matches) > 1:
+            raise ValueError(
+                f"Load profile {key!r}: {len(matches)} files in {root} match {pattern!r}: "
+                f"{', '.join(path.name for path in matches)}. Keep one, or set load_profile_file to choose."
+            )
+        if matches:
+            return ProfileSource(key, matches[0], packaged=False, native_freq=resolution)
+    patterns = " or ".join(repr(spec.files[resolution]) for resolution in resolutions)
+    raise FileNotFoundError(f"Load profile {key!r}: no file in {root} matches {patterns}.")
+
+
+def validate_profile_options(profile_type: Any, column: Any = None, unit: Any = None) -> None:
+    """Check the column and unit options against the profile key.
+
+    Only ``custom`` profiles take them, and ``custom`` needs a unit.
+
+    Raises:
+        ValueError: If an option is set for a registered profile, a ``custom``
+            profile has no unit, or the unit is not one of ``PROFILE_UNITS``.
+    """
+    key = resolve_profile_key(profile_type)
+    if key != CUSTOM_PROFILE:
+        given = [name for name, value in (("load_profile_column", column), ("load_profile_unit", unit)) if value]
+        if given:
+            raise ValueError(
+                f"{' and '.join(given)} apply only to load_profile 'custom'; {key!r} fixes its own column and unit."
+            )
+        return
+    if unit is None:
+        raise ValueError(f"load_profile 'custom' needs load_profile_unit, one of: {', '.join(PROFILE_UNITS)}.")
+    if unit not in PROFILE_UNITS:
+        raise ValueError(f"Unknown load_profile_unit {unit!r}. Valid units: {', '.join(PROFILE_UNITS)}.")
+    if column is not None and (not isinstance(column, str) or not column):
+        raise ValueError("load_profile_column must be a non-empty column name.")
 
 
 def load_profile(
@@ -80,6 +250,10 @@ def load_profile(
     num_years: int = 1,
     rlp_directory: Optional[str] = None,
     timezone: Optional[str] = "UTC",
+    *,
+    profile_file: str | os.PathLike[str] | None = None,
+    profile_column: Optional[str] = None,
+    profile_unit: Optional[str] = None,
 ) -> pd.DataFrame:
     """
     Load and scale a residential/commercial load profile.
@@ -90,7 +264,9 @@ def load_profile(
     extension, and hourly or 15-minute output.
 
     Args:
-        profile_type: Profile type key (see PROFILE_NAMES) or name
+        profile_type: Profile key (see ``PROFILES``), case-insensitive:
+            ``demandlib_h0`` (bundled), ``eredes_btn_a``/``_b``/``_c``,
+            ``bdew_h0``, ``ree_2.0td``, or ``custom``.
         annual_consumption_kwh: Target annual consumption in kWh
         start_date: First day of the profile, 1 January of its year (YYYY-01-01).
             Profile rows are stamped from 1 January onward, so any other date
@@ -98,19 +274,34 @@ def load_profile(
         freq: Time frequency ('h' for hourly, '15min' for 15-minute)
         num_years: Number of years to generate
         rlp_directory: Directory containing RLP files. When omitted, BREOS
-            uses only redistributable packaged profiles.
+            uses only redistributable packaged profiles. An external
+            profile's filename pattern must match exactly one file in it.
         timezone: Timezone for the index. Profile rows are wall-clock local
             behavior (H0 morning/evening peaks), so pass the location's
             timezone to pin them to local time; the simulation aligns load
             and PV by UTC instant. The 'UTC' default keeps the legacy
             UTC-clock convention for callers without a location.
+        profile_file: An explicit CSV to read instead of the registry's
+            filename pattern; relative paths are taken inside
+            ``rlp_directory`` when it is set. Required for ``custom``. Its
+            resolution is taken from its row count.
+        profile_column: For ``custom``, the column holding the load. Needed
+            only when the file has more than one value column.
+        profile_unit: For ``custom``, the unit of that column: ``W`` or
+            ``kW`` (mean power over each row) or ``Wh`` or ``kWh`` (energy per
+            row). Required for ``custom``.
 
     Returns:
-        DataFrame with 'Electrical Consumption [W]' column and DatetimeIndex
+        DataFrame with 'Electrical Consumption [W]' column and DatetimeIndex.
+        ``attrs["breos_load_profile"]`` records the canonical key, the file
+        read (packaged filename or absolute path) and its SHA-256, its
+        native resolution, and the column and unit taken from it.
 
     Raises:
-        ValueError: If profile_type is not recognized, or start_date is not
-            1 January
+        ValueError: If profile_type is not recognized or was removed, the
+            column or unit options do not fit it, a filename pattern matches
+            several files, or start_date is not 1 January
+        FileNotFoundError: If the profile's file is missing
     """
     freq = normalise_frequency(freq)
     start_ts = pd.Timestamp(start_date)
@@ -120,53 +311,20 @@ def load_profile(
             "1 January, so a later start would move every season; use "
             f"'{start_ts.year}-01-01'."
         )
-    profile_type = PROFILE_ALIASES.get(str(profile_type).lower(), str(profile_type))
-    if profile_type not in PROFILE_FILES:
-        raise ValueError(f"Unknown profile type: {profile_type}. Valid types: {list(PROFILE_FILES.keys())}")
-
-    packaged = rlp_directory is None
-    rlp_path = None if packaged else Path(rlp_directory)
-
-    def _candidate(filename: str):
-        return rlp_resource(filename) if packaged else rlp_path / filename
-
-    def _exists(candidate) -> bool:
-        return candidate.is_file() if packaged else candidate.exists()
-
-    # Prefer native 15-minute files when requested. If only a native
-    # 15-minute external profile is available, load it and downsample later.
-    native_candidate = _candidate(PROFILE_FILES_15MIN[profile_type]) if profile_type in PROFILE_FILES_15MIN else None
-    use_native_15min = freq == "15min" and profile_type in PROFILE_FILES_15MIN and _exists(native_candidate)
-
-    if use_native_15min:
-        csv_resource = native_candidate
-        native_freq = "15min"
+    validate_profile_options(profile_type, profile_column, profile_unit)
+    source = resolve_profile_file(profile_type, freq, rlp_directory, profile_file)
+    spec = PROFILES[source.key]
+    if source.key == CUSTOM_PROFILE:
+        columns = ((profile_column, profile_unit),) if profile_column else ()
+        default_unit = str(profile_unit)
     else:
-        hourly_candidate = _candidate(PROFILE_FILES[profile_type])
-        if _exists(hourly_candidate):
-            csv_resource = hourly_candidate
-            native_freq = PROFILE_FILE_NATIVE_FREQ.get(profile_type, "h")
-        elif profile_type in PROFILE_FILES_15MIN and _exists(native_candidate):
-            csv_resource = native_candidate
-            native_freq = "15min"
-        else:
-            csv_resource = hourly_candidate
-            native_freq = "h"
+        columns, default_unit = spec.columns, spec.unit
 
-    if not _exists(csv_resource):
-        if packaged:
-            profile_name = PROFILE_NAMES.get(profile_type, profile_type)
-            raise ValueError(
-                f"Profile type {profile_type!r} ({profile_name}) is not bundled with BREOS. "
-                "Its upstream redistribution terms are not confirmed for package release. "
-                "Pass rlp_directory with a licensed local copy or use profile_type='1'."
-            )
-        raise FileNotFoundError(f"Load profile file not found: {csv_resource}")
-
-    # Load the profile
-    path_context = as_file(csv_resource) if packaged else nullcontext(csv_resource)
+    path_context = as_file(source.source) if source.packaged else nullcontext(source.source)
     with path_context as csv_file:
-        df = _load_profile_csv(Path(csv_file), profile_type, native_freq)
+        csv_path = Path(csv_file)
+        df, native_freq, column, unit = _load_profile_csv(csv_path, columns, default_unit, source.native_freq)
+        sha256 = hashlib.sha256(csv_path.read_bytes()).hexdigest()
 
     # Create a naive wall-clock index for one real calendar year; rows describe
     # household behavior at local clock time and are pinned to the timezone
@@ -176,7 +334,7 @@ def load_profile(
     end_ts = start_ts + pd.DateOffset(years=1)
     new_index = pd.date_range(start=start_ts, end=end_ts, freq=native_freq, inclusive="left")
 
-    df = _fit_profile_to_calendar(df, new_index, steps_per_hour, csv_resource)
+    df = _fit_profile_to_calendar(df, new_index, steps_per_hour, source.label)
     df.index = new_index
     df.index.name = "DateTime"
 
@@ -202,6 +360,16 @@ def load_profile(
     # this is a no-op apart from floating-point roundoff.
     scale_to_annual_consumption(df, annual_consumption_kwh * num_years)
 
+    df.attrs[LOAD_PROFILE_METADATA_KEY] = {
+        "key": source.key,
+        "name": spec.name,
+        "file": source.label,
+        "packaged": source.packaged,
+        "sha256": sha256,
+        "native_resolution": native_freq,
+        "column": column,
+        "unit": unit,
+    }
     return df
 
 
@@ -268,51 +436,69 @@ def _fit_profile_to_calendar(
     return pd.concat([df.iloc[:leap_day], df.iloc[leap_day + steps_per_day :]], ignore_index=True)
 
 
-def _load_profile_csv(csv_file: Path, profile_type: str, native_freq: str = "h") -> pd.DataFrame:
-    """Load a profile CSV file, standardize its column name, and validate it.
+_ROWS_PER_YEAR = {8760: "h", 8784: "h", 35040: "15min", 35136: "15min"}
 
-    Fully blank rows (such as the trailing ``,,,`` row of E-REDES exports)
-    are dropped. The remaining rows must be finite and non-negative, and a
-    leading timestamp column, when present, must step at ``native_freq``.
+
+def _load_profile_csv(
+    csv_file: Path,
+    columns: tuple[tuple[str, str], ...],
+    default_unit: str,
+    native_freq: Optional[str],
+) -> tuple[pd.DataFrame, str, str, str]:
+    """Read a profile CSV, convert its load column to W, and validate it.
+
+    ``columns`` lists the accepted ``(column, unit)`` pairs in order; when it
+    is empty the file must have exactly one value column after its timestamp
+    column, read in ``default_unit``. A ``native_freq`` of None is taken from
+    the row count. Fully blank rows (such as the trailing ``,,,`` row of
+    E-REDES exports) are dropped. The remaining rows must be finite and
+    non-negative, and a leading timestamp column, when present, must step at
+    the native resolution.
+
+    Returns the frame, its native resolution, and the column and unit read.
     """
     try:
         # Read without an index column so a blank row is blank in every
         # column, including the timestamp, before it is dropped.
         raw = pd.read_csv(csv_file).dropna(how="all").reset_index(drop=True)
-        timestamps = raw.iloc[:, 0]
-        if profile_type == "1":
-            # H0SLP demandlib format (hourly is stored in W; 15min h0_dyn is kW).
-            df = raw.iloc[:, 1:]
-            if "Electrical Consumption [W]" in df.columns:
-                pass
-            elif "Electrical Consumption [kW]" in df.columns:
-                # Backwards compatibility for user-supplied files with the
-                # historical bundled header.
-                df = df.rename(columns={"Electrical Consumption [kW]": "Electrical Consumption [W]"})
-                df["Electrical Consumption [W]"] *= 1000
-            elif "h0_dyn" in df.columns:
-                df = df.rename(columns={"h0_dyn": "Electrical Consumption [W]"})
-                df["Electrical Consumption [W]"] *= 1000
-
-        elif profile_type in EREDES_COLUMNS:
-            # E-Redes format: one file holds BTN A, B and C, so select by exact name.
-            col_name = EREDES_COLUMNS[profile_type]
-            if col_name not in raw.columns:
-                raise ValueError(f"profile {profile_type} needs the column {col_name!r}; found {list(raw.columns)}")
-            df = raw[[col_name]].rename(columns={col_name: "Electrical Consumption [W]"})
-        else:
-            df = raw.iloc[:, 1:]
-            df.columns = ["Electrical Consumption [W]"]
-
-        df = df[["Electrical Consumption [W]"]].copy()
     except Exception as e:
         raise ValueError(f"Error loading profile from {csv_file}: {e}") from e
+    # A file with a single column holds only values; otherwise the first
+    # column is the timestamp (or a row label).
+    timestamps = raw.iloc[:, 0] if raw.shape[1] > 1 else None
+    if columns:
+        found = next(((column, unit) for column, unit in columns if column in raw.columns), None)
+        if found is None:
+            expected = " or ".join(repr(column) for column, _ in columns)
+            raise ValueError(f"Load profile {csv_file} needs the column {expected}; found {list(raw.columns)}.")
+        column, unit = found
+    else:
+        values = list(raw.columns[1:]) if timestamps is not None else list(raw.columns)
+        if len(values) != 1:
+            raise ValueError(
+                f"Load profile {csv_file} has {len(values)} value columns ({values}); "
+                "set load_profile_column to the one holding the load."
+            )
+        column, unit = str(values[0]), default_unit
 
+    if native_freq is None:
+        native_freq = _ROWS_PER_YEAR.get(len(raw))
+        if native_freq is None:
+            raise ValueError(
+                f"Load profile {csv_file} has {len(raw)} data rows; one year is 8760 or 8784 hourly rows, "
+                "or 35040 or 35136 15-minute rows. Rows are placed on the calendar by position."
+            )
+
+    df = raw[[column]].rename(columns={column: LOAD_COLUMN})
     _validate_profile_rows(df, timestamps, native_freq, csv_file)
-    return df
+    if unit in _ENERGY_UNIT_TO_WH:
+        df[LOAD_COLUMN] *= _ENERGY_UNIT_TO_WH[unit] / get_hours_per_step(native_freq)
+    else:
+        df[LOAD_COLUMN] *= _UNIT_TO_W[unit]
+    return df, native_freq, column, unit
 
 
-def _validate_profile_rows(df: pd.DataFrame, timestamps: pd.Series, native_freq: str, csv_file: Path) -> None:
+def _validate_profile_rows(df: pd.DataFrame, timestamps: Optional[pd.Series], native_freq: str, csv_file: Path) -> None:
     """Refuse non-numeric, non-finite, negative, or irregularly stamped rows."""
     values = pd.to_numeric(df["Electrical Consumption [W]"], errors="coerce").to_numpy(dtype=float)
     bad = ~np.isfinite(values)
@@ -332,7 +518,7 @@ def _validate_profile_rows(df: pd.DataFrame, timestamps: pd.Series, native_freq:
     # Rows are placed by position, so a timestamp column is optional. When the
     # file has one, it must step evenly at the profile's resolution; a DST gap
     # or a missing row would otherwise move later rows by one step.
-    if pd.api.types.is_numeric_dtype(timestamps):
+    if timestamps is None or pd.api.types.is_numeric_dtype(timestamps):
         return
     stamps = _parse_profile_timestamps(timestamps, csv_file)
     if stamps is None:

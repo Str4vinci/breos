@@ -12,7 +12,7 @@ EXPECTED_DEFAULTS = {
     "battery_kwh": 0.0,
     "pv_arrays": None,
     "pv_module": None,
-    "load_profile": "1",
+    "load_profile": "demandlib_h0",
     "rlp_directory": None,
     "tilt": None,
     "azimuth": None,
@@ -65,6 +65,9 @@ EXPECTED_DEFAULTS = {
     "battery_indoor_model": None,
     "execution_backend": "python",
     "weather_source": None,
+    "load_profile_file": None,
+    "load_profile_column": None,
+    "load_profile_unit": None,
 }
 
 EXPECTED_CLI_FIELDS = [
@@ -80,6 +83,9 @@ EXPECTED_CLI_FIELDS = [
     "pv_module",
     "load_profile",
     "rlp_directory",
+    "load_profile_file",
+    "load_profile_column",
+    "load_profile_unit",
     "tilt",
     "azimuth",
     "transposition_model",

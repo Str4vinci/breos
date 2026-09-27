@@ -2,7 +2,7 @@
 
 The page is built from the same loader the ``breos list`` CLI uses, so the
 documented tables cannot drift from ``breos/data/configs/*.json``,
-``breos.pv_modules.MODULES``, and ``breos.load_profiles.PROFILE_NAMES``.
+``breos.pv_modules.MODULES``, and ``breos.load_profiles.PROFILES``.
 
 Regenerate after changing any of those sources:
 
@@ -101,17 +101,15 @@ SECTIONS: list[dict[str, Any]] = [
         "title": "Load profiles",
         "intro": (
             "Keys for the `load_profile` config key, from"
-            " `breos.load_profiles.PROFILE_NAMES`. Non-bundled profiles need their"
-            " source CSVs supplied through `rlp_directory` — see"
-            " [Load Profile Data](../legal/load-profile-data.md) for expected"
-            " filenames and licensing notes. The `bdew_h0` alias maps to the"
-            " bundled demandlib-shaped H0 example; direct BDEW H0 2025 is key"
-            " `7` and requires an external CSV."
+            " `breos.load_profiles.PROFILES`. Non-bundled profiles need their"
+            " source CSVs supplied through `rlp_directory`, and `custom` needs"
+            " `load_profile_file` — see"
+            " [Load Profile Data](../legal/load-profile-data.md) for the filename"
+            " patterns and licensing notes."
         ),
         "columns": [
             ("key", "Key", "code"),
             ("name", "Name", "text"),
-            ("aliases", "Aliases", "code"),
             ("bundled", "Bundled", "text"),
         ],
     },
