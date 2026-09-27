@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any, Callable
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from breos.config_schema import TableSpec, anything, boolean, number
+from breos.config_schema import TableSpec, anything, boolean, choice, mapping_of, number, text
 from breos.constants import DEFAULT_MAX_SOC, DEFAULT_MIN_SOC
 from breos.degradation.profiles import ENABLED_BLAST_MODEL_KEYS, apply_battery_profile_defaults
 from breos.economics import (
@@ -50,6 +50,16 @@ from breos.solar import (
     resolve_pvwatts_losses,
 )
 from breos.solar import default_azimuth as default_azimuth_fn
+from breos.tariffs import (
+    BOUNDARY_POLICIES,
+    SUPPORTED_CURRENCIES,
+    TariffPrices,
+    TariffSpec,
+    available_tariff_schedules,
+    get_tariff_schedule,
+    schedule_resolution_minutes,
+)
+from breos.utils import get_hours_per_step
 
 _NO_DEFAULT = object()
 
@@ -402,6 +412,8 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         cli_flags=("--start-date",),
         cli_help="First simulated day: 1 January of the study year, YYYY-01-01.",
     ),
+    # The [tariff] table (ADR 0002). Omitted: flat prices from the cost preset.
+    "tariff": AppConfigField(default=None, default_order=59),
     "weather_source": AppConfigField(
         default=None,
         default_order=55,
@@ -547,6 +559,8 @@ class ResolvedAppConfig:
     # AC nameplate that clips dispatch, sized like the inverter CAPEX: the DC
     # peak over inverter_loading_ratio.
     inverter_ac_capacity_w: float | None
+    # The configured [tariff], or None for flat prices.
+    tariff: TariffSpec | None
     cost_params: CostParams
     emissions_params: EmissionsParams | None
 
@@ -756,8 +770,105 @@ def validate_config(cfg: dict[str, Any]) -> None:
     _validate_pv_and_inverter(cfg, has_arrays)
     _validate_time_and_weather(cfg)
     _validate_economics(cfg)
+    _validate_tariff(cfg)
     _validate_battery_and_degradation(cfg)
     _validate_reachable_gcr(cfg, has_arrays)
+
+
+def _tariff_study_date(value: Any, where: str) -> date:
+    # TOML and Python give dates; JSON and the CLI give ISO strings.
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    if isinstance(value, str):
+        try:
+            return date.fromisoformat(value)
+        except ValueError as exc:
+            raise ValueError(f"'{where}' must be an ISO date such as 2027-07-01") from exc
+    raise TypeError(f"'{where}' must be a date")
+
+
+def _check_tariff_prices(table: dict[str, Any], where: str) -> None:
+    periods = set(get_tariff_schedule(table["schedule"]).periods)
+    for name in ("import_prices", "export_prices"):
+        given = set(table[name])
+        unknown = sorted(given - periods - {"all"})
+        if unknown:
+            raise ValueError(
+                f"'{where}.{name}' has period(s) {', '.join(unknown)} that schedule {table['schedule']!r} "
+                f"does not have. Its periods: {', '.join(sorted(periods))}; 'all' prices every period."
+            )
+        missing = sorted(periods - given) if "all" not in given else []
+        if missing:
+            raise ValueError(
+                f"'{where}.{name}' has no price for {', '.join(missing)}. Price every period of "
+                f"{table['schedule']!r}, or give 'all'."
+            )
+
+
+TARIFF_TABLE = TableSpec(
+    "tariff",
+    keys={
+        "schedule": choice(available_tariff_schedules()),
+        "currency": choice(tuple(sorted(SUPPORTED_CURRENCIES))),
+        "import_prices": mapping_of(text, number(minimum=0)),
+        "export_prices": mapping_of(text, number(minimum=0)),
+        "fixed_charge_per_day": number(minimum=0),
+        "boundary_policy": choice(tuple(sorted(BOUNDARY_POLICIES))),
+        "study_date": _tariff_study_date,
+    },
+    required=frozenset({"schedule", "currency", "import_prices", "export_prices"}),
+    check=_check_tariff_prices,
+)
+# Flat-price cost keys a tariff replaces; setting both would price energy twice.
+_TARIFF_REPLACES_COSTS = ("electricity_cost", "electricity_sold_cost", "daily_power_cost")
+
+
+def _validate_tariff(cfg: dict[str, Any]) -> None:
+    if cfg["tariff"] is None:
+        return
+    table = TARIFF_TABLE.validate(cfg["tariff"])
+    clashing = sorted(key for key in _TARIFF_REPLACES_COSTS if key in (cfg.get("costs") or {}))
+    if clashing:
+        raise ValueError(
+            f"A [tariff] sets the energy prices and the fixed charge, so {', '.join(f'costs.{k}' for k in clashing)} "
+            "would price them twice. Remove them, or remove [tariff]."
+        )
+    step_minutes = int(get_hours_per_step(cfg["resolution"]) * 60)
+    required = schedule_resolution_minutes(table["schedule"])
+    if required % step_minutes:
+        raise ValueError(
+            f"Schedule {table['schedule']!r} has boundaries every {required} minutes, which "
+            f'{cfg["resolution"]!r} steps cannot represent; use resolution = "15min" (ADR 0002 A3).'
+        )
+
+
+def resolve_tariff_spec(cfg: dict[str, Any], timezone: str) -> TariffSpec | None:
+    """Build the configured tariff, checking its schedule belongs to the location's timezone."""
+    if cfg["tariff"] is None:
+        return None
+    table = TARIFF_TABLE.validate(cfg["tariff"])
+    schedule = get_tariff_schedule(table["schedule"])
+    if schedule.timezone != timezone:
+        raise ValueError(
+            f"Schedule {schedule.identifier!r} is defined in {schedule.timezone} civil time, but the "
+            f"location's timezone is {timezone}. BREOS does not move a schedule to another zone."
+        )
+    prices = TariffPrices(
+        currency=table["currency"],
+        import_prices=table["import_prices"],
+        export_prices=table["export_prices"],
+        fixed_charge_per_day=table.get("fixed_charge_per_day", 0.0),
+        identifier="config",
+        version="1",
+    )
+    return TariffSpec(
+        schedule=schedule.identifier,
+        prices=prices,
+        boundary_policy=table.get("boundary_policy", "strict"),
+        study_date=table.get("study_date"),
+    )
 
 
 def _validate_reachable_gcr(cfg: dict[str, Any], has_arrays: bool) -> None:
@@ -1302,6 +1413,7 @@ def resolve_app_config(config: dict[str, Any]) -> ResolvedAppConfig:
         tracking=tracking,
         axis_azimuth=axis_azimuth,
         inverter_ac_capacity_w=inverter_ac_capacity_w(n_modules * avg_module_power_w, cfg["inverter_loading_ratio"]),
+        tariff=resolve_tariff_spec(cfg, timezone),
         cost_params=resolve_costs(cfg),
         emissions_params=resolve_emissions(cfg),
     )

@@ -52,6 +52,7 @@ weather/data access, load profiles, PV system data, and cost assumptions; see
 | `execution_backend` | `"python"` | Within-day dispatch implementation. `"numba"` selects the optional compiled backend installed by `breos[fast]` |
 | `cost_preset` | `None` | Cost preset key from packaged defaults |
 | `costs` | *unset* | Optional cost overrides layered over the selected preset and built-in defaults; see [below](#cost-and-emissions-presets) |
+| `tariff` | *unset* | Time-of-use import and export prices on a bundled schedule, replacing the flat `electricity_cost`, `electricity_sold_cost` and `daily_power_cost`; see [Time-of-use tariffs](#time-of-use-tariffs) |
 | `inflation_rate` | `0.02` | Annual electricity price inflation |
 | `sell_price_inflation` | `0.0` | Annual inflation of the grid export (sell) price |
 | `discount_rate` | `0.03` | Discount rate for NPV |
@@ -446,6 +447,44 @@ Unknown keys and negative or non-finite values are rejected before simulation.
 For full control, build a {py:class}`~breos.CostParams` and
 {py:class}`~breos.EmissionsParams` yourself and call the lower-level
 functions documented in the [Cost and emissions API](../api/cost-analysis.md).
+
+## Time-of-use tariffs
+
+A `[tariff]` table prices energy by period instead of at one flat rate. It
+names a bundled schedule, which fixes the periods in local civil time, and
+you give the prices, which BREOS does not bundle:
+
+```toml
+[tariff]
+schedule = "pt_mainland_2026_daily_bi"   # see the schedule list in the Tariffs API page
+currency = "EUR"
+import_prices = { peak = 0.28, off_peak = 0.11 }
+export_prices = { all = 0.05 }
+fixed_charge_per_day = 0.25              # optional, default 0
+# study_date = 2027-07-01                # needed for a 2027 schedule on an earlier simulated year
+```
+
+- Every period of the schedule needs an import and an export price, or an
+  `all` price for every period. A period the schedule does not have is an
+  error; there is no fallback to another schedule.
+- The schedule must be defined in the location's timezone, and the
+  resolution fine enough for its boundaries: the Portuguese tri-hourly and
+  2027 schedules change on the half hour, so they need `resolution = "15min"`.
+- A tariff replaces the flat `costs.electricity_cost`,
+  `costs.electricity_sold_cost` and `costs.daily_power_cost`, so setting
+  those as well is an error. CAPEX, O&M and replacement costs still come from
+  the cost preset, in the same currency.
+- Dispatch does not change: the battery still maximises self-consumption.
+  The tariff changes what the energy costs. Each year row records its import
+  cost, export revenue, no-system import cost and fixed charge at year-1
+  prices; the projection escalates and discounts them as it does flat prices.
+- Every project year replays the start-year calendar, so weekdays and
+  holidays do not advance; provenance records this as
+  `calendar_policy = "replay_start_year"`, with the schedule, prices and
+  their hashes.
+
+Monte Carlo prices every trajectory with the same tariff. Projected
+optimization does not read a tariff yet.
 
 ## Load profiles
 

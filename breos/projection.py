@@ -23,6 +23,7 @@ from breos.battery import (
     SimulationSummary,
     simulate_energy_balance,
     simulate_energy_balance_summary,
+    weighted_column_sums,
 )
 from breos.economics import (
     calculate_lcoe_from_projection,
@@ -31,6 +32,7 @@ from breos.economics import (
     replacement_fraction_from_steps,
 )
 from breos.execution import observed_jit_cache_state, reset_jit_cache_observation
+from breos.tariffs import ResolvedTariff
 from breos.utils import get_hours_per_step
 
 
@@ -216,6 +218,7 @@ def build_year_row(
     pv_degradation_factor: float,
     annual_fec: float = 0.0,
     extra: Mapping[str, Any] | None = None,
+    money: Mapping[str, float] | None = None,
 ) -> dict[str, Any]:
     """Build the one year-row schema App, Monte Carlo and the optimizer report.
 
@@ -290,7 +293,39 @@ def build_year_row(
     # Cumulative FEC belongs to the installed pack and restarts at zero on
     # replacement, so the year's own count comes from the all-pack total.
     row["Battery_Annual_FEC"] = float(annual_fec)
+    # Year-1-price money from a tariff (ADR 0003 E7); without one, economics
+    # prices the energy at the flat rates.
+    row.update(money or {})
     return row
+
+
+def _tariff_weights(tariff: ResolvedTariff) -> dict[str, tuple[str, np.ndarray]]:
+    import_prices = np.asarray(tariff.import_price_per_kwh, dtype=float)
+    return {
+        "Import_Cost": ("Import_From_Grid", import_prices),
+        "Export_Revenue": ("Sell_To_Grid", np.asarray(tariff.export_price_per_kwh, dtype=float)),
+        # The no-system household buys its whole load at the same prices.
+        "Baseline_Import_Cost": ("Houseload", import_prices),
+    }
+
+
+def _tariff_money(
+    tariff: ResolvedTariff, weighted_w: Mapping[str, float], hours_per_step: float, n_steps: int
+) -> dict[str, float]:
+    """A year's money at year-1 prices from its price-weighted power sums."""
+    money = {name: float(total * hours_per_step / 1000) for name, total in weighted_w.items()}
+    # Billed on the simulated duration, as the flat path is (ADR 0003 E5).
+    money["Fixed_Charge"] = tariff.prices.fixed_charge_per_day * (n_steps * hours_per_step / 24)
+    return money
+
+
+def _check_tariff_calendar(tariff: ResolvedTariff, index: pd.DatetimeIndex) -> None:
+    same = len(index) == len(tariff.index) and bool((index.tz_convert("UTC") == tariff.index.tz_convert("UTC")).all())
+    if not same:
+        raise ValueError(
+            "The tariff was resolved on a different calendar from the simulated year; resolve it on the "
+            "simulation index."
+        )
 
 
 @dataclass(frozen=True)
@@ -335,6 +370,7 @@ def project_years(
     blast_model: str | None = None,
     initial_carry: CarryState | None = None,
     observe_jit_per_year: bool = False,
+    tariff: ResolvedTariff | None = None,
 ) -> ProjectionRun:
     """Simulate ``years`` project years, carrying the battery from one to the next.
 
@@ -343,8 +379,14 @@ def project_years(
     builds the battery at the carried SOH. The rainflow residue is counted
     once, at the end of the last year. ``observe_jit_per_year`` records the
     Numba cache state of every year, as App reports it.
+
+    With a ``tariff``, resolved on the simulation calendar, each year row
+    carries its import cost, export revenue, no-system import cost and fixed
+    charge at year-1 prices, from the step energy times the step price. Every
+    year replays the one calendar (ADR 0002 A2).
     """
     hours_per_step = get_hours_per_step(freq)
+    weights = _tariff_weights(tariff) if tariff is not None else None
     carry = initial_carry or CarryState()
     rows: list[dict[str, Any]] = []
     total_replacements = 0
@@ -374,7 +416,10 @@ def project_years(
             reset_jit_cache_observation(execution_backend)
 
         if year.aligned is not None:
-            summary = simulate_energy_balance_summary(aligned=year.aligned, **common)
+            if tariff is not None:
+                _check_tariff_calendar(tariff, year.aligned.index)
+            summary = simulate_energy_balance_summary(aligned=year.aligned, weights=weights, **common)
+            weighted_w: Mapping[str, float] = summary.weighted_sums
             carry = carry.after_summary(
                 summary, has_battery=has_battery, resistance_fade=batt_cfg.enable_resistance_fade
             )
@@ -412,6 +457,11 @@ def project_years(
             )
             if first_year_results_df is None:
                 first_year_results_df = results_df
+            if tariff is not None:
+                _check_tariff_calendar(tariff, pd.DatetimeIndex(results_df["Datetime"]))
+            weighted_w = weighted_column_sums(
+                {column: results_df[column].to_numpy() for column, _ in (weights or {}).values()}, weights
+            )
 
         if observe_jit_per_year:
             state_name = observed_jit_cache_state(execution_backend)
@@ -434,6 +484,7 @@ def project_years(
                 pv_degradation_factor=year.pv_degradation_factor,
                 annual_fec=annual_fec,
                 extra=year.extra,
+                money=_tariff_money(tariff, weighted_w, hours_per_step, n_steps) if tariff is not None else None,
             )
         )
 
@@ -458,6 +509,7 @@ def run_projection(
     has_battery: bool,
     execution_backend: str,
     observe_jit_per_year: bool = False,
+    tariff: ResolvedTariff | None = None,
 ) -> ProjectionRun:
     """Run :func:`project_years` for an App configuration.
 
@@ -480,6 +532,7 @@ def run_projection(
         degradation_engine=str(cfg.get("degradation_engine", "native")).strip().lower(),
         blast_model=cfg.get("blast_model"),
         observe_jit_per_year=observe_jit_per_year,
+        tariff=tariff,
     )
 
 

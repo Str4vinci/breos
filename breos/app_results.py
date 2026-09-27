@@ -171,6 +171,9 @@ def _provenance(
     # unchanged. An empty list is recorded as given.
     if input_repairs is not None:
         provenance["input_repairs"] = deepcopy(input_repairs)
+    # Flat-price runs carry no tariff block, so their results are unchanged.
+    if artifacts.tariff is not None:
+        provenance["tariff"] = deepcopy(artifacts.tariff)
     return provenance
 
 
