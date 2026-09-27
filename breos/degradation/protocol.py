@@ -60,7 +60,10 @@ class _NativeRainflowCounter:
                 f"{state.get('schema_version')!r}; expected {_NATIVE_RAINFLOW_STATE_VERSION!r}"
             )
         try:
-            self._points = deque(self._point(point) for point in state.get("residue", []))  # type: ignore[arg-type]
+            residue = [self._point(point) for point in state.get("residue", [])]
+            if any(point is None for point in residue):
+                raise ValueError("native rainflow residue points must not be null")
+            self._points = deque(point for point in residue if point is not None)
             self._previous = self._point(state.get("previous"))
             self._current = self._point(state.get("current"))
             last_delta = state.get("last_delta")
@@ -71,7 +74,7 @@ class _NativeRainflowCounter:
             self._step_seconds = None if step_seconds is None else float(step_seconds)
         except (TypeError, ValueError) as exc:
             raise ValueError("Invalid native rainflow state") from exc
-        if self._next_index < 0 or any(point is None for point in self._points):
+        if self._next_index < 0:
             raise ValueError("Invalid native rainflow state")
         if self._step_seconds is not None and (not np.isfinite(self._step_seconds) or self._step_seconds <= 0):
             raise ValueError("Invalid native rainflow step size")
