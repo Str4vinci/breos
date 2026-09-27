@@ -143,6 +143,32 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   loss diagnostics, carried energy, replacement steps); `App.result()` is
   unchanged, and so are all numbers: the App golden baseline matches bit for
   bit.
+- Projected optimization (`evaluate_projected_design` and the NSGA-II
+  projected scoring) runs the same projection loop,
+  `breos.projection.project_years`, with its own battery and initial SOH
+  ([#179](https://github.com/Str4vinci/breos/issues/179)).
+  `_projected_year_summary` is gone, so the optimizer's yearly table
+  (`ProjectedDesignResult.yearly`) has the shared year-row schema:
+  **`PV_DC_kWh` is now `PV_DC_Generation_kWh` and `PV_DC_Curtailed_kWh` is
+  now `Curtailment_DC_kWh`**, a PV-only design reports `Battery_SOH_%` as
+  empty rather than 100, and the table gains the App and Monte Carlo columns.
+  App and Monte Carlo rows gain the optimizer's `Inverter_Loss_kWh`,
+  `Battery_Charge_Throughput_kWh`, `Battery_Discharge_Throughput_kWh`, the two
+  SOC means and `Battery_Annual_FEC`, and `SimulationSummary` gains
+  `fec_all_packs`. Optimizer results move by at most one unit in the last
+  place (2e-16 relative in LCOE and the ZEB ratio), because delivered PV is
+  now summed per column rather than per step; App and Monte Carlo results
+  are unchanged.
+- Nested config tables are checked by one schema, `breos.config_schema.TableSpec`
+  ([#181](https://github.com/Str4vinci/breos/issues/181)): the keys a table
+  allows, a checker per key, the keys it requires, and a hook for rules that
+  span keys. `costs`, `battery_indoor_model` and each `pv_arrays` entry use
+  it now, and the 0.7 `[tariff]` and `[smart_charging]` tables will. Every
+  table reports an unknown key the same way, as `Unknown key
+  'battery_indoor_model.setpoint'. Available: ...`; the indoor model and
+  `pv_arrays` messages used to differ, and a non-boolean
+  `battery_indoor_model.enabled` now says "must be true or false". Valid
+  configs behave exactly as before.
 - **One default discount and inflation rate everywhere** (ADR 0003 E6): a
   discount rate of 0.03 and an inflation rate of 0.02, defined once as
   `breos.economics.DEFAULT_DISCOUNT_RATE` and `DEFAULT_INFLATION_RATE` and
