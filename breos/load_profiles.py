@@ -15,6 +15,7 @@ import numpy as np
 import pandas as pd
 
 from breos.resources import rlp_resource
+from breos.utils import normalise_frequency
 from breos.weather import resample_to_15min
 
 # Profile type mappings
@@ -111,6 +112,7 @@ def load_profile(
         ValueError: If profile_type is not recognized, or start_date is not
             1 January
     """
+    freq = normalise_frequency(freq)
     start_ts = pd.Timestamp(start_date)
     if (start_ts.month, start_ts.day) != (1, 1) or start_ts != start_ts.normalize():
         raise ValueError(
@@ -134,7 +136,7 @@ def load_profile(
     # Prefer native 15-minute files when requested. If only a native
     # 15-minute external profile is available, load it and downsample later.
     native_candidate = _candidate(PROFILE_FILES_15MIN[profile_type]) if profile_type in PROFILE_FILES_15MIN else None
-    use_native_15min = freq in ("15min", "15T") and profile_type in PROFILE_FILES_15MIN and _exists(native_candidate)
+    use_native_15min = freq == "15min" and profile_type in PROFILE_FILES_15MIN and _exists(native_candidate)
 
     if use_native_15min:
         csv_resource = native_candidate
@@ -190,7 +192,7 @@ def load_profile(
     df = _localize_wall_clock_index(df, timezone, native_freq)
 
     # Resample if needed (hourly to 15-min)
-    if freq in ("15min", "15T") and native_freq == "h":
+    if freq == "15min" and native_freq == "h":
         df = _resample_load_to_15min(df)
     elif freq == "h" and native_freq == "15min":
         df = df.resample("h").mean()
