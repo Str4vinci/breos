@@ -130,6 +130,16 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   optimizer paths. Results are unchanged. The optimizer's two paths no longer
   raise `TypeError` when `dc_ac_ratio` is `None`; they run without AC
   clipping, as App does.
+- Nested config tables are checked by one schema, `breos.config_schema.TableSpec`
+  ([#181](https://github.com/Str4vinci/breos/issues/181)): the keys a table
+  allows, a checker per key, the keys it requires, and a hook for rules that
+  span keys. `costs`, `battery_indoor_model` and each `pv_arrays` entry use
+  it now, and the 0.7 `[tariff]` and `[smart_charging]` tables will. Every
+  table reports an unknown key the same way, as `Unknown key
+  'battery_indoor_model.setpoint'. Available: ...`; the indoor model and
+  `pv_arrays` messages used to differ, and a non-boolean
+  `battery_indoor_model.enabled` now says "must be true or false". Valid
+  configs behave exactly as before.
 
 ### Fixed
 - App weather that does not cover the whole calendar year of `start_date`
