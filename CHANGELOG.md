@@ -218,6 +218,9 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   €/kWh; energy and battery results are unchanged. App results do not
   change, since App already used 0.03 and 0.02. An explicit 0.0 is used as
   given.
+- The DST-day tariff test builds each civil day up to the next local
+  midnight, so it passes on pandas 2.x too, where `pd.offsets.Day` is a fixed
+  24 hours; the `floors` CI job failed on it. Test only.
 
 ### Fixed
 - App weather that does not cover the whole calendar year of `start_date`

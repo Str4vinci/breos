@@ -215,7 +215,9 @@ def test_a_utc_year_grazing_the_next_local_year_needs_no_second_calendar():
 def test_dst_days_keep_every_instant(schedule, day, expected_steps):
     zone = TIMEZONES[schedule]
     start = pd.Timestamp(day, tz=zone)
-    # A calendar day in the zone: 23 or 25 hours at the transitions.
-    index = pd.date_range(start, start + pd.offsets.Day(1), freq="15min", inclusive="left")
+    # A calendar day in the zone, 23 or 25 hours at the transitions. The end is
+    # the next local midnight: pd.offsets.Day is a fixed 24 hours before pandas 3.
+    end = pd.Timestamp((start + pd.Timedelta(hours=36)).date(), tz=zone)
+    index = pd.date_range(start, end, freq="15min", inclusive="left")
     labels = classify_tariff_periods(index, schedule, timezone=zone)
     assert len(labels) == expected_steps
