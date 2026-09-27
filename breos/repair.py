@@ -31,7 +31,7 @@ from __future__ import annotations
 import json
 from collections.abc import Iterable, Mapping
 from dataclasses import asdict, dataclass
-from typing import Any, Optional, Union
+from typing import Any, Optional, Union, cast
 
 import numpy as np
 import pandas as pd
@@ -293,7 +293,8 @@ def repair_series(
         raise TypeError(f"{kind} series must be numeric power in W, got dtype {series.dtype}")
 
     step = _step(series.index, freq, kind)
-    full = _regular_index(series.index, step, index, kind)
+    # _step has checked that the index is a DatetimeIndex.
+    full = _regular_index(cast(pd.DatetimeIndex, series.index), step, index, kind)
     hours = step / pd.Timedelta(hours=1)
 
     present = full.isin(series.index)
@@ -455,11 +456,11 @@ def _step(idx: pd.Index, freq: Optional[str], kind: str) -> pd.Timedelta:
     if len(idx) < 2:
         raise ValueError(f"{kind} series needs at least two timestamps to define its step")
     if idx.hasnans:
-        raise ValueError(f"{kind} series has {int(idx.isna().sum())} NaT timestamps")
+        raise ValueError(f"{kind} series has {int(np.asarray(idx.isna()).sum())} NaT timestamps")
     duplicated = idx.duplicated(keep=False)
     if duplicated.any():
         raise ValueError(
-            f"{kind} series has {int(duplicated.sum())} rows on duplicate timestamps (first at "
+            f"{kind} series has {int(np.asarray(duplicated).sum())} rows on duplicate timestamps (first at "
             f"{idx[duplicated][0].isoformat()}). repair_series does not choose between duplicate "
             "readings; drop or aggregate them first."
         )
@@ -467,7 +468,7 @@ def _step(idx: pd.Index, freq: Optional[str], kind: str) -> pd.Timedelta:
         raise ValueError(f"{kind} series index is not sorted; call sort_index() first")
     if freq is not None:
         try:
-            step = pd.Timedelta(pd.tseries.frequencies.to_offset(freq))
+            step = pd.Timedelta(cast(Any, pd.tseries.frequencies.to_offset(freq)))
         except (TypeError, ValueError) as exc:
             raise ValueError(f"freq must be a fixed step such as 'h' or '15min', got {freq!r}") from exc
     else:
@@ -481,7 +482,7 @@ def _regular_index(
     idx: pd.DatetimeIndex, step: pd.Timedelta, target: Optional[pd.DatetimeIndex], kind: str
 ) -> pd.DatetimeIndex:
     """Return the full regular index, refusing an index off the step grid."""
-    ns = idx.as_unit("ns").asi8
+    ns = idx.as_unit("ns").asi8  # type: ignore[attr-defined]  # pandas-stubs omits asi8
     step_ns = step.as_unit("ns").value
     off_grid = np.flatnonzero(np.diff(ns) % step_ns != 0)
     if off_grid.size:
@@ -500,7 +501,8 @@ def _regular_index(
         raise ValueError("index and the series must both be timezone-aware or both naive")
     if target.hasnans or target.has_duplicates or not target.is_monotonic_increasing:
         raise ValueError("index must be sorted, without NaT or duplicate timestamps")
-    if len(target) > 1 and (np.diff(target.as_unit("ns").asi8) != step_ns).any():
+    target_ns = target.as_unit("ns").asi8  # type: ignore[attr-defined]  # pandas-stubs omits asi8
+    if len(target) > 1 and (np.diff(target_ns) != step_ns).any():
         raise ValueError(f"index must be regular at the series step ({_freq_alias(step)})")
     outside = ~idx.isin(target)
     if outside.any():
@@ -564,7 +566,7 @@ def _fill_from_nearby_days(
     """Return fill values for every invalid step, or raise if one has no donor."""
     clock = full.tz_convert("UTC") if kind == "pv" and full.tz is not None else full
     wall = clock.tz_localize(None) if clock.tz is not None else clock
-    wall_ns = wall.as_unit("ns").asi8
+    wall_ns = wall.as_unit("ns").asi8  # type: ignore[attr-defined]  # pandas-stubs omits asi8
     day = wall_ns // _NS_PER_DAY
     time_of_day = wall_ns - day * _NS_PER_DAY
 
