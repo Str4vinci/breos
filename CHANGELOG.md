@@ -799,6 +799,23 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   `PROFILE_FILE_NATIVE_FREQ`, `PROFILE_NAMES`, `PROFILE_ALIASES` and
   `EREDES_COLUMNS`. Read `PROFILES` instead. `breos list load-profiles` drops
   its `aliases` field and gains `files` and `requires_load_profile_file`.
+- **The steady-state optimizer scoring basis and `calculate_financials`**
+  ([#179](https://github.com/Str4vinci/breos/issues/179)), with no
+  deprecation period. `optimization.objective_basis = "steady_state"` scored a
+  candidate on one simulated year, with NPV from `calculate_financials` and
+  battery replacements extrapolated from the year-one SOH loss. Candidates are
+  now scored over the projected lifetime only, and a config that still sets
+  `"steady_state"` raises `ValueError`; `"projected"` stays accepted. The
+  default projected scoring also ran that year-one pass on every candidate for
+  diagnostics, so the `SteadyState_Grid_Independence_%`,
+  `SteadyState_NPV_Eur` and `SteadyState_ZEB_Ratio` values and Pareto columns
+  are gone, along with the private helpers `_year_one_soh_loss_pct` and
+  `_estimate_battery_replacement_treatment` and the constants
+  `DEFAULT_PANEL_WP` and `DEFAULT_OBJECTIVE_BASIS`.
+  `SolarDesignProblem.projected_objectives` is gone too;
+  `objective_basis` remains and is always `"projected"`. Projected results are
+  unchanged bit for bit, and each candidate evaluation skips one simulated
+  year: 22% faster on a three-year horizon and 4% on twenty years.
 
 ### Documentation
 - The release checklist records that `v0.5.0`, `v0.5.1` and `v0.6.0` are

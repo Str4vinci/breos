@@ -85,8 +85,8 @@ print(pareto[["Modules", "Battery_kWh", "Tilt", "Azimuth"]])
 ```
 
 `pareto` is a DataFrame with one row per non-dominated design, holding the
-sizing columns above, the objective values, ZEB diagnostics, and both
-steady-state and projected fields. There is no single best row. Pick the design
+sizing columns above, the objective values, ZEB diagnostics, and the
+`Projected_*` fields. There is no single best row. Pick the design
 whose balance of independence and cost matches the project.
 
 The optimizer does not read `pop_size`, `n_offsprings`, `n_gen`, or `seed`
@@ -102,8 +102,7 @@ Loosen `budget_eur`, `max_area_m2`, `max_modules`, or `max_battery_kwh` in
 
 ## Score designs over their projected lifetime
 
-The default `projected` basis scores each candidate over the whole configured
-horizon:
+The optimizer scores each candidate over the whole configured horizon:
 
 ```toml
 [optimization]
@@ -117,17 +116,9 @@ feasibility constraint, set `enforce_zeb = true` under `[constraints]`.
 
 Projected scoring simulates `years_projection` years for every candidate. Start
 with a small `pop_size` and `n_gen` while you check that the config resolves,
-then scale up. To screen a wide design space at lower cost, opt into the
-single-year basis:
-
-```toml
-[optimization]
-objective_basis = "steady_state"
-```
-
-The `steady_state` basis optimizes annual grid independence, NPV, and ZEB ratio.
-It estimates battery replacement from first-year state-of-health loss instead
-of propagating battery state through the project lifetime.
+then scale up. To screen a wide design space at lower cost, shorten
+`years_projection` for the screening run. The single-year `steady_state` basis
+was removed in 0.7.0, and a config that still sets it raises an error.
 
 ## Evaluate one design in detail
 
