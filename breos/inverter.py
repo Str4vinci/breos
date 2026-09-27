@@ -320,22 +320,53 @@ def calculate_dc_ac_power(
     inverter_ac_power = max(0.0, float(inverter_ac_power))
     inverter_efficiency = min(1.0, max(0.0, float(inverter_efficiency)))
     ac_output_scale = _clamped_ac_output_scale(ac_output_scale)
+    ac_power, conversion_loss, clipping_loss_dc = _dc_ac(
+        pv_dc_power, inverter_ac_power, inverter_efficiency, ac_output_scale, 2.0
+    )
+    # Only a converter that is really there has an AC side to express the
+    # clipped DC on; the core's early returns carry no clipping otherwise.
+    if inverter_efficiency > 0.0 and inverter_ac_power > 0.0:
+        clipping_loss_ac_equiv = clipping_loss_dc * inverter_efficiency * ac_output_scale
+    else:
+        clipping_loss_ac_equiv = 0.0
+
+    return InverterConversionResult(
+        ac_power_w=ac_power,
+        conversion_loss_w=conversion_loss,
+        clipping_loss_dc_w=clipping_loss_dc,
+        clipping_loss_ac_equivalent_w=clipping_loss_ac_equiv,
+    )
+
+
+def _dc_ac(
+    pv_dc_power: float,
+    inverter_ac_power: float,
+    inverter_efficiency: float,
+    ac_output_scale: float,
+    pow_two: float,
+) -> tuple[float, float, float]:
+    """Scalar core of :func:`calculate_dc_ac_power`: ``(ac, conversion_loss, clipping_dc)``.
+
+    Written without dataclasses or ``float()`` coercion so the Numba backend
+    compiles this same function; see :mod:`breos._dispatch`.
+
+    ``pow_two`` carries the literal 2.0 in from a Python caller. CPython
+    evaluates ``zeta ** 2`` as a libm ``pow`` call, and for some inputs
+    glibc's ``pow`` differs by one ULP from the correctly rounded square.
+    With a constant exponent LLVM rewrites the call to ``zeta * zeta`` and
+    picks up that one ULP; keeping the exponent opaque until run time
+    forces the same libm call on both backends. This is load-bearing for bit
+    identity, not a stylistic choice.
+    """
+    pv_dc_power = max(0.0, pv_dc_power)
+    inverter_ac_power = max(0.0, inverter_ac_power)
+    inverter_efficiency = min(1.0, max(0.0, inverter_efficiency))
+    ac_output_scale = min(1.0, max(0.0, ac_output_scale))
 
     if inverter_efficiency <= 0.0 or inverter_ac_power <= 0.0:
-        return InverterConversionResult(
-            ac_power_w=0.0,
-            conversion_loss_w=0.0,
-            clipping_loss_dc_w=pv_dc_power,
-            clipping_loss_ac_equivalent_w=0.0,
-        )
-
+        return 0.0, 0.0, pv_dc_power
     if pv_dc_power <= 0.0:
-        return InverterConversionResult(
-            ac_power_w=0.0,
-            conversion_loss_w=0.0,
-            clipping_loss_dc_w=0.0,
-            clipping_loss_ac_equivalent_w=0.0,
-        )
+        return 0.0, 0.0, 0.0
 
     # A lower-level BatteryConfig may intentionally omit the inverter
     # nameplate. With no rated power there is no part-load ratio to evaluate,
@@ -343,12 +374,7 @@ def calculate_dc_ac_power(
     # supplies its sized finite AC rating.
     if not math.isfinite(inverter_ac_power):
         ac_power = pv_dc_power * inverter_efficiency * ac_output_scale
-        return InverterConversionResult(
-            ac_power_w=ac_power,
-            conversion_loss_w=pv_dc_power - ac_power,
-            clipping_loss_dc_w=0.0,
-            clipping_loss_ac_equivalent_w=0.0,
-        )
+        return ac_power, pv_dc_power - ac_power, 0.0
 
     # PVWatts defines pdc0 as the DC input at which the inverter reaches its
     # AC nameplate (pac0 = eta_inv_nom * pdc0). BREOS exposes the AC rating,
@@ -364,20 +390,15 @@ def calculate_dc_ac_power(
             inverter_ac_power,
             (inverter_efficiency / PVWATTS_REFERENCE_EFFICIENCY)
             * pdc0
-            * (PVWATTS_CURVE_QUADRATIC * zeta**2 + PVWATTS_CURVE_LINEAR * zeta + PVWATTS_CURVE_CONSTANT),
+            * (
+                PVWATTS_CURVE_QUADRATIC * math.pow(zeta, pow_two) + PVWATTS_CURVE_LINEAR * zeta + PVWATTS_CURVE_CONSTANT
+            ),
         ),
     )
     ac_power *= ac_output_scale
     clipping_loss_dc = max(0.0, pv_dc_power - dc_used)
     conversion_loss = max(0.0, dc_used - ac_power)
-    clipping_loss_ac_equiv = clipping_loss_dc * inverter_efficiency * ac_output_scale
-
-    return InverterConversionResult(
-        ac_power_w=ac_power,
-        conversion_loss_w=conversion_loss,
-        clipping_loss_dc_w=clipping_loss_dc,
-        clipping_loss_ac_equivalent_w=clipping_loss_ac_equiv,
-    )
+    return ac_power, conversion_loss, clipping_loss_dc
 
 
 def _calculate_dc_ac_power_arrays(
@@ -438,13 +459,28 @@ def dc_power_for_ac_output(
     requested AC at the same scale. Dispatch must pass the same value to both,
     or it would size DC against one boundary and deliver against another.
     """
-    ac_output_scale = _clamped_ac_output_scale(ac_output_scale)
+    return _dc_for_ac(
+        float(ac_power_w),
+        float(inverter_ac_power),
+        float(inverter_efficiency),
+        _clamped_ac_output_scale(ac_output_scale),
+    )
+
+
+def _dc_for_ac(
+    ac_power_w: float,
+    inverter_ac_power: float,
+    inverter_efficiency: float,
+    ac_output_scale: float,
+) -> float:
+    """Scalar core of :func:`dc_power_for_ac_output`, compiled as-is by the Numba backend."""
+    ac_output_scale = min(1.0, max(0.0, ac_output_scale))
     if ac_output_scale <= 0.0:
         return 0.0
-    ac_power_w = float(ac_power_w) / ac_output_scale
-    ac_target = max(0.0, min(float(ac_power_w), max(0.0, float(inverter_ac_power))))
-    inverter_ac_power = max(0.0, float(inverter_ac_power))
-    inverter_efficiency = min(1.0, max(0.0, float(inverter_efficiency)))
+    ac_power_w = ac_power_w / ac_output_scale
+    ac_target = max(0.0, min(ac_power_w, max(0.0, inverter_ac_power)))
+    inverter_ac_power = max(0.0, inverter_ac_power)
+    inverter_efficiency = min(1.0, max(0.0, inverter_efficiency))
     if ac_target <= 0.0 or inverter_ac_power <= 0.0 or inverter_efficiency <= 0.0:
         return 0.0
     if not math.isfinite(inverter_ac_power):

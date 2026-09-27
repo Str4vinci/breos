@@ -199,6 +199,22 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   €/kWh; energy and battery results are unchanged. App results do not
   change, since App already used 0.03 and 0.02. An explicit 0.0 is used as
   given.
+- The greedy dispatch step is written once for both execution backends
+  ([#177](https://github.com/Str4vinci/breos/issues/177)). The step, the day
+  loop, the capacity window and the ledger layout live in `breos._dispatch`
+  as plain scalar code; the Python backend calls it and the Numba backend
+  compiles the same functions, instead of a hand-kept copy in
+  `breos._numba_dispatch_kernels`. The inverter conversion has one scalar
+  core behind `calculate_dc_ac_power` and `dc_power_for_ac_output`, and the
+  unused no-battery branch of the day loop is gone (PV-only runs take the
+  vectorised path). `lfp_capacity_factor` and `compute_cell_temperature`
+  stay importable from `breos.battery`. Results are unchanged on both
+  backends: the App golden baseline and Monte Carlo runs match develop bit
+  for bit. A warm hourly battery year takes about 30% less time on the
+  Python backend (80 to 56 ms on the parity harness) and about 15% less on
+  Numba (13.0 to 11.1 ms), the latter because the aging step now reads
+  timestamps from one precomputed tick array instead of slicing the
+  `DatetimeIndex` every day.
 
 ### Fixed
 - App weather that does not cover the whole calendar year of `start_date`

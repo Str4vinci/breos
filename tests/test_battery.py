@@ -10,7 +10,6 @@ import breos.battery as battery_module
 from breos.battery import (
     BatteryConfig,
     _datetime_index_ticks,
-    _dispatch_day_python,
     _dispatch_no_battery_vectorized,
     _get_degradation_params,
     _ResultBuffers,
@@ -221,30 +220,34 @@ class TestSimulateEnergyBalance:
         )
         hours_per_step = 0.25
         cap_wh = float("inf") if inverter_ac_capacity_w is None else inverter_ac_capacity_w * hours_per_step
+        # The scalar reference: the public inverter helper, one step at a time,
+        # with PV serving load before export. Only battery runs enter the day
+        # loop, so this is the one place the PV-only rules are written out.
         reference = _ResultBuffers(len(pv_dc))
+        reference.zero_fill()
+        for i in range(len(pv_dc)):
+            pv_wh = max(0.0, pv_dc[i] * hours_per_step)
+            load_wh = load[i] * hours_per_step
+            conversion = calculate_dc_ac_power(pv_wh, cap_wh, config.inverter_efficiency, config.ac_output_scale)
+            to_load = min(conversion.ac_power_w, load_wh)
+            production = pv_wh - conversion.clipping_loss_dc_w - conversion.conversion_loss_w
+            reference.pv_dc[i] = pv_wh / hours_per_step
+            reference.pv_production[i] = production / hours_per_step
+            reference.load[i] = load_wh / hours_per_step
+            reference.pv_delta[i] = (production - load_wh) / hours_per_step
+            reference.grid_import[i] = max(0.0, load_wh - to_load) / hours_per_step
+            reference.grid_export[i] = (conversion.ac_power_w - to_load) / hours_per_step
+            reference.soh[i] = 100.0
+            reference.t_cell[i] = temperature[i]
+            reference.pv_curtailment[i] = conversion.clipping_loss_dc_w / hours_per_step
+            reference.ledger["PV_DC_To_Inverter"][i] = (pv_wh - conversion.clipping_loss_dc_w) / hours_per_step
+            reference.ledger["PV_DC_Curtailed"][i] = conversion.clipping_loss_dc_w / hours_per_step
+            reference.ledger["PV_AC_To_Load"][i] = to_load / hours_per_step
+            reference.ledger["PV_AC_Export"][i] = (conversion.ac_power_w - to_load) / hours_per_step
+            reference.ledger["PV_Direct_Inverter_Loss"][i] = conversion.conversion_loss_w / hours_per_step
+            reference.ledger["Inverter_Loss"][i] = conversion.conversion_loss_w / hours_per_step
         vectorized = _ResultBuffers(len(pv_dc))
 
-        _dispatch_day_python(
-            reference,
-            pv_dc,
-            load,
-            temperature,
-            0,
-            len(pv_dc),
-            battery_config=config,
-            has_battery=False,
-            battery_soh_decimal=1.0,
-            Battery_SOH=100.0,
-            Battery_Energy_Wh=0.0,
-            Battery_PV_Origin_Energy_Wh=0.0,
-            eff_charge=config.charge_efficiency,
-            eff_discharge=config.discharge_efficiency,
-            hours_per_step=hours_per_step,
-            standby_loss_per_step_wh=0.0,
-            cap_wh=cap_wh,
-            cap_charge_wh=float("inf"),
-            cap_discharge_wh=float("inf"),
-        )
         _dispatch_no_battery_vectorized(
             vectorized,
             pv_dc,

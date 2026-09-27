@@ -126,7 +126,8 @@ execution_backend = "numba"
 Installing the extra changes nothing on its own. Without
 `execution_backend = "numba"`, Monte Carlo uses the Python path.
 
-The kernel carries the production BREOS dispatch and its energy ledger. Rainflow
+The kernel is the production BREOS dispatch and its energy ledger, compiled
+from the same functions the Python path runs rather than from a copy. Rainflow
 counting, degradation, resistance growth, and replacement stay in Python, so the
 backend accelerates one stage rather than the whole model. It is private, with
 no public API, and configuration is the only supported way to select it.

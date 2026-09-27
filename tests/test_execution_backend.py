@@ -9,7 +9,7 @@ import pandas as pd
 import pytest
 
 from breos.app_config import APP_CONFIG_FIELDS
-from breos.battery import EXECUTION_BACKENDS, _dispatch_day_python, _resolve_dispatch_day
+from breos.battery import EXECUTION_BACKENDS, BatteryConfig, _dispatch_day_python, _resolve_dispatch_day, _ResultBuffers
 from breos.montecarlo import MonteCarloSettings, _aggregate_jit_cache_states, run_montecarlo
 
 
@@ -110,21 +110,13 @@ def test_jit_cache_state_ignores_unverified_cache_files(tmp_path, monkeypatch):
 
 def _call_numba_cache_probe(dispatch):
     dispatch._dispatch_day_numba(
-        SimpleNamespace(matrix=np.zeros((37, 1))),
+        _ResultBuffers(1),
         np.zeros(1),
         np.zeros(1),
         np.full(1, 25.0),
         0,
         1,
-        battery_config=SimpleNamespace(
-            nominal_energy_wh=0.0,
-            max_soc=0.9,
-            min_soc=0.1,
-            inverter_efficiency=0.96,
-            thermal_resistance_kw=0.05,
-            ac_output_scale=1.0,
-        ),
-        has_battery=False,
+        battery_config=BatteryConfig(nominal_energy_wh=5000.0),
         battery_soh_decimal=1.0,
         Battery_SOH=100.0,
         Battery_Energy_Wh=0.0,
@@ -150,7 +142,7 @@ def test_jit_cache_state_reports_miss_then_in_memory_reuse(monkeypatch):
             if not self.signatures:
                 self.stats.cache_misses["signature"] = 1
                 self.signatures.append(("compiled",))
-            return 0.0, 0.0, 0.0, 0.0
+            return 0.0, 0.0, 0.0
 
     monkeypatch.setattr(dispatch, "_KERNEL", _Kernel())
     dispatch.reset_jit_cache_observation()
@@ -175,7 +167,7 @@ def test_montecarlo_provenance_uses_worker_observations_across_repeated_studies(
             if not self.signatures:
                 self.stats.cache_misses["signature"] = 1
                 self.signatures.append(("compiled",))
-            return 0.0, 0.0, 0.0, 0.0
+            return 0.0, 0.0, 0.0
 
     monkeypatch.setattr(dispatch, "_KERNEL", _Kernel())
     monkeypatch.setattr(
@@ -264,16 +256,18 @@ def test_both_backends_agree_on_a_seeded_study(tmp_path, write_multiyear_weather
 _CACHE_PROBE = """
 import json, sys
 sys.path.insert(0, {root!r})
-from breos._numba_dispatch import _build_kernel
 import numpy as np
+from breos._numba_dispatch import _dispatch_day_numba, _kernel
+from breos.battery import BatteryConfig, _ResultBuffers
 
-kernel = _build_kernel()
-matrix = np.zeros((37, 96))
-kernel(
-    matrix, np.zeros(96), np.zeros(96), np.full(96, 25.0), 0, 96,
-    0.0, 0.0, False, 0.0, 1.0, 100.0, 0.9, 0.1, 0.0, 0.95, 0.95, 0.96,
-    np.inf, np.inf, np.inf, 0.05, 0.25, 2.0, 1.0, np.inf,
+_dispatch_day_numba(
+    _ResultBuffers(96), np.zeros(96), np.zeros(96), np.full(96, 25.0), 0, 96,
+    battery_config=BatteryConfig(nominal_energy_wh=5000.0),
+    battery_soh_decimal=1.0, Battery_SOH=100.0, Battery_Energy_Wh=0.0, Battery_PV_Origin_Energy_Wh=0.0,
+    eff_charge=0.95, eff_discharge=0.95, hours_per_step=0.25, standby_loss_per_step_wh=0.0,
+    cap_wh=np.inf, cap_charge_wh=np.inf, cap_discharge_wh=np.inf,
 )
+kernel = _kernel()
 print(json.dumps({{
     "hits": int(sum(kernel.stats.cache_hits.values())),
     "misses": int(sum(kernel.stats.cache_misses.values())),
@@ -303,15 +297,15 @@ def _run_cache_probe(cache_dir):
 def _dispatch_cache_data_files(cache_dir):
     from pathlib import Path
 
-    return sorted(Path(cache_dir).glob("**/*_dispatch_day_kernel*.nbc"))
+    return sorted(Path(cache_dir).glob("**/_dispatch._dispatch_day-*.nbc"))
 
 
 def test_dispatch_kernel_cache_survives_a_new_process(tmp_path):
     """The on-disk cache must work across processes, not just within one.
 
     This is a regression test for a defect, not a nicety. When the kernels were
-    defined inside a factory, ``_dispatch_day_kernel`` closed over the three
-    helper dispatchers; Numba's cache index key for a closure includes the cell
+    defined inside a factory, the day kernel closed over the three helper
+    dispatchers; Numba's cache index key for a closure includes the cell
     contents, which are not stable across processes, so every process missed
     the cache and appended another data file. Under multiprocessing that meant
     every worker recompiled, and the cache directory grew without bound.

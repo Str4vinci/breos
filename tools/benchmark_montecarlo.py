@@ -62,16 +62,21 @@ def machine_info() -> dict[str, object]:
 _COMPILE_PROBE = """
 import json, sys, time
 sys.path.insert(0, {root!r})
-from breos._numba_dispatch import _build_kernel
 import numpy as np
+from breos._numba_dispatch import _dispatch_day_numba, _kernel
+from breos.battery import BatteryConfig, _ResultBuffers
+config = BatteryConfig(nominal_energy_wh=5000.0)
+out = _ResultBuffers(96)
 start = time.perf_counter()
-kernel = _build_kernel()
+kernel = _kernel()
 hits_before = sum(kernel.stats.cache_hits.values())
 misses_before = sum(kernel.stats.cache_misses.values())
-matrix = np.zeros((37, 96))
-pv = np.zeros(96); load = np.zeros(96); temp = np.full(96, 25.0)
-kernel(matrix, pv, load, temp, 0, 96, 0.0, 0.0, False, 0.0, 1.0, 100.0, 0.9, 0.1,
-       0.0, 0.95, 0.95, 0.96, np.inf, np.inf, np.inf, True, 0.05, 0.25, 2.0)
+_dispatch_day_numba(
+    out, np.zeros(96), np.zeros(96), np.full(96, 25.0), 0, 96,
+    battery_config=config, battery_soh_decimal=1.0, Battery_SOH=100.0,
+    Battery_Energy_Wh=0.0, Battery_PV_Origin_Energy_Wh=0.0, eff_charge=0.95, eff_discharge=0.95,
+    hours_per_step=0.25, standby_loss_per_step_wh=0.0, cap_wh=np.inf, cap_charge_wh=np.inf, cap_discharge_wh=np.inf,
+)
 hits_after = sum(kernel.stats.cache_hits.values())
 misses_after = sum(kernel.stats.cache_misses.values())
 state = "cold" if misses_after > misses_before else "warm" if hits_after > hits_before else "unknown"
