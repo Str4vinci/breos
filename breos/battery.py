@@ -1798,9 +1798,14 @@ def _build_simulation_summary(core: _CoreRun, *, return_degradation_state: bool)
 
 
 def _resolve_finalize_degradation(finalize_degradation: Optional[bool], return_degradation_state: bool) -> bool:
-    """Resolve whether terminal rainflow residue belongs to this span."""
+    """Resolve whether terminal rainflow residue belongs to this span.
+
+    A span finalizes unless the caller opts out explicitly. Returning state is
+    not enough to leave cycles open: a caller that asks for state but does not
+    feed it back would otherwise lose the unresolved half cycles.
+    """
     if finalize_degradation is None:
-        return not return_degradation_state
+        return True
     if not finalize_degradation and not return_degradation_state:
         raise ValueError("finalize_degradation=False requires return_degradation_state=True")
     return bool(finalize_degradation)
@@ -1862,8 +1867,8 @@ def _simulate_core(
         initial_degradation_state: Optional native or BLAST state returned by
             a previous call with ``return_degradation_state=True``.
         finalize_degradation: Count any remaining rainflow half cycles at the
-            end of this span. Set False only when returning state for a later
-            span to continue.
+            end of this span (the default). Set False only when returning state
+            that a later span resumes from; otherwise those cycles are lost.
         return_degradation_state: Append final degradation carry state to the
             return tuple when True.
         debug: Enable debug output
@@ -2187,9 +2192,11 @@ def simulate_energy_balance(
     without materialising the results frame.
 
     Native rainflow state carries unresolved cycles between daily windows. By
-    default, terminal half cycles are counted when no carry state is returned;
-    set ``return_degradation_state=True`` to preserve that residue for a later
-    span, or set ``finalize_degradation=True`` to count it at this span's end.
+    default the remaining half cycles are counted at the end of the span,
+    whether or not a carry state is returned. A multi-year caller that feeds
+    the returned state into the next span passes
+    ``return_degradation_state=True, finalize_degradation=False`` for every
+    span but the last, so that residue continues into the next span instead.
 
     Returns:
         Tuple of:
@@ -2281,8 +2288,9 @@ def simulate_energy_balance_summary(
     35,040 rows they were being reduced from.
 
     The ``finalize_degradation`` option controls whether the native rainflow
-    residue is charged as terminal half cycles. It defaults to False when a
-    degradation state is returned so a later span can continue the same trace.
+    residue is charged as terminal half cycles. It defaults to True; pass
+    False together with ``return_degradation_state=True`` only when the
+    returned state is fed into a later span that continues the same trace.
 
     Pass either ``pv_dc`` and ``houseload``, or a
     :class:`AlignedSimulationInputs` built by

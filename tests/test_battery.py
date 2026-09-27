@@ -780,6 +780,46 @@ class TestSimulateEnergyBalance:
         assert degradation["Cumulative_Calendar_Seconds"].iloc[-1] == pytest.approx(30 * 3600.0)
         assert state["native_rainflow_state"]["residue"] == []
 
+    def test_native_state_returning_call_finalizes_by_default(self):
+        # A caller that asks for the carry state but never feeds it back must
+        # not lose the unresolved half cycles: only an explicit
+        # finalize_degradation=False leaves them open.
+        idx = pd.date_range("2025-01-01 00:00", periods=24, freq="h", tz="UTC")
+        load_values = np.zeros(len(idx))
+        load_values[:8] = 900.0
+        config = BatteryConfig(
+            nominal_energy_wh=5000,
+            standby_loss_wh=0.0,
+            enable_replacement=False,
+            max_charge_power_w=2500.0,
+            max_discharge_power_w=2500.0,
+        )
+        kwargs = dict(
+            pv_dc=pd.Series(0.0, index=idx),
+            houseload=pd.DataFrame({"Load": load_values}, index=idx),
+            battery_config=config,
+            temperature_series=pd.Series(25.0, index=idx),
+            freq="h",
+            return_degradation_state=True,
+        )
+
+        *_, default_degradation, default_state = simulate_energy_balance(**kwargs)
+        *_, closed_degradation, closed_state = simulate_energy_balance(**kwargs, finalize_degradation=True)
+        *_, open_degradation, open_state = simulate_energy_balance(**kwargs, finalize_degradation=False)
+
+        # The single discharge is an unresolved half cycle, so only
+        # finalization counts it.
+        assert open_degradation["Cumulative_FEC"].iloc[-1] == pytest.approx(0.0)
+        assert open_state["native_rainflow_state"]["residue"] != []
+        assert default_degradation["Cumulative_FEC"].iloc[-1] > 0.0
+        assert default_state["native_rainflow_state"]["residue"] == []
+        pd.testing.assert_frame_equal(default_degradation, closed_degradation)
+        assert default_state == closed_state
+
+        summary = simulate_energy_balance_summary(**kwargs)
+        assert summary.fec_cum == default_degradation["Cumulative_FEC"].iloc[-1]
+        assert summary.final_degradation_state == default_state
+
     def test_native_rainflow_residue_continues_across_simulation_calls(self):
         idx = pd.date_range("2025-01-01 00:00", periods=48, freq="h", tz="UTC")
         pv_values = np.tile(np.asarray([0.0] * 8 + [1200.0] * 8 + [0.0] * 8), 2)
@@ -809,6 +849,7 @@ class TestSimulateEnergyBalance:
             temperature_series=temperature.iloc[:24],
             freq="h",
             return_degradation_state=True,
+            finalize_degradation=False,
         )
         first_results, *_, state = first
         second = simulate_energy_balance(
@@ -882,6 +923,7 @@ class TestSimulateEnergyBalance:
             temperature_series=pd.Series(25.0, index=idx),
             freq="h",
             return_degradation_state=True,
+            finalize_degradation=False,
         )
 
         assert replacements == 1
