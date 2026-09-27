@@ -3,7 +3,18 @@
 import pytest
 
 import breos
-from breos.inverter import InverterConfig, calculate_dc_ac_power, dc_power_for_ac_output
+from breos.inverter import InverterConfig, calculate_dc_ac_power, dc_power_for_ac_output, get_inverter_preset
+
+
+def test_inverter_presets_are_independent_copies():
+    first = get_inverter_preset("residential_hybrid")
+    second = get_inverter_preset("residential_hybrid")
+
+    assert first is not second
+    first.dc_ac_ratio = 99.0
+
+    assert second.dc_ac_ratio == 1.25
+    assert get_inverter_preset("residential_hybrid").dc_ac_ratio == 1.25
 
 
 def test_inverter_datasheet_limits_are_optional_for_legacy_callers():
