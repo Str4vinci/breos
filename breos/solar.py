@@ -9,7 +9,7 @@ import math
 import warnings
 from dataclasses import dataclass
 from numbers import Integral, Real
-from typing import Any, Dict, List, Optional
+from typing import Any, ClassVar, Dict, List, Optional
 
 import numpy as np
 import pandas as pd
@@ -140,7 +140,23 @@ def resolve_pvwatts_losses(
 
 @dataclass
 class PVModuleParams:
-    """Parameters for a PV module."""
+    """Datasheet parameters for a PV module.
+
+    Every field holds what the user supplied. The temperature coefficients the
+    models use are read-only properties resolved from the current field
+    values: ``alpha_sc`` (A/°C), ``beta_voc`` (V/°C) and ``gamma_pmp_effective``
+    (%/°C). ``gamma_pmp`` stays ``None`` unless it was given, and
+    ``gamma_pmp_effective`` then follows ``T_Pmax_pct``. Because nothing
+    derived is stored, in-place edits, ``dataclasses.replace``, a
+    ``dataclasses.asdict`` round trip, copies and pickles all see current
+    coefficients.
+
+    Field values are validated on construction and on every assignment. A
+    rejected assignment leaves the module unchanged. ``Mpp`` must match
+    ``Vmp * Imp`` within 2%, so change the STC point together with
+    ``dataclasses.replace(module, Mpp=..., Vmp=..., Imp=...)`` when a single
+    edit would leave it inconsistent.
+    """
 
     Mpp: float  # W (STC power)
     Vmp: float  # V
@@ -163,24 +179,27 @@ class PVModuleParams:
 
     alpha_sc_abs: Optional[float] = None  # A/°C - if provided, overrides T_Isc_pct conversion
     beta_voc_abs: Optional[float] = None  # V/°C - if provided, overrides T_Voc_pct conversion
-    gamma_pmp: Optional[float] = None
+    gamma_pmp: Optional[float] = None  # %/°C - if provided, overrides T_Pmax_pct
     # Appended after all pre-0.5 fields to preserve positional construction.
     bifaciality: Optional[float] = None  # Metadata: rear/front maximum-power ratio (inert by itself)
     NOCT: Optional[float] = None  # Metadata: nominal operating cell temperature (°C), required by noct-sam
 
     _POSITIVE_FIELDS = frozenset({"Mpp", "Vmp", "Imp", "Voc", "Isc"})
+    _STC_POINT_FIELDS = ("Mpp", "Vmp", "Imp")
     _FINITE_FIELDS = frozenset({"T_Pmax_pct", "T_Voc_pct", "T_Isc_pct", "alpha_sc_abs", "beta_voc_abs", "gamma_pmp"})
     _MPP_RELATIVE_TOLERANCE = 0.02
 
-    def __setattr__(self, name: str, value) -> None:
-        """Keep mutable datasheet fields and their derived coefficients in sync."""
-        ready = getattr(self, "_module_params_ready", False)
+    # Set per instance once __post_init__ has checked the STC point.
+    _module_params_ready: ClassVar[bool] = False
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        """Validate a field before it is stored; a rejected edit changes nothing."""
         if name in self._POSITIVE_FIELDS:
             self._validate_number(name, value, minimum=0.0, minimum_strict=True)
         elif name in self._FINITE_FIELDS:
             if value is not None or name in {"T_Pmax_pct", "T_Voc_pct", "T_Isc_pct"}:
                 self._validate_number(name, value)
-            if name == "T_Pmax_pct" and value is not None and value >= 0:
+            if name == "T_Pmax_pct" and float(value) >= 0:
                 raise ValueError("T_Pmax_pct must be negative")
         elif name == "N_Cells":
             if isinstance(value, (bool, np.bool_)) or not isinstance(value, Integral) or value <= 0:
@@ -197,27 +216,19 @@ class PVModuleParams:
         elif name == "celltype" and (not isinstance(value, str) or not value.strip()):
             raise ValueError("celltype must be a non-empty string")
 
+        # During __init__ the STC point is checked once, in __post_init__,
+        # after all three fields exist.
+        if name in self._STC_POINT_FIELDS and self._module_params_ready:
+            point = {field: getattr(self, field) for field in self._STC_POINT_FIELDS}
+            point[name] = value
+            self._validate_stc_point(point["Mpp"], point["Vmp"], point["Imp"])
+
         object.__setattr__(self, name, value)
-        if not ready:
-            return
-
-        if name in {"Isc", "T_Isc_pct", "alpha_sc_abs"}:
-            object.__setattr__(self, "alpha_sc", self._resolved_alpha_sc())
-        elif name in {"Voc", "T_Voc_pct", "beta_voc_abs"}:
-            object.__setattr__(self, "beta_voc", self._resolved_beta_voc())
-
-        if name == "gamma_pmp":
-            explicit = value is not None
-            object.__setattr__(self, "_gamma_pmp_explicit", explicit)
-            if not explicit:
-                object.__setattr__(self, "gamma_pmp", self.T_Pmax_pct)
-        elif name == "T_Pmax_pct" and not self._gamma_pmp_explicit:
-            object.__setattr__(self, "gamma_pmp", value)
 
     @staticmethod
     def _validate_number(
         name: str,
-        value,
+        value: Any,
         *,
         minimum: Optional[float] = None,
         maximum: Optional[float] = None,
@@ -226,35 +237,46 @@ class PVModuleParams:
     ) -> None:
         if isinstance(value, (bool, np.bool_)) or not isinstance(value, Real) or not math.isfinite(float(value)):
             raise ValueError(f"{name} must be a finite number")
-        if minimum is not None and (value <= minimum if minimum_strict else value < minimum):
+        number = float(value)
+        if minimum is not None and (number <= minimum if minimum_strict else number < minimum):
             bracket = "greater than" if minimum_strict else "at least"
             raise ValueError(f"{name} must be {bracket} {minimum}")
-        if maximum is not None and (value >= maximum if maximum_strict else value > maximum):
+        if maximum is not None and (number >= maximum if maximum_strict else number > maximum):
             bracket = "less than" if maximum_strict else "at most"
             raise ValueError(f"{name} must be {bracket} {maximum}")
 
-    def _resolved_alpha_sc(self) -> float:
+    @classmethod
+    def _validate_stc_point(cls, mpp: float, vmp: float, imp: float) -> None:
+        if not math.isclose(mpp, vmp * imp, rel_tol=cls._MPP_RELATIVE_TOLERANCE):
+            raise ValueError(
+                f"Mpp must match Vmp * Imp within {cls._MPP_RELATIVE_TOLERANCE:.0%} for a datasheet STC point "
+                f"(Mpp={mpp}, Vmp * Imp={vmp * imp:.6g}); use dataclasses.replace() to change "
+                "Mpp, Vmp and Imp together"
+            )
+
+    @property
+    def alpha_sc(self) -> float:
+        """Short-circuit-current temperature coefficient in A/°C."""
         if self.alpha_sc_abs is not None:
             return float(self.alpha_sc_abs)
         return float((self.T_Isc_pct * self.Isc) / 100)
 
-    def _resolved_beta_voc(self) -> float:
+    @property
+    def beta_voc(self) -> float:
+        """Open-circuit-voltage temperature coefficient in V/°C."""
         if self.beta_voc_abs is not None:
             return float(self.beta_voc_abs)
         return float((self.T_Voc_pct * self.Voc) / 100)
 
-    def __post_init__(self):
-        mpp_from_datasheet = self.Vmp * self.Imp
-        if not math.isclose(self.Mpp, mpp_from_datasheet, rel_tol=self._MPP_RELATIVE_TOLERANCE):
-            raise ValueError(
-                f"Mpp must match Vmp * Imp within {self._MPP_RELATIVE_TOLERANCE:.0%} for a datasheet STC point"
-            )
-        explicit_gamma = self.gamma_pmp is not None
-        object.__setattr__(self, "_gamma_pmp_explicit", explicit_gamma)
-        if not explicit_gamma:
-            object.__setattr__(self, "gamma_pmp", self.T_Pmax_pct)
-        object.__setattr__(self, "alpha_sc", self._resolved_alpha_sc())
-        object.__setattr__(self, "beta_voc", self._resolved_beta_voc())
+    @property
+    def gamma_pmp_effective(self) -> float:
+        """Maximum-power temperature coefficient in %/°C: ``gamma_pmp`` if set, else ``T_Pmax_pct``."""
+        if self.gamma_pmp is not None:
+            return float(self.gamma_pmp)
+        return float(self.T_Pmax_pct)
+
+    def __post_init__(self) -> None:
+        self._validate_stc_point(self.Mpp, self.Vmp, self.Imp)
         object.__setattr__(self, "_module_params_ready", True)
 
 
@@ -491,7 +513,7 @@ def _get_cec_params(pv_params: "PVModuleParams"):
         pv_params.Isc,
         pv_params.alpha_sc,
         pv_params.beta_voc,
-        pv_params.gamma_pmp,
+        pv_params.gamma_pmp_effective,
         pv_params.N_Cells,
     )
     if key in _cec_param_cache:
@@ -505,7 +527,7 @@ def _get_cec_params(pv_params: "PVModuleParams"):
         Isc=pv_params.Isc,
         alpha_sc=pv_params.alpha_sc,
         beta_voc=pv_params.beta_voc,
-        gamma_pmp=pv_params.gamma_pmp,
+        gamma_pmp=pv_params.gamma_pmp_effective,
         cells_in_series=pv_params.N_Cells,
     )
     _cec_param_cache[key] = cec
@@ -626,7 +648,7 @@ def _build_pv_production_breakdown(
         times,
         name="module_dc_W",
     )
-    gamma_per_c = float(pv_params.gamma_pmp) / 100.0
+    gamma_per_c = pv_params.gamma_pmp_effective / 100.0
     temperature_factor = 1.0 + gamma_per_c * (detail.temp_cell - 25.0)
     safe_temperature_factor = np.where(np.abs(temperature_factor) > 1e-6, temperature_factor, 1.0)
     effective_irradiance_dc = (module_dc / pd.Series(safe_temperature_factor, index=times)).rename(

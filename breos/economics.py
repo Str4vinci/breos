@@ -230,7 +230,7 @@ def replacement_booking_time(
 
     Args:
         relative_years: 1-based projection years.
-        year_fractions: Position of the swap within its year, in ``[0, 1)``.
+        year_fractions: Position of the swap within its year, in ``[0, 1]``.
             ``None`` or a non-finite entry falls back to
             :data:`DEFAULT_REPLACEMENT_YEAR_FRACTION`. Where a year holds more
             than one replacement, the caller supplies the cost-weighted mean
@@ -274,7 +274,7 @@ def replacement_fraction_from_steps(replacement_steps, n_steps: int) -> float:
     interval at index 2616 ends at step boundary 2617 of 8760.
 
     Returns:
-        Fraction in ``[0, 1]``, or NaN when the year holds no replacement.
+        Fraction in ``(0, 1]``, or NaN when the year holds no replacement.
     """
     steps = np.asarray(replacement_steps, dtype=float)
     if steps.size == 0 or n_steps <= 0:
@@ -291,7 +291,7 @@ def replacement_fraction_by_year(years, replaced) -> pd.Series:
     :func:`replacement_booking_time` for what that aggregate costs.
 
     Returns:
-        Series of fractions in ``[0, 1)`` indexed by the year label, holding
+        Series of fractions in ``(0, 1]`` indexed by the year label, holding
         only the years that carry a replacement.
     """
     frame = pd.DataFrame(

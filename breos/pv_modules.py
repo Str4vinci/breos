@@ -15,7 +15,11 @@ Usage:
 
     # Override a parameter
     custom = get_module("Suntech_STP550S_STC")
-    custom.Mpp = 545  # Slightly different power
+    custom.Mpp = 545  # Slightly different power (must stay within 2% of Vmp * Imp)
+
+    # Change the STC point together
+    from dataclasses import replace
+    resized = replace(custom, Mpp=560, Vmp=42.4, Imp=13.21)
 """
 
 from copy import copy

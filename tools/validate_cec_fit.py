@@ -56,7 +56,7 @@ def _oracle(module):
         i_sc=module.Isc,
         alpha_sc=module.alpha_sc,
         beta_voc=module.beta_voc,
-        gamma_pmp=module.gamma_pmp,
+        gamma_pmp=module.gamma_pmp_effective,
         cells_in_series=module.N_Cells,
     )
 
@@ -70,7 +70,7 @@ def _candidate(module):
         Isc=module.Isc,
         alpha_sc=module.alpha_sc,
         beta_voc=module.beta_voc,
-        gamma_pmp=module.gamma_pmp,
+        gamma_pmp=module.gamma_pmp_effective,
         cells_in_series=module.N_Cells,
     )
 
@@ -157,7 +157,7 @@ def main():
         sam = _oracle(module)
         new = _candidate(module)
 
-        print(f"\n=== {name}  (gamma_pmp={module.gamma_pmp}, N_Cells={module.N_Cells}) ===")
+        print(f"\n=== {name}  (gamma_pmp={module.gamma_pmp_effective}, N_Cells={module.N_Cells}) ===")
         for label, s, n in zip(PARAM_LABELS, sam, new):
             rel = abs(s - n) / abs(s) if s else float("nan")
             print(f"  {label:9s}  sam={s: .6e}  new={n: .6e}  rel={rel:.2e}")

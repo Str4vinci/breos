@@ -1,5 +1,9 @@
 """Tests for the solar module."""
 
+import copy
+import dataclasses
+import pickle
+
 import numpy as np
 import pandas as pd
 import pvlib
@@ -36,6 +40,12 @@ def _spy_on_faiman(monkeypatch):
     return calls
 
 
+def _edit_in_place(params, **edits):
+    for name, value in edits.items():
+        setattr(params, name, value)
+    return params
+
+
 def _module_params(**overrides):
     """Generic_400W-style datasheet values for PVModuleParams tests."""
     params = dict(
@@ -56,12 +66,14 @@ def _module_params(**overrides):
 class TestPVModuleParams:
     def test_gamma_pmp_defaults_to_power_coefficient(self):
         params = _module_params()
-        assert params.gamma_pmp == params.T_Pmax_pct
+        assert params.gamma_pmp is None
+        assert params.gamma_pmp_effective == params.T_Pmax_pct
 
     def test_gamma_pmp_override_is_respected(self):
         # A user-supplied gamma_pmp must not be silently replaced by T_Pmax_pct.
         params = _module_params(gamma_pmp=-0.30)
         assert params.gamma_pmp == -0.30
+        assert params.gamma_pmp_effective == -0.30
 
     def test_derived_temperature_coefficients_follow_supported_mutation(self):
         # get_module() returns the documented mutable copy, so derived CEC
@@ -73,7 +85,7 @@ class TestPVModuleParams:
 
         assert params.alpha_sc == pytest.approx(0.05 * 15.0 / 100.0)
         assert params.beta_voc == pytest.approx(-0.26 * 50.0 / 100.0)
-        assert params.gamma_pmp == pytest.approx(-0.4)
+        assert params.gamma_pmp_effective == pytest.approx(-0.4)
 
         params.alpha_sc_abs = 0.6
         assert params.alpha_sc == pytest.approx(0.6)
@@ -82,7 +94,71 @@ class TestPVModuleParams:
 
         explicit = _module_params(gamma_pmp=-0.30)
         explicit.T_Pmax_pct = -0.4
+        assert explicit.gamma_pmp_effective == pytest.approx(-0.30)
+
+        explicit.gamma_pmp = None
+        assert explicit.gamma_pmp_effective == pytest.approx(-0.4)
+
+    @pytest.mark.parametrize(
+        "rebuild",
+        [
+            pytest.param(lambda p, **edits: _edit_in_place(p, **edits), id="in-place"),
+            pytest.param(lambda p, **edits: dataclasses.replace(p, **edits), id="replace"),
+            pytest.param(
+                lambda p, **edits: PVModuleParams(**{**dataclasses.asdict(p), **edits}),
+                id="asdict-round-trip",
+            ),
+            pytest.param(lambda p, **edits: _edit_in_place(copy.copy(p), **edits), id="copy"),
+            pytest.param(lambda p, **edits: _edit_in_place(copy.deepcopy(p), **edits), id="deepcopy"),
+            pytest.param(lambda p, **edits: _edit_in_place(pickle.loads(pickle.dumps(p)), **edits), id="pickle"),
+        ],
+    )
+    def test_derived_coefficients_are_current_after_every_reconstruction(self, rebuild):
+        # Each path first reconstructs a module whose coefficients were left
+        # at their datasheet defaults, then edits the source fields. The
+        # derived values must follow the edit, not the original module.
+        original = _module_params()
+        rebuilt = rebuild(original, T_Pmax_pct=-0.40, Isc=10.40, T_Voc_pct=-0.30)
+
+        assert rebuilt.gamma_pmp is None
+        assert rebuilt.gamma_pmp_effective == pytest.approx(-0.40)
+        assert rebuilt.alpha_sc == pytest.approx(0.05 * 10.40 / 100.0)
+        assert rebuilt.beta_voc == pytest.approx(-0.30 * 49.3 / 100.0)
+        if rebuilt is not original:
+            assert original.gamma_pmp_effective == pytest.approx(-0.35)
+
+        # A second hop from the rebuilt module still follows edits.
+        again = rebuild(rebuilt, T_Pmax_pct=-0.45)
+        assert again.gamma_pmp_effective == pytest.approx(-0.45)
+
+        # An explicit gamma_pmp survives the same path and still wins.
+        explicit = rebuild(_module_params(gamma_pmp=-0.30), T_Pmax_pct=-0.40)
         assert explicit.gamma_pmp == pytest.approx(-0.30)
+        assert explicit.gamma_pmp_effective == pytest.approx(-0.30)
+
+    def test_derived_coefficients_are_read_only(self):
+        params = _module_params()
+        with pytest.raises(AttributeError):
+            params.alpha_sc = 0.1
+        with pytest.raises(AttributeError):
+            params.gamma_pmp_effective = -0.3
+
+    @pytest.mark.parametrize(("field", "value"), [("Mpp", 450.0), ("Vmp", 45.0), ("Imp", 9.0)])
+    def test_in_place_stc_point_edit_is_revalidated(self, field, value):
+        params = _module_params()
+
+        with pytest.raises(ValueError, match=r"Mpp must match Vmp \* Imp"):
+            setattr(params, field, value)
+
+        assert (params.Mpp, params.Vmp, params.Imp) == (400, 41.0, 9.76)
+
+    def test_consistent_stc_point_edits_are_accepted(self):
+        params = _module_params()
+        params.Mpp = 395.0  # 1.3% below Vmp * Imp, inside the 2% tolerance
+        assert params.Mpp == 395.0
+
+        resized = dataclasses.replace(params, Mpp=545.0, Vmp=41.8, Imp=13.04)
+        assert (resized.Mpp, resized.Vmp, resized.Imp) == (545.0, 41.8, 13.04)
 
     def test_bifaciality_is_optional_metadata(self):
         assert _module_params().bifaciality is None
