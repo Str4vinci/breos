@@ -54,9 +54,12 @@ weather/data access, load profiles, PV system data, and cost assumptions; see
 | `costs` | *unset* | Optional cost overrides layered over the selected preset and built-in defaults; see [below](#cost-and-emissions-presets) |
 | `tariff` | *unset* | Time-of-use import and export prices on a bundled schedule, replacing the flat `electricity_cost`, `electricity_sold_cost` and `daily_power_cost`; see [Time-of-use tariffs](#time-of-use-tariffs) |
 | `smart_charging` | *unset* | Grid charging toward a target in the tariff's cheap periods. See [Smart charging](#smart-charging) |
-| `inflation_rate` | `0.02` | Annual electricity price inflation |
-| `sell_price_inflation` | `0.0` | Annual inflation of the grid export (sell) price |
-| `discount_rate` | `0.03` | Discount rate for NPV |
+| `inflation_rate` | `0.02` | General annual inflation (nominal). Import energy, the fixed charge and O&M escalate at it unless their own rate is set; replacement prices inflate at it |
+| `import_price_escalation` | `None` | Annual escalation of the import price and the fixed charge; `None` uses `inflation_rate` |
+| `om_escalation` | `None` | Annual escalation of O&M costs; `None` uses `inflation_rate` |
+| `replacement_cost_learning` | `0.0` | Annual fall in the battery replacement price on top of inflation: a swap at `t` years costs `C0 × (1 + inflation_rate)^t × (1 − learning)^t` |
+| `sell_price_inflation` | `0.0` | Annual escalation of the grid export (sell) price |
+| `discount_rate` | `0.03` | Nominal discount rate for NPV |
 | `emissions_country` | `None` | Country code for CO2 calculations (`"PT"`, `"DE"`, `"ES"`, ...) |
 | `export_emissions_factor_gco2_kwh` | `None` | Optional displacement factor for exported PV. `None` uses the preset's avoided-grid factor and reports that fallback explicitly |
 | `pv_degradation_rate` | `0.005` | Annual PV degradation rate (0.5% / year), compounded and counted from the start of each year, so year 1 has none; see [Module aging](../api/pv.md#module-aging) |

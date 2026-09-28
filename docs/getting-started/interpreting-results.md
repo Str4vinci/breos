@@ -16,8 +16,10 @@ read the recorded currency.
 ledger schema. Version `"1.0"` dropped the `_eur` suffixes and renamed the
 `_exact` payback fields to `_interpolated`, with no aliases (the
 [changelog](https://github.com/Str4vinci/breos/blob/develop/CHANGELOG.md)
-lists every rename). Version `"1.1"`, which 0.7.0 reports, adds the
-[year-1 money keys](#year-1-money-keys). A renamed or removed key bumps the
+lists every rename). Version `"1.1"` adds the
+[year-1 money keys](#year-1-money-keys), and `"1.2"`, which 0.7.0 reports,
+adds `provenance.economics` ([Economic conventions](#economic-conventions)).
+A renamed or removed key bumps the
 major version, an added key the minor. A result without the key predates 1.0.
 
 ## Top-level keys
@@ -143,6 +145,29 @@ charge, discharge, standby, capacity-window, and replacement boundary flows.
 
 Use {py:func}`breos.plotting.plot_pv_loss_waterfall` to render the same
 block as a PV loss diagram.
+
+## Economic conventions
+
+The projection is in nominal terms: `inflation_rate`, the escalators and
+`discount_rate` are nominal annual rates. `result()["provenance"]["economics"]`
+records the rates a run used, each escalator after inheriting from
+`inflation_rate`, and the implied real discount rate,
+`(1 + discount_rate) / (1 + inflation_rate) − 1`. To run a real study, give
+real rates and zero inflation; the arithmetic is the same, and BREOS records
+the rates rather than the intent.
+
+Timing (ADR 0003 E3):
+
+- The initial investment is at year 0.
+- Energy, the fixed charge and O&M are at year-1 prices, escalated
+  `(1 + rate)^(n − 1)` in year `n` and booked at the end of the year, so
+  discounted by `(1 + discount_rate)^n`. When an escalator equals the
+  discount rate, one year of discounting still remains.
+- A battery replacement is priced at today's (t = 0) storage cost, inflated
+  to the instant of the swap and discounted from that instant, not from a
+  year boundary.
+- The daily fixed charge is billed on the simulated duration: 365 days for a
+  common year, 366 for a leap year.
 
 ## Monthly and yearly breakdowns
 
