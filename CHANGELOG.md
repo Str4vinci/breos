@@ -155,6 +155,23 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   "replay_start_year"`. Projected optimization does not read a tariff yet.
   Flat-price runs are unchanged; their `resolved_config` gains `tariff: null`.
   New example: `configs/examples/time-of-use-portugal.toml`.
+- **The `[smart_charging]` table** (ADR 0002, [#178](https://github.com/Str4vinci/breos/issues/178)),
+  validated but not yet runnable. `mode = "fixed_target"` takes a
+  `target_usable_fraction` of the usable SOC window, `charge_periods` and
+  `discharge_periods` named from the tariff's schedule, a
+  `grid_charge_efficiency` with no default (A6) and an optional
+  `grid_import_limit_w`. It is checked when App is built: a missing
+  `[tariff]` or battery, an unknown key or period, charge and discharge
+  periods that overlap (A8) and out-of-range values all raise, naming the
+  dotted key. `App.simulate()` and both optimizer entry points then raise
+  `smart_charging fixed_target is not supported yet` until the dispatch step
+  applies grid charging. `mode = "disabled"` runs with the same results as
+  omitting the table. The fixed-target controller, `breos.smart_charging`,
+  turns a spec and a resolved tariff into `DispatchInstructions`
+  (`breos.dispatch_instructions`): immutable per-step arrays for discharge
+  permission, reserve and grid-charge target, with a deterministic
+  `instruction_hash()` for provenance. Results' `resolved_config` gains
+  `smart_charging: null`.
 
 ### Changed
 - **Ledger schema 2.0: stored energy has three origins**

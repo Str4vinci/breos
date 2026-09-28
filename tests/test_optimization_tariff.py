@@ -16,6 +16,13 @@ TARIFF = {
     "export_prices": {"all": 0.03},
     "fixed_charge_per_day": 0.40,
 }
+FIXED_TARGET = {
+    "mode": "fixed_target",
+    "target_usable_fraction": 0.5,
+    "charge_periods": ["off_peak"],
+    "discharge_periods": ["peak"],
+    "grid_charge_efficiency": 0.95,
+}
 
 
 @pytest.fixture
@@ -36,10 +43,10 @@ def tariff_case(monkeypatch):
     return weather, load, config
 
 
-def evaluate(case):
+def evaluate(case, battery_kwh=0.0):
     weather, load, config = case
     return optimization.evaluate_projected_design(
-        weather, load, config, n_modules=4, battery_kwh=0.0, tilt=30.0, azimuth=180.0
+        weather, load, config, n_modules=4, battery_kwh=battery_kwh, tilt=30.0, azimuth=180.0
     )
 
 
@@ -77,7 +84,8 @@ def test_optimizer_rejects_invalid_tariff_before_pv(tariff_case, monkeypatch, en
     [
         ({"costs": {"electricity_cost": 0.2}}, "price them twice"),
         ({"tariff": {**TARIFF, "schedule": "pt_mainland_2027_daily_bi"}}, "15min"),
-        ({"smart_charging": {}}, "smart_charging is not supported"),
+        ({"smart_charging": FIXED_TARGET}, "smart_charging fixed_target is not supported yet"),
+        ({"smart_charging": {**FIXED_TARGET, "charge_periods": ["night"]}}, r"smart_charging\.charge_periods.*night"),
     ],
 )
 def test_optimizer_checks_conflicts_and_unsupported_dispatch(tariff_case, monkeypatch, extra, message):
@@ -87,7 +95,35 @@ def test_optimizer_checks_conflicts_and_unsupported_dispatch(tariff_case, monkey
         optimization, "calculate_pv_production_dc", lambda **kwargs: pytest.fail("PV ran before config validation")
     )
     with pytest.raises(ValueError, match=message):
-        evaluate((weather, load, config))
+        evaluate((weather, load, config), battery_kwh=5.0)
+
+
+def test_optimizer_search_rejects_fixed_target_charging_before_pv(tariff_case, monkeypatch):
+    pytest.importorskip("pymoo")
+    weather, load, config = tariff_case
+    config["smart_charging"] = FIXED_TARGET
+    monkeypatch.setattr(
+        optimization, "calculate_pv_production_dc", lambda **kwargs: pytest.fail("PV ran before config validation")
+    )
+    with pytest.raises(ValueError, match="smart_charging fixed_target is not supported yet"):
+        optimization.SolarDesignProblem(weather, load, config, "unused")
+
+
+def test_optimizer_fixed_target_needs_a_battery(tariff_case):
+    weather, load, config = tariff_case
+    config["smart_charging"] = FIXED_TARGET
+    with pytest.raises(ValueError, match=r"'smart_charging\.mode' = 'fixed_target' needs a battery"):
+        evaluate((weather, load, config), battery_kwh=0.0)
+
+
+def test_optimizer_accepts_disabled_smart_charging_unchanged(tariff_case):
+    weather, load, config = tariff_case
+    plain = evaluate(tariff_case, battery_kwh=5.0)
+    config = {**config, "smart_charging": {"mode": "disabled"}}
+    disabled = evaluate((weather, load, config), battery_kwh=5.0)
+
+    pd.testing.assert_series_equal(pd.Series(disabled.metrics), pd.Series(plain.metrics))
+    pd.testing.assert_frame_equal(disabled.yearly, plain.yearly)
 
 
 def test_optimizer_money_matches_the_step_ledger(tariff_case, monkeypatch):

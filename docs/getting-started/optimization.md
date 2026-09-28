@@ -145,8 +145,11 @@ Both `evaluate_projected_design` and `optimize_system_multi_objective` price
 each timestep through the shared projection loop. Each project year replays
 the input calendar, with PV and battery degradation carried between years.
 Tariff prices affect the financial objective; the battery still follows
-self-consumption dispatch. A `smart_charging` table raises until that dispatch
-strategy is supported.
+self-consumption dispatch. A `smart_charging` table is checked as App checks
+it, with `battery_kwh` taken from the design, or from
+`constraints.max_battery_kwh` for a search. `mode = "fixed_target"` then
+raises until that dispatch strategy is supported; `mode = "disabled"` runs
+unchanged.
 
 Fixed-design results record the schedule, prices, calendar and hashes in
 `result.provenance["tariff"]`. Search results record the same fields in

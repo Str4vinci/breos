@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any, Callable
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from breos.config_schema import TableSpec, anything, boolean, choice, mapping_of, number, text
+from breos.config_schema import TableSpec, anything, boolean, choice, list_of, mapping_of, number, text
 from breos.constants import DEFAULT_MAX_SOC, DEFAULT_MIN_SOC
 from breos.degradation.profiles import ENABLED_BLAST_MODEL_KEYS, apply_battery_profile_defaults
 from breos.economics import (
@@ -30,6 +30,7 @@ from breos.pv.model_options import is_known_model, is_valid_albedo, is_valid_gcr
 from breos.pv.temperature import validate_temperature_inputs
 from breos.pv_modules import MODULES, PVModuleParams, get_module
 from breos.resources import load_config_json
+from breos.smart_charging import SMART_CHARGING_MODES, SmartChargingSpec
 from breos.solar import (
     BIFACIAL_MODELS,
     DEFAULT_BIFACIAL_MODEL,
@@ -414,6 +415,8 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
     ),
     # The [tariff] table (ADR 0002). Omitted: flat prices from the cost preset.
     "tariff": AppConfigField(default=None, default_order=59),
+    # The [smart_charging] table (ADR 0002). Omitted: greedy self-consumption.
+    "smart_charging": AppConfigField(default=None, default_order=60),
     "weather_source": AppConfigField(
         default=None,
         default_order=55,
@@ -561,6 +564,8 @@ class ResolvedAppConfig:
     inverter_ac_capacity_w: float | None
     # The configured [tariff], or None for flat prices.
     tariff: TariffSpec | None
+    # The configured [smart_charging], or None for greedy self-consumption.
+    smart_charging: SmartChargingSpec | None
     cost_params: CostParams
     emissions_params: EmissionsParams | None
 
@@ -772,6 +777,7 @@ def validate_config(cfg: dict[str, Any]) -> None:
     _validate_economics(cfg)
     _validate_tariff(cfg)
     _validate_battery_and_degradation(cfg)
+    _validate_smart_charging(cfg)
     _validate_reachable_gcr(cfg, has_arrays)
 
 
@@ -874,6 +880,100 @@ def resolve_tariff_spec(cfg: dict[str, Any], timezone: str) -> TariffSpec | None
         prices=prices,
         boundary_policy=table.get("boundary_policy", "strict"),
         study_date=table.get("study_date"),
+    )
+
+
+# Keys fixed-target mode must set. grid_charge_efficiency has no default: the
+# inverter model has no AC-to-DC path to derive one from (ADR 0002 A6).
+_FIXED_TARGET_REQUIRED = ("target_usable_fraction", "charge_periods", "discharge_periods", "grid_charge_efficiency")
+
+
+def _check_smart_charging_keys(table: dict[str, Any], where: str) -> None:
+    if table["mode"] == "disabled":
+        extra = sorted(key for key in table if key != "mode")
+        if extra:
+            raise ValueError(
+                f"'{where}.mode' = 'disabled' takes no other keys; remove {', '.join(f'{where}.{k}' for k in extra)}"
+            )
+        return
+    missing = [key for key in _FIXED_TARGET_REQUIRED if key not in table]
+    if missing:
+        raise ValueError(f"'{where}' needs {', '.join(f'{where}.{k}' for k in missing)} for mode = 'fixed_target'")
+    overlap = sorted(set(table["charge_periods"]) & set(table["discharge_periods"]))
+    if overlap:
+        raise ValueError(
+            f"'{where}.charge_periods' and '{where}.discharge_periods' share {', '.join(overlap)}; "
+            "every step either charges or discharges (ADR 0002 A8)"
+        )
+
+
+SMART_CHARGING_TABLE = TableSpec(
+    "smart_charging",
+    keys={
+        "mode": choice(SMART_CHARGING_MODES),
+        "target_usable_fraction": number(minimum=0, maximum=1),
+        "charge_periods": list_of(text, min_length=1),
+        "discharge_periods": list_of(text, min_length=1),
+        "grid_charge_efficiency": number(minimum=0, maximum=1, min_exclusive=True),
+        # None, as well as omitting the key, leaves site import unlimited.
+        "grid_import_limit_w": number(minimum=0, min_exclusive=True, allow_none=True),
+    },
+    required=frozenset({"mode"}),
+    check=_check_smart_charging_keys,
+)
+
+
+def _checked_smart_charging(value: Any, schedule: str | None, battery_kwh: float) -> dict[str, Any]:
+    """Check a [smart_charging] table against the configured tariff schedule and battery."""
+    table = SMART_CHARGING_TABLE.validate(value)
+    if table["mode"] == "disabled":
+        return table
+    if schedule is None:
+        raise ValueError(
+            "'smart_charging.mode' = 'fixed_target' needs a [tariff]: its charge and discharge periods are "
+            "tariff periods"
+        )
+    if not battery_kwh > 0:
+        raise ValueError("'smart_charging.mode' = 'fixed_target' needs a battery; set battery_kwh > 0")
+    periods = get_tariff_schedule(schedule).periods
+    for name in ("charge_periods", "discharge_periods"):
+        unknown = sorted(set(table[name]) - set(periods))
+        if unknown:
+            raise ValueError(
+                f"'smart_charging.{name}' has period(s) {', '.join(unknown)} that schedule {schedule!r} "
+                f"does not have. Its periods: {', '.join(sorted(periods))}."
+            )
+    return table
+
+
+def _validate_smart_charging(cfg: dict[str, Any]) -> None:
+    if cfg["smart_charging"] is None:
+        return
+    schedule = TARIFF_TABLE.validate(cfg["tariff"])["schedule"] if cfg["tariff"] is not None else None
+    _checked_smart_charging(cfg["smart_charging"], schedule, cfg["battery_kwh"])
+
+
+def resolve_smart_charging_spec(cfg: dict[str, Any], tariff_spec: TariffSpec | None) -> SmartChargingSpec | None:
+    """Validate and build a smart-charging spec for App or an adapted optimizer config.
+
+    ``cfg`` supplies ``smart_charging`` and ``battery_kwh``; ``tariff_spec``
+    is what :func:`resolve_tariff_spec` returned for the same config, whose
+    periods the charge and discharge periods must name.
+    """
+    if cfg.get("smart_charging") is None:
+        return None
+    schedule = tariff_spec.schedule if tariff_spec is not None else None
+    table = _checked_smart_charging(cfg["smart_charging"], schedule, cfg["battery_kwh"])
+    if table["mode"] == "disabled":
+        return SmartChargingSpec(mode="disabled")
+    return SmartChargingSpec(
+        mode=table["mode"],
+        target_usable_fraction=table["target_usable_fraction"],
+        # A period named twice is still one period.
+        charge_periods=tuple(dict.fromkeys(table["charge_periods"])),
+        discharge_periods=tuple(dict.fromkeys(table["discharge_periods"])),
+        grid_charge_efficiency=table["grid_charge_efficiency"],
+        grid_import_limit_w=table.get("grid_import_limit_w"),
     )
 
 
@@ -1402,6 +1502,7 @@ def resolve_app_config(config: dict[str, Any]) -> ResolvedAppConfig:
     # Materialise the resolved module count (derived from pv_arrays when set)
     # into a fresh dict rather than mutating the merged config in place.
     cfg = {**cfg, "n_modules": n_modules}
+    tariff = resolve_tariff_spec(cfg, timezone)
 
     return ResolvedAppConfig(
         cfg=cfg,
@@ -1419,7 +1520,8 @@ def resolve_app_config(config: dict[str, Any]) -> ResolvedAppConfig:
         tracking=tracking,
         axis_azimuth=axis_azimuth,
         inverter_ac_capacity_w=inverter_ac_capacity_w(n_modules * avg_module_power_w, cfg["inverter_loading_ratio"]),
-        tariff=resolve_tariff_spec(cfg, timezone),
+        tariff=tariff,
+        smart_charging=resolve_smart_charging_spec(cfg, tariff),
         cost_params=resolve_costs(cfg),
         emissions_params=resolve_emissions(cfg),
     )

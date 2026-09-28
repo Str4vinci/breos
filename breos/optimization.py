@@ -682,25 +682,34 @@ def _evaluate_projected_design_metrics(
     return metrics
 
 
-def _resolve_optimization_tariff(config: dict[str, Any], index: pd.DatetimeIndex) -> ResolvedTariff | None:
-    """Adapt the optimizer's config to the shared tariff validation and resolver."""
-    from breos.app_config import resolve_tariff_spec
+def _resolve_optimization_tariff(
+    config: dict[str, Any], index: pd.DatetimeIndex, battery_kwh: float
+) -> ResolvedTariff | None:
+    """Adapt the optimizer's config to the shared tariff and smart-charging validation.
 
-    if config.get("smart_charging") is not None:
-        raise ValueError("smart_charging is not supported yet; tariff pricing uses self-consumption dispatch")
-    if config.get("tariff") is None:
-        return None
+    ``battery_kwh`` is the largest battery the entry point can install: the
+    design's for a fixed design, ``constraints.max_battery_kwh`` for a search.
+    """
+    from breos.app_config import resolve_smart_charging_spec, resolve_tariff_spec
+
     timezone = config["location"].get("timezone", "UTC")
     spec = resolve_tariff_spec(
         {
-            "tariff": config["tariff"],
+            "tariff": config.get("tariff"),
             "costs": config.get("costs"),
             "resolution": (config.get("simulation") or {}).get("resolution", "h"),
         },
         timezone,
     )
-    assert spec is not None
-    return spec.resolve(index, timezone)
+    smart_charging = resolve_smart_charging_spec(
+        {"smart_charging": config.get("smart_charging"), "battery_kwh": battery_kwh}, spec
+    )
+    if smart_charging is not None and smart_charging.mode == "fixed_target":
+        raise ValueError(
+            "smart_charging fixed_target is not supported yet; tariff pricing uses self-consumption dispatch. "
+            "Remove smart_charging or set mode = 'disabled'."
+        )
+    return spec.resolve(index, timezone) if spec is not None else None
 
 
 def _site_location(location: dict[str, Any]) -> Any:
@@ -780,7 +789,7 @@ def evaluate_projected_design(
 
     frames = list(weather_by_year) if weather_by_year is not None else None
     tariff_index = frames[0].index if frames else tmy_data.index
-    tariff = _resolve_optimization_tariff(config, tariff_index)
+    tariff = _resolve_optimization_tariff(config, tariff_index, float(battery_kwh))
     location = config["location"]
     loc_obj = _site_location(location)
     simulation = config.get("simulation", {}) or {}
@@ -970,7 +979,9 @@ try:
 
             # One schedule/price resolution per search, shared by every
             # candidate and project year. Validate before model preparation.
-            self.tariff = _resolve_optimization_tariff(config, tmy_data.index)
+            self.tariff = _resolve_optimization_tariff(
+                config, tmy_data.index, float((config.get("constraints") or {}).get("max_battery_kwh", 30))
+            )
             self.location = config["location"]
             # config['location'] is a plain dict; the pvlib Location that
             # calculate_pv_production_dc needs is constructed once here.

@@ -53,6 +53,7 @@ weather/data access, load profiles, PV system data, and cost assumptions; see
 | `cost_preset` | `None` | Cost preset key from packaged defaults |
 | `costs` | *unset* | Optional cost overrides layered over the selected preset and built-in defaults; see [below](#cost-and-emissions-presets) |
 | `tariff` | *unset* | Time-of-use import and export prices on a bundled schedule, replacing the flat `electricity_cost`, `electricity_sold_cost` and `daily_power_cost`; see [Time-of-use tariffs](#time-of-use-tariffs) |
+| `smart_charging` | *unset* | Grid charging toward a target in the tariff's cheap periods; validated but not yet runnable. See [Smart charging](#smart-charging) |
 | `inflation_rate` | `0.02` | Annual electricity price inflation |
 | `sell_price_inflation` | `0.0` | Annual inflation of the grid export (sell) price |
 | `discount_rate` | `0.03` | Discount rate for NPV |
@@ -486,6 +487,47 @@ fixed_charge_per_day = 0.25              # optional, default 0
 Monte Carlo prices every trajectory with the same tariff. Projected
 optimization accepts the same tariff table in its nested config; see
 [Optimization](optimization.md#price-a-design-with-a-time-of-use-tariff).
+
+## Smart charging
+
+```{note}
+The `[smart_charging]` table is validated but not yet runnable. BREOS checks
+it when App is built, then `App.simulate()` raises `smart_charging
+fixed_target is not supported yet` until the battery dispatch can charge from
+the grid ([#178](https://github.com/Str4vinci/breos/issues/178)). Projected
+optimization raises the same error. `mode = "disabled"` runs, with the same
+results as omitting the table.
+```
+
+A `[smart_charging]` table sets when the battery may discharge and when the
+grid may charge it, by tariff period. It needs a `[tariff]` and a battery:
+
+```toml
+[smart_charging]
+mode = "fixed_target"               # or "disabled"
+target_usable_fraction = 0.50       # 0 is battery_min_soc, 1 is battery_max_soc
+charge_periods = ["off_peak"]
+discharge_periods = ["mid_peak", "peak"]
+grid_charge_efficiency = 0.95       # required: AC-to-DC conversion of the grid-charging path
+grid_import_limit_w = 5000          # optional: total site import, load included
+```
+
+- In a charge period the grid may charge the battery toward
+  `target_usable_fraction` of the usable window. In a discharge period the
+  battery may discharge to the load. In a period in neither list it does
+  neither. PV may charge the battery in every period.
+- `target_usable_fraction` is a fraction of the usable window between
+  `battery_min_soc` and `battery_max_soc`, not of nominal capacity. The window
+  shrinks with temperature and state of health, and the target moves with it.
+- The period names must exist in the tariff's schedule, and the two lists
+  must not share a period: every step either charges or discharges.
+- `grid_charge_efficiency` has no default, because the inverter model has no
+  AC-to-DC path to derive one from. Stored energy then also passes through
+  the battery's own charge efficiency.
+- Omit `grid_import_limit_w` for no site limit. Grid charging is also bounded
+  by the battery's charge power and by the inverter's AC rating, which PV
+  output uses first.
+- `mode = "disabled"` accepts no other key. Unknown keys are errors.
 
 ## Load profiles
 
