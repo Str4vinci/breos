@@ -221,7 +221,8 @@ breos sweep --config config.toml --output sweep_results.csv
 The output includes the varied parameters (`param_*` columns, including for
 example `param_costs.electricity_cost`), resolved system
 sizing, the BREOS version, and top-level scalar result metrics such as grid
-independence, NPV, payback, LCOE, and battery replacement totals. This is
+independence, NPV, payback, LCOE, battery replacement totals, and the
+[year-1 money components](interpreting-results.md#year-1-money-keys). This is
 explicit enumeration, not an optimizer; use the optimization API for searching
 over objectives and constraints.
 

@@ -119,6 +119,20 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   cashflows, escalated and not discounted: `cost_import`, `revenue_export`,
   `cost_operation`, `cost_fixed_charge`, `cost_replacement` and
   `replacement_time_years`.
+- `App.result()` reports the year-1 money components as top-level keys, at
+  year-1 prices (before escalation and discounting):
+  `grid_import_cost_year1_prices`, `grid_export_revenue_year1_prices`,
+  `fixed_charge_year1_prices` and `no_system_import_cost_year1_prices` (the
+  no-system household's import cost; its year-1 bill adds the same fixed
+  charge). Flat and tariff runs report all four. With smart charging,
+  `grid_charge_cost_year1_prices` is the part of the grid import cost bought
+  to charge the battery; it is already included in
+  `grid_import_cost_year1_prices`. The `breos sweep` CSV copies top-level
+  scalars, so it now carries these columns
+  ([#181](https://github.com/Str4vinci/breos/issues/181),
+  [#183](https://github.com/Str4vinci/breos/issues/183)). The result schema
+  version becomes `"1.1"`, since an added field bumps the minor. No reported
+  number changes.
 - **Tariff domain**, `breos.tariffs` (ADR 0002). A `TariffSchedule` assigns
   instants to named periods in local civil time and records its regulatory
   source; `TariffPrices` holds per-kWh import and export prices per period and
@@ -252,10 +266,11 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   where plots used to write `€`. BREOS does not convert currencies.
 
   `App.result()`, Monte Carlo provenance and `--json` output, and optimizer
-  provenance carry `result_schema_version = "1.0"`
+  provenance carry `result_schema_version`
   (`breos.result_schema.RESULT_SCHEMA_VERSION`), independent of the ledger
-  schema. A renamed or removed field bumps the major version, an added field
-  the minor. A result without it predates these names.
+  schema: `"1.0"` for these names, `"1.1"` in 0.7.0 with the year-1 money
+  keys above. A renamed or removed field bumps the major version, an added
+  field the minor. A result without it predates these names.
 - **Avoided emissions use net exchange** (ADR 0002 A10,
   [#178](https://github.com/Str4vinci/breos/issues/178)). The self-consumed
   credit is `(Load − Import − B_u) × CI`, where `B_u` is unattributed battery

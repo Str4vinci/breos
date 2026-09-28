@@ -608,6 +608,39 @@ battery_kwh = [0.0, 5.0]
     assert rows[0]["grid_independence_pct"] == "48.0"
 
 
+@pytest.mark.usefixtures("_patch_weather")
+def test_sweep_csv_carries_the_year1_money_components(tmp_path, capsys):
+    config_path = tmp_path / "money-sweep.toml"
+    config_path.write_text(
+        """
+location = "porto"
+n_modules = 8
+annual_consumption_kwh = 3500
+projection_years = 1
+
+[sweep]
+battery_kwh = [0.0, 5.0]
+""".strip(),
+        encoding="utf-8",
+    )
+    output_path = tmp_path / "money-sweep.csv"
+
+    assert cli.main(["sweep", "--config", str(config_path), "--output", str(output_path)]) == 0
+
+    rows = list(csv.DictReader(output_path.open(encoding="utf-8")))
+    assert len(rows) == 2
+    for row in rows:
+        assert row["result_schema_version"] == "1.1"
+        for key in (
+            "grid_import_cost_year1_prices",
+            "grid_export_revenue_year1_prices",
+            "fixed_charge_year1_prices",
+            "no_system_import_cost_year1_prices",
+        ):
+            assert float(row[key]) >= 0.0
+        assert float(row["no_system_import_cost_year1_prices"]) > float(row["grid_import_cost_year1_prices"])
+
+
 def test_sweep_applies_dotted_cost_keys_without_mutating_base_config(monkeypatch, tmp_path, capsys):
     seen_configs = []
 

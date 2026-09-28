@@ -290,10 +290,23 @@ def build_result(
         "degradation": artifacts.degradation_summary,
     }
 
+    # The year-1 money components at year-1 prices, before escalation and
+    # discounting (ADR 0003 E7), at the top level so the sweep CSV keeps them.
+    result.update(
+        {
+            "grid_import_cost_year1_prices": _round2(year1["Import_Cost"]),
+            "grid_export_revenue_year1_prices": _round2(year1["Export_Revenue"]),
+            "fixed_charge_year1_prices": _round2(year1["Fixed_Charge"]),
+            "no_system_import_cost_year1_prices": _round2(year1["Baseline_Import_Cost"]),
+        }
+    )
+
     if resolved.pv_arrays:
         result["pv_arrays"] = [dict(arr) for arr in resolved.pv_arrays]
     if artifacts.smart_charging is not None:
         result["smart_charging"] = smart_charging_to_dict(artifacts)
+        # The part of grid_import_cost_year1_prices bought to charge the battery.
+        result["grid_charge_cost_year1_prices"] = _round2(year1["Grid_Charge_Cost"])
 
     if cfg["battery_kwh"] > 0:
         soh_digits = 1 if cfg["degradation_engine"] == "blast" else 2

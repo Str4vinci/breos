@@ -13,11 +13,12 @@ cost catalogue. BREOS does not convert currencies. Summary and plot labels
 read the recorded currency.
 
 `result_schema_version` versions the result's names, independently of the
-ledger schema. It is `"1.0"` from 0.7.0, the release that dropped the `_eur`
-suffixes and renamed the `_exact` payback fields to `_interpolated`, with no
-aliases (the [changelog](https://github.com/Str4vinci/breos/blob/develop/CHANGELOG.md)
-lists every rename). A renamed or removed key bumps the major version, an
-added key the minor. A result without the key predates 1.0.
+ledger schema. Version `"1.0"` dropped the `_eur` suffixes and renamed the
+`_exact` payback fields to `_interpolated`, with no aliases (the
+[changelog](https://github.com/Str4vinci/breos/blob/develop/CHANGELOG.md)
+lists every rename). Version `"1.1"`, which 0.7.0 reports, adds the
+[year-1 money keys](#year-1-money-keys). A renamed or removed key bumps the
+major version, an added key the minor. A result without the key predates 1.0.
 
 ## Top-level keys
 
@@ -48,6 +49,36 @@ added key the minor. A result without the key predates 1.0.
 | `yearly` | Per-year breakdown of production, load, imports, exports |
 | `pv_loss_waterfall` | Year 1 PV loss waterfall from irradiance reference through PVWatts losses, inverter losses, and dispatch losses |
 | `provenance` | BREOS version, currency, normalized resolved config, ledger schema version, weather/location metadata, resolution, timezone, and start date; `input_repairs` holds the reports passed as `App(..., input_repairs=...)`, and is present only then (see [Repairing measured data](inputs.md#repairing-measured-data)) |
+
+## Year-1 money keys
+
+These keys give the first project year's money components at year-1 prices:
+the prices of the first project year, before escalation and discounting. They
+are in the run's currency and rounded to 0.01. Without a `[tariff]` they use
+the flat `costs` prices; with one, each step's energy is priced at that
+step's tariff price. Flat and tariff runs report the same four keys.
+
+| Key | Description |
+|---|---|
+| `grid_import_cost_year1_prices` | Cost of the year-1 grid import, `grid_import_kwh` |
+| `grid_export_revenue_year1_prices` | Revenue from the year-1 grid export, `grid_export_kwh` |
+| `fixed_charge_year1_prices` | The fixed charge for the simulated duration of year 1: the daily charge times the simulated hours / 24 |
+| `no_system_import_cost_year1_prices` | Import cost of the household without a system, which buys its whole year-1 load, `consumption_kwh`. It is the import cost only; it does not include the fixed charge |
+| `grid_charge_cost_year1_prices` | Present only with smart charging (`smart_charging.mode = "fixed_target"`): the part of `grid_import_cost_year1_prices` bought to charge the battery |
+
+`grid_charge_cost_year1_prices` is already included in
+`grid_import_cost_year1_prices`, so do not add the two. It is the same value
+as `smart_charging.yearly[0].grid_charge_cost_year1_prices`.
+
+The same fixed charge applies with or without the system. The projection's
+no-system annual cost is the no-system import cost plus the fixed charge, so
+the year-1 no-system bill is
+`no_system_import_cost_year1_prices + fixed_charge_year1_prices`.
+
+Year 1 is not escalated, so these values match the `cost_import`,
+`revenue_export` and `cost_fixed_charge` of the year-1 `financial` row; the
+later rows escalate. `breos sweep` copies every top-level scalar key into its
+CSV, so the sweep CSV carries these columns too.
 
 ## Battery-specific keys
 
