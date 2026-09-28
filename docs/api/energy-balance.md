@@ -86,7 +86,9 @@ name. Read the second name of each pair instead: `Sell_To_Grid` →
 Stored energy has three origins: PV, grid, and an unattributed remainder. A
 fresh battery starts full with unattributed energy, and a replacement pack's
 energy is unattributed too, so initial SOC is never credited as PV. PV
-charging adds to the PV origin, and grid charging to the grid origin.
+charging adds to the PV origin. Nothing charges the grid origin yet: it holds
+only energy carried in with `initial_grid_origin_energy_wh`, until grid
+charging lands.
 Discharge, standby loss, capacity-window loss and replacement each take from
 all three origins in proportion to their shares at the start of that
 operation. A step either charges or discharges the battery, never both, so one
@@ -106,8 +108,8 @@ share per step is exact.
 The unattributed share of any flow is its total minus the PV and grid shares,
 and the unattributed balance is `Battery_Energy` minus both origin balances.
 Each origin reconciles step by step from these columns alone, to rounding:
-the ending balance is the beginning balance plus charge stored, minus discharge, standby,
-capacity-window and replacement removal. Only PV-origin discharge counts as
+the ending balance is the beginning balance plus charge stored (PV only, for
+now), minus discharge, standby, capacity-window and replacement removal. Only PV-origin discharge counts as
 self-consumption.
 
 App and Monte Carlo projections carry total stored energy and both origin

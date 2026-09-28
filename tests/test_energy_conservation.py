@@ -1,6 +1,7 @@
 """Per-step energy conservation across backends, engines and a full year (#184)."""
 
 import importlib.util
+import math
 
 import numpy as np
 import pandas as pd
@@ -218,4 +219,86 @@ def test_carried_grid_origin_cannot_exceed_the_non_pv_energy():
             initial_energy_wh=3000.0,
             initial_pv_origin_energy_wh=2000.0,
             initial_grid_origin_energy_wh=1500.0,
+        )
+
+
+@pytest.mark.filterwarnings("ignore::breos.degradation.validation.BlastExperimentalRangeWarning")
+def test_carried_origins_must_fit_the_energy_blast_restores():
+    """BLAST restarts from its restored SOH, so the origins are checked against that energy."""
+    pv, load, temperature = _year()
+    config = BatteryConfig(nominal_energy_wh=5000.0, enable_replacement=False)
+    blast = {"degradation_engine": "blast", "blast_model": "nmc_gr_50ah_b1"}
+    *_, state = simulate_energy_balance(
+        pv_dc=pv,
+        houseload=load,
+        battery_config=config,
+        freq="h",
+        temperature_series=temperature,
+        return_degradation_state=True,
+        **blast,
+    )
+    with pytest.raises(ValueError, match="initial_grid_origin_energy_wh must be between 0 and the starting energy"):
+        simulate_energy_balance(
+            pv_dc=pv.iloc[:48],
+            houseload=load.iloc[:48],
+            battery_config=config,
+            freq="h",
+            temperature_series=temperature.iloc[:48],
+            initial_degradation_state=state,
+            initial_grid_origin_energy_wh=5000.0 * config.max_soc,
+            **blast,
+        )
+
+
+def test_an_exact_split_of_the_carried_energy_is_accepted():
+    """``E * f`` and ``E * (1 - f)`` can round a few ULPs past ``E - E * f``."""
+    energy = 1000.0
+    pv_origin, grid_origin = energy * 0.7, energy * (1 - 0.7)
+    assert grid_origin > energy - pv_origin
+    pv, load, temperature = _year()
+    results, *_ = simulate_energy_balance(
+        pv_dc=pv.iloc[:24],
+        houseload=load.iloc[:24],
+        battery_config=BatteryConfig(nominal_energy_wh=5000.0),
+        freq="h",
+        temperature_series=temperature.iloc[:24],
+        initial_energy_wh=energy,
+        initial_pv_origin_energy_wh=pv_origin,
+        initial_grid_origin_energy_wh=grid_origin,
+    )
+    first = results.iloc[0]
+    assert first["Battery_Grid_Origin_Energy_Beginning"] == energy - pv_origin
+    assert_origin_reconciliation(results, 1.0)
+
+    results, *_ = simulate_energy_balance(
+        pv_dc=pv.iloc[:24],
+        houseload=load.iloc[:24],
+        battery_config=BatteryConfig(nominal_energy_wh=5000.0),
+        freq="h",
+        temperature_series=temperature.iloc[:24],
+        initial_energy_wh=energy,
+        initial_grid_origin_energy_wh=-0.0,
+    )
+    assert math.copysign(1.0, results["Battery_Grid_Origin_Energy_Beginning"].iloc[0]) == 1.0
+
+
+def test_a_step_that_charges_and_discharges_is_refused(monkeypatch):
+    from breos import _dispatch
+
+    step = _dispatch._dispatch_dc_step
+
+    def both(*args):
+        ledger = list(step(*args))
+        ledger[6], ledger[7] = 1.0, 1.0  # battery_charge_input, battery_discharge_dc
+        return tuple(ledger)
+
+    monkeypatch.setattr(_dispatch, "_dispatch_dc_step", both)
+    pv, load, temperature = _year()
+    with pytest.raises(ValueError, match="both charged and discharged"):
+        simulate_energy_balance(
+            pv_dc=pv.iloc[:24],
+            houseload=load.iloc[:24],
+            battery_config=BatteryConfig(nominal_energy_wh=5000.0),
+            freq="h",
+            temperature_series=temperature.iloc[:24],
         )

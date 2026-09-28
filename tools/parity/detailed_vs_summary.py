@@ -57,6 +57,11 @@ def check(name: str, backend: str = "python") -> list[str]:
         float(results_df["Battery_PV_Origin_Energy_End"].iloc[-1]),
         summary.carried_pv_origin_energy_wh,
     )
+    same(
+        "carried_grid_origin",
+        float(results_df["Battery_Grid_Origin_Energy_End"].iloc[-1]),
+        summary.carried_grid_origin_energy_wh,
+    )
     same("has_degradation_rows", not deg_df.empty, summary.has_degradation_rows)
     if not deg_df.empty:
         same("fec", float(deg_df["Cumulative_FEC"].iloc[-1]), summary.fec_cum)

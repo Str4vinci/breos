@@ -202,6 +202,15 @@ def test_system_ac_production_prefers_explicit_ledger_over_legacy_field():
     assert system_ac_production_power(results).tolist() == pytest.approx([550.0, 200.0])
 
 
+def test_first_year_projection_names_the_renamed_export_column():
+    index = pd.date_range("2025-01-01", periods=24, freq="h", tz="UTC")
+    legacy = pd.DataFrame(
+        {"Datetime": index, "Houseload": 500.0, "Import_From_Grid": 200.0, "Sell_To_Grid": 50.0, "PV_Production": 400.0}
+    )
+    with pytest.raises(ValueError, match="before ledger schema 2.0 call it Sell_To_Grid"):
+        cost_analysis_projection(legacy, {"total_initial_cost": 1000.0}, num_years=2)
+
+
 def test_system_ac_production_accepts_legacy_field():
     results = pd.DataFrame({"PV_Production": [500.0, 250.0]})
 

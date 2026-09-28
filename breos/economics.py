@@ -391,7 +391,9 @@ def cost_analysis_projection(
             first-year estimation path alone; callers that already have actual
             yearly totals may pass ``None``. System production is
             ``PV_AC_To_Load + PV_Origin_Battery_AC_To_Load + PV_AC_Export``;
-            legacy ``PV_Production`` is accepted for compatibility.
+            without those, legacy ``PV_Production`` is used. Export is always
+            read from ``PV_AC_Export``: frames written before ledger schema
+            2.0 named it ``Sell_To_Grid`` and must be renamed first.
         costs: Dictionary with cost parameters (from calculate_costs())
         num_years: Number of years to project
         inflation_rate: Annual inflation for electricity/operation costs
@@ -573,6 +575,13 @@ def cost_analysis_projection(
     # Result columns are typically in W (Power).
     # To get Energy (kWh), we need to multiply by hours_per_step and divide by 1000.
 
+    if "PV_AC_Export" not in df.columns:
+        hint = (
+            " Frames written before ledger schema 2.0 call it Sell_To_Grid; rename that column."
+            if ("Sell_To_Grid" in df.columns)
+            else ""
+        )
+        raise ValueError(f"results_df has no PV_AC_Export column.{hint}")
     # First convert columns to numeric, just in case
     df["System_AC_Production"] = system_ac_production_power(df)
     cols_to_numeric = ["System_AC_Production", "Houseload", "Import_From_Grid", "PV_AC_Export", "Replacement_Cost"]

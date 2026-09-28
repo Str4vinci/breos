@@ -578,6 +578,12 @@ def _resolve_degradation_engine(
 
 
 def _carried_origin(value: Optional[float], name: str, limit_wh: float, limit_name: str) -> float:
+    """Validate one carried origin against the energy it may take, returning it in Wh.
+
+    ``limit_wh`` is often a difference such as ``E - pv``, which can round a
+    few ULPs below what a caller split exactly (``E * f`` and ``E * (1 - f)``).
+    A value within that rounding of the limit is accepted and clamped to it.
+    """
     if value is None:
         return 0.0
     if isinstance(value, (bool, np.bool_)):
@@ -588,9 +594,11 @@ def _carried_origin(value: Optional[float], name: str, limit_wh: float, limit_na
         raise ValueError(f"{name} must be a finite number") from exc
     if not math.isfinite(origin_wh):
         raise ValueError(f"{name} must be a finite number")
-    if not 0.0 <= origin_wh <= limit_wh:
+    slack = 4.0 * math.ulp(max(abs(limit_wh), abs(origin_wh)))
+    if not 0.0 <= origin_wh <= limit_wh + slack:
         raise ValueError(f"{name} must be between 0 and {limit_name}")
-    return origin_wh
+    # Adding 0.0 turns a -0.0 input into 0.0.
+    return min(origin_wh, max(0.0, limit_wh)) + 0.0
 
 
 def _resolve_carried_energy(
@@ -871,6 +879,10 @@ class _PvOnlySummaryBuffers:
             rows[alias] = rows[name]
         for name in _ROW_COLUMNS:
             rows.setdefault(name, self.zeros)
+        # Many columns share these two arrays, so a stray write would show up
+        # in all of them; nothing may write them.
+        self.zeros.flags.writeable = False
+        self.replaced.flags.writeable = False
         self.columns: Mapping[str, np.ndarray] = _frame_mapping(rows, self.replaced, self.replacement_cost)
 
     def zero_fill(self) -> None:
@@ -1524,6 +1536,9 @@ def _simulate_core(
             to the configured max-SOC state for first-run compatibility.
         initial_pv_origin_energy_wh: Optional PV-origin share of the carried
             stored energy (Wh). Defaults to zero.
+        initial_grid_origin_energy_wh: Optional grid-origin share of the
+            carried stored energy (Wh). Defaults to zero; whatever neither
+            origin covers is unattributed.
         execution_backend: Which implementation runs the within-day dispatch
             arithmetic. ``"python"`` is the default and the numerical
             reference; ``"numba"`` selects the optional compiled kernel and
@@ -1669,6 +1684,20 @@ def _simulate_core(
     Battery_SOH = battery_soh_decimal * 100.0
     if degradation_engine_key == "blast" and initial_energy_wh is None:
         Battery_Energy_Wh = battery_config.nominal_energy_wh * battery_soh_decimal * battery_config.max_soc
+        # The carried origins were checked against the energy before BLAST
+        # restored its SOH; they must also fit the energy the run starts with.
+        Battery_PV_Origin_Energy_Wh = _carried_origin(
+            initial_pv_origin_energy_wh,
+            "initial_pv_origin_energy_wh",
+            Battery_Energy_Wh,
+            "the starting energy at the restored BLAST SOH",
+        )
+        Battery_Grid_Origin_Energy_Wh = _carried_origin(
+            initial_grid_origin_energy_wh,
+            "initial_grid_origin_energy_wh",
+            Battery_Energy_Wh - Battery_PV_Origin_Energy_Wh,
+            "the starting energy at the restored BLAST SOH minus initial_pv_origin_energy_wh",
+        )
 
     # Health state advanced only at daily boundaries. The loop keeps hot
     # copies of the four fields it reads every step (SOH and the two
