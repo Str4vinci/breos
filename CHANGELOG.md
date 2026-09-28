@@ -5,6 +5,30 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 ## [Unreleased]
 
 ### Added
+- Grid charging and dispatch instructions in the battery step
+  ([#178](https://github.com/Str4vinci/breos/issues/178), ADR 0002 A6–A8).
+  `simulate_energy_balance` and `simulate_energy_balance_summary` accept
+  `dispatch_instructions`, a `breos.dispatch_instructions.DispatchInstructions`
+  of per-step arrays:
+  - whether the battery may discharge;
+  - the usable fraction it keeps before discharging;
+  - a grid-charge target as a usable fraction, or NaN for none;
+  - the grid-charge AC-to-DC efficiency and a site import limit.
+
+  A fraction applies to each step's capacity window, so the energy it names
+  moves with temperature and SOH. Grid charging runs after PV allocation in
+  the same step. Its DC input passes through the cell charge efficiency and
+  is booked as `Battery_Charge_Input`, so cell losses, self-heating and both
+  aging engines see it. PV keeps priority on the charge-power, stored-power,
+  inverter-rating and site-import limits the two share. A step that exports
+  PV or discharges does not grid-charge. New results columns:
+  `Grid_AC_To_Battery` (part of `Import_From_Grid`), `Grid_DC_To_Battery`,
+  `Grid_Charge_Conversion_Loss` and `Grid_Origin_Battery_Charge_Stored`. Year
+  rows gain `Grid_AC_To_Battery_kWh` and `Grid_Charge_Conversion_Loss_kWh`.
+  Both backends run the same step and match bit for bit under instructions.
+  Without instructions, results are unchanged on both backends. No App or
+  CLI setting uses this yet; `[smart_charging]` will. A year's dispatch is
+  about 8–12% slower on the Python backend and about 3% slower on Numba.
 - Added the external validation page to the documentation. It collects the
   measured-data checks against NIST Gaithersburg, the DKA Solar Centre, IEA PVPS
   Task 13, the UCY PHAETHON test-bed, and a Reunion Island microgrid, with the

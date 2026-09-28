@@ -40,6 +40,7 @@ for _helper in (
     _dispatch.compute_cell_temperature,
     _dispatch._apply_capacity_window,
     _dispatch._charge,
+    _dispatch._grid_charge,
     _dispatch._combined_conversion,
     _dispatch._dispatch_dc_step,
 ):

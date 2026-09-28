@@ -100,6 +100,8 @@ def test_checker_counts_grid_charging_as_an_input():
     drawn = 100.0 / config.charge_efficiency  # grid energy that stores 100 Wh
     charged = results.copy()
     charged["Grid_AC_To_Battery"] = drawn
+    charged["Grid_DC_To_Battery"] = drawn
+    charged["Grid_Charge_Conversion_Loss"] = 0.0
     charged["Import_From_Grid"] += drawn
     charged["Battery_Charge_Input"] += drawn
     charged["Battery_Charge_Loss"] += drawn - 100.0
