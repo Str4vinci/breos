@@ -75,6 +75,7 @@ location-tools = [
 dev = [
     "pytest>=8.0",
     "pytest-cov>=7.0",
+    "pytest-xdist>=3.8",
     "ruff>=0.15",
     "mypy>=1.18",
     "pandas-stubs>=2.3",

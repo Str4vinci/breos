@@ -27,6 +27,9 @@ pip install -e ".[dev]"
 uv run pytest tests/ -v
 ```
 
+Add `-n auto` to spread the suite over your CPU cores (pytest-xdist, included
+in the `dev` extra); CI runs it that way.
+
 For a fast end-to-end smoke test without writing code:
 
 ```bash
@@ -104,10 +107,11 @@ uv run pytest tests/test_app.py -v
 - PRs should target `develop`, not `main`
 - Include a brief description of what changed and why
 - Make sure CI passes. It runs lint, format checks, tests on Python 3.11
-  through 3.14, release artifact verification, the Sphinx docs build, and
-  lightweight macOS/Windows public-entrypoint checks on every PR to `develop`
-  or `main`. Core-package coverage is not part of that — it is published by a
-  separate `coverage-report` job that runs nightly, on demand, and at release.
+  through 3.14, release artifact verification, and the Sphinx docs build on
+  every PR. The lightweight macOS/Windows public-entrypoint checks run on PRs
+  into `main` or `release/**`, and nightly on `develop`. Core-package coverage
+  is published by a separate `coverage-report` job that runs nightly, on
+  demand, and at release.
 - Keep PRs focused — one feature or fix per PR
 
 ## Reporting Issues
