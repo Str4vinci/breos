@@ -48,13 +48,13 @@ def test_projected_evaluator_carries_physical_and_degradation_state(monkeypatch)
                 # Every column the year row reads, zero unless set below.
                 **{column: [0.0, 0.0] for column in _ROW_SUM_COLUMNS},
                 "PV_AC_To_Load": [300.0, 300.0],
-                "Battery_AC_To_Load_PV": [50.0, 50.0],
+                "PV_Origin_Battery_AC_To_Load": [50.0, 50.0],
                 "PV_AC_Export": [50.0, 50.0],
                 "Houseload": [500.0, 500.0],
                 "Import_From_Grid": [150.0 * year, 150.0 * year],
-                "Sell_To_Grid": [50.0, 50.0],
                 "Battery_Energy_End": [100.0, 100.0 + year],
                 "Battery_PV_Origin_Energy_End": [50.0, 50.0 + year],
+                "Battery_Grid_Origin_Energy_End": [0.0, 0.0],
             },
             index=idx,
         )

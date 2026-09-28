@@ -7,7 +7,7 @@ import pandas as pd
 import pytest
 
 from breos.battery import BatteryConfig, simulate_energy_balance
-from tests.energy_conservation import LEDGER_COLUMNS, assert_energy_conservation
+from tests.energy_conservation import LEDGER_COLUMNS, assert_energy_conservation, assert_origin_reconciliation
 
 _BACKENDS = [
     "python",
@@ -60,6 +60,7 @@ def test_full_year_conserves_energy_at_every_step(backend, engine, config_kwargs
     # Cold-weather derating shrinks the usable window and spills stored energy.
     assert results["Capacity_Window_Loss"].sum() > 0.0
     assert_energy_conservation(results, config, atol=1e-7)
+    assert_origin_reconciliation(results, 1.0)
 
 
 @pytest.mark.parametrize("backend", _BACKENDS)
@@ -76,6 +77,7 @@ def test_15min_year_conserves_energy_at_every_step(backend):
     )
 
     assert_energy_conservation(results, config, atol=1e-7)
+    assert_origin_reconciliation(results, 0.25)
 
 
 def _two_days():
@@ -139,3 +141,81 @@ def test_checker_applies_atol_as_an_absolute_bound():
     with pytest.raises(AssertionError, match="PV DC split"):
         assert_energy_conservation(off, config, atol=1e-7)
     assert_energy_conservation(off, config, atol=1e-3)
+
+
+@pytest.mark.parametrize("backend", _BACKENDS)
+def test_carried_grid_origin_is_drawn_down_in_proportion(backend):
+    """Grid-origin energy carried in from an earlier span leaves in proportion to its share."""
+    pv, load, temperature = _year()
+    config = BatteryConfig(nominal_energy_wh=5000.0, eol_percentage=0.985, standby_loss_wh=2.0)
+    results, *_, n_replacements, _ = simulate_energy_balance(
+        pv_dc=pv.iloc[: 24 * 60],
+        houseload=load.iloc[: 24 * 60],
+        battery_config=config,
+        freq="h",
+        temperature_series=temperature.iloc[: 24 * 60],
+        initial_energy_wh=4000.0,
+        initial_pv_origin_energy_wh=1000.0,
+        initial_grid_origin_energy_wh=2000.0,
+        execution_backend=backend,
+    )
+
+    assert_energy_conservation(results, config)
+    assert_origin_reconciliation(results, 1.0)
+    first = results.iloc[0]
+    assert first["Battery_Grid_Origin_Energy_Beginning"] == 2000.0
+    # The first night discharges; the grid origin supplies half of it.
+    night = results.iloc[:6]
+    assert night["Battery_Discharge_DC"].sum() > 0.0
+    np.testing.assert_allclose(
+        night["Grid_Origin_Battery_Discharge_DC"], night["Battery_Discharge_DC"] * 0.5, rtol=1e-6, atol=1e-9
+    )
+    assert results["Grid_Origin_Standby_Loss"].sum() > 0.0
+    assert results["Grid_Origin_Capacity_Window_Loss"].sum() > 0.0
+    # Nothing charges the grid origin yet, so it only ever falls.
+    assert (results["Battery_Grid_Origin_Energy_End"] <= results["Battery_Grid_Origin_Energy_Beginning"]).all()
+
+
+def test_replacement_hands_every_origin_out_and_starts_unattributed():
+    pv, load, temperature = _year()
+    config = BatteryConfig(nominal_energy_wh=5000.0, eol_percentage=0.985)
+    results, *_, n_replacements, _ = simulate_energy_balance(
+        pv_dc=pv,
+        houseload=load,
+        battery_config=config,
+        freq="h",
+        temperature_series=temperature,
+        initial_energy_wh=4000.0,
+        initial_pv_origin_energy_wh=1000.0,
+        initial_grid_origin_energy_wh=500.0,
+    )
+
+    assert n_replacements >= 1
+    swaps = results[results["Battery_Replaced"]]
+    assert (swaps["PV_Origin_Replacement_Energy_Removed"] > 0.0).all()
+    assert (swaps["Battery_PV_Origin_Energy_End"] == 0.0).all()
+    assert (swaps["Battery_Grid_Origin_Energy_End"] == 0.0).all()
+    assert_origin_reconciliation(results, 1.0)
+
+
+def test_origin_checker_catches_an_unbooked_origin_change():
+    results, _config = _two_days()
+    assert_origin_reconciliation(results, 1.0)
+    drifted = results.copy()
+    drifted.loc[drifted.index[20], "Battery_PV_Origin_Energy_End"] += 1.0
+    with pytest.raises(AssertionError, match="PV-origin balance"):
+        assert_origin_reconciliation(drifted, 1.0)
+
+
+def test_carried_grid_origin_cannot_exceed_the_non_pv_energy():
+    pv, load, temperature = _year()
+    with pytest.raises(ValueError, match="initial_grid_origin_energy_wh must be between 0"):
+        simulate_energy_balance(
+            pv_dc=pv.iloc[:24],
+            houseload=load.iloc[:24],
+            battery_config=BatteryConfig(nominal_energy_wh=5000.0),
+            freq="h",
+            initial_energy_wh=3000.0,
+            initial_pv_origin_energy_wh=2000.0,
+            initial_grid_origin_energy_wh=1500.0,
+        )

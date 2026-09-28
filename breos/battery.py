@@ -577,16 +577,34 @@ def _resolve_degradation_engine(
     return engine_key
 
 
+def _carried_origin(value: Optional[float], name: str, limit_wh: float, limit_name: str) -> float:
+    if value is None:
+        return 0.0
+    if isinstance(value, (bool, np.bool_)):
+        raise ValueError(f"{name} must be a finite number, not a bool")
+    try:
+        origin_wh = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{name} must be a finite number") from exc
+    if not math.isfinite(origin_wh):
+        raise ValueError(f"{name} must be a finite number")
+    if not 0.0 <= origin_wh <= limit_wh:
+        raise ValueError(f"{name} must be between 0 and {limit_name}")
+    return origin_wh
+
+
 def _resolve_carried_energy(
     initial_energy_wh: Optional[float],
     initial_pv_origin_energy_wh: Optional[float],
     battery_config: BatteryConfig,
     battery_soh_decimal: float,
-) -> Tuple[float, float]:
-    """Validate the carried stored-energy state, returning ``(energy, pv_origin)``.
+    initial_grid_origin_energy_wh: Optional[float] = None,
+) -> Tuple[float, float, float]:
+    """Validate the carried stored-energy state, returning ``(energy, pv_origin, grid_origin)``.
 
-    Both default for a fresh run: a battery starting full at its configured
-    max SOC, with none of that energy attributable to PV.
+    All three default for a fresh run: a battery starting full at its
+    configured max SOC, with none of that energy attributable to PV or to the
+    grid. Whatever the two origins do not cover is unattributed.
     """
     if initial_energy_wh is None:
         energy_wh = battery_config.nominal_energy_wh * battery_soh_decimal * battery_config.max_soc
@@ -604,21 +622,16 @@ def _resolve_carried_energy(
                 f"initial_energy_wh must be between 0 and nominal_energy_wh ({battery_config.nominal_energy_wh:g} Wh)"
             )
 
-    if initial_pv_origin_energy_wh is None:
-        pv_origin_wh = 0.0
-    else:
-        if isinstance(initial_pv_origin_energy_wh, (bool, np.bool_)):
-            raise ValueError("initial_pv_origin_energy_wh must be a finite number, not a bool")
-        try:
-            pv_origin_wh = float(initial_pv_origin_energy_wh)
-        except (TypeError, ValueError) as exc:
-            raise ValueError("initial_pv_origin_energy_wh must be a finite number") from exc
-        if not math.isfinite(pv_origin_wh):
-            raise ValueError("initial_pv_origin_energy_wh must be a finite number")
-        if not 0.0 <= pv_origin_wh <= energy_wh:
-            raise ValueError("initial_pv_origin_energy_wh must be between 0 and initial_energy_wh")
-
-    return energy_wh, pv_origin_wh
+    pv_origin_wh = _carried_origin(
+        initial_pv_origin_energy_wh, "initial_pv_origin_energy_wh", energy_wh, "initial_energy_wh"
+    )
+    grid_origin_wh = _carried_origin(
+        initial_grid_origin_energy_wh,
+        "initial_grid_origin_energy_wh",
+        energy_wh - pv_origin_wh,
+        "initial_energy_wh minus initial_pv_origin_energy_wh",
+    )
+    return energy_wh, pv_origin_wh, grid_origin_wh
 
 
 def _build_degradation_lifecycle(
@@ -812,18 +825,16 @@ _PV_ONLY_ROWS: Tuple[str, ...] = (
     "Houseload",
     "PV_Delta",
     "Import_From_Grid",
-    "Sell_To_Grid",
     "Battery_SOH",
     "T_cell",
-    "PV_Curtailment",
     "PV_DC_To_Inverter",
+    "PV_DC_Curtailed",
     "PV_AC_To_Load",
+    "PV_AC_Export",
     "PV_Direct_Inverter_Loss",
 )
 # Rows a PV-only run fills with values it already wrote under another name.
 _PV_ONLY_ALIASES: Dict[str, str] = {
-    "PV_DC_Curtailed": "PV_Curtailment",
-    "PV_AC_Export": "Sell_To_Grid",
     "Inverter_Loss": "PV_Direct_Inverter_Loss",
 }
 
@@ -831,18 +842,18 @@ _PV_ONLY_ALIASES: Dict[str, str] = {
 class _PvOnlySummaryBuffers:
     """Reduced per-step buffers for a PV-only run that only owes a summary.
 
-    A system with no battery leaves 24 of the frame's columns at zero for
-    every step, and writes three more with values it has already written
-    under another name. Allocating the full ``(_N_ROWS, n_steps)`` matrix to
-    hold that costs about three times the memory such a run needs, and a
-    Monte Carlo study pays it once per simulated year in every worker at
+    A system with no battery leaves most of the frame's columns at zero for
+    every step, and writes ``Inverter_Loss`` with the values it already wrote
+    as ``PV_Direct_Inverter_Loss``. Allocating the full ``(_N_ROWS, n_steps)``
+    matrix to hold that costs several times the memory such a run needs, and
+    a Monte Carlo study pays it once per simulated year in every worker at
     once -- which is memory traffic, not arithmetic, and so is exactly what
     stops the study scaling across cores.
 
-    This type presents the same ``columns`` mapping over twelve written
-    arrays, one shared zero array and one shared zero mask. It is
-    deliberately a summary-path type with no ``to_frame``: the detailed frame
-    must not hand a caller aliased columns it could write through.
+    This type presents the same ``columns`` mapping over the written arrays
+    (``_PV_ONLY_ROWS``), one shared zero array and one shared zero mask. It
+    is deliberately a summary-path type with no ``to_frame``: the detailed
+    frame must not hand a caller aliased columns it could write through.
     """
 
     __slots__ = ("zeros", "replaced", "replacement_cost", "columns")
@@ -852,9 +863,9 @@ class _PvOnlySummaryBuffers:
         self.replaced: np.ndarray = np.zeros(n_steps, dtype=bool)
         self.replacement_cost: np.ndarray = self.zeros
         # Written rows are left uninitialised; the dispatch overwrites every
-        # element of each one before anything reads it. The aliased rows
-        # keep every reported sum identical and drop three more full-length
-        # allocations per simulated year.
+        # element of each one before anything reads it. An aliased row keeps
+        # every reported sum identical and drops one more full-length
+        # allocation per simulated year.
         rows: Dict[str, np.ndarray] = {name: np.empty(n_steps) for name in _PV_ONLY_ROWS}
         for alias, name in _PV_ONLY_ALIASES.items():
             rows[alias] = rows[name]
@@ -961,14 +972,18 @@ def _apply_battery_replacement(
     step_index: int,
     hours_per_step: float,
     battery_energy_wh: float,
+    pv_origin_energy_wh: float,
+    grid_origin_energy_wh: float,
     battery_energy_beginning: float,
-) -> Tuple[float, float, float]:
-    """Swap in a new pack, returning ``(energy, pv_origin, day_end_soc)``.
+) -> Tuple[float, float, float, float]:
+    """Swap in a new pack, returning ``(energy, pv_origin, grid_origin, day_end_soc)``.
 
     Replacement happens *inside* the closing timestep, after that step's
     results were already recorded. The recorded end-of-step state is
     therefore rewritten so it matches the next step's beginning, and both
     external energy transfers are exposed for whole-system reconciliation.
+    The retired pack takes every origin with it; the new pack's energy is
+    unattributed (ADR 0002 A8).
     """
     replacement_energy_removed = battery_energy_wh
     aging.soh_fraction = 1.0
@@ -996,11 +1011,14 @@ def _apply_battery_replacement(
     out.columns["Battery_SOC_Absolute"][step_index] = battery_config.max_soc
     out.columns["Battery_SOH"][step_index] = 100.0
     out.columns["Battery_PV_Origin_Energy_End"][step_index] = 0.0
+    out.columns["Battery_Grid_Origin_Energy_End"][step_index] = 0.0
     out.columns["Battery_Replacement_Energy_Removed"][step_index] = replacement_energy_removed / hours_per_step
+    out.columns["PV_Origin_Replacement_Energy_Removed"][step_index] = pv_origin_energy_wh / hours_per_step
+    out.columns["Grid_Origin_Replacement_Energy_Removed"][step_index] = grid_origin_energy_wh / hours_per_step
     out.columns["Battery_Replacement_Energy_Added"][step_index] = replacement_energy_added / hours_per_step
     out.columns["Battery_Energy_Delta"][step_index] = (battery_energy_wh - battery_energy_beginning) / hours_per_step
 
-    return battery_energy_wh, 0.0, battery_config.max_soc
+    return battery_energy_wh, 0.0, 0.0, battery_config.max_soc
 
 
 def _dispatch_no_battery_vectorized(
@@ -1037,10 +1055,10 @@ def _dispatch_no_battery_vectorized(
     # here is algebraically equivalent but differs by one ULP at low load.
     pv_production_wh = pv_dc_wh - clipping_loss_dc_wh - conversion_loss_wh
 
-    # The three columns reported twice under different names are divided
-    # once and assigned twice. On the reduced summary buffer the second
-    # assignment writes the array the first one already filled, which is
-    # what makes sharing it safe: both names carry the same values either way.
+    # Inverter_Loss is PV_Direct_Inverter_Loss when there is no battery: it is
+    # divided once and assigned twice. On the reduced summary buffer the
+    # second assignment writes the array the first one already filled, which
+    # is what makes sharing it safe: both names carry the same values.
     curtailment_w = clipping_loss_dc_wh / hours_per_step
     grid_export_w = grid_export_wh / hours_per_step
     conversion_w = conversion_loss_wh / hours_per_step
@@ -1050,10 +1068,8 @@ def _dispatch_no_battery_vectorized(
     out.columns["Houseload"][:] = load_wh / hours_per_step
     out.columns["PV_Delta"][:] = (pv_production_wh - load_wh) / hours_per_step
     out.columns["Import_From_Grid"][:] = grid_import_wh / hours_per_step
-    out.columns["Sell_To_Grid"][:] = grid_export_w
     out.columns["Battery_SOH"].fill(100.0)
     out.columns["T_cell"][:] = temperature_values
-    out.columns["PV_Curtailment"][:] = curtailment_w
 
     out.columns["PV_DC_To_Inverter"][:] = (pv_dc_wh - clipping_loss_dc_wh) / hours_per_step
     out.columns["PV_DC_Curtailed"][:] = curtailment_w
@@ -1080,14 +1096,15 @@ def _apply_daily_degradation(
     hours_per_step: float,
     battery_energy_wh: float,
     pv_origin_energy_wh: float,
+    grid_origin_energy_wh: float,
     battery_energy_beginning: float,
     debug: bool,
-) -> Tuple[float, float]:
-    """Close out one degradation period, returning ``(energy, pv_origin)``.
+) -> Tuple[float, float, float]:
+    """Close out one degradation period, returning ``(energy, pv_origin, grid_origin)``.
 
     Runs the lifecycle step, optional resistance fade and the end-of-life
     replacement check in that order, mutating *aging* in place and appending
-    one row to *degradation_tracking*. The two stored-energy values are
+    one row to *degradation_tracking*. The stored-energy values are
     returned rather than carried on *aging* because the per-step loop owns
     them and only a replacement changes them here.
 
@@ -1151,15 +1168,19 @@ def _apply_daily_degradation(
         aging.soh_percent = aging.soh_fraction * 100.0
         aging.cumulative_cycle_deg += terminal_cycles.cycle_degradation
         cycle_degradation_for_row = degradation_step.cycle_degradation + terminal_cycles.cycle_degradation
-        battery_energy_wh, pv_origin_energy_wh, day_end_soc_absolute = _apply_battery_replacement(
-            aging,
-            battery_config,
-            lifecycle,
-            out,
-            step_index=step_index,
-            hours_per_step=hours_per_step,
-            battery_energy_wh=battery_energy_wh,
-            battery_energy_beginning=battery_energy_beginning,
+        battery_energy_wh, pv_origin_energy_wh, grid_origin_energy_wh, day_end_soc_absolute = (
+            _apply_battery_replacement(
+                aging,
+                battery_config,
+                lifecycle,
+                out,
+                step_index=step_index,
+                hours_per_step=hours_per_step,
+                battery_energy_wh=battery_energy_wh,
+                pv_origin_energy_wh=pv_origin_energy_wh,
+                grid_origin_energy_wh=grid_origin_energy_wh,
+                battery_energy_beginning=battery_energy_beginning,
+            )
         )
         if debug:
             print(f"\n*** BATTERY REPLACED at {step_time} ***")
@@ -1187,7 +1208,7 @@ def _apply_daily_degradation(
 
     aging.day_start_soc = day_end_soc_absolute
     aging.day_start_t_cell = day_end_t_cell
-    return battery_energy_wh, pv_origin_energy_wh
+    return battery_energy_wh, pv_origin_energy_wh, grid_origin_energy_wh
 
 
 def _build_summary_row(
@@ -1205,7 +1226,7 @@ def _build_summary_row(
     """
     total_pv = np.sum(buffers.columns["PV_Production"]) * hours_per_step
     total_load = np.sum(buffers.columns["Houseload"]) * hours_per_step
-    total_sell = np.sum(buffers.columns["Sell_To_Grid"]) * hours_per_step
+    total_sell = np.sum(buffers.columns["PV_AC_Export"]) * hours_per_step
     total_import = np.sum(buffers.columns["Import_From_Grid"]) * hours_per_step
 
     percentage_imported = (total_import / total_load * 100) if total_load > 0 else 0
@@ -1317,8 +1338,10 @@ class SimulationSummary:
     total_replacement_cost: float
     opening_energy_wh: float
     opening_pv_origin_energy_wh: float
+    opening_grid_origin_energy_wh: float
     carried_energy_wh: float
     carried_pv_origin_energy_wh: float
+    carried_grid_origin_energy_wh: float
     has_degradation_rows: bool
     fec_cum: float
     cumulative_calendar_seconds: float
@@ -1404,8 +1427,10 @@ def _build_simulation_summary(
         # previous year carried out.
         opening_energy_wh=float(buffers.columns["Battery_Energy_Beginning"][0]),
         opening_pv_origin_energy_wh=float(buffers.columns["Battery_PV_Origin_Energy_Beginning"][0]),
+        opening_grid_origin_energy_wh=float(buffers.columns["Battery_Grid_Origin_Energy_Beginning"][0]),
         carried_energy_wh=float(buffers.columns["Battery_Energy"][-1]),
         carried_pv_origin_energy_wh=float(buffers.columns["Battery_PV_Origin_Energy_End"][-1]),
+        carried_grid_origin_energy_wh=float(buffers.columns["Battery_Grid_Origin_Energy_End"][-1]),
         has_degradation_rows=bool(core.degradation_tracking),
         fec_cum=aging.fec_cum,
         cumulative_calendar_seconds=aging.cumulative_cal_seconds,
@@ -1454,6 +1479,7 @@ def _simulate_core(
     debug: bool = False,
     initial_energy_wh: Optional[float] = None,
     initial_pv_origin_energy_wh: Optional[float] = None,
+    initial_grid_origin_energy_wh: Optional[float] = None,
     execution_backend: str = "python",
     summary_only: bool = False,
     aligned: Optional[AlignedSimulationInputs] = None,
@@ -1561,11 +1587,12 @@ def _simulate_core(
     if degradation_engine_key == "native" and initial_degradation_state is not None:
         battery_soh_decimal = float(state_payload.get("soh_fraction", battery_soh_decimal))
     Battery_SOH = battery_soh_decimal * 100.0
-    Battery_Energy_Wh, Battery_PV_Origin_Energy_Wh = _resolve_carried_energy(
+    Battery_Energy_Wh, Battery_PV_Origin_Energy_Wh, Battery_Grid_Origin_Energy_Wh = _resolve_carried_energy(
         initial_energy_wh,
         initial_pv_origin_energy_wh,
         battery_config,
         battery_soh_decimal,
+        initial_grid_origin_energy_wh,
     )
 
     # Degradation windows are positional (fixed steps_per_day), not
@@ -1713,29 +1740,32 @@ def _simulate_core(
     window_start = 0
     while window_start < n_steps:
         window_end = min(window_start + steps_per_day, n_steps)
-        Battery_Energy_Wh, Battery_PV_Origin_Energy_Wh, battery_energy_beginning = dispatch_day(
-            out,
-            _pv_dc_vals,
-            _load_vals,
-            _temp_vals,
-            window_start,
-            window_end,
-            battery_config=battery_config,
-            battery_soh_decimal=battery_soh_decimal,
-            Battery_SOH=Battery_SOH,
-            Battery_Energy_Wh=Battery_Energy_Wh,
-            Battery_PV_Origin_Energy_Wh=Battery_PV_Origin_Energy_Wh,
-            eff_charge=eff_charge,
-            eff_discharge=eff_discharge,
-            hours_per_step=hours_per_step,
-            standby_loss_per_step_wh=standby_loss_per_step_wh,
-            cap_wh=cap_wh,
-            cap_charge_wh=cap_charge_wh,
-            cap_discharge_wh=cap_discharge_wh,
-            cap_stored_wh=cap_stored_wh,
+        Battery_Energy_Wh, Battery_PV_Origin_Energy_Wh, Battery_Grid_Origin_Energy_Wh, battery_energy_beginning = (
+            dispatch_day(
+                out,
+                _pv_dc_vals,
+                _load_vals,
+                _temp_vals,
+                window_start,
+                window_end,
+                battery_config=battery_config,
+                battery_soh_decimal=battery_soh_decimal,
+                Battery_SOH=Battery_SOH,
+                Battery_Energy_Wh=Battery_Energy_Wh,
+                Battery_PV_Origin_Energy_Wh=Battery_PV_Origin_Energy_Wh,
+                Battery_Grid_Origin_Energy_Wh=Battery_Grid_Origin_Energy_Wh,
+                eff_charge=eff_charge,
+                eff_discharge=eff_discharge,
+                hours_per_step=hours_per_step,
+                standby_loss_per_step_wh=standby_loss_per_step_wh,
+                cap_wh=cap_wh,
+                cap_charge_wh=cap_charge_wh,
+                cap_discharge_wh=cap_discharge_wh,
+                cap_stored_wh=cap_stored_wh,
+            )
         )
         last_step = window_end - 1
-        Battery_Energy_Wh, Battery_PV_Origin_Energy_Wh = _apply_daily_degradation(
+        Battery_Energy_Wh, Battery_PV_Origin_Energy_Wh, Battery_Grid_Origin_Energy_Wh = _apply_daily_degradation(
             aging,
             degradation_lifecycle,
             battery_config,
@@ -1755,6 +1785,7 @@ def _simulate_core(
             hours_per_step=hours_per_step,
             battery_energy_wh=Battery_Energy_Wh,
             pv_origin_energy_wh=Battery_PV_Origin_Energy_Wh,
+            grid_origin_energy_wh=Battery_Grid_Origin_Energy_Wh,
             battery_energy_beginning=battery_energy_beginning,
             debug=debug,
         )
@@ -1800,6 +1831,7 @@ def simulate_energy_balance(
     debug: bool = False,
     initial_energy_wh: Optional[float] = None,
     initial_pv_origin_energy_wh: Optional[float] = None,
+    initial_grid_origin_energy_wh: Optional[float] = None,
     execution_backend: str = "python",
     finalize_degradation: Optional[bool] = None,
 ) -> (
@@ -1851,6 +1883,7 @@ def simulate_energy_balance(
         debug=debug,
         initial_energy_wh=initial_energy_wh,
         initial_pv_origin_energy_wh=initial_pv_origin_energy_wh,
+        initial_grid_origin_energy_wh=initial_grid_origin_energy_wh,
         execution_backend=execution_backend,
     )
     df = core.buffers.to_frame(core.rng)
@@ -1898,6 +1931,7 @@ def simulate_energy_balance_summary(
     debug: bool = False,
     initial_energy_wh: Optional[float] = None,
     initial_pv_origin_energy_wh: Optional[float] = None,
+    initial_grid_origin_energy_wh: Optional[float] = None,
     execution_backend: str = "python",
     aligned: Optional[AlignedSimulationInputs] = None,
     finalize_degradation: Optional[bool] = None,
@@ -1952,6 +1986,7 @@ def simulate_energy_balance_summary(
         debug=debug,
         initial_energy_wh=initial_energy_wh,
         initial_pv_origin_energy_wh=initial_pv_origin_energy_wh,
+        initial_grid_origin_energy_wh=initial_grid_origin_energy_wh,
         execution_backend=execution_backend,
         # Reduced per-step buffers are safe here: nothing downstream of this
         # call materialises a per-timestep frame.

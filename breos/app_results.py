@@ -31,7 +31,7 @@ def monthly_to_dicts(results_df: pd.DataFrame, freq: str) -> list[dict[str, Any]
         "PV_DC",
         "PV_Production",
         "PV_AC_To_Load",
-        "Battery_AC_To_Load_PV",
+        "PV_Origin_Battery_AC_To_Load",
         "Houseload",
         "Import_From_Grid",
         "PV_AC_Export",
@@ -44,7 +44,7 @@ def monthly_to_dicts(results_df: pd.DataFrame, freq: str) -> list[dict[str, Any]
     for idx, row in monthly.iterrows():
         pv_dc = float(row["PV_DC"])
         direct = float(row["PV_AC_To_Load"])
-        battery = float(row["Battery_AC_To_Load_PV"])
+        battery = float(row["PV_Origin_Battery_AC_To_Load"])
         usable_pv = direct + battery + float(row["PV_AC_Export"])
         legacy_pv = float(row["PV_Production"])
         consumption = float(row["Houseload"])

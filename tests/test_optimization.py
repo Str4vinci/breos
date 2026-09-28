@@ -319,8 +319,8 @@ def test_solar_design_problem_scores_zeb_from_explicit_ac_ledger(monkeypatch):
         idx,
         Houseload=500.0,
         PV_AC_To_Load=300.0,
-        Battery_AC_To_Load_PV=50.0,
-        Sell_To_Grid=75.0,
+        PV_Origin_Battery_AC_To_Load=50.0,
+        PV_AC_Export=75.0,
         PV_Production=1000.0,
     )
 

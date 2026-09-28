@@ -165,7 +165,7 @@ def _build_pv_loss_waterfall(
     direct_pv_ac = e("PV_AC_To_Load")
     export_ac = e("PV_AC_Export")
     battery_ac = e("Battery_AC_To_Load")
-    pv_origin_battery_ac = e("Battery_AC_To_Load_PV")
+    pv_origin_battery_ac = e("PV_Origin_Battery_AC_To_Load")
     inverter_conversion = e("Inverter_Loss")
     direct_pv_conversion = e("PV_Direct_Inverter_Loss")
     battery_discharge_conversion = e("Battery_Inverter_Loss")
@@ -183,7 +183,7 @@ def _build_pv_loss_waterfall(
             _series_energy_kwh(first_year_results_df.get("Battery_Discharge_Loss", empty_series), freq)
         ),
         "battery_standby_loss_kwh": _rounded(
-            _series_energy_kwh(first_year_results_df.get("Battery_Standby_Loss", empty_series), freq)
+            _series_energy_kwh(first_year_results_df.get("Standby_Loss", empty_series), freq)
         ),
     }
     dispatch["battery_round_trip_loss_kwh"] = _rounded(

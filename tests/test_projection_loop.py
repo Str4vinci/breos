@@ -98,6 +98,34 @@ def test_carry_state_starts_year_one_at_the_battery_initial_state():
     assert first["initial_degradation_state"] is None
     later = CarryState(energy_wh=1234.0, pv_origin_energy_wh=None).simulation_kwargs()
     assert (later["initial_energy_wh"], later["initial_pv_origin_energy_wh"]) == (1234.0, 0.0)
+    assert later["initial_grid_origin_energy_wh"] == 0.0
+
+
+def test_carry_state_hands_the_grid_origin_to_the_next_year():
+    """Frames and summaries carry the grid origin forward, and year two starts from it."""
+    from breos.battery import BatteryConfig, simulate_energy_balance, simulate_energy_balance_summary
+
+    pv, load, temperature = _inputs()
+    config = BatteryConfig(nominal_energy_wh=5000.0)
+    kwargs = dict(
+        pv_dc=pv.iloc[:48],
+        houseload=load.iloc[:48],
+        battery_config=config,
+        freq="h",
+        temperature_series=temperature.iloc[:48],
+        initial_energy_wh=4000.0,
+        initial_grid_origin_energy_wh=3000.0,
+    )
+    results, _, _, _, _, degradation = simulate_energy_balance(**kwargs)
+    summary = simulate_energy_balance_summary(**kwargs)
+
+    from_frames = CarryState().after_frames(results, degradation, None, has_battery=True)
+    from_summary = CarryState().after_summary(summary, has_battery=True, resistance_fade=False)
+    carried = float(results["Battery_Grid_Origin_Energy_End"].iloc[-1])
+    assert 0.0 < carried < 3000.0
+    assert from_frames.grid_origin_energy_wh == from_summary.grid_origin_energy_wh == carried
+    assert summary.opening_grid_origin_energy_wh == 3000.0
+    assert from_summary.simulation_kwargs()["initial_grid_origin_energy_wh"] == carried
 
 
 def test_value_projection_prices_the_year_rows():

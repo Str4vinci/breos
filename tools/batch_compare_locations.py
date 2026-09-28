@@ -310,7 +310,7 @@ def _run_single_sim(args_tuple):
         total_pv_kwh = total_pv / 1000
         total_load = (results_df["Houseload"].sum() / 1000) * hours_per_step
         total_import = (results_df["Import_From_Grid"].sum() / 1000) * hours_per_step
-        total_export = (results_df["Sell_To_Grid"].sum() / 1000) * hours_per_step
+        total_export = (results_df["PV_AC_Export"].sum() / 1000) * hours_per_step
         grid_indep = (1 - total_import / total_load) * 100 if total_load > 0 else 0
 
         yearly_summaries.append(

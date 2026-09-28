@@ -165,7 +165,7 @@ after a deliberate call to take them on, and the notes below are the arguments
 for and against, not designs.
 
 - **Excess-energy index.** `EEI = excess / PV production`, with excess as
-  `Sell_To_Grid` plus `PV_DC_Curtailed`. Both are already in the ledger, so
+  `PV_AC_Export` plus `PV_DC_Curtailed`. Both are already in the ledger, so
   the diagnostic is nearly free. As an optimization objective it is close to
   degenerate under flat feed-in pricing, where NPV already values exported
   energy, so it earns its place only alongside an export cap. Open question:

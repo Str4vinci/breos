@@ -465,7 +465,7 @@ class TestUnlimitedInverterAndOptimizer:
         result = self._infinite_public_run("python", with_battery=False, scale=scale)
         expected = np.array([500.0, 1000.0, 2000.0]) * 0.96 * scale
         assert np.array_equal(result[0]["PV_Production"].to_numpy(), expected)
-        assert np.array_equal(result[0]["Sell_To_Grid"].to_numpy(), expected)
+        assert np.array_equal(result[0]["PV_AC_Export"].to_numpy(), expected)
         assert result[1] == expected.sum()
 
     @pytest.mark.parametrize("scale", [0.5, 0.8])
@@ -476,7 +476,7 @@ class TestUnlimitedInverterAndOptimizer:
         numba_result = self._infinite_public_run("numba", with_battery=True, scale=scale)
         expected = np.array([500.0, 1000.0, 2000.0]) * 0.96 * scale
         assert np.array_equal(python_result[0]["PV_Production"].to_numpy(), expected)
-        assert np.array_equal(python_result[0]["Sell_To_Grid"].to_numpy(), expected)
+        assert np.array_equal(python_result[0]["PV_AC_Export"].to_numpy(), expected)
         assert python_result[1] == expected.sum()
         for column in python_result[0].columns:
             if column != "Datetime":

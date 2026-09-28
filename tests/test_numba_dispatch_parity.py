@@ -490,6 +490,7 @@ def test_zeta_squared_must_use_libm_pow_not_the_folded_square():
         Battery_SOH=100.0,
         Battery_Energy_Wh=900.0,
         Battery_PV_Origin_Energy_Wh=0.0,
+        Battery_Grid_Origin_Energy_Wh=0.0,
         eff_charge=0.95,
         eff_discharge=0.95,
         hours_per_step=0.25,

@@ -11,7 +11,7 @@ _LEDGER_COLUMNS = [
     "PV_DC",
     "PV_Production",
     "PV_AC_To_Load",
-    "Battery_AC_To_Load_PV",
+    "PV_Origin_Battery_AC_To_Load",
     "Houseload",
     "Import_From_Grid",
     "PV_AC_Export",

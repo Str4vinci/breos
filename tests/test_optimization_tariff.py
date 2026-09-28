@@ -108,7 +108,7 @@ def test_optimizer_money_matches_the_step_ledger(tariff_case, monkeypatch):
         prices = np.where((local.hour >= 8) & (local.hour < 22), 0.50, 0.10)
         row = result.yearly.iloc[i]
         assert row["Import_Cost"] == pytest.approx((frame["Import_From_Grid"] * prices).sum() / 1000)
-        assert row["Export_Revenue"] == pytest.approx(frame["Sell_To_Grid"].sum() / 1000 * 0.03)
+        assert row["Export_Revenue"] == pytest.approx(frame["PV_AC_Export"].sum() / 1000 * 0.03)
         assert row["Baseline_Import_Cost"] == pytest.approx(16.0)
         assert row["Fixed_Charge"] == pytest.approx(0.80)
     assert result.provenance["tariff"]["calendar_policy"] == "replay_start_year"

@@ -193,9 +193,8 @@ def test_system_ac_production_prefers_explicit_ledger_over_legacy_field():
     results = pd.DataFrame(
         {
             "PV_AC_To_Load": [300.0, 100.0],
-            "Battery_AC_To_Load_PV": [50.0, 25.0],
+            "PV_Origin_Battery_AC_To_Load": [50.0, 25.0],
             "PV_AC_Export": [200.0, 75.0],
-            "Sell_To_Grid": [999.0, 999.0],
             "PV_Production": [9999.0, 9999.0],
         }
     )
@@ -589,11 +588,10 @@ class TestFirstYearProjectionCalendar:
             {
                 "Datetime": index,
                 "PV_AC_To_Load": 500.0,
-                "Battery_AC_To_Load_PV": 0.0,
+                "PV_Origin_Battery_AC_To_Load": 0.0,
                 "PV_AC_Export": 300.0,
                 "Houseload": 1000.0,
                 "Import_From_Grid": 500.0,
-                "Sell_To_Grid": 300.0,
             }
         )
 

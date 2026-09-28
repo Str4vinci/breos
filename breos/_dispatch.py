@@ -146,7 +146,13 @@ def _dc_for_ac(
 # 1.2 removes the year_1_degradation loss-waterfall stage. PV module age is
 # counted at the start of each year, so year 1 has no degradation and the stage
 # was always 0; pvwatts_static is now the last stage.
-LEDGER_SCHEMA_VERSION = "1.2"
+# 2.0 splits stored energy into PV, grid and unattributed origins (ADR 0002
+# A8, A9): grid-origin balances and per-origin charge, discharge, standby,
+# capacity-window and replacement columns. It drops four columns that
+# repeated another under a second name: Sell_To_Grid (read PV_AC_Export),
+# PV_Curtailment (PV_DC_Curtailed), Battery_Standby_Loss (Standby_Loss) and
+# Battery_AC_To_Load_PV (PV_Origin_Battery_AC_To_Load).
+LEDGER_SCHEMA_VERSION = "2.0"
 
 # Per-step state columns, by results-frame name, in their row order inside the
 # shared buffer matrix. Stored-energy columns are Wh; every other column is
@@ -157,19 +163,18 @@ _STATE_COLUMNS: Tuple[str, ...] = (
     "Houseload",
     "PV_Delta",
     "Import_From_Grid",
-    "Sell_To_Grid",
     "Battery_Energy",
     "Battery_SOC_Normalized",
     "Battery_SOC_Absolute",
     "Battery_SOH",
     "T_cell",
-    "PV_Curtailment",
     "Battery_Charge_Loss",
     "Battery_Discharge_Loss",
-    "Battery_Standby_Loss",
     "Battery_Energy_Beginning",
     "Battery_PV_Origin_Energy_Beginning",
     "Battery_PV_Origin_Energy_End",
+    "Battery_Grid_Origin_Energy_Beginning",
+    "Battery_Grid_Origin_Energy_End",
 )
 
 # Explicit per-step energy flows and losses. Every entry is accumulated in Wh
@@ -185,8 +190,6 @@ _LEDGER_COLUMNS: Tuple[str, ...] = (
     "Battery_Charge_Stored",
     "Battery_Discharge_DC",
     "Battery_AC_To_Load",
-    "Battery_AC_To_Load_PV",
-    "PV_Origin_Battery_AC_To_Load",
     "PV_Direct_Inverter_Loss",
     "Battery_Inverter_Loss",
     "Inverter_Loss",
@@ -195,6 +198,22 @@ _LEDGER_COLUMNS: Tuple[str, ...] = (
     "Battery_Replacement_Energy_Removed",
     "Battery_Replacement_Energy_Added",
     "Battery_Energy_Delta",
+    # Stored energy by origin (ADR 0002 A8): PV, grid, and an unattributed
+    # remainder that holds a fresh or replacement pack's initial energy. Each
+    # flow into or out of the store is split here for PV and grid; the
+    # unattributed share of a flow is its total minus those two. Every origin
+    # then reconciles step by step from the ledger alone.
+    "PV_Origin_Battery_Charge_Stored",
+    "PV_Origin_Battery_Discharge_DC",
+    "PV_Origin_Battery_AC_To_Load",
+    "PV_Origin_Standby_Loss",
+    "PV_Origin_Capacity_Window_Loss",
+    "PV_Origin_Replacement_Energy_Removed",
+    "Grid_Origin_Battery_Discharge_DC",
+    "Grid_Origin_Battery_AC_To_Load",
+    "Grid_Origin_Standby_Loss",
+    "Grid_Origin_Capacity_Window_Loss",
+    "Grid_Origin_Replacement_Energy_Removed",
 )
 
 # Every row of the buffer matrix, by the one name it has everywhere: the
@@ -211,19 +230,18 @@ R_PV_PRODUCTION = _ROW["PV_Production"]
 R_LOAD = _ROW["Houseload"]
 R_PV_DELTA = _ROW["PV_Delta"]
 R_GRID_IMPORT = _ROW["Import_From_Grid"]
-R_GRID_EXPORT = _ROW["Sell_To_Grid"]
 R_BATTERY_ENERGY = _ROW["Battery_Energy"]
 R_SOC_NORMALIZED = _ROW["Battery_SOC_Normalized"]
 R_SOC_ABSOLUTE = _ROW["Battery_SOC_Absolute"]
 R_SOH = _ROW["Battery_SOH"]
 R_T_CELL = _ROW["T_cell"]
-R_PV_CURTAILMENT = _ROW["PV_Curtailment"]
 R_CHARGE_LOSS = _ROW["Battery_Charge_Loss"]
 R_DISCHARGE_LOSS = _ROW["Battery_Discharge_Loss"]
-R_STANDBY_LOSS = _ROW["Battery_Standby_Loss"]
 R_BATTERY_ENERGY_BEGIN = _ROW["Battery_Energy_Beginning"]
 R_PV_ORIGIN_BEGIN = _ROW["Battery_PV_Origin_Energy_Beginning"]
 R_PV_ORIGIN_END = _ROW["Battery_PV_Origin_Energy_End"]
+R_GRID_ORIGIN_BEGIN = _ROW["Battery_Grid_Origin_Energy_Beginning"]
+R_GRID_ORIGIN_END = _ROW["Battery_Grid_Origin_Energy_End"]
 
 L_PV_DC_TO_BATTERY = _ROW["PV_DC_To_Battery"]
 L_PV_DC_TO_INVERTER = _ROW["PV_DC_To_Inverter"]
@@ -234,8 +252,6 @@ L_BATTERY_CHARGE_INPUT = _ROW["Battery_Charge_Input"]
 L_BATTERY_CHARGE_STORED = _ROW["Battery_Charge_Stored"]
 L_BATTERY_DISCHARGE_DC = _ROW["Battery_Discharge_DC"]
 L_BATTERY_AC_TO_LOAD = _ROW["Battery_AC_To_Load"]
-L_BATTERY_AC_TO_LOAD_PV = _ROW["Battery_AC_To_Load_PV"]
-L_PV_ORIGIN_BATTERY_AC_TO_LOAD = _ROW["PV_Origin_Battery_AC_To_Load"]
 L_PV_DIRECT_INVERTER_LOSS = _ROW["PV_Direct_Inverter_Loss"]
 L_BATTERY_INVERTER_LOSS = _ROW["Battery_Inverter_Loss"]
 L_INVERTER_LOSS = _ROW["Inverter_Loss"]
@@ -244,6 +260,17 @@ L_CAPACITY_WINDOW_LOSS = _ROW["Capacity_Window_Loss"]
 L_REPLACEMENT_ENERGY_REMOVED = _ROW["Battery_Replacement_Energy_Removed"]
 L_REPLACEMENT_ENERGY_ADDED = _ROW["Battery_Replacement_Energy_Added"]
 L_BATTERY_ENERGY_DELTA = _ROW["Battery_Energy_Delta"]
+L_PV_ORIGIN_CHARGE_STORED = _ROW["PV_Origin_Battery_Charge_Stored"]
+L_PV_ORIGIN_DISCHARGE_DC = _ROW["PV_Origin_Battery_Discharge_DC"]
+L_PV_ORIGIN_BATTERY_AC_TO_LOAD = _ROW["PV_Origin_Battery_AC_To_Load"]
+L_PV_ORIGIN_STANDBY_LOSS = _ROW["PV_Origin_Standby_Loss"]
+L_PV_ORIGIN_CAPACITY_WINDOW_LOSS = _ROW["PV_Origin_Capacity_Window_Loss"]
+L_PV_ORIGIN_REPLACEMENT_REMOVED = _ROW["PV_Origin_Replacement_Energy_Removed"]
+L_GRID_ORIGIN_DISCHARGE_DC = _ROW["Grid_Origin_Battery_Discharge_DC"]
+L_GRID_ORIGIN_BATTERY_AC_TO_LOAD = _ROW["Grid_Origin_Battery_AC_To_Load"]
+L_GRID_ORIGIN_STANDBY_LOSS = _ROW["Grid_Origin_Standby_Loss"]
+L_GRID_ORIGIN_CAPACITY_WINDOW_LOSS = _ROW["Grid_Origin_Capacity_Window_Loss"]
+L_GRID_ORIGIN_REPLACEMENT_REMOVED = _ROW["Grid_Origin_Replacement_Energy_Removed"]
 
 
 def lfp_capacity_factor(T_C: float) -> float:
@@ -318,12 +345,14 @@ def _apply_capacity_window(
     standby_loss_wh: float,
     energy_wh: float,
     pv_origin_wh: float,
+    grid_origin_wh: float,
     t_cell: float,
-) -> Tuple[float, float, float, float, float, float]:
+) -> Tuple[float, float, float, float, float, float, float, float, float, float, float]:
     """Derate the usable SOC window and bleed standby loss, before dispatch.
 
-    Returns ``(energy, pv_origin, emin, emax, capacity_window_loss, standby)``,
-    all in Wh. Assumes a configured battery; the no-battery case never calls
+    Returns ``(energy, pv_origin, grid_origin, emin, emax,
+    capacity_window_loss, standby, pv_capacity_window_loss,
+    grid_capacity_window_loss, pv_standby, grid_standby)``, all in Wh. Assumes a configured battery; the no-battery case never calls
     this. ``standby_loss_wh`` is already scaled to the timestep.
 
     ``t_cell`` here is the ambient/indoor temperature at step start, not the
@@ -335,26 +364,55 @@ def _apply_capacity_window(
     A temperature- or SOH-driven fall in ``emax`` is booked as an explicit
     loss — it is neither export nor standby consumption — and the lower
     reserve is a dispatch boundary that must never create energy when it
-    rises. The PV-origin share is rescaled with every reduction so it stays a
-    fraction of what is actually stored.
+    rises. Each reduction removes the PV, grid and unattributed origins in
+    proportion to their shares, so every origin stays a fraction of what is
+    actually stored.
     """
     usable_cap = nominal_energy_wh * soh_fraction
     f_cap = lfp_capacity_factor(t_cell)
     emax = usable_cap * max_soc * f_cap
     emin = usable_cap * min_soc * f_cap
 
+    pv_window_loss = 0.0
+    grid_window_loss = 0.0
     capacity_window_loss = max(0.0, energy_wh - emax)
     if capacity_window_loss > 0.0 and energy_wh > 0.0:
-        pv_origin_wh *= emax / energy_wh
+        kept = emax / energy_wh
+        pv_window_loss = pv_origin_wh
+        grid_window_loss = grid_origin_wh
+        pv_origin_wh *= kept
+        grid_origin_wh *= kept
+        pv_window_loss -= pv_origin_wh
+        grid_window_loss -= grid_origin_wh
         energy_wh = emax
 
+    pv_standby = 0.0
+    grid_standby = 0.0
     removable_for_standby = max(0.0, energy_wh - emin)
     standby = min(standby_loss_wh, removable_for_standby)
     if standby > 0.0 and energy_wh > 0.0:
-        pv_origin_wh *= (energy_wh - standby) / energy_wh
+        kept = (energy_wh - standby) / energy_wh
+        pv_standby = pv_origin_wh
+        grid_standby = grid_origin_wh
+        pv_origin_wh *= kept
+        grid_origin_wh *= kept
+        pv_standby -= pv_origin_wh
+        grid_standby -= grid_origin_wh
         energy_wh -= standby
 
-    return energy_wh, pv_origin_wh, emin, emax, capacity_window_loss, standby
+    return (
+        energy_wh,
+        pv_origin_wh,
+        grid_origin_wh,
+        emin,
+        emax,
+        capacity_window_loss,
+        standby,
+        pv_window_loss,
+        grid_window_loss,
+        pv_standby,
+        grid_standby,
+    )
 
 
 def _charge(
@@ -548,6 +606,7 @@ def _dispatch_day(
     hi: int,
     battery_energy: float,
     pv_origin: float,
+    grid_origin: float,
     nominal_energy_wh: float,
     soh_fraction: float,
     soh_percent: float,
@@ -565,7 +624,7 @@ def _dispatch_day(
     hours_per_step: float,
     ac_output_scale: float,
     pow_two: float,
-) -> Tuple[float, float, float]:
+) -> Tuple[float, float, float, float]:
     """Dispatch timesteps ``[lo, hi)`` at fixed health, writing rows of *matrix*.
 
     State of health, resistance-derived efficiencies and the replacement
@@ -573,9 +632,10 @@ def _dispatch_day(
     them at the day boundary. Only battery runs come here: PV-only runs take
     the vectorised path in :mod:`breos.battery`.
 
-    Returns ``(battery_energy, pv_origin, battery_energy_beginning)``, where the
-    last value is the beginning-of-step stored energy of the final step in the
-    window, which the day-close replacement path needs.
+    Returns ``(battery_energy, pv_origin, grid_origin,
+    battery_energy_beginning)``, where the last value is the beginning-of-step
+    stored energy of the final step in the window, which the day-close
+    replacement path needs.
     """
     battery_energy_beginning = 0.0
     for i in range(lo, hi):
@@ -589,13 +649,19 @@ def _dispatch_day(
 
         battery_energy_beginning = battery_energy
         pv_origin_beginning = pv_origin
+        grid_origin_beginning = grid_origin
         (
             battery_energy,
             pv_origin,
+            grid_origin,
             emin,
             emax,
             capacity_window_loss,
             battery_standby_loss,
+            pv_window_loss,
+            grid_window_loss,
+            pv_standby_loss,
+            grid_standby_loss,
         ) = _apply_capacity_window(
             nominal_energy_wh,
             soh_fraction,
@@ -604,13 +670,21 @@ def _dispatch_day(
             standby_loss_per_step_wh,
             battery_energy,
             pv_origin,
+            grid_origin,
             t_cell,
         )
 
+        # Discharge takes from every origin in proportion to its share before
+        # dispatch. One share per step is exact only because a step either
+        # charges or discharges, which is checked below.
         energy_before_dispatch = battery_energy
         origin_before_dispatch = pv_origin
+        grid_before_dispatch = grid_origin
         origin_fraction = (
             min(1.0, max(0.0, origin_before_dispatch / energy_before_dispatch)) if energy_before_dispatch > 0.0 else 0.0
+        )
+        grid_fraction = (
+            min(1.0, max(0.0, grid_before_dispatch / energy_before_dispatch)) if energy_before_dispatch > 0.0 else 0.0
         )
         (
             battery_energy,
@@ -643,11 +717,16 @@ def _dispatch_day(
             cap_stored_wh,
             pow_two,
         )
+        if battery_charge_input > 0.0 and battery_discharge_dc > 0.0:
+            raise ValueError("a dispatch step both charged and discharged the battery")
         charge_stored = battery_charge_input * eff_charge
         pv_origin_discharge_dc = battery_discharge_dc * origin_fraction
         pv_origin_battery_ac = battery_ac_to_load * origin_fraction
         pv_origin = max(0.0, origin_before_dispatch - pv_origin_discharge_dc + charge_stored)
         pv_origin = min(pv_origin, battery_energy)
+        grid_origin_discharge_dc = battery_discharge_dc * grid_fraction
+        grid_origin_battery_ac = battery_ac_to_load * grid_fraction
+        grid_origin = max(0.0, min(grid_before_dispatch - grid_origin_discharge_dc, battery_energy - pv_origin))
 
         # PV output after clipping and the direct PV inverter loss: AC to load
         # and export plus DC to the battery, with or without an inverter rating.
@@ -678,19 +757,18 @@ def _dispatch_day(
         matrix[R_LOAD, i] = load / hours_per_step
         matrix[R_PV_DELTA, i] = (pv_production - load) / hours_per_step
         matrix[R_GRID_IMPORT, i] = grid_import / hours_per_step
-        matrix[R_GRID_EXPORT, i] = pv_ac_export / hours_per_step
         matrix[R_BATTERY_ENERGY, i] = battery_energy
         matrix[R_SOC_NORMALIZED, i] = soc_normalized
         matrix[R_SOC_ABSOLUTE, i] = soc_absolute
         matrix[R_SOH, i] = soh_percent
         matrix[R_T_CELL, i] = t_cell
-        matrix[R_PV_CURTAILMENT, i] = pv_dc_curtailed / hours_per_step
         matrix[R_CHARGE_LOSS, i] = battery_charge_loss / hours_per_step
         matrix[R_DISCHARGE_LOSS, i] = battery_discharge_loss / hours_per_step
-        matrix[R_STANDBY_LOSS, i] = battery_standby_loss / hours_per_step
         matrix[R_BATTERY_ENERGY_BEGIN, i] = battery_energy_beginning
         matrix[R_PV_ORIGIN_BEGIN, i] = pv_origin_beginning
         matrix[R_PV_ORIGIN_END, i] = pv_origin
+        matrix[R_GRID_ORIGIN_BEGIN, i] = grid_origin_beginning
+        matrix[R_GRID_ORIGIN_END, i] = grid_origin
 
         matrix[L_PV_DC_TO_BATTERY, i] = pv_dc_to_battery / hours_per_step
         matrix[L_PV_DC_TO_INVERTER, i] = pv_dc_to_inverter / hours_per_step
@@ -701,8 +779,6 @@ def _dispatch_day(
         matrix[L_BATTERY_CHARGE_STORED, i] = charge_stored / hours_per_step
         matrix[L_BATTERY_DISCHARGE_DC, i] = battery_discharge_dc / hours_per_step
         matrix[L_BATTERY_AC_TO_LOAD, i] = battery_ac_to_load / hours_per_step
-        matrix[L_BATTERY_AC_TO_LOAD_PV, i] = pv_origin_battery_ac / hours_per_step
-        matrix[L_PV_ORIGIN_BATTERY_AC_TO_LOAD, i] = pv_origin_battery_ac / hours_per_step
         matrix[L_PV_DIRECT_INVERTER_LOSS, i] = pv_direct_inverter_loss / hours_per_step
         matrix[L_BATTERY_INVERTER_LOSS, i] = battery_inverter_loss / hours_per_step
         matrix[L_INVERTER_LOSS, i] = (pv_direct_inverter_loss + battery_inverter_loss) / hours_per_step
@@ -711,7 +787,18 @@ def _dispatch_day(
         matrix[L_REPLACEMENT_ENERGY_REMOVED, i] = 0.0
         matrix[L_REPLACEMENT_ENERGY_ADDED, i] = 0.0
         matrix[L_BATTERY_ENERGY_DELTA, i] = battery_energy_delta / hours_per_step
-    return battery_energy, pv_origin, battery_energy_beginning
+        matrix[L_PV_ORIGIN_CHARGE_STORED, i] = charge_stored / hours_per_step
+        matrix[L_PV_ORIGIN_DISCHARGE_DC, i] = pv_origin_discharge_dc / hours_per_step
+        matrix[L_PV_ORIGIN_BATTERY_AC_TO_LOAD, i] = pv_origin_battery_ac / hours_per_step
+        matrix[L_PV_ORIGIN_STANDBY_LOSS, i] = pv_standby_loss / hours_per_step
+        matrix[L_PV_ORIGIN_CAPACITY_WINDOW_LOSS, i] = pv_window_loss / hours_per_step
+        matrix[L_PV_ORIGIN_REPLACEMENT_REMOVED, i] = 0.0
+        matrix[L_GRID_ORIGIN_DISCHARGE_DC, i] = grid_origin_discharge_dc / hours_per_step
+        matrix[L_GRID_ORIGIN_BATTERY_AC_TO_LOAD, i] = grid_origin_battery_ac / hours_per_step
+        matrix[L_GRID_ORIGIN_STANDBY_LOSS, i] = grid_standby_loss / hours_per_step
+        matrix[L_GRID_ORIGIN_CAPACITY_WINDOW_LOSS, i] = grid_window_loss / hours_per_step
+        matrix[L_GRID_ORIGIN_REPLACEMENT_REMOVED, i] = 0.0
+    return battery_energy, pv_origin, grid_origin, battery_energy_beginning
 
 
 def _day_arguments(
@@ -727,6 +814,7 @@ def _day_arguments(
     Battery_SOH: float,
     Battery_Energy_Wh: float,
     Battery_PV_Origin_Energy_Wh: float,
+    Battery_Grid_Origin_Energy_Wh: float,
     eff_charge: float,
     eff_discharge: float,
     hours_per_step: float,
@@ -752,6 +840,7 @@ def _day_arguments(
         hi,
         float(Battery_Energy_Wh),
         float(Battery_PV_Origin_Energy_Wh),
+        float(Battery_Grid_Origin_Energy_Wh),
         float(battery_config.nominal_energy_wh),
         float(battery_soh_decimal),
         float(Battery_SOH),
@@ -772,7 +861,7 @@ def _day_arguments(
     )
 
 
-def _dispatch_day_python(out: Any, *args: Any, **state: Any) -> Tuple[float, float, float]:
+def _dispatch_day_python(out: Any, *args: Any, **state: Any) -> Tuple[float, float, float, float]:
     """Run :func:`_dispatch_day` as Python; the reference backend.
 
     Takes the arguments of :func:`_day_arguments`.

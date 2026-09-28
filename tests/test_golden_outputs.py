@@ -101,7 +101,7 @@ def test_simulate_energy_balance_15min_golden_output():
     )
     assert total_pv == pytest.approx(1152.0)
     assert results_df["Import_From_Grid"].sum() * 0.25 / 1000 == pytest.approx(0.308)
-    assert results_df["Sell_To_Grid"].sum() * 0.25 / 1000 == pytest.approx(0.46)
+    assert results_df["PV_AC_Export"].sum() * 0.25 / 1000 == pytest.approx(0.46)
 
 
 def test_cost_analysis_projection_golden_output():
