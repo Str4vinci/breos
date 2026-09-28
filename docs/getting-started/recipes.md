@@ -231,7 +231,9 @@ such as a charge period the tariff schedule does not have, stops the sweep
 at once. `breos validate-config` checks every combination too.
 
 To compare tariffs, keep one `[tariff]` in the base scenario and vary its
-prices, or give `tariff` itself a list of whole tables:
+prices, or give `tariff` itself a list of whole tables, each of which
+replaces the base `[tariff]` for its run. The CSV's year-1 money columns
+then compare the bills directly:
 
 ```toml
 [tariff]
