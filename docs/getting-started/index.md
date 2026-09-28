@@ -78,6 +78,14 @@ number, with reproducible seeds and provenance.
 Understand every `App` config area, its defaults, and its validation rules.
 :::
 
+:::{grid-item-card} Configuration key reference
+:link: config-reference
+:link-type: doc
+
+Look up every config key and nested-table key, with its default, CLI flag and
+allowed values.
+:::
+
 :::{grid-item-card} Packaged options
 :link: options
 :link-type: doc

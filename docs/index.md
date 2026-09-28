@@ -152,6 +152,7 @@ getting-started/recipes
 getting-started/optimization
 getting-started/monte-carlo
 getting-started/configuration
+getting-started/config-reference
 getting-started/options
 getting-started/interpreting-results
 ```

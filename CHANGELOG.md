@@ -1181,6 +1181,18 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   is cheapest. New example `configs/examples/tariff-comparison.toml` compares
   a simple, a bi-hourly and a tri-hourly offer with and without a battery. The
   configs README lists the three tariff examples.
+- A generated configuration key reference,
+  `docs/getting-started/config-reference.md`, lists every top-level App key
+  and every key of `[costs]`, `[battery_indoor_model]`, `[[pv_arrays]]`,
+  `[tariff]` and `[smart_charging]`, with its default, CLI flag and allowed
+  values ([#181](https://github.com/Str4vinci/breos/issues/181)). Each
+  registry entry (`AppConfigField.doc`, `TableSpec.docs`) now carries its
+  description, and `tools/generate_config_docs.py --check`, run by the test
+  suite, fails when the page and the registry disagree. It replaces the
+  hand-written key table in Configuration, which had drifted: it lacked
+  `enable_resistance_fade`, the three `load_profile_*` keys for custom
+  profiles and the `montecarlo` and `sweep` sections, and still gave
+  `load_profile` the removed default `"1"`.
 
 ## [0.6.2] - 2026-09-24
 
