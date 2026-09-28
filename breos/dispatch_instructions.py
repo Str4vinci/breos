@@ -17,6 +17,7 @@ import hashlib
 import math
 import struct
 from dataclasses import dataclass
+from functools import lru_cache
 from numbers import Integral, Real
 from typing import Any
 
@@ -102,13 +103,24 @@ class DispatchInstructions:
 
     @classmethod
     def noop(cls, n: int) -> DispatchInstructions:
-        """Instructions that change nothing: greedy self-consumption dispatch for ``n`` steps."""
+        """Instructions that change nothing: greedy self-consumption dispatch for ``n`` steps.
+
+        The set is immutable, so one per length is built and then shared:
+        every greedy run asks for one, and Monte Carlo and the optimizer make
+        many runs of the same length.
+        """
         if isinstance(n, bool) or not isinstance(n, Integral) or n < 0:
             raise ValueError("'n' must be a non-negative integer")
+        if cls is DispatchInstructions:
+            return _shared_noop(int(n))
+        return cls._build_noop(int(n))
+
+    @classmethod
+    def _build_noop(cls, n: int) -> DispatchInstructions:
         return cls(
-            discharge_allowed=np.ones(int(n), dtype=np.bool_),
-            reserve_fraction=np.zeros(int(n)),
-            grid_target_fraction=np.full(int(n), np.nan),
+            discharge_allowed=np.ones(n, dtype=np.bool_),
+            reserve_fraction=np.zeros(n),
+            grid_target_fraction=np.full(n, np.nan),
             grid_charge_efficiency=1.0,
             grid_import_limit_w=math.inf,
         )
@@ -143,3 +155,8 @@ class DispatchInstructions:
             self.grid_charge_efficiency,
             self.grid_import_limit_w,
         )
+
+
+@lru_cache(maxsize=8)
+def _shared_noop(n: int) -> DispatchInstructions:
+    return DispatchInstructions._build_noop(n)
