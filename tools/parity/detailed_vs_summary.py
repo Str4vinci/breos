@@ -16,7 +16,12 @@ from harness import FREQ, SCENARIOS, build  # noqa: E402
 
 
 def check(name: str, backend: str = "python") -> list[str]:
-    from breos.battery import BatteryConfig, simulate_energy_balance, simulate_energy_balance_summary
+    from breos.battery import (
+        BatteryConfig,
+        frame_replaced_capacity_wh,
+        simulate_energy_balance,
+        simulate_energy_balance_summary,
+    )
 
     pv, load, temp, cfg, sim_kwargs = build(name)
     common = dict(
@@ -46,7 +51,7 @@ def check(name: str, backend: str = "python") -> list[str]:
         same(f"sum::{col}", float(results_df[col].sum()), summary.column_sums[col])
 
     same("total_pv", float(total_pv), float(summary.total_pv_wh))
-    same("replaced_capacity", float(results_df["Battery_Replaced_Capacity_Wh"].sum()), summary.replaced_capacity_wh)
+    same("replaced_capacity", frame_replaced_capacity_wh(results_df), summary.replaced_capacity_wh)
     same("n_replacements", int(n_rep), int(summary.n_replacements))
     for col in summary_df.columns:
         same(f"summary_row::{col}", float(summary_df[col].iloc[0]), float(summary.summary_row[col]))

@@ -237,9 +237,12 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   per kWh times the capacity, or the optimizer's `battery.replacement_cost`.
   App, Monte Carlo and the optimizer price replacements through this one
   function, so a replacement price, learning rate or revaluation no longer
-  needs a re-simulation. Every reported number is unchanged: the App golden
-  baseline and the dispatch parity harness match bit for bit. The optimizer's
-  year tables also gain the year-1-price money columns. Result schema 1.3.
+  needs a re-simulation. Frames and year rows that already carry
+  `Replacement_Cost` (ledger schema < 3.0) keep the stored money. Every
+  reported number is unchanged: the App golden baseline and the dispatch
+  parity harness match bit for bit, and the t = 0 totals are still added year
+  by year, so they do not depend on the Python version. The optimizer's year
+  tables also gain the year-1-price money columns. Result schema 1.3.
 - `breos sweep` prepares weather, PV, load and battery temperature once per
   distinct input configuration and reuses them across the runs that differ
   only in settings the input stage never reads, such as a tariff, a battery

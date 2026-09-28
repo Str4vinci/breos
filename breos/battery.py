@@ -1364,6 +1364,20 @@ class SimulationSummary:
     ledger_schema_version: str = LEDGER_SCHEMA_VERSION
 
 
+def frame_replaced_capacity_wh(results_df: pd.DataFrame) -> float:
+    """The nominal capacity a results frame's replacements swapped in (Wh).
+
+    Added one event at a time from 0.0, in step order, as the day loop adds
+    it to ``SimulationSummary.replaced_capacity_wh``, so the detailed and
+    summary paths report the same float. Only replacement steps are non-zero.
+    """
+    total = 0.0
+    swapped = results_df["Battery_Replaced_Capacity_Wh"].to_numpy(dtype=float)
+    for value in swapped[swapped != 0.0]:
+        total += float(value)
+    return total
+
+
 def weighted_column_sums(
     columns: Mapping[str, np.ndarray], weights: Optional[Mapping[str, Tuple[str, np.ndarray]]]
 ) -> Dict[str, float]:

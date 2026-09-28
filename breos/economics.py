@@ -399,8 +399,15 @@ def _replacement_outlays_t0(counts: Any, each: float) -> np.ndarray:
 
 
 def replacement_total_t0(replacement_cost: Any) -> float:
-    """The replacements at t = 0 prices, summed year by year as the projection loop once did."""
-    return sum(float(value) for value in replacement_cost)
+    """The replacements at t = 0 prices, summed year by year as the projection loop once did.
+
+    An explicit ``+=`` loop, not ``sum()``: from Python 3.12 the built-in sums
+    floats with compensation, so its total would depend on the Python version.
+    """
+    total = 0.0
+    for value in replacement_cost:
+        total += float(value)
+    return total
 
 
 def _replacement_cost_each(costs: Dict[str, float], n_events: float) -> float:
@@ -748,15 +755,18 @@ def cost_analysis_projection(
     # To get kWh, divide by 1000.
     yearly = df[["System_AC_Production", "Houseload", "Import_From_Grid", "PV_AC_Export"]].groupby(df["Year"]).sum()
 
-    # The frame marks each swap; the economics prices it (ADR 0003 E4).
-    if "Battery_Replaced" in df.columns:
-        yearly_counts = df["Battery_Replaced"].astype(bool).groupby(df["Year"]).sum()
+    # The frame marks each swap; the economics prices it (ADR 0003 E4). A
+    # frame that already carries the money (ledger schema < 3.0) keeps it, as
+    # price_year_rows keeps a year row's. Either way the per-step money is
+    # group-summed, the reduction the projection has always used.
+    if "Replacement_Cost" in df.columns:
+        step_cost = pd.to_numeric(df["Replacement_Cost"], errors="coerce").fillna(0.0).to_numpy(dtype=float)
+    elif "Battery_Replaced" in df.columns:
+        replaced = df["Battery_Replaced"].to_numpy(dtype=bool)
+        step_cost = np.where(replaced, _replacement_cost_each(costs, float(replaced.sum())), 0.0)
     else:
-        yearly_counts = pd.Series(0, index=yearly.index)
-    each = _replacement_cost_each(costs, float(yearly_counts.sum()))
-    yearly_replacement = pd.DataFrame(
-        {"Replacement_Cost": _replacement_outlays_t0(yearly_counts, each)}, index=yearly_counts.index
-    )
+        step_cost = np.zeros(len(df))
+    yearly_replacement = pd.DataFrame({"Replacement_Cost": step_cost}, index=df.index).groupby(df["Year"]).sum()
 
     # The ledger marks the swap step, so the instant does not have to be
     # reconstructed downstream. Without the column the booking falls back to

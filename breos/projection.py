@@ -21,6 +21,7 @@ from breos.battery import (
     AlignedSimulationInputs,
     BatteryConfig,
     SimulationSummary,
+    frame_replaced_capacity_wh,
     simulate_energy_balance,
     simulate_energy_balance_summary,
     weighted_column_sums,
@@ -465,7 +466,7 @@ def project_years(
             )
             carry = carry.after_frames(results_df, degradation_df, state, has_battery=has_battery)
             sums_w = {column: float(results_df[column].sum()) for column in _ROW_SUM_COLUMNS}
-            replaced_wh = float(results_df["Battery_Replaced_Capacity_Wh"].sum())
+            replaced_wh = frame_replaced_capacity_wh(results_df)
             replacement_steps = (
                 np.flatnonzero(results_df["Battery_Replaced"].to_numpy()).tolist()
                 if "Battery_Replaced" in results_df.columns
