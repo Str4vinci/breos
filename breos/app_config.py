@@ -13,6 +13,8 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from breos.config_schema import TableSpec, anything, boolean, choice, list_of, mapping_of, number, text
 from breos.constants import (
+    DEFAULT_CHARGE_EFFICIENCY,
+    DEFAULT_DISCHARGE_EFFICIENCY,
     DEFAULT_INDOOR_CEILING_C,
     DEFAULT_INDOOR_COUPLING_ALPHA,
     DEFAULT_INDOOR_FLOOR_C,
@@ -71,6 +73,7 @@ from breos.tariffs import (
 from breos.utils import get_hours_per_step
 
 _NO_DEFAULT = object()
+_TRACKING_MODES = ("fixed", "single_axis", "dual_axis")
 
 
 @dataclass(frozen=True)
@@ -260,7 +263,10 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         default_order=57,
         cli_flags=("--load-profile-column",),
         cli_help="For load_profile 'custom': the CSV column holding the load, if the file has several.",
-        doc='For `load_profile = "custom"`: the CSV column holding the load, if the file has several',
+        doc=(
+            'For `load_profile = "custom"` only: the CSV column holding the load, if the file has several. Refused '
+            "for any other profile"
+        ),
     ),
     "load_profile_unit": AppConfigField(
         default=None,
@@ -268,7 +274,10 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         cli_flags=("--load-profile-unit",),
         cli_choices=PROFILE_UNITS,
         cli_help="For load_profile 'custom': W or kW (mean power per row), or Wh or kWh (energy per row).",
-        doc='For `load_profile = "custom"`: `W` or `kW` (mean power per row), or `Wh` or `kWh` (energy per row)',
+        doc=(
+            'Required for `load_profile = "custom"`, and refused for any other profile: `W` or `kW` (mean power per '
+            "row), or `Wh` or `kWh` (energy per row)"
+        ),
     ),
     "tilt": AppConfigField(
         default=None,
@@ -378,7 +387,7 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         doc=(
             'Cell-temperature model and mounting preset. `"pvsyst-*"` and `"sapm-*"` use documented mounting '
             'coefficients; `"noct-sam"` needs sourced module NOCT and efficiency metadata, which no bundled module '
-            "has yet"
+            "has yet. The default is Faiman, open rack"
         ),
     ),
     "bifacial_model": AppConfigField(
@@ -623,7 +632,9 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         ),
     ),
     "tracking": AppConfigField(
-        default="fixed", default_order=7, doc='Tracking mode: `"fixed"`, `"single_axis"` or `"dual_axis"`'
+        default="fixed",
+        default_order=7,
+        doc="Tracking mode: " + ", ".join(f'`"{mode}"`' for mode in _TRACKING_MODES),
     ),
     "axis_tilt": AppConfigField(default=0.0, default_order=8, doc="Single-axis tracker axis tilt (degrees)"),
     "axis_azimuth": AppConfigField(
@@ -657,7 +668,10 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
     "battery_rte": AppConfigField(
         default=None,
         default_order=41,
-        doc="Battery round-trip efficiency, split evenly across charge and discharge; `None` is 0.95",
+        doc=(
+            "Battery round-trip efficiency, split evenly across charge and discharge; `None` is "
+            f"{DEFAULT_CHARGE_EFFICIENCY * DEFAULT_DISCHARGE_EFFICIENCY:.2f}"
+        ),
     ),
     "enable_resistance_fade": AppConfigField(
         default=False,
@@ -686,7 +700,7 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         default_order=52,
         doc=(
             'Battery temperature used for degradation: `"weather"`, a fixed temperature in °C, or a timestamped CSV '
-            "path"
+            "path. The indoor model then remaps it unless `battery_indoor_model` disables it"
         ),
     ),
     "battery_indoor_model": AppConfigField(
@@ -790,13 +804,13 @@ INDOOR_MODEL_TABLE = TableSpec(
     check=_check_indoor_temperature_band,
     docs={
         "enabled": (
-            "Map the outdoor temperature to an indoor battery temperature "
+            "Remap the resolved `battery_temperature` (weather, fixed or CSV) to an indoor battery temperature "
             f"(default `{str(DEFAULT_INDOOR_MODEL_ENABLED).lower()}`). `false` uses `battery_temperature` as given"
         ),
         "setpoint_c": f"Indoor comfort midpoint in °C (default {DEFAULT_INDOOR_SETPOINT_C:g})",
         "coupling_alpha": (
-            "Share of the outdoor temperature in the indoor one, from 0 (fully insulated) to 1 (outdoor): "
-            f"`alpha × outdoor + (1 − alpha) × setpoint_c` (default {DEFAULT_INDOOR_COUPLING_ALPHA:g})"
+            "Share of the input temperature in the indoor one, from 0 (fully insulated) to 1 (no buffering): "
+            f"`alpha × input + (1 − alpha) × setpoint_c` (default {DEFAULT_INDOOR_COUPLING_ALPHA:g})"
         ),
         "floor_c": f"Lowest indoor temperature in °C (default {DEFAULT_INDOOR_FLOOR_C:g})",
         "ceiling_c": f"Highest indoor temperature in °C (default {DEFAULT_INDOOR_CEILING_C:g}); not below `floor_c`",
@@ -958,7 +972,6 @@ def _validate_sky_settings(
         raise ValueError(f"'{prefix}model_perez' must be one of: {valid}")
 
 
-_TRACKING_MODES = ("fixed", "single_axis", "dual_axis")
 # Tracker geometry, inherited by every tracking array that does not set it.
 _TRACKER_GEOMETRY_KEYS = (
     "axis_tilt",
@@ -1146,13 +1159,15 @@ TARIFF_TABLE = TableSpec(
             "[Bundled schedules](../api/tariffs.md#bundled-schedules)"
         ),
         "currency": (
-            f"Currency of the prices, which the cost preset must share: {', '.join(sorted(SUPPORTED_CURRENCIES))}"
+            f"Currency of the prices: {', '.join(sorted(SUPPORTED_CURRENCIES))}. The cost preset should be in the "
+            "same currency; BREOS does not convert"
         ),
         "import_prices": "Import price per kWh by period name, at year-1 prices; `all` prices every period",
         "export_prices": "Export price per kWh by period name, at year-1 prices; `all` prices every period",
         "fixed_charge_per_day": "Fixed charge per day, at year-1 prices (default 0)",
         "boundary_policy": (
-            "How a period boundary inside a step is handled. `strict`, the default and only policy, refuses it"
+            "How a period boundary inside a step is handled. `strict`, the default, refuses it. One of "
+            + ", ".join(f"`{policy}`" for policy in sorted(BOUNDARY_POLICIES))
         ),
         "study_date": "A date in the schedule's effective window, needed when the simulated year is outside it",
     },
@@ -1261,7 +1276,10 @@ SMART_CHARGING_TABLE = TableSpec(
             "AC-to-DC conversion efficiency of the grid-charging path, before the battery's own charge efficiency. "
             "No default"
         ),
-        "grid_import_limit_w": "Site import limit in W that grid charging keeps total import below; unset is unlimited",
+        "grid_import_limit_w": (
+            "Site import limit in W for grid charging, which may import up to the limit minus the load's import. "
+            "Load import is never cut. Unset is unlimited"
+        ),
     },
 )
 

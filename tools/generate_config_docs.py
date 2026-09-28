@@ -25,6 +25,7 @@ from typing import Any
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
+from breos import app_config  # noqa: E402
 from breos.app_config import (  # noqa: E402
     APP_CONFIG_FIELDS,
     COSTS_TABLE,
@@ -46,13 +47,15 @@ HEADER = """\
 
 Every key a {py:class}`~breos.App` config accepts, generated from the
 configuration registry that validates it. A key that is not listed here is
-rejected. [Configuration](configuration.md) explains how the keys work
+rejected. The keys inside the `[montecarlo]` and `[sweep]` runner sections are
+described on the [Monte Carlo](monte-carlo.md) and
+[Parameter sweep](recipes.md#parameter-sweep) pages. [Configuration](configuration.md) explains how the keys work
 together; [Packaged options](options.md) lists the preset keys they accept.
 """
 
 TOP_LEVEL_INTRO = """\
 The top level of a config dict or TOML file. A CLI flag, where there is one,
-overrides the config file.
+is a `breos run` option that overrides the config file.
 """
 
 # Nested tables in page order: the heading, the spec, and the introduction.
@@ -67,8 +70,9 @@ TABLES: tuple[tuple[str, TableSpec, str], ...] = (
     (
         "battery_indoor_model",
         INDOOR_MODEL_TABLE,
-        "The indoor-buffering model that maps the outdoor temperature to the battery's, as "
-        "`[battery_indoor_model]` in TOML. Omitting the table applies it with the defaults.",
+        "The indoor-buffering model, as `[battery_indoor_model]` in TOML. It remaps the resolved "
+        "`battery_temperature` (weather, fixed or CSV) to an indoor battery temperature. Omitting the table applies "
+        "it with the defaults.",
     ),
     (
         "pv_arrays",
@@ -90,6 +94,10 @@ TABLES: tuple[tuple[str, TableSpec, str], ...] = (
     ),
 )
 
+# Keys a table's own validator requires, where adding them to the spec's
+# ``required`` would change the error a missing key raises.
+_ALSO_REQUIRED = {"pv_arrays": frozenset({"modules"})}
+
 _COST_PARAM_DEFAULTS = {field.name: field.default for field in fields(CostParams)}
 
 
@@ -107,6 +115,10 @@ def _checked(where: str, text: str) -> str:
 
 
 def _table(header: tuple[str, ...], rows: list[tuple[str, ...]]) -> str:
+    for row in rows:
+        for cell in row:
+            if "|" in cell or "\n" in cell:
+                raise ValueError(f"Table cell {cell!r} must be one line without '|'")
     lines = ["| " + " | ".join(header) + " |", "|" + "|".join("---" for _ in header) + "|"]
     lines.extend("| " + " | ".join(row) + " |" for row in rows)
     return "\n".join(lines)
@@ -143,15 +155,21 @@ def _nested_rows(spec: TableSpec, name: str) -> tuple[tuple[str, ...], list[tupl
         ]
         return header, rows
     header = ("Key", "Required", "Description")
-    keys = sorted(spec.keys, key=lambda key: (key not in spec.required, key))
-    rows = [(f"`{key}`", "yes" if key in spec.required else "", _checked(key, spec.docs[key])) for key in keys]
+    required = spec.required | _ALSO_REQUIRED.get(name, frozenset())
+    keys = sorted(spec.keys, key=lambda key: (key not in required, key))
+    rows = [(f"`{key}`", "yes" if key in required else "", _checked(key, spec.docs[key])) for key in keys]
     return header, rows
 
 
 def generate() -> str:
-    missing = sorted(set(NESTED_TABLE_SPECS) - {name for name, _, _ in TABLES})
+    sectioned = {id(spec) for _, spec, _ in TABLES}
+    specs = [
+        *NESTED_TABLE_SPECS.values(),
+        *(value for value in vars(app_config).values() if isinstance(value, TableSpec)),
+    ]
+    missing = sorted({spec.name for spec in specs if id(spec) not in sectioned})
     if missing:
-        raise ValueError(f"Nested tables {missing} have no section; add them to TABLES")
+        raise ValueError(f"Tables {missing} have no section; add them to TABLES")
     parts = [
         HEADER,
         f"## Top-level keys\n\n{TOP_LEVEL_INTRO}\n"

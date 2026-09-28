@@ -4,13 +4,15 @@
 
 Every key a {py:class}`~breos.App` config accepts, generated from the
 configuration registry that validates it. A key that is not listed here is
-rejected. [Configuration](configuration.md) explains how the keys work
+rejected. The keys inside the `[montecarlo]` and `[sweep]` runner sections are
+described on the [Monte Carlo](monte-carlo.md) and
+[Parameter sweep](recipes.md#parameter-sweep) pages. [Configuration](configuration.md) explains how the keys work
 together; [Packaged options](options.md) lists the preset keys they accept.
 
 ## Top-level keys
 
 The top level of a config dict or TOML file. A CLI flag, where there is one,
-overrides the config file.
+is a `breos run` option that overrides the config file.
 
 | Key | Default | CLI flag | Description |
 |---|---|---|---|
@@ -29,7 +31,7 @@ overrides the config file.
 | `battery_min_soc` | `0.1` | — | Battery SOC floor, as a fraction of nominal SOH-derated capacity |
 | `battery_power_limit_c_rate` | `None` | `--battery-power-limit-c-rate` | Charge and discharge limit on the stored energy, as a multiple of capacity (1.0 = 1 C). It scales with `battery_kwh` and cannot be combined with `battery_max_charge_power_w` or `battery_max_discharge_power_w` |
 | `battery_rte` | `None` | — | Battery round-trip efficiency, split evenly across charge and discharge; `None` is 0.95 |
-| `battery_temperature` | `"weather"` | — | Battery temperature used for degradation: `"weather"`, a fixed temperature in °C, or a timestamped CSV path |
+| `battery_temperature` | `"weather"` | — | Battery temperature used for degradation: `"weather"`, a fixed temperature in °C, or a timestamped CSV path. The indoor model then remaps it unless `battery_indoor_model` disables it |
 | `battery_type` | *removed* | — | Removed legacy selector. Setting it raises an error: use `degradation_engine = "native"`, or `degradation_engine = "blast"` with `blast_model` |
 | `bifacial_model` | `"none"` | `--bifacial-model` | Rear-irradiance model. `"none"` is front-only production; `"infinite_sheds"` needs sourced module bifaciality plus `gcr`, `pvrow_height` and `pvrow_pitch`. One of `"none"`, `"infinite_sheds"` |
 | `blast_model` | `None` | `--blast-model` | Stable BLAST model key; required with `degradation_engine = "blast"` and invalid with the native engine |
@@ -54,9 +56,9 @@ overrides the config file.
 | `inverter_efficiency` | `0.96` | `--inverter-efficiency` | Nominal inverter efficiency used by the PVWatts part-load curve |
 | `inverter_loading_ratio` | `1.25` | `--inverter-loading-ratio` | DC/AC oversizing ratio; also sets the inverter AC rating that clips production |
 | `load_profile` | `"demandlib_h0"` | `--load-profile` | Load profile key; see [Load profiles](configuration.md#load-profiles) and [Packaged options](options.md#load-profiles) |
-| `load_profile_column` | `None` | `--load-profile-column` | For `load_profile = "custom"`: the CSV column holding the load, if the file has several |
+| `load_profile_column` | `None` | `--load-profile-column` | For `load_profile = "custom"` only: the CSV column holding the load, if the file has several. Refused for any other profile |
 | `load_profile_file` | `None` | `--load-profile-file` | Load-profile CSV to read instead of the key's filename pattern; required for `load_profile = "custom"`. A relative path is taken inside `rlp_directory` when that is set |
-| `load_profile_unit` | `None` | `--load-profile-unit` | For `load_profile = "custom"`: `W` or `kW` (mean power per row), or `Wh` or `kWh` (energy per row). One of `"W"`, `"kW"`, `"Wh"`, `"kWh"` |
+| `load_profile_unit` | `None` | `--load-profile-unit` | Required for `load_profile = "custom"`, and refused for any other profile: `W` or `kW` (mean power per row), or `Wh` or `kWh` (energy per row). One of `"W"`, `"kW"`, `"Wh"`, `"kWh"` |
 | `location` | *required* | `--location` | Preset key (e.g. `"porto"`, `"berlin"`) or `{"latitude": ..., "longitude": ..., "timezone": ...}`. See [Custom location](configuration.md#custom-location) |
 | `max_angle` | `60.0` | — | Single-axis tracker maximum rotation angle (degrees) |
 | `model_perez` | `"allsitescomposite1990"` | `--perez-model` | Perez coefficient set; only used when `transposition_model = "perez"`. One of `"allsitescomposite1990"`, `"allsitescomposite1988"`, `"sandiacomposite1988"`, `"usacomposite1988"`, `"france1988"`, `"phoenix1988"`, `"elmonte1988"`, `"osage1988"`, `"albuquerque1988"`, `"capecanaveral1988"`, `"albany1988"` |
@@ -80,9 +82,9 @@ overrides the config file.
 | `surface_type` | `None` | `--surface-type` | Named ground cover mapped to an albedo; an alternative to `albedo`. One of `"aluminum"`, `"asphalt"`, `"concrete"`, `"copper"`, `"dirty steel"`, `"fresh grass"`, `"fresh snow"`, `"fresh steel"`, `"grass"`, `"sand"`, `"sea"`, `"snow"`, `"soil"`, `"urban"` |
 | `sweep` | *unset* | — | Parameter grid, read by `breos sweep`; see [Parameter sweep](recipes.md#parameter-sweep) |
 | `tariff` | *unset* | — | Time-of-use import and export prices on a bundled schedule, replacing the flat `costs.electricity_cost`, `costs.electricity_sold_cost` and `costs.daily_power_cost`; see [`[tariff]`](#tariff) and [Time-of-use tariffs](configuration.md#time-of-use-tariffs) |
-| `temperature_model` | `"faiman"` | `--temperature-model` | Cell-temperature model and mounting preset. `"pvsyst-*"` and `"sapm-*"` use documented mounting coefficients; `"noct-sam"` needs sourced module NOCT and efficiency metadata, which no bundled module has yet. One of `"faiman"`, `"pvsyst-freestanding"`, `"pvsyst-semi-integrated"`, `"pvsyst-insulated"`, `"sapm-open-rack-glass-glass"`, `"sapm-close-mount-glass-glass"`, `"sapm-open-rack-glass-polymer"`, `"sapm-insulated-back-glass-polymer"`, `"noct-sam"` |
+| `temperature_model` | `"faiman"` | `--temperature-model` | Cell-temperature model and mounting preset. `"pvsyst-*"` and `"sapm-*"` use documented mounting coefficients; `"noct-sam"` needs sourced module NOCT and efficiency metadata, which no bundled module has yet. The default is Faiman, open rack. One of `"faiman"`, `"pvsyst-freestanding"`, `"pvsyst-semi-integrated"`, `"pvsyst-insulated"`, `"sapm-open-rack-glass-glass"`, `"sapm-close-mount-glass-glass"`, `"sapm-open-rack-glass-polymer"`, `"sapm-insulated-back-glass-polymer"`, `"noct-sam"` |
 | `tilt` | `None` | `--tilt` | Tilt angle (degrees). `None` estimates it from the latitude |
-| `tracking` | `"fixed"` | — | Tracking mode: `"fixed"`, `"single_axis"` or `"dual_axis"` |
+| `tracking` | `"fixed"` | — | Tracking mode: `"fixed"`, `"single_axis"`, `"dual_axis"` |
 | `transposition_model` | `"isotropic"` | `--transposition-model`, `--sky-model` | Sky-diffusion model used to project GHI/DHI/DNI onto the plane of array; see [Sky-diffusion model](configuration.md#sky-diffusion-transposition-model). One of `"isotropic"`, `"klucher"`, `"haydavies"`, `"reindl"`, `"king"`, `"perez"`, `"perez-driesse"` |
 | `weather_source` | `None` | `--weather-source` | Source part of the cached `weather/<location>_tmy_<years>_<source>.csv` file to load, e.g. `"pvgis-sarah3"`. Needed only when several TMY files exist for a location preset; see [Offline runs with cached weather](recipes.md#offline-runs-with-cached-weather) |
 
@@ -110,13 +112,13 @@ Cost overrides, as `[costs]` in TOML. A key you omit comes from `cost_preset`, a
 
 ## battery_indoor_model
 
-The indoor-buffering model that maps the outdoor temperature to the battery's, as `[battery_indoor_model]` in TOML. Omitting the table applies it with the defaults.
+The indoor-buffering model, as `[battery_indoor_model]` in TOML. It remaps the resolved `battery_temperature` (weather, fixed or CSV) to an indoor battery temperature. Omitting the table applies it with the defaults.
 
 | Key | Required | Description |
 |---|---|---|
 | `ceiling_c` |  | Highest indoor temperature in °C (default 35); not below `floor_c` |
-| `coupling_alpha` |  | Share of the outdoor temperature in the indoor one, from 0 (fully insulated) to 1 (outdoor): `alpha × outdoor + (1 − alpha) × setpoint_c` (default 0.3) |
-| `enabled` |  | Map the outdoor temperature to an indoor battery temperature (default `true`). `false` uses `battery_temperature` as given |
+| `coupling_alpha` |  | Share of the input temperature in the indoor one, from 0 (fully insulated) to 1 (no buffering): `alpha × input + (1 − alpha) × setpoint_c` (default 0.3) |
+| `enabled` |  | Remap the resolved `battery_temperature` (weather, fixed or CSV) to an indoor battery temperature (default `true`). `false` uses `battery_temperature` as given |
 | `floor_c` |  | Lowest indoor temperature in °C (default 15) |
 | `setpoint_c` |  | Indoor comfort midpoint in °C (default 22) |
 
@@ -126,6 +128,7 @@ One entry per array, as `[[pv_arrays]]` in TOML. `modules` is required; an array
 
 | Key | Required | Description |
 |---|---|---|
+| `modules` | yes | Number of PV modules in this array, at least 1 |
 | `albedo` |  | `albedo` for this array; inherits the top-level value |
 | `axis_azimuth` |  | `axis_azimuth` for this array; inherits the top-level value |
 | `axis_tilt` |  | `axis_tilt` for this array; inherits the top-level value |
@@ -138,7 +141,6 @@ One entry per array, as `[[pv_arrays]]` in TOML. `modules` is required; an array
 | `max_angle` |  | `max_angle` for this array; inherits the top-level value |
 | `model_perez` |  | `model_perez` for this array; inherits the top-level value |
 | `module` |  | Module catalogue key for this array; inherits `pv_module` |
-| `modules` |  | Number of PV modules in this array, at least 1 |
 | `pvrow_height` |  | `pvrow_height` for this array; inherits the top-level value |
 | `pvrow_pitch` |  | `pvrow_pitch` for this array; inherits the top-level value |
 | `surface_type` |  | `surface_type` for this array; inherits the top-level value |
@@ -152,11 +154,11 @@ Time-of-use prices, as `[tariff]` in TOML; see [Time-of-use tariffs](configurati
 
 | Key | Required | Description |
 |---|---|---|
-| `currency` | yes | Currency of the prices, which the cost preset must share: EUR |
+| `currency` | yes | Currency of the prices: EUR. The cost preset should be in the same currency; BREOS does not convert |
 | `export_prices` | yes | Export price per kWh by period name, at year-1 prices; `all` prices every period |
 | `import_prices` | yes | Import price per kWh by period name, at year-1 prices; `all` prices every period |
 | `schedule` | yes | Bundled schedule key, which fixes the periods in local civil time; see [Bundled schedules](../api/tariffs.md#bundled-schedules) |
-| `boundary_policy` |  | How a period boundary inside a step is handled. `strict`, the default and only policy, refuses it |
+| `boundary_policy` |  | How a period boundary inside a step is handled. `strict`, the default, refuses it. One of `strict` |
 | `fixed_charge_per_day` |  | Fixed charge per day, at year-1 prices (default 0) |
 | `study_date` |  | A date in the schedule's effective window, needed when the simulated year is outside it |
 
@@ -170,5 +172,5 @@ Grid charging by tariff period, as `[smart_charging]` in TOML; see [Smart chargi
 | `charge_periods` |  | Tariff periods in which the grid may charge the battery |
 | `discharge_periods` |  | Tariff periods in which the battery may discharge to the load; not a charge period |
 | `grid_charge_efficiency` |  | AC-to-DC conversion efficiency of the grid-charging path, before the battery's own charge efficiency. No default |
-| `grid_import_limit_w` |  | Site import limit in W that grid charging keeps total import below; unset is unlimited |
+| `grid_import_limit_w` |  | Site import limit in W for grid charging, which may import up to the limit minus the load's import. Load import is never cut. Unset is unlimited |
 | `target_usable_fraction` |  | Grid-charging target as a fraction of the usable window: 0 is `battery_min_soc`, 1 is `battery_max_soc` |
