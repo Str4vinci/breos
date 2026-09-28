@@ -204,9 +204,11 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   general inflation, and learning defaults to 0, so a run that sets none of
   them prices exactly as before: the App golden baseline is bit-identical. A
   replacement at `t` years costs `C0 × (1 + inflation_rate)^t × (1 −
-  learning)^t`. `result()["provenance"]["economics"]` and the Monte Carlo
-  provenance record the rates used and the implied real discount rate
-  (E1); the result schema version becomes `"1.2"`. `breos sweep` treats the
+  learning)^t`. `result()["provenance"]["economics"]`, the Monte Carlo
+  provenance and the optimizer's provenance record the rates used and the
+  implied real discount rate (E1); the result schema version becomes `"1.2"`.
+  The optimizer checks its `financials` rates before the search starts: a
+  rate at or below −1, or a learning rate outside [0, 1), raises. `breos sweep` treats the
   three keys as input-independent, so sweeping them reuses the prepared
   inputs. The docs state the timing conventions (E3).
 

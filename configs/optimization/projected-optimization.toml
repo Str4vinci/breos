@@ -92,8 +92,11 @@ dc_ac_ratio = 1.25
 
 [financials]
 discount_rate = 0.05
-inflation_rate = 0.02
+inflation_rate = 0.02            # general inflation; the escalators below inherit it
 sell_price_inflation = 0.0
+# import_price_escalation = 0.03  # import energy and the fixed charge
+# om_escalation = 0.02            # O&M
+# replacement_cost_learning = 0.0 # annual fall in the replacement price
 project_lifespan = 20
 pv_degradation_rate = 0.005
 

@@ -537,20 +537,28 @@ def _projection_rates(fin_cfg: Dict[str, Any]) -> Dict[str, Any]:
     """The ``financials`` rates as ``cost_analysis_projection`` arguments (ADR 0003 E2).
 
     The escalators stay None when unset, so they inherit ``inflation_rate``.
+    Rates at or below -1 raise, as the App's do, and the learning rate must
+    be in [0, 1).
     """
 
     def optional(key: str) -> Optional[float]:
         value = fin_cfg.get(key)
         return None if value is None else float(value)
 
-    return {
+    rates = {
         "inflation_rate": float(fin_cfg.get("inflation_rate", DEFAULT_INFLATION_RATE)),
         "sell_price_inflation": float(fin_cfg.get("sell_price_inflation", 0.0)),
         "import_price_escalation": optional("import_price_escalation"),
         "om_escalation": optional("om_escalation"),
-        "replacement_cost_learning": float(fin_cfg.get("replacement_cost_learning", 0.0)),
+        "replacement_cost_learning": optional("replacement_cost_learning") or 0.0,
         "discount_rate": float(fin_cfg.get("discount_rate", DEFAULT_DISCOUNT_RATE)),
     }
+    for key in ("inflation_rate", "sell_price_inflation", "import_price_escalation", "om_escalation", "discount_rate"):
+        if rates[key] is not None and not rates[key] > -1:
+            raise ValueError(f"financials.{key} must be greater than -1")
+    if not 0 <= rates["replacement_cost_learning"] < 1:
+        raise ValueError("financials.replacement_cost_learning must be at least 0 and below 1")
+    return rates
 
 
 def _evaluate_projected_design_metrics(
@@ -1377,7 +1385,8 @@ def optimize_system_multi_objective(
     # that then has to be torn down.
     require_backend(execution_backend)
 
-    # Invalid tariffs must fail before a worker pool is created.
+    # Invalid tariffs and rates must fail before a worker pool is created.
+    economics = projection_rates_record(_projection_rates(config.get("financials", {}) or {}))
     problem = SolarDesignProblem(
         tmy_data,
         houseload,
@@ -1453,7 +1462,7 @@ def optimize_system_multi_objective(
     actual_generations = max(0, int(getattr(result.algorithm, "n_gen", n_gen + 1)) - 1)
     provenance = {
         **problem.pricing.provenance(),
-        "economics": projection_rates_record(_projection_rates(problem.config.get("financials", {}) or {})),
+        "economics": economics,
     }
     pareto.attrs["currency"] = provenance["currency"]
     return OptimizationResult(
