@@ -129,4 +129,4 @@ def test_montecarlo_records_the_profile_file(tmp_path, write_multiyear_weather):
 
     assert result.provenance["load_profile"]["key"] == "demandlib_h0"
     assert result.provenance["load_profile"]["file"] == "h0SLP_demandlib_1000kwh_hourly.csv"
-    assert np.isfinite(result.runs["npv_savings_eur"]).all()
+    assert np.isfinite(result.runs["npv_savings"]).all()

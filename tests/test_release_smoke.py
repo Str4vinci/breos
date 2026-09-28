@@ -29,7 +29,7 @@ def test_readme_quickstart_smoke(_patch_weather):
 
     assert result["grid_independence_pct"] > 0
     assert result["payback_year"] is None or result["payback_year"] >= 1
-    assert "npv_savings_eur" in result
+    assert "npv_savings" in result
     assert result["co2_avoided_total_kg"] > 0
 
 
@@ -54,7 +54,7 @@ def test_montecarlo_example_config_smoke(tmp_path, write_multiyear_weather):
 
     assert len(result.runs) == 1
     assert result.available_years == [2021]
-    assert "npv_savings_eur" in result.summary
+    assert "npv_savings" in result.summary
 
 
 def test_multi_objective_optimization_smoke(open_meteo_weather):
@@ -69,7 +69,7 @@ def test_multi_objective_optimization_smoke(open_meteo_weather):
         "location": {"latitude": 41.15, "longitude": -8.61, "timezone": "UTC"},
         "simulation": {"resolution": "h"},
         "constraints": {
-            "budget_eur": 100000.0,
+            "budget": 100000.0,
             "max_area_m2": 100.0,
             "max_modules": 4,
             "max_battery_kwh": 2.0,
@@ -91,4 +91,4 @@ def test_multi_objective_optimization_smoke(open_meteo_weather):
 
     pareto = result.details["pareto"]
     assert not pareto.empty
-    assert {"Modules", "Battery_kWh", "Grid_Independence_%", "NPV_Eur", "ZEB_Ratio"}.issubset(pareto.columns)
+    assert {"Modules", "Battery_kWh", "Grid_Independence_%", "NPV", "ZEB_Ratio"}.issubset(pareto.columns)

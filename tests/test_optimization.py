@@ -155,8 +155,8 @@ def test_projected_objective_basis_rejects_unknown_value():
 _PROJECTED_STUB = {
     "Projected_Grid_Independence_%": 50.0,
     "Projected_ZEB_Ratio": 0.5,
-    "Projected_NPV_Eur": 1000.0,
-    "Projected_Initial_Cost_Eur": 500.0,
+    "Projected_NPV": 1000.0,
+    "Projected_Initial_Cost": 500.0,
 }
 
 
@@ -167,15 +167,15 @@ def test_projected_zeb_constraint_uses_projected_diagnostic(monkeypatch):
     projected = {
         "Projected_Grid_Independence_%": 50.0,
         "Projected_ZEB_Ratio": 0.8,
-        "Projected_NPV_Eur": 1000.0,
-        "Projected_Initial_Cost_Eur": 0.0,
+        "Projected_NPV": 1000.0,
+        "Projected_Initial_Cost": 0.0,
     }
     monkeypatch.setattr("breos.optimization.calculate_pv_production_dc", lambda **kwargs: pd.Series(0.0, index=idx))
     monkeypatch.setattr("breos.optimization._evaluate_projected_design_metrics", lambda **kwargs: projected)
     config = {
         "location": {"latitude": 41.15, "longitude": -8.61, "timezone": "UTC"},
         "optimization": {"objective_basis": "projected"},
-        "constraints": {"budget_eur": 100000.0, "max_area_m2": 100.0, "enforce_zeb": True},
+        "constraints": {"budget": 100000.0, "max_area_m2": 100.0, "enforce_zeb": True},
         "simulation": {"resolution": "h", "years_projection": 2},
         "financials": {"project_lifespan": 2},
         "mode": {"fixed_azimuth": 180},
@@ -197,7 +197,7 @@ def test_solar_design_problem_area_constraint_uses_pv_dimensions(monkeypatch):
     config = {
         "location": {"latitude": 41.15, "longitude": -8.61, "timezone": "UTC"},
         "simulation": {"resolution": "h"},
-        "constraints": {"budget_eur": 100000, "max_area_m2": 10.0, "max_modules": 5},
+        "constraints": {"budget": 100000, "max_area_m2": 10.0, "max_modules": 5},
         "mode": {"fixed_azimuth": 180},
         "pv": {
             "module": "Suntech_STP550S_STC",
@@ -276,7 +276,7 @@ def test_solar_design_problem_uses_configured_resolution(monkeypatch):
     config = {
         "location": {"latitude": 41.15, "longitude": -8.61, "timezone": "UTC"},
         "simulation": {"resolution": "15min", "years_projection": 1},
-        "constraints": {"budget_eur": 100000, "max_area_m2": 100.0},
+        "constraints": {"budget": 100000, "max_area_m2": 100.0},
         "mode": {"fixed_azimuth": 180},
         "battery": {"temperature": 20.0, "indoor_model": {"enabled": False}},
     }
@@ -307,7 +307,7 @@ def test_solar_design_problem_scores_zeb_from_explicit_ac_ledger(monkeypatch):
     config = {
         "location": {"latitude": 41.15, "longitude": -8.61, "timezone": "UTC"},
         "simulation": {"resolution": "h", "years_projection": 1},
-        "constraints": {"budget_eur": 100000, "max_area_m2": 100.0},
+        "constraints": {"budget": 100000, "max_area_m2": 100.0},
         "mode": {"fixed_azimuth": 180},
         "battery": {"temperature": 20.0},
     }
@@ -342,7 +342,7 @@ def test_solar_design_problem_uses_simulated_load_for_objective_denominator(monk
     config = {
         "location": {"latitude": 41.15, "longitude": -8.61, "timezone": "UTC"},
         "simulation": {"resolution": "h", "years_projection": 1},
-        "constraints": {"budget_eur": 100000, "max_area_m2": 100.0},
+        "constraints": {"budget": 100000, "max_area_m2": 100.0},
         "mode": {"fixed_azimuth": 180},
         "battery": {"temperature": 20.0},
     }
@@ -370,7 +370,7 @@ def test_optimize_system_multi_objective_returns_pareto_dataframe(monkeypatch):
         "location": {"latitude": 41.15, "longitude": -8.61, "timezone": "UTC"},
         "simulation": {"resolution": "h"},
         "constraints": {
-            "budget_eur": 100000.0,
+            "budget": 100000.0,
             "max_area_m2": 100.0,
             "max_modules": 4,
             "max_battery_kwh": 3.0,
@@ -402,7 +402,7 @@ def test_optimize_system_multi_objective_returns_pareto_dataframe(monkeypatch):
         "Tilt",
         "Azimuth",
         "Grid_Independence_%",
-        "NPV_Eur",
+        "NPV",
         "ZEB_Ratio",
     }
     assert not [column for column in pareto.columns if column.startswith("SteadyState_")]
@@ -434,11 +434,11 @@ def test_projected_optimization_smoke_reports_two_objective_semantics(monkeypatc
             "Projected_ZEB_Ratio_FinalYear": 0.79 + modules / 100.0,
             "Projected_ZEB_Ratio_Mean": 0.8 + modules / 100.0,
             "Projected_ZEB_Ratio_Min": 0.79 + modules / 100.0,
-            "Projected_NPV_Eur": 1000.0 - modules,
+            "Projected_NPV": 1000.0 - modules,
             "Projected_Breakeven_Year": 8.0,
-            "Projected_Breakeven_Year_Exact": 7.5,
-            "Projected_Initial_Cost_Eur": 500.0,
-            "Projected_Replacement_Cost_Eur": 0.0,
+            "Projected_Breakeven_Year_Interpolated": 7.5,
+            "Projected_Initial_Cost": 500.0,
+            "Projected_Replacement_Cost_T0_Prices": 0.0,
             "Projected_Total_Replacements": 0,
             "Projected_Final_SOH_%": 90.0,
             "Projected_PV_Production_Year1_kWh": 1.0,
@@ -453,7 +453,7 @@ def test_projected_optimization_smoke_reports_two_objective_semantics(monkeypatc
         "simulation": {"resolution": "h", "years_projection": 2},
         "optimization": {"objective_basis": "projected", "early_stop": False},
         "constraints": {
-            "budget_eur": 100000.0,
+            "budget": 100000.0,
             "max_area_m2": 100.0,
             "max_modules": 4,
             "max_battery_kwh": 3.0,
@@ -478,13 +478,13 @@ def test_projected_optimization_smoke_reports_two_objective_semantics(monkeypatc
     assert result.details["objective_basis"] == "projected"
     assert result.iterations == 1
     assert np.array_equal(pareto["Grid_Independence_%"], pareto["Projected_Grid_Independence_%"])
-    assert np.array_equal(pareto["NPV_Eur"], pareto["Projected_NPV_Eur"])
+    assert np.array_equal(pareto["NPV"], pareto["Projected_NPV"])
     assert np.array_equal(pareto["ZEB_Ratio"], pareto["Projected_ZEB_Ratio"])
     assert np.allclose(pareto["Objective_Grid_Independence_%"], pareto["Projected_Grid_Independence_%"])
-    assert np.allclose(pareto["Objective_NPV_Eur"], pareto["Projected_NPV_Eur"])
+    assert np.allclose(pareto["Objective_NPV"], pareto["Projected_NPV"])
     assert "Objective_ZEB_Ratio" not in pareto
     assert not [column for column in pareto.columns if column.startswith("SteadyState_")]
-    assert result.details["objective_names"] == ["Projected_Grid_Independence_%", "Projected_NPV_Eur"]
+    assert result.details["objective_names"] == ["Projected_Grid_Independence_%", "Projected_NPV"]
 
 
 def test_projected_optimization_uses_worker_diagnostics_without_parent_rescoring(monkeypatch):
@@ -510,7 +510,7 @@ def test_projected_optimization_uses_worker_diagnostics_without_parent_rescoring
         "simulation": {"resolution": "h", "years_projection": 1},
         "optimization": {"objective_basis": "projected", "early_stop": False},
         "constraints": {
-            "budget_eur": 100000.0,
+            "budget": 100000.0,
             "max_area_m2": 100.0,
             "max_modules": 4,
             "max_battery_kwh": 3.0,
@@ -545,10 +545,10 @@ def test_projected_optimization_uses_worker_diagnostics_without_parent_rescoring
 
     pareto = result.details["pareto"]
     assert not pareto.empty
-    assert {"Projected_NPV_Eur", "Projected_Grid_Independence_%"} <= set(pareto.columns)
+    assert {"Projected_NPV", "Projected_Grid_Independence_%"} <= set(pareto.columns)
     np.testing.assert_array_equal(
-        pareto["Projected_NPV_Eur"].to_numpy(),
-        result.details["pymoo_result"].opt.get("Projected_NPV_Eur"),
+        pareto["Projected_NPV"].to_numpy(),
+        result.details["pymoo_result"].opt.get("Projected_NPV"),
     )
     assert parent_metric_calls == 0
 
@@ -564,7 +564,7 @@ def _projected_capture(monkeypatch, config, x):
     _stub_projection_balance(monkeypatch, idx, captured["balance"], Houseload=500.0, Import_From_Grid=500.0)
     base = {
         "location": {"latitude": 41.15, "longitude": -8.61, "timezone": "UTC"},
-        "constraints": {"budget_eur": 100000.0, "max_area_m2": 100.0},
+        "constraints": {"budget": 100000.0, "max_area_m2": 100.0},
         "mode": {"fixed_azimuth": 180},
     }
     problem = SolarDesignProblem(tmy_data, houseload, {**base, **config}, "results/_test_run/problem_settings")
@@ -644,7 +644,7 @@ def test_projected_blast_scores_a_pv_only_candidate(synthetic_weather):
     config = {
         "location": {"latitude": 41.15, "longitude": -8.61, "timezone": "UTC"},
         "optimization": {"objective_basis": "projected"},
-        "constraints": {"budget_eur": 100000.0, "max_area_m2": 100.0},
+        "constraints": {"budget": 100000.0, "max_area_m2": 100.0},
         "simulation": {"resolution": "h", "years_projection": 1},
         "mode": {"fixed_azimuth": 180},
         "battery": {"degradation_engine": "blast", "blast_model": "nmc_gr_50ah_b1"},
@@ -654,7 +654,7 @@ def test_projected_blast_scores_a_pv_only_candidate(synthetic_weather):
     # This used to raise "degradation_engine='blast' requires a configured battery".
     problem._evaluate(np.array([6.0, 0.0, 35.0], dtype=float), out)
 
-    assert np.isfinite(out["Projected_NPV_Eur"])
+    assert np.isfinite(out["Projected_NPV"])
     assert 0.0 < out["Projected_Grid_Independence_%"] < 100.0
 
 
@@ -711,7 +711,7 @@ def test_early_stopping_optimizer_result_pickles(monkeypatch):
     config = {
         "location": {"latitude": 41.15, "longitude": -8.61, "timezone": "UTC"},
         "simulation": {"resolution": "h"},
-        "constraints": {"budget_eur": 1e5, "max_area_m2": 100.0, "max_modules": 4, "max_battery_kwh": 3.0},
+        "constraints": {"budget": 1e5, "max_area_m2": 100.0, "max_modules": 4, "max_battery_kwh": 3.0},
         "mode": {"fixed_azimuth": 180},
         "optimization": {"early_stop": {"min_gen": 1}},
         "battery": {"temperature": 20.0},

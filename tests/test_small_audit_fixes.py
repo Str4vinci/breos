@@ -47,9 +47,9 @@ def test_a_carried_zero_resistance_growth_is_used():
 
 def test_montecarlo_summary_leaves_out_non_finite_values():
     # An infinite LCOE made the mean infinite and the spread NaN (#175).
-    runs = pd.DataFrame({"lcoe_eur_kwh": [0.10, 0.20, np.inf, np.nan]})
+    runs = pd.DataFrame({"lcoe_per_kwh": [0.10, 0.20, np.inf, np.nan]})
 
-    entry = _summarize(runs)["lcoe_eur_kwh"]
+    entry = _summarize(runs)["lcoe_per_kwh"]
 
     assert entry["count"] == 2
     assert entry["n_runs"] == 4

@@ -13,7 +13,7 @@ import pytest
 pytest.importorskip("matplotlib")
 
 from breos import plotting  # noqa: E402
-from breos.economics import cost_analysis_projection, find_payback_year, find_payback_year_exact  # noqa: E402
+from breos.economics import cost_analysis_projection, find_payback_year, find_payback_year_interpolated  # noqa: E402
 from breos.utils import format_years_months  # noqa: E402
 
 
@@ -33,13 +33,15 @@ def _projection(savings, first_year=1, investment=None):
     return projection
 
 
-def _assert_payback(projection, exact, integer):
-    assert find_payback_year_exact(projection) == (pytest.approx(exact) if exact is not None else None)
+def _assert_payback(projection, interpolated, integer):
+    assert find_payback_year_interpolated(projection) == (
+        pytest.approx(interpolated) if interpolated is not None else None
+    )
     assert find_payback_year(projection) == integer
 
 
 @pytest.mark.parametrize(
-    ("savings", "exact", "integer"),
+    ("savings", "interpolated", "integer"),
     [
         ([-300.0, -100.0, 200.0], 2 + 1 / 3, 3),
         # Without a recorded investment there is no year-0 point, so a first
@@ -53,11 +55,11 @@ def _assert_payback(projection, exact, integer):
         ([-100.0, 0.0, 0.0, 50.0], 2.0, 2),
     ],
 )
-def test_exact_and_integer_payback_agree_on_the_crossing(savings, exact, integer):
+def test_interpolated_and_integer_payback_agree_on_the_crossing(savings, interpolated, integer):
     projection = _projection(savings)
 
-    _assert_payback(projection, exact, integer)
-    assert find_payback_year_exact(projection.drop(columns="Savings_Cumulative_NPV")) is None
+    _assert_payback(projection, interpolated, integer)
+    assert find_payback_year_interpolated(projection.drop(columns="Savings_Cumulative_NPV")) is None
     assert find_payback_year(projection.drop(columns="Savings_Cumulative_NPV")) is None
 
 
@@ -92,7 +94,7 @@ def test_a_zero_investment_that_never_loses_pays_back_at_year_zero():
 def test_explicit_investment_overrides_the_attrs():
     projection = _projection([79.0, 200.0], investment=1000.0)
 
-    assert find_payback_year_exact(projection, initial_investment=21.0) == pytest.approx(0.21)
+    assert find_payback_year_interpolated(projection, initial_investment=21.0) == pytest.approx(0.21)
     assert find_payback_year(projection, initial_investment=21.0) == 1
 
 
@@ -103,7 +105,7 @@ def test_non_finite_savings_are_rejected(bad, investment):
     # the >= 0 test and reported a false crossing.
     projection = _projection([-100.0, bad, 10.0], investment=investment)
 
-    for find in (find_payback_year_exact, find_payback_year):
+    for find in (find_payback_year_interpolated, find_payback_year):
         with pytest.raises(ValueError, match="NaN or infinite"):
             find(projection)
 
@@ -112,7 +114,7 @@ def test_non_finite_savings_are_rejected(bad, investment):
 def test_a_non_finite_investment_is_rejected(bad):
     projection = _projection([-50.0, 10.0])
 
-    for find in (find_payback_year_exact, find_payback_year):
+    for find in (find_payback_year_interpolated, find_payback_year):
         with pytest.raises(ValueError, match="NaN or infinite"):
             find(projection, initial_investment=bad)
 
@@ -153,7 +155,7 @@ def test_cost_projection_anchors_payback_at_its_investment():
     projection = _cost_projection(investment=40.0)
 
     assert projection.attrs["payback_year"] == 1
-    assert find_payback_year_exact(projection) == pytest.approx(40.0 / 190.0)
+    assert find_payback_year_interpolated(projection) == pytest.approx(40.0 / 190.0)
 
 
 def test_payback_of_a_projection_read_back_without_attrs():
@@ -162,14 +164,14 @@ def test_payback_of_a_projection_read_back_without_attrs():
     projection = _cost_projection(investment=40.0)
     projection.attrs.clear()
 
-    assert find_payback_year_exact(projection) == pytest.approx(40.0 / 190.0)
+    assert find_payback_year_interpolated(projection) == pytest.approx(40.0 / 190.0)
     assert find_payback_year(projection) == 1
 
 
-def test_exact_payback_scales_the_crossing_by_the_year_spacing():
+def test_interpolated_payback_scales_the_crossing_by_the_year_spacing():
     projection = pd.DataFrame({"Year": [1, 3], "Savings_Cumulative_NPV": [-100.0, 100.0]})
 
-    assert find_payback_year_exact(projection) == pytest.approx(2.0)
+    assert find_payback_year_interpolated(projection) == pytest.approx(2.0)
     assert find_payback_year(projection) == 3
 
 
@@ -212,7 +214,7 @@ def test_breakeven_plot_anchors_at_the_investment(tmp_path, capsys):
     assert "Break-even point: 0 years 2 months" in capsys.readouterr().out
 
 
-def test_montecarlo_payback_plots_use_the_exact_year(tmp_path, monkeypatch):
+def test_montecarlo_payback_plots_use_the_interpolated_year(tmp_path, monkeypatch):
     # The distribution's 0.1-year bins and mean used the integer year (#218).
     received = {}
     monkeypatch.setattr(
@@ -223,7 +225,7 @@ def test_montecarlo_payback_plots_use_the_exact_year(tmp_path, monkeypatch):
     )
     monkeypatch.setattr(plotting, "plot_breakeven_summary_bar", lambda *args, **kwargs: None)
     runs = pd.DataFrame(
-        {"run": [1, 2], "npv_savings_eur": [1.0, -1.0], "payback_year": [5, None], "payback_year_exact": [4.2, None]}
+        {"run": [1, 2], "npv_savings": [1.0, -1.0], "payback_year": [5, None], "payback_year_interpolated": [4.2, None]}
     )
 
     plotting._plot_montecarlo_payback_summary(runs, str(tmp_path))

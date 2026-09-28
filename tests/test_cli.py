@@ -571,7 +571,7 @@ def test_sweep_expands_grid_and_writes_combined_csv(monkeypatch, tmp_path, capsy
         def result(self):
             return {
                 "grid_independence_pct": 40.0 + self.config["n_modules"],
-                "npv_savings_eur": 1000.0 + self.config["battery_kwh"],
+                "npv_savings": 1000.0 + self.config["battery_kwh"],
                 "yearly": [{"year": 1}],
             }
 
@@ -619,7 +619,7 @@ def test_sweep_applies_dotted_cost_keys_without_mutating_base_config(monkeypatch
             return None
 
         def result(self):
-            return {"npv_savings_eur": self.config["costs"]["electricity_cost"] * 1000}
+            return {"npv_savings": self.config["costs"]["electricity_cost"] * 1000}
 
     monkeypatch.setattr(cli, "App", SweepFakeApp)
     config_path = tmp_path / "cost-sweep.toml"
@@ -649,7 +649,7 @@ storage_cost_per_kwh = 420.0
     ]
     rows = list(csv.DictReader(output_path.open(encoding="utf-8")))
     assert [row["param_costs.electricity_cost"] for row in rows] == ["0.2", "0.3"]
-    assert [row["npv_savings_eur"] for row in rows] == ["200.0", "300.0"]
+    assert [row["npv_savings"] for row in rows] == ["200.0", "300.0"]
 
 
 def test_sweep_accepts_unquoted_toml_dotted_cost_key(monkeypatch, tmp_path, capsys):

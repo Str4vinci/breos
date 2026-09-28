@@ -53,8 +53,9 @@ unless stated:
 ## Decision
 
 E1, E6 and E8 were **Accepted** on 2026-09-26. E2–E5, E7, E9 and the E6
-inflation default were **Accepted** on 2026-09-27. The code changes they call
-for are still to be made.
+inflation default were **Accepted** on 2026-09-27. Accepting them accepted
+the design, not its implementation. E8 and E9 were then implemented for 0.7.0
+under #183; the changelog carries the migration table below as shipped.
 
 ### E1. Nominal basis for the projection APIs — Accepted 2026-09-26
 

@@ -39,7 +39,7 @@ from breos.economics import (
     calculate_lcoe_from_projection,
     cost_analysis_projection,
     find_payback_year,
-    find_payback_year_exact,
+    find_payback_year_interpolated,
 )
 from breos.inverter import InverterConfig
 from breos.load_profiles import load_profile
@@ -355,7 +355,7 @@ def _run_single_sim(args_tuple):
     roi_percent = (npv_savings / total_initial * 100) if total_initial > 0 else 0.0
     savings_per_kwp = (npv_savings / system_kwp) if system_kwp > 0 else 0.0
     savings_per_euro = (npv_savings / total_initial) if total_initial > 0 else 0.0
-    lcoe_eur_kwh = calculate_lcoe_from_projection(
+    lcoe_per_kwh = calculate_lcoe_from_projection(
         cost_proj,
         total_investment=total_initial,
         discount_rate=costs_cfg.get("discount_rate", DEFAULT_DISCOUNT_RATE),
@@ -381,7 +381,7 @@ def _run_single_sim(args_tuple):
         "total_replacement_cost": total_replacement_cost,
         # Economic efficiency
         "npv_savings_20yr": npv_savings,
-        "lcoe_eur_kwh": lcoe_eur_kwh,
+        "lcoe_per_kwh": lcoe_per_kwh,
         "roi_percent": roi_percent,
         "savings_per_kwp": savings_per_kwp,
         "savings_per_euro": savings_per_euro,
@@ -633,7 +633,7 @@ def generate_outputs(results_df, output_dir, locations, cost_projections=None):
         pivot = loc_df.pivot_table(
             index="battery_kwh",
             columns="n_modules",
-            values="lcoe_eur_kwh",
+            values="lcoe_per_kwh",
         )
         plot_grid_independence_heatmap(
             pivot,

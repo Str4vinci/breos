@@ -86,7 +86,7 @@ result = app.result()
 
 print(f"Grid independence: {result['grid_independence_pct']:.1f}%")
 print(f"Payback: {result['payback_year']} years")
-print(f"NPV savings: {result['npv_savings_eur']:,.0f} EUR")
+print(f"NPV savings: {result['npv_savings']:,.0f} EUR")
 ```
 
 `result()` returns a plain JSON-serializable dict. The

@@ -360,14 +360,14 @@ def test_plot_montecarlo_final_soh_distribution(mc_runs, tmp_path):
 
 
 def test_plot_breakeven_distribution(mc_runs, tmp_path):
-    payback = mc_runs["payback_year_exact"].dropna().tolist()
+    payback = mc_runs["payback_year_interpolated"].dropna().tolist()
     assert payback
     plotting.plot_breakeven_distribution(payback, len(mc_runs), str(tmp_path))
     _assert_written(tmp_path, "breakeven_histogram.png")
 
 
 def test_plot_breakeven_cdf(mc_runs, tmp_path):
-    payback = mc_runs["payback_year_exact"].dropna().tolist()
+    payback = mc_runs["payback_year_interpolated"].dropna().tolist()
     assert payback
     plotting.plot_breakeven_cdf(payback, str(tmp_path))
     _assert_written(tmp_path, "breakeven_cdf.png")
@@ -497,7 +497,7 @@ def test_plot_pareto_front_analysis(tmp_path):
             "Consumption_kWh": consumption,
             "Tariff": tariff,
             "Detailed_Strategy": strategy,
-            "Net_Cost_Eur": consumption * 0.2 - 40.0 * point + rng.normal(0.0, 20.0),
+            "Net_Cost": consumption * 0.2 - 40.0 * point + rng.normal(0.0, 20.0),
             "Grid_Independence_%": 20.0 + 8.0 * point + rng.normal(0.0, 2.0),
         }
         for consumption in (3000, 5000)

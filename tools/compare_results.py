@@ -26,7 +26,7 @@ import pandas as pd
 PROJECT_ROOT = Path(__file__).parent.parent.resolve()
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from breos.economics import find_payback_year_exact
+from breos.economics import find_payback_year_interpolated
 from breos.plotting import plot_breakeven_comparison
 from breos.utils import format_years_months
 
@@ -77,7 +77,7 @@ def compare_results(folders: list, labels: list = None, output_dir: str = "resul
     print("-" * 77)
     summary = []
     for df, label in zip(cost_dfs, valid_labels):
-        be = find_payback_year_exact(df)
+        be = find_payback_year_interpolated(df)
         cost = df.loc[df["Year"] == max_year, "Cost_System_Cumulative_NPV"].values[0]
         no_sys_cost = df.loc[df["Year"] == max_year, "Cost_No_Sys_Cumulative_NPV"].values[0]
         summary.append((label, be, cost, no_sys_cost))

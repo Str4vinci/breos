@@ -13,7 +13,9 @@ import pandas as pd
 from breos.app_config import ResolvedAppConfig
 from breos.battery import LEDGER_SCHEMA_VERSION
 from breos.emissions import calculate_co2_savings
+from breos.result_schema import RESULT_SCHEMA_VERSION
 from breos.runners.app import SimulationArtifacts
+from breos.tariffs import result_currency
 from breos.utils import get_hours_per_step, local_datetime_index
 
 
@@ -154,6 +156,8 @@ def _provenance(
     provenance = {
         "breos_version": _package_version(),
         "ledger_schema_version": LEDGER_SCHEMA_VERSION,
+        # Every money field is in this currency; BREOS does not convert.
+        "currency": result_currency(resolved.tariff),
         "resolved_config": normalized_cfg,
         "weather": weather,
         "load_profile": json.loads(json.dumps(artifacts.load_profile_metadata, default=str)),
@@ -257,6 +261,7 @@ def build_result(
     lcoe = float(artifacts.lcoe)
 
     result: dict[str, Any] = {
+        "result_schema_version": RESULT_SCHEMA_VERSION,
         "n_modules": cfg["n_modules"],
         "pv_kwp": round(resolved.system_kwp, 3),
         "battery_kwh": cfg["battery_kwh"],
@@ -273,10 +278,10 @@ def build_result(
         "grid_export_kwh": round(float(yr1_export), 2),
         "grid_independence_pct": round(float(grid_indep_y1), 2),
         "self_consumption_pct": round(float(self_consumption_pct), 2),
-        "total_investment_eur": round(float(total_initial), 2),
+        "total_investment": round(float(total_initial), 2),
         "payback_year": int(artifacts.payback_year) if artifacts.payback_year is not None else None,
-        "npv_savings_eur": round(float(npv_savings), 2),
-        "lcoe_eur_kwh": round(lcoe, 4) if math.isfinite(lcoe) else None,
+        "npv_savings": round(float(npv_savings), 2),
+        "lcoe_per_kwh": round(lcoe, 4) if math.isfinite(lcoe) else None,
         "yearly": yearly_to_dicts(artifacts.yearly_df),
         "monthly": monthly_to_dicts(artifacts.first_year_results_df, cfg["resolution"]),
         "financial": financial_to_dicts(artifacts.cost_projection, total_initial),
@@ -294,7 +299,12 @@ def build_result(
         soh_digits = 1 if cfg["degradation_engine"] == "blast" else 2
         result["battery_soh_end_pct"] = round(float(artifacts.current_soh), soh_digits)
         result["battery_replacements"] = artifacts.total_replacements
-        result["battery_replacement_cost_eur"] = round(float(artifacts.total_replacement_cost), 2)
+        # At t = 0 prices, neither inflated nor discounted; the discounted
+        # total is the one the NPV counts.
+        result["battery_replacement_cost_t0_prices"] = round(float(artifacts.total_replacement_cost), 2)
+        result["battery_replacement_cost_npv"] = round(
+            float(artifacts.cost_projection.attrs["replacement_cost_npv"]), 2
+        )
         if cfg["degradation_engine"] == "blast":
             for row in result["yearly"]:
                 if "soh_pct" in row:

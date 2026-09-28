@@ -61,7 +61,7 @@ Multi-objective sizing accepts these explicit constraint keys:
 
 | Key | Default | Meaning |
 | --- | ---: | --- |
-| `constraints.budget_eur` | 10,000 | Maximum initial system cost in EUR |
+| `constraints.budget` | 10,000 | Maximum initial system cost, in the run's currency. `budget_eur`, its name before 0.7.0, is an error |
 | `constraints.max_area_m2` | 20 | Maximum PV-module frame area in m² |
 | `constraints.max_battery_kwh` | 30 | Maximum battery decision-variable value in kWh |
 | `constraints.max_modules` | 60 | Maximum PV-module decision-variable value |
@@ -73,10 +73,15 @@ report. The defaults preserve earlier direct-API behavior; they are not
 site-specific recommendations.
 
 Results expose `Projected_*` diagnostics. The ordinary `Grid_Independence_%`
-and `NPV_Eur` columns equal `Projected_Grid_Independence_%` and
-`Projected_NPV_Eur`. `ZEB_Ratio` mirrors `Projected_ZEB_Ratio` but is not an
-objective. `Objective_Grid_Independence_%` and `Objective_NPV_Eur` identify the
+and `NPV` columns equal `Projected_Grid_Independence_%` and
+`Projected_NPV`. `ZEB_Ratio` mirrors `Projected_ZEB_Ratio` but is not an
+objective. `Objective_Grid_Independence_%` and `Objective_NPV` identify the
 metrics sent to NSGA-II explicitly.
+
+`details["provenance"]`, and the `provenance` of `evaluate_projected_design`,
+carry `result_schema_version` and `currency`, the currency of every money
+column (see [Interpreting results](../getting-started/interpreting-results.md#currency-and-schema-version)),
+plus the tariff and smart-charging records when the config has them.
 
 Use `evaluate_projected_design` when you need the detailed result for one
 fixed design instead of a Pareto search. It returns the projected metrics, the

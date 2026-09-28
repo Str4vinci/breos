@@ -326,7 +326,7 @@ class TestLCOE:
             yearly_summary_df=yearly_summary,
         )
 
-        assert projection.attrs["lcoe_eur_kwh"] == pytest.approx((1000 + 100 + 100 + 500) / (1000 + 900))
+        assert projection.attrs["lcoe_per_kwh"] == pytest.approx((1000 + 100 + 100 + 500) / (1000 + 900))
 
     @staticmethod
     def _projection_lcoe(inflation_rate, years=20, degradation=0.005, discount=0.05):
@@ -365,7 +365,7 @@ class TestLCOE:
             discount_rate=discount,
             degradation_rate=degradation,
         )
-        return real_terms, projection.attrs["lcoe_eur_kwh"]
+        return real_terms, projection.attrs["lcoe_per_kwh"]
 
     def test_real_terms_lcoe_matches_the_projection_without_inflation(self):
         # calculate_lcoe holds O&M at first-year prices (#175); without

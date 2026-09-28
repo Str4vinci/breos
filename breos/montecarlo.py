@@ -38,7 +38,7 @@ from breos.app_inputs import (
 )
 from breos.battery import LEDGER_SCHEMA_VERSION, AlignedSimulationInputs, align_simulation_inputs
 from breos.dispatch_instructions import DispatchInstructions
-from breos.economics import find_payback_year, find_payback_year_exact
+from breos.economics import find_payback_year, find_payback_year_interpolated
 from breos.execution import (
     aggregate_jit_cache_states,
     is_pv_only_dispatch,
@@ -52,8 +52,9 @@ from breos.execution import (
 from breos.load_profiles import LOAD_PROFILE_METADATA_KEY, load_profile
 from breos.projection import ProjectionYear, build_pv_only_battery_config, run_projection, value_projection
 from breos.pv.model_options import DEFAULT_SOLAR_POSITION, resolve_solar_position_method, solar_position_time_offset
+from breos.result_schema import RESULT_SCHEMA_VERSION
 from breos.smart_charging import resolve_instructions, smart_charging_provenance
-from breos.tariffs import ResolvedTariff, tariff_provenance
+from breos.tariffs import ResolvedTariff, result_currency, tariff_provenance
 from breos.weather import (
     build_battery_temperature_series,
     fetch_tmy_weather_data,
@@ -66,17 +67,17 @@ from breos.weather import (
 
 # Metrics summarized across runs (column in the per-run frame -> output label).
 _SUMMARY_METRICS = {
-    "npv_savings_eur": "npv_savings_eur",
+    "npv_savings": "npv_savings",
     "payback_year": "payback_year",
-    "payback_year_exact": "payback_year_exact",
-    "lcoe_eur_kwh": "lcoe_eur_kwh",
+    "payback_year_interpolated": "payback_year_interpolated",
+    "lcoe_per_kwh": "lcoe_per_kwh",
     "final_soh_pct": "final_soh_pct",
     "mean_grid_independence_pct": "mean_grid_independence_pct",
     "lifetime_grid_independence_pct": "lifetime_grid_independence_pct",
     "total_replacements": "total_replacements",
 }
 # A run without a payback year did not pay back within the horizon.
-_PAYBACK_METRICS = ("payback_year", "payback_year_exact")
+_PAYBACK_METRICS = ("payback_year", "payback_year_interpolated")
 
 
 @dataclass(frozen=True)
@@ -393,7 +394,7 @@ def _simulate_trajectory(
     value = value_projection(cfg, resolved, projection)
     cost_projection, lcoe, yearly_df = value.cost_projection, value.lcoe, value.yearly_df
     payback_year = find_payback_year(cost_projection)
-    payback_year_exact = find_payback_year_exact(cost_projection)
+    payback_year_interpolated = find_payback_year_interpolated(cost_projection)
     npv_savings = float(cost_projection["Savings_Cumulative_NPV"].iloc[-1])
 
     trajectory = yearly_df.merge(cost_projection, on="Year", how="left", suffixes=("", "_Financial"))
@@ -402,15 +403,17 @@ def _simulate_trajectory(
     lifetime_gi = 100.0 * (1.0 - lifetime_import / lifetime_load) if lifetime_load > 0.0 else 0.0
 
     metrics = {
-        "npv_savings_eur": npv_savings,
+        "npv_savings": npv_savings,
         "payback_year": payback_year if payback_year is not None else float("nan"),
-        "payback_year_exact": payback_year_exact if payback_year_exact is not None else float("nan"),
-        "lcoe_eur_kwh": float(lcoe),
+        "payback_year_interpolated": payback_year_interpolated
+        if payback_year_interpolated is not None
+        else float("nan"),
+        "lcoe_per_kwh": float(lcoe),
         "final_soh_pct": float(current_soh) if has_battery else float("nan"),
         "mean_grid_independence_pct": float(yearly_df["Grid_Independence_%"].mean()),
         "lifetime_grid_independence_pct": lifetime_gi,
         "total_replacements": int(total_replacements),
-        "total_replacement_cost_eur": float(total_replacement_cost),
+        "total_replacement_cost_t0_prices": float(total_replacement_cost),
         "mean_pv_production_kwh": float(yearly_df["Legacy_PV_Production_kWh"].mean()),
         "mean_pv_dc_generation_kwh": float(yearly_df["PV_DC_Generation_kWh"].mean()),
         "mean_direct_pv_ac_load_kwh": float(yearly_df["Direct_PV_AC_Load_kWh"].mean()),
@@ -697,6 +700,9 @@ def run_montecarlo(config: dict[str, Any], settings: MonteCarloSettings) -> Mont
         backend_provenance["jit_cache"] = _aggregate_jit_cache_states(jit_cache_states)
 
     runs_df = pd.DataFrame(rows)
+    currency = result_currency(resolved.tariff)
+    # Plot labels read the currency from the frame.
+    runs_df.attrs["currency"] = currency
     yearly_df = pd.concat(yearly_frames, ignore_index=True) if yearly_frames else None
     try:
         breos_version = version("breos")
@@ -710,6 +716,9 @@ def run_montecarlo(config: dict[str, Any], settings: MonteCarloSettings) -> Mont
         yearly=yearly_df,
         provenance={
             "breos_version": breos_version,
+            "result_schema_version": RESULT_SCHEMA_VERSION,
+            # Every money column and summary is in this currency; BREOS does not convert.
+            "currency": currency,
             "resolved_config": cfg,
             "settings": asdict(settings),
             "available_weather_years": [int(y) for y in available_years],

@@ -21,6 +21,7 @@ import numpy as np
 import pandas as pd
 
 from breos.repair import InputRepairReport, RepairEvent, repair_series  # noqa: F401 - public re-export
+from breos.tariffs import DEFAULT_CURRENCY
 from breos.utils import local_datetime_index
 
 
@@ -140,7 +141,7 @@ def export_summary(
         suffix: Optional suffix for filename
         format: Output format ('txt' for formatted text, 'csv' for raw)
         extra_metrics: Optional label -> value pairs appended as additional
-            summary fields (e.g. ``{"LCOE [EUR/kWh]": "0.1327"}``). Pre-format
+            summary fields (e.g. ``{"LCOE [EUR/kWh]": "0.1327"}`` for an EUR run). Pre-format
             float values as strings to control their displayed precision.
 
     Returns:
@@ -181,28 +182,29 @@ def _economics_summary_metrics(cost_projection_df: Optional[pd.DataFrame]) -> Di
     """Pull headline economics figures from a cost projection's ``attrs``.
 
     The projection produced by :func:`breos.economics.cost_analysis_projection`
-    stamps LCOE, payback, NPV savings, and total investment onto
+    stamps LCOE, payback, NPV savings, total investment and the currency onto
     ``DataFrame.attrs``. This surfaces them as summary fields without any
-    recomputation. Missing figures are skipped; an absent projection yields an
-    empty dict.
+    recomputation, labelled in that currency (EUR when absent). Missing figures
+    are skipped; an absent projection yields an empty dict.
     """
     if cost_projection_df is None:
         return {}
 
     attrs = cost_projection_df.attrs
     metrics: Dict[str, Any] = {}
+    currency = attrs.get("currency", DEFAULT_CURRENCY)
 
-    lcoe = attrs.get("lcoe_eur_kwh")
+    lcoe = attrs.get("lcoe_per_kwh")
     if lcoe is not None and np.isfinite(lcoe):
-        metrics["LCOE [EUR/kWh]"] = f"{float(lcoe):.4f}"
+        metrics[f"LCOE [{currency}/kWh]"] = f"{float(lcoe):.4f}"
 
     total_investment = attrs.get("total_investment")
     if total_investment is not None:
-        metrics["Total Investment [EUR]"] = f"{float(total_investment):.2f}"
+        metrics[f"Total Investment [{currency}]"] = f"{float(total_investment):.2f}"
 
     npv = attrs.get("final_npv_savings")
     if npv is not None:
-        metrics["NPV Savings [EUR]"] = f"{float(npv):.2f}"
+        metrics[f"NPV Savings [{currency}]"] = f"{float(npv):.2f}"
 
     if "payback_year" in attrs:
         payback = attrs.get("payback_year")

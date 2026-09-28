@@ -37,15 +37,15 @@ def test_app_result_matches_golden(name):
 
 
 def test_compare_reports_a_changed_float():
-    expected = {"npv_savings_eur": encode(100.0), "battery_replacements": 1}
+    expected = {"npv_savings": encode(100.0), "battery_replacements": 1}
 
-    assert compare("x", {"npv_savings_eur": 100.0, "battery_replacements": 1}, expected) == []
-    assert compare("x", {"npv_savings_eur": 100.0 + 1e-6, "battery_replacements": 1}, expected, rel=1e-9) == [
-        "x: npv_savings_eur: 100.000001 != 100.0"
+    assert compare("x", {"npv_savings": 100.0, "battery_replacements": 1}, expected) == []
+    assert compare("x", {"npv_savings": 100.0 + 1e-6, "battery_replacements": 1}, expected, rel=1e-9) == [
+        "x: npv_savings: 100.000001 != 100.0"
     ]
-    assert compare("x", {"npv_savings_eur": 100.0}, expected) == ["x: missing battery_replacements"]
-    assert compare("x", {"npv_savings_eur": 100, "battery_replacements": 1}, expected) == [
-        "x: npv_savings_eur: expected float 100.0, got 100"
+    assert compare("x", {"npv_savings": 100.0}, expected) == ["x: missing battery_replacements"]
+    assert compare("x", {"npv_savings": 100, "battery_replacements": 1}, expected) == [
+        "x: npv_savings: expected float 100.0, got 100"
     ]
 
 
