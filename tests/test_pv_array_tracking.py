@@ -68,7 +68,7 @@ def test_top_level_tracker_settings_are_validated(settings, error, match):
         ({"tracking": "singleaxis"}, ValueError, r"'pv_arrays\[0\]\.tracking' must be 'fixed'"),
         ({"backtrack": "no"}, TypeError, r"'pv_arrays\[0\]\.backtrack' must be true or false"),
         ({"max_angle": -500}, ValueError, r"'pv_arrays\[0\]\.max_angle' must be between"),
-        ({"tlt": 10}, ValueError, r"Unknown key\(s\) in pv_arrays\[0\]: tlt"),
+        ({"tlt": 10}, ValueError, r"Unknown key 'pv_arrays\[0\]\.tlt'"),
     ],
 )
 def test_array_entries_are_validated_before_the_weather_fetch(array, error, match):

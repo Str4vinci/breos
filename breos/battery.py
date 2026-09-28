@@ -9,8 +9,8 @@ This module handles battery energy storage simulation including:
 """
 
 import math
-from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Tuple, Union
+from dataclasses import dataclass, field
+from typing import Any, Dict, List, Mapping, Optional, Tuple, Union
 
 import numpy as np
 import pandas as pd
@@ -1772,14 +1772,45 @@ class SimulationSummary:
     cumulative_calendar_degradation: float
     resistance_growth: float
     replacement_steps: Tuple[int, ...]
+    # Rainflow cycles every pack accumulated in the span, a retired pack's
+    # part-period included; ``fec_cum`` restarts at zero on replacement.
+    fec_all_packs: float = 0.0
     final_degradation_state: Optional[Dict[str, Any]] = None
+    # ``sum(column * weights)`` for each requested (column, weights) pair,
+    # such as import power times the step's import price.
+    weighted_sums: Dict[str, float] = field(default_factory=dict)
 
 
-def _build_simulation_summary(core: _CoreRun, *, return_degradation_state: bool) -> SimulationSummary:
+def weighted_column_sums(
+    columns: Mapping[str, np.ndarray], weights: Optional[Mapping[str, Tuple[str, np.ndarray]]]
+) -> Dict[str, float]:
+    """``sum(columns[column] * w)`` for each ``name: (column, w)`` in ``weights``.
+
+    Frames and summaries both reduce through this, so a priced total is the
+    same float whichever path produced the column.
+    """
+    if not weights:
+        return {}
+    sums: Dict[str, float] = {}
+    for name, (column, values) in weights.items():
+        array = np.asarray(columns[column], dtype=float)
+        if len(values) != len(array):
+            raise ValueError(f"weights {name!r} have {len(values)} steps; the simulation has {len(array)}")
+        sums[name] = float(np.dot(array, np.asarray(values, dtype=float)))
+    return sums
+
+
+def _build_simulation_summary(
+    core: _CoreRun,
+    *,
+    return_degradation_state: bool,
+    weights: Optional[Mapping[str, Tuple[str, np.ndarray]]] = None,
+) -> SimulationSummary:
     """Reduce a completed core run to its annual totals and carry state."""
     buffers = core.buffers
     aging = core.aging
-    column_sums = _column_sums(buffers.column_arrays())
+    columns = buffers.column_arrays()
+    column_sums = _column_sums(columns)
 
     summary_row, total_pv = _build_summary_row(
         buffers,
@@ -1825,7 +1856,9 @@ def _build_simulation_summary(core: _CoreRun, *, return_degradation_state: bool)
         cumulative_calendar_degradation=aging.cumulative_cal_deg,
         resistance_growth=aging.resistance_growth,
         replacement_steps=tuple(int(i) for i in np.flatnonzero(buffers.replaced)),
+        fec_all_packs=aging.fec_lifetime,
         final_degradation_state=final_state,
+        weighted_sums=weighted_column_sums(columns, weights),
     )
 
 
@@ -2314,8 +2347,13 @@ def simulate_energy_balance_summary(
     execution_backend: str = "python",
     aligned: Optional[AlignedSimulationInputs] = None,
     finalize_degradation: Optional[bool] = None,
+    weights: Optional[Mapping[str, Tuple[str, np.ndarray]]] = None,
 ) -> SimulationSummary:
     """Simulate an energy balance and return annual totals and carry state.
+
+    ``weights`` maps a name to a results column and one weight per step; the
+    summary's ``weighted_sums`` holds ``sum(column * weight)`` for each, which
+    is how a tariff prices a year without per-step frames.
 
     Runs exactly the physics :func:`simulate_energy_balance` runs, with the
     same arguments, and skips only the construction of the per-timestep
@@ -2366,7 +2404,7 @@ def simulate_energy_balance_summary(
         summary_only=True,
         aligned=aligned,
     )
-    return _build_simulation_summary(core, return_degradation_state=return_degradation_state)
+    return _build_simulation_summary(core, return_degradation_state=return_degradation_state, weights=weights)
 
 
 def lfp_capacity_factor(T_C: float) -> float:

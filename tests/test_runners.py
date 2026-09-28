@@ -53,9 +53,18 @@ def test_app_runner_native_default_matches_explicit_native(monkeypatch):
     )
 
     monkeypatch.setattr(app_runner, "prepare_simulation_inputs", lambda cfg, resolved, deps: inputs)
-    monkeypatch.setattr(app_runner, "build_costs_dict", lambda cfg, resolved: {"total_initial_cost": 0.0})
-    monkeypatch.setattr(app_runner, "cost_analysis_projection", lambda **kwargs: pd.DataFrame())
-    monkeypatch.setattr(app_runner, "calculate_lcoe_from_projection", lambda *args, **kwargs: 0.0)
+    monkeypatch.setattr(
+        projection_module,
+        "build_costs_dict",
+        lambda cfg, resolved: {
+            "total_initial_cost": 0.0,
+            "electricity_cost": 0.0,
+            "electricity_sold_cost": 0.0,
+            "daily_power_cost": 0.0,
+        },
+    )
+    monkeypatch.setattr(projection_module, "cost_analysis_projection", lambda **kwargs: pd.DataFrame())
+    monkeypatch.setattr(projection_module, "calculate_lcoe_from_projection", lambda *args, **kwargs: 0.0)
     monkeypatch.setattr(app_runner, "find_payback_year", lambda projection: None)
 
     cfg = {
@@ -84,10 +93,11 @@ def test_app_runner_native_default_matches_explicit_native(monkeypatch):
         cost_params=SimpleNamespace(battery_cost_per_kwh=500.0),
         avg_module_power_w=400.0,
         inverter_ac_capacity_w=400.0 / 1.25,
+        tariff=None,
         emissions_params=None,
     )
 
-    real_simulate_energy_balance = app_runner.simulate_energy_balance
+    real_simulate_energy_balance = projection_module.simulate_energy_balance
     native_states = []
 
     def _record_native_state(**kwargs):
@@ -95,7 +105,7 @@ def test_app_runner_native_default_matches_explicit_native(monkeypatch):
             native_states.append(kwargs.get("initial_degradation_state"))
         return real_simulate_energy_balance(**kwargs)
 
-    monkeypatch.setattr(app_runner, "simulate_energy_balance", _record_native_state)
+    monkeypatch.setattr(projection_module, "simulate_energy_balance", _record_native_state)
     default_artifacts = run_app_runner(cfg, resolved, deps=SimpleNamespace())
     native_states.clear()
     native_artifacts = run_app_runner({**cfg, "degradation_engine": "native"}, resolved, deps=SimpleNamespace())
@@ -125,9 +135,18 @@ def test_app_runner_threads_blast_state_across_projection_years(monkeypatch):
     )
 
     monkeypatch.setattr(app_runner, "prepare_simulation_inputs", lambda cfg, resolved, deps: inputs)
-    monkeypatch.setattr(app_runner, "build_costs_dict", lambda cfg, resolved: {"total_initial_cost": 0.0})
-    monkeypatch.setattr(app_runner, "cost_analysis_projection", lambda **kwargs: pd.DataFrame())
-    monkeypatch.setattr(app_runner, "calculate_lcoe_from_projection", lambda *args, **kwargs: 0.0)
+    monkeypatch.setattr(
+        projection_module,
+        "build_costs_dict",
+        lambda cfg, resolved: {
+            "total_initial_cost": 0.0,
+            "electricity_cost": 0.0,
+            "electricity_sold_cost": 0.0,
+            "daily_power_cost": 0.0,
+        },
+    )
+    monkeypatch.setattr(projection_module, "cost_analysis_projection", lambda **kwargs: pd.DataFrame())
+    monkeypatch.setattr(projection_module, "calculate_lcoe_from_projection", lambda *args, **kwargs: 0.0)
     monkeypatch.setattr(app_runner, "find_payback_year", lambda projection: None)
     real_battery_config = projection_module.BatteryConfig
 
@@ -165,6 +184,7 @@ def test_app_runner_threads_blast_state_across_projection_years(monkeypatch):
         cost_params=SimpleNamespace(battery_cost_per_kwh=500.0),
         avg_module_power_w=400.0,
         inverter_ac_capacity_w=400.0 / 1.25,
+        tariff=None,
         emissions_params=None,
     )
 

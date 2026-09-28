@@ -67,6 +67,13 @@ Native and BLAST model selection, discovery, provenance, and migration.
 Cost parameters, NPV / LCOE / payback projections, emissions.
 :::
 
+:::{grid-item-card} Tariffs
+:link: tariffs
+:link-type: doc
+
+Time-of-use schedules, prices, and their resolution onto a simulation index.
+:::
+
 :::{grid-item-card} Optimization
 :link: optimization
 :link-type: doc
@@ -100,6 +107,7 @@ energy-balance
 battery
 degradation-models
 cost-analysis
+tariffs
 optimization
 plotting
 appendix

@@ -5,6 +5,7 @@ import pandas as pd
 import pytest
 
 import breos.montecarlo as montecarlo_module
+import breos.projection as projection_module
 from breos.app_config import resolve_app_config
 from breos.battery import align_simulation_inputs
 from breos.montecarlo import (
@@ -66,7 +67,7 @@ def test_montecarlo_worker_omits_uncollected_trajectory(monkeypatch):
         "_simulate_trajectory",
         lambda *args: ({"npv_savings_eur": 1.0}, trajectory),
     )
-    montecarlo_module._initialize_worker({}, None, np.array([2021]), 1, settings, {}, {})
+    montecarlo_module._initialize_worker({}, None, np.array([2021]), 1, settings, {}, {}, None)
 
     run_idx, metrics, returned_trajectory, jit_cache_state = montecarlo_module._run_trajectory_index(0)
 
@@ -309,13 +310,13 @@ def test_run_montecarlo_threads_sell_price_inflation(tmp_path, monkeypatch, writ
 
     weather = write_multiyear_weather(tmp_path / "multi.csv")
     seen = {}
-    original = mc_module.cost_analysis_projection
+    original = projection_module.cost_analysis_projection
 
     def _capture(*args, **kwargs):
         seen["sell_price_inflation"] = kwargs.get("sell_price_inflation")
         return original(*args, **kwargs)
 
-    monkeypatch.setattr(mc_module, "cost_analysis_projection", _capture)
+    monkeypatch.setattr(projection_module, "cost_analysis_projection", _capture)
     settings = MonteCarloSettings(weather_file=str(weather), n_runs=1, years_per_run=2, seed=0)
     run_montecarlo({**_base_config(), "sell_price_inflation": 0.04}, settings)
 
@@ -349,7 +350,7 @@ def test_montecarlo_carries_battery_and_pv_origin_inventory_between_years(
     import breos.montecarlo as mc_module
 
     weather = write_multiyear_weather(tmp_path / "multi.csv", years=(2021,))
-    original = mc_module.simulate_energy_balance_summary
+    original = projection_module.simulate_energy_balance_summary
     calls = []
 
     def _capture(*args, **kwargs):
@@ -366,7 +367,7 @@ def test_montecarlo_carries_battery_and_pv_origin_inventory_between_years(
         )
         return output
 
-    monkeypatch.setattr(mc_module, "simulate_energy_balance_summary", _capture)
+    monkeypatch.setattr(projection_module, "simulate_energy_balance_summary", _capture)
     settings = MonteCarloSettings(weather_file=str(weather), n_runs=1, years_per_run=2, seed=0)
     result = run_montecarlo(_base_config(), settings)
 

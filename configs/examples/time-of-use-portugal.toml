@@ -1,0 +1,16 @@
+# Time-of-use pricing on the Portuguese mainland daily bi-hourly schedule.
+# BREOS bundles the schedule (Diretiva ERSE n.º 1/2026); the prices below are
+# illustrative, not a supplier's offer. Put your own tariff's prices here.
+location = "porto"
+n_modules = 10
+annual_consumption_kwh = 4000
+battery_kwh = 5.0
+cost_preset = "residential_pt"
+emissions_country = "PT"
+
+[tariff]
+schedule = "pt_mainland_2026_daily_bi"
+currency = "EUR"
+import_prices = { peak = 0.2310, off_peak = 0.1210 }
+export_prices = { all = 0.0500 }
+fixed_charge_per_day = 0.30

@@ -84,6 +84,53 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
     resolution, and the column and unit read. Monte Carlo provenance has the
     same block. `breos validate-config` prints the file it resolved, or says
     it is not there yet.
+- Year rows carry money at year-1 prices (ADR 0003 E7): `Import_Cost`,
+  `Export_Revenue`, `Fixed_Charge` and `Baseline_Import_Cost` (the load bought
+  without a system), added by `breos.economics.price_year_rows`, plus the
+  simulated duration, `Simulated_Hours`. `cost_analysis_projection`
+  escalates, times and discounts these columns, and keeps any a caller
+  supplies, which is how TOU valuation will fill them. The flat case
+  multiplies in the same order as before, so every App golden number is the
+  same float. The App result's `financial` rows gain each year's component
+  cashflows, escalated and not discounted: `cost_import`, `revenue_export`,
+  `cost_operation`, `cost_fixed_charge`, `cost_replacement` and
+  `replacement_time_years`.
+- **Tariff domain**, `breos.tariffs` (ADR 0002). A `TariffSchedule` assigns
+  instants to named periods in local civil time and records its regulatory
+  source; `TariffPrices` holds per-kWh import and export prices per period and
+  a daily fixed charge in one currency (EUR in 0.7.0); a `ResolvedTariff`
+  aligns both to a simulation index, with period labels and codes, price
+  arrays, the civil-day boundaries (`day_starts`: 23-, 24- and 25-hour days),
+  and separate schedule and price hashes. Periods are classified in the
+  timezone passed in, never the index's own (A1), and a schedule is not moved
+  to another zone. Nine schedules are bundled, checked against their primary
+  sources: the Portuguese mainland BTN daily and weekly bi- and tri-hourly
+  cycles of 2026 (Diretiva ERSE n.º 1/2026) and of the 2027 reform (Diretiva
+  ERSE n.º 3/2026, de 19 de agosto), and the Spanish 2.0TD access tariff (CNMC
+  Circular 3/2020) with its 2026 national holidays. A schedule whose
+  boundaries hourly input cannot represent is rejected at that resolution
+  (A3). Nothing in App, Monte Carlo or the optimizer uses tariffs yet, so no
+  result changes; the `[tariff]` config table comes with TOU valuation.
+- **Time-of-use valuation** through a `[tariff]` App table (ADR 0002): a
+  bundled `schedule`, a `currency` (EUR), per-period `import_prices` and
+  `export_prices` (or an `all` price), an optional `fixed_charge_per_day`,
+  `boundary_policy = "strict"` and, for a 2027 schedule on an earlier year, a
+  `study_date`. It is checked when App is built: unknown schedules,
+  currencies and periods, unpriced periods, a schedule from another timezone,
+  a resolution too coarse for the schedule's boundaries, and flat
+  `costs.electricity_cost`, `electricity_sold_cost` or `daily_power_cost`
+  set as well all raise. The tariff is resolved once on the simulated
+  calendar and every project year replays it (A2). The shared projection
+  loop prices each year as step energy times step price, from per-step
+  frames (App) or weighted summary sums (Monte Carlo, through the new
+  `weights` argument of `simulate_energy_balance_summary`), into the year
+  rows' `Import_Cost`, `Export_Revenue`, `Baseline_Import_Cost` and
+  `Fixed_Charge`. Dispatch does not change. `result()["provenance"]["tariff"]`
+  and the Monte Carlo provenance record the schedule and its source, the
+  prices, both hashes, the timezone and `calendar_policy =
+  "replay_start_year"`. Projected optimization does not read a tariff yet.
+  Flat-price runs are unchanged; their `resolved_config` gains `tariff: null`.
+  New example: `configs/examples/time-of-use-portugal.toml`.
 
 ### Changed
 - Cut CI runner time without dropping a check. Merges into `develop` no
@@ -137,6 +184,70 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   optimizer paths. Results are unchanged. The optimizer's two paths no longer
   raise `TypeError` when `dc_ac_ratio` is `None`; they run without AC
   clipping, as App does.
+- App and Monte Carlo run one multi-year projection loop,
+  `breos.projection.run_projection`
+  ([#179](https://github.com/Str4vinci/breos/issues/179)). The battery state
+  a year hands the next is one `CarryState` (stored energy, PV-origin energy,
+  throughput, calendar time, degradation, SOH, resistance, and the engine's
+  native degradation payload), and every year row has one schema, built by
+  `build_year_row` from column sums that are the same floats whether the year
+  ran with per-step frames (App) or as a summary (Monte Carlo). Both price the
+  rows through `value_projection`. App's `SimulationArtifacts.yearly_df`
+  gains the columns Monte Carlo rows already had (cumulative battery state,
+  loss diagnostics, carried energy, replacement steps); `App.result()` is
+  unchanged, and so are all numbers: the App golden baseline matches bit for
+  bit.
+- Projected optimization (`evaluate_projected_design` and the NSGA-II
+  projected scoring) runs the same projection loop,
+  `breos.projection.project_years`, with its own battery and initial SOH
+  ([#179](https://github.com/Str4vinci/breos/issues/179)).
+  `_projected_year_summary` is gone, so the optimizer's yearly table
+  (`ProjectedDesignResult.yearly`) has the shared year-row schema:
+  **`PV_DC_kWh` is now `PV_DC_Generation_kWh` and `PV_DC_Curtailed_kWh` is
+  now `Curtailment_DC_kWh`**, a PV-only design reports `Battery_SOH_%` as
+  empty rather than 100, and the table gains the App and Monte Carlo columns.
+  App and Monte Carlo rows gain the optimizer's `Inverter_Loss_kWh`,
+  `Battery_Charge_Throughput_kWh`, `Battery_Discharge_Throughput_kWh`, the two
+  SOC means and `Battery_Annual_FEC`, and `SimulationSummary` gains
+  `fec_all_packs`. Optimizer results move by at most one unit in the last
+  place (2e-16 relative in LCOE and the ZEB ratio), because delivered PV is
+  now summed per column rather than per step; App and Monte Carlo results
+  are unchanged.
+- Nested config tables are checked by one schema, `breos.config_schema.TableSpec`
+  ([#181](https://github.com/Str4vinci/breos/issues/181)): the keys a table
+  allows, a checker per key, the keys it requires, and a hook for rules that
+  span keys. `costs`, `battery_indoor_model` and each `pv_arrays` entry use
+  it now, and the 0.7 `[tariff]` and `[smart_charging]` tables will. Every
+  table reports an unknown key the same way, as `Unknown key
+  'battery_indoor_model.setpoint'. Available: ...`; the indoor model and
+  `pv_arrays` messages used to differ, and a non-boolean
+  `battery_indoor_model.enabled` now says "must be true or false". Valid
+  configs behave exactly as before.
+- The daily fixed charge is billed on the simulated duration,
+  `Simulated_Hours / 24` days, instead of 365 days (ADR 0003 E5). A common
+  year is exactly 365 days, so its results do not change. A leap-year run is
+  now billed 366 days: for a Porto run starting in 2024 (25 years,
+  `residential_pt`, 0.30 €/day) the discounted cost with and without the
+  system both rise by 6.49 €, and the NPV of savings is unchanged because the
+  charge is paid either way. Year rows without `Simulated_Hours`, from direct
+  callers, are billed as 365-day years, as before.
+- **One default discount and inflation rate everywhere** (ADR 0003 E6): a
+  discount rate of 0.03 and an inflation rate of 0.02, defined once as
+  `breos.economics.DEFAULT_DISCOUNT_RATE` and `DEFAULT_INFLATION_RATE` and
+  read by the App registry, `CostParams`, `cost_params_from_config`,
+  optimization, `cost_analysis_projection`, `calculate_lcoe_from_projection`
+  and `calculate_lcoe`. **Callers that omit the discount rate get different
+  results:** `CostParams`, `cost_params_from_config`, the optimizer and both
+  LCOE functions used 0.0, and a direct `cost_analysis_projection` call used
+  0.02 (with inflation 0.03). On three projected-optimizer designs without a
+  `financials.discount_rate`, NPV moves from 6430.77 to 3941.12 €, −1736.96 to
+  −2690.35 € and −12091.27 to −11013.42 €, and LCOE rises by 0.017–0.021
+  €/kWh; energy and battery results are unchanged. App results do not
+  change, since App already used 0.03 and 0.02. An explicit 0.0 is used as
+  given.
+- The DST-day tariff test builds each civil day up to the next local
+  midnight, so it passes on pandas 2.x too, where `pd.offsets.Day` is a fixed
+  24 hours; the `floors` CI job failed on it. Test only.
 
 ### Fixed
 - App weather that does not cover the whole calendar year of `start_date`
@@ -777,6 +888,26 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   `PROFILE_FILE_NATIVE_FREQ`, `PROFILE_NAMES`, `PROFILE_ALIASES` and
   `EREDES_COLUMNS`. Read `PROFILES` instead. `breos list load-profiles` drops
   its `aliases` field and gains `files` and `requires_load_profile_file`.
+- **The steady-state optimizer scoring basis and `calculate_financials`**
+  ([#179](https://github.com/Str4vinci/breos/issues/179)), with no
+  deprecation period. `optimization.objective_basis = "steady_state"` scored a
+  candidate on one simulated year, with NPV from `calculate_financials` and
+  battery replacements extrapolated from the year-one SOH loss. Candidates are
+  now scored over the projected lifetime only, and a config that still sets
+  `"steady_state"` raises `ValueError`; `"projected"` stays accepted. The
+  default projected scoring also ran that year-one pass on every candidate for
+  diagnostics, so the `SteadyState_Grid_Independence_%`,
+  `SteadyState_NPV_Eur` and `SteadyState_ZEB_Ratio` values and Pareto columns
+  are gone, along with the private helpers `_year_one_soh_loss_pct` and
+  `_estimate_battery_replacement_treatment` and the constants
+  `DEFAULT_PANEL_WP` and `DEFAULT_OBJECTIVE_BASIS`.
+  `SolarDesignProblem.projected_objectives` is gone too;
+  `objective_basis` remains and is always `"projected"`. Projected results are
+  unchanged bit for bit, and each candidate evaluation skips one simulated
+  year: 22% faster on a three-year horizon and 4% on twenty years.
+- The packaged `breos/data/configs/financials.json`, which nothing loaded and
+  which said discount 0.05 against the App's 0.03 (ADR 0003 E6,
+  [#186](https://github.com/Str4vinci/breos/issues/186)).
 
 ### Documentation
 - The release checklist records that `v0.5.0`, `v0.5.1` and `v0.6.0` are

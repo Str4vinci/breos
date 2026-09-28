@@ -115,6 +115,37 @@ def write_multiyear_weather():
 
 
 # ---------------------------------------------------------------------------
+# Stubbed projection year (optimizer wiring tests)
+# ---------------------------------------------------------------------------
+
+
+def _stub_projection_balance(monkeypatch, index, captured=None, **columns):
+    """Replace the projection loop's dispatch with a fixed per-step ledger.
+
+    Every column the year row sums is zero on ``index`` unless ``columns``
+    sets it, in W. Each call's keyword arguments are stored in ``captured``
+    when given, so a test can check what the optimizer asked the loop to run.
+    """
+    from breos.projection import _ROW_SUM_COLUMNS
+
+    frame = pd.DataFrame(
+        0.0,
+        index=index,
+        columns=[*_ROW_SUM_COLUMNS, "Battery_Energy_End", "Battery_PV_Origin_Energy_End"],
+    )
+    for name, values in columns.items():
+        frame[name] = values
+
+    def fake_balance(**kwargs):
+        if captured is not None:
+            captured.update(kwargs)
+        return frame, 0.0, pd.DataFrame(), 0.0, 0, pd.DataFrame(), None
+
+    monkeypatch.setattr("breos.projection.simulate_energy_balance", fake_balance)
+    return frame
+
+
+# ---------------------------------------------------------------------------
 # Location
 # ---------------------------------------------------------------------------
 

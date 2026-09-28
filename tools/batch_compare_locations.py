@@ -35,6 +35,7 @@ from breos.battery import (
     simulate_energy_balance,
 )
 from breos.economics import (
+    DEFAULT_DISCOUNT_RATE,
     calculate_lcoe_from_projection,
     cost_analysis_projection,
     find_payback_year,
@@ -338,7 +339,7 @@ def _run_single_sim(args_tuple):
         costs=costs_dict,
         num_years=years_projection,
         inflation_rate=costs_cfg.get("inflation_rate", 0.02),
-        discount_rate=costs_cfg.get("discount_rate", 0.0),
+        discount_rate=costs_cfg.get("discount_rate", DEFAULT_DISCOUNT_RATE),
         freq=FREQ,
         yearly_summary_df=yearly_df,
         total_replacement_cost=total_replacement_cost,
@@ -357,7 +358,7 @@ def _run_single_sim(args_tuple):
     lcoe_eur_kwh = calculate_lcoe_from_projection(
         cost_proj,
         total_investment=total_initial,
-        discount_rate=costs_cfg.get("discount_rate", 0.0),
+        discount_rate=costs_cfg.get("discount_rate", DEFAULT_DISCOUNT_RATE),
     )
 
     # System utilization (year 1)

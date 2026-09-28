@@ -320,9 +320,10 @@ projection loop #179 introduces. Until an entry point uses that loop, it
 rejects a `tariff` or `smart_charging` table rather than valuing at flat
 prices.
 
-`objective_basis = "steady_state"` is rejected with a tariff or smart charging
-until #179 retires `calculate_financials`, which values one year at scalar
-prices.
+`objective_basis = "steady_state"` was to reject a tariff or smart charging
+until #179 retired `calculate_financials`, which valued one year at scalar
+prices. #179 removed both, so the case no longer arises: the optimizer scores
+over the projected lifetime only.
 
 ### A6. Grid-charge conversion and shared limits (#178) — Accepted 2026-09-26
 
