@@ -145,10 +145,33 @@ def _write_payload(data: dict[str, Any], args: argparse.Namespace, what: str) ->
     return 0
 
 
+# The sections of the resolved-config summary, in output order. Each App key
+# names its place through ``AppConfigField.summary``.
+_SUMMARY_SECTIONS = ("location", "pv", "inverter", "load", "battery", "economics", "emissions", "simulation")
+
+
 def _resolved_config_summary(config: dict[str, Any]) -> dict[str, Any]:
+    """Summarise a resolved App config without fetching weather or simulating.
+
+    Every registered key appears at its ``AppConfigField.summary`` place, as
+    configured after defaults and normalisation; ``None`` still means "not
+    set" (an escalator that follows ``inflation_rate``, pvlib's albedo). Values
+    the resolver derives (the location's coordinates, the tilt, azimuth and
+    tracker axis, the module, the inverter AC rating, the load-profile file)
+    then replace or join them. Key order within a section follows the
+    registry.
+    """
     resolved = resolve_app_config(config)
     cfg = resolved.cfg
-    inverter_ac_kw = (resolved.inverter_ac_capacity_w or 0.0) / 1000
+    summary: dict[str, Any] = {"valid": True, **{section: {} for section in _SUMMARY_SECTIONS}}
+    for name, field in APP_CONFIG_FIELDS.items():
+        if field.summary is not None:
+            section, key = field.summary.split(".")
+            summary[section][key] = cfg.get(name)
+    # A table can hold values JSON has no type for, such as a TOML date in
+    # [tariff]; they are written as text, as in the result's provenance.
+    summary = json.loads(json.dumps(summary, default=str))
+
     # A config is valid before its external profile file is in place, so a
     # missing file is reported rather than raised; several matches still raise.
     try:
@@ -158,86 +181,32 @@ def _resolved_config_summary(config: dict[str, Any]) -> dict[str, Any]:
         profile_file_error = None
     except FileNotFoundError as exc:
         profile_file, profile_file_error = None, str(exc)
-    return {
-        "valid": True,
-        "location": {
-            "key": resolved.loc_key,
-            "latitude": resolved.lat,
-            "longitude": resolved.lon,
-            "timezone": resolved.timezone,
-        },
-        "pv": {
-            "n_modules": cfg["n_modules"],
-            "system_kwp": resolved.system_kwp,
-            "module": resolved.pv_module_key,
-            "arrays": resolved.pv_arrays or None,
-            "tilt": resolved.tilt,
-            "azimuth": resolved.azimuth,
-            "transposition_model": cfg["transposition_model"],
-            "albedo": cfg["albedo"],
-            "surface_type": cfg["surface_type"],
-            "model_perez": cfg["model_perez"],
-            "solar_position": cfg["solar_position"],
-            "iam_model": cfg["iam_model"],
-            "diffuse_iam": cfg["diffuse_iam"],
-            "temperature_model": cfg["temperature_model"],
-            "bifacial_model": cfg["bifacial_model"],
-            "gcr": cfg["gcr"],
-            "pvrow_height": cfg["pvrow_height"],
-            "pvrow_pitch": cfg["pvrow_pitch"],
-            "pv_loss_overrides": cfg["pv_loss_overrides"],
-            "losses": resolve_pvwatts_losses(cfg["pv_loss_overrides"]),
-        },
-        "inverter": {
-            "efficiency": cfg["inverter_efficiency"],
-            "loading_ratio": cfg["inverter_loading_ratio"],
-            "ac_rating_kw": inverter_ac_kw,
-            "dc_coupled": cfg["dc_coupled"],
-        },
-        "load": {
-            "annual_consumption_kwh": cfg["annual_consumption_kwh"],
-            "load_profile": cfg["load_profile"],
-            "load_profile_file": profile_file,
-            "load_profile_file_error": profile_file_error,
-            "rlp_directory": cfg["rlp_directory"],
-            "resolution": cfg["resolution"],
-            "start_date": cfg["start_date"],
-        },
-        "battery": {
-            "capacity_kwh": cfg["battery_kwh"],
-            "max_charge_power_w": cfg["battery_max_charge_power_w"],
-            "max_discharge_power_w": cfg["battery_max_discharge_power_w"],
-            "power_limit_c_rate": cfg["battery_power_limit_c_rate"],
-            "min_soc": cfg["battery_min_soc"],
-            "max_soc": cfg["battery_max_soc"],
-            "eol_percentage": cfg["battery_eol_percentage"],
-            "round_trip_efficiency": cfg["battery_rte"] if cfg["battery_rte"] is not None else 0.95,
-            "degradation_engine": cfg["degradation_engine"],
-            "blast_model": cfg["blast_model"],
-            "model_profile": (
-                get_battery_model_profile(cfg["blast_model"]).as_dict() if cfg["blast_model"] is not None else None
-            ),
-        },
-        "economics": {
-            "cost_preset": cfg["cost_preset"],
-            "projection_years": cfg["projection_years"],
-            "inflation_rate": cfg["inflation_rate"],
-            "sell_price_inflation": cfg["sell_price_inflation"],
-            "import_price_escalation": cfg["import_price_escalation"],
-            "om_escalation": cfg["om_escalation"],
-            "replacement_cost_learning": cfg["replacement_cost_learning"],
-            "discount_rate": cfg["discount_rate"],
-        },
-        "emissions": {
-            "country": cfg["emissions_country"],
-            "enabled": resolved.emissions_params is not None,
-            "export_factor_gco2_kwh": cfg["export_emissions_factor_gco2_kwh"],
-        },
-        "notes": [
-            "This is a resolved configuration check only; no weather fetch or simulation was run.",
-            "Packaged defaults are examples. Replace weather, load, PV, inverter, cost, and emissions inputs for real studies.",
-        ],
-    }
+    summary["location"].update(
+        key=resolved.loc_key, latitude=resolved.lat, longitude=resolved.lon, timezone=resolved.timezone
+    )
+    summary["pv"].update(
+        system_kwp=resolved.system_kwp,
+        module=resolved.pv_module_key,
+        arrays=resolved.pv_arrays or None,
+        tilt=resolved.tilt,
+        azimuth=resolved.azimuth,
+        axis_azimuth=resolved.axis_azimuth,
+        losses=resolve_pvwatts_losses(cfg["pv_loss_overrides"]),
+    )
+    summary["inverter"]["ac_rating_kw"] = (resolved.inverter_ac_capacity_w or 0.0) / 1000
+    summary["load"].update(load_profile_file=profile_file, load_profile_file_error=profile_file_error)
+    summary["battery"].update(
+        round_trip_efficiency=cfg["battery_rte"] if cfg["battery_rte"] is not None else 0.95,
+        model_profile=(
+            get_battery_model_profile(cfg["blast_model"]).as_dict() if cfg["blast_model"] is not None else None
+        ),
+    )
+    summary["emissions"]["enabled"] = resolved.emissions_params is not None
+    summary["notes"] = [
+        "This is a resolved configuration check only; no weather fetch or simulation was run.",
+        "Packaged defaults are examples. Replace weather, load, PV, inverter, cost, and emissions inputs for real studies.",
+    ]
+    return summary
 
 
 def _load_options(category: str) -> list[dict[str, Any]]:
