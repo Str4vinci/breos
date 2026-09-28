@@ -47,7 +47,7 @@ def _problem_config(dc_ac_ratio: float = 1.6):
     return {
         "location": {"latitude": 41.15, "longitude": -8.61, "timezone": "UTC"},
         "simulation": {"resolution": "h", "years_projection": 1},
-        "constraints": {"budget_eur": 100000, "max_area_m2": 100.0, "max_modules": 5},
+        "constraints": {"budget": 100000, "max_area_m2": 100.0, "max_modules": 5},
         "mode": {"fixed_azimuth": 180},
         "pv": {"module": "Suntech_STP550S_STC"},
         "battery": {"temperature": 20.0, "indoor_model": {"enabled": False}},
@@ -239,7 +239,7 @@ def test_projected_budget_constraint_gates_the_reported_capex(synthetic_weather,
     config = {
         "location": {"latitude": 41.15, "longitude": -8.61, "timezone": "UTC"},
         "simulation": {"resolution": "h", "years_projection": 1},
-        "constraints": {"budget_eur": 480.0, "max_area_m2": 100.0, "max_modules": 5},
+        "constraints": {"budget": 480.0, "max_area_m2": 100.0, "max_modules": 5},
         "optimization": {"objective_basis": "projected"},
         "mode": {"fixed_azimuth": 180},
         "pv": {"module": "Suntech_STP550S_STC"},
@@ -249,8 +249,8 @@ def test_projected_budget_constraint_gates_the_reported_capex(synthetic_weather,
     out: dict = {}
     problem._evaluate(np.array([1.0, 0.0, 35.0], dtype=float), out)
 
-    assert out["Projected_Initial_Cost_Eur"] == pytest.approx(490.03, abs=0.01)
-    assert out["G"][0] == pytest.approx(out["Projected_Initial_Cost_Eur"] - 480.0)
+    assert out["Projected_Initial_Cost"] == pytest.approx(490.03, abs=0.01)
+    assert out["G"][0] == pytest.approx(out["Projected_Initial_Cost"] - 480.0)
     assert out["G"][0] > 0.0
 
 
@@ -295,7 +295,7 @@ def test_projected_optimizer_candidate_matches_app(open_meteo_weather, monkeypat
         "location": {"latitude": 41.15, "longitude": -8.61, "timezone": "UTC"},
         "simulation": {"resolution": "h", "years_projection": 1},
         "constraints": {
-            "budget_eur": 100000.0,
+            "budget": 100000.0,
             "max_area_m2": 100.0,
             "max_modules": 4,
             "max_battery_kwh": 2.0,
@@ -368,8 +368,8 @@ def test_projected_optimizer_candidate_matches_app(open_meteo_weather, monkeypat
     assert app_result["grid_independence_pct"] == pytest.approx(
         candidate["Projected_Grid_Independence_%"], **app_rounding
     )
-    assert app_result["npv_savings_eur"] == pytest.approx(candidate["Projected_NPV_Eur"], **app_rounding)
-    assert app_result["total_investment_eur"] == pytest.approx(candidate["Projected_Initial_Cost_Eur"], **app_rounding)
+    assert app_result["npv_savings"] == pytest.approx(candidate["Projected_NPV"], **app_rounding)
+    assert app_result["total_investment"] == pytest.approx(candidate["Projected_Initial_Cost"], **app_rounding)
 
 
 def test_optimizer_site_uses_the_same_altitude_as_app():

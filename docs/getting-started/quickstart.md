@@ -74,9 +74,9 @@ top-level values close to these:
   "pv_production_kwh": 8288.0,
   "grid_independence_pct": 80.2,
   "self_consumption_pct": 39.8,
-  "total_investment_eur": 7788.9,
+  "total_investment": 7788.9,
   "payback_year": 10,
-  "npv_savings_eur": 5041.3,
+  "npv_savings": 5041.3,
   "battery_soh_end_pct": 70.6,
   "co2_avoided_total_kg": 20228.0
 }
@@ -120,7 +120,7 @@ result = app.result()
 
 print(f"Grid independence: {result['grid_independence_pct']:.1f}%")
 print(f"Payback: {result['payback_year']} years")
-print(f"NPV savings: {result['npv_savings_eur']:,.0f} EUR")
+print(f"NPV savings: {result['npv_savings']:,.0f} EUR")
 print(f"CO2 avoided: {result['co2_avoided_total_kg']:,.0f} kg")
 ```
 

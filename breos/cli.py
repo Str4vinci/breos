@@ -31,6 +31,7 @@ from breos.load_profiles import PROFILES, resolve_profile_file
 from breos.pv_modules import MODULES
 from breos.resources import load_config_json
 from breos.solar import resolve_pvwatts_losses
+from breos.tariffs import DEFAULT_CURRENCY
 from breos.utils import normalise_frequency
 
 
@@ -250,9 +251,11 @@ def _load_options(category: str) -> list[dict[str, Any]]:
         return [
             {
                 "key": key,
-                "electricity_cost_eur_kwh": value.get("electricity_cost"),
-                "export_price_eur_kwh": value.get("electricity_sold_cost"),
-                "storage_cost_eur_kwh": value.get("storage_cost_per_kwh"),
+                # The bundled catalogue is in one currency; BREOS does not convert.
+                "currency": DEFAULT_CURRENCY,
+                "electricity_cost_per_kwh": value.get("electricity_cost"),
+                "export_price_per_kwh": value.get("electricity_sold_cost"),
+                "storage_cost_per_kwh": value.get("storage_cost_per_kwh"),
             }
             for key, value in sorted(presets.items())
         ]
@@ -304,8 +307,9 @@ def _format_options(category: str, rows: list[dict[str, Any]]) -> str:
         return "\n".join(lines)
     if category == "cost-presets":
         return "\n".join(
-            f"{row['key']}: buy {row['electricity_cost_eur_kwh']} EUR/kWh, "
-            f"sell {row['export_price_eur_kwh']} EUR/kWh, battery {row['storage_cost_eur_kwh']} EUR/kWh"
+            f"{row['key']}: buy {row['electricity_cost_per_kwh']} {row['currency']}/kWh, "
+            f"sell {row['export_price_per_kwh']} {row['currency']}/kWh, "
+            f"battery {row['storage_cost_per_kwh']} {row['currency']}/kWh"
             for row in rows
         )
     if category == "emissions":
@@ -614,6 +618,8 @@ def _montecarlo(args: argparse.Namespace) -> int:
 
     if args.json:
         payload = {
+            "result_schema_version": result.provenance["result_schema_version"],
+            "currency": result.provenance["currency"],
             "settings": settings.__dict__,
             "summary": nonfinite_to_none(result.summary),
             "available_years": result.available_years,

@@ -62,8 +62,8 @@ class _UndefinedLcoeApp:
         return {
             "n_modules": self.config.get("n_modules"),
             "grid_independence_pct": 0.0,
-            "lcoe_eur_kwh": float("inf"),
-            "yearly": [{"year": 1, "lcoe_eur_kwh": np.float64("inf"), "ratio": float("nan")}],
+            "lcoe_per_kwh": float("inf"),
+            "yearly": [{"year": 1, "lcoe_per_kwh": np.float64("inf"), "ratio": float("nan")}],
         }
 
 
@@ -94,8 +94,8 @@ def test_run_writes_undefined_metrics_as_null_to_stdout_and_file(monkeypatch, tm
     written = _strict_loads(output.read_text(encoding="utf-8"))
 
     for payload in (stdout, written):
-        assert payload["lcoe_eur_kwh"] is None
-        assert payload["yearly"] == [{"year": 1, "lcoe_eur_kwh": None, "ratio": None}]
+        assert payload["lcoe_per_kwh"] is None
+        assert payload["yearly"] == [{"year": 1, "lcoe_per_kwh": None, "ratio": None}]
         assert payload["grid_independence_pct"] == 0.0
 
 
@@ -121,10 +121,10 @@ def test_sweep_json_reports_undefined_metrics_as_null(monkeypatch, tmp_path, cap
 
     payload = _strict_loads(capsys.readouterr().out)
     assert payload["runs"] == 2
-    assert [row["lcoe_eur_kwh"] for row in payload["rows"]] == [None, None]
+    assert [row["lcoe_per_kwh"] for row in payload["rows"]] == [None, None]
     # The CSV keeps its own spelling of an undefined value.
     rows = list(csv.DictReader(output.open(encoding="utf-8")))
-    assert [row["lcoe_eur_kwh"] for row in rows] == ["inf", "inf"]
+    assert [row["lcoe_per_kwh"] for row in rows] == ["inf", "inf"]
 
 
 @pytest.mark.parametrize(
@@ -155,22 +155,26 @@ def test_montecarlo_provenance_and_json_write_nonfinite_statistics_as_null(monke
     runs = pd.DataFrame(
         {
             "run": [1, 2, 3],
-            "npv_savings_eur": [-100.0, 0.0, 100.0],
-            "lcoe_eur_kwh": [0.12, float("inf"), 0.14],
+            "npv_savings": [-100.0, 0.0, 100.0],
+            "lcoe_per_kwh": [0.12, float("inf"), 0.14],
         }
     )
 
     def fake_run(_config, settings):
         summary = _summarize(runs)
         # A statistic with no defined value, the case the CLI must still write.
-        summary["npv_savings_eur"]["std"] = float("nan")
-        summary["lcoe_eur_kwh"]["max"] = float("inf")
+        summary["npv_savings"]["std"] = float("nan")
+        summary["lcoe_per_kwh"]["max"] = float("inf")
         return MonteCarloResult(
             runs=runs,
             summary=summary,
             settings=settings,
             available_years=[2021],
-            provenance={"settings": {"max_load_scale": settings.max_load_scale}},
+            provenance={
+                "result_schema_version": "1.0",
+                "currency": "EUR",
+                "settings": {"max_load_scale": settings.max_load_scale},
+            },
         )
 
     monkeypatch.setattr(montecarlo_module, "run_montecarlo", fake_run)
@@ -181,12 +185,15 @@ def test_montecarlo_provenance_and_json_write_nonfinite_statistics_as_null(monke
     payload = _strict_loads(capsys.readouterr().out)
     provenance = _strict_loads((tmp_path / "out.provenance.json").read_text())
     for summary in (payload["summary"], provenance["summary"]):
-        assert summary["npv_savings_eur"]["std"] is None
-        assert summary["lcoe_eur_kwh"]["max"] is None
-        assert summary["lcoe_eur_kwh"]["count"] == 2
-        assert summary["lcoe_eur_kwh"]["mean"] == pytest.approx(0.13)
+        assert summary["npv_savings"]["std"] is None
+        assert summary["lcoe_per_kwh"]["max"] is None
+        assert summary["lcoe_per_kwh"]["count"] == 2
+        assert summary["lcoe_per_kwh"]["mean"] == pytest.approx(0.13)
     assert payload["settings"]["max_load_scale"] is None
     assert provenance["settings"]["max_load_scale"] is None
+    for record in (payload, provenance):
+        assert record["result_schema_version"] == "1.0"
+        assert record["currency"] == "EUR"
 
 
 def test_montecarlo_cli_rejects_an_infinite_max_load_scale(tmp_path, capsys):

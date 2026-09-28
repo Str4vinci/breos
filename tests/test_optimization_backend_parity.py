@@ -12,7 +12,7 @@ from breos.optimization import SolarDesignProblem, evaluate_projected_design  # 
 _CONFIG = {
     "location": {"latitude": 41.15, "longitude": -8.61, "timezone": "UTC"},
     "optimization": {"objective_basis": "projected"},
-    "constraints": {"budget_eur": 100000.0, "max_area_m2": 100.0},
+    "constraints": {"budget": 100000.0, "max_area_m2": 100.0},
     "simulation": {"resolution": "h", "years_projection": 3},
     "mode": {"fixed_azimuth": 180},
     "battery": {"eol_percentage": 0.93, "temperature": "weather"},
@@ -72,7 +72,7 @@ def test_problem_scores_match_the_fixed_design_evaluator(_inputs, design):
     ).metrics
 
     shared = sorted(key for key in scored if key.startswith("Projected_") and key in evaluated)
-    assert "Projected_NPV_Eur" in shared and "Projected_Grid_Independence_%" in shared
+    assert "Projected_NPV" in shared and "Projected_Grid_Independence_%" in shared
     for key in shared:
         # A design that never breaks even reports NaN on both sides.
         np.testing.assert_array_equal(scored[key], evaluated[key], err_msg=key)

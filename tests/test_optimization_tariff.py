@@ -37,7 +37,7 @@ def tariff_case(monkeypatch):
         "simulation": {"resolution": "h", "years_projection": 2},
         "battery": {"temperature": 20.0},
         "mode": {"fixed_azimuth": 180.0},
-        "constraints": {"budget_eur": 100000, "max_area_m2": 100, "max_tilt_deg": 60},
+        "constraints": {"budget": 100000, "max_area_m2": 100, "max_tilt_deg": 60},
         "tariff": deepcopy(TARIFF),
     }
     return weather, load, config
@@ -50,6 +50,18 @@ def evaluate(case, battery_kwh=0.0):
     )
 
 
+def test_optimizer_provenance_records_the_schema_version_and_currency(tariff_case):
+    weather, load, config = tariff_case
+    flat = deepcopy(config)
+    del flat["tariff"]
+
+    for case in (tariff_case, (weather, load, flat)):
+        provenance = evaluate(case).provenance
+        assert provenance["result_schema_version"] == "1.0"
+        assert provenance["currency"] == "EUR"
+    assert "tariff" not in evaluate((weather, load, flat)).provenance
+
+
 def test_tariff_changes_optimizer_money_without_changing_energy(tariff_case):
     weather, load, config = tariff_case
     first = evaluate(tariff_case)
@@ -57,7 +69,7 @@ def test_tariff_changes_optimizer_money_without_changing_energy(tariff_case):
     expensive["tariff"]["import_prices"] = {"all": 2.0}
     second = evaluate((weather, load, expensive))
 
-    assert second.metrics["Projected_NPV_Eur"] > first.metrics["Projected_NPV_Eur"]
+    assert second.metrics["Projected_NPV"] > first.metrics["Projected_NPV"]
     pd.testing.assert_frame_equal(
         first.yearly[["Import_kWh", "Export_kWh", "PV_Production_kWh"]],
         second.yearly[["Import_kWh", "Export_kWh", "PV_Production_kWh"]],
@@ -106,7 +118,7 @@ def test_optimizer_prices_fixed_target_charging(tariff_case):
     assert charged.yearly["Grid_AC_To_Battery_kWh"].sum() > 0.0
     assert (greedy.yearly["Grid_AC_To_Battery_kWh"] == 0.0).all()
     assert charged.yearly["Grid_Charge_Cost"].sum() > 0.0
-    assert charged.metrics["Projected_NPV_Eur"] != greedy.metrics["Projected_NPV_Eur"]
+    assert charged.metrics["Projected_NPV"] != greedy.metrics["Projected_NPV"]
     record = charged.provenance["smart_charging"]
     assert record["mode"] == "fixed_target"
     assert record["schedule_hash"] == charged.provenance["tariff"]["schedule_hash"]
@@ -123,7 +135,7 @@ def test_optimizer_search_shares_fixed_target_scoring_and_provenance(tariff_case
     out = {}
     restored._evaluate(np.array([4, 5.0, 30.0]), out)
 
-    assert out["Projected_NPV_Eur"] == fixed.metrics["Projected_NPV_Eur"]
+    assert out["Projected_NPV"] == fixed.metrics["Projected_NPV"]
     assert restored.pricing.instructions == problem.pricing.instructions
     result = optimization.optimize_system_multi_objective(weather, load, config, pop_size=4, n_gen=1, seed=42)
     assert result.details["provenance"]["smart_charging"] == fixed.provenance["smart_charging"]
@@ -187,8 +199,8 @@ def test_search_and_fixed_design_share_tariff_scoring_and_pickle(tariff_case):
     out = {}
     restored._evaluate(np.array([4, 0.0, 30.0]), out)
 
-    assert out["Projected_NPV_Eur"] == fixed.metrics["Projected_NPV_Eur"]
-    assert out["F"][1] == -fixed.metrics["Projected_NPV_Eur"]
+    assert out["Projected_NPV"] == fixed.metrics["Projected_NPV"]
+    assert out["F"][1] == -fixed.metrics["Projected_NPV"]
     assert restored.tariff.schedule_hash == fixed.provenance["tariff"]["schedule_hash"]
     with pytest.raises(TypeError):
         restored.tariff.prices.import_prices["peak"] = 100
@@ -301,7 +313,7 @@ def test_three_year_tariff_design_reproduces_through_app(
         artifacts[0].yearly_df[fixed.yearly.columns], fixed.yearly, check_exact=False, rtol=1e-12, atol=1e-10
     )
     assert fixed.metrics["Projected_Total_Replacements"] > 0
-    assert result["npv_savings_eur"] == pytest.approx(fixed.metrics["Projected_NPV_Eur"], abs=0.0051, rel=0)
+    assert result["npv_savings"] == pytest.approx(fixed.metrics["Projected_NPV"], abs=0.0051, rel=0)
     assert result["provenance"]["tariff"] == fixed.provenance["tariff"]
     if smart_charging:
         assert result["provenance"]["smart_charging"] == fixed.provenance["smart_charging"]

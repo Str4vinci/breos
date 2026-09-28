@@ -98,7 +98,7 @@ generation counts for a denser front and a longer runtime. Pass `n_procs` to
 processes.
 
 If no candidate satisfies the constraints, the call raises `RuntimeError`.
-Loosen `budget_eur`, `max_area_m2`, `max_modules`, or `max_battery_kwh` in
+Loosen `budget`, `max_area_m2`, `max_modules`, or `max_battery_kwh` in
 `[constraints]` and run it again.
 
 ## Score designs over their projected lifetime

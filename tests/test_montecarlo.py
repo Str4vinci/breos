@@ -65,14 +65,14 @@ def test_montecarlo_worker_omits_uncollected_trajectory(monkeypatch):
     monkeypatch.setattr(
         montecarlo_module,
         "_simulate_trajectory",
-        lambda *args: ({"npv_savings_eur": 1.0}, trajectory),
+        lambda *args: ({"npv_savings": 1.0}, trajectory),
     )
     montecarlo_module._initialize_worker({}, None, np.array([2021]), 1, settings, {}, {}, None, None)
 
     run_idx, metrics, returned_trajectory, jit_cache_state = montecarlo_module._run_trajectory_index(0)
 
     assert run_idx == 0
-    assert metrics == {"npv_savings_eur": 1.0}
+    assert metrics == {"npv_savings": 1.0}
     assert returned_trajectory is None
     assert jit_cache_state is None
 
@@ -185,13 +185,13 @@ def test_run_montecarlo_shapes_and_years(tmp_path, write_multiyear_weather):
 
     assert len(result.runs) == 3
     assert result.available_years == [2021, 2022]
-    for col in ("npv_savings_eur", "lcoe_eur_kwh", "final_soh_pct", "mean_grid_independence_pct"):
+    for col in ("npv_savings", "lcoe_per_kwh", "final_soh_pct", "mean_grid_independence_pct"):
         assert col in result.runs.columns
     assert "mean_pv_dc_generation_kwh" in result.runs
     assert "mean_usable_ac_system_production_kwh" in result.runs
-    assert "npv_savings_eur" in result.summary
-    assert set(result.summary["npv_savings_eur"]) >= {"mean", "p5", "p50", "p95"}
-    assert set(result.summary["npv_savings_eur"]) >= {"p2_5", "p97_5"}
+    assert "npv_savings" in result.summary
+    assert set(result.summary["npv_savings"]) >= {"mean", "p5", "p50", "p95"}
+    assert set(result.summary["npv_savings"]) >= {"p2_5", "p97_5"}
     assert result.provenance["settings"]["load_distribution"] == "normal"
 
 
@@ -218,7 +218,7 @@ def test_run_montecarlo_can_collect_yearly_cost_trajectories(tmp_path, write_mul
         "Cost_System_Cumulative_NPV",
     } <= set(result.yearly.columns)
     assert "lifetime_grid_independence_pct" in result.runs
-    assert "payback_year_exact" in result.runs
+    assert "payback_year_interpolated" in result.runs
 
 
 def test_run_montecarlo_filters_weather_sampling_pool(tmp_path, write_multiyear_weather):
@@ -243,8 +243,8 @@ def test_run_montecarlo_filters_weather_sampling_pool(tmp_path, write_multiyear_
 def test_run_montecarlo_is_reproducible_with_seed(tmp_path, write_multiyear_weather):
     weather = write_multiyear_weather(tmp_path / "multi.csv")
     settings = MonteCarloSettings(weather_file=str(weather), n_runs=4, years_per_run=3, seed=42)
-    a = run_montecarlo(_base_config(), settings).runs["npv_savings_eur"].to_numpy()
-    b = run_montecarlo(_base_config(), settings).runs["npv_savings_eur"].to_numpy()
+    a = run_montecarlo(_base_config(), settings).runs["npv_savings"].to_numpy()
+    b = run_montecarlo(_base_config(), settings).runs["npv_savings"].to_numpy()
     np.testing.assert_allclose(a, b)
 
 
@@ -284,6 +284,9 @@ def test_run_montecarlo_run_streams_are_spawned_from_the_base_seed(tmp_path, wri
             assert row["Load_Scale"] == scale
     assert "SeedSequence(base_seed).spawn(n_runs)" in result.provenance["random_stream"]
     assert result.provenance["ledger_schema_version"] == "2.0"
+    assert result.provenance["result_schema_version"] == "1.0"
+    assert result.provenance["currency"] == "EUR"
+    assert result.runs.attrs["currency"] == "EUR"
 
 
 def test_run_montecarlo_parallel_workers_preserve_seeded_results(tmp_path, write_multiyear_weather):
@@ -303,7 +306,7 @@ def test_run_montecarlo_defaults_years_to_projection_years(tmp_path, write_multi
     result = run_montecarlo(_base_config(), settings)
     # projection_years=3 in the base config -> 3 weather years sampled per run.
     assert len(result.runs) == 1
-    assert result.summary["npv_savings_eur"]["std"] == 0.0
+    assert result.summary["npv_savings"]["std"] == 0.0
 
 
 def test_run_montecarlo_threads_sell_price_inflation(tmp_path, monkeypatch, write_multiyear_weather):
@@ -490,28 +493,28 @@ def test_run_montecarlo_rejects_empty_weather(tmp_path):
 def test_summarize_reports_payback_probability_and_conditional_count():
     runs = pd.DataFrame(
         {
-            "npv_savings_eur": np.linspace(-900.0, 100.0, 10),
+            "npv_savings": np.linspace(-900.0, 100.0, 10),
             "payback_year": [np.nan] * 9 + [5.0],
-            "payback_year_exact": [np.nan] * 9 + [4.5],
+            "payback_year_interpolated": [np.nan] * 9 + [4.5],
         }
     )
 
     summary = _summarize(runs)
 
-    for metric, value in (("payback_year", 5.0), ("payback_year_exact", 4.5)):
+    for metric, value in (("payback_year", 5.0), ("payback_year_interpolated", 4.5)):
         assert summary[metric]["count"] == 1
         assert summary[metric]["n_runs"] == 10
         assert summary[metric]["payback_probability"] == pytest.approx(0.1)
         assert summary[metric]["p50"] == value
-    assert summary["npv_savings_eur"]["count"] == 10
-    assert summary["npv_savings_eur"]["n_runs"] == 10
-    assert "payback_probability" not in summary["npv_savings_eur"]
+    assert summary["npv_savings"]["count"] == 10
+    assert summary["npv_savings"]["n_runs"] == 10
+    assert "payback_probability" not in summary["npv_savings"]
 
 
 def test_summarize_keeps_payback_entry_when_no_run_pays_back():
     runs = pd.DataFrame(
         {
-            "npv_savings_eur": [-500.0, -400.0],
+            "npv_savings": [-500.0, -400.0],
             "payback_year": [np.nan, np.nan],
             "final_soh_pct": [np.nan, np.nan],
         }
@@ -553,7 +556,7 @@ def test_montecarlo_cli_labels_conditional_payback_statistics(monkeypatch, tmp_p
     config = tmp_path / "mc.json"
     config.write_text('{"location": "porto", "montecarlo": {"weather_file": "%s"}}' % weather)
     runs = pd.DataFrame(
-        {"run": range(1, 11), "npv_savings_eur": np.linspace(-900.0, 100.0, 10), "payback_year": [np.nan] * 9 + [5.0]}
+        {"run": range(1, 11), "npv_savings": np.linspace(-900.0, 100.0, 10), "payback_year": [np.nan] * 9 + [5.0]}
     )
 
     def fake_run(_config, settings):

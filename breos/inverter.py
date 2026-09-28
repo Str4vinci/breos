@@ -84,8 +84,8 @@ class InverterConfig:
     inverter_efficiency: float = 0.96
     is_hybrid: bool = True
     mppt_channels: int = 2
-    cost_per_kw_simple: float = 48.37  # €/kW for simple grid-tie inverter
-    cost_per_kw_hybrid: float = 102.58  # €/kW for hybrid inverter
+    cost_per_kw_simple: float = 48.37  # currency/kW for simple grid-tie inverter
+    cost_per_kw_hybrid: float = 102.58  # currency/kW for hybrid inverter
     max_dc_voltage_v: Optional[float] = None
     max_dc_power_w: Optional[float] = None
     min_mppt_voltage_v: Optional[float] = None
@@ -172,7 +172,7 @@ class InverterConfig:
             pv_peak_power_w: PV peak power for sizing (uses nominal_power if provided)
 
         Returns:
-            Inverter cost in €
+            Inverter cost, in the currency of the per-kW costs
         """
         if self.nominal_power_w is not None:
             power = self.nominal_power_w

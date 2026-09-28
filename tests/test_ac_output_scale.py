@@ -380,7 +380,7 @@ class TestProjectedWeatherSequence:
             "breos.optimization._evaluate_projected_design_metrics",
             lambda **kwargs: {
                 "Projected_Grid_Independence_%": 60.0,
-                "Projected_NPV_Eur": 100.0,
+                "Projected_NPV": 100.0,
                 "sequence_length": (
                     1 if isinstance(kwargs["base_dc_power"], pd.Series) else len(kwargs["base_dc_power"])
                 ),
@@ -565,9 +565,9 @@ class TestUnlimitedInverterAndOptimizer:
             seen["projected"] = kwargs["base_dc_power"].copy()
             return {
                 "Projected_Grid_Independence_%": 100.0,
-                "Projected_NPV_Eur": 0.0,
+                "Projected_NPV": 0.0,
                 "Projected_ZEB_Ratio": 1.0,
-                "Projected_Initial_Cost_Eur": 0.0,
+                "Projected_Initial_Cost": 0.0,
             }
 
         monkeypatch.setattr("breos.optimization._evaluate_projected_design_metrics", fake_projected)
@@ -622,7 +622,7 @@ class TestDcOutputScale:
             seen["dc"] = kwargs["base_dc_power"]
             return {
                 "Projected_Grid_Independence_%": 0.0,
-                "Projected_NPV_Eur": 0.0,
+                "Projected_NPV": 0.0,
                 "_yearly_summary_df": pd.DataFrame({"Year": [1]}),
                 "_cost_projection_df": pd.DataFrame({"Year": [1]}),
             }

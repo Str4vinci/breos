@@ -22,20 +22,21 @@ from breos.economics import (
     calculate_lcoe_from_projection,
     cost_analysis_projection,
     cost_params_from_config,
-    find_payback_year_exact,
+    find_payback_year_interpolated,
 )
 from breos.emissions import EmissionsParams
 from breos.execution import DEFAULT_EXECUTION_BACKEND, require_backend, validate_execution_backend
 from breos.inverter import inverter_ac_capacity_w as inverter_ac_capacity_w_for
 from breos.projection import CarryState, ProjectionYear, project_years
 from breos.pv.model_options import configured_pv_model_kwargs
+from breos.result_schema import RESULT_SCHEMA_VERSION
 from breos.smart_charging import resolve_instructions, smart_charging_provenance
 from breos.solar import (
     PVModuleParams,
     calculate_pv_production_dc,
     default_azimuth,
 )
-from breos.tariffs import ResolvedTariff, tariff_provenance
+from breos.tariffs import ResolvedTariff, result_currency, tariff_provenance
 from breos.utils import get_hours_per_step
 
 
@@ -645,16 +646,17 @@ def _evaluate_projected_design_metrics(
         yearly_summary_df=yearly_summary_df,
         total_replacement_cost=total_replacement_cost,
         emissions_params=emissions_params,
+        currency=result_currency(tariff),
     )
     payback_year = cost_projection.attrs.get("payback_year")
-    payback_exact = find_payback_year_exact(cost_projection)
+    payback_interpolated = find_payback_year_interpolated(cost_projection)
     metrics: Dict[str, Any] = {
         **_summarize_projected_lifetime_metrics(yearly_summary_df),
-        "Projected_NPV_Eur": float(cost_projection["Savings_Cumulative_NPV"].iloc[-1]),
+        "Projected_NPV": float(cost_projection["Savings_Cumulative_NPV"].iloc[-1]),
         "Projected_Breakeven_Year": float(payback_year) if payback_year is not None else np.nan,
-        "Projected_Breakeven_Year_Exact": payback_exact if payback_exact is not None else np.nan,
-        "Projected_Initial_Cost_Eur": float(costs["total_initial_cost"]),
-        "Projected_Replacement_Cost_Eur": float(total_replacement_cost),
+        "Projected_Breakeven_Year_Interpolated": payback_interpolated if payback_interpolated is not None else np.nan,
+        "Projected_Initial_Cost": float(costs["total_initial_cost"]),
+        "Projected_Replacement_Cost_T0_Prices": float(total_replacement_cost),
         "Projected_Total_Replacements": int(total_replacements),
         "Projected_Final_SOH_%": float(current_soh),
         "Projected_PV_Production_Year1_kWh": float(yearly_summary_df["PV_Production_kWh"].iloc[0]),
@@ -663,7 +665,7 @@ def _evaluate_projected_design_metrics(
         "Projected_PV_DC_FinalYear_kWh": float(yearly_summary_df["PV_DC_Generation_kWh"].iloc[-1]),
         "Projected_PV_DC_Curtailed_Year1_kWh": float(yearly_summary_df["Curtailment_DC_kWh"].iloc[0]),
         "Projected_Inverter_Loss_Year1_kWh": float(yearly_summary_df["Inverter_Loss_kWh"].iloc[0]),
-        "Projected_LCOE_Eur_kWh": float(
+        "Projected_LCOE_per_kWh": float(
             calculate_lcoe_from_projection(
                 cost_projection,
                 total_investment=float(costs["total_initial_cost"]),
@@ -695,7 +697,11 @@ class _OptimizationTariff:
     smart_charging: Dict[str, Any] | None = None
 
     def provenance(self) -> Dict[str, Any]:
-        record: Dict[str, Any] = {}
+        # Every money column is in this currency; BREOS does not convert.
+        record: Dict[str, Any] = {
+            "result_schema_version": RESULT_SCHEMA_VERSION,
+            "currency": result_currency(self.tariff),
+        }
         if self.tariff is not None:
             year = self.tariff.index.tz_convert(self.tariff.timezone)[0].year
             record["tariff"] = tariff_provenance(self.tariff, calendar_year=year)
@@ -1017,7 +1023,12 @@ try:
             self.loc_obj = _site_location(self.location)
 
             self.constraints = config.get("constraints", {})
-            self.budget_limit = self.constraints.get("budget_eur", 10000)
+            if "budget_eur" in self.constraints:
+                raise ValueError(
+                    "constraints.budget_eur was renamed to constraints.budget in 0.7.0; "
+                    "the budget is in the run's currency."
+                )
+            self.budget_limit = self.constraints.get("budget", 10000)
             self.area_limit = self.constraints.get("max_area_m2", 20)
             self.max_battery_kwh = self.constraints.get("max_battery_kwh", 30)
             self.max_modules = self.constraints.get("max_modules", 60)
@@ -1188,15 +1199,15 @@ try:
             )
             out.update(projected_metrics)
             objective_grid_dependence = 1.0 - float(projected_metrics["Projected_Grid_Independence_%"]) / 100.0
-            objective_npv = float(projected_metrics["Projected_NPV_Eur"])
+            objective_npv = float(projected_metrics["Projected_NPV"])
             objective_zeb = float(projected_metrics["Projected_ZEB_Ratio"])
             # The budget gates the CAPEX the result reports, so the cost a
             # feasible design shows is the cost that was checked.
-            objective_capex = float(projected_metrics["Projected_Initial_Cost_Eur"])
+            objective_capex = float(projected_metrics["Projected_Initial_Cost"])
 
             out["ZEB_Ratio"] = objective_zeb
             out["Objective_Grid_Independence_%"] = float(projected_metrics["Projected_Grid_Independence_%"])
-            out["Objective_NPV_Eur"] = objective_npv
+            out["Objective_NPV"] = objective_npv
 
             # --- 4. Constraints Calculation ---
             # g1: Price <= Budget (g1 <= 0 means satisfied)
@@ -1397,7 +1408,7 @@ def optimize_system_multi_objective(
     pareto["Modules"] = pareto["Modules"].round().astype(int)
     pareto["Battery_kWh"] = pareto["Battery_kWh"].round().astype(float)
     pareto["Grid_Independence_%"] = (1 - f[:, 0]) * 100
-    pareto["NPV_Eur"] = -f[:, 1]
+    pareto["NPV"] = -f[:, 1]
     # pymoo stores every ``out`` value on the evaluated individual, so the
     # Pareto diagnostics are already available even when workers performed
     # the scoring. Enumerate custom data keys to keep optional diagnostics
@@ -1414,13 +1425,14 @@ def optimize_system_multi_objective(
     for column in diagnostics_df.columns:
         pareto[column] = diagnostics_df[column].to_numpy()
     pareto["Grid_Independence_%"] = pareto["Projected_Grid_Independence_%"]
-    pareto["NPV_Eur"] = pareto["Projected_NPV_Eur"]
+    pareto["NPV"] = pareto["Projected_NPV"]
     pareto["ZEB_Ratio"] = pareto["Projected_ZEB_Ratio"]
 
     # pymoo advances the counter after its termination update. Report the last
     # completed generation, matching the research workflow's saved metadata.
     actual_generations = max(0, int(getattr(result.algorithm, "n_gen", n_gen + 1)) - 1)
     provenance = problem.pricing.provenance()
+    pareto.attrs["currency"] = provenance["currency"]
     return OptimizationResult(
         optimal_value=float("nan"),
         objective_value=float("nan"),
@@ -1430,10 +1442,10 @@ def optimize_system_multi_objective(
             "pymoo_result": result,
             "problem": problem,
             "objective_basis": problem.objective_basis,
-            "objective_names": ["Projected_Grid_Independence_%", "Projected_NPV_Eur"],
+            "objective_names": ["Projected_Grid_Independence_%", "Projected_NPV"],
             "early_stop": early_stop_metadata,
             "n_procs": n_procs,
             "battery_replacement_treatment": problem.battery_replacement_treatment,
-            **({"provenance": provenance} if provenance else {}),
+            "provenance": provenance,
         },
     )

@@ -14,9 +14,10 @@ from typing import Any, Dict, Optional, Tuple, cast
 import numpy as np
 import pandas as pd
 
+from breos.tariffs import DEFAULT_CURRENCY
 from breos.utils import get_hours_per_step, local_datetime_index
 
-# Default battery and replacement cost per kWh of battery capacity (€/kWh)
+# Default battery and replacement cost per kWh of battery capacity (currency/kWh)
 BATTERY_REPLACEMENT_COST_PER_KWH: float = 500.0
 
 # Where a replacement year carries no recorded instant, the outlay is booked
@@ -82,26 +83,26 @@ class CostParams:
     """Cost parameters for economic analysis."""
 
     # Electricity prices
-    electricity_cost: float = 0.27  # €/kWh purchased
-    electricity_sold_cost: float = 0.06  # €/kWh sold to grid
-    daily_power_cost: float = 0.30  # € per day connection fee
+    electricity_cost: float = 0.27  # currency/kWh purchased
+    electricity_sold_cost: float = 0.06  # currency/kWh sold to grid
+    daily_power_cost: float = 0.30  # currency per day connection fee
 
     # Equipment costs
-    module_cost_per_w: float = 0.125  # €/W
-    battery_cost_per_kwh: float = BATTERY_REPLACEMENT_COST_PER_KWH  # €/kWh
+    module_cost_per_w: float = 0.125  # currency/W
+    battery_cost_per_kwh: float = BATTERY_REPLACEMENT_COST_PER_KWH  # currency/kWh
     dc_ac_ratio: float = 1.25  # DC/AC sizing ratio for inverter CAPEX
-    inverter_cost_per_kw: float = 102.58  # €/kW (with battery)
-    inverter_cost_per_kw_nobatt: float = 48.37  # €/kW (without battery)
-    installation_cost_per_module: float = 350.0  # €/module
-    battery_installation_cost: float = 350.0  # € fixed
-    other_cost_per_module: float = 50.0  # € cables, etc.
-    other_cost_fixed: float = 0.0  # € fixed misc. costs
+    inverter_cost_per_kw: float = 102.58  # currency/kW (with battery)
+    inverter_cost_per_kw_nobatt: float = 48.37  # currency/kW (without battery)
+    installation_cost_per_module: float = 350.0  # currency/module
+    battery_installation_cost: float = 350.0  # currency, fixed
+    other_cost_per_module: float = 50.0  # currency/module: cables, etc.
+    other_cost_fixed: float = 0.0  # currency, fixed misc. costs
     land_cost: float = 0.0
 
     # Operations
-    maintenance_cost_per_panel: float = 10.0  # €/panel/year
-    maintenance_cost_fixed: float = 0.0  # € fixed /year
-    operation_cost: float = 0.0  # € additional /year
+    maintenance_cost_per_panel: float = 10.0  # currency/panel/year
+    maintenance_cost_fixed: float = 0.0  # currency/year, fixed
+    operation_cost: float = 0.0  # currency/year, additional
 
     # Analysis parameters
     inflation_rate: float = DEFAULT_INFLATION_RATE
@@ -332,6 +333,13 @@ def _discount_annual_with_replacement(
     return (annual - outlay) * discount_factors + outlay * replacement_discount
 
 
+def _replacement_npv(replacement: pd.Series, replacement_exponents: np.ndarray, discount_rate: float) -> float:
+    """The replacement outlays discounted from their swap instants, as the system NPV counts them."""
+    outlay = np.asarray(replacement, dtype=float)
+    discount = 1.0 / ((1.0 + discount_rate) ** np.asarray(replacement_exponents, dtype=float))
+    return float(np.sum(outlay * discount))
+
+
 # Year-row money columns at year-1 prices (ADR 0003 E7). The projection
 # escalates, times and discounts them; TOU valuation fills them from per-step
 # energy and prices in the year loop.
@@ -390,6 +398,7 @@ def cost_analysis_projection(
     yearly_summary_df: Optional[pd.DataFrame] = None,
     total_replacement_cost: Optional[float] = None,
     emissions_params=None,
+    currency: str = DEFAULT_CURRENCY,
 ) -> pd.DataFrame:
     """
     Perform multi-year cost projection analysis.
@@ -422,6 +431,8 @@ def cost_analysis_projection(
             Year, PV_Production_kWh, Import_kWh, Export_kWh, etc. for each year.
             When provided, uses actual yearly data instead of estimation.
         total_replacement_cost: Total battery replacement cost from propagation
+        currency: The currency every money input is in. BREOS does not
+            convert; it is recorded as ``attrs["currency"]`` for labels.
 
     Returns:
         DataFrame with yearly cost projections
@@ -518,12 +529,16 @@ def cost_analysis_projection(
         proj["Savings_Cumulative"] = proj["Cost_No_Sys_Cumulative"] - proj["Cost_System_Cumulative"]
         proj["Savings_Cumulative_NPV"] = proj["Cost_No_Sys_Cumulative_NPV"] - proj["Cost_System_Cumulative_NPV"]
 
+        proj.attrs["currency"] = currency
         proj.attrs["total_investment"] = costs["total_initial_cost"]
         proj.attrs["payback_year"] = find_payback_year(proj)
         proj.attrs["final_npv_savings"] = proj["Savings_Cumulative_NPV"].iloc[-1]
+        proj.attrs["replacement_cost_npv"] = _replacement_npv(
+            proj["Cost_Replacement"], replacement_exponents, discount_rate
+        )
         if total_replacement_cost is not None:
             proj.attrs["total_replacement_cost"] = total_replacement_cost
-        proj.attrs["lcoe_eur_kwh"] = calculate_lcoe_from_projection(
+        proj.attrs["lcoe_per_kwh"] = calculate_lcoe_from_projection(
             proj,
             total_investment=costs["total_initial_cost"],
             discount_rate=discount_rate,
@@ -605,7 +620,7 @@ def cost_analysis_projection(
     # Aggregate first year
     # Summing Power (W) gives sum(Watts). To get Wh, multiply by hours_per_step.
     # To get kWh, divide by 1000.
-    # Replacement_Cost is already in currency (EUR), likely summed is correct (not power->energy).
+    # Replacement_Cost is already money, so it is summed without the power-to-energy conversion.
     yearly = df[["System_AC_Production", "Houseload", "Import_From_Grid", "PV_AC_Export"]].groupby(df["Year"]).sum()
 
     # Handle replacement cost separately if present (it's already simple sum, no kWh conversion needed)
@@ -723,10 +738,14 @@ def cost_analysis_projection(
     proj["Export_kWh"] = export_degraded
     proj["Degradation_Factor"] = degradation_factors
 
+    proj.attrs["currency"] = currency
     proj.attrs["total_investment"] = costs["total_initial_cost"]
     proj.attrs["payback_year"] = find_payback_year(proj)
     proj.attrs["final_npv_savings"] = proj["Savings_Cumulative_NPV"].iloc[-1]
-    proj.attrs["lcoe_eur_kwh"] = calculate_lcoe_from_projection(
+    proj.attrs["replacement_cost_npv"] = _replacement_npv(
+        proj["Cost_Replacement"], replacement_exponents, discount_rate
+    )
+    proj.attrs["lcoe_per_kwh"] = calculate_lcoe_from_projection(
         proj,
         total_investment=costs["total_initial_cost"],
         discount_rate=discount_rate,
@@ -842,11 +861,11 @@ def _sustained_payback_index(savings: np.ndarray) -> Optional[int]:
 def find_payback_year(cost_projection: pd.DataFrame, initial_investment: Optional[float] = None) -> Optional[int]:
     """Return the sustained discounted payback year, as a whole year.
 
-    The integer counterpart of :func:`find_payback_year_exact`, under the same
+    The integer counterpart of :func:`find_payback_year_interpolated`, under the same
     rule: the first year from which cumulative discounted savings
     (``Savings_Cumulative_NPV``) are zero or above and stay so to the end of
     the simulated period. The series starts at year 0 with minus the
-    investment (see :func:`find_payback_year_exact`), so it is the whole year
+    investment (see :func:`find_payback_year_interpolated`), so it is the whole year
     in which the savings cross zero for the last time, and a system that pays
     back within its first year reports 1. If a battery replacement turns the
     savings negative again, payback is the later recovery.
@@ -874,7 +893,7 @@ def find_payback_year(cost_projection: pd.DataFrame, initial_investment: Optiona
     return None if index is None else int(years[index])
 
 
-def find_payback_year_exact(
+def find_payback_year_interpolated(
     cost_projection: pd.DataFrame, initial_investment: Optional[float] = None
 ) -> Optional[float]:
     """Return the sustained discounted payback, interpolated between years.
@@ -942,9 +961,9 @@ def calculate_lcoe(
     lower value.
 
     Args:
-        total_investment: Total CAPEX (€)
+        total_investment: Total CAPEX, in the run's currency
         annual_production_kwh: First year production (kWh)
-        annual_operation_cost: Annual O&M cost (€), in first-year prices
+        annual_operation_cost: Annual O&M cost, in first-year prices
         lifetime_years: System lifetime
         discount_rate: Discount rate (real)
         degradation_rate: Annual compound PV degradation rate, counted from
@@ -952,7 +971,7 @@ def calculate_lcoe(
             ``annual_production_kwh * (1 - degradation_rate) ** (t - 1)``.
 
     Returns:
-        LCOE in €/kWh
+        LCOE per kWh, in the currency of the inputs
     """
     # NPV of costs
     npv_costs = total_investment
@@ -991,7 +1010,7 @@ def calculate_lcoe_from_projection(
         production_column: Column containing yearly production in kWh.
 
     Returns:
-        LCOE in €/kWh.
+        LCOE per kWh, in the currency of the inputs.
     """
     if cost_projection.empty:
         return float("inf")

@@ -491,7 +491,7 @@ class TestAppValidation:
                 }
             )
             app.simulate()
-            return app.result()["npv_savings_eur"]
+            return app.result()["npv_savings"]
 
         # Inflating the export price raises later-year export revenue, so
         # cumulative NPV savings must grow. The key used to exist only on
@@ -585,7 +585,7 @@ class TestAppValidation:
         app.simulate()
         result = app.result()
 
-        assert result["lcoe_eur_kwh"] is None
+        assert result["lcoe_per_kwh"] is None
         json.dumps(result, allow_nan=False)
 
     def test_horizon_profile_reduces_generation_and_is_serialized(self, _patch_weather):
@@ -790,10 +790,10 @@ class TestAppSimulateNoBattery:
             "grid_export_kwh",
             "grid_independence_pct",
             "self_consumption_pct",
-            "total_investment_eur",
+            "total_investment",
             "payback_year",
-            "npv_savings_eur",
-            "lcoe_eur_kwh",
+            "npv_savings",
+            "lcoe_per_kwh",
             "co2_avoided_year1_kg",
             "co2_avoided_total_kg",
             "yearly",
@@ -903,10 +903,10 @@ class TestAppSimulateNoBattery:
         assert result["provenance"]["degradation"] is degradation
 
     def test_investment_positive(self):
-        assert self.result["total_investment_eur"] > 0
+        assert self.result["total_investment"] > 0
 
     def test_lcoe_positive(self):
-        assert self.result["lcoe_eur_kwh"] > 0
+        assert self.result["lcoe_per_kwh"] > 0
 
 
 def test_monthly_rows_follow_the_local_year_of_fixed_offset_weather(monkeypatch, synthetic_weather):
@@ -1193,7 +1193,7 @@ class TestAppSimulateWithBattery:
     def test_battery_keys_present(self):
         assert "battery_soh_end_pct" in self.result
         assert "battery_replacements" in self.result
-        assert "battery_replacement_cost_eur" in self.result
+        assert "battery_replacement_cost_t0_prices" in self.result
 
     def test_loss_waterfall_reports_battery_dispatch_losses(self):
         dispatch = self.result["pv_loss_waterfall"]["dispatch"]

@@ -184,6 +184,68 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   from 1,431 to 1,823 kWh in year 1; 387 kWh of that is grid charge.
 
 ### Changed
+- **Currency-neutral result names and result schema 1.0** (ADR 0003 E8 and
+  E9, [#183](https://github.com/Str4vinci/breos/issues/183)). Money keys drop
+  the currency, and the fractional payback is "interpolated" rather than
+  "exact", since it is a straight line between year-end points. There are no
+  aliases: scripts that read the old names break once and move to the table
+  below. Every reported number is unchanged. A removed output key is absent.
+  `constraints.budget_eur` raises a `ValueError` that names `budget`, rather
+  than falling back to the default budget.
+
+  | Surface | Old | New |
+  |---|---|---|
+  | `App.result()`, `breos sweep` CSV | `total_investment_eur` | `total_investment` |
+  | `App.result()`, `breos sweep` CSV | `npv_savings_eur` | `npv_savings` |
+  | `App.result()`, `breos sweep` CSV | `lcoe_eur_kwh` | `lcoe_per_kwh` |
+  | `App.result()`, `breos sweep` CSV | `battery_replacement_cost_eur` | `battery_replacement_cost_t0_prices` |
+  | `cost_analysis_projection` `attrs` | `lcoe_eur_kwh` | `lcoe_per_kwh` |
+  | Monte Carlo `runs` column, `summary` key | `npv_savings_eur` | `npv_savings` |
+  | Monte Carlo `runs` column, `summary` key | `lcoe_eur_kwh` | `lcoe_per_kwh` |
+  | Monte Carlo `runs` column | `total_replacement_cost_eur` | `total_replacement_cost_t0_prices` |
+  | Monte Carlo `runs` column, `summary` key | `payback_year_exact` | `payback_year_interpolated` |
+  | Optimization Pareto column | `NPV_Eur` | `NPV` |
+  | Optimization Pareto column | `Objective_NPV_Eur` | `Objective_NPV` |
+  | Optimization Pareto column, `objective_names` | `Projected_NPV_Eur` | `Projected_NPV` |
+  | Optimization Pareto column | `Projected_Initial_Cost_Eur` | `Projected_Initial_Cost` |
+  | Optimization Pareto column | `Projected_Replacement_Cost_Eur` | `Projected_Replacement_Cost_T0_Prices` |
+  | Optimization Pareto column | `Projected_LCOE_Eur_kWh` | `Projected_LCOE_per_kWh` |
+  | Optimization Pareto column | `Projected_Breakeven_Year_Exact` | `Projected_Breakeven_Year_Interpolated` |
+  | Optimization config, `constraints` | `budget_eur` | `budget` |
+  | `breos.economics` function | `find_payback_year_exact` | `find_payback_year_interpolated` |
+  | `breos list cost-presets --json` | `electricity_cost_eur_kwh` | `electricity_cost_per_kwh` |
+  | `breos list cost-presets --json` | `export_price_eur_kwh` | `export_price_per_kwh` |
+  | `breos list cost-presets --json` | `storage_cost_eur_kwh` | `storage_cost_per_kwh` |
+  | `breos.io` summary label | `LCOE [EUR/kWh]` | `LCOE [<currency>/kWh]` |
+  | `breos.io` summary label | `Total Investment [EUR]` | `Total Investment [<currency>]` |
+  | `breos.io` summary label | `NPV Savings [EUR]` | `NPV Savings [<currency>]` |
+  | `plot_pareto_front_analysis` input column | `Net_Cost_Eur` | `Net_Cost` |
+  | `plot_tariff_comparison` input column | `Net Cost (€)` | `Net Cost` |
+  | `plot_tariff_comparison` input column | `No System Cost (€)` | `No System Cost` |
+
+  The ADR's table also lists `SteadyState_NPV_Eur` and
+  `replacement_cost_eur_each`; both went earlier in this release with the
+  steady-state objective basis. `_t0_prices` marks a total at t = 0 prices,
+  neither inflated nor discounted. `App.result()` gains
+  `battery_replacement_cost_npv` beside it: the same replacements inflated to
+  and discounted from each swap instant, as `npv_savings` counts them.
+
+  The currency is recorded once per result: `provenance["currency"]` in
+  `App.result()`, Monte Carlo and optimizer provenance (`details["provenance"]`
+  and `evaluate_projected_design(...).provenance`, now present on flat prices
+  too), and `attrs["currency"]` on cost projections, Monte Carlo `runs` and
+  the Pareto frame. It is the tariff's `currency`, or `EUR`, the bundled
+  catalogue's, without a tariff; `breos.tariffs.result_currency` resolves it.
+  `cost_analysis_projection` takes `currency=` and stamps it. The summary
+  labels above, plot axis and value labels, and `breos list cost-presets`
+  (which gains a `currency` field) read it, so an EUR run writes the ISO code
+  where plots used to write `€`. BREOS does not convert currencies.
+
+  `App.result()`, Monte Carlo provenance and `--json` output, and optimizer
+  provenance carry `result_schema_version = "1.0"`
+  (`breos.result_schema.RESULT_SCHEMA_VERSION`), independent of the ledger
+  schema. A renamed or removed field bumps the major version, an added field
+  the minor. A result without it predates these names.
 - **Avoided emissions use net exchange** (ADR 0002 A10,
   [#178](https://github.com/Str4vinci/breos/issues/178)). The self-consumed
   credit is `(Load − Import − B_u) × CI`, where `B_u` is unattributed battery

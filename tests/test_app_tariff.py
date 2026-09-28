@@ -79,8 +79,8 @@ def test_a_flat_tariff_reproduces_flat_pricing():
 
     flat, tou = flat_app.result(), tou_app.result()
     # sum(energy * price) against price * sum(energy): the same to rounding.
-    assert tou["npv_savings_eur"] == pytest.approx(flat["npv_savings_eur"], abs=0.01)
-    assert tou["lcoe_eur_kwh"] == flat["lcoe_eur_kwh"]
+    assert tou["npv_savings"] == pytest.approx(flat["npv_savings"], abs=0.01)
+    assert tou["lcoe_per_kwh"] == flat["lcoe_per_kwh"]
     assert tou["grid_import_kwh"] == flat["grid_import_kwh"]
     assert "tariff" not in flat["provenance"]
     assert tou["provenance"]["tariff"]["calendar_policy"] == "replay_start_year"
@@ -216,7 +216,7 @@ def test_montecarlo_prices_every_trajectory_with_the_tariff(tmp_path, write_mult
     assert tou.provenance["tariff"]["schedule"] == "pt_mainland_2026_daily_bi"
     assert "tariff" not in flat.provenance
     pd.testing.assert_series_equal(tou.yearly["Import_kWh"], flat.yearly["Import_kWh"])
-    assert not np.allclose(tou.runs["npv_savings_eur"], flat.runs["npv_savings_eur"])
+    assert not np.allclose(tou.runs["npv_savings"], flat.runs["npv_savings"])
 
 
 @pytest.mark.usefixtures("_patch_weather")

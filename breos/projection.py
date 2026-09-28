@@ -33,7 +33,7 @@ from breos.economics import (
     replacement_fraction_from_steps,
 )
 from breos.execution import observed_jit_cache_state, reset_jit_cache_observation
-from breos.tariffs import ResolvedTariff
+from breos.tariffs import ResolvedTariff, result_currency
 from breos.utils import get_hours_per_step
 
 
@@ -589,6 +589,7 @@ def value_projection(cfg: dict[str, Any], resolved: ResolvedAppConfig, run: Proj
         yearly_summary_df=yearly_df,
         total_replacement_cost=run.total_replacement_cost,
         emissions_params=resolved.emissions_params,
+        currency=result_currency(resolved.tariff),
     )
     lcoe = calculate_lcoe_from_projection(
         cost_projection,

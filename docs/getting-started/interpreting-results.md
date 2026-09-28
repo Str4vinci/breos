@@ -4,10 +4,26 @@
 pandas or numpy types. The same dict is written by the CLI's `--output`
 flag.
 
+## Currency and schema version
+
+Money keys carry no currency. Every money value in a result is in the run's
+currency, which `provenance.currency` records: the tariff's `currency` when
+the run has a `[tariff]` table, otherwise `EUR`, the currency of the bundled
+cost catalogue. BREOS does not convert currencies. Summary and plot labels
+read the recorded currency.
+
+`result_schema_version` versions the result's names, independently of the
+ledger schema. It is `"1.0"` from 0.7.0, the release that dropped the `_eur`
+suffixes and renamed the `_exact` payback fields to `_interpolated`, with no
+aliases (the [changelog](https://github.com/Str4vinci/breos/blob/develop/CHANGELOG.md)
+lists every rename). A renamed or removed key bumps the major version, an
+added key the minor. A result without the key predates 1.0.
+
 ## Top-level keys
 
 | Key | Description |
 |---|---|
+| `result_schema_version` | Version of the result's names (see above) |
 | `n_modules` | Number of PV modules used in the simulation |
 | `pv_kwp` | System DC nameplate capacity (kWp) |
 | `battery_kwh` | Battery capacity (kWh) |
@@ -23,15 +39,15 @@ flag.
 | `grid_export_kwh` | Year 1 energy sold to the grid |
 | `grid_independence_pct` | Year 1 grid independence ratio |
 | `self_consumption_pct` | Year 1 self-consumption ratio |
-| `total_investment_eur` | Total CAPEX |
+| `total_investment` | Total CAPEX |
 | `payback_year` | Sustained discounted payback within the simulated period, as a whole year: the year from which cumulative NPV savings are zero or above and stay so to the horizon (`None` if not reached) |
-| `npv_savings_eur` | Cumulative NPV savings over the projection horizon |
-| `lcoe_eur_kwh` | Levelized cost of electricity from system CAPEX, O&M, simulated replacements, and discounted PV production |
+| `npv_savings` | Cumulative NPV savings over the projection horizon |
+| `lcoe_per_kwh` | Levelized cost of electricity from system CAPEX, O&M, simulated replacements, and discounted PV production |
 | `monthly` | Year 1 monthly energy balance rows |
 | `financial` | Yearly financial projection rows (year 0 = investment) |
 | `yearly` | Per-year breakdown of production, load, imports, exports |
 | `pv_loss_waterfall` | Year 1 PV loss waterfall from irradiance reference through PVWatts losses, inverter losses, and dispatch losses |
-| `provenance` | BREOS version, normalized resolved config, ledger schema version, weather/location metadata, resolution, timezone, and start date; `input_repairs` holds the reports passed as `App(..., input_repairs=...)`, and is present only then (see [Repairing measured data](inputs.md#repairing-measured-data)) |
+| `provenance` | BREOS version, currency, normalized resolved config, ledger schema version, weather/location metadata, resolution, timezone, and start date; `input_repairs` holds the reports passed as `App(..., input_repairs=...)`, and is present only then (see [Repairing measured data](inputs.md#repairing-measured-data)) |
 
 ## Battery-specific keys
 
@@ -41,7 +57,8 @@ Present only when `battery_kwh > 0`:
 |---|---|
 | `battery_soh_end_pct` | State of health at the end of the projection horizon |
 | `battery_replacements` | Total number of replacements over the projection |
-| `battery_replacement_cost_eur` | Total replacement cost |
+| `battery_replacement_cost_t0_prices` | Total replacement cost at t = 0 prices, neither inflated nor discounted |
+| `battery_replacement_cost_npv` | The same replacements inflated to and discounted from each swap instant, as `npv_savings` counts them |
 
 ## Emissions keys
 
@@ -138,6 +155,6 @@ to the end of the horizon. The series starts at year 0, so a system that
 recovers its investment during year 1 reports 1. If a battery replacement
 turns `balance` negative again, payback is the later recovery, and a
 `balance` that is negative in the last year means no payback.
-`economics.find_payback_year_exact` gives the same crossing as a fractional
+`economics.find_payback_year_interpolated` gives the same crossing as a fractional
 year, interpolated linearly between the annual points; it is an estimate
 from year-end values, not an exact date.

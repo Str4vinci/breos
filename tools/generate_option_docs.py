@@ -80,9 +80,9 @@ SECTIONS: list[dict[str, Any]] = [
         ),
         "columns": [
             ("key", "Key", "code"),
-            ("electricity_cost_eur_kwh", "Buy (EUR/kWh)", "text"),
-            ("export_price_eur_kwh", "Export (EUR/kWh)", "text"),
-            ("storage_cost_eur_kwh", "Battery (EUR/kWh)", "text"),
+            ("electricity_cost_per_kwh", "Buy (EUR/kWh)", "text"),
+            ("export_price_per_kwh", "Export (EUR/kWh)", "text"),
+            ("storage_cost_per_kwh", "Battery (EUR/kWh)", "text"),
         ],
     },
     {

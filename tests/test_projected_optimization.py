@@ -128,12 +128,12 @@ def test_projected_evaluator_carries_physical_and_degradation_state(monkeypatch)
     assert calls[1]["battery_config"].replacement_cost == pytest.approx(1000.0)
     assert captured["yearly"]["Import_kWh"].tolist() == pytest.approx([0.3, 0.6])
     assert captured["yearly"]["Replacement_Cost"].tolist() == pytest.approx([0.0, 1000.0])
-    assert metrics["Projected_NPV_Eur"] == pytest.approx(50.0)
+    assert metrics["Projected_NPV"] == pytest.approx(50.0)
     assert metrics["Projected_Total_Replacements"] == 1
-    assert metrics["Projected_Replacement_Cost_Eur"] == pytest.approx(1000.0)
+    assert metrics["Projected_Replacement_Cost_T0_Prices"] == pytest.approx(1000.0)
     assert metrics["Projected_Final_SOH_%"] == pytest.approx(99.0)
     assert metrics["Projected_Breakeven_Year"] == pytest.approx(2.0)
-    assert metrics["Projected_LCOE_Eur_kWh"] == pytest.approx(0.123)
+    assert metrics["Projected_LCOE_per_kWh"] == pytest.approx(0.123)
     assert metrics["Projected_CO2_Avoided_Total_kg"] == pytest.approx(21.0)
     assert metrics["Projected_CO2_Avoided_SelfConsumed_kg"] == pytest.approx(17.0)
     assert metrics["_yearly_summary_df"]["Battery_Cumulative_FEC"].tolist() == pytest.approx([10.0, 20.0])
@@ -162,7 +162,7 @@ def test_public_projected_design_evaluator_returns_plot_source_tables(monkeypatc
         "breos.optimization._evaluate_projected_design_metrics",
         lambda **_kwargs: {
             "Projected_Grid_Independence_%": 60.0,
-            "Projected_NPV_Eur": 100.0,
+            "Projected_NPV": 100.0,
             "_yearly_summary_df": yearly,
             "_cost_projection_df": financial,
         },
@@ -186,7 +186,7 @@ def test_public_projected_design_evaluator_returns_plot_source_tables(monkeypatc
 
     assert isinstance(result, ProjectedDesignResult)
     assert result.metrics["Modules"] == 9
-    assert result.metrics["Projected_NPV_Eur"] == pytest.approx(100.0)
+    assert result.metrics["Projected_NPV"] == pytest.approx(100.0)
     pd.testing.assert_frame_equal(result.yearly, yearly)
     pd.testing.assert_frame_equal(result.financial, financial)
 
@@ -353,7 +353,7 @@ class TestZeroModuleDesign:
         assert result.metrics["Modules"] == 0
         assert result.metrics["Projected_PV_Production_Year1_kWh"] == pytest.approx(0.0)
         assert result.metrics["Projected_PV_DC_Year1_kWh"] == pytest.approx(0.0)
-        assert np.isinf(result.metrics["Projected_LCOE_Eur_kWh"])
+        assert np.isinf(result.metrics["Projected_LCOE_per_kWh"])
         # A design that generates nothing cannot displace any import.
         assert result.metrics["Projected_Grid_Independence_%"] == pytest.approx(0.0)
         assert result.yearly["Import_kWh"].iloc[0] == pytest.approx(result.yearly["Load_kWh"].iloc[0], rel=1e-9)
@@ -376,7 +376,7 @@ class TestZeroModuleDesign:
             seen["inverter_ac_capacity_w"] = kwargs["inverter_ac_capacity_w"]
             return {
                 "Projected_Grid_Independence_%": 0.0,
-                "Projected_NPV_Eur": 0.0,
+                "Projected_NPV": 0.0,
                 "_yearly_summary_df": pd.DataFrame({"Year": [1]}),
                 "_cost_projection_df": pd.DataFrame({"Year": [1]}),
             }

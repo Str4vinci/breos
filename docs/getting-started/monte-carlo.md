@@ -75,7 +75,10 @@ matters most for wall-clock time.
 
 `monte_carlo_results.csv` holds one row per run. Alongside it, BREOS writes a
 provenance JSON recording the resolved settings and hashes of the inputs and
-outputs, which is what makes a published result auditable later.
+outputs, which is what makes a published result auditable later. It and the
+`--json` output carry `result_schema_version` and `currency`, the currency of
+every money column (see
+[Interpreting results](interpreting-results.md#currency-and-schema-version)).
 
 `--collect-yearly` adds a second CSV with one row per run and projection year,
 carrying the energy, degradation, and discounted-cost ledger. Cost envelopes and
@@ -86,7 +89,7 @@ distributions into `plots/`. `--json` prints a machine-readable summary to
 stdout for scripting.
 
 Each summary entry gives `count`, the number of runs its statistics cover, out
-of `n_runs`. `payback_year` and `payback_year_exact` are the sustained
+of `n_runs`. `payback_year` and `payback_year_interpolated` are the sustained
 discounted payback within the simulated period, as a whole and as an
 interpolated fractional year: the time from which cumulative discounted savings
 stay zero or above to the horizon (see

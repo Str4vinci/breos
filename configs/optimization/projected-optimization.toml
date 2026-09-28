@@ -67,7 +67,7 @@ min_gen = 20
 n_skip = 0
 
 [constraints]
-budget_eur = 15000.0
+budget = 15000.0
 max_area_m2 = 25.0
 max_modules = 20
 max_battery_kwh = 30.0

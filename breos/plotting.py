@@ -14,7 +14,8 @@ from typing import List, Optional, Tuple
 import numpy as np
 import pandas as pd
 
-from breos.economics import find_payback_year, find_payback_year_exact
+from breos.economics import find_payback_year, find_payback_year_interpolated
+from breos.tariffs import DEFAULT_CURRENCY
 from breos.utils import format_years_months, local_datetime_index
 
 MONTH_LABELS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
@@ -30,6 +31,11 @@ try:
     HAS_MATPLOTLIB = True
 except ImportError:
     HAS_MATPLOTLIB = False
+
+
+def _currency(frame: pd.DataFrame) -> str:
+    """The currency a frame's money is in, for labels: ``attrs["currency"]``, else the default."""
+    return str(frame.attrs.get("currency", DEFAULT_CURRENCY))
 
 
 def _check_matplotlib():
@@ -421,7 +427,7 @@ def create_cost_plots(
         )
 
     ax.set_xlabel("Year")
-    ax.set_ylabel("Cumulative Cost (€)")
+    ax.set_ylabel(f"Cumulative Cost ({_currency(cost_projection)})")
     # ax.set_title('Cost Comparison: With vs Without PV System')
     ax.legend()
     ax.grid(True, alpha=0.3)
@@ -1115,11 +1121,11 @@ def plot_breakeven(cost_projection: pd.DataFrame, results_directory: str, scenar
     # Break-even with month precision, by the same interpolation Monte Carlo
     # and the optimizer report.
     savings = pd.DataFrame({"Year": years.to_numpy(), "Savings_Cumulative_NPV": no_sys.values - with_sys.values})
-    be_year_exact = find_payback_year_exact(savings, initial_investment=initial_investment)
+    be_year_interpolated = find_payback_year_interpolated(savings, initial_investment=initial_investment)
     be_text = "Not reached"
-    if be_year_exact is not None:
-        be_years = int(be_year_exact)
-        be_months = int((be_year_exact - be_years) * 12)
+    if be_year_interpolated is not None:
+        be_years = int(be_year_interpolated)
+        be_months = int((be_year_interpolated - be_years) * 12)
         be_text = f"{be_years} years {be_months} months"
 
     # =========================================================================
@@ -1131,27 +1137,27 @@ def plot_breakeven(cost_projection: pd.DataFrame, results_directory: str, scenar
     ax1.plot(years, with_sys, "g-", linewidth=2.5, marker="s", markersize=4, label=f"PV System{label_suffix}")
 
     # Mark break-even point
-    if be_year_exact is not None:
+    if be_year_interpolated is not None:
         # Interpolate the cost at break-even, from the year-0 investment when
         # the break-even falls inside the first year.
         curve_years, curve_cost = years.to_numpy(dtype=float), with_sys.to_numpy(dtype=float)
         if initial_investment is not None and curve_years[0] > 0.0:
             curve_years = np.concatenate(([0.0], curve_years))
             curve_cost = np.concatenate(([float(initial_investment)], curve_cost))
-        be_cost = np.interp(be_year_exact, curve_years, curve_cost)
-        ax1.axvline(x=be_year_exact, color="blue", linestyle="--", alpha=0.7, linewidth=1.5)
-        ax1.scatter([be_year_exact], [be_cost], s=120, c="blue", zorder=5, edgecolors="white", linewidth=2)
+        be_cost = np.interp(be_year_interpolated, curve_years, curve_cost)
+        ax1.axvline(x=be_year_interpolated, color="blue", linestyle="--", alpha=0.7, linewidth=1.5)
+        ax1.scatter([be_year_interpolated], [be_cost], s=120, c="blue", zorder=5, edgecolors="white", linewidth=2)
         ax1.annotate(
             f"Break-even\n{be_text}",
-            xy=(be_year_exact, be_cost),
-            xytext=(be_year_exact + 1.5, be_cost * 0.85),
+            xy=(be_year_interpolated, be_cost),
+            xytext=(be_year_interpolated + 1.5, be_cost * 0.85),
             fontsize=11,
             fontweight="bold",
             arrowprops=dict(arrowstyle="->", color="blue", lw=1.5),
         )
 
     ax1.set_xlabel("Year", fontsize=12)
-    ax1.set_ylabel("Cumulative Cost (€)", fontsize=12)
+    ax1.set_ylabel(f"Cumulative Cost ({_currency(cost_projection)})", fontsize=12)
     ax1.set_xticks(years)  # Show every year
     ax1.legend(loc="upper left", fontsize=11)
     ax1.grid(True, alpha=0.3)
@@ -1176,7 +1182,7 @@ def plot_breakeven(cost_projection: pd.DataFrame, results_directory: str, scenar
     ax2.bar(years, annual_savings, color=colors, alpha=0.8, edgecolor="black", linewidth=0.5)
     ax2.axhline(y=0, color="black", linestyle="-", linewidth=1)
     ax2.set_xlabel("Year", fontsize=12)
-    ax2.set_ylabel("Annual Savings (€)", fontsize=12)
+    ax2.set_ylabel(f"Annual Savings ({_currency(cost_projection)})", fontsize=12)
     ax2.set_xticks(years)  # Show every year
     ax2.grid(True, alpha=0.3, axis="y")
 
@@ -1495,7 +1501,7 @@ def _finite_numeric_series(df: pd.DataFrame, column: str) -> pd.Series:
 
 def _is_breos_montecarlo_summary(df: pd.DataFrame) -> bool:
     """Detect the one-row-per-run schema written by ``breos montecarlo``."""
-    return "npv_savings_eur" in df.columns and ("run" in df.columns or "payback_year" in df.columns)
+    return "npv_savings" in df.columns and ("run" in df.columns or "payback_year" in df.columns)
 
 
 def _plot_montecarlo_distribution(
@@ -1550,7 +1556,9 @@ def _plot_montecarlo_payback_summary(df: pd.DataFrame, results_directory: str, s
     total_runs = len(df)
     # The fractional year, which the distribution's 0.1-year bins and mean need;
     # older run tables carry only the integer year.
-    payback = _finite_numeric_series(df, "payback_year_exact" if "payback_year_exact" in df.columns else "payback_year")
+    payback = _finite_numeric_series(
+        df, "payback_year_interpolated" if "payback_year_interpolated" in df.columns else "payback_year"
+    )
     achieved_count = len(payback)
 
     if achieved_count:
@@ -1608,10 +1616,10 @@ def plot_montecarlo_simulation(
         plot_montecarlo_grid_independence_distribution(full_df, plots_folder, suffix)
         plot_montecarlo_final_soh_distribution(full_df, plots_folder, suffix)
         _plot_montecarlo_distribution(
-            _finite_numeric_series(full_df, "lcoe_eur_kwh"),
+            _finite_numeric_series(full_df, "lcoe_per_kwh"),
             plots_folder,
             "montecarlo_lcoe_distribution",
-            "LCOE (EUR/kWh)",
+            f"LCOE ({_currency(full_df)}/kWh)",
             "tab:purple",
             suffix,
         )
@@ -1647,10 +1655,10 @@ def plot_montecarlo_simulation(
         plot_montecarlo_grid_independence_distribution(df, plots_folder, suffix)
         plot_montecarlo_final_soh_distribution(df, plots_folder, suffix)
         _plot_montecarlo_distribution(
-            _finite_numeric_series(df, "lcoe_eur_kwh"),
+            _finite_numeric_series(df, "lcoe_per_kwh"),
             plots_folder,
             "montecarlo_lcoe_distribution",
-            "LCOE (EUR/kWh)",
+            f"LCOE ({_currency(df)}/kWh)",
             "tab:purple",
             suffix,
         )
@@ -1864,7 +1872,7 @@ def plot_montecarlo_cost_overlay(all_results_df: pd.DataFrame, results_directory
         ax.set_xticks(range(1, max_year + 1))
 
     ax.set_xlabel("Year", fontsize=12)
-    ax.set_ylabel("Cumulative Cost (EUR)", fontsize=12)
+    ax.set_ylabel(f"Cumulative Cost ({_currency(all_results_df)})", fontsize=12)
     # ax.set_title('Financial Projection Uncertainty', fontsize=14)
     ax.grid(True, alpha=0.3)
     ax.legend()
@@ -1918,17 +1926,17 @@ def plot_montecarlo_npv_distribution(all_results_df: pd.DataFrame, results_direc
     Histogram of NPV savings across all MC runs.
 
     Supports the one-row-per-run ``breos montecarlo`` CSV
-    (``npv_savings_eur``) and the legacy run-year schema where NPV savings is
+    (``npv_savings``) and the legacy run-year schema where NPV savings is
     derived from cumulative system and no-system costs.
     """
     _check_matplotlib()
 
-    if "npv_savings_eur" in all_results_df.columns:
+    if "npv_savings" in all_results_df.columns:
         _plot_montecarlo_distribution(
-            _finite_numeric_series(all_results_df, "npv_savings_eur"),
+            _finite_numeric_series(all_results_df, "npv_savings"),
             results_directory,
             "montecarlo_npv_distribution",
-            "NPV Savings (EUR)",
+            f"NPV Savings ({_currency(all_results_df)})",
             "tab:blue",
             suffix,
             include_zero=True,
@@ -1962,11 +1970,13 @@ def plot_montecarlo_npv_distribution(all_results_df: pd.DataFrame, results_direc
         (p99, "P99", ":", 1.0),
     ]
     for val, label, ls, lw in line_cfg:
-        ax.axvline(x=val, color="tab:red", linestyle=ls, linewidth=lw, label=f"{label}: {val:,.0f} EUR")
+        ax.axvline(
+            x=val, color="tab:red", linestyle=ls, linewidth=lw, label=f"{label}: {val:,.0f} {_currency(all_results_df)}"
+        )
 
     ax.axvline(x=0, color="black", linewidth=0.8, linestyle="-", alpha=0.5)
 
-    ax.set_xlabel(f"NPV Savings at Year {int(final_year)} (EUR)", fontsize=12)
+    ax.set_xlabel(f"NPV Savings at Year {int(final_year)} ({_currency(all_results_df)})", fontsize=12)
     ax.set_ylabel("Frequency", fontsize=12)
     ax.grid(True, alpha=0.3, axis="y")
     ax.legend()
@@ -2062,9 +2072,10 @@ def plot_tariff_comparison_manual(
     vals_nosys: List[float],
     results_dir: str,
     filename: str = "tariff_comparison_bar.png",
+    currency: str = DEFAULT_CURRENCY,
 ) -> None:
     """
-    Create a grouped bar chart comparing tariffs.
+    Create a grouped bar chart comparing tariffs; ``currency`` labels the values.
     """
     _check_matplotlib()
     import numpy as np
@@ -2084,7 +2095,7 @@ def plot_tariff_comparison_manual(
             x + width / 2, vals_sys, width, label="With System", color="steelblue", alpha=0.8, edgecolor="black"
         )
 
-        ax.set_ylabel("Net Electricity Cost (Year 1) [€]")
+        ax.set_ylabel(f"Net Electricity Cost (Year 1) [{currency}]")
         # ax.set_title('Tariff Comparison: No System vs With PV+Batt')
         ax.set_xticks(x)
         ax.set_xticklabels(regimes)
@@ -2096,7 +2107,7 @@ def plot_tariff_comparison_manual(
             for rect in rects:
                 height = rect.get_height()
                 ax.annotate(
-                    f"€{height:.0f}",
+                    f"{height:.0f} {currency}",
                     xy=(rect.get_x() + rect.get_width() / 2, height),
                     xytext=(0, 3),  # 3 points vertical offset
                     textcoords="offset points",
@@ -2126,7 +2137,8 @@ def plot_tariff_comparison(results_df: pd.DataFrame, results_directory: str, sce
     2. No System Cost (Pure Load) - if column exists
 
     Args:
-        results_df: DataFrame with 'Tariff', 'Net Cost (€)' and optional 'No System Cost (€)'
+        results_df: DataFrame with 'Tariff', 'Net Cost' and optional 'No System Cost', in
+            ``attrs["currency"]`` (EUR when absent)
         results_directory: Directory to save plots
         scenario_name: Optional suffix for filenames
     """
@@ -2156,7 +2168,7 @@ def plot_tariff_comparison(results_df: pd.DataFrame, results_directory: str, sce
         # Add value labels (rounded to cents)
         for bar, val in zip(bars, values, strict=True):
             height = bar.get_height()
-            label_text = f"€{val:.2f}"
+            label_text = f"{val:.2f} {_currency(results_df)}"
 
             # Make the lowest cost bold
             # fontweight = 'bold' if val == min_val else 'normal'
@@ -2173,7 +2185,7 @@ def plot_tariff_comparison(results_df: pd.DataFrame, results_directory: str, sce
                 fontsize=10,
             )
 
-        ax.set_ylabel(f"{title_metric} (€)")
+        ax.set_ylabel(f"{title_metric} ({_currency(results_df)})")
         # ax.set_title(f'Tariff Comparison: {title_metric}')
         ax.grid(True, alpha=0.3, axis="y")
 
@@ -2183,16 +2195,16 @@ def plot_tariff_comparison(results_df: pd.DataFrame, results_directory: str, sce
         plt.close()
 
     # Plot 1: Net Cost (With System) - Single Bar
-    if "Net Cost (€)" in results_df.columns:
-        _create_bar_plot("Net Cost (€)", "net_cost", "Net Annual Cost")
+    if "Net Cost" in results_df.columns:
+        _create_bar_plot("Net Cost", "net_cost", "Net Annual Cost")
 
     # Plot 2: Side-by-Side Comparison (No System vs With System)
-    if "No System Cost (€)" in results_df.columns and "Net Cost (€)" in results_df.columns:
+    if "No System Cost" in results_df.columns and "Net Cost" in results_df.columns:
         fig, ax = plt.subplots(figsize=(14, 7))
 
         tariffs = results_df["Tariff"]
-        no_sys = results_df["No System Cost (€)"]
-        with_sys = results_df["Net Cost (€)"]
+        no_sys = results_df["No System Cost"]
+        with_sys = results_df["Net Cost"]
 
         x = np.arange(len(tariffs))
         width = 0.35
@@ -2232,7 +2244,7 @@ def plot_tariff_comparison(results_df: pd.DataFrame, results_directory: str, sce
             for rect in rects:
                 height = rect.get_height()
                 ax.annotate(
-                    f"€{height:.0f}",
+                    f"{height:.0f} {_currency(results_df)}",
                     xy=(rect.get_x() + rect.get_width() / 2, height),
                     xytext=(0, 3),
                     textcoords="offset points",
@@ -2246,7 +2258,7 @@ def plot_tariff_comparison(results_df: pd.DataFrame, results_directory: str, sce
         autolabel(rects1, is_gray=True)
         autolabel(rects2, is_gray=False)
 
-        ax.set_ylabel("Annual Cost (€)")
+        ax.set_ylabel(f"Annual Cost ({_currency(results_df)})")
         # ax.set_title('Cost Savings Comparison')
         ax.set_xticks(x)
         ax.set_xticklabels(tariffs, rotation=15)
@@ -2484,16 +2496,17 @@ def plot_breakeven_comparison(
         max_year = max(max_year, int(df["Year"].max()))
 
         # Break-even dotted line
-        be = find_payback_year_exact(df)
+        be = find_payback_year_interpolated(df)
         if be is not None:
             ax.axvline(x=be, color=color, linestyle=":", alpha=0.5, linewidth=1)
             break_evens.append(be)
 
     ax.set_xlabel("Year")
-    ax.set_ylabel("Cumulative Cost (€)")
+    currency = _currency(cost_dfs[0]) if cost_dfs else DEFAULT_CURRENCY
+    ax.set_ylabel(f"Cumulative Cost ({currency})")
     ax.legend(loc="upper left")
     ax.grid(True, alpha=0.3)
-    ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, _: f"{x:,.0f}€"))
+    ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, _: f"{x:,.0f} {currency}"))
     ax.set_xticks(range(1, max_year + 1))
     ax.set_xlim(_breakeven_left_limit(break_evens), max_year + 0.5)
 
@@ -2533,10 +2546,11 @@ def plot_breakeven_two(
     ax.plot(df2["Year"], df2["Cost_System_Cumulative_NPV"], "g-", label=label2, linewidth=2)
 
     ax.set_xlabel("Year")
-    ax.set_ylabel("Cumulative Cost (€)")
+    currency = _currency(df1)
+    ax.set_ylabel(f"Cumulative Cost ({currency})")
     ax.legend(loc="upper left")
     ax.grid(True, alpha=0.3)
-    ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, _: f"{x:,.0f}€"))
+    ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, _: f"{x:,.0f} {currency}"))
 
     max_year = int(df1["Year"].max())
     ax.set_xticks(range(1, max_year + 1))
@@ -2682,7 +2696,7 @@ def plot_pareto_front_analysis(
 
     Args:
         df: Full results DataFrame with ``Consumption_kWh``, ``Tariff``,
-            ``Detailed_Strategy``, ``Net_Cost_Eur``, and
+            ``Detailed_Strategy``, ``Net_Cost``, and
             ``Grid_Independence_%`` columns.
         consumptions: List of consumption levels to plot (one subplot each).
         results_dir: Output directory.
@@ -2724,7 +2738,7 @@ def plot_pareto_front_analysis(
         if subset.empty:
             continue
 
-        mask = _is_pareto_efficient(subset["Net_Cost_Eur"].values, subset["Grid_Independence_%"].values)
+        mask = _is_pareto_efficient(subset["Net_Cost"].values, subset["Grid_Independence_%"].values)
         pareto_subset = subset[mask].copy()
         pareto_subset.to_csv(os.path.join(results_dir, f"pareto_front_{cons}.csv"), index=False)
 
@@ -2734,7 +2748,7 @@ def plot_pareto_front_analysis(
                 if m.any():
                     ax.scatter(
                         subset.loc[m, "Grid_Independence_%"],
-                        subset.loc[m, "Net_Cost_Eur"],
+                        subset.loc[m, "Net_Cost"],
                         c=color_map[tariff],
                         marker=marker_map[strategy],
                         alpha=0.2,
@@ -2747,7 +2761,7 @@ def plot_pareto_front_analysis(
                 if m.any():
                     ax.scatter(
                         pareto_subset.loc[m, "Grid_Independence_%"],
-                        pareto_subset.loc[m, "Net_Cost_Eur"],
+                        pareto_subset.loc[m, "Net_Cost"],
                         c=color_map[tariff],
                         marker=marker_map[strategy],
                         s=100,
@@ -2758,7 +2772,7 @@ def plot_pareto_front_analysis(
 
         ax.set_title(f"Pareto Front - {cons} kWh Annual Consumption")
         ax.set_xlabel("Grid Independence (%)")
-        ax.set_ylabel("Net Cost (€)")
+        ax.set_ylabel(f"Net Cost ({_currency(df)})")
         ax.grid(True, alpha=0.3)
 
     legend_elements = [Line2D([0], [0], marker="o", color="w", label="Tariffs:", markersize=0)]

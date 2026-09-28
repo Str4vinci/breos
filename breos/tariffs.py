@@ -31,6 +31,8 @@ import pandas as pd
 from breos.resources import load_config_json
 
 SUPPORTED_CURRENCIES = frozenset({"EUR"})
+# The bundled cost catalogue's currency, and the currency of a run without a tariff.
+DEFAULT_CURRENCY = "EUR"
 BOUNDARY_POLICIES = frozenset({"strict"})
 SCHEDULE_CYCLES = frozenset({"flat", "daily", "weekly", "custom"})
 
@@ -737,7 +739,7 @@ def resolve_flat_tariff(
     import_price_per_kwh: float,
     export_price_per_kwh: float,
     fixed_charge_per_day: float = 0.0,
-    currency: str = "EUR",
+    currency: str = DEFAULT_CURRENCY,
 ) -> ResolvedTariff:
     """Resolve one import and one export price for every step, as the flat path prices energy."""
     prices = TariffPrices(
@@ -774,6 +776,11 @@ class TariffSpec:
             study_date=self.study_date,
             boundary_policy=self.boundary_policy,
         )
+
+
+def result_currency(tariff: TariffSpec | ResolvedTariff | None) -> str:
+    """The currency a run's money is in: its tariff's, or the cost catalogue's without one."""
+    return tariff.prices.currency if tariff is not None else DEFAULT_CURRENCY
 
 
 def tariff_provenance(resolved: ResolvedTariff, *, calendar_year: int) -> dict[str, Any]:
