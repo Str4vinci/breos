@@ -248,6 +248,22 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 - The DST-day tariff test builds each civil day up to the next local
   midnight, so it passes on pandas 2.x too, where `pd.offsets.Day` is a fixed
   24 hours; the `floors` CI job failed on it. Test only.
+- The greedy dispatch step is written once for both execution backends
+  ([#177](https://github.com/Str4vinci/breos/issues/177)). The step, the day
+  loop, the capacity window and the ledger layout live in `breos._dispatch`
+  as plain scalar code; the Python backend calls it and the Numba backend
+  compiles the same functions, instead of a hand-kept copy in
+  `breos._numba_dispatch_kernels`. The inverter conversion has one scalar
+  core behind `calculate_dc_ac_power` and `dc_power_for_ac_output`, and the
+  unused no-battery branch of the day loop is gone (PV-only runs take the
+  vectorised path). `lfp_capacity_factor` and `compute_cell_temperature`
+  stay importable from `breos.battery`. Results are unchanged on both
+  backends: the App golden baseline and Monte Carlo runs match develop bit
+  for bit. A warm hourly battery year takes about 30% less time on the
+  Python backend (80 to 56 ms on the parity harness) and about 15% less on
+  Numba (13.0 to 11.1 ms), the latter because the aging step now reads
+  timestamps from one precomputed tick array instead of slicing the
+  `DatetimeIndex` every day.
 
 ### Fixed
 - Fixed-design evaluation and multi-objective optimization now validate and

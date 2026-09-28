@@ -16,6 +16,16 @@ import numpy as np
 import pandas as pd
 import rainflow
 
+from breos._dispatch import (  # noqa: F401  -- the dispatch step moved; its names stay importable here
+    _LEDGER_COLUMNS,
+    _LEDGER_ROW0,
+    _N_ROWS,
+    _STATE_ROW_INDEX,
+    _STATE_ROWS,
+    _dispatch_day_python,
+    compute_cell_temperature,
+    lfp_capacity_factor,
+)
 from breos.constants import (
     A_Q,
     A_R,
@@ -35,8 +45,6 @@ from breos.constants import (
     LAM_EXPONENT_B,
     LAM_K0_FRAC,
     LAM_SOC_EXPONENT_N,
-    LFP_CAP_DERATE_PER_C_COLD,
-    LFP_CAP_DERATE_PER_C_MODERATE,
     NAUMANN_EA_J_MOL,
     NAUMANN_EA_R_J_MOL,
     NAUMANN_EXPONENT_B,
@@ -74,7 +82,7 @@ from breos.execution import (  # noqa: F401  -- EXECUTION_BACKENDS re-exported
     is_pv_only_dispatch,
     validate_execution_backend,
 )
-from breos.inverter import _calculate_dc_ac_power_arrays, calculate_dc_ac_power, dc_power_for_ac_output
+from breos.inverter import _calculate_dc_ac_power_arrays
 from breos.utils import _datetime_index_ticks, get_hours_per_step, remap_datetime_index_years
 
 SUPPORTED_BATTERY_TYPES: tuple[str, ...] = ("lfp",)
@@ -261,155 +269,6 @@ class BatteryConfig:
         if self.power_limit_c_rate is None:
             return None
         return self.power_limit_c_rate * self.nominal_energy_wh
-
-
-def _dispatch_dc_step(
-    pv_dc: float,
-    load: float,
-    battery_energy: float,
-    emin: float,
-    emax: float,
-    eff_charge: float,
-    eff_discharge: float,
-    inv_eff: float,
-    cap_charge_in_wh: float,
-    cap_discharge_ac_wh: float,
-    inv_cap_ac_wh: float,
-    has_battery: bool,
-    ac_output_scale: float = 1.0,
-    cap_stored_wh: float = math.inf,
-) -> Tuple[float, Dict[str, float]]:
-    """Dispatch one DC-coupled timestep; inputs, outputs and ledger are Wh.
-
-    PV serves AC load first. Surplus DC then charges the battery before any
-    export. PV and battery discharge share the inverter AC nameplate.
-    ``cap_stored_wh`` limits the stored energy gained or released, on top of
-    the DC charge-input and AC discharge limits.
-    """
-    ledger = {
-        "pv_dc_to_battery": 0.0,
-        "pv_dc_to_inverter": 0.0,
-        "pv_dc_curtailed": 0.0,
-        "pv_ac_to_load": 0.0,
-        "pv_ac_export": 0.0,
-        "battery_charge_input": 0.0,
-        "battery_discharge_dc": 0.0,
-        "battery_ac_to_load": 0.0,
-        "battery_charge_loss": 0.0,
-        "battery_discharge_loss": 0.0,
-        "pv_direct_inverter_loss": 0.0,
-        "battery_inverter_loss": 0.0,
-        "grid_import": 0.0,
-    }
-    pv_conversion = calculate_dc_ac_power(pv_dc, inv_cap_ac_wh, inv_eff, ac_output_scale)
-    pv_ac_max = pv_conversion.ac_power_w
-
-    def charge(surplus_dc: float) -> float:
-        nonlocal battery_energy
-        room = max(0.0, emax - battery_energy)
-        if room <= 0.0 or eff_charge <= 0.0:
-            return 0.0
-        drawn = min(surplus_dc, room / eff_charge, cap_charge_in_wh, cap_stored_wh / eff_charge)
-        battery_energy += drawn * eff_charge
-        ledger["pv_dc_to_battery"] = drawn
-        ledger["battery_charge_input"] = drawn
-        ledger["battery_charge_loss"] = drawn * (1.0 - eff_charge)
-        return drawn
-
-    if has_battery and pv_ac_max >= load:
-        ledger["pv_ac_to_load"] = load
-        dc_to_load = dc_power_for_ac_output(load, inv_cap_ac_wh, inv_eff, ac_output_scale)
-        surplus_dc = max(0.0, pv_dc - dc_to_load)
-        drawn = charge(surplus_dc)
-        remaining_dc = surplus_dc - drawn
-        direct_conversion = calculate_dc_ac_power(dc_to_load + remaining_dc, inv_cap_ac_wh, inv_eff, ac_output_scale)
-        export_ac = max(0.0, direct_conversion.ac_power_w - load)
-        dc_export = max(0.0, dc_to_load + remaining_dc - direct_conversion.clipping_loss_dc_w - dc_to_load)
-        ledger["pv_ac_export"] = export_ac
-        ledger["pv_dc_to_inverter"] = dc_to_load + dc_export
-        ledger["pv_dc_curtailed"] = direct_conversion.clipping_loss_dc_w
-        ledger["pv_direct_inverter_loss"] = direct_conversion.conversion_loss_w
-    elif has_battery:
-        ledger["pv_ac_to_load"] = pv_ac_max
-        dc_to_inverter = pv_dc - pv_conversion.clipping_loss_dc_w
-        ledger["pv_dc_to_inverter"] = dc_to_inverter
-        ledger["pv_direct_inverter_loss"] = pv_conversion.conversion_loss_w
-        excess_dc = pv_conversion.clipping_loss_dc_w
-        deficit = load - pv_ac_max
-        if excess_dc > 1e-12:
-            # The inverter is saturated by PV. DC above its immediate AC
-            # headroom may charge, but battery discharge has no AC headroom.
-            drawn = charge(excess_dc)
-            ledger["pv_dc_curtailed"] = excess_dc - drawn
-            ledger["grid_import"] = deficit
-        else:
-            available = max(0.0, battery_energy - emin)
-            # AC correction is applied after the inverter curve and nameplate
-            # limit, so the reachable AC ceiling is the scaled nameplate, which
-            # the (0, 1] bound keeps at or below the nameplate itself.
-            target_total_ac = min(load, inv_cap_ac_wh * ac_output_scale)
-            if available > 0.0 and eff_discharge > 0.0 and target_total_ac > pv_ac_max:
-                total_dc_target = dc_power_for_ac_output(target_total_ac, inv_cap_ac_wh, inv_eff, ac_output_scale)
-                battery_dc = min(
-                    available * eff_discharge,
-                    max(0.0, total_dc_target - pv_dc),
-                    cap_stored_wh * eff_discharge,
-                )
-
-                def combined_conversion(battery_dc_input: float) -> tuple[float, float, float]:
-                    total_dc = pv_dc + battery_dc_input
-                    conversion = calculate_dc_ac_power(total_dc, inv_cap_ac_wh, inv_eff, ac_output_scale)
-                    if total_dc <= 0.0:
-                        return 0.0, 0.0, 0.0
-                    battery_ac = conversion.ac_power_w * battery_dc_input / total_dc
-                    pv_ac = conversion.ac_power_w - battery_ac
-                    return pv_ac, battery_ac, conversion.conversion_loss_w
-
-                # The public discharge limit is AC delivered. If it binds,
-                # solve for the battery DC contribution at the one shared
-                # inverter operating point rather than applying a second
-                # independent part-load curve.
-                if math.isfinite(cap_discharge_ac_wh):
-                    _, unconstrained_battery_ac, _ = combined_conversion(battery_dc)
-                    if unconstrained_battery_ac > cap_discharge_ac_wh:
-                        lower = 0.0
-                        upper = battery_dc
-                        for _ in range(40):
-                            midpoint = (lower + upper) / 2.0
-                            _, midpoint_battery_ac, _ = combined_conversion(midpoint)
-                            if midpoint_battery_ac < cap_discharge_ac_wh:
-                                lower = midpoint
-                            else:
-                                upper = midpoint
-                        battery_dc = upper
-
-                pv_delivered_ac, delivered_ac, total_inverter_loss = combined_conversion(battery_dc)
-                draw = battery_dc / eff_discharge
-                battery_energy -= draw
-                total_inverter_dc = pv_dc + battery_dc
-                battery_inverter_loss = (
-                    total_inverter_loss * battery_dc / total_inverter_dc if total_inverter_dc > 0.0 else 0.0
-                )
-                ledger["battery_discharge_dc"] = draw
-                ledger["battery_ac_to_load"] = delivered_ac
-                ledger["battery_discharge_loss"] = draw - battery_dc
-                ledger["battery_inverter_loss"] = battery_inverter_loss
-                ledger["pv_ac_to_load"] = pv_delivered_ac
-                ledger["pv_direct_inverter_loss"] = total_inverter_loss - battery_inverter_loss
-                ledger["grid_import"] = max(0.0, load - pv_delivered_ac - delivered_ac)
-            else:
-                ledger["grid_import"] = deficit
-    else:
-        usable_ac = pv_ac_max
-        ledger["pv_ac_to_load"] = min(usable_ac, load)
-        ledger["pv_ac_export"] = usable_ac - ledger["pv_ac_to_load"]
-        dc_to_inverter = pv_dc - pv_conversion.clipping_loss_dc_w
-        ledger["pv_dc_to_inverter"] = dc_to_inverter
-        ledger["pv_dc_curtailed"] = pv_conversion.clipping_loss_dc_w
-        ledger["pv_direct_inverter_loss"] = pv_conversion.conversion_loss_w
-        ledger["grid_import"] = max(0.0, load - ledger["pv_ac_to_load"])
-
-    return battery_energy, ledger
 
 
 def _require_complete_series(values: pd.Series, name: str) -> None:
@@ -843,53 +702,6 @@ def _native_degradation_kwargs(calendar_model: str) -> Dict[str, float]:
     }
 
 
-def _apply_capacity_window(
-    nominal_energy_wh: float,
-    soh_fraction: float,
-    max_soc: float,
-    min_soc: float,
-    standby_loss_wh: float,
-    energy_wh: float,
-    pv_origin_wh: float,
-    t_cell: float,
-) -> Tuple[float, float, float, float, float, float]:
-    """Derate the usable SOC window and bleed standby loss, before dispatch.
-
-    Returns ``(energy, pv_origin, emin, emax, capacity_window_loss, standby)``,
-    all in Wh. Assumes a configured battery; the no-battery case never calls
-    this. ``standby_loss_wh`` is already scaled to the timestep.
-
-    ``t_cell`` here is the ambient/indoor temperature at step start, not the
-    self-heated cell temperature the thermal model produces later in the same
-    step: usable capacity is set by the pack's state *before* this step's
-    charge/discharge self-heating, while aging sees the warmed cell. That
-    split is intentional.
-
-    A temperature- or SOH-driven fall in ``emax`` is booked as an explicit
-    loss — it is neither export nor standby consumption — and the lower
-    reserve is a dispatch boundary that must never create energy when it
-    rises. The PV-origin share is rescaled with every reduction so it stays a
-    fraction of what is actually stored.
-    """
-    usable_cap = nominal_energy_wh * soh_fraction
-    f_cap = lfp_capacity_factor(t_cell)
-    emax = usable_cap * max_soc * f_cap
-    emin = usable_cap * min_soc * f_cap
-
-    capacity_window_loss = max(0.0, energy_wh - emax)
-    if capacity_window_loss > 0.0 and energy_wh > 0.0:
-        pv_origin_wh *= emax / energy_wh
-        energy_wh = emax
-
-    removable_for_standby = max(0.0, energy_wh - emin)
-    standby = min(standby_loss_wh, removable_for_standby)
-    if standby > 0.0 and energy_wh > 0.0:
-        pv_origin_wh *= (energy_wh - standby) / energy_wh
-        energy_wh -= standby
-
-    return energy_wh, pv_origin_wh, emin, emax, capacity_window_loss, standby
-
-
 def _step_energy_cap(power_w: Optional[float], hours_per_step: float) -> float:
     """Convert a nameplate power limit (W) to a per-step energy cap (Wh).
 
@@ -897,61 +709,6 @@ def _step_energy_cap(power_w: Optional[float], hours_per_step: float) -> float:
     cap rather than as a separate branch.
     """
     return power_w * hours_per_step if power_w is not None else float("inf")
-
-
-# Explicit per-step energy flows and losses, in the column order they appear
-# in the results frame. Every entry is accumulated in Wh during the loop and
-# divided by the step length on write, so the frame reports average W.
-_LEDGER_COLUMNS: Tuple[str, ...] = (
-    "PV_DC_To_Battery",
-    "PV_DC_To_Inverter",
-    "PV_DC_Curtailed",
-    "PV_AC_To_Load",
-    "PV_AC_Export",
-    "Battery_Charge_Input",
-    "Battery_Charge_Stored",
-    "Battery_Discharge_DC",
-    "Battery_AC_To_Load",
-    "Battery_AC_To_Load_PV",
-    "PV_Origin_Battery_AC_To_Load",
-    "PV_Direct_Inverter_Loss",
-    "Battery_Inverter_Loss",
-    "Inverter_Loss",
-    "Standby_Loss",
-    "Capacity_Window_Loss",
-    "Battery_Replacement_Energy_Removed",
-    "Battery_Replacement_Energy_Added",
-    "Battery_Energy_Delta",
-)
-
-# Per-step state columns, in their row order inside the shared buffer matrix.
-# The ledger columns occupy the rows immediately after them. The compiled
-# dispatch kernel addresses rows by these indices, so the order is part of the
-# kernel contract and must not be reordered without updating it.
-_STATE_ROWS: Tuple[str, ...] = (
-    "pv_dc",
-    "pv_production",
-    "load",
-    "pv_delta",
-    "grid_import",
-    "grid_export",
-    "battery_energy",
-    "soc_normalized",
-    "soc_absolute",
-    "soh",
-    "t_cell",
-    "pv_curtailment",
-    "charge_loss",
-    "discharge_loss",
-    "standby_loss",
-    "battery_energy_begin",
-    "pv_origin_begin",
-    "pv_origin_end",
-)
-_STATE_ROW_INDEX: Dict[str, int] = {name: row for row, name in enumerate(_STATE_ROWS)}
-_LEDGER_ROW0: int = len(_STATE_ROWS)
-_LEDGER_ROW_INDEX: Dict[str, int] = {name: _LEDGER_ROW0 + offset for offset, name in enumerate(_LEDGER_COLUMNS)}
-_N_ROWS: int = _LEDGER_ROW0 + len(_LEDGER_COLUMNS)
 
 
 class _ResultBuffers:
@@ -1260,195 +1017,6 @@ def _apply_battery_replacement(
     return battery_energy_wh, 0.0, battery_config.max_soc
 
 
-def _dispatch_day_python(
-    out: "_ResultBuffers",
-    _pv_dc_vals: np.ndarray,
-    _load_vals: np.ndarray,
-    _temp_vals: np.ndarray,
-    lo: int,
-    hi: int,
-    *,
-    battery_config: BatteryConfig,
-    has_battery: bool,
-    battery_soh_decimal: float,
-    Battery_SOH: float,
-    Battery_Energy_Wh: float,
-    Battery_PV_Origin_Energy_Wh: float,
-    eff_charge: float,
-    eff_discharge: float,
-    hours_per_step: float,
-    standby_loss_per_step_wh: float,
-    cap_wh: float,
-    cap_charge_wh: float,
-    cap_discharge_wh: float,
-    cap_stored_wh: float = math.inf,
-) -> Tuple[float, float, float, float]:
-    """Dispatch timesteps ``[lo, hi)`` at fixed health, filling *out* in place.
-
-    This is the reference per-step loop, lifted out of the year loop so that a
-    whole day can be handed to one call. State of health, resistance-derived
-    efficiencies and the replacement decision are unchanged for the duration
-    of the call; the caller advances them at the day boundary.
-
-    Returns ``(battery_energy, pv_origin, t_cell_day_sum, battery_energy_beginning)``,
-    where the last value is the beginning-of-step stored energy of the final
-    step in the window, which the day-close replacement path needs.
-    """
-    _ledger_arrays = out.ledger
-    T_cell_day_sum = 0.0
-    battery_energy_beginning = 0.0
-    for i in range(lo, hi):
-        # Get values for this timestep via fast array indexing
-        # Treat negative model/data artefacts as zero generation, matching the
-        # public inverter helper and preventing negative PV from being
-        # allocated through the shared PV/battery conversion path.
-        pv_dc_power = max(0.0, _pv_dc_vals[i] * hours_per_step)  # DC power (Wh) before inverter
-        load = _load_vals[i] * hours_per_step  # AC Load in Wh
-        T_ambient = _temp_vals[i]
-        T_cell = T_ambient  # default; overridden by thermal model below
-
-        battery_energy_beginning = Battery_Energy_Wh if has_battery else 0.0
-        pv_origin_beginning = Battery_PV_Origin_Energy_Wh if has_battery else 0.0
-        capacity_window_loss = 0.0
-        battery_standby_loss = 0.0
-
-        if has_battery:
-            (
-                Battery_Energy_Wh,
-                Battery_PV_Origin_Energy_Wh,
-                Emin,
-                Emax,
-                capacity_window_loss,
-                battery_standby_loss,
-            ) = _apply_capacity_window(
-                battery_config.nominal_energy_wh,
-                battery_soh_decimal,
-                battery_config.max_soc,
-                battery_config.min_soc,
-                standby_loss_per_step_wh,
-                Battery_Energy_Wh,
-                Battery_PV_Origin_Energy_Wh,
-                T_cell,
-            )
-        else:
-            Emax = 0.0
-            Emin = 0.0
-
-        energy_before_dispatch = Battery_Energy_Wh
-        origin_before_dispatch = Battery_PV_Origin_Energy_Wh
-        origin_fraction = (
-            min(1.0, max(0.0, origin_before_dispatch / energy_before_dispatch)) if energy_before_dispatch > 0.0 else 0.0
-        )
-        Battery_Energy_Wh, ledger = _dispatch_dc_step(
-            pv_dc_power,
-            load,
-            Battery_Energy_Wh,
-            Emin,
-            Emax,
-            eff_charge,
-            eff_discharge,
-            battery_config.inverter_efficiency,
-            cap_charge_wh,
-            cap_discharge_wh,
-            cap_wh,
-            has_battery,
-            battery_config.ac_output_scale,
-            cap_stored_wh,
-        )
-        charge_stored = ledger["battery_charge_input"] * eff_charge
-        pv_origin_discharge_dc = ledger["battery_discharge_dc"] * origin_fraction
-        pv_origin_battery_ac = ledger["battery_ac_to_load"] * origin_fraction
-        Battery_PV_Origin_Energy_Wh = max(
-            0.0,
-            origin_before_dispatch - pv_origin_discharge_dc + charge_stored,
-        )
-        Battery_PV_Origin_Energy_Wh = min(Battery_PV_Origin_Energy_Wh, Battery_Energy_Wh)
-
-        Import = ledger["grid_import"]
-        Sell = ledger["pv_ac_export"]
-        charge_in = ledger["battery_charge_input"]
-        discharge_out = ledger["battery_discharge_dc"]
-        pv_curtailment = ledger["pv_dc_curtailed"]
-        battery_charge_loss = ledger["battery_charge_loss"]
-        battery_discharge_loss = ledger["battery_discharge_loss"]
-        # PV output after clipping and the direct PV inverter loss: AC to load
-        # and export plus DC to the battery, with or without an inverter rating.
-        pv_production = pv_dc_power - pv_curtailment - ledger["pv_direct_inverter_loss"]
-        battery_energy_delta = Battery_Energy_Wh - battery_energy_beginning
-
-        # Compute cell temperature via lumped thermal model
-        if has_battery and battery_config.thermal_resistance_kw > 0:
-            # charge_in and discharge_out are in Wh; convert to W for thermal calc
-            charge_power_w = charge_in / hours_per_step if hours_per_step > 0 else 0.0
-            discharge_power_w = discharge_out / hours_per_step if hours_per_step > 0 else 0.0
-            T_cell = compute_cell_temperature(
-                T_ambient,
-                charge_power_w,
-                discharge_power_w,
-                eff_charge,
-                eff_discharge,
-                battery_config.thermal_resistance_kw,
-            )
-        T_cell_day_sum += T_cell
-
-        # SOC calculations (handle no-battery case)
-        if has_battery:
-            soc_normalized = (Battery_Energy_Wh - Emin) / (Emax - Emin) if (Emax - Emin) > 0 else 0.0
-            soc_normalized = max(0.0, min(1.0, soc_normalized))
-            soc_absolute = (
-                Battery_Energy_Wh / (battery_config.nominal_energy_wh * battery_soh_decimal)
-                if battery_soh_decimal > 0
-                else 0.0
-            )
-            soc_absolute = max(0.0, min(1.0, soc_absolute))
-        else:
-            soc_normalized = 0.0
-            soc_absolute = 0.0
-        # Store results via array indexing (avoids per-timestep dict overhead)
-        out.pv_dc[i] = pv_dc_power / hours_per_step
-        out.pv_production[i] = pv_production / hours_per_step
-        out.load[i] = load / hours_per_step
-        out.pv_delta[i] = (pv_production - load) / hours_per_step
-        out.grid_import[i] = Import / hours_per_step
-        out.grid_export[i] = Sell / hours_per_step
-        out.battery_energy[i] = Battery_Energy_Wh if has_battery else 0.0
-        out.soc_normalized[i] = soc_normalized
-        out.soc_absolute[i] = soc_absolute
-        out.soh[i] = Battery_SOH if has_battery else 100.0
-        out.t_cell[i] = T_cell
-        out.pv_curtailment[i] = pv_curtailment / hours_per_step
-        out.charge_loss[i] = battery_charge_loss / hours_per_step
-        out.discharge_loss[i] = battery_discharge_loss / hours_per_step
-        out.standby_loss[i] = battery_standby_loss / hours_per_step
-        out.battery_energy_begin[i] = battery_energy_beginning
-        out.pv_origin_begin[i] = pv_origin_beginning
-        out.pv_origin_end[i] = Battery_PV_Origin_Energy_Wh
-        ledger_w = {
-            "PV_DC_To_Battery": ledger["pv_dc_to_battery"],
-            "PV_DC_To_Inverter": ledger["pv_dc_to_inverter"],
-            "PV_DC_Curtailed": ledger["pv_dc_curtailed"],
-            "PV_AC_To_Load": ledger["pv_ac_to_load"],
-            "PV_AC_Export": ledger["pv_ac_export"],
-            "Battery_Charge_Input": ledger["battery_charge_input"],
-            "Battery_Charge_Stored": charge_stored,
-            "Battery_Discharge_DC": ledger["battery_discharge_dc"],
-            "Battery_AC_To_Load": ledger["battery_ac_to_load"],
-            "Battery_AC_To_Load_PV": pv_origin_battery_ac,
-            "PV_Origin_Battery_AC_To_Load": pv_origin_battery_ac,
-            "PV_Direct_Inverter_Loss": ledger["pv_direct_inverter_loss"],
-            "Battery_Inverter_Loss": ledger["battery_inverter_loss"],
-            "Inverter_Loss": ledger["pv_direct_inverter_loss"] + ledger["battery_inverter_loss"],
-            "Standby_Loss": battery_standby_loss,
-            "Capacity_Window_Loss": capacity_window_loss,
-            "Battery_Replacement_Energy_Removed": 0.0,
-            "Battery_Replacement_Energy_Added": 0.0,
-            "Battery_Energy_Delta": battery_energy_delta,
-        }
-        for key, value_wh in ledger_w.items():
-            _ledger_arrays[key][i] = value_wh / hours_per_step
-    return Battery_Energy_Wh, Battery_PV_Origin_Energy_Wh, T_cell_day_sum, battery_energy_beginning
-
-
 def _dispatch_no_battery_vectorized(
     out: Union["_ResultBuffers", "_PvOnlySummaryBuffers"],
     pv_dc_values: np.ndarray,
@@ -1518,7 +1086,8 @@ def _apply_daily_degradation(
     *,
     step_index: int,
     step_time: pd.Timestamp,
-    day_index: pd.DatetimeIndex,
+    time_ticks: np.ndarray,
+    ticks_per_second: float,
     soc_absolute_day: np.ndarray,
     t_cell_day: np.ndarray,
     finalize_cycles: bool,
@@ -1540,7 +1109,6 @@ def _apply_daily_degradation(
     boundary; a replacement moves that endpoint to the fresh pack's
     max SOC, since the recorded state was rewritten to match.
     """
-    time_ticks, ticks_per_second = _datetime_index_ticks(day_index)
     period_steps = len(soc_absolute_day)
     period_seconds = period_steps * hours_per_step * 3600.0
     dt_days = period_seconds / 86400.0
@@ -2150,15 +1718,13 @@ def _simulate_core(
     # for the whole window and advanced here, between windows, so every
     # scientifically sensitive transition stays on this path regardless of
     # which backend ran the arithmetic inside the window.
+    # Slicing the DatetimeIndex once per day was a measurable share of a
+    # compiled year, so the aging model gets views of one tick array instead.
+    time_ticks, ticks_per_second = _datetime_index_ticks(rng)
     window_start = 0
     while window_start < n_steps:
         window_end = min(window_start + steps_per_day, n_steps)
-        (
-            Battery_Energy_Wh,
-            Battery_PV_Origin_Energy_Wh,
-            _,
-            battery_energy_beginning,
-        ) = dispatch_day(
+        Battery_Energy_Wh, Battery_PV_Origin_Energy_Wh, battery_energy_beginning = dispatch_day(
             out,
             _pv_dc_vals,
             _load_vals,
@@ -2166,7 +1732,6 @@ def _simulate_core(
             window_start,
             window_end,
             battery_config=battery_config,
-            has_battery=has_battery,
             battery_soh_decimal=battery_soh_decimal,
             Battery_SOH=Battery_SOH,
             Battery_Energy_Wh=Battery_Energy_Wh,
@@ -2180,35 +1745,35 @@ def _simulate_core(
             cap_discharge_wh=cap_discharge_wh,
             cap_stored_wh=cap_stored_wh,
         )
-        if has_battery:
-            last_step = window_end - 1
-            Battery_Energy_Wh, Battery_PV_Origin_Energy_Wh = _apply_daily_degradation(
-                aging,
-                degradation_lifecycle,
-                battery_config,
-                out,
-                degradation_tracking,
-                step_index=last_step,
-                # Timestamps are read once per closed day rather than once per
-                # step; nothing inside the window depends on the calendar.
-                step_time=rng[last_step],
-                day_index=rng[window_start:window_end],
-                # Copied before the call so a replacement rewriting the closing
-                # step's recorded state cannot reach the day the aging model saw.
-                soc_absolute_day=out.soc_absolute[window_start:window_end].copy(),
-                t_cell_day=out.t_cell[window_start:window_end].copy(),
-                finalize_cycles=finalize_degradation and window_end == n_steps,
-                hours_per_step=hours_per_step,
-                battery_energy_wh=Battery_Energy_Wh,
-                pv_origin_energy_wh=Battery_PV_Origin_Energy_Wh,
-                battery_energy_beginning=battery_energy_beginning,
-                debug=debug,
-            )
-            # Refresh the loop's hot copies of the daily-boundary state.
-            battery_soh_decimal = aging.soh_fraction
-            Battery_SOH = aging.soh_percent
-            eff_charge = aging.eff_charge
-            eff_discharge = aging.eff_discharge
+        last_step = window_end - 1
+        Battery_Energy_Wh, Battery_PV_Origin_Energy_Wh = _apply_daily_degradation(
+            aging,
+            degradation_lifecycle,
+            battery_config,
+            out,
+            degradation_tracking,
+            step_index=last_step,
+            # Timestamps are read once per closed day rather than once per
+            # step; nothing inside the window depends on the calendar.
+            step_time=rng[last_step],
+            time_ticks=time_ticks[window_start:window_end],
+            ticks_per_second=ticks_per_second,
+            # Copied before the call so a replacement rewriting the closing
+            # step's recorded state cannot reach the day the aging model saw.
+            soc_absolute_day=out.soc_absolute[window_start:window_end].copy(),
+            t_cell_day=out.t_cell[window_start:window_end].copy(),
+            finalize_cycles=finalize_degradation and window_end == n_steps,
+            hours_per_step=hours_per_step,
+            battery_energy_wh=Battery_Energy_Wh,
+            pv_origin_energy_wh=Battery_PV_Origin_Energy_Wh,
+            battery_energy_beginning=battery_energy_beginning,
+            debug=debug,
+        )
+        # Refresh the loop's hot copies of the daily-boundary state.
+        battery_soh_decimal = aging.soh_fraction
+        Battery_SOH = aging.soh_percent
+        eff_charge = aging.eff_charge
+        eff_discharge = aging.eff_discharge
         if window_end - window_start < steps_per_day:
             break
         window_start = window_end
@@ -2405,70 +1970,6 @@ def simulate_energy_balance_summary(
         aligned=aligned,
     )
     return _build_simulation_summary(core, return_degradation_state=return_degradation_state, weights=weights)
-
-
-def lfp_capacity_factor(T_C: float) -> float:
-    """
-    Temperature-dependent usable capacity factor for LFP batteries.
-
-    Returns a factor in [0.5, 1.0] relative to nominal capacity at 25°C.
-    Uses a piecewise-linear model calibrated to typical LFP characterisation data:
-      - ≥25°C: 1.0  (capacity doesn't increase meaningfully above reference)
-      - 0–25°C: linear derating at LFP_CAP_DERATE_PER_C_MODERATE per °C
-      - <0°C:   steeper derating at LFP_CAP_DERATE_PER_C_COLD per °C below 0
-
-    Args:
-        T_C: Battery temperature in °C
-
-    Returns:
-        Capacity factor (dimensionless, ≤ 1.0)
-    """
-    if T_C >= 25.0:
-        return 1.0
-    elif T_C >= 0.0:
-        return 1.0 - LFP_CAP_DERATE_PER_C_MODERATE * (25.0 - T_C)
-    else:
-        base_at_zero = 1.0 - LFP_CAP_DERATE_PER_C_MODERATE * 25.0  # ~0.95
-        return max(0.5, base_at_zero - LFP_CAP_DERATE_PER_C_COLD * abs(T_C))
-
-
-def compute_cell_temperature(
-    T_ambient_C: float,
-    charge_power_w: float,
-    discharge_power_w: float,
-    charge_eff: float,
-    discharge_eff: float,
-    thermal_resistance_kw: float = DEFAULT_THERMAL_RESISTANCE_KW,
-) -> float:
-    """
-    Compute battery cell temperature using a quasi-steady-state lumped thermal model.
-
-    Heat is generated by ohmic losses during charge and discharge. The cell
-    temperature rises above ambient proportional to heat dissipation and
-    thermal resistance of the enclosure.
-
-    Valid for hourly (or longer) timesteps where the battery thermal mass
-    reaches approximate equilibrium within each step.
-
-    Args:
-        T_ambient_C: Ambient temperature (C)
-        charge_power_w: Power flowing into the battery this step (W, DC side)
-        discharge_power_w: Power drawn from the battery this step (W, DC side)
-        charge_eff: Charge efficiency (0-1)
-        discharge_eff: Discharge efficiency (0-1)
-        thermal_resistance_kw: Thermal resistance in K/W
-
-    Returns:
-        Cell temperature (C)
-    """
-    # Heat from charging: fraction (1 - eta_charge) is lost as heat
-    P_loss_charge = charge_power_w * (1.0 - charge_eff)
-    # Heat from discharging: battery delivers more internally than reaches load
-    P_loss_discharge = discharge_power_w * (1.0 - discharge_eff)
-
-    P_loss_total = P_loss_charge + P_loss_discharge
-    T_cell = T_ambient_C + thermal_resistance_kw * P_loss_total
-    return T_cell
 
 
 def apply_indoor_temperature_model(

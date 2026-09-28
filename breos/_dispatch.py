@@ -1,0 +1,764 @@
+"""The within-day greedy dispatch, written once for both execution backends.
+
+Everything here is scalar code over floats and one output matrix: no dicts, no
+closures, no dataclasses. That is what lets :mod:`breos._numba_dispatch_kernels`
+compile these same functions when the optional Numba backend is selected,
+while the Python backend calls them as they stand. There is no second copy to
+keep in step, so the backends cannot drift apart.
+
+Operation order and branch structure are part of the contract: the target is a
+bit-identical result on both backends, and the compiled side is built with
+``fastmath=False`` so LLVM keeps the order written here.
+
+This module must not import Numba. ``import breos`` reaches it through
+:mod:`breos.battery`, and the Numba dependency is optional.
+"""
+
+from __future__ import annotations
+
+import math
+from typing import TYPE_CHECKING, Any, Dict, Tuple
+
+import numpy as np
+
+from breos.constants import DEFAULT_THERMAL_RESISTANCE_KW, LFP_CAP_DERATE_PER_C_COLD, LFP_CAP_DERATE_PER_C_MODERATE
+
+if TYPE_CHECKING:
+    from breos.battery import BatteryConfig
+
+# PVWatts part-load curve. The inverter cores live here, beside the day loop,
+# because Numba's cache is keyed on this file: an edit to them or to these
+# constants must invalidate the compiled kernel.
+PVWATTS_REFERENCE_EFFICIENCY = 0.9637
+PVWATTS_CURVE_QUADRATIC = -0.0162
+PVWATTS_CURVE_LINEAR = 0.9858
+PVWATTS_CURVE_CONSTANT = -0.0059
+
+
+def _dc_ac(
+    pv_dc_power: float,
+    inverter_ac_power: float,
+    inverter_efficiency: float,
+    ac_output_scale: float,
+    pow_two: float,
+) -> tuple[float, float, float]:
+    """Scalar core of :func:`calculate_dc_ac_power`: ``(ac, conversion_loss, clipping_dc)``.
+
+    Written without dataclasses or ``float()`` coercion so the Numba backend
+    compiles this same function.
+
+    ``pow_two`` carries the literal 2.0 in from a Python caller. CPython
+    evaluates ``zeta ** 2`` as a libm ``pow`` call, and for some inputs
+    glibc's ``pow`` differs by one ULP from the correctly rounded square.
+    With a constant exponent LLVM rewrites the call to ``zeta * zeta`` and
+    picks up that one ULP; keeping the exponent opaque until run time
+    forces the same libm call on both backends. This is load-bearing for bit
+    identity, not a stylistic choice.
+    """
+    pv_dc_power = max(0.0, pv_dc_power)
+    inverter_ac_power = max(0.0, inverter_ac_power)
+    inverter_efficiency = min(1.0, max(0.0, inverter_efficiency))
+    ac_output_scale = min(1.0, max(0.0, ac_output_scale))
+
+    if inverter_efficiency <= 0.0 or inverter_ac_power <= 0.0:
+        return 0.0, 0.0, pv_dc_power
+    if pv_dc_power <= 0.0:
+        return 0.0, 0.0, 0.0
+
+    # A lower-level BatteryConfig may intentionally omit the inverter
+    # nameplate. With no rated power there is no part-load ratio to evaluate,
+    # so retain the historical unbounded flat-efficiency behavior. App always
+    # supplies its sized finite AC rating.
+    if not math.isfinite(inverter_ac_power):
+        ac_power = pv_dc_power * inverter_efficiency * ac_output_scale
+        return ac_power, pv_dc_power - ac_power, 0.0
+
+    # PVWatts defines pdc0 as the DC input at which the inverter reaches its
+    # AC nameplate (pac0 = eta_inv_nom * pdc0). BREOS exposes the AC rating,
+    # so derive the matching pdc0 here. This is the single conversion path
+    # used by both the public solar helper and the App dispatch engine.
+    pdc0 = inverter_ac_power / inverter_efficiency
+    dc_used = min(pv_dc_power, pdc0)
+    zeta = dc_used / pdc0
+    ac_power = max(
+        0.0,
+        min(
+            dc_used,
+            inverter_ac_power,
+            (inverter_efficiency / PVWATTS_REFERENCE_EFFICIENCY)
+            * pdc0
+            * (
+                PVWATTS_CURVE_QUADRATIC * math.pow(zeta, pow_two) + PVWATTS_CURVE_LINEAR * zeta + PVWATTS_CURVE_CONSTANT
+            ),
+        ),
+    )
+    ac_power *= ac_output_scale
+    clipping_loss_dc = max(0.0, pv_dc_power - dc_used)
+    conversion_loss = max(0.0, dc_used - ac_power)
+    return ac_power, conversion_loss, clipping_loss_dc
+
+
+def _dc_for_ac(
+    ac_power_w: float,
+    inverter_ac_power: float,
+    inverter_efficiency: float,
+    ac_output_scale: float,
+) -> float:
+    """Scalar core of :func:`dc_power_for_ac_output`, compiled as-is by the Numba backend."""
+    ac_output_scale = min(1.0, max(0.0, ac_output_scale))
+    if ac_output_scale <= 0.0:
+        return 0.0
+    ac_power_w = ac_power_w / ac_output_scale
+    ac_target = max(0.0, min(ac_power_w, max(0.0, inverter_ac_power)))
+    inverter_ac_power = max(0.0, inverter_ac_power)
+    inverter_efficiency = min(1.0, max(0.0, inverter_efficiency))
+    if ac_target <= 0.0 or inverter_ac_power <= 0.0 or inverter_efficiency <= 0.0:
+        return 0.0
+    if not math.isfinite(inverter_ac_power):
+        return ac_target / inverter_efficiency
+
+    upper = inverter_ac_power / inverter_efficiency
+    if ac_target >= inverter_ac_power:
+        return upper
+
+    # Rearrange the PVWatts polynomial in zeta = pdc / pdc0 and take
+    # the root on its monotonic operating interval (0 < zeta < 1).
+    normalized_ac = ac_target * PVWATTS_REFERENCE_EFFICIENCY / inverter_ac_power
+    a = -PVWATTS_CURVE_QUADRATIC
+    b = -PVWATTS_CURVE_LINEAR
+    c = normalized_ac - PVWATTS_CURVE_CONSTANT
+    discriminant = max(0.0, b * b - 4.0 * a * c)
+    zeta = (-b - math.sqrt(discriminant)) / (2.0 * a)
+    # At unusually high nominal efficiencies the empirical PVWatts curve can
+    # exceed 100% conversion efficiency around its peak. The forward helper
+    # caps AC output at DC input to preserve energy conservation, so its
+    # inverse must also request at least the target amount of DC.
+    return min(upper, max(ac_target, zeta * upper))
+
+
+# Explicit per-step energy flows and losses, in the column order they appear
+# in the results frame. Every entry is accumulated in Wh during the loop and
+# divided by the step length on write, so the frame reports average W.
+_LEDGER_COLUMNS: Tuple[str, ...] = (
+    "PV_DC_To_Battery",
+    "PV_DC_To_Inverter",
+    "PV_DC_Curtailed",
+    "PV_AC_To_Load",
+    "PV_AC_Export",
+    "Battery_Charge_Input",
+    "Battery_Charge_Stored",
+    "Battery_Discharge_DC",
+    "Battery_AC_To_Load",
+    "Battery_AC_To_Load_PV",
+    "PV_Origin_Battery_AC_To_Load",
+    "PV_Direct_Inverter_Loss",
+    "Battery_Inverter_Loss",
+    "Inverter_Loss",
+    "Standby_Loss",
+    "Capacity_Window_Loss",
+    "Battery_Replacement_Energy_Removed",
+    "Battery_Replacement_Energy_Added",
+    "Battery_Energy_Delta",
+)
+
+# Per-step state columns, in their row order inside the shared buffer matrix.
+# The ledger columns occupy the rows immediately after them. The day loop
+# addresses rows by the indices below, so the order is its contract.
+_STATE_ROWS: Tuple[str, ...] = (
+    "pv_dc",
+    "pv_production",
+    "load",
+    "pv_delta",
+    "grid_import",
+    "grid_export",
+    "battery_energy",
+    "soc_normalized",
+    "soc_absolute",
+    "soh",
+    "t_cell",
+    "pv_curtailment",
+    "charge_loss",
+    "discharge_loss",
+    "standby_loss",
+    "battery_energy_begin",
+    "pv_origin_begin",
+    "pv_origin_end",
+)
+_STATE_ROW_INDEX: Dict[str, int] = {name: row for row, name in enumerate(_STATE_ROWS)}
+_LEDGER_ROW0: int = len(_STATE_ROWS)
+_LEDGER_ROW_INDEX: Dict[str, int] = {name: _LEDGER_ROW0 + offset for offset, name in enumerate(_LEDGER_COLUMNS)}
+_N_ROWS: int = _LEDGER_ROW0 + len(_LEDGER_COLUMNS)
+
+# Row indices as plain module constants, which Numba freezes at compile time.
+R_PV_DC = _STATE_ROW_INDEX["pv_dc"]
+R_PV_PRODUCTION = _STATE_ROW_INDEX["pv_production"]
+R_LOAD = _STATE_ROW_INDEX["load"]
+R_PV_DELTA = _STATE_ROW_INDEX["pv_delta"]
+R_GRID_IMPORT = _STATE_ROW_INDEX["grid_import"]
+R_GRID_EXPORT = _STATE_ROW_INDEX["grid_export"]
+R_BATTERY_ENERGY = _STATE_ROW_INDEX["battery_energy"]
+R_SOC_NORMALIZED = _STATE_ROW_INDEX["soc_normalized"]
+R_SOC_ABSOLUTE = _STATE_ROW_INDEX["soc_absolute"]
+R_SOH = _STATE_ROW_INDEX["soh"]
+R_T_CELL = _STATE_ROW_INDEX["t_cell"]
+R_PV_CURTAILMENT = _STATE_ROW_INDEX["pv_curtailment"]
+R_CHARGE_LOSS = _STATE_ROW_INDEX["charge_loss"]
+R_DISCHARGE_LOSS = _STATE_ROW_INDEX["discharge_loss"]
+R_STANDBY_LOSS = _STATE_ROW_INDEX["standby_loss"]
+R_BATTERY_ENERGY_BEGIN = _STATE_ROW_INDEX["battery_energy_begin"]
+R_PV_ORIGIN_BEGIN = _STATE_ROW_INDEX["pv_origin_begin"]
+R_PV_ORIGIN_END = _STATE_ROW_INDEX["pv_origin_end"]
+
+L_PV_DC_TO_BATTERY = _LEDGER_ROW_INDEX["PV_DC_To_Battery"]
+L_PV_DC_TO_INVERTER = _LEDGER_ROW_INDEX["PV_DC_To_Inverter"]
+L_PV_DC_CURTAILED = _LEDGER_ROW_INDEX["PV_DC_Curtailed"]
+L_PV_AC_TO_LOAD = _LEDGER_ROW_INDEX["PV_AC_To_Load"]
+L_PV_AC_EXPORT = _LEDGER_ROW_INDEX["PV_AC_Export"]
+L_BATTERY_CHARGE_INPUT = _LEDGER_ROW_INDEX["Battery_Charge_Input"]
+L_BATTERY_CHARGE_STORED = _LEDGER_ROW_INDEX["Battery_Charge_Stored"]
+L_BATTERY_DISCHARGE_DC = _LEDGER_ROW_INDEX["Battery_Discharge_DC"]
+L_BATTERY_AC_TO_LOAD = _LEDGER_ROW_INDEX["Battery_AC_To_Load"]
+L_BATTERY_AC_TO_LOAD_PV = _LEDGER_ROW_INDEX["Battery_AC_To_Load_PV"]
+L_PV_ORIGIN_BATTERY_AC_TO_LOAD = _LEDGER_ROW_INDEX["PV_Origin_Battery_AC_To_Load"]
+L_PV_DIRECT_INVERTER_LOSS = _LEDGER_ROW_INDEX["PV_Direct_Inverter_Loss"]
+L_BATTERY_INVERTER_LOSS = _LEDGER_ROW_INDEX["Battery_Inverter_Loss"]
+L_INVERTER_LOSS = _LEDGER_ROW_INDEX["Inverter_Loss"]
+L_STANDBY_LOSS = _LEDGER_ROW_INDEX["Standby_Loss"]
+L_CAPACITY_WINDOW_LOSS = _LEDGER_ROW_INDEX["Capacity_Window_Loss"]
+L_REPLACEMENT_ENERGY_REMOVED = _LEDGER_ROW_INDEX["Battery_Replacement_Energy_Removed"]
+L_REPLACEMENT_ENERGY_ADDED = _LEDGER_ROW_INDEX["Battery_Replacement_Energy_Added"]
+L_BATTERY_ENERGY_DELTA = _LEDGER_ROW_INDEX["Battery_Energy_Delta"]
+
+
+def lfp_capacity_factor(T_C: float) -> float:
+    """
+    Temperature-dependent usable capacity factor for LFP batteries.
+
+    Returns a factor in [0.5, 1.0] relative to nominal capacity at 25°C.
+    Uses a piecewise-linear model calibrated to typical LFP characterisation data:
+      - ≥25°C: 1.0  (capacity doesn't increase meaningfully above reference)
+      - 0–25°C: linear derating at LFP_CAP_DERATE_PER_C_MODERATE per °C
+      - <0°C:   steeper derating at LFP_CAP_DERATE_PER_C_COLD per °C below 0
+
+    Args:
+        T_C: Battery temperature in °C
+
+    Returns:
+        Capacity factor (dimensionless, ≤ 1.0)
+    """
+    if T_C >= 25.0:
+        return 1.0
+    elif T_C >= 0.0:
+        return 1.0 - LFP_CAP_DERATE_PER_C_MODERATE * (25.0 - T_C)
+    else:
+        base_at_zero = 1.0 - LFP_CAP_DERATE_PER_C_MODERATE * 25.0  # ~0.95
+        return max(0.5, base_at_zero - LFP_CAP_DERATE_PER_C_COLD * abs(T_C))
+
+
+def compute_cell_temperature(
+    T_ambient_C: float,
+    charge_power_w: float,
+    discharge_power_w: float,
+    charge_eff: float,
+    discharge_eff: float,
+    thermal_resistance_kw: float = DEFAULT_THERMAL_RESISTANCE_KW,
+) -> float:
+    """
+    Compute battery cell temperature using a quasi-steady-state lumped thermal model.
+
+    Heat is generated by ohmic losses during charge and discharge. The cell
+    temperature rises above ambient proportional to heat dissipation and
+    thermal resistance of the enclosure.
+
+    Valid for hourly (or longer) timesteps where the battery thermal mass
+    reaches approximate equilibrium within each step.
+
+    Args:
+        T_ambient_C: Ambient temperature (C)
+        charge_power_w: Power flowing into the battery this step (W, DC side)
+        discharge_power_w: Power drawn from the battery this step (W, DC side)
+        charge_eff: Charge efficiency (0-1)
+        discharge_eff: Discharge efficiency (0-1)
+        thermal_resistance_kw: Thermal resistance in K/W
+
+    Returns:
+        Cell temperature (C)
+    """
+    # Heat from charging: fraction (1 - eta_charge) is lost as heat
+    P_loss_charge = charge_power_w * (1.0 - charge_eff)
+    # Heat from discharging: battery delivers more internally than reaches load
+    P_loss_discharge = discharge_power_w * (1.0 - discharge_eff)
+
+    P_loss_total = P_loss_charge + P_loss_discharge
+    T_cell = T_ambient_C + thermal_resistance_kw * P_loss_total
+    return T_cell
+
+
+def _apply_capacity_window(
+    nominal_energy_wh: float,
+    soh_fraction: float,
+    max_soc: float,
+    min_soc: float,
+    standby_loss_wh: float,
+    energy_wh: float,
+    pv_origin_wh: float,
+    t_cell: float,
+) -> Tuple[float, float, float, float, float, float]:
+    """Derate the usable SOC window and bleed standby loss, before dispatch.
+
+    Returns ``(energy, pv_origin, emin, emax, capacity_window_loss, standby)``,
+    all in Wh. Assumes a configured battery; the no-battery case never calls
+    this. ``standby_loss_wh`` is already scaled to the timestep.
+
+    ``t_cell`` here is the ambient/indoor temperature at step start, not the
+    self-heated cell temperature the thermal model produces later in the same
+    step: usable capacity is set by the pack's state *before* this step's
+    charge/discharge self-heating, while aging sees the warmed cell. That
+    split is intentional.
+
+    A temperature- or SOH-driven fall in ``emax`` is booked as an explicit
+    loss — it is neither export nor standby consumption — and the lower
+    reserve is a dispatch boundary that must never create energy when it
+    rises. The PV-origin share is rescaled with every reduction so it stays a
+    fraction of what is actually stored.
+    """
+    usable_cap = nominal_energy_wh * soh_fraction
+    f_cap = lfp_capacity_factor(t_cell)
+    emax = usable_cap * max_soc * f_cap
+    emin = usable_cap * min_soc * f_cap
+
+    capacity_window_loss = max(0.0, energy_wh - emax)
+    if capacity_window_loss > 0.0 and energy_wh > 0.0:
+        pv_origin_wh *= emax / energy_wh
+        energy_wh = emax
+
+    removable_for_standby = max(0.0, energy_wh - emin)
+    standby = min(standby_loss_wh, removable_for_standby)
+    if standby > 0.0 and energy_wh > 0.0:
+        pv_origin_wh *= (energy_wh - standby) / energy_wh
+        energy_wh -= standby
+
+    return energy_wh, pv_origin_wh, emin, emax, capacity_window_loss, standby
+
+
+def _charge(
+    surplus_dc: float,
+    battery_energy: float,
+    emax: float,
+    eff_charge: float,
+    cap_charge_in_wh: float,
+    cap_stored_wh: float,
+) -> Tuple[float, float]:
+    """Charge from *surplus_dc* up to the window and power limits.
+
+    Returns ``(battery_energy, drawn)``, where ``drawn`` is the DC taken from
+    the surplus; ``drawn * eff_charge`` of it is stored.
+    """
+    room = max(0.0, emax - battery_energy)
+    if room <= 0.0 or eff_charge <= 0.0:
+        return battery_energy, 0.0
+    drawn = min(surplus_dc, room / eff_charge, cap_charge_in_wh, cap_stored_wh / eff_charge)
+    return battery_energy + drawn * eff_charge, drawn
+
+
+def _combined_conversion(
+    pv_dc: float,
+    battery_dc: float,
+    inv_cap_ac_wh: float,
+    inv_eff: float,
+    ac_output_scale: float,
+    pow_two: float,
+) -> Tuple[float, float, float]:
+    """Convert PV and battery DC at one shared inverter operating point.
+
+    Returns ``(pv_ac, battery_ac, conversion_loss)``, splitting the AC output
+    in proportion to each source's share of the DC input.
+    """
+    total_dc = pv_dc + battery_dc
+    ac_power, conversion_loss, _clipping_dc = _dc_ac(total_dc, inv_cap_ac_wh, inv_eff, ac_output_scale, pow_two)
+    if total_dc <= 0.0:
+        return 0.0, 0.0, 0.0
+    battery_ac = ac_power * battery_dc / total_dc
+    pv_ac = ac_power - battery_ac
+    return pv_ac, battery_ac, conversion_loss
+
+
+def _dispatch_dc_step(
+    pv_dc: float,
+    load: float,
+    battery_energy: float,
+    emin: float,
+    emax: float,
+    eff_charge: float,
+    eff_discharge: float,
+    inv_eff: float,
+    cap_charge_in_wh: float,
+    cap_discharge_ac_wh: float,
+    inv_cap_ac_wh: float,
+    ac_output_scale: float,
+    cap_stored_wh: float,
+    pow_two: float,
+) -> Tuple[float, float, float, float, float, float, float, float, float, float, float, float, float, float]:
+    """Dispatch one DC-coupled timestep; inputs and outputs are Wh.
+
+    PV serves AC load first. Surplus DC then charges the battery before any
+    export. PV and battery discharge share the inverter AC nameplate.
+    ``cap_stored_wh`` limits the stored energy gained or released, on top of
+    the DC charge-input and AC discharge limits.
+
+    Returns the stored energy after the step followed by the step's ledger:
+    ``(battery_energy, pv_dc_to_battery, pv_dc_to_inverter, pv_dc_curtailed,
+    pv_ac_to_load, pv_ac_export, battery_charge_input, battery_discharge_dc,
+    battery_ac_to_load, battery_charge_loss, battery_discharge_loss,
+    pv_direct_inverter_loss, battery_inverter_loss, grid_import)``.
+    """
+    pv_dc_curtailed = 0.0
+    pv_ac_export = 0.0
+    battery_discharge_dc = 0.0
+    battery_ac_to_load = 0.0
+    battery_discharge_loss = 0.0
+    battery_inverter_loss = 0.0
+    drawn = 0.0
+
+    pv_ac_max, pv_conversion_loss, pv_clipping_dc = _dc_ac(pv_dc, inv_cap_ac_wh, inv_eff, ac_output_scale, pow_two)
+
+    if pv_ac_max >= load:
+        pv_ac_to_load = load
+        dc_to_load = _dc_for_ac(load, inv_cap_ac_wh, inv_eff, ac_output_scale)
+        surplus_dc = max(0.0, pv_dc - dc_to_load)
+        battery_energy, drawn = _charge(surplus_dc, battery_energy, emax, eff_charge, cap_charge_in_wh, cap_stored_wh)
+        remaining_dc = surplus_dc - drawn
+        direct_ac, direct_conversion_loss, direct_clipping_dc = _dc_ac(
+            dc_to_load + remaining_dc, inv_cap_ac_wh, inv_eff, ac_output_scale, pow_two
+        )
+        pv_ac_export = max(0.0, direct_ac - load)
+        dc_export = max(0.0, dc_to_load + remaining_dc - direct_clipping_dc - dc_to_load)
+        pv_dc_to_inverter = dc_to_load + dc_export
+        pv_dc_curtailed = direct_clipping_dc
+        pv_direct_inverter_loss = direct_conversion_loss
+        grid_import = 0.0
+    else:
+        pv_ac_to_load = pv_ac_max
+        pv_dc_to_inverter = pv_dc - pv_clipping_dc
+        pv_direct_inverter_loss = pv_conversion_loss
+        excess_dc = pv_clipping_dc
+        deficit = load - pv_ac_max
+        if excess_dc > 1e-12:
+            # The inverter is saturated by PV. DC above its immediate AC
+            # headroom may charge, but battery discharge has no AC headroom.
+            battery_energy, drawn = _charge(
+                excess_dc, battery_energy, emax, eff_charge, cap_charge_in_wh, cap_stored_wh
+            )
+            pv_dc_curtailed = excess_dc - drawn
+            grid_import = deficit
+        else:
+            available = max(0.0, battery_energy - emin)
+            # AC correction is applied after the inverter curve and nameplate
+            # limit, so the reachable AC ceiling is the scaled nameplate, which
+            # the (0, 1] bound keeps at or below the nameplate itself.
+            target_total_ac = min(load, inv_cap_ac_wh * ac_output_scale)
+            if available > 0.0 and eff_discharge > 0.0 and target_total_ac > pv_ac_max:
+                total_dc_target = _dc_for_ac(target_total_ac, inv_cap_ac_wh, inv_eff, ac_output_scale)
+                battery_dc = min(
+                    available * eff_discharge,
+                    max(0.0, total_dc_target - pv_dc),
+                    cap_stored_wh * eff_discharge,
+                )
+
+                # The public discharge limit is AC delivered. If it binds,
+                # solve for the battery DC contribution at the one shared
+                # inverter operating point rather than applying a second
+                # independent part-load curve.
+                if math.isfinite(cap_discharge_ac_wh):
+                    unconstrained_battery_ac = _combined_conversion(
+                        pv_dc, battery_dc, inv_cap_ac_wh, inv_eff, ac_output_scale, pow_two
+                    )[1]
+                    if unconstrained_battery_ac > cap_discharge_ac_wh:
+                        lower = 0.0
+                        upper = battery_dc
+                        for _iteration in range(40):
+                            midpoint = (lower + upper) / 2.0
+                            midpoint_battery_ac = _combined_conversion(
+                                pv_dc, midpoint, inv_cap_ac_wh, inv_eff, ac_output_scale, pow_two
+                            )[1]
+                            if midpoint_battery_ac < cap_discharge_ac_wh:
+                                lower = midpoint
+                            else:
+                                upper = midpoint
+                        battery_dc = upper
+
+                pv_delivered_ac, delivered_ac, total_inverter_loss = _combined_conversion(
+                    pv_dc, battery_dc, inv_cap_ac_wh, inv_eff, ac_output_scale, pow_two
+                )
+                draw = battery_dc / eff_discharge
+                battery_energy -= draw
+                total_inverter_dc = pv_dc + battery_dc
+                battery_inverter_loss = (
+                    total_inverter_loss * battery_dc / total_inverter_dc if total_inverter_dc > 0.0 else 0.0
+                )
+                battery_discharge_dc = draw
+                battery_ac_to_load = delivered_ac
+                battery_discharge_loss = draw - battery_dc
+                pv_ac_to_load = pv_delivered_ac
+                pv_direct_inverter_loss = total_inverter_loss - battery_inverter_loss
+                grid_import = max(0.0, load - pv_delivered_ac - delivered_ac)
+            else:
+                grid_import = deficit
+
+    return (
+        battery_energy,
+        drawn,
+        pv_dc_to_inverter,
+        pv_dc_curtailed,
+        pv_ac_to_load,
+        pv_ac_export,
+        drawn,
+        battery_discharge_dc,
+        battery_ac_to_load,
+        drawn * (1.0 - eff_charge),
+        battery_discharge_loss,
+        pv_direct_inverter_loss,
+        battery_inverter_loss,
+        grid_import,
+    )
+
+
+def _dispatch_day(
+    matrix: np.ndarray,
+    pv_dc_vals: np.ndarray,
+    load_vals: np.ndarray,
+    temp_vals: np.ndarray,
+    lo: int,
+    hi: int,
+    battery_energy: float,
+    pv_origin: float,
+    nominal_energy_wh: float,
+    soh_fraction: float,
+    soh_percent: float,
+    max_soc: float,
+    min_soc: float,
+    standby_loss_per_step_wh: float,
+    eff_charge: float,
+    eff_discharge: float,
+    inv_eff: float,
+    cap_charge_in_wh: float,
+    cap_discharge_ac_wh: float,
+    inv_cap_ac_wh: float,
+    cap_stored_wh: float,
+    thermal_resistance_kw: float,
+    hours_per_step: float,
+    ac_output_scale: float,
+    pow_two: float,
+) -> Tuple[float, float, float]:
+    """Dispatch timesteps ``[lo, hi)`` at fixed health, writing rows of *matrix*.
+
+    State of health, resistance-derived efficiencies and the replacement
+    decision are unchanged for the duration of the call; the caller advances
+    them at the day boundary. Only battery runs come here: PV-only runs take
+    the vectorised path in :mod:`breos.battery`.
+
+    Returns ``(battery_energy, pv_origin, battery_energy_beginning)``, where the
+    last value is the beginning-of-step stored energy of the final step in the
+    window, which the day-close replacement path needs.
+    """
+    battery_energy_beginning = 0.0
+    for i in range(lo, hi):
+        # Treat negative model/data artefacts as zero generation, matching the
+        # public inverter helper and preventing negative PV from being
+        # allocated through the shared PV/battery conversion path.
+        pv_dc_power = max(0.0, pv_dc_vals[i] * hours_per_step)  # DC power (Wh) before inverter
+        load = load_vals[i] * hours_per_step  # AC Load in Wh
+        t_ambient = temp_vals[i]
+        t_cell = t_ambient  # default; overridden by thermal model below
+
+        battery_energy_beginning = battery_energy
+        pv_origin_beginning = pv_origin
+        (
+            battery_energy,
+            pv_origin,
+            emin,
+            emax,
+            capacity_window_loss,
+            battery_standby_loss,
+        ) = _apply_capacity_window(
+            nominal_energy_wh,
+            soh_fraction,
+            max_soc,
+            min_soc,
+            standby_loss_per_step_wh,
+            battery_energy,
+            pv_origin,
+            t_cell,
+        )
+
+        energy_before_dispatch = battery_energy
+        origin_before_dispatch = pv_origin
+        origin_fraction = (
+            min(1.0, max(0.0, origin_before_dispatch / energy_before_dispatch)) if energy_before_dispatch > 0.0 else 0.0
+        )
+        (
+            battery_energy,
+            pv_dc_to_battery,
+            pv_dc_to_inverter,
+            pv_dc_curtailed,
+            pv_ac_to_load,
+            pv_ac_export,
+            battery_charge_input,
+            battery_discharge_dc,
+            battery_ac_to_load,
+            battery_charge_loss,
+            battery_discharge_loss,
+            pv_direct_inverter_loss,
+            battery_inverter_loss,
+            grid_import,
+        ) = _dispatch_dc_step(
+            pv_dc_power,
+            load,
+            battery_energy,
+            emin,
+            emax,
+            eff_charge,
+            eff_discharge,
+            inv_eff,
+            cap_charge_in_wh,
+            cap_discharge_ac_wh,
+            inv_cap_ac_wh,
+            ac_output_scale,
+            cap_stored_wh,
+            pow_two,
+        )
+        charge_stored = battery_charge_input * eff_charge
+        pv_origin_discharge_dc = battery_discharge_dc * origin_fraction
+        pv_origin_battery_ac = battery_ac_to_load * origin_fraction
+        pv_origin = max(0.0, origin_before_dispatch - pv_origin_discharge_dc + charge_stored)
+        pv_origin = min(pv_origin, battery_energy)
+
+        # PV output after clipping and the direct PV inverter loss: AC to load
+        # and export plus DC to the battery, with or without an inverter rating.
+        pv_production = pv_dc_power - pv_dc_curtailed - pv_direct_inverter_loss
+        battery_energy_delta = battery_energy - battery_energy_beginning
+
+        # Compute cell temperature via lumped thermal model
+        if thermal_resistance_kw > 0:
+            # The ledger is in Wh; convert to W for the thermal calculation
+            charge_power_w = battery_charge_input / hours_per_step if hours_per_step > 0 else 0.0
+            discharge_power_w = battery_discharge_dc / hours_per_step if hours_per_step > 0 else 0.0
+            t_cell = compute_cell_temperature(
+                t_ambient,
+                charge_power_w,
+                discharge_power_w,
+                eff_charge,
+                eff_discharge,
+                thermal_resistance_kw,
+            )
+
+        soc_normalized = (battery_energy - emin) / (emax - emin) if (emax - emin) > 0 else 0.0
+        soc_normalized = max(0.0, min(1.0, soc_normalized))
+        soc_absolute = battery_energy / (nominal_energy_wh * soh_fraction) if soh_fraction > 0 else 0.0
+        soc_absolute = max(0.0, min(1.0, soc_absolute))
+
+        matrix[R_PV_DC, i] = pv_dc_power / hours_per_step
+        matrix[R_PV_PRODUCTION, i] = pv_production / hours_per_step
+        matrix[R_LOAD, i] = load / hours_per_step
+        matrix[R_PV_DELTA, i] = (pv_production - load) / hours_per_step
+        matrix[R_GRID_IMPORT, i] = grid_import / hours_per_step
+        matrix[R_GRID_EXPORT, i] = pv_ac_export / hours_per_step
+        matrix[R_BATTERY_ENERGY, i] = battery_energy
+        matrix[R_SOC_NORMALIZED, i] = soc_normalized
+        matrix[R_SOC_ABSOLUTE, i] = soc_absolute
+        matrix[R_SOH, i] = soh_percent
+        matrix[R_T_CELL, i] = t_cell
+        matrix[R_PV_CURTAILMENT, i] = pv_dc_curtailed / hours_per_step
+        matrix[R_CHARGE_LOSS, i] = battery_charge_loss / hours_per_step
+        matrix[R_DISCHARGE_LOSS, i] = battery_discharge_loss / hours_per_step
+        matrix[R_STANDBY_LOSS, i] = battery_standby_loss / hours_per_step
+        matrix[R_BATTERY_ENERGY_BEGIN, i] = battery_energy_beginning
+        matrix[R_PV_ORIGIN_BEGIN, i] = pv_origin_beginning
+        matrix[R_PV_ORIGIN_END, i] = pv_origin
+
+        matrix[L_PV_DC_TO_BATTERY, i] = pv_dc_to_battery / hours_per_step
+        matrix[L_PV_DC_TO_INVERTER, i] = pv_dc_to_inverter / hours_per_step
+        matrix[L_PV_DC_CURTAILED, i] = pv_dc_curtailed / hours_per_step
+        matrix[L_PV_AC_TO_LOAD, i] = pv_ac_to_load / hours_per_step
+        matrix[L_PV_AC_EXPORT, i] = pv_ac_export / hours_per_step
+        matrix[L_BATTERY_CHARGE_INPUT, i] = battery_charge_input / hours_per_step
+        matrix[L_BATTERY_CHARGE_STORED, i] = charge_stored / hours_per_step
+        matrix[L_BATTERY_DISCHARGE_DC, i] = battery_discharge_dc / hours_per_step
+        matrix[L_BATTERY_AC_TO_LOAD, i] = battery_ac_to_load / hours_per_step
+        matrix[L_BATTERY_AC_TO_LOAD_PV, i] = pv_origin_battery_ac / hours_per_step
+        matrix[L_PV_ORIGIN_BATTERY_AC_TO_LOAD, i] = pv_origin_battery_ac / hours_per_step
+        matrix[L_PV_DIRECT_INVERTER_LOSS, i] = pv_direct_inverter_loss / hours_per_step
+        matrix[L_BATTERY_INVERTER_LOSS, i] = battery_inverter_loss / hours_per_step
+        matrix[L_INVERTER_LOSS, i] = (pv_direct_inverter_loss + battery_inverter_loss) / hours_per_step
+        matrix[L_STANDBY_LOSS, i] = battery_standby_loss / hours_per_step
+        matrix[L_CAPACITY_WINDOW_LOSS, i] = capacity_window_loss / hours_per_step
+        matrix[L_REPLACEMENT_ENERGY_REMOVED, i] = 0.0
+        matrix[L_REPLACEMENT_ENERGY_ADDED, i] = 0.0
+        matrix[L_BATTERY_ENERGY_DELTA, i] = battery_energy_delta / hours_per_step
+    return battery_energy, pv_origin, battery_energy_beginning
+
+
+def _day_arguments(
+    out: Any,
+    pv_dc_vals: np.ndarray,
+    load_vals: np.ndarray,
+    temp_vals: np.ndarray,
+    lo: int,
+    hi: int,
+    *,
+    battery_config: "BatteryConfig",
+    battery_soh_decimal: float,
+    Battery_SOH: float,
+    Battery_Energy_Wh: float,
+    Battery_PV_Origin_Energy_Wh: float,
+    eff_charge: float,
+    eff_discharge: float,
+    hours_per_step: float,
+    standby_loss_per_step_wh: float,
+    cap_wh: float,
+    cap_charge_wh: float,
+    cap_discharge_wh: float,
+    cap_stored_wh: float = math.inf,
+) -> Tuple[Any, ...]:
+    """Pack one day's state into the positional arguments of :func:`_dispatch_day`.
+
+    Both backends pack through here, so they cannot be handed different
+    inputs. Scalars are coerced to ``float`` so the compiled backend always
+    sees one signature. The trailing 2.0 is ``pow_two``; see
+    :func:`_dc_ac` for why it is passed rather than written.
+    """
+    return (
+        out.matrix,
+        pv_dc_vals,
+        load_vals,
+        temp_vals,
+        lo,
+        hi,
+        float(Battery_Energy_Wh),
+        float(Battery_PV_Origin_Energy_Wh),
+        float(battery_config.nominal_energy_wh),
+        float(battery_soh_decimal),
+        float(Battery_SOH),
+        float(battery_config.max_soc),
+        float(battery_config.min_soc),
+        float(standby_loss_per_step_wh),
+        float(eff_charge),
+        float(eff_discharge),
+        float(battery_config.inverter_efficiency),
+        float(cap_charge_wh),
+        float(cap_discharge_wh),
+        float(cap_wh),
+        float(cap_stored_wh),
+        float(battery_config.thermal_resistance_kw),
+        float(hours_per_step),
+        float(battery_config.ac_output_scale),
+        2.0,
+    )
+
+
+def _dispatch_day_python(out: Any, *args: Any, **state: Any) -> Tuple[float, float, float]:
+    """Run :func:`_dispatch_day` as Python; the reference backend.
+
+    Takes the arguments of :func:`_day_arguments`.
+    """
+    return _dispatch_day(*_day_arguments(out, *args, **state))

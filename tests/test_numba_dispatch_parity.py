@@ -26,10 +26,11 @@ import pandas as pd
 import pytest
 
 import breos.battery as battery_module
-from breos._numba_dispatch import _build_kernel
+from breos._numba_dispatch import _build_kernel, _dispatch_day_numba
 from breos.battery import (
     _STATE_ROW_INDEX,
     BatteryConfig,
+    _ResultBuffers,
     simulate_energy_balance,
     simulate_energy_balance_summary,
 )
@@ -114,6 +115,13 @@ def _same_state(left, right) -> bool:
 @pytest.mark.parametrize("scenario", SCENARIOS)
 def test_numba_matches_python_exactly(scenario, freq):
     _assert_identical(f"{scenario}@{freq}", _run(scenario, "python", freq), _run(scenario, "numba", freq))
+
+
+def test_compiled_backend_compiles_the_python_backends_own_day_loop():
+    """One source: the kernel is built from the function the Python backend runs, not a copy of it."""
+    from breos import _dispatch
+
+    assert _build_kernel().py_func is _dispatch._dispatch_day
 
 
 def test_single_day_matches():
@@ -436,9 +444,10 @@ def test_zeta_squared_must_use_libm_pow_not_the_folded_square():
 
     CPython evaluates ``zeta ** 2`` as a libm ``pow`` call. LLVM rewrites a
     constant-exponent ``pow`` into ``x * x``, and for some inputs libm's
-    ``pow`` and the correctly rounded square differ by one ULP. Simplifying
-    the kernel back to ``zeta ** 2`` would reintroduce that difference, so
-    this test drives the kernel with an input where it shows up.
+    ``pow`` and the correctly rounded square differ by one ULP. Writing the
+    shared inverter core with a literal exponent, ``zeta ** 2`` included,
+    would let the compiled backend fold it, so this test drives the compiled
+    dispatch with an input where the difference shows up.
 
     BREOS promises no bit identity across platforms or libm versions. It does
     promise it between the Python and numba backends on one machine, and that
@@ -463,40 +472,34 @@ def test_zeta_squared_must_use_libm_pow_not_the_folded_square():
         dc_power, ac_rating, efficiency, _folded_square
     ), "input no longer distinguishes libm pow from the folded square"
 
-    kernel = _build_kernel()
-    matrix = np.zeros((37, 1))
-    pv = np.array([dc_power * 4.0])  # Wh at a 15-minute step
-    load = np.zeros(1)
-    temp = np.full(1, 25.0)
-    kernel(
-        matrix,
-        pv,
-        load,
-        temp,
+    # A full pack cannot charge, and with no load the whole step goes through
+    # the direct PV conversion, so its production is the helper's to the bit.
+    config = BatteryConfig(
+        nominal_energy_wh=1000.0, max_soc=0.9, min_soc=0.1, standby_loss_wh=0.0, inverter_efficiency=efficiency
+    )
+    out = _ResultBuffers(1)
+    _dispatch_day_numba(
+        out,
+        np.array([dc_power * 4.0]),  # W at a 15-minute step, so the step carries dc_power Wh
+        np.zeros(1),
+        np.full(1, 25.0),
         0,
         1,
-        0.0,
-        0.0,
-        False,
-        0.0,
-        1.0,
-        100.0,
-        0.9,
-        0.1,
-        0.0,
-        0.95,
-        0.95,
-        efficiency,
-        np.inf,
-        np.inf,
-        ac_rating,
-        0.05,
-        0.25,
-        2.0,
-        1.0,
-        np.inf,
+        battery_config=config,
+        battery_soh_decimal=1.0,
+        Battery_SOH=100.0,
+        Battery_Energy_Wh=900.0,
+        Battery_PV_Origin_Energy_Wh=0.0,
+        eff_charge=0.95,
+        eff_discharge=0.95,
+        hours_per_step=0.25,
+        standby_loss_per_step_wh=0.0,
+        cap_wh=ac_rating,
+        cap_charge_wh=np.inf,
+        cap_discharge_wh=np.inf,
     )
+    assert out.ledger["Battery_Charge_Input"][0] == 0.0, "the pack charged, so the step is not all direct PV"
     reference = calculate_dc_ac_power(dc_power, ac_rating, efficiency)
-    assert matrix[_STATE_ROW_INDEX["pv_production"], 0] * 0.25 == pytest.approx(
+    assert out.matrix[_STATE_ROW_INDEX["pv_production"], 0] * 0.25 == pytest.approx(
         dc_power - reference.clipping_loss_dc_w - reference.conversion_loss_w, abs=0.0, rel=0.0
     )

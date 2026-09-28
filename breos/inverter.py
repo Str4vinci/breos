@@ -15,10 +15,14 @@ from typing import Optional
 
 import numpy as np
 
-PVWATTS_REFERENCE_EFFICIENCY = 0.9637
-PVWATTS_CURVE_QUADRATIC = -0.0162
-PVWATTS_CURVE_LINEAR = 0.9858
-PVWATTS_CURVE_CONSTANT = -0.0059
+from breos._dispatch import (
+    PVWATTS_CURVE_CONSTANT,
+    PVWATTS_CURVE_LINEAR,
+    PVWATTS_CURVE_QUADRATIC,
+    PVWATTS_REFERENCE_EFFICIENCY,
+    _dc_ac,
+    _dc_for_ac,
+)
 
 
 def _require_optional_non_negative_finite(name: str, value: Optional[float]) -> None:
@@ -320,57 +324,15 @@ def calculate_dc_ac_power(
     inverter_ac_power = max(0.0, float(inverter_ac_power))
     inverter_efficiency = min(1.0, max(0.0, float(inverter_efficiency)))
     ac_output_scale = _clamped_ac_output_scale(ac_output_scale)
-
-    if inverter_efficiency <= 0.0 or inverter_ac_power <= 0.0:
-        return InverterConversionResult(
-            ac_power_w=0.0,
-            conversion_loss_w=0.0,
-            clipping_loss_dc_w=pv_dc_power,
-            clipping_loss_ac_equivalent_w=0.0,
-        )
-
-    if pv_dc_power <= 0.0:
-        return InverterConversionResult(
-            ac_power_w=0.0,
-            conversion_loss_w=0.0,
-            clipping_loss_dc_w=0.0,
-            clipping_loss_ac_equivalent_w=0.0,
-        )
-
-    # A lower-level BatteryConfig may intentionally omit the inverter
-    # nameplate. With no rated power there is no part-load ratio to evaluate,
-    # so retain the historical unbounded flat-efficiency behavior. App always
-    # supplies its sized finite AC rating.
-    if not math.isfinite(inverter_ac_power):
-        ac_power = pv_dc_power * inverter_efficiency * ac_output_scale
-        return InverterConversionResult(
-            ac_power_w=ac_power,
-            conversion_loss_w=pv_dc_power - ac_power,
-            clipping_loss_dc_w=0.0,
-            clipping_loss_ac_equivalent_w=0.0,
-        )
-
-    # PVWatts defines pdc0 as the DC input at which the inverter reaches its
-    # AC nameplate (pac0 = eta_inv_nom * pdc0). BREOS exposes the AC rating,
-    # so derive the matching pdc0 here. This is the single conversion path
-    # used by both the public solar helper and the App dispatch engine.
-    pdc0 = inverter_ac_power / inverter_efficiency
-    dc_used = min(pv_dc_power, pdc0)
-    zeta = dc_used / pdc0
-    ac_power = max(
-        0.0,
-        min(
-            dc_used,
-            inverter_ac_power,
-            (inverter_efficiency / PVWATTS_REFERENCE_EFFICIENCY)
-            * pdc0
-            * (PVWATTS_CURVE_QUADRATIC * zeta**2 + PVWATTS_CURVE_LINEAR * zeta + PVWATTS_CURVE_CONSTANT),
-        ),
+    ac_power, conversion_loss, clipping_loss_dc = _dc_ac(
+        pv_dc_power, inverter_ac_power, inverter_efficiency, ac_output_scale, 2.0
     )
-    ac_power *= ac_output_scale
-    clipping_loss_dc = max(0.0, pv_dc_power - dc_used)
-    conversion_loss = max(0.0, dc_used - ac_power)
-    clipping_loss_ac_equiv = clipping_loss_dc * inverter_efficiency * ac_output_scale
+    # Only a converter that is really there has an AC side to express the
+    # clipped DC on; the core's early returns carry no clipping otherwise.
+    if inverter_efficiency > 0.0 and inverter_ac_power > 0.0:
+        clipping_loss_ac_equiv = clipping_loss_dc * inverter_efficiency * ac_output_scale
+    else:
+        clipping_loss_ac_equiv = 0.0
 
     return InverterConversionResult(
         ac_power_w=ac_power,
@@ -441,32 +403,7 @@ def dc_power_for_ac_output(
     ac_output_scale = _clamped_ac_output_scale(ac_output_scale)
     if ac_output_scale <= 0.0:
         return 0.0
-    ac_power_w = float(ac_power_w) / ac_output_scale
-    ac_target = max(0.0, min(float(ac_power_w), max(0.0, float(inverter_ac_power))))
-    inverter_ac_power = max(0.0, float(inverter_ac_power))
-    inverter_efficiency = min(1.0, max(0.0, float(inverter_efficiency)))
-    if ac_target <= 0.0 or inverter_ac_power <= 0.0 or inverter_efficiency <= 0.0:
-        return 0.0
-    if not math.isfinite(inverter_ac_power):
-        return ac_target / inverter_efficiency
-
-    upper = inverter_ac_power / inverter_efficiency
-    if ac_target >= inverter_ac_power:
-        return upper
-
-    # Rearrange the PVWatts polynomial in zeta = pdc / pdc0 and take
-    # the root on its monotonic operating interval (0 < zeta < 1).
-    normalized_ac = ac_target * PVWATTS_REFERENCE_EFFICIENCY / inverter_ac_power
-    a = -PVWATTS_CURVE_QUADRATIC
-    b = -PVWATTS_CURVE_LINEAR
-    c = normalized_ac - PVWATTS_CURVE_CONSTANT
-    discriminant = max(0.0, b * b - 4.0 * a * c)
-    zeta = (-b - math.sqrt(discriminant)) / (2.0 * a)
-    # At unusually high nominal efficiencies the empirical PVWatts curve can
-    # exceed 100% conversion efficiency around its peak. The forward helper
-    # caps AC output at DC input to preserve energy conservation, so its
-    # inverse must also request at least the target amount of DC.
-    return min(upper, max(ac_target, zeta * upper))
+    return _dc_for_ac(float(ac_power_w), float(inverter_ac_power), float(inverter_efficiency), ac_output_scale)
 
 
 def inverter_ac_capacity_w(pv_peak_w: float, loading_ratio: Optional[float]) -> Optional[float]:
