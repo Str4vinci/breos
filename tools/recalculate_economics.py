@@ -5,6 +5,11 @@ Reads existing yearly_summary.csv (or hourly_results.csv as fallback) to preserv
 the simulated energy balance, then re-runs cost_analysis_projection() with the
 updated prices from configs/base/costs.json.
 
+It infers one escalation rate from the no-system cost ratio, which is the
+import escalation, and re-prices O&M and replacements at it. A projection that
+set om_escalation or replacement_cost_learning (ADR 0003 E2) is therefore not
+reproduced; re-run it through App instead.
+
 Usage:
     uv run python tools/recalculate_economics.py [--dry-run] [--joao-only]
 """

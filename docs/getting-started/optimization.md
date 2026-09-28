@@ -26,7 +26,11 @@ nested dictionary grouped into sections: `location`, `load`, `pv`, `battery`,
 `optimization`, `constraints`, `costs`, `financials`, `emissions`, and
 `simulation`, with an optional `tariff` table. The two shapes are not
 interchangeable, and a flat `App` config passed to the optimizer fails on the
-first missing section.
+first missing section. The `financials` section takes the App's rate keys:
+`inflation_rate`, `sell_price_inflation`, `discount_rate` and the separate
+escalators `import_price_escalation`, `om_escalation` and
+`replacement_cost_learning`
+([Economic conventions](interpreting-results.md#economic-conventions)).
 
 A ready-to-edit nested config ships as
 [`configs/optimization/projected-optimization.toml`](https://github.com/Str4vinci/breos/blob/main/configs/optimization/projected-optimization.toml).

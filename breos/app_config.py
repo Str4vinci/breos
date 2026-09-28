@@ -337,7 +337,33 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         default_order=29,
         cli_flags=("--inflation-rate",),
         cli_type=float,
-        cli_help="Annual electricity price inflation.",
+        cli_help=(
+            "General annual inflation. Import energy, the fixed charge and O&M escalate at it unless "
+            "their own rate is set, and replacement prices inflate at it."
+        ),
+    ),
+    # ADR 0003 E2: separate escalators. None inherits inflation_rate, so a run
+    # that sets none of them prices exactly as before.
+    "import_price_escalation": AppConfigField(
+        default=None,
+        default_order=61,
+        cli_flags=("--import-price-escalation",),
+        cli_type=float,
+        cli_help="Annual escalation of the import price and the fixed charge. Default: inflation_rate.",
+    ),
+    "om_escalation": AppConfigField(
+        default=None,
+        default_order=62,
+        cli_flags=("--om-escalation",),
+        cli_type=float,
+        cli_help="Annual escalation of O&M costs. Default: inflation_rate.",
+    ),
+    "replacement_cost_learning": AppConfigField(
+        default=0.0,
+        default_order=63,
+        cli_flags=("--replacement-cost-learning",),
+        cli_type=float,
+        cli_help="Annual fall in the battery replacement price, on top of inflation. Default 0.",
     ),
     "sell_price_inflation": AppConfigField(
         default=0.0,
@@ -1210,6 +1236,11 @@ def _validate_economics(cfg: dict[str, Any]) -> None:
             raise ValueError(f"'{key}' must be greater than -1")
     if not -1 < _finite_real(cfg["sell_price_inflation"], "sell_price_inflation") < 1:
         raise ValueError("'sell_price_inflation' must be between -1 and 1 (exclusive)")
+    for key in ("import_price_escalation", "om_escalation"):
+        if cfg[key] is not None and _finite_real(cfg[key], key) <= -1:
+            raise ValueError(f"'{key}' must be greater than -1 when configured")
+    if not 0 <= _finite_real(cfg["replacement_cost_learning"], "replacement_cost_learning") < 1:
+        raise ValueError("'replacement_cost_learning' must be at least 0 and below 1")
     if "costs" in cfg:
         COSTS_TABLE.validate(cfg["costs"])
     if cfg["export_emissions_factor_gco2_kwh"] is not None:

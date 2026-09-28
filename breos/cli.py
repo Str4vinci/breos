@@ -223,6 +223,9 @@ def _resolved_config_summary(config: dict[str, Any]) -> dict[str, Any]:
             "projection_years": cfg["projection_years"],
             "inflation_rate": cfg["inflation_rate"],
             "sell_price_inflation": cfg["sell_price_inflation"],
+            "import_price_escalation": cfg["import_price_escalation"],
+            "om_escalation": cfg["om_escalation"],
+            "replacement_cost_learning": cfg["replacement_cost_learning"],
             "discount_rate": cfg["discount_rate"],
         },
         "emissions": {

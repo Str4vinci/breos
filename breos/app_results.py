@@ -12,6 +12,7 @@ import pandas as pd
 
 from breos.app_config import ResolvedAppConfig
 from breos.battery import LEDGER_SCHEMA_VERSION
+from breos.economics import projection_rates_record
 from breos.emissions import calculate_co2_savings
 from breos.result_schema import RESULT_SCHEMA_VERSION
 from breos.runners.app import SimulationArtifacts
@@ -171,6 +172,7 @@ def _provenance(
         # fact without one, so it is recorded on every run, not only on
         # benchmarks. Same keys as the Monte Carlo block, from the same code.
         "execution": artifacts.execution,
+        "economics": projection_rates_record(cfg),
     }
     # Only runs given repair reports carry the key, so existing results are
     # unchanged. An empty list is recorded as given.

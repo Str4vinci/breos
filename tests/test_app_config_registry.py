@@ -70,6 +70,9 @@ EXPECTED_DEFAULTS = {
     "load_profile_unit": None,
     "tariff": None,
     "smart_charging": None,
+    "import_price_escalation": None,
+    "om_escalation": None,
+    "replacement_cost_learning": 0.0,
 }
 
 EXPECTED_CLI_FIELDS = [
@@ -105,6 +108,9 @@ EXPECTED_CLI_FIELDS = [
     "resolution",
     "projection_years",
     "inflation_rate",
+    "import_price_escalation",
+    "om_escalation",
+    "replacement_cost_learning",
     "sell_price_inflation",
     "export_emissions_factor_gco2_kwh",
     "discount_rate",
