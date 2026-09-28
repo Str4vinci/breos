@@ -116,6 +116,32 @@ def test_tou_money_reconciles_with_the_step_ledger(resolution, hours):
 
 
 @pytest.mark.usefixtures("_patch_weather")
+def test_a_tou_run_reports_its_year1_money_at_the_top_level(monkeypatch):
+    import breos.app as app_module
+
+    artifacts = []
+    run_app = app_module.run_app_simulation
+
+    def record(*args):
+        artifacts.append(run_app(*args))
+        return artifacts[-1]
+
+    monkeypatch.setattr(app_module, "run_app_simulation", record)
+    app = App({**BASE, "tariff": TOU})
+    app.simulate()
+    result = app.result()
+    year1 = artifacts[0].yearly_df.iloc[0]
+
+    assert result["grid_import_cost_year1_prices"] == round(year1["Import_Cost"], 2)
+    assert result["grid_export_revenue_year1_prices"] == round(year1["Export_Revenue"], 2)
+    assert result["no_system_import_cost_year1_prices"] == round(year1["Baseline_Import_Cost"], 2)
+    assert result["fixed_charge_year1_prices"] == 91.25  # 365 days at 0.25
+    assert result["grid_import_cost_year1_prices"] == result["financial"][1]["cost_import"]
+    # Without smart charging the battery charges from PV only.
+    assert "grid_charge_cost_year1_prices" not in result
+
+
+@pytest.mark.usefixtures("_patch_weather")
 def test_cheap_nights_lower_the_bill():
     night = {**TOU, "import_prices": {"peak": 0.40, "off_peak": 0.05}}
     day = {**TOU, "import_prices": {"peak": 0.05, "off_peak": 0.40}}

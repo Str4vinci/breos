@@ -171,7 +171,7 @@ def test_montecarlo_provenance_and_json_write_nonfinite_statistics_as_null(monke
             settings=settings,
             available_years=[2021],
             provenance={
-                "result_schema_version": "1.0",
+                "result_schema_version": "1.1",
                 "currency": "EUR",
                 "settings": {"max_load_scale": settings.max_load_scale},
             },
@@ -192,7 +192,7 @@ def test_montecarlo_provenance_and_json_write_nonfinite_statistics_as_null(monke
     assert payload["settings"]["max_load_scale"] is None
     assert provenance["settings"]["max_load_scale"] is None
     for record in (payload, provenance):
-        assert record["result_schema_version"] == "1.0"
+        assert record["result_schema_version"] == "1.1"
         assert record["currency"] == "EUR"
 
 
