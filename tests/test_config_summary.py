@@ -46,6 +46,32 @@ def test_keys_the_hand_built_summary_left_out_are_reported(name, value):
     assert summary[section][key] == value
 
 
+def test_summary_reports_what_the_resolver_derives():
+    config = {
+        "location": {"latitude": 52.5, "longitude": 13.4, "timezone": "Europe/Berlin"},
+        "annual_consumption_kwh": 3500,
+        "tracking": "single_axis",
+        "battery_kwh": 5.0,
+        "pv_arrays": [{"modules": 4, "azimuth": 90}, {"modules": 3, "azimuth": 270}],
+    }
+    summary = cli._resolved_config_summary(config)
+    resolved = cli.resolve_app_config(config)
+    assert summary["location"] == {
+        "key": None,
+        "latitude": 52.5,
+        "longitude": 13.4,
+        "timezone": "Europe/Berlin",
+    }
+    assert summary["pv"]["n_modules"] == 7
+    assert summary["pv"]["tilt"] == resolved.tilt
+    assert summary["pv"]["azimuth"] == resolved.azimuth
+    assert summary["pv"]["axis_azimuth"] == resolved.axis_azimuth == 180.0
+    assert [array["azimuth"] for array in summary["pv"]["arrays"]] == [90.0, 270.0]
+    assert summary["pv"]["module"] == resolved.pv_module_key
+    assert summary["inverter"]["ac_rating_kw"] == resolved.inverter_ac_capacity_w / 1000
+    assert summary["battery"]["round_trip_efficiency"] == 0.95
+
+
 def test_summary_writes_a_toml_date_as_text(tmp_path, capsys):
     config_path = tmp_path / "tariff.toml"
     config_path.write_text(

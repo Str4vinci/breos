@@ -48,8 +48,9 @@ breos run --config quickstart.toml --output result.json
 
 `validate-config` checks required keys and prints the resolved choices without
 fetching weather or running a simulation. `--dry-run` writes the same resolved
-configuration summary as JSON, with every config key's resolved value
-grouped by section. A successful dry run shows the location,
+configuration summary as JSON, with every config key grouped by section:
+its configured value after defaults, or the value BREOS derives from it
+(tilt, azimuth, module, inverter AC rating). A successful dry run shows the location,
 timezone, module count, PV size, inverter AC rating, load profile, battery
 capacity, cost preset, emissions preset, and resolved static PVWatts loss
 components. The loss block applies any `pv_loss_overrides` and reports the

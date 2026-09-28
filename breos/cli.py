@@ -153,10 +153,13 @@ _SUMMARY_SECTIONS = ("location", "pv", "inverter", "load", "battery", "economics
 def _resolved_config_summary(config: dict[str, Any]) -> dict[str, Any]:
     """Summarise a resolved App config without fetching weather or simulating.
 
-    Every registered key appears at its ``AppConfigField.summary`` place, with
-    its resolved value. Values the resolver derives (the location's
-    coordinates, the resolved tilt and module, the inverter AC rating, the
-    load-profile file) then replace or join them.
+    Every registered key appears at its ``AppConfigField.summary`` place, as
+    configured after defaults and normalisation; ``None`` still means "not
+    set" (an escalator that follows ``inflation_rate``, pvlib's albedo). Values
+    the resolver derives (the location's coordinates, the tilt, azimuth and
+    tracker axis, the module, the inverter AC rating, the load-profile file)
+    then replace or join them. Key order within a section follows the
+    registry.
     """
     resolved = resolve_app_config(config)
     cfg = resolved.cfg
@@ -187,6 +190,7 @@ def _resolved_config_summary(config: dict[str, Any]) -> dict[str, Any]:
         arrays=resolved.pv_arrays or None,
         tilt=resolved.tilt,
         azimuth=resolved.azimuth,
+        axis_azimuth=resolved.axis_azimuth,
         losses=resolve_pvwatts_losses(cfg["pv_loss_overrides"]),
     )
     summary["inverter"]["ac_rating_kw"] = (resolved.inverter_ac_capacity_w or 0.0) / 1000
