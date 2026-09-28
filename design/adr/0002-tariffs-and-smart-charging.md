@@ -41,11 +41,14 @@ and notebook results are evidence, not implementation sources. Ports must be
 derived from the frozen blobs above or independently reimplemented against
 primary sources.
 
-The frozen TOU blob's 2027 Portuguese docstring incorrectly attributes the
-electricity-period decision to ERSE Directive 3/2026. ERSE's acts catalog
-identifies that directive as the gas-tariff decision for gas year 2026–2027.
-BREOS must cite ERSE's final CP137 report, closing explainer, and current
-electricity-tariff page for the approved 2027 periods. Spain's 2.0TD schedule
+The frozen TOU blob's 2027 Portuguese citation needs the directive's date:
+[Diretiva n.º 3/2026, de 19 de agosto](https://diariodarepublica.pt/dr/detalhe/diretiva/3-2026-1159784501)
+approves the electricity periods. A separate
+[Diretiva n.º 3/2026, de 26 de junho](https://diariodarepublica.pt/dr/detalhe/diretiva/3-2026-1138879591)
+sets gas tariffs. Cite the August act, Article 2 for the schedules and Article
+3 for implementation: BTN bi/tri-hourly meters change over from 1 July through
+31 December 2027. A specific installation uses the new schedule from its own
+changeover, rather than from one universal date. Spain's 2.0TD schedule
 must cite CNMC Circular 3/2020 rather than Royal Decree 446/2023. Supplier
 prices are separate, dated inputs and are never implied by those schedules.
 

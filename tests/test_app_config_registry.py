@@ -68,6 +68,7 @@ EXPECTED_DEFAULTS = {
     "load_profile_file": None,
     "load_profile_column": None,
     "load_profile_unit": None,
+    "tariff": None,
 }
 
 EXPECTED_CLI_FIELDS = [

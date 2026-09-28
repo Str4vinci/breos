@@ -294,6 +294,7 @@
   "provenance.resolved_config.solar_position": "interval-start",
   "provenance.resolved_config.start_date": "2025-01-01",
   "provenance.resolved_config.surface_type": null,
+  "provenance.resolved_config.tariff": null,
   "provenance.resolved_config.temperature_model": "faiman",
   "provenance.resolved_config.tilt": 34.380004,
   "provenance.resolved_config.tracking": "fixed",

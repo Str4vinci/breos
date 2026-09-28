@@ -93,6 +93,7 @@ def test_app_runner_native_default_matches_explicit_native(monkeypatch):
         cost_params=SimpleNamespace(battery_cost_per_kwh=500.0),
         avg_module_power_w=400.0,
         inverter_ac_capacity_w=400.0 / 1.25,
+        tariff=None,
         emissions_params=None,
     )
 
@@ -183,6 +184,7 @@ def test_app_runner_threads_blast_state_across_projection_years(monkeypatch):
         cost_params=SimpleNamespace(battery_cost_per_kwh=500.0),
         avg_module_power_w=400.0,
         inverter_ac_capacity_w=400.0 / 1.25,
+        tariff=None,
         emissions_params=None,
     )
 
