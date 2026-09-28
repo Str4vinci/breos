@@ -191,8 +191,11 @@ From the CLI, the equivalent flag is `--transposition-model perez`
 Use `breos sweep` when you want to run the same scenario over an explicit grid
 of App config values. The top-level keys define the base scenario; every key
 under `[sweep]` replaces the matching key for each run. Quote dotted keys to
-vary values inside a table such as `[costs]`. The command runs the Cartesian
-product and writes one CSV row per combination:
+vary one value inside a table: `[costs]`, `[battery_indoor_model]`,
+`[tariff]` or `[smart_charging]`. A tariff's price maps take one more level,
+the period name, as in `"tariff.import_prices.off_peak"`. Any other key
+inside a table, or a level past the period name, is refused. The command runs
+the Cartesian product and writes one CSV row per combination:
 
 ```toml
 location = "porto"
@@ -221,6 +224,24 @@ sizing, the BREOS version, and top-level scalar result metrics such as grid
 independence, NPV, payback, LCOE, and battery replacement totals. This is
 explicit enumeration, not an optimizer; use the optimization API for searching
 over objectives and constraints.
+
+Every combination is validated before the first run starts, so a bad one,
+such as a charge period the tariff schedule does not have, stops the sweep
+at once. `breos validate-config` checks every combination too.
+
+To compare tariffs, keep one `[tariff]` in the base scenario and vary its
+prices, or give `tariff` itself a list of whole tables:
+
+```toml
+[tariff]
+schedule = "pt_mainland_2026_daily_bi"
+currency = "EUR"
+import_prices = { peak = 0.2310, off_peak = 0.1210 }
+export_prices = { all = 0.0500 }
+
+[sweep]
+"tariff.import_prices.off_peak" = [0.1010, 0.1210, 0.1410]
+```
 
 ## 15-minute resolution
 

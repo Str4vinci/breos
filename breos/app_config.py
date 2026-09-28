@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from numbers import Real
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Mapping
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from breos.config_schema import TableSpec, anything, boolean, choice, list_of, mapping_of, number, text
@@ -921,6 +921,15 @@ SMART_CHARGING_TABLE = TableSpec(
     required=frozenset({"mode"}),
     check=_check_smart_charging_keys,
 )
+
+# The nested tables of an App config, by top-level key. ``pv_arrays`` is a
+# list of tables and is not here: a sweep or merge cannot address one entry.
+NESTED_TABLE_SPECS: Mapping[str, TableSpec] = {
+    "costs": COSTS_TABLE,
+    "battery_indoor_model": INDOOR_MODEL_TABLE,
+    "tariff": TARIFF_TABLE,
+    "smart_charging": SMART_CHARGING_TABLE,
+}
 
 
 def _checked_smart_charging(
