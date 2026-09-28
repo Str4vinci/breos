@@ -24,8 +24,9 @@ This trips people up, so it is worth stating plainly. `App` takes a flat
 dictionary of keys such as `n_modules` and `cost_preset`. The optimizer takes a
 nested dictionary grouped into sections: `location`, `load`, `pv`, `battery`,
 `optimization`, `constraints`, `costs`, `financials`, `emissions`, and
-`simulation`. The two shapes are not interchangeable, and a flat `App` config
-passed to the optimizer fails on the first missing section.
+`simulation`, with an optional `tariff` table. The two shapes are not
+interchangeable, and a flat `App` config passed to the optimizer fails on the
+first missing section.
 
 A ready-to-edit nested config ships as
 [`configs/optimization/projected-optimization.toml`](https://github.com/Str4vinci/breos/blob/main/configs/optimization/projected-optimization.toml).
@@ -119,6 +120,38 @@ with a small `pop_size` and `n_gen` while you check that the config resolves,
 then scale up. To screen a wide design space at lower cost, shorten
 `years_projection` for the screening run. The single-year `steady_state` basis
 was removed in 0.7.0, and a config that still sets it raises an error.
+
+## Price a design with a time-of-use tariff
+
+Add the same `[tariff]` table accepted by App to the optimizer config:
+
+```toml
+# Illustrative prices, not a supplier offer.
+[tariff]
+schedule = "pt_mainland_2026_daily_bi"
+currency = "EUR"
+import_prices = { peak = 0.28, off_peak = 0.11 }
+export_prices = { all = 0.05 }
+fixed_charge_per_day = 0.30
+```
+
+Remove `electricity_cost`, `electricity_sold_cost`, and `daily_power_cost`
+from `[costs]` when you add `[tariff]`. Supplying both raises an error.
+The schedule must match `location.timezone`. Schedules with half-hour or
+quarter-hour boundaries require `simulation.resolution = "15min"`.
+See [Tariffs](../api/tariffs.md) for effective dates and Spanish holiday coverage.
+
+Both `evaluate_projected_design` and `optimize_system_multi_objective` price
+each timestep through the shared projection loop. Each project year replays
+the input calendar, with PV and battery degradation carried between years.
+Tariff prices affect the financial objective; the battery still follows
+self-consumption dispatch. A `smart_charging` table raises until that dispatch
+strategy is supported.
+
+Fixed-design results record the schedule, prices, calendar and hashes in
+`result.provenance["tariff"]`. Search results record the same fields in
+`result.details["provenance"]["tariff"]`. Tariff-enabled searches also support
+`n_procs`, and their results can be pickled.
 
 ## Evaluate one design in detail
 

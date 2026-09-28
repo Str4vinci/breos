@@ -133,6 +133,13 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   New example: `configs/examples/time-of-use-portugal.toml`.
 
 ### Changed
+- Cut CI runner time without dropping a check. Merges into `develop` no
+  longer re-run the workflow, since branch protection already requires each PR
+  to be tested up to date with `develop`. The macOS/Windows smoke suite runs
+  nightly and at the release gates instead of on every PR commit. The
+  full-suite jobs, including the coverage report, run under pytest-xdist
+  (`-n auto`), now in the `dev` extra. A new push to a PR cancels that PR's
+  run still in progress.
 - `resample_tmy_to_15min` is now a thin wrapper over `resample_to_15min`, so
   the two share one interpolation path. Its output is unchanged: the same
   columns, values, and provenance.
@@ -243,6 +250,14 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   24 hours; the `floors` CI job failed on it. Test only.
 
 ### Fixed
+- Fixed-design evaluation and multi-objective optimization now validate and
+  apply the optional `tariff` table through the shared projection loop.
+  Previously they silently ignored it and valued the design at flat prices.
+  App's checks for prices, timezone, resolution and conflicting flat costs
+  apply before PV calculation or worker startup. Results record tariff
+  provenance, and immutable tariff prices can be pickled for worker processes.
+  Unsupported `smart_charging` tables now raise in both optimizer entry points.
+  Configurations without either table keep their existing behavior.
 - Corrected the Portuguese reform citation in ADR 0002 and the tariff plan:
   the electricity periods are set by Diretiva n.º 3/2026, de 19 de agosto; the
   directive with the same number dated 26 June sets gas prices. Docs only.

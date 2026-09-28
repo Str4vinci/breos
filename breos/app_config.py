@@ -845,9 +845,15 @@ def _validate_tariff(cfg: dict[str, Any]) -> None:
 
 
 def resolve_tariff_spec(cfg: dict[str, Any], timezone: str) -> TariffSpec | None:
-    """Build the configured tariff, checking its schedule belongs to the location's timezone."""
+    """Validate and build a tariff for App or an adapted optimizer config.
+
+    ``cfg`` supplies ``tariff``, ``resolution`` and optional ``costs``. Keeping
+    the price-conflict and resolution checks here gives both entry points
+    the same validation before they run the PV model.
+    """
     if cfg["tariff"] is None:
         return None
+    _validate_tariff(cfg)
     table = TARIFF_TABLE.validate(cfg["tariff"])
     schedule = get_tariff_schedule(table["schedule"])
     if schedule.timezone != timezone:

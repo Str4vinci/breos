@@ -484,7 +484,8 @@ fixed_charge_per_day = 0.25              # optional, default 0
   their hashes.
 
 Monte Carlo prices every trajectory with the same tariff. Projected
-optimization does not read a tariff yet.
+optimization accepts the same tariff table in its nested config; see
+[Optimization](optimization.md#price-a-design-with-a-time-of-use-tariff).
 
 ## Load profiles
 
