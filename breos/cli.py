@@ -25,6 +25,7 @@ from breos.app_config import (
     resolve_app_config,
     validate_montecarlo_config,
 )
+from breos.app_inputs import reuse_prepared_inputs
 from breos.config_schema import MappingOf
 from breos.degradation import get_battery_model_profile, list_battery_models
 from breos.io import nonfinite_to_none
@@ -547,6 +548,28 @@ def _write_sweep_csv(rows: list[dict[str, Any]], output: Path) -> None:
             writer.writerow({key: _csv_cell(value) for key, value in row.items()})
 
 
+def _sweep_row(
+    run_idx: int, varied: dict[str, Any], resolved: dict[str, Any], result: dict[str, Any]
+) -> dict[str, Any]:
+    """One sweep CSV row: the run, its varied values, resolved sizing and scalar results."""
+    row: dict[str, Any] = {
+        "run": run_idx,
+        "breos_version": _package_version(),
+    }
+    row.update({f"param_{key}": value for key, value in varied.items()})
+    row.update(
+        {
+            "resolved_location": resolved["location"]["key"] or "custom",
+            "resolved_n_modules": resolved["pv"]["n_modules"],
+            "resolved_battery_kwh": resolved["battery"]["capacity_kwh"],
+            "resolved_pv_kwp": resolved["pv"]["system_kwp"],
+            "resolved_inverter_ac_kw": resolved["inverter"]["ac_rating_kw"],
+        }
+    )
+    row.update(_scalar_result_items(result))
+    return row
+
+
 def _sweep(args: argparse.Namespace) -> int:
     config = _load_config(args.config)
     _ignore_unused_runner_sections(config, command="sweep", used_sections=frozenset({"sweep"}))
@@ -565,27 +588,13 @@ def _sweep(args: argparse.Namespace) -> int:
     ]
     rows: list[dict[str, Any]] = []
 
-    for run_idx, (varied, run_config, resolved) in enumerate(runs, start=1):
-        app = App(run_config)
-        app.simulate()
-        result = app.result()
-
-        row: dict[str, Any] = {
-            "run": run_idx,
-            "breos_version": _package_version(),
-        }
-        row.update({f"param_{key}": value for key, value in varied.items()})
-        row.update(
-            {
-                "resolved_location": resolved["location"]["key"] or "custom",
-                "resolved_n_modules": resolved["pv"]["n_modules"],
-                "resolved_battery_kwh": resolved["battery"]["capacity_kwh"],
-                "resolved_pv_kwp": resolved["pv"]["system_kwp"],
-                "resolved_inverter_ac_kw": resolved["inverter"]["ac_rating_kw"],
-            }
-        )
-        row.update(_scalar_result_items(result))
-        rows.append(row)
+    # Runs that differ only in keys the input stage never reads (a tariff, a
+    # battery size) share one preparation of weather, PV and load (#181).
+    with reuse_prepared_inputs():
+        for run_idx, (varied, run_config, resolved) in enumerate(runs, start=1):
+            app = App(run_config)
+            app.simulate()
+            rows.append(_sweep_row(run_idx, varied, resolved, app.result()))
 
     _write_sweep_csv(rows, args.output)
 
