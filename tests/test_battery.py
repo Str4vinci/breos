@@ -26,7 +26,7 @@ from breos.degradation.engine import BlastEngine
 from breos.economics import system_ac_production_power
 from breos.inverter import _calculate_dc_ac_power_arrays, calculate_dc_ac_power
 from breos.solar import dc_to_ac
-from tests.energy_conservation import assert_energy_conservation
+from tests.energy_conservation import assert_energy_conservation, assert_origin_reconciliation
 
 
 class TestBatteryConfig:
@@ -236,10 +236,10 @@ class TestSimulateEnergyBalance:
             reference.columns["Houseload"][i] = load_wh / hours_per_step
             reference.columns["PV_Delta"][i] = (production - load_wh) / hours_per_step
             reference.columns["Import_From_Grid"][i] = max(0.0, load_wh - to_load) / hours_per_step
-            reference.columns["Sell_To_Grid"][i] = (conversion.ac_power_w - to_load) / hours_per_step
+            reference.columns["PV_AC_Export"][i] = (conversion.ac_power_w - to_load) / hours_per_step
             reference.columns["Battery_SOH"][i] = 100.0
             reference.columns["T_cell"][i] = temperature[i]
-            reference.columns["PV_Curtailment"][i] = conversion.clipping_loss_dc_w / hours_per_step
+            reference.columns["PV_DC_Curtailed"][i] = conversion.clipping_loss_dc_w / hours_per_step
             reference.columns["PV_DC_To_Inverter"][i] = (pv_wh - conversion.clipping_loss_dc_w) / hours_per_step
             reference.columns["PV_DC_Curtailed"][i] = conversion.clipping_loss_dc_w / hours_per_step
             reference.columns["PV_AC_To_Load"][i] = to_load / hours_per_step
@@ -473,8 +473,8 @@ class TestSimulateEnergyBalance:
         )
 
         # Aliased columns would make these two the same array.
-        results_df.loc[0, "PV_Curtailment"] = 1234.5
-        assert results_df.loc[0, "PV_DC_Curtailed"] != 1234.5
+        results_df.loc[0, "PV_Direct_Inverter_Loss"] = 1234.5
+        assert results_df.loc[0, "Inverter_Loss"] != 1234.5
 
     def test_pv_only_run_uses_vectorized_dispatch(self, monkeypatch):
         index = pd.date_range("2025-01-01", periods=24, freq="h", tz="UTC")
@@ -629,7 +629,7 @@ class TestSimulateEnergyBalance:
         # AC production saturates at the inverter rating
         assert results_df["PV_Production"].max() == pytest.approx(1000.0)
         # Export uses the headroom left after serving the load
-        assert results_df["Sell_To_Grid"].max() == pytest.approx(500.0)
+        assert results_df["PV_AC_Export"].max() == pytest.approx(500.0)
         # total_pv sums the clipped AC production
         expected = sum(calculate_dc_ac_power(value, 1000.0, config.inverter_efficiency).ac_power_w for value in pv_dc)
         assert total_pv == pytest.approx(expected)
@@ -705,12 +705,12 @@ class TestSimulateEnergyBalance:
         # Hour 1: DC surplus above the AC cap still charges the DC-coupled
         # battery back to full, while export clips at the rating
         assert results_df["Battery_Energy"].iloc[1] == pytest.approx(1800.0)
-        assert results_df["Sell_To_Grid"].iloc[1] == pytest.approx(1000.0)
+        assert results_df["PV_AC_Export"].iloc[1] == pytest.approx(1000.0)
 
     def test_cold_derate_cannot_sell_energy_pv_never_produced(self):
         # A full battery whose temperature drops sees Emax shrink below its
         # stored energy (lfp cold derate). charge_room went negative and the
-        # battery silently drained into Sell_To_Grid: 100 Wh of PV exported
+        # battery silently drained into PV_AC_Export: 100 Wh of PV exported
         # ~539 Wh in the first cold hour. Export must never exceed PV AC.
         idx = pd.date_range("2025-01-01 00:00", periods=6, freq="h", tz="UTC")
         pv_dc = pd.Series(100.0, index=idx)
@@ -727,7 +727,7 @@ class TestSimulateEnergyBalance:
         )
 
         pv_ac_max = 100.0 * config.inverter_efficiency
-        assert results_df["Sell_To_Grid"].max() <= pv_ac_max + 1e-9
+        assert results_df["PV_AC_Export"].max() <= pv_ac_max + 1e-9
         # Stored energy is clamped into the temperature-derated window
         from breos.battery import lfp_capacity_factor
 
@@ -1088,9 +1088,9 @@ class TestSimulateEnergyBalance:
             "Battery_Energy_End",
             "Battery_PV_Origin_Energy_End",
             "Battery_AC_To_Load",
-            "Battery_AC_To_Load_PV",
+            "PV_Origin_Battery_AC_To_Load",
             "Import_From_Grid",
-            "Sell_To_Grid",
+            "PV_AC_Export",
         ):
             np.testing.assert_allclose(
                 second_results[column],
@@ -1203,7 +1203,7 @@ class TestSimulateEnergyBalance:
             "Battery_Charge_Stored",
             "Battery_Discharge_DC",
             "Battery_AC_To_Load",
-            "Battery_AC_To_Load_PV",
+            "PV_Origin_Battery_AC_To_Load",
             "PV_Origin_Battery_AC_To_Load",
             "PV_Direct_Inverter_Loss",
             "Battery_Inverter_Loss",
@@ -1220,7 +1220,7 @@ class TestSimulateEnergyBalance:
             check_exact=True,
         )
 
-        economics_columns = ("Houseload", "Import_From_Grid", "Sell_To_Grid")
+        economics_columns = ("Houseload", "Import_From_Grid", "PV_AC_Export")
         pd.testing.assert_frame_equal(
             perturbed_results[list(economics_columns)],
             baseline_results[list(economics_columns)],
@@ -1472,7 +1472,7 @@ class TestEnergyLedger:
             freq="15min",
             **kwargs,
         )
-        for column in ("Import_From_Grid", "Sell_To_Grid", "PV_DC_Curtailed"):
+        for column in ("Import_From_Grid", "PV_AC_Export", "PV_DC_Curtailed"):
             assert hourly[column].sum() == pytest.approx(quarterly[column].sum() * 0.25)
         assert hourly["Battery_Energy_End"].iloc[-1] == pytest.approx(quarterly["Battery_Energy_End"].iloc[-1])
 
@@ -1490,7 +1490,7 @@ class TestEnergyLedger:
         assert results["Battery_PV_Origin_Energy_End"].iloc[1] > 0.0
         assert results["PV_Origin_Battery_AC_To_Load"].iloc[2] > 0.0
         assert results["PV_Origin_Battery_AC_To_Load"].iloc[2] <= results["Battery_AC_To_Load"].iloc[2]
-        np.testing.assert_allclose(results["Battery_AC_To_Load_PV"], results["PV_Origin_Battery_AC_To_Load"])
+        assert_origin_reconciliation(results, 1.0)
         assert results["PV_Direct_Inverter_Loss"].sum() > 0.0
         assert results["Battery_Inverter_Loss"].sum() > 0.0
         np.testing.assert_allclose(results["Battery_Charge_Loss"], results["Battery_Charge_Input"] * 0.1)
@@ -1499,7 +1499,7 @@ class TestEnergyLedger:
         results, _, config = self._run([0.0], [0.0], standby_loss_wh=20.0)
         assert_energy_conservation(results, config)
         assert results["Standby_Loss"].iloc[0] == pytest.approx(20.0)
-        assert results["Battery_Standby_Loss"].iloc[0] == pytest.approx(20.0)
+        assert results["Standby_Loss"].iloc[0] == pytest.approx(20.0)
         assert results["Capacity_Window_Loss"].iloc[0] == 0.0
         assert results["Battery_Energy_Delta"].iloc[0] == pytest.approx(-20.0)
 

@@ -133,6 +133,35 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   New example: `configs/examples/time-of-use-portugal.toml`.
 
 ### Changed
+- **Ledger schema 2.0: stored energy has three origins**
+  ([#178](https://github.com/Str4vinci/breos/issues/178), ADR 0002 A8 and A9).
+  Stored energy is split into PV, grid and an unattributed remainder. A fresh
+  pack's initial energy and a replacement pack's energy are unattributed.
+  Discharge, standby loss, capacity-window loss and replacement take from all
+  three origins in proportion to their shares at the start of each operation.
+  The results frame gains the grid-origin balances
+  (`Battery_Grid_Origin_Energy_Beginning`/`_End`) and, for PV and grid, the
+  per-origin columns `*_Origin_Battery_Discharge_DC`,
+  `*_Origin_Battery_AC_To_Load`, `*_Origin_Standby_Loss`,
+  `*_Origin_Capacity_Window_Loss` and `*_Origin_Replacement_Energy_Removed`,
+  plus `PV_Origin_Battery_Charge_Stored`. Each origin now reconciles step by
+  step from the frame alone. The unattributed share of a flow is its total
+  minus the PV and grid shares. Nothing charges the grid origin yet: grid
+  charging comes later in 0.7.0. It can already hold energy carried in
+  through the new `initial_grid_origin_energy_wh` argument of
+  `simulate_energy_balance` and `simulate_energy_balance_summary`. The App,
+  Monte Carlo and optimizer year loops carry it from year to year, the year
+  rows report `Battery_Carried_Grid_Origin_Energy_Wh`, and
+  `SimulationSummary` gains `opening_grid_origin_energy_wh` and
+  `carried_grid_origin_energy_wh`. When a BLAST run restores its SOH from a
+  carried state without a carried energy, the carried origins are now checked
+  against the energy the run starts with, which could open the unattributed
+  origin below zero before. The dispatch step raises if a step both
+  charges and discharges the battery, since one origin share per step relies
+  on that. `ledger_schema_version` is now `2.0`. No reported number changes
+  on either backend: the only App golden fields that move are the two
+  `ledger_schema_version` strings. A year's dispatch is about 14% slower on
+  the Python backend and about 3% slower on Numba.
 - The per-step ledger is laid out in one place
   ([#178](https://github.com/Str4vinci/breos/issues/178)). Each buffer-matrix
   row has one name, its results-frame column, from the day loop through the
@@ -895,6 +924,14 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   unchanged.
 
 ### Removed
+- Removed four per-step result columns that repeated another under a second
+  name (ledger schema 2.0, ADR 0002 A9). Read `PV_AC_Export` for
+  `Sell_To_Grid`, `PV_DC_Curtailed` for `PV_Curtailment`, `Standby_Loss` for
+  `Battery_Standby_Loss`, and `PV_Origin_Battery_AC_To_Load` for
+  `Battery_AC_To_Load_PV`. `system_ac_production_power` and
+  `cost_analysis_projection` no longer accept `Sell_To_Grid` as the export
+  column; the latter raises a `ValueError` that names the rename. The year-row names, such as `Export_kWh` and
+  `Battery_Standby_Loss_kWh`, are unchanged, and so is every value.
 - Removed the optimizer's `costs.panel_wp` override. It priced the steady-state
   CAPEX at a nominal wattage instead of the selected module's rating, so the
   optimizer carried two CAPEX figures for one design: this is how the budget

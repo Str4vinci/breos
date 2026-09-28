@@ -97,6 +97,7 @@ class CarryState:
 
     energy_wh: float | None = None
     pv_origin_energy_wh: float | None = None
+    grid_origin_energy_wh: float | None = None
     fec: float = 0.0
     calendar_seconds: float = 0.0
     cycle_degradation: float = 0.0
@@ -118,6 +119,7 @@ class CarryState:
         if self.energy_wh is not None:
             kwargs["initial_energy_wh"] = self.energy_wh
             kwargs["initial_pv_origin_energy_wh"] = self.pv_origin_energy_wh or 0.0
+            kwargs["initial_grid_origin_energy_wh"] = self.grid_origin_energy_wh or 0.0
         return kwargs
 
     def after_frames(
@@ -134,6 +136,7 @@ class CarryState:
         changes: dict[str, Any] = {
             "energy_wh": float(results_df["Battery_Energy_End"].iloc[-1]),
             "pv_origin_energy_wh": float(results_df["Battery_PV_Origin_Energy_End"].iloc[-1]),
+            "grid_origin_energy_wh": float(results_df["Battery_Grid_Origin_Energy_End"].iloc[-1]),
             "degradation_state": degradation_state,
         }
         if not degradation_df.empty:
@@ -158,6 +161,7 @@ class CarryState:
         changes: dict[str, Any] = {
             "energy_wh": summary.carried_energy_wh,
             "pv_origin_energy_wh": summary.carried_pv_origin_energy_wh,
+            "grid_origin_energy_wh": summary.carried_grid_origin_energy_wh,
             "degradation_state": summary.final_degradation_state,
         }
         if summary.has_degradation_rows:
@@ -182,7 +186,7 @@ _DIAGNOSTIC_COLUMNS = {
     "Battery_AC_To_Load_kWh": "Battery_AC_To_Load",
     "Battery_Charge_Loss_kWh": "Battery_Charge_Loss",
     "Battery_Discharge_Loss_kWh": "Battery_Discharge_Loss",
-    "Battery_Standby_Loss_kWh": "Battery_Standby_Loss",
+    "Battery_Standby_Loss_kWh": "Standby_Loss",
     "Capacity_Window_Loss_kWh": "Capacity_Window_Loss",
     "Replacement_Energy_Removed_kWh": "Battery_Replacement_Energy_Removed",
     "Replacement_Energy_Added_kWh": "Battery_Replacement_Energy_Added",
@@ -191,10 +195,10 @@ _ROW_SUM_COLUMNS = (
     "PV_DC",
     "PV_Production",
     "PV_AC_To_Load",
-    "Battery_AC_To_Load_PV",
+    "PV_Origin_Battery_AC_To_Load",
     "Houseload",
     "Import_From_Grid",
-    "Sell_To_Grid",
+    "PV_AC_Export",
     "PV_DC_Curtailed",
     "Inverter_Loss",
     "Battery_Charge_Stored",
@@ -234,10 +238,10 @@ def build_year_row(
         return float(sums_w[column] * hours_per_step / 1000)
 
     direct_pv_ac_kwh = kwh("PV_AC_To_Load")
-    pv_origin_battery_ac_kwh = kwh("Battery_AC_To_Load_PV")
+    pv_origin_battery_ac_kwh = kwh("PV_Origin_Battery_AC_To_Load")
     total_load = (sums_w["Houseload"] / 1000) * hours_per_step
     total_import = (sums_w["Import_From_Grid"] / 1000) * hours_per_step
-    total_export = (sums_w["Sell_To_Grid"] / 1000) * hours_per_step
+    total_export = (sums_w["PV_AC_Export"] / 1000) * hours_per_step
     row: dict[str, Any] = {
         "Year": year_idx + 1,
         # Delivered AC: PV straight to load, PV-origin battery discharge to
@@ -278,6 +282,9 @@ def build_year_row(
     row["Battery_Carried_PV_Origin_Energy_Wh"] = (
         float(carry.pv_origin_energy_wh) if has_battery and carry.pv_origin_energy_wh is not None else None
     )
+    row["Battery_Carried_Grid_Origin_Energy_Wh"] = (
+        float(carry.grid_origin_energy_wh) if has_battery and carry.grid_origin_energy_wh is not None else None
+    )
     row["Replacement_Steps"] = ";".join(str(step) for step in replacement_steps)
     row["Inverter_Loss_kWh"] = kwh("Inverter_Loss")
     # Cell-side energy in and out, so the pair reflects round-trip loss and
@@ -303,7 +310,7 @@ def _tariff_weights(tariff: ResolvedTariff) -> dict[str, tuple[str, np.ndarray]]
     import_prices = np.asarray(tariff.import_price_per_kwh, dtype=float)
     return {
         "Import_Cost": ("Import_From_Grid", import_prices),
-        "Export_Revenue": ("Sell_To_Grid", np.asarray(tariff.export_price_per_kwh, dtype=float)),
+        "Export_Revenue": ("PV_AC_Export", np.asarray(tariff.export_price_per_kwh, dtype=float)),
         # The no-system household buys its whole load at the same prices.
         "Baseline_Import_Cost": ("Houseload", import_prices),
     }

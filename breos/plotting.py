@@ -450,7 +450,7 @@ def monthly_graphs(results_df: pd.DataFrame, results_directory: str, columns: Op
         df.set_index("Datetime", inplace=True)
 
     if columns is None:
-        columns = ["PV_Production", "Houseload", "Import_From_Grid", "Sell_To_Grid"]
+        columns = ["PV_Production", "Houseload", "Import_From_Grid", "PV_AC_Export"]
 
     # Filter to available columns
     columns = [c for c in columns if c in df.columns]
@@ -499,7 +499,7 @@ def yearly_graphs(results_df: pd.DataFrame, results_directory: str) -> None:
         df["Datetime"] = local_datetime_index(df["Datetime"])
         df.set_index("Datetime", inplace=True)
 
-    columns = ["PV_Production", "Houseload", "Import_From_Grid", "Sell_To_Grid"]
+    columns = ["PV_Production", "Houseload", "Import_From_Grid", "PV_AC_Export"]
     columns = [c for c in columns if c in df.columns]
 
     yearly = _power_frame_to_energy_kwh(df[columns], _result_instants(results_df)).resample("YE").sum()
@@ -515,7 +515,7 @@ def yearly_graphs(results_df: pd.DataFrame, results_directory: str) -> None:
         "PV_Production": "PV Production",
         "Houseload": "Load",
         "Import_From_Grid": "Grid Import",
-        "Sell_To_Grid": "Grid Export",
+        "PV_AC_Export": "Grid Export",
     }
     ax.legend([labels[column] for column in columns])
     ax.grid(True, alpha=0.3, axis="y")
@@ -1357,7 +1357,7 @@ def plot_monthly_comparison(results_df: pd.DataFrame, results_directory: str, sc
         df.set_index("Datetime", inplace=True)
 
     # Monthly aggregation
-    columns = ["PV_Production", "Houseload", "Import_From_Grid", "Sell_To_Grid"]
+    columns = ["PV_Production", "Houseload", "Import_From_Grid", "PV_AC_Export"]
     columns = [c for c in columns if c in df.columns]
 
     monthly = _power_frame_to_energy_kwh(df[columns], _result_instants(results_df)).resample("ME").sum()
@@ -1372,13 +1372,13 @@ def plot_monthly_comparison(results_df: pd.DataFrame, results_directory: str, sc
         "PV_Production": "#FFD700",
         "Houseload": "#4169E1",
         "Import_From_Grid": "#FF6347",
-        "Sell_To_Grid": "#32CD32",
+        "PV_AC_Export": "#32CD32",
     }
     labels = {
         "PV_Production": "PV Generation",
         "Houseload": "Load Demand",
         "Import_From_Grid": "Grid Import",
-        "Sell_To_Grid": "Grid Export",
+        "PV_AC_Export": "Grid Export",
     }
 
     for i, col in enumerate(columns):
@@ -1439,7 +1439,7 @@ def plot_monthly_balance(results_df: pd.DataFrame, results_directory: str) -> No
     else:
         df = results_df.copy()
 
-    energy_columns = ["PV_Production", "Houseload", "Import_From_Grid", "Sell_To_Grid"]
+    energy_columns = ["PV_Production", "Houseload", "Import_From_Grid", "PV_AC_Export"]
     missing = [column for column in energy_columns if column not in df.columns]
     if missing:
         raise ValueError(f"Missing energy-balance column(s): {', '.join(missing)}")
@@ -1463,7 +1463,7 @@ def plot_monthly_balance(results_df: pd.DataFrame, results_directory: str) -> No
 
     # Positives
     ax.bar(months - width / 2, monthly_avg["PV_Production"], width, label="PV Production", color="gold", alpha=0.9)
-    ax.bar(months + width / 2, monthly_avg["Sell_To_Grid"], width, label="Grid Export", color="green", alpha=0.9)
+    ax.bar(months + width / 2, monthly_avg["PV_AC_Export"], width, label="Grid Export", color="green", alpha=0.9)
 
     # Negatives (Load and Import)
     ax.bar(months - width / 2, -monthly_avg["Houseload"], width, label="Load", color="steelblue", alpha=0.9)

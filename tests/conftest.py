@@ -131,7 +131,12 @@ def _stub_projection_balance(monkeypatch, index, captured=None, **columns):
     frame = pd.DataFrame(
         0.0,
         index=index,
-        columns=[*_ROW_SUM_COLUMNS, "Battery_Energy_End", "Battery_PV_Origin_Energy_End"],
+        columns=[
+            *_ROW_SUM_COLUMNS,
+            "Battery_Energy_End",
+            "Battery_PV_Origin_Energy_End",
+            "Battery_Grid_Origin_Energy_End",
+        ],
     )
     for name, values in columns.items():
         frame[name] = values

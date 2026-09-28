@@ -63,11 +63,10 @@ inverter losses.
 | `PV_DC_To_Battery` | W, DC | Charge-path input, before charge loss |
 | `PV_DC_Curtailed` | W, DC | PV that cannot be routed |
 | `PV_AC_To_Load` | W, AC | Direct PV delivered to load |
-| `PV_AC_Export` | W, AC | Direct PV exported (`Sell_To_Grid` alias) |
+| `PV_AC_Export` | W, AC | Direct PV exported |
 | `Battery_Charge_Stored` | W-equivalent | Increase due to charging after charge loss |
 | `Battery_Discharge_DC` | W-equivalent, stored DC | Energy removed from storage |
 | `Battery_AC_To_Load` | W, AC | All battery energy delivered to load |
-| `Battery_AC_To_Load_PV` | W, AC | PV-origin share of battery delivery |
 | `PV_Direct_Inverter_Loss` | W | Direct-PV inverter conversion loss |
 | `Battery_Inverter_Loss` | W | Battery-discharge inverter loss |
 | `Battery_Charge_Loss` / `Battery_Discharge_Loss` | W | Cell conversion losses |
@@ -76,13 +75,45 @@ inverter losses.
 | `Battery_Energy_Beginning` / `Battery_Energy_End` | Wh | Stored energy at interval boundaries |
 | `Battery_Energy_Delta` | W-equivalent | End minus beginning, including explicit boundary adjustments |
 
-PV-origin inventory begins at zero at the reporting boundary and is mixed
-proportionally with stored energy. This prevents initial SOC from being
-credited as PV and makes ending PV inventory visible rather than crediting it
-as self-consumption.
+Ledger schema 2.0 removed four columns that repeated another under a second
+name. Read the second name of each pair instead: `Sell_To_Grid` →
+`PV_AC_Export`, `PV_Curtailment` → `PV_DC_Curtailed`, `Battery_Standby_Loss`
+→ `Standby_Loss`, and `Battery_AC_To_Load_PV` →
+`PV_Origin_Battery_AC_To_Load`.
 
-App and Monte Carlo projections carry both total stored energy and PV-origin
-inventory from one simulated year into the next. They do not reset the battery
+## Energy origins
+
+Stored energy has three origins: PV, grid, and an unattributed remainder. A
+fresh battery starts full with unattributed energy, and a replacement pack's
+energy is unattributed too, so initial SOC is never credited as PV. PV
+charging adds to the PV origin. Nothing charges the grid origin yet: it holds
+only energy carried in with `initial_grid_origin_energy_wh`, until grid
+charging lands.
+Discharge, standby loss, capacity-window loss and replacement each take from
+all three origins in proportion to their shares at the start of that
+operation. A step either charges or discharges the battery, never both, so one
+share per step is exact.
+
+| Column | Unit/basis | Definition |
+|---|---|---|
+| `Battery_PV_Origin_Energy_Beginning` / `_End` | Wh | PV-origin stored energy at interval boundaries |
+| `Battery_Grid_Origin_Energy_Beginning` / `_End` | Wh | Grid-origin stored energy at interval boundaries |
+| `PV_Origin_Battery_Charge_Stored` | W-equivalent | PV charge stored after charge loss |
+| `PV_Origin_Battery_Discharge_DC`, `Grid_Origin_Battery_Discharge_DC` | W-equivalent, stored DC | Each origin's share of `Battery_Discharge_DC` |
+| `PV_Origin_Battery_AC_To_Load`, `Grid_Origin_Battery_AC_To_Load` | W, AC | Each origin's share of `Battery_AC_To_Load` |
+| `PV_Origin_Standby_Loss`, `Grid_Origin_Standby_Loss` | W | Each origin's share of `Standby_Loss` |
+| `PV_Origin_Capacity_Window_Loss`, `Grid_Origin_Capacity_Window_Loss` | W | Each origin's share of `Capacity_Window_Loss` |
+| `PV_Origin_Replacement_Energy_Removed`, `Grid_Origin_Replacement_Energy_Removed` | W-equivalent | Each origin's share of `Battery_Replacement_Energy_Removed` |
+
+The unattributed share of any flow is its total minus the PV and grid shares,
+and the unattributed balance is `Battery_Energy` minus both origin balances.
+Each origin reconciles step by step from these columns alone, to rounding:
+the ending balance is the beginning balance plus charge stored (PV only, for
+now), minus discharge, standby, capacity-window and replacement removal. Only PV-origin discharge counts as
+self-consumption.
+
+App and Monte Carlo projections carry total stored energy and both origin
+balances from one simulated year into the next. They do not reset the battery
 to a free full state at calendar boundaries.
 
 ## Compatibility fields and KPIs
@@ -93,7 +124,7 @@ loss; lower-level callers that omit a nameplate retain the exact legacy
 `(PV_DC − PV_DC_Curtailed) × inverter_efficiency` calculation. It is not
 physical AC delivery through storage, and new KPIs do not derive from it.
 
-Self-consumed PV is `PV_AC_To_Load + Battery_AC_To_Load_PV`. Usable system AC
+Self-consumed PV is `PV_AC_To_Load + PV_Origin_Battery_AC_To_Load`. Usable system AC
 generation is self-consumed PV plus `PV_AC_Export`. Grid independence is
 `1 − Import_From_Grid / Houseload`.
 

@@ -63,4 +63,4 @@ def test_summary_reports_the_ledger_schema_version():
     summary = simulate_energy_balance_summary(
         pv_dc=pv, houseload=load, battery_config=BatteryConfig(nominal_energy_wh=5000.0), freq="h"
     )
-    assert summary.ledger_schema_version == LEDGER_SCHEMA_VERSION == "1.2"
+    assert summary.ledger_schema_version == LEDGER_SCHEMA_VERSION == "2.0"

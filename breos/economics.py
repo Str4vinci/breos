@@ -28,7 +28,7 @@ BATTERY_REPLACEMENT_COST_PER_KWH: float = 500.0
 # rather than buried here.
 DEFAULT_REPLACEMENT_YEAR_FRACTION: float = 0.5
 
-SYSTEM_AC_PRODUCTION_COLUMNS = ("PV_AC_To_Load", "Battery_AC_To_Load_PV")
+SYSTEM_AC_PRODUCTION_COLUMNS = ("PV_AC_To_Load", "PV_Origin_Battery_AC_To_Load", "PV_AC_Export")
 
 # Canonical translation from the public cost-catalogue/config vocabulary to
 # CostParams attributes. App presets, App ``[costs]`` overrides, and the
@@ -56,20 +56,17 @@ def system_ac_production_power(results_df: pd.DataFrame) -> pd.Series:
     """Return usable PV-system AC production in the frame's power unit.
 
     Prefer the explicit ledger: direct PV to load, PV returned from battery
-    to load, and PV exported at the AC boundary. ``Sell_To_Grid`` is accepted
-    as the export alias. Older frames fall back to compatibility-only
-    ``PV_Production``.
+    to load, and PV exported at the AC boundary. Older frames fall back to
+    compatibility-only ``PV_Production``.
     """
     if all(column in results_df.columns for column in SYSTEM_AC_PRODUCTION_COLUMNS):
-        export_column = "PV_AC_Export" if "PV_AC_Export" in results_df.columns else "Sell_To_Grid"
-        if export_column in results_df.columns:
-            columns = [*SYSTEM_AC_PRODUCTION_COLUMNS, export_column]
-            return results_df[columns].apply(pd.to_numeric, errors="coerce").fillna(0.0).sum(axis=1)
+        columns = list(SYSTEM_AC_PRODUCTION_COLUMNS)
+        return results_df[columns].apply(pd.to_numeric, errors="coerce").fillna(0.0).sum(axis=1)
 
     if "PV_Production" in results_df.columns:
         return pd.to_numeric(results_df["PV_Production"], errors="coerce").fillna(0.0)
 
-    required = ", ".join((*SYSTEM_AC_PRODUCTION_COLUMNS, "PV_AC_Export (or Sell_To_Grid)"))
+    required = ", ".join(SYSTEM_AC_PRODUCTION_COLUMNS)
     raise KeyError(f"Results do not contain the AC system-production ledger ({required}) or legacy PV_Production")
 
 
@@ -389,13 +386,14 @@ def cost_analysis_projection(
 
     Args:
         results_df: DataFrame with ``Datetime``, ``Houseload``,
-            ``Import_From_Grid``, and ``Sell_To_Grid``. Required only when
+            ``Import_From_Grid``, and ``PV_AC_Export``. Required only when
             ``yearly_summary_df`` is not supplied, because it feeds the legacy
             first-year estimation path alone; callers that already have actual
             yearly totals may pass ``None``. System production is
-            ``PV_AC_To_Load + Battery_AC_To_Load_PV + PV_AC_Export``
-            (``Sell_To_Grid`` is the export alias); legacy ``PV_Production``
-            is accepted for compatibility.
+            ``PV_AC_To_Load + PV_Origin_Battery_AC_To_Load + PV_AC_Export``;
+            without those, legacy ``PV_Production`` is used. Export is always
+            read from ``PV_AC_Export``: frames written before ledger schema
+            2.0 named it ``Sell_To_Grid`` and must be renamed first.
         costs: Dictionary with cost parameters (from calculate_costs())
         num_years: Number of years to project
         inflation_rate: Annual inflation for electricity/operation costs
@@ -577,9 +575,16 @@ def cost_analysis_projection(
     # Result columns are typically in W (Power).
     # To get Energy (kWh), we need to multiply by hours_per_step and divide by 1000.
 
+    if "PV_AC_Export" not in df.columns:
+        hint = (
+            " Frames written before ledger schema 2.0 call it Sell_To_Grid; rename that column."
+            if ("Sell_To_Grid" in df.columns)
+            else ""
+        )
+        raise ValueError(f"results_df has no PV_AC_Export column.{hint}")
     # First convert columns to numeric, just in case
     df["System_AC_Production"] = system_ac_production_power(df)
-    cols_to_numeric = ["System_AC_Production", "Houseload", "Import_From_Grid", "Sell_To_Grid", "Replacement_Cost"]
+    cols_to_numeric = ["System_AC_Production", "Houseload", "Import_From_Grid", "PV_AC_Export", "Replacement_Cost"]
     for col in cols_to_numeric:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0.0)
@@ -588,7 +593,7 @@ def cost_analysis_projection(
     # Summing Power (W) gives sum(Watts). To get Wh, multiply by hours_per_step.
     # To get kWh, divide by 1000.
     # Replacement_Cost is already in currency (EUR), likely summed is correct (not power->energy).
-    yearly = df[["System_AC_Production", "Houseload", "Import_From_Grid", "Sell_To_Grid"]].groupby(df["Year"]).sum()
+    yearly = df[["System_AC_Production", "Houseload", "Import_From_Grid", "PV_AC_Export"]].groupby(df["Year"]).sum()
 
     # Handle replacement cost separately if present (it's already simple sum, no kWh conversion needed)
     if "Replacement_Cost" in df.columns:
@@ -611,7 +616,7 @@ def cost_analysis_projection(
 
     first_year_load = yearly["Houseload"].iloc[0]
     first_year_import = yearly["Import_From_Grid"].iloc[0]
-    first_year_export = yearly["Sell_To_Grid"].iloc[0]
+    first_year_export = yearly["PV_AC_Export"].iloc[0]
     first_year_pv = yearly["System_AC_Production"].iloc[0]
     first_year_days = daily_counts.iloc[0]
 

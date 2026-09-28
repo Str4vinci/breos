@@ -99,7 +99,7 @@ def test_tou_money_reconciles_with_the_step_ledger(resolution, hours):
 
     assert year1["Import_Cost"] == pytest.approx(priced("Import_From_Grid", import_price), rel=1e-12)
     assert year1["Baseline_Import_Cost"] == pytest.approx(priced("Houseload", import_price), rel=1e-12)
-    assert year1["Export_Revenue"] == pytest.approx(priced("Sell_To_Grid", 0.05), rel=1e-12)
+    assert year1["Export_Revenue"] == pytest.approx(priced("PV_AC_Export", 0.05), rel=1e-12)
     # The DST days are priced over their real 23 and 25 hours: no step is
     # invented, dropped, or counted twice.
     steps_per_day = pd.Series(local.date).value_counts()

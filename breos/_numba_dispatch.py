@@ -97,7 +97,7 @@ def _kernel() -> Any:
     return _KERNEL
 
 
-def _dispatch_day_numba(out: Any, *args: Any, **state: Any) -> Tuple[float, float, float]:
+def _dispatch_day_numba(out: Any, *args: Any, **state: Any) -> Tuple[float, float, float, float]:
     """Run the compiled ``_dispatch_day``; takes the arguments of ``_day_arguments``."""
     global _JIT_CACHE_STATE
 
