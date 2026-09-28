@@ -133,6 +133,18 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   New example: `configs/examples/time-of-use-portugal.toml`.
 
 ### Changed
+- The per-step ledger is laid out in one place
+  ([#178](https://github.com/Str4vinci/breos/issues/178)). Each buffer-matrix
+  row has one name, its results-frame column, from the day loop through the
+  buffers to the frame. The snake-case row aliases and the rename step
+  between them are gone. The result buffers expose their columns as one
+  read-only mapping, so a misspelt column raises instead of being created
+  silently. `LEDGER_SCHEMA_VERSION` moves from `breos.runners.app` to sit
+  beside the column tuples in `breos._dispatch`, and is still importable from
+  `breos.battery`. `SimulationSummary.ledger_schema_version` and Monte Carlo
+  `provenance.ledger_schema_version` now report it too, as App provenance
+  already did. No reported number changes, and the results frame keeps its
+  columns and their order.
 - Cut CI runner time without dropping a check. Merges into `develop` no
   longer re-run the workflow, since branch protection already requires each PR
   to be tested up to date with `develop`. The macOS/Windows smoke suite runs

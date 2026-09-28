@@ -10,6 +10,7 @@ This module handles battery energy storage simulation including:
 
 import math
 from dataclasses import dataclass, field
+from types import MappingProxyType
 from typing import Any, Dict, List, Mapping, Optional, Tuple, Union
 
 import numpy as np
@@ -18,10 +19,10 @@ import rainflow
 
 from breos._dispatch import (  # noqa: F401  -- the dispatch step moved; its names stay importable here
     _LEDGER_COLUMNS,
-    _LEDGER_ROW0,
     _N_ROWS,
-    _STATE_ROW_INDEX,
-    _STATE_ROWS,
+    _ROW,
+    _ROW_COLUMNS,
+    LEDGER_SCHEMA_VERSION,
     _dispatch_day_python,
     compute_cell_temperature,
     lfp_capacity_factor,
@@ -711,6 +712,34 @@ def _step_energy_cap(power_w: Optional[float], hours_per_step: float) -> float:
     return power_w * hours_per_step if power_w is not None else float("inf")
 
 
+# Results-frame column order. Every matrix row appears once, under its row
+# name. The replacement flag and its cost are the only columns that are not
+# matrix rows, and ``Battery_Energy_End`` is the ``Battery_Energy`` array
+# under a second name.
+_FRAME_COLUMNS: Tuple[str, ...] = (
+    *_ROW_COLUMNS[: _ROW["T_cell"] + 1],
+    "Battery_Replaced",
+    "Replacement_Cost",
+    *_ROW_COLUMNS[_ROW["T_cell"] + 1 : _ROW["Battery_Energy_Beginning"] + 1],
+    "Battery_Energy_End",
+    *_ROW_COLUMNS[_ROW["Battery_Energy_Beginning"] + 1 :],
+)
+
+
+def _frame_mapping(rows: Mapping[str, np.ndarray], replaced: np.ndarray, replacement_cost: np.ndarray):
+    """Return every frame column by name, in frame order, as a read-only mapping.
+
+    Read-only so a misspelt name fails as a ``KeyError`` instead of adding a
+    column nothing reads.
+    """
+    specials = {
+        "Battery_Replaced": replaced,
+        "Replacement_Cost": replacement_cost,
+        "Battery_Energy_End": rows["Battery_Energy"],
+    }
+    return MappingProxyType({name: specials[name] if name in specials else rows[name] for name in _FRAME_COLUMNS})
+
+
 class _ResultBuffers:
     """Pre-allocated per-timestep output arrays and their frame layout.
 
@@ -719,28 +748,24 @@ class _ResultBuffers:
     allocation and :meth:`to_frame` here means the column set is described
     once instead of drifting between two ends of a 700-line function.
 
-    ``replaced`` and ``replacement_cost`` are zero-filled because only
-    replacement days write them; every other array is fully overwritten each
-    step and is left uninitialised.
+    ``columns`` holds every frame column by its frame name, which is also the
+    name the day loop's row constants are built from. ``replaced`` and
+    ``replacement_cost`` are zero-filled because only replacement days write
+    them; every matrix row is fully overwritten each step and is left
+    uninitialised.
     """
 
-    __slots__ = (
-        "matrix",
-        "replaced",
-        "replacement_cost",
-        "ledger",
-    ) + _STATE_ROWS
+    __slots__ = ("matrix", "replaced", "replacement_cost", "columns")
 
     def __init__(self, n_steps: int) -> None:
         # One row per per-step column, so a whole day of every output can be
-        # handed to a compiled kernel as a single contiguous array. Each named
-        # attribute below is a view on its row, not a copy.
-        self.matrix = np.empty((_N_ROWS, n_steps))
-        for row, name in enumerate(_STATE_ROWS):
-            setattr(self, name, self.matrix[row])
-        self.replaced = np.zeros(n_steps, dtype=bool)
-        self.replacement_cost = np.zeros(n_steps)
-        self.ledger = {key: self.matrix[_LEDGER_ROW0 + offset] for offset, key in enumerate(_LEDGER_COLUMNS)}
+        # handed to a compiled kernel as a single contiguous array. Each
+        # column below is a view on its row, not a copy.
+        self.matrix: np.ndarray = np.empty((_N_ROWS, n_steps))
+        self.replaced: np.ndarray = np.zeros(n_steps, dtype=bool)
+        self.replacement_cost: np.ndarray = np.zeros(n_steps)
+        rows = {name: self.matrix[row] for row, name in enumerate(_ROW_COLUMNS)}
+        self.columns: Mapping[str, np.ndarray] = _frame_mapping(rows, self.replaced, self.replacement_cost)
 
     def zero_fill(self) -> None:
         """Zero every per-step column the caller is not going to write."""
@@ -748,47 +773,11 @@ class _ResultBuffers:
 
     def column_arrays(self) -> Dict[str, np.ndarray]:
         """Return every per-timestep output column, keyed by its frame name."""
-        return _column_arrays(self)
+        return dict(self.columns)
 
     def to_frame(self, rng: pd.DatetimeIndex) -> pd.DataFrame:
         """Assemble the public per-timestep results frame."""
-        return pd.DataFrame({"Datetime": rng, **self.column_arrays()})
-
-
-def _column_arrays(buffers: Any) -> Dict[str, np.ndarray]:
-    """Return every per-timestep output column of *buffers*, keyed by frame name.
-
-    Both buffer types and both result builders read a run through this one
-    mapping, so no path can report a different column set from the one the
-    detailed frame exposes.
-    """
-    return {
-        "PV_DC": buffers.pv_dc,
-        "PV_Production": buffers.pv_production,
-        "Houseload": buffers.load,
-        "PV_Delta": buffers.pv_delta,
-        "Import_From_Grid": buffers.grid_import,
-        "Sell_To_Grid": buffers.grid_export,
-        "Battery_Energy": buffers.battery_energy,
-        "Battery_SOC_Normalized": buffers.soc_normalized,
-        "Battery_SOC_Absolute": buffers.soc_absolute,
-        "Battery_SOH": buffers.soh,
-        "T_cell": buffers.t_cell,
-        "Battery_Replaced": buffers.replaced,
-        "Replacement_Cost": buffers.replacement_cost,
-        "PV_Curtailment": buffers.pv_curtailment,
-        "Battery_Charge_Loss": buffers.charge_loss,
-        "Battery_Discharge_Loss": buffers.discharge_loss,
-        "Battery_Standby_Loss": buffers.standby_loss,
-        # Stored-energy state columns are Wh; all explicit flow/loss
-        # ledger columns are average W over the timestep. The
-        # end-of-step energy is the same array as "Battery_Energy".
-        "Battery_Energy_Beginning": buffers.battery_energy_begin,
-        "Battery_Energy_End": buffers.battery_energy,
-        "Battery_PV_Origin_Energy_Beginning": buffers.pv_origin_begin,
-        "Battery_PV_Origin_Energy_End": buffers.pv_origin_end,
-        **buffers.ledger,
-    }
+        return pd.DataFrame({"Datetime": rng, **self.columns})
 
 
 def _column_sums(columns: Dict[str, np.ndarray]) -> Dict[str, float]:
@@ -815,73 +804,70 @@ def _column_sums(columns: Dict[str, np.ndarray]) -> Dict[str, float]:
     return sums
 
 
-# The per-step columns a PV-only run actually writes. Everything else in
-# :func:`_column_arrays` stays at zero when there is no battery.
-_PV_ONLY_STATE_ROWS: Tuple[str, ...] = (
-    "pv_dc",
-    "pv_production",
-    "load",
-    "pv_delta",
-    "grid_import",
-    "grid_export",
-    "soh",
-    "t_cell",
-    "pv_curtailment",
-)
-_PV_ONLY_LEDGER_COLUMNS: Tuple[str, ...] = (
+# The per-step rows a PV-only run actually writes. Everything else stays at
+# zero when there is no battery.
+_PV_ONLY_ROWS: Tuple[str, ...] = (
+    "PV_DC",
+    "PV_Production",
+    "Houseload",
+    "PV_Delta",
+    "Import_From_Grid",
+    "Sell_To_Grid",
+    "Battery_SOH",
+    "T_cell",
+    "PV_Curtailment",
     "PV_DC_To_Inverter",
     "PV_AC_To_Load",
     "PV_Direct_Inverter_Loss",
 )
+# Rows a PV-only run fills with values it already wrote under another name.
+_PV_ONLY_ALIASES: Dict[str, str] = {
+    "PV_DC_Curtailed": "PV_Curtailment",
+    "PV_AC_Export": "Sell_To_Grid",
+    "Inverter_Loss": "PV_Direct_Inverter_Loss",
+}
 
 
 class _PvOnlySummaryBuffers:
     """Reduced per-step buffers for a PV-only run that only owes a summary.
 
-    A system with no battery leaves 24 of the columns :func:`_column_arrays`
-    reports at zero for every step, and writes three more with values it has
-    already written under another name. Allocating the full
-    ``(_N_ROWS, n_steps)`` matrix to hold that costs about three times the
-    memory such a run needs, and a Monte Carlo study pays it once per
-    simulated year in every worker at once -- which is memory traffic, not
-    arithmetic, and so is exactly what stops the study scaling across cores.
+    A system with no battery leaves 24 of the frame's columns at zero for
+    every step, and writes three more with values it has already written
+    under another name. Allocating the full ``(_N_ROWS, n_steps)`` matrix to
+    hold that costs about three times the memory such a run needs, and a
+    Monte Carlo study pays it once per simulated year in every worker at
+    once -- which is memory traffic, not arithmetic, and so is exactly what
+    stops the study scaling across cores.
 
-    This type presents the same reading interface over twelve written arrays,
-    one shared zero array and one shared zero mask. It is deliberately a
-    summary-path type with no ``to_frame``: the detailed frame must not hand
-    a caller aliased columns it could write through.
+    This type presents the same ``columns`` mapping over twelve written
+    arrays, one shared zero array and one shared zero mask. It is
+    deliberately a summary-path type with no ``to_frame``: the detailed frame
+    must not hand a caller aliased columns it could write through.
     """
 
-    __slots__ = ("zeros", "replaced", "replacement_cost", "ledger") + _STATE_ROWS
+    __slots__ = ("zeros", "replaced", "replacement_cost", "columns")
 
     def __init__(self, n_steps: int) -> None:
-        self.zeros = np.zeros(n_steps)
-        written = frozenset(_PV_ONLY_STATE_ROWS)
-        for name in _STATE_ROWS:
-            # Written rows are left uninitialised; the dispatch overwrites
-            # every element of each one before anything reads it.
-            setattr(self, name, np.empty(n_steps) if name in written else self.zeros)
-        self.replaced = np.zeros(n_steps, dtype=bool)
-        self.replacement_cost = self.zeros
-
-        ledger: Dict[str, np.ndarray] = {name: np.empty(n_steps) for name in _PV_ONLY_LEDGER_COLUMNS}
-        # Three ledger columns hold, step for step, values the run has
-        # already produced under another name. Pointing them at that array
-        # keeps every reported sum identical and drops three more
-        # full-length allocations per simulated year.
-        ledger["PV_DC_Curtailed"] = self.pv_curtailment
-        ledger["PV_AC_Export"] = self.grid_export
-        ledger["Inverter_Loss"] = ledger["PV_Direct_Inverter_Loss"]
-        for name in _LEDGER_COLUMNS:
-            ledger.setdefault(name, self.zeros)
-        self.ledger = ledger
+        self.zeros: np.ndarray = np.zeros(n_steps)
+        self.replaced: np.ndarray = np.zeros(n_steps, dtype=bool)
+        self.replacement_cost: np.ndarray = self.zeros
+        # Written rows are left uninitialised; the dispatch overwrites every
+        # element of each one before anything reads it. The aliased rows
+        # keep every reported sum identical and drop three more full-length
+        # allocations per simulated year.
+        rows: Dict[str, np.ndarray] = {name: np.empty(n_steps) for name in _PV_ONLY_ROWS}
+        for alias, name in _PV_ONLY_ALIASES.items():
+            rows[alias] = rows[name]
+        for name in _ROW_COLUMNS:
+            rows.setdefault(name, self.zeros)
+        self.columns: Mapping[str, np.ndarray] = _frame_mapping(rows, self.replaced, self.replacement_cost)
 
     def zero_fill(self) -> None:
         """No-op: unwritten columns are already served by the zero array."""
 
     def column_arrays(self) -> Dict[str, np.ndarray]:
         """Return every per-timestep output column, keyed by its frame name."""
-        return _column_arrays(self)
+        return dict(self.columns)
 
 
 @dataclass(slots=True)
@@ -1005,14 +991,14 @@ def _apply_battery_replacement(
 
     out.replaced[step_index] = True
     out.replacement_cost[step_index] = battery_config.replacement_cost
-    out.battery_energy[step_index] = battery_energy_wh
-    out.soc_normalized[step_index] = 1.0
-    out.soc_absolute[step_index] = battery_config.max_soc
-    out.soh[step_index] = 100.0
-    out.pv_origin_end[step_index] = 0.0
-    out.ledger["Battery_Replacement_Energy_Removed"][step_index] = replacement_energy_removed / hours_per_step
-    out.ledger["Battery_Replacement_Energy_Added"][step_index] = replacement_energy_added / hours_per_step
-    out.ledger["Battery_Energy_Delta"][step_index] = (battery_energy_wh - battery_energy_beginning) / hours_per_step
+    out.columns["Battery_Energy"][step_index] = battery_energy_wh
+    out.columns["Battery_SOC_Normalized"][step_index] = 1.0
+    out.columns["Battery_SOC_Absolute"][step_index] = battery_config.max_soc
+    out.columns["Battery_SOH"][step_index] = 100.0
+    out.columns["Battery_PV_Origin_Energy_End"][step_index] = 0.0
+    out.columns["Battery_Replacement_Energy_Removed"][step_index] = replacement_energy_removed / hours_per_step
+    out.columns["Battery_Replacement_Energy_Added"][step_index] = replacement_energy_added / hours_per_step
+    out.columns["Battery_Energy_Delta"][step_index] = (battery_energy_wh - battery_energy_beginning) / hours_per_step
 
     return battery_energy_wh, 0.0, battery_config.max_soc
 
@@ -1059,22 +1045,22 @@ def _dispatch_no_battery_vectorized(
     grid_export_w = grid_export_wh / hours_per_step
     conversion_w = conversion_loss_wh / hours_per_step
 
-    out.pv_dc[:] = pv_dc_wh / hours_per_step
-    out.pv_production[:] = pv_production_wh / hours_per_step
-    out.load[:] = load_wh / hours_per_step
-    out.pv_delta[:] = (pv_production_wh - load_wh) / hours_per_step
-    out.grid_import[:] = grid_import_wh / hours_per_step
-    out.grid_export[:] = grid_export_w
-    out.soh.fill(100.0)
-    out.t_cell[:] = temperature_values
-    out.pv_curtailment[:] = curtailment_w
+    out.columns["PV_DC"][:] = pv_dc_wh / hours_per_step
+    out.columns["PV_Production"][:] = pv_production_wh / hours_per_step
+    out.columns["Houseload"][:] = load_wh / hours_per_step
+    out.columns["PV_Delta"][:] = (pv_production_wh - load_wh) / hours_per_step
+    out.columns["Import_From_Grid"][:] = grid_import_wh / hours_per_step
+    out.columns["Sell_To_Grid"][:] = grid_export_w
+    out.columns["Battery_SOH"].fill(100.0)
+    out.columns["T_cell"][:] = temperature_values
+    out.columns["PV_Curtailment"][:] = curtailment_w
 
-    out.ledger["PV_DC_To_Inverter"][:] = (pv_dc_wh - clipping_loss_dc_wh) / hours_per_step
-    out.ledger["PV_DC_Curtailed"][:] = curtailment_w
-    out.ledger["PV_AC_To_Load"][:] = pv_ac_to_load_wh / hours_per_step
-    out.ledger["PV_AC_Export"][:] = grid_export_w
-    out.ledger["PV_Direct_Inverter_Loss"][:] = conversion_w
-    out.ledger["Inverter_Loss"][:] = conversion_w
+    out.columns["PV_DC_To_Inverter"][:] = (pv_dc_wh - clipping_loss_dc_wh) / hours_per_step
+    out.columns["PV_DC_Curtailed"][:] = curtailment_w
+    out.columns["PV_AC_To_Load"][:] = pv_ac_to_load_wh / hours_per_step
+    out.columns["PV_AC_Export"][:] = grid_export_w
+    out.columns["PV_Direct_Inverter_Loss"][:] = conversion_w
+    out.columns["Inverter_Loss"][:] = conversion_w
 
 
 def _apply_daily_degradation(
@@ -1217,10 +1203,10 @@ def _build_summary_row(
     ``total_pv`` is both a summary row and a separate public return value, so
     it is computed once here and handed back rather than recomputed.
     """
-    total_pv = np.sum(buffers.pv_production) * hours_per_step
-    total_load = np.sum(buffers.load) * hours_per_step
-    total_sell = np.sum(buffers.grid_export) * hours_per_step
-    total_import = np.sum(buffers.grid_import) * hours_per_step
+    total_pv = np.sum(buffers.columns["PV_Production"]) * hours_per_step
+    total_load = np.sum(buffers.columns["Houseload"]) * hours_per_step
+    total_sell = np.sum(buffers.columns["Sell_To_Grid"]) * hours_per_step
+    total_import = np.sum(buffers.columns["Import_From_Grid"]) * hours_per_step
 
     percentage_imported = (total_import / total_load * 100) if total_load > 0 else 0
 
@@ -1347,6 +1333,9 @@ class SimulationSummary:
     # ``sum(column * weights)`` for each requested (column, weights) pair,
     # such as import power times the step's import price.
     weighted_sums: Dict[str, float] = field(default_factory=dict)
+    # The ledger schema the column sums follow; App and Monte Carlo report
+    # the same version.
+    ledger_schema_version: str = LEDGER_SCHEMA_VERSION
 
 
 def weighted_column_sums(
@@ -1398,7 +1387,7 @@ def _build_simulation_summary(
         )
 
     return SimulationSummary(
-        n_steps=len(buffers.battery_energy),
+        n_steps=len(buffers.columns["Battery_Energy"]),
         hours_per_step=core.hours_per_step,
         has_battery=core.has_battery,
         column_sums=column_sums,
@@ -1413,10 +1402,10 @@ def _build_simulation_summary(
         # The opening state makes the year-to-year seam checkable from a
         # summary alone: the first step's beginning energy must equal what the
         # previous year carried out.
-        opening_energy_wh=float(buffers.battery_energy_begin[0]),
-        opening_pv_origin_energy_wh=float(buffers.pv_origin_begin[0]),
-        carried_energy_wh=float(buffers.battery_energy[-1]),
-        carried_pv_origin_energy_wh=float(buffers.pv_origin_end[-1]),
+        opening_energy_wh=float(buffers.columns["Battery_Energy_Beginning"][0]),
+        opening_pv_origin_energy_wh=float(buffers.columns["Battery_PV_Origin_Energy_Beginning"][0]),
+        carried_energy_wh=float(buffers.columns["Battery_Energy"][-1]),
+        carried_pv_origin_energy_wh=float(buffers.columns["Battery_PV_Origin_Energy_End"][-1]),
         has_degradation_rows=bool(core.degradation_tracking),
         fec_cum=aging.fec_cum,
         cumulative_calendar_seconds=aging.cumulative_cal_seconds,
@@ -1760,8 +1749,8 @@ def _simulate_core(
             ticks_per_second=ticks_per_second,
             # Copied before the call so a replacement rewriting the closing
             # step's recorded state cannot reach the day the aging model saw.
-            soc_absolute_day=out.soc_absolute[window_start:window_end].copy(),
-            t_cell_day=out.t_cell[window_start:window_end].copy(),
+            soc_absolute_day=out.columns["Battery_SOC_Absolute"][window_start:window_end].copy(),
+            t_cell_day=out.columns["T_cell"][window_start:window_end].copy(),
             finalize_cycles=finalize_degradation and window_end == n_steps,
             hours_per_step=hours_per_step,
             battery_energy_wh=Battery_Energy_Wh,

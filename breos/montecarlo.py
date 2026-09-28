@@ -36,7 +36,7 @@ from breos.app_inputs import (
     build_dc_system_base,
     load_consumption_profile,
 )
-from breos.battery import AlignedSimulationInputs, align_simulation_inputs
+from breos.battery import LEDGER_SCHEMA_VERSION, AlignedSimulationInputs, align_simulation_inputs
 from breos.economics import find_payback_year, find_payback_year_exact
 from breos.execution import (
     aggregate_jit_cache_states,
@@ -708,6 +708,7 @@ def run_montecarlo(config: dict[str, Any], settings: MonteCarloSettings) -> Mont
                 "numpy.random.default_rng(numpy.random.SeedSequence(base_seed).spawn(n_runs)[zero_based_run_index])"
             ),
             "execution": backend_provenance,
+            "ledger_schema_version": LEDGER_SCHEMA_VERSION,
             **({"tariff": tariff_provenance(tariff, calendar_year=settings.target_year)} if tariff is not None else {}),
         },
     )

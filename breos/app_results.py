@@ -11,8 +11,9 @@ from typing import Any, cast
 import pandas as pd
 
 from breos.app_config import ResolvedAppConfig
+from breos.battery import LEDGER_SCHEMA_VERSION
 from breos.emissions import calculate_co2_savings
-from breos.runners.app import LEDGER_SCHEMA_VERSION, SimulationArtifacts
+from breos.runners.app import SimulationArtifacts
 from breos.utils import get_hours_per_step, local_datetime_index
 
 
