@@ -2,15 +2,18 @@
 
 from __future__ import annotations
 
+import json
+from contextlib import contextmanager
+from contextvars import ContextVar
 from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, cast
+from typing import Any, Callable, Iterator, cast
 
 import pandas as pd
 from pvlib.location import Location
 
-from breos.app_config import ResolvedAppConfig
+from breos.app_config import ResolvedAppConfig, resolve_app_config
 from breos.pv.horizon import apply_terrain_horizon_profile
 from breos.pv.model_options import DEFAULT_SOLAR_POSITION
 from breos.solar import (
@@ -367,3 +370,127 @@ def prepare_simulation_inputs(
         load_data=load_data,
         temperature_series=temperature_series,
     )
+
+
+# Config keys that do not reach prepare_simulation_inputs, directly or through
+# the ResolvedAppConfig fields it reads (location, tilt, azimuth, tracking,
+# pv_arrays, pv_params). Each was traced and is pinned by a test that changes
+# it and compares the prepared inputs. They feed dispatch, degradation,
+# valuation, emissions or the backend, all of which run after this stage.
+# A key not listed here is part of the cache key, so a new key is safe until
+# it is shown not to matter.
+INPUT_INDEPENDENT_KEYS: frozenset[str] = frozenset(
+    {
+        # Battery sizing and dispatch.
+        "battery_kwh",
+        "battery_min_soc",
+        "battery_max_soc",
+        "battery_max_charge_power_w",
+        "battery_max_discharge_power_w",
+        "battery_power_limit_c_rate",
+        "battery_eol_percentage",
+        "battery_rte",
+        "enable_resistance_fade",
+        "inverter_efficiency",
+        "inverter_loading_ratio",
+        # Degradation.
+        "calendar_model",
+        "degradation_engine",
+        "blast_model",
+        "pv_degradation_rate",
+        "projection_years",
+        # Prices, valuation and dispatch strategy.
+        "cost_preset",
+        "costs",
+        "inflation_rate",
+        "sell_price_inflation",
+        "discount_rate",
+        "tariff",
+        "smart_charging",
+        # Emissions and execution.
+        "emissions_country",
+        "export_emissions_factor_gco2_kwh",
+        "execution_backend",
+    }
+)
+
+# The block's one cached preparation, by (input key, dependencies, prepare).
+_PREPARED_INPUTS_CACHE: ContextVar[dict[tuple[Any, ...], PreparedSimulationInputs] | None] = ContextVar(
+    "breos_prepared_inputs_cache", default=None
+)
+
+
+@contextmanager
+def reuse_prepared_inputs() -> Iterator[None]:
+    """Reuse prepared inputs across the App runs inside the block.
+
+    ``breos sweep`` runs many Apps that often differ only in keys the input
+    stage never reads, such as a tariff or a battery size. Inside this block,
+    :func:`prepare_simulation_inputs_cached` prepares weather, PV, load and
+    battery temperature once and hands each run with the same input
+    configuration its own deep copy. It holds one preparation, the latest,
+    so memory stays at one run's inputs however many configurations the
+    block sees; run the Apps grouped by :func:`input_configuration_key` to
+    reuse each preparation fully. The cache lives only for the block. Files
+    are read once per preparation, so a file changed meanwhile is not re-read,
+    and a warning the input stage raises appears only for the run that
+    prepared those inputs.
+    """
+    token = _PREPARED_INPUTS_CACHE.set({})
+    try:
+        yield
+    finally:
+        _PREPARED_INPUTS_CACHE.reset(token)
+
+
+def _input_cache_key(cfg: dict[str, Any]) -> str | None:
+    """The resolved config without the input-independent keys, as canonical JSON.
+
+    None when a value is not plain JSON data (an in-memory frame or series),
+    which the key could not represent faithfully; that run is not cached.
+    """
+    relevant = {key: value for key, value in cfg.items() if key not in INPUT_INDEPENDENT_KEYS}
+    try:
+        return json.dumps(relevant, sort_keys=True)
+    except (TypeError, ValueError):
+        return None
+
+
+def input_configuration_key(config: dict[str, Any]) -> str | None:
+    """The input configuration a raw App config resolves to, or None if it cannot be cached.
+
+    Two configs with the same key get the same prepared inputs.
+    """
+    return _input_cache_key(resolve_app_config(config).cfg)
+
+
+def prepare_simulation_inputs_cached(
+    cfg: dict[str, Any],
+    resolved: ResolvedAppConfig,
+    deps: AppRuntimeDependencies,
+    *,
+    prepare: Callable[..., PreparedSimulationInputs] = prepare_simulation_inputs,
+) -> PreparedSimulationInputs:
+    """:func:`prepare_simulation_inputs`, reused inside :func:`reuse_prepared_inputs`.
+
+    ``resolved`` is derived from ``cfg`` alone, so the resolved config
+    without :data:`INPUT_INDEPENDENT_KEYS`, with the runtime dependencies,
+    identifies the inputs. Outside the block this prepares afresh, as before.
+    ``prepare`` is the preparation to reuse; the App runner passes its own
+    reference, which tests replace.
+    """
+    cache = _PREPARED_INPUTS_CACHE.get()
+    key = _input_cache_key(cfg) if cache is not None else None
+    if cache is None or key is None:
+        return prepare(cfg, resolved, deps)
+    entry = (key, deps, prepare)
+    try:
+        hit = entry in cache
+    except TypeError:
+        # A replaced dependency that cannot be hashed; prepare afresh.
+        return prepare(cfg, resolved, deps)
+    if not hit:
+        cache.clear()
+        cache[entry] = prepare(cfg, resolved, deps)
+    # A copy per run, so nothing a run does to its inputs reaches the next.
+    return deepcopy(cache[entry])

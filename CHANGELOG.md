@@ -198,6 +198,19 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   from 1,431 to 1,823 kWh in year 1; 387 kWh of that is grid charge.
 
 ### Changed
+- `breos sweep` prepares weather, PV, load and battery temperature once per
+  distinct input configuration and reuses them across the runs that differ
+  only in settings the input stage never reads, such as a tariff, a battery
+  size or a price ([#181](https://github.com/Str4vinci/breos/issues/181)).
+  `breos.app_inputs.INPUT_INDEPENDENT_KEYS` lists those settings, and a test
+  changes each one and checks that the prepared inputs stay the same. Each run
+  gets its own copy. A 24-run tariff and battery sweep on live PVGIS weather
+  took 26 s instead of 59 s, with 2 weather fetches instead of 24, and wrote
+  the same CSV bytes. The sweep runs its grid grouped by input
+  configuration and writes the rows in grid order, and the cache holds one
+  preparation at a time, so memory stays at one run's inputs. The cache lives
+  only for one sweep; `App` itself still prepares its inputs afresh. No
+  reported number changes.
 - `breos sweep` takes its dotted keys from the config registry
   ([#181](https://github.com/Str4vinci/breos/issues/181)). It accepts any key
   of `[costs]`, `[battery_indoor_model]`, `[tariff]` and `[smart_charging]`,

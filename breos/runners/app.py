@@ -9,7 +9,7 @@ import numpy as np
 import pandas as pd
 
 from breos.app_config import DEFAULTS, ResolvedAppConfig, default_module_key
-from breos.app_inputs import AppRuntimeDependencies, prepare_simulation_inputs
+from breos.app_inputs import AppRuntimeDependencies, prepare_simulation_inputs, prepare_simulation_inputs_cached
 from breos.battery import LEDGER_SCHEMA_VERSION
 from breos.degradation.results import DegradationEngineName, build_degradation_summary_from_state
 from breos.economics import find_payback_year
@@ -306,7 +306,7 @@ def run_app_simulation(
     )
     execution = backend_provenance(execution_backend, pv_only=not has_battery)
 
-    inputs = prepare_simulation_inputs(cfg, resolved, deps)
+    inputs = prepare_simulation_inputs_cached(cfg, resolved, deps, prepare=prepare_simulation_inputs)
 
     projection_years = cfg["projection_years"]
     degradation_rate = cfg["pv_degradation_rate"]

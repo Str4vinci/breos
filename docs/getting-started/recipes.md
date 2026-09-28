@@ -230,6 +230,16 @@ Every combination is validated before the first run starts, so a bad one,
 such as a charge period the tariff schedule does not have, stops the sweep
 at once. `breos validate-config` checks every combination too.
 
+Runs that differ only in settings the input stage never reads share one
+preparation of weather, PV, load and battery temperature. Those settings are
+the battery and inverter settings, degradation, the projection length, prices,
+`[tariff]`, `[smart_charging]`, emissions and the execution backend. A tariff
+or battery-size comparison therefore fetches PVGIS weather and runs the PV
+model once per PV design, not once per run, and writes the same CSV as
+preparing each run afresh. To do so it runs the grid grouped by PV design,
+while the CSV keeps the grid order. A warning from the input stage appears
+once, for the run that prepares those inputs.
+
 To compare tariffs, keep one `[tariff]` in the base scenario and vary its
 prices, or give `tariff` itself a list of whole tables, each of which
 replaces the base `[tariff]` for its run. The CSV's year-1 money columns
