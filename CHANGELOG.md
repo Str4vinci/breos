@@ -243,6 +243,9 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   24 hours; the `floors` CI job failed on it. Test only.
 
 ### Fixed
+- Corrected the Portuguese reform citation in ADR 0002 and the tariff plan:
+  the electricity periods are set by Diretiva n.º 3/2026, de 19 de agosto; the
+  directive with the same number dated 26 June sets gas prices. Docs only.
 - App weather that does not cover the whole calendar year of `start_date`
   raises `ValueError` instead of simulating a shorter year
   ([#242](https://github.com/Str4vinci/breos/issues/242)). The simulation
