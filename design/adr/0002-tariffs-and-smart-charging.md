@@ -235,10 +235,10 @@ Implementation follows the delivery sequence in
 The 0.7 readiness audit (#187) found details the decision above leaves open
 and statements the code has since outgrown. A6 was **Accepted** on 2026-09-26
 and every other amendment below on 2026-09-27. Each one replaces the text it
-names, and that text is marked in place above. Accepting A6–A10 accepts the
-design for the dispatch-seam and ledger work, not its implementation: grid
-charging, origin accounting, ledger schema 2.0 and net-exchange emissions do
-not exist yet and must still be implemented and validated. Economic
+names, and that text is marked in place above. Accepting A6–A10 accepted the
+design for the dispatch-seam and ledger work, not its implementation. Grid
+charging, origin accounting, ledger schema 2.0 and net-exchange emissions were
+then implemented for 0.7.0 in #279–#282 (#178). Economic
 conventions and money naming are in
 [ADR 0003](0003-economic-basis.md).
 
@@ -418,8 +418,8 @@ results bit-identical rather than equal up to rounding. PV production for LCOE a
 
 ### Implementation notes for the dispatch-seam PR
 
-These are not decisions. They record where the current step resists A6–A9,
-for the seam PR that follows #177 (one dispatch step for both backends).
+These are not decisions. They record where the step resisted A6–A9 before
+the seam work that followed #177. All four were resolved in #279–#281.
 
 - `_dispatch_dc_step`'s `charge()` assigns its ledger entries and runs at
   most once per step. PV and grid charge must accumulate into one charge

@@ -53,7 +53,7 @@ weather/data access, load profiles, PV system data, and cost assumptions; see
 | `cost_preset` | `None` | Cost preset key from packaged defaults |
 | `costs` | *unset* | Optional cost overrides layered over the selected preset and built-in defaults; see [below](#cost-and-emissions-presets) |
 | `tariff` | *unset* | Time-of-use import and export prices on a bundled schedule, replacing the flat `electricity_cost`, `electricity_sold_cost` and `daily_power_cost`; see [Time-of-use tariffs](#time-of-use-tariffs) |
-| `smart_charging` | *unset* | Grid charging toward a target in the tariff's cheap periods; validated but not yet runnable. See [Smart charging](#smart-charging) |
+| `smart_charging` | *unset* | Grid charging toward a target in the tariff's cheap periods. See [Smart charging](#smart-charging) |
 | `inflation_rate` | `0.02` | Annual electricity price inflation |
 | `sell_price_inflation` | `0.0` | Annual inflation of the grid export (sell) price |
 | `discount_rate` | `0.03` | Discount rate for NPV |
@@ -490,17 +490,10 @@ optimization accepts the same tariff table in its nested config; see
 
 ## Smart charging
 
-```{note}
-The `[smart_charging]` table is validated but not yet runnable. BREOS checks
-it when App is built, then `App.simulate()` raises `smart_charging
-fixed_target is not supported yet` until the battery dispatch can charge from
-the grid ([#178](https://github.com/Str4vinci/breos/issues/178)). Projected
-optimization raises the same error. `mode = "disabled"` runs, with the same
-results as omitting the table.
-```
-
 A `[smart_charging]` table sets when the battery may discharge and when the
-grid may charge it, by tariff period. It needs a `[tariff]` and a battery:
+grid may charge it, by tariff period. It needs a `[tariff]` and a battery.
+Omitting it, or setting `mode = "disabled"`, is greedy self-consumption with
+unchanged results:
 
 ```toml
 [smart_charging]
@@ -528,6 +521,24 @@ grid_import_limit_w = 5000          # optional: total site import, load included
   by the battery's charge power and by the inverter's AC rating, which PV
   output uses first.
 - `mode = "disabled"` accepts no other key. Unknown keys are errors.
+- Grid charging runs after PV in each step and never while PV is exported,
+  so it never takes PV self-consumption. The grid-charge import is part of
+  `grid_import_kwh`, and the tariff prices it like any import.
+
+Results gain a `smart_charging` block: per year, the grid-charge AC energy,
+its conversion loss, its cost at year-1 prices, and battery delivery to load
+split into PV, grid and unattributed origin. It also gives the stored energy
+by origin at the start and end of the project, since stored energy carries
+from year to year (`terminal_convention = "physical_carry"`). Only PV-origin
+battery delivery counts as self-consumption. Avoided emissions use net
+exchange: grid energy shifted through the battery is imported, so it earns
+nothing, and its round-trip loss counts against the system.
+`provenance.smart_charging` records the parameters, the hash of the resolved
+instructions and the tariff's schedule hash.
+
+Monte Carlo applies the same instructions to every trajectory, and projected
+optimization to every candidate design with a battery; both record the same
+provenance. See `configs/examples/smart-charging-portugal.toml`.
 
 ## Load profiles
 

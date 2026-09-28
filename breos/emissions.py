@@ -62,15 +62,25 @@ def calculate_co2_savings(
     total_pv_kwh: float,
     self_consumed_kwh: float,
     emissions_params: EmissionsParams,
+    *,
+    grid_shift_kwh: float = 0.0,
 ) -> Dict[str, Any]:
     """
     Calculate CO2 emissions avoided by PV production.
+
+    Avoided emissions use net exchange (ADR 0002 A10): the load the system
+    covered without importing, times the grid factor, plus PV export times
+    the export factor. Grid energy shifted through the battery is imported,
+    so it earns nothing, and its round-trip loss counts against the system.
 
     Args:
         total_pv_kwh: Total PV production in kWh
         self_consumed_kwh: Explicit PV-origin AC delivered to load, including
             direct PV and later PV-origin battery discharge.
         emissions_params: Emissions parameters with grid carbon intensity
+        grid_shift_kwh: Grid-origin battery AC to load minus the grid AC
+            imported to charge the battery; zero or negative. Zero without
+            grid charging, which leaves the result exactly as before.
 
     Returns:
         Dict with CO2 avoided metrics in kg and tonnes.
@@ -78,7 +88,7 @@ def calculate_co2_savings(
     ci = emissions_params.avoided_intensity_gco2_kwh
     export_ci = emissions_params.export_displacement_intensity_gco2_kwh
     exported_kwh = max(0.0, total_pv_kwh - self_consumed_kwh)
-    co2_self_kg = self_consumed_kwh * ci / 1000
+    co2_self_kg = (self_consumed_kwh + grid_shift_kwh) * ci / 1000
     co2_export_kg = exported_kwh * export_ci / 1000
     co2_total_kg = co2_self_kg + co2_export_kg
 
@@ -102,6 +112,7 @@ def calculate_co2_projection(
     yearly_pv_kwh: np.ndarray,
     yearly_export_kwh: np.ndarray,
     emissions_params: EmissionsParams,
+    yearly_grid_shift_kwh: Optional[np.ndarray] = None,
 ) -> pd.DataFrame:
     """
     Calculate multi-year CO2 savings projection.
@@ -110,6 +121,9 @@ def calculate_co2_projection(
         yearly_pv_kwh: Array of PV production per year (kWh)
         yearly_export_kwh: Array of grid export per year (kWh)
         emissions_params: Emissions parameters
+        yearly_grid_shift_kwh: Per year, grid-origin battery AC to load minus
+            the grid AC imported to charge the battery (see
+            :func:`calculate_co2_savings`). None without grid charging.
 
     Returns:
         DataFrame with yearly and cumulative CO2 avoided columns.
@@ -119,6 +133,8 @@ def calculate_co2_projection(
     n_years = len(yearly_pv_kwh)
 
     yearly_self_consumed = yearly_pv_kwh - yearly_export_kwh
+    if yearly_grid_shift_kwh is not None:
+        yearly_self_consumed = yearly_self_consumed + yearly_grid_shift_kwh
     co2_self = yearly_self_consumed * ci / 1000
     co2_export = yearly_export_kwh * export_ci / 1000
     co2_total = co2_self + co2_export

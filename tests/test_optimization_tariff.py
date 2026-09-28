@@ -84,7 +84,6 @@ def test_optimizer_rejects_invalid_tariff_before_pv(tariff_case, monkeypatch, en
     [
         ({"costs": {"electricity_cost": 0.2}}, "price them twice"),
         ({"tariff": {**TARIFF, "schedule": "pt_mainland_2027_daily_bi"}}, "15min"),
-        ({"smart_charging": FIXED_TARGET}, "smart_charging fixed_target is not supported yet"),
         ({"smart_charging": {**FIXED_TARGET, "charge_periods": ["night"]}}, r"smart_charging\.charge_periods.*night"),
     ],
 )
@@ -98,15 +97,36 @@ def test_optimizer_checks_conflicts_and_unsupported_dispatch(tariff_case, monkey
         evaluate((weather, load, config), battery_kwh=5.0)
 
 
-def test_optimizer_search_rejects_fixed_target_charging_before_pv(tariff_case, monkeypatch):
+def test_optimizer_prices_fixed_target_charging(tariff_case):
+    weather, load, config = tariff_case
+    greedy = evaluate(tariff_case, battery_kwh=5.0)
+    config["smart_charging"] = FIXED_TARGET
+    charged = evaluate((weather, load, config), battery_kwh=5.0)
+
+    assert charged.yearly["Grid_AC_To_Battery_kWh"].sum() > 0.0
+    assert (greedy.yearly["Grid_AC_To_Battery_kWh"] == 0.0).all()
+    assert charged.yearly["Grid_Charge_Cost"].sum() > 0.0
+    assert charged.metrics["Projected_NPV_Eur"] != greedy.metrics["Projected_NPV_Eur"]
+    record = charged.provenance["smart_charging"]
+    assert record["mode"] == "fixed_target"
+    assert record["schedule_hash"] == charged.provenance["tariff"]["schedule_hash"]
+    assert "smart_charging" not in greedy.provenance
+
+
+def test_optimizer_search_shares_fixed_target_scoring_and_provenance(tariff_case):
     pytest.importorskip("pymoo")
     weather, load, config = tariff_case
     config["smart_charging"] = FIXED_TARGET
-    monkeypatch.setattr(
-        optimization, "calculate_pv_production_dc", lambda **kwargs: pytest.fail("PV ran before config validation")
-    )
-    with pytest.raises(ValueError, match="smart_charging fixed_target is not supported yet"):
-        optimization.SolarDesignProblem(weather, load, config, "unused")
+    fixed = evaluate((weather, load, config), battery_kwh=5.0)
+    problem = optimization.SolarDesignProblem(weather, load, config, "unused")
+    restored = pickle.loads(pickle.dumps(problem))
+    out = {}
+    restored._evaluate(np.array([4, 5.0, 30.0]), out)
+
+    assert out["Projected_NPV_Eur"] == fixed.metrics["Projected_NPV_Eur"]
+    assert restored.pricing.instructions == problem.pricing.instructions
+    result = optimization.optimize_system_multi_objective(weather, load, config, pop_size=4, n_gen=1, seed=42)
+    assert result.details["provenance"]["smart_charging"] == fixed.provenance["smart_charging"]
 
 
 def test_optimizer_fixed_target_needs_a_battery(tariff_case):
@@ -184,8 +204,13 @@ def test_invalid_tariff_fails_before_starting_workers(tariff_case, monkeypatch):
         optimization.optimize_system_multi_objective(weather, load, config, n_procs=2)
 
 
+@pytest.mark.parametrize(
+    "smart_charging", [None, {**FIXED_TARGET, "target_usable_fraction": 1.0}], ids=["greedy", "fixed-target"]
+)
 @pytest.mark.parametrize(("freq", "backend"), [("h", "python"), ("15min", "numba")])
-def test_three_year_tariff_design_reproduces_through_app(monkeypatch, open_meteo_weather, freq, backend):
+def test_three_year_tariff_design_reproduces_through_app(
+    monkeypatch, open_meteo_weather, freq, backend, smart_charging
+):
     import breos.app as app_module
     from breos import App
     from breos.app_inputs import AppRuntimeDependencies
@@ -217,6 +242,7 @@ def test_three_year_tariff_design_reproduces_through_app(monkeypatch, open_meteo
         "enable_resistance_fade": True,
         "execution_backend": backend,
         "tariff": tariff,
+        **({"smart_charging": smart_charging} if smart_charging else {}),
     }
     dependencies = AppRuntimeDependencies(
         load_profile=lambda **kwargs: load.copy(),
@@ -256,6 +282,7 @@ def test_three_year_tariff_design_reproduces_through_app(monkeypatch, open_meteo
         },
         "inverter_efficiency": cfg["inverter_efficiency"],
         "tariff": tariff,
+        **({"smart_charging": smart_charging} if smart_charging else {}),
     }
     fixed = optimization.evaluate_projected_design(
         weather, load, config, n_modules=8, battery_kwh=5.0, tilt=30.0, azimuth=180.0, execution_backend=backend
@@ -268,6 +295,9 @@ def test_three_year_tariff_design_reproduces_through_app(monkeypatch, open_meteo
     assert fixed.metrics["Projected_Total_Replacements"] > 0
     assert result["npv_savings_eur"] == pytest.approx(fixed.metrics["Projected_NPV_Eur"], abs=0.0051, rel=0)
     assert result["provenance"]["tariff"] == fixed.provenance["tariff"]
+    if smart_charging:
+        assert result["provenance"]["smart_charging"] == fixed.provenance["smart_charging"]
+        assert fixed.yearly["Grid_AC_To_Battery_kWh"].min() > 0.0, "the design must grid-charge"
     for app_row, (_, opt_row) in zip(result["financial"][1:], fixed.financial.iterrows(), strict=True):
         for app_key, column in (
             ("cost_import", "Cost_Import"),

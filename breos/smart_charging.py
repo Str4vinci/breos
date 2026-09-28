@@ -111,6 +111,16 @@ def resolve_instructions(spec: SmartChargingSpec, tariff: ResolvedTariff | None)
     )
 
 
+def stored_energy_by_origin(energy_wh: float, pv_origin_wh: float, grid_origin_wh: float) -> dict[str, float]:
+    """Split stored energy into its PV, grid and unattributed origins (ADR 0002 A8)."""
+    return {
+        "total_wh": float(energy_wh),
+        "pv_origin_wh": float(pv_origin_wh),
+        "grid_origin_wh": float(grid_origin_wh),
+        "unattributed_wh": float(energy_wh - pv_origin_wh - grid_origin_wh),
+    }
+
+
 def smart_charging_provenance(
     spec: SmartChargingSpec, instructions: DispatchInstructions, tariff: ResolvedTariff
 ) -> dict[str, Any]:

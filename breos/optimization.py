@@ -14,6 +14,7 @@ import numpy as np
 import pandas as pd
 
 from breos.battery import BatteryConfig, simulate_energy_balance
+from breos.dispatch_instructions import DispatchInstructions
 from breos.economics import (
     DEFAULT_DISCOUNT_RATE,
     DEFAULT_INFLATION_RATE,
@@ -28,6 +29,7 @@ from breos.execution import DEFAULT_EXECUTION_BACKEND, require_backend, validate
 from breos.inverter import inverter_ac_capacity_w as inverter_ac_capacity_w_for
 from breos.projection import CarryState, ProjectionYear, project_years
 from breos.pv.model_options import configured_pv_model_kwargs
+from breos.smart_charging import resolve_instructions, smart_charging_provenance
 from breos.solar import (
     PVModuleParams,
     calculate_pv_production_dc,
@@ -551,6 +553,7 @@ def _evaluate_projected_design_metrics(
     execution_backend: str = DEFAULT_EXECUTION_BACKEND,
     ac_output_scale: float = 1.0,
     tariff: ResolvedTariff | None = None,
+    instructions: DispatchInstructions | None = None,
 ) -> Dict[str, Any]:
     """Evaluate one design over the projected horizon using production engines.
 
@@ -624,6 +627,7 @@ def _evaluate_projected_design_metrics(
         blast_model=blast_model,
         initial_carry=CarryState(soh_pct=float(batt_spec.get("initial_soh", 100.0)) if has_battery else 100.0),
         tariff=tariff,
+        instructions=instructions if has_battery else None,
     )
     yearly_summary_df = projection.yearly_df
     first_year_results_df = projection.first_year_results_df
@@ -682,13 +686,34 @@ def _evaluate_projected_design_metrics(
     return metrics
 
 
+@dataclass(frozen=True)
+class _OptimizationTariff:
+    """A search's or design's resolved tariff and smart-charging instructions, shared by every year."""
+
+    tariff: ResolvedTariff | None = None
+    instructions: DispatchInstructions | None = None
+    smart_charging: Dict[str, Any] | None = None
+
+    def provenance(self) -> Dict[str, Any]:
+        record: Dict[str, Any] = {}
+        if self.tariff is not None:
+            year = self.tariff.index.tz_convert(self.tariff.timezone)[0].year
+            record["tariff"] = tariff_provenance(self.tariff, calendar_year=year)
+        if self.smart_charging is not None:
+            record["smart_charging"] = dict(self.smart_charging)
+        return record
+
+
 def _resolve_optimization_tariff(
     config: dict[str, Any], index: pd.DatetimeIndex, battery_kwh: float
-) -> ResolvedTariff | None:
+) -> _OptimizationTariff:
     """Adapt the optimizer's config to the shared tariff and smart-charging validation.
 
     ``battery_kwh`` is the largest battery the entry point can install: the
     design's for a fixed design, ``constraints.max_battery_kwh`` for a search.
+    The instructions are resolved once, on the tariff's calendar, and replayed
+    every project year, as App does. A candidate without a battery ignores
+    them.
     """
     from breos.app_config import resolve_smart_charging_spec, resolve_tariff_spec
 
@@ -704,12 +729,15 @@ def _resolve_optimization_tariff(
     smart_charging = resolve_smart_charging_spec(
         {"smart_charging": config.get("smart_charging"), "battery_kwh": battery_kwh}, spec
     )
-    if smart_charging is not None and smart_charging.mode == "fixed_target":
-        raise ValueError(
-            "smart_charging fixed_target is not supported yet; tariff pricing uses self-consumption dispatch. "
-            "Remove smart_charging or set mode = 'disabled'."
-        )
-    return spec.resolve(index, timezone) if spec is not None else None
+    tariff = spec.resolve(index, timezone) if spec is not None else None
+    instructions = resolve_instructions(smart_charging, tariff) if smart_charging is not None else None
+    if instructions is None or tariff is None or smart_charging is None:
+        return _OptimizationTariff(tariff=tariff)
+    return _OptimizationTariff(
+        tariff=tariff,
+        instructions=instructions,
+        smart_charging=smart_charging_provenance(smart_charging, instructions, tariff),
+    )
 
 
 def _site_location(location: dict[str, Any]) -> Any:
@@ -789,7 +817,7 @@ def evaluate_projected_design(
 
     frames = list(weather_by_year) if weather_by_year is not None else None
     tariff_index = frames[0].index if frames else tmy_data.index
-    tariff = _resolve_optimization_tariff(config, tariff_index, float(battery_kwh))
+    pricing = _resolve_optimization_tariff(config, tariff_index, float(battery_kwh))
     location = config["location"]
     loc_obj = _site_location(location)
     simulation = config.get("simulation", {}) or {}
@@ -875,7 +903,8 @@ def evaluate_projected_design(
         emissions_params=EmissionsParams(**emissions_config) if emissions_config else None,
         return_tables=True,
         ac_output_scale=_validated_ac_output_scale(config),
-        tariff=tariff,
+        tariff=pricing.tariff,
+        instructions=pricing.instructions,
     )
     yearly = raw_metrics.pop("_yearly_summary_df")
     financial = raw_metrics.pop("_cost_projection_df")
@@ -886,12 +915,7 @@ def evaluate_projected_design(
         "Azimuth": float(azimuth),
         **raw_metrics,
     }
-    provenance = (
-        {"tariff": tariff_provenance(tariff, calendar_year=tariff.index.tz_convert(tariff.timezone)[0].year)}
-        if tariff is not None
-        else {}
-    )
-    return ProjectedDesignResult(metrics=metrics, yearly=yearly, financial=financial, provenance=provenance)
+    return ProjectedDesignResult(metrics=metrics, yearly=yearly, financial=financial, provenance=pricing.provenance())
 
 
 # ==========================================
@@ -979,9 +1003,10 @@ try:
 
             # One schedule/price resolution per search, shared by every
             # candidate and project year. Validate before model preparation.
-            self.tariff = _resolve_optimization_tariff(
+            self.pricing = _resolve_optimization_tariff(
                 config, tmy_data.index, float((config.get("constraints") or {}).get("max_battery_kwh", 30))
             )
+            self.tariff = self.pricing.tariff
             self.location = config["location"]
             # config['location'] is a plain dict; the pvlib Location that
             # calculate_pv_production_dc needs is constructed once here.
@@ -1155,6 +1180,7 @@ try:
                 inverter_ac_capacity_w=inverter_ac_capacity_w,
                 ac_output_scale=self.ac_output_scale,
                 tariff=self.tariff,
+                instructions=self.pricing.instructions,
             )
             out.update(projected_metrics)
             objective_grid_dependence = 1.0 - float(projected_metrics["Projected_Grid_Independence_%"]) / 100.0
@@ -1390,15 +1416,7 @@ def optimize_system_multi_objective(
     # pymoo advances the counter after its termination update. Report the last
     # completed generation, matching the research workflow's saved metadata.
     actual_generations = max(0, int(getattr(result.algorithm, "n_gen", n_gen + 1)) - 1)
-    provenance = (
-        {
-            "tariff": tariff_provenance(
-                problem.tariff, calendar_year=problem.tariff.index.tz_convert(problem.tariff.timezone)[0].year
-            )
-        }
-        if problem.tariff is not None
-        else {}
-    )
+    provenance = problem.pricing.provenance()
     return OptimizationResult(
         optimal_value=float("nan"),
         objective_value=float("nan"),

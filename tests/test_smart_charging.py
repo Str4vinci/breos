@@ -2,7 +2,6 @@
 
 import json
 import math
-import pickle
 from copy import deepcopy
 
 import numpy as np
@@ -11,7 +10,6 @@ import pytest
 
 from breos.app import App
 from breos.app_config import resolve_tariff_spec
-from breos.dispatch_instructions import DispatchInstructions
 from breos.smart_charging import SmartChargingSpec, resolve_instructions, smart_charging_provenance
 
 LISBON = "Europe/Lisbon"
@@ -56,17 +54,6 @@ def _without(table, *keys):
 def _tri_tariff(index):
     spec = resolve_tariff_spec({"tariff": TRI, "costs": None, "resolution": "15min"}, LISBON)
     return spec.resolve(index, LISBON)
-
-
-def _instructions(**overrides):
-    fields = {
-        "discharge_allowed": [True, False, False],
-        "reserve_fraction": [0.0, 0.0, 0.2],
-        "grid_target_fraction": [np.nan, 0.5, np.nan],
-        "grid_charge_efficiency": 0.95,
-        "grid_import_limit_w": 4000.0,
-    }
-    return DispatchInstructions(**{**fields, **overrides})
 
 
 # --- [smart_charging] validation --------------------------------------------
@@ -237,15 +224,81 @@ def test_disabled_needs_neither_a_tariff_nor_a_battery():
     assert App(BASE)._resolved.smart_charging is None
 
 
-# --- App behaviour until the dispatch step lands ------------------------------
+# --- App runs ----------------------------------------------------------------
 
 
-def test_fixed_target_is_refused_before_simulation(monkeypatch):
-    app = _app(FIXED)
-    monkeypatch.setattr("breos.app.run_app_simulation", lambda *a, **k: pytest.fail("simulation started"))
+def _record_app_artifacts(monkeypatch):
+    import breos.app as app_module
 
-    with pytest.raises(ValueError, match="smart_charging fixed_target is not supported yet"):
-        app.simulate()
+    artifacts = []
+    run_app = app_module.run_app_simulation
+
+    def record(*args):
+        result = run_app(*args)
+        artifacts.append(result)
+        return result
+
+    monkeypatch.setattr(app_module, "run_app_simulation", record)
+    return artifacts
+
+
+@pytest.mark.usefixtures("_patch_weather")
+def test_fixed_target_app_run_charges_from_the_grid_and_reports_it(monkeypatch):
+    from tests.energy_conservation import assert_energy_conservation, assert_origin_reconciliation
+
+    artifacts = _record_app_artifacts(monkeypatch)
+    greedy = App({**BASE, "tariff": TOU, "emissions_country": "PT"})
+    smart = _app(FIXED, emissions_country="PT")
+    greedy.simulate()
+    smart.simulate()
+    plain, charged = greedy.result(), smart.result()
+    frame = artifacts[1].first_year_results_df
+
+    # The step ledger balances and every origin reconciles under grid charging.
+    config = smart._resolved
+    from breos.projection import build_battery_config
+
+    assert_energy_conservation(frame, build_battery_config(smart._cfg, config, initial_soh=100.0))
+    assert_origin_reconciliation(frame, 1.0)
+    assert frame["Grid_AC_To_Battery"].sum() > 0.0
+    # No step both grid-charges and exports.
+    assert not ((frame["Grid_AC_To_Battery"] > 0.0) & (frame["PV_AC_Export"] > 0.0)).any()
+
+    block = charged["smart_charging"]
+    year1 = block["yearly"][0]
+    assert block["mode"] == "fixed_target" and block["terminal_convention"] == "physical_carry"
+    assert year1["grid_charge_ac_kwh"] > 0.0
+    assert year1["grid_charge_conversion_loss_kwh"] == pytest.approx(0.05 * year1["grid_charge_ac_kwh"], abs=0.02)
+    assert year1["battery_ac_to_load_kwh"]["grid_origin"] > 0.0
+    # Grid charging happens only off peak, at 0.11 per kWh.
+    assert year1["grid_charge_cost_year1_prices"] == pytest.approx(
+        frame["Grid_AC_To_Battery"].sum() / 1000 * 0.11, abs=0.006
+    )
+    for key in ("initial_stored_energy", "final_stored_energy"):
+        state = block[key]
+        assert state["total_wh"] == pytest.approx(
+            state["pv_origin_wh"] + state["grid_origin_wh"] + state["unattributed_wh"], abs=0.02
+        )
+    assert block["initial_stored_energy"]["unattributed_wh"] == block["initial_stored_energy"]["total_wh"]
+    assert len(block["yearly"]) == BASE["projection_years"]
+
+    record = charged["provenance"]["smart_charging"]
+    assert record["mode"] == "fixed_target"
+    assert record["charge_periods"] == ["off_peak"]
+    assert record["schedule_hash"] == charged["provenance"]["tariff"]["schedule_hash"]
+    assert len(record["instruction_hash"]) == 64
+    assert "smart_charging" not in plain and "smart_charging" not in plain["provenance"]
+
+    # Grid energy shifted through the battery is imported, so it earns no
+    # avoided emissions, and its round-trip loss counts against the system
+    # (A10): self-consumed CO2 falls by the grid charge net of its delivery.
+    assert charged["grid_import_kwh"] > plain["grid_import_kwh"]
+    assert charged["co2_avoided_self_consumption_year1_kg"] < plain["co2_avoided_self_consumption_year1_kg"]
+    ci = smart._resolved.emissions_params.avoided_intensity_gco2_kwh
+    shift = year1["battery_ac_to_load_kwh"]["grid_origin"] - year1["grid_charge_ac_kwh"]
+    assert charged["co2_avoided_self_consumption_year1_kg"] == pytest.approx(
+        (charged["self_consumption_kwh"] + shift) * ci / 1000, abs=0.05
+    )
 
 
 @pytest.mark.usefixtures("_patch_weather")
@@ -375,121 +428,18 @@ def test_provenance_records_parameters_and_hashes():
         smart_charging_provenance(TRI_SPEC, instructions, _tri_tariff(index[:4]))
 
 
-# --- DispatchInstructions ----------------------------------------------------
+def test_monte_carlo_runs_fixed_target_charging(tmp_path, write_multiyear_weather):
+    from breos.montecarlo import MonteCarloSettings, run_montecarlo
 
+    weather = write_multiyear_weather(tmp_path / "multi.csv")
+    settings = MonteCarloSettings(weather_file=str(weather), n_runs=2, years_per_run=2, seed=3, collect_yearly=True)
+    greedy = run_montecarlo({**BASE, "tariff": TOU}, settings)
+    charged = run_montecarlo({**BASE, "tariff": TOU, "smart_charging": FIXED}, settings)
 
-def test_instructions_are_frozen_contiguous_copies():
-    source = np.array([0.0, 0.0, 0.2])
-    instructions = _instructions(reserve_fraction=source)
-    source[2] = 0.9
-
-    assert instructions.reserve_fraction[2] == 0.2
-    for name, dtype in (
-        ("discharge_allowed", np.bool_),
-        ("reserve_fraction", np.float64),
-        ("grid_target_fraction", np.float64),
-    ):
-        array = getattr(instructions, name)
-        assert array.dtype == dtype and array.ndim == 1
-        assert array.flags.c_contiguous and not array.flags.writeable
-        with pytest.raises(ValueError, match="read-only"):
-            array[0] = array[0]
-    with pytest.raises(AttributeError):
-        instructions.grid_charge_efficiency = 0.5
-    assert len(instructions) == 3
-    assert isinstance(instructions.grid_import_limit_w, float)
-
-
-@pytest.mark.parametrize(
-    ("overrides", "error", "message"),
-    [
-        ({"discharge_allowed": [1, 0, 0]}, TypeError, "'discharge_allowed' must be a boolean array"),
-        ({"discharge_allowed": [[True, False, False]]}, ValueError, "'discharge_allowed' must be 1-D"),
-        ({"reserve_fraction": ["a", "b", "c"]}, TypeError, "'reserve_fraction' must be a 1-D array"),
-        ({"reserve_fraction": [0.0, 0.0]}, ValueError, "'reserve_fraction' has 2 steps but 'discharge_allowed' has 3"),
-        ({"grid_target_fraction": [np.nan] * 4}, ValueError, "'grid_target_fraction' has 4 steps"),
-        ({"reserve_fraction": [0.0, np.nan, 0.0]}, ValueError, "'reserve_fraction' must be finite"),
-        ({"reserve_fraction": [0.0, 1.5, 0.0]}, ValueError, "'reserve_fraction' must be between 0 and 1"),
-        ({"reserve_fraction": [-0.1, 0.0, 0.0]}, ValueError, "'reserve_fraction' must be between 0 and 1"),
-        ({"grid_target_fraction": [np.nan, np.inf, np.nan]}, ValueError, "'grid_target_fraction' must be finite"),
-        ({"grid_target_fraction": [np.nan, 1.1, np.nan]}, ValueError, "'grid_target_fraction' must be between"),
-        ({"grid_target_fraction": [0.5, 0.5, np.nan]}, ValueError, r"Step 0 both allows discharge.*A8"),
-        ({"grid_charge_efficiency": 0.0}, ValueError, "'grid_charge_efficiency' must be between 0"),
-        ({"grid_charge_efficiency": 1.01}, ValueError, "'grid_charge_efficiency' must be between 0"),
-        ({"grid_charge_efficiency": math.nan}, ValueError, "'grid_charge_efficiency' must be between 0"),
-        ({"grid_charge_efficiency": True}, TypeError, "'grid_charge_efficiency' must be a number"),
-        ({"grid_import_limit_w": 0.0}, ValueError, "'grid_import_limit_w' must be greater than 0"),
-        ({"grid_import_limit_w": -5.0}, ValueError, "'grid_import_limit_w' must be greater than 0"),
-        ({"grid_import_limit_w": math.nan}, ValueError, "'grid_import_limit_w' must be greater than 0"),
-        ({"grid_import_limit_w": "5 kW"}, TypeError, "'grid_import_limit_w' must be a number"),
-    ],
-)
-def test_instructions_reject_invalid_steps(overrides, error, message):
-    with pytest.raises(error, match=message):
-        _instructions(**overrides)
-
-
-def test_instructions_accept_their_bounds():
-    instructions = _instructions(
-        reserve_fraction=[1.0, 0.0, 0.0],
-        grid_target_fraction=[np.nan, 1.0, 0.0],
-        grid_charge_efficiency=1,
-        grid_import_limit_w=math.inf,
-    )
-    assert instructions.grid_charge_efficiency == 1.0
-    assert instructions.grid_import_limit_w == math.inf
-
-
-def test_noop_changes_nothing():
-    noop = DispatchInstructions.noop(np.int64(4))
-
-    np.testing.assert_array_equal(noop.discharge_allowed, np.ones(4, dtype=bool))
-    np.testing.assert_array_equal(noop.reserve_fraction, np.zeros(4))
-    assert np.isnan(noop.grid_target_fraction).all()
-    assert (noop.grid_charge_efficiency, noop.grid_import_limit_w) == (1.0, math.inf)
-    assert len(DispatchInstructions.noop(0)) == 0
-    with pytest.raises(ValueError, match="non-negative integer"):
-        DispatchInstructions.noop(-1)
-
-
-def test_instruction_hash_is_stable():
-    first, second = _instructions(), _instructions()
-
-    assert first.instruction_hash() == second.instruction_hash()
-    assert len(first.instruction_hash()) == 64
-    assert first == second and hash(first) == hash(second)
-    # Pinned: the hash must not move between runs, processes or platforms.
-    assert DispatchInstructions.noop(3).instruction_hash() == (
-        "74802b4fde0ea77449ea784bad6040cd744851cebb957fb0760871907d2d3cdf"
-    )
-    # How a NaN or a zero was made does not change the instructions.
-    other_nan = np.frombuffer(np.uint64(0x7FF8000000000001).tobytes(), dtype=np.float64)[0]
-    assert np.isnan(other_nan)
-    assert _instructions(grid_target_fraction=[other_nan, 0.5, -np.nan]) == first
-    assert _instructions(reserve_fraction=[-0.0, 0.0, 0.2]) == first
-
-
-@pytest.mark.parametrize(
-    "overrides",
-    [
-        {"discharge_allowed": [False, False, False]},
-        {"reserve_fraction": [0.0, 0.0, 0.3]},
-        {"grid_target_fraction": [np.nan, 0.6, np.nan]},
-        {"grid_target_fraction": [np.nan, np.nan, np.nan]},
-        {"grid_charge_efficiency": 0.9},
-        {"grid_import_limit_w": math.inf},
-    ],
-)
-def test_instruction_hash_sees_every_field(overrides):
-    assert _instructions(**overrides).instruction_hash() != _instructions().instruction_hash()
-
-
-def test_instructions_survive_pickling():
-    instructions = _instructions()
-
-    restored = pickle.loads(pickle.dumps(instructions))
-
-    assert restored == instructions
-    assert restored.instruction_hash() == instructions.instruction_hash()
-    assert not restored.grid_target_fraction.flags.writeable
-    assert not restored.discharge_allowed.flags.writeable
+    assert (greedy.yearly["Grid_AC_To_Battery_kWh"] == 0.0).all()
+    assert (charged.yearly["Grid_AC_To_Battery_kWh"] > 0.0).all()
+    assert (charged.yearly["Import_kWh"] > greedy.yearly["Import_kWh"]).all()
+    record = charged.provenance["smart_charging"]
+    assert record["mode"] == "fixed_target"
+    assert record["schedule_hash"] == charged.provenance["tariff"]["schedule_hash"]
+    assert "smart_charging" not in greedy.provenance

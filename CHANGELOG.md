@@ -27,7 +27,7 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   rows gain `Grid_AC_To_Battery_kWh` and `Grid_Charge_Conversion_Loss_kWh`.
   Both backends run the same step and match bit for bit under instructions.
   Without instructions, results are unchanged on both backends. No App or
-  CLI setting uses this yet; `[smart_charging]` will. A year's dispatch is
+  CLI setting takes the instructions directly; `[smart_charging]` builds them. A year's dispatch is
   about 8–12% slower on the Python backend and about 3% slower on Numba.
 - Added the external validation page to the documentation. It collects the
   measured-data checks against NIST Gaithersburg, the DKA Solar Centre, IEA PVPS
@@ -155,25 +155,46 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   "replay_start_year"`. Projected optimization does not read a tariff yet.
   Flat-price runs are unchanged; their `resolved_config` gains `tariff: null`.
   New example: `configs/examples/time-of-use-portugal.toml`.
-- **The `[smart_charging]` table** (ADR 0002, [#178](https://github.com/Str4vinci/breos/issues/178)),
-  validated but not yet runnable. `mode = "fixed_target"` takes a
+- **The `[smart_charging]` table: fixed-target grid charging** (ADR 0002,
+  [#178](https://github.com/Str4vinci/breos/issues/178)). `mode = "fixed_target"` takes a
   `target_usable_fraction` of the usable SOC window, `charge_periods` and
   `discharge_periods` named from the tariff's schedule, a
   `grid_charge_efficiency` with no default (A6) and an optional
   `grid_import_limit_w`. It is checked when App is built: a missing
   `[tariff]` or battery, an unknown key or period, charge and discharge
   periods that overlap (A8) and out-of-range values all raise, naming the
-  dotted key. `App.simulate()` and both optimizer entry points then raise
-  `smart_charging fixed_target is not supported yet` until the dispatch step
-  applies grid charging. `mode = "disabled"` runs with the same results as
-  omitting the table. The fixed-target controller, `breos.smart_charging`,
-  turns a spec and a resolved tariff into `DispatchInstructions`
-  (`breos.dispatch_instructions`): immutable per-step arrays for discharge
-  permission, reserve and grid-charge target, with a deterministic
-  `instruction_hash()` for provenance. Results' `resolved_config` gains
-  `smart_charging: null`.
+  dotted key. The fixed-target controller, `breos.smart_charging`, turns the
+  table and the resolved tariff into `DispatchInstructions`: in a charge
+  period the grid may charge toward the target, in a discharge period the
+  battery may discharge, and in neither it does neither. App, Monte Carlo and
+  both optimizer entry points resolve the instructions once and apply them in
+  every project year. `mode = "disabled"` runs with the same results as
+  omitting the table. Results gain a `smart_charging` block: per year, the
+  grid-charge energy, its conversion loss, its cost at year-1 prices, and
+  battery delivery split by origin, plus the stored energy by origin at the
+  start and end of the project. `provenance.smart_charging` (App, Monte Carlo,
+  optimizer) records the parameters, the instruction hash, the schedule hash
+  and the terminal convention, `physical_carry`. Tariff year rows gain
+  `Grid_Charge_Cost`, the part of `Import_Cost` that charged the battery.
+  Year rows gain `Grid_Origin_Battery_AC_Load_kWh`. Results'
+  `resolved_config` gains `smart_charging: null`. New example:
+  `configs/examples/smart-charging-portugal.toml`. On an example 5 kWh
+  hourly system under the bi-hourly tariff (0.28/0.11 €/kWh, 25 years), a
+  50% off-peak target raises NPV savings from 1,906 € to 2,346 € and imports
+  from 1,431 to 1,823 kWh in year 1; 387 kWh of that is grid charge.
 
 ### Changed
+- **Avoided emissions use net exchange** (ADR 0002 A10,
+  [#178](https://github.com/Str4vinci/breos/issues/178)). The self-consumed
+  credit is `(Load − Import − B_u) × CI`, where `B_u` is unattributed battery
+  energy delivered to load. Grid energy shifted through the battery is
+  imported, so it earns nothing, and its round-trip loss counts against the
+  system. `calculate_co2_savings` gains `grid_shift_kwh` and
+  `calculate_co2_projection` gains `yearly_grid_shift_kwh`: grid-origin
+  battery delivery minus grid-charge import, zero or negative. Without grid
+  charging the shift is zero and every emissions result is unchanged, bit for
+  bit. In the smart-charging example above, year-1 avoided CO2 falls from
+  479.4 to 476.1 kg.
 - **Ledger schema 2.0: stored energy has three origins**
   ([#178](https://github.com/Str4vinci/breos/issues/178), ADR 0002 A8 and A9).
   Stored energy is split into PV, grid and an unattributed remainder. A fresh
@@ -351,7 +372,6 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   App's checks for prices, timezone, resolution and conflicting flat costs
   apply before PV calculation or worker startup. Results record tariff
   provenance, and immutable tariff prices can be pickled for worker processes.
-  Unsupported `smart_charging` tables now raise in both optimizer entry points.
   Configurations without either table keep their existing behavior.
 - Corrected the Portuguese reform citation in ADR 0002 and the tariff plan:
   the electricity periods are set by Diretiva n.º 3/2026, de 19 de agosto; the

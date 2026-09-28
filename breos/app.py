@@ -68,15 +68,6 @@ class App:
 
     def simulate(self) -> None:
         """Run the full simulation pipeline."""
-        smart_charging = self._resolved.smart_charging
-        # Checked at construction, refused here until the dispatch step can
-        # apply grid-charge instructions (#178). Disabled runs as if omitted.
-        if smart_charging is not None and smart_charging.mode == "fixed_target":
-            raise ValueError(
-                "smart_charging fixed_target is not supported yet: the configuration is valid, but the "
-                "dispatch step cannot apply grid-charge instructions until #178 lands. Remove "
-                "[smart_charging] or set mode = 'disabled'."
-            )
         artifacts = run_app_simulation(self._cfg, self._resolved, self._runtime_dependencies())
         self._result = build_app_result(self._cfg, self._resolved, artifacts, input_repairs=self._input_repairs)
 

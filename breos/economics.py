@@ -364,6 +364,18 @@ def price_year_rows(yearly_summary_df: pd.DataFrame, costs: Dict[str, float]) ->
     return priced
 
 
+def _grid_shift_kwh(yearly: pd.DataFrame) -> Optional[np.ndarray]:
+    """Per year, grid-origin battery delivery minus grid-charge import (ADR 0002 A10).
+
+    None when the year rows carry no grid-charge columns, so emissions keep
+    their old arithmetic exactly.
+    """
+    columns = ("Grid_Origin_Battery_AC_Load_kWh", "Grid_AC_To_Battery_kWh")
+    if not all(column in yearly.columns for column in columns):
+        return None
+    return (yearly[columns[0]] - yearly[columns[1]]).to_numpy(dtype=float)
+
+
 def cost_analysis_projection(
     results_df: Optional[pd.DataFrame],
     costs: Dict[str, float],
@@ -523,6 +535,7 @@ def cost_analysis_projection(
                 proj["PV_Production_kWh"].to_numpy(),
                 proj["Export_kWh"].to_numpy(),
                 emissions_params,
+                _grid_shift_kwh(yearly_data),
             )
             proj["CO2_Avoided_Total_kg"] = co2_proj["CO2_Avoided_Total_kg"].values
             proj["CO2_Avoided_SelfConsumed_kg"] = co2_proj["CO2_Avoided_SelfConsumed_kg"].values

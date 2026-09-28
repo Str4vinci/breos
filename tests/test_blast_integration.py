@@ -206,6 +206,7 @@ def test_blast_multiple_replacements_through_runner(monkeypatch):
         avg_module_power_w=400.0,
         inverter_ac_capacity_w=cfg["n_modules"] * 400.0 / cfg["inverter_loading_ratio"],
         tariff=None,
+        smart_charging=None,
         emissions_params=None,
     )
 

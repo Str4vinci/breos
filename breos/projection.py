@@ -25,6 +25,7 @@ from breos.battery import (
     simulate_energy_balance_summary,
     weighted_column_sums,
 )
+from breos.dispatch_instructions import DispatchInstructions
 from breos.economics import (
     calculate_lcoe_from_projection,
     cost_analysis_projection,
@@ -198,6 +199,7 @@ _ROW_SUM_COLUMNS = (
     "PV_Production",
     "PV_AC_To_Load",
     "PV_Origin_Battery_AC_To_Load",
+    "Grid_Origin_Battery_AC_To_Load",
     "Houseload",
     "Import_From_Grid",
     "PV_AC_Export",
@@ -253,6 +255,9 @@ def build_year_row(
         "PV_DC_Generation_kWh": kwh("PV_DC"),
         "Direct_PV_AC_Load_kWh": direct_pv_ac_kwh,
         "PV_Origin_Battery_AC_Load_kWh": pv_origin_battery_ac_kwh,
+        # Grid energy shifted through the battery (ADR 0002 A10): what the
+        # battery delivered from grid charge, and what that charge imported.
+        "Grid_Origin_Battery_AC_Load_kWh": kwh("Grid_Origin_Battery_AC_To_Load"),
         "Self_Consumption_kWh": direct_pv_ac_kwh + pv_origin_battery_ac_kwh,
         "Curtailment_DC_kWh": kwh("PV_DC_Curtailed"),
         "Load_kWh": total_load,
@@ -315,6 +320,8 @@ def _tariff_weights(tariff: ResolvedTariff) -> dict[str, tuple[str, np.ndarray]]
         "Export_Revenue": ("PV_AC_Export", np.asarray(tariff.export_price_per_kwh, dtype=float)),
         # The no-system household buys its whole load at the same prices.
         "Baseline_Import_Cost": ("Houseload", import_prices),
+        # The part of Import_Cost bought to charge the battery.
+        "Grid_Charge_Cost": ("Grid_AC_To_Battery", import_prices),
     }
 
 
@@ -380,6 +387,7 @@ def project_years(
     initial_carry: CarryState | None = None,
     observe_jit_per_year: bool = False,
     tariff: ResolvedTariff | None = None,
+    instructions: DispatchInstructions | None = None,
 ) -> ProjectionRun:
     """Simulate ``years`` project years, carrying the battery from one to the next.
 
@@ -392,7 +400,8 @@ def project_years(
     With a ``tariff``, resolved on the simulation calendar, each year row
     carries its import cost, export revenue, no-system import cost and fixed
     charge at year-1 prices, from the step energy times the step price. Every
-    year replays the one calendar (ADR 0002 A2).
+    year replays the one calendar (ADR 0002 A2), and so do smart-charging
+    ``instructions``, resolved on that calendar.
     """
     hours_per_step = get_hours_per_step(freq)
     weights = _tariff_weights(tariff) if tariff is not None else None
@@ -415,6 +424,7 @@ def project_years(
             "return_degradation_state": True,
             "finalize_degradation": year_idx == years - 1,
             "execution_backend": execution_backend,
+            "dispatch_instructions": instructions,
         }
 
         if observe_jit_per_year:
@@ -519,6 +529,7 @@ def run_projection(
     execution_backend: str,
     observe_jit_per_year: bool = False,
     tariff: ResolvedTariff | None = None,
+    instructions: DispatchInstructions | None = None,
 ) -> ProjectionRun:
     """Run :func:`project_years` for an App configuration.
 
@@ -542,6 +553,7 @@ def run_projection(
         blast_model=cfg.get("blast_model"),
         observe_jit_per_year=observe_jit_per_year,
         tariff=tariff,
+        instructions=instructions,
     )
 
 
