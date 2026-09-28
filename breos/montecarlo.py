@@ -37,6 +37,7 @@ from breos.app_inputs import (
     load_consumption_profile,
 )
 from breos.battery import LEDGER_SCHEMA_VERSION, AlignedSimulationInputs, align_simulation_inputs
+from breos.dispatch_instructions import DispatchInstructions
 from breos.economics import find_payback_year, find_payback_year_exact
 from breos.execution import (
     aggregate_jit_cache_states,
@@ -51,6 +52,7 @@ from breos.execution import (
 from breos.load_profiles import LOAD_PROFILE_METADATA_KEY, load_profile
 from breos.projection import ProjectionYear, build_pv_only_battery_config, run_projection, value_projection
 from breos.pv.model_options import DEFAULT_SOLAR_POSITION, resolve_solar_position_method, solar_position_time_offset
+from breos.smart_charging import resolve_instructions, smart_charging_provenance
 from breos.tariffs import ResolvedTariff, tariff_provenance
 from breos.weather import (
     build_battery_temperature_series,
@@ -345,6 +347,7 @@ def _simulate_trajectory(
     aligned_by_year: dict[int, AlignedSimulationInputs],
     pv_chains: dict[tuple[int, int], AlignedSimulationInputs] | None,
     tariff: ResolvedTariff | None = None,
+    instructions: DispatchInstructions | None = None,
 ) -> tuple[dict[str, Any], pd.DataFrame]:
     """Run one Monte Carlo trajectory and return its summary metrics."""
     degradation_rate = cfg["pv_degradation_rate"]
@@ -382,6 +385,7 @@ def _simulate_trajectory(
         has_battery=has_battery,
         execution_backend=cast(str, settings.execution_backend),
         tariff=tariff,
+        instructions=instructions,
     )
     current_soh = projection.carry.soh_pct
     total_replacements = projection.total_replacements
@@ -524,6 +528,7 @@ def _run_trajectory_index(run_idx: int) -> tuple[int, dict[str, Any], pd.DataFra
         aligned_by_year,
         pv_chains,
         tariff,
+        instructions,
     ) = _WORKER_CONTEXT
     # One observation window per trajectory: that is the unit of work whose
     # compile cost is being attributed. A no-op on the Python backend.
@@ -543,6 +548,7 @@ def _run_trajectory_index(run_idx: int) -> tuple[int, dict[str, Any], pd.DataFra
         aligned_by_year,
         pv_chains,
         tariff,
+        instructions,
     )
     # None from a numba run means no compiled dispatch call was observed -- a
     # trajectory can legitimately never enter the kernel. Record that as
@@ -650,6 +656,10 @@ def run_montecarlo(config: dict[str, Any], settings: MonteCarloSettings) -> Mont
     )
     pv_chains = _prepare_pv_chains(cfg, resolved, aligned_by_year, settings, years_per_run)
     tariff = _resolve_study_tariff(resolved, aligned_by_year)
+    # Every sampled weather year shares the tariff's calendar, so one set of
+    # smart-charging instructions serves every trajectory and year.
+    spec = resolved.smart_charging
+    instructions = resolve_instructions(spec, tariff) if spec is not None and has_battery else None
 
     # The weather frames and the raw load profile are not passed to the
     # workers: alignment consumed them here, and a worker only ever reads the
@@ -663,6 +673,7 @@ def run_montecarlo(config: dict[str, Any], settings: MonteCarloSettings) -> Mont
         aligned_by_year,
         pv_chains,
         tariff,
+        instructions,
     )
     if settings.n_procs == 1:
         _initialize_worker(*context)
@@ -710,5 +721,10 @@ def run_montecarlo(config: dict[str, Any], settings: MonteCarloSettings) -> Mont
             "execution": backend_provenance,
             "ledger_schema_version": LEDGER_SCHEMA_VERSION,
             **({"tariff": tariff_provenance(tariff, calendar_year=settings.target_year)} if tariff is not None else {}),
+            **(
+                {"smart_charging": smart_charging_provenance(spec, instructions, tariff)}
+                if spec is not None and instructions is not None and tariff is not None
+                else {}
+            ),
         },
     )

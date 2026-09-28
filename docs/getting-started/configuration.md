@@ -53,6 +53,7 @@ weather/data access, load profiles, PV system data, and cost assumptions; see
 | `cost_preset` | `None` | Cost preset key from packaged defaults |
 | `costs` | *unset* | Optional cost overrides layered over the selected preset and built-in defaults; see [below](#cost-and-emissions-presets) |
 | `tariff` | *unset* | Time-of-use import and export prices on a bundled schedule, replacing the flat `electricity_cost`, `electricity_sold_cost` and `daily_power_cost`; see [Time-of-use tariffs](#time-of-use-tariffs) |
+| `smart_charging` | *unset* | Grid charging toward a target in the tariff's cheap periods. See [Smart charging](#smart-charging) |
 | `inflation_rate` | `0.02` | Annual electricity price inflation |
 | `sell_price_inflation` | `0.0` | Annual inflation of the grid export (sell) price |
 | `discount_rate` | `0.03` | Discount rate for NPV |
@@ -486,6 +487,60 @@ fixed_charge_per_day = 0.25              # optional, default 0
 Monte Carlo prices every trajectory with the same tariff. Projected
 optimization accepts the same tariff table in its nested config; see
 [Optimization](optimization.md#price-a-design-with-a-time-of-use-tariff).
+
+## Smart charging
+
+A `[smart_charging]` table sets when the battery may discharge and when the
+grid may charge it, by tariff period. It needs a `[tariff]` and a battery.
+Omitting it, or setting `mode = "disabled"`, is greedy self-consumption with
+unchanged results:
+
+```toml
+[smart_charging]
+mode = "fixed_target"               # or "disabled"
+target_usable_fraction = 0.50       # 0 is battery_min_soc, 1 is battery_max_soc
+charge_periods = ["off_peak"]
+discharge_periods = ["mid_peak", "peak"]
+grid_charge_efficiency = 0.95       # required: AC-to-DC conversion of the grid-charging path
+grid_import_limit_w = 5000          # optional: grid charging keeps total import below this
+```
+
+- In a charge period the grid may charge the battery toward
+  `target_usable_fraction` of the usable window. In a discharge period the
+  battery may discharge to the load. In a period in neither list it does
+  neither. PV may charge the battery in every period.
+- `target_usable_fraction` is a fraction of the usable window between
+  `battery_min_soc` and `battery_max_soc`, not of nominal capacity. The window
+  shrinks with temperature and state of health, and the target moves with it.
+- The period names must exist in the tariff's schedule, and the two lists
+  must not share a period: every step either charges or discharges.
+- `grid_charge_efficiency` has no default, because the inverter model has no
+  AC-to-DC path to derive one from. Stored energy then also passes through
+  the battery's own charge efficiency.
+- `grid_import_limit_w` limits grid charging only: in each step it may import
+  up to the limit minus what the load already imports. Load import is never
+  cut, so a load above the limit still imports in full. Omit it for no site
+  limit. Grid charging is also bounded by the battery's charge power and by
+  the inverter's AC rating, which PV output uses first.
+- `mode = "disabled"` accepts no other key. Unknown keys are errors.
+- Grid charging runs after PV in each step and never while PV is exported,
+  so it never takes PV self-consumption. The grid-charge import is part of
+  `grid_import_kwh`, and the tariff prices it like any import.
+
+Results gain a `smart_charging` block: per year, the grid-charge AC energy,
+its conversion loss, its cost at year-1 prices, and battery delivery to load
+split into PV, grid and unattributed origin. It also gives the stored energy
+by origin at the start and end of the project, since stored energy carries
+from year to year (`terminal_convention = "physical_carry"`). Only PV-origin
+battery delivery counts as self-consumption. Avoided emissions use net
+exchange: grid energy shifted through the battery is imported, so it earns
+nothing, and its round-trip loss counts against the system.
+`provenance.smart_charging` records the parameters, the hash of the resolved
+instructions and the tariff's schedule hash.
+
+Monte Carlo applies the same instructions to every trajectory, and projected
+optimization to every candidate design with a battery; both record the same
+provenance. See `configs/examples/smart-charging-portugal.toml`.
 
 ## Load profiles
 

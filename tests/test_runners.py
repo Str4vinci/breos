@@ -94,6 +94,7 @@ def test_app_runner_native_default_matches_explicit_native(monkeypatch):
         avg_module_power_w=400.0,
         inverter_ac_capacity_w=400.0 / 1.25,
         tariff=None,
+        smart_charging=None,
         emissions_params=None,
     )
 
@@ -185,6 +186,7 @@ def test_app_runner_threads_blast_state_across_projection_years(monkeypatch):
         avg_module_power_w=400.0,
         inverter_ac_capacity_w=400.0 / 1.25,
         tariff=None,
+        smart_charging=None,
         emissions_params=None,
     )
 

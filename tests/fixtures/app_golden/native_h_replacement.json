@@ -299,6 +299,7 @@
   "provenance.resolved_config.resolution": "h",
   "provenance.resolved_config.rlp_directory": null,
   "provenance.resolved_config.sell_price_inflation": 0.0,
+  "provenance.resolved_config.smart_charging": null,
   "provenance.resolved_config.solar_position": "interval-start",
   "provenance.resolved_config.start_date": "2025-01-01",
   "provenance.resolved_config.surface_type": null,

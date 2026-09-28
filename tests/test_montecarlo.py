@@ -67,7 +67,7 @@ def test_montecarlo_worker_omits_uncollected_trajectory(monkeypatch):
         "_simulate_trajectory",
         lambda *args: ({"npv_savings_eur": 1.0}, trajectory),
     )
-    montecarlo_module._initialize_worker({}, None, np.array([2021]), 1, settings, {}, {}, None)
+    montecarlo_module._initialize_worker({}, None, np.array([2021]), 1, settings, {}, {}, None, None)
 
     run_idx, metrics, returned_trajectory, jit_cache_state = montecarlo_module._run_trajectory_index(0)
 

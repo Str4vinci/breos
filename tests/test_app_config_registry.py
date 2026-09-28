@@ -69,6 +69,7 @@ EXPECTED_DEFAULTS = {
     "load_profile_column": None,
     "load_profile_unit": None,
     "tariff": None,
+    "smart_charging": None,
 }
 
 EXPECTED_CLI_FIELDS = [

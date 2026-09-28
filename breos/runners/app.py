@@ -22,6 +22,7 @@ from breos.execution import (
 from breos.load_profiles import LOAD_PROFILE_METADATA_KEY
 from breos.projection import ProjectionYear, run_projection, value_projection
 from breos.pv_modules import get_module
+from breos.smart_charging import resolve_instructions, smart_charging_provenance, stored_energy_by_origin
 from breos.solar import PVProductionBreakdown
 from breos.tariffs import tariff_provenance
 from breos.utils import get_hours_per_step
@@ -47,6 +48,9 @@ class SimulationArtifacts:
     execution: dict[str, Any]
     # The resolved tariff's provenance; None on flat prices.
     tariff: dict[str, Any] | None = None
+    # Smart-charging provenance and the project's first and last stored
+    # energy by origin; None without fixed-target smart charging.
+    smart_charging: dict[str, Any] | None = None
 
 
 def _series_energy_kwh(series: pd.Series, freq: str) -> float:
@@ -323,6 +327,10 @@ def run_app_simulation(
         if resolved.tariff
         else None
     )
+    # The instructions follow the tariff's calendar, so they too are resolved
+    # once and replayed every year.
+    spec = resolved.smart_charging
+    instructions = resolve_instructions(spec, tariff) if spec is not None and has_battery else None
     projection = run_projection(
         cfg,
         resolved,
@@ -332,6 +340,7 @@ def run_app_simulation(
         execution_backend=execution_backend,
         observe_jit_per_year=True,
         tariff=tariff,
+        instructions=instructions,
     )
     first_year_results_df = cast(pd.DataFrame, projection.first_year_results_df)
     current_soh = projection.carry.soh_pct
@@ -360,6 +369,24 @@ def run_app_simulation(
 
     if execution_backend == "numba":
         execution["jit_cache"] = aggregate_jit_cache_states(jit_cache_states)
+
+    smart_charging = None
+    if instructions is not None and spec is not None and tariff is not None:
+        first = first_year_results_df.iloc[0]
+        carry = projection.carry
+        smart_charging = {
+            **smart_charging_provenance(spec, instructions, tariff),
+            # The terminal convention is physical carry, so the state the
+            # project starts and ends in is reported rather than assumed.
+            "initial_stored_energy": stored_energy_by_origin(
+                first["Battery_Energy_Beginning"],
+                first["Battery_PV_Origin_Energy_Beginning"],
+                first["Battery_Grid_Origin_Energy_Beginning"],
+            ),
+            "final_stored_energy": stored_energy_by_origin(
+                carry.energy_wh or 0.0, carry.pv_origin_energy_wh or 0.0, carry.grid_origin_energy_wh or 0.0
+            ),
+        }
 
     return SimulationArtifacts(
         yearly_df=yearly_df,
@@ -393,4 +420,5 @@ def run_app_simulation(
         degradation_summary=degradation_summary,
         execution=execution,
         tariff=tariff_provenance(tariff, calendar_year=int(cfg["start_date"][:4])) if tariff is not None else None,
+        smart_charging=smart_charging,
     )

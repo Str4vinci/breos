@@ -175,7 +175,59 @@ def _provenance(
     # Flat-price runs carry no tariff block, so their results are unchanged.
     if artifacts.tariff is not None:
         provenance["tariff"] = deepcopy(artifacts.tariff)
+    if artifacts.smart_charging is not None:
+        provenance["smart_charging"] = {
+            key: value
+            for key, value in artifacts.smart_charging.items()
+            if key not in ("initial_stored_energy", "final_stored_energy")
+        }
     return provenance
+
+
+def _grid_shift_kwh(row: Any) -> float:
+    """Grid-origin battery delivery minus grid-charge import (ADR 0002 A10); zero without grid charging."""
+    return float(row["Grid_Origin_Battery_AC_Load_kWh"] - row["Grid_AC_To_Battery_kWh"])
+
+
+def _round2(value: float) -> float:
+    """Round to 0.01; adding 0.0 turns a rounded -0.0 residue into 0.0."""
+    return round(float(value), 2) + 0.0
+
+
+def smart_charging_to_dict(artifacts: SimulationArtifacts) -> dict[str, Any]:
+    """The smart-charging block of an App result: grid charge, delivery by origin, and terminal state."""
+    assert artifacts.smart_charging is not None
+    yearly = artifacts.yearly_df
+    rows = []
+    for _, row in yearly.iterrows():
+        item: dict[str, Any] = {
+            "year": int(row["Year"]),
+            "grid_charge_ac_kwh": _round2(row["Grid_AC_To_Battery_kWh"]),
+            "grid_charge_conversion_loss_kwh": _round2(row["Grid_Charge_Conversion_Loss_kWh"]),
+            "battery_ac_to_load_kwh": {
+                "pv_origin": _round2(row["PV_Origin_Battery_AC_Load_kWh"]),
+                "grid_origin": _round2(row["Grid_Origin_Battery_AC_Load_kWh"]),
+                "unattributed": _round2(
+                    row["Battery_AC_To_Load_kWh"]
+                    - row["PV_Origin_Battery_AC_Load_kWh"]
+                    - row["Grid_Origin_Battery_AC_Load_kWh"]
+                ),
+            },
+        }
+        # Year-1 prices, like the tariff's other money columns.
+        if "Grid_Charge_Cost" in row:
+            item["grid_charge_cost_year1_prices"] = _round2(row["Grid_Charge_Cost"])
+        rows.append(item)
+    stored = {
+        key: {name: _round2(value) for name, value in artifacts.smart_charging[key].items()}
+        for key in ("initial_stored_energy", "final_stored_energy")
+    }
+    return {
+        "mode": artifacts.smart_charging["mode"],
+        "terminal_convention": artifacts.smart_charging["terminal_convention"],
+        **stored,
+        "yearly": rows,
+    }
 
 
 def build_result(
@@ -235,6 +287,8 @@ def build_result(
 
     if resolved.pv_arrays:
         result["pv_arrays"] = [dict(arr) for arr in resolved.pv_arrays]
+    if artifacts.smart_charging is not None:
+        result["smart_charging"] = smart_charging_to_dict(artifacts)
 
     if cfg["battery_kwh"] > 0:
         soh_digits = 1 if cfg["degradation_engine"] == "blast" else 2
@@ -247,12 +301,17 @@ def build_result(
                     row["soh_pct"] = round(float(row["soh_pct"]), 1)
 
     if resolved.emissions_params is not None:
-        co2 = calculate_co2_savings(yr1_pv, self_consumption_kwh, resolved.emissions_params)
+        co2 = calculate_co2_savings(
+            yr1_pv, self_consumption_kwh, resolved.emissions_params, grid_shift_kwh=_grid_shift_kwh(year1)
+        )
         lifetime_self = 0.0
         lifetime_export = 0.0
         for _, row in artifacts.yearly_df.iterrows():
             yearly_co2 = calculate_co2_savings(
-                float(row["PV_Production_kWh"]), float(row["Self_Consumption_kWh"]), resolved.emissions_params
+                float(row["PV_Production_kWh"]),
+                float(row["Self_Consumption_kWh"]),
+                resolved.emissions_params,
+                grid_shift_kwh=_grid_shift_kwh(row),
             )
             lifetime_self += yearly_co2["CO2_Avoided_SelfConsumed_kg"]
             lifetime_export += yearly_co2["CO2_Avoided_Export_kg"]
