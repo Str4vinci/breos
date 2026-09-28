@@ -490,6 +490,7 @@ fixed_charge_per_day = 0.25              # optional, default 0
 Monte Carlo prices every trajectory with the same tariff. Projected
 optimization accepts the same tariff table in its nested config; see
 [Optimization](optimization.md#price-a-design-with-a-time-of-use-tariff).
+To compare several offers, see [Compare tariffs](recipes.md#compare-tariffs).
 
 ## Smart charging
 

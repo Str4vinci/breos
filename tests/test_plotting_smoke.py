@@ -41,7 +41,6 @@ _BASE_CONFIG = {
     "projection_years": 3,
 }
 
-_DEAD_PVBAT_REASON = "#186: dead pvbat leftover; BREOS never produces the input schema it expects"
 _DEAD_LEGACY_MC_REASON = (
     "#186: reachable only through the legacy run-year branch of plot_montecarlo_simulation, "
     "whose run_number/year columns BREOS never produces"
@@ -507,21 +506,6 @@ def test_plot_pareto_front_analysis(tmp_path):
     ]
     plotting.plot_pareto_front_analysis(pd.DataFrame(rows), [3000, 5000], str(tmp_path))
     _assert_written(tmp_path, "pareto_front_refined.png", "pareto_front_3000.csv", "pareto_front_5000.csv")
-
-
-# ---------------------------------------------------------------------------
-# Tariff comparison
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.skip(reason=_DEAD_PVBAT_REASON)
-def test_plot_tariff_comparison():
-    pass
-
-
-@pytest.mark.skip(reason=_DEAD_PVBAT_REASON)
-def test_plot_tariff_comparison_manual():
-    pass
 
 
 def test_plot_cell_temperature_leaves_months_without_data_empty(tmp_path, monkeypatch):

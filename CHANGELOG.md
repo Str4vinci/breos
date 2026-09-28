@@ -272,13 +272,13 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   | `breos.io` summary label | `Total Investment [EUR]` | `Total Investment [<currency>]` |
   | `breos.io` summary label | `NPV Savings [EUR]` | `NPV Savings [<currency>]` |
   | `plot_pareto_front_analysis` input column | `Net_Cost_Eur` | `Net_Cost` |
-  | `plot_tariff_comparison` input column | `Net Cost (€)` | `Net Cost` |
-  | `plot_tariff_comparison` input column | `No System Cost (€)` | `No System Cost` |
 
   The ADR's table also lists `SteadyState_NPV_Eur` and
   `replacement_cost_eur_each`; both went earlier in this release with the
-  steady-state objective basis. `_t0_prices` marks a total at t = 0 prices,
-  neither inflated nor discounted. `App.result()` gains
+  steady-state objective basis. It lists two `plot_tariff_comparison` input
+  columns as well; that function was removed in this release (see Removed).
+  `_t0_prices` marks a total at t = 0 prices, neither inflated nor
+  discounted. `App.result()` gains
   `battery_replacement_cost_npv` beside it: the same replacements inflated to
   and discounted from each swap instant, as `npv_savings` counts them.
 
@@ -1160,6 +1160,13 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 - The packaged `breos/data/configs/financials.json`, which nothing loaded and
   which said discount 0.05 against the App's 0.03 (ADR 0003 E6,
   [#186](https://github.com/Str4vinci/breos/issues/186)).
+- `breos.plotting.plot_tariff_comparison` and `plot_tariff_comparison_manual`
+  ([#186](https://github.com/Str4vinci/breos/issues/186)), with no
+  deprecation period. Nothing called them, and they expected hand-built
+  `Tariff`/`Net Cost` tables that BREOS never produced. Compare tariffs with
+  `breos sweep` over the `[tariff]` table and read its year-1 money columns,
+  or loop over `App` runs. The "Compare tariffs" recipe shows both, and
+  `configs/examples/tariff-comparison.toml` is the CLI version.
 
 ### Documentation
 - The release checklist records that `v0.5.0`, `v0.5.1` and `v0.6.0` are
@@ -1167,6 +1174,13 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   leave them in place rather than re-push them
   ([#185](https://github.com/Str4vinci/breos/issues/185)). The release flow
   now creates annotated tags.
+- A "Compare tariffs" recipe: the same system under several offers, from
+  `breos sweep` over whole `[tariff]` tables or from a loop over `App` runs,
+  read through the year-1 bill, the project-long cost with the system, and
+  `npv_savings`, which ranks where a system pays most rather than which offer
+  is cheapest. New example `configs/examples/tariff-comparison.toml` compares
+  a simple, a bi-hourly and a tri-hourly offer with and without a battery. The
+  configs README lists the three tariff examples.
 
 ## [0.6.2] - 2026-09-24
 

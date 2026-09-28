@@ -240,10 +240,83 @@ preparing each run afresh. To do so it runs the grid grouped by PV design,
 while the CSV keeps the grid order. A warning from the input stage appears
 once, for the run that prepares those inputs.
 
-To compare tariffs, keep one `[tariff]` in the base scenario and vary its
-prices, or give `tariff` itself a list of whole tables, each of which
-replaces the base `[tariff]` for its run. The CSV's year-1 money columns
-then compare the bills directly:
+To compare tariffs, see [Compare tariffs](#compare-tariffs).
+
+## Compare tariffs
+
+A tariff comparison prices the same system and load under each offer. The
+dispatch does not depend on the price unless `[smart_charging]` is set, so
+the energy flows are the same and only the money differs. Two comparisons
+answer different questions:
+
+- **Which offer is cheapest?** Compare what the household pays under each.
+  For the first year, the
+  [year-1 money keys](interpreting-results.md#year-1-money-keys) give the
+  bill: import cost plus fixed charge minus export revenue. Over the project,
+  the last `financial` row's `cost_with_system` is the cumulative discounted
+  cost with the system: investment, energy, fixed charge, O&M and
+  replacements.
+- **Under which offer does the system pay most?** `npv_savings` is the
+  system's saving against no system *under the same offer*. Each offer has
+  its own no-system bill, so a higher `npv_savings` does not mean a cheaper
+  offer. An offer with an expensive peak can make PV save more while still
+  costing more overall.
+
+### From the CLI
+
+Give `tariff` a list of whole tables under `[sweep]`; each replaces the
+tariff for its runs. A simple (single-price) offer is any schedule with an
+`all` price.
+[configs/examples/tariff-comparison.toml](https://github.com/Str4vinci/breos/blob/develop/configs/examples/tariff-comparison.toml)
+compares a simple, a bi-hourly and a tri-hourly offer, with and without a
+battery:
+
+```toml
+location = "porto"
+n_modules = 10
+annual_consumption_kwh = 4000
+cost_preset = "residential_pt"
+emissions_country = "PT"
+resolution = "15min"   # the tri-hourly schedule changes on the half hour
+
+[sweep]
+battery_kwh = [0.0, 5.0]
+
+[[sweep.tariff]]
+schedule = "pt_mainland_2026_daily_bi"
+currency = "EUR"
+import_prices = { all = 0.1950 }
+export_prices = { all = 0.0500 }
+fixed_charge_per_day = 0.30
+
+[[sweep.tariff]]
+schedule = "pt_mainland_2026_daily_bi"
+currency = "EUR"
+import_prices = { peak = 0.2310, off_peak = 0.1210 }
+export_prices = { all = 0.0500 }
+fixed_charge_per_day = 0.30
+
+[[sweep.tariff]]
+schedule = "pt_mainland_2026_daily_tri"
+currency = "EUR"
+import_prices = { peak = 0.2890, mid_peak = 0.1920, off_peak = 0.1210 }
+export_prices = { all = 0.0500 }
+fixed_charge_per_day = 0.30
+```
+
+```bash
+breos sweep --config configs/examples/tariff-comparison.toml --output tariff_comparison.csv
+```
+
+The six runs share one preparation of weather and PV. In the CSV,
+`param_tariff` holds each run's tariff table as JSON, so a spreadsheet or
+pandas can label the rows by its `schedule` and prices. The year-1 money
+columns compare the first-year bills; the CSV carries top-level scalars only,
+so for the project-long cost use the Python route below. The prices above are
+illustrative; put the offers you are comparing in their place.
+
+To vary one price instead of the whole offer, keep one `[tariff]` in the base
+scenario and sweep a dotted key:
 
 ```toml
 [tariff]
@@ -255,6 +328,57 @@ export_prices = { all = 0.0500 }
 [sweep]
 "tariff.import_prices.off_peak" = [0.1010, 0.1210, 0.1410]
 ```
+
+### From Python
+
+A loop over {py:class}`~breos.App` runs does the same, and can also compare
+against the cost preset's flat prices, which a tariff table replaces:
+
+```python
+from breos import App
+
+base = {
+    "location": "porto",
+    "n_modules": 10,
+    "annual_consumption_kwh": 4000,
+    "battery_kwh": 5.0,
+    "cost_preset": "residential_pt",
+    "emissions_country": "PT",
+}
+offers = {
+    "preset flat prices": {},
+    "bi-hourly": {
+        "tariff": {
+            "schedule": "pt_mainland_2026_daily_bi",
+            "currency": "EUR",
+            "import_prices": {"peak": 0.2310, "off_peak": 0.1210},
+            "export_prices": {"all": 0.0500},
+            "fixed_charge_per_day": 0.30,
+        }
+    },
+}
+
+for name, offer in offers.items():
+    app = App({**base, **offer})
+    app.simulate()
+    result = app.result()
+    bill = (
+        result["grid_import_cost_year1_prices"]
+        + result["fixed_charge_year1_prices"]
+        - result["grid_export_revenue_year1_prices"]
+    )
+    project_cost = result["financial"][-1]["cost_with_system"]
+    print(
+        f"{name}: year-1 bill {bill:.2f}, project cost {project_cost:.2f}, "
+        f"NPV savings vs no system {result['npv_savings']:.2f}"
+    )
+```
+
+The year-1 bill leaves out O&M, which does not depend on the offer.
+
+The flat run uses the preset's `electricity_cost`, `electricity_sold_cost` and
+`daily_power_cost`; a tariff run must not set them. Each run with the same PV
+design repeats the weather and PV preparation, which `breos sweep` shares.
 
 ## 15-minute resolution
 
