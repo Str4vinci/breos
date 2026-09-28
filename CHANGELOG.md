@@ -213,6 +213,18 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   inputs. The docs state the timing conventions (E3).
 
 ### Changed
+- `breos validate-config --json` and `breos run --dry-run` build their
+  resolved-config summary from the config registry: each `AppConfigField`
+  names its place (`summary = "section.key"`), so every App key is reported
+  ([#181](https://github.com/Str4vinci/breos/issues/181)). Every field the
+  summary reported before keeps its place and value. The summary gains the
+  keys it left out: the tracker settings, `horizon_profile` and
+  `pv_degradation_rate` under `pv`; `load_profile_column` and
+  `load_profile_unit` under `load`; `calendar_model`,
+  `enable_resistance_fade`, `battery_temperature`, `battery_indoor_model`
+  and `smart_charging` under `battery`; `costs` and `tariff` under
+  `economics`; and a new `simulation` section with `weather_source` and
+  `execution_backend`. A TOML date in `[tariff]` is written as text.
 - `breos sweep` prepares weather, PV, load and battery temperature once per
   distinct input configuration and reuses them across the runs that differ
   only in settings the input stage never reads, such as a tariff, a battery
