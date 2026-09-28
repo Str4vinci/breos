@@ -12,7 +12,17 @@ from typing import Any, Callable, Mapping
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from breos.config_schema import TableSpec, anything, boolean, choice, list_of, mapping_of, number, text
-from breos.constants import DEFAULT_MAX_SOC, DEFAULT_MIN_SOC
+from breos.constants import (
+    DEFAULT_CHARGE_EFFICIENCY,
+    DEFAULT_DISCHARGE_EFFICIENCY,
+    DEFAULT_INDOOR_CEILING_C,
+    DEFAULT_INDOOR_COUPLING_ALPHA,
+    DEFAULT_INDOOR_FLOOR_C,
+    DEFAULT_INDOOR_MODEL_ENABLED,
+    DEFAULT_INDOOR_SETPOINT_C,
+    DEFAULT_MAX_SOC,
+    DEFAULT_MIN_SOC,
+)
 from breos.degradation.profiles import ENABLED_BLAST_MODEL_KEYS, apply_battery_profile_defaults
 from breos.economics import (
     COST_CONFIG_KEY_TO_PARAM,
@@ -63,6 +73,7 @@ from breos.tariffs import (
 from breos.utils import get_hours_per_step
 
 _NO_DEFAULT = object()
+_TRACKING_MODES = ("fixed", "single_axis", "dual_axis")
 
 
 @dataclass(frozen=True)
@@ -73,6 +84,11 @@ class AppConfigField:
     below. This registry owns the mechanical contract that had previously
     drifted across defaults, the allowed-key list, CLI arguments, and CLI
     override propagation.
+
+    ``doc`` describes the key in the generated configuration key reference
+    (``tools/generate_config_docs.py``). ``default_doc`` replaces the default
+    shown there when the value alone would mislead: a required key, or a
+    table that is unset by default.
     """
 
     default: Any = _NO_DEFAULT
@@ -83,6 +99,8 @@ class AppConfigField:
     cli_action: str | None = None
     cli_help: str | None = None
     normalizer: Callable[[Any], Any] | None = None
+    doc: str = ""
+    default_doc: str | None = None
 
     @property
     def has_default(self) -> bool:
@@ -114,12 +132,25 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         cli_flags=("--location",),
         cli_help="Location preset key, for example 'porto'.",
         normalizer=_lower,
+        doc=(
+            'Preset key (e.g. `"porto"`, `"berlin"`) or `{"latitude": ..., "longitude": ..., "timezone": ...}`. See '
+            "[Custom location](configuration.md#custom-location)"
+        ),
+        default_doc="*required*",
     ),
-    "n_modules": AppConfigField(cli_flags=("--n-modules",), cli_type=int, cli_help="Number of PV modules."),
+    "n_modules": AppConfigField(
+        cli_flags=("--n-modules",),
+        cli_type=int,
+        cli_help="Number of PV modules.",
+        doc="Number of PV modules",
+        default_doc="*required unless `pv_arrays` is set*",
+    ),
     "annual_consumption_kwh": AppConfigField(
         cli_flags=("--annual-consumption-kwh",),
         cli_type=float,
         cli_help="Annual electricity demand in kWh.",
+        doc="Annual electricity demand (kWh)",
+        default_doc="*required*",
     ),
     "battery_kwh": AppConfigField(
         default=0.0,
@@ -127,6 +158,10 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         cli_flags=("--battery-kwh",),
         cli_type=float,
         cli_help="Battery capacity in kWh.",
+        doc=(
+            "Nominal battery capacity in kWh (`0` = no battery). The SOC window sets the usable share; see [Battery "
+            "capacity and the SOC window](configuration.md#battery-capacity-and-the-soc-window)"
+        ),
     ),
     "battery_max_charge_power_w": AppConfigField(
         default=None,
@@ -134,6 +169,7 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         cli_flags=("--battery-max-charge-power-w",),
         cli_type=float,
         cli_help="Maximum DC power entering the battery charge path in W (default: unlimited).",
+        doc="Maximum DC power entering the battery charge path; `None` is unlimited",
     ),
     "battery_max_discharge_power_w": AppConfigField(
         default=None,
@@ -141,6 +177,7 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         cli_flags=("--battery-max-discharge-power-w",),
         cli_type=float,
         cli_help="Maximum battery AC power delivered to load in W (default: unlimited).",
+        doc="Maximum battery AC power delivered to load; `None` is unlimited",
     ),
     "battery_power_limit_c_rate": AppConfigField(
         default=None,
@@ -152,6 +189,11 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
             "for example 1.0 for 1 C. Scales with battery_kwh; cannot be combined with the absolute "
             "battery_max_charge_power_w or battery_max_discharge_power_w."
         ),
+        doc=(
+            "Charge and discharge limit on the stored energy, as a multiple of capacity (1.0 = 1 C). It scales with "
+            "`battery_kwh` and cannot be combined with `battery_max_charge_power_w` or "
+            "`battery_max_discharge_power_w`"
+        ),
     ),
     "cost_preset": AppConfigField(
         default=None,
@@ -159,6 +201,10 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         cli_flags=("--cost-preset",),
         cli_help="Cost preset key, for example 'residential-pt'.",
         normalizer=_underscored,
+        doc=(
+            "Cost preset key from the packaged defaults; see [Packaged options](options.md#cost-presets). `None` uses "
+            "the {py:class}`~breos.CostParams` defaults"
+        ),
     ),
     "emissions_country": AppConfigField(
         default=None,
@@ -166,15 +212,27 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         cli_flags=("--emissions-country",),
         cli_help="Country code for emissions, for example 'pt'.",
         normalizer=_upper,
+        doc=(
+            'Country code for CO2 calculations (`"PT"`, `"DE"`, `"ES"`, ...); see [Packaged '
+            "options](options.md#emissions-factors)"
+        ),
     ),
     "pv_module": AppConfigField(
-        default=None, default_order=2, cli_flags=("--pv-module",), cli_help="PV module catalogue key."
+        default=None,
+        default_order=2,
+        cli_flags=("--pv-module",),
+        cli_help="PV module catalogue key.",
+        doc="Module key from the built-in catalogue. `None` uses the first available",
     ),
     "load_profile": AppConfigField(
         default="demandlib_h0",
         default_order=3,
         cli_flags=("--load-profile",),
         cli_help="Load profile key; see 'breos list load-profiles'.",
+        doc=(
+            "Load profile key; see [Load profiles](configuration.md#load-profiles) and [Packaged "
+            "options](options.md#load-profiles)"
+        ),
     ),
     "rlp_directory": AppConfigField(
         default=None,
@@ -183,6 +241,7 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         cli_type=Path,
         cli_help="Directory containing licensed external RLP CSV files.",
         normalizer=_path_string,
+        doc="Directory containing licensed external RLP CSVs for non-bundled load profiles",
     ),
     "load_profile_file": AppConfigField(
         default=None,
@@ -194,12 +253,20 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
             "A relative path is taken inside rlp_directory when that is set."
         ),
         normalizer=_path_string,
+        doc=(
+            'Load-profile CSV to read instead of the key\'s filename pattern; required for `load_profile = "custom"`. '
+            "A relative path is taken inside `rlp_directory` when that is set"
+        ),
     ),
     "load_profile_column": AppConfigField(
         default=None,
         default_order=57,
         cli_flags=("--load-profile-column",),
         cli_help="For load_profile 'custom': the CSV column holding the load, if the file has several.",
+        doc=(
+            'For `load_profile = "custom"` only: the CSV column holding the load, if the file has several. Refused '
+            "for any other profile"
+        ),
     ),
     "load_profile_unit": AppConfigField(
         default=None,
@@ -207,6 +274,10 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         cli_flags=("--load-profile-unit",),
         cli_choices=PROFILE_UNITS,
         cli_help="For load_profile 'custom': W or kW (mean power per row), or Wh or kWh (energy per row).",
+        doc=(
+            'Required for `load_profile = "custom"`, and refused for any other profile: `W` or `kW` (mean power per '
+            "row), or `Wh` or `kWh` (energy per row)"
+        ),
     ),
     "tilt": AppConfigField(
         default=None,
@@ -214,6 +285,7 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         cli_flags=("--tilt",),
         cli_type=float,
         cli_help="PV tilt angle in degrees.",
+        doc="Tilt angle (degrees). `None` estimates it from the latitude",
     ),
     "azimuth": AppConfigField(
         default=None,
@@ -221,6 +293,7 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         cli_flags=("--azimuth",),
         cli_type=float,
         cli_help="PV surface azimuth in degrees.",
+        doc="Surface azimuth (degrees). `None` faces the equator: 180 in the northern hemisphere",
     ),
     "transposition_model": AppConfigField(
         default=DEFAULT_TRANSPOSITION_MODEL,
@@ -228,6 +301,10 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         cli_flags=("--transposition-model", "--sky-model"),
         cli_choices=tuple(TRANSPOSITION_MODELS),
         cli_help="Sky-diffusion model for POA transposition (default: isotropic).",
+        doc=(
+            "Sky-diffusion model used to project GHI/DHI/DNI onto the plane of array; see [Sky-diffusion "
+            "model](configuration.md#sky-diffusion-transposition-model)"
+        ),
     ),
     "albedo": AppConfigField(
         default=None,
@@ -235,6 +312,10 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         cli_flags=("--albedo",),
         cli_type=float,
         cli_help="Ground reflectance 0-1 (default: pvlib 0.25). Excludes --surface-type.",
+        doc=(
+            "Ground reflectance (0-1) for the ground-diffuse component; `None` uses pvlib's 0.25 default. Mutually "
+            "exclusive with `surface_type`"
+        ),
     ),
     "surface_type": AppConfigField(
         default=None,
@@ -242,6 +323,7 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         cli_flags=("--surface-type",),
         cli_choices=tuple(SURFACE_TYPES),
         cli_help="Named ground cover mapped to an albedo (alternative to --albedo).",
+        doc="Named ground cover mapped to an albedo; an alternative to `albedo`",
     ),
     "model_perez": AppConfigField(
         default=DEFAULT_PEREZ_MODEL,
@@ -249,6 +331,7 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         cli_flags=("--perez-model",),
         cli_choices=tuple(PEREZ_MODELS),
         cli_help="Perez coefficient set (only used with --transposition-model perez).",
+        doc='Perez coefficient set; only used when `transposition_model = "perez"`',
     ),
     "solar_position": AppConfigField(
         default=DEFAULT_SOLAR_POSITION,
@@ -259,6 +342,11 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
             "Where within each timestep the sun position is evaluated. 'mid-interval' matches "
             "PVWatts/SAM for interval-averaged weather (default: interval-start)."
         ),
+        doc=(
+            'Where within each timestep the sun position is evaluated. `"mid-interval"` adds half a timestep. '
+            '`"weather"` reads the representative-time offset from content-bound weather metadata, including provider '
+            "offsets for instantaneous irradiance and left- or right-labelled interval means"
+        ),
     ),
     "iam_model": AppConfigField(
         default=DEFAULT_IAM_MODEL,
@@ -266,6 +354,10 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         cli_flags=("--iam-model",),
         cli_choices=tuple(IAM_MODELS),
         cli_help="Beam incidence-angle modifier (default: ashrae, historical compatibility).",
+        doc=(
+            'Beam incidence-angle modifier. `"physical"` uses pvlib\'s physical optics model and `"martin_ruiz"` its '
+            "empirical model; the Ashrae default preserves historical results"
+        ),
     ),
     "diffuse_iam": AppConfigField(
         default=DEFAULT_DIFFUSE_IAM,
@@ -275,6 +367,11 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         cli_help=(
             "Whether IAM is also applied to the diffuse POA components. 'marion' weighs sky- and "
             "ground-diffuse with the view-factor-integrated selected IAM model (default: none, beam-only)."
+        ),
+        doc=(
+            'Whether the incidence-angle modifier also applies to the diffuse POA components. `"marion"` weighs sky- '
+            "and ground-diffuse with the view-factor-integrated selected IAM model (Marion 2017); the default applies "
+            "IAM to beam only, a known ~0.5-1% overestimate"
         ),
     ),
     "temperature_model": AppConfigField(
@@ -287,6 +384,11 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
             "mounting coefficients; noct-sam additionally requires sourced module NOCT and efficiency "
             "metadata (not yet bundled). Default: faiman, open rack."
         ),
+        doc=(
+            'Cell-temperature model and mounting preset. `"pvsyst-*"` and `"sapm-*"` use documented mounting '
+            'coefficients; `"noct-sam"` needs sourced module NOCT and efficiency metadata, which no bundled module '
+            "has yet. The default is Faiman, open rack"
+        ),
     ),
     "bifacial_model": AppConfigField(
         default=DEFAULT_BIFACIAL_MODEL,
@@ -296,6 +398,10 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         cli_help=(
             "Rear-irradiance model (default: none; infinite_sheds requires bifacial module metadata and row geometry)."
         ),
+        doc=(
+            'Rear-irradiance model. `"none"` is front-only production; `"infinite_sheds"` needs sourced module '
+            "bifaciality plus `gcr`, `pvrow_height` and `pvrow_pitch`"
+        ),
     ),
     "pvrow_height": AppConfigField(
         default=None,
@@ -303,6 +409,10 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         cli_flags=("--pvrow-height",),
         cli_type=float,
         cli_help="PV row center height above ground; use the same unit as --pvrow-pitch.",
+        doc=(
+            'Height of the PV row center above ground; required by `"infinite_sheds"`, in the same unit as '
+            "`pvrow_pitch`"
+        ),
     ),
     "pvrow_pitch": AppConfigField(
         default=None,
@@ -310,6 +420,7 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         cli_flags=("--pvrow-pitch",),
         cli_type=float,
         cli_help="Distance between PV rows; use the same unit as --pvrow-height.",
+        doc='Distance between adjacent PV rows; required by `"infinite_sheds"`, in the same unit as `pvrow_height`',
     ),
     "gcr": AppConfigField(
         default=0.35,
@@ -317,6 +428,7 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         cli_flags=("--gcr",),
         cli_type=float,
         cli_help="PV row ground coverage ratio (default: 0.35).",
+        doc="Ground coverage ratio for single-axis tracking and infinite-sheds bifacial geometry",
     ),
     "resolution": AppConfigField(
         default="h",
@@ -324,6 +436,7 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         cli_flags=("--resolution",),
         cli_choices=("h", "15min"),
         cli_help="Simulation time resolution.",
+        doc="Simulation time resolution",
     ),
     "projection_years": AppConfigField(
         default=20,
@@ -331,6 +444,7 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         cli_flags=("--projection-years",),
         cli_type=int,
         cli_help="Economic projection horizon.",
+        doc="Economic projection horizon in years",
     ),
     "inflation_rate": AppConfigField(
         default=DEFAULT_INFLATION_RATE,
@@ -341,6 +455,10 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
             "General annual inflation. Import energy, the fixed charge and O&M escalate at it unless "
             "their own rate is set, and replacement prices inflate at it."
         ),
+        doc=(
+            "General annual inflation (nominal). Import energy, the fixed charge and O&M escalate at it unless their "
+            "own rate is set; replacement prices inflate at it"
+        ),
     ),
     # ADR 0003 E2: separate escalators. None inherits inflation_rate, so a run
     # that sets none of them prices exactly as before.
@@ -350,6 +468,7 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         cli_flags=("--import-price-escalation",),
         cli_type=float,
         cli_help="Annual escalation of the import price and the fixed charge. Default: inflation_rate.",
+        doc="Annual escalation of the import price and the fixed charge; `None` uses `inflation_rate`",
     ),
     "om_escalation": AppConfigField(
         default=None,
@@ -357,6 +476,7 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         cli_flags=("--om-escalation",),
         cli_type=float,
         cli_help="Annual escalation of O&M costs. Default: inflation_rate.",
+        doc="Annual escalation of O&M costs; `None` uses `inflation_rate`",
     ),
     "replacement_cost_learning": AppConfigField(
         default=0.0,
@@ -364,6 +484,10 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         cli_flags=("--replacement-cost-learning",),
         cli_type=float,
         cli_help="Annual fall in the battery replacement price, on top of inflation. Default 0.",
+        doc=(
+            "Annual fall in the battery replacement price on top of inflation: a swap at `t` years costs `C0 × (1 + "
+            "inflation_rate)^t × (1 − learning)^t`"
+        ),
     ),
     "sell_price_inflation": AppConfigField(
         default=0.0,
@@ -371,6 +495,7 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         cli_flags=("--sell-price-inflation",),
         cli_type=float,
         cli_help="Annual inflation of the grid export (sell) price. Default 0.",
+        doc="Annual escalation of the grid export (sell) price",
     ),
     "export_emissions_factor_gco2_kwh": AppConfigField(
         default=None,
@@ -378,6 +503,10 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         cli_flags=("--export-emissions-factor-gco2-kwh",),
         cli_type=float,
         cli_help="Exported-generation displacement factor in gCO2/kWh (default: grid avoided factor).",
+        doc=(
+            "Displacement factor for exported PV, in gCO2/kWh. `None` uses the preset's avoided-grid factor and "
+            "reports that fallback"
+        ),
     ),
     "discount_rate": AppConfigField(
         default=DEFAULT_DISCOUNT_RATE,
@@ -385,6 +514,7 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         cli_flags=("--discount-rate",),
         cli_type=float,
         cli_help="Discount rate for NPV calculations.",
+        doc="Nominal discount rate for NPV",
     ),
     "pv_degradation_rate": AppConfigField(
         default=0.005,
@@ -392,12 +522,20 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         cli_flags=("--pv-degradation-rate",),
         cli_type=float,
         cli_help="Annual compound PV degradation rate; year 1 has none.",
+        doc=(
+            "Annual PV degradation rate, compounded and counted from the start of each year, so year 1 has none; see "
+            "[Module aging](../api/pv.md#module-aging)"
+        ),
     ),
     "calendar_model": AppConfigField(
         default="naumann_lam_field_calibrated",
         default_order=35,
         cli_flags=("--calendar-model",),
         cli_help="Battery calendar aging model.",
+        doc=(
+            "Battery calendar aging model. The default is the v1 field calibration; "
+            '`"naumann_lam_field_calibrated_v2"` is the v2 fit with Lam `Ea`/`n` fixed and `k0`/`b` fitted'
+        ),
     ),
     "degradation_engine": AppConfigField(
         default="native",
@@ -405,12 +543,14 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         cli_flags=("--degradation-engine",),
         cli_choices=("native", "blast"),
         cli_help="Battery degradation engine (default: native Naumann/Lam).",
+        doc='`"native"` keeps Naumann/Lam; `"blast"` opts into a vendored BLAST cell model',
     ),
     "blast_model": AppConfigField(
         default=None,
         default_order=37,
         cli_flags=("--blast-model",),
         cli_help="Stable BLAST battery-model key; requires --degradation-engine blast.",
+        doc='Stable BLAST model key; required with `degradation_engine = "blast"` and invalid with the native engine',
     ),
     "dc_coupled": AppConfigField(
         default=True,
@@ -418,6 +558,7 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         cli_flags=("--dc-coupled",),
         cli_action="store_true",
         cli_help="Use the supported DC-coupled/hybrid battery model.",
+        doc="DC-coupled or hybrid inverter. `False` is not supported and raises",
     ),
     "inverter_efficiency": AppConfigField(
         default=0.96,
@@ -425,6 +566,7 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         cli_flags=("--inverter-efficiency",),
         cli_type=float,
         cli_help="Inverter efficiency.",
+        doc="Nominal inverter efficiency used by the PVWatts part-load curve",
     ),
     "inverter_loading_ratio": AppConfigField(
         default=1.25,
@@ -432,17 +574,36 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         cli_flags=("--inverter-loading-ratio",),
         cli_type=float,
         cli_help="DC/AC oversizing ratio.",
+        doc="DC/AC oversizing ratio; also sets the inverter AC rating that clips production",
     ),
     "start_date": AppConfigField(
         default="2023-01-01",
         default_order=50,
         cli_flags=("--start-date",),
         cli_help="First simulated day: 1 January of the study year, YYYY-01-01.",
+        doc="First simulated day: 1 January of the study year, `YYYY-01-01`",
     ),
     # The [tariff] table (ADR 0002). Omitted: flat prices from the cost preset.
-    "tariff": AppConfigField(default=None, default_order=59),
+    "tariff": AppConfigField(
+        default=None,
+        default_order=59,
+        doc=(
+            "Time-of-use import and export prices on a bundled schedule, replacing the flat `costs.electricity_cost`, "
+            "`costs.electricity_sold_cost` and `costs.daily_power_cost`; see [`[tariff]`](#tariff) and [Time-of-use "
+            "tariffs](configuration.md#time-of-use-tariffs)"
+        ),
+        default_doc="*unset*",
+    ),
     # The [smart_charging] table (ADR 0002). Omitted: greedy self-consumption.
-    "smart_charging": AppConfigField(default=None, default_order=60),
+    "smart_charging": AppConfigField(
+        default=None,
+        default_order=60,
+        doc=(
+            "Grid charging toward a target in the tariff's cheap periods; see [`[smart_charging]`](#smart_charging) "
+            "and [Smart charging](configuration.md#smart-charging)"
+        ),
+        default_doc="*unset*",
+    ),
     "weather_source": AppConfigField(
         default=None,
         default_order=55,
@@ -451,28 +612,105 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
             "Source part of the cached weather/<location>_tmy_*_<source>.csv file to use when several "
             "TMY files exist for the location preset, for example 'pvgis-sarah3'."
         ),
+        doc=(
+            "Source part of the cached `weather/<location>_tmy_<years>_<source>.csv` file to load, e.g. "
+            '`"pvgis-sarah3"`. Needed only when several TMY files exist for a location preset; see [Offline runs with '
+            "cached weather](recipes.md#offline-runs-with-cached-weather)"
+        ),
     ),
     # Config-file/API-only fields.
-    "costs": AppConfigField(),
-    "pv_arrays": AppConfigField(default=None, default_order=1),
-    "tracking": AppConfigField(default="fixed", default_order=7),
-    "axis_tilt": AppConfigField(default=0.0, default_order=8),
-    "axis_azimuth": AppConfigField(default=None, default_order=9),
-    "max_angle": AppConfigField(default=60.0, default_order=10),
-    "backtrack": AppConfigField(default=True, default_order=11),
-    "cross_axis_tilt": AppConfigField(default=0.0, default_order=13),
-    "dual_axis_max_tilt": AppConfigField(default=90.0, default_order=14),
+    "costs": AppConfigField(
+        doc="Cost overrides layered over the selected preset and the built-in defaults; see [`[costs]`](#costs)",
+        default_doc="*unset*",
+    ),
+    "pv_arrays": AppConfigField(
+        default=None,
+        default_order=1,
+        doc=(
+            "List of arrays, each with `modules`, `module`, `tilt` and `azimuth`. The array module total replaces "
+            "`n_modules`; see [`[[pv_arrays]]`](#pv_arrays)"
+        ),
+    ),
+    "tracking": AppConfigField(
+        default="fixed",
+        default_order=7,
+        doc="Tracking mode: " + ", ".join(f'`"{mode}"`' for mode in _TRACKING_MODES),
+    ),
+    "axis_tilt": AppConfigField(default=0.0, default_order=8, doc="Single-axis tracker axis tilt (degrees)"),
+    "axis_azimuth": AppConfigField(
+        default=None, default_order=9, doc="Tracker axis azimuth (degrees). `None` sets it from the latitude"
+    ),
+    "max_angle": AppConfigField(
+        default=60.0, default_order=10, doc="Single-axis tracker maximum rotation angle (degrees)"
+    ),
+    "backtrack": AppConfigField(
+        default=True, default_order=11, doc="Whether single-axis trackers backtrack to avoid row shading"
+    ),
+    "cross_axis_tilt": AppConfigField(
+        default=0.0, default_order=13, doc="Cross-axis terrain slope for single-axis tracking (degrees)"
+    ),
+    "dual_axis_max_tilt": AppConfigField(
+        default=90.0, default_order=14, doc="Maximum panel tilt for dual-axis tracking (degrees)"
+    ),
     # The BatteryConfig defaults, so the App and the optimizer, which leaves
     # unset battery settings to BatteryConfig, resolve the same window.
-    "battery_min_soc": AppConfigField(default=DEFAULT_MIN_SOC, default_order=38),
-    "battery_max_soc": AppConfigField(default=DEFAULT_MAX_SOC, default_order=39),
-    "battery_eol_percentage": AppConfigField(default=0.70, default_order=40),
-    "battery_rte": AppConfigField(default=None, default_order=41),
-    "enable_resistance_fade": AppConfigField(default=False, default_order=45),
-    "pv_loss_overrides": AppConfigField(default=None, default_order=49),
-    "horizon_profile": AppConfigField(default=None, default_order=51),
-    "battery_temperature": AppConfigField(default="weather", default_order=52),
-    "battery_indoor_model": AppConfigField(default=None, default_order=53),
+    "battery_min_soc": AppConfigField(
+        default=DEFAULT_MIN_SOC,
+        default_order=38,
+        doc="Battery SOC floor, as a fraction of nominal SOH-derated capacity",
+    ),
+    "battery_max_soc": AppConfigField(
+        default=DEFAULT_MAX_SOC, default_order=39, doc="Battery SOC ceiling, on the same basis as `battery_min_soc`"
+    ),
+    "battery_eol_percentage": AppConfigField(
+        default=0.70, default_order=40, doc="SOH fraction that triggers a battery replacement"
+    ),
+    "battery_rte": AppConfigField(
+        default=None,
+        default_order=41,
+        doc=(
+            "Battery round-trip efficiency, split evenly across charge and discharge; `None` is "
+            f"{DEFAULT_CHARGE_EFFICIENCY * DEFAULT_DISCHARGE_EFFICIENCY:.2f}"
+        ),
+    ),
+    "enable_resistance_fade": AppConfigField(
+        default=False,
+        default_order=45,
+        doc=(
+            "Grow the battery's internal resistance as it ages (Naumann), which lowers its charge and discharge "
+            'efficiencies. Native engine only: it cannot be combined with `degradation_engine = "blast"`'
+        ),
+    ),
+    "pv_loss_overrides": AppConfigField(
+        default=None,
+        default_order=49,
+        doc='Per-component overrides (percent) for the fixed PVWatts system losses, e.g. `{"shading": 0.0}`',
+    ),
+    "horizon_profile": AppConfigField(
+        default=None,
+        default_order=51,
+        doc=(
+            "Far-horizon profile as `[[azimuth_deg, elevation_deg], ...]`. Points are circularly interpolated; direct "
+            "beam is removed while the sun is on or below the terrain line. Needs weather explicitly marked as "
+            "unshaded"
+        ),
+    ),
+    "battery_temperature": AppConfigField(
+        default="weather",
+        default_order=52,
+        doc=(
+            'Battery temperature used for degradation: `"weather"`, a fixed temperature in °C, or a timestamped CSV '
+            "path. The indoor model then remaps it unless `battery_indoor_model` disables it"
+        ),
+    ),
+    "battery_indoor_model": AppConfigField(
+        default=None,
+        default_order=53,
+        doc=(
+            "Indoor-temperature model settings. `None` applies the default indoor buffering; `{enabled = false}` uses "
+            "`battery_temperature` without remapping. See [`[battery_indoor_model]`](#battery_indoor_model)"
+        ),
+    ),
     "execution_backend": AppConfigField(
         default=DEFAULT_EXECUTION_BACKEND,
         default_order=54,
@@ -483,13 +721,32 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
             "'numba' is an optional compiled path that reproduces it bit for bit and "
             'needs the extra: pip install "breos[fast]".'
         ),
+        doc=(
+            'Within-day dispatch implementation. `"python"` is the numerical reference; `"numba"` is an optional '
+            'compiled path that reproduces it bit for bit and needs `pip install "breos[fast]"`'
+        ),
     ),
     # Runner sections are accepted by App resolution so each workflow can use
     # the same base config validation. The CLI validates their own structure.
-    "montecarlo": AppConfigField(),
-    "sweep": AppConfigField(),
+    "montecarlo": AppConfigField(
+        doc=(
+            "Monte Carlo study controls, read by `breos montecarlo`; see [Monte "
+            "Carlo](monte-carlo.md#configure-a-study)"
+        ),
+        default_doc="*unset*",
+    ),
+    "sweep": AppConfigField(
+        doc="Parameter grid, read by `breos sweep`; see [Parameter sweep](recipes.md#parameter-sweep)",
+        default_doc="*unset*",
+    ),
     # Kept solely to preserve the existing actionable legacy-selector error.
-    "battery_type": AppConfigField(),
+    "battery_type": AppConfigField(
+        doc=(
+            'Removed legacy selector. Setting it raises an error: use `degradation_engine = "native"`, or '
+            '`degradation_engine = "blast"` with `blast_model`'
+        ),
+        default_doc="*removed*",
+    ),
 }
 
 _DEFAULT_FIELDS = sorted(
@@ -506,7 +763,27 @@ ALLOWED_CONFIG_KEYS: frozenset[str] = frozenset(APP_CONFIG_FIELDS)
 # the canonical translation to CostParams lives in ``breos.economics`` so the
 # App and lower-level construction helper cannot drift.
 COST_OVERRIDE_KEYS: frozenset[str] = frozenset(COST_CONFIG_KEY_TO_PARAM)
-COSTS_TABLE = TableSpec("costs", keys=dict.fromkeys(COST_OVERRIDE_KEYS, number(minimum=0)))
+COSTS_TABLE = TableSpec(
+    "costs",
+    keys=dict.fromkeys(COST_OVERRIDE_KEYS, number(minimum=0)),
+    docs={
+        "electricity_cost": "Flat import price, per kWh at year-1 prices",
+        "electricity_sold_cost": "Flat export price, per kWh at year-1 prices",
+        "daily_power_cost": "Fixed grid-connection charge per day, at year-1 prices",
+        "module_cost_per_w": "PV module price per W of module rating",
+        "storage_cost_per_kwh": "Battery price per kWh of nominal capacity; also the t = 0 price of each replacement",
+        "inverter_cost_per_kw_hybrid": "Hybrid inverter price per kW of AC rating, for a system with a battery",
+        "inverter_cost_per_kw_simple": "Inverter price per kW of AC rating, for a PV-only system",
+        "installation_cost_per_module": "Installation cost per PV module",
+        "installation_cost_battery": "Fixed battery installation cost, for a system with a battery",
+        "other_cost_per_module": "Other cost per PV module, such as cabling",
+        "other_costs": "Fixed other initial cost",
+        "land_cost": "Land cost, part of the initial investment",
+        "maintenance_cost_per_panel": "O&M cost per PV module per year, at year-1 prices",
+        "maintenance_cost": "Fixed O&M cost per year, at year-1 prices",
+        "operation_cost": "Further operation cost per year, at year-1 prices",
+    },
+)
 
 
 def _check_indoor_temperature_band(model: dict[str, Any], where: str) -> None:
@@ -525,6 +802,19 @@ INDOOR_MODEL_TABLE = TableSpec(
         "ceiling_c": number(),
     },
     check=_check_indoor_temperature_band,
+    docs={
+        "enabled": (
+            "Remap the resolved `battery_temperature` (weather, fixed or CSV) to an indoor battery temperature "
+            f"(default `{str(DEFAULT_INDOOR_MODEL_ENABLED).lower()}`). `false` uses `battery_temperature` as given"
+        ),
+        "setpoint_c": f"Indoor comfort midpoint in °C (default {DEFAULT_INDOOR_SETPOINT_C:g})",
+        "coupling_alpha": (
+            "Share of the input temperature in the indoor one, from 0 (fully insulated) to 1 (no buffering): "
+            f"`alpha × input + (1 − alpha) × setpoint_c` (default {DEFAULT_INDOOR_COUPLING_ALPHA:g})"
+        ),
+        "floor_c": f"Lowest indoor temperature in °C (default {DEFAULT_INDOOR_FLOOR_C:g})",
+        "ceiling_c": f"Highest indoor temperature in °C (default {DEFAULT_INDOOR_CEILING_C:g}); not below `floor_c`",
+    },
 )
 
 # Keep runner-table keys explicit until the shared configuration schema from
@@ -682,7 +972,6 @@ def _validate_sky_settings(
         raise ValueError(f"'{prefix}model_perez' must be one of: {valid}")
 
 
-_TRACKING_MODES = ("fixed", "single_axis", "dual_axis")
 # Tracker geometry, inherited by every tracking array that does not set it.
 _TRACKER_GEOMETRY_KEYS = (
     "axis_tilt",
@@ -713,7 +1002,19 @@ _PV_ARRAY_OPTION_KEYS = (
 _PV_ARRAY_KEYS = frozenset(
     ("modules", "module", "tilt", "azimuth", "tracking", *_TRACKER_GEOMETRY_KEYS, *_PV_ARRAY_OPTION_KEYS)
 )
-PV_ARRAY_TABLE = TableSpec("pv_arrays[i]", keys=dict.fromkeys(_PV_ARRAY_KEYS, anything))
+PV_ARRAY_TABLE = TableSpec(
+    "pv_arrays[i]",
+    keys=dict.fromkeys(_PV_ARRAY_KEYS, anything),
+    docs={
+        "modules": "Number of PV modules in this array, at least 1",
+        "module": "Module catalogue key for this array; inherits `pv_module`",
+        # Every other key is its top-level namesake, for this array only.
+        **{
+            key: f"`{key}` for this array; inherits the top-level value"
+            for key in ("tilt", "azimuth", "tracking", *_TRACKER_GEOMETRY_KEYS, *_PV_ARRAY_OPTION_KEYS)
+        },
+    },
+)
 
 
 def _validate_tracker_settings(settings: dict[str, Any], where: str = "") -> None:
@@ -852,6 +1153,24 @@ TARIFF_TABLE = TableSpec(
     },
     required=frozenset({"schedule", "currency", "import_prices", "export_prices"}),
     check=_check_tariff_prices,
+    docs={
+        "schedule": (
+            "Bundled schedule key, which fixes the periods in local civil time; see "
+            "[Bundled schedules](../api/tariffs.md#bundled-schedules)"
+        ),
+        "currency": (
+            f"Currency of the prices: {', '.join(sorted(SUPPORTED_CURRENCIES))}. The cost preset should be in the "
+            "same currency; BREOS does not convert"
+        ),
+        "import_prices": "Import price per kWh by period name, at year-1 prices; `all` prices every period",
+        "export_prices": "Export price per kWh by period name, at year-1 prices; `all` prices every period",
+        "fixed_charge_per_day": "Fixed charge per day, at year-1 prices (default 0)",
+        "boundary_policy": (
+            "How a period boundary inside a step is handled. `strict`, the default, refuses it. One of "
+            + ", ".join(f"`{policy}`" for policy in sorted(BOUNDARY_POLICIES))
+        ),
+        "study_date": "A date in the schedule's effective window, needed when the simulated year is outside it",
+    },
 )
 # Flat-price cost keys a tariff replaces; setting both would price energy twice.
 _TARIFF_REPLACES_COSTS = ("electricity_cost", "electricity_sold_cost", "daily_power_cost")
@@ -946,6 +1265,22 @@ SMART_CHARGING_TABLE = TableSpec(
     },
     required=frozenset({"mode"}),
     check=_check_smart_charging_keys,
+    docs={
+        "mode": "`fixed_target` charges from the grid toward a target; `disabled` is greedy self-consumption",
+        "target_usable_fraction": (
+            "Grid-charging target as a fraction of the usable window: 0 is `battery_min_soc`, 1 is `battery_max_soc`"
+        ),
+        "charge_periods": "Tariff periods in which the grid may charge the battery",
+        "discharge_periods": "Tariff periods in which the battery may discharge to the load; not a charge period",
+        "grid_charge_efficiency": (
+            "AC-to-DC conversion efficiency of the grid-charging path, before the battery's own charge efficiency. "
+            "No default"
+        ),
+        "grid_import_limit_w": (
+            "Site import limit in W for grid charging, which may import up to the limit minus the load's import. "
+            "Load import is never cut. Unset is unlimited"
+        ),
+    },
 )
 
 # The nested tables of an App config, by top-level key. ``pv_arrays`` is a

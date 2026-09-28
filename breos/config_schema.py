@@ -39,6 +39,8 @@ class TableSpec:
         check: Called with the checked table and its name once every key has
             passed, for rules that span keys (``floor_c <= ceiling_c``).
         kind: How the expected type is named when the value is not a mapping.
+        docs: A description per allowed key, for the generated configuration
+            key reference.
     """
 
     name: str
@@ -46,6 +48,7 @@ class TableSpec:
     required: frozenset[str] = field(default_factory=frozenset)
     check: Callable[[dict[str, Any], str], None] | None = None
     kind: str = "table/dict"
+    docs: Mapping[str, str] = field(default_factory=dict)
 
     def validate(self, value: Any, where: str | None = None) -> dict[str, Any]:
         """Check a table and return it with each value as its checker returned it.

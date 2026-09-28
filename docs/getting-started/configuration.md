@@ -15,72 +15,10 @@ weather/data access, load profiles, PV system data, and cost assumptions; see
 
 ## All keys
 
-| Key | Default | Description |
-|---|---|---|
-| `location` | *required* | Preset key (e.g. `"porto"`, `"berlin"`) or `{"latitude": ..., "longitude": ..., "timezone": ...}` |
-| `n_modules` | *required unless `pv_arrays` is set* | Number of PV modules |
-| `pv_arrays` | `None` | List of arrays with `modules`, `module`, `tilt`, and `azimuth`. When present, the array module total overrides `n_modules` |
-| `annual_consumption_kwh` | *required* | Annual electricity demand (kWh) |
-| `battery_kwh` | `0.0` | Nominal battery capacity in kWh (`0` = no battery). The SOC window sets the usable share — see [below](#battery-capacity-and-the-soc-window) |
-| `pv_module` | `None` | Module key from the built-in catalogue. `None` uses the first available |
-| `load_profile` | `"1"` | Bundled demandlib-derived H0 profile; `"demandlib_h0"` is the friendly alias (see {py:func}`~breos.load_profiles.load_profile`) |
-| `rlp_directory` | `None` | Directory containing licensed external RLP CSVs for non-bundled load profiles |
-| `tilt` | auto | Tilt angle (degrees). Auto-estimated from latitude when `None` |
-| `azimuth` | auto | Surface azimuth (degrees). Auto-set to 180 in the northern hemisphere |
-| `tracking` | `"fixed"` | Tracking mode (`"fixed"`, `"single_axis"`, or `"dual_axis"`) |
-| `axis_tilt` | `0.0` | Single-axis tracker axis tilt |
-| `axis_azimuth` | auto | Tracker axis azimuth. Auto-set from latitude when `None` |
-| `max_angle` | `60.0` | Single-axis tracker maximum rotation angle |
-| `backtrack` | `True` | Whether single-axis trackers backtrack to avoid row shading |
-| `gcr` | `0.35` | Ground coverage ratio for single-axis tracking and infinite-sheds bifacial geometry |
-| `cross_axis_tilt` | `0.0` | Cross-axis terrain slope for single-axis tracking |
-| `dual_axis_max_tilt` | `90.0` | Maximum panel tilt for dual-axis tracking |
-| `transposition_model` | `"isotropic"` | Sky-diffusion model used to project GHI/DHI/DNI onto the plane of array (see [below](#sky-diffusion-transposition-model)) |
-| `albedo` | `None` | Ground reflectance (0-1) for the ground-diffuse component; `None` uses pvlib's 0.25 default. Mutually exclusive with `surface_type` |
-| `surface_type` | `None` | Named ground cover (e.g. `"snow"`, `"sea"`, `"grass"`) mapped to an albedo; an alternative to `albedo` |
-| `model_perez` | `"allsitescomposite1990"` | Perez coefficient set; only used when `transposition_model = "perez"` |
-| `solar_position` | `"interval-start"` | Where within each timestep the sun position is evaluated. `"mid-interval"` adds half a timestep. `"weather"` instead reads the representative-time offset from content-bound weather metadata, including provider offsets for instantaneous irradiance and left- or right-labelled interval means. |
-| `horizon_profile` | `None` | Optional `[[azimuth_deg, elevation_deg], ...]` far-horizon profile. Points are circularly interpolated; direct beam is removed while the sun is on or below the terrain line. Requires weather explicitly marked as unshaded |
-| `iam_model` | `"ashrae"` | Beam incidence-angle modifier. `"physical"` uses pvlib's physical optics model and `"martin_ruiz"` its empirical model; the Ashrae default preserves historical results |
-| `diffuse_iam` | `"none"` | Whether the incidence-angle modifier is also applied to the diffuse POA components. `"marion"` weighs sky- and ground-diffuse with the view-factor-integrated selected IAM model (Marion 2017); the default applies IAM to beam only, a known ~0.5–1% overestimate |
-| `temperature_model` | `"faiman"` | Cell-temperature model / mounting preset. `"pvsyst-*"` and `"sapm-*"` expose documented mounting/construction coefficients; `"noct-sam"` requires sourced module NOCT and efficiency metadata (not yet available for bundled modules). The default Faiman open-rack result is unchanged |
-| `bifacial_model` | `"none"` | Rear-irradiance model. `"none"` preserves front-only production; `"infinite_sheds"` requires sourced module bifaciality plus `gcr`, `pvrow_height`, and `pvrow_pitch` |
-| `pvrow_height` | `None` | Height of the PV row center above ground; required by `"infinite_sheds"` and expressed in the same unit as `pvrow_pitch` |
-| `pvrow_pitch` | `None` | Distance between adjacent PV rows; required by `"infinite_sheds"` and expressed in the same unit as `pvrow_height` |
-| `resolution` | `"h"` | Time resolution (`"h"` or `"15min"`) |
-| `projection_years` | `20` | Economic projection horizon |
-| `execution_backend` | `"python"` | Within-day dispatch implementation. `"numba"` selects the optional compiled backend installed by `breos[fast]` |
-| `cost_preset` | `None` | Cost preset key from packaged defaults |
-| `costs` | *unset* | Optional cost overrides layered over the selected preset and built-in defaults; see [below](#cost-and-emissions-presets) |
-| `tariff` | *unset* | Time-of-use import and export prices on a bundled schedule, replacing the flat `electricity_cost`, `electricity_sold_cost` and `daily_power_cost`; see [Time-of-use tariffs](#time-of-use-tariffs) |
-| `smart_charging` | *unset* | Grid charging toward a target in the tariff's cheap periods. See [Smart charging](#smart-charging) |
-| `inflation_rate` | `0.02` | General annual inflation (nominal). Import energy, the fixed charge and O&M escalate at it unless their own rate is set; replacement prices inflate at it |
-| `import_price_escalation` | `None` | Annual escalation of the import price and the fixed charge; `None` uses `inflation_rate` |
-| `om_escalation` | `None` | Annual escalation of O&M costs; `None` uses `inflation_rate` |
-| `replacement_cost_learning` | `0.0` | Annual fall in the battery replacement price on top of inflation: a swap at `t` years costs `C0 × (1 + inflation_rate)^t × (1 − learning)^t` |
-| `sell_price_inflation` | `0.0` | Annual escalation of the grid export (sell) price |
-| `discount_rate` | `0.03` | Nominal discount rate for NPV |
-| `emissions_country` | `None` | Country code for CO2 calculations (`"PT"`, `"DE"`, `"ES"`, ...) |
-| `export_emissions_factor_gco2_kwh` | `None` | Optional displacement factor for exported PV. `None` uses the preset's avoided-grid factor and reports that fallback explicitly |
-| `pv_degradation_rate` | `0.005` | Annual PV degradation rate (0.5% / year), compounded and counted from the start of each year, so year 1 has none; see [Module aging](../api/pv.md#module-aging) |
-| `calendar_model` | `"naumann_lam_field_calibrated"` | Battery calendar aging model. Default is the v1 field calibration; use `"naumann_lam_field_calibrated_v2"` for the v2 field-calibrated fit with Lam `Ea`/`n` fixed and `k0`/`b` fitted |
-| `degradation_engine` | `"native"` | `"native"` keeps Naumann/Lam; `"blast"` explicitly opts into a vendored BLAST cell model |
-| `blast_model` | `None` | Stable BLAST model key; required with `degradation_engine="blast"` and invalid with the native engine |
-| `battery_min_soc` | `0.10` | Battery SOC floor (fraction of nominal, SOH-derated capacity) |
-| `battery_max_soc` | `0.90` | Battery SOC ceiling (same basis as `battery_min_soc`) |
-| `battery_eol_percentage` | `0.70` | SOH fraction that triggers battery replacement |
-| `battery_rte` | `None` | Battery round-trip efficiency (`None` = 0.95), split evenly across charge/discharge |
-| `battery_max_charge_power_w` | `None` | Maximum DC power entering the battery charge path; `None` is unlimited |
-| `battery_max_discharge_power_w` | `None` | Maximum battery AC power delivered to load; `None` is unlimited |
-| `battery_power_limit_c_rate` | `None` | Charge and discharge limit on the stored energy, as a multiple of capacity (1.0 = 1 C); replaces both absolute limits |
-| `battery_temperature` | `"weather"` | Battery temperature used for degradation: `"weather"`, a fixed temperature in °C, or a timestamped CSV path |
-| `battery_indoor_model` | `None` | Optional indoor-temperature model settings. `None` applies the default indoor buffering; use `{"enabled": false}` to use `battery_temperature` without remapping |
-| `dc_coupled` | `True` | DC-coupled / hybrid inverter. `False` is currently unsupported and raises |
-| `inverter_efficiency` | `0.96` | Nominal inverter efficiency used by the PVWatts part-load curve |
-| `inverter_loading_ratio` | `1.25` | DC/AC oversizing ratio; also sets the inverter AC rating that clips production |
-| `pv_loss_overrides` | `None` | Per-component overrides (percent) for the fixed PVWatts system losses, e.g. `{"shading": 0.0}` |
-| `start_date` | `"2023-01-01"` | First simulated day: 1 January of the study year |
-| `weather_source` | `None` | Source part of the cached `weather/<location>_tmy_<years>_<source>.csv` file to load, e.g. `"pvgis-sarah3"`. Needed only when several TMY files exist for a location preset; see [Offline runs with cached weather](recipes.md#offline-runs-with-cached-weather) |
+The [Configuration key reference](config-reference.md) lists every key, with
+its default, CLI flag, allowed values and nested-table keys. It is generated
+from the configuration registry that validates a config, so it cannot miss a
+key. The sections below explain how the keys work together.
 
 Real calendar-year load profiles follow `start_date`: leap years contain
 8,784 hourly (35,136 quarter-hourly) intervals and preserve exact annual
@@ -439,13 +377,8 @@ electricity_cost = 0.22
 storage_cost_per_kwh = 425.0
 ```
 
-The accepted keys follow the packaged cost-catalogue names:
-`electricity_cost`, `electricity_sold_cost`, `daily_power_cost`,
-`module_cost_per_w`, `storage_cost_per_kwh`,
-`inverter_cost_per_kw_hybrid`, `inverter_cost_per_kw_simple`,
-`installation_cost_per_module`, `installation_cost_battery`,
-`other_cost_per_module`, `other_costs`, `land_cost`,
-`maintenance_cost_per_panel`, `maintenance_cost`, and `operation_cost`.
+The accepted keys follow the packaged cost-catalogue names; the
+[key reference](config-reference.md#costs) lists them with their defaults.
 Unknown keys and negative or non-finite values are rejected before simulation.
 
 For full control, build a {py:class}`~breos.CostParams` and
