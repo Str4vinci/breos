@@ -161,9 +161,44 @@ def test_inputs_are_prepared_once_per_input_config_inside_the_block_only(monkeyp
     assert same == first
     assert again["grid_charge_cost_year1_prices"] > 0.0
 
+    # The block holds one preparation, so memory stays at one run's inputs;
+    # returning to an earlier configuration prepares it again.
+    calls.clear()
+    with reuse_prepared_inputs():
+        run(BASE)
+        run({**BASE, "n_modules": 10})
+        run(BASE)
+    assert calls == [8, 10, 8]
+
     calls.clear()
     run(BASE)
     assert calls == [8]
+
+
+def test_a_different_preparation_function_is_not_served_from_the_cache():
+    from breos.app_inputs import prepare_simulation_inputs_cached
+
+    app = App(BASE)
+    with reuse_prepared_inputs():
+        first = prepare_simulation_inputs_cached(app._cfg, app._resolved, None, prepare=lambda *_: ["a"])
+        second = prepare_simulation_inputs_cached(app._cfg, app._resolved, None, prepare=lambda *_: ["b"])
+    assert (first, second) == (["a"], ["b"])
+
+
+def test_an_unhashable_dependency_prepares_afresh():
+    from breos.app_inputs import prepare_simulation_inputs_cached
+
+    app = App(BASE)
+    calls = []
+
+    def prepare(*_args):
+        calls.append(1)
+        return "inputs"
+
+    with reuse_prepared_inputs():
+        for _ in range(2):
+            assert prepare_simulation_inputs_cached(app._cfg, app._resolved, [], prepare=prepare) == "inputs"
+    assert calls == [1, 1]
 
 
 SWEEP_CONFIG = """
@@ -189,11 +224,12 @@ import_prices = { peak = 0.2310, off_peak = 0.1210 }
 export_prices = { all = 0.0500 }
 fixed_charge_per_day = 0.30
 
+# n_modules varies fastest, so the grid order alternates PV designs.
 [sweep]
-n_modules = [8, 10]
 battery_kwh = [5.0, 10.0]
 "tariff.import_prices.off_peak" = [0.10, 0.14]
 "smart_charging.target_usable_fraction" = [0.5, 0.9]
+n_modules = [8, 10]
 """
 
 
@@ -217,6 +253,7 @@ def test_a_sweep_writes_the_same_csv_bytes_with_and_without_the_cache(monkeypatc
 
     cached = tmp_path / "cached.csv"
     assert cli.main(["sweep", "--config", str(config_path), "--output", str(cached)]) == 0
+    # The runs are grouped by PV design, so each is prepared once.
     assert calls == [8, 10]
 
     calls.clear()
@@ -228,5 +265,8 @@ def test_a_sweep_writes_the_same_csv_bytes_with_and_without_the_cache(monkeypatc
     assert cached.read_bytes() == fresh.read_bytes()
     rows = list(csv.DictReader(fresh.open(encoding="utf-8")))
     assert len(rows) == 16
+    # The CSV keeps the grid order, not the run order.
+    assert [row["run"] for row in rows] == [str(n) for n in range(1, 17)]
+    assert [row["param_n_modules"] for row in rows[:4]] == ["8", "10", "8", "10"]
     # The runs differ, so the equality is not between identical rows.
     assert len({row["grid_import_cost_year1_prices"] for row in rows}) > 8

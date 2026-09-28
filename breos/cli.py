@@ -25,7 +25,7 @@ from breos.app_config import (
     resolve_app_config,
     validate_montecarlo_config,
 )
-from breos.app_inputs import reuse_prepared_inputs
+from breos.app_inputs import input_configuration_key, reuse_prepared_inputs
 from breos.config_schema import MappingOf
 from breos.degradation import get_battery_model_profile, list_battery_models
 from breos.io import nonfinite_to_none
@@ -586,15 +586,24 @@ def _sweep(args: argparse.Namespace) -> int:
         (varied, run_config, _resolved_config_summary(run_config))
         for varied, run_config in _sweep_run_configs(config, grid)
     ]
-    rows: list[dict[str, Any]] = []
 
     # Runs that differ only in keys the input stage never reads (a tariff, a
     # battery size) share one preparation of weather, PV and load (#181).
+    # They run grouped by input configuration, so the one-entry cache serves
+    # each group; the CSV keeps the grid order.
+    input_keys = [input_configuration_key(run_config) for _, run_config, _ in runs]
+    first_seen: dict[str | None, int] = {}
+    for index, key in enumerate(input_keys):
+        first_seen.setdefault(key, index)
+    order = sorted(range(len(runs)), key=lambda index: first_seen[input_keys[index]])
+    by_index: dict[int, dict[str, Any]] = {}
     with reuse_prepared_inputs():
-        for run_idx, (varied, run_config, resolved) in enumerate(runs, start=1):
+        for index in order:
+            varied, run_config, resolved = runs[index]
             app = App(run_config)
             app.simulate()
-            rows.append(_sweep_row(run_idx, varied, resolved, app.result()))
+            by_index[index] = _sweep_row(index + 1, varied, resolved, app.result())
+    rows = [by_index[index] for index in range(len(runs))]
 
     _write_sweep_csv(rows, args.output)
 

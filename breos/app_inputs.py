@@ -13,7 +13,7 @@ from typing import Any, Callable, Iterator, cast
 import pandas as pd
 from pvlib.location import Location
 
-from breos.app_config import ResolvedAppConfig
+from breos.app_config import ResolvedAppConfig, resolve_app_config
 from breos.pv.horizon import apply_terrain_horizon_profile
 from breos.pv.model_options import DEFAULT_SOLAR_POSITION
 from breos.solar import (
@@ -414,8 +414,9 @@ INPUT_INDEPENDENT_KEYS: frozenset[str] = frozenset(
     }
 )
 
-_PREPARED_INPUTS_CACHE: ContextVar[dict[tuple[str, AppRuntimeDependencies], PreparedSimulationInputs] | None] = (
-    ContextVar("breos_prepared_inputs_cache", default=None)
+# The block's one cached preparation, by (input key, dependencies, prepare).
+_PREPARED_INPUTS_CACHE: ContextVar[dict[tuple[Any, ...], PreparedSimulationInputs] | None] = ContextVar(
+    "breos_prepared_inputs_cache", default=None
 )
 
 
@@ -426,11 +427,14 @@ def reuse_prepared_inputs() -> Iterator[None]:
     ``breos sweep`` runs many Apps that often differ only in keys the input
     stage never reads, such as a tariff or a battery size. Inside this block,
     :func:`prepare_simulation_inputs_cached` prepares weather, PV, load and
-    battery temperature once per distinct input configuration and hands
-    each run its own deep copy. The cache lives only for the block. Files are
-    read once per configuration, so a file changed during the block is not
-    re-read, and a warning the input stage raises appears only for the first
-    run that prepares those inputs.
+    battery temperature once and hands each run with the same input
+    configuration its own deep copy. It holds one preparation, the latest,
+    so memory stays at one run's inputs however many configurations the
+    block sees; run the Apps grouped by :func:`input_configuration_key` to
+    reuse each preparation fully. The cache lives only for the block. Files
+    are read once per preparation, so a file changed meanwhile is not re-read,
+    and a warning the input stage raises appears only for the run that
+    prepared those inputs.
     """
     token = _PREPARED_INPUTS_CACHE.set({})
     try:
@@ -452,6 +456,14 @@ def _input_cache_key(cfg: dict[str, Any]) -> str | None:
         return None
 
 
+def input_configuration_key(config: dict[str, Any]) -> str | None:
+    """The input configuration a raw App config resolves to, or None if it cannot be cached.
+
+    Two configs with the same key get the same prepared inputs.
+    """
+    return _input_cache_key(resolve_app_config(config).cfg)
+
+
 def prepare_simulation_inputs_cached(
     cfg: dict[str, Any],
     resolved: ResolvedAppConfig,
@@ -471,8 +483,14 @@ def prepare_simulation_inputs_cached(
     key = _input_cache_key(cfg) if cache is not None else None
     if cache is None or key is None:
         return prepare(cfg, resolved, deps)
-    entry = (key, deps)
-    if entry not in cache:
+    entry = (key, deps, prepare)
+    try:
+        hit = entry in cache
+    except TypeError:
+        # A replaced dependency that cannot be hashed; prepare afresh.
+        return prepare(cfg, resolved, deps)
+    if not hit:
+        cache.clear()
         cache[entry] = prepare(cfg, resolved, deps)
     # A copy per run, so nothing a run does to its inputs reaches the next.
     return deepcopy(cache[entry])
