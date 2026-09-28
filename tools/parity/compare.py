@@ -31,6 +31,12 @@ def compare(left_path: str, right_path: str, left_label: str = "left", right_lab
             print(f"SHAPE {key}: {a.shape} vs {b.shape}")
             differing.append(key)
             continue
+        if a.dtype.kind == "U" or b.dtype.kind == "U":
+            # Text columns, such as BLAST's model name, match or they don't.
+            if a.dtype != b.dtype or not (a == b).all():
+                print(f"DIFF {key}: text differs")
+                differing.append(key)
+            continue
         same = (a == b) | (np.isnan(a) & np.isnan(b))
         if same.all():
             continue

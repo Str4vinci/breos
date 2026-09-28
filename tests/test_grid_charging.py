@@ -10,7 +10,7 @@ import pandas as pd
 import pytest
 
 from breos._dispatch import lfp_capacity_factor
-from breos.battery import BatteryConfig, simulate_energy_balance
+from breos.battery import BatteryConfig, simulate_energy_balance, simulate_energy_balance_summary
 from breos.dispatch_instructions import DispatchInstructions
 from tests.energy_conservation import assert_energy_conservation, assert_origin_reconciliation
 
@@ -116,6 +116,33 @@ def test_instructed_runs_conserve_energy_and_reconcile_origins(scenario, freq, b
     if scenario == "fixed_target_replacement":
         assert results["Battery_Replaced"].any()
         assert results["Grid_Origin_Replacement_Energy_Removed"].sum() > 0.0
+
+
+@pytest.mark.parametrize("backend", _BACKENDS)
+@pytest.mark.parametrize("scenario", ["fixed_target_limited", "reserve_floor", "fixed_target_blast"])
+@pytest.mark.filterwarnings("ignore::breos.degradation.validation.BlastExperimentalRangeWarning")
+def test_the_summary_path_applies_the_same_instructions(scenario, backend):
+    # Monte Carlo and the optimizer take the summary path, with its reduced
+    # buffers; it must dispatch exactly as the detailed one does.
+    pv, load, temp, cfg, sim = build_instructed(scenario, "h")
+    kwargs = {**sim, "execution_backend": backend}
+    detailed = simulate_energy_balance(
+        pv_dc=pv, houseload=load, battery_config=BatteryConfig(**cfg), freq="h", temperature_series=temp, **kwargs
+    )[0]
+    summary = simulate_energy_balance_summary(
+        pv_dc=pv, houseload=load, battery_config=BatteryConfig(**cfg), freq="h", temperature_series=temp, **kwargs
+    )
+
+    assert summary.column_sums["Grid_AC_To_Battery"] > 0.0
+    for column in ("Grid_AC_To_Battery", "Grid_Charge_Conversion_Loss", "Import_From_Grid", "Battery_Discharge_DC"):
+        assert summary.column_sums[column] == detailed[column].sum(), column
+    assert summary.carried_grid_origin_energy_wh == detailed["Battery_Grid_Origin_Energy_End"].iloc[-1]
+
+
+def test_noop_instructions_are_shared_per_length():
+    assert DispatchInstructions.noop(24) is DispatchInstructions.noop(24)
+    assert DispatchInstructions.noop(24) is not DispatchInstructions.noop(48)
+    assert not DispatchInstructions.noop(24).grid_target_fraction.flags.writeable
 
 
 # --- the grid-charge sub-step ---------------------------------------------

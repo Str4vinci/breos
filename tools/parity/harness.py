@@ -302,22 +302,35 @@ def run(name: str, backend: str = "python", freq: str = FREQ):
     return results_df, total_pv, summary_df, rep_cost, n_rep, deg_df
 
 
-def dump(path: str, backend: str = "python") -> None:
+def _column(values: pd.Series) -> np.ndarray:
+    """A column as float64 bits, or as text when it is not numeric (BLAST names its model per row)."""
+    if pd.api.types.is_numeric_dtype(values) or pd.api.types.is_bool_dtype(values):
+        return values.to_numpy(dtype=np.float64)
+    return values.astype(str).to_numpy(dtype=np.str_)
+
+
+def dump(path: str, backend: str = "python", *, instructions: bool = False) -> None:
+    """Write every scenario's columns to ``path``.
+
+    ``instructions`` adds INSTRUCTION_SCENARIOS, which need a tree with
+    ``dispatch_instructions``; leave it off when dumping an older tree.
+    """
+    names = SCENARIOS + (INSTRUCTION_SCENARIOS if instructions else ())
     payload: dict[str, np.ndarray] = {}
     for freq in RESOLUTIONS:
-        for name in SCENARIOS:
+        for name in names:
             results_df, total_pv, summary_df, rep_cost, n_rep, deg_df = run(name, backend, freq)
             key = f"{name}@{freq}"
             for col in results_df.columns:
                 if col == "Datetime":
                     continue
-                payload[f"{key}::results::{col}"] = results_df[col].to_numpy(dtype=np.float64)
+                payload[f"{key}::results::{col}"] = _column(results_df[col])
             for col in deg_df.columns:
                 if col == "Datetime":
                     continue
-                payload[f"{key}::degradation::{col}"] = deg_df[col].to_numpy(dtype=np.float64)
+                payload[f"{key}::degradation::{col}"] = _column(deg_df[col])
             for col in summary_df.columns:
-                payload[f"{key}::summary::{col}"] = summary_df[col].to_numpy(dtype=np.float64)
+                payload[f"{key}::summary::{col}"] = _column(summary_df[col])
             payload[f"{key}::scalar::total_pv"] = np.array([total_pv], dtype=np.float64)
             payload[f"{key}::scalar::replacement_cost"] = np.array([rep_cost], dtype=np.float64)
             payload[f"{key}::scalar::n_replacements"] = np.array([n_rep], dtype=np.float64)
@@ -327,4 +340,6 @@ def dump(path: str, backend: str = "python") -> None:
 
 
 if __name__ == "__main__":
-    dump(sys.argv[1], sys.argv[2] if len(sys.argv) > 2 else "python")
+    # harness.py OUT.npz [python|numba] [--instructions]
+    args = [arg for arg in sys.argv[1:] if arg != "--instructions"]
+    dump(args[0], args[1] if len(args) > 1 else "python", instructions="--instructions" in sys.argv[1:])
