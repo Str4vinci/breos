@@ -8,10 +8,12 @@
 # n.º 1/2026); the prices are illustrative, not a supplier's offer. Put the
 # offers you are comparing here.
 #
-# In the CSV, param_tariff names each run's offer, and the year-1 money
+# In the CSV, param_tariff holds each run's tariff as JSON. The year-1 money
 # columns (grid_import_cost_year1_prices, grid_export_revenue_year1_prices,
-# fixed_charge_year1_prices, no_system_import_cost_year1_prices) compare the
-# first-year bills. npv_savings compares the offers over the project.
+# fixed_charge_year1_prices) give each offer's first-year bill: import plus
+# fixed charge minus export. npv_savings is the system's saving against no
+# system under the same offer, so it shows where the system pays most, not
+# which offer is cheapest.
 location = "porto"
 n_modules = 10
 annual_consumption_kwh = 4000

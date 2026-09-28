@@ -246,9 +246,21 @@ To compare tariffs, see [Compare tariffs](#compare-tariffs).
 
 A tariff comparison prices the same system and load under each offer. The
 dispatch does not depend on the price unless `[smart_charging]` is set, so
-the energy flows are the same and only the money differs. Compare the
-[year-1 money keys](interpreting-results.md#year-1-money-keys) for the
-first-year bill and `npv_savings` over the project.
+the energy flows are the same and only the money differs. Two comparisons
+answer different questions:
+
+- **Which offer is cheapest?** Compare what the household pays under each.
+  For the first year, the
+  [year-1 money keys](interpreting-results.md#year-1-money-keys) give the
+  bill: import cost plus fixed charge minus export revenue. Over the project,
+  the last `financial` row's `cost_with_system` is the cumulative discounted
+  cost with the system: investment, energy, fixed charge, O&M and
+  replacements.
+- **Under which offer does the system pay most?** `npv_savings` is the
+  system's saving against no system *under the same offer*. Each offer has
+  its own no-system bill, so a higher `npv_savings` does not mean a cheaper
+  offer. An offer with an expensive peak can make PV save more while still
+  costing more overall.
 
 ### From the CLI
 
@@ -298,7 +310,9 @@ breos sweep --config configs/examples/tariff-comparison.toml --output tariff_com
 
 The six runs share one preparation of weather and PV. In the CSV,
 `param_tariff` holds each run's tariff table as JSON, so a spreadsheet or
-pandas can label the rows by its `schedule` and prices. The prices above are
+pandas can label the rows by its `schedule` and prices. The year-1 money
+columns compare the first-year bills; the CSV carries top-level scalars only,
+so for the project-long cost use the Python route below. The prices above are
 illustrative; put the offers you are comparing in their place.
 
 To vary one price instead of the whole offer, keep one `[tariff]` in the base
@@ -353,8 +367,14 @@ for name, offer in offers.items():
         + result["fixed_charge_year1_prices"]
         - result["grid_export_revenue_year1_prices"]
     )
-    print(f"{name}: year-1 net bill {bill:.2f}, NPV savings {result['npv_savings']:.2f}")
+    project_cost = result["financial"][-1]["cost_with_system"]
+    print(
+        f"{name}: year-1 bill {bill:.2f}, project cost {project_cost:.2f}, "
+        f"NPV savings vs no system {result['npv_savings']:.2f}"
+    )
 ```
+
+The year-1 bill leaves out O&M, which does not depend on the offer.
 
 The flat run uses the preset's `electricity_cost`, `electricity_sold_cost` and
 `daily_power_cost`; a tariff run must not set them. Each run with the same PV
