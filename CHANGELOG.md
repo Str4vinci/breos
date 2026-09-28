@@ -258,6 +258,9 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   provenance, and immutable tariff prices can be pickled for worker processes.
   Unsupported `smart_charging` tables now raise in both optimizer entry points.
   Configurations without either table keep their existing behavior.
+- Corrected the Portuguese reform citation in ADR 0002 and the tariff plan:
+  the electricity periods are set by Diretiva n.º 3/2026, de 19 de agosto; the
+  directive with the same number dated 26 June sets gas prices. Docs only.
 - App weather that does not cover the whole calendar year of `start_date`
   raises `ValueError` instead of simulating a shorter year
   ([#242](https://github.com/Str4vinci/breos/issues/242)). The simulation
