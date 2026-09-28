@@ -198,6 +198,16 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   from 1,431 to 1,823 kWh in year 1; 387 kWh of that is grid charge.
 
 ### Changed
+- `breos sweep` takes its dotted keys from the config registry
+  ([#181](https://github.com/Str4vinci/breos/issues/181)). It accepts any key
+  of `[costs]`, `[battery_indoor_model]`, `[tariff]` and `[smart_charging]`,
+  and a period of a tariff's price map (`"tariff.import_prices.off_peak"`).
+  Before, only `costs.*` was accepted. Every combination is resolved before
+  the first run, so an invalid one fails at once instead of after the runs
+  before it, and `breos validate-config` checks every combination of a
+  `[sweep]`. `breos run` merges its flags into the config file table by
+  table, so a flag that sets one key of a table keeps the file's other keys
+  (no flag sets a table key yet). No reported number changes.
 - **Currency-neutral result names and result schema 1.0** (ADR 0003 E8 and
   E9, [#183](https://github.com/Str4vinci/breos/issues/183)). Money keys drop
   the currency, and the fractional payback is "interpolated" rather than

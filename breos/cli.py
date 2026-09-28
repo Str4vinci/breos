@@ -20,11 +20,12 @@ from breos.app import App
 from breos.app_config import (
     ALLOWED_CONFIG_KEYS,
     APP_CONFIG_FIELDS,
-    COST_OVERRIDE_KEYS,
+    NESTED_TABLE_SPECS,
     normalize_config_keys,
     resolve_app_config,
     validate_montecarlo_config,
 )
+from breos.config_schema import MappingOf
 from breos.degradation import get_battery_model_profile, list_battery_models
 from breos.io import nonfinite_to_none
 from breos.load_profiles import PROFILES, resolve_profile_file
@@ -86,7 +87,24 @@ def _build_config(args: argparse.Namespace) -> dict[str, Any]:
             continue
         overrides[key] = value
 
-    return {**config, **overrides}
+    return _deep_merge(config, overrides)
+
+
+def _deep_merge(base: dict[str, Any], overrides: dict[str, Any]) -> dict[str, Any]:
+    """Return ``base`` with ``overrides`` applied, merging nested tables key by key.
+
+    An override table replaces only the keys it sets, so a flag that sets one
+    ``[tariff]`` key keeps the rest of the file's table. Neither input is
+    changed.
+    """
+    merged = dict(base)
+    for key, value in overrides.items():
+        current = merged.get(key)
+        if isinstance(current, dict) and isinstance(value, dict):
+            merged[key] = _deep_merge(current, value)
+        else:
+            merged[key] = value
+    return merged
 
 
 def _json_text(data: Any, what: str, **kwargs: Any) -> str:
@@ -347,7 +365,10 @@ def _list_options_command(args: argparse.Namespace) -> int:
 def _validate_config(args: argparse.Namespace) -> int:
     config = _load_config(args.config)
     if "sweep" in config:
-        _normalise_sweep_grid(config["sweep"])
+        grid = _normalise_sweep_grid(config["sweep"])
+        base = {key: value for key, value in config.items() if key != "sweep"}
+        for _, run_config in _sweep_run_configs(base, grid):
+            _resolved_config_summary(run_config)
     payload = _resolved_config_summary(config)
     if args.json:
         print(_json_text(payload, "the config summary", indent=2))
@@ -411,18 +432,7 @@ def _normalise_sweep_grid(raw_grid: Any) -> dict[str, list[Any]]:
         raise ValueError("Sweep config must define at least one parameter under [sweep].")
 
     for key in grid:
-        top_level, separator, nested = key.partition(".")
-        if top_level not in ALLOWED_CONFIG_KEYS:
-            available = ", ".join(sorted(ALLOWED_CONFIG_KEYS))
-            raise ValueError(f"Unknown sweep key '{key}'. Available: {available}")
-        if separator and top_level != "costs":
-            available = ", ".join(f"costs.{name}" for name in sorted(COST_OVERRIDE_KEYS))
-            raise ValueError(
-                f"Unknown sweep key '{key}'. Dotted keys are supported only under 'costs'. Available: {available}"
-            )
-        if top_level == "costs" and (not separator or nested not in COST_OVERRIDE_KEYS):
-            available = ", ".join(f"costs.{name}" for name in sorted(COST_OVERRIDE_KEYS))
-            raise ValueError(f"Unknown sweep key '{key}'. Available: {available}")
+        _check_sweep_key(key)
 
     keys = set(grid)
     for key in keys:
@@ -432,6 +442,60 @@ def _normalise_sweep_grid(raw_grid: Any) -> dict[str, list[Any]]:
             if parent in keys:
                 raise ValueError(f"Sweep keys '{parent}' and '{key}' conflict")
     return grid
+
+
+def _sweep_run_configs(
+    config: dict[str, Any], grid: dict[str, list[Any]]
+) -> list[tuple[dict[str, Any], dict[str, Any]]]:
+    """Each grid point's varied values and run config, in sweep order."""
+    keys = list(grid)
+    runs = []
+    for values in itertools.product(*(grid[key] for key in keys)):
+        varied = dict(zip(keys, values, strict=True))
+        runs.append((varied, _apply_sweep_values(config, varied)))
+    return runs
+
+
+def _check_sweep_key(key: str) -> None:
+    """Check one sweep key against the config registry.
+
+    A top-level key must be registered. A dotted key must name a key of a
+    nested table (``costs``, ``battery_indoor_model``, ``tariff``,
+    ``smart_charging``), and may go one level further only into a free-form
+    mapping such as ``tariff.import_prices.P1``. Values are checked later,
+    when each run's config is resolved.
+    """
+    parts = key.split(".")
+    top_level = parts[0]
+    if top_level not in ALLOWED_CONFIG_KEYS:
+        available = ", ".join(sorted(ALLOWED_CONFIG_KEYS))
+        raise ValueError(f"Unknown sweep key '{key}'. Available: {available}")
+    if top_level == "costs" and len(parts) == 1:
+        # A whole [costs] table per run would drop the file's other overrides.
+        available = ", ".join(f"costs.{name}" for name in sorted(NESTED_TABLE_SPECS["costs"].keys))
+        raise ValueError(f"Unknown sweep key '{key}'. Available: {available}")
+    if len(parts) == 1:
+        return
+    spec = NESTED_TABLE_SPECS.get(top_level)
+    if spec is None:
+        tables = ", ".join(f"'{name}'" for name in sorted(NESTED_TABLE_SPECS))
+        raise ValueError(f"Unknown sweep key '{key}'. Dotted keys are supported only under {tables}.")
+    table_key = parts[1]
+    if table_key not in spec.keys:
+        available = ", ".join(f"{top_level}.{name}" for name in sorted(spec.keys))
+        raise ValueError(f"Unknown sweep key '{key}'. Available: {available}")
+    if len(parts) == 2:
+        return
+    if not isinstance(spec.keys[table_key], MappingOf):
+        raise ValueError(
+            f"Unknown sweep key '{key}'. '{top_level}.{table_key}' is not a table of named entries; "
+            f"sweep '{top_level}.{table_key}' itself."
+        )
+    if len(parts) > 3:
+        raise ValueError(
+            f"Unknown sweep key '{key}'. '{top_level}.{table_key}' takes one more level, the entry name, "
+            f"as in '{top_level}.{table_key}.{parts[2]}'."
+        )
 
 
 def _apply_sweep_values(config: dict[str, Any], varied: dict[str, Any]) -> dict[str, Any]:
@@ -491,14 +555,17 @@ def _sweep(args: argparse.Namespace) -> int:
         raise ValueError("Sweep config must include a [sweep] section.")
 
     grid = _normalise_sweep_grid(raw_grid)
-    param_keys = list(grid)
+    # Every grid point is resolved before the first one runs, so a bad
+    # combination (a tariff period the schedule lacks) fails in seconds, not
+    # after the runs before it. Each App is built only when it runs, so a
+    # finished run's result is not held until the sweep ends.
+    runs = [
+        (varied, run_config, _resolved_config_summary(run_config))
+        for varied, run_config in _sweep_run_configs(config, grid)
+    ]
     rows: list[dict[str, Any]] = []
 
-    for run_idx, values in enumerate(itertools.product(*(grid[key] for key in param_keys)), start=1):
-        varied = dict(zip(param_keys, values, strict=True))
-        run_config = _apply_sweep_values(config, varied)
-        resolved = _resolved_config_summary(run_config)
-
+    for run_idx, (varied, run_config, resolved) in enumerate(runs, start=1):
         app = App(run_config)
         app.simulate()
         result = app.result()

@@ -2,6 +2,7 @@
 
 import csv
 import json
+import re
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -760,5 +761,143 @@ annual_consumption_kwh = 3500
     assert exit_code == 1
     error = capsys.readouterr().err
     assert "Unknown sweep key 'location.foo'" in error
-    assert "Dotted keys are supported only under 'costs'" in error
-    assert "costs.electricity_cost" in error
+    assert "Dotted keys are supported only under 'battery_indoor_model', 'costs', 'smart_charging', 'tariff'" in error
+
+
+SMART_CHARGING_SWEEP_BASE = """
+location = "porto"
+n_modules = 10
+annual_consumption_kwh = 4000
+battery_kwh = 5.0
+
+[tariff]
+schedule = "pt_mainland_2026_daily_bi"
+currency = "EUR"
+import_prices = { peak = 0.2310, off_peak = 0.1210 }
+export_prices = { all = 0.0500 }
+
+[smart_charging]
+mode = "fixed_target"
+target_usable_fraction = 0.50
+charge_periods = ["off_peak"]
+discharge_periods = ["peak"]
+grid_charge_efficiency = 0.95
+"""
+
+
+def test_sweep_applies_dotted_tariff_and_smart_charging_keys(monkeypatch, tmp_path):
+    seen_configs = []
+
+    class SweepFakeApp:
+        def __init__(self, config):
+            seen_configs.append(config)
+
+        def simulate(self):
+            return None
+
+        def result(self):
+            return {}
+
+    monkeypatch.setattr(cli, "App", SweepFakeApp)
+    config_path = tmp_path / "tariff-sweep.toml"
+    config_path.write_text(
+        SMART_CHARGING_SWEEP_BASE
+        + """
+[sweep]
+"tariff.import_prices.off_peak" = [0.10, 0.12]
+"smart_charging.target_usable_fraction" = [0.5, 0.8]
+""",
+        encoding="utf-8",
+    )
+    output_path = tmp_path / "tariff-sweep.csv"
+
+    assert cli.main(["sweep", "--config", str(config_path), "--output", str(output_path)]) == 0
+
+    assert [(c["tariff"]["import_prices"], c["smart_charging"]["target_usable_fraction"]) for c in seen_configs] == [
+        ({"peak": 0.2310, "off_peak": 0.10}, 0.5),
+        ({"peak": 0.2310, "off_peak": 0.10}, 0.8),
+        ({"peak": 0.2310, "off_peak": 0.12}, 0.5),
+        ({"peak": 0.2310, "off_peak": 0.12}, 0.8),
+    ]
+    rows = list(csv.DictReader(output_path.open(encoding="utf-8")))
+    assert [row["param_tariff.import_prices.off_peak"] for row in rows] == ["0.1", "0.1", "0.12", "0.12"]
+
+
+@pytest.mark.parametrize(
+    ("key", "message"),
+    [
+        ("tariff.shedule", r"Unknown sweep key 'tariff\.shedule'\. Available: tariff\.boundary_policy"),
+        ("smart_charging.target", r"Available: smart_charging\.charge_periods"),
+        ("tariff.schedule.peak", r"'tariff\.schedule' is not a table of named entries"),
+        ("tariff.import_prices.peak.low", r"'tariff\.import_prices' takes one more level, the entry name"),
+        ("tariff.export_prices.all.x", r"as in 'tariff\.export_prices\.all'"),
+        ("costs", r"Unknown sweep key 'costs'\. Available: costs\.daily_power_cost"),
+        ("battery_indoor_model.setpoint", r"Available: battery_indoor_model\.ceiling_c"),
+    ],
+)
+def test_sweep_rejects_dotted_keys_the_registry_does_not_have(tmp_path, capsys, key, message):
+    config_path = tmp_path / "bad-key-sweep.toml"
+    config_path.write_text(SMART_CHARGING_SWEEP_BASE + f'\n[sweep]\n"{key}" = [1.0]\n', encoding="utf-8")
+
+    assert cli.main(["validate-config", str(config_path)]) == 1
+    assert re.search(message, capsys.readouterr().err)
+
+
+def test_sweep_resolves_every_grid_point_before_the_first_run(monkeypatch, tmp_path, capsys):
+    simulated = []
+    monkeypatch.setattr(cli.App, "simulate", lambda self: simulated.append(self))
+    config_path = tmp_path / "bad-point-sweep.toml"
+    # The second value names a period the schedule does not have.
+    config_path.write_text(
+        SMART_CHARGING_SWEEP_BASE + '\n[sweep]\n"smart_charging.charge_periods" = [["off_peak"], ["night"]]\n',
+        encoding="utf-8",
+    )
+
+    assert cli.main(["sweep", "--config", str(config_path), "--output", str(tmp_path / "out.csv")]) == 1
+    assert "'smart_charging.charge_periods' has period(s) night" in capsys.readouterr().err
+    assert simulated == []
+    assert not (tmp_path / "out.csv").exists()
+
+    # validate-config checks every grid point too, not only the base config.
+    assert cli.main(["validate-config", str(config_path)]) == 1
+    assert "'smart_charging.charge_periods' has period(s) night" in capsys.readouterr().err
+
+
+def test_sweep_builds_each_app_only_when_it_runs(monkeypatch, tmp_path):
+    events = []
+
+    class SweepFakeApp:
+        def __init__(self, config):
+            events.append(("build", config["n_modules"]))
+            self.n_modules = config["n_modules"]
+
+        def simulate(self):
+            events.append(("run", self.n_modules))
+
+        def result(self):
+            return {}
+
+    monkeypatch.setattr(cli, "App", SweepFakeApp)
+    config_path = tmp_path / "order-sweep.toml"
+    config_path.write_text('location = "porto"\nannual_consumption_kwh = 3500\n\n[sweep]\nn_modules = [8, 10]\n')
+
+    assert cli.main(["sweep", "--config", str(config_path), "--output", str(tmp_path / "out.csv")]) == 0
+    # A finished run's App, and its result, is not held until the sweep ends.
+    assert events == [("build", 8), ("run", 8), ("build", 10), ("run", 10)]
+
+
+def test_deep_merge_keeps_the_rest_of_a_nested_table():
+    base = {"n_modules": 8, "tariff": {"schedule": "pt_mainland_2026_daily_bi", "import_prices": {"peak": 0.23}}}
+    overrides = {"n_modules": 10, "tariff": {"import_prices": {"off_peak": 0.12}}, "battery_kwh": 5.0}
+
+    merged = cli._deep_merge(base, overrides)
+
+    assert merged == {
+        "n_modules": 10,
+        "tariff": {"schedule": "pt_mainland_2026_daily_bi", "import_prices": {"peak": 0.23, "off_peak": 0.12}},
+        "battery_kwh": 5.0,
+    }
+    assert base["tariff"] == {"schedule": "pt_mainland_2026_daily_bi", "import_prices": {"peak": 0.23}}
+    # A scalar override replaces a table, and a table replaces a scalar.
+    assert cli._deep_merge({"costs": {"a": 1}}, {"costs": None}) == {"costs": None}
+    assert cli._deep_merge({"costs": None}, {"costs": {"a": 1}}) == {"costs": {"a": 1}}

@@ -165,15 +165,29 @@ def list_of(item: Checker, *, min_length: int = 0) -> Checker:
     return check
 
 
-def mapping_of(key: Checker, value: Checker) -> Checker:
-    """A mapping with free-form keys, such as a tariff's period-to-price map."""
+@dataclass(frozen=True)
+class MappingOf:
+    """The checker :func:`mapping_of` returns.
 
-    def check(table: Any, where: str) -> dict[Any, Any]:
+    It is a class rather than a closure so that a caller can tell a free-form
+    mapping from a scalar key: ``breos sweep`` allows one more dotted level
+    below it (``tariff.import_prices.P1``).
+    """
+
+    key: Checker
+    value: Checker
+
+    def __call__(self, table: Any, where: str) -> dict[Any, Any]:
         if not isinstance(table, Mapping):
             raise TypeError(f"'{where}' must be a table/dict")
-        return {key(name, f"{where} key {name!r}"): value(item, f"{where}.{name}") for name, item in table.items()}
+        return {
+            self.key(name, f"{where} key {name!r}"): self.value(item, f"{where}.{name}") for name, item in table.items()
+        }
 
-    return check
+
+def mapping_of(key: Checker, value: Checker) -> MappingOf:
+    """A mapping with free-form keys, such as a tariff's period-to-price map."""
+    return MappingOf(key, value)
 
 
 def table(spec: TableSpec) -> Checker:
