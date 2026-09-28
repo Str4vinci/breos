@@ -15,7 +15,7 @@ from tools.generate_app_golden import SCENARIOS, _fake_fetch
 
 
 @pytest.fixture(scope="module")
-def replacement_result():
+def replacement_app():
     from breos import App
 
     with (
@@ -24,7 +24,12 @@ def replacement_result():
     ):
         app = App({**SCENARIOS["native_h_replacement"], "execution_backend": "python"})
         app.simulate()
-        return app.result()
+        return app
+
+
+@pytest.fixture(scope="module")
+def replacement_result(replacement_app):
+    return replacement_app.result()
 
 
 def _keys(value, prefix=""):
@@ -37,13 +42,31 @@ def _keys(value, prefix=""):
             yield from _keys(item, prefix)
 
 
-def test_the_first_result_schema_version_is_1_0():
-    assert RESULT_SCHEMA_VERSION == "1.0"
+def test_the_result_schema_version_is_1_1():
+    # 1.0 was the currency-neutral names; 1.1 adds the year-1 money components.
+    assert RESULT_SCHEMA_VERSION == "1.1"
 
 
 def test_app_result_records_the_schema_version_and_currency(replacement_result):
-    assert replacement_result["result_schema_version"] == "1.0"
+    assert replacement_result["result_schema_version"] == "1.1"
     assert replacement_result["provenance"]["currency"] == "EUR"
+
+
+def test_a_flat_run_reports_its_year1_money_at_the_top_level(replacement_app, replacement_result):
+    result = replacement_result
+    year1 = result["financial"][1]
+    assert year1["year"] == 1
+
+    # Year 1 is escalated by (1 + i)^0, so its projected cashflows are the year-1 prices.
+    assert result["grid_import_cost_year1_prices"] == year1["cost_import"]
+    assert result["grid_export_revenue_year1_prices"] == year1["revenue_export"]
+    assert result["fixed_charge_year1_prices"] == year1["cost_fixed_charge"]
+    # The no-system household buys its whole load at the flat price.
+    price = replacement_app._resolved.cost_params.electricity_cost
+    assert result["no_system_import_cost_year1_prices"] == pytest.approx(result["consumption_kwh"] * price, abs=0.01)
+    assert result["no_system_import_cost_year1_prices"] > result["grid_import_cost_year1_prices"] > 0.0
+    # Only smart charging buys energy for the battery.
+    assert "grid_charge_cost_year1_prices" not in result
 
 
 def test_app_result_keys_name_no_currency_and_no_exact_payback(replacement_result):
