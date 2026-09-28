@@ -231,21 +231,21 @@ class TestSimulateEnergyBalance:
             conversion = calculate_dc_ac_power(pv_wh, cap_wh, config.inverter_efficiency, config.ac_output_scale)
             to_load = min(conversion.ac_power_w, load_wh)
             production = pv_wh - conversion.clipping_loss_dc_w - conversion.conversion_loss_w
-            reference.pv_dc[i] = pv_wh / hours_per_step
-            reference.pv_production[i] = production / hours_per_step
-            reference.load[i] = load_wh / hours_per_step
-            reference.pv_delta[i] = (production - load_wh) / hours_per_step
-            reference.grid_import[i] = max(0.0, load_wh - to_load) / hours_per_step
-            reference.grid_export[i] = (conversion.ac_power_w - to_load) / hours_per_step
-            reference.soh[i] = 100.0
-            reference.t_cell[i] = temperature[i]
-            reference.pv_curtailment[i] = conversion.clipping_loss_dc_w / hours_per_step
-            reference.ledger["PV_DC_To_Inverter"][i] = (pv_wh - conversion.clipping_loss_dc_w) / hours_per_step
-            reference.ledger["PV_DC_Curtailed"][i] = conversion.clipping_loss_dc_w / hours_per_step
-            reference.ledger["PV_AC_To_Load"][i] = to_load / hours_per_step
-            reference.ledger["PV_AC_Export"][i] = (conversion.ac_power_w - to_load) / hours_per_step
-            reference.ledger["PV_Direct_Inverter_Loss"][i] = conversion.conversion_loss_w / hours_per_step
-            reference.ledger["Inverter_Loss"][i] = conversion.conversion_loss_w / hours_per_step
+            reference.columns["PV_DC"][i] = pv_wh / hours_per_step
+            reference.columns["PV_Production"][i] = production / hours_per_step
+            reference.columns["Houseload"][i] = load_wh / hours_per_step
+            reference.columns["PV_Delta"][i] = (production - load_wh) / hours_per_step
+            reference.columns["Import_From_Grid"][i] = max(0.0, load_wh - to_load) / hours_per_step
+            reference.columns["Sell_To_Grid"][i] = (conversion.ac_power_w - to_load) / hours_per_step
+            reference.columns["Battery_SOH"][i] = 100.0
+            reference.columns["T_cell"][i] = temperature[i]
+            reference.columns["PV_Curtailment"][i] = conversion.clipping_loss_dc_w / hours_per_step
+            reference.columns["PV_DC_To_Inverter"][i] = (pv_wh - conversion.clipping_loss_dc_w) / hours_per_step
+            reference.columns["PV_DC_Curtailed"][i] = conversion.clipping_loss_dc_w / hours_per_step
+            reference.columns["PV_AC_To_Load"][i] = to_load / hours_per_step
+            reference.columns["PV_AC_Export"][i] = (conversion.ac_power_w - to_load) / hours_per_step
+            reference.columns["PV_Direct_Inverter_Loss"][i] = conversion.conversion_loss_w / hours_per_step
+            reference.columns["Inverter_Loss"][i] = conversion.conversion_loss_w / hours_per_step
         vectorized = _ResultBuffers(len(pv_dc))
 
         _dispatch_no_battery_vectorized(

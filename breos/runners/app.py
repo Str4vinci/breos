@@ -10,6 +10,7 @@ import pandas as pd
 
 from breos.app_config import DEFAULTS, ResolvedAppConfig, default_module_key
 from breos.app_inputs import AppRuntimeDependencies, prepare_simulation_inputs
+from breos.battery import LEDGER_SCHEMA_VERSION
 from breos.degradation.results import DegradationEngineName, build_degradation_summary_from_state
 from breos.economics import find_payback_year
 from breos.execution import (
@@ -46,16 +47,6 @@ class SimulationArtifacts:
     execution: dict[str, Any]
     # The resolved tariff's provenance; None on flat prices.
     tariff: dict[str, Any] | None = None
-
-
-# 1.1 adds the bifacial_rear_gain PV loss-waterfall stage, relabels the iam
-# stage to name the front side explicitly, and adds the pv_model provenance
-# block. All three are additive, so 1.0 consumers keep reading the fields they
-# already knew.
-# 1.2 removes the year_1_degradation loss-waterfall stage. PV module age is
-# counted at the start of each year, so year 1 has no degradation and the stage
-# was always 0; pvwatts_static is now the last stage.
-LEDGER_SCHEMA_VERSION = "1.2"
 
 
 def _series_energy_kwh(series: pd.Series, freq: str) -> float:

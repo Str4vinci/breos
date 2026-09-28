@@ -28,7 +28,7 @@ import pytest
 import breos.battery as battery_module
 from breos._numba_dispatch import _build_kernel, _dispatch_day_numba
 from breos.battery import (
-    _STATE_ROW_INDEX,
+    _ROW,
     BatteryConfig,
     _ResultBuffers,
     simulate_energy_balance,
@@ -498,8 +498,8 @@ def test_zeta_squared_must_use_libm_pow_not_the_folded_square():
         cap_charge_wh=np.inf,
         cap_discharge_wh=np.inf,
     )
-    assert out.ledger["Battery_Charge_Input"][0] == 0.0, "the pack charged, so the step is not all direct PV"
+    assert out.columns["Battery_Charge_Input"][0] == 0.0, "the pack charged, so the step is not all direct PV"
     reference = calculate_dc_ac_power(dc_power, ac_rating, efficiency)
-    assert out.matrix[_STATE_ROW_INDEX["pv_production"], 0] * 0.25 == pytest.approx(
+    assert out.matrix[_ROW["PV_Production"], 0] * 0.25 == pytest.approx(
         dc_power - reference.clipping_loss_dc_w - reference.conversion_loss_w, abs=0.0, rel=0.0
     )

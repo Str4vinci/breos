@@ -136,9 +136,45 @@ def _dc_for_ac(
     return min(upper, max(ac_target, zeta * upper))
 
 
-# Explicit per-step energy flows and losses, in the column order they appear
-# in the results frame. Every entry is accumulated in Wh during the loop and
-# divided by the step length on write, so the frame reports average W.
+# Version of the ledger: the per-step columns below and the App's PV loss
+# waterfall built from them. Bump it with any change a consumer could see.
+# App, Monte Carlo and SimulationSummary all report it.
+# 1.1 adds the bifacial_rear_gain PV loss-waterfall stage, relabels the iam
+# stage to name the front side explicitly, and adds the pv_model provenance
+# block. All three are additive, so 1.0 consumers keep reading the fields they
+# already knew.
+# 1.2 removes the year_1_degradation loss-waterfall stage. PV module age is
+# counted at the start of each year, so year 1 has no degradation and the stage
+# was always 0; pvwatts_static is now the last stage.
+LEDGER_SCHEMA_VERSION = "1.2"
+
+# Per-step state columns, by results-frame name, in their row order inside the
+# shared buffer matrix. Stored-energy columns are Wh; every other column is
+# average W over the timestep.
+_STATE_COLUMNS: Tuple[str, ...] = (
+    "PV_DC",
+    "PV_Production",
+    "Houseload",
+    "PV_Delta",
+    "Import_From_Grid",
+    "Sell_To_Grid",
+    "Battery_Energy",
+    "Battery_SOC_Normalized",
+    "Battery_SOC_Absolute",
+    "Battery_SOH",
+    "T_cell",
+    "PV_Curtailment",
+    "Battery_Charge_Loss",
+    "Battery_Discharge_Loss",
+    "Battery_Standby_Loss",
+    "Battery_Energy_Beginning",
+    "Battery_PV_Origin_Energy_Beginning",
+    "Battery_PV_Origin_Energy_End",
+)
+
+# Explicit per-step energy flows and losses. Every entry is accumulated in Wh
+# during the loop and divided by the step length on write, so the frame
+# reports average W. Their rows follow the state rows.
 _LEDGER_COLUMNS: Tuple[str, ...] = (
     "PV_DC_To_Battery",
     "PV_DC_To_Inverter",
@@ -161,73 +197,53 @@ _LEDGER_COLUMNS: Tuple[str, ...] = (
     "Battery_Energy_Delta",
 )
 
-# Per-step state columns, in their row order inside the shared buffer matrix.
-# The ledger columns occupy the rows immediately after them. The day loop
-# addresses rows by the indices below, so the order is its contract.
-_STATE_ROWS: Tuple[str, ...] = (
-    "pv_dc",
-    "pv_production",
-    "load",
-    "pv_delta",
-    "grid_import",
-    "grid_export",
-    "battery_energy",
-    "soc_normalized",
-    "soc_absolute",
-    "soh",
-    "t_cell",
-    "pv_curtailment",
-    "charge_loss",
-    "discharge_loss",
-    "standby_loss",
-    "battery_energy_begin",
-    "pv_origin_begin",
-    "pv_origin_end",
-)
-_STATE_ROW_INDEX: Dict[str, int] = {name: row for row, name in enumerate(_STATE_ROWS)}
-_LEDGER_ROW0: int = len(_STATE_ROWS)
-_LEDGER_ROW_INDEX: Dict[str, int] = {name: _LEDGER_ROW0 + offset for offset, name in enumerate(_LEDGER_COLUMNS)}
-_N_ROWS: int = _LEDGER_ROW0 + len(_LEDGER_COLUMNS)
+# Every row of the buffer matrix, by the one name it has everywhere: the
+# day loop writes it, the buffers expose it and the results frame reports it
+# under this name. The day loop addresses rows by the indices below, so the
+# order is its contract.
+_ROW_COLUMNS: Tuple[str, ...] = _STATE_COLUMNS + _LEDGER_COLUMNS
+_ROW: Dict[str, int] = {name: row for row, name in enumerate(_ROW_COLUMNS)}
+_N_ROWS: int = len(_ROW_COLUMNS)
 
 # Row indices as plain module constants, which Numba freezes at compile time.
-R_PV_DC = _STATE_ROW_INDEX["pv_dc"]
-R_PV_PRODUCTION = _STATE_ROW_INDEX["pv_production"]
-R_LOAD = _STATE_ROW_INDEX["load"]
-R_PV_DELTA = _STATE_ROW_INDEX["pv_delta"]
-R_GRID_IMPORT = _STATE_ROW_INDEX["grid_import"]
-R_GRID_EXPORT = _STATE_ROW_INDEX["grid_export"]
-R_BATTERY_ENERGY = _STATE_ROW_INDEX["battery_energy"]
-R_SOC_NORMALIZED = _STATE_ROW_INDEX["soc_normalized"]
-R_SOC_ABSOLUTE = _STATE_ROW_INDEX["soc_absolute"]
-R_SOH = _STATE_ROW_INDEX["soh"]
-R_T_CELL = _STATE_ROW_INDEX["t_cell"]
-R_PV_CURTAILMENT = _STATE_ROW_INDEX["pv_curtailment"]
-R_CHARGE_LOSS = _STATE_ROW_INDEX["charge_loss"]
-R_DISCHARGE_LOSS = _STATE_ROW_INDEX["discharge_loss"]
-R_STANDBY_LOSS = _STATE_ROW_INDEX["standby_loss"]
-R_BATTERY_ENERGY_BEGIN = _STATE_ROW_INDEX["battery_energy_begin"]
-R_PV_ORIGIN_BEGIN = _STATE_ROW_INDEX["pv_origin_begin"]
-R_PV_ORIGIN_END = _STATE_ROW_INDEX["pv_origin_end"]
+R_PV_DC = _ROW["PV_DC"]
+R_PV_PRODUCTION = _ROW["PV_Production"]
+R_LOAD = _ROW["Houseload"]
+R_PV_DELTA = _ROW["PV_Delta"]
+R_GRID_IMPORT = _ROW["Import_From_Grid"]
+R_GRID_EXPORT = _ROW["Sell_To_Grid"]
+R_BATTERY_ENERGY = _ROW["Battery_Energy"]
+R_SOC_NORMALIZED = _ROW["Battery_SOC_Normalized"]
+R_SOC_ABSOLUTE = _ROW["Battery_SOC_Absolute"]
+R_SOH = _ROW["Battery_SOH"]
+R_T_CELL = _ROW["T_cell"]
+R_PV_CURTAILMENT = _ROW["PV_Curtailment"]
+R_CHARGE_LOSS = _ROW["Battery_Charge_Loss"]
+R_DISCHARGE_LOSS = _ROW["Battery_Discharge_Loss"]
+R_STANDBY_LOSS = _ROW["Battery_Standby_Loss"]
+R_BATTERY_ENERGY_BEGIN = _ROW["Battery_Energy_Beginning"]
+R_PV_ORIGIN_BEGIN = _ROW["Battery_PV_Origin_Energy_Beginning"]
+R_PV_ORIGIN_END = _ROW["Battery_PV_Origin_Energy_End"]
 
-L_PV_DC_TO_BATTERY = _LEDGER_ROW_INDEX["PV_DC_To_Battery"]
-L_PV_DC_TO_INVERTER = _LEDGER_ROW_INDEX["PV_DC_To_Inverter"]
-L_PV_DC_CURTAILED = _LEDGER_ROW_INDEX["PV_DC_Curtailed"]
-L_PV_AC_TO_LOAD = _LEDGER_ROW_INDEX["PV_AC_To_Load"]
-L_PV_AC_EXPORT = _LEDGER_ROW_INDEX["PV_AC_Export"]
-L_BATTERY_CHARGE_INPUT = _LEDGER_ROW_INDEX["Battery_Charge_Input"]
-L_BATTERY_CHARGE_STORED = _LEDGER_ROW_INDEX["Battery_Charge_Stored"]
-L_BATTERY_DISCHARGE_DC = _LEDGER_ROW_INDEX["Battery_Discharge_DC"]
-L_BATTERY_AC_TO_LOAD = _LEDGER_ROW_INDEX["Battery_AC_To_Load"]
-L_BATTERY_AC_TO_LOAD_PV = _LEDGER_ROW_INDEX["Battery_AC_To_Load_PV"]
-L_PV_ORIGIN_BATTERY_AC_TO_LOAD = _LEDGER_ROW_INDEX["PV_Origin_Battery_AC_To_Load"]
-L_PV_DIRECT_INVERTER_LOSS = _LEDGER_ROW_INDEX["PV_Direct_Inverter_Loss"]
-L_BATTERY_INVERTER_LOSS = _LEDGER_ROW_INDEX["Battery_Inverter_Loss"]
-L_INVERTER_LOSS = _LEDGER_ROW_INDEX["Inverter_Loss"]
-L_STANDBY_LOSS = _LEDGER_ROW_INDEX["Standby_Loss"]
-L_CAPACITY_WINDOW_LOSS = _LEDGER_ROW_INDEX["Capacity_Window_Loss"]
-L_REPLACEMENT_ENERGY_REMOVED = _LEDGER_ROW_INDEX["Battery_Replacement_Energy_Removed"]
-L_REPLACEMENT_ENERGY_ADDED = _LEDGER_ROW_INDEX["Battery_Replacement_Energy_Added"]
-L_BATTERY_ENERGY_DELTA = _LEDGER_ROW_INDEX["Battery_Energy_Delta"]
+L_PV_DC_TO_BATTERY = _ROW["PV_DC_To_Battery"]
+L_PV_DC_TO_INVERTER = _ROW["PV_DC_To_Inverter"]
+L_PV_DC_CURTAILED = _ROW["PV_DC_Curtailed"]
+L_PV_AC_TO_LOAD = _ROW["PV_AC_To_Load"]
+L_PV_AC_EXPORT = _ROW["PV_AC_Export"]
+L_BATTERY_CHARGE_INPUT = _ROW["Battery_Charge_Input"]
+L_BATTERY_CHARGE_STORED = _ROW["Battery_Charge_Stored"]
+L_BATTERY_DISCHARGE_DC = _ROW["Battery_Discharge_DC"]
+L_BATTERY_AC_TO_LOAD = _ROW["Battery_AC_To_Load"]
+L_BATTERY_AC_TO_LOAD_PV = _ROW["Battery_AC_To_Load_PV"]
+L_PV_ORIGIN_BATTERY_AC_TO_LOAD = _ROW["PV_Origin_Battery_AC_To_Load"]
+L_PV_DIRECT_INVERTER_LOSS = _ROW["PV_Direct_Inverter_Loss"]
+L_BATTERY_INVERTER_LOSS = _ROW["Battery_Inverter_Loss"]
+L_INVERTER_LOSS = _ROW["Inverter_Loss"]
+L_STANDBY_LOSS = _ROW["Standby_Loss"]
+L_CAPACITY_WINDOW_LOSS = _ROW["Capacity_Window_Loss"]
+L_REPLACEMENT_ENERGY_REMOVED = _ROW["Battery_Replacement_Energy_Removed"]
+L_REPLACEMENT_ENERGY_ADDED = _ROW["Battery_Replacement_Energy_Added"]
+L_BATTERY_ENERGY_DELTA = _ROW["Battery_Energy_Delta"]
 
 
 def lfp_capacity_factor(T_C: float) -> float:
