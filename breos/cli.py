@@ -368,7 +368,7 @@ def _validate_config(args: argparse.Namespace) -> int:
         grid = _normalise_sweep_grid(config["sweep"])
         base = {key: value for key, value in config.items() if key != "sweep"}
         for _, run_config in _sweep_run_configs(base, grid):
-            resolve_app_config(run_config)
+            _resolved_config_summary(run_config)
     payload = _resolved_config_summary(config)
     if args.json:
         print(_json_text(payload, "the config summary", indent=2))
@@ -470,6 +470,10 @@ def _check_sweep_key(key: str) -> None:
     if top_level not in ALLOWED_CONFIG_KEYS:
         available = ", ".join(sorted(ALLOWED_CONFIG_KEYS))
         raise ValueError(f"Unknown sweep key '{key}'. Available: {available}")
+    if top_level == "costs" and len(parts) == 1:
+        # A whole [costs] table per run would drop the file's other overrides.
+        available = ", ".join(f"costs.{name}" for name in sorted(NESTED_TABLE_SPECS["costs"].keys))
+        raise ValueError(f"Unknown sweep key '{key}'. Available: {available}")
     if len(parts) == 1:
         return
     spec = NESTED_TABLE_SPECS.get(top_level)
@@ -482,10 +486,15 @@ def _check_sweep_key(key: str) -> None:
         raise ValueError(f"Unknown sweep key '{key}'. Available: {available}")
     if len(parts) == 2:
         return
-    if not isinstance(spec.keys[table_key], MappingOf) or len(parts) > 3:
+    if not isinstance(spec.keys[table_key], MappingOf):
         raise ValueError(
             f"Unknown sweep key '{key}'. '{top_level}.{table_key}' is not a table of named entries; "
             f"sweep '{top_level}.{table_key}' itself."
+        )
+    if len(parts) > 3:
+        raise ValueError(
+            f"Unknown sweep key '{key}'. '{top_level}.{table_key}' takes one more level, the entry name, "
+            f"as in '{top_level}.{table_key}.{parts[2]}'."
         )
 
 
@@ -548,14 +557,16 @@ def _sweep(args: argparse.Namespace) -> int:
     grid = _normalise_sweep_grid(raw_grid)
     # Every grid point is resolved before the first one runs, so a bad
     # combination (a tariff period the schedule lacks) fails in seconds, not
-    # after the runs before it.
+    # after the runs before it. Each App is built only when it runs, so a
+    # finished run's result is not held until the sweep ends.
     runs = [
-        (varied, _resolved_config_summary(run_config), App(run_config))
+        (varied, run_config, _resolved_config_summary(run_config))
         for varied, run_config in _sweep_run_configs(config, grid)
     ]
     rows: list[dict[str, Any]] = []
 
-    for run_idx, (varied, resolved, app) in enumerate(runs, start=1):
+    for run_idx, (varied, run_config, resolved) in enumerate(runs, start=1):
+        app = App(run_config)
         app.simulate()
         result = app.result()
 

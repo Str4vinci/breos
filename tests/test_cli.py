@@ -796,7 +796,9 @@ def test_sweep_applies_dotted_tariff_and_smart_charging_keys(monkeypatch, tmp_pa
         ("tariff.shedule", r"Unknown sweep key 'tariff\.shedule'\. Available: tariff\.boundary_policy"),
         ("smart_charging.target", r"Available: smart_charging\.charge_periods"),
         ("tariff.schedule.peak", r"'tariff\.schedule' is not a table of named entries"),
-        ("tariff.import_prices.peak.low", r"'tariff\.import_prices' is not a table of named entries"),
+        ("tariff.import_prices.peak.low", r"'tariff\.import_prices' takes one more level, the entry name"),
+        ("tariff.export_prices.all.x", r"as in 'tariff\.export_prices\.all'"),
+        ("costs", r"Unknown sweep key 'costs'\. Available: costs\.daily_power_cost"),
         ("battery_indoor_model.setpoint", r"Available: battery_indoor_model\.ceiling_c"),
     ],
 )
@@ -826,6 +828,29 @@ def test_sweep_resolves_every_grid_point_before_the_first_run(monkeypatch, tmp_p
     # validate-config checks every grid point too, not only the base config.
     assert cli.main(["validate-config", str(config_path)]) == 1
     assert "'smart_charging.charge_periods' has period(s) night" in capsys.readouterr().err
+
+
+def test_sweep_builds_each_app_only_when_it_runs(monkeypatch, tmp_path):
+    events = []
+
+    class SweepFakeApp:
+        def __init__(self, config):
+            events.append(("build", config["n_modules"]))
+            self.n_modules = config["n_modules"]
+
+        def simulate(self):
+            events.append(("run", self.n_modules))
+
+        def result(self):
+            return {}
+
+    monkeypatch.setattr(cli, "App", SweepFakeApp)
+    config_path = tmp_path / "order-sweep.toml"
+    config_path.write_text('location = "porto"\nannual_consumption_kwh = 3500\n\n[sweep]\nn_modules = [8, 10]\n')
+
+    assert cli.main(["sweep", "--config", str(config_path), "--output", str(tmp_path / "out.csv")]) == 0
+    # A finished run's App, and its result, is not held until the sweep ends.
+    assert events == [("build", 8), ("run", 8), ("build", 10), ("run", 10)]
 
 
 def test_deep_merge_keeps_the_rest_of_a_nested_table():
