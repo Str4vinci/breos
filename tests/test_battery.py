@@ -26,7 +26,7 @@ from breos.degradation.engine import BlastEngine
 from breos.economics import system_ac_production_power
 from breos.inverter import _calculate_dc_ac_power_arrays, calculate_dc_ac_power
 from breos.solar import dc_to_ac
-from tests.energy_conservation import assert_energy_conservation
+from tests.energy_conservation import assert_energy_conservation, assert_origin_reconciliation
 
 
 class TestBatteryConfig:
@@ -1490,7 +1490,7 @@ class TestEnergyLedger:
         assert results["Battery_PV_Origin_Energy_End"].iloc[1] > 0.0
         assert results["PV_Origin_Battery_AC_To_Load"].iloc[2] > 0.0
         assert results["PV_Origin_Battery_AC_To_Load"].iloc[2] <= results["Battery_AC_To_Load"].iloc[2]
-        np.testing.assert_allclose(results["PV_Origin_Battery_AC_To_Load"], results["PV_Origin_Battery_AC_To_Load"])
+        assert_origin_reconciliation(results, 1.0)
         assert results["PV_Direct_Inverter_Loss"].sum() > 0.0
         assert results["Battery_Inverter_Loss"].sum() > 0.0
         np.testing.assert_allclose(results["Battery_Charge_Loss"], results["Battery_Charge_Input"] * 0.1)

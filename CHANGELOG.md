@@ -177,7 +177,10 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   Monte Carlo and optimizer year loops carry it from year to year, the year
   rows report `Battery_Carried_Grid_Origin_Energy_Wh`, and
   `SimulationSummary` gains `opening_grid_origin_energy_wh` and
-  `carried_grid_origin_energy_wh`. The dispatch step raises if a step both
+  `carried_grid_origin_energy_wh`. When a BLAST run restores its SOH from a
+  carried state without a carried energy, the carried origins are now checked
+  against the energy the run starts with, which could open the unattributed
+  origin below zero before. The dispatch step raises if a step both
   charges and discharges the battery, since one origin share per step relies
   on that. `ledger_schema_version` is now `2.0`. No reported number changes
   on either backend: the only App golden fields that move are the two
@@ -951,7 +954,7 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   `Battery_Standby_Loss`, and `PV_Origin_Battery_AC_To_Load` for
   `Battery_AC_To_Load_PV`. `system_ac_production_power` and
   `cost_analysis_projection` no longer accept `Sell_To_Grid` as the export
-  column. The year-row names, such as `Export_kWh` and
+  column; the latter raises a `ValueError` that names the rename. The year-row names, such as `Export_kWh` and
   `Battery_Standby_Loss_kWh`, are unchanged, and so is every value.
 - Removed the optimizer's `costs.panel_wp` override. It priced the steady-state
   CAPEX at a nominal wattage instead of the selected module's rating, so the
