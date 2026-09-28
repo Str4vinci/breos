@@ -223,10 +223,70 @@ SCENARIOS = (
 )
 
 
+# Scenarios that drive the dispatch with ADR 0002 instructions. They need a
+# BREOS with ``dispatch_instructions`` (0.7.0), so they are kept apart from
+# SCENARIOS, which also run against older trees.
+INSTRUCTION_SCENARIOS = (
+    "noop_instructions",
+    "fixed_target",
+    "fixed_target_limited",
+    "reserve_floor",
+    "fixed_target_replacement",
+    "fixed_target_blast",
+)
+
+
+def _tou_instructions(index: pd.DatetimeIndex, *, target: float, reserve: float, efficiency: float, limit_w: float):
+    """Charge from the grid overnight, discharge in the evening, hold in between."""
+    from breos.dispatch_instructions import DispatchInstructions
+
+    hour = index.hour.to_numpy()
+    charge = (hour >= 1) & (hour < 6)
+    discharge = (hour >= 17) & (hour < 23)
+    return DispatchInstructions(
+        discharge_allowed=discharge,
+        reserve_fraction=np.where(discharge, reserve, 0.0),
+        grid_target_fraction=np.where(charge, target, np.nan),
+        grid_charge_efficiency=efficiency,
+        grid_import_limit_w=limit_w,
+    )
+
+
+def build_instructed(name: str, freq: str = FREQ):
+    """Return ``build``'s tuple for an instruction scenario, instructions in the sim kwargs."""
+    import math
+
+    from breos.dispatch_instructions import DispatchInstructions
+
+    base = {"fixed_target_replacement": "replacement", "fixed_target_blast": "blast"}.get(name, "baseline")
+    pv, load, temp, cfg, sim = build(base, freq)
+    index = pv.index
+    if name == "noop_instructions":
+        # Every instruction field set to its no-op value but the scalars, which
+        # a no-op must also ignore.
+        instructions = DispatchInstructions(
+            discharge_allowed=np.ones(len(index), dtype=bool),
+            reserve_fraction=np.zeros(len(index)),
+            grid_target_fraction=np.full(len(index), np.nan),
+            grid_charge_efficiency=0.9,
+            grid_import_limit_w=1500.0,
+        )
+    elif name == "fixed_target_limited":
+        # Every shared limit binds some night: a 1 kW charge cap, a 1.2 kW
+        # site limit against overnight load, and a small inverter.
+        cfg = {**cfg, "max_charge_power_w": 1000.0, "inverter_ac_capacity_w": 2500.0}
+        instructions = _tou_instructions(index, target=0.9, reserve=0.0, efficiency=0.93, limit_w=1200.0)
+    elif name == "reserve_floor":
+        instructions = _tou_instructions(index, target=0.4, reserve=0.35, efficiency=0.95, limit_w=math.inf)
+    else:
+        instructions = _tou_instructions(index, target=0.7, reserve=0.0, efficiency=0.95, limit_w=5000.0)
+    return pv, load, temp, cfg, {**sim, "dispatch_instructions": instructions}
+
+
 def run(name: str, backend: str = "python", freq: str = FREQ):
     from breos.battery import BatteryConfig, simulate_energy_balance
 
-    pv, load, temp, cfg, sim_kwargs = build(name, freq)
+    pv, load, temp, cfg, sim_kwargs = (build_instructed if name in INSTRUCTION_SCENARIOS else build)(name, freq)
     battery_config = BatteryConfig(**cfg)
     kwargs = dict(sim_kwargs)
     if backend != "python":
@@ -242,22 +302,35 @@ def run(name: str, backend: str = "python", freq: str = FREQ):
     return results_df, total_pv, summary_df, rep_cost, n_rep, deg_df
 
 
-def dump(path: str, backend: str = "python") -> None:
+def _column(values: pd.Series) -> np.ndarray:
+    """A column as float64 bits, or as text when it is not numeric (BLAST names its model per row)."""
+    if pd.api.types.is_numeric_dtype(values) or pd.api.types.is_bool_dtype(values):
+        return values.to_numpy(dtype=np.float64)
+    return values.astype(str).to_numpy(dtype=np.str_)
+
+
+def dump(path: str, backend: str = "python", *, instructions: bool = False) -> None:
+    """Write every scenario's columns to ``path``.
+
+    ``instructions`` adds INSTRUCTION_SCENARIOS, which need a tree with
+    ``dispatch_instructions``; leave it off when dumping an older tree.
+    """
+    names = SCENARIOS + (INSTRUCTION_SCENARIOS if instructions else ())
     payload: dict[str, np.ndarray] = {}
     for freq in RESOLUTIONS:
-        for name in SCENARIOS:
+        for name in names:
             results_df, total_pv, summary_df, rep_cost, n_rep, deg_df = run(name, backend, freq)
             key = f"{name}@{freq}"
             for col in results_df.columns:
                 if col == "Datetime":
                     continue
-                payload[f"{key}::results::{col}"] = results_df[col].to_numpy(dtype=np.float64)
+                payload[f"{key}::results::{col}"] = _column(results_df[col])
             for col in deg_df.columns:
                 if col == "Datetime":
                     continue
-                payload[f"{key}::degradation::{col}"] = deg_df[col].to_numpy(dtype=np.float64)
+                payload[f"{key}::degradation::{col}"] = _column(deg_df[col])
             for col in summary_df.columns:
-                payload[f"{key}::summary::{col}"] = summary_df[col].to_numpy(dtype=np.float64)
+                payload[f"{key}::summary::{col}"] = _column(summary_df[col])
             payload[f"{key}::scalar::total_pv"] = np.array([total_pv], dtype=np.float64)
             payload[f"{key}::scalar::replacement_cost"] = np.array([rep_cost], dtype=np.float64)
             payload[f"{key}::scalar::n_replacements"] = np.array([n_rep], dtype=np.float64)
@@ -267,4 +340,6 @@ def dump(path: str, backend: str = "python") -> None:
 
 
 if __name__ == "__main__":
-    dump(sys.argv[1], sys.argv[2] if len(sys.argv) > 2 else "python")
+    # harness.py OUT.npz [python|numba] [--instructions]
+    args = [arg for arg in sys.argv[1:] if arg != "--instructions"]
+    dump(args[0], args[1] if len(args) > 1 else "python", instructions="--instructions" in sys.argv[1:])

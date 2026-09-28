@@ -1,4 +1,8 @@
-"""The within-day greedy dispatch, written once for both execution backends.
+"""The within-day dispatch step, written once for both execution backends.
+
+The step is greedy self-consumption, gated by per-step instructions (ADR
+0002): may the battery discharge, how much it keeps, and whether it charges
+from the grid toward a target. No instructions is the greedy step exactly.
 
 Everything here is scalar code over floats and one output matrix: no dicts, no
 closures, no dataclasses. That is what lets :mod:`breos._numba_dispatch_kernels`
@@ -17,11 +21,12 @@ This module must not import Numba. ``import breos`` reaches it through
 from __future__ import annotations
 
 import math
-from typing import TYPE_CHECKING, Any, Dict, Tuple
+from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple
 
 import numpy as np
 
 from breos.constants import DEFAULT_THERMAL_RESISTANCE_KW, LFP_CAP_DERATE_PER_C_COLD, LFP_CAP_DERATE_PER_C_MODERATE
+from breos.dispatch_instructions import DispatchInstructions
 
 if TYPE_CHECKING:
     from breos.battery import BatteryConfig
@@ -188,6 +193,12 @@ _LEDGER_COLUMNS: Tuple[str, ...] = (
     "PV_AC_Export",
     "Battery_Charge_Input",
     "Battery_Charge_Stored",
+    # Grid charging (ADR 0002 A6): AC imported for the battery, the DC it
+    # becomes after the hybrid inverter's AC-to-DC conversion, and that
+    # conversion's loss. The DC is part of Battery_Charge_Input.
+    "Grid_AC_To_Battery",
+    "Grid_DC_To_Battery",
+    "Grid_Charge_Conversion_Loss",
     "Battery_Discharge_DC",
     "Battery_AC_To_Load",
     "PV_Direct_Inverter_Loss",
@@ -209,6 +220,7 @@ _LEDGER_COLUMNS: Tuple[str, ...] = (
     "PV_Origin_Standby_Loss",
     "PV_Origin_Capacity_Window_Loss",
     "PV_Origin_Replacement_Energy_Removed",
+    "Grid_Origin_Battery_Charge_Stored",
     "Grid_Origin_Battery_Discharge_DC",
     "Grid_Origin_Battery_AC_To_Load",
     "Grid_Origin_Standby_Loss",
@@ -250,6 +262,9 @@ L_PV_AC_TO_LOAD = _ROW["PV_AC_To_Load"]
 L_PV_AC_EXPORT = _ROW["PV_AC_Export"]
 L_BATTERY_CHARGE_INPUT = _ROW["Battery_Charge_Input"]
 L_BATTERY_CHARGE_STORED = _ROW["Battery_Charge_Stored"]
+L_GRID_AC_TO_BATTERY = _ROW["Grid_AC_To_Battery"]
+L_GRID_DC_TO_BATTERY = _ROW["Grid_DC_To_Battery"]
+L_GRID_CHARGE_CONVERSION_LOSS = _ROW["Grid_Charge_Conversion_Loss"]
 L_BATTERY_DISCHARGE_DC = _ROW["Battery_Discharge_DC"]
 L_BATTERY_AC_TO_LOAD = _ROW["Battery_AC_To_Load"]
 L_PV_DIRECT_INVERTER_LOSS = _ROW["PV_Direct_Inverter_Loss"]
@@ -266,6 +281,7 @@ L_PV_ORIGIN_BATTERY_AC_TO_LOAD = _ROW["PV_Origin_Battery_AC_To_Load"]
 L_PV_ORIGIN_STANDBY_LOSS = _ROW["PV_Origin_Standby_Loss"]
 L_PV_ORIGIN_CAPACITY_WINDOW_LOSS = _ROW["PV_Origin_Capacity_Window_Loss"]
 L_PV_ORIGIN_REPLACEMENT_REMOVED = _ROW["PV_Origin_Replacement_Energy_Removed"]
+L_GRID_ORIGIN_CHARGE_STORED = _ROW["Grid_Origin_Battery_Charge_Stored"]
 L_GRID_ORIGIN_DISCHARGE_DC = _ROW["Grid_Origin_Battery_Discharge_DC"]
 L_GRID_ORIGIN_BATTERY_AC_TO_LOAD = _ROW["Grid_Origin_Battery_AC_To_Load"]
 L_GRID_ORIGIN_STANDBY_LOSS = _ROW["Grid_Origin_Standby_Loss"]
@@ -435,6 +451,42 @@ def _charge(
     return battery_energy + drawn * eff_charge, drawn
 
 
+def _grid_charge(
+    battery_energy: float,
+    target_energy: float,
+    emax: float,
+    eff_charge: float,
+    grid_eff: float,
+    cap_charge_in_wh: float,
+    cap_stored_wh: float,
+    inverter_headroom_ac: float,
+    site_headroom_ac: float,
+) -> Tuple[float, float, float]:
+    """Charge from the grid toward *target_energy*, after PV has been allocated.
+
+    Grid AC ``a`` becomes DC charge input ``a * grid_eff``, which then passes
+    through the existing charge efficiency like PV charge input (ADR 0002 A6).
+    The caps are what PV left of the step's shared limits: charge input,
+    stored energy, the inverter's AC rating and the site import limit.
+
+    Returns ``(battery_energy, grid_ac, grid_dc)``.
+    """
+    room = min(target_energy, emax) - battery_energy
+    if room <= 0.0 or eff_charge <= 0.0:
+        return battery_energy, 0.0, 0.0
+    grid_ac = min(
+        room / eff_charge / grid_eff,
+        cap_charge_in_wh / grid_eff,
+        cap_stored_wh / eff_charge / grid_eff,
+        inverter_headroom_ac,
+        site_headroom_ac,
+    )
+    if grid_ac <= 0.0:
+        return battery_energy, 0.0, 0.0
+    grid_dc = grid_ac * grid_eff
+    return battery_energy + grid_dc * eff_charge, grid_ac, grid_dc
+
+
 def _combined_conversion(
     pv_dc: float,
     battery_dc: float,
@@ -472,7 +524,14 @@ def _dispatch_dc_step(
     ac_output_scale: float,
     cap_stored_wh: float,
     pow_two: float,
-) -> Tuple[float, float, float, float, float, float, float, float, float, float, float, float, float, float]:
+    discharge_allowed: bool,
+    discharge_floor: float,
+    grid_target_energy: float,
+    grid_eff: float,
+    grid_import_cap_wh: float,
+) -> Tuple[
+    float, float, float, float, float, float, float, float, float, float, float, float, float, float, float, float
+]:
     """Dispatch one DC-coupled timestep; inputs and outputs are Wh.
 
     PV serves AC load first. Surplus DC then charges the battery before any
@@ -480,11 +539,21 @@ def _dispatch_dc_step(
     ``cap_stored_wh`` limits the stored energy gained or released, on top of
     the DC charge-input and AC discharge limits.
 
+    The instruction inputs (ADR 0002) gate that greedy step without
+    replacing it. The battery discharges only if ``discharge_allowed``, and
+    never below ``discharge_floor``. A finite ``grid_target_energy`` then
+    grid-charges toward it with what PV left of each shared limit, but not
+    while PV is exported or the battery has discharged. With
+    ``discharge_allowed`` true, ``discharge_floor == emin`` and a NaN target
+    the step is the greedy step, operation for operation.
+
     Returns the stored energy after the step followed by the step's ledger:
     ``(battery_energy, pv_dc_to_battery, pv_dc_to_inverter, pv_dc_curtailed,
     pv_ac_to_load, pv_ac_export, battery_charge_input, battery_discharge_dc,
     battery_ac_to_load, battery_charge_loss, battery_discharge_loss,
-    pv_direct_inverter_loss, battery_inverter_loss, grid_import)``.
+    pv_direct_inverter_loss, battery_inverter_loss, grid_import, grid_ac,
+    grid_dc)``. ``grid_import`` includes ``grid_ac``, and
+    ``battery_charge_input`` includes ``grid_dc``.
     """
     pv_dc_curtailed = 0.0
     pv_ac_export = 0.0
@@ -493,6 +562,8 @@ def _dispatch_dc_step(
     battery_discharge_loss = 0.0
     battery_inverter_loss = 0.0
     drawn = 0.0
+    grid_ac = 0.0
+    grid_dc = 0.0
 
     pv_ac_max, pv_conversion_loss, pv_clipping_dc = _dc_ac(pv_dc, inv_cap_ac_wh, inv_eff, ac_output_scale, pow_two)
 
@@ -526,12 +597,12 @@ def _dispatch_dc_step(
             pv_dc_curtailed = excess_dc - drawn
             grid_import = deficit
         else:
-            available = max(0.0, battery_energy - emin)
+            available = max(0.0, battery_energy - discharge_floor)
             # AC correction is applied after the inverter curve and nameplate
             # limit, so the reachable AC ceiling is the scaled nameplate, which
             # the (0, 1] bound keeps at or below the nameplate itself.
             target_total_ac = min(load, inv_cap_ac_wh * ac_output_scale)
-            if available > 0.0 and eff_discharge > 0.0 and target_total_ac > pv_ac_max:
+            if discharge_allowed and available > 0.0 and eff_discharge > 0.0 and target_total_ac > pv_ac_max:
                 total_dc_target = _dc_for_ac(target_total_ac, inv_cap_ac_wh, inv_eff, ac_output_scale)
                 battery_dc = min(
                     available * eff_discharge,
@@ -579,6 +650,26 @@ def _dispatch_dc_step(
             else:
                 grid_import = deficit
 
+    battery_charge_input = drawn
+    if not math.isnan(grid_target_energy) and pv_ac_export <= 0.0 and battery_discharge_dc <= 0.0:
+        # PV keeps priority on every limit the two sources share (A6): grid
+        # charge gets the charge input and stored energy PV did not use, the
+        # inverter rating less the step's PV AC output, and the site limit
+        # less the step's load import.
+        battery_energy, grid_ac, grid_dc = _grid_charge(
+            battery_energy,
+            grid_target_energy,
+            emax,
+            eff_charge,
+            grid_eff,
+            cap_charge_in_wh - drawn,
+            cap_stored_wh - drawn * eff_charge,
+            inv_cap_ac_wh - pv_ac_to_load - pv_ac_export,
+            grid_import_cap_wh - grid_import,
+        )
+        battery_charge_input = drawn + grid_dc
+        grid_import = grid_import + grid_ac
+
     return (
         battery_energy,
         drawn,
@@ -586,14 +677,16 @@ def _dispatch_dc_step(
         pv_dc_curtailed,
         pv_ac_to_load,
         pv_ac_export,
-        drawn,
+        battery_charge_input,
         battery_discharge_dc,
         battery_ac_to_load,
-        drawn * (1.0 - eff_charge),
+        battery_charge_input * (1.0 - eff_charge),
         battery_discharge_loss,
         pv_direct_inverter_loss,
         battery_inverter_loss,
         grid_import,
+        grid_ac,
+        grid_dc,
     )
 
 
@@ -624,6 +717,11 @@ def _dispatch_day(
     hours_per_step: float,
     ac_output_scale: float,
     pow_two: float,
+    discharge_allowed: np.ndarray,
+    reserve_fraction: np.ndarray,
+    grid_target_fraction: np.ndarray,
+    grid_eff: float,
+    grid_import_cap_wh: float,
 ) -> Tuple[float, float, float, float]:
     """Dispatch timesteps ``[lo, hi)`` at fixed health, writing rows of *matrix*.
 
@@ -631,6 +729,11 @@ def _dispatch_day(
     decision are unchanged for the duration of the call; the caller advances
     them at the day boundary. Only battery runs come here: PV-only runs take
     the vectorised path in :mod:`breos.battery`.
+
+    ``discharge_allowed``, ``reserve_fraction`` and ``grid_target_fraction``
+    are the per-step instruction arrays (ADR 0002), indexed like the inputs.
+    A fraction is of each step's usable window, ``emin + f * (emax - emin)``,
+    so the energy it names moves with temperature and health (A7).
 
     Returns ``(battery_energy, pv_origin, grid_origin,
     battery_energy_beginning)``, where the last value is the beginning-of-step
@@ -674,6 +777,13 @@ def _dispatch_day(
             t_cell,
         )
 
+        # Instructions apply to this step's window. A zero reserve and no
+        # target leave the greedy floor, emin, exactly as it is.
+        reserve = reserve_fraction[i]
+        discharge_floor = emin + reserve * (emax - emin) if reserve > 0.0 else emin
+        target = grid_target_fraction[i]
+        grid_target_energy = emin + target * (emax - emin) if not math.isnan(target) else math.nan
+
         # Discharge takes from every origin in proportion to its share before
         # dispatch. One share per step is exact only because a step either
         # charges or discharges, which is checked below.
@@ -701,6 +811,8 @@ def _dispatch_day(
             pv_direct_inverter_loss,
             battery_inverter_loss,
             grid_import,
+            grid_ac,
+            grid_dc,
         ) = _dispatch_dc_step(
             pv_dc_power,
             load,
@@ -716,17 +828,28 @@ def _dispatch_day(
             ac_output_scale,
             cap_stored_wh,
             pow_two,
+            discharge_allowed[i],
+            discharge_floor,
+            grid_target_energy,
+            grid_eff,
+            grid_import_cap_wh,
         )
         if battery_charge_input > 0.0 and battery_discharge_dc > 0.0:
             raise ValueError("a dispatch step both charged and discharged the battery")
         charge_stored = battery_charge_input * eff_charge
+        # Each source's charge adds to its own origin: PV DC to PV, grid to grid.
+        pv_charge_stored = pv_dc_to_battery * eff_charge
+        grid_charge_stored = grid_dc * eff_charge
         pv_origin_discharge_dc = battery_discharge_dc * origin_fraction
         pv_origin_battery_ac = battery_ac_to_load * origin_fraction
-        pv_origin = max(0.0, origin_before_dispatch - pv_origin_discharge_dc + charge_stored)
+        pv_origin = max(0.0, origin_before_dispatch - pv_origin_discharge_dc + pv_charge_stored)
         pv_origin = min(pv_origin, battery_energy)
         grid_origin_discharge_dc = battery_discharge_dc * grid_fraction
         grid_origin_battery_ac = battery_ac_to_load * grid_fraction
-        grid_origin = max(0.0, min(grid_before_dispatch - grid_origin_discharge_dc, battery_energy - pv_origin))
+        grid_origin = max(
+            0.0,
+            min(grid_before_dispatch - grid_origin_discharge_dc + grid_charge_stored, battery_energy - pv_origin),
+        )
 
         # PV output after clipping and the direct PV inverter loss: AC to load
         # and export plus DC to the battery, with or without an inverter rating.
@@ -777,6 +900,9 @@ def _dispatch_day(
         matrix[L_PV_AC_EXPORT, i] = pv_ac_export / hours_per_step
         matrix[L_BATTERY_CHARGE_INPUT, i] = battery_charge_input / hours_per_step
         matrix[L_BATTERY_CHARGE_STORED, i] = charge_stored / hours_per_step
+        matrix[L_GRID_AC_TO_BATTERY, i] = grid_ac / hours_per_step
+        matrix[L_GRID_DC_TO_BATTERY, i] = grid_dc / hours_per_step
+        matrix[L_GRID_CHARGE_CONVERSION_LOSS, i] = (grid_ac - grid_dc) / hours_per_step
         matrix[L_BATTERY_DISCHARGE_DC, i] = battery_discharge_dc / hours_per_step
         matrix[L_BATTERY_AC_TO_LOAD, i] = battery_ac_to_load / hours_per_step
         matrix[L_PV_DIRECT_INVERTER_LOSS, i] = pv_direct_inverter_loss / hours_per_step
@@ -787,12 +913,13 @@ def _dispatch_day(
         matrix[L_REPLACEMENT_ENERGY_REMOVED, i] = 0.0
         matrix[L_REPLACEMENT_ENERGY_ADDED, i] = 0.0
         matrix[L_BATTERY_ENERGY_DELTA, i] = battery_energy_delta / hours_per_step
-        matrix[L_PV_ORIGIN_CHARGE_STORED, i] = charge_stored / hours_per_step
+        matrix[L_PV_ORIGIN_CHARGE_STORED, i] = pv_charge_stored / hours_per_step
         matrix[L_PV_ORIGIN_DISCHARGE_DC, i] = pv_origin_discharge_dc / hours_per_step
         matrix[L_PV_ORIGIN_BATTERY_AC_TO_LOAD, i] = pv_origin_battery_ac / hours_per_step
         matrix[L_PV_ORIGIN_STANDBY_LOSS, i] = pv_standby_loss / hours_per_step
         matrix[L_PV_ORIGIN_CAPACITY_WINDOW_LOSS, i] = pv_window_loss / hours_per_step
         matrix[L_PV_ORIGIN_REPLACEMENT_REMOVED, i] = 0.0
+        matrix[L_GRID_ORIGIN_CHARGE_STORED, i] = grid_charge_stored / hours_per_step
         matrix[L_GRID_ORIGIN_DISCHARGE_DC, i] = grid_origin_discharge_dc / hours_per_step
         matrix[L_GRID_ORIGIN_BATTERY_AC_TO_LOAD, i] = grid_origin_battery_ac / hours_per_step
         matrix[L_GRID_ORIGIN_STANDBY_LOSS, i] = grid_standby_loss / hours_per_step
@@ -823,14 +950,22 @@ def _day_arguments(
     cap_charge_wh: float,
     cap_discharge_wh: float,
     cap_stored_wh: float = math.inf,
+    instructions: Optional["DispatchInstructions"] = None,
 ) -> Tuple[Any, ...]:
     """Pack one day's state into the positional arguments of :func:`_dispatch_day`.
 
     Both backends pack through here, so they cannot be handed different
     inputs. Scalars are coerced to ``float`` so the compiled backend always
-    sees one signature. The trailing 2.0 is ``pow_two``; see
+    sees one signature. The 2.0 after the scalars is ``pow_two``; see
     :func:`_dc_ac` for why it is passed rather than written.
+
+    ``instructions`` covers the whole run, not just this day, since the day
+    loop indexes it like the inputs. None means greedy dispatch; a caller
+    that packs many days passes one no-op set rather than building one per
+    day.
     """
+    if instructions is None:
+        instructions = DispatchInstructions.noop(len(pv_dc_vals))
     return (
         out.matrix,
         pv_dc_vals,
@@ -858,6 +993,11 @@ def _day_arguments(
         float(hours_per_step),
         float(battery_config.ac_output_scale),
         2.0,
+        instructions.discharge_allowed,
+        instructions.reserve_fraction,
+        instructions.grid_target_fraction,
+        float(instructions.grid_charge_efficiency),
+        float(instructions.grid_import_limit_w * hours_per_step),
     )
 
 

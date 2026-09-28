@@ -77,6 +77,7 @@ from breos.degradation.protocol import (
     DegradationLifecycle,
     NativeDegradationAdapter,
 )
+from breos.dispatch_instructions import DispatchInstructions
 from breos.economics import BATTERY_REPLACEMENT_COST_PER_KWH
 from breos.execution import (  # noqa: F401  -- EXECUTION_BACKENDS re-exported
     EXECUTION_BACKENDS,
@@ -1492,6 +1493,7 @@ def _simulate_core(
     initial_energy_wh: Optional[float] = None,
     initial_pv_origin_energy_wh: Optional[float] = None,
     initial_grid_origin_energy_wh: Optional[float] = None,
+    dispatch_instructions: Optional[DispatchInstructions] = None,
     execution_backend: str = "python",
     summary_only: bool = False,
     aligned: Optional[AlignedSimulationInputs] = None,
@@ -1539,6 +1541,9 @@ def _simulate_core(
         initial_grid_origin_energy_wh: Optional grid-origin share of the
             carried stored energy (Wh). Defaults to zero; whatever neither
             origin covers is unattributed.
+        dispatch_instructions: Optional per-step instructions (ADR 0002) for
+            the battery dispatch, one entry per simulation step. None is
+            greedy self-consumption. PV-only runs ignore them.
         execution_backend: Which implementation runs the within-day dispatch
             arithmetic. ``"python"`` is the default and the numerical
             reference; ``"numba"`` selects the optional compiled kernel and
@@ -1733,6 +1738,12 @@ def _simulate_core(
     cap_stored_wh = _step_energy_cap(battery_config.stored_power_limit_w, hours_per_step)
 
     dispatch_day = _resolve_dispatch_day(execution_backend)
+    if dispatch_instructions is not None and len(dispatch_instructions) != n_steps:
+        raise ValueError(
+            f"dispatch_instructions cover {len(dispatch_instructions)} steps; the simulation has {n_steps}"
+        )
+    # No instructions is greedy dispatch; one no-op set serves every day.
+    instructions = dispatch_instructions if dispatch_instructions is not None else DispatchInstructions.noop(n_steps)
 
     # PV-only balance is already vectorized with NumPy and does not need the
     # general per-step dispatcher. This common path is faster than either the
@@ -1791,6 +1802,7 @@ def _simulate_core(
                 cap_charge_wh=cap_charge_wh,
                 cap_discharge_wh=cap_discharge_wh,
                 cap_stored_wh=cap_stored_wh,
+                instructions=instructions,
             )
         )
         last_step = window_end - 1
@@ -1861,6 +1873,7 @@ def simulate_energy_balance(
     initial_energy_wh: Optional[float] = None,
     initial_pv_origin_energy_wh: Optional[float] = None,
     initial_grid_origin_energy_wh: Optional[float] = None,
+    dispatch_instructions: Optional[DispatchInstructions] = None,
     execution_backend: str = "python",
     finalize_degradation: Optional[bool] = None,
 ) -> (
@@ -1913,6 +1926,7 @@ def simulate_energy_balance(
         initial_energy_wh=initial_energy_wh,
         initial_pv_origin_energy_wh=initial_pv_origin_energy_wh,
         initial_grid_origin_energy_wh=initial_grid_origin_energy_wh,
+        dispatch_instructions=dispatch_instructions,
         execution_backend=execution_backend,
     )
     df = core.buffers.to_frame(core.rng)
@@ -1961,6 +1975,7 @@ def simulate_energy_balance_summary(
     initial_energy_wh: Optional[float] = None,
     initial_pv_origin_energy_wh: Optional[float] = None,
     initial_grid_origin_energy_wh: Optional[float] = None,
+    dispatch_instructions: Optional[DispatchInstructions] = None,
     execution_backend: str = "python",
     aligned: Optional[AlignedSimulationInputs] = None,
     finalize_degradation: Optional[bool] = None,
@@ -2016,6 +2031,7 @@ def simulate_energy_balance_summary(
         initial_energy_wh=initial_energy_wh,
         initial_pv_origin_energy_wh=initial_pv_origin_energy_wh,
         initial_grid_origin_energy_wh=initial_grid_origin_energy_wh,
+        dispatch_instructions=dispatch_instructions,
         execution_backend=execution_backend,
         # Reduced per-step buffers are safe here: nothing downstream of this
         # call materialises a per-timestep frame.

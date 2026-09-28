@@ -54,6 +54,56 @@ most 5 kW in either direction. Its DC input while charging is higher by the
 charge loss, and its AC output while discharging is lower by the discharge and
 inverter losses.
 
+## Dispatch instructions and grid charging
+
+`simulate_energy_balance(..., dispatch_instructions=...)` takes a
+`breos.dispatch_instructions.DispatchInstructions`: per-step arrays that gate
+the greedy step without replacing it (ADR 0002). There is one entry per
+simulation step.
+
+- `discharge_allowed`: whether the battery may discharge in that step.
+- `reserve_fraction`: the usable fraction kept before discharge. The battery
+  discharges down to `emin + f × (emax − emin)`, not to `emin`.
+- `grid_target_fraction`: a grid-charge target as a usable fraction, or NaN
+  for no grid charge in that step.
+- `grid_charge_efficiency`: the hybrid inverter's AC-to-DC conversion on the
+  charging path.
+- `grid_import_limit_w`: the site import limit, which includes the load's
+  own import (`math.inf` for none).
+
+A step may discharge or have a grid target, never both. Omitting the
+instructions, or passing `DispatchInstructions.noop(n)`, is greedy
+self-consumption, bit for bit.
+
+Fractions apply to each step's capacity window, which scales with the
+temperature capacity factor every step and with SOH every day. The same
+target therefore names less energy on a cold night and falls as the pack
+fades.
+
+Grid charging runs after PV allocation in the same step. Grid AC `a` becomes
+DC charge input `a × grid_charge_efficiency`, which then passes through the
+cell charge efficiency like PV charge input. It is booked as
+`Battery_Charge_Input`, so cell losses, self-heating and both aging engines
+see it. PV keeps priority on every limit the two share:
+
+- the charge-input limit (`max_charge_power_w`) and the stored-energy limit
+  (`power_limit_c_rate`) bound PV and grid charge together;
+- grid-charge AC input is at most the inverter AC rating minus the step's PV
+  AC output. This summed-throughput rule is conservative: a real hybrid
+  inverter may net the two flows internally;
+- grid-charge import is at most `grid_import_limit_w` minus the step's load
+  import.
+
+There is no grid charging in a step that exports PV or discharges the
+battery. Grid-charge AC is part of `Import_From_Grid`.
+
+| Column | Unit/basis | Definition |
+|---|---|---|
+| `Grid_AC_To_Battery` | W, AC | Grid import for charging, part of `Import_From_Grid` |
+| `Grid_DC_To_Battery` | W, DC | That import after AC-to-DC conversion, part of `Battery_Charge_Input` |
+| `Grid_Charge_Conversion_Loss` | W | `Grid_AC_To_Battery − Grid_DC_To_Battery` |
+| `Grid_Origin_Battery_Charge_Stored` | W-equivalent | Grid charge stored after charge loss |
+
 ## Ledger schema
 
 | Column | Unit/basis | Definition |
@@ -86,9 +136,7 @@ name. Read the second name of each pair instead: `Sell_To_Grid` →
 Stored energy has three origins: PV, grid, and an unattributed remainder. A
 fresh battery starts full with unattributed energy, and a replacement pack's
 energy is unattributed too, so initial SOC is never credited as PV. PV
-charging adds to the PV origin. Nothing charges the grid origin yet: it holds
-only energy carried in with `initial_grid_origin_energy_wh`, until grid
-charging lands.
+charging adds to the PV origin, and grid charging to the grid origin.
 Discharge, standby loss, capacity-window loss and replacement each take from
 all three origins in proportion to their shares at the start of that
 operation. A step either charges or discharges the battery, never both, so one
@@ -98,7 +146,7 @@ share per step is exact.
 |---|---|---|
 | `Battery_PV_Origin_Energy_Beginning` / `_End` | Wh | PV-origin stored energy at interval boundaries |
 | `Battery_Grid_Origin_Energy_Beginning` / `_End` | Wh | Grid-origin stored energy at interval boundaries |
-| `PV_Origin_Battery_Charge_Stored` | W-equivalent | PV charge stored after charge loss |
+| `PV_Origin_Battery_Charge_Stored`, `Grid_Origin_Battery_Charge_Stored` | W-equivalent | Each source's charge stored after charge loss |
 | `PV_Origin_Battery_Discharge_DC`, `Grid_Origin_Battery_Discharge_DC` | W-equivalent, stored DC | Each origin's share of `Battery_Discharge_DC` |
 | `PV_Origin_Battery_AC_To_Load`, `Grid_Origin_Battery_AC_To_Load` | W, AC | Each origin's share of `Battery_AC_To_Load` |
 | `PV_Origin_Standby_Loss`, `Grid_Origin_Standby_Loss` | W | Each origin's share of `Standby_Loss` |
@@ -108,8 +156,8 @@ share per step is exact.
 The unattributed share of any flow is its total minus the PV and grid shares,
 and the unattributed balance is `Battery_Energy` minus both origin balances.
 Each origin reconciles step by step from these columns alone, to rounding:
-the ending balance is the beginning balance plus charge stored (PV only, for
-now), minus discharge, standby, capacity-window and replacement removal. Only PV-origin discharge counts as
+the ending balance is the beginning balance plus charge stored, minus discharge, standby,
+capacity-window and replacement removal. Only PV-origin discharge counts as
 self-consumption.
 
 App and Monte Carlo projections carry total stored energy and both origin

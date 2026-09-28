@@ -37,13 +37,13 @@ from breos.battery import (
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools" / "parity"))
 
-from harness import FREQ, RESOLUTIONS, SCENARIOS, build  # noqa: E402
+from harness import FREQ, INSTRUCTION_SCENARIOS, RESOLUTIONS, SCENARIOS, build, build_instructed  # noqa: E402
 
 numba = pytest.importorskip("numba", reason="the compiled backend needs the breos[fast] extra")
 
 
 def _run(name: str, backend: str, freq: str = FREQ):
-    pv, load, temp, cfg, sim_kwargs = build(name, freq)
+    pv, load, temp, cfg, sim_kwargs = (build_instructed if name in INSTRUCTION_SCENARIOS else build)(name, freq)
     return simulate_energy_balance(
         pv_dc=pv,
         houseload=load,
@@ -115,6 +115,19 @@ def _same_state(left, right) -> bool:
 @pytest.mark.parametrize("scenario", SCENARIOS)
 def test_numba_matches_python_exactly(scenario, freq):
     _assert_identical(f"{scenario}@{freq}", _run(scenario, "python", freq), _run(scenario, "numba", freq))
+
+
+@pytest.mark.filterwarnings("ignore::breos.degradation.validation.BlastExperimentalRangeWarning")
+@pytest.mark.parametrize("freq", RESOLUTIONS)
+@pytest.mark.parametrize("scenario", INSTRUCTION_SCENARIOS)
+def test_numba_matches_python_exactly_under_instructions(scenario, freq):
+    python_out = _run(scenario, "python", freq)
+    _assert_identical(f"{scenario}@{freq}", python_out, _run(scenario, "numba", freq))
+    grid_ac = python_out[0]["Grid_AC_To_Battery"]
+    if scenario == "noop_instructions":
+        assert (grid_ac == 0.0).all()
+    else:
+        assert grid_ac.sum() > 0.0, "the scenario must grid-charge"
 
 
 def test_compiled_backend_compiles_the_python_backends_own_day_loop():

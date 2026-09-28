@@ -182,6 +182,8 @@ _DIAGNOSTIC_COLUMNS = {
     "PV_Direct_Inverter_Loss_kWh": "PV_Direct_Inverter_Loss",
     "Battery_Inverter_Loss_kWh": "Battery_Inverter_Loss",
     "Battery_Charge_Input_kWh": "Battery_Charge_Input",
+    "Grid_AC_To_Battery_kWh": "Grid_AC_To_Battery",
+    "Grid_Charge_Conversion_Loss_kWh": "Grid_Charge_Conversion_Loss",
     "Battery_Discharge_DC_kWh": "Battery_Discharge_DC",
     "Battery_AC_To_Load_kWh": "Battery_AC_To_Load",
     "Battery_Charge_Loss_kWh": "Battery_Charge_Loss",
