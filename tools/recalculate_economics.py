@@ -20,6 +20,7 @@ ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(ROOT))
 
 from breos.economics import cost_analysis_projection
+from breos.tariffs import DEFAULT_CURRENCY
 
 RESULTS_DIR = ROOT / "results"
 COSTS_FILE = ROOT / "configs" / "base" / "costs.json"
@@ -150,7 +151,7 @@ def recalculate_dir(results_dir: Path, dry_run: bool = False) -> str:
         f"[{country.upper()}] {params['num_years']}yr  "
         f"buy={prices['electricity_cost']:.4f}  "
         f"sell={prices['electricity_sold_cost']:.4f}  "
-        f"initial={params['total_initial_cost']:.0f}€"
+        f"initial={params['total_initial_cost']:.0f} {DEFAULT_CURRENCY}"
     )
 
     if dry_run:

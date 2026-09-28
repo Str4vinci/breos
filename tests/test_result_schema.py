@@ -8,7 +8,7 @@ import pytest
 from breos.cli import _load_options
 from breos.io import _economics_summary_metrics
 from breos.optimization import SolarDesignProblem
-from breos.plotting import _currency
+from breos.plotting import _currency, plot_breakeven_comparison
 from breos.result_schema import RESULT_SCHEMA_VERSION
 from breos.tariffs import DEFAULT_CURRENCY, result_currency
 from tools.generate_app_golden import SCENARIOS, _fake_fetch
@@ -86,6 +86,11 @@ def test_optimizer_rejects_the_removed_budget_key():
     with pytest.raises(ValueError, match=r"constraints\.budget_eur was renamed to constraints\.budget"):
         SolarDesignProblem(tmy_data, houseload, config, "results/_test_run/problem_budget_eur")
 
+    # Setting the new key as well does not let the old one through.
+    config["constraints"] = {"budget_eur": 5000.0, "budget": 5000.0}
+    with pytest.raises(ValueError, match=r"constraints\.budget_eur was renamed to constraints\.budget"):
+        SolarDesignProblem(tmy_data, houseload, config, "results/_test_run/problem_budget_both")
+
     config["constraints"] = {"budget": 5000.0}
     assert SolarDesignProblem(tmy_data, houseload, config, "results/_test_run/problem_budget").budget_limit == 5000.0
 
@@ -113,6 +118,13 @@ def test_plot_labels_read_the_frame_currency():
     assert _currency(frame) == "EUR"
     frame.attrs["currency"] = "CHF"
     assert _currency(frame) == "CHF"
+
+
+def test_breakeven_comparison_draws_an_empty_list(tmp_path):
+    pytest.importorskip("matplotlib")
+    plot_breakeven_comparison([], [], [], str(tmp_path), "empty.png")
+
+    assert (tmp_path / "empty.png").exists()
 
 
 def test_cost_presets_state_their_currency():

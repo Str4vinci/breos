@@ -2502,7 +2502,7 @@ def plot_breakeven_comparison(
             break_evens.append(be)
 
     ax.set_xlabel("Year")
-    currency = _currency(cost_dfs[0])
+    currency = _currency(cost_dfs[0]) if cost_dfs else DEFAULT_CURRENCY
     ax.set_ylabel(f"Cumulative Cost ({currency})")
     ax.legend(loc="upper left")
     ax.grid(True, alpha=0.3)
