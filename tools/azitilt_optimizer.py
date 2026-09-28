@@ -200,7 +200,7 @@ class OptimizerContext:
                     final_batt_config = BatteryConfig(nominal_energy_wh=0)
 
                 # Run energy balance
-                results_df, _, summary_df, _, _, _ = simulate_energy_balance(
+                results_df, _, summary_df, _, _ = simulate_energy_balance(
                     pv_dc=dc_power, houseload=self.load_data, battery_config=final_batt_config, freq="h", debug=False
                 )
 

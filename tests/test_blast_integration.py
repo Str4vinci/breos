@@ -73,7 +73,7 @@ def test_blast_15min_resolution_two_days():
 
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        results_df, _total_pv, summary_df, _cost, _n_rep, degradation_df, degradation_state = simulate_energy_balance(
+        results_df, _total_pv, summary_df, _n_rep, degradation_df, degradation_state = simulate_energy_balance(
             pv_dc=pv_dc,
             houseload=houseload,
             battery_config=config,
@@ -159,6 +159,7 @@ def test_blast_multiple_replacements_through_runner(monkeypatch):
         "daily_power_cost": 0.3,
         "annual_operation_cost": 50.0,
         "total_initial_cost": 12000.0,
+        "replacement_cost_each": 5.0 * 500.0,
     }
     monkeypatch.setattr(app_runner, "prepare_simulation_inputs", lambda cfg, resolved, deps: inputs)
     monkeypatch.setattr(projection_module, "build_costs_dict", lambda cfg, resolved: costs)
@@ -215,8 +216,10 @@ def test_blast_multiple_replacements_through_runner(monkeypatch):
         artifacts = app_runner.run_app_simulation(cfg, resolved, deps=SimpleNamespace())
 
     assert len(captured_years) == cfg["projection_years"]
-    per_year_counts = [year_result[4] for year_result in captured_years]
-    per_year_costs = [year_result[3] for year_result in captured_years]
+    per_year_counts = [year_result[3] for year_result in captured_years]
+    # The economics prices each replacement at the pack's t = 0 price (ADR 0003 E4).
+    per_year_costs = artifacts.yearly_df["Replacement_Cost"].tolist()
+    assert per_year_costs == [count * battery_kwh * 500.0 for count in per_year_counts]
 
     # Multiple replacement events occur (stable minimum for this committed fixture;
     # the deterministic run currently produces 11).
@@ -253,8 +256,8 @@ def test_blast_multiple_replacements_through_runner(monkeypatch):
     replacement_years_seen = 0
     for year_idx, year_result in enumerate(captured_years):
         results_df = year_result[0]
-        degradation_df = year_result[5]
-        year_replacements = year_result[4]
+        degradation_df = year_result[4]
+        year_replacements = year_result[3]
 
         # Ledger closes on every row of every year, including replacement rows.
         _assert_energy_ledger_closes(results_df)

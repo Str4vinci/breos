@@ -78,7 +78,6 @@ from breos.degradation.protocol import (
     NativeDegradationAdapter,
 )
 from breos.dispatch_instructions import DispatchInstructions
-from breos.economics import BATTERY_REPLACEMENT_COST_PER_KWH
 from breos.execution import (  # noqa: F401  -- EXECUTION_BACKENDS re-exported
     EXECUTION_BACKENDS,
     is_pv_only_dispatch,
@@ -139,7 +138,6 @@ class BatteryConfig:
     discharge_efficiency: float = DEFAULT_DISCHARGE_EFFICIENCY
     standby_loss_wh: float = DEFAULT_STANDBY_LOSS_WH
     enable_replacement: bool = True
-    replacement_cost: Optional[float] = None  # Auto-computed from cost per kWh if not set
     calendar_model: str = "naumann_lam_field_calibrated"  # v1 field-calibrated default alias
     # Resistance fade (opt-in): grows internal resistance daily and derates
     # the charge/discharge efficiencies in the energy loop so the effective
@@ -222,10 +220,6 @@ class BatteryConfig:
         for name in ("standby_loss_wh", "initial_resistance_growth", "thermal_resistance_kw"):
             if getattr(self, name) < 0.0:
                 raise ValueError(f"{name} must be non-negative")
-        if self.replacement_cost is not None:
-            self.replacement_cost = finite("replacement_cost", self.replacement_cost)
-            if self.replacement_cost < 0.0:
-                raise ValueError("replacement_cost must be non-negative")
 
         for name in ("inverter_ac_capacity_w", "max_charge_power_w", "max_discharge_power_w"):
             value = getattr(self, name)
@@ -258,12 +252,6 @@ class BatteryConfig:
                 "instead to correct an under-predicting model"
             )
         self.battery_type = _normalise_battery_type(self.battery_type)
-        # Auto-compute replacement cost
-        if self.replacement_cost is None:
-            if self.nominal_energy_wh > 1:
-                self.replacement_cost = BATTERY_REPLACEMENT_COST_PER_KWH * (self.nominal_energy_wh / 1000)
-            else:
-                self.replacement_cost = 0.0
 
     @property
     def stored_power_limit_w(self) -> Optional[float]:
@@ -735,20 +723,20 @@ def _step_energy_cap(power_w: Optional[float], hours_per_step: float) -> float:
 
 
 # Results-frame column order. Every matrix row appears once, under its row
-# name. The replacement flag and its cost are the only columns that are not
-# matrix rows, and ``Battery_Energy_End`` is the ``Battery_Energy`` array
+# name. The replacement flag and the capacity it swapped (Wh) are the only
+# columns that are not matrix rows, and ``Battery_Energy_End`` is the ``Battery_Energy`` array
 # under a second name.
 _FRAME_COLUMNS: Tuple[str, ...] = (
     *_ROW_COLUMNS[: _ROW["T_cell"] + 1],
     "Battery_Replaced",
-    "Replacement_Cost",
+    "Battery_Replaced_Capacity_Wh",
     *_ROW_COLUMNS[_ROW["T_cell"] + 1 : _ROW["Battery_Energy_Beginning"] + 1],
     "Battery_Energy_End",
     *_ROW_COLUMNS[_ROW["Battery_Energy_Beginning"] + 1 :],
 )
 
 
-def _frame_mapping(rows: Mapping[str, np.ndarray], replaced: np.ndarray, replacement_cost: np.ndarray):
+def _frame_mapping(rows: Mapping[str, np.ndarray], replaced: np.ndarray, replaced_capacity: np.ndarray):
     """Return every frame column by name, in frame order, as a read-only mapping.
 
     Read-only so a misspelt name fails as a ``KeyError`` instead of adding a
@@ -756,7 +744,7 @@ def _frame_mapping(rows: Mapping[str, np.ndarray], replaced: np.ndarray, replace
     """
     specials = {
         "Battery_Replaced": replaced,
-        "Replacement_Cost": replacement_cost,
+        "Battery_Replaced_Capacity_Wh": replaced_capacity,
         "Battery_Energy_End": rows["Battery_Energy"],
     }
     return MappingProxyType({name: specials[name] if name in specials else rows[name] for name in _FRAME_COLUMNS})
@@ -772,12 +760,12 @@ class _ResultBuffers:
 
     ``columns`` holds every frame column by its frame name, which is also the
     name the day loop's row constants are built from. ``replaced`` and
-    ``replacement_cost`` are zero-filled because only replacement days write
+    ``replaced_capacity`` are zero-filled because only replacement days write
     them; every matrix row is fully overwritten each step and is left
     uninitialised.
     """
 
-    __slots__ = ("matrix", "replaced", "replacement_cost", "columns")
+    __slots__ = ("matrix", "replaced", "replaced_capacity", "columns")
 
     def __init__(self, n_steps: int) -> None:
         # One row per per-step column, so a whole day of every output can be
@@ -785,9 +773,9 @@ class _ResultBuffers:
         # column below is a view on its row, not a copy.
         self.matrix: np.ndarray = np.empty((_N_ROWS, n_steps))
         self.replaced: np.ndarray = np.zeros(n_steps, dtype=bool)
-        self.replacement_cost: np.ndarray = np.zeros(n_steps)
+        self.replaced_capacity: np.ndarray = np.zeros(n_steps)
         rows = {name: self.matrix[row] for row, name in enumerate(_ROW_COLUMNS)}
-        self.columns: Mapping[str, np.ndarray] = _frame_mapping(rows, self.replaced, self.replacement_cost)
+        self.columns: Mapping[str, np.ndarray] = _frame_mapping(rows, self.replaced, self.replaced_capacity)
 
     def zero_fill(self) -> None:
         """Zero every per-step column the caller is not going to write."""
@@ -865,12 +853,12 @@ class _PvOnlySummaryBuffers:
     frame must not hand a caller aliased columns it could write through.
     """
 
-    __slots__ = ("zeros", "replaced", "replacement_cost", "columns")
+    __slots__ = ("zeros", "replaced", "replaced_capacity", "columns")
 
     def __init__(self, n_steps: int) -> None:
         self.zeros: np.ndarray = np.zeros(n_steps)
         self.replaced: np.ndarray = np.zeros(n_steps, dtype=bool)
-        self.replacement_cost: np.ndarray = self.zeros
+        self.replaced_capacity: np.ndarray = self.zeros
         # Written rows are left uninitialised; the dispatch overwrites every
         # element of each one before anything reads it. An aliased row keeps
         # every reported sum identical and drops one more full-length
@@ -884,7 +872,7 @@ class _PvOnlySummaryBuffers:
         # in all of them; nothing may write them.
         self.zeros.flags.writeable = False
         self.replaced.flags.writeable = False
-        self.columns: Mapping[str, np.ndarray] = _frame_mapping(rows, self.replaced, self.replacement_cost)
+        self.columns: Mapping[str, np.ndarray] = _frame_mapping(rows, self.replaced, self.replaced_capacity)
 
     def zero_fill(self) -> None:
         """No-op: unwritten columns are already served by the zero array."""
@@ -927,7 +915,9 @@ class _AgingState:
     eff_charge: float
     eff_discharge: float
     n_replacements: int
-    total_replacement_cost: float
+    # Nominal capacity swapped in, summed over the replacements (Wh). The
+    # economics prices it; the physics carries no money (ADR 0003 E4).
+    replaced_capacity_wh: float
     day_start_soc: float
     day_start_t_cell: float
 
@@ -1011,14 +1001,14 @@ def _apply_battery_replacement(
     aging.cumulative_resistance_cycle = 0.0
     aging.cumulative_resistance_calendar = 0.0
     aging.n_replacements += 1
-    aging.total_replacement_cost += battery_config.replacement_cost
+    aging.replaced_capacity_wh += battery_config.nominal_energy_wh
 
     battery_energy_wh = battery_config.nominal_energy_wh * battery_config.max_soc
     replacement_energy_added = battery_energy_wh
     lifecycle.reset()
 
     out.replaced[step_index] = True
-    out.replacement_cost[step_index] = battery_config.replacement_cost
+    out.replaced_capacity[step_index] = battery_config.nominal_energy_wh
     out.columns["Battery_Energy"][step_index] = battery_energy_wh
     out.columns["Battery_SOC_Normalized"][step_index] = 1.0
     out.columns["Battery_SOC_Absolute"][step_index] = battery_config.max_soc
@@ -1230,7 +1220,7 @@ def _build_summary_row(
     *,
     final_soh_percent: float,
     n_replacements: int,
-    total_replacement_cost: float,
+    replaced_capacity_wh: float,
 ) -> Tuple[Dict[str, float], float]:
     """Summarise a completed run, returning ``(summary_row, total_pv_wh)``.
 
@@ -1253,7 +1243,7 @@ def _build_summary_row(
         "Grid Independence [%]": 100 - percentage_imported,
         "Final SOH [%]": final_soh_percent,
         "N_Replacements": n_replacements,
-        "Replacement_Cost": total_replacement_cost,
+        "Replaced_Capacity_kWh": replaced_capacity_wh / 1000.0,
     }
     return summary, total_pv
 
@@ -1348,7 +1338,7 @@ class SimulationSummary:
     summary_row: Dict[str, float]
     final_soh_percent: float
     n_replacements: int
-    total_replacement_cost: float
+    replaced_capacity_wh: float
     opening_energy_wh: float
     opening_pv_origin_energy_wh: float
     opening_grid_origin_energy_wh: float
@@ -1410,7 +1400,7 @@ def _build_simulation_summary(
         core.hours_per_step,
         final_soh_percent=core.final_soh_percent,
         n_replacements=aging.n_replacements,
-        total_replacement_cost=aging.total_replacement_cost,
+        replaced_capacity_wh=aging.replaced_capacity_wh,
     )
 
     final_state = None
@@ -1431,7 +1421,7 @@ def _build_simulation_summary(
         summary_row=summary_row,
         final_soh_percent=core.final_soh_percent,
         n_replacements=aging.n_replacements,
-        total_replacement_cost=aging.total_replacement_cost,
+        replaced_capacity_wh=aging.replaced_capacity_wh,
         # Read from the recorded end-of-step state rather than from the loop
         # locals: a replacement inside the closing step rewrites what the next
         # year must resume from.
@@ -1555,7 +1545,6 @@ def _simulate_core(
         - results_df: Detailed timestep results
         - total_pv: Total PV AC production after inverter efficiency (Wh)
         - summary_df: Summary statistics
-        - replacement_cost: Total battery replacement cost
         - n_replacements: Number of battery replacements
         - degradation_df: Daily degradation tracking
     """
@@ -1724,7 +1713,7 @@ def _simulate_core(
         eff_charge=eff_charge,
         eff_discharge=eff_discharge,
         n_replacements=0,
-        total_replacement_cost=0.0,
+        replaced_capacity_wh=0.0,
         day_start_soc=degradation_day_start_soc,
         day_start_t_cell=degradation_day_start_t_cell,
     )
@@ -1877,8 +1866,8 @@ def simulate_energy_balance(
     execution_backend: str = "python",
     finalize_degradation: Optional[bool] = None,
 ) -> (
-    Tuple[pd.DataFrame, float, pd.DataFrame, float, int, pd.DataFrame]
-    | Tuple[pd.DataFrame, float, pd.DataFrame, float, int, pd.DataFrame, Dict[str, Any]]
+    Tuple[pd.DataFrame, float, pd.DataFrame, int, pd.DataFrame]
+    | Tuple[pd.DataFrame, float, pd.DataFrame, int, pd.DataFrame, Dict[str, Any]]
 ):
     """Simulate an energy balance and return the detailed per-timestep results.
 
@@ -1900,7 +1889,6 @@ def simulate_energy_balance(
         - results_df: Detailed timestep results
         - total_pv: Total PV AC production after inverter efficiency (Wh)
         - summary_df: Summary statistics
-        - replacement_cost: Total battery replacement cost
         - n_replacements: Number of battery replacements
         - degradation_df: Daily degradation tracking
     """
@@ -1936,11 +1924,11 @@ def simulate_energy_balance(
         core.hours_per_step,
         final_soh_percent=core.final_soh_percent,
         n_replacements=core.aging.n_replacements,
-        total_replacement_cost=core.aging.total_replacement_cost,
+        replaced_capacity_wh=core.aging.replaced_capacity_wh,
     )
     summary_df = pd.DataFrame([summary_row])
 
-    result = (df, total_pv, summary_df, core.aging.total_replacement_cost, core.aging.n_replacements, deg_df)
+    result = (df, total_pv, summary_df, core.aging.n_replacements, deg_df)
     if not return_degradation_state:
         return result
 

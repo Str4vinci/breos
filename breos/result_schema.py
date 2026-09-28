@@ -8,7 +8,10 @@ predates the currency-neutral names of 1.0. 1.1 adds the App result's
 top-level year-1 money components (``grid_import_cost_year1_prices`` and its
 neighbours). 1.2 adds ``provenance.economics``, the rates a projection used
 (ADR 0003 E1, E2), to App, Monte Carlo and optimizer provenance, and the
-escalator keys to the App's ``resolved_config``.
+escalator keys to the App's ``resolved_config``. 1.3 adds
+``Replaced_Capacity_kWh``, the nominal capacity each year's replacements
+swapped in, to the year rows of Monte Carlo trajectories and optimizer tables,
+which also gain the year-1-price money columns (ADR 0003 E4).
 """
 
-RESULT_SCHEMA_VERSION = "1.2"
+RESULT_SCHEMA_VERSION = "1.3"

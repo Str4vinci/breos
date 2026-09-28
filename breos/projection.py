@@ -31,6 +31,7 @@ from breos.economics import (
     cost_analysis_projection,
     price_year_rows,
     replacement_fraction_from_steps,
+    replacement_total_t0,
 )
 from breos.execution import observed_jit_cache_state, reset_jit_cache_observation
 from breos.tariffs import ResolvedTariff, result_currency
@@ -41,8 +42,8 @@ def build_battery_config(cfg: dict[str, Any], resolved: ResolvedAppConfig, *, in
     """Build the battery one projection year runs, starting at ``initial_soh``.
 
     A configured round-trip efficiency is split evenly across charge and
-    discharge, the BatteryConfig default convention. Replacement is on, and
-    a replacement is priced at the configured storage cost per kWh.
+    discharge, the BatteryConfig default convention. Replacement is on; the
+    economics prices each one (ADR 0003 E4).
     """
     battery_kwh = cfg["battery_kwh"]
     efficiency: dict[str, Any] = {}
@@ -59,7 +60,6 @@ def build_battery_config(cfg: dict[str, Any], resolved: ResolvedAppConfig, *, in
         inverter_efficiency=cfg["inverter_efficiency"],
         inverter_ac_capacity_w=resolved.inverter_ac_capacity_w,
         enable_replacement=True,
-        replacement_cost=resolved.cost_params.battery_cost_per_kwh * battery_kwh,
         calendar_model=cfg["calendar_model"],
         max_charge_power_w=cfg["battery_max_charge_power_w"],
         max_discharge_power_w=cfg["battery_max_discharge_power_w"],
@@ -220,7 +220,7 @@ def build_year_row(
     *,
     has_battery: bool,
     n_replacements: int,
-    replacement_cost: float,
+    replaced_capacity_wh: float,
     replacement_steps: Sequence[int],
     n_steps: int,
     pv_degradation_factor: float,
@@ -271,7 +271,8 @@ def build_year_row(
         "Battery_Cumulative_Calendar_Degradation": carry.calendar_degradation,
         "Battery_Resistance_Growth": carry.resistance_growth,
         "Replacements": n_replacements,
-        "Replacement_Cost": replacement_cost,
+        # The nominal capacity swapped in; the economics prices it (ADR 0003 E4).
+        "Replaced_Capacity_kWh": replaced_capacity_wh / 1000,
         # Where in the year the pack was swapped, so the economics can book
         # the outlay at that instant rather than at a year boundary. NaN in a
         # year without a replacement.
@@ -368,7 +369,6 @@ class ProjectionRun:
     yearly_df: pd.DataFrame
     carry: CarryState
     total_replacements: int
-    total_replacement_cost: float
     # The first year's per-step frame; None for a summary projection.
     first_year_results_df: pd.DataFrame | None
     jit_cache_states: list[str]
@@ -408,7 +408,6 @@ def project_years(
     carry = initial_carry or CarryState()
     rows: list[dict[str, Any]] = []
     total_replacements = 0
-    total_replacement_cost = 0.0
     first_year_results_df: pd.DataFrame | None = None
     jit_cache_states: list[str] = []
 
@@ -443,7 +442,7 @@ def project_years(
                 summary, has_battery=has_battery, resistance_fade=batt_cfg.enable_resistance_fade
             )
             sums_w: Mapping[str, float] = summary.column_sums
-            n_rep, rep_cost = summary.n_replacements, summary.total_replacement_cost
+            n_rep, replaced_wh = summary.n_replacements, summary.replaced_capacity_wh
             replacement_steps: Sequence[int] = summary.replacement_steps
             n_steps = summary.n_steps
             annual_fec = summary.fec_all_packs if has_battery and summary.has_degradation_rows else 0.0
@@ -455,8 +454,8 @@ def project_years(
                 # Checked first, so a year off the tariff's calendar fails
                 # here rather than on the instructions' step count.
                 _check_tariff_calendar(tariff, pd.date_range(year.pv_dc.index[0], year.pv_dc.index[-1], freq=freq))
-            results_df, _total_pv, _summary_df, rep_cost, n_rep, degradation_df, state = cast(
-                "tuple[pd.DataFrame, float, pd.DataFrame, float, int, pd.DataFrame, dict[str, Any]]",
+            results_df, _total_pv, _summary_df, n_rep, degradation_df, state = cast(
+                "tuple[pd.DataFrame, float, pd.DataFrame, int, pd.DataFrame, dict[str, Any]]",
                 simulate_energy_balance(
                     pv_dc=year.pv_dc,
                     houseload=year.houseload,
@@ -466,6 +465,7 @@ def project_years(
             )
             carry = carry.after_frames(results_df, degradation_df, state, has_battery=has_battery)
             sums_w = {column: float(results_df[column].sum()) for column in _ROW_SUM_COLUMNS}
+            replaced_wh = float(results_df["Battery_Replaced_Capacity_Wh"].sum())
             replacement_steps = (
                 np.flatnonzero(results_df["Battery_Replaced"].to_numpy()).tolist()
                 if "Battery_Replaced" in results_df.columns
@@ -491,7 +491,6 @@ def project_years(
                 jit_cache_states.append(state_name)
 
         total_replacements += n_rep
-        total_replacement_cost += rep_cost
         rows.append(
             build_year_row(
                 year_idx,
@@ -500,7 +499,7 @@ def project_years(
                 carry,
                 has_battery=has_battery,
                 n_replacements=n_rep,
-                replacement_cost=rep_cost,
+                replaced_capacity_wh=replaced_wh,
                 replacement_steps=replacement_steps,
                 n_steps=n_steps,
                 pv_degradation_factor=year.pv_degradation_factor,
@@ -516,7 +515,6 @@ def project_years(
         yearly_df=pd.DataFrame(rows),
         carry=carry,
         total_replacements=total_replacements,
-        total_replacement_cost=total_replacement_cost,
         first_year_results_df=first_year_results_df,
         jit_cache_states=jit_cache_states,
     )
@@ -562,12 +560,16 @@ def run_projection(
 
 @dataclass(frozen=True)
 class ProjectionValue:
-    """A priced projection: the cost dict, the priced year rows, the cost projection, and LCOE."""
+    """A priced projection: the cost dict, the priced year rows, the cost projection, and LCOE.
+
+    ``total_replacement_cost`` is the replacements at t = 0 prices.
+    """
 
     costs: dict[str, float]
     yearly_df: pd.DataFrame
     cost_projection: pd.DataFrame
     lcoe: float
+    total_replacement_cost: float
 
 
 def value_projection(cfg: dict[str, Any], resolved: ResolvedAppConfig, run: ProjectionRun) -> ProjectionValue:
@@ -591,7 +593,6 @@ def value_projection(cfg: dict[str, Any], resolved: ResolvedAppConfig, run: Proj
         discount_rate=cfg["discount_rate"],
         freq=cfg["resolution"],
         yearly_summary_df=yearly_df,
-        total_replacement_cost=run.total_replacement_cost,
         emissions_params=resolved.emissions_params,
         currency=result_currency(resolved.tariff),
     )
@@ -600,4 +601,10 @@ def value_projection(cfg: dict[str, Any], resolved: ResolvedAppConfig, run: Proj
         total_investment=costs["total_initial_cost"],
         discount_rate=cfg["discount_rate"],
     )
-    return ProjectionValue(costs=costs, yearly_df=yearly_df, cost_projection=cost_projection, lcoe=lcoe)
+    return ProjectionValue(
+        costs=costs,
+        yearly_df=yearly_df,
+        cost_projection=cost_projection,
+        lcoe=lcoe,
+        total_replacement_cost=replacement_total_t0(yearly_df["Replacement_Cost"]),
+    )

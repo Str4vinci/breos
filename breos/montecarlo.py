@@ -390,9 +390,9 @@ def _simulate_trajectory(
     )
     current_soh = projection.carry.soh_pct
     total_replacements = projection.total_replacements
-    total_replacement_cost = projection.total_replacement_cost
     value = value_projection(cfg, resolved, projection)
     cost_projection, lcoe, yearly_df = value.cost_projection, value.lcoe, value.yearly_df
+    total_replacement_cost = value.total_replacement_cost
     payback_year = find_payback_year(cost_projection)
     payback_year_interpolated = find_payback_year_interpolated(cost_projection)
     npv_savings = float(cost_projection["Savings_Cumulative_NPV"].iloc[-1])

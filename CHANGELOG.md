@@ -228,6 +228,18 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   `battery.indoor_model`, `battery.smart_charging`, `economics.costs`,
   `economics.tariff`, and a new `simulation` section with `weather_source`
   and `execution_backend`. A TOML date in `[tariff]` is written as text.
+- The economics prices battery replacements (ADR 0003 E4,
+  [#183](https://github.com/Str4vinci/breos/issues/183)). The simulation
+  reports each swap and its capacity; year rows carry `Replacements` and the
+  new `Replaced_Capacity_kWh`. `price_year_rows` adds `Replacement_Cost` from
+  `costs["replacement_cost_each"]`, which `calculate_costs` now returns and
+  the new `breos.economics.replacement_event_cost` computes: the storage cost
+  per kWh times the capacity, or the optimizer's `battery.replacement_cost`.
+  App, Monte Carlo and the optimizer price replacements through this one
+  function, so a replacement price, learning rate or revaluation no longer
+  needs a re-simulation. Every reported number is unchanged: the App golden
+  baseline and the dispatch parity harness match bit for bit. The optimizer's
+  year tables also gain the year-1-price money columns. Result schema 1.3.
 - `breos sweep` prepares weather, PV, load and battery temperature once per
   distinct input configuration and reuses them across the runs that differ
   only in settings the input stage never reads, such as a tariff, a battery
@@ -1115,6 +1127,21 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   unchanged.
 
 ### Removed
+- Replacement money left the physics layer (ADR 0003 E4,
+  [#183](https://github.com/Str4vinci/breos/issues/183)).
+  `BatteryConfig.replacement_cost` is removed, and `BatteryConfig` no longer
+  prices a pack at a built-in 500 per kWh. `simulate_energy_balance` returns
+  a five-tuple, `(results_df, total_pv, summary_df, n_replacements,
+  degradation_df)`, without the old fourth element `total_replacement_cost`;
+  with `return_degradation_state=True` the state is the sixth. The per-step
+  `Replacement_Cost` column is now `Battery_Replaced_Capacity_Wh`, the nominal
+  capacity swapped in at that step, and the summary row's `Replacement_Cost`
+  is `Replaced_Capacity_kWh` (ledger schema 3.0). `SimulationSummary`
+  replaces `total_replacement_cost` with `replaced_capacity_wh`, and
+  `cost_analysis_projection` drops its `total_replacement_cost` argument: it
+  computes the total and always sets `attrs["total_replacement_cost"]`.
+  The optimizer's private `_replacement_event_cost` is gone; use
+  `breos.economics.replacement_event_cost`.
 - Removed four per-step result columns that repeated another under a second
   name (ledger schema 2.0, ADR 0002 A9). Read `PV_AC_Export` for
   `Sell_To_Grid`, `PV_DC_Curtailed` for `PV_Curtailment`, `Standby_Loss` for

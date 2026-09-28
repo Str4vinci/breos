@@ -847,7 +847,7 @@ class TestAppSimulateNoBattery:
         assert "year_1_degradation" not in keys
         assert keys[-1] == "pvwatts_static"
         assert waterfall["stages"][-1]["energy_kwh"] == waterfall["energy_balance"]["pv_dc"]["generation_kwh"]
-        assert waterfall["ledger_schema_version"] == "2.0"
+        assert waterfall["ledger_schema_version"] == "3.0"
 
     def test_grid_independence_range(self):
         gi = self.result["grid_independence_pct"]
@@ -866,7 +866,7 @@ class TestAppSimulateNoBattery:
         assert r["usable_ac_system_production_kwh"] == pytest.approx(
             r["self_consumption_kwh"] + r["grid_export_kwh"], abs=0.02
         )
-        assert r["provenance"]["ledger_schema_version"] == "2.0"
+        assert r["provenance"]["ledger_schema_version"] == "3.0"
         assert r["provenance"]["timezone"] == "Europe/Lisbon"
         json.dumps(r["provenance"])
 

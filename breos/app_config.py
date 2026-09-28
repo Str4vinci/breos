@@ -30,6 +30,7 @@ from breos.economics import (
     DEFAULT_INFLATION_RATE,
     CostParams,
     calculate_costs,
+    replacement_event_cost,
 )
 from breos.emissions import EmissionsParams
 from breos.execution import DEFAULT_EXECUTION_BACKEND, EXECUTION_BACKENDS, validate_execution_backend
@@ -1940,12 +1941,17 @@ def resolve_emissions(cfg: dict[str, Any]) -> EmissionsParams | None:
 
 
 def build_costs_dict(cfg: dict[str, Any], resolved: ResolvedAppConfig) -> dict[str, float]:
-    """Build the cost-analysis input dictionary for the resolved system."""
+    """Build the cost-analysis input dictionary for the resolved system.
+
+    A replacement is priced at the storage cost per kWh of the configured
+    capacity (ADR 0003 E4), the price the optimizer uses too.
+    """
     return calculate_costs(
         n_modules=cfg["n_modules"],
         module_power_w=resolved.avg_module_power_w,
         battery_capacity_wh=cfg["battery_kwh"] * 1000,
         cost_params=resolved.cost_params,
+        replacement_cost_each=replacement_event_cost(cfg["battery_kwh"], resolved.cost_params.battery_cost_per_kwh),
     )
 
 

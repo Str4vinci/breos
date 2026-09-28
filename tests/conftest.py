@@ -136,6 +136,7 @@ def _stub_projection_balance(monkeypatch, index, captured=None, **columns):
             "Battery_Energy_End",
             "Battery_PV_Origin_Energy_End",
             "Battery_Grid_Origin_Energy_End",
+            "Battery_Replaced_Capacity_Wh",
         ],
     )
     for name, values in columns.items():
@@ -144,7 +145,7 @@ def _stub_projection_balance(monkeypatch, index, captured=None, **columns):
     def fake_balance(**kwargs):
         if captured is not None:
             captured.update(kwargs)
-        return frame, 0.0, pd.DataFrame(), 0.0, 0, pd.DataFrame(), None
+        return frame, 0.0, pd.DataFrame(), 0, pd.DataFrame(), None
 
     monkeypatch.setattr("breos.projection.simulate_energy_balance", fake_balance)
     return frame

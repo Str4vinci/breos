@@ -157,7 +157,11 @@ def _dc_for_ac(
 # repeated another under a second name: Sell_To_Grid (read PV_AC_Export),
 # PV_Curtailment (PV_DC_Curtailed), Battery_Standby_Loss (Standby_Loss) and
 # Battery_AC_To_Load_PV (PV_Origin_Battery_AC_To_Load).
-LEDGER_SCHEMA_VERSION = "2.0"
+# 3.0 takes money out of the ledger (ADR 0003 E4): the per-step
+# Replacement_Cost becomes Battery_Replaced_Capacity_Wh, the nominal capacity
+# swapped in at that step, and the summary row's Replacement_Cost becomes
+# Replaced_Capacity_kWh. The economics prices replacements.
+LEDGER_SCHEMA_VERSION = "3.0"
 
 # Per-step state columns, by results-frame name, in their row order inside the
 # shared buffer matrix. Stored-energy columns are Wh; every other column is

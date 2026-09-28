@@ -16,6 +16,7 @@ COSTS = {
     "electricity_sold_cost": 0.05,
     "daily_power_cost": 0.30,
     "annual_operation_cost": 40.0,
+    "replacement_cost_each": 1500.0,
 }
 YEARS = 5
 
@@ -47,7 +48,6 @@ def _steps():
             "Houseload": 800.0,
             "Import_From_Grid": 400.0,
             "PV_AC_Export": 100.0,
-            "Replacement_Cost": np.where(replaced, 1500.0, 0.0),
             "Battery_Replaced": replaced,
         },
         index=index,

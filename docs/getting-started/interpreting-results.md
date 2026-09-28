@@ -17,8 +17,10 @@ ledger schema. Version `"1.0"` dropped the `_eur` suffixes and renamed the
 `_exact` payback fields to `_interpolated`, with no aliases (the
 [changelog](https://github.com/Str4vinci/breos/blob/develop/CHANGELOG.md)
 lists every rename). Version `"1.1"` adds the
-[year-1 money keys](#year-1-money-keys), and `"1.2"`, which 0.7.0 reports,
-adds `provenance.economics` ([Economic conventions](#economic-conventions)).
+[year-1 money keys](#year-1-money-keys), `"1.2"` adds `provenance.economics`
+([Economic conventions](#economic-conventions)), and `"1.3"`, which 0.7.0
+reports, adds `Replaced_Capacity_kWh` to the year rows of Monte Carlo
+trajectories and optimizer tables.
 A renamed or removed key bumps the
 major version, an added key the minor. A result without the key predates 1.0.
 
@@ -165,7 +167,9 @@ Timing (ADR 0003 E3):
   discount rate, one year of discounting still remains.
 - A battery replacement is priced at today's (t = 0) storage cost, inflated
   to the instant of the swap and discounted from that instant, not from a
-  year boundary.
+  year boundary. The simulation reports only when a pack was swapped and its
+  capacity; the economics prices it (ADR 0003 E4), the same way for the App,
+  Monte Carlo and the optimizer.
 - The daily fixed charge is billed on the simulated duration: 365 days for a
   common year, 366 for a leap year.
 
