@@ -184,6 +184,20 @@ class TariffPrices:
             resolved[period] = _nonnegative_price(raw_price, f"prices.{name}.{period}")
         return MappingProxyType(resolved)
 
+    def __reduce__(self) -> tuple[Any, tuple[Any, ...]]:
+        """Rebuild immutable price maps in optimizer worker processes."""
+        return type(self), (
+            self.currency,
+            dict(self.import_prices),
+            dict(self.export_prices),
+            self.fixed_charge_per_day,
+            self.identifier,
+            self.version,
+            self.source_url,
+            self.effective_from,
+            self.effective_to,
+        )
+
 
 @dataclass(frozen=True)
 class ResolvedTariff:
