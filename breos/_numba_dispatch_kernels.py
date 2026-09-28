@@ -11,11 +11,12 @@ defined inside another function includes the closure cell contents, which are
 not stable across processes, so such a function misses the cache in every new
 process and appends a fresh ``.nbc`` entry each time.
 
-The cache is keyed on the day loop's own source file. An edit to a helper in
-another file, such as the inverter core in :mod:`breos.inverter`, does not
-invalidate it: clear ``breos/__pycache__/_dispatch.*.nb[ic]`` (or the
-``NUMBA_CACHE_DIR``) after changing one, or the compiled backend keeps the old
-arithmetic and the parity tests will say so.
+The cache is keyed on the day loop's own source file, so every compiled
+helper, the inverter cores included, lives in :mod:`breos._dispatch`. Numba
+freezes module globals at compile time, and constants imported from
+:mod:`breos.constants` are not part of that key: after editing one, clear
+``breos/__pycache__/_dispatch.*.nb[ic]`` (or the ``NUMBA_CACHE_DIR``), or the
+compiled backend keeps the old value and the parity tests will say so.
 
 Importing this module requires Numba. :mod:`breos._numba_dispatch` must stay
 importable without it -- that is where the availability check and the friendly
@@ -30,11 +31,11 @@ from __future__ import annotations
 from numba import njit
 from numba.extending import register_jitable
 
-from breos import _dispatch, inverter
+from breos import _dispatch
 
 for _helper in (
-    inverter._dc_ac,
-    inverter._dc_for_ac,
+    _dispatch._dc_ac,
+    _dispatch._dc_for_ac,
     _dispatch.lfp_capacity_factor,
     _dispatch.compute_cell_temperature,
     _dispatch._apply_capacity_window,
