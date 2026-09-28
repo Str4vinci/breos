@@ -33,8 +33,10 @@ TERMINAL_CONVENTION = "physical_carry"
 class SmartChargingSpec:
     """A configured ``[smart_charging]`` table before it meets a tariff.
 
-    ``grid_import_limit_w`` caps total site import, load included; None is no
-    limit. With ``mode = "disabled"`` the other fields keep their defaults.
+    ``grid_import_limit_w`` is a site import limit that the load's own import
+    counts against: grid charging never takes total import above it, but
+    load import is never cut, so a load above the limit still imports in
+    full. None is no limit. With ``mode = "disabled"`` the other fields keep their defaults.
     The App checks the table (``breos.app_config.SMART_CHARGING_TABLE``);
     this value only keeps a direct construction coherent.
     """

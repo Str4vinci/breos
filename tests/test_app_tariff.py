@@ -10,6 +10,7 @@ from breos.battery import align_simulation_inputs
 from breos.montecarlo import MonteCarloSettings, run_montecarlo
 from breos.projection import ProjectionYear, run_projection
 from breos.runners.app import run_app_simulation
+from breos.smart_charging import SmartChargingSpec, resolve_instructions
 
 BASE = {"location": "porto", "n_modules": 8, "annual_consumption_kwh": 4000, "battery_kwh": 5.0, "projection_years": 3}
 TOU = {
@@ -169,6 +170,39 @@ def test_a_tariff_on_another_calendar_is_refused():
             has_battery=True,
             execution_backend="python",
             tariff=tariff,
+        )
+
+
+def test_a_smart_charging_year_on_another_calendar_names_the_calendar():
+    # The detailed path checks the calendar before it simulates, so a year off
+    # the tariff's calendar is refused for that reason, not for the
+    # instructions' step count.
+    resolved = resolve_app_config({**BASE, "tariff": TOU})
+    idx = pd.date_range("2023-01-01", periods=48, freq="h", tz="UTC")
+    tariff = resolved.tariff.resolve(idx[:24], resolved.timezone)
+    spec = SmartChargingSpec(
+        mode="fixed_target",
+        target_usable_fraction=0.5,
+        charge_periods=("off_peak",),
+        discharge_periods=("peak",),
+        grid_charge_efficiency=0.95,
+    )
+
+    with pytest.raises(ValueError, match="different calendar"):
+        run_projection(
+            resolved.cfg,
+            resolved,
+            1,
+            lambda _: ProjectionYear(
+                pv_degradation_factor=1.0,
+                pv_dc=pd.Series(0.0, index=idx),
+                houseload=pd.DataFrame({"Load": 100.0}, index=idx),
+                temperature_series=pd.Series(20.0, index=idx),
+            ),
+            has_battery=True,
+            execution_backend="python",
+            tariff=tariff,
+            instructions=resolve_instructions(spec, tariff),
         )
 
 

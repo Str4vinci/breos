@@ -136,6 +136,14 @@ def test_optimizer_fixed_target_needs_a_battery(tariff_case):
         evaluate((weather, load, config), battery_kwh=0.0)
 
 
+def test_optimizer_search_without_a_battery_names_its_constraint(tariff_case):
+    weather, load, config = tariff_case
+    config["smart_charging"] = FIXED_TARGET
+    config["constraints"] = {**config["constraints"], "max_battery_kwh": 0}
+    with pytest.raises(ValueError, match=r"needs a battery; set constraints\.max_battery_kwh > 0"):
+        optimization.SolarDesignProblem(weather, load, config, "unused")
+
+
 def test_optimizer_accepts_disabled_smart_charging_unchanged(tariff_case):
     weather, load, config = tariff_case
     plain = evaluate(tariff_case, battery_kwh=5.0)

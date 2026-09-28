@@ -502,7 +502,7 @@ target_usable_fraction = 0.50       # 0 is battery_min_soc, 1 is battery_max_soc
 charge_periods = ["off_peak"]
 discharge_periods = ["mid_peak", "peak"]
 grid_charge_efficiency = 0.95       # required: AC-to-DC conversion of the grid-charging path
-grid_import_limit_w = 5000          # optional: total site import, load included
+grid_import_limit_w = 5000          # optional: grid charging keeps total import below this
 ```
 
 - In a charge period the grid may charge the battery toward
@@ -517,9 +517,11 @@ grid_import_limit_w = 5000          # optional: total site import, load included
 - `grid_charge_efficiency` has no default, because the inverter model has no
   AC-to-DC path to derive one from. Stored energy then also passes through
   the battery's own charge efficiency.
-- Omit `grid_import_limit_w` for no site limit. Grid charging is also bounded
-  by the battery's charge power and by the inverter's AC rating, which PV
-  output uses first.
+- `grid_import_limit_w` limits grid charging only: in each step it may import
+  up to the limit minus what the load already imports. Load import is never
+  cut, so a load above the limit still imports in full. Omit it for no site
+  limit. Grid charging is also bounded by the battery's charge power and by
+  the inverter's AC rating, which PV output uses first.
 - `mode = "disabled"` accepts no other key. Unknown keys are errors.
 - Grid charging runs after PV in each step and never while PV is exported,
   so it never takes PV self-consumption. The grid-charge import is part of

@@ -450,6 +450,11 @@ def project_years(
         else:
             if year.pv_dc is None or year.houseload is None:
                 raise ValueError("a projection year needs aligned inputs, or pv_dc and houseload")
+            if tariff is not None:
+                # The simulation runs on this range (align_simulation_inputs).
+                # Checked first, so a year off the tariff's calendar fails
+                # here rather than on the instructions' step count.
+                _check_tariff_calendar(tariff, pd.date_range(year.pv_dc.index[0], year.pv_dc.index[-1], freq=freq))
             results_df, _total_pv, _summary_df, rep_cost, n_rep, degradation_df, state = cast(
                 "tuple[pd.DataFrame, float, pd.DataFrame, float, int, pd.DataFrame, dict[str, Any]]",
                 simulate_energy_balance(
@@ -476,8 +481,6 @@ def project_years(
             )
             if first_year_results_df is None:
                 first_year_results_df = results_df
-            if tariff is not None:
-                _check_tariff_calendar(tariff, pd.DatetimeIndex(results_df["Datetime"]))
             weighted_w = weighted_column_sums(
                 {column: results_df[column].to_numpy() for column, _ in (weights or {}).values()}, weights
             )

@@ -68,8 +68,9 @@ simulation step.
   for no grid charge in that step.
 - `grid_charge_efficiency`: the hybrid inverter's AC-to-DC conversion on the
   charging path.
-- `grid_import_limit_w`: the site import limit, which includes the load's
-  own import (`math.inf` for none).
+- `grid_import_limit_w`: the site import limit that grid charging respects,
+  counting the load's own import against it (`math.inf` for none). Load
+  import itself is never cut.
 
 A step may discharge or have a grid target, never both. Omitting the
 instructions, or passing `DispatchInstructions.noop(n)`, is greedy

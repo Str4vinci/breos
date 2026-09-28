@@ -282,6 +282,16 @@ def test_fixed_target_app_run_charges_from_the_grid_and_reports_it(monkeypatch):
     assert block["initial_stored_energy"]["unattributed_wh"] == block["initial_stored_energy"]["total_wh"]
     assert len(block["yearly"]) == BASE["projection_years"]
 
+    # A rounded residue is reported as 0.0, never -0.0.
+    def values(node):
+        if isinstance(node, dict):
+            return [v for child in node.values() for v in values(child)]
+        if isinstance(node, list):
+            return [v for child in node for v in values(child)]
+        return [node] if isinstance(node, float) else []
+
+    assert not any(value == 0.0 and math.copysign(1.0, value) < 0 for value in values(block))
+
     record = charged["provenance"]["smart_charging"]
     assert record["mode"] == "fixed_target"
     assert record["charge_periods"] == ["off_peak"]
@@ -443,3 +453,11 @@ def test_monte_carlo_runs_fixed_target_charging(tmp_path, write_multiyear_weathe
     assert record["mode"] == "fixed_target"
     assert record["schedule_hash"] == charged.provenance["tariff"]["schedule_hash"]
     assert "smart_charging" not in greedy.provenance
+
+
+def test_the_smart_charging_block_never_reports_negative_zero():
+    from breos.app_results import _round2
+
+    assert math.copysign(1.0, _round2(-1e-13)) == 1.0
+    assert _round2(-0.004) == 0.0 and math.copysign(1.0, _round2(-0.004)) == 1.0
+    assert _round2(12.345678) == 12.35

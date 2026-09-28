@@ -705,12 +705,13 @@ class _OptimizationTariff:
 
 
 def _resolve_optimization_tariff(
-    config: dict[str, Any], index: pd.DatetimeIndex, battery_kwh: float
+    config: dict[str, Any], index: pd.DatetimeIndex, battery_kwh: float, battery_key: str = "battery_kwh"
 ) -> _OptimizationTariff:
     """Adapt the optimizer's config to the shared tariff and smart-charging validation.
 
     ``battery_kwh`` is the largest battery the entry point can install: the
-    design's for a fixed design, ``constraints.max_battery_kwh`` for a search.
+    design's for a fixed design, ``constraints.max_battery_kwh`` for a search;
+    ``battery_key`` names which, for the error when it is zero.
     The instructions are resolved once, on the tariff's calendar, and replayed
     every project year, as App does. A candidate without a battery ignores
     them.
@@ -727,7 +728,7 @@ def _resolve_optimization_tariff(
         timezone,
     )
     smart_charging = resolve_smart_charging_spec(
-        {"smart_charging": config.get("smart_charging"), "battery_kwh": battery_kwh}, spec
+        {"smart_charging": config.get("smart_charging"), "battery_kwh": battery_kwh}, spec, battery_key
     )
     tariff = spec.resolve(index, timezone) if spec is not None else None
     instructions = resolve_instructions(smart_charging, tariff) if smart_charging is not None else None
@@ -1004,7 +1005,10 @@ try:
             # One schedule/price resolution per search, shared by every
             # candidate and project year. Validate before model preparation.
             self.pricing = _resolve_optimization_tariff(
-                config, tmy_data.index, float((config.get("constraints") or {}).get("max_battery_kwh", 30))
+                config,
+                tmy_data.index,
+                float((config.get("constraints") or {}).get("max_battery_kwh", 30)),
+                battery_key="constraints.max_battery_kwh",
             )
             self.tariff = self.pricing.tariff
             self.location = config["location"]

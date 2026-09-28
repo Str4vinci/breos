@@ -189,6 +189,11 @@ def _grid_shift_kwh(row: Any) -> float:
     return float(row["Grid_Origin_Battery_AC_Load_kWh"] - row["Grid_AC_To_Battery_kWh"])
 
 
+def _round2(value: float) -> float:
+    """Round to 0.01; adding 0.0 turns a rounded -0.0 residue into 0.0."""
+    return round(float(value), 2) + 0.0
+
+
 def smart_charging_to_dict(artifacts: SimulationArtifacts) -> dict[str, Any]:
     """The smart-charging block of an App result: grid charge, delivery by origin, and terminal state."""
     assert artifacts.smart_charging is not None
@@ -197,27 +202,24 @@ def smart_charging_to_dict(artifacts: SimulationArtifacts) -> dict[str, Any]:
     for _, row in yearly.iterrows():
         item: dict[str, Any] = {
             "year": int(row["Year"]),
-            "grid_charge_ac_kwh": round(float(row["Grid_AC_To_Battery_kWh"]), 2),
-            "grid_charge_conversion_loss_kwh": round(float(row["Grid_Charge_Conversion_Loss_kWh"]), 2),
+            "grid_charge_ac_kwh": _round2(row["Grid_AC_To_Battery_kWh"]),
+            "grid_charge_conversion_loss_kwh": _round2(row["Grid_Charge_Conversion_Loss_kWh"]),
             "battery_ac_to_load_kwh": {
-                "pv_origin": round(float(row["PV_Origin_Battery_AC_Load_kWh"]), 2),
-                "grid_origin": round(float(row["Grid_Origin_Battery_AC_Load_kWh"]), 2),
-                "unattributed": round(
-                    float(
-                        row["Battery_AC_To_Load_kWh"]
-                        - row["PV_Origin_Battery_AC_Load_kWh"]
-                        - row["Grid_Origin_Battery_AC_Load_kWh"]
-                    ),
-                    2,
+                "pv_origin": _round2(row["PV_Origin_Battery_AC_Load_kWh"]),
+                "grid_origin": _round2(row["Grid_Origin_Battery_AC_Load_kWh"]),
+                "unattributed": _round2(
+                    row["Battery_AC_To_Load_kWh"]
+                    - row["PV_Origin_Battery_AC_Load_kWh"]
+                    - row["Grid_Origin_Battery_AC_Load_kWh"]
                 ),
             },
         }
         # Year-1 prices, like the tariff's other money columns.
         if "Grid_Charge_Cost" in row:
-            item["grid_charge_cost_year1_prices"] = round(float(row["Grid_Charge_Cost"]), 2)
+            item["grid_charge_cost_year1_prices"] = _round2(row["Grid_Charge_Cost"])
         rows.append(item)
     stored = {
-        key: {name: round(value, 2) for name, value in artifacts.smart_charging[key].items()}
+        key: {name: _round2(value) for name, value in artifacts.smart_charging[key].items()}
         for key in ("initial_stored_energy", "final_stored_energy")
     }
     return {

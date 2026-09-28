@@ -923,8 +923,13 @@ SMART_CHARGING_TABLE = TableSpec(
 )
 
 
-def _checked_smart_charging(value: Any, schedule: str | None, battery_kwh: float) -> dict[str, Any]:
-    """Check a [smart_charging] table against the configured tariff schedule and battery."""
+def _checked_smart_charging(
+    value: Any, schedule: str | None, battery_kwh: float, battery_key: str = "battery_kwh"
+) -> dict[str, Any]:
+    """Check a [smart_charging] table against the configured tariff schedule and battery.
+
+    ``battery_key`` names the setting ``battery_kwh`` came from, for the error.
+    """
     table = SMART_CHARGING_TABLE.validate(value)
     if table["mode"] == "disabled":
         return table
@@ -934,7 +939,7 @@ def _checked_smart_charging(value: Any, schedule: str | None, battery_kwh: float
             "tariff periods"
         )
     if not battery_kwh > 0:
-        raise ValueError("'smart_charging.mode' = 'fixed_target' needs a battery; set battery_kwh > 0")
+        raise ValueError(f"'smart_charging.mode' = 'fixed_target' needs a battery; set {battery_key} > 0")
     periods = get_tariff_schedule(schedule).periods
     for name in ("charge_periods", "discharge_periods"):
         unknown = sorted(set(table[name]) - set(periods))
@@ -953,17 +958,20 @@ def _validate_smart_charging(cfg: dict[str, Any]) -> None:
     _checked_smart_charging(cfg["smart_charging"], schedule, cfg["battery_kwh"])
 
 
-def resolve_smart_charging_spec(cfg: dict[str, Any], tariff_spec: TariffSpec | None) -> SmartChargingSpec | None:
+def resolve_smart_charging_spec(
+    cfg: dict[str, Any], tariff_spec: TariffSpec | None, battery_key: str = "battery_kwh"
+) -> SmartChargingSpec | None:
     """Validate and build a smart-charging spec for App or an adapted optimizer config.
 
     ``cfg`` supplies ``smart_charging`` and ``battery_kwh``; ``tariff_spec``
     is what :func:`resolve_tariff_spec` returned for the same config, whose
-    periods the charge and discharge periods must name.
+    periods the charge and discharge periods must name. ``battery_key`` is
+    the setting the error names when ``battery_kwh`` is zero.
     """
     if cfg.get("smart_charging") is None:
         return None
     schedule = tariff_spec.schedule if tariff_spec is not None else None
-    table = _checked_smart_charging(cfg["smart_charging"], schedule, cfg["battery_kwh"])
+    table = _checked_smart_charging(cfg["smart_charging"], schedule, cfg["battery_kwh"], battery_key)
     if table["mode"] == "disabled":
         return SmartChargingSpec(mode="disabled")
     return SmartChargingSpec(
