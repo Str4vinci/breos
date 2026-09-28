@@ -7,7 +7,7 @@ This module provides:
 - ZEB (Zero Energy Building) sizing
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, Optional, Sequence, Tuple, Union
 
 import numpy as np
@@ -33,6 +33,7 @@ from breos.solar import (
     calculate_pv_production_dc,
     default_azimuth,
 )
+from breos.tariffs import ResolvedTariff, tariff_provenance
 from breos.utils import get_hours_per_step
 
 
@@ -58,6 +59,7 @@ class ProjectedDesignResult:
     metrics: Dict[str, Any]
     yearly: pd.DataFrame
     financial: pd.DataFrame
+    provenance: Dict[str, Any] = field(default_factory=dict)
 
 
 def _serial_elementwise_runner(func: Callable[[Any], Any], args: list[Any]) -> list[Any]:
@@ -548,6 +550,7 @@ def _evaluate_projected_design_metrics(
     return_tables: bool = False,
     execution_backend: str = DEFAULT_EXECUTION_BACKEND,
     ac_output_scale: float = 1.0,
+    tariff: ResolvedTariff | None = None,
 ) -> Dict[str, Any]:
     """Evaluate one design over the projected horizon using production engines.
 
@@ -620,6 +623,7 @@ def _evaluate_projected_design_metrics(
         degradation_engine=degradation_engine,
         blast_model=blast_model,
         initial_carry=CarryState(soh_pct=float(batt_spec.get("initial_soh", 100.0)) if has_battery else 100.0),
+        tariff=tariff,
     )
     yearly_summary_df = projection.yearly_df
     first_year_results_df = projection.first_year_results_df
@@ -676,6 +680,27 @@ def _evaluate_projected_design_metrics(
         metrics["_yearly_summary_df"] = yearly_summary_df
         metrics["_cost_projection_df"] = cost_projection
     return metrics
+
+
+def _resolve_optimization_tariff(config: dict[str, Any], index: pd.DatetimeIndex) -> ResolvedTariff | None:
+    """Adapt the optimizer's config to the shared tariff validation and resolver."""
+    from breos.app_config import resolve_tariff_spec
+
+    if config.get("smart_charging") is not None:
+        raise ValueError("smart_charging is not supported yet; tariff pricing uses self-consumption dispatch")
+    if config.get("tariff") is None:
+        return None
+    timezone = config["location"].get("timezone", "UTC")
+    spec = resolve_tariff_spec(
+        {
+            "tariff": config["tariff"],
+            "costs": config.get("costs"),
+            "resolution": (config.get("simulation") or {}).get("resolution", "h"),
+        },
+        timezone,
+    )
+    assert spec is not None
+    return spec.resolve(index, timezone)
 
 
 def _site_location(location: dict[str, Any]) -> Any:
@@ -753,6 +778,9 @@ def evaluate_projected_design(
     # and reports the cheap problem late.
     require_backend(execution_backend)
 
+    frames = list(weather_by_year) if weather_by_year is not None else None
+    tariff_index = frames[0].index if frames else tmy_data.index
+    tariff = _resolve_optimization_tariff(config, tariff_index)
     location = config["location"]
     loc_obj = _site_location(location)
     simulation = config.get("simulation", {}) or {}
@@ -783,11 +811,10 @@ def evaluate_projected_design(
         )
         return series if dc_output_scale == 1.0 else series * dc_output_scale
 
-    if weather_by_year is None:
+    if frames is None:
         base_dc_power: Union[pd.Series, Sequence[pd.Series]] = _dc_for(tmy_data)
         dc_index = base_dc_power.index
     else:
-        frames = list(weather_by_year)
         if len(frames) != years_projection:
             raise ValueError(f"weather_by_year has {len(frames)} years, expected {years_projection}")
         # Every year must land on the same intra-year index, because the load
@@ -839,6 +866,7 @@ def evaluate_projected_design(
         emissions_params=EmissionsParams(**emissions_config) if emissions_config else None,
         return_tables=True,
         ac_output_scale=_validated_ac_output_scale(config),
+        tariff=tariff,
     )
     yearly = raw_metrics.pop("_yearly_summary_df")
     financial = raw_metrics.pop("_cost_projection_df")
@@ -849,7 +877,12 @@ def evaluate_projected_design(
         "Azimuth": float(azimuth),
         **raw_metrics,
     }
-    return ProjectedDesignResult(metrics=metrics, yearly=yearly, financial=financial)
+    provenance = (
+        {"tariff": tariff_provenance(tariff, calendar_year=tariff.index.tz_convert(tariff.timezone)[0].year)}
+        if tariff is not None
+        else {}
+    )
+    return ProjectedDesignResult(metrics=metrics, yearly=yearly, financial=financial, provenance=provenance)
 
 
 # ==========================================
@@ -935,6 +968,9 @@ try:
             self.config = config
             self.results_dir = results_dir
 
+            # One schedule/price resolution per search, shared by every
+            # candidate and project year. Validate before model preparation.
+            self.tariff = _resolve_optimization_tariff(config, tmy_data.index)
             self.location = config["location"]
             # config['location'] is a plain dict; the pvlib Location that
             # calculate_pv_production_dc needs is constructed once here.
@@ -1107,6 +1143,7 @@ try:
                 inverter_efficiency=self.inverter_efficiency,
                 inverter_ac_capacity_w=inverter_ac_capacity_w,
                 ac_output_scale=self.ac_output_scale,
+                tariff=self.tariff,
             )
             out.update(projected_metrics)
             objective_grid_dependence = 1.0 - float(projected_metrics["Projected_Grid_Independence_%"]) / 100.0
@@ -1268,8 +1305,19 @@ def optimize_system_multi_objective(
     # that then has to be torn down.
     require_backend(execution_backend)
 
+    # Invalid tariffs must fail before a worker pool is created.
+    problem = SolarDesignProblem(
+        tmy_data,
+        houseload,
+        config,
+        results_dir,
+        execution_backend=execution_backend,
+    )
+    termination, early_stop_metadata = _build_multi_objective_termination(
+        n_gen,
+        (config.get("optimization") or {}).get("early_stop"),
+    )
     pool = None
-    elementwise_runner = None
     if n_procs > 1:
         from multiprocessing import Pool
 
@@ -1279,20 +1327,7 @@ def optimize_system_multi_objective(
             from pymoo.core.problem import StarmapParallelization
 
         pool = Pool(n_procs)
-        elementwise_runner = StarmapParallelization(pool.starmap)
-
-    problem = SolarDesignProblem(
-        tmy_data,
-        houseload,
-        config,
-        results_dir,
-        elementwise_runner=elementwise_runner,
-        execution_backend=execution_backend,
-    )
-    termination, early_stop_metadata = _build_multi_objective_termination(
-        n_gen,
-        (config.get("optimization") or {}).get("early_stop"),
-    )
+        problem.elementwise_runner = StarmapParallelization(pool.starmap)
     try:
         result = minimize(
             problem,
@@ -1344,6 +1379,15 @@ def optimize_system_multi_objective(
     # pymoo advances the counter after its termination update. Report the last
     # completed generation, matching the research workflow's saved metadata.
     actual_generations = max(0, int(getattr(result.algorithm, "n_gen", n_gen + 1)) - 1)
+    provenance = (
+        {
+            "tariff": tariff_provenance(
+                problem.tariff, calendar_year=problem.tariff.index.tz_convert(problem.tariff.timezone)[0].year
+            )
+        }
+        if problem.tariff is not None
+        else {}
+    )
     return OptimizationResult(
         optimal_value=float("nan"),
         objective_value=float("nan"),
@@ -1357,5 +1401,6 @@ def optimize_system_multi_objective(
             "early_stop": early_stop_metadata,
             "n_procs": n_procs,
             "battery_replacement_treatment": problem.battery_replacement_treatment,
+            **({"provenance": provenance} if provenance else {}),
         },
     )

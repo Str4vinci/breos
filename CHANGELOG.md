@@ -243,6 +243,14 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   24 hours; the `floors` CI job failed on it. Test only.
 
 ### Fixed
+- Fixed-design evaluation and multi-objective optimization now validate and
+  apply the optional `tariff` table through the shared projection loop.
+  Previously they silently ignored it and valued the design at flat prices.
+  App's checks for prices, timezone, resolution and conflicting flat costs
+  apply before PV calculation or worker startup. Results record tariff
+  provenance, and immutable tariff prices can be pickled for worker processes.
+  Unsupported `smart_charging` tables now raise in both optimizer entry points.
+  Configurations without either table keep their existing behavior.
 - App weather that does not cover the whole calendar year of `start_date`
   raises `ValueError` instead of simulating a shorter year
   ([#242](https://github.com/Str4vinci/breos/issues/242)). The simulation

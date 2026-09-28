@@ -44,6 +44,15 @@ Projected NPV uses each simulated year's import, export, load, usable AC PV
 production, and replacement cost. This is a repeated-TMY scenario, not a
 forecast of distinct future weather years.
 
+An optional `tariff` table uses the same schema and validation as App. The
+shared projection loop values imports, exports and the no-system baseline at
+the timestep prices and bills the fixed charge by simulated duration. The
+table replaces the three flat energy/fixed-charge entries in `costs`; giving
+both raises. The schedule is resolved once per search in `location.timezone`.
+The [optimization guide](../getting-started/optimization.md#price-a-design-with-a-time-of-use-tariff)
+shows the configuration and provenance fields. Smart charging is not yet
+supported and is rejected.
+
 ZEB remains a reported diagnostic in projected mode. Set
 `constraints.enforce_zeb = true` to require a projected lifetime ZEB ratio of
 at least one; this adds a feasibility constraint, not a third objective.
