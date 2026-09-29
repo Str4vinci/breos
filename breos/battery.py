@@ -1692,8 +1692,10 @@ def _simulate_core(
         # accumulated across every pack it used.
         fec_lifetime=0.0,
         cumulative_cal_seconds=initial_calendar_seconds,
-        cumulative_cycle_deg=initial_cumulative_cycle_deg,
-        cumulative_cal_deg=initial_cumulative_cal_deg,
+        # Coerced so a NumPy scalar argument, such as float32, is summed in
+        # float64 like the carried state always was.
+        cumulative_cycle_deg=float(initial_cumulative_cycle_deg),
+        cumulative_cal_deg=float(initial_cumulative_cal_deg),
         resistance_growth=resistance_growth,
         eff_charge=eff_charge,
         eff_discharge=eff_discharge,

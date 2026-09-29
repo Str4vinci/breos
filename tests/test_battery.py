@@ -753,26 +753,30 @@ class TestSimulateEnergyBalance:
         assert state["soh_fraction"] < 1.0
         assert state["day_start_soc_absolute"] == pytest.approx(result[0]["Battery_SOC_Absolute"].iloc[-1])
 
+    @staticmethod
+    def _cycling_kwargs(**overrides):
+        """Three days of daytime charging and evening discharge, returning state."""
+        idx = pd.date_range("2025-01-01 00:00", periods=72, freq="h", tz="UTC")
+        hour = idx.hour.to_numpy()
+        kwargs = dict(
+            pv_dc=pd.Series(np.where((hour >= 9) & (hour < 16), 2400.0, 0.0), index=idx),
+            houseload=pd.DataFrame({"Load": np.where((hour >= 18) | (hour < 2), 800.0, 200.0)}, index=idx),
+            battery_config=BatteryConfig(nominal_energy_wh=5000, standby_loss_wh=0.0, enable_replacement=False),
+            freq="h",
+            temperature_series=pd.Series(25.0, index=idx),
+            return_degradation_state=True,
+        )
+        return {**kwargs, **overrides}
+
     @pytest.mark.parametrize(
         ("engine", "engine_kwargs"),
         [("native", {}), ("blast", {"blast_model": "lfp_gr_250ah_prismatic"})],
     )
     def test_carried_degradation_split_matches_frame_and_summary(self, engine, engine_kwargs):
-        idx = pd.date_range("2025-01-01 00:00", periods=72, freq="h", tz="UTC")
-        hour = idx.hour.to_numpy()
-        pv = pd.Series(np.where((hour >= 9) & (hour < 16), 2400.0, 0.0), index=idx)
-        load = pd.DataFrame({"Load": np.where((hour >= 18) | (hour < 2), 800.0, 200.0)}, index=idx)
-        config = BatteryConfig(nominal_energy_wh=5000, standby_loss_wh=0.0, enable_replacement=False)
-        kwargs = dict(
-            pv_dc=pv,
-            houseload=load,
-            battery_config=config,
-            freq="h",
-            temperature_series=pd.Series(25.0, index=idx),
+        kwargs = self._cycling_kwargs(
             initial_cumulative_cycle_deg=0.1,
             initial_cumulative_cal_deg=0.2,
             degradation_engine=engine,
-            return_degradation_state=True,
             **engine_kwargs,
         )
 
@@ -794,6 +798,46 @@ class TestSimulateEnergyBalance:
         else:
             # BLAST reports one total loss, so the native split stays as carried in.
             assert (cycle, calendar) == (0.1, 0.2)
+
+    def test_float32_starting_split_is_summed_in_float64(self):
+        as_float32 = self._cycling_kwargs(
+            initial_cumulative_cycle_deg=np.float32(0.1), initial_cumulative_cal_deg=np.float32(0.2)
+        )
+        as_float = self._cycling_kwargs(
+            initial_cumulative_cycle_deg=float(np.float32(0.1)), initial_cumulative_cal_deg=float(np.float32(0.2))
+        )
+
+        *_, degradation, state = simulate_energy_balance(**as_float32)
+        *_, expected_degradation, expected_state = simulate_energy_balance(**as_float)
+        summary = simulate_energy_balance_summary(**as_float32)
+
+        for column in ("Cumulative_Cycle_Degradation", "Cumulative_Calendar_Degradation"):
+            assert degradation[column].dtype == np.float64
+            np.testing.assert_array_equal(degradation[column], expected_degradation[column])
+        for key in ("cumulative_cycle_degradation", "cumulative_calendar_degradation"):
+            assert state[key] == expected_state[key]
+            assert type(getattr(summary, key)) is float
+            assert getattr(summary, key) == expected_state[key]
+
+    def test_native_state_payload_split_wins_over_starting_arguments(self):
+        *_, carried = simulate_energy_balance(**self._cycling_kwargs(finalize_degradation=False))
+        carried = {**carried, "cumulative_cycle_degradation": 0.3, "cumulative_calendar_degradation": 0.4}
+
+        *_, from_state, state = simulate_energy_balance(**self._cycling_kwargs(initial_degradation_state=carried))
+        *_, conflicting, conflicting_state = simulate_energy_balance(
+            **self._cycling_kwargs(
+                initial_degradation_state=carried,
+                initial_cumulative_cycle_deg=5.0,
+                initial_cumulative_cal_deg=6.0,
+            )
+        )
+
+        pd.testing.assert_frame_equal(conflicting, from_state)
+        for key in ("cumulative_cycle_degradation", "cumulative_calendar_degradation"):
+            assert conflicting_state[key] == state[key]
+        first = from_state.iloc[0]
+        assert first["Cumulative_Cycle_Degradation"] == pytest.approx(0.3 + first["Cycle_Degradation"])
+        assert first["Cumulative_Calendar_Degradation"] == pytest.approx(0.4 + first["Calendar_Degradation"])
 
     def test_native_replacement_resets_the_carried_degradation_split(self):
         idx = pd.date_range("2025-01-01 00:00", periods=24, freq="h", tz="UTC")
