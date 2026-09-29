@@ -173,15 +173,20 @@ def test_a_two_state_grid_interpolates_close_to_the_optimum():
     assert 0.0 <= gap < 1e-3
 
 
-def test_the_planner_adds_no_compiled_signature():
+def test_the_planner_compiles_only_the_production_signature():
+    # Production hands the kernel writable buffer and series arrays (only the
+    # instruction arrays are read-only). Checked on every signature compiled
+    # so far, so the result does not depend on which test compiled it.
     pytest.importorskip("numba")
     from breos._numba_dispatch import _kernel
 
     problem = _problem(2)
-    _priced_run(problem, problem.instructions, execution_backend="numba")
-    signatures = len(_kernel().signatures)
     solve_daily_targets(problem, target_levels=3, soc_states=3, execution_backend="numba")
-    assert len(_kernel().signatures) == signatures
+    signatures = _kernel().signatures
+    assert signatures
+    for signature in signatures:
+        # The buffer matrix, then PV, load and temperature.
+        assert all(argument.mutable for argument in signature[:4]), signature
 
 
 @pytest.mark.parametrize("steps_per_day", [24, 96])
