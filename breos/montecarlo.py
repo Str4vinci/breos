@@ -405,6 +405,15 @@ class MonteCarloYearCache:
         return dict(self._dc_by_year), dict(self._temp_by_year), deepcopy(self._runtime_weather)
 
 
+def _reject_period(cfg: dict[str, Any]) -> None:
+    """Refuse a [period] window, before any weather is loaded or cached."""
+    if cfg.get("period") is not None:
+        raise ValueError(
+            "'period' is not supported with Monte Carlo: each trajectory simulates whole weather years and "
+            "their lifetime economics. Remove 'period', or run the window with breos.App."
+        )
+
+
 def build_year_cache(config: dict[str, Any], settings: MonteCarloSettings) -> MonteCarloYearCache:
     """Prepare the per-year weather and PV inputs once, for many Monte Carlo studies.
 
@@ -421,6 +430,7 @@ def build_year_cache(config: dict[str, Any], settings: MonteCarloSettings) -> Mo
     """
     resolved = resolve_app_config(config)
     cfg = resolved.cfg
+    _reject_period(cfg)
     weather_key = _weather_cache_key(cfg, resolved, settings)
     runtime_weather: dict[str, Any] = {}
     weather_by_year = _load_weather_years(cfg, resolved, settings, runtime_weather=runtime_weather)
@@ -843,11 +853,7 @@ def run_montecarlo(
         raise ValueError("weather_start_year must not be later than weather_end_year")
     if cfg["degradation_engine"] == "blast":
         raise ValueError("degradation_engine='blast' is not supported with Monte Carlo yet")
-    if cfg.get("period") is not None:
-        raise ValueError(
-            "'period' is not supported with Monte Carlo: each trajectory simulates whole weather years and "
-            "their lifetime economics. Remove 'period', or run the window with breos.App."
-        )
+    _reject_period(cfg)
     if cfg["horizon_profile"] is not None:
         raise ValueError(
             "'horizon_profile' is not supported with Monte Carlo weather files yet because their "

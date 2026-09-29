@@ -19,7 +19,7 @@ import pytest
 from breos import App, cli
 from breos.app_config import resolve_app_config
 from breos.app_inputs import input_configuration_key
-from breos.montecarlo import MonteCarloSettings, run_montecarlo
+from breos.montecarlo import MonteCarloSettings, build_year_cache, run_montecarlo
 from breos.optimization_config import resolve_optimization_config
 from tools.generate_app_golden import synthetic_weather
 
@@ -311,6 +311,9 @@ def test_a_window_off_the_weather_step_raises():
 def test_monte_carlo_rejects_a_period(tmp_path):
     with pytest.raises(ValueError, match="'period' is not supported with Monte Carlo"):
         run_montecarlo({**BASE, "period": JUNE_WEEK}, MonteCarloSettings(weather_file=str(tmp_path / "none.csv")))
+    # Also before a year cache loads any weather: the file does not exist.
+    with pytest.raises(ValueError, match="'period' is not supported with Monte Carlo"):
+        build_year_cache({**BASE, "period": JUNE_WEEK}, MonteCarloSettings(weather_file=str(tmp_path / "none.csv")))
 
 
 @pytest.mark.parametrize(
