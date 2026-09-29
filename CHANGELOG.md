@@ -681,16 +681,18 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   Monte Carlo and the optimizer do not call `dc_to_ac` and are unchanged bit
   for bit.
 - `breos.plotting` checks for matplotlib once, when it is imported, and the
-  error says `pip install "breos[plots]"`. Each plot used to check on its own
-  call, with a `uv add matplotlib` hint, and the three payback plots
+  error says `pip install "breos[plots]"`. Each plot used to check on its
+  own call, with a `uv add matplotlib` hint, and the three payback plots
   (`plot_breakeven_distribution`, `plot_breakeven_cdf`,
   `plot_breakeven_summary_bar`) did not check at all. `import breos` still
-  loads no plotting code; without matplotlib, the first use of a plotting
-  name now raises `ImportError`. The plotting module also drops code no
-  BREOS output reaches: a multi-year `Year` axis in the degradation plots,
-  which no degradation frame carries, and a `Savings_Annual` column in
-  `plot_breakeven`, which no cost projection has. Every figure the plotting
-  tests write is byte-identical to before.
+  loads no plotting code. Without matplotlib, `import breos.plotting` raises
+  `ModuleNotFoundError`, and a top-level plotting name such as
+  `breos.plot_co2_savings` raises `AttributeError` with the same hint, so
+  `help(breos)` and `getattr(breos, name, default)` still work. The plotting
+  module also drops code no BREOS output reaches: a multi-year `Year` axis
+  in the degradation plots, which no degradation frame carries, and a
+  `Savings_Annual` column in `plot_breakeven`, which no cost projection has.
+  Every figure the plotting tests write is byte-identical to before.
 
 ### Fixed
 - `calendar_model` is stored as it is validated: trimmed, lower-case, with

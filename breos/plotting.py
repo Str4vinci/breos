@@ -28,7 +28,7 @@ try:
     import matplotlib.pyplot as plt
     from matplotlib.patches import Polygon, Rectangle
 except ImportError as exc:
-    raise ImportError('breos.plotting needs matplotlib. Install it with: pip install "breos[plots]"') from exc
+    raise ModuleNotFoundError('breos.plotting needs matplotlib. Install it with: pip install "breos[plots]"') from exc
 
 
 def _currency(frame: pd.DataFrame) -> str:
@@ -2283,7 +2283,6 @@ def plot_azitilt_landscape_3d(
         results_dir: Output directory.
         filename:    Output filename.
     """
-
     os.makedirs(results_dir, exist_ok=True)
 
     fig = plt.figure(figsize=(12, 9))
