@@ -13,17 +13,10 @@ from typing import Any
 import numpy as np
 
 from breos.degradation.blast import models
-from breos.degradation.profiles import BATTERY_MODEL_REGISTRY, BLAST_STATE_SCHEMA_VERSION, CORE_BLAST_MODEL_KEYS
-from breos.degradation.validation import (
-    BlastAgingHorizonWarning,
-    BlastExperimentalRangeWarning,
-    BlastWarningCollector,
-)
+from breos.degradation.profiles import BATTERY_MODEL_REGISTRY, BLAST_STATE_SCHEMA_VERSION
+from breos.degradation.validation import BlastWarningCollector
 
 BLAST_MODEL_CLASSES = {key: getattr(models, profile.class_name) for key, profile in BATTERY_MODEL_REGISTRY.items()}
-
-# Backwards-compatible internal name used by the replayed Phase 1 tests.
-P1_BLAST_MODEL_KEYS = CORE_BLAST_MODEL_KEYS
 
 
 class BlastNumericalError(RuntimeError):
@@ -191,10 +184,7 @@ class BlastEngine:
             )
 
         engine = cls(blast_model_key, **snapshot.get("model_kwargs", {}))
-        engine._warning_collector = BlastWarningCollector.from_snapshot(
-            blast_model_key,
-            snapshot.get("warnings", []),
-        )
+        engine._warning_collector = BlastWarningCollector(blast_model_key, snapshot.get("warnings", []))
         for group_name in cls._ARRAY_GROUPS:
             group = snapshot[group_name]
             setattr(

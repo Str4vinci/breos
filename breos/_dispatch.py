@@ -706,7 +706,6 @@ def _dispatch_day(
     grid_origin: float,
     nominal_energy_wh: float,
     soh_fraction: float,
-    soh_percent: float,
     max_soc: float,
     min_soc: float,
     standby_loss_per_step_wh: float,
@@ -726,7 +725,7 @@ def _dispatch_day(
     grid_target_fraction: np.ndarray,
     grid_eff: float,
     grid_import_cap_wh: float,
-) -> Tuple[float, float, float, float]:
+) -> None:
     """Dispatch timesteps ``[lo, hi)`` at fixed health, writing rows of *matrix*.
 
     State of health, resistance-derived efficiencies and the replacement
@@ -739,12 +738,10 @@ def _dispatch_day(
     A fraction is of each step's usable window, ``emin + f * (emax - emin)``,
     so the energy it names moves with temperature and health (A7).
 
-    Returns ``(battery_energy, pv_origin, grid_origin,
-    battery_energy_beginning)``, where the last value is the beginning-of-step
-    stored energy of the final step in the window, which the day-close
-    replacement path needs.
+    Nothing is returned: the state the next window and the day-close
+    replacement path need is the final step's row of *matrix*.
     """
-    battery_energy_beginning = 0.0
+    soh_percent = soh_fraction * 100.0
     for i in range(lo, hi):
         # Treat negative model/data artefacts as zero generation, matching the
         # public inverter helper and preventing negative PV from being
@@ -929,7 +926,6 @@ def _dispatch_day(
         matrix[L_GRID_ORIGIN_STANDBY_LOSS, i] = grid_standby_loss / hours_per_step
         matrix[L_GRID_ORIGIN_CAPACITY_WINDOW_LOSS, i] = grid_window_loss / hours_per_step
         matrix[L_GRID_ORIGIN_REPLACEMENT_REMOVED, i] = 0.0
-    return battery_energy, pv_origin, grid_origin, battery_energy_beginning
 
 
 def _day_arguments(
@@ -942,7 +938,6 @@ def _day_arguments(
     *,
     battery_config: "BatteryConfig",
     battery_soh_decimal: float,
-    Battery_SOH: float,
     Battery_Energy_Wh: float,
     Battery_PV_Origin_Energy_Wh: float,
     Battery_Grid_Origin_Energy_Wh: float,
@@ -982,7 +977,6 @@ def _day_arguments(
         float(Battery_Grid_Origin_Energy_Wh),
         float(battery_config.nominal_energy_wh),
         float(battery_soh_decimal),
-        float(Battery_SOH),
         float(battery_config.max_soc),
         float(battery_config.min_soc),
         float(standby_loss_per_step_wh),
@@ -1005,9 +999,9 @@ def _day_arguments(
     )
 
 
-def _dispatch_day_python(out: Any, *args: Any, **state: Any) -> Tuple[float, float, float, float]:
+def _dispatch_day_python(out: Any, *args: Any, **state: Any) -> None:
     """Run :func:`_dispatch_day` as Python; the reference backend.
 
     Takes the arguments of :func:`_day_arguments`.
     """
-    return _dispatch_day(*_day_arguments(out, *args, **state))
+    _dispatch_day(*_day_arguments(out, *args, **state))

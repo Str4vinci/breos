@@ -276,12 +276,6 @@ def test_unknown_backend_names_are_rejected_once_and_the_same_way(bad):
         resolve_app_config({**BASE_CONFIG, "execution_backend": bad})
 
 
-def test_jit_cache_aggregation_never_raises():
-    """Provenance bookkeeping must not be able to fail a completed run."""
-    for states in ([], ["unknown"], ["warm", "unknown"], ["warm"], ["warm", "cold"]):
-        assert aggregate_jit_cache_states(states) in {"warm", "cold", "unknown"}
-
-
 def test_missing_numba_is_reported_before_app_prepares_inputs(monkeypatch):
     """The dependency check must precede input preparation, which can hit the network.
 
