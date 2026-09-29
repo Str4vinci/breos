@@ -7,6 +7,7 @@ runs once. Lifetime economics are None for it; energy covers the window.
 """
 
 import json
+import warnings
 from contextlib import contextmanager
 from datetime import date, datetime
 from unittest import mock
@@ -33,6 +34,13 @@ BASE = {
 }
 JUNE_WEEK = {"start": "2025-06-01", "end": "2025-06-08"}
 LISBON = "Europe/Lisbon"
+TOU = {
+    "schedule": "pt_mainland_2026_daily_bi",
+    "currency": "EUR",
+    "import_prices": {"peak": 0.28, "off_peak": 0.11},
+    "export_prices": {"all": 0.05},
+    "fixed_charge_per_day": 0.25,
+}
 # Every per-step flow of a PV-only run: with no battery state, each step
 # depends on its own inputs only.
 FLOWS = ("PV_DC", "PV_Production", "PV_AC_To_Load", "PV_AC_Export", "PV_DC_Curtailed", "Houseload", "Import_From_Grid")
@@ -201,6 +209,7 @@ def test_the_yearly_row_and_provenance_record_the_window(battery_runs):
         "days": 7,
         "start_time": "2025-06-01T00:00:00+01:00",
         "end_time": "2025-06-08T00:00:00+01:00",
+        "projection_years_used": 1,
     }
     assert result["provenance"]["period"] == window
     assert {key: result["period"][key] for key in window} == window
@@ -331,13 +340,7 @@ def test_revalue_reprices_the_window_and_keeps_lifetime_economics_none(battery_r
 
 
 def test_a_tariff_with_smart_charging_prices_the_window():
-    tariff = {
-        "schedule": "pt_mainland_2026_daily_bi",
-        "currency": "EUR",
-        "import_prices": {"peak": 0.28, "off_peak": 0.11},
-        "export_prices": {"all": 0.05},
-        "fixed_charge_per_day": 0.25,
-    }
+    tariff = TOU
     smart = {
         "mode": "fixed_target",
         "target_usable_fraction": 0.6,
@@ -393,3 +396,118 @@ def test_the_cli_runs_a_toml_period_and_reports_it(tmp_path, capsys):
     assert result["period"]["days"] == 7
     assert result["npv_savings"] is None
     assert result["provenance"]["resolved_config"]["period"] == JUNE_WEEK
+
+
+# (config changes, window start, window end, weather year served). A leap
+# year is served a common-year TMY, which fill_leap_day completes.
+SLICE_CASES = {
+    "15min_june_week": ({"resolution": "15min"}, "2025-06-01", "2025-06-08", 2025),
+    "spring_forward_day": ({}, "2025-03-30", "2025-03-31", 2025),
+    "fall_back_day_15min": ({"resolution": "15min"}, "2025-10-26", "2025-10-27", 2025),
+    "leap_day": ({"start_date": "2024-01-01"}, "2024-02-29", "2024-03-01", 2023),
+    "last_week_to_1_january": ({}, "2025-12-25", "2026-01-01", 2025),
+}
+
+
+@pytest.mark.parametrize("case", list(SLICE_CASES))
+def test_a_pv_only_window_equals_the_full_year_slice(case):
+    changes, start, end, weather_year = SLICE_CASES[case]
+    config = {**BASE, "battery_kwh": 0, **changes}
+    weather = synthetic_weather(weather_year)
+    full = _run({**config, "projection_years": 1}, weather=weather)._artifacts.first_year_results_df
+    window = _run({**config, "period": {"start": start, "end": end}}, weather=weather)._artifacts
+    frame = window.first_year_results_df
+    sliced = _window(full, start, end)
+
+    expected_hours = (pd.Timestamp(end, tz=LISBON) - pd.Timestamp(start, tz=LISBON)) / pd.Timedelta(hours=1)
+    steps_per_hour = 4 if changes.get("resolution") == "15min" else 1
+    assert len(frame) == len(sliced) == expected_hours * steps_per_hour
+    np.testing.assert_array_equal(pd.DatetimeIndex(frame["Datetime"]).asi8, pd.DatetimeIndex(sliced["Datetime"]).asi8)
+    for column in FLOWS:
+        np.testing.assert_array_equal(frame[column].to_numpy(), sliced[column].to_numpy(), err_msg=column)
+
+
+@pytest.mark.parametrize(
+    ("start", "end", "days", "hours"),
+    [
+        # Lisbon springs forward on 30 March, so 1 March to 1 April is 31
+        # civil days but 743 hours.
+        ("2025-03-30", "2025-03-31", 1, 23),
+        ("2025-10-26", "2025-10-27", 1, 25),
+        ("2025-03-01", "2025-04-01", 31, 743),
+    ],
+)
+def test_the_fixed_charge_is_billed_on_the_window_civil_days(start, end, days, hours):
+    app = _run({**BASE, "period": {"start": start, "end": end}})
+    result = app.result()
+
+    assert result["period"]["simulated_hours"] == hours
+    assert result["fixed_charge_year1_prices"] == round(days * app._artifacts.costs["daily_power_cost"], 2)
+    assert app._artifacts.yearly_df["Billed_Days"].iloc[0] == days
+
+
+def test_a_tariff_fixed_charge_is_billed_on_the_window_civil_days():
+    config = {**BASE, "tariff": TOU, "period": {"start": "2025-03-01", "end": "2025-04-01"}}
+    app = _run(config)
+    assert app.result()["fixed_charge_year1_prices"] == round(31 * TOU["fixed_charge_per_day"], 2)
+
+    # A price change re-prices the stored window, billing the same days.
+    with _weather():
+        revalued = app.revalue({"tariff": {"fixed_charge_per_day": 0.5}})
+    assert revalued["provenance"]["revaluation"]["method"] == "repriced"
+    assert revalued["fixed_charge_year1_prices"] == 15.5
+
+
+def test_revalue_that_adds_a_tariff_simulates_the_window_again(battery_runs):
+    _full, week = battery_runs
+    with _weather():
+        revalued = week.revalue({"tariff": TOU})
+    fresh = _run({**BASE, "battery_kwh": 5, "period": JUNE_WEEK, "tariff": TOU}).result()
+
+    assert revalued["provenance"]["revaluation"]["method"] == "resimulated"
+    del revalued["provenance"]["revaluation"]
+    for result in (revalued, fresh):
+        del result["provenance"]["execution"]
+    assert revalued == fresh
+    assert revalued["npv_savings"] is None
+    assert revalued["period"]["days"] == 7
+
+
+def test_an_explicit_projection_years_is_ignored_with_a_warning():
+    with pytest.warns(UserWarning, match=r"'projection_years' \(25\) is ignored"):
+        app = _run({**BASE, "projection_years": 25, "period": JUNE_WEEK})
+    assert app.result()["period"]["projection_years_used"] == 1
+    assert len(app.result()["yearly"]) == 1
+
+    # Left at its default, it is ignored silently.
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        App({**BASE, "period": JUNE_WEEK})
+        App({**BASE, "projection_years": 25})
+
+
+def test_the_config_summary_lists_the_period_only_when_set():
+    assert "period" not in cli._resolved_config_summary(BASE)["simulation"]
+    assert cli._resolved_config_summary({**BASE, "period": JUNE_WEEK})["simulation"]["period"] == JUNE_WEEK
+
+
+@pytest.mark.parametrize(
+    ("location", "period", "missing"),
+    [
+        (
+            {"latitude": 52.52, "longitude": 13.405, "timezone": "Europe/Berlin"},
+            {"start": "2025-01-01", "end": "2025-01-08"},
+            r"the leading 0 days 01:00:00 \(1 steps\)",
+        ),
+        (
+            {"latitude": 40.71, "longitude": -74.01, "timezone": "America/New_York"},
+            {"start": "2025-12-25", "end": "2026-01-01"},
+            r"the trailing 0 days 05:00:00 \(5 steps\)",
+        ),
+    ],
+    ids=["berlin_1_january", "new_york_31_december"],
+)
+def test_utc_year_weather_cannot_serve_a_window_at_the_civil_year_edge(location, period, missing):
+    # The synthetic year covers one UTC year, as an Open-Meteo file does.
+    with pytest.raises(ValueError, match=missing):
+        _run({**BASE, "location": location, "period": period})

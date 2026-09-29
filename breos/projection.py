@@ -359,12 +359,33 @@ def _fixed_charge(tariff: ResolvedTariff, simulated_hours: float) -> float:
     return tariff.prices.fixed_charge_per_day * (simulated_hours / 24)
 
 
+def _billed_fixed_charge(tariff: ResolvedTariff, row: pd.Series) -> float:
+    # A [period] row bills its civil days (Billed_Days), whatever DST does to
+    # its hours; any other row bills its simulated duration.
+    billed_days = row.get("Billed_Days")
+    if billed_days is not None and not pd.isna(billed_days):
+        return tariff.prices.fixed_charge_per_day * float(billed_days)
+    return _fixed_charge(tariff, row["Simulated_Hours"])
+
+
 def _tariff_money(
-    tariff: ResolvedTariff, weighted_w: Mapping[str, float], hours_per_step: float, n_steps: int
+    tariff: ResolvedTariff,
+    weighted_w: Mapping[str, float],
+    hours_per_step: float,
+    n_steps: int,
+    billed_days: float | None = None,
 ) -> dict[str, float]:
-    """A year's money at year-1 prices from its price-weighted power sums."""
+    """A year's money at year-1 prices from its price-weighted power sums.
+
+    The fixed charge is billed on ``billed_days`` when given (a [period]
+    window's civil days), otherwise on the simulated duration.
+    """
     money = {name: float(weighted_w[name] * hours_per_step / 1000) for name in _PRICED_FLOWS}
-    money["Fixed_Charge"] = _fixed_charge(tariff, n_steps * hours_per_step)
+    money["Fixed_Charge"] = (
+        tariff.prices.fixed_charge_per_day * billed_days
+        if billed_days is not None
+        else _fixed_charge(tariff, n_steps * hours_per_step)
+    )
     return money
 
 
@@ -395,7 +416,7 @@ def reprice_tariff_year_rows(
         for period, price in prices[kind].items():
             total = total + period_energy[_period_energy_name(money_column, period)].to_numpy(dtype=float) * price
         repriced[money_column] = total
-    repriced["Fixed_Charge"] = [_fixed_charge(tariff, hours) for hours in repriced["Simulated_Hours"]]
+    repriced["Fixed_Charge"] = [_billed_fixed_charge(tariff, row) for _, row in repriced.iterrows()]
     return repriced
 
 
@@ -577,7 +598,11 @@ def project_years(
                 pv_degradation_factor=year.pv_degradation_factor,
                 annual_fec=annual_fec,
                 extra=year.extra,
-                money=_tariff_money(tariff, weighted_w, hours_per_step, n_steps) if tariff is not None else None,
+                money=(
+                    _tariff_money(tariff, weighted_w, hours_per_step, n_steps, year.extra.get("Billed_Days"))
+                    if tariff is not None
+                    else None
+                ),
             )
         )
         if record_period_energy:

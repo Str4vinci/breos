@@ -995,6 +995,11 @@ class SimulationPeriod:
         """The instant the window ends, local midnight of ``end``; not simulated."""
         return _local_midnight(self.end, self.timezone)
 
+    @property
+    def days(self) -> int:
+        """Civil days in the window, which the fixed charge is billed on."""
+        return (self.end - self.start).days
+
     def record(self) -> dict[str, Any]:
         """A JSON-safe description of the window, for results and provenance."""
         return {
@@ -1002,9 +1007,11 @@ class SimulationPeriod:
             "end": self.end.isoformat(),
             "end_exclusive": True,
             "timezone": self.timezone,
-            "days": (self.end - self.start).days,
+            "days": self.days,
             "start_time": self.start_time.isoformat(),
             "end_time": self.end_time.isoformat(),
+            # The window runs once, whatever projection_years says.
+            "projection_years_used": 1,
         }
 
 

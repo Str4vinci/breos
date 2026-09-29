@@ -370,6 +370,10 @@ def run_app_simulation(
     projection_years = cfg["projection_years"] if period is None else 1
     degradation_rate = cfg["pv_degradation_rate"]
 
+    # A window bills the fixed charge on its civil days: a DST day has 23 or
+    # 25 hours but is one day of the tariff.
+    extra = {"Billed_Days": float(period.days)} if period is not None else {}
+
     def year_inputs(year_idx: int) -> ProjectionYear:
         pv_degradation_factor = (1 - degradation_rate) ** year_idx
         return ProjectionYear(
@@ -377,6 +381,7 @@ def run_app_simulation(
             pv_dc=inputs.dc_system_base * pv_degradation_factor,
             houseload=inputs.load_data,
             temperature_series=inputs.temperature_series,
+            extra=extra,
         )
 
     # Every project year replays the start-year calendar (ADR 0002 A2), so the
