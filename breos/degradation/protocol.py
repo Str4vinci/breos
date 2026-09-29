@@ -304,8 +304,6 @@ class NativeDegradationAdapter:
         initial_soh_fraction: float,
         initial_fec: float,
         initial_calendar_seconds: float,
-        initial_cumulative_cycle_degradation: float,
-        initial_cumulative_calendar_degradation: float,
         nominal_energy_wh: float,
         battery_type: str,
         k0_fraction: float,
@@ -321,8 +319,6 @@ class NativeDegradationAdapter:
         self._soh = float(initial_soh_fraction)
         self._fec = float(initial_fec)
         self._calendar_seconds = float(initial_calendar_seconds)
-        self._cumulative_cycle_degradation = float(initial_cumulative_cycle_degradation)
-        self._cumulative_calendar_degradation = float(initial_cumulative_calendar_degradation)
         self._nominal_energy_wh = float(nominal_energy_wh)
         self._battery_type = battery_type
         self._k0_fraction = float(k0_fraction)
@@ -356,8 +352,6 @@ class NativeDegradationAdapter:
             mean_soc_absolute=day.mean_soc,
             debug=self._debug,
         )
-        self._cumulative_cycle_degradation += cycle_degradation
-        self._cumulative_calendar_degradation += calendar_degradation
         return DegradationStep(
             soh_fraction=self._soh,
             fec=self._fec,
@@ -378,7 +372,6 @@ class NativeDegradationAdapter:
             battery_type=self._battery_type,
             debug=self._debug,
         )
-        self._cumulative_cycle_degradation += cycle_degradation
         return DegradationStep(
             soh_fraction=self._soh,
             fec=self._fec,
@@ -395,8 +388,6 @@ class NativeDegradationAdapter:
         self._soh = 1.0
         self._fec = 0.0
         self._calendar_seconds = 0.0
-        self._cumulative_cycle_degradation = 0.0
-        self._cumulative_calendar_degradation = 0.0
         self._rainflow.reset()
 
     def snapshot(self, *, day_start_soc: float, day_start_temperature_c: float) -> dict[str, Any]:
@@ -405,8 +396,6 @@ class NativeDegradationAdapter:
             "soh_fraction": self._soh,
             "fec_cum": self._fec,
             "cumulative_calendar_seconds": self._calendar_seconds,
-            "cumulative_cycle_degradation": self._cumulative_cycle_degradation,
-            "cumulative_calendar_degradation": self._cumulative_calendar_degradation,
             "native_rainflow_state": self._rainflow.snapshot(),
             "day_start_soc_absolute": float(day_start_soc),
             "day_start_temperature_c": float(day_start_temperature_c),
@@ -433,8 +422,6 @@ class BlastDegradationAdapter:
         initial_state: Mapping[str, Any] | None = None,
         initial_fec: float = 0.0,
         initial_calendar_seconds: float = 0.0,
-        initial_cumulative_cycle_degradation: float = 0.0,
-        initial_cumulative_calendar_degradation: float = 0.0,
     ) -> None:
         from breos.degradation.engine import BlastEngine, build_endpoint_day
 
@@ -448,8 +435,6 @@ class BlastDegradationAdapter:
         self._soh = self._engine.soh()
         self._fec = float(initial_fec)
         self._calendar_seconds = float(initial_calendar_seconds)
-        self._cumulative_cycle_degradation = float(initial_cumulative_cycle_degradation)
-        self._cumulative_calendar_degradation = float(initial_cumulative_calendar_degradation)
 
     def step(self, day: DegradationDay) -> DegradationStep:
         previous_soh = self._soh
@@ -492,16 +477,12 @@ class BlastDegradationAdapter:
         self._soh = 1.0
         self._fec = 0.0
         self._calendar_seconds = 0.0
-        self._cumulative_cycle_degradation = 0.0
-        self._cumulative_calendar_degradation = 0.0
 
     def snapshot(self, *, day_start_soc: float, day_start_temperature_c: float) -> dict[str, Any]:
         return {
             "degradation_engine": "blast",
             "fec_cum": self._fec,
             "cumulative_calendar_seconds": self._calendar_seconds,
-            "cumulative_cycle_degradation": self._cumulative_cycle_degradation,
-            "cumulative_calendar_degradation": self._cumulative_calendar_degradation,
             "blast_model": self.model_key,
             "blast_engine": self._engine.state_snapshot(),
             "day_start_soc_absolute": float(day_start_soc),

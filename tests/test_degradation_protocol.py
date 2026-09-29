@@ -43,8 +43,6 @@ def test_native_adapter_implements_lifecycle_contract_and_snapshot_shape():
         initial_soh_fraction=1.0,
         initial_fec=2.0,
         initial_calendar_seconds=86400.0,
-        initial_cumulative_cycle_degradation=0.1,
-        initial_cumulative_calendar_degradation=0.2,
         nominal_energy_wh=5000.0,
         battery_type="lfp",
         k0_fraction=1.0,
@@ -71,8 +69,9 @@ def test_native_adapter_implements_lifecycle_contract_and_snapshot_shape():
     assert snapshot["soh_fraction"] == pytest.approx(0.97)
     assert snapshot["fec_cum"] == pytest.approx(2.8)
     assert snapshot["cumulative_calendar_seconds"] == pytest.approx(172800.0)
-    assert snapshot["cumulative_cycle_degradation"] == pytest.approx(0.11)
-    assert snapshot["cumulative_calendar_degradation"] == pytest.approx(0.22)
+    # The cycle/calendar split is a per-step increment; the energy loop owns the running total.
+    assert "cumulative_cycle_degradation" not in snapshot
+    assert "cumulative_calendar_degradation" not in snapshot
     assert snapshot["native_rainflow_state"]["residue"] == []
     assert snapshot["day_start_soc_absolute"] == pytest.approx(0.1)
 
@@ -101,8 +100,6 @@ def test_native_rainflow_stream_matches_nested_cross_midnight_whole_trace():
         "initial_soh_fraction": 1.0,
         "initial_fec": 0.0,
         "initial_calendar_seconds": 0.0,
-        "initial_cumulative_cycle_degradation": 0.0,
-        "initial_cumulative_calendar_degradation": 0.0,
         "nominal_energy_wh": 5000.0,
         "battery_type": "lfp",
         "k0_fraction": 1.0,
@@ -215,8 +212,6 @@ def test_blast_adapter_implements_lifecycle_restore_warning_and_reset_contract()
         initial_state=snapshot,
         initial_fec=snapshot["fec_cum"],
         initial_calendar_seconds=snapshot["cumulative_calendar_seconds"],
-        initial_cumulative_cycle_degradation=snapshot["cumulative_cycle_degradation"],
-        initial_cumulative_calendar_degradation=snapshot["cumulative_calendar_degradation"],
     )
     assert restored.soh() == pytest.approx(adapter.soh())
     assert restored.warnings() == adapter.warnings()
