@@ -1218,10 +1218,10 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   can no longer be named by `pv.module` or `pv_module` too, which was ignored.
   Values the optimizer used to coerce or clamp now raise: a numeric string
   for `constraints.max_tilt_deg`, a whole-number key given as a fraction,
-  `early_stop.period`, `min_gen` below 1 or `n_skip` below 0, a negative cost,
-  a non-boolean `battery.enable_replacement` or `constraints.enforce_zeb`, a
-  maximum tilt below `constraints.min_tilt_deg`, and an empty `[tariff]` or
-  `[smart_charging]` table. `evaluate_projected_design` now refuses
+  `early_stop.period`, `min_gen` below 1 or `n_skip` below 0, a string
+  `early_stop.ftol`, a negative cost, a non-boolean
+  `battery.enable_replacement` or `constraints.enforce_zeb`, and a maximum
+  tilt below `constraints.min_tilt_deg`. `evaluate_projected_design` now refuses
   `optimization.objective_basis = "steady_state"`, as the search does.
 - Replacement money left the physics layer (ADR 0003 E4,
   [#183](https://github.com/Str4vinci/breos/issues/183)).
