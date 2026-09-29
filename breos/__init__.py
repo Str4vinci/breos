@@ -148,6 +148,8 @@ from breos.load_profiles import (
 from breos.montecarlo import (
     MonteCarloResult,
     MonteCarloSettings,
+    MonteCarloYearCache,
+    build_year_cache,
     run_montecarlo,
 )
 
@@ -330,8 +332,10 @@ __all__ = [
     "ProjectedDesignResult",
     # Monte Carlo
     "run_montecarlo",
+    "build_year_cache",
     "MonteCarloSettings",
     "MonteCarloResult",
+    "MonteCarloYearCache",
     # I/O
     "export_results",
     "export_summary",
