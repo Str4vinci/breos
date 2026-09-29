@@ -140,17 +140,14 @@ def test_the_load_is_the_window_share_of_the_scaled_year(pv_only_runs):
     assert week.result()["consumption_kwh"] < 4000 * 8 / 365
 
     # The window's load is the day-type-aligned H0 year sliced, not a
-    # positional copy of the 2023 source: Sunday 1 June 2025 carries the
-    # source Sunday 4 June 2023 (#298).
+    # positional copy of the 2023 source (#298); test_load_profiles pins
+    # which source day each target day takes.
     load = load_profile("demandlib_h0", 4000, start_date="2025-01-01", freq="h", timezone=LISBON).iloc[:, 0]
     houseload = week._artifacts.first_year_results_df["Houseload"].to_numpy()
     window = (load.index >= pd.Timestamp("2025-06-01", tz=LISBON)) & (
         load.index < pd.Timestamp("2025-06-08", tz=LISBON)
     )
     np.testing.assert_array_equal(houseload, load[window].to_numpy())
-    source = load_profile("demandlib_h0", 4000, start_date="2023-01-01", freq="h", timezone=LISBON).iloc[:, 0]
-    ratio = houseload[:24] / source.loc["2023-06-04"].to_numpy()
-    np.testing.assert_allclose(ratio, ratio[0], rtol=1e-12)
 
 
 @pytest.mark.parametrize(

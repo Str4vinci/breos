@@ -14,7 +14,7 @@ matches each target day to the nearest source day of the same H0 type:
 weekday, Saturday, or Sunday. It searches across the year boundary and uses
 28 February as the seasonal anchor for 29 February, then selects a source day
 of the leap day's actual type. A selected shape can be up to four calendar
-days from the target's month and day. On two to six days a year, that
+days from the target's month and day. On up to six days a year, that
 source day falls in the neighbouring demandlib season: for example, 21 and
 22 March 2026 get winter shapes, and 14 May 2025 gets a summer shape. BREOS
 scales the resulting profile to the requested annual consumption after
