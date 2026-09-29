@@ -24,17 +24,15 @@ Usage:
 """
 
 # Version — resolved from the installed package metadata so it always matches
-# the version declared in pyproject.toml (the single source of truth). This is
-# the same mechanism used by breos/cli.py and docs/conf.py, which keeps the
-# literal from drifting out of sync with the distribution version on a release.
+# the version declared in pyproject.toml (the single source of truth). The CLI
+# and result provenance read the same helper, and docs/conf.py the same
+# metadata, which keeps the literal from drifting out of sync with the
+# distribution version on a release.
 from importlib import import_module
-from importlib.metadata import PackageNotFoundError
-from importlib.metadata import version as _version
 
-try:
-    __version__ = _version("breos")
-except PackageNotFoundError:  # running from a source tree without an install
-    __version__ = "0.0.0+unknown"
+from breos.utils import package_version as _package_version
+
+__version__ = _package_version()
 
 # Public facade
 from breos.app import App

@@ -902,6 +902,26 @@ class TestAppSimulateNoBattery:
         assert result["provenance"]["degradation"] == degradation
         assert result["provenance"]["degradation"] is degradation
 
+    @pytest.mark.parametrize("spelling", ["Naumann-Lam", " naumann_lam "])
+    def test_native_result_reports_the_normalised_calendar_model(self, spelling):
+        # Validation accepted spellings that the result then reported as
+        # given, or that the aging model could not look up (surrounding spaces).
+        app = App(
+            {
+                "location": "porto",
+                "n_modules": 6,
+                "annual_consumption_kwh": 3000,
+                "battery_kwh": 5.0,
+                "projection_years": 1,
+                "calendar_model": spelling,
+            }
+        )
+        app.simulate()
+        result = app.result()
+
+        assert result["degradation"]["model_key"] == "naumann_lam"
+        assert result["provenance"]["resolved_config"]["calendar_model"] == "naumann_lam"
+
     def test_investment_positive(self):
         assert self.result["total_investment"] > 0
 

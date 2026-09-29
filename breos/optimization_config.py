@@ -26,6 +26,7 @@ from breos.app_config import (
     INDOOR_MODEL_TABLE,
     SMART_CHARGING_TABLE,
     TARIFF_TABLE,
+    check_calendar_model,
     default_module_key,
 )
 from breos.config_schema import (
@@ -208,11 +209,12 @@ BATTERY_TABLE = TableSpec(
                 "max_discharge_power_w",
                 "power_limit_c_rate",
                 "dc_coupled",
-                "calendar_model",
                 "enable_resistance_fade",
             ),
             anything,
         ),
+        # Stored normalised, as App stores its top-level calendar_model.
+        "calendar_model": check_calendar_model,
         # Read by the battery temperature builder, which checks it.
         "temperature": anything,
         "indoor_model": _optional(table(INDOOR_MODEL_TABLE)),
