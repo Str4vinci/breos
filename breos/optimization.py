@@ -921,7 +921,10 @@ def _snap_to_grid_within_bounds(values: np.ndarray, step: float, lower: float, u
     return np.clip(np.round(values / step) * step, lowest, highest)
 
 
-# Only import pymoo if this module is used for full optimization to avoid overhead
+# pymoo is optional, so these classes exist only when it is installed; without
+# it optimize_system_multi_objective raises ImportError. They subclass pymoo
+# types at module level so an optimizer result that stores them pickles, which
+# means ``import breos`` imports pymoo whenever it is installed.
 try:
     from pymoo.core.problem import ElementwiseProblem
     from pymoo.core.repair import Repair

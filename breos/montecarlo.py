@@ -26,7 +26,6 @@ import multiprocessing
 import os
 from copy import deepcopy
 from dataclasses import asdict, dataclass, field, replace
-from importlib.metadata import PackageNotFoundError, version
 from multiprocessing import Pool
 from typing import Any, cast
 
@@ -60,6 +59,7 @@ from breos.pv.model_options import DEFAULT_SOLAR_POSITION, resolve_solar_positio
 from breos.result_schema import RESULT_SCHEMA_VERSION
 from breos.smart_charging import resolve_instructions, smart_charging_provenance
 from breos.tariffs import ResolvedTariff, result_currency, tariff_provenance
+from breos.utils import package_version
 from breos.weather import (
     _weather_file_sha256,
     _weather_metadata_sidecar_path,
@@ -935,10 +935,6 @@ def run_montecarlo(
     # Plot labels read the currency from the frame.
     runs_df.attrs["currency"] = currency
     yearly_df = pd.concat(yearly_frames, ignore_index=True) if yearly_frames else None
-    try:
-        breos_version = version("breos")
-    except PackageNotFoundError:
-        breos_version = "unknown"
     return MonteCarloResult(
         runs=runs_df,
         summary=_summarize(runs_df),
@@ -946,7 +942,7 @@ def run_montecarlo(
         available_years=[int(y) for y in available_years],
         yearly=yearly_df,
         provenance={
-            "breos_version": breos_version,
+            "breos_version": package_version(),
             "result_schema_version": RESULT_SCHEMA_VERSION,
             # Every money column and summary is in this currency; BREOS does not convert.
             "currency": currency,
