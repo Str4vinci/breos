@@ -20,11 +20,13 @@ lists every rename). Version `"1.1"` adds the
 [year-1 money keys](#year-1-money-keys), `"1.2"` adds `provenance.economics`
 ([Economic conventions](#economic-conventions)), `"1.3"` adds
 `Replaced_Capacity_kWh` to the year rows of Monte Carlo trajectories and
-optimizer tables, and `"1.4"`, which 0.7.0 reports, adds
-`provenance.revaluation` to the results of
+optimizer tables, `"1.4"` adds `provenance.revaluation` to the results of
 [`App.revalue`](recipes.md#revalue-a-run-at-other-prices) and the export CO2
 columns (`CO2_Avoided_Export_kg`, `CO2_Avoided_Export_Cumulative_kg`) to the
-cost projection and Monte Carlo trajectories.
+cost projection and Monte Carlo trajectories, and `"1.5"`, which 0.7.0
+reports, adds `constraints` and `run_settings` to the optimizer's provenance
+and the `Projected_CO2_*` columns to the Pareto rows of a search with
+`[emissions]`.
 A renamed or removed key bumps the
 major version, an added key the minor. A result without the key predates 1.0.
 

@@ -57,7 +57,40 @@ ZEB remains a reported diagnostic in projected mode. Set
 `constraints.enforce_zeb = true` to require a projected lifetime ZEB ratio of
 at least one; this adds a feasibility constraint, not a third objective.
 
-Multi-objective sizing accepts these explicit constraint keys:
+### Configuration keys
+
+`breos.optimization_config.resolve_optimization_config` checks the nested
+config once, before any candidate is scored, and fills in every default by
+name. Every table takes a fixed set of keys, and an unknown key raises, so a
+misspelt key cannot be ignored. The weather and load are not config keys: the
+call takes them as DataFrames.
+
+| Table | Keys (default) |
+| --- | --- |
+| `location` | `latitude`, `longitude` (required); `timezone` (`"UTC"`); `altitude` (looked up from the coordinates); `name` (`""`) |
+| `pv` | `module` (the App's default module); `params` (an inline module: `Mpp`, `Vmp`, `Imp`, `Voc`, `Isc` required; temperature coefficients, `N_Cells` and `celltype` optional); `dimensions` or `module_width_m` and `module_length_m` (1.134 × 2.278 m); `degradation_rate` (0.005, or `financials.pv_degradation_rate`) |
+| `battery` | the `BatteryConfig` keys `battery_type`, `min_soc`, `max_soc`, `charge_efficiency`, `discharge_efficiency`, `standby_loss_wh`, `eol_percentage`, `max_charge_power_w`, `max_discharge_power_w`, `power_limit_c_rate`, `dc_coupled`, `calendar_model`, `enable_resistance_fade` (the App's defaults); `temperature` (`"weather"`); `indoor_model` (the App's `battery_indoor_model` table); `degradation_engine` (`"native"`); `blast_model`; `replacement_cost` (storage cost per kWh times capacity); `enable_replacement` (`true`); `initial_soh` (100) |
+| `costs` | the App's `costs` keys, plus `dc_ac_ratio` (1.25), the DC peak over the inverter AC rating |
+| `financials` | `inflation_rate` (0.02), `sell_price_inflation` (0), `import_price_escalation`, `om_escalation`, `replacement_cost_learning`, `discount_rate` (0.03), `project_lifespan`, `pv_degradation_rate`, and the flat-price fallbacks `electricity_cost` and `electricity_sold_cost` |
+| `constraints` | see below |
+| `mode` | `fixed_azimuth` (none: azimuth is searched, 90–270° in the north, −90–90° in the south) |
+| `optimization` | `algorithm` (`"nsga2"`, the only one); `objective_basis` (`"projected"`); `early_stop` (off; a table takes `enabled`, `ftol` 0.0025, `period` 10, `n_skip` 0, `min_gen` min(20, `n_gen`), `only_feasible` `true`); `pop_size` (40), `n_gen` (100), `n_offsprings` (pymoo's), `seed` (1) |
+| `simulation` | `resolution` (`"h"` or `"15min"`); `years_projection` (20, or `financials.project_lifespan`) |
+| `inverter` | `efficiency`, used when the top-level `inverter_efficiency` (0.96) is not set |
+| `emissions` | the `EmissionsParams` fields; the search then reports `Projected_CO2_*` for every Pareto row |
+| `tariff`, `smart_charging` | the App's tables |
+| top level | `pv_module`, `inverter_efficiency`, `dc_output_scale` (1), `ac_output_scale` (1), and the App's PV model keys (`transposition_model`, `albedo`, `iam_model`, ...) |
+
+Where two keys set one thing, the first one set wins:
+`simulation.years_projection` over `financials.project_lifespan`,
+`pv.degradation_rate` over `financials.pv_degradation_rate`,
+`inverter_efficiency` over `inverter.efficiency`, and `pv.module` over
+`pv_module`. `optimize_system_multi_objective` takes `pop_size`, `n_gen`,
+`n_offsprings` and `seed` as arguments too; an argument and its
+`[optimization]` key that disagree raise. The optimizer never reads
+`execution_backend` from the config: pass it to the function.
+
+The search bounds:
 
 | Key | Default | Meaning |
 | --- | ---: | --- |
@@ -65,12 +98,16 @@ Multi-objective sizing accepts these explicit constraint keys:
 | `constraints.max_area_m2` | 20 | Maximum PV-module frame area in m² |
 | `constraints.max_battery_kwh` | 30 | Maximum battery decision-variable value in kWh |
 | `constraints.max_modules` | 60 | Maximum PV-module decision-variable value |
+| `constraints.min_tilt_deg` | 10 | Minimum tilt in degrees |
 | `constraints.max_tilt_deg` | 90 | Maximum tilt, or `"adjust"` for the latitude-based bound |
+| `constraints.tilt_margin_deg` | 15 | Margin over the latitude for `"adjust"`: 5° × round((\|latitude\| + margin) / 5), between 60 and 90 |
 | `constraints.enforce_zeb` | `false` | Add the ZEB feasibility constraint |
 
 Set the physical and financial limits explicitly for any study you intend to
 report. The defaults preserve earlier direct-API behavior; they are not
-site-specific recommendations.
+site-specific recommendations. The search records the bounds it used,
+defaults included, in `details["provenance"]["constraints"]`, and its run
+settings in `details["provenance"]["run_settings"]`.
 
 Results expose `Projected_*` diagnostics. The ordinary `Grid_Independence_%`
 and `NPV` columns equal `Projected_Grid_Independence_%` and
@@ -117,6 +154,7 @@ release, not from a later version.
 
    breos.optimization.optimize_system_multi_objective
    breos.optimization.evaluate_projected_design
+   breos.optimization_config.resolve_optimization_config
 ```
 
 ## Battery sizing

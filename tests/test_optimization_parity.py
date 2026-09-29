@@ -319,7 +319,6 @@ def test_projected_optimizer_candidate_matches_app(open_meteo_weather, monkeypat
         "battery": {"temperature": 20.0, "indoor_model": {"enabled": False}},
         "costs": COSTS_CONFIG,
         "financials": financials,
-        "execution_backend": "python",
     }
     optimized = optimize_system_multi_objective(
         weather,

@@ -5,6 +5,26 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 ## [Unreleased]
 
 ### Added
+- The optimization config is checked and defaulted once, by
+  `breos.optimization_config.resolve_optimization_config`
+  ([#181](https://github.com/Str4vinci/breos/issues/181),
+  [#162](https://github.com/Str4vinci/breos/issues/162)).
+  `optimize_system_multi_objective`, `SolarDesignProblem` and
+  `evaluate_projected_design` resolve their config before any candidate is
+  scored. Every table takes a fixed set of keys, and an unknown key raises
+  instead of being ignored. Every default is named in one place:
+  `constraints.budget` 10,000, `max_area_m2` 20, `max_modules` 60,
+  `max_battery_kwh` 30, and the tilt floor, now the key
+  `constraints.min_tilt_deg` (10°). The settings the App shares (the tariff,
+  smart-charging, cost and indoor-model tables, the projection horizon, PV
+  degradation, inverter efficiency and the default module) default as the
+  App's do. The search records its resolved `constraints` and
+  `run_settings` in `details["provenance"]`. `optimize_system_multi_objective`
+  now reads `pop_size`, `n_gen`, `n_offsprings` and `seed` from
+  `[optimization]` when they are not passed; an argument that disagrees with
+  its key raises. `[emissions]` now reaches the search, so every Pareto row
+  of a search with emissions carries `Projected_CO2_*`. Result schema 1.5.
+  No number changes for a config the optimizer accepts.
 - `App.revalue(changes)` values a finished run at other prices
   ([#183](https://github.com/Str4vinci/breos/issues/183)). It accepts the
   economics keys only (`costs`, `cost_preset`, `tariff`, `discount_rate`,
@@ -1177,6 +1197,14 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   unchanged.
 
 ### Removed
+- Optimization config keys that nothing read now raise
+  ([#181](https://github.com/Str4vinci/breos/issues/181)): `[load]`,
+  `simulation.weather_file`, `simulation.irradiance_resampling`, the
+  top-level `name` and `execution_backend` (pass `execution_backend` to the
+  function), and the undocumented `[pv_specs]` table, which duplicated
+  `pv.params`. The example `configs/optimization/projected-optimization.toml`
+  drops them. An inline module in `pv.params` must state `Mpp`, `Vmp`, `Imp`,
+  `Voc` and `Isc`; they used to default to one 550 W module's values.
 - Replacement money left the physics layer (ADR 0003 E4,
   [#183](https://github.com/Str4vinci/breos/issues/183)).
   `BatteryConfig.replacement_cost` is removed, and `BatteryConfig` no longer

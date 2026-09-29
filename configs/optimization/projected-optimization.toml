@@ -16,8 +16,11 @@
 #
 # There is no n_modules or battery_kwh here on purpose. The optimizer searches
 # for them within the [constraints] bounds.
+#
+# Every table takes a fixed set of keys, and an unknown key raises. A key left
+# out takes the default docs/api/optimization.md lists. The weather and load
+# are not config keys: the call takes them as DataFrames.
 
-name = "Projected-lifetime sizing example"
 inverter_efficiency = 0.96
 
 [location]
@@ -25,12 +28,6 @@ latitude = 41.1579
 longitude = -8.6291
 timezone = "Europe/Lisbon"
 name = "Porto, Portugal"
-
-[load]
-# "demandlib_h0" is the bundled H0 household profile. External profiles need a
-# licensed CSV and an rlp_directory; see examples/external-rlp.toml.
-profile_type = "demandlib_h0"
-annual_consumption_kwh = 4000.0
 
 [pv]
 module = "Suntech_STP550S_STC"   # `breos list modules` shows the catalogue
@@ -59,6 +56,8 @@ pop_size = 40
 n_offsprings = 20
 n_gen = 40
 seed = 1                         # fix this; NSGA-II is stochastic
+# optimize_system_multi_objective reads the four settings above unless you pass
+# them as arguments; an argument that disagrees with its key raises.
 
 [optimization.early_stop]
 ftol = 0.0025
@@ -71,6 +70,7 @@ budget = 15000.0
 max_area_m2 = 25.0
 max_modules = 20
 max_battery_kwh = 30.0
+min_tilt_deg = 10.0              # lower tilt bound, degrees
 max_tilt_deg = "adjust"          # or a number in degrees
 enforce_zeb = false              # true makes the ZEB ratio a hard constraint
 
@@ -97,10 +97,8 @@ sell_price_inflation = 0.0
 # import_price_escalation = 0.03  # import energy and the fixed charge
 # om_escalation = 0.02            # O&M
 # replacement_cost_learning = 0.0 # annual fall in the replacement price
-project_lifespan = 20
-pv_degradation_rate = 0.005
 
-[emissions]
+[emissions]                      # adds Projected_CO2_* to every Pareto row
 country = "Portugal"
 average_grid_carbon_intensity_gco2_kwh = 127.91
 source = "Ember Climate, Europe Yearly Full Release"
@@ -109,7 +107,3 @@ year = 2025
 [simulation]
 resolution = "h"                 # "15min" is four times slower
 years_projection = 20
-# BREOS ships no weather data. Point this at your own TMY or historical CSV.
-# The conventional location is a local weather/ directory, which is git-ignored.
-weather_file = "weather/porto_tmy_2005_2023_pvgis-sarah3.csv"
-irradiance_resampling = "clear_sky_energy_conserving"   # only used at 15min

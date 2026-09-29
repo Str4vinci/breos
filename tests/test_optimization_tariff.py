@@ -57,7 +57,7 @@ def test_optimizer_provenance_records_the_schema_version_and_currency(tariff_cas
 
     for case in (tariff_case, (weather, load, flat)):
         provenance = evaluate(case).provenance
-        assert provenance["result_schema_version"] == "1.4"
+        assert provenance["result_schema_version"] == "1.5"
         assert provenance["currency"] == "EUR"
     assert "tariff" not in evaluate((weather, load, flat)).provenance
 
@@ -326,3 +326,20 @@ def test_three_year_tariff_design_reproduces_through_app(
             ("cost_replacement", "Cost_Replacement"),
         ):
             assert app_row[app_key] == pytest.approx(opt_row[column], abs=0.0051, rel=0)
+
+
+def test_search_records_its_resolved_bounds_and_scores_emissions(tariff_case):
+    pytest.importorskip("pymoo")
+    weather, load, config = tariff_case
+    config = {
+        **config,
+        "optimization": {"pop_size": 4, "seed": 42},
+        "emissions": {"average_grid_carbon_intensity_gco2_kwh": 150.0},
+    }
+    result = optimization.optimize_system_multi_objective(weather, load, config, n_gen=1)
+    provenance = result.details["provenance"]
+    assert provenance["run_settings"] == {"pop_size": 4, "n_gen": 1, "n_offsprings": None, "seed": 42}
+    assert provenance["constraints"]["min_tilt_deg"] == 10.0
+    assert provenance["constraints"]["max_modules"] == 60
+    # [emissions] reaches the search, not only the fixed-design evaluator.
+    assert result.details["pareto"]["Projected_CO2_Avoided_Total_kg"].gt(0).all()
