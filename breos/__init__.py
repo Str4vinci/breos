@@ -29,6 +29,7 @@ Usage:
 # metadata, which keeps the literal from drifting out of sync with the
 # distribution version on a release.
 from importlib import import_module
+from importlib.util import find_spec as _find_spec
 
 from breos.utils import package_version as _package_version
 
@@ -256,14 +257,22 @@ def __getattr__(name: str):
 
     if name not in _LAZY_PLOTTING_EXPORTS:
         raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-    value = getattr(import_module("breos.plotting"), name)
+    try:
+        plotting = import_module("breos.plotting")
+    except ImportError as exc:
+        # An AttributeError keeps getattr(breos, name, default), inspect and
+        # help(breos) working on an install without the plots extra.
+        raise AttributeError(str(exc), name=name) from exc
+    value = getattr(plotting, name)
     globals()[name] = value
     return value
 
 
 def __dir__() -> list[str]:
-    """Include lazy compatibility attributes in interactive discovery."""
+    """Include lazy compatibility attributes in discovery when matplotlib is installed."""
 
+    if _find_spec("matplotlib") is None:
+        return sorted(globals())
     return sorted(set(globals()) | _LAZY_PLOTTING_EXPORTS)
 
 

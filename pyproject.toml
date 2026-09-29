@@ -156,7 +156,6 @@ include = [
     "/docs",
     "/maintainers",
     "/pyproject.toml",
-    "/rlp",
     "/tests",
     "/tools",
     "/uv.lock",
