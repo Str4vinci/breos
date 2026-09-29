@@ -661,8 +661,27 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   `update_battery_resistance_cyclewise` and
   `update_battery_resistance_calendar` still return the increment. Results
   and carried states are unchanged bit for bit.
+- `DEFAULTS` lists the App keys in config-registry order, and
+  `AppConfigField.default_order` is gone
+  ([#164](https://github.com/Str4vinci/breos/issues/164)). Nothing read the
+  order: the input cache key sorts its keys, and configs are compared by
+  value. The only visible effect is the key order of
+  `provenance.resolved_config` in App and Monte Carlo results; every key and
+  value is unchanged.
 
 ### Fixed
+- `calendar_model` is stored as it is validated: trimmed, lower-case, with
+  hyphens as underscores ([#186](https://github.com/Str4vinci/breos/issues/186)).
+  For `"Naumann-Lam"`, `degradation.model_key` and
+  `provenance.resolved_config.calendar_model` now read `"naumann_lam"`
+  instead of the spelling given. A name with surrounding spaces, which
+  validation accepted, no longer fails in the aging model with `ValueError`.
+  No number changes.
+- `breos --version` and `provenance.breos_version` in App and Monte Carlo
+  results read `"0.0.0+unknown"` outside an installed package, as
+  `breos.__version__` does ([#186](https://github.com/Str4vinci/breos/issues/186)).
+  The CLI reported `"0.1.0"` and the results `"unknown"`. All four read
+  `breos.utils.package_version()`.
 - Bundled demandlib H0 profiles now put weekday, Saturday and Sunday shapes
   on the corresponding day types in the study year, instead of assigning the
   dated 2023 rows by position ([#298](https://github.com/Str4vinci/breos/issues/298)).
