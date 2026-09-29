@@ -687,7 +687,13 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   so a Monte Carlo study and an App run of the same year use the same load.
   Profiles placed by position now also follow the target year's
   daylight-saving dates, which moves 169 hourly steps in Lisbon for 2025.
-  Monte Carlo no longer reads `start_date`. **Monte Carlo results change
+  Monte Carlo no longer uses `start_date` for the load or weather; its
+  provenance records the load's year as `load_profile.calendar_year`
+  (result schema 1.8). A leap `target_year`, which raised an error at hourly
+  and 15-minute resolution, now runs: each weather year gets a 29 February
+  copied from its 28 February, as the App gives a TMY. Before, 29 February was
+  missing from the weather, and at 15 minutes the resampler would have
+  interpolated across it as one night. **Monte Carlo results change
   when `start_date` falls in another year than `target_year`.** On the
   shipped `configs/examples/montecarlo.toml` (100 runs, seed 42) with the
   Porto 2005–2024 Open-Meteo history, mean NPV savings fall from

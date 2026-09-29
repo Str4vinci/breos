@@ -59,7 +59,10 @@ for sampling when your file covers more history than you want to use.
 restamped to it, and the demand profile and any tariff follow its calendar.
 The bundled H0 profile therefore puts its weekday, Saturday and Sunday shapes
 on that year's days, as an App run with `start_date` on 1 January of that year
-does. Monte Carlo does not read `start_date`.
+does. Monte Carlo does not use `start_date` for the load or weather; the
+provenance records the load's year as `load_profile.calendar_year`. Weather
+years are read without 29 February, so for a leap `target_year` each one
+gets a copy of its 28 February, as the App gives a TMY.
 
 A runnable version ships as
 [`configs/examples/montecarlo.toml`](https://github.com/Str4vinci/breos/blob/main/configs/examples/montecarlo.toml).

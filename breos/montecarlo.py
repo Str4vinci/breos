@@ -65,6 +65,7 @@ from breos.weather import (
     _weather_metadata_sidecar_path,
     build_battery_temperature_series,
     fetch_tmy_weather_data,
+    fill_leap_day,
     load_weather,
     preload_weather_by_year,
     resample_to_15min,
@@ -192,7 +193,9 @@ def _load_weather_years(
 
     indexed_by_year: dict[int, pd.DataFrame] = {}
     for year, df in weather_by_year.items():
-        weather = _index_weather(df)
+        # The years are read without 29 February, so a leap target_year gets
+        # a copy of 28 February, as an App run of that year does.
+        weather = fill_leap_day(_index_weather(df))
         input_frequency = pd.infer_freq(weather.index[:10]) if len(weather.index) >= 3 else None
         if input_frequency is None and len(weather.index) >= 2:
             input_frequency = pd.tseries.frequencies.to_offset(weather.index[1] - weather.index[0]).freqstr
@@ -807,9 +810,11 @@ def run_montecarlo(
             :class:`MonteCarloYearCache` for what it reuses.
 
     The weather, the load and any tariff share the ``settings.target_year``
-    calendar. The load is built as an App run with ``start_date`` on
-    1 January of that year builds it, so the config's ``start_date`` does not
-    affect a Monte Carlo study.
+    calendar. The load is the one an App run of that year would build. The
+    config's ``start_date`` is validated but not used for the load or weather,
+    and ``provenance["load_profile"]["calendar_year"]`` records the year the
+    load was built for. A leap target year's 29 February copies 28 February's
+    weather, as in the App.
 
     The dispatch backend is ``settings.execution_backend`` when set, else the
     config's top-level ``execution_backend``, else ``"python"``. The CLI
@@ -964,7 +969,12 @@ def run_montecarlo(
             "settings": asdict(settings),
             "available_weather_years": [int(y) for y in available_years],
             "runtime_weather": runtime_weather,
-            "load_profile": dict(base_load.attrs.get(LOAD_PROFILE_METADATA_KEY, {})),
+            # The load is built for target_year; resolved_config keeps the
+            # start_date the user gave, which Monte Carlo does not use.
+            "load_profile": {
+                **base_load.attrs.get(LOAD_PROFILE_METADATA_KEY, {}),
+                "calendar_year": settings.target_year,
+            },
             "random_stream": (
                 "numpy.random.default_rng(numpy.random.SeedSequence(base_seed).spawn(n_runs)[zero_based_run_index])"
             ),

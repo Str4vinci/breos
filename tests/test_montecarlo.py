@@ -265,6 +265,43 @@ def test_run_montecarlo_builds_the_load_on_the_target_year_calendar(tmp_path, mo
         np.testing.assert_array_equal(aligned.load_w, expected.iloc[:, 0].reindex(aligned.index).to_numpy())
 
 
+@pytest.mark.parametrize("resolution", ["h", "15min"])
+def test_run_montecarlo_fills_the_leap_day_of_a_leap_target_year(
+    tmp_path, monkeypatch, write_multiyear_weather, resolution
+):
+    # The weather years are read without 29 February. Restamped onto 2028,
+    # hourly weather skipped the day and 15-minute weather interpolated one
+    # night across it, so 29 February had no PV.
+    weather = write_multiyear_weather(tmp_path / "multi.csv")
+    settings = MonteCarloSettings(weather_file=str(weather), n_runs=1, years_per_run=1, seed=1, target_year=2028)
+    captured = {}
+    align_years = montecarlo_module._align_years
+
+    def capturing(*args, **kwargs):
+        captured.update(align_years(*args, **kwargs))
+        return captured
+
+    monkeypatch.setattr(montecarlo_module, "_align_years", capturing)
+    config = {**_base_config(), "resolution": resolution, "projection_years": 1, "start_date": "2023-01-01"}
+    result = run_montecarlo(config, settings)
+
+    timezone = resolve_app_config(config).timezone
+    expected = load_profile("demandlib_h0", 4000, start_date="2028-01-01", freq=resolution, timezone=timezone)
+    for aligned in captured.values():
+        np.testing.assert_array_equal(aligned.load_w, expected.iloc[:, 0].reindex(aligned.index).to_numpy())
+        days = aligned.index.tz_convert(timezone).normalize()
+        pv = {
+            day: aligned.pv_dc_w[days == pd.Timestamp(day, tz=timezone)].sum() for day in ("2028-02-28", "2028-02-29")
+        }
+        assert pv["2028-02-28"] > 0.0
+        assert pv["2028-02-29"] == pytest.approx(pv["2028-02-28"], rel=0.01)
+    assert result.provenance["runtime_weather"]["metadata"]["leap_day"] == {
+        "year": 2028,
+        "filled_from": "2028-02-28",
+    }
+    assert result.provenance["load_profile"]["calendar_year"] == 2028
+
+
 def test_run_montecarlo_results_do_not_depend_on_the_start_date_year(tmp_path, write_multiyear_weather):
     weather = write_multiyear_weather(tmp_path / "multi.csv")
     settings = MonteCarloSettings(
@@ -323,7 +360,7 @@ def test_run_montecarlo_run_streams_are_spawned_from_the_base_seed(tmp_path, wri
             assert row["Load_Scale"] == scale
     assert "SeedSequence(base_seed).spawn(n_runs)" in result.provenance["random_stream"]
     assert result.provenance["ledger_schema_version"] == "3.0"
-    assert result.provenance["result_schema_version"] == "1.7"
+    assert result.provenance["result_schema_version"] == "1.8"
     assert result.provenance["currency"] == "EUR"
     assert result.runs.attrs["currency"] == "EUR"
     assert result.provenance["economics"]["import_price_escalation"] == result.provenance["economics"]["inflation_rate"]

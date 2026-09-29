@@ -649,7 +649,10 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         default_order=50,
         cli_flags=("--start-date",),
         cli_help="First simulated day: 1 January of the study year, YYYY-01-01.",
-        doc="1 January of the study year, `YYYY-01-01`. The App simulates that year, or the `period` window in it",
+        doc=(
+            "1 January of the study year, `YYYY-01-01`. The App simulates that year, or the `period` window in it. "
+            "Monte Carlo does not use it for the load or weather; its `target_year` sets the study year"
+        ),
         summary="load.start_date",
     ),
     # The [period] table (#242). Omitted: the whole calendar year of start_date.
