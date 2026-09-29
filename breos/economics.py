@@ -148,11 +148,39 @@ def cost_params_from_config(
     return CostParams(**params)
 
 
+def replacement_event_cost(battery_kwh: float, cost_per_kwh: float, configured: Any = None) -> float:
+    """The t = 0 price of one battery replacement (ADR 0003 E4).
+
+    The physics reports when a pack is swapped and its nominal capacity; the
+    economics prices each swap here, so App, Monte Carlo and the optimizer
+    price replacements the same way. ``configured`` is an explicit price per
+    replacement, as the optimizer's ``battery.replacement_cost`` gives it;
+    ``None``, ``"auto"`` or ``"calculate"`` prices the pack at
+    ``cost_per_kwh``.
+
+    Raises:
+        ValueError: If ``configured`` is not a finite non-negative number or
+            one of the words above.
+    """
+    if configured is None or (isinstance(configured, str) and configured.strip().lower() in {"auto", "calculate"}):
+        return float(battery_kwh) * float(cost_per_kwh)
+    if isinstance(configured, bool):
+        raise ValueError("battery.replacement_cost must be a non-negative number or 'calculate'")
+    try:
+        price = float(configured)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("battery.replacement_cost must be a non-negative number or 'calculate'") from exc
+    if not np.isfinite(price) or price < 0.0:
+        raise ValueError("battery.replacement_cost must be a non-negative number or 'calculate'")
+    return price
+
+
 def calculate_costs(
     n_modules: int,
     module_power_w: float,
     battery_capacity_wh: float = 0.0,
     cost_params: Optional[CostParams] = None,
+    replacement_cost_each: Optional[float] = None,
 ) -> Dict[str, float]:
     """
     Calculate system costs (CAPEX) and return cost dictionary.
@@ -162,9 +190,13 @@ def calculate_costs(
         module_power_w: Power per module in Watts (STC)
         battery_capacity_wh: Battery capacity in Wh (0 for no battery)
         cost_params: Cost parameters
+        replacement_cost_each: The t = 0 price of one battery replacement,
+            from :func:`replacement_event_cost`. ``None`` prices the pack at
+            ``cost_params.battery_cost_per_kwh``.
 
     Returns:
-        Dictionary with cost breakdown and totals
+        Dictionary with cost breakdown and totals. ``replacement_cost_each``
+        is what the projection prices each simulated replacement at.
     """
     if cost_params is None:
         cost_params = CostParams()
@@ -215,6 +247,11 @@ def calculate_costs(
         "battery_cost": battery_cost,
         "installation_cost": installation_cost,
         "other_costs": other_costs,
+        "replacement_cost_each": (
+            replacement_event_cost(battery_capacity_wh / 1000, cost_params.battery_cost_per_kwh)
+            if replacement_cost_each is None
+            else float(replacement_cost_each)
+        ),
     }
 
 
@@ -346,6 +383,46 @@ def _replacement_npv(replacement: pd.Series, replacement_exponents: np.ndarray, 
 YEAR_ROW_MONEY_COLUMNS = ("Import_Cost", "Export_Revenue", "Fixed_Charge", "Baseline_Import_Cost")
 
 
+def _replacement_outlays_t0(counts: Any, each: float) -> np.ndarray:
+    """``each`` summed once per replacement, for each entry of ``counts``.
+
+    Summed one event at a time from 0.0, as the physics layer once added its
+    per-event cost, so the totals are the same floats (ADR 0003 E4).
+    """
+    totals = []
+    for count in np.asarray(counts, dtype=float):
+        if count < 0 or count != np.floor(count):
+            raise ValueError(f"a year's Replacements must be a whole non-negative count, got {count!r}")
+        total = 0.0
+        for _ in range(int(count)):
+            total += each
+        totals.append(total)
+    return np.asarray(totals, dtype=float)
+
+
+def replacement_total_t0(replacement_cost: Any) -> float:
+    """The replacements at t = 0 prices, summed year by year as the projection loop once did.
+
+    An explicit ``+=`` loop, not ``sum()``: from Python 3.12 the built-in sums
+    floats with compensation, so its total would depend on the Python version.
+    """
+    total = 0.0
+    for value in replacement_cost:
+        total += float(value)
+    return total
+
+
+def _replacement_cost_each(costs: Dict[str, float], n_events: float) -> float:
+    if "replacement_cost_each" in costs:
+        return float(costs["replacement_cost_each"])
+    if n_events > 0:
+        raise ValueError(
+            "costs has no 'replacement_cost_each', so the simulated battery replacements cannot be priced; "
+            "build costs with calculate_costs, or set it from replacement_event_cost"
+        )
+    return 0.0
+
+
 def price_year_rows(yearly_summary_df: pd.DataFrame, costs: Dict[str, float]) -> pd.DataFrame:
     """Add the year-1-price money columns to flat-priced year rows.
 
@@ -353,12 +430,23 @@ def price_year_rows(yearly_summary_df: pd.DataFrame, costs: Dict[str, float]) ->
     ``Export_kWh`` times the export price, ``Baseline_Import_Cost`` the load
     bought without a system, and ``Fixed_Charge`` the daily charge for the
     simulated duration, ``Simulated_Hours / 24`` days (E5). A row without
-    ``Simulated_Hours`` is billed as a 365-day year. Columns already present
-    (TOU valuation sets them) are kept. The operation order is the one the
-    projection used before these columns existed, so flat results are the
-    same floats.
+    ``Simulated_Hours`` is billed as a 365-day year. ``Replacement_Cost`` is
+    the year's ``Replacements`` at ``costs["replacement_cost_each"]``, t = 0
+    prices (E4). Columns already present (TOU valuation sets them) are kept.
+    The operation order is the one the projection used before these columns
+    existed, so flat results are the same floats.
     """
     priced = yearly_summary_df.copy()
+    if "Replacement_Cost" not in priced.columns:
+        if "Replacements" in priced.columns:
+            counts = pd.to_numeric(priced["Replacements"], errors="coerce").fillna(0.0).to_numpy(dtype=float)
+            # Right after the count, where the year rows carried the money
+            # before ledger schema 3.0, so the column order is unchanged.
+            position = list(priced.columns).index("Replacements") + 1
+        else:
+            counts, position = np.zeros(len(priced)), len(priced.columns)
+        each = _replacement_cost_each(costs, float(np.sum(counts)))
+        priced.insert(position, "Replacement_Cost", _replacement_outlays_t0(counts, each))
     days = priced["Simulated_Hours"] / 24 if "Simulated_Hours" in priced.columns else 365
     computed = {
         "Import_Cost": lambda: priced["Import_kWh"] * costs["electricity_cost"],
@@ -440,7 +528,6 @@ def cost_analysis_projection(
     scenario_name: str = "",
     freq: str = "h",
     yearly_summary_df: Optional[pd.DataFrame] = None,
-    total_replacement_cost: Optional[float] = None,
     emissions_params=None,
     currency: str = DEFAULT_CURRENCY,
     import_price_escalation: Optional[float] = None,
@@ -479,7 +566,9 @@ def cost_analysis_projection(
         yearly_summary_df: Optional DataFrame from singleyear propagation with
             Year, PV_Production_kWh, Import_kWh, Export_kWh, etc. for each year.
             When provided, uses actual yearly data instead of estimation.
-        total_replacement_cost: Total battery replacement cost from propagation
+            Each year's ``Replacements`` are priced at
+            ``costs["replacement_cost_each"]`` unless the rows already carry
+            ``Replacement_Cost``.
         currency: The currency every money input is in. BREOS does not
             convert; it is recorded as ``attrs["currency"]`` for labels.
 
@@ -589,8 +678,7 @@ def cost_analysis_projection(
         proj.attrs["replacement_cost_npv"] = _replacement_npv(
             proj["Cost_Replacement"], replacement_exponents, discount_rate
         )
-        if total_replacement_cost is not None:
-            proj.attrs["total_replacement_cost"] = total_replacement_cost
+        proj.attrs["total_replacement_cost"] = replacement_total_t0(replacement_base)
         proj.attrs["lcoe_per_kwh"] = calculate_lcoe_from_projection(
             proj,
             total_investment=costs["total_initial_cost"],
@@ -665,7 +753,7 @@ def cost_analysis_projection(
         raise ValueError(f"results_df has no PV_AC_Export column.{hint}")
     # First convert columns to numeric, just in case
     df["System_AC_Production"] = system_ac_production_power(df)
-    cols_to_numeric = ["System_AC_Production", "Houseload", "Import_From_Grid", "PV_AC_Export", "Replacement_Cost"]
+    cols_to_numeric = ["System_AC_Production", "Houseload", "Import_From_Grid", "PV_AC_Export"]
     for col in cols_to_numeric:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0.0)
@@ -673,14 +761,20 @@ def cost_analysis_projection(
     # Aggregate first year
     # Summing Power (W) gives sum(Watts). To get Wh, multiply by hours_per_step.
     # To get kWh, divide by 1000.
-    # Replacement_Cost is already money, so it is summed without the power-to-energy conversion.
     yearly = df[["System_AC_Production", "Houseload", "Import_From_Grid", "PV_AC_Export"]].groupby(df["Year"]).sum()
 
-    # Handle replacement cost separately if present (it's already simple sum, no kWh conversion needed)
+    # The frame marks each swap; the economics prices it (ADR 0003 E4). A
+    # frame that already carries the money (ledger schema < 3.0) keeps it, as
+    # price_year_rows keeps a year row's. Either way the per-step money is
+    # group-summed, the reduction the projection has always used.
     if "Replacement_Cost" in df.columns:
-        yearly_replacement = df[["Replacement_Cost"]].groupby(df["Year"]).sum()
+        step_cost = pd.to_numeric(df["Replacement_Cost"], errors="coerce").fillna(0.0).to_numpy(dtype=float)
+    elif "Battery_Replaced" in df.columns:
+        replaced = df["Battery_Replaced"].to_numpy(dtype=bool)
+        step_cost = np.where(replaced, _replacement_cost_each(costs, float(replaced.sum())), 0.0)
     else:
-        yearly_replacement = pd.DataFrame(0.0, index=yearly.index, columns=["Replacement_Cost"])
+        step_cost = np.zeros(len(df))
+    yearly_replacement = pd.DataFrame({"Replacement_Cost": step_cost}, index=df.index).groupby(df["Year"]).sum()
 
     # The ledger marks the swap step, so the instant does not have to be
     # reconstructed downstream. Without the column the booking falls back to
@@ -763,8 +857,8 @@ def cost_analysis_projection(
     )
     replacement_exponents = _booking_exponents(replacement_time, proj["Year"].to_numpy(dtype=float))
     proj["Replacement_Time_Years"] = replacement_time
-    # The simulation logs replacement at the base (year-1) cost input, so
-    # inflate to the swap instant here, and discount from the same instant.
+    # Replacements are priced at t = 0, so inflate to the swap instant here,
+    # and discount from the same instant.
     proj["Cost_Replacement"] = _replacement_outlay(
         replacement_base, replacement_exponents, inflation_rate, replacement_cost_learning
     )
@@ -802,6 +896,7 @@ def cost_analysis_projection(
     proj.attrs["replacement_cost_npv"] = _replacement_npv(
         proj["Cost_Replacement"], replacement_exponents, discount_rate
     )
+    proj.attrs["total_replacement_cost"] = replacement_total_t0(replacement_base)
     proj.attrs["lcoe_per_kwh"] = calculate_lcoe_from_projection(
         proj,
         total_investment=costs["total_initial_cost"],

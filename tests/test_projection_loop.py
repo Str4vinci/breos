@@ -69,7 +69,6 @@ def test_frames_and_summaries_give_the_same_year_rows(overrides, has_battery):
     pd.testing.assert_frame_equal(frames.yearly_df, summaries.yearly_df, check_exact=True)
     assert frames.carry == summaries.carry
     assert frames.total_replacements == summaries.total_replacements
-    assert frames.total_replacement_cost == summaries.total_replacement_cost
     assert frames.first_year_results_df is not None and summaries.first_year_results_df is None
     if "battery_eol_percentage" in overrides:
         assert frames.total_replacements > 0
@@ -116,7 +115,7 @@ def test_carry_state_hands_the_grid_origin_to_the_next_year():
         initial_energy_wh=4000.0,
         initial_grid_origin_energy_wh=3000.0,
     )
-    results, _, _, _, _, degradation = simulate_energy_balance(**kwargs)
+    results, _, _, _, degradation = simulate_energy_balance(**kwargs)
     summary = simulate_energy_balance_summary(**kwargs)
 
     from_frames = CarryState().after_frames(results, degradation, None, has_battery=True)

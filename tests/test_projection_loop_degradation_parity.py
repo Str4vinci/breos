@@ -80,7 +80,7 @@ def _spy(monkeypatch, module, name, records, calls):
         if name == "simulate_energy_balance_summary":
             records.append(_state_record(output.final_degradation_state, output.n_replacements))
         else:
-            records.append(_state_record(output[-1], output[4]))
+            records.append(_state_record(output[-1], output[3]))
         return output
 
     monkeypatch.setattr(module, name, _wrapped)

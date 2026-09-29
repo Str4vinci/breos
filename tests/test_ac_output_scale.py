@@ -239,7 +239,6 @@ class TestCompiledBackendParity:
             )
         assert python_out[1] == numba_out[1]
         assert python_out[3] == numba_out[3]
-        assert python_out[4] == numba_out[4]
 
 
 def _scaled_battery_ceiling_run(backend: str):

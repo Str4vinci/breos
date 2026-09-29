@@ -23,7 +23,10 @@ from breos.economics import (
     cost_analysis_projection,
     cost_params_from_config,
     find_payback_year_interpolated,
+    price_year_rows,
     projection_rates_record,
+    replacement_event_cost,
+    replacement_total_t0,
 )
 from breos.emissions import EmissionsParams
 from breos.execution import DEFAULT_EXECUTION_BACKEND, require_backend, validate_execution_backend
@@ -202,7 +205,7 @@ def optimize_battery_size(
     for size_wh in battery_sizes_wh:
         config = BatteryConfig(nominal_energy_wh=size_wh)
 
-        df, total_pv, summary, _, _, _ = simulate_energy_balance(
+        df, total_pv, summary, _, _ = simulate_energy_balance(
             pv_dc=pv_dc,
             houseload=houseload,
             battery_config=config,
@@ -459,7 +462,6 @@ def _build_battery_config_from_spec(
     initial_soh: float = 100.0,
     enable_replacement: bool = False,
     inverter_ac_capacity_w: Optional[float] = None,
-    replacement_cost: Optional[float] = None,
     ac_output_scale: float = 1.0,
 ) -> BatteryConfig:
     """Build a BatteryConfig for optimization paths without dropping supported settings.
@@ -476,7 +478,6 @@ def _build_battery_config_from_spec(
         inverter_efficiency=inverter_efficiency,
         inverter_ac_capacity_w=inverter_ac_capacity_w,
         enable_replacement=enable_replacement,
-        replacement_cost=replacement_cost,
         ac_output_scale=ac_output_scale,
         **configured,
     )
@@ -488,19 +489,6 @@ def _safe_ratio(numerator: float, denominator: float) -> float:
     if abs(denominator) < 1e-12:
         return 0.0
     return float(numerator) / denominator
-
-
-def _replacement_event_cost(batt_spec: Dict[str, Any], battery_kwh: float, storage_cost: float) -> float:
-    """Resolve a replacement event cost from explicit or calculated input."""
-    configured = batt_spec.get("replacement_cost")
-    if configured is None or (isinstance(configured, str) and configured.strip().lower() in {"auto", "calculate"}):
-        return float(battery_kwh) * float(storage_cost)
-    if isinstance(configured, bool):
-        raise ValueError("battery.replacement_cost must be a non-negative number or 'calculate'")
-    replacement_cost = float(configured)
-    if not np.isfinite(replacement_cost) or replacement_cost < 0.0:
-        raise ValueError("battery.replacement_cost must be a non-negative number or 'calculate'")
-    return replacement_cost
 
 
 def _summarize_projected_lifetime_metrics(yearly_summary_df: pd.DataFrame) -> Dict[str, float]:
@@ -613,11 +601,10 @@ def _evaluate_projected_design_metrics(
         module_power_w=pv_params.Mpp,
         battery_capacity_wh=battery_kwh * 1000.0,
         cost_params=cost_params,
-    )
-    replacement_cost = _replacement_event_cost(
-        batt_spec,
-        battery_kwh,
-        cost_params.battery_cost_per_kwh,
+        # The App's price, unless battery.replacement_cost sets one (ADR 0003 E4).
+        replacement_cost_each=replacement_event_cost(
+            battery_kwh, cost_params.battery_cost_per_kwh, batt_spec.get("replacement_cost")
+        ),
     )
     has_battery = battery_kwh > 0.0
     degradation_engine, blast_model = _resolve_degradation_engine_spec(batt_spec)
@@ -633,7 +620,6 @@ def _evaluate_projected_design_metrics(
             initial_soh=soh_pct,
             enable_replacement=bool(batt_spec.get("enable_replacement", True)) and has_battery,
             inverter_ac_capacity_w=inverter_ac_capacity_w,
-            replacement_cost=replacement_cost,
             ac_output_scale=ac_output_scale,
         )
 
@@ -659,10 +645,10 @@ def _evaluate_projected_design_metrics(
         tariff=tariff,
         instructions=instructions if has_battery else None,
     )
-    yearly_summary_df = projection.yearly_df
+    # Priced here, as App and Monte Carlo price theirs (ADR 0003 E4, E7).
+    yearly_summary_df = price_year_rows(projection.yearly_df, costs)
     first_year_results_df = projection.first_year_results_df
     total_replacements = projection.total_replacements
-    total_replacement_cost = projection.total_replacement_cost
     current_soh = float(projection.carry.soh_pct)
     cost_projection = cost_analysis_projection(
         results_df=first_year_results_df,
@@ -671,7 +657,6 @@ def _evaluate_projected_design_metrics(
         **_projection_rates(fin_cfg),
         freq=freq,
         yearly_summary_df=yearly_summary_df,
-        total_replacement_cost=total_replacement_cost,
         emissions_params=emissions_params,
         currency=result_currency(tariff),
     )
@@ -683,7 +668,7 @@ def _evaluate_projected_design_metrics(
         "Projected_Breakeven_Year": float(payback_year) if payback_year is not None else np.nan,
         "Projected_Breakeven_Year_Interpolated": payback_interpolated if payback_interpolated is not None else np.nan,
         "Projected_Initial_Cost": float(costs["total_initial_cost"]),
-        "Projected_Replacement_Cost_T0_Prices": float(total_replacement_cost),
+        "Projected_Replacement_Cost_T0_Prices": replacement_total_t0(yearly_summary_df["Replacement_Cost"]),
         "Projected_Total_Replacements": int(total_replacements),
         "Projected_Final_SOH_%": float(current_soh),
         "Projected_PV_Production_Year1_kWh": float(yearly_summary_df["PV_Production_kWh"].iloc[0]),

@@ -66,7 +66,7 @@ def _run_app(config, weather):
 
     def _capture_year(*args, **kwargs):
         output = simulate_energy_balance(*args, **kwargs)
-        captured["degradation"].append(output[5])
+        captured["degradation"].append(output[4])
         return output
 
     with pytest.MonkeyPatch.context() as mp:

@@ -258,14 +258,24 @@ def test_optimizer_honours_an_explicit_replacement_cost(monkeypatch):
     idx = pd.date_range("2025-01-01 00:00", periods=2, freq="h", tz="UTC")
     houseload = pd.DataFrame({"Load": [500.0, 500.0]}, index=idx)
 
-    calculated = _run_evaluate(monkeypatch, _problem_config(), houseload, idx)
+    import breos.optimization as optimization
+
+    priced_at = []
+    real_projection = optimization.cost_analysis_projection
+
+    def spy(*args, **kwargs):
+        priced_at.append(kwargs["costs"]["replacement_cost_each"])
+        return real_projection(*args, **kwargs)
+
+    monkeypatch.setattr(optimization, "cost_analysis_projection", spy)
+    _run_evaluate(monkeypatch, _problem_config(), houseload, idx)
     config = _problem_config()
     config["battery"]["replacement_cost"] = 1234.0
-    explicit = _run_evaluate(monkeypatch, config, houseload, idx)
+    _run_evaluate(monkeypatch, config, houseload, idx)
 
-    # 1 kWh at the configured EUR 400/kWh, unless the config names a cost.
-    assert calculated["battery_config"].replacement_cost == pytest.approx(400.0)
-    assert explicit["battery_config"].replacement_cost == pytest.approx(1234.0)
+    # 1 kWh at the configured 400/kWh, unless the config names a cost. The
+    # economics prices it; the battery carries no money (ADR 0003 E4).
+    assert priced_at == pytest.approx([400.0, 1234.0])
 
 
 def test_projected_optimizer_candidate_matches_app(open_meteo_weather, monkeypatch):

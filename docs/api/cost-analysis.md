@@ -22,6 +22,7 @@ energy balance.
    :toctree: generated/
 
    breos.economics.calculate_costs
+   breos.economics.replacement_event_cost
    breos.economics.cost_analysis_projection
 ```
 

@@ -57,8 +57,8 @@ def _run(name: str, backend: str, freq: str = FREQ):
 
 
 def _assert_identical(name: str, python_out, numba_out) -> None:
-    py_df, py_total, py_summary, py_cost, py_reps, py_deg = python_out[:6]
-    nb_df, nb_total, nb_summary, nb_cost, nb_reps, nb_deg = numba_out[:6]
+    py_df, py_total, py_summary, py_reps, py_deg = python_out[:5]
+    nb_df, nb_total, nb_summary, nb_reps, nb_deg = numba_out[:5]
 
     assert list(py_df.columns) == list(nb_df.columns)
     for column in py_df.columns:
@@ -75,7 +75,6 @@ def _assert_identical(name: str, python_out, numba_out) -> None:
         )
 
     assert py_total == nb_total
-    assert py_cost == nb_cost
     assert py_reps == nb_reps
     for column in py_deg.columns:
         if column == "Datetime":
@@ -83,7 +82,7 @@ def _assert_identical(name: str, python_out, numba_out) -> None:
         assert np.array_equal(py_deg[column].to_numpy(), nb_deg[column].to_numpy()), f"{name}: degradation {column}"
     for column in py_summary.columns:
         assert py_summary[column].iloc[0] == nb_summary[column].iloc[0], f"{name}: summary {column}"
-    assert _same_state(python_out[6], numba_out[6]), f"{name}: degradation state differs"
+    assert _same_state(python_out[5], numba_out[5]), f"{name}: degradation state differs"
 
 
 def _same_state(left, right) -> bool:
@@ -178,9 +177,9 @@ def test_trailing_partial_day_matches():
     """A trailing partial day must age the battery identically in both backends."""
     python_out = _run("partial_day", "python")
     assert len(python_out[0]) % 96 != 0, "scenario no longer has a trailing partial day"
-    assert len(python_out[5]) == 2
-    assert python_out[5]["Datetime"].iloc[-1] == python_out[0]["Datetime"].iloc[-1]
-    assert python_out[5]["Cumulative_Calendar_Seconds"].iloc[-1] == pytest.approx(len(python_out[0]) * 900.0)
+    assert len(python_out[4]) == 2
+    assert python_out[4]["Datetime"].iloc[-1] == python_out[0]["Datetime"].iloc[-1]
+    assert python_out[4]["Cumulative_Calendar_Seconds"].iloc[-1] == pytest.approx(len(python_out[0]) * 900.0)
     _assert_identical("partial_day", python_out, _run("partial_day", "numba"))
 
 
@@ -233,10 +232,10 @@ def test_both_inverter_loss_channels_are_populated():
 
 def test_replacement_at_threshold_matches():
     python_out = _run("replacement", "python")
-    df, deg = python_out[0], python_out[5]
-    assert python_out[4] > 0, "scenario never replaces the pack"
+    df, deg = python_out[0], python_out[4]
+    assert python_out[3] > 0, "scenario never replaces the pack"
     replaced_at = np.flatnonzero(df["Battery_Replaced"].to_numpy())
-    assert replaced_at.size == python_out[4]
+    assert replaced_at.size == python_out[3]
     # A replacement fires on the day the pack crosses end of life, and the
     # closing step's recorded state is rewritten to the fresh pack.
     for step in replaced_at:
@@ -262,8 +261,8 @@ def test_carried_state_between_years_matches():
 
 def test_cycle_counting_boundary_is_unaffected_by_backend():
     """Degradation is Python-only, so its inputs must arrive bit-identical."""
-    py_deg = _run("baseline", "python")[5]
-    nb_deg = _run("baseline", "numba")[5]
+    py_deg = _run("baseline", "python")[4]
+    nb_deg = _run("baseline", "numba")[4]
     for column in ("Cumulative_FEC", "Cumulative_Cycle_Degradation", "Cumulative_Calendar_Degradation", "SOH"):
         assert np.array_equal(py_deg[column].to_numpy(), nb_deg[column].to_numpy()), column
     assert py_deg["Cumulative_FEC"].iloc[-1] > 0.0

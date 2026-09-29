@@ -686,7 +686,7 @@ def test_optimize_battery_size_raises_when_one_size_fails(monkeypatch):
     def balance(**kwargs):
         if kwargs["battery_config"].nominal_energy_wh == 5000:
             raise RuntimeError("dispatch failed for 5 kWh")
-        return pd.DataFrame(), 0.0, summary, 0.0, 0, pd.DataFrame()
+        return pd.DataFrame(), 0.0, summary, 0, pd.DataFrame()
 
     monkeypatch.setattr("breos.optimization.simulate_energy_balance", balance)
 

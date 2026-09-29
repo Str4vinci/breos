@@ -346,13 +346,13 @@ def run_app_simulation(
     current_soh = projection.carry.soh_pct
     degradation_state = projection.carry.degradation_state
     total_replacements = projection.total_replacements
-    total_replacement_cost = projection.total_replacement_cost
     jit_cache_states = projection.jit_cache_states
     degradation_engine = str(cfg.get("degradation_engine", "native")).strip().lower()
     blast_model = cfg.get("blast_model")
 
     value = value_projection(cfg, resolved, projection)
     costs, cost_projection, lcoe, yearly_df = value.costs, value.cost_projection, value.lcoe, value.yearly_df
+    total_replacement_cost = value.total_replacement_cost
 
     replacement_events = [
         {"year": int(year), "count": int(count)}

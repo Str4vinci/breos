@@ -13,9 +13,15 @@ when no battery is configured, it simply skips the storage path.
    breos.battery.simulate_energy_balance
 ```
 
-The function returns a six-tuple of `(results_df, total_pv_wh,
-summary_df, total_replacement_cost, n_replacements, degradation_df)`.
-Battery-specific outputs are empty when running without storage.
+The function returns a five-tuple of `(results_df, total_pv_wh,
+summary_df, n_replacements, degradation_df)`. Battery-specific outputs are
+empty when running without storage.
+
+The physics carries no money. A replacement is reported where it happens:
+`Battery_Replaced` marks the step, and `Battery_Replaced_Capacity_Wh` holds
+the nominal capacity swapped in (ledger schema 3.0). The economics prices it
+at `costs["replacement_cost_each"]`; see
+{py:func}`~breos.economics.replacement_event_cost`.
 
 ## Physical boundary and coupling
 

@@ -51,7 +51,6 @@ def test_battery_config_comes_from_the_config():
     assert battery.charge_efficiency == battery.discharge_efficiency == math.sqrt(0.9)
     assert (battery.min_soc, battery.max_soc) == (0.15, 0.95)
     assert battery.inverter_ac_capacity_w == resolved.inverter_ac_capacity_w
-    assert battery.replacement_cost == resolved.cost_params.battery_cost_per_kwh * 6.5
     assert battery.enable_replacement and battery.enable_resistance_fade
 
 

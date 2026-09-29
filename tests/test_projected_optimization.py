@@ -70,13 +70,14 @@ def test_projected_evaluator_carries_physical_and_degradation_state(monkeypatch)
             }
         )
         replacements = 1 if year == 2 else 0
-        replacement_cost = 1000.0 if replacements else 0.0
-        return results, 0.0, pd.DataFrame(), replacement_cost, replacements, degradation, {"year": year}
+        results["Battery_Replaced_Capacity_Wh"] = [0.0, 2000.0 * replacements]
+        return results, 0.0, pd.DataFrame(), replacements, degradation, {"year": year}
 
     captured = {}
 
     def fake_projection(**kwargs):
         captured["yearly"] = kwargs["yearly_summary_df"].copy()
+        captured["costs"] = dict(kwargs["costs"])
         projection = pd.DataFrame(
             {
                 "Year": [1, 2],
@@ -125,9 +126,11 @@ def test_projected_evaluator_carries_physical_and_degradation_state(monkeypatch)
     assert calls[1]["initial_cumulative_cal_deg"] == pytest.approx(0.02)
     assert calls[1]["initial_energy_wh"] == pytest.approx(101.0)
     assert calls[1]["initial_pv_origin_energy_wh"] == pytest.approx(51.0)
-    assert calls[1]["battery_config"].replacement_cost == pytest.approx(1000.0)
     assert captured["yearly"]["Import_kWh"].tolist() == pytest.approx([0.3, 0.6])
-    assert captured["yearly"]["Replacement_Cost"].tolist() == pytest.approx([0.0, 1000.0])
+    # The physics reports the swap and its capacity; the economics prices it (ADR 0003 E4).
+    assert captured["yearly"]["Replacements"].tolist() == [0, 1]
+    assert captured["yearly"]["Replaced_Capacity_kWh"].tolist() == pytest.approx([0.0, 2.0])
+    assert captured["costs"]["replacement_cost_each"] == pytest.approx(1000.0)
     assert metrics["Projected_NPV"] == pytest.approx(50.0)
     assert metrics["Projected_Total_Replacements"] == 1
     assert metrics["Projected_Replacement_Cost_T0_Prices"] == pytest.approx(1000.0)

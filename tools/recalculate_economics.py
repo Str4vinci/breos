@@ -10,6 +10,11 @@ import escalation, and re-prices O&M and replacements at it. A projection that
 set om_escalation or replacement_cost_learning (ADR 0003 E2) is therefore not
 reproduced; re-run it through App instead.
 
+Replacements stored as money (a ``Replacement_Cost`` column, ledger schema
+< 3.0) keep their stored t = 0 price. Newer outputs record only the swapped
+capacity, so each swap is priced at the country's ``storage_cost_per_kwh``
+(ADR 0003 E4).
+
 Usage:
     uv run python tools/recalculate_economics.py [--dry-run] [--joao-only]
 """
@@ -24,7 +29,7 @@ import pandas as pd
 ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(ROOT))
 
-from breos.economics import cost_analysis_projection
+from breos.economics import cost_analysis_projection, replacement_event_cost
 from breos.tariffs import DEFAULT_CURRENCY
 
 RESULTS_DIR = ROOT / "results"
@@ -37,14 +42,17 @@ NEW_PRICES = {
     "pt": {
         "electricity_cost": _COSTS_CFG["residential_pt"]["electricity_cost"],
         "electricity_sold_cost": _COSTS_CFG["residential_pt"]["electricity_sold_cost"],
+        "storage_cost_per_kwh": _COSTS_CFG["residential_pt"]["storage_cost_per_kwh"],
     },
     "es": {
         "electricity_cost": _COSTS_CFG["residential_es"]["electricity_cost"],
         "electricity_sold_cost": _COSTS_CFG["residential_es"]["electricity_sold_cost"],
+        "storage_cost_per_kwh": _COSTS_CFG["residential_es"]["storage_cost_per_kwh"],
     },
     "de": {
         "electricity_cost": _COSTS_CFG["residential_de"]["electricity_cost"],
         "electricity_sold_cost": _COSTS_CFG["residential_de"]["electricity_sold_cost"],
+        "storage_cost_per_kwh": _COSTS_CFG["residential_de"]["storage_cost_per_kwh"],
     },
 }
 
@@ -114,6 +122,24 @@ def extract_params(proj_df: pd.DataFrame) -> dict:
     }
 
 
+def swapped_pack_kwh(frame: pd.DataFrame) -> float:
+    """The capacity one replacement swapped in, from year rows or an hourly frame; 0.0 without one."""
+    if "Replaced_Capacity_kWh" in frame.columns and "Replacements" in frame.columns:
+        # A one-swap year gives the capacity exactly; dividing a year's total
+        # by its count can be one ulp off.
+        single = frame[frame["Replacements"] == 1]
+        if not single.empty:
+            return float(single["Replaced_Capacity_kWh"].iloc[0])
+        swapped = frame[frame["Replacements"] > 0]
+        if not swapped.empty:
+            return float(swapped["Replaced_Capacity_kWh"].iloc[0] / swapped["Replacements"].iloc[0])
+    if "Battery_Replaced_Capacity_Wh" in frame.columns and "Battery_Replaced" in frame.columns:
+        swapped = frame.loc[frame["Battery_Replaced"].astype(bool), "Battery_Replaced_Capacity_Wh"]
+        if not swapped.empty:
+            return float(swapped.iloc[0]) / 1000.0
+    return 0.0
+
+
 def detect_freq(hourly_file: Path) -> str:
     df = pd.read_csv(hourly_file, nrows=3)
     if "Datetime" in df.columns and len(df) >= 2:
@@ -166,6 +192,9 @@ def recalculate_dir(results_dir: Path, dry_run: bool = False) -> str:
     try:
         if yearly_file.exists():
             yearly_df = pd.read_csv(yearly_file)
+            costs["replacement_cost_each"] = replacement_event_cost(
+                swapped_pack_kwh(yearly_df), prices["storage_cost_per_kwh"]
+            )
             cost_analysis_projection(
                 results_df=pd.DataFrame(),
                 costs=costs,
@@ -178,6 +207,9 @@ def recalculate_dir(results_dir: Path, dry_run: bool = False) -> str:
         else:
             freq = detect_freq(hourly_file)
             results_df = pd.read_csv(hourly_file)
+            costs["replacement_cost_each"] = replacement_event_cost(
+                swapped_pack_kwh(results_df), prices["storage_cost_per_kwh"]
+            )
             cost_analysis_projection(
                 results_df=results_df,
                 costs=costs,

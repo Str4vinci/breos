@@ -291,7 +291,7 @@ def run(name: str, backend: str = "python", freq: str = FREQ):
     kwargs = dict(sim_kwargs)
     if backend != "python":
         kwargs["execution_backend"] = backend
-    results_df, total_pv, summary_df, rep_cost, n_rep, deg_df = simulate_energy_balance(
+    output = simulate_energy_balance(
         pv_dc=pv,
         houseload=load,
         battery_config=battery_config,
@@ -299,7 +299,11 @@ def run(name: str, backend: str = "python", freq: str = FREQ):
         temperature_series=temp,
         **kwargs,
     )
-    return results_df, total_pv, summary_df, rep_cost, n_rep, deg_df
+    # A tree before ADR 0003 E4 also returned the replacement money, fourth.
+    if len(output) == 6:
+        output = (*output[:3], *output[4:])
+    results_df, total_pv, summary_df, n_rep, deg_df = output
+    return results_df, total_pv, summary_df, n_rep, deg_df
 
 
 def _column(values: pd.Series) -> np.ndarray:
@@ -319,7 +323,7 @@ def dump(path: str, backend: str = "python", *, instructions: bool = False) -> N
     payload: dict[str, np.ndarray] = {}
     for freq in RESOLUTIONS:
         for name in names:
-            results_df, total_pv, summary_df, rep_cost, n_rep, deg_df = run(name, backend, freq)
+            results_df, total_pv, summary_df, n_rep, deg_df = run(name, backend, freq)
             key = f"{name}@{freq}"
             for col in results_df.columns:
                 if col == "Datetime":
@@ -332,7 +336,6 @@ def dump(path: str, backend: str = "python", *, instructions: bool = False) -> N
             for col in summary_df.columns:
                 payload[f"{key}::summary::{col}"] = _column(summary_df[col])
             payload[f"{key}::scalar::total_pv"] = np.array([total_pv], dtype=np.float64)
-            payload[f"{key}::scalar::replacement_cost"] = np.array([rep_cost], dtype=np.float64)
             payload[f"{key}::scalar::n_replacements"] = np.array([n_rep], dtype=np.float64)
             print(f"  {key}: {len(results_df)} steps, {n_rep} replacement(s)", flush=True)
     np.savez(path, **payload)

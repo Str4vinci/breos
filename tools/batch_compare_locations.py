@@ -40,6 +40,7 @@ from breos.economics import (
     cost_analysis_projection,
     find_payback_year,
     find_payback_year_interpolated,
+    replacement_event_cost,
 )
 from breos.inverter import InverterConfig
 from breos.load_profiles import load_profile
@@ -227,6 +228,7 @@ def build_costs_dict(n_modules, battery_kwh, pv_params, costs_cfg):
         "battery_cost": battery_cost,
         "installation_cost": installation_cost,
         "other_costs": other_costs,
+        "replacement_cost_each": replacement_event_cost(battery_kwh, costs_cfg["storage_cost_per_kwh"]),
     }
 
 
@@ -243,7 +245,6 @@ def _run_single_sim(args_tuple):
 
     hours_per_step = get_hours_per_step(FREQ)
     battery_wh = battery_kwh * 1000
-    replacement_cost = costs_cfg["storage_cost_per_kwh"] * battery_kwh
 
     # State for multi-year propagation
     cumulative_fec = 0.0
@@ -253,7 +254,6 @@ def _run_single_sim(args_tuple):
     cumulative_cal_deg = 0.0
     current_soh = 100.0
     total_replacements = 0
-    total_replacement_cost = 0.0
     yearly_summaries = []
     year1_fec = 0.0
 
@@ -273,11 +273,10 @@ def _run_single_sim(args_tuple):
             dc_coupled=True,
             inverter_efficiency=INVERTER_EFF,
             enable_replacement=True,
-            replacement_cost=replacement_cost,
             calendar_model=CALENDAR_MODEL,
         )
 
-        results_df, total_pv, summary_df, year_rep_cost, year_n_rep, degradation_df = simulate_energy_balance(
+        results_df, total_pv, summary_df, year_n_rep, degradation_df = simulate_energy_balance(
             pv_dc=dc_power,
             houseload=load_data,
             battery_config=year_battery_config,
@@ -305,7 +304,6 @@ def _run_single_sim(args_tuple):
             year1_fec = degradation_df["Cumulative_FEC"].iloc[-1]
 
         total_replacements += year_n_rep
-        total_replacement_cost += year_rep_cost
 
         # Yearly summary
         total_pv_kwh = total_pv / 1000
@@ -324,7 +322,6 @@ def _run_single_sim(args_tuple):
                 "Grid_Independence_%": grid_indep,
                 "Battery_SOH_%": current_soh,
                 "Replacements": year_n_rep,
-                "Replacement_Cost": year_rep_cost,
                 "PV_Degradation_Factor": pv_degradation_factor,
             }
         )
@@ -343,8 +340,8 @@ def _run_single_sim(args_tuple):
         discount_rate=costs_cfg.get("discount_rate", DEFAULT_DISCOUNT_RATE),
         freq=FREQ,
         yearly_summary_df=yearly_df,
-        total_replacement_cost=total_replacement_cost,
     )
+    total_replacement_cost = cost_proj.attrs["total_replacement_cost"]
     payback = find_payback_year(cost_proj)
 
     # --- Derived metrics ---

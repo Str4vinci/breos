@@ -53,18 +53,10 @@ class TestBatteryConfig:
         assert direct.eol_percentage == DEFAULTS["battery_eol_percentage"]
         assert from_spec.eol_percentage == DEFAULTS["battery_eol_percentage"]
 
-    def test_replacement_cost_auto(self):
-        cfg = BatteryConfig(nominal_energy_wh=10000)
-        # 10 kWh * 500 €/kWh = 5000
-        assert cfg.replacement_cost == pytest.approx(5000.0, rel=0.01)
-
-    def test_replacement_cost_zero_battery(self):
-        cfg = BatteryConfig(nominal_energy_wh=0)
-        assert cfg.replacement_cost == 0.0
-
-    def test_replacement_cost_override(self):
-        cfg = BatteryConfig(nominal_energy_wh=5000, replacement_cost=1000.0)
-        assert cfg.replacement_cost == 1000.0
+    def test_battery_config_carries_no_money(self):
+        # The physics reports replacements; the economics prices them (ADR 0003 E4).
+        with pytest.raises(TypeError, match="replacement_cost"):
+            BatteryConfig(nominal_energy_wh=5000, replacement_cost=1000.0)
 
     def test_battery_type_accessible(self):
         cfg = BatteryConfig(nominal_energy_wh=5000, battery_type="LFP")
@@ -282,7 +274,7 @@ class TestSimulateEnergyBalance:
             freq="15min",
         )
 
-        results_df, total_pv, summary_df, _, _, _ = simulate_energy_balance(**common)
+        results_df, total_pv, summary_df, _, _ = simulate_energy_balance(**common)
         summary = simulate_energy_balance_summary(**common)
 
         # The reduced buffer must not quietly drop the columns it zeroes.
@@ -505,7 +497,7 @@ class TestSimulateEnergyBalance:
 
         monkeypatch.setattr(battery_module, "_apply_daily_degradation", fail_if_called)
 
-        results, _, _, _, _, degradation = simulate_energy_balance(
+        results, _, _, _, degradation = simulate_energy_balance(
             pv_dc=pd.Series(1000.0, index=index),
             houseload=pd.DataFrame({"Load": 500.0}, index=index),
             battery_config=BatteryConfig(nominal_energy_wh=0.0),
@@ -517,7 +509,7 @@ class TestSimulateEnergyBalance:
         assert degradation.empty
 
     def test_no_battery(self, dc_production, sample_load):
-        results_df, total_pv, summary_df, rep_cost, n_rep, deg_df = simulate_energy_balance(
+        results_df, total_pv, summary_df, n_rep, deg_df = simulate_energy_balance(
             pv_dc=dc_production * 6,
             houseload=sample_load,
             battery_config=None,
@@ -525,7 +517,6 @@ class TestSimulateEnergyBalance:
         )
         assert isinstance(results_df, pd.DataFrame)
         assert total_pv > 0
-        assert rep_cost == 0.0
         assert n_rep == 0
 
     def test_with_battery_returns_tuple(self, dc_production, sample_load, battery_config, temperature_series):
@@ -536,8 +527,8 @@ class TestSimulateEnergyBalance:
             freq="h",
             temperature_series=temperature_series,
         )
-        assert len(result) == 6
-        results_df, total_pv, summary_df, rep_cost, n_rep, deg_df = result
+        assert len(result) == 5
+        results_df, total_pv, summary_df, n_rep, deg_df = result
         assert isinstance(results_df, pd.DataFrame)
         assert total_pv > 0
 
@@ -778,7 +769,7 @@ class TestSimulateEnergyBalance:
             max_discharge_power_w=2500.0,
         )
 
-        results, _, _, _, _, degradation, state = simulate_energy_balance(
+        results, _, _, _, degradation, state = simulate_energy_balance(
             pv_dc=pd.Series(pv_values, index=idx),
             houseload=pd.DataFrame({"Load": load_values}, index=idx),
             battery_config=config,
@@ -889,8 +880,8 @@ class TestSimulateEnergyBalance:
             initial_degradation_state=state,
         )
 
-        full_results, _, _, _, _, full_degradation = full
-        second_results, _, _, _, _, second_degradation = second
+        full_results, _, _, _, full_degradation = full
+        second_results, _, _, _, second_degradation = second
         assert second_degradation["Cumulative_FEC"].iloc[-1] == pytest.approx(
             full_degradation["Cumulative_FEC"].iloc[-1], abs=1e-12
         )
@@ -942,7 +933,7 @@ class TestSimulateEnergyBalance:
             return_degradation_state=True,
             finalize_degradation=True,
         )
-        results, _, _, _, replacements, degradation, state = simulate_energy_balance(
+        results, _, _, replacements, degradation, state = simulate_energy_balance(
             pv_dc=pd.Series(pv_values, index=idx),
             houseload=pd.DataFrame({"Load": load_values}, index=idx),
             battery_config=config,
@@ -986,8 +977,8 @@ class TestSimulateEnergyBalance:
             return_degradation_state=True,
         )
 
-        assert len(result) == 7
-        results_df, _, summary_df, _, _, degradation_df, degradation_state = result
+        assert len(result) == 6
+        results_df, _, summary_df, _, degradation_df, degradation_state = result
         assert len(degradation_df) == 2
         assert degradation_df["BLAST_Model"].tolist() == ["lfp_gr_250ah_prismatic"] * 2
         assert "BLAST_Degradation" in degradation_df.columns
@@ -1190,8 +1181,8 @@ class TestSimulateEnergyBalance:
 
         baseline = run(baseline_snapshot)
         perturbed = run(perturbed_snapshot)
-        baseline_results, _, baseline_summary, _, _, baseline_degradation, baseline_final_state = baseline
-        perturbed_results, _, perturbed_summary, _, _, perturbed_degradation, perturbed_final_state = perturbed
+        baseline_results, _, baseline_summary, _, baseline_degradation, baseline_final_state = baseline
+        perturbed_results, _, perturbed_summary, _, perturbed_degradation, perturbed_final_state = perturbed
 
         ledger_columns = (
             "PV_DC_To_Battery",
@@ -1290,7 +1281,7 @@ class TestSimulateEnergyBalance:
         temperature = pd.Series(25.0, index=idx)
         config = BatteryConfig(nominal_energy_wh=5000, standby_loss_wh=0.0, enable_replacement=False)
 
-        results_df, _, _, _, _, full_degradation, _ = simulate_energy_balance(
+        results_df, _, _, _, full_degradation, _ = simulate_energy_balance(
             pv_dc=pv_dc,
             houseload=houseload,
             battery_config=config,
@@ -1357,7 +1348,7 @@ class TestSimulateEnergyBalance:
             enable_replacement=True,
         )
 
-        results_df, _, summary_df, _, n_replacements, degradation_df, degradation_state = simulate_energy_balance(
+        results_df, _, summary_df, n_replacements, degradation_df, degradation_state = simulate_energy_balance(
             pv_dc=pv_dc,
             houseload=houseload,
             battery_config=config,
