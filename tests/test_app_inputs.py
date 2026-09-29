@@ -9,6 +9,7 @@ from breos.app_inputs import (
     load_weather_for_simulation,
     prepare_simulation_inputs,
     remap_tmy_year,
+    weather_input_frequency,
 )
 
 
@@ -95,3 +96,19 @@ def test_prepare_inputs_threads_explicit_battery_temperature(monkeypatch):
 
     assert prepared.temperature_series.tolist() == [25.0, 25.0]
     assert captured == {"temp_config": 25.0, "indoor_model": {"enabled": False}}
+
+
+def test_weather_input_frequency_falls_back_to_the_first_step():
+    def frame(index):
+        return pd.DataFrame({"ghi": 0.0}, index=index)
+
+    hourly = pd.date_range("2025-01-01", periods=24, freq="h", tz="UTC")
+
+    assert weather_input_frequency(frame(hourly)) == "h"
+    assert weather_input_frequency(frame(pd.date_range("2025-01-01", periods=8, freq="15min", tz="UTC"))) == "15min"
+    # Too few rows for pandas to infer a frequency.
+    assert weather_input_frequency(frame(hourly[:2])) == "h"
+    # An early gap makes the first ten steps irregular, so App resamples by
+    # the first step as Monte Carlo does, and the resampler fills the gap.
+    assert weather_input_frequency(frame(hourly.delete(5))) == "h"
+    assert weather_input_frequency(frame(hourly[:1])) is None

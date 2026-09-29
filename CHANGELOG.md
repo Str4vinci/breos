@@ -691,10 +691,17 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   still work. The weather metadata key, the horizon-status defaults, the
   sidecar reading and the timestamp and air-temperature column names are
   each defined once. The unused `read_weather_csv`,
-  `resolve_configured_pv_model_options` and `solar._get_column` are gone,
-  and so is the fill of three timing fields for Open-Meteo sidecars written
-  before 0.6.0; those old files now log the naive-timestamp warning.
-  Results are unchanged bit for bit.
+  `resolve_configured_pv_model_options` and `solar._get_column` are gone.
+  Two edge cases change. App now takes the weather step from the first two
+  rows when pandas cannot infer it, as Monte Carlo already did: hourly
+  weather with fewer than 3 rows fails the full-year check instead of a
+  frequency error, and hourly weather with a gap in its first ten rows is
+  resampled to 15 minutes, which fills the gap, instead of failing the
+  full-year check. When the first column of a weather CSV is not a
+  timestamp, `load_weather` now takes the first column named `date`,
+  `datetime` or `time` in any case, such as `Date` or `TIME`; it used to
+  match only `date`, `time` and `Datetime`, in that order. Results are
+  unchanged bit for bit.
 
 ### Fixed
 - `calendar_model` is stored as it is validated: trimmed, lower-case, with

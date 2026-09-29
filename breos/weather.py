@@ -12,6 +12,7 @@ import json
 import logging
 import os
 import re
+from collections.abc import Hashable, Iterable
 from copy import deepcopy
 from datetime import timedelta
 from pathlib import Path
@@ -45,7 +46,7 @@ _DATE_COLUMNS = ("date", "datetime", "time")
 _AIR_TEMPERATURE_COLUMNS = ("temp_air", "temperature_2m", "temp", "air_temperature")
 
 
-def _find_date_column(columns) -> Any:
+def _find_date_column(columns: Iterable[Hashable]) -> Hashable | None:
     """Return the first column named like a timestamp, or None."""
     return next((column for column in columns if str(column).lower() in _DATE_COLUMNS), None)
 
@@ -148,8 +149,16 @@ def _weather_file_sidecar(filepath: str | os.PathLike[str]) -> tuple[str, str, d
 
 def weather_file_metadata(filepath: str | os.PathLike[str]) -> dict[str, Any]:
     """Return validated sidecar metadata plus the bound file path and digest."""
-    path, sha256, metadata = _weather_file_sidecar(filepath)
-    return {**(metadata or {}), "path": path, "sha256": sha256}
+    path, sha256, persisted = _weather_file_sidecar(filepath)
+    metadata = deepcopy(persisted or {})
+    if metadata.get("source") == "OpenMeteo_historical" and metadata.get("radiation_time_basis") == "instant":
+        # Sidecars written before 0.6.0 predate the timing fields; their
+        # Open-Meteo files are instant GMT samples.
+        metadata.setdefault("timestamp_label_basis", "instant")
+        metadata.setdefault("timestamp_timezone", "GMT")
+        metadata.setdefault("irradiance_time_offset_hours", 0.0)
+    metadata.update({"path": path, "sha256": sha256})
+    return metadata
 
 
 def _normalised_horizon_metadata(horizon: Any) -> dict[str, Any]:
