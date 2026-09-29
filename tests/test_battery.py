@@ -539,9 +539,11 @@ class TestSimulateEnergyBalance:
         Both limits scale with ``lfp_capacity_factor`` at the step's
         temperature, while ``Battery_SOC_Absolute`` divides by ``nominal * SOH``
         without that factor, so a correct run goes just below ``min_soc``.
-        The ceiling holds at every step. The floor is the running minimum:
-        when the pack warms, the floor rises above what is stored, and the
-        dispatch does not create energy to meet it.
+        The ceiling holds at every step. The floor may not: when the pack
+        warms, the floor rises above what is stored, and the dispatch does not
+        create energy to meet it. Below the floor, SOC therefore cannot fall
+        from one step to the next. Discharge and standby stop at the floor,
+        and a falling SOH only raises the ratio.
         """
         results_df, *_ = simulate_energy_balance(
             pv_dc=dc_production * 6,
@@ -552,7 +554,8 @@ class TestSimulateEnergyBalance:
         )
         soc = results_df["Battery_SOC_Absolute"].to_numpy()
         capacity_factor = np.array([lfp_capacity_factor(t) for t in temperature_series.to_numpy()])
-        floor = battery_config.min_soc * np.minimum.accumulate(capacity_factor)
+        previous_soc = np.concatenate(([np.inf], soc[:-1]))
+        floor = np.minimum(battery_config.min_soc * capacity_factor, previous_soc)
         ceiling = battery_config.max_soc * capacity_factor
 
         assert len(soc) == len(capacity_factor)
