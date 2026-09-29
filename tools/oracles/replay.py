@@ -1,22 +1,27 @@
-"""Replay dispatch instructions through the production projection, and price them.
+"""Replay dispatch instructions through the production App run, and price them.
 
 An oracle or controller hands over a :class:`~breos.dispatch_instructions.DispatchInstructions`
 and, optionally, the per-step flows it expects them to produce. The replay
-runs the instructions through the App's own projection: the same inputs, the
-same year loop, and stored energy, origins and degradation carried from one
-project year into the next. The tariff prices the result. Each planned flow
-is then compared with what the first project year delivered, and every step
-where the two differ by more than the tolerance is reported as corrected.
+runs the instructions through the App runner itself
+(:func:`breos.runners.app.run_app_simulation`): the same inputs, the same
+year loop and ``[period]`` handling, and stored energy, origins and
+degradation carried from one project year into the next. The tariff prices
+the result. Each planned flow is then compared with what the first project
+year delivered.
 
 This is the BREOS counterpart of the legacy ``pvbat/dispatch_replay.py``
 (``07dc0e40``). The legacy replay took explicit power requests. Here the
 control is the instruction arrays, which the dispatch step applies under
-every physical limit, and a planned flow is what the planner expected. A
-correction means production physics did not do what the plan assumed, for
-example because a power limit bound or health moved during the year.
+every physical limit, and a planned flow is only what the planner expected:
+it never drives the dispatch. A mismatch therefore means production physics
+did not do what the planner's model assumed, for example because a power
+limit bound or health moved during the year.
 
 It evaluates one schedule and makes no optimisation claim. It is a
-validation tool, not public API.
+validation tool, not public API. To replay several schedules on one
+configuration without preparing its inputs each time, run
+:func:`prepare_replay` and the replays inside
+:func:`breos.app_inputs.reuse_prepared_inputs`.
 """
 
 from __future__ import annotations
@@ -29,15 +34,15 @@ import pandas as pd
 
 from breos.app import App
 from breos.app_config import ResolvedAppConfig, resolve_app_config
-from breos.app_inputs import AppRuntimeDependencies, PreparedSimulationInputs, prepare_simulation_inputs
+from breos.app_inputs import AppRuntimeDependencies, PreparedSimulationInputs, prepare_simulation_inputs_cached
 from breos.dispatch_instructions import DispatchInstructions
 from breos.execution import is_pv_only_dispatch
-from breos.projection import ProjectionRun, ProjectionValue, ProjectionYear, run_projection, value_projection
+from breos.runners import app as app_runner
+from breos.runners.app import SimulationArtifacts
 from breos.tariffs import ResolvedTariff
 from breos.utils import get_hours_per_step
 
-REPLAY_SCHEMA = "breos_dispatch_replay_v1"
-DEFAULT_TOLERANCE_WH = 1e-7
+REPLAY_SCHEMA = "breos_dispatch_replay_v2"
 
 # A planned flow, by name, and the results column it is compared with. The
 # ``_w`` flows are average power over the step, as the ledger reports them;
@@ -51,6 +56,27 @@ PLANNED_FLOWS: dict[str, str] = {
 
 
 @dataclass(frozen=True)
+class Tolerance:
+    """How far a delivered flow may miss its plan on one step and still match.
+
+    A step matches when ``|planned - delivered| <= atol_wh + rtol * |delivered|``,
+    with both sides in Wh over the step.
+    """
+
+    atol_wh: float = 1e-7
+    rtol: float = 0.0
+
+    def __post_init__(self) -> None:
+        for name in ("atol_wh", "rtol"):
+            value = getattr(self, name)
+            if not (np.isfinite(value) and value >= 0.0):
+                raise ValueError(f"'{name}' must be finite and non-negative")
+
+
+DEFAULT_TOLERANCE = Tolerance()
+
+
+@dataclass(frozen=True)
 class ReplayCase:
     """One App configuration, prepared once and replayable with any instructions.
 
@@ -61,6 +87,7 @@ class ReplayCase:
 
     cfg: dict[str, Any]
     resolved: ResolvedAppConfig
+    deps: AppRuntimeDependencies
     inputs: PreparedSimulationInputs
     tariff: ResolvedTariff
 
@@ -82,33 +109,37 @@ def prepare_replay(config: dict[str, Any], *, deps: AppRuntimeDependencies | Non
         raise ValueError("A replay prices its result with a tariff; the configuration has no [tariff] table")
     if is_pv_only_dispatch(cfg["battery_kwh"] * 1000, cfg["battery_max_soc"], cfg["battery_min_soc"]):
         raise ValueError("A replay needs a battery: a PV-only run ignores dispatch instructions")
-    inputs = prepare_simulation_inputs(cfg, resolved, deps or App._runtime_dependencies())
+    deps = deps or App._runtime_dependencies()
+    # The runner's own preparation, so a reuse_prepared_inputs block shares it.
+    inputs = prepare_simulation_inputs_cached(cfg, resolved, deps, prepare=app_runner.prepare_simulation_inputs)
     tariff = resolved.tariff.resolve(pd.DatetimeIndex(inputs.dc_system_base.index), resolved.timezone)
-    return ReplayCase(cfg=cfg, resolved=resolved, inputs=inputs, tariff=tariff)
+    return ReplayCase(cfg=cfg, resolved=resolved, deps=deps, inputs=inputs, tariff=tariff)
 
 
 @dataclass(frozen=True)
 class ReplayResult:
-    """A replayed schedule: the projection, its price, and planned against delivered.
+    """A replayed schedule: the App run, and its planned against delivered flows.
 
-    ``planned``, ``delivered`` and ``planned_minus_delivered_wh`` hold the
-    flows the caller planned, for the first project year. A power difference
-    is converted to energy over the step. ``corrected_steps`` are the steps
-    where any planned flow missed by more than ``tolerance_wh``; with no
-    planned flows there are none, and ``requests_feasible`` is True.
-    ``first_year_step_cost`` is each step's import cost less export revenue.
+    ``artifacts`` is what the App runner produced: the priced year rows, the
+    cost projection (None for a ``[period]`` window), the first year's
+    per-step frame and the projection. ``planned``, ``delivered`` and
+    ``planned_minus_delivered_wh`` hold the flows the caller planned, for the
+    first project year only; a power difference is converted to energy over
+    the step. ``mismatched_steps`` are the steps where any planned flow missed
+    its tolerance, and ``plan_matched`` says there were none. With no planned
+    flows nothing is compared and the plan matches. ``first_year_step_cost``
+    is each first-year step's import cost less export revenue.
     """
 
-    run: ProjectionRun
-    value: ProjectionValue
+    artifacts: SimulationArtifacts
     instruction_hash: str
     first_year_step_cost: np.ndarray
     planned: dict[str, np.ndarray]
     delivered: dict[str, np.ndarray]
     planned_minus_delivered_wh: dict[str, np.ndarray]
-    corrected_steps: tuple[int, ...]
-    requests_feasible: bool
-    tolerance_wh: float
+    mismatched_steps: tuple[int, ...]
+    plan_matched: bool
+    tolerances: dict[str, Tolerance]
     schema: str = REPLAY_SCHEMA
 
 
@@ -125,58 +156,45 @@ def _planned_arrays(planned: Mapping[str, Any], n_steps: int) -> dict[str, np.nd
     return arrays
 
 
+def _tolerances(tolerance: Tolerance | Mapping[str, Tolerance], flows: Mapping[str, Any]) -> dict[str, Tolerance]:
+    if isinstance(tolerance, Tolerance):
+        return {name: tolerance for name in flows}
+    unknown = sorted(set(tolerance) - set(PLANNED_FLOWS))
+    if unknown:
+        raise ValueError(f"Tolerance for unknown flow(s) {', '.join(unknown)}; known: {', '.join(PLANNED_FLOWS)}")
+    return {name: tolerance.get(name, DEFAULT_TOLERANCE) for name in flows}
+
+
 def replay_instructions(
     case: ReplayCase,
     instructions: DispatchInstructions,
     *,
     planned: Mapping[str, Any] | None = None,
-    tolerance_wh: float = DEFAULT_TOLERANCE_WH,
+    tolerance: Tolerance | Mapping[str, Tolerance] = DEFAULT_TOLERANCE,
     execution_backend: str | None = None,
 ) -> ReplayResult:
-    """Run ``instructions`` through ``case``'s projection and compare them with ``planned``.
+    """Run ``instructions`` through ``case``'s App run and compare the first year with ``planned``.
 
     The instructions cover one year on the tariff's calendar and are replayed
-    every project year, as App replays its own (ADR 0002 A2). The execution
-    backend defaults to the configuration's.
+    every project year, as App replays its own (ADR 0002 A2). ``planned``
+    maps names in :data:`PLANNED_FLOWS` to one value per step of the first
+    project year, the only year whose per-step frame the run keeps; later
+    years are simulated and priced but not compared. ``tolerance`` is one
+    :class:`Tolerance` for every flow, or one per flow name, with
+    :data:`DEFAULT_TOLERANCE` for a flow it leaves out. A planned power is
+    compared as energy over the step, so its tolerance is in Wh too. The
+    execution backend defaults to the configuration's.
     """
-    if not (np.isfinite(tolerance_wh) and tolerance_wh >= 0.0):
-        raise ValueError("'tolerance_wh' must be finite and non-negative")
     n_steps = len(case.index)
     if len(instructions) != n_steps:
         raise ValueError(f"The instructions cover {len(instructions)} steps; the tariff's calendar has {n_steps}")
     requested = _planned_arrays(planned or {}, n_steps)
-    cfg, inputs = case.cfg, case.inputs
+    tolerances = _tolerances(tolerance, requested)
+    cfg = case.cfg if execution_backend is None else {**case.cfg, "execution_backend": execution_backend}
 
-    # The year loop is App's (breos.runners.app.run_app_simulation): a
-    # [period] window runs once and bills its civil days.
-    period = case.resolved.period
-    years = 1 if period is not None else cfg["projection_years"]
-    extra = {"Billed_Days": float(period.days)} if period is not None else {}
+    artifacts = app_runner.run_app_simulation(cfg, case.resolved, case.deps, instructions=instructions)
 
-    def year_inputs(year_idx: int) -> ProjectionYear:
-        factor = (1 - cfg["pv_degradation_rate"]) ** year_idx
-        return ProjectionYear(
-            pv_degradation_factor=factor,
-            pv_dc=inputs.dc_system_base * factor,
-            houseload=inputs.load_data,
-            temperature_series=inputs.temperature_series,
-            extra=extra,
-        )
-
-    run = run_projection(
-        cfg,
-        case.resolved,
-        years,
-        year_inputs,
-        has_battery=True,
-        execution_backend=execution_backend or cfg["execution_backend"],
-        tariff=case.tariff,
-        instructions=instructions,
-    )
-    value = value_projection(cfg, case.resolved, run)
-
-    frame = run.first_year_results_df
-    assert frame is not None
+    frame = artifacts.first_year_results_df
     hours_per_step = get_hours_per_step(cfg["resolution"])
     step_cost = (
         frame["Import_From_Grid"].to_numpy() * np.asarray(case.tariff.import_price_per_kwh)
@@ -184,22 +202,21 @@ def replay_instructions(
     ) * (hours_per_step / 1000)
 
     delivered = {name: frame[PLANNED_FLOWS[name]].to_numpy(dtype=np.float64) for name in requested}
-    differences = {
-        name: (values - delivered[name]) * (1.0 if name.endswith("_wh") else hours_per_step)
-        for name, values in requested.items()
-    }
-    corrected = np.zeros(n_steps, dtype=bool)
-    for difference in differences.values():
-        corrected |= np.abs(difference) > tolerance_wh
+    mismatched = np.zeros(n_steps, dtype=bool)
+    differences = {}
+    for name, values in requested.items():
+        to_wh = 1.0 if name.endswith("_wh") else hours_per_step
+        differences[name] = (values - delivered[name]) * to_wh
+        allowed = tolerances[name].atol_wh + tolerances[name].rtol * np.abs(delivered[name] * to_wh)
+        mismatched |= np.abs(differences[name]) > allowed
     return ReplayResult(
-        run=run,
-        value=value,
+        artifacts=artifacts,
         instruction_hash=instructions.instruction_hash(),
         first_year_step_cost=step_cost,
         planned=requested,
         delivered=delivered,
         planned_minus_delivered_wh=differences,
-        corrected_steps=tuple(int(step) for step in np.flatnonzero(corrected)),
-        requests_feasible=not bool(corrected.any()),
-        tolerance_wh=float(tolerance_wh),
+        mismatched_steps=tuple(int(step) for step in np.flatnonzero(mismatched)),
+        plan_matched=not bool(mismatched.any()),
+        tolerances=tolerances,
     )

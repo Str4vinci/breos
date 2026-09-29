@@ -1,4 +1,4 @@
-"""The dispatch-replay oracle: instructions through the production projection (plan step 7)."""
+"""The dispatch-replay oracle: instructions through the production App run (plan step 7)."""
 
 import math
 
@@ -8,7 +8,7 @@ import pytest
 
 from breos.app import App
 from breos.smart_charging import resolve_instructions
-from tools.oracles.replay import PLANNED_FLOWS, prepare_replay, replay_instructions
+from tools.oracles.replay import PLANNED_FLOWS, Tolerance, prepare_replay, replay_instructions
 
 BASE = {"location": "porto", "n_modules": 8, "annual_consumption_kwh": 4000, "battery_kwh": 5.0, "projection_years": 3}
 TOU = {
@@ -16,6 +16,7 @@ TOU = {
     "currency": "EUR",
     "import_prices": {"peak": 0.28, "off_peak": 0.11},
     "export_prices": {"all": 0.05},
+    "fixed_charge_per_day": 0.25,
 }
 FIXED = {
     "mode": "fixed_target",
@@ -30,68 +31,115 @@ CONFIG = {**BASE, "tariff": TOU, "smart_charging": FIXED}
 pytestmark = pytest.mark.usefixtures("_patch_weather")
 
 
-def _record_app_artifacts(monkeypatch):
-    import breos.app as app_module
-
-    artifacts = []
-    run_app = app_module.run_app_simulation
-
-    def record(*args):
-        artifacts.append(run_app(*args))
-        return artifacts[-1]
-
-    monkeypatch.setattr(app_module, "run_app_simulation", record)
-    return artifacts
-
-
 def _fixed_target(case):
     return resolve_instructions(case.resolved.smart_charging, case.tariff)
 
 
-def test_replaying_the_fixed_target_instructions_reproduces_the_app_run(monkeypatch):
-    artifacts = _record_app_artifacts(monkeypatch)
-    App(CONFIG).simulate()
-    app = artifacts[0]
+def _app_artifacts(config):
+    app = App(config)
+    app.simulate()
+    return app._artifacts
 
+
+def test_replaying_the_fixed_target_instructions_reproduces_the_app_run():
+    app = _app_artifacts(CONFIG)
     case = prepare_replay(CONFIG)
     instructions = _fixed_target(case)
     assert instructions == app.instructions
     frame = app.first_year_results_df
     planned = {name: frame[column] for name, column in PLANNED_FLOWS.items()}
     replay = replay_instructions(case, instructions, planned=planned)
+    run = replay.artifacts
 
-    pd.testing.assert_frame_equal(replay.run.first_year_results_df, frame, check_exact=True)
-    pd.testing.assert_frame_equal(replay.value.yearly_df, app.yearly_df, check_exact=True)
-    pd.testing.assert_frame_equal(replay.value.cost_projection, app.cost_projection, check_exact=True)
-    assert replay.run.carry == app.projection.carry
-    assert (replay.requests_feasible, replay.corrected_steps) == (True, ())
+    pd.testing.assert_frame_equal(run.first_year_results_df, frame, check_exact=True)
+    pd.testing.assert_frame_equal(run.yearly_df, app.yearly_df, check_exact=True)
+    pd.testing.assert_frame_equal(run.cost_projection, app.cost_projection, check_exact=True)
+    pd.testing.assert_frame_equal(run.projection.period_energy, app.projection.period_energy, check_exact=True)
+    assert run.projection.carry == app.projection.carry
+    assert (replay.plan_matched, replay.mismatched_steps) == (True, ())
     assert all(not difference.any() for difference in replay.planned_minus_delivered_wh.values())
     year_one = app.yearly_df.iloc[0]
     assert replay.first_year_step_cost.sum() == pytest.approx(
         year_one["Import_Cost"] - year_one["Export_Revenue"], rel=1e-12
     )
     assert replay.instruction_hash == instructions.instruction_hash()
+    # The table did not make these instructions, so the run claims no smart-charging provenance.
+    assert (app.smart_charging is not None, run.smart_charging) == (True, None)
 
 
-def test_an_infeasible_request_is_reported_as_corrected():
+@pytest.mark.filterwarnings("ignore:'projection_years'")
+def test_a_period_window_replays_once_and_bills_its_civil_days():
+    # March 2025 in Lisbon: 31 civil days, one of them 23 hours long.
+    config = {**CONFIG, "start_date": "2025-01-01", "period": {"start": "2025-03-01", "end": "2025-04-01"}}
+    app = _app_artifacts(config)
+    case = prepare_replay(config)
+    replay = replay_instructions(case, _fixed_target(case))
+    yearly = replay.artifacts.yearly_df
+
+    pd.testing.assert_frame_equal(yearly, app.yearly_df, check_exact=True)
+    assert len(yearly) == 1 and replay.artifacts.cost_projection is None
+    assert len(case.index) == 31 * 24 - 1
+    assert yearly["Fixed_Charge"].iloc[0] == pytest.approx(31 * TOU["fixed_charge_per_day"], rel=1e-12)
+
+
+def test_a_plan_that_asks_past_a_power_limit_does_not_match():
     case = prepare_replay({**CONFIG, "battery_max_charge_power_w": 1000.0})
     instructions = _fixed_target(case)
-    feasible = replay_instructions(case, instructions)
-    delivered = feasible.run.first_year_results_df["Grid_AC_To_Battery"].to_numpy()
+    unplanned = replay_instructions(case, instructions)
+    frame = unplanned.artifacts.first_year_results_df
+    delivered = frame["Grid_AC_To_Battery"].to_numpy()
     step = int(np.flatnonzero(delivered > 0)[0])
+    # The battery takes at most 1 kW of DC charge input, so the grid supplies
+    # at most 1 kW over the 0.95 AC-to-DC conversion.
+    assert frame["Battery_Charge_Input"].iloc[step] <= 1000.0 * (1 + 1e-12)
+    assert delivered[step] <= 1000.0 / 0.95 * (1 + 1e-12)
 
-    # The plan asks the grid for 3 kW where the battery can take at most 1 kW.
+    # The plan asks the grid for 3 kW there.
     planned = delivered.copy()
     planned[step] = 3000.0
     replay = replay_instructions(case, instructions, planned={"grid_charge_ac_w": planned})
-    assert replay.corrected_steps == (step,)
-    assert replay.requests_feasible is False
-    hours = 1.0
-    assert replay.planned_minus_delivered_wh["grid_charge_ac_w"][step] == pytest.approx(
-        (3000.0 - delivered[step]) * hours
+    assert (replay.mismatched_steps, replay.plan_matched) == ((step,), False)
+    assert replay.planned_minus_delivered_wh["grid_charge_ac_w"][step] == pytest.approx(3000.0 - delivered[step])
+    # A plan never drives the dispatch: only the report differs.
+    pd.testing.assert_frame_equal(replay.artifacts.yearly_df, unplanned.artifacts.yearly_df, check_exact=True)
+
+
+def test_a_planned_power_is_compared_as_energy_over_the_step():
+    # At 15 minutes, 400 W too much is 100 Wh and 150 W is 37.5 Wh.
+    case = prepare_replay({**CONFIG, "resolution": "15min", "projection_years": 1})
+    instructions = _fixed_target(case)
+    frame = replay_instructions(case, instructions).artifacts.first_year_results_df
+    delivered = frame["Grid_AC_To_Battery"].to_numpy()
+    first, second = np.flatnonzero(delivered > 0)[:2]
+    planned = delivered.copy()
+    planned[first] += 400.0
+    planned[second] += 150.0
+    replay = replay_instructions(
+        case,
+        instructions,
+        planned={"grid_charge_ac_w": planned, "battery_energy_wh": frame["Battery_Energy_End"]},
+        tolerance={"grid_charge_ac_w": Tolerance(atol_wh=50.0)},
     )
-    # The request changes nothing in the physics: only the report differs.
-    pd.testing.assert_frame_equal(replay.value.yearly_df, feasible.value.yearly_df, check_exact=True)
+    difference = replay.planned_minus_delivered_wh["grid_charge_ac_w"]
+    assert (difference[first], difference[second]) == (pytest.approx(100.0), pytest.approx(37.5))
+    assert replay.mismatched_steps == (first,)
+    assert replay.tolerances == {"grid_charge_ac_w": Tolerance(atol_wh=50.0), "battery_energy_wh": Tolerance()}
+
+
+def test_a_relative_tolerance_scales_with_the_delivered_energy():
+    case = prepare_replay({**CONFIG, "projection_years": 1})
+    instructions = _fixed_target(case)
+    energy = replay_instructions(case, instructions).artifacts.first_year_results_df["Battery_Energy_End"].to_numpy()
+    step = int(np.argmax(energy))
+    planned = energy.copy()
+    planned[step] *= 1.01
+    loose = replay_instructions(
+        case, instructions, planned={"battery_energy_wh": planned}, tolerance=Tolerance(rtol=0.02)
+    )
+    tight = replay_instructions(
+        case, instructions, planned={"battery_energy_wh": planned}, tolerance=Tolerance(rtol=0.005)
+    )
+    assert (loose.plan_matched, tight.mismatched_steps) == (True, (step,))
 
 
 def test_a_replay_rejects_what_it_cannot_price_or_check():
@@ -106,3 +154,7 @@ def test_a_replay_rejects_what_it_cannot_price_or_check():
         replay_instructions(case, instructions, planned={"export_w": np.zeros(n)})
     with pytest.raises(ValueError, match="finite, non-negative"):
         replay_instructions(case, instructions, planned={"discharge_ac_w": np.full(n, math.nan)})
+    with pytest.raises(ValueError, match="Tolerance for unknown flow"):
+        replay_instructions(case, instructions, tolerance={"export_w": Tolerance()})
+    with pytest.raises(ValueError, match="'rtol' must be finite"):
+        Tolerance(rtol=-1.0)
