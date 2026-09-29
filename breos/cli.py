@@ -34,7 +34,7 @@ from breos.pv_modules import MODULES
 from breos.resources import load_config_json
 from breos.solar import resolve_pvwatts_losses
 from breos.tariffs import DEFAULT_CURRENCY
-from breos.utils import deep_merge, normalise_frequency
+from breos.utils import normalise_frequency
 
 
 def _package_version() -> str:
@@ -88,7 +88,24 @@ def _build_config(args: argparse.Namespace) -> dict[str, Any]:
             continue
         overrides[key] = value
 
-    return deep_merge(config, overrides)
+    return _deep_merge(config, overrides)
+
+
+def _deep_merge(base: dict[str, Any], overrides: dict[str, Any]) -> dict[str, Any]:
+    """Return ``base`` with ``overrides`` applied, merging nested tables key by key.
+
+    An override table replaces only the keys it sets, so a flag that sets one
+    ``[tariff]`` key keeps the rest of the file's table. Neither input is
+    changed.
+    """
+    merged = dict(base)
+    for key, value in overrides.items():
+        current = merged.get(key)
+        if isinstance(current, dict) and isinstance(value, dict):
+            merged[key] = _deep_merge(current, value)
+        else:
+            merged[key] = value
+    return merged
 
 
 def _json_text(data: Any, what: str, **kwargs: Any) -> str:

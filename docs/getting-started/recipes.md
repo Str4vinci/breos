@@ -385,8 +385,10 @@ design repeats the weather and PV preparation, which `breos sweep` shares.
 `App.revalue` returns the result a finished run would give at other prices,
 without simulating the energy balance again when the prices cannot change
 the dispatch. It accepts the economics keys only: `costs`, `cost_preset`,
-`tariff`, `discount_rate`, `inflation_rate` and the escalators. Nested
-tables merge key by key, as CLI overrides do.
+`tariff`, `discount_rate`, `inflation_rate` and the escalators. A nested
+table changes only the keys it sets, a key set to `None` in it is removed,
+and `{"tariff": None}` removes the tariff. A price list
+(`tariff.import_prices`, `tariff.export_prices`) replaces the old one whole.
 
 ```python
 from breos import App

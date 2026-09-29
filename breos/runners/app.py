@@ -347,6 +347,8 @@ def run_app_simulation(
         observe_jit_per_year=True,
         tariff=tariff,
         instructions=instructions,
+        # Kept so App.revalue can re-price the tariff without re-simulating.
+        record_period_energy=True,
     )
     first_year_results_df = cast(pd.DataFrame, projection.first_year_results_df)
     current_soh = projection.carry.soh_pct

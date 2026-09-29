@@ -8,9 +8,10 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 - `App.revalue(changes)` values a finished run at other prices
   ([#183](https://github.com/Str4vinci/breos/issues/183)). It accepts the
   economics keys only (`costs`, `cost_preset`, `tariff`, `discount_rate`,
-  `inflation_rate` and the escalators; `breos.app.REVALUATION_KEYS`),
-  merged into the run's configuration table by table, and raises
-  `ValueError` for any other key. When the prices cannot change the
+  `inflation_rate` and the escalators; `breos.app.REVALUATION_KEYS`) and
+  raises `ValueError` for any other key. A nested table changes only the
+  keys it sets, `None` removes a key, and a tariff price list replaces the
+  old one whole. When the prices cannot change the
   dispatch it re-prices the stored run: flat prices, a tariff removed, or new
   prices on the same schedule with unchanged smart-charging instructions.
   Otherwise it simulates again. `provenance.revaluation` records

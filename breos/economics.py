@@ -517,7 +517,8 @@ def _replacement_outlay(base: np.ndarray, exponents: np.ndarray, inflation_rate:
 
 
 # Column order of a cost projection. Columns a stage does not produce (CO2
-# without emissions) are left out; anything else follows in its own order.
+# without emissions) are left out; any other column a caller added to the
+# cashflows follows, in its own order.
 COST_PROJECTION_COLUMNS = (
     "Year",
     "Load_kWh",
@@ -771,7 +772,10 @@ def discount_cashflows(
     proj["Cost_System_Cumulative_NPV"] = total_investment + proj["Cost_System_Annual_NPV"].cumsum()
     proj["Savings_Cumulative"] = proj["Cost_No_Sys_Cumulative"] - proj["Cost_System_Cumulative"]
     proj["Savings_Cumulative_NPV"] = proj["Cost_No_Sys_Cumulative_NPV"] - proj["Cost_System_Cumulative_NPV"]
-    proj = proj[[column for column in COST_PROJECTION_COLUMNS if column in proj.columns]]
+    proj = proj[
+        [column for column in COST_PROJECTION_COLUMNS if column in proj.columns]
+        + [column for column in proj.columns if column not in COST_PROJECTION_COLUMNS]
+    ]
 
     proj.attrs["currency"] = currency
     proj.attrs["total_investment"] = total_investment

@@ -164,7 +164,7 @@ def _provenance(
         "resolution": cfg["resolution"],
         "timezone": resolved.timezone,
         "start_date": cfg["start_date"],
-        "pv_model": {"bifacial": artifacts.pv_loss_waterfall["bifacial"]},
+        "pv_model": {"bifacial": deepcopy(artifacts.pv_loss_waterfall["bifacial"])},
         "degradation": artifacts.degradation_summary,
         # Which dispatch implementation produced these numbers, and the
         # toolchain it ran on. A bit-identity claim cannot be checked after the
@@ -281,10 +281,14 @@ def build_result(
         "yearly": yearly_to_dicts(artifacts.yearly_df),
         "monthly": monthly_to_dicts(artifacts.first_year_results_df, cfg["resolution"]),
         "financial": financial_to_dicts(artifacts.cost_projection, total_initial),
-        "pv_loss_waterfall": artifacts.pv_loss_waterfall,
+        # Copied, so editing a result cannot reach the stored run that
+        # App.revalue prices again.
+        "pv_loss_waterfall": deepcopy(artifacts.pv_loss_waterfall),
         "provenance": _provenance(cfg, resolved, artifacts, input_repairs),
-        "degradation": artifacts.degradation_summary,
+        "degradation": deepcopy(artifacts.degradation_summary),
     }
+    # One copy, as provenance and the top level have always shared it.
+    result["provenance"]["degradation"] = result["degradation"]
 
     # The year-1 money components at year-1 prices, before escalation and
     # discounting (ADR 0003 E7), at the top level so the sweep CSV keeps them.

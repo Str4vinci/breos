@@ -65,10 +65,9 @@ def _fields(result):
 
 
 def _merge(base, changes):
-    merged = dict(base)
-    for key, value in changes.items():
-        merged[key] = {**base[key], **value} if isinstance(value, dict) and isinstance(base.get(key), dict) else value
-    return merged
+    from breos.app import _revalued_config
+
+    return _revalued_config(base, changes)
 
 
 def _assert_close(revalued, fresh, rel):
@@ -152,7 +151,7 @@ def test_a_tariff_removed_is_repriced_at_flat_prices(tou_app, flat_app):
 
 @pytest.mark.parametrize("changes", [{"battery_kwh": 3.0}, {"projection_years": 5}, {"location": "lisbon"}])
 def test_keys_that_change_the_simulation_are_refused(flat_app, changes):
-    with pytest.raises(ValueError, match=f"revalue\\(\\) changes prices only; {next(iter(changes))}"):
+    with pytest.raises(ValueError, match=f"changes prices only, and {next(iter(changes))} is not a price key"):
         _revalued(flat_app, changes)
 
 
@@ -173,3 +172,33 @@ def test_revaluation_keys_are_the_prices():
 def test_revalue_needs_a_run():
     with pytest.raises(RuntimeError, match="simulate"):
         App(BASE).revalue({"discount_rate": 0.05})
+
+
+def test_an_unknown_key_is_named(flat_app):
+    with pytest.raises(ValueError, match="Unknown config key\\(s\\) for revalue\\(\\): discount"):
+        _revalued(flat_app, {"discount": 0.05})
+
+
+def test_a_price_list_is_replaced_whole(tou_app):
+    # Merged key by key, "all" would sit beside peak and off_peak and never apply.
+    changes = {"tariff": {"import_prices": {"all": 0.2}}}
+    revalued = _revalued(tou_app, changes)
+    fresh = _simulated({**BASE, "tariff": {**TOU, "import_prices": {"all": 0.2}}}).result()
+    _assert_close(_fields(revalued), _fields(fresh), rel=1e-12)
+    assert revalued["npv_savings"] != tou_app.result()["npv_savings"]
+
+
+def test_none_removes_a_key_so_flat_prices_can_give_way_to_a_tariff():
+    flat = _simulated({**BASE, "costs": {"electricity_cost": 0.24}})
+    revalued = _revalued(flat, {"costs": {"electricity_cost": None}, "tariff": TOU})
+    assert revalued["provenance"]["revaluation"]["method"] == "resimulated"
+    assert _fields(revalued) == _fields(_simulated({**BASE, "costs": {}, "tariff": TOU}).result())
+
+
+def test_a_revalued_result_shares_nothing_with_the_run(flat_app):
+    before = _fields(flat_app.result())
+    revalued = _revalued(flat_app, {"discount_rate": 0.06})
+    revalued["degradation"]["engine"] = "edited"
+    revalued["pv_loss_waterfall"]["stages"].clear()
+    flat_app.result()["degradation"]["engine"] = "edited too"
+    assert _fields(_revalued(flat_app, {})) == before

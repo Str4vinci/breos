@@ -454,6 +454,7 @@ def project_years(
     observe_jit_per_year: bool = False,
     tariff: ResolvedTariff | None = None,
     instructions: DispatchInstructions | None = None,
+    record_period_energy: bool = False,
 ) -> ProjectionRun:
     """Simulate ``years`` project years, carrying the battery from one to the next.
 
@@ -467,10 +468,13 @@ def project_years(
     carries its import cost, export revenue, no-system import cost and fixed
     charge at year-1 prices, from the step energy times the step price. Every
     year replays the one calendar (ADR 0002 A2), and so do smart-charging
-    ``instructions``, resolved on that calendar.
+    ``instructions``, resolved on that calendar. ``record_period_energy``
+    also keeps each year's priced energy by tariff period, which App.revalue
+    re-prices from.
     """
     hours_per_step = get_hours_per_step(freq)
-    period_weights = _period_weights(tariff) if tariff is not None else {}
+    record_period_energy = record_period_energy and tariff is not None
+    period_weights = _period_weights(tariff) if record_period_energy and tariff is not None else {}
     weights = {**_tariff_weights(tariff), **period_weights} if tariff is not None else None
     carry = initial_carry or CarryState()
     rows: list[dict[str, Any]] = []
@@ -576,7 +580,7 @@ def project_years(
                 money=_tariff_money(tariff, weighted_w, hours_per_step, n_steps) if tariff is not None else None,
             )
         )
-        if tariff is not None:
+        if record_period_energy:
             period_rows.append({name: float(weighted_w[name] * hours_per_step / 1000) for name in period_weights})
 
     if not rows:
@@ -587,7 +591,7 @@ def project_years(
         total_replacements=total_replacements,
         first_year_results_df=first_year_results_df,
         jit_cache_states=jit_cache_states,
-        period_energy=pd.DataFrame(period_rows) if tariff is not None else None,
+        period_energy=pd.DataFrame(period_rows) if record_period_energy else None,
     )
 
 
@@ -602,6 +606,7 @@ def run_projection(
     observe_jit_per_year: bool = False,
     tariff: ResolvedTariff | None = None,
     instructions: DispatchInstructions | None = None,
+    record_period_energy: bool = False,
 ) -> ProjectionRun:
     """Run :func:`project_years` for an App configuration.
 
@@ -626,6 +631,7 @@ def run_projection(
         observe_jit_per_year=observe_jit_per_year,
         tariff=tariff,
         instructions=instructions,
+        record_period_energy=record_period_energy,
     )
 
 

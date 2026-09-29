@@ -28,8 +28,34 @@ from breos.app_results import build_result as build_app_result
 from breos.load_profiles import load_profile
 from breos.repair import input_repair_records
 from breos.runners.app import SimulationArtifacts, revalue_app_simulation, run_app_simulation
-from breos.utils import deep_merge
 from breos.weather import build_battery_temperature_series, fetch_tmy_weather_data, load_weather, resample_to_15min
+
+# Nested tables App.revalue replaces whole: the entries of a price list
+# belong together, so a change must not keep a period it leaves out.
+_REPLACED_TABLES = frozenset({("tariff", "import_prices"), ("tariff", "export_prices")})
+
+
+def _revalued_config(config: dict[str, Any], changes: Mapping[str, Any]) -> dict[str, Any]:
+    """``config`` with ``changes`` applied table by table, as App.revalue documents."""
+    merged = dict(config)
+    for key, value in changes.items():
+        current = merged.get(key)
+        if not (isinstance(current, dict) and isinstance(value, Mapping)):
+            merged[key] = deepcopy(value)
+            continue
+        table = deepcopy(current)
+        for name, item in value.items():
+            if item is None:
+                table.pop(name, None)
+            elif (key, name) in _REPLACED_TABLES or not (
+                isinstance(table.get(name), dict) and isinstance(item, Mapping)
+            ):
+                table[name] = deepcopy(item)
+            else:
+                table[name] = {**table[name], **deepcopy(dict(item))}
+        merged[key] = table
+    return merged
+
 
 # The keys App.revalue may change: the economics section of the resolved
 # configuration, except the horizon, which sets how many years are simulated.
@@ -88,10 +114,12 @@ class App:
     def revalue(self, changes: Mapping[str, Any]) -> dict[str, Any]:
         """Return the result this run would give at other prices, without changing this App.
 
-        ``changes`` holds configuration keys, merged into this App's
-        configuration as a CLI override is: a nested table such as ``costs``
-        or ``tariff`` replaces only the keys it sets. Only the economics keys
-        in :data:`REVALUATION_KEYS` may change: ``costs``, ``cost_preset``,
+        ``changes`` holds configuration keys. A nested table such as
+        ``costs`` or ``tariff`` changes only the keys it sets, and a key set
+        to ``None`` in it is removed; ``{"tariff": None}`` removes the table.
+        A price list (``tariff.import_prices``, ``tariff.export_prices``)
+        replaces the old one whole. Only the economics keys in
+        :data:`REVALUATION_KEYS` may change: ``costs``, ``cost_preset``,
         ``tariff``, the discount rate and the escalators.
 
         When the new prices cannot change the dispatch, the stored simulation
@@ -110,13 +138,16 @@ class App:
         """
         if self._artifacts is None:
             raise RuntimeError("Call simulate() before revalue().")
-        config = deep_merge(self._config, dict(changes))
+        unknown = sorted(key for key in changes if key not in APP_CONFIG_FIELDS)
+        if unknown:
+            raise ValueError(f"Unknown config key(s) for revalue(): {', '.join(unknown)}")
+        config = _revalued_config(self._config, changes)
         changed = sorted(key for key in config.keys() | self._config.keys() if config.get(key) != self._config.get(key))
         outside = [key for key in changed if key not in REVALUATION_KEYS]
         if outside:
             raise ValueError(
-                f"revalue() changes prices only; {', '.join(outside)} would change the simulation. "
-                f"Build a new App for that. Keys revalue() accepts: {', '.join(sorted(REVALUATION_KEYS))}."
+                f"revalue() changes prices only, and {', '.join(outside)} is not a price key. "
+                f"Build a new App for it. Keys revalue() accepts: {', '.join(sorted(REVALUATION_KEYS))}."
             )
         resolved = resolve_app_config(config)
         artifacts, method = revalue_app_simulation(

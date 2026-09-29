@@ -890,7 +890,7 @@ def test_deep_merge_keeps_the_rest_of_a_nested_table():
     base = {"n_modules": 8, "tariff": {"schedule": "pt_mainland_2026_daily_bi", "import_prices": {"peak": 0.23}}}
     overrides = {"n_modules": 10, "tariff": {"import_prices": {"off_peak": 0.12}}, "battery_kwh": 5.0}
 
-    merged = cli.deep_merge(base, overrides)
+    merged = cli._deep_merge(base, overrides)
 
     assert merged == {
         "n_modules": 10,
@@ -899,5 +899,5 @@ def test_deep_merge_keeps_the_rest_of_a_nested_table():
     }
     assert base["tariff"] == {"schedule": "pt_mainland_2026_daily_bi", "import_prices": {"peak": 0.23}}
     # A scalar override replaces a table, and a table replaces a scalar.
-    assert cli.deep_merge({"costs": {"a": 1}}, {"costs": None}) == {"costs": None}
-    assert cli.deep_merge({"costs": None}, {"costs": {"a": 1}}) == {"costs": {"a": 1}}
+    assert cli._deep_merge({"costs": {"a": 1}}, {"costs": None}) == {"costs": None}
+    assert cli._deep_merge({"costs": None}, {"costs": {"a": 1}}) == {"costs": {"a": 1}}
