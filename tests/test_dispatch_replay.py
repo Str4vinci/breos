@@ -7,6 +7,7 @@ import pandas as pd
 import pytest
 
 from breos.app import App
+from breos.dispatch_instructions import DispatchInstructions
 from breos.smart_charging import resolve_instructions
 from tools.oracles.replay import PLANNED_FLOWS, Tolerance, prepare_replay, replay_instructions
 
@@ -67,6 +68,19 @@ def test_replaying_the_fixed_target_instructions_reproduces_the_app_run():
     assert (app.smart_charging is not None, run.smart_charging) == (True, None)
 
 
+def test_the_given_instructions_drive_the_dispatch():
+    # The config asks for fixed-target charging; the replay dispatches greedily.
+    case = prepare_replay(CONFIG)
+    replay = replay_instructions(case, DispatchInstructions.noop(len(case.index)))
+    frame = replay.artifacts.first_year_results_df
+    smart = _app_artifacts(CONFIG).first_year_results_df
+    greedy = _app_artifacts({**BASE, "tariff": TOU}).first_year_results_df
+
+    assert smart["Grid_AC_To_Battery"].sum() > 0.0
+    assert frame["Grid_AC_To_Battery"].sum() == 0.0
+    pd.testing.assert_frame_equal(frame, greedy, check_exact=True)
+
+
 @pytest.mark.filterwarnings("ignore:'projection_years'")
 def test_a_period_window_replays_once_and_bills_its_civil_days():
     # March 2025 in Lisbon: 31 civil days, one of them 23 hours long.
@@ -111,9 +125,12 @@ def test_a_planned_power_is_compared_as_energy_over_the_step():
     frame = replay_instructions(case, instructions).artifacts.first_year_results_df
     delivered = frame["Grid_AC_To_Battery"].to_numpy()
     first, second = np.flatnonzero(delivered > 0)[:2]
+    below = int(np.flatnonzero(delivered > 400.0)[-1])
     planned = delivered.copy()
     planned[first] += 400.0
     planned[second] += 150.0
+    # A plan below what was delivered misses too.
+    planned[below] -= 400.0
     replay = replay_instructions(
         case,
         instructions,
@@ -121,8 +138,12 @@ def test_a_planned_power_is_compared_as_energy_over_the_step():
         tolerance={"grid_charge_ac_w": Tolerance(atol_wh=50.0)},
     )
     difference = replay.planned_minus_delivered_wh["grid_charge_ac_w"]
-    assert (difference[first], difference[second]) == (pytest.approx(100.0), pytest.approx(37.5))
-    assert replay.mismatched_steps == (first,)
+    assert (difference[first], difference[second], difference[below]) == (
+        pytest.approx(100.0),
+        pytest.approx(37.5),
+        pytest.approx(-100.0),
+    )
+    assert replay.mismatched_steps == (first, below)
     assert replay.tolerances == {"grid_charge_ac_w": Tolerance(atol_wh=50.0), "battery_energy_wh": Tolerance()}
 
 
