@@ -9,6 +9,9 @@ validated in one place, and is recorded wherever results are written.
 from __future__ import annotations
 
 import importlib.util
+import os
+import pickle
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -70,9 +73,8 @@ def _optimization_inputs():
     return weather, pd.DataFrame({"Load": 400.0}, index=weather.index)
 
 
-@pytest.fixture
-def _dispatch_backends(monkeypatch):
-    """Record the backend each simulated span resolves its dispatch kernel for.
+def _spy_on_dispatch(monkeypatch, record):
+    """Pass the backend each simulated span resolves its dispatch kernel for to ``record``.
 
     The reference kernel stands in for the compiled one, so this runs without
     the breos[fast] extra: what is observed is which name reaches the kernel,
@@ -81,14 +83,19 @@ def _dispatch_backends(monkeypatch):
     from breos import _numba_dispatch, battery
 
     reference = battery._resolve_dispatch_day("python")
-    seen: list[str] = []
 
     def _resolve(execution_backend):
-        seen.append(execution_backend)
+        record(execution_backend)
         return reference
 
     monkeypatch.setattr(battery, "_resolve_dispatch_day", _resolve)
     monkeypatch.setattr(_numba_dispatch, "require_numba_dispatch_day", lambda: reference)
+
+
+@pytest.fixture
+def _dispatch_backends(monkeypatch):
+    seen: list[str] = []
+    _spy_on_dispatch(monkeypatch, seen.append)
     return seen
 
 
@@ -165,6 +172,56 @@ def test_the_chosen_backend_reaches_the_dispatch_kernel(
     assert set(_dispatch_backends) == {backend or DEFAULT_EXECUTION_BACKEND}
 
 
+def test_the_chosen_backend_survives_pickling_to_a_worker(_optimization_inputs, _dispatch_backends):
+    """Worker processes score candidates on a pickled copy of the problem.
+
+    The copy must keep the backend: a restore that fell back to the default
+    would score every candidate of a parallel search on the reference kernel.
+    """
+    pytest.importorskip("pymoo")
+    from breos.optimization import SolarDesignProblem
+
+    problem = SolarDesignProblem(
+        *_optimization_inputs, OPTIMIZATION_CONFIG, "results/_test_run/backend_propagation", execution_backend="numba"
+    )
+    restored = pickle.loads(pickle.dumps(problem))
+    restored._evaluate(np.array([DESIGN["n_modules"], DESIGN["battery_kwh"], DESIGN["tilt"]], dtype=float), {})
+
+    assert restored.execution_backend == "numba"
+    assert _dispatch_backends and set(_dispatch_backends) == {"numba"}
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="the spy reaches workers only through fork")
+def test_the_chosen_backend_reaches_the_kernel_in_worker_processes(monkeypatch, tmp_path, _optimization_inputs):
+    """A parallel search scores its candidates in workers, on the chosen backend.
+
+    The workers are forked so they inherit the spy, and each writes what it
+    saw to a shared file, since a list in a child never reaches the parent.
+    """
+    pytest.importorskip("pymoo")
+    import multiprocessing
+
+    from breos.optimization import optimize_system_multi_objective
+
+    log = tmp_path / "dispatch_backends.log"
+
+    def _record(execution_backend):
+        with log.open("a", encoding="utf-8") as handle:
+            handle.write(f"{os.getpid()} {execution_backend}\n")
+
+    _spy_on_dispatch(monkeypatch, _record)
+    monkeypatch.setattr(multiprocessing, "Pool", multiprocessing.get_context("fork").Pool)
+
+    optimize_system_multi_objective(
+        *_optimization_inputs, OPTIMIZATION_CONFIG, pop_size=2, n_gen=1, seed=1, n_procs=2, execution_backend="numba"
+    )
+
+    records = [line.split() for line in log.read_text(encoding="utf-8").splitlines()]
+    assert records, "no simulated span resolved a dispatch kernel"
+    assert str(os.getpid()) not in {pid for pid, _ in records}, "a candidate was scored in the parent"
+    assert {backend for _, backend in records} == {"numba"}
+
+
 @pytest.mark.parametrize(
     "run",
     [_run_evaluate_projected_design, _run_solar_design_problem, _run_optimize_system_multi_objective],
@@ -180,7 +237,8 @@ def test_optimization_refuses_a_backend_named_in_its_config(run, request, _optim
     """
     monkeypatch.setitem(OPTIMIZATION_CONFIG, "execution_backend", "numba")
 
-    with pytest.raises(ValueError, match="Pass execution_backend to the function"):
+    # The key name, not the wording of the hint around it.
+    with pytest.raises(ValueError, match="execution_backend"):
         run(_optimization_inputs, request)
 
 
