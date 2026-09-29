@@ -27,8 +27,10 @@ cost projection and Monte Carlo trajectories, `"1.5"` adds `constraints` and
 `run_settings` to the optimizer's provenance and the `Projected_CO2_*`
 columns to the Pareto rows of a search with `[emissions]`, `"1.6"` adds
 `inverter_ac_rating_kw` to the `resolved_config` of App and Monte Carlo
-results, and `"1.7"`, which 0.7.0 reports, adds the
-[`period` keys](#period-runs) of a run over part of a year.
+results, `"1.7"` adds the [`period` keys](#period-runs) of a run over part
+of a year, and `"1.8"`, which 0.7.0 reports, adds `calendar_year`, the
+`target_year` the load was built for, to Monte Carlo's
+`provenance.load_profile`.
 A renamed or removed key bumps the
 major version, an added key the minor. A result without the key predates 1.0.
 

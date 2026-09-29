@@ -18,7 +18,7 @@ from pvlib.albedo import SURFACE_ALBEDOS
 from pvlib.location import Location
 
 from breos.cec_fit import fit_cec_params
-from breos.inverter import calculate_dc_ac_power
+from breos.inverter import _calculate_dc_ac_power_arrays
 from breos.pv.iam import calculate_front_effective_irradiance
 from breos.pv.model_options import (
     BIFACIAL_MODELS,
@@ -1153,7 +1153,12 @@ def dc_to_ac(
     """
     inv_size = pv_peak_power_w / inverter_loading_ratio
 
-    ac_power = dc_power.map(lambda value: calculate_dc_ac_power(value, inv_size, inverter_efficiency).ac_power_w)
+    # A missing DC value converts to 0 W, as calculate_dc_ac_power returns for it.
+    dc_values = np.nan_to_num(dc_power.to_numpy(dtype=np.float64), nan=0.0, posinf=np.inf, neginf=-np.inf)
+    # With no AC rating an infinite DC input gives an infinite AC output, as in
+    # the scalar path; only the unused loss array meets inf - inf.
+    with np.errstate(invalid="ignore"):
+        ac_power, _, _ = _calculate_dc_ac_power_arrays(dc_values, inv_size, inverter_efficiency)
 
     return pd.Series(ac_power, index=dc_power.index, name="ac_power_W")
 

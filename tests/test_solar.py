@@ -3,6 +3,7 @@
 import copy
 import dataclasses
 import pickle
+import warnings
 
 import numpy as np
 import pandas as pd
@@ -10,6 +11,7 @@ import pvlib
 import pytest
 
 import breos.solar as solar
+from breos.inverter import calculate_dc_ac_power
 from breos.pv.model_options import resolve_pv_model_options
 from breos.pv_modules import get_module
 from breos.solar import (
@@ -242,6 +244,45 @@ class TestDcToAc:
         ac = dc_to_ac(self._dc(4000.0), pv_peak_power_w=10000.0, inverter_loading_ratio=1.25, inverter_efficiency=0.96)
         assert (ac < 4000.0).all()
         assert (ac <= 8000.0).all()
+
+    def test_matches_the_scalar_conversion_step_by_step(self):
+        # The series conversion and calculate_dc_ac_power share one PVWatts
+        # curve. Edge inputs agree exactly: no power, negative or missing DC
+        # (both 0 W), the DC limit and clipping above it. The part-load curve
+        # agrees to 2 ULP, because the scalar path squares through libm pow.
+        pdc0 = 8000.0 / 0.96
+        edges = [0.0, -0.0, -50.0, float("nan"), float("-inf"), 1e-300, 4000.0, pdc0, 20000.0, float("inf")]
+        curve = np.random.default_rng(0).uniform(0.0, 1.2 * pdc0, 20_000)
+        idx = pd.date_range("2023-01-01", periods=len(edges) + len(curve), freq="15min", tz="UTC")
+        dc = pd.Series(np.concatenate([edges, curve]), index=idx)
+
+        ac = dc_to_ac(dc, pv_peak_power_w=10000.0, inverter_loading_ratio=1.25, inverter_efficiency=0.96)
+        scalar = np.array([calculate_dc_ac_power(value, 8000.0, 0.96).ac_power_w for value in dc])
+
+        assert ac.name == "ac_power_W"
+        assert ac.index.equals(idx)
+        assert ac.dtype == np.float64
+        np.testing.assert_array_equal(ac.to_numpy()[: len(edges)], scalar[: len(edges)])
+        np.testing.assert_array_max_ulp(ac.to_numpy()[len(edges) :], scalar[len(edges) :], maxulp=2)
+
+    def test_edge_series_convert_like_the_scalar_path_without_warnings(self):
+        idx = pd.date_range("2023-01-01", periods=3, freq="h", tz="UTC")
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            # No AC rating: an infinite DC input passes through as infinite AC.
+            unrated = dc_to_ac(pd.Series([float("inf"), 100.0, 0.0], index=idx), float("inf"), 1.25, 0.96)
+            # Missing values in an object series convert to 0 W, and an empty
+            # one still gives a float series.
+            with_none = dc_to_ac(pd.Series([None, 100.0, 0.0], index=idx, dtype=object), 10000.0, 1.25, 0.96)
+            empty = dc_to_ac(pd.Series([], dtype=object), 10000.0, 1.25, 0.96)
+
+        assert unrated.tolist() == [
+            calculate_dc_ac_power(v, float("inf"), 0.96).ac_power_w for v in (np.inf, 100.0, 0.0)
+        ]
+        assert unrated.iloc[0] == float("inf")
+        assert with_none.tolist() == [0.0, *(calculate_dc_ac_power(v, 8000.0, 0.96).ac_power_w for v in (100.0, 0.0))]
+        assert empty.dtype == np.float64
+        assert empty.empty
 
 
 class TestTiltAndAzimuth:

@@ -12,7 +12,6 @@ import shlex
 import sys
 import tomllib
 import warnings
-from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Any, Sequence
 
@@ -29,20 +28,14 @@ from breos.app_config import (
 from breos.app_inputs import input_configuration_key, reuse_prepared_inputs
 from breos.config_schema import MappingOf
 from breos.degradation import get_battery_model_profile, list_battery_models
+from breos.execution import EXECUTION_BACKENDS
 from breos.io import nonfinite_to_none
 from breos.load_profiles import PROFILES, resolve_profile_file
 from breos.pv_modules import MODULES
 from breos.resources import load_config_json
 from breos.solar import resolve_pvwatts_losses
 from breos.tariffs import DEFAULT_CURRENCY
-from breos.utils import normalise_frequency
-
-
-def _package_version() -> str:
-    try:
-        return version("breos")
-    except PackageNotFoundError:
-        return "0.1.0"
+from breos.utils import normalise_frequency, package_version
 
 
 def _sha256(path: Path) -> str:
@@ -537,7 +530,7 @@ def _sweep_row(
     """One sweep CSV row: the run, its varied values, resolved sizing and scalar results."""
     row: dict[str, Any] = {
         "run": run_idx,
-        "breos_version": _package_version(),
+        "breos_version": package_version(),
     }
     row.update({f"param_{key}": value for key, value in varied.items()})
     row.update(
@@ -749,7 +742,7 @@ def _add_run_config_arguments(parser: argparse.ArgumentParser) -> None:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="breos", description="Run BREOS simulations from the command line.")
-    parser.add_argument("--version", action="version", version=f"breos {_package_version()}")
+    parser.add_argument("--version", action="version", version=f"breos {package_version()}")
 
     subparsers = parser.add_subparsers(dest="command", required=True)
 
@@ -802,14 +795,16 @@ def build_parser() -> argparse.ArgumentParser:
         choices=("normal", "uniform"),
         help="Demand multiplier distribution; uncertainty is sigma for normal or half-width for uniform.",
     )
-    mc.add_argument("--target-year", type=int, help="Calendar year the weather index is mapped to.")
+    mc.add_argument(
+        "--target-year", type=int, help="Study calendar year: the weather, load and tariff are all placed on it."
+    )
     mc.add_argument("--weather-start-year", type=int, help="First historical weather year eligible for sampling.")
     mc.add_argument("--weather-end-year", type=int, help="Last historical weather year eligible for sampling.")
     mc.add_argument("--seed", type=int, help="Base random seed for reproducible runs.")
     mc.add_argument("--n-procs", type=int, help="Worker processes for independent trajectories (default: 1).")
     mc.add_argument(
         "--execution-backend",
-        choices=("python", "numba"),
+        choices=EXECUTION_BACKENDS,
         help=(
             "Within-day dispatch implementation. 'python' (default) is the numerical reference; "
             "'numba' is the optional compiled backend and needs: pip install \"breos[fast]\"."

@@ -26,7 +26,6 @@ import multiprocessing
 import os
 from copy import deepcopy
 from dataclasses import asdict, dataclass, field, replace
-from importlib.metadata import PackageNotFoundError, version
 from multiprocessing import Pool
 from typing import Any, cast
 
@@ -60,11 +59,13 @@ from breos.pv.model_options import DEFAULT_SOLAR_POSITION, resolve_solar_positio
 from breos.result_schema import RESULT_SCHEMA_VERSION
 from breos.smart_charging import resolve_instructions, smart_charging_provenance
 from breos.tariffs import ResolvedTariff, result_currency, tariff_provenance
+from breos.utils import package_version
 from breos.weather import (
     _weather_file_sha256,
     _weather_metadata_sidecar_path,
     build_battery_temperature_series,
     fetch_tmy_weather_data,
+    fill_leap_day,
     load_weather,
     preload_weather_by_year,
     resample_to_15min,
@@ -157,10 +158,16 @@ def _sample_load_scale(
 
 def _index_weather(df: pd.DataFrame) -> pd.DataFrame:
     """Turn a ``preload_weather_by_year`` frame (with a ``date`` column) into a
-    UTC-indexed weather DataFrame matching the deterministic pipeline."""
+    UTC-indexed weather DataFrame matching the deterministic pipeline.
+
+    The years are read without 29 February, so a leap target year gets a copy
+    of 28 February, as an App run of that year does. The day is filled on the
+    file's own clock, where it was dropped: in UTC, a file written at +01:00
+    would still have an hour dated 29 February, and the fill would be skipped.
+    """
     w = df.copy()
     w["date"] = pd.to_datetime(w["date"])
-    w = w.set_index("date")
+    w = fill_leap_day(w.set_index("date"))
     if w.index.tz is None:
         w.index = w.index.tz_localize("UTC")
     else:
@@ -806,6 +813,13 @@ def run_montecarlo(
             was built for other weather inputs; see
             :class:`MonteCarloYearCache` for what it reuses.
 
+    The weather, the load and any tariff share the ``settings.target_year``
+    calendar. The load is the one an App run of that year would build. The
+    config's ``start_date`` is validated but not used for the load or weather,
+    and ``provenance["load_profile"]["calendar_year"]`` records the year the
+    load was built for. A leap target year's 29 February copies 28 February's
+    weather, as in the App.
+
     The dispatch backend is ``settings.execution_backend`` when set, else the
     config's top-level ``execution_backend``, else ``"python"``. The CLI
     applies the same order after its own ``--execution-backend`` flag and
@@ -880,7 +894,12 @@ def run_montecarlo(
     available_years = np.array(sorted(dc_by_year.keys()))
 
     deps = _runtime_dependencies()
-    base_load = load_consumption_profile(cfg, deps, timezone=resolved.timezone)
+    # Every weather year is restamped to target_year, so the load is built on
+    # that calendar too: H0 day types then match the study year's weekdays, as
+    # in an App run of that year. The year of start_date does not enter.
+    base_load = load_consumption_profile(
+        {**cfg, "start_date": f"{settings.target_year}-01-01"}, deps, timezone=resolved.timezone
+    )
     aligned_by_year = _align_years(
         cfg,
         base_load,
@@ -935,10 +954,6 @@ def run_montecarlo(
     # Plot labels read the currency from the frame.
     runs_df.attrs["currency"] = currency
     yearly_df = pd.concat(yearly_frames, ignore_index=True) if yearly_frames else None
-    try:
-        breos_version = version("breos")
-    except PackageNotFoundError:
-        breos_version = "unknown"
     return MonteCarloResult(
         runs=runs_df,
         summary=_summarize(runs_df),
@@ -946,7 +961,7 @@ def run_montecarlo(
         available_years=[int(y) for y in available_years],
         yearly=yearly_df,
         provenance={
-            "breos_version": breos_version,
+            "breos_version": package_version(),
             "result_schema_version": RESULT_SCHEMA_VERSION,
             # Every money column and summary is in this currency; BREOS does not convert.
             "currency": currency,
@@ -954,7 +969,12 @@ def run_montecarlo(
             "settings": asdict(settings),
             "available_weather_years": [int(y) for y in available_years],
             "runtime_weather": runtime_weather,
-            "load_profile": dict(base_load.attrs.get(LOAD_PROFILE_METADATA_KEY, {})),
+            # The load is built for target_year; resolved_config keeps the
+            # start_date the user gave, which Monte Carlo does not use.
+            "load_profile": {
+                **base_load.attrs.get(LOAD_PROFILE_METADATA_KEY, {}),
+                "calendar_year": settings.target_year,
+            },
             "random_stream": (
                 "numpy.random.default_rng(numpy.random.SeedSequence(base_seed).spawn(n_runs)[zero_based_run_index])"
             ),
