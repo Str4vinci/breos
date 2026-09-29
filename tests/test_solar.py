@@ -22,6 +22,7 @@ from breos.solar import (
     calculate_pv_production_breakdown,
     calculate_pv_production_dc,
     calculate_pv_production_dc_tracking,
+    calculate_pv_production_tracking_breakdown,
     dc_to_ac,
     default_azimuth,
     estimate_optimal_tilt,
@@ -455,19 +456,6 @@ class TestPVProduction:
         assert lit.any()
         assert (bifacial.temp_cell[lit] > front_only.temp_cell[lit]).all()
 
-    def test_output_shape(self, synthetic_weather, porto_location, pv_params):
-        dc = calculate_pv_production_dc(
-            weather_data=synthetic_weather,
-            location=porto_location,
-            tilt=35,
-            surface_azimuth=180,
-            n_modules=1,
-            pv_params=pv_params,
-            freq="h",
-        )
-        assert isinstance(dc, pd.Series)
-        assert len(dc) == len(synthetic_weather)
-
     def test_default_path_uses_local_cec_fit(self, synthetic_weather, porto_location, pv_params, monkeypatch):
         calls = 0
         original_fit = solar.fit_cec_params
@@ -494,9 +482,6 @@ class TestPVProduction:
 
         assert calls == 1
         assert dc.sum() > 0
-
-    def test_all_non_negative(self, dc_production):
-        assert (dc_production >= -0.01).all()  # small tolerance for floating point
 
     def test_more_modules_more_production(self, synthetic_weather, porto_location, pv_params):
         dc_1 = calculate_pv_production_dc(
@@ -619,33 +604,41 @@ class TestTracking:
             **kw,
         )
 
-    def test_single_axis_output_shape(self, synthetic_weather, porto_location, pv_params):
-        dc = self._single(synthetic_weather, porto_location, pv_params)
-        assert isinstance(dc, pd.Series)
-        assert len(dc) == len(synthetic_weather)
+    def test_dual_geq_single_gt_fixed(self, synthetic_weather, porto_location, pv_params):
+        """Energy hierarchy: dual_axis >= single_axis > fixed (no-backtrack, full range)."""
+        fixed = self._fixed(synthetic_weather, porto_location, pv_params)
+        single = self._single(synthetic_weather, porto_location, pv_params, backtrack=False, max_angle=90)
+        dual = self._dual(synthetic_weather, porto_location, pv_params)
+        for dc in (fixed, single, dual):
+            assert isinstance(dc, pd.Series)
+            assert len(dc) == len(synthetic_weather)
+            assert (dc >= -0.01).all()
+        assert dual.sum() >= single.sum() > fixed.sum()
 
-    def test_single_axis_non_negative(self, synthetic_weather, porto_location, pv_params):
-        dc = self._single(synthetic_weather, porto_location, pv_params)
-        assert (dc.fillna(0) >= -0.01).all()
+    @pytest.mark.parametrize(
+        "option",
+        [
+            {"solar_position": "mid-interval"},
+            {"diffuse_iam": "marion"},
+            {"temperature_model": "pvsyst-semi-integrated"},
+        ],
+        ids=lambda option: next(iter(option)),
+    )
+    def test_tracking_forwards_model_option(self, synthetic_weather, porto_location, pv_params, option):
+        def dc(**kw):
+            return calculate_pv_production_tracking_breakdown(
+                weather_data=synthetic_weather,
+                location=porto_location,
+                n_modules=1,
+                tracking="single_axis",
+                pv_params=pv_params,
+                freq="h",
+                **kw,
+            ).dc_after_losses
 
-    def test_dual_axis_output_shape(self, synthetic_weather, porto_location, pv_params):
-        dc = self._dual(synthetic_weather, porto_location, pv_params)
-        assert isinstance(dc, pd.Series)
-        assert len(dc) == len(synthetic_weather)
-
-    def test_tracking_beats_fixed(self, synthetic_weather, porto_location, pv_params):
-        """Single-axis tracker should produce more annual energy than optimal fixed tilt."""
-        fixed = self._fixed(synthetic_weather, porto_location, pv_params).sum()
-        # No backtracking, no row shading penalty for a fair upper-bound comparison
-        single = self._single(synthetic_weather, porto_location, pv_params, backtrack=False, max_angle=90).sum()
-        assert single > fixed
-
-    def test_dual_geq_single_geq_fixed(self, synthetic_weather, porto_location, pv_params):
-        """Energy hierarchy: dual_axis >= single_axis >= fixed (no-backtrack, full range)."""
-        fixed = self._fixed(synthetic_weather, porto_location, pv_params).sum()
-        single = self._single(synthetic_weather, porto_location, pv_params, backtrack=False, max_angle=90).sum()
-        dual = self._dual(synthetic_weather, porto_location, pv_params).sum()
-        assert dual >= single >= fixed
+        selected = dc(**option)
+        assert (selected >= -0.01).all()
+        assert selected.sum() != pytest.approx(dc().sum())
 
     def test_backtracking_reduces_low_sun_output(self, synthetic_weather, porto_location, pv_params):
         """Backtracking sacrifices some low-sun output to avoid row-to-row shading."""
@@ -833,31 +826,15 @@ class TestSolarPosition:
         # A half-hour shift redistributes energy within the day; annual totals stay close.
         assert mid.sum() == pytest.approx(start.sum(), rel=0.05)
 
-    @pytest.mark.parametrize(
-        ("metadata", "expected_offset"),
-        [
-            (
-                {
-                    "radiation_time_basis": "instant",
-                    "timestamp_label_basis": "provider_hour",
-                    "irradiance_time_offset_hours": 0.1714,
-                },
-                pd.Timedelta(hours=0.1714),
-            ),
-            (
-                {"radiation_time_basis": "interval_mean", "timestamp_label_basis": "left"},
-                pd.Timedelta(minutes=30),
-            ),
-            (
-                {"radiation_time_basis": "interval_mean", "timestamp_label_basis": "right"},
-                pd.Timedelta(minutes=-30),
-            ),
-        ],
-    )
-    def test_weather_method_sends_the_metadata_time_to_solar_position(self, metadata, expected_offset):
+    def test_weather_method_sends_the_metadata_time_to_solar_position(self):
+        # The offset table itself is tested in test_weather.py; one case shows
+        # transposition reads it.
         index = pd.date_range("2025-01-01", periods=2, freq="h", tz="UTC")
         weather = pd.DataFrame({"ghi": [0.0, 0.0]}, index=index)
-        weather.attrs["breos_weather_metadata"] = metadata
+        weather.attrs["breos_weather_metadata"] = {
+            "radiation_time_basis": "interval_mean",
+            "timestamp_label_basis": "right",
+        }
         captured = {}
 
         class RecordingLocation:
@@ -869,7 +846,7 @@ class TestSolarPosition:
             weather, RecordingLocation(), "h", solar_position="weather"
         )
 
-        assert captured["times"].equals(labels + expected_offset)
+        assert captured["times"].equals(labels - pd.Timedelta(minutes=30))
         assert solar_position.index.equals(labels)
 
     def test_mid_interval_moves_energy_toward_morning_for_east_array(
@@ -894,19 +871,6 @@ class TestSolarPosition:
             return morning / dc.sum()
 
         assert split("mid-interval") > split("interval-start") + 0.01
-
-    def test_tracking_accepts_mid_interval(self, synthetic_weather, porto_location, pv_params):
-        dc = calculate_pv_production_dc_tracking(
-            weather_data=synthetic_weather,
-            location=porto_location,
-            n_modules=1,
-            tracking="single_axis",
-            pv_params=pv_params,
-            freq="h",
-            solar_position="mid-interval",
-        )
-        assert (dc >= -0.01).all()
-        assert dc.sum() > 0
 
 
 class TestDiffuseIAM:
@@ -936,19 +900,6 @@ class TestDiffuseIAM:
         marion = self._dc(synthetic_weather, porto_location, pv_params, diffuse_iam="marion").sum()
         assert marion < none
         assert 0.002 < 1 - marion / none < 0.03
-
-    def test_tracking_accepts_marion(self, synthetic_weather, porto_location, pv_params):
-        dc = calculate_pv_production_dc_tracking(
-            weather_data=synthetic_weather,
-            location=porto_location,
-            n_modules=1,
-            tracking="single_axis",
-            pv_params=pv_params,
-            freq="h",
-            diffuse_iam="marion",
-        )
-        assert (dc >= -0.01).all()
-        assert dc.sum() > 0
 
 
 class TestIAMModel:
@@ -1035,19 +986,6 @@ class TestTemperatureModel:
 
         with_metadata = _module_params(Module_Efficiency=0.21, NOCT=45.0)
         assert self._annual(synthetic_weather, porto_location, with_metadata, temperature_model="noct-sam") > 0
-
-    def test_tracking_accepts_preset(self, synthetic_weather, porto_location, pv_params):
-        dc = calculate_pv_production_dc_tracking(
-            weather_data=synthetic_weather,
-            location=porto_location,
-            n_modules=1,
-            tracking="single_axis",
-            pv_params=pv_params,
-            freq="h",
-            temperature_model="pvsyst-semi-integrated",
-        )
-        assert (dc >= -0.01).all()
-        assert dc.sum() > 0
 
 
 class TestGroundReflectance:
