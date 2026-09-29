@@ -10,7 +10,7 @@ already-resolved :class:`PVModelOptions` and do no validation of their own.
 from __future__ import annotations
 
 import math
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from typing import Any, Mapping
 
 import numpy as np
@@ -68,7 +68,7 @@ SURFACE_TYPES = tuple(sorted(SURFACE_ALBEDOS))
 # metadata. It supports instantaneous samples with an explicit provider
 # offset and interval means with either left or right labels.
 #
-# Resolved by solar_position_time_offset, which both transposition
+# Resolved by solar_position_at_labels, which both transposition
 # (breos.solar._prepare_solarpos_and_weather) and terrain shading
 # (breos.pv.horizon) call, so the two cannot disagree about where the sun is.
 # It depends on the weather, so it is resolved separately from
@@ -266,6 +266,21 @@ def solar_position_time_offset(method: str, weather: pd.DataFrame, freq: str) ->
     return pd.Timedelta(0)
 
 
+def solar_position_at_labels(
+    location: Any, times: pd.DatetimeIndex, weather: pd.DataFrame, freq: str, solar_position: str
+) -> tuple[pd.DataFrame, str]:
+    """Return the sun position for each label in ``times`` and the resolved method.
+
+    The sun is evaluated :func:`solar_position_time_offset` after each label,
+    and the result is indexed at the labels.
+    """
+    method = resolve_solar_position_method(solar_position)
+    offset = solar_position_time_offset(method, weather, freq)
+    solarpos = location.get_solarposition(times=times + offset)
+    solarpos.index = times
+    return solarpos, method
+
+
 def resolve_iam_model(model: str) -> str:
     """Normalise and validate a beam incidence-angle modifier model."""
     if not is_known_model(model, IAM_MODELS):
@@ -425,18 +440,6 @@ def configured_pv_model_kwargs(config: Mapping[str, Any]) -> dict[str, Any]:
     """Return the PV model kwargs present in a resolved application config.
 
     Missing keys stay missing so the public PV function owns its defaults.
-    This function is the single config-to-call mapping used by optimization.
+    This function is the single config-to-call mapping used by App and optimization.
     """
     return {key: config[key] for key in PV_MODEL_CONFIG_KEYS if key in config}
-
-
-def resolve_configured_pv_model_options(
-    config: Mapping[str, Any], *, bifaciality: float | None = None
-) -> dict[str, Any]:
-    """Resolve the effective PV model chain for runtime provenance."""
-    kwargs = configured_pv_model_kwargs(config)
-    solar_position = resolve_solar_position_method(kwargs.pop("solar_position", DEFAULT_SOLAR_POSITION))
-    resolved = resolve_pv_model_options(bifaciality=bifaciality, **kwargs)
-    effective = asdict(resolved)
-    effective["solar_position"] = solar_position
-    return effective

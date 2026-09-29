@@ -35,8 +35,19 @@ from breos.utils import (
 logger = logging.getLogger(__name__)
 
 WEATHER_METADATA_KEY = "breos_weather_metadata"
-_WEATHER_METADATA_KEY = WEATHER_METADATA_KEY
 _WEATHER_METADATA_SCHEMA_VERSION = 1
+
+
+# Timestamp column names a weather or temperature CSV may use, in any case.
+_DATE_COLUMNS = ("date", "datetime", "time")
+# Air-temperature column names, in order of preference: pvlib (PVGIS TMY),
+# Open-Meteo, then generic spellings.
+_AIR_TEMPERATURE_COLUMNS = ("temp_air", "temperature_2m", "temp", "air_temperature")
+
+
+def _find_date_column(columns) -> Any:
+    """Return the first column named like a timestamp, or None."""
+    return next((column for column in columns if str(column).lower() in _DATE_COLUMNS), None)
 
 
 def _unknown_horizon_metadata(provider: str | None = None) -> dict[str, str | None]:
@@ -71,7 +82,7 @@ def save_weather_csv(weather: pd.DataFrame, filepath: str | os.PathLike[str]) ->
     payload = {
         "schema_version": _WEATHER_METADATA_SCHEMA_VERSION,
         "weather_sha256": _weather_file_sha256(filepath),
-        _WEATHER_METADATA_KEY: deepcopy(weather.attrs.get(_WEATHER_METADATA_KEY, {})),
+        WEATHER_METADATA_KEY: deepcopy(weather.attrs.get(WEATHER_METADATA_KEY, {})),
     }
     sidecar_path = _weather_metadata_sidecar_path(filepath)
     with open(sidecar_path, "w", encoding="utf-8") as sidecar:
@@ -99,7 +110,7 @@ def _load_weather_metadata_sidecar(filepath: str | os.PathLike[str], weather_sha
         logger.warning("Ignoring weather metadata sidecar whose CSV digest does not match: %s", sidecar_path)
         return None
 
-    metadata = payload.get(_WEATHER_METADATA_KEY)
+    metadata = payload.get(WEATHER_METADATA_KEY)
     if not isinstance(metadata, dict):
         logger.warning("Ignoring weather metadata sidecar without a metadata object: %s", sidecar_path)
         return None
@@ -128,26 +139,31 @@ def weather_metadata(weather: pd.DataFrame) -> dict[str, Any]:
     return deepcopy(metadata) if isinstance(metadata, dict) else {}
 
 
-def weather_file_metadata(filepath: str | os.PathLike[str]) -> dict[str, Any]:
-    """Return validated sidecar metadata plus the bound file path and digest."""
+def _weather_file_sidecar(filepath: str | os.PathLike[str]) -> tuple[str, str, dict[str, Any] | None]:
+    """Return a weather file's absolute path, digest and validated sidecar metadata."""
     path = os.path.abspath(os.fspath(filepath))
     sha256 = _weather_file_sha256(path)
-    metadata = deepcopy(_load_weather_metadata_sidecar(path, sha256) or {})
-    if metadata.get("source") == "OpenMeteo_historical" and metadata.get("radiation_time_basis") == "instant":
-        metadata.setdefault("timestamp_label_basis", "instant")
-        metadata.setdefault("timestamp_timezone", "GMT")
-        metadata.setdefault("irradiance_time_offset_hours", 0.0)
-    metadata.update({"path": path, "sha256": sha256})
-    return metadata
+    return path, sha256, _load_weather_metadata_sidecar(path, sha256)
 
 
-def read_weather_csv(filepath: str | os.PathLike[str], *, index_col: int | str = 0, utc: bool = True) -> pd.DataFrame:
-    """Read a weather CSV and restore its content-bound metadata sidecar."""
-    path = os.path.abspath(os.fspath(filepath))
-    frame = pd.read_csv(path, index_col=index_col)
-    frame.index = pd.to_datetime(frame.index, utc=utc)
-    frame.attrs[WEATHER_METADATA_KEY] = weather_file_metadata(path)
-    return frame
+def weather_file_metadata(filepath: str | os.PathLike[str]) -> dict[str, Any]:
+    """Return validated sidecar metadata plus the bound file path and digest."""
+    path, sha256, metadata = _weather_file_sidecar(filepath)
+    return {**(metadata or {}), "path": path, "sha256": sha256}
+
+
+def _normalised_horizon_metadata(horizon: Any) -> dict[str, Any]:
+    """Return a horizon record with a known status, or the unknown record.
+
+    A record without a known ``status`` is treated as unknown. A known one is
+    copied, with ``provider`` and ``profile`` filled in as ``None`` if absent.
+    """
+    if not isinstance(horizon, dict) or horizon.get("status") not in {"applied", "not_applied", "unknown"}:
+        return _unknown_horizon_metadata()
+    horizon = deepcopy(horizon)
+    horizon.setdefault("provider", None)
+    horizon.setdefault("profile", None)
+    return horizon
 
 
 def _representative_time_offset(
@@ -371,11 +387,10 @@ def load_weather(
         except (ValueError, TypeError):
             # Fall back to looking for named datetime columns
             df = pd.read_csv(filepath)
-            for col_name in ["date", "time", "Datetime"]:
-                if col_name in df.columns:
-                    df[col_name] = pd.to_datetime(df[col_name])
-                    df.set_index(col_name, inplace=True)
-                    break
+            date_col = _find_date_column(df.columns)
+            if date_col is not None:
+                df[date_col] = pd.to_datetime(df[date_col])
+                df.set_index(date_col, inplace=True)
 
     # Subset by year range for historical data
     if best["type"] == "historical" and start_year is not None and end_year is not None:
@@ -386,33 +401,23 @@ def load_weather(
             df = df.loc[mask]
             logger.info("Subset to %s-%s (%d rows)", start_year, end_year, len(df))
 
-    path = os.path.abspath(filepath)
-    sha256 = _weather_file_sha256(path)
-    persisted_metadata = _load_weather_metadata_sidecar(path, sha256)
-    metadata = deepcopy(persisted_metadata) if persisted_metadata is not None else {}
+    path, sha256, persisted_metadata = _weather_file_sidecar(filepath)
+    metadata = dict(persisted_metadata or {})
     upstream_source = metadata.get("source")
-    horizon = metadata.get("horizon")
-    if not isinstance(horizon, dict) or horizon.get("status") not in {"applied", "not_applied", "unknown"}:
-        horizon = _unknown_horizon_metadata()
-    else:
-        horizon = deepcopy(horizon)
-        horizon.setdefault("provider", None)
-        horizon.setdefault("profile", None)
-
     metadata.update(
         {
             "source": "local_file",
             "path": path,
             "sha256": sha256,
             "parsed_filename": {key: value for key, value in best.items() if key != "filepath"},
-            "horizon": horizon,
+            "horizon": _normalised_horizon_metadata(metadata.get("horizon")),
         }
     )
     if persisted_metadata is not None:
         if upstream_source is not None:
             metadata["upstream_source"] = upstream_source
         metadata["metadata_sidecar"] = str(_weather_metadata_sidecar_path(path))
-    df.attrs[_WEATHER_METADATA_KEY] = metadata
+    df.attrs[WEATHER_METADATA_KEY] = metadata
 
     return df
 
@@ -445,7 +450,7 @@ def fill_leap_day(weather: pd.DataFrame) -> pd.DataFrame:
     leap_day.index = source.index + pd.Timedelta(days=1)
     filled = pd.concat([weather, leap_day]).sort_index()
     filled.attrs = deepcopy(weather.attrs)
-    metadata = filled.attrs.get(_WEATHER_METADATA_KEY)
+    metadata = filled.attrs.get(WEATHER_METADATA_KEY)
     if isinstance(metadata, dict):
         metadata["leap_day"] = {"year": year, "filled_from": f"{year}-02-28"}
     return filled
@@ -533,7 +538,7 @@ def fetch_tmy_weather_data(
     )
 
     irradiance_offset = float(metadata.get("inputs", {}).get("location", {}).get("irradiance_time_offset", 0.0))
-    tmy_data.attrs[_WEATHER_METADATA_KEY] = {
+    tmy_data.attrs[WEATHER_METADATA_KEY] = {
         "source": "PVGIS_TMY",
         "api_metadata": metadata,
         "raw_radiation_variables": ["G(h)", "Gb(n)", "Gd(h)"],
@@ -704,7 +709,7 @@ def fetch_weather_data(
     if right_labelled:
         index = hourly_dataframe.index
         hourly_dataframe = hourly_dataframe[(index > first_label) & (index <= last_label)]
-    hourly_dataframe.attrs[_WEATHER_METADATA_KEY] = {
+    hourly_dataframe.attrs[WEATHER_METADATA_KEY] = {
         "source": "OpenMeteo_historical",
         "provider_hourly_fields": [provider_name for provider_name, _output_name in hourly_fields],
         "raw_radiation_variables": [provider_name for provider_name, _output_name in hourly_fields[2:]],
@@ -765,7 +770,7 @@ def resample_tmy_to_15min(tmy_data: pd.DataFrame, metadata: dict) -> pd.DataFram
     if "relative_humidity" in df_15:
         df_15["relative_humidity"] = df_15["relative_humidity"].clip(0, 100)
 
-    weather_provenance = df_15.attrs.get(_WEATHER_METADATA_KEY)
+    weather_provenance = df_15.attrs.get(WEATHER_METADATA_KEY)
     if weather_provenance is not None:
         weather_provenance["irradiance_resampling_method"] = "makima_clear_sky"
     return df_15
@@ -817,7 +822,7 @@ def resample_to_15min(
         ValueError: If DataFrame doesn't have DatetimeIndex
     """
     df_hourly = relabel_right_labeled_interval_means(df_hourly)
-    weather_metadata = deepcopy(df_hourly.attrs.get(_WEATHER_METADATA_KEY))
+    weather_metadata = deepcopy(df_hourly.attrs.get(WEATHER_METADATA_KEY))
 
     # Ensure DatetimeIndex
     if not isinstance(df_hourly.index, pd.DatetimeIndex):
@@ -950,7 +955,7 @@ def resample_to_15min(
         weather_metadata["output_resolution"] = "15min"
         weather_metadata["irradiance_resampling_method"] = method
         weather_metadata["preserve_irradiance_energy"] = preserve_irradiance_energy
-        df_15min.attrs[_WEATHER_METADATA_KEY] = weather_metadata
+        df_15min.attrs[WEATHER_METADATA_KEY] = weather_metadata
 
     return df_15min
 
@@ -1093,16 +1098,8 @@ def read_epw_file(
     freq = normalise_frequency(freq)
     df, meta = pvlib.iotools.read_epw(filepath)
 
-    # Standardize column names
-    rename_map = {
-        "ghi": "ghi",
-        "dni": "dni",
-        "dhi": "dhi",
-        "temp_air": "temp_air",
-        "wind_speed": "wind_speed",
-    }
-    available = {k: v for k, v in rename_map.items() if k in df.columns}
-    df = df[list(available.keys())].rename(columns=available)
+    # pvlib already maps the EPW fields to these names; keep only them.
+    df = df[[column for column in ("ghi", "dni", "dhi", "temp_air", "wind_speed") if column in df.columns]]
 
     # Use EPW metadata for coordinates if not provided
     if latitude is None:
@@ -1114,7 +1111,7 @@ def read_epw_file(
     # (1-24); pvlib labels that hour at its start (0-23). Record the basis
     # before resampling, so the 15-minute clear-sky scaling evaluates each
     # hour at its midpoint and keeps the resampling provenance.
-    df.attrs[_WEATHER_METADATA_KEY] = {
+    df.attrs[WEATHER_METADATA_KEY] = {
         "source": "EPW_file",
         "path": os.path.abspath(filepath),
         "radiation_time_basis": "interval_mean",
@@ -1142,13 +1139,12 @@ def extract_ambient_temperature(weather_df: pd.DataFrame) -> Optional[pd.Series]
     Returns:
         pd.Series of temperatures, or None if no recognised column found.
     """
-    for col in ("temp_air", "temperature_2m", "temp", "air_temperature"):
+    for col in _AIR_TEMPERATURE_COLUMNS:
         if col in weather_df.columns:
             return weather_df[col]
     return None
 
 
-_TEMPERATURE_FILE_DATE_COLUMNS = ("date", "datetime", "time")
 _TEMPERATURE_FILE_VALUE_COLUMNS = ("temp", "temperature", "t_cell", "t_amb")
 
 
@@ -1236,12 +1232,12 @@ def _read_temperature_file(path: str) -> pd.Series:
         df = pd.read_csv(path)
     except Exception as exc:
         raise ValueError(f"could not read battery temperature file {path}: {exc}") from exc
-    date_col = next((c for c in df.columns if str(c).lower() in _TEMPERATURE_FILE_DATE_COLUMNS), None)
+    date_col = _find_date_column(df.columns)
     val_col = next((c for c in df.columns if str(c).lower() in _TEMPERATURE_FILE_VALUE_COLUMNS), None)
     if date_col is None or val_col is None:
         raise ValueError(
             f"battery temperature file {path} needs a timestamp column "
-            f"({', '.join(_TEMPERATURE_FILE_DATE_COLUMNS)}) and a temperature column "
+            f"({', '.join(_DATE_COLUMNS)}) and a temperature column "
             f"({', '.join(_TEMPERATURE_FILE_VALUE_COLUMNS)}); it has {', '.join(map(str, df.columns))}"
         )
     try:
@@ -1288,10 +1284,7 @@ def build_battery_temperature_series(
 
     weather_indexed = weather_df
     if weather_indexed is not None and not isinstance(weather_indexed.index, pd.DatetimeIndex):
-        date_col = next(
-            (c for c in weather_indexed.columns if str(c).lower() in {"date", "datetime", "time"}),
-            None,
-        )
+        date_col = _find_date_column(weather_indexed.columns)
         if date_col is not None:
             weather_indexed = weather_indexed.copy()
             weather_indexed[date_col] = pd.to_datetime(weather_indexed[date_col])

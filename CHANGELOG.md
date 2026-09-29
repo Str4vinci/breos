@@ -680,6 +680,21 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   steps of synthetic Porto PV years, hourly and 15-minute, none differs. App,
   Monte Carlo and the optimizer do not call `dc_to_ac` and are unchanged bit
   for bit.
+- Internal PV, weather and load cleanups from a code audit. The fixed-tilt
+  and tracking breakdowns share one builder, and App passes the PV model
+  options through `configured_pv_model_kwargs`, as the optimizer does. App
+  and Monte Carlo decide whether to resample hourly weather to 15 minutes in
+  one helper. Transposition and terrain shading compute the sun position in
+  one function. `PVModuleParams` is defined in `breos.pv_modules`, so
+  `breos.solar` imports the module catalog at load time instead of inside
+  four functions; `breos.solar.PVModuleParams` and `breos.PVModuleParams`
+  still work. The weather metadata key, the horizon-status defaults, the
+  sidecar reading and the timestamp and air-temperature column names are
+  each defined once. The unused `read_weather_csv`,
+  `resolve_configured_pv_model_options` and `solar._get_column` are gone,
+  and so is the fill of three timing fields for Open-Meteo sidecars written
+  before 0.6.0; those old files now log the naive-timestamp warning.
+  Results are unchanged bit for bit.
 
 ### Fixed
 - `calendar_model` is stored as it is validated: trimmed, lower-case, with

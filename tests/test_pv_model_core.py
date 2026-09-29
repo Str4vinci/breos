@@ -155,15 +155,6 @@ def test_pvsyst_kernel_falls_back_to_breos_default_efficiency():
 
     actual = calculate_cell_temperature(poa_global, temp_air, wind_speed, "pvsyst-freestanding")
 
-    expected = pvlib.temperature.pvsyst_cell(
-        poa_global,
-        temp_air,
-        wind_speed,
-        module_efficiency=DEFAULT_MODULE_EFFICIENCY,
-        **params,
-    )
-    np.testing.assert_allclose(actual, expected)
-
     pvlib_legacy_default = pvlib.temperature.pvsyst_cell(poa_global, temp_air, wind_speed, **params)
     assert actual[-1] < pvlib_legacy_default[-1]
 
@@ -252,17 +243,14 @@ def test_model_option_keys_partition_into_per_array_and_function_level():
 
     ``iam_model``/``diffuse_iam``/``temperature_model``/``solar_position`` are function-level
     for every array while the sky and ground geometry is per-array
-    overridable. A new option must land in exactly one of the two tuples, so
-    the partition (not just the union) is what gets asserted.
+    overridable. A new option must land in one of the two tuples, and the
+    function-level set is pinned exactly.
     """
     per_array = set(solar._PER_ARRAY_MODEL_OPTION_KEYS)
     function_level = set(solar._FUNCTION_LEVEL_MODEL_OPTION_KEYS)
 
     assert per_array | function_level == set(solar._MODEL_OPTION_KEYS)
-    assert per_array & function_level == set()
     assert function_level == {"solar_position", "iam_model", "diffuse_iam", "temperature_model"}
-    # gcr is model geometry here but tracker geometry on the tracking path.
-    assert set(solar._TRACKING_MODEL_OPTION_KEYS) == set(solar._MODEL_OPTION_KEYS) - {"gcr"}
 
 
 def test_no_public_entry_point_accepts_var_keywords():

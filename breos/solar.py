@@ -5,11 +5,9 @@ This module provides functions for calculating photovoltaic power production
 using pvlib, with support for both hourly and 15-minute time resolutions.
 """
 
-import math
 import warnings
 from dataclasses import dataclass
-from numbers import Integral, Real
-from typing import Any, ClassVar, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 import numpy as np
 import pandas as pd
@@ -40,10 +38,12 @@ from breos.pv.model_options import (
     PVModelOptions,
     resolve_pv_model_options,
     resolve_solar_position_method,
-    solar_position_time_offset,
+    solar_position_at_labels,
 )
 from breos.pv.temperature import calculate_cell_temperature
+from breos.pv_modules import PVModuleParams, get_module
 from breos.utils import IRRADIANCE_COLUMN_ALIASES, find_irradiance_column, get_hours_per_step
+from breos.weather import _AIR_TEMPERATURE_COLUMNS
 
 # Module-level cache for CEC model parameters (depends only on module specs, not weather)
 _cec_param_cache: Dict[tuple, tuple] = {}
@@ -141,148 +141,6 @@ def resolve_pvwatts_losses(
     }
 
 
-@dataclass
-class PVModuleParams:
-    """Datasheet parameters for a PV module.
-
-    Every field holds what the user supplied. The temperature coefficients the
-    models use are read-only properties resolved from the current field
-    values: ``alpha_sc`` (A/°C), ``beta_voc`` (V/°C) and ``gamma_pmp_effective``
-    (%/°C). ``gamma_pmp`` stays ``None`` unless it was given, and
-    ``gamma_pmp_effective`` then follows ``T_Pmax_pct``. Because nothing
-    derived is stored, in-place edits, ``dataclasses.replace``, a
-    ``dataclasses.asdict`` round trip, copies and pickles all see current
-    coefficients.
-
-    Field values are validated on construction and on every assignment. A
-    rejected assignment leaves the module unchanged. ``Mpp`` must match
-    ``Vmp * Imp`` within 2%, so change the STC point together with
-    ``dataclasses.replace(module, Mpp=..., Vmp=..., Imp=...)`` when a single
-    edit would leave it inconsistent.
-    """
-
-    Mpp: float  # W (STC power)
-    Vmp: float  # V
-    Imp: float  # A
-    Voc: float  # V
-    Isc: float  # A
-
-    T_Pmax_pct: float  # %/°C
-    T_Voc_pct: float  # %/°C
-    T_Isc_pct: float  # %/°C
-
-    N_Cells: int  # Number of cells (eg 6*24 or 144)
-
-    Name: Optional[str] = None  # Metadata: specific module model name
-    # Module efficiency fraction, e.g. 0.213. Feeds the PVsyst and SAM NOCT
-    # cell-temperature models; when unset the PVsyst path uses
-    # breos.pv.temperature.DEFAULT_MODULE_EFFICIENCY and noct-sam refuses to run.
-    Module_Efficiency: Optional[float] = None
-    celltype: str = "monoSi"
-
-    alpha_sc_abs: Optional[float] = None  # A/°C - if provided, overrides T_Isc_pct conversion
-    beta_voc_abs: Optional[float] = None  # V/°C - if provided, overrides T_Voc_pct conversion
-    gamma_pmp: Optional[float] = None  # %/°C - if provided, overrides T_Pmax_pct
-    # Appended after all pre-0.5 fields to preserve positional construction.
-    bifaciality: Optional[float] = None  # Metadata: rear/front maximum-power ratio (inert by itself)
-    NOCT: Optional[float] = None  # Metadata: nominal operating cell temperature (°C), required by noct-sam
-
-    _POSITIVE_FIELDS = frozenset({"Mpp", "Vmp", "Imp", "Voc", "Isc"})
-    _STC_POINT_FIELDS = ("Mpp", "Vmp", "Imp")
-    _FINITE_FIELDS = frozenset({"T_Pmax_pct", "T_Voc_pct", "T_Isc_pct", "alpha_sc_abs", "beta_voc_abs", "gamma_pmp"})
-    _MPP_RELATIVE_TOLERANCE = 0.02
-
-    # Set per instance once __post_init__ has checked the STC point.
-    _module_params_ready: ClassVar[bool] = False
-
-    def __setattr__(self, name: str, value: Any) -> None:
-        """Validate a field before it is stored; a rejected edit changes nothing."""
-        if name in self._POSITIVE_FIELDS:
-            self._validate_number(name, value, minimum=0.0, minimum_strict=True)
-        elif name in self._FINITE_FIELDS:
-            if value is not None or name in {"T_Pmax_pct", "T_Voc_pct", "T_Isc_pct"}:
-                self._validate_number(name, value)
-            if name == "T_Pmax_pct" and float(value) >= 0:
-                raise ValueError("T_Pmax_pct must be negative")
-        elif name == "N_Cells":
-            if isinstance(value, (bool, np.bool_)) or not isinstance(value, Integral) or value <= 0:
-                raise ValueError("N_Cells must be a positive integer")
-        elif name == "Module_Efficiency" and value is not None:
-            self._validate_number(name, value, minimum=0.0, maximum=1.0, minimum_strict=True)
-        elif name == "NOCT" and value is not None:
-            self._validate_number(name, value, minimum=0.0, maximum=100.0, minimum_strict=True)
-        elif name == "bifaciality" and value is not None:
-            try:
-                self._validate_number(name, value, minimum=0.0, maximum=1.0, minimum_strict=True)
-            except ValueError as exc:
-                raise ValueError("bifaciality must be between 0 (exclusive) and 1 (inclusive)") from exc
-        elif name == "celltype" and (not isinstance(value, str) or not value.strip()):
-            raise ValueError("celltype must be a non-empty string")
-
-        # During __init__ the STC point is checked once, in __post_init__,
-        # after all three fields exist.
-        if name in self._STC_POINT_FIELDS and self._module_params_ready:
-            point = {field: getattr(self, field) for field in self._STC_POINT_FIELDS}
-            point[name] = value
-            self._validate_stc_point(point["Mpp"], point["Vmp"], point["Imp"])
-
-        object.__setattr__(self, name, value)
-
-    @staticmethod
-    def _validate_number(
-        name: str,
-        value: Any,
-        *,
-        minimum: Optional[float] = None,
-        maximum: Optional[float] = None,
-        minimum_strict: bool = False,
-        maximum_strict: bool = False,
-    ) -> None:
-        if isinstance(value, (bool, np.bool_)) or not isinstance(value, Real) or not math.isfinite(float(value)):
-            raise ValueError(f"{name} must be a finite number")
-        number = float(value)
-        if minimum is not None and (number <= minimum if minimum_strict else number < minimum):
-            bracket = "greater than" if minimum_strict else "at least"
-            raise ValueError(f"{name} must be {bracket} {minimum}")
-        if maximum is not None and (number >= maximum if maximum_strict else number > maximum):
-            bracket = "less than" if maximum_strict else "at most"
-            raise ValueError(f"{name} must be {bracket} {maximum}")
-
-    @classmethod
-    def _validate_stc_point(cls, mpp: float, vmp: float, imp: float) -> None:
-        if not math.isclose(mpp, vmp * imp, rel_tol=cls._MPP_RELATIVE_TOLERANCE):
-            raise ValueError(
-                f"Mpp must match Vmp * Imp within {cls._MPP_RELATIVE_TOLERANCE:.0%} for a datasheet STC point "
-                f"(Mpp={mpp}, Vmp * Imp={vmp * imp:.6g}); use dataclasses.replace() to change "
-                "Mpp, Vmp and Imp together"
-            )
-
-    @property
-    def alpha_sc(self) -> float:
-        """Short-circuit-current temperature coefficient in A/°C."""
-        if self.alpha_sc_abs is not None:
-            return float(self.alpha_sc_abs)
-        return float((self.T_Isc_pct * self.Isc) / 100)
-
-    @property
-    def beta_voc(self) -> float:
-        """Open-circuit-voltage temperature coefficient in V/°C."""
-        if self.beta_voc_abs is not None:
-            return float(self.beta_voc_abs)
-        return float((self.T_Voc_pct * self.Voc) / 100)
-
-    @property
-    def gamma_pmp_effective(self) -> float:
-        """Maximum-power temperature coefficient in %/°C: ``gamma_pmp`` if set, else ``T_Pmax_pct``."""
-        if self.gamma_pmp is not None:
-            return float(self.gamma_pmp)
-        return float(self.T_Pmax_pct)
-
-    def __post_init__(self) -> None:
-        self._validate_stc_point(self.Mpp, self.Vmp, self.Imp)
-        object.__setattr__(self, "_module_params_ready", True)
-
-
 @dataclass(frozen=True)
 class PVProductionBreakdown:
     """Intermediate PV model stages for loss-waterfall reporting.
@@ -336,15 +194,11 @@ def _prepare_solarpos_and_weather(
     """
     if not isinstance(weather_data.index, pd.DatetimeIndex):
         raise ValueError("weather_data must have a DatetimeIndex")
-    method = resolve_solar_position_method(solar_position)
+    # A misspelt method is reported before any problem with the weather grid.
+    resolve_solar_position_method(solar_position)
 
     times = _require_weather_grid(weather_data.index, freq)
-    if method in {"mid-interval", "weather"}:
-        offset = solar_position_time_offset(method, weather_data, freq)
-        solarpos = location.get_solarposition(times=times + offset)
-        solarpos.index = times
-    else:
-        solarpos = location.get_solarposition(times=times)
+    solarpos, _method = solar_position_at_labels(location, times, weather_data, freq, solar_position)
     weather_aligned = weather_data.set_axis(times)
     return times, solarpos, weather_aligned
 
@@ -376,7 +230,7 @@ def _compute_irradiance_and_cell_temp_detail(
     solarpos: pd.DataFrame,
     surface_tilt,
     surface_azimuth,
-    pv_params: "PVModuleParams",
+    pv_params: PVModuleParams,
     model_options: PVModelOptions,
 ) -> _IrradianceModelResult:
     """Compute GHI, POA, effective irradiance, and cell temperature.
@@ -510,7 +364,7 @@ def _compute_irradiance_and_cell_temp_detail(
     )
 
 
-def _get_cec_params(pv_params: "PVModuleParams"):
+def _get_cec_params(pv_params: PVModuleParams):
     """Fetch (and cache) CEC single-diode model params for a module."""
     key = (
         pv_params.celltype,
@@ -567,7 +421,7 @@ def _age_degradation_percent(
 def _module_dc_before_losses(
     effective_irradiance: np.ndarray,
     temp_cell: np.ndarray,
-    pv_params: "PVModuleParams",
+    pv_params: PVModuleParams,
     n_modules: int,
     times: pd.DatetimeIndex,
     name: str,
@@ -635,21 +489,78 @@ def _scale_reference_dc(
     return (base_dc * ratio).rename(name)
 
 
-def _build_pv_production_breakdown(
-    weather_aligned: pd.DataFrame,
+def _tracker_orientation(
     solarpos: pd.DataFrame,
-    surface_tilt,
-    surface_azimuth,
-    pv_params: "PVModuleParams",
+    tracking: str,
+    *,
+    axis_tilt: float,
+    axis_azimuth: float,
+    max_angle: float,
+    backtrack: bool,
+    gcr: float,
+    cross_axis_tilt: float,
+    dual_axis_max_tilt: float,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return per-timestep surface tilt and azimuth for a tracking array."""
+    if tracking == "single_axis":
+        tracker = pvlib.tracking.singleaxis(
+            apparent_zenith=solarpos.apparent_zenith,
+            solar_azimuth=solarpos.azimuth,
+            axis_tilt=axis_tilt,
+            axis_azimuth=axis_azimuth,
+            max_angle=max_angle,
+            backtrack=backtrack,
+            gcr=gcr,
+            cross_axis_tilt=cross_axis_tilt,
+        )
+        # singleaxis returns NaN when sun is below horizon — stow to axis orientation
+        return (
+            tracker["surface_tilt"].fillna(axis_tilt).values,
+            tracker["surface_azimuth"].fillna(axis_azimuth).values,
+        )
+
+    # Dual-axis: panel normal points at sun. Clip below horizon.
+    zenith = solarpos.apparent_zenith.to_numpy(dtype=float)
+    sun_azimuth = solarpos.azimuth.to_numpy(dtype=float)
+    surface_tilt = np.clip(zenith, 0.0, dual_axis_max_tilt)
+    surface_azimuth = sun_azimuth
+    # When sun is below horizon, stow flat facing south/north (axis_azimuth fallback)
+    below_horizon = zenith >= 90.0
+    surface_tilt = np.where(below_horizon, 0.0, surface_tilt)
+    surface_azimuth = np.where(below_horizon, axis_azimuth, surface_azimuth)
+    return surface_tilt, surface_azimuth
+
+
+def _build_pv_production_breakdown(
+    weather_data: pd.DataFrame,
+    location: Location,
+    orientation: Callable[[pd.DataFrame], tuple[Any, Any]],
     n_modules: int,
-    times: pd.DatetimeIndex,
-    model_options: PVModelOptions,
-    degradation_rate: float = 0.0,
-    current_year: Optional[int] = None,
-    start_year: Optional[int] = None,
-    loss_overrides: Optional[Dict[str, float]] = None,
+    pv_params: Optional[PVModuleParams],
+    freq: str,
+    degradation_rate: float,
+    current_year: Optional[int],
+    start_year: Optional[int],
+    loss_overrides: Optional[Dict[str, float]],
+    model_kwargs: Dict[str, Any],
 ) -> PVProductionBreakdown:
-    """Build the full fixed/tracking PV production breakdown."""
+    """Build the full fixed/tracking PV production breakdown.
+
+    ``orientation`` maps the solar position to ``(surface_tilt,
+    surface_azimuth)``: scalars for a fixed array, per-timestep arrays for a
+    tracker. ``model_kwargs`` is the model-option block as the public entry
+    point received it.
+    """
+    if pv_params is None:
+        pv_params = get_module("Generic_400W")
+    option_kwargs = dict(model_kwargs)
+    solar_position = option_kwargs.pop("solar_position")
+
+    times, solarpos, weather_aligned = _prepare_solarpos_and_weather(
+        weather_data, location, freq, solar_position=solar_position
+    )
+    surface_tilt, surface_azimuth = orientation(solarpos)
+    model_options = resolve_pv_model_options(bifaciality=pv_params.bifaciality, **option_kwargs)
     detail = _compute_irradiance_and_cell_temp_detail(
         weather_aligned,
         solarpos,
@@ -752,41 +663,18 @@ def calculate_pv_production_breakdown(
     installation year. See :func:`calculate_pv_production_dc` for the
     parameters.
     """
-    if pv_params is None:
-        from breos.pv_modules import get_module
-
-        pv_params = get_module("Generic_400W")
-
-    times, solarpos, weather_aligned = _prepare_solarpos_and_weather(
-        weather_data, location, freq, solar_position=solar_position
-    )
-    model_options = resolve_pv_model_options(
-        transposition_model=transposition_model,
-        albedo=albedo,
-        surface_type=surface_type,
-        model_perez=model_perez,
-        iam_model=iam_model,
-        diffuse_iam=diffuse_iam,
-        temperature_model=temperature_model,
-        bifacial_model=bifacial_model,
-        bifaciality=pv_params.bifaciality,
-        gcr=gcr,
-        pvrow_height=pvrow_height,
-        pvrow_pitch=pvrow_pitch,
-    )
     breakdown = _build_pv_production_breakdown(
-        weather_aligned,
-        solarpos,
-        surface_tilt=tilt,
-        surface_azimuth=surface_azimuth,
-        pv_params=pv_params,
+        weather_data,
+        location,
+        lambda _solarpos: (tilt, surface_azimuth),
         n_modules=n_modules,
-        times=times,
+        pv_params=pv_params,
+        freq=freq,
         degradation_rate=degradation_rate,
         current_year=current_year,
         start_year=start_year,
         loss_overrides=loss_overrides,
-        model_options=model_options,
+        model_kwargs=_model_option_kwargs(locals()),
     )
 
     if verbose:
@@ -949,67 +837,31 @@ def calculate_pv_production_tracking_breakdown(
     if tracking not in ("single_axis", "dual_axis"):
         raise ValueError(f"tracking must be 'single_axis' or 'dual_axis', got {tracking!r}")
 
-    if pv_params is None:
-        from breos.pv_modules import get_module
-
-        pv_params = get_module("Generic_400W")
-
-    times, solarpos, weather_aligned = _prepare_solarpos_and_weather(
-        weather_data, location, freq, solar_position=solar_position
-    )
-
-    if tracking == "single_axis":
-        tracker = pvlib.tracking.singleaxis(
-            apparent_zenith=solarpos.apparent_zenith,
-            solar_azimuth=solarpos.azimuth,
+    def orientation(solarpos: pd.DataFrame) -> tuple[np.ndarray, np.ndarray]:
+        return _tracker_orientation(
+            solarpos,
+            tracking,
             axis_tilt=axis_tilt,
             axis_azimuth=axis_azimuth,
             max_angle=max_angle,
             backtrack=backtrack,
             gcr=gcr,
             cross_axis_tilt=cross_axis_tilt,
+            dual_axis_max_tilt=dual_axis_max_tilt,
         )
-        # singleaxis returns NaN when sun is below horizon — stow to axis orientation
-        surface_tilt = tracker["surface_tilt"].fillna(axis_tilt).values
-        surface_azimuth = tracker["surface_azimuth"].fillna(axis_azimuth).values
-    else:
-        # Dual-axis: panel normal points at sun. Clip below horizon.
-        zenith = solarpos.apparent_zenith.values
-        sun_azimuth = solarpos.azimuth.values
-        surface_tilt = np.clip(zenith, 0.0, dual_axis_max_tilt)
-        surface_azimuth = sun_azimuth
-        # When sun is below horizon, stow flat facing south/north (axis_azimuth fallback)
-        below_horizon = zenith >= 90.0
-        surface_tilt = np.where(below_horizon, 0.0, surface_tilt)
-        surface_azimuth = np.where(below_horizon, axis_azimuth, surface_azimuth)
 
-    model_options = resolve_pv_model_options(
-        transposition_model=transposition_model,
-        albedo=albedo,
-        surface_type=surface_type,
-        model_perez=model_perez,
-        iam_model=iam_model,
-        diffuse_iam=diffuse_iam,
-        temperature_model=temperature_model,
-        bifacial_model=bifacial_model,
-        bifaciality=pv_params.bifaciality,
-        gcr=gcr,
-        pvrow_height=pvrow_height,
-        pvrow_pitch=pvrow_pitch,
-    )
     breakdown = _build_pv_production_breakdown(
-        weather_aligned,
-        solarpos,
-        surface_tilt=surface_tilt,
-        surface_azimuth=surface_azimuth,
-        pv_params=pv_params,
+        weather_data,
+        location,
+        orientation,
         n_modules=n_modules,
-        times=times,
+        pv_params=pv_params,
+        freq=freq,
         degradation_rate=degradation_rate,
         current_year=current_year,
         start_year=start_year,
         loss_overrides=loss_overrides,
-        model_options=model_options,
+        model_kwargs=_model_option_kwargs(locals()),
     )
 
     if verbose:
@@ -1225,8 +1077,6 @@ def calculate_pv_production_ac(
     model_kwargs = _model_option_kwargs(locals())
 
     if pv_params is None:
-        from breos.pv_modules import get_module
-
         pv_params = get_module("Generic_400W")
 
     dc_power = calculate_pv_production_dc(
@@ -1277,7 +1127,7 @@ def _extract_met_data(weather_df: pd.DataFrame):
     """
     met = []
     for quantity, names, example in (
-        ("air temperature", ["temp_air", "temperature_2m", "temp", "air_temperature"], 'weather["temp_air"] = 25.0'),
+        ("air temperature", list(_AIR_TEMPERATURE_COLUMNS), 'weather["temp_air"] = 25.0'),
         ("wind speed", ["wind_speed", "wind_speed_10m", "ws", "WS10m"], 'weather["wind_speed"] = 1.0'),
     ):
         name = next((n for n in names if n in weather_df.columns), None)
@@ -1295,18 +1145,6 @@ def _extract_met_data(weather_df: pd.DataFrame):
             )
         met.append(values)
     return tuple(met)
-
-
-def _get_column(df: pd.DataFrame, possible_names: list, default=None):
-    """Get column from DataFrame trying multiple possible names."""
-    for name in possible_names:
-        if name in df.columns:
-            return df[name].values
-
-    if default is not None:
-        return np.full(len(df), default)
-
-    raise KeyError(f"Could not find column. Tried: {possible_names}")
 
 
 def estimate_optimal_tilt(latitude: float) -> float:
@@ -1355,19 +1193,20 @@ def _sum_pv_breakdowns(breakdowns: list[PVProductionBreakdown]) -> PVProductionB
     if not breakdowns:
         raise ValueError("At least one PV production breakdown is required")
 
-    def _sum_attr(name: str) -> pd.Series:
-        total = getattr(breakdowns[0], name).copy()
-        for breakdown in breakdowns[1:]:
-            total = total.add(getattr(breakdown, name), fill_value=0.0)
-        return total.rename(getattr(breakdowns[0], name).name)
+    def _sum(series: list[pd.Series]) -> pd.Series:
+        total = series[0].copy()
+        for other in series[1:]:
+            total = total.add(other, fill_value=0.0)
+        total.name = series[0].name
+        return total
 
-    component_losses: Dict[str, pd.Series] = {}
-    component_names = breakdowns[0].pvwatts_component_losses.keys()
-    for component in component_names:
-        total = breakdowns[0].pvwatts_component_losses[component].copy()
-        for breakdown in breakdowns[1:]:
-            total = total.add(breakdown.pvwatts_component_losses[component], fill_value=0.0)
-        component_losses[component] = total.rename(f"{component}_loss_W")
+    def _sum_attr(name: str) -> pd.Series:
+        return _sum([getattr(breakdown, name) for breakdown in breakdowns])
+
+    component_losses = {
+        component: _sum([breakdown.pvwatts_component_losses[component] for breakdown in breakdowns])
+        for component in breakdowns[0].pvwatts_component_losses
+    }
 
     return PVProductionBreakdown(
         horizontal_reference_dc=_sum_attr("horizontal_reference_dc"),
@@ -1422,12 +1261,6 @@ def calculate_multi_array_production_breakdown(
     parameters.
     """
     defaults = _model_option_kwargs(locals())
-
-    # Import locally to avoid circular dependencies (if solar imported by pv_modules)
-    try:
-        from breos.pv_modules import get_module
-    except ImportError as err:
-        raise ImportError("breos.pv_modules is required for multi-array production") from err
 
     breakdowns: list[PVProductionBreakdown] = []
 

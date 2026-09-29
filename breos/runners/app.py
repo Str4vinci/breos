@@ -34,6 +34,7 @@ from breos.smart_charging import resolve_instructions, smart_charging_provenance
 from breos.solar import PVProductionBreakdown
 from breos.tariffs import ResolvedTariff, tariff_provenance
 from breos.utils import get_hours_per_step
+from breos.weather import WEATHER_METADATA_KEY
 
 
 @dataclass(frozen=True)
@@ -461,7 +462,7 @@ def run_app_simulation(
         pv_loss_waterfall=_build_pv_loss_waterfall(inputs.pv_breakdown, first_year_results_df, cfg, resolved),
         weather_metadata=dict(
             inputs.weather.attrs.get(
-                "breos_weather_metadata",
+                WEATHER_METADATA_KEY,
                 {
                     "source": "runtime_dependency_or_unknown",
                     "note": "The injected weather provider did not expose source metadata.",
