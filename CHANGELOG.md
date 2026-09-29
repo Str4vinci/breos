@@ -661,6 +661,16 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   `update_battery_resistance_cyclewise` and
   `update_battery_resistance_calendar` still return the increment. Results
   and carried states are unchanged bit for bit.
+- `dc_to_ac`, and with it `calculate_pv_production_ac`, converts the whole
+  series in one vectorised pass through the inverter curve the PV-only
+  dispatch uses, instead of calling `calculate_dc_ac_power` once per
+  timestep ([#186](https://github.com/Str4vinci/breos/issues/186)). A
+  15-minute year takes 0.2 ms instead of 46 ms. Missing DC still converts to
+  0 W. The scalar path squares the load ratio through libm `pow`, so on
+  about 7 in a million random part-load inputs the two differ by 1 or 2 ULP
+  (a relative change below 5e-16); on 525,600 steps of synthetic Porto PV
+  years, hourly and 15-minute, none differs. App, Monte Carlo and the optimizer do not call
+  `dc_to_ac` and are unchanged bit for bit.
 
 ### Fixed
 - Bundled demandlib H0 profiles now put weekday, Saturday and Sunday shapes
