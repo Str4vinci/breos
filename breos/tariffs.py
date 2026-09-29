@@ -18,7 +18,7 @@ import json
 import math
 import re
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import date, datetime
 from functools import lru_cache
 from numbers import Real
 from types import MappingProxyType
@@ -92,9 +92,8 @@ def _canonical_hash(payload: object) -> str:
 class TariffSchedule:
     """Metadata for one versioned tariff schedule.
 
-    Period-classification rules live in schedule resolvers and packaged data;
-    this value records the stable identity and provenance used by a resolved
-    tariff.
+    The period rules live in a :class:`ScheduleDefinition`; this value
+    records the stable identity and provenance used by a resolved tariff.
     """
 
     identifier: str
@@ -244,12 +243,15 @@ FLAT_SCHEDULE = TariffSchedule(
 def _parse_date(value: object, where: str) -> date | None:
     if value is None:
         return None
+    # JSON gives ISO strings; TOML and Python give dates.
+    if isinstance(value, date) and not isinstance(value, datetime):
+        return value
     if not isinstance(value, str):
-        raise TypeError(f"'{where}' must be an ISO date string")
+        raise TypeError(f"'{where}' must be a date or an ISO date string")
     try:
         return date.fromisoformat(value)
     except ValueError as exc:
-        raise ValueError(f"'{where}' must be an ISO date string") from exc
+        raise ValueError(f"'{where}' must be a date or an ISO date string") from exc
 
 
 def _clock_minutes(value: object, where: str) -> int:
@@ -261,131 +263,240 @@ def _clock_minutes(value: object, where: str) -> int:
     return int(hour) * 60 + int(minute)
 
 
-def _validate_rule_intervals(
-    schedule_id: str,
-    periods: tuple[str, ...],
-    rule_index: int,
-    intervals: object,
-) -> tuple[tuple[int, int, str], ...]:
-    where = f"tariffs.json schedules.{schedule_id}.rules[{rule_index}].intervals"
+@dataclass(frozen=True)
+class ScheduleRule:
+    """The periods of one day selector and season, tiling the civil day.
+
+    ``days`` is ``weekday``, ``saturday``, ``sunday`` or ``all``; ``season``
+    is ``standard``, ``dst`` or ``all``. Each interval is ``(start, end,
+    period)`` in minutes after local midnight, ``end`` exclusive; together
+    they cover 0 through 1440 with no gap or overlap.
+    """
+
+    days: str
+    season: str
+    intervals: tuple[tuple[int, int, str], ...]
+
+    def __post_init__(self) -> None:
+        if self.days not in {*_DAY_TYPES, "all"}:
+            raise ValueError(f"Unknown day selector: {self.days!r}")
+        if self.season not in {*_SEASONS, "all"}:
+            raise ValueError(f"Unknown season selector: {self.season!r}")
+        intervals = []
+        for start, end, period in self.intervals:
+            for bound in (start, end):
+                if isinstance(bound, bool) or not isinstance(bound, int) or not 0 <= bound <= 24 * 60:
+                    raise ValueError(f"Interval bounds must be whole minutes from 0 through 1440, not {bound!r}")
+            if start >= end:
+                raise ValueError(f"Interval {period} [{start}, {end}) must have start before end")
+            intervals.append((start, end, _period_name(period, "interval period")))
+        intervals.sort()
+        cursor = 0
+        for start, end, _period in intervals:
+            if start != cursor:
+                problem = "overlap" if start < cursor else "gap"
+                raise ValueError(f"Intervals have a {problem} at minute {min(start, cursor)}")
+            cursor = end
+        if cursor != 24 * 60:
+            raise ValueError("Intervals must cover the complete civil day")
+        object.__setattr__(self, "intervals", tuple(intervals))
+
+    def applies_to(self, day_type: str, season: str) -> bool:
+        return self.days in {day_type, "all"} and self.season in {season, "all"}
+
+
+@dataclass(frozen=True)
+class HolidayCalendar:
+    """Dates a schedule treats as another day type.
+
+    ``years`` are the years ``dates`` is complete for: an index covering a
+    day of any other year raises rather than miss a holiday. ``None`` means
+    the dates are complete for every year.
+    """
+
+    day_type: str
+    dates: frozenset[date]
+    years: frozenset[int] | None = None
+    source: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.day_type not in _DAY_TYPES:
+            raise ValueError(f"'holidays.day_type' must be one of: {', '.join(_DAY_TYPES)}")
+        dates = frozenset(self.dates)
+        if any(not isinstance(day, date) or isinstance(day, datetime) for day in dates):
+            raise TypeError("'holidays.dates' must hold dates")
+        object.__setattr__(self, "dates", dates)
+        if self.years is not None:
+            years = frozenset(self.years)
+            if any(isinstance(year, bool) or not isinstance(year, int) for year in years):
+                raise TypeError("'holidays.years' must hold integer years")
+            outside = sorted(day for day in dates if day.year not in years)
+            if outside:
+                raise ValueError(f"'holidays.dates' has {outside[0].isoformat()}, outside the calendar's years")
+            object.__setattr__(self, "years", years)
+        if self.source is not None:
+            object.__setattr__(self, "source", _nonempty_text(self.source, "holidays.source"))
+
+
+@dataclass(frozen=True)
+class ScheduleDefinition:
+    """A complete tariff schedule: its metadata, period rules and holidays.
+
+    Every day type and season is matched by exactly one rule. A holiday takes
+    the rule of ``holidays.day_type``. The values are immutable and pickle,
+    so a definition can travel to optimizer worker processes. The bundled
+    catalogue is built with :func:`parse_schedule_definition`.
+    """
+
+    schedule: TariffSchedule
+    rules: tuple[ScheduleRule, ...]
+    holidays: HolidayCalendar | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.schedule, TariffSchedule):
+            raise TypeError("'schedule' must be a TariffSchedule")
+        rules = tuple(self.rules)
+        if not rules or any(not isinstance(rule, ScheduleRule) for rule in rules):
+            raise TypeError("'rules' must be a non-empty sequence of ScheduleRule")
+        identifier = self.schedule.identifier
+        for position, rule in enumerate(rules):
+            unknown = {period for _start, _end, period in rule.intervals} - set(self.schedule.periods)
+            if unknown:
+                raise ValueError(
+                    f"Schedule {identifier!r} rules[{position}] uses unknown period(s): {', '.join(sorted(unknown))}"
+                )
+        for day_type in _DAY_TYPES:
+            for season in _SEASONS:
+                matches = sum(rule.applies_to(day_type, season) for rule in rules)
+                if matches != 1:
+                    raise ValueError(
+                        f"Schedule {identifier!r} must define exactly one rule for {day_type}/{season}; found {matches}"
+                    )
+        object.__setattr__(self, "rules", rules)
+        if self.holidays is not None and not isinstance(self.holidays, HolidayCalendar):
+            raise TypeError("'holidays' must be a HolidayCalendar when configured")
+
+    @property
+    def resolution_minutes(self) -> int:
+        """The coarsest step, in minutes, that lands on every boundary: input must divide it."""
+        return math.gcd(
+            24 * 60, *(bound for rule in self.rules for start, end, _ in rule.intervals for bound in (start, end))
+        )
+
+    def rule_for(self, day_type: str, season: str) -> ScheduleRule:
+        return next(rule for rule in self.rules if rule.applies_to(day_type, season))
+
+
+def _parse_rule(raw: object, where: str) -> ScheduleRule:
+    if not isinstance(raw, Mapping):
+        raise TypeError(f"'{where}' must be a mapping")
+    intervals = raw.get("intervals")
     if not isinstance(intervals, Mapping) or not intervals:
-        raise TypeError(f"'{where}' must be a non-empty mapping")
-
-    unknown = set(intervals) - set(periods)
-    if unknown:
-        raise ValueError(f"'{where}' contains unknown period(s): {', '.join(sorted(unknown))}")
-
+        raise TypeError(f"'{where}.intervals' must be a non-empty mapping")
     flattened: list[tuple[int, int, str]] = []
     for raw_period, raw_ranges in intervals.items():
         period = str(raw_period)
-        if not isinstance(raw_ranges, list) or not raw_ranges:
-            raise TypeError(f"'{where}.{period}' must be a non-empty list of [start, end] ranges")
+        if not isinstance(raw_ranges, (list, tuple)) or not raw_ranges:
+            raise TypeError(f"'{where}.intervals.{period}' must be a non-empty list of [start, end] ranges")
         for range_index, raw_range in enumerate(raw_ranges):
-            range_where = f"{where}.{period}[{range_index}]"
-            if not isinstance(raw_range, list) or len(raw_range) != 2:
+            range_where = f"{where}.intervals.{period}[{range_index}]"
+            if not isinstance(raw_range, (list, tuple)) or len(raw_range) != 2:
                 raise TypeError(f"'{range_where}' must contain exactly [start, end]")
             start = _clock_minutes(raw_range[0], f"{range_where}[0]")
             end = _clock_minutes(raw_range[1], f"{range_where}[1]")
-            if start >= end:
-                raise ValueError(f"'{range_where}' must have start before end")
             flattened.append((start, end, period))
+    try:
+        return ScheduleRule(
+            days=cast(str, raw.get("days")), season=cast(str, raw.get("season")), intervals=tuple(flattened)
+        )
+    except ValueError as exc:
+        raise ValueError(f"'{where}': {exc}") from exc
 
-    flattened.sort()
-    cursor = 0
-    for start, end, _period in flattened:
-        if start != cursor:
-            problem = "overlap" if start < cursor else "gap"
-            raise ValueError(f"'{where}' has a {problem} at minute {min(start, cursor)}")
-        cursor = end
-    if cursor != 24 * 60:
-        raise ValueError(f"'{where}' must cover the complete civil day")
-    return tuple(flattened)
+
+def _parse_holidays(raw: object, where: str) -> HolidayCalendar | None:
+    """Read a holiday calendar: the day type holidays take, and dates by year."""
+    if raw is None:
+        return None
+    if not isinstance(raw, Mapping):
+        raise TypeError(f"'{where}' must be a mapping")
+    day_type = raw.get("day_type")
+    if day_type not in _DAY_TYPES:
+        raise ValueError(f"'{where}.day_type' must be one of: {', '.join(_DAY_TYPES)}")
+    raw_dates = raw.get("dates")
+    if not isinstance(raw_dates, Mapping) or not raw_dates:
+        raise TypeError(f"'{where}.dates' must map years to lists of ISO dates")
+    years: set[int] = set()
+    dates: set[date] = set()
+    for year, values in raw_dates.items():
+        if not isinstance(values, (list, tuple)):
+            raise TypeError(f"'{where}.dates.{year}' must be a list of ISO dates")
+        parsed = {_parse_date(value, f"{where}.dates.{year}") for value in values}
+        if any(day is None or day.year != int(year) for day in parsed):
+            raise ValueError(f"'{where}.dates.{year}' must hold dates in {year}")
+        years.add(int(year))
+        dates.update(cast(set[date], parsed))
+    return HolidayCalendar(day_type=day_type, dates=frozenset(dates), years=frozenset(years), source=raw.get("source"))
+
+
+def parse_schedule_definition(
+    identifier: str, raw: Mapping[str, Any], *, where: str | None = None
+) -> ScheduleDefinition:
+    """Build a :class:`ScheduleDefinition` from its mapping form, as in the bundled ``tariffs.json``.
+
+    ``raw`` holds ``version``, ``timezone``, ``cycle``, ``periods`` and
+    ``rules``, and optionally ``source_url``, ``source``, ``note``,
+    ``effective_from``, ``effective_to`` and ``holidays``. Each rule has a
+    ``days`` selector, a ``season`` selector and ``intervals`` mapping periods
+    to ``["HH:MM", "HH:MM"]`` ranges; ``"24:00"`` closes the day. Holidays
+    have a ``day_type`` and ``dates`` mapping each year to its dates. The
+    finest time resolution the schedule needs follows from the boundaries.
+    ``where`` names the source in error messages; it defaults to the
+    identifier.
+    """
+    name = _nonempty_text(identifier, "schedule identifier")
+    where = where or name
+    if not isinstance(raw, Mapping):
+        raise TypeError(f"'{where}' must be a mapping")
+
+    raw_periods = raw.get("periods", ())
+    if not isinstance(raw_periods, (list, tuple)):
+        raise TypeError(f"'{where}.periods' must be a list of period names")
+    periods = tuple(_period_name(period, f"{where}.periods[{position}]") for position, period in enumerate(raw_periods))
+    schedule = TariffSchedule(
+        identifier=name,
+        # TariffSchedule validates these; a missing one fails there.
+        version=cast(str, raw.get("version")),
+        timezone=cast(str, raw.get("timezone")),
+        cycle=cast(str, raw.get("cycle")),
+        periods=periods,
+        source_url=raw.get("source_url"),
+        source=raw.get("source"),
+        note=raw.get("note"),
+        effective_from=_parse_date(raw.get("effective_from"), f"{where}.effective_from"),
+        effective_to=_parse_date(raw.get("effective_to"), f"{where}.effective_to"),
+    )
+
+    raw_rules = raw.get("rules")
+    if not isinstance(raw_rules, (list, tuple)) or not raw_rules:
+        raise TypeError(f"'{where}.rules' must be a non-empty list")
+    rules = tuple(_parse_rule(raw_rule, f"{where}.rules[{position}]") for position, raw_rule in enumerate(raw_rules))
+    return ScheduleDefinition(
+        schedule=schedule, rules=rules, holidays=_parse_holidays(raw.get("holidays"), f"{where}.holidays")
+    )
 
 
 @lru_cache(maxsize=1)
-def _schedule_catalog() -> Mapping[str, Mapping[str, Any]]:
+def _schedule_catalog() -> Mapping[str, ScheduleDefinition]:
     payload = load_config_json("tariffs.json")
     raw_schedules = payload.get("schedules")
     if not isinstance(raw_schedules, dict) or not raw_schedules:
         raise ValueError("'tariffs.json schedules' must be a non-empty mapping")
 
-    catalog: dict[str, Mapping[str, Any]] = {}
+    catalog: dict[str, ScheduleDefinition] = {}
     for raw_identifier, raw_definition in raw_schedules.items():
         identifier = _nonempty_text(raw_identifier, "tariffs.json schedule identifier")
-        if not isinstance(raw_definition, dict):
-            raise TypeError(f"'tariffs.json schedules.{identifier}' must be a mapping")
-
-        periods = tuple(
-            _period_name(period, f"tariffs.json schedules.{identifier}.periods[{position}]")
-            for position, period in enumerate(raw_definition.get("periods", ()))
-        )
-        schedule = TariffSchedule(
-            identifier=identifier,
-            # TariffSchedule validates these; a missing one fails there.
-            version=cast(str, raw_definition.get("version")),
-            timezone=cast(str, raw_definition.get("timezone")),
-            cycle=cast(str, raw_definition.get("cycle")),
-            periods=periods,
-            source_url=raw_definition.get("source_url"),
-            source=raw_definition.get("source"),
-            note=raw_definition.get("note"),
-            effective_from=_parse_date(
-                raw_definition.get("effective_from"), f"tariffs.json schedules.{identifier}.effective_from"
-            ),
-            effective_to=_parse_date(
-                raw_definition.get("effective_to"), f"tariffs.json schedules.{identifier}.effective_to"
-            ),
-        )
-
-        resolution = raw_definition.get("required_resolution_minutes")
-        if isinstance(resolution, bool) or not isinstance(resolution, int) or resolution <= 0:
-            raise ValueError(
-                f"'tariffs.json schedules.{identifier}.required_resolution_minutes' must be a positive integer"
-            )
-
-        raw_rules = raw_definition.get("rules")
-        if not isinstance(raw_rules, list) or not raw_rules:
-            raise TypeError(f"'tariffs.json schedules.{identifier}.rules' must be a non-empty list")
-        rules: list[Mapping[str, Any]] = []
-        for rule_index, raw_rule in enumerate(raw_rules):
-            if not isinstance(raw_rule, dict):
-                raise TypeError(f"'tariffs.json schedules.{identifier}.rules[{rule_index}]' must be a mapping")
-            days = raw_rule.get("days")
-            season = raw_rule.get("season")
-            if days not in {*_DAY_TYPES, "all"}:
-                raise ValueError(f"Unknown day selector in schedule {identifier!r}: {days!r}")
-            if season not in {*_SEASONS, "all"}:
-                raise ValueError(f"Unknown season selector in schedule {identifier!r}: {season!r}")
-            rules.append(
-                MappingProxyType(
-                    {
-                        "days": days,
-                        "season": season,
-                        "intervals": _validate_rule_intervals(
-                            identifier, schedule.periods, rule_index, raw_rule.get("intervals")
-                        ),
-                    }
-                )
-            )
-
-        for day_type in _DAY_TYPES:
-            for season in _SEASONS:
-                matches = [
-                    rule for rule in rules if rule["days"] in {day_type, "all"} and rule["season"] in {season, "all"}
-                ]
-                if len(matches) != 1:
-                    raise ValueError(
-                        f"Schedule {identifier!r} must define exactly one rule for {day_type}/{season}; "
-                        f"found {len(matches)}"
-                    )
-
-        catalog[identifier] = MappingProxyType(
-            {
-                "schedule": schedule,
-                "required_resolution_minutes": resolution,
-                "rules": tuple(rules),
-                "holidays": _parse_holidays(identifier, raw_definition.get("holidays")),
-            }
+        catalog[identifier] = parse_schedule_definition(
+            identifier, raw_definition, where=f"tariffs.json schedules.{identifier}"
         )
     return MappingProxyType(catalog)
 
@@ -395,14 +506,27 @@ def available_tariff_schedules() -> tuple[str, ...]:
     return tuple(sorted(_schedule_catalog()))
 
 
-def get_tariff_schedule(identifier: str) -> TariffSchedule:
-    """Return immutable metadata for one bundled schedule identifier."""
+def get_schedule_definition(identifier: str) -> ScheduleDefinition:
+    """Return the full definition of one bundled schedule identifier."""
     name = _nonempty_text(identifier, "schedule identifier")
     try:
-        return _schedule_catalog()[name]["schedule"]
+        return _schedule_catalog()[name]
     except KeyError as exc:
         available = ", ".join(available_tariff_schedules())
         raise KeyError(f"Unknown tariff schedule {name!r}. Available: {available}") from exc
+
+
+def get_tariff_schedule(identifier: str) -> TariffSchedule:
+    """Return immutable metadata for one bundled schedule identifier."""
+    return get_schedule_definition(identifier).schedule
+
+
+def _as_definition(schedule: str | ScheduleDefinition) -> ScheduleDefinition:
+    if isinstance(schedule, ScheduleDefinition):
+        return schedule
+    if not isinstance(schedule, str):
+        raise TypeError("'schedule' must be a bundled schedule identifier or a ScheduleDefinition")
+    return get_schedule_definition(schedule)
 
 
 def _validate_schedule_resolution(
@@ -439,40 +563,19 @@ def _validate_schedule_resolution(
         )
 
 
-def _parse_holidays(identifier: str, raw: object) -> Mapping[str, Any] | None:
-    """Read a schedule's holiday calendar: the day type holidays take, and dates by year."""
-    if raw is None:
-        return None
-    where = f"tariffs.json schedules.{identifier}.holidays"
-    if not isinstance(raw, dict):
-        raise TypeError(f"'{where}' must be a mapping")
-    day_type = raw.get("day_type")
-    if day_type not in _DAY_TYPES:
-        raise ValueError(f"'{where}.day_type' must be one of: {', '.join(_DAY_TYPES)}")
-    raw_dates = raw.get("dates")
-    if not isinstance(raw_dates, dict) or not raw_dates:
-        raise TypeError(f"'{where}.dates' must map years to lists of ISO dates")
-    by_year: dict[int, frozenset[date]] = {}
-    for year, values in raw_dates.items():
-        parsed = frozenset(_parse_date(value, f"{where}.dates.{year}") for value in values)
-        if any(day is None or day.year != int(year) for day in parsed):
-            raise ValueError(f"'{where}.dates.{year}' must hold dates in {year}")
-        by_year[int(year)] = cast(frozenset[date], parsed)
-    return MappingProxyType({"day_type": day_type, "source": raw.get("source"), "dates": MappingProxyType(by_year)})
-
-
-def _holiday_dates(identifier: str, holidays: Mapping[str, Any] | None, years: set[int]) -> frozenset[date]:
+def _holiday_dates(identifier: str, holidays: HolidayCalendar | None, years: set[int]) -> frozenset[date]:
     if holidays is None:
         return frozenset()
-    missing = sorted(years - set(holidays["dates"]))
-    if missing:
-        known = ", ".join(str(year) for year in sorted(holidays["dates"]))
-        raise ValueError(
-            f"Schedule {identifier!r} treats national holidays as {holidays['day_type']}s, but BREOS has no "
-            f"holiday calendar for {', '.join(map(str, missing))} (it has {known}). The calendar is published "
-            "every year; simulate a year it covers."
-        )
-    return frozenset().union(*(holidays["dates"][year] for year in years))
+    if holidays.years is not None:
+        missing = sorted(years - holidays.years)
+        if missing:
+            known = ", ".join(str(year) for year in sorted(holidays.years))
+            raise ValueError(
+                f"Schedule {identifier!r} treats national holidays as {holidays.day_type}s, but BREOS has no "
+                f"holiday calendar for {', '.join(map(str, missing))} (it has {known}). The calendar is published "
+                "every year; simulate a year it covers."
+            )
+    return frozenset(day for day in holidays.dates if day.year in years)
 
 
 def _day_type(
@@ -535,18 +638,19 @@ def _check_timezone(schedule: TariffSchedule, timezone: str) -> str:
 
 def classify_tariff_periods(
     index: pd.DatetimeIndex,
-    identifier: str,
+    schedule: str | ScheduleDefinition,
     *,
     timezone: str,
     study_date: date | None = None,
     boundary_policy: str = "strict",
 ) -> tuple[str, ...]:
-    """Classify instants with a bundled schedule in the configured civil time.
+    """Classify instants with a schedule in the configured civil time.
 
-    ``timezone`` is the location's IANA zone (the App's
-    ``ResolvedAppConfig.timezone``). The index is converted to it explicitly;
-    its own timezone only has to identify the instants. The zone must be the
-    one the schedule is defined in.
+    ``schedule`` is a bundled schedule identifier or a
+    :class:`ScheduleDefinition`. ``timezone`` is the location's IANA zone
+    (the App's ``ResolvedAppConfig.timezone``). The index is converted to it
+    explicitly; its own timezone only has to identify the instants. The zone
+    must be the one the schedule is defined in.
 
     Raises:
         ValueError: If the zone differs from the schedule's, the index cannot
@@ -559,56 +663,52 @@ def classify_tariff_periods(
         allowed = ", ".join(sorted(BOUNDARY_POLICIES))
         raise ValueError(f"'boundary_policy' must be one of: {allowed}")
 
-    schedule = get_tariff_schedule(identifier)
-    zone = _check_timezone(schedule, timezone)
-    definition = _schedule_catalog()[schedule.identifier]
-    _validate_schedule_resolution(resolved_index, schedule.identifier, definition["required_resolution_minutes"], zone)
-    _validate_study_date(schedule, resolved_index, study_date, zone)
+    definition = _as_definition(schedule)
+    metadata = definition.schedule
+    zone = _check_timezone(metadata, timezone)
+    _validate_schedule_resolution(resolved_index, metadata.identifier, definition.resolution_minutes, zone)
+    _validate_study_date(metadata, resolved_index, study_date, zone)
 
     local_index = resolved_index.tz_convert(zone)
-    holidays = definition["holidays"]
+    holidays = definition.holidays
     # A year the index only grazes (the last UTC hour of a year is already the
     # next local year east of UTC) needs no calendar: its steps are fewer than
     # one civil day. Every year the index covers for a day or more does.
     years, counts = np.unique(local_index.year, return_counts=True)
     step_hours = (local_index[1] - local_index[0]).total_seconds() / 3600 if len(local_index) > 1 else 24.0
     covered = {int(year) for year, count in zip(years, counts, strict=True) if count * step_hours >= 24}
-    holiday_dates = _holiday_dates(schedule.identifier, holidays, covered)
-    holiday_day_type = holidays["day_type"] if holidays is not None else "sunday"
+    holiday_dates = _holiday_dates(metadata.identifier, holidays, covered)
+    holiday_day_type = holidays.day_type if holidays is not None else "sunday"
     labels: list[str] = []
     for timestamp in local_index:
-        day_type = _day_type(timestamp, holiday_dates, holiday_day_type)
-        season = _season(timestamp)
-        rule = next(
-            rule
-            for rule in definition["rules"]
-            if rule["days"] in {day_type, "all"} and rule["season"] in {season, "all"}
-        )
+        rule = definition.rule_for(_day_type(timestamp, holiday_dates, holiday_day_type), _season(timestamp))
         minute = timestamp.hour * 60 + timestamp.minute
-        label = next(period for start, end, period in rule["intervals"] if start <= minute < end)
+        label = next(period for start, end, period in rule.intervals if start <= minute < end)
         labels.append(label)
     return tuple(labels)
 
 
 def resolve_named_tariff(
     index: pd.DatetimeIndex,
-    schedule_identifier: str,
+    schedule: str | ScheduleDefinition,
     prices: TariffPrices,
     *,
     timezone: str,
     study_date: date | None = None,
     boundary_policy: str = "strict",
 ) -> ResolvedTariff:
-    """Classify and price one bundled tariff schedule in the configured civil time."""
-    schedule = get_tariff_schedule(schedule_identifier)
+    """Classify and price one tariff schedule, bundled or defined, in the configured civil time."""
+    definition = _as_definition(schedule)
     labels = classify_tariff_periods(
         index,
-        schedule_identifier,
+        definition,
         timezone=timezone,
         study_date=study_date,
         boundary_policy=boundary_policy,
     )
-    return resolve_tariff(index, labels, schedule, prices, timezone=timezone, boundary_policy=boundary_policy)
+    return resolve_tariff(
+        index, labels, definition.schedule, prices, timezone=timezone, boundary_policy=boundary_policy
+    )
 
 
 def civil_day_starts(index: pd.DatetimeIndex, timezone: str) -> tuple[int, ...]:
@@ -757,15 +857,20 @@ def resolve_flat_tariff(
 class TariffSpec:
     """A configured tariff before it meets a simulation index: the App's ``[tariff]`` table.
 
-    ``resolve`` classifies and prices one index. Every project year replays
+    ``schedule`` is a bundled schedule identifier or a
+    :class:`ScheduleDefinition`. ``resolve`` classifies and prices one index. Every project year replays
     the start-year calendar (ADR 0002 A2), so a run resolves once and reuses
     the result for every year.
     """
 
-    schedule: str
+    schedule: str | ScheduleDefinition
     prices: TariffPrices
     boundary_policy: str = "strict"
     study_date: date | None = None
+
+    @property
+    def definition(self) -> ScheduleDefinition:
+        return _as_definition(self.schedule)
 
     def resolve(self, index: pd.DatetimeIndex, timezone: str) -> ResolvedTariff:
         return resolve_named_tariff(
@@ -806,7 +911,6 @@ def tariff_provenance(resolved: ResolvedTariff, *, calendar_year: int) -> dict[s
     }
 
 
-def schedule_resolution_minutes(identifier: str) -> int:
-    """The finest boundary step of a bundled schedule, in minutes: input must be at least this fine."""
-    schedule = get_tariff_schedule(identifier)
-    return int(_schedule_catalog()[schedule.identifier]["required_resolution_minutes"])
+def schedule_resolution_minutes(schedule: str | ScheduleDefinition) -> int:
+    """The step, in minutes, that lands on every boundary of a schedule: input steps must divide it."""
+    return _as_definition(schedule).resolution_minutes

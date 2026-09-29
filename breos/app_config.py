@@ -68,6 +68,7 @@ from breos.tariffs import (
     BOUNDARY_POLICIES,
     SUPPORTED_CURRENCIES,
     TariffPrices,
+    TariffSchedule,
     TariffSpec,
     available_tariff_schedules,
     get_tariff_schedule,
@@ -1525,7 +1526,7 @@ NESTED_TABLE_SPECS: Mapping[str, TableSpec] = {
 
 
 def _checked_smart_charging(
-    value: Any, schedule: str | None, battery_kwh: float, battery_key: str = "battery_kwh"
+    value: Any, schedule: TariffSchedule | None, battery_kwh: float, battery_key: str = "battery_kwh"
 ) -> dict[str, Any]:
     """Check a [smart_charging] table against the configured tariff schedule and battery.
 
@@ -1541,12 +1542,12 @@ def _checked_smart_charging(
         )
     if not battery_kwh > 0:
         raise ValueError(f"'smart_charging.mode' = 'fixed_target' needs a battery; set {battery_key} > 0")
-    periods = get_tariff_schedule(schedule).periods
+    periods = schedule.periods
     for name in ("charge_periods", "discharge_periods"):
         unknown = sorted(set(table[name]) - set(periods))
         if unknown:
             raise ValueError(
-                f"'smart_charging.{name}' has period(s) {', '.join(unknown)} that schedule {schedule!r} "
+                f"'smart_charging.{name}' has period(s) {', '.join(unknown)} that schedule {schedule.identifier!r} "
                 f"does not have. Its periods: {', '.join(sorted(periods))}."
             )
     return table
@@ -1555,7 +1556,9 @@ def _checked_smart_charging(
 def _validate_smart_charging(cfg: dict[str, Any]) -> None:
     if cfg["smart_charging"] is None:
         return
-    schedule = TARIFF_TABLE.validate(cfg["tariff"])["schedule"] if cfg["tariff"] is not None else None
+    schedule = (
+        get_tariff_schedule(TARIFF_TABLE.validate(cfg["tariff"])["schedule"]) if cfg["tariff"] is not None else None
+    )
     _checked_smart_charging(cfg["smart_charging"], schedule, cfg["battery_kwh"])
 
 
@@ -1571,7 +1574,7 @@ def resolve_smart_charging_spec(
     """
     if cfg.get("smart_charging") is None:
         return None
-    schedule = tariff_spec.schedule if tariff_spec is not None else None
+    schedule = tariff_spec.definition.schedule if tariff_spec is not None else None
     table = _checked_smart_charging(cfg["smart_charging"], schedule, cfg["battery_kwh"], battery_key)
     if table["mode"] == "disabled":
         return SmartChargingSpec(mode="disabled")
