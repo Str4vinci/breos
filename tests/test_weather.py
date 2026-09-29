@@ -23,6 +23,7 @@ from breos.weather import (
     resample_to_15min,
     save_weather_csv,
     select_random_year_and_replace_datetime,
+    weather_file_metadata,
     weather_representative_time_offset,
 )
 
@@ -932,3 +933,31 @@ def test_save_weather_csv_writes_content_bound_metadata(tmp_path):
     payload = json.loads(Path(f"{path}.metadata.json").read_text())
     assert payload["weather_sha256"] == hashlib.sha256(path.read_bytes()).hexdigest()
     assert payload["breos_weather_metadata"]["radiation_time_basis"] == "interval_mean"
+
+
+def test_pre_060_openmeteo_sidecar_reads_as_instant_gmt(tmp_path):
+    # Sidecars written before 0.6.0 carry no timing fields. Their Open-Meteo
+    # files hold instant GMT samples, so the naive-timestamp warning is wrong.
+    weather = pd.DataFrame({"ghi": [0.0, 1.0]}, index=pd.date_range("2020-01-01", periods=2, freq="h", tz="UTC"))
+    weather.attrs["breos_weather_metadata"] = {"source": "OpenMeteo_historical", "radiation_time_basis": "instant"}
+    path = tmp_path / "weather.csv"
+    save_weather_csv(weather, path)
+
+    metadata = weather_file_metadata(path)
+
+    assert metadata["timestamp_label_basis"] == "instant"
+    assert metadata["timestamp_timezone"] == "GMT"
+    assert metadata["irradiance_time_offset_hours"] == 0.0
+
+
+def test_load_weather_finds_a_date_column_in_any_case(tmp_path):
+    csv_path = tmp_path / "lat41_lon-8_tmy_2005_2023_pvgis-sarah3.csv"
+    pd.DataFrame({"station": ["a", "b"], "Date": ["2020-01-01 00:00", "2020-01-01 01:00"], "ghi": [0.0, 1.0]}).to_csv(
+        csv_path, index=False
+    )
+
+    loaded = load_weather("lat41_lon-8", data_type="tmy", weather_dir=str(tmp_path))
+
+    assert isinstance(loaded.index, pd.DatetimeIndex)
+    assert loaded.index.name == "Date"
+    assert loaded["ghi"].tolist() == [0.0, 1.0]

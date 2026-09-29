@@ -11,8 +11,9 @@ import numpy as np
 import pandas as pd
 from pvlib.location import Location
 
-from breos.pv.model_options import DEFAULT_SOLAR_POSITION, resolve_solar_position_method, solar_position_time_offset
+from breos.pv.model_options import DEFAULT_SOLAR_POSITION, solar_position_at_labels
 from breos.utils import IRRADIANCE_COLUMN_ALIASES, find_irradiance_column
+from breos.weather import WEATHER_METADATA_KEY
 
 
 def normalise_horizon_profile(profile: Any) -> list[list[float]] | None:
@@ -76,19 +77,6 @@ def _weather_column(weather: pd.DataFrame, component: str) -> str:
     return column
 
 
-def _solar_position_at_labels(
-    location: Location,
-    weather: pd.DataFrame,
-    freq: str,
-    solar_position: str,
-) -> tuple[pd.DataFrame, str]:
-    method = resolve_solar_position_method(solar_position)
-    offset = solar_position_time_offset(method, weather, freq)
-    solarpos = location.get_solarposition(times=weather.index + offset)
-    solarpos.index = weather.index
-    return solarpos, method
-
-
 def apply_terrain_horizon_profile(
     weather: pd.DataFrame,
     location: Location,
@@ -116,7 +104,7 @@ def apply_terrain_horizon_profile(
     if not isinstance(weather.index, pd.DatetimeIndex):
         raise ValueError("weather_data must have a DatetimeIndex")
 
-    metadata = deepcopy(weather.attrs.get("breos_weather_metadata"))
+    metadata = deepcopy(weather.attrs.get(WEATHER_METADATA_KEY))
     horizon = metadata.get("horizon") if isinstance(metadata, dict) else None
     status = horizon.get("status") if isinstance(horizon, dict) else "unknown"
     if isinstance(horizon, dict) and status == "applied":
@@ -135,7 +123,7 @@ def apply_terrain_horizon_profile(
     ghi_column = _weather_column(weather, "ghi")
     dni_column = _weather_column(weather, "dni")
     dhi_column = _weather_column(weather, "dhi")
-    solarpos, position_method = _solar_position_at_labels(location, weather, freq, solar_position)
+    solarpos, position_method = solar_position_at_labels(location, weather.index, weather, freq, solar_position)
     if "apparent_elevation" in solarpos:
         solar_elevation = np.asarray(solarpos["apparent_elevation"], dtype=float)
     else:
@@ -173,7 +161,6 @@ def apply_terrain_horizon_profile(
         "solar_position": position_method,
         "shaded_timesteps": int(np.count_nonzero(shaded)),
     }
-    metadata = deepcopy(metadata)
     metadata["horizon"] = {"status": "applied", "provider": "breos", "profile": profile_metadata}
-    result.attrs["breos_weather_metadata"] = metadata
+    result.attrs[WEATHER_METADATA_KEY] = metadata
     return result

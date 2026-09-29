@@ -15,7 +15,7 @@ from pvlib.location import Location
 
 from breos.app_config import ResolvedAppConfig, SimulationPeriod, resolve_app_config
 from breos.pv.horizon import apply_terrain_horizon_profile
-from breos.pv.model_options import DEFAULT_SOLAR_POSITION
+from breos.pv.model_options import DEFAULT_SOLAR_POSITION, configured_pv_model_kwargs
 from breos.solar import (
     PVProductionBreakdown,
     calculate_multi_array_production_breakdown,
@@ -23,7 +23,13 @@ from breos.solar import (
     calculate_pv_production_tracking_breakdown,
 )
 from breos.utils import get_hours_per_step, remap_datetime_index_years
-from breos.weather import AmbiguousWeatherError, fill_leap_day, warn_if_naive_weather_timestamps
+from breos.weather import (
+    WEATHER_METADATA_KEY,
+    AmbiguousWeatherError,
+    _normalised_horizon_metadata,
+    fill_leap_day,
+    warn_if_naive_weather_timestamps,
+)
 
 FrameT = TypeVar("FrameT", pd.DataFrame, pd.Series)
 
@@ -52,21 +58,14 @@ class PreparedSimulationInputs:
 
 def _ensure_weather_horizon_metadata(weather: pd.DataFrame) -> None:
     """Give injected or legacy weather an explicit conservative horizon state."""
-    metadata = deepcopy(weather.attrs.get("breos_weather_metadata"))
+    metadata = deepcopy(weather.attrs.get(WEATHER_METADATA_KEY))
     if not isinstance(metadata, dict):
         metadata = {
             "source": "runtime_dependency_or_unknown",
             "note": "The injected weather provider did not expose source metadata.",
         }
-    horizon = metadata.get("horizon")
-    if not isinstance(horizon, dict) or horizon.get("status") not in {"applied", "not_applied", "unknown"}:
-        metadata["horizon"] = {"status": "unknown", "provider": None, "profile": None}
-    else:
-        horizon = deepcopy(horizon)
-        horizon.setdefault("provider", None)
-        horizon.setdefault("profile", None)
-        metadata["horizon"] = horizon
-    weather.attrs["breos_weather_metadata"] = metadata
+    metadata["horizon"] = _normalised_horizon_metadata(metadata.get("horizon"))
+    weather.attrs[WEATHER_METADATA_KEY] = metadata
 
 
 def remap_tmy_year(df: pd.DataFrame, target_year: int) -> pd.DataFrame:
@@ -84,7 +83,7 @@ def remap_tmy_year(df: pd.DataFrame, target_year: int) -> pd.DataFrame:
     offset = target_year - dominant_year
     if offset == 0:
         return fill_leap_day(df)
-    weather_metadata = deepcopy(df.attrs.get("breos_weather_metadata"))
+    weather_metadata = deepcopy(df.attrs.get(WEATHER_METADATA_KEY))
     remapped = df.copy()
     remapped.index = idx_utc
     remapped = remap_datetime_index_years(remapped, offset)
@@ -92,13 +91,13 @@ def remap_tmy_year(df: pd.DataFrame, target_year: int) -> pd.DataFrame:
     new_idx = new_idx.tz_convert(was_tz) if was_tz is not None else new_idx.tz_localize(None)
     remapped.index = new_idx
     if weather_metadata is not None:
-        remapped.attrs["breos_weather_metadata"] = weather_metadata
+        remapped.attrs[WEATHER_METADATA_KEY] = weather_metadata
     return fill_leap_day(remapped)
 
 
 def _weather_source_label(weather: pd.DataFrame) -> str:
     """Name the weather's origin for an error message: its file, else its source."""
-    metadata = weather.attrs.get("breos_weather_metadata")
+    metadata = weather.attrs.get(WEATHER_METADATA_KEY)
     if isinstance(metadata, dict):
         if metadata.get("path"):
             return str(metadata["path"])
@@ -213,6 +212,38 @@ def cut_to_period(frame: FrameT, period: SimulationPeriod) -> FrameT:
     return cut
 
 
+def weather_input_frequency(weather: pd.DataFrame) -> str | None:
+    """The step of the weather index as a pandas frequency string, or None."""
+    index = cast(pd.DatetimeIndex, weather.index)
+    frequency = pd.infer_freq(index[:10]) if len(index) >= 3 else None
+    if frequency is None and len(index) >= 2:
+        frequency = pd.tseries.frequencies.to_offset(index[1] - index[0]).freqstr
+    return frequency
+
+
+def resample_hourly_weather(
+    weather: pd.DataFrame,
+    freq: str,
+    *,
+    latitude: float,
+    longitude: float,
+    resample: Callable[..., pd.DataFrame],
+    **resample_kwargs: Any,
+) -> pd.DataFrame:
+    """Resample hourly weather to 15 minutes for a 15-minute study.
+
+    App and Monte Carlo both call this, with ``resample`` normally
+    :func:`breos.weather.resample_to_15min`. Weather that is not hourly, or a
+    study that is not at 15 minutes, is returned unchanged.
+    """
+    if freq != "15min":
+        return weather
+    input_frequency = weather_input_frequency(weather)
+    if input_frequency and "h" in input_frequency.lower() and "15" not in input_frequency:
+        return resample(weather, latitude=latitude, longitude=longitude, **resample_kwargs)
+    return weather
+
+
 def load_weather_for_simulation(
     resolved: ResolvedAppConfig,
     freq: str,
@@ -279,17 +310,14 @@ def load_weather_for_simulation(
     # Both weather loaders return a DatetimeIndex.
     weather_index = cast(pd.DatetimeIndex, weather.index)
     if weather_index.tz is None:
-        warn_if_naive_weather_timestamps(
-            weather_index, weather.attrs.get("breos_weather_metadata") or {}, "Local weather"
-        )
+        warn_if_naive_weather_timestamps(weather_index, weather.attrs.get(WEATHER_METADATA_KEY) or {}, "Local weather")
         weather.index = weather_index.tz_localize("UTC")
     weather = remap_tmy_year(weather, start_year)
-    if freq == "15min":
-        inferred = pd.infer_freq(cast(pd.DatetimeIndex, weather.index)[:10])
-        if inferred and "h" in inferred.lower() and "15" not in inferred:
-            # The resampler carries the weather metadata over and adds its own
-            # resolution and method fields to it.
-            weather = deps.resample_to_15min(weather, latitude=resolved.lat, longitude=resolved.lon)
+    # The resampler carries the weather metadata over and adds its own
+    # resolution and method fields to it.
+    weather = resample_hourly_weather(
+        weather, freq, latitude=resolved.lat, longitude=resolved.lon, resample=deps.resample_to_15min
+    )
     if period is None:
         require_full_year_weather(weather, start_year, freq, resolved.timezone)
     else:
@@ -323,19 +351,7 @@ def build_pv_production_breakdown(
     location = Location(resolved.lat, resolved.lon, tz=resolved.timezone)
     freq = cfg["resolution"]
     loss_overrides = cfg["pv_loss_overrides"]
-    sky_kwargs = {
-        "transposition_model": cfg["transposition_model"],
-        "albedo": cfg["albedo"],
-        "surface_type": cfg["surface_type"],
-        "model_perez": cfg["model_perez"],
-        "solar_position": cfg["solar_position"],
-        "iam_model": cfg["iam_model"],
-        "diffuse_iam": cfg["diffuse_iam"],
-        "temperature_model": cfg["temperature_model"],
-        "bifacial_model": cfg["bifacial_model"],
-        "pvrow_height": cfg["pvrow_height"],
-        "pvrow_pitch": cfg["pvrow_pitch"],
-    }
+    model_kwargs = configured_pv_model_kwargs(cfg)
 
     if resolved.pv_arrays:
         return calculate_multi_array_production_breakdown(
@@ -344,8 +360,7 @@ def build_pv_production_breakdown(
             arrays=resolved.pv_arrays,
             freq=freq,
             loss_overrides=loss_overrides,
-            gcr=cfg["gcr"],
-            **sky_kwargs,
+            **model_kwargs,
         )
 
     if resolved.tracking == "fixed":
@@ -358,8 +373,7 @@ def build_pv_production_breakdown(
             pv_params=resolved.pv_params,
             freq=freq,
             loss_overrides=loss_overrides,
-            gcr=cfg["gcr"],
-            **sky_kwargs,
+            **model_kwargs,
         )
     else:
         breakdown = calculate_pv_production_tracking_breakdown(
@@ -371,13 +385,12 @@ def build_pv_production_breakdown(
             axis_azimuth=resolved.axis_azimuth,
             max_angle=cfg["max_angle"],
             backtrack=cfg["backtrack"],
-            gcr=cfg["gcr"],
             cross_axis_tilt=cfg["cross_axis_tilt"],
             dual_axis_max_tilt=cfg["dual_axis_max_tilt"],
             pv_params=resolved.pv_params,
             freq=freq,
             loss_overrides=loss_overrides,
-            **sky_kwargs,
+            **model_kwargs,
         )
     return breakdown
 
