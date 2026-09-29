@@ -80,13 +80,9 @@ you build an `App`. See
 
 ## Inverter
 
-Common inverter configurations live in `breos.inverter.INVERTER_PRESETS`.
-Use `get_inverter_preset` to look one up by key.
-
 ```{eval-rst}
 .. autosummary::
    :toctree: generated/
 
    breos.inverter.InverterConfig
-   breos.inverter.get_inverter_preset
 ```

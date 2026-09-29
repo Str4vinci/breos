@@ -438,7 +438,6 @@ class TestAppValidation:
                 annual_consumption_kwh=kwargs["annual_consumption_kwh"],
                 start_date=kwargs["start_date"],
                 freq=kwargs["freq"],
-                num_years=kwargs["num_years"],
                 timezone=kwargs["timezone"],
             )
 
@@ -638,7 +637,6 @@ class TestAppValidation:
                 annual_consumption_kwh=kwargs["annual_consumption_kwh"],
                 start_date=kwargs["start_date"],
                 freq=kwargs["freq"],
-                num_years=kwargs["num_years"],
                 timezone=kwargs["timezone"],
             )
 

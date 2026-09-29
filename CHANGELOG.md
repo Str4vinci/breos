@@ -1405,6 +1405,55 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   unchanged.
 
 ### Removed
+- **`breos.resample_tmy_to_15min` and the `freq` argument of
+  `fetch_tmy_weather_data`** ([#164](https://github.com/Str4vinci/breos/issues/164)),
+  with no deprecation period. `fetch_tmy_weather_data` now always returns the
+  hourly PVGIS data; for 15-minute steps, pass them to `resample_to_15min`, as
+  App and Monte Carlo already do. The TMY wrapper also kept only the
+  irradiance, temperature, humidity and wind columns and capped relative
+  humidity at 100%; `resample_to_15min` keeps every numeric column. Results
+  are unchanged.
+- **`breos.select_random_year_and_replace_datetime`**, with no deprecation
+  period. Nothing called it. `preload_weather_by_year` reads the same complete
+  years, keyed by year; draw a key from a seeded `numpy.random.Generator` to
+  pick one.
+- **`breos.align_load_to_pv`** ([#164](https://github.com/Str4vinci/breos/issues/164)),
+  with no deprecation period. It re-stamped the load onto the PV index by
+  position and ignored timezones. `simulate_energy_balance` aligns load and PV
+  by UTC instant itself, so pass both series to it unaligned. The optimizer
+  stopped calling it in 0.3.4.
+- **The `num_years` argument of `load_profile`**, with no deprecation period.
+  Every caller passed 1, and `load_profile` now always returns one calendar
+  year. A call that passed `rlp_directory` or `timezone` by position must name
+  them.
+- **The unused `InverterConfig` extras**, with no deprecation period:
+  `breos.INVERTER_PRESETS`, `breos.get_inverter_preset`,
+  `InverterConfig.size_from_pv` and `InverterConfig.get_cost`; the fields
+  `cost_per_kw_simple` and `cost_per_kw_hybrid`, a third copy of the cost
+  presets' inverter prices; and the datasheet fields `max_dc_voltage_v`,
+  `max_dc_power_w`, `min_mppt_voltage_v`, `max_mppt_voltage_v`,
+  `startup_voltage_v`, `max_strings_per_mppt`, `max_input_current_per_mppt_a`
+  and `max_short_circuit_current_per_mppt_a`, with their checks. No simulation
+  read any of them: App sizes the inverter from `dc_ac_ratio` or
+  `inverter_ac_rating_kw` and prices it with the `inverter_cost_per_kw_hybrid`
+  and `inverter_cost_per_kw_simple` cost keys.
+- **The `verbose` argument of the PV production functions**, with no
+  deprecation period: `calculate_pv_production_dc`,
+  `calculate_pv_production_breakdown`, `calculate_pv_production_dc_tracking`,
+  `calculate_pv_production_tracking_breakdown`, `calculate_pv_production_ac`,
+  `calculate_multi_array_production` and
+  `calculate_multi_array_production_breakdown`. Nothing passed `True`, which
+  printed the annual total; sum the returned series instead. A call that
+  passed a later argument by position must name it.
+- **Three unused arguments**, with no deprecation period:
+  `resample_to_15min(non_negative_cols=)`, `fit_cec_params(temp_ref=)`, and
+  `start_time`, `end_time` and `freq` of `build_battery_temperature_series`.
+  `resample_to_15min` still clips the solar and wind columns at zero.
+  `fit_cec_params` fits at 25 °C, the reference temperature at which
+  `calcparams_cec` reads the parameters and the fit normalises gamma, so
+  another value gave inconsistent parameters. `build_battery_temperature_series`
+  now requires `temp_config` and `index`, which every caller passed. The `fit_cec_params` docstring no longer says that `celltype` is
+  unused: it selects the empirical starting guess.
 - Optimization config keys that nothing read now raise
   ([#181](https://github.com/Str4vinci/breos/issues/181)): `[load]`,
   `simulation.weather_file`, `simulation.irradiance_resampling`, the

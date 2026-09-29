@@ -2,54 +2,7 @@
 
 import pytest
 
-from breos.inverter import InverterConfig, calculate_dc_ac_power, dc_power_for_ac_output, get_inverter_preset
-
-
-def test_inverter_presets_are_independent_copies():
-    first = get_inverter_preset("residential_hybrid")
-    second = get_inverter_preset("residential_hybrid")
-
-    assert first is not second
-    first.dc_ac_ratio = 99.0
-
-    assert second.dc_ac_ratio == 1.25
-    assert get_inverter_preset("residential_hybrid").dc_ac_ratio == 1.25
-
-
-def test_inverter_datasheet_limits_are_optional_for_legacy_callers():
-    config = InverterConfig()
-
-    assert config.max_dc_voltage_v is None
-    assert config.max_dc_power_w is None
-    assert config.min_mppt_voltage_v is None
-    assert config.max_mppt_voltage_v is None
-    assert config.startup_voltage_v is None
-    assert config.max_input_current_per_mppt_a is None
-    assert config.max_short_circuit_current_per_mppt_a is None
-    assert config.max_strings_per_mppt is None
-
-
-def test_inverter_accepts_complete_datasheet_limits():
-    config = InverterConfig(
-        nominal_power_w=5000.0,
-        max_dc_voltage_v=600.0,
-        max_dc_power_w=7500.0,
-        min_mppt_voltage_v=120.0,
-        max_mppt_voltage_v=560.0,
-        startup_voltage_v=150.0,
-        max_input_current_per_mppt_a=16.0,
-        max_short_circuit_current_per_mppt_a=24.0,
-        max_strings_per_mppt=2,
-    )
-
-    assert config.max_dc_voltage_v == 600.0
-    assert config.max_dc_power_w == 7500.0
-    assert config.min_mppt_voltage_v == 120.0
-    assert config.max_mppt_voltage_v == 560.0
-    assert config.startup_voltage_v == 150.0
-    assert config.max_input_current_per_mppt_a == 16.0
-    assert config.max_short_circuit_current_per_mppt_a == 24.0
-    assert config.max_strings_per_mppt == 2
+from breos.inverter import InverterConfig, calculate_dc_ac_power, dc_power_for_ac_output
 
 
 @pytest.mark.parametrize(
@@ -62,11 +15,9 @@ def test_inverter_accepts_complete_datasheet_limits():
         ("inverter_efficiency", 0.0),
         ("inverter_efficiency", 1.01),
         ("inverter_efficiency", float("nan")),
-        ("cost_per_kw_simple", -0.01),
-        ("cost_per_kw_hybrid", float("inf")),
     ],
 )
-def test_inverter_rejects_invalid_existing_numeric_fields(field, value):
+def test_inverter_rejects_invalid_numeric_fields(field, value):
     with pytest.raises(ValueError, match=field):
         InverterConfig(**{field: value})
 
@@ -77,79 +28,10 @@ def test_inverter_requires_boolean_hybrid_flag(is_hybrid):
         InverterConfig(is_hybrid=is_hybrid)
 
 
-@pytest.mark.parametrize(
-    ("field", "value"),
-    [
-        ("max_dc_voltage_v", -1.0),
-        ("max_dc_power_w", float("nan")),
-        ("min_mppt_voltage_v", float("nan")),
-        ("max_mppt_voltage_v", float("inf")),
-        ("startup_voltage_v", True),
-        ("max_input_current_per_mppt_a", -0.1),
-        ("max_short_circuit_current_per_mppt_a", float("-inf")),
-    ],
-)
-def test_inverter_rejects_invalid_supplied_datasheet_quantities(field, value):
-    with pytest.raises(ValueError, match=field):
-        InverterConfig(**{field: value})
-
-
-def test_inverter_rejects_inverted_mppt_voltage_window():
-    with pytest.raises(ValueError, match="min_mppt_voltage_v must not exceed max_mppt_voltage_v"):
-        InverterConfig(min_mppt_voltage_v=500.0, max_mppt_voltage_v=120.0)
-
-
-def test_inverter_accepts_mppt_voltage_ceiling_equal_to_dc_voltage_ceiling():
-    config = InverterConfig(max_dc_voltage_v=600.0, max_mppt_voltage_v=600.0)
-
-    assert config.max_mppt_voltage_v == config.max_dc_voltage_v
-
-
-def test_inverter_rejects_mppt_voltage_ceiling_above_dc_voltage_ceiling():
-    with pytest.raises(ValueError, match="max_mppt_voltage_v must not exceed max_dc_voltage_v"):
-        InverterConfig(max_dc_voltage_v=600.0, max_mppt_voltage_v=600.1)
-
-
-@pytest.mark.parametrize(
-    ("field", "value"),
-    [
-        ("min_mppt_voltage_v", 600.1),
-        ("startup_voltage_v", 600.1),
-    ],
-)
-def test_inverter_rejects_mppt_limits_above_dc_voltage_ceiling_without_mppt_maximum(field, value):
-    with pytest.raises(ValueError, match=f"{field} must not exceed max_dc_voltage_v"):
-        InverterConfig(max_dc_voltage_v=600.0, **{field: value})
-
-
-def test_inverter_accepts_startup_voltage_below_the_mppt_window():
-    """Fronius Primo-style datasheet: startup well under the MPP range minimum."""
-    config = InverterConfig(
-        max_dc_voltage_v=1000.0,
-        min_mppt_voltage_v=240.0,
-        max_mppt_voltage_v=800.0,
-        startup_voltage_v=80.0,
-    )
-
-    assert config.startup_voltage_v == 80.0
-
-
-def test_inverter_accepts_startup_voltage_above_the_mppt_window():
-    config = InverterConfig(
-        max_dc_voltage_v=1000.0,
-        min_mppt_voltage_v=240.0,
-        max_mppt_voltage_v=800.0,
-        startup_voltage_v=850.0,
-    )
-
-    assert config.startup_voltage_v == 850.0
-
-
-@pytest.mark.parametrize("field", ["mppt_channels", "max_strings_per_mppt"])
 @pytest.mark.parametrize("value", [0, -1, 1.5, True])
-def test_inverter_rejects_non_positive_or_non_integer_channel_counts(field, value):
-    with pytest.raises(ValueError, match=field):
-        InverterConfig(**{field: value})
+def test_inverter_rejects_non_positive_or_non_integer_mppt_channels(value):
+    with pytest.raises(ValueError, match="mppt_channels"):
+        InverterConfig(mppt_channels=value)
 
 
 def test_dc_ac_power_exposes_dc_side_clipping_losses():

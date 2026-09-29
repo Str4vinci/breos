@@ -247,7 +247,6 @@ def load_profile(
     annual_consumption_kwh: float,
     start_date: str = "2025-01-01",
     freq: str = "h",
-    num_years: int = 1,
     rlp_directory: Optional[str] = None,
     timezone: Optional[str] = "UTC",
     *,
@@ -260,8 +259,8 @@ def load_profile(
 
     This is the main function for loading load profiles. It supports the
     bundled H0SLP demandlib profile, user-supplied external CSVs through
-    ``rlp_directory``, scaling to target annual consumption, multi-year
-    extension, and hourly or 15-minute output.
+    ``rlp_directory``, scaling to target annual consumption, and hourly or
+    15-minute output.
 
     Args:
         profile_type: Profile key (see ``PROFILES``), case-insensitive:
@@ -274,7 +273,6 @@ def load_profile(
             profiles are placed by position. A later start would shift every
             season.
         freq: Time frequency ('h' for hourly, '15min' for 15-minute)
-        num_years: Number of years to generate
         rlp_directory: Directory containing RLP files. When omitted, BREOS
             uses only redistributable packaged profiles. An external
             profile's filename pattern must match exactly one file in it.
@@ -333,7 +331,6 @@ def load_profile(
     # Create a naive wall-clock index for one real calendar year; rows describe
     # household behavior at local clock time and are pinned to the timezone
     # afterwards. A Jan-Dec leap year therefore has 8784 hours.
-    start_year = int(start_date[:4])
     steps_per_hour = 4 if native_freq == "15min" else 1
     end_ts = start_ts + pd.DateOffset(years=1)
     new_index = pd.date_range(start=start_ts, end=end_ts, freq=native_freq, inclusive="left")
@@ -354,14 +351,9 @@ def load_profile(
     df.index = new_index
     df.index.name = "DateTime"
 
-    # Extend to multiple years if needed (on the naive wall-clock index, so
-    # each year is localized at its own DST transition dates below)
-    if num_years > 1:
-        df = _extend_to_years(df, start_year, num_years)
-
-    # Scale the complete requested calendar before timezone localization. The
-    # localization helper preserves this integral while reconciling DST gaps.
-    scale_to_annual_consumption(df, annual_consumption_kwh * num_years)
+    # Scale the calendar year before timezone localization. The localization
+    # helper preserves this integral while reconciling DST gaps.
+    scale_to_annual_consumption(df, annual_consumption_kwh)
 
     df = _localize_wall_clock_index(df, timezone, native_freq)
 
@@ -374,7 +366,7 @@ def load_profile(
     # Interpolation can slightly change the integral. A final normalization is
     # therefore needed for exact returned energy; for native-resolution output
     # this is a no-op apart from floating-point roundoff.
-    scale_to_annual_consumption(df, annual_consumption_kwh * num_years)
+    scale_to_annual_consumption(df, annual_consumption_kwh)
 
     df.attrs[LOAD_PROFILE_METADATA_KEY] = {
         "key": source.key,
@@ -663,65 +655,6 @@ def scale_to_annual_consumption(
         load_df[column] *= scaling_factor
 
 
-def _extend_to_years(df: pd.DataFrame, start_year: int, num_years: int) -> pd.DataFrame:
-    """
-    Extend a 1-year profile to multiple years by repeating data.
-
-    Generates a fresh index for each year to handle leap years correctly
-    and avoid duplicates from simple date shifting.
-    """
-
-    def _calendar_key(ts: pd.Timestamp, day_override: Optional[int] = None):
-        offset = ts.utcoffset()
-        offset_seconds = int(offset.total_seconds()) if offset is not None else None
-        return (
-            ts.month,
-            ts.day if day_override is None else day_override,
-            ts.hour,
-            ts.minute,
-            offset_seconds,
-        )
-
-    # Build a calendar lookup from the canonical source year. Feb. 29 is excluded
-    # so leap years can duplicate Feb. 28 without shifting the rest of the year.
-    source_rows = {}
-    for ts, row in df.iterrows():
-        if ts.month == 2 and ts.day == 29:
-            continue
-        source_rows[_calendar_key(ts)] = row.to_numpy(copy=True)
-
-    freq = pd.infer_freq(df.index) or "h"
-    tz = df.index.tz
-
-    dfs = []
-
-    for i in range(num_years):
-        current_year = start_year + i
-
-        # Generate full index for this year
-        year_start = f"{current_year}-01-01 00:00"
-        year_end = f"{current_year}-12-31 23:45"  # Cover max potential range
-
-        year_index = pd.date_range(start=year_start, end=year_end, freq=freq, tz=tz)
-        # Cap at end of year exactly
-        year_index = year_index[year_index.year == current_year]
-
-        year_values = []
-        for ts in year_index:
-            day_override = 28 if (ts.month == 2 and ts.day == 29) else None
-            key = _calendar_key(ts, day_override=day_override)
-            if key not in source_rows:
-                raise KeyError(f"Missing canonical load value for {ts}")
-            year_values.append(source_rows[key])
-        year_values = np.vstack(year_values)
-
-        # Create DataFrame
-        year_df = pd.DataFrame(data=year_values, index=year_index, columns=df.columns)
-        dfs.append(year_df)
-
-    return pd.concat(dfs)
-
-
 def _resample_load_to_15min(df: pd.DataFrame) -> pd.DataFrame:
     """Resample hourly mean load to 15-minute steps, keeping each hour's mean.
 
@@ -754,51 +687,3 @@ def _resample_load_to_15min(df: pd.DataFrame) -> pd.DataFrame:
         blocks[~scalable] = hourly[~scalable, None]
         df_15min[col] = blocks.reshape(-1)
     return df_15min
-
-
-def align_load_to_pv(load_df: pd.DataFrame, pv_series: pd.Series, freq: str = "h") -> pd.DataFrame:
-    """
-    Align load profile DatetimeIndex to match PV production data.
-
-    This handles the common case where load profiles use a generic year (e.g., 2023)
-    but PV/TMY data uses a different year (e.g., 1990).
-
-    .. warning::
-        Values are re-stamped positionally, ignoring timezones — only safe
-        when load and PV share the same clock convention (both UTC or both
-        the same fixed offset). :func:`breos.battery.simulate_energy_balance`
-        performs timezone- and DST-aware alignment internally, so do NOT
-        pre-align with this function when passing both series there; the
-        optimizer stopped doing so in 0.3.4.
-
-    Args:
-        load_df: Load profile DataFrame with DatetimeIndex
-        pv_series: PV production Series with DatetimeIndex
-        freq: Time frequency
-
-    Returns:
-        Load DataFrame with index aligned to PV data's year
-    """
-    # Get PV time range
-    pv_start = pv_series.index[0]
-    pv_end = pv_series.index[-1]
-
-    # Create new index matching PV's year
-    new_index = pd.date_range(start=pv_start, end=pv_end, freq=freq)
-
-    # Get the load values (ignoring year)
-    load_values = load_df.iloc[:, 0].values
-
-    # Adjust length if needed
-    if len(load_values) < len(new_index):
-        # Repeat to fill
-        repeats = (len(new_index) // len(load_values)) + 1
-        load_values = np.tile(load_values, repeats)[: len(new_index)]
-    elif len(load_values) > len(new_index):
-        load_values = load_values[: len(new_index)]
-
-    # Create new DataFrame
-    result = pd.DataFrame({load_df.columns[0]: load_values}, index=new_index)
-    result.index.name = "DateTime"
-
-    return result
