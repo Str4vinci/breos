@@ -11,6 +11,8 @@ from pathlib import Path
 from typing import Any, Callable, Mapping
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+import pandas as pd
+
 from breos.config_schema import TableSpec, anything, boolean, choice, list_of, mapping_of, number, text
 from breos.constants import (
     DEFAULT_CHARGE_EFFICIENCY,
@@ -647,8 +649,18 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         default_order=50,
         cli_flags=("--start-date",),
         cli_help="First simulated day: 1 January of the study year, YYYY-01-01.",
-        doc="First simulated day: 1 January of the study year, `YYYY-01-01`",
+        doc="1 January of the study year, `YYYY-01-01`. The App simulates that year, or the `period` window in it",
         summary="load.start_date",
+    ),
+    # The [period] table (#242). Omitted: the whole calendar year of start_date.
+    "period": AppConfigField(
+        doc=(
+            "Simulate only the window from `start` to `end`, local dates in the year of `start_date`, `end` "
+            "exclusive. The window runs once and reports energy only: lifetime economics are `None`. See "
+            "[`[period]`](#period) and [Simulate part of a year](recipes.md#simulate-part-of-a-year)"
+        ),
+        default_doc="*unset*",
+        summary="simulation.period",
     ),
     # The [tariff] table (ADR 0002). Omitted: flat prices from the cost preset.
     "tariff": AppConfigField(
@@ -921,6 +933,116 @@ INDOOR_MODEL_TABLE = TableSpec(
     },
 )
 
+
+def _period_date(value: Any, where: str) -> date:
+    # TOML and Python give dates; JSON and the CLI give ISO strings. A window
+    # starts and ends at local midnight, so a time of day is refused.
+    if isinstance(value, datetime):
+        raise TypeError(f"'{where}' must be a date such as 2025-06-01, not a date and time")
+    if isinstance(value, date):
+        return value
+    if isinstance(value, str):
+        try:
+            return date.fromisoformat(value)
+        except ValueError as exc:
+            raise ValueError(f"'{where}' must be an ISO date such as 2025-06-01, got {value!r}") from exc
+    raise TypeError(f"'{where}' must be a date such as 2025-06-01")
+
+
+def _check_period_order(table: dict[str, Any], where: str) -> None:
+    if not table["start"] < table["end"]:
+        raise ValueError(
+            f"'{where}.start' ({table['start'].isoformat()}) must be before '{where}.end' "
+            f"({table['end'].isoformat()}); the end date is exclusive, so a one-day window ends the next day"
+        )
+
+
+PERIOD_TABLE = TableSpec(
+    "period",
+    keys={"start": _period_date, "end": _period_date},
+    required=frozenset({"start", "end"}),
+    check=_check_period_order,
+    docs={
+        "start": "First simulated day, a date in the year of `start_date`. The window starts at its local midnight",
+        "end": (
+            "Day after the last simulated day: the window ends at its local midnight, so `end` is exclusive. At "
+            "most 1 January of the next year"
+        ),
+    },
+)
+
+
+@dataclass(frozen=True)
+class SimulationPeriod:
+    """The window a ``period`` config simulates, from ``start`` to ``end`` exclusive.
+
+    Both are civil dates in ``timezone``, the location's IANA zone (the #180
+    calendar contract): the window starts at local midnight of ``start`` and
+    ends at local midnight of ``end``, whatever clock the weather is on.
+    """
+
+    start: date
+    end: date
+    timezone: str
+
+    @property
+    def start_time(self) -> pd.Timestamp:
+        """The instant the window starts, local midnight of ``start``."""
+        return _local_midnight(self.start, self.timezone)
+
+    @property
+    def end_time(self) -> pd.Timestamp:
+        """The instant the window ends, local midnight of ``end``; not simulated."""
+        return _local_midnight(self.end, self.timezone)
+
+    @property
+    def days(self) -> int:
+        """Civil days in the window, which the fixed charge is billed on."""
+        return (self.end - self.start).days
+
+    def record(self) -> dict[str, Any]:
+        """A JSON-safe description of the window, for results and provenance."""
+        return {
+            "start": self.start.isoformat(),
+            "end": self.end.isoformat(),
+            "end_exclusive": True,
+            "timezone": self.timezone,
+            "days": self.days,
+            "start_time": self.start_time.isoformat(),
+            "end_time": self.end_time.isoformat(),
+            # The window runs once, whatever projection_years says.
+            "projection_years_used": 1,
+        }
+
+
+def _local_midnight(day: date, timezone: str) -> pd.Timestamp:
+    # A zone that springs forward at midnight has no 00:00 that day, and one
+    # that falls back at midnight has two; the day starts at the earliest
+    # instant that exists.
+    return pd.Timestamp(day).tz_localize(timezone, nonexistent="shift_forward", ambiguous=True)
+
+
+def _validate_period(cfg: dict[str, Any]) -> None:
+    """Check a [period] against the year of ``start_date``, and store its dates as ISO strings."""
+    if cfg.get("period") is None:
+        return
+    table = PERIOD_TABLE.validate(cfg["period"])
+    start, end = table["start"], table["end"]
+    year = date.fromisoformat(cfg["start_date"]).year
+    if start.year != year or end > date(year + 1, 1, 1):
+        raise ValueError(
+            f"'period' ({start.isoformat()} to {end.isoformat()}) must lie in {year}, the year of start_date: "
+            f"'period.start' on or after {year}-01-01 and 'period.end' on or before {year + 1}-01-01. "
+            f"Set start_date = '{start.year}-01-01' to simulate a window in {start.year}."
+        )
+    if (start, end) == (date(year, 1, 1), date(year + 1, 1, 1)):
+        raise ValueError(
+            f"'period' covers the whole of {year}; remove it. Without 'period' the App simulates the whole "
+            "calendar year of start_date and its lifetime economics."
+        )
+    cfg["period"] = {"start": start.isoformat(), "end": end.isoformat()}
+
+
 # Keep runner-table keys explicit until the shared configuration schema from
 # #181 can describe these sections alongside App fields.
 MONTECARLO_CONFIG_KEYS: frozenset[str] = frozenset(
@@ -989,6 +1111,8 @@ class ResolvedAppConfig:
     smart_charging: SmartChargingSpec | None
     cost_params: CostParams
     emissions_params: EmissionsParams | None
+    # The configured [period], or None for the whole calendar year of start_date.
+    period: SimulationPeriod | None = None
 
 
 def load_json(name: str) -> dict[str, Any]:
@@ -1209,6 +1333,7 @@ def validate_config(cfg: dict[str, Any]) -> None:
     _validate_economics(cfg)
     _validate_tariff(cfg)
     _validate_battery_and_degradation(cfg)
+    _validate_period(cfg)
     _validate_smart_charging(cfg)
     _validate_reachable_gcr(cfg, has_arrays)
 
@@ -1395,6 +1520,7 @@ NESTED_TABLE_SPECS: Mapping[str, TableSpec] = {
     "battery_indoor_model": INDOOR_MODEL_TABLE,
     "tariff": TARIFF_TABLE,
     "smart_charging": SMART_CHARGING_TABLE,
+    "period": PERIOD_TABLE,
 }
 
 
@@ -1750,7 +1876,7 @@ def _validate_battery_and_degradation(cfg: dict[str, Any]) -> None:
         raise ValueError(
             f"'start_date' must be 1 January of the study year, got {cfg['start_date']!r}. BREOS simulates "
             f"whole calendar years: weather, load and every projected year start on 1 January, so use "
-            f"'{start.year}-01-01'."
+            f"'{start.year}-01-01'. To simulate part of the year, set [period]."
         )
 
     if not isinstance(cfg["enable_resistance_fade"], bool):
@@ -1977,6 +2103,16 @@ def build_costs_dict(cfg: dict[str, Any], resolved: ResolvedAppConfig) -> dict[s
     )
 
 
+def resolve_period(cfg: dict[str, Any], timezone: str) -> SimulationPeriod | None:
+    """The simulated window of a validated config, or None for the whole calendar year."""
+    period = cfg.get("period")
+    if period is None:
+        return None
+    return SimulationPeriod(
+        start=date.fromisoformat(period["start"]), end=date.fromisoformat(period["end"]), timezone=timezone
+    )
+
+
 def _normalise_config_values(cfg: dict[str, Any]) -> dict[str, Any]:
     """Apply registry-owned value normalizers to config files and API input."""
     for key, field in APP_CONFIG_FIELDS.items():
@@ -2062,4 +2198,5 @@ def resolve_app_config(config: dict[str, Any]) -> ResolvedAppConfig:
         smart_charging=resolve_smart_charging_spec(cfg, tariff),
         cost_params=cost_params,
         emissions_params=resolve_emissions(cfg),
+        period=resolve_period(cfg, timezone),
     )

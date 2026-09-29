@@ -18,11 +18,12 @@ Usage:
 
 from __future__ import annotations
 
+import warnings
 from collections.abc import Mapping
 from copy import deepcopy
 from typing import Any
 
-from breos.app_config import APP_CONFIG_FIELDS, resolve_app_config
+from breos.app_config import APP_CONFIG_FIELDS, normalize_config_keys, resolve_app_config
 from breos.app_inputs import AppRuntimeDependencies
 from breos.app_results import build_result as build_app_result
 from breos.load_profiles import load_profile
@@ -101,6 +102,13 @@ class App:
     def __init__(self, config: dict, *, input_repairs: Any = None) -> None:
         self._config = deepcopy(config)
         self._resolved = resolve_app_config(config)
+        if self._resolved.period is not None and "projection_years" in normalize_config_keys(config):
+            warnings.warn(
+                f"'projection_years' ({self._resolved.cfg['projection_years']}) is ignored: a [period] window "
+                "runs once and has no project lifetime. Remove it, or remove [period] to project whole years.",
+                UserWarning,
+                stacklevel=2,
+            )
         self._cfg = self._resolved.cfg
         self._input_repairs = input_repair_records(input_repairs)
         self._result: dict[str, Any] | None = None

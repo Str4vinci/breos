@@ -8,7 +8,7 @@ from typing import Any, cast
 import numpy as np
 import pandas as pd
 
-from breos.app_config import DEFAULTS, ResolvedAppConfig, default_module_key
+from breos.app_config import DEFAULTS, ResolvedAppConfig, SimulationPeriod, default_module_key
 from breos.app_inputs import AppRuntimeDependencies, prepare_simulation_inputs, prepare_simulation_inputs_cached
 from breos.battery import LEDGER_SCHEMA_VERSION
 from breos.degradation.results import DegradationEngineName, build_degradation_summary_from_state
@@ -21,7 +21,14 @@ from breos.execution import (
     is_pv_only_dispatch,
 )
 from breos.load_profiles import LOAD_PROFILE_METADATA_KEY
-from breos.projection import ProjectionRun, ProjectionYear, reprice_tariff_year_rows, run_projection, value_projection
+from breos.projection import (
+    ProjectionRun,
+    ProjectionValue,
+    ProjectionYear,
+    reprice_tariff_year_rows,
+    run_projection,
+    value_projection,
+)
 from breos.pv_modules import get_module
 from breos.smart_charging import resolve_instructions, smart_charging_provenance, stored_energy_by_origin
 from breos.solar import PVProductionBreakdown
@@ -35,13 +42,14 @@ class SimulationArtifacts:
 
     yearly_df: pd.DataFrame
     first_year_results_df: pd.DataFrame
-    cost_projection: pd.DataFrame
+    # The lifetime economics: None for a [period] window, which runs once.
+    cost_projection: pd.DataFrame | None
     costs: dict[str, float]
     payback_year: int | None
-    lcoe: float
+    lcoe: float | None
     current_soh: float
     total_replacements: int
-    total_replacement_cost: float
+    total_replacement_cost: float | None
     pv_loss_waterfall: dict[str, Any]
     weather_metadata: dict[str, Any]
     load_profile_metadata: dict[str, Any]
@@ -57,6 +65,48 @@ class SimulationArtifacts:
     projection: ProjectionRun | None = None
     resolved_tariff: ResolvedTariff | None = None
     instructions: DispatchInstructions | None = None
+    # A [period] run's window record, and its avoided CO2 by pathway (kg)
+    # with emissions on; None for a full-year run.
+    period: dict[str, Any] | None = None
+    period_co2: dict[str, float] | None = None
+
+
+# The avoided-CO2 columns a result reports for its first year, or its window.
+CO2_COLUMNS = ("CO2_Avoided_SelfConsumed_kg", "CO2_Avoided_Export_kg", "CO2_Avoided_Total_kg")
+
+
+def _economics_fields(value: ProjectionValue, period: SimulationPeriod | None) -> dict[str, Any]:
+    """The artifact fields a priced projection fills.
+
+    A [period] window shorter than a year keeps its year row, priced at
+    year-1 prices, and its avoided CO2, and leaves the lifetime economics
+    None: a projection would treat the window as a whole project year.
+    """
+    if period is None:
+        return {
+            "yearly_df": value.yearly_df,
+            "cost_projection": value.cost_projection,
+            "costs": value.costs,
+            "payback_year": find_payback_year(value.cost_projection),
+            "lcoe": value.lcoe,
+            "total_replacement_cost": value.total_replacement_cost,
+            "period_co2": None,
+        }
+    projection = value.cost_projection
+    co2 = (
+        {column: float(projection[column].iloc[0]) for column in CO2_COLUMNS}
+        if all(column in projection.columns for column in CO2_COLUMNS)
+        else None
+    )
+    return {
+        "yearly_df": value.yearly_df,
+        "cost_projection": None,
+        "costs": value.costs,
+        "payback_year": None,
+        "lcoe": None,
+        "total_replacement_cost": None,
+        "period_co2": co2,
+    }
 
 
 def _series_energy_kwh(series: pd.Series, freq: str) -> float:
@@ -151,7 +201,7 @@ def _build_pv_loss_waterfall(
     cfg: dict[str, Any],
     resolved: ResolvedAppConfig,
 ) -> dict[str, Any]:
-    """Build a JSON-serializable year-1 PV loss waterfall."""
+    """Build a JSON-serializable year-1 PV loss waterfall, or the window's for a [period] run."""
     freq = cfg["resolution"]
     horizontal_dc = _series_energy_kwh(pv_breakdown.horizontal_reference_dc, freq)
     poa_dc = _series_energy_kwh(pv_breakdown.poa_global_dc, freq)
@@ -237,9 +287,9 @@ def _build_pv_loss_waterfall(
     )
 
     return {
-        "basis": "year_1",
+        "basis": "year_1" if getattr(resolved, "period", None) is None else "period",
         "unit": "kWh",
-        "flow_unit": "kWh per year",
+        "flow_unit": "kWh per year" if getattr(resolved, "period", None) is None else "kWh over the period",
         "state_unit": "kWh at period boundary",
         "ledger_schema_version": LEDGER_SCHEMA_VERSION,
         "stages": stages,
@@ -314,8 +364,15 @@ def run_app_simulation(
 
     inputs = prepare_simulation_inputs_cached(cfg, resolved, deps, prepare=prepare_simulation_inputs)
 
-    projection_years = cfg["projection_years"]
+    # A [period] window runs once. Replayed as project years, it would carry
+    # degradation over copies of one window as if each were a year.
+    period = getattr(resolved, "period", None)
+    projection_years = cfg["projection_years"] if period is None else 1
     degradation_rate = cfg["pv_degradation_rate"]
+
+    # A window bills the fixed charge on its civil days: a DST day has 23 or
+    # 25 hours but is one day of the tariff.
+    extra = {"Billed_Days": float(period.days)} if period is not None else {}
 
     def year_inputs(year_idx: int) -> ProjectionYear:
         pv_degradation_factor = (1 - degradation_rate) ** year_idx
@@ -324,6 +381,7 @@ def run_app_simulation(
             pv_dc=inputs.dc_system_base * pv_degradation_factor,
             houseload=inputs.load_data,
             temperature_series=inputs.temperature_series,
+            extra=extra,
         )
 
     # Every project year replays the start-year calendar (ADR 0002 A2), so the
@@ -358,9 +416,8 @@ def run_app_simulation(
     degradation_engine = str(cfg.get("degradation_engine", "native")).strip().lower()
     blast_model = cfg.get("blast_model")
 
-    value = value_projection(cfg, resolved, projection)
-    costs, cost_projection, lcoe, yearly_df = value.costs, value.cost_projection, value.lcoe, value.yearly_df
-    total_replacement_cost = value.total_replacement_cost
+    economics = _economics_fields(value_projection(cfg, resolved, projection), period)
+    yearly_df = economics["yearly_df"]
 
     replacement_events = [
         {"year": int(year), "count": int(count)}
@@ -397,15 +454,10 @@ def run_app_simulation(
         }
 
     return SimulationArtifacts(
-        yearly_df=yearly_df,
+        **economics,
         first_year_results_df=first_year_results_df,
-        cost_projection=cost_projection,
-        costs=costs,
-        payback_year=find_payback_year(cost_projection),
-        lcoe=lcoe,
         current_soh=current_soh,
         total_replacements=total_replacements,
-        total_replacement_cost=total_replacement_cost,
         pv_loss_waterfall=_build_pv_loss_waterfall(inputs.pv_breakdown, first_year_results_df, cfg, resolved),
         weather_metadata=dict(
             inputs.weather.attrs.get(
@@ -432,6 +484,7 @@ def run_app_simulation(
         projection=projection,
         resolved_tariff=tariff,
         instructions=instructions,
+        period=period.record() if period is not None else None,
     )
 
 
@@ -483,12 +536,7 @@ def revalue_app_simulation(
         smart_charging = {**smart_charging, **smart_charging_provenance(resolved.smart_charging, instructions, tariff)}
     revalued = replace(
         artifacts,
-        yearly_df=value.yearly_df,
-        cost_projection=value.cost_projection,
-        costs=value.costs,
-        payback_year=find_payback_year(value.cost_projection),
-        lcoe=value.lcoe,
-        total_replacement_cost=value.total_replacement_cost,
+        **_economics_fields(value, getattr(resolved, "period", None)),
         tariff=tariff_provenance(tariff, calendar_year=int(cfg["start_date"][:4])) if tariff is not None else None,
         smart_charging=smart_charging,
         resolved_tariff=tariff,

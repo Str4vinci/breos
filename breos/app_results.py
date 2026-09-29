@@ -14,13 +14,18 @@ from breos.app_config import ResolvedAppConfig
 from breos.battery import LEDGER_SCHEMA_VERSION
 from breos.economics import projection_rates_record
 from breos.result_schema import RESULT_SCHEMA_VERSION
-from breos.runners.app import SimulationArtifacts
+from breos.runners.app import CO2_COLUMNS, SimulationArtifacts
 from breos.tariffs import result_currency
 from breos.utils import get_hours_per_step, local_datetime_index
 
 
-def monthly_to_dicts(results_df: pd.DataFrame, freq: str) -> list[dict[str, Any]]:
-    """Convert first-year timestep results into monthly energy rows."""
+def monthly_to_dicts(results_df: pd.DataFrame, freq: str, timezone: str | None = None) -> list[dict[str, Any]]:
+    """Convert first-year timestep results into monthly energy rows.
+
+    Months follow the wall clock of the results, unless ``timezone`` names
+    the zone to group them in instead (a [period] run groups its window by
+    the location's civil months, on which the window is defined).
+    """
     hours_per_step = get_hours_per_step(freq)
     df = results_df.copy()
     if not isinstance(df.index, pd.DatetimeIndex):
@@ -28,6 +33,8 @@ def monthly_to_dicts(results_df: pd.DataFrame, freq: str) -> list[dict[str, Any]
             df.index = local_datetime_index(df.pop("Datetime"))
         else:
             raise ValueError("results_df must have a DatetimeIndex or Datetime column")
+    if timezone is not None and df.index.tz is not None:
+        df.index = df.index.tz_convert(timezone)
 
     columns = [
         "PV_DC",
@@ -98,12 +105,17 @@ def financial_to_dicts(cost_proj: pd.DataFrame, total_initial_cost: float) -> li
     return rows
 
 
-def yearly_to_dicts(yearly_df: pd.DataFrame) -> list[dict[str, Any]]:
-    """Convert yearly summary DataFrame to a list of plain dicts."""
+def yearly_to_dicts(yearly_df: pd.DataFrame, period: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    """Convert yearly summary DataFrame to a list of plain dicts.
+
+    With a [period] ``period`` record, the one row covers that window, and
+    says so in ``period_start`` and ``period_end`` (exclusive).
+    """
     rows = []
     for _, row in yearly_df.iterrows():
         item: dict[str, Any] = {
             "year": int(row["Year"]),
+            **({"period_start": period["start"], "period_end": period["end"]} if period is not None else {}),
             "pv_kwh": round(float(row["Legacy_PV_Production_kWh"]), 2),
             "pv_dc_generation_kwh": round(float(row["PV_DC_Generation_kWh"]), 2),
             "direct_pv_ac_load_kwh": round(float(row["Direct_PV_AC_Load_kWh"]), 2),
@@ -180,6 +192,9 @@ def _provenance(
     # Flat-price runs carry no tariff block, so their results are unchanged.
     if artifacts.tariff is not None:
         provenance["tariff"] = deepcopy(artifacts.tariff)
+    # Only [period] runs carry the window, so full-year results are unchanged.
+    if artifacts.period is not None:
+        provenance["period"] = deepcopy(artifacts.period)
     if artifacts.smart_charging is not None:
         provenance["smart_charging"] = {
             key: value
@@ -253,8 +268,12 @@ def build_result(
     grid_indep_y1 = year1["Grid_Independence_%"]
 
     total_initial = artifacts.costs["total_initial_cost"]
-    npv_savings = float(artifacts.cost_projection["Savings_Cumulative_NPV"].iloc[-1])
-    lcoe = float(artifacts.lcoe)
+    # None for a [period] window, which has no lifetime economics.
+    cost_projection = artifacts.cost_projection
+    npv_savings = (
+        round(float(cost_projection["Savings_Cumulative_NPV"].iloc[-1]), 2) if cost_projection is not None else None
+    )
+    lcoe = float(artifacts.lcoe) if artifacts.lcoe is not None else math.nan
 
     result: dict[str, Any] = {
         "result_schema_version": RESULT_SCHEMA_VERSION,
@@ -276,11 +295,15 @@ def build_result(
         "self_consumption_pct": round(float(self_consumption_pct), 2),
         "total_investment": round(float(total_initial), 2),
         "payback_year": int(artifacts.payback_year) if artifacts.payback_year is not None else None,
-        "npv_savings": round(float(npv_savings), 2),
+        "npv_savings": npv_savings,
         "lcoe_per_kwh": round(lcoe, 4) if math.isfinite(lcoe) else None,
-        "yearly": yearly_to_dicts(artifacts.yearly_df),
-        "monthly": monthly_to_dicts(artifacts.first_year_results_df, cfg["resolution"]),
-        "financial": financial_to_dicts(artifacts.cost_projection, total_initial),
+        "yearly": yearly_to_dicts(artifacts.yearly_df, artifacts.period),
+        "monthly": monthly_to_dicts(
+            artifacts.first_year_results_df,
+            cfg["resolution"],
+            timezone=resolved.timezone if artifacts.period is not None else None,
+        ),
+        "financial": financial_to_dicts(cost_projection, total_initial) if cost_projection is not None else None,
         # Copied, so editing a result cannot reach the stored run that
         # App.revalue prices again.
         "pv_loss_waterfall": deepcopy(artifacts.pv_loss_waterfall),
@@ -313,10 +336,12 @@ def build_result(
         result["battery_soh_end_pct"] = round(float(artifacts.current_soh), soh_digits)
         result["battery_replacements"] = artifacts.total_replacements
         # At t = 0 prices, neither inflated nor discounted; the discounted
-        # total is the one the NPV counts.
-        result["battery_replacement_cost_t0_prices"] = round(float(artifacts.total_replacement_cost), 2)
-        result["battery_replacement_cost_npv"] = round(
-            float(artifacts.cost_projection.attrs["replacement_cost_npv"]), 2
+        # total is the one the NPV counts. A [period] window prices neither.
+        result["battery_replacement_cost_t0_prices"] = (
+            round(float(artifacts.total_replacement_cost), 2) if artifacts.total_replacement_cost is not None else None
+        )
+        result["battery_replacement_cost_npv"] = (
+            round(float(cost_projection.attrs["replacement_cost_npv"]), 2) if cost_projection is not None else None
         )
         if cfg["degradation_engine"] == "blast":
             for row in result["yearly"]:
@@ -325,27 +350,65 @@ def build_result(
 
     if resolved.emissions_params is not None:
         # Read from the projection, which computes each year's CO2 once for
-        # every runner (#183).
+        # every runner (#183); a [period] window keeps its one row's.
         projection = artifacts.cost_projection
-        co2 = {
-            column: float(projection[column].iloc[0])
-            for column in ("CO2_Avoided_SelfConsumed_kg", "CO2_Avoided_Export_kg", "CO2_Avoided_Total_kg")
-        }
-        lifetime_self = float(projection.attrs["lifetime_co2_avoided_self_consumed_kg"])
-        lifetime_export = float(projection.attrs["lifetime_co2_avoided_export_kg"])
-        lifetime_total = float(projection.attrs["lifetime_co2_avoided_total_kg"])
+        if projection is not None:
+            co2 = {column: float(projection[column].iloc[0]) for column in CO2_COLUMNS}
+            lifetime: dict[str, float | None] = {
+                "self": round(float(projection.attrs["lifetime_co2_avoided_self_consumed_kg"]), 2),
+                "export": round(float(projection.attrs["lifetime_co2_avoided_export_kg"]), 2),
+                "total": round(float(projection.attrs["lifetime_co2_avoided_total_kg"]), 2),
+            }
+        else:
+            assert artifacts.period_co2 is not None
+            co2 = artifacts.period_co2
+            lifetime = {"self": None, "export": None, "total": None}
         result.update(
             {
                 "co2_avoided_self_consumption_year1_kg": round(co2["CO2_Avoided_SelfConsumed_kg"], 2),
                 "co2_avoided_export_year1_kg": round(co2["CO2_Avoided_Export_kg"], 2),
                 "co2_avoided_total_year1_kg": round(co2["CO2_Avoided_Total_kg"], 2),
-                "co2_avoided_self_consumption_lifetime_kg": round(lifetime_self, 2),
-                "co2_avoided_export_lifetime_kg": round(lifetime_export, 2),
-                "co2_avoided_total_lifetime_kg": round(lifetime_total, 2),
+                "co2_avoided_self_consumption_lifetime_kg": lifetime["self"],
+                "co2_avoided_export_lifetime_kg": lifetime["export"],
+                "co2_avoided_total_lifetime_kg": lifetime["total"],
                 # Compatibility aliases retained for the pre-ledger public schema.
                 "co2_avoided_year1_kg": round(co2["CO2_Avoided_Total_kg"], 2),
-                "co2_avoided_total_kg": round(lifetime_total, 2),
+                "co2_avoided_total_kg": lifetime["total"],
             }
         )
 
+    if artifacts.period is not None:
+        result["period"] = period_to_dict(artifacts.period, result, float(year1["Simulated_Hours"]))
+
     return result
+
+
+# Why a [period] run reports no lifetime economics, in its result.
+PERIOD_ECONOMICS_REASON = (
+    "A period shorter than a year runs once, so it has no project lifetime to escalate, discount or pay back "
+    "over. The energy fields and the *_year1_prices money cover the period; the lifetime fields are None."
+)
+# The result fields a [period] run reports as None, when the run has them.
+PERIOD_SKIPPED_FIELDS = (
+    "payback_year",
+    "npv_savings",
+    "lcoe_per_kwh",
+    "financial",
+    "battery_replacement_cost_t0_prices",
+    "battery_replacement_cost_npv",
+    "co2_avoided_self_consumption_lifetime_kg",
+    "co2_avoided_export_lifetime_kg",
+    "co2_avoided_total_lifetime_kg",
+    "co2_avoided_total_kg",
+)
+
+
+def period_to_dict(period: dict[str, Any], result: dict[str, Any], simulated_hours: float) -> dict[str, Any]:
+    """The ``period`` block of a [period] result: the window, and why the lifetime economics are None."""
+    return {
+        **deepcopy(period),
+        "simulated_hours": simulated_hours,
+        "lifetime_economics": "skipped",
+        "lifetime_economics_reason": PERIOD_ECONOMICS_REASON,
+        "skipped_fields": [field for field in PERIOD_SKIPPED_FIELDS if field in result],
+    }

@@ -66,6 +66,7 @@ is a `breos run` option that overrides the config file.
 | `montecarlo` | *unset* | — | Monte Carlo study controls, read by `breos montecarlo`; see [Monte Carlo](monte-carlo.md#configure-a-study) |
 | `n_modules` | *required unless `pv_arrays` is set* | `--n-modules` | Number of PV modules |
 | `om_escalation` | `None` | `--om-escalation` | Annual escalation of O&M costs; `None` uses `inflation_rate` |
+| `period` | *unset* | — | Simulate only the window from `start` to `end`, local dates in the year of `start_date`, `end` exclusive. The window runs once and reports energy only: lifetime economics are `None`. See [`[period]`](#period) and [Simulate part of a year](recipes.md#simulate-part-of-a-year) |
 | `projection_years` | `20` | `--projection-years` | Economic projection horizon in years |
 | `pv_arrays` | `None` | — | List of arrays, each with `modules`, `module`, `tilt` and `azimuth`. The array module total replaces `n_modules`; see [`[[pv_arrays]]`](#pv_arrays) |
 | `pv_degradation_rate` | `0.005` | `--pv-degradation-rate` | Annual PV degradation rate, compounded and counted from the start of each year, so year 1 has none; see [Module aging](../api/pv.md#module-aging) |
@@ -79,7 +80,7 @@ is a `breos run` option that overrides the config file.
 | `sell_price_inflation` | `0.0` | `--sell-price-inflation` | Annual escalation of the grid export (sell) price |
 | `smart_charging` | *unset* | — | Grid charging toward a target in the tariff's cheap periods; see [`[smart_charging]`](#smart_charging) and [Smart charging](configuration.md#smart-charging) |
 | `solar_position` | `"interval-start"` | `--solar-position` | Where within each timestep the sun position is evaluated. `"mid-interval"` adds half a timestep. `"weather"` reads the representative-time offset from content-bound weather metadata, including provider offsets for instantaneous irradiance and left- or right-labelled interval means. One of `"interval-start"`, `"mid-interval"`, `"weather"` |
-| `start_date` | `"2023-01-01"` | `--start-date` | First simulated day: 1 January of the study year, `YYYY-01-01` |
+| `start_date` | `"2023-01-01"` | `--start-date` | 1 January of the study year, `YYYY-01-01`. The App simulates that year, or the `period` window in it |
 | `surface_type` | `None` | `--surface-type` | Named ground cover mapped to an albedo; an alternative to `albedo`. One of `"aluminum"`, `"asphalt"`, `"concrete"`, `"copper"`, `"dirty steel"`, `"fresh grass"`, `"fresh snow"`, `"fresh steel"`, `"grass"`, `"sand"`, `"sea"`, `"snow"`, `"soil"`, `"urban"` |
 | `sweep` | *unset* | — | Parameter grid, read by `breos sweep`; see [Parameter sweep](recipes.md#parameter-sweep) |
 | `tariff` | *unset* | — | Time-of-use import and export prices on a bundled schedule, replacing the flat `costs.electricity_cost`, `costs.electricity_sold_cost` and `costs.daily_power_cost`; see [`[tariff]`](#tariff) and [Time-of-use tariffs](configuration.md#time-of-use-tariffs) |
@@ -175,3 +176,12 @@ Grid charging by tariff period, as `[smart_charging]` in TOML; see [Smart chargi
 | `grid_charge_efficiency` |  | AC-to-DC conversion efficiency of the grid-charging path, before the battery's own charge efficiency. No default |
 | `grid_import_limit_w` |  | Site import limit in W for grid charging, which may import up to the limit minus the load's import. Load import is never cut. Unset is unlimited |
 | `target_usable_fraction` |  | Grid-charging target as a fraction of the usable window: 0 is `battery_min_soc`, 1 is `battery_max_soc` |
+
+## period
+
+A window shorter than a year, as `[period]` in TOML; see [Simulate part of a year](recipes.md#simulate-part-of-a-year). Both dates are local civil dates in the location's timezone, in the year of `start_date`, and the window runs from local midnight of `start` to local midnight of `end`.
+
+| Key | Required | Description |
+|---|---|---|
+| `end` | yes | Day after the last simulated day: the window ends at its local midnight, so `end` is exclusive. At most 1 January of the next year |
+| `start` | yes | First simulated day, a date in the year of `start_date`. The window starts at its local midnight |
