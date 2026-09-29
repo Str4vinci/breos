@@ -22,6 +22,7 @@ from breos.app_config import (
     APP_CONFIG_FIELDS,
     NESTED_TABLE_SPECS,
     normalize_config_keys,
+    override_config,
     resolve_app_config,
     validate_montecarlo_config,
 )
@@ -88,7 +89,7 @@ def _build_config(args: argparse.Namespace) -> dict[str, Any]:
             continue
         overrides[key] = value
 
-    return _deep_merge(config, overrides)
+    return _deep_merge(override_config(config, overrides), overrides)
 
 
 def _deep_merge(base: dict[str, Any], overrides: dict[str, Any]) -> dict[str, Any]:
@@ -472,8 +473,12 @@ def _check_sweep_key(key: str) -> None:
 
 
 def _apply_sweep_values(config: dict[str, Any], varied: dict[str, Any]) -> dict[str, Any]:
-    """Return a run config with top-level or dotted sweep values applied."""
-    result = copy.deepcopy(config)
+    """Return a run config with top-level or dotted sweep values applied.
+
+    A value replaces the base's alternative key, as a CLI flag does
+    (``inverter_ac_rating_kw`` over a base ``inverter_loading_ratio``).
+    """
+    result = override_config(copy.deepcopy(config), varied)
     for key, value in varied.items():
         parts = key.split(".")
         target = result

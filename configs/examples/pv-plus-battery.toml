@@ -49,6 +49,7 @@ pv_degradation_rate = 0.005        # [0.005] annual PV output loss
 dc_coupled = true                  # [true] BREOS currently supports DC-coupled/hybrid dispatch only
 inverter_efficiency = 0.96         # [0.96]
 inverter_loading_ratio = 1.25      # [1.25] DC/AC oversizing ratio
+# inverter_ac_rating_kw = 4.0      # absolute AC rating instead of the ratio; set one
 
 # --- Battery detail (advanced) ----------------------------------------------
 calendar_model = "naumann_lam_field_calibrated"  # calendar aging model

@@ -53,8 +53,9 @@ is a `breos run` option that overrides the config file.
 | `iam_model` | `"ashrae"` | `--iam-model` | Beam incidence-angle modifier. `"physical"` uses pvlib's physical optics model and `"martin_ruiz"` its empirical model; the Ashrae default preserves historical results. One of `"ashrae"`, `"physical"`, `"martin_ruiz"` |
 | `import_price_escalation` | `None` | `--import-price-escalation` | Annual escalation of the import price and the fixed charge; `None` uses `inflation_rate` |
 | `inflation_rate` | `0.02` | `--inflation-rate` | General annual inflation (nominal). Import energy, the fixed charge and O&M escalate at it unless their own rate is set; replacement prices inflate at it |
+| `inverter_ac_rating_kw` | `None` | `--inverter-ac-rating-kw` | Absolute inverter AC rating in kW, instead of `inverter_loading_ratio`: it clips production and CAPEX prices it. Not with `inverter_loading_ratio` |
 | `inverter_efficiency` | `0.96` | `--inverter-efficiency` | Nominal inverter efficiency used by the PVWatts part-load curve |
-| `inverter_loading_ratio` | `1.25` | `--inverter-loading-ratio` | DC/AC oversizing ratio; also sets the inverter AC rating that clips production |
+| `inverter_loading_ratio` | `1.25` | `--inverter-loading-ratio` | DC/AC oversizing ratio; also sets the inverter AC rating that clips production and that CAPEX prices. Not with `inverter_ac_rating_kw` |
 | `load_profile` | `"demandlib_h0"` | `--load-profile` | Load profile key; see [Load profiles](configuration.md#load-profiles) and [Packaged options](options.md#load-profiles) |
 | `load_profile_column` | `None` | `--load-profile-column` | For `load_profile = "custom"` only: the CSV column holding the load, if the file has several. Refused for any other profile |
 | `load_profile_file` | `None` | `--load-profile-file` | Load-profile CSV to read instead of the key's filename pattern; required for `load_profile = "custom"`. A relative path is taken inside `rlp_directory` when that is set |

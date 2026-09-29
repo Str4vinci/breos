@@ -16,7 +16,9 @@ which also gain the year-1-price money columns (ADR 0003 E4). 1.4 adds
 columns to cost projections and Monte Carlo trajectories (#183). 1.5 adds
 ``constraints`` and ``run_settings`` to the optimizer's provenance, and the
 ``Projected_CO2_*`` columns to Pareto rows of a search with ``[emissions]``
+(#181). 1.6 adds ``inverter_ac_rating_kw`` to the ``resolved_config`` of App and Monte
+Carlo results
 (#181).
 """
 
-RESULT_SCHEMA_VERSION = "1.5"
+RESULT_SCHEMA_VERSION = "1.6"

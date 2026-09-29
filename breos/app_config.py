@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, datetime
 from numbers import Real
 from pathlib import Path
@@ -624,8 +624,23 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         cli_flags=("--inverter-loading-ratio",),
         cli_type=float,
         cli_help="DC/AC oversizing ratio.",
-        doc="DC/AC oversizing ratio; also sets the inverter AC rating that clips production",
+        doc=(
+            "DC/AC oversizing ratio; also sets the inverter AC rating that clips production and that CAPEX "
+            "prices. Not with `inverter_ac_rating_kw`"
+        ),
         summary="inverter.loading_ratio",
+    ),
+    "inverter_ac_rating_kw": AppConfigField(
+        default=None,
+        default_order=64,
+        cli_flags=("--inverter-ac-rating-kw",),
+        cli_type=float,
+        cli_help="Absolute inverter AC rating in kW, instead of --inverter-loading-ratio.",
+        doc=(
+            "Absolute inverter AC rating in kW, instead of `inverter_loading_ratio`: it clips production and "
+            "CAPEX prices it. Not with `inverter_loading_ratio`"
+        ),
+        summary="inverter.ac_rating_kw",
     ),
     "start_date": AppConfigField(
         default="2023-01-01",
@@ -965,7 +980,8 @@ class ResolvedAppConfig:
     tracking: str
     axis_azimuth: float
     # AC nameplate that clips dispatch, sized like the inverter CAPEX: the DC
-    # peak over inverter_loading_ratio.
+    # peak over inverter_loading_ratio, or inverter_ac_rating_kw. Every
+    # consumer reads this one value: the dispatch, CAPEX and the reports.
     inverter_ac_capacity_w: float | None
     # The configured [tariff], or None for flat prices.
     tariff: TariffSpec | None
@@ -1590,7 +1606,10 @@ def _validate_pv_and_inverter(cfg: dict[str, Any], has_arrays: bool) -> None:
         )
     if not 0 < _finite_real(cfg["inverter_efficiency"], "inverter_efficiency") <= 1:
         raise ValueError("'inverter_efficiency' must be between 0 (exclusive) and 1 (inclusive)")
-    if _finite_real(cfg["inverter_loading_ratio"], "inverter_loading_ratio") <= 0:
+    if cfg["inverter_ac_rating_kw"] is not None:
+        if _finite_real(cfg["inverter_ac_rating_kw"], "inverter_ac_rating_kw") <= 0:
+            raise ValueError("'inverter_ac_rating_kw' must be > 0")
+    elif _finite_real(cfg["inverter_loading_ratio"], "inverter_loading_ratio") <= 0:
         raise ValueError("'inverter_loading_ratio' must be > 0")
 
 
@@ -1915,7 +1934,8 @@ def resolve_costs(cfg: dict[str, Any]) -> CostParams:
     for config_key, value in cfg.get("costs", {}).items():
         params[COST_CONFIG_KEY_TO_PARAM[config_key]] = value
 
-    params["dc_ac_ratio"] = cfg["inverter_loading_ratio"]
+    if cfg["inverter_loading_ratio"] is not None:
+        params["dc_ac_ratio"] = cfg["inverter_loading_ratio"]
     params.setdefault("inflation_rate", cfg["inflation_rate"])
     params.setdefault("sell_price_inflation", cfg["sell_price_inflation"])
     params.setdefault("discount_rate", cfg["discount_rate"])
@@ -1951,6 +1971,8 @@ def build_costs_dict(cfg: dict[str, Any], resolved: ResolvedAppConfig) -> dict[s
         module_power_w=resolved.avg_module_power_w,
         battery_capacity_wh=cfg["battery_kwh"] * 1000,
         cost_params=resolved.cost_params,
+        # The rating that clips production is the one CAPEX prices (#181).
+        inverter_ac_capacity_w=resolved.inverter_ac_capacity_w,
         replacement_cost_each=replacement_event_cost(cfg["battery_kwh"], resolved.cost_params.battery_cost_per_kwh),
     )
 
@@ -1963,9 +1985,40 @@ def _normalise_config_values(cfg: dict[str, Any]) -> dict[str, Any]:
     return cfg
 
 
+# Keys that set the same thing, so one config layer may set only one of them.
+# A later layer (a CLI flag over a file, a sweep value over the base) that
+# sets one drops the other from the layers below: see override_config.
+EXCLUSIVE_ALTERNATIVES: Mapping[str, str] = {
+    "inverter_ac_rating_kw": "inverter_loading_ratio",
+    "inverter_loading_ratio": "inverter_ac_rating_kw",
+}
+
+
+def override_config(base: Mapping[str, Any], overrides: Mapping[str, Any]) -> dict[str, Any]:
+    """``base`` without the alternatives of the keys ``overrides`` sets, so the override replaces them.
+
+    Setting ``inverter_ac_rating_kw`` over a file that sets
+    ``inverter_loading_ratio`` replaces the ratio, as any flag replaces the
+    file's value. Both set in one layer still raise when the config resolves.
+    """
+    dropped = {EXCLUSIVE_ALTERNATIVES[key] for key in overrides if key in EXCLUSIVE_ALTERNATIVES}
+    return {key: value for key, value in base.items() if key not in dropped or key in overrides}
+
+
+def _check_one_inverter_sizing(config: Mapping[str, Any]) -> None:
+    """``inverter_ac_rating_kw`` and ``inverter_loading_ratio`` size the same inverter; allow one."""
+    if config.get("inverter_ac_rating_kw") is not None and config.get("inverter_loading_ratio") is not None:
+        raise ValueError("'inverter_ac_rating_kw' and 'inverter_loading_ratio' both size the inverter; set one of them")
+
+
 def resolve_app_config(config: dict[str, Any]) -> ResolvedAppConfig:
     """Merge, validate, and resolve App configuration."""
-    cfg = merge_defaults(normalize_config_keys(config))
+    normalized = normalize_config_keys(config)
+    _check_one_inverter_sizing(normalized)
+    cfg = merge_defaults(normalized)
+    if cfg["inverter_ac_rating_kw"] is not None:
+        # The absolute rating replaces the ratio, so the ratio is reported unset.
+        cfg["inverter_loading_ratio"] = None
     _normalise_config_values(cfg)
     validate_config(cfg)
 
@@ -1980,6 +2033,14 @@ def resolve_app_config(config: dict[str, Any]) -> ResolvedAppConfig:
     # into a fresh dict rather than mutating the merged config in place.
     cfg = {**cfg, "n_modules": n_modules}
     tariff = resolve_tariff_spec(cfg, timezone)
+    cost_params = resolve_costs(cfg)
+    ac_capacity_w: float | None
+    if cfg["inverter_ac_rating_kw"] is not None:
+        ac_capacity_w = float(cfg["inverter_ac_rating_kw"]) * 1000
+        # The ratio the rating implies, so CostParams does not keep a stale one.
+        cost_params = replace(cost_params, dc_ac_ratio=n_modules * avg_module_power_w / ac_capacity_w)
+    else:
+        ac_capacity_w = inverter_ac_capacity_w(n_modules * avg_module_power_w, cfg["inverter_loading_ratio"])
 
     return ResolvedAppConfig(
         cfg=cfg,
@@ -1996,9 +2057,9 @@ def resolve_app_config(config: dict[str, Any]) -> ResolvedAppConfig:
         azimuth=azimuth,
         tracking=tracking,
         axis_azimuth=axis_azimuth,
-        inverter_ac_capacity_w=inverter_ac_capacity_w(n_modules * avg_module_power_w, cfg["inverter_loading_ratio"]),
+        inverter_ac_capacity_w=ac_capacity_w,
         tariff=tariff,
         smart_charging=resolve_smart_charging_spec(cfg, tariff),
-        cost_params=resolve_costs(cfg),
+        cost_params=cost_params,
         emissions_params=resolve_emissions(cfg),
     )

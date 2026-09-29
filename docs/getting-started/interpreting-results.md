@@ -23,10 +23,11 @@ lists every rename). Version `"1.1"` adds the
 optimizer tables, `"1.4"` adds `provenance.revaluation` to the results of
 [`App.revalue`](recipes.md#revalue-a-run-at-other-prices) and the export CO2
 columns (`CO2_Avoided_Export_kg`, `CO2_Avoided_Export_Cumulative_kg`) to the
-cost projection and Monte Carlo trajectories, and `"1.5"`, which 0.7.0
-reports, adds `constraints` and `run_settings` to the optimizer's provenance
-and the `Projected_CO2_*` columns to the Pareto rows of a search with
-`[emissions]`.
+cost projection and Monte Carlo trajectories, `"1.5"` adds `constraints` and
+`run_settings` to the optimizer's provenance and the `Projected_CO2_*`
+columns to the Pareto rows of a search with `[emissions]`, and `"1.6"`, which
+0.7.0 reports, adds `inverter_ac_rating_kw` to the `resolved_config` of App
+and Monte Carlo results.
 A renamed or removed key bumps the
 major version, an added key the minor. A result without the key predates 1.0.
 

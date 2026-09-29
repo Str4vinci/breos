@@ -181,6 +181,7 @@ def calculate_costs(
     battery_capacity_wh: float = 0.0,
     cost_params: Optional[CostParams] = None,
     replacement_cost_each: Optional[float] = None,
+    inverter_ac_capacity_w: Optional[float] = None,
 ) -> Dict[str, float]:
     """
     Calculate system costs (CAPEX) and return cost dictionary.
@@ -193,6 +194,9 @@ def calculate_costs(
         replacement_cost_each: The t = 0 price of one battery replacement,
             from :func:`replacement_event_cost`. ``None`` prices the pack at
             ``cost_params.battery_cost_per_kwh``.
+        inverter_ac_capacity_w: The inverter AC rating to price, in W, the one
+            the dispatch clips at. ``None`` sizes it as the DC peak over
+            ``cost_params.dc_ac_ratio``.
 
     Returns:
         Dictionary with cost breakdown and totals. ``replacement_cost_each``
@@ -202,7 +206,12 @@ def calculate_costs(
         cost_params = CostParams()
 
     total_power_kw = n_modules * module_power_w / 1000
-    inverter_power_kw = total_power_kw / cost_params.dc_ac_ratio if cost_params.dc_ac_ratio > 0 else total_power_kw
+    if inverter_ac_capacity_w is not None:
+        inverter_power_kw = inverter_ac_capacity_w / 1000
+    elif cost_params.dc_ac_ratio > 0:
+        inverter_power_kw = total_power_kw / cost_params.dc_ac_ratio
+    else:
+        inverter_power_kw = total_power_kw
     has_battery = battery_capacity_wh > 1
 
     # PV module costs
