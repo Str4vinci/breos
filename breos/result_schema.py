@@ -18,7 +18,11 @@ columns to cost projections and Monte Carlo trajectories (#183). 1.5 adds
 ``Projected_CO2_*`` columns to Pareto rows of a search with ``[emissions]``
 (#181). 1.6 adds ``inverter_ac_rating_kw`` to the ``resolved_config`` of App and Monte
 Carlo results
-(#181).
+(#181). 1.7 adds the ``[period]`` window (#242): an App result of a period run
+gains ``period``, ``provenance.period`` and ``period_start``/``period_end`` in
+its year row, and reports its lifetime economics (``npv_savings``,
+``payback_year``, ``lcoe_per_kwh``, ``financial``, the replacement costs and
+the lifetime CO2) as None. Results of full-year runs are unchanged.
 """
 
-RESULT_SCHEMA_VERSION = "1.6"
+RESULT_SCHEMA_VERSION = "1.7"

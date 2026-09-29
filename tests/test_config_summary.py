@@ -21,12 +21,17 @@ def test_every_app_key_has_one_place_in_the_summary():
         assert section in cli._SUMMARY_SECTIONS and key and "." not in key
 
 
+# Keys left out of the summary while unset, so a summary without them is
+# unchanged; they appear at their place once set.
+OMITTED_WHEN_UNSET = {"period"}
+
+
 def test_summary_reports_each_key_at_its_place():
     summary = cli._resolved_config_summary(BASE)
     for name, field in APP_CONFIG_FIELDS.items():
         if field.summary is not None:
             section, key = field.summary.split(".")
-            assert key in summary[section], name
+            assert (key in summary[section]) is (name not in OMITTED_WHEN_UNSET), name
 
 
 @pytest.mark.parametrize(
@@ -38,6 +43,7 @@ def test_summary_reports_each_key_at_its_place():
         ("horizon_profile", [[0.0, 5.0], [180.0, 10.0]]),
         ("execution_backend", "python"),
         ("costs", {"electricity_cost": 0.25}),
+        ("period", {"start": "2023-06-01", "end": "2023-06-08"}),
     ],
 )
 def test_keys_the_hand_built_summary_left_out_are_reported(name, value):

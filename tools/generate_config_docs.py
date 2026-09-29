@@ -31,6 +31,7 @@ from breos.app_config import (  # noqa: E402
     COSTS_TABLE,
     INDOOR_MODEL_TABLE,
     NESTED_TABLE_SPECS,
+    PERIOD_TABLE,
     PV_ARRAY_TABLE,
     SMART_CHARGING_TABLE,
     TARIFF_TABLE,
@@ -91,6 +92,14 @@ TABLES: tuple[tuple[str, TableSpec, str], ...] = (
         "Grid charging by tariff period, as `[smart_charging]` in TOML; see "
         '[Smart charging](configuration.md#smart-charging). `mode = "fixed_target"` needs every key but '
         '`grid_import_limit_w`; `mode = "disabled"` takes no other key.',
+    ),
+    (
+        "period",
+        PERIOD_TABLE,
+        "A window shorter than a year, as `[period]` in TOML; see "
+        "[Simulate part of a year](recipes.md#simulate-part-of-a-year). Both dates are local civil dates in the "
+        "location's timezone, in the year of `start_date`, and the window runs from local midnight of `start` to "
+        "local midnight of `end`.",
     ),
 )
 

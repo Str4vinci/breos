@@ -147,6 +147,7 @@ def test_registry_preserves_defaults_and_allowed_top_level_keys():
             "annual_consumption_kwh",
             "n_modules",
             "costs",
+            "period",
             "montecarlo",
             "sweep",
             "battery_type",

@@ -166,6 +166,9 @@ def _resolved_config_summary(config: dict[str, Any]) -> dict[str, Any]:
     cfg = resolved.cfg
     summary: dict[str, Any] = {"valid": True, **{section: {} for section in _SUMMARY_SECTIONS}}
     for name, field in APP_CONFIG_FIELDS.items():
+        # An unset [period] is left out, so a full-year summary is unchanged.
+        if name == "period" and cfg.get(name) is None:
+            continue
         if field.summary is not None:
             section, key = field.summary.split(".")
             summary[section][key] = cfg.get(name)
@@ -357,6 +360,9 @@ def _validate_config(args: argparse.Namespace) -> int:
         print(f"Battery: {payload['battery']['capacity_kwh']} kWh")
         print(f"Cost preset: {payload['economics']['cost_preset'] or 'none'}")
         print(f"Emissions: {payload['emissions']['country'] or 'disabled'}")
+        period = payload["simulation"].get("period")
+        if period is not None:
+            print(f"Period: {period['start']} to {period['end']} (end exclusive); lifetime economics are skipped")
     return 0
 
 
