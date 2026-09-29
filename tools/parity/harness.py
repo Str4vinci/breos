@@ -5,6 +5,18 @@ BREOS checkout: it touches only ``BatteryConfig`` and
 ``simulate_energy_balance``, which are stable across the revisions being
 compared. Every scenario is deterministic given its name.
 
+Every scenario runs at both resolutions in ``RESOLUTIONS``, hourly and
+15-minute; the dump keys are ``<scenario>@<freq>``.
+
+Usage::
+
+    python tools/parity/harness.py OUT.npz [python|numba] [--instructions]
+
+The backend defaults to ``python``. ``--instructions`` adds
+``INSTRUCTION_SCENARIOS``, which need a tree with ``dispatch_instructions``;
+leave it off when dumping an older tree. ``-h`` or ``--help`` prints this
+text.
+
 Run it against two trees and compare the ``.npz`` files with
 ``compare.py``; any differing bit in any exported column shows up as a
 non-zero maximum absolute difference for that column.
@@ -343,6 +355,11 @@ def dump(path: str, backend: str = "python", *, instructions: bool = False) -> N
 
 
 if __name__ == "__main__":
-    # harness.py OUT.npz [python|numba] [--instructions]
+    if any(arg in ("-h", "--help") for arg in sys.argv[1:]):
+        print(__doc__)
+        sys.exit(0)
     args = [arg for arg in sys.argv[1:] if arg != "--instructions"]
+    if not args:
+        print(__doc__, file=sys.stderr)
+        sys.exit(2)
     dump(args[0], args[1] if len(args) > 1 else "python", instructions="--instructions" in sys.argv[1:])
