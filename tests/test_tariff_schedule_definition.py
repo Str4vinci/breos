@@ -300,32 +300,51 @@ def test_a_zone_without_clock_changes_takes_the_boundary_step():
     assert schedule_resolution_minutes(_hourly_schedule("Australia/Lord_Howe"), [2026]) == 30
 
 
-@pytest.mark.parametrize(
-    ("zone", "old_year", "old_step"),
-    [("Asia/Kathmandu", 1986, 15), ("America/Guyana", 1975, 15), ("Pacific/Kiritimati", 1979, 20)],
-)
-def test_only_the_simulated_years_clock_changes_count(zone, old_year, old_step):
-    # Each zone once moved its clock by an odd step; in 2026 it keeps one offset.
+def _clock_changes(changes):
+    """Offset changes in seconds by year, for any zone: the tz database differs between installs."""
+    return lambda timezone, year: changes.get(year, 0)
+
+
+@pytest.mark.parametrize(("change_minutes", "old_step"), [(15, 15), (45, 15), (40, 20)])
+def test_only_the_simulated_years_clock_changes_count(monkeypatch, change_minutes, old_step):
+    # Kathmandu (1986, 15 min), Guyana (1975, 45 min) and Kiritimati (1979,
+    # 40 min) once moved their clocks by such a step; an hourly schedule is
+    # held to the finer step in that year only.
+    monkeypatch.setattr(tariffs, "_offset_change_seconds", _clock_changes({1990: change_minutes * 60}))
+    schedule = _hourly_schedule("UTC", ("07:00", "22:00"))
+    assert schedule_resolution_minutes(schedule, [1990]) == old_step
+    assert schedule_resolution_minutes(schedule, [1990, 2026]) == old_step
+    assert schedule_resolution_minutes(schedule, [2026]) == 60
+
+
+@pytest.mark.parametrize("zone", ["Asia/Kathmandu", "America/Guyana", "Pacific/Kiritimati", "Africa/Monrovia"])
+def test_zones_with_old_odd_clock_changes_take_hourly_steps_now(zone):
+    # Each keeps one offset in 2026, whatever its history.
     schedule = _hourly_schedule(zone, ("07:00", "22:00"))
-    assert schedule_resolution_minutes(schedule, [old_year]) == old_step
     assert schedule_resolution_minutes(schedule, [2026]) == 60
     index = pd.date_range("2026-01-01", "2027-01-01", freq="h", tz=zone, inclusive="left").tz_convert("UTC")
     labels = classify_tariff_periods(index, schedule, timezone=zone)
     assert labels[:24] == ("off_peak",) * 7 + ("peak",) * 15 + ("off_peak",) * 2
 
 
-def test_a_clock_change_off_the_minute_is_named():
-    # Liberia moved from UTC-0:44:30 to UTC on 7 January 1972.
+def test_a_clock_change_off_the_minute_is_named(monkeypatch):
+    # Liberia moved from UTC-0:44:30 to UTC in 1972.
+    monkeypatch.setattr(tariffs, "_offset_change_seconds", _clock_changes({2026: 44 * 60 + 30}))
     schedule = _hourly_schedule("Africa/Monrovia", ("07:00", "22:00"))
-    assert schedule_resolution_minutes(schedule, [2026]) == 60
-    index = pd.date_range("2026-01-01", "2027-01-01", freq="h", tz="UTC", inclusive="left")
-    assert len(classify_tariff_periods(index, schedule, timezone="Africa/Monrovia")) == len(index)
+    with pytest.raises(ValueError, match="changes its UTC offset in 2026 by a step that is not a whole number"):
+        schedule_resolution_minutes(schedule, [2026])
+    index = pd.date_range("2026-03-01", periods=24, freq="h", tz="UTC")
+    with pytest.raises(ValueError, match="not a whole number of minutes"):
+        classify_tariff_periods(index, schedule, timezone="Africa/Monrovia")
+
+
+def test_monrovia_1972_is_named_where_the_tz_data_keeps_its_seconds():
+    # pytz, which pandas 2 uses for zone names, rounds the old offset to a minute.
+    if tariffs._offset_change_seconds("Africa/Monrovia", 1972) % 60 == 0:
+        pytest.skip("this tz data rounds Liberia's 1972 offset change to whole minutes")
+    schedule = _hourly_schedule("Africa/Monrovia", ("07:00", "22:00"))
     with pytest.raises(ValueError, match="changes its UTC offset in 1972 by a step that is not a whole number"):
         schedule_resolution_minutes(schedule, [1972])
-    with pytest.raises(ValueError, match="not a whole number of minutes"):
-        classify_tariff_periods(
-            pd.date_range("1972-03-01", periods=24, freq="h", tz="UTC"), schedule, timezone="Africa/Monrovia"
-        )
 
 
 def _custom(**overrides):
