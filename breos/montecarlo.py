@@ -20,11 +20,15 @@ multi-year historical CSV (see ``configs/examples/montecarlo.toml``).
 
 from __future__ import annotations
 
+import hashlib
+import json
 import math
 import multiprocessing
+from copy import deepcopy
 from dataclasses import asdict, dataclass, field, replace
 from importlib.metadata import PackageNotFoundError, version
 from multiprocessing import Pool
+from pathlib import Path
 from typing import Any, cast
 
 import numpy as np
@@ -32,6 +36,7 @@ import pandas as pd
 
 from breos.app_config import DEFAULTS, ResolvedAppConfig, resolve_app_config
 from breos.app_inputs import (
+    INPUT_INDEPENDENT_KEYS,
     AppRuntimeDependencies,
     build_dc_system_base,
     load_consumption_profile,
@@ -161,14 +166,14 @@ def _index_weather(df: pd.DataFrame) -> pd.DataFrame:
     return w
 
 
-def _precompute_year_caches(
+def _load_weather_years(
     cfg: dict[str, Any],
     resolved: ResolvedAppConfig,
     settings: MonteCarloSettings,
     *,
     runtime_weather: dict[str, Any] | None = None,
-) -> tuple[dict[int, pd.Series], dict[int, pd.Series]]:
-    """Build per-year undegraded DC production and battery temperature series."""
+) -> dict[int, pd.DataFrame]:
+    """Read the weather file into per-year frames at the study resolution."""
     freq = cfg["resolution"]
     weather_by_year = preload_weather_by_year(settings.weather_file, target_year=settings.target_year)
     if settings.weather_start_year is not None:
@@ -183,8 +188,7 @@ def _precompute_year_caches(
             "Provide a multi-year historical CSV with a 'date' column."
         )
 
-    dc_by_year: dict[int, pd.Series] = {}
-    temp_by_year: dict[int, pd.Series] = {}
+    indexed_by_year: dict[int, pd.DataFrame] = {}
     for year, df in weather_by_year.items():
         weather = _index_weather(df)
         input_frequency = pd.infer_freq(weather.index[:10]) if len(weather.index) >= 3 else None
@@ -213,6 +217,23 @@ def _precompute_year_caches(
                     "metadata": weather_metadata(weather),
                 }
             )
+        indexed_by_year[year] = weather
+    return indexed_by_year
+
+
+def _build_pv_years(
+    cfg: dict[str, Any],
+    resolved: ResolvedAppConfig,
+    weather_by_year: dict[int, pd.DataFrame],
+) -> tuple[dict[int, pd.Series], dict[int, pd.Series]]:
+    """Build each year's undegraded DC production and battery temperature series.
+
+    Both read the weather frames without writing to them, which is what lets
+    a :class:`MonteCarloYearCache` build them again from the frames it holds.
+    """
+    dc_by_year: dict[int, pd.Series] = {}
+    temp_by_year: dict[int, pd.Series] = {}
+    for year, weather in weather_by_year.items():
         dc_by_year[year] = build_dc_system_base(cfg, resolved, weather)
         temp_by_year[year] = build_battery_temperature_series(
             cfg["battery_temperature"],
@@ -221,6 +242,183 @@ def _precompute_year_caches(
             indoor_model=cfg["battery_indoor_model"],
         )
     return dc_by_year, temp_by_year
+
+
+def _precompute_year_caches(
+    cfg: dict[str, Any],
+    resolved: ResolvedAppConfig,
+    settings: MonteCarloSettings,
+    *,
+    runtime_weather: dict[str, Any] | None = None,
+) -> tuple[dict[int, pd.Series], dict[int, pd.Series]]:
+    """Build per-year undegraded DC production and battery temperature series."""
+    weather_by_year = _load_weather_years(cfg, resolved, settings, runtime_weather=runtime_weather)
+    return _build_pv_years(cfg, resolved, weather_by_year)
+
+
+# Config keys the PV layer of the year cache never reads, directly or through
+# the ResolvedAppConfig fields it reads. They are the input-independent keys
+# of the App sweep, plus the demand keys and the runner's own section: a
+# Monte Carlo study loads its demand apart from the year cache, and reads its
+# weather from MonteCarloSettings, not the config. Each is pinned by a test
+# that changes it and compares the year cache. A key not listed here is part
+# of the cache key, so a new key costs a rebuild, never a wrong reuse.
+YEAR_CACHE_INDEPENDENT_KEYS: frozenset[str] = INPUT_INDEPENDENT_KEYS | frozenset(
+    {
+        # Demand.
+        "annual_consumption_kwh",
+        "load_profile",
+        "load_profile_file",
+        "load_profile_column",
+        "load_profile_unit",
+        "rlp_directory",
+        "start_date",
+        # The [montecarlo] section, read by the CLI into MonteCarloSettings.
+        "montecarlo",
+    }
+)
+
+
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _weather_cache_key(
+    cfg: dict[str, Any], resolved: ResolvedAppConfig, settings: MonteCarloSettings
+) -> dict[str, Any]:
+    """Everything the weather layer of the year cache reads."""
+    path = Path(settings.weather_file)
+    return {
+        "weather_file": str(path.resolve()),
+        "weather_file_sha256": _file_sha256(path),
+        "target_year": settings.target_year,
+        "weather_start_year": settings.weather_start_year,
+        "weather_end_year": settings.weather_end_year,
+        "resolution": cfg["resolution"],
+        "latitude": resolved.lat,
+        "longitude": resolved.lon,
+        "preserve_irradiance_energy": settings.preserve_irradiance_energy,
+        "solar_position": resolve_solar_position_method(cfg.get("solar_position", DEFAULT_SOLAR_POSITION)),
+    }
+
+
+def _pv_cache_key(cfg: dict[str, Any]) -> str | None:
+    """The resolved config without :data:`YEAR_CACHE_INDEPENDENT_KEYS`, as canonical JSON.
+
+    None when a value is not plain JSON data, which the key could not
+    represent faithfully; the PV layer is then built afresh for every run.
+    """
+    relevant = {key: value for key, value in cfg.items() if key not in YEAR_CACHE_INDEPENDENT_KEYS}
+    try:
+        return json.dumps(relevant, sort_keys=True)
+    except (TypeError, ValueError):
+        return None
+
+
+class MonteCarloYearCache:
+    """The per-year weather and PV inputs of a Monte Carlo study, for reuse.
+
+    Build one with :func:`build_year_cache` and pass it to
+    :func:`run_montecarlo` as ``year_cache`` to run many designs over one
+    weather file without preparing the weather again for each.
+
+    It holds two layers. The weather layer is each weather year read,
+    restamped and resampled to the study resolution. It is keyed on the
+    weather file's path and SHA-256, the year window and target year, the
+    resolution, the coordinates, ``preserve_irradiance_energy`` and the
+    solar-position method, and a study whose weather key differs is refused.
+    The PV layer is each year's DC production and battery temperature. It is
+    keyed on the resolved config without :data:`YEAR_CACHE_INDEPENDENT_KEYS`,
+    such as the battery, inverter, cost and demand settings. A study with
+    another PV key, such as another module count, builds the PV layer again
+    from the cached weather and keeps it in place of the old one, so run the
+    designs grouped by PV configuration to reuse each PV layer fully.
+
+    The weather file is read once, when the cache is built: a warning it
+    raises then does not repeat for each study.
+    """
+
+    def __init__(
+        self,
+        weather_key: dict[str, Any],
+        weather_by_year: dict[int, pd.DataFrame],
+        runtime_weather: dict[str, Any],
+        pv_key: str | None,
+        dc_by_year: dict[int, pd.Series],
+        temp_by_year: dict[int, pd.Series],
+    ) -> None:
+        self._weather_key = weather_key
+        self._weather_by_year = weather_by_year
+        self._runtime_weather = runtime_weather
+        self._pv_key = pv_key
+        self._dc_by_year = dc_by_year
+        self._temp_by_year = temp_by_year
+
+    @property
+    def weather_key(self) -> dict[str, Any]:
+        """The weather inputs this cache was built from."""
+        return dict(self._weather_key)
+
+    @property
+    def pv_key(self) -> str | None:
+        """The PV configuration of the PV layer it holds, or None if it cannot be reused."""
+        return self._pv_key
+
+    @property
+    def available_years(self) -> list[int]:
+        """The weather years a study samples from."""
+        return sorted(int(year) for year in self._weather_by_year)
+
+    def __repr__(self) -> str:
+        return f"MonteCarloYearCache(weather_file={self._weather_key['weather_file']!r}, years={self.available_years})"
+
+    def _years_for(
+        self, cfg: dict[str, Any], resolved: ResolvedAppConfig, settings: MonteCarloSettings
+    ) -> tuple[dict[int, pd.Series], dict[int, pd.Series], dict[str, Any]]:
+        """The DC and temperature series and weather record for one study."""
+        weather_key = _weather_cache_key(cfg, resolved, settings)
+        if weather_key != self._weather_key:
+            differing = ", ".join(name for name in weather_key if weather_key[name] != self._weather_key.get(name))
+            raise ValueError(
+                f"year_cache was built for other weather inputs ({differing} differ); "
+                "build one for this study with build_year_cache(config, settings)"
+            )
+        pv_key = _pv_cache_key(cfg)
+        if pv_key is None or pv_key != self._pv_key:
+            self._dc_by_year, self._temp_by_year = _build_pv_years(cfg, resolved, self._weather_by_year)
+            self._pv_key = pv_key
+        # New dicts over the shared series: a study reads them and never
+        # writes to them, and its provenance keeps its own weather record.
+        return dict(self._dc_by_year), dict(self._temp_by_year), deepcopy(self._runtime_weather)
+
+
+def build_year_cache(config: dict[str, Any], settings: MonteCarloSettings) -> MonteCarloYearCache:
+    """Prepare the per-year weather and PV inputs once, for many Monte Carlo studies.
+
+    Args:
+        config: An App configuration dict, as for :func:`run_montecarlo`.
+        settings: Monte Carlo controls. Only the weather settings are read:
+            ``weather_file``, ``target_year``, ``weather_start_year``,
+            ``weather_end_year`` and ``preserve_irradiance_energy``.
+
+    Returns:
+        A :class:`MonteCarloYearCache` to pass to :func:`run_montecarlo` as
+        ``year_cache``. Its results are the same, bit for bit, as a study
+        run without it.
+    """
+    resolved = resolve_app_config(config)
+    cfg = resolved.cfg
+    weather_key = _weather_cache_key(cfg, resolved, settings)
+    runtime_weather: dict[str, Any] = {}
+    weather_by_year = _load_weather_years(cfg, resolved, settings, runtime_weather=runtime_weather)
+    dc_by_year, temp_by_year = _build_pv_years(cfg, resolved, weather_by_year)
+    return MonteCarloYearCache(
+        weather_key, weather_by_year, runtime_weather, _pv_cache_key(cfg), dc_by_year, temp_by_year
+    )
 
 
 def _align_years(
@@ -572,12 +770,22 @@ def _aggregate_jit_cache_states(states: list[str]) -> str:
     return aggregate_jit_cache_states(states)
 
 
-def run_montecarlo(config: dict[str, Any], settings: MonteCarloSettings) -> MonteCarloResult:
+def run_montecarlo(
+    config: dict[str, Any],
+    settings: MonteCarloSettings,
+    *,
+    year_cache: MonteCarloYearCache | None = None,
+) -> MonteCarloResult:
     """Run a Monte Carlo study over weather years and demand uncertainty.
 
     Args:
         config: An App configuration dict (same keys as :class:`breos.App`).
         settings: Monte Carlo controls (weather file, runs, uncertainty, seed).
+        year_cache: Per-year weather and PV inputs from :func:`build_year_cache`,
+            reused instead of prepared again. A sweep over designs builds it
+            once and passes it to every study. Raises ``ValueError`` when it
+            was built for other weather inputs; see
+            :class:`MonteCarloYearCache` for what it reuses.
 
     The dispatch backend is ``settings.execution_backend`` when set, else the
     config's top-level ``execution_backend``, else ``"python"``. The CLI
@@ -639,13 +847,16 @@ def run_montecarlo(config: dict[str, Any], settings: MonteCarloSettings) -> Mont
     has_battery = _has_battery(cfg)
     backend_provenance = _resolve_backend(settings.execution_backend, pv_only=not has_battery)
 
-    runtime_weather: dict[str, Any] = {}
-    dc_by_year, temp_by_year = _precompute_year_caches(
-        cfg,
-        resolved,
-        settings,
-        runtime_weather=runtime_weather,
-    )
+    if year_cache is None:
+        runtime_weather: dict[str, Any] = {}
+        dc_by_year, temp_by_year = _precompute_year_caches(
+            cfg,
+            resolved,
+            settings,
+            runtime_weather=runtime_weather,
+        )
+    else:
+        dc_by_year, temp_by_year, runtime_weather = year_cache._years_for(cfg, resolved, settings)
     available_years = np.array(sorted(dc_by_year.keys()))
 
     deps = _runtime_dependencies()
