@@ -1,15 +1,22 @@
 """Tests for breos.utils."""
 
+import datetime
+from zoneinfo import ZoneInfo
+
 import numpy as np
 import pandas as pd
 import pytest
 
+import breos.utils
+from breos import cli
 from breos.utils import (
     _datetime_index_seconds,
+    _has_fixed_utc_offset,
     get_hours_per_step,
     get_steps_per_day,
     get_steps_per_year,
     normalise_frequency,
+    package_version,
     remap_datetime_index_years,
     safe_path_slug,
 )
@@ -69,6 +76,40 @@ def test_remap_datetime_index_years_drops_invalid_feb_29():
     assert not remapped.index.has_duplicates
     assert pd.Timestamp("2025-02-28 00:00", tz="UTC") in remapped.index
     assert pd.Timestamp("2025-03-01 00:00", tz="UTC") in remapped.index
+
+
+@pytest.mark.parametrize(
+    ("tz", "fixed"),
+    [
+        (None, True),
+        (datetime.timezone.utc, True),
+        (datetime.timezone(datetime.timedelta(hours=-3)), True),
+        (ZoneInfo("UTC"), True),
+        (ZoneInfo("Etc/GMT+1"), True),
+        (ZoneInfo("Etc/GMT-14"), True),
+        (ZoneInfo("Europe/Lisbon"), False),
+        (ZoneInfo("Asia/Kolkata"), False),
+    ],
+)
+def test_has_fixed_utc_offset_recognises_every_fixed_offset_zone(tz, fixed):
+    assert _has_fixed_utc_offset(tz) is fixed
+    if fixed:
+        # The vectorised shift it enables agrees with the element-wise one.
+        idx = pd.date_range("2024-02-28 00:00", periods=72, freq="h", tz=tz)
+        expected = pd.DatetimeIndex([ts.replace(year=2025) for ts in idx if not (ts.month == 2 and ts.day == 29)])
+        pd.testing.assert_index_equal(remap_datetime_index_years(idx, 1), expected)
+
+
+def test_version_has_one_fallback_outside_an_install(monkeypatch, capsys):
+    def _not_installed(name):
+        raise breos.utils.PackageNotFoundError(name)
+
+    monkeypatch.setattr(breos.utils, "version", _not_installed)
+
+    assert package_version() == "0.0.0+unknown"
+    with pytest.raises(SystemExit):
+        cli.build_parser().parse_args(["--version"])
+    assert capsys.readouterr().out.strip() == "breos 0.0.0+unknown"
 
 
 @pytest.mark.parametrize(("freq", "canonical"), [("h", "h"), ("1h", "h"), ("15min", "15min")])

@@ -3,8 +3,11 @@
 import tomllib
 from pathlib import Path
 
+import numpy as np
+import pandas as pd
 import pytest
 
+from breos import optimization
 from breos.app_config import DEFAULTS, default_module_key
 from breos.optimization_config import (
     DEFAULT_BUDGET,
@@ -47,6 +50,41 @@ def test_every_default_is_filled_in_by_name():
     assert resolved["battery"]["temperature"] == DEFAULTS["battery_temperature"]
     assert resolved["location"] == {**MINIMAL["location"], "timezone": "UTC", "altitude": None, "name": ""}
     assert resolved["financials"] == {"inflation_rate": 0.02, "sell_price_inflation": 0.0, "discount_rate": 0.03}
+
+
+@pytest.mark.parametrize("spelling", ["Naumann-Lam", " naumann_lam "])
+def test_the_calendar_model_is_stored_as_the_aging_model_reads_it(spelling, monkeypatch):
+    config = {**MINIMAL, "battery": {"calendar_model": spelling, "temperature": 20.0}}
+    assert resolve_optimization_config(config)["battery"]["calendar_model"] == "naumann_lam"
+
+    # The evaluated design ages with it: surrounding spaces used to pass here
+    # and then fail in the aging model.
+    index = pd.date_range("2026-01-05", periods=48, freq="h", tz="UTC")
+    pv = pd.Series(np.where((index.hour >= 10) & (index.hour < 16), 1800.0, 0.0), index=index)
+    monkeypatch.setattr(optimization, "calculate_pv_production_dc", lambda **kwargs: pv.copy())
+
+    def final_soh(calendar_model):
+        result = optimization.evaluate_projected_design(
+            pd.DataFrame({"temp_air": 20.0}, index=index),
+            pd.DataFrame({"Load": 1000.0}, index=index),
+            {
+                **MINIMAL,
+                "battery": {"calendar_model": calendar_model, "temperature": 20.0},
+                "simulation": {"resolution": "h", "years_projection": 1},
+            },
+            n_modules=4,
+            battery_kwh=5.0,
+            tilt=30.0,
+            azimuth=180.0,
+        )
+        return result.yearly["Battery_SOH_%"].iloc[-1]
+
+    assert final_soh(spelling) == final_soh("naumann_lam") < 100.0
+
+
+def test_an_unknown_calendar_model_raises_before_the_search():
+    with pytest.raises(ValueError, match=r"'battery\.calendar_model' must be one of"):
+        resolve_optimization_config({**MINIMAL, "battery": {"calendar_model": "invented"}})
 
 
 def test_resolving_twice_changes_nothing():
