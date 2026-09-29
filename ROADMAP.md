@@ -20,11 +20,13 @@ plans behind individual items.
 ## Model accuracy and validation
 
 - **Weekday-aware load-profile alignment and an E-REDES source-file converter.
-  Prerequisite for 0.7.0 time-of-use tariffs.** `load_profile` restamps a source
-  CSV onto the simulation year positionally (`df.index = new_index`), so row 0
-  becomes 1 January regardless of the weekday in the source file or target
-  year. Each profile inherits the weekday phase of the year that generated its
-  file. The bundled demandlib H0 files are 2023 with a Sunday start,
+  Prerequisite for 0.7.0 time-of-use tariffs.** The bundled demandlib H0
+  alignment is corrected in #298: each target day takes the nearest source day
+  of the same weekday, Saturday or Sunday type, searching across New Year, so a
+  shape moves at most four calendar days. External profile families still
+  restamp source rows positionally (`df.index = new_index`), so row 0 becomes
+  1 January regardless of the weekday in the source file or target year. The
+  bundled demandlib H0 files are 2023 with a Sunday start,
   `EREDES_2025_BTN_1000kwh_15min.csv` is 2025 with a Wednesday start, and
   `EREDES_2025_BTN_1000kwh_hourly.csv` is 2023 despite its name. The two
   E-REDES files therefore disagree by four days.

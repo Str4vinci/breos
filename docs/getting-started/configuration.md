@@ -23,9 +23,11 @@ key. The sections below explain how the keys work together.
 Real calendar-year load profiles follow `start_date`: leap years contain
 8,784 hourly (35,136 quarter-hourly) intervals and preserve exact annual
 energy. An 8,760-hour TMY restamped onto a leap year gets the same treatment:
-29 February is a copy of 28 February, for the weather and the load alike, and
-1 March onwards keeps its own data. The result's weather provenance records
-the copied day under `leap_day`.
+29 February is a copy of 28 February for the weather, and 1 March onwards
+keeps its own data. External load profiles placed by position likewise copy
+28 February. The bundled demandlib H0 instead uses the nearest source day of
+the leap day's weekday, Saturday or Sunday type. The result's weather
+provenance records the copied weather day under `leap_day`.
 
 Unknown top-level keys are rejected at load time. A misspelled key such as
 `batery_kwh` raises an error listing the offending key rather than being

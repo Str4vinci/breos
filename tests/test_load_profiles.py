@@ -84,6 +84,146 @@ def test_load_profile_utc_default_keeps_legacy_convention():
     assert len(profile) == 8760
 
 
+@pytest.mark.parametrize("freq", ["h", "15min"])
+def test_bundled_h0_uses_the_target_years_day_types(freq):
+    source = load_profile("demandlib_h0", 1000, start_date="2023-01-01", freq=freq, timezone="UTC").iloc[:, 0]
+    target = load_profile("demandlib_h0", 1000, start_date="2025-01-01", freq=freq, timezone="UTC").iloc[:, 0]
+
+    def shape(values):
+        return values.to_numpy() / values.sum()
+
+    # 8 January is Sunday in the source year but Wednesday in the study year.
+    # The nearest source weekday is Monday 9 January; the source Sunday must
+    # still be used for a target Sunday.
+    np.testing.assert_allclose(shape(target.loc["2025-01-08"]), shape(source.loc["2023-01-09"]), atol=1e-14)
+    np.testing.assert_allclose(shape(target.loc["2025-01-05"]), shape(source.loc["2023-01-08"]), atol=1e-14)
+    assert not np.allclose(shape(target.loc["2025-01-08"]), shape(source.loc["2023-01-08"]))
+    assert target.sum() * (0.25 if freq == "15min" else 1.0) / 1000 == pytest.approx(1000)
+
+
+@pytest.mark.parametrize("freq", ["h", "15min"])
+def test_bundled_h0_leap_day_uses_its_real_day_type(freq):
+    source = load_profile("demandlib_h0", 1000, start_date="2023-01-01", freq=freq, timezone="UTC").iloc[:, 0]
+    target = load_profile("demandlib_h0", 1000, start_date="2020-01-01", freq=freq, timezone="UTC").iloc[:, 0]
+
+    # 29 February 2020 was Saturday. The nearest source Saturday to the
+    # non-leap 28 February anchor is 25 February 2023.
+    leap_shape = target.loc["2020-02-29"].to_numpy() / target.loc["2020-02-29"].sum()
+    saturday_shape = source.loc["2023-02-25"].to_numpy() / source.loc["2023-02-25"].sum()
+    np.testing.assert_allclose(leap_shape, saturday_shape, atol=1e-14)
+    assert target.sum() * (0.25 if freq == "15min" else 1.0) / 1000 == pytest.approx(1000)
+
+
+def test_external_demandlib_h0_uses_its_own_dated_source_year(tmp_path):
+    source_index = pd.date_range("2024-01-01", "2025-01-01", freq="h", inclusive="left")
+    values = np.full(len(source_index), 50.0)
+    values[::24] += np.arange(366)
+    pd.DataFrame({_LOAD_COLUMN: values}, index=source_index).to_csv(tmp_path / "h0SLP_demandlib_1000kwh_hourly.csv")
+
+    source = load_profile("demandlib_h0", 1000, start_date="2024-01-01", rlp_directory=str(tmp_path)).iloc[:, 0]
+    target = load_profile("demandlib_h0", 1000, start_date="2025-01-01", rlp_directory=str(tmp_path)).iloc[:, 0]
+    target_sunday = target.loc["2025-01-05"]
+    source_sunday = source.loc["2024-01-07"]
+    np.testing.assert_allclose(
+        target_sunday.to_numpy() / target_sunday.sum(), source_sunday.to_numpy() / source_sunday.sum()
+    )
+
+
+def test_external_demandlib_h0_without_dated_rows_raises(tmp_path):
+    # Positional placement cannot align day types, so an undated H0 file that
+    # loaded before the alignment fix is now refused.
+    pd.DataFrame({_LOAD_COLUMN: np.full(8760, 50.0)}).to_csv(
+        tmp_path / "h0SLP_demandlib_1000kwh_hourly.csv", index=False
+    )
+
+    with pytest.raises(ValueError, match="needs a dated first row at 1 January 00:00"):
+        load_profile("demandlib_h0", 1000, start_date="2025-01-01", rlp_directory=str(tmp_path))
+
+
+def _assert_source_days(target, source, pairs):
+    """Each target day equals its source day times one profile-wide scale.
+
+    The bundled H0 days have distinct daily energies, so a common scale
+    identifies the source day even where same-type days share a shape.
+    """
+    ratios = [target.loc[day].to_numpy() / source.loc[source_day].to_numpy() for day, source_day in pairs]
+    np.testing.assert_allclose(np.concatenate(ratios), ratios[0][0], rtol=1e-12)
+
+
+# (target day, expected source day in the bundled 2023 file)
+_PINNED_H0_DAYS = {
+    2025: [
+        ("2025-01-08", "2023-01-09"),  # Wednesday; the source Sunday 8 January is skipped
+        ("2025-05-14", "2023-05-15"),  # Wednesday takes a summer-season source Monday
+    ],
+    2026: [
+        ("2026-01-01", "2023-01-02"),  # Thursday; the source 1 January is a Sunday
+        ("2026-01-03", "2023-12-30"),  # Saturday; the search wraps back across New Year
+        ("2026-03-21", "2023-03-18"),  # Saturday takes a winter-season source Saturday
+        ("2026-12-31", "2023-12-29"),  # Thursday
+    ],
+    2020: [
+        ("2020-02-28", "2023-02-28"),  # Friday
+        ("2020-02-29", "2023-02-25"),  # Saturday leap day, anchored on 28 February
+        ("2020-03-01", "2023-02-26"),  # Sunday reaches back into February
+    ],
+    2024: [
+        ("2024-02-29", "2023-02-28"),  # Thursday leap day
+        ("2024-03-01", "2023-03-01"),  # Friday keeps its own date
+    ],
+}
+
+
+@pytest.mark.parametrize("freq", ["h", "15min"])
+@pytest.mark.parametrize("year", sorted(_PINNED_H0_DAYS))
+def test_bundled_h0_pins_the_chosen_source_day(year, freq):
+    source = load_profile("demandlib_h0", 1000, start_date="2023-01-01", freq=freq, timezone="UTC").iloc[:, 0]
+    target = load_profile("demandlib_h0", 1000, start_date=f"{year}-01-01", freq=freq, timezone="UTC").iloc[:, 0]
+
+    _assert_source_days(target, source, _PINNED_H0_DAYS[year])
+    # Another winter weekday has the same shape but not the same scale.
+    with pytest.raises(AssertionError):
+        _assert_source_days(target, source, [*_PINNED_H0_DAYS[year], (_PINNED_H0_DAYS[year][0][0], "2023-01-10")])
+
+
+def test_bundled_h0_day_types_follow_the_civil_calendar_across_dst():
+    source = load_profile("demandlib_h0", 1000, start_date="2023-01-01", freq="15min", timezone="UTC").iloc[:, 0]
+    target = load_profile("demandlib_h0", 1000, start_date="2025-01-01", freq="15min", timezone="Europe/Berlin")
+    civil = target.iloc[:, 0].copy()
+    civil.index = civil.index.tz_localize(None)
+
+    steps = civil.groupby(civil.index.date).size()
+    assert steps.loc[pd.Timestamp("2025-03-30").date()] == 92
+    assert steps.loc[pd.Timestamp("2025-10-26").date()] == 100
+    assert set(steps.drop([pd.Timestamp("2025-03-30").date(), pd.Timestamp("2025-10-26").date()])) == {96}
+
+    # The fall-back hour's second (standard-time) occurrence carries the
+    # profile row; the spring-forward hour does not exist on the civil clock.
+    civil = civil[~civil.index.duplicated(keep="last")]
+    spring = civil.loc["2025-03-30"]
+    source_spring = source.loc["2023-04-02"]
+    source_spring = source_spring[source_spring.index.hour != 2]
+    ratios = np.concatenate(
+        [
+            civil.loc["2025-01-08"].to_numpy() / source.loc["2023-01-09"].to_numpy(),  # Wednesday
+            spring.to_numpy() / source_spring.to_numpy(),  # Sunday, 92 steps
+            civil.loc["2025-10-26"].to_numpy() / source.loc["2023-10-29"].to_numpy(),  # Sunday, 100 steps
+        ]
+    )
+    np.testing.assert_allclose(ratios, ratios[0], rtol=1e-12)
+
+    # Every ordinary civil day carries a source day of its own H0 type.
+    def day_type(day):
+        return 0 if day.weekday() < 5 else day.weekday() - 4
+
+    source_days = source.to_numpy().reshape(365, 96)
+    for day, values in civil.groupby(civil.index.date):
+        if len(values) != 96:
+            continue
+        match = np.abs(source_days * ratios[0] - values.to_numpy()).max(axis=1).argmin()
+        assert day_type(pd.Timestamp(day)) == day_type(pd.Timestamp("2023-01-01") + pd.Timedelta(days=int(match)))
+
+
 @pytest.mark.parametrize(
     ("freq", "expected_length", "expected_end", "hours_per_step"),
     [
@@ -117,15 +257,13 @@ def test_load_profile_uses_real_leap_calendar_and_preserves_energy(
 
 def test_load_profile_leap_day_does_not_shift_march_profile():
     leap = load_profile("demandlib_h0", 1000, start_date="2024-01-01", freq="h", timezone="UTC")
-    canonical = load_profile("demandlib_h0", 1000, start_date="2025-01-01", freq="h", timezone="UTC")
+    source = load_profile("demandlib_h0", 1000, start_date="2023-01-01", freq="h", timezone="UTC")
 
-    # Compare against a within-profile reference because each returned calendar
-    # is independently scaled to the requested annual energy.
-    leap_load = leap.iloc[:, 0]
-    canonical_load = canonical.iloc[:, 0]
-    assert leap_load.loc["2024-03-01 00:00"] / leap_load.iloc[0] == pytest.approx(
-        canonical_load.loc["2025-03-01 00:00"] / canonical_load.iloc[0]
-    )
+    # March 1 in 2024 and 2023 are both weekdays: inserting 29 February must
+    # keep March 1 near its own season, not move it to the source's March 2.
+    march = leap.loc["2024-03-01"].iloc[:, 0]
+    source_march = source.loc["2023-03-01"].iloc[:, 0]
+    np.testing.assert_allclose(march.to_numpy() / march.sum(), source_march.to_numpy() / source_march.sum())
 
 
 def test_non_bundled_profile_requires_external_directory():

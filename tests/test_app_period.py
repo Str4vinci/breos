@@ -19,6 +19,7 @@ import pytest
 from breos import App, cli
 from breos.app_config import resolve_app_config
 from breos.app_inputs import input_configuration_key
+from breos.load_profiles import load_profile
 from breos.montecarlo import MonteCarloSettings, build_year_cache, run_montecarlo
 from breos.optimization_config import resolve_optimization_config
 from tools.generate_app_golden import synthetic_weather
@@ -137,6 +138,16 @@ def test_the_load_is_the_window_share_of_the_scaled_year(pv_only_runs):
     june = _window(full._artifacts.first_year_results_df, "2025-06-01", "2025-06-08")
     assert week.result()["consumption_kwh"] == round(float(june["Houseload"].sum()) / 1000, 2)
     assert week.result()["consumption_kwh"] < 4000 * 8 / 365
+
+    # The window's load is the day-type-aligned H0 year sliced, not a
+    # positional copy of the 2023 source (#298); test_load_profiles pins
+    # which source day each target day takes.
+    load = load_profile("demandlib_h0", 4000, start_date="2025-01-01", freq="h", timezone=LISBON).iloc[:, 0]
+    houseload = week._artifacts.first_year_results_df["Houseload"].to_numpy()
+    window = (load.index >= pd.Timestamp("2025-06-01", tz=LISBON)) & (
+        load.index < pd.Timestamp("2025-06-08", tz=LISBON)
+    )
+    np.testing.assert_array_equal(houseload, load[window].to_numpy())
 
 
 @pytest.mark.parametrize(

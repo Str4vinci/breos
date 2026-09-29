@@ -269,8 +269,10 @@ def load_profile(
             ``bdew_h0``, ``ree_2.0td``, or ``custom``.
         annual_consumption_kwh: Target annual consumption in kWh
         start_date: First day of the profile, 1 January of its year (YYYY-01-01).
-            Profile rows are stamped from 1 January onward, so any other date
-            would shift every season.
+            The bundled H0's source days are matched to the study year's
+            weekday, Saturday or Sunday near the same calendar date. Other
+            profiles are placed by position. A later start would shift every
+            season.
         freq: Time frequency ('h' for hourly, '15min' for 15-minute)
         num_years: Number of years to generate
         rlp_directory: Directory containing RLP files. When omitted, BREOS
@@ -323,18 +325,32 @@ def load_profile(
     path_context = as_file(source.source) if source.packaged else nullcontext(source.source)
     with path_context as csv_file:
         csv_path = Path(csv_file)
-        df, native_freq, column, unit = _load_profile_csv(csv_path, columns, default_unit, source.native_freq)
+        df, native_freq, column, unit, source_start = _load_profile_csv(
+            csv_path, columns, default_unit, source.native_freq
+        )
         sha256 = hashlib.sha256(csv_path.read_bytes()).hexdigest()
 
     # Create a naive wall-clock index for one real calendar year; rows describe
     # household behavior at local clock time and are pinned to the timezone
-    # afterwards.  A Jan-Dec leap year therefore has 8784 hours.
+    # afterwards. A Jan-Dec leap year therefore has 8784 hours.
     start_year = int(start_date[:4])
     steps_per_hour = 4 if native_freq == "15min" else 1
     end_ts = start_ts + pd.DateOffset(years=1)
     new_index = pd.date_range(start=start_ts, end=end_ts, freq=native_freq, inclusive="left")
 
-    df = _fit_profile_to_calendar(df, new_index, steps_per_hour, source.label)
+    if source.key == "demandlib_h0":
+        if (
+            source_start is None
+            or (source_start.month, source_start.day) != (1, 1)
+            or source_start != source_start.normalize()
+        ):
+            raise ValueError(
+                f"The demandlib H0 file {source.label} needs a dated first row at 1 January 00:00 "
+                "to align its day types"
+            )
+        df = _align_h0_day_types(df, new_index, source_start.year, steps_per_hour, source.label)
+    else:
+        df = _fit_profile_to_calendar(df, new_index, steps_per_hour, source.label)
     df.index = new_index
     df.index.name = "DateTime"
 
@@ -436,6 +452,55 @@ def _fit_profile_to_calendar(
     return pd.concat([df.iloc[:leap_day], df.iloc[leap_day + steps_per_day :]], ignore_index=True)
 
 
+def _h0_day_type(day: pd.Timestamp) -> int:
+    """H0 distinguishes weekdays, Saturdays and Sundays, not individual weekdays."""
+    return 0 if day.weekday() < 5 else day.weekday() - 4
+
+
+def _align_h0_day_types(
+    df: pd.DataFrame, target_index: pd.DatetimeIndex, source_year: int, steps_per_hour: int, source: str
+) -> pd.DataFrame:
+    """Use the nearest source-calendar day of the target's H0 day type.
+
+    The source's daily shape stays near the same month and day. Searches wrap
+    around New Year, where late December and early January are both winter.
+    For 29 February in a common-year source, 28 February is the anchor.
+    The source may be bundled or supplied through ``rlp_directory``.
+    """
+    steps_per_day = 24 * steps_per_hour
+    source_days = pd.date_range(f"{source_year}-01-01", f"{source_year + 1}-01-01", freq="D", inclusive="left")
+    if len(df) != len(source_days) * steps_per_day:
+        raise ValueError(
+            f"Load profile {source} has {len(df)} rows, but its timestamp year {source_year} needs "
+            f"{len(source_days) * steps_per_day} at this resolution"
+        )
+    if target_index[0].year == source_year:
+        return df
+
+    source_types = [_h0_day_type(day) for day in source_days]
+    chosen: list[int] = []
+    for day in target_index[::steps_per_day]:
+        anchor = pd.Timestamp(
+            year=source_year,
+            month=day.month,
+            day=28 if day.month == 2 and day.day == 29 and len(source_days) == 365 else day.day,
+        )
+        anchor_pos = (anchor - source_days[0]).days
+        target_type = _h0_day_type(day)
+        for distance in range(8):
+            offsets = (0,) if distance == 0 else (-distance, distance)
+            for offset in offsets:
+                pos = (anchor_pos + offset) % len(source_days)
+                if source_types[pos] == target_type:
+                    chosen.append(pos)
+                    break
+            else:
+                continue
+            break
+    values = df.to_numpy().reshape(len(source_days), steps_per_day, len(df.columns))
+    return pd.DataFrame(values[chosen].reshape(len(target_index), len(df.columns)), columns=df.columns)
+
+
 _ROWS_PER_YEAR = {8760: "h", 8784: "h", 35040: "15min", 35136: "15min"}
 
 
@@ -444,7 +509,7 @@ def _load_profile_csv(
     columns: tuple[tuple[str, str], ...],
     default_unit: str,
     native_freq: Optional[str],
-) -> tuple[pd.DataFrame, str, str, str]:
+) -> tuple[pd.DataFrame, str, str, str, pd.Timestamp | None]:
     """Read a profile CSV, convert its load column to W, and validate it.
 
     ``columns`` lists the accepted ``(column, unit)`` pairs in order; when it
@@ -490,15 +555,17 @@ def _load_profile_csv(
             )
 
     df = raw[[column]].rename(columns={column: LOAD_COLUMN})
-    _validate_profile_rows(df, timestamps, native_freq, csv_file)
+    source_start = _validate_profile_rows(df, timestamps, native_freq, csv_file)
     if unit in _ENERGY_UNIT_TO_WH:
         df[LOAD_COLUMN] *= _ENERGY_UNIT_TO_WH[unit] / get_hours_per_step(native_freq)
     else:
         df[LOAD_COLUMN] *= _UNIT_TO_W[unit]
-    return df, native_freq, column, unit
+    return df, native_freq, column, unit, source_start
 
 
-def _validate_profile_rows(df: pd.DataFrame, timestamps: Optional[pd.Series], native_freq: str, csv_file: Path) -> None:
+def _validate_profile_rows(
+    df: pd.DataFrame, timestamps: Optional[pd.Series], native_freq: str, csv_file: Path
+) -> pd.Timestamp | None:
     """Refuse non-numeric, non-finite, negative, or irregularly stamped rows."""
     values = pd.to_numeric(df["Electrical Consumption [W]"], errors="coerce").to_numpy(dtype=float)
     bad = ~np.isfinite(values)
@@ -519,10 +586,10 @@ def _validate_profile_rows(df: pd.DataFrame, timestamps: Optional[pd.Series], na
     # file has one, it must step evenly at the profile's resolution; a DST gap
     # or a missing row would otherwise move later rows by one step.
     if timestamps is None or pd.api.types.is_numeric_dtype(timestamps):
-        return
+        return None
     stamps = _parse_profile_timestamps(timestamps, csv_file)
     if stamps is None:
-        return
+        return None
     step = pd.Timedelta(pd.tseries.frequencies.to_offset(native_freq))
     irregular = np.flatnonzero(stamps.diff().iloc[1:].to_numpy() != step.to_timedelta64())
     if irregular.size:
@@ -531,6 +598,7 @@ def _validate_profile_rows(df: pd.DataFrame, timestamps: Optional[pd.Series], na
             f"Load profile {csv_file} is not evenly spaced at {native_freq}: data row {row} "
             f"({timestamps.iloc[row]}) follows {timestamps.iloc[row - 1]}."
         )
+    return stamps.iloc[0]
 
 
 def _parse_profile_timestamps(timestamps: pd.Series, csv_file: Path) -> Optional[pd.Series]:
