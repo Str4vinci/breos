@@ -2,15 +2,27 @@
 Utility functions for breos library.
 """
 
-import datetime
 import multiprocessing
 import os
 import re
+from importlib.metadata import PackageNotFoundError, version
 
 import numpy as np
 import pandas as pd
 
 _SAFE_SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
+
+
+def package_version() -> str:
+    """Return the installed BREOS version, or ``"0.0.0+unknown"`` from a source tree.
+
+    ``breos.__version__``, the CLI and every result's provenance read it here,
+    so they cannot report different versions for one run.
+    """
+    try:
+        return version("breos")
+    except PackageNotFoundError:
+        return "0.0.0+unknown"
 
 
 def safe_path_slug(name: str) -> str:
@@ -55,9 +67,10 @@ def _has_fixed_utc_offset(tz) -> bool:
     """
     if tz is None:
         return True
-    if isinstance(tz, datetime.timezone):
-        return True
-    return str(tz).upper() == "UTC"
+    # A tzinfo can answer utcoffset(None) only when its offset never changes:
+    # datetime.timezone, ZoneInfo("UTC") and ZoneInfo("Etc/GMT+1") do, and a
+    # zone with transitions returns None.
+    return tz.utcoffset(None) is not None
 
 
 def _remap_years_vectorized(index: "pd.DatetimeIndex", year_offset: int):
