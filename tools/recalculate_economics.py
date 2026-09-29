@@ -125,6 +125,11 @@ def extract_params(proj_df: pd.DataFrame) -> dict:
 def swapped_pack_kwh(frame: pd.DataFrame) -> float:
     """The capacity one replacement swapped in, from year rows or an hourly frame; 0.0 without one."""
     if "Replaced_Capacity_kWh" in frame.columns and "Replacements" in frame.columns:
+        # A one-swap year gives the capacity exactly; dividing a year's total
+        # by its count can be one ulp off.
+        single = frame[frame["Replacements"] == 1]
+        if not single.empty:
+            return float(single["Replaced_Capacity_kWh"].iloc[0])
         swapped = frame[frame["Replacements"] > 0]
         if not swapped.empty:
             return float(swapped["Replaced_Capacity_kWh"].iloc[0] / swapped["Replacements"].iloc[0])

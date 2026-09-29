@@ -391,6 +391,8 @@ def _replacement_outlays_t0(counts: Any, each: float) -> np.ndarray:
     """
     totals = []
     for count in np.asarray(counts, dtype=float):
+        if count < 0 or count != np.floor(count):
+            raise ValueError(f"a year's Replacements must be a whole non-negative count, got {count!r}")
         total = 0.0
         for _ in range(int(count)):
             total += each
@@ -436,9 +438,15 @@ def price_year_rows(yearly_summary_df: pd.DataFrame, costs: Dict[str, float]) ->
     """
     priced = yearly_summary_df.copy()
     if "Replacement_Cost" not in priced.columns:
-        counts = priced["Replacements"] if "Replacements" in priced.columns else np.zeros(len(priced))
+        if "Replacements" in priced.columns:
+            counts = pd.to_numeric(priced["Replacements"], errors="coerce").fillna(0.0).to_numpy(dtype=float)
+            # Right after the count, where the year rows carried the money
+            # before ledger schema 3.0, so the column order is unchanged.
+            position = list(priced.columns).index("Replacements") + 1
+        else:
+            counts, position = np.zeros(len(priced)), len(priced.columns)
         each = _replacement_cost_each(costs, float(np.sum(counts)))
-        priced["Replacement_Cost"] = _replacement_outlays_t0(counts, each)
+        priced.insert(position, "Replacement_Cost", _replacement_outlays_t0(counts, each))
     days = priced["Simulated_Hours"] / 24 if "Simulated_Hours" in priced.columns else 365
     computed = {
         "Import_Cost": lambda: priced["Import_kWh"] * costs["electricity_cost"],

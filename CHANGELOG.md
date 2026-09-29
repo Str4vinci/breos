@@ -239,10 +239,22 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   function, so a replacement price, learning rate or revaluation no longer
   needs a re-simulation. Frames and year rows that already carry
   `Replacement_Cost` (ledger schema < 3.0) keep the stored money. Every
-  reported number is unchanged: the App golden baseline and the dispatch
-  parity harness match bit for bit, and the t = 0 totals are still added year
-  by year, so they do not depend on the Python version. The optimizer's year
-  tables also gain the year-1-price money columns. Result schema 1.3.
+  number App, Monte Carlo and the optimizer report is unchanged: the App
+  golden baseline and the dispatch parity harness match bit for bit, and the
+  t = 0 totals are still added year by year, so they do not depend on the
+  Python version. Year tables keep `Replacement_Cost` right after
+  `Replacements`; `Replaced_Capacity_kWh` follows it, so the columns after it
+  move one place. The optimizer's year tables also gain the year-1-price
+  money columns. Result schema 1.3.
+
+  Direct callers of the economics see two changes. A hand-built `costs`
+  dict without `replacement_cost_each` raises once the run has a
+  replacement, instead of pricing it from the simulation. And
+  `cost_analysis_projection` on a results frame prices each swap at the
+  `costs` it is given (`calculate_costs` uses `CostParams.battery_cost_per_kwh`),
+  where it used to take the price `BatteryConfig` set, 500 per kWh unless
+  configured; the two agree only when the prices do. A `Replacements` count
+  must be a whole number; a missing one counts as none.
 - `breos sweep` prepares weather, PV, load and battery temperature once per
   distinct input configuration and reuses them across the runs that differ
   only in settings the input stage never reads, such as a tariff, a battery

@@ -61,6 +61,29 @@ def test_year_rows_price_each_replacement():
     assert priced["Replacement_Cost"].tolist() == [0.0, 0.1, 0.1 + 0.1 + 0.1]
 
 
+def test_the_price_sits_after_the_count_as_before():
+    rows = pd.DataFrame({"Year": [1], "Replacements": [1], "Replaced_Capacity_kWh": [5.0], "Import_kWh": [0.0]})
+    priced = price_year_rows(
+        rows.assign(Export_kWh=0.0, Load_kWh=0.0),
+        {"electricity_cost": 0.2, "electricity_sold_cost": 0.05, "daily_power_cost": 0.0, "replacement_cost_each": 9.0},
+    )
+    assert list(priced.columns[:4]) == ["Year", "Replacements", "Replacement_Cost", "Replaced_Capacity_kWh"]
+
+
+def test_replacement_counts_must_be_whole():
+    costs = {
+        "electricity_cost": 0.2,
+        "electricity_sold_cost": 0.05,
+        "daily_power_cost": 0.0,
+        "replacement_cost_each": 9.0,
+    }
+    rows = pd.DataFrame({"Year": [1, 2], "Import_kWh": 0.0, "Export_kWh": 0.0, "Load_kWh": 0.0})
+    # A missing count, as a CSV round trip leaves it, is no replacement.
+    assert price_year_rows(rows.assign(Replacements=[np.nan, 1.0]), costs)["Replacement_Cost"].tolist() == [0.0, 9.0]
+    with pytest.raises(ValueError, match="whole non-negative count"):
+        price_year_rows(rows.assign(Replacements=[0.0, 1.7]), costs)
+
+
 def test_replacements_without_a_price_are_refused():
     rows = pd.DataFrame({"Year": [1], "Replacements": [1], "Import_kWh": [0.0], "Export_kWh": [0.0], "Load_kWh": [0.0]})
     costs = {"electricity_cost": 0.2, "electricity_sold_cost": 0.05, "daily_power_cost": 0.0}
@@ -236,3 +259,9 @@ def test_recalculate_economics_prices_capacity_only_outputs(tmp_path):
     assert projection["Cost_Replacement"].iloc[0] == pytest.approx(
         5.0 * price * 1.02 ** projection["Replacement_Time_Years"].iloc[0]
     )
+
+
+def test_recalculate_economics_reads_the_pack_from_a_one_swap_year():
+    # 19.9 kWh over three swaps divides to 19.900000000000002.
+    rows = pd.DataFrame({"Replacements": [3, 1], "Replaced_Capacity_kWh": [19.9 * 3, 19.9]})
+    assert recalculate_economics.swapped_pack_kwh(rows) == 19.9
