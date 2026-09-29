@@ -46,6 +46,7 @@ def test_every_default_is_filled_in_by_name():
     assert resolved["inverter_efficiency"] == DEFAULTS["inverter_efficiency"]
     assert resolved["battery"]["temperature"] == DEFAULTS["battery_temperature"]
     assert resolved["location"] == {**MINIMAL["location"], "timezone": "UTC", "altitude": None, "name": ""}
+    assert resolved["financials"] == {"inflation_rate": 0.02, "sell_price_inflation": 0.0, "discount_rate": 0.03}
 
 
 def test_resolving_twice_changes_nothing():
@@ -134,3 +135,29 @@ def test_run_settings_come_from_the_argument_or_the_config():
     assert resolve_run_settings(config, pop_size=12, n_gen=5)["n_gen"] == 5
     with pytest.raises(ValueError, match="pop_size = 20 was passed, but optimization.pop_size = 12"):
         resolve_run_settings(config, pop_size=20)
+
+
+def test_whole_numbers_may_be_written_as_floats():
+    resolved = resolve_optimization_config({**MINIMAL, "simulation": {"years_projection": 20.0, "resolution": "H"}})
+    assert resolved["simulation"] == {"years_projection": 20, "resolution": "h"}
+    with pytest.raises(ValueError, match="simulation.years_projection' must be a whole number"):
+        resolve_optimization_config({**MINIMAL, "simulation": {"years_projection": 20.5}})
+
+
+@pytest.mark.parametrize(
+    ("changes", "error"),
+    [
+        ({"tariff": {}}, "tariff"),
+        (
+            {"pv": {"module": "Generic_400W", "params": {"Mpp": 400, "Vmp": 40, "Imp": 10, "Voc": 48, "Isc": 11}}},
+            "pv.params gives the module inline",
+        ),
+        ({"constraints": {"min_tilt_deg": 50.0, "max_tilt_deg": 40.0}}, "min_tilt_deg"),
+        ({"constraints": {"min_tilt_deg": 80.0, "max_tilt_deg": "adjust"}}, "above the maximum tilt \\(60\\)"),
+        ({"optimization": {"objective_basis": "steady_state"}}, "'steady_state' was removed"),
+        ({"optimization": {"objective_basis": "annual"}}, "must be 'projected'"),
+    ],
+)
+def test_the_resolver_refuses_what_the_search_would(changes, error):
+    with pytest.raises(ValueError, match=error):
+        resolve_optimization_config({**MINIMAL, **changes})

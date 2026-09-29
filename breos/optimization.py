@@ -29,7 +29,12 @@ from breos.economics import (
 from breos.emissions import EmissionsParams
 from breos.execution import DEFAULT_EXECUTION_BACKEND, require_backend, validate_execution_backend
 from breos.inverter import inverter_ac_capacity_w as inverter_ac_capacity_w_for
-from breos.optimization_config import DEFAULT_TIMEZONE, resolve_optimization_config, resolve_run_settings
+from breos.optimization_config import (
+    DEFAULT_TIMEZONE,
+    adjusted_max_tilt_deg,
+    resolve_optimization_config,
+    resolve_run_settings,
+)
 from breos.projection import CarryState, ProjectionYear, project_years
 from breos.pv.model_options import configured_pv_model_kwargs
 from breos.result_schema import RESULT_SCHEMA_VERSION
@@ -77,8 +82,7 @@ def _resolve_max_tilt_deg(constraints: Dict[str, Any], latitude: float) -> float
     """Resolve the optimization tilt upper bound from constraints."""
     value = constraints["max_tilt_deg"]
     if value == "adjust":
-        adjusted = 5.0 * round((abs(float(latitude)) + float(constraints["tilt_margin_deg"])) / 5.0)
-        return float(np.clip(adjusted, 60.0, 90.0))
+        return adjusted_max_tilt_deg(latitude, constraints["tilt_margin_deg"])
     return float(value)
 
 
@@ -264,11 +268,11 @@ DEFAULT_PROJECT_LIFESPAN = 20
 def _pv_params_from_config(params: Dict[str, Any]) -> PVModuleParams:
     """Build PVModuleParams from an inline config mapping."""
     return PVModuleParams(
-        Mpp=params.get("Mpp", 550),
-        Vmp=params.get("Vmp", 42.05),
-        Imp=params.get("Imp", 13.08),
-        Voc=params.get("Voc", 49.88),
-        Isc=params.get("Isc", 14.01),
+        Mpp=params["Mpp"],
+        Vmp=params["Vmp"],
+        Imp=params["Imp"],
+        Voc=params["Voc"],
+        Isc=params["Isc"],
         T_Pmax_pct=params.get("T_Pmax_pct", params.get("T_Pmax", -0.34)),
         T_Voc_pct=params.get("T_Voc_pct", params.get("T_Voc", -0.26)),
         T_Isc_pct=params.get("T_Isc_pct", params.get("T_Isc", 0.05)),
@@ -1007,27 +1011,14 @@ try:
             self.max_modules = self.constraints["max_modules"]
             self.min_tilt_deg = float(self.constraints["min_tilt_deg"])
             self.max_tilt_deg = _resolve_max_tilt_deg(self.constraints, self.location["latitude"])
-            if self.min_tilt_deg > self.max_tilt_deg:
-                raise ValueError(
-                    f"constraints.min_tilt_deg ({self.min_tilt_deg:g}) is above the maximum tilt "
-                    f"({self.max_tilt_deg:g}); lower it or raise constraints.max_tilt_deg"
-                )
             self.enforce_zeb = bool(self.constraints["enforce_zeb"])
             self.freq = config["simulation"]["resolution"]
             # Resolved once: candidate scoring is the hottest loop here.
             self.model_options = configured_pv_model_kwargs(config)
             self.opt_cfg = config["optimization"]
-            # Candidates are scored over the project lifetime only. The key
-            # stays readable so a config that still names the removed annual
-            # basis fails loudly instead of being scored on another basis.
-            self.objective_basis = str(self.opt_cfg["objective_basis"]).strip().lower()
-            if self.objective_basis == "steady_state":
-                raise ValueError(
-                    "optimization.objective_basis = 'steady_state' was removed in 0.7.0: candidates are "
-                    "scored over the projected lifetime only. Use 'projected' or omit the key."
-                )
-            if self.objective_basis != "projected":
-                raise ValueError("optimization.objective_basis must be 'projected'")
+            # Candidates are scored over the project lifetime only; the
+            # resolver refuses the removed annual basis.
+            self.objective_basis = self.opt_cfg["objective_basis"]
             self.projected_years, self.projected_degradation_rate = _resolve_horizon_and_pv_degradation(config)
             # Validated here so a bad engine setting fails before the first
             # candidate rather than inside a worker.

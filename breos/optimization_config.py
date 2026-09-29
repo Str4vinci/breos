@@ -37,6 +37,7 @@ from breos.config_schema import (
     table,
     text,
 )
+from breos.economics import DEFAULT_DISCOUNT_RATE, DEFAULT_INFLATION_RATE
 from breos.emissions import EmissionsParams
 from breos.pv.model_options import PV_MODEL_CONFIG_KEYS
 
@@ -70,12 +71,16 @@ _REMOVED_KEYS = {
 
 
 def _integer(minimum: int) -> Any:
+    """A whole number, returned as ``int``; ``20.0`` is accepted, ``20.5`` is not."""
+
     def check(value: Any, where: str) -> int:
-        if isinstance(value, bool) or not isinstance(value, int):
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
             raise TypeError(f"'{where}' must be a whole number")
+        if isinstance(value, float) and not (math.isfinite(value) and value.is_integer()):
+            raise ValueError(f"'{where}' must be a whole number")
         if value < minimum:
             raise ValueError(f"'{where}' must be >= {minimum}")
-        return value
+        return int(value)
 
     return check
 
@@ -127,6 +132,17 @@ def _max_tilt(value: Any, where: str) -> Any:
             return "adjust"
         raise ValueError(f"Unsupported {where} value: {value!r}. Use a number or 'adjust'.")
     return number(minimum=0, maximum=90)(value, where)
+
+
+def _objective_basis(value: Any, where: str) -> str:
+    if isinstance(value, str) and value.strip().lower() == "steady_state":
+        raise ValueError(
+            "optimization.objective_basis = 'steady_state' was removed in 0.7.0: candidates are "
+            "scored over the projected lifetime only. Use 'projected' or omit the key."
+        )
+    if not (isinstance(value, str) and value.strip().lower() == DEFAULT_OBJECTIVE_BASIS):
+        raise ValueError("optimization.objective_basis must be 'projected'")
+    return DEFAULT_OBJECTIVE_BASIS
 
 
 def _early_stop(value: Any, where: str) -> Any:
@@ -261,7 +277,7 @@ OPTIMIZATION_TABLE = TableSpec(
     "optimization",
     keys={
         "algorithm": choice(("nsga2",)),
-        "objective_basis": anything,
+        "objective_basis": _objective_basis,
         "early_stop": _early_stop,
         "pop_size": _integer(1),
         "n_gen": _integer(1),
@@ -271,7 +287,7 @@ OPTIMIZATION_TABLE = TableSpec(
 )
 SIMULATION_TABLE = TableSpec(
     "simulation",
-    keys={"resolution": choice(("h", "15min"), case_insensitive=False), "years_projection": _integer(1)},
+    keys={"resolution": choice(("h", "15min")), "years_projection": _integer(1)},
 )
 INVERTER_TABLE = TableSpec("inverter", keys={"efficiency": number(minimum=0, maximum=1, min_exclusive=True)})
 EMISSIONS_TABLE = TableSpec("emissions", keys={field.name: anything for field in fields(EmissionsParams)})
@@ -311,6 +327,11 @@ def _first_set(where: tuple[tuple[str, Any], ...], default: Any) -> Any:
     return default
 
 
+def adjusted_max_tilt_deg(latitude: float, margin_deg: float) -> float:
+    """The ``max_tilt_deg = "adjust"`` bound: 5° × round((|latitude| + margin) / 5), within 60–90°."""
+    return float(min(max(5.0 * round((abs(float(latitude)) + float(margin_deg)) / 5.0), 60.0), 90.0))
+
+
 def resolve_optimization_config(config: Mapping[str, Any]) -> dict[str, Any]:
     """Check an optimization config and return it with every default filled in.
 
@@ -348,7 +369,9 @@ def resolve_optimization_config(config: Mapping[str, Any]) -> dict[str, Any]:
         if key in OPTIMIZATION_SCALARS:
             resolved[key] = OPTIMIZATION_SCALARS[key](value, key)
             continue
-        if value is None or (key in ("emissions", "tariff", "smart_charging") and not value):
+        # An empty [emissions] table turns emissions off, as it always has;
+        # an empty [tariff] or [smart_charging] is checked like any other.
+        if value is None or (key == "emissions" and not value):
             resolved[key] = None
             continue
         if isinstance(value, Mapping):
@@ -369,6 +392,9 @@ def resolve_optimization_config(config: Mapping[str, Any]) -> dict[str, Any]:
     resolved["pv"] = pv
     financials = resolved.setdefault("financials", {}) or {}
     resolved["financials"] = financials
+    financials.setdefault("inflation_rate", DEFAULT_INFLATION_RATE)
+    financials.setdefault("sell_price_inflation", 0.0)
+    financials.setdefault("discount_rate", DEFAULT_DISCOUNT_RATE)
     simulation = resolved.setdefault("simulation", {}) or {}
     resolved["simulation"] = simulation
     inverter = resolved.pop("inverter", None) or {}
@@ -399,7 +425,7 @@ def resolve_optimization_config(config: Mapping[str, Any]) -> dict[str, Any]:
     if "params" not in pv:
         pv["module"] = module or default_module_key()
     elif module is not None:
-        pv["module"] = module
+        raise ValueError("pv.params gives the module inline, so it is not also named; remove pv.module or pv_module")
     resolved.setdefault("dc_output_scale", 1.0)
     resolved.setdefault("ac_output_scale", 1.0)
 
@@ -424,6 +450,14 @@ def resolve_optimization_config(config: Mapping[str, Any]) -> dict[str, Any]:
     constraints.setdefault("max_tilt_deg", DEFAULT_MAX_TILT_DEG)
     constraints.setdefault("tilt_margin_deg", DEFAULT_TILT_MARGIN_DEG)
     constraints.setdefault("enforce_zeb", False)
+    max_tilt = constraints["max_tilt_deg"]
+    if max_tilt == "adjust":
+        max_tilt = adjusted_max_tilt_deg(location["latitude"], constraints["tilt_margin_deg"])
+    if constraints["min_tilt_deg"] > max_tilt:
+        raise ValueError(
+            f"constraints.min_tilt_deg ({constraints['min_tilt_deg']:g}) is above the maximum tilt "
+            f"({max_tilt:g}); lower it or raise constraints.max_tilt_deg"
+        )
 
     mode = resolved.setdefault("mode", {}) or {}
     resolved["mode"] = mode
