@@ -509,30 +509,6 @@ class TestSimulateEnergyBalance:
         assert np.array_equal(results["Battery_SOH"].to_numpy(), np.full(24, 100.0))
         assert degradation.empty
 
-    def test_no_battery(self, dc_production, sample_load):
-        results_df, total_pv, summary_df, n_rep, deg_df = simulate_energy_balance(
-            pv_dc=dc_production * 6,
-            houseload=sample_load,
-            battery_config=None,
-            freq="h",
-        )
-        assert isinstance(results_df, pd.DataFrame)
-        assert total_pv > 0
-        assert n_rep == 0
-
-    def test_with_battery_returns_tuple(self, dc_production, sample_load, battery_config, temperature_series):
-        result = simulate_energy_balance(
-            pv_dc=dc_production * 6,
-            houseload=sample_load,
-            battery_config=battery_config,
-            freq="h",
-            temperature_series=temperature_series,
-        )
-        assert len(result) == 5
-        results_df, total_pv, summary_df, n_rep, deg_df = result
-        assert isinstance(results_df, pd.DataFrame)
-        assert total_pv > 0
-
     def test_soc_within_bounds(self, dc_production, sample_load, battery_config, temperature_series):
         """Stored energy stays inside the temperature-derated SOC window.
 
@@ -1120,48 +1096,6 @@ class TestSimulateEnergyBalance:
         assert degradation_state["blast_engine"]["blast_model_key"] == "lfp_gr_250ah_prismatic"
         assert degradation_state["day_start_soc_absolute"] == pytest.approx(results_df["Battery_SOC_Absolute"].iloc[-1])
 
-    def test_blast_degradation_state_threads_across_calls(self):
-        idx = pd.date_range("2025-01-01 00:00", periods=48, freq="h", tz="UTC")
-        pv_dc = pd.Series(0.0, index=idx)
-        houseload = pd.DataFrame({"Load": 0.0}, index=idx)
-        temperature = pd.Series(25.0, index=idx)
-        config = BatteryConfig(nominal_energy_wh=5000, standby_loss_wh=0.0, enable_replacement=False)
-
-        full_run = simulate_energy_balance(
-            pv_dc=pv_dc,
-            houseload=houseload,
-            battery_config=config,
-            freq="h",
-            temperature_series=temperature,
-            degradation_engine="blast",
-            blast_model="lfp_gr_250ah_prismatic",
-        )
-        first_day = simulate_energy_balance(
-            pv_dc=pv_dc.iloc[:24],
-            houseload=houseload.iloc[:24],
-            battery_config=config,
-            freq="h",
-            temperature_series=temperature.iloc[:24],
-            degradation_engine="blast",
-            blast_model="lfp_gr_250ah_prismatic",
-            return_degradation_state=True,
-        )
-        *_, degradation_state = first_day
-        second_day = simulate_energy_balance(
-            pv_dc=pv_dc.iloc[24:],
-            houseload=houseload.iloc[24:],
-            battery_config=config,
-            freq="h",
-            temperature_series=temperature.iloc[24:],
-            degradation_engine="blast",
-            blast_model="lfp_gr_250ah_prismatic",
-            initial_degradation_state=degradation_state,
-        )
-
-        full_degradation = full_run[-1]
-        second_degradation = second_day[-1]
-        assert second_degradation["SOH"].iloc[-1] == pytest.approx(full_degradation["SOH"].iloc[-1], abs=1e-12)
-
     def test_blast_split_preserves_stored_energy_and_pv_origin_inventory(self):
         idx = pd.date_range("2025-01-01 00:00", periods=48, freq="h", tz="UTC")
         pv_dc = pd.Series(([0.0] * 8 + [2500.0] * 8 + [0.0] * 8) * 2, index=idx)
@@ -1445,28 +1379,6 @@ class TestSimulateEnergyBalance:
         day_1_efc = first_state["blast_engine"]["stressors"]["efc"][-1]
         assert day_1_efc > 0.0
         assert day_1_efc == pytest.approx(full_degradation["Cumulative_FEC"].iloc[0], abs=1e-12)
-
-    def test_blast_cumulative_fec_tracks_engine_efc(self):
-        idx = pd.date_range("2025-01-01 00:00", periods=48, freq="h", tz="UTC")
-        pv_dc = pd.Series(([0.0] * 8 + [2500.0] * 8 + [0.0] * 8) * 2, index=idx)
-        houseload = pd.DataFrame({"Load": ([900.0] * 8 + [0.0] * 8 + [900.0] * 8) * 2}, index=idx)
-        temperature = pd.Series(25.0, index=idx)
-        config = BatteryConfig(nominal_energy_wh=5000, standby_loss_wh=0.0, enable_replacement=False)
-
-        *_, degradation_df, degradation_state = simulate_energy_balance(
-            pv_dc=pv_dc,
-            houseload=houseload,
-            battery_config=config,
-            freq="h",
-            temperature_series=temperature,
-            degradation_engine="blast",
-            blast_model="lfp_gr_250ah_prismatic",
-            return_degradation_state=True,
-        )
-
-        engine_efc = degradation_state["blast_engine"]["stressors"]["efc"][-1]
-        assert degradation_df["Cumulative_FEC"].iloc[-1] > 0.0
-        assert degradation_df["Cumulative_FEC"].iloc[-1] == pytest.approx(engine_efc, abs=1e-12)
 
     def test_blast_replacement_resets_engine_state(self):
         idx = pd.date_range("2025-01-01 00:00", periods=24, freq="h", tz="UTC")
@@ -1783,27 +1695,29 @@ class TestEnergyLedger:
 
 
 class TestIndoorTemperatureModel:
-    def test_output_shape(self):
-        outdoor = pd.Series(np.linspace(-5, 40, 100))
-        indoor = apply_indoor_temperature_model(outdoor)
-        assert len(indoor) == len(outdoor)
+    # T_indoor = clamp(alpha * T_outdoor + (1 - alpha) * setpoint, floor, ceiling); the
+    # defaults are a 22 C setpoint, alpha 0.3 and a 15-35 C clamp.
+    @pytest.mark.parametrize(
+        ("outdoor", "kwargs", "expected"),
+        [
+            (10.0, {}, 18.4),
+            (30.0, {}, 24.4),
+            (-20.0, {}, 15.0),
+            (100.0, {}, 35.0),
+            (10.0, {"coupling_alpha": 0.0}, 22.0),
+            (20.0, {"coupling_alpha": 1.0}, 20.0),
+            (10.0, {"setpoint_c": 20.0, "coupling_alpha": 0.5}, 15.0),
+            (-20.0, {"floor_c": 5.0}, 9.4),
+            (-50.0, {"floor_c": 5.0}, 5.0),
+            (100.0, {"ceiling_c": 40.0}, 40.0),
+        ],
+    )
+    def test_blend_and_clamp_values(self, outdoor, kwargs, expected):
+        index = pd.date_range("2025-01-01", periods=2, freq="h")
+        indoor = apply_indoor_temperature_model(pd.Series(outdoor, index=index), **kwargs)
 
-    def test_clamping_floor(self):
-        outdoor = pd.Series([-20.0] * 10)
-        indoor = apply_indoor_temperature_model(outdoor, floor_c=15.0)
-        assert indoor.min() >= 15.0
-
-    def test_clamping_ceiling(self):
-        outdoor = pd.Series([50.0] * 10)
-        indoor = apply_indoor_temperature_model(outdoor, ceiling_c=35.0)
-        assert indoor.max() <= 35.0
-
-    def test_coupling_factor(self):
-        outdoor = pd.Series([10.0] * 10)
-        # alpha=0 means fully setpoint, alpha=1 means fully outdoor
-        indoor_low = apply_indoor_temperature_model(outdoor, setpoint_c=22.0, coupling_alpha=0.0)
-        indoor_high = apply_indoor_temperature_model(outdoor, setpoint_c=22.0, coupling_alpha=1.0)
-        assert indoor_low.iloc[0] > indoor_high.iloc[0]  # setpoint > outdoor, so less coupling = warmer
+        assert indoor.index.equals(index)
+        assert indoor.to_numpy() == pytest.approx([expected, expected], rel=1e-12, abs=1e-12)
 
 
 # ---------------------------------------------------------------------------

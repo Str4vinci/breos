@@ -16,7 +16,7 @@ compiled and cached.
 
 from __future__ import annotations
 
-from typing import Any, Tuple
+from typing import Any
 
 from breos._dispatch import _day_arguments
 
@@ -64,40 +64,26 @@ def jit_cache_state() -> str | None:
     return _JIT_CACHE_STATE
 
 
-def observed_jit_cache_state() -> str | None:
-    """Return the cache outcome observed by the current worker process."""
-    return jit_cache_state()
-
-
 def _cache_event_count(events: Any) -> int:
     """Return the number of cache events in a Numba dispatcher counter."""
     return int(sum(events.values()))
 
 
-def _build_kernel() -> Any:
+def _kernel() -> Any:
     """Return the compiled dispatch kernel, importing the compiled module lazily.
 
     :mod:`breos._numba_dispatch_kernels` imports Numba at its top, so it is
     imported here rather than above: this module must stay importable without
     the optional dependency, because :func:`require_numba_dispatch_day` is
-    what turns a missing Numba into a readable error.
+    what turns a missing Numba into a readable error. Python caches the
+    imported module, so later calls cost one lookup.
     """
     from breos._numba_dispatch_kernels import _dispatch_day_kernel
 
     return _dispatch_day_kernel
 
 
-_KERNEL: Any = None
-
-
-def _kernel() -> Any:
-    global _KERNEL
-    if _KERNEL is None:
-        _KERNEL = _build_kernel()
-    return _KERNEL
-
-
-def _dispatch_day_numba(out: Any, *args: Any, **state: Any) -> Tuple[float, float, float, float]:
+def _dispatch_day_numba(out: Any, *args: Any, **state: Any) -> None:
     """Run the compiled ``_dispatch_day``; takes the arguments of ``_day_arguments``."""
     global _JIT_CACHE_STATE
 
@@ -108,7 +94,7 @@ def _dispatch_day_numba(out: Any, *args: Any, **state: Any) -> Tuple[float, floa
         cache_hits_before = _cache_event_count(kernel.stats.cache_hits)
         cache_misses_before = _cache_event_count(kernel.stats.cache_misses)
 
-    result = kernel(*_day_arguments(out, *args, **state))
+    kernel(*_day_arguments(out, *args, **state))
     if observe_cache:
         cache_hits_after = _cache_event_count(kernel.stats.cache_hits)
         cache_misses_after = _cache_event_count(kernel.stats.cache_misses)
@@ -125,7 +111,6 @@ def _dispatch_day_numba(out: Any, *args: Any, **state: Any) -> Tuple[float, floa
             # observation failed, and the simulation continues -- its numbers
             # do not depend on this.
             _JIT_CACHE_STATE = "unknown"
-    return result
 
 
 def require_numba_dispatch_day() -> Any:

@@ -211,8 +211,9 @@ drift-prone — keep additions minimal until that lands):
 
 `degradation_engine="native"` (default) ⇒ existing behavior, **bit-for-bit**.
 
-When `blast_model` is set, its cell-model profile (see below) is resolved before
-user overrides are applied, following the profile-registry precedence rule.
+When `blast_model` is set, its cell-model profile (see below) selects the
+engine and model. It sets no operating value; user configuration resolves over
+the global App defaults.
 
 ## Model catalog (vendor all 14, enable in phases)
 
@@ -265,10 +266,11 @@ There are **three tiers** of profile data; only the third can be a user
 
 `breos/degradation/profiles.py` is the single declarative registry for Python
 and CLI discovery, engine class lookup, model identity, citations, ranges, and
-output capabilities. Configuration resolves in this order:
+output capabilities. Because no profile carries operating defaults,
+configuration resolves in this order:
 
 ```text
-explicit user config > sourced profile default > global App default
+explicit user config > global App default
 ```
 
 Cost remains in the cost-preset system. Experimental-range conflicts warn

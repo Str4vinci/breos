@@ -15,7 +15,6 @@ from breos.degradation.profiles import (
     CORE_BLAST_MODEL_KEYS,
     ENABLED_BLAST_MODEL_KEYS,
     get_battery_model_profile,
-    merge_battery_config_layers,
 )
 
 
@@ -80,15 +79,6 @@ def test_registry_upstream_identity_matches_vendoring_manifest():
     manifest = (Path(__file__).parents[1] / "breos/degradation/blast/VENDORED.md").read_text(encoding="utf-8")
     assert len(BLAST_UPSTREAM_COMMIT) == 40
     assert BLAST_UPSTREAM_COMMIT in manifest
-
-
-def test_config_precedence_is_user_then_profile_then_global():
-    resolved = merge_battery_config_layers(
-        {"battery_min_soc": 0.1, "battery_max_soc": 0.9, "source": "global"},
-        {"battery_min_soc": 0.2, "source": "profile"},
-        {"battery_min_soc": 0.3},
-    )
-    assert resolved == {"battery_min_soc": 0.3, "battery_max_soc": 0.9, "source": "profile"}
 
 
 def test_native_is_default_and_blast_is_explicit_opt_in():

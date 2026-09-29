@@ -46,16 +46,6 @@ class BlastWarningCollector:
         self._profile = BATTERY_MODEL_REGISTRY[blast_model_key]
         self._records = {str(record["code"]): deepcopy(dict(record)) for record in records}
 
-    @classmethod
-    def from_snapshot(
-        cls,
-        blast_model_key: str,
-        records: Iterable[Mapping[str, Any]],
-    ) -> BlastWarningCollector:
-        """Restore warning history from a serialized engine snapshot."""
-
-        return cls(blast_model_key, records)
-
     def _record(
         self,
         code: str,

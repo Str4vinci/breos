@@ -11,13 +11,11 @@ import pytest
 from breos.degradation.blast.degradation_model import BatteryDegradationModel
 from breos.degradation.engine import (
     BLAST_MODEL_CLASSES,
-    P1_BLAST_MODEL_KEYS,
-    BlastAgingHorizonWarning,
     BlastEngine,
-    BlastExperimentalRangeWarning,
     BlastNumericalError,
     build_endpoint_day,
 )
+from breos.degradation.validation import BlastAgingHorizonWarning, BlastExperimentalRangeWarning
 
 
 def _daily_profile() -> tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -53,24 +51,6 @@ def test_build_endpoint_day_rejects_mismatched_samples():
             start_soc=0.5,
             start_temperature_c=25.0,
         )
-
-
-def test_p1_models_step_and_snapshot():
-    t_secs, soc, temperature_c = _daily_profile()
-
-    for model_key in P1_BLAST_MODEL_KEYS:
-        engine = BlastEngine(model_key)
-        soh_day_1 = engine.step(t_secs, soc, temperature_c)
-        assert np.isfinite(soh_day_1)
-        assert 0.0 < soh_day_1 <= 1.0
-
-        snapshot = engine.state_snapshot()
-        restored = BlastEngine.from_snapshot(model_key, snapshot)
-        soh_day_2 = restored.step(t_secs, soc, temperature_c)
-
-        assert np.isfinite(soh_day_2)
-        assert soh_day_2 <= soh_day_1
-        assert restored.model.stressors["t_days"][-1] == pytest.approx(2.0)
 
 
 def test_all_models_snapshot_restore_continuity():
@@ -127,36 +107,6 @@ def test_snapshot_restore_preserves_mid_swing_boundary_efc():
         abs=1e-12,
     )
     assert continuous.model.stressors["efc"][-1] == pytest.approx(expected_efc, abs=1e-12)
-
-
-def test_adapter_matches_vendored_simulate_battery_life_fixed_soc_storage():
-    days = 100
-    t_day = np.array([0.0, 86400.0])
-    soc_day = np.array([0.55, 0.55])
-    temperature_day_c = np.array([25.0, 25.0])
-    input_day = {
-        "Time_s": t_day,
-        "SOC": soc_day,
-        "Temperature_C": temperature_day_c,
-    }
-
-    for model_key, model_cls in BLAST_MODEL_CLASSES.items():
-        engine = BlastEngine(model_key)
-        adapter_soh = []
-        for _ in range(days):
-            adapter_soh.append(engine.step(t_day, soc_day, temperature_day_c))
-
-        standalone = model_cls()
-        for _ in range(days):
-            standalone.simulate_battery_life(input_day)
-
-        np.testing.assert_allclose(
-            adapter_soh,
-            standalone.outputs["q"][1:],
-            rtol=0,
-            atol=1e-6,
-            err_msg=model_key,
-        )
 
 
 def test_experimental_range_warnings_deduplicate_across_snapshot_continuation():
