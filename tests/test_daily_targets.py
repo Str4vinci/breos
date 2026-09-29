@@ -1,6 +1,7 @@
 """The daily charge-target planner behind daily-persistence smart charging (plan step 7)."""
 
 import importlib.util
+import itertools
 import math
 from dataclasses import replace
 
@@ -11,10 +12,12 @@ import pytest
 from breos._daily_targets import (
     DEFAULT_HORIZON_DAYS,
     DailyTargetProblem,
+    _DayEvaluator,
     daily_target_instructions,
     solve_daily_targets,
     target_grid,
 )
+from breos._dispatch import lfp_capacity_factor
 from breos.app_config import resolve_tariff_spec
 from breos.battery import BatteryConfig, simulate_energy_balance
 from breos.dispatch_instructions import DispatchInstructions
@@ -129,10 +132,62 @@ def test_the_plan_matches_the_legacy_dynamic_program(
     assert plan.objective == plan.stage_cost + plan.terminal_cost
 
 
+def _limited_pack():
+    return _pack(inverter_ac_capacity_w=2500.0, max_charge_power_w=1500.0, max_discharge_power_w=2000.0)
+
+
+def _cheapest_schedule_cost(problem, efficiency):
+    """The lowest objective of every one of the 11**3 schedules of a 3-day problem.
+
+    Each schedule is chained through the planner's own day transitions from
+    the unsnapped energy and priced with the same refill, so it is the exact
+    optimum the gridded value function approximates.
+    """
+    levels = np.linspace(0.0, 1.0, 11)
+    evaluator = _DayEvaluator(problem, levels, "python")
+    refill_per_wh = OFF_PEAK / 1000 / (efficiency * 0.95)
+    best = math.inf
+    for schedule in itertools.product(range(len(levels)), repeat=3):
+        energy, cost = 1200.0, 0.0
+        for day, level in enumerate(schedule):
+            day_cost, energy = evaluator.run(day, energy, level)
+            cost += day_cost
+        best = min(best, cost + max(0.0, 4500.0 - energy) * refill_per_wh)
+    return best
+
+
+@pytest.mark.parametrize(("config", "efficiency"), [(None, 1.0), (_limited_pack(), 0.93)], ids=["plain", "limited"])
+def test_the_plan_is_the_cheapest_of_every_schedule(config, efficiency):
+    problem = _problem(3, config=config, efficiency=efficiency)
+    plan = solve_daily_targets(problem, initial_energy_wh=1200.0)
+    assert plan.objective == pytest.approx(_cheapest_schedule_cost(problem, efficiency), rel=0, abs=1e-12)
+
+
+def test_a_two_state_grid_interpolates_close_to_the_optimum():
+    # With only the window's two ends on the grid, reading the value
+    # function between them keeps the plan within 0.001 of the optimum; a
+    # nearest-state lookup misses by 0.009 here.
+    problem = _problem(3)
+    plan = solve_daily_targets(problem, initial_energy_wh=1200.0, soc_states=2)
+    gap = plan.objective - _cheapest_schedule_cost(problem, 1.0)
+    assert 0.0 <= gap < 1e-3
+
+
+def test_the_planner_adds_no_compiled_signature():
+    pytest.importorskip("numba")
+    from breos._numba_dispatch import _kernel
+
+    problem = _problem(2)
+    _priced_run(problem, problem.instructions, execution_backend="numba")
+    signatures = len(_kernel().signatures)
+    solve_daily_targets(problem, target_levels=3, soc_states=3, execution_backend="numba")
+    assert len(_kernel().signatures) == signatures
+
+
 @pytest.mark.parametrize("steps_per_day", [24, 96])
 def test_python_and_numba_plans_agree_bit_for_bit(steps_per_day):
     pytest.importorskip("numba")
-    config = _pack(inverter_ac_capacity_w=2500.0, max_charge_power_w=1500.0, max_discharge_power_w=2000.0)
+    config = _limited_pack()
     temperature = 8.0 + 10.0 * np.sin(np.arange(3 * steps_per_day) / steps_per_day * 2 * np.pi)
     problem = _problem(3, config=config, steps_per_day=steps_per_day, temperature_c=temperature, efficiency=0.93)
     python = solve_daily_targets(problem, initial_energy_wh=900.0, execution_backend="python")
@@ -196,6 +251,30 @@ def test_a_terminal_shortfall_is_bought_back_at_the_cheapest_price_through_both_
     assert plan.end_energy_wh < full_wh
     expected = (full_wh - plan.end_energy_wh) / 1000 * OFF_PEAK / (0.9 * 0.95)
     assert plan.terminal_cost == pytest.approx(expected, rel=1e-12)
+
+
+def test_the_refill_is_priced_where_the_battery_may_grid_charge():
+    # Two midday peak steps at 0.02: cheap, but the instructions never charge there.
+    problem = _problem(n_steps=68)
+    prices = problem.import_price_per_kwh.copy()
+    prices[[12, 13]] = 0.02
+    problem = replace(problem, import_price_per_kwh=prices)
+    plan = solve_daily_targets(problem, initial_energy_wh=1200.0)
+    shortfall_wh = 4500.0 - plan.end_energy_wh
+    assert plan.terminal_cost == pytest.approx(shortfall_wh / 1000 * OFF_PEAK / 0.95, rel=1e-12)
+
+    # With no step that may grid-charge, the cheapest step of the window prices it.
+    never = replace(problem.instructions, grid_target_fraction=np.full(68, np.nan))
+    idle = solve_daily_targets(replace(problem, instructions=never), initial_energy_wh=1200.0)
+    assert idle.terminal_cost == pytest.approx((4500.0 - idle.end_energy_wh) / 1000 * 0.02 / 0.95, rel=1e-12)
+
+
+def test_the_refill_target_is_full_at_the_last_steps_temperature():
+    problem = _problem(n_steps=68, temperature_c=np.linspace(20.0, 10.0, 96))
+    plan = solve_daily_targets(problem, initial_energy_wh=1200.0)
+    target_wh = 4500.0 * lfp_capacity_factor(problem.temperature_c[-1])
+    assert target_wh < 4500.0
+    assert plan.terminal_cost == pytest.approx((target_wh - plan.end_energy_wh) / 1000 * OFF_PEAK / 0.95, rel=1e-12)
 
 
 def test_the_refill_cost_stops_the_last_day_draining_the_battery():

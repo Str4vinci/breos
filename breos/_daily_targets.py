@@ -25,6 +25,20 @@ over a project year.
 
 Days are civil days (ADR 0002 A1), given as the resolved tariff's
 ``day_starts``. The legacy tool used positional ``steps_per_day`` windows.
+Production still advances health on positional degradation windows, so a
+closed-loop controller that plans civil days will run a degradation window
+in two ``_dispatch_day`` calls when a civil day starts inside it. Carrying
+the stored energy and both origins from the first call into the second gives
+the same energy as one call. The day-close replacement path must then take
+``battery_energy_beginning`` from the call that holds the window's last step.
+
+Two choices depart from the legacy tool on purpose. The terminal refill is
+priced at the cheapest step that may grid-charge, not the cheapest step of
+the window: energy cannot be bought back in a period the instructions never
+charge in, and a cheaper period elsewhere would undervalue what the battery
+holds at the end and push a rolling controller to drain it. The refill
+target is the max-SOC energy at the last step's temperature, the most the
+battery can then hold, rather than at the reference capacity.
 """
 
 from __future__ import annotations
@@ -160,6 +174,8 @@ class DailyTargetProblem:
                 raise ValueError(f"'{name}' must hold one value per instruction step ({n}), got shape {array.shape}")
             if not np.isfinite(array).all():
                 raise ValueError(f"'{name}' must be finite")
+            # Read-only here; the planner dispatches on writable copies, so
+            # the compiled kernel keeps the one signature production uses.
             array.setflags(write=False)
             object.__setattr__(self, name, array)
         object.__setattr__(self, "day_starts", tuple(int(s) for s in _checked_day_starts(self.day_starts, n)))
@@ -240,8 +256,9 @@ class DailyTargetPlan:
 
     ``objective`` is ``stage_cost`` plus ``terminal_cost``, in the tariff's
     currency. ``stage_cost`` is import cost less export revenue over the
-    window; ``terminal_cost`` buys back, at the window's cheapest import
-    price, the stored energy that ends below the terminal target.
+    window; ``terminal_cost`` buys back, at the cheapest import price of a
+    step that may grid-charge, the stored energy that ends below the
+    terminal target.
     """
 
     targets: np.ndarray
@@ -261,6 +278,7 @@ class _DayEvaluator:
         hours = problem.hours_per_step
         self.problem = problem
         self.buffers = _ResultBuffers(len(problem.instructions))
+        self.series = (np.array(problem.pv_dc_w), np.array(problem.load_w), np.array(problem.temperature_c))
         self.dispatch_day = _resolve_dispatch_day(execution_backend)
         self.level_instructions = [
             daily_target_instructions(problem.instructions, problem.day_starts, np.full(problem.n_days, level))
@@ -290,9 +308,7 @@ class _DayEvaluator:
         lo, hi = problem.day_starts[day], problem.day_starts[day + 1]
         end_energy, _pv_origin, _grid_origin, _beginning = self.dispatch_day(
             self.buffers,
-            problem.pv_dc_w,
-            problem.load_w,
-            problem.temperature_c,
+            *self.series,
             lo,
             hi,
             Battery_Energy_Wh=energy_wh,
@@ -325,10 +341,12 @@ def solve_daily_targets(
 
     ``initial_energy_wh`` defaults to a full battery at the configured max
     SOC, as a fresh simulation starts. Unless ``free_terminal``, energy that
-    ends the window below ``terminal_energy_wh`` (default: that same full
-    level) is charged at the window's cheapest import price through both
-    charge efficiencies. Without it the plan would drain the battery on the
-    last day, a gain the next window pays for.
+    ends the window below ``terminal_energy_wh`` is bought back at the
+    cheapest import price of a step with a grid target (of any step if none
+    has one), through both charge efficiencies. The default target is the
+    max-SOC energy at the last step's temperature. Without the refill the
+    plan would drain the battery on the last day, a gain the next window
+    pays for.
 
     With no battery, or a single level, there is nothing to choose: the days
     are chained at the lowest level.
@@ -338,23 +356,26 @@ def solve_daily_targets(
         raise ValueError("'soc_states' must be an integer of at least 2")
     config = problem.battery_config
     soh, eff_charge, _eff_discharge = problem.health()
-    full_wh = config.nominal_energy_wh * soh * config.max_soc
-    start = full_wh if initial_energy_wh is None else float(initial_energy_wh)
-    target = full_wh if terminal_energy_wh is None else float(terminal_energy_wh)
+    usable_wh = config.nominal_energy_wh * soh
+    temperatures = problem.temperature_c
+    start = usable_wh * config.max_soc if initial_energy_wh is None else float(initial_energy_wh)
+    end_capacity = lfp_capacity_factor(float(temperatures[-1])) if len(temperatures) else 1.0
+    target = usable_wh * config.max_soc * end_capacity if terminal_energy_wh is None else float(terminal_energy_wh)
     if not (math.isfinite(start) and math.isfinite(target)):
         raise ValueError("'initial_energy_wh' and 'terminal_energy_wh' must be finite")
 
-    usable_wh = config.nominal_energy_wh * soh
-    factors = [lfp_capacity_factor(float(t)) for t in np.unique(problem.temperature_c)]
+    # Unrounded, unlike the legacy tool: the grid must span the window the
+    # dispatch computes from these same temperatures.
+    factors = [lfp_capacity_factor(float(t)) for t in np.unique(temperatures)]
     soc_grid = np.linspace(
         config.min_soc * usable_wh * min(factors, default=1.0),
         config.max_soc * usable_wh * max(factors, default=1.0),
         int(soc_states),
     )
+    chargeable = ~np.isnan(problem.instructions.grid_target_fraction)
+    refill_prices = problem.import_price_per_kwh[chargeable] if chargeable.any() else problem.import_price_per_kwh
     refill_per_wh = (
-        float(problem.import_price_per_kwh.min(initial=math.inf))
-        / 1000.0
-        / (problem.instructions.grid_charge_efficiency * eff_charge)
+        float(refill_prices.min(initial=math.inf)) / 1000.0 / (problem.instructions.grid_charge_efficiency * eff_charge)
     )
 
     def terminal_cost(end_wh: Any) -> Any:
