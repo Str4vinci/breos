@@ -55,6 +55,12 @@ draw from `1 - load_uncertainty` to `1 + load_uncertainty` instead.
 `weather_start_year` and `weather_end_year` restrict which years are eligible
 for sampling when your file covers more history than you want to use.
 
+`target_year` is the study's calendar year. Every sampled weather year is
+restamped to it, and the demand profile and any tariff follow its calendar.
+The bundled H0 profile therefore puts its weekday, Saturday and Sunday shapes
+on that year's days, as an App run with `start_date` on 1 January of that year
+does. Monte Carlo does not read `start_date`.
+
 A runnable version ships as
 [`configs/examples/montecarlo.toml`](https://github.com/Str4vinci/breos/blob/main/configs/examples/montecarlo.toml).
 

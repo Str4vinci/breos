@@ -806,6 +806,11 @@ def run_montecarlo(
             was built for other weather inputs; see
             :class:`MonteCarloYearCache` for what it reuses.
 
+    The weather, the load and any tariff share the ``settings.target_year``
+    calendar. The load is built as an App run with ``start_date`` on
+    1 January of that year builds it, so the config's ``start_date`` does not
+    affect a Monte Carlo study.
+
     The dispatch backend is ``settings.execution_backend`` when set, else the
     config's top-level ``execution_backend``, else ``"python"``. The CLI
     applies the same order after its own ``--execution-backend`` flag and
@@ -880,7 +885,12 @@ def run_montecarlo(
     available_years = np.array(sorted(dc_by_year.keys()))
 
     deps = _runtime_dependencies()
-    base_load = load_consumption_profile(cfg, deps, timezone=resolved.timezone)
+    # Every weather year is restamped to target_year, so the load is built on
+    # that calendar too: H0 day types then match the study year's weekdays, as
+    # in an App run of that year. The year of start_date does not enter.
+    base_load = load_consumption_profile(
+        {**cfg, "start_date": f"{settings.target_year}-01-01"}, deps, timezone=resolved.timezone
+    )
     aligned_by_year = _align_years(
         cfg,
         base_load,

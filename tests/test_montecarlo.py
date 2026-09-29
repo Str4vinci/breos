@@ -8,6 +8,7 @@ import breos.montecarlo as montecarlo_module
 import breos.projection as projection_module
 from breos.app_config import resolve_app_config
 from breos.battery import align_simulation_inputs
+from breos.load_profiles import load_profile
 from breos.montecarlo import (
     MonteCarloSettings,
     _precompute_year_caches,
@@ -238,6 +239,44 @@ def test_run_montecarlo_filters_weather_sampling_pool(tmp_path, write_multiyear_
     assert result.available_years == [2021]
     assert result.yearly is not None
     assert set(result.yearly["Weather_Year"]) == {2021}
+
+
+def test_run_montecarlo_builds_the_load_on_the_target_year_calendar(tmp_path, monkeypatch, write_multiyear_weather):
+    # start_date 2023 and target_year 2025 put a 2023 Sunday on Wednesday
+    # 8 January 2025 when the load is shifted by position (#302).
+    weather = write_multiyear_weather(tmp_path / "multi.csv")
+    settings = MonteCarloSettings(weather_file=str(weather), n_runs=1, years_per_run=1, seed=1, target_year=2025)
+    captured = {}
+    align_years = montecarlo_module._align_years
+
+    def capturing(*args, **kwargs):
+        captured.update(align_years(*args, **kwargs))
+        return captured
+
+    monkeypatch.setattr(montecarlo_module, "_align_years", capturing)
+    config = {**_base_config(), "start_date": "2023-01-01"}
+    run_montecarlo(config, settings)
+
+    timezone = resolve_app_config(config).timezone
+    expected = load_profile("demandlib_h0", 4000, start_date="2025-01-01", freq="h", timezone=timezone)
+    assert set(captured) == {2021, 2022}
+    for aligned in captured.values():
+        assert aligned.index[0] == pd.Timestamp("2025-01-01", tz=timezone)
+        np.testing.assert_array_equal(aligned.load_w, expected.iloc[:, 0].reindex(aligned.index).to_numpy())
+
+
+def test_run_montecarlo_results_do_not_depend_on_the_start_date_year(tmp_path, write_multiyear_weather):
+    weather = write_multiyear_weather(tmp_path / "multi.csv")
+    settings = MonteCarloSettings(
+        weather_file=str(weather), n_runs=2, years_per_run=2, seed=5, target_year=2025, collect_yearly=True
+    )
+    results = [
+        run_montecarlo({**_base_config(), "start_date": start_date}, settings)
+        for start_date in ("2023-01-01", "2025-01-01")
+    ]
+
+    pd.testing.assert_frame_equal(results[0].runs, results[1].runs, check_exact=True)
+    pd.testing.assert_frame_equal(results[0].yearly, results[1].yearly, check_exact=True)
 
 
 def test_run_montecarlo_is_reproducible_with_seed(tmp_path, write_multiyear_weather):
