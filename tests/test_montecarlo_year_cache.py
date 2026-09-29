@@ -11,6 +11,7 @@ import json
 import math
 import pickle
 import shutil
+from pathlib import Path
 
 import pandas as pd
 import pytest
@@ -24,6 +25,7 @@ from breos.montecarlo import (
     build_year_cache,
     run_montecarlo,
 )
+from breos.weather import _weather_file_sha256 as _file_sha256
 from tests.test_input_cache import CHANGES as INPUT_INDEPENDENT_CHANGES
 
 BASE = {
@@ -217,6 +219,63 @@ def test_a_cache_is_refused_for_another_weather_file_or_once_its_file_changes(tm
     write_multiyear_weather(path, years=(2021, 2022, 2023))
     with pytest.raises(ValueError, match="\\(weather_file_sha256 differ"):
         run_montecarlo(BASE, _settings(path), year_cache=cache)
+
+
+def _write_sidecar(weather, offset_hours):
+    """A valid metadata sidecar that moves the irradiance timestamps by ``offset_hours``."""
+    metadata = {"radiation_time_basis": "instant", "irradiance_time_offset_hours": offset_hours}
+    payload = {"schema_version": 1, "weather_sha256": _file_sha256(weather), "breos_weather_metadata": metadata}
+    Path(f"{weather}.metadata.json").write_text(json.dumps(payload))
+
+
+def test_a_cache_is_refused_once_the_weather_metadata_sidecar_changes(weather):
+    config = {**BASE, "solar_position": "weather"}
+    settings = _settings(weather)
+    _write_sidecar(weather, 0.0)
+    cache = build_year_cache(config, settings)
+    before = _result_bits(run_montecarlo(config, settings))
+
+    # Same CSV bytes, other timing metadata: the sun moves, so the numbers do.
+    _write_sidecar(weather, 0.5)
+    assert _result_bits(run_montecarlo(config, settings)) != before
+    with pytest.raises(ValueError, match="\\(weather_metadata_sidecar_sha256 differ"):
+        run_montecarlo(config, settings, year_cache=cache)
+
+    Path(f"{weather}.metadata.json").unlink()
+    with pytest.raises(ValueError, match="\\(weather_metadata_sidecar_sha256 differ"):
+        run_montecarlo(config, settings, year_cache=cache)
+
+
+def test_a_battery_temperature_file_rewritten_in_place_rebuilds_the_pv_layer(tmp_path, weather, builds):
+    index = pd.date_range("2025-01-01", "2025-12-31 23:00", freq="h", tz="UTC")
+    temperatures = tmp_path / "battery_temperature.csv"
+    pd.DataFrame({"date": index, "temperature": 20.0}).to_csv(temperatures, index=False)
+    config = {**BASE, "battery_temperature": str(temperatures)}
+    settings = _settings(weather)
+    cache = build_year_cache(config, settings)
+
+    pd.DataFrame({"date": index, "temperature": 40.0}).to_csv(temperatures, index=False)
+    fresh = _result_bits(run_montecarlo(config, settings))
+    builds.update(weather=0, pv=0)
+    reused = _result_bits(run_montecarlo(config, settings, year_cache=cache))
+
+    assert builds == {"weather": 0, "pv": 1}
+    assert reused == fresh
+
+
+def test_a_cache_built_through_a_symlink_is_refused_for_the_real_file(tmp_path, weather):
+    link = tmp_path / "link.csv"
+    link.symlink_to(weather)
+    cache = build_year_cache(BASE, _settings(link))
+    # Provenance records the path as given, so the link and its target are
+    # two weather files, and reusing one for the other would record the wrong one.
+    with pytest.raises(ValueError, match="\\(weather_file differ"):
+        run_montecarlo(BASE, _settings(weather), year_cache=cache)
+
+    fresh = run_montecarlo(BASE, _settings(link))
+    reused = run_montecarlo(BASE, _settings(link), year_cache=cache)
+    assert reused.provenance["runtime_weather"]["metadata"]["path"] == str(link)
+    assert _result_bits(reused) == _result_bits(fresh)
 
 
 def test_every_year_cache_independent_key_is_a_registry_key_with_a_pinning_change():

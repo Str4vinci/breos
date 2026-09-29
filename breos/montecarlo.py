@@ -20,15 +20,14 @@ multi-year historical CSV (see ``configs/examples/montecarlo.toml``).
 
 from __future__ import annotations
 
-import hashlib
 import json
 import math
 import multiprocessing
+import os
 from copy import deepcopy
 from dataclasses import asdict, dataclass, field, replace
 from importlib.metadata import PackageNotFoundError, version
 from multiprocessing import Pool
-from pathlib import Path
 from typing import Any, cast
 
 import numpy as np
@@ -39,6 +38,7 @@ from breos.app_inputs import (
     INPUT_INDEPENDENT_KEYS,
     AppRuntimeDependencies,
     build_dc_system_base,
+    config_cache_key,
     load_consumption_profile,
 )
 from breos.battery import LEDGER_SCHEMA_VERSION, AlignedSimulationInputs, align_simulation_inputs
@@ -61,6 +61,8 @@ from breos.result_schema import RESULT_SCHEMA_VERSION
 from breos.smart_charging import resolve_instructions, smart_charging_provenance
 from breos.tariffs import ResolvedTariff, result_currency, tariff_provenance
 from breos.weather import (
+    _weather_file_sha256,
+    _weather_metadata_sidecar_path,
     build_battery_temperature_series,
     fetch_tmy_weather_data,
     load_weather,
@@ -279,22 +281,22 @@ YEAR_CACHE_INDEPENDENT_KEYS: frozenset[str] = INPUT_INDEPENDENT_KEYS | frozenset
 )
 
 
-def _file_sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1 << 20), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
 def _weather_cache_key(
     cfg: dict[str, Any], resolved: ResolvedAppConfig, settings: MonteCarloSettings
 ) -> dict[str, Any]:
-    """Everything the weather layer of the year cache reads."""
-    path = Path(settings.weather_file)
+    """Everything the weather layer of the year cache reads.
+
+    The path is kept as given, made absolute but not resolved through links,
+    because that is the path the study's provenance records. The metadata
+    sidecar carries the file's timestamp and radiation timing, which move
+    the sun, so it is part of the weather too.
+    """
+    path = os.path.abspath(os.fspath(settings.weather_file))
+    sidecar = _weather_metadata_sidecar_path(path)
     return {
-        "weather_file": str(path.resolve()),
-        "weather_file_sha256": _file_sha256(path),
+        "weather_file": path,
+        "weather_file_sha256": _weather_file_sha256(path),
+        "weather_metadata_sidecar_sha256": _weather_file_sha256(sidecar) if sidecar.is_file() else None,
         "target_year": settings.target_year,
         "weather_start_year": settings.weather_start_year,
         "weather_end_year": settings.weather_end_year,
@@ -309,14 +311,16 @@ def _weather_cache_key(
 def _pv_cache_key(cfg: dict[str, Any]) -> str | None:
     """The resolved config without :data:`YEAR_CACHE_INDEPENDENT_KEYS`, as canonical JSON.
 
-    None when a value is not plain JSON data, which the key could not
-    represent faithfully; the PV layer is then built afresh for every run.
+    A ``battery_temperature`` CSV is keyed on its contents as well as its
+    path, so a file rewritten in place is read again. None when a value is
+    not plain JSON data, which the key could not represent faithfully; the
+    PV layer is then built afresh for every run.
     """
-    relevant = {key: value for key, value in cfg.items() if key not in YEAR_CACHE_INDEPENDENT_KEYS}
-    try:
-        return json.dumps(relevant, sort_keys=True)
-    except (TypeError, ValueError):
-        return None
+    key = config_cache_key(cfg, YEAR_CACHE_INDEPENDENT_KEYS)
+    temperature = cfg.get("battery_temperature")
+    if key is None or not isinstance(temperature, (str, os.PathLike)) or str(temperature).lower() == "weather":
+        return key
+    return json.dumps([key, _weather_file_sha256(temperature)])
 
 
 class MonteCarloYearCache:
@@ -328,18 +332,23 @@ class MonteCarloYearCache:
 
     It holds two layers. The weather layer is each weather year read,
     restamped and resampled to the study resolution. It is keyed on the
-    weather file's path and SHA-256, the year window and target year, the
-    resolution, the coordinates, ``preserve_irradiance_energy`` and the
-    solar-position method, and a study whose weather key differs is refused.
-    The PV layer is each year's DC production and battery temperature. It is
-    keyed on the resolved config without :data:`YEAR_CACHE_INDEPENDENT_KEYS`,
-    such as the battery, inverter, cost and demand settings. A study with
-    another PV key, such as another module count, builds the PV layer again
-    from the cached weather and keeps it in place of the old one, so run the
-    designs grouped by PV configuration to reuse each PV layer fully.
+    weather file's absolute path, its SHA-256 and that of its metadata
+    sidecar, the year window and target year, the resolution, the
+    coordinates, ``preserve_irradiance_energy`` and the solar-position
+    method, and a study whose weather key differs is refused. The PV layer
+    is each year's DC production and battery temperature. It is keyed on the
+    resolved config without :data:`YEAR_CACHE_INDEPENDENT_KEYS`, such as the
+    battery sizing and dispatch, inverter, cost and demand settings, and on
+    the contents of a ``battery_temperature`` CSV. A study with another PV
+    key, such as another module count or battery temperature, builds the PV
+    layer again from the cached weather and keeps it in place of the old
+    one, so run the designs grouped by PV configuration to reuse each PV
+    layer fully.
 
     The weather file is read once, when the cache is built: a warning it
-    raises then does not repeat for each study.
+    raises then does not repeat for each study. A study may replace the PV
+    layer, so the cache is not safe to share between threads running
+    studies at once.
     """
 
     def __init__(

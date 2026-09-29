@@ -164,17 +164,22 @@ results = {
 The results are the same, bit for bit, as studies run without the cache. The
 cache has two layers:
 
-- The weather layer is reused only for the same weather file (path and
-  contents), year window, `target_year`, resolution, location,
-  `preserve_irradiance_energy`, and solar-position method. A study with other
-  weather inputs raises `ValueError`.
+- The weather layer is reused only for the same weather file (its absolute
+  path, its contents and those of its `.metadata.json` sidecar), year window,
+  `target_year`, resolution, location, `preserve_irradiance_energy`, and
+  solar-position method. A study with other weather inputs raises
+  `ValueError`.
 - The PV layer is reused when the config differs only in keys that do not
-  reach PV production or battery temperature: the battery, inverter, cost,
-  tariff, emissions, and demand settings
+  reach PV production or battery temperature: battery sizing and dispatch,
+  inverter, degradation, cost, tariff, emissions, and demand settings
   (`breos.montecarlo.YEAR_CACHE_INDEPENDENT_KEYS`). Any other change, such as
-  `n_modules` or `tilt`, rebuilds the PV layer from the cached weather and
-  replaces the old one. Run designs grouped by PV configuration to get the
-  most reuse.
+  `n_modules`, `tilt`, `battery_temperature`, `battery_indoor_model`, or new
+  contents in a `battery_temperature` CSV, rebuilds the PV layer from the
+  cached weather and replaces the old one. Run designs grouped by PV
+  configuration to get the most reuse.
+
+A study may replace the PV layer, so do not share one cache between threads
+running studies at the same time.
 
 ## Related pages
 
