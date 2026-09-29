@@ -266,13 +266,18 @@ def test_run_montecarlo_builds_the_load_on_the_target_year_calendar(tmp_path, mo
 
 
 @pytest.mark.parametrize("resolution", ["h", "15min"])
+@pytest.mark.parametrize(("location", "utc_offset"), [("porto", ""), ("berlin", "+01:00"), ("melbourne", "+11:00")])
 def test_run_montecarlo_fills_the_leap_day_of_a_leap_target_year(
-    tmp_path, monkeypatch, write_multiyear_weather, resolution
+    tmp_path, monkeypatch, write_multiyear_weather, resolution, location, utc_offset
 ):
     # The weather years are read without 29 February. Restamped onto 2028,
     # hourly weather skipped the day and 15-minute weather interpolated one
-    # night across it, so 29 February had no PV.
+    # night across it, so 29 February had no PV. The day is dropped on the
+    # file's own clock, so a file written with a UTC offset is filled there.
     weather = write_multiyear_weather(tmp_path / "multi.csv")
+    frame = pd.read_csv(weather)
+    frame["date"] = frame["date"] + utc_offset
+    frame.to_csv(weather, index=False)
     settings = MonteCarloSettings(weather_file=str(weather), n_runs=1, years_per_run=1, seed=1, target_year=2028)
     captured = {}
     align_years = montecarlo_module._align_years
@@ -282,7 +287,13 @@ def test_run_montecarlo_fills_the_leap_day_of_a_leap_target_year(
         return captured
 
     monkeypatch.setattr(montecarlo_module, "_align_years", capturing)
-    config = {**_base_config(), "resolution": resolution, "projection_years": 1, "start_date": "2023-01-01"}
+    config = {
+        **_base_config(),
+        "location": location,
+        "resolution": resolution,
+        "projection_years": 1,
+        "start_date": "2023-01-01",
+    }
     result = run_montecarlo(config, settings)
 
     timezone = resolve_app_config(config).timezone

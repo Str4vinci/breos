@@ -691,7 +691,8 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   provenance records the load's year as `load_profile.calendar_year`
   (result schema 1.8). A leap `target_year`, which raised an error at hourly
   and 15-minute resolution, now runs: each weather year gets a 29 February
-  copied from its 28 February, as the App gives a TMY. Before, 29 February was
+  copied from its 28 February on the file's own clock, including a UTC offset
+  written in its timestamps, as the App gives a TMY. Before, 29 February was
   missing from the weather, and at 15 minutes the resampler would have
   interpolated across it as one night. **Monte Carlo results change
   when `start_date` falls in another year than `target_year`.** On the

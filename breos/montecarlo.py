@@ -158,10 +158,16 @@ def _sample_load_scale(
 
 def _index_weather(df: pd.DataFrame) -> pd.DataFrame:
     """Turn a ``preload_weather_by_year`` frame (with a ``date`` column) into a
-    UTC-indexed weather DataFrame matching the deterministic pipeline."""
+    UTC-indexed weather DataFrame matching the deterministic pipeline.
+
+    The years are read without 29 February, so a leap target year gets a copy
+    of 28 February, as an App run of that year does. The day is filled on the
+    file's own clock, where it was dropped: in UTC, a file written at +01:00
+    would still have an hour dated 29 February, and the fill would be skipped.
+    """
     w = df.copy()
     w["date"] = pd.to_datetime(w["date"])
-    w = w.set_index("date")
+    w = fill_leap_day(w.set_index("date"))
     if w.index.tz is None:
         w.index = w.index.tz_localize("UTC")
     else:
@@ -193,9 +199,7 @@ def _load_weather_years(
 
     indexed_by_year: dict[int, pd.DataFrame] = {}
     for year, df in weather_by_year.items():
-        # The years are read without 29 February, so a leap target_year gets
-        # a copy of 28 February, as an App run of that year does.
-        weather = fill_leap_day(_index_weather(df))
+        weather = _index_weather(df)
         input_frequency = pd.infer_freq(weather.index[:10]) if len(weather.index) >= 3 else None
         if input_frequency is None and len(weather.index) >= 2:
             input_frequency = pd.tseries.frequencies.to_offset(weather.index[1] - weather.index[0]).freqstr
