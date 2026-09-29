@@ -22,7 +22,9 @@ Carlo results
 gains ``period``, ``provenance.period`` and ``period_start``/``period_end`` in
 its year row, and reports its lifetime economics (``npv_savings``,
 ``payback_year``, ``lcoe_per_kwh``, ``financial``, the replacement costs and
-the lifetime CO2) as None. Results of full-year runs are unchanged.
+the lifetime CO2) as None. Results of full-year runs are unchanged. 1.8 adds
+``calendar_year`` to Monte Carlo's ``provenance.load_profile``: the
+``target_year`` the load was built for (#302).
 """
 
-RESULT_SCHEMA_VERSION = "1.7"
+RESULT_SCHEMA_VERSION = "1.8"

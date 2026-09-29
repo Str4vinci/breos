@@ -16,6 +16,7 @@ from breos.battery import (
     _update_battery_soh_cyclewise_arrays,
     align_simulation_inputs,
     apply_indoor_temperature_model,
+    lfp_capacity_factor,
     resistance_to_efficiency,
     simulate_energy_balance,
     simulate_energy_balance_summary,
@@ -533,6 +534,17 @@ class TestSimulateEnergyBalance:
         assert total_pv > 0
 
     def test_soc_within_bounds(self, dc_production, sample_load, battery_config, temperature_series):
+        """Stored energy stays inside the temperature-derated SOC window.
+
+        Both limits scale with ``lfp_capacity_factor`` at the step's
+        temperature, while ``Battery_SOC_Absolute`` divides by ``nominal * SOH``
+        without that factor, so a correct run goes just below ``min_soc``.
+        The ceiling holds at every step. The floor may not: when the pack
+        warms, the floor rises above what is stored, and the dispatch does not
+        create energy to meet it. Below the floor, SOC therefore cannot fall
+        from one step to the next. Discharge and standby stop at the floor,
+        and a falling SOH only raises the ratio.
+        """
         results_df, *_ = simulate_energy_balance(
             pv_dc=dc_production * 6,
             houseload=sample_load,
@@ -540,10 +552,18 @@ class TestSimulateEnergyBalance:
             freq="h",
             temperature_series=temperature_series,
         )
-        if "SOC_Absolute" in results_df.columns:
-            soc = results_df["SOC_Absolute"]
-            # SOC should never exceed nominal capacity
-            assert soc.max() <= battery_config.nominal_energy_wh * 1.01  # 1% tolerance
+        soc = results_df["Battery_SOC_Absolute"].to_numpy()
+        capacity_factor = np.array([lfp_capacity_factor(t) for t in temperature_series.to_numpy()])
+        previous_soc = np.concatenate(([np.inf], soc[:-1]))
+        floor = np.minimum(battery_config.min_soc * capacity_factor, previous_soc)
+        ceiling = battery_config.max_soc * capacity_factor
+
+        assert len(soc) == len(capacity_factor)
+        assert np.all(soc >= floor - 1e-12), f"{int((soc < floor - 1e-12).sum())} steps below the SOC floor"
+        assert np.all(soc <= ceiling + 1e-12), f"{int((soc > ceiling + 1e-12).sum())} steps above the SOC ceiling"
+        # The case reaches both limits, so neither assertion is vacuous.
+        assert np.isclose(soc, battery_config.min_soc * capacity_factor, rtol=0, atol=1e-9).any()
+        assert np.isclose(soc, ceiling, rtol=0, atol=1e-9).any()
 
     def test_more_pv_means_more_independence(self, dc_production, sample_load, battery_config, temperature_series):
         gi_values = []

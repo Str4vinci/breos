@@ -24,9 +24,8 @@ dated first row by the same rule. That row must be 1 January 00:00; an
 undated `demandlib_h0` file raises `ValueError`. Other external profile
 families still follow their positional calendar rule. Project years replay
 the study year's calendar; they do not advance the load and tariff weekdays
-each year. Monte Carlo still places load by position when `target_year`
-differs from the year of `start_date`
-([#302](https://github.com/Str4vinci/breos/issues/302)).
+each year. Monte Carlo builds the load for its `target_year` by the same
+rule.
 
 ## External profile files
 
