@@ -1418,7 +1418,11 @@ def _validate_tariff(cfg: dict[str, Any]) -> None:
             "would price them twice. Remove them, or remove [tariff]."
         )
     step_minutes = int(get_hours_per_step(cfg["resolution"]) * 60)
-    required = schedule_resolution_minutes(table["schedule"])
+    # The clock changes of the study year count; the optimizer's adapted config
+    # has no start_date, and classifying its index checks them instead.
+    start = cfg.get("start_date")
+    years = None if start is None else ((start if isinstance(start, date) else date.fromisoformat(start)).year,)
+    required = schedule_resolution_minutes(table["schedule"], years)
     if required % step_minutes:
         fitting = [freq for freq in ("h", "15min") if required % int(get_hours_per_step(freq) * 60) == 0]
         remedy = (
@@ -1433,9 +1437,10 @@ def _validate_tariff(cfg: dict[str, Any]) -> None:
 def resolve_tariff_spec(cfg: dict[str, Any], timezone: str) -> TariffSpec | None:
     """Validate and build a tariff for App or an adapted optimizer config.
 
-    ``cfg`` supplies ``tariff``, ``resolution`` and optional ``costs``. Keeping
-    the price-conflict and resolution checks here gives both entry points
-    the same validation before they run the PV model.
+    ``cfg`` supplies ``tariff``, ``resolution``, optional ``costs`` and, from
+    App, ``start_date``, whose year's clock changes count toward the
+    resolution. Keeping the price-conflict and resolution checks here gives
+    both entry points the same validation before they run the PV model.
     """
     if cfg["tariff"] is None:
         return None

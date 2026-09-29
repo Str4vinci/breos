@@ -221,20 +221,29 @@ def test_a_definition_resolves_exactly_like_its_identifier(name):
     assert parse_schedule_definition(name, load_config_json("tariffs.json")["schedules"][name]) == definition
 
 
-def test_required_resolution_follows_the_boundaries_and_the_clock_changes():
+BOUNDARY_STEPS = {
+    "es_2_0td": 120,
+    "pt_mainland_2026_daily_bi": 120,
+    "pt_mainland_2026_daily_tri": 30,
+    "pt_mainland_2026_weekly_bi": 30,
+    "pt_mainland_2026_weekly_tri": 15,
+    "pt_mainland_2027_daily_bi": 30,
+    "pt_mainland_2027_daily_tri": 30,
+    "pt_mainland_2027_weekly_bi": 30,
+    "pt_mainland_2027_weekly_tri": 30,
+}
+
+
+@pytest.mark.parametrize("year", [2024, 2026])
+def test_required_resolution_follows_the_boundaries_and_the_clock_changes(year):
     # 2026 bi-hourly and 2.0TD change period only on even hours, but Lisbon and
-    # Madrid move their clocks by an hour; the 2026 weekly tri-hourly
-    # schedule has quarter-hour boundaries.
-    assert {name: schedule_resolution_minutes(name) for name in available_tariff_schedules()} == {
-        "es_2_0td": 60,
-        "pt_mainland_2026_daily_bi": 60,
-        "pt_mainland_2026_daily_tri": 30,
-        "pt_mainland_2026_weekly_bi": 30,
-        "pt_mainland_2026_weekly_tri": 15,
-        "pt_mainland_2027_daily_bi": 30,
-        "pt_mainland_2027_daily_tri": 30,
-        "pt_mainland_2027_weekly_bi": 30,
-        "pt_mainland_2027_weekly_tri": 30,
+    # Madrid move their clocks by an hour every year; the 2026 weekly
+    # tri-hourly schedule has quarter-hour boundaries.
+    names = available_tariff_schedules()
+    assert {name: get_schedule_definition(name).resolution_minutes for name in names} == BOUNDARY_STEPS
+    assert {name: schedule_resolution_minutes(name) for name in names} == BOUNDARY_STEPS
+    assert {name: schedule_resolution_minutes(name, [year]) for name in names} == {
+        name: min(step, 60) for name, step in BOUNDARY_STEPS.items()
     }
 
 
@@ -252,39 +261,71 @@ def test_two_hourly_steps_across_a_clock_change_are_refused(name):
 def test_every_step_is_checked_against_the_local_step_grid(monkeypatch, name):
     # Were the clock change missed in the resolution, the step after it would
     # still be caught: 03:00 local on 2026-03-29 in both zones.
-    monkeypatch.setattr(tariffs, "_offset_change_minutes", lambda timezone: 0)
+    monkeypatch.setattr(tariffs, "_offset_change_seconds", lambda timezone, year: 0)
     zone = _zone(name)
-    assert schedule_resolution_minutes(name) == 120
+    assert schedule_resolution_minutes(name, [2026]) == 120
     index = pd.date_range("2026-01-05", "2026-07-08", freq="2h", tz=zone, inclusive="left").tz_convert("UTC")
     with pytest.raises(ValueError, match="do not align with the index step at 2026-03-29 03:00:00 local time"):
         classify_tariff_periods(index, name, timezone=zone)
 
 
-def test_a_zone_without_clock_changes_takes_the_boundary_step():
-    utc = parse_schedule_definition(
-        "utc_even_hours",
+def _hourly_schedule(zone, boundaries=("08:00", "22:00")):
+    first, last = boundaries
+    return parse_schedule_definition(
+        "hourly",
         {
             "version": "1",
-            "timezone": "UTC",
+            "timezone": zone,
             "cycle": "custom",
             "periods": ["off_peak", "peak"],
             "rules": [
                 {
                     "days": "all",
                     "season": "all",
-                    "intervals": {"off_peak": [["00:00", "08:00"], ["22:00", "24:00"]], "peak": [["08:00", "22:00"]]},
+                    "intervals": {"off_peak": [["00:00", first], [last, "24:00"]], "peak": [[first, last]]},
                 }
             ],
         },
     )
-    assert utc.resolution_minutes == 120
+
+
+def test_a_zone_without_clock_changes_takes_the_boundary_step():
+    utc = _hourly_schedule("UTC")
+    assert schedule_resolution_minutes(utc, [2026]) == 120
     index = pd.date_range("2026-01-01", "2027-01-01", freq="2h", tz="UTC", inclusive="left")
     labels = classify_tariff_periods(index, utc, timezone="UTC")
     assert labels[:12] == ("off_peak",) * 4 + ("peak",) * 7 + ("off_peak",)
     assert labels == labels[:12] * 365
-    # Lord Howe Island moves its clock by half an hour.
-    lord_howe = replace(utc, schedule=replace(utc.schedule, timezone="Australia/Lord_Howe"))
-    assert lord_howe.resolution_minutes == 30
+    # Lord Howe Island moves its clock by half an hour every year.
+    assert schedule_resolution_minutes(_hourly_schedule("Australia/Lord_Howe"), [2026]) == 30
+
+
+@pytest.mark.parametrize(
+    ("zone", "old_year", "old_step"),
+    [("Asia/Kathmandu", 1986, 15), ("America/Guyana", 1975, 15), ("Pacific/Kiritimati", 1979, 20)],
+)
+def test_only_the_simulated_years_clock_changes_count(zone, old_year, old_step):
+    # Each zone once moved its clock by an odd step; in 2026 it keeps one offset.
+    schedule = _hourly_schedule(zone, ("07:00", "22:00"))
+    assert schedule_resolution_minutes(schedule, [old_year]) == old_step
+    assert schedule_resolution_minutes(schedule, [2026]) == 60
+    index = pd.date_range("2026-01-01", "2027-01-01", freq="h", tz=zone, inclusive="left").tz_convert("UTC")
+    labels = classify_tariff_periods(index, schedule, timezone=zone)
+    assert labels[:24] == ("off_peak",) * 7 + ("peak",) * 15 + ("off_peak",) * 2
+
+
+def test_a_clock_change_off_the_minute_is_named():
+    # Liberia moved from UTC-0:44:30 to UTC on 7 January 1972.
+    schedule = _hourly_schedule("Africa/Monrovia", ("07:00", "22:00"))
+    assert schedule_resolution_minutes(schedule, [2026]) == 60
+    index = pd.date_range("2026-01-01", "2027-01-01", freq="h", tz="UTC", inclusive="left")
+    assert len(classify_tariff_periods(index, schedule, timezone="Africa/Monrovia")) == len(index)
+    with pytest.raises(ValueError, match="changes its UTC offset in 1972 by a step that is not a whole number"):
+        schedule_resolution_minutes(schedule, [1972])
+    with pytest.raises(ValueError, match="not a whole number of minutes"):
+        classify_tariff_periods(
+            pd.date_range("1972-03-01", periods=24, freq="h", tz="UTC"), schedule, timezone="Africa/Monrovia"
+        )
 
 
 def _custom(**overrides):

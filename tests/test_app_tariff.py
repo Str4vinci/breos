@@ -59,7 +59,7 @@ def test_tariff_config_is_checked_at_construction(tariff, extra, error, message)
 
 def test_a_schedule_finer_than_every_app_step_names_what_it_needs(monkeypatch):
     # A 10-minute boundary, as a custom schedule may have: no App resolution fits.
-    monkeypatch.setattr("breos.app_config.schedule_resolution_minutes", lambda schedule: 10)
+    monkeypatch.setattr("breos.app_config.schedule_resolution_minutes", lambda schedule, years=None: 10)
     with pytest.raises(ValueError, match="needs steps that divide 10 minutes.*App offers no step that divides 10"):
         App({**BASE, "resolution": "15min", "tariff": TOU})
 

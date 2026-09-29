@@ -22,7 +22,7 @@ from datetime import date, datetime
 from functools import lru_cache
 from numbers import Real
 from types import MappingProxyType
-from typing import Any, Mapping, Sequence, cast
+from typing import Any, Iterable, Mapping, Sequence, cast
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import numpy as np
@@ -382,34 +382,31 @@ class ScheduleDefinition:
 
     @property
     def resolution_minutes(self) -> int:
-        """The coarsest step, in minutes, that lands on every boundary: input steps must divide it.
+        """The coarsest step, in minutes, that lands on every interval boundary.
 
-        A regular index moves on the local clock when the zone changes its UTC
-        offset, so the changes count as boundaries too: a Lisbon or Madrid
-        schedule needs 60 minutes or finer whatever its periods.
+        This ignores the zone's clock changes, which depend on the year; the
+        step a simulation needs is :func:`schedule_resolution_minutes` with
+        the simulated years.
         """
         bounds = (bound for rule in self.rules for start, end, _ in rule.intervals for bound in (start, end))
-        return math.gcd(24 * 60, _offset_change_minutes(self.schedule.timezone), *bounds)
+        return math.gcd(24 * 60, *bounds)
 
     def rule_for(self, day_type: str, season: str) -> ScheduleRule:
         return next(rule for rule in self.rules if rule.applies_to(day_type, season))
 
 
 @lru_cache(maxsize=None)
-def _offset_change_minutes(timezone: str) -> int:
-    """The greatest common divisor, in minutes, of the changes between the UTC offsets a zone uses.
+def _offset_change_seconds(timezone: str, year: int) -> int:
+    """The greatest common divisor, in seconds, of the changes between the UTC offsets a zone uses in one year.
 
-    The offsets are read at every UTC midnight from 1970 through 2100. A
-    change that is not a whole number of minutes counts as one minute; ``0``
-    means the zone keeps one offset.
+    The offsets are read at every UTC midnight from 31 December of the year
+    before through 2 January of the next, so the local year is covered in
+    any zone; ``0`` means the zone keeps one offset.
     """
-    instants = pd.date_range("1970-01-01", "2101-01-01", freq="D", tz="UTC")
+    instants = pd.date_range(f"{year - 1}-12-31", f"{year + 1}-01-02", freq="D", tz="UTC")
     offsets = (instants.tz_convert(timezone).tz_localize(None) - instants.tz_localize(None)).unique()
-    seconds = sorted(int(offset.total_seconds()) for offset in offsets)
-    result = 0
-    for change in (value - seconds[0] for value in seconds[1:]):
-        result = math.gcd(result, change // 60 if change % 60 == 0 else 1)
-    return result
+    seconds = [int(offset.total_seconds()) for offset in offsets]
+    return math.gcd(*(value - seconds[0] for value in seconds))
 
 
 def _parse_rule(raw: object, where: str) -> ScheduleRule:
@@ -696,10 +693,13 @@ def classify_tariff_periods(
     definition = _as_definition(schedule)
     metadata = definition.schedule
     zone = _check_timezone(metadata, timezone)
-    _validate_schedule_resolution(resolved_index, metadata.identifier, definition.resolution_minutes, zone)
+    local_index = resolved_index.tz_convert(zone)
+    # The clock changes that matter are those in the years the index touches.
+    touched_years = range(local_index[0].year, local_index[-1].year + 1) if len(local_index) else ()
+    required_minutes = schedule_resolution_minutes(definition, touched_years)
+    _validate_schedule_resolution(resolved_index, metadata.identifier, required_minutes, zone)
     _validate_study_date(metadata, resolved_index, study_date, zone)
 
-    local_index = resolved_index.tz_convert(zone)
     holidays = definition.holidays
     # A year the index only grazes (the last UTC hour of a year is already the
     # next local year east of UTC) needs no calendar: its steps are fewer than
@@ -941,6 +941,27 @@ def tariff_provenance(resolved: ResolvedTariff, *, calendar_year: int) -> dict[s
     }
 
 
-def schedule_resolution_minutes(schedule: str | ScheduleDefinition) -> int:
-    """The step, in minutes, that lands on every boundary of a schedule: input steps must divide it."""
-    return _as_definition(schedule).resolution_minutes
+def schedule_resolution_minutes(schedule: str | ScheduleDefinition, years: Iterable[int] | None = None) -> int:
+    """The step, in minutes, that lands on every boundary of a schedule: input steps must divide it.
+
+    With ``years``, the changes of the zone's UTC offset in those calendar
+    years count as boundaries too, since a regular index moves on the local
+    clock when the clocks change: a Lisbon or Madrid schedule needs 60 minutes
+    or finer. Without, only the intervals count.
+
+    Raises:
+        ValueError: If the zone changes its offset by a step that is not a
+            whole number of minutes in one of ``years``.
+    """
+    definition = _as_definition(schedule)
+    minutes = definition.resolution_minutes
+    zone = definition.schedule.timezone
+    for year in sorted(set(years or ())):
+        change = _offset_change_seconds(zone, int(year))
+        if change % 60:
+            raise ValueError(
+                f"{zone} changes its UTC offset in {year} by a step that is not a whole number of minutes; "
+                "tariff periods cannot be classified across it"
+            )
+        minutes = math.gcd(minutes, change // 60)
+    return minutes

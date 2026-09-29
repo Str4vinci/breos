@@ -39,12 +39,13 @@ weekends and national holidays are `off_peak` all day, using the holiday
 calendar BREOS carries for each year. A year without one raises.
 
 The boundary step is the coarsest step that lands on every period boundary
-and on every change of the zone's UTC offset, since a regular index moves on
-the local clock when the clocks change; it follows from the schedule's
-intervals and zone. Input steps must divide it, and every step must start on
-the local step grid: a schedule whose boundaries fall on the half hour or
-quarter hour needs 15-minute input, and hourly input is rejected rather than
-approximated.
+and on every change of the zone's UTC offset in the simulated years, since a
+regular index moves on the local clock when the clocks change. Lisbon and
+Madrid change theirs by an hour every year, so no schedule there takes steps
+longer than 60 minutes. Input steps must divide the boundary step, and every
+step must start on the local step grid: a schedule whose boundaries fall on
+the half hour or quarter hour needs 15-minute input, and hourly input is
+rejected rather than approximated.
 
 ## Schedule definitions
 
