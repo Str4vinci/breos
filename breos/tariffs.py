@@ -346,6 +346,10 @@ class ScheduleDefinition:
     the rule of ``holidays.day_type``. The values are immutable and pickle,
     so a definition can travel to optimizer worker processes. The bundled
     catalogue is built with :func:`parse_schedule_definition`.
+
+    A definition is hashable, but its ``hash()`` varies between processes:
+    never store it or use it as a persistent key. A resolved tariff's
+    ``schedule_hash`` is the stable identity.
     """
 
     schedule: TariffSchedule
@@ -378,13 +382,34 @@ class ScheduleDefinition:
 
     @property
     def resolution_minutes(self) -> int:
-        """The coarsest step, in minutes, that lands on every boundary: input must divide it."""
-        return math.gcd(
-            24 * 60, *(bound for rule in self.rules for start, end, _ in rule.intervals for bound in (start, end))
-        )
+        """The coarsest step, in minutes, that lands on every boundary: input steps must divide it.
+
+        A regular index moves on the local clock when the zone changes its UTC
+        offset, so the changes count as boundaries too: a Lisbon or Madrid
+        schedule needs 60 minutes or finer whatever its periods.
+        """
+        bounds = (bound for rule in self.rules for start, end, _ in rule.intervals for bound in (start, end))
+        return math.gcd(24 * 60, _offset_change_minutes(self.schedule.timezone), *bounds)
 
     def rule_for(self, day_type: str, season: str) -> ScheduleRule:
         return next(rule for rule in self.rules if rule.applies_to(day_type, season))
+
+
+@lru_cache(maxsize=None)
+def _offset_change_minutes(timezone: str) -> int:
+    """The greatest common divisor, in minutes, of the changes between the UTC offsets a zone uses.
+
+    The offsets are read at every UTC midnight from 1970 through 2100. A
+    change that is not a whole number of minutes counts as one minute; ``0``
+    means the zone keeps one offset.
+    """
+    instants = pd.date_range("1970-01-01", "2101-01-01", freq="D", tz="UTC")
+    offsets = (instants.tz_convert(timezone).tz_localize(None) - instants.tz_localize(None)).unique()
+    seconds = sorted(int(offset.total_seconds()) for offset in offsets)
+    result = 0
+    for change in (value - seconds[0] for value in seconds[1:]):
+        result = math.gcd(result, change // 60 if change % 60 == 0 else 1)
+    return result
 
 
 def _parse_rule(raw: object, where: str) -> ScheduleRule:
@@ -409,8 +434,8 @@ def _parse_rule(raw: object, where: str) -> ScheduleRule:
         return ScheduleRule(
             days=cast(str, raw.get("days")), season=cast(str, raw.get("season")), intervals=tuple(flattened)
         )
-    except ValueError as exc:
-        raise ValueError(f"'{where}': {exc}") from exc
+    except (TypeError, ValueError) as exc:
+        raise type(exc)(f"'{where}': {exc}") from exc
 
 
 def _parse_holidays(raw: object, where: str) -> HolidayCalendar | None:
@@ -427,13 +452,17 @@ def _parse_holidays(raw: object, where: str) -> HolidayCalendar | None:
         raise TypeError(f"'{where}.dates' must map years to lists of ISO dates")
     years: set[int] = set()
     dates: set[date] = set()
-    for year, values in raw_dates.items():
+    for raw_year, values in raw_dates.items():
+        try:
+            year = int(raw_year)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"'{where}.dates' keys must be years, not {raw_year!r}") from exc
         if not isinstance(values, (list, tuple)):
             raise TypeError(f"'{where}.dates.{year}' must be a list of ISO dates")
         parsed = {_parse_date(value, f"{where}.dates.{year}") for value in values}
-        if any(day is None or day.year != int(year) for day in parsed):
+        if any(day is None or day.year != year for day in parsed):
             raise ValueError(f"'{where}.dates.{year}' must hold dates in {year}")
-        years.add(int(year))
+        years.add(year)
         dates.update(cast(set[date], parsed))
     return HolidayCalendar(day_type=day_type, dates=frozenset(dates), years=frozenset(years), source=raw.get("source"))
 
@@ -449,7 +478,8 @@ def parse_schedule_definition(
     ``days`` selector, a ``season`` selector and ``intervals`` mapping periods
     to ``["HH:MM", "HH:MM"]`` ranges; ``"24:00"`` closes the day. Holidays
     have a ``day_type`` and ``dates`` mapping each year to its dates. The
-    finest time resolution the schedule needs follows from the boundaries.
+    time resolution the schedule needs follows from the boundaries and the
+    zone's UTC-offset changes.
     ``where`` names the source in error messages; it defaults to the
     identifier.
     """
@@ -549,17 +579,17 @@ def _validate_schedule_resolution(
             f"Schedule {identifier!r} requires {required_minutes}-minute resolution or finer; "
             f"the index uses {cadence_minutes}-minute steps"
         )
-    first_local = index[0].tz_convert(timezone)
-    first_day_offset_ns = (
-        (first_local.hour * 60 + first_local.minute) * minute_ns
-        + first_local.second * 1_000_000_000
-        + first_local.microsecond * 1_000
-        + first_local.nanosecond
-    )
-    if first_day_offset_ns % cadence_ns:
+    # Every step must start on the local step grid, not just the first: a
+    # regular index moves on the local clock when the UTC offset changes.
+    # The cadence divides a day, so the wall-clock epoch is on the grid.
+    local_index = index.tz_convert(timezone)
+    wall_ns = cast(Any, local_index.tz_localize(None).as_unit("ns")).asi8
+    misaligned = np.flatnonzero(wall_ns % cadence_ns)
+    if misaligned.size:
+        step = local_index[int(misaligned[0])]
         raise ValueError(
-            f"Schedule {identifier!r} boundaries do not align with an index starting at "
-            f"{first_local.strftime('%H:%M:%S')}"
+            f"Schedule {identifier!r} boundaries do not align with the index step at "
+            f"{step.strftime('%Y-%m-%d %H:%M:%S')} local time"
         )
 
 

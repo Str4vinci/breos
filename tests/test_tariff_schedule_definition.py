@@ -8,6 +8,7 @@ from datetime import date
 import pandas as pd
 import pytest
 
+from breos import tariffs
 from breos.resources import load_config_json
 from breos.tariffs import (
     HolidayCalendar,
@@ -220,12 +221,13 @@ def test_a_definition_resolves_exactly_like_its_identifier(name):
     assert parse_schedule_definition(name, load_config_json("tariffs.json")["schedules"][name]) == definition
 
 
-def test_required_resolution_follows_the_interval_boundaries():
-    # 2026 bi-hourly and 2.0TD change period only on even hours; the 2026
-    # weekly tri-hourly schedule has quarter-hour boundaries.
+def test_required_resolution_follows_the_boundaries_and_the_clock_changes():
+    # 2026 bi-hourly and 2.0TD change period only on even hours, but Lisbon and
+    # Madrid move their clocks by an hour; the 2026 weekly tri-hourly
+    # schedule has quarter-hour boundaries.
     assert {name: schedule_resolution_minutes(name) for name in available_tariff_schedules()} == {
-        "es_2_0td": 120,
-        "pt_mainland_2026_daily_bi": 120,
+        "es_2_0td": 60,
+        "pt_mainland_2026_daily_bi": 60,
         "pt_mainland_2026_daily_tri": 30,
         "pt_mainland_2026_weekly_bi": 30,
         "pt_mainland_2026_weekly_tri": 15,
@@ -234,10 +236,55 @@ def test_required_resolution_follows_the_interval_boundaries():
         "pt_mainland_2027_weekly_bi": 30,
         "pt_mainland_2027_weekly_tri": 30,
     }
-    two_hourly = pd.date_range("2026-01-12", periods=12, freq="2h", tz=LISBON)
-    assert classify_tariff_periods(two_hourly, "pt_mainland_2026_daily_bi", timezone=LISBON) == (
-        ("off_peak",) * 4 + ("peak",) * 7 + ("off_peak",)
+
+
+@pytest.mark.parametrize("name", ["pt_mainland_2026_daily_bi", "es_2_0td"])
+def test_two_hourly_steps_across_a_clock_change_are_refused(name):
+    # Regular two-hour steps from local midnight land on odd local hours after
+    # the spring change, where a step would straddle two periods.
+    zone = _zone(name)
+    index = pd.date_range("2026-01-05", "2026-07-08", freq="2h", tz=zone, inclusive="left").tz_convert("UTC")
+    with pytest.raises(ValueError, match="requires 60-minute resolution or finer"):
+        classify_tariff_periods(index, name, timezone=zone)
+
+
+@pytest.mark.parametrize("name", ["pt_mainland_2026_daily_bi", "es_2_0td"])
+def test_every_step_is_checked_against_the_local_step_grid(monkeypatch, name):
+    # Were the clock change missed in the resolution, the step after it would
+    # still be caught: 03:00 local on 2026-03-29 in both zones.
+    monkeypatch.setattr(tariffs, "_offset_change_minutes", lambda timezone: 0)
+    zone = _zone(name)
+    assert schedule_resolution_minutes(name) == 120
+    index = pd.date_range("2026-01-05", "2026-07-08", freq="2h", tz=zone, inclusive="left").tz_convert("UTC")
+    with pytest.raises(ValueError, match="do not align with the index step at 2026-03-29 03:00:00 local time"):
+        classify_tariff_periods(index, name, timezone=zone)
+
+
+def test_a_zone_without_clock_changes_takes_the_boundary_step():
+    utc = parse_schedule_definition(
+        "utc_even_hours",
+        {
+            "version": "1",
+            "timezone": "UTC",
+            "cycle": "custom",
+            "periods": ["off_peak", "peak"],
+            "rules": [
+                {
+                    "days": "all",
+                    "season": "all",
+                    "intervals": {"off_peak": [["00:00", "08:00"], ["22:00", "24:00"]], "peak": [["08:00", "22:00"]]},
+                }
+            ],
+        },
     )
+    assert utc.resolution_minutes == 120
+    index = pd.date_range("2026-01-01", "2027-01-01", freq="2h", tz="UTC", inclusive="left")
+    labels = classify_tariff_periods(index, utc, timezone="UTC")
+    assert labels[:12] == ("off_peak",) * 4 + ("peak",) * 7 + ("off_peak",)
+    assert labels == labels[:12] * 365
+    # Lord Howe Island moves its clock by half an hour.
+    lord_howe = replace(utc, schedule=replace(utc.schedule, timezone="Australia/Lord_Howe"))
+    assert lord_howe.resolution_minutes == 30
 
 
 def _custom(**overrides):
@@ -352,6 +399,12 @@ def test_holidays_without_years_are_complete_for_every_year():
         ({"holidays": {"day_type": "monday", "dates": {"2026": ["2026-01-01"]}}}, ValueError, r"holidays\.day_type"),
         ({"effective_from": "July 2027"}, ValueError, r"tariff\.custom_schedule\.effective_from"),
         ({"cycle": "hourly"}, ValueError, "schedule.cycle"),
+        ({"holidays": {"day_type": "sunday", "dates": {"next": ["2026-01-01"]}}}, ValueError, r"holidays\.dates' keys"),
+        (
+            {"rules": [{"days": ["all"], "season": "all", "intervals": {"peak": [["00:00", "24:00"]]}}]},
+            TypeError,
+            r"tariff\.custom_schedule\.rules\[0\]'",
+        ),
     ],
 )
 def test_parse_rejects_malformed_definitions(overrides, error, match):

@@ -13,12 +13,12 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   `get_schedule_definition` returns a bundled one. `classify_tariff_periods`,
   `resolve_named_tariff`, `schedule_resolution_minutes` and `TariffSpec`
   take a bundled identifier or a definition. The resolution a schedule needs
-  now follows from its interval boundaries, and `tariffs.json` no longer
-  declares it: `pt_mainland_2026_daily_bi` and `es_2_0td`, which change
-  period only on even hours, report 120 minutes instead of 60, so a
-  two-hourly index now classifies them; hourly and 15-minute runs are
-  unchanged. Every bundled schedule gives the same period labels and
-  schedule hashes as before, and no result changes. This is the first step
+  now follows from its interval boundaries and its zone's UTC-offset
+  changes, and `tariffs.json` no longer declares it; every bundled schedule
+  derives the value it declared. Classification checks that every step, not
+  only the first, starts on the local step grid. Every bundled schedule
+  gives the same period labels and schedule hashes as before, and no result
+  changes. This is the first step
   toward custom tariff schedules in `App`.
 - `breos.montecarlo.build_year_cache(config, settings)` prepares a Monte
   Carlo study's per-year weather, PV production and battery temperature

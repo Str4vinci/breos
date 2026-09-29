@@ -1420,9 +1420,13 @@ def _validate_tariff(cfg: dict[str, Any]) -> None:
     step_minutes = int(get_hours_per_step(cfg["resolution"]) * 60)
     required = schedule_resolution_minutes(table["schedule"])
     if required % step_minutes:
+        fitting = [freq for freq in ("h", "15min") if required % int(get_hours_per_step(freq) * 60) == 0]
+        remedy = (
+            f'use resolution = "{fitting[0]}"' if fitting else f"App offers no step that divides {required} minutes"
+        )
         raise ValueError(
-            f"Schedule {table['schedule']!r} has boundaries every {required} minutes, which "
-            f'{cfg["resolution"]!r} steps cannot represent; use resolution = "15min" (ADR 0002 A3).'
+            f"Schedule {table['schedule']!r} needs steps that divide {required} minutes, which "
+            f"{cfg['resolution']!r} steps do not; {remedy} (ADR 0002 A3)."
         )
 
 
