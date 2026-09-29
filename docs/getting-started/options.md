@@ -38,7 +38,7 @@ Catalogue keys for the `pv_module` config key, from `breos.pv_modules.MODULES`.
 
 ## Cost presets
 
-Preset keys for the `cost_preset` config key, from `breos/data/configs/costs.json`. Editable copies live in `configs/base/`.
+Preset keys for the `cost_preset` config key, from `breos/data/configs/costs.json`.
 
 | Key | Buy (EUR/kWh) | Export (EUR/kWh) | Battery (EUR/kWh) |
 |---|---|---|---|

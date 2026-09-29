@@ -2,20 +2,15 @@
 
 You do **not** need this directory to run BREOS — the defaults (locations, costs,
 emissions, PV modules, the bundled load profile) are packaged inside the
-installed `breos` package. This folder exists so you can read those defaults and
-keep your own runnable example configs.
+installed `breos` package. This folder holds runnable example configs to copy
+and edit; `breos list` shows the packaged presets.
 
 ```
 configs/
-├── base/          # editable copies of the packaged JSON presets (reference only)
 ├── examples/      # runnable CLI configs for `breos run`, `sweep`, and `montecarlo`
 └── optimization/  # nested configs for the Python optimization API
 ```
 
-- **`base/`** mirrors the packaged presets (`locations`, `costs`, `emissions`,
-  `financials`, `electricity`). Read them to see what BREOS ships and to copy
-  values into your run config. The CLI always loads its own packaged copies, so
-  editing files here is for reference — it does not change a run.
 - **`examples/`** holds CLI configs: single-run inputs for `breos run`, plus
   dedicated `sweep` and Monte Carlo examples. Every file here validates with
   `breos validate-config`.
@@ -79,7 +74,7 @@ breos list load-profiles
 | File | What it shows |
 | --- | --- |
 | [`quickstart.toml`](examples/quickstart.toml) | Minimal happy-path run (Porto, PV + battery) |
-| [`pv-plus-battery.toml`](examples/pv-plus-battery.toml) | **Annotated reference** — every available key with its default |
+| [`pv-plus-battery.toml`](examples/pv-plus-battery.toml) | **Annotated reference** — the common keys with their defaults |
 | [`pv-only.toml`](examples/pv-only.toml) | Baseline with no battery, to compare storage scenarios against |
 | [`germany-berlin.toml`](examples/germany-berlin.toml) | Swapping location + cost preset + emissions factor together |
 | [`east-west-roof.toml`](examples/east-west-roof.toml) | Multiple `[[pv_arrays]]` (split east/west roof) |
@@ -92,8 +87,9 @@ breos list load-profiles
 | [`montecarlo.toml`](examples/montecarlo.toml) | Monte Carlo over weather years + demand (`breos montecarlo`) |
 | [`external-rlp.toml`](examples/external-rlp.toml) | Using non-bundled, licensed load profiles |
 
-Start from `pv-plus-battery.toml` if you want to see the full set of knobs; copy
-any example and edit it for your own scenario.
+Start from `pv-plus-battery.toml` to see the common knobs, and read the
+[configuration key reference](../docs/getting-started/config-reference.md) for
+every key BREOS accepts. Copy any example and edit it for your own scenario.
 
 ## Optimization configs
 

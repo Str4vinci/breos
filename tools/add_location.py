@@ -1,4 +1,19 @@
 #!/usr/bin/env python3
+"""
+Add a geocoded location to the packaged location presets.
+
+Looks an address up with Nominatim, finds its time zone, and writes the entry
+to breos/data/configs/locations.json in this checkout. The ``location`` config
+key and tools/fetch_weather.py find it when BREOS runs from this checkout, for
+example after ``uv sync``, not from an installed wheel. Run
+tools/generate_option_docs.py afterwards to update the options page. For a
+one-off site, set ``location`` to a latitude/longitude/timezone table instead.
+Needs geopy and timezonefinder: ``pip install geopy timezonefinder``.
+
+Usage:
+    python tools/add_location.py "Porto, Portugal"
+"""
+
 import argparse
 import json
 import sys
@@ -7,9 +22,8 @@ from pathlib import Path
 from geopy.geocoders import Nominatim
 from timezonefinder import TimezoneFinder
 
-# Define path to locations.json
 PROJECT_ROOT = Path(__file__).parent.parent
-LOCATIONS_FILE = PROJECT_ROOT / "configs" / "base" / "locations.json"
+LOCATIONS_FILE = PROJECT_ROOT / "breos" / "data" / "configs" / "locations.json"
 
 
 def get_location_data(address):
@@ -46,6 +60,7 @@ def save_location(slug, data):
     try:
         with open(LOCATIONS_FILE, "w") as f:
             json.dump(locations, f, indent=4)
+            f.write("\n")
         print(f"Successfully added '{slug}' to {LOCATIONS_FILE}")
         return True
     except Exception as e:

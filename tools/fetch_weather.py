@@ -9,12 +9,11 @@ Usage:
     python tools/fetch_weather.py historical --location porto --start 2005 --end 2024
     python tools/fetch_weather.py tmy --location porto --force
 
-Locations are resolved from configs/base/locations.json.
-Run with --list to see available locations.
+Locations are the packaged presets (breos/data/configs/locations.json).
+Run the list subcommand to see them, and tools/add_location.py to add one.
 """
 
 import argparse
-import json
 import os
 import sys
 from pathlib import Path
@@ -22,13 +21,13 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).parent.parent.resolve()
 sys.path.insert(0, str(PROJECT_ROOT))
 
-LOCATIONS_PATH = PROJECT_ROOT / "configs" / "base" / "locations.json"
 WEATHER_DIR = PROJECT_ROOT / "weather"
 
 
 def load_locations() -> dict:
-    with open(LOCATIONS_PATH) as f:
-        return json.load(f)
+    from breos.resources import load_config_json
+
+    return load_config_json("locations.json")
 
 
 def resolve_location(name: str) -> dict:
@@ -37,8 +36,7 @@ def resolve_location(name: str) -> dict:
         available = ", ".join(locations.keys())
         print(f"ERROR: Location '{name}' not found.")
         print(f"Available: {available}")
-        print(f"\nTo add a new location, edit {LOCATIONS_PATH}")
-        print("or use: python tools/fetch_historical_weather.py <config.json> --add-locations")
+        print('\nTo add a new location, run: python tools/add_location.py "<address>"')
         sys.exit(1)
     return locations[name]
 
@@ -122,7 +120,7 @@ def fetch_historical(args):
 
 def list_locations(args):
     locations = load_locations()
-    print(f"Available locations ({LOCATIONS_PATH}):\n")
+    print("Available locations:\n")
     for key, loc in locations.items():
         print(f"  {key:15s}  {loc.get('name', '')} ({loc['latitude']}, {loc['longitude']})")
 

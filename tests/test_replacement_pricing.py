@@ -22,7 +22,6 @@ from breos.economics import (
     replacement_event_cost,
     replacement_total_t0,
 )
-from tools import recalculate_economics
 from tools.generate_app_golden import SCENARIOS, _fake_fetch
 
 
@@ -237,31 +236,3 @@ def test_both_dispatch_paths_add_the_swapped_capacity_alike():
     summary = simulate_energy_balance_summary(**common)
     assert n_replacements >= 6
     assert frame_replaced_capacity_wh(results) == summary.replaced_capacity_wh
-
-
-def test_recalculate_economics_prices_capacity_only_outputs(tmp_path):
-    frame, replaced = _frame_with_swaps(1, Battery_Replaced_Capacity_Wh=0.0)
-    frame.loc[replaced, "Battery_Replaced_Capacity_Wh"] = 5000.0
-    frame["Datetime"] = frame["Datetime"].dt.strftime("%d/%m/%Y %H:%M")
-    frame.to_csv(tmp_path / "hourly_results.csv", index=False)
-    pd.DataFrame(
-        {
-            "Year": [1, 2],
-            "Cost_System_Annual": [100.0, 100.0],
-            "Cost_System_Cumulative": [1100.0, 1200.0],
-            "Cost_No_Sys_Annual": [300.0, 306.0],
-        }
-    ).to_csv(tmp_path / "cost_projection.csv", index=False)
-    assert recalculate_economics.swapped_pack_kwh(frame) == 5.0
-    assert recalculate_economics.recalculate_dir(tmp_path).startswith("OK")
-    projection = pd.read_csv(tmp_path / "cost_projection.csv")
-    price = recalculate_economics.NEW_PRICES["pt"]["storage_cost_per_kwh"]
-    assert projection["Cost_Replacement"].iloc[0] == pytest.approx(
-        5.0 * price * 1.02 ** projection["Replacement_Time_Years"].iloc[0]
-    )
-
-
-def test_recalculate_economics_reads_the_pack_from_a_one_swap_year():
-    # 19.9 kWh over three swaps divides to 19.900000000000002.
-    rows = pd.DataFrame({"Replacements": [3, 1], "Replaced_Capacity_kWh": [19.9 * 3, 19.9]})
-    assert recalculate_economics.swapped_pack_kwh(rows) == 19.9

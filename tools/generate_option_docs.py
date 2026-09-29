@@ -74,10 +74,7 @@ SECTIONS: list[dict[str, Any]] = [
     {
         "category": "cost-presets",
         "title": "Cost presets",
-        "intro": (
-            "Preset keys for the `cost_preset` config key, from"
-            " `breos/data/configs/costs.json`. Editable copies live in `configs/base/`."
-        ),
+        "intro": "Preset keys for the `cost_preset` config key, from `breos/data/configs/costs.json`.",
         "columns": [
             ("key", "Key", "code"),
             ("electricity_cost_per_kwh", "Buy (EUR/kWh)", "text"),

@@ -14,16 +14,15 @@ from typing import List, Optional, Tuple
 import numpy as np
 import pandas as pd
 
-from breos.economics import find_payback_year, find_payback_year_interpolated
+from breos.economics import find_payback_year_interpolated
 from breos.tariffs import DEFAULT_CURRENCY
-from breos.utils import format_years_months, local_datetime_index
+from breos.utils import local_datetime_index
 
 MONTH_LABELS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
 
 # matplotlib is the optional ``plots`` extra. ``import breos`` loads this
 # module only when a plotting name is first used, so the error surfaces there.
 try:
-    import matplotlib
     import matplotlib.dates as mdates
     import matplotlib.pyplot as plt
     from matplotlib.patches import Polygon, Rectangle
@@ -369,114 +368,6 @@ def plot_pv_loss_waterfall(
     return fig
 
 
-def create_cost_plots(
-    cost_projection: pd.DataFrame, total_initial_cost: float, results_directory: str, scenario_name: str = ""
-) -> None:
-    """
-    Create cost projection visualization.
-
-    Args:
-        cost_projection: DataFrame from cost_analysis_projection()
-        total_initial_cost: Total investment cost
-        results_directory: Directory to save plots
-        scenario_name: Optional suffix for filenames
-    """
-    os.makedirs(results_directory, exist_ok=True)
-    suffix = f"_{scenario_name}" if scenario_name else ""
-
-    fig, ax = plt.subplots(figsize=(12, 6))
-
-    # Plot cumulative costs
-    if "Cost_No_Sys_Cumulative_NPV" in cost_projection.columns:
-        ax.plot(
-            cost_projection["Year"],
-            cost_projection["Cost_No_Sys_Cumulative_NPV"],
-            "r--",
-            label="No System (NPV)",
-            linewidth=2,
-        )
-        ax.plot(
-            cost_projection["Year"],
-            cost_projection["Cost_System_Cumulative_NPV"],
-            "g-",
-            label="With PV System (NPV)",
-            linewidth=2,
-        )
-    else:
-        ax.plot(
-            cost_projection["Year"], cost_projection["Cost_No_Sys_Cumulative"], "r--", label="No System", linewidth=2
-        )
-        ax.plot(
-            cost_projection["Year"],
-            cost_projection["Cost_System_Cumulative"],
-            "g-",
-            label="With PV System",
-            linewidth=2,
-        )
-
-    # Find and mark payback
-    payback_year = find_payback_year(cost_projection)
-    if payback_year is not None:
-        ax.axvline(x=payback_year, color="blue", linestyle=":", alpha=0.7)
-        ax.annotate(
-            f"Payback: Year {payback_year}", xy=(payback_year, ax.get_ylim()[1] * 0.9), fontsize=10, color="blue"
-        )
-
-    ax.set_xlabel("Year")
-    ax.set_ylabel(f"Cumulative Cost ({_currency(cost_projection)})")
-    ax.legend()
-    ax.grid(True, alpha=0.3)
-
-    plt.tight_layout()
-    plt.savefig(f"{results_directory}/cost_projection{suffix}.png", dpi=300)
-    plt.close()
-
-
-def monthly_graphs(results_df: pd.DataFrame, results_directory: str, columns: Optional[List[str]] = None) -> None:
-    """
-    Create monthly aggregated bar charts.
-
-    Args:
-        results_df: Energy balance results DataFrame
-        results_directory: Directory to save plots
-        columns: Columns to plot (default: PV, Load, Import, Sell)
-    """
-    os.makedirs(results_directory, exist_ok=True)
-
-    df = _local_time_indexed(results_df)
-
-    if columns is None:
-        columns = ["PV_Production", "Houseload", "Import_From_Grid", "PV_AC_Export"]
-
-    # Filter to available columns
-    columns = [c for c in columns if c in df.columns]
-
-    # Monthly aggregation
-    monthly = _power_frame_to_energy_kwh(df[columns], _result_instants(results_df)).resample("ME").sum()
-
-    fig, ax = plt.subplots(figsize=(14, 6))
-
-    x = range(len(monthly))
-    width = 0.2
-
-    colors = ["gold", "steelblue", "coral", "lightgreen"]
-    labels = ["PV Production", "Load", "Grid Import", "Grid Export"]
-
-    for i, (col, color, label) in enumerate(zip(columns, colors, labels, strict=False)):
-        if col in monthly.columns:
-            ax.bar([xi + i * width for xi in x], monthly[col], width, label=label, color=color, alpha=0.8)
-
-    ax.set_xticks([xi + width * (len(columns) - 1) / 2 for xi in x])
-    ax.set_xticklabels([d.strftime("%b %Y") for d in monthly.index], rotation=45)
-    ax.set_ylabel("Energy (kWh)")
-    ax.legend()
-    ax.grid(True, alpha=0.3, axis="y")
-
-    plt.tight_layout()
-    plt.savefig(f"{results_directory}/monthly_energy.png", dpi=300)
-    plt.close()
-
-
 def yearly_graphs(results_df: pd.DataFrame, results_directory: str) -> None:
     """
     Create yearly aggregated summary.
@@ -670,245 +561,6 @@ def plot_resistance_and_efficiency(degradation_df: pd.DataFrame, results_directo
         plt.close()
 
 
-def plot_validation_soh_comparison(
-    measured_soh: "pd.Series",
-    predicted_soh: "pd.Series",
-    results_directory: str,
-    x_label: str = "Time",
-    metrics: Optional[dict] = None,
-) -> None:
-    """
-    Plot measured vs predicted SOH for degradation model validation.
-
-    Measured data is shown as scatter points, predicted as a line.
-    Optionally annotates RMSE on the plot.
-
-    Args:
-        measured_soh: Series indexed by x-axis values (cycles, days, etc.) with measured SOH
-        predicted_soh: Series indexed by same x-axis values with predicted SOH
-        results_directory: Directory to save plot
-        x_label: Label for x-axis
-        metrics: Optional dict with 'RMSE', 'MAE', etc. to annotate
-    """
-    os.makedirs(results_directory, exist_ok=True)
-
-    fig, ax = plt.subplots(figsize=(10, 6))
-    ax.scatter(measured_soh.index, measured_soh.values, s=15, alpha=0.6, color="b", label="Measured", zorder=5)
-    ax.plot(predicted_soh.index, predicted_soh.values, "r-", linewidth=2, label="Predicted")
-
-    ax.set_xlabel(x_label)
-    ax.set_ylabel("SOH")
-    ax.legend()
-    ax.grid(True, alpha=0.3)
-
-    if metrics:
-        text_parts = []
-        if "RMSE" in metrics:
-            text_parts.append(f"RMSE = {metrics['RMSE']:.4f}")
-        if "MAE" in metrics:
-            text_parts.append(f"MAE = {metrics['MAE']:.4f}")
-        if "R2" in metrics:
-            text_parts.append(f"R\u00b2 = {metrics['R2']:.4f}")
-        if text_parts:
-            ax.text(
-                0.02,
-                0.02,
-                "\n".join(text_parts),
-                transform=ax.transAxes,
-                fontsize=10,
-                verticalalignment="bottom",
-                bbox=dict(boxstyle="round", facecolor="wheat", alpha=0.5),
-            )
-
-    plt.tight_layout()
-    plt.savefig(f"{results_directory}/validation_soh_comparison.png", dpi=300)
-    plt.close()
-
-
-def plot_validation_residuals(
-    measured_soh: "pd.Series",
-    predicted_soh: "pd.Series",
-    results_directory: str,
-    x_label: str = "Time",
-) -> None:
-    """
-    Plot residuals (measured - predicted) over time.
-
-    Args:
-        measured_soh: Measured SOH series
-        predicted_soh: Predicted SOH series (must share same index)
-        results_directory: Directory to save plot
-        x_label: Label for x-axis
-    """
-    os.makedirs(results_directory, exist_ok=True)
-
-    residuals = (measured_soh - predicted_soh) * 100  # to percentage points
-
-    fig, ax = plt.subplots(figsize=(10, 5))
-    ax.scatter(residuals.index, residuals.values, s=10, alpha=0.5, color="steelblue")
-    ax.axhline(0, color="k", linestyle="--", linewidth=1)
-    ax.set_xlabel(x_label)
-    ax.set_ylabel("Residual (measured - predicted) [pp]")
-    ax.grid(True, alpha=0.3)
-    plt.tight_layout()
-    plt.savefig(f"{results_directory}/validation_residuals.png", dpi=300)
-    plt.close()
-
-
-def plot_validation_parity(
-    measured_soh: "pd.Series",
-    predicted_soh: "pd.Series",
-    results_directory: str,
-    metrics: Optional[dict] = None,
-) -> None:
-    """
-    Plot parity (predicted vs measured) with 1:1 line.
-
-    Args:
-        measured_soh: Measured SOH values
-        predicted_soh: Predicted SOH values (same length)
-        results_directory: Directory to save plot
-        metrics: Optional dict with R2 etc. to annotate
-    """
-    os.makedirs(results_directory, exist_ok=True)
-
-    fig, ax = plt.subplots(figsize=(7, 7))
-    ax.scatter(measured_soh.values, predicted_soh.values, s=15, alpha=0.5, color="steelblue")
-
-    # 1:1 line
-    lims = [
-        min(measured_soh.min(), predicted_soh.min()) - 0.01,
-        max(measured_soh.max(), predicted_soh.max()) + 0.01,
-    ]
-    ax.plot(lims, lims, "k--", linewidth=1, alpha=0.7)
-
-    ax.set_xlabel("Measured SOH")
-    ax.set_ylabel("Predicted SOH")
-    ax.set_xlim(lims)
-    ax.set_ylim(lims)
-    ax.set_aspect("equal")
-    ax.grid(True, alpha=0.3)
-
-    if metrics and "R2" in metrics:
-        ax.text(
-            0.05,
-            0.95,
-            f"R\u00b2 = {metrics['R2']:.4f}",
-            transform=ax.transAxes,
-            fontsize=11,
-            verticalalignment="top",
-            bbox=dict(boxstyle="round", facecolor="wheat", alpha=0.5),
-        )
-
-    plt.tight_layout()
-    plt.savefig(f"{results_directory}/validation_parity.png", dpi=300)
-    plt.close()
-
-
-def plot_validation_multi_system(
-    systems_results: dict,
-    results_directory: str,
-) -> None:
-    """
-    Plot measured vs predicted SOH for multiple systems on one figure.
-
-    Each system gets a unique color. Measured SOH shown as markers,
-    predicted SOH as lines.
-
-    Args:
-        systems_results: Dict keyed by system_id. Each value contains
-            ``simulation`` data with ``date`` and ``predicted_soh``, ``truth``
-            data with ``date`` and ``measured_soh``, and optional ``metrics``.
-        results_directory: Directory to save plot
-    """
-    os.makedirs(results_directory, exist_ok=True)
-
-    n_systems = len(systems_results)
-    if n_systems == 0:
-        return
-
-    # plt.cm.get_cmap was removed in matplotlib 3.11; the registry works on the floor too.
-    cmap = matplotlib.colormaps["tab20"].resampled(max(n_systems, 2))
-
-    fig, ax = plt.subplots(figsize=(12, 7))
-
-    for i, (sid, res) in enumerate(sorted(systems_results.items())):
-        color = cmap(i)
-        sim = res["simulation"]
-        truth = res["truth"]
-        label = f"System {sid}"
-
-        # Predicted as line
-        ax.plot(sim["date"], sim["predicted_soh"], "-", color=color, linewidth=1.2, alpha=0.7)
-
-        # Measured as markers
-        if not truth.empty:
-            ax.scatter(
-                truth["date"],
-                truth["measured_soh"],
-                color=color,
-                s=40,
-                marker="o",
-                edgecolors="k",
-                linewidths=0.5,
-                label=label,
-                zorder=5,
-            )
-
-    ax.set_xlabel("Date")
-    ax.set_ylabel("SOH")
-    ax.set_ylim(0.6, 1.02)
-    ax.grid(True, alpha=0.3)
-    ax.legend(loc="lower left", ncol=2, fontsize=9)
-
-    # Format x-axis as years
-    ax.xaxis.set_major_locator(mdates.YearLocator())
-    ax.xaxis.set_major_formatter(mdates.DateFormatter("%Y"))
-    fig.autofmt_xdate()
-
-    plt.tight_layout()
-    plt.savefig(os.path.join(results_directory, "validation_multi_system.png"), dpi=300)
-    plt.close()
-
-
-def plot_validation_degradation_split(
-    simulation_df: "pd.DataFrame",
-    results_directory: str,
-    system_label: str = "",
-) -> None:
-    """
-    Plot calendar vs cycle aging contribution over time as stacked area.
-
-    Args:
-        simulation_df: DataFrame with columns 'date', 'cal_loss', 'cycle_loss'
-        results_directory: Directory to save plot
-        system_label: Optional label for filename suffix
-    """
-    os.makedirs(results_directory, exist_ok=True)
-
-    dates = simulation_df["date"]
-    cal_loss = simulation_df["cal_loss"] * 100  # to percentage points
-    cycle_loss = simulation_df["cycle_loss"] * 100
-
-    fig, ax = plt.subplots(figsize=(10, 6))
-    ax.fill_between(dates, 0, cal_loss, alpha=0.6, color="#2196F3", label="Calendar aging")
-    ax.fill_between(dates, cal_loss, cal_loss + cycle_loss, alpha=0.6, color="#FF5722", label="Cycle aging")
-
-    ax.set_xlabel("Date")
-    ax.set_ylabel("Capacity loss [pp]")
-    ax.legend(loc="upper left")
-    ax.grid(True, alpha=0.3)
-
-    ax.xaxis.set_major_locator(mdates.YearLocator())
-    ax.xaxis.set_major_formatter(mdates.DateFormatter("%Y"))
-    fig.autofmt_xdate()
-
-    plt.tight_layout()
-    suffix = f"_{system_label}" if system_label else ""
-    plt.savefig(os.path.join(results_directory, f"validation_degradation_split{suffix}.png"), dpi=300)
-    plt.close()
-
-
 def plot_cell_temperature(
     results_df: pd.DataFrame,
     results_directory: str,
@@ -970,7 +622,6 @@ def plot_timeseries(
     columns: List[str],
     results_directory: str,
     filename: str = "timeseries.png",
-    title: str = "Time Series",
 ) -> None:
     """
     Plot multiple columns as time series.
@@ -980,7 +631,6 @@ def plot_timeseries(
         columns: Column names to plot
         results_directory: Directory to save plot
         filename: Output filename
-        title: Plot title
     """
     os.makedirs(results_directory, exist_ok=True)
 
@@ -992,7 +642,6 @@ def plot_timeseries(
 
     ax.set_xlabel("Time")
     ax.set_ylabel("Value")
-    # ax.set_title(title)
     ax.legend()
     ax.grid(True, alpha=0.3)
 
@@ -1172,77 +821,6 @@ def plot_battery_soh_timeseries(
 
     plt.tight_layout()
     plt.savefig(f"{results_directory}/battery_soh_timeseries{suffix}.png", dpi=300)
-    plt.close()
-
-
-def plot_tilt_optimization(
-    tilt_results: pd.DataFrame,
-    results_directory: str,
-    scenario_name: str = "",
-    x_col: str = "Tilt",
-    y_col: str = "Total_PV_Production_kWh",
-    optimal_marker: bool = True,
-) -> None:
-    """
-    Scatter plot of tilt optimization results.
-
-    Args:
-        tilt_results: DataFrame with tilt optimization results
-        results_directory: Directory to save plots
-        scenario_name: Optional suffix for filenames
-        x_col: Column for x-axis (default: 'Tilt')
-        y_col: Column for y-axis (default: 'Total_PV_Production_kWh')
-        optimal_marker: Whether to highlight optimal point
-    """
-    os.makedirs(results_directory, exist_ok=True)
-    suffix = f"_{scenario_name}" if scenario_name else ""
-
-    if x_col not in tilt_results.columns or y_col not in tilt_results.columns:
-        print(f"Warning: Required columns {x_col} or {y_col} not found")
-        return
-
-    fig, ax = plt.subplots(figsize=(12, 6))
-
-    x = tilt_results[x_col]
-    y = tilt_results[y_col]
-
-    # Scatter plot with color based on y value
-    scatter = ax.scatter(x, y, c=y, cmap="viridis", s=80, alpha=0.8, edgecolor="black")
-    ax.plot(x, y, "k-", alpha=0.3, linewidth=1)
-
-    # Mark optimal point
-    if optimal_marker:
-        optimal_idx = y.idxmax()
-        optimal_x = x.loc[optimal_idx]
-        optimal_y = y.loc[optimal_idx]
-        ax.scatter(
-            [optimal_x],
-            [optimal_y],
-            s=200,
-            c="red",
-            marker="*",
-            edgecolor="black",
-            linewidth=1.5,
-            zorder=5,
-            label=f"Optimal: {optimal_x}°",
-        )
-        ax.annotate(
-            f"{optimal_y:.1f} kWh",
-            xy=(optimal_x, optimal_y),
-            xytext=(optimal_x + 2, optimal_y + optimal_y * 0.02),
-            fontsize=10,
-            fontweight="bold",
-        )
-
-    plt.colorbar(scatter, ax=ax, label=y_col)
-
-    ax.set_xlabel(f"{x_col} (°)", fontsize=12)
-    ax.set_ylabel(y_col, fontsize=12)
-    ax.legend(loc="lower right")
-    ax.grid(True, alpha=0.3)
-
-    plt.tight_layout()
-    plt.savefig(f"{results_directory}/tilt_optimization{suffix}.png", dpi=300)
     plt.close()
 
 
@@ -1456,137 +1034,43 @@ def _plot_montecarlo_payback_summary(df: pd.DataFrame, results_directory: str, s
 
 
 def plot_montecarlo_simulation(
-    all_data: List[dict],
+    runs: pd.DataFrame,
     results_directory: str,
     scenario_name: str = "",
-    full_df: Optional[pd.DataFrame] = None,
     verbose: bool = True,
 ) -> None:
     """
     Generate all plots for Monte Carlo simulation results.
 
     Args:
-        all_data: List of result dictionaries from simulation
-        results_directory: Directory to save plots
+        runs: The one-row-per-run table written by ``breos montecarlo``.
+        results_directory: Directory to save plots; they go in its ``plots``
+            subdirectory.
         scenario_name: Optional suffix for filenames
-        full_df: Optional DataFrame with full time-series results (for overlays)
-            or the one-row-per-run CSV written by ``breos montecarlo``.
         verbose: Print the output directory when plots are generated.
     """
-    os.makedirs(results_directory, exist_ok=True)
+    if not _is_breos_montecarlo_summary(runs):
+        raise ValueError(
+            "plot_montecarlo_simulation needs the one-row-per-run table written by breos montecarlo "
+            "(an npv_savings column and a run or payback_year column)"
+        )
+
     suffix = f"_{scenario_name}" if scenario_name else ""
     plots_folder = os.path.join(results_directory, "plots")
     os.makedirs(plots_folder, exist_ok=True)
 
-    # Use provided DF or try to load
-    if full_df is not None:
-        pass  # use provided full_df
-    else:
-        # Fallback to loading from disk
-        csv_path = os.path.join(results_directory, "monte_carlo_results.csv")
-        if not os.path.exists(csv_path):
-            csv_path = os.path.join(results_directory, "combined_results.csv")  # Legacy name check
-
-        if os.path.exists(csv_path):
-            full_df = pd.read_csv(csv_path)
-
-    # Try to load detailed degradation data
-    details_df = None
-    details_path = os.path.join(results_directory, "monte_carlo_degradation_details.csv")
-    if os.path.exists(details_path):
-        details_df = pd.read_csv(details_path)
-
-    if full_df is not None and _is_breos_montecarlo_summary(full_df):
-        plot_montecarlo_npv_distribution(full_df, plots_folder, suffix)
-        plot_montecarlo_grid_independence_distribution(full_df, plots_folder, suffix)
-        plot_montecarlo_final_soh_distribution(full_df, plots_folder, suffix)
-        _plot_montecarlo_distribution(
-            _finite_numeric_series(full_df, "lcoe_per_kwh"),
-            plots_folder,
-            "montecarlo_lcoe_distribution",
-            f"LCOE ({_currency(full_df)}/kWh)",
-            "tab:purple",
-            suffix,
-        )
-        _plot_montecarlo_payback_summary(full_df, plots_folder, suffix)
-        if verbose:
-            print(f"Monte Carlo plots saved to: {plots_folder}")
-        return
-
-    if full_df is not None:
-        # 4. Cost Overlay
-        plot_montecarlo_cost_overlay(full_df, plots_folder, suffix)
-
-        # 5. SOH Overlay
-        if details_df is not None:
-            plot_montecarlo_soh_traces(details_df, plots_folder, suffix)
-        else:
-            plot_montecarlo_soh_overlay(full_df, plots_folder, suffix)
-
-        # 6. NPV Savings Distribution (P10/P50/P90/P99)
-        plot_montecarlo_npv_distribution(full_df, plots_folder, suffix)
-
-        # 7. Grid Independence Distribution (P10/P50/P90/P99)
-        plot_montecarlo_grid_independence_distribution(full_df, plots_folder, suffix)
-
-    # Process Data for Break-even Stats (Unique Runs only)
-    if full_df is not None:
-        df = full_df
-    else:
-        df = pd.DataFrame(all_data)
-
-    if not df.empty and _is_breos_montecarlo_summary(df):
-        plot_montecarlo_npv_distribution(df, plots_folder, suffix)
-        plot_montecarlo_grid_independence_distribution(df, plots_folder, suffix)
-        plot_montecarlo_final_soh_distribution(df, plots_folder, suffix)
-        _plot_montecarlo_distribution(
-            _finite_numeric_series(df, "lcoe_per_kwh"),
-            plots_folder,
-            "montecarlo_lcoe_distribution",
-            f"LCOE ({_currency(df)}/kWh)",
-            "tab:purple",
-            suffix,
-        )
-        _plot_montecarlo_payback_summary(df, plots_folder, suffix)
-        if verbose:
-            print(f"Monte Carlo plots saved to: {plots_folder}")
-        return
-
-    if not df.empty and "run_number" in df.columns:
-        # Total unique runs
-        total_runs = df["run_number"].nunique()
-
-        # Filter for runs that achieved break even
-        # Since break_even_achieved is boolean and persists, we can just check if ANY row for a run is True
-        # Or more simply, take the unique break_even_year for rows where it is not null
-
-        # Filter for rows that actually have the break-even flag set to True
-        # This ensures we get a row where break_even_year is populated
-        successful_rows = df[df["break_even_achieved"].fillna(False).astype(bool)]
-
-        # Get unique runs from these rows
-        success_df = successful_rows.drop_duplicates("run_number")
-
-        # If break_even_year is in columns
-        if "break_even_year" in success_df.columns:
-            breakeven_steps = success_df["break_even_year"].dropna().tolist()
-        else:
-            breakeven_steps = []
-
-    else:
-        # Fallback (should not happen with correct data)
-        total_runs = len(all_data) if isinstance(all_data, list) else 0
-        breakeven_steps = []
-
-    # 1. Break-even Histogram
-    plot_breakeven_distribution(breakeven_steps, total_runs, plots_folder, suffix)
-
-    # 2. Break-even CDF
-    plot_breakeven_cdf(breakeven_steps, plots_folder, suffix)
-
-    # 3. Summary Bar (Success Rate)
-    plot_breakeven_summary_bar(len(breakeven_steps), total_runs, plots_folder, suffix)
-
+    plot_montecarlo_npv_distribution(runs, plots_folder, suffix)
+    plot_montecarlo_grid_independence_distribution(runs, plots_folder, suffix)
+    plot_montecarlo_final_soh_distribution(runs, plots_folder, suffix)
+    _plot_montecarlo_distribution(
+        _finite_numeric_series(runs, "lcoe_per_kwh"),
+        plots_folder,
+        "montecarlo_lcoe_distribution",
+        f"LCOE ({_currency(runs)}/kWh)",
+        "tab:purple",
+        suffix,
+    )
+    _plot_montecarlo_payback_summary(runs, plots_folder, suffix)
     if verbose:
         print(f"Monte Carlo plots saved to: {plots_folder}")
 
@@ -1718,209 +1202,35 @@ def plot_breakeven_summary_bar(achieved_count: int, total_runs: int, results_dir
     plt.close()
 
 
-def plot_montecarlo_cost_overlay(all_results_df: pd.DataFrame, results_directory: str, suffix: str = "") -> None:
-    """
-    Overlay plot of Cumulative System Cost vs No System Cost for all runs.
-    """
-    fig, ax = plt.subplots(figsize=(12, 8))
-
-    runs = all_results_df["run_number"].unique()
-
-    # Plot each run with high transparency
-    for run in runs:
-        run_data = all_results_df[all_results_df["run_number"] == run]
-        x = run_data["year"]
-        y_sys = run_data["cumulative_system_cost"]
-        y_nosys = run_data["cumulative_nosys_cost"]
-
-        ax.plot(x, y_sys, color="blue", alpha=0.1, linewidth=1)
-        ax.plot(x, y_nosys, color="red", alpha=0.1, linewidth=1)
-
-    # Dummy lines for legend
-    ax.plot([], [], color="blue", label="System Cost (All Runs)")
-    ax.plot([], [], color="red", label="No System Cost (All Runs)")
-
-    # Plot Mean Lines
-    mean_sys = all_results_df.groupby("year")["cumulative_system_cost"].mean()
-    mean_nosys = all_results_df.groupby("year")["cumulative_nosys_cost"].mean()
-
-    ax.plot(mean_sys.index, mean_sys.values, color="darkblue", linewidth=2.5, linestyle="-", label="Mean System Cost")
-    ax.plot(
-        mean_nosys.index, mean_nosys.values, color="darkred", linewidth=2.5, linestyle="--", label="Mean No System Cost"
-    )
-
-    # Force integer ticks on x-axis
-    max_year = int(all_results_df["year"].max())
-    if max_year > 0:
-        ax.set_xticks(range(1, max_year + 1))
-
-    ax.set_xlabel("Year", fontsize=12)
-    ax.set_ylabel(f"Cumulative Cost ({_currency(all_results_df)})", fontsize=12)
-    ax.grid(True, alpha=0.3)
-    ax.legend()
-
-    plt.tight_layout()
-    plt.savefig(f"{results_directory}/montecarlo_cost_overlay{suffix}.png", dpi=300)
-    plt.close()
-
-
-def plot_montecarlo_soh_overlay(all_results_df: pd.DataFrame, results_directory: str, suffix: str = "") -> None:
-    """
-    Overlay plot of Battery SOH degradation for all runs.
-    """
-    fig, ax = plt.subplots(figsize=(12, 8))
-
-    runs = all_results_df["run_number"].unique()
-
-    # Plot each run
-    for run in runs:
-        run_data = all_results_df[all_results_df["run_number"] == run]
-        x = run_data["year"]
-        y = run_data["battery_soh"]
-
-        ax.plot(x, y, color="green", alpha=0.1, linewidth=1)
-
-    # Mean line
-    mean_soh = all_results_df.groupby("year")["battery_soh"].mean()
-    ax.plot(mean_soh.index, mean_soh.values, color="darkgreen", linewidth=2.5, label="Mean SOH")
-
-    # Force integer ticks on x-axis
-    max_year = int(all_results_df["year"].max())
-    if max_year > 0:
-        ax.set_xticks(range(1, max_year + 1))
-
-    ax.set_xlabel("Year", fontsize=12)
-    ax.set_ylabel("State of Health (%)", fontsize=12)
-    ax.grid(True, alpha=0.3)
-    ax.set_ylim(0, 105)
-    ax.legend()
-
-    plt.tight_layout()
-    plt.savefig(f"{results_directory}/montecarlo_soh_overlay{suffix}.png", dpi=300)
-    plt.close()
-
-
 def plot_montecarlo_npv_distribution(all_results_df: pd.DataFrame, results_directory: str, suffix: str = "") -> None:
     """
-    Histogram of NPV savings across all MC runs.
-
-    Supports the one-row-per-run ``breos montecarlo`` CSV
-    (``npv_savings``) and the legacy run-year schema where NPV savings is
-    derived from cumulative system and no-system costs.
+    Histogram of NPV savings (``npv_savings``) across one-row-per-run MC results.
     """
-    if "npv_savings" in all_results_df.columns:
-        _plot_montecarlo_distribution(
-            _finite_numeric_series(all_results_df, "npv_savings"),
-            results_directory,
-            "montecarlo_npv_distribution",
-            f"NPV Savings ({_currency(all_results_df)})",
-            "tab:blue",
-            suffix,
-            include_zero=True,
-        )
-        return
-
-    df = all_results_df.copy()
-    df["npv_savings"] = df["cumulative_nosys_cost"] - df["cumulative_system_cost"]
-
-    final_year = df["year"].max()
-    final = df[df["year"] == final_year]["npv_savings"]
-
-    if final.empty:
-        print("No final-year data for NPV distribution.")
-        return
-
-    p10 = float(final.quantile(0.10))
-    p50 = float(final.quantile(0.50))
-    p90 = float(final.quantile(0.90))
-    p99 = float(final.quantile(0.99))
-
-    fig, ax = plt.subplots(figsize=(12, 8))
-
-    ax.hist(final, bins=80, color="tab:blue", alpha=0.6, edgecolor="white", linewidth=0.5)
-
-    # Percentile lines
-    line_cfg = [
-        (p10, "P10", "--", 1.5),
-        (p50, "P50", "-", 2.5),
-        (p90, "P90", "--", 1.5),
-        (p99, "P99", ":", 1.0),
-    ]
-    for val, label, ls, lw in line_cfg:
-        ax.axvline(
-            x=val, color="tab:red", linestyle=ls, linewidth=lw, label=f"{label}: {val:,.0f} {_currency(all_results_df)}"
-        )
-
-    ax.axvline(x=0, color="black", linewidth=0.8, linestyle="-", alpha=0.5)
-
-    ax.set_xlabel(f"NPV Savings at Year {int(final_year)} ({_currency(all_results_df)})", fontsize=12)
-    ax.set_ylabel("Frequency", fontsize=12)
-    ax.grid(True, alpha=0.3, axis="y")
-    ax.legend()
-
-    plt.tight_layout()
-    plt.savefig(f"{results_directory}/montecarlo_npv_distribution{suffix}.png", dpi=300)
-    plt.close()
+    _plot_montecarlo_distribution(
+        _finite_numeric_series(all_results_df, "npv_savings"),
+        results_directory,
+        "montecarlo_npv_distribution",
+        f"NPV Savings ({_currency(all_results_df)})",
+        "tab:blue",
+        suffix,
+        include_zero=True,
+    )
 
 
 def plot_montecarlo_grid_independence_distribution(
     all_results_df: pd.DataFrame, results_directory: str, suffix: str = ""
 ) -> None:
     """
-    Histogram of grid independence across all MC runs.
-
-    Supports the one-row-per-run ``breos montecarlo`` CSV
-    (``mean_grid_independence_pct``) and the legacy run-year schema
-    (``grid_independence_pct``).
+    Histogram of mean grid independence (``mean_grid_independence_pct``) across one-row-per-run MC results.
     """
-    if "mean_grid_independence_pct" in all_results_df.columns:
-        _plot_montecarlo_distribution(
-            _finite_numeric_series(all_results_df, "mean_grid_independence_pct"),
-            results_directory,
-            "montecarlo_grid_independence_distribution",
-            "Mean Grid Independence (%)",
-            "tab:green",
-            suffix,
-        )
-        return
-
-    if "grid_independence_pct" not in all_results_df.columns:
-        print("No grid_independence_pct column found, skipping distribution plot.")
-        return
-
-    final_year = all_results_df["year"].max()
-    final = all_results_df[all_results_df["year"] == final_year]["grid_independence_pct"]
-
-    if final.empty:
-        print("No final-year data for grid independence distribution.")
-        return
-
-    p10 = float(final.quantile(0.10))
-    p50 = float(final.quantile(0.50))
-    p90 = float(final.quantile(0.90))
-    p99 = float(final.quantile(0.99))
-
-    fig, ax = plt.subplots(figsize=(12, 8))
-
-    ax.hist(final, bins=80, color="tab:green", alpha=0.6, edgecolor="white", linewidth=0.5)
-
-    line_cfg = [
-        (p10, "P10", "--", 1.5),
-        (p50, "P50", "-", 2.5),
-        (p90, "P90", "--", 1.5),
-        (p99, "P99", ":", 1.0),
-    ]
-    for val, label, ls, lw in line_cfg:
-        ax.axvline(x=val, color="tab:red", linestyle=ls, linewidth=lw, label=f"{label}: {val:.1f}%")
-
-    ax.set_xlabel(f"Grid Independence at Year {int(final_year)} (%)", fontsize=12)
-    ax.set_ylabel("Frequency", fontsize=12)
-    ax.grid(True, alpha=0.3, axis="y")
-    ax.legend()
-
-    plt.tight_layout()
-    plt.savefig(f"{results_directory}/montecarlo_grid_independence_distribution{suffix}.png", dpi=300)
-    plt.close()
+    _plot_montecarlo_distribution(
+        _finite_numeric_series(all_results_df, "mean_grid_independence_pct"),
+        results_directory,
+        "montecarlo_grid_independence_distribution",
+        "Mean Grid Independence (%)",
+        "tab:green",
+        suffix,
+    )
 
 
 def plot_montecarlo_final_soh_distribution(
@@ -1937,38 +1247,6 @@ def plot_montecarlo_final_soh_distribution(
         "tab:cyan",
         suffix,
     )
-
-
-def plot_montecarlo_soh_traces(details_df: pd.DataFrame, results_directory: str, suffix: str = "") -> None:
-    """
-    Plot detailed SOH traces for sample runs (daily resolution).
-    """
-    fig, ax = plt.subplots(figsize=(12, 8))
-
-    runs = details_df["run_number"].unique()
-
-    for run in runs:
-        run_data = details_df[details_df["run_number"] == run].copy()
-
-        # Use simple index-based years
-        # Assuming daily data
-        x = np.arange(len(run_data)) / 365.0
-        y = run_data["SOH"]
-
-        ax.plot(x, y, linewidth=1.5, alpha=0.6, label=f"Run {run}")
-
-    ax.set_xlabel("Simulation Year", fontsize=12)
-    ax.set_ylabel("State of Health (%)", fontsize=12)
-    ax.grid(True, alpha=0.3)
-    ax.set_ylim(0, 102)
-
-    # Add reference lines
-    ax.axhline(y=80, color="red", linestyle="--", alpha=0.5, label="EOL (80%)")
-    ax.legend(loc="lower left")
-
-    plt.tight_layout()
-    plt.savefig(f"{results_directory}/montecarlo_soh_traces{suffix}.png", dpi=300)
-    plt.close()
 
 
 # =========================================================================
@@ -2178,60 +1456,6 @@ def plot_breakeven_comparison(
     plt.close()
 
 
-def plot_breakeven_two(
-    df1: "pd.DataFrame",
-    label1: str,
-    be1: "Optional[float]",
-    df2: "pd.DataFrame",
-    label2: str,
-    be2: "Optional[float]",
-    results_dir: str,
-    filename: str = "breakeven_two.png",
-) -> None:
-    """
-    Two-scenario break-even comparison with annotated crossover markers.
-
-    Args:
-        df1, df2: DataFrames with ``Year``, ``Cost_No_Sys_Cumulative_NPV``,
-            and ``Cost_System_Cumulative_NPV`` columns.
-        label1/2: Display labels.
-        be1/be2: Pre-computed break-even years (decimal), or None.
-        results_dir: Output directory.
-        filename: Output filename.
-    """
-    os.makedirs(results_dir, exist_ok=True)
-
-    fig, ax = plt.subplots(figsize=(12, 7))
-
-    ax.plot(df1["Year"], df1["Cost_No_Sys_Cumulative_NPV"], "r--", label="No System", linewidth=2.5)
-    ax.plot(df1["Year"], df1["Cost_System_Cumulative_NPV"], "b-", label=label1, linewidth=2)
-    ax.plot(df2["Year"], df2["Cost_System_Cumulative_NPV"], "g-", label=label2, linewidth=2)
-
-    ax.set_xlabel("Year")
-    currency = _currency(df1)
-    ax.set_ylabel(f"Cumulative Cost ({currency})")
-    ax.legend(loc="upper left")
-    ax.grid(True, alpha=0.3)
-    ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, _: f"{x:,.0f} {currency}"))
-
-    max_year = int(df1["Year"].max())
-    ax.set_xticks(range(1, max_year + 1))
-    ax.set_xlim(_breakeven_left_limit([be for be in (be1, be2) if be is not None]), max_year + 0.5)
-
-    ylim = ax.get_ylim()
-    y_pos = ylim[1] * 0.85
-    if be1 is not None:
-        ax.axvline(x=be1, color="blue", linestyle=":", alpha=0.7, linewidth=1.5)
-        ax.annotate(f"{label1}: {format_years_months(be1)}", xy=(be1 + 0.3, y_pos), fontsize=10, color="blue")
-    if be2 is not None:
-        ax.axvline(x=be2, color="green", linestyle=":", alpha=0.7, linewidth=1.5)
-        ax.annotate(f"{label2}: {format_years_months(be2)}", xy=(be2 + 0.3, y_pos * 0.92), fontsize=10, color="green")
-
-    plt.tight_layout()
-    plt.savefig(os.path.join(results_dir, filename), dpi=300)
-    plt.close()
-
-
 def plot_azitilt_landscape_2d(
     df_grid: "pd.DataFrame",
     opt_azimuth: float,
@@ -2260,42 +1484,6 @@ def plot_azitilt_landscape_2d(
     ax.legend()
     ax.grid(True, alpha=0.3)
     plt.tight_layout()
-    plt.savefig(os.path.join(results_dir, filename), dpi=300)
-    plt.close()
-
-
-def plot_azitilt_landscape_3d(
-    df_grid: "pd.DataFrame",
-    opt_azimuth: float,
-    opt_tilt: float,
-    opt_metric: float,
-    results_dir: str,
-    filename: str = "optimization_landscape_3d.png",
-) -> None:
-    """
-    3-D surface plot of the azimuth/tilt optimisation landscape.
-
-    Args:
-        df_grid:     DataFrame with columns 'Azimuth', 'Tilt', 'Metric'.
-        opt_azimuth: Optimal azimuth to mark.
-        opt_tilt:   Optimal tilt to mark.
-        opt_metric:  Metric value at optimum.
-        results_dir: Output directory.
-        filename:    Output filename.
-    """
-    os.makedirs(results_dir, exist_ok=True)
-
-    fig = plt.figure(figsize=(12, 9))
-    ax = fig.add_subplot(111, projection="3d")
-    pivot = df_grid.pivot(index="Tilt", columns="Azimuth", values="Metric")
-    X, Y = np.meshgrid(pivot.columns, pivot.index)
-    Z = pivot.values
-    surf = ax.plot_surface(X, Y, Z, cmap="viridis", edgecolor="none", alpha=0.9)
-    ax.scatter([opt_azimuth], [opt_tilt], [opt_metric], color="red", s=100, label="Optimum", zorder=10)
-    ax.set_xlabel("Azimuth")
-    ax.set_ylabel("Tilt")
-    ax.set_zlabel("Metric")
-    fig.colorbar(surf, shrink=0.5, aspect=5)
     plt.savefig(os.path.join(results_dir, filename), dpi=300)
     plt.close()
 
@@ -2455,67 +1643,6 @@ def plot_pareto_front_analysis(
     plt.tight_layout(rect=[0, 0, 0.85, 1])
     plt.savefig(os.path.join(results_dir, filename), dpi=300)
     plt.close()
-
-
-def plot_calendar_aging_sensitivity(
-    soh_trajectories: dict,
-    eol_threshold: float,
-    results_dir: str,
-    filename: str = "calendar_aging_sensitivity.png",
-) -> None:
-    """
-    Plot SOH trajectories for different calendar aging k0 scaling factors.
-
-    Args:
-        soh_trajectories: Dict mapping label strings (e.g. "k₀ × 0.25") to
-            lists of yearly SOH values.
-        eol_threshold: End-of-life SOH threshold as percentage (e.g. 80.0).
-        results_dir: Directory to save the plot.
-        filename: Output filename.
-    """
-    os.makedirs(results_dir, exist_ok=True)
-
-    colors = ["#2ecc71", "#3498db", "#e67e22", "#e74c3c"]
-    markers = ["o", "s", "^", "D"]
-
-    fig, ax = plt.subplots(figsize=(12, 7))
-
-    for i, (label, soh_values) in enumerate(soh_trajectories.items()):
-        years = list(range(1, len(soh_values) + 1))
-        color = colors[i % len(colors)]
-        marker = markers[i % len(markers)]
-        ax.plot(
-            years,
-            soh_values,
-            color=color,
-            linewidth=2,
-            marker=marker,
-            markersize=5,
-            markevery=max(1, len(years) // 10),
-            label=label,
-            zorder=3,
-        )
-
-    # EOL threshold line
-    ax.axhline(
-        eol_threshold,
-        color="grey",
-        linewidth=1.5,
-        linestyle="--",
-        label=f"EOL threshold ({eol_threshold:.0f}%)",
-        zorder=2,
-    )
-
-    ax.set_xlabel("Year")
-    ax.set_ylabel("State of Health (%)")
-    ax.set_xticks(range(1, len(next(iter(soh_trajectories.values()))) + 1))
-    ax.set_ylim(None, 102)
-    ax.grid(True, alpha=0.3)
-    ax.legend(loc="lower left", frameon=True)
-
-    fig.tight_layout()
-    fig.savefig(os.path.join(results_dir, filename), dpi=300, bbox_inches="tight")
-    plt.close(fig)
 
 
 def plot_grid_independence_heatmap(
