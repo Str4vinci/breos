@@ -1527,7 +1527,6 @@ def _simulate_core(
             requires ``breos[fast]``. Everything outside the day window runs
             in Python either way.
 
-
     Returns:
         A :class:`_CoreRun` holding the filled result buffers, the calendar,
         the aging state and the lifecycle; the public entry points shape

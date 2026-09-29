@@ -52,7 +52,7 @@ byte-for-byte identical.
   hard pandas type check, and its annotation is dependency-neutral.
 - **D — dead code removal:** deleted the trailing module-level string that
   held an unexecuted `find_breakpoints` test script. It referenced names the
-  module never defines and was never evaluated.
+  module never defines and was never executed.
 - **F — repository formatting:** applied Ruff/Black-compatible formatting,
   including whitespace, quote, and line-wrap changes.
 - **S — state-domain guards:** bounded the incremental state updates to the

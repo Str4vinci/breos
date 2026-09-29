@@ -43,13 +43,12 @@ conditions.
 Resolved settings use this order:
 
 1. explicit user configuration;
-2. sourced model-profile defaults;
-3. global BREOS defaults.
+2. global BREOS defaults.
 
-No BLAST paper bundled here defines generic pack operating limits, so the
-profiles currently contain no invented SOC, efficiency, power, or replacement
-defaults. Existing global settings therefore remain unchanged unless a user
-overrides them.
+Choosing a `blast_model` does not change any operating setting. No BLAST paper
+bundled here defines generic pack operating limits, so BREOS does not invent
+SOC, efficiency, power, or replacement defaults per model. The global settings
+apply unless a user overrides them.
 
 ## Migration from `battery_type`
 
