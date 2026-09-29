@@ -1,10 +1,65 @@
 """Tests for plotting helpers."""
 
+import subprocess
+import sys
+
 import pandas as pd
 import pytest
 
 
+def test_plotting_without_matplotlib_names_the_plots_extra():
+    # Each plot checked for matplotlib itself, with a "uv add" hint, and the
+    # three payback plots did not check at all.
+    code = """
+import sys
+
+sys.modules["matplotlib"] = None
+import breos
+
+try:
+    import breos.plotting
+except ImportError as exc:
+    assert 'pip install "breos[plots]"' in str(exc), exc
+else:
+    raise AssertionError("breos.plotting loaded without matplotlib")
+
+try:
+    breos.plot_co2_savings
+except AttributeError as exc:
+    assert 'pip install "breos[plots]"' in str(exc), exc
+else:
+    raise AssertionError("breos.plot_co2_savings resolved without matplotlib")
+"""
+    completed = subprocess.run([sys.executable, "-c", code], text=True, capture_output=True, check=False)
+
+    assert completed.returncode == 0, completed.stderr
+
+
+def test_package_discovery_without_matplotlib_skips_lazy_plots():
+    # The lazy plotting names raised ImportError from breos.__getattr__, which
+    # broke help(breos), inspect.getmembers and getattr with a default.
+    code = """
+import inspect
+import pydoc
+import sys
+
+sys.modules["matplotlib"] = None
+import breos
+
+assert "plot_co2_savings" not in dir(breos)
+assert getattr(breos, "plot_co2_savings", None) is None
+assert not hasattr(breos, "plot_co2_savings")
+inspect.getmembers(breos)
+pydoc.render_doc(breos)
+"""
+    completed = subprocess.run([sys.executable, "-c", code], text=True, capture_output=True, check=False)
+
+    assert completed.returncode == 0, completed.stderr
+
+
 def test_power_frame_to_energy_kwh_applies_timestep_duration():
+    pytest.importorskip("matplotlib")
+
     from breos.plotting import _power_frame_to_energy_kwh
 
     index = pd.date_range("2025-01-01", periods=4, freq="15min")

@@ -5,6 +5,21 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 ## [Unreleased]
 
 ### Added
+- `breos.tariffs.ScheduleDefinition` holds a complete tariff schedule: its
+  `TariffSchedule` metadata, `ScheduleRule` intervals per day type and
+  season, and an optional `HolidayCalendar`. It is frozen and pickles.
+  `parse_schedule_definition` builds one from the mapping form the bundled
+  `tariffs.json` uses, and the catalogue now goes through it;
+  `get_schedule_definition` returns a bundled one. `classify_tariff_periods`,
+  `resolve_named_tariff`, `schedule_resolution_minutes` and `TariffSpec`
+  take a bundled identifier or a definition. The resolution a schedule needs
+  now follows from its interval boundaries and the changes of its zone's UTC
+  offset in the simulated years (`schedule_resolution_minutes(schedule,
+  years)`), and `tariffs.json` no longer declares it; every bundled schedule
+  derives the value it declared. Classification checks that every step, not
+  only the first, starts on the local step grid. Every bundled schedule
+  gives the same period labels and schedule hashes as before, and no result
+  changes. This is the first step toward custom tariff schedules in `App`.
 - `breos.montecarlo.build_year_cache(config, settings)` prepares a Monte
   Carlo study's per-year weather, PV production and battery temperature
   once, and `run_montecarlo(..., year_cache=cache)` reuses them across a
@@ -680,6 +695,19 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   steps of synthetic Porto PV years, hourly and 15-minute, none differs. App,
   Monte Carlo and the optimizer do not call `dc_to_ac` and are unchanged bit
   for bit.
+- `breos.plotting` checks for matplotlib once, when it is imported, and the
+  error says `pip install "breos[plots]"`. Each plot used to check on its
+  own call, with a `uv add matplotlib` hint, and the three payback plots
+  (`plot_breakeven_distribution`, `plot_breakeven_cdf`,
+  `plot_breakeven_summary_bar`) did not check at all. `import breos` still
+  loads no plotting code. Without matplotlib, `import breos.plotting` raises
+  `ModuleNotFoundError`, and a top-level plotting name such as
+  `breos.plot_co2_savings` raises `AttributeError` with the same hint, so
+  `help(breos)` and `getattr(breos, name, default)` still work. The plotting
+  module also drops code no BREOS output reaches: a multi-year `Year` axis
+  in the degradation plots, which no degradation frame carries, and a
+  `Savings_Annual` column in `plot_breakeven`, which no cost projection has.
+  Every figure the plotting tests write is byte-identical to before.
 
 ### Fixed
 - `calendar_model` is stored as it is validated: trimmed, lower-case, with
@@ -1506,6 +1534,11 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   `enable_resistance_fade`, the three `load_profile_*` keys for custom
   profiles and the `montecarlo` and `sweep` sections, and still gave
   `load_profile` the removed default `"1"`.
+- Removed `rlp/README.md` from the repository and the source archive. It
+  still listed the numeric load-profile keys that 0.7.0 removes; the
+  load-profile data page documents external profiles and `rlp_directory`.
+  The plotting API page says which functions write files and which return
+  the figure, and names the `plots` extra.
 
 ## [0.6.2] - 2026-09-24
 

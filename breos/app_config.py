@@ -68,6 +68,7 @@ from breos.tariffs import (
     BOUNDARY_POLICIES,
     SUPPORTED_CURRENCIES,
     TariffPrices,
+    TariffSchedule,
     TariffSpec,
     available_tariff_schedules,
     get_tariff_schedule,
@@ -1375,20 +1376,29 @@ def _validate_tariff(cfg: dict[str, Any]) -> None:
             "would price them twice. Remove them, or remove [tariff]."
         )
     step_minutes = int(get_hours_per_step(cfg["resolution"]) * 60)
-    required = schedule_resolution_minutes(table["schedule"])
+    # The clock changes of the study year count; the optimizer's adapted config
+    # has no start_date, and classifying its index checks them instead.
+    start = cfg.get("start_date")
+    years = None if start is None else ((start if isinstance(start, date) else date.fromisoformat(start)).year,)
+    required = schedule_resolution_minutes(table["schedule"], years)
     if required % step_minutes:
+        fitting = [freq for freq in ("h", "15min") if required % int(get_hours_per_step(freq) * 60) == 0]
+        remedy = (
+            f'use resolution = "{fitting[0]}"' if fitting else f"App offers no step that divides {required} minutes"
+        )
         raise ValueError(
-            f"Schedule {table['schedule']!r} has boundaries every {required} minutes, which "
-            f'{cfg["resolution"]!r} steps cannot represent; use resolution = "15min" (ADR 0002 A3).'
+            f"Schedule {table['schedule']!r} needs steps that divide {required} minutes, which "
+            f"{cfg['resolution']!r} steps do not; {remedy} (ADR 0002 A3)."
         )
 
 
 def resolve_tariff_spec(cfg: dict[str, Any], timezone: str) -> TariffSpec | None:
     """Validate and build a tariff for App or an adapted optimizer config.
 
-    ``cfg`` supplies ``tariff``, ``resolution`` and optional ``costs``. Keeping
-    the price-conflict and resolution checks here gives both entry points
-    the same validation before they run the PV model.
+    ``cfg`` supplies ``tariff``, ``resolution``, optional ``costs`` and, from
+    App, ``start_date``, whose year's clock changes count toward the
+    resolution. Keeping the price-conflict and resolution checks here gives
+    both entry points the same validation before they run the PV model.
     """
     if cfg["tariff"] is None:
         return None
@@ -1483,7 +1493,7 @@ NESTED_TABLE_SPECS: Mapping[str, TableSpec] = {
 
 
 def _checked_smart_charging(
-    value: Any, schedule: str | None, battery_kwh: float, battery_key: str = "battery_kwh"
+    value: Any, schedule: TariffSchedule | None, battery_kwh: float, battery_key: str = "battery_kwh"
 ) -> dict[str, Any]:
     """Check a [smart_charging] table against the configured tariff schedule and battery.
 
@@ -1499,12 +1509,12 @@ def _checked_smart_charging(
         )
     if not battery_kwh > 0:
         raise ValueError(f"'smart_charging.mode' = 'fixed_target' needs a battery; set {battery_key} > 0")
-    periods = get_tariff_schedule(schedule).periods
+    periods = schedule.periods
     for name in ("charge_periods", "discharge_periods"):
         unknown = sorted(set(table[name]) - set(periods))
         if unknown:
             raise ValueError(
-                f"'smart_charging.{name}' has period(s) {', '.join(unknown)} that schedule {schedule!r} "
+                f"'smart_charging.{name}' has period(s) {', '.join(unknown)} that schedule {schedule.identifier!r} "
                 f"does not have. Its periods: {', '.join(sorted(periods))}."
             )
     return table
@@ -1513,7 +1523,9 @@ def _checked_smart_charging(
 def _validate_smart_charging(cfg: dict[str, Any]) -> None:
     if cfg["smart_charging"] is None:
         return
-    schedule = TARIFF_TABLE.validate(cfg["tariff"])["schedule"] if cfg["tariff"] is not None else None
+    schedule = (
+        get_tariff_schedule(TARIFF_TABLE.validate(cfg["tariff"])["schedule"]) if cfg["tariff"] is not None else None
+    )
     _checked_smart_charging(cfg["smart_charging"], schedule, cfg["battery_kwh"])
 
 
@@ -1529,7 +1541,7 @@ def resolve_smart_charging_spec(
     """
     if cfg.get("smart_charging") is None:
         return None
-    schedule = tariff_spec.schedule if tariff_spec is not None else None
+    schedule = tariff_spec.definition.schedule if tariff_spec is not None else None
     table = _checked_smart_charging(cfg["smart_charging"], schedule, cfg["battery_kwh"], battery_key)
     if table["mode"] == "disabled":
         return SmartChargingSpec(mode="disabled")
