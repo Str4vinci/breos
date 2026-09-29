@@ -5,6 +5,20 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 ## [Unreleased]
 
 ### Added
+- `inverter_ac_rating_kw` sets the inverter AC rating in kW, instead of
+  `inverter_loading_ratio` ([#181](https://github.com/Str4vinci/breos/issues/181));
+  setting both raises, and `--inverter-ac-rating-kw` sets it from the CLI.
+  `ResolvedAppConfig.inverter_ac_capacity_w` is resolved once, from either
+  key, and the dispatch, CAPEX and the reports read it: `calculate_costs`
+  gains `inverter_ac_capacity_w`, the rating to price, instead of re-deriving
+  it from the ratio. With the rating set, `resolved_config` reports
+  `inverter_loading_ratio` as unset. Result schema 1.6. CAPEX now divides the
+  rating in W by 1000 where it divided the kWp by the ratio, so
+  `inverter_cost` can differ in the last bit: over 480 module, count, ratio
+  and battery combinations it did in 86, `total_initial_cost` in 2 (by at
+  most 1.3e-16 of its value), and no value changed at two decimals. The
+  optimizer keeps `costs.dc_ac_ratio`, since each candidate's rating follows
+  its module count.
 - The optimization config is checked and defaulted once, by
   `breos.optimization_config.resolve_optimization_config`
   ([#181](https://github.com/Str4vinci/breos/issues/181),
