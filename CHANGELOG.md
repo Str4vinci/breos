@@ -5,6 +5,27 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 ## [Unreleased]
 
 ### Added
+- A `[period]` table simulates a window shorter than a year in `App`
+  ([#242](https://github.com/Str4vinci/breos/issues/242)), for example
+  `{"start": "2025-06-01", "end": "2025-06-08"}`. `start` and `end` are
+  civil dates in the location's timezone, in the year of `start_date`; the
+  window runs from local midnight of `start` to local midnight of `end`, so
+  `end` is exclusive and may be 1 January of the next year. The full-year
+  load is built and scaled to `annual_consumption_kwh` as before, then
+  weather, PV, load and battery temperature are cut to the window, which
+  runs once from the battery's initial state; `projection_years` is not
+  used. The weather must cover the window; missing leading or trailing rows
+  raise. Energy results, the year-1-price money, the year-1 CO2 and the PV
+  loss waterfall cover the window. The lifetime economics (`npv_savings`,
+  `payback_year`, `lcoe_per_kwh`, `financial`, the replacement costs and the
+  lifetime CO2) are `None`, and a new `period` block, also in
+  `provenance.period`, records the window and why. The one `yearly` row
+  carries `period_start` and `period_end`, and `monthly` groups the window by
+  civil month. A PV-only window equals the same steps of a full-year run
+  exactly. `App.revalue` re-prices a window; `breos sweep` can vary
+  `period.start` and `period.end`; Monte Carlo and the optimizer reject
+  `period`. Result schema 1.7. Runs without `period` are unchanged apart
+  from the schema version.
 - `inverter_ac_rating_kw` sets the inverter AC rating in kW, instead of
   `inverter_loading_ratio` ([#181](https://github.com/Str4vinci/breos/issues/181));
   setting both in one config raises. `--inverter-ac-rating-kw` sets it from

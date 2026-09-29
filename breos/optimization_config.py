@@ -352,6 +352,12 @@ def resolve_optimization_config(config: Mapping[str, Any]) -> dict[str, Any]:
     """
     if not isinstance(config, Mapping):
         raise TypeError("The optimization config must be a table/dict")
+    simulation_table = config.get("simulation")
+    if "period" in config or (isinstance(simulation_table, Mapping) and "period" in simulation_table):
+        raise ValueError(
+            "'period' is not supported by the optimizer: it ranks designs on their lifetime economics, which a "
+            "window shorter than a year does not have. Remove 'period', or run the window with breos.App."
+        )
     unknown = sorted(key for key in config if key not in OPTIMIZATION_TABLES and key not in OPTIMIZATION_SCALARS)
     if unknown:
         hint = (

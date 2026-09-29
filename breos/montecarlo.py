@@ -626,6 +626,11 @@ def run_montecarlo(config: dict[str, Any], settings: MonteCarloSettings) -> Mont
         raise ValueError("weather_start_year must not be later than weather_end_year")
     if cfg["degradation_engine"] == "blast":
         raise ValueError("degradation_engine='blast' is not supported with Monte Carlo yet")
+    if cfg.get("period") is not None:
+        raise ValueError(
+            "'period' is not supported with Monte Carlo: each trajectory simulates whole weather years and "
+            "their lifetime economics. Remove 'period', or run the window with breos.App."
+        )
     if cfg["horizon_profile"] is not None:
         raise ValueError(
             "'horizon_profile' is not supported with Monte Carlo weather files yet because their "

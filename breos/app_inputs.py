@@ -8,12 +8,12 @@ from contextvars import ContextVar
 from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Iterator, cast
+from typing import Any, Callable, Iterator, TypeVar, cast
 
 import pandas as pd
 from pvlib.location import Location
 
-from breos.app_config import ResolvedAppConfig, resolve_app_config
+from breos.app_config import ResolvedAppConfig, SimulationPeriod, resolve_app_config
 from breos.pv.horizon import apply_terrain_horizon_profile
 from breos.pv.model_options import DEFAULT_SOLAR_POSITION
 from breos.solar import (
@@ -24,6 +24,8 @@ from breos.solar import (
 )
 from breos.utils import get_hours_per_step, remap_datetime_index_years
 from breos.weather import AmbiguousWeatherError, fill_leap_day, warn_if_naive_weather_timestamps
+
+FrameT = TypeVar("FrameT", pd.DataFrame, pd.Series)
 
 
 @dataclass(frozen=True)
@@ -158,6 +160,59 @@ def require_full_year_weather(weather: pd.DataFrame, year: int, freq: str, timez
     )
 
 
+def require_period_weather(weather: pd.DataFrame, period: SimulationPeriod, freq: str) -> None:
+    """Raise unless the weather has a row at every step of the ``period`` window.
+
+    The window runs from local midnight of ``period.start`` to local midnight
+    of ``period.end``, exclusive, on the location's civil calendar. A step
+    labelled ``t`` covers ``[t, t + step)``, so the window must hold a whole
+    number of steps, its first row must be at its start, and its last row one
+    step before its end. Missing leading or trailing rows raise, as a gap in
+    the middle does in the PV model.
+    """
+    index = weather.index
+    if not isinstance(index, pd.DatetimeIndex) or index.empty:
+        raise ValueError(f"Weather from {_weather_source_label(weather)} has no timestamped rows")
+    step = pd.Timedelta(hours=get_hours_per_step(freq))
+    start, end = period.start_time, period.end_time
+    window = f"the period {period.start.isoformat()} to {period.end.isoformat()} ({start} to {end}, end exclusive)"
+    if (end - start) % step:
+        raise ValueError(
+            f"{window} is not a whole number of {freq!r} steps, so it cannot be simulated at that resolution."
+        )
+    inside = index[(index >= start) & (index < end)]
+    first, last = index.min(), index.max()
+    leading = inside[0] - start if len(inside) else end - start
+    trailing = end - (inside[-1] + step) if len(inside) else pd.Timedelta(0)
+    if leading >= step or trailing >= step:
+        missing = []
+        if leading >= step:
+            missing.append(f"the leading {leading} ({int(leading // step)} steps)")
+        if trailing >= step:
+            missing.append(f"the trailing {trailing} ({int(trailing // step)} steps)")
+        raise ValueError(
+            f"Weather from {_weather_source_label(weather)} does not cover {window}: after restamping onto "
+            f"{period.start.year} it runs from {first} to {last}, so {' and '.join(missing)} of the window "
+            f"{'is' if len(missing) == 1 else 'are'} missing. Supply weather for the whole period, or fill the "
+            "missing rows explicitly."
+        )
+    if leading:
+        raise ValueError(
+            f"{window} does not start on a step of the weather, whose first row in the window is {inside[0]}. "
+            f"The window must start and end on a {freq!r} step."
+        )
+
+
+def cut_to_period(frame: FrameT, period: SimulationPeriod) -> FrameT:
+    """The rows of ``frame`` inside the ``period`` window, with its attrs kept."""
+    index = frame.index
+    if not isinstance(index, pd.DatetimeIndex):
+        raise TypeError("a 'period' needs timestamped weather and load, to place the window on them")
+    cut = frame.loc[(index >= period.start_time) & (index < period.end_time)].copy()
+    cut.attrs = deepcopy(frame.attrs)
+    return cut
+
+
 def load_weather_for_simulation(
     resolved: ResolvedAppConfig,
     freq: str,
@@ -168,8 +223,12 @@ def load_weather_for_simulation(
     horizon_profile: Any = None,
     solar_position: str = DEFAULT_SOLAR_POSITION,
     weather_source: str | None = None,
+    period: SimulationPeriod | None = None,
 ) -> pd.DataFrame:
     """Load TMY weather, falling back to PVGIS fetch.
+
+    The weather must cover the whole calendar year of ``start_year``, or with
+    a ``period`` the whole window, which the returned weather is cut to.
 
     When ``weather_dir`` is not given, a ``weather/`` directory in the
     current working directory is scanned first: a file matching the
@@ -231,7 +290,10 @@ def load_weather_for_simulation(
             # The resampler carries the weather metadata over and adds its own
             # resolution and method fields to it.
             weather = deps.resample_to_15min(weather, latitude=resolved.lat, longitude=resolved.lon)
-    require_full_year_weather(weather, start_year, freq, resolved.timezone)
+    if period is None:
+        require_full_year_weather(weather, start_year, freq, resolved.timezone)
+    else:
+        require_period_weather(weather, period, freq)
 
     if horizon_profile is not None:
         weather = apply_terrain_horizon_profile(
@@ -242,6 +304,10 @@ def load_weather_for_simulation(
             solar_position=solar_position,
         )
 
+    if period is not None:
+        # Cut after the resampler and the horizon, so each kept row is what
+        # a full-year run computes for it.
+        weather = cut_to_period(weather, period)
     return weather
 
 
@@ -345,6 +411,9 @@ def prepare_simulation_inputs(
     """Prepare weather, PV, demand, and temperature inputs for the App pipeline."""
     freq = cfg["resolution"]
     start_year = int(cfg["start_date"][:4])
+    # Read as the waterfall reads pv_arrays, so a hand-built resolved config
+    # without the field simulates the whole year.
+    period = getattr(resolved, "period", None)
     weather = load_weather_for_simulation(
         resolved,
         freq,
@@ -353,10 +422,15 @@ def prepare_simulation_inputs(
         horizon_profile=cfg["horizon_profile"],
         solar_position=cfg["solar_position"],
         weather_source=cfg["weather_source"],
+        period=period,
     )
     pv_breakdown = build_pv_production_breakdown(cfg, resolved, weather)
     dc_system_base = pv_breakdown.dc_after_losses
+    # The full-year profile is scaled to annual_consumption_kwh first, so a
+    # window gets its share of the year, not the annual total.
     load_data = load_consumption_profile(cfg, deps, timezone=resolved.timezone)
+    if period is not None:
+        load_data = cut_to_period(load_data, period)
     temperature_series = deps.build_battery_temperature_series(
         cfg["battery_temperature"],
         index=dc_system_base.index,

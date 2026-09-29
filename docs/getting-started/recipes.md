@@ -442,6 +442,54 @@ cost_preset = "residential_pt"
 emissions_country = "PT"
 ```
 
+## Simulate part of a year
+
+A `[period]` table simulates a window shorter than a year, for example one
+week in June:
+
+```toml
+location = "porto"
+n_modules = 10
+annual_consumption_kwh = 4000
+battery_kwh = 5.0
+start_date = "2025-01-01"
+
+[period]
+start = 2025-06-01
+end = 2025-06-08
+```
+
+As a Python dict, give the dates as ISO strings or `datetime.date` values:
+`"period": {"start": "2025-06-01", "end": "2025-06-08"}`.
+
+- `start` and `end` are dates in the location's timezone, in the year of
+  `start_date`. The window starts at local midnight of `start` and ends at
+  local midnight of `end`, so `end` is exclusive: the example covers 1 to 7
+  June, and one day is `start = 2025-06-01`, `end = 2025-06-02`. `end` may be
+  1 January of the next year. A window of the whole year raises; omit
+  `[period]` for that.
+- The load profile is built for the whole year and scaled to
+  `annual_consumption_kwh` as usual, and the window gets its share of it.
+  Weather, PV, load and battery temperature are then cut to the window.
+- The weather must cover the whole window. It may cover more (a TMY covers
+  the year), but a window it does not reach raises `ValueError` naming the
+  missing span.
+- The window runs once, from the battery's initial state: `projection_years`
+  is not used, and nothing is repeated or carried over.
+- Energy results cover the window. The lifetime economics (NPV, payback,
+  LCOE, the `financial` projection and the replacement costs) are `None`; see
+  [Period runs](interpreting-results.md#period-runs).
+
+PV, load and every other flow of a PV-only run equal the same steps of a
+full-year run exactly. With a battery the dispatch differs, because the
+window starts from the battery's initial state of charge and health, not
+from the state the full-year run reaches on that date.
+
+Monte Carlo and the optimizer reject `period`: they rank designs on lifetime
+economics. `breos sweep` accepts it, and can vary `period.start` and
+`period.end`. `App.revalue` re-prices a period run's window; its lifetime
+economics stay `None`.
+
 ## External load profile (E-REDES, BDEW, REE)
 
 Only the demandlib-derived H0 profile (`"1"`, alias `"demandlib_h0"`) ships
@@ -545,4 +593,5 @@ filename (including the source), is recorded under `provenance.weather`.
 The file is restamped onto the year of `start_date` and must then cover that
 whole calendar year. A file missing its first or last rows raises `ValueError`
 that names the file and the missing span, rather than simulating a shorter
-year.
+year. With a [`[period]`](#simulate-part-of-a-year), the file needs to cover
+only the window.

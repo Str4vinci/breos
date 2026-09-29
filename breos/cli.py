@@ -357,6 +357,9 @@ def _validate_config(args: argparse.Namespace) -> int:
         print(f"Battery: {payload['battery']['capacity_kwh']} kWh")
         print(f"Cost preset: {payload['economics']['cost_preset'] or 'none'}")
         print(f"Emissions: {payload['emissions']['country'] or 'disabled'}")
+        period = payload["simulation"]["period"]
+        if period is not None:
+            print(f"Period: {period['start']} to {period['end']} (end exclusive); lifetime economics are skipped")
     return 0
 
 
