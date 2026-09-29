@@ -1503,6 +1503,33 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   `breos sweep` over the `[tariff]` table and read its year-1 money columns,
   or loop over `App` runs. The "Compare tariffs" recipe shows both, and
   `configs/examples/tariff-comparison.toml` is the CLI version.
+- Re-exports and test-only helpers in the battery and degradation modules
+  ([#186](https://github.com/Str4vinci/breos/issues/186)), with no
+  deprecation period. Import `EXECUTION_BACKENDS` from `breos.execution`,
+  not `breos.battery`, and `BlastExperimentalRangeWarning` and
+  `BlastAgingHorizonWarning` from `breos.degradation.validation`, not
+  `breos.degradation.engine`. A pytest `filterwarnings` entry such as
+  `ignore::breos.degradation.engine.BlastExperimentalRangeWarning` now stops
+  the test with an `AttributeError`; name `breos.degradation.validation`
+  instead. `breos.degradation.results.build_degradation_summary` is gone:
+  `build_degradation_summary_from_state` returns the same dict and reads the
+  BLAST warnings from the carried lifecycle state. These are gone without a
+  replacement: `breos.degradation.protocol.DegradationProvenance`,
+  `resolve_degradation_provenance` and `warning_records_from_snapshot`;
+  `apply_battery_profile_defaults` (from `breos.degradation.profiles` and
+  `breos.app_config`) and `merge_battery_config_layers`, which merged an
+  always-empty model-profile layer;
+  `breos.degradation.engine.P1_BLAST_MODEL_KEYS`;
+  `BlastWarningCollector.from_snapshot`, which only called the constructor;
+  and the `warnings()` and `provenance()` methods of `DegradationLifecycle`
+  and its native and BLAST adapters. `DegradationLifecycle` is no longer
+  `runtime_checkable`, so `isinstance(x, DegradationLifecycle)` raises
+  `TypeError`. These re-exports are gone; import them from
+  `breos.degradation.profiles`: `CORE_BLAST_MODEL_KEYS` from
+  `breos.degradation.engine`, and `BLAST_STATE_SCHEMA_VERSION` and
+  `get_battery_model_profile` from `breos.degradation.protocol`.
+  Configuration still resolves as user values over the global defaults.
+  Results are unchanged bit for bit.
 - **Plotting functions that nothing called**
   ([#186](https://github.com/Str4vinci/breos/issues/186)), with no
   deprecation period, from `breos.plotting` and the top-level `breos`

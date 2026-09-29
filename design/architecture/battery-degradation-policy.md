@@ -50,9 +50,9 @@ predictive validity.
 A `blast_model` key identifies a particular empirical cell model, not a generic
 chemistry curve. Model identity, citations, experimental ranges, and output
 capabilities come from the single public registry. Experimental ranges drive
-warnings; they are not recommended pack settings. Operating defaults are added
-only when a source supports them, with precedence remaining explicit user
-configuration over sourced profile defaults over global defaults.
+warnings; they are not recommended pack settings. A model key does not supply
+operating defaults: settings resolve as explicit user configuration over global
+defaults.
 
 BLAST outputs are cell-model projections, not pack-calibrated predictions.
 Thermal gradients, cell variation, imbalance, interconnects, and BMS behavior

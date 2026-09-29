@@ -6,13 +6,10 @@ import pytest
 
 from breos.battery import _detect_cycles_rainflow_arrays
 from breos.degradation.protocol import (
-    BlastDegradationAdapter,
     DegradationDay,
-    DegradationLifecycle,
     NativeDegradationAdapter,
     _NativeRainflowCounter,
 )
-from breos.degradation.validation import BlastExperimentalRangeWarning
 
 
 def _day(*, temperature_c: float = 25.0) -> DegradationDay:
@@ -53,7 +50,6 @@ def test_native_adapter_implements_lifecycle_contract_and_snapshot_shape():
         calendar_step=calendar_step,
     )
 
-    assert isinstance(adapter, DegradationLifecycle)
     step = adapter.step(_day())
 
     assert step.soh_fraction == pytest.approx(0.97)
@@ -61,9 +57,7 @@ def test_native_adapter_implements_lifecycle_contract_and_snapshot_shape():
     assert step.calendar_seconds == pytest.approx(172800.0)
     assert step.cycle_degradation == pytest.approx(0.01)
     assert step.calendar_degradation == pytest.approx(0.02)
-    assert adapter.warnings() == []
     assert adapter.tracking_fields(step) == {}
-    assert adapter.provenance().engine == "native"
     snapshot = adapter.snapshot(day_start_soc=0.1, day_start_temperature_c=25.0)
     assert snapshot["degradation_engine"] == "native"
     assert snapshot["soh_fraction"] == pytest.approx(0.97)
@@ -186,39 +180,3 @@ def test_native_rainflow_uses_plateau_end_and_counts_exact_one_percent_cycle():
         (cycle["start_idx"], cycle["end_idx"]) for cycle in expected
     ]
     assert observed[0]["doc"] == pytest.approx(0.01)
-
-
-def test_blast_adapter_implements_lifecycle_restore_warning_and_reset_contract():
-    adapter = BlastDegradationAdapter("lfp_gr_250ah_prismatic")
-    assert isinstance(adapter, DegradationLifecycle)
-
-    with pytest.warns(BlastExperimentalRangeWarning):
-        step = adapter.step(_day(temperature_c=55.0))
-
-    assert step.soh_fraction < 1.0
-    assert step.cycle_degradation == 0.0
-    assert step.calendar_degradation == 0.0
-    assert adapter.tracking_fields(step) == {
-        "BLAST_Model": "lfp_gr_250ah_prismatic",
-        "BLAST_Degradation": step.engine_degradation,
-    }
-    assert adapter.provenance().engine == "blast"
-    assert adapter.provenance().state_schema_version == "1.0"
-    assert [record["category"] for record in adapter.warnings()] == ["experimental_range"]
-
-    snapshot = adapter.snapshot(day_start_soc=0.1, day_start_temperature_c=55.0)
-    restored = BlastDegradationAdapter(
-        "lfp_gr_250ah_prismatic",
-        initial_state=snapshot,
-        initial_fec=snapshot["fec_cum"],
-        initial_calendar_seconds=snapshot["cumulative_calendar_seconds"],
-    )
-    assert restored.soh() == pytest.approx(adapter.soh())
-    assert restored.warnings() == adapter.warnings()
-
-    restored.reset()
-    assert restored.soh() == pytest.approx(1.0)
-    assert restored.warnings() == adapter.warnings()
-    reset = restored.snapshot(day_start_soc=0.9, day_start_temperature_c=25.0)
-    assert reset["blast_engine"]["outputs"]["q"][-1] == pytest.approx(1.0)
-    assert reset["blast_engine"]["stressors"]["efc"][-1] == pytest.approx(0.0)

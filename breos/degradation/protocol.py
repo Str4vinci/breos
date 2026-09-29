@@ -10,11 +10,9 @@ from __future__ import annotations
 from collections import deque
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Literal, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Literal, Protocol
 
 import numpy as np
-
-from breos.degradation.profiles import BLAST_STATE_SCHEMA_VERSION, get_battery_model_profile
 
 if TYPE_CHECKING:
     from breos.degradation.engine import BlastEngine
@@ -259,17 +257,6 @@ class DegradationStep:
     cycle_records: tuple[Mapping[str, float | int], ...] = ()
 
 
-@dataclass(frozen=True)
-class DegradationProvenance:
-    """Engine identity used by the public degradation-result builder."""
-
-    engine: DegradationEngineName
-    model_key: str
-    model_profile: Mapping[str, Any] | None = None
-    state_schema_version: str | None = None
-
-
-@runtime_checkable
 class DegradationLifecycle(Protocol):
     """Internal lifecycle operations required by the energy-balance runner."""
 
@@ -282,10 +269,6 @@ class DegradationLifecycle(Protocol):
     def reset(self) -> None: ...
 
     def snapshot(self, *, day_start_soc: float, day_start_temperature_c: float) -> dict[str, Any]: ...
-
-    def warnings(self) -> list[dict[str, Any]]: ...
-
-    def provenance(self) -> DegradationProvenance: ...
 
     def tracking_fields(self, step: DegradationStep) -> dict[str, Any]: ...
 
@@ -401,12 +384,6 @@ class NativeDegradationAdapter:
             "day_start_temperature_c": float(day_start_temperature_c),
         }
 
-    def warnings(self) -> list[dict[str, Any]]:
-        return []
-
-    def provenance(self) -> DegradationProvenance:
-        return resolve_degradation_provenance("native", self.model_key)
-
     def tracking_fields(self, step: DegradationStep) -> dict[str, Any]:
         del step
         return {}
@@ -489,39 +466,8 @@ class BlastDegradationAdapter:
             "day_start_temperature_c": float(day_start_temperature_c),
         }
 
-    def warnings(self) -> list[dict[str, Any]]:
-        return self._engine.warning_records()
-
-    def provenance(self) -> DegradationProvenance:
-        return resolve_degradation_provenance("blast", self.model_key)
-
     def tracking_fields(self, step: DegradationStep) -> dict[str, Any]:
         return {
             "BLAST_Model": self.model_key,
             "BLAST_Degradation": step.engine_degradation,
         }
-
-
-def resolve_degradation_provenance(engine: str, model_key: str) -> DegradationProvenance:
-    """Resolve result provenance without exposing the lifecycle adapters."""
-
-    if engine == "native":
-        return DegradationProvenance(engine="native", model_key=model_key)
-    if engine == "blast":
-        profile = get_battery_model_profile(model_key)
-        return DegradationProvenance(
-            engine="blast",
-            model_key=model_key,
-            model_profile=profile.as_dict(),
-            state_schema_version=BLAST_STATE_SCHEMA_VERSION,
-        )
-    raise ValueError("degradation engine must be 'native' or 'blast'")
-
-
-def warning_records_from_snapshot(engine: str, state: Mapping[str, Any] | None) -> list[dict[str, Any]]:
-    """Read lifecycle warnings from the current schema without runner branching."""
-
-    if engine == "native" or state is None:
-        return []
-    engine_state = state.get("blast_engine", state)
-    return list(engine_state.get("warnings", []))

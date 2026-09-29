@@ -34,7 +34,7 @@ def test_restored_collector_deduplicates_and_returns_defensive_copies():
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
         collector.check_experimental_range(t_secs, soc, temperature_c)
-        restored = BlastWarningCollector.from_snapshot(
+        restored = BlastWarningCollector(
             "lfp_gr_250ah_prismatic",
             collector.records(),
         )

@@ -136,7 +136,7 @@ def observed_jit_cache_state(execution_backend: str) -> str | None:
     """Return the cache outcome observed since the last reset, or None."""
     if execution_backend != "numba":
         return None
-    from breos._numba_dispatch import observed_jit_cache_state as _observed
+    from breos._numba_dispatch import jit_cache_state as _observed
 
     return _observed()
 
