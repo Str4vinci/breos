@@ -38,6 +38,10 @@ from breos.constants import (
     D_DOC_R,
     DEFAULT_CHARGE_EFFICIENCY,
     DEFAULT_DISCHARGE_EFFICIENCY,
+    DEFAULT_INDOOR_CEILING_C,
+    DEFAULT_INDOOR_COUPLING_ALPHA,
+    DEFAULT_INDOOR_FLOOR_C,
+    DEFAULT_INDOOR_SETPOINT_C,
     DEFAULT_MAX_SOC,
     DEFAULT_MIN_SOC,
     DEFAULT_STANDBY_LOSS_WH,
@@ -78,11 +82,7 @@ from breos.degradation.protocol import (
     NativeDegradationAdapter,
 )
 from breos.dispatch_instructions import DispatchInstructions
-from breos.execution import (  # noqa: F401  -- EXECUTION_BACKENDS re-exported
-    EXECUTION_BACKENDS,
-    is_pv_only_dispatch,
-    validate_execution_backend,
-)
+from breos.execution import is_pv_only_dispatch, validate_execution_backend
 from breos.inverter import _calculate_dc_ac_power_arrays
 from breos.utils import _datetime_index_ticks, get_hours_per_step, remap_datetime_index_years
 
@@ -1510,8 +1510,6 @@ def _simulate_core(
         finalize_degradation: Count any remaining rainflow half cycles at the
             end of this span (the default). Set False only when returning state
             that a later span resumes from; otherwise those cycles are lost.
-        return_degradation_state: Append final degradation carry state to the
-            return tuple when True.
         debug: Enable debug output
         initial_energy_wh: Optional carried stored-energy state (Wh). Defaults
             to the configured max-SOC state for first-run compatibility.
@@ -1529,13 +1527,11 @@ def _simulate_core(
             requires ``breos[fast]``. Everything outside the day window runs
             in Python either way.
 
+
     Returns:
-        Tuple of:
-        - results_df: Detailed timestep results
-        - total_pv: Total PV AC production after inverter efficiency (Wh)
-        - summary_df: Summary statistics
-        - n_replacements: Number of battery replacements
-        - degradation_df: Daily degradation tracking
+        A :class:`_CoreRun` holding the filled result buffers, the calendar,
+        the aging state and the lifecycle; the public entry points shape
+        their results from it.
     """
     if battery_config is None:
         battery_config = BatteryConfig(nominal_energy_wh=0)
@@ -1584,7 +1580,6 @@ def _simulate_core(
     battery_soh_decimal = battery_config.initial_soh / 100.0
     if degradation_engine_key == "native" and initial_degradation_state is not None:
         battery_soh_decimal = float(state_payload.get("soh_fraction", battery_soh_decimal))
-    Battery_SOH = battery_soh_decimal * 100.0
     Battery_Energy_Wh, Battery_PV_Origin_Energy_Wh, Battery_Grid_Origin_Energy_Wh = _resolve_carried_energy(
         initial_energy_wh,
         initial_pv_origin_energy_wh,
@@ -1743,7 +1738,7 @@ def _simulate_core(
             degradation_tracking=degradation_tracking,
             hours_per_step=hours_per_step,
             has_battery=False,
-            final_soh_percent=Battery_SOH,
+            final_soh_percent=aging.soh_percent,
         )
 
     # Dispatch advances one degradation day at a time. Health state is fixed
@@ -1756,32 +1751,34 @@ def _simulate_core(
     window_start = 0
     while window_start < n_steps:
         window_end = min(window_start + steps_per_day, n_steps)
-        Battery_Energy_Wh, Battery_PV_Origin_Energy_Wh, Battery_Grid_Origin_Energy_Wh, battery_energy_beginning = (
-            dispatch_day(
-                out,
-                _pv_dc_vals,
-                _load_vals,
-                _temp_vals,
-                window_start,
-                window_end,
-                battery_config=battery_config,
-                battery_soh_decimal=battery_soh_decimal,
-                Battery_SOH=Battery_SOH,
-                Battery_Energy_Wh=Battery_Energy_Wh,
-                Battery_PV_Origin_Energy_Wh=Battery_PV_Origin_Energy_Wh,
-                Battery_Grid_Origin_Energy_Wh=Battery_Grid_Origin_Energy_Wh,
-                eff_charge=eff_charge,
-                eff_discharge=eff_discharge,
-                hours_per_step=hours_per_step,
-                standby_loss_per_step_wh=standby_loss_per_step_wh,
-                cap_wh=cap_wh,
-                cap_charge_wh=cap_charge_wh,
-                cap_discharge_wh=cap_discharge_wh,
-                cap_stored_wh=cap_stored_wh,
-                instructions=instructions,
-            )
+        dispatch_day(
+            out,
+            _pv_dc_vals,
+            _load_vals,
+            _temp_vals,
+            window_start,
+            window_end,
+            battery_config=battery_config,
+            battery_soh_decimal=battery_soh_decimal,
+            Battery_Energy_Wh=Battery_Energy_Wh,
+            Battery_PV_Origin_Energy_Wh=Battery_PV_Origin_Energy_Wh,
+            Battery_Grid_Origin_Energy_Wh=Battery_Grid_Origin_Energy_Wh,
+            eff_charge=eff_charge,
+            eff_discharge=eff_discharge,
+            hours_per_step=hours_per_step,
+            standby_loss_per_step_wh=standby_loss_per_step_wh,
+            cap_wh=cap_wh,
+            cap_charge_wh=cap_charge_wh,
+            cap_discharge_wh=cap_discharge_wh,
+            cap_stored_wh=cap_stored_wh,
+            instructions=instructions,
         )
         last_step = window_end - 1
+        # The window's closing row holds the state the day close continues from.
+        Battery_Energy_Wh = float(out.columns["Battery_Energy"][last_step])
+        Battery_PV_Origin_Energy_Wh = float(out.columns["Battery_PV_Origin_Energy_End"][last_step])
+        Battery_Grid_Origin_Energy_Wh = float(out.columns["Battery_Grid_Origin_Energy_End"][last_step])
+        battery_energy_beginning = float(out.columns["Battery_Energy_Beginning"][last_step])
         Battery_Energy_Wh, Battery_PV_Origin_Energy_Wh, Battery_Grid_Origin_Energy_Wh = _apply_daily_degradation(
             aging,
             degradation_lifecycle,
@@ -1808,7 +1805,6 @@ def _simulate_core(
         )
         # Refresh the loop's hot copies of the daily-boundary state.
         battery_soh_decimal = aging.soh_fraction
-        Battery_SOH = aging.soh_percent
         eff_charge = aging.eff_charge
         eff_discharge = aging.eff_discharge
         if window_end - window_start < steps_per_day:
@@ -1823,7 +1819,7 @@ def _simulate_core(
         degradation_tracking=degradation_tracking,
         hours_per_step=hours_per_step,
         has_battery=has_battery,
-        final_soh_percent=Battery_SOH,
+        final_soh_percent=aging.soh_percent,
     )
 
 
@@ -2013,10 +2009,10 @@ def simulate_energy_balance_summary(
 
 def apply_indoor_temperature_model(
     outdoor_temperature: pd.Series,
-    setpoint_c: float = 22.0,
-    coupling_alpha: float = 0.3,
-    floor_c: float = 15.0,
-    ceiling_c: float = 35.0,
+    setpoint_c: float = DEFAULT_INDOOR_SETPOINT_C,
+    coupling_alpha: float = DEFAULT_INDOOR_COUPLING_ALPHA,
+    floor_c: float = DEFAULT_INDOOR_FLOOR_C,
+    ceiling_c: float = DEFAULT_INDOOR_CEILING_C,
 ) -> pd.Series:
     """
     Transform outdoor temperature to indoor temperature for battery simulation.

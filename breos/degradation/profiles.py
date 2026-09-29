@@ -412,20 +412,3 @@ def list_battery_models(*, enabled_only: bool = False) -> list[dict[str, Any]]:
         for profile in BATTERY_MODEL_REGISTRY.values()
         if not enabled_only or profile.key in ENABLED_BLAST_MODEL_KEYS
     ]
-
-
-def apply_battery_profile_defaults(
-    global_defaults: Mapping[str, Any], user_config: Mapping[str, Any]
-) -> dict[str, Any]:
-    """Resolve configuration as user values > profile defaults > globals."""
-    model_key = user_config.get("blast_model")
-    profile = BATTERY_MODEL_REGISTRY.get(str(model_key)) if model_key is not None else None
-    profile_defaults = profile.operating_defaults if profile is not None else {}
-    return merge_battery_config_layers(global_defaults, profile_defaults, user_config)
-
-
-def merge_battery_config_layers(
-    global_defaults: Mapping[str, Any], profile_defaults: Mapping[str, Any], user_config: Mapping[str, Any]
-) -> dict[str, Any]:
-    """Merge the documented config precedence without mutating any input."""
-    return {**global_defaults, **profile_defaults, **user_config}

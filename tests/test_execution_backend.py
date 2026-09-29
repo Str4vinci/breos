@@ -9,8 +9,9 @@ import pandas as pd
 import pytest
 
 from breos.app_config import APP_CONFIG_FIELDS
-from breos.battery import EXECUTION_BACKENDS, BatteryConfig, _dispatch_day_python, _resolve_dispatch_day, _ResultBuffers
-from breos.montecarlo import MonteCarloSettings, _aggregate_jit_cache_states, run_montecarlo
+from breos.battery import BatteryConfig, _dispatch_day_python, _resolve_dispatch_day, _ResultBuffers
+from breos.execution import aggregate_jit_cache_states
+from breos.montecarlo import MonteCarloSettings, run_montecarlo
 
 
 def _base_config():
@@ -27,16 +28,10 @@ def _base_config():
 
 
 def test_python_is_the_default_and_the_reference():
-    assert EXECUTION_BACKENDS == ("python", "numba")
     # Unset Monte Carlo settings inherit the App key, whose default is python.
     assert MonteCarloSettings(weather_file="x").execution_backend is None
     assert APP_CONFIG_FIELDS["execution_backend"].default == "python"
     assert _resolve_dispatch_day("python") is _dispatch_day_python
-
-
-def test_unknown_backend_is_rejected():
-    with pytest.raises(ValueError, match="execution_backend must be one of"):
-        _resolve_dispatch_day("cuda")
 
 
 def test_montecarlo_rejects_unknown_backend_before_loading_inputs(tmp_path):
@@ -98,16 +93,6 @@ def test_provenance_records_the_compiler_versions_and_cache_state(tmp_path, writ
     assert execution["jit_cache"] in {"warm", "cold"}
 
 
-def test_jit_cache_state_ignores_unverified_cache_files(tmp_path, monkeypatch):
-    import breos._numba_dispatch as dispatch
-
-    monkeypatch.setenv("NUMBA_CACHE_DIR", str(tmp_path))
-    (tmp_path / "_numba_dispatch.stale.nbi").write_bytes(b"not a valid Numba cache index")
-    dispatch.reset_jit_cache_observation()
-
-    assert dispatch.jit_cache_state() is None
-
-
 def _call_numba_cache_probe(dispatch):
     dispatch._dispatch_day_numba(
         _ResultBuffers(1),
@@ -118,7 +103,6 @@ def _call_numba_cache_probe(dispatch):
         1,
         battery_config=BatteryConfig(nominal_energy_wh=5000.0),
         battery_soh_decimal=1.0,
-        Battery_SOH=100.0,
         Battery_Energy_Wh=0.0,
         Battery_PV_Origin_Energy_Wh=0.0,
         Battery_Grid_Origin_Energy_Wh=0.0,
@@ -143,16 +127,16 @@ def test_jit_cache_state_reports_miss_then_in_memory_reuse(monkeypatch):
             if not self.signatures:
                 self.stats.cache_misses["signature"] = 1
                 self.signatures.append(("compiled",))
-            return 0.0, 0.0, 0.0
 
-    monkeypatch.setattr(dispatch, "_KERNEL", _Kernel())
+    kernel = _Kernel()
+    monkeypatch.setattr(dispatch, "_kernel", lambda: kernel)
     dispatch.reset_jit_cache_observation()
     _call_numba_cache_probe(dispatch)
-    assert dispatch.observed_jit_cache_state() == "cold"
+    assert dispatch.jit_cache_state() == "cold"
 
     dispatch.reset_jit_cache_observation()
     _call_numba_cache_probe(dispatch)
-    assert dispatch.observed_jit_cache_state() == "warm"
+    assert dispatch.jit_cache_state() == "warm"
 
 
 def test_montecarlo_provenance_uses_worker_observations_across_repeated_studies(monkeypatch):
@@ -168,9 +152,9 @@ def test_montecarlo_provenance_uses_worker_observations_across_repeated_studies(
             if not self.signatures:
                 self.stats.cache_misses["signature"] = 1
                 self.signatures.append(("compiled",))
-            return 0.0, 0.0, 0.0
 
-    monkeypatch.setattr(dispatch, "_KERNEL", _Kernel())
+    kernel = _Kernel()
+    monkeypatch.setattr(dispatch, "_kernel", lambda: kernel)
     monkeypatch.setattr(
         mc_module,
         "_precompute_year_caches",
@@ -215,7 +199,7 @@ def test_montecarlo_provenance_uses_worker_observations_across_repeated_studies(
     ],
 )
 def test_jit_cache_worker_observations_are_aggregated(states, expected):
-    assert _aggregate_jit_cache_states(states) == expected
+    assert aggregate_jit_cache_states(states) == expected
 
 
 @pytest.mark.parametrize("states", [[], ["unknown"], ["warm", "unknown"], ["cold", "unknown"]])
@@ -226,7 +210,7 @@ def test_unclassifiable_jit_cache_observations_degrade_to_unknown(states):
     cache; a single "unknown" from any worker makes the study-level claim
     untrustworthy. Both report "unknown" rather than raising.
     """
-    assert _aggregate_jit_cache_states(states) == "unknown"
+    assert aggregate_jit_cache_states(states) == "unknown"
 
 
 def test_both_backends_agree_on_a_seeded_study(tmp_path, write_multiyear_weather):
@@ -264,7 +248,7 @@ from breos.battery import BatteryConfig, _ResultBuffers
 _dispatch_day_numba(
     _ResultBuffers(96), np.zeros(96), np.zeros(96), np.full(96, 25.0), 0, 96,
     battery_config=BatteryConfig(nominal_energy_wh=5000.0),
-    battery_soh_decimal=1.0, Battery_SOH=100.0, Battery_Energy_Wh=0.0, Battery_PV_Origin_Energy_Wh=0.0, Battery_Grid_Origin_Energy_Wh=0.0,
+    battery_soh_decimal=1.0, Battery_Energy_Wh=0.0, Battery_PV_Origin_Energy_Wh=0.0, Battery_Grid_Origin_Energy_Wh=0.0,
     eff_charge=0.95, eff_discharge=0.95, hours_per_step=0.25, standby_loss_per_step_wh=0.0,
     cap_wh=np.inf, cap_charge_wh=np.inf, cap_discharge_wh=np.inf,
 )

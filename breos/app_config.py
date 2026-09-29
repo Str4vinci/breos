@@ -25,7 +25,7 @@ from breos.constants import (
     DEFAULT_MAX_SOC,
     DEFAULT_MIN_SOC,
 )
-from breos.degradation.profiles import ENABLED_BLAST_MODEL_KEYS, apply_battery_profile_defaults
+from breos.degradation.profiles import ENABLED_BLAST_MODEL_KEYS
 from breos.economics import (
     COST_CONFIG_KEY_TO_PARAM,
     DEFAULT_DISCOUNT_RATE,
@@ -1112,8 +1112,8 @@ def normalize_config_keys(config: dict[str, Any]) -> dict[str, Any]:
 
 
 def merge_defaults(config: dict[str, Any]) -> dict[str, Any]:
-    """Apply user values over BLAST profile defaults over global defaults."""
-    return apply_battery_profile_defaults(DEFAULTS, config)
+    """Apply user values over the global defaults."""
+    return {**DEFAULTS, **config}
 
 
 def default_module_key() -> str:

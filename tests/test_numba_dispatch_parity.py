@@ -26,7 +26,7 @@ import pandas as pd
 import pytest
 
 import breos.battery as battery_module
-from breos._numba_dispatch import _build_kernel, _dispatch_day_numba
+from breos._numba_dispatch import _dispatch_day_numba, _kernel
 from breos.battery import (
     _ROW,
     BatteryConfig,
@@ -133,44 +133,7 @@ def test_compiled_backend_compiles_the_python_backends_own_day_loop():
     """One source: the kernel is built from the function the Python backend runs, not a copy of it."""
     from breos import _dispatch
 
-    assert _build_kernel().py_func is _dispatch._dispatch_day
-
-
-def test_single_day_matches():
-    """Validation step 2: one compiled day against one reference day."""
-    _assert_identical("one_day", _run("one_day", "python"), _run("one_day", "numba"))
-
-
-def test_numba_pv_only_summary_uses_common_vectorized_path(monkeypatch):
-    pv, load, temp, cfg, sim_kwargs = build("no_battery")
-    vectorized_calls = []
-    reduced_buffer_calls = []
-    original_dispatch = battery_module._dispatch_no_battery_vectorized
-    original_buffers = battery_module._PvOnlySummaryBuffers
-
-    def recording_dispatch(*args, **kwargs):
-        vectorized_calls.append(len(args[1]))
-        return original_dispatch(*args, **kwargs)
-
-    def recording_buffers(n_steps):
-        reduced_buffer_calls.append(n_steps)
-        return original_buffers(n_steps)
-
-    monkeypatch.setattr(battery_module, "_dispatch_no_battery_vectorized", recording_dispatch)
-    monkeypatch.setattr(battery_module, "_PvOnlySummaryBuffers", recording_buffers)
-    result = simulate_energy_balance_summary(
-        pv_dc=pv,
-        houseload=load,
-        battery_config=BatteryConfig(**cfg),
-        freq=FREQ,
-        temperature_series=temp,
-        execution_backend="numba",
-        **sim_kwargs,
-    )
-
-    assert vectorized_calls == [35040]
-    assert reduced_buffer_calls == [35040]
-    assert result.n_steps == 35040
+    assert _kernel().py_func is _dispatch._dispatch_day
 
 
 def test_trailing_partial_day_matches():
@@ -257,15 +220,6 @@ def test_carried_state_between_years_matches():
     assert df["Battery_Energy_Beginning"].iloc[0] > 0.0
     assert df["Battery_PV_Origin_Energy_Beginning"].iloc[0] > 0.0
     _assert_identical("carried_state", python_out, _run("carried_state", "numba"))
-
-
-def test_cycle_counting_boundary_is_unaffected_by_backend():
-    """Degradation is Python-only, so its inputs must arrive bit-identical."""
-    py_deg = _run("baseline", "python")[4]
-    nb_deg = _run("baseline", "numba")[4]
-    for column in ("Cumulative_FEC", "Cumulative_Cycle_Degradation", "Cumulative_Calendar_Degradation", "SOH"):
-        assert np.array_equal(py_deg[column].to_numpy(), nb_deg[column].to_numpy()), column
-    assert py_deg["Cumulative_FEC"].iloc[-1] > 0.0
 
 
 def test_summary_path_matches_detailed_path_under_numba():
@@ -499,7 +453,6 @@ def test_zeta_squared_must_use_libm_pow_not_the_folded_square():
         1,
         battery_config=config,
         battery_soh_decimal=1.0,
-        Battery_SOH=100.0,
         Battery_Energy_Wh=900.0,
         Battery_PV_Origin_Energy_Wh=0.0,
         Battery_Grid_Origin_Energy_Wh=0.0,

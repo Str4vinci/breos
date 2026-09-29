@@ -288,7 +288,6 @@ class _DayEvaluator:
         self.state = {
             "battery_config": config,
             "battery_soh_decimal": soh,
-            "Battery_SOH": soh * 100.0,
             # Origins never feed a dispatch decision, so they cannot move a cost.
             "Battery_PV_Origin_Energy_Wh": 0.0,
             "Battery_Grid_Origin_Energy_Wh": 0.0,
@@ -306,7 +305,7 @@ class _DayEvaluator:
         """``(cost, end_energy_wh)`` of ``day`` from ``energy_wh`` at target level ``level``."""
         problem = self.problem
         lo, hi = problem.day_starts[day], problem.day_starts[day + 1]
-        end_energy, _pv_origin, _grid_origin, _beginning = self.dispatch_day(
+        self.dispatch_day(
             self.buffers,
             *self.series,
             lo,
@@ -315,6 +314,7 @@ class _DayEvaluator:
             instructions=self.level_instructions[level],
             **self.state,
         )
+        end_energy = self.buffers.columns["Battery_Energy"][hi - 1]
         return _window_cost(self.buffers.matrix, problem, lo, hi), float(end_energy)
 
 
