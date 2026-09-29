@@ -226,6 +226,11 @@ independence, NPV, payback, LCOE, battery replacement totals, and the
 explicit enumeration, not an optimizer; use the optimization API for searching
 over objectives and constraints.
 
+{py:func}`~breos.plotting.plot_sweep_heatmap` draws one column of a
+two-parameter sweep CSV as a heatmap, and
+{py:func}`~breos.plotting.plot_orientation_landscape` draws a `tilt` ×
+`azimuth` sweep ([Plotting](../api/plotting.md#sweeps-and-the-optimizer-front)).
+
 Every combination is validated before the first run starts, so a bad one,
 such as a charge period the tariff schedule does not have, stops the sweep
 at once. `breos validate-config` checks every combination too.

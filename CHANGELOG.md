@@ -340,8 +340,50 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   rate at or below −1, or a learning rate outside [0, 1), raises. `breos sweep` treats the
   three keys as input-independent, so sweeping them reuses the prepared
   inputs. The docs state the timing conventions (E3).
+- **Plots of sweep and optimizer output**
+  ([#186](https://github.com/Str4vinci/breos/issues/186)), in
+  `breos.plotting` and the top-level `breos` namespace. They read the CSV
+  `breos sweep` writes, or its DataFrame, and take a swept key as in the
+  config (`n_modules`) or as its column (`param_n_modules`):
+  - `plot_sweep_heatmap(sweep, metric, results_directory, x=None, y=None,
+    diff=None, ...)` draws one result column of a two-parameter sweep. With
+    `diff=`, a second sweep over the same grid, it draws the difference on a
+    diverging scale, for example the same sizing grid at two locations.
+  - `plot_orientation_landscape(sweep, metric, results_directory, tilt="tilt",
+    azimuth="azimuth", maximize=True, ...)` maps a tilt × azimuth sweep, marks
+    the best orientation and draws the east-west profile at the best tilt. A
+    sweep of tilt alone, such as an east-west roof, gets the tilt profile.
+  - `plot_pareto_front(designs, results_directory, x="Grid_Independence_%",
+    y="NPV", maximize=(True, True), color_by=None, ...)` draws two objectives
+    of the `OptimizationResult` of `optimize_system_multi_objective`, its
+    `details["pareto"]` frame, or any table of designs, and marks the designs
+    that no other one beats in both.
 
 ### Changed
+- **`plot_breakeven_comparison` reads App results**
+  ([#186](https://github.com/Str4vinci/breos/issues/186)). It takes
+  `App.result()` dicts, whose `financial` rows it reads, or cost projection
+  frames: `plot_breakeven_comparison(projections, labels, results_directory,
+  colors=None, filename=...)`. `colors` moves after the directory and
+  defaults to the colour cycle, and `results_dir` is now
+  `results_directory`, as in the other plots. Each curve now starts at year 0
+  with the investment, and the no-system baseline at 0, so the dotted payback
+  line meets the curves where they cross; before, the curves began at year 1.
+  Labels or colours that do not match the projections, projections in two
+  currencies, and a [period] result without `financial` rows raise
+  `ValueError`. The payback line was already the shared
+  `find_payback_year_interpolated` rule.
+- **The TMY-versus-historical weather plots compute their own statistics**
+  ([#186](https://github.com/Str4vinci/breos/issues/186)).
+  `plot_weather_monthly_comparison(tmy, historical, results_directory,
+  variable="ghi", tmy_label="TMY", filename=None)` and
+  `plot_weather_annual_ghi_distribution(tmy, historical, results_directory,
+  tmy_label="TMY", filename=...)` take a TMY weather frame and the historical
+  weather a Monte Carlo study samples: its `weather_file` path, or the
+  per-year frames of `preload_weather_by_year`. They read the same complete
+  years as the study, and Open-Meteo column names. Before, they took monthly
+  arrays and a statistics table that the caller had to build.
+  `plot_weather_monthly_comparison` also draws `dni`, `dhi` and `temp_air`.
 - `breos validate-config --json` and `breos run --dry-run` build their
   resolved-config summary from the config registry: each `AppConfigField`
   names its place (`summary = "section.key"`), so every App key is reported
@@ -1559,6 +1601,21 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 - **The `validation` and `location-tools` extras.** `validation` installed
   nothing. `location-tools` only served `tools/add_location.py`, which is not
   in the wheel; install `geopy` and `timezonefinder` to run it.
+- **`plot_grid_independence_heatmap` and `plot_location_comparison_delta`**
+  ([#186](https://github.com/Str4vinci/breos/issues/186)), with no
+  deprecation period. They took hand-built pivot tables, and only the removed
+  `tools/batch_compare_locations.py` built them. Use `plot_sweep_heatmap` on
+  a `breos sweep` result, with `diff=` for the difference between two sweeps.
+- **`plot_azitilt_landscape_2d` and `plot_azitilt_ew_1d`**
+  ([#186](https://github.com/Str4vinci/breos/issues/186)), with no
+  deprecation period. Only the removed `tools/azitilt_optimizer.py` called
+  them. Use `plot_orientation_landscape` on a tilt × azimuth sweep, or on a
+  tilt sweep of an east-west roof.
+- **`plot_pareto_front_analysis`**
+  ([#186](https://github.com/Str4vinci/breos/issues/186)), with no
+  deprecation period. It read `Tariff`, `Detailed_Strategy` and
+  `Consumption_kWh` tables that BREOS never produced. Use
+  `plot_pareto_front` on the optimizer result or on a sweep.
 
 ### Documentation
 - The release checklist records that `v0.5.0`, `v0.5.1` and `v0.6.0` are

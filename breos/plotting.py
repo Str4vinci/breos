@@ -9,14 +9,16 @@ This module provides visualization functions for:
 """
 
 import os
-from typing import List, Optional, Tuple
+from typing import Any, List, Mapping, Optional, Sequence, Tuple, Union
 
 import numpy as np
 import pandas as pd
+from scipy.stats import t as student_t
 
-from breos.economics import find_payback_year_interpolated
+from breos.economics import _initial_investment, find_payback_year_interpolated
 from breos.tariffs import DEFAULT_CURRENCY
-from breos.utils import local_datetime_index
+from breos.utils import find_irradiance_column, local_datetime_index
+from breos.weather import extract_ambient_temperature, preload_weather_by_year
 
 MONTH_LABELS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
 
@@ -1253,36 +1255,120 @@ def plot_montecarlo_final_soh_distribution(
 # TMY VS HISTORICAL WEATHER
 # =========================================================================
 
+# Name and unit of each weather variable the comparison plots draw. Irradiance
+# is summed to an energy total, temperature averaged.
+_WEATHER_VARIABLES = {
+    "ghi": ("GHI", "kWh/m²"),
+    "dni": ("DNI", "kWh/m²"),
+    "dhi": ("DHI", "kWh/m²"),
+    "temp_air": ("Air temperature", "°C"),
+}
+
+
+def _weather_values(weather: pd.DataFrame, variable: str) -> pd.Series:
+    """One weather variable as a series indexed by time.
+
+    Time is the ``date`` column of a :func:`~breos.weather.preload_weather_by_year`
+    year, else the index. Irradiance is found under any of its aliases
+    (``shortwave_radiation`` is GHI), air temperature as
+    :func:`~breos.weather.extract_ambient_temperature` finds it.
+    """
+    if variable not in _WEATHER_VARIABLES:
+        raise ValueError(f"variable must be one of {', '.join(_WEATHER_VARIABLES)}, not {variable!r}")
+    if variable == "temp_air":
+        temperature = extract_ambient_temperature(weather)
+        column = None if temperature is None else temperature.name
+    else:
+        column = find_irradiance_column(weather.columns, variable)
+    if column is None:
+        raise ValueError(f"The weather has no {variable} column; it has {', '.join(map(str, weather.columns))}")
+    index = pd.DatetimeIndex(weather["date"] if "date" in weather.columns else weather.index)
+    if len(index) < 2:
+        raise ValueError("The weather needs at least two timestamps")
+    return pd.Series(pd.to_numeric(weather[column], errors="coerce").to_numpy(dtype=float), index=index)
+
+
+def _weather_monthly(weather: pd.DataFrame, variable: str) -> pd.Series:
+    """Monthly irradiance totals in kWh/m², or monthly mean temperature, indexed 1 to 12."""
+    values = _weather_values(weather, variable)
+    by_month = values.groupby(values.index.month)
+    if variable == "temp_air":
+        monthly = by_month.mean()
+    else:
+        hours_per_step = values.index.to_series().diff().median().total_seconds() / 3600.0
+        monthly = by_month.sum() * hours_per_step / 1000.0
+    return monthly.reindex(range(1, 13))
+
+
+def _historical_weather_years(
+    historical: Union[str, "os.PathLike[str]", Mapping[int, pd.DataFrame]],
+) -> "dict[int, pd.DataFrame]":
+    """The complete years of a multi-year weather file, as a Monte Carlo study reads them."""
+    if isinstance(historical, Mapping):
+        years = dict(historical)
+    else:
+        years = preload_weather_by_year(os.fspath(historical))
+    if not years:
+        raise ValueError("The historical weather has no complete year")
+    return years
+
+
+def _weather_monthly_stats(historical_years: Mapping[int, pd.DataFrame], variable: str) -> pd.DataFrame:
+    """Per month: the historical mean, its 95% confidence interval, and the lowest and highest year."""
+    table = pd.DataFrame({year: _weather_monthly(frame, variable) for year, frame in historical_years.items()})
+    count = table.count(axis=1)
+    mean = table.mean(axis=1)
+    half_width = student_t.ppf(0.975, count - 1) * table.std(axis=1) / np.sqrt(count)
+    return pd.DataFrame(
+        {
+            "mean": mean,
+            "ci_low": mean - half_width,
+            "ci_high": mean + half_width,
+            "min": table.min(axis=1),
+            "max": table.max(axis=1),
+        }
+    )
+
 
 def plot_weather_monthly_comparison(
-    tmy_vals: np.ndarray,
-    stats: "pd.DataFrame",
-    ylabel: str,
-    tmy_source: str,
-    results_dir: str,
-    filename: str,
+    tmy: pd.DataFrame,
+    historical: Union[str, "os.PathLike[str]", Mapping[int, pd.DataFrame]],
+    results_directory: str,
+    variable: str = "ghi",
+    tmy_label: str = "TMY",
+    filename: Optional[str] = None,
 ) -> None:
     """
-    Scatter+line monthly comparison: TMY vs historical mean with 95% CI band,
-    red min-year line, and green max-year line.
+    Compare a TMY with historical weather years, month by month.
+
+    Draws the TMY, the historical mean with its 95% confidence interval, and
+    each month's lowest and highest year. Irradiance is the monthly total in
+    kWh/m²; temperature is the monthly mean in °C.
 
     Args:
-        tmy_vals: Array of 12 monthly TMY values.
-        stats: DataFrame with columns ``mean``, ``ci_low``, ``ci_high``,
-            ``min``, and ``max``.
-        ylabel: Y-axis label (e.g. "GHI (kWh/m²)").
-        tmy_source: Source label for the TMY line (e.g. "pvgis-sarah3").
-        results_dir: Directory to save the plot.
-        filename: Output filename (e.g. "monthly_ghi_comparison.png").
+        tmy: One weather year, as :func:`breos.weather.load_weather` or
+            :func:`breos.weather.fetch_tmy_weather_data` return it.
+        historical: The multi-year weather CSV that a Monte Carlo study
+            samples (``MonteCarloSettings.weather_file``), or the per-year
+            frames :func:`breos.weather.preload_weather_by_year` splits it
+            into. Only complete years count, as in the study.
+        results_directory: Directory to save the plot.
+        variable: ``"ghi"``, ``"dni"``, ``"dhi"`` or ``"temp_air"``.
+        tmy_label: Legend label of the TMY line, for example its source.
+        filename: Output filename. Defaults to ``weather_monthly_<variable>.png``.
     """
-    os.makedirs(results_dir, exist_ok=True)
+    name, unit = _WEATHER_VARIABLES.get(variable, (variable, ""))
+    tmy_vals = _weather_monthly(tmy, variable).to_numpy()
+    historical_years = _historical_weather_years(historical)
+    monthly_stats = _weather_monthly_stats(historical_years, variable)
+    os.makedirs(results_directory, exist_ok=True)
 
     x = np.arange(12)
-    hist_mean = stats["mean"].values
-    hist_ci_low = stats["ci_low"].values
-    hist_ci_high = stats["ci_high"].values
-    hist_min = stats["min"].values
-    hist_max = stats["max"].values
+    hist_mean = monthly_stats["mean"].values
+    hist_ci_low = monthly_stats["ci_low"].values
+    hist_ci_high = monthly_stats["ci_high"].values
+    hist_min = monthly_stats["min"].values
+    hist_max = monthly_stats["max"].values
 
     fig, ax = plt.subplots(figsize=(14, 7))
 
@@ -1303,18 +1389,25 @@ def plot_weather_monthly_comparison(
     )
 
     # 95% CI shaded band
-    ax.fill_between(x, hist_ci_low, hist_ci_high, color="steelblue", alpha=0.25, label="95% CI")
+    ax.fill_between(x, hist_ci_low, hist_ci_high, color="steelblue", alpha=0.25, label="95% CI of the mean")
 
     # Historical mean line
-    ax.plot(x, hist_mean, color="steelblue", linewidth=2.5, marker="o", markersize=7, zorder=4, label="Historical mean")
-
-    # TMY line (on top)
     ax.plot(
-        x, tmy_vals, color="darkorange", linewidth=2.5, marker="D", markersize=6, zorder=6, label=f"TMY ({tmy_source})"
+        x,
+        hist_mean,
+        color="steelblue",
+        linewidth=2.5,
+        marker="o",
+        markersize=7,
+        zorder=4,
+        label=f"Historical mean ({len(historical_years)} years)",
     )
 
+    # TMY line (on top)
+    ax.plot(x, tmy_vals, color="darkorange", linewidth=2.5, marker="D", markersize=6, zorder=6, label=tmy_label)
+
     ax.set_xlabel("Month")
-    ax.set_ylabel(ylabel)
+    ax.set_ylabel(f"{name} ({unit})")
     ax.set_xticks(x)
     ax.set_xticklabels(MONTH_LABELS)
     ax.grid(True, axis="y", alpha=0.3)
@@ -1323,28 +1416,42 @@ def plot_weather_monthly_comparison(
 
     fig.tight_layout()
     fig.subplots_adjust(bottom=0.22)
-    fig.savefig(os.path.join(results_dir, filename), dpi=300, bbox_inches="tight")
+    fig.savefig(
+        os.path.join(results_directory, filename or f"weather_monthly_{variable}.png"), dpi=300, bbox_inches="tight"
+    )
     plt.close(fig)
 
 
 def plot_weather_annual_ghi_distribution(
-    annual_ghi_per_year: "pd.Series",
-    tmy_annual_ghi: float,
-    hist_annual_ghi_mean: float,
-    results_dir: str,
+    tmy: pd.DataFrame,
+    historical: Union[str, "os.PathLike[str]", Mapping[int, pd.DataFrame]],
+    results_directory: str,
+    tmy_label: str = "TMY",
     filename: str = "annual_ghi_distribution.png",
 ) -> None:
     """
-    Histogram of annual GHI values across historical years with TMY and mean lines.
+    Histogram of the annual GHI of historical weather years, with the TMY and the historical mean.
 
     Args:
-        annual_ghi_per_year:  Series of annual GHI totals, one per historical year.
-        tmy_annual_ghi:       TMY annual GHI total.
-        hist_annual_ghi_mean: Mean of historical annual GHI totals.
-        results_dir:          Directory to save the plot.
-        filename:             Output filename.
+        tmy: One weather year, as :func:`breos.weather.load_weather` or
+            :func:`breos.weather.fetch_tmy_weather_data` return it.
+        historical: The multi-year weather CSV that a Monte Carlo study
+            samples (``MonteCarloSettings.weather_file``), or the per-year
+            frames :func:`breos.weather.preload_weather_by_year` splits it
+            into. Only complete years count, as in the study.
+        results_directory: Directory to save the plot.
+        tmy_label: Legend label of the TMY line, for example its source.
+        filename: Output filename.
     """
-    os.makedirs(results_dir, exist_ok=True)
+    tmy_annual_ghi = float(_weather_monthly(tmy, "ghi").sum())
+    annual_ghi_per_year = pd.Series(
+        {
+            year: float(_weather_monthly(frame, "ghi").sum())
+            for year, frame in _historical_weather_years(historical).items()
+        }
+    )
+    hist_annual_ghi_mean = float(annual_ghi_per_year.mean())
+    os.makedirs(results_directory, exist_ok=True)
 
     n_years = len(annual_ghi_per_year)
     fig, ax = plt.subplots(figsize=(10, 6))
@@ -1357,7 +1464,11 @@ def plot_weather_annual_ghi_distribution(
         label=f"Historical ({n_years} years)",
     )
     ax.axvline(
-        tmy_annual_ghi, color="darkorange", linewidth=2.5, linestyle="--", label=f"TMY ({tmy_annual_ghi:.0f} kWh/m²)"
+        tmy_annual_ghi,
+        color="darkorange",
+        linewidth=2.5,
+        linestyle="--",
+        label=f"{tmy_label} ({tmy_annual_ghi:.0f} kWh/m²)",
     )
     ax.axvline(
         hist_annual_ghi_mean,
@@ -1376,149 +1487,459 @@ def plot_weather_annual_ghi_distribution(
     data_max = annual_ghi_per_year.values.max()
     x_min = min(data_min, tmy_annual_ghi, hist_annual_ghi_mean)
     x_max = max(data_max, tmy_annual_ghi, hist_annual_ghi_mean)
-    span = x_max - x_min
+    span = (x_max - x_min) or 1.0
     ax.set_xlim(x_min - 0.05 * span, x_max + 0.05 * span)
 
     fig.tight_layout()
-    fig.savefig(os.path.join(results_dir, filename), dpi=300, bbox_inches="tight")
+    fig.savefig(os.path.join(results_directory, filename), dpi=300, bbox_inches="tight")
     plt.close(fig)
 
 
-def _breakeven_left_limit(break_evens: "List[float]") -> float:
-    """Left x-limit of a break-even comparison: 0 when a line falls in the first half-year."""
-    return 0.0 if break_evens and min(break_evens) < 0.5 else 0.5
+def _breakeven_projection(projection: Union[pd.DataFrame, Mapping[str, Any]]) -> pd.DataFrame:
+    """A cost projection frame: the frame itself, or one built from an App result's ``financial`` rows."""
+    if isinstance(projection, pd.DataFrame):
+        return projection
+    rows = projection.get("financial")
+    if not rows:
+        raise ValueError("The App result has no 'financial' projection; a [period] run has no break-even")
+    years = [row for row in rows if row["year"] > 0]
+    frame = pd.DataFrame(
+        {
+            "Year": [row["year"] for row in years],
+            "Cost_No_Sys_Cumulative_NPV": [row["cost_without_system"] for row in years],
+            "Cost_System_Cumulative_NPV": [row["cost_with_system"] for row in years],
+            "Savings_Cumulative_NPV": [row["balance"] for row in years],
+        }
+    )
+    # Year 0 holds minus the investment, where payback is read from.
+    year_zero = [row for row in rows if row["year"] == 0]
+    if year_zero:
+        frame.attrs["total_investment"] = -float(year_zero[0]["balance"])
+    frame.attrs["currency"] = projection.get("provenance", {}).get("currency", DEFAULT_CURRENCY)
+    return frame
 
 
 def plot_breakeven_comparison(
-    cost_dfs: "List[pd.DataFrame]",
-    labels: "List[str]",
-    colors: "List[str]",
-    results_dir: str,
+    projections: Sequence[Union[pd.DataFrame, Mapping[str, Any]]],
+    labels: Sequence[str],
+    results_directory: str,
+    colors: Optional[Sequence[str]] = None,
     filename: str = "breakeven_comparison.png",
 ) -> None:
     """
     Multi-scenario break-even comparison: N cumulative cost curves vs No-System baseline.
 
+    Each curve starts at year 0 with the investment, and a dotted line marks
+    its payback by :func:`breos.economics.find_payback_year_interpolated`.
+    Scenarios with the same no-system cost share one baseline.
+
     Args:
-        cost_dfs: List of DataFrames with ``Year``,
-            ``Cost_No_Sys_Cumulative_NPV``, ``Cost_System_Cumulative_NPV``,
-            and ``Savings_Cumulative_NPV`` columns.
+        projections: One per scenario: a :meth:`breos.App.result` dict, whose
+            ``financial`` rows are read, or a cost projection frame from
+            :func:`breos.economics.cost_analysis_projection` or its CSV,
+            with ``Year``, ``Cost_No_Sys_Cumulative_NPV``,
+            ``Cost_System_Cumulative_NPV`` and ``Savings_Cumulative_NPV``.
         labels: Display label for each scenario.
-        colors: Line colour for each scenario.
-        results_dir: Output directory.
+        results_directory: Output directory.
+        colors: Line colour for each scenario. Defaults to the colour cycle.
         filename: Output filename.
+
+    Raises:
+        ValueError: If the labels or colours do not match the projections,
+            the projections are in different currencies, or an App result
+            has no ``financial`` projection.
     """
-    os.makedirs(results_dir, exist_ok=True)
+    if len(labels) != len(projections):
+        raise ValueError(f"{len(projections)} projections need {len(projections)} labels, not {len(labels)}")
+    if colors is None:
+        colors = [f"C{index % 10}" for index in range(len(projections))]
+    elif len(colors) != len(projections):
+        raise ValueError(f"{len(projections)} projections need {len(projections)} colors, not {len(colors)}")
+    cost_dfs = [_breakeven_projection(projection) for projection in projections]
+    currencies = sorted({_currency(df) for df in cost_dfs})
+    if len(currencies) > 1:
+        raise ValueError(f"The projections are in different currencies ({', '.join(currencies)}); plot them apart")
+    currency = currencies[0] if currencies else DEFAULT_CURRENCY
+    os.makedirs(results_directory, exist_ok=True)
 
     fig, ax = plt.subplots(figsize=(14, 8))
 
+    # Year 0 costs the investment with a system and nothing without one.
+    curves = []
+    for df in cost_dfs:
+        years = df["Year"].to_numpy(dtype=float)
+        no_sys = df["Cost_No_Sys_Cumulative_NPV"].to_numpy(dtype=float)
+        with_sys = df["Cost_System_Cumulative_NPV"].to_numpy(dtype=float)
+        investment = _initial_investment(df)
+        if investment is not None and len(years) and years[0] > 0.0:
+            years = np.concatenate(([0.0], years))
+            no_sys = np.concatenate(([0.0], no_sys))
+            with_sys = np.concatenate(([investment], with_sys))
+        curves.append((years, no_sys, with_sys))
+
     # Plot No-System baseline for each scenario
     # Track unique baselines to avoid duplicate lines when scenarios share the same baseline
-    seen_baselines = {}
-    for df, label, color in zip(cost_dfs, labels, colors, strict=False):
-        no_sys_values = tuple(df["Cost_No_Sys_Cumulative_NPV"].round(0).values)
-        if no_sys_values not in seen_baselines:
-            seen_baselines[no_sys_values] = label
+    seen_baselines = set()
+    for (years, no_sys, _), label, color in zip(curves, labels, colors, strict=True):
+        baseline = tuple(np.round(no_sys, 0))
+        if baseline not in seen_baselines:
+            seen_baselines.add(baseline)
             no_sys_label = "No System" if len(cost_dfs) == 1 else f"No System ({label})"
-            ax.plot(
-                df["Year"],
-                df["Cost_No_Sys_Cumulative_NPV"],
-                color=color,
-                linestyle="--",
-                label=no_sys_label,
-                linewidth=2.5,
-                alpha=0.7,
-            )
+            ax.plot(years, no_sys, color=color, linestyle="--", label=no_sys_label, linewidth=2.5, alpha=0.7)
 
     max_year = 0
-    break_evens = []
-    for df, label, color in zip(cost_dfs, labels, colors, strict=False):
-        ax.plot(df["Year"], df["Cost_System_Cumulative_NPV"], color=color, label=label, linewidth=2)
+    for df, (years, _, with_sys), label, color in zip(cost_dfs, curves, labels, colors, strict=True):
+        ax.plot(years, with_sys, color=color, label=label, linewidth=2)
         max_year = max(max_year, int(df["Year"].max()))
 
         # Break-even dotted line
         be = find_payback_year_interpolated(df)
         if be is not None:
             ax.axvline(x=be, color=color, linestyle=":", alpha=0.5, linewidth=1)
-            break_evens.append(be)
 
     ax.set_xlabel("Year")
-    currency = _currency(cost_dfs[0]) if cost_dfs else DEFAULT_CURRENCY
     ax.set_ylabel(f"Cumulative Cost ({currency})")
     ax.legend(loc="upper left")
     ax.grid(True, alpha=0.3)
     ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, _: f"{x:,.0f} {currency}"))
-    ax.set_xticks(range(1, max_year + 1))
-    ax.set_xlim(_breakeven_left_limit(break_evens), max_year + 0.5)
+    ax.set_xticks(range(0, max_year + 1))
+    ax.set_xlim(0, max_year + 0.5)
 
     plt.tight_layout()
-    plt.savefig(os.path.join(results_dir, filename), dpi=300)
+    plt.savefig(os.path.join(results_directory, filename), dpi=300)
     plt.close()
 
 
-def plot_azitilt_landscape_2d(
-    df_grid: "pd.DataFrame",
-    opt_azimuth: float,
-    opt_tilt: float,
-    results_dir: str,
-    filename: str = "optimization_landscape_2d.png",
+# =========================================================================
+# SWEEP RESULTS
+# =========================================================================
+
+# Axis labels of the sweep and optimizer columns BREOS writes, without their
+# ``param_`` or ``resolved_`` prefix. Other columns are labelled by name.
+_COLUMN_LABELS = {
+    "n_modules": "Number of PV modules",
+    "battery_kwh": "Battery capacity (kWh)",
+    "pv_kwp": "PV size (kWp)",
+    "tilt": "Tilt (°)",
+    "azimuth": "Azimuth (°)",
+    "grid_independence_pct": "Grid independence (%)",
+    "self_consumption_pct": "Self-consumption (%)",
+    "pv_production_kwh": "PV production (kWh)",
+    "total_investment": "Investment ({currency})",
+    "npv_savings": "NPV savings ({currency})",
+    "lcoe_per_kwh": "LCOE ({currency}/kWh)",
+    "payback_year": "Payback (years)",
+    "Modules": "Number of PV modules",
+    "Battery_kWh": "Battery capacity (kWh)",
+    "Tilt": "Tilt (°)",
+    "Azimuth": "Azimuth (°)",
+    "Grid_Independence_%": "Grid independence (%)",
+    "NPV": "NPV savings ({currency})",
+    "ZEB_Ratio": "ZEB ratio",
+    "Projected_Initial_Cost": "Investment ({currency})",
+}
+
+_COMPASS_POINTS = {0: "N", 45: "NE", 90: "E", 135: "SE", 180: "S", 225: "SW", 270: "W", 315: "NW", 360: "N"}
+
+
+def _column_label(column: str, currency: str) -> str:
+    """Axis label of a sweep or optimizer column."""
+    name = str(column)
+    for prefix in ("param_", "resolved_"):
+        name = name.removeprefix(prefix)
+    label = _COLUMN_LABELS.get(name)
+    return name if label is None else label.format(currency=currency)
+
+
+def _read_table(data: Union[pd.DataFrame, str, "os.PathLike[str]"]) -> pd.DataFrame:
+    """A result table: the frame itself, or the CSV at ``data``."""
+    return data if isinstance(data, pd.DataFrame) else pd.read_csv(data)
+
+
+def _sweep_column(frame: pd.DataFrame, name: str) -> str:
+    """The column ``name``, or the ``param_<name>`` column ``breos sweep`` writes for a swept key."""
+    for column in (name, f"param_{name}"):
+        if column in frame.columns:
+            return column
+    raise ValueError(f"The table has no {name!r} or 'param_{name}' column")
+
+
+def _swept_parameters(frame: pd.DataFrame) -> List[str]:
+    """The ``param_`` columns of a ``breos sweep`` table, in sweep order."""
+    return [str(column) for column in frame.columns if str(column).startswith("param_")]
+
+
+def _sweep_grid(frame: pd.DataFrame, x: str, y: str, metric: str) -> pd.DataFrame:
+    """``metric`` with one row per ``y`` value and one column per ``x`` value, both ascending."""
+    if frame[[y, x]].duplicated().any():
+        others = [column for column in _swept_parameters(frame) if column not in (x, y) and frame[column].nunique() > 1]
+        hint = f"; it also varies {', '.join(others)}, so select one value of each" if others else ""
+        raise ValueError(f"The sweep has more than one row for some {x} and {y} pair{hint}")
+    grid = frame.pivot(index=y, columns=x, values=metric).sort_index().sort_index(axis=1)
+    return grid.astype(float)
+
+
+def _tick_text(value: Any) -> str:
+    """A grid value as a tick label: 10.0 is "10"."""
+    return f"{value:g}" if isinstance(value, (int, float, np.number)) else str(value)
+
+
+def _cell_format(values: np.ndarray) -> str:
+    """One number format for every cell of a grid, from its largest magnitude."""
+    finite = np.abs(values[np.isfinite(values)])
+    largest = float(finite.max()) if finite.size else 0.0
+    if largest >= 100:
+        return ",.0f"
+    if largest >= 10:
+        return ".1f"
+    if largest >= 1:
+        return ".2f"
+    return ".3f"
+
+
+def plot_sweep_heatmap(
+    sweep: Union[pd.DataFrame, str, "os.PathLike[str]"],
+    metric: str,
+    results_directory: str,
+    x: Optional[str] = None,
+    y: Optional[str] = None,
+    diff: Union[pd.DataFrame, str, "os.PathLike[str]", None] = None,
+    labels: Optional[Tuple[str, str]] = None,
+    metric_label: Optional[str] = None,
+    cmap: Optional[str] = None,
+    vmin: Optional[float] = None,
+    vmax: Optional[float] = None,
+    filename: Optional[str] = None,
 ) -> None:
     """
-    2-D scatter plot of the azimuth/tilt optimisation landscape (colour = metric).
+    Heatmap of one metric of a two-parameter ``breos sweep`` result.
+
+    Each cell is one run, annotated with its value when the grid has at most
+    15 rows and 15 columns. With ``diff``, each cell is ``sweep`` minus
+    ``diff`` on a diverging scale centred on zero, for example the same
+    sizing grid at two locations or two tariffs. Cells in only one of the two
+    sweeps stay blank.
 
     Args:
-        df_grid:     DataFrame with columns 'Azimuth', 'Tilt', 'Metric'.
-        opt_azimuth: Optimal azimuth to mark with a red cross.
-        opt_tilt:   Optimal tilt to mark with a red cross.
-        results_dir: Output directory.
-        filename:    Output filename.
+        sweep: The CSV ``breos sweep`` writes, or its DataFrame.
+        metric: The result column to draw, such as ``grid_independence_pct``
+            or ``npv_savings``.
+        results_directory: Directory to save the plot.
+        x: Parameter on the horizontal axis, as its sweep key (``n_modules``)
+            or its column (``param_n_modules``). ``x`` and ``y`` default to
+            the two swept parameters, in sweep order.
+        y: Parameter on the vertical axis.
+        diff: A second sweep over the same parameters, subtracted from ``sweep``.
+        labels: Names of ``sweep`` and ``diff`` for the colour-bar label.
+        metric_label: Colour-bar label. Defaults to a label for the metric.
+        cmap: Matplotlib colormap name. Defaults to ``YlGnBu``, or ``RdBu``
+            with ``diff``.
+        vmin: Colour-scale minimum (auto if None). With ``diff`` the scale
+            is always symmetric about zero, and ``vmin`` and ``vmax`` are not read.
+        vmax: Colour-scale maximum (auto if None).
+        filename: Output filename. Defaults to ``sweep_<metric>.png``, or
+            ``sweep_<metric>_diff.png`` with ``diff``.
+
+    Raises:
+        ValueError: If ``x`` and ``y`` are not given and the sweep does not
+            vary exactly two parameters, if it has more than one run per cell
+            (it varies a third parameter), or if the two sweeps share no cell.
     """
-    os.makedirs(results_dir, exist_ok=True)
+    from matplotlib.colors import Normalize, TwoSlopeNorm
 
-    fig, ax = plt.subplots(figsize=(10, 8))
-    sc = ax.scatter(df_grid["Azimuth"], df_grid["Tilt"], c=df_grid["Metric"], cmap="viridis", s=50)
-    ax.scatter([opt_azimuth], [opt_tilt], color="red", marker="x", s=200, linewidth=3, label="Optimum")
-    plt.colorbar(sc, ax=ax, label="Metric")
-    ax.set_xlabel("Azimuth (deg)")
-    ax.set_ylabel("Tilt (deg)")
-    ax.legend()
-    ax.grid(True, alpha=0.3)
-    plt.tight_layout()
-    plt.savefig(os.path.join(results_dir, filename), dpi=300)
-    plt.close()
+    frame = _read_table(sweep)
+    if x is None and y is None:
+        swept = _swept_parameters(frame)
+        if len(swept) != 2:
+            raise ValueError(f"Name x and y: the sweep varies {len(swept)} parameters ({', '.join(swept)}), not 2")
+        x_column, y_column = swept
+    elif x is None or y is None:
+        raise ValueError("Give both x and y, or neither")
+    else:
+        x_column, y_column = _sweep_column(frame, x), _sweep_column(frame, y)
+    grid = _sweep_grid(frame, x_column, y_column, metric)
+    label = metric_label or _column_label(metric, _currency(frame))
+
+    if diff is None:
+        values = grid
+        norm: Normalize = Normalize(vmin=vmin, vmax=vmax)
+        cmap = cmap or "YlGnBu"
+    else:
+        values = grid.sub(_sweep_grid(_read_table(diff), x_column, y_column, metric))
+        if not np.isfinite(values.to_numpy()).any():
+            raise ValueError(f"The two sweeps share no {x_column} and {y_column} cell with a {metric} value")
+        abs_max = float(np.nanmax(np.abs(values.to_numpy()))) or 1.0
+        norm = TwoSlopeNorm(vmin=-abs_max, vcenter=0, vmax=abs_max)
+        cmap = cmap or "RdBu"
+        label = f"{label} ({labels[0]} − {labels[1]})" if labels else f"{label} difference"
+    data = values.to_numpy()
+    if not np.isfinite(data).any():
+        raise ValueError(f"The sweep has no finite {metric} value")
+    norm.autoscale_None(data[np.isfinite(data)])
+    os.makedirs(results_directory, exist_ok=True)
+
+    fig, ax = plt.subplots(figsize=(10, 5))
+    im = ax.imshow(data, aspect="auto", cmap=cmap, norm=norm, origin="lower")
+
+    # Axis labels from pivot index/columns
+    ax.set_xticks(range(len(values.columns)))
+    ax.set_xticklabels([_tick_text(c) for c in values.columns])
+    ax.set_yticks(range(len(values.index)))
+    ax.set_yticklabels([_tick_text(i) for i in values.index])
+    ax.set_xlabel(_column_label(x_column, _currency(frame)))
+    ax.set_ylabel(_column_label(y_column, _currency(frame)))
+
+    # Annotate cells, in white on dark colours
+    if data.shape[0] <= 15 and data.shape[1] <= 15:
+        number_format = ("+" if diff is not None else "") + _cell_format(data)
+        for i in range(data.shape[0]):
+            for j in range(data.shape[1]):
+                val = data[i, j]
+                if np.isfinite(val):
+                    red, green, blue, _ = im.cmap(norm(val))
+                    text_color = "white" if 0.299 * red + 0.587 * green + 0.114 * blue < 0.5 else "black"
+                    ax.text(
+                        j,
+                        i,
+                        format(val, number_format),
+                        ha="center",
+                        va="center",
+                        color=text_color,
+                        fontsize=9,
+                        fontweight="bold",
+                    )
+
+    cbar = fig.colorbar(im, ax=ax, pad=0.02)
+    cbar.set_label(label)
+
+    default_name = f"sweep_{metric}_diff.png" if diff is not None else f"sweep_{metric}.png"
+    fig.tight_layout()
+    fig.savefig(os.path.join(results_directory, filename or default_name), dpi=300, bbox_inches="tight")
+    plt.close(fig)
 
 
-def plot_azitilt_ew_1d(
-    tilt_vals: "np.ndarray",
-    metrics: "List[float]",
-    opt_tilt: float,
-    opt_metric: float,
-    results_dir: str,
-    filename: str = "optimization_1d_tilt_ew.png",
+def _set_azimuth_ticks(ax, azimuths: np.ndarray) -> None:
+    """Label azimuth ticks with their compass point, where the range spans three of them."""
+    low, high = float(np.min(azimuths)), float(np.max(azimuths))
+    ticks = [angle for angle in _COMPASS_POINTS if low <= angle <= high]
+    if len(ticks) >= 3:
+        ax.set_xticks(ticks)
+        ax.set_xticklabels([f"{angle}° {_COMPASS_POINTS[angle]}" for angle in ticks])
+
+
+def plot_orientation_landscape(
+    sweep: Union[pd.DataFrame, str, "os.PathLike[str]"],
+    metric: str,
+    results_directory: str,
+    tilt: str = "tilt",
+    azimuth: str = "azimuth",
+    maximize: bool = True,
+    metric_label: Optional[str] = None,
+    filename: str = "orientation_landscape.png",
 ) -> None:
     """
-    1-D line plot of PV metric vs tilt for the East-West configuration.
+    Plot a metric over panel orientation from a ``breos sweep`` result.
+
+    A tilt × azimuth sweep gets two panels. The left one maps the metric over
+    both angles and marks the best orientation. The right one is the
+    east-west profile: the metric against azimuth at the best tilt.
+
+    A sweep of tilt alone gets one panel, the metric against tilt, with the
+    best tilt marked. This is the plot for an east-west roof whose
+    ``[[pv_arrays]]`` set their azimuths and take the swept top-level ``tilt``.
 
     Args:
-        tilt_vals:  Array of tilt angles evaluated.
-        metrics:     Corresponding metric values (positive = better).
-        opt_tilt:   Optimal tilt to mark.
-        opt_metric:  Metric value at optimal tilt.
-        results_dir: Output directory.
-        filename:    Output filename.
-    """
-    os.makedirs(results_dir, exist_ok=True)
+        sweep: The CSV ``breos sweep`` writes, or its DataFrame. It must have
+            one run per orientation.
+        metric: The result column to draw, such as ``pv_production_kwh`` or
+            ``npv_savings``.
+        results_directory: Directory to save the plot.
+        tilt: The tilt parameter, as its sweep key or column.
+        azimuth: The azimuth parameter, as its sweep key or column. A table
+            without it, or with one azimuth only, is a tilt sweep.
+        maximize: True if a higher metric is better; False for a metric such
+            as ``lcoe_per_kwh``.
+        metric_label: Axis and colour-bar label. Defaults to a label for the metric.
+        filename: Output filename.
 
-    fig, ax = plt.subplots(figsize=(10, 6))
-    ax.plot(tilt_vals, metrics, "b-", linewidth=2)
-    ax.plot(opt_tilt, opt_metric, "rx", markersize=10, mew=2, label="Optimum")
-    ax.set_xlabel("Tilt (deg)")
-    ax.set_ylabel("Metric")
-    ax.grid(True)
-    ax.legend()
-    plt.tight_layout()
-    plt.savefig(os.path.join(results_dir, filename), dpi=300)
-    plt.close()
+    Raises:
+        ValueError: If the sweep has more than one run for an orientation
+            (it varies another parameter too).
+    """
+    frame = _read_table(sweep)
+    tilt_column = _sweep_column(frame, tilt)
+    try:
+        azimuth_column: Optional[str] = _sweep_column(frame, azimuth)
+    except ValueError:
+        azimuth_column = None
+    if azimuth_column is not None and frame[azimuth_column].nunique() < 2:
+        azimuth_column = None
+    label = metric_label or _column_label(metric, _currency(frame))
+    pick = np.nanargmax if maximize else np.nanargmin
+
+    if azimuth_column is None:
+        if frame[tilt_column].duplicated().any():
+            raise ValueError(f"The sweep has more than one row for some {tilt_column}; select one value of the others")
+        profile = frame.set_index(tilt_column)[metric].astype(float).sort_index()
+        best = int(pick(profile.to_numpy()))
+        os.makedirs(results_directory, exist_ok=True)
+
+        fig, ax = plt.subplots(figsize=(10, 6))
+        ax.plot(profile.index, profile.values, "b-", marker="o", linewidth=2)
+        ax.plot(
+            profile.index[best],
+            profile.iloc[best],
+            "rx",
+            markersize=12,
+            mew=3,
+            label=f"Optimum: {profile.index[best]:g}° tilt",
+        )
+        ax.set_xlabel("Tilt (°)")
+        ax.set_ylabel(label)
+        ax.grid(True, alpha=0.3)
+        ax.legend()
+        plt.tight_layout()
+        plt.savefig(os.path.join(results_directory, filename), dpi=300)
+        plt.close()
+        return
+
+    grid = _sweep_grid(frame, azimuth_column, tilt_column, metric)
+    row, col = np.unravel_index(int(pick(grid.to_numpy())), grid.shape)
+    best_tilt, best_azimuth = float(grid.index[row]), float(grid.columns[col])
+    azimuths = grid.columns.to_numpy(dtype=float)
+    os.makedirs(results_directory, exist_ok=True)
+
+    fig, (ax_map, ax_profile) = plt.subplots(1, 2, figsize=(16, 6.5), gridspec_kw={"width_ratios": [1.25, 1]})
+    mesh = ax_map.pcolormesh(
+        azimuths, grid.index.to_numpy(dtype=float), grid.to_numpy(), cmap="viridis", shading="nearest"
+    )
+    ax_map.scatter(
+        [best_azimuth],
+        [best_tilt],
+        color="red",
+        marker="x",
+        s=200,
+        linewidth=3,
+        label=f"Optimum: {best_tilt:g}° tilt, {best_azimuth:g}° azimuth",
+    )
+    fig.colorbar(mesh, ax=ax_map, label=label)
+    ax_map.set_xlabel("Azimuth (°)")
+    ax_map.set_ylabel("Tilt (°)")
+    _set_azimuth_ticks(ax_map, azimuths)
+    ax_map.legend(loc="upper center", bbox_to_anchor=(0.5, -0.12))
+
+    # East-west profile through the optimum
+    ax_profile.plot(azimuths, grid.iloc[row].to_numpy(), "b-", marker="o", linewidth=2, label=f"{best_tilt:g}° tilt")
+    ax_profile.plot(best_azimuth, grid.iloc[row, col], "rx", markersize=12, mew=3, label="Optimum")
+    ax_profile.set_xlabel("Azimuth (°)")
+    ax_profile.set_ylabel(label)
+    _set_azimuth_ticks(ax_profile, azimuths)
+    ax_profile.grid(True, alpha=0.3)
+    ax_profile.legend()
+
+    fig.tight_layout()
+    fig.savefig(os.path.join(results_directory, filename), dpi=300, bbox_inches="tight")
+    plt.close(fig)
 
 
 # =========================================================================
@@ -1526,249 +1947,105 @@ def plot_azitilt_ew_1d(
 # =========================================================================
 
 
-def plot_pareto_front_analysis(
-    df: "pd.DataFrame",
-    consumptions: "List[float]",
-    results_dir: str,
-    filename: str = "pareto_front_refined.png",
+def _pareto_mask(x: np.ndarray, y: np.ndarray) -> np.ndarray:
+    """Mask of the points no other point dominates, when both coordinates are maximised.
+
+    A point is dominated when another is at least as good in both and better
+    in one. Equal points on the front all stay on it.
+    """
+    front = np.zeros(len(x), dtype=bool)
+    best_y = -np.inf
+    last: Optional[Tuple[float, float]] = None
+    # Best x first, and the best y among equal x; a point is on the front if
+    # its y beats every point before it.
+    for index in np.lexsort((-y, -x)):
+        point = (float(x[index]), float(y[index]))
+        if point[1] > best_y or point == last:
+            front[index] = True
+            best_y, last = point[1], point
+    return front
+
+
+def plot_pareto_front(
+    designs: Any,
+    results_directory: str,
+    x: str = "Grid_Independence_%",
+    y: str = "NPV",
+    maximize: Tuple[bool, bool] = (True, True),
+    color_by: Optional[str] = None,
+    filename: str = "pareto_front.png",
 ) -> None:
     """
-    2×2 grid of Pareto-front scatter plots, one panel per consumption level.
+    Scatter two objectives of a set of designs and draw their Pareto front.
 
-    Background points show the full solution set (faint); foreground points
-    highlight Pareto-optimal configurations (coloured by tariff, shaped by
-    strategy).
+    The designs no other design beats in both objectives are drawn large and
+    joined by a line; the dominated ones are drawn small and grey. On the
+    optimizer's front with its own two objectives, every design is on it.
 
     Args:
-        df: Full results DataFrame with ``Consumption_kWh``, ``Tariff``,
-            ``Detailed_Strategy``, ``Net_Cost``, and
-            ``Grid_Independence_%`` columns.
-        consumptions: List of consumption levels to plot (one subplot each).
-        results_dir: Output directory.
+        designs: The :class:`~breos.optimization.OptimizationResult` of
+            :func:`~breos.optimization.optimize_system_multi_objective`, its
+            ``details["pareto"]`` frame or that frame's CSV, or any table of
+            designs, such as a ``breos sweep`` CSV.
+        results_directory: Directory to save the plot.
+        x: Column of the objective on the horizontal axis, or a swept key.
+        y: Column of the objective on the vertical axis, or a swept key.
+            The defaults are the optimizer's two objectives.
+        maximize: For ``x`` and ``y``, True if higher is better; False for a
+            cost such as ``Projected_Initial_Cost`` or ``lcoe_per_kwh``.
+        color_by: Column that colours the front, such as ``Battery_kWh``,
+            with a colour bar. None draws it in one colour.
         filename: Output filename.
+
+    Raises:
+        ValueError: If a column is missing, or no design has finite values
+            of both objectives.
     """
-    from matplotlib.lines import Line2D
-
-    os.makedirs(results_dir, exist_ok=True)
-
-    def _is_pareto_efficient(costs, independence):
-        is_efficient = [True] * len(costs)
-        for i in range(len(costs)):
-            for j in range(len(costs)):
-                if i == j:
-                    continue
-                if (costs[j] <= costs[i] and independence[j] >= independence[i]) and (
-                    costs[j] < costs[i] or independence[j] > independence[i]
-                ):
-                    is_efficient[i] = False
-                    break
-        return is_efficient
-
-    strategies = df["Detailed_Strategy"].unique()
-    tariffs = df["Tariff"].unique()
-
-    prop_cycle = plt.rcParams["axes.prop_cycle"]
-    colors = prop_cycle.by_key()["color"]
-    color_map = {t: colors[i % len(colors)] for i, t in enumerate(tariffs)}
-    markers = ["o", "s", "^", "D", "v", "<", ">", "p", "*", "h"]
-    marker_map = {s: markers[i % len(markers)] for i, s in enumerate(strategies)}
-
-    fig, axes = plt.subplots(2, 2, figsize=(16, 12))
-    axes = axes.flatten()
-
-    for i, cons in enumerate(consumptions):
-        ax = axes[i]
-        subset = df[df["Consumption_kWh"] == cons].copy()
-        if subset.empty:
-            continue
-
-        mask = _is_pareto_efficient(subset["Net_Cost"].values, subset["Grid_Independence_%"].values)
-        pareto_subset = subset[mask].copy()
-        pareto_subset.to_csv(os.path.join(results_dir, f"pareto_front_{cons}.csv"), index=False)
-
-        for tariff in tariffs:
-            for strategy in strategies:
-                m = (subset["Tariff"] == tariff) & (subset["Detailed_Strategy"] == strategy)
-                if m.any():
-                    ax.scatter(
-                        subset.loc[m, "Grid_Independence_%"],
-                        subset.loc[m, "Net_Cost"],
-                        c=color_map[tariff],
-                        marker=marker_map[strategy],
-                        alpha=0.2,
-                        label=None,
-                    )
-
-        for tariff in tariffs:
-            for strategy in strategies:
-                m = (pareto_subset["Tariff"] == tariff) & (pareto_subset["Detailed_Strategy"] == strategy)
-                if m.any():
-                    ax.scatter(
-                        pareto_subset.loc[m, "Grid_Independence_%"],
-                        pareto_subset.loc[m, "Net_Cost"],
-                        c=color_map[tariff],
-                        marker=marker_map[strategy],
-                        s=100,
-                        edgecolor="black",
-                        zorder=10,
-                        label=f"{tariff} - {strategy}",
-                    )
-
-        ax.set_title(f"Pareto Front - {cons} kWh Annual Consumption")
-        ax.set_xlabel("Grid Independence (%)")
-        ax.set_ylabel(f"Net Cost ({_currency(df)})")
-        ax.grid(True, alpha=0.3)
-
-    legend_elements = [Line2D([0], [0], marker="o", color="w", label="Tariffs:", markersize=0)]
-    for tariff, color in color_map.items():
-        legend_elements.append(
-            Line2D([0], [0], marker="o", color="w", markerfacecolor=color, label=tariff, markersize=10)
-        )
-    legend_elements.append(Line2D([0], [0], marker="o", color="w", label="Strategies:", markersize=0))
-    for strategy, marker in marker_map.items():
-        legend_elements.append(
-            Line2D(
-                [0],
-                [0],
-                marker=marker,
-                color="w",
-                markeredgecolor="black",
-                markerfacecolor="gray",
-                label=strategy,
-                markersize=10,
-            )
-        )
-
-    fig.legend(handles=legend_elements, loc="center right", title="Configuration")
-    plt.tight_layout(rect=[0, 0, 0.85, 1])
-    plt.savefig(os.path.join(results_dir, filename), dpi=300)
-    plt.close()
-
-
-def plot_grid_independence_heatmap(
-    pivot_data: pd.DataFrame,
-    results_directory: str,
-    location_name: str,
-    filename: str = "grid_independence_heatmap.png",
-    metric_label: str = "Grid Independence (%)",
-    cmap: str = "YlGnBu",
-    vmin: Optional[float] = None,
-    vmax: Optional[float] = None,
-) -> None:
-    """
-    Plot a heatmap of grid independence (or other metric) vs system size.
-
-    Args:
-        pivot_data: DataFrame with battery capacity as index, module counts as
-            columns, and metric values in the cells.
-        results_directory: Directory to save the plot
-        location_name: Location name for labelling (used in axis/legend, not title)
-        filename: Output filename
-        metric_label: Colorbar label
-        cmap: Matplotlib colormap name
-        vmin: Colorbar minimum (auto if None)
-        vmax: Colorbar maximum (auto if None)
-    """
-    from matplotlib.colors import Normalize
-
+    details = getattr(designs, "details", None)
+    if isinstance(details, Mapping) and "pareto" in details:
+        designs = details["pareto"]
+    frame = _read_table(designs)
+    x_column, y_column = _sweep_column(frame, x), _sweep_column(frame, y)
+    color_column = None if color_by is None else _sweep_column(frame, color_by)
+    x_values = pd.to_numeric(frame[x_column], errors="coerce").to_numpy(dtype=float)
+    y_values = pd.to_numeric(frame[y_column], errors="coerce").to_numpy(dtype=float)
+    finite = np.isfinite(x_values) & np.isfinite(y_values)
+    if not finite.any():
+        raise ValueError(f"No design has finite {x_column} and {y_column} values")
+    frame, x_values, y_values = frame[finite], x_values[finite], y_values[finite]
+    signs = [1.0 if higher else -1.0 for higher in maximize]
+    front = _pareto_mask(signs[0] * x_values, signs[1] * y_values)
+    currency = _currency(frame)
     os.makedirs(results_directory, exist_ok=True)
 
-    fig, ax = plt.subplots(figsize=(10, 5))
-
-    norm = Normalize(vmin=vmin, vmax=vmax)
-    im = ax.imshow(
-        pivot_data.values,
-        aspect="auto",
-        cmap=cmap,
-        norm=norm,
-        origin="lower",
-    )
-
-    # Axis labels from pivot index/columns
-    ax.set_xticks(range(len(pivot_data.columns)))
-    ax.set_xticklabels([str(c) for c in pivot_data.columns])
-    ax.set_yticks(range(len(pivot_data.index)))
-    ax.set_yticklabels([str(i) for i in pivot_data.index])
-
-    ax.set_xlabel("Number of PV Modules")
-    ax.set_ylabel("Battery Capacity (kWh)")
-
-    # Annotate cells
-    for i in range(len(pivot_data.index)):
-        for j in range(len(pivot_data.columns)):
-            val = pivot_data.values[i, j]
-            if not np.isnan(val):
-                text_color = "white" if val > (norm.vmax + norm.vmin) / 2 else "black"
-                ax.text(j, i, f"{val:.1f}", ha="center", va="center", color=text_color, fontsize=9, fontweight="bold")
-
-    cbar = fig.colorbar(im, ax=ax, pad=0.02)
-    cbar.set_label(metric_label)
-
-    fig.tight_layout()
-    fig.savefig(os.path.join(results_directory, filename), dpi=300, bbox_inches="tight")
-    plt.close(fig)
-
-
-def plot_location_comparison_delta(
-    delta_data: pd.DataFrame,
-    results_directory: str,
-    loc_a: str,
-    loc_b: str,
-    filename: str = "grid_independence_delta.png",
-    metric_label: str = "Grid Independence Delta (pp)",
-) -> None:
-    """
-    Plot a diverging heatmap of the difference in a metric between two locations.
-
-    Args:
-        delta_data: DataFrame with battery capacity as index, module counts as
-            columns, and ``loc_a - loc_b`` values in percentage points.
-        results_directory: Directory to save the plot
-        loc_a: Name of location A
-        loc_b: Name of location B
-        filename: Output filename
-        metric_label: Colorbar label
-    """
-    from matplotlib.colors import TwoSlopeNorm
-
-    os.makedirs(results_directory, exist_ok=True)
-
-    fig, ax = plt.subplots(figsize=(10, 5))
-
-    abs_max = max(abs(np.nanmin(delta_data.values)), abs(np.nanmax(delta_data.values)))
-    if abs_max == 0:
-        abs_max = 1.0
-    norm = TwoSlopeNorm(vmin=-abs_max, vcenter=0, vmax=abs_max)
-
-    im = ax.imshow(
-        delta_data.values,
-        aspect="auto",
-        cmap="RdBu",
-        norm=norm,
-        origin="lower",
-    )
-
-    ax.set_xticks(range(len(delta_data.columns)))
-    ax.set_xticklabels([str(c) for c in delta_data.columns])
-    ax.set_yticks(range(len(delta_data.index)))
-    ax.set_yticklabels([str(i) for i in delta_data.index])
-
-    ax.set_xlabel("Number of PV Modules")
-    ax.set_ylabel("Battery Capacity (kWh)")
-
-    # Annotate cells
-    for i in range(len(delta_data.index)):
-        for j in range(len(delta_data.columns)):
-            val = delta_data.values[i, j]
-            if not np.isnan(val):
-                text_color = "white" if abs(val) > abs_max * 0.6 else "black"
-                sign = "+" if val > 0 else ""
-                ax.text(
-                    j, i, f"{sign}{val:.1f}", ha="center", va="center", color=text_color, fontsize=9, fontweight="bold"
-                )
-
-    cbar = fig.colorbar(im, ax=ax, pad=0.02)
-    cbar.set_label(f"{metric_label} ({loc_a} \u2212 {loc_b})")
+    fig, ax = plt.subplots(figsize=(11, 7))
+    if not front.all():
+        ax.scatter(
+            x_values[~front], y_values[~front], s=25, color="grey", alpha=0.4, label=f"Dominated ({(~front).sum()})"
+        )
+    order = np.argsort(x_values[front], kind="stable")
+    ax.plot(x_values[front][order], y_values[front][order], color="black", linewidth=1, alpha=0.6, zorder=2)
+    front_label = f"Pareto front ({front.sum()})"
+    if color_column is None:
+        ax.scatter(
+            x_values[front], y_values[front], s=70, color="tab:blue", edgecolor="black", zorder=3, label=front_label
+        )
+    else:
+        points = ax.scatter(
+            x_values[front],
+            y_values[front],
+            s=70,
+            c=pd.to_numeric(frame[color_column], errors="coerce").to_numpy(dtype=float)[front],
+            cmap="viridis",
+            edgecolor="black",
+            zorder=3,
+            label=front_label,
+        )
+        fig.colorbar(points, ax=ax, label=_column_label(color_column, currency))
+    ax.set_xlabel(_column_label(x_column, currency))
+    ax.set_ylabel(_column_label(y_column, currency))
+    ax.grid(True, alpha=0.3)
+    ax.legend()
 
     fig.tight_layout()
     fig.savefig(os.path.join(results_directory, filename), dpi=300, bbox_inches="tight")
