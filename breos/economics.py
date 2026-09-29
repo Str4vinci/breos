@@ -516,6 +516,326 @@ def _replacement_outlay(base: np.ndarray, exponents: np.ndarray, inflation_rate:
     return outlay if learning == 0.0 else outlay * (1 - learning) ** exponents
 
 
+# Column order of a cost projection. Columns a stage does not produce (CO2
+# without emissions) are left out; any other column a caller added to the
+# cashflows follows, in its own order.
+COST_PROJECTION_COLUMNS = (
+    "Year",
+    "Load_kWh",
+    "Cost_No_Sys_Annual",
+    "Cost_No_Sys_Cumulative",
+    "PV_Production_kWh",
+    "Export_kWh",
+    "Degradation_Factor",
+    "Cost_Import",
+    "Revenue_Export",
+    "Cost_Operation",
+    "Cost_Daily",
+    "Replacement_Time_Years",
+    "Cost_Replacement",
+    "Cost_System_Annual",
+    "Cost_System_Cumulative",
+    "Cost_No_Sys_Annual_NPV",
+    "Cost_System_Annual_NPV",
+    "Cost_No_Sys_Cumulative_NPV",
+    "Cost_System_Cumulative_NPV",
+    "Savings_Cumulative",
+    "Savings_Cumulative_NPV",
+)
+
+
+def _validated_year_rows(yearly_summary_df: pd.DataFrame, num_years: int) -> pd.DataFrame:
+    """The year rows ordered by their ``Year`` labels, which must be exactly 1 through ``num_years``."""
+    expected_years = pd.Index(range(1, num_years + 1), name="Year")
+    numeric_years = pd.to_numeric(yearly_summary_df["Year"], errors="coerce").to_numpy(dtype=float)
+    if not np.isfinite(numeric_years).all() or not np.equal(numeric_years, np.floor(numeric_years)).all():
+        raise ValueError("yearly_summary_df Year values must be finite integers")
+
+    yearly_index = pd.Index(numeric_years.astype(int), name="Year")
+    if yearly_index.has_duplicates:
+        raise ValueError("yearly_summary_df Year values must be unique")
+    if not yearly_index.difference(expected_years).empty or not expected_years.difference(yearly_index).empty:
+        raise ValueError(f"yearly_summary_df Year values must cover exactly 1 through {num_years}")
+
+    # Reorder the rows by their validated year labels so each financial row
+    # stays attached to the simulation year it describes.
+    rows = yearly_summary_df.drop(columns="Year")
+    rows.index = yearly_index
+    rows = rows.reindex(expected_years)
+    rows.insert(0, "Year", expected_years)
+    return rows.reset_index(drop=True)
+
+
+def _estimate_year_rows(
+    results_df: pd.DataFrame, costs: Dict[str, float], num_years: int, degradation_rate: float, freq: str
+) -> pd.DataFrame:
+    """Year rows estimated from one simulated year: the legacy first-year path.
+
+    Year 1 is the simulation; later years scale its production by
+    ``(1 - degradation_rate) ** (n - 1)`` at the first year's self-consumption
+    ratio, and the import grows by the self-consumed PV lost. Replacements are
+    taken from the simulated calendar years where the frame covers them. The
+    rows carry the year-1-price money, so they value like simulated rows.
+    """
+    df = results_df.copy()
+    if "Datetime" in df.columns:
+        df.index = local_datetime_index(df.pop("Datetime"))
+    time_index = cast(pd.DatetimeIndex, df.index)
+    df["Year"] = time_index.year
+    df["Date"] = time_index.normalize()
+    hours_per_step = get_hours_per_step(freq)
+
+    if "PV_AC_Export" not in df.columns:
+        hint = (
+            " Frames written before ledger schema 2.0 call it Sell_To_Grid; rename that column."
+            if ("Sell_To_Grid" in df.columns)
+            else ""
+        )
+        raise ValueError(f"results_df has no PV_AC_Export column.{hint}")
+    df["System_AC_Production"] = system_ac_production_power(df)
+    for col in ("System_AC_Production", "Houseload", "Import_From_Grid", "PV_AC_Export"):
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0.0)
+
+    # Summing power (W) and scaling by hours per step / 1000 gives kWh.
+    yearly = df[["System_AC_Production", "Houseload", "Import_From_Grid", "PV_AC_Export"]].groupby(df["Year"]).sum()
+
+    # The frame marks each swap; the economics prices it (ADR 0003 E4). A
+    # frame that already carries the money (ledger schema < 3.0) keeps it, as
+    # price_year_rows keeps a year row's. Either way the per-step money is
+    # group-summed, the reduction the projection has always used.
+    if "Replacement_Cost" in df.columns:
+        step_cost = pd.to_numeric(df["Replacement_Cost"], errors="coerce").fillna(0.0).to_numpy(dtype=float)
+    elif "Battery_Replaced" in df.columns:
+        replaced = df["Battery_Replaced"].to_numpy(dtype=bool)
+        step_cost = np.where(replaced, _replacement_cost_each(costs, float(replaced.sum())), 0.0)
+    else:
+        step_cost = np.zeros(len(df))
+    yearly_replacement = pd.DataFrame({"Replacement_Cost": step_cost}, index=df.index).groupby(df["Year"]).sum()
+
+    # The ledger marks the swap step, so the instant does not have to be
+    # reconstructed downstream. Without the column the booking falls back to
+    # the documented mid-year default.
+    if "Battery_Replaced" in df.columns:
+        replacement_year_fractions = replacement_fraction_by_year(df["Year"], df["Battery_Replaced"])
+    else:
+        replacement_year_fractions = pd.Series(dtype=float)
+
+    yearly = yearly * hours_per_step / 1000.0
+    daily_counts = df.groupby("Year")["Date"].nunique()
+
+    first_year_load = yearly["Houseload"].iloc[0]
+    first_year_import = yearly["Import_From_Grid"].iloc[0]
+    first_year_export = yearly["PV_AC_Export"].iloc[0]
+    first_year_pv = yearly["System_AC_Production"].iloc[0]
+    first_year_days = daily_counts.iloc[0]
+
+    years = pd.Series(range(1, num_years + 1))
+    degradation_factors = (1 - degradation_rate) ** (years - 1)
+    pv_degraded = first_year_pv * degradation_factors
+    self_consumption_ratio = 1 - (first_year_export / first_year_pv) if first_year_pv > 0 else 0
+    export_degraded = pv_degraded * (1 - self_consumption_ratio)
+    pv_reduction = first_year_pv - pv_degraded
+    import_adjusted = first_year_import + pv_reduction * self_consumption_ratio
+
+    # Simulation results only cover the simulated period: a multi-year frame
+    # provides replacement events for every year it covers, a single-year run
+    # at most year 1. yearly_replacement is indexed by calendar year, so align
+    # it via the simulation start year.
+    start_year = df["Year"].min()
+    replacement_base = np.zeros(num_years, dtype=float)
+    replacement_fraction = np.full(num_years, np.nan, dtype=float)
+    for position, relative_year in enumerate(years):
+        actual_year = start_year + relative_year - 1
+        if actual_year in yearly_replacement.index:
+            replacement_base[position] = float(yearly_replacement.loc[actual_year, "Replacement_Cost"])
+            if actual_year in replacement_year_fractions.index:
+                replacement_fraction[position] = float(replacement_year_fractions.loc[actual_year])
+
+    return pd.DataFrame(
+        {
+            "Year": years,
+            "Load_kWh": first_year_load,
+            "Import_kWh": import_adjusted,
+            "Export_kWh": export_degraded,
+            "PV_Production_kWh": pv_degraded,
+            "PV_Degradation_Factor": degradation_factors,
+            "Replacement_Cost": replacement_base,
+            "Replacement_Year_Fraction": replacement_fraction,
+            "Fixed_Charge": first_year_days * costs["daily_power_cost"],
+        }
+    )
+
+
+def value_year_rows(
+    year_rows: pd.DataFrame,
+    costs: Dict[str, float],
+    *,
+    inflation_rate: float = DEFAULT_INFLATION_RATE,
+    sell_price_inflation: float = 0.0,
+    import_price_escalation: Optional[float] = None,
+    om_escalation: Optional[float] = None,
+    replacement_cost_learning: float = 0.0,
+) -> pd.DataFrame:
+    """Turn priced year rows into each year's component cashflows (the valuation stage).
+
+    ``year_rows`` are rows 1 through N, in order, carrying the year-1-price
+    money of :func:`price_year_rows`. Energy, fixed-charge and O&M flows are
+    escalated from year-1 prices; each replacement is priced at t = 0 and
+    inflated to its swap instant, ``Replacement_Time_Years`` (ADR 0003 E2,
+    E3). Nothing is discounted here. ``attrs["total_replacement_cost"]`` is
+    the replacements at t = 0 prices.
+    """
+    years = year_rows["Year"]
+    rates = resolve_escalation_rates(inflation_rate, import_price_escalation, om_escalation)
+    inflation_factors = (1 + rates["import_price_escalation"]) ** (years - 1)
+    om_factors = (1 + rates["om_escalation"]) ** (years - 1)
+    sell_inflation_factors = (1 + sell_price_inflation) ** (years - 1)
+
+    flows = pd.DataFrame({"Year": years})
+    if "Load_kWh" in year_rows.columns:
+        flows["Load_kWh"] = year_rows["Load_kWh"]
+    flows["Cost_No_Sys_Annual"] = (year_rows["Baseline_Import_Cost"] + year_rows["Fixed_Charge"]) * inflation_factors
+    flows["PV_Production_kWh"] = year_rows["PV_Production_kWh"]
+    flows["Export_kWh"] = year_rows["Export_kWh"]
+    flows["Degradation_Factor"] = year_rows["PV_Degradation_Factor"]
+    flows["Cost_Import"] = year_rows["Import_Cost"] * inflation_factors
+    flows["Revenue_Export"] = year_rows["Export_Revenue"] * sell_inflation_factors
+    flows["Cost_Operation"] = costs["annual_operation_cost"] * om_factors
+    flows["Cost_Daily"] = year_rows["Fixed_Charge"] * inflation_factors
+
+    # The replacement outlay is booked at the instant the pack is swapped:
+    # inflated to it here and discounted from it later. The annual flows
+    # keep the year-end convention.
+    replacement_base = pd.to_numeric(year_rows["Replacement_Cost"], errors="coerce").fillna(0.0).to_numpy()
+    replacement_time = replacement_booking_time(
+        years.to_numpy(dtype=float),
+        (
+            pd.to_numeric(year_rows["Replacement_Year_Fraction"], errors="coerce").to_numpy()
+            if "Replacement_Year_Fraction" in year_rows.columns
+            else None
+        ),
+        replacement_base > 0.0,
+    )
+    flows["Replacement_Time_Years"] = replacement_time
+    flows["Cost_Replacement"] = _replacement_outlay(
+        replacement_base,
+        _booking_exponents(replacement_time, years.to_numpy(dtype=float)),
+        inflation_rate,
+        replacement_cost_learning,
+    )
+    flows["Cost_System_Annual"] = (
+        flows["Cost_Import"]
+        - flows["Revenue_Export"]
+        + flows["Cost_Operation"]
+        + flows["Cost_Daily"]
+        + flows["Cost_Replacement"]
+    )
+    flows.attrs["total_replacement_cost"] = replacement_total_t0(replacement_base)
+    return flows
+
+
+def discount_cashflows(
+    flows: pd.DataFrame,
+    *,
+    total_investment: float,
+    discount_rate: float = DEFAULT_DISCOUNT_RATE,
+    currency: str = DEFAULT_CURRENCY,
+) -> pd.DataFrame:
+    """Accumulate and discount component cashflows, and compute the metrics (the discounting stage).
+
+    ``flows`` is the output of :func:`value_year_rows`. Annual flows are
+    discounted at year end, a replacement from its swap instant. Adds the
+    cumulative, NPV and savings columns and sets ``attrs``: ``currency``,
+    ``total_investment``, ``payback_year``, ``final_npv_savings``,
+    ``replacement_cost_npv``, ``total_replacement_cost`` and
+    ``lcoe_per_kwh``, the one LCOE every runner reports.
+    """
+    proj = flows.copy()
+    years = proj["Year"]
+    discount_factors = 1 / ((1 + discount_rate) ** years)
+    replacement_exponents = _booking_exponents(
+        proj["Replacement_Time_Years"].to_numpy(dtype=float), years.to_numpy(dtype=float)
+    )
+
+    proj["Cost_No_Sys_Cumulative"] = proj["Cost_No_Sys_Annual"].cumsum()
+    proj["Cost_System_Cumulative"] = total_investment + proj["Cost_System_Annual"].cumsum()
+    proj["Cost_No_Sys_Annual_NPV"] = proj["Cost_No_Sys_Annual"] * discount_factors
+    proj["Cost_System_Annual_NPV"] = _discount_annual_with_replacement(
+        proj["Cost_System_Annual"],
+        proj["Cost_Replacement"],
+        discount_factors,
+        replacement_exponents,
+        discount_rate,
+    )
+    proj["Cost_No_Sys_Cumulative_NPV"] = proj["Cost_No_Sys_Annual_NPV"].cumsum()
+    proj["Cost_System_Cumulative_NPV"] = total_investment + proj["Cost_System_Annual_NPV"].cumsum()
+    proj["Savings_Cumulative"] = proj["Cost_No_Sys_Cumulative"] - proj["Cost_System_Cumulative"]
+    proj["Savings_Cumulative_NPV"] = proj["Cost_No_Sys_Cumulative_NPV"] - proj["Cost_System_Cumulative_NPV"]
+    proj = proj[
+        [column for column in COST_PROJECTION_COLUMNS if column in proj.columns]
+        + [column for column in proj.columns if column not in COST_PROJECTION_COLUMNS]
+    ]
+
+    proj.attrs["currency"] = currency
+    proj.attrs["total_investment"] = total_investment
+    proj.attrs["payback_year"] = find_payback_year(proj)
+    proj.attrs["final_npv_savings"] = proj["Savings_Cumulative_NPV"].iloc[-1]
+    proj.attrs["replacement_cost_npv"] = _replacement_npv(
+        proj["Cost_Replacement"], replacement_exponents, discount_rate
+    )
+    proj.attrs["total_replacement_cost"] = flows.attrs["total_replacement_cost"]
+    proj.attrs["lcoe_per_kwh"] = calculate_lcoe_from_projection(
+        proj, total_investment=total_investment, discount_rate=discount_rate
+    )
+    return proj
+
+
+def add_co2_projection(proj: pd.DataFrame, year_rows: pd.DataFrame, emissions_params) -> None:
+    """Add each year's avoided CO2 to a cost projection, in place (the emissions stage).
+
+    Self-consumption is ``PV_Production_kWh - Export_kWh`` plus any grid
+    shift through the battery (ADR 0002 A10). Sets
+    ``attrs["lifetime_co2_avoided_total_kg"]`` and
+    ``attrs["lifetime_co2_avoided_self_consumed_kg"]``.
+    """
+    from breos.emissions import calculate_co2_projection
+
+    co2_proj = calculate_co2_projection(
+        proj["PV_Production_kWh"].to_numpy(),
+        proj["Export_kWh"].to_numpy(),
+        emissions_params,
+        _grid_shift_kwh(year_rows),
+    )
+    for col in (
+        "CO2_Avoided_Total_kg",
+        "CO2_Avoided_SelfConsumed_kg",
+        "CO2_Avoided_Total_Cumulative_kg",
+        "CO2_Avoided_SelfConsumed_Cumulative_kg",
+        "CO2_Avoided_CI_gCO2_kWh",
+        "CO2_Avoided_CI_Type",
+        "Average_Grid_CI_gCO2_kWh",
+        "Marginal_Grid_CI_gCO2_kWh",
+        "CO2_Avoided_Export_kg",
+        "CO2_Avoided_Export_Cumulative_kg",
+    ):
+        proj[col] = co2_proj[col].values
+    proj.attrs["lifetime_co2_avoided_total_kg"] = float(proj["CO2_Avoided_Total_Cumulative_kg"].iloc[-1])
+    proj.attrs["lifetime_co2_avoided_self_consumed_kg"] = float(proj["CO2_Avoided_SelfConsumed_Cumulative_kg"].iloc[-1])
+    proj.attrs["lifetime_co2_avoided_export_kg"] = float(proj["CO2_Avoided_Export_Cumulative_kg"].iloc[-1])
+
+
+def write_cost_projection(proj: pd.DataFrame, results_directory: str, scenario_name: str = "") -> str:
+    """Write a cost projection to ``cost_projection[_<scenario>].csv`` in ``results_directory``; return the path."""
+    import os
+
+    os.makedirs(results_directory, exist_ok=True)
+    suffix = f"_{scenario_name}" if scenario_name else ""
+    path = f"{results_directory}/cost_projection{suffix}.csv"
+    proj.to_csv(path, index=False)
+    return path
+
+
 def cost_analysis_projection(
     results_df: Optional[pd.DataFrame],
     costs: Dict[str, float],
@@ -537,7 +857,12 @@ def cost_analysis_projection(
     """
     Perform multi-year cost projection analysis.
 
-    Includes inflation, discount rate, and PV degradation.
+    Includes inflation, discount rate, and PV degradation. The work runs in
+    four stages, each also public: :func:`price_year_rows` and
+    :func:`value_year_rows` turn energy into component cashflows,
+    :func:`discount_cashflows` discounts them and computes the metrics,
+    :func:`add_co2_projection` adds avoided emissions, and
+    :func:`write_cost_projection` writes the file.
 
     Args:
         results_df: DataFrame with ``Datetime``, ``Houseload``,
@@ -575,367 +900,33 @@ def cost_analysis_projection(
     Returns:
         DataFrame with yearly cost projections
     """
-
-    # If yearly_summary_df provided (from propagation), use actual yearly data
     if yearly_summary_df is not None and not yearly_summary_df.empty:
-        expected_years = pd.Index(range(1, num_years + 1), name="Year")
-        numeric_years = pd.to_numeric(yearly_summary_df["Year"], errors="coerce").to_numpy(dtype=float)
-        if not np.isfinite(numeric_years).all() or not np.equal(numeric_years, np.floor(numeric_years)).all():
-            raise ValueError("yearly_summary_df Year values must be finite integers")
-
-        yearly_index = pd.Index(numeric_years.astype(int), name="Year")
-        if yearly_index.has_duplicates:
-            raise ValueError("yearly_summary_df Year values must be unique")
-        if not yearly_index.difference(expected_years).empty or not expected_years.difference(yearly_index).empty:
-            raise ValueError(f"yearly_summary_df Year values must cover exactly 1 through {num_years}")
-
-        # Reorder the summary by its validated year labels so each financial
-        # row stays attached to the simulation year it describes.
-        yearly_data = price_year_rows(yearly_summary_df, costs).drop(columns="Year")
-        yearly_data.index = yearly_index
-        yearly_data = yearly_data.reindex(expected_years)
-
-        # Keep the year labels as the working index while pandas aligns every
-        # yearly series below. Reset to the usual RangeIndex before returning.
-        proj = pd.DataFrame(index=expected_years)
-        proj["Year"] = expected_years
-
-        # Factors
-        rates = resolve_escalation_rates(inflation_rate, import_price_escalation, om_escalation)
-        inflation_factors = (1 + rates["import_price_escalation"]) ** (proj["Year"] - 1)
-        om_factors = (1 + rates["om_escalation"]) ** (proj["Year"] - 1)
-        sell_inflation_factors = (1 + sell_price_inflation) ** (proj["Year"] - 1)
-        discount_factors = 1 / ((1 + discount_rate) ** proj["Year"])
-
-        # Baseline (no system) - use the actual yearly demand from propagation.
-        proj["Load_kWh"] = yearly_data["Load_kWh"]
-        proj["Cost_No_Sys_Annual"] = (
-            yearly_data["Baseline_Import_Cost"] + yearly_data["Fixed_Charge"]
-        ) * inflation_factors
-        proj["Cost_No_Sys_Cumulative"] = proj["Cost_No_Sys_Annual"].cumsum()
-
-        # With PV system - Use ACTUAL yearly values from propagation
-        proj["PV_Production_kWh"] = yearly_data["PV_Production_kWh"]
-        proj["Export_kWh"] = yearly_data["Export_kWh"]
-        proj["Degradation_Factor"] = yearly_data["PV_Degradation_Factor"]
-
-        # Cost calculations using actual data
-        proj["Cost_Import"] = yearly_data["Import_Cost"] * inflation_factors
-        proj["Revenue_Export"] = yearly_data["Export_Revenue"] * sell_inflation_factors
-        proj["Cost_Operation"] = costs["annual_operation_cost"] * om_factors
-        proj["Cost_Daily"] = yearly_data["Fixed_Charge"] * inflation_factors
-
-        # Battery replacement costs from propagation. The outlay is booked at
-        # the instant the pack is swapped: inflated to it and, below,
-        # discounted from it. The surrounding annual flows keep the year-end
-        # convention they have always had.
-        replacement_base = pd.to_numeric(yearly_data["Replacement_Cost"], errors="coerce").fillna(0.0).to_numpy()
-        replacement_time = replacement_booking_time(
-            proj["Year"].to_numpy(dtype=float),
-            (
-                pd.to_numeric(yearly_data["Replacement_Year_Fraction"], errors="coerce").to_numpy()
-                if "Replacement_Year_Fraction" in yearly_data.columns
-                else None
-            ),
-            replacement_base > 0.0,
-        )
-        replacement_exponents = _booking_exponents(replacement_time, proj["Year"].to_numpy(dtype=float))
-        proj["Replacement_Time_Years"] = replacement_time
-        proj["Cost_Replacement"] = _replacement_outlay(
-            replacement_base, replacement_exponents, inflation_rate, replacement_cost_learning
-        )
-
-        proj["Cost_System_Annual"] = (
-            proj["Cost_Import"]
-            - proj["Revenue_Export"]
-            + proj["Cost_Operation"]
-            + proj["Cost_Daily"]
-            + proj["Cost_Replacement"]
-        )
-
-        proj["Cost_System_Cumulative"] = costs["total_initial_cost"] + proj["Cost_System_Annual"].cumsum()
-
-        # Discounted values (NPV)
-        proj["Cost_No_Sys_Annual_NPV"] = proj["Cost_No_Sys_Annual"] * discount_factors
-        proj["Cost_System_Annual_NPV"] = _discount_annual_with_replacement(
-            proj["Cost_System_Annual"],
-            proj["Cost_Replacement"],
-            discount_factors,
-            replacement_exponents,
-            discount_rate,
-        )
-        proj["Cost_No_Sys_Cumulative_NPV"] = proj["Cost_No_Sys_Annual_NPV"].cumsum()
-        proj["Cost_System_Cumulative_NPV"] = costs["total_initial_cost"] + proj["Cost_System_Annual_NPV"].cumsum()
-
-        # Savings
-        proj["Savings_Cumulative"] = proj["Cost_No_Sys_Cumulative"] - proj["Cost_System_Cumulative"]
-        proj["Savings_Cumulative_NPV"] = proj["Cost_No_Sys_Cumulative_NPV"] - proj["Cost_System_Cumulative_NPV"]
-
-        proj.attrs["currency"] = currency
-        proj.attrs["total_investment"] = costs["total_initial_cost"]
-        proj.attrs["payback_year"] = find_payback_year(proj)
-        proj.attrs["final_npv_savings"] = proj["Savings_Cumulative_NPV"].iloc[-1]
-        proj.attrs["replacement_cost_npv"] = _replacement_npv(
-            proj["Cost_Replacement"], replacement_exponents, discount_rate
-        )
-        proj.attrs["total_replacement_cost"] = replacement_total_t0(replacement_base)
-        proj.attrs["lcoe_per_kwh"] = calculate_lcoe_from_projection(
-            proj,
-            total_investment=costs["total_initial_cost"],
-            discount_rate=discount_rate,
-        )
-
-        # CO2 emissions avoided
-        if emissions_params is not None:
-            from breos.emissions import calculate_co2_projection
-
-            co2_proj = calculate_co2_projection(
-                proj["PV_Production_kWh"].to_numpy(),
-                proj["Export_kWh"].to_numpy(),
-                emissions_params,
-                _grid_shift_kwh(yearly_data),
-            )
-            proj["CO2_Avoided_Total_kg"] = co2_proj["CO2_Avoided_Total_kg"].values
-            proj["CO2_Avoided_SelfConsumed_kg"] = co2_proj["CO2_Avoided_SelfConsumed_kg"].values
-            proj["CO2_Avoided_Total_Cumulative_kg"] = co2_proj["CO2_Avoided_Total_Cumulative_kg"].values
-            proj["CO2_Avoided_SelfConsumed_Cumulative_kg"] = co2_proj["CO2_Avoided_SelfConsumed_Cumulative_kg"].values
-            for col in (
-                "CO2_Avoided_CI_gCO2_kWh",
-                "CO2_Avoided_CI_Type",
-                "Average_Grid_CI_gCO2_kWh",
-                "Marginal_Grid_CI_gCO2_kWh",
-            ):
-                proj[col] = co2_proj[col].values
-            proj.attrs["lifetime_co2_avoided_total_kg"] = float(proj["CO2_Avoided_Total_Cumulative_kg"].iloc[-1])
-            proj.attrs["lifetime_co2_avoided_self_consumed_kg"] = float(
-                proj["CO2_Avoided_SelfConsumed_Cumulative_kg"].iloc[-1]
-            )
-
-        # Save if directory provided
-        if results_directory:
-            import os
-
-            os.makedirs(results_directory, exist_ok=True)
-            suffix = f"_{scenario_name}" if scenario_name else ""
-            proj.to_csv(f"{results_directory}/cost_projection{suffix}.csv", index=False)
-
-        return proj.reset_index(drop=True)
-
-    # ===== LEGACY PATH: Estimate from first year =====
-    if results_df is None:
+        year_rows = _validated_year_rows(yearly_summary_df, num_years)
+    elif results_df is None:
         raise ValueError(
             "cost_analysis_projection requires results_df when yearly_summary_df is not provided: "
             "the first-year estimation path has nothing to estimate from"
         )
-    df = results_df.copy()
-
-    # Prepare datetime index
-    if "Datetime" in df.columns:
-        df.index = local_datetime_index(df.pop("Datetime"))
-
-    time_index = cast(pd.DatetimeIndex, df.index)
-    df["Year"] = time_index.year
-    df["Date"] = time_index.normalize()
-
-    # Calculate hours per step for energy conversion
-    hours_per_step = get_hours_per_step(freq)
-
-    # Convert W (or whatever units, usually W in results_df) to kW
-    # Result columns are typically in W (Power).
-    # To get Energy (kWh), we need to multiply by hours_per_step and divide by 1000.
-
-    if "PV_AC_Export" not in df.columns:
-        hint = (
-            " Frames written before ledger schema 2.0 call it Sell_To_Grid; rename that column."
-            if ("Sell_To_Grid" in df.columns)
-            else ""
-        )
-        raise ValueError(f"results_df has no PV_AC_Export column.{hint}")
-    # First convert columns to numeric, just in case
-    df["System_AC_Production"] = system_ac_production_power(df)
-    cols_to_numeric = ["System_AC_Production", "Houseload", "Import_From_Grid", "PV_AC_Export"]
-    for col in cols_to_numeric:
-        if col in df.columns:
-            df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0.0)
-
-    # Aggregate first year
-    # Summing Power (W) gives sum(Watts). To get Wh, multiply by hours_per_step.
-    # To get kWh, divide by 1000.
-    yearly = df[["System_AC_Production", "Houseload", "Import_From_Grid", "PV_AC_Export"]].groupby(df["Year"]).sum()
-
-    # The frame marks each swap; the economics prices it (ADR 0003 E4). A
-    # frame that already carries the money (ledger schema < 3.0) keeps it, as
-    # price_year_rows keeps a year row's. Either way the per-step money is
-    # group-summed, the reduction the projection has always used.
-    if "Replacement_Cost" in df.columns:
-        step_cost = pd.to_numeric(df["Replacement_Cost"], errors="coerce").fillna(0.0).to_numpy(dtype=float)
-    elif "Battery_Replaced" in df.columns:
-        replaced = df["Battery_Replaced"].to_numpy(dtype=bool)
-        step_cost = np.where(replaced, _replacement_cost_each(costs, float(replaced.sum())), 0.0)
     else:
-        step_cost = np.zeros(len(df))
-    yearly_replacement = pd.DataFrame({"Replacement_Cost": step_cost}, index=df.index).groupby(df["Year"]).sum()
+        year_rows = _estimate_year_rows(results_df, costs, num_years, degradation_rate, freq)
+    year_rows = price_year_rows(year_rows, costs)
 
-    # The ledger marks the swap step, so the instant does not have to be
-    # reconstructed downstream. Without the column the booking falls back to
-    # the documented mid-year default.
-    if "Battery_Replaced" in df.columns:
-        replacement_year_fractions = replacement_fraction_by_year(df["Year"], df["Battery_Replaced"])
-    else:
-        replacement_year_fractions = pd.Series(dtype=float)
-
-    # Scale to Energy (kWh)
-    yearly = yearly * hours_per_step / 1000.0
-
-    daily_counts = df.groupby("Year")["Date"].nunique()
-
-    first_year_load = yearly["Houseload"].iloc[0]
-    first_year_import = yearly["Import_From_Grid"].iloc[0]
-    first_year_export = yearly["PV_AC_Export"].iloc[0]
-    first_year_pv = yearly["System_AC_Production"].iloc[0]
-    first_year_days = daily_counts.iloc[0]
-
-    # Build projection
-    proj = pd.DataFrame()
-    proj["Year"] = range(1, num_years + 1)
-
-    # Factors
-    rates = resolve_escalation_rates(inflation_rate, import_price_escalation, om_escalation)
-    inflation_factors = (1 + rates["import_price_escalation"]) ** (proj["Year"] - 1)
-    om_factors = (1 + rates["om_escalation"]) ** (proj["Year"] - 1)
-    sell_inflation_factors = (1 + sell_price_inflation) ** (proj["Year"] - 1)
-    discount_factors = 1 / ((1 + discount_rate) ** proj["Year"])
-    degradation_factors = (1 - degradation_rate) ** (proj["Year"] - 1)
-
-    # Baseline (no system)
-    proj["Cost_No_Sys_Annual"] = (
-        first_year_load * costs["electricity_cost"] + first_year_days * costs["daily_power_cost"]
-    ) * inflation_factors
-    proj["Cost_No_Sys_Cumulative"] = proj["Cost_No_Sys_Annual"].cumsum()
-
-    # With PV system (including degradation)
-    pv_degraded = first_year_pv * degradation_factors
-    self_consumption_ratio = 1 - (first_year_export / first_year_pv) if first_year_pv > 0 else 0
-    export_degraded = pv_degraded * (1 - self_consumption_ratio)
-    pv_reduction = first_year_pv - pv_degraded
-    import_adjusted = first_year_import + pv_reduction * self_consumption_ratio
-
-    proj["Cost_Import"] = import_adjusted * costs["electricity_cost"] * inflation_factors
-    proj["Revenue_Export"] = export_degraded * costs["electricity_sold_cost"] * sell_inflation_factors
-    proj["Cost_Operation"] = costs["annual_operation_cost"] * om_factors
-    proj["Cost_Daily"] = first_year_days * costs["daily_power_cost"] * inflation_factors
-
-    proj["Cost_System_Annual"] = (
-        proj["Cost_Import"] - proj["Revenue_Export"] + proj["Cost_Operation"] + proj["Cost_Daily"]
+    flows = value_year_rows(
+        year_rows,
+        costs,
+        inflation_rate=inflation_rate,
+        sell_price_inflation=sell_price_inflation,
+        import_price_escalation=import_price_escalation,
+        om_escalation=om_escalation,
+        replacement_cost_learning=replacement_cost_learning,
     )
-
-    proj["Cost_System_Cumulative"] = costs["total_initial_cost"] + proj["Cost_System_Annual"].cumsum()
-
-    # Battery replacement, taken from simulated years where available.
-    # Simulation results only cover the simulated period: the App's
-    # multi-year loop provides per-year replacement events for every
-    # projection year, while a single-year run provides at most year 1 and
-    # leaves later projection years without replacement costs.
-    #
-    # yearly_replacement is indexed by calendar year; proj['Year'] is the
-    # relative year (1, 2, ...), so align via the simulation start year.
-    start_year = df["Year"].min()
-
-    replacement_base = np.zeros(len(proj), dtype=float)
-    replacement_fraction = np.full(len(proj), np.nan, dtype=float)
-    for position, relative_year in enumerate(proj["Year"]):
-        actual_year = start_year + relative_year - 1
-        if actual_year in yearly_replacement.index:
-            replacement_base[position] = float(yearly_replacement.loc[actual_year, "Replacement_Cost"])
-            if actual_year in replacement_year_fractions.index:
-                replacement_fraction[position] = float(replacement_year_fractions.loc[actual_year])
-
-    replacement_time = replacement_booking_time(
-        proj["Year"].to_numpy(dtype=float),
-        replacement_fraction,
-        replacement_base > 0.0,
+    proj = discount_cashflows(
+        flows, total_investment=costs["total_initial_cost"], discount_rate=discount_rate, currency=currency
     )
-    replacement_exponents = _booking_exponents(replacement_time, proj["Year"].to_numpy(dtype=float))
-    proj["Replacement_Time_Years"] = replacement_time
-    # Replacements are priced at t = 0, so inflate to the swap instant here,
-    # and discount from the same instant.
-    proj["Cost_Replacement"] = _replacement_outlay(
-        replacement_base, replacement_exponents, inflation_rate, replacement_cost_learning
-    )
-
-    # Add to annual system cost
-    proj["Cost_System_Annual"] += proj["Cost_Replacement"]
-
-    proj["Cost_System_Cumulative"] = costs["total_initial_cost"] + proj["Cost_System_Annual"].cumsum()
-
-    # Discounted values (NPV)
-    proj["Cost_No_Sys_Annual_NPV"] = proj["Cost_No_Sys_Annual"] * discount_factors
-    proj["Cost_System_Annual_NPV"] = _discount_annual_with_replacement(
-        proj["Cost_System_Annual"],
-        proj["Cost_Replacement"],
-        discount_factors,
-        replacement_exponents,
-        discount_rate,
-    )
-    proj["Cost_No_Sys_Cumulative_NPV"] = proj["Cost_No_Sys_Annual_NPV"].cumsum()
-    proj["Cost_System_Cumulative_NPV"] = costs["total_initial_cost"] + proj["Cost_System_Annual_NPV"].cumsum()
-
-    # Savings
-    proj["Savings_Cumulative"] = proj["Cost_No_Sys_Cumulative"] - proj["Cost_System_Cumulative"]
-    proj["Savings_Cumulative_NPV"] = proj["Cost_No_Sys_Cumulative_NPV"] - proj["Cost_System_Cumulative_NPV"]
-
-    # Tracking columns
-    proj["PV_Production_kWh"] = pv_degraded
-    proj["Export_kWh"] = export_degraded
-    proj["Degradation_Factor"] = degradation_factors
-
-    proj.attrs["currency"] = currency
-    proj.attrs["total_investment"] = costs["total_initial_cost"]
-    proj.attrs["payback_year"] = find_payback_year(proj)
-    proj.attrs["final_npv_savings"] = proj["Savings_Cumulative_NPV"].iloc[-1]
-    proj.attrs["replacement_cost_npv"] = _replacement_npv(
-        proj["Cost_Replacement"], replacement_exponents, discount_rate
-    )
-    proj.attrs["total_replacement_cost"] = replacement_total_t0(replacement_base)
-    proj.attrs["lcoe_per_kwh"] = calculate_lcoe_from_projection(
-        proj,
-        total_investment=costs["total_initial_cost"],
-        discount_rate=discount_rate,
-    )
-
-    # CO2 emissions avoided
     if emissions_params is not None:
-        from breos.emissions import calculate_co2_projection
-
-        co2_proj = calculate_co2_projection(
-            proj["PV_Production_kWh"].to_numpy(),
-            proj["Export_kWh"].to_numpy(),
-            emissions_params,
-        )
-        proj["CO2_Avoided_Total_kg"] = co2_proj["CO2_Avoided_Total_kg"].values
-        proj["CO2_Avoided_SelfConsumed_kg"] = co2_proj["CO2_Avoided_SelfConsumed_kg"].values
-        proj["CO2_Avoided_Total_Cumulative_kg"] = co2_proj["CO2_Avoided_Total_Cumulative_kg"].values
-        proj["CO2_Avoided_SelfConsumed_Cumulative_kg"] = co2_proj["CO2_Avoided_SelfConsumed_Cumulative_kg"].values
-        for col in (
-            "CO2_Avoided_CI_gCO2_kWh",
-            "CO2_Avoided_CI_Type",
-            "Average_Grid_CI_gCO2_kWh",
-            "Marginal_Grid_CI_gCO2_kWh",
-        ):
-            proj[col] = co2_proj[col].values
-        proj.attrs["lifetime_co2_avoided_total_kg"] = float(proj["CO2_Avoided_Total_Cumulative_kg"].iloc[-1])
-        proj.attrs["lifetime_co2_avoided_self_consumed_kg"] = float(
-            proj["CO2_Avoided_SelfConsumed_Cumulative_kg"].iloc[-1]
-        )
-
-    # Save if directory provided
+        add_co2_projection(proj, year_rows, emissions_params)
     if results_directory:
-        import os
-
-        os.makedirs(results_directory, exist_ok=True)
-        suffix = f"_{scenario_name}" if scenario_name else ""
-        proj.to_csv(f"{results_directory}/cost_projection{suffix}.csv", index=False)
-
+        write_cost_projection(proj, results_directory, scenario_name)
     return proj
 
 

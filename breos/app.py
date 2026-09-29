@@ -18,15 +18,53 @@ Usage:
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+from copy import deepcopy
 from typing import Any
 
-from breos.app_config import resolve_app_config
+from breos.app_config import APP_CONFIG_FIELDS, resolve_app_config
 from breos.app_inputs import AppRuntimeDependencies
 from breos.app_results import build_result as build_app_result
 from breos.load_profiles import load_profile
 from breos.repair import input_repair_records
-from breos.runners.app import run_app_simulation
+from breos.runners.app import SimulationArtifacts, revalue_app_simulation, run_app_simulation
 from breos.weather import build_battery_temperature_series, fetch_tmy_weather_data, load_weather, resample_to_15min
+
+# Nested tables App.revalue replaces whole: the entries of a price list
+# belong together, so a change must not keep a period it leaves out.
+_REPLACED_TABLES = frozenset({("tariff", "import_prices"), ("tariff", "export_prices")})
+
+
+def _revalued_config(config: dict[str, Any], changes: Mapping[str, Any]) -> dict[str, Any]:
+    """``config`` with ``changes`` applied table by table, as App.revalue documents."""
+    merged = dict(config)
+    for key, value in changes.items():
+        current = merged.get(key)
+        if not isinstance(value, Mapping):
+            merged[key] = deepcopy(value)
+            continue
+        # A new table starts empty, so a key set to None has nothing to remove.
+        table: dict[str, Any] = deepcopy(current) if isinstance(current, dict) else {}
+        for name, item in value.items():
+            if item is None:
+                table.pop(name, None)
+            elif (key, name) in _REPLACED_TABLES or not (
+                isinstance(table.get(name), dict) and isinstance(item, Mapping)
+            ):
+                table[name] = deepcopy(item)
+            else:
+                table[name] = {**table[name], **deepcopy(dict(item))}
+        merged[key] = table
+    return merged
+
+
+# The keys App.revalue may change: the economics section of the resolved
+# configuration, except the horizon, which sets how many years are simulated.
+REVALUATION_KEYS = frozenset(
+    key
+    for key, field in APP_CONFIG_FIELDS.items()
+    if field.summary is not None and field.summary.startswith("economics.") and key != "projection_years"
+)
 
 
 class App:
@@ -61,15 +99,64 @@ class App:
     """
 
     def __init__(self, config: dict, *, input_repairs: Any = None) -> None:
+        self._config = deepcopy(config)
         self._resolved = resolve_app_config(config)
         self._cfg = self._resolved.cfg
         self._input_repairs = input_repair_records(input_repairs)
         self._result: dict[str, Any] | None = None
+        self._artifacts: SimulationArtifacts | None = None
 
     def simulate(self) -> None:
         """Run the full simulation pipeline."""
         artifacts = run_app_simulation(self._cfg, self._resolved, self._runtime_dependencies())
         self._result = build_app_result(self._cfg, self._resolved, artifacts, input_repairs=self._input_repairs)
+        self._artifacts = artifacts
+
+    def revalue(self, changes: Mapping[str, Any]) -> dict[str, Any]:
+        """Return the result this run would give at other prices, without changing this App.
+
+        ``changes`` holds configuration keys. A nested table such as
+        ``costs`` or ``tariff`` changes only the keys it sets, and a key set
+        to ``None`` in it is removed; ``{"tariff": None}`` removes the table.
+        A price list (``tariff.import_prices``, ``tariff.export_prices``)
+        replaces the old one whole. Only the economics keys in
+        :data:`REVALUATION_KEYS` may change: ``costs``, ``cost_preset``,
+        ``tariff``, the discount rate and the escalators.
+
+        When the new prices cannot change the dispatch, the stored simulation
+        is re-priced: flat prices, a tariff removed, or a tariff on the same
+        schedule whose smart-charging instructions stay the same. Otherwise (a
+        tariff added, a different schedule) the run is simulated again. The
+        result records which in ``provenance["revaluation"]``, with the keys
+        that changed. A flat-price revaluation gives the same floats as a new
+        simulation; a re-priced tariff sums energy by period instead of by
+        step, so it agrees to rounding.
+
+        Raises:
+            RuntimeError: If :meth:`simulate` has not been called.
+            ValueError: If ``changes`` sets a key outside
+                :data:`REVALUATION_KEYS`; build a new App for those.
+        """
+        if self._artifacts is None:
+            raise RuntimeError("Call simulate() before revalue().")
+        unknown = sorted(key for key in changes if key not in APP_CONFIG_FIELDS)
+        if unknown:
+            raise ValueError(f"Unknown config key(s) for revalue(): {', '.join(unknown)}")
+        config = _revalued_config(self._config, changes)
+        changed = sorted(key for key in config.keys() | self._config.keys() if config.get(key) != self._config.get(key))
+        outside = [key for key in changed if key not in REVALUATION_KEYS]
+        if outside:
+            raise ValueError(
+                f"revalue() changes prices only, and {', '.join(outside)} is not a price key. "
+                f"Build a new App for it. Keys revalue() accepts: {', '.join(sorted(REVALUATION_KEYS))}."
+            )
+        resolved = resolve_app_config(config)
+        artifacts, method = revalue_app_simulation(
+            resolved.cfg, resolved, self._artifacts, self._runtime_dependencies()
+        )
+        result = build_app_result(resolved.cfg, resolved, artifacts, input_repairs=self._input_repairs)
+        result["provenance"]["revaluation"] = {"method": method, "changed_keys": changed}
+        return result
 
     def result(self) -> dict[str, Any]:
         """

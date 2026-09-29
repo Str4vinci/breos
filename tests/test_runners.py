@@ -15,6 +15,13 @@ from breos.runners.app import run_app_simulation as run_app_runner
 from breos.solar import PVProductionBreakdown
 
 
+def _empty_projection() -> pd.DataFrame:
+    """A stand-in cost projection carrying the attrs the runners read."""
+    projection = pd.DataFrame()
+    projection.attrs.update({"lcoe_per_kwh": 0.0, "total_replacement_cost": 0.0})
+    return projection
+
+
 def _pv_breakdown(pv: pd.Series) -> PVProductionBreakdown:
     zeros = pd.Series(0.0, index=pv.index)
     return PVProductionBreakdown(
@@ -63,8 +70,7 @@ def test_app_runner_native_default_matches_explicit_native(monkeypatch):
             "daily_power_cost": 0.0,
         },
     )
-    monkeypatch.setattr(projection_module, "cost_analysis_projection", lambda **kwargs: pd.DataFrame())
-    monkeypatch.setattr(projection_module, "calculate_lcoe_from_projection", lambda *args, **kwargs: 0.0)
+    monkeypatch.setattr(projection_module, "cost_analysis_projection", lambda **kwargs: _empty_projection())
     monkeypatch.setattr(app_runner, "find_payback_year", lambda projection: None)
 
     cfg = {
@@ -146,8 +152,7 @@ def test_app_runner_threads_blast_state_across_projection_years(monkeypatch):
             "daily_power_cost": 0.0,
         },
     )
-    monkeypatch.setattr(projection_module, "cost_analysis_projection", lambda **kwargs: pd.DataFrame())
-    monkeypatch.setattr(projection_module, "calculate_lcoe_from_projection", lambda *args, **kwargs: 0.0)
+    monkeypatch.setattr(projection_module, "cost_analysis_projection", lambda **kwargs: _empty_projection())
     monkeypatch.setattr(app_runner, "find_payback_year", lambda projection: None)
     real_battery_config = projection_module.BatteryConfig
 

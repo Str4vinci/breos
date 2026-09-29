@@ -13,7 +13,6 @@ import pandas as pd
 from breos.app_config import ResolvedAppConfig
 from breos.battery import LEDGER_SCHEMA_VERSION
 from breos.economics import projection_rates_record
-from breos.emissions import calculate_co2_savings
 from breos.result_schema import RESULT_SCHEMA_VERSION
 from breos.runners.app import SimulationArtifacts
 from breos.tariffs import result_currency
@@ -165,13 +164,13 @@ def _provenance(
         "resolution": cfg["resolution"],
         "timezone": resolved.timezone,
         "start_date": cfg["start_date"],
-        "pv_model": {"bifacial": artifacts.pv_loss_waterfall["bifacial"]},
+        "pv_model": {"bifacial": deepcopy(artifacts.pv_loss_waterfall["bifacial"])},
         "degradation": artifacts.degradation_summary,
         # Which dispatch implementation produced these numbers, and the
         # toolchain it ran on. A bit-identity claim cannot be checked after the
         # fact without one, so it is recorded on every run, not only on
         # benchmarks. Same keys as the Monte Carlo block, from the same code.
-        "execution": artifacts.execution,
+        "execution": deepcopy(artifacts.execution),
         "economics": projection_rates_record(cfg),
     }
     # Only runs given repair reports carry the key, so existing results are
@@ -188,11 +187,6 @@ def _provenance(
             if key not in ("initial_stored_energy", "final_stored_energy")
         }
     return provenance
-
-
-def _grid_shift_kwh(row: Any) -> float:
-    """Grid-origin battery delivery minus grid-charge import (ADR 0002 A10); zero without grid charging."""
-    return float(row["Grid_Origin_Battery_AC_Load_kWh"] - row["Grid_AC_To_Battery_kWh"])
 
 
 def _round2(value: float) -> float:
@@ -287,10 +281,14 @@ def build_result(
         "yearly": yearly_to_dicts(artifacts.yearly_df),
         "monthly": monthly_to_dicts(artifacts.first_year_results_df, cfg["resolution"]),
         "financial": financial_to_dicts(artifacts.cost_projection, total_initial),
-        "pv_loss_waterfall": artifacts.pv_loss_waterfall,
+        # Copied, so editing a result cannot reach the stored run that
+        # App.revalue prices again.
+        "pv_loss_waterfall": deepcopy(artifacts.pv_loss_waterfall),
         "provenance": _provenance(cfg, resolved, artifacts, input_repairs),
-        "degradation": artifacts.degradation_summary,
+        "degradation": deepcopy(artifacts.degradation_summary),
     }
+    # One copy, as provenance and the top level have always shared it.
+    result["provenance"]["degradation"] = result["degradation"]
 
     # The year-1 money components at year-1 prices, before escalation and
     # discounting (ADR 0003 E7), at the top level so the sweep CSV keeps them.
@@ -326,21 +324,16 @@ def build_result(
                     row["soh_pct"] = round(float(row["soh_pct"]), 1)
 
     if resolved.emissions_params is not None:
-        co2 = calculate_co2_savings(
-            yr1_pv, self_consumption_kwh, resolved.emissions_params, grid_shift_kwh=_grid_shift_kwh(year1)
-        )
-        lifetime_self = 0.0
-        lifetime_export = 0.0
-        for _, row in artifacts.yearly_df.iterrows():
-            yearly_co2 = calculate_co2_savings(
-                float(row["PV_Production_kWh"]),
-                float(row["Self_Consumption_kWh"]),
-                resolved.emissions_params,
-                grid_shift_kwh=_grid_shift_kwh(row),
-            )
-            lifetime_self += yearly_co2["CO2_Avoided_SelfConsumed_kg"]
-            lifetime_export += yearly_co2["CO2_Avoided_Export_kg"]
-        lifetime_total = lifetime_self + lifetime_export
+        # Read from the projection, which computes each year's CO2 once for
+        # every runner (#183).
+        projection = artifacts.cost_projection
+        co2 = {
+            column: float(projection[column].iloc[0])
+            for column in ("CO2_Avoided_SelfConsumed_kg", "CO2_Avoided_Export_kg", "CO2_Avoided_Total_kg")
+        }
+        lifetime_self = float(projection.attrs["lifetime_co2_avoided_self_consumed_kg"])
+        lifetime_export = float(projection.attrs["lifetime_co2_avoided_export_kg"])
+        lifetime_total = float(projection.attrs["lifetime_co2_avoided_total_kg"])
         result.update(
             {
                 "co2_avoided_self_consumption_year1_kg": round(co2["CO2_Avoided_SelfConsumed_kg"], 2),

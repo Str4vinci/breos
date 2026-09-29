@@ -87,11 +87,12 @@ def test_projected_evaluator_carries_physical_and_degradation_state(monkeypatch)
             }
         )
         projection.attrs["payback_year"] = 2
+        projection.attrs["lcoe_per_kwh"] = 0.123
+        projection.attrs["total_replacement_cost"] = 1000.0
         return projection
 
     monkeypatch.setattr("breos.projection.simulate_energy_balance", fake_balance)
     monkeypatch.setattr("breos.optimization.cost_analysis_projection", fake_projection)
-    monkeypatch.setattr("breos.optimization.calculate_lcoe_from_projection", lambda *_args, **_kwargs: 0.123)
 
     metrics = _evaluate_projected_design_metrics(
         base_dc_power=base_dc,
