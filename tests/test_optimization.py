@@ -233,6 +233,29 @@ def test_solar_design_problem_honors_module_and_tilt_bounds():
     assert problem.xu[2] == pytest.approx(45.0)
 
 
+def test_the_tilt_floor_and_search_defaults_are_the_resolved_ones():
+    idx = pd.date_range("2025-01-01 00:00", periods=2, freq="h", tz="UTC")
+    tmy_data = pd.DataFrame({"temp_air": [15.0, 16.0], "ghi": [0.0, 0.0]}, index=idx)
+    houseload = pd.DataFrame({"Load": [500.0, 500.0]}, index=idx)
+    location = {"latitude": 41.15, "longitude": -8.61, "timezone": "UTC"}
+
+    default = SolarDesignProblem(tmy_data, houseload, {"location": location}, "results/_test_run/defaults")
+    assert (default.budget_limit, default.area_limit, default.xl[2]) == (10000.0, 20.0, 10.0)
+    assert (default.max_modules, default.max_battery_kwh, default.xu[2]) == (60, 30.0, 90.0)
+
+    raised = SolarDesignProblem(
+        tmy_data, houseload, {"location": location, "constraints": {"min_tilt_deg": 25.0}}, "results/_test_run/floor"
+    )
+    assert raised.xl[2] == 25.0
+    with pytest.raises(ValueError, match="min_tilt_deg"):
+        SolarDesignProblem(
+            tmy_data,
+            houseload,
+            {"location": location, "constraints": {"min_tilt_deg": 50.0, "max_tilt_deg": 40.0}},
+            "results/_test_run/floor_above",
+        )
+
+
 def test_discrete_repair_keeps_candidates_inside_the_bounds():
     """Snapping to the grid must not round a candidate past a bound.
 

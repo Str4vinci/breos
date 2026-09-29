@@ -22,11 +22,13 @@ raises `ImportError` and names this command.
 
 This trips people up, so it is worth stating plainly. `App` takes a flat
 dictionary of keys such as `n_modules` and `cost_preset`. The optimizer takes a
-nested dictionary grouped into sections: `location`, `load`, `pv`, `battery`,
+nested dictionary grouped into sections: `location`, `pv`, `battery`,
 `optimization`, `constraints`, `costs`, `financials`, `emissions`, and
-`simulation`, with an optional `tariff` table. The two shapes are not
-interchangeable, and a flat `App` config passed to the optimizer fails on the
-first missing section. The `financials` section takes the App's rate keys:
+`simulation`, with optional `tariff` and `smart_charging` tables. The two
+shapes are not interchangeable. Every table takes a fixed set of keys, so a
+flat `App` config passed to the optimizer, or a misspelt key, raises before
+any design is scored; the [API reference](../api/optimization.md#configuration-keys)
+lists the keys and their defaults. The `financials` section takes the App's rate keys:
 `inflation_rate`, `sell_price_inflation`, `discount_rate` and the separate
 escalators `import_price_escalation`, `om_escalation` and
 `replacement_cost_learning`
@@ -49,18 +51,20 @@ optimizer chooses them, bounded by `[constraints]`.
 ## Load the weather and the load profile
 
 The optimizer takes one weather year and one load year as DataFrames, and
-reuses them for every candidate and every projection year:
+reuses them for every candidate and every projection year. They are not
+config keys. BREOS ships no weather data, so point this at your own TMY or
+historical CSV:
 
 ```python
 import pandas as pd
 from breos.load_profiles import load_profile
 
-weather = pd.read_csv(config["simulation"]["weather_file"], index_col=0)
+weather = pd.read_csv("weather/porto_tmy_2005_2023_pvgis-sarah3.csv", index_col=0)
 weather.index = pd.to_datetime(weather.index, utc=True)
 
 load = load_profile(
-    config["load"]["profile_type"],
-    config["load"]["annual_consumption_kwh"],
+    "demandlib_h0",
+    4000.0,
     start_date=f"{weather.index[0].year}-01-01",
     freq=config["simulation"]["resolution"],
     timezone=config["location"]["timezone"],
@@ -75,15 +79,7 @@ For 15-minute runs, upsample the weather with
 ```python
 from breos.optimization import optimize_system_multi_objective
 
-result = optimize_system_multi_objective(
-    weather,
-    load,
-    config,
-    pop_size=config["optimization"]["pop_size"],
-    n_offsprings=config["optimization"]["n_offsprings"],
-    n_gen=config["optimization"]["n_gen"],
-    seed=config["optimization"]["seed"],
-)
+result = optimize_system_multi_objective(weather, load, config)
 
 pareto = result.details["pareto"]
 print(pareto[["Modules", "Battery_kWh", "Tilt", "Azimuth"]])
@@ -94,9 +90,11 @@ sizing columns above, the objective values, ZEB diagnostics, and the
 `Projected_*` fields. There is no single best row. Pick the design
 whose balance of independence and cost matches the project.
 
-The optimizer does not read `pop_size`, `n_offsprings`, `n_gen`, or `seed`
-from the nested config automatically. Forward them as shown above. Set and
-record the seed because NSGA-II is stochastic. Raise the population and
+The call reads `pop_size`, `n_offsprings`, `n_gen` and `seed` from
+`[optimization]`. You can pass them as arguments instead; an argument that
+disagrees with its key raises. Set and record the seed because NSGA-II is
+stochastic; `details["provenance"]["run_settings"]` records what the search
+used, and `details["provenance"]["constraints"]` its bounds. Raise the population and
 generation counts for a denser front and a longer runtime. Pass `n_procs` to
 `optimize_system_multi_objective` to evaluate candidates in parallel
 processes.

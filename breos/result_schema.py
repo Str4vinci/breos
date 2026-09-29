@@ -13,7 +13,10 @@ escalator keys to the App's ``resolved_config``. 1.3 adds
 swapped in, to the year rows of Monte Carlo trajectories and optimizer tables,
 which also gain the year-1-price money columns (ADR 0003 E4). 1.4 adds
 ``provenance.revaluation`` to ``App.revalue`` results and the export CO2
-columns to cost projections and Monte Carlo trajectories (#183).
+columns to cost projections and Monte Carlo trajectories (#183). 1.5 adds
+``constraints`` and ``run_settings`` to the optimizer's provenance, and the
+``Projected_CO2_*`` columns to Pareto rows of a search with ``[emissions]``
+(#181).
 """
 
-RESULT_SCHEMA_VERSION = "1.4"
+RESULT_SCHEMA_VERSION = "1.5"
