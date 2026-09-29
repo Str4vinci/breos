@@ -9,6 +9,19 @@ Other profile keys are treated as external data and require local files that
 users are licensed to use. See
 [Load Profile Data](../legal/load-profile-data.md).
 
+The bundled H0 files were generated for 2023. For another study year, BREOS
+matches each target day to the nearest source day of the same H0 type:
+weekday, Saturday, or Sunday. It searches across the year boundary and uses
+28 February as the seasonal anchor for 29 February, then selects a source day
+of the leap day's actual type. A selected shape can be up to four calendar
+days from the target's month and day. BREOS scales the resulting profile to
+the requested annual consumption after alignment. The default 2023 study
+year retains its original rows. A `demandlib_h0` file supplied through
+`rlp_directory` uses the year on its dated first row by the same rule. Other
+external profile families still follow their positional calendar rule.
+Project years replay the study year's calendar; they do not advance the load
+and tariff weekdays each year.
+
 ## External profile files
 
 Non-bundled standard profiles are still supported by the public API. Put the

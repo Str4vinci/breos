@@ -607,6 +607,17 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   `DatetimeIndex` every day.
 
 ### Fixed
+- Bundled demandlib H0 profiles now put weekday, Saturday and Sunday shapes
+  on the corresponding day types in the study year, instead of assigning the
+  dated 2023 rows by position ([#298](https://github.com/Str4vinci/breos/issues/298)).
+  The nearest matching source day stays within four calendar days of the
+  target date; leap days use their actual day type, and annual energy is still
+  normalized to the configured consumption. **Results can change when the
+  study year's weekdays differ from 2023.** With 4,000 kWh of H0 load and
+  illustrative prices of 0.11/0.18/0.28 EUR per kWh on the bundled 2026
+  Portuguese weekly tri-hourly schedule, the load-only annual import bill
+  moves from 694.90 EUR to 685.59 EUR (−1.34%). The default 2023 path is
+  unchanged.
 - Fixed-design evaluation and multi-objective optimization now validate and
   apply the optional `tariff` table through the shared projection loop.
   Previously they silently ignored it and valued the design at flat prices.

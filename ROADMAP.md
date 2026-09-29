@@ -20,11 +20,12 @@ plans behind individual items.
 ## Model accuracy and validation
 
 - **Weekday-aware load-profile alignment and an E-REDES source-file converter.
-  Prerequisite for 0.7.0 time-of-use tariffs.** `load_profile` restamps a source
-  CSV onto the simulation year positionally (`df.index = new_index`), so row 0
-  becomes 1 January regardless of the weekday in the source file or target
-  year. Each profile inherits the weekday phase of the year that generated its
-  file. The bundled demandlib H0 files are 2023 with a Sunday start,
+  Prerequisite for 0.7.0 time-of-use tariffs.** The bundled demandlib H0
+  alignment is corrected in #298: it selects nearby source days of the same
+  weekday, Saturday or Sunday type. External profile families still restamp
+  source rows positionally (`df.index = new_index`), so row 0 becomes 1 January
+  regardless of the weekday in the source file or target year. The bundled
+  demandlib H0 files are 2023 with a Sunday start,
   `EREDES_2025_BTN_1000kwh_15min.csv` is 2025 with a Wednesday start, and
   `EREDES_2025_BTN_1000kwh_hourly.csv` is 2023 despite its name. The two
   E-REDES files therefore disagree by four days.
@@ -49,8 +50,9 @@ plans behind individual items.
     for all 35040 rows of the 2026 vintage. Parsing the published dates instead
     of restamping positionally removes the whole bug class for E-REDES, with no
     whole-week rolling heuristic. Profiles without a published calendar still
-    need that heuristic, which trades up to three days of day-of-year phase for
-    correct weekday phase. On H0, the residual after realignment is 1.27% of
+  need that heuristic, which trades up to four days of day-of-year phase at
+  the year boundary for correct weekday phase. On H0, the residual after
+  realignment is 1.27% of
     mean load, compared with 10.9% before.
   - Timestamps are interval-end values. The first row is `00:15`, and the last
     is `24:00` on 31 December. The existing repository file was restamped onto

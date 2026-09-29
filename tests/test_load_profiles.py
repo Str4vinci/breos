@@ -84,6 +84,51 @@ def test_load_profile_utc_default_keeps_legacy_convention():
     assert len(profile) == 8760
 
 
+@pytest.mark.parametrize("freq", ["h", "15min"])
+def test_bundled_h0_uses_the_target_years_day_types(freq):
+    source = load_profile("demandlib_h0", 1000, start_date="2023-01-01", freq=freq, timezone="UTC").iloc[:, 0]
+    target = load_profile("demandlib_h0", 1000, start_date="2025-01-01", freq=freq, timezone="UTC").iloc[:, 0]
+
+    def shape(values):
+        return values.to_numpy() / values.sum()
+
+    # 8 January is Sunday in the source year but Wednesday in the study year.
+    # The nearest source weekday is Monday 9 January; the source Sunday must
+    # still be used for a target Sunday.
+    np.testing.assert_allclose(shape(target.loc["2025-01-08"]), shape(source.loc["2023-01-09"]), atol=1e-14)
+    np.testing.assert_allclose(shape(target.loc["2025-01-05"]), shape(source.loc["2023-01-08"]), atol=1e-14)
+    assert not np.allclose(shape(target.loc["2025-01-08"]), shape(source.loc["2023-01-08"]))
+    assert target.sum() * (0.25 if freq == "15min" else 1.0) / 1000 == pytest.approx(1000)
+
+
+@pytest.mark.parametrize("freq", ["h", "15min"])
+def test_bundled_h0_leap_day_uses_its_real_day_type(freq):
+    source = load_profile("demandlib_h0", 1000, start_date="2023-01-01", freq=freq, timezone="UTC").iloc[:, 0]
+    target = load_profile("demandlib_h0", 1000, start_date="2020-01-01", freq=freq, timezone="UTC").iloc[:, 0]
+
+    # 29 February 2020 was Saturday. The nearest source Saturday to the
+    # non-leap 28 February anchor is 25 February 2023.
+    leap_shape = target.loc["2020-02-29"].to_numpy() / target.loc["2020-02-29"].sum()
+    saturday_shape = source.loc["2023-02-25"].to_numpy() / source.loc["2023-02-25"].sum()
+    np.testing.assert_allclose(leap_shape, saturday_shape, atol=1e-14)
+    assert target.sum() * (0.25 if freq == "15min" else 1.0) / 1000 == pytest.approx(1000)
+
+
+def test_external_demandlib_h0_uses_its_own_dated_source_year(tmp_path):
+    source_index = pd.date_range("2024-01-01", "2025-01-01", freq="h", inclusive="left")
+    values = np.full(len(source_index), 50.0)
+    values[::24] += np.arange(366)
+    pd.DataFrame({_LOAD_COLUMN: values}, index=source_index).to_csv(tmp_path / "h0SLP_demandlib_1000kwh_hourly.csv")
+
+    source = load_profile("demandlib_h0", 1000, start_date="2024-01-01", rlp_directory=str(tmp_path)).iloc[:, 0]
+    target = load_profile("demandlib_h0", 1000, start_date="2025-01-01", rlp_directory=str(tmp_path)).iloc[:, 0]
+    target_sunday = target.loc["2025-01-05"]
+    source_sunday = source.loc["2024-01-07"]
+    np.testing.assert_allclose(
+        target_sunday.to_numpy() / target_sunday.sum(), source_sunday.to_numpy() / source_sunday.sum()
+    )
+
+
 @pytest.mark.parametrize(
     ("freq", "expected_length", "expected_end", "hours_per_step"),
     [
@@ -117,15 +162,13 @@ def test_load_profile_uses_real_leap_calendar_and_preserves_energy(
 
 def test_load_profile_leap_day_does_not_shift_march_profile():
     leap = load_profile("demandlib_h0", 1000, start_date="2024-01-01", freq="h", timezone="UTC")
-    canonical = load_profile("demandlib_h0", 1000, start_date="2025-01-01", freq="h", timezone="UTC")
+    source = load_profile("demandlib_h0", 1000, start_date="2023-01-01", freq="h", timezone="UTC")
 
-    # Compare against a within-profile reference because each returned calendar
-    # is independently scaled to the requested annual energy.
-    leap_load = leap.iloc[:, 0]
-    canonical_load = canonical.iloc[:, 0]
-    assert leap_load.loc["2024-03-01 00:00"] / leap_load.iloc[0] == pytest.approx(
-        canonical_load.loc["2025-03-01 00:00"] / canonical_load.iloc[0]
-    )
+    # March 1 in 2024 and 2023 are both weekdays: inserting 29 February must
+    # keep March 1 near its own season, not move it to the source's March 2.
+    march = leap.loc["2024-03-01"].iloc[:, 0]
+    source_march = source.loc["2023-03-01"].iloc[:, 0]
+    np.testing.assert_allclose(march.to_numpy() / march.sum(), source_march.to_numpy() / source_march.sum())
 
 
 def test_non_bundled_profile_requires_external_directory():

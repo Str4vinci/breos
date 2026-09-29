@@ -78,7 +78,20 @@ For E-REDES, the same CSV can contain BTN A, BTN B, and BTN C columns; BREOS cho
 
 `custom` takes the unit of each row: `W` or `kW` for the mean power over the row's interval, `Wh` or `kWh` for the energy delivered in it. The profile is scaled to `annual_consumption_kwh` either way, so the unit fixes only what the column means. Its resolution comes from its row count. Provenance records the key, the file read and its SHA-256, the column and the unit (`result()["provenance"]["load_profile"]`).
 
-BREOS places the rows on the calendar by position, starting on 1 January, so every file must hold exactly one calendar year. After fully blank rows are dropped, an hourly file needs 8,760 or 8,784 rows and a 15-minute file 35,040 or 35,136. A common-year file on a leap-year run repeats 28 February; a leap-year file on a common-year run drops its 29 February. Values must be finite and non-negative. The first column may hold timestamps (ISO, or `dd/mm/yyyy HH:MM` as in the E-REDES exports); if it does, they must step evenly, so a file on a local clock with DST gaps is refused. Any other file raises `ValueError` when it loads.
+For external profile families other than `demandlib_h0`, BREOS places rows on
+the calendar by position, starting on 1 January. The bundled demandlib H0's
+dated 2023 source days are matched to the study year's weekday, Saturday or
+Sunday near the same calendar date. A `demandlib_h0` file supplied through
+`rlp_directory` uses its own dated source year by the same rule. Every file
+must hold exactly one calendar year.
+After fully blank rows are dropped, an hourly file needs 8,760 or 8,784 rows
+and a 15-minute file 35,040 or 35,136. A common-year external file on a
+leap-year run repeats 28 February; a leap-year external file on a common-year
+run drops its 29 February. Values must be finite and non-negative. The first
+column may hold timestamps (ISO, or `dd/mm/yyyy HH:MM` as in the E-REDES
+exports); if it does, they must step evenly, so a file on a local clock with
+DST gaps is refused. A demandlib H0 file needs its dated 1 January start for
+weekday alignment. Any other file raises `ValueError` when it loads.
 
 ## If redistribution permission is granted
 
