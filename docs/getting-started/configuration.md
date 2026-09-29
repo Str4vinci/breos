@@ -349,8 +349,8 @@ location/era-specific fits from the Perez papers and are only consulted when
 
 ## Cost and emissions presets
 
-Built-in presets are packaged with BREOS. Editable copies and examples live
-in `configs/base/` and `configs/examples/`.
+Built-in presets are packaged with BREOS; [Packaged options](options.md)
+lists them, and `configs/examples/` has runnable configs that use them.
 Pass the key, then use the optional `costs` table for project-specific values.
 Explicit overrides win over the named preset; preset values win over
 {py:class}`~breos.CostParams` defaults:

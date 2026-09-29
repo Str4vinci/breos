@@ -21,7 +21,6 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 REQUIRED_WHEEL_FILES = {
     "breos/data/configs/locations.json",
     "breos/data/configs/costs.json",
-    "breos/data/configs/electricity.json",
     "breos/data/configs/emissions.json",
     "breos/data/configs/tariffs.json",
     "breos/data/rlp/h0SLP_demandlib_1000kwh_hourly.csv",
