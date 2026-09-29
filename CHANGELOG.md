@@ -695,6 +695,28 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   steps of synthetic Porto PV years, hourly and 15-minute, none differs. App,
   Monte Carlo and the optimizer do not call `dc_to_ac` and are unchanged bit
   for bit.
+- Internal PV, weather and load cleanups from a code audit. The fixed-tilt
+  and tracking breakdowns share one builder, and App passes the PV model
+  options through `configured_pv_model_kwargs`, as the optimizer does. App
+  and Monte Carlo decide whether to resample hourly weather to 15 minutes in
+  one helper. Transposition and terrain shading compute the sun position in
+  one function. `PVModuleParams` is defined in `breos.pv_modules`, so
+  `breos.solar` imports the module catalog at load time instead of inside
+  four functions; `breos.solar.PVModuleParams` and `breos.PVModuleParams`
+  still work. The weather metadata key, the horizon-status defaults, the
+  sidecar reading and the timestamp and air-temperature column names are
+  each defined once. The unused `read_weather_csv`,
+  `resolve_configured_pv_model_options` and `solar._get_column` are gone.
+  Two edge cases change. App now takes the weather step from the first two
+  rows when pandas cannot infer it, as Monte Carlo already did: hourly
+  weather with fewer than 3 rows fails the full-year check instead of a
+  frequency error, and hourly weather with a gap in its first ten rows is
+  resampled to 15 minutes, which fills the gap, instead of failing the
+  full-year check. When the first column of a weather CSV is not a
+  timestamp, `load_weather` now takes the first column named `date`,
+  `datetime` or `time` in any case, such as `Date` or `TIME`; it used to
+  match only `date`, `time` and `Datetime`, in that order. Results are
+  unchanged bit for bit.
 - `breos.plotting` checks for matplotlib once, when it is imported, and the
   error says `pip install "breos[plots]"`. Each plot used to check on its
   own call, with a `uv add matplotlib` hint, and the three payback plots
