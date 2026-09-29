@@ -5,6 +5,21 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 ## [Unreleased]
 
 ### Added
+- `breos.tariffs.ScheduleDefinition` holds a complete tariff schedule: its
+  `TariffSchedule` metadata, `ScheduleRule` intervals per day type and
+  season, and an optional `HolidayCalendar`. It is frozen and pickles.
+  `parse_schedule_definition` builds one from the mapping form the bundled
+  `tariffs.json` uses, and the catalogue now goes through it;
+  `get_schedule_definition` returns a bundled one. `classify_tariff_periods`,
+  `resolve_named_tariff`, `schedule_resolution_minutes` and `TariffSpec`
+  take a bundled identifier or a definition. The resolution a schedule needs
+  now follows from its interval boundaries and the changes of its zone's UTC
+  offset in the simulated years (`schedule_resolution_minutes(schedule,
+  years)`), and `tariffs.json` no longer declares it; every bundled schedule
+  derives the value it declared. Classification checks that every step, not
+  only the first, starts on the local step grid. Every bundled schedule
+  gives the same period labels and schedule hashes as before, and no result
+  changes. This is the first step toward custom tariff schedules in `App`.
 - `breos.montecarlo.build_year_cache(config, settings)` prepares a Monte
   Carlo study's per-year weather, PV production and battery temperature
   once, and `run_montecarlo(..., year_cache=cache)` reuses them across a
