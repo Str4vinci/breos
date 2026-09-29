@@ -41,11 +41,6 @@ _BASE_CONFIG = {
     "projection_years": 3,
 }
 
-_DEAD_LEGACY_MC_REASON = (
-    "#186: reachable only through the legacy run-year branch of plot_montecarlo_simulation, "
-    "whose run_number/year columns BREOS never produces"
-)
-
 
 def _fake_tmy(weather):
     def _fetch(*args, **kwargs):
@@ -163,11 +158,6 @@ def test_set_presentation_mode():
 # ---------------------------------------------------------------------------
 
 
-def test_monthly_graphs(battery_run, tmp_path):
-    plotting.monthly_graphs(battery_run.results, str(tmp_path))
-    _assert_written(tmp_path, "monthly_energy.png")
-
-
 def test_yearly_graphs(battery_run, tmp_path):
     plotting.yearly_graphs(battery_run.results, str(tmp_path))
     _assert_written(tmp_path, "yearly_energy.png")
@@ -232,77 +222,9 @@ def test_plot_resistance_and_efficiency(battery_run, tmp_path):
     _assert_written(tmp_path, "battery_resistance_growth.png", "battery_effective_rte.png")
 
 
-def test_plot_calendar_aging_sensitivity(battery_run, tmp_path):
-    soh = battery_run.yearly["Battery_SOH_%"].to_numpy()
-    trajectories = {f"k₀ × {scale}": list(100 - scale * (100 - soh)) for scale in (0.5, 1, 2)}
-    plotting.plot_calendar_aging_sensitivity(trajectories, 80.0, str(tmp_path))
-    _assert_written(tmp_path, "calendar_aging_sensitivity.png")
-
-
-# ---------------------------------------------------------------------------
-# Degradation validation (measured vs predicted SOH)
-# ---------------------------------------------------------------------------
-
-
-@pytest.fixture
-def soh_pair(battery_run):
-    """Daily predicted SOH from App and a sparse noisy 'measured' series."""
-    predicted = battery_run.degradation.set_index("Datetime")["SOH"] / 100.0
-    measured = predicted.iloc[::30] + np.random.default_rng(0).normal(0.0, 0.002, len(predicted.iloc[::30]))
-    return measured, predicted.loc[measured.index]
-
-
-def test_plot_validation_soh_comparison(soh_pair, tmp_path):
-    measured, predicted = soh_pair
-    plotting.plot_validation_soh_comparison(
-        measured, predicted, str(tmp_path), x_label="Date", metrics={"RMSE": 0.002, "MAE": 0.0015, "R2": 0.9}
-    )
-    _assert_written(tmp_path, "validation_soh_comparison.png")
-
-
-def test_plot_validation_residuals(soh_pair, tmp_path):
-    plotting.plot_validation_residuals(*soh_pair, str(tmp_path))
-    _assert_written(tmp_path, "validation_residuals.png")
-
-
-def test_plot_validation_parity(soh_pair, tmp_path):
-    plotting.plot_validation_parity(*soh_pair, str(tmp_path), metrics={"R2": 0.9})
-    _assert_written(tmp_path, "validation_parity.png")
-
-
-def test_plot_validation_multi_system(soh_pair, tmp_path):
-    measured, predicted = soh_pair
-    system = {
-        "simulation": pd.DataFrame({"date": predicted.index, "predicted_soh": predicted.to_numpy()}),
-        "truth": pd.DataFrame({"date": measured.index, "measured_soh": measured.to_numpy()}),
-    }
-    plotting.plot_validation_multi_system({"A": system, "B": system}, str(tmp_path))
-    _assert_written(tmp_path, "validation_multi_system.png")
-
-
-def test_plot_validation_degradation_split(battery_run, tmp_path):
-    frame = battery_run.degradation
-    simulation = pd.DataFrame(
-        {
-            "date": frame["Datetime"],
-            "cal_loss": frame["Cumulative_Calendar_Degradation"],
-            "cycle_loss": frame["Cumulative_Cycle_Degradation"],
-        }
-    )
-    plotting.plot_validation_degradation_split(simulation, str(tmp_path), system_label="A")
-    _assert_written(tmp_path, "validation_degradation_split_A.png")
-
-
 # ---------------------------------------------------------------------------
 # App economics and emissions (cost projection)
 # ---------------------------------------------------------------------------
-
-
-def test_create_cost_plots(battery_run, tmp_path):
-    plotting.create_cost_plots(
-        battery_run.cost_projection, battery_run.costs["total_initial_cost"], str(tmp_path), scenario_name="battery"
-    )
-    _assert_written(tmp_path, "cost_projection_battery.png")
 
 
 def test_plot_breakeven(battery_run, tmp_path):
@@ -318,19 +240,6 @@ def test_plot_breakeven_comparison(battery_run, pv_only_run, tmp_path):
         str(tmp_path),
     )
     _assert_written(tmp_path, "breakeven_comparison.png")
-
-
-def test_plot_breakeven_two(battery_run, pv_only_run, tmp_path):
-    plotting.plot_breakeven_two(
-        battery_run.cost_projection,
-        "PV + battery",
-        battery_run.payback_year,
-        pv_only_run.cost_projection,
-        "PV only",
-        pv_only_run.payback_year,
-        str(tmp_path),
-    )
-    _assert_written(tmp_path, "breakeven_two.png")
 
 
 def test_plot_co2_savings(battery_run, tmp_path):
@@ -375,21 +284,6 @@ def test_plot_breakeven_cdf(mc_runs, tmp_path):
 def test_plot_breakeven_summary_bar(mc_runs, tmp_path):
     plotting.plot_breakeven_summary_bar(int(mc_runs["payback_year"].notna().sum()), len(mc_runs), str(tmp_path))
     _assert_written(tmp_path, "breakeven_summary_bar.png")
-
-
-@pytest.mark.skip(reason=_DEAD_LEGACY_MC_REASON)
-def test_plot_montecarlo_cost_overlay():
-    pass
-
-
-@pytest.mark.skip(reason=_DEAD_LEGACY_MC_REASON)
-def test_plot_montecarlo_soh_overlay():
-    pass
-
-
-@pytest.mark.skip(reason=_DEAD_LEGACY_MC_REASON)
-def test_plot_montecarlo_soh_traces():
-    pass
 
 
 # ---------------------------------------------------------------------------
@@ -438,22 +332,9 @@ def orientation_grid():
     return pd.DataFrame({"Azimuth": azimuth.ravel(), "Tilt": tilt.ravel(), "Metric": metric.ravel()})
 
 
-def test_plot_tilt_optimization(orientation_grid, tmp_path):
-    south = orientation_grid[orientation_grid["Azimuth"] == 180.0].reset_index(drop=True)
-    tilt_results = south.rename(columns={"Metric": "Total_PV_Production_kWh"})
-    plotting.plot_tilt_optimization(tilt_results, str(tmp_path), scenario_name="porto")
-    _assert_written(tmp_path, "tilt_optimization_porto.png")
-
-
 def test_plot_azitilt_landscape_2d(orientation_grid, tmp_path):
     plotting.plot_azitilt_landscape_2d(orientation_grid, 180.0, 35.0, str(tmp_path))
     _assert_written(tmp_path, "optimization_landscape_2d.png")
-
-
-def test_plot_azitilt_landscape_3d(orientation_grid, tmp_path):
-    best = orientation_grid.loc[orientation_grid["Metric"].idxmax()]
-    plotting.plot_azitilt_landscape_3d(orientation_grid, best["Azimuth"], best["Tilt"], best["Metric"], str(tmp_path))
-    _assert_written(tmp_path, "optimization_landscape_3d.png")
 
 
 def test_plot_azitilt_ew_1d(orientation_grid, tmp_path):
@@ -536,7 +417,6 @@ def _berlin_csv_frame(frame, tmp_path, name):
 @pytest.mark.parametrize(
     ("call", "expected"),
     [
-        (lambda r, d: plotting.monthly_graphs(r, d), "monthly_energy.png"),
         (lambda r, d: plotting.yearly_graphs(r, d), "yearly_energy.png"),
         (lambda r, d: plotting.weekly_graphs(r, 13, d), "week_13_profile.png"),
         (lambda r, d: plotting.plot_cell_temperature(r, d), "battery_cell_temperature.png"),
@@ -547,7 +427,7 @@ def _berlin_csv_frame(frame, tmp_path, name):
         (lambda r, d: plotting.plot_monthly_comparison(r, d, scenario_name="dst"), "monthly_comparison_dst.png"),
         (lambda r, d: plotting.plot_monthly_balance(r, d), "monthly_balance.png"),
     ],
-    ids=["monthly", "yearly", "weekly", "cell_temperature", "soh", "monthly_comparison", "monthly_balance"],
+    ids=["yearly", "weekly", "cell_temperature", "soh", "monthly_comparison", "monthly_balance"],
 )
 def test_plots_read_dst_crossing_result_csvs(battery_run, tmp_path, call, expected):
     # A DST-zone run writes two UTC offsets, and pandas 3 refused to parse
@@ -603,12 +483,11 @@ def test_load_results_keeps_one_zone_files_as_they_were(battery_run, tmp_path):
 @pytest.mark.parametrize(
     ("call", "expected"),
     [
-        (lambda r, d: plotting.monthly_graphs(r, d), "monthly_energy.png"),
         (lambda r, d: plotting.yearly_graphs(r, d), "yearly_energy.png"),
         (lambda r, d: plotting.plot_monthly_comparison(r, d, scenario_name="dst"), "monthly_comparison_dst.png"),
         (lambda r, d: plotting.plot_monthly_balance(r, d), "monthly_balance.png"),
     ],
-    ids=["monthly", "yearly", "monthly_comparison", "monthly_balance"],
+    ids=["yearly", "monthly_comparison", "monthly_balance"],
 )
 def test_energy_plots_read_dst_csvs_loaded_with_load_results(battery_run, tmp_path, call, expected):
     # load_results turns the Datetime column into a wall-clock index, which

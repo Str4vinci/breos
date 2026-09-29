@@ -1,8 +1,10 @@
 # ============================================================================
 # BREOS run config — annotated reference
 #
-# Shows every available key with its default in [brackets]. Delete any line to
-# fall back to the default. This file doubles as a realistic PV + battery run.
+# Shows the common keys, each with its default in [brackets]. Delete any line
+# to fall back to the default. This file doubles as a realistic PV + battery
+# run. Every accepted key is listed in the configuration key reference,
+# docs/getting-started/config-reference.md (https://breos.readthedocs.io/).
 #
 #   breos run --config configs/examples/pv-plus-battery.toml
 #
