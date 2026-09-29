@@ -648,6 +648,19 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   Numba (13.0 to 11.1 ms), the latter because the aging step now reads
   timestamps from one precomputed tick array instead of slicing the
   `DatetimeIndex` every day.
+- The energy loop keeps the only running totals of cycle and calendar
+  degradation ([#186](https://github.com/Str4vinci/breos/issues/186)). The
+  native and BLAST degradation adapters kept a second copy for the carried
+  degradation state; they now report only each period's increment, and the
+  state takes `cumulative_cycle_degradation` and
+  `cumulative_calendar_degradation` from the energy loop, as it already took
+  `resistance_growth`. The internal adapters lose their
+  `initial_cumulative_*_degradation` arguments. The unused running totals of
+  cycle and calendar resistance growth are gone
+  ([#164](https://github.com/Str4vinci/breos/issues/164));
+  `update_battery_resistance_cyclewise` and
+  `update_battery_resistance_calendar` still return the increment. Results
+  and carried states are unchanged bit for bit.
 
 ### Fixed
 - Bundled demandlib H0 profiles now put weekday, Saturday and Sunday shapes

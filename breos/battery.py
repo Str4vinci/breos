@@ -641,8 +641,6 @@ def _build_degradation_lifecycle(
     initial_degradation_state: Optional[Dict[str, Any]],
     initial_fec: float,
     initial_calendar_seconds: float,
-    initial_cumulative_cycle_deg: float,
-    initial_cumulative_cal_deg: float,
     default_day_start_soc: float,
     default_day_start_t_cell: float,
     debug: bool,
@@ -660,12 +658,6 @@ def _build_degradation_lifecycle(
             initial_soh_fraction=battery_soh_decimal,
             initial_fec=float(state_payload.get("fec_cum", initial_fec)),
             initial_calendar_seconds=float(state_payload.get("cumulative_calendar_seconds", initial_calendar_seconds)),
-            initial_cumulative_cycle_degradation=float(
-                state_payload.get("cumulative_cycle_degradation", initial_cumulative_cycle_deg)
-            ),
-            initial_cumulative_calendar_degradation=float(
-                state_payload.get("cumulative_calendar_degradation", initial_cumulative_cal_deg)
-            ),
             nominal_energy_wh=battery_config.nominal_energy_wh,
             battery_type=battery_config.battery_type,
             **_native_degradation_kwargs(battery_config.calendar_model),
@@ -692,8 +684,6 @@ def _build_degradation_lifecycle(
         initial_state=state_payload,
         initial_fec=initial_fec,
         initial_calendar_seconds=initial_calendar_seconds,
-        initial_cumulative_cycle_degradation=initial_cumulative_cycle_deg,
-        initial_cumulative_calendar_degradation=initial_cumulative_cal_deg,
     )
     return (
         lifecycle,
@@ -890,11 +880,10 @@ class _AgingState:
     :func:`_apply_daily_degradation`, so the loop can keep hot copies in
     locals and refresh them when a period closes.
 
-    ``cumulative_resistance_cycle`` and ``cumulative_resistance_calendar`` are
-    accumulated and reset with the rest of the fade state but are not reported
-    anywhere; they are kept because they mirror the SOH accumulators, and
-    dropping them would silently remove the only running total of where
-    resistance growth came from.
+    ``cumulative_cycle_deg`` and ``cumulative_cal_deg`` split the installed
+    pack's SOH loss into its cycle and calendar parts. The degradation
+    adapters report only each period's increment, so this is the one running
+    total; the carry state reads it, like ``resistance_growth``.
 
     ``fec_cum`` belongs to the pack currently installed and is reset to zero
     when that pack is replaced, so it cannot be differenced across a
@@ -910,8 +899,6 @@ class _AgingState:
     cumulative_cycle_deg: float
     cumulative_cal_deg: float
     resistance_growth: float
-    cumulative_resistance_cycle: float
-    cumulative_resistance_calendar: float
     eff_charge: float
     eff_discharge: float
     n_replacements: int
@@ -942,10 +929,10 @@ def _apply_resistance_fade(
     day_fec = sum(max(0.0, min(1.0, c["doc"])) * c.get("count", 1.0) for c in cycles)
     fec_before_day = aging.fec_cum - day_fec
 
-    aging.resistance_growth, dR_cycle = update_battery_resistance_cyclewise(
+    aging.resistance_growth, _ = update_battery_resistance_cyclewise(
         aging.resistance_growth, cycles, fec_before_day, debug=debug
     )
-    aging.resistance_growth, dR_calendar = update_battery_resistance_calendar(
+    aging.resistance_growth, _ = update_battery_resistance_calendar(
         aging.resistance_growth,
         T_cell_C=mean_t_cell,
         cumulative_cal_seconds=aging.cumulative_cal_seconds,
@@ -953,9 +940,6 @@ def _apply_resistance_fade(
         mean_soc_absolute=mean_soc_absolute,
         debug=debug,
     )
-    aging.cumulative_resistance_cycle += dR_cycle
-    aging.cumulative_resistance_calendar += dR_calendar
-
     # Feed the resistance penalty back into the energy loop using the same
     # mapping as the initial dispatch state.
     aging.eff_charge, aging.eff_discharge = resistance_to_efficiency(
@@ -998,8 +982,6 @@ def _apply_battery_replacement(
     aging.eff_discharge = battery_config.discharge_efficiency
     aging.cumulative_cycle_deg = 0.0
     aging.cumulative_cal_deg = 0.0
-    aging.cumulative_resistance_cycle = 0.0
-    aging.cumulative_resistance_calendar = 0.0
     aging.n_replacements += 1
     aging.replaced_capacity_wh += battery_config.nominal_energy_wh
 
@@ -1250,29 +1232,27 @@ def _build_summary_row(
 
 def _build_final_degradation_state(
     degradation_lifecycle: DegradationLifecycle,
-    *,
-    day_start_soc: float,
-    day_start_temperature_c: float,
-    resistance_growth: float,
+    aging: _AgingState,
 ) -> Dict[str, Any]:
     """Assemble the carry state a follow-on run can be resumed from.
 
     The engine-independent keys are listed first and explicitly, so the
     schema a caller round-trips does not depend on adapter dict ordering;
     whatever else the adapter reports (BLAST engine internals) follows.
-    Resistance growth is owned by the energy loop, not by either adapter.
+    Resistance growth and the cycle/calendar degradation split are owned by
+    the energy loop, not by either adapter.
     """
     adapter_snapshot = degradation_lifecycle.snapshot(
-        day_start_soc=day_start_soc,
-        day_start_temperature_c=day_start_temperature_c,
+        day_start_soc=aging.day_start_soc,
+        day_start_temperature_c=aging.day_start_t_cell,
     )
     return {
         "degradation_engine": adapter_snapshot.pop("degradation_engine"),
         "fec_cum": float(adapter_snapshot.pop("fec_cum")),
         "cumulative_calendar_seconds": float(adapter_snapshot.pop("cumulative_calendar_seconds")),
-        "resistance_growth": float(resistance_growth),
-        "cumulative_cycle_degradation": float(adapter_snapshot.pop("cumulative_cycle_degradation")),
-        "cumulative_calendar_degradation": float(adapter_snapshot.pop("cumulative_calendar_degradation")),
+        "resistance_growth": float(aging.resistance_growth),
+        "cumulative_cycle_degradation": float(aging.cumulative_cycle_deg),
+        "cumulative_calendar_degradation": float(aging.cumulative_cal_deg),
         **adapter_snapshot,
     }
 
@@ -1419,12 +1399,7 @@ def _build_simulation_summary(
 
     final_state = None
     if return_degradation_state:
-        final_state = _build_final_degradation_state(
-            core.lifecycle,
-            day_start_soc=aging.day_start_soc,
-            day_start_temperature_c=aging.day_start_t_cell,
-            resistance_growth=aging.resistance_growth,
-        )
+        final_state = _build_final_degradation_state(core.lifecycle, aging)
 
     return SimulationSummary(
         n_steps=len(buffers.columns["Battery_Energy"]),
@@ -1681,8 +1656,6 @@ def _simulate_core(
         initial_degradation_state=initial_degradation_state,
         initial_fec=initial_fec,
         initial_calendar_seconds=initial_calendar_seconds,
-        initial_cumulative_cycle_deg=initial_cumulative_cycle_deg,
-        initial_cumulative_cal_deg=initial_cumulative_cal_deg,
         default_day_start_soc=degradation_day_start_soc,
         default_day_start_t_cell=degradation_day_start_t_cell,
         debug=debug,
@@ -1719,11 +1692,11 @@ def _simulate_core(
         # accumulated across every pack it used.
         fec_lifetime=0.0,
         cumulative_cal_seconds=initial_calendar_seconds,
-        cumulative_cycle_deg=initial_cumulative_cycle_deg,
-        cumulative_cal_deg=initial_cumulative_cal_deg,
+        # Coerced so a NumPy scalar argument, such as float32, is summed in
+        # float64 like the carried state always was.
+        cumulative_cycle_deg=float(initial_cumulative_cycle_deg),
+        cumulative_cal_deg=float(initial_cumulative_cal_deg),
         resistance_growth=resistance_growth,
-        cumulative_resistance_cycle=0.0,
-        cumulative_resistance_calendar=0.0,
         eff_charge=eff_charge,
         eff_discharge=eff_discharge,
         n_replacements=0,
@@ -1946,12 +1919,7 @@ def simulate_energy_balance(
     if not return_degradation_state:
         return result
 
-    final_degradation_state = _build_final_degradation_state(
-        core.lifecycle,
-        day_start_soc=core.aging.day_start_soc,
-        day_start_temperature_c=core.aging.day_start_t_cell,
-        resistance_growth=core.aging.resistance_growth,
-    )
+    final_degradation_state = _build_final_degradation_state(core.lifecycle, core.aging)
     return (*result, final_degradation_state)
 
 
