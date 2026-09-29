@@ -1481,6 +1481,56 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   `breos sweep` over the `[tariff]` table and read its year-1 money columns,
   or loop over `App` runs. The "Compare tariffs" recipe shows both, and
   `configs/examples/tariff-comparison.toml` is the CLI version.
+- **Plotting functions that nothing called**
+  ([#186](https://github.com/Str4vinci/breos/issues/186)), with no
+  deprecation period, from `breos.plotting` and the top-level `breos`
+  namespace: `plot_validation_soh_comparison`, `plot_validation_residuals`,
+  `plot_validation_parity`, `plot_validation_multi_system`,
+  `plot_validation_degradation_split`, `plot_calendar_aging_sensitivity`,
+  `plot_breakeven_two`, `plot_tilt_optimization`, `create_cost_plots`,
+  `plot_azitilt_landscape_3d` and `monthly_graphs`. Use
+  `plot_monthly_comparison` for `monthly_graphs`: it draws the same monthly
+  PV, load, import and export bars, while `monthly_graphs` could put the
+  wrong legend label on a bar when a column was missing. Use
+  `plot_breakeven_comparison` for `plot_breakeven_two`. `plot_timeseries`
+  drops its `title` argument, which it never drew. Every remaining plot
+  draws the same figure as before.
+- **The run-year Monte Carlo plots**
+  ([#186](https://github.com/Str4vinci/breos/issues/186)).
+  `plot_montecarlo_cost_overlay`, `plot_montecarlo_soh_overlay` and
+  `plot_montecarlo_soh_traces` read `run_number`/`year` tables that BREOS
+  never writes. They are gone with the branch of `plot_montecarlo_simulation`
+  that called them. `plot_montecarlo_simulation` now takes the
+  one-row-per-run table as its first argument,
+  `plot_montecarlo_simulation(result.runs, results_directory)`. The unused
+  `all_data` positional and the `full_df` keyword are gone. It no longer
+  looks for `monte_carlo_results.csv`, `combined_results.csv` or
+  `monte_carlo_degradation_details.csv` in the directory, and any other
+  table raises `ValueError`. `plot_montecarlo_npv_distribution` and
+  `plot_montecarlo_grid_independence_distribution` read only `npv_savings`
+  and `mean_grid_independence_pct`. `breos montecarlo --plots` writes the
+  same seven figures as before.
+- **Unmaintained tools** under `tools/`: `batch_compare_locations.py`,
+  `recalculate_economics.py`, `compare_results.py`, `azitilt_optimizer.py`
+  and `validate_cec_fit.py`, with their tests. They kept their own cost
+  fallbacks, year loops and config formats apart from the App's, read files
+  that no runner writes, or, for `validate_cec_fit.py`, needed `nrel-pysam`,
+  which BREOS no longer installs. Compare designs and orientations with
+  `breos sweep`. `fetch_historical_weather.py` is gone too:
+  `python tools/fetch_weather.py historical --location <key> --start <year>
+  --end <year>` fetches the same Open-Meteo years for one location.
+- **`configs/base/`**. Its `costs`, `emissions`, `locations` and
+  `electricity` files were copies of the packaged presets that no run read,
+  and its `financials.json` had lost its packaged counterpart. `breos list`
+  and the Packaged options page show the presets.
+  `tools/add_location.py` now adds to the packaged
+  `breos/data/configs/locations.json`, where the `location` key finds it, and
+  `tools/fetch_weather.py` reads the packaged presets. The packaged
+  `breos/data/configs/electricity.json`, which nothing loaded, is removed as
+  well ([#186](https://github.com/Str4vinci/breos/issues/186)).
+- **The `validation` and `location-tools` extras.** `validation` installed
+  nothing. `location-tools` only served `tools/add_location.py`, which is not
+  in the wheel; install `geopy` and `timezonefinder` to run it.
 
 ### Documentation
 - The release checklist records that `v0.5.0`, `v0.5.1` and `v0.6.0` are
@@ -1512,6 +1562,10 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   load-profile data page documents external profiles and `rlp_directory`.
   The plotting API page says which functions write files and which return
   the figure, and names the `plots` extra.
+- `configs/examples/pv-plus-battery.toml` no longer claims to show every key:
+  it sets 26 top-level keys, about a third of those BREOS accepts. It and the
+  configs README now point to the configuration key reference for the full
+  list.
 
 ## [0.6.2] - 2026-09-24
 

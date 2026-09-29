@@ -65,13 +65,6 @@ weather = [
     "requests-cache>=1.2.1",
     "timezonefinder>=8.2.1",
 ]
-# Compatibility alias for setup scripts written before 0.4.2. The validation
-# harness uses committed CSV/JSON artifacts and needs no dedicated packages.
-validation = []
-location-tools = [
-    "geopy>=2.4.1",
-    "timezonefinder>=8.2.1",
-]
 dev = [
     "pytest>=8.0",
     "pytest-cov>=7.0",
