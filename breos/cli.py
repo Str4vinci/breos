@@ -674,7 +674,7 @@ def _montecarlo(args: argparse.Namespace) -> int:
     if args.plots:
         from breos.plotting import plot_montecarlo_simulation
 
-        plot_montecarlo_simulation([], str(out_path.parent), full_df=result.runs, verbose=not args.json)
+        plot_montecarlo_simulation(result.runs, str(out_path.parent), verbose=not args.json)
         plots_dir = out_path.parent / "plots"
 
     if args.json:
