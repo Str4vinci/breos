@@ -43,7 +43,6 @@ BREOS's Python dependencies are open-source packages under their respective
 licenses. See `pyproject.toml`, `uv.lock`, and each package's own metadata for
 the authoritative license text. Core and optional dependencies currently include:
 
-- **geopy** — MIT
 - **joblib** — BSD 3-Clause
 - **matplotlib** — Matplotlib / PSF-style license terms
 - **numba** — BSD

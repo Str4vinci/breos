@@ -3,9 +3,12 @@
 Add a geocoded location to the packaged location presets.
 
 Looks an address up with Nominatim, finds its time zone, and writes the entry
-to breos/data/configs/locations.json in this checkout, where the ``location``
-config key and tools/fetch_weather.py find it. Needs geopy and timezonefinder:
-``pip install geopy timezonefinder``.
+to breos/data/configs/locations.json in this checkout. The ``location`` config
+key and tools/fetch_weather.py find it when BREOS runs from this checkout, for
+example after ``uv sync``, not from an installed wheel. Run
+tools/generate_option_docs.py afterwards to update the options page. For a
+one-off site, set ``location`` to a latitude/longitude/timezone table instead.
+Needs geopy and timezonefinder: ``pip install geopy timezonefinder``.
 
 Usage:
     python tools/add_location.py "Porto, Portugal"

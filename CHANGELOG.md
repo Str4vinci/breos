@@ -1520,17 +1520,20 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   reference bundles that are not in the repository. Compare designs and
   orientations with `breos sweep`. `fetch_historical_weather.py` is gone
   too: `python tools/fetch_weather.py historical --location <key> --start
-  <year> --end <year>` fetches the same Open-Meteo years for one location.
+  <year> --end <year>` fetches the same Open-Meteo years for one location
+  preset; add a new site with `tools/add_location.py` first.
 - **`configs/base/`**. Its `costs`, `emissions`, `locations` and
   `electricity` files were copies of the packaged presets that no run read,
   and its `financials.json` had lost its packaged counterpart. `breos list`
-  and the Packaged options page show the presets.
-  `tools/add_location.py` now adds to the packaged
-  `breos/data/configs/locations.json`, where the `location` key finds it, and
+  and the Packaged options page show the presets. `tools/add_location.py`
+  now adds to `breos/data/configs/locations.json` in the checkout, where the
+  `location` key finds it when BREOS runs from that checkout; regenerate the
+  options page with `tools/generate_option_docs.py` afterwards. For a
+  one-off site, set `location` to a latitude/longitude/timezone table.
   `tools/fetch_weather.py` reads the packaged presets. The packaged
   `breos/data/configs/electricity.json`, which nothing loaded, is removed as
-  well ([#186](https://github.com/Str4vinci/breos/issues/186)), and so is the
-  unread `electricity_cost_excl_vat` field of the packaged cost presets.
+  well ([#186](https://github.com/Str4vinci/breos/issues/186)), and so is
+  the unread `electricity_cost_excl_vat` field of the packaged cost presets.
 - **The `validation` and `location-tools` extras.** `validation` installed
   nothing. `location-tools` only served `tools/add_location.py`, which is not
   in the wheel; install `geopy` and `timezonefinder` to run it.
