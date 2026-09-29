@@ -39,6 +39,8 @@ from breos.app_inputs import (
     build_dc_system_base,
     config_cache_key,
     load_consumption_profile,
+    resample_hourly_weather,
+    weather_input_frequency,
 )
 from breos.battery import LEDGER_SCHEMA_VERSION, AlignedSimulationInputs, align_simulation_inputs
 from breos.dispatch_instructions import DispatchInstructions
@@ -200,17 +202,15 @@ def _load_weather_years(
     indexed_by_year: dict[int, pd.DataFrame] = {}
     for year, df in weather_by_year.items():
         weather = _index_weather(df)
-        input_frequency = pd.infer_freq(weather.index[:10]) if len(weather.index) >= 3 else None
-        if input_frequency is None and len(weather.index) >= 2:
-            input_frequency = pd.tseries.frequencies.to_offset(weather.index[1] - weather.index[0]).freqstr
-        if freq == "15min":
-            if input_frequency and "h" in input_frequency.lower() and "15" not in input_frequency:
-                weather = resample_to_15min(
-                    weather,
-                    latitude=resolved.lat,
-                    longitude=resolved.lon,
-                    preserve_irradiance_energy=settings.preserve_irradiance_energy,
-                )
+        input_frequency = weather_input_frequency(weather)
+        weather = resample_hourly_weather(
+            weather,
+            freq,
+            latitude=resolved.lat,
+            longitude=resolved.lon,
+            resample=resample_to_15min,
+            preserve_irradiance_energy=settings.preserve_irradiance_energy,
+        )
         if runtime_weather is not None and not runtime_weather:
             # The same resolution the PV model applies, so a spelling such as
             # "Mid-Interval" is recorded with the offset it actually gets.
@@ -484,7 +484,7 @@ def _align_years(
 # A PV-only study memoizes the DC-to-AC conversion for every distinct
 # (weather year, project year) pair. That is bounded work, but it is not
 # bounded memory: four arrays per pair (the PV input and three conversion
-# outputs), at eight bytes per timestep. The Article's 19 weather years over a
+# outputs), at eight bytes per timestep. Nineteen weather years over a
 # 20-year project at 15-minute resolution come to about 407 MiB. Past this
 # budget the study runs without the cache
 # rather than exhausting the machine -- same numbers, less speed.

@@ -1155,7 +1155,7 @@ class TestAppSimulateTracking:
         assert tracked.result()["pv_production_kwh"] > fixed.result()["pv_production_kwh"]
 
     def test_per_array_tracking_flows_through(self, _patch_weather):
-        """Tracking keys on pv_arrays entries must reach calculate_multi_array_production."""
+        """Tracking keys on pv_arrays entries must reach calculate_multi_array_production_breakdown."""
         fixed_app = App(
             {
                 "location": "porto",

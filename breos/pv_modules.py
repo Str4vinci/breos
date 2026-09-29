@@ -22,10 +22,156 @@ Usage:
     resized = replace(custom, Mpp=560, Vmp=42.4, Imp=13.21)
 """
 
+import math
 from copy import copy
-from typing import Dict, List, Optional
+from dataclasses import dataclass
+from numbers import Integral, Real
+from typing import Any, ClassVar, Dict, List, Optional
 
-from breos.solar import PVModuleParams
+import numpy as np
+
+
+@dataclass
+class PVModuleParams:
+    """Datasheet parameters for a PV module.
+
+    Every field holds what the user supplied. The temperature coefficients the
+    models use are read-only properties resolved from the current field
+    values: ``alpha_sc`` (A/°C), ``beta_voc`` (V/°C) and ``gamma_pmp_effective``
+    (%/°C). ``gamma_pmp`` stays ``None`` unless it was given, and
+    ``gamma_pmp_effective`` then follows ``T_Pmax_pct``. Because nothing
+    derived is stored, in-place edits, ``dataclasses.replace``, a
+    ``dataclasses.asdict`` round trip, copies and pickles all see current
+    coefficients.
+
+    Field values are validated on construction and on every assignment. A
+    rejected assignment leaves the module unchanged. ``Mpp`` must match
+    ``Vmp * Imp`` within 2%, so change the STC point together with
+    ``dataclasses.replace(module, Mpp=..., Vmp=..., Imp=...)`` when a single
+    edit would leave it inconsistent.
+    """
+
+    Mpp: float  # W (STC power)
+    Vmp: float  # V
+    Imp: float  # A
+    Voc: float  # V
+    Isc: float  # A
+
+    T_Pmax_pct: float  # %/°C
+    T_Voc_pct: float  # %/°C
+    T_Isc_pct: float  # %/°C
+
+    N_Cells: int  # Number of cells (eg 6*24 or 144)
+
+    Name: Optional[str] = None  # Metadata: specific module model name
+    # Module efficiency fraction, e.g. 0.213. Feeds the PVsyst and SAM NOCT
+    # cell-temperature models; when unset the PVsyst path uses
+    # breos.pv.temperature.DEFAULT_MODULE_EFFICIENCY and noct-sam refuses to run.
+    Module_Efficiency: Optional[float] = None
+    celltype: str = "monoSi"
+
+    alpha_sc_abs: Optional[float] = None  # A/°C - if provided, overrides T_Isc_pct conversion
+    beta_voc_abs: Optional[float] = None  # V/°C - if provided, overrides T_Voc_pct conversion
+    gamma_pmp: Optional[float] = None  # %/°C - if provided, overrides T_Pmax_pct
+    # Appended after all pre-0.5 fields to preserve positional construction.
+    bifaciality: Optional[float] = None  # Metadata: rear/front maximum-power ratio (inert by itself)
+    NOCT: Optional[float] = None  # Metadata: nominal operating cell temperature (°C), required by noct-sam
+
+    _POSITIVE_FIELDS = frozenset({"Mpp", "Vmp", "Imp", "Voc", "Isc"})
+    _STC_POINT_FIELDS = ("Mpp", "Vmp", "Imp")
+    _FINITE_FIELDS = frozenset({"T_Pmax_pct", "T_Voc_pct", "T_Isc_pct", "alpha_sc_abs", "beta_voc_abs", "gamma_pmp"})
+    _MPP_RELATIVE_TOLERANCE = 0.02
+
+    # Set per instance once __post_init__ has checked the STC point.
+    _module_params_ready: ClassVar[bool] = False
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        """Validate a field before it is stored; a rejected edit changes nothing."""
+        if name in self._POSITIVE_FIELDS:
+            self._validate_number(name, value, minimum=0.0, minimum_strict=True)
+        elif name in self._FINITE_FIELDS:
+            if value is not None or name in {"T_Pmax_pct", "T_Voc_pct", "T_Isc_pct"}:
+                self._validate_number(name, value)
+            if name == "T_Pmax_pct" and float(value) >= 0:
+                raise ValueError("T_Pmax_pct must be negative")
+        elif name == "N_Cells":
+            if isinstance(value, (bool, np.bool_)) or not isinstance(value, Integral) or value <= 0:
+                raise ValueError("N_Cells must be a positive integer")
+        elif name == "Module_Efficiency" and value is not None:
+            self._validate_number(name, value, minimum=0.0, maximum=1.0, minimum_strict=True)
+        elif name == "NOCT" and value is not None:
+            self._validate_number(name, value, minimum=0.0, maximum=100.0, minimum_strict=True)
+        elif name == "bifaciality" and value is not None:
+            try:
+                self._validate_number(name, value, minimum=0.0, maximum=1.0, minimum_strict=True)
+            except ValueError as exc:
+                raise ValueError("bifaciality must be between 0 (exclusive) and 1 (inclusive)") from exc
+        elif name == "celltype" and (not isinstance(value, str) or not value.strip()):
+            raise ValueError("celltype must be a non-empty string")
+
+        # During __init__ the STC point is checked once, in __post_init__,
+        # after all three fields exist.
+        if name in self._STC_POINT_FIELDS and self._module_params_ready:
+            point = {field: getattr(self, field) for field in self._STC_POINT_FIELDS}
+            point[name] = value
+            self._validate_stc_point(point["Mpp"], point["Vmp"], point["Imp"])
+
+        object.__setattr__(self, name, value)
+
+    @staticmethod
+    def _validate_number(
+        name: str,
+        value: Any,
+        *,
+        minimum: Optional[float] = None,
+        maximum: Optional[float] = None,
+        minimum_strict: bool = False,
+        maximum_strict: bool = False,
+    ) -> None:
+        if isinstance(value, (bool, np.bool_)) or not isinstance(value, Real) or not math.isfinite(float(value)):
+            raise ValueError(f"{name} must be a finite number")
+        number = float(value)
+        if minimum is not None and (number <= minimum if minimum_strict else number < minimum):
+            bracket = "greater than" if minimum_strict else "at least"
+            raise ValueError(f"{name} must be {bracket} {minimum}")
+        if maximum is not None and (number >= maximum if maximum_strict else number > maximum):
+            bracket = "less than" if maximum_strict else "at most"
+            raise ValueError(f"{name} must be {bracket} {maximum}")
+
+    @classmethod
+    def _validate_stc_point(cls, mpp: float, vmp: float, imp: float) -> None:
+        if not math.isclose(mpp, vmp * imp, rel_tol=cls._MPP_RELATIVE_TOLERANCE):
+            raise ValueError(
+                f"Mpp must match Vmp * Imp within {cls._MPP_RELATIVE_TOLERANCE:.0%} for a datasheet STC point "
+                f"(Mpp={mpp}, Vmp * Imp={vmp * imp:.6g}); use dataclasses.replace() to change "
+                "Mpp, Vmp and Imp together"
+            )
+
+    @property
+    def alpha_sc(self) -> float:
+        """Short-circuit-current temperature coefficient in A/°C."""
+        if self.alpha_sc_abs is not None:
+            return float(self.alpha_sc_abs)
+        return float((self.T_Isc_pct * self.Isc) / 100)
+
+    @property
+    def beta_voc(self) -> float:
+        """Open-circuit-voltage temperature coefficient in V/°C."""
+        if self.beta_voc_abs is not None:
+            return float(self.beta_voc_abs)
+        return float((self.T_Voc_pct * self.Voc) / 100)
+
+    @property
+    def gamma_pmp_effective(self) -> float:
+        """Maximum-power temperature coefficient in %/°C: ``gamma_pmp`` if set, else ``T_Pmax_pct``."""
+        if self.gamma_pmp is not None:
+            return float(self.gamma_pmp)
+        return float(self.T_Pmax_pct)
+
+    def __post_init__(self) -> None:
+        self._validate_stc_point(self.Mpp, self.Vmp, self.Imp)
+        object.__setattr__(self, "_module_params_ready", True)
+
 
 # =============================================================================
 # MODULE CATALOG

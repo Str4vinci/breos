@@ -640,9 +640,6 @@ def scale_to_annual_consumption(
         annual_consumption_kwh: Target annual consumption in kWh
         column: Name of the consumption column
     """
-    # Calculate current annual consumption in Wh
-    current_annual_wh = load_df[column].sum()
-
     # Determine hours per step
     if isinstance(load_df.index, pd.DatetimeIndex):
         # Infer from index frequency

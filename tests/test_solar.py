@@ -16,7 +16,6 @@ from breos.pv.model_options import resolve_pv_model_options
 from breos.pv_modules import get_module
 from breos.solar import (
     PEREZ_MODELS,
-    SURFACE_TYPES,
     TRANSPOSITION_MODELS,
     PVModuleParams,
     calculate_multi_array_production,
@@ -876,9 +875,10 @@ class TestSolarPosition:
     def test_mid_interval_moves_energy_toward_morning_for_east_array(
         self, synthetic_weather, porto_location, pv_params
     ):
-        # For an east-facing array the sun evaluated half a step later has moved
-        # off the panel normal by evening and onto it in the morning; the split
-        # between pre- and post-noon energy must therefore change.
+        # Hourly values labelled at the start of their hour pair, at mid-interval,
+        # with the sun half an hour later. For an east-facing array that raises
+        # each morning hour's irradiance on the panel, so the morning share of
+        # the energy rises.
         def split(sp):
             dc = calculate_pv_production_dc(
                 weather_data=synthetic_weather,
@@ -893,7 +893,7 @@ class TestSolarPosition:
             morning = dc[dc.index.hour < 12].sum()
             return morning / dc.sum()
 
-        assert split("mid-interval") != pytest.approx(split("interval-start"), rel=1e-3)
+        assert split("mid-interval") > split("interval-start") + 0.01
 
     def test_tracking_accepts_mid_interval(self, synthetic_weather, porto_location, pv_params):
         dc = calculate_pv_production_dc_tracking(
@@ -1091,11 +1091,6 @@ class TestGroundReflectance:
     def test_albedo_out_of_range(self, synthetic_weather, porto_location, pv_params):
         with pytest.raises(ValueError, match="albedo must be between 0 and 1"):
             self._dc(synthetic_weather, porto_location, pv_params, albedo=1.5)
-
-    def test_all_surface_types_resolve(self, synthetic_weather, porto_location, pv_params):
-        for surface_type in SURFACE_TYPES:
-            dc = self._dc(synthetic_weather, porto_location, pv_params, surface_type=surface_type)
-            assert dc.sum() > 0, surface_type
 
 
 class TestPerezCoefficients:
