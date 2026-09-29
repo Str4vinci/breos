@@ -54,8 +54,10 @@ unless stated:
 
 E1, E6 and E8 were **Accepted** on 2026-09-26. E2–E5, E7, E9 and the E6
 inflation default were **Accepted** on 2026-09-27. Accepting them accepted
-the design, not its implementation. E8 and E9 were then implemented for 0.7.0
-under #183; the changelog carries the migration table below as shipped.
+the design, not its implementation. All nine were then implemented for
+0.7.0 under #183: E6 in #271, E5 and E7 in #273, E8 and E9 in #283, E1, E2
+and E3 in #288, and E4 in #291. The changelog carries the migration table
+below as shipped.
 
 ### E1. Nominal basis for the projection APIs — Accepted 2026-09-26
 
@@ -255,6 +257,6 @@ version; an added field bumps the minor.
   valuation step and need no re-simulation for price-blind dispatch.
 - Downstream code moves to the neutral names and the interpolated payback
   names once, in 0.7.0, using the E8 table.
-- Splitting `cost_analysis_projection` into valuation, discounting and
-  metrics, emissions, and file output, and computing LCOE and lifetime CO2
-  once rather than again in each runner, are implementation work under #183.
+- `cost_analysis_projection` is split into valuation, discounting and
+  metrics, emissions, and file output, and LCOE and lifetime CO2 are
+  computed once rather than again in each runner (#292, under #183).
