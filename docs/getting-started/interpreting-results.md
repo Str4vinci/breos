@@ -18,9 +18,13 @@ ledger schema. Version `"1.0"` dropped the `_eur` suffixes and renamed the
 [changelog](https://github.com/Str4vinci/breos/blob/develop/CHANGELOG.md)
 lists every rename). Version `"1.1"` adds the
 [year-1 money keys](#year-1-money-keys), `"1.2"` adds `provenance.economics`
-([Economic conventions](#economic-conventions)), and `"1.3"`, which 0.7.0
-reports, adds `Replaced_Capacity_kWh` to the year rows of Monte Carlo
-trajectories and optimizer tables.
+([Economic conventions](#economic-conventions)), `"1.3"` adds
+`Replaced_Capacity_kWh` to the year rows of Monte Carlo trajectories and
+optimizer tables, and `"1.4"`, which 0.7.0 reports, adds
+`provenance.revaluation` to the results of
+[`App.revalue`](recipes.md#revalue-a-run-at-other-prices) and the export CO2
+columns (`CO2_Avoided_Export_kg`, `CO2_Avoided_Export_Cumulative_kg`) to the
+cost projection and Monte Carlo trajectories.
 A renamed or removed key bumps the
 major version, an added key the minor. A result without the key predates 1.0.
 

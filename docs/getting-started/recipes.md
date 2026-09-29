@@ -380,6 +380,48 @@ The flat run uses the preset's `electricity_cost`, `electricity_sold_cost` and
 `daily_power_cost`; a tariff run must not set them. Each run with the same PV
 design repeats the weather and PV preparation, which `breos sweep` shares.
 
+## Revalue a run at other prices
+
+`App.revalue` returns the result a finished run would give at other prices,
+without simulating the energy balance again when the prices cannot change
+the dispatch. It accepts the economics keys only: `costs`, `cost_preset`,
+`tariff`, `discount_rate`, `inflation_rate` and the escalators. Nested
+tables merge key by key, as CLI overrides do.
+
+```python
+from breos import App
+
+app = App(
+    {
+        "location": "porto",
+        "n_modules": 10,
+        "annual_consumption_kwh": 4000,
+        "battery_kwh": 5.0,
+        "cost_preset": "residential_pt",
+    }
+)
+app.simulate()
+
+for storage_cost in (500, 400, 300):
+    result = app.revalue({"costs": {"storage_cost_per_kwh": storage_cost}, "discount_rate": 0.05})
+    print(storage_cost, result["npv_savings"], result["provenance"]["revaluation"]["method"])
+```
+
+`provenance.revaluation.method` says what happened:
+
+- `"repriced"`: the stored run was priced again. This is the case for flat
+  prices, for a tariff removed, and for new prices on the same tariff
+  schedule when the smart-charging instructions do not change (fixed-target
+  instructions follow the periods, not the prices). Flat prices give the
+  same floats as a new run. A re-priced tariff sums each year's energy by
+  period instead of by step, so it agrees with a new run to rounding.
+- `"resimulated"`: the run was simulated again, because a tariff was added,
+  the schedule changed, or the instructions would change.
+
+A key that changes the simulation, such as `battery_kwh` or
+`projection_years`, raises `ValueError`; build a new `App` for it.
+`revalue` leaves the App and its `result()` unchanged.
+
 ## 15-minute resolution
 
 Hourly weather is interpolated to 15-minute steps (Makima), and the bundled

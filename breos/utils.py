@@ -6,6 +6,7 @@ import datetime
 import multiprocessing
 import os
 import re
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -306,3 +307,20 @@ def format_years_months(years_decimal) -> str:
     years = int(years_decimal)
     months = int((years_decimal - years) * 12)
     return f"{years}y" if months == 0 else f"{years}y {months}m"
+
+
+def deep_merge(base: dict[str, Any], overrides: dict[str, Any]) -> dict[str, Any]:
+    """Return ``base`` with ``overrides`` applied, merging nested tables key by key.
+
+    An override table replaces only the keys it sets, so a CLI flag or an
+    :meth:`App.revalue <breos.App.revalue>` change that sets one ``[tariff]``
+    key keeps the rest of the table. Neither input is changed.
+    """
+    merged = dict(base)
+    for key, value in overrides.items():
+        current = merged.get(key)
+        if isinstance(current, dict) and isinstance(value, dict):
+            merged[key] = deep_merge(current, value)
+        else:
+            merged[key] = value
+    return merged

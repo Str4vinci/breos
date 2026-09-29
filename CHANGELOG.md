@@ -5,6 +5,30 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 ## [Unreleased]
 
 ### Added
+- `App.revalue(changes)` values a finished run at other prices
+  ([#183](https://github.com/Str4vinci/breos/issues/183)). It accepts the
+  economics keys only (`costs`, `cost_preset`, `tariff`, `discount_rate`,
+  `inflation_rate` and the escalators; `breos.app.REVALUATION_KEYS`),
+  merged into the run's configuration table by table, and raises
+  `ValueError` for any other key. When the prices cannot change the
+  dispatch it re-prices the stored run: flat prices, a tariff removed, or new
+  prices on the same schedule with unchanged smart-charging instructions.
+  Otherwise it simulates again. `provenance.revaluation` records
+  `method` (`"repriced"` or `"resimulated"`) and `changed_keys`. A flat
+  revaluation gives the same floats as a new run; a re-priced tariff sums
+  each year's energy by tariff period, which projections on a tariff now
+  record (`ProjectionRun.period_energy`), and agrees with a new run to
+  rounding. The App and its `result()` are unchanged. Result schema 1.4.
+- `cost_analysis_projection` is split into public stages:
+  `price_year_rows` and the new `value_year_rows` (energy to component
+  cashflows), `discount_cashflows` (cumulative and discounted cashflows,
+  payback, NPV and LCOE), `add_co2_projection` and `write_cost_projection`.
+  The first-year estimation path builds year rows and runs the same stages,
+  so its projection gains `Load_kWh` and takes the year-row path's column
+  order; its values are unchanged. Cost projections, and Monte Carlo
+  trajectories with them, gain `CO2_Avoided_Export_kg`,
+  `CO2_Avoided_Export_Cumulative_kg` and
+  `attrs["lifetime_co2_avoided_export_kg"]`.
 - Grid charging and dispatch instructions in the battery step
   ([#178](https://github.com/Str4vinci/breos/issues/178), ADR 0002 A6–A8).
   `simulate_energy_balance` and `simulate_energy_balance_summary` accept
@@ -228,6 +252,16 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   `battery.indoor_model`, `battery.smart_charging`, `economics.costs`,
   `economics.tariff`, and a new `simulation` section with `weather_source`
   and `execution_backend`. A TOML date in `[tariff]` is written as text.
+- LCOE and lifetime CO2 are computed once per run, in the cost projection
+  ([#183](https://github.com/Str4vinci/breos/issues/183)). App, Monte Carlo
+  and the optimizer read `attrs["lcoe_per_kwh"]` instead of calling
+  `calculate_lcoe_from_projection` again, which gave the same float. The App's
+  CO2 fields read the projection's CO2 columns instead of looping
+  `calculate_co2_savings` over the years. The projection counts
+  self-consumption as production minus export, the loop used
+  `Self_Consumption_kWh`, so the unrounded values differ by up to 4e-14 of
+  their size. Over 69 configurations (flat, TOU and smart charging, three
+  countries) no reported CO2 field changed at its two decimals.
 - The economics prices battery replacements (ADR 0003 E4,
   [#183](https://github.com/Str4vinci/breos/issues/183)). The simulation
   reports each swap and its capacity; year rows carry `Replacements` and the

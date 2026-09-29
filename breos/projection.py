@@ -28,11 +28,9 @@ from breos.battery import (
 )
 from breos.dispatch_instructions import DispatchInstructions
 from breos.economics import (
-    calculate_lcoe_from_projection,
     cost_analysis_projection,
     price_year_rows,
     replacement_fraction_from_steps,
-    replacement_total_t0,
 )
 from breos.execution import observed_jit_cache_state, reset_jit_cache_observation
 from breos.tariffs import ResolvedTariff, result_currency
@@ -327,14 +325,78 @@ def _tariff_weights(tariff: ResolvedTariff) -> dict[str, tuple[str, np.ndarray]]
     }
 
 
+# The flows a tariff prices, by the money column each fills and the frame
+# column it is summed from, with the step price that applies to it.
+_PRICED_FLOWS: dict[str, tuple[str, str]] = {
+    "Import_Cost": ("Import_From_Grid", "import"),
+    "Export_Revenue": ("PV_AC_Export", "export"),
+    "Baseline_Import_Cost": ("Houseload", "import"),
+    "Grid_Charge_Cost": ("Grid_AC_To_Battery", "import"),
+}
+
+
+def _period_energy_name(money_column: str, period: str) -> str:
+    return f"{_PRICED_FLOWS[money_column][0]}_kWh@{period}"
+
+
+def _period_weights(tariff: ResolvedTariff) -> dict[str, tuple[str, np.ndarray]]:
+    """One 0/1 mask per tariff period and priced flow, so each year also records its energy by period.
+
+    That energy is what :func:`reprice_tariff_year_rows` re-prices a year from
+    when only the prices change.
+    """
+    labels = np.asarray(tariff.period_labels, dtype=object)
+    weights: dict[str, tuple[str, np.ndarray]] = {}
+    for period in dict.fromkeys(tariff.period_labels):
+        mask = (labels == period).astype(float)
+        for money_column, (column, _price) in _PRICED_FLOWS.items():
+            weights[_period_energy_name(money_column, period)] = (column, mask)
+    return weights
+
+
+def _fixed_charge(tariff: ResolvedTariff, simulated_hours: float) -> float:
+    # Billed on the simulated duration, as the flat path is (ADR 0003 E5).
+    return tariff.prices.fixed_charge_per_day * (simulated_hours / 24)
+
+
 def _tariff_money(
     tariff: ResolvedTariff, weighted_w: Mapping[str, float], hours_per_step: float, n_steps: int
 ) -> dict[str, float]:
     """A year's money at year-1 prices from its price-weighted power sums."""
-    money = {name: float(total * hours_per_step / 1000) for name, total in weighted_w.items()}
-    # Billed on the simulated duration, as the flat path is (ADR 0003 E5).
-    money["Fixed_Charge"] = tariff.prices.fixed_charge_per_day * (n_steps * hours_per_step / 24)
+    money = {name: float(weighted_w[name] * hours_per_step / 1000) for name in _PRICED_FLOWS}
+    money["Fixed_Charge"] = _fixed_charge(tariff, n_steps * hours_per_step)
     return money
+
+
+def _period_prices(tariff: ResolvedTariff, kind: str) -> dict[str, float]:
+    prices = tariff.import_price_per_kwh if kind == "import" else tariff.export_price_per_kwh
+    by_period: dict[str, float] = {}
+    for label, price in zip(tariff.period_labels, prices, strict=True):
+        by_period.setdefault(label, float(price))
+    return by_period
+
+
+def reprice_tariff_year_rows(
+    yearly_df: pd.DataFrame, period_energy: pd.DataFrame, tariff: ResolvedTariff
+) -> pd.DataFrame:
+    """Year rows re-priced at ``tariff``'s prices, from each year's energy by tariff period.
+
+    For revaluation without re-simulation: ``period_energy`` is the
+    :attr:`ProjectionRun.period_energy` of a run on a tariff with the same
+    schedule, so only the prices differ. Each money column becomes the sum over
+    periods of energy times price, and the fixed charge the new daily charge
+    over the simulated hours. A fresh simulation sums energy times price per
+    step instead, so the two agree to rounding, not bit for bit.
+    """
+    repriced = yearly_df.copy()
+    prices = {kind: _period_prices(tariff, kind) for kind in ("import", "export")}
+    for money_column, (_column, kind) in _PRICED_FLOWS.items():
+        total = np.zeros(len(repriced))
+        for period, price in prices[kind].items():
+            total = total + period_energy[_period_energy_name(money_column, period)].to_numpy(dtype=float) * price
+        repriced[money_column] = total
+    repriced["Fixed_Charge"] = [_fixed_charge(tariff, hours) for hours in repriced["Simulated_Hours"]]
+    return repriced
 
 
 def _check_tariff_calendar(tariff: ResolvedTariff, index: pd.DatetimeIndex) -> None:
@@ -373,6 +435,9 @@ class ProjectionRun:
     # The first year's per-step frame; None for a summary projection.
     first_year_results_df: pd.DataFrame | None
     jit_cache_states: list[str]
+    # With a tariff, each year's priced energy by tariff period (kWh), one
+    # row per year, so a price change can be re-priced without re-simulating.
+    period_energy: pd.DataFrame | None = None
 
 
 def project_years(
@@ -405,9 +470,11 @@ def project_years(
     ``instructions``, resolved on that calendar.
     """
     hours_per_step = get_hours_per_step(freq)
-    weights = _tariff_weights(tariff) if tariff is not None else None
+    period_weights = _period_weights(tariff) if tariff is not None else {}
+    weights = {**_tariff_weights(tariff), **period_weights} if tariff is not None else None
     carry = initial_carry or CarryState()
     rows: list[dict[str, Any]] = []
+    period_rows: list[dict[str, float]] = []
     total_replacements = 0
     first_year_results_df: pd.DataFrame | None = None
     jit_cache_states: list[str] = []
@@ -509,6 +576,8 @@ def project_years(
                 money=_tariff_money(tariff, weighted_w, hours_per_step, n_steps) if tariff is not None else None,
             )
         )
+        if tariff is not None:
+            period_rows.append({name: float(weighted_w[name] * hours_per_step / 1000) for name in period_weights})
 
     if not rows:
         raise RuntimeError("projection_years must be at least 1")
@@ -518,6 +587,7 @@ def project_years(
         total_replacements=total_replacements,
         first_year_results_df=first_year_results_df,
         jit_cache_states=jit_cache_states,
+        period_energy=pd.DataFrame(period_rows) if tariff is not None else None,
     )
 
 
@@ -597,15 +667,10 @@ def value_projection(cfg: dict[str, Any], resolved: ResolvedAppConfig, run: Proj
         emissions_params=resolved.emissions_params,
         currency=result_currency(resolved.tariff),
     )
-    lcoe = calculate_lcoe_from_projection(
-        cost_projection,
-        total_investment=costs["total_initial_cost"],
-        discount_rate=cfg["discount_rate"],
-    )
     return ProjectionValue(
         costs=costs,
         yearly_df=yearly_df,
         cost_projection=cost_projection,
-        lcoe=lcoe,
-        total_replacement_cost=replacement_total_t0(yearly_df["Replacement_Cost"]),
+        lcoe=cost_projection.attrs["lcoe_per_kwh"],
+        total_replacement_cost=cost_projection.attrs["total_replacement_cost"],
     )

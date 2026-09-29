@@ -26,6 +26,28 @@ energy balance.
    breos.economics.cost_analysis_projection
 ```
 
+`cost_analysis_projection` runs four stages, each public, so a caller can
+re-price stored year rows without repeating the rest:
+
+```{eval-rst}
+.. autosummary::
+   :toctree: generated/
+
+   breos.economics.price_year_rows
+   breos.economics.value_year_rows
+   breos.economics.discount_cashflows
+   breos.economics.add_co2_projection
+   breos.economics.write_cost_projection
+```
+
+`price_year_rows` and `value_year_rows` turn each year's energy into component
+cashflows, `discount_cashflows` accumulates and discounts them and sets the
+payback, NPV and LCOE, `add_co2_projection` adds the avoided emissions, and
+`write_cost_projection` writes `cost_projection.csv`. App, Monte Carlo and the
+optimizer read LCOE and lifetime CO2 from the projection these stages build,
+so each is computed once per run. To value a finished App run at other
+prices, use `App.revalue` ([recipe](../getting-started/recipes.md#revalue-a-run-at-other-prices)).
+
 ## Metrics
 
 ```{eval-rst}

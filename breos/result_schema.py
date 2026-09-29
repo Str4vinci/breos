@@ -11,7 +11,9 @@ neighbours). 1.2 adds ``provenance.economics``, the rates a projection used
 escalator keys to the App's ``resolved_config``. 1.3 adds
 ``Replaced_Capacity_kWh``, the nominal capacity each year's replacements
 swapped in, to the year rows of Monte Carlo trajectories and optimizer tables,
-which also gain the year-1-price money columns (ADR 0003 E4).
+which also gain the year-1-price money columns (ADR 0003 E4). 1.4 adds
+``provenance.revaluation`` to ``App.revalue`` results and the export CO2
+columns to cost projections and Monte Carlo trajectories (#183).
 """
 
-RESULT_SCHEMA_VERSION = "1.3"
+RESULT_SCHEMA_VERSION = "1.4"

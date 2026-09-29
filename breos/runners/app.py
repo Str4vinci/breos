@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, cast
 
 import numpy as np
@@ -12,6 +12,7 @@ from breos.app_config import DEFAULTS, ResolvedAppConfig, default_module_key
 from breos.app_inputs import AppRuntimeDependencies, prepare_simulation_inputs, prepare_simulation_inputs_cached
 from breos.battery import LEDGER_SCHEMA_VERSION
 from breos.degradation.results import DegradationEngineName, build_degradation_summary_from_state
+from breos.dispatch_instructions import DispatchInstructions
 from breos.economics import find_payback_year
 from breos.execution import (
     DEFAULT_EXECUTION_BACKEND,
@@ -20,11 +21,11 @@ from breos.execution import (
     is_pv_only_dispatch,
 )
 from breos.load_profiles import LOAD_PROFILE_METADATA_KEY
-from breos.projection import ProjectionYear, run_projection, value_projection
+from breos.projection import ProjectionRun, ProjectionYear, reprice_tariff_year_rows, run_projection, value_projection
 from breos.pv_modules import get_module
 from breos.smart_charging import resolve_instructions, smart_charging_provenance, stored_energy_by_origin
 from breos.solar import PVProductionBreakdown
-from breos.tariffs import tariff_provenance
+from breos.tariffs import ResolvedTariff, tariff_provenance
 from breos.utils import get_hours_per_step
 
 
@@ -51,6 +52,11 @@ class SimulationArtifacts:
     # Smart-charging provenance and the project's first and last stored
     # energy by origin; None without fixed-target smart charging.
     smart_charging: dict[str, Any] | None = None
+    # What revaluation re-prices from: the unpriced projection, and the
+    # tariff and instructions the run dispatched on.
+    projection: ProjectionRun | None = None
+    resolved_tariff: ResolvedTariff | None = None
+    instructions: DispatchInstructions | None = None
 
 
 def _series_energy_kwh(series: pd.Series, freq: str) -> float:
@@ -421,4 +427,68 @@ def run_app_simulation(
         execution=execution,
         tariff=tariff_provenance(tariff, calendar_year=int(cfg["start_date"][:4])) if tariff is not None else None,
         smart_charging=smart_charging,
+        projection=projection,
+        resolved_tariff=tariff,
+        instructions=instructions,
     )
+
+
+# The year-row columns a tariff fills; without one, economics prices the
+# energy at the flat rates instead.
+_TARIFF_MONEY_COLUMNS = ("Import_Cost", "Export_Revenue", "Baseline_Import_Cost", "Grid_Charge_Cost", "Fixed_Charge")
+
+
+def revalue_app_simulation(
+    cfg: dict[str, Any],
+    resolved: ResolvedAppConfig,
+    artifacts: SimulationArtifacts,
+    deps: AppRuntimeDependencies,
+) -> tuple[SimulationArtifacts, str]:
+    """Value a finished run at ``cfg``'s prices; return the artifacts and ``"repriced"`` or ``"resimulated"``.
+
+    ``cfg`` must differ from the run's configuration in economics keys only
+    (App.revalue checks). The stored projection is re-priced when the new
+    prices cannot change the dispatch: flat prices, a tariff removed, or a
+    tariff on the same schedule whose smart-charging instructions are
+    unchanged. A tariff added, a different schedule or calendar, or
+    instructions that change re-simulate the run.
+    """
+    run, old_tariff = artifacts.projection, artifacts.resolved_tariff
+    if run is None:
+        raise ValueError("these artifacts carry no projection to re-price")
+    if resolved.tariff is not None and old_tariff is None:
+        return run_app_simulation(cfg, resolved, deps), "resimulated"
+
+    tariff = resolved.tariff.resolve(old_tariff.index, resolved.timezone) if resolved.tariff and old_tariff else None
+    instructions = None
+    yearly = run.yearly_df
+    if tariff is not None and old_tariff is not None:
+        if tariff.schedule_hash != old_tariff.schedule_hash:
+            return run_app_simulation(cfg, resolved, deps), "resimulated"
+        if artifacts.instructions is not None and resolved.smart_charging is not None:
+            instructions = resolve_instructions(resolved.smart_charging, tariff)
+            if instructions is None or instructions.instruction_hash() != artifacts.instructions.instruction_hash():
+                return run_app_simulation(cfg, resolved, deps), "resimulated"
+        if tariff.price_hash != old_tariff.price_hash:
+            yearly = reprice_tariff_year_rows(yearly, cast(pd.DataFrame, run.period_energy), tariff)
+    elif old_tariff is not None:
+        yearly = yearly.drop(columns=[column for column in _TARIFF_MONEY_COLUMNS if column in yearly.columns])
+
+    value = value_projection(cfg, resolved, replace(run, yearly_df=yearly))
+    smart_charging = artifacts.smart_charging
+    if smart_charging is not None and instructions is not None and tariff is not None:
+        assert resolved.smart_charging is not None
+        smart_charging = {**smart_charging, **smart_charging_provenance(resolved.smart_charging, instructions, tariff)}
+    revalued = replace(
+        artifacts,
+        yearly_df=value.yearly_df,
+        cost_projection=value.cost_projection,
+        costs=value.costs,
+        payback_year=find_payback_year(value.cost_projection),
+        lcoe=value.lcoe,
+        total_replacement_cost=value.total_replacement_cost,
+        tariff=tariff_provenance(tariff, calendar_year=int(cfg["start_date"][:4])) if tariff is not None else None,
+        smart_charging=smart_charging,
+        resolved_tariff=tariff,
+    )
+    return revalued, "repriced"

@@ -19,14 +19,12 @@ from breos.economics import (
     DEFAULT_DISCOUNT_RATE,
     DEFAULT_INFLATION_RATE,
     calculate_costs,
-    calculate_lcoe_from_projection,
     cost_analysis_projection,
     cost_params_from_config,
     find_payback_year_interpolated,
     price_year_rows,
     projection_rates_record,
     replacement_event_cost,
-    replacement_total_t0,
 )
 from breos.emissions import EmissionsParams
 from breos.execution import DEFAULT_EXECUTION_BACKEND, require_backend, validate_execution_backend
@@ -668,7 +666,7 @@ def _evaluate_projected_design_metrics(
         "Projected_Breakeven_Year": float(payback_year) if payback_year is not None else np.nan,
         "Projected_Breakeven_Year_Interpolated": payback_interpolated if payback_interpolated is not None else np.nan,
         "Projected_Initial_Cost": float(costs["total_initial_cost"]),
-        "Projected_Replacement_Cost_T0_Prices": replacement_total_t0(yearly_summary_df["Replacement_Cost"]),
+        "Projected_Replacement_Cost_T0_Prices": float(cost_projection.attrs["total_replacement_cost"]),
         "Projected_Total_Replacements": int(total_replacements),
         "Projected_Final_SOH_%": float(current_soh),
         "Projected_PV_Production_Year1_kWh": float(yearly_summary_df["PV_Production_kWh"].iloc[0]),
@@ -677,13 +675,7 @@ def _evaluate_projected_design_metrics(
         "Projected_PV_DC_FinalYear_kWh": float(yearly_summary_df["PV_DC_Generation_kWh"].iloc[-1]),
         "Projected_PV_DC_Curtailed_Year1_kWh": float(yearly_summary_df["Curtailment_DC_kWh"].iloc[0]),
         "Projected_Inverter_Loss_Year1_kWh": float(yearly_summary_df["Inverter_Loss_kWh"].iloc[0]),
-        "Projected_LCOE_per_kWh": float(
-            calculate_lcoe_from_projection(
-                cost_projection,
-                total_investment=float(costs["total_initial_cost"]),
-                discount_rate=float(fin_cfg.get("discount_rate", DEFAULT_DISCOUNT_RATE)),
-            )
-        ),
+        "Projected_LCOE_per_kWh": float(cost_projection.attrs["lcoe_per_kwh"]),
     }
     if "CO2_Avoided_Total_Cumulative_kg" in cost_projection:
         metrics.update(
