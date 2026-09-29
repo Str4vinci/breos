@@ -393,6 +393,7 @@ INPUT_INDEPENDENT_KEYS: frozenset[str] = frozenset(
         "enable_resistance_fade",
         "inverter_efficiency",
         "inverter_loading_ratio",
+        "inverter_ac_rating_kw",
         # Degradation.
         "calendar_model",
         "degradation_engine",

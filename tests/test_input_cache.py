@@ -62,6 +62,7 @@ CHANGES = {
     "enable_resistance_fade": {"enable_resistance_fade": True},
     "inverter_efficiency": {"inverter_efficiency": 0.97},
     "inverter_loading_ratio": {"inverter_loading_ratio": 1.1},
+    "inverter_ac_rating_kw": {"inverter_ac_rating_kw": 3.0},
     "calendar_model": {"calendar_model": "naumann"},
     "degradation_engine": {"degradation_engine": "blast", "blast_model": "nmc_gr_50ah_b1"},
     "blast_model": {"degradation_engine": "blast", "blast_model": "lfp_gr_250ah_prismatic"},

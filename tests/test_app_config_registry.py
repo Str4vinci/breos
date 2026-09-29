@@ -73,6 +73,7 @@ EXPECTED_DEFAULTS = {
     "import_price_escalation": None,
     "om_escalation": None,
     "replacement_cost_learning": 0.0,
+    "inverter_ac_rating_kw": None,
 }
 
 EXPECTED_CLI_FIELDS = [
@@ -121,6 +122,7 @@ EXPECTED_CLI_FIELDS = [
     "dc_coupled",
     "inverter_efficiency",
     "inverter_loading_ratio",
+    "inverter_ac_rating_kw",
     "start_date",
     "weather_source",
     "execution_backend",
