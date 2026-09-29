@@ -1,8 +1,11 @@
 # Plotting
 
-Publication-ready matplotlib figures grouped by what they visualize.
-All functions write a PNG to a results directory and accept optional
-styling overrides.
+Matplotlib figures of BREOS results, grouped by what they visualize. They
+need the `plots` extra (`pip install "breos[plots]"`). Most functions take a
+results directory and write one or more PNG files there;
+`plot_pv_loss_waterfall` returns the figure and saves it only when given an
+`output_path`. Use `set_presentation_mode` to enlarge the fonts of every
+figure.
 
 ## Time series
 
