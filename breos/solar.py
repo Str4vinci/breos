@@ -1155,7 +1155,10 @@ def dc_to_ac(
 
     # A missing DC value converts to 0 W, as calculate_dc_ac_power returns for it.
     dc_values = np.nan_to_num(dc_power.to_numpy(dtype=np.float64), nan=0.0, posinf=np.inf, neginf=-np.inf)
-    ac_power, _, _ = _calculate_dc_ac_power_arrays(dc_values, inv_size, inverter_efficiency)
+    # With no AC rating an infinite DC input gives an infinite AC output, as in
+    # the scalar path; only the unused loss array meets inf - inf.
+    with np.errstate(invalid="ignore"):
+        ac_power, _, _ = _calculate_dc_ac_power_arrays(dc_values, inv_size, inverter_efficiency)
 
     return pd.Series(ac_power, index=dc_power.index, name="ac_power_W")
 
