@@ -65,7 +65,7 @@ def _pack(**overrides):
         "min_soc": 0.1,
         "max_soc": 0.9,
         "standby_loss_wh": 0.0,
-        "thermal_resistance_kw": 0.0,
+        "thermal_resistance_k_per_w": 0.0,
         "enable_replacement": False,
     }
     return BatteryConfig(**{**settings, **overrides})
@@ -271,7 +271,7 @@ def test_discharge_gate_and_reserve_floor():
 
 def test_grid_charge_heats_the_cell():
     pv, load, temperature = _night()
-    config = _pack(thermal_resistance_kw=0.01)
+    config = _pack(thermal_resistance_k_per_w=0.01)
     emin, _ = _window(config)
     results = _simulate(pv, load, temperature, config, _charge_everywhere(6, 0.8), initial_energy_wh=emin)
 

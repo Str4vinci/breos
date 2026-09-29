@@ -45,7 +45,7 @@ from breos.constants import (
     DEFAULT_MAX_SOC,
     DEFAULT_MIN_SOC,
     DEFAULT_STANDBY_LOSS_WH,
-    DEFAULT_THERMAL_RESISTANCE_KW,
+    DEFAULT_THERMAL_RESISTANCE_K_PER_W,
     LAM_EA_J_MOL,
     LAM_EXPONENT_B,
     LAM_K0_FRAC,
@@ -60,10 +60,6 @@ from breos.constants import (
     NAUMANN_LAM_FIELD_CALIBRATED_EXPONENT_B,
     NAUMANN_LAM_FIELD_CALIBRATED_K0_FRAC,
     NAUMANN_LAM_FIELD_CALIBRATED_SOC_EXPONENT_N,
-    NAUMANN_LAM_FIELD_CALIBRATED_V1_EA_J_MOL,
-    NAUMANN_LAM_FIELD_CALIBRATED_V1_EXPONENT_B,
-    NAUMANN_LAM_FIELD_CALIBRATED_V1_K0_FRAC,
-    NAUMANN_LAM_FIELD_CALIBRATED_V1_SOC_EXPONENT_N,
     NAUMANN_LAM_FIELD_CALIBRATED_V2_EA_J_MOL,
     NAUMANN_LAM_FIELD_CALIBRATED_V2_EXPONENT_B,
     NAUMANN_LAM_FIELD_CALIBRATED_V2_K0_FRAC,
@@ -86,8 +82,6 @@ from breos.execution import is_pv_only_dispatch, validate_execution_backend
 from breos.inverter import _calculate_dc_ac_power_arrays
 from breos.utils import _datetime_index_ticks, get_hours_per_step, remap_datetime_index_years
 
-SUPPORTED_BATTERY_TYPES: tuple[str, ...] = ("lfp",)
-
 
 @dataclass
 class BatteryConfig:
@@ -98,7 +92,7 @@ class BatteryConfig:
     - PV → Battery: No inverter loss (stays in DC)
     - Battery → Load: Inverter loss applies (DC to AC)
 
-    AC-coupled dispatch is not implemented; ``dc_coupled=False`` raises.
+    AC-coupled dispatch is not implemented.
 
     Power limits are nameplate powers and therefore scale with the timestep:
     ``max_charge_power_w`` limits DC input to the battery path, while
@@ -145,16 +139,11 @@ class BatteryConfig:
     enable_resistance_fade: bool = False  # Enable Naumann resistance growth model
     initial_resistance_growth: float = 0.0  # Initial relative resistance growth (fraction, 0=new)
     # Thermal model
-    thermal_resistance_kw: float = DEFAULT_THERMAL_RESISTANCE_KW  # K/W for lumped thermal model
-    # DC-coupled system (hybrid inverter) settings
-    dc_coupled: bool = True  # True = hybrid inverter (DC-coupled battery)
+    thermal_resistance_k_per_w: float = DEFAULT_THERMAL_RESISTANCE_K_PER_W  # K/W for lumped thermal model
     inverter_efficiency: float = 0.96  # Inverter efficiency (for DC→AC conversion)
     # Inverter AC rating (W) shared by PV and battery discharge; AC output is
     # clipped to this each step. None disables clipping (legacy behavior).
     inverter_ac_capacity_w: Optional[float] = None
-    # Battery chemistry. The native degradation model is currently LFP-only;
-    # unsupported values fail loudly instead of reusing LFP parameters.
-    battery_type: str = "lfp"
     max_charge_power_w: Optional[float] = None
     max_discharge_power_w: Optional[float] = None
     # Capacity-proportional alternative to the two absolute limits above. When
@@ -174,14 +163,6 @@ class BatteryConfig:
     ac_output_scale: float = 1.0
 
     def __post_init__(self):
-        if not isinstance(self.dc_coupled, bool):
-            raise ValueError("dc_coupled must be a bool")
-        if not self.dc_coupled:
-            raise NotImplementedError(
-                "AC-coupled battery dispatch is not implemented. Only DC-coupled "
-                "(hybrid inverter) systems are supported; set dc_coupled=True."
-            )
-
         def finite(name: str, value: float) -> float:
             if isinstance(value, (bool, np.bool_)):
                 raise ValueError(f"{name} must be a finite number, not a bool")
@@ -203,7 +184,7 @@ class BatteryConfig:
         self.inverter_efficiency = finite("inverter_efficiency", self.inverter_efficiency)
         self.standby_loss_wh = finite("standby_loss_wh", self.standby_loss_wh)
         self.initial_resistance_growth = finite("initial_resistance_growth", self.initial_resistance_growth)
-        self.thermal_resistance_kw = finite("thermal_resistance_kw", self.thermal_resistance_kw)
+        self.thermal_resistance_k_per_w = finite("thermal_resistance_k_per_w", self.thermal_resistance_k_per_w)
 
         if self.nominal_energy_wh < 0.0:
             raise ValueError("nominal_energy_wh must be non-negative")
@@ -217,7 +198,7 @@ class BatteryConfig:
             value = getattr(self, name)
             if not 0.0 < value <= 1.0:
                 raise ValueError(f"{name} must be greater than 0 and at most 1")
-        for name in ("standby_loss_wh", "initial_resistance_growth", "thermal_resistance_kw"):
+        for name in ("standby_loss_wh", "initial_resistance_growth", "thermal_resistance_k_per_w"):
             if getattr(self, name) < 0.0:
                 raise ValueError(f"{name} must be non-negative")
 
@@ -251,7 +232,6 @@ class BatteryConfig:
                 "nameplate and more AC than the DC entering the inverter. Scale the DC series "
                 "instead to correct an under-predicting model"
             )
-        self.battery_type = _normalise_battery_type(self.battery_type)
 
     @property
     def stored_power_limit_w(self) -> Optional[float]:
@@ -643,7 +623,6 @@ def _build_degradation_lifecycle(
     initial_calendar_seconds: float,
     default_day_start_soc: float,
     default_day_start_t_cell: float,
-    debug: bool,
 ) -> Tuple[DegradationLifecycle, float, float]:
     """Construct the degradation backend and its first day-boundary state.
 
@@ -658,13 +637,10 @@ def _build_degradation_lifecycle(
             initial_soh_fraction=battery_soh_decimal,
             initial_fec=float(state_payload.get("fec_cum", initial_fec)),
             initial_calendar_seconds=float(state_payload.get("cumulative_calendar_seconds", initial_calendar_seconds)),
-            nominal_energy_wh=battery_config.nominal_energy_wh,
-            battery_type=battery_config.battery_type,
             **_native_degradation_kwargs(battery_config.calendar_model),
             cycle_step=_update_battery_soh_from_cycles,
             calendar_step=update_battery_soh_calendar,
             initial_rainflow_state=state_payload.get("native_rainflow_state"),
-            debug=debug,
         )
         return (
             lifecycle,
@@ -917,7 +893,6 @@ def _apply_resistance_fade(
     mean_t_cell: float,
     mean_soc_absolute: float,
     dt_days: float,
-    debug: bool,
 ) -> float:
     """Grow internal resistance for one period and return the effective RTE.
 
@@ -926,19 +901,16 @@ def _apply_resistance_fade(
     lifecycle step has already folded them into the cumulative FEC, so they
     are subtracted back out here.
     """
-    day_fec = sum(max(0.0, min(1.0, c["doc"])) * c.get("count", 1.0) for c in cycles)
+    day_fec = sum(max(0.0, min(1.0, c["doc"])) * c["count"] for c in cycles)
     fec_before_day = aging.fec_cum - day_fec
 
-    aging.resistance_growth, _ = update_battery_resistance_cyclewise(
-        aging.resistance_growth, cycles, fec_before_day, debug=debug
-    )
+    aging.resistance_growth, _ = update_battery_resistance_cyclewise(aging.resistance_growth, cycles, fec_before_day)
     aging.resistance_growth, _ = update_battery_resistance_calendar(
         aging.resistance_growth,
         T_cell_C=mean_t_cell,
         cumulative_cal_seconds=aging.cumulative_cal_seconds,
         dt_days=dt_days,
         mean_soc_absolute=mean_soc_absolute,
-        debug=debug,
     )
     # Feed the resistance penalty back into the energy loop using the same
     # mapping as the initial dispatch state.
@@ -1083,7 +1055,6 @@ def _apply_daily_degradation(
     pv_origin_energy_wh: float,
     grid_origin_energy_wh: float,
     battery_energy_beginning: float,
-    debug: bool,
 ) -> Tuple[float, float, float]:
     """Close out one degradation period, returning ``(energy, pv_origin, grid_origin)``.
 
@@ -1139,7 +1110,6 @@ def _apply_daily_degradation(
             mean_t_cell=mean_t_cell,
             mean_soc_absolute=mean_soc_abs,
             dt_days=dt_days,
-            debug=debug,
         )
 
     if battery_config.enable_replacement and aging.soh_fraction <= battery_config.eol_percentage:
@@ -1167,8 +1137,6 @@ def _apply_daily_degradation(
                 battery_energy_beginning=battery_energy_beginning,
             )
         )
-        if debug:
-            print(f"\n*** BATTERY REPLACED at {step_time} ***")
     else:
         cycle_degradation_for_row = degradation_step.cycle_degradation
 
@@ -1289,8 +1257,6 @@ class _CoreRun:
     lifecycle: DegradationLifecycle
     degradation_tracking: List[Dict[str, Any]]
     hours_per_step: float
-    has_battery: bool
-    final_soh_percent: float
 
 
 @dataclass(frozen=True, slots=True)
@@ -1312,7 +1278,6 @@ class SimulationSummary:
 
     n_steps: int
     hours_per_step: float
-    has_battery: bool
     column_sums: Dict[str, float]
     total_pv_wh: float
     summary_row: Dict[str, float]
@@ -1392,7 +1357,7 @@ def _build_simulation_summary(
     summary_row, total_pv = _build_summary_row(
         buffers,
         core.hours_per_step,
-        final_soh_percent=core.final_soh_percent,
+        final_soh_percent=aging.soh_percent,
         n_replacements=aging.n_replacements,
         replaced_capacity_wh=aging.replaced_capacity_wh,
     )
@@ -1404,11 +1369,10 @@ def _build_simulation_summary(
     return SimulationSummary(
         n_steps=len(buffers.columns["Battery_Energy"]),
         hours_per_step=core.hours_per_step,
-        has_battery=core.has_battery,
         column_sums=column_sums,
         total_pv_wh=total_pv,
         summary_row=summary_row,
-        final_soh_percent=core.final_soh_percent,
+        final_soh_percent=aging.soh_percent,
         n_replacements=aging.n_replacements,
         replaced_capacity_wh=aging.replaced_capacity_wh,
         # Read from the recorded end-of-step state rather than from the loop
@@ -1458,7 +1422,6 @@ def _simulate_core(
     end_time: Optional[pd.Timestamp] = None,
     freq: str = "h",
     temperature_series: Optional[pd.Series] = None,
-    results_directory: Optional[str] = None,
     initial_fec: float = 0.0,
     initial_calendar_seconds: float = 0.0,
     initial_resistance_growth: Optional[float] = None,
@@ -1468,7 +1431,6 @@ def _simulate_core(
     blast_model: Optional[str] = None,
     initial_degradation_state: Optional[Dict[str, Any]] = None,
     finalize_degradation: bool = True,
-    debug: bool = False,
     initial_energy_wh: Optional[float] = None,
     initial_pv_origin_energy_wh: Optional[float] = None,
     initial_grid_origin_energy_wh: Optional[float] = None,
@@ -1501,7 +1463,6 @@ def _simulate_core(
         end_time: Simulation end time (defaults to last index of pv_dc)
         freq: Time frequency ('h' for hourly, '15min' for 15-minute)
         temperature_series: Battery cell temperature (C), defaults to 25C
-        results_directory: Directory for saving results (optional)
         degradation_engine: Degradation backend. ``"native"`` preserves the
             Naumann/Lam model; ``"blast"`` uses the BLAST daily endpoint adapter.
         blast_model: BLAST model key when ``degradation_engine="blast"``.
@@ -1510,7 +1471,6 @@ def _simulate_core(
         finalize_degradation: Count any remaining rainflow half cycles at the
             end of this span (the default). Set False only when returning state
             that a later span resumes from; otherwise those cycles are lost.
-        debug: Enable debug output
         initial_energy_wh: Optional carried stored-energy state (Wh). Defaults
             to the configured max-SOC state for first-run compatibility.
         initial_pv_origin_energy_wh: Optional PV-origin share of the carried
@@ -1652,7 +1612,6 @@ def _simulate_core(
         initial_calendar_seconds=initial_calendar_seconds,
         default_day_start_soc=degradation_day_start_soc,
         default_day_start_t_cell=degradation_day_start_t_cell,
-        debug=debug,
     )
 
     battery_soh_decimal = degradation_lifecycle.soh()
@@ -1736,8 +1695,6 @@ def _simulate_core(
             lifecycle=degradation_lifecycle,
             degradation_tracking=degradation_tracking,
             hours_per_step=hours_per_step,
-            has_battery=False,
-            final_soh_percent=aging.soh_percent,
         )
 
     # Dispatch advances one degradation day at a time. Health state is fixed
@@ -1800,7 +1757,6 @@ def _simulate_core(
             pv_origin_energy_wh=Battery_PV_Origin_Energy_Wh,
             grid_origin_energy_wh=Battery_Grid_Origin_Energy_Wh,
             battery_energy_beginning=battery_energy_beginning,
-            debug=debug,
         )
         # Refresh the loop's hot copies of the daily-boundary state.
         battery_soh_decimal = aging.soh_fraction
@@ -1817,8 +1773,6 @@ def _simulate_core(
         lifecycle=degradation_lifecycle,
         degradation_tracking=degradation_tracking,
         hours_per_step=hours_per_step,
-        has_battery=has_battery,
-        final_soh_percent=aging.soh_percent,
     )
 
 
@@ -1830,7 +1784,7 @@ def simulate_energy_balance(
     end_time: Optional[pd.Timestamp] = None,
     freq: str = "h",
     temperature_series: Optional[pd.Series] = None,
-    results_directory: Optional[str] = None,
+    *,
     initial_fec: float = 0.0,
     initial_calendar_seconds: float = 0.0,
     initial_resistance_growth: Optional[float] = None,
@@ -1840,7 +1794,6 @@ def simulate_energy_balance(
     blast_model: Optional[str] = None,
     initial_degradation_state: Optional[Dict[str, Any]] = None,
     return_degradation_state: bool = False,
-    debug: bool = False,
     initial_energy_wh: Optional[float] = None,
     initial_pv_origin_energy_wh: Optional[float] = None,
     initial_grid_origin_energy_wh: Optional[float] = None,
@@ -1882,7 +1835,6 @@ def simulate_energy_balance(
         end_time=end_time,
         freq=freq,
         temperature_series=temperature_series,
-        results_directory=results_directory,
         initial_fec=initial_fec,
         initial_calendar_seconds=initial_calendar_seconds,
         initial_resistance_growth=initial_resistance_growth,
@@ -1892,7 +1844,6 @@ def simulate_energy_balance(
         blast_model=blast_model,
         initial_degradation_state=initial_degradation_state,
         finalize_degradation=_resolve_finalize_degradation(finalize_degradation, return_degradation_state),
-        debug=debug,
         initial_energy_wh=initial_energy_wh,
         initial_pv_origin_energy_wh=initial_pv_origin_energy_wh,
         initial_grid_origin_energy_wh=initial_grid_origin_energy_wh,
@@ -1904,7 +1855,7 @@ def simulate_energy_balance(
     summary_row, total_pv = _build_summary_row(
         core.buffers,
         core.hours_per_step,
-        final_soh_percent=core.final_soh_percent,
+        final_soh_percent=core.aging.soh_percent,
         n_replacements=core.aging.n_replacements,
         replaced_capacity_wh=core.aging.replaced_capacity_wh,
     )
@@ -1926,7 +1877,7 @@ def simulate_energy_balance_summary(
     end_time: Optional[pd.Timestamp] = None,
     freq: Optional[str] = None,
     temperature_series: Optional[pd.Series] = None,
-    results_directory: Optional[str] = None,
+    *,
     initial_fec: float = 0.0,
     initial_calendar_seconds: float = 0.0,
     initial_resistance_growth: Optional[float] = None,
@@ -1936,7 +1887,6 @@ def simulate_energy_balance_summary(
     blast_model: Optional[str] = None,
     initial_degradation_state: Optional[Dict[str, Any]] = None,
     return_degradation_state: bool = False,
-    debug: bool = False,
     initial_energy_wh: Optional[float] = None,
     initial_pv_origin_energy_wh: Optional[float] = None,
     initial_grid_origin_energy_wh: Optional[float] = None,
@@ -1982,7 +1932,6 @@ def simulate_energy_balance_summary(
         end_time=end_time,
         freq=freq,
         temperature_series=temperature_series,
-        results_directory=results_directory,
         initial_fec=initial_fec,
         initial_calendar_seconds=initial_calendar_seconds,
         initial_resistance_growth=initial_resistance_growth,
@@ -1992,7 +1941,6 @@ def simulate_energy_balance_summary(
         blast_model=blast_model,
         initial_degradation_state=initial_degradation_state,
         finalize_degradation=_resolve_finalize_degradation(finalize_degradation, return_degradation_state),
-        debug=debug,
         initial_energy_wh=initial_energy_wh,
         initial_pv_origin_energy_wh=initial_pv_origin_energy_wh,
         initial_grid_origin_energy_wh=initial_grid_origin_energy_wh,
@@ -2063,20 +2011,12 @@ def _get_degradation_params(model: str) -> Tuple[float, float, float, float]:
         return LAM_K0_FRAC, LAM_EA_J_MOL, LAM_EXPONENT_B, LAM_SOC_EXPONENT_N
 
     # ── Naumann-Lam: field-calibrated v1 (default) ───────────────────────
-    elif model_lower == "naumann_lam_field_calibrated":
+    elif model_lower in ("naumann_lam_field_calibrated", "naumann_lam_field_calibrated_v1"):
         return (
             NAUMANN_LAM_FIELD_CALIBRATED_K0_FRAC,
             NAUMANN_LAM_FIELD_CALIBRATED_EA_J_MOL,
             NAUMANN_LAM_FIELD_CALIBRATED_EXPONENT_B,
             NAUMANN_LAM_FIELD_CALIBRATED_SOC_EXPONENT_N,
-        )
-
-    elif model_lower == "naumann_lam_field_calibrated_v1":
-        return (
-            NAUMANN_LAM_FIELD_CALIBRATED_V1_K0_FRAC,
-            NAUMANN_LAM_FIELD_CALIBRATED_V1_EA_J_MOL,
-            NAUMANN_LAM_FIELD_CALIBRATED_V1_EXPONENT_B,
-            NAUMANN_LAM_FIELD_CALIBRATED_V1_SOC_EXPONENT_N,
         )
 
     elif model_lower == "naumann_lam_field_calibrated_v2":
@@ -2094,61 +2034,6 @@ def _get_degradation_params(model: str) -> Tuple[float, float, float, float]:
             f"'naumann_lam_field_calibrated_v2', "
             f"'naumann_lam', or 'naumann'."
         )
-
-
-def detect_half_cycles_from_soc_series(
-    soc_abs_series: pd.Series, time_index: pd.DatetimeIndex, tiny_hysteresis: float = 1e-4
-) -> Tuple[List[Dict], pd.Series]:
-    """
-    Detect charge/discharge half-cycles using local extrema logic.
-
-    Args:
-        soc_abs_series: Absolute SOC series
-        time_index: Datetime index
-        tiny_hysteresis: Minimum change to count as extremum
-
-    Returns:
-        Tuple of (half_cycles list, original series)
-    """
-    soc = soc_abs_series.values
-    times = time_index
-    n = len(soc)
-
-    if n < 2:
-        return [], soc_abs_series
-
-    extrema_idx = [0]
-    for i in range(1, n - 1):
-        is_peak = soc[i] >= soc[i - 1] + tiny_hysteresis and soc[i] > soc[i + 1] + tiny_hysteresis
-        is_trough = soc[i] <= soc[i - 1] - tiny_hysteresis and soc[i] < soc[i + 1] - tiny_hysteresis
-        if is_peak or is_trough:
-            extrema_idx.append(i)
-    extrema_idx.append(n - 1)
-
-    half_cycles = []
-    for i in range(1, len(extrema_idx)):
-        sidx = extrema_idx[i - 1]
-        eidx = extrema_idx[i]
-        if eidx == sidx:
-            continue
-
-        doc = abs(soc[eidx] - soc[sidx])
-        mean_soc = float(np.mean(soc[sidx : eidx + 1]))
-        duration_h = (times[eidx] - times[sidx]).total_seconds() / 3600.0
-        mean_c_rate = 0.0 if duration_h <= 0 else doc / duration_h
-
-        half_cycles.append(
-            {
-                "start_idx": sidx,
-                "end_idx": eidx,
-                "doc": doc,
-                "mean_soc": mean_soc,
-                "mean_c_rate": mean_c_rate,
-                "duration_h": duration_h,
-            }
-        )
-
-    return half_cycles, soc_abs_series
 
 
 def _detect_cycles_rainflow_arrays(
@@ -2194,52 +2079,13 @@ def _detect_cycles_rainflow_arrays(
     return cycles
 
 
-def detect_cycles_rainflow(
-    soc_abs_series: pd.Series, time_index: pd.DatetimeIndex, min_doc_fraction: float = 0.01
-) -> List[Dict]:
-    """
-    Detect charge/discharge cycles using rainflow counting (ASTM E1049).
-
-    Rainflow counting correctly identifies nested cycles common in residential
-    PV+storage profiles, which simple extrema-based methods miss.
-
-    Args:
-        soc_abs_series: Absolute SOC series (0-1 range)
-        time_index: Datetime index for the series
-        min_doc_fraction: Minimum depth-of-cycle to include (fraction, 0-1)
-
-    Returns:
-        List of cycle dicts with keys: 'doc', 'mean_soc', 'count',
-        'mean_c_rate', 'start_idx', 'end_idx'
-    """
-    time_ticks, ticks_per_second = _datetime_index_ticks(time_index)
-    return _detect_cycles_rainflow_arrays(
-        soc_abs_series.to_numpy(),
-        time_ticks,
-        ticks_per_second,
-        min_doc_fraction=min_doc_fraction,
-    )
-
-
 # =========================================================================
 # Resistance fade functions (Naumann 2020)
 # =========================================================================
 
 
-def k_c_rate_R(C_rate: float) -> float:
-    """Calculate C-rate factor for resistance growth (Naumann Eq. 8 variant)."""
-    kC = A_R * C_rate + B_R
-    return max(0.0, kC)
-
-
-def k_doc_R(DOC_frac: float) -> float:
-    """Calculate DOC factor for resistance growth (Naumann Eq. 10 variant)."""
-    kDOC = C_DOC_R * ((DOC_frac - 0.6) ** 3) + D_DOC_R
-    return max(0.0, kDOC)
-
-
 def update_battery_resistance_cyclewise(
-    resistance_growth: float, cycles: List[Dict], fec_cum: float, min_DoD_fraction: float = 0.01, debug: bool = False
+    resistance_growth: float, cycles: List[Dict], fec_cum: float, min_DoD_fraction: float = 0.01
 ) -> Tuple[float, float]:
     """
     Calculate cycle-induced resistance growth using Naumann's model.
@@ -2249,10 +2095,11 @@ def update_battery_resistance_cyclewise(
 
     Args:
         resistance_growth: Current cumulative resistance growth (fraction, e.g. 0.05 = 5%)
-        cycles: List of cycle dicts from detect_cycles_rainflow or detect_half_cycles
+        cycles: Rainflow cycle dicts, each with ``doc`` (depth, fraction),
+            ``count`` (1.0 for a full cycle, 0.5 for a half) and
+            ``mean_c_rate``
         fec_cum: Cumulative FEC at start of this period
         min_DoD_fraction: Minimum DOC to count
-        debug: Enable debug output
 
     Returns:
         Tuple of (new_resistance_growth, delta_resistance_growth)
@@ -2265,12 +2112,11 @@ def update_battery_resistance_cyclewise(
         if DOC < min_DoD_fraction:
             continue
 
-        count = cyc.get("count", 1.0)
-        dFEC = DOC * count
+        dFEC = DOC * cyc["count"]
         mean_c_rate = cyc["mean_c_rate"]
 
-        kC = k_c_rate_R(mean_c_rate)
-        kDOC = k_doc_R(DOC)
+        kC = max(0.0, A_R * mean_c_rate + B_R)
+        kDOC = max(0.0, C_DOC_R * ((DOC - 0.6) ** 3) + D_DOC_R)
 
         fec_new = running_fec + dFEC
 
@@ -2280,9 +2126,6 @@ def update_battery_resistance_cyclewise(
 
         delta_R += dR_fraction
         running_fec = fec_new
-
-        if debug:
-            print(f"[R-cycle] DOC={DOC:.4f}, C-rate={mean_c_rate:.4f}, dR={dR_fraction * 100:.6f}%")
 
     new_growth = resistance_growth + delta_R
     return new_growth, delta_R
@@ -2294,7 +2137,6 @@ def update_battery_resistance_calendar(
     cumulative_cal_seconds: float,
     dt_days: float = 1.0,
     mean_soc_absolute: float = 0.5,
-    debug: bool = False,
 ) -> Tuple[float, float]:
     """
     Calculate calendar-induced resistance growth using Naumann's model.
@@ -2308,7 +2150,6 @@ def update_battery_resistance_calendar(
         cumulative_cal_seconds: Total elapsed calendar seconds
         dt_days: Time step in days
         mean_soc_absolute: Mean absolute SOC during period
-        debug: Enable debug output
 
     Returns:
         Tuple of (new_resistance_growth, delta_resistance_growth)
@@ -2333,9 +2174,6 @@ def update_battery_resistance_calendar(
     soc_stress = max(0.0, mean_soc_absolute) ** NAUMANN_SOC_EXPONENT_N_R
 
     dR_fraction = k0_frac * arr_factor * delta_time * soc_stress
-
-    if debug:
-        print(f"[R-calendar] T={T_cell_C:.1f}°C, dR={dR_fraction * 100:.6f}%")
 
     return resistance_growth + dR_fraction, dR_fraction
 
@@ -2369,41 +2207,12 @@ def resistance_to_efficiency(
     return base_charge_eff / derate, base_discharge_eff / derate
 
 
-def _normalise_battery_type(battery_type: str) -> str:
-    """Normalize and validate the native battery chemistry selector."""
-    normalised = str(battery_type).strip().lower()
-    if normalised not in SUPPORTED_BATTERY_TYPES:
-        available = ", ".join(SUPPORTED_BATTERY_TYPES)
-        raise ValueError(
-            f"Unsupported battery_type {battery_type!r}. "
-            f"The native BREOS degradation model currently supports only: {available}."
-        )
-    return normalised
-
-
-def _get_cycle_params(battery_type: str = "lfp") -> Tuple[float, float, float, float, float]:
-    """Get cycle aging (Naumann-style) parameters for a battery chemistry.
-
-    Returns:
-        Tuple of (a_q, b_q, c_doc_q, d_doc_q, z_q)
-    """
-    _normalise_battery_type(battery_type)
-    return (A_Q, B_Q, C_DOC_Q, D_DOC_Q, Z_Q)
-
-
 def _update_battery_soh_from_cycles(
     soh_start_fraction: float,
     cycles: List[Dict],
-    nominal_energy_Wh: float,
     fec_cum: float = 0.0,
     min_DoD_fraction: float = 0.01,
-    battery_type: str = "lfp",
-    debug: bool = False,
 ) -> Tuple[float, float, float]:
-    # Get technology-specific cycle parameters
-    del nominal_energy_Wh
-    a_q, b_q, c_doc_q, d_doc_q, z_q = _get_cycle_params(battery_type)
-
     qloss_cycle_fraction = 0.0
 
     for cyc in cycles:
@@ -2412,31 +2221,22 @@ def _update_battery_soh_from_cycles(
             continue
 
         mean_c_rate = cyc["mean_c_rate"]
-        # For rainflow cycles: count is 1.0 (full) or 0.5 (half)
-        # For extrema-based: each entry is a half-cycle (count=1 implicitly)
-        count = cyc.get("count", 1.0)
+        # Energy throughput for this cycle in FEC; a rainflow count is 1.0
+        # for a full cycle and 0.5 for a half
+        dFEC = DOC * cyc["count"]
 
-        # Energy throughput for this cycle: DOC * count * nominal
-        dFEC = DOC * count
-
-        # Naumann-style k-factors with technology-specific coefficients
-        kC = max(0.0, a_q * mean_c_rate + b_q)
-        kDOC = max(0.0, c_doc_q * ((DOC - 0.6) ** 3) + d_doc_q)
+        # Naumann-style k-factors with the LFP cycle aging coefficients
+        kC = max(0.0, A_Q * mean_c_rate + B_Q)
+        kDOC = max(0.0, C_DOC_Q * ((DOC - 0.6) ** 3) + D_DOC_Q)
 
         fec_new = fec_cum + dFEC
 
         # Differential form using cumulative FEC (Naumann Eq. 5-6)
-        dq_percent = kC * kDOC * (fec_new**z_q - fec_cum**z_q)
+        dq_percent = kC * kDOC * (fec_new**Z_Q - fec_cum**Z_Q)
         dq_fraction = dq_percent / 100.0
 
         qloss_cycle_fraction += dq_fraction
         fec_cum = fec_new
-
-        if debug:
-            print(
-                f"[cycle] DOC={DOC:.4f}, C-rate={mean_c_rate:.4f}, count={count}, "
-                f"dFEC={dFEC:.6e}, dq={dq_fraction * 100:.6f}%"
-            )
 
     soh_after = max(0.0, soh_start_fraction - qloss_cycle_fraction)
     return soh_after, qloss_cycle_fraction, fec_cum
@@ -2447,11 +2247,8 @@ def _update_battery_soh_cyclewise_arrays(
     soc_values: np.ndarray,
     time_ticks: np.ndarray,
     ticks_per_second: float,
-    nominal_energy_Wh: float,
     fec_cum: float = 0.0,
     min_DoD_fraction: float = 0.01,
-    battery_type: str = "lfp",
-    debug: bool = False,
 ) -> Tuple[float, float, float]:
     """Run native rainflow degradation without constructing pandas objects."""
     if len(soc_values) < 2:
@@ -2465,39 +2262,30 @@ def _update_battery_soh_cyclewise_arrays(
     return _update_battery_soh_from_cycles(
         soh_start_fraction,
         cycles,
-        nominal_energy_Wh,
         fec_cum=fec_cum,
         min_DoD_fraction=min_DoD_fraction,
-        battery_type=battery_type,
-        debug=debug,
     )
 
 
 def update_battery_soh_cyclewise(
     soh_start_fraction: float,
     soc_series_absolute: pd.Series,
-    nominal_energy_Wh: float,
+    *,
     fec_cum: float = 0.0,
     min_DoD_fraction: float = 0.01,
-    use_rainflow: bool = True,
-    battery_type: str = "lfp",
-    debug: bool = False,
 ) -> Tuple[float, float, float]:
     """
     Calculate cycle-induced degradation using Naumann's semi-empirical model.
 
-    Implements Equation 5-6 from Naumann 2020 paper, with technology-specific
-    cycle aging coefficients selected by battery_type.
+    Implements Equation 5-6 from Naumann 2020 paper with the LFP cycle aging
+    coefficients. Cycles are counted with rainflow (ASTM E1049) over the
+    whole series, and the series' own ends close them.
 
     Args:
         soh_start_fraction: Starting SOH as fraction (0-1)
         soc_series_absolute: SOC time series
-        nominal_energy_Wh: Nominal battery capacity
         fec_cum: Cumulative full equivalent cycles
         min_DoD_fraction: Minimum DoD to count as cycle
-        use_rainflow: Use rainflow counting (True) or extrema-based detection (False)
-        battery_type: Battery chemistry ('lfp')
-        debug: Enable debug output
 
     Returns:
         Tuple of (soh_after, qloss_cycle_fraction, fec_cum)
@@ -2505,30 +2293,14 @@ def update_battery_soh_cyclewise(
     if len(soc_series_absolute) < 2:
         return soh_start_fraction, 0.0, fec_cum
 
-    time_index = soc_series_absolute.index
-    if use_rainflow:
-        time_ticks, ticks_per_second = _datetime_index_ticks(time_index)
-        return _update_battery_soh_cyclewise_arrays(
-            soh_start_fraction,
-            soc_series_absolute.to_numpy(),
-            time_ticks,
-            ticks_per_second,
-            nominal_energy_Wh,
-            fec_cum=fec_cum,
-            min_DoD_fraction=min_DoD_fraction,
-            battery_type=battery_type,
-            debug=debug,
-        )
-
-    cycles, _ = detect_half_cycles_from_soc_series(soc_series_absolute, time_index)
-    return _update_battery_soh_from_cycles(
+    time_ticks, ticks_per_second = _datetime_index_ticks(soc_series_absolute.index)
+    return _update_battery_soh_cyclewise_arrays(
         soh_start_fraction,
-        cycles,
-        nominal_energy_Wh,
+        soc_series_absolute.to_numpy(),
+        time_ticks,
+        ticks_per_second,
         fec_cum=fec_cum,
         min_DoD_fraction=min_DoD_fraction,
-        battery_type=battery_type,
-        debug=debug,
     )
 
 
@@ -2542,7 +2314,6 @@ def update_battery_soh_calendar(
     cumulative_cal_seconds: float = 0.0,
     dt_days: float = 1.0,
     mean_soc_absolute: float = 0.5,
-    debug: bool = False,
 ) -> Tuple[float, float, float]:
     """
     Generalized calendar aging using power law physics (Naumann / Lam 2025).
@@ -2559,7 +2330,6 @@ def update_battery_soh_calendar(
         cumulative_cal_seconds: Total elapsed seconds
         dt_days: Time step in days
         mean_soc_absolute: Mean SOC during period
-        debug: Enable debug output
 
     Returns:
         Tuple of (soh_after, dsoh_fraction, new_cumulative_seconds)
@@ -2587,10 +2357,5 @@ def update_battery_soh_calendar(
     d_soh_fraction = k0_frac * arr_factor * delta_time_factor * soc_stress
 
     soh_after = max(0.0, soh_start_fraction - d_soh_fraction)
-
-    if debug:
-        print(
-            f"[calendar] T={T_cell_C}°C, b={cal_b:.2f}, Δt^b={delta_time_factor:.2f}, d_soh={d_soh_fraction * 100:.6f}%"
-        )
 
     return soh_after, d_soh_fraction, t_new

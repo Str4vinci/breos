@@ -25,7 +25,7 @@ from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple
 
 import numpy as np
 
-from breos.constants import DEFAULT_THERMAL_RESISTANCE_KW, LFP_CAP_DERATE_PER_C_COLD, LFP_CAP_DERATE_PER_C_MODERATE
+from breos.constants import DEFAULT_THERMAL_RESISTANCE_K_PER_W, LFP_CAP_DERATE_PER_C_COLD, LFP_CAP_DERATE_PER_C_MODERATE
 from breos.dispatch_instructions import DispatchInstructions
 
 if TYPE_CHECKING:
@@ -324,7 +324,7 @@ def compute_cell_temperature(
     discharge_power_w: float,
     charge_eff: float,
     discharge_eff: float,
-    thermal_resistance_kw: float = DEFAULT_THERMAL_RESISTANCE_KW,
+    thermal_resistance_k_per_w: float = DEFAULT_THERMAL_RESISTANCE_K_PER_W,
 ) -> float:
     """
     Compute battery cell temperature using a quasi-steady-state lumped thermal model.
@@ -342,7 +342,7 @@ def compute_cell_temperature(
         discharge_power_w: Power drawn from the battery this step (W, DC side)
         charge_eff: Charge efficiency (0-1)
         discharge_eff: Discharge efficiency (0-1)
-        thermal_resistance_kw: Thermal resistance in K/W
+        thermal_resistance_k_per_w: Thermal resistance in K/W
 
     Returns:
         Cell temperature (C)
@@ -353,7 +353,7 @@ def compute_cell_temperature(
     P_loss_discharge = discharge_power_w * (1.0 - discharge_eff)
 
     P_loss_total = P_loss_charge + P_loss_discharge
-    T_cell = T_ambient_C + thermal_resistance_kw * P_loss_total
+    T_cell = T_ambient_C + thermal_resistance_k_per_w * P_loss_total
     return T_cell
 
 
@@ -716,7 +716,7 @@ def _dispatch_day(
     cap_discharge_ac_wh: float,
     inv_cap_ac_wh: float,
     cap_stored_wh: float,
-    thermal_resistance_kw: float,
+    thermal_resistance_k_per_w: float,
     hours_per_step: float,
     ac_output_scale: float,
     pow_two: float,
@@ -858,7 +858,7 @@ def _dispatch_day(
         battery_energy_delta = battery_energy - battery_energy_beginning
 
         # Compute cell temperature via lumped thermal model
-        if thermal_resistance_kw > 0:
+        if thermal_resistance_k_per_w > 0:
             # The ledger is in Wh; convert to W for the thermal calculation
             charge_power_w = battery_charge_input / hours_per_step if hours_per_step > 0 else 0.0
             discharge_power_w = battery_discharge_dc / hours_per_step if hours_per_step > 0 else 0.0
@@ -868,7 +868,7 @@ def _dispatch_day(
                 discharge_power_w,
                 eff_charge,
                 eff_discharge,
-                thermal_resistance_kw,
+                thermal_resistance_k_per_w,
             )
 
         soc_normalized = (battery_energy - emin) / (emax - emin) if (emax - emin) > 0 else 0.0
@@ -987,7 +987,7 @@ def _day_arguments(
         float(cap_discharge_wh),
         float(cap_wh),
         float(cap_stored_wh),
-        float(battery_config.thermal_resistance_kw),
+        float(battery_config.thermal_resistance_k_per_w),
         float(hours_per_step),
         float(battery_config.ac_output_scale),
         2.0,

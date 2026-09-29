@@ -730,6 +730,13 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   in the degradation plots, which no degradation frame carries, and a
   `Savings_Annual` column in `plot_breakeven`, which no cost projection has.
   Every figure the plotting tests write is byte-identical to before.
+- `BatteryConfig.thermal_resistance_kw` is now `thermal_resistance_k_per_w`,
+  and `breos.constants.DEFAULT_THERMAL_RESISTANCE_KW` is
+  `DEFAULT_THERMAL_RESISTANCE_K_PER_W`, with no alias. The value is the
+  pack-to-ambient thermal resistance in K/W; the old name read as kilowatts.
+  `compute_cell_temperature` takes the same new keyword. No App, optimizer or
+  CLI key sets it. The old keyword raises `TypeError`. Results are unchanged
+  bit for bit.
 
 ### Fixed
 - `calendar_model` is stored as it is validated: trimmed, lower-case, with
@@ -1586,6 +1593,53 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 - **The `validation` and `location-tools` extras.** `validation` installed
   nothing. `location-tools` only served `tools/add_location.py`, which is not
   in the wheel; install `geopy` and `timezonefinder` to run it.
+- **Unused energy-balance arguments**
+  ([#186](https://github.com/Str4vinci/breos/issues/186)), with no
+  deprecation period. `simulate_energy_balance` and
+  `simulate_energy_balance_summary` drop `results_directory`, which they never
+  read, and `debug`, which only printed; `update_battery_soh_cyclewise`,
+  `update_battery_soh_calendar`, `update_battery_resistance_cyclewise` and
+  `update_battery_resistance_calendar` drop `debug` too.
+  `update_battery_soh_cyclewise` also drops `nominal_energy_Wh`, which it
+  discarded on entry. Every argument after `temperature_series`, and after
+  the SOC series of `update_battery_soh_cyclewise`, is now keyword-only, so
+  an old positional call raises `TypeError` instead of passing a capacity as
+  `fec_cum` or a directory as `initial_fec`.
+- **The extrema cycle counter**
+  ([#164](https://github.com/Str4vinci/breos/issues/164)), with no
+  deprecation period: `update_battery_soh_cyclewise(use_rainflow=False)`,
+  and `detect_half_cycles_from_soc_series` and `detect_cycles_rainflow` from
+  `breos.battery` and the top-level namespace. Nothing passed `False`, and it
+  counted a different quantity, not a second estimate: 1.2 FEC for an SOC
+  excursion that rainflow counts as 0.6. The energy balance counts cycles
+  with the incremental rainflow counter in `breos.degradation.protocol`, and
+  `update_battery_soh_cyclewise` always uses rainflow. Cycle dicts passed to
+  `update_battery_resistance_cyclewise` must carry `count`, as every rainflow
+  cycle does; a missing one used to be read as a full cycle.
+- `breos.battery.k_c_rate_R` and `k_doc_R`, also in the top-level namespace
+  ([#186](https://github.com/Str4vinci/breos/issues/186)). They were the
+  resistance-growth factors of `update_battery_resistance_cyclewise`, which
+  now computes them inline, as the capacity model does. The four
+  `NAUMANN_LAM_FIELD_CALIBRATED_V1_*` constants repeated the
+  `NAUMANN_LAM_FIELD_CALIBRATED_*` ones; the `"naumann_lam_field_calibrated_v1"`
+  calendar model stays, with the same parameters.
+- **Selectors with one legal value**
+  ([#186](https://github.com/Str4vinci/breos/issues/186)), with no
+  deprecation period. `BatteryConfig.battery_type` and
+  `breos.battery.SUPPORTED_BATTERY_TYPES` accepted only `"lfp"`, the
+  chemistry the native model always used; the lifecycle adapter drops its
+  `battery_type` and `nominal_energy_wh` arguments with them. `App` no longer
+  has a targeted error for `battery_type` and rejects it as an unknown key,
+  and the config reference no longer lists it. `BatteryConfig.dc_coupled`
+  and the `breos run --dc-coupled` flag could only say `True`: the flag was a
+  `store_true` switch on a key that defaults to `True` and raises on `False`.
+  The App key `dc_coupled` stays, so `resolved_config` keeps it. The
+  optimizer's `battery` table no longer accepts `battery_type` or
+  `dc_coupled`.
+- `list_battery_models(enabled_only=...)`, which filtered nothing because
+  every registered model is enabled, and `SimulationSummary.has_battery`,
+  which nothing read ([#186](https://github.com/Str4vinci/breos/issues/186)).
+  Results are unchanged bit for bit for every removal above.
 
 ### Documentation
 - The release checklist records that `v0.5.0`, `v0.5.1` and `v0.6.0` are

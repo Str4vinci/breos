@@ -90,14 +90,11 @@ maps to the v1 field calibration. The explicit
 `"naumann_lam_field_calibrated_v2"` for the v2 field-calibrated fit with Lam
 `Ea`/`n` fixed and `k0`/`b` fitted to field data.
 
-The native BREOS degradation path is calibrated for LFP cells only. App config
-must not use the ambiguous legacy `battery_type` selector: omit
+The native BREOS degradation path is calibrated for LFP cells only. Omit
 `degradation_engine` for native behavior, or set `degradation_engine="blast"`
-and a stable `blast_model` key. Lower-level
-`BatteryConfig(battery_type="LFP")` still normalizes to `"lfp"` for native
-compatibility; it does not select BLAST. See the
+and a stable `blast_model` key. See the
 [degradation model reference](../api/degradation-models.md) for discovery,
-precedence, provenance, and migration details.
+precedence, provenance, and engine selection.
 
 ## Discovering available options
 

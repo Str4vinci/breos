@@ -43,21 +43,15 @@ and daily mean absolute SOC.
    breos.battery.compute_cell_temperature
 ```
 
-## Cycle detection
-
-```{eval-rst}
-.. autosummary::
-   :toctree: generated/
-
-   breos.battery.detect_cycles_rainflow
-   breos.battery.detect_half_cycles_from_soc_series
-```
-
 ## Degradation primitives
 
-Low-level update functions that the energy balance loop calls each
-timestep. Use these directly only when reproducing or critiquing the
-degradation model.
+Low-level update functions for the degradation model. The energy balance
+does not call them each timestep: it ages the pack once per daily
+degradation window, from that window's rainflow cycles, mean cell temperature
+and mean absolute SOC, and it applies the resistance updates only when
+resistance fade is enabled. `update_battery_soh_cyclewise` counts the
+rainflow cycles of the whole series it is given. Use these directly only when
+reproducing or critiquing the degradation model.
 
 ```{eval-rst}
 .. autosummary::
