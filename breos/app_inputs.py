@@ -447,17 +447,22 @@ def reuse_prepared_inputs() -> Iterator[None]:
         _PREPARED_INPUTS_CACHE.reset(token)
 
 
-def _input_cache_key(cfg: dict[str, Any]) -> str | None:
-    """The resolved config without the input-independent keys, as canonical JSON.
+def config_cache_key(cfg: dict[str, Any], independent_keys: frozenset[str]) -> str | None:
+    """A resolved config without ``independent_keys``, as canonical JSON.
 
     None when a value is not plain JSON data (an in-memory frame or series),
     which the key could not represent faithfully; that run is not cached.
     """
-    relevant = {key: value for key, value in cfg.items() if key not in INPUT_INDEPENDENT_KEYS}
+    relevant = {key: value for key, value in cfg.items() if key not in independent_keys}
     try:
         return json.dumps(relevant, sort_keys=True)
     except (TypeError, ValueError):
         return None
+
+
+def _input_cache_key(cfg: dict[str, Any]) -> str | None:
+    """The resolved config without the input-independent keys, as canonical JSON, or None."""
+    return config_cache_key(cfg, INPUT_INDEPENDENT_KEYS)
 
 
 def input_configuration_key(config: dict[str, Any]) -> str | None:
