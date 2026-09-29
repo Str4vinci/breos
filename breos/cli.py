@@ -795,7 +795,9 @@ def build_parser() -> argparse.ArgumentParser:
         choices=("normal", "uniform"),
         help="Demand multiplier distribution; uncertainty is sigma for normal or half-width for uniform.",
     )
-    mc.add_argument("--target-year", type=int, help="Calendar year the weather index is mapped to.")
+    mc.add_argument(
+        "--target-year", type=int, help="Study calendar year: the weather, load and tariff are all placed on it."
+    )
     mc.add_argument("--weather-start-year", type=int, help="First historical weather year eligible for sampling.")
     mc.add_argument("--weather-end-year", type=int, help="Last historical weather year eligible for sampling.")
     mc.add_argument("--seed", type=int, help="Base random seed for reproducible runs.")

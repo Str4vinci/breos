@@ -701,9 +701,32 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   14 May 2025 gets a summer shape. A `demandlib_h0` file supplied through
   `rlp_directory` must now have a dated first row at 1 January 00:00; an
   undated file, which previously loaded by position, raises `ValueError`.
-  Monte Carlo still places load by position when `target_year` differs from
-  the year of `start_date`; this is tracked in
-  [#302](https://github.com/Str4vinci/breos/issues/302).
+- Monte Carlo now builds the load profile for `target_year`, the calendar its
+  weather years and tariff already use, instead of for the year of
+  `start_date` shifted onto `target_year` by position
+  ([#302](https://github.com/Str4vinci/breos/issues/302)). With the defaults
+  (`start_date` 2023, `target_year` 2025), H0 put a 2023 Sunday shape on
+  Wednesday 8 January 2025; it now follows the H0 day-type alignment above,
+  so a Monte Carlo study and an App run of the same year use the same load.
+  Profiles placed by position now also follow the target year's
+  daylight-saving dates, which moves 169 hourly steps in Lisbon for 2025.
+  Monte Carlo no longer uses `start_date` for the load or weather; its
+  provenance records the load's year as `load_profile.calendar_year`
+  (result schema 1.8). A leap `target_year`, which raised an error at hourly
+  and 15-minute resolution, now runs: each weather year gets a 29 February
+  copied from its 28 February on the file's own clock, including a UTC offset
+  written in its timestamps, as the App gives a TMY. Before, 29 February was
+  missing from the weather, and at 15 minutes the resampler would have
+  interpolated across it as one night. **Monte Carlo results change
+  when `start_date` falls in another year than `target_year`.** On the
+  shipped `configs/examples/montecarlo.toml` (100 runs, seed 42) with the
+  Porto 2005–2024 Open-Meteo history, mean NPV savings fall from
+  4,446.79 EUR to 4,433.51 EUR (−13.28 EUR, −0.30%), mean annual grid import
+  rises from 1,029.63 kWh to 1,033.00 kWh (+3.36 kWh, +0.33%), mean annual
+  self-consumption falls from 2,965.30 kWh to 2,961.93 kWh (−0.11%), mean
+  lifetime grid independence falls from 74.25% to 74.16%, and the mean
+  interpolated payback moves from 13.109 to 13.122 years. A study whose
+  `start_date` is in `target_year` is unchanged bit for bit.
 - Fixed-design evaluation and multi-objective optimization now validate and
   apply the optional `tariff` table through the shared projection loop.
   Previously they silently ignored it and valued the design at flat prices.
