@@ -67,7 +67,8 @@ rates and `discount_rate` is a nominal discount rate. They are
 escalated projection, the steady-state `calculate_financials`, which mirrors
 it, and the App, Monte Carlo and optimization paths built on them. This is
 the arithmetic BREOS already performs and how tariff and financing inputs are
-usually quoted.
+usually quoted. (#270 later retired `calculate_financials` with the
+steady-state objective basis.)
 
 The standalone `calculate_lcoe` keeps its documented real-terms contract
 (#251): it holds O&M at first-year prices, so its `discount_rate` is a real
@@ -228,6 +229,10 @@ so rows 1–4 also apply to it.
 | 27 | `plot_pareto_front_analysis` input column | `Net_Cost_Eur` | `Net_Cost` |
 | 28 | `plot_tariff_comparison` input column | `Net Cost (€)` | `Net Cost` |
 | 29 | `plot_tariff_comparison` input column | `No System Cost (€)` | `No System Cost` |
+
+As shipped, the changelog's table omits rows 12 and 18, which went earlier in
+0.7.0 with the steady-state objective basis (#270), and rows 28 and 29,
+whose function was removed (#287).
 
 Rows 24–26 substitute the resolved currency code, so an EUR run writes the
 same text as today. Names that are already neutral keep them: the projection
