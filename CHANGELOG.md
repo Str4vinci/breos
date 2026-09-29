@@ -1511,14 +1511,16 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   and `mean_grid_independence_pct`. `breos montecarlo --plots` writes the
   same seven figures as before.
 - **Unmaintained tools** under `tools/`: `batch_compare_locations.py`,
-  `recalculate_economics.py`, `compare_results.py`, `azitilt_optimizer.py`
-  and `validate_cec_fit.py`, with their tests. They kept their own cost
-  fallbacks, year loops and config formats apart from the App's, read files
-  that no runner writes, or, for `validate_cec_fit.py`, needed `nrel-pysam`,
-  which BREOS no longer installs. Compare designs and orientations with
-  `breos sweep`. `fetch_historical_weather.py` is gone too:
-  `python tools/fetch_weather.py historical --location <key> --start <year>
-  --end <year>` fetches the same Open-Meteo years for one location.
+  `recalculate_economics.py`, `compare_results.py`, `azitilt_optimizer.py`,
+  `validate_cec_fit.py` and `parity/bundle_compare.py`, with their tests.
+  They kept their own cost fallbacks, year loops and config formats apart
+  from the App's, read files that no runner writes, or, for
+  `validate_cec_fit.py`, needed `nrel-pysam`, which BREOS no longer
+  installs. `parity/bundle_compare.py` compared Monte Carlo cases with
+  reference bundles that are not in the repository. Compare designs and
+  orientations with `breos sweep`. `fetch_historical_weather.py` is gone
+  too: `python tools/fetch_weather.py historical --location <key> --start
+  <year> --end <year>` fetches the same Open-Meteo years for one location.
 - **`configs/base/`**. Its `costs`, `emissions`, `locations` and
   `electricity` files were copies of the packaged presets that no run read,
   and its `financials.json` had lost its packaged counterpart. `breos list`
@@ -1527,7 +1529,8 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   `breos/data/configs/locations.json`, where the `location` key finds it, and
   `tools/fetch_weather.py` reads the packaged presets. The packaged
   `breos/data/configs/electricity.json`, which nothing loaded, is removed as
-  well ([#186](https://github.com/Str4vinci/breos/issues/186)).
+  well ([#186](https://github.com/Str4vinci/breos/issues/186)), and so is the
+  unread `electricity_cost_excl_vat` field of the packaged cost presets.
 - **The `validation` and `location-tools` extras.** `validation` installed
   nothing. `location-tools` only served `tools/add_location.py`, which is not
   in the wheel; install `geopy` and `timezonefinder` to run it.
