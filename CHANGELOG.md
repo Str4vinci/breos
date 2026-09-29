@@ -5,6 +5,23 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 ## [Unreleased]
 
 ### Added
+- `breos.montecarlo.build_year_cache(config, settings)` prepares a Monte
+  Carlo study's per-year weather, PV production and battery temperature
+  once, and `run_montecarlo(..., year_cache=cache)` reuses them across a
+  sweep over designs ([#165](https://github.com/Str4vinci/breos/issues/165)).
+  The weather layer is keyed on the weather file's absolute path, its
+  SHA-256 and that of its metadata sidecar, the year window, `target_year`,
+  resolution, coordinates, `preserve_irradiance_energy` and the
+  solar-position method; a study with other weather inputs raises
+  `ValueError`. The PV layer is keyed on the resolved config without
+  `YEAR_CACHE_INDEPENDENT_KEYS` (the App sweep's `INPUT_INDEPENDENT_KEYS`,
+  the demand keys and `[montecarlo]`) and on the contents of a
+  `battery_temperature` CSV, so a change to any other key, such as
+  `n_modules` or `battery_temperature`, rebuilds it from the cached
+  weather. Results match a study run without the cache bit for bit. On a
+  15-minute, 10-year file with 8 runs of 20 years on the Numba backend, a
+  battery-size design went from 3.5 s to 0.7 s and a module-count design
+  from 3.7 s to 2.1 s.
 - A `[period]` table simulates a window shorter than a year in `App`
   ([#242](https://github.com/Str4vinci/breos/issues/242)), for example
   `{"start": "2025-06-01", "end": "2025-06-08"}`. `start` and `end` are
