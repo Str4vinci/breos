@@ -358,8 +358,8 @@ if __name__ == "__main__":
     if any(arg in ("-h", "--help") for arg in sys.argv[1:]):
         print(__doc__)
         sys.exit(0)
-    if not sys.argv[1:]:
+    args = [arg for arg in sys.argv[1:] if arg != "--instructions"]
+    if not args:
         print(__doc__, file=sys.stderr)
         sys.exit(2)
-    args = [arg for arg in sys.argv[1:] if arg != "--instructions"]
     dump(args[0], args[1] if len(args) > 1 else "python", instructions="--instructions" in sys.argv[1:])

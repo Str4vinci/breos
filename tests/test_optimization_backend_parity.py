@@ -38,6 +38,14 @@ def _problem_metrics(weather, load, backend, design, config=_CONFIG):
     return out
 
 
+def _assert_metrics_identical(python, compiled):
+    # Per key, so a NaN (a design that never breaks even) must be NaN on both
+    # sides; dict == would pass only while both hold the np.nan singleton.
+    assert python.keys() == compiled.keys()
+    for key in python:
+        np.testing.assert_array_equal(np.asarray(python[key]), np.asarray(compiled[key]), err_msg=key)
+
+
 @pytest.mark.parametrize("design", _DESIGNS)
 def test_projected_scoring_is_identical_on_both_backends(_inputs, design):
     weather, load = _inputs
@@ -45,9 +53,7 @@ def test_projected_scoring_is_identical_on_both_backends(_inputs, design):
     python = _problem_metrics(weather, load, "python", design)
     compiled = _problem_metrics(weather, load, "numba", design)
 
-    assert python.keys() == compiled.keys()
-    for key in python:
-        np.testing.assert_array_equal(np.asarray(python[key]), np.asarray(compiled[key]), err_msg=key)
+    _assert_metrics_identical(python, compiled)
 
 
 @pytest.mark.parametrize("design", _DESIGNS)
@@ -59,7 +65,7 @@ def test_evaluate_projected_design_is_identical_on_both_backends(_inputs, design
     python = evaluate_projected_design(weather, load, _CONFIG, execution_backend="python", **kwargs)
     compiled = evaluate_projected_design(weather, load, _CONFIG, execution_backend="numba", **kwargs)
 
-    assert python.metrics == compiled.metrics
+    _assert_metrics_identical(python.metrics, compiled.metrics)
     assert python.yearly.equals(compiled.yearly)
     assert python.financial.equals(compiled.financial)
 
@@ -135,9 +141,10 @@ def test_fixed_target_scoring_is_identical_on_both_backends(_lisbon_inputs, engi
     python = _problem_metrics(weather, load, "python", _FIXED_TARGET_DESIGN, config)
     compiled = _problem_metrics(weather, load, "numba", _FIXED_TARGET_DESIGN, config)
 
-    assert python.keys() == compiled.keys()
-    for key in python:
-        np.testing.assert_array_equal(np.asarray(python[key]), np.asarray(compiled[key]), err_msg=key)
+    # The problem metrics carry no grid-charge total; the evaluation test below
+    # checks grid charging for the same config and design.
+    assert python["Projected_Total_Replacements"] > 0
+    _assert_metrics_identical(python, compiled)
 
 
 @pytest.mark.parametrize("engine", ["native", "blast"])
@@ -154,6 +161,6 @@ def test_fixed_target_evaluation_is_identical_on_both_backends(_lisbon_inputs, e
     # The case must exercise grid charging and a replacement, or parity is vacuous.
     assert python.yearly["Grid_AC_To_Battery_kWh"].sum() > 0
     assert python.metrics["Projected_Total_Replacements"] > 0
-    assert python.metrics == compiled.metrics
+    _assert_metrics_identical(python.metrics, compiled.metrics)
     assert python.yearly.equals(compiled.yearly)
     assert python.financial.equals(compiled.financial)
