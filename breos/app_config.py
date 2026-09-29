@@ -134,6 +134,27 @@ def _model_key(value: Any) -> Any:
     return value.strip().lower().replace("-", "_") if isinstance(value, str) else value
 
 
+CALENDAR_MODELS: tuple[str, ...] = (
+    "naumann",
+    "naumann_lam",
+    "naumann_lam_field_calibrated",
+    "naumann_lam_field_calibrated_v1",
+    "naumann_lam_field_calibrated_v2",
+)
+
+
+def check_calendar_model(value: Any, where: str) -> str:
+    """Return a calendar aging model name as the aging model looks it up.
+
+    The App and the optimizer both store the returned spelling, so a name
+    that passes here cannot fail in ``_get_degradation_params``.
+    """
+    key = _model_key(value)
+    if not isinstance(key, str) or key not in CALENDAR_MODELS:
+        raise ValueError(f"'{where}' must be one of: {', '.join(CALENDAR_MODELS)}")
+    return key
+
+
 APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
     # CLI-exposed fields are kept in parser display order. Required inputs have
     # no default; argparse still leaves them optional so --config can supply
@@ -1785,15 +1806,7 @@ def _validate_battery_and_degradation(cfg: dict[str, Any]) -> None:
         raise TypeError("'dc_coupled' must be a boolean")
     if not cfg["dc_coupled"]:
         raise NotImplementedError("BREOS 0.3.x supports DC-coupled/hybrid battery dispatch only")
-    valid_calendar_models = {
-        "naumann",
-        "naumann_lam",
-        "naumann_lam_field_calibrated",
-        "naumann_lam_field_calibrated_v1",
-        "naumann_lam_field_calibrated_v2",
-    }
-    if str(cfg["calendar_model"]) not in valid_calendar_models:
-        raise ValueError(f"'calendar_model' must be one of: {', '.join(sorted(valid_calendar_models))}")
+    check_calendar_model(cfg["calendar_model"], "calendar_model")
     start_date = cfg["start_date"]
     # datetime subclasses date, so it is excluded before the date case.
     if isinstance(start_date, date) and not isinstance(start_date, datetime):
