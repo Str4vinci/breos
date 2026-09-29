@@ -22,6 +22,32 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   15-minute, 10-year file with 8 runs of 20 years on the Numba backend, a
   battery-size design went from 3.5 s to 0.7 s and a module-count design
   from 3.7 s to 2.1 s.
+- A `[period]` table simulates a window shorter than a year in `App`
+  ([#242](https://github.com/Str4vinci/breos/issues/242)), for example
+  `{"start": "2025-06-01", "end": "2025-06-08"}`. `start` and `end` are
+  civil dates in the location's timezone, in the year of `start_date`; the
+  window runs from local midnight of `start` to local midnight of `end`, so
+  `end` is exclusive and may be 1 January of the next year. The full-year
+  load is built and scaled to `annual_consumption_kwh` as before, then
+  weather, PV, load and battery temperature are cut to the window, which
+  runs once from the battery's initial state; `projection_years` is not
+  used, and setting it alongside `[period]` gives a warning. The weather
+  must cover the window; missing leading or trailing rows raise, so UTC-year
+  weather cannot serve a window at a civil year edge away from UTC, and
+  weather stamped at half past the hour cannot place a window. Energy
+  results, the year-1-price money, the year-1 CO2 and the PV loss waterfall
+  cover the window, and the fixed charge is billed on its civil days, so a
+  window over a DST change bills whole days. The lifetime economics
+  (`npv_savings`, `payback_year`, `lcoe_per_kwh`, `financial`, the
+  replacement costs and the lifetime CO2) are `None`, and a new `period`
+  block, also in `provenance.period`, records the window,
+  `projection_years_used = 1` and why. `breos validate-config` lists the
+  window only when it is set. The one `yearly` row carries `period_start` and `period_end`, and `monthly` groups the window by
+  civil month. A PV-only window equals the same steps of a full-year run
+  exactly. `App.revalue` re-prices a window; `breos sweep` can vary
+  `period.start` and `period.end`; Monte Carlo and the optimizer reject
+  `period`. Result schema 1.7. Runs without `period` are unchanged apart
+  from the schema version.
 - `inverter_ac_rating_kw` sets the inverter AC rating in kW, instead of
   `inverter_loading_ratio` ([#181](https://github.com/Str4vinci/breos/issues/181));
   setting both in one config raises. `--inverter-ac-rating-kw` sets it from

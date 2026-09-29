@@ -45,11 +45,11 @@ def _keys(value, prefix=""):
 def test_the_result_schema_version_is_1_2():
     # 1.0 was the currency-neutral names; 1.1 adds the year-1 money components,
     # 1.2 the economics provenance block.
-    assert RESULT_SCHEMA_VERSION == "1.6"
+    assert RESULT_SCHEMA_VERSION == "1.7"
 
 
 def test_app_result_records_the_schema_version_and_currency(replacement_result):
-    assert replacement_result["result_schema_version"] == "1.6"
+    assert replacement_result["result_schema_version"] == "1.7"
     assert replacement_result["provenance"]["currency"] == "EUR"
 
 

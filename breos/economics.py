@@ -438,8 +438,9 @@ def price_year_rows(yearly_summary_df: pd.DataFrame, costs: Dict[str, float]) ->
     ``Import_Cost`` is ``Import_kWh`` times the import price, ``Export_Revenue``
     ``Export_kWh`` times the export price, ``Baseline_Import_Cost`` the load
     bought without a system, and ``Fixed_Charge`` the daily charge for the
-    simulated duration, ``Simulated_Hours / 24`` days (E5). A row without
-    ``Simulated_Hours`` is billed as a 365-day year. ``Replacement_Cost`` is
+    simulated duration, ``Simulated_Hours / 24`` days (E5). A row with
+    ``Billed_Days`` (a [period] window) is billed on those civil days instead,
+    and a row without either is billed as a 365-day year. ``Replacement_Cost`` is
     the year's ``Replacements`` at ``costs["replacement_cost_each"]``, t = 0
     prices (E4). Columns already present (TOU valuation sets them) are kept.
     The operation order is the one the projection used before these columns
@@ -456,7 +457,12 @@ def price_year_rows(yearly_summary_df: pd.DataFrame, costs: Dict[str, float]) ->
             counts, position = np.zeros(len(priced)), len(priced.columns)
         each = _replacement_cost_each(costs, float(np.sum(counts)))
         priced.insert(position, "Replacement_Cost", _replacement_outlays_t0(counts, each))
-    days = priced["Simulated_Hours"] / 24 if "Simulated_Hours" in priced.columns else 365
+    days: Any
+    if "Billed_Days" in priced.columns:
+        # A [period] window bills its civil days, whatever DST does to its hours.
+        days = priced["Billed_Days"]
+    else:
+        days = priced["Simulated_Hours"] / 24 if "Simulated_Hours" in priced.columns else 365
     computed = {
         "Import_Cost": lambda: priced["Import_kWh"] * costs["electricity_cost"],
         "Export_Revenue": lambda: priced["Export_kWh"] * costs["electricity_sold_cost"],

@@ -25,9 +25,10 @@ optimizer tables, `"1.4"` adds `provenance.revaluation` to the results of
 columns (`CO2_Avoided_Export_kg`, `CO2_Avoided_Export_Cumulative_kg`) to the
 cost projection and Monte Carlo trajectories, `"1.5"` adds `constraints` and
 `run_settings` to the optimizer's provenance and the `Projected_CO2_*`
-columns to the Pareto rows of a search with `[emissions]`, and `"1.6"`, which
-0.7.0 reports, adds `inverter_ac_rating_kw` to the `resolved_config` of App
-and Monte Carlo results.
+columns to the Pareto rows of a search with `[emissions]`, `"1.6"` adds
+`inverter_ac_rating_kw` to the `resolved_config` of App and Monte Carlo
+results, and `"1.7"`, which 0.7.0 reports, adds the
+[`period` keys](#period-runs) of a run over part of a year.
 A renamed or removed key bumps the
 major version, an added key the minor. A result without the key predates 1.0.
 
@@ -225,3 +226,51 @@ turns `balance` negative again, payback is the later recovery, and a
 `economics.find_payback_year_interpolated` gives the same crossing as a fractional
 year, interpolated linearly between the annual points; it is an estimate
 from year-end values, not an exact date.
+
+## Period runs
+
+A run with a [`[period]`](recipes.md#simulate-part-of-a-year) window
+simulates that window once, with no projection years. Its result keeps the
+full-year keys, with these differences:
+
+- The energy keys (`pv_production_kwh`, `grid_import_kwh`,
+  `self_consumption_kwh` and the rest), the [year-1 money
+  keys](#year-1-money-keys), the year-1 CO2 keys and the PV loss waterfall
+  cover the window. The waterfall's `basis` is `"period"`. The fixed charge
+  is billed on the window's civil days.
+- `yearly` has one row, labelled with the window's `period_start` and
+  `period_end` (exclusive). `monthly` groups the window by the location's
+  civil months, so a window inside June has one `"Jun"` row. A full-year
+  run groups by the weather's clock instead, so where that clock is not the
+  civil one, a window's month can differ from the full-year run's by the
+  hour at the month edge.
+- The lifetime economics are `None`: `npv_savings`, `payback_year`,
+  `lcoe_per_kwh`, `financial`, `battery_replacement_cost_t0_prices`,
+  `battery_replacement_cost_npv` and the lifetime CO2 keys. A window has no
+  project lifetime to escalate, discount or pay back over. `total_investment`
+  is still reported.
+- `battery_soh_end_pct` is the state of health at the end of the window,
+  including the rainflow cycles still open at its end, which the last day
+  of any run counts.
+- A top-level `period` block, also recorded as `provenance.period`, describes
+  the window:
+
+```python
+{
+    "start": "2025-06-01",
+    "end": "2025-06-08",
+    "end_exclusive": True,
+    "timezone": "Europe/Lisbon",
+    "days": 7,
+    "start_time": "2025-06-01T00:00:00+01:00",
+    "end_time": "2025-06-08T00:00:00+01:00",
+    "projection_years_used": 1,
+    "simulated_hours": 168.0,
+    "lifetime_economics": "skipped",
+    "lifetime_economics_reason": "A period shorter than a year runs once, ...",
+    "skipped_fields": ["payback_year", "npv_savings", "lcoe_per_kwh", "financial"],
+}
+```
+
+`skipped_fields` lists the keys of this result that are `None` for that
+reason; the example is a PV-only run without emissions.

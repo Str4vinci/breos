@@ -630,7 +630,7 @@ battery_kwh = [0.0, 5.0]
     rows = list(csv.DictReader(output_path.open(encoding="utf-8")))
     assert len(rows) == 2
     for row in rows:
-        assert row["result_schema_version"] == "1.6"
+        assert row["result_schema_version"] == "1.7"
         for key in (
             "grid_import_cost_year1_prices",
             "grid_export_revenue_year1_prices",
@@ -761,7 +761,10 @@ annual_consumption_kwh = 3500
     assert exit_code == 1
     error = capsys.readouterr().err
     assert "Unknown sweep key 'location.foo'" in error
-    assert "Dotted keys are supported only under 'battery_indoor_model', 'costs', 'smart_charging', 'tariff'" in error
+    assert (
+        "Dotted keys are supported only under 'battery_indoor_model', 'costs', 'period', 'smart_charging', 'tariff'"
+        in error
+    )
 
 
 SMART_CHARGING_SWEEP_BASE = """
