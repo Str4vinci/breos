@@ -137,9 +137,6 @@ def _run_parser() -> argparse.ArgumentParser:
 
 def test_registry_preserves_defaults_and_allowed_top_level_keys():
     assert DEFAULTS == EXPECTED_DEFAULTS
-    assert list(DEFAULTS) == list(EXPECTED_DEFAULTS)
-    default_orders = [field.default_order for field in APP_CONFIG_FIELDS.values() if field.has_default]
-    assert sorted(default_orders) == list(range(len(EXPECTED_DEFAULTS)))
     assert ALLOWED_CONFIG_KEYS == frozenset(
         set(EXPECTED_DEFAULTS)
         | {

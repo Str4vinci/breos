@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import math
 from copy import deepcopy
-from importlib.metadata import PackageNotFoundError, version
 from typing import Any, cast
 
 import pandas as pd
@@ -16,7 +15,7 @@ from breos.economics import projection_rates_record
 from breos.result_schema import RESULT_SCHEMA_VERSION
 from breos.runners.app import CO2_COLUMNS, SimulationArtifacts
 from breos.tariffs import result_currency
-from breos.utils import get_hours_per_step, local_datetime_index
+from breos.utils import get_hours_per_step, local_datetime_index, package_version
 
 
 def monthly_to_dicts(results_df: pd.DataFrame, freq: str, timezone: str | None = None) -> list[dict[str, Any]]:
@@ -134,13 +133,6 @@ def yearly_to_dicts(yearly_df: pd.DataFrame, period: dict[str, Any] | None = Non
     return rows
 
 
-def _package_version() -> str:
-    try:
-        return version("breos")
-    except PackageNotFoundError:
-        return "unknown"
-
-
 def _provenance(
     cfg: dict[str, Any],
     resolved: ResolvedAppConfig,
@@ -166,7 +158,7 @@ def _provenance(
     weather.setdefault("latitude", resolved.lat)
     weather.setdefault("longitude", resolved.lon)
     provenance = {
-        "breos_version": _package_version(),
+        "breos_version": package_version(),
         "ledger_schema_version": LEDGER_SCHEMA_VERSION,
         # Every money field is in this currency; BREOS does not convert.
         "currency": result_currency(resolved.tariff),
