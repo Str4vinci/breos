@@ -40,10 +40,11 @@ def _revalued_config(config: dict[str, Any], changes: Mapping[str, Any]) -> dict
     merged = dict(config)
     for key, value in changes.items():
         current = merged.get(key)
-        if not (isinstance(current, dict) and isinstance(value, Mapping)):
+        if not isinstance(value, Mapping):
             merged[key] = deepcopy(value)
             continue
-        table = deepcopy(current)
+        # A new table starts empty, so a key set to None has nothing to remove.
+        table: dict[str, Any] = deepcopy(current) if isinstance(current, dict) else {}
         for name, item in value.items():
             if item is None:
                 table.pop(name, None)

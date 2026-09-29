@@ -170,7 +170,7 @@ def _provenance(
         # toolchain it ran on. A bit-identity claim cannot be checked after the
         # fact without one, so it is recorded on every run, not only on
         # benchmarks. Same keys as the Monte Carlo block, from the same code.
-        "execution": artifacts.execution,
+        "execution": deepcopy(artifacts.execution),
         "economics": projection_rates_record(cfg),
     }
     # Only runs given repair reports carry the key, so existing results are

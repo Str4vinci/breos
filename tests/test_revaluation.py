@@ -195,10 +195,17 @@ def test_none_removes_a_key_so_flat_prices_can_give_way_to_a_tariff():
     assert _fields(revalued) == _fields(_simulated({**BASE, "costs": {}, "tariff": TOU}).result())
 
 
-def test_a_revalued_result_shares_nothing_with_the_run(flat_app):
-    before = _fields(flat_app.result())
-    revalued = _revalued(flat_app, {"discount_rate": 0.06})
+def test_a_revalued_result_shares_nothing_with_the_run():
+    app = _simulated(BASE)
+    before = _fields(app.result())
+    revalued = _revalued(app, {"discount_rate": 0.06})
     revalued["degradation"]["engine"] = "edited"
     revalued["pv_loss_waterfall"]["stages"].clear()
-    flat_app.result()["degradation"]["engine"] = "edited too"
-    assert _fields(_revalued(flat_app, {})) == before
+    revalued["provenance"]["execution"]["backend"] = "edited"
+    app.result()["degradation"]["engine"] = "edited too"
+    assert _fields(_revalued(app, {})) == before
+
+
+def test_none_in_a_new_table_removes_nothing(flat_app):
+    revalued = _revalued(flat_app, {"costs": {"storage_cost_per_kwh": None}})
+    assert _fields(revalued) == _fields(flat_app.result())
