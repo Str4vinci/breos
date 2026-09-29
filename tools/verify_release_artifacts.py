@@ -70,7 +70,6 @@ ALLOWED_SDIST_TOP_LEVEL = {
     "docs",
     "maintainers",
     "pyproject.toml",
-    "rlp",
     "tests",
     "tools",
     "uv.lock",

@@ -20,27 +20,20 @@ from breos.utils import format_years_months, local_datetime_index
 
 MONTH_LABELS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
 
-# Plotting imports with backend handling
+# matplotlib is the optional ``plots`` extra. ``import breos`` loads this
+# module only when a plotting name is first used, so the error surfaces there.
 try:
     import matplotlib
     import matplotlib.dates as mdates
     import matplotlib.pyplot as plt
     from matplotlib.patches import Polygon, Rectangle
-    from matplotlib.ticker import FuncFormatter
-
-    HAS_MATPLOTLIB = True
-except ImportError:
-    HAS_MATPLOTLIB = False
+except ImportError as exc:
+    raise ImportError('breos.plotting needs matplotlib. Install it with: pip install "breos[plots]"') from exc
 
 
 def _currency(frame: pd.DataFrame) -> str:
     """The currency a frame's money is in, for labels: ``attrs["currency"]``, else the default."""
     return str(frame.attrs.get("currency", DEFAULT_CURRENCY))
-
-
-def _check_matplotlib():
-    if not HAS_MATPLOTLIB:
-        raise ImportError("matplotlib is required for plotting. Install with: uv add matplotlib")
 
 
 def _result_instants(results_df: pd.DataFrame) -> pd.DatetimeIndex:
@@ -63,6 +56,15 @@ def _result_instants(results_df: pd.DataFrame) -> pd.DatetimeIndex:
         return pd.DatetimeIndex(pd.to_datetime(values))
     except ValueError:
         return pd.DatetimeIndex(pd.to_datetime(values, utc=True))
+
+
+def _local_time_indexed(results_df: pd.DataFrame) -> pd.DataFrame:
+    """Return a copy of ``results_df`` indexed by its ``Datetime`` column on the local clock, if it has one."""
+    df = results_df.copy()
+    if "Datetime" in df.columns:
+        df["Datetime"] = local_datetime_index(df["Datetime"])
+        df = df.set_index("Datetime")
+    return df
 
 
 def _power_frame_to_energy_kwh(frame: pd.DataFrame, instants: Optional[pd.DatetimeIndex] = None) -> pd.DataFrame:
@@ -96,8 +98,6 @@ def set_presentation_mode(enabled: bool = True, scale: float = 1.5):
         set_presentation_mode(True)  # Enable before generating plots
         set_presentation_mode(False) # Reset to defaults
     """
-    _check_matplotlib()
-
     if enabled:
         plt.rcParams.update(
             {
@@ -148,8 +148,6 @@ def plot_pv_loss_waterfall(
     Returns:
         The matplotlib ``Figure``.
     """
-    _check_matplotlib()
-
     stages = list(waterfall.get("stages", []))
     if len(stages) < 2:
         raise ValueError("waterfall must contain at least two stages")
@@ -383,8 +381,6 @@ def create_cost_plots(
         results_directory: Directory to save plots
         scenario_name: Optional suffix for filenames
     """
-    _check_matplotlib()
-
     os.makedirs(results_directory, exist_ok=True)
     suffix = f"_{scenario_name}" if scenario_name else ""
 
@@ -428,7 +424,6 @@ def create_cost_plots(
 
     ax.set_xlabel("Year")
     ax.set_ylabel(f"Cumulative Cost ({_currency(cost_projection)})")
-    # ax.set_title('Cost Comparison: With vs Without PV System')
     ax.legend()
     ax.grid(True, alpha=0.3)
 
@@ -446,14 +441,9 @@ def monthly_graphs(results_df: pd.DataFrame, results_directory: str, columns: Op
         results_directory: Directory to save plots
         columns: Columns to plot (default: PV, Load, Import, Sell)
     """
-    _check_matplotlib()
-
     os.makedirs(results_directory, exist_ok=True)
 
-    df = results_df.copy()
-    if "Datetime" in df.columns:
-        df["Datetime"] = local_datetime_index(df["Datetime"])
-        df.set_index("Datetime", inplace=True)
+    df = _local_time_indexed(results_df)
 
     if columns is None:
         columns = ["PV_Production", "Houseload", "Import_From_Grid", "PV_AC_Export"]
@@ -479,7 +469,6 @@ def monthly_graphs(results_df: pd.DataFrame, results_directory: str, columns: Op
     ax.set_xticks([xi + width * (len(columns) - 1) / 2 for xi in x])
     ax.set_xticklabels([d.strftime("%b %Y") for d in monthly.index], rotation=45)
     ax.set_ylabel("Energy (kWh)")
-    # ax.set_title('Monthly Energy Summary')
     ax.legend()
     ax.grid(True, alpha=0.3, axis="y")
 
@@ -496,14 +485,9 @@ def yearly_graphs(results_df: pd.DataFrame, results_directory: str) -> None:
         results_df: Energy balance results DataFrame
         results_directory: Directory to save plots
     """
-    _check_matplotlib()
-
     os.makedirs(results_directory, exist_ok=True)
 
-    df = results_df.copy()
-    if "Datetime" in df.columns:
-        df["Datetime"] = local_datetime_index(df["Datetime"])
-        df.set_index("Datetime", inplace=True)
+    df = _local_time_indexed(results_df)
 
     columns = ["PV_Production", "Houseload", "Import_From_Grid", "PV_AC_Export"]
     columns = [c for c in columns if c in df.columns]
@@ -516,7 +500,6 @@ def yearly_graphs(results_df: pd.DataFrame, results_directory: str) -> None:
 
     ax.set_xticklabels([d.strftime("%Y") for d in yearly.index], rotation=0)
     ax.set_ylabel("Energy (kWh)")
-    # ax.set_title('Yearly Energy Summary')
     labels = {
         "PV_Production": "PV Production",
         "Houseload": "Load",
@@ -540,14 +523,9 @@ def weekly_graphs(results_df: pd.DataFrame, week_number: int, results_directory:
         week_number: Week of year to plot (1-52)
         results_directory: Directory to save plots
     """
-    _check_matplotlib()
-
     os.makedirs(results_directory, exist_ok=True)
 
-    df = results_df.copy()
-    if "Datetime" in df.columns:
-        df["Datetime"] = local_datetime_index(df["Datetime"])
-        df.set_index("Datetime", inplace=True)
+    df = _local_time_indexed(results_df)
 
     # Filter to specific week
     df["Week"] = df.index.isocalendar().week
@@ -579,47 +557,35 @@ def weekly_graphs(results_df: pd.DataFrame, week_number: int, results_directory:
     plt.close()
 
 
+def _degradation_x(degradation_df: pd.DataFrame) -> pd.Index:
+    """The x values of a daily degradation frame: its ``Datetime`` on the local clock, else its index."""
+    if "Datetime" in degradation_df.columns:
+        return local_datetime_index(degradation_df["Datetime"])
+    return degradation_df.index
+
+
 def degradation_plots(degradation_df: pd.DataFrame, results_directory: str) -> None:
     """
     Create battery degradation visualization.
-    Generates separate plots for SOH, Components, FEC, and SOC.
+    Generates separate plots for SOH, degradation components and FEC, plus
+    resistance growth and round-trip efficiency when the frame has them.
 
     Args:
         degradation_df: Degradation tracking DataFrame
         results_directory: Directory to save plots
     """
-    _check_matplotlib()
-
     if degradation_df.empty:
         print("No degradation data to plot")
         return
 
     os.makedirs(results_directory, exist_ok=True)
 
-    # Determine x-axis: use sequential days for multi-year propagation
-    # (TMY data repeats the same dates each year, so we need to adjust)
-    if "Year" in degradation_df.columns and degradation_df["Year"].nunique() > 1:
-        # Multi-year: use day index (sequential)
-        x = np.arange(len(degradation_df))  # Day index (0, 1, 2, ...)
-        x_years = x / 365.0  # Convert to years for tick labels
-        use_years_axis = True
-    elif "Datetime" in degradation_df.columns:
-        x = local_datetime_index(degradation_df["Datetime"])
-        use_years_axis = False
-    else:
-        x = degradation_df.index
-        use_years_axis = False
+    x = _degradation_x(degradation_df)
 
     # 1. SOH over time
     fig, ax1 = plt.subplots(figsize=(10, 6))
     ax1.plot(x, degradation_df["SOH"], "b-", linewidth=2)
     ax1.set_ylabel("SOH (%)")
-    if use_years_axis:
-        ax1.set_xlabel("Year")
-        # Set ticks at each year
-        max_years = int(x_years.max()) + 1
-        ax1.set_xticks([y * 365 for y in range(max_years + 1)])
-        ax1.set_xticklabels([str(y) for y in range(max_years + 1)])
     ax1.grid(True, alpha=0.3)
     plt.tight_layout()
     plt.savefig(f"{results_directory}/battery_degradation_soh.png", dpi=300)
@@ -640,11 +606,6 @@ def degradation_plots(degradation_df: pd.DataFrame, results_directory: str) -> N
             ax.fill_between(x, base, base + calendar_data, alpha=0.5, label="Calendar")
 
         ax.set_ylabel(ylabel)
-        if use_years_axis:
-            ax.set_xlabel("Year")
-            max_years = int(x_years.max()) + 1
-            ax.set_xticks([y * 365 for y in range(max_years + 1)])
-            ax.set_xticklabels([str(y) for y in range(max_years + 1)])
         ax.legend()
         ax.grid(True, alpha=0.3)
         plt.tight_layout()
@@ -664,11 +625,6 @@ def degradation_plots(degradation_df: pd.DataFrame, results_directory: str) -> N
         fig, ax3 = plt.subplots(figsize=(10, 6))
         ax3.plot(x, degradation_df["Cumulative_FEC"], "g-", linewidth=2)
         ax3.set_ylabel("Full Equivalent Cycles")
-        if use_years_axis:
-            ax3.set_xlabel("Year")
-            max_years = int(x_years.max()) + 1
-            ax3.set_xticks([y * 365 for y in range(max_years + 1)])
-            ax3.set_xticklabels([str(y) for y in range(max_years + 1)])
         ax3.grid(True, alpha=0.3)
         plt.tight_layout()
         plt.savefig(f"{results_directory}/battery_degradation_fec.png", dpi=300)
@@ -687,37 +643,17 @@ def plot_resistance_and_efficiency(degradation_df: pd.DataFrame, results_directo
         degradation_df: Degradation tracking DataFrame with Resistance_Growth and Effective_RTE columns
         results_directory: Directory to save plots
     """
-    _check_matplotlib()
-
     if degradation_df.empty or "Resistance_Growth" not in degradation_df.columns:
         return
 
     os.makedirs(results_directory, exist_ok=True)
 
-    # Determine x-axis
-    if "Year" in degradation_df.columns and degradation_df["Year"].nunique() > 1:
-        x = np.arange(len(degradation_df))
-        x_years = x / 365.0
-        use_years_axis = True
-    elif "Datetime" in degradation_df.columns:
-        x = local_datetime_index(degradation_df["Datetime"])
-        use_years_axis = False
-    else:
-        x = degradation_df.index
-        use_years_axis = False
-
-    def _set_year_ticks(ax, x_years):
-        max_years = int(x_years.max()) + 1
-        ax.set_xticks([y * 365 for y in range(max_years + 1)])
-        ax.set_xticklabels([str(y) for y in range(max_years + 1)])
-        ax.set_xlabel("Year")
+    x = _degradation_x(degradation_df)
 
     # Resistance growth plot
     fig, ax = plt.subplots(figsize=(10, 6))
     ax.plot(x, degradation_df["Resistance_Growth"] * 100, "r-", linewidth=2)
     ax.set_ylabel("Resistance Growth (%)")
-    if use_years_axis:
-        _set_year_ticks(ax, x_years)
     ax.grid(True, alpha=0.3)
     plt.tight_layout()
     plt.savefig(f"{results_directory}/battery_resistance_growth.png", dpi=300)
@@ -728,8 +664,6 @@ def plot_resistance_and_efficiency(degradation_df: pd.DataFrame, results_directo
         fig, ax = plt.subplots(figsize=(10, 6))
         ax.plot(x, degradation_df["Effective_RTE"] * 100, "m-", linewidth=2)
         ax.set_ylabel("Round-Trip Efficiency (%)")
-        if use_years_axis:
-            _set_year_ticks(ax, x_years)
         ax.grid(True, alpha=0.3)
         plt.tight_layout()
         plt.savefig(f"{results_directory}/battery_effective_rte.png", dpi=300)
@@ -756,7 +690,6 @@ def plot_validation_soh_comparison(
         x_label: Label for x-axis
         metrics: Optional dict with 'RMSE', 'MAE', etc. to annotate
     """
-    _check_matplotlib()
     os.makedirs(results_directory, exist_ok=True)
 
     fig, ax = plt.subplots(figsize=(10, 6))
@@ -807,7 +740,6 @@ def plot_validation_residuals(
         results_directory: Directory to save plot
         x_label: Label for x-axis
     """
-    _check_matplotlib()
     os.makedirs(results_directory, exist_ok=True)
 
     residuals = (measured_soh - predicted_soh) * 100  # to percentage points
@@ -838,7 +770,6 @@ def plot_validation_parity(
         results_directory: Directory to save plot
         metrics: Optional dict with R2 etc. to annotate
     """
-    _check_matplotlib()
     os.makedirs(results_directory, exist_ok=True)
 
     fig, ax = plt.subplots(figsize=(7, 7))
@@ -890,7 +821,6 @@ def plot_validation_multi_system(
             data with ``date`` and ``measured_soh``, and optional ``metrics``.
         results_directory: Directory to save plot
     """
-    _check_matplotlib()
     os.makedirs(results_directory, exist_ok=True)
 
     n_systems = len(systems_results)
@@ -954,7 +884,6 @@ def plot_validation_degradation_split(
         results_directory: Directory to save plot
         system_label: Optional label for filename suffix
     """
-    _check_matplotlib()
     os.makedirs(results_directory, exist_ok=True)
 
     dates = simulation_df["date"]
@@ -994,17 +923,12 @@ def plot_cell_temperature(
         results_df: Hourly results DataFrame with 'Datetime' and 'T_cell' columns.
         results_directory: Directory to save plots
     """
-    _check_matplotlib()
-
     if "T_cell" not in results_df.columns:
         return
 
     os.makedirs(results_directory, exist_ok=True)
 
-    df = results_df.copy()
-    if "Datetime" in df.columns:
-        df["Datetime"] = local_datetime_index(df["Datetime"])
-        df = df.set_index("Datetime")
+    df = _local_time_indexed(results_df)
 
     # Monthly aggregation
     monthly_mean = df["T_cell"].resample("ME").mean()
@@ -1058,8 +982,6 @@ def plot_timeseries(
         filename: Output filename
         title: Plot title
     """
-    _check_matplotlib()
-
     os.makedirs(results_directory, exist_ok=True)
 
     fig, ax = plt.subplots(figsize=(14, 6))
@@ -1094,8 +1016,6 @@ def plot_breakeven(cost_projection: pd.DataFrame, results_directory: str, scenar
         results_directory: Directory to save plots
         scenario_name: Optional suffix for filenames
     """
-    _check_matplotlib()
-
     os.makedirs(results_directory, exist_ok=True)
     suffix = f"_{scenario_name}" if scenario_name else ""
 
@@ -1171,12 +1091,7 @@ def plot_breakeven(cost_projection: pd.DataFrame, results_directory: str, scenar
     # =========================================================================
     fig2, ax2 = plt.subplots(figsize=(12, 6))
 
-    if "Savings_Annual_NPV" in cost_projection.columns:
-        annual_savings = cost_projection["Savings_Annual_NPV"]
-    elif "Savings_Annual" in cost_projection.columns:
-        annual_savings = cost_projection["Savings_Annual"]
-    else:
-        annual_savings = no_sys.diff().fillna(no_sys.iloc[0]) - with_sys.diff().fillna(with_sys.iloc[0])
+    annual_savings = no_sys.diff().fillna(no_sys.iloc[0]) - with_sys.diff().fillna(with_sys.iloc[0])
 
     colors = ["#2ecc71" if s > 0 else "#e74c3c" for s in annual_savings]
     ax2.bar(years, annual_savings, color=colors, alpha=0.8, edgecolor="black", linewidth=0.5)
@@ -1222,17 +1137,10 @@ def plot_battery_soh_timeseries(
         end_date: Optional end date filter (e.g., '2025-12-31')
         scenario_name: Optional suffix for filenames
     """
-    _check_matplotlib()
-
     os.makedirs(results_directory, exist_ok=True)
     suffix = f"_{scenario_name}" if scenario_name else ""
 
-    df = results_df.copy()
-
-    # Ensure datetime index
-    if "Datetime" in df.columns:
-        df["Datetime"] = local_datetime_index(df["Datetime"])
-        df.set_index("Datetime", inplace=True)
+    df = _local_time_indexed(results_df)
 
     # Filter date range if specified. The bounds are civil dates, read on the
     # results' own clock, so a naive date compares with a tz-aware index.
@@ -1258,7 +1166,6 @@ def plot_battery_soh_timeseries(
 
     ax.set_xlabel("Date", fontsize=12)
     ax.set_ylabel("State of Health (%)", fontsize=12)
-    # ax.set_title('Battery State of Health Over Time', fontsize=14, fontweight='bold')
     ax.legend(loc="lower left")
     ax.grid(True, alpha=0.3)
     ax.set_ylim([min(75, df["Battery_SOH"].min() - 5), 102])
@@ -1287,8 +1194,6 @@ def plot_tilt_optimization(
         y_col: Column for y-axis (default: 'Total_PV_Production_kWh')
         optimal_marker: Whether to highlight optimal point
     """
-    _check_matplotlib()
-
     os.makedirs(results_directory, exist_ok=True)
     suffix = f"_{scenario_name}" if scenario_name else ""
 
@@ -1352,15 +1257,10 @@ def plot_monthly_comparison(results_df: pd.DataFrame, results_directory: str, sc
         results_directory: Directory to save plots
         scenario_name: Optional suffix for filenames
     """
-    _check_matplotlib()
-
     os.makedirs(results_directory, exist_ok=True)
     suffix = f"_{scenario_name}" if scenario_name else ""
 
-    df = results_df.copy()
-    if "Datetime" in df.columns:
-        df["Datetime"] = local_datetime_index(df["Datetime"])
-        df.set_index("Datetime", inplace=True)
+    df = _local_time_indexed(results_df)
 
     # Monthly aggregation
     columns = ["PV_Production", "Houseload", "Import_From_Grid", "PV_AC_Export"]
@@ -1403,7 +1303,6 @@ def plot_monthly_comparison(results_df: pd.DataFrame, results_directory: str, sc
     ax.set_xticklabels(monthly["Month"], fontsize=11)
     ax.set_ylabel("Energy (kWh)", fontsize=12)
     ax.set_xlabel("Month", fontsize=12)
-    # ax.set_title('Monthly Energy Comparison', fontsize=14, fontweight='bold')
     ax.legend(loc="upper right", fontsize=10)
     ax.grid(True, alpha=0.3, axis="y")
 
@@ -1435,15 +1334,7 @@ def plot_monthly_balance(results_df: pd.DataFrame, results_directory: str) -> No
         results_df: Simulation results DataFrame
         results_directory: Directory to save plots
     """
-    _check_matplotlib()
-
-    # Ensure Datetime index
-    if "Datetime" in results_df.columns:
-        df = results_df.copy()
-        df["Datetime"] = local_datetime_index(df["Datetime"])
-        df.set_index("Datetime", inplace=True)
-    else:
-        df = results_df.copy()
+    df = _local_time_indexed(results_df)
 
     energy_columns = ["PV_Production", "Houseload", "Import_From_Grid", "PV_AC_Export"]
     missing = [column for column in energy_columns if column not in df.columns]
@@ -1514,8 +1405,6 @@ def _plot_montecarlo_distribution(
     include_zero: bool = False,
 ) -> bool:
     """Shared histogram with P5/P50/P95 markers for MC summary metrics."""
-    _check_matplotlib()
-
     values = pd.to_numeric(values, errors="coerce").replace([np.inf, -np.inf], np.nan).dropna()
     if values.empty:
         return False
@@ -1551,8 +1440,6 @@ def _plot_montecarlo_distribution(
 
 def _plot_montecarlo_payback_summary(df: pd.DataFrame, results_directory: str, suffix: str = "") -> None:
     """Plot payback distribution, CDF, and achieved/not-achieved summary."""
-    _check_matplotlib()
-
     total_runs = len(df)
     # The fractional year, which the distribution's 0.1-year bins and mean need;
     # older run tables carry only the integer year.
@@ -1586,8 +1473,6 @@ def plot_montecarlo_simulation(
             or the one-row-per-run CSV written by ``breos montecarlo``.
         verbose: Print the output directory when plots are generated.
     """
-    _check_matplotlib()
-
     os.makedirs(results_directory, exist_ok=True)
     suffix = f"_{scenario_name}" if scenario_name else ""
     plots_folder = os.path.join(results_directory, "plots")
@@ -1837,8 +1722,6 @@ def plot_montecarlo_cost_overlay(all_results_df: pd.DataFrame, results_directory
     """
     Overlay plot of Cumulative System Cost vs No System Cost for all runs.
     """
-    _check_matplotlib()
-
     fig, ax = plt.subplots(figsize=(12, 8))
 
     runs = all_results_df["run_number"].unique()
@@ -1873,7 +1756,6 @@ def plot_montecarlo_cost_overlay(all_results_df: pd.DataFrame, results_directory
 
     ax.set_xlabel("Year", fontsize=12)
     ax.set_ylabel(f"Cumulative Cost ({_currency(all_results_df)})", fontsize=12)
-    # ax.set_title('Financial Projection Uncertainty', fontsize=14)
     ax.grid(True, alpha=0.3)
     ax.legend()
 
@@ -1886,8 +1768,6 @@ def plot_montecarlo_soh_overlay(all_results_df: pd.DataFrame, results_directory:
     """
     Overlay plot of Battery SOH degradation for all runs.
     """
-    _check_matplotlib()
-
     fig, ax = plt.subplots(figsize=(12, 8))
 
     runs = all_results_df["run_number"].unique()
@@ -1911,7 +1791,6 @@ def plot_montecarlo_soh_overlay(all_results_df: pd.DataFrame, results_directory:
 
     ax.set_xlabel("Year", fontsize=12)
     ax.set_ylabel("State of Health (%)", fontsize=12)
-    # ax.set_title('Battery Degradation Uncertainty', fontsize=14)
     ax.grid(True, alpha=0.3)
     ax.set_ylim(0, 105)
     ax.legend()
@@ -1929,8 +1808,6 @@ def plot_montecarlo_npv_distribution(all_results_df: pd.DataFrame, results_direc
     (``npv_savings``) and the legacy run-year schema where NPV savings is
     derived from cumulative system and no-system costs.
     """
-    _check_matplotlib()
-
     if "npv_savings" in all_results_df.columns:
         _plot_montecarlo_distribution(
             _finite_numeric_series(all_results_df, "npv_savings"),
@@ -1996,8 +1873,6 @@ def plot_montecarlo_grid_independence_distribution(
     (``mean_grid_independence_pct``) and the legacy run-year schema
     (``grid_independence_pct``).
     """
-    _check_matplotlib()
-
     if "mean_grid_independence_pct" in all_results_df.columns:
         _plot_montecarlo_distribution(
             _finite_numeric_series(all_results_df, "mean_grid_independence_pct"),
@@ -2054,8 +1929,6 @@ def plot_montecarlo_final_soh_distribution(
     """
     Histogram of final battery state-of-health across one-row-per-run MC results.
     """
-    _check_matplotlib()
-
     _plot_montecarlo_distribution(
         _finite_numeric_series(all_results_df, "final_soh_pct"),
         results_directory,
@@ -2070,8 +1943,6 @@ def plot_montecarlo_soh_traces(details_df: pd.DataFrame, results_directory: str,
     """
     Plot detailed SOH traces for sample runs (daily resolution).
     """
-    _check_matplotlib()
-
     fig, ax = plt.subplots(figsize=(12, 8))
 
     runs = details_df["run_number"].unique()
@@ -2088,7 +1959,6 @@ def plot_montecarlo_soh_traces(details_df: pd.DataFrame, results_directory: str,
 
     ax.set_xlabel("Simulation Year", fontsize=12)
     ax.set_ylabel("State of Health (%)", fontsize=12)
-    # ax.set_title('Detailed Degradation Traces (Sample Runs)')
     ax.grid(True, alpha=0.3)
     ax.set_ylim(0, 102)
 
@@ -2102,7 +1972,7 @@ def plot_montecarlo_soh_traces(details_df: pd.DataFrame, results_directory: str,
 
 
 # =========================================================================
-# FUTURE-PROOFING PLOTS
+# TMY VS HISTORICAL WEATHER
 # =========================================================================
 
 
@@ -2127,7 +1997,6 @@ def plot_weather_monthly_comparison(
         results_dir: Directory to save the plot.
         filename: Output filename (e.g. "monthly_ghi_comparison.png").
     """
-    _check_matplotlib()
     os.makedirs(results_dir, exist_ok=True)
 
     x = np.arange(12)
@@ -2197,7 +2066,6 @@ def plot_weather_annual_ghi_distribution(
         results_dir:          Directory to save the plot.
         filename:             Output filename.
     """
-    _check_matplotlib()
     os.makedirs(results_dir, exist_ok=True)
 
     n_years = len(annual_ghi_per_year)
@@ -2262,7 +2130,6 @@ def plot_breakeven_comparison(
         results_dir: Output directory.
         filename: Output filename.
     """
-    _check_matplotlib()
     os.makedirs(results_dir, exist_ok=True)
 
     fig, ax = plt.subplots(figsize=(14, 8))
@@ -2332,7 +2199,6 @@ def plot_breakeven_two(
         results_dir: Output directory.
         filename: Output filename.
     """
-    _check_matplotlib()
     os.makedirs(results_dir, exist_ok=True)
 
     fig, ax = plt.subplots(figsize=(12, 7))
@@ -2383,7 +2249,6 @@ def plot_azitilt_landscape_2d(
         results_dir: Output directory.
         filename:    Output filename.
     """
-    _check_matplotlib()
     os.makedirs(results_dir, exist_ok=True)
 
     fig, ax = plt.subplots(figsize=(10, 8))
@@ -2418,8 +2283,6 @@ def plot_azitilt_landscape_3d(
         results_dir: Output directory.
         filename:    Output filename.
     """
-    _check_matplotlib()
-    from mpl_toolkits.mplot3d import Axes3D  # noqa: F401
 
     os.makedirs(results_dir, exist_ok=True)
 
@@ -2457,7 +2320,6 @@ def plot_azitilt_ew_1d(
         results_dir: Output directory.
         filename:    Output filename.
     """
-    _check_matplotlib()
     os.makedirs(results_dir, exist_ok=True)
 
     fig, ax = plt.subplots(figsize=(10, 6))
@@ -2473,7 +2335,7 @@ def plot_azitilt_ew_1d(
 
 
 # =========================================================================
-# PARETO ANALYSIS  (used by tools/analyze_pareto.py)
+# PARETO ANALYSIS
 # =========================================================================
 
 
@@ -2498,7 +2360,6 @@ def plot_pareto_front_analysis(
         results_dir: Output directory.
         filename: Output filename.
     """
-    _check_matplotlib()
     from matplotlib.lines import Line2D
 
     os.makedirs(results_dir, exist_ok=True)
@@ -2613,7 +2474,6 @@ def plot_calendar_aging_sensitivity(
         results_dir: Directory to save the plot.
         filename: Output filename.
     """
-    _check_matplotlib()
     os.makedirs(results_dir, exist_ok=True)
 
     colors = ["#2ecc71", "#3498db", "#e67e22", "#e74c3c"]
@@ -2683,7 +2543,6 @@ def plot_grid_independence_heatmap(
         vmin: Colorbar minimum (auto if None)
         vmax: Colorbar maximum (auto if None)
     """
-    _check_matplotlib()
     from matplotlib.colors import Normalize
 
     os.makedirs(results_directory, exist_ok=True)
@@ -2744,7 +2603,6 @@ def plot_location_comparison_delta(
         filename: Output filename
         metric_label: Colorbar label
     """
-    _check_matplotlib()
     from matplotlib.colors import TwoSlopeNorm
 
     os.makedirs(results_directory, exist_ok=True)
@@ -2799,16 +2657,15 @@ def plot_co2_savings(
     """
     Plot CO2 emissions avoided over system lifetime.
 
-    Creates co2_savings_{scenario}.png showing yearly CO2 avoided
-    (total and self-consumed) as bars with a cumulative line.
+    Creates two figures: co2_avoided_yearly_{scenario}.png, with yearly CO2
+    avoided (total and self-consumed) as bars, and
+    co2_avoided_cumulative_{scenario}.png, with the cumulative totals as lines.
 
     Args:
         cost_projection: DataFrame from cost_analysis_projection() with CO2 columns
         results_directory: Directory to save plots
         scenario_name: Optional suffix for filenames
     """
-    _check_matplotlib()
-
     if "CO2_Avoided_Total_kg" not in cost_projection.columns:
         return
 
@@ -2883,8 +2740,3 @@ def plot_co2_savings(
     fig.tight_layout()
     fig.savefig(os.path.join(results_directory, f"co2_avoided_cumulative{suffix}.png"), dpi=300, bbox_inches="tight")
     plt.close(fig)
-
-
-# =========================================================================
-# Deprecated documentation-derived baseline vs BREOS comparison plots
-# =========================================================================
