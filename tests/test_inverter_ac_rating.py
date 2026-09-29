@@ -5,7 +5,8 @@ from unittest import mock
 import pytest
 
 from breos import App
-from breos.app_config import build_costs_dict, resolve_app_config
+from breos.app_config import build_costs_dict, override_config, resolve_app_config
+from breos.cli import _apply_sweep_values, _build_config, build_parser
 from tools.generate_app_golden import SCENARIOS, _fake_fetch
 
 BASE = {**SCENARIOS["native_h_battery"], "execution_backend": "python"}
@@ -59,3 +60,32 @@ def test_the_run_clips_and_reports_at_the_rating():
     assert low_result["total_investment"] < high_result["total_investment"]
     assert low_result["usable_ac_system_production_kwh"] < high_result["usable_ac_system_production_kwh"]
     assert low_result["provenance"]["resolved_config"]["inverter_ac_rating_kw"] == 1.5
+
+
+def test_the_cost_parameters_carry_the_ratio_the_rating_implies():
+    resolved = resolve_app_config({**BASE, "inverter_ac_rating_kw": 3.2})
+    peak_w = resolved.cfg["n_modules"] * resolved.avg_module_power_w
+    assert resolved.cost_params.dc_ac_ratio == peak_w / 3200.0
+
+
+def test_a_later_layer_replaces_the_other_sizing_key():
+    assert override_config({"inverter_loading_ratio": 1.25, "n_modules": 8}, {"inverter_ac_rating_kw": 3.0}) == {
+        "n_modules": 8
+    }
+    # Both in the one layer is still refused when the config resolves.
+    both = {"inverter_ac_rating_kw": 3.0, "inverter_loading_ratio": 1.2}
+    assert override_config({}, both) == {}
+    swept = _apply_sweep_values({**BASE, "inverter_loading_ratio": 1.25}, {"inverter_ac_rating_kw": 3.0})
+    assert "inverter_loading_ratio" not in swept
+    assert resolve_app_config(swept).inverter_ac_capacity_w == 3000.0
+
+
+def test_a_cli_flag_replaces_the_file_ratio(tmp_path):
+    config_file = tmp_path / "system.toml"
+    config_file.write_text(
+        'location = "porto"\nn_modules = 8\nannual_consumption_kwh = 4000\ninverter_loading_ratio = 1.25\n'
+    )
+    args = build_parser().parse_args(["run", "--config", str(config_file), "--inverter-ac-rating-kw", "3.3"])
+    config = _build_config(args)
+    assert config["inverter_ac_rating_kw"] == 3.3
+    assert "inverter_loading_ratio" not in config

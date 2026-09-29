@@ -7,7 +7,9 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 ### Added
 - `inverter_ac_rating_kw` sets the inverter AC rating in kW, instead of
   `inverter_loading_ratio` ([#181](https://github.com/Str4vinci/breos/issues/181));
-  setting both raises, and `--inverter-ac-rating-kw` sets it from the CLI.
+  setting both in one config raises. `--inverter-ac-rating-kw` sets it from
+  the CLI, and a flag or a `breos sweep` value for one of the two replaces
+  the other from the config file, as any flag replaces the file's value.
   `ResolvedAppConfig.inverter_ac_capacity_w` is resolved once, from either
   key, and the dispatch, CAPEX and the reports read it: `calculate_costs`
   gains `inverter_ac_capacity_w`, the rating to price, instead of re-deriving
