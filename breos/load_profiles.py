@@ -344,7 +344,10 @@ def load_profile(
             or (source_start.month, source_start.day) != (1, 1)
             or source_start != source_start.normalize()
         ):
-            raise ValueError("The demandlib H0 file must start at 1 January midnight to align its day types")
+            raise ValueError(
+                f"The demandlib H0 file {source.label} needs a dated first row at 1 January 00:00 "
+                "to align its day types"
+            )
         df = _align_h0_day_types(df, new_index, source_start.year, steps_per_hour, source.label)
     else:
         df = _fit_profile_to_calendar(df, new_index, steps_per_hour, source.label)

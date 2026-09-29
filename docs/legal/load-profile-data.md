@@ -90,8 +90,9 @@ leap-year run repeats 28 February; a leap-year external file on a common-year
 run drops its 29 February. Values must be finite and non-negative. The first
 column may hold timestamps (ISO, or `dd/mm/yyyy HH:MM` as in the E-REDES
 exports); if it does, they must step evenly, so a file on a local clock with
-DST gaps is refused. A demandlib H0 file needs its dated 1 January start for
-weekday alignment. Any other file raises `ValueError` when it loads.
+DST gaps is refused. A demandlib H0 file needs a dated first row at
+1 January 00:00 for weekday alignment; an undated one is refused. Any other
+file raises `ValueError` when it loads.
 
 ## If redistribution permission is granted
 

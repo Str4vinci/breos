@@ -129,6 +129,101 @@ def test_external_demandlib_h0_uses_its_own_dated_source_year(tmp_path):
     )
 
 
+def test_external_demandlib_h0_without_dated_rows_raises(tmp_path):
+    # Positional placement cannot align day types, so an undated H0 file that
+    # loaded before the alignment fix is now refused.
+    pd.DataFrame({_LOAD_COLUMN: np.full(8760, 50.0)}).to_csv(
+        tmp_path / "h0SLP_demandlib_1000kwh_hourly.csv", index=False
+    )
+
+    with pytest.raises(ValueError, match="needs a dated first row at 1 January 00:00"):
+        load_profile("demandlib_h0", 1000, start_date="2025-01-01", rlp_directory=str(tmp_path))
+
+
+def _assert_source_days(target, source, pairs):
+    """Each target day equals its source day times one profile-wide scale.
+
+    The bundled H0 days have distinct daily energies, so a common scale
+    identifies the source day even where same-type days share a shape.
+    """
+    ratios = [target.loc[day].to_numpy() / source.loc[source_day].to_numpy() for day, source_day in pairs]
+    np.testing.assert_allclose(np.concatenate(ratios), ratios[0][0], rtol=1e-12)
+
+
+# (target day, expected source day in the bundled 2023 file)
+_PINNED_H0_DAYS = {
+    2025: [
+        ("2025-01-08", "2023-01-09"),  # Wednesday; the source Sunday 8 January is skipped
+        ("2025-05-14", "2023-05-15"),  # Wednesday takes a summer-season source Monday
+    ],
+    2026: [
+        ("2026-01-01", "2023-01-02"),  # Thursday; the source 1 January is a Sunday
+        ("2026-01-03", "2023-12-30"),  # Saturday; the search wraps back across New Year
+        ("2026-03-21", "2023-03-18"),  # Saturday takes a winter-season source Saturday
+        ("2026-12-31", "2023-12-29"),  # Thursday
+    ],
+    2020: [
+        ("2020-02-28", "2023-02-28"),  # Friday
+        ("2020-02-29", "2023-02-25"),  # Saturday leap day, anchored on 28 February
+        ("2020-03-01", "2023-02-26"),  # Sunday reaches back into February
+    ],
+    2024: [
+        ("2024-02-29", "2023-02-28"),  # Thursday leap day
+        ("2024-03-01", "2023-03-01"),  # Friday keeps its own date
+    ],
+}
+
+
+@pytest.mark.parametrize("freq", ["h", "15min"])
+@pytest.mark.parametrize("year", sorted(_PINNED_H0_DAYS))
+def test_bundled_h0_pins_the_chosen_source_day(year, freq):
+    source = load_profile("demandlib_h0", 1000, start_date="2023-01-01", freq=freq, timezone="UTC").iloc[:, 0]
+    target = load_profile("demandlib_h0", 1000, start_date=f"{year}-01-01", freq=freq, timezone="UTC").iloc[:, 0]
+
+    _assert_source_days(target, source, _PINNED_H0_DAYS[year])
+    # Another winter weekday has the same shape but not the same scale.
+    with pytest.raises(AssertionError):
+        _assert_source_days(target, source, [*_PINNED_H0_DAYS[year], (_PINNED_H0_DAYS[year][0][0], "2023-01-10")])
+
+
+def test_bundled_h0_day_types_follow_the_civil_calendar_across_dst():
+    source = load_profile("demandlib_h0", 1000, start_date="2023-01-01", freq="15min", timezone="UTC").iloc[:, 0]
+    target = load_profile("demandlib_h0", 1000, start_date="2025-01-01", freq="15min", timezone="Europe/Berlin")
+    civil = target.iloc[:, 0].copy()
+    civil.index = civil.index.tz_localize(None)
+
+    steps = civil.groupby(civil.index.date).size()
+    assert steps.loc[pd.Timestamp("2025-03-30").date()] == 92
+    assert steps.loc[pd.Timestamp("2025-10-26").date()] == 100
+    assert set(steps.drop([pd.Timestamp("2025-03-30").date(), pd.Timestamp("2025-10-26").date()])) == {96}
+
+    # The fall-back hour's second (standard-time) occurrence carries the
+    # profile row; the spring-forward hour does not exist on the civil clock.
+    civil = civil[~civil.index.duplicated(keep="last")]
+    spring = civil.loc["2025-03-30"]
+    source_spring = source.loc["2023-04-02"]
+    source_spring = source_spring[source_spring.index.hour != 2]
+    ratios = np.concatenate(
+        [
+            civil.loc["2025-01-08"].to_numpy() / source.loc["2023-01-09"].to_numpy(),  # Wednesday
+            spring.to_numpy() / source_spring.to_numpy(),  # Sunday, 92 steps
+            civil.loc["2025-10-26"].to_numpy() / source.loc["2023-10-29"].to_numpy(),  # Sunday, 100 steps
+        ]
+    )
+    np.testing.assert_allclose(ratios, ratios[0], rtol=1e-12)
+
+    # Every ordinary civil day carries a source day of its own H0 type.
+    def day_type(day):
+        return 0 if day.weekday() < 5 else day.weekday() - 4
+
+    source_days = source.to_numpy().reshape(365, 96)
+    for day, values in civil.groupby(civil.index.date):
+        if len(values) != 96:
+            continue
+        match = np.abs(source_days * ratios[0] - values.to_numpy()).max(axis=1).argmin()
+        assert day_type(pd.Timestamp(day)) == day_type(pd.Timestamp("2023-01-01") + pd.Timedelta(days=int(match)))
+
+
 @pytest.mark.parametrize(
     ("freq", "expected_length", "expected_end", "hours_per_step"),
     [

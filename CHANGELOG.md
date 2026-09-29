@@ -617,7 +617,14 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   illustrative prices of 0.11/0.18/0.28 EUR per kWh on the bundled 2026
   Portuguese weekly tri-hourly schedule, the load-only annual import bill
   moves from 694.90 EUR to 685.59 EUR (−1.34%). The default 2023 path is
-  unchanged.
+  unchanged. On two to six days a year the nearest source day falls in the
+  neighbouring demandlib season: 21 and 22 March 2026 get winter shapes, and
+  14 May 2025 gets a summer shape. A `demandlib_h0` file supplied through
+  `rlp_directory` must now have a dated first row at 1 January 00:00; an
+  undated file, which previously loaded by position, raises `ValueError`.
+  Monte Carlo still places load by position when `target_year` differs from
+  the year of `start_date`; this is tracked in
+  [#302](https://github.com/Str4vinci/breos/issues/302).
 - Fixed-design evaluation and multi-objective optimization now validate and
   apply the optional `tariff` table through the shared projection loop.
   Previously they silently ignored it and valued the design at flat prices.
