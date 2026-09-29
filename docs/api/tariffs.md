@@ -16,7 +16,7 @@ so a UTC, fixed-offset, or local index resolves to the same periods.
 
 ## Bundled schedules
 
-| Identifier | Periods | Finest boundary | Source |
+| Identifier | Periods | Boundary step | Source |
 |---|---|---|---|
 | `pt_mainland_2026_daily_bi` | off_peak, peak | 60 min | Diretiva ERSE n.º 1/2026, Art. 45.º |
 | `pt_mainland_2026_daily_tri` | off_peak, mid_peak, peak | 30 min | Diretiva ERSE n.º 1/2026, Art. 45.º |
@@ -38,8 +38,26 @@ a `study_date` in its effective window when the simulated year is earlier.
 weekends and national holidays are `off_peak` all day, using the holiday
 calendar BREOS carries for each year. A year without one raises.
 
-A schedule whose boundaries fall on the half hour or quarter hour needs input
-at that resolution or finer: hourly input is rejected rather than approximated.
+The boundary step is the coarsest step that lands on every period boundary
+and on every change of the zone's UTC offset in the simulated years, since a
+regular index moves on the local clock when the clocks change. Lisbon and
+Madrid change theirs by an hour every year, so no schedule there takes steps
+longer than 60 minutes. Input steps must divide the boundary step, and every
+step must start on the local step grid: a schedule whose boundaries fall on
+the half hour or quarter hour needs 15-minute input, and hourly input is
+rejected rather than approximated.
+
+## Schedule definitions
+
+A {class}`~breos.tariffs.ScheduleDefinition` is a complete schedule: its
+{class}`~breos.tariffs.TariffSchedule` metadata, its
+{class}`~breos.tariffs.ScheduleRule` values, which give every day type and
+season exactly one set of intervals, and an optional
+{class}`~breos.tariffs.HolidayCalendar`. Every bundled schedule is one, built
+from `tariffs.json` by {func}`~breos.tariffs.parse_schedule_definition`. The
+classification and resolution functions and `TariffSpec` take either a
+bundled identifier or a definition. A definition is immutable and pickles, so
+it reaches optimizer worker processes unchanged.
 
 ## Resolution
 
@@ -48,10 +66,16 @@ at that resolution or finer: hourly input is rejected rather than approximated.
    :toctree: generated/
 
    breos.tariffs.TariffSchedule
+   breos.tariffs.ScheduleDefinition
+   breos.tariffs.ScheduleRule
+   breos.tariffs.HolidayCalendar
    breos.tariffs.TariffPrices
    breos.tariffs.ResolvedTariff
    breos.tariffs.available_tariff_schedules
    breos.tariffs.get_tariff_schedule
+   breos.tariffs.get_schedule_definition
+   breos.tariffs.parse_schedule_definition
+   breos.tariffs.schedule_resolution_minutes
    breos.tariffs.classify_tariff_periods
    breos.tariffs.resolve_named_tariff
    breos.tariffs.resolve_tariff

@@ -343,8 +343,17 @@ def run_app_simulation(
     cfg: dict[str, Any],
     resolved: ResolvedAppConfig,
     deps: AppRuntimeDependencies,
+    *,
+    instructions: DispatchInstructions | None = None,
 ) -> SimulationArtifacts:
-    """Run the weather/PV/load/battery/economics simulation pipeline."""
+    """Run the weather/PV/load/battery/economics simulation pipeline.
+
+    ``instructions`` replaces the dispatch instructions the ``[smart_charging]``
+    table would give, for a validation tool that replays a schedule of its
+    own (``tools/oracles/replay.py``). They must be resolved on the simulated
+    index. The run then reports no smart-charging provenance, since the table
+    did not produce them. App never passes them.
+    """
     # Resolve the backend before anything is fetched or computed. Input
     # preparation can hit the network for weather, so a missing optional
     # dependency should be reported now rather than after a download.
@@ -395,7 +404,9 @@ def run_app_simulation(
     # The instructions follow the tariff's calendar, so they too are resolved
     # once and replayed every year.
     spec = resolved.smart_charging
-    instructions = resolve_instructions(spec, tariff) if spec is not None and has_battery else None
+    from_spec = instructions is None
+    if from_spec:
+        instructions = resolve_instructions(spec, tariff) if spec is not None and has_battery else None
     projection = run_projection(
         cfg,
         resolved,
@@ -437,7 +448,7 @@ def run_app_simulation(
         execution["jit_cache"] = aggregate_jit_cache_states(jit_cache_states)
 
     smart_charging = None
-    if instructions is not None and spec is not None and tariff is not None:
+    if from_spec and instructions is not None and spec is not None and tariff is not None:
         first = first_year_results_df.iloc[0]
         carry = projection.carry
         smart_charging = {

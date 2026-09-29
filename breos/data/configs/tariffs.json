@@ -8,7 +8,6 @@
         "off_peak",
         "peak"
       ],
-      "required_resolution_minutes": 60,
       "source_url": "https://files.diariodarepublica.pt/2s/2026/01/004000000/0018600288.pdf",
       "source": "Diretiva ERSE n.º 1/2026 (Diário da República, 2.ª série, n.º 4, 2026-01-07), Art. 45.º n.º 4 and n.º 9-13",
       "effective_to": "2027-12-31",
@@ -47,7 +46,6 @@
         "mid_peak",
         "peak"
       ],
-      "required_resolution_minutes": 30,
       "source_url": "https://files.diariodarepublica.pt/2s/2026/01/004000000/0018600288.pdf",
       "source": "Diretiva ERSE n.º 1/2026 (Diário da República, 2.ª série, n.º 4, 2026-01-07), Art. 45.º n.º 4 and n.º 9-13",
       "effective_to": "2027-12-31",
@@ -143,7 +141,6 @@
         "off_peak",
         "peak"
       ],
-      "required_resolution_minutes": 30,
       "source_url": "https://files.diariodarepublica.pt/2s/2026/01/004000000/0018600288.pdf",
       "source": "Diretiva ERSE n.º 1/2026 (Diário da República, 2.ª série, n.º 4, 2026-01-07), Art. 45.º n.º 4 and n.º 9-13",
       "effective_to": "2027-12-31",
@@ -250,7 +247,6 @@
         "mid_peak",
         "peak"
       ],
-      "required_resolution_minutes": 15,
       "source_url": "https://files.diariodarepublica.pt/2s/2026/01/004000000/0018600288.pdf",
       "source": "Diretiva ERSE n.º 1/2026 (Diário da República, 2.ª série, n.º 4, 2026-01-07), Art. 45.º n.º 4 and n.º 9-13",
       "effective_to": "2027-12-31",
@@ -402,7 +398,6 @@
         "off_peak",
         "peak"
       ],
-      "required_resolution_minutes": 30,
       "source_url": "https://files.diariodarepublica.pt/2s/2026/08/160000000/0020300209.pdf",
       "source": "Diretiva ERSE n.º 3/2026, de 19 de agosto (Diário da República, 2.ª série, n.º 160, pp. 203-209), Art. 2.º n.º 4 and n.º 7",
       "effective_from": "2027-07-01",
@@ -441,7 +436,6 @@
         "mid_peak",
         "peak"
       ],
-      "required_resolution_minutes": 30,
       "source_url": "https://files.diariodarepublica.pt/2s/2026/08/160000000/0020300209.pdf",
       "source": "Diretiva ERSE n.º 3/2026, de 19 de agosto (Diário da República, 2.ª série, n.º 160, pp. 203-209), Art. 2.º n.º 4 and n.º 7",
       "effective_from": "2027-07-01",
@@ -489,7 +483,6 @@
         "off_peak",
         "peak"
       ],
-      "required_resolution_minutes": 30,
       "source_url": "https://files.diariodarepublica.pt/2s/2026/08/160000000/0020300209.pdf",
       "source": "Diretiva ERSE n.º 3/2026, de 19 de agosto (Diário da República, 2.ª série, n.º 160, pp. 203-209), Art. 2.º n.º 4 and n.º 7",
       "effective_from": "2027-07-01",
@@ -558,7 +551,6 @@
         "mid_peak",
         "peak"
       ],
-      "required_resolution_minutes": 30,
       "source_url": "https://files.diariodarepublica.pt/2s/2026/08/160000000/0020300209.pdf",
       "source": "Diretiva ERSE n.º 3/2026, de 19 de agosto (Diário da República, 2.ª série, n.º 160, pp. 203-209), Art. 2.º n.º 4 and n.º 7",
       "effective_from": "2027-07-01",
@@ -674,7 +666,6 @@
         "mid_peak": "P2 (llano)",
         "peak": "P1 (punta)"
       },
-      "required_resolution_minutes": 60,
       "source_url": "https://www.boe.es/buscar/act.php?id=BOE-A-2020-1066",
       "source": "CNMC Circular 3/2020 (BOE-A-2020-1066), Art. 7.3; 2.0TD is the access tariff up to 15 kW (Art. 6.1.a)",
       "effective_from": "2021-06-01",
