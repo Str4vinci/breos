@@ -138,7 +138,6 @@ def optimize_tilt(
             n_modules=n_modules,
             pv_params=pv_params,
             freq=freq,
-            verbose=False,
             **(model_options or {}),
         )
         total_production = dc_power.sum() * get_hours_per_step(freq) / 1000  # kWh (DC)
@@ -827,7 +826,6 @@ def evaluate_projected_design(
             n_modules=int(n_modules),
             pv_params=pv_params,
             freq=freq,
-            verbose=False,
             **configured_pv_model_kwargs(config),
         )
         return series if dc_output_scale == 1.0 else series * dc_output_scale
@@ -1111,7 +1109,6 @@ try:
                 n_modules=n_modules,
                 pv_params=pv_params,
                 freq=self.freq,
-                verbose=False,
                 **self.model_options,
             )
             # Apply the DC-side correction before scoring. This keeps
@@ -1123,7 +1120,7 @@ try:
             # Load alignment (timezone- and DST-aware year remapping) happens
             # inside simulate_energy_balance — the same code path the App
             # uses. Positionally re-stamping the load onto the PV index here
-            # (the pre-0.3.4 align_load_to_pv call) discarded the load's real
+            # (as the optimizer did before 0.3.4) discarded the load's real
             # timestamps and could shift it against PV by the UTC offset.
             if isinstance(self.houseload, pd.Series):
                 houseload_df = self.houseload.to_frame(name="Load")

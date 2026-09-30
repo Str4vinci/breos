@@ -51,7 +51,7 @@ def test_empty_multi_array_system_treats_a_resolution_mismatch_like_a_non_empty_
 def test_ac_production_keeps_its_positional_parameters(synthetic_weather, pv_params):
     # loss_overrides is appended, so a positional transposition model still
     # binds to transposition_model.
-    args = (synthetic_weather, _LOCATION, 35, 180, 4, pv_params, "h", 0.0, None, None, 1.25, 0.96, False)
+    args = (synthetic_weather, _LOCATION, 35, 180, 4, pv_params, "h", 0.0, None, None, 1.25, 0.96)
     positional = calculate_pv_production_ac(*args, "isotropic")
     keyword = calculate_pv_production_ac(*args, transposition_model="isotropic")
 

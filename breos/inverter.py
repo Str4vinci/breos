@@ -1,16 +1,14 @@
 """
-Inverter module for PV system sizing and efficiency.
+Inverter conversion and sizing helpers.
 
 This module handles:
-- Inverter sizing based on PV array power
-- DC/AC coupling configurations
-- Efficiency calculations
+- DC-to-AC conversion with the PVWatts part-load curve and clipping
+- The inverse: the DC input a requested AC output needs
+- The inverter AC nameplate for a DC peak and loading ratio
 """
 
 import math
-from copy import deepcopy
 from dataclasses import dataclass
-from numbers import Integral, Real
 from typing import Optional
 
 import numpy as np
@@ -23,167 +21,6 @@ from breos._dispatch import (
     _dc_ac,
     _dc_for_ac,
 )
-
-
-def _require_optional_non_negative_finite(name: str, value: Optional[float]) -> None:
-    """Reject invalid supplied datasheet quantities while allowing unknown limits."""
-    if value is None:
-        return
-    if isinstance(value, bool) or not isinstance(value, Real) or not math.isfinite(value) or value < 0:
-        raise ValueError(f"{name} must be a finite non-negative number when provided")
-
-
-def _require_positive_finite(name: str, value: float) -> None:
-    """Reject a ratio or other quantity that must be strictly positive."""
-    if isinstance(value, bool) or not isinstance(value, Real) or not math.isfinite(value) or value <= 0:
-        raise ValueError(f"{name} must be a finite positive number")
-
-
-def _require_efficiency(name: str, value: float) -> None:
-    """Reject efficiencies outside the physically meaningful interval (0, 1]."""
-    if isinstance(value, bool) or not isinstance(value, Real) or not math.isfinite(value) or not 0 < value <= 1:
-        raise ValueError(f"{name} must be a finite number in (0, 1]")
-
-
-def _require_positive_integer(name: str, value: int) -> None:
-    """Reject MPPT counts and parallel-string limits that cannot describe hardware."""
-    if isinstance(value, bool) or not isinstance(value, Integral) or value <= 0:
-        raise ValueError(f"{name} must be a positive integer")
-
-
-@dataclass
-class InverterConfig:
-    """
-    Inverter configuration parameters.
-
-    Attributes:
-        nominal_power_w: Inverter nominal AC power (W). If None, sized from PV.
-        dc_ac_ratio: DC/AC sizing ratio (typical: 1.1-1.25)
-        inverter_efficiency: Peak inverter efficiency (typical: 0.96-0.98)
-        is_hybrid: Whether this is a hybrid inverter with battery support
-        mppt_channels: Number of MPPT channels
-        cost_per_kw_simple: Cost per kW for simple (grid-tie) inverter
-        cost_per_kw_hybrid: Cost per kW for hybrid inverter (with battery)
-        max_dc_voltage_v: Absolute maximum DC input voltage from the datasheet (V).
-        max_dc_power_w: Maximum recommended or permitted DC input power (W).
-        min_mppt_voltage_v: Lower bound of the MPPT operating window (V).
-        max_mppt_voltage_v: Upper bound of the MPPT operating window (V).
-        startup_voltage_v: DC voltage required for inverter startup (V).
-        max_strings_per_mppt: Maximum parallel strings permitted on each MPPT.
-        max_input_current_per_mppt_a: Maximum operating input current per MPPT (A).
-        max_short_circuit_current_per_mppt_a: Maximum short-circuit current per MPPT (A).
-
-    The datasheet fields are optional so existing aggregate simulations and
-    callers which do not yet know a particular inverter's nameplate limits
-    remain valid. When a field is supplied, it is validated here rather than
-    relying on an API boundary to do so.
-    """
-
-    nominal_power_w: Optional[float] = None
-    dc_ac_ratio: float = 1.25  # Default 1.25
-    inverter_efficiency: float = 0.96
-    is_hybrid: bool = True
-    mppt_channels: int = 2
-    cost_per_kw_simple: float = 48.37  # currency/kW for simple grid-tie inverter
-    cost_per_kw_hybrid: float = 102.58  # currency/kW for hybrid inverter
-    max_dc_voltage_v: Optional[float] = None
-    max_dc_power_w: Optional[float] = None
-    min_mppt_voltage_v: Optional[float] = None
-    max_mppt_voltage_v: Optional[float] = None
-    startup_voltage_v: Optional[float] = None
-    max_strings_per_mppt: Optional[int] = None
-    max_input_current_per_mppt_a: Optional[float] = None
-    max_short_circuit_current_per_mppt_a: Optional[float] = None
-
-    def __post_init__(self) -> None:
-        """Validate configuration and supplied datasheet limits without dependencies."""
-        _require_optional_non_negative_finite("nominal_power_w", self.nominal_power_w)
-        _require_positive_finite("dc_ac_ratio", self.dc_ac_ratio)
-        _require_efficiency("inverter_efficiency", self.inverter_efficiency)
-        if not isinstance(self.is_hybrid, bool):
-            raise ValueError("is_hybrid must be a bool")
-        _require_positive_integer("mppt_channels", self.mppt_channels)
-        _require_optional_non_negative_finite("cost_per_kw_simple", self.cost_per_kw_simple)
-        _require_optional_non_negative_finite("cost_per_kw_hybrid", self.cost_per_kw_hybrid)
-        _require_optional_non_negative_finite("max_dc_voltage_v", self.max_dc_voltage_v)
-        _require_optional_non_negative_finite("max_dc_power_w", self.max_dc_power_w)
-        _require_optional_non_negative_finite("min_mppt_voltage_v", self.min_mppt_voltage_v)
-        _require_optional_non_negative_finite("max_mppt_voltage_v", self.max_mppt_voltage_v)
-        _require_optional_non_negative_finite("startup_voltage_v", self.startup_voltage_v)
-        _require_optional_non_negative_finite("max_input_current_per_mppt_a", self.max_input_current_per_mppt_a)
-        _require_optional_non_negative_finite(
-            "max_short_circuit_current_per_mppt_a", self.max_short_circuit_current_per_mppt_a
-        )
-
-        if self.max_strings_per_mppt is not None:
-            _require_positive_integer("max_strings_per_mppt", self.max_strings_per_mppt)
-
-        if (
-            self.min_mppt_voltage_v is not None
-            and self.max_mppt_voltage_v is not None
-            and self.min_mppt_voltage_v > self.max_mppt_voltage_v
-        ):
-            raise ValueError("min_mppt_voltage_v must not exceed max_mppt_voltage_v")
-
-        if (
-            self.max_dc_voltage_v is not None
-            and self.max_mppt_voltage_v is not None
-            and self.max_mppt_voltage_v > self.max_dc_voltage_v
-        ):
-            raise ValueError("max_mppt_voltage_v must not exceed max_dc_voltage_v")
-
-        if (
-            self.max_dc_voltage_v is not None
-            and self.min_mppt_voltage_v is not None
-            and self.min_mppt_voltage_v > self.max_dc_voltage_v
-        ):
-            raise ValueError("min_mppt_voltage_v must not exceed max_dc_voltage_v")
-
-        # Only the physical ceiling is enforced. Startup voltage is deliberately
-        # not required to sit inside the MPPT window: plenty of real datasheets
-        # quote a startup well below the MPP range minimum (Fronius Primo starts
-        # at ~80 V against an MPP range from ~240 V), because startup marks where
-        # the inverter wakes up, not where it can track. Requiring containment
-        # would reject a faithful transcription of those sheets.
-        if (
-            self.startup_voltage_v is not None
-            and self.max_dc_voltage_v is not None
-            and self.startup_voltage_v > self.max_dc_voltage_v
-        ):
-            raise ValueError("startup_voltage_v must not exceed max_dc_voltage_v")
-
-    def size_from_pv(self, pv_peak_power_w: float) -> float:
-        """
-        Size inverter based on PV peak power.
-
-        Args:
-            pv_peak_power_w: Total PV array peak power (Wp)
-
-        Returns:
-            Inverter nominal AC power (W)
-        """
-        return pv_peak_power_w / self.dc_ac_ratio
-
-    def get_cost(self, pv_peak_power_w: Optional[float] = None) -> float:
-        """
-        Calculate inverter cost.
-
-        Args:
-            pv_peak_power_w: PV peak power for sizing (uses nominal_power if provided)
-
-        Returns:
-            Inverter cost, in the currency of the per-kW costs
-        """
-        if self.nominal_power_w is not None:
-            power = self.nominal_power_w
-        elif pv_peak_power_w is not None:
-            power = self.size_from_pv(pv_peak_power_w)
-        else:
-            raise ValueError("Either nominal_power_w or pv_peak_power_w must be provided")
-
-        cost_per_kw = self.cost_per_kw_hybrid if self.is_hybrid else self.cost_per_kw_simple
-        power_kw = power / 1000  # Convert W to kW
-        return power_kw * cost_per_kw
 
 
 @dataclass(frozen=True)
@@ -199,53 +36,6 @@ class InverterConversionResult:
     def total_dc_input_w(self) -> float:
         """DC input reconstructed from AC output, conversion loss, and clipping."""
         return self.ac_power_w + self.conversion_loss_w + self.clipping_loss_dc_w
-
-
-# Common inverter presets
-INVERTER_PRESETS = {
-    "residential_hybrid": InverterConfig(
-        dc_ac_ratio=1.25,
-        inverter_efficiency=0.96,
-        is_hybrid=True,
-    ),
-    "residential_simple": InverterConfig(
-        dc_ac_ratio=1.25,
-        inverter_efficiency=0.96,
-        is_hybrid=False,
-    ),
-    "commercial_hybrid": InverterConfig(
-        dc_ac_ratio=1.25,
-        inverter_efficiency=0.98,
-        is_hybrid=True,
-    ),
-    "oversized_1.5": InverterConfig(
-        dc_ac_ratio=1.5,
-        inverter_efficiency=0.96,
-        is_hybrid=True,
-    ),
-}
-
-
-def get_inverter_preset(name: str) -> InverterConfig:
-    """
-    Get a pre-defined inverter configuration.
-
-    Available presets:
-    - residential_hybrid: 1.25 ratio, 0.96 efficiency, hybrid
-    - residential_simple: 1.25 ratio, 0.96 efficiency, grid-tie only
-    - commercial_hybrid: 1.25 ratio, 0.98 efficiency, hybrid
-    - oversized_1.5: 1.5 ratio for high DC/AC
-
-    Args:
-        name: Preset name
-
-    Returns:
-        InverterConfig object
-    """
-    if name not in INVERTER_PRESETS:
-        available = ", ".join(INVERTER_PRESETS.keys())
-        raise KeyError(f"Preset '{name}' not found. Available: {available}")
-    return deepcopy(INVERTER_PRESETS[name])
 
 
 def _clamped_ac_output_scale(value: float) -> float:
