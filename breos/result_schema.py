@@ -31,6 +31,9 @@ legacy PV production fields; it renames monthly/yearly grid rows and optimizer
 breakeven columns to use explicit grid-import, grid-export and payback names.
 The migration table is in the result interpretation guide. It does not change
 the timestep ledger or the annual ``PV_Production_kWh`` usable-AC field.
+
+2.1 adds ``tariff.custom_schedule`` to the ``resolved_config`` of App and
+Monte Carlo results when an inline schedule is configured.
 """
 
-RESULT_SCHEMA_VERSION = "2.0"
+RESULT_SCHEMA_VERSION = "2.1"

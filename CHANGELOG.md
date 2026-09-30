@@ -23,6 +23,11 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   the same phase. The output year comes from the dates, not the filename.
   The converter makes no network access, and BREOS still bundles no E-REDES
   data.
+- `[tariff.custom_schedule]` lets App, Monte Carlo and projected optimization
+  use a strict inline schedule definition. It accepts the same periods, rules,
+  effective dates and explicit year-keyed holidays as the tariff schedule
+  parser, and records the definition in `provenance.resolved_config` so the
+  run can be reproduced. Result schema 2.1 adds that config field.
 - `breos.tariffs.ScheduleDefinition` holds a complete tariff schedule: its
   `TariffSchedule` metadata, `ScheduleRule` intervals per day type and
   season, and an optional `HolidayCalendar`. It is frozen and pickles.

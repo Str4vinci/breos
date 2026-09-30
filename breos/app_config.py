@@ -66,12 +66,15 @@ from breos.solar import (
 from breos.solar import default_azimuth as default_azimuth_fn
 from breos.tariffs import (
     BOUNDARY_POLICIES,
+    SCHEDULE_CYCLES,
     SUPPORTED_CURRENCIES,
+    ScheduleDefinition,
     TariffPrices,
     TariffSchedule,
     TariffSpec,
     available_tariff_schedules,
-    get_tariff_schedule,
+    get_schedule_definition,
+    parse_schedule_definition,
     schedule_resolution_minutes,
 )
 from breos.utils import get_hours_per_step
@@ -1262,17 +1265,24 @@ def _validate_bifacial_settings(
     _validate_gcr(gcr, prefix)
 
 
-def validate_config(cfg: dict[str, Any]) -> None:
+def validate_config(cfg: dict[str, Any]) -> TariffSpec | None:
     """Validate user-facing App config before resolving derived values."""
     has_arrays = _validate_structure_and_location(cfg)
     _validate_pv_and_inverter(cfg, has_arrays)
     _validate_time_and_weather(cfg)
     _validate_economics(cfg)
-    _validate_tariff(cfg)
+    tariff_spec = None
+    if cfg["tariff"] is not None:
+        # Resolve location before PV module metadata or weather work. The
+        # schedule's civil-time zone is part of the tariff definition, not a
+        # conversion that may be deferred until the simulation is running.
+        timezone = resolve_location(cfg)[2]
+        tariff_spec = resolve_tariff_spec(cfg, timezone)
     _validate_battery_and_degradation(cfg)
     _validate_period(cfg)
-    _validate_smart_charging(cfg)
+    _validate_smart_charging(cfg, tariff_spec)
     _validate_reachable_gcr(cfg, has_arrays)
+    return tariff_spec
 
 
 def _tariff_study_date(value: Any, where: str) -> date:
@@ -1289,21 +1299,147 @@ def _tariff_study_date(value: Any, where: str) -> date:
     raise TypeError(f"'{where}' must be a date")
 
 
+def _strict_custom_table(
+    value: Any,
+    where: str,
+    *,
+    allowed: frozenset[str],
+    required: frozenset[str],
+) -> Mapping[str, Any]:
+    if not isinstance(value, Mapping):
+        raise TypeError(f"'{where}' must be a table/dict")
+    unknown = sorted(str(key) for key in value if key not in allowed)
+    if unknown:
+        raise ValueError(f"Unknown key(s) in '{where}': {', '.join(f'{where}.{key}' for key in unknown)}")
+    missing = sorted(key for key in required if key not in value)
+    if missing:
+        raise ValueError(f"'{where}' needs {', '.join(f'{where}.{key}' for key in missing)}")
+    return value
+
+
+_CUSTOM_SCHEDULE_KEYS = frozenset(
+    {
+        "identifier",
+        "version",
+        "timezone",
+        "cycle",
+        "periods",
+        "rules",
+        "source",
+        "source_url",
+        "note",
+        "effective_from",
+        "effective_to",
+        "holidays",
+    }
+)
+_CUSTOM_SCHEDULE_REQUIRED = frozenset({"identifier", "version", "timezone", "cycle", "periods", "rules"})
+_CUSTOM_RULE_KEYS = frozenset({"days", "season", "intervals"})
+_CUSTOM_HOLIDAY_KEYS = frozenset({"day_type", "dates", "source"})
+
+
+def _custom_schedule(value: Any, where: str) -> ScheduleDefinition:
+    """Validate the App's strict nested shape, then use the shared parser."""
+    raw = _strict_custom_table(
+        value,
+        where,
+        allowed=_CUSTOM_SCHEDULE_KEYS,
+        required=_CUSTOM_SCHEDULE_REQUIRED,
+    )
+    identifier = text(raw["identifier"], f"{where}.identifier")
+    text(raw["version"], f"{where}.version")
+    timezone = text(raw["timezone"], f"{where}.timezone")
+    try:
+        ZoneInfo(timezone)
+    except ZoneInfoNotFoundError as exc:
+        raise ValueError(f"Unknown IANA tariff timezone: {timezone!r} at '{where}.timezone'") from exc
+    normalized_raw = dict(raw)
+    normalized_raw["cycle"] = choice(tuple(sorted(SCHEDULE_CYCLES)))(raw["cycle"], f"{where}.cycle")
+    periods = raw["periods"]
+    if not isinstance(periods, (list, tuple)):
+        raise TypeError(f"'{where}.periods' must be a list of period names")
+
+    rules = raw["rules"]
+    if not isinstance(rules, (list, tuple)) or not rules:
+        raise TypeError(f"'{where}.rules' must be a non-empty list")
+    normalized_rules = []
+    for position, rule in enumerate(rules):
+        rule_where = f"{where}.rules[{position}]"
+        rule_table = _strict_custom_table(
+            rule,
+            rule_where,
+            allowed=_CUSTOM_RULE_KEYS,
+            required=_CUSTOM_RULE_KEYS,
+        )
+        normalized_rule = dict(rule_table)
+        normalized_rule["days"] = choice(("all", "saturday", "sunday", "weekday"))(
+            rule_table["days"], f"{rule_where}.days"
+        )
+        normalized_rule["season"] = choice(("all", "dst", "standard"))(rule_table["season"], f"{rule_where}.season")
+        if not isinstance(rule_table["intervals"], Mapping):
+            raise TypeError(f"'{rule_where}.intervals' must be a table/dict")
+        normalized_rules.append(normalized_rule)
+    normalized_raw["rules"] = normalized_rules
+
+    holidays = raw.get("holidays")
+    if holidays is not None:
+        holiday_table = _strict_custom_table(
+            holidays,
+            f"{where}.holidays",
+            allowed=_CUSTOM_HOLIDAY_KEYS,
+            required=frozenset({"day_type", "dates"}),
+        )
+        normalized_holidays = dict(holiday_table)
+        normalized_holidays["day_type"] = choice(("saturday", "sunday", "weekday"))(
+            holiday_table["day_type"], f"{where}.holidays.day_type"
+        )
+        normalized_raw["holidays"] = normalized_holidays
+        holiday_dates = holiday_table["dates"]
+        if not isinstance(holiday_dates, Mapping) or not holiday_dates:
+            raise TypeError(f"'{where}.holidays.dates' must map years to lists of ISO dates")
+        for raw_year in holiday_dates:
+            if not (isinstance(raw_year, str) and re.fullmatch(r"\d{4}", raw_year)):
+                raise ValueError(f"'{where}.holidays.dates' keys must be four-digit years, not {raw_year!r}")
+            year = int(raw_year)
+            if not 1 <= year <= 9999:
+                raise ValueError(f"'{where}.holidays.dates' keys must be years from 0001 through 9999")
+        if "source" in holiday_table:
+            text(holiday_table["source"], f"{where}.holidays.source")
+
+    for name in ("source", "source_url", "note"):
+        if name in raw:
+            text(raw[name], f"{where}.{name}")
+
+    definition = parse_schedule_definition(
+        identifier, {key: item for key, item in normalized_raw.items() if key != "identifier"}, where=where
+    )
+    return definition
+
+
+def _selected_schedule(table: Mapping[str, Any]) -> ScheduleDefinition:
+    if "custom_schedule" in table:
+        return table["custom_schedule"]
+    return get_schedule_definition(table["schedule"])
+
+
 def _check_tariff_prices(table: dict[str, Any], where: str) -> None:
-    periods = set(get_tariff_schedule(table["schedule"]).periods)
+    if ("schedule" in table) == ("custom_schedule" in table):
+        raise ValueError(f"'{where}' must set exactly one of 'schedule' or 'custom_schedule'")
+    schedule = _selected_schedule(table).schedule
+    periods = set(schedule.periods)
     for name in ("import_prices", "export_prices"):
         given = set(table[name])
         unknown = sorted(given - periods - {"all"})
         if unknown:
             raise ValueError(
-                f"'{where}.{name}' has period(s) {', '.join(unknown)} that schedule {table['schedule']!r} "
+                f"'{where}.{name}' has period(s) {', '.join(unknown)} that schedule {schedule.identifier!r} "
                 f"does not have. Its periods: {', '.join(sorted(periods))}; 'all' prices every period."
             )
         missing = sorted(periods - given) if "all" not in given else []
         if missing:
             raise ValueError(
                 f"'{where}.{name}' has no price for {', '.join(missing)}. Price every period of "
-                f"{table['schedule']!r}, or give 'all'."
+                f"{schedule.identifier!r}, or give 'all'."
             )
 
 
@@ -1311,6 +1447,7 @@ TARIFF_TABLE = TableSpec(
     "tariff",
     keys={
         "schedule": choice(available_tariff_schedules()),
+        "custom_schedule": _custom_schedule,
         "currency": choice(tuple(sorted(SUPPORTED_CURRENCIES))),
         "import_prices": mapping_of(text, number(minimum=0)),
         "export_prices": mapping_of(text, number(minimum=0)),
@@ -1318,12 +1455,16 @@ TARIFF_TABLE = TableSpec(
         "boundary_policy": choice(tuple(sorted(BOUNDARY_POLICIES))),
         "study_date": _tariff_study_date,
     },
-    required=frozenset({"schedule", "currency", "import_prices", "export_prices"}),
+    required=frozenset({"currency", "import_prices", "export_prices"}),
     check=_check_tariff_prices,
     docs={
         "schedule": (
             "Bundled schedule key, which fixes the periods in local civil time; see "
-            "[Bundled schedules](../api/tariffs.md#bundled-schedules)"
+            "[Bundled schedules](../api/tariffs.md#bundled-schedules). Set this or `custom_schedule`, not both"
+        ),
+        "custom_schedule": (
+            "Inline schedule definition with `identifier`, `version`, `timezone`, `cycle`, `periods`, and `rules`; "
+            "set this or `schedule`, not both. See [Custom App schedules](../api/tariffs.md#custom-app-schedules)"
         ),
         "currency": (
             f"Currency of the prices: {', '.join(sorted(SUPPORTED_CURRENCIES))}. The cost preset should be in the "
@@ -1343,9 +1484,7 @@ TARIFF_TABLE = TableSpec(
 _TARIFF_REPLACES_COSTS = ("electricity_cost", "electricity_sold_cost", "daily_power_cost")
 
 
-def _validate_tariff(cfg: dict[str, Any]) -> None:
-    if cfg["tariff"] is None:
-        return
+def _validate_tariff(cfg: dict[str, Any]) -> tuple[dict[str, Any], ScheduleDefinition]:
     table = TARIFF_TABLE.validate(cfg["tariff"])
     clashing = sorted(key for key in _TARIFF_REPLACES_COSTS if key in (cfg.get("costs") or {}))
     if clashing:
@@ -1358,16 +1497,19 @@ def _validate_tariff(cfg: dict[str, Any]) -> None:
     # has no start_date, and classifying its index checks them instead.
     start = cfg.get("start_date")
     years = None if start is None else ((start if isinstance(start, date) else date.fromisoformat(start)).year,)
-    required = schedule_resolution_minutes(table["schedule"], years)
+    schedule = _selected_schedule(table)
+    required = schedule_resolution_minutes(schedule, years)
     if required % step_minutes:
         fitting = [freq for freq in ("h", "15min") if required % int(get_hours_per_step(freq) * 60) == 0]
         remedy = (
             f'use resolution = "{fitting[0]}"' if fitting else f"App offers no step that divides {required} minutes"
         )
+        identifier = schedule.schedule.identifier
         raise ValueError(
-            f"Schedule {table['schedule']!r} needs steps that divide {required} minutes, which "
+            f"Schedule {identifier!r} needs steps that divide {required} minutes, which "
             f"{cfg['resolution']!r} steps do not; {remedy} (ADR 0002 A3)."
         )
+    return table, schedule
 
 
 def resolve_tariff_spec(cfg: dict[str, Any], timezone: str) -> TariffSpec | None:
@@ -1380,12 +1522,11 @@ def resolve_tariff_spec(cfg: dict[str, Any], timezone: str) -> TariffSpec | None
     """
     if cfg["tariff"] is None:
         return None
-    _validate_tariff(cfg)
-    table = TARIFF_TABLE.validate(cfg["tariff"])
-    schedule = get_tariff_schedule(table["schedule"])
-    if schedule.timezone != timezone:
+    table, schedule = _validate_tariff(cfg)
+    metadata = schedule.schedule
+    if metadata.timezone != timezone:
         raise ValueError(
-            f"Schedule {schedule.identifier!r} is defined in {schedule.timezone} civil time, but the "
+            f"Schedule {metadata.identifier!r} is defined in {metadata.timezone} civil time, but the "
             f"location's timezone is {timezone}. BREOS does not move a schedule to another zone."
         )
     prices = TariffPrices(
@@ -1397,7 +1538,7 @@ def resolve_tariff_spec(cfg: dict[str, Any], timezone: str) -> TariffSpec | None
         version="1",
     )
     return TariffSpec(
-        schedule=schedule.identifier,
+        schedule=schedule,
         prices=prices,
         boundary_policy=table.get("boundary_policy", "strict"),
         study_date=table.get("study_date"),
@@ -1498,12 +1639,10 @@ def _checked_smart_charging(
     return table
 
 
-def _validate_smart_charging(cfg: dict[str, Any]) -> None:
+def _validate_smart_charging(cfg: dict[str, Any], tariff_spec: TariffSpec | None = None) -> None:
     if cfg["smart_charging"] is None:
         return
-    schedule = (
-        get_tariff_schedule(TARIFF_TABLE.validate(cfg["tariff"])["schedule"]) if cfg["tariff"] is not None else None
-    )
+    schedule = tariff_spec.definition.schedule if tariff_spec is not None else None
     _checked_smart_charging(cfg["smart_charging"], schedule, cfg["battery_kwh"])
 
 
@@ -2108,7 +2247,7 @@ def resolve_app_config(config: dict[str, Any]) -> ResolvedAppConfig:
         # The absolute rating replaces the ratio, so the ratio is reported unset.
         cfg["inverter_loading_ratio"] = None
     _normalise_config_values(cfg)
-    validate_config(cfg)
+    tariff = validate_config(cfg)
 
     lat, lon, timezone, loc_key = resolve_location(cfg)
     tilt, azimuth, axis_azimuth = resolve_orientation(cfg, lat)
@@ -2121,7 +2260,6 @@ def resolve_app_config(config: dict[str, Any]) -> ResolvedAppConfig:
     # Materialise the resolved module count (derived from pv_arrays when set)
     # into a fresh dict rather than mutating the merged config in place.
     cfg = {**cfg, "n_modules": n_modules}
-    tariff = resolve_tariff_spec(cfg, timezone)
     cost_params = resolve_costs(cfg)
     ac_capacity_w: float | None
     if cfg["inverter_ac_rating_kw"] is not None:
