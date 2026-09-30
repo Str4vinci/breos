@@ -14,6 +14,7 @@ from breos.battery import LEDGER_SCHEMA_VERSION
 from breos.economics import projection_rates_record
 from breos.result_schema import RESULT_SCHEMA_VERSION
 from breos.runners.app import CO2_COLUMNS, SimulationArtifacts
+from breos.smart_charging import PLANNER_MODES
 from breos.tariffs import result_currency
 from breos.utils import get_hours_per_step, local_datetime_index, package_version
 
@@ -184,10 +185,14 @@ def _provenance(
     if artifacts.period is not None:
         provenance["period"] = deepcopy(artifacts.period)
     if artifacts.smart_charging is not None:
+        # The result's smart_charging block reports the stored energy. The
+        # experimental daily_persistence record also keeps it, unrounded, as
+        # part of what identifies the policy's run (result schema 2.2).
+        planned = artifacts.smart_charging["mode"] in PLANNER_MODES
         provenance["smart_charging"] = {
-            key: value
+            key: deepcopy(value)
             for key, value in artifacts.smart_charging.items()
-            if key not in ("initial_stored_energy", "final_stored_energy")
+            if planned or key not in ("initial_stored_energy", "final_stored_energy")
         }
     return provenance
 

@@ -13,7 +13,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import pandas as pd
 
-from breos.config_schema import TableSpec, anything, boolean, choice, list_of, mapping_of, number, text
+from breos.config_schema import TableSpec, anything, boolean, choice, integer, list_of, mapping_of, number, text
 from breos.constants import (
     DEFAULT_CHARGE_EFFICIENCY,
     DEFAULT_DISCHARGE_EFFICIENCY,
@@ -43,7 +43,7 @@ from breos.pv.model_options import is_known_model, is_valid_albedo, is_valid_gcr
 from breos.pv.temperature import validate_temperature_inputs
 from breos.pv_modules import MODULES, PVModuleParams, get_module
 from breos.resources import load_config_json
-from breos.smart_charging import SMART_CHARGING_MODES, SmartChargingSpec
+from breos.smart_charging import PLANNER_MODES, PLANNER_SETTINGS, SMART_CHARGING_MODES, SmartChargingSpec
 from breos.solar import (
     BIFACIAL_MODELS,
     DEFAULT_BIFACIAL_MODEL,
@@ -656,8 +656,8 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
     "smart_charging": AppConfigField(
         default=None,
         doc=(
-            "Grid charging toward a target in the tariff's cheap periods; see [`[smart_charging]`](#smart_charging) "
-            "and [Smart charging](configuration.md#smart-charging)"
+            "Grid charging toward a fixed or a daily planned target in the tariff's cheap periods; see "
+            "[`[smart_charging]`](#smart_charging) and [Smart charging](configuration.md#smart-charging)"
         ),
         default_doc="*unset*",
         summary="battery.smart_charging",
@@ -1545,22 +1545,44 @@ def resolve_tariff_spec(cfg: dict[str, Any], timezone: str) -> TariffSpec | None
     )
 
 
-# Keys fixed-target mode must set. grid_charge_efficiency has no default: the
-# inverter model has no AC-to-DC path to derive one from (ADR 0002 A6).
-_FIXED_TARGET_REQUIRED = ("target_usable_fraction", "charge_periods", "discharge_periods", "grid_charge_efficiency")
+# Keys each grid-charging mode must set. grid_charge_efficiency has no
+# default: the inverter model has no AC-to-DC path to derive one from (ADR
+# 0002 A6). daily_persistence plans its target, so it sets none.
+_COMMON_REQUIRED = ("charge_periods", "discharge_periods", "grid_charge_efficiency")
+_MODE_REQUIRED = {
+    "fixed_target": ("target_usable_fraction", *_COMMON_REQUIRED),
+    "daily_persistence": _COMMON_REQUIRED,
+}
+# Keys a grid-charging mode refuses: the fixed target where the planner picks
+# it, and the planner settings where there is no planner.
+_MODE_REFUSED = {
+    "fixed_target": tuple(PLANNER_SETTINGS),
+    "daily_persistence": ("target_usable_fraction",),
+}
 
 
 def _check_smart_charging_keys(table: dict[str, Any], where: str) -> None:
-    if table["mode"] == "disabled":
+    mode = table["mode"]
+    if mode == "disabled":
         extra = sorted(key for key in table if key != "mode")
         if extra:
             raise ValueError(
                 f"'{where}.mode' = 'disabled' takes no other keys; remove {', '.join(f'{where}.{k}' for k in extra)}"
             )
         return
-    missing = [key for key in _FIXED_TARGET_REQUIRED if key not in table]
+    refused = [key for key in _MODE_REFUSED[mode] if key in table]
+    if refused:
+        reason = (
+            "the planner chooses each day's target"
+            if mode in PLANNER_MODES
+            else f"they set the planner of mode = {' or '.join(repr(m) for m in PLANNER_MODES)}"
+        )
+        raise ValueError(
+            f"'{where}.mode' = '{mode}' does not take {', '.join(f'{where}.{k}' for k in refused)}: {reason}"
+        )
+    missing = [key for key in _MODE_REQUIRED[mode] if key not in table]
     if missing:
-        raise ValueError(f"'{where}' needs {', '.join(f'{where}.{k}' for k in missing)} for mode = 'fixed_target'")
+        raise ValueError(f"'{where}' needs {', '.join(f'{where}.{k}' for k in missing)} for mode = '{mode}'")
     overlap = sorted(set(table["charge_periods"]) & set(table["discharge_periods"]))
     if overlap:
         raise ValueError(
@@ -1579,13 +1601,32 @@ SMART_CHARGING_TABLE = TableSpec(
         "grid_charge_efficiency": number(minimum=0, maximum=1, min_exclusive=True),
         # None, as well as omitting the key, leaves site import unlimited.
         "grid_import_limit_w": number(minimum=0, min_exclusive=True, allow_none=True),
+        **{name: integer(minimum=minimum) for name, (_default, minimum) in PLANNER_SETTINGS.items()},
     },
     required=frozenset({"mode"}),
     check=_check_smart_charging_keys,
     docs={
-        "mode": "`fixed_target` charges from the grid toward a target; `disabled` is greedy self-consumption",
+        "mode": (
+            "`fixed_target` charges from the grid toward a fixed target; `daily_persistence` (experimental, App "
+            "only) plans each day's target; `disabled` is greedy self-consumption"
+        ),
         "target_usable_fraction": (
-            "Grid-charging target as a fraction of the usable window: 0 is `battery_min_soc`, 1 is `battery_max_soc`"
+            "Grid-charging target as a fraction of the usable window: 0 is `battery_min_soc`, 1 is "
+            "`battery_max_soc`. `fixed_target` only"
+        ),
+        "forecast_horizon_days": (
+            f"`daily_persistence` only: civil days the planner looks ahead, today included. An integer of at "
+            f"least {PLANNER_SETTINGS['forecast_horizon_days'][1]}; default "
+            f"{PLANNER_SETTINGS['forecast_horizon_days'][0]}"
+        ),
+        "target_levels": (
+            f"`daily_persistence` only: candidate targets, evenly spaced from 0 to 1 of the usable window. An "
+            f"integer of at least {PLANNER_SETTINGS['target_levels'][1]} (one level selects target 0); default "
+            f"{PLANNER_SETTINGS['target_levels'][0]}"
+        ),
+        "soc_states": (
+            f"`daily_persistence` only: stored-energy grid points of the planner's value function. An integer of "
+            f"at least {PLANNER_SETTINGS['soc_states'][1]}; default {PLANNER_SETTINGS['soc_states'][0]}"
         ),
         "charge_periods": "Tariff periods in which the grid may charge the battery",
         "discharge_periods": "Tariff periods in which the battery may discharge to the load; not a charge period",
@@ -1619,15 +1660,15 @@ def _checked_smart_charging(
     ``battery_key`` names the setting ``battery_kwh`` came from, for the error.
     """
     table = SMART_CHARGING_TABLE.validate(value)
-    if table["mode"] == "disabled":
+    mode = table["mode"]
+    if mode == "disabled":
         return table
     if schedule is None:
         raise ValueError(
-            "'smart_charging.mode' = 'fixed_target' needs a [tariff]: its charge and discharge periods are "
-            "tariff periods"
+            f"'smart_charging.mode' = '{mode}' needs a [tariff]: its charge and discharge periods are tariff periods"
         )
     if not battery_kwh > 0:
-        raise ValueError(f"'smart_charging.mode' = 'fixed_target' needs a battery; set {battery_key} > 0")
+        raise ValueError(f"'smart_charging.mode' = '{mode}' needs a battery; set {battery_key} > 0")
     periods = schedule.periods
     for name in ("charge_periods", "discharge_periods"):
         unknown = sorted(set(table[name]) - set(periods))
@@ -1664,12 +1705,15 @@ def resolve_smart_charging_spec(
         return SmartChargingSpec(mode="disabled")
     return SmartChargingSpec(
         mode=table["mode"],
-        target_usable_fraction=table["target_usable_fraction"],
+        target_usable_fraction=table.get("target_usable_fraction"),
         # A period named twice is still one period.
         charge_periods=tuple(dict.fromkeys(table["charge_periods"])),
         discharge_periods=tuple(dict.fromkeys(table["discharge_periods"])),
         grid_charge_efficiency=table["grid_charge_efficiency"],
         grid_import_limit_w=table.get("grid_import_limit_w"),
+        # Omitted planner settings take the planner's defaults, which the
+        # spec then records.
+        **{name: table[name] for name in PLANNER_SETTINGS if name in table},
     )
 
 

@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
-from numbers import Real
+from numbers import Integral, Real
 from typing import Any, Callable, Iterable, Mapping
 
 Checker = Callable[[Any, str], Any]
@@ -108,6 +108,23 @@ def number(
         high_ok = maximum is None or (result < maximum if max_exclusive else result <= maximum)
         if not (low_ok and high_ok):
             raise ValueError(f"'{where}' must be {_range_text(minimum, maximum, min_exclusive, max_exclusive)}")
+        return result
+
+    return check
+
+
+def integer(*, minimum: int | None = None) -> Checker:
+    """An integer, optionally at least ``minimum``; returned as ``int``.
+
+    A bool is refused, and so is a float even when it is integral (``2.0``).
+    """
+
+    def check(value: Any, where: str) -> int:
+        if isinstance(value, bool) or not isinstance(value, Integral):
+            raise TypeError(f"'{where}' must be an integer")
+        result = int(value)
+        if minimum is not None and result < minimum:
+            raise ValueError(f"'{where}' must be >= {minimum}")
         return result
 
     return check

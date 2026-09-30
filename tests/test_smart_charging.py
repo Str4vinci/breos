@@ -65,10 +65,10 @@ def _tri_tariff(index):
         ([], {}, TypeError, r"'smart_charging' must be a table/dict"),
         (_without(FIXED, "mode"), {}, ValueError, r"'smart_charging' needs smart_charging\.mode$"),
         (
-            {**FIXED, "mode": "daily_persistence"},
+            {**FIXED, "mode": "perfect_foresight"},
             {},
             ValueError,
-            r"'smart_charging\.mode' must be one of: disabled, fixed_target",
+            r"'smart_charging\.mode' must be one of: disabled, fixed_target, daily_persistence; got 'perfect_foresight'",
         ),
         (
             {**FIXED, "target_soc": 0.5},

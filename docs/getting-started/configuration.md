@@ -444,7 +444,7 @@ unchanged results:
 
 ```toml
 [smart_charging]
-mode = "fixed_target"               # or "disabled"
+mode = "fixed_target"               # or "disabled", or the experimental "daily_persistence"
 target_usable_fraction = 0.50       # 0 is battery_min_soc, 1 is battery_max_soc
 charge_periods = ["off_peak"]
 discharge_periods = ["mid_peak", "peak"]
@@ -488,6 +488,88 @@ instructions and the tariff's schedule hash.
 Monte Carlo applies the same instructions to every trajectory, and projected
 optimization to every candidate design with a battery; both record the same
 provenance. See `configs/examples/smart-charging-portugal.toml`.
+
+### Daily persistence (experimental)
+
+`mode = "daily_persistence"` keeps the fixed-target layout but chooses the
+grid-charge target once per day while the run goes, instead of fixing it in
+the configuration. It is experimental and runs in `App` only:
+
+```toml
+[smart_charging]
+mode = "daily_persistence"
+charge_periods = ["off_peak"]
+discharge_periods = ["peak"]
+grid_charge_efficiency = 0.95       # required, as for fixed_target
+grid_import_limit_w = 5000          # optional
+# Optional planner settings (integers), shown at their defaults:
+forecast_horizon_days = 2           # days the planner looks ahead, today included
+target_levels = 11                  # candidate targets 0, 0.1, ..., 1 of the usable window
+soc_states = 21                     # stored-energy grid points of the planner
+```
+
+At each local midnight in the tariff's timezone the mode:
+
+1. forecasts PV, load and temperature for the planning window by repeating
+   the last complete local day that has been simulated. Slots match by local
+   wall-clock time, so a 23- or 25-hour day keeps every tariff period in
+   place: a repeated fall-back hour reuses the observed hour, and the hour a
+   spring-forward day skipped is interpolated between its neighbours;
+2. solves a small dynamic program over that forecast and the known tariff
+   prices, from the battery's measured stored energy, state of health and
+   efficiencies, choosing one target per day from `target_levels` candidates;
+3. applies the first day's target to that day's charge periods, and plans
+   the next day again from what actually happened.
+
+The table takes the same `charge_periods`, `discharge_periods`,
+`grid_charge_efficiency` and `grid_import_limit_w` as `fixed_target`, and
+refuses `target_usable_fraction`, since the planner chooses it. The planner
+settings are integers (not booleans or `2.0`); `fixed_target` and `disabled`
+refuse them. `target_levels = 1` is valid and selects the sole target 0.
+The run starts with no complete day to repeat, so until one
+complete local day has been observed it sets no grid target
+(`warm_start_policy = "no_grid_until_one_complete_local_day"`); PV charging
+and the discharge periods run as configured. A partial first or last day
+does not count as observed, and the two ends of a `[period]` are never
+joined into one day.
+
+The planner's terminal target is the day's starting energy, capped at the
+max-SOC capacity at the final forecast temperature and current state of
+health. Energy that ends the window below that target is priced at the
+cheapest import price of a step that may grid-charge, through both charge
+efficiencies (`planner_terminal_policy = "preserve_start_energy"`). When no
+step permits grid charging, it uses the cheapest import price of any step.
+The same policy applies at the project's final horizon.
+This only keeps a rolling plan from treating an empty battery at the end of
+its window as free. It is not an instruction: the simulated battery still
+carries its stored energy, origins and degradation from year to year
+(`terminal_convention = "physical_carry"`).
+
+Keep these modelling assumptions in mind when reading the results:
+
+- The forecast is naive persistence, not a weather or load forecast.
+- The end-of-window price is a simple continuation value, not a learned one.
+  It assumes missing energy can be bought back at the cheapest chargeable
+  price within the window, and is biased when recharge prices beyond the
+  window differ.
+- State of health and efficiencies stay fixed inside each short solve; the
+  simulation still ages the battery every day.
+
+`provenance.smart_charging` of such a run records `experimental = true`, the
+controller and planner versions, the effective planner settings, the
+forecast, warm-start and terminal policies, the schedule hash, an
+`instruction_hash` of the instructions the run executed in every project
+year, and the stored energy by origin at the start and end of the project.
+[`App.revalue`](recipes.md#revalue-a-run-at-other-prices) simulates the run
+again when the import or export prices change, since they move the plan; a
+change to the fixed charge alone is re-priced. Monte Carlo and projected
+optimization refuse the mode, because they share one set of static
+instructions across trajectories and candidate designs.
+
+The planner simulates each candidate target with the same dispatch step as
+the run, several hundred times a day, so the mode is much slower than
+`fixed_target`. Use `execution_backend = "numba"` (the `breos[fast]` extra); the Python
+backend at 15 minutes gives a warning.
 
 ## Load profiles
 
