@@ -921,10 +921,15 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   clock, so 29 February is a copy of 28 February, 1 March keeps its own
   hours, and the weather metadata records the fill as `leap_day`, as for a
   UTC TMY. **Results change for leap study years with a fixed-offset TMY.**
-  UTC-stamped files, including those BREOS's downloaders write, naive
-  timestamps (read as UTC), timestamps with mixed daylight-saving offsets
-  (read as UTC), and a fixed-offset TMY moved between two common years are
-  unchanged bit for bit.
+  This includes PVGIS TMYs saved by BREOS's own downloader, which stamps them
+  at the location's winter UTC offset (for example `+01:00` for Berlin or
+  Madrid). A leap-year fixed-offset TMY moved to a common study year also
+  changes: it now drops its own local 29 February, where it previously
+  dropped the UTC day and shifted part of it into 1 March. UTC-stamped files
+  (such as Porto or Lisbon TMYs), naive timestamps (read as UTC), timestamps
+  with mixed daylight-saving offsets (read as UTC), and a fixed-offset TMY
+  moved between two common years or between two leap years are unchanged
+  bit for bit.
 - Fixed-design evaluation and multi-objective optimization now validate and
   apply the optional `tariff` table through the shared projection loop.
   Previously they silently ignored it and valued the design at flat prices.
