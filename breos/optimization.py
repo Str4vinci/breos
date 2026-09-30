@@ -1,10 +1,9 @@
 """
 Optimization module for PV system sizing and configuration.
 
-This module provides:
-- Tilt angle optimization
-- Battery sizing optimization
-- ZEB (Zero Energy Building) sizing
+This module provides the NSGA-II multi-objective design search
+(:func:`optimize_system_multi_objective`) and the fixed-design projection
+(:func:`evaluate_projected_design`) behind it.
 """
 
 from dataclasses import dataclass, field
@@ -13,7 +12,7 @@ from typing import Any, Callable, Dict, Optional, Sequence, Tuple, Union
 import numpy as np
 import pandas as pd
 
-from breos.battery import BatteryConfig, simulate_energy_balance
+from breos.battery import BatteryConfig
 from breos.dispatch_instructions import DispatchInstructions
 from breos.economics import (
     calculate_costs,
@@ -40,10 +39,8 @@ from breos.smart_charging import resolve_instructions, smart_charging_provenance
 from breos.solar import (
     PVModuleParams,
     calculate_pv_production_dc,
-    default_azimuth,
 )
 from breos.tariffs import ResolvedTariff, result_currency, tariff_provenance
-from breos.utils import get_hours_per_step
 from breos.weather import build_battery_temperature_series
 
 
@@ -85,174 +82,6 @@ def _resolve_max_tilt_deg(constraints: Dict[str, Any], latitude: float) -> float
     return float(value)
 
 
-def optimize_tilt(
-    weather_data: pd.DataFrame,
-    location,
-    n_modules: int,
-    model_options: Optional[Dict[str, Any]] = None,
-    pv_params: Optional[PVModuleParams] = None,
-    surface_azimuth: Optional[float] = None,
-    tilt_range: Tuple[float, float] = (0.0, 60.0),
-    objective: str = "max_production",
-    freq: str = "h",
-    n_points: int = 13,
-    verbose: bool = True,
-) -> OptimizationResult:
-    """
-    Optimize panel tilt angle for maximum production.
-
-    Args:
-        weather_data: Weather DataFrame with solar irradiance
-        location: pvlib Location object
-        n_modules: Number of PV modules
-        pv_params: PV module parameters
-        surface_azimuth: Panel azimuth (180=South, 0=North). If None, auto-detected from hemisphere.
-        tilt_range: (min_tilt, max_tilt) in degrees
-        objective: Must be ``"max_production"``. The historical
-            ``"max_self_consumption"`` label was never implemented because
-            this function has no load input; it now raises instead of silently
-            optimizing production.
-        freq: Time frequency
-        n_points: Number of tilt values to evaluate
-        verbose: Print progress
-
-    Returns:
-        OptimizationResult with optimal tilt
-    """
-    if objective != "max_production":
-        raise ValueError("optimize_tilt supports objective='max_production' only")
-    if surface_azimuth is None:
-        surface_azimuth = default_azimuth(location.latitude)
-    tilts = np.linspace(tilt_range[0], tilt_range[1], n_points)
-    results = []
-
-    # A failing candidate raises: scoring it as zero production, as this used
-    # to, could move the reported optimum.
-    for tilt in tilts:
-        dc_power = calculate_pv_production_dc(
-            weather_data=weather_data,
-            location=location,
-            tilt=tilt,
-            surface_azimuth=surface_azimuth,
-            n_modules=n_modules,
-            pv_params=pv_params,
-            freq=freq,
-            **(model_options or {}),
-        )
-        total_production = dc_power.sum() * get_hours_per_step(freq) / 1000  # kWh (DC)
-        results.append({"tilt": tilt, "production_kwh": total_production})
-
-        if verbose:
-            print(f"  Tilt {tilt:.1f}°: {total_production:.1f} kWh")
-
-    results_df = pd.DataFrame(results)
-    optimal_idx = results_df["production_kwh"].idxmax()
-    optimal_tilt = results_df.loc[optimal_idx, "tilt"]
-    optimal_production = results_df.loc[optimal_idx, "production_kwh"]
-
-    if verbose:
-        print(f"\nOptimal tilt: {optimal_tilt:.1f}° ({optimal_production:.1f} kWh)")
-
-    return OptimizationResult(
-        optimal_value=optimal_tilt,
-        objective_value=optimal_production,
-        iterations=len(tilts),
-        details={"all_results": results_df},
-    )
-
-
-def optimize_battery_size(
-    pv_dc: pd.Series,
-    houseload: pd.DataFrame,
-    battery_sizes_wh: list,
-    start_time: Optional[pd.Timestamp] = None,
-    end_time: Optional[pd.Timestamp] = None,
-    freq: str = "h",
-    objective: str = "max_self_consumption",
-    verbose: bool = True,
-    execution_backend: str = DEFAULT_EXECUTION_BACKEND,
-) -> OptimizationResult:
-    """
-    Optimize battery size for self-consumption or grid independence.
-
-    Args:
-        pv_dc: PV DC production series
-        houseload: Load DataFrame
-        battery_sizes_wh: List of battery sizes to evaluate
-        start_time: Simulation start
-        end_time: Simulation end
-        freq: Time frequency
-        objective: 'max_self_consumption' or 'min_import'
-        verbose: Print progress
-
-    Returns:
-        OptimizationResult with optimal battery size
-    """
-    # Before the first candidate, not inside the loop over battery sizes.
-    require_backend(execution_backend)
-
-    results = []
-
-    # A failing candidate raises rather than being dropped from the comparison.
-    for size_wh in battery_sizes_wh:
-        config = BatteryConfig(nominal_energy_wh=size_wh)
-
-        df, total_pv, summary, _, _ = simulate_energy_balance(
-            pv_dc=pv_dc,
-            houseload=houseload,
-            battery_config=config,
-            start_time=start_time,
-            end_time=end_time,
-            freq=freq,
-            debug=False,
-            execution_backend=execution_backend,
-        )
-
-        grid_independence = summary["Grid Independence [%]"].iloc[0]
-        import_pct = summary["Import [%]"].iloc[0]
-        total_pv_kwh = summary["Total PV [kWh]"].iloc[0]
-        export_kwh = summary["Sell [kWh]"].iloc[0]
-        self_consumption_pct = ((total_pv_kwh - export_kwh) / total_pv_kwh) * 100 if total_pv_kwh > 0 else 0.0
-
-        results.append(
-            {
-                "battery_size_wh": size_wh,
-                "battery_size_kwh": size_wh / 1000,
-                "grid_independence": grid_independence,
-                "import_percent": import_pct,
-                "self_consumption": self_consumption_pct,
-            }
-        )
-
-        if verbose:
-            print(f"  {size_wh / 1000:.1f} kWh: {grid_independence:.1f}% grid independence")
-
-    results_df = pd.DataFrame(results)
-    if results_df.empty:
-        raise ValueError("battery_sizes_wh must name at least one battery size")
-
-    if objective == "max_self_consumption":
-        optimal_idx = results_df["self_consumption"].idxmax()
-        optimal_value = results_df.loc[optimal_idx, "self_consumption"]
-    elif objective == "max_grid_independence":
-        optimal_idx = results_df["grid_independence"].idxmax()
-        optimal_value = results_df.loc[optimal_idx, "grid_independence"]
-    elif objective == "min_import":
-        optimal_idx = results_df["import_percent"].idxmin()
-        optimal_value = results_df.loc[optimal_idx, "import_percent"]
-    else:
-        raise ValueError("objective must be 'max_self_consumption', 'max_grid_independence', or 'min_import'")
-
-    optimal_size = results_df.loc[optimal_idx, "battery_size_wh"]
-
-    return OptimizationResult(
-        optimal_value=optimal_size,
-        objective_value=optimal_value,
-        iterations=len(battery_sizes_wh),
-        details={"all_results": results_df},
-    )
-
-
 # ==========================================
 # 2. HELPER FUNCTIONS
 # ==========================================
@@ -269,9 +98,9 @@ def _pv_params_from_config(params: Dict[str, Any]) -> PVModuleParams:
         Imp=params["Imp"],
         Voc=params["Voc"],
         Isc=params["Isc"],
-        T_Pmax_pct=params.get("T_Pmax_pct", params.get("T_Pmax", -0.34)),
-        T_Voc_pct=params.get("T_Voc_pct", params.get("T_Voc", -0.26)),
-        T_Isc_pct=params.get("T_Isc_pct", params.get("T_Isc", 0.05)),
+        T_Pmax_pct=params.get("T_Pmax_pct", -0.34),
+        T_Voc_pct=params.get("T_Voc_pct", -0.26),
+        T_Isc_pct=params.get("T_Isc_pct", 0.05),
         N_Cells=params.get("N_Cells", 144),
         celltype=params.get("celltype", "monoSi"),
     )
@@ -601,16 +430,13 @@ def _evaluate_projected_design_metrics(
     )
     # Priced here, as App and Monte Carlo price theirs (ADR 0003 E4, E7).
     yearly_summary_df = price_year_rows(projection.yearly_df, costs)
-    first_year_results_df = projection.first_year_results_df
     total_replacements = projection.total_replacements
     current_soh = float(projection.carry.soh_pct)
     cost_projection = cost_analysis_projection(
-        results_df=first_year_results_df,
+        yearly_summary_df,
         costs=costs,
         num_years=years_projection,
         **_projection_rates(fin_cfg),
-        freq=freq,
-        yearly_summary_df=yearly_summary_df,
         emissions_params=emissions_params,
         currency=result_currency(tariff),
     )
@@ -937,7 +763,7 @@ try:
             tmy_data: pd.DataFrame,
             houseload: pd.DataFrame,
             config: Dict[str, Any],
-            results_dir: str,
+            *,
             elementwise_runner=None,
             execution_backend: str = DEFAULT_EXECUTION_BACKEND,
         ):
@@ -952,7 +778,6 @@ try:
             # unknown key raises, and every default is in the resolved config.
             config = resolve_optimization_config(config)
             self.config = config
-            self.results_dir = results_dir
 
             self.constraints = config["constraints"]
             # One schedule/price resolution per search, shared by every
@@ -1203,7 +1028,7 @@ def optimize_system_multi_objective(
     tmy_data: pd.DataFrame,
     houseload: pd.DataFrame,
     config: Dict[str, Any],
-    results_dir: str = "results/optimization",
+    *,
     pop_size: int | None = None,
     n_gen: int | None = None,
     n_offsprings: int | None = None,
@@ -1229,7 +1054,6 @@ def optimize_system_multi_objective(
         config: Optimization config using the nested keys consumed by
             :class:`SolarDesignProblem` (``location``, ``constraints``,
             ``simulation``, ``pv``, ``battery``, ``costs``, ``financials``).
-        results_dir: Directory label retained in the problem object.
         pop_size: NSGA-II population size. Each of the four run settings is
             this argument, else the ``[optimization]`` key of the same name,
             else its default; an argument and a key that disagree raise.
@@ -1291,7 +1115,6 @@ def optimize_system_multi_objective(
         tmy_data,
         houseload,
         config,
-        results_dir,
         execution_backend=execution_backend,
     )
     termination, early_stop_metadata = _build_multi_objective_termination(n_gen, config["optimization"]["early_stop"])

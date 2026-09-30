@@ -3,7 +3,6 @@ I/O module for data export and import.
 
 This module provides functions for:
 - Exporting simulation results to CSV/TXT
-- Saving cost analysis reports
 - Generating formatted summary reports
 - Preparing result payloads for strict JSON
 - Repairing measured load and PV series before a simulation
@@ -15,13 +14,12 @@ from :mod:`breos.repair`.
 import math
 import os
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, List, Union
 
 import numpy as np
 import pandas as pd
 
 from breos.repair import InputRepairReport, RepairEvent, repair_series  # noqa: F401 - public re-export
-from breos.tariffs import DEFAULT_CURRENCY
 from breos.utils import local_datetime_index
 
 
@@ -85,51 +83,12 @@ def export_results(
     return filepath
 
 
-def export_cost_analysis(
-    cost_df: pd.DataFrame,
-    results_directory: str,
-    prefix: str = "",
-    suffix: str = "",
-    format: str = "csv",
-    index: bool = False,
-) -> str:
-    """
-    Export cost projection analysis to CSV or TXT.
-
-    Args:
-        cost_df: DataFrame from cost_analysis_projection()
-        results_directory: Directory to save the file
-        prefix: Optional prefix for filename
-        suffix: Optional suffix for filename
-        format: Output format ('csv' or 'txt')
-        index: Whether to include DataFrame index
-
-    Returns:
-        Path to the saved file
-    """
-    os.makedirs(results_directory, exist_ok=True)
-
-    parts = [p for p in [prefix, "cost_analysis", suffix] if p]
-    filename = "_".join(parts) + f".{format}"
-    filepath = os.path.join(results_directory, filename)
-
-    if format == "csv":
-        cost_df.to_csv(filepath, index=index)
-    elif format == "txt":
-        cost_df.to_csv(filepath, index=index, sep="\t")
-    else:
-        raise ValueError(f"Unsupported format: {format}. Use 'csv' or 'txt'.")
-
-    return filepath
-
-
 def export_summary(
     summary_df: pd.DataFrame,
     results_directory: str,
     prefix: str = "",
     suffix: str = "",
     format: str = "txt",
-    extra_metrics: Optional[Dict[str, Any]] = None,
 ) -> str:
     """
     Export summary statistics as formatted text or CSV.
@@ -140,19 +99,11 @@ def export_summary(
         prefix: Optional prefix for filename
         suffix: Optional suffix for filename
         format: Output format ('txt' for formatted text, 'csv' for raw)
-        extra_metrics: Optional label -> value pairs appended as additional
-            summary fields (e.g. ``{"LCOE [EUR/kWh]": "0.1327"}`` for an EUR run). Pre-format
-            float values as strings to control their displayed precision.
 
     Returns:
         Path to the saved file
     """
     os.makedirs(results_directory, exist_ok=True)
-
-    if extra_metrics:
-        summary_df = summary_df.copy()
-        for label, value in extra_metrics.items():
-            summary_df[label] = value
 
     parts = [p for p in [prefix, "summary", suffix] if p]
     filename = "_".join(parts) + f".{format}"
@@ -176,41 +127,6 @@ def export_summary(
         summary_df.to_csv(filepath, index=False)
 
     return filepath
-
-
-def _economics_summary_metrics(cost_projection_df: Optional[pd.DataFrame]) -> Dict[str, Any]:
-    """Pull headline economics figures from a cost projection's ``attrs``.
-
-    The projection produced by :func:`breos.economics.cost_analysis_projection`
-    stamps LCOE, payback, NPV savings, total investment and the currency onto
-    ``DataFrame.attrs``. This surfaces them as summary fields without any
-    recomputation, labelled in that currency (EUR when absent). Missing figures
-    are skipped; an absent projection yields an empty dict.
-    """
-    if cost_projection_df is None:
-        return {}
-
-    attrs = cost_projection_df.attrs
-    metrics: Dict[str, Any] = {}
-    currency = attrs.get("currency", DEFAULT_CURRENCY)
-
-    lcoe = attrs.get("lcoe_per_kwh")
-    if lcoe is not None and np.isfinite(lcoe):
-        metrics[f"LCOE [{currency}/kWh]"] = f"{float(lcoe):.4f}"
-
-    total_investment = attrs.get("total_investment")
-    if total_investment is not None:
-        metrics[f"Total Investment [{currency}]"] = f"{float(total_investment):.2f}"
-
-    npv = attrs.get("final_npv_savings")
-    if npv is not None:
-        metrics[f"NPV Savings [{currency}]"] = f"{float(npv):.2f}"
-
-    if "payback_year" in attrs:
-        payback = attrs.get("payback_year")
-        metrics["Payback [year]"] = "N/A" if payback is None else int(payback)
-
-    return metrics
 
 
 def load_results(filepath: Union[str, os.PathLike], parse_dates: Union[bool, List[str]] = True) -> pd.DataFrame:

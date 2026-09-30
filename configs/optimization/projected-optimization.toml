@@ -48,7 +48,6 @@ enable_replacement = true
 replacement_cost = "calculate"
 
 [optimization]
-algorithm = "nsga2"
 # "projected" scores candidates over the whole horizon using simulated yearly
 # values. It is the only basis; "steady_state" was removed in 0.7.0.
 objective_basis = "projected"

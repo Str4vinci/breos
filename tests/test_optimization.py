@@ -1,7 +1,5 @@
 """Tests for optimization guardrails."""
 
-from types import SimpleNamespace
-
 import numpy as np
 import pandas as pd
 import pytest
@@ -10,75 +8,9 @@ pytest.importorskip("pymoo")
 
 from breos.optimization import (
     SolarDesignProblem,
-    optimize_battery_size,
     optimize_system_multi_objective,
-    optimize_tilt,
 )
 from tests.conftest import _stub_projection_balance
-
-
-def test_optimize_tilt_rejects_unimplemented_objective():
-    with pytest.raises(ValueError, match="max_production"):
-        optimize_tilt(
-            pd.DataFrame(),
-            SimpleNamespace(latitude=41.0),
-            1,
-            objective="max_self_consumption",
-            verbose=False,
-        )
-
-
-def test_optimize_tilt_propagates_a_failing_evaluation(monkeypatch):
-    monkeypatch.setattr(
-        "breos.optimization.calculate_pv_production_dc",
-        lambda **kwargs: (_ for _ in ()).throw(RuntimeError("invalid weather")),
-    )
-
-    with pytest.raises(RuntimeError, match="invalid weather"):
-        optimize_tilt(
-            pd.DataFrame(),
-            SimpleNamespace(latitude=41.0),
-            1,
-            n_points=2,
-            verbose=False,
-        )
-
-
-def test_optimize_battery_size_uses_current_energy_balance_api():
-    idx = pd.date_range("2025-01-01 00:00", periods=24, freq="h", tz="UTC")
-    pv_dc = pd.Series([0.0] * 8 + [800.0] * 8 + [0.0] * 8, index=idx)
-    houseload = pd.DataFrame({"Load": [300.0] * 24}, index=idx)
-
-    result = optimize_battery_size(
-        pv_dc=pv_dc,
-        houseload=houseload,
-        battery_sizes_wh=[0.0, 1000.0, 3000.0],
-        objective="max_grid_independence",
-        verbose=False,
-    )
-
-    assert result.optimal_value in {0.0, 1000.0, 3000.0}
-    assert result.iterations == 3
-    assert set(result.details["all_results"].columns) >= {
-        "battery_size_wh",
-        "grid_independence",
-        "self_consumption",
-    }
-
-
-def test_optimize_battery_size_rejects_unknown_objective():
-    idx = pd.date_range("2025-01-01 00:00", periods=2, freq="h", tz="UTC")
-    pv_dc = pd.Series([0.0, 0.0], index=idx)
-    houseload = pd.DataFrame({"Load": [100.0, 100.0]}, index=idx)
-
-    with pytest.raises(ValueError, match="objective must be"):
-        optimize_battery_size(
-            pv_dc=pv_dc,
-            houseload=houseload,
-            battery_sizes_wh=[0.0],
-            objective="max_magic",
-            verbose=False,
-        )
 
 
 def test_projected_objective_basis_uses_two_objectives_and_optional_zeb_constraint():
@@ -92,7 +24,7 @@ def test_projected_objective_basis_uses_two_objectives_and_optional_zeb_constrai
         "mode": {"fixed_azimuth": 180},
     }
 
-    problem = SolarDesignProblem(tmy_data, houseload, config, "results/_test_run/problem_projected")
+    problem = SolarDesignProblem(tmy_data, houseload, config)
 
     assert problem.n_obj == 2
     assert problem.n_ieq_constr == 3
@@ -113,7 +45,7 @@ def test_objective_basis_defaults_to_projected():
         "mode": {"fixed_azimuth": 180},
     }
 
-    problem = SolarDesignProblem(tmy_data, houseload, config, "results/_test_run/problem_default_basis")
+    problem = SolarDesignProblem(tmy_data, houseload, config)
 
     assert problem.objective_basis == "projected"
     assert problem.n_obj == 2
@@ -131,7 +63,7 @@ def test_steady_state_objective_basis_was_removed():
     }
 
     with pytest.raises(ValueError, match=r"'steady_state' was removed in 0\.7\.0.*Use 'projected'"):
-        SolarDesignProblem(tmy_data, houseload, config, "results/_test_run/problem_steady_state")
+        SolarDesignProblem(tmy_data, houseload, config)
 
 
 def test_projected_objective_basis_rejects_unknown_value():
@@ -147,7 +79,6 @@ def test_projected_objective_basis_rejects_unknown_value():
                 "location": {"latitude": 41.15, "longitude": -8.61, "timezone": "UTC"},
                 "optimization": {"objective_basis": "lifetime-ish"},
             },
-            "results/_test_run/problem_invalid_basis",
         )
 
 
@@ -181,7 +112,7 @@ def test_projected_zeb_constraint_uses_projected_diagnostic(monkeypatch):
         "mode": {"fixed_azimuth": 180},
     }
     out = {}
-    problem = SolarDesignProblem(tmy_data, houseload, config, "results/_test_run/problem_projected_zeb")
+    problem = SolarDesignProblem(tmy_data, houseload, config)
     problem._evaluate(np.array([2.0, 0.0, 10.0]), out)
 
     assert out["F"] == pytest.approx([0.5, -1000.0])
@@ -209,7 +140,7 @@ def test_solar_design_problem_area_constraint_uses_pv_dimensions(monkeypatch):
     monkeypatch.setattr("breos.optimization.calculate_pv_production_dc", lambda **kwargs: dc)
     monkeypatch.setattr("breos.optimization._evaluate_projected_design_metrics", lambda **kwargs: _PROJECTED_STUB)
 
-    problem = SolarDesignProblem(tmy_data, houseload, config, "results/_test_run/problem_area")
+    problem = SolarDesignProblem(tmy_data, houseload, config)
     out: dict = {}
     problem._evaluate(np.array([2.0, 0.0, 10.0], dtype=float), out)
 
@@ -226,7 +157,7 @@ def test_solar_design_problem_honors_module_and_tilt_bounds():
         "mode": {"fixed_azimuth": 180},
     }
 
-    problem = SolarDesignProblem(tmy_data, houseload, config, "results/_test_run/problem_bounds")
+    problem = SolarDesignProblem(tmy_data, houseload, config)
 
     assert problem.xu[0] == pytest.approx(5.0)
     assert problem.xu[1] == pytest.approx(7.0)
@@ -239,20 +170,17 @@ def test_the_tilt_floor_and_search_defaults_are_the_resolved_ones():
     houseload = pd.DataFrame({"Load": [500.0, 500.0]}, index=idx)
     location = {"latitude": 41.15, "longitude": -8.61, "timezone": "UTC"}
 
-    default = SolarDesignProblem(tmy_data, houseload, {"location": location}, "results/_test_run/defaults")
+    default = SolarDesignProblem(tmy_data, houseload, {"location": location})
     assert (default.budget_limit, default.area_limit, default.xl[2]) == (10000.0, 20.0, 10.0)
     assert (default.max_modules, default.max_battery_kwh, default.xu[2]) == (60, 30.0, 90.0)
 
-    raised = SolarDesignProblem(
-        tmy_data, houseload, {"location": location, "constraints": {"min_tilt_deg": 25.0}}, "results/_test_run/floor"
-    )
+    raised = SolarDesignProblem(tmy_data, houseload, {"location": location, "constraints": {"min_tilt_deg": 25.0}})
     assert raised.xl[2] == 25.0
     with pytest.raises(ValueError, match="min_tilt_deg"):
         SolarDesignProblem(
             tmy_data,
             houseload,
             {"location": location, "constraints": {"min_tilt_deg": 50.0, "max_tilt_deg": 40.0}},
-            "results/_test_run/floor_above",
         )
 
 
@@ -271,7 +199,7 @@ def test_discrete_repair_keeps_candidates_inside_the_bounds():
         "location": {"latitude": 41.15, "longitude": -8.61, "timezone": "UTC"},
         "constraints": {"max_modules": 7.5, "max_battery_kwh": 29.5, "max_tilt_deg": 63.0},
     }
-    problem = SolarDesignProblem(tmy_data, houseload, config, "results/_test_run/repair_bounds")
+    problem = SolarDesignProblem(tmy_data, houseload, config)
 
     X = np.array(
         [
@@ -327,7 +255,7 @@ def test_solar_design_problem_uses_configured_resolution(monkeypatch):
     monkeypatch.setattr("breos.optimization.calculate_pv_production_dc", fake_pv)
     _stub_projection_balance(monkeypatch, idx, captured, Houseload=1000.0, Import_From_Grid=600.0, PV_AC_To_Load=400.0)
 
-    problem = SolarDesignProblem(tmy_data, houseload, config, "results/_test_run/problem_resolution")
+    problem = SolarDesignProblem(tmy_data, houseload, config)
     out: dict = {}
     problem._evaluate(np.array([2.0, 1.0, 10.0], dtype=float), out)
 
@@ -363,7 +291,7 @@ def test_solar_design_problem_scores_zeb_from_explicit_ac_ledger(monkeypatch):
         PV_Production=1000.0,
     )
 
-    problem = SolarDesignProblem(tmy_data, houseload, config, "results/_test_run/problem_zeb_ac")
+    problem = SolarDesignProblem(tmy_data, houseload, config)
     out = {}
     problem._evaluate(np.array([2.0, 1.0, 10.0], dtype=float), out)
 
@@ -391,7 +319,7 @@ def test_solar_design_problem_uses_simulated_load_for_objective_denominator(monk
     # load, of which 0.5 kWh was imported.
     _stub_projection_balance(monkeypatch, idx, Houseload=500.0, Import_From_Grid=250.0)
 
-    problem = SolarDesignProblem(tmy_data, houseload, config, "results/_test_run/problem_aligned_load")
+    problem = SolarDesignProblem(tmy_data, houseload, config)
     out = {}
     problem._evaluate(np.array([2.0, 0.0, 10.0], dtype=float), out)
 
@@ -606,7 +534,7 @@ def _projected_capture(monkeypatch, config, x):
         "constraints": {"budget": 100000.0, "max_area_m2": 100.0},
         "mode": {"fixed_azimuth": 180},
     }
-    problem = SolarDesignProblem(tmy_data, houseload, {**base, **config}, "results/_test_run/problem_settings")
+    problem = SolarDesignProblem(tmy_data, houseload, {**base, **config})
     out: dict = {}
     problem._evaluate(np.array(x, dtype=float), out)
     captured["out"] = out
@@ -673,7 +601,7 @@ def test_invalid_degradation_settings_raise_when_the_problem_is_built(battery, m
     }
 
     with pytest.raises(ValueError, match=match):
-        SolarDesignProblem(tmy_data, houseload, config, "results/_test_run/problem_bad_blast")
+        SolarDesignProblem(tmy_data, houseload, config)
 
 
 def test_projected_blast_scores_a_pv_only_candidate(synthetic_weather):
@@ -688,53 +616,13 @@ def test_projected_blast_scores_a_pv_only_candidate(synthetic_weather):
         "mode": {"fixed_azimuth": 180},
         "battery": {"degradation_engine": "blast", "blast_model": "nmc_gr_50ah_b1"},
     }
-    problem = SolarDesignProblem(synthetic_weather, load, config, "results/_test_run/problem_blast_pv_only")
+    problem = SolarDesignProblem(synthetic_weather, load, config)
     out: dict = {}
     # This used to raise "degradation_engine='blast' requires a configured battery".
     problem._evaluate(np.array([6.0, 0.0, 35.0], dtype=float), out)
 
     assert np.isfinite(out["Projected_NPV"])
     assert 0.0 < out["Projected_Grid_Independence_%"] < 100.0
-
-
-def test_optimize_tilt_raises_when_one_angle_fails(monkeypatch):
-    # One failing tilt used to be scored as zero production (#217), which
-    # could move the reported optimum without a message.
-    idx = pd.date_range("2025-01-01", periods=2, freq="h", tz="UTC")
-
-    def production(**kwargs):
-        if kwargs["tilt"] == 20.0:
-            raise RuntimeError("PV chain failed at 20 degrees")
-        return pd.Series(1000.0, index=idx)
-
-    monkeypatch.setattr("breos.optimization.calculate_pv_production_dc", production)
-
-    with pytest.raises(RuntimeError, match="PV chain failed at 20 degrees"):
-        optimize_tilt(pd.DataFrame(), SimpleNamespace(latitude=41.0), 1, tilt_range=(0, 40), n_points=3, verbose=False)
-
-
-def test_optimize_battery_size_raises_when_one_size_fails(monkeypatch):
-    # A failing size used to be dropped from the comparison (#217).
-    from breos.optimization import optimize_battery_size
-
-    idx = pd.date_range("2025-01-01", periods=2, freq="h", tz="UTC")
-    summary = pd.DataFrame(
-        {"Grid Independence [%]": [50.0], "Import [%]": [50.0], "Total PV [kWh]": [1.0], "Sell [kWh]": [0.2]}
-    )
-
-    def balance(**kwargs):
-        if kwargs["battery_config"].nominal_energy_wh == 5000:
-            raise RuntimeError("dispatch failed for 5 kWh")
-        return pd.DataFrame(), 0.0, summary, 0, pd.DataFrame()
-
-    monkeypatch.setattr("breos.optimization.simulate_energy_balance", balance)
-
-    with pytest.raises(RuntimeError, match="dispatch failed for 5 kWh"):
-        optimize_battery_size(
-            pd.Series(0.0, index=idx), pd.DataFrame({"Load": 1.0}, index=idx), [0, 5000, 10000], verbose=False
-        )
-    with pytest.raises(ValueError, match="at least one battery size"):
-        optimize_battery_size(pd.Series(0.0, index=idx), pd.DataFrame({"Load": 1.0}, index=idx), [], verbose=False)
 
 
 def test_early_stopping_optimizer_result_pickles(monkeypatch):

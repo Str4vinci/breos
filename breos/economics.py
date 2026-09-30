@@ -9,13 +9,12 @@ This module handles:
 """
 
 from dataclasses import dataclass
-from typing import Any, Dict, Optional, Tuple, cast
+from typing import Any, Dict, Optional, Tuple
 
 import numpy as np
 import pandas as pd
 
 from breos.tariffs import DEFAULT_CURRENCY
-from breos.utils import get_hours_per_step, local_datetime_index
 
 # Default battery and replacement cost per kWh of battery capacity (currency/kWh)
 BATTERY_REPLACEMENT_COST_PER_KWH: float = 500.0
@@ -56,19 +55,18 @@ COST_CONFIG_KEY_TO_PARAM: dict[str, str] = {
 def system_ac_production_power(results_df: pd.DataFrame) -> pd.Series:
     """Return usable PV-system AC production in the frame's power unit.
 
-    Prefer the explicit ledger: direct PV to load, PV returned from battery
-    to load, and PV exported at the AC boundary. Older frames fall back to
-    compatibility-only ``PV_Production``.
+    The sum of the explicit ledger: direct PV to load, PV returned from
+    battery to load, and PV exported at the AC boundary.
+
+    Raises:
+        KeyError: If the frame lacks any of the three ledger columns.
     """
-    if all(column in results_df.columns for column in SYSTEM_AC_PRODUCTION_COLUMNS):
-        columns = list(SYSTEM_AC_PRODUCTION_COLUMNS)
-        return results_df[columns].apply(pd.to_numeric, errors="coerce").fillna(0.0).sum(axis=1)
-
-    if "PV_Production" in results_df.columns:
-        return pd.to_numeric(results_df["PV_Production"], errors="coerce").fillna(0.0)
-
-    required = ", ".join(SYSTEM_AC_PRODUCTION_COLUMNS)
-    raise KeyError(f"Results do not contain the AC system-production ledger ({required}) or legacy PV_Production")
+    missing = [column for column in SYSTEM_AC_PRODUCTION_COLUMNS if column not in results_df.columns]
+    if missing:
+        required = ", ".join(SYSTEM_AC_PRODUCTION_COLUMNS)
+        raise KeyError(f"Results do not contain the AC system-production ledger ({required})")
+    columns = list(SYSTEM_AC_PRODUCTION_COLUMNS)
+    return results_df[columns].apply(pd.to_numeric, errors="coerce").fillna(0.0).sum(axis=1)
 
 
 # The one default set for every projection entry point (ADR 0003 E6). Both are
@@ -333,32 +331,6 @@ def replacement_fraction_from_steps(replacement_steps, n_steps: int) -> float:
     return float(np.mean((steps + 1.0) / float(n_steps)))
 
 
-def replacement_fraction_by_year(years, replaced) -> pd.Series:
-    """Within-year position of each year's replacement steps, from the ledger.
-
-    ``Battery_Replaced`` marks the final interval run by the old pack, so the
-    swap position is its ending boundary. A year holding more than one swap
-    reports the mean position; see
-    :func:`replacement_booking_time` for what that aggregate costs.
-
-    Returns:
-        Series of fractions in ``(0, 1]`` indexed by the year label, holding
-        only the years that carry a replacement.
-    """
-    frame = pd.DataFrame(
-        {
-            "Year": np.asarray(years),
-            "Replaced": np.asarray(replaced, dtype=bool),
-        }
-    )
-    fractions: Dict[Any, float] = {}
-    for year, block in frame.groupby("Year", sort=True):
-        fraction = replacement_fraction_from_steps(np.flatnonzero(block["Replaced"].to_numpy()), len(block))
-        if np.isfinite(fraction):
-            fractions[year] = fraction
-    return pd.Series(fractions, dtype=float)
-
-
 def _discount_annual_with_replacement(
     annual: pd.Series,
     replacement: pd.Series,
@@ -581,107 +553,6 @@ def _validated_year_rows(yearly_summary_df: pd.DataFrame, num_years: int) -> pd.
     return rows.reset_index(drop=True)
 
 
-def _estimate_year_rows(
-    results_df: pd.DataFrame, costs: Dict[str, float], num_years: int, degradation_rate: float, freq: str
-) -> pd.DataFrame:
-    """Year rows estimated from one simulated year: the legacy first-year path.
-
-    Year 1 is the simulation; later years scale its production by
-    ``(1 - degradation_rate) ** (n - 1)`` at the first year's self-consumption
-    ratio, and the import grows by the self-consumed PV lost. Replacements are
-    taken from the simulated calendar years where the frame covers them. The
-    rows carry the year-1-price money, so they value like simulated rows.
-    """
-    df = results_df.copy()
-    if "Datetime" in df.columns:
-        df.index = local_datetime_index(df.pop("Datetime"))
-    time_index = cast(pd.DatetimeIndex, df.index)
-    df["Year"] = time_index.year
-    df["Date"] = time_index.normalize()
-    hours_per_step = get_hours_per_step(freq)
-
-    if "PV_AC_Export" not in df.columns:
-        hint = (
-            " Frames written before ledger schema 2.0 call it Sell_To_Grid; rename that column."
-            if ("Sell_To_Grid" in df.columns)
-            else ""
-        )
-        raise ValueError(f"results_df has no PV_AC_Export column.{hint}")
-    df["System_AC_Production"] = system_ac_production_power(df)
-    for col in ("System_AC_Production", "Houseload", "Import_From_Grid", "PV_AC_Export"):
-        if col in df.columns:
-            df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0.0)
-
-    # Summing power (W) and scaling by hours per step / 1000 gives kWh.
-    yearly = df[["System_AC_Production", "Houseload", "Import_From_Grid", "PV_AC_Export"]].groupby(df["Year"]).sum()
-
-    # The frame marks each swap; the economics prices it (ADR 0003 E4). A
-    # frame that already carries the money (ledger schema < 3.0) keeps it, as
-    # price_year_rows keeps a year row's. Either way the per-step money is
-    # group-summed, the reduction the projection has always used.
-    if "Replacement_Cost" in df.columns:
-        step_cost = pd.to_numeric(df["Replacement_Cost"], errors="coerce").fillna(0.0).to_numpy(dtype=float)
-    elif "Battery_Replaced" in df.columns:
-        replaced = df["Battery_Replaced"].to_numpy(dtype=bool)
-        step_cost = np.where(replaced, _replacement_cost_each(costs, float(replaced.sum())), 0.0)
-    else:
-        step_cost = np.zeros(len(df))
-    yearly_replacement = pd.DataFrame({"Replacement_Cost": step_cost}, index=df.index).groupby(df["Year"]).sum()
-
-    # The ledger marks the swap step, so the instant does not have to be
-    # reconstructed downstream. Without the column the booking falls back to
-    # the documented mid-year default.
-    if "Battery_Replaced" in df.columns:
-        replacement_year_fractions = replacement_fraction_by_year(df["Year"], df["Battery_Replaced"])
-    else:
-        replacement_year_fractions = pd.Series(dtype=float)
-
-    yearly = yearly * hours_per_step / 1000.0
-    daily_counts = df.groupby("Year")["Date"].nunique()
-
-    first_year_load = yearly["Houseload"].iloc[0]
-    first_year_import = yearly["Import_From_Grid"].iloc[0]
-    first_year_export = yearly["PV_AC_Export"].iloc[0]
-    first_year_pv = yearly["System_AC_Production"].iloc[0]
-    first_year_days = daily_counts.iloc[0]
-
-    years = pd.Series(range(1, num_years + 1))
-    degradation_factors = (1 - degradation_rate) ** (years - 1)
-    pv_degraded = first_year_pv * degradation_factors
-    self_consumption_ratio = 1 - (first_year_export / first_year_pv) if first_year_pv > 0 else 0
-    export_degraded = pv_degraded * (1 - self_consumption_ratio)
-    pv_reduction = first_year_pv - pv_degraded
-    import_adjusted = first_year_import + pv_reduction * self_consumption_ratio
-
-    # Simulation results only cover the simulated period: a multi-year frame
-    # provides replacement events for every year it covers, a single-year run
-    # at most year 1. yearly_replacement is indexed by calendar year, so align
-    # it via the simulation start year.
-    start_year = df["Year"].min()
-    replacement_base = np.zeros(num_years, dtype=float)
-    replacement_fraction = np.full(num_years, np.nan, dtype=float)
-    for position, relative_year in enumerate(years):
-        actual_year = start_year + relative_year - 1
-        if actual_year in yearly_replacement.index:
-            replacement_base[position] = float(yearly_replacement.loc[actual_year, "Replacement_Cost"])
-            if actual_year in replacement_year_fractions.index:
-                replacement_fraction[position] = float(replacement_year_fractions.loc[actual_year])
-
-    return pd.DataFrame(
-        {
-            "Year": years,
-            "Load_kWh": first_year_load,
-            "Import_kWh": import_adjusted,
-            "Export_kWh": export_degraded,
-            "PV_Production_kWh": pv_degraded,
-            "PV_Degradation_Factor": degradation_factors,
-            "Replacement_Cost": replacement_base,
-            "Replacement_Year_Fraction": replacement_fraction,
-            "Fixed_Charge": first_year_days * costs["daily_power_cost"],
-        }
-    )
-
-
 def value_year_rows(
     year_rows: pd.DataFrame,
     costs: Dict[str, float],
@@ -852,17 +723,15 @@ def write_cost_projection(proj: pd.DataFrame, results_directory: str, scenario_n
 
 
 def cost_analysis_projection(
-    results_df: Optional[pd.DataFrame],
+    yearly_summary_df: pd.DataFrame,
     costs: Dict[str, float],
     num_years: int = 20,
     inflation_rate: float = DEFAULT_INFLATION_RATE,
     sell_price_inflation: float = 0.0,
     discount_rate: float = DEFAULT_DISCOUNT_RATE,
-    degradation_rate: float = 0.005,
+    *,
     results_directory: Optional[str] = None,
     scenario_name: str = "",
-    freq: str = "h",
-    yearly_summary_df: Optional[pd.DataFrame] = None,
     emissions_params=None,
     currency: str = DEFAULT_CURRENCY,
     import_price_escalation: Optional[float] = None,
@@ -870,25 +739,22 @@ def cost_analysis_projection(
     replacement_cost_learning: float = 0.0,
 ) -> pd.DataFrame:
     """
-    Perform multi-year cost projection analysis.
+    Perform multi-year cost projection analysis from simulated year rows.
 
-    Includes inflation, discount rate, and PV degradation. The work runs in
-    four stages, each also public: :func:`price_year_rows` and
-    :func:`value_year_rows` turn energy into component cashflows,
-    :func:`discount_cashflows` discounts them and computes the metrics,
-    :func:`add_co2_projection` adds avoided emissions, and
-    :func:`write_cost_projection` writes the file.
+    Includes inflation and the discount rate; PV degradation is already in
+    the simulated rows. The work runs in four stages, each also public:
+    :func:`price_year_rows` and :func:`value_year_rows` turn energy into
+    component cashflows, :func:`discount_cashflows` discounts them and
+    computes the metrics, :func:`add_co2_projection` adds avoided emissions,
+    and :func:`write_cost_projection` writes the file.
 
     Args:
-        results_df: DataFrame with ``Datetime``, ``Houseload``,
-            ``Import_From_Grid``, and ``PV_AC_Export``. Required only when
-            ``yearly_summary_df`` is not supplied, because it feeds the legacy
-            first-year estimation path alone; callers that already have actual
-            yearly totals may pass ``None``. System production is
-            ``PV_AC_To_Load + PV_Origin_Battery_AC_To_Load + PV_AC_Export``;
-            without those, legacy ``PV_Production`` is used. Export is always
-            read from ``PV_AC_Export``: frames written before ledger schema
-            2.0 named it ``Sell_To_Grid`` and must be renamed first.
+        yearly_summary_df: One row per simulated project year, with ``Year``
+            1 through ``num_years``, ``PV_Production_kWh``, ``Import_kWh``,
+            ``Export_kWh``, etc., as the App, Monte Carlo and the optimizer
+            produce them. Each year's ``Replacements`` are priced at
+            ``costs["replacement_cost_each"]`` unless the rows already carry
+            ``Replacement_Cost``.
         costs: Dictionary with cost parameters (from calculate_costs())
         num_years: Number of years to project
         inflation_rate: General annual inflation. Import energy, the fixed
@@ -896,34 +762,23 @@ def cost_analysis_projection(
             and replacement prices always inflate at it (ADR 0003 E2).
         sell_price_inflation: Annual escalation of the export price
         discount_rate: Nominal discount rate for NPV calculations
-        degradation_rate: Annual compound PV degradation rate, counted from
-            the start of each year: year ``n`` production is scaled by
-            ``(1 - degradation_rate) ** (n - 1)``, so year 1 has none. Used
-            only when ``yearly_summary_df`` is not supplied.
         results_directory: Optional directory to save results
         scenario_name: Optional name suffix for saved files
-        freq: Simulation frequency string ('h', '15min')
-        yearly_summary_df: Optional DataFrame from singleyear propagation with
-            Year, PV_Production_kWh, Import_kWh, Export_kWh, etc. for each year.
-            When provided, uses actual yearly data instead of estimation.
-            Each year's ``Replacements`` are priced at
-            ``costs["replacement_cost_each"]`` unless the rows already carry
-            ``Replacement_Cost``.
+        emissions_params: Optional :class:`~breos.emissions.EmissionsParams`;
+            when given, the avoided-emissions columns are added.
         currency: The currency every money input is in. BREOS does not
             convert; it is recorded as ``attrs["currency"]`` for labels.
 
     Returns:
         DataFrame with yearly cost projections
+
+    Raises:
+        ValueError: If ``yearly_summary_df`` is missing or empty, or its
+            ``Year`` labels are not exactly 1 through ``num_years``.
     """
-    if yearly_summary_df is not None and not yearly_summary_df.empty:
-        year_rows = _validated_year_rows(yearly_summary_df, num_years)
-    elif results_df is None:
-        raise ValueError(
-            "cost_analysis_projection requires results_df when yearly_summary_df is not provided: "
-            "the first-year estimation path has nothing to estimate from"
-        )
-    else:
-        year_rows = _estimate_year_rows(results_df, costs, num_years, degradation_rate, freq)
+    if not isinstance(yearly_summary_df, pd.DataFrame) or yearly_summary_df.empty:
+        raise ValueError("cost_analysis_projection needs yearly_summary_df, one row per simulated project year")
+    year_rows = _validated_year_rows(yearly_summary_df, num_years)
     year_rows = price_year_rows(year_rows, costs)
 
     flows = value_year_rows(
@@ -1099,57 +954,10 @@ def find_payback_year_interpolated(
     return float(years[index - 1] + fraction * (years[index] - years[index - 1]))
 
 
-def calculate_lcoe(
-    total_investment: float,
-    annual_production_kwh: float,
-    annual_operation_cost: float,
-    lifetime_years: int = 25,
-    discount_rate: float = DEFAULT_DISCOUNT_RATE,
-    degradation_rate: float = 0.005,
-) -> float:
-    """
-    Calculate a real-terms (constant-price) Levelized Cost of Electricity.
-
-    O&M is held at ``annual_operation_cost`` in every year: no inflation is
-    applied, so costs are in first-year prices and ``discount_rate`` should be
-    a real rate. :func:`calculate_lcoe_from_projection`, which the App,
-    Monte Carlo and the optimizer report, instead takes O&M from a projection
-    that escalates it by the inflation rate. The two agree when inflation is
-    zero and there is no replacement; with inflation this function gives the
-    lower value.
-
-    Args:
-        total_investment: Total CAPEX, in the run's currency
-        annual_production_kwh: First year production (kWh)
-        annual_operation_cost: Annual O&M cost, in first-year prices
-        lifetime_years: System lifetime
-        discount_rate: Discount rate (real)
-        degradation_rate: Annual compound PV degradation rate, counted from
-            the start of each year: year ``t`` produces
-            ``annual_production_kwh * (1 - degradation_rate) ** (t - 1)``.
-
-    Returns:
-        LCOE per kWh, in the currency of the inputs
-    """
-    # NPV of costs
-    npv_costs = total_investment
-    for t in range(1, lifetime_years + 1):
-        npv_costs += annual_operation_cost / ((1 + discount_rate) ** t)
-
-    # NPV of production
-    npv_production = 0.0
-    for t in range(1, lifetime_years + 1):
-        year_production = annual_production_kwh * ((1 - degradation_rate) ** (t - 1))
-        npv_production += year_production / ((1 + discount_rate) ** t)
-
-    return npv_costs / npv_production if npv_production > 0 else float("inf")
-
-
 def calculate_lcoe_from_projection(
     cost_projection: pd.DataFrame,
     total_investment: Optional[float] = None,
     discount_rate: float = DEFAULT_DISCOUNT_RATE,
-    production_column: str = "PV_Production_kWh",
 ) -> float:
     """Calculate LCOE from a simulated multi-year projection.
 
@@ -1162,31 +970,22 @@ def calculate_lcoe_from_projection(
     Args:
         cost_projection: DataFrame from :func:`cost_analysis_projection`.
         total_investment: System CAPEX. If omitted, uses
-            ``cost_projection.attrs["total_investment"]`` or infers it from
-            the first cumulative/annual system-cost row.
+            ``cost_projection.attrs["total_investment"]``, which
+            :func:`cost_analysis_projection` records.
         discount_rate: Discount rate used for production and annual costs.
-        production_column: Column containing yearly production in kWh.
 
     Returns:
         LCOE per kWh, in the currency of the inputs.
     """
     if cost_projection.empty:
         return float("inf")
-    if production_column not in cost_projection.columns:
-        raise ValueError(f"cost_projection must include {production_column!r}")
+    if "PV_Production_kWh" not in cost_projection.columns:
+        raise ValueError("cost_projection must include 'PV_Production_kWh'")
 
     if total_investment is None:
         total_investment = cost_projection.attrs.get("total_investment")
     if total_investment is None:
-        if {"Cost_System_Cumulative", "Cost_System_Annual"}.issubset(cost_projection.columns):
-            first = (
-                cost_projection.sort_values("Year").iloc[0]
-                if "Year" in cost_projection.columns
-                else cost_projection.iloc[0]
-            )
-            total_investment = float(first["Cost_System_Cumulative"] - first["Cost_System_Annual"])
-        else:
-            raise ValueError("total_investment is required when it cannot be inferred from cost_projection")
+        raise ValueError("total_investment is required when cost_projection.attrs does not record it")
 
     years = (
         pd.to_numeric(cost_projection["Year"], errors="coerce")
@@ -1195,7 +994,7 @@ def calculate_lcoe_from_projection(
     )
     discount_factors = 1 / ((1 + discount_rate) ** years)
 
-    production = pd.to_numeric(cost_projection[production_column], errors="coerce").fillna(0.0)
+    production = pd.to_numeric(cost_projection["PV_Production_kWh"], errors="coerce").fillna(0.0)
     operation = (
         pd.to_numeric(cost_projection["Cost_Operation"], errors="coerce").fillna(0.0)
         if "Cost_Operation" in cost_projection.columns

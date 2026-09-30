@@ -32,7 +32,7 @@ def _inputs():
 
 
 def _problem_metrics(weather, load, backend, design, config=_CONFIG):
-    problem = SolarDesignProblem(weather, load, config, "results/_test_run/backend_parity", execution_backend=backend)
+    problem = SolarDesignProblem(weather, load, config, execution_backend=backend)
     out: dict = {}
     problem._evaluate(np.array(design, dtype=float), out)
     return out

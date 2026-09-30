@@ -2,8 +2,6 @@
 Utility functions for breos library.
 """
 
-import multiprocessing
-import os
 import re
 from importlib.metadata import PackageNotFoundError, version
 
@@ -246,35 +244,6 @@ def get_hours_per_step(freq: str) -> float:
         ValueError: If freq is not recognized
     """
     return _HOURS_PER_STEP[normalise_frequency(freq)]
-
-
-def get_steps_per_day(freq: str) -> int:
-    """
-    Get the number of timesteps per day based on frequency.
-
-    Args:
-        freq: Frequency string ('h' for hourly, '15min' for 15-minute)
-
-    Returns:
-        Steps per day (24 for hourly, 96 for 15-min)
-    """
-    hours_per_step = get_hours_per_step(freq)
-    return int(24 / hours_per_step)
-
-
-def get_steps_per_year(freq: str, leap_year: bool = False) -> int:
-    """
-    Get the number of timesteps per year based on frequency.
-
-    Args:
-        freq: Frequency string ('h' for hourly, '15min' for 15-minute)
-        leap_year: Whether to account for leap year (366 days)
-
-    Returns:
-        Steps per year (8760/8784 for hourly, 35040/35136 for 15-min)
-    """
-    days = 366 if leap_year else 365
-    return get_steps_per_day(freq) * days
 
 
 # Irradiance column names BREOS recognises, per component, in order of

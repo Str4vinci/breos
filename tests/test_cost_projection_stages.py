@@ -50,11 +50,10 @@ def _rows():
 
 def test_the_stages_compose_to_the_projection(tmp_path):
     whole = cost_analysis_projection(
-        None,
+        _rows(),
         COSTS,
         num_years=3,
         discount_rate=0.04,
-        yearly_summary_df=_rows(),
         emissions_params=EMISSIONS,
         results_directory=str(tmp_path / "whole"),
         **RATES,
@@ -82,7 +81,7 @@ def test_valuation_does_not_discount():
 
 def test_the_projection_carries_the_lcoe_and_co2_every_runner_reports():
     projection = cost_analysis_projection(
-        None, COSTS, num_years=3, discount_rate=0.04, yearly_summary_df=_rows(), emissions_params=EMISSIONS, **RATES
+        _rows(), COSTS, num_years=3, discount_rate=0.04, emissions_params=EMISSIONS, **RATES
     )
     assert projection.attrs["lcoe_per_kwh"] > 0
     total = projection["CO2_Avoided_SelfConsumed_kg"] + projection["CO2_Avoided_Export_kg"]

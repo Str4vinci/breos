@@ -156,7 +156,7 @@ _MODULE_PARAMS_TABLE = TableSpec(
     "pv.params",
     keys={
         **dict.fromkeys(("Mpp", "Vmp", "Imp", "Voc", "Isc"), number(minimum=0, min_exclusive=True)),
-        **dict.fromkeys(("T_Pmax_pct", "T_Pmax", "T_Voc_pct", "T_Voc", "T_Isc_pct", "T_Isc"), number()),
+        **dict.fromkeys(("T_Pmax_pct", "T_Voc_pct", "T_Isc_pct"), number()),
         "N_Cells": _integer(1),
         "celltype": text,
     },
@@ -278,7 +278,6 @@ EARLY_STOP_TABLE = TableSpec(
 OPTIMIZATION_TABLE = TableSpec(
     "optimization",
     keys={
-        "algorithm": choice(("nsga2",)),
         "objective_basis": _objective_basis,
         "early_stop": _early_stop,
         "pop_size": _integer(1),
@@ -473,7 +472,6 @@ def resolve_optimization_config(config: Mapping[str, Any]) -> dict[str, Any]:
 
     optimization = resolved.setdefault("optimization", {}) or {}
     resolved["optimization"] = optimization
-    optimization.setdefault("algorithm", "nsga2")
     optimization.setdefault("objective_basis", DEFAULT_OBJECTIVE_BASIS)
     optimization.setdefault("early_stop", None)
     for key in ("emissions", "tariff", "smart_charging"):

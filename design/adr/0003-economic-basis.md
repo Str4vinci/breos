@@ -72,7 +72,8 @@ steady-state objective basis.)
 
 The standalone `calculate_lcoe` keeps its documented real-terms contract
 (#251): it holds O&M at first-year prices, so its `discount_rate` is a real
-rate. It is not a projection API and does not change.
+rate. It is not a projection API and does not change. (0.7.0 later removed
+`calculate_lcoe`, which nothing in the package called.)
 
 Provenance records the rates the projection used and the implied real
 discount rate, `(1 + d) / (1 + inflation_rate) − 1`. A user can enter real
@@ -132,8 +133,8 @@ The default discount rate is 0.03 everywhere: the value App users already
 get. It is defined once, beside `CostParams`, and read by the App registry, `CostParams`, optimization
 (`DEFAULT_DISCOUNT_RATE`), Monte Carlo, `cost_analysis_projection`,
 `calculate_lcoe_from_projection` and `calculate_lcoe`. For `calculate_lcoe`
-the 0.03 is a real rate, under its E1 contract. `financials.json` is
-deleted.
+the 0.03 is a real rate, under its E1 contract (until 0.7.0 removed it).
+`financials.json` is deleted.
 
 Callers who omit the discount rate get different results. `CostParams`,
 `cost_params_from_config`, optimization (`calculate_financials` and the

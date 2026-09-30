@@ -101,7 +101,6 @@ from breos.degradation import (
 from breos.economics import (
     CostParams,
     calculate_costs,
-    calculate_lcoe,
     calculate_lcoe_from_projection,
     cost_analysis_projection,
     cost_params_from_config,
@@ -112,7 +111,6 @@ from breos.economics import (
 from breos.emissions import (
     EmissionsParams,
     calculate_co2_projection,
-    calculate_co2_savings,
 )
 
 # Inverter
@@ -126,7 +124,6 @@ from breos.inverter import (
 from breos.io import (
     InputRepairReport,
     RepairEvent,
-    export_cost_analysis,
     export_results,
     export_summary,
     load_results,
@@ -153,9 +150,7 @@ from breos.optimization import (
     OptimizationResult,
     ProjectedDesignResult,
     evaluate_projected_design,
-    optimize_battery_size,
     optimize_system_multi_objective,
-    optimize_tilt,
 )
 
 # PV Module Database
@@ -181,8 +176,6 @@ from breos.solar import (
 # Utils
 from breos.utils import (
     get_hours_per_step,
-    get_steps_per_day,
-    get_steps_per_year,
     is_leap_year,
     remap_datetime_index_years,
 )
@@ -302,18 +295,14 @@ __all__ = [
     "BatteryModelProfile",
     "BATTERY_MODEL_REGISTRY",
     # Emissions
-    "calculate_co2_savings",
     "calculate_co2_projection",
     # Economics
     "calculate_costs",
     "cost_analysis_projection",
     "cost_params_from_config",
     "find_payback_year",
-    "calculate_lcoe",
     "calculate_lcoe_from_projection",
     # Optimization
-    "optimize_tilt",
-    "optimize_battery_size",
     "optimize_system_multi_objective",
     "evaluate_projected_design",
     "ProjectedDesignResult",
