@@ -1,8 +1,8 @@
 # 0002 — Tariffs are resolved values; smart charging is an instruction layer
 
-- **Status:** Accepted for 0.7.x implementation; amendments A1–A10 Accepted
+- **Status:** Accepted for 0.7.x implementation; amendments A1–A11 Accepted
 - **Date:** 2026-08-20; amendments 2026-09-26; A6 accepted 2026-09-26;
-  A1–A5 and A7–A10 accepted 2026-09-27
+  A1–A5 and A7–A10 accepted 2026-09-27; A11 accepted 2026-09-30
 
 ## Context
 
@@ -233,9 +233,10 @@ Implementation follows the delivery sequence in
 ## Amendments for 0.7 readiness
 
 The 0.7 readiness audit (#187) found details the decision above leaves open
-and statements the code has since outgrown. A6 was **Accepted** on 2026-09-26
-and every other amendment below on 2026-09-27. Each one replaces the text it
-names, and that text is marked in place above. Accepting A6–A10 accepted the
+and statements the code has since outgrown. A6 was **Accepted** on 2026-09-26,
+A11 on 2026-09-30, and every other amendment below on 2026-09-27. Each one
+replaces the text it names, and that text is marked in place above; A11 adds
+a rule and replaces none. Accepting A6–A10 accepted the
 design for the dispatch-seam and ledger work, not its implementation. Grid
 charging, origin accounting, ledger schema 2.0 and net-exchange emissions were
 then implemented for 0.7.0 in #279–#282 (#178). Economic
@@ -415,6 +416,16 @@ direct PV plus PV-origin battery AC to load, the quantity credited today.
 Computing it from those columns plus the grid-origin terms keeps default
 results bit-identical rather than equal up to rounding. PV production for LCOE and CO2 is built from
 `PV_AC_Export`, not its `Sell_To_Grid` alias.
+
+### A11. Controllers decide civil days; aging stays positional — Accepted 2026-09-30
+
+Controller decisions are made at configured-timezone civil-day boundaries. If
+a civil boundary falls inside a positional degradation window, dispatch is
+split into subcalls and carries energy plus PV/grid origins between them;
+degradation still closes once on its existing positional window. A controller
+at a shared boundary observes the post-aging/post-replacement state. The
+window close uses the `Battery_Energy_Beginning` ledger value from the
+subcall containing its last step.
 
 ### Implementation notes for the dispatch-seam PR
 

@@ -23,6 +23,31 @@ FIXED_TARGET = {
     "discharge_periods": ["peak"],
     "grid_charge_efficiency": 0.95,
 }
+CUSTOM_TARIFF = {
+    "custom_schedule": {
+        "identifier": "optimizer_custom_weekly",
+        "version": "1",
+        "timezone": "Europe/Lisbon",
+        "cycle": "weekly",
+        "periods": ["peak", "off_peak"],
+        "rules": [
+            {
+                "days": "weekday",
+                "season": "all",
+                "intervals": {
+                    "off_peak": [["00:00", "08:00"], ["22:00", "24:00"]],
+                    "peak": [["08:00", "22:00"]],
+                },
+            },
+            {"days": "saturday", "season": "all", "intervals": {"off_peak": [["00:00", "24:00"]]}},
+            {"days": "sunday", "season": "all", "intervals": {"off_peak": [["00:00", "24:00"]]}},
+        ],
+    },
+    "currency": "EUR",
+    "import_prices": {"peak": 0.50, "off_peak": 0.10},
+    "export_prices": {"all": 0.03},
+    "fixed_charge_per_day": 0.40,
+}
 
 
 @pytest.fixture
@@ -57,7 +82,7 @@ def test_optimizer_provenance_records_the_schema_version_and_currency(tariff_cas
 
     for case in (tariff_case, (weather, load, flat)):
         provenance = evaluate(case).provenance
-        assert provenance["result_schema_version"] == "2.0"
+        assert provenance["result_schema_version"] == "2.1"
         assert provenance["currency"] == "EUR"
     assert "tariff" not in evaluate((weather, load, flat)).provenance
 
@@ -204,6 +229,25 @@ def test_search_and_fixed_design_share_tariff_scoring_and_pickle(tariff_case):
     assert restored.tariff.schedule_hash == fixed.provenance["tariff"]["schedule_hash"]
     with pytest.raises(TypeError):
         restored.tariff.prices.import_prices["peak"] = 100
+
+
+def test_custom_schedule_is_resolved_and_pickles_into_optimizer_worker(tariff_case):
+    pytest.importorskip("pymoo")
+    weather, load, config = tariff_case
+    config["tariff"] = deepcopy(CUSTOM_TARIFF)
+    expected = evaluate(tariff_case)
+
+    problem = optimization.SolarDesignProblem(weather, load, config)
+    assert problem.config["tariff"]["custom_schedule"] == CUSTOM_TARIFF["custom_schedule"]
+    assert problem.tariff.schedule.identifier == "optimizer_custom_weekly"
+
+    worker_problem = pickle.loads(pickle.dumps(problem))
+    out = {}
+    worker_problem._evaluate(np.array([4, 0.0, 30.0]), out)
+
+    assert out["Projected_NPV"] == expected.metrics["Projected_NPV"]
+    assert worker_problem.pricing.instructions == problem.pricing.instructions
+    assert worker_problem.tariff.schedule_hash == problem.tariff.schedule_hash
 
 
 def test_search_result_records_tariff_provenance(tariff_case):
