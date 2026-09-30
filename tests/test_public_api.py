@@ -18,6 +18,25 @@ def _subprocess_env(**overrides):
     return env
 
 
+def test_importing_breos_does_not_import_installed_numba(tmp_path):
+    pytest.importorskip("numba")
+    code = """
+import sys
+import breos
+import breos.app
+import breos.cli
+import breos.montecarlo
+import breos.optimization
+assert "numba" not in sys.modules, sorted(name for name in sys.modules if name.startswith("numba"))
+"""
+    env = _subprocess_env(MPLCONFIGDIR=str(tmp_path))
+    completed = subprocess.run(
+        [sys.executable, "-c", code], cwd=tmp_path, env=env, text=True, capture_output=True, check=False
+    )
+
+    assert completed.returncode == 0, completed.stderr
+
+
 def test_top_level_namespace_matches_stable_release_surface():
     code = """
 import types

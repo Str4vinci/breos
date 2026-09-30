@@ -656,3 +656,19 @@ def test_early_stopping_optimizer_result_pickles(monkeypatch):
 
     restored = pickle.loads(pickle.dumps(result.details["pymoo_result"]))
     assert restored.X.shape == result.details["pymoo_result"].X.shape
+
+
+@pytest.mark.parametrize("n_procs", [0, -1, True])
+def test_optimizer_needs_a_positive_worker_count(n_procs):
+    from tests.conftest import _build_synthetic_weather
+
+    weather = _build_synthetic_weather(2023)
+    load = pd.DataFrame({"Load": 400.0}, index=weather.index)
+    config = {
+        "location": {"latitude": 41.15, "longitude": -8.61, "timezone": "UTC"},
+        "constraints": {"budget": 100000.0, "max_area_m2": 100.0, "max_modules": 8, "max_battery_kwh": 5.0},
+        "simulation": {"resolution": "h", "years_projection": 1},
+    }
+
+    with pytest.raises(ValueError, match="n_procs must be a positive integer"):
+        optimize_system_multi_objective(weather, load, config, pop_size=4, n_gen=1, n_procs=n_procs)
