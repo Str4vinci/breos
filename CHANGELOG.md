@@ -909,6 +909,22 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   lifetime grid independence falls from 74.25% to 74.16%, and the mean
   interpolated payback moves from 13.109 to 13.122 years. A study whose
   `start_date` is in `target_year` is unchanged bit for bit.
+- An App run in a leap year now gives a TMY stamped at a fixed UTC offset its
+  29 February ([#313](https://github.com/Str4vinci/breos/issues/313)).
+  `remap_tmy_year` shifted the TMY to the study year in UTC, so for a PVGIS
+  TMY saved at `+01:00` (Berlin) or `+11:00` (Melbourne) the first hours of
+  local 1 March landed on 29 February, and the leap-day fill, which reads the
+  index's own clock, saw that day as present and skipped it. The weather was
+  8,760 hours on an 8,784-hour year, and 29 February had no irradiance
+  (`+01:00`) or only part of 1 March's (`+11:00`); at 15 minutes the resampler
+  interpolated across the gap. A fixed-offset index is now shifted on its own
+  clock, so 29 February is a copy of 28 February, 1 March keeps its own
+  hours, and the weather metadata records the fill as `leap_day`, as for a
+  UTC TMY. **Results change for leap study years with a fixed-offset TMY.**
+  UTC-stamped files, including those BREOS's downloaders write, naive
+  timestamps (read as UTC), timestamps with mixed daylight-saving offsets
+  (read as UTC), and a fixed-offset TMY moved between two common years are
+  unchanged bit for bit.
 - Fixed-design evaluation and multi-objective optimization now validate and
   apply the optional `tariff` table through the shared projection loop.
   Previously they silently ignored it and valued the design at flat prices.
