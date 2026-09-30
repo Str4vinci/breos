@@ -4,6 +4,49 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 
 ## [Unreleased]
 
+## [0.7.0] - Unreleased
+
+0.7.0 adds time-of-use tariffs and grid charging, makes the results
+currency-neutral, and removes APIs that nothing used. The main changes:
+
+- Time-of-use valuation through a `[tariff]` table, with bundled,
+  provenance-bound schedules or a strict inline `[tariff.custom_schedule]`,
+  per-period import and export prices, separate price escalators, and
+  `App.revalue` to price a finished run again.
+- Fixed-target grid charging through the `[smart_charging]` table. Stored
+  energy is tracked by origin (PV, grid or unattributed), and avoided
+  emissions use net exchange.
+- Experimental daily grid-charge planning, `mode = "daily_persistence"`, in
+  App only. Validation tools under `tools/oracles/`: a replay of a given
+  schedule through production dispatch, a perfect-foresight daily-target
+  dynamic program replayed the same way, and a linear-programming lower bound
+  on the first year's net grid cost.
+- One greedy dispatch step for the Python and Numba backends, with results
+  unchanged on both, and `tools/benchmark_optimization.py`, which checks that
+  both backends give the same optimizer results before it times them.
+- Dated E-REDES BTN profiles follow the study year's day classes, and
+  `tools/convert_eredes_profiles.py` builds their files from the E-REDES
+  publication.
+- A `[period]` table runs App over a window shorter than a year, and
+  `battery_allow_terminal_replacement` can skip a replacement that would serve
+  no step of the horizon.
+- Result schema 2.3 and ledger schema 2.0: money keys drop the currency,
+  `import_kwh` and `export_kwh` become `grid_import_kwh` and
+  `grid_export_kwh`, and breakeven columns become payback columns.
+
+Several changes break existing scripts and configs, with no deprecation
+period: renamed result and config keys have no aliases, and the numeric
+load-profile keys, the steady-state optimizer scoring basis and many unused
+functions, plots and tools are removed. Read **Changed** and **Removed**
+before upgrading. Fixes that change results say so in their entries.
+
+Known limits: `daily_persistence` is experimental, and Monte Carlo and
+optimization refuse it. A cached TMY whose index is in a named
+daylight-saving zone still loses 29 February when it is moved to a leap study
+year ([#329](https://github.com/Str4vinci/breos/issues/329)); App does not
+reach that path, only a direct call to `remap_tmy_year` or
+`load_weather_for_simulation`.
+
 ### Added
 - `battery_allow_terminal_replacement` (App and Monte Carlo), the
   optimizer's `[battery] allow_terminal_replacement` and
@@ -1100,8 +1143,6 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   and `pv_loss_waterfall.ledger_schema_version` move to `1.2`. Consumers that
   look the stage up by key, or index `stages[6]`, need updating. These are
   the only changes to the App golden baseline.
-
-### Fixed
 - Config errors that surfaced only after the weather fetch are reported when
   the App is built, and CLI, TOML and Python config are normalised the same
   way ([#176](https://github.com/Str4vinci/breos/issues/176)). Load-profile
