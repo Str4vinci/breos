@@ -38,7 +38,13 @@ SlotKey: TypeAlias = tuple[int, int]
 
 @dataclass(frozen=True, slots=True)
 class ObservedCivilDay:
-    """One fully observed configured-zone day, in its local-slot order."""
+    """One fully observed configured-zone day, in its local-slot order.
+
+    ``pv_dc_w``, ``load_w`` and ``temperature_c`` are the simulation inputs
+    the dispatch read on those slots. ``temperature_c`` is the input
+    (ambient or battery-location) temperature, not ``T_cell``: the dispatch
+    and the daily-target planner each derive the cell temperature from it.
+    """
 
     logical_day_ordinal: int
     local_date: str
@@ -84,7 +90,7 @@ class PendingObservedCivilDay:
             raise ValueError("an observed slot was captured more than once")
 
         def splice(values: tuple[float | None, ...], new: Sequence[float]) -> tuple[float | None, ...]:
-            return (*values[:start], *(float(value) for value in new), *values[stop:])
+            return values[:start] + tuple(map(float, new)) + values[stop:]
 
         return PendingObservedCivilDay(
             self.logical_day_ordinal,
@@ -99,23 +105,24 @@ class PendingObservedCivilDay:
     @property
     def captured_slots(self) -> int:
         """How many expected slots have been observed so far."""
-        return sum(value is not None for value in self.pv_dc_w)
+        return len(self.pv_dc_w) - self.pv_dc_w.count(None)
 
     @property
     def complete(self) -> bool:
-        return all(value is not None for value in self.pv_dc_w)
+        return None not in self.pv_dc_w
 
     def promote(self) -> ObservedCivilDay:
         if not self.complete:
             raise ValueError("an incomplete civil day cannot become forecast history")
+        # Segments are recorded whole, so a complete day holds floats only.
         return ObservedCivilDay(
             self.logical_day_ordinal,
             self.local_date,
             self.timezone,
             self.slot_keys,
-            tuple(float(value) for value in self.pv_dc_w if value is not None),
-            tuple(float(value) for value in self.load_w if value is not None),
-            tuple(float(value) for value in self.temperature_c if value is not None),
+            cast("tuple[float, ...]", self.pv_dc_w),
+            cast("tuple[float, ...]", self.load_w),
+            cast("tuple[float, ...]", self.temperature_c),
         )
 
 
@@ -123,15 +130,20 @@ class PendingObservedCivilDay:
 class KnownTariffHorizon:
     """Tariff/calendar facts aligned to one controller decision span.
 
-    The horizon starts with the decision span and continues for the
+    The horizon starts with the decision span and continues for up to the
     controller's ``tariff_horizon_days`` logical days, in replay order.
     ``civil_day_offsets`` holds the offset of each logical day's first slot,
-    followed by the horizon length. ``calendar_positions`` gives each slot's
-    position in the replayed resolved tariff. These are schedule data, not
-    weather or load observations.
+    followed by the horizon length. A standalone span such as a ``[period]``
+    has no day after its end, so near that end the horizon holds fewer than
+    ``tariff_horizon_days`` days (as few as the decision span alone) and
+    ``civil_day_offsets`` is correspondingly shorter. ``slot_keys`` gives
+    each slot's configured-zone wall slot and DST fold, and
+    ``calendar_positions`` its position in the replayed resolved tariff.
+    These are schedule data, not weather or load observations.
     """
 
     timezone: str
+    slot_keys: tuple[SlotKey, ...]
     period_labels: tuple[str, ...]
     period_codes: tuple[int, ...]
     import_price_per_kwh: tuple[float, ...]
@@ -330,6 +342,46 @@ class _InstructionBuffer:
         self._reserve[lo:hi] = instructions.reserve_fraction[offset : offset + count]
         self._target[lo:hi] = instructions.grid_target_fraction[offset : offset + count]
 
+    def executed(self) -> DispatchInstructions | None:
+        """A copy of the instructions the call dispatched, one per simulated step.
+
+        Only the slots this call ran are here. A decision's slots that the
+        next call runs, or that no call runs because this call was the last,
+        are not. None when no decision was made.
+        """
+        if self.grid_charge_efficiency is None or self.grid_import_limit_w is None:
+            return None
+        return DispatchInstructions(
+            discharge_allowed=self._discharge,
+            reserve_fraction=self._reserve,
+            grid_target_fraction=self._target,
+            grid_charge_efficiency=self.grid_charge_efficiency,
+            grid_import_limit_w=self.grid_import_limit_w,
+        )
+
+
+def concatenate_instructions(parts: Sequence[DispatchInstructions]) -> DispatchInstructions | None:
+    """Join executed instruction traces in dispatch order; None for no parts.
+
+    Every part must keep the same two kernel scalars, as the decisions of one
+    simulation do.
+    """
+    if not parts:
+        return None
+    first = parts[0]
+    scalars = (first.grid_charge_efficiency, first.grid_import_limit_w)
+    if any((part.grid_charge_efficiency, part.grid_import_limit_w) != scalars for part in parts[1:]):
+        raise ValueError(
+            "executed instructions with different grid_charge_efficiency or grid_import_limit_w cannot be joined"
+        )
+    return DispatchInstructions(
+        discharge_allowed=np.concatenate([part.discharge_allowed for part in parts]),
+        reserve_fraction=np.concatenate([part.reserve_fraction for part in parts]),
+        grid_target_fraction=np.concatenate([part.grid_target_fraction for part in parts]),
+        grid_charge_efficiency=scalars[0],
+        grid_import_limit_w=scalars[1],
+    )
+
 
 @dataclass(slots=True)
 class _ActiveDecision:
@@ -479,9 +531,11 @@ class _ControllerSession:
         offsets = [0]
         for ranges in days:
             offsets.append(offsets[-1] + sum(len(part) for part in ranges))
-        positions = np.concatenate([np.arange(part.start, part.stop) for ranges in days for part in ranges])
+        parts = [part for ranges in days for part in ranges]
+        positions = np.concatenate([np.arange(part.start, part.stop) for part in parts])
         return KnownTariffHorizon(
             timezone=self._timezone,
+            slot_keys=tuple(key for part in parts for key in self._slot_keys(part.start, part.stop)),
             period_labels=tuple(self._labels[positions].tolist()),
             period_codes=tuple(self._codes[positions].tolist()),
             import_price_per_kwh=tuple(self._import[positions].tolist()),
@@ -610,6 +664,10 @@ class _ControllerSession:
             self._pending = None
         else:
             self._pending = pending
+
+    def executed_instructions(self) -> DispatchInstructions | None:
+        """A copy of the instructions this call dispatched; see :meth:`_InstructionBuffer.executed`."""
+        return self.instructions.executed()
 
     def finish(self) -> ControllerCarry:
         """The carry the next projection-year call resumes from."""

@@ -16,7 +16,7 @@ from typing import Any, Callable, Mapping, Sequence, cast
 import numpy as np
 import pandas as pd
 
-from breos._controller import ControllerCarry, DailyDispatchController
+from breos._controller import ControllerCarry, DailyDispatchController, concatenate_instructions
 from breos.app_config import ResolvedAppConfig, build_costs_dict
 from breos.battery import (
     AlignedSimulationInputs,
@@ -463,6 +463,10 @@ class ProjectionRun:
     # With a tariff, each year's priced energy by tariff period (kWh), one
     # row per year, so a price change can be re-priced without re-simulating.
     period_energy: pd.DataFrame | None = None
+    # With a daily controller, the instructions it executed, one per
+    # simulated step in project order across every year (ADR 0002 A11).
+    # Slots of a decision that no year dispatched are not in it.
+    controller_instructions: DispatchInstructions | None = None
 
 
 def project_years(
@@ -502,9 +506,10 @@ def project_years(
     A private ``day_controller`` (ADR 0002 A11) decides each civil day of
     the ``tariff``'s calendar in place of static ``instructions``, on
     per-step years with a battery. Its carry crosses the years beside the
-    battery state. ``replay_seam`` says the next year replays the calendar,
-    so a civil day cut by a year's end continues at the next year's head;
-    a standalone ``[period]`` passes False.
+    battery state, and the run's ``controller_instructions`` join the
+    instructions each year executed. ``replay_seam`` says the next year
+    replays the calendar, so a civil day cut by a year's end continues at
+    the next year's head; a standalone ``[period]`` passes False.
     """
     if day_controller is not None:
         if instructions is not None:
@@ -523,6 +528,7 @@ def project_years(
     total_replacements = 0
     first_year_results_df: pd.DataFrame | None = None
     jit_cache_states: list[str] = []
+    executed: list[DispatchInstructions] = []
 
     for year_idx in range(years):
         year = year_inputs(year_idx)
@@ -603,6 +609,8 @@ def project_years(
                     carry.after_frames(results_df, degradation_df, detailed.degradation_state, has_battery=has_battery),
                     controller_carry=detailed.controller_carry,
                 )
+                if detailed.controller_instructions is not None:
+                    executed.append(detailed.controller_instructions)
             sums_w = {column: float(results_df[column].sum()) for column in _ROW_SUM_COLUMNS}
             replaced_wh = frame_replaced_capacity_wh(results_df)
             replacement_steps = np.flatnonzero(results_df["Battery_Replaced"].to_numpy()).tolist()
@@ -659,6 +667,7 @@ def project_years(
         first_year_results_df=first_year_results_df,
         jit_cache_states=jit_cache_states,
         period_energy=pd.DataFrame(period_rows) if record_period_energy else None,
+        controller_instructions=concatenate_instructions(executed),
     )
 
 

@@ -1264,6 +1264,9 @@ class _CoreRun:
     hours_per_step: float
     # The daily controller's carry; None without a controller.
     controller_carry: Optional[ControllerCarry] = None
+    # A copy of the instructions a daily controller's decisions dispatched,
+    # one per simulated step; None without a controller.
+    controller_instructions: Optional[DispatchInstructions] = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -1474,7 +1477,8 @@ def _simulate_core(
         start_time: Simulation start time (defaults to first index of pv_dc)
         end_time: Simulation end time (defaults to last index of pv_dc)
         freq: Time frequency ('h' for hourly, '15min' for 15-minute)
-        temperature_series: Battery cell temperature (C), defaults to 25C
+        temperature_series: Ambient (battery-location) temperature (C),
+            defaults to 25C. The dispatch derives ``T_cell`` from it.
         degradation_engine: Degradation backend. ``"native"`` preserves the
             Naumann/Lam model; ``"blast"`` uses the BLAST daily endpoint adapter.
         blast_model: BLAST model key when ``degradation_engine="blast"``.
@@ -1503,6 +1507,11 @@ def _simulate_core(
             ``dispatch_instructions``. It needs a battery and
             ``controller_tariff``, the resolved tariff whose ``day_starts``
             are the civil-day boundaries.
+        controller_tariff: The resolved tariff a ``day_controller`` runs on,
+            resolved on this span's simulation index. Its ``day_starts`` are
+            the civil-day boundaries, and its labels and prices feed each
+            day's known tariff horizon. Required with ``day_controller`` and
+            unused without one.
         controller_carry: The controller carry a previous projection year
             returned; None starts a new projection.
         projection_year: The project year this span simulates, for the
@@ -1514,7 +1523,8 @@ def _simulate_core(
     Returns:
         A :class:`_CoreRun` holding the filled result buffers, the calendar,
         the aging state and the lifecycle; the public entry points shape
-        their results from it.
+        their results from it. With a ``day_controller`` it also holds the
+        controller carry and a copy of the instructions the span dispatched.
     """
     if battery_config is None:
         battery_config = BatteryConfig(nominal_energy_wh=0)
@@ -1849,6 +1859,7 @@ def _simulate_core(
         degradation_tracking=degradation_tracking,
         hours_per_step=hours_per_step,
         controller_carry=None if session is None else session.finish(),
+        controller_instructions=None if session is None else session.executed_instructions(),
     )
 
 
@@ -1953,8 +1964,9 @@ class _DetailedRun:
     """A detailed span with its carry states, for the projection loop's controller path.
 
     The first six fields are what ``simulate_energy_balance(...,
-    return_degradation_state=True)`` returns; the controller carry is kept
-    beside them so neither that tuple nor the degradation payload changes.
+    return_degradation_state=True)`` returns; the controller carry and the
+    executed controller instructions are kept beside them so neither that
+    tuple nor the degradation payload changes.
     """
 
     results_df: pd.DataFrame
@@ -1964,6 +1976,7 @@ class _DetailedRun:
     degradation_df: pd.DataFrame
     degradation_state: Dict[str, Any]
     controller_carry: Optional[ControllerCarry]
+    controller_instructions: Optional[DispatchInstructions]
 
 
 def _simulate_detailed_run(
@@ -1988,6 +2001,7 @@ def _simulate_detailed_run(
         degradation_df=deg_df,
         degradation_state=_build_final_degradation_state(core.lifecycle, core.aging),
         controller_carry=core.controller_carry,
+        controller_instructions=core.controller_instructions,
     )
 
 
