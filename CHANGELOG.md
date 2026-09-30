@@ -370,6 +370,31 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   A sweep CSV does not record its currency: `currency=` names it for the
   money labels. Without it, and without `attrs["currency"]` on a DataFrame,
   the labels name no currency ("NPV savings") rather than assume EUR.
+- Two validation oracles for smart charging, under `tools/oracles/`. They
+  are tools, not public API, and no result changes. Each replays its
+  schedule through the production App run with `tools/oracles/replay.py`,
+  prices it with the tariff, and compares it with App's own dispatch of the
+  same configuration. Each has a command line
+  (`python tools/oracles/<name>.py --config <file> --output <json> --csv <csv>`)
+  that writes a JSON summary and a CSV, both tagged with a schema.
+  - `tools/oracles/daily_target_dp.py` plans the first project year one
+    grid-charge target per civil day, with perfect foresight, with the
+    private daily-target dynamic program. It needs a fixed-target
+    `[smart_charging]` table, whose layout it keeps. It reports the plan,
+    the flows the plan expects at its fixed health against what production
+    delivers, and the replayed cost next to the fixed-target run
+    (schema `breos_daily_target_dp_oracle_v1`).
+  - `tools/oracles/lp_bound.py` bounds the first project year's import cost
+    less export revenue from below with a perfect-foresight linear program,
+    solved with HiGHS through `scipy.optimize.linprog`. The program contains
+    every flow the production dispatch can deliver under any instructions,
+    at the year's opening health, so no controller pays less. It keeps the
+    prices, the efficiencies, the power limits, the inverter rating and the
+    temperature-dependent ceiling, and relaxes the rest: fixed health, a
+    concave bound on the inverter's part-load curve, standby loss charged
+    in part, the dispatch order, and a free end state. The module docstring
+    lists each relaxation. The schedule can be turned into instructions and
+    replayed to show the gap (schema `breos_lp_bound_v1`).
 
 ### Changed
 - **`plot_breakeven_comparison` reads App results**

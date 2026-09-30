@@ -26,7 +26,7 @@ configuration without preparing its inputs each time, run
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from typing import Any, Mapping
 
 import numpy as np
@@ -35,10 +35,13 @@ import pandas as pd
 from breos.app import App
 from breos.app_config import ResolvedAppConfig, resolve_app_config
 from breos.app_inputs import AppRuntimeDependencies, PreparedSimulationInputs, prepare_simulation_inputs_cached
+from breos.battery import AlignedSimulationInputs, BatteryConfig, align_simulation_inputs
 from breos.dispatch_instructions import DispatchInstructions
 from breos.execution import is_pv_only_dispatch
+from breos.projection import CarryState, build_battery_config
 from breos.runners import app as app_runner
 from breos.runners.app import SimulationArtifacts
+from breos.smart_charging import resolve_instructions
 from breos.tariffs import ResolvedTariff
 from breos.utils import get_hours_per_step
 
@@ -94,6 +97,33 @@ class ReplayCase:
     @property
     def index(self) -> pd.DatetimeIndex:
         return self.tariff.index
+
+    def aligned_inputs(self) -> AlignedSimulationInputs:
+        """The first project year's PV, load and battery temperature, as the dispatch reads them.
+
+        They are aligned onto the simulation calendar the way the runner's
+        projection aligns them, so a planner sees the per-step values the
+        replay dispatches on.
+        """
+        aligned = align_simulation_inputs(
+            self.inputs.dc_system_base,
+            self.inputs.load_data,
+            self.inputs.temperature_series,
+            freq=self.cfg["resolution"],
+        )
+        if not aligned.index.equals(self.index):
+            raise ValueError("The aligned simulation calendar differs from the tariff's calendar")
+        return aligned
+
+    def battery_config(self) -> BatteryConfig:
+        """The battery the first project year runs, at the state of health it starts with."""
+        return build_battery_config(self.cfg, self.resolved, initial_soh=CarryState().soh_pct)
+
+    def configured_instructions(self) -> DispatchInstructions:
+        """What App dispatches with: the ``[smart_charging]`` instructions, or greedy no-ops without them."""
+        spec = self.resolved.smart_charging
+        instructions = resolve_instructions(spec, self.tariff) if spec is not None else None
+        return instructions if instructions is not None else DispatchInstructions.noop(len(self.index))
 
 
 def prepare_replay(config: dict[str, Any], *, deps: AppRuntimeDependencies | None = None) -> ReplayCase:
@@ -220,3 +250,37 @@ def replay_instructions(
         plan_matched=not bool(mismatched.any()),
         tolerances=tolerances,
     )
+
+
+def replay_summary(replay: ReplayResult, hours_per_step: float) -> dict[str, Any]:
+    """A replay's first-year cost, its instructions' hash, its lowest health and its grid charge."""
+    frame = replay.artifacts.first_year_results_df
+    return {
+        "first_year_cost": float(replay.first_year_step_cost.sum()),
+        "instruction_hash": replay.instruction_hash,
+        "min_soh_pct": float(frame["Battery_SOH"].min()),
+        "grid_charge_kwh": float(frame["Grid_AC_To_Battery"].sum() * hours_per_step / 1000.0),
+        "battery_ac_to_load_kwh": float(frame["Battery_AC_To_Load"].sum() * hours_per_step / 1000.0),
+    }
+
+
+def reference_dispatch(case: ReplayCase) -> str:
+    """``"fixed_target"`` when App dispatches with a fixed-target table, else ``"greedy"``."""
+    spec = case.resolved.smart_charging
+    return "fixed_target" if spec is not None and spec.mode == "fixed_target" else "greedy"
+
+
+def plan_comparison(replay: ReplayResult) -> dict[str, Any]:
+    """How far a replay's delivered flows missed the plan: counts and totals, in kWh."""
+    return {
+        "plan_matched": replay.plan_matched,
+        "mismatched_steps": len(replay.mismatched_steps),
+        "tolerances_wh": {name: asdict(tol) for name, tol in replay.tolerances.items()},
+        "planned_minus_delivered_kwh": {
+            name: {
+                "sum": float(difference.sum() / 1000.0),
+                "max_abs": float(np.abs(difference).max(initial=0.0) / 1000.0),
+            }
+            for name, difference in replay.planned_minus_delivered_wh.items()
+        },
+    }
