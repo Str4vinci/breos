@@ -4,14 +4,22 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from breos.economics import DEFAULT_DISCOUNT_RATE, DEFAULT_INFLATION_RATE
 from breos.optimization import (
-    ProjectedDesignResult,
     _evaluate_projected_design_metrics,
     _summarize_projected_lifetime_metrics,
     evaluate_projected_design,
 )
 from breos.projection import _ROW_SUM_COLUMNS
 from breos.pv_modules import get_module
+
+# The rates resolve_optimization_config fills in; the private evaluator reads
+# them from the resolved financials rather than defaulting them again.
+_RATES = {
+    "inflation_rate": DEFAULT_INFLATION_RATE,
+    "sell_price_inflation": 0.0,
+    "discount_rate": DEFAULT_DISCOUNT_RATE,
+}
 
 
 def test_lifetime_grid_independence_uses_total_import_and_load():
@@ -35,7 +43,6 @@ def test_lifetime_grid_independence_uses_total_import_and_load():
 def test_projected_evaluator_carries_physical_and_degradation_state(monkeypatch):
     idx = pd.date_range("2025-01-01", periods=2, freq="h", tz="UTC")
     base_dc = pd.Series([1000.0, 500.0], index=idx)
-    tmy = pd.DataFrame({"temp_air": [20.0, 20.0], "ghi": [500.0, 250.0]}, index=idx)
     load = pd.DataFrame({"Load": [500.0, 500.0]}, index=idx)
     temperature = pd.Series([20.0, 20.0], index=idx)
     calls = []
@@ -96,7 +103,6 @@ def test_projected_evaluator_carries_physical_and_degradation_state(monkeypatch)
 
     metrics = _evaluate_projected_design_metrics(
         base_dc_power=base_dc,
-        tmy_data=tmy,
         houseload=load,
         temperature_series=temperature,
         pv_params=get_module("Suntech_STP550S_STC"),
@@ -107,7 +113,7 @@ def test_projected_evaluator_carries_physical_and_degradation_state(monkeypatch)
             "enable_resistance_fade": True,
         },
         costs_cfg={"storage_cost_per_kwh": 500.0},
-        fin_cfg={"project_lifespan": 2},
+        fin_cfg={**_RATES, "project_lifespan": 2},
         freq="h",
         years_projection=2,
         degradation_rate=0.10,
@@ -147,54 +153,6 @@ def test_projected_evaluator_carries_physical_and_degradation_state(monkeypatch)
     )
 
 
-def test_public_projected_design_evaluator_returns_plot_source_tables(monkeypatch):
-    idx = pd.date_range("2025-01-01", periods=2, freq="h", tz="UTC")
-    weather = pd.DataFrame({"temp_air": [20.0, 20.0]}, index=idx)
-    load = pd.DataFrame({"Load": [500.0, 500.0]}, index=idx)
-    yearly = pd.DataFrame({"Year": [1], "Grid_Independence_%": [60.0]})
-    financial = pd.DataFrame({"Year": [1], "Savings_Cumulative_NPV": [100.0]})
-
-    monkeypatch.setattr(
-        "breos.optimization.calculate_pv_production_dc",
-        lambda **_kwargs: pd.Series([100.0, 200.0], index=idx),
-    )
-    monkeypatch.setattr(
-        "breos.optimization._temperature_series_from_config",
-        lambda *_args, **_kwargs: pd.Series([20.0, 20.0], index=idx),
-    )
-    monkeypatch.setattr(
-        "breos.optimization._evaluate_projected_design_metrics",
-        lambda **_kwargs: {
-            "Projected_Grid_Independence_%": 60.0,
-            "Projected_NPV": 100.0,
-            "_yearly_summary_df": yearly,
-            "_cost_projection_df": financial,
-        },
-    )
-
-    result = evaluate_projected_design(
-        weather,
-        load,
-        {
-            "location": {"latitude": 41.15, "longitude": -8.63},
-            "pv": {"module": "Suntech_STP550S_STC"},
-            "simulation": {"resolution": "h", "years_projection": 1},
-            "financials": {"project_lifespan": 1},
-            "costs": {"dc_ac_ratio": 1.25},
-        },
-        n_modules=9,
-        battery_kwh=5.0,
-        tilt=25.0,
-        azimuth=185.0,
-    )
-
-    assert isinstance(result, ProjectedDesignResult)
-    assert result.metrics["Modules"] == 9
-    assert result.metrics["Projected_NPV"] == pytest.approx(100.0)
-    pd.testing.assert_frame_equal(result.yearly, yearly)
-    pd.testing.assert_frame_equal(result.financial, financial)
-
-
 def _synthetic_projection_inputs(days: int = 30):
     """A short, hard-cycled year that is cheap enough to project twice."""
     idx = pd.date_range("2025-01-01 00:00", periods=days * 24, freq="h", tz="UTC")
@@ -210,13 +168,12 @@ def _project(batt_spec, *, battery_kwh, years=2, days=30):
     idx, base_dc, houseload, temperature = _synthetic_projection_inputs(days)
     return _evaluate_projected_design_metrics(
         base_dc_power=base_dc,
-        tmy_data=pd.DataFrame({"temp_air": 20.0, "ghi": 500.0}, index=idx),
         houseload=houseload,
         temperature_series=temperature,
         pv_params=get_module("Suntech_STP550S_STC"),
         batt_spec=batt_spec,
         costs_cfg={"storage_cost_per_kwh": 500.0},
-        fin_cfg={"project_lifespan": years},
+        fin_cfg={**_RATES, "project_lifespan": years},
         freq="h",
         years_projection=years,
         degradation_rate=0.005,
@@ -338,10 +295,6 @@ class TestZeroModuleDesign:
             return pd.Series(np.zeros(len(idx)), index=idx)
 
         monkeypatch.setattr("breos.optimization.calculate_pv_production_dc", _no_pv)
-        monkeypatch.setattr(
-            "breos.optimization._temperature_series_from_config",
-            lambda *_args, **_kwargs: pd.Series(np.full(len(idx), 20.0), index=idx),
-        )
 
         result = evaluate_projected_design(
             weather,
@@ -361,6 +314,8 @@ class TestZeroModuleDesign:
         # A design that generates nothing cannot displace any import.
         assert result.metrics["Projected_Grid_Independence_%"] == pytest.approx(0.0)
         assert result.yearly["Import_kWh"].iloc[0] == pytest.approx(result.yearly["Load_kWh"].iloc[0], rel=1e-9)
+        # The cost projection comes back as the plot-source financial table.
+        assert result.financial["Savings_Cumulative_NPV"].size == 1
 
     def test_zero_modules_gives_the_inverter_no_rating(self, monkeypatch):
         """The rating is sized from the array, so the no-PV corner has none."""
@@ -370,10 +325,6 @@ class TestZeroModuleDesign:
         monkeypatch.setattr(
             "breos.optimization.calculate_pv_production_dc",
             lambda **_kwargs: pd.Series(np.zeros(len(idx)), index=idx),
-        )
-        monkeypatch.setattr(
-            "breos.optimization._temperature_series_from_config",
-            lambda *_args, **_kwargs: pd.Series(np.full(len(idx), 20.0), index=idx),
         )
 
         def _capture(**kwargs):

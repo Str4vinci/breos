@@ -32,10 +32,10 @@ from typing import Any, cast
 import numpy as np
 import pandas as pd
 
-from breos.app_config import DEFAULTS, ResolvedAppConfig, resolve_app_config
+from breos.app import App
+from breos.app_config import ResolvedAppConfig, resolve_app_config
 from breos.app_inputs import (
     INPUT_INDEPENDENT_KEYS,
-    AppRuntimeDependencies,
     build_dc_system_base,
     config_cache_key,
     load_consumption_profile,
@@ -55,7 +55,7 @@ from breos.execution import (
 from breos.execution import (
     backend_provenance as _backend_provenance,
 )
-from breos.load_profiles import LOAD_PROFILE_METADATA_KEY, load_profile
+from breos.load_profiles import LOAD_PROFILE_METADATA_KEY
 from breos.projection import ProjectionYear, build_pv_only_battery_config, run_projection, value_projection
 from breos.pv.model_options import DEFAULT_SOLAR_POSITION, resolve_solar_position_method, solar_position_time_offset
 from breos.result_schema import RESULT_SCHEMA_VERSION
@@ -66,26 +66,24 @@ from breos.weather import (
     _weather_file_sha256,
     _weather_metadata_sidecar_path,
     build_battery_temperature_series,
-    fetch_tmy_weather_data,
     fill_leap_day,
-    load_weather,
     preload_weather_by_year,
     resample_to_15min,
     weather_metadata,
     weather_representative_time_offset,
 )
 
-# Metrics summarized across runs (column in the per-run frame -> output label).
-_SUMMARY_METRICS = {
-    "npv_savings": "npv_savings",
-    "payback_year": "payback_year",
-    "payback_year_interpolated": "payback_year_interpolated",
-    "lcoe_per_kwh": "lcoe_per_kwh",
-    "final_soh_pct": "final_soh_pct",
-    "mean_grid_independence_pct": "mean_grid_independence_pct",
-    "lifetime_grid_independence_pct": "lifetime_grid_independence_pct",
-    "total_replacements": "total_replacements",
-}
+# Per-run columns summarized across runs, under the same names.
+_SUMMARY_METRICS = (
+    "npv_savings",
+    "payback_year",
+    "payback_year_interpolated",
+    "lcoe_per_kwh",
+    "final_soh_pct",
+    "mean_grid_independence_pct",
+    "lifetime_grid_independence_pct",
+    "total_replacements",
+)
 # A run without a payback year did not pay back within the horizon.
 _PAYBACK_METRICS = ("payback_year", "payback_year_interpolated")
 
@@ -126,16 +124,6 @@ class MonteCarloResult:
     available_years: list[int] = field(default_factory=list)
     yearly: pd.DataFrame | None = None
     provenance: dict[str, Any] = field(default_factory=dict)
-
-
-def _runtime_dependencies() -> AppRuntimeDependencies:
-    return AppRuntimeDependencies(
-        load_profile=load_profile,
-        load_weather=load_weather,
-        fetch_tmy_weather_data=fetch_tmy_weather_data,
-        resample_to_15min=resample_to_15min,
-        build_battery_temperature_series=build_battery_temperature_series,
-    )
 
 
 def _sample_load_scale(
@@ -659,8 +647,8 @@ def _has_battery(cfg: dict[str, Any]) -> bool:
     """
     return not is_pv_only_dispatch(
         cfg["battery_kwh"] * 1000,
-        cfg.get("battery_max_soc", DEFAULTS["battery_max_soc"]),
-        cfg.get("battery_min_soc", DEFAULTS["battery_min_soc"]),
+        cfg["battery_max_soc"],
+        cfg["battery_min_soc"],
     )
 
 
@@ -893,7 +881,7 @@ def run_montecarlo(
         dc_by_year, temp_by_year, runtime_weather = year_cache._years_for(cfg, resolved, settings)
     available_years = np.array(sorted(dc_by_year.keys()))
 
-    deps = _runtime_dependencies()
+    deps = App._runtime_dependencies()
     # Every weather year is restamped to target_year, so the load is built on
     # that calendar too: H0 day types then match the study year's weekdays, as
     # in an App run of that year. The year of start_date does not enter.

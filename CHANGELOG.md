@@ -1479,6 +1479,10 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   unchanged.
 
 ### Removed
+- `breos.optimization.DEFAULT_PROJECT_LIFESPAN`, with no deprecation period.
+  Nothing read it: the optimizer's horizon comes from
+  `simulation.years_projection` or `financials.project_lifespan`, and
+  defaults to the same 20 years.
 - **`breos.resample_tmy_to_15min` and the `freq` argument of
   `fetch_tmy_weather_data`** ([#164](https://github.com/Str4vinci/breos/issues/164)),
   with no deprecation period. `fetch_tmy_weather_data` now always returns the

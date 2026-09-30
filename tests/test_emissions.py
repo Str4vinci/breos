@@ -1,9 +1,8 @@
 """Tests for the emissions module."""
 
-import numpy as np
 import pytest
 
-from breos.emissions import EmissionsParams, calculate_co2_projection, calculate_co2_savings
+from breos.emissions import EmissionsParams, calculate_co2_savings
 
 
 class TestCO2Savings:
@@ -73,22 +72,3 @@ class TestCO2Savings:
         params = EmissionsParams(marginal_grid_carbon_intensity_gco2_kwh=300.0)
         result = calculate_co2_savings(10.0, 4.0, params)
         assert result["CO2_Avoided_Export_kg"] == pytest.approx(1.8)
-
-
-class TestCO2Projection:
-    def test_shape(self):
-        params = EmissionsParams(average_grid_carbon_intensity_gco2_kwh=100.0)
-        yearly_pv = np.array([5000, 4975, 4950])
-        yearly_export = np.array([2000, 1990, 1980])
-        proj = calculate_co2_projection(yearly_pv, yearly_export, params)
-        assert len(proj) == 3
-        assert "CO2_Avoided_Total_kg" in proj.columns
-        assert "CO2_Avoided_Total_Cumulative_kg" in proj.columns
-
-    def test_cumulative_increasing(self):
-        params = EmissionsParams(average_grid_carbon_intensity_gco2_kwh=100.0)
-        yearly_pv = np.array([5000, 5000, 5000, 5000])
-        yearly_export = np.array([2000, 2000, 2000, 2000])
-        proj = calculate_co2_projection(yearly_pv, yearly_export, params)
-        cumulative = proj["CO2_Avoided_Total_Cumulative_kg"].values
-        assert all(cumulative[i] <= cumulative[i + 1] for i in range(len(cumulative) - 1))

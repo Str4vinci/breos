@@ -20,9 +20,18 @@ import breos.projection as projection_module
 from breos.app_config import resolve_app_config
 from breos.app_inputs import PreparedSimulationInputs
 from breos.battery import align_simulation_inputs
+from breos.economics import DEFAULT_DISCOUNT_RATE, DEFAULT_INFLATION_RATE
 from breos.montecarlo import MonteCarloSettings, _simulate_trajectory
 from breos.runners import app as app_runner
 from breos.solar import PVProductionBreakdown
+
+# The rates resolve_optimization_config fills in; the private evaluator reads
+# them from the resolved financials rather than defaulting them again.
+_RATES = {
+    "inflation_rate": DEFAULT_INFLATION_RATE,
+    "sell_price_inflation": 0.0,
+    "discount_rate": DEFAULT_DISCOUNT_RATE,
+}
 
 PROJECTION_YEARS = 3
 STATE_KEYS = (
@@ -153,13 +162,12 @@ def test_app_montecarlo_and_projected_optimization_age_the_battery_identically(m
     }
     opt_metrics = optimization_module._evaluate_projected_design_metrics(
         base_dc_power=pv,
-        tmy_data=pd.DataFrame(index=pv.index),
         houseload=load,
         temperature_series=temperature,
         pv_params=resolved.pv_params,
         batt_spec=batt_spec,
         costs_cfg={},
-        fin_cfg={},
+        fin_cfg=_RATES,
         freq="h",
         years_projection=PROJECTION_YEARS,
         degradation_rate=cfg["pv_degradation_rate"],
