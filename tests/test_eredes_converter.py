@@ -121,6 +121,49 @@ def test_converted_files_load_on_their_own_calendar(tmp_path, legal_rows):
         np.testing.assert_allclose(values / values.sum(), expected / expected.sum(), rtol=1e-10)
 
 
+@pytest.mark.parametrize("freq", ["15min", "h"])
+def test_interpolated_spring_hour_survives_alignment_into_another_year(tmp_path, legal_rows, freq):
+    # The converter fills the skipped hour of Sunday 29 March 2026. A 2026
+    # Lisbon run drops it again, but Good Friday 30 March 2029 is a
+    # Sunday/holiday that takes the whole source date, where 01:00 exists.
+    source = _write(tmp_path / "publication.csv", legal_rows)
+    quarter_path, hourly_path = convert_eredes.convert(source, tmp_path)
+    converted = pd.read_csv(quarter_path if freq == "15min" else hourly_path, index_col=0, parse_dates=True)
+    converted = converted["BTN A - Wh"]
+    source_day = converted.loc["2026-03-29"].to_numpy()
+
+    load = load_profile(
+        "eredes_btn_a",
+        3500,
+        start_date="2029-01-01",
+        freq=freq,
+        rlp_directory=str(tmp_path),
+        timezone="Europe/Lisbon",
+    ).iloc[:, 0]
+
+    civil = load.copy()
+    civil.index = civil.index.tz_localize(None)
+    civil = civil[~civil.index.duplicated(keep="last")]  # the repeated fall-back hour
+    target_day = civil.loc["2029-03-30"].to_numpy()
+    assert len(target_day) == len(source_day) == (96 if freq == "15min" else 24)
+    np.testing.assert_allclose(target_day / target_day.sum(), source_day / source_day.sum(), rtol=1e-12)
+    # The filled hour is kept, still on the straight line between its neighbours.
+    if freq == "15min":
+        quarters = converted.loc["2026-03-29 00:45":"2026-03-29 02:00"].to_numpy()
+        np.testing.assert_allclose(quarters, np.linspace(quarters[0], quarters[-1], 6), rtol=1e-11)
+    filled = civil.loc["2029-03-30 01:00":"2029-03-30 01:45"].to_numpy()
+    scale = target_day.sum() / source_day.sum()
+    expected = converted.loc["2026-03-29 01:00":"2026-03-29 01:45"].to_numpy() * scale
+    np.testing.assert_allclose(filled, expected, rtol=1e-12)
+    assert (filled > 0).all()
+
+    # The conversion moved the file's annual energy, but the load is scaled to
+    # the configured total exactly.
+    assert converted.sum() != pytest.approx(1000 * legal_rows["a"].sum(), rel=1e-9)
+    hours_per_step = 0.25 if freq == "15min" else 1.0
+    assert load.sum() * hours_per_step / 1000 == pytest.approx(3500, rel=1e-12)
+
+
 def test_a_civil_time_publication_is_read_as_civil_time(tmp_path):
     rows = _publication_rows(year=2024, legal=False)
     assert rows["date"].value_counts().eq(96).all()

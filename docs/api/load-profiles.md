@@ -112,11 +112,26 @@ publication's dates. The converter does the following:
 - It multiplies kWh by 1000 to give Wh. Each hourly value is the sum of its
   four quarter-hours, so the two files have the same days in the same phase.
 
-The clock changes move each file's annual energy by a few Wh in 1,000 kWh;
-BREOS scales every profile to `annual_consumption_kwh` anyway. App
-provenance records the converted file and its SHA-256, not the publication
-it came from. The converter does not download data, and BREOS does not
-bundle E-REDES files.
+The two clock-change rules are BREOS's own. E-REDES does not prescribe how to
+put its legal-time publication on a civil clock. The rules have these
+limits:
+
+- The converter discards the shape of the first, summer-time occurrence of
+  the fall-back hour.
+- The interpolated spring-forward hour is not measured data. A
+  `Europe/Lisbon` run in the publication's own year drops it again. However,
+  day-class alignment can move the whole source date into another study
+  year. There the hour is an ordinary hour, so the interpolated values stay
+  in the load. For example, Good Friday 30 March 2029 takes Sunday 29 March
+  2026 from the 2026 publication.
+- Both rules change the file's annual energy. For the 2026 publication, the
+  measured change was less than 5 Wh in 1,000 kWh for each BTN profile. BREOS
+  scales every profile to `annual_consumption_kwh`, so the annual total is
+  exact. The two shape changes above stay.
+
+App provenance records the converted file and its SHA-256, not the
+publication it came from. The converter does not download data, and BREOS
+does not bundle E-REDES files.
 
 ## Profile registry
 

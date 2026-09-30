@@ -7,22 +7,28 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 ### Added
 - `tools/convert_eredes_profiles.py` converts the E-REDES consumption-profile
   publication (`Perfil_Consumo_Injecao_E-REDES_<year>.csv`) to the
-  `EREDES_<year>_BTN_1000kwh_15min.csv` and `EREDES_<year>_BTN_1000kwh_hourly.csv`
-  files that `eredes_btn_a`, `eredes_btn_b` and `eredes_btn_c` read
+  `EREDES_<year>_BTN_1000kwh_15min.csv` and
+  `EREDES_<year>_BTN_1000kwh_hourly.csv` files that `eredes_btn_a`,
+  `eredes_btn_b` and `eredes_btn_c` read
   ([#303](https://github.com/Str4vinci/breos/issues/303)). It reads the
-  Latin-1 file with its four header rows, finds the BTN A/B/C columns by
-  their labels and drops blank rows. It refuses a file whose dates do not
-  cover one complete calendar year, whose weekday does not match its date,
-  whose values are not finite and non-negative, or whose quarter-hours have a
-  gap or a repeat. The publication stamps each quarter-hour at its end in
-  Portuguese legal time; the converter writes interval starts on the civil
-  clock, 96 per date. `24:00` is the next midnight, and each end moves back
-  15 minutes. The repeated fall-back hour keeps its standard-time occurrence,
-  and the skipped spring-forward hour is interpolated. kWh become Wh, and
-  each hourly value is the sum of its four quarter-hours, so both files have
-  the same phase. The output year comes from the dates, not the filename.
-  The converter makes no network access, and BREOS still bundles no E-REDES
-  data.
+  Latin-1 file with its four header rows, finds the BTN A/B/C columns by their
+  labels and drops blank rows. It refuses a file whose dates do not cover one
+  complete calendar year, whose weekday does not match its date, whose values
+  are not finite and non-negative, or whose quarter-hours have a gap or a
+  repeat. The publication stamps each quarter-hour at its end in Portuguese
+  legal time; the converter writes interval starts on the civil clock, 96 per
+  date. `24:00` is the next midnight, and each end moves back 15 minutes. The
+  repeated fall-back hour keeps its standard-time occurrence, and the skipped
+  spring-forward hour is interpolated. These two rules are BREOS's own, not an
+  E-REDES method: the shape of the first, summer-time fall-back occurrence is
+  discarded, and the interpolated hour stays in the load when day-class
+  alignment moves its date into a study year where that hour exists. For the
+  2026 publication they changed each BTN profile's annual energy by less than
+  5 Wh in 1,000 kWh; the load is scaled to `annual_consumption_kwh` exactly.
+  kWh become Wh, and each hourly value is the sum of its four quarter-hours,
+  so both files have the same phase. The output year comes from the dates, not
+  the filename. The converter makes no network access, and BREOS still bundles
+  no E-REDES data.
 - `[tariff.custom_schedule]` lets App, Monte Carlo and projected optimization
   use a strict inline schedule definition. It accepts the same periods, rules,
   effective dates and explicit year-keyed holidays as the tariff schedule

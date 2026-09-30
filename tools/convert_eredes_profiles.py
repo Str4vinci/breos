@@ -33,15 +33,25 @@ The publication is read as follows:
   duplicate.
 
 The output is on BREOS's civil clock: 96 quarter-hours on every date, stamped
-at their start in local wall-clock time. The repeated fall-back hour keeps its
-standard-time occurrence, the one BREOS pins a wall-clock row to when it
-localizes a profile. The spring-forward hour, which the legal clock skips, is
-linearly interpolated between its neighbours; BREOS drops it again for a
-``Europe/Lisbon`` run. Values are converted from kWh to Wh (times 1000). Each
-hourly value is the sum of its four quarter-hours, so both files carry the
-same days in the same phase. BREOS rescales every profile to the configured
-annual consumption, so the small energy change from the clock conversion
-does not reach a simulation.
+at their start in local wall-clock time. Values are converted from kWh to Wh
+(times 1000). Each hourly value is the sum of its four quarter-hours, so both
+files carry the same days in the same phase.
+
+The two clock changes are filled by BREOS's own rule; E-REDES prescribes no
+reconstruction, and the conversion has these limits:
+
+- The repeated fall-back hour keeps its standard-time occurrence, the one
+  BREOS pins a wall-clock row to when it localizes a profile. The shape of
+  the first, summer-time occurrence is discarded.
+- The spring-forward hour, which the legal clock skips, is linearly
+  interpolated between its neighbours. It is not measured data. BREOS drops
+  it again for a ``Europe/Lisbon`` run in the publication's own year, but
+  day-class alignment can move the whole source date into another study
+  year, where the interpolated hour is an ordinary hour and is kept.
+- Both changes move the file's annual energy. For the 2026 publication the
+  measured change was under 5 Wh in 1,000 kWh per BTN profile. BREOS
+  rescales every profile to the configured annual consumption, so the annual
+  total of a simulation is exact, but the shape changes above remain.
 """
 
 from __future__ import annotations
