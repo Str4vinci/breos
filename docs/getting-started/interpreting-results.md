@@ -46,6 +46,13 @@ to `provenance.smart_charging` of App results that configure it:
 `warm_start_policy`, `planner_terminal_policy`, and the
 `initial_stored_energy` and `final_stored_energy` by origin. Other results
 are unchanged.
+Version "2.3" adds `battery_allow_terminal_replacement` to the
+`resolved_config` of App and Monte Carlo results, and
+`battery_replacement_treatment`, with its `allow_terminal_replacement`
+policy and a `terminal_period` description, to the provenance of a projected
+design and of an optimizer search. See
+[battery replacement at the end of the horizon](configuration.md#battery-replacement-at-the-end-of-the-horizon).
+Default results are otherwise unchanged.
 A renamed or removed key bumps the
 major version, an added key the minor. A result without the key predates 1.0.
 
