@@ -822,8 +822,8 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   PV DC falls by 10 Wh of 2021 kWh and grid independence from 39.5956% to
   39.5947%, now equal to App.
 - `fetch_weather_data`, `read_epw_file` and `load_profile` raise `ValueError`
-  for a frequency other than hourly or 15-minute, as `fetch_tmy_weather_data`
-  already did ([#175](https://github.com/Str4vinci/breos/issues/175)). They
+  for a frequency other than hourly or 15-minute
+  ([#175](https://github.com/Str4vinci/breos/issues/175)). They
   used to return hourly data for `freq="30min"`. The weather readers check the
   frequency before any request or file read.
 - Removed the "Year 1 PV degradation" stage (`year_1_degradation`) from the
@@ -995,8 +995,8 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   01:00 on `start_date`, so it covers exactly the requested hours.
   Instantaneous fetches are unchanged. `preload_weather_by_year` now warns
   about each year it skips, and its year-splitting helper takes the step size
-  from the whole file. Files fetched before this fix still lose their last year, now
-  with a warning; fetch them again to keep it. **Results change only for
+  from the whole file. Files fetched before this fix still lose their last
+  year, now with a warning; fetch them again to keep it. **Results change only for
   interval-mean files fetched from now on**, which give Monte Carlo one more
   weather year. Monte Carlo on existing files is unchanged: the per-year
   weather from both Porto 2005-2024 Open-Meteo files matches develop exactly.
@@ -1431,7 +1431,7 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   and the datasheet fields `max_dc_voltage_v`, `max_dc_power_w`,
   `min_mppt_voltage_v`, `max_mppt_voltage_v`, `startup_voltage_v`,
   `max_strings_per_mppt`, `max_input_current_per_mppt_a` and
-  `max_short_circuit_current_per_mppt_a`, added in 0.6.0 as groundwork for
+  `max_short_circuit_current_per_mppt_a`, added in 0.5.0 as groundwork for
   string-aware validation, with their checks. App sizes the inverter from
   `inverter_loading_ratio` or `inverter_ac_rating_kw` and prices it with the
   `inverter_cost_per_kw_hybrid` and `inverter_cost_per_kw_simple` cost keys.
