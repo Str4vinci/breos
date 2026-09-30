@@ -10,6 +10,10 @@ period is a charge period the grid may charge the battery toward
 ``target_usable_fraction`` of that step's usable window (A7). On a step whose
 period is a discharge period the battery may discharge. A step in neither
 set does neither; PV may charge the battery on every step.
+
+App runs ``fixed_target`` through the private civil-day controller seam
+(ADR 0002 A11) with :class:`FixedTargetDayController`, which hands each day
+its slice of the resolved instructions.
 """
 
 from __future__ import annotations
@@ -20,6 +24,7 @@ from typing import Any
 
 import numpy as np
 
+from breos._controller import ControllerDayDecision, ControllerDayInput
 from breos.dispatch_instructions import DispatchInstructions
 from breos.tariffs import ResolvedTariff
 
@@ -111,6 +116,35 @@ def resolve_instructions(spec: SmartChargingSpec, tariff: ResolvedTariff | None)
         grid_charge_efficiency=spec.grid_charge_efficiency,
         grid_import_limit_w=math.inf if spec.grid_import_limit_w is None else spec.grid_import_limit_w,
     )
+
+
+@dataclass(frozen=True)
+class FixedTargetDayController:
+    """Fixed-target smart charging as a private daily controller (ADR 0002 A11).
+
+    ``instructions`` are :func:`resolve_instructions`' output on the replayed
+    tariff calendar. Each day's decision is their slice at the day's
+    calendar positions, so a run through this controller dispatches exactly
+    the static instructions. It reads the known tariff calendar only, and
+    keeps no policy state.
+    """
+
+    instructions: DispatchInstructions
+    tariff_horizon_days: int = 1
+
+    def decide_day(self, day: ControllerDayInput, policy_state: object | None) -> ControllerDayDecision:
+        positions = np.asarray(day.tariff.calendar_positions[: day.decision_step_count], dtype=np.intp)
+        source = self.instructions
+        return ControllerDayDecision(
+            DispatchInstructions(
+                discharge_allowed=source.discharge_allowed[positions],
+                reserve_fraction=source.reserve_fraction[positions],
+                grid_target_fraction=source.grid_target_fraction[positions],
+                grid_charge_efficiency=source.grid_charge_efficiency,
+                grid_import_limit_w=source.grid_import_limit_w,
+            ),
+            policy_state,
+        )
 
 
 def stored_energy_by_origin(energy_wh: float, pv_origin_wh: float, grid_origin_wh: float) -> dict[str, float]:

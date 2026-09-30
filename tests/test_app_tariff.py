@@ -1,5 +1,6 @@
 """Time-of-use valuation through App, Monte Carlo and the shared projection loop (ADR 0002, 0003 E7)."""
 
+import dataclasses
 import json
 from copy import deepcopy
 from datetime import date
@@ -14,7 +15,7 @@ from breos.battery import align_simulation_inputs
 from breos.montecarlo import MonteCarloSettings, run_montecarlo
 from breos.projection import ProjectionYear, run_projection
 from breos.runners.app import run_app_simulation
-from breos.smart_charging import SmartChargingSpec, resolve_instructions
+from breos.smart_charging import FixedTargetDayController, SmartChargingSpec, resolve_instructions
 from breos.tariffs import ScheduleDefinition
 
 BASE = {"location": "porto", "n_modules": 8, "annual_consumption_kwh": 4000, "battery_kwh": 5.0, "projection_years": 3}
@@ -272,6 +273,58 @@ def test_a_smart_charging_year_on_another_calendar_names_the_calendar():
             tariff=tariff,
             instructions=resolve_instructions(spec, tariff),
         )
+
+
+SMART = {
+    "mode": "fixed_target",
+    "target_usable_fraction": 0.6,
+    "charge_periods": ["off_peak"],
+    "discharge_periods": ["peak"],
+    "grid_charge_efficiency": 0.95,
+    "grid_import_limit_w": 5000,
+}
+
+
+def _spy_on_projection(monkeypatch):
+    import breos.runners.app as runner
+
+    calls = []
+    run_projection_ = runner.run_projection
+
+    def spy(*args, **kwargs):
+        calls.append(kwargs)
+        return run_projection_(*args, **kwargs)
+
+    monkeypatch.setattr(runner, "run_projection", spy)
+    return calls
+
+
+@pytest.mark.usefixtures("_patch_weather")
+@pytest.mark.parametrize("resolution", ["h", "15min"])
+@pytest.mark.parametrize("backend", ["python", "numba"])
+def test_app_fixed_target_runs_through_the_daily_controller_unchanged(monkeypatch, resolution, backend):
+    # ADR 0002 A11: App's configured fixed target runs through the civil-day
+    # controller seam; a replayed schedule stays on the static path. The two
+    # must give the same ledger, year rows and carried state bit for bit.
+    if backend == "numba":
+        pytest.importorskip("numba", reason="the compiled backend needs the breos[fast] extra")
+    calls = _spy_on_projection(monkeypatch)
+    app = App({**BASE, "resolution": resolution, "execution_backend": backend, "tariff": TOU, "smart_charging": SMART})
+    deps = app._runtime_dependencies()
+    controlled = run_app_simulation(app._resolved, deps)
+    static = run_app_simulation(app._resolved, deps, instructions=controlled.instructions)
+
+    assert isinstance(calls[0]["day_controller"], FixedTargetDayController) and calls[0]["instructions"] is None
+    assert calls[0]["replay_seam"] is True
+    assert calls[1]["day_controller"] is None and calls[1]["instructions"] is controlled.instructions
+    pd.testing.assert_frame_equal(controlled.first_year_results_df, static.first_year_results_df, check_exact=True)
+    pd.testing.assert_frame_equal(controlled.yearly_df, static.yearly_df, check_exact=True)
+    assert dataclasses.replace(controlled.projection.carry, controller_carry=None) == static.projection.carry
+    assert controlled.smart_charging["instruction_hash"] == controlled.instructions.instruction_hash()
+    assert controlled.first_year_results_df["Grid_AC_To_Battery"].sum() > 0
+    carry = controlled.projection.carry.controller_carry
+    assert carry.next_project_step_ordinal == 3 * len(controlled.first_year_results_df)
+    assert carry.complete_days_observed == 3 * 365
 
 
 def test_montecarlo_prices_every_trajectory_with_the_tariff(tmp_path, write_multiyear_weather):

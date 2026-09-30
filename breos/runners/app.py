@@ -29,7 +29,12 @@ from breos.projection import (
     value_projection,
 )
 from breos.pv_modules import get_module
-from breos.smart_charging import resolve_instructions, smart_charging_provenance, stored_energy_by_origin
+from breos.smart_charging import (
+    FixedTargetDayController,
+    resolve_instructions,
+    smart_charging_provenance,
+    stored_energy_by_origin,
+)
 from breos.solar import PVProductionBreakdown
 from breos.tariffs import ResolvedTariff, tariff_provenance
 from breos.utils import get_hours_per_step
@@ -381,8 +386,13 @@ def run_app_simulation(
     # once and replayed every year.
     spec = resolved.smart_charging
     from_spec = instructions is None
+    day_controller = None
     if from_spec:
         instructions = resolve_instructions(spec, tariff) if spec is not None and has_battery else None
+        # The configured table runs through the civil-day controller seam
+        # (ADR 0002 A11); a replayed schedule stays on the static path.
+        if instructions is not None:
+            day_controller = FixedTargetDayController(instructions)
     projection = run_projection(
         cfg,
         resolved,
@@ -392,9 +402,13 @@ def run_app_simulation(
         execution_backend=execution_backend,
         observe_jit_per_year=True,
         tariff=tariff,
-        instructions=instructions,
+        instructions=None if day_controller is not None else instructions,
         # Kept so App.revalue can re-price the tariff without re-simulating.
         record_period_energy=True,
+        day_controller=day_controller,
+        # A [period] window is one standalone span; project years replay one
+        # calendar, so a civil day cut by a year's end continues next year.
+        replay_seam=period is None,
     )
     first_year_results_df = cast(pd.DataFrame, projection.first_year_results_df)
     current_soh = projection.carry.soh_pct
