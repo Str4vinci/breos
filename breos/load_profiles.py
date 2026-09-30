@@ -12,7 +12,7 @@ from contextlib import nullcontext
 from dataclasses import dataclass
 from importlib.resources import as_file
 from pathlib import Path
-from typing import Any, Dict, Mapping, Optional, Union
+from typing import Any, Mapping, Optional
 
 import numpy as np
 import pandas as pd

@@ -1499,6 +1499,13 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   unchanged.
 
 ### Removed
+- The package root now exposes only the public non-module symbols listed in
+  `breos.__all__`; import battery helpers, constants, repair events, catalogue
+  values, and weather utilities from their owning modules (`breos.battery`,
+  `breos.constants`, `breos.io`, `breos.pv_modules`, `breos.utils`, and
+  `breos.weather`). Top-level plotting compatibility attributes are removed;
+  import plotting functions from `breos.plotting`. `breos.App` and every
+  declared `__all__` export remain available.
 - App configuration no longer accepts `dc_coupled`, and
   `provenance.resolved_config` no longer echoes it. Dispatch remains the
   supported DC-coupled/hybrid model; supplying the old key now raises an

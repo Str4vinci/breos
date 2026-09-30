@@ -28,9 +28,6 @@ Usage:
 # and result provenance read the same helper, and docs/conf.py the same
 # metadata, which keeps the literal from drifting out of sync with the
 # distribution version on a release.
-from importlib import import_module
-from importlib.util import find_spec as _find_spec
-
 from breos.utils import package_version as _package_version
 
 __version__ = _package_version()
@@ -42,47 +39,7 @@ from breos.app import App
 from breos.battery import (
     BatteryConfig,
     apply_indoor_temperature_model,
-    compute_cell_temperature,
-    resistance_to_efficiency,
     simulate_energy_balance,
-    update_battery_resistance_calendar,
-    update_battery_resistance_cyclewise,
-    update_battery_soh_calendar,
-    update_battery_soh_cyclewise,
-)
-
-# Constants
-from breos.constants import (
-    A_Q,
-    A_R,
-    B_Q,
-    B_R,
-    C_DOC_Q,
-    C_DOC_R,
-    D_DOC_Q,
-    D_DOC_R,
-    DEFAULT_CHARGE_EFFICIENCY,
-    DEFAULT_DISCHARGE_EFFICIENCY,
-    DEFAULT_INDOOR_CEILING_C,
-    DEFAULT_INDOOR_COUPLING_ALPHA,
-    DEFAULT_INDOOR_FLOOR_C,
-    DEFAULT_INDOOR_SETPOINT_C,
-    DEFAULT_MAX_SOC,
-    DEFAULT_MIN_SOC,
-    LAM_EA_J_MOL,
-    LAM_EXPONENT_B,
-    LAM_K0_FRAC,
-    LAM_SOC_EXPONENT_N,
-    NAUMANN_EA_J_MOL,
-    NAUMANN_EA_R_J_MOL,
-    NAUMANN_EXPONENT_B,
-    NAUMANN_K0_PERCENT,
-    NAUMANN_K0_R_PERCENT,
-    NAUMANN_SOC_EXPONENT_N,
-    R_GAS,
-    T_REF_K,
-    Z_Q,
-    Z_R,
 )
 
 # Battery degradation model discovery
@@ -119,7 +76,6 @@ from breos.inverter import (
 # I/O (export/import functions)
 from breos.io import (
     InputRepairReport,
-    RepairEvent,
     export_results,
     export_summary,
     load_results,
@@ -151,7 +107,6 @@ from breos.optimization import (
 
 # PV Module Database
 from breos.pv_modules import (
-    MODULES,
     get_module,
     get_module_info,
     list_modules,
@@ -169,82 +124,13 @@ from breos.solar import (
     estimate_optimal_tilt,
 )
 
-# Utils
-from breos.utils import (
-    get_hours_per_step,
-    is_leap_year,
-    remap_datetime_index_years,
-)
-
 # Weather
 from breos.weather import (
-    build_battery_temperature_series,
-    extract_ambient_temperature,
     fetch_tmy_weather_data,
     fetch_weather_data,
     load_weather,
-    parse_weather_filename,
-    preload_weather_by_year,
     read_epw_file,
-    resample_to_15min,
 )
-
-# Plotting functions historically remain available as top-level attributes, but
-# importing core BREOS or invoking a non-plotting CLI command must not initialize
-# Matplotlib. PEP 562 module attribute hooks preserve those compatibility names
-# while deferring the optional plotting stack until a caller actually uses it.
-_LAZY_PLOTTING_EXPORTS = frozenset(
-    {
-        "degradation_plots",
-        "plot_battery_soh_timeseries",
-        "plot_breakeven",
-        "plot_breakeven_comparison",
-        "plot_cell_temperature",
-        "plot_co2_savings",
-        "plot_montecarlo_final_soh_distribution",
-        "plot_montecarlo_grid_independence_distribution",
-        "plot_montecarlo_npv_distribution",
-        "plot_montecarlo_simulation",
-        "plot_monthly_balance",
-        "plot_monthly_comparison",
-        "plot_orientation_landscape",
-        "plot_pareto_front",
-        "plot_pv_loss_waterfall",
-        "plot_resistance_and_efficiency",
-        "plot_sweep_heatmap",
-        "plot_timeseries",
-        "plot_weather_annual_ghi_distribution",
-        "plot_weather_monthly_comparison",
-        "set_presentation_mode",
-        "weekly_graphs",
-        "yearly_graphs",
-    }
-)
-
-
-def __getattr__(name: str):
-    """Resolve compatibility plotting attributes without eager imports."""
-
-    if name not in _LAZY_PLOTTING_EXPORTS:
-        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-    try:
-        plotting = import_module("breos.plotting")
-    except ImportError as exc:
-        # An AttributeError keeps getattr(breos, name, default), inspect and
-        # help(breos) working on an install without the plots extra.
-        raise AttributeError(str(exc), name=name) from exc
-    value = getattr(plotting, name)
-    globals()[name] = value
-    return value
-
-
-def __dir__() -> list[str]:
-    """Include lazy compatibility attributes in discovery when matplotlib is installed."""
-
-    if _find_spec("matplotlib") is None:
-        return sorted(globals())
-    return sorted(set(globals()) | _LAZY_PLOTTING_EXPORTS)
-
 
 __all__ = [
     # Public facade

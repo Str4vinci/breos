@@ -25,7 +25,6 @@ import numpy as np
 import pandas as pd
 import pytest
 
-import breos.battery as battery_module
 from breos._numba_dispatch import _dispatch_day_numba, _kernel
 from breos.battery import (
     _ROW,

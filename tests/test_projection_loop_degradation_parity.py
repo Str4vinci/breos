@@ -14,7 +14,6 @@ import numpy as np
 import pandas as pd
 import pytest
 
-import breos.montecarlo as montecarlo_module
 import breos.optimization as optimization_module
 import breos.projection as projection_module
 from breos.app_config import resolve_app_config

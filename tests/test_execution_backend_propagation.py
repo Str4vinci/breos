@@ -24,7 +24,6 @@ from breos.execution import (
     DEFAULT_EXECUTION_BACKEND,
     EXECUTION_BACKENDS,
     PV_ONLY_DISPATCH_PATH,
-    aggregate_jit_cache_states,
     backend_provenance,
     is_pv_only_dispatch,
     validate_execution_backend,

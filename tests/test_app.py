@@ -7,7 +7,6 @@ from datetime import date
 import pandas as pd
 import pytest
 
-import breos
 import breos.app as app_module
 import breos.projection as projection_module
 from breos.app import App
@@ -1243,7 +1242,6 @@ class TestAppSimulateWithBattery:
 
 
 def test_multiyear_battery_inventory_and_pv_origin_cross_year_boundary(_patch_weather, monkeypatch):
-    import breos.runners.app as runner_module
 
     original = projection_module.simulate_energy_balance
     calls = []

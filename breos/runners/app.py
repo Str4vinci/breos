@@ -5,7 +5,6 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from typing import Any, cast
 
-import numpy as np
 import pandas as pd
 
 from breos.app_config import ResolvedAppConfig, SimulationPeriod
