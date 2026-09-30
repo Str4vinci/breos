@@ -629,6 +629,15 @@ def test_run_montecarlo_rejects_load_scale_bounds_that_allow_negative_demand(
         run_montecarlo(_base_config(), settings)
 
 
+@pytest.mark.parametrize("n_procs", [0, -1])
+def test_run_montecarlo_needs_at_least_one_worker(tmp_path, n_procs, write_multiyear_weather):
+    weather = write_multiyear_weather(tmp_path / "multi.csv")
+    settings = MonteCarloSettings(weather_file=str(weather), n_runs=1, years_per_run=1, seed=0, n_procs=n_procs)
+
+    with pytest.raises(ValueError, match="n_procs must be at least 1"):
+        run_montecarlo(_base_config(), settings)
+
+
 def test_montecarlo_cli_labels_conditional_payback_statistics(monkeypatch, tmp_path, capsys):
     from breos import cli
     from breos.montecarlo import MonteCarloResult

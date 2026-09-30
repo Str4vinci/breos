@@ -296,9 +296,11 @@ def test_only_pv_origin_discharge_counts_as_pv():
     assert results["PV_Origin_Battery_AC_To_Load"].sum() < results["Battery_AC_To_Load"].sum()
 
 
-def test_grid_charging_is_aged_like_pv_charging():
-    """Both engines see grid charge as throughput."""
-    pv, load, temp, cfg, sim = build_instructed("fixed_target", "h")
+@pytest.mark.parametrize("scenario", ["fixed_target", "fixed_target_blast"])
+@pytest.mark.filterwarnings("ignore::breos.degradation.validation.BlastExperimentalRangeWarning")
+def test_grid_charging_is_aged_like_pv_charging(scenario):
+    """Native and BLAST degradation both see grid charge as throughput."""
+    pv, load, temp, cfg, sim = build_instructed(scenario, "h")
     config = BatteryConfig(**cfg)
     instructions = sim.pop("dispatch_instructions")
     *_, greedy_degradation = simulate_energy_balance(
@@ -315,8 +317,9 @@ def test_grid_charging_is_aged_like_pv_charging():
     )
     assert (
         charged_degradation["Cumulative_FEC_All_Packs"].iloc[-1]
-        != greedy_degradation["Cumulative_FEC_All_Packs"].iloc[-1]
+        > greedy_degradation["Cumulative_FEC_All_Packs"].iloc[-1]
     )
+    assert charged_degradation["SOH"].iloc[-1] < greedy_degradation["SOH"].iloc[-1]
 
 
 def test_instructions_must_cover_the_simulation():
