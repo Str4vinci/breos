@@ -323,7 +323,7 @@ class LpBoundProblem:
             import_price_per_kwh=np.asarray(case.tariff.import_price_per_kwh),
             export_price_per_kwh=np.asarray(case.tariff.export_price_per_kwh),
             battery_config=case.battery_config(),
-            hours_per_step=get_hours_per_step(case.cfg["resolution"]),
+            hours_per_step=get_hours_per_step(case.resolved.cfg["resolution"]),
             **{**settings, **overrides},
         )
 
@@ -751,7 +751,7 @@ def report(result: LpBoundResult, case: ReplayCase) -> dict[str, Any]:
         "schema": result.schema,
         "currency": result_currency(case.tariff),
         "n_steps": len(problem),
-        "resolution": case.cfg["resolution"],
+        "resolution": case.resolved.cfg["resolution"],
         "start": str(case.index[0]),
         "end": str(case.index[-1]),
         "battery_kwh": problem.battery_config.nominal_energy_wh / 1000.0,

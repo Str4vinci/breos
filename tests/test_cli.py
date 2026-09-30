@@ -103,11 +103,11 @@ def _record_montecarlo_backend(monkeypatch):
 
     observed = {}
 
-    def fake_resolve_backend(execution_backend, *, pv_only=False):
+    def fake_backend_provenance(execution_backend, *, pv_only=False):
         observed["execution_backend"] = execution_backend
         raise _BackendChosen
 
-    monkeypatch.setattr(montecarlo, "_resolve_backend", fake_resolve_backend)
+    monkeypatch.setattr(montecarlo, "backend_provenance", fake_backend_provenance)
     return observed
 
 

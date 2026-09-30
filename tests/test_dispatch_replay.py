@@ -179,3 +179,20 @@ def test_a_replay_rejects_what_it_cannot_price_or_check():
         replay_instructions(case, instructions, tolerance={"export_w": Tolerance()})
     with pytest.raises(ValueError, match="'rtol' must be finite"):
         Tolerance(rtol=-1.0)
+
+
+def test_replay_runs_the_requested_backend_without_changing_the_case():
+    pytest.importorskip("numba")
+    case = prepare_replay(CONFIG)
+    instructions = _fixed_target(case)
+
+    python = replay_instructions(case, instructions)
+    numba = replay_instructions(case, instructions, execution_backend="numba")
+
+    assert python.artifacts.execution["execution_backend"] == "python"
+    assert numba.artifacts.execution["execution_backend"] == "numba"
+    # The override is per call: the prepared case keeps its own backend.
+    assert case.resolved.cfg["execution_backend"] == "python"
+    pd.testing.assert_frame_equal(
+        python.artifacts.first_year_results_df, numba.artifacts.first_year_results_df, check_exact=True
+    )

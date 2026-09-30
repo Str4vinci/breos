@@ -24,7 +24,7 @@ _BASE = {"n_modules": 6, "annual_consumption_kwh": 3000, "projection_years": 1, 
 
 def _result_index(config):
     app = App(config)
-    artifacts = run_app_simulation(app._cfg, app._resolved, app._runtime_dependencies())
+    artifacts = run_app_simulation(app._resolved, app._runtime_dependencies())
     return pd.DatetimeIndex(artifacts.first_year_results_df["Datetime"]), app._resolved.timezone
 
 

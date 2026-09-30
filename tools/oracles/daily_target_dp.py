@@ -132,7 +132,7 @@ def daily_target_problem(case: ReplayCase) -> DailyTargetProblem:
         pv_dc_w=aligned.pv_dc_w,
         load_w=aligned.load_w,
         temperature_c=aligned.temperature_c,
-        freq=case.cfg["resolution"],
+        freq=case.resolved.cfg["resolution"],
     )
 
 
@@ -185,7 +185,7 @@ def run_daily_target_oracle(
     The planner and the replays run on the configuration's execution
     backend unless ``execution_backend`` names one.
     """
-    backend = execution_backend or case.cfg.get("execution_backend", "python")
+    backend = execution_backend or case.resolved.cfg.get("execution_backend", "python")
     problem = daily_target_problem(case)
     started = time.perf_counter()
     plan = solve_daily_targets(
@@ -228,7 +228,7 @@ def report(result: DailyTargetOracleResult, case: ReplayCase) -> dict[str, Any]:
         "currency": result_currency(case.tariff),
         "n_steps": len(problem.instructions),
         "n_days": problem.n_days,
-        "resolution": case.cfg["resolution"],
+        "resolution": case.resolved.cfg["resolution"],
         "start": str(case.index[0]),
         "end": str(case.index[-1]),
         "battery_kwh": problem.battery_config.nominal_energy_wh / 1000.0,

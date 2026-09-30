@@ -4,6 +4,7 @@ from types import SimpleNamespace
 
 import pandas as pd
 
+from breos.app_config import resolve_app_config
 from breos.app_inputs import (
     AppRuntimeDependencies,
     load_weather_for_simulation,
@@ -81,18 +82,17 @@ def test_prepare_inputs_threads_explicit_battery_temperature(monkeypatch):
         resample_to_15min=lambda frame, **kwargs: frame,
         build_battery_temperature_series=temperature_builder,
     )
-    cfg = {
-        "resolution": "h",
-        "start_date": "2025-01-01",
-        "horizon_profile": None,
-        "solar_position": "interval-start",
-        "weather_source": None,
-        "battery_temperature": 25.0,
-        "battery_indoor_model": {"enabled": False},
-    }
-    resolved = SimpleNamespace(timezone="UTC")
+    resolved = resolve_app_config(
+        {
+            "location": {"latitude": 41.0, "longitude": -8.0, "timezone": "UTC"},
+            "n_modules": 1,
+            "annual_consumption_kwh": 1000,
+            "battery_temperature": 25.0,
+            "battery_indoor_model": {"enabled": False},
+        }
+    )
 
-    prepared = prepare_simulation_inputs(cfg, resolved, deps)
+    prepared = prepare_simulation_inputs(resolved.cfg, resolved, deps)
 
     assert prepared.temperature_series.tolist() == [25.0, 25.0]
     assert captured == {"temp_config": 25.0, "indoor_model": {"enabled": False}}

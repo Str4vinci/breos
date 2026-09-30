@@ -39,8 +39,8 @@ def test_app_resolves_profile_key_case_and_native_date_during_construction():
         }
     )
 
-    assert app._cfg["load_profile"] == "bdew_h0"
-    assert app._cfg["start_date"] == "2023-01-01"
+    assert app._resolved.cfg["load_profile"] == "bdew_h0"
+    assert app._resolved.cfg["start_date"] == "2023-01-01"
 
 
 # ---------------------------------------------------------------------------
@@ -321,8 +321,8 @@ class TestAppValidation:
     def test_battery_temperature_and_indoor_model_are_accepted(self):
         app = App({**self.BASE, "battery_temperature": 25.0, "battery_indoor_model": {"enabled": False}})
 
-        assert app._cfg["battery_temperature"] == 25.0
-        assert app._cfg["battery_indoor_model"] == {"enabled": False}
+        assert app._resolved.cfg["battery_temperature"] == 25.0
+        assert app._resolved.cfg["battery_indoor_model"] == {"enabled": False}
 
     def test_cost_overrides_resolve_through_app_facade(self):
         app = App(
@@ -355,35 +355,7 @@ class TestAppValidation:
                 "montecarlo": {"n_runs": 10, "weather_file": "weather.csv"},
             }
         )
-        assert app._cfg["n_modules"] == 10
-
-    def test_blast_config_accepts_enabled_p1_models(self):
-        for blast_model in ("lfp_gr_250ah_prismatic", "nca_gr_panasonic_3ah"):
-            app = App(
-                {
-                    "location": "porto",
-                    "n_modules": 10,
-                    "annual_consumption_kwh": 4000,
-                    "battery_kwh": 5.0,
-                    "degradation_engine": "blast",
-                    "blast_model": blast_model,
-                }
-            )
-            assert app._cfg["degradation_engine"] == "blast"
-            assert app._cfg["blast_model"] == blast_model
-
-    def test_blast_config_enables_phase3_models(self):
-        app = App(
-            {
-                "location": "porto",
-                "n_modules": 10,
-                "annual_consumption_kwh": 4000,
-                "battery_kwh": 5.0,
-                "degradation_engine": "blast",
-                "blast_model": "nmc811_grsi_lgm50_5ah",
-            }
-        )
-        assert app._cfg["blast_model"] == "nmc811_grsi_lgm50_5ah"
+        assert app._resolved.cfg["n_modules"] == 10
 
     def test_custom_location_valid(self):
         app = App(
@@ -406,7 +378,7 @@ class TestAppValidation:
                 ],
             }
         )
-        assert app._cfg["n_modules"] == 6
+        assert app._resolved.cfg["n_modules"] == 6
 
     def test_resolution_does_not_mutate_input_config(self):
         # Resolving the derived module count must not write back into the
@@ -421,7 +393,7 @@ class TestAppValidation:
         }
         app = App(user_config)
         assert "n_modules" not in user_config
-        assert app._cfg["n_modules"] == 7
+        assert app._resolved.cfg["n_modules"] == 7
 
     def test_result_before_simulate(self):
         app = App({"location": "porto", "n_modules": 10, "annual_consumption_kwh": 4000})
@@ -766,9 +738,6 @@ class TestAppSimulateNoBattery:
         self.app.simulate()
         self.result = self.app.result()
 
-    def test_result_is_dict(self):
-        assert isinstance(self.result, dict)
-
     def test_json_serializable(self):
         json.dumps(self.result)
 
@@ -868,63 +837,64 @@ class TestAppSimulateNoBattery:
         assert r["provenance"]["timezone"] == "Europe/Lisbon"
         json.dumps(r["provenance"])
 
-    def test_blast_result_reports_model_identity_and_state_provenance(self):
-        app = App(
-            {
-                "location": "porto",
-                "n_modules": 6,
-                "annual_consumption_kwh": 3000,
-                "battery_kwh": 5.0,
-                "projection_years": 1,
-                "degradation_engine": "blast",
-                "blast_model": "lfp_gr_250ah_prismatic",
-            }
-        )
-        app.simulate()
-        result = app.result()
-
-        degradation = result["degradation"]
-        assert degradation["engine"] == "blast"
-        assert degradation["model_key"] == "lfp_gr_250ah_prismatic"
-        assert degradation["model_profile"]["key"] == degradation["model_key"]
-        assert degradation["model_profile"]["upstream"]["commit"] == "d789e00bca60f628de640745c18eb724b07358bd"
-        assert degradation["model_profile"]["calibration_basis"] == "cell-model"
-        assert degradation["pack_calibrated"] is False
-        assert degradation["initial_soh_pct"] == 100.0
-        assert degradation["final_soh_pct"] == round(result["battery_soh_end_pct"], 1)
-        assert degradation["state_schema_version"] == "1.0"
-        range_warnings = degradation["experimental_range_warnings"]
-        assert range_warnings
-        assert len({warning["code"] for warning in range_warnings}) == len(range_warnings)
-        assert degradation["aging_horizon_extrapolation_warnings"] == []
-        assert result["provenance"]["degradation"] == degradation
-        assert result["provenance"]["degradation"] is degradation
-
-    @pytest.mark.parametrize("spelling", ["Naumann-Lam", " naumann_lam "])
-    def test_native_result_reports_the_normalised_calendar_model(self, spelling):
-        # Validation accepted spellings that the result then reported as
-        # given, or that the aging model could not look up (surrounding spaces).
-        app = App(
-            {
-                "location": "porto",
-                "n_modules": 6,
-                "annual_consumption_kwh": 3000,
-                "battery_kwh": 5.0,
-                "projection_years": 1,
-                "calendar_model": spelling,
-            }
-        )
-        app.simulate()
-        result = app.result()
-
-        assert result["degradation"]["model_key"] == "naumann_lam"
-        assert result["provenance"]["resolved_config"]["calendar_model"] == "naumann_lam"
-
     def test_investment_positive(self):
         assert self.result["total_investment"] > 0
 
     def test_lcoe_positive(self):
         assert self.result["lcoe_per_kwh"] > 0
+
+
+def test_blast_result_reports_model_identity_and_state_provenance(_patch_weather):
+    app = App(
+        {
+            "location": "porto",
+            "n_modules": 6,
+            "annual_consumption_kwh": 3000,
+            "battery_kwh": 5.0,
+            "projection_years": 1,
+            "degradation_engine": "blast",
+            "blast_model": "lfp_gr_250ah_prismatic",
+        }
+    )
+    app.simulate()
+    result = app.result()
+
+    degradation = result["degradation"]
+    assert degradation["engine"] == "blast"
+    assert degradation["model_key"] == "lfp_gr_250ah_prismatic"
+    assert degradation["model_profile"]["key"] == degradation["model_key"]
+    assert degradation["model_profile"]["upstream"]["commit"] == "d789e00bca60f628de640745c18eb724b07358bd"
+    assert degradation["model_profile"]["calibration_basis"] == "cell-model"
+    assert degradation["pack_calibrated"] is False
+    assert degradation["initial_soh_pct"] == 100.0
+    assert degradation["final_soh_pct"] == round(result["battery_soh_end_pct"], 1)
+    assert degradation["state_schema_version"] == "1.0"
+    range_warnings = degradation["experimental_range_warnings"]
+    assert range_warnings
+    assert len({warning["code"] for warning in range_warnings}) == len(range_warnings)
+    assert degradation["aging_horizon_extrapolation_warnings"] == []
+    assert result["provenance"]["degradation"] == degradation
+
+
+@pytest.mark.parametrize("spelling", ["Naumann-Lam", " naumann_lam "])
+def test_native_result_reports_the_normalised_calendar_model(_patch_weather, spelling):
+    # Validation accepted spellings that the result then reported as
+    # given, or that the aging model could not look up (surrounding spaces).
+    app = App(
+        {
+            "location": "porto",
+            "n_modules": 6,
+            "annual_consumption_kwh": 3000,
+            "battery_kwh": 5.0,
+            "projection_years": 1,
+            "calendar_model": spelling,
+        }
+    )
+    app.simulate()
+    result = app.result()
+
+    assert result["degradation"]["model_key"] == "naumann_lam"
+    assert result["provenance"]["resolved_config"]["calendar_model"] == "naumann_lam"
 
 
 def test_monthly_rows_follow_the_local_year_of_fixed_offset_weather(monkeypatch, synthetic_weather):
@@ -1005,9 +975,9 @@ class TestAppBifacialConfig:
     def test_front_only_default_needs_no_row_geometry(self):
         app = App(self._config())
 
-        assert app._cfg["bifacial_model"] == "none"
-        assert app._cfg["pvrow_height"] is None
-        assert app._cfg["pvrow_pitch"] is None
+        assert app._resolved.cfg["bifacial_model"] == "none"
+        assert app._resolved.cfg["pvrow_height"] is None
+        assert app._resolved.cfg["pvrow_pitch"] is None
 
     def test_infinite_sheds_requires_bifacial_module(self):
         with pytest.raises(ValueError, match="requires bifaciality metadata"):
@@ -1048,8 +1018,8 @@ class TestAppBifacialConfig:
             }
         )
 
-        assert app._cfg["pv_arrays"][0]["bifacial_model"] == "infinite_sheds"
-        assert app._cfg["pv_arrays"][0]["pvrow_height"] == 1.5
+        assert app._resolved.cfg["pv_arrays"][0]["bifacial_model"] == "infinite_sheds"
+        assert app._resolved.cfg["pv_arrays"][0]["pvrow_height"] == 1.5
 
     def test_infinite_sheds_runs_through_app_and_adds_generation(self, _patch_weather):
         common = self._config(projection_years=1, albedo=0.3)

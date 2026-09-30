@@ -26,7 +26,7 @@ configuration without preparing its inputs each time, run
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from typing import Any, Mapping
 
 import numpy as np
@@ -37,7 +37,7 @@ from breos.app_config import ResolvedAppConfig, resolve_app_config
 from breos.app_inputs import AppRuntimeDependencies, PreparedSimulationInputs, prepare_simulation_inputs_cached
 from breos.battery import AlignedSimulationInputs, BatteryConfig, align_simulation_inputs
 from breos.dispatch_instructions import DispatchInstructions
-from breos.execution import is_pv_only_dispatch
+from breos.execution import config_has_battery
 from breos.projection import CarryState, build_battery_config
 from breos.runners import app as app_runner
 from breos.runners.app import SimulationArtifacts
@@ -88,7 +88,6 @@ class ReplayCase:
     the simulation index.
     """
 
-    cfg: dict[str, Any]
     resolved: ResolvedAppConfig
     deps: AppRuntimeDependencies
     inputs: PreparedSimulationInputs
@@ -109,7 +108,7 @@ class ReplayCase:
             self.inputs.dc_system_base,
             self.inputs.load_data,
             self.inputs.temperature_series,
-            freq=self.cfg["resolution"],
+            freq=self.resolved.cfg["resolution"],
         )
         if not aligned.index.equals(self.index):
             raise ValueError("The aligned simulation calendar differs from the tariff's calendar")
@@ -117,7 +116,7 @@ class ReplayCase:
 
     def battery_config(self) -> BatteryConfig:
         """The battery the first project year runs, at the state of health it starts with."""
-        return build_battery_config(self.cfg, self.resolved, initial_soh=CarryState().soh_pct)
+        return build_battery_config(self.resolved.cfg, self.resolved, initial_soh=CarryState().soh_pct)
 
     def configured_instructions(self) -> DispatchInstructions:
         """What App dispatches with: the ``[smart_charging]`` instructions, or greedy no-ops without them."""
@@ -137,13 +136,13 @@ def prepare_replay(config: dict[str, Any], *, deps: AppRuntimeDependencies | Non
     cfg = resolved.cfg
     if resolved.tariff is None:
         raise ValueError("A replay prices its result with a tariff; the configuration has no [tariff] table")
-    if is_pv_only_dispatch(cfg["battery_kwh"] * 1000, cfg["battery_max_soc"], cfg["battery_min_soc"]):
+    if not config_has_battery(cfg):
         raise ValueError("A replay needs a battery: a PV-only run ignores dispatch instructions")
     deps = deps or App._runtime_dependencies()
     # The runner's own preparation, so a reuse_prepared_inputs block shares it.
     inputs = prepare_simulation_inputs_cached(cfg, resolved, deps, prepare=app_runner.prepare_simulation_inputs)
     tariff = resolved.tariff.resolve(pd.DatetimeIndex(inputs.dc_system_base.index), resolved.timezone)
-    return ReplayCase(cfg=cfg, resolved=resolved, deps=deps, inputs=inputs, tariff=tariff)
+    return ReplayCase(resolved=resolved, deps=deps, inputs=inputs, tariff=tariff)
 
 
 @dataclass(frozen=True)
@@ -220,12 +219,16 @@ def replay_instructions(
         raise ValueError(f"The instructions cover {len(instructions)} steps; the tariff's calendar has {n_steps}")
     requested = _planned_arrays(planned or {}, n_steps)
     tolerances = _tolerances(tolerance, requested)
-    cfg = case.cfg if execution_backend is None else {**case.cfg, "execution_backend": execution_backend}
+    resolved = (
+        case.resolved
+        if execution_backend is None
+        else replace(case.resolved, cfg={**case.resolved.cfg, "execution_backend": execution_backend})
+    )
 
-    artifacts = app_runner.run_app_simulation(cfg, case.resolved, case.deps, instructions=instructions)
+    artifacts = app_runner.run_app_simulation(resolved, case.deps, instructions=instructions)
 
     frame = artifacts.first_year_results_df
-    hours_per_step = get_hours_per_step(cfg["resolution"])
+    hours_per_step = get_hours_per_step(resolved.cfg["resolution"])
     step_cost = (
         frame["Import_From_Grid"].to_numpy() * np.asarray(case.tariff.import_price_per_kwh)
         - frame["PV_AC_Export"].to_numpy() * np.asarray(case.tariff.export_price_per_kwh)

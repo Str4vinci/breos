@@ -264,7 +264,7 @@ def _smoke_test_installed_wheel(wheel: Path, work_dir: Path) -> None:
         result = app.result()
         if len(result["yearly"]) != 1 or result["pv_production_kwh"] <= 0:
             raise AssertionError("installed wheel did not produce a simulated PV result")
-        if app._cfg["location"] != "porto":
+        if app._resolved.cfg["location"] != "porto":
             raise AssertionError("App did not resolve packaged configuration")
 
         profiles = breos.list_battery_models()

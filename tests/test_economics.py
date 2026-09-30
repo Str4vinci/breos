@@ -35,7 +35,7 @@ class TestCostDefaultsSingleSource:
     def test_resolve_costs_preset_fallbacks_match_dataclass_defaults(self, monkeypatch):
         from breos import app_config
 
-        monkeypatch.setattr(app_config, "load_json", lambda name: {"minimal": {}})
+        monkeypatch.setattr(app_config, "load_config_json", lambda name: {"minimal": {}})
         cfg = {
             "cost_preset": "minimal",
             "inverter_loading_ratio": 1.25,
@@ -61,7 +61,7 @@ class TestCostDefaultsSingleSource:
 
         monkeypatch.setattr(
             app_config,
-            "load_json",
+            "load_config_json",
             lambda name: {
                 "partial": {
                     "electricity_cost": 0.31,

@@ -282,7 +282,7 @@ def test_three_year_tariff_design_reproduces_through_app(
 
     monkeypatch.setattr(app_module, "run_app_simulation", record_app)
     app = App(app_config)
-    cfg, params = app._cfg, app._resolved.cost_params
+    cfg, params = app._resolved.cfg, app._resolved.cost_params
     costs = {
         key: getattr(params, field)
         for key, field in COST_CONFIG_KEY_TO_PARAM.items()

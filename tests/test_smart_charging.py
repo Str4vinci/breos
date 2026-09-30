@@ -258,7 +258,7 @@ def test_fixed_target_app_run_charges_from_the_grid_and_reports_it(monkeypatch):
     config = smart._resolved
     from breos.projection import build_battery_config
 
-    assert_energy_conservation(frame, build_battery_config(smart._cfg, config, initial_soh=100.0))
+    assert_energy_conservation(frame, build_battery_config(smart._resolved.cfg, config, initial_soh=100.0))
     assert_origin_reconciliation(frame, 1.0)
     assert frame["Grid_AC_To_Battery"].sum() > 0.0
     # No step both grid-charges and exports.
