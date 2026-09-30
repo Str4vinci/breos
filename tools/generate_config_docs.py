@@ -106,6 +106,12 @@ TABLES: tuple[tuple[str, TableSpec, str], ...] = (
 # Keys a table's own validator requires, where adding them to the spec's
 # ``required`` would change the error a missing key raises.
 _ALSO_REQUIRED = {"pv_arrays": frozenset({"modules"})}
+_CONDITIONALLY_REQUIRED = {
+    "tariff": {
+        "schedule": "exactly one of these",
+        "custom_schedule": "exactly one of these",
+    }
+}
 
 _COST_PARAM_DEFAULTS = {field.name: field.default for field in fields(CostParams)}
 
@@ -164,9 +170,18 @@ def _nested_rows(spec: TableSpec, name: str) -> tuple[tuple[str, ...], list[tupl
         ]
         return header, rows
     header = ("Key", "Required", "Description")
-    required = spec.required | _ALSO_REQUIRED.get(name, frozenset())
+    always_required = spec.required | _ALSO_REQUIRED.get(name, frozenset())
+    conditional_required = _CONDITIONALLY_REQUIRED.get(name, {})
+    required = always_required | frozenset(conditional_required)
     keys = sorted(spec.keys, key=lambda key: (key not in required, key))
-    rows = [(f"`{key}`", "yes" if key in required else "", _checked(key, spec.docs[key])) for key in keys]
+    rows = [
+        (
+            f"`{key}`",
+            conditional_required.get(key, "yes" if key in always_required else ""),
+            _checked(key, spec.docs[key]),
+        )
+        for key in keys
+    ]
     return header, rows
 
 

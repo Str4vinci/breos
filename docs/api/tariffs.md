@@ -47,6 +47,70 @@ step must start on the local step grid: a schedule whose boundaries fall on
 the half hour or quarter hour needs 15-minute input, and hourly input is
 rejected rather than approximated.
 
+## Custom App schedules
+
+App, Monte Carlo, and projected optimization accept an inline definition as
+`[tariff.custom_schedule]` instead of the bundled `schedule` key. The supplied
+identifier and version are retained in tariff provenance, while the complete
+input table is recorded in `provenance.resolved_config`:
+
+```toml
+[tariff]
+currency = "EUR"
+import_prices = { peak = 0.31, off_peak = 0.12 }
+export_prices = { all = 0.05 }
+
+[tariff.custom_schedule]
+identifier = "my_supplier_2026"
+version = "2026-01"
+timezone = "Europe/Lisbon"
+cycle = "weekly"
+periods = ["peak", "off_peak"]
+source = "Supplier tariff sheet"
+effective_from = 2026-01-01
+effective_to = 2026-12-31
+
+[[tariff.custom_schedule.rules]]
+days = "weekday"
+season = "all"
+intervals = { off_peak = [["00:00", "08:00"], ["22:00", "24:00"]], peak = [["08:00", "22:00"]] }
+
+[[tariff.custom_schedule.rules]]
+days = "saturday"
+season = "all"
+intervals = { off_peak = [["00:00", "24:00"]] }
+
+[[tariff.custom_schedule.rules]]
+days = "sunday"
+season = "all"
+intervals = { off_peak = [["00:00", "24:00"]] }
+
+[tariff.custom_schedule.holidays]
+day_type = "sunday"
+source = "Supplier holiday calendar"
+dates = { "2026" = [2026-01-01, 2026-12-25] }
+```
+
+The schedule table requires `identifier`, `version`, `timezone`, `cycle`,
+`periods`, and `rules`; optional metadata is `source`, `source_url`, `note`,
+`effective_from`, `effective_to`, and `holidays`. Unknown keys are rejected
+throughout the nested definition. Use a valid IANA timezone and make it match
+the configured location exactly. Prices at `[tariff]` must cover every listed
+period, or use `all`.
+
+Rules use the same semantics as bundled schedules: `days` is `weekday`,
+`saturday`, `sunday`, or `all`; `season` is `standard`, `dst`, or `all`. Every
+day-type/season combination must resolve to exactly one rule. Period intervals
+are inclusive at the start and exclusive at the end, and must tile the local
+day from `00:00` through `24:00` without gaps or overlaps. `24:00` is valid
+only as an interval end.
+
+Holiday dates are never inferred or fetched. `holidays.dates` maps years to
+explicit date lists, and each date must belong to its mapped year. Include the
+complete calendar you intend for every simulated tariff year; resolving a
+year absent from the map raises an error. Omit the `holidays` table when the
+schedule has no separate holiday classification.
+
 ## Schedule definitions
 
 A {class}`~breos.tariffs.ScheduleDefinition` is a complete schedule: its

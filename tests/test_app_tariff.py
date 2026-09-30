@@ -1,5 +1,9 @@
 """Time-of-use valuation through App, Monte Carlo and the shared projection loop (ADR 0002, 0003 E7)."""
 
+import json
+from copy import deepcopy
+from datetime import date
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -11,6 +15,7 @@ from breos.montecarlo import MonteCarloSettings, run_montecarlo
 from breos.projection import ProjectionYear, run_projection
 from breos.runners.app import run_app_simulation
 from breos.smart_charging import SmartChargingSpec, resolve_instructions
+from breos.tariffs import ScheduleDefinition
 
 BASE = {"location": "porto", "n_modules": 8, "annual_consumption_kwh": 4000, "battery_kwh": 5.0, "projection_years": 3}
 TOU = {
@@ -19,6 +24,36 @@ TOU = {
     "import_prices": {"peak": 0.28, "off_peak": 0.11},
     "export_prices": {"all": 0.05},
     "fixed_charge_per_day": 0.25,
+}
+CUSTOM_SCHEDULE = {
+    "identifier": "example_supplier_2023",
+    "version": "2023-01",
+    "timezone": "Europe/Lisbon",
+    "cycle": "weekly",
+    "periods": ["peak", "off_peak"],
+    "source": "Illustrative supplier tariff sheet",
+    "effective_from": date(2023, 1, 1),
+    "effective_to": date(2023, 12, 31),
+    "rules": [
+        {
+            "days": "weekday",
+            "season": "all",
+            "intervals": {"off_peak": [["00:00", "08:00"], ["22:00", "24:00"]], "peak": [["08:00", "22:00"]]},
+        },
+        {"days": "saturday", "season": "all", "intervals": {"off_peak": [["00:00", "24:00"]]}},
+        {"days": "sunday", "season": "all", "intervals": {"off_peak": [["00:00", "24:00"]]}},
+    ],
+    "holidays": {
+        "day_type": "sunday",
+        "source": "Illustrative supplier holiday calendar",
+        "dates": {"2023": [date(2023, 1, 2)]},
+    },
+}
+CUSTOM_TARIFF = {
+    "custom_schedule": CUSTOM_SCHEDULE,
+    "currency": "EUR",
+    "import_prices": {"peak": 0.31, "off_peak": 0.12},
+    "export_prices": {"all": 0.05},
 }
 
 
@@ -284,3 +319,202 @@ def test_study_date_is_accepted_as_a_date():
         }
     )
     assert resolved.tariff.study_date == date(2027, 7, 1)
+
+
+@pytest.mark.parametrize(
+    ("tariff", "message"),
+    [
+        ({key: value for key, value in CUSTOM_TARIFF.items() if key != "custom_schedule"}, "exactly one"),
+        ({**CUSTOM_TARIFF, "schedule": "pt_mainland_2026_daily_bi"}, "exactly one"),
+        ({**CUSTOM_TARIFF, "import_prices": {"peak": 0.3}}, "has no price for off_peak"),
+        ({**CUSTOM_TARIFF, "export_prices": {"all": 0.05, "night": 0.01}}, "night"),
+    ],
+)
+def test_custom_schedule_selection_and_prices_are_checked(tariff, message):
+    with pytest.raises(ValueError, match=message):
+        App({**BASE, "tariff": tariff})
+
+
+@pytest.mark.parametrize(
+    ("mutate", "message"),
+    [
+        (lambda raw: raw.update(unexpected=True), r"custom_schedule\.unexpected"),
+        (lambda raw: raw["rules"][0].update(unexpected=True), r"rules\[0\]\.unexpected"),
+        (lambda raw: raw["holidays"].update(observed=True), r"holidays\.observed"),
+        (lambda raw: raw["holidays"]["dates"].update({"all": []}), "four-digit years"),
+        (
+            lambda raw: raw["rules"].pop(),
+            "exactly one rule for sunday/standard",
+        ),
+        (
+            lambda raw: raw["rules"][0]["intervals"].update(
+                {"peak": [["07:00", "22:00"]], "off_peak": [["00:00", "08:00"], ["22:00", "24:00"]]}
+            ),
+            "overlap at minute 420",
+        ),
+        (
+            lambda raw: raw["rules"][0]["intervals"].update(
+                {"peak": [["08:00", "22:00"]], "off_peak": [["00:00", "07:00"], ["22:00", "24:00"]]}
+            ),
+            "gap at minute 420",
+        ),
+    ],
+    ids=["schedule-key", "rule-key", "holiday-key", "holiday-year", "coverage", "overlap", "gap"],
+)
+def test_custom_schedule_rejects_unknown_and_malformed_nested_values(mutate, message):
+    custom = deepcopy(CUSTOM_SCHEDULE)
+    mutate(custom)
+    with pytest.raises((TypeError, ValueError), match=message):
+        App({**BASE, "tariff": {**CUSTOM_TARIFF, "custom_schedule": custom}})
+
+
+@pytest.mark.parametrize(
+    ("mutate", "message"),
+    [
+        *[
+            (lambda raw, key=key: raw.pop(key), rf"custom_schedule.*{key}")
+            for key in ("identifier", "version", "timezone", "cycle", "periods", "rules")
+        ],
+        *[
+            (lambda raw, key=key: raw["rules"][0].pop(key), rf"rules\[0\].*{key}")
+            for key in ("days", "season", "intervals")
+        ],
+        (lambda raw: raw.update(timezone="Europe/Atlantis"), "Unknown IANA tariff timezone"),
+        (lambda raw: raw.update(cycle="monthly"), r"custom_schedule\.cycle"),
+        (lambda raw: raw.update(periods=["peak", "peak", "off_peak"]), "must not contain duplicates"),
+        (lambda raw: raw.update(periods=["Peak", "off_peak"]), "lowercase letters"),
+        (lambda raw: raw["rules"][0]["intervals"].update(shoulder=[]), "shoulder"),
+        (lambda raw: raw["rules"][1]["intervals"].update(off_peak=[["24:00", "24:00"]]), "start before end"),
+        (lambda raw: raw["holidays"]["dates"].update({"2023": [date(2024, 1, 1)]}), "dates in 2023"),
+    ],
+)
+def test_custom_schedule_requires_its_fields_and_valid_metadata(mutate, message):
+    custom = deepcopy(CUSTOM_SCHEDULE)
+    mutate(custom)
+    with pytest.raises((TypeError, ValueError), match=message):
+        App({**BASE, "tariff": {**CUSTOM_TARIFF, "custom_schedule": custom}})
+
+
+def test_custom_schedule_is_a_table_and_is_parsed_once(monkeypatch):
+    # A parsed definition would be recorded as its repr and could not be fed back.
+    definition = resolve_app_config({**BASE, "tariff": CUSTOM_TARIFF}).tariff.schedule
+    with pytest.raises(TypeError, match=r"'tariff\.custom_schedule' must be a table"):
+        App({**BASE, "tariff": {**CUSTOM_TARIFF, "custom_schedule": definition}})
+
+    from breos import app_config
+
+    calls = []
+    parse = app_config.parse_schedule_definition
+    monkeypatch.setattr(
+        app_config, "parse_schedule_definition", lambda *args, **kwargs: calls.append(1) or parse(*args, **kwargs)
+    )
+    App({**BASE, "tariff": CUSTOM_TARIFF})
+    assert len(calls) == 1
+
+
+def test_custom_schedule_must_match_location_before_pv_metadata_resolution(monkeypatch):
+    custom = deepcopy(CUSTOM_TARIFF)
+    custom["custom_schedule"]["timezone"] = "Europe/Berlin"
+    monkeypatch.setattr(
+        "breos.app_config.resolve_pv_system", lambda *args, **kwargs: pytest.fail("PV metadata resolved first")
+    )
+
+    with pytest.raises(ValueError, match="does not move a schedule"):
+        App({**BASE, "tariff": custom})
+
+
+def test_custom_schedule_resolution_keeps_definition_holidays_and_provenance():
+    app_config = {**BASE, "projection_years": 1, "tariff": CUSTOM_TARIFF}
+    resolved = resolve_app_config(app_config)
+    assert isinstance(resolved.tariff.schedule, ScheduleDefinition)
+    assert resolved.tariff.definition.schedule.identifier == "example_supplier_2023"
+    assert resolved.tariff.definition.schedule.effective_to == date(2023, 12, 31)
+
+    index = pd.date_range("2023-01-02 07:00", "2023-01-03 10:00", freq="h", tz="Europe/Lisbon")
+    classified = resolved.tariff.resolve(index, resolved.timezone)
+    assert classified.period_labels[index.get_loc(pd.Timestamp("2023-01-02 09:00", tz="Europe/Lisbon"))] == "off_peak"
+    assert classified.period_labels[index.get_loc(pd.Timestamp("2023-01-03 09:00", tz="Europe/Lisbon"))] == "peak"
+    without_effective_window = deepcopy(CUSTOM_TARIFF)
+    without_effective_window["custom_schedule"].pop("effective_from")
+    without_effective_window["custom_schedule"].pop("effective_to")
+    unrestricted = resolve_app_config({**BASE, "tariff": without_effective_window})
+    # A year covered for a civil day or more needs its explicit calendar. (A
+    # shorter graze, as at a UTC year end, is exempt by the classifier.)
+    with pytest.raises(ValueError, match="no holiday calendar for 2024"):
+        unrestricted.tariff.resolve(
+            pd.date_range("2024-01-01", periods=24, freq="h", tz="Europe/Lisbon"), "Europe/Lisbon"
+        )
+
+
+@pytest.mark.usefixtures("_patch_weather")
+def test_custom_schedule_run_records_its_config_and_tariff_provenance():
+    app = App({**BASE, "projection_years": 1, "tariff": CUSTOM_TARIFF})
+    app.simulate()
+    result = app.result()
+
+    assert result["result_schema_version"] == "2.1"
+    assert result["provenance"]["tariff"]["schedule"] == "example_supplier_2023"
+    assert result["provenance"]["tariff"]["schedule_version"] == "2023-01"
+    custom = result["provenance"]["resolved_config"]["tariff"]["custom_schedule"]
+    assert custom["identifier"] == "example_supplier_2023"
+    assert custom["holidays"]["dates"]["2023"] == ["2023-01-02"]
+
+    # The recorded config reproduces the schedule after a JSON round trip.
+    recorded = json.loads(json.dumps(result["provenance"]["resolved_config"]))
+    replay = App(recorded)
+    replay.simulate()
+    assert replay.result()["provenance"]["tariff"]["schedule_hash"] == result["provenance"]["tariff"]["schedule_hash"]
+
+
+def test_custom_schedule_period_names_drive_smart_charging_validation():
+    smart_charging = {
+        "mode": "fixed_target",
+        "target_usable_fraction": 0.5,
+        "charge_periods": ["off_peak"],
+        "discharge_periods": ["peak"],
+        "grid_charge_efficiency": 0.95,
+    }
+    resolved = resolve_app_config({**BASE, "tariff": CUSTOM_TARIFF, "smart_charging": smart_charging})
+    assert resolved.smart_charging.charge_periods == ("off_peak",)
+
+    invalid = {**smart_charging, "charge_periods": ["night"]}
+    with pytest.raises(ValueError, match="smart_charging.charge_periods.*night.*example_supplier_2023"):
+        App({**BASE, "tariff": CUSTOM_TARIFF, "smart_charging": invalid})
+
+
+def test_custom_schedule_effective_window_is_enforced_when_resolved():
+    custom = deepcopy(CUSTOM_TARIFF)
+    custom["custom_schedule"]["effective_to"] = date(2022, 12, 31)
+    with pytest.raises(ValueError, match="effective_from.*on or before.*effective_to"):
+        App({**BASE, "tariff": custom})
+
+    custom = deepcopy(CUSTOM_TARIFF)
+    custom["custom_schedule"]["effective_from"] = date(2024, 1, 1)
+    custom["custom_schedule"].pop("effective_to")
+    resolved = resolve_app_config({**BASE, "tariff": custom})
+    with pytest.raises(ValueError, match="not effective across the index date range"):
+        resolved.tariff.resolve(pd.date_range("2023-01-01", periods=2, freq="h", tz="Europe/Lisbon"), "Europe/Lisbon")
+
+
+def test_custom_schedule_with_ten_minute_boundaries_rejects_app_steps():
+    custom = deepcopy(CUSTOM_TARIFF)
+    custom["custom_schedule"]["rules"][0]["intervals"] = {
+        "off_peak": [["00:00", "07:10"]],
+        "peak": [["07:10", "24:00"]],
+    }
+    with pytest.raises(ValueError, match="needs steps that divide 10 minutes.*App offers no step that divides 10"):
+        App({**BASE, "resolution": "15min", "tariff": custom})
+
+
+def test_montecarlo_accepts_custom_schedule_with_explicit_calendar(tmp_path, write_multiyear_weather):
+    weather = write_multiyear_weather(tmp_path / "weather.csv")
+    settings = MonteCarloSettings(
+        weather_file=str(weather), n_runs=1, years_per_run=1, target_year=2023, seed=2, collect_yearly=True
+    )
+
+    result = run_montecarlo({**BASE, "projection_years": 1, "tariff": CUSTOM_TARIFF}, settings)
+
+    assert result.provenance["tariff"]["schedule"] == "example_supplier_2023"
+    assert result.provenance["result_schema_version"] == "2.1"
+    recorded = result.provenance["resolved_config"]["tariff"]["custom_schedule"]
+    assert recorded["identifier"] == "example_supplier_2023"

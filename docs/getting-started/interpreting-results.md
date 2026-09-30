@@ -35,6 +35,9 @@ Version "2.0" removes configuration and metadata fields without an
 operational effect, removes duplicate CO2 and legacy PV keys, and renames
 monthly/yearly grid fields and optimizer payback columns. The migration table
 below lists every change.
+Version "2.1" adds `tariff.custom_schedule` to the `resolved_config` of App
+and Monte Carlo results that set an inline
+[custom schedule](../api/tariffs.md#custom-app-schedules).
 A renamed or removed key bumps the
 major version, an added key the minor. A result without the key predates 1.0.
 

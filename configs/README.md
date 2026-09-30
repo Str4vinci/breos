@@ -82,6 +82,7 @@ breos list load-profiles
 | [`recommended-pv.toml`](examples/recommended-pv.toml) | Explicit higher-fidelity rooftop PV choices while compatible defaults remain unchanged |
 | [`sweep.toml`](examples/sweep.toml) | Parameter grid over module count and battery size (`breos sweep`) |
 | [`time-of-use-portugal.toml`](examples/time-of-use-portugal.toml) | Time-of-use `[tariff]` on a bundled Portuguese schedule |
+| [`custom-tariff-schedule.toml`](examples/custom-tariff-schedule.toml) | Inline tariff periods, rules and explicit holidays |
 | [`smart-charging-portugal.toml`](examples/smart-charging-portugal.toml) | Fixed-target grid charging in the tariff's off-peak period |
 | [`tariff-comparison.toml`](examples/tariff-comparison.toml) | Three offers, with and without a battery, in one `breos sweep` |
 | [`montecarlo.toml`](examples/montecarlo.toml) | Monte Carlo over weather years + demand (`breos montecarlo`) |
