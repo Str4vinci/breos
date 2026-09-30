@@ -26,7 +26,7 @@ configuration without preparing its inputs each time, run
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Mapping
 
 import numpy as np
@@ -36,7 +36,7 @@ from breos.app import App
 from breos.app_config import ResolvedAppConfig, resolve_app_config
 from breos.app_inputs import AppRuntimeDependencies, PreparedSimulationInputs, prepare_simulation_inputs_cached
 from breos.dispatch_instructions import DispatchInstructions
-from breos.execution import is_pv_only_dispatch
+from breos.execution import config_has_battery
 from breos.runners import app as app_runner
 from breos.runners.app import SimulationArtifacts
 from breos.tariffs import ResolvedTariff
@@ -85,7 +85,6 @@ class ReplayCase:
     the simulation index.
     """
 
-    cfg: dict[str, Any]
     resolved: ResolvedAppConfig
     deps: AppRuntimeDependencies
     inputs: PreparedSimulationInputs
@@ -107,13 +106,13 @@ def prepare_replay(config: dict[str, Any], *, deps: AppRuntimeDependencies | Non
     cfg = resolved.cfg
     if resolved.tariff is None:
         raise ValueError("A replay prices its result with a tariff; the configuration has no [tariff] table")
-    if is_pv_only_dispatch(cfg["battery_kwh"] * 1000, cfg["battery_max_soc"], cfg["battery_min_soc"]):
+    if not config_has_battery(cfg):
         raise ValueError("A replay needs a battery: a PV-only run ignores dispatch instructions")
     deps = deps or App._runtime_dependencies()
     # The runner's own preparation, so a reuse_prepared_inputs block shares it.
     inputs = prepare_simulation_inputs_cached(cfg, resolved, deps, prepare=app_runner.prepare_simulation_inputs)
     tariff = resolved.tariff.resolve(pd.DatetimeIndex(inputs.dc_system_base.index), resolved.timezone)
-    return ReplayCase(cfg=cfg, resolved=resolved, deps=deps, inputs=inputs, tariff=tariff)
+    return ReplayCase(resolved=resolved, deps=deps, inputs=inputs, tariff=tariff)
 
 
 @dataclass(frozen=True)
@@ -190,12 +189,16 @@ def replay_instructions(
         raise ValueError(f"The instructions cover {len(instructions)} steps; the tariff's calendar has {n_steps}")
     requested = _planned_arrays(planned or {}, n_steps)
     tolerances = _tolerances(tolerance, requested)
-    cfg = case.cfg if execution_backend is None else {**case.cfg, "execution_backend": execution_backend}
+    resolved = (
+        case.resolved
+        if execution_backend is None
+        else replace(case.resolved, cfg={**case.resolved.cfg, "execution_backend": execution_backend})
+    )
 
-    artifacts = app_runner.run_app_simulation(cfg, case.resolved, case.deps, instructions=instructions)
+    artifacts = app_runner.run_app_simulation(resolved, case.deps, instructions=instructions)
 
     frame = artifacts.first_year_results_df
-    hours_per_step = get_hours_per_step(cfg["resolution"])
+    hours_per_step = get_hours_per_step(resolved.cfg["resolution"])
     step_cost = (
         frame["Import_From_Grid"].to_numpy() * np.asarray(case.tariff.import_price_per_kwh)
         - frame["PV_AC_Export"].to_numpy() * np.asarray(case.tariff.export_price_per_kwh)

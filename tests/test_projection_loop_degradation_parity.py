@@ -129,7 +129,7 @@ def test_app_montecarlo_and_projected_optimization_age_the_battery_identically(m
     # so each run gets its own spy.
     with monkeypatch.context() as patch:
         _spy(patch, projection_module, "simulate_energy_balance", app_records, app_calls)
-        app_artifacts = app_runner.run_app_simulation(cfg, resolved, deps=SimpleNamespace())
+        app_artifacts = app_runner.run_app_simulation(resolved, deps=SimpleNamespace())
 
     # Monte Carlo: one trajectory with a single weather year and no load
     # uncertainty, so the draw is the App's inputs exactly.

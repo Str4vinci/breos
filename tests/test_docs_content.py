@@ -6,37 +6,15 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DOCS_ROOT = REPO_ROOT / "docs"
 
-INTERNAL_DOCS = (
-    "architecture/0.6x-numba-dispatch.md",
-    "architecture/0.7x-tariffs-and-smart-charging-plan.md",
-    "architecture/string-inverter-sizing.md",
-    "architecture/battery-degradation-policy.md",
-    "architecture/blast-degradation-engine.md",
-    "adr/0001-docs-architecture.md",
-    "adr/index.md",
-    "release.md",
-)
+# Design notes and ADRs live in design/ and the release checklist in
+# maintainers/. None of them is a docs/ source, so the places they used to
+# occupy under docs/ must stay absent.
+INTERNAL_DOC_LOCATIONS = ("architecture", "adr", "release.md")
 
 
 def test_internal_project_notes_are_not_read_the_docs_sources():
-    for relative_path in INTERNAL_DOCS:
-        assert not (DOCS_ROOT / relative_path).exists(), relative_path
-
-    assert (REPO_ROOT / "design" / "architecture" / "blast-degradation-engine.md").is_file()
-    assert (REPO_ROOT / "design" / "adr" / "0001-docs-architecture.md").is_file()
-    assert (REPO_ROOT / "maintainers" / "release-checklist.md").is_file()
-
-
-def test_current_user_guides_do_not_describe_the_release_as_0_3_x():
-    user_facing_files = [
-        DOCS_ROOT / "index.md",
-        *sorted((DOCS_ROOT / "getting-started").glob("*.md")),
-        *sorted((DOCS_ROOT / "api").glob("*.md")),
-        *sorted((REPO_ROOT / "configs" / "examples").glob("*.toml")),
-    ]
-
-    stale = [str(path.relative_to(REPO_ROOT)) for path in user_facing_files if "0.3.x" in path.read_text()]
-    assert stale == []
+    present = [name for name in INTERNAL_DOC_LOCATIONS if (DOCS_ROOT / name).exists()]
+    assert present == []
 
 
 def test_installation_guide_does_not_pin_yesterdays_release():

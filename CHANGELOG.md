@@ -1795,6 +1795,25 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   every registered model is enabled, and `SimulationSummary.has_battery`,
   which nothing read ([#186](https://github.com/Str4vinci/breos/issues/186)).
   Results are unchanged bit for bit for every removal above.
+- Pass-through helpers in the App runner, configuration and execution
+  modules, with no deprecation period. `breos.runners` no longer re-exports
+  `run_app_simulation` and `SimulationArtifacts`; import them from
+  `breos.runners.app`. `breos.app_config.load_json` only called
+  `breos.resources.load_config_json`; call that instead.
+  `breos.execution.backend_provenance` drops its `jit_cache_states`
+  argument: a `numba` record's `jit_cache` is `"unknown"` until the caller
+  sets it, for example to `aggregate_jit_cache_states(states)`. The App
+  runner functions take the resolved configuration without the `cfg` dict it
+  already holds: `run_app_simulation(resolved, deps)`,
+  `revalue_app_simulation(resolved, artifacts, deps)` and
+  `breos.app_results.build_result(resolved, artifacts)`. The orientation
+  defaults are worked out once, by the new `resolve_orientation(cfg, lat)`:
+  `resolve_pv_system(cfg, *, tilt, azimuth, axis_azimuth)` takes its result
+  and returns six values instead of eight, without the tilt and azimuth;
+  `resolve_tracking(cfg)` returns only the tracker mode; and
+  `normalise_pv_arrays` takes the angles as keyword-only arguments.
+  `load_consumption_profile` requires its `timezone` instead of falling back
+  to UTC. Results are unchanged bit for bit.
 
 ### Documentation
 - The release checklist records that `v0.5.0`, `v0.5.1` and `v0.6.0` are
