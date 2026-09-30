@@ -11,7 +11,6 @@ import pytest
 from breos.load_profiles import (
     PROFILE_KEYS,
     PROFILES,
-    _extend_to_years,
     _resample_load_to_15min,
     load_profile,
     resolve_profile_key,
@@ -19,22 +18,6 @@ from breos.load_profiles import (
 from breos.resources import rlp_resource
 
 _LOAD_COLUMN = "Electrical Consumption [W]"
-
-
-def test_extend_to_years_duplicates_feb_28_for_leap_day_without_shifting_rest():
-    idx = pd.date_range("2023-01-01 00:00", periods=8760, freq="h", tz="UTC")
-    profile = pd.DataFrame({"Load": np.arange(len(idx), dtype=float)}, index=idx)
-
-    extended = _extend_to_years(profile, start_year=2024, num_years=1)
-
-    feb_28 = extended.loc[pd.Timestamp("2024-02-28 12:00", tz="UTC"), "Load"]
-    feb_29 = extended.loc[pd.Timestamp("2024-02-29 12:00", tz="UTC"), "Load"]
-    mar_1 = extended.loc[pd.Timestamp("2024-03-01 00:00", tz="UTC"), "Load"]
-    source_mar_1 = profile.loc[pd.Timestamp("2023-03-01 00:00", tz="UTC"), "Load"]
-
-    assert len(extended) == 8784
-    assert feb_29 == pytest.approx(feb_28)
-    assert mar_1 == pytest.approx(source_mar_1)
 
 
 def test_load_profile_is_case_insensitive_at_15min():

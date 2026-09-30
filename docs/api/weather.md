@@ -79,7 +79,7 @@ filename such as `pvgis-sarah3`.
 
 ## Resampling
 
-Convert between hourly and 15-minute resolutions. The 15-minute path uses
+Convert hourly weather to 15-minute steps. The resampler uses
 Makima interpolation on clearness indices rather than raw irradiance so
 sunrise / sunset transitions stay physically consistent. Every column is
 interpolated at each row's representative time from the weather metadata:
@@ -96,7 +96,6 @@ established interpolation output.
    :toctree: generated/
 
    breos.weather.resample_to_15min
-   breos.weather.resample_tmy_to_15min
 ```
 
 ## Helpers

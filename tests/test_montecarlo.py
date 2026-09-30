@@ -142,7 +142,7 @@ def test_montecarlo_records_transformed_runtime_weather_timing(monkeypatch):
             {
                 "input_resolution": "h",
                 "output_resolution": "15min",
-                "irradiance_resampling_method": "makima_clear_sky",
+                "irradiance_resampling_method": "makima",
                 "preserve_irradiance_energy": True,
             }
         )
