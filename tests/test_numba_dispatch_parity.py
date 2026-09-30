@@ -468,3 +468,10 @@ def test_zeta_squared_must_use_libm_pow_not_the_folded_square():
     assert out.matrix[_ROW["PV_Production"], 0] * 0.25 == pytest.approx(
         dc_power - reference.clipping_loss_dc_w - reference.conversion_loss_w, abs=0.0, rel=0.0
     )
+
+
+def test_compiled_kernel_does_not_start_its_own_threads():
+    # Parallelism comes only from the n_procs worker processes; a parallel
+    # kernel inside each worker would oversubscribe the machine.
+    options = _kernel().targetoptions
+    assert not options.get("parallel", False)
