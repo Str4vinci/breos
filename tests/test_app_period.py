@@ -353,6 +353,39 @@ def test_revalue_reprices_the_window_and_keeps_lifetime_economics_none(battery_r
         week.revalue({"period": {"start": "2025-07-01", "end": "2025-07-08"}})
 
 
+def test_a_smart_charging_window_is_one_standalone_controller_span(monkeypatch):
+    # ADR 0002 A11: a [period] runs its fixed target through the daily
+    # controller as one standalone span, never stitched to its own start.
+    import breos.runners.app as runner
+    from breos.runners.app import run_app_simulation
+
+    calls = []
+    run_projection = runner.run_projection
+    monkeypatch.setattr(runner, "run_projection", lambda *a, **k: calls.append(k) or run_projection(*a, **k))
+    smart = {
+        "mode": "fixed_target",
+        "target_usable_fraction": 0.6,
+        "charge_periods": ["off_peak"],
+        "discharge_periods": ["peak"],
+        "grid_charge_efficiency": 0.95,
+    }
+    config = {**BASE, "battery_kwh": 5, "tariff": TOU, "smart_charging": smart, "period": JUNE_WEEK}
+    config.pop("cost_preset")
+    with _weather(None):
+        app = App(config)
+        deps = app._runtime_dependencies()
+        controlled = run_app_simulation(app._resolved, deps)
+        static = run_app_simulation(app._resolved, deps, instructions=controlled.instructions)
+
+    assert calls[0]["replay_seam"] is False and calls[0]["day_controller"] is not None
+    pd.testing.assert_frame_equal(controlled.first_year_results_df, static.first_year_results_df, check_exact=True)
+    pd.testing.assert_frame_equal(controlled.yearly_df, static.yearly_df, check_exact=True)
+    carry = controlled.projection.carry.controller_carry
+    # The window is seven whole Lisbon days on a UTC index.
+    assert (carry.complete_days_observed, carry.next_project_day_ordinal) == (7, 7)
+    assert carry.pending_day is None and carry.active_day_decision is None
+
+
 def test_a_tariff_with_smart_charging_prices_the_window():
     tariff = TOU
     smart = {

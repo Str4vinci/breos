@@ -34,6 +34,12 @@ the timestep ledger or the annual ``PV_Production_kWh`` usable-AC field.
 
 2.1 adds ``tariff.custom_schedule`` to the ``resolved_config`` of App and
 Monte Carlo results when an inline schedule is configured.
+
+2.2 adds the experimental ``daily_persistence`` record to an App result's
+``provenance.smart_charging`` when that mode is configured: the
+``experimental`` marker, controller and planner versions, planner settings,
+forecast, warm-start and terminal policies, and the stored energy by origin
+at the start and end of the project. Other results are unchanged.
 """
 
-RESULT_SCHEMA_VERSION = "2.1"
+RESULT_SCHEMA_VERSION = "2.2"

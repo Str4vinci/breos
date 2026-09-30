@@ -76,7 +76,7 @@ is a `breos run` option that overrides the config file.
 | `resolution` | `"h"` | `--resolution` | Simulation time resolution. One of `"h"`, `"15min"` |
 | `rlp_directory` | `None` | `--rlp-directory` | Directory containing licensed external RLP CSVs for non-bundled load profiles |
 | `sell_price_inflation` | `0.0` | `--sell-price-inflation` | Annual escalation of the grid export (sell) price |
-| `smart_charging` | *unset* | — | Grid charging toward a target in the tariff's cheap periods; see [`[smart_charging]`](#smart_charging) and [Smart charging](configuration.md#smart-charging) |
+| `smart_charging` | *unset* | — | Grid charging toward a fixed or a daily planned target in the tariff's cheap periods; see [`[smart_charging]`](#smart_charging) and [Smart charging](configuration.md#smart-charging) |
 | `solar_position` | `"interval-start"` | `--solar-position` | Where within each timestep the sun position is evaluated. `"mid-interval"` adds half a timestep. `"weather"` reads the representative-time offset from content-bound weather metadata, including provider offsets for instantaneous irradiance and left- or right-labelled interval means. One of `"interval-start"`, `"mid-interval"`, `"weather"` |
 | `start_date` | `"2023-01-01"` | `--start-date` | 1 January of the study year, `YYYY-01-01`. The App simulates that year, or the `period` window in it. Monte Carlo does not use it for the load or weather; its `target_year` sets the study year |
 | `surface_type` | `None` | `--surface-type` | Named ground cover mapped to an albedo; an alternative to `albedo`. One of `"aluminum"`, `"asphalt"`, `"concrete"`, `"copper"`, `"dirty steel"`, `"fresh grass"`, `"fresh snow"`, `"fresh steel"`, `"grass"`, `"sand"`, `"sea"`, `"snow"`, `"soil"`, `"urban"` |
@@ -165,16 +165,19 @@ Time-of-use prices, as `[tariff]` in TOML; see [Time-of-use tariffs](configurati
 
 ## smart_charging
 
-Grid charging by tariff period, as `[smart_charging]` in TOML; see [Smart charging](configuration.md#smart-charging). `mode = "fixed_target"` needs every key but `grid_import_limit_w`; `mode = "disabled"` takes no other key.
+Grid charging by tariff period, as `[smart_charging]` in TOML; see [Smart charging](configuration.md#smart-charging). `mode = "fixed_target"` needs `target_usable_fraction`, `charge_periods`, `discharge_periods` and `grid_charge_efficiency`, and refuses the planner keys. The experimental `mode = "daily_persistence"` (App only) needs the same keys but `target_usable_fraction`, which it refuses, and takes the optional planner keys `forecast_horizon_days`, `target_levels` and `soc_states`. `grid_import_limit_w` is optional in both. `mode = "disabled"` takes no other key.
 
 | Key | Required | Description |
 |---|---|---|
-| `mode` | yes | `fixed_target` charges from the grid toward a target; `disabled` is greedy self-consumption |
-| `charge_periods` |  | Tariff periods in which the grid may charge the battery |
-| `discharge_periods` |  | Tariff periods in which the battery may discharge to the load; not a charge period |
-| `grid_charge_efficiency` |  | AC-to-DC conversion efficiency of the grid-charging path, before the battery's own charge efficiency. No default |
+| `charge_periods` | unless `disabled` | Tariff periods in which the grid may charge the battery |
+| `discharge_periods` | unless `disabled` | Tariff periods in which the battery may discharge to the load; not a charge period |
+| `grid_charge_efficiency` | unless `disabled` | AC-to-DC conversion efficiency of the grid-charging path, before the battery's own charge efficiency. No default |
+| `mode` | yes | `fixed_target` charges from the grid toward a fixed target; `daily_persistence` (experimental, App only) plans each day's target; `disabled` is greedy self-consumption |
+| `target_usable_fraction` | `fixed_target` | Grid-charging target as a fraction of the usable window: 0 is `battery_min_soc`, 1 is `battery_max_soc`. `fixed_target` only |
+| `forecast_horizon_days` |  | `daily_persistence` only: civil days the planner looks ahead, today included. An integer of at least 1; default 2 |
 | `grid_import_limit_w` |  | Site import limit in W for grid charging, which may import up to the limit minus the load's import. Load import is never cut. Unset is unlimited |
-| `target_usable_fraction` |  | Grid-charging target as a fraction of the usable window: 0 is `battery_min_soc`, 1 is `battery_max_soc` |
+| `soc_states` |  | `daily_persistence` only: stored-energy grid points of the planner's value function. An integer of at least 2; default 21 |
+| `target_levels` |  | `daily_persistence` only: candidate targets, evenly spaced from 0 to 1 of the usable window. An integer of at least 1 (one level selects target 0); default 11 |
 
 ## period
 

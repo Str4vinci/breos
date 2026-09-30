@@ -133,7 +133,9 @@ class App:
         When the new prices cannot change the dispatch, the stored simulation
         is re-priced: flat prices, a tariff removed, or a tariff on the same
         schedule whose smart-charging instructions stay the same. Otherwise (a
-        tariff added, a different schedule) the run is simulated again. The
+        tariff added, a different schedule, or new import or export prices
+        under the experimental ``daily_persistence`` smart charging, which
+        plans on them) the run is simulated again. The
         result records which in ``provenance["revaluation"]``, with the keys
         that changed. A flat-price revaluation gives the same floats as a new
         simulation; a re-priced tariff sums energy by period instead of by
