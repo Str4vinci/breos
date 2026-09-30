@@ -96,8 +96,10 @@ column may hold timestamps (ISO, or `dd/mm/yyyy HH:MM` as in the E-REDES
 exports); if it does, they must step evenly, so a file on a local clock with
 DST gaps is refused. A demandlib H0 file needs a dated first row at
 1 January 00:00 for weekday alignment; an undated one is refused. A dated
-E-REDES file must also start at 1 January 00:00. Any other file raises
-`ValueError` when it loads.
+E-REDES file must also start at 1 January 00:00, and its year and the study
+year must be 2004 or later (see
+[E-REDES profiles](../api/load-profiles.md#e-redes-profiles)). Any other file
+raises `ValueError` when it loads.
 
 ## If redistribution permission is granted
 

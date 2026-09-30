@@ -304,7 +304,10 @@ def load_profile(
     Raises:
         ValueError: If profile_type is not recognized or was removed, the
             column or unit options do not fit it, a filename pattern matches
-            several files, or start_date is not 1 January
+            several files, or start_date is not 1 January. Also if a dated
+            E-REDES file does not start at 1 January 00:00, or its timestamp
+            year or the study year is before 2004, the first year of the
+            Portuguese holiday calendar
         FileNotFoundError: If the profile's file is missing
     """
     freq = normalise_frequency(freq)
@@ -359,6 +362,15 @@ def load_profile(
                 "a dated E-REDES file needs its first row at 1 January 00:00, the start of the first "
                 "interval. Convert the E-REDES publication with tools/convert_eredes_profiles.py."
             )
+        # Both calendars are checked, even when the years are equal and the
+        # rows load unchanged.
+        for role, year in (("its timestamp year", source_start.year), ("the study year", start_ts.year)):
+            if year < _PORTUGAL_CALENDAR_FIRST_YEAR:
+                raise ValueError(
+                    f"The {spec.name} file {source.label} cannot be aligned: {role} is {year}, and BREOS's "
+                    f"Portuguese national-holiday calendar for E-REDES day classes starts in "
+                    f"{_PORTUGAL_CALENDAR_FIRST_YEAR}."
+                )
     if day_type is not None and source_start is not None:
         df = _align_day_types(df, new_index, source_start.year, steps_per_hour, source.label, day_type)
     else:
@@ -478,6 +490,12 @@ def _easter_sunday(year: int) -> date:
     return date(year, month, (h + l - 7 * m + 33 * month + 19) % 32)
 
 
+# The first year of the Portuguese holiday calendar. The 2003 Labour Code
+# (Article 208), in force from December 2003, is the earliest source for the
+# full list below.
+_PORTUGAL_CALENDAR_FIRST_YEAR = 2004
+
+
 @lru_cache(maxsize=None)
 def _portugal_national_holidays(year: int) -> frozenset[date]:
     """Portugal's nationwide statutory holidays in ``year``.
@@ -490,12 +508,25 @@ def _portugal_national_holidays(year: int) -> frozenset[date]:
     from 2 April 2016, before any of the four fell that year. They are
     therefore absent in 2013, 2014 and 2015 only.
 
+    The calendar starts in 2004. The 2003 Labour Code (Article 208), in
+    force from December 2003, gives the same list, and the 2009 Code kept
+    it; this helper has no source for earlier years. Years after the
+    current one are assumed to keep the current list.
+
     The optional holidays of Article 235 (Carnival Tuesday and the municipal
     holiday), local Good Friday substitutions, bridge days and government
     tolerances are not included: they vary by locality or employer. This
     calendar types the days of dated E-REDES BTN profiles; tariff schedules
     carry their own holiday lists.
+
+    Raises:
+        ValueError: If ``year`` is before 2004.
     """
+    if year < _PORTUGAL_CALENDAR_FIRST_YEAR:
+        raise ValueError(
+            f"BREOS's Portuguese national-holiday calendar starts in {_PORTUGAL_CALENDAR_FIRST_YEAR}; "
+            f"it has no holiday list for {year}."
+        )
     easter = _easter_sunday(year)
     days = {
         date(year, 1, 1),

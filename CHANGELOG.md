@@ -912,31 +912,34 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   placing their rows by position from 1 January
   ([#303](https://github.com/Str4vinci/breos/issues/303)). They use the H0
   rule of [#298](https://github.com/Str4vinci/breos/issues/298): each target
-  day takes the nearest source day of its own class, trying the same month
-  and day first, then the day before, then the day after, and wrapping at
-  New Year; 29 February starts from 28 February. A Sunday or one of
-  Portugal's nationwide statutory holidays takes the Sunday/holiday class, in
-  both the source and the study year, even when the holiday is a Saturday.
-  These are the 13 holidays of Labour Code Article 234, without Corpus
-  Christi, 5 October, 1 November and 1 December in 2013–2015, when they were
-  suspended. Carnival, municipal holidays and bridge days are not holidays
-  for this rule. The source year now comes from the file's timestamps, not
-  its filename: an hourly file named 2025 but stamped 2023 aligns by its 2023
-  calendar, and the hourly and 15-minute files from one publication share a
-  phase. A file in its own year loads unchanged. A dated E-REDES file must
-  start at 1 January 00:00; one that starts elsewhere, for example with
-  interval-end stamps from 00:15, raises `ValueError` and names the
-  converter. Undated E-REDES files, `bdew_h0`, `ree_2.0td` and `custom` keep
-  their positional placement, and the demandlib H0 alignment is unchanged
-  bit for bit. Monte Carlo aligns to its `target_year` the same way. No
-  result or provenance field is added; `provenance.load_profile` still
-  records the file and its SHA-256. **Results change for E-REDES runs whose
-  study year differs from the file's dated year.** This was measured on two
-  BTN C files, a 15-minute file dated 2025 and an hourly file dated 2023, for
-  a 2026 study at 3,500 kWh with 8 modules on the Porto TMY. The tariffs were
-  the bundled 2026 weekly bi-hourly and tri-hourly schedules with
-  illustrative prices. Across PV only, PV with a 5 kWh battery, and
-  fixed-target smart charging, the change is:
+  day takes the nearest source day of its own class, trying the same month and
+  day first, then the day before, then the day after, and wrapping at New
+  Year; 29 February starts from 28 February. A Sunday or one of Portugal's
+  nationwide statutory holidays takes the Sunday/holiday class, in both the
+  source and the study year, even when the holiday is a Saturday. These are
+  the 13 holidays of Labour Code Article 234, without Corpus Christi, 5
+  October, 1 November and 1 December in 2013–2015, when they were suspended.
+  Carnival, municipal holidays and bridge days are not holidays for this rule.
+  The holiday calendar starts in 2004, the first full year of the 2003 Labour
+  Code: a file stamped before 2004, or a study year before 2004, raises
+  `ValueError`, also when the file is in its own year. Later years are assumed
+  to keep the current list. The source year now comes from the file's
+  timestamps, not its filename: an hourly file named 2025 but stamped 2023
+  aligns by its 2023 calendar, and the hourly and 15-minute files from one
+  publication share a phase. A file in its own year loads unchanged. A dated
+  E-REDES file must start at 1 January 00:00; one that starts elsewhere, for
+  example with interval-end stamps from 00:15, raises `ValueError` and names
+  the converter. Undated E-REDES files, `bdew_h0`, `ree_2.0td` and `custom`
+  keep their positional placement, and the demandlib H0 alignment is unchanged
+  bit for bit. Monte Carlo aligns to its `target_year` the same way. No result
+  or provenance field is added; `provenance.load_profile` still records the
+  file and its SHA-256. **Results change for E-REDES runs whose study year
+  differs from the file's dated year.** This was measured on two BTN C files,
+  a 15-minute file dated 2025 and an hourly file dated 2023, for a 2026 study
+  at 3,500 kWh with 8 modules on the Porto TMY. The tariffs were the bundled
+  2026 weekly bi-hourly and tri-hourly schedules with illustrative prices.
+  Across PV only, PV with a 5 kWh battery, and fixed-target smart charging,
+  the change is:
   - year-1 bill without a system: −0.49 to +1.29 EUR (−0.08% to +0.19%);
   - year-1 import bill with the system: −0.27 to +1.33 EUR (−0.16% to +0.76%);
   - grid import: −1.7 to +6.9 kWh;

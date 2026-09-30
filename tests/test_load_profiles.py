@@ -538,6 +538,51 @@ def test_dated_eredes_file_must_start_at_the_first_interval(tmp_path):
         load_profile("eredes_btn_c", 1000, freq="15min", rlp_directory=str(tmp_path))
 
 
+def test_portugal_holiday_calendar_starts_in_2004():
+    # The 2003 Labour Code, in force from December 2003, is the earliest
+    # source for the full list.
+    with pytest.raises(ValueError, match="calendar starts in 2004; it has no holiday list for 2003"):
+        _portugal_national_holidays(2003)
+    holidays = _portugal_national_holidays(2004)
+    # Corpus Christi, Easter (11 April) + 60 days, is 10 June in 2004, so the
+    # 13 holidays fall on 12 dates.
+    assert _easter_sunday(2004) + timedelta(days=60) == date(2004, 6, 10)
+    assert len(holidays) == 12
+    assert {date(2004, 4, 9), date(2004, 4, 11), date(2004, 6, 10), date(2004, 10, 5), date(2004, 12, 1)} <= holidays
+
+
+@pytest.mark.parametrize(
+    ("source_year", "study_year", "role"),
+    [
+        (2003, 2026, "its timestamp year is 2003"),
+        (2025, 2003, "the study year is 2003"),
+        # The same-year shortcut does not skip the check.
+        (2003, 2003, "its timestamp year is 2003"),
+    ],
+)
+def test_dated_eredes_years_before_2004_are_refused(tmp_path, source_year, study_year, role):
+    _write_eredes(tmp_path / "EREDES_2025_BTN_1000kwh_hourly.csv", 8760, start=f"{source_year}-01-01", freq="h")
+
+    with pytest.raises(
+        ValueError, match=rf"cannot be aligned: {role}.*calendar for E-REDES day classes starts in 2004"
+    ):
+        load_profile("eredes_btn_c", 1000, start_date=f"{study_year}-01-01", rlp_directory=str(tmp_path))
+
+
+def test_dated_eredes_profile_from_2004_is_aligned(tmp_path):
+    _write_eredes(tmp_path / "EREDES_2004_BTN_1000kwh_hourly.csv", 8784, start="2004-01-01", freq="h")
+    options = {"rlp_directory": str(tmp_path), "timezone": "UTC"}
+
+    same_year = load_profile("eredes_btn_c", 1000, start_date="2004-01-01", **options).iloc[:, 0].to_numpy()
+    source = 1000.0 + np.arange(8784) // 24
+    np.testing.assert_allclose(same_year / same_year.sum(), source / source.sum(), rtol=1e-13)
+    in_2026 = load_profile("eredes_btn_c", 1000, start_date="2026-01-01", **options).iloc[:, 0]
+    # Thursday 1 January 2026, a holiday, takes Thursday 1 January 2004, a holiday.
+    # Friday 2 January takes Friday 2 January 2004.
+    daily = in_2026.groupby(in_2026.index.date).mean()
+    assert daily[date(2026, 1, 2)] / daily[date(2026, 1, 1)] == pytest.approx(1001 / 1000)
+
+
 def test_dated_custom_and_other_external_profiles_stay_positional(tmp_path):
     day = np.arange(8760) // 24
     _write_custom(tmp_path / "measured.csv", 100.0 + day)

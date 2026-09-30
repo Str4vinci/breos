@@ -80,6 +80,14 @@ are not holidays for this rule. E-REDES does not publish a per-date holiday
 flag, so this is BREOS's reading of its three day classes. Tariff schedules
 keep their own holiday lists.
 
+The holiday calendar starts in 2004. The 2003 Labour Code, in force from
+December 2003, is the earliest source BREOS uses for this list, and the 2009
+Code kept it. A dated E-REDES file whose timestamps are before 2004, or a
+study year before 2004, raises `ValueError`. This check applies even when
+the file and the study year are the same, and the file would load unchanged.
+For years after the current one, BREOS assumes that the current holiday list
+continues.
+
 A dated E-REDES file must start at 1 January 00:00, the start of its first
 interval, and hold exactly that calendar year. An undated E-REDES file is
 placed by position.
