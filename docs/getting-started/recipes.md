@@ -425,7 +425,10 @@ for storage_cost in (500, 400, 300):
   same floats as a new run. A re-priced tariff sums each year's energy by
   period instead of by step, so it agrees with a new run to rounding.
 - `"resimulated"`: the run was simulated again, because a tariff was added,
-  the schedule changed, or the instructions would change.
+  the schedule changed, or the instructions would change. Under the
+  experimental `daily_persistence` smart charging, whose planner reads the
+  prices, any change to the import or export prices simulates again; a
+  change to the fixed charge alone is re-priced.
 
 A key that changes the simulation, such as `battery_kwh` or
 `projection_years`, raises `ValueError`; build a new `App` for it.

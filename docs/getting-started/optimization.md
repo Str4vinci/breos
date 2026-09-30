@@ -155,8 +155,9 @@ charging, which the optimizer applies as App does. It is checked as App checks
 it, with `battery_kwh` taken from the design, or from
 `constraints.max_battery_kwh` for a search. The instructions are resolved once
 per search; a candidate without a battery ignores them. Results record them
-in `provenance["smart_charging"]`. See
-[Smart charging](configuration.md#smart-charging).
+in `provenance["smart_charging"]`. The experimental `daily_persistence` mode
+plans each day while a single run goes, so the optimizer refuses it before
+any candidate runs. See [Smart charging](configuration.md#smart-charging).
 
 Fixed-design results record the schedule, prices, calendar and hashes in
 `result.provenance["tariff"]`. Search results record the same fields in

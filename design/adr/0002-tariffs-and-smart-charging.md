@@ -1,8 +1,8 @@
 # 0002 — Tariffs are resolved values; smart charging is an instruction layer
 
-- **Status:** Accepted for 0.7.x implementation; amendments A1–A11 Accepted
+- **Status:** Accepted for 0.7.x implementation; amendments A1–A12 Accepted
 - **Date:** 2026-08-20; amendments 2026-09-26; A6 accepted 2026-09-26;
-  A1–A5 and A7–A10 accepted 2026-09-27; A11 accepted 2026-09-30
+  A1–A5 and A7–A10 accepted 2026-09-27; A11 and A12 accepted 2026-09-30
 
 ## Context
 
@@ -234,9 +234,9 @@ Implementation follows the delivery sequence in
 
 The 0.7 readiness audit (#187) found details the decision above leaves open
 and statements the code has since outgrown. A6 was **Accepted** on 2026-09-26,
-A11 on 2026-09-30, and every other amendment below on 2026-09-27. Each one
-replaces the text it names, and that text is marked in place above; A11 adds
-a rule and replaces none. Accepting A6–A10 accepted the
+A11 and A12 on 2026-09-30, and every other amendment below on 2026-09-27. Each
+one replaces the text it names, and that text is marked in place above; A11
+and A12 add rules and replace none. Accepting A6–A10 accepted the
 design for the dispatch-seam and ledger work, not its implementation. Grid
 charging, origin accounting, ledger schema 2.0 and net-exchange emissions were
 then implemented for 0.7.0 in #279–#282 (#178). Economic
@@ -426,6 +426,52 @@ degradation still closes once on its existing positional window. A controller
 at a shared boundary observes the post-aging/post-replacement state. The
 window close uses the `Battery_Energy_Beginning` ledger value from the
 subcall containing its last step.
+
+### A12. Daily persistence: warm start and forecast-terminal value — Accepted 2026-09-30
+
+The experimental App mode `daily_persistence` is a daily controller under
+A11. It keeps the fixed-target instruction layout and chooses one grid-charge
+target per configured-zone civil day. A decision reads the known tariff, the
+battery's measured state and the last complete observed local day, and never
+the current or a future day's PV, load or temperature.
+
+- **Forecast** (`repeat_previous_complete_local_day`). The last complete
+  local day's PV DC, load and input temperature are repeated on every day of
+  the planning window, slot by local wall-clock time and DST fold, never by
+  position. A repeated fall-back slot the observed day lacks reuses the
+  observed sample at that wall time; a spring-forward slot the observed day
+  lacks is interpolated between its neighbouring wall times. Tariff labels,
+  prices and day offsets are used as resolved, including the A2 seam.
+- **Warm start** (`no_grid_until_one_complete_local_day`). Until one
+  complete local day has been observed, a decision keeps the configured
+  discharge gate and reserve and sets no grid target. A partial first day
+  and a clipped `[period]` edge are not observations. The observation and
+  any day decision in progress carry across the A2 year seam; a standalone
+  `[period]` never joins its end to its start.
+- **Rolling solve.** Each day builds a fresh daily-target problem on the
+  forecast from the measured stored energy, the current state of health and
+  the resistance-adjusted efficiencies, which stay fixed inside the solve.
+  Only the first day's target is executed; the next day is planned again
+  from the simulated state.
+- **Forecast-terminal value** (`preserve_start_energy`). Each solve's
+  terminal target is the day's starting energy, capped at
+  `nominal_energy_wh * soh * max_soc * capacity_factor(T)` for the final
+  forecast temperature `T`, with no free terminal. Stored energy that ends
+  the window below the target is priced at the cheapest import price of a
+  step that may grid-charge (of any step when none may), through the
+  grid-charge and battery charge efficiencies. The same rule applies at the
+  project's final horizon. It is a planning penalty, not a dispatch
+  instruction or a physical reset: App keeps `physical_carry` and reports
+  the stored energy by origin at the start and end of the project.
+
+The terminal price is a tractable continuation proxy, not a learned value
+function; it is biased when recharge prices beyond the window differ from
+those inside it. Monte Carlo and projected optimization, which share one
+set of static instructions across trajectories or candidates, refuse the
+mode. Price-aware dispatch forces simulation, so `App.revalue` re-simulates
+when the per-step prices change. Result schema 2.2 records the policy in
+`provenance.smart_charging`, with a hash of the instructions every project
+year executed, and no forecast or per-day target.
 
 ### Implementation notes for the dispatch-seam PR
 
