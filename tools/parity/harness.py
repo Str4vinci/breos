@@ -87,7 +87,6 @@ def build(name: str, freq: str = FREQ):
     common = dict(
         max_soc=0.95,
         min_soc=0.10,
-        dc_coupled=True,
         inverter_efficiency=0.96,
         enable_replacement=True,
         calendar_model="naumann_lam",

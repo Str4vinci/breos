@@ -145,7 +145,6 @@ def test_app_montecarlo_and_projected_optimization_age_the_battery_identically(m
         "min_soc": cfg["battery_min_soc"],
         "max_soc": cfg["battery_max_soc"],
         "eol_percentage": cfg["battery_eol_percentage"],
-        "dc_coupled": cfg["dc_coupled"],
         "calendar_model": cfg["calendar_model"],
         "max_charge_power_w": cfg["battery_max_charge_power_w"],
         "max_discharge_power_w": cfg["battery_max_discharge_power_w"],

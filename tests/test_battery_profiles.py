@@ -57,6 +57,9 @@ def test_python_discovery_is_public_and_json_serializable():
     assert models[0]["calibration_basis"] == "cell-model"
     assert models[0]["pack_calibrated"] is False
     json.dumps(models)
+    # Every registered model is enabled, so there is no filter to ask for.
+    with pytest.raises(TypeError, match="enabled_only"):
+        breos.list_battery_models(enabled_only=True)
 
 
 def test_registry_metadata_is_immutable_and_discovery_results_are_isolated():
@@ -92,7 +95,7 @@ def test_native_is_default_and_blast_is_explicit_opt_in():
 
 
 def test_config_rejects_ambiguous_or_incomplete_model_selection():
-    with pytest.raises(ValueError, match="ambiguous legacy selector"):
+    with pytest.raises(ValueError, match="Unknown config key.*battery_type"):
         resolve_app_config(_base_config(battery_type="lfp"))
     with pytest.raises(ValueError, match="requires.*degradation_engine=blast"):
         resolve_app_config(_base_config(blast_model="lfp_gr_250ah_prismatic"))

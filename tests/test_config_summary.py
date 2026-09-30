@@ -8,8 +8,8 @@ from breos import cli
 from breos.app_config import APP_CONFIG_FIELDS
 
 BASE = {"location": "porto", "n_modules": 10, "annual_consumption_kwh": 4000}
-# Runner sections and the removed legacy selector are not App settings.
-NOT_SUMMARISED = {"montecarlo", "sweep", "battery_type"}
+# Runner sections are not App settings.
+NOT_SUMMARISED = {"montecarlo", "sweep"}
 
 
 def test_every_app_key_has_one_place_in_the_summary():

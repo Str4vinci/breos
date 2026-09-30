@@ -287,8 +287,6 @@ class NativeDegradationAdapter:
         initial_soh_fraction: float,
         initial_fec: float,
         initial_calendar_seconds: float,
-        nominal_energy_wh: float,
-        battery_type: str,
         k0_fraction: float,
         activation_energy: float,
         soc_exponent: float,
@@ -296,14 +294,11 @@ class NativeDegradationAdapter:
         cycle_step: CycleStep,
         calendar_step: CalendarStep,
         initial_rainflow_state: Mapping[str, Any] | None = None,
-        debug: bool = False,
     ) -> None:
         self.model_key = model_key
         self._soh = float(initial_soh_fraction)
         self._fec = float(initial_fec)
         self._calendar_seconds = float(initial_calendar_seconds)
-        self._nominal_energy_wh = float(nominal_energy_wh)
-        self._battery_type = battery_type
         self._k0_fraction = float(k0_fraction)
         self._activation_energy = float(activation_energy)
         self._soc_exponent = float(soc_exponent)
@@ -311,17 +306,13 @@ class NativeDegradationAdapter:
         self._cycle_step = cycle_step
         self._calendar_step = calendar_step
         self._rainflow = _NativeRainflowCounter(initial_rainflow_state)
-        self._debug = debug
 
     def step(self, day: DegradationDay) -> DegradationStep:
         cycles = self._rainflow.step(day)
         soh_after_cycle, cycle_degradation, self._fec = self._cycle_step(
             self._soh,
             cycles,
-            self._nominal_energy_wh,
             fec_cum=self._fec,
-            battery_type=self._battery_type,
-            debug=self._debug,
         )
         self._soh, calendar_degradation, self._calendar_seconds = self._calendar_step(
             soh_after_cycle,
@@ -333,7 +324,6 @@ class NativeDegradationAdapter:
             cumulative_cal_seconds=self._calendar_seconds,
             dt_days=(len(day.soc) * day.step_seconds) / 86400.0,
             mean_soc_absolute=day.mean_soc,
-            debug=self._debug,
         )
         return DegradationStep(
             soh_fraction=self._soh,
@@ -350,10 +340,7 @@ class NativeDegradationAdapter:
         self._soh, cycle_degradation, self._fec = self._cycle_step(
             self._soh,
             cycles,
-            self._nominal_energy_wh,
             fec_cum=self._fec,
-            battery_type=self._battery_type,
-            debug=self._debug,
         )
         return DegradationStep(
             soh_fraction=self._soh,

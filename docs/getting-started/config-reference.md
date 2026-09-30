@@ -32,14 +32,13 @@ is a `breos run` option that overrides the config file.
 | `battery_power_limit_c_rate` | `None` | `--battery-power-limit-c-rate` | Charge and discharge limit on the stored energy, as a multiple of capacity (1.0 = 1 C). It scales with `battery_kwh` and cannot be combined with `battery_max_charge_power_w` or `battery_max_discharge_power_w` |
 | `battery_rte` | `None` | — | Battery round-trip efficiency, split evenly across charge and discharge; `None` is 0.95 |
 | `battery_temperature` | `"weather"` | — | Battery temperature used for degradation: `"weather"`, a fixed temperature in °C, or a timestamped CSV path. The indoor model then remaps it unless `battery_indoor_model` disables it |
-| `battery_type` | *removed* | — | Removed legacy selector. Setting it raises an error: use `degradation_engine = "native"`, or `degradation_engine = "blast"` with `blast_model` |
 | `bifacial_model` | `"none"` | `--bifacial-model` | Rear-irradiance model. `"none"` is front-only production; `"infinite_sheds"` needs sourced module bifaciality plus `gcr`, `pvrow_height` and `pvrow_pitch`. One of `"none"`, `"infinite_sheds"` |
 | `blast_model` | `None` | `--blast-model` | Stable BLAST model key; required with `degradation_engine = "blast"` and invalid with the native engine |
 | `calendar_model` | `"naumann_lam_field_calibrated"` | `--calendar-model` | Battery calendar aging model. The default is the v1 field calibration; `"naumann_lam_field_calibrated_v2"` is the v2 fit with Lam `Ea`/`n` fixed and `k0`/`b` fitted |
 | `cost_preset` | `None` | `--cost-preset` | Cost preset key from the packaged defaults; see [Packaged options](options.md#cost-presets). `None` uses the {py:class}`~breos.CostParams` defaults |
 | `costs` | *unset* | — | Cost overrides layered over the selected preset and the built-in defaults; see [`[costs]`](#costs) |
 | `cross_axis_tilt` | `0.0` | — | Cross-axis terrain slope for single-axis tracking (degrees) |
-| `dc_coupled` | `True` | `--dc-coupled` | DC-coupled or hybrid inverter. `False` is not supported and raises |
+| `dc_coupled` | `True` | — | DC-coupled or hybrid inverter. `False` is not supported and raises |
 | `degradation_engine` | `"native"` | `--degradation-engine` | `"native"` keeps Naumann/Lam; `"blast"` opts into a vendored BLAST cell model. One of `"native"`, `"blast"` |
 | `diffuse_iam` | `"none"` | `--diffuse-iam` | Whether the incidence-angle modifier also applies to the diffuse POA components. `"marion"` weighs sky- and ground-diffuse with the view-factor-integrated selected IAM model (Marion 2017); the default applies IAM to beam only, a known ~0.5-1% overestimate. One of `"none"`, `"marion"` |
 | `discount_rate` | `0.03` | `--discount-rate` | Nominal discount rate for NPV |
