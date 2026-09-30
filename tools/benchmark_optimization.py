@@ -757,20 +757,22 @@ def _run_app(inputs: dict[str, Any], backend: str) -> dict[str, Any]:
         build_battery_temperature_series=build_battery_temperature_series,
     )
     ledgers: list[dict[str, pd.DataFrame]] = []
-    simulate = projection.simulate_energy_balance
+    simulate = projection._simulate_detailed_run
 
     def recording_simulate(**kwargs: Any) -> Any:
         output = simulate(**kwargs)
-        ledgers.append({"results": output[0], "degradation": output[4]})
+        ledgers.append({"results": output.results_df, "degradation": output.degradation_df})
         return output
 
-    projection.simulate_energy_balance = recording_simulate  # type: ignore[assignment]
+    # App fixed targets run through the civil-day controller. Record that
+    # path's assembled year, including the ledger and closed aging windows.
+    projection._simulate_detailed_run = recording_simulate  # type: ignore[assignment]
     try:
         app = App({**inputs["app_config"], "execution_backend": backend})
         app._runtime_dependencies = lambda: dependencies  # type: ignore[method-assign]
         app.simulate()
     finally:
-        projection.simulate_energy_balance = simulate  # type: ignore[assignment]
+        projection._simulate_detailed_run = simulate  # type: ignore[assignment]
     artifacts = app._artifacts
     assert artifacts is not None
     return {
@@ -843,6 +845,17 @@ def _child_parity(spec: dict[str, Any], inputs: dict[str, Any]) -> dict[str, Any
     checks.append(_requirement("witness_replaces_battery", replacements > 0, replacements=replacements))
 
     app = {backend: _run_app(inputs, backend) for backend in BACKENDS}
+    years = inputs["app_config"]["projection_years"]
+    for backend in BACKENDS:
+        ledgers = app[backend]["ledgers"]
+        checks.append(
+            _requirement(
+                f"app_{backend}_complete_ledgers",
+                len(ledgers) == years and all(len(ledger["results"]) == len(inputs["weather"]) for ledger in ledgers),
+                recorded_years=len(ledgers),
+                expected_years=years,
+            )
+        )
     for part in ("ledgers", "first_year_results", "yearly", "cost_projection", "degradation_summary"):
         checks.append(_check(f"app_{part}_identical", value_differences(app["python"][part], app["numba"][part], part)))
     checks.append(

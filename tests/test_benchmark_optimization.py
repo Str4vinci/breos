@@ -19,6 +19,24 @@ def test_defaults_match_the_documented_study():
     assert (args.n_procs, args.warm_repeats, args.output) == (1, 3, None)
 
 
+def test_app_witness_records_every_controller_year(tmp_path):
+    staged, location, _ = bench.stage_weather(bench.DEFAULT_WEATHER_FILE, tmp_path)
+    settings = dict(latitude=41.1579, longitude=-8.6291, annual_consumption_kwh=3500.0)
+    weather, load, _ = bench.prepare_case_inputs(staged, location, "h", **settings)
+    app_config, optimizer_config = bench.study_configs("h", 3, **settings)
+
+    run = bench._run_app(
+        dict(weather=weather, load=load, app_config=app_config, optimizer_config=optimizer_config), "python"
+    )
+
+    assert len(run["ledgers"]) == 3
+    assert all(len(ledger["results"]) == len(weather) for ledger in run["ledgers"])
+    grid_kwh = sum(ledger["results"]["Grid_AC_To_Battery"].sum() / 1000.0 for ledger in run["ledgers"])
+    assert grid_kwh > 0.0
+    assert grid_kwh == pytest.approx(run["yearly"]["Grid_AC_To_Battery_kWh"].sum(), rel=1e-15)
+    assert run["total_replacements"] > 0
+
+
 @pytest.mark.parametrize(
     "argv",
     [
