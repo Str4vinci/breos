@@ -33,7 +33,7 @@ its production pipeline on.
 - **Monte Carlo** — weather-year and demand resampling for NPV, payback, grid-independence, LCOE, and SoH distributions.
 - **Optimization** — multi-objective PV/battery sizing (pymoo NSGA-II), tilt optimization, and sizing sweeps.
 - **Emissions** — CO<sub>2</sub> savings and projections.
-- **Visualization** — plots for energy balances, degradation, breakeven, and Monte Carlo distributions.
+- **Visualization** — plots for energy balances, degradation, breakeven, Monte Carlo distributions, sweep heatmaps, orientation landscapes and Pareto fronts.
 - **Bring your own data** — every layer accepts custom inputs: PV module parameters, battery degradation coefficients, weather CSVs, load profiles, and cost/tariff/emissions assumptions. The packaged presets are starting points, not fixed defaults.
 
 ## Installation
