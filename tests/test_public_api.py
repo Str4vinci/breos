@@ -129,3 +129,33 @@ assert matplotlib.get_backend() == before
     )
 
     assert preserve_backend.returncode == 0, preserve_backend.stderr
+
+
+def test_keyword_only_boundaries_are_pinned():
+    """A positional call past a removed argument raises instead of rebinding."""
+    import inspect
+
+    from breos.economics import cost_analysis_projection
+    from breos.optimization import optimize_system_multi_objective
+
+    def positional(func):
+        return [
+            name
+            for name, parameter in inspect.signature(func).parameters.items()
+            if parameter.kind is inspect.Parameter.POSITIONAL_OR_KEYWORD and name != "self"
+        ]
+
+    assert positional(cost_analysis_projection) == [
+        "yearly_summary_df",
+        "costs",
+        "num_years",
+        "inflation_rate",
+        "sell_price_inflation",
+        "discount_rate",
+    ]
+    assert positional(optimize_system_multi_objective) == ["tmy_data", "houseload", "config"]
+
+    pytest.importorskip("pymoo")
+    from breos.optimization import SolarDesignProblem
+
+    assert positional(SolarDesignProblem.__init__) == ["tmy_data", "houseload", "config"]

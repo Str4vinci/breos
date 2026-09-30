@@ -233,11 +233,12 @@ so rows 1–4 also apply to it.
 
 As shipped, the changelog's table omits rows 12 and 18, which went earlier in
 0.7.0 with the steady-state objective basis (#270), rows 28 and 29, whose
-function was removed (#287), and row 27, whose function was removed with the
-tool-only plots (#186).
+function was removed (#287), row 27, whose function was removed with the
+tool-only plots (#186), and rows 24–26, whose labels went with the
+`breos.io` summary helper that produced them.
 
 Rows 24–26 substitute the resolved currency code, so an EUR run writes the
-same text as today. Names that are already neutral keep them: the projection
+same text as today. (0.7.0 later removed the helper that wrote them.) Names that are already neutral keep them: the projection
 columns (`Cost_Import`, `Revenue_Export`, the `*_NPV` columns),
 `attrs["total_investment"]` and `attrs["final_npv_savings"]`. The private
 argument `_estimate_battery_replacement_treatment(replacement_cost_eur=...)`

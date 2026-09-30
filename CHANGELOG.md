@@ -517,15 +517,14 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   | `breos list cost-presets --json` | `electricity_cost_eur_kwh` | `electricity_cost_per_kwh` |
   | `breos list cost-presets --json` | `export_price_eur_kwh` | `export_price_per_kwh` |
   | `breos list cost-presets --json` | `storage_cost_eur_kwh` | `storage_cost_per_kwh` |
-  | `breos.io` summary label | `LCOE [EUR/kWh]` | `LCOE [<currency>/kWh]` |
-  | `breos.io` summary label | `Total Investment [EUR]` | `Total Investment [<currency>]` |
-  | `breos.io` summary label | `NPV Savings [EUR]` | `NPV Savings [<currency>]` |
 
   The ADR's table also lists `SteadyState_NPV_Eur` and
   `replacement_cost_eur_each`; both went earlier in this release with the
   steady-state objective basis. It lists two `plot_tariff_comparison` input
   columns and a `plot_pareto_front_analysis` one as well; both functions
-  were removed in this release (see Removed).
+  were removed in this release (see Removed). It also lists three
+  `breos.io` summary labels, which went with `_economics_summary_metrics`
+  (see Removed).
   `_t0_prices` marks a total at t = 0 prices, neither inflated nor
   discounted. `App.result()` gains
   `battery_replacement_cost_npv` beside it: the same replacements inflated to
@@ -1474,13 +1473,17 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 - **`breos.calculate_lcoe`**, with no deprecation period. Nothing in BREOS
   called it. The `lcoe_per_kwh` that App, Monte Carlo and the optimizer
   report comes from `calculate_lcoe_from_projection`, which stays. For a
-  real-terms LCOE, run the projection with `inflation_rate = 0` and a real
-  `discount_rate`; the two functions agreed there for a run without a
-  battery replacement, which `calculate_lcoe` left out.
+  real-terms LCOE, run the projection with `inflation_rate = 0`, no
+  `om_escalation` and a real `discount_rate`; the two functions agreed there
+  for a run without a battery replacement, which `calculate_lcoe` left out.
 - **`breos.calculate_co2_savings`**, with no deprecation period. Nothing in
   BREOS called it after the projection took over the lifetime CO2.
-  `calculate_co2_projection` gives the same values per year from yearly PV
-  and export; pass one-element arrays for a single year. Its
+  `calculate_co2_projection` gives the same kg values per year; pass
+  one-element arrays for a single year, and pass the export
+  (`total_pv_kwh - self_consumed_kwh`) rather than the self-consumption.
+  Read the `CO2_Avoided_*_kg` columns and divide by 1000 for tonnes; the
+  intensity keys are named `*_CI_gCO2_kWh` there, such as
+  `CO2_Avoided_CI_gCO2_kWh` and `CO2_Avoided_CI_Type`. Its
   `Grid_CI_gCO2_kWh` column, a copy of `CO2_Avoided_CI_gCO2_kWh`, is gone
   too. Neither reached a result: the cost projection, App, Monte Carlo and
   optimizer outputs never carried it.
@@ -1494,10 +1497,10 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   such as `cost_analysis_projection(None, costs, yearly_summary_df=rows)`
   becomes `cost_analysis_projection(rows, costs)`; a per-step frame or an
   empty table raises `ValueError`. With the path go
-  `breos.economics.replacement_fraction_by_year` and the
-  `PV_Production` fallback of `system_ac_production_power`, which now needs
-  `PV_AC_To_Load`, `PV_Origin_Battery_AC_To_Load` and `PV_AC_Export` and
-  raises `KeyError` without them.
+  `breos.economics.replacement_fraction_by_year` and
+  `breos.economics.system_ac_production_power` with its
+  `SYSTEM_AC_PRODUCTION_COLUMNS`; for usable AC production, sum
+  `PV_AC_To_Load`, `PV_Origin_Battery_AC_To_Load` and `PV_AC_Export`.
 - **The `production_column` argument of `calculate_lcoe_from_projection`**,
   with no deprecation period, and its inference of the investment from the
   first projection row. It reads `PV_Production_kWh`, and takes the
@@ -1515,10 +1518,12 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 - **`breos.io.export_cost_analysis`, the `extra_metrics` argument of
   `export_summary`, and `breos.utils.get_steps_per_day` and
   `get_steps_per_year`**, with no deprecation period. Nothing called them.
-  Write a cost projection with `write_cost_projection` or
-  `DataFrame.to_csv`; add a summary field as a column of the summary
-  DataFrame before calling `export_summary`; and use
-  `round(24 / get_hours_per_step(freq))` for steps per day. The private
+  Write a cost projection with `write_cost_projection`, which writes
+  `cost_projection[_<scenario>].csv`, or with `DataFrame.to_csv` for another
+  name, or `to_csv(path, sep="\t")` for the old `txt` format. Add a summary
+  field as a column of the summary DataFrame before calling
+  `export_summary`, and use `round(24 / get_hours_per_step(freq))` for steps
+  per day. The private
   `breos.io._economics_summary_metrics` is gone with them.
 - **`breos.resample_tmy_to_15min` and the `freq` argument of
   `fetch_tmy_weather_data`** ([#164](https://github.com/Str4vinci/breos/issues/164)),
@@ -1614,8 +1619,7 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   name (ledger schema 2.0, ADR 0002 A9). Read `PV_AC_Export` for
   `Sell_To_Grid`, `PV_DC_Curtailed` for `PV_Curtailment`, `Standby_Loss` for
   `Battery_Standby_Loss`, and `PV_Origin_Battery_AC_To_Load` for
-  `Battery_AC_To_Load_PV`. `system_ac_production_power` no longer accepts
-  `Sell_To_Grid` as the export column. The year-row names, such as `Export_kWh` and
+  `Battery_AC_To_Load_PV`. The year-row names, such as `Export_kWh` and
   `Battery_Standby_Loss_kWh`, are unchanged, and so is every value.
 - Removed the optimizer's `costs.panel_wp` override. It priced the steady-state
   CAPEX at a nominal wattage instead of the selected module's rating, so the

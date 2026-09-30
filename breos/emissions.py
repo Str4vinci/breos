@@ -3,8 +3,8 @@ Emissions module for CO2 savings calculations.
 
 This module handles:
 - Grid carbon intensity parameters per country (average and marginal)
-- CO2 emissions avoided by PV production (total and self-consumed)
-- Multi-year CO2 savings projections
+- Multi-year projections of the CO2 emissions avoided by PV production
+  (self-consumed and exported)
 """
 
 from dataclasses import dataclass

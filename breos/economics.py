@@ -28,8 +28,6 @@ BATTERY_REPLACEMENT_COST_PER_KWH: float = 500.0
 # rather than buried here.
 DEFAULT_REPLACEMENT_YEAR_FRACTION: float = 0.5
 
-SYSTEM_AC_PRODUCTION_COLUMNS = ("PV_AC_To_Load", "PV_Origin_Battery_AC_To_Load", "PV_AC_Export")
-
 # Canonical translation from the public cost-catalogue/config vocabulary to
 # CostParams attributes. App presets, App ``[costs]`` overrides, and the
 # lower-level ``cost_params_from_config`` helper all share this mapping.
@@ -50,23 +48,6 @@ COST_CONFIG_KEY_TO_PARAM: dict[str, str] = {
     "maintenance_cost": "maintenance_cost_fixed",
     "operation_cost": "operation_cost",
 }
-
-
-def system_ac_production_power(results_df: pd.DataFrame) -> pd.Series:
-    """Return usable PV-system AC production in the frame's power unit.
-
-    The sum of the explicit ledger: direct PV to load, PV returned from
-    battery to load, and PV exported at the AC boundary.
-
-    Raises:
-        KeyError: If the frame lacks any of the three ledger columns.
-    """
-    missing = [column for column in SYSTEM_AC_PRODUCTION_COLUMNS if column not in results_df.columns]
-    if missing:
-        required = ", ".join(SYSTEM_AC_PRODUCTION_COLUMNS)
-        raise KeyError(f"Results do not contain the AC system-production ledger ({required})")
-    columns = list(SYSTEM_AC_PRODUCTION_COLUMNS)
-    return results_df[columns].apply(pd.to_numeric, errors="coerce").fillna(0.0).sum(axis=1)
 
 
 # The one default set for every projection entry point (ADR 0003 E6). Both are
