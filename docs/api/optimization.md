@@ -51,7 +51,8 @@ table replaces the three flat energy/fixed-charge entries in `costs`; giving
 both raises. The schedule is resolved once per search in `location.timezone`.
 The [optimization guide](../getting-started/optimization.md#price-a-design-with-a-time-of-use-tariff)
 shows the configuration and provenance fields. A `smart_charging` table applies
-fixed-target charging to every candidate with a battery, as App does.
+fixed-target charging to every candidate with a battery, as App does. The
+experimental, App-only `daily_persistence` mode raises `ValueError`.
 
 ZEB remains a reported diagnostic in projected mode. Set
 `constraints.enforce_zeb = true` to require a projected lifetime ZEB ratio of

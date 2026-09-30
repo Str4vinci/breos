@@ -90,8 +90,12 @@ TABLES: tuple[tuple[str, TableSpec, str], ...] = (
         "smart_charging",
         SMART_CHARGING_TABLE,
         "Grid charging by tariff period, as `[smart_charging]` in TOML; see "
-        '[Smart charging](configuration.md#smart-charging). `mode = "fixed_target"` needs every key but '
-        '`grid_import_limit_w`; `mode = "disabled"` takes no other key.',
+        '[Smart charging](configuration.md#smart-charging). `mode = "fixed_target"` needs '
+        "`target_usable_fraction`, `charge_periods`, `discharge_periods` and `grid_charge_efficiency`, and refuses "
+        'the planner keys. The experimental `mode = "daily_persistence"` (App only) needs the same keys but '
+        "`target_usable_fraction`, which it refuses, and takes the optional planner keys `forecast_horizon_days`, "
+        '`target_levels` and `soc_states`. `grid_import_limit_w` is optional in both. `mode = "disabled"` takes '
+        "no other key.",
     ),
     (
         "period",
@@ -110,7 +114,13 @@ _CONDITIONALLY_REQUIRED = {
     "tariff": {
         "schedule": "exactly one of these",
         "custom_schedule": "exactly one of these",
-    }
+    },
+    "smart_charging": {
+        "charge_periods": "unless `disabled`",
+        "discharge_periods": "unless `disabled`",
+        "grid_charge_efficiency": "unless `disabled`",
+        "target_usable_fraction": "`fixed_target`",
+    },
 }
 
 _COST_PARAM_DEFAULTS = {field.name: field.default for field in fields(CostParams)}
