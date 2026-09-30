@@ -186,6 +186,7 @@ def test_choice_flags_reject_a_value_outside_their_choices(flag, value, capsys):
     assert excinfo.value.code == 2
     assert "invalid choice" in capsys.readouterr().err
 
+
 def test_dc_coupled_has_no_cli_flag():
     # The key only accepts True, its default, so a flag could never change it.
     with pytest.raises(SystemExit):
