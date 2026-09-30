@@ -96,14 +96,13 @@ class AppConfigField:
 
     ``summary`` is the key's ``"section.name"`` place in the resolved-config
     summary that ``breos validate-config`` and ``breos run --dry-run`` print.
-    Only the runner sections and the removed ``battery_type`` have none.
+    Only the runner sections have none.
     """
 
     default: Any = _NO_DEFAULT
     cli_flags: tuple[str, ...] = ()
     cli_type: Callable[[str], Any] | None = None
     cli_choices: tuple[str, ...] | None = None
-    cli_action: str | None = None
     cli_help: str | None = None
     normalizer: Callable[[Any], Any] | None = None
     doc: str = ""
@@ -591,9 +590,6 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
     ),
     "dc_coupled": AppConfigField(
         default=True,
-        cli_flags=("--dc-coupled",),
-        cli_action="store_true",
-        cli_help="Use the supported DC-coupled/hybrid battery model.",
         doc="DC-coupled or hybrid inverter. `False` is not supported and raises",
         summary="inverter.dc_coupled",
     ),
@@ -817,14 +813,6 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
     "sweep": AppConfigField(
         doc="Parameter grid, read by `breos sweep`; see [Parameter sweep](recipes.md#parameter-sweep)",
         default_doc="*unset*",
-    ),
-    # Kept solely to preserve the existing actionable legacy-selector error.
-    "battery_type": AppConfigField(
-        doc=(
-            'Removed legacy selector. Setting it raises an error: use `degradation_engine = "native"`, or '
-            '`degradation_engine = "blast"` with `blast_model`'
-        ),
-        default_doc="*removed*",
     ),
 }
 
@@ -1582,11 +1570,6 @@ def _validate_reachable_gcr(cfg: dict[str, Any], has_arrays: bool) -> None:
 
 def _validate_structure_and_location(cfg: dict[str, Any]) -> bool:
     """Validate top-level keys, required inputs, and location structure."""
-    if "battery_type" in cfg:
-        raise ValueError(
-            "'battery_type' is an ambiguous legacy selector and is not supported by App. "
-            "Use degradation_engine='native' (default), or set degradation_engine='blast' with blast_model='<key>'."
-        )
     unknown = set(cfg) - ALLOWED_CONFIG_KEYS
     if unknown:
         available = ", ".join(sorted(ALLOWED_CONFIG_KEYS))
@@ -1820,7 +1803,7 @@ def _validate_battery_and_degradation(cfg: dict[str, Any]) -> None:
     if not isinstance(cfg["dc_coupled"], bool):
         raise TypeError("'dc_coupled' must be a boolean")
     if not cfg["dc_coupled"]:
-        raise NotImplementedError("BREOS 0.3.x supports DC-coupled/hybrid battery dispatch only")
+        raise NotImplementedError("BREOS supports DC-coupled/hybrid battery dispatch only")
     check_calendar_model(cfg["calendar_model"], "calendar_model")
     start_date = cfg["start_date"]
     # datetime subclasses date, so it is excluded before the date case.

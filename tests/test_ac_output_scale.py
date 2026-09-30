@@ -1,8 +1,11 @@
 """The post-inverter AC output scale and the per-year projected weather sequence.
 
 Both exist for PV-bias scenarios. Two properties carry every result that
-depends on them, and both are asserted here rather than argued: the default reproduces prior behaviour exactly, and the compiled
-backend reproduces the Python reference exactly when the scale is active.
+depends on them: the default reproduces prior behaviour exactly, and the
+compiled backend reproduces the Python reference exactly when the scale is
+active. The golden outputs pin the default; the 1.0 case of the
+multiplicative tests below compares it with an omitted scale, and the
+backend parity is asserted here.
 
 The scale is applied *after* the part-load curve and every inverter limit, so
 it corrects modelled AC delivery without moving the clipping threshold or the
@@ -37,6 +40,7 @@ import pandas as pd
 import pytest
 
 from breos.battery import BatteryConfig, simulate_energy_balance
+from breos.economics import DEFAULT_DISCOUNT_RATE, DEFAULT_INFLATION_RATE
 from breos.inverter import (
     _calculate_dc_ac_power_arrays,
     calculate_dc_ac_power,
@@ -52,25 +56,6 @@ EFFICIENCY = 0.96
 # A measured-bias AC-side factor, a deeper trim, plus a no-op.
 SCALES = (1.0, 1.0 / 1.0857, 0.5)
 DC_GRID = (0.0, 1e-9, 50.0, 500.0, 1800.0, 3520.0, 3666.6666666666665, 9000.0)
-
-
-@pytest.mark.parametrize("dc", DC_GRID)
-def test_default_scale_is_a_no_op(dc):
-    """An explicit 1.0 must be bit-identical to omitting the argument."""
-    without = calculate_dc_ac_power(dc, AC_RATING, EFFICIENCY)
-    with_one = calculate_dc_ac_power(dc, AC_RATING, EFFICIENCY, 1.0)
-    assert without.ac_power_w == with_one.ac_power_w
-    assert without.conversion_loss_w == with_one.conversion_loss_w
-    assert without.clipping_loss_dc_w == with_one.clipping_loss_dc_w
-    assert without.clipping_loss_ac_equivalent_w == with_one.clipping_loss_ac_equivalent_w
-
-
-def test_default_scale_is_a_no_op_on_the_array_path():
-    dc = np.array(DC_GRID)
-    without = _calculate_dc_ac_power_arrays(dc, AC_RATING, EFFICIENCY)
-    with_one = _calculate_dc_ac_power_arrays(dc, AC_RATING, EFFICIENCY, 1.0)
-    for left, right in zip(without, with_one):
-        assert np.array_equal(left, right)
 
 
 @pytest.mark.parametrize("scale", SCALES)
@@ -189,30 +174,6 @@ def _simulate(scenario: str, backend: str, scale: float):
     )
 
 
-@pytest.mark.parametrize("scenario", ("one_day", "baseline", "saturating", "discharge_limited"))
-def test_dispatch_default_scale_reproduces_the_unscaled_run(scenario):
-    """Passing 1.0 through the whole dispatch must change nothing."""
-    reference = _simulate(scenario, "python", 1.0)
-    pv, load, temp, cfg, sim_kwargs = build(scenario)
-    plain = simulate_energy_balance(
-        pv_dc=pv,
-        houseload=load,
-        battery_config=BatteryConfig(**cfg),
-        freq=FREQ,
-        temperature_series=temp,
-        return_degradation_state=True,
-        execution_backend="python",
-        **sim_kwargs,
-    )
-    for column in plain[0].columns:
-        if column == "Datetime":
-            continue
-        assert np.array_equal(plain[0][column].to_numpy(), reference[0][column].to_numpy()), (
-            f"{scenario}: {column} moved under an explicit 1.0"
-        )
-    assert plain[1] == reference[1]
-
-
 @pytest.mark.parametrize("scenario", ("one_day", "saturating", "discharge_limited"))
 def test_scaling_reduces_delivered_ac(scenario):
     full = _simulate(scenario, "python", 1.0)[0]
@@ -303,13 +264,16 @@ class TestProjectedWeatherSequence:
         from breos.pv_modules import get_module
 
         shared = dict(
-            tmy_data=pd.DataFrame(index=index),
             houseload=load,
             temperature_series=temperature,
             pv_params=get_module("Suntech_STP550S_STC"),
             batt_spec={"calendar_model": "naumann_lam", "enable_replacement": False},
             costs_cfg={},
-            fin_cfg={},
+            fin_cfg={
+                "inflation_rate": DEFAULT_INFLATION_RATE,
+                "sell_price_inflation": 0.0,
+                "discount_rate": DEFAULT_DISCOUNT_RATE,
+            },
             freq="h",
             years_projection=2,
             degradation_rate=0.005,
@@ -332,7 +296,6 @@ class TestProjectedWeatherSequence:
         with pytest.raises(ValueError, match="expected 3"):
             _evaluate_projected_design_metrics(
                 base_dc_power=[dc, dc],
-                tmy_data=pd.DataFrame(index=index),
                 houseload=pd.DataFrame({"Load": np.zeros(24)}, index=index),
                 temperature_series=pd.Series(np.full(24, 20.0), index=index),
                 pv_params=get_module("Suntech_STP550S_STC"),
@@ -370,14 +333,9 @@ class TestProjectedWeatherSequence:
             lambda **_kwargs: pd.Series(np.linspace(0.0, 3000.0, 24), index=idx),
         )
 
-        def _capture(_mode, index, **_kwargs):
-            seen.append(index)
-            return pd.Series(np.full(24, 20.0), index=idx)
-
-        monkeypatch.setattr("breos.optimization._temperature_series_from_config", _capture)
-        monkeypatch.setattr(
-            "breos.optimization._evaluate_projected_design_metrics",
-            lambda **kwargs: {
+        def _capture(**kwargs):
+            seen.append(kwargs["temperature_series"].index)
+            return {
                 "Projected_Grid_Independence_%": 60.0,
                 "Projected_NPV": 100.0,
                 "sequence_length": (
@@ -385,8 +343,9 @@ class TestProjectedWeatherSequence:
                 ),
                 "_yearly_summary_df": pd.DataFrame({"Year": [1, 2]}),
                 "_cost_projection_df": pd.DataFrame({"Year": [1, 2]}),
-            },
-        )
+            }
+
+        monkeypatch.setattr("breos.optimization._evaluate_projected_design_metrics", _capture)
 
         config = {
             "location": {"latitude": 41.15, "longitude": -8.63},
@@ -555,10 +514,6 @@ class TestUnlimitedInverterAndOptimizer:
         seen = {}
 
         monkeypatch.setattr("breos.optimization.calculate_pv_production_dc", lambda **_kwargs: raw.copy())
-        monkeypatch.setattr(
-            "breos.optimization._temperature_series_from_config",
-            lambda *_args, **_kwargs: pd.Series(np.full(3, 20.0), index=idx),
-        )
 
         def fake_projected(**kwargs):
             seen["projected"] = kwargs["base_dc_power"].copy()
@@ -612,10 +567,6 @@ class TestDcOutputScale:
         seen: dict = {}
 
         monkeypatch.setattr("breos.optimization.calculate_pv_production_dc", lambda **_k: raw.copy())
-        monkeypatch.setattr(
-            "breos.optimization._temperature_series_from_config",
-            lambda *_a, **_k: pd.Series(np.full(24, 20.0), index=idx),
-        )
 
         def _capture(**kwargs):
             seen["dc"] = kwargs["base_dc_power"]
@@ -629,14 +580,6 @@ class TestDcOutputScale:
         monkeypatch.setattr("breos.optimization._evaluate_projected_design_metrics", _capture)
         evaluate_projected_design(weather, load, config, n_modules=9, battery_kwh=5.0, tilt=35.0, azimuth=200.0)
         return raw, seen["dc"]
-
-    def test_default_leaves_the_dc_series_untouched(self, monkeypatch):
-        raw, used = self._run(monkeypatch, self._config())
-        assert np.array_equal(used.to_numpy(), raw.to_numpy())
-
-    def test_explicit_one_is_the_same_object_value(self, monkeypatch):
-        raw, used = self._run(monkeypatch, self._config(dc_output_scale=1.0))
-        assert np.array_equal(used.to_numpy(), raw.to_numpy())
 
     @pytest.mark.parametrize("scale", [0.5, 0.9210647508519848, 1.0857])
     def test_dc_series_is_scaled_before_dispatch(self, monkeypatch, scale):

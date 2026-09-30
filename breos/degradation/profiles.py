@@ -405,10 +405,6 @@ def get_battery_model_profile(key: str) -> BatteryModelProfile:
         raise KeyError(f"Unknown battery model {key!r}. Available: {available}") from exc
 
 
-def list_battery_models(*, enabled_only: bool = False) -> list[dict[str, Any]]:
+def list_battery_models() -> list[dict[str, Any]]:
     """Return JSON-serializable discovery metadata for BLAST battery models."""
-    return [
-        profile.as_dict()
-        for profile in BATTERY_MODEL_REGISTRY.values()
-        if not enabled_only or profile.key in ENABLED_BLAST_MODEL_KEYS
-    ]
+    return [profile.as_dict() for profile in BATTERY_MODEL_REGISTRY.values()]

@@ -63,7 +63,7 @@ def _pack(**overrides):
         "charge_efficiency": 0.95,
         "discharge_efficiency": 0.95,
         "standby_loss_wh": 2.0,
-        "thermal_resistance_kw": 0.0,
+        "thermal_resistance_k_per_w": 0.0,
         "inverter_efficiency": 0.96,
         "enable_replacement": False,
     }
