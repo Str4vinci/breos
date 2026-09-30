@@ -42,7 +42,7 @@ from breos.pv.model_options import (
 )
 from breos.pv.temperature import calculate_cell_temperature
 from breos.pv_modules import PVModuleParams, get_module
-from breos.utils import IRRADIANCE_COLUMN_ALIASES, find_irradiance_column, get_hours_per_step
+from breos.utils import IRRADIANCE_COLUMN_ALIASES, find_irradiance_column
 from breos.weather import _AIR_TEMPERATURE_COLUMNS
 
 # Module-level cache for CEC model parameters (depends only on module specs, not weather)
@@ -63,18 +63,18 @@ DEFAULT_PVWATTS_LOSSES: Dict[str, float] = {
     "availability": 3.0,
 }
 
-# The PV model-option block every public ``calculate_pv_production_*`` entry
-# point accepts. Each of those functions still declares these explicitly —
-# the signature is the documentation, and ``**kwargs`` would silently swallow
-# a misspelled option — but the wrappers that only forward the block use this
-# tuple instead of re-listing it, so adding an option is one edit here plus
-# one per signature rather than one per call site too.
-_MODEL_OPTION_KEYS = PV_MODEL_CONFIG_KEYS
+# ``PV_MODEL_CONFIG_KEYS`` is the PV model-option block every public
+# ``calculate_pv_production_*`` entry point accepts. Each of those functions
+# still declares these explicitly — the signature is the documentation, and
+# ``**kwargs`` would silently swallow a misspelled option — but the wrappers
+# that only forward the block use that tuple instead of re-listing it, so
+# adding an option is one edit there plus one per signature rather than one
+# per call site too.
 
 # On the tracking entry points ``gcr`` is tracker row geometry with its own
 # argument slot next to ``backtrack`` and ``cross_axis_tilt``, so it is
 # forwarded there rather than as part of the model-option block.
-_TRACKING_MODEL_OPTION_KEYS = tuple(key for key in _MODEL_OPTION_KEYS if key != "gcr")
+_TRACKING_MODEL_OPTION_KEYS = tuple(key for key in PV_MODEL_CONFIG_KEYS if key != "gcr")
 
 # Model options a single array in ``calculate_multi_array_production_breakdown``
 # may override. ``iam_model``, ``diffuse_iam``, ``temperature_model`` and
@@ -93,10 +93,12 @@ _PER_ARRAY_MODEL_OPTION_KEYS = (
     "pvrow_height",
     "pvrow_pitch",
 )
-_FUNCTION_LEVEL_MODEL_OPTION_KEYS = tuple(key for key in _MODEL_OPTION_KEYS if key not in _PER_ARRAY_MODEL_OPTION_KEYS)
+_FUNCTION_LEVEL_MODEL_OPTION_KEYS = tuple(
+    key for key in PV_MODEL_CONFIG_KEYS if key not in _PER_ARRAY_MODEL_OPTION_KEYS
+)
 
 
-def _model_option_kwargs(caller_locals: Dict[str, Any], keys: tuple = _MODEL_OPTION_KEYS) -> Dict[str, Any]:
+def _model_option_kwargs(caller_locals: Dict[str, Any], keys: tuple = PV_MODEL_CONFIG_KEYS) -> Dict[str, Any]:
     """Pick the shared model-option block out of a caller's ``locals()``.
 
     Call this from a wrapper that only forwards its options, passing
@@ -641,7 +643,6 @@ def calculate_pv_production_breakdown(
     degradation_rate: float = 0.0,
     current_year: Optional[int] = None,
     start_year: Optional[int] = None,
-    verbose: bool = False,
     loss_overrides: Optional[Dict[str, float]] = None,
     transposition_model: str = DEFAULT_TRANSPOSITION_MODEL,
     albedo: Optional[float] = None,
@@ -677,10 +678,6 @@ def calculate_pv_production_breakdown(
         model_kwargs=_model_option_kwargs(locals()),
     )
 
-    if verbose:
-        total_kwh = breakdown.dc_after_losses.sum() * get_hours_per_step(freq) / 1000
-        print(f"Total PV DC production for tilt {tilt} deg: {total_kwh:.1f} kWh")
-
     return breakdown
 
 
@@ -695,7 +692,6 @@ def calculate_pv_production_dc(
     degradation_rate: float = 0.0,
     current_year: Optional[int] = None,
     start_year: Optional[int] = None,
-    verbose: bool = False,
     loss_overrides: Optional[Dict[str, float]] = None,
     transposition_model: str = DEFAULT_TRANSPOSITION_MODEL,
     albedo: Optional[float] = None,
@@ -742,7 +738,6 @@ def calculate_pv_production_dc(
         start_year: Installation year, the first year of operation. At
             ``current_year == start_year`` the modules are new and have no age
             loss. ``None`` means no age loss.
-        verbose: Whether to print production summary
         loss_overrides: Per-component PVWatts loss overrides (percent)
         transposition_model: Sky-diffusion model for POA transposition
             (one of ``TRANSPOSITION_MODELS``); defaults to ``"isotropic"``.
@@ -786,7 +781,6 @@ def calculate_pv_production_dc(
         degradation_rate=degradation_rate,
         current_year=current_year,
         start_year=start_year,
-        verbose=verbose,
         loss_overrides=loss_overrides,
         **_model_option_kwargs(locals()),
     ).dc_after_losses
@@ -809,7 +803,6 @@ def calculate_pv_production_tracking_breakdown(
     degradation_rate: float = 0.0,
     current_year: Optional[int] = None,
     start_year: Optional[int] = None,
-    verbose: bool = False,
     loss_overrides: Optional[Dict[str, float]] = None,
     transposition_model: str = DEFAULT_TRANSPOSITION_MODEL,
     albedo: Optional[float] = None,
@@ -864,10 +857,6 @@ def calculate_pv_production_tracking_breakdown(
         model_kwargs=_model_option_kwargs(locals()),
     )
 
-    if verbose:
-        total_kwh = breakdown.dc_after_losses.sum() * get_hours_per_step(freq) / 1000
-        print(f"Total PV DC production ({tracking}): {total_kwh:.1f} kWh")
-
     return breakdown
 
 
@@ -888,7 +877,6 @@ def calculate_pv_production_dc_tracking(
     degradation_rate: float = 0.0,
     current_year: Optional[int] = None,
     start_year: Optional[int] = None,
-    verbose: bool = False,
     loss_overrides: Optional[Dict[str, float]] = None,
     transposition_model: str = DEFAULT_TRANSPOSITION_MODEL,
     albedo: Optional[float] = None,
@@ -933,7 +921,6 @@ def calculate_pv_production_dc_tracking(
         start_year: Installation year, the first year of operation. At
             ``current_year == start_year`` the modules are new and have no age
             loss. ``None`` means no age loss.
-        verbose: Whether to print production summary.
         loss_overrides: Per-component PVWatts loss overrides (percent).
         transposition_model: Sky-diffusion model for POA transposition
             (one of ``TRANSPOSITION_MODELS``); defaults to ``"isotropic"``.
@@ -976,7 +963,6 @@ def calculate_pv_production_dc_tracking(
         degradation_rate=degradation_rate,
         current_year=current_year,
         start_year=start_year,
-        verbose=verbose,
         loss_overrides=loss_overrides,
         **_model_option_kwargs(locals(), _TRACKING_MODEL_OPTION_KEYS),
     ).dc_after_losses
@@ -1028,7 +1014,6 @@ def calculate_pv_production_ac(
     start_year: Optional[int] = None,
     inverter_loading_ratio: float = 1.25,
     inverter_efficiency: float = 0.96,
-    verbose: bool = False,
     transposition_model: str = DEFAULT_TRANSPOSITION_MODEL,
     albedo: Optional[float] = None,
     surface_type: Optional[str] = None,
@@ -1067,7 +1052,6 @@ def calculate_pv_production_ac(
             loss. ``None`` means no age loss.
         inverter_loading_ratio: DC/AC ratio for inverter sizing
         inverter_efficiency: Nominal inverter efficiency
-        verbose: Whether to print production summary
         loss_overrides: Per-component PVWatts loss overrides (percent), as
             for :func:`calculate_pv_production_dc`
 
@@ -1090,18 +1074,12 @@ def calculate_pv_production_ac(
         degradation_rate=degradation_rate,
         current_year=current_year,
         start_year=start_year,
-        verbose=False,
         loss_overrides=loss_overrides,
         **model_kwargs,
     )
 
     pv_peak_power_w = n_modules * pv_params.Mpp
     ac_power = dc_to_ac(dc_power, pv_peak_power_w, inverter_loading_ratio, inverter_efficiency)
-
-    if verbose:
-        hours_per_step = get_hours_per_step(freq)
-        total_kwh = ac_power.sum() * hours_per_step / 1000
-        print(f"Total PV AC production for tilt {tilt} deg: {total_kwh:.1f} kWh")
 
     return ac_power
 
@@ -1233,7 +1211,6 @@ def calculate_multi_array_production_breakdown(
     degradation_rate: float = 0.0,
     current_year: Optional[int] = None,
     start_year: Optional[int] = None,
-    verbose: bool = False,
     loss_overrides: Optional[Dict[str, float]] = None,
     transposition_model: str = DEFAULT_TRANSPOSITION_MODEL,
     albedo: Optional[float] = None,
@@ -1285,9 +1262,6 @@ def calculate_multi_array_production_breakdown(
             tilt = arr.get("tilt", 35)
             azimuth = arr.get("azimuth", default_azimuth(location.latitude))
 
-            if verbose:
-                print(f"   Array {i + 1}: {n_mod}x {mod_name}, fixed Tilt={tilt}, Azimuth={azimuth}")
-
             breakdown = calculate_pv_production_breakdown(
                 weather_data=weather_data,
                 location=location,
@@ -1299,21 +1273,10 @@ def calculate_multi_array_production_breakdown(
                 degradation_rate=degradation_rate,
                 current_year=current_year,
                 start_year=start_year,
-                verbose=False,
                 loss_overrides=loss_overrides,
                 **arr_options,
             )
         elif tracking in ("single_axis", "dual_axis"):
-            if verbose:
-                if tracking == "single_axis":
-                    print(
-                        f"   Array {i + 1}: {n_mod}x {mod_name}, single-axis "
-                        f"axis_azimuth={arr.get('axis_azimuth', 180.0)}, "
-                        f"gcr={arr_gcr}, max_angle=±{arr.get('max_angle', 60.0)}"
-                    )
-                else:
-                    print(f"   Array {i + 1}: {n_mod}x {mod_name}, dual-axis")
-
             breakdown = calculate_pv_production_tracking_breakdown(
                 weather_data=weather_data,
                 location=location,
@@ -1331,7 +1294,6 @@ def calculate_multi_array_production_breakdown(
                 degradation_rate=degradation_rate,
                 current_year=current_year,
                 start_year=start_year,
-                verbose=False,
                 loss_overrides=loss_overrides,
                 # gcr goes in the tracker geometry block above, not here.
                 **{key: value for key, value in arr_options.items() if key != "gcr"},
@@ -1369,11 +1331,6 @@ def calculate_multi_array_production_breakdown(
 
     total = _sum_pv_breakdowns(breakdowns)
 
-    if verbose:
-        hours_per_step = get_hours_per_step(freq)
-        total_kwh = total.dc_after_losses.sum() * hours_per_step / 1000
-        print(f"   Total Multi-Array Production: {total_kwh:,.1f} kWh")
-
     return total
 
 
@@ -1385,7 +1342,6 @@ def calculate_multi_array_production(
     degradation_rate: float = 0.0,
     current_year: Optional[int] = None,
     start_year: Optional[int] = None,
-    verbose: bool = False,
     loss_overrides: Optional[Dict[str, float]] = None,
     transposition_model: str = DEFAULT_TRANSPOSITION_MODEL,
     albedo: Optional[float] = None,
@@ -1425,7 +1381,6 @@ def calculate_multi_array_production(
         start_year: Installation year, the first year of operation. At
             ``current_year == start_year`` the modules are new and have no age
             loss. ``None`` means no age loss.
-        verbose: Print summary
         loss_overrides: Per-component PVWatts loss overrides (percent)
         transposition_model: Default sky-diffusion model for arrays that do
             not set their own (one of ``TRANSPOSITION_MODELS``).
@@ -1455,7 +1410,6 @@ def calculate_multi_array_production(
         degradation_rate=degradation_rate,
         current_year=current_year,
         start_year=start_year,
-        verbose=verbose,
         loss_overrides=loss_overrides,
         **_model_option_kwargs(locals()),
     ).dc_after_losses

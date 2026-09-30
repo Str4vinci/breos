@@ -66,7 +66,6 @@ def fetch_tmy(args):
     tmy_data, metadata = fetch_tmy_weather_data(
         latitude=loc["latitude"],
         longitude=loc["longitude"],
-        freq="h",
         save_to_file=False,
     )
 

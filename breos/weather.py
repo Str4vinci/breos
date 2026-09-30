@@ -469,13 +469,15 @@ def fetch_tmy_weather_data(
     latitude: float,
     longitude: float,
     sample_year: Optional[int] = 2025,
-    freq: str = "h",
     timezone: Optional[str] = None,
     save_to_file: bool = False,
     use_horizon: bool = True,
 ) -> Tuple[pd.DataFrame, dict]:
     """
     Fetch Typical Meteorological Year (TMY) weather data from PVGIS.
+
+    The data are hourly. For 15-minute steps, pass them to
+    :func:`resample_to_15min`.
 
     Args:
         latitude: Latitude of the location
@@ -484,7 +486,6 @@ def fetch_tmy_weather_data(
             For a leap year the TMY is fetched on the preceding year's
             calendar, restamped, and given a 29 February copied from 28
             February (see :func:`fill_leap_day`).
-        freq: Frequency for output data ('h' for hourly, '15min' for 15-minute)
         timezone: Timezone string used to determine the location's whole-hour
             UTC offset (offset taken at Jan 1 of sample_year, i.e. standard
             time for northern-hemisphere locations). Auto-detected if None.
@@ -503,7 +504,6 @@ def fetch_tmy_weather_data(
     Raises:
         ValueError: If the selected timezone has a fractional-hour UTC offset.
     """
-    freq = normalise_frequency(freq)
     roll_utc_offset = None
     coerce_year = sample_year
     if sample_year is not None:
@@ -570,10 +570,6 @@ def fetch_tmy_weather_data(
         tmy_data.attrs = attrs
         tmy_data = fill_leap_day(tmy_data)
 
-    # Resample to 15-min if requested
-    if freq == "15min":
-        tmy_data = resample_tmy_to_15min(tmy_data, metadata)
-
     if save_to_file:
         # Encode metadata in filename: {location}_tmy_{year_min}_{year_max}_{db}.csv
         try:
@@ -587,7 +583,7 @@ def fetch_tmy_weather_data(
             db_slug = f"pvgis-{rad_db.lower()}" if rad_db != "unknown" else "pvgis"
             filename = f"weather/{loc_name}_tmy_{year_min}_{year_max}_{db_slug}.csv"
         except (KeyError, AttributeError):
-            filename = f"weather/tmy_data_{sample_year if sample_year else 'original'}_{freq}.csv"
+            filename = f"weather/tmy_data_{sample_year if sample_year else 'original'}_h.csv"
         os.makedirs(os.path.dirname(filename), exist_ok=True)
         save_weather_csv(tmy_data, filename)
         logger.info("Saved TMY data and provenance sidecar to %s", filename)
@@ -749,46 +745,9 @@ def fetch_weather_data(
     return hourly_dataframe
 
 
-_TMY_RESAMPLED_COLUMNS = ("ghi", "dni", "dhi", "temp_air", "relative_humidity", "wind_speed")
-
-
-def resample_tmy_to_15min(tmy_data: pd.DataFrame, metadata: dict) -> pd.DataFrame:
-    """
-    Resample PVGIS TMY data from hourly to 15-minute intervals.
-
-    A thin wrapper over :func:`resample_to_15min` with Makima interpolation
-    and clear-sky scaling at the PVGIS site, including its elevation. Only
-    irradiance, temperature, humidity, and wind columns are kept.
-
-    Args:
-        tmy_data: DataFrame with hourly TMY data
-        metadata: Metadata dict from PVGIS containing location info
-
-    Returns:
-        DataFrame with 15-minute intervals
-    """
-    loc = metadata["inputs"]["location"]
-    columns = [column for column in _TMY_RESAMPLED_COLUMNS if column in tmy_data.columns]
-    df_15 = resample_to_15min(
-        tmy_data[columns],
-        method="makima",
-        latitude=loc["latitude"],
-        longitude=loc["longitude"],
-        altitude=loc["elevation"],
-    )
-    if "relative_humidity" in df_15:
-        df_15["relative_humidity"] = df_15["relative_humidity"].clip(0, 100)
-
-    weather_provenance = df_15.attrs.get(WEATHER_METADATA_KEY)
-    if weather_provenance is not None:
-        weather_provenance["irradiance_resampling_method"] = "makima_clear_sky"
-    return df_15
-
-
 def resample_to_15min(
     df_hourly: pd.DataFrame,
     method: str = "makima",
-    non_negative_cols: Optional[List[str]] = None,
     latitude: Optional[float] = None,
     longitude: Optional[float] = None,
     preserve_irradiance_energy: bool = False,
@@ -815,7 +774,6 @@ def resample_to_15min(
     Args:
         df_hourly: DataFrame with hourly DatetimeIndex
         method: Interpolation method ('makima', 'linear', 'cubic')
-        non_negative_cols: Columns to clip at zero (auto-detected for solar/wind)
         latitude: Location latitude for clear-sky scaling (optional)
         longitude: Location longitude for clear-sky scaling (optional)
         preserve_irradiance_energy: Renormalize each source hour's four
@@ -924,19 +882,12 @@ def resample_to_15min(
                 interpolated[after_last] = y_original[-1]
             df_15min[col] = interpolated
 
-    # Auto-detect non-negative columns (solar/wind) — applies to columns not
-    # already handled by clear-sky scaling
-    if non_negative_cols is None:
-        non_negative_cols = []
-        for col in df_15min.columns:
-            if col in irrad_col_map and use_clearsky:
-                continue  # already clipped via clear-sky scaling
-            if any(x in col.lower() for x in ["irrad", "radiation", "tilted", "terrestrial", "wind", "speed"]):
-                non_negative_cols.append(col)
-
-    # Clip negative values
-    for col in non_negative_cols:
-        if col in df_15min.columns:
+    # Clip negative values in the solar and wind columns that clear-sky
+    # scaling has not already clipped
+    for col in df_15min.columns:
+        if col in irrad_col_map and use_clearsky:
+            continue
+        if any(x in col.lower() for x in ["irrad", "radiation", "tilted", "terrestrial", "wind", "speed"]):
             df_15min[col] = np.clip(df_15min[col], 0, None)
 
     if preserve_irradiance_energy and irrad_col_map:
@@ -1026,39 +977,6 @@ def _remap_weather_year(year_data: pd.DataFrame, source_year: int, target_year: 
     return remapped
 
 
-def select_random_year_and_replace_datetime(
-    csv_file_path: str,
-    target_year: int = 2025,
-    *,
-    rng: Optional[np.random.Generator] = None,
-) -> Tuple[pd.DataFrame, int]:
-    """
-    Load weather data, randomly select a complete year, and replace datetime with target year.
-
-    Args:
-        csv_file_path: Path to the CSV file
-        target_year: Year to replace the selected year's datetime with
-        rng: Generator that makes the choice. Pass a seeded one to reproduce
-            it; the default draws fresh entropy.
-
-    Returns:
-        Tuple of (DataFrame with target year dates, selected_year)
-
-    Raises:
-        ValueError: If the file has no complete year
-    """
-    by_year, metadata = _complete_weather_years(csv_file_path)
-    if not by_year:
-        raise ValueError(f"No complete years found in weather file: {csv_file_path}")
-
-    rng = np.random.default_rng() if rng is None else rng
-    selected_year = int(rng.choice(list(by_year)))
-
-    selected_year_data = _remap_weather_year(by_year[selected_year], selected_year, target_year)
-    selected_year_data.attrs[WEATHER_METADATA_KEY] = metadata
-    return selected_year_data, selected_year
-
-
 def preload_weather_by_year(
     csv_file_path: str,
     target_year: int = 2025,
@@ -1067,9 +985,8 @@ def preload_weather_by_year(
     Pre-load weather CSV once and split into per-year DataFrames.
 
     Each year's dates are remapped to *target_year* so the resulting
-    DataFrames can be used directly in simulation (same datetime grid as
-    ``select_random_year_and_replace_datetime`` would produce). Incomplete
-    years are skipped with a warning.
+    DataFrames can be used directly in simulation. Incomplete years are
+    skipped with a warning.
 
     Args:
         csv_file_path: Path to the multi-year weather CSV
@@ -1257,12 +1174,9 @@ def _read_temperature_file(path: str) -> pd.Series:
 
 
 def build_battery_temperature_series(
-    temp_config: Any = None,
-    index: Optional[pd.DatetimeIndex] = None,
+    temp_config: Any,
+    index: pd.DatetimeIndex,
     *,
-    start_time: Optional[pd.Timestamp] = None,
-    end_time: Optional[pd.Timestamp] = None,
-    freq: str = "h",
     default_temp: float = 25.0,
     weather_df: Optional[pd.DataFrame] = None,
     indoor_model: Optional[Dict[str, Any]] = None,
@@ -1284,12 +1198,7 @@ def build_battery_temperature_series(
     ``align_weather_year=True`` when ``weather_df`` is a representative year
     whose temperatures should be restamped onto the calendar year of ``index``.
     """
-    if index is None:
-        if start_time is None or end_time is None:
-            raise ValueError("Either index or start_time/end_time must be provided.")
-        index = pd.date_range(start=start_time, end=end_time, freq=freq)
-    else:
-        index = pd.DatetimeIndex(index)
+    index = pd.DatetimeIndex(index)
 
     weather_indexed = weather_df
     if weather_indexed is not None and not isinstance(weather_indexed.index, pd.DatetimeIndex):

@@ -19,10 +19,8 @@ from breos.weather import (
     preload_weather_by_year,
     read_epw_file,
     relabel_right_labeled_interval_means,
-    resample_tmy_to_15min,
     resample_to_15min,
     save_weather_csv,
-    select_random_year_and_replace_datetime,
     weather_file_metadata,
     weather_representative_time_offset,
 )
@@ -328,33 +326,6 @@ def test_preload_weather_by_year_warns_about_the_years_it_skips(tmp_path, caplog
     assert "midnight after the last day" in caplog.text
 
 
-def test_select_random_year_only_picks_complete_years(tmp_path):
-    path = _write_right_labelled_file_without_trailing_midnight(tmp_path)
-
-    picked = set()
-    for seed in range(20):
-        rng = np.random.default_rng(seed)
-        selected, selected_year = select_random_year_and_replace_datetime(str(path), target_year=2025, rng=rng)
-        assert len(selected) == 8760
-        picked.add(selected_year)
-
-    assert picked == {2022, 2023}
-
-
-def test_select_random_year_draws_from_the_given_generator(tmp_path):
-    path = _write_right_labelled_file_without_trailing_midnight(tmp_path)
-    np.random.seed(0)
-    global_state = np.random.get_state()[1].copy()
-
-    picks = [
-        select_random_year_and_replace_datetime(str(path), rng=np.random.default_rng(seed))[1] for seed in range(8)
-    ]
-
-    assert picks == [int(np.random.default_rng(seed).choice([2022, 2023])) for seed in range(8)]
-    assert set(picks) == {2022, 2023}
-    np.testing.assert_array_equal(np.random.get_state()[1], global_state)
-
-
 def test_battery_temperature_helper_applies_indoor_default():
     idx = pd.date_range("2025-01-01 00:00", periods=2, freq="h", tz="UTC")
     weather = pd.DataFrame({"temp_air": [10.0, 20.0]}, index=idx)
@@ -491,12 +462,10 @@ def _three_day_hourly_weather(unit: str) -> pd.DataFrame:
     )
 
 
-_TMY_METADATA = {"inputs": {"location": {"latitude": 41.1579, "longitude": -8.6291, "elevation": 100.0}}}
 _RESAMPLERS = {
     "clear_sky_makima": lambda df: resample_to_15min(df, latitude=41.1579, longitude=-8.6291),
     "clear_sky_linear": lambda df: resample_to_15min(df, method="linear", latitude=41.1579, longitude=-8.6291),
     "direct_makima": lambda df: resample_to_15min(df),
-    "tmy": lambda df: resample_tmy_to_15min(df, _TMY_METADATA),
 }
 
 
@@ -505,7 +474,7 @@ _RESAMPLERS = {
 def test_resamplers_do_not_depend_on_the_index_resolution(resampler, unit):
     """pandas 3 parses timestamps as microseconds, pandas 2 as nanoseconds.
 
-    Both resamplers used to divide the raw integers by 10**9, which jittered
+    The resamplers used to divide the raw integers by 10**9, which jittered
     the microsecond abscissa and made second-resolution input fail outright.
     """
     reference = _RESAMPLERS[resampler](_three_day_hourly_weather("ns"))
@@ -585,20 +554,7 @@ def test_resample_interpolates_clearness_index_at_interval_midpoints():
     np.testing.assert_allclose(resampled["ghi"].to_numpy()[inner], expected[inner], atol=1e-9)
 
 
-def test_tmy_resampling_keeps_the_weather_columns_and_bounds_humidity():
-    weather = _three_day_hourly_weather("ns")
-    weather["relative_humidity"] = np.linspace(40.0, 140.0, len(weather))
-    weather["pressure"] = 101325.0
-    weather.attrs["breos_weather_metadata"] = {"source": "PVGIS_TMY", "radiation_time_basis": "instant"}
-
-    resampled = resample_tmy_to_15min(weather, _TMY_METADATA)
-
-    assert resampled.columns.tolist() == ["ghi", "dni", "dhi", "temp_air", "relative_humidity", "wind_speed"]
-    assert resampled["relative_humidity"].max() == 100.0
-    assert resampled.attrs["breos_weather_metadata"]["irradiance_resampling_method"] == "makima_clear_sky"
-
-
-def test_fetch_tmy_weather_accepts_1h_spelling_and_uses_horizon_by_default(monkeypatch):
+def test_fetch_tmy_weather_uses_horizon_by_default(monkeypatch):
     tmy = pd.DataFrame({"ghi": [0.0]}, index=pd.date_range("2020-01-01 00:00", periods=1, freq="h"))
     captured = {}
 
@@ -608,7 +564,7 @@ def test_fetch_tmy_weather_accepts_1h_spelling_and_uses_horizon_by_default(monke
 
     monkeypatch.setattr("breos.weather.pvlib.iotools.get_pvgis_tmy", fake_get_pvgis_tmy)
 
-    weather, _metadata = fetch_tmy_weather_data(41.0, -8.0, sample_year=None, freq="1h")
+    weather, _metadata = fetch_tmy_weather_data(41.0, -8.0, sample_year=None)
 
     assert len(weather) == 1
     assert captured["usehorizon"] is True
@@ -736,26 +692,6 @@ def test_resample_to_15min_preserves_weather_metadata():
     assert metadata is not weather.attrs["breos_weather_metadata"]
 
 
-def test_resample_tmy_to_15min_preserves_weather_metadata():
-    idx = pd.date_range("2025-01-01 00:00", periods=4, freq="h", tz="UTC")
-    weather = pd.DataFrame({"temp_air": [0.0, 4.0, 8.0, 12.0]}, index=idx)
-    weather.attrs["breos_weather_metadata"] = {
-        "source": "test",
-        "horizon": {"status": "applied", "provider": "test", "profile": "test"},
-    }
-    api_metadata = {"inputs": {"location": {"latitude": 41.0, "longitude": -8.0, "elevation": 0.0}}}
-
-    resampled = resample_tmy_to_15min(weather, api_metadata)
-
-    metadata = resampled.attrs["breos_weather_metadata"]
-    assert metadata["source"] == "test"
-    assert metadata["horizon"] == weather.attrs["breos_weather_metadata"]["horizon"]
-    assert metadata["input_resolution"] == "h"
-    assert metadata["output_resolution"] == "15min"
-    assert metadata["irradiance_resampling_method"] == "makima_clear_sky"
-    assert metadata is not weather.attrs["breos_weather_metadata"]
-
-
 def test_fetch_tmy_keeps_utc_instants_for_non_utc_location(monkeypatch):
     # PVGIS serves UTC-ordered rows; synthetic GHI peaks at 11:00 UTC
     # (solar noon near Berlin's longitude). The fetch must roll the data
@@ -877,34 +813,6 @@ def test_read_epw_rejects_unsupported_frequency_before_reading(monkeypatch, freq
 
     with pytest.raises(ValueError, match="Unsupported frequency"):
         read_epw_file("dummy.epw", freq=freq)
-
-
-@pytest.mark.parametrize("freq", ["30min", "15T", "H"])
-def test_fetch_tmy_weather_rejects_unsupported_frequency_before_fetching(monkeypatch, freq):
-    def fail_get_pvgis_tmy(*_args, **_kwargs):
-        raise AssertionError("PVGIS must not be called for an unsupported frequency")
-
-    monkeypatch.setattr("breos.weather.pvlib.iotools.get_pvgis_tmy", fail_get_pvgis_tmy)
-
-    with pytest.raises(ValueError, match="Unsupported frequency"):
-        fetch_tmy_weather_data(41.0, -8.0, sample_year=None, freq=freq)
-
-
-def test_select_random_year_accepts_15min_leap_year_after_dropping_feb_29(tmp_path):
-    weather_path, source = _write_leap_year_15min_weather(tmp_path)
-
-    selected, selected_year = select_random_year_and_replace_datetime(str(weather_path), target_year=2025)
-
-    dates = pd.to_datetime(selected["date"])
-    source_march_1 = source.loc[source["date"] == pd.Timestamp("2024-03-01 00:00"), "temp_air"].item()
-    mapped_march_1 = selected.loc[dates == pd.Timestamp("2025-03-01 00:00"), "temp_air"].item()
-
-    assert selected_year == 2024
-    assert len(selected) == 35040
-    assert not ((dates.dt.month == 2) & (dates.dt.day == 29)).any()
-    assert dates.iloc[0] == pd.Timestamp("2025-01-01 00:00")
-    assert dates.iloc[-1] == pd.Timestamp("2025-12-31 23:45")
-    assert mapped_march_1 == source_march_1
 
 
 def test_preload_weather_by_year_accepts_15min_leap_year_after_dropping_feb_29(tmp_path):

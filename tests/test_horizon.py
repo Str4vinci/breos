@@ -199,21 +199,15 @@ def _interval_weather(radiation: dict) -> pd.DataFrame:
     return weather
 
 
-@pytest.mark.parametrize(
-    ("radiation", "offset"),
-    [
-        ({"radiation_time_basis": "interval_mean", "timestamp_label_basis": "left"}, pd.Timedelta(minutes=30)),
-        ({"radiation_time_basis": "interval_mean", "timestamp_label_basis": "right"}, pd.Timedelta(minutes=-30)),
-        ({"radiation_time_basis": "instant", "irradiance_time_offset_hours": 0.1714}, pd.Timedelta(hours=0.1714)),
-    ],
-)
-def test_apply_horizon_reads_solar_position_timing_from_weather_metadata(radiation, offset):
-    weather = _interval_weather(radiation)
+def test_apply_horizon_reads_solar_position_timing_from_weather_metadata():
+    # The offset table itself is tested in test_weather.py; one case shows
+    # shading reads it.
+    weather = _interval_weather({"radiation_time_basis": "instant", "irradiance_time_offset_hours": 0.1714})
     location = _FakeLocation(_solar_position(weather.index))
 
     shaded = apply_terrain_horizon_profile(weather, location, [[0, 10], [180, 0]], freq="h", solar_position="weather")
 
-    assert location.requested_times.equals(weather.index + offset)
+    assert location.requested_times.equals(weather.index + pd.Timedelta(hours=0.1714))
     assert shaded.attrs["breos_weather_metadata"]["horizon"]["profile"]["solar_position"] == "weather"
 
 

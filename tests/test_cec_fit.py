@@ -83,7 +83,6 @@ class TestGammaMatch:
             _KNOWN["alpha_sc"],
             _KNOWN["beta_voc"],
             np.array([_KNOWN["Isc"], 1e-10, 0.3, 200.0, 2.0]),
-            25.0,
         )
         gammas = [_modeled_gamma(five0, adjust, _KNOWN["alpha_sc"]) for adjust in (-10.0, 0.0, 10.0, 20.0)]
         assert all(np.diff(gammas) < 0)

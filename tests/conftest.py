@@ -183,7 +183,6 @@ def sample_load():
         annual_consumption_kwh=3000,
         start_date="2023-01-01",
         freq="h",
-        num_years=1,
         timezone="UTC",
     )
 
