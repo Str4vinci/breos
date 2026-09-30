@@ -204,7 +204,11 @@ def _edit(rows, label, column, value):
         (lambda rows: _edit(rows, "2/Jan/2026 10:00", "time", "10:10"), r"has the interval end '10:10'"),
         (lambda rows: rows[~rows["date"].eq("31/Dec/2026")], r"2026-01-01 to 2026-12-30 \(364 dates\).*is 365"),
         (lambda rows: _edit(rows, "31/Dec/2026 24:00", "date", "1/Jan/2027"), "366 dates"),
-        (lambda rows: _edit(rows, "29/Mar/2026 02:00", "time", "01:00"), "not a Europe/Lisbon legal time"),
+        (
+            lambda rows: _edit(rows, "29/Mar/2026 02:00", "time", "01:00"),
+            r"data row \d+ has the interval end '01:00' on 2026-03-29, which is not a Europe/Lisbon legal time: "
+            r"the clock moves forward to 02:00 that day, so the interval that ends at the change is labelled 02:00",
+        ),
         (lambda rows: _edit(rows, "25/Oct/2026 01:15a", "time", "01:15"), "repeats the Europe/Lisbon legal-time"),
     ],
 )

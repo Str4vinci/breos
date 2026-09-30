@@ -14,6 +14,7 @@ from breos.load_profiles import (
     PROFILES,
     _btn_day_type,
     _easter_sunday,
+    _parse_profile_timestamps,
     _portugal_national_holidays,
     _resample_load_to_15min,
     load_profile,
@@ -627,6 +628,26 @@ def _one_offset_row(freq, periods):
         ),
         # One offset-stamped row among naive ones.
         ("h", lambda: _one_offset_row("h", 8760), r"has 1 timestamps with a UTC offset.*data row 4000"),
+        # Hour-only and compact ISO forms, which pandas also reads as offset-aware.
+        (
+            "h",
+            lambda: pd.date_range("2025-01-01", periods=8760, freq="h").strftime("%Y-%m-%dT%H+01:00"),
+            r"8760 timestamps with a UTC offset, one fixed offset \(\+01:00;",
+        ),
+        (
+            "15min",
+            lambda: pd.date_range("2025-01-01", periods=35040, freq="15min").strftime("%Y%m%dT%H%M+0100"),
+            r"35040 timestamps with a UTC offset, one fixed offset \(\+0100;",
+        ),
+        # An ISO range label: pandas reads its end time as an offset.
+        (
+            "h",
+            lambda: [
+                f"{t:%Y-%m-%d %H:%M}-{t + pd.Timedelta(hours=1):%H:%M}"
+                for t in pd.date_range("2025-01-01", periods=8760, freq="h")
+            ],
+            r"8760 timestamps with a UTC offset, 24 different offsets",
+        ),
     ],
 )
 def test_dated_eredes_file_with_utc_offsets_is_refused(tmp_path, freq, stamps, message):
@@ -660,6 +681,52 @@ def test_dated_eredes_file_with_naive_civil_timestamps_loads(tmp_path, freq, sta
     # 1 July 13:00 civil time keeps the value of the 1 July row.
     scale = civil.loc["2025-01-01 00:00"] / 1000.0
     assert civil.loc["2025-07-01 13:00"] == pytest.approx((1000.0 + 181) * scale)
+
+
+@pytest.mark.parametrize(
+    "stamp",
+    [
+        "01/01/2025 00:00",
+        "2025-01-01 00:00:00",
+        "2025-01-01T00:00",
+        "2025-01-01T00",
+        "20250101T0000",
+        "2025-01-01",
+        " 2025-01-01 00:00 ",
+        # Range labels are not offsets.
+        "01/01/2025 00:00-01:00",
+        "00:00-00:15",
+    ],
+)
+def test_naive_and_range_label_stamps_are_not_read_as_offsets(tmp_path, stamp):
+    _parse_profile_timestamps(pd.Series([stamp, stamp]), tmp_path / "f.csv", naive_timestamps=True)
+
+
+@pytest.mark.parametrize(
+    ("freq", "label"),
+    [
+        ("h", lambda t, step: f"{t:%d/%m/%Y %H:%M}-{t + step:%H:%M}"),
+        ("15min", lambda t, step: f"{t:%H:%M}-{t + step:%H:%M}"),
+    ],
+)
+def test_eredes_file_with_range_labels_stays_positional(tmp_path, freq, label):
+    # Day-first and clock-only range labels do not parse as timestamps, so
+    # the file is undated and its rows are placed by position, not aligned.
+    periods = 35040 if freq == "15min" else 8760
+    step = pd.Timedelta(minutes=15 if freq == "15min" else 60)
+    name = "EREDES_2025_BTN_1000kwh_15min.csv" if freq == "15min" else "EREDES_2025_BTN_1000kwh_hourly.csv"
+    _write_stamped_eredes(
+        tmp_path / name, [label(t, step) for t in pd.date_range("2025-01-01", periods=periods, freq=freq)]
+    )
+
+    load = load_profile(
+        "eredes_btn_c", 1000, start_date="2026-01-01", freq=freq, rlp_directory=str(tmp_path), timezone="UTC"
+    )
+
+    values = load.iloc[:, 0].to_numpy()
+    source = 1000.0 + np.arange(periods) // (96 if freq == "15min" else 24)
+    assert len(values) == periods
+    np.testing.assert_allclose(values / values[0], source / source[0], rtol=1e-12)
 
 
 @pytest.mark.parametrize("key", ["custom", "ree_2.0td", "demandlib_h0"])

@@ -730,8 +730,11 @@ def _validate_profile_rows(
     return stamps.iloc[0]
 
 
-# A trailing UTC offset after a clock time: Z, +01, +0100 or +01:00.
-_UTC_OFFSET = re.compile(r"\d{2}:\d{2}(?::\d{2}(?:[.,]\d+)?)?\s*(?P<offset>[Zz]|[+-]\d{2}(?::?\d{2})?)$")
+# An ISO 8601 date and clock time with a trailing UTC offset: Z, +01, +0100
+# or +01:00. The match counts only on a row that pandas also parses as ISO
+# 8601, so it flags exactly the rows read as offset-aware, and range labels
+# such as "01/01/2026 00:00-01:00" or "00:00-00:15" are not offsets.
+_UTC_OFFSET = re.compile(r"^\d{4}[-/\d]*[Tt ]\s*[\d:.,]+?\s*(?P<offset>[Zz]|[+-][\d:]+)$")
 
 
 def _parse_profile_timestamps(
@@ -743,12 +746,15 @@ def _parse_profile_timestamps(
     column is then a label, not a time column. Raises when some rows parse and
     others do not, because a damaged time column cannot be checked for gaps.
 
-    With ``naive_timestamps``, a stamp with a UTC offset raises before
-    parsing. The parse below reads every stamp as a UTC instant, which would
-    move an offset-stamped row off its civil date and hour.
+    With ``naive_timestamps``, a stamp with a UTC offset raises. The parse
+    reads every stamp as a UTC instant, which would move an offset-stamped
+    row off its civil date and hour.
     """
+    # utc=True compares offset-aware stamps as instants, so a file whose
+    # offsets change at DST is evenly spaced; naive stamps are unchanged.
+    iso = pd.to_datetime(timestamps, errors="coerce", utc=True, format="ISO8601")
     if naive_timestamps:
-        offsets = timestamps.astype(str).str.strip().str.extract(_UTC_OFFSET)["offset"]
+        offsets = timestamps.astype(str).str.strip().str.extract(_UTC_OFFSET)["offset"].where(iso.notna())
         stamped = np.flatnonzero(offsets.notna().to_numpy())
         if stamped.size:
             row = int(stamped[0])
@@ -761,13 +767,8 @@ def _parse_profile_timestamps(
                 "row keeps its civil date. Remove the offsets, or convert the E-REDES publication with "
                 "tools/convert_eredes_profiles.py."
             )
-    best = None
-    for kwargs in ({"format": "ISO8601"}, {"format": "%d/%m/%Y %H:%M"}):
-        # utc=True compares offset-aware stamps as instants, so a file whose
-        # offsets change at DST is evenly spaced; naive stamps are unchanged.
-        stamps = pd.to_datetime(timestamps, errors="coerce", utc=True, **kwargs)
-        if best is None or stamps.notna().sum() > best.notna().sum():
-            best = stamps
+    day_first = pd.to_datetime(timestamps, errors="coerce", utc=True, format="%d/%m/%Y %H:%M")
+    best = day_first if day_first.notna().sum() > iso.notna().sum() else iso
     if not best.notna().any():
         return None
     malformed = np.flatnonzero(best.isna().to_numpy())

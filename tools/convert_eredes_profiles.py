@@ -193,6 +193,17 @@ def read_publication(source: str | Path) -> tuple[int, pd.DataFrame]:
     try:
         local_ends = pd.DatetimeIndex(ends).tz_localize(SOURCE_TIMEZONE, ambiguous=~marked, nonexistent="raise")
     except Exception as error:  # the time zone library's own error types differ
+        skipped = pd.DatetimeIndex(ends).tz_localize(SOURCE_TIMEZONE, ambiguous=~marked, nonexistent="NaT").isna()
+        if skipped.any():
+            row = int(np.flatnonzero(skipped)[0])
+            end = ends.iloc[row]
+            change = pd.DatetimeIndex([end]).tz_localize(SOURCE_TIMEZONE, nonexistent="shift_forward")[0]
+            raise _fail(
+                source,
+                f"data row {row} has the interval end {data[2].iloc[row]!r} on {end.date()}, which is not a "
+                f"{SOURCE_TIMEZONE} legal time: the clock moves forward to {change:%H:%M} that day, so the "
+                f"interval that ends at the change is labelled {change:%H:%M}",
+            ) from error
         raise _fail(source, f"has an interval end that is not a {SOURCE_TIMEZONE} legal time: {error}") from error
     starts = local_ends - STEP
     grid = pd.date_range(
