@@ -41,7 +41,7 @@ def _run(synthetic_weather, tz="UTC"):
         mock.patch("breos.app.load_weather", lambda **_kwargs: None),
     ):
         app = App(_BERLIN)
-        artifacts = run_app_simulation(app._cfg, app._resolved, app._runtime_dependencies())
+        artifacts = run_app_simulation(app._resolved, app._runtime_dependencies())
         app.simulate()
     return app.result(), artifacts.first_year_results_df
 

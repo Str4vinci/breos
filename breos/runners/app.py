@@ -8,18 +8,18 @@ from typing import Any, cast
 import numpy as np
 import pandas as pd
 
-from breos.app_config import DEFAULTS, ResolvedAppConfig, SimulationPeriod, default_module_key
-from breos.app_inputs import AppRuntimeDependencies, prepare_simulation_inputs, prepare_simulation_inputs_cached
+from breos.app_config import ResolvedAppConfig, SimulationPeriod
+from breos.app_inputs import (
+    AppRuntimeDependencies,
+    prepare_simulation_inputs,
+    prepare_simulation_inputs_cached,
+    unknown_source_metadata,
+)
 from breos.battery import LEDGER_SCHEMA_VERSION
 from breos.degradation.results import DegradationEngineName, build_degradation_summary_from_state
 from breos.dispatch_instructions import DispatchInstructions
 from breos.economics import find_payback_year
-from breos.execution import (
-    DEFAULT_EXECUTION_BACKEND,
-    aggregate_jit_cache_states,
-    backend_provenance,
-    is_pv_only_dispatch,
-)
+from breos.execution import aggregate_jit_cache_states, backend_provenance, config_has_battery
 from breos.load_profiles import LOAD_PROFILE_METADATA_KEY
 from breos.projection import (
     ProjectionRun,
@@ -135,36 +135,31 @@ def _waterfall_stage(key: str, label: str, energy_kwh: float, previous_kwh: floa
 
 
 def _bifacial_summary(
-    cfg: dict[str, Any],
-    resolved: ResolvedAppConfig,
-    front_effective_dc_kwh: float,
-    rear_gain_dc_kwh: float,
+    resolved: ResolvedAppConfig, front_effective_dc_kwh: float, rear_gain_dc_kwh: float
 ) -> dict[str, Any]:
     """Build JSON-safe bifacial configuration and year-1 gain provenance."""
-    default_model = cfg.get("bifacial_model", DEFAULTS["bifacial_model"])
-    default_gcr = cfg.get("gcr", DEFAULTS["gcr"])
-    default_height = cfg.get("pvrow_height")
-    default_pitch = cfg.get("pvrow_pitch")
-    resolved_arrays = getattr(resolved, "pv_arrays", None)
-    if resolved_arrays:
-        arrays = resolved_arrays
-    else:
-        arrays = [
-            {
-                "modules": cfg["n_modules"],
-                "module": cfg.get("pv_module") or default_module_key(),
-                "bifacial_model": default_model,
-                "gcr": default_gcr,
-                "pvrow_height": default_height,
-                "pvrow_pitch": default_pitch,
-            }
-        ]
+    cfg = resolved.cfg
+    default_model = cfg["bifacial_model"]
+    default_gcr = cfg["gcr"]
+    default_height = cfg["pvrow_height"]
+    default_pitch = cfg["pvrow_pitch"]
+    # Without pv_arrays, the top-level settings describe the one array.
+    arrays = resolved.pv_arrays or [
+        {
+            "modules": cfg["n_modules"],
+            "module": resolved.pv_module_key,
+            "bifacial_model": default_model,
+            "gcr": default_gcr,
+            "pvrow_height": default_height,
+            "pvrow_pitch": default_pitch,
+        }
+    ]
 
     rows: list[dict[str, Any]] = []
     models: set[str] = set()
     for index, array in enumerate(arrays):
         model = str(array.get("bifacial_model", default_model)).strip().lower()
-        module_key = array.get("module") or cfg.get("pv_module") or default_module_key()
+        module_key = array["module"]
         module = get_module(module_key)
         models.add(model)
         row: dict[str, Any] = {
@@ -197,12 +192,10 @@ def _bifacial_summary(
 
 
 def _build_pv_loss_waterfall(
-    pv_breakdown: PVProductionBreakdown,
-    first_year_results_df: pd.DataFrame,
-    cfg: dict[str, Any],
-    resolved: ResolvedAppConfig,
+    pv_breakdown: PVProductionBreakdown, first_year_results_df: pd.DataFrame, resolved: ResolvedAppConfig
 ) -> dict[str, Any]:
     """Build a JSON-serializable year-1 PV loss waterfall, or the window's for a [period] run."""
+    cfg = resolved.cfg
     freq = cfg["resolution"]
     horizontal_dc = _series_energy_kwh(pv_breakdown.horizontal_reference_dc, freq)
     poa_dc = _series_energy_kwh(pv_breakdown.poa_global_dc, freq)
@@ -234,18 +227,11 @@ def _build_pv_loss_waterfall(
     pvwatts_components = {
         name: _rounded(_series_energy_kwh(loss, freq)) for name, loss in pv_breakdown.pvwatts_component_losses.items()
     }
-    empty_series = pd.Series(dtype=float)
     dispatch: dict[str, Any] = {
         "curtailment_kwh": _rounded(curtailment),
-        "battery_charge_loss_kwh": _rounded(
-            _series_energy_kwh(first_year_results_df.get("Battery_Charge_Loss", empty_series), freq)
-        ),
-        "battery_discharge_loss_kwh": _rounded(
-            _series_energy_kwh(first_year_results_df.get("Battery_Discharge_Loss", empty_series), freq)
-        ),
-        "battery_standby_loss_kwh": _rounded(
-            _series_energy_kwh(first_year_results_df.get("Standby_Loss", empty_series), freq)
-        ),
+        "battery_charge_loss_kwh": _rounded(e("Battery_Charge_Loss")),
+        "battery_discharge_loss_kwh": _rounded(e("Battery_Discharge_Loss")),
+        "battery_standby_loss_kwh": _rounded(e("Standby_Loss")),
     }
     dispatch["battery_round_trip_loss_kwh"] = _rounded(
         dispatch["battery_charge_loss_kwh"] + dispatch["battery_discharge_loss_kwh"]
@@ -288,13 +274,13 @@ def _build_pv_loss_waterfall(
     )
 
     return {
-        "basis": "year_1" if getattr(resolved, "period", None) is None else "period",
+        "basis": "year_1" if resolved.period is None else "period",
         "unit": "kWh",
-        "flow_unit": "kWh per year" if getattr(resolved, "period", None) is None else "kWh over the period",
+        "flow_unit": "kWh per year" if resolved.period is None else "kWh over the period",
         "state_unit": "kWh at period boundary",
         "ledger_schema_version": LEDGER_SCHEMA_VERSION,
         "stages": stages,
-        "bifacial": _bifacial_summary(cfg, resolved, front_effective_dc, rear_gain_dc),
+        "bifacial": _bifacial_summary(resolved, front_effective_dc, rear_gain_dc),
         "pvwatts": {
             "components_pct": {name: float(value) for name, value in pv_breakdown.pvwatts_components_pct.items()},
             "components_kwh": pvwatts_components,
@@ -340,7 +326,6 @@ def _build_pv_loss_waterfall(
 
 
 def run_app_simulation(
-    cfg: dict[str, Any],
     resolved: ResolvedAppConfig,
     deps: AppRuntimeDependencies,
     *,
@@ -354,29 +339,21 @@ def run_app_simulation(
     index. The run then reports no smart-charging provenance, since the table
     did not produce them. App never passes them.
     """
+    cfg = resolved.cfg
     # Resolve the backend before anything is fetched or computed. Input
     # preparation can hit the network for weather, so a missing optional
     # dependency should be reported now rather than after a download.
-    # resolve_app_config always supplies this; the default covers direct
-    # callers that build a cfg dict themselves, and it is the reference
-    # implementation rather than the fast one.
-    execution_backend = cfg.get("execution_backend", DEFAULT_EXECUTION_BACKEND)
-    battery_kwh = cfg["battery_kwh"]
-    battery_wh = battery_kwh * 1000
+    execution_backend = cfg["execution_backend"]
     # Asked the way the dispatch asks it, so the run and its provenance agree
     # on what counts as PV-only.
-    has_battery = not is_pv_only_dispatch(
-        battery_wh,
-        cfg.get("battery_max_soc", DEFAULTS["battery_max_soc"]),
-        cfg.get("battery_min_soc", DEFAULTS["battery_min_soc"]),
-    )
+    has_battery = config_has_battery(cfg)
     execution = backend_provenance(execution_backend, pv_only=not has_battery)
 
     inputs = prepare_simulation_inputs_cached(cfg, resolved, deps, prepare=prepare_simulation_inputs)
 
     # A [period] window runs once. Replayed as project years, it would carry
     # degradation over copies of one window as if each were a year.
-    period = getattr(resolved, "period", None)
+    period = resolved.period
     projection_years = cfg["projection_years"] if period is None else 1
     degradation_rate = cfg["pv_degradation_rate"]
 
@@ -425,8 +402,8 @@ def run_app_simulation(
     degradation_state = projection.carry.degradation_state
     total_replacements = projection.total_replacements
     jit_cache_states = projection.jit_cache_states
-    degradation_engine = str(cfg.get("degradation_engine", "native")).strip().lower()
-    blast_model = cfg.get("blast_model")
+    degradation_engine = cfg["degradation_engine"]
+    blast_model = cfg["blast_model"]
 
     economics = _economics_fields(value_projection(cfg, resolved, projection), period)
     yearly_df = economics["yearly_df"]
@@ -470,24 +447,10 @@ def run_app_simulation(
         first_year_results_df=first_year_results_df,
         current_soh=current_soh,
         total_replacements=total_replacements,
-        pv_loss_waterfall=_build_pv_loss_waterfall(inputs.pv_breakdown, first_year_results_df, cfg, resolved),
-        weather_metadata=dict(
-            inputs.weather.attrs.get(
-                WEATHER_METADATA_KEY,
-                {
-                    "source": "runtime_dependency_or_unknown",
-                    "note": "The injected weather provider did not expose source metadata.",
-                },
-            )
-        ),
+        pv_loss_waterfall=_build_pv_loss_waterfall(inputs.pv_breakdown, first_year_results_df, resolved),
+        weather_metadata=dict(inputs.weather.attrs.get(WEATHER_METADATA_KEY, unknown_source_metadata("weather"))),
         load_profile_metadata=dict(
-            inputs.load_data.attrs.get(
-                LOAD_PROFILE_METADATA_KEY,
-                {
-                    "source": "runtime_dependency_or_unknown",
-                    "note": "The injected load-profile provider did not expose source metadata.",
-                },
-            )
+            inputs.load_data.attrs.get(LOAD_PROFILE_METADATA_KEY, unknown_source_metadata("load-profile"))
         ),
         degradation_summary=degradation_summary,
         execution=execution,
@@ -506,36 +469,36 @@ _TARIFF_MONEY_COLUMNS = ("Import_Cost", "Export_Revenue", "Baseline_Import_Cost"
 
 
 def revalue_app_simulation(
-    cfg: dict[str, Any],
     resolved: ResolvedAppConfig,
     artifacts: SimulationArtifacts,
     deps: AppRuntimeDependencies,
 ) -> tuple[SimulationArtifacts, str]:
-    """Value a finished run at ``cfg``'s prices; return the artifacts and ``"repriced"`` or ``"resimulated"``.
+    """Value a finished run at ``resolved``'s prices; return the artifacts and ``"repriced"`` or ``"resimulated"``.
 
-    ``cfg`` must differ from the run's configuration in economics keys only
+    ``resolved`` must differ from the run's configuration in economics keys only
     (App.revalue checks). The stored projection is re-priced when the new
     prices cannot change the dispatch: flat prices, a tariff removed, or a
     tariff on the same schedule whose smart-charging instructions are
     unchanged. A tariff added, a different schedule or calendar, or
     instructions that change re-simulate the run.
     """
+    cfg = resolved.cfg
     run, old_tariff = artifacts.projection, artifacts.resolved_tariff
     if run is None:
         raise ValueError("these artifacts carry no projection to re-price")
     if resolved.tariff is not None and old_tariff is None:
-        return run_app_simulation(cfg, resolved, deps), "resimulated"
+        return run_app_simulation(resolved, deps), "resimulated"
 
     tariff = resolved.tariff.resolve(old_tariff.index, resolved.timezone) if resolved.tariff and old_tariff else None
     instructions = None
     yearly = run.yearly_df
     if tariff is not None and old_tariff is not None:
         if tariff.schedule_hash != old_tariff.schedule_hash:
-            return run_app_simulation(cfg, resolved, deps), "resimulated"
+            return run_app_simulation(resolved, deps), "resimulated"
         if artifacts.instructions is not None and resolved.smart_charging is not None:
             instructions = resolve_instructions(resolved.smart_charging, tariff)
             if instructions is None or instructions.instruction_hash() != artifacts.instructions.instruction_hash():
-                return run_app_simulation(cfg, resolved, deps), "resimulated"
+                return run_app_simulation(resolved, deps), "resimulated"
         if tariff.price_hash != old_tariff.price_hash:
             yearly = reprice_tariff_year_rows(yearly, cast(pd.DataFrame, run.period_energy), tariff)
     elif old_tariff is not None:
@@ -548,7 +511,7 @@ def revalue_app_simulation(
         smart_charging = {**smart_charging, **smart_charging_provenance(resolved.smart_charging, instructions, tariff)}
     revalued = replace(
         artifacts,
-        **_economics_fields(value, getattr(resolved, "period", None)),
+        **_economics_fields(value, resolved.period),
         tariff=tariff_provenance(tariff, calendar_year=int(cfg["start_date"][:4])) if tariff is not None else None,
         smart_charging=smart_charging,
         resolved_tariff=tariff,

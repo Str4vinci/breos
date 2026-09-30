@@ -134,11 +134,11 @@ def yearly_to_dicts(yearly_df: pd.DataFrame, period: dict[str, Any] | None = Non
 
 
 def _provenance(
-    cfg: dict[str, Any],
     resolved: ResolvedAppConfig,
     artifacts: SimulationArtifacts,
     input_repairs: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
+    cfg = resolved.cfg
     normalized_cfg = {
         **cfg,
         "location": {
@@ -150,7 +150,7 @@ def _provenance(
         "tilt": resolved.tilt,
         "azimuth": resolved.azimuth,
         "axis_azimuth": resolved.axis_azimuth,
-        "pv_module": cfg.get("pv_module") or resolved.pv_module_key,
+        "pv_module": cfg["pv_module"] or resolved.pv_module_key,
     }
     # Round-trip through JSON to guarantee only public, serializable scalar types.
     normalized_cfg = json.loads(json.dumps(normalized_cfg, default=str))
@@ -238,7 +238,6 @@ def smart_charging_to_dict(artifacts: SimulationArtifacts) -> dict[str, Any]:
 
 
 def build_result(
-    cfg: dict[str, Any],
     resolved: ResolvedAppConfig,
     artifacts: SimulationArtifacts,
     *,
@@ -249,6 +248,7 @@ def build_result(
     ``input_repairs`` holds strict-JSON repair reports (see
     :func:`breos.repair.input_repair_records`) for ``provenance``.
     """
+    cfg = resolved.cfg
     year1 = artifacts.yearly_df.iloc[0]
     yr1_pv = year1["PV_Production_kWh"]
     legacy_yr1_pv = year1["Legacy_PV_Production_kWh"]
@@ -299,7 +299,7 @@ def build_result(
         # Copied, so editing a result cannot reach the stored run that
         # App.revalue prices again.
         "pv_loss_waterfall": deepcopy(artifacts.pv_loss_waterfall),
-        "provenance": _provenance(cfg, resolved, artifacts, input_repairs),
+        "provenance": _provenance(resolved, artifacts, input_repairs),
         "degradation": deepcopy(artifacts.degradation_summary),
     }
     # One copy, as provenance and the top level have always shared it.

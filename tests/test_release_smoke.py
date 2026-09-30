@@ -1,5 +1,8 @@
 """Release-smoke coverage for documented public workflows."""
 
+import hashlib
+import json
+import shutil
 import tomllib
 from pathlib import Path
 
@@ -7,7 +10,7 @@ import pandas as pd
 import pytest
 
 import breos
-from breos.montecarlo import MonteCarloSettings, run_montecarlo
+from breos import cli
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -34,27 +37,48 @@ def test_readme_quickstart_smoke(_patch_weather):
 
 
 def test_montecarlo_example_config_smoke(tmp_path, write_multiyear_weather):
-    with (REPO_ROOT / "configs" / "examples" / "montecarlo.toml").open("rb") as f:
-        config = tomllib.load(f)
+    """The documented ``breos montecarlo --config`` run reads the example's [montecarlo] table.
 
+    Flags replace the file's run count and horizon, and the weather file its
+    missing one; every other setting must come from the example.
+    """
+    config_path = tmp_path / "montecarlo.toml"
+    shutil.copy(REPO_ROOT / "configs" / "examples" / "montecarlo.toml", config_path)
+    with config_path.open("rb") as f:
+        section = tomllib.load(f)["montecarlo"]
     weather_file = write_multiyear_weather(tmp_path / "historical.csv", years=(2021,))
-    config["projection_years"] = 1
-    config["montecarlo"]["weather_file"] = str(weather_file)
-    config["montecarlo"]["n_runs"] = 1
-    config["montecarlo"]["years_per_run"] = 1
+    output = tmp_path / "runs.csv"
 
-    settings = MonteCarloSettings(
-        weather_file=str(weather_file),
-        n_runs=1,
-        years_per_run=1,
-        seed=42,
+    code = cli.main(
+        [
+            "montecarlo",
+            "--config",
+            str(config_path),
+            "--weather-file",
+            str(weather_file),
+            "--runs",
+            "1",
+            "--years",
+            "1",
+            "--output",
+            str(output),
+        ]
     )
 
-    result = run_montecarlo(config, settings)
-
-    assert len(result.runs) == 1
-    assert result.available_years == [2021]
-    assert "npv_savings" in result.summary
+    assert code == 0
+    runs = pd.read_csv(output)
+    assert runs["run"].tolist() == [1]
+    assert runs["npv_savings"].notna().all()
+    provenance = json.loads(output.with_name("runs.provenance.json").read_text())
+    settings = provenance["settings"]
+    assert settings["n_runs"] == 1
+    assert settings["years_per_run"] == 1
+    assert settings["weather_file"] == str(weather_file)
+    for key in ("load_uncertainty", "load_distribution", "target_year", "seed", "collect_yearly", "n_procs"):
+        assert settings[key] == section[key], key
+    assert provenance["available_weather_years"] == [2021]
+    assert provenance["resolved_config"]["pv_module"] == "Suntech_STP550S_STC"
+    assert provenance["weather_file_sha256"] == hashlib.sha256(weather_file.read_bytes()).hexdigest()
 
 
 def test_multi_objective_optimization_smoke(open_meteo_weather):

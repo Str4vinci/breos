@@ -90,7 +90,7 @@ def _prepared(config):
         mock.patch("breos.app.load_weather", lambda **_kwargs: None),
     ):
         app = App(config)
-        return prepare_simulation_inputs(app._cfg, app._resolved, app._runtime_dependencies())
+        return prepare_simulation_inputs(app._resolved.cfg, app._resolved, app._runtime_dependencies())
 
 
 @pytest.fixture(scope="module")
@@ -106,7 +106,7 @@ def test_every_input_independent_key_is_a_registry_key_with_a_pinning_change():
 @pytest.mark.parametrize("key", sorted(CHANGES))
 def test_an_input_independent_key_leaves_the_prepared_inputs_unchanged(key, base_inputs):
     changed = {**BASE, **CHANGES[key]}
-    assert _input_cache_key(App(changed)._cfg) == _input_cache_key(App(BASE)._cfg)
+    assert _input_cache_key(App(changed)._resolved.cfg) == _input_cache_key(App(BASE)._resolved.cfg)
     # Pickled, the frames compare values, index, dtypes and attrs at once.
     assert pickle.dumps(_prepared(changed)) == base_inputs
 
@@ -123,7 +123,7 @@ def test_an_input_independent_key_leaves_the_prepared_inputs_unchanged(key, base
 )
 def test_an_input_key_changes_the_cache_key_and_the_inputs(change, base_inputs):
     changed = {**BASE, **change}
-    assert _input_cache_key(App(changed)._cfg) != _input_cache_key(App(BASE)._cfg)
+    assert _input_cache_key(App(changed)._resolved.cfg) != _input_cache_key(App(BASE)._resolved.cfg)
     assert pickle.dumps(_prepared(changed)) != base_inputs
 
 
@@ -184,8 +184,8 @@ def test_a_different_preparation_function_is_not_served_from_the_cache():
 
     app = App(BASE)
     with reuse_prepared_inputs():
-        first = prepare_simulation_inputs_cached(app._cfg, app._resolved, None, prepare=lambda *_: ["a"])
-        second = prepare_simulation_inputs_cached(app._cfg, app._resolved, None, prepare=lambda *_: ["b"])
+        first = prepare_simulation_inputs_cached(app._resolved.cfg, app._resolved, None, prepare=lambda *_: ["a"])
+        second = prepare_simulation_inputs_cached(app._resolved.cfg, app._resolved, None, prepare=lambda *_: ["b"])
     assert (first, second) == (["a"], ["b"])
 
 
@@ -201,7 +201,7 @@ def test_an_unhashable_dependency_prepares_afresh():
 
     with reuse_prepared_inputs():
         for _ in range(2):
-            assert prepare_simulation_inputs_cached(app._cfg, app._resolved, [], prepare=prepare) == "inputs"
+            assert prepare_simulation_inputs_cached(app._resolved.cfg, app._resolved, [], prepare=prepare) == "inputs"
     assert calls == [1, 1]
 
 

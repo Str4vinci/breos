@@ -56,14 +56,19 @@ class PreparedSimulationInputs:
     temperature_series: pd.Series
 
 
+def unknown_source_metadata(provider: str) -> dict[str, Any]:
+    """The metadata recorded for input whose ``provider`` (weather, load-profile) gave none."""
+    return {
+        "source": "runtime_dependency_or_unknown",
+        "note": f"The injected {provider} provider did not expose source metadata.",
+    }
+
+
 def _ensure_weather_horizon_metadata(weather: pd.DataFrame) -> None:
     """Give injected or legacy weather an explicit conservative horizon state."""
     metadata = deepcopy(weather.attrs.get(WEATHER_METADATA_KEY))
     if not isinstance(metadata, dict):
-        metadata = {
-            "source": "runtime_dependency_or_unknown",
-            "note": "The injected weather provider did not expose source metadata.",
-        }
+        metadata = unknown_source_metadata("weather")
     metadata["horizon"] = _normalised_horizon_metadata(metadata.get("horizon"))
     weather.attrs[WEATHER_METADATA_KEY] = metadata
 
@@ -394,9 +399,7 @@ def build_pv_production_breakdown(
     return breakdown
 
 
-def load_consumption_profile(
-    cfg: dict[str, Any], deps: AppRuntimeDependencies, timezone: str | None = None
-) -> pd.DataFrame:
+def load_consumption_profile(cfg: dict[str, Any], deps: AppRuntimeDependencies, timezone: str) -> pd.DataFrame:
     """Load and scale the configured demand profile.
 
     Profile rows describe household behavior at legal clock time, so the
@@ -409,7 +412,7 @@ def load_consumption_profile(
         start_date=cfg["start_date"],
         freq=cfg["resolution"],
         rlp_directory=cfg["rlp_directory"],
-        timezone=timezone or "UTC",
+        timezone=timezone,
         profile_file=cfg["load_profile_file"],
         profile_column=cfg["load_profile_column"],
         profile_unit=cfg["load_profile_unit"],
@@ -422,9 +425,7 @@ def prepare_simulation_inputs(
     """Prepare weather, PV, demand, and temperature inputs for the App pipeline."""
     freq = cfg["resolution"]
     start_year = int(cfg["start_date"][:4])
-    # Read as the waterfall reads pv_arrays, so a hand-built resolved config
-    # without the field simulates the whole year.
-    period = getattr(resolved, "period", None)
+    period = resolved.period
     weather = load_weather_for_simulation(
         resolved,
         freq,

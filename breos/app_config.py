@@ -1062,11 +1062,6 @@ class ResolvedAppConfig:
     period: SimulationPeriod | None = None
 
 
-def load_json(name: str) -> dict[str, Any]:
-    """Load a packaged App configuration resource."""
-    return load_config_json(name)
-
-
 def normalize_config_keys(config: dict[str, Any]) -> dict[str, Any]:
     """Return a copy with hyphens changed to underscores in every table key.
 
@@ -1869,7 +1864,7 @@ def resolve_location(cfg: dict[str, Any]) -> tuple[float, float, str, str | None
     """Resolve a location preset or custom coordinate dict."""
     loc = cfg["location"]
     if isinstance(loc, str):
-        locations = load_json("locations.json")
+        locations = load_config_json("locations.json")
         if loc not in locations:
             available = ", ".join(sorted(locations))
             raise ValueError(f"Unknown location '{loc}'. Available: {available}")
@@ -1878,32 +1873,51 @@ def resolve_location(cfg: dict[str, Any]) -> tuple[float, float, str, str | None
     return loc["latitude"], loc["longitude"], loc["timezone"], None
 
 
-def normalise_pv_arrays(arrays: list[dict[str, Any]] | None, cfg: dict[str, Any], lat: float) -> list[dict[str, Any]]:
-    """Apply App-level PV defaults to each configured PV array."""
+def resolve_orientation(cfg: dict[str, Any], lat: float) -> tuple[float, float, float]:
+    """Return the top-level tilt, azimuth and tracker axis azimuth.
+
+    An unset angle is derived from the latitude: the tilt by
+    :func:`estimate_optimal_tilt`, both azimuths toward the equator. The PV
+    arrays inherit the same values.
+    """
+    tilt = cfg["tilt"] if cfg["tilt"] is not None else estimate_optimal_tilt(lat)
+    azimuth = cfg["azimuth"] if cfg["azimuth"] is not None else default_azimuth_fn(lat)
+    axis_azimuth = cfg["axis_azimuth"] if cfg["axis_azimuth"] is not None else default_azimuth_fn(lat)
+    return tilt, azimuth, axis_azimuth
+
+
+def normalise_pv_arrays(
+    arrays: list[dict[str, Any]] | None,
+    cfg: dict[str, Any],
+    *,
+    tilt: float,
+    azimuth: float,
+    axis_azimuth: float,
+) -> list[dict[str, Any]]:
+    """Apply App-level PV defaults to each configured PV array.
+
+    ``tilt``, ``azimuth`` and ``axis_azimuth`` are the top-level values from
+    :func:`resolve_orientation`.
+    """
     if not arrays:
         return []
 
-    default_module = cfg.get("pv_module") or default_module_key()
-    configured_tilt = cfg.get("tilt")
-    configured_azimuth = cfg.get("azimuth")
-    default_tilt = configured_tilt if configured_tilt is not None else estimate_optimal_tilt(lat)
-    default_azimuth = configured_azimuth if configured_azimuth is not None else default_azimuth_fn(lat)
+    default_module = cfg["pv_module"] or default_module_key()
 
     # Tracker settings are inherited from the top level like module, tilt and
     # azimuth. The PV model has its own fallbacks for an array without them,
     # and those used to win: a top-level single-axis tracker ran fixed-tilt
     # once pv_arrays was set.
-    tracker_defaults = {key: cfg.get(key, DEFAULTS[key]) for key in ("tracking", *_TRACKER_GEOMETRY_KEYS)}
-    if tracker_defaults["axis_azimuth"] is None:
-        tracker_defaults["axis_azimuth"] = default_azimuth_fn(lat)
+    tracker_defaults = {key: cfg[key] for key in ("tracking", *_TRACKER_GEOMETRY_KEYS)}
+    tracker_defaults["axis_azimuth"] = axis_azimuth
 
     normalized: list[dict[str, Any]] = []
     for arr in arrays:
         entry = {
             "modules": int(arr["modules"]),
             "module": arr.get("module") or default_module,
-            "tilt": float(arr.get("tilt", default_tilt)),
-            "azimuth": float(arr.get("azimuth", default_azimuth)),
+            "tilt": float(arr.get("tilt", tilt)),
+            "azimuth": float(arr.get("azimuth", azimuth)),
             "tracking": arr.get("tracking", tracker_defaults["tracking"]),
         }
         if entry["tracking"] != "fixed":
@@ -1918,9 +1932,12 @@ def normalise_pv_arrays(arrays: list[dict[str, Any]] | None, cfg: dict[str, Any]
 
 
 def resolve_pv_system(
-    cfg: dict[str, Any], lat: float
-) -> tuple[list[dict[str, Any]], str, PVModuleParams, int, float, float, float, float]:
-    """Resolve PV module, array, tilt, azimuth, and system sizing details.
+    cfg: dict[str, Any], *, tilt: float, azimuth: float, axis_azimuth: float
+) -> tuple[list[dict[str, Any]], str, PVModuleParams, int, float, float]:
+    """Resolve PV module, array, and system sizing details.
+
+    ``tilt``, ``azimuth`` and ``axis_azimuth`` are the top-level values from
+    :func:`resolve_orientation`, which the arrays inherit.
 
     The module is returned twice: as its catalogue key and as its parameters.
 
@@ -1928,7 +1945,7 @@ def resolve_pv_system(
     the caller materialises it so the dict wrapped by the frozen
     :class:`ResolvedAppConfig` is built once and not mutated in place.
     """
-    pv_arrays = normalise_pv_arrays(cfg.get("pv_arrays"), cfg, lat)
+    pv_arrays = normalise_pv_arrays(cfg["pv_arrays"], cfg, tilt=tilt, azimuth=azimuth, axis_azimuth=axis_azimuth)
     if pv_arrays:
         n_modules = sum(arr["modules"] for arr in pv_arrays)
         total_power_w = sum(arr["modules"] * get_module(arr["module"]).Mpp for arr in pv_arrays)
@@ -1946,10 +1963,7 @@ def resolve_pv_system(
     if not pv_arrays:
         avg_module_power_w = pv_params.Mpp
         system_kwp = n_modules * pv_params.Mpp / 1000
-
-    tilt = cfg["tilt"] if cfg["tilt"] is not None else estimate_optimal_tilt(lat)
-    azimuth = cfg["azimuth"] if cfg["azimuth"] is not None else default_azimuth_fn(lat)
-    return pv_arrays, module_name, pv_params, n_modules, avg_module_power_w, system_kwp, tilt, azimuth
+    return pv_arrays, module_name, pv_params, n_modules, avg_module_power_w, system_kwp
 
 
 def validate_temperature_module_metadata(
@@ -1969,13 +1983,16 @@ def validate_temperature_module_metadata(
         validate_temperature_inputs(model, module.Module_Efficiency, module.NOCT)
 
 
-def resolve_tracking(cfg: dict[str, Any], lat: float) -> tuple[str, float]:
-    """Resolve tracker mode and orientation defaults."""
+def resolve_tracking(cfg: dict[str, Any]) -> str:
+    """Return the top-level tracker mode.
+
+    The validator skips an unset (None) mode, so ``tracking = None`` is
+    rejected here.
+    """
     tracking = cfg["tracking"]
     if tracking not in _TRACKING_MODES:
         raise ValueError(f"tracking must be 'fixed', 'single_axis', or 'dual_axis', got {tracking!r}")
-    axis_azimuth = cfg["axis_azimuth"] if cfg["axis_azimuth"] is not None else default_azimuth_fn(lat)
-    return tracking, axis_azimuth
+    return tracking
 
 
 def resolve_costs(cfg: dict[str, Any]) -> CostParams:
@@ -1988,7 +2005,7 @@ def resolve_costs(cfg: dict[str, Any]) -> CostParams:
     params: dict[str, Any] = {}
 
     if cfg.get("cost_preset"):
-        costs_db = load_json("costs.json")
+        costs_db = load_config_json("costs.json")
         preset_key = cfg["cost_preset"]
         if preset_key not in costs_db:
             available = ", ".join(sorted(costs_db))
@@ -2019,7 +2036,7 @@ def resolve_emissions(cfg: dict[str, Any]) -> EmissionsParams | None:
     if not cfg["emissions_country"]:
         return None
 
-    emissions_db = load_json("emissions.json")
+    emissions_db = load_config_json("emissions.json")
     key = cfg["emissions_country"]
     if key not in emissions_db:
         available = ", ".join(sorted(emissions_db))
@@ -2103,11 +2120,12 @@ def resolve_app_config(config: dict[str, Any]) -> ResolvedAppConfig:
     validate_config(cfg)
 
     lat, lon, timezone, loc_key = resolve_location(cfg)
-    pv_arrays, pv_module_key, pv_params, n_modules, avg_module_power_w, system_kwp, tilt, azimuth = resolve_pv_system(
-        cfg, lat
+    tilt, azimuth, axis_azimuth = resolve_orientation(cfg, lat)
+    pv_arrays, pv_module_key, pv_params, n_modules, avg_module_power_w, system_kwp = resolve_pv_system(
+        cfg, tilt=tilt, azimuth=azimuth, axis_azimuth=axis_azimuth
     )
     validate_temperature_module_metadata(cfg["temperature_model"], pv_arrays, pv_params)
-    tracking, axis_azimuth = resolve_tracking(cfg, lat)
+    tracking = resolve_tracking(cfg)
 
     # Materialise the resolved module count (derived from pv_arrays when set)
     # into a fresh dict rather than mutating the merged config in place.

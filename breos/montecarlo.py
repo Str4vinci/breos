@@ -47,13 +47,11 @@ from breos.dispatch_instructions import DispatchInstructions
 from breos.economics import find_payback_year, find_payback_year_interpolated, projection_rates_record
 from breos.execution import (
     aggregate_jit_cache_states,
-    is_pv_only_dispatch,
+    backend_provenance,
+    config_has_battery,
     observed_jit_cache_state,
     reset_jit_cache_observation,
     validate_execution_backend,
-)
-from breos.execution import (
-    backend_provenance as _backend_provenance,
 )
 from breos.load_profiles import LOAD_PROFILE_METADATA_KEY
 from breos.projection import ProjectionYear, build_pv_only_battery_config, run_projection, value_projection
@@ -524,7 +522,7 @@ def _prepare_pv_chains(
     Returns ``None`` when the study is not shaped to benefit, in which case
     every run computes its own conversion exactly as before.
     """
-    if _has_battery(cfg):
+    if config_has_battery(cfg):
         return None
     any_year = next(iter(aligned_by_year.values()), None)
     if any_year is None:
@@ -564,7 +562,7 @@ def _simulate_trajectory(
 ) -> tuple[dict[str, Any], pd.DataFrame]:
     """Run one Monte Carlo trajectory and return its summary metrics."""
     degradation_rate = cfg["pv_degradation_rate"]
-    has_battery = _has_battery(cfg)
+    has_battery = config_has_battery(cfg)
 
     def year_inputs(year_idx: int) -> ProjectionYear:
         pv_degradation_factor = (1 - degradation_rate) ** year_idx
@@ -636,29 +634,6 @@ def _simulate_trajectory(
         "mean_export_kwh": float(yearly_df["Export_kWh"].mean()),
     }
     return metrics, trajectory
-
-
-def _has_battery(cfg: dict[str, Any]) -> bool:
-    """Ask the dispatch's own question of a study config.
-
-    A study asks this in four places -- the chain cache, alignment, the
-    trajectory loop and the provenance record -- and a study whose answer
-    differed between them would cache one shape of work and report another.
-    """
-    return not is_pv_only_dispatch(
-        cfg["battery_kwh"] * 1000,
-        cfg["battery_max_soc"],
-        cfg["battery_min_soc"],
-    )
-
-
-def _resolve_backend(execution_backend: str, *, pv_only: bool = False) -> dict[str, Any]:
-    """Check the backend is usable and record its toolchain.
-
-    Thin wrapper over :func:`breos.execution.backend_provenance` so that App
-    and Monte Carlo record the same keys from the same code.
-    """
-    return _backend_provenance(execution_backend, pv_only=pv_only)
 
 
 def _summarize(runs: pd.DataFrame) -> dict[str, dict[str, float]]:
@@ -776,14 +751,6 @@ def _run_trajectory_index(run_idx: int) -> tuple[int, dict[str, Any], pd.DataFra
     return run_idx, metrics, trajectory if settings.collect_yearly else None, jit_cache_state
 
 
-def _aggregate_jit_cache_states(states: list[str]) -> str:
-    """Summarise the workers' JIT cache observations for provenance.
-
-    Thin wrapper over :func:`breos.execution.aggregate_jit_cache_states`.
-    """
-    return aggregate_jit_cache_states(states)
-
-
 def run_montecarlo(
     config: dict[str, Any],
     settings: MonteCarloSettings,
@@ -866,8 +833,8 @@ def run_montecarlo(
     # Resolve the dispatch backend before any input is loaded, so a missing
     # optional dependency stops a 10,000-trajectory study immediately rather
     # than hours into it.
-    has_battery = _has_battery(cfg)
-    backend_provenance = _resolve_backend(settings.execution_backend, pv_only=not has_battery)
+    has_battery = config_has_battery(cfg)
+    execution = backend_provenance(settings.execution_backend, pv_only=not has_battery)
 
     if year_cache is None:
         runtime_weather: dict[str, Any] = {}
@@ -935,7 +902,7 @@ def run_montecarlo(
             yearly_frames.append(trajectory)
 
     if settings.execution_backend == "numba":
-        backend_provenance["jit_cache"] = _aggregate_jit_cache_states(jit_cache_states)
+        execution["jit_cache"] = aggregate_jit_cache_states(jit_cache_states)
 
     runs_df = pd.DataFrame(rows)
     currency = result_currency(resolved.tariff)
@@ -966,7 +933,7 @@ def run_montecarlo(
             "random_stream": (
                 "numpy.random.default_rng(numpy.random.SeedSequence(base_seed).spawn(n_runs)[zero_based_run_index])"
             ),
-            "execution": backend_provenance,
+            "execution": execution,
             "economics": projection_rates_record(cfg),
             "ledger_schema_version": LEDGER_SCHEMA_VERSION,
             **({"tariff": tariff_provenance(tariff, calendar_year=settings.target_year)} if tariff is not None else {}),
