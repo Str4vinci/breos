@@ -86,7 +86,6 @@ def fetch_weather(key: str, loc: dict, force: bool = False) -> dict:
         latitude=loc["latitude"],
         longitude=loc["longitude"],
         sample_year=2025,
-        freq="h",
         timezone=loc["timezone"],
         save_to_file=False,
     )

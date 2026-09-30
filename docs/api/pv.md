@@ -84,5 +84,7 @@ you build an `App`. See
 .. autosummary::
    :toctree: generated/
 
-   breos.inverter.InverterConfig
+   breos.inverter.calculate_dc_ac_power
+   breos.inverter.dc_power_for_ac_output
+   breos.inverter.InverterConversionResult
 ```

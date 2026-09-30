@@ -539,9 +539,6 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   full-suite jobs, including the coverage report, run under pytest-xdist
   (`-n auto`), now in the `dev` extra. A new push to a PR cancels that PR's
   run still in progress.
-- `resample_tmy_to_15min` is now a thin wrapper over `resample_to_15min`, so
-  the two share one interpolation path. Its output is unchanged: the same
-  columns, values, and provenance.
 - **`PVModuleParams.gamma_pmp` now holds only what the user supplied.** It
   stays `None` when the power coefficient is left to default, instead of
   being overwritten with `T_Pmax_pct` on construction. Read the coefficient
@@ -997,10 +994,8 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   The fetch now runs through the midnight after `end_date` and starts at
   01:00 on `start_date`, so it covers exactly the requested hours.
   Instantaneous fetches are unchanged. `preload_weather_by_year` now warns
-  about each year it skips, and `select_random_year_and_replace_datetime`
-  picks only complete years; it used to pick a short year with a warning. The
-  two share one year-splitting helper, which takes the step size from the
-  whole file. Files fetched before this fix still lose their last year, now
+  about each year it skips, and its year-splitting helper takes the step size
+  from the whole file. Files fetched before this fix still lose their last year, now
   with a warning; fetch them again to keep it. **Results change only for
   interval-mean files fetched from now on**, which give Monte Carlo one more
   weather year. Monte Carlo on existing files is unchanged: the per-year
@@ -1387,10 +1382,8 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   Monte Carlo and the optimizer report, escalates it with inflation, so the
   two differ whenever inflation is not zero. Its numbers are unchanged; a test
   pins that the two agree at zero inflation.
-- Four small fixes from the 0.6.2 audit
+- Three small fixes from the 0.6.2 audit
   ([#161](https://github.com/Str4vinci/breos/issues/161)).
-  `get_inverter_preset` returns a copy, so changing one caller's
-  `InverterConfig` no longer changes the preset for every later caller.
   `cost_analysis_projection` matches yearly rows to projection years by their
   `Year` labels instead of by position, so rows in a different order give the
   same projection; labels that are not exactly 1 through the projection length
@@ -1410,9 +1403,13 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   with no deprecation period. `fetch_tmy_weather_data` now always returns the
   hourly PVGIS data; for 15-minute steps, pass them to `resample_to_15min`, as
   App and Monte Carlo already do. The TMY wrapper also kept only the
-  irradiance, temperature, humidity and wind columns and capped relative
-  humidity at 100%; `resample_to_15min` keeps every numeric column. Results
-  are unchanged.
+  irradiance, temperature, humidity and wind columns, capped relative
+  humidity at 100% and tagged its output's weather provenance with
+  `irradiance_resampling_method = "makima_clear_sky"`; `resample_to_15min`
+  keeps every numeric column and records the method it used, such as
+  `"makima"`. A call to `fetch_tmy_weather_data` that passed `timezone`,
+  `save_to_file` or `use_horizon` by position must name it. Results are
+  unchanged.
 - **`breos.select_random_year_and_replace_datetime`**, with no deprecation
   period. Nothing called it. `preload_weather_by_year` reads the same complete
   years, keyed by year; draw a key from a seeded `numpy.random.Generator` to
@@ -1426,17 +1423,20 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   Every caller passed 1, and `load_profile` now always returns one calendar
   year. A call that passed `rlp_directory` or `timezone` by position must name
   them.
-- **The unused `InverterConfig` extras**, with no deprecation period:
-  `breos.INVERTER_PRESETS`, `breos.get_inverter_preset`,
-  `InverterConfig.size_from_pv` and `InverterConfig.get_cost`; the fields
-  `cost_per_kw_simple` and `cost_per_kw_hybrid`, a third copy of the cost
-  presets' inverter prices; and the datasheet fields `max_dc_voltage_v`,
-  `max_dc_power_w`, `min_mppt_voltage_v`, `max_mppt_voltage_v`,
-  `startup_voltage_v`, `max_strings_per_mppt`, `max_input_current_per_mppt_a`
-  and `max_short_circuit_current_per_mppt_a`, with their checks. No simulation
-  read any of them: App sizes the inverter from `dc_ac_ratio` or
-  `inverter_ac_rating_kw` and prices it with the `inverter_cost_per_kw_hybrid`
-  and `inverter_cost_per_kw_simple` cost keys.
+- **`breos.InverterConfig`, `breos.INVERTER_PRESETS` and
+  `breos.get_inverter_preset`**, with no deprecation period. Nothing in BREOS
+  built an `InverterConfig` or read one. With the class go its methods
+  `size_from_pv` and `get_cost`; its fields `cost_per_kw_simple` and
+  `cost_per_kw_hybrid`, a third copy of the cost presets' inverter prices;
+  and the datasheet fields `max_dc_voltage_v`, `max_dc_power_w`,
+  `min_mppt_voltage_v`, `max_mppt_voltage_v`, `startup_voltage_v`,
+  `max_strings_per_mppt`, `max_input_current_per_mppt_a` and
+  `max_short_circuit_current_per_mppt_a`, added in 0.6.0 as groundwork for
+  string-aware validation, with their checks. App sizes the inverter from
+  `inverter_loading_ratio` or `inverter_ac_rating_kw` and prices it with the
+  `inverter_cost_per_kw_hybrid` and `inverter_cost_per_kw_simple` cost keys.
+  `calculate_dc_ac_power`, `dc_power_for_ac_output` and
+  `InverterConversionResult` stay.
 - **The `verbose` argument of the PV production functions**, with no
   deprecation period: `calculate_pv_production_dc`,
   `calculate_pv_production_breakdown`, `calculate_pv_production_dc_tracking`,
@@ -1445,15 +1445,18 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   `calculate_multi_array_production_breakdown`. Nothing passed `True`, which
   printed the annual total; sum the returned series instead. A call that
   passed a later argument by position must name it.
-- **Three unused arguments**, with no deprecation period:
-  `resample_to_15min(non_negative_cols=)`, `fit_cec_params(temp_ref=)`, and
-  `start_time`, `end_time` and `freq` of `build_battery_temperature_series`.
-  `resample_to_15min` still clips the solar and wind columns at zero.
-  `fit_cec_params` fits at 25 °C, the reference temperature at which
-  `calcparams_cec` reads the parameters and the fit normalises gamma, so
-  another value gave inconsistent parameters. `build_battery_temperature_series`
-  now requires `temp_config` and `index`, which every caller passed. The `fit_cec_params` docstring no longer says that `celltype` is
-  unused: it selects the empirical starting guess.
+- **Unused arguments of three functions**, with no deprecation period:
+  `non_negative_cols` of `resample_to_15min`, `temp_ref` of `fit_cec_params`,
+  and `start_time`, `end_time` and `freq` of
+  `build_battery_temperature_series`. `resample_to_15min` still clips the
+  solar and wind columns at zero; a call that passed a later argument by
+  position must name it, or `resample_to_15min(df, "makima", None, 41.1, -8.6)`
+  now reads `41.1` as the longitude. `fit_cec_params` fits at 25 °C, the
+  reference temperature at which `calcparams_cec` reads the parameters and
+  the fit normalises gamma, so another value gave inconsistent parameters.
+  `build_battery_temperature_series` now requires `temp_config` and `index`,
+  which every caller passed. The `fit_cec_params` docstring no longer says
+  that `celltype` is unused: it selects the empirical starting guess.
 - Optimization config keys that nothing read now raise
   ([#181](https://github.com/Str4vinci/breos/issues/181)): `[load]`,
   `simulation.weather_file`, `simulation.irradiance_resampling`, the

@@ -117,7 +117,6 @@ from breos.emissions import (
 
 # Inverter
 from breos.inverter import (
-    InverterConfig,
     InverterConversionResult,
     calculate_dc_ac_power,
     dc_power_for_ac_output,
@@ -269,7 +268,6 @@ __all__ = [
     "BatteryConfig",
     "CostParams",
     "EmissionsParams",
-    "InverterConfig",
     "InverterConversionResult",
     "OptimizationResult",
     "PVModuleParams",

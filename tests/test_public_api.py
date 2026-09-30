@@ -19,7 +19,6 @@ def test_top_level_all_is_narrow_release_surface():
         "BatteryConfig",
         "CostParams",
         "EmissionsParams",
-        "InverterConfig",
         "InverterConversionResult",
         "calculate_dc_ac_power",
         "OptimizationResult",

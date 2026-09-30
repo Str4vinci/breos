@@ -2,36 +2,7 @@
 
 import pytest
 
-from breos.inverter import InverterConfig, calculate_dc_ac_power, dc_power_for_ac_output
-
-
-@pytest.mark.parametrize(
-    ("field", "value"),
-    [
-        ("nominal_power_w", -1.0),
-        ("nominal_power_w", float("nan")),
-        ("dc_ac_ratio", 0.0),
-        ("dc_ac_ratio", float("inf")),
-        ("inverter_efficiency", 0.0),
-        ("inverter_efficiency", 1.01),
-        ("inverter_efficiency", float("nan")),
-    ],
-)
-def test_inverter_rejects_invalid_numeric_fields(field, value):
-    with pytest.raises(ValueError, match=field):
-        InverterConfig(**{field: value})
-
-
-@pytest.mark.parametrize("is_hybrid", [0, 1, "true", None])
-def test_inverter_requires_boolean_hybrid_flag(is_hybrid):
-    with pytest.raises(ValueError, match="is_hybrid must be a bool"):
-        InverterConfig(is_hybrid=is_hybrid)
-
-
-@pytest.mark.parametrize("value", [0, -1, 1.5, True])
-def test_inverter_rejects_non_positive_or_non_integer_mppt_channels(value):
-    with pytest.raises(ValueError, match="mppt_channels"):
-        InverterConfig(mppt_channels=value)
+from breos.inverter import calculate_dc_ac_power, dc_power_for_ac_output
 
 
 def test_dc_ac_power_exposes_dc_side_clipping_losses():

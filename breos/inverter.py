@@ -1,15 +1,14 @@
 """
-Inverter module for PV system sizing and efficiency.
+Inverter conversion and sizing helpers.
 
 This module handles:
-- Inverter sizing based on PV array power
-- DC/AC coupling configurations
-- Efficiency calculations
+- DC-to-AC conversion with the PVWatts part-load curve and clipping
+- The inverse: the DC input a requested AC output needs
+- The inverter AC nameplate for a DC peak and loading ratio
 """
 
 import math
 from dataclasses import dataclass
-from numbers import Integral, Real
 from typing import Optional
 
 import numpy as np
@@ -22,61 +21,6 @@ from breos._dispatch import (
     _dc_ac,
     _dc_for_ac,
 )
-
-
-def _require_optional_non_negative_finite(name: str, value: Optional[float]) -> None:
-    """Reject an invalid supplied quantity while allowing an unknown one."""
-    if value is None:
-        return
-    if isinstance(value, bool) or not isinstance(value, Real) or not math.isfinite(value) or value < 0:
-        raise ValueError(f"{name} must be a finite non-negative number when provided")
-
-
-def _require_positive_finite(name: str, value: float) -> None:
-    """Reject a ratio or other quantity that must be strictly positive."""
-    if isinstance(value, bool) or not isinstance(value, Real) or not math.isfinite(value) or value <= 0:
-        raise ValueError(f"{name} must be a finite positive number")
-
-
-def _require_efficiency(name: str, value: float) -> None:
-    """Reject efficiencies outside the physically meaningful interval (0, 1]."""
-    if isinstance(value, bool) or not isinstance(value, Real) or not math.isfinite(value) or not 0 < value <= 1:
-        raise ValueError(f"{name} must be a finite number in (0, 1]")
-
-
-def _require_positive_integer(name: str, value: int) -> None:
-    """Reject an MPPT count that cannot describe hardware."""
-    if isinstance(value, bool) or not isinstance(value, Integral) or value <= 0:
-        raise ValueError(f"{name} must be a positive integer")
-
-
-@dataclass
-class InverterConfig:
-    """
-    Inverter configuration parameters.
-
-    Attributes:
-        nominal_power_w: Inverter nominal AC power (W), or None if unknown.
-        dc_ac_ratio: DC/AC sizing ratio (typical: 1.1-1.25)
-        inverter_efficiency: Peak inverter efficiency (typical: 0.96-0.98)
-        is_hybrid: Whether this is a hybrid inverter with battery support
-        mppt_channels: Number of MPPT channels
-    """
-
-    nominal_power_w: Optional[float] = None
-    dc_ac_ratio: float = 1.25  # Default 1.25
-    inverter_efficiency: float = 0.96
-    is_hybrid: bool = True
-    mppt_channels: int = 2
-
-    def __post_init__(self) -> None:
-        """Validate the configuration without dependencies."""
-        _require_optional_non_negative_finite("nominal_power_w", self.nominal_power_w)
-        _require_positive_finite("dc_ac_ratio", self.dc_ac_ratio)
-        _require_efficiency("inverter_efficiency", self.inverter_efficiency)
-        if not isinstance(self.is_hybrid, bool):
-            raise ValueError("is_hybrid must be a bool")
-        _require_positive_integer("mppt_channels", self.mppt_channels)
 
 
 @dataclass(frozen=True)

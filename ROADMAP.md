@@ -88,9 +88,9 @@ plans behind individual items.
 - String-aware inverter validation and modeling. See
   [design/architecture/string-inverter-sizing.md](design/architecture/string-inverter-sizing.md).
 
-- **Absolute inverter AC rating as an App input (0.7.x).** `InverterConfig`
-  already carries `nominal_power_w`, and `calculate_dc_ac_power` already clips
-  against it with full DC-side bookkeeping, but the App path never sets it:
+- **Absolute inverter AC rating as an App input (0.7.x).**
+  `calculate_dc_ac_power` already clips against an absolute AC rating with
+  full DC-side bookkeeping, but the App path never sets one:
   `runners/app.py` derives the ceiling as `pv_peak_w / inverter_loading_ratio`,
   so the AC rating is a consequence of module choice rather than a stated
   quantity. On a large roof that is a reasonable sizing default. On a small

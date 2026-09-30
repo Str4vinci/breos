@@ -22,7 +22,6 @@ from breos.solar import (
     calculate_pv_production_breakdown,
     calculate_pv_production_dc,
     calculate_pv_production_dc_tracking,
-    calculate_pv_production_tracking_breakdown,
     dc_to_ac,
     default_azimuth,
     estimate_optimal_tilt,
@@ -625,8 +624,10 @@ class TestTracking:
         ids=lambda option: next(iter(option)),
     )
     def test_tracking_forwards_model_option(self, synthetic_weather, porto_location, pv_params, option):
+        # Built on the public wrapper, so the case fails if either the wrapper
+        # stops forwarding the option or the breakdown stops using it.
         def dc(**kw):
-            return calculate_pv_production_tracking_breakdown(
+            return calculate_pv_production_dc_tracking(
                 weather_data=synthetic_weather,
                 location=porto_location,
                 n_modules=1,
@@ -634,7 +635,7 @@ class TestTracking:
                 pv_params=pv_params,
                 freq="h",
                 **kw,
-            ).dc_after_losses
+            )
 
         selected = dc(**option)
         assert (selected >= -0.01).all()
