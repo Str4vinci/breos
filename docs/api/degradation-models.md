@@ -50,20 +50,14 @@ bundled here defines generic pack operating limits, so BREOS does not invent
 SOC, efficiency, power, or replacement defaults per model. The global settings
 apply unless a user overrides them.
 
-## Migration from `battery_type`
+## Selecting the engine
 
-Do not use the legacy `battery_type` selector in `App` configuration. It was
-ambiguous: it mixed chemistry identity with degradation-model selection.
-Strict `App` validation already rejected this key as unknown in 0.3.4; 0.4.0
-adds targeted migration guidance rather than introducing a new breaking
-change.
-Choose `degradation_engine="native"` (or omit it) for the existing LFP
-Naumann/Lam model. Choose `degradation_engine="blast"` together with one
-stable `blast_model` key for BLAST. Supplying `blast_model` while the native
-engine is active raises instead of silently changing behavior.
-
-The lower-level `BatteryConfig.battery_type` field remains temporarily limited
-to `"lfp"` for native cycle-aging compatibility; it does not select BLAST.
+Choose `degradation_engine="native"` (or omit it) for the LFP Naumann/Lam
+model. Choose `degradation_engine="blast"` together with one stable
+`blast_model` key for BLAST. Supplying `blast_model` while the native engine
+is active raises instead of silently changing behavior. There is no
+`battery_type` selector: `App` rejects it as an unknown key, and
+`BatteryConfig` has no such field.
 
 BLAST selection requires `battery_kwh > 0`; PV-only configurations should keep
 the default native engine and omit `blast_model`.

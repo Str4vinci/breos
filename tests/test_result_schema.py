@@ -146,7 +146,7 @@ def test_plot_labels_read_the_frame_currency():
 
 def test_breakeven_comparison_draws_an_empty_list(tmp_path):
     pytest.importorskip("matplotlib")
-    plot_breakeven_comparison([], [], [], str(tmp_path), "empty.png")
+    plot_breakeven_comparison([], [], str(tmp_path), filename="empty.png")
 
     assert (tmp_path / "empty.png").exists()
 

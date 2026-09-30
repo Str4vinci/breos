@@ -90,6 +90,9 @@ sizing columns above, the objective values, ZEB diagnostics, and the
 `Projected_*` fields. There is no single best row. Pick the design
 whose balance of independence and cost matches the project.
 
+{py:func}`~breos.plotting.plot_pareto_front` draws the front, two objectives
+at a time: `plot_pareto_front(result, "plots", color_by="Battery_kWh")`.
+
 The call reads `pop_size`, `n_offsprings`, `n_gen` and `seed` from
 `[optimization]`. You can pass them as arguments instead; an argument that
 disagrees with its key raises. Set and record the seed because NSGA-II is
