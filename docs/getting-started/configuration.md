@@ -26,7 +26,8 @@ energy. An 8,760-hour TMY restamped onto a leap year gets the same treatment:
 29 February is a copy of 28 February for the weather, and 1 March onwards
 keeps its own data. External load profiles placed by position likewise copy
 28 February. The bundled demandlib H0 instead uses the nearest source day of
-the leap day's weekday, Saturday or Sunday type. The result's weather
+the leap day's weekday, Saturday or Sunday type, and a dated E-REDES file the
+nearest of its working-day, Saturday or Sunday/holiday class. The result's weather
 provenance records the copied weather day under `leap_day`.
 
 Unknown top-level keys are rejected at load time. A misspelled key such as
