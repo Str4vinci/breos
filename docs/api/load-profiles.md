@@ -76,15 +76,6 @@ profile_unit="kW")`.
    breos.load_profiles.scale_to_annual_consumption
 ```
 
-## Alignment
-
-```{eval-rst}
-.. autosummary::
-   :toctree: generated/
-
-   breos.load_profiles.align_load_to_pv
-```
-
 ## Repairing measured input
 
 An explicit, reported repair step for measured load and PV power series, run

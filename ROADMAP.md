@@ -88,30 +88,6 @@ plans behind individual items.
 - String-aware inverter validation and modeling. See
   [design/architecture/string-inverter-sizing.md](design/architecture/string-inverter-sizing.md).
 
-- **Absolute inverter AC rating as an App input (0.7.x).** `InverterConfig`
-  already carries `nominal_power_w`, and `calculate_dc_ac_power` already clips
-  against it with full DC-side bookkeeping, but the App path never sets it:
-  `runners/app.py` derives the ceiling as `pv_peak_w / inverter_loading_ratio`,
-  so the AC rating is a consequence of module choice rather than a stated
-  quantity. On a large roof that is a reasonable sizing default. On a small
-  system it is wrong in a way the caller cannot correct: 2 x 445 Wp at the
-  default 1.25 ratio lands at 712 W by coincidence, and swapping to 550 W
-  modules moves the ceiling to 880 W with no input having said so.
-
-  The driving case is plug-in balcony PV, where the AC rating is not a sizing
-  choice but a legal ceiling — 800 W in Portugal (Decreto-Lei 130/2026), Great
-  Britain (SI 2026/848), Germany and Austria — and DC oversizing behind it is
-  the normal configuration, so the clipped energy is a headline result rather
-  than a rounding error. A ratio cannot express "exactly 800 W whatever the
-  modules are".
-
-  Ask: an optional absolute nominal AC power on App config, taking precedence
-  over `inverter_loading_ratio` when supplied, honoured by the existing
-  clipping path, and reported in the results the way `inverter.ac_capacity_kw`
-  already is. Pairs naturally with the export cap described under "Under
-  consideration": the same installations that need a hard AC ceiling are the
-  ones legally required not to inject.
-
 ## Economics
 
 - Currency concept plus non-EU cost and grid-emission presets.

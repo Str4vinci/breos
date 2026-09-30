@@ -29,7 +29,7 @@ TMY and historical data, file I/O, resampling, clear-sky scaling.
 :link-type: doc
 
 DC and AC production, multi-array layouts, module catalogue, inverter
-sizing.
+conversion.
 :::
 
 :::{grid-item-card} Load profiles

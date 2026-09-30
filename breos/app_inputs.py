@@ -301,7 +301,6 @@ def load_weather_for_simulation(
             latitude=resolved.lat,
             longitude=resolved.lon,
             sample_year=start_year,
-            freq="h",
             timezone=resolved.timezone,
             use_horizon=horizon_profile is None,
         )
@@ -409,7 +408,6 @@ def load_consumption_profile(
         annual_consumption_kwh=cfg["annual_consumption_kwh"],
         start_date=cfg["start_date"],
         freq=cfg["resolution"],
-        num_years=1,
         rlp_directory=cfg["rlp_directory"],
         timezone=timezone or "UTC",
         profile_file=cfg["load_profile_file"],

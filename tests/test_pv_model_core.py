@@ -10,7 +10,7 @@ import pytest
 
 from breos import solar
 from breos.pv.iam import calculate_front_effective_irradiance
-from breos.pv.model_options import PVModelOptions, resolve_pv_model_options
+from breos.pv.model_options import PV_MODEL_CONFIG_KEYS, PVModelOptions, resolve_pv_model_options
 from breos.pv.temperature import DEFAULT_MODULE_EFFICIENCY, calculate_cell_temperature
 
 # Every public entry point that accepts the shared PV model-option block.
@@ -222,19 +222,17 @@ def test_noct_sam_requires_complete_sourced_module_metadata():
 def test_every_entry_point_declares_the_whole_model_option_block(function):
     """Each public entry point must accept every shared model option by keyword.
 
-    ``solar._MODEL_OPTION_KEYS`` drives the wrappers' dict forwarding, so a new
+    ``PV_MODEL_CONFIG_KEYS`` drives the wrappers' dict forwarding, so a new
     option added to the tuple without being added to a signature would raise a
     ``TypeError`` only when that path happened to run. Assert it up front, and
     keep the options keyword-addressable — ``breos.App``, ``cli.py`` and
     ``validation/`` all pass them by name.
     """
     parameters = inspect.signature(function).parameters
-    missing = [key for key in solar._MODEL_OPTION_KEYS if key not in parameters]
+    missing = [key for key in PV_MODEL_CONFIG_KEYS if key not in parameters]
     assert not missing, f"{function.__name__} is missing model options: {missing}"
 
-    positional_only = [
-        key for key in solar._MODEL_OPTION_KEYS if parameters[key].kind is inspect.Parameter.POSITIONAL_ONLY
-    ]
+    positional_only = [key for key in PV_MODEL_CONFIG_KEYS if parameters[key].kind is inspect.Parameter.POSITIONAL_ONLY]
     assert not positional_only, f"{function.__name__} made model options positional-only: {positional_only}"
 
 
@@ -249,7 +247,7 @@ def test_model_option_keys_partition_into_per_array_and_function_level():
     per_array = set(solar._PER_ARRAY_MODEL_OPTION_KEYS)
     function_level = set(solar._FUNCTION_LEVEL_MODEL_OPTION_KEYS)
 
-    assert per_array | function_level == set(solar._MODEL_OPTION_KEYS)
+    assert per_array | function_level == set(PV_MODEL_CONFIG_KEYS)
     assert function_level == {"solar_position", "iam_model", "diffuse_iam", "temperature_model"}
 
 
