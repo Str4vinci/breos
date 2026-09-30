@@ -22,6 +22,10 @@ Fetch historical data with the `weather` extra:
 pip install "breos[weather]"
 ```
 
+To see how the TMY that `breos run` uses compares with those years, pass
+both to {py:func}`~breos.plotting.plot_weather_monthly_comparison` or
+{py:func}`~breos.plotting.plot_weather_annual_ghi_distribution`.
+
 ## Configure a study
 
 The top-level keys are the ordinary scenario, identical to `breos run`. The
