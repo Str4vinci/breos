@@ -136,6 +136,32 @@ def daily_target_problem(case: ReplayCase) -> DailyTargetProblem:
     )
 
 
+def fixed_health_state(problem: DailyTargetProblem) -> dict[str, Any]:
+    """The day state the planner dispatches every transition with, less the stored energy and instructions.
+
+    The same keys and values as the planner's own (``_DayEvaluator.state``);
+    ``tests/test_daily_target_oracle.py`` pins them, so a field the planner
+    gains cannot leave the planned flows on another model.
+    """
+    soh, eff_charge, eff_discharge = problem.health()
+    config = problem.battery_config
+    hours = problem.hours_per_step
+    return {
+        "battery_config": config,
+        "battery_soh_decimal": soh,
+        "Battery_PV_Origin_Energy_Wh": 0.0,
+        "Battery_Grid_Origin_Energy_Wh": 0.0,
+        "eff_charge": eff_charge,
+        "eff_discharge": eff_discharge,
+        "hours_per_step": hours,
+        "standby_loss_per_step_wh": config.standby_loss_wh * hours,
+        "cap_wh": _step_energy_cap(config.inverter_ac_capacity_w, hours),
+        "cap_charge_wh": _step_energy_cap(config.max_charge_power_w, hours),
+        "cap_discharge_wh": _step_energy_cap(config.max_discharge_power_w, hours),
+        "cap_stored_wh": _step_energy_cap(config.stored_power_limit_w, hours),
+    }
+
+
 def fixed_health_flows(
     problem: DailyTargetProblem, instructions: DispatchInstructions, *, execution_backend: str = "python"
 ) -> tuple[dict[str, np.ndarray], np.ndarray]:
@@ -146,11 +172,9 @@ def fixed_health_flows(
     :data:`tools.oracles.replay.PLANNED_FLOWS` and the per-step import cost
     less export revenue.
     """
-    soh, eff_charge, eff_discharge = problem.health()
     config = problem.battery_config
-    hours = problem.hours_per_step
     buffers = _ResultBuffers(len(instructions))
-    # The planner's own day state (_DayEvaluator), on writable copies of the series.
+    # Writable copies of the series, as the planner dispatches on.
     _resolve_dispatch_day(execution_backend)(
         buffers,
         np.array(problem.pv_dc_w),
@@ -158,20 +182,9 @@ def fixed_health_flows(
         np.array(problem.temperature_c),
         0,
         len(instructions),
-        battery_config=config,
-        battery_soh_decimal=soh,
-        Battery_Energy_Wh=config.nominal_energy_wh * soh * config.max_soc,
-        Battery_PV_Origin_Energy_Wh=0.0,
-        Battery_Grid_Origin_Energy_Wh=0.0,
-        eff_charge=eff_charge,
-        eff_discharge=eff_discharge,
-        hours_per_step=hours,
-        standby_loss_per_step_wh=config.standby_loss_wh * hours,
-        cap_wh=_step_energy_cap(config.inverter_ac_capacity_w, hours),
-        cap_charge_wh=_step_energy_cap(config.max_charge_power_w, hours),
-        cap_discharge_wh=_step_energy_cap(config.max_discharge_power_w, hours),
-        cap_stored_wh=_step_energy_cap(config.stored_power_limit_w, hours),
+        Battery_Energy_Wh=config.nominal_energy_wh * problem.health()[0] * config.max_soc,
         instructions=instructions,
+        **fixed_health_state(problem),
     )
     columns = buffers.columns
     planned = {

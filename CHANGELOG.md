@@ -387,18 +387,22 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
     solved with HiGHS through `scipy.optimize.linprog`. The program contains
     every flow the production dispatch can deliver under any instructions,
     as long as the battery's health stays at or above the program's floor
-    health and no battery is replaced in the year. The bound holds for any
-    such dispatch. It keeps the prices, the efficiencies, the power limits,
+    health, no battery is replaced in the year, and grid charge passes
+    through the program's converter: the `[smart_charging]` grid-charge
+    efficiency and site limit, or no grid charge without that table. The
+    bound holds for any such dispatch. It keeps the prices, the efficiencies, the power limits,
     the inverter rating and the temperature-dependent ceiling. It relaxes
     the rest: opening health for the ceiling and the efficiencies, a concave
     bound on the inverter's part-load curve, standby loss charged in part,
     the dispatch order, and a free end state. The module docstring lists
     each relaxation. `--floor-soh auto`, the default, solves once, replays
     App's dispatch and the program's own schedule, and solves again with
-    the floor at the lowest health those replays reached, so the bound
-    covers every run it reports. `bound_is_strict` in the report, and a
-    warning, say when a reported run is not covered, for example after a
-    first-year replacement. The optimum at the opening health is reported
+    the floor at the lowest health those replays reached. Each reported run
+    is then checked: it counts as covered only if its ledger is a feasible
+    point of the program that costs no more than the run did.
+    `bound_is_strict` in the report, and a warning, say when a reported run
+    is not covered, for example after a first-year replacement or a grid
+    charge the program does not allow. The optimum at the opening health is reported
     only as `fixed_health_estimate`, which is not a bound. `--floor-soh`
     also takes `opening` or a fraction (schema `breos_lp_bound_v1`).
 

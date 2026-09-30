@@ -6,11 +6,12 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from breos._daily_targets import daily_target_instructions
+from breos._daily_targets import _DayEvaluator, daily_target_instructions, target_grid
 from tools.oracles.daily_target_dp import (
     DP_DAYS_SCHEMA,
     DP_ORACLE_SCHEMA,
     daily_target_problem,
+    fixed_health_state,
     main,
     report,
     run_daily_target_oracle,
@@ -113,3 +114,10 @@ def test_the_command_line_writes_a_tagged_summary_and_one_row_per_day(tmp_path):
     frame = pd.read_csv(days, comment="#")
     assert len(frame) == 3
     assert frame["replayed_cost"].sum() == pytest.approx(summary["replay"]["first_year_cost"], rel=1e-9)
+
+
+def test_the_planned_flows_use_the_planners_own_day_state():
+    # A field the planner's state gains must reach the planned flows too.
+    case = prepare_replay(_config(1, battery_max_charge_power_w=1500.0))
+    problem = daily_target_problem(case)
+    assert fixed_health_state(problem) == _DayEvaluator(problem, target_grid(1), "python").state

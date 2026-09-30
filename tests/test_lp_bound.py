@@ -205,14 +205,18 @@ def test_the_default_bound_is_strict_for_every_run_it_reports():
 
 
 def test_a_floor_at_the_opening_health_is_only_an_estimate():
-    # Health fades during every run, so a floor at the opening health covers none.
+    # The program's own schedule drains the battery to its floor, and health
+    # has faded by then, so its ledger sits below a floor at the opening
+    # health. Coverage is decided by that ledger, not assumed.
     case = prepare_replay(_config(2))
-    with pytest.warns(UserWarning, match="does not provably cover the reference run: its health fell"):
-        result = run_lp_bound(case, replay=False, floor_soh="opening")
+    with pytest.warns(UserWarning, match="does not provably cover the lp_replay run: .*its health fell"):
+        result = run_lp_bound(case, floor_soh="opening")
     assert not result.bound_is_strict
     assert result.bound.objective == result.fixed_health_estimate.objective
     summary = report(result, case)
-    assert summary["bound_is_strict"] is False and summary["reference"]["covered_by_bound"] is False
+    assert summary["bound_is_strict"] is False and summary["lp_replay"]["covered_by_bound"] is False
+    # The fixed-target run never reaches its floor here, so its ledger is a point of the program anyway.
+    assert summary["reference"]["covered_by_bound"] is True
 
 
 def test_a_replacement_in_the_first_year_is_never_covered():
@@ -401,3 +405,33 @@ def test_fuzzed_dispatch_ledgers_are_points_of_the_program(efficiency, scale, ho
         slack = dc - dc_per_ac * load
         secant_tight += int((served & (load >= 1.0) & (np.abs(slack) <= 1e-6 * load + 1e-9)).sum())
     assert shared_rating > 0 and secant_tight > 0, (shared_rating, secant_tight)
+
+
+def test_a_run_that_grid_charges_where_the_program_cannot_is_not_covered():
+    # Without a [smart_charging] table the program has no grid-charge
+    # converter, so it bounds self-consumption only. A controller that grid
+    # charges at 0.95 is outside it, whatever its health: the ledger check
+    # must refuse it rather than count it covered.
+    case = prepare_replay({key: value for key, value in _config(3).items() if key != "smart_charging"})
+    charging = replay_instructions(case, _random_instructions(case, 3))
+    assert charging.artifacts.first_year_results_df["Grid_AC_To_Battery"].sum() > 0.0
+    with pytest.warns(UserWarning, match="charged from the grid, which the program does not allow"):
+        result = run_lp_bound(case, replay=False, covering={"controller": charging})
+    runs = {run.name: run for run in result.runs}
+    assert runs["reference"].covered and not runs["controller"].covered
+    assert not result.bound_is_strict
+    assert "not a point of the program" in runs["controller"].reason
+    # With the converter the same run is covered.
+    allowed = run_lp_bound(case, replay=False, covering={"controller": charging}, grid_charge_efficiency=0.95)
+    assert allowed.bound_is_strict
+    assert allowed.bound.objective <= charging.first_year_step_cost.sum()
+
+
+def test_an_invalid_floor_health_is_a_usage_error(tmp_path, capsys):
+    config = tmp_path / "config.json"
+    config.write_text(json.dumps(_config(1)), encoding="utf-8")
+    for value in ("sometimes", "1.5"):
+        with pytest.raises(SystemExit) as exit_info:
+            main(["--config", str(config), "--floor-soh", value])
+        assert exit_info.value.code == 2
+        assert "--floor-soh" in capsys.readouterr().err

@@ -8,8 +8,9 @@ cost less export revenue. It is solved with HiGHS through
 :func:`scipy.optimize.linprog`. Its feasible set contains every flow the
 production dispatch step can deliver, under any
 :class:`~breos.dispatch_instructions.DispatchInstructions`, as long as the
-battery's health stays at or above the program's floor health and no
-battery is replaced during the year. Under that condition its optimum is a
+battery's health stays at or above the program's floor health, no battery
+is replaced during the year, and grid charge passes through the program's
+grid-charge converter (see below). Under that condition its optimum is a
 cost no controller can beat, causal or not. The standing charge is left
 out: every schedule pays it.
 
@@ -22,8 +23,10 @@ covers every run it reports, and any dispatch whose health stays at or
 above that floor; it does not cover a controller that fades harder. The
 optimum at the opening health is reported next to it as a
 ``fixed_health_estimate``: a close estimate, not a bound, since every run
-fades. ``bound_is_strict`` says whether the bound covers every reported
-run, and a warning names each one it does not.
+fades. Each reported run is checked by its ledger: it is covered only if
+the ledger is a feasible point of the final program that costs no more
+than the run. ``bound_is_strict`` says whether every reported run is
+covered, and a warning names each one that is not.
 
 This is the BREOS counterpart of the legacy perfect-foresight bound
 (``tools/compute_a2_perfect_foresight_bound.py`` and
@@ -100,7 +103,10 @@ What it relaxes, so that the bound claim holds:
 Grid charging is available with the ``[smart_charging]`` table's
 grid-charge efficiency and site limit. Without a fixed-target table the
 program has no grid-charge converter to model and bounds self-consumption
-dispatch only, unless a grid-charge efficiency is given.
+dispatch only, unless a grid-charge efficiency is given. The bound says
+nothing about a dispatch that grid-charges at a better efficiency, above
+the site limit, or at all when the program has no converter; such a run
+is reported as not covered.
 
 The bound is the optimum within the solver's tolerances. The schedule of
 the fixed-health estimate can be turned into instructions (:func:`lp_instructions`) and replayed through the
@@ -760,15 +766,20 @@ def lp_planned_flows(bound: LpBound, problem: LpBoundProblem) -> dict[str, np.nd
 
 FLOOR_AUTO = "auto"
 FLOOR_OPENING = "opening"
+# A covered run's ledger must meet every constraint of the program to within this (Wh over a step).
+COVER_TOLERANCE_WH = 1e-6
 
 
 @dataclass(frozen=True)
 class CoveredRun:
     """A replayed run the bound was checked against, and whether it provably covers it.
 
-    The bound covers a run when the run's lowest first-year health is at or
-    above the program's floor health and the run replaced no battery in the
-    first year. ``reason`` says why not, when it does not.
+    The bound covers a run when the run's first-year ledger, mapped by
+    :func:`ledger_point`, is a feasible point of the program to within
+    :data:`COVER_TOLERANCE_WH` and costs no more than the run did. Then the
+    bound is at most the run's cost. ``reason`` explains a run that is not
+    covered: health below the floor, a first-year replacement, or grid
+    charge the program does not allow.
     """
 
     name: str
@@ -814,23 +825,53 @@ def _min_soh(replay: ReplayResult) -> float:
     return float(replay.artifacts.first_year_results_df["Battery_SOH"].min()) / 100.0
 
 
-def _covered_run(name: str, replay: ReplayResult, floor_soh: float) -> CoveredRun:
+def _covered_run(name: str, replay: ReplayResult, problem: LpBoundProblem, program: LinearProgram) -> CoveredRun:
+    """Whether ``program`` provably covers ``replay``: its ledger is a feasible point that costs no more.
+
+    That certificate is the whole test, so it holds whatever made the run:
+    its health, a replacement, a grid charge at another efficiency or site
+    limit, or grid charge the program does not allow. The reasons explain a
+    failed certificate by what the program does not model.
+    """
+    frame = replay.artifacts.first_year_results_df
     health = _min_soh(replay)
     replacements = first_year_replacements(replay)
     reasons = []
-    if replacements:
-        reasons.append(
-            f"it replaced the battery {replacements} time(s) in the first year, which adds stored energy "
-            "and restores health the program does not model"
-        )
-    if health < floor_soh:
-        reasons.append(f"its health fell to {health:.6f}, below the floor health {floor_soh:.6f}")
+    covered = False
+    if len(frame) != program.n_steps:
+        reasons.append(f"it has {len(frame)} steps, not the program's {program.n_steps}")
+    else:
+        x = ledger_point(program, frame, problem.hours_per_step)
+        violation = max(program.violation(x).values())
+        cost, replayed = float(program.cost @ x), float(replay.first_year_step_cost.sum())
+        covered = violation <= COVER_TOLERANCE_WH and cost <= replayed + 1e-9 * max(1.0, abs(replayed))
+        if not covered:
+            reasons.append(
+                f"its ledger is not a point of the program that costs no more than the run "
+                f"(largest violation {violation:.3g} Wh, program cost {cost:.6f} against {replayed:.6f})"
+            )
+    if not covered:
+        if replacements:
+            reasons.append(
+                f"it replaced the battery {replacements} time(s) in the first year, which adds stored energy "
+                "and restores health the program does not model"
+            )
+        if health < problem.health()[1]:
+            reasons.append(f"its health fell to {health:.6f}, below the floor health {problem.health()[1]:.6f}")
+        grid_ac = float(frame["Grid_AC_To_Battery"].sum())
+        if grid_ac > 0.0 and problem.grid_charge_efficiency is None:
+            reasons.append("it charged from the grid, which the program does not allow")
+        elif grid_ac > 0.0:
+            reasons.append(
+                "it may have charged from the grid at another efficiency or site limit than the program's "
+                f"({problem.grid_charge_efficiency:g}, {problem.grid_import_limit_w:g} W)"
+            )
     return CoveredRun(
         name=name,
         replay=replay,
         min_soh_fraction=health,
         replacements=replacements,
-        covered=not reasons,
+        covered=covered,
         reason="; ".join(reasons) or None,
     )
 
@@ -851,14 +892,19 @@ def run_lp_bound(
     solves at the opening health, replays the reference and the schedule,
     then solves again with the floor at the lowest health, unrounded, that
     any of those replays or the ``covering`` ones reached. The bound then
-    holds for every run it reports, and for any dispatch whose health stays
-    at or above that floor; it does not cover a controller that fades
+    holds for any dispatch whose health stays at or above that floor, that
+    replaces no battery, and that grid-charges only through the program's
+    converter (its grid-charge efficiency and site limit, or not at all
+    when the program has none); it does not cover a controller that fades
     harder. ``"opening"`` keeps the opening health, which covers no run
     that fades. A number is a floor health fraction.
 
-    A run that replaces the battery in its first year is never covered.
-    When a reported run is not covered, a warning says so and
-    ``bound_is_strict`` is False.
+    Each reported run is checked, not assumed: it is covered only if its
+    ledger is a feasible point of the final program that costs no more
+    than the run did (:class:`CoveredRun`). A run that replaced its battery
+    in the first year, or grid-charged in a way the program does not allow,
+    fails that check. When a reported run is not covered, a warning says
+    so and ``bound_is_strict`` is False.
     """
     if "floor_soh_fraction" in problem_overrides:
         raise TypeError("Set the floor health with 'floor_soh', not 'floor_soh_fraction'")
@@ -891,7 +937,8 @@ def run_lp_bound(
     problem = dataclasses.replace(opening, floor_soh_fraction=floor)
     bound = estimate if floor == opening_soh else solve_lp_bound(problem)
 
-    runs = tuple(_covered_run(name, run, floor) for name, run in named.items())
+    program = build_linear_program(problem)
+    runs = tuple(_covered_run(name, run, problem, program) for name, run in named.items())
     for run in runs:
         if not run.covered:
             warnings.warn(f"The LP bound does not provably cover the {run.name} run: {run.reason}", stacklevel=2)
@@ -907,11 +954,26 @@ def run_lp_bound(
     )
 
 
+def schedule_totals(bound: LpBound) -> dict[str, float]:
+    """One schedule's cost and energy totals, in the tariff's currency and kWh."""
+    schedule = bound.schedule
+    return {
+        "cost": bound.objective,
+        "import_cost": bound.import_cost,
+        "export_revenue": bound.export_revenue,
+        "import_kwh": float((schedule["grid_import_to_load_wh"] + schedule["grid_ac_to_battery_wh"]).sum() / 1000),
+        "export_kwh": float(schedule["pv_ac_export_wh"].sum() / 1000),
+        "grid_charge_kwh": float(schedule["grid_ac_to_battery_wh"].sum() / 1000),
+        "battery_ac_to_load_kwh": float(schedule["battery_ac_to_load_wh"].sum() / 1000),
+        "start_energy_wh": bound.start_energy_wh,
+        "end_energy_wh": float(schedule["battery_energy_end_wh"][-1]),
+    }
+
+
 def report(result: LpBoundResult, case: ReplayCase) -> dict[str, Any]:
     """A JSON-safe summary of ``result``."""
     problem, bound = result.problem, result.bound
     soh, floor_soh = problem.health()
-    schedule = bound.schedule
     coverage = {run.name: run for run in result.runs}
 
     def run_fields(name: str, replay: ReplayResult) -> dict[str, Any]:
@@ -938,7 +1000,8 @@ def report(result: LpBoundResult, case: ReplayCase) -> dict[str, Any]:
             "bound": bound.objective,
             "bound_scope": (
                 "a lower bound for any dispatch of this year whose state of health stays at or above "
-                "floor_soh_fraction and that replaces no battery"
+                "floor_soh_fraction, that replaces no battery, and that grid-charges only at "
+                "grid_charge_efficiency within grid_import_limit_w (not at all when it is null)"
             ),
             "floor_mode": result.floor_mode,
             "floor_soh_fraction": floor_soh,
@@ -951,14 +1014,11 @@ def report(result: LpBoundResult, case: ReplayCase) -> dict[str, Any]:
             "grid_charge_efficiency": problem.grid_charge_efficiency,
             "grid_import_limit_w": problem.grid_import_limit_w,
             "inverter_tangents": problem.tangents,
-            "import_cost": bound.import_cost,
-            "export_revenue": bound.export_revenue,
-            "import_kwh": float((schedule["grid_import_to_load_wh"] + schedule["grid_ac_to_battery_wh"]).sum() / 1000),
-            "export_kwh": float(schedule["pv_ac_export_wh"].sum() / 1000),
-            "grid_charge_kwh": float(schedule["grid_ac_to_battery_wh"].sum() / 1000),
-            "battery_ac_to_load_kwh": float(schedule["battery_ac_to_load_wh"].sum() / 1000),
-            "start_energy_wh": bound.start_energy_wh,
-            "end_energy_wh": float(schedule["battery_energy_end_wh"][-1]),
+            # Two schedules: the bound's, and the fixed-health estimate's, which the replay and the CSV use.
+            "schedules": {
+                "bound": schedule_totals(bound),
+                "fixed_health_estimate": {**schedule_totals(result.fixed_health_estimate), "replayed": True},
+            },
             "n_variables": bound.n_variables,
             "n_constraints": bound.n_constraints,
             "solve_seconds": bound.solve_seconds,
@@ -1001,6 +1061,20 @@ def schedule_frame(result: LpBoundResult, case: ReplayCase) -> pd.DataFrame:
     return frame
 
 
+def _floor_soh_argument(value: str) -> str | float:
+    if value in (FLOOR_AUTO, FLOOR_OPENING):
+        return value
+    try:
+        fraction = float(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(
+            f"expected {FLOOR_AUTO!r}, {FLOOR_OPENING!r} or a fraction, got {value!r}"
+        ) from None
+    if not 0.0 < fraction <= 1.0:
+        raise argparse.ArgumentTypeError(f"a floor health fraction must be in (0, 1], got {value!r}")
+    return fraction
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument(
@@ -1011,6 +1085,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--no-replay", action="store_true", help="Skip replaying the schedule's instructions")
     parser.add_argument(
         "--floor-soh",
+        type=_floor_soh_argument,
         default=FLOOR_AUTO,
         help=(
             "Floor health: 'auto' (default) takes the lowest health the reported replays reached, "
@@ -1028,7 +1103,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     overrides: dict[str, Any] = {"tangents": args.tangents}
-    floor_soh: str | float = args.floor_soh if args.floor_soh in (FLOOR_AUTO, FLOOR_OPENING) else float(args.floor_soh)
+    floor_soh: str | float = args.floor_soh
     if args.grid_charge_efficiency is not None:
         overrides["grid_charge_efficiency"] = args.grid_charge_efficiency
     with reuse_prepared_inputs():
