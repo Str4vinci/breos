@@ -223,7 +223,6 @@ def _validated_ac_output_scale(config: Dict[str, Any]) -> float:
 
 # Battery-section keys forwarded to BatteryConfig under the same name.
 _BATTERY_SPEC_KEYS = (
-    "battery_type",
     "min_soc",
     "max_soc",
     "charge_efficiency",
@@ -233,7 +232,6 @@ _BATTERY_SPEC_KEYS = (
     "max_charge_power_w",
     "max_discharge_power_w",
     "power_limit_c_rate",
-    "dc_coupled",
     "calendar_model",
     "enable_resistance_fade",
 )

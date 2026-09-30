@@ -2,13 +2,15 @@
 
 Each test builds the smallest realistic input the function documents, calls it
 with the Agg backend and checks that it wrote its figure. Inputs come from one
-offline App run and one small offline Monte Carlo study where the function
-consumes those result shapes; the rest follow the docstrings.
+offline App run, one small offline Monte Carlo study and two small offline
+``breos sweep`` runs where the function consumes those result shapes; the rest
+follow the docstrings.
 ``plot_pv_loss_waterfall`` and ``plot_montecarlo_simulation`` have their own
 tests in ``test_plotting.py`` and ``test_montecarlo_plotting.py``.
 """
 
 import inspect
+import json
 from types import SimpleNamespace
 
 import numpy as np
@@ -124,10 +126,6 @@ def _assert_written(directory, *names):
         assert path.stat().st_size > 0, name
 
 
-def _monthly_ghi_kwh_m2(weather):
-    return weather["ghi"].resample("ME").sum() / 1000.0
-
-
 def test_every_public_plotting_function_has_a_smoke_test():
     public = {
         name
@@ -234,12 +232,22 @@ def test_plot_breakeven(battery_run, tmp_path):
 
 def test_plot_breakeven_comparison(battery_run, pv_only_run, tmp_path):
     plotting.plot_breakeven_comparison(
-        [battery_run.cost_projection, pv_only_run.cost_projection],
-        ["PV + battery", "PV only"],
-        ["tab:blue", "tab:orange"],
-        str(tmp_path),
+        [battery_run.cost_projection, pv_only_run.cost_projection], ["PV + battery", "PV only"], str(tmp_path)
     )
     _assert_written(tmp_path, "breakeven_comparison.png")
+
+
+def test_plot_breakeven_comparison_of_app_results(tmp_path):
+    results = []
+    for battery_kwh in (0.0, 5.0):
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(app_module, "fetch_tmy_weather_data", _fake_tmy(_build_synthetic_weather()))
+            mp.setattr(app_module, "load_weather", lambda **kw: None)
+            app = App({**_BASE_CONFIG, "battery_kwh": battery_kwh})
+            app.simulate()
+        results.append(app.result())
+    plotting.plot_breakeven_comparison(results, ["PV only", "PV + battery"], str(tmp_path), filename="app.png")
+    _assert_written(tmp_path, "app.png")
 
 
 def test_plot_co2_savings(battery_run, tmp_path):
@@ -291,102 +299,91 @@ def test_plot_breakeven_summary_bar(mc_runs, tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_plot_weather_monthly_comparison(historical_weather, tmp_path):
-    monthly = _monthly_ghi_kwh_m2(historical_weather)
-    by_month = monthly.groupby(monthly.index.month)
-    mean = by_month.mean()
-    half_width = 1.96 * by_month.std() / np.sqrt(by_month.count())
-    stats = pd.DataFrame(
-        {
-            "mean": mean,
-            "ci_low": mean - half_width,
-            "ci_high": mean + half_width,
-            "min": by_month.min(),
-            "max": by_month.max(),
-        }
-    )
-    tmy = _monthly_ghi_kwh_m2(_build_synthetic_weather()).to_numpy()
+@pytest.fixture(scope="module")
+def historical_weather_file(tmp_path_factory, historical_weather):
+    """The multi-year weather CSV a Monte Carlo study reads."""
+    weather_file = tmp_path_factory.mktemp("weather") / "historical.csv"
+    historical_weather.rename_axis("date").reset_index().to_csv(weather_file, index=False)
+    return weather_file
+
+
+def test_plot_weather_monthly_comparison(historical_weather_file, tmp_path):
+    plotting.plot_weather_monthly_comparison(_build_synthetic_weather(), historical_weather_file, str(tmp_path))
     plotting.plot_weather_monthly_comparison(
-        tmy, stats, "GHI (kWh/m²)", "pvgis-sarah3", str(tmp_path), "monthly_ghi_comparison.png"
+        _build_synthetic_weather(), historical_weather_file, str(tmp_path), variable="temp_air"
     )
-    _assert_written(tmp_path, "monthly_ghi_comparison.png")
+    _assert_written(tmp_path, "weather_monthly_ghi.png", "weather_monthly_temp_air.png")
 
 
-def test_plot_weather_annual_ghi_distribution(historical_weather, tmp_path):
-    annual = historical_weather["ghi"].groupby(historical_weather.index.year).sum() / 1000.0
-    tmy_annual = _build_synthetic_weather()["ghi"].sum() / 1000.0
-    plotting.plot_weather_annual_ghi_distribution(annual, tmy_annual, float(annual.mean()), str(tmp_path))
+def test_plot_weather_annual_ghi_distribution(historical_weather_file, tmp_path):
+    plotting.plot_weather_annual_ghi_distribution(_build_synthetic_weather(), historical_weather_file, str(tmp_path))
     _assert_written(tmp_path, "annual_ghi_distribution.png")
 
 
 # ---------------------------------------------------------------------------
-# Orientation and sizing sweeps
+# Sweeps and the optimizer front
 # ---------------------------------------------------------------------------
 
 
-@pytest.fixture
-def orientation_grid():
-    """Azimuth x tilt lattice with a smooth optimum near south at 35 degrees."""
-    azimuth, tilt = np.meshgrid([90.0, 135.0, 180.0, 225.0, 270.0], [0.0, 20.0, 35.0, 50.0])
-    metric = 1500.0 * np.cos(np.radians(azimuth - 180.0) / 2) * np.cos(np.radians(tilt - 35.0))
-    return pd.DataFrame({"Azimuth": azimuth.ravel(), "Tilt": tilt.ravel(), "Metric": metric.ravel()})
+def _run_sweep(directory, config):
+    """Run ``breos sweep`` offline on synthetic weather; return its CSV."""
+    from breos.cli import main
+
+    config_file = directory / "sweep.json"
+    config_file.write_text(json.dumps(config))
+    output = directory / "sweep.csv"
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(app_module, "fetch_tmy_weather_data", _fake_tmy(_build_synthetic_weather()))
+        mp.setattr(app_module, "load_weather", lambda **kw: None)
+        assert main(["sweep", "--config", str(config_file), "--output", str(output)]) == 0
+    return output
 
 
-def test_plot_azitilt_landscape_2d(orientation_grid, tmp_path):
-    plotting.plot_azitilt_landscape_2d(orientation_grid, 180.0, 35.0, str(tmp_path))
-    _assert_written(tmp_path, "optimization_landscape_2d.png")
+@pytest.fixture(scope="module")
+def sizing_sweep(tmp_path_factory):
+    """Module count x battery capacity."""
+    sweep = {"n_modules": [4, 8], "battery_kwh": [0.0, 5.0]}
+    return _run_sweep(tmp_path_factory.mktemp("sizing"), {**_BASE_CONFIG, "sweep": sweep})
 
 
-def test_plot_azitilt_ew_1d(orientation_grid, tmp_path):
-    east = orientation_grid[orientation_grid["Azimuth"] == 90.0]
-    best = east.loc[east["Metric"].idxmax()]
-    plotting.plot_azitilt_ew_1d(
-        east["Tilt"].to_numpy(), east["Metric"].tolist(), best["Tilt"], best["Metric"], str(tmp_path)
+@pytest.fixture(scope="module")
+def orientation_sweep(tmp_path_factory):
+    """Tilt x azimuth, PV only."""
+    sweep = {"tilt": [10, 35, 60], "azimuth": [90, 180, 270]}
+    return _run_sweep(tmp_path_factory.mktemp("orientation"), {**_BASE_CONFIG, "battery_kwh": 0.0, "sweep": sweep})
+
+
+def test_plot_sweep_heatmap(sizing_sweep, tmp_path):
+    plotting.plot_sweep_heatmap(sizing_sweep, "grid_independence_pct", str(tmp_path))
+    # A second sweep whose NPV is 100 lower per kWh of battery: real, non-zero differences.
+    other = pd.read_csv(sizing_sweep)
+    other["npv_savings"] -= 100.0 * other["param_battery_kwh"]
+    with pytest.MonkeyPatch.context() as mp:
+        drawn = []
+        mp.setattr(plotting.plt, "close", lambda *args, **kwargs: drawn.append(plotting.plt.gcf()))
+        plotting.plot_sweep_heatmap(sizing_sweep, "npv_savings", str(tmp_path), diff=other, currency="EUR")
+    image = drawn[0].axes[0].images[0]
+    np.testing.assert_allclose(np.ma.filled(image.get_array(), np.nan), [[0.0, 0.0], [500.0, 500.0]], atol=1e-6)
+    assert (image.norm.vmin, image.norm.vmax) == pytest.approx((-500.0, 500.0))
+    assert drawn[0].axes[1].get_ylabel() == "NPV savings difference (EUR)"
+    plotting.plt.close("all")
+    _assert_written(tmp_path, "sweep_grid_independence_pct.png", "sweep_npv_savings_diff.png")
+
+
+def test_plot_orientation_landscape(orientation_sweep, tmp_path):
+    plotting.plot_orientation_landscape(orientation_sweep, "pv_production_kwh", str(tmp_path))
+    tilt_only = pd.read_csv(orientation_sweep).query("param_azimuth == 180")
+    plotting.plot_orientation_landscape(
+        tilt_only.drop(columns="param_azimuth"), "pv_production_kwh", str(tmp_path), filename="tilt.png"
     )
-    _assert_written(tmp_path, "optimization_1d_tilt_ew.png")
+    _assert_written(tmp_path, "orientation_landscape.png", "tilt.png")
 
 
-@pytest.fixture
-def sizing_pivot():
-    """Grid independence (%) with battery kWh as index and module count as columns."""
-    return pd.DataFrame(
-        [[28.0, 32.5, 35.1], [41.2, 52.8, 58.3], [44.0, 60.1, 68.9]],
-        index=[0.0, 5.0, 10.0],
-        columns=[4, 8, 12],
+def test_plot_pareto_front(sizing_sweep, tmp_path):
+    plotting.plot_pareto_front(
+        sizing_sweep, str(tmp_path), x="grid_independence_pct", y="npv_savings", color_by="battery_kwh"
     )
-
-
-def test_plot_grid_independence_heatmap(sizing_pivot, tmp_path):
-    plotting.plot_grid_independence_heatmap(sizing_pivot, str(tmp_path), "Porto", vmin=0.0, vmax=100.0)
-    _assert_written(tmp_path, "grid_independence_heatmap.png")
-
-
-def test_plot_location_comparison_delta(sizing_pivot, tmp_path):
-    delta = sizing_pivot - sizing_pivot.to_numpy().mean()
-    plotting.plot_location_comparison_delta(delta, str(tmp_path), "Porto", "Berlin")
-    _assert_written(tmp_path, "grid_independence_delta.png")
-
-
-# Matplotlib 3.11 returns the colour cycle as RGB tuples, which scatter's c=
-# reads as values to colour-map when a group has exactly three points.
-@pytest.mark.filterwarnings("ignore:\\*c\\* argument looks like a single numeric RGB")
-def test_plot_pareto_front_analysis(tmp_path):
-    rng = np.random.default_rng(0)
-    rows = [
-        {
-            "Consumption_kWh": consumption,
-            "Tariff": tariff,
-            "Detailed_Strategy": strategy,
-            "Net_Cost": consumption * 0.2 - 40.0 * point + rng.normal(0.0, 20.0),
-            "Grid_Independence_%": 20.0 + 8.0 * point + rng.normal(0.0, 2.0),
-        }
-        for consumption in (3000, 5000)
-        for tariff in ("flat", "bi-hourly")
-        for strategy in ("PV only", "PV + battery")
-        for point in range(4)
-    ]
-    plotting.plot_pareto_front_analysis(pd.DataFrame(rows), [3000, 5000], str(tmp_path))
-    _assert_written(tmp_path, "pareto_front_refined.png", "pareto_front_3000.csv", "pareto_front_5000.csv")
+    _assert_written(tmp_path, "pareto_front.png")
 
 
 def test_plot_cell_temperature_leaves_months_without_data_empty(tmp_path, monkeypatch):

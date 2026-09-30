@@ -26,10 +26,9 @@ def _day(*, temperature_c: float = 25.0) -> DegradationDay:
 
 
 def test_native_adapter_implements_lifecycle_contract_and_snapshot_shape():
-    def cycle_step(soh, cycles, nominal_energy_wh, *, fec_cum, **kwargs):
+    def cycle_step(soh, cycles, *, fec_cum, **kwargs):
         assert len(cycles) == 1
         assert cycles[0]["doc"] == pytest.approx(0.8)
-        assert nominal_energy_wh == 5000.0
         return soh - 0.01, 0.01, fec_cum + 0.8
 
     def calendar_step(soh, *, cumulative_cal_seconds, **kwargs):
@@ -40,8 +39,6 @@ def test_native_adapter_implements_lifecycle_contract_and_snapshot_shape():
         initial_soh_fraction=1.0,
         initial_fec=2.0,
         initial_calendar_seconds=86400.0,
-        nominal_energy_wh=5000.0,
-        battery_type="lfp",
         k0_fraction=1.0,
         activation_energy=1.0,
         soc_exponent=1.0,
@@ -82,7 +79,7 @@ def test_native_rainflow_stream_matches_nested_cross_midnight_whole_trace():
     ticks_per_second = 1_000_000.0
     time_ticks = np.arange(len(trace), dtype=np.int64) * int(3600 * ticks_per_second)
 
-    def cycle_step(soh, cycles, nominal_energy_wh, *, fec_cum, **kwargs):
+    def cycle_step(soh, cycles, *, fec_cum, **kwargs):
         increment = sum(float(cycle["doc"]) * float(cycle["count"]) for cycle in cycles)
         return soh, 0.0, fec_cum + increment
 
@@ -94,8 +91,6 @@ def test_native_rainflow_stream_matches_nested_cross_midnight_whole_trace():
         "initial_soh_fraction": 1.0,
         "initial_fec": 0.0,
         "initial_calendar_seconds": 0.0,
-        "nominal_energy_wh": 5000.0,
-        "battery_type": "lfp",
         "k0_fraction": 1.0,
         "activation_energy": 1.0,
         "soc_exponent": 1.0,

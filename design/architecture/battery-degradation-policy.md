@@ -12,10 +12,10 @@ remains its default; BLAST is an explicit opt-in through
 `degradation_engine="blast"` and a named `blast_model`. Unsupported
 combinations raise rather than silently falling back to native behavior.
 
-The App-level `battery_type` key was already rejected by strict validation in
-0.3.4. Its targeted 0.4.0 error is migration guidance, not a newly removed App
-feature. The lower-level `BatteryConfig(battery_type="LFP")` API remains
-supported for native degradation and is not a BLAST model selector.
+There is no chemistry selector. The App-level `battery_type` key was rejected
+by strict validation from 0.3.4, with a targeted error from 0.4.0; 0.7.0
+removed that error and the lower-level `BatteryConfig.battery_type` field,
+which only ever accepted `"lfp"`. `App` now rejects the key as unknown.
 
 Changes to these selectors, documented result/provenance fields, or default
 behavior require focused `App` tests and an explicit changelog migration note.

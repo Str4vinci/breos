@@ -119,7 +119,6 @@ EXPECTED_CLI_FIELDS = [
     "calendar_model",
     "degradation_engine",
     "blast_model",
-    "dc_coupled",
     "inverter_efficiency",
     "inverter_loading_ratio",
     "inverter_ac_rating_kw",
@@ -147,7 +146,6 @@ def test_registry_preserves_defaults_and_allowed_top_level_keys():
             "period",
             "montecarlo",
             "sweep",
-            "battery_type",
         }
     )
 
@@ -169,9 +167,12 @@ def test_registry_generates_every_app_config_cli_option():
         assert action.default is None
         actual_choices = tuple(action.choices) if action.choices is not None else None
         assert actual_choices == field.cli_choices
-        if field.cli_action == "store_true":
-            assert action.const is True
-            assert action.default is None
+
+
+def test_dc_coupled_has_no_cli_flag():
+    # The key only accepts True, its default, so a flag could never change it.
+    with pytest.raises(SystemExit):
+        cli.build_parser().parse_args(["run", "--dc-coupled"])
 
 
 def test_registry_generated_cli_values_all_reach_config_overrides():
@@ -180,8 +181,6 @@ def test_registry_generated_cli_values_all_reach_config_overrides():
         if not field.cli_flags:
             continue
         argv.append(field.cli_flags[0])
-        if field.cli_action == "store_true":
-            continue
         if field.cli_choices is not None:
             raw: object = field.cli_choices[0]
         elif field.cli_type is int:

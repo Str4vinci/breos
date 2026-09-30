@@ -1,5 +1,6 @@
 """Tests for the battery module."""
 
+import importlib
 from copy import deepcopy
 
 import numpy as np
@@ -14,12 +15,14 @@ from breos.battery import (
     _get_degradation_params,
     _ResultBuffers,
     _update_battery_soh_cyclewise_arrays,
+    _update_battery_soh_from_cycles,
     align_simulation_inputs,
     apply_indoor_temperature_model,
     lfp_capacity_factor,
     resistance_to_efficiency,
     simulate_energy_balance,
     simulate_energy_balance_summary,
+    update_battery_resistance_cyclewise,
     update_battery_soh_cyclewise,
 )
 from breos.constants import LAM_EA_J_MOL, LAM_SOC_EXPONENT_N
@@ -36,9 +39,8 @@ class TestBatteryConfig:
         assert cfg.max_soc == 0.90
         assert cfg.min_soc == 0.10
         assert cfg.eol_percentage == 0.70
-        assert cfg.dc_coupled is True
         assert cfg.inverter_efficiency == 0.96
-        assert cfg.battery_type == "lfp"
+        assert cfg.thermal_resistance_k_per_w == 0.05
         assert cfg.calendar_model == "naumann_lam_field_calibrated"
 
     def test_eol_default_agrees_across_config_surfaces(self):
@@ -59,17 +61,14 @@ class TestBatteryConfig:
         with pytest.raises(TypeError, match="replacement_cost"):
             BatteryConfig(nominal_energy_wh=5000, replacement_cost=1000.0)
 
-    def test_battery_type_accessible(self):
-        cfg = BatteryConfig(nominal_energy_wh=5000, battery_type="LFP")
-        assert cfg.battery_type == "lfp"
-
-    def test_non_lfp_battery_type_rejected(self):
-        with pytest.raises(ValueError, match="supports only: lfp"):
-            BatteryConfig(nominal_energy_wh=5000, battery_type="nmc")
-
-    def test_ac_coupled_dispatch_rejected(self):
-        with pytest.raises(NotImplementedError, match="AC-coupled"):
-            BatteryConfig(nominal_energy_wh=5000, dc_coupled=False)
+    @pytest.mark.parametrize(
+        "removed", [{"battery_type": "lfp"}, {"dc_coupled": True}, {"thermal_resistance_kw": 0.05}]
+    )
+    def test_removed_fields_are_rejected(self, removed):
+        # The chemistry selector only accepted "lfp", dc_coupled only True, and
+        # the thermal resistance holds K/W; none is a field any more.
+        with pytest.raises(TypeError, match=next(iter(removed))):
+            BatteryConfig(nominal_energy_wh=5000, **removed)
 
     @pytest.mark.parametrize("field", ["max_charge_power_w", "max_discharge_power_w"])
     @pytest.mark.parametrize("value", [-1.0, float("inf"), float("nan")])
@@ -115,20 +114,24 @@ class TestBatteryConfig:
             ({"nominal_energy_wh": 1000.0, "discharge_efficiency": 1.1}, "discharge_efficiency"),
             ({"nominal_energy_wh": 1000.0, "inverter_efficiency": float("nan")}, "inverter_efficiency"),
             ({"nominal_energy_wh": 1000.0, "standby_loss_wh": -1.0}, "standby_loss_wh"),
-            ({"nominal_energy_wh": 1000.0, "thermal_resistance_kw": -1.0}, "thermal_resistance_kw"),
+            ({"nominal_energy_wh": 1000.0, "thermal_resistance_k_per_w": -1.0}, "thermal_resistance_k_per_w"),
             ({"nominal_energy_wh": 1000.0, "max_charge_power_w": True}, "max_charge_power_w"),
-            ({"nominal_energy_wh": 1000.0, "dc_coupled": "true"}, "dc_coupled"),
         ],
     )
     def test_physical_configuration_validation(self, kwargs, match):
         with pytest.raises(ValueError, match=match):
             BatteryConfig(**kwargs)
 
-    def test_cycle_aging_rejects_non_lfp_battery_type(self):
+    @pytest.mark.parametrize(
+        "removed", [{"nominal_energy_Wh": 5000.0}, {"battery_type": "lfp"}, {"use_rainflow": True}, {"debug": False}]
+    )
+    def test_cycle_aging_takes_no_removed_arguments(self, removed):
+        # Capacity was deleted on entry, the chemistry could only be LFP, the
+        # extrema counter was never used, and debug only printed.
         soc = pd.Series([0.1, 0.8, 0.2], index=pd.date_range("2025-01-01", periods=3, freq="h"))
 
-        with pytest.raises(ValueError, match="supports only: lfp"):
-            update_battery_soh_cyclewise(1.0, soc, 5000.0, battery_type="nca")
+        with pytest.raises(TypeError, match=next(iter(removed))):
+            update_battery_soh_cyclewise(1.0, soc, **removed)
 
     @pytest.mark.parametrize("freq", ["5min", "15min", "h"])
     @pytest.mark.parametrize("unit", ["s", "ms", "us", "ns"])
@@ -142,7 +145,6 @@ class TestBatteryConfig:
         expected = update_battery_soh_cyclewise(
             0.93,
             series,
-            6000.0,
             fec_cum=12.5,
         )
         time_ticks, ticks_per_second = _datetime_index_ticks(index)
@@ -152,7 +154,6 @@ class TestBatteryConfig:
             values,
             time_ticks,
             ticks_per_second,
-            6000.0,
             fec_cum=12.5,
         )
 
@@ -199,6 +200,83 @@ class TestResistanceToEfficiency:
         assert eff_discharge == pytest.approx(0.0082)
         assert eff_charge < 0.01
         assert eff_discharge < 0.01
+
+
+class TestRemovedBatteryApi:
+    @pytest.mark.parametrize(
+        "module,name",
+        [
+            ("breos", "detect_cycles_rainflow"),
+            ("breos", "detect_half_cycles_from_soc_series"),
+            ("breos", "k_c_rate_R"),
+            ("breos", "k_doc_R"),
+            ("breos.battery", "detect_cycles_rainflow"),
+            ("breos.battery", "detect_half_cycles_from_soc_series"),
+            ("breos.battery", "k_c_rate_R"),
+            ("breos.battery", "k_doc_R"),
+            ("breos.battery", "SUPPORTED_BATTERY_TYPES"),
+            ("breos.constants", "NAUMANN_LAM_FIELD_CALIBRATED_V1_K0_FRAC"),
+            ("breos.constants", "NAUMANN_LAM_FIELD_CALIBRATED_V1_EA_J_MOL"),
+            ("breos.constants", "NAUMANN_LAM_FIELD_CALIBRATED_V1_EXPONENT_B"),
+            ("breos.constants", "NAUMANN_LAM_FIELD_CALIBRATED_V1_SOC_EXPONENT_N"),
+            ("breos.constants", "DEFAULT_THERMAL_RESISTANCE_KW"),
+        ],
+    )
+    def test_removed_names_are_gone(self, module, name):
+        assert not hasattr(importlib.import_module(module), name)
+
+    @pytest.mark.parametrize("simulate", [simulate_energy_balance, simulate_energy_balance_summary])
+    @pytest.mark.parametrize("removed", [{"debug": False}, {"results_directory": "results"}])
+    def test_simulate_takes_no_removed_arguments(self, simulate, removed):
+        idx = pd.date_range("2025-01-01", periods=24, freq="h", tz="UTC")
+        with pytest.raises(TypeError, match=next(iter(removed))):
+            simulate(
+                pv_dc=pd.Series(0.0, index=idx),
+                houseload=pd.DataFrame({"Load": 100.0}, index=idx),
+                battery_config=BatteryConfig(nominal_energy_wh=1000.0),
+                **removed,
+            )
+
+    def test_positional_calls_past_a_removed_argument_fail_loudly(self):
+        # Without keyword-only arguments, an old call would have passed its
+        # capacity as fec_cum and its results directory as initial_fec.
+        idx = pd.date_range("2025-01-01", periods=24, freq="h", tz="UTC")
+        soc = pd.Series([0.1, 0.8, 0.2], index=idx[:3])
+        with pytest.raises(TypeError, match="positional"):
+            update_battery_soh_cyclewise(1.0, soc, 5000.0)
+        # The private cycle steps lost the same capacity slot before fec_cum.
+        time_ticks, ticks_per_second = _datetime_index_ticks(soc.index)
+        with pytest.raises(TypeError, match="positional"):
+            _update_battery_soh_cyclewise_arrays(1.0, soc.to_numpy(), time_ticks, ticks_per_second, 5000.0)
+        with pytest.raises(TypeError, match="positional"):
+            _update_battery_soh_from_cycles(1.0, [], 5000.0)
+        with pytest.raises(TypeError, match="positional"):
+            simulate_energy_balance(
+                pd.Series(0.0, index=idx),
+                pd.DataFrame({"Load": 100.0}, index=idx),
+                BatteryConfig(nominal_energy_wh=1000.0),
+                None,
+                None,
+                "h",
+                None,
+                None,
+            )
+
+    def test_summary_has_no_battery_flag(self):
+        idx = pd.date_range("2025-01-01", periods=24, freq="h", tz="UTC")
+        summary = simulate_energy_balance_summary(
+            pv_dc=pd.Series(0.0, index=idx),
+            houseload=pd.DataFrame({"Load": 100.0}, index=idx),
+            battery_config=BatteryConfig(nominal_energy_wh=1000.0),
+        )
+        # Nothing read it; a caller knows whether it configured a battery.
+        assert not hasattr(summary, "has_battery")
+
+    def test_resistance_cycle_step_needs_a_count(self):
+        # Every rainflow cycle carries a count; a missing one was read as a
+        # full cycle when the extrema counter could omit it.
+        with pytest.raises(KeyError, match="count"):
+            update_battery_resistance_cyclewise(0.0, [{"doc": 0.5, "mean_c_rate": 0.3}], 0.0)
 
 
 class TestSimulateEnergyBalance:
@@ -702,7 +780,7 @@ class TestSimulateEnergyBalance:
         idx = pd.date_range("2025-01-01 00:00", periods=6, freq="h", tz="UTC")
         pv_dc = pd.Series(100.0, index=idx)
         houseload = pd.DataFrame({"Load": 0.0}, index=idx)
-        config = BatteryConfig(nominal_energy_wh=10000, battery_type="lfp")
+        config = BatteryConfig(nominal_energy_wh=10000)
         temperature = pd.Series([25.0, 25.0, 0.0, 0.0, 0.0, 0.0], index=idx)
 
         results_df, *_ = simulate_energy_balance(
@@ -1009,8 +1087,8 @@ class TestSimulateEnergyBalance:
         pv_values[8:16] = 1200.0
         load_values[16:24] = 900.0
 
-        def force_replacement_on_cycle(soh, cycles, nominal_energy_wh, *, fec_cum, **kwargs):
-            del nominal_energy_wh, kwargs
+        def force_replacement_on_cycle(soh, cycles, *, fec_cum, **kwargs):
+            del kwargs
             cycle_fec = sum(cycle["doc"] * cycle["count"] for cycle in cycles)
             if cycle_fec > 0.0 and soh > 0.95:
                 return soh - 0.1, 0.1, fec_cum + cycle_fec
@@ -1570,7 +1648,7 @@ class TestEnergyLedger:
                 nominal_energy_wh=1000.0,
                 enable_replacement=False,
                 enable_resistance_fade=True,
-                thermal_resistance_kw=0.0,
+                thermal_resistance_k_per_w=0.0,
             ),
             temperature_series=pd.Series([10.0] * 12 + [30.0] * 12, index=idx),
             freq="h",

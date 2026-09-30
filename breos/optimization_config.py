@@ -198,7 +198,6 @@ BATTERY_TABLE = TableSpec(
         # Forwarded to BatteryConfig, which checks the values.
         **dict.fromkeys(
             (
-                "battery_type",
                 "min_soc",
                 "max_soc",
                 "charge_efficiency",
@@ -208,7 +207,6 @@ BATTERY_TABLE = TableSpec(
                 "max_charge_power_w",
                 "max_discharge_power_w",
                 "power_limit_c_rate",
-                "dc_coupled",
                 "enable_resistance_fade",
             ),
             anything,

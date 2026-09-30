@@ -16,6 +16,7 @@ Before 0.3.3, a config could name a non-LFP pack (`BatteryConfig.battery_type`)
 but still age it on LFP curves. In 0.3.3 the native path was made explicit:
 `BatteryConfig(battery_type="LFP")` normalizes to `"lfp"`, and unsupported
 chemistries now raise instead of silently reusing LFP cycle-aging parameters.
+0.7.0 removed the field, which only ever accepted `"lfp"`.
 The runner (`breos/runners/app.py`) exposes BLAST through explicit
 `degradation_engine` / `blast_model` config keys and a declarative profile
 registry. Profiles supply only sourced defaults; no generic chemistry defaults
@@ -203,9 +204,9 @@ drift-prone — keep additions minimal until that lands):
    a clear error, never silently fall back to native (see the Monte Carlo note in
    Performance / Phasing).
 3. `breos/runners/app.py`: pass both into the energy-balance path. Do not
-   repurpose lower-level `BatteryConfig.battery_type`, which remains a guarded
-   native-LFP selector; App migration guidance points callers to the explicit
-   `degradation_engine` / `blast_model` keys.
+   repurpose lower-level `BatteryConfig.battery_type`, then a guarded
+   native-LFP selector (removed in 0.7.0); App migration guidance points
+   callers to the explicit `degradation_engine` / `blast_model` keys.
 4. `breos/cli.py`: `--degradation-engine` / `--blast-model` flags via
    `_add_override`.
 
@@ -379,7 +380,7 @@ Resolved:
   branch proved snapshot continuity across all 14 BLAST models, including the
   P3b multi-mode models.
 - **[DECIDED] Do not repurpose `battery_type` for BLAST chemistry.** At the
-  lower level it is a guarded native-LFP selector. Strict App validation already
+  lower level it was a guarded native-LFP selector until 0.7.0 removed it. Strict App validation already
   rejected the key in 0.3.4; 0.4.0 adds a targeted migration error. The explicit
   `degradation_engine` / `blast_model` keys select BLAST instead.
 

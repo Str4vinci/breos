@@ -232,8 +232,9 @@ so rows 1–4 also apply to it.
 | 29 | `plot_tariff_comparison` input column | `No System Cost (€)` | `No System Cost` |
 
 As shipped, the changelog's table omits rows 12 and 18, which went earlier in
-0.7.0 with the steady-state objective basis (#270), and rows 28 and 29,
-whose function was removed (#287).
+0.7.0 with the steady-state objective basis (#270), rows 28 and 29, whose
+function was removed (#287), and row 27, whose function was removed with the
+tool-only plots (#186).
 
 Rows 24–26 substitute the resolved currency code, so an EUR run writes the
 same text as today. Names that are already neutral keep them: the projection

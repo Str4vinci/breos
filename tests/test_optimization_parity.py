@@ -207,8 +207,7 @@ def test_optimizer_battery_defaults_match_app_defaults():
         "charge_efficiency",
         "discharge_efficiency",
         "standby_loss_wh",
-        "battery_type",
-        "dc_coupled",
+        "thermal_resistance_k_per_w",
         "calendar_model",
         "enable_resistance_fade",
     ):

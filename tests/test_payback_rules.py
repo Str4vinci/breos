@@ -192,9 +192,7 @@ def test_breakeven_comparison_marks_a_crossing_before_the_second_year(tmp_path, 
     early, late = _projection([50.0, 100.0]), _projection([-300.0, -100.0, 200.0])
     first_year = _projection([79.0, 200.0], investment=21.0)
 
-    plotting.plot_breakeven_comparison(
-        [early, late, first_year], ["early", "late", "first year"], ["C0", "C1", "C2"], str(tmp_path)
-    )
+    plotting.plot_breakeven_comparison([early, late, first_year], ["early", "late", "first year"], str(tmp_path))
 
     assert lines == [pytest.approx(1.0), pytest.approx(2 + 1 / 3), pytest.approx(0.21)]
 
