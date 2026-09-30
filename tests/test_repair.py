@@ -6,7 +6,6 @@ import numpy as np
 import pandas as pd
 import pytest
 
-import breos
 from breos import App
 from breos.io import InputRepairReport, repair_series
 

@@ -10,7 +10,7 @@ from breos.economics import CostParams
 from breos.emissions import EmissionsParams
 from breos.load_profiles import load_profile
 from breos.pv_modules import get_module
-from breos.solar import PVModuleParams, calculate_pv_production_dc
+from breos.solar import calculate_pv_production_dc
 from breos.weather import extract_ambient_temperature
 
 # ---------------------------------------------------------------------------

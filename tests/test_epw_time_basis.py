@@ -1,8 +1,6 @@
 """EPW radiation is a left-labelled hourly interval mean (#213)."""
 
-import numpy as np
 import pandas as pd
-import pytest
 from pvlib.location import Location
 
 from breos.pv_modules import get_module

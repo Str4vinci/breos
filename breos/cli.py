@@ -36,7 +36,7 @@ from breos.pv_modules import MODULES
 from breos.resources import load_config_json
 from breos.solar import resolve_pvwatts_losses
 from breos.tariffs import DEFAULT_CURRENCY
-from breos.utils import normalise_frequency, package_version
+from breos.utils import package_version
 
 
 def _sha256(path: Path) -> str:

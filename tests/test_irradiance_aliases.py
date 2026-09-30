@@ -1,7 +1,6 @@
 """One irradiance alias map for the resampler, the PV model and horizon shading (#211)."""
 
 import numpy as np
-import pandas as pd
 import pytest
 from pvlib.location import Location
 

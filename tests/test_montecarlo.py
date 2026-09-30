@@ -394,7 +394,6 @@ def test_run_montecarlo_defaults_years_to_projection_years(tmp_path, write_multi
 
 
 def test_run_montecarlo_threads_sell_price_inflation(tmp_path, monkeypatch, write_multiyear_weather):
-    import breos.montecarlo as mc_module
 
     weather = write_multiyear_weather(tmp_path / "multi.csv")
     seen = {}
@@ -435,7 +434,6 @@ def test_run_montecarlo_threads_battery_power_limits(tmp_path, monkeypatch, writ
 def test_montecarlo_carries_battery_and_pv_origin_inventory_between_years(
     tmp_path, monkeypatch, write_multiyear_weather
 ):
-    import breos.montecarlo as mc_module
 
     weather = write_multiyear_weather(tmp_path / "multi.csv", years=(2021,))
     original = projection_module.simulate_energy_balance_summary

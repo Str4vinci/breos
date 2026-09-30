@@ -68,7 +68,6 @@ from breos.weather import (
     preload_weather_by_year,
     resample_to_15min,
     weather_metadata,
-    weather_representative_time_offset,
 )
 
 # Per-run columns summarized across runs, under the same names.

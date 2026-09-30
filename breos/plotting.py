@@ -23,8 +23,7 @@ from breos.weather import extract_ambient_temperature, preload_weather_by_year
 
 MONTH_LABELS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
 
-# matplotlib is the optional ``plots`` extra. ``import breos`` loads this
-# module only when a plotting name is first used, so the error surfaces there.
+# matplotlib is the optional ``plots`` extra. Importing this module validates it.
 try:
     import matplotlib.dates as mdates
     import matplotlib.pyplot as plt

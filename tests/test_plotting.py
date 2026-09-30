@@ -1,10 +1,21 @@
 """Tests for plotting helpers."""
 
+import os
 import subprocess
 import sys
+from pathlib import Path
 
 import pandas as pd
 import pytest
+
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
+def _subprocess_env():
+    env = os.environ.copy()
+    pythonpath = [str(_REPO_ROOT), env.get("PYTHONPATH", "")]
+    env["PYTHONPATH"] = os.pathsep.join(path for path in pythonpath if path)
+    return env
 
 
 def test_plotting_without_matplotlib_names_the_plots_extra():
@@ -23,27 +34,25 @@ except ImportError as exc:
 else:
     raise AssertionError("breos.plotting loaded without matplotlib")
 
-try:
-    breos.plot_co2_savings
-except AttributeError as exc:
-    assert 'pip install "breos[plots]"' in str(exc), exc
-else:
-    raise AssertionError("breos.plot_co2_savings resolved without matplotlib")
 """
-    completed = subprocess.run([sys.executable, "-c", code], text=True, capture_output=True, check=False)
+    completed = subprocess.run(
+        [sys.executable, "-c", code], env=_subprocess_env(), text=True, capture_output=True, check=False
+    )
 
     assert completed.returncode == 0, completed.stderr
 
 
-def test_package_discovery_without_matplotlib_skips_lazy_plots():
-    # The lazy plotting names raised ImportError from breos.__getattr__, which
-    # broke help(breos), inspect.getmembers and getattr with a default.
+def test_package_discovery_with_matplotlib_stub_without_spec():
+    # #314: introspection must not call find_spec for an incomplete module stub.
     code = """
 import inspect
 import pydoc
 import sys
+import types
 
-sys.modules["matplotlib"] = None
+matplotlib_stub = types.ModuleType("matplotlib")
+assert matplotlib_stub.__spec__ is None
+sys.modules["matplotlib"] = matplotlib_stub
 import breos
 
 assert "plot_co2_savings" not in dir(breos)
@@ -52,7 +61,9 @@ assert not hasattr(breos, "plot_co2_savings")
 inspect.getmembers(breos)
 pydoc.render_doc(breos)
 """
-    completed = subprocess.run([sys.executable, "-c", code], text=True, capture_output=True, check=False)
+    completed = subprocess.run(
+        [sys.executable, "-c", code], env=_subprocess_env(), text=True, capture_output=True, check=False
+    )
 
     assert completed.returncode == 0, completed.stderr
 

@@ -4,7 +4,6 @@ import csv
 import json
 import re
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 

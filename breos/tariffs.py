@@ -17,7 +17,7 @@ import hashlib
 import json
 import math
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import date, datetime
 from functools import lru_cache
 from numbers import Real
