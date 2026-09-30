@@ -421,6 +421,31 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
     charge the program does not allow. The optimum at the opening health is reported
     only as `fixed_health_estimate`, which is not a bound. `--floor-soh`
     also takes `opening` or a fraction (schema `breos_lp_bound_v1`).
+- `tools/benchmark_optimization.py` times the public
+  `optimize_system_multi_objective` on the Python and Numba backends. It is
+  a tool, not public API, and no result changes. The study is a
+  three-year, fixed-target time-of-use search on the PT 2026 daily
+  two-period tariff, hourly and at 15 minutes. Its weather is the local
+  Porto TMY, read through `load_weather`, and its load is the bundled
+  demandlib H0 profile. `--weather-file` takes one complete year of other
+  weather. A weather metadata sidecar that does not match its file, or has
+  another schema version, stops the run, since its timing fields reach the
+  resampler and the PV model. Every case's inputs are checked before the
+  first run. Before any timing, both backends must give the same Pareto
+  designs, pymoo optimum, objectives, diagnostics and evaluation and
+  generation counts at the same seed. A fixed 8-module, 5 kWh design must also give the same
+  `evaluate_projected_design` tables and the same `App` step ledgers and
+  degradation state on both, and that design must charge from the grid and
+  replace its battery. Each measurement runs in a fresh process: a cold run
+  per backend, with an empty `NUMBA_CACHE_DIR` for Numba, and at least
+  three warm runs (`--warm-repeats`), each after an untimed warm-up at the
+  study size. With one worker, a timed run whose counts differ from the
+  parity run fails its case. `--smoke` allows fewer warm runs and marks the
+  report. The report gives total time, the `SolarDesignProblem`
+  construction time, the residual search and wrapper time, peak RSS (the
+  child's own `VmHWM` on Linux, `ru_maxrss` elsewhere), and the speedup
+  over the Python warm median. `--output` writes it as JSON (schema
+  `breos_optimization_benchmark_v1`), also when a run fails part way.
 
 ### Changed
 - Result schema 2.0 renames `monthly[].import_kwh` and
