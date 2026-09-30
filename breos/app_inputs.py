@@ -22,7 +22,7 @@ from breos.solar import (
     calculate_pv_production_breakdown,
     calculate_pv_production_tracking_breakdown,
 )
-from breos.utils import get_hours_per_step, remap_datetime_index_years
+from breos.utils import _has_fixed_utc_offset, get_hours_per_step, remap_datetime_index_years
 from breos.weather import (
     WEATHER_METADATA_KEY,
     AmbiguousWeatherError,
@@ -78,23 +78,35 @@ def remap_tmy_year(df: pd.DataFrame, target_year: int) -> pd.DataFrame:
 
     A leap target year gets a 29 February copied from 28 February, so a
     non-leap TMY covers the leap year the load profile already covers.
+
+    An index at a fixed UTC offset, such as a PVGIS TMY saved at ``+01:00``,
+    is shifted on its own clock, the clock :func:`fill_leap_day` reads. Shifted
+    in UTC, its local 1 March 00:00 would land on 29 February of a leap year,
+    and the fill would be skipped. A naive index, or one under a zone with
+    transitions, is shifted in UTC, where a whole-year shift cannot land on a
+    nonexistent or ambiguous local time.
     """
     idx = df.index
     if not isinstance(idx, pd.DatetimeIndex) or len(idx) == 0:
         return df
     was_tz = idx.tz
-    idx_utc = idx.tz_convert("UTC") if was_tz is not None else idx.tz_localize("UTC")
-    dominant_year = cast(int, idx_utc.year.value_counts().idxmax())
+    own_clock = was_tz is not None and _has_fixed_utc_offset(was_tz)
+    if own_clock:
+        idx_shift = idx
+    else:
+        idx_shift = idx.tz_convert("UTC") if was_tz is not None else idx.tz_localize("UTC")
+    dominant_year = cast(int, idx_shift.year.value_counts().idxmax())
     offset = target_year - dominant_year
     if offset == 0:
         return fill_leap_day(df)
     weather_metadata = deepcopy(df.attrs.get(WEATHER_METADATA_KEY))
     remapped = df.copy()
-    remapped.index = idx_utc
+    remapped.index = idx_shift
     remapped = remap_datetime_index_years(remapped, offset)
-    new_idx = remapped.index
-    new_idx = new_idx.tz_convert(was_tz) if was_tz is not None else new_idx.tz_localize(None)
-    remapped.index = new_idx
+    if not own_clock:
+        new_idx = remapped.index
+        new_idx = new_idx.tz_convert(was_tz) if was_tz is not None else new_idx.tz_localize(None)
+        remapped.index = new_idx
     if weather_metadata is not None:
         remapped.attrs[WEATHER_METADATA_KEY] = weather_metadata
     return fill_leap_day(remapped)
