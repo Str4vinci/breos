@@ -1,5 +1,6 @@
 """The dispatch-replay oracle: instructions through the production App run (plan step 7)."""
 
+import dataclasses
 import math
 
 import numpy as np
@@ -56,7 +57,10 @@ def test_replaying_the_fixed_target_instructions_reproduces_the_app_run():
     pd.testing.assert_frame_equal(run.yearly_df, app.yearly_df, check_exact=True)
     pd.testing.assert_frame_equal(run.cost_projection, app.cost_projection, check_exact=True)
     pd.testing.assert_frame_equal(run.projection.period_energy, app.projection.period_energy, check_exact=True)
-    assert run.projection.carry == app.projection.carry
+    # The App run's fixed target went through the daily controller seam, so
+    # only it carries controller state; the physical carry is the same.
+    assert run.projection.carry == dataclasses.replace(app.projection.carry, controller_carry=None)
+    assert app.projection.carry.controller_carry is not None
     assert (replay.plan_matched, replay.mismatched_steps) == (True, ())
     assert all(not difference.any() for difference in replay.planned_minus_delivered_wh.values())
     year_one = app.yearly_df.iloc[0]

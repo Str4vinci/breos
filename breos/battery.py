@@ -8,15 +8,17 @@ This module handles battery energy storage simulation including:
 - Cycle and calendar aging
 """
 
+import dataclasses
 import math
 from dataclasses import dataclass, field
 from types import MappingProxyType
-from typing import Any, Dict, List, Mapping, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Mapping, Optional, Tuple, Union
 
 import numpy as np
 import pandas as pd
 import rainflow
 
+from breos._controller import ControllerBatteryState, ControllerCarry, DailyDispatchController, _ControllerSession
 from breos._dispatch import (  # noqa: F401  -- the dispatch step moved; its names stay importable here
     _LEDGER_COLUMNS,
     _N_ROWS,
@@ -81,6 +83,9 @@ from breos.dispatch_instructions import DispatchInstructions
 from breos.execution import is_pv_only_dispatch, validate_execution_backend
 from breos.inverter import _calculate_dc_ac_power_arrays
 from breos.utils import _datetime_index_ticks, get_hours_per_step, remap_datetime_index_years
+
+if TYPE_CHECKING:
+    from breos.tariffs import ResolvedTariff
 
 
 @dataclass
@@ -1257,6 +1262,8 @@ class _CoreRun:
     lifecycle: DegradationLifecycle
     degradation_tracking: List[Dict[str, Any]]
     hours_per_step: float
+    # The daily controller's carry; None without a controller.
+    controller_carry: Optional[ControllerCarry] = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -1438,6 +1445,11 @@ def _simulate_core(
     execution_backend: str = "python",
     summary_only: bool = False,
     aligned: Optional[AlignedSimulationInputs] = None,
+    day_controller: Optional[DailyDispatchController] = None,
+    controller_tariff: Optional["ResolvedTariff"] = None,
+    controller_carry: Optional[ControllerCarry] = None,
+    projection_year: int = 0,
+    replay_seam: bool = False,
 ) -> "_CoreRun":
     """
     Simulate energy balance with battery storage and degradation.
@@ -1486,6 +1498,18 @@ def _simulate_core(
             reference; ``"numba"`` selects the optional compiled kernel and
             requires ``breos[fast]``. Everything outside the day window runs
             in Python either way.
+        day_controller: Optional private daily controller (ADR 0002 A11),
+            asked for each configured-zone civil day's instructions instead of
+            ``dispatch_instructions``. It needs a battery and
+            ``controller_tariff``, the resolved tariff whose ``day_starts``
+            are the civil-day boundaries.
+        controller_carry: The controller carry a previous projection year
+            returned; None starts a new projection.
+        projection_year: The project year this span simulates, for the
+            controller's input.
+        replay_seam: True when the next span replays this calendar (ADR 0002
+            A2), so a civil day cut by the span's end continues at its head.
+            False for a standalone span such as a ``[period]``.
 
     Returns:
         A :class:`_CoreRun` holding the filled result buffers, the calendar,
@@ -1673,6 +1697,27 @@ def _simulate_core(
         )
     # No instructions is greedy dispatch; one no-op set serves every day.
     instructions = dispatch_instructions if dispatch_instructions is not None else DispatchInstructions.noop(n_steps)
+    session: Optional[_ControllerSession] = None
+    if day_controller is not None:
+        if dispatch_instructions is not None:
+            raise ValueError("pass either dispatch_instructions or a daily controller, not both")
+        if controller_tariff is None:
+            raise ValueError("a daily controller needs the resolved tariff's civil calendar")
+        if not has_battery:
+            raise ValueError("a daily controller needs a battery; a PV-only run has nothing to dispatch")
+        session = _ControllerSession(
+            day_controller,
+            controller_tariff,
+            rng,
+            hours_per_step=hours_per_step,
+            carry=controller_carry,
+            projection_year=projection_year,
+            replay_seam=replay_seam,
+            battery_config=MappingProxyType(dataclasses.asdict(battery_config)),
+        )
+    # The dispatch reads instructions at global positions; a controller's
+    # buffer is filled day by day ahead of each segment.
+    dispatch_arrays: Any = instructions if session is None else session.instructions
 
     # PV-only balance is already vectorized with NumPy and does not need the
     # general per-step dispatcher. This common path is faster than either the
@@ -1707,33 +1752,63 @@ def _simulate_core(
     window_start = 0
     while window_start < n_steps:
         window_end = min(window_start + steps_per_day, n_steps)
-        dispatch_day(
-            out,
-            _pv_dc_vals,
-            _load_vals,
-            _temp_vals,
-            window_start,
-            window_end,
-            battery_config=battery_config,
-            battery_soh_decimal=battery_soh_decimal,
-            Battery_Energy_Wh=Battery_Energy_Wh,
-            Battery_PV_Origin_Energy_Wh=Battery_PV_Origin_Energy_Wh,
-            Battery_Grid_Origin_Energy_Wh=Battery_Grid_Origin_Energy_Wh,
-            eff_charge=eff_charge,
-            eff_discharge=eff_discharge,
-            hours_per_step=hours_per_step,
-            standby_loss_per_step_wh=standby_loss_per_step_wh,
-            cap_wh=cap_wh,
-            cap_charge_wh=cap_charge_wh,
-            cap_discharge_wh=cap_discharge_wh,
-            cap_stored_wh=cap_stored_wh,
-            instructions=instructions,
-        )
+        # Without a controller a window is one dispatch call. With one, a
+        # civil-day start inside the window splits it (ADR 0002 A11): each
+        # segment continues from the previous segment's stored energy and
+        # origins, and health stays fixed until the window closes below.
+        segment_start = window_start
+        while segment_start < window_end:
+            if session is None:
+                segment_end = window_end
+            else:
+                if session.decides_at(segment_start):
+                    # A day starting where the previous window closed sees the
+                    # state after that close's aging and any replacement.
+                    session.decide(
+                        segment_start,
+                        ControllerBatteryState(
+                            energy_wh=Battery_Energy_Wh,
+                            pv_origin_energy_wh=Battery_PV_Origin_Energy_Wh,
+                            grid_origin_energy_wh=Battery_Grid_Origin_Energy_Wh,
+                            soh_fraction=battery_soh_decimal,
+                            resistance_growth=aging.resistance_growth,
+                            charge_efficiency=eff_charge,
+                            discharge_efficiency=eff_discharge,
+                        ),
+                    )
+                segment_end = session.prepare_segment(segment_start, window_end)
+            dispatch_day(
+                out,
+                _pv_dc_vals,
+                _load_vals,
+                _temp_vals,
+                segment_start,
+                segment_end,
+                battery_config=battery_config,
+                battery_soh_decimal=battery_soh_decimal,
+                Battery_Energy_Wh=Battery_Energy_Wh,
+                Battery_PV_Origin_Energy_Wh=Battery_PV_Origin_Energy_Wh,
+                Battery_Grid_Origin_Energy_Wh=Battery_Grid_Origin_Energy_Wh,
+                eff_charge=eff_charge,
+                eff_discharge=eff_discharge,
+                hours_per_step=hours_per_step,
+                standby_loss_per_step_wh=standby_loss_per_step_wh,
+                cap_wh=cap_wh,
+                cap_charge_wh=cap_charge_wh,
+                cap_discharge_wh=cap_discharge_wh,
+                cap_stored_wh=cap_stored_wh,
+                instructions=dispatch_arrays,
+            )
+            if session is not None:
+                session.complete_segment(_pv_dc_vals, _load_vals, _temp_vals)
+            segment_last = segment_end - 1
+            Battery_Energy_Wh = float(out.columns["Battery_Energy"][segment_last])
+            Battery_PV_Origin_Energy_Wh = float(out.columns["Battery_PV_Origin_Energy_End"][segment_last])
+            Battery_Grid_Origin_Energy_Wh = float(out.columns["Battery_Grid_Origin_Energy_End"][segment_last])
+            segment_start = segment_end
         last_step = window_end - 1
-        # The window's closing row holds the state the day close continues from.
-        Battery_Energy_Wh = float(out.columns["Battery_Energy"][last_step])
-        Battery_PV_Origin_Energy_Wh = float(out.columns["Battery_PV_Origin_Energy_End"][last_step])
-        Battery_Grid_Origin_Energy_Wh = float(out.columns["Battery_Grid_Origin_Energy_End"][last_step])
+        # The window's closing row, written by its final segment, holds the
+        # state the day close continues from.
         battery_energy_beginning = float(out.columns["Battery_Energy_Beginning"][last_step])
         Battery_Energy_Wh, Battery_PV_Origin_Energy_Wh, Battery_Grid_Origin_Energy_Wh = _apply_daily_degradation(
             aging,
@@ -1773,6 +1848,7 @@ def _simulate_core(
         lifecycle=degradation_lifecycle,
         degradation_tracking=degradation_tracking,
         hours_per_step=hours_per_step,
+        controller_carry=None if session is None else session.finish(),
     )
 
 
@@ -1850,6 +1926,16 @@ def simulate_energy_balance(
         dispatch_instructions=dispatch_instructions,
         execution_backend=execution_backend,
     )
+    result = _detailed_frames(core)
+    if not return_degradation_state:
+        return result
+
+    final_degradation_state = _build_final_degradation_state(core.lifecycle, core.aging)
+    return (*result, final_degradation_state)
+
+
+def _detailed_frames(core: _CoreRun) -> Tuple[pd.DataFrame, float, pd.DataFrame, int, pd.DataFrame]:
+    """The detailed path's frames: results, total PV, summary, replacements and degradation."""
     df = core.buffers.to_frame(core.rng)
     deg_df = pd.DataFrame(core.degradation_tracking) if core.degradation_tracking else pd.DataFrame()
     summary_row, total_pv = _build_summary_row(
@@ -1859,14 +1945,50 @@ def simulate_energy_balance(
         n_replacements=core.aging.n_replacements,
         replaced_capacity_wh=core.aging.replaced_capacity_wh,
     )
-    summary_df = pd.DataFrame([summary_row])
+    return df, total_pv, pd.DataFrame([summary_row]), core.aging.n_replacements, deg_df
 
-    result = (df, total_pv, summary_df, core.aging.n_replacements, deg_df)
-    if not return_degradation_state:
-        return result
 
-    final_degradation_state = _build_final_degradation_state(core.lifecycle, core.aging)
-    return (*result, final_degradation_state)
+@dataclass(frozen=True, slots=True)
+class _DetailedRun:
+    """A detailed span with its carry states, for the projection loop's controller path.
+
+    The first six fields are what ``simulate_energy_balance(...,
+    return_degradation_state=True)`` returns; the controller carry is kept
+    beside them so neither that tuple nor the degradation payload changes.
+    """
+
+    results_df: pd.DataFrame
+    total_pv_wh: float
+    summary_df: pd.DataFrame
+    n_replacements: int
+    degradation_df: pd.DataFrame
+    degradation_state: Dict[str, Any]
+    controller_carry: Optional[ControllerCarry]
+
+
+def _simulate_detailed_run(
+    pv_dc: pd.Series,
+    houseload: pd.DataFrame,
+    *,
+    finalize_degradation: bool,
+    **core_kwargs: Any,
+) -> _DetailedRun:
+    """Run :func:`_simulate_core` with per-step frames and return every carry state.
+
+    Takes the core's keyword arguments, including the private daily
+    controller's; see :func:`_simulate_core`.
+    """
+    core = _simulate_core(pv_dc=pv_dc, houseload=houseload, finalize_degradation=finalize_degradation, **core_kwargs)
+    df, total_pv, summary_df, n_replacements, deg_df = _detailed_frames(core)
+    return _DetailedRun(
+        results_df=df,
+        total_pv_wh=total_pv,
+        summary_df=summary_df,
+        n_replacements=n_replacements,
+        degradation_df=deg_df,
+        degradation_state=_build_final_degradation_state(core.lifecycle, core.aging),
+        controller_carry=core.controller_carry,
+    )
 
 
 def simulate_energy_balance_summary(

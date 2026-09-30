@@ -16,11 +16,13 @@ from typing import Any, Callable, Mapping, Sequence, cast
 import numpy as np
 import pandas as pd
 
+from breos._controller import ControllerCarry, DailyDispatchController
 from breos.app_config import ResolvedAppConfig, build_costs_dict
 from breos.battery import (
     AlignedSimulationInputs,
     BatteryConfig,
     SimulationSummary,
+    _simulate_detailed_run,
     frame_replaced_capacity_wh,
     simulate_energy_balance,
     simulate_energy_balance_summary,
@@ -91,7 +93,10 @@ class CarryState:
     and resistance, and overrides the scalars when the kernel restores it; the
     scalars carry them for year one and for engines whose payload does not.
     ``energy_wh`` is None until a year has run, so year one starts at the
-    battery's own initial state of charge.
+    battery's own initial state of charge. ``controller_carry`` is a daily
+    controller's policy state, observations and project clock (ADR 0002
+    A11); it is not degradation state and never enters
+    :meth:`simulation_kwargs`.
     """
 
     energy_wh: float | None = None
@@ -104,6 +109,7 @@ class CarryState:
     resistance_growth: float = 0.0
     soh_pct: float = 100.0
     degradation_state: dict[str, Any] | None = None
+    controller_carry: ControllerCarry | None = None
 
     def simulation_kwargs(self) -> dict[str, Any]:
         """Keyword arguments that start a simulation from this state."""
@@ -474,6 +480,8 @@ def project_years(
     tariff: ResolvedTariff | None = None,
     instructions: DispatchInstructions | None = None,
     record_period_energy: bool = False,
+    day_controller: DailyDispatchController | None = None,
+    replay_seam: bool = True,
 ) -> ProjectionRun:
     """Simulate ``years`` project years, carrying the battery from one to the next.
 
@@ -490,7 +498,21 @@ def project_years(
     ``instructions``, resolved on that calendar. ``record_period_energy``
     also keeps each year's priced energy by tariff period, which App.revalue
     re-prices from.
+
+    A private ``day_controller`` (ADR 0002 A11) decides each civil day of
+    the ``tariff``'s calendar in place of static ``instructions``, on
+    per-step years with a battery. Its carry crosses the years beside the
+    battery state. ``replay_seam`` says the next year replays the calendar,
+    so a civil day cut by a year's end continues at the next year's head;
+    a standalone ``[period]`` passes False.
     """
+    if day_controller is not None:
+        if instructions is not None:
+            raise ValueError("pass either instructions or a daily controller, not both")
+        if tariff is None:
+            raise ValueError("a daily controller needs a resolved tariff")
+        if not has_battery:
+            raise ValueError("a daily controller needs a battery")
     hours_per_step = get_hours_per_step(freq)
     record_period_energy = record_period_energy and tariff is not None
     period_weights = _period_weights(tariff) if record_period_energy and tariff is not None else {}
@@ -525,6 +547,8 @@ def project_years(
             reset_jit_cache_observation(execution_backend)
 
         if year.aligned is not None:
+            if day_controller is not None:
+                raise ValueError("a daily controller runs on per-step projection years, not aligned summaries")
             if tariff is not None:
                 _check_tariff_calendar(tariff, year.aligned.index)
             summary = simulate_energy_balance_summary(aligned=year.aligned, weights=weights, **common)
@@ -545,16 +569,40 @@ def project_years(
                 # Checked first, so a year off the tariff's calendar fails
                 # here rather than on the instructions' step count.
                 _check_tariff_calendar(tariff, pd.date_range(year.pv_dc.index[0], year.pv_dc.index[-1], freq=freq))
-            results_df, _total_pv, _summary_df, n_rep, degradation_df, state = cast(
-                "tuple[pd.DataFrame, float, pd.DataFrame, int, pd.DataFrame, dict[str, Any]]",
-                simulate_energy_balance(
+            if day_controller is None:
+                results_df, _total_pv, _summary_df, n_rep, degradation_df, state = cast(
+                    "tuple[pd.DataFrame, float, pd.DataFrame, int, pd.DataFrame, dict[str, Any]]",
+                    simulate_energy_balance(
+                        pv_dc=year.pv_dc,
+                        houseload=year.houseload,
+                        temperature_series=year.temperature_series if has_battery else None,
+                        **common,
+                    ),
+                )
+                carry = carry.after_frames(results_df, degradation_df, state, has_battery=has_battery)
+            else:
+                assert tariff is not None
+                core_kwargs = {key: value for key, value in common.items() if key != "return_degradation_state"}
+                detailed = _simulate_detailed_run(
                     pv_dc=year.pv_dc,
                     houseload=year.houseload,
-                    temperature_series=year.temperature_series if has_battery else None,
-                    **common,
-                ),
-            )
-            carry = carry.after_frames(results_df, degradation_df, state, has_battery=has_battery)
+                    temperature_series=year.temperature_series,
+                    day_controller=day_controller,
+                    controller_tariff=tariff,
+                    controller_carry=carry.controller_carry,
+                    projection_year=year_idx,
+                    replay_seam=replay_seam,
+                    **core_kwargs,
+                )
+                results_df, n_rep, degradation_df = (
+                    detailed.results_df,
+                    detailed.n_replacements,
+                    detailed.degradation_df,
+                )
+                carry = replace(
+                    carry.after_frames(results_df, degradation_df, detailed.degradation_state, has_battery=has_battery),
+                    controller_carry=detailed.controller_carry,
+                )
             sums_w = {column: float(results_df[column].sum()) for column in _ROW_SUM_COLUMNS}
             replaced_wh = frame_replaced_capacity_wh(results_df)
             replacement_steps = np.flatnonzero(results_df["Battery_Replaced"].to_numpy()).tolist()
@@ -626,6 +674,8 @@ def run_projection(
     tariff: ResolvedTariff | None = None,
     instructions: DispatchInstructions | None = None,
     record_period_energy: bool = False,
+    day_controller: DailyDispatchController | None = None,
+    replay_seam: bool = True,
 ) -> ProjectionRun:
     """Run :func:`project_years` for an App configuration.
 
@@ -651,6 +701,8 @@ def run_projection(
         tariff=tariff,
         instructions=instructions,
         record_period_energy=record_period_energy,
+        day_controller=day_controller,
+        replay_seam=replay_seam,
     )
 
 
