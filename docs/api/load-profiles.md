@@ -21,11 +21,12 @@ scales the resulting profile to the requested annual consumption after
 alignment. The default 2023 study year retains its original rows. A
 `demandlib_h0` file supplied through `rlp_directory` uses the year on its
 dated first row by the same rule. That row must be 1 January 00:00; an
-undated `demandlib_h0` file raises `ValueError`. Other external profile
-families still follow their positional calendar rule. Project years replay
-the study year's calendar; they do not advance the load and tariff weekdays
-each year. Monte Carlo builds the load for its `target_year` by the same
-rule.
+undated `demandlib_h0` file raises `ValueError`. Dated E-REDES files follow
+the same rule with E-REDES day classes; see [E-REDES profiles](#e-redes-profiles).
+Other external profile families, undated files and `custom` profiles follow
+their positional calendar rule. Project years replay the study year's
+calendar; they do not advance the load and tariff weekdays each year. Monte
+Carlo builds the load for its `target_year` by the same rule.
 
 ## External profile files
 
@@ -54,6 +55,68 @@ resolution = "15min"
 Expected filenames are documented in [Load Profile Data](../legal/load-profile-data.md).
 Your own CSV loads with `load_profile("custom", ..., profile_file="meter.csv",
 profile_unit="kW")`.
+
+## E-REDES profiles
+
+E-REDES BTN profiles distinguish three day classes: working day, Saturday, and
+Sunday or holiday. When an E-REDES file has timestamps, BREOS takes its source
+year from them, not from the filename. Each day of the study year then takes
+the nearest source day of the same class. The search starts at the same month
+and day in the source year and tries one day earlier, then one day later, and
+so on. It wraps across New Year, and 29 February starts from 28 February in a
+common source year. This is the demandlib H0 rule with E-REDES classes. A file
+in its own year loads unchanged. Alignment works on whole civil days before
+the timezone is applied, and annual scaling comes after it.
+
+BREOS types a day as Sunday/holiday if it is a Sunday or one of Portugal's
+nationwide statutory holidays that year. This applies in both the source year
+and the study year. The holidays are those of Labour Code Article 234: 1 January, Good
+Friday, Easter Sunday, 25 April, 1 May, Corpus Christi, 10 June, 15 August,
+5 October, 1 November, and 1, 8 and 25 December. Corpus Christi, 5 October,
+1 November and 1 December were suspended in 2013, 2014 and 2015, so they are
+working days (or Saturdays) in those years. A holiday on a Saturday takes the
+Sunday/holiday class. Carnival Tuesday, municipal holidays, and bridge days
+are not holidays for this rule. E-REDES does not publish a per-date holiday
+flag, so this is BREOS's reading of its three day classes. Tariff schedules
+keep their own holiday lists.
+
+A dated E-REDES file must start at 1 January 00:00, the start of its first
+interval, and hold exactly that calendar year. An undated E-REDES file is
+placed by position.
+
+To make the files from the E-REDES publication
+(`Perfil_Consumo_Injecao_E-REDES_<year>.csv`), use the converter in the
+BREOS source tree:
+
+```bash
+python tools/convert_eredes_profiles.py Perfil_Consumo_Injecao_E-REDES_2026.csv --output-dir external_rlp
+```
+
+It writes `EREDES_<year>_BTN_1000kwh_15min.csv` and
+`EREDES_<year>_BTN_1000kwh_hourly.csv` with the columns
+`DateTime,BTN A - Wh,BTN B - Wh,BTN C - Wh`. The year comes from the
+publication's dates. The converter does the following:
+
+- It reads the Latin-1 file and its four header rows, finds the BTN A, B and
+  C columns by their labels, and drops blank rows.
+- It checks that the dates cover one complete calendar year, that each
+  weekday matches its date, that every value is finite and non-negative, and
+  that there is no missing or repeated quarter-hour.
+- It changes each interval end to an interval start. The publication stamps
+  each quarter-hour at its end, in Portuguese legal time (`00:15` to `24:00`).
+  `24:00` is the next midnight, and each end moves back 15 minutes.
+- It puts every date on 96 civil quarter-hours. The fall-back hour is listed
+  twice in the publication, with its second occurrence marked `a`; the
+  converter keeps the second, standard-time occurrence. The spring-forward
+  hour is not in the publication; the converter interpolates it linearly.
+- It multiplies kWh by 1000 to give Wh. Each hourly value is the sum of its
+  four quarter-hours, so the two files have the same days in the same phase.
+
+The clock changes move each file's annual energy by a few Wh in 1,000 kWh;
+BREOS scales every profile to `annual_consumption_kwh` anyway. App
+provenance records the converted file and its SHA-256, not the publication
+it came from. The converter does not download data, and BREOS does not
+bundle E-REDES files.
 
 ## Profile registry
 

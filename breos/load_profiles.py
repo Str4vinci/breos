@@ -10,9 +10,11 @@ import hashlib
 import os
 from contextlib import nullcontext
 from dataclasses import dataclass
+from datetime import date, timedelta
+from functools import lru_cache
 from importlib.resources import as_file
 from pathlib import Path
-from typing import Any, Mapping, Optional
+from typing import Any, Callable, Mapping, Optional
 
 import numpy as np
 import pandas as pd
@@ -269,9 +271,11 @@ def load_profile(
         annual_consumption_kwh: Target annual consumption in kWh
         start_date: First day of the profile, 1 January of its year (YYYY-01-01).
             The bundled H0's source days are matched to the study year's
-            weekday, Saturday or Sunday near the same calendar date. Other
-            profiles are placed by position. A later start would shift every
-            season.
+            weekday, Saturday or Sunday near the same calendar date. A dated
+            E-REDES file's days are matched the same way to the study year's
+            working day, Saturday or Sunday/holiday, with Portugal's national
+            holidays as Sundays. Undated files and the other profiles are
+            placed by position. A later start would shift every season.
         freq: Time frequency ('h' for hourly, '15min' for 15-minute)
         rlp_directory: Directory containing RLP files. When omitted, BREOS
             uses only redistributable packaged profiles. An external
@@ -335,6 +339,7 @@ def load_profile(
     end_ts = start_ts + pd.DateOffset(years=1)
     new_index = pd.date_range(start=start_ts, end=end_ts, freq=native_freq, inclusive="left")
 
+    day_type = _DAY_TYPE_ALIGNED.get(source.key)
     if source.key == "demandlib_h0":
         if (
             source_start is None
@@ -345,8 +350,19 @@ def load_profile(
                 f"The demandlib H0 file {source.label} needs a dated first row at 1 January 00:00 "
                 "to align its day types"
             )
-        df = _align_h0_day_types(df, new_index, source_start.year, steps_per_hour, source.label)
+    elif day_type is not None and source_start is not None:
+        # A dated E-REDES file's year comes from its timestamps, never its
+        # filename. Its rows must start at the first interval of the year.
+        if (source_start.month, source_start.day) != (1, 1) or source_start != source_start.normalize():
+            raise ValueError(
+                f"The {spec.name} file {source.label} starts at {source_start.strftime('%Y-%m-%d %H:%M')}; "
+                "a dated E-REDES file needs its first row at 1 January 00:00, the start of the first "
+                "interval. Convert the E-REDES publication with tools/convert_eredes_profiles.py."
+            )
+    if day_type is not None and source_start is not None:
+        df = _align_day_types(df, new_index, source_start.year, steps_per_hour, source.label, day_type)
     else:
+        # Undated files and custom profiles are placed by position.
         df = _fit_profile_to_calendar(df, new_index, steps_per_hour, source.label)
     df.index = new_index
     df.index.name = "DateTime"
@@ -449,27 +465,103 @@ def _h0_day_type(day: pd.Timestamp) -> int:
     return 0 if day.weekday() < 5 else day.weekday() - 4
 
 
-def _align_h0_day_types(
-    df: pd.DataFrame, target_index: pd.DatetimeIndex, source_year: int, steps_per_hour: int, source: str
+def _easter_sunday(year: int) -> date:
+    """Gregorian Easter Sunday (the anonymous Gregorian computus)."""
+    a, b, c = year % 19, year // 100, year % 100
+    d, e = b // 4, b % 4
+    g = (8 * b + 13) // 25
+    h = (19 * a + b - d - g + 15) % 30
+    i, k = c // 4, c % 4
+    l = (32 + 2 * e + 2 * i - h - k) % 7
+    m = (a + 11 * h + 19 * l) // 433
+    month = (h + l - 7 * m + 90) // 25
+    return date(year, month, (h + l - 7 * m + 33 * month + 19) % 32)
+
+
+@lru_cache(maxsize=None)
+def _portugal_national_holidays(year: int) -> frozenset[date]:
+    """Portugal's nationwide statutory holidays in ``year``.
+
+    These are the mandatory holidays of the Labour Code (Article 234): 1
+    January, Good Friday, Easter Sunday, 25 April, 1 May, Corpus Christi
+    (Easter + 60 days), 10 June, 15 August, 5 October, 1 November and 1, 8
+    and 25 December. Law 23/2012 suspended Corpus Christi, 5 October,
+    1 November and 1 December from 1 January 2013; Law 8/2016 restored them
+    from 2 April 2016, before any of the four fell that year. They are
+    therefore absent in 2013, 2014 and 2015 only.
+
+    The optional holidays of Article 235 (Carnival Tuesday and the municipal
+    holiday), local Good Friday substitutions, bridge days and government
+    tolerances are not included: they vary by locality or employer. This
+    calendar types the days of dated E-REDES BTN profiles; tariff schedules
+    carry their own holiday lists.
+    """
+    easter = _easter_sunday(year)
+    days = {
+        date(year, 1, 1),
+        easter - timedelta(days=2),
+        easter,
+        date(year, 4, 25),
+        date(year, 5, 1),
+        date(year, 6, 10),
+        date(year, 8, 15),
+        date(year, 12, 8),
+        date(year, 12, 25),
+    }
+    if not 2013 <= year <= 2015:
+        days |= {easter + timedelta(days=60), date(year, 10, 5), date(year, 11, 1), date(year, 12, 1)}
+    return frozenset(days)
+
+
+def _btn_day_type(day: pd.Timestamp) -> int:
+    """E-REDES BTN day class: working day (0), Saturday (1) or Sunday/holiday (2).
+
+    A national holiday takes the Sunday/holiday class whatever its weekday,
+    including a Saturday.
+    """
+    if day.weekday() == 6 or day.date() in _portugal_national_holidays(day.year):
+        return 2
+    return 1 if day.weekday() == 5 else 0
+
+
+# Profiles whose dated files carry a real calendar: each target day takes the
+# nearest source day of its own day type.
+_DAY_TYPE_ALIGNED: dict[str, Callable[[pd.Timestamp], int]] = {
+    "demandlib_h0": _h0_day_type,
+    "eredes_btn_a": _btn_day_type,
+    "eredes_btn_b": _btn_day_type,
+    "eredes_btn_c": _btn_day_type,
+}
+
+
+def _align_day_types(
+    df: pd.DataFrame,
+    target_index: pd.DatetimeIndex,
+    source_year: int,
+    steps_per_hour: int,
+    source: str,
+    day_type: Callable[[pd.Timestamp], int],
 ) -> pd.DataFrame:
-    """Use the nearest source-calendar day of the target's H0 day type.
+    """Use the nearest source-calendar day of the target's day type.
 
     The source's daily shape stays near the same month and day. Searches wrap
     around New Year, where late December and early January are both winter.
-    For 29 February in a common-year source, 28 February is the anchor.
-    The source may be bundled or supplied through ``rlp_directory``.
+    For 29 February in a common-year source, 28 February is the anchor. At
+    each distance the anchor itself is tried first, then the earlier day,
+    then the later one. The source may be bundled or supplied through
+    ``rlp_directory``.
     """
     steps_per_day = 24 * steps_per_hour
     source_days = pd.date_range(f"{source_year}-01-01", f"{source_year + 1}-01-01", freq="D", inclusive="left")
     if len(df) != len(source_days) * steps_per_day:
         raise ValueError(
-            f"Load profile {source} has {len(df)} rows, but its timestamp year {source_year} needs "
+            f"Load profile {source} has {len(df)} data rows, but its timestamp year {source_year} needs "
             f"{len(source_days) * steps_per_day} at this resolution"
         )
     if target_index[0].year == source_year:
         return df
 
-    source_types = [_h0_day_type(day) for day in source_days]
+    source_types = [day_type(day) for day in source_days]
     chosen: list[int] = []
     for day in target_index[::steps_per_day]:
         anchor = pd.Timestamp(
@@ -478,8 +570,8 @@ def _align_h0_day_types(
             day=28 if day.month == 2 and day.day == 29 and len(source_days) == 365 else day.day,
         )
         anchor_pos = (anchor - source_days[0]).days
-        target_type = _h0_day_type(day)
-        for distance in range(8):
+        target_type = day_type(day)
+        for distance in range(len(source_days) // 2 + 1):
             offsets = (0,) if distance == 0 else (-distance, distance)
             for offset in offsets:
                 pos = (anchor_pos + offset) % len(source_days)
@@ -489,6 +581,8 @@ def _align_h0_day_types(
             else:
                 continue
             break
+        else:
+            raise ValueError(f"Load profile {source} has no {source_year} day of the day type of {day.date()}")
     values = df.to_numpy().reshape(len(source_days), steps_per_day, len(df.columns))
     return pd.DataFrame(values[chosen].reshape(len(target_index), len(df.columns)), columns=df.columns)
 
@@ -574,9 +668,9 @@ def _validate_profile_rows(
         )
     df["Electrical Consumption [W]"] = values
 
-    # Rows are placed by position, so a timestamp column is optional. When the
-    # file has one, it must step evenly at the profile's resolution; a DST gap
-    # or a missing row would otherwise move later rows by one step.
+    # A timestamp column is optional: undated rows are placed by position.
+    # When the file has one, it must step evenly at the profile's resolution;
+    # a DST gap or a missing row would otherwise move later rows by one step.
     if timestamps is None or pd.api.types.is_numeric_dtype(timestamps):
         return None
     stamps = _parse_profile_timestamps(timestamps, csv_file)
