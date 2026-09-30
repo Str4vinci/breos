@@ -1615,7 +1615,12 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   with the incremental rainflow counter in `breos.degradation.protocol`, and
   `update_battery_soh_cyclewise` always uses rainflow. Cycle dicts passed to
   `update_battery_resistance_cyclewise` must carry `count`, as every rainflow
-  cycle does; a missing one used to be read as a full cycle.
+  cycle does; a missing one used to be read as a full cycle. BREOS has no
+  public replacement for the two detectors. To count cycles outside a
+  simulation, call `rainflow.extract_cycles` on the SOC series directly,
+  which is what `detect_cycles_rainflow` wrapped. To age a pack from a whole
+  SOC series, `update_battery_soh_cyclewise` still counts its cycles with
+  rainflow.
 - `breos.battery.k_c_rate_R` and `k_doc_R`, also in the top-level namespace
   ([#186](https://github.com/Str4vinci/breos/issues/186)). They were the
   resistance-growth factors of `update_battery_resistance_cyclewise`, which
@@ -1633,7 +1638,8 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   and the config reference no longer lists it. `BatteryConfig.dc_coupled`
   and the `breos run --dc-coupled` flag could only say `True`: the flag was a
   `store_true` switch on a key that defaults to `True` and raises on `False`.
-  The App key `dc_coupled` stays, so `resolved_config` keeps it. The
+  The App key `dc_coupled` stays, so `resolved_config` keeps it, and
+  `False` still raises, with an error that no longer names 0.3.x. The
   optimizer's `battery` table no longer accepts `battery_type` or
   `dc_coupled`.
 - `list_battery_models(enabled_only=...)`, which filtered nothing because

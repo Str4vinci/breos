@@ -46,11 +46,15 @@ and daily mean absolute SOC.
 ## Degradation primitives
 
 Low-level update functions for the degradation model. The energy balance
-does not call them each timestep: it ages the pack once per daily
-degradation window, from that window's rainflow cycles, mean cell temperature
-and mean absolute SOC, and it applies the resistance updates only when
-resistance fade is enabled. `update_battery_soh_cyclewise` counts the
-rainflow cycles of the whole series it is given. Use these directly only when
+ages the pack once per daily degradation window, not each timestep. It calls
+`update_battery_soh_calendar` once per window, with that window's mean cell
+temperature and mean absolute SOC. When resistance fade is enabled, it also
+calls the two resistance functions once per window. It does not call
+`update_battery_soh_cyclewise`: its cycle step takes the window's cycles from
+an incremental rainflow counter. `update_battery_soh_cyclewise` is a
+standalone equivalent of that cycle step for one whole SOC series. It closes
+the rainflow residue at the end of the series, so calling it once per day
+does not reproduce a simulation. Use these functions directly only when
 reproducing or critiquing the degradation model.
 
 ```{eval-rst}

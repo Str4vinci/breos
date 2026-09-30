@@ -114,6 +114,13 @@ def test_an_unknown_top_level_key_raises(key, message):
         resolve_optimization_config({**MINIMAL, key: {}})
 
 
+@pytest.mark.parametrize(("key", "value"), [("battery_type", "lfp"), ("dc_coupled", True)])
+def test_removed_battery_keys_are_unknown(key, value):
+    # Each could hold only one value, and BatteryConfig no longer has either.
+    with pytest.raises(ValueError, match=f"Unknown key 'battery.{key}'"):
+        resolve_optimization_config({**MINIMAL, "battery": {key: value}})
+
+
 def test_keys_nothing_read_are_refused():
     for config in (
         {**MINIMAL, "simulation": {"weather_file": "weather/porto.csv"}},

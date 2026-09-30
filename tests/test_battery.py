@@ -15,12 +15,14 @@ from breos.battery import (
     _get_degradation_params,
     _ResultBuffers,
     _update_battery_soh_cyclewise_arrays,
+    _update_battery_soh_from_cycles,
     align_simulation_inputs,
     apply_indoor_temperature_model,
     lfp_capacity_factor,
     resistance_to_efficiency,
     simulate_energy_balance,
     simulate_energy_balance_summary,
+    update_battery_resistance_cyclewise,
     update_battery_soh_cyclewise,
 )
 from breos.constants import LAM_EA_J_MOL, LAM_SOC_EXPONENT_N
@@ -242,6 +244,12 @@ class TestRemovedBatteryApi:
         soc = pd.Series([0.1, 0.8, 0.2], index=idx[:3])
         with pytest.raises(TypeError, match="positional"):
             update_battery_soh_cyclewise(1.0, soc, 5000.0)
+        # The private cycle steps lost the same capacity slot before fec_cum.
+        time_ticks, ticks_per_second = _datetime_index_ticks(soc.index)
+        with pytest.raises(TypeError, match="positional"):
+            _update_battery_soh_cyclewise_arrays(1.0, soc.to_numpy(), time_ticks, ticks_per_second, 5000.0)
+        with pytest.raises(TypeError, match="positional"):
+            _update_battery_soh_from_cycles(1.0, [], 5000.0)
         with pytest.raises(TypeError, match="positional"):
             simulate_energy_balance(
                 pd.Series(0.0, index=idx),
@@ -263,6 +271,12 @@ class TestRemovedBatteryApi:
         )
         # Nothing read it; a caller knows whether it configured a battery.
         assert not hasattr(summary, "has_battery")
+
+    def test_resistance_cycle_step_needs_a_count(self):
+        # Every rainflow cycle carries a count; a missing one was read as a
+        # full cycle when the extrema counter could omit it.
+        with pytest.raises(KeyError, match="count"):
+            update_battery_resistance_cyclewise(0.0, [{"doc": 0.5, "mean_c_rate": 0.3}], 0.0)
 
 
 class TestSimulateEnergyBalance:

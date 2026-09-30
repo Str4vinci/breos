@@ -2210,6 +2210,7 @@ def resistance_to_efficiency(
 def _update_battery_soh_from_cycles(
     soh_start_fraction: float,
     cycles: List[Dict],
+    *,
     fec_cum: float = 0.0,
     min_DoD_fraction: float = 0.01,
 ) -> Tuple[float, float, float]:
@@ -2247,6 +2248,7 @@ def _update_battery_soh_cyclewise_arrays(
     soc_values: np.ndarray,
     time_ticks: np.ndarray,
     ticks_per_second: float,
+    *,
     fec_cum: float = 0.0,
     min_DoD_fraction: float = 0.01,
 ) -> Tuple[float, float, float]:
