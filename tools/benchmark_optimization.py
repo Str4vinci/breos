@@ -28,16 +28,23 @@ preparation. ``total - problem_construction`` is reported as the residual
 search and wrapper time. It includes NSGA-II and result assembly as well as
 the candidate simulations, so it is not a pure dispatch time.
 
-Peak RSS is the child's ``ru_maxrss`` high-water mark, which includes native
-NumPy and Numba allocations. A warm child's peak also covers its warm-up run,
-which has the same size as the timed run.
+Peak RSS is the child's own high-water mark, which includes native NumPy and
+Numba allocations. On Linux it is ``VmHWM`` from ``/proc/self/status``, which
+starts again at ``exec``; ``ru_maxrss`` is not used there, because a child
+started by ``subprocess`` inherits the parent's peak in it. Other platforms
+report ``ru_maxrss``, and the report names the source. A warm child's peak
+also covers its warm-up run, which has the same size as the timed run.
+
+A timed run needs at least three warm repeats. ``--smoke`` allows fewer, for
+a quick end-to-end check, and marks the report
+``warm_repeats_below_contract``.
 
 Parallel workers (``--n-procs`` above 1) can change the timing and the order
 in which pymoo meets its candidates. Parity always runs with one worker.
 
 Usage:
     python tools/benchmark_optimization.py --output benchmark.json
-    python tools/benchmark_optimization.py --resolution h --pop-size 4 --n-gen 1 \\
+    python tools/benchmark_optimization.py --smoke --resolution h 15min --pop-size 4 --n-gen 1 \\
         --warm-repeats 1 --projection-years 3
 """
 
@@ -50,6 +57,7 @@ import importlib.util
 import json
 import os
 import pickle
+import re
 import shutil
 import statistics
 import subprocess
@@ -115,6 +123,10 @@ THREAD_ENV = {
     "NUMBA_NUM_THREADS": "1",
 }
 MAX_LISTED_DIFFERENCES = 20
+# NSGA-II needs a few individuals to select and mate.
+MIN_POP_SIZE = 4
+# The contract's minimum of warm repetitions; --smoke allows fewer.
+MIN_WARM_REPEATS = 3
 
 _CHILD_BOOTSTRAP = (
     "import sys; sys.path.insert(0, {root!r}); "
@@ -134,6 +146,13 @@ def _positive_int(text: str) -> int:
         raise argparse.ArgumentTypeError(f"{text!r} is not an integer") from None
     if value < 1:
         raise argparse.ArgumentTypeError(f"{value} must be 1 or more")
+    return value
+
+
+def _pop_size(text: str) -> int:
+    value = _positive_int(text)
+    if value < MIN_POP_SIZE:
+        raise argparse.ArgumentTypeError(f"{value} is below the smallest population, {MIN_POP_SIZE}")
     return value
 
 
@@ -174,7 +193,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--annual-consumption-kwh", type=_positive_float, default=DEFAULT_ANNUAL_CONSUMPTION_KWH)
     parser.add_argument("--resolution", nargs="+", choices=RESOLUTIONS, default=list(RESOLUTIONS))
     parser.add_argument("--projection-years", type=_positive_int, default=3)
-    parser.add_argument("--pop-size", type=_positive_int, default=8)
+    parser.add_argument("--pop-size", type=_pop_size, default=8, help=f"At least {MIN_POP_SIZE}")
     parser.add_argument("--n-gen", type=_positive_int, default=2)
     parser.add_argument("--seed", type=_non_negative_int, default=42)
     parser.add_argument(
@@ -183,7 +202,17 @@ def build_parser() -> argparse.ArgumentParser:
         default=1,
         help="Workers for the timed runs; above 1 can change timing and candidate order. Parity uses 1.",
     )
-    parser.add_argument("--warm-repeats", type=_positive_int, default=3, help="Warm children per backend")
+    parser.add_argument(
+        "--warm-repeats",
+        type=_positive_int,
+        default=MIN_WARM_REPEATS,
+        help=f"Warm children per backend; at least {MIN_WARM_REPEATS} unless --smoke",
+    )
+    parser.add_argument(
+        "--smoke",
+        action="store_true",
+        help="A quick end-to-end check: allows fewer warm repeats and marks the report",
+    )
     parser.add_argument("--output", type=Path, help="Write the JSON report here")
     return parser
 
@@ -203,6 +232,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         parser.error(f"--weather-file must be a .csv or .csv.gz file: {args.weather_file}")
     if not args.weather_file.is_file():
         parser.error(f"--weather-file does not exist: {args.weather_file}")
+    if args.warm_repeats < MIN_WARM_REPEATS and not args.smoke:
+        parser.error(
+            f"--warm-repeats {args.warm_repeats} is below {MIN_WARM_REPEATS}; pass --smoke for a quick check "
+            "that is not a timing result"
+        )
     return args
 
 
@@ -233,9 +267,17 @@ def stage_weather(weather_file: Path, staging_dir: Path) -> tuple[Path, str, dic
     ``load_weather`` reads only ``.csv`` names of the form
     ``{location}_{type}_{years}_{source}.csv``. A ``.csv.gz`` file is
     decompressed, and a name outside that form is replaced by a canonical
-    one. A metadata sidecar that is bound to the original file (its
-    ``weather_sha256`` matches) is bound again to the staged CSV, so the
-    loader reads the same timing metadata. Returns the staged path, the
+    one.
+
+    The metadata sidecar carries the timing fields the resampler and the PV
+    model read, so it is checked as ``load_weather`` checks it: schema
+    version, a metadata object, and a ``weather_sha256`` bound to the file.
+    ``{file}.metadata.json`` may be bound to the file as given or to its
+    decompressed CSV; for a ``.csv.gz``, ``{csv}.metadata.json`` (the
+    sidecar BREOS writes for the CSV) must be bound to the decompressed CSV.
+    The sidecar is bound again to the staged CSV, so the loader reads the
+    same metadata. A sidecar that fails a check raises ``ValueError``; a file
+    without one is recorded as ``absent``. Returns the staged path, the
     location key to request, and the provenance record.
     """
     from breos.weather import parse_weather_filename
@@ -264,21 +306,49 @@ def stage_weather(weather_file: Path, staging_dir: Path) -> tuple[Path, str, dic
         "staged_sha256": staged_sha256,
         "sidecar": {"status": "absent"},
     }
-    sidecar = Path(f"{source}.metadata.json")
-    if sidecar.is_file():
-        payload = json.loads(sidecar.read_text(encoding="utf-8"))
-        bound = isinstance(payload, dict) and payload.get("weather_sha256") == original_sha256
+    candidates = [(Path(f"{source}.metadata.json"), {original_sha256, staged_sha256})]
+    if compressed:
+        candidates.append((source.parent / f"{plain_name}.metadata.json", {staged_sha256}))
+    for sidecar, accepted in candidates:
+        if not sidecar.is_file():
+            continue
+        payload = check_weather_sidecar(sidecar, accepted)
+        bound_to = "decompressed CSV" if payload["weather_sha256"] == staged_sha256 else "file as given"
+        restaged = {**payload, "weather_sha256": staged_sha256}
+        Path(f"{staged}.metadata.json").write_text(json.dumps(restaged, indent=2, sort_keys=True) + "\n")
         record["sidecar"] = {
-            "status": "bound" if bound else "digest_mismatch",
+            "status": "bound",
             "path": str(sidecar),
             "sha256": sha256_file(sidecar),
+            "bound_to": bound_to,
             "payload": payload,
+            "restaged_for": staged_name,
         }
-        if bound:
-            restaged = {**payload, "weather_sha256": staged_sha256}
-            Path(f"{staged}.metadata.json").write_text(json.dumps(restaged, indent=2, sort_keys=True) + "\n")
-            record["sidecar"]["restaged_for"] = staged_name
+        break
     return staged, location, record
+
+
+def check_weather_sidecar(sidecar: Path, accepted_sha256: set[str]) -> dict[str, Any]:
+    """Return a weather sidecar's payload, or raise ``ValueError`` naming the failed check."""
+    from breos.weather import _WEATHER_METADATA_SCHEMA_VERSION, WEATHER_METADATA_KEY
+
+    try:
+        payload = json.loads(sidecar.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"weather metadata sidecar {sidecar} cannot be read: {exc}") from exc
+    if not isinstance(payload, dict) or payload.get("schema_version") != _WEATHER_METADATA_SCHEMA_VERSION:
+        raise ValueError(
+            f"weather metadata sidecar {sidecar} does not have schema_version {_WEATHER_METADATA_SCHEMA_VERSION}"
+        )
+    if payload.get("weather_sha256") not in accepted_sha256:
+        raise ValueError(
+            f"weather metadata sidecar {sidecar} records weather_sha256 {payload.get('weather_sha256')!r}, which "
+            "matches neither the weather file nor its decompressed CSV. Its timing metadata would be dropped, "
+            "which changes the resampler and the PV model; fix or remove the sidecar."
+        )
+    if not isinstance(payload.get(WEATHER_METADATA_KEY), dict):
+        raise ValueError(f"weather metadata sidecar {sidecar} has no {WEATHER_METADATA_KEY!r} object")
+    return payload
 
 
 def check_complete_year(frame: pd.DataFrame, resolution: str, label: str) -> None:
@@ -541,16 +611,40 @@ def _requirement(name: str, passed: bool, **detail: Any) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-def peak_rss_mib() -> float | None:
-    """This process's peak resident set size in MiB, or None where it cannot be read."""
+def _ru_maxrss() -> int | None:
     try:
         import resource
     except ImportError:  # Windows
         return None
-    peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-    # ru_maxrss is in bytes on macOS and in KiB on Linux and the BSDs.
-    peak_bytes = peak if sys.platform == "darwin" else peak * 1024
+    return int(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
+
+
+def ru_maxrss_mib(platform: str | None = None) -> float | None:
+    """``ru_maxrss`` in MiB: it is in bytes on macOS and in KiB on Linux and the BSDs."""
+    peak = _ru_maxrss()
+    if peak is None:
+        return None
+    peak_bytes = peak if (platform or sys.platform) == "darwin" else peak * 1024
     return round(peak_bytes / 2**20, 1)
+
+
+def peak_rss(platform: str | None = None, status_path: Path = Path("/proc/self/status")) -> tuple[float | None, str]:
+    """This process's peak resident set size in MiB and where it was read.
+
+    On Linux ``VmHWM`` is read, since it starts again at ``exec`` while
+    ``ru_maxrss`` keeps the peak of the parent that spawned the process.
+    Elsewhere, or when ``VmHWM`` cannot be read, ``ru_maxrss`` is used.
+    """
+    platform = platform or sys.platform
+    if platform.startswith("linux"):
+        try:
+            match = re.search(r"^VmHWM:\s+(\d+)\s+kB", status_path.read_text(), re.MULTILINE)
+        except OSError:
+            match = None
+        if match:
+            return round(int(match.group(1)) / 1024, 1), "linux_vmhwm"
+    value = ru_maxrss_mib(platform)
+    return (value, "ru_maxrss") if value is not None else (None, "unavailable")
 
 
 class _ConstructionTimer:
@@ -630,6 +724,7 @@ def _child_measure(spec: dict[str, Any], inputs: dict[str, Any]) -> dict[str, An
     if len(timer.calls) != 1:
         raise RuntimeError(f"expected one SolarDesignProblem construction, timed {len(timer.calls)}")
     construction_s = timer.calls[0]
+    rss_mib, rss_source = peak_rss()
     return {
         "phase": spec["phase"],
         "backend": backend,
@@ -639,7 +734,8 @@ def _child_measure(spec: dict[str, Any], inputs: dict[str, Any]) -> dict[str, An
         "problem_construction_s": construction_s,
         "residual_search_s": total_s - construction_s,
         "warmup_total_s": warmup_s,
-        "peak_rss_mib": peak_rss_mib(),
+        "peak_rss_mib": rss_mib,
+        "peak_rss_source": rss_source,
         "numba_cache_files_before": cache_files_before,
         "numba_cache_files_after": _numba_cache_files(),
         **_search_counts(result),
@@ -689,6 +785,16 @@ def _run_app(inputs: dict[str, Any], backend: str) -> dict[str, Any]:
     }
 
 
+def _raw_optimum(result: Any) -> pd.DataFrame:
+    """pymoo's own optimum, X, F and G, in the same fixed row order as the Pareto frame."""
+    optimum = result.details["pymoo_result"].opt
+    blocks = {name: np.atleast_2d(optimum.get(name)) for name in ("X", "F", "G")}
+    frame = pd.DataFrame(
+        {f"{name}{column}": values[:, column] for name, values in blocks.items() for column in range(values.shape[1])}
+    )
+    return frame.sort_values(by=list(frame.columns), kind="mergesort").reset_index(drop=True)
+
+
 def _child_parity(spec: dict[str, Any], inputs: dict[str, Any]) -> dict[str, Any]:
     from breos.optimization import evaluate_projected_design
 
@@ -705,6 +811,8 @@ def _child_parity(spec: dict[str, Any], inputs: dict[str, Any]) -> dict[str, Any
             duplicated_designs=int(pareto["python"].duplicated(subset=design).sum()),
         )
     )
+    raw = {backend: _raw_optimum(result) for backend, result in runs.items()}
+    checks.append(_check("optimizer_raw_opt_identical", value_differences(raw["python"], raw["numba"], "opt")))
     checks.append(_check("optimizer_counts_identical", value_differences(counts["python"], counts["numba"], "counts")))
     checks.append(_requirement("optimizer_has_feasible_design", counts["python"]["feasible_pareto_designs"] >= 1))
 
@@ -844,11 +952,15 @@ def run_child(kind: str, spec: dict[str, Any], workdir: Path, numba_cache_dir: P
     numba_cache_dir.mkdir(parents=True, exist_ok=True)
     env = {**os.environ, **THREAD_ENV, "NUMBA_CACHE_DIR": str(numba_cache_dir), "PYTHONHASHSEED": "0"}
     command = [sys.executable, "-c", _CHILD_BOOTSTRAP.format(root=str(PROJECT_ROOT)), kind, str(spec_path)]
+    # Recorded because a child's ru_maxrss starts from this value on Linux.
+    parent_peak = ru_maxrss_mib()
     completed = subprocess.run([*command, str(result_path)], env=env, capture_output=True, text=True)
     if completed.returncode != 0:
         tail = "\n".join(completed.stderr.strip().splitlines()[-30:])
         raise RuntimeError(f"child {label} failed with exit code {completed.returncode}:\n{tail}")
-    return json.loads(result_path.read_text())
+    payload = json.loads(result_path.read_text())
+    payload["parent_ru_maxrss_mib_at_spawn"] = parent_peak
+    return payload
 
 
 # ---------------------------------------------------------------------------
@@ -862,13 +974,27 @@ def _stats(values: list[float]) -> dict[str, float | None]:
     return {"median": statistics.median(values), "min": min(values)}
 
 
-def summarize_case(measurements: list[dict[str, Any]]) -> dict[str, Any]:
+def summarize_case(measurements: list[dict[str, Any]], parity_counts: dict[str, int] | None = None) -> dict[str, Any]:
     """Cold and warm figures per backend, with speedups against the Python warm median.
 
     A speedup is the Python warm median total (or residual) divided by the
-    measurement's; the Python warm median is therefore 1.
+    measurement's; the Python warm median is therefore 1. With
+    ``parity_counts``, every timed run must also report the parity run's
+    evaluation and generation counts for ``evaluation_counts_consistent``.
     """
     summary: dict[str, Any] = {"backends": {}, "speedup_vs_python_warm_median": {}}
+    summary["peak_rss_sources"] = sorted({str(m.get("peak_rss_source", "unknown")) for m in measurements})
+    expected = None if parity_counts is None else (parity_counts["evaluations"], parity_counts["generations"])
+    if expected is None and measurements:
+        expected = (measurements[0]["evaluations"], measurements[0]["generations"])
+    mismatches = [
+        f"{m['phase']} {m['backend']} {m['repeat']}: {m['evaluations']} evaluations, {m['generations']} generation(s)"
+        for m in measurements
+        if (m["evaluations"], m["generations"]) != expected
+    ]
+    summary["expected_counts"] = None if expected is None else {"evaluations": expected[0], "generations": expected[1]}
+    summary["count_mismatches"] = mismatches
+    summary["evaluation_counts_consistent"] = not mismatches
     for backend in BACKENDS:
         cold = [m for m in measurements if m["backend"] == backend and m["phase"] == "cold"]
         warm = [m for m in measurements if m["backend"] == backend and m["phase"] == "warm"]
@@ -906,18 +1032,31 @@ def summarize_case(measurements: list[dict[str, Any]]) -> dict[str, Any]:
             entry[f"{phase}_total"] = baseline_total / total if baseline_total and total else None
             entry[f"{phase}_residual_search"] = baseline_residual / residual if baseline_residual and residual else None
         summary["speedup_vs_python_warm_median"][backend] = entry
-    counts = {(m["evaluations"], m["generations"]) for m in measurements}
-    summary["evaluation_counts_consistent"] = len(counts) <= 1
     return summary
 
 
+def case_status(case: dict[str, Any], n_procs: int) -> str:
+    """``passed`` when parity passed, the case ran, and, with one worker, every count matched parity."""
+    if "error" in case or case.get("parity", {}).get("status") != "passed" or "summary" not in case:
+        return "failed"
+    if n_procs == 1 and not case["summary"]["evaluation_counts_consistent"]:
+        return "failed"
+    return "passed"
+
+
 def build_report(
-    args: argparse.Namespace, machine: dict[str, Any], weather: dict[str, Any], cases: list[dict[str, Any]]
+    args: argparse.Namespace,
+    machine: dict[str, Any],
+    weather: dict[str, Any],
+    cases: list[dict[str, Any]],
+    error: str | None = None,
 ) -> dict[str, Any]:
-    parity_passed = all(case["parity"]["status"] == "passed" for case in cases)
-    return {
+    passed = error is None and len(cases) == len(args.resolution) and all(c.get("status") == "passed" for c in cases)
+    report: dict[str, Any] = {
         "schema": REPORT_SCHEMA,
-        "status": "passed" if parity_passed and len(cases) == len(args.resolution) else "failed",
+        "status": "passed" if passed else "failed",
+        "smoke": bool(args.smoke),
+        "warm_repeats_below_contract": args.warm_repeats < MIN_WARM_REPEATS,
         "entrypoint": "breos.optimization.optimize_system_multi_objective",
         "machine": machine,
         "settings": {
@@ -944,7 +1083,10 @@ def build_report(
             "candidate simulation, NSGA-II and result assembly; not a pure dispatch time",
             "cold": "first call in a fresh child; the Numba child starts with an empty NUMBA_CACHE_DIR",
             "warm": "a fresh child runs the optimizer once untimed at the study size, then times one call",
-            "peak_rss_mib": "ru_maxrss of the child, warm-up included",
+            "peak_rss_mib": "the child's own peak, warm-up included: VmHWM on Linux (peak_rss_source "
+            "linux_vmhwm), ru_maxrss elsewhere",
+            "evaluation_counts_consistent": "every timed run has the parity run's evaluation and generation "
+            "counts; it gates the case when n_procs is 1",
         },
         "study": {
             "tariff": TARIFF,
@@ -957,6 +1099,9 @@ def build_report(
         "weather_file": weather,
         "cases": cases,
     }
+    if error is not None:
+        report["error"] = error
+    return report
 
 
 def _format_seconds(value: float | None) -> str:
@@ -965,6 +1110,8 @@ def _format_seconds(value: float | None) -> str:
 
 def format_case(case: dict[str, Any]) -> list[str]:
     """Console lines for one case."""
+    if "parity" not in case:
+        return [f"[{case['resolution']}] failed before parity: {case.get('error', 'not run')}"]
     parity = case["parity"]
     counts = parity["counts"]["python"]
     witness = parity["witness"]
@@ -977,9 +1124,18 @@ def format_case(case: dict[str, Any]) -> list[str]:
     for check in parity["checks"]:
         if not check["passed"]:
             lines.append(f"  FAILED {check['name']}: {'; '.join(check['differences']) or 'requirement not met'}")
+    if "error" in case:
+        lines.append(f"  ERROR {case['error']}")
     summary = case.get("summary")
     if not summary:
         return lines
+    if summary["evaluation_counts_consistent"]:
+        lines.append(f"  every timed run matched the parity counts {summary['expected_counts']}")
+    else:
+        lines.append(
+            f"  COUNTS DIFFER from parity {summary['expected_counts']}: {'; '.join(summary['count_mismatches'])}"
+        )
+    lines.append(f"  peak RSS source: {', '.join(summary['peak_rss_sources'])}")
     for backend, figures in summary["backends"].items():
         cold, warm = figures["cold"], figures["warm"]
         speed = summary["speedup_vs_python_warm_median"].get(backend, {})
@@ -1019,7 +1175,10 @@ def machine_info() -> dict[str, Any]:
     return info
 
 
-def run_case(args: argparse.Namespace, resolution: str, staged: Path, location: str, session: Path) -> dict[str, Any]:
+def prepare_case(
+    args: argparse.Namespace, resolution: str, staged: Path, location: str, session: Path
+) -> dict[str, Any]:
+    """Prepare and check one case's inputs and write them for the children; runs no child."""
     weather, load, input_record = prepare_case_inputs(
         staged,
         location,
@@ -1042,8 +1201,20 @@ def run_case(args: argparse.Namespace, resolution: str, staged: Path, location: 
             handle,
             protocol=pickle.HIGHEST_PROTOCOL,
         )
+    return {
+        "resolution": resolution,
+        "inputs": input_record,
+        "inputs_path": str(inputs_path),
+        "optimizer_config_sha256": config_sha256(optimizer_config),
+        "optimizer_config": optimizer_config,
+    }
+
+
+def run_case(args: argparse.Namespace, case: dict[str, Any], session: Path) -> None:
+    """Run a prepared case's parity and timing children, recording into ``case``."""
+    resolution = case["resolution"]
     base = {
-        "inputs": str(inputs_path),
+        "inputs": case["inputs_path"],
         "resolution": resolution,
         "pop_size": args.pop_size,
         "n_gen": args.n_gen,
@@ -1052,20 +1223,16 @@ def run_case(args: argparse.Namespace, resolution: str, staged: Path, location: 
     }
     # The parity child fills the warm cache, which the warm children reuse.
     warm_cache = session / f"numba-cache-warm-{resolution}"
-    case: dict[str, Any] = {
-        "resolution": resolution,
-        "inputs": input_record,
-        "optimizer_config_sha256": config_sha256(optimizer_config),
-        "optimizer_config": optimizer_config,
-    }
     print(f"[{resolution}] parity...", flush=True)
     case["parity"] = run_child("parity", base, session, warm_cache)
     if case["parity"]["status"] != "passed":
+        case["status"] = "failed"
         print("\n".join(format_case(case)), flush=True)
         print(f"[{resolution}] parity failed; the case is not timed", flush=True)
-        return case
+        return
 
-    measurements = []
+    measurements: list[dict[str, Any]] = []
+    case["measurements"] = measurements
     for backend in BACKENDS:
         print(f"[{resolution}] cold {backend}...", flush=True)
         cold_cache = session / f"numba-cache-cold-{resolution}-{backend}"
@@ -1076,10 +1243,16 @@ def run_case(args: argparse.Namespace, resolution: str, staged: Path, location: 
             print(f"[{resolution}] warm {backend} {repeat + 1}/{args.warm_repeats}...", flush=True)
             spec = {**base, "backend": backend, "phase": "warm", "repeat": repeat, "warmup": True}
             measurements.append(run_child("measure", spec, session, warm_cache))
-    case["measurements"] = measurements
-    case["summary"] = summarize_case(measurements)
+    case["summary"] = summarize_case(measurements, case["parity"]["counts"]["python"])
+    case["status"] = case_status(case, args.n_procs)
     print("\n".join(format_case(case)), flush=True)
-    return case
+
+
+def write_report(args: argparse.Namespace, report: dict[str, Any]) -> None:
+    if args.output:
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        args.output.write_text(json.dumps(report, indent=2, default=_json_default))
+        print(f"\nwrote {args.output}")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -1094,18 +1267,28 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     machine = machine_info()
-    cases = []
+    error = None
     with tempfile.TemporaryDirectory(prefix="breos-optimization-benchmark-") as tmp:
         session = Path(tmp)
         staged, location, weather_record = stage_weather(args.weather_file, session / "weather")
-        for resolution in args.resolution:
-            cases.append(run_case(args, resolution, staged, location, session))
+        if weather_record["sidecar"]["status"] == "absent":
+            print(f"note: {args.weather_file} has no metadata sidecar; its rows are read as instant samples")
+        # Every case's inputs are checked before the first child, so a bad
+        # input for a later resolution fails before any time is spent.
+        cases = [prepare_case(args, resolution, staged, location, session) for resolution in args.resolution]
+        run = []
+        for case in cases:
+            run.append(case)
+            try:
+                run_case(args, case, session)
+            except Exception as exc:
+                case["error"] = error = f"{type(exc).__name__}: {exc}"
+                case["status"] = "failed"
+                print(f"[{case['resolution']}] {error}", file=sys.stderr, flush=True)
+                break
 
-    report = build_report(args, machine, weather_record, cases)
-    if args.output:
-        args.output.parent.mkdir(parents=True, exist_ok=True)
-        args.output.write_text(json.dumps(report, indent=2, default=_json_default))
-        print(f"\nwrote {args.output}")
+    report = build_report(args, machine, weather_record, run, error=error)
+    write_report(args, report)
     print(f"status: {report['status']}")
     return 0 if report["status"] == "passed" else 1
 
