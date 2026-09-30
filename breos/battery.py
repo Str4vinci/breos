@@ -126,6 +126,19 @@ class BatteryConfig:
     ``eol_percentage`` defaults to 0.70 (replace the battery when its state
     of health falls to 70% of nominal capacity), matching the App config
     default ``battery_eol_percentage``.
+
+    ``allow_terminal_replacement`` decides whether the end-of-life check at
+    the close of this span's final degradation period may replace the pack.
+    That period is the one ending on the span's last step: its last whole
+    day, or a trailing partial day, or the whole span when it is shorter
+    than a day. The default ``True`` replaces there as anywhere else.
+    ``False`` skips only that swap, so no pack is bought that would deliver
+    no service inside the span. The period is still aged, finalized and
+    recorded, and the old pack's state is reported. A complete day followed
+    by a partial day is not the final period and keeps its replacement.
+    A call treats its own span as the horizon: a caller that splits one
+    horizon across several calls must leave it ``True`` on every span but
+    the last, because the next span inherits the pack.
     """
 
     nominal_energy_wh: float  # Required — nominal capacity in Wh
@@ -137,6 +150,9 @@ class BatteryConfig:
     discharge_efficiency: float = DEFAULT_DISCHARGE_EFFICIENCY
     standby_loss_wh: float = DEFAULT_STANDBY_LOSS_WH
     enable_replacement: bool = True
+    # False skips the end-of-life swap at the close of the span's final
+    # degradation period only; that period still ages the pack.
+    allow_terminal_replacement: bool = True
     calendar_model: str = "naumann_lam_field_calibrated"  # v1 field-calibrated default alias
     # Resistance fade (opt-in): grows internal resistance daily and derates
     # the charge/discharge efficiencies in the energy loop so the effective
@@ -178,6 +194,11 @@ class BatteryConfig:
             if not math.isfinite(result):
                 raise ValueError(f"{name} must be a finite number")
             return result
+
+        # Checked rather than coerced: a string such as "false" is truthy.
+        if not isinstance(self.allow_terminal_replacement, (bool, np.bool_)):
+            raise ValueError("allow_terminal_replacement must be a bool")
+        self.allow_terminal_replacement = bool(self.allow_terminal_replacement)
 
         self.nominal_energy_wh = finite("nominal_energy_wh", self.nominal_energy_wh)
         self.initial_soh = finite("initial_soh", self.initial_soh)
@@ -1060,6 +1081,7 @@ def _apply_daily_degradation(
     pv_origin_energy_wh: float,
     grid_origin_energy_wh: float,
     battery_energy_beginning: float,
+    replacement_allowed: bool = True,
 ) -> Tuple[float, float, float]:
     """Close out one degradation period, returning ``(energy, pv_origin, grid_origin)``.
 
@@ -1072,6 +1094,10 @@ def _apply_daily_degradation(
     The period's SOC and cell-temperature endpoints become the next starting
     boundary; a replacement moves that endpoint to the fresh pack's
     max SOC, since the recorded state was rewritten to match.
+
+    ``replacement_allowed`` is False only for the span's final period when
+    the battery does not allow a terminal replacement. The period still ages
+    the pack and is still recorded; only the end-of-life swap is skipped.
     """
     period_steps = len(soc_absolute_day)
     period_seconds = period_steps * hours_per_step * 3600.0
@@ -1117,7 +1143,11 @@ def _apply_daily_degradation(
             dt_days=dt_days,
         )
 
-    if battery_config.enable_replacement and aging.soh_fraction <= battery_config.eol_percentage:
+    if (
+        replacement_allowed
+        and battery_config.enable_replacement
+        and aging.soh_fraction <= battery_config.eol_percentage
+    ):
         # A retired native pack owns its unresolved terminal half cycles.
         # Settle them before reset so its lifetime FEC remains complete while
         # the replacement starts with a clean rainflow residue.
@@ -1842,6 +1872,9 @@ def _simulate_core(
             pv_origin_energy_wh=Battery_PV_Origin_Energy_Wh,
             grid_origin_energy_wh=Battery_Grid_Origin_Energy_Wh,
             battery_energy_beginning=battery_energy_beginning,
+            # The period closing on the span's last step is its final one,
+            # whole or partial; a pack bought there would serve no step.
+            replacement_allowed=battery_config.allow_terminal_replacement or window_end < n_steps,
         )
         # Refresh the loop's hot copies of the daily-boundary state.
         battery_soh_decimal = aging.soh_fraction

@@ -57,4 +57,5 @@ calendar_model = "naumann_lam_field_calibrated"  # calendar aging model
 battery_min_soc = 0.10             # [0.10] lower SoC limit
 battery_max_soc = 0.90             # [0.90] upper SoC limit
 battery_eol_percentage = 0.70      # [0.70] capacity fraction at end-of-life
+battery_allow_terminal_replacement = true  # [true] false: no pack bought at the horizon's final degradation period
 # battery_rte = 0.95               # [derived] round-trip efficiency override

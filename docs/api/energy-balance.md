@@ -22,6 +22,9 @@ The physics carries no money. A replacement is reported where it happens:
 the nominal capacity swapped in (ledger schema 3.0). The economics prices it
 at `costs["replacement_cost_each"]`; see
 {py:func}`~breos.economics.replacement_event_cost`.
+`BatteryConfig(allow_terminal_replacement=False)` skips a replacement in the
+final degradation period of the call's span, which ends on its last step; see
+[Battery replacement at the end of the horizon](../getting-started/configuration.md#battery-replacement-at-the-end-of-the-horizon).
 
 ## Physical boundary and coupling
 

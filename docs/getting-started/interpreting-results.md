@@ -46,6 +46,13 @@ to `provenance.smart_charging` of App results that configure it:
 `warm_start_policy`, `planner_terminal_policy`, and the
 `initial_stored_energy` and `final_stored_energy` by origin. Other results
 are unchanged.
+Version "2.3" adds `battery_allow_terminal_replacement` to the
+`resolved_config` of App and Monte Carlo results, and
+`battery_replacement_treatment`, with its `allow_terminal_replacement`
+policy and a `terminal_period` description, to the provenance of a projected
+design and of an optimizer search. See
+[battery replacement at the end of the horizon](configuration.md#battery-replacement-at-the-end-of-the-horizon).
+Default results are otherwise unchanged.
 A renamed or removed key bumps the
 major version, an added key the minor. A result without the key predates 1.0.
 
@@ -118,6 +125,12 @@ Present only when `battery_kwh > 0`:
 | `battery_replacements` | Total number of replacements over the projection |
 | `battery_replacement_cost_t0_prices` | Total replacement cost at t = 0 prices, neither inflated nor discounted |
 | `battery_replacement_cost_npv` | The same replacements inflated to and discounted from each swap instant, as `npv_savings` counts them |
+
+With `battery_allow_terminal_replacement = false`, a pack that reaches end of
+life in the final degradation period of the horizon is not replaced. The
+replacement count and costs then leave out that one swap, and
+`battery_soh_end_pct` can end below the end-of-life threshold. See
+[Battery replacement at the end of the horizon](configuration.md#battery-replacement-at-the-end-of-the-horizon).
 
 ## Emissions keys
 

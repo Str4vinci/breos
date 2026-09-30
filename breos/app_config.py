@@ -738,6 +738,17 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         doc="SOH fraction that triggers a battery replacement",
         summary="battery.eol_percentage",
     ),
+    "battery_allow_terminal_replacement": AppConfigField(
+        default=True,
+        doc=(
+            "Whether a battery that reaches end of life in the horizon's final degradation period is replaced. That "
+            "period ends on the last simulated step: the last whole day, a trailing partial day, or a span shorter "
+            "than a day. `false` skips only that replacement and its cost; the period is still aged. See "
+            "[Battery replacement at the end of the horizon]"
+            "(configuration.md#battery-replacement-at-the-end-of-the-horizon)"
+        ),
+        summary="battery.allow_terminal_replacement",
+    ),
     "battery_rte": AppConfigField(
         default=None,
         doc=(
@@ -1994,6 +2005,8 @@ def _validate_battery_and_degradation(cfg: dict[str, Any]) -> None:
 
     if not isinstance(cfg["enable_resistance_fade"], bool):
         raise TypeError("'enable_resistance_fade' must be a boolean")
+    if not isinstance(cfg["battery_allow_terminal_replacement"], bool):
+        raise TypeError("'battery_allow_terminal_replacement' must be a boolean")
 
     # Validated through breos.execution so App and Monte Carlo cannot disagree
     # about which names exist. The default stays "python": the compiled path is

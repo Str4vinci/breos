@@ -7,7 +7,7 @@ This module provides the NSGA-II multi-objective design search
 """
 
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, Optional, Sequence, Tuple, Union
+from typing import Any, Callable, Dict, Mapping, Optional, Sequence, Tuple, Union
 
 import numpy as np
 import pandas as pd
@@ -234,6 +234,7 @@ _BATTERY_SPEC_KEYS = (
     "power_limit_c_rate",
     "calendar_model",
     "enable_resistance_fade",
+    "allow_terminal_replacement",
 )
 
 
@@ -263,6 +264,26 @@ def _build_battery_config_from_spec(
         ac_output_scale=ac_output_scale,
         **configured,
     )
+
+
+def _battery_replacement_treatment(battery: Mapping[str, Any]) -> Dict[str, Any]:
+    """How projected scoring treats battery replacement, for the provenance.
+
+    ``allow_terminal_replacement`` is the configured policy for the final
+    period; the earlier years' internal permission is not the user's setting.
+    """
+    return {
+        "method": "simulated_yearly_state_propagation",
+        "description": "Projected scoring simulates every year and records actual replacement events.",
+        "higher_fidelity_basis": "App multiyear SOH propagation",
+        "allow_terminal_replacement": bool(battery.get("allow_terminal_replacement", True)),
+        "terminal_period": (
+            "The final degradation period of the last project year: the elapsed one-day window of simulation "
+            "steps that ends on the horizon's last step, whole or partial. It is always aged and recorded; "
+            "allow_terminal_replacement = false skips only its end-of-life replacement. Every earlier period, "
+            "including the close of each earlier project year, replaces as usual."
+        ),
+    }
 
 
 def _safe_ratio(numerator: float, denominator: float) -> float:
@@ -701,7 +722,11 @@ def evaluate_projected_design(
         "Azimuth": float(azimuth),
         **raw_metrics,
     }
-    provenance = {**pricing.provenance(), "economics": projection_rates_record(_projection_rates(financials))}
+    provenance = {
+        **pricing.provenance(),
+        "economics": projection_rates_record(_projection_rates(financials)),
+        "battery_replacement_treatment": _battery_replacement_treatment(battery),
+    }
     return ProjectedDesignResult(metrics=metrics, yearly=yearly, financial=financial, provenance=provenance)
 
 
@@ -827,11 +852,7 @@ try:
             self.ac_output_scale = _validated_ac_output_scale(config)
             self.dc_output_scale = _validated_dc_output_scale(config)
 
-            self.battery_replacement_treatment = {
-                "method": "simulated_yearly_state_propagation",
-                "description": "Projected scoring simulates every year and records actual replacement events.",
-                "higher_fidelity_basis": "App multiyear SOH propagation",
-            }
+            self.battery_replacement_treatment = _battery_replacement_treatment(config["battery"])
 
             self.fixed_azimuth = config["mode"]["fixed_azimuth"]
 
@@ -1187,6 +1208,7 @@ def optimize_system_multi_objective(
         # The search bounds and run settings the search used, defaults included.
         "constraints": dict(config["constraints"]),
         "run_settings": settings,
+        "battery_replacement_treatment": dict(problem.battery_replacement_treatment),
     }
     pareto.attrs["currency"] = provenance["currency"]
     return OptimizationResult(
