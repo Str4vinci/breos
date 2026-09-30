@@ -96,6 +96,46 @@ and a stable `blast_model` key. See the
 [degradation model reference](../api/degradation-models.md) for discovery,
 precedence, provenance, and engine selection.
 
+## Battery replacement at the end of the horizon
+
+BREOS replaces the battery when its state of health falls to
+`battery_eol_percentage`. The check runs when each degradation period closes.
+A degradation period is a fixed window of one day of simulation steps (24
+hourly or 96 fifteen-minute steps), counted from the start of the simulated
+span; it is not a civil or tariff day. By default the check also runs when
+the horizon's final period closes. A pack that reaches end of life there is
+bought and priced, but it serves no step inside the horizon, so the result
+depends on whether the crossing falls just before or just after the horizon
+ends.
+
+`battery_allow_terminal_replacement = false` skips only that final
+replacement:
+
+- The final period is the one that ends on the last simulated step of the
+  last project year. When the span is whole days, it is the last whole day.
+  When the span ends with a partial day, it is that partial period, and the
+  whole day before it can still replace, because the new pack serves the
+  remaining steps. A span shorter than a day, such as a short `[period]`,
+  has one partial period, and that period is the final one.
+- The final period is still dispatched, aged and recorded, and its remaining
+  rainflow cycles are still counted. The result reports the old pack's state
+  of health, cycles, resistance and stored energy. No replacement, replaced
+  capacity or replacement cost is recorded for it.
+- Every earlier period replaces as usual. This includes the close of each
+  earlier project year, because the next year uses the new pack. A
+  replacement earlier in the final year is still counted and priced.
+- Smart-charging decisions do not change. The key controls only the
+  replacement in the simulated battery.
+
+Only a horizon whose final period reaches end of life gives a different
+result. Monte Carlo applies the key to the final year of each trajectory. The
+optimizer takes it as `[battery] allow_terminal_replacement`. The default is
+`true`. The resolved value is in `provenance.resolved_config`, and the
+optimizer records it in `battery_replacement_treatment`. A direct
+{py:class}`~breos.battery.BatteryConfig` call treats its own span as the horizon, so a
+caller that splits one horizon across several calls must keep
+`allow_terminal_replacement=True` on every span except the last.
+
 ## Discovering available options
 
 Use the CLI to list packaged option keys:

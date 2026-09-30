@@ -475,6 +475,7 @@ INPUT_INDEPENDENT_KEYS: frozenset[str] = frozenset(
         "battery_max_discharge_power_w",
         "battery_power_limit_c_rate",
         "battery_eol_percentage",
+        "battery_allow_terminal_replacement",
         "battery_rte",
         "enable_resistance_fade",
         "inverter_efficiency",

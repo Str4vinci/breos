@@ -629,7 +629,7 @@ battery_kwh = [0.0, 5.0]
     rows = list(csv.DictReader(output_path.open(encoding="utf-8")))
     assert len(rows) == 2
     for row in rows:
-        assert row["result_schema_version"] == "2.2"
+        assert row["result_schema_version"] == "2.3"
         for key in (
             "grid_import_cost_year1_prices",
             "grid_export_revenue_year1_prices",

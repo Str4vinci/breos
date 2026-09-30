@@ -22,6 +22,7 @@ is a `breos run` option that overrides the config file.
 | `axis_tilt` | `0.0` | — | Single-axis tracker axis tilt (degrees) |
 | `azimuth` | `None` | `--azimuth` | Surface azimuth (degrees). `None` faces the equator: 180 in the northern hemisphere |
 | `backtrack` | `True` | — | Whether single-axis trackers backtrack to avoid row shading |
+| `battery_allow_terminal_replacement` | `True` | — | Whether a battery that reaches end of life in the horizon's final degradation period is replaced. That period ends on the last simulated step: the last whole day, a trailing partial day, or a span shorter than a day. `false` skips only that replacement and its cost; the period is still aged. See [Battery replacement at the end of the horizon](configuration.md#battery-replacement-at-the-end-of-the-horizon) |
 | `battery_eol_percentage` | `0.7` | — | SOH fraction that triggers a battery replacement |
 | `battery_indoor_model` | `None` | — | Indoor-temperature model settings. `None` applies the default indoor buffering; `{enabled = false}` uses `battery_temperature` without remapping. See [`[battery_indoor_model]`](#battery_indoor_model) |
 | `battery_kwh` | `0.0` | `--battery-kwh` | Nominal battery capacity in kWh (`0` = no battery). The SOC window sets the usable share; see [Battery capacity and the SOC window](configuration.md#battery-capacity-and-the-soc-window) |

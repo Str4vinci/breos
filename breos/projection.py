@@ -44,7 +44,9 @@ def build_battery_config(cfg: dict[str, Any], resolved: ResolvedAppConfig, *, in
 
     A configured round-trip efficiency is split evenly across charge and
     discharge, the BatteryConfig default convention. Replacement is on; the
-    economics prices each one (ADR 0003 E4).
+    economics prices each one (ADR 0003 E4). ``battery_allow_terminal_replacement``
+    is the project's policy for its final period; :func:`project_years`
+    applies it to the final year only.
     """
     battery_kwh = cfg["battery_kwh"]
     efficiency: dict[str, Any] = {}
@@ -60,6 +62,7 @@ def build_battery_config(cfg: dict[str, Any], resolved: ResolvedAppConfig, *, in
         inverter_efficiency=cfg["inverter_efficiency"],
         inverter_ac_capacity_w=resolved.inverter_ac_capacity_w,
         enable_replacement=True,
+        allow_terminal_replacement=cfg.get("battery_allow_terminal_replacement", True),
         calendar_model=cfg["calendar_model"],
         max_charge_power_w=cfg["battery_max_charge_power_w"],
         max_discharge_power_w=cfg["battery_max_discharge_power_w"],
@@ -495,6 +498,11 @@ def project_years(
     once, at the end of the last year. ``observe_jit_per_year`` records the
     Numba cache state of every year, as App reports it.
 
+    The battery's ``allow_terminal_replacement`` is the project's policy for
+    the final degradation period of its last year. Every earlier year runs a
+    copy that allows it, because the next year inherits the pack a year-end
+    replacement installs.
+
     With a ``tariff``, resolved on the simulation calendar, each year row
     carries its import cost, export revenue, no-system import cost and fixed
     charge at year-1 prices, from the step energy times the step price. Every
@@ -533,6 +541,8 @@ def project_years(
     for year_idx in range(years):
         year = year_inputs(year_idx)
         batt_cfg = battery_config(carry.soh_pct)
+        if year_idx < years - 1 and not batt_cfg.allow_terminal_replacement:
+            batt_cfg = replace(batt_cfg, allow_terminal_replacement=True)
         common = {
             **carry.simulation_kwargs(),
             "battery_config": batt_cfg,

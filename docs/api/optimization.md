@@ -32,6 +32,9 @@ SoH, full-equivalent cycles, calendar time, cycle and calendar degradation,
 resistance growth, and supported degradation-engine state into the next year.
 Replacement remains enabled, resets the battery through the production battery
 engine, and adds the actual event cost to that year's financial ledger.
+`battery.allow_terminal_replacement = false` skips only a replacement in the
+final degradation period of the last project year; see
+[Battery replacement at the end of the horizon](../getting-started/configuration.md#battery-replacement-at-the-end-of-the-horizon).
 
 Lifetime grid independence is calculated from aggregate energy, not from the
 mean annual percentage:
@@ -70,7 +73,7 @@ call takes them as DataFrames.
 | --- | --- |
 | `location` | `latitude`, `longitude` (required); `timezone` (`"UTC"`); `altitude` (looked up from the coordinates); `name` (`""`) |
 | `pv` | `module` (the App's default module); `params` (an inline module: `Mpp`, `Vmp`, `Imp`, `Voc`, `Isc` required; temperature coefficients `T_Pmax_pct`, `T_Voc_pct` and `T_Isc_pct`, `N_Cells` and `celltype` optional); `dimensions` or `module_width_m` and `module_length_m` (1.134 × 2.278 m); `degradation_rate` (0.005, or `financials.pv_degradation_rate`) |
-| `battery` | the `BatteryConfig` keys `min_soc`, `max_soc`, `charge_efficiency`, `discharge_efficiency`, `standby_loss_wh`, `eol_percentage`, `max_charge_power_w`, `max_discharge_power_w`, `power_limit_c_rate`, `calendar_model`, `enable_resistance_fade` (the App's defaults); `temperature` (`"weather"`); `indoor_model` (the App's `battery_indoor_model` table); `degradation_engine` (`"native"`); `blast_model`; `replacement_cost` (storage cost per kWh times capacity); `enable_replacement` (`true`); `initial_soh` (100) |
+| `battery` | the `BatteryConfig` keys `min_soc`, `max_soc`, `charge_efficiency`, `discharge_efficiency`, `standby_loss_wh`, `eol_percentage`, `max_charge_power_w`, `max_discharge_power_w`, `power_limit_c_rate`, `calendar_model`, `enable_resistance_fade` (the App's defaults); `temperature` (`"weather"`); `indoor_model` (the App's `battery_indoor_model` table); `degradation_engine` (`"native"`); `blast_model`; `replacement_cost` (storage cost per kWh times capacity); `enable_replacement` (`true`); `allow_terminal_replacement` (`true`); `initial_soh` (100) |
 | `costs` | the App's `costs` keys, plus `dc_ac_ratio` (1.25), the DC peak over the inverter AC rating |
 | `financials` | `inflation_rate` (0.02), `sell_price_inflation` (0), `import_price_escalation`, `om_escalation`, `replacement_cost_learning`, `discount_rate` (0.03), `project_lifespan`, `pv_degradation_rate`, and the flat-price fallbacks `electricity_cost` and `electricity_sold_cost` |
 | `constraints` | see below |
@@ -122,7 +125,10 @@ metrics sent to NSGA-II explicitly.
 `details["provenance"]`, and the `provenance` of `evaluate_projected_design`,
 carry `result_schema_version` and `currency`, the currency of every money
 column (see [Interpreting results](../getting-started/interpreting-results.md#currency-and-schema-version)),
-plus the tariff and smart-charging records when the config has them.
+plus the tariff and smart-charging records when the config has them. Their
+`battery_replacement_treatment` records the replacement method, the configured
+`allow_terminal_replacement` and what the terminal period is;
+`details["battery_replacement_treatment"]` holds the same record.
 
 Use `evaluate_projected_design` when you need the detailed result for one
 fixed design instead of a Pareto search. It returns the projected metrics, the

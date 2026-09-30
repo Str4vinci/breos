@@ -58,6 +58,7 @@ CHANGES = {
     "battery_max_discharge_power_w": {"battery_max_discharge_power_w": 2000.0},
     "battery_power_limit_c_rate": {"battery_power_limit_c_rate": 0.5},
     "battery_eol_percentage": {"battery_eol_percentage": 0.8},
+    "battery_allow_terminal_replacement": {"battery_allow_terminal_replacement": False},
     "battery_rte": {"battery_rte": 0.9},
     "enable_resistance_fade": {"enable_resistance_fade": True},
     "inverter_efficiency": {"inverter_efficiency": 0.97},

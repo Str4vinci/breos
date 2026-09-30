@@ -50,6 +50,7 @@ EXPECTED_DEFAULTS = {
     "battery_min_soc": 0.10,
     "battery_max_soc": 0.90,
     "battery_eol_percentage": 0.70,
+    "battery_allow_terminal_replacement": True,
     "battery_rte": None,
     "battery_max_charge_power_w": None,
     "battery_max_discharge_power_w": None,

@@ -221,6 +221,9 @@ BATTERY_TABLE = TableSpec(
         "blast_model": anything,
         "replacement_cost": anything,
         "enable_replacement": boolean,
+        # The final period of the last project year only; earlier years
+        # always replace, since the next year inherits the pack.
+        "allow_terminal_replacement": boolean,
         "initial_soh": number(minimum=0, maximum=100, min_exclusive=True),
     },
 )
@@ -449,6 +452,7 @@ def resolve_optimization_config(config: Mapping[str, Any]) -> dict[str, Any]:
     battery.setdefault("blast_model", None)
     battery.setdefault("replacement_cost", None)
     battery.setdefault("enable_replacement", True)
+    battery.setdefault("allow_terminal_replacement", True)
     battery.setdefault("initial_soh", 100.0)
     resolved["costs"] = resolved.get("costs") or {}
 

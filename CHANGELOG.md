@@ -5,6 +5,28 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 ## [Unreleased]
 
 ### Added
+- `battery_allow_terminal_replacement` (App and Monte Carlo), the
+  optimizer's `[battery] allow_terminal_replacement` and
+  `BatteryConfig.allow_terminal_replacement` can skip buying a battery that
+  would serve no step of the horizon
+  ([#304](https://github.com/Str4vinci/breos/issues/304)). A pack that
+  reaches end of life in the horizon's final degradation period was replaced
+  and priced although it delivers no service. With `false`, only that
+  replacement is skipped. The final period is the one that ends on the last
+  simulated step: the last whole day, or a trailing partial day, or the whole
+  span when it is shorter than a day. A whole day followed by a partial day
+  is not final and keeps its replacement, because the new pack serves the
+  remaining steps; this is how the "last whole day" of the original proposal
+  reads with partial-period aging. The final period is still dispatched,
+  aged, recorded and finalized, and the result reports the old pack's state.
+  Earlier periods replace as usual, including the close of each earlier
+  project year, whose pack the next year inherits, and Monte Carlo applies
+  the key to the final year of each trajectory. Smart-charging decisions do
+  not change. The default `true` changes no result; only an opted-out
+  horizon whose final period reaches end of life changes its final battery
+  state, replacement count and replacement costs. Result schema 2.3 records
+  the value in `provenance.resolved_config` and, for a projected design and
+  an optimizer search, in `battery_replacement_treatment`.
 - Experimental App smart charging with `mode = "daily_persistence"` chooses
   a grid-charge target each local day from the last complete day's PV DC,
   load and input temperature and the known tariff. It starts without grid

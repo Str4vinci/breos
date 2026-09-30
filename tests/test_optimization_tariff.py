@@ -82,7 +82,7 @@ def test_optimizer_provenance_records_the_schema_version_and_currency(tariff_cas
 
     for case in (tariff_case, (weather, load, flat)):
         provenance = evaluate(case).provenance
-        assert provenance["result_schema_version"] == "2.2"
+        assert provenance["result_schema_version"] == "2.3"
         assert provenance["currency"] == "EUR"
     assert "tariff" not in evaluate((weather, load, flat)).provenance
 

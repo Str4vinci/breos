@@ -40,6 +40,12 @@ Monte Carlo results when an inline schedule is configured.
 ``experimental`` marker, controller and planner versions, planner settings,
 forecast, warm-start and terminal policies, and the stored energy by origin
 at the start and end of the project. Other results are unchanged.
+
+2.3 adds ``battery_allow_terminal_replacement`` to the ``resolved_config`` of
+App and Monte Carlo results, and ``battery_replacement_treatment``, with its
+``allow_terminal_replacement`` policy and a ``terminal_period`` description,
+to the provenance of a projected design and of an optimizer search. Default
+results are otherwise unchanged.
 """
 
-RESULT_SCHEMA_VERSION = "2.2"
+RESULT_SCHEMA_VERSION = "2.3"

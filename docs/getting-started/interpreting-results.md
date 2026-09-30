@@ -119,6 +119,12 @@ Present only when `battery_kwh > 0`:
 | `battery_replacement_cost_t0_prices` | Total replacement cost at t = 0 prices, neither inflated nor discounted |
 | `battery_replacement_cost_npv` | The same replacements inflated to and discounted from each swap instant, as `npv_savings` counts them |
 
+With `battery_allow_terminal_replacement = false`, a pack that reaches end of
+life in the final degradation period of the horizon is not replaced. The
+replacement count and costs then leave out that one swap, and
+`battery_soh_end_pct` can end below the end-of-life threshold. See
+[Battery replacement at the end of the horizon](configuration.md#battery-replacement-at-the-end-of-the-horizon).
+
 ## Emissions keys
 
 Present only when `emissions_country` is set:
