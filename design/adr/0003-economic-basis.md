@@ -238,7 +238,8 @@ tool-only plots (#186), and rows 24–26, whose labels went with the
 `breos.io` summary helper that produced them.
 
 Rows 24–26 substitute the resolved currency code, so an EUR run writes the
-same text as today. (0.7.0 later removed the helper that wrote them.) Names that are already neutral keep them: the projection
+same text as today. (0.7.0 later removed the helper that wrote them.)
+Names that are already neutral keep them: the projection
 columns (`Cost_Import`, `Revenue_Export`, the `*_NPV` columns),
 `attrs["total_investment"]` and `attrs["final_npv_savings"]`. The private
 argument `_estimate_battery_replacement_treatment(replacement_cost_eur=...)`

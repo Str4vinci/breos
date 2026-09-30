@@ -700,8 +700,8 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   optimization, `cost_analysis_projection` and
   `calculate_lcoe_from_projection`. **Callers that omit the discount rate get
   different results:** `CostParams`, `cost_params_from_config`, the optimizer
-  and `calculate_lcoe_from_projection` used 0.0, and a direct `cost_analysis_projection` call used
-  0.02 (with inflation 0.03). On three projected-optimizer designs without a
+  and `calculate_lcoe_from_projection` used 0.0, and a direct
+  `cost_analysis_projection` call used 0.02 (with inflation 0.03). On three projected-optimizer designs without a
   `financials.discount_rate`, NPV moves from 6430.77 to 3941.12 €, −1736.96 to
   −2690.35 € and −12091.27 to −11013.42 €, and LCOE rises by 0.017–0.021
   €/kWh; energy and battery results are unchanged. App results do not
@@ -1335,8 +1335,8 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   ([#218](https://github.com/Str4vinci/breos/issues/218)). The new
   `economics.find_payback_year_exact` interpolates where cumulative
   discounted savings first turn positive, the rule `find_payback_year`
-  already used, scaled by the spacing between the two years; Monte Carlo and the optimizer each had a
-  private copy of it, and `plot_breakeven`, `plot_breakeven_comparison`,
+  already used, scaled by the spacing between the two years; Monte Carlo
+  and the optimizer each had a private copy of it, and `plot_breakeven`, `plot_breakeven_comparison`,
   `tools/compare_results.py` and `tools/batch_compare_locations.py` had
   three more rules. `create_cost_plots` uses `find_payback_year`. The Monte
   Carlo payback distribution and CDF plot `payback_year_exact` instead of
@@ -1479,14 +1479,15 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 - **`breos.calculate_co2_savings`**, with no deprecation period. Nothing in
   BREOS called it after the projection took over the lifetime CO2.
   `calculate_co2_projection` gives the same kg values per year; pass
-  one-element arrays for a single year, and pass the export
-  (`total_pv_kwh - self_consumed_kwh`) rather than the self-consumption.
-  Read the `CO2_Avoided_*_kg` columns and divide by 1000 for tonnes; the
-  intensity keys are named `*_CI_gCO2_kWh` there, such as
-  `CO2_Avoided_CI_gCO2_kWh` and `CO2_Avoided_CI_Type`. Its
-  `Grid_CI_gCO2_kWh` column, a copy of `CO2_Avoided_CI_gCO2_kWh`, is gone
-  too. Neither reached a result: the cost projection, App, Monte Carlo and
-  optimizer outputs never carried it.
+  one-element arrays for a single year, pass the export
+  (`total_pv_kwh - self_consumed_kwh`) rather than the self-consumption, and
+  pass `grid_shift_kwh` as `yearly_grid_shift_kwh`. Read the
+  `CO2_Avoided_*_kg` columns and divide by 1000 for tonnes; the intensity is
+  in `CO2_Avoided_CI_gCO2_kWh`, and its kind in `CO2_Avoided_CI_Type`. The
+  projection's `Grid_CI_gCO2_kWh` column, a copy of
+  `CO2_Avoided_CI_gCO2_kWh`, is gone too. No result carried either
+  intensity copy: the cost projection, App, Monte Carlo and optimizer
+  outputs never did.
 - **The first-year input shape of `cost_analysis_projection`**, with no
   deprecation period. Given a per-step results frame and no year rows, it
   estimated later years from year 1 at a fixed self-consumption ratio; App,
@@ -1520,7 +1521,7 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   `get_steps_per_year`**, with no deprecation period. Nothing called them.
   Write a cost projection with `write_cost_projection`, which writes
   `cost_projection[_<scenario>].csv`, or with `DataFrame.to_csv` for another
-  name, or `to_csv(path, sep="\t")` for the old `txt` format. Add a summary
+  name, or `to_csv(path, sep="\t", index=False)` for the old `txt` format. Add a summary
   field as a column of the summary DataFrame before calling
   `export_summary`, and use `round(24 / get_hours_per_step(freq))` for steps
   per day. The private

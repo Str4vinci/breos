@@ -139,6 +139,11 @@ def test_keyword_only_boundaries_are_pinned():
     from breos.optimization import optimize_system_multi_objective
 
     def positional(func):
+        # A *args would swallow a positional argument past the boundary.
+        assert all(
+            parameter.kind is not inspect.Parameter.VAR_POSITIONAL
+            for parameter in inspect.signature(func).parameters.values()
+        )
         return [
             name
             for name, parameter in inspect.signature(func).parameters.items()
