@@ -175,6 +175,9 @@ def test_the_bound_is_below_every_replayed_schedule():
     assert summary["reference"]["dispatch"] == "fixed_target"
     assert summary["reference"]["minus_bound"] == pytest.approx(costs["fixed_target"] - bound)
     assert summary["lp_replay"]["minus_bound"] > 0.0
+    # Health fades during the run, so a floor at the opening health does not cover it.
+    assert summary["reference"]["floor_soh_covers_run"] is False
+    assert report(run_lp_bound(case, replay=False, floor_soh_fraction=0.99), case)["reference"]["floor_soh_covers_run"]
     json.dumps(summary, allow_nan=False)
 
 

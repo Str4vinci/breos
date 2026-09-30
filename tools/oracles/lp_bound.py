@@ -37,8 +37,8 @@ What it relaxes, so that the bound claim holds:
   the fade, which is the one way fixed health favours the dispatch. The
   floor is therefore taken at ``floor_soh_fraction``, the same value by
   default; the bound holds for any dispatch whose health stays at or above
-  it. The report gives the lowest health each replay reached, so the
-  premise can be checked.
+  it. The report gives the lowest health each replay reached and whether
+  the floor covers it (``floor_soh_covers_run``); ``--floor-soh`` sets it.
 - **The inverter curve is convexified.** The PVWatts part-load curve the
   dispatch uses is not concave near zero load. The program bounds AC output
   from above by a concave function over it: a line from the origin at the
@@ -781,6 +781,8 @@ def report(result: LpBoundResult, case: ReplayCase) -> dict[str, Any]:
             "dispatch": reference_dispatch(case),
             **reference,
             "minus_bound": reference["first_year_cost"] - bound.objective,
+            # The bound provably covers this run only if its floor health is at or below the run's.
+            "floor_soh_covers_run": floor_soh * 100.0 <= reference["min_soh_pct"],
         },
     }
     if result.lp_replay is not None:
@@ -788,6 +790,7 @@ def report(result: LpBoundResult, case: ReplayCase) -> dict[str, Any]:
         payload["lp_replay"] = {
             **replayed,
             "minus_bound": replayed["first_year_cost"] - bound.objective,
+            "floor_soh_covers_run": floor_soh * 100.0 <= replayed["min_soh_pct"],
             **plan_comparison(result.lp_replay),
         }
     return payload
