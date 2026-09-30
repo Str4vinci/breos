@@ -308,6 +308,9 @@ def _summarize_projected_lifetime_metrics(yearly_summary_df: pd.DataFrame) -> Di
 def _projection_rates(fin_cfg: Dict[str, Any]) -> Dict[str, Any]:
     """The ``financials`` rates as ``cost_analysis_projection`` arguments (ADR 0003 E2).
 
+    ``fin_cfg`` is the ``financials`` table of :func:`resolve_optimization_config`,
+    which fills ``inflation_rate``, ``sell_price_inflation`` and
+    ``discount_rate``; a raw table without them raises ``KeyError``.
     The escalators stay None when unset, so they inherit ``inflation_rate``.
     Rates at or below -1 raise, as the App's do, and the learning rate must
     be in [0, 1).
