@@ -201,6 +201,16 @@ def test_fixed_target_as_a_controller_reproduces_the_static_ledger(case, freq, b
     adapted = _core(scenario, backend, controller=recording)
 
     _assert_same_run(static, adapted)
+    # The executed trace is exactly what the static path dispatched.
+    assert static.controller_instructions is None
+    assert adapted.controller_instructions == scenario.instructions
+    for day in recording.days:
+        horizon = day.tariff
+        assert len(horizon.slot_keys) == len(horizon.calendar_positions) == horizon.civil_day_offsets[-1]
+        decided = horizon.slot_keys[: day.decision_step_count]
+        assert (
+            decided == day.expected_slot_keys[day.civil_slot_offset : day.civil_slot_offset + day.decision_step_count]
+        )
     starts = [day.project_step_ordinal for day in recording.days]
     assert starts == list(scenario.tariff.day_starts[:-1])
     assert [day.logical_day_ordinal for day in recording.days] == list(range(len(starts)))
@@ -310,6 +320,30 @@ def test_a_shared_boundary_decides_after_aging_and_replacement(backend):
     assert day.last_complete_observed_day.pv_dc_w == tuple(scenario.pv.iloc[:24])
 
 
+@pytest.mark.parametrize("freq", FREQS)
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_a_replacement_inside_a_civil_day_matches_the_static_ledger(freq, backend):
+    _require(backend)
+    # Berlin summer on a UTC index: a civil day begins two hours before the
+    # first positional window closes, and that close replaces the pack, so
+    # the swap lands inside the day's dispatch, between two of its segments.
+    steps_per_day = _steps_per_day(freq)
+    scenario = _scenario("2024-06-01T00:00Z", 3 * steps_per_day, freq, "Europe/Berlin")
+    recording = _Recording(FixedTargetDayController(scenario.instructions))
+    static = _core(scenario, backend, battery=_battery(initial_soh=70.01))
+    adapted = _core(scenario, backend, controller=recording, battery=_battery(initial_soh=70.01))
+
+    _assert_same_run(static, adapted)
+    assert np.flatnonzero(adapted.buffers.replaced).tolist() == [steps_per_day - 1]
+    assert adapted.buffers.columns["Grid_AC_To_Battery"].sum() > 0
+    interior, after = recording.days[1], recording.days[2]
+    assert interior.project_step_ordinal == steps_per_day - 2 * steps_per_day // 24
+    # Decided before the close: the retiring pack's health.
+    assert interior.battery_state.soh_fraction == pytest.approx(0.7001, rel=1e-12, abs=0.0)
+    # The next day is decided on the fresh pack, one window of aging later.
+    assert after.battery_state.soh_fraction > 0.99
+
+
 # -- the A2 year seam -------------------------------------------------------------
 
 
@@ -366,6 +400,18 @@ def test_full_utc_years_carry_the_controller_across_the_year_seam(zone, freq, ba
             assert np.array_equal(static_frame[column].to_numpy(), adapted_frame[column].to_numpy()), column
     pd.testing.assert_frame_equal(static.yearly_df, adapted.yearly_df, check_exact=True)
     assert dataclasses.replace(adapted.carry, controller_carry=None) == static.carry
+    # The executed trace joins both years in project order: the static
+    # instructions twice, whatever the decisions straddling the seam were.
+    assert static.controller_instructions is None
+    twice = DispatchInstructions(
+        discharge_allowed=np.tile(scenario.instructions.discharge_allowed, 2),
+        reserve_fraction=np.tile(scenario.instructions.reserve_fraction, 2),
+        grid_target_fraction=np.tile(scenario.instructions.grid_target_fraction, 2),
+        grid_charge_efficiency=scenario.instructions.grid_charge_efficiency,
+        grid_import_limit_w=scenario.instructions.grid_import_limit_w,
+    )
+    assert adapted.controller_instructions == twice
+    decided_steps = sum(len(decision.instructions) for decision in recording.decisions)
 
     days = recording.days
     ordinals = [day.logical_day_ordinal for day in days]
@@ -383,6 +429,7 @@ def test_full_utc_years_carry_the_controller_across_the_year_seam(zone, freq, ba
         assert first_year.complete_days_observed == 365 and second_year.complete_days_observed == 730
         assert first_year.pending_day is None and first_year.active_day_decision is None
         assert year_two[0].logical_day_ordinal == 365 and year_two[0].project_step_ordinal == n_steps
+        assert decided_steps == len(twice)
         return
 
     # Berlin: the year ends at local 1 January 00:00 and the replay resumes at
@@ -399,6 +446,9 @@ def test_full_utc_years_carry_the_controller_across_the_year_seam(zone, freq, ba
         *range(n_steps - tail, n_steps),
         *range(steps_per_day - tail),
     )
+    assert seam.tariff.slot_keys == seam.expected_slot_keys
+    # The final decision's head slots, after the last year's end, never run.
+    assert decided_steps - len(twice) == steps_per_day - tail
     assert first_year.complete_days_observed == 364
     assert first_year.pending_day.logical_day_ordinal == 365
     assert first_year.pending_day.captured_slots == tail
@@ -443,6 +493,45 @@ def test_a_standalone_period_is_never_stitched(freq):
     # The same span as a replayed year would stitch its end to its head.
     assert replayed.days[-1].decision_step_count == steps_per_day
     assert replay.controller_carry.active_day_decision.next_slot_offset == half
+
+
+def test_a_carry_the_next_span_does_not_continue_is_dropped():
+    # A replayed span from local 12:00 carries a half-captured final day into
+    # a span that starts at local 17:00 another week, which cannot continue it.
+    first = _scenario("2024-06-10T10:00Z", 3 * 24, "h", "Europe/Berlin")
+    other = _scenario("2024-06-20T15:00Z", 3 * 24, "h", "Europe/Berlin")
+    carry = _core(first, "python", controller=FixedTargetDayController(first.instructions), replay_seam=True)
+    carried = carry.controller_carry
+    assert carried.pending_day.logical_day_ordinal == 3 and carried.pending_day.captured_slots == 12
+    assert carried.active_day_decision.next_slot_offset == 12
+    assert carried.complete_days_observed == 2
+
+    recording = _Recording(FixedTargetDayController(other.instructions))
+    run = _core(other, "python", controller=recording, replay_seam=True, controller_carry=carried)
+    head = recording.days[0]
+    # The pending day is dropped, not completed: the controller is asked for
+    # a new day, on the clock that carried on, and history is unchanged.
+    assert head.logical_day_ordinal == 4 and head.project_step_ordinal == 3 * 24
+    assert head.clipped_start and not head.initial_partial_day
+    assert head.complete_days_observed == 2 and head.last_complete_observed_day.logical_day_ordinal == 2
+    assert run.controller_carry.complete_days_observed == 4
+    assert run.controller_instructions == other.instructions
+
+
+def test_the_tariff_horizon_is_shorter_at_a_standalone_end():
+    # Four civil days (two of them partial) with a three-day horizon.
+    scenario = _scenario("2024-06-10T10:00Z", 3 * 24, "h", "Europe/Berlin")
+    recording = _Recording(dataclasses.replace(FixedTargetDayController(scenario.instructions), tariff_horizon_days=3))
+    _core(scenario, "python", controller=recording)
+
+    starts = list(scenario.tariff.day_starts)
+    assert len(recording.days) == 4
+    for number, day in enumerate(recording.days):
+        days_seen = min(3, 4 - number)
+        offsets = day.tariff.civil_day_offsets
+        assert len(offsets) == days_seen + 1
+        assert [day.project_step_ordinal + offset for offset in offsets] == starts[number : number + days_seen + 1]
+        assert day.tariff.calendar_positions == tuple(range(starts[number], starts[number + days_seen]))
 
 
 @pytest.mark.parametrize("periods_in_days", [1, 3])
