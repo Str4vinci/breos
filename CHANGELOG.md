@@ -5,6 +5,30 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 ## [Unreleased]
 
 ### Added
+- `tools/convert_eredes_profiles.py` converts the E-REDES consumption-profile
+  publication (`Perfil_Consumo_Injecao_E-REDES_<year>.csv`) to the
+  `EREDES_<year>_BTN_1000kwh_15min.csv` and
+  `EREDES_<year>_BTN_1000kwh_hourly.csv` files that `eredes_btn_a`,
+  `eredes_btn_b` and `eredes_btn_c` read
+  ([#303](https://github.com/Str4vinci/breos/issues/303)). It reads the
+  Latin-1 file with its four header rows, finds the BTN A/B/C columns by their
+  labels and drops blank rows. It refuses a file whose dates do not cover one
+  complete calendar year, whose weekday does not match its date, whose values
+  are not finite and non-negative, or whose quarter-hours have a gap or a
+  repeat. The publication stamps each quarter-hour at its end in Portuguese
+  legal time; the converter writes interval starts on the civil clock, 96 per
+  date. `24:00` is the next midnight, and each end moves back 15 minutes. The
+  repeated fall-back hour keeps its standard-time occurrence, and the skipped
+  spring-forward hour is interpolated. These two rules are BREOS's own, not an
+  E-REDES method: the shape of the first, summer-time fall-back occurrence is
+  discarded, and the interpolated hour stays in the load when day-class
+  alignment moves its date into a study year where that hour exists. For the
+  2026 publication they changed each BTN profile's annual energy by less than
+  5 Wh in 1,000 kWh; the load is scaled to `annual_consumption_kwh` exactly.
+  kWh become Wh, and each hourly value is the sum of its four quarter-hours,
+  so both files have the same phase. The output year comes from the dates, not
+  the filename. The converter makes no network access, and BREOS still bundles
+  no E-REDES data.
 - Experimental App smart charging with `mode = "daily_persistence"` chooses
   a grid-charge target each local day from the last complete day's PV DC,
   load and input temperature and the known tariff. It starts without grid
@@ -421,6 +445,31 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
     charge the program does not allow. The optimum at the opening health is reported
     only as `fixed_health_estimate`, which is not a bound. `--floor-soh`
     also takes `opening` or a fraction (schema `breos_lp_bound_v1`).
+- `tools/benchmark_optimization.py` times the public
+  `optimize_system_multi_objective` on the Python and Numba backends. It is
+  a tool, not public API, and no result changes. The study is a
+  three-year, fixed-target time-of-use search on the PT 2026 daily
+  two-period tariff, hourly and at 15 minutes. Its weather is the local
+  Porto TMY, read through `load_weather`, and its load is the bundled
+  demandlib H0 profile. `--weather-file` takes one complete year of other
+  weather. A weather metadata sidecar that does not match its file, or has
+  another schema version, stops the run, since its timing fields reach the
+  resampler and the PV model. Every case's inputs are checked before the
+  first run. Before any timing, both backends must give the same Pareto
+  designs, pymoo optimum, objectives, diagnostics and evaluation and
+  generation counts at the same seed. A fixed 8-module, 5 kWh design must also give the same
+  `evaluate_projected_design` tables and the same `App` step ledgers and
+  degradation state on both, and that design must charge from the grid and
+  replace its battery. Each measurement runs in a fresh process: a cold run
+  per backend, with an empty `NUMBA_CACHE_DIR` for Numba, and at least
+  three warm runs (`--warm-repeats`), each after an untimed warm-up at the
+  study size. With one worker, a timed run whose counts differ from the
+  parity run fails its case. `--smoke` allows fewer warm runs and marks the
+  report. The report gives total time, the `SolarDesignProblem`
+  construction time, the residual search and wrapper time, peak RSS (the
+  child's own `VmHWM` on Linux, `ru_maxrss` elsewhere), and the speedup
+  over the Python warm median. `--output` writes it as JSON (schema
+  `breos_optimization_benchmark_v1`), also when a run fails part way.
 
 ### Changed
 - Result schema 2.0 renames `monthly[].import_kwh` and
@@ -894,6 +943,46 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   14 May 2025 gets a summer shape. A `demandlib_h0` file supplied through
   `rlp_directory` must now have a dated first row at 1 January 00:00; an
   undated file, which previously loaded by position, raises `ValueError`.
+- Dated E-REDES BTN A/B/C profiles now put working-day, Saturday and
+  Sunday/holiday shapes on those day classes in the study year, instead of
+  placing their rows by position from 1 January
+  ([#303](https://github.com/Str4vinci/breos/issues/303)). They use the H0
+  rule of [#298](https://github.com/Str4vinci/breos/issues/298): each target
+  day takes the nearest source day of its own class, trying the same month and
+  day first, then the day before, then the day after, and wrapping at New
+  Year; 29 February starts from 28 February. A Sunday or one of Portugal's
+  nationwide statutory holidays takes the Sunday/holiday class, in both the
+  source and the study year, even when the holiday is a Saturday. These are
+  the 13 holidays of Labour Code Article 234, without Corpus Christi, 5
+  October, 1 November and 1 December in 2013–2015, when they were suspended.
+  Carnival, municipal holidays and bridge days are not holidays for this rule.
+  The holiday calendar starts in 2004, the first full year of the 2003 Labour
+  Code: a file stamped before 2004, or a study year before 2004, raises
+  `ValueError`, also when the file is in its own year. Later years are assumed
+  to keep the current list. The source year now comes from the file's
+  timestamps, not its filename: an hourly file named 2025 but stamped 2023
+  aligns by its 2023 calendar, and the hourly and 15-minute files from one
+  publication share a phase. A file in its own year loads unchanged. A dated
+  E-REDES file must start at 1 January 00:00; one that starts elsewhere, for
+  example with interval-end stamps from 00:15, raises `ValueError` and names
+  the converter. Its timestamps must be naive civil times: a timestamp with a
+  UTC offset, fixed or changing at DST, raises `ValueError`, because read as a
+  UTC instant a summer row would move one hour from its civil time. Other
+  profiles still read offset timestamps as UTC instants. Undated E-REDES
+  files, `bdew_h0`, `ree_2.0td` and `custom` keep their positional placement,
+  and the demandlib H0 alignment is unchanged bit for bit. Monte Carlo aligns
+  to its `target_year` the same way. No result or provenance field is added;
+  `provenance.load_profile` still records the file and its SHA-256. **Results
+  change for E-REDES runs whose study year differs from the file's dated
+  year.** This was measured on two BTN C files, a 15-minute file dated 2025
+  and an hourly file dated 2023, for a 2026 study at 3,500 kWh with 8 modules
+  on the Porto TMY. The tariffs were the bundled 2026 weekly bi-hourly and
+  tri-hourly schedules with illustrative prices. Across PV only, PV with a 5
+  kWh battery, and fixed-target smart charging, the change is:
+  - year-1 bill without a system: −0.49 to +1.29 EUR (−0.08% to +0.19%);
+  - year-1 import bill with the system: −0.27 to +1.33 EUR (−0.16% to +0.76%);
+  - grid import: −1.7 to +6.9 kWh;
+  - 25-year NPV of savings: −15.08 to +10.71 EUR.
 - Monte Carlo now builds the load profile for `target_year`, the calendar its
   weather years and tariff already use, instead of for the year of
   `start_date` shifted onto `target_year` by position

@@ -8,8 +8,11 @@ import pytest
 
 from breos import cli
 from breos.app import App
+from breos.load_profiles import _btn_day_type
 from breos.montecarlo import MonteCarloSettings, run_montecarlo
+from breos.runners.app import run_app_simulation
 
+LISBON = "Europe/Lisbon"
 BASE = {"location": "porto", "n_modules": 6, "annual_consumption_kwh": 3000, "projection_years": 1}
 
 
@@ -130,3 +133,52 @@ def test_montecarlo_records_the_profile_file(tmp_path, write_multiyear_weather):
     assert result.provenance["load_profile"]["key"] == "demandlib_h0"
     assert result.provenance["load_profile"]["file"] == "h0SLP_demandlib_1000kwh_hourly.csv"
     assert np.isfinite(result.runs["npv_savings"]).all()
+
+
+def _write_day_class_eredes(path, year=2025, dated=True):
+    """A 15-minute E-REDES file whose level on each date is its BTN class in ``year``.
+
+    Working days are 1 Wh per quarter-hour, Saturdays 2 and Sundays and
+    national holidays 3, so the class of the source day reaches the App run.
+    """
+    stamps = pd.date_range(f"{year}-01-01", f"{year + 1}-01-01", freq="15min", inclusive="left")
+    level = np.array([1.0 + _btn_day_type(day) for day in stamps.normalize()])
+    frame = pd.DataFrame({"BTN A - Wh": level, "BTN B - Wh": level, "BTN C - Wh": level})
+    if dated:
+        frame.insert(0, "DateTime", stamps.strftime("%Y-%m-%d %H:%M"))
+    frame.to_csv(path, index=False)
+
+
+@pytest.mark.usefixtures("_patch_weather")
+def test_a_dated_eredes_profile_reaches_a_tou_run_with_the_study_years_day_classes(tmp_path):
+    tariff = {
+        "schedule": "pt_mainland_2026_weekly_bi",
+        "currency": "EUR",
+        "import_prices": {"peak": 0.30, "off_peak": 0.10},
+        "export_prices": {"all": 0.05},
+        "fixed_charge_per_day": 0.25,
+    }
+    config = {**BASE, "start_date": "2026-01-01", "resolution": "15min", "tariff": tariff}
+
+    def run(directory):
+        app = App({**config, "load_profile": "eredes_btn_c", "rlp_directory": str(directory)})
+        return run_app_simulation(app._resolved, app._runtime_dependencies())
+
+    classes = {}
+    for dated in (True, False):
+        directory = tmp_path / ("dated" if dated else "undated")
+        directory.mkdir()
+        _write_day_class_eredes(directory / "EREDES_2025_BTN_1000kwh_15min.csv", dated=dated)
+        artifacts = run(directory)
+        frame = artifacts.first_year_results_df
+        local = pd.Series(frame["Houseload"].to_numpy(), index=pd.DatetimeIndex(frame["Datetime"]).tz_convert(LISBON))
+        daily = local.groupby(local.index.date).mean()
+        classes[dated] = (np.rint(daily / daily.min()) - 1).astype(int)
+        classes[dated, "bill"] = artifacts.yearly_df["Baseline_Import_Cost"].iloc[0]
+
+    expected = pd.Series([_btn_day_type(pd.Timestamp(day)) for day in classes[True].index], index=classes[True].index)
+    # Every 2026 date carries a 2025 source day of its own class, holidays included.
+    pd.testing.assert_series_equal(classes[True], expected, check_names=False)
+    # Placed by position, the 2025 rows start on a Wednesday and land one weekday late.
+    assert (classes[False] != expected).sum() > 100
+    assert classes[True, "bill"] != pytest.approx(classes[False, "bill"], rel=1e-4)
