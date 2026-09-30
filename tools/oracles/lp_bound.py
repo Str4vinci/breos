@@ -7,10 +7,23 @@ grid, battery discharge, grid charge and stored energy) to minimise import
 cost less export revenue. It is solved with HiGHS through
 :func:`scipy.optimize.linprog`. Its feasible set contains every flow the
 production dispatch step can deliver, under any
-:class:`~breos.dispatch_instructions.DispatchInstructions`. Its optimum is
-therefore a cost that no controller can beat, causal or not, on the same
-year at the same health. The standing charge is left out: every schedule
-pays it.
+:class:`~breos.dispatch_instructions.DispatchInstructions`, as long as the
+battery's health stays at or above the program's floor health and no
+battery is replaced during the year. Under that condition its optimum is a
+cost no controller can beat, causal or not. The standing charge is left
+out: every schedule pays it.
+
+The floor health is the one setting the claim depends on. By default
+(``floor_soh="auto"``, ``--floor-soh auto``) the program is solved at the
+opening health, the reference dispatch and the program's own schedule are
+replayed, and it is solved again with the floor at the lowest health,
+unrounded, that those replays reached. The reported bound then provably
+covers every run it reports, and any dispatch whose health stays at or
+above that floor; it does not cover a controller that fades harder. The
+optimum at the opening health is reported next to it as a
+``fixed_health_estimate``: a close estimate, not a bound, since every run
+fades. ``bound_is_strict`` says whether the bound covers every reported
+run, and a warning names each one it does not.
 
 This is the BREOS counterpart of the legacy perfect-foresight bound
 (``tools/compute_a2_perfect_foresight_bound.py`` and
@@ -30,15 +43,20 @@ What the program keeps exactly, per step:
 
 What it relaxes, so that the bound claim holds:
 
-- **Fixed health.** State of health and both efficiencies are held at the
-  year's opening values (``soh_fraction``, the configured efficiencies).
-  Health only falls within a year, which lowers the dispatch's ceiling and
-  so keeps the bound valid. It also lowers the floor, by ``min_soc`` times
-  the fade, which is the one way fixed health favours the dispatch. The
-  floor is therefore taken at ``floor_soh_fraction``, the same value by
-  default; the bound holds for any dispatch whose health stays at or above
-  it. The report gives the lowest health each replay reached and whether
-  the floor covers it (``floor_soh_covers_run``); ``--floor-soh`` sets it.
+- **Opening health for the ceiling and the efficiencies.** State of health
+  and both efficiencies are held at the year's opening values
+  (``soh_fraction``, the configured efficiencies). Between replacements,
+  health only falls, which lowers the dispatch's ceiling, and resistance
+  fade only lowers its efficiencies; both keep the bound valid. With fade a
+  dispatch ledger is not exactly a point of the program, since the
+  dispatch drew more energy than the program's efficiencies need for the
+  same stored energy, but the point :func:`ledger_point` builds from the
+  stored energies is, and it costs no more. Falling health also lowers the
+  floor, by ``min_soc`` times the fade, which is the one way the opening
+  health would favour the program: hence the floor health above.
+- **No replacement.** A replacement adds stored energy and restores health
+  within the year, which the program does not model. A replayed run that
+  replaced its battery in the first year is never counted as covered.
 - **The inverter curve is convexified.** The PVWatts part-load curve the
   dispatch uses is not concave near zero load. The program bounds AC output
   from above by a concave function over it: a line from the origin at the
@@ -56,12 +74,13 @@ What it relaxes, so that the bound claim holds:
   make it. DC above the rated point is clipped, as in the dispatch, and the
   clipped DC may still charge the battery.
 - **Standby loss is charged in part.** The dispatch bleeds
-  ``min(standby, energy - emin)`` each step after the window clip. The
-  energy that leaves is not a convex function of the energy stored, so the
-  program charges the chord of it over the window: the full standby loss
-  at the ceiling, none at the floor, and a share in between. A spill
-  variable absorbs the capacity-window loss when a colder step shrinks the
-  window, and any standby the chord does not charge.
+  ``min(standby, energy - emin)`` each step after the window clip, so the
+  energy left is ``max(emin, energy - standby)`` above ``emin`` and the
+  energy itself below it. The program charges the line through ``(emin,
+  emin)`` and the ceiling's value, which lies on or above that map: the
+  full standby loss at the ceiling, none at ``emin``, a share in between.
+  A spill variable absorbs the capacity-window loss when a colder step
+  shrinks the window, and any standby the line does not charge.
 - **A lower floor after a cold spell.** The dispatch never discharges below
   the step's floor, but stored energy can sit below a floor that rises with
   temperature. The program's floor is the running minimum of the floor
@@ -83,8 +102,8 @@ grid-charge efficiency and site limit. Without a fixed-target table the
 program has no grid-charge converter to model and bounds self-consumption
 dispatch only, unless a grid-charge efficiency is given.
 
-The bound is the optimum within the solver's tolerances. The schedule can be
-turned into instructions (:func:`lp_instructions`) and replayed through the
+The bound is the optimum within the solver's tolerances. The schedule of
+the fixed-health estimate can be turned into instructions (:func:`lp_instructions`) and replayed through the
 production run with :mod:`tools.oracles.replay`, which shows the gap between
 what the relaxed physics promised and what production delivers. Legacy
 options not ported: the per-project-year and year-one-reused LP modes, the
@@ -93,17 +112,20 @@ bounds the first year's bill.
 
 Usage:
     python tools/oracles/lp_bound.py --config my.toml --output bound.json --csv schedule.csv
+    python tools/oracles/lp_bound.py --config my.toml --floor-soh 0.9    # a floor of your own
 """
 
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import math
 import sys
 import time
+import warnings
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Mapping, Sequence
 
 import numpy as np
 import pandas as pd
@@ -133,6 +155,7 @@ from tools.oracles.replay import (
     ReplayCase,
     ReplayResult,
     Tolerance,
+    first_year_replacements,
     plan_comparison,
     prepare_replay,
     reference_dispatch,
@@ -143,15 +166,19 @@ from tools.oracles.replay import (
 LP_BOUND_SCHEMA = "breos_lp_bound_v1"
 LP_SCHEDULE_SCHEMA = "breos_lp_bound_schedule_v1"
 DEFAULT_TANGENTS = 5
+# Below this load (Wh over the step) a step takes the peak-ratio line, not its own secant.
+MIN_SECANT_LOAD_WH = 1.0
 # A planned flow below this (Wh over the step) is solver noise, not an action.
 ACTION_THRESHOLD_WH = 1e-6
 # The replay compares the schedule's flows with this tolerance.
 DEFAULT_REPLAY_TOLERANCE = Tolerance(atol_wh=1.0)
 
+# What the program relaxes. The floor health is not among them: it is the
+# condition the bound holds under (see run_lp_bound and the report's bound_scope).
 RELAXATIONS = (
-    "fixed_health",
+    "opening_health_ceiling_and_efficiencies",
     "inverter_concave_hull",
-    "partial_standby_loss",
+    "standby_loss_by_chord",
     "running_minimum_floor",
     "no_dispatch_order",
     "free_terminal_energy",
@@ -226,10 +253,13 @@ def load_secants(
     so no output up to a load ``L`` below that point converts better than
     ``L`` itself: ``dc_per_ac`` is DC per AC at ``L``. Exported AC past
     ``L`` costs at least the marginal DC per AC there, since the DC-for-AC
-    curve is convex. A step with no load, or a load at or above the peak
-    point, takes the peak ratio and no export term, which the hull cuts
-    already hold. Both factors are shaded by 1e-9 so round-off in the
-    dispatch's own conversion cannot cut off a point it delivers.
+    curve is convex. A step with a load below 1 Wh, or at or above the
+    peak point, takes the peak ratio and no export term, which the hull
+    cuts already hold. Near zero load the DC-for-AC inverse sits on the
+    curve's zero crossing, where its ratio is large and round-off in it is
+    too, so a secant there would not be worth its margin. Both factors are
+    shaded by 1e-9 so round-off in the dispatch's own conversion cannot cut
+    off a point it delivers.
     """
     eta = min(1.0, max(0.0, float(inverter_efficiency)))
     scale = min(1.0, max(0.0, float(ac_output_scale)))
@@ -243,7 +273,7 @@ def load_secants(
     shade = 1.0 - 1e-9
     dc_per_ac = np.full(n, peak_dc / peak_ac * shade)
     dc_per_export = np.zeros(n)
-    for step in np.flatnonzero((load_wh > 0.0) & (load_wh < peak_ac)):
+    for step in np.flatnonzero((load_wh >= MIN_SECANT_LOAD_WH) & (load_wh < peak_ac)):
         load = float(load_wh[step])
         dc = _dc_for_ac(load, inverter_ac_wh, eta, scale)
         slope = scale * eta / PVWATTS_REFERENCE_EFFICIENCY * (2.0 * q * dc / pdc0 + l)
@@ -365,8 +395,9 @@ class LpBound:
     """The program's optimum: the bound, and the schedule that attains it.
 
     ``objective`` is import cost less export revenue over the problem, in
-    the tariff's currency; no dispatch on the same inputs and health pays
-    less. ``schedule`` maps each name in :data:`SCHEDULE_FLOWS` to its Wh
+    the tariff's currency. No dispatch on the same inputs pays less if its
+    health stays at or above the problem's floor health and it replaces no
+    battery. ``schedule`` maps each name in :data:`SCHEDULE_FLOWS` to its Wh
     per step, with solver round-off below zero set to zero.
     """
 
@@ -398,6 +429,9 @@ class LinearProgram:
     upper: np.ndarray
     n_steps: int
     start_energy_wh: float
+    eff_charge: float
+    eff_discharge: float
+    grid_charge_efficiency: float
 
     def block(self, name: str) -> slice:
         """The positions of flow ``name`` in ``x``."""
@@ -417,26 +451,48 @@ class LinearProgram:
 def ledger_point(program: LinearProgram, results: pd.DataFrame, hours_per_step: float) -> np.ndarray:
     """A dispatch ledger, the first project year's per-step frame, as a point ``x`` of ``program``.
 
-    Every flow the dispatch delivered has a variable. If the program is a
-    relaxation of the dispatch, every such point is feasible:
-    :meth:`LinearProgram.violation` is zero up to round-off. The tests check
-    exactly that.
+    Every flow the dispatch delivered has a variable. Charge and discharge
+    are mapped through the energy they store and deliver at the program's
+    efficiencies, and any stored energy that leaves otherwise goes to the
+    spill. With the configured efficiencies this is the ledger itself.
+    With resistance fade the dispatch's efficiencies are lower, so the
+    point draws less PV or grid energy and releases less stored energy than
+    production did, for the same stored energy and the same AC: it costs no
+    more than production and the bound still holds, but it is not the
+    ledger one to one.
+
+    If the program is a relaxation of the dispatch, every such point is
+    feasible: :meth:`LinearProgram.violation` is zero up to round-off. That
+    round-off includes the dispatch's own, for example its discharge-limit
+    bisection, which can overshoot the limit by about 1e-9 Wh. The tests
+    check exactly that.
     """
+    stored_pv = results["PV_Origin_Battery_Charge_Stored"].to_numpy(dtype=np.float64)
+    stored_grid = results["Grid_Origin_Battery_Charge_Stored"].to_numpy(dtype=np.float64)
+    battery_dc = (results["Battery_Discharge_DC"] - results["Battery_Discharge_Loss"]).to_numpy(dtype=np.float64)
+    grid_ac = results["Grid_AC_To_Battery"].to_numpy(dtype=np.float64)
+    grid_gain = program.eff_charge * program.grid_charge_efficiency
+    discharge = battery_dc / program.eff_discharge if program.eff_discharge > 0.0 else battery_dc
     columns = {
-        "pv_dc_to_inverter_wh": results["PV_DC_To_Inverter"],
-        "pv_dc_to_battery_wh": results["PV_DC_To_Battery"],
-        "pv_ac_to_load_wh": results["PV_AC_To_Load"],
-        "pv_ac_export_wh": results["PV_AC_Export"],
-        "battery_ac_to_load_wh": results["Battery_AC_To_Load"],
-        "battery_discharge_stored_wh": results["Battery_Discharge_DC"],
-        "grid_ac_to_battery_wh": results["Grid_AC_To_Battery"],
-        "grid_import_to_load_wh": results["Import_From_Grid"] - results["Grid_AC_To_Battery"],
-        "stored_energy_spill_wh": results["Capacity_Window_Loss"],
-        "standby_loss_wh": results["Standby_Loss"],
+        "pv_dc_to_inverter_wh": results["PV_DC_To_Inverter"].to_numpy(dtype=np.float64),
+        "pv_dc_to_battery_wh": stored_pv / program.eff_charge if program.eff_charge > 0.0 else stored_pv,
+        "pv_ac_to_load_wh": results["PV_AC_To_Load"].to_numpy(dtype=np.float64),
+        "pv_ac_export_wh": results["PV_AC_Export"].to_numpy(dtype=np.float64),
+        "battery_ac_to_load_wh": results["Battery_AC_To_Load"].to_numpy(dtype=np.float64),
+        "battery_discharge_stored_wh": discharge,
+        "grid_ac_to_battery_wh": stored_grid / grid_gain if grid_gain > 0.0 else grid_ac,
+        "grid_import_to_load_wh": (results["Import_From_Grid"] - results["Grid_AC_To_Battery"]).to_numpy(
+            dtype=np.float64
+        ),
+        "stored_energy_spill_wh": (results["Capacity_Window_Loss"] + results["Battery_Discharge_DC"]).to_numpy(
+            dtype=np.float64
+        )
+        - discharge,
+        "standby_loss_wh": results["Standby_Loss"].to_numpy(dtype=np.float64),
     }
     x = np.zeros(len(SCHEDULE_FLOWS) * program.n_steps)
     for name, values in columns.items():
-        x[program.block(name)] = np.asarray(values, dtype=np.float64) * hours_per_step
+        x[program.block(name)] = values * hours_per_step
     # Stored energy is a state, reported in Wh rather than as average power.
     x[program.block("battery_energy_end_wh")] = results["Battery_Energy_End"].to_numpy(dtype=np.float64)
     return x
@@ -525,13 +581,19 @@ def build_linear_program(problem: LpBoundProblem) -> LinearProgram:
     vals.append(np.ones(n - 1))
     standby = config.standby_loss_wh * hours
     if standby > 0.0:
-        # The dispatch bleeds min(standby, energy - emin) after the window
-        # clip: the energy left is convex in the clipped energy, so the chord
-        # over [floor, emax] bounds it from above. Standby is charged in
-        # full at emax and not at all at the floor.
+        # After the window clip the dispatch bleeds min(standby, E - emin)
+        # down to emin, leaving E below emin and max(emin, E - standby) above
+        # it. That map is not convex across emin, but the line through
+        # (emin, emin) and (emax, max(emin, emax - standby)) lies on or above
+        # it everywhere: above emin the map is convex and meets the line at
+        # both ends, and below emin it is the identity, under a line of slope
+        # at most 1 through (emin, emin). With fade the dispatch's emin is
+        # lower, which only lowers the map. Standby is charged in full at
+        # emax and not at all at emin.
         top = np.maximum(emin, emax - standby)
-        slope = (top - emin) / (emax - floor)
-        chord_rhs = emin - slope * floor
+        span = emax - emin
+        slope = np.divide(top - emin, span, out=np.zeros_like(span), where=span > 0.0)
+        chord_rhs = emin * (1.0 - slope)
         chord_rhs[0] -= (1.0 - slope[0]) * start
         chord_first = counter[0]
         add_rows([(var(_SP), slope - 1.0), (var(_SB), -1.0)], chord_rhs, counter)
@@ -608,6 +670,9 @@ def build_linear_program(problem: LpBoundProblem) -> LinearProgram:
         upper=upper,
         n_steps=n,
         start_energy_wh=start,
+        eff_charge=eff_c,
+        eff_discharge=eff_d,
+        grid_charge_efficiency=grid_eff,
     )
 
 
@@ -693,51 +758,152 @@ def lp_planned_flows(bound: LpBound, problem: LpBoundProblem) -> dict[str, np.nd
     }
 
 
+FLOOR_AUTO = "auto"
+FLOOR_OPENING = "opening"
+
+
+@dataclass(frozen=True)
+class CoveredRun:
+    """A replayed run the bound was checked against, and whether it provably covers it.
+
+    The bound covers a run when the run's lowest first-year health is at or
+    above the program's floor health and the run replaced no battery in the
+    first year. ``reason`` says why not, when it does not.
+    """
+
+    name: str
+    replay: ReplayResult
+    min_soh_fraction: float
+    replacements: int
+    covered: bool
+    reason: str | None
+
+
 @dataclass(frozen=True)
 class LpBoundResult:
     """The bound on one configuration, against what production dispatch delivers.
 
-    ``reference`` replays the instructions App itself dispatches with: the
-    fixed-target ones, or greedy dispatch without a ``[smart_charging]``
-    table. ``lp_replay`` replays the schedule's instructions, when asked.
-    Every cost compared is the first project year's import cost less export
-    revenue.
+    ``bound`` is solved on ``problem``, whose floor health ``floor_mode``
+    chose. ``fixed_health_estimate`` is the optimum with the floor at the
+    opening health: a close estimate, but not a bound on a run whose health
+    fades, which every real run does. The schedule replayed is the
+    estimate's. ``reference`` replays the instructions App itself
+    dispatches with: the fixed-target ones, or greedy dispatch without a
+    ``[smart_charging]`` table. ``lp_replay`` replays the schedule, when
+    asked. ``runs`` are every replay the bound was checked against, and
+    ``bound_is_strict`` says it covers all of them. Every cost compared is
+    the first project year's import cost less export revenue.
     """
 
     problem: LpBoundProblem
     bound: LpBound
+    fixed_health_estimate: LpBound
     reference: ReplayResult
     instructions: DispatchInstructions | None
     lp_replay: ReplayResult | None
+    runs: tuple[CoveredRun, ...]
+    floor_mode: str
     schema: str = LP_BOUND_SCHEMA
+
+    @property
+    def bound_is_strict(self) -> bool:
+        return all(run.covered for run in self.runs)
+
+
+def _min_soh(replay: ReplayResult) -> float:
+    return float(replay.artifacts.first_year_results_df["Battery_SOH"].min()) / 100.0
+
+
+def _covered_run(name: str, replay: ReplayResult, floor_soh: float) -> CoveredRun:
+    health = _min_soh(replay)
+    replacements = first_year_replacements(replay)
+    reasons = []
+    if replacements:
+        reasons.append(
+            f"it replaced the battery {replacements} time(s) in the first year, which adds stored energy "
+            "and restores health the program does not model"
+        )
+    if health < floor_soh:
+        reasons.append(f"its health fell to {health:.6f}, below the floor health {floor_soh:.6f}")
+    return CoveredRun(
+        name=name,
+        replay=replay,
+        min_soh_fraction=health,
+        replacements=replacements,
+        covered=not reasons,
+        reason="; ".join(reasons) or None,
+    )
 
 
 def run_lp_bound(
     case: ReplayCase,
     *,
     replay: bool = True,
+    floor_soh: str | float = FLOOR_AUTO,
+    covering: Mapping[str, ReplayResult] | None = None,
     tolerance: Tolerance = DEFAULT_REPLAY_TOLERANCE,
     execution_backend: str | None = None,
     **problem_overrides: Any,
 ) -> LpBoundResult:
-    """Bound ``case``'s first-year bill, replay App's own dispatch and, with ``replay``, the schedule."""
-    problem = LpBoundProblem.from_case(case, **problem_overrides)
-    bound = solve_lp_bound(problem)
+    """Bound ``case``'s first-year bill, and replay App's own dispatch and, with ``replay``, the schedule.
+
+    ``floor_soh`` sets the floor health. ``"auto"`` (the default) first
+    solves at the opening health, replays the reference and the schedule,
+    then solves again with the floor at the lowest health, unrounded, that
+    any of those replays or the ``covering`` ones reached. The bound then
+    holds for every run it reports, and for any dispatch whose health stays
+    at or above that floor; it does not cover a controller that fades
+    harder. ``"opening"`` keeps the opening health, which covers no run
+    that fades. A number is a floor health fraction.
+
+    A run that replaces the battery in its first year is never covered.
+    When a reported run is not covered, a warning says so and
+    ``bound_is_strict`` is False.
+    """
+    if "floor_soh_fraction" in problem_overrides:
+        raise TypeError("Set the floor health with 'floor_soh', not 'floor_soh_fraction'")
+    opening = LpBoundProblem.from_case(case, **problem_overrides)
+    estimate = solve_lp_bound(opening)
     reference = replay_instructions(case, case.configured_instructions(), execution_backend=execution_backend)
-    instructions = lp_instructions(bound, problem) if replay else None
+    instructions = lp_instructions(estimate, opening) if replay else None
     lp_replay = (
         replay_instructions(
             case,
             instructions,
-            planned=lp_planned_flows(bound, problem),
+            planned=lp_planned_flows(estimate, opening),
             tolerance=tolerance,
             execution_backend=execution_backend,
         )
         if instructions is not None
         else None
     )
+    named = {"reference": reference, **({"lp_replay": lp_replay} if lp_replay is not None else {}), **(covering or {})}
+
+    opening_soh = opening.health()[0]
+    if floor_soh == FLOOR_AUTO:
+        floor = min([opening_soh, *(_min_soh(run) for run in named.values())])
+    elif floor_soh == FLOOR_OPENING:
+        floor = opening_soh
+    elif isinstance(floor_soh, str):
+        raise ValueError(f"'floor_soh' must be {FLOOR_AUTO!r}, {FLOOR_OPENING!r} or a fraction")
+    else:
+        floor = float(floor_soh)
+    problem = dataclasses.replace(opening, floor_soh_fraction=floor)
+    bound = estimate if floor == opening_soh else solve_lp_bound(problem)
+
+    runs = tuple(_covered_run(name, run, floor) for name, run in named.items())
+    for run in runs:
+        if not run.covered:
+            warnings.warn(f"The LP bound does not provably cover the {run.name} run: {run.reason}", stacklevel=2)
     return LpBoundResult(
-        problem=problem, bound=bound, reference=reference, instructions=instructions, lp_replay=lp_replay
+        problem=problem,
+        bound=bound,
+        fixed_health_estimate=estimate,
+        reference=reference,
+        instructions=instructions,
+        lp_replay=lp_replay,
+        runs=runs,
+        floor_mode=floor_soh if isinstance(floor_soh, str) else "given",
     )
 
 
@@ -745,8 +911,19 @@ def report(result: LpBoundResult, case: ReplayCase) -> dict[str, Any]:
     """A JSON-safe summary of ``result``."""
     problem, bound = result.problem, result.bound
     soh, floor_soh = problem.health()
-    reference = replay_summary(result.reference, problem.hours_per_step)
     schedule = bound.schedule
+    coverage = {run.name: run for run in result.runs}
+
+    def run_fields(name: str, replay: ReplayResult) -> dict[str, Any]:
+        summary = replay_summary(replay, problem.hours_per_step)
+        run = coverage[name]
+        return {
+            **summary,
+            "minus_bound": summary["first_year_cost"] - bound.objective,
+            "covered_by_bound": run.covered,
+            "not_covered_because": run.reason,
+        }
+
     payload: dict[str, Any] = {
         "schema": result.schema,
         "currency": result_currency(case.tariff),
@@ -756,14 +933,24 @@ def report(result: LpBoundResult, case: ReplayCase) -> dict[str, Any]:
         "end": str(case.index[-1]),
         "battery_kwh": problem.battery_config.nominal_energy_wh / 1000.0,
         "cost_basis": "first project year import cost less export revenue; standing charge excluded",
+        "bound_is_strict": result.bound_is_strict,
         "lp": {
-            "relaxations": list(RELAXATIONS),
-            "soh_fraction": soh,
+            "bound": bound.objective,
+            "bound_scope": (
+                "a lower bound for any dispatch of this year whose state of health stays at or above "
+                "floor_soh_fraction and that replaces no battery"
+            ),
+            "floor_mode": result.floor_mode,
             "floor_soh_fraction": floor_soh,
+            "soh_fraction": soh,
+            "fixed_health_estimate": result.fixed_health_estimate.objective,
+            "fixed_health_estimate_note": (
+                "the optimum with the floor at the opening health; not a bound on a run whose health fades"
+            ),
+            "relaxations": list(RELAXATIONS),
             "grid_charge_efficiency": problem.grid_charge_efficiency,
             "grid_import_limit_w": problem.grid_import_limit_w,
             "inverter_tangents": problem.tangents,
-            "bound": bound.objective,
             "import_cost": bound.import_cost,
             "export_revenue": bound.export_revenue,
             "import_kwh": float((schedule["grid_import_to_load_wh"] + schedule["grid_ac_to_battery_wh"]).sum() / 1000),
@@ -777,28 +964,29 @@ def report(result: LpBoundResult, case: ReplayCase) -> dict[str, Any]:
             "solve_seconds": bound.solve_seconds,
             "solver_message": bound.solver_message,
         },
-        "reference": {
-            "dispatch": reference_dispatch(case),
-            **reference,
-            "minus_bound": reference["first_year_cost"] - bound.objective,
-            # The bound provably covers this run only if its floor health is at or below the run's.
-            "floor_soh_covers_run": floor_soh * 100.0 <= reference["min_soh_pct"],
-        },
+        "reference": {"dispatch": reference_dispatch(case), **run_fields("reference", result.reference)},
     }
     if result.lp_replay is not None:
-        replayed = replay_summary(result.lp_replay, problem.hours_per_step)
         payload["lp_replay"] = {
-            **replayed,
-            "minus_bound": replayed["first_year_cost"] - bound.objective,
-            "floor_soh_covers_run": floor_soh * 100.0 <= replayed["min_soh_pct"],
+            "schedule": "fixed_health_estimate",
+            **run_fields("lp_replay", result.lp_replay),
             **plan_comparison(result.lp_replay),
         }
+    others = [run for run in result.runs if run.name not in ("reference", "lp_replay")]
+    if others:
+        payload["covering"] = {run.name: run_fields(run.name, run.replay) for run in others}
     return payload
 
 
 def schedule_frame(result: LpBoundResult, case: ReplayCase) -> pd.DataFrame:
-    """The schedule, one row per step, with the replay's delivered flows when there is one."""
-    frame = pd.DataFrame({"timestamp": case.index.astype(str), **result.bound.schedule})
+    """The replayed schedule, one row per step, with the replay's delivered flows when there is one.
+
+    The schedule is the fixed-health estimate's, the one the instructions
+    come from; ``bound_battery_energy_end_wh`` is the stored energy of the
+    schedule that attains the reported bound.
+    """
+    frame = pd.DataFrame({"timestamp": case.index.astype(str), **result.fixed_health_estimate.schedule})
+    frame["bound_battery_energy_end_wh"] = result.bound.schedule["battery_energy_end_wh"]
     if result.instructions is not None:
         frame["discharge_allowed"] = result.instructions.discharge_allowed
         frame["reserve_fraction"] = result.instructions.reserve_fraction
@@ -821,7 +1009,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--output", default="-", help="JSON summary path; '-' (default) writes to standard output")
     parser.add_argument("--csv", help="Write the per-step schedule to this CSV")
     parser.add_argument("--no-replay", action="store_true", help="Skip replaying the schedule's instructions")
-    parser.add_argument("--floor-soh", type=float, help="State of health (fraction) the floor is taken at")
+    parser.add_argument(
+        "--floor-soh",
+        default=FLOOR_AUTO,
+        help=(
+            "Floor health: 'auto' (default) takes the lowest health the reported replays reached, "
+            "'opening' the opening health (not a bound on a run that fades), or a fraction"
+        ),
+    )
     parser.add_argument("--tangents", type=int, default=DEFAULT_TANGENTS, help="Tangents to the inverter curve")
     parser.add_argument(
         "--grid-charge-efficiency",
@@ -833,8 +1028,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     overrides: dict[str, Any] = {"tangents": args.tangents}
-    if args.floor_soh is not None:
-        overrides["floor_soh_fraction"] = args.floor_soh
+    floor_soh: str | float = args.floor_soh if args.floor_soh in (FLOOR_AUTO, FLOOR_OPENING) else float(args.floor_soh)
     if args.grid_charge_efficiency is not None:
         overrides["grid_charge_efficiency"] = args.grid_charge_efficiency
     with reuse_prepared_inputs():
@@ -842,6 +1036,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         result = run_lp_bound(
             case,
             replay=not args.no_replay,
+            floor_soh=floor_soh,
             tolerance=Tolerance(atol_wh=args.atol_wh),
             execution_backend=args.execution_backend,
             **overrides,

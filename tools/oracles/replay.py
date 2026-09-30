@@ -255,13 +255,24 @@ def replay_instructions(
     )
 
 
+def first_year_replacements(replay: ReplayResult) -> int:
+    """How many battery replacements the replay's first project year made."""
+    frame = replay.artifacts.first_year_results_df
+    return int(np.count_nonzero(frame["Battery_Replaced"].to_numpy())) if "Battery_Replaced" in frame else 0
+
+
 def replay_summary(replay: ReplayResult, hours_per_step: float) -> dict[str, Any]:
-    """A replay's first-year cost, its instructions' hash, its lowest health and its grid charge."""
+    """A replay's first-year cost, instruction hash, lowest health, replacements and battery flows.
+
+    ``min_soh_fraction`` is the lowest state of health of the first year,
+    unrounded, as a fraction like every health setting of the oracles.
+    """
     frame = replay.artifacts.first_year_results_df
     return {
         "first_year_cost": float(replay.first_year_step_cost.sum()),
         "instruction_hash": replay.instruction_hash,
-        "min_soh_pct": float(frame["Battery_SOH"].min()),
+        "min_soh_fraction": float(frame["Battery_SOH"].min()) / 100.0,
+        "first_year_replacements": first_year_replacements(replay),
         "grid_charge_kwh": float(frame["Grid_AC_To_Battery"].sum() * hours_per_step / 1000.0),
         "battery_ac_to_load_kwh": float(frame["Battery_AC_To_Load"].sum() * hours_per_step / 1000.0),
     }
@@ -274,16 +285,23 @@ def reference_dispatch(case: ReplayCase) -> str:
 
 
 def plan_comparison(replay: ReplayResult) -> dict[str, Any]:
-    """How far a replay's delivered flows missed the plan: counts and totals, in kWh."""
+    """How far a replay's delivered flows missed the plan, in kWh.
+
+    A flow gives the sum of its per-step differences and the largest one. A
+    state, such as ``battery_energy_wh``, has no meaningful sum: it gives
+    the largest difference and the difference at the last step.
+    """
+    differences: dict[str, dict[str, float]] = {}
+    for name, difference in replay.planned_minus_delivered_wh.items():
+        largest = float(np.abs(difference).max(initial=0.0) / 1000.0)
+        if name.endswith("_wh"):
+            end = float(difference[-1] / 1000.0) if len(difference) else 0.0
+            differences[name] = {"max_abs": largest, "end": end}
+        else:
+            differences[name] = {"sum": float(difference.sum() / 1000.0), "max_abs": largest}
     return {
         "plan_matched": replay.plan_matched,
         "mismatched_steps": len(replay.mismatched_steps),
         "tolerances_wh": {name: asdict(tol) for name, tol in replay.tolerances.items()},
-        "planned_minus_delivered_kwh": {
-            name: {
-                "sum": float(difference.sum() / 1000.0),
-                "max_abs": float(np.abs(difference).max(initial=0.0) / 1000.0),
-            }
-            for name, difference in replay.planned_minus_delivered_wh.items()
-        },
+        "planned_minus_delivered_kwh": differences,
     }

@@ -15,7 +15,8 @@ This is the BREOS counterpart of the offline oracle of the legacy
 ``tools/compute_a2_daily_sc_oracle.py`` (``--forecast-mode perfect``, at
 ``07dc0e40``). It is a validation tool, not public API. It is an optimum
 over one policy class under the planner's model, not a bound: the linear
-program of :mod:`tools.oracles.lp_bound` bounds every policy.
+program of :mod:`tools.oracles.lp_bound` bounds every policy whose health
+stays at or above its floor health.
 
 The planner holds state of health and both efficiencies at the year's
 opening values, and its value function lives on a grid of stored energy.
@@ -63,13 +64,12 @@ from breos._daily_targets import (
     DEFAULT_TARGET_LEVELS,
     DailyTargetPlan,
     DailyTargetProblem,
-    _DayEvaluator,
     daily_target_instructions,
     solve_daily_targets,
     target_grid,
 )
 from breos.app_inputs import reuse_prepared_inputs
-from breos.battery import _ResultBuffers
+from breos.battery import _resolve_dispatch_day, _ResultBuffers, _step_energy_cap
 from breos.dispatch_instructions import DispatchInstructions
 from breos.tariffs import result_currency
 from tools.oracles._output import load_config, write_csv, write_json
@@ -146,18 +146,32 @@ def fixed_health_flows(
     :data:`tools.oracles.replay.PLANNED_FLOWS` and the per-step import cost
     less export revenue.
     """
-    evaluator = _DayEvaluator(problem, target_grid(1), execution_backend)
-    soh, _eff_charge, _eff_discharge = problem.health()
+    soh, eff_charge, eff_discharge = problem.health()
     config = problem.battery_config
+    hours = problem.hours_per_step
     buffers = _ResultBuffers(len(instructions))
-    evaluator.dispatch_day(
+    # The planner's own day state (_DayEvaluator), on writable copies of the series.
+    _resolve_dispatch_day(execution_backend)(
         buffers,
-        *evaluator.series,
+        np.array(problem.pv_dc_w),
+        np.array(problem.load_w),
+        np.array(problem.temperature_c),
         0,
         len(instructions),
+        battery_config=config,
+        battery_soh_decimal=soh,
         Battery_Energy_Wh=config.nominal_energy_wh * soh * config.max_soc,
+        Battery_PV_Origin_Energy_Wh=0.0,
+        Battery_Grid_Origin_Energy_Wh=0.0,
+        eff_charge=eff_charge,
+        eff_discharge=eff_discharge,
+        hours_per_step=hours,
+        standby_loss_per_step_wh=config.standby_loss_wh * hours,
+        cap_wh=_step_energy_cap(config.inverter_ac_capacity_w, hours),
+        cap_charge_wh=_step_energy_cap(config.max_charge_power_w, hours),
+        cap_discharge_wh=_step_energy_cap(config.max_discharge_power_w, hours),
+        cap_stored_wh=_step_energy_cap(config.stored_power_limit_w, hours),
         instructions=instructions,
-        **evaluator.state,
     )
     columns = buffers.columns
     planned = {
