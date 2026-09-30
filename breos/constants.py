@@ -45,6 +45,8 @@ LAM_EXPONENT_B = 0.75  # Time exponent (Based on Lam Fig 5A LFP cluster)
 LAM_SOC_EXPONENT_N = 0.75  # Assume same SOC exponent as Naumann/general LFP
 
 # === Naumann + Lam field-calibrated parameters v1 (default, 15-min) ===
+# Selected by "naumann_lam_field_calibrated" and its explicit alias
+# "naumann_lam_field_calibrated_v1".
 # Re-run on 2026-04-12 against the effective 5-system Zenodo LFP field set
 # (systems 14, 15, 17, 20, 21) using the finalized validation pipeline.
 # Mean RMSE = 4.40pp on the full calibration fit; LOO mean CV RMSE = 6.0pp.
@@ -52,10 +54,6 @@ NAUMANN_LAM_FIELD_CALIBRATED_K0_FRAC = 8.019530e-08
 NAUMANN_LAM_FIELD_CALIBRATED_EA_J_MOL = 11876.09
 NAUMANN_LAM_FIELD_CALIBRATED_EXPONENT_B = 0.7701374
 NAUMANN_LAM_FIELD_CALIBRATED_SOC_EXPONENT_N = 0.1010299
-NAUMANN_LAM_FIELD_CALIBRATED_V1_K0_FRAC = NAUMANN_LAM_FIELD_CALIBRATED_K0_FRAC
-NAUMANN_LAM_FIELD_CALIBRATED_V1_EA_J_MOL = NAUMANN_LAM_FIELD_CALIBRATED_EA_J_MOL
-NAUMANN_LAM_FIELD_CALIBRATED_V1_EXPONENT_B = NAUMANN_LAM_FIELD_CALIBRATED_EXPONENT_B
-NAUMANN_LAM_FIELD_CALIBRATED_V1_SOC_EXPONENT_N = NAUMANN_LAM_FIELD_CALIBRATED_SOC_EXPONENT_N
 
 # === Naumann + Lam field-calibrated parameters v2 (15-min) ===
 # Revalidation on 2026-06-12, Variant C2: Ea and n fixed to Lam lab defaults,
@@ -91,7 +89,7 @@ LFP_CAP_DERATE_PER_C_COLD = 0.010  # fraction/°C below 0°C  (steeper derating)
 # to large surface area and (often) forced ventilation.
 # Range: 0.01-0.10 K/W.  0.05 K/W gives ~1-3°C rise above ambient
 # during typical 0.3C charging of a 5 kWh pack.
-DEFAULT_THERMAL_RESISTANCE_KW = 0.05  # K per W of heat dissipation
+DEFAULT_THERMAL_RESISTANCE_K_PER_W = 0.05  # K per W of heat dissipation
 
 # === Indoor Temperature Model ===
 # Residential batteries are installed indoors (garage, utility room) where

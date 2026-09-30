@@ -125,7 +125,6 @@ RUN_FLAGS: list[tuple[str, list[str], str, object]] = [
     ("--calendar-model", ["Naumann-Lam"], "calendar_model", "naumann_lam"),
     ("--degradation-engine", ["blast"], "degradation_engine", "blast"),
     ("--blast-model", ["lfp_gr_250ah_prismatic"], "blast_model", "lfp_gr_250ah_prismatic"),
-    ("--dc-coupled", [], "dc_coupled", True),
     ("--inverter-efficiency", ["0.97"], "inverter_efficiency", 0.97),
     ("--inverter-loading-ratio", ["1.2"], "inverter_loading_ratio", 1.2),
     ("--inverter-ac-rating-kw", ["4.6"], "inverter_ac_rating_kw", 4.6),
@@ -155,7 +154,6 @@ def test_registry_preserves_defaults_and_allowed_top_level_keys():
             "period",
             "montecarlo",
             "sweep",
-            "battery_type",
         }
     )
 
@@ -165,7 +163,9 @@ def test_each_run_flag_sets_its_config_key(flag, argument, key, expected):
     assert _run_config(flag, *argument) == {key: expected}
 
 
-def test_run_help_lists_exactly_the_tabled_flags_in_order(capsys):
+def test_run_help_lists_exactly_the_tabled_flags_in_order(capsys, monkeypatch):
+    # Python 3.14's argparse colours help when the environment asks for it.
+    monkeypatch.setenv("NO_COLOR", "1")
     with pytest.raises(SystemExit):
         cli.build_parser().parse_args(["run", "--help"])
     help_text = capsys.readouterr().out
@@ -186,6 +186,11 @@ def test_choice_flags_reject_a_value_outside_their_choices(flag, value, capsys):
     assert excinfo.value.code == 2
     assert "invalid choice" in capsys.readouterr().err
 
+def test_dc_coupled_has_no_cli_flag():
+    # The key only accepts True, its default, so a flag could never change it.
+    with pytest.raises(SystemExit):
+        cli.build_parser().parse_args(["run", "--dc-coupled"])
+
 
 def test_registry_generated_cli_values_all_reach_config_overrides():
     argv = ["run"]
@@ -193,8 +198,6 @@ def test_registry_generated_cli_values_all_reach_config_overrides():
         if not field.cli_flags:
             continue
         argv.append(field.cli_flags[0])
-        if field.cli_action == "store_true":
-            continue
         if field.cli_choices is not None:
             raw: object = field.cli_choices[0]
         elif field.cli_type is int:

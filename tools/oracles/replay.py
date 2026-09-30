@@ -85,7 +85,6 @@ class ReplayCase:
     the simulation index.
     """
 
-    cfg: dict[str, Any]
     resolved: ResolvedAppConfig
     deps: AppRuntimeDependencies
     inputs: PreparedSimulationInputs
@@ -113,7 +112,7 @@ def prepare_replay(config: dict[str, Any], *, deps: AppRuntimeDependencies | Non
     # The runner's own preparation, so a reuse_prepared_inputs block shares it.
     inputs = prepare_simulation_inputs_cached(cfg, resolved, deps, prepare=app_runner.prepare_simulation_inputs)
     tariff = resolved.tariff.resolve(pd.DatetimeIndex(inputs.dc_system_base.index), resolved.timezone)
-    return ReplayCase(cfg=cfg, resolved=resolved, deps=deps, inputs=inputs, tariff=tariff)
+    return ReplayCase(resolved=resolved, deps=deps, inputs=inputs, tariff=tariff)
 
 
 @dataclass(frozen=True)

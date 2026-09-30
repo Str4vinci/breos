@@ -289,6 +289,22 @@ def test_discrete_repair_keeps_candidates_inside_the_bounds():
     ]
     assert np.all(repaired >= problem.xl) and np.all(repaired <= problem.xu)
 
+    # pymoo calls the repair through Repair.do with a population; _do receives
+    # its design matrix and the result is written back onto the population.
+    from pymoo.core.population import Population
+
+    population = DiscreteGridRepair().do(problem, Population.new("X", X.copy()))
+    assert population.get("X").tolist() == repaired.tolist()
+
+
+def test_optimize_system_multi_objective_reports_a_missing_pymoo(monkeypatch):
+    missing = ImportError("No module named 'pymoo'")
+    monkeypatch.setattr("breos.optimization._PYMOO_IMPORT_ERROR", missing)
+
+    with pytest.raises(ImportError, match=r"pip install 'breos\[optimization\]'") as excinfo:
+        optimize_system_multi_objective(pd.DataFrame(), pd.DataFrame(), {})
+    assert excinfo.value.__cause__ is missing
+
 
 def test_solar_design_problem_uses_configured_resolution(monkeypatch):
     idx = pd.date_range("2025-01-01 00:00", periods=2, freq="15min", tz="UTC")

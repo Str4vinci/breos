@@ -743,10 +743,6 @@ def _add_run_config_arguments(parser: argparse.ArgumentParser) -> None:
             kwargs["type"] = field.cli_type
         if field.cli_choices is not None:
             kwargs["choices"] = field.cli_choices
-        if field.cli_action is not None:
-            kwargs["action"] = field.cli_action
-            # A missing boolean flag must not overwrite a config-file value.
-            kwargs["default"] = None
         parser.add_argument(*field.cli_flags, **kwargs)
 
 

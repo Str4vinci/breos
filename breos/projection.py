@@ -55,7 +55,6 @@ def build_battery_config(cfg: dict[str, Any], resolved: ResolvedAppConfig, *, in
         eol_percentage=cfg["battery_eol_percentage"],
         max_soc=cfg["battery_max_soc"],
         min_soc=cfg["battery_min_soc"],
-        dc_coupled=cfg["dc_coupled"],
         inverter_efficiency=cfg["inverter_efficiency"],
         inverter_ac_capacity_w=resolved.inverter_ac_capacity_w,
         enable_replacement=True,

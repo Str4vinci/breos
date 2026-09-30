@@ -213,7 +213,7 @@ def dc_production(synthetic_weather, porto_location, pv_params):
 
 @pytest.fixture
 def battery_config():
-    return BatteryConfig(nominal_energy_wh=5000, battery_type="lfp")
+    return BatteryConfig(nominal_energy_wh=5000)
 
 
 # ---------------------------------------------------------------------------

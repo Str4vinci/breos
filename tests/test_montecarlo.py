@@ -327,14 +327,6 @@ def test_run_montecarlo_results_do_not_depend_on_the_start_date_year(tmp_path, w
     pd.testing.assert_frame_equal(results[0].yearly, results[1].yearly, check_exact=True)
 
 
-def test_run_montecarlo_is_reproducible_with_seed(tmp_path, write_multiyear_weather):
-    weather = write_multiyear_weather(tmp_path / "multi.csv")
-    settings = MonteCarloSettings(weather_file=str(weather), n_runs=4, years_per_run=3, seed=42)
-    a = run_montecarlo(_base_config(), settings).runs["npv_savings"].to_numpy()
-    b = run_montecarlo(_base_config(), settings).runs["npv_savings"].to_numpy()
-    np.testing.assert_allclose(a, b)
-
-
 def _load_scale_paths(result):
     return [tuple(group["Load_Scale"]) for _run, group in result.yearly.groupby("run")]
 
@@ -378,9 +370,11 @@ def test_run_montecarlo_run_streams_are_spawned_from_the_base_seed(tmp_path, wri
 
 
 def test_run_montecarlo_parallel_workers_preserve_seeded_results(tmp_path, write_multiyear_weather):
+    # Two seeded studies, one serial and one in a worker pool, give the same
+    # runs. Two project years also carry battery state across a year boundary.
     weather = write_multiyear_weather(tmp_path / "multi.csv")
-    serial = MonteCarloSettings(weather_file=str(weather), n_runs=2, years_per_run=1, seed=42)
-    parallel = MonteCarloSettings(weather_file=str(weather), n_runs=2, years_per_run=1, seed=42, n_procs=2)
+    serial = MonteCarloSettings(weather_file=str(weather), n_runs=2, years_per_run=2, seed=42)
+    parallel = MonteCarloSettings(weather_file=str(weather), n_runs=2, years_per_run=2, seed=42, n_procs=2)
 
     serial_result = run_montecarlo(_base_config(), serial).runs
     parallel_result = run_montecarlo(_base_config(), parallel).runs
@@ -390,11 +384,12 @@ def test_run_montecarlo_parallel_workers_preserve_seeded_results(tmp_path, write
 
 def test_run_montecarlo_defaults_years_to_projection_years(tmp_path, write_multiyear_weather):
     weather = write_multiyear_weather(tmp_path / "multi.csv")
-    settings = MonteCarloSettings(weather_file=str(weather), n_runs=1, seed=0)
+    settings = MonteCarloSettings(weather_file=str(weather), n_runs=1, seed=0, collect_yearly=True)
+    assert settings.years_per_run is None
     result = run_montecarlo(_base_config(), settings)
-    # projection_years=3 in the base config -> 3 weather years sampled per run.
-    assert len(result.runs) == 1
-    assert result.summary["npv_savings"]["std"] == 0.0
+    # projection_years=3 in the base config -> 3 project years per run.
+    assert result.yearly is not None
+    assert result.yearly["Year"].tolist() == [1, 2, 3]
 
 
 def test_run_montecarlo_threads_sell_price_inflation(tmp_path, monkeypatch, write_multiyear_weather):

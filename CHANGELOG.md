@@ -340,8 +340,82 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   rate at or below −1, or a learning rate outside [0, 1), raises. `breos sweep` treats the
   three keys as input-independent, so sweeping them reuses the prepared
   inputs. The docs state the timing conventions (E3).
+- **Plots of sweep and optimizer output**
+  ([#186](https://github.com/Str4vinci/breos/issues/186)), in
+  `breos.plotting` and the top-level `breos` namespace. They read the CSV
+  `breos sweep` writes, or its DataFrame, and take a swept key as in the
+  config (`n_modules`) or as its column (`param_n_modules`); both name the
+  swept `param_` column, not the result column of the same name. A misspelt
+  key or metric raises `ValueError` and lists the table's columns:
+  - `plot_sweep_heatmap(sweep, metric, results_directory, x=None, y=None,
+    diff=None, labels=None, ..., currency=None, filename=None)` draws one
+    result column of a two-parameter sweep. With `diff=`, a second sweep over
+    the same grid, it draws the difference, for example the same sizing grid
+    at two locations; a difference of a percentage is labelled in percentage
+    points. A difference, and a metric with a negative value such as a loss
+    in `npv_savings`, use a diverging colour scale centred on zero, unless
+    `vmin` or `vmax` is given. `labels` without `diff` raises `ValueError`.
+  - `plot_orientation_landscape(sweep, metric, results_directory, tilt="tilt",
+    azimuth="azimuth", maximize=True, ..., currency=None, ...)` maps a tilt ×
+    azimuth sweep, marks the best orientation and draws the east-west profile
+    at the best tilt. Azimuth ticks carry compass points, negative
+    (southern-hemisphere) azimuths included. A sweep of tilt alone, such as
+    an east-west roof, gets the tilt profile.
+  - `plot_pareto_front(designs, results_directory, x="Grid_Independence_%",
+    y="NPV", maximize=(True, True), color_by=None, currency=None, ...)` draws
+    two objectives of the `OptimizationResult` of
+    `optimize_system_multi_objective`, its `details["pareto"]` frame, or any
+    table of designs, and marks the designs that no other one beats in both.
+
+  A sweep CSV does not record its currency: `currency=` names it for the
+  money labels. Without it, and without `attrs["currency"]` on a DataFrame,
+  the labels name no currency ("NPV savings") rather than assume EUR.
 
 ### Changed
+- **`plot_breakeven_comparison` reads App results**
+  ([#186](https://github.com/Str4vinci/breos/issues/186)). It takes
+  `App.result()` dicts, whose `financial` rows it reads, or cost projection
+  frames: `plot_breakeven_comparison(projections, labels, results_directory,
+  colors=None, currency=None, filename=...)`. To migrate, the first
+  argument `cost_dfs` is now `projections`, `colors` moves after the
+  directory and defaults to the colour cycle, and `results_dir` is now
+  `results_directory`, as in the other plots. Each curve now starts at year 0
+  with the investment, and the no-system baseline at 0, so the dotted payback
+  line meets the curves where they cross; before, the curves began at year 1.
+  Each payback line is labelled with its year. A baseline that every
+  scenario shares is drawn once, in black, as "No system"; otherwise each
+  group of scenarios that share one gets "No system (<labels>)". A
+  projection read back from CSV records no currency: it takes the currency
+  of the other projections, or `currency=`, or the axis shows no currency
+  code. Labels or colours that do not match the projections, projections
+  that record two currencies, a `currency=` that contradicts a recorded one,
+  and a `[period]` result without `financial` rows raise `ValueError`. The
+  payback line was already the shared `find_payback_year_interpolated` rule.
+- **The TMY-versus-historical weather plots compute their own statistics**
+  ([#186](https://github.com/Str4vinci/breos/issues/186)).
+  `plot_weather_monthly_comparison(tmy, historical, results_directory,
+  variable="ghi", tmy_label="TMY", filename=None)` and
+  `plot_weather_annual_ghi_distribution(tmy, historical, results_directory,
+  tmy_label="TMY", filename=...)` take a TMY weather frame and the historical
+  weather a Monte Carlo study samples: its `weather_file` path, or the
+  per-year frames of `preload_weather_by_year`. They read the same complete
+  years as the study, and Open-Meteo column names. Before, they took monthly
+  arrays and a statistics table that the caller had to build.
+  `plot_weather_monthly_comparison` also draws `dni`, `dhi` and `temp_air`.
+  To migrate `plot_weather_monthly_comparison`: `tmy_vals` and `stats` are
+  replaced by `tmy` and `historical`; `ylabel` is gone, as the label comes
+  from `variable`; `tmy_source` is now `tmy_label`, and the TMY legend entry
+  is its text as given, not "TMY (<source>)"; `results_dir` is now
+  `results_directory`; and `filename` is optional, defaulting to
+  `weather_monthly_<variable>.png`. Its "Min year" and "Max year" legend
+  entries are now "Monthly minimum" and "Monthly maximum": each month's
+  lowest and highest value over the years, which can come from different
+  years. To migrate `plot_weather_annual_ghi_distribution`:
+  `annual_ghi_per_year`, `tmy_annual_ghi` and `hist_annual_ghi_mean` are
+  replaced by `tmy` and `historical`, and `results_dir` is now
+  `results_directory`. Missing weather values warn, and the monthly figures
+  skip them; the annual distribution raises `ValueError` for a TMY or year
+  without GHI for a whole month.
 - `breos validate-config --json` and `breos run --dry-run` build their
   resolved-config summary from the config registry: each `AppConfigField`
   names its place (`summary = "section.key"`), so every App key is reported
@@ -452,12 +526,12 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   | `breos.io` summary label | `LCOE [EUR/kWh]` | `LCOE [<currency>/kWh]` |
   | `breos.io` summary label | `Total Investment [EUR]` | `Total Investment [<currency>]` |
   | `breos.io` summary label | `NPV Savings [EUR]` | `NPV Savings [<currency>]` |
-  | `plot_pareto_front_analysis` input column | `Net_Cost_Eur` | `Net_Cost` |
 
   The ADR's table also lists `SteadyState_NPV_Eur` and
   `replacement_cost_eur_each`; both went earlier in this release with the
   steady-state objective basis. It lists two `plot_tariff_comparison` input
-  columns as well; that function was removed in this release (see Removed).
+  columns and a `plot_pareto_front_analysis` one as well; both functions
+  were removed in this release (see Removed).
   `_t0_prices` marks a total at t = 0 prices, neither inflated nor
   discounted. `App.result()` gains
   `battery_replacement_cost_npv` beside it: the same replacements inflated to
@@ -727,6 +801,13 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   in the degradation plots, which no degradation frame carries, and a
   `Savings_Annual` column in `plot_breakeven`, which no cost projection has.
   Every figure the plotting tests write is byte-identical to before.
+- `BatteryConfig.thermal_resistance_kw` is now `thermal_resistance_k_per_w`,
+  and `breos.constants.DEFAULT_THERMAL_RESISTANCE_KW` is
+  `DEFAULT_THERMAL_RESISTANCE_K_PER_W`, with no alias. The value is the
+  pack-to-ambient thermal resistance in K/W; the old name read as kilowatts.
+  `compute_cell_temperature` takes the same new keyword. No App, optimizer or
+  CLI key sets it. The old keyword raises `TypeError`. Results are unchanged
+  bit for bit.
 
 ### Fixed
 - `calendar_model` is stored as it is validated: trimmed, lower-case, with
@@ -1398,6 +1479,10 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   unchanged.
 
 ### Removed
+- `breos.optimization.DEFAULT_PROJECT_LIFESPAN`, with no deprecation period.
+  Nothing read it: the optimizer's horizon comes from
+  `simulation.years_projection` or `financials.project_lifespan`, and
+  defaults to the same 20 years.
 - **`breos.resample_tmy_to_15min` and the `freq` argument of
   `fetch_tmy_weather_data`** ([#164](https://github.com/Str4vinci/breos/issues/164)),
   with no deprecation period. `fetch_tmy_weather_data` now always returns the
@@ -1638,6 +1723,78 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 - **The `validation` and `location-tools` extras.** `validation` installed
   nothing. `location-tools` only served `tools/add_location.py`, which is not
   in the wheel; install `geopy` and `timezonefinder` to run it.
+- **`plot_grid_independence_heatmap` and `plot_location_comparison_delta`**
+  ([#186](https://github.com/Str4vinci/breos/issues/186)), with no
+  deprecation period. They took hand-built pivot tables, and only the removed
+  `tools/batch_compare_locations.py` built them. Use `plot_sweep_heatmap` on
+  a `breos sweep` result, with `diff=` for the difference between two sweeps.
+- **`plot_azitilt_landscape_2d` and `plot_azitilt_ew_1d`**
+  ([#186](https://github.com/Str4vinci/breos/issues/186)), with no
+  deprecation period. Only the removed `tools/azitilt_optimizer.py` called
+  them. Use `plot_orientation_landscape` on a tilt × azimuth sweep, or on a
+  tilt sweep of an east-west roof.
+- **`plot_pareto_front_analysis`**
+  ([#186](https://github.com/Str4vinci/breos/issues/186)), with no
+  deprecation period. It read `Tariff`, `Detailed_Strategy` and
+  `Consumption_kWh` tables that BREOS never produced. Use
+  `plot_pareto_front` on the optimizer result or on a sweep.
+- **Unused energy-balance arguments**
+  ([#186](https://github.com/Str4vinci/breos/issues/186)), with no
+  deprecation period. `simulate_energy_balance` and
+  `simulate_energy_balance_summary` drop `results_directory`, which they never
+  read, and `debug`, which only printed; `update_battery_soh_cyclewise`,
+  `update_battery_soh_calendar`, `update_battery_resistance_cyclewise` and
+  `update_battery_resistance_calendar` drop `debug` too.
+  `update_battery_soh_cyclewise` also drops `nominal_energy_Wh`, which it
+  discarded on entry. Every argument after `temperature_series`, and after
+  the SOC series of `update_battery_soh_cyclewise`, is now keyword-only, so
+  an old positional call raises `TypeError` instead of passing a capacity as
+  `fec_cum` or a directory as `initial_fec`.
+- **The extrema cycle counter**
+  ([#164](https://github.com/Str4vinci/breos/issues/164)), with no
+  deprecation period: `update_battery_soh_cyclewise(use_rainflow=False)`,
+  and `detect_half_cycles_from_soc_series` and `detect_cycles_rainflow` from
+  `breos.battery` and the top-level namespace. Nothing passed `False`, and it
+  counted a different quantity, not a second estimate: 1.2 FEC for an SOC
+  excursion that rainflow counts as 0.6. The energy balance counts cycles
+  with the incremental rainflow counter in `breos.degradation.protocol`, and
+  `update_battery_soh_cyclewise` always uses rainflow. Cycle dicts passed to
+  `update_battery_resistance_cyclewise` must carry `count`, as every rainflow
+  cycle does; a missing one used to be read as a full cycle. BREOS has no
+  public replacement for the two detectors. To count cycles outside a
+  simulation, call `rainflow.extract_cycles` on the SOC series directly,
+  which is what `detect_cycles_rainflow` wrapped. The wrapper also built the
+  dicts that `update_battery_resistance_cyclewise` takes: from each
+  `(range, mean, count, i_start, i_end)` tuple of an SOC series in percent,
+  `doc` is `range / 100`, `count` is `count`, and `mean_c_rate` is `doc`
+  divided by the hours from step `i_start` to step `i_end`. To age a pack
+  from a whole SOC series, `update_battery_soh_cyclewise` still counts its
+  cycles with rainflow.
+- `breos.battery.k_c_rate_R` and `k_doc_R`, also in the top-level namespace
+  ([#186](https://github.com/Str4vinci/breos/issues/186)). They were the
+  resistance-growth factors of `update_battery_resistance_cyclewise`, which
+  now computes them inline, as the capacity model does. The four
+  `NAUMANN_LAM_FIELD_CALIBRATED_V1_*` constants repeated the
+  `NAUMANN_LAM_FIELD_CALIBRATED_*` ones; the `"naumann_lam_field_calibrated_v1"`
+  calendar model stays, with the same parameters.
+- **Selectors with one legal value**
+  ([#186](https://github.com/Str4vinci/breos/issues/186)), with no
+  deprecation period. `BatteryConfig.battery_type` and
+  `breos.battery.SUPPORTED_BATTERY_TYPES` accepted only `"lfp"`, the
+  chemistry the native model always used; the lifecycle adapter drops its
+  `battery_type` and `nominal_energy_wh` arguments with them. `App` no longer
+  has a targeted error for `battery_type` and rejects it as an unknown key,
+  and the config reference no longer lists it. `BatteryConfig.dc_coupled`
+  and the `breos run --dc-coupled` flag could only say `True`: the flag was a
+  `store_true` switch on a key that defaults to `True` and raises on `False`.
+  The App key `dc_coupled` stays, so `resolved_config` keeps it, and
+  `False` still raises, with an error that no longer names 0.3.x. The
+  optimizer's `battery` table no longer accepts `battery_type` or
+  `dc_coupled`.
+- `list_battery_models(enabled_only=...)`, which filtered nothing because
+  every registered model is enabled, and `SimulationSummary.has_battery`,
+  which nothing read ([#186](https://github.com/Str4vinci/breos/issues/186)).
+  Results are unchanged bit for bit for every removal above.
 - Pass-through helpers in the App runner, configuration and execution
   modules, with no deprecation period. `breos.runners` no longer re-exports
   `run_app_simulation` and `SimulationArtifacts`; import them from
@@ -1649,8 +1806,14 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   runner functions take the resolved configuration without the `cfg` dict it
   already holds: `run_app_simulation(resolved, deps)`,
   `revalue_app_simulation(resolved, artifacts, deps)` and
-  `breos.app_results.build_result(resolved, artifacts)`. Results are
-  unchanged bit for bit.
+  `breos.app_results.build_result(resolved, artifacts)`. The orientation
+  defaults are worked out once, by the new `resolve_orientation(cfg, lat)`:
+  `resolve_pv_system(cfg, *, tilt, azimuth, axis_azimuth)` takes its result
+  and returns six values instead of eight, without the tilt and azimuth;
+  `resolve_tracking(cfg)` returns only the tracker mode; and
+  `normalise_pv_arrays` takes the angles as keyword-only arguments.
+  `load_consumption_profile` requires its `timezone` instead of falling back
+  to UTC. Results are unchanged bit for bit.
 
 ### Documentation
 - The release checklist records that `v0.5.0`, `v0.5.1` and `v0.6.0` are
