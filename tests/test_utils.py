@@ -13,8 +13,6 @@ from breos.utils import (
     _datetime_index_seconds,
     _has_fixed_utc_offset,
     get_hours_per_step,
-    get_steps_per_day,
-    get_steps_per_year,
     normalise_frequency,
     package_version,
     remap_datetime_index_years,
@@ -128,22 +126,16 @@ def test_normalise_frequency_rejects_other_values_and_names_the_accepted_ones(fr
 @pytest.mark.parametrize("freq", ["h", "1h"])
 def test_hourly_frequency_spellings(freq):
     assert get_hours_per_step(freq) == pytest.approx(1.0)
-    assert get_steps_per_day(freq) == 24
-    assert get_steps_per_year(freq) == 8760
 
 
 def test_15min_frequency_spelling():
     assert get_hours_per_step("15min") == pytest.approx(0.25)
-    assert get_steps_per_day("15min") == 96
-    assert get_steps_per_year("15min", leap_year=True) == 35136
 
 
 @pytest.mark.parametrize("freq", ["H", "1H", "15T", "15m", "30min"])
 def test_step_helpers_reject_pandas_2_aliases_and_unsupported_steps(freq):
     with pytest.raises(ValueError, match="Unsupported frequency"):
         get_hours_per_step(freq)
-    with pytest.raises(ValueError, match="Unsupported frequency"):
-        get_steps_per_day(freq)
 
 
 @pytest.mark.parametrize("unit", ["s", "ms", "us", "ns"])

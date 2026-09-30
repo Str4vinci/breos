@@ -44,9 +44,7 @@ def test_flat_money_columns_are_energy_times_price():
 
 @pytest.mark.parametrize(("hours", "days"), [(8760.0, 365), (8784.0, 366), (24 * 31.0, 31)])
 def test_fixed_charge_is_billed_on_the_simulated_duration(hours, days):
-    projection = cost_analysis_projection(
-        None, COSTS, num_years=1, yearly_summary_df=_rows([hours]), inflation_rate=0.0
-    )
+    projection = cost_analysis_projection(_rows([hours]), COSTS, num_years=1, inflation_rate=0.0)
 
     assert projection["Cost_Daily"].iloc[0] == pytest.approx(days * 0.30, rel=1e-15)
     # The fee is charged with and without the system, so it cancels in savings.
@@ -62,7 +60,7 @@ def test_money_columns_given_by_the_caller_are_kept():
     rows = _rows([8760.0]).assign(Import_Cost=[123.0])
 
     priced = price_year_rows(rows, COSTS)
-    projection = cost_analysis_projection(None, COSTS, num_years=1, yearly_summary_df=rows, inflation_rate=0.0)
+    projection = cost_analysis_projection(rows, COSTS, num_years=1, inflation_rate=0.0)
 
     assert priced["Import_Cost"].iloc[0] == 123.0
     assert projection["Cost_Import"].iloc[0] == 123.0

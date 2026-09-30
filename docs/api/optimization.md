@@ -1,14 +1,14 @@
 # Optimization
 
-Optimization helpers for system configuration. The supported tilt grid search
-and battery-sizing helper cover one-dimensional sizing;
+Optimization helpers for system configuration.
 [pymoo](https://pymoo.org/) powers public multi-objective PV/battery sizing (PV
 count, battery, cost, grid independence, and ZEB ratio). For end-to-end App
-runs over an explicit config grid, use the `breos sweep` CLI command documented
-in [Recipes](../getting-started/recipes.md#parameter-sweep).
+runs over an explicit config grid, including one-dimensional tilt or battery
+sweeps, use the `breos sweep` CLI command documented in
+[Recipes](../getting-started/recipes.md#parameter-sweep).
 
 Install `breos[optimization]` to use pymoo-backed multi-objective sizing.
-The one-dimensional helpers use the core scientific stack.
+`evaluate_projected_design` uses the core scientific stack.
 
 ZEB and financial production use usable AC system energy from the dispatch
 ledger, not raw PV DC, so inverter efficiency and clipping affect candidate
@@ -68,13 +68,13 @@ call takes them as DataFrames.
 | Table | Keys (default) |
 | --- | --- |
 | `location` | `latitude`, `longitude` (required); `timezone` (`"UTC"`); `altitude` (looked up from the coordinates); `name` (`""`) |
-| `pv` | `module` (the App's default module); `params` (an inline module: `Mpp`, `Vmp`, `Imp`, `Voc`, `Isc` required; temperature coefficients, `N_Cells` and `celltype` optional); `dimensions` or `module_width_m` and `module_length_m` (1.134 × 2.278 m); `degradation_rate` (0.005, or `financials.pv_degradation_rate`) |
+| `pv` | `module` (the App's default module); `params` (an inline module: `Mpp`, `Vmp`, `Imp`, `Voc`, `Isc` required; temperature coefficients `T_Pmax_pct`, `T_Voc_pct` and `T_Isc_pct`, `N_Cells` and `celltype` optional); `dimensions` or `module_width_m` and `module_length_m` (1.134 × 2.278 m); `degradation_rate` (0.005, or `financials.pv_degradation_rate`) |
 | `battery` | the `BatteryConfig` keys `min_soc`, `max_soc`, `charge_efficiency`, `discharge_efficiency`, `standby_loss_wh`, `eol_percentage`, `max_charge_power_w`, `max_discharge_power_w`, `power_limit_c_rate`, `calendar_model`, `enable_resistance_fade` (the App's defaults); `temperature` (`"weather"`); `indoor_model` (the App's `battery_indoor_model` table); `degradation_engine` (`"native"`); `blast_model`; `replacement_cost` (storage cost per kWh times capacity); `enable_replacement` (`true`); `initial_soh` (100) |
 | `costs` | the App's `costs` keys, plus `dc_ac_ratio` (1.25), the DC peak over the inverter AC rating |
 | `financials` | `inflation_rate` (0.02), `sell_price_inflation` (0), `import_price_escalation`, `om_escalation`, `replacement_cost_learning`, `discount_rate` (0.03), `project_lifespan`, `pv_degradation_rate`, and the flat-price fallbacks `electricity_cost` and `electricity_sold_cost` |
 | `constraints` | see below |
 | `mode` | `fixed_azimuth` (none: azimuth is searched, 90–270° in the north, −90–90° in the south) |
-| `optimization` | `algorithm` (`"nsga2"`, the only one); `objective_basis` (`"projected"`); `early_stop` (off; a table takes `enabled`, `ftol` 0.0025, `period` 10, `n_skip` 0, `min_gen` min(20, `n_gen`), `only_feasible` `true`); `pop_size` (40), `n_gen` (100), `n_offsprings` (pymoo's), `seed` (1) |
+| `optimization` | `objective_basis` (`"projected"`); `early_stop` (off; a table takes `enabled`, `ftol` 0.0025, `period` 10, `n_skip` 0, `min_gen` min(20, `n_gen`), `only_feasible` `true`); `pop_size` (40), `n_gen` (100), `n_offsprings` (pymoo's), `seed` (1) |
 | `simulation` | `resolution` (`"h"` or `"15min"`); `years_projection` (20, or `financials.project_lifespan`) |
 | `inverter` | `efficiency`, used when the top-level `inverter_efficiency` (0.96) is not set |
 | `emissions` | the `EmissionsParams` fields; the search then reports `Projected_CO2_*` for every Pareto row |
@@ -89,6 +89,9 @@ Where two keys set one thing, the first one set wins:
 `n_offsprings` and `seed` as arguments too; an argument and its
 `[optimization]` key that disagree raise. The optimizer never reads
 `execution_backend` from the config: pass it to the function.
+
+`dc_output_scale` and `ac_output_scale` are optimizer-only keys: the App and
+the Monte Carlo runner do not take them.
 
 The search bounds:
 
@@ -137,15 +140,6 @@ were removed from the repository after 0.6.2. They are preserved in the
 `validation/article1/` and `tools/`. Reproduce the published numbers from that
 release, not from a later version.
 
-## Tilt
-
-```{eval-rst}
-.. autosummary::
-   :toctree: generated/
-
-   breos.optimization.optimize_tilt
-```
-
 ## Multi-objective sizing
 
 ```{eval-rst}
@@ -155,15 +149,6 @@ release, not from a later version.
    breos.optimization.optimize_system_multi_objective
    breos.optimization.evaluate_projected_design
    breos.optimization_config.resolve_optimization_config
-```
-
-## Battery sizing
-
-```{eval-rst}
-.. autosummary::
-   :toctree: generated/
-
-   breos.optimization.optimize_battery_size
 ```
 
 ## Result type

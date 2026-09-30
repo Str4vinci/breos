@@ -144,9 +144,7 @@ def _cost_projection(investment, electricity_cost=0.30):
             "Replacement_Cost": 0.0,
         }
     )
-    return cost_analysis_projection(
-        None, costs, num_years=3, inflation_rate=0.0, discount_rate=0.0, yearly_summary_df=yearly
-    )
+    return cost_analysis_projection(yearly, costs, num_years=3, inflation_rate=0.0, discount_rate=0.0)
 
 
 def test_cost_projection_anchors_payback_at_its_investment():

@@ -8,15 +8,12 @@ from breos.economics import (
     DEFAULT_REPLACEMENT_YEAR_FRACTION,
     CostParams,
     calculate_costs,
-    calculate_lcoe,
     calculate_lcoe_from_projection,
     cost_analysis_projection,
     cost_params_from_config,
     find_payback_year,
     replacement_booking_time,
-    replacement_fraction_by_year,
     replacement_fraction_from_steps,
-    system_ac_production_power,
 )
 
 
@@ -189,32 +186,14 @@ class TestCalculateCosts:
             cost_params_from_config(dict(base, panel_wp=500.0), {"project_lifespan": 1})
 
 
-def test_system_ac_production_prefers_explicit_ledger_over_legacy_field():
-    results = pd.DataFrame(
-        {
-            "PV_AC_To_Load": [300.0, 100.0],
-            "PV_Origin_Battery_AC_To_Load": [50.0, 25.0],
-            "PV_AC_Export": [200.0, 75.0],
-            "PV_Production": [9999.0, 9999.0],
-        }
-    )
-
-    assert system_ac_production_power(results).tolist() == pytest.approx([550.0, 200.0])
-
-
-def test_first_year_projection_names_the_renamed_export_column():
-    index = pd.date_range("2025-01-01", periods=24, freq="h", tz="UTC")
-    legacy = pd.DataFrame(
-        {"Datetime": index, "Houseload": 500.0, "Import_From_Grid": 200.0, "Sell_To_Grid": 50.0, "PV_Production": 400.0}
-    )
-    with pytest.raises(ValueError, match="before ledger schema 2.0 call it Sell_To_Grid"):
-        cost_analysis_projection(legacy, {"total_initial_cost": 1000.0}, num_years=2)
-
-
-def test_system_ac_production_accepts_legacy_field():
-    results = pd.DataFrame({"PV_Production": [500.0, 250.0]})
-
-    assert system_ac_production_power(results).tolist() == pytest.approx([500.0, 250.0])
+def test_cost_projection_needs_year_rows():
+    with pytest.raises(ValueError, match="needs yearly_summary_df"):
+        cost_analysis_projection(None, {"total_initial_cost": 1000.0}, num_years=2)
+    with pytest.raises(ValueError, match="needs yearly_summary_df"):
+        cost_analysis_projection(pd.DataFrame(), {"total_initial_cost": 1000.0}, num_years=2)
+    steps = pd.DataFrame({"PV_AC_Export": [1.0]}, index=pd.date_range("2025-01-01", periods=1, freq="h"))
+    with pytest.raises(ValueError, match="not a per-step results frame"):
+        cost_analysis_projection(steps, {"total_initial_cost": 1000.0}, num_years=1)
 
 
 class TestFindPaybackYear:
@@ -243,46 +222,6 @@ class TestFindPaybackYear:
 
 
 class TestLCOE:
-    def test_basic(self):
-        lcoe = calculate_lcoe(
-            total_investment=5000,
-            annual_production_kwh=5000,
-            annual_operation_cost=50,
-            lifetime_years=20,
-            discount_rate=0.0,
-            degradation_rate=0.0,
-        )
-        # (5000 + 50*20) / (5000*20) = 6000/100000 = 0.06
-        assert lcoe == pytest.approx(0.06, rel=0.01)
-
-    def test_degradation_increases_lcoe(self):
-        lcoe_no_deg = calculate_lcoe(
-            total_investment=5000,
-            annual_production_kwh=5000,
-            annual_operation_cost=50,
-            lifetime_years=20,
-            discount_rate=0.0,
-            degradation_rate=0.0,
-        )
-        lcoe_with_deg = calculate_lcoe(
-            total_investment=5000,
-            annual_production_kwh=5000,
-            annual_operation_cost=50,
-            lifetime_years=20,
-            discount_rate=0.0,
-            degradation_rate=0.01,
-        )
-        assert lcoe_with_deg > lcoe_no_deg
-
-    def test_zero_production(self):
-        lcoe = calculate_lcoe(
-            total_investment=5000,
-            annual_production_kwh=0,
-            annual_operation_cost=50,
-            lifetime_years=20,
-        )
-        assert lcoe == float("inf")
-
     def test_projection_lcoe_includes_replacement_costs(self):
         projection = pd.DataFrame(
             {
@@ -296,6 +235,64 @@ class TestLCOE:
         lcoe = calculate_lcoe_from_projection(projection, total_investment=1000.0, discount_rate=0.0)
 
         assert lcoe == pytest.approx(0.85)
+
+    def test_projection_lcoe_matches_the_closed_form_without_inflation(self):
+        # An independent 20-year oracle with PV degradation and a non-zero
+        # discount rate. With no inflation, O&M escalation or replacement,
+        # the projection's LCOE is the closed form
+        #   (I + sum_t OM / (1 + d)^t) / sum_t P0 (1 - g)^(t - 1) / (1 + d)^t
+        # for t = 1..N.
+        years, degradation, discount = 20, 0.005, 0.05
+        investment, operation, first_year_kwh = 5000.0, 75.0, 4000.0
+        costs = {
+            "electricity_cost": 0.30,
+            "electricity_sold_cost": 0.05,
+            "daily_power_cost": 0.20,
+            "total_initial_cost": investment,
+            "annual_operation_cost": operation,
+        }
+        production = first_year_kwh * (1.0 - degradation) ** np.arange(years)
+        yearly_summary = pd.DataFrame(
+            {
+                "Year": range(1, years + 1),
+                "Load_kWh": 5000.0,
+                "PV_Production_kWh": production,
+                "Import_kWh": 2500.0,
+                "Export_kWh": 1500.0,
+                "PV_Degradation_Factor": production / production[0],
+                "Replacement_Cost": 0.0,
+            }
+        )
+        projection = cost_analysis_projection(
+            yearly_summary, costs, num_years=years, inflation_rate=0.0, discount_rate=discount
+        )
+
+        t = np.arange(1, years + 1)
+        discounting = (1.0 + discount) ** t
+        npv_costs = investment + np.sum(operation / discounting)
+        npv_production = np.sum(first_year_kwh * (1.0 - degradation) ** (t - 1) / discounting)
+        closed_form = npv_costs / npv_production
+
+        assert projection.attrs["lcoe_per_kwh"] == pytest.approx(closed_form, rel=1e-12)
+        assert calculate_lcoe_from_projection(projection, discount_rate=discount) == pytest.approx(
+            closed_form, rel=1e-12
+        )
+
+    def test_projection_lcoe_reads_the_recorded_investment_and_does_not_infer_it(self):
+        projection = pd.DataFrame(
+            {
+                "Year": [1, 2],
+                "PV_Production_kWh": [1000.0, 1000.0],
+                "Cost_Operation": [100.0, 100.0],
+                "Cost_System_Annual": [100.0, 100.0],
+                "Cost_System_Cumulative": [1100.0, 1200.0],
+            }
+        )
+        with pytest.raises(ValueError, match="total_investment is required"):
+            calculate_lcoe_from_projection(projection, discount_rate=0.0)
+
+        projection.attrs["total_investment"] = 1000.0
+        assert calculate_lcoe_from_projection(projection, discount_rate=0.0) == pytest.approx(0.6)
 
     def test_cost_projection_exposes_lcoe_attr(self):
         costs = {
@@ -318,66 +315,14 @@ class TestLCOE:
         )
 
         projection = cost_analysis_projection(
-            pd.DataFrame(),
+            yearly_summary,
             costs,
             num_years=2,
             inflation_rate=0.0,
             discount_rate=0.0,
-            yearly_summary_df=yearly_summary,
         )
 
         assert projection.attrs["lcoe_per_kwh"] == pytest.approx((1000 + 100 + 100 + 500) / (1000 + 900))
-
-    @staticmethod
-    def _projection_lcoe(inflation_rate, years=20, degradation=0.005, discount=0.05):
-        costs = {
-            "electricity_cost": 0.30,
-            "electricity_sold_cost": 0.05,
-            "daily_power_cost": 0.20,
-            "total_initial_cost": 5000.0,
-            "annual_operation_cost": 75.0,
-        }
-        production = 4000.0 * (1.0 - degradation) ** np.arange(years)
-        yearly_summary = pd.DataFrame(
-            {
-                "Year": range(1, years + 1),
-                "Load_kWh": 5000.0,
-                "PV_Production_kWh": production,
-                "Import_kWh": 2500.0,
-                "Export_kWh": 1500.0,
-                "PV_Degradation_Factor": production / production[0],
-                "Replacement_Cost": 0.0,
-            }
-        )
-        projection = cost_analysis_projection(
-            None,
-            costs,
-            num_years=years,
-            inflation_rate=inflation_rate,
-            discount_rate=discount,
-            yearly_summary_df=yearly_summary,
-        )
-        real_terms = calculate_lcoe(
-            total_investment=costs["total_initial_cost"],
-            annual_production_kwh=float(production[0]),
-            annual_operation_cost=costs["annual_operation_cost"],
-            lifetime_years=years,
-            discount_rate=discount,
-            degradation_rate=degradation,
-        )
-        return real_terms, projection.attrs["lcoe_per_kwh"]
-
-    def test_real_terms_lcoe_matches_the_projection_without_inflation(self):
-        # calculate_lcoe holds O&M at first-year prices (#175); without
-        # inflation there is nothing to escalate and the two must agree.
-        real_terms, from_projection = self._projection_lcoe(inflation_rate=0.0)
-
-        assert real_terms == pytest.approx(from_projection, rel=1e-12)
-
-    def test_real_terms_lcoe_does_not_escalate_operation_cost(self):
-        real_terms, from_projection = self._projection_lcoe(inflation_rate=0.02)
-
-        assert real_terms < from_projection
 
     def test_cost_projection_uses_yearly_load_for_no_system_baseline(self):
         costs = {
@@ -400,12 +345,11 @@ class TestLCOE:
         )
 
         projection = cost_analysis_projection(
-            pd.DataFrame(),
+            yearly_summary,
             costs,
             num_years=2,
             inflation_rate=0.0,
             discount_rate=0.0,
-            yearly_summary_df=yearly_summary,
         )
 
         daily = 365 * costs["daily_power_cost"]
@@ -425,10 +369,9 @@ class TestLCOE:
     def test_cost_projection_rejects_duplicate_or_incomplete_year_labels(self, years):
         with pytest.raises(ValueError, match="yearly_summary_df Year values"):
             cost_analysis_projection(
-                results_df=None,
+                pd.DataFrame({"Year": years}),
                 costs={},
                 num_years=2,
-                yearly_summary_df=pd.DataFrame({"Year": years}),
             )
 
 
@@ -470,15 +413,6 @@ class TestReplacementBookingTime:
 
         assert booked[0] == pytest.approx(2.0 + DEFAULT_REPLACEMENT_YEAR_FRACTION)
 
-    def test_fraction_by_year_reads_the_ledger_column(self):
-        years = [2025] * 4 + [2026] * 4
-        replaced = [False, False, True, False, False, False, False, False]
-
-        fractions = replacement_fraction_by_year(years, replaced)
-
-        assert fractions.index.tolist() == [2025]
-        assert fractions.loc[2025] == pytest.approx(0.75)
-
 
 class TestReplacementBookingInProjection:
     INFLATION = 0.03
@@ -500,7 +434,7 @@ class TestReplacementBookingInProjection:
             }
         )
         return cost_analysis_projection(
-            results_df=None,
+            yearly,
             costs={
                 "electricity_cost": 0.22,
                 "electricity_sold_cost": 0.05,
@@ -511,7 +445,6 @@ class TestReplacementBookingInProjection:
             num_years=12,
             inflation_rate=self.INFLATION,
             discount_rate=self.DISCOUNT,
-            yearly_summary_df=yearly,
         )
 
     def test_both_rates_are_applied_at_the_same_instant(self):
@@ -575,41 +508,3 @@ class TestReplacementBookingInProjection:
         expected = (12000.0 + operation + outlay / (1 + self.DISCOUNT) ** booked_at) / production
 
         assert lcoe == pytest.approx(expected)
-
-
-class TestFirstYearProjectionCalendar:
-    """The first-year path groups the ledger on its own local calendar."""
-
-    COSTS = {
-        "electricity_cost": 0.20,
-        "electricity_sold_cost": 0.05,
-        "daily_power_cost": 0.30,
-        "annual_operation_cost": 0.0,
-        "total_initial_cost": 5000.0,
-    }
-
-    @pytest.mark.parametrize("tz", ["Europe/Berlin", "Australia/Sydney"])
-    def test_year_one_is_the_whole_local_year_east_of_utc(self, tz):
-        # East of UTC the first local hours fall in the previous UTC year.
-        # Grouping in UTC built the projection from that stub alone.
-        index = pd.date_range("2023-01-01", periods=8760, freq="h", tz=tz)
-        results = pd.DataFrame(
-            {
-                "Datetime": index,
-                "PV_AC_To_Load": 500.0,
-                "PV_Origin_Battery_AC_To_Load": 0.0,
-                "PV_AC_Export": 300.0,
-                "Houseload": 1000.0,
-                "Import_From_Grid": 500.0,
-            }
-        )
-
-        projection = cost_analysis_projection(
-            results, self.COSTS, num_years=2, inflation_rate=0.0, discount_rate=0.0, degradation_rate=0.0
-        )
-
-        year_one = projection.iloc[0]
-        assert year_one["Cost_No_Sys_Annual"] == pytest.approx(8760.0 * 0.20 + 365 * 0.30)
-        assert year_one["Cost_Import"] == pytest.approx(8760.0 * 0.5 * 0.20)
-        assert year_one["Revenue_Export"] == pytest.approx(8760.0 * 0.3 * 0.05)
-        assert year_one["Cost_Daily"] == pytest.approx(365 * 0.30)

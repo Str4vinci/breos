@@ -6,7 +6,6 @@ import pandas as pd
 import pytest
 
 from breos.cli import _load_options
-from breos.io import _economics_summary_metrics
 from breos.optimization import SolarDesignProblem
 from breos.plotting import _currency, plot_breakeven_comparison
 from breos.result_schema import RESULT_SCHEMA_VERSION
@@ -108,33 +107,15 @@ def test_optimizer_rejects_the_removed_budget_key():
     }
 
     with pytest.raises(ValueError, match=r"constraints\.budget_eur was renamed to constraints\.budget"):
-        SolarDesignProblem(tmy_data, houseload, config, "results/_test_run/problem_budget_eur")
+        SolarDesignProblem(tmy_data, houseload, config)
 
     # Setting the new key as well does not let the old one through.
     config["constraints"] = {"budget_eur": 5000.0, "budget": 5000.0}
     with pytest.raises(ValueError, match=r"constraints\.budget_eur was renamed to constraints\.budget"):
-        SolarDesignProblem(tmy_data, houseload, config, "results/_test_run/problem_budget_both")
+        SolarDesignProblem(tmy_data, houseload, config)
 
     config["constraints"] = {"budget": 5000.0}
-    assert SolarDesignProblem(tmy_data, houseload, config, "results/_test_run/problem_budget").budget_limit == 5000.0
-
-
-def test_summary_labels_name_the_projection_currency():
-    projection = pd.DataFrame({"Year": [1]})
-    projection.attrs.update({"lcoe_per_kwh": 0.1327, "total_investment": 1000.0, "final_npv_savings": 50.0})
-
-    assert set(_economics_summary_metrics(projection)) == {
-        "LCOE [EUR/kWh]",
-        "Total Investment [EUR]",
-        "NPV Savings [EUR]",
-    }
-
-    projection.attrs["currency"] = "CHF"
-    assert set(_economics_summary_metrics(projection)) == {
-        "LCOE [CHF/kWh]",
-        "Total Investment [CHF]",
-        "NPV Savings [CHF]",
-    }
+    assert SolarDesignProblem(tmy_data, houseload, config).budget_limit == 5000.0
 
 
 def test_plot_labels_read_the_frame_currency():

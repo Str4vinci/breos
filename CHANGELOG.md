@@ -128,9 +128,7 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   `price_year_rows` and the new `value_year_rows` (energy to component
   cashflows), `discount_cashflows` (cumulative and discounted cashflows,
   payback, NPV and LCOE), `add_co2_projection` and `write_cost_projection`.
-  The first-year estimation path builds year rows and runs the same stages,
-  so its projection gains `Load_kWh` and takes the year-row path's column
-  order; its values are unchanged. Cost projections, and Monte Carlo
+  Cost projections, and Monte Carlo
   trajectories with them, gain `CO2_Avoided_Export_kg`,
   `CO2_Avoided_Export_Cumulative_kg` and
   `attrs["lifetime_co2_avoided_export_kg"]`.
@@ -493,14 +491,10 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   move one place. The optimizer's year tables also gain the year-1-price
   money columns. Result schema 1.3.
 
-  Direct callers of the economics see two changes. A hand-built `costs`
+  Direct callers of the economics see one change: a hand-built `costs`
   dict without `replacement_cost_each` raises once the run has a
-  replacement, instead of pricing it from the simulation. And
-  `cost_analysis_projection` on a results frame prices each swap at the
-  `costs` it is given (`calculate_costs` uses `CostParams.battery_cost_per_kwh`),
-  where it used to take the price `BatteryConfig` set, 500 per kWh unless
-  configured; the two agree only when the prices do. A `Replacements` count
-  must be a whole number; a missing one counts as none.
+  replacement, instead of pricing it from the simulation. A `Replacements`
+  count must be a whole number; a missing one counts as none.
 - `breos sweep` prepares weather, PV, load and battery temperature once per
   distinct input configuration and reuses them across the runs that differ
   only in settings the input stage never reads, such as a tariff, a battery
@@ -556,15 +550,14 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   | `breos list cost-presets --json` | `electricity_cost_eur_kwh` | `electricity_cost_per_kwh` |
   | `breos list cost-presets --json` | `export_price_eur_kwh` | `export_price_per_kwh` |
   | `breos list cost-presets --json` | `storage_cost_eur_kwh` | `storage_cost_per_kwh` |
-  | `breos.io` summary label | `LCOE [EUR/kWh]` | `LCOE [<currency>/kWh]` |
-  | `breos.io` summary label | `Total Investment [EUR]` | `Total Investment [<currency>]` |
-  | `breos.io` summary label | `NPV Savings [EUR]` | `NPV Savings [<currency>]` |
 
   The ADR's table also lists `SteadyState_NPV_Eur` and
   `replacement_cost_eur_each`; both went earlier in this release with the
   steady-state objective basis. It lists two `plot_tariff_comparison` input
   columns and a `plot_pareto_front_analysis` one as well; both functions
-  were removed in this release (see Removed).
+  were removed in this release (see Removed). It also lists three
+  `breos.io` summary labels, which went with `_economics_summary_metrics`
+  (see Removed).
   `_t0_prices` marks a total at t = 0 prices, neither inflated nor
   discounted. `App.result()` gains
   `battery_replacement_cost_npv` beside it: the same replacements inflated to
@@ -592,8 +585,7 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   credit is `(Load − Import − B_u) × CI`, where `B_u` is unattributed battery
   energy delivered to load. Grid energy shifted through the battery is
   imported, so it earns nothing, and its round-trip loss counts against the
-  system. `calculate_co2_savings` gains `grid_shift_kwh` and
-  `calculate_co2_projection` gains `yearly_grid_shift_kwh`: grid-origin
+  system. `calculate_co2_projection` gains `yearly_grid_shift_kwh`: grid-origin
   battery delivery minus grid-charge import, zero or negative. Without grid
   charging the shift is zero and every emissions result is unchanged, bit for
   bit. In the smart-charging example above, year-1 avoided CO2 falls from
@@ -738,11 +730,11 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   discount rate of 0.03 and an inflation rate of 0.02, defined once as
   `breos.economics.DEFAULT_DISCOUNT_RATE` and `DEFAULT_INFLATION_RATE` and
   read by the App registry, `CostParams`, `cost_params_from_config`,
-  optimization, `cost_analysis_projection`, `calculate_lcoe_from_projection`
-  and `calculate_lcoe`. **Callers that omit the discount rate get different
-  results:** `CostParams`, `cost_params_from_config`, the optimizer and both
-  LCOE functions used 0.0, and a direct `cost_analysis_projection` call used
-  0.02 (with inflation 0.03). On three projected-optimizer designs without a
+  optimization, `cost_analysis_projection` and
+  `calculate_lcoe_from_projection`. **Callers that omit the discount rate get
+  different results:** `CostParams`, `cost_params_from_config`, the optimizer
+  and `calculate_lcoe_from_projection` used 0.0, and a direct
+  `cost_analysis_projection` call used 0.02 (with inflation 0.03). On three projected-optimizer designs without a
   `financials.discount_rate`, NPV moves from 6430.77 to 3941.12 €, −1736.96 to
   −2690.35 € and −12091.27 to −11013.42 €, and LCOE rises by 0.017–0.021
   €/kWh; energy and battery results are unchanged. App results do not
@@ -1131,24 +1123,20 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   wider window raises the year-one SOH loss from 5.92 to 6.17 points, and the
   replacement estimate books four swaps instead of three. App runs and configs
   that set all four keys, such as the example config, are unchanged.
-- Monthly result rows and the first-year cost projection group on the local
-  calendar of the result frame instead of UTC
-  ([#166](https://github.com/Str4vinci/breos/issues/166)). Both converted the
-  `Datetime` column to UTC before grouping, so east of UTC the local year
-  started with a stub of the previous December and every month boundary moved
-  by the UTC offset. **The `monthly` result changes for App runs east of
+- Monthly result rows group on the local calendar of the result frame
+  instead of UTC ([#166](https://github.com/Str4vinci/breos/issues/166)).
+  They converted the `Datetime` column to UTC before grouping, so east of UTC
+  the local year started with a stub of the previous December and every month
+  boundary moved by the UTC offset. **The `monthly` result changes for App runs east of
   UTC.** A PVGIS run for Berlin or Melbourne returned 13 rows, the first a
   1-hour or 11-hour December stub. It now returns the 12 local months. With
   10 modules and a 5 kWh battery, Berlin monthly PV is unchanged because the
   moved hour is at night, and monthly consumption moves by up to 0.27 kWh.
   Melbourne monthly PV moves by up to 6.6 kWh and consumption by up to
-  4.0 kWh. Yearly totals, NPV, payback and LCOE of App runs do not use these
-  paths and are unchanged, and Porto is unchanged.
-  `cost_analysis_projection` without `yearly_summary_df` built the whole
-  projection from the stub: for a constant 1 kW Berlin year at 0.20 €/kWh and
-  0.20 €/day, the year-1 no-system cost was 0.40 € instead of 1,825 €. A
-  `Datetime` column read back from a CSV of an IANA-zone run, which has two
-  UTC offsets, groups on each row's own wall-clock time.
+  4.0 kWh. Yearly totals, NPV, payback and LCOE of App runs do not use this
+  grouping and are unchanged, and Porto is unchanged. A `Datetime` column
+  read back from a CSV of an IANA-zone run, which has two UTC offsets, groups
+  on each row's own wall-clock time.
 - The projected optimizer's budget constraint checks the CAPEX it reports
   ([#157](https://github.com/Str4vinci/breos/issues/157)). With
   `objective_basis = "projected"`, `budget_eur` was compared with the
@@ -1312,9 +1300,7 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   `cap_wh_is_infinite` argument is gone. **`PV_Production`, `Total PV [kWh]`,
   and the returned total PV change for unrated runs with a battery.** On the
   48-hour golden fixture (3 kWh), total PV rises from 22.272 to 22.473 kWh
-  (+0.90%). `optimize_battery_size`, which runs unrated, reports a higher
-  self-consumption: 71.07% instead of 70.71% for a 10 kWh battery on
-  synthetic weather. App, Monte Carlo, and `SolarDesignProblem` results are
+  (+0.90%). App, Monte Carlo, and `SolarDesignProblem` results are
   unchanged: the App always rates the inverter, and the optimizer scores
   from the AC ledger even with `dc_ac_ratio = 0`.
 
@@ -1365,15 +1351,10 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   used to be recorded with a 0-minute offset while 30 minutes were applied
   at hourly resolution. Simulated numbers are unchanged.
 
-- `optimize_tilt` and `optimize_battery_size` raise when a candidate fails,
-  and an optimizer result run with early stopping pickles
-  ([#217](https://github.com/Str4vinci/breos/issues/217)). The sweep helpers
-  scored a failing tilt as zero production and dropped a failing battery
-  size, so one PV-chain error could move the reported optimum without a
-  message. The early-stopping termination was a local class, so
-  `details["pymoo_result"]` could not be pickled. Results of sweeps whose
-  candidates all run are unchanged. `optimize_battery_size` with no sizes
-  raises `ValueError` instead of `RuntimeError`.
+- An optimizer result run with early stopping pickles
+  ([#217](https://github.com/Str4vinci/breos/issues/217)). The early-stopping
+  termination was a local class, so `details["pymoo_result"]` could not be
+  pickled.
 
 - Two PV API gaps ([#220](https://github.com/Str4vinci/breos/issues/220)).
   When every array in `calculate_multi_array_production_breakdown` is empty,
@@ -1387,8 +1368,8 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   ([#218](https://github.com/Str4vinci/breos/issues/218)). The new
   `economics.find_payback_year_exact` interpolates where cumulative
   discounted savings first turn positive, the rule `find_payback_year`
-  already used, scaled by the spacing between the two years; Monte Carlo and the optimizer each had a
-  private copy of it, and `plot_breakeven`, `plot_breakeven_comparison`,
+  already used, scaled by the spacing between the two years; Monte Carlo
+  and the optimizer each had a private copy of it, and `plot_breakeven`, `plot_breakeven_comparison`,
   `tools/compare_results.py` and `tools/batch_compare_locations.py` had
   three more rules. `create_cost_plots` uses `find_payback_year`. The Monte
   Carlo payback distribution and CDF plot `payback_year_exact` instead of
@@ -1490,12 +1471,6 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   from the year-0 investment and widen the axis to show it. Both functions
   raise `ValueError` when the years, the savings or the investment contain
   NaN or infinite values, instead of reporting NaN or a false crossing.
-- `calculate_lcoe` is documented as a real-terms (constant-price) LCOE
-  ([#175](https://github.com/Str4vinci/breos/issues/175)). It holds O&M at
-  first-year prices, while `calculate_lcoe_from_projection`, which App,
-  Monte Carlo and the optimizer report, escalates it with inflation, so the
-  two differ whenever inflation is not zero. Its numbers are unchanged; a test
-  pins that the two agree at zero inflation.
 - Three small fixes from the 0.6.2 audit
   ([#161](https://github.com/Str4vinci/breos/issues/161)).
   `cost_analysis_projection` matches yearly rows to projection years by their
@@ -1516,6 +1491,74 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   Nothing read it: the optimizer's horizon comes from
   `simulation.years_projection` or `financials.project_lifespan`, and
   defaults to the same 20 years.
+- **`breos.optimize_tilt` and `breos.optimize_battery_size`**, with no
+  deprecation period. Nothing called them, and `OptimizationResult` stays. For
+  a one-dimensional sweep over tilt or battery size, run `breos sweep` over
+  the App key, which prices and projects every point; for a joint search, use
+  `optimize_system_multi_objective`.
+- **The `results_dir` argument of `optimize_system_multi_objective` and
+  `SolarDesignProblem`**, with no deprecation period. It was stored and never
+  read. It was the fourth positional argument, so every argument after
+  `config` is now keyword-only: a call that passed `results_dir`, `pop_size`
+  or a later argument by position raises `TypeError` instead of silently
+  binding the next value, and must name them, as in
+  `optimize_system_multi_objective(weather, load, config, pop_size=40)`.
+- **`breos.calculate_lcoe`**, with no deprecation period. Nothing in BREOS
+  called it. The `lcoe_per_kwh` that App, Monte Carlo and the optimizer
+  report comes from `calculate_lcoe_from_projection`, which stays. For a
+  real-terms LCOE, run the projection with `inflation_rate = 0`, no
+  `om_escalation` and a real `discount_rate`; the two functions agreed there
+  for a run without a battery replacement, which `calculate_lcoe` left out.
+- **`breos.calculate_co2_savings`**, with no deprecation period. Nothing in
+  BREOS called it after the projection took over the lifetime CO2.
+  `calculate_co2_projection` gives the same kg values per year; pass
+  one-element arrays for a single year, pass the export
+  (`total_pv_kwh - self_consumed_kwh`) rather than the self-consumption, and
+  pass `grid_shift_kwh` as `yearly_grid_shift_kwh`. Read the
+  `CO2_Avoided_*_kg` columns and divide by 1000 for tonnes; the intensity is
+  in `CO2_Avoided_CI_gCO2_kWh`, and its kind in `CO2_Avoided_CI_Type`. The
+  projection's `Grid_CI_gCO2_kWh` column, a copy of
+  `CO2_Avoided_CI_gCO2_kWh`, is gone too. No result carried either
+  intensity copy: the cost projection, App, Monte Carlo and optimizer
+  outputs never did.
+- **The first-year input shape of `cost_analysis_projection`**, with no
+  deprecation period. Given a per-step results frame and no year rows, it
+  estimated later years from year 1 at a fixed self-consumption ratio; App,
+  Monte Carlo and the optimizer all pass simulated year rows. The year rows
+  are now the first argument, `cost_analysis_projection(yearly_summary_df,
+  costs, num_years, ...)`, and `results_df`, `degradation_rate` and `freq`
+  are gone. Every argument after `discount_rate` is keyword-only. A call
+  such as `cost_analysis_projection(None, costs, yearly_summary_df=rows)`
+  becomes `cost_analysis_projection(rows, costs)`; a per-step frame or an
+  empty table raises `ValueError`. With the path go
+  `breos.economics.replacement_fraction_by_year` and
+  `breos.economics.system_ac_production_power` with its
+  `SYSTEM_AC_PRODUCTION_COLUMNS`; for usable AC production, sum
+  `PV_AC_To_Load`, `PV_Origin_Battery_AC_To_Load` and `PV_AC_Export`.
+- **The `production_column` argument of `calculate_lcoe_from_projection`**,
+  with no deprecation period, and its inference of the investment from the
+  first projection row. It reads `PV_Production_kWh`, and takes the
+  investment from `total_investment` or the projection's
+  `attrs["total_investment"]`, which `cost_analysis_projection` records;
+  without either it raises `ValueError`. A projection read back from CSV has
+  no attrs, so pass `total_investment`.
+- **The optimizer config aliases `T_Pmax`, `T_Voc` and `T_Isc` in
+  `pv.params`, and the `optimization.algorithm` key**, with no deprecation
+  period. Name the coefficients `T_Pmax_pct`, `T_Voc_pct` and `T_Isc_pct`,
+  as `PVModuleParams` does. `algorithm` accepted only `"nsga2"`, which is
+  the only search; remove the key. Both now raise as unknown keys, and the
+  example `configs/optimization/projected-optimization.toml` drops
+  `algorithm`.
+- **`breos.io.export_cost_analysis`, the `extra_metrics` argument of
+  `export_summary`, and `breos.utils.get_steps_per_day` and
+  `get_steps_per_year`**, with no deprecation period. Nothing called them.
+  Write a cost projection with `write_cost_projection`, which writes
+  `cost_projection[_<scenario>].csv`, or with `DataFrame.to_csv` for another
+  name, or `to_csv(path, sep="\t", index=False)` for the old `txt` format. Add a summary
+  field as a column of the summary DataFrame before calling
+  `export_summary`, and use `round(24 / get_hours_per_step(freq))` for steps
+  per day. The private
+  `breos.io._economics_summary_metrics` is gone with them.
 - **`breos.resample_tmy_to_15min` and the `freq` argument of
   `fetch_tmy_weather_data`** ([#164](https://github.com/Str4vinci/breos/issues/164)),
   with no deprecation period. `fetch_tmy_weather_data` now always returns the
@@ -1610,9 +1653,7 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   name (ledger schema 2.0, ADR 0002 A9). Read `PV_AC_Export` for
   `Sell_To_Grid`, `PV_DC_Curtailed` for `PV_Curtailment`, `Standby_Loss` for
   `Battery_Standby_Loss`, and `PV_Origin_Battery_AC_To_Load` for
-  `Battery_AC_To_Load_PV`. `system_ac_production_power` and
-  `cost_analysis_projection` no longer accept `Sell_To_Grid` as the export
-  column; the latter raises a `ValueError` that names the rename. The year-row names, such as `Export_kWh` and
+  `Battery_AC_To_Load_PV`. The year-row names, such as `Export_kWh` and
   `Battery_Standby_Loss_kWh`, are unchanged, and so is every value.
 - Removed the optimizer's `costs.panel_wp` override. It priced the steady-state
   CAPEX at a nominal wattage instead of the selected module's rating, so the

@@ -88,7 +88,7 @@ def test_optimizer_rejects_invalid_tariff_before_pv(tariff_case, monkeypatch, en
             evaluate(tariff_case)
         else:
             pytest.importorskip("pymoo")
-            optimization.SolarDesignProblem(weather, load, config, "unused")
+            optimization.SolarDesignProblem(weather, load, config)
 
 
 @pytest.mark.parametrize(
@@ -130,7 +130,7 @@ def test_optimizer_search_shares_fixed_target_scoring_and_provenance(tariff_case
     weather, load, config = tariff_case
     config["smart_charging"] = FIXED_TARGET
     fixed = evaluate((weather, load, config), battery_kwh=5.0)
-    problem = optimization.SolarDesignProblem(weather, load, config, "unused")
+    problem = optimization.SolarDesignProblem(weather, load, config)
     restored = pickle.loads(pickle.dumps(problem))
     out = {}
     restored._evaluate(np.array([4, 5.0, 30.0]), out)
@@ -153,7 +153,7 @@ def test_optimizer_search_without_a_battery_names_its_constraint(tariff_case):
     config["smart_charging"] = FIXED_TARGET
     config["constraints"] = {**config["constraints"], "max_battery_kwh": 0}
     with pytest.raises(ValueError, match=r"needs a battery; set constraints\.max_battery_kwh > 0"):
-        optimization.SolarDesignProblem(weather, load, config, "unused")
+        optimization.SolarDesignProblem(weather, load, config)
 
 
 def test_optimizer_accepts_disabled_smart_charging_unchanged(tariff_case):
@@ -194,7 +194,7 @@ def test_search_and_fixed_design_share_tariff_scoring_and_pickle(tariff_case):
     pytest.importorskip("pymoo")
     weather, load, config = tariff_case
     fixed = evaluate(tariff_case)
-    problem = optimization.SolarDesignProblem(weather, load, config, "unused")
+    problem = optimization.SolarDesignProblem(weather, load, config)
     restored = pickle.loads(pickle.dumps(problem))
     out = {}
     restored._evaluate(np.array([4, 0.0, 30.0]), out)

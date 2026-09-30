@@ -10,7 +10,6 @@ from breos.economics import (
     DEFAULT_DISCOUNT_RATE,
     DEFAULT_INFLATION_RATE,
     CostParams,
-    calculate_lcoe,
     calculate_lcoe_from_projection,
     cost_analysis_projection,
     cost_params_from_config,
@@ -30,7 +29,6 @@ def test_every_entry_point_defaults_to_the_one_set():
     projection = inspect.signature(cost_analysis_projection).parameters
     assert (projection["discount_rate"].default, projection["inflation_rate"].default) == (0.03, 0.02)
     assert inspect.signature(calculate_lcoe_from_projection).parameters["discount_rate"].default == 0.03
-    assert inspect.signature(calculate_lcoe).parameters["discount_rate"].default == 0.03
 
 
 def test_the_packaged_financials_preset_is_gone():
@@ -75,7 +73,7 @@ def _projection(**rates):
         "daily_power_cost": 0.0,
         "annual_operation_cost": 50.0,
     }
-    return cost_analysis_projection(None, costs, num_years=3, yearly_summary_df=yearly, **rates)
+    return cost_analysis_projection(yearly, costs, num_years=3, **rates)
 
 
 def test_a_zero_discount_rate_leaves_cashflows_undiscounted():

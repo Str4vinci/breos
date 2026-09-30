@@ -457,14 +457,14 @@ class TestUnlimitedInverterAndOptimizer:
             "ac_output_scale": 0.9210647508519848,
             "dc_output_scale": 0.75,
         }
-        problem = SolarDesignProblem(weather, load, config, None)
+        problem = SolarDesignProblem(weather, load, config)
         assert problem.ac_output_scale == pytest.approx(0.9210647508519848)
         assert problem.dc_output_scale == pytest.approx(0.75)
 
         del config["ac_output_scale"]
         del config["dc_output_scale"]
-        assert SolarDesignProblem(weather, load, config, None).ac_output_scale == 1.0
-        assert SolarDesignProblem(weather, load, config, None).dc_output_scale == 1.0
+        assert SolarDesignProblem(weather, load, config).ac_output_scale == 1.0
+        assert SolarDesignProblem(weather, load, config).dc_output_scale == 1.0
 
     @pytest.mark.parametrize("scale", [0.0, -1.0, 1.0857, 2.0, float("nan"), float("inf")])
     def test_optimizer_problem_rejects_an_out_of_range_ac_scale(self, scale):
@@ -483,7 +483,7 @@ class TestUnlimitedInverterAndOptimizer:
             "ac_output_scale": scale,
         }
         with pytest.raises(ValueError, match="ac_output_scale must be finite"):
-            SolarDesignProblem(weather, load, config, None)
+            SolarDesignProblem(weather, load, config)
 
     @pytest.mark.parametrize("scale", [0.0, -1.0, float("nan"), float("inf")])
     def test_optimizer_problem_rejects_invalid_dc_scale(self, scale):
@@ -501,7 +501,7 @@ class TestUnlimitedInverterAndOptimizer:
             "dc_output_scale": scale,
         }
         with pytest.raises(ValueError, match="dc_output_scale must be finite and greater than 0"):
-            SolarDesignProblem(weather, load, config, None)
+            SolarDesignProblem(weather, load, config)
 
     def test_optimizer_problem_scales_dc_before_projected_scoring(self, monkeypatch):
         """NSGA candidate scoring sends corrected raw DC to the projection."""
@@ -534,7 +534,7 @@ class TestUnlimitedInverterAndOptimizer:
             "optimization": {"objective_basis": "projected"},
             "dc_output_scale": 0.5,
         }
-        problem = SolarDesignProblem(weather, load, config, None)
+        problem = SolarDesignProblem(weather, load, config)
         out = {}
         problem._evaluate(np.array([1.0, 1.0, 35.0, 180.0]), out)
 

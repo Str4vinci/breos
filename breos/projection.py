@@ -678,7 +678,7 @@ def value_projection(cfg: dict[str, Any], resolved: ResolvedAppConfig, run: Proj
     costs = build_costs_dict(cfg, resolved)
     yearly_df = price_year_rows(run.yearly_df, costs)
     cost_projection = cost_analysis_projection(
-        results_df=None,
+        yearly_summary_df=yearly_df,
         costs=costs,
         num_years=len(yearly_df),
         inflation_rate=cfg["inflation_rate"],
@@ -688,8 +688,6 @@ def value_projection(cfg: dict[str, Any], resolved: ResolvedAppConfig, run: Proj
         om_escalation=cfg.get("om_escalation"),
         replacement_cost_learning=cfg.get("replacement_cost_learning", 0.0),
         discount_rate=cfg["discount_rate"],
-        freq=cfg["resolution"],
-        yearly_summary_df=yearly_df,
         emissions_params=resolved.emissions_params,
         currency=result_currency(resolved.tariff),
     )
