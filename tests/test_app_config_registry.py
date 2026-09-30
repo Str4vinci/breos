@@ -164,7 +164,9 @@ def test_each_run_flag_sets_its_config_key(flag, argument, key, expected):
 
 
 def test_run_help_lists_exactly_the_tabled_flags_in_order(capsys, monkeypatch):
-    # Python 3.14's argparse colours help when the environment asks for it.
+    # Python 3.14's argparse colours help when the environment asks for it,
+    # and PYTHON_COLORS outranks NO_COLOR there.
+    monkeypatch.setenv("PYTHON_COLORS", "0")
     monkeypatch.setenv("NO_COLOR", "1")
     with pytest.raises(SystemExit):
         cli.build_parser().parse_args(["run", "--help"])
