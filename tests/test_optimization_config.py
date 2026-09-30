@@ -131,6 +131,22 @@ def test_keys_nothing_read_are_refused():
             resolve_optimization_config(config)
 
 
+@pytest.mark.parametrize(
+    ("section", "value", "key"),
+    [
+        ("optimization", {"algorithm": "nsga2"}, "optimization.algorithm"),
+        ("pv", {"params": {"Mpp": 400, "Vmp": 40, "Imp": 10, "Voc": 48, "Isc": 11, "T_Pmax": -0.3}}, "T_Pmax"),
+        ("pv", {"params": {"Mpp": 400, "Vmp": 40, "Imp": 10, "Voc": 48, "Isc": 11, "T_Voc": -0.3}}, "T_Voc"),
+        ("pv", {"params": {"Mpp": 400, "Vmp": 40, "Imp": 10, "Voc": 48, "Isc": 11, "T_Isc": 0.05}}, "T_Isc"),
+    ],
+)
+def test_keys_removed_in_0_7_0_are_unknown(section, value, key):
+    # The single-value algorithm key and the short temperature-coefficient
+    # aliases were removed; they raise like any other unknown key.
+    with pytest.raises(ValueError, match=rf"Unknown key '[a-z.]*{key}'"):
+        resolve_optimization_config({**MINIMAL, section: value})
+
+
 def test_removed_keys_name_their_replacement():
     with pytest.raises(ValueError, match=r"constraints\.budget_eur was renamed to constraints\.budget"):
         resolve_optimization_config({**MINIMAL, "constraints": {"budget_eur": 5000.0}})
@@ -163,7 +179,6 @@ def test_an_inline_module_states_its_rating():
     [
         ("constraints", {"max_tilt_deg": "steep"}, "Use a number or 'adjust'"),
         ("constraints", {"enforce_zeb": "yes"}, "must be true or false"),
-        ("optimization", {"algorithm": "cmaes"}, "must be one of: nsga2"),
         ("optimization", {"early_stop": {"ftol": 0}}, "optimization.early_stop.ftol"),
         ("simulation", {"resolution": "30min"}, "must be one of: h, 15min"),
         ("battery", {"indoor_model": {"setpoint": 22}}, "battery.indoor_model.setpoint"),

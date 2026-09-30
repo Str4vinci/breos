@@ -67,7 +67,7 @@ def _run_evaluate(monkeypatch, config, houseload, tmy_index):
     monkeypatch.setattr("breos.optimization.calculate_pv_production_dc", lambda **kwargs: dc)
     _stub_projection_balance(monkeypatch, tmy_index, captured, Houseload=500.0, Import_From_Grid=500.0)
 
-    problem = SolarDesignProblem(tmy_data, houseload, config, "results/_test_run/parity")
+    problem = SolarDesignProblem(tmy_data, houseload, config)
     out: dict = {}
     problem._evaluate(np.array([2.0, 1.0, 10.0], dtype=float), out)
     captured["out"] = out
@@ -244,7 +244,7 @@ def test_projected_budget_constraint_gates_the_reported_capex(synthetic_weather,
         "pv": {"module": "Suntech_STP550S_STC"},
         "battery": {"temperature": 20.0, "indoor_model": {"enabled": False}},
     }
-    problem = SolarDesignProblem(synthetic_weather, sample_load, config, "results/_test_run/budget")
+    problem = SolarDesignProblem(synthetic_weather, sample_load, config)
     out: dict = {}
     problem._evaluate(np.array([1.0, 0.0, 35.0], dtype=float), out)
 
@@ -323,7 +323,6 @@ def test_projected_optimizer_candidate_matches_app(open_meteo_weather, monkeypat
         weather,
         houseload,
         optimizer_config,
-        "results/_test_run/optimizer_app_parity",
         pop_size=8,
         n_gen=1,
         seed=42,

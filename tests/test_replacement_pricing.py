@@ -17,7 +17,6 @@ from breos.battery import (
 from breos.economics import (
     CostParams,
     calculate_costs,
-    cost_analysis_projection,
     price_year_rows,
     replacement_event_cost,
     replacement_total_t0,
@@ -92,92 +91,26 @@ def test_replacements_without_a_price_are_refused():
     assert price_year_rows(rows.assign(Replacements=0), costs)["Replacement_Cost"].tolist() == [0.0]
 
 
-def test_the_frame_path_prices_the_marked_swaps():
-    index = pd.date_range("2025-01-01", periods=48, freq="h")
-    replaced = np.zeros(48, dtype=bool)
-    replaced[30] = True
-    frame = pd.DataFrame(
-        {
-            "Datetime": index,
-            "PV_AC_To_Load": 100.0,
-            "PV_Origin_Battery_AC_To_Load": 0.0,
-            "PV_AC_Export": 0.0,
-            "Houseload": 500.0,
-            "Import_From_Grid": 400.0,
-            "Battery_Replaced": replaced,
-        }
-    )
-    costs = {
-        "total_initial_cost": 1000.0,
-        "electricity_cost": 0.2,
-        "electricity_sold_cost": 0.05,
-        "daily_power_cost": 0.0,
-        "annual_operation_cost": 0.0,
-        "replacement_cost_each": 750.0,
-    }
-    projection = cost_analysis_projection(frame, costs, num_years=2, inflation_rate=0.0, discount_rate=0.0)
-    assert projection["Cost_Replacement"].tolist() == [750.0, 0.0]
-    assert projection.attrs["total_replacement_cost"] == 750.0
-
-
 def test_the_t0_total_is_added_year_by_year():
     # Built-in sum() compensates from Python 3.12 and would give 1.0 here; the
     # projection loop added the years one at a time, on every Python.
     assert replacement_total_t0([0.1] * 10) == 0.9999999999999999
 
 
-def _frame_with_swaps(n_swaps, **extra):
-    index = pd.date_range("2025-01-01", periods=48, freq="h")
-    replaced = np.zeros(48, dtype=bool)
-    replaced[: 8 * n_swaps : 8] = True
-    frame = pd.DataFrame(
-        {
-            "Datetime": index,
-            "PV_AC_To_Load": 100.0,
-            "PV_Origin_Battery_AC_To_Load": 0.0,
-            "PV_AC_Export": 0.0,
-            "Houseload": 500.0,
-            "Import_From_Grid": 400.0,
-            "Battery_Replaced": replaced,
-            **extra,
-        }
-    )
-    return frame, replaced
-
-
-_FRAME_COSTS = {
-    "total_initial_cost": 1000.0,
-    "electricity_cost": 0.2,
-    "electricity_sold_cost": 0.05,
-    "daily_power_cost": 0.0,
-    "annual_operation_cost": 0.0,
-}
-
-
-def test_the_frame_path_group_sums_the_swaps():
-    # Six swaps at 0.1: one at a time gives 0.6, the group sum the projection
-    # has always taken of the per-step money gives 0.6000000000000001.
-    frame, replaced = _frame_with_swaps(6)
-    projection = cost_analysis_projection(
-        frame, {**_FRAME_COSTS, "replacement_cost_each": 0.1}, num_years=1, inflation_rate=0.0, discount_rate=0.0
-    )
-    per_step = pd.DataFrame({"Replacement_Cost": np.where(replaced, 0.1, 0.0)})
-    expected = float(per_step.groupby(frame["Datetime"].dt.year).sum()["Replacement_Cost"].iloc[0])
-    assert expected != 0.6  # what adding 0.1 six times gives
-    assert projection["Cost_Replacement"].tolist() == [expected]
-
-
-def test_stored_replacement_money_is_kept_on_both_paths():
-    # Ledger schema < 3.0 stored the money per step and per year; both paths
-    # keep it rather than re-pricing, and need no replacement_cost_each.
-    frame, replaced = _frame_with_swaps(1, Replacement_Cost=0.0)
-    frame.loc[replaced, "Replacement_Cost"] = 640.0
-    projection = cost_analysis_projection(frame, _FRAME_COSTS, num_years=1, inflation_rate=0.0, discount_rate=0.0)
-    assert projection["Cost_Replacement"].tolist() == [640.0]
+def test_stored_replacement_money_is_kept():
+    # Ledger schema < 3.0 stored the money per year; the rows keep it rather
+    # than re-pricing, and need no replacement_cost_each.
+    costs = {
+        "total_initial_cost": 1000.0,
+        "electricity_cost": 0.2,
+        "electricity_sold_cost": 0.05,
+        "daily_power_cost": 0.0,
+        "annual_operation_cost": 0.0,
+    }
     rows = pd.DataFrame(
         {"Year": [1], "Replacements": [1], "Replacement_Cost": [640.0], "Import_kWh": [0.0], "Export_kWh": [0.0]}
     )
-    assert price_year_rows(rows.assign(Load_kWh=0.0), _FRAME_COSTS)["Replacement_Cost"].tolist() == [640.0]
+    assert price_year_rows(rows.assign(Load_kWh=0.0), costs)["Replacement_Cost"].tolist() == [640.0]
 
 
 def test_the_physics_reports_the_swapped_capacity():

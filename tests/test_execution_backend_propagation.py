@@ -104,15 +104,6 @@ def _run_app(inputs, request, **backend):
     App({**BASE_CONFIG, **backend}).simulate()
 
 
-def _run_optimize_battery_size(inputs, request, **backend):
-    from breos.optimization import optimize_battery_size
-
-    weather, load = inputs
-    optimize_battery_size(
-        pv_dc=weather["ghi"] * 2.0, houseload=load, battery_sizes_wh=[5000.0], verbose=False, **backend
-    )
-
-
 def _run_evaluate_projected_design(inputs, request, **backend):
     from breos.optimization import evaluate_projected_design
 
@@ -123,7 +114,7 @@ def _run_solar_design_problem(inputs, request, **backend):
     pytest.importorskip("pymoo")
     from breos.optimization import SolarDesignProblem
 
-    problem = SolarDesignProblem(*inputs, OPTIMIZATION_CONFIG, "results/_test_run/backend_propagation", **backend)
+    problem = SolarDesignProblem(*inputs, OPTIMIZATION_CONFIG, **backend)
     problem._evaluate(np.array([DESIGN["n_modules"], DESIGN["battery_kwh"], DESIGN["tilt"]], dtype=float), {})
 
 
@@ -149,7 +140,6 @@ def test_the_reference_implementation_is_the_default_everywhere():
     "run",
     [
         _run_app,
-        _run_optimize_battery_size,
         _run_evaluate_projected_design,
         _run_solar_design_problem,
         _run_optimize_system_multi_objective,
@@ -181,9 +171,7 @@ def test_the_chosen_backend_survives_pickling_to_a_worker(_optimization_inputs, 
     pytest.importorskip("pymoo")
     from breos.optimization import SolarDesignProblem
 
-    problem = SolarDesignProblem(
-        *_optimization_inputs, OPTIMIZATION_CONFIG, "results/_test_run/backend_propagation", execution_backend="numba"
-    )
+    problem = SolarDesignProblem(*_optimization_inputs, OPTIMIZATION_CONFIG, execution_backend="numba")
     restored = pickle.loads(pickle.dumps(problem))
     restored._evaluate(np.array([DESIGN["n_modules"], DESIGN["battery_kwh"], DESIGN["tilt"]], dtype=float), {})
 
@@ -290,25 +278,6 @@ def test_missing_numba_is_reported_before_app_prepares_inputs(monkeypatch):
 
     with pytest.raises(_numba_dispatch.NumbaUnavailableError):
         app_runner.run_app_simulation(resolve_app_config({**BASE_CONFIG, "execution_backend": "numba"}), None)
-
-
-def test_missing_numba_is_reported_before_the_first_candidate(monkeypatch):
-    """optimize_battery_size checks at entry, not inside the size loop.
-
-    An empty size list proves the ordering: with the check inside the loop
-    there would be nothing to trip over, and the call would succeed.
-    """
-    from breos import _numba_dispatch, optimization
-
-    monkeypatch.setattr(_numba_dispatch, "numba_available", lambda: False)
-
-    with pytest.raises(_numba_dispatch.NumbaUnavailableError):
-        optimization.optimize_battery_size(
-            pv_dc=None,
-            houseload=None,
-            battery_sizes_wh=[],
-            execution_backend="numba",
-        )
 
 
 def test_missing_numba_is_reported_before_the_pv_model_runs(monkeypatch, request, _optimization_inputs):

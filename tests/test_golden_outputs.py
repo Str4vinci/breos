@@ -139,13 +139,12 @@ def test_cost_analysis_projection_golden_output():
     )
 
     projection = cost_analysis_projection(
-        pd.DataFrame(),
+        yearly_summary,
         costs,
         num_years=3,
         inflation_rate=0.02,
         sell_price_inflation=0.01,
         discount_rate=0.03,
-        yearly_summary_df=yearly_summary,
         emissions_params=EmissionsParams(average_grid_carbon_intensity_gco2_kwh=200.0, country="Testland"),
     )
 

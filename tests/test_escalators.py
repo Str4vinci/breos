@@ -37,57 +37,23 @@ def _rows():
     )
 
 
-def _steps():
-    # The per-step frame branch: one year of hourly steps, replayed each year,
-    # with one replacement a third of the way into year 1.
-    index = pd.date_range("2025-01-01", periods=8760, freq="h")
-    replaced = np.arange(8760) == 3000
-    return pd.DataFrame(
-        {
-            "PV_Production": 500.0,
-            "Houseload": 800.0,
-            "Import_From_Grid": 400.0,
-            "PV_AC_Export": 100.0,
-            "Battery_Replaced": replaced,
-        },
-        index=index,
-    )
-
-
-BRANCHES = {
-    "year_rows": lambda **rates: cost_analysis_projection(
-        None, COSTS, num_years=YEARS, yearly_summary_df=_rows(), **rates
-    ),
-    "steps": lambda **rates: cost_analysis_projection(_steps(), COSTS, num_years=YEARS, freq="h", **rates),
-}
-REPLACEMENT_ROW = {"year_rows": 2, "steps": 0}
-
-
-@pytest.fixture(params=sorted(BRANCHES))
-def branch(request):
-    return request.param
-
-
 def _project(**rates):
-    return BRANCHES["year_rows"](**rates)
+    return cost_analysis_projection(_rows(), COSTS, num_years=YEARS, **rates)
 
 
-def test_omitted_escalators_reproduce_the_single_inflation_rate(branch):
-    project = BRANCHES[branch]
-    default = project(inflation_rate=0.025)
-    explicit = project(inflation_rate=0.025, import_price_escalation=0.025, om_escalation=0.025)
+def test_omitted_escalators_reproduce_the_single_inflation_rate():
+    default = _project(inflation_rate=0.025)
+    explicit = _project(inflation_rate=0.025, import_price_escalation=0.025, om_escalation=0.025)
 
     pd.testing.assert_frame_equal(default, explicit, check_exact=True)
 
 
-def test_each_escalator_moves_only_its_flow(branch):
-    project = BRANCHES[branch]
-    base = project(inflation_rate=0.02)
-    importing = project(inflation_rate=0.02, import_price_escalation=0.06)
-    om = project(inflation_rate=0.02, om_escalation=0.06)
+def test_each_escalator_moves_only_its_flow():
+    base = _project(inflation_rate=0.02)
+    importing = _project(inflation_rate=0.02, import_price_escalation=0.06)
+    om = _project(inflation_rate=0.02, om_escalation=0.06)
 
     for column in ("Cost_Import", "Cost_Daily", "Cost_No_Sys_Annual"):
-        # Against the base run, so PV degradation in the step branch cancels.
         assert importing[column].iloc[-1] / base[column].iloc[-1] == pytest.approx((1.06 / 1.02) ** 4)
         pd.testing.assert_series_equal(om[column], base[column])
     assert om["Cost_Operation"].iloc[-1] == pytest.approx(40 * 1.06**4)
@@ -96,10 +62,10 @@ def test_each_escalator_moves_only_its_flow(branch):
     pd.testing.assert_series_equal(importing["Cost_Replacement"], base["Cost_Replacement"])
 
 
-def test_replacement_learning_lowers_replacements_only(branch):
-    project, row = BRANCHES[branch], REPLACEMENT_ROW[branch]
-    base = project(inflation_rate=0.02)
-    learning = project(inflation_rate=0.02, replacement_cost_learning=0.05)
+def test_replacement_learning_lowers_replacements_only():
+    row = 2
+    base = _project(inflation_rate=0.02)
+    learning = _project(inflation_rate=0.02, replacement_cost_learning=0.05)
 
     t = base["Replacement_Time_Years"].iloc[row]
     assert 0 < t < YEARS

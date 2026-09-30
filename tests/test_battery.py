@@ -27,7 +27,6 @@ from breos.battery import (
 )
 from breos.constants import LAM_EA_J_MOL, LAM_SOC_EXPONENT_N
 from breos.degradation.engine import BlastEngine
-from breos.economics import system_ac_production_power
 from breos.inverter import _calculate_dc_ac_power_arrays, calculate_dc_ac_power
 from breos.solar import dc_to_ac
 from tests.energy_conservation import assert_energy_conservation, assert_origin_reconciliation
@@ -1361,9 +1360,10 @@ class TestSimulateEnergyBalance:
             baseline_results[list(economics_columns)],
             check_exact=True,
         )
+        system_ac_columns = ["PV_AC_To_Load", "PV_Origin_Battery_AC_To_Load", "PV_AC_Export"]
         pd.testing.assert_series_equal(
-            system_ac_production_power(perturbed_results),
-            system_ac_production_power(baseline_results),
+            perturbed_results[system_ac_columns].sum(axis=1),
+            baseline_results[system_ac_columns].sum(axis=1),
             check_exact=True,
         )
 

@@ -29,9 +29,6 @@ def test_top_level_all_is_narrow_release_surface():
         "simulate_energy_balance",
         "calculate_costs",
         "cost_analysis_projection",
-        "calculate_co2_savings",
-        "optimize_tilt",
-        "optimize_battery_size",
         "optimize_system_multi_objective",
         "export_results",
         "load_results",
@@ -125,3 +122,38 @@ assert matplotlib.get_backend() == before
     )
 
     assert preserve_backend.returncode == 0, preserve_backend.stderr
+
+
+def test_keyword_only_boundaries_are_pinned():
+    """A positional call past a removed argument raises instead of rebinding."""
+    import inspect
+
+    from breos.economics import cost_analysis_projection
+    from breos.optimization import optimize_system_multi_objective
+
+    def positional(func):
+        # A *args would swallow a positional argument past the boundary.
+        assert all(
+            parameter.kind is not inspect.Parameter.VAR_POSITIONAL
+            for parameter in inspect.signature(func).parameters.values()
+        )
+        return [
+            name
+            for name, parameter in inspect.signature(func).parameters.items()
+            if parameter.kind is inspect.Parameter.POSITIONAL_OR_KEYWORD and name != "self"
+        ]
+
+    assert positional(cost_analysis_projection) == [
+        "yearly_summary_df",
+        "costs",
+        "num_years",
+        "inflation_rate",
+        "sell_price_inflation",
+        "discount_rate",
+    ]
+    assert positional(optimize_system_multi_objective) == ["tmy_data", "houseload", "config"]
+
+    pytest.importorskip("pymoo")
+    from breos.optimization import SolarDesignProblem
+
+    assert positional(SolarDesignProblem.__init__) == ["tmy_data", "houseload", "config"]
