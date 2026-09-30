@@ -26,8 +26,8 @@ at `costs["replacement_cost_each"]`; see
 ## Physical boundary and coupling
 
 BREOS currently implements **DC-coupled/hybrid dispatch only**. PV and the
-battery share one inverter AC nameplate. `App({..., "dc_coupled": False})`
-raises rather than silently running the DC model under an AC-coupled label.
+battery share one inverter AC nameplate. This is the only supported App
+dispatch model; there is no configuration option to select AC coupling.
 
 Inputs and flow columns are average power in W over each interval. Dispatch
 converts them once to Wh (`W × interval hours`), applies all limits and

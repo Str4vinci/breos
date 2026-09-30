@@ -84,6 +84,8 @@ def test_year_rows_carry_the_battery_across_years():
     assert rows["Battery_Cumulative_FEC"].is_monotonic_increasing
     assert rows["Battery_SOH_%"].iloc[-1] == run.carry.soh_pct
     assert rows["Battery_Carried_Energy_Wh"].iloc[-1] == run.carry.energy_wh
+    assert "PV_Production_kWh" in rows
+    assert "Legacy_PV_Production_kWh" not in rows
     np.testing.assert_allclose(
         rows["PV_Production_kWh"],
         rows["Direct_PV_AC_Load_kWh"] + rows["PV_Origin_Battery_AC_Load_kWh"] + rows["Export_kWh"],

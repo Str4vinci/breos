@@ -262,7 +262,7 @@ def _smoke_test_installed_wheel(wheel: Path, work_dir: Path) -> None:
         )
         app.simulate()
         result = app.result()
-        if len(result["yearly"]) != 1 or result["pv_production_kwh"] <= 0:
+        if len(result["yearly"]) != 1 or result["usable_ac_system_production_kwh"] <= 0:
             raise AssertionError("installed wheel did not produce a simulated PV result")
         if app._resolved.cfg["location"] != "porto":
             raise AssertionError("App did not resolve packaged configuration")
@@ -293,7 +293,7 @@ def _smoke_test_installed_wheel(wheel: Path, work_dir: Path) -> None:
                 {
                     "breos_file": str(breos_file),
                     "profile_rows": len(profile),
-                    "simulated_pv_production_kwh": result["pv_production_kwh"],
+                    "simulated_usable_ac_system_production_kwh": result["usable_ac_system_production_kwh"],
                     "blast_models": len(profiles),
                     "blast_upstream": f"{BLAST_UPSTREAM_VERSION}@{BLAST_UPSTREAM_COMMIT}",
                 }

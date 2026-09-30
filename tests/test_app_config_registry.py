@@ -55,7 +55,6 @@ EXPECTED_DEFAULTS = {
     "battery_max_discharge_power_w": None,
     "battery_power_limit_c_rate": None,
     "enable_resistance_fade": False,
-    "dc_coupled": True,
     "inverter_efficiency": 0.96,
     "inverter_loading_ratio": 1.25,
     "pv_loss_overrides": None,
@@ -189,8 +188,12 @@ def test_choice_flags_reject_a_value_outside_their_choices(flag, value, capsys):
     assert "invalid choice" in capsys.readouterr().err
 
 
+def test_dc_coupled_is_an_unknown_app_key():
+    with pytest.raises(ValueError, match="Unknown config key.*dc_coupled"):
+        resolve_app_config({"dc_coupled": True})
+
+
 def test_dc_coupled_has_no_cli_flag():
-    # The key only accepts True, its default, so a flag could never change it.
     with pytest.raises(SystemExit):
         cli.build_parser().parse_args(["run", "--dc-coupled"])
 

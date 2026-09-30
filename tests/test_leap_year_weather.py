@@ -85,5 +85,5 @@ def test_app_runs_a_leap_year_with_storage(_patch_weather, resolution):
 
     assert result["consumption_kwh"] == pytest.approx(3500.0, rel=1e-6)
     assert len(result["monthly"]) == 12
-    assert result["pv_production_kwh"] > 0
+    assert result["usable_ac_system_production_kwh"] > 0
     assert result["provenance"]["weather"]["leap_day"]["year"] == 2028

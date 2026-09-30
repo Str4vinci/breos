@@ -446,8 +446,8 @@ def _evaluate_projected_design_metrics(
     metrics: Dict[str, Any] = {
         **_summarize_projected_lifetime_metrics(yearly_summary_df),
         "Projected_NPV": float(cost_projection["Savings_Cumulative_NPV"].iloc[-1]),
-        "Projected_Breakeven_Year": float(payback_year) if payback_year is not None else np.nan,
-        "Projected_Breakeven_Year_Interpolated": payback_interpolated if payback_interpolated is not None else np.nan,
+        "Projected_Payback_Year": float(payback_year) if payback_year is not None else np.nan,
+        "Projected_Payback_Year_Interpolated": payback_interpolated if payback_interpolated is not None else np.nan,
         "Projected_Initial_Cost": float(costs["total_initial_cost"]),
         "Projected_Replacement_Cost_T0_Prices": float(cost_projection.attrs["total_replacement_cost"]),
         "Projected_Total_Replacements": int(total_replacements),

@@ -371,10 +371,13 @@ def test_plot_sweep_heatmap(sizing_sweep, tmp_path):
 
 
 def test_plot_orientation_landscape(orientation_sweep, tmp_path):
-    plotting.plot_orientation_landscape(orientation_sweep, "pv_production_kwh", str(tmp_path))
+    plotting.plot_orientation_landscape(orientation_sweep, "usable_ac_system_production_kwh", str(tmp_path))
     tilt_only = pd.read_csv(orientation_sweep).query("param_azimuth == 180")
     plotting.plot_orientation_landscape(
-        tilt_only.drop(columns="param_azimuth"), "pv_production_kwh", str(tmp_path), filename="tilt.png"
+        tilt_only.drop(columns="param_azimuth"),
+        "usable_ac_system_production_kwh",
+        str(tmp_path),
+        filename="tilt.png",
     )
     _assert_written(tmp_path, "orientation_landscape.png", "tilt.png")
 

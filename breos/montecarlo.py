@@ -624,7 +624,6 @@ def _simulate_trajectory(
         "lifetime_grid_independence_pct": lifetime_gi,
         "total_replacements": int(total_replacements),
         "total_replacement_cost_t0_prices": float(total_replacement_cost),
-        "mean_pv_production_kwh": float(yearly_df["Legacy_PV_Production_kWh"].mean()),
         "mean_pv_dc_generation_kwh": float(yearly_df["PV_DC_Generation_kWh"].mean()),
         "mean_direct_pv_ac_load_kwh": float(yearly_df["Direct_PV_AC_Load_kWh"].mean()),
         "mean_pv_origin_battery_ac_load_kwh": float(yearly_df["PV_Origin_Battery_AC_Load_kWh"].mean()),

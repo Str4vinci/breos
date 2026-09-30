@@ -190,6 +190,7 @@ def test_run_montecarlo_shapes_and_years(tmp_path, write_multiyear_weather):
         assert col in result.runs.columns
     assert "mean_pv_dc_generation_kwh" in result.runs
     assert "mean_usable_ac_system_production_kwh" in result.runs
+    assert "mean_pv_production_kwh" not in result.runs
     assert "npv_savings" in result.summary
     assert set(result.summary["npv_savings"]) >= {"mean", "p5", "p50", "p95"}
     assert set(result.summary["npv_savings"]) >= {"p2_5", "p97_5"}
@@ -363,7 +364,7 @@ def test_run_montecarlo_run_streams_are_spawned_from_the_base_seed(tmp_path, wri
             assert row["Load_Scale"] == scale
     assert "SeedSequence(base_seed).spawn(n_runs)" in result.provenance["random_stream"]
     assert result.provenance["ledger_schema_version"] == "3.0"
-    assert result.provenance["result_schema_version"] == "1.8"
+    assert result.provenance["result_schema_version"] == "2.0"
     assert result.provenance["currency"] == "EUR"
     assert result.runs.attrs["currency"] == "EUR"
     assert result.provenance["economics"]["import_price_escalation"] == result.provenance["economics"]["inflation_rate"]

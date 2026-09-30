@@ -38,7 +38,6 @@ is a `breos run` option that overrides the config file.
 | `cost_preset` | `None` | `--cost-preset` | Cost preset key from the packaged defaults; see [Packaged options](options.md#cost-presets). `None` uses the {py:class}`~breos.CostParams` defaults |
 | `costs` | *unset* | — | Cost overrides layered over the selected preset and the built-in defaults; see [`[costs]`](#costs) |
 | `cross_axis_tilt` | `0.0` | — | Cross-axis terrain slope for single-axis tracking (degrees) |
-| `dc_coupled` | `True` | — | DC-coupled or hybrid inverter. `False` is not supported and raises |
 | `degradation_engine` | `"native"` | `--degradation-engine` | `"native"` keeps Naumann/Lam; `"blast"` opts into a vendored BLAST cell model. One of `"native"`, `"blast"` |
 | `diffuse_iam` | `"none"` | `--diffuse-iam` | Whether the incidence-angle modifier also applies to the diffuse POA components. `"marion"` weighs sky- and ground-diffuse with the view-factor-integrated selected IAM model (Marion 2017); the default applies IAM to beam only, a known ~0.5-1% overestimate. One of `"none"`, `"marion"` |
 | `discount_rate` | `0.03` | `--discount-rate` | Nominal discount rate for NPV |

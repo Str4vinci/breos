@@ -73,22 +73,24 @@ top-level values close to these:
   "n_modules": 10,
   "pv_kwp": 5.5,
   "battery_kwh": 5.0,
-  "pv_production_kwh": 8288.0,
   "grid_independence_pct": 80.2,
   "self_consumption_pct": 39.8,
   "total_investment": 7788.9,
   "payback_year": 10,
   "npv_savings": 5041.3,
   "battery_soh_end_pct": 70.6,
-  "co2_avoided_total_kg": 20228.0
+  "co2_avoided_total_lifetime_kg": 20228.0
 }
 ```
 
 Exact numbers shift with the PVGIS TMY vintage and dependency versions, but a
 plausible first run lands in the same neighborhood — roughly 8 MWh/yr of PV
-production and 75–85% grid independence for this config. If your values are
-far off, use the dry-run summary and [Required Inputs](inputs.md) to check
-which defaults your run actually used.
+usable AC production and 75–85% grid independence for this config. The
+production value is the current usable-AC measure; schema 1.8's
+`pv_production_kwh` also counted DC energy sent into storage, so its numbers
+cannot be carried over to this field. If your values are far off, use the
+dry-run summary and [Required Inputs](inputs.md) to check which defaults your
+run actually used.
 
 To discover packaged option keys:
 
@@ -121,9 +123,10 @@ app.simulate()
 result = app.result()
 
 print(f"Grid independence: {result['grid_independence_pct']:.1f}%")
+print(f"Usable AC production: {result['usable_ac_system_production_kwh']:,.0f} kWh")
 print(f"Payback: {result['payback_year']} years")
 print(f"NPV savings: {result['npv_savings']:,.0f} EUR")
-print(f"CO2 avoided: {result['co2_avoided_total_kg']:,.0f} kg")
+print(f"CO2 avoided: {result['co2_avoided_total_lifetime_kg']:,.0f} kg")
 ```
 
 What just happened, end-to-end:
