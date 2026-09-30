@@ -33,7 +33,7 @@ def test_readme_quickstart_smoke(_patch_weather):
     assert result["grid_independence_pct"] > 0
     assert result["payback_year"] is None or result["payback_year"] >= 1
     assert "npv_savings" in result
-    assert result["co2_avoided_total_kg"] > 0
+    assert result["co2_avoided_total_lifetime_kg"] > 0
 
 
 def test_montecarlo_example_config_smoke(tmp_path, write_multiyear_weather):

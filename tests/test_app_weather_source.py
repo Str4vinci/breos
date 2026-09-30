@@ -86,7 +86,7 @@ def test_weather_source_changes_the_simulated_production(weather_dir, synthetic_
     sarah3 = _run({**BASE, "weather_source": "pvgis-sarah3"})
     nsrdb = _run({**BASE, "weather_source": "nsrdb"})
 
-    assert nsrdb["pv_production_kwh"] < sarah3["pv_production_kwh"]
+    assert nsrdb["usable_ac_system_production_kwh"] < sarah3["usable_ac_system_production_kwh"]
 
 
 def test_weather_source_without_a_matching_file_does_not_fetch(weather_dir):

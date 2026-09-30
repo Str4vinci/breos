@@ -43,7 +43,6 @@ class BatteryModelProfile:
     experimental_range: Mapping[str, Any]
     citations: tuple[str, ...]
     output_keys: tuple[str, ...]
-    operating_defaults: Mapping[str, Any]
     release_phase: str
     aging_horizon_days: float | None = None
     notes: str = ""
@@ -68,7 +67,6 @@ class BatteryModelProfile:
             "experimental_range": _json_metadata(self.experimental_range),
             "citations": list(self.citations),
             "output_keys": list(self.output_keys),
-            "operating_defaults": _json_metadata(self.operating_defaults),
             "release_phase": self.release_phase,
             "aging_horizon_days": self.aging_horizon_days,
             "notes": self.notes,
@@ -99,8 +97,6 @@ def _profile(
     aging_horizon_days: float | None = None,
     notes: str = "",
 ) -> BatteryModelProfile:
-    # BLAST model papers do not define pack-level operating defaults. Keep the
-    # mapping empty rather than inventing generic chemistry assumptions.
     return BatteryModelProfile(
         key=key,
         name=name,
@@ -112,7 +108,6 @@ def _profile(
         experimental_range=_freeze_metadata(experimental_range),
         citations=citations,
         output_keys=output_keys,
-        operating_defaults=_freeze_metadata({}),
         release_phase=release_phase,
         aging_horizon_days=aging_horizon_days,
         notes=notes,

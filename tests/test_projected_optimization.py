@@ -143,7 +143,9 @@ def test_projected_evaluator_carries_physical_and_degradation_state(monkeypatch)
     assert metrics["Projected_Total_Replacements"] == 1
     assert metrics["Projected_Replacement_Cost_T0_Prices"] == pytest.approx(1000.0)
     assert metrics["Projected_Final_SOH_%"] == pytest.approx(99.0)
-    assert metrics["Projected_Breakeven_Year"] == pytest.approx(2.0)
+    assert metrics["Projected_Payback_Year"] == pytest.approx(2.0)
+    assert "Projected_Breakeven_Year" not in metrics
+    assert "Projected_Breakeven_Year_Interpolated" not in metrics
     assert metrics["Projected_LCOE_per_kWh"] == pytest.approx(0.123)
     assert metrics["Projected_CO2_Avoided_Total_kg"] == pytest.approx(21.0)
     assert metrics["Projected_CO2_Avoided_SelfConsumed_kg"] == pytest.approx(17.0)

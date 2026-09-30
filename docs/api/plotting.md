@@ -86,7 +86,7 @@ or of any table of designs, and marks the designs no other one beats.
 from breos.plotting import plot_orientation_landscape, plot_pareto_front, plot_sweep_heatmap
 
 plot_sweep_heatmap("porto.csv", "grid_independence_pct", "plots", diff="berlin.csv", labels=("Porto", "Berlin"))
-plot_orientation_landscape("orientation.csv", "pv_production_kwh", "plots")
+plot_orientation_landscape("orientation.csv", "usable_ac_system_production_kwh", "plots")
 plot_pareto_front(result, "plots", color_by="Battery_kWh")
 ```
 

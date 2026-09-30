@@ -46,7 +46,7 @@ def test_registry_is_the_single_catalog_for_all_vendored_models():
         assert profile.experimental_range["max_c_rate_discharge"] == model.experimental_range["max_rate_discharge"]
         assert profile.output_keys == tuple(model.outputs)
         assert profile.citations
-        assert profile.operating_defaults == {}
+        assert "operating_defaults" not in profile.as_dict()
 
 
 def test_python_discovery_is_public_and_json_serializable():
@@ -56,6 +56,7 @@ def test_python_discovery_is_public_and_json_serializable():
     assert get_battery_model_profile("nmc111_gr_sanyo_2ah").supports_resistance is True
     assert models[0]["calibration_basis"] == "cell-model"
     assert models[0]["pack_calibrated"] is False
+    assert all("operating_defaults" not in model for model in models)
     json.dumps(models)
     # Every registered model is enabled, so there is no filter to ask for.
     with pytest.raises(TypeError, match="enabled_only"):

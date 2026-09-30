@@ -407,6 +407,14 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
     also takes `opening` or a fraction (schema `breos_lp_bound_v1`).
 
 ### Changed
+- Result schema 2.0 renames `monthly[].import_kwh` and
+  `yearly[].import_kwh` to `grid_import_kwh`, with paired `export_kwh`
+  fields renamed to `grid_export_kwh`; values are unchanged. Optimizer columns
+  `Projected_Breakeven_Year` and `Projected_Breakeven_Year_Interpolated` are
+  now `Projected_Payback_Year` and `Projected_Payback_Year_Interpolated`.
+- The schema 2.0 migration guide maps removed CO2 aliases to the existing
+  total-year and total-lifetime fields. Enum spelling in echoed provenance
+  remains unchanged.
 - **`plot_breakeven_comparison` reads App results**
   ([#186](https://github.com/Str4vinci/breos/issues/186)). It takes
   `App.result()` dicts, whose `financial` rows it reads, or cost projection
@@ -1491,6 +1499,24 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   unchanged.
 
 ### Removed
+- App configuration no longer accepts `dc_coupled`, and
+  `provenance.resolved_config` no longer echoes it. Dispatch remains the
+  supported DC-coupled/hybrid model; supplying the old key now raises an
+  unknown-config-key error.
+- Remove `BatteryModelProfile.operating_defaults`, the matching discovery
+  JSON field, and serialized `model_profile.operating_defaults` metadata.
+  Profiles never supplied operational defaults and the field was always
+  empty.
+- Remove the exact-alias CO2 fields `co2_avoided_year1_kg` and
+  `co2_avoided_total_kg`; read existing `co2_avoided_total_year1_kg` and
+  `co2_avoided_total_lifetime_kg` respectively.
+- Remove top-level `pv_production_kwh`, monthly/yearly `pv_kwh`, shared annual
+  `Legacy_PV_Production_kWh`, and Monte Carlo `mean_pv_production_kwh`.
+  Readers can use the existing `usable_ac_system_production_kwh`, annual
+  `PV_Production_kWh`, and `mean_usable_ac_system_production_kwh`. The App PV
+  values have different definitions; dispatch and retained usable-AC values
+  do not change. The timestep ledger's `PV_Production` remains.
+- Bump result schema from 1.8 directly to 2.0 for these removals and renames.
 - `breos.optimization.DEFAULT_PROJECT_LIFESPAN`, with no deprecation period.
   Nothing read it: the optimizer's horizon comes from
   `simulation.years_projection` or `financials.project_lifespan`, and

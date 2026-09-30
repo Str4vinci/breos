@@ -262,7 +262,7 @@ def _orientation_sweep():
             "param_tilt": tilt,
             "param_azimuth": azimuth,
             # Best at 30 degrees facing south; west a little better than east.
-            "pv_production_kwh": 1000.0 - (tilt - 30) ** 2 - abs(azimuth - 185),
+            "usable_ac_system_production_kwh": 1000.0 - (tilt - 30) ** 2 - abs(azimuth - 185),
         }
         for tilt in tilts
         for azimuth in azimuths
@@ -271,7 +271,7 @@ def _orientation_sweep():
 
 
 def test_orientation_landscape_marks_the_optimum_and_the_east_west_profile(tmp_path, drawn):
-    plotting.plot_orientation_landscape(_orientation_sweep(), "pv_production_kwh", str(tmp_path))
+    plotting.plot_orientation_landscape(_orientation_sweep(), "usable_ac_system_production_kwh", str(tmp_path))
 
     ax_map, ax_profile = drawn[0].axes[0], drawn[0].axes[1]
     np.testing.assert_array_equal(ax_map.collections[1].get_offsets(), [[180.0, 30.0]])
@@ -291,7 +291,7 @@ def test_orientation_landscape_marks_the_optimum_and_the_east_west_profile(tmp_p
 
 def test_orientation_landscape_minimises_when_asked(tmp_path, drawn):
     frame = _orientation_sweep()
-    frame["lcoe_per_kwh"] = 1.0 / frame["pv_production_kwh"]
+    frame["lcoe_per_kwh"] = 1.0 / frame["usable_ac_system_production_kwh"]
 
     plotting.plot_orientation_landscape(frame, "lcoe_per_kwh", str(tmp_path), maximize=False)
 
@@ -300,9 +300,9 @@ def test_orientation_landscape_minimises_when_asked(tmp_path, drawn):
 
 def test_orientation_landscape_draws_a_tilt_sweep_as_a_profile(tmp_path, drawn):
     # An east-west roof: both arrays take the swept tilt, so only tilt varies.
-    frame = pd.DataFrame({"param_tilt": [30, 10, 50], "pv_production_kwh": [950.0, 900.0, 920.0]})
+    frame = pd.DataFrame({"param_tilt": [30, 10, 50], "usable_ac_system_production_kwh": [950.0, 900.0, 920.0]})
 
-    plotting.plot_orientation_landscape(frame, "pv_production_kwh", str(tmp_path))
+    plotting.plot_orientation_landscape(frame, "usable_ac_system_production_kwh", str(tmp_path))
 
     (ax,) = drawn[0].axes
     np.testing.assert_array_equal(ax.lines[0].get_xdata(), [10, 30, 50])
@@ -314,13 +314,17 @@ def test_orientation_landscape_ticks_negative_azimuths(tmp_path, drawn):
     # A southern-hemisphere sweep: north is 0, east and west are -90 and 90.
     frame = pd.DataFrame(
         [
-            {"param_tilt": tilt, "param_azimuth": azimuth, "pv_production_kwh": 1000.0 - tilt - abs(azimuth)}
+            {
+                "param_tilt": tilt,
+                "param_azimuth": azimuth,
+                "usable_ac_system_production_kwh": 1000.0 - tilt - abs(azimuth),
+            }
             for tilt in (10, 30)
             for azimuth in (-90, -45, 0, 45, 90)
         ]
     )
 
-    plotting.plot_orientation_landscape(frame, "pv_production_kwh", str(tmp_path))
+    plotting.plot_orientation_landscape(frame, "usable_ac_system_production_kwh", str(tmp_path))
 
     for ax in drawn[0].axes[:2]:
         assert [label.get_text() for label in ax.get_xticklabels()] == [
@@ -357,7 +361,7 @@ def test_orientation_landscape_names_a_bad_metric_and_an_empty_one(tmp_path):
 
 def test_orientation_landscape_takes_the_currency_of_a_csv(tmp_path, drawn):
     frame = _orientation_sweep()
-    frame["npv_savings"] = frame["pv_production_kwh"]
+    frame["npv_savings"] = frame["usable_ac_system_production_kwh"]
 
     plotting.plot_orientation_landscape(frame, "npv_savings", str(tmp_path), currency="USD")
     plotting.plot_orientation_landscape(frame, "npv_savings", str(tmp_path))
@@ -367,10 +371,12 @@ def test_orientation_landscape_takes_the_currency_of_a_csv(tmp_path, drawn):
 
 
 def test_orientation_landscape_rejects_a_sweep_with_another_varied_key(tmp_path):
-    frame = pd.DataFrame({"param_tilt": [10, 10], "param_n_modules": [4, 8], "pv_production_kwh": [1.0, 2.0]})
+    frame = pd.DataFrame(
+        {"param_tilt": [10, 10], "param_n_modules": [4, 8], "usable_ac_system_production_kwh": [1.0, 2.0]}
+    )
 
     with pytest.raises(ValueError, match="more than one row"):
-        plotting.plot_orientation_landscape(frame, "pv_production_kwh", str(tmp_path))
+        plotting.plot_orientation_landscape(frame, "usable_ac_system_production_kwh", str(tmp_path))
 
 
 # ---------------------------------------------------------------------------

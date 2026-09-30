@@ -37,7 +37,6 @@ def monthly_to_dicts(results_df: pd.DataFrame, freq: str, timezone: str | None =
 
     columns = [
         "PV_DC",
-        "PV_Production",
         "PV_AC_To_Load",
         "PV_Origin_Battery_AC_To_Load",
         "Houseload",
@@ -54,7 +53,6 @@ def monthly_to_dicts(results_df: pd.DataFrame, freq: str, timezone: str | None =
         direct = float(row["PV_AC_To_Load"])
         battery = float(row["PV_Origin_Battery_AC_To_Load"])
         usable_pv = direct + battery + float(row["PV_AC_Export"])
-        legacy_pv = float(row["PV_Production"])
         consumption = float(row["Houseload"])
         export = float(row["PV_AC_Export"])
         imported = float(row["Import_From_Grid"])
@@ -62,7 +60,6 @@ def monthly_to_dicts(results_df: pd.DataFrame, freq: str, timezone: str | None =
         rows.append(
             {
                 "month": cast(pd.Timestamp, idx).strftime("%b"),
-                "pv_kwh": round(legacy_pv, 2),
                 "pv_dc_generation_kwh": round(pv_dc, 2),
                 "direct_pv_ac_load_kwh": round(direct, 2),
                 "pv_origin_battery_ac_load_kwh": round(battery, 2),
@@ -70,8 +67,8 @@ def monthly_to_dicts(results_df: pd.DataFrame, freq: str, timezone: str | None =
                 "curtailment_dc_kwh": round(float(row["PV_DC_Curtailed"]), 2),
                 "consumption_kwh": round(consumption, 2),
                 "self_consumption_kwh": round(self_consumption, 2),
-                "import_kwh": round(imported, 2),
-                "export_kwh": round(export, 2),
+                "grid_import_kwh": round(imported, 2),
+                "grid_export_kwh": round(export, 2),
                 "grid_independence_pct": round((1 - imported / consumption) * 100, 2) if consumption > 0 else 0.0,
             }
         )
@@ -115,7 +112,6 @@ def yearly_to_dicts(yearly_df: pd.DataFrame, period: dict[str, Any] | None = Non
         item: dict[str, Any] = {
             "year": int(row["Year"]),
             **({"period_start": period["start"], "period_end": period["end"]} if period is not None else {}),
-            "pv_kwh": round(float(row["Legacy_PV_Production_kWh"]), 2),
             "pv_dc_generation_kwh": round(float(row["PV_DC_Generation_kWh"]), 2),
             "direct_pv_ac_load_kwh": round(float(row["Direct_PV_AC_Load_kWh"]), 2),
             "pv_origin_battery_ac_load_kwh": round(float(row["PV_Origin_Battery_AC_Load_kWh"]), 2),
@@ -123,8 +119,8 @@ def yearly_to_dicts(yearly_df: pd.DataFrame, period: dict[str, Any] | None = Non
             "curtailment_dc_kwh": round(float(row["Curtailment_DC_kWh"]), 2),
             "consumption_kwh": round(float(row["Load_kWh"]), 2),
             "self_consumption_kwh": round(float(row["Self_Consumption_kWh"]), 2),
-            "import_kwh": round(float(row["Import_kWh"]), 2),
-            "export_kwh": round(float(row["Export_kWh"]), 2),
+            "grid_import_kwh": round(float(row["Import_kWh"]), 2),
+            "grid_export_kwh": round(float(row["Export_kWh"]), 2),
             "grid_independence_pct": round(float(row["Grid_Independence_%"]), 2),
         }
         if row["Battery_SOH_%"] is not None:
@@ -251,7 +247,6 @@ def build_result(
     cfg = resolved.cfg
     year1 = artifacts.yearly_df.iloc[0]
     yr1_pv = year1["PV_Production_kWh"]
-    legacy_yr1_pv = year1["Legacy_PV_Production_kWh"]
     yr1_export = year1["Export_kWh"]
     yr1_import = year1["Import_kWh"]
     yr1_load = year1["Load_kWh"]
@@ -272,8 +267,6 @@ def build_result(
         "n_modules": cfg["n_modules"],
         "pv_kwp": round(resolved.system_kwp, 3),
         "battery_kwh": cfg["battery_kwh"],
-        # Compatibility field: legacy potential AC conversion of uncurtailed PV.
-        "pv_production_kwh": round(float(legacy_yr1_pv), 2),
         "pv_dc_generation_kwh": round(float(year1["PV_DC_Generation_kWh"]), 2),
         "direct_pv_ac_load_kwh": round(float(year1["Direct_PV_AC_Load_kWh"]), 2),
         "pv_origin_battery_ac_load_kwh": round(float(year1["PV_Origin_Battery_AC_Load_kWh"]), 2),
@@ -363,9 +356,6 @@ def build_result(
                 "co2_avoided_self_consumption_lifetime_kg": lifetime["self"],
                 "co2_avoided_export_lifetime_kg": lifetime["export"],
                 "co2_avoided_total_lifetime_kg": lifetime["total"],
-                # Compatibility aliases retained for the pre-ledger public schema.
-                "co2_avoided_year1_kg": round(co2["CO2_Avoided_Total_kg"], 2),
-                "co2_avoided_total_kg": lifetime["total"],
             }
         )
 
@@ -391,7 +381,6 @@ PERIOD_SKIPPED_FIELDS = (
     "co2_avoided_self_consumption_lifetime_kg",
     "co2_avoided_export_lifetime_kg",
     "co2_avoided_total_lifetime_kg",
-    "co2_avoided_total_kg",
 )
 
 

@@ -1706,7 +1706,7 @@ _COLUMN_LABELS = {
     "azimuth": "Azimuth (°)",
     "grid_independence_pct": "Grid independence (%)",
     "self_consumption_pct": "Self-consumption (%)",
-    "pv_production_kwh": "PV production (kWh)",
+    "usable_ac_system_production_kwh": "Usable AC system production (kWh)",
     "total_investment": "Investment ({currency})",
     "npv_savings": "NPV savings ({currency})",
     "lcoe_per_kwh": "LCOE ({currency}/kWh)",
@@ -2029,7 +2029,7 @@ def plot_orientation_landscape(
     Args:
         sweep: The CSV ``breos sweep`` writes, or its DataFrame. It must have
             one run per orientation.
-        metric: The result column to draw, such as ``pv_production_kwh`` or
+        metric: The result column to draw, such as ``usable_ac_system_production_kwh`` or
             ``npv_savings``.
         results_directory: Directory to save the plot.
         tilt: The tilt parameter, as its sweep key or column.

@@ -189,7 +189,6 @@ def test_lifetime_economics_are_none_and_say_why(battery_runs):
         "co2_avoided_self_consumption_lifetime_kg",
         "co2_avoided_export_lifetime_kg",
         "co2_avoided_total_lifetime_kg",
-        "co2_avoided_total_kg",
     ):
         assert result[key] is None, key
         assert key in result["period"]["skipped_fields"]
@@ -201,7 +200,8 @@ def test_lifetime_economics_are_none_and_say_why(battery_runs):
     # The fixed charge is billed on the window's 7 days, not a year's.
     assert result["fixed_charge_year1_prices"] == round(7 * week._artifacts.costs["daily_power_cost"], 2)
     assert result["co2_avoided_total_year1_kg"] > 0
-    assert result["co2_avoided_year1_kg"] == result["co2_avoided_total_year1_kg"]
+    assert "co2_avoided_year1_kg" not in result
+    assert "co2_avoided_total_kg" not in result
     # Strict JSON, as the CLI writes it.
     json.dumps(result, allow_nan=False)
 

@@ -249,7 +249,6 @@ def build_year_row(
         # Delivered AC: PV straight to load, PV-origin battery discharge to
         # load, and export.
         "PV_Production_kWh": direct_pv_ac_kwh + pv_origin_battery_ac_kwh + total_export,
-        "Legacy_PV_Production_kWh": kwh("PV_Production"),
         "PV_DC_Generation_kWh": kwh("PV_DC"),
         "Direct_PV_AC_Load_kWh": direct_pv_ac_kwh,
         "PV_Origin_Battery_AC_Load_kWh": pv_origin_battery_ac_kwh,

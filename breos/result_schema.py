@@ -25,6 +25,12 @@ its year row, and reports its lifetime economics (``npv_savings``,
 the lifetime CO2) as None. Results of full-year runs are unchanged. 1.8 adds
 ``calendar_year`` to Monte Carlo's ``provenance.load_profile``: the
 ``target_year`` the load was built for (#302).
+
+2.0 removes inert configuration and metadata, duplicate CO2 aliases and
+legacy PV production fields; it renames monthly/yearly grid rows and optimizer
+breakeven columns to use explicit grid-import, grid-export and payback names.
+The migration table is in the result interpretation guide. It does not change
+the timestep ledger or the annual ``PV_Production_kWh`` usable-AC field.
 """
 
-RESULT_SCHEMA_VERSION = "1.8"
+RESULT_SCHEMA_VERSION = "2.0"

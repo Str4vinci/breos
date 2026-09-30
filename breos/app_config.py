@@ -588,11 +588,6 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         doc='Stable BLAST model key; required with `degradation_engine = "blast"` and invalid with the native engine',
         summary="battery.blast_model",
     ),
-    "dc_coupled": AppConfigField(
-        default=True,
-        doc="DC-coupled or hybrid inverter. `False` is not supported and raises",
-        summary="inverter.dc_coupled",
-    ),
     "inverter_efficiency": AppConfigField(
         default=0.96,
         cli_flags=("--inverter-efficiency",),
@@ -1795,10 +1790,6 @@ def _validate_battery_and_degradation(cfg: dict[str, Any]) -> None:
         raise FileNotFoundError(f"battery_temperature file not found: {battery_temperature}")
     if cfg["battery_indoor_model"] is not None:
         INDOOR_MODEL_TABLE.validate(cfg["battery_indoor_model"])
-    if not isinstance(cfg["dc_coupled"], bool):
-        raise TypeError("'dc_coupled' must be a boolean")
-    if not cfg["dc_coupled"]:
-        raise NotImplementedError("BREOS supports DC-coupled/hybrid battery dispatch only")
     check_calendar_model(cfg["calendar_model"], "calendar_model")
     start_date = cfg["start_date"]
     # datetime subclasses date, so it is excluded before the date case.

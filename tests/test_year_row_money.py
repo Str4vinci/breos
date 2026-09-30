@@ -79,6 +79,6 @@ def test_app_rows_and_financial_components_reconcile():
     first = result["financial"][1]
     year1 = result["yearly"][0]
     assert first["cost_import"] == pytest.approx(
-        year1["import_kwh"] * app._resolved.cost_params.electricity_cost, abs=0.02
+        year1["grid_import_kwh"] * app._resolved.cost_params.electricity_cost, abs=0.02
     )
     assert set(YEAR_ROW_MONEY_COLUMNS) == {"Import_Cost", "Export_Revenue", "Fixed_Charge", "Baseline_Import_Cost"}

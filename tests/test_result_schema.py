@@ -41,14 +41,12 @@ def _keys(value, prefix=""):
             yield from _keys(item, prefix)
 
 
-def test_the_result_schema_version_is_1_2():
-    # 1.0 was the currency-neutral names; 1.1 adds the year-1 money components,
-    # 1.2 the economics provenance block.
-    assert RESULT_SCHEMA_VERSION == "1.8"
+def test_the_result_schema_version_is_2_0():
+    assert RESULT_SCHEMA_VERSION == "2.0"
 
 
 def test_app_result_records_the_schema_version_and_currency(replacement_result):
-    assert replacement_result["result_schema_version"] == "1.8"
+    assert replacement_result["result_schema_version"] == "2.0"
     assert replacement_result["provenance"]["currency"] == "EUR"
 
 
@@ -76,6 +74,37 @@ def test_app_result_keys_name_no_currency_and_no_exact_payback(replacement_resul
     assert not [key for key in keys if "eur" in key.lower() or "exact" in key.lower()]
     for renamed in ("total_investment", "npv_savings", "lcoe_per_kwh", "battery_replacement_cost_t0_prices"):
         assert renamed in replacement_result
+
+
+def test_schema_2_removes_legacy_and_duplicate_result_keys(replacement_result):
+    keys = set(_keys(replacement_result))
+    removed = {
+        "pv_production_kwh",
+        "pv_kwh",
+        "co2_avoided_year1_kg",
+        "co2_avoided_total_kg",
+        "provenance.resolved_config.dc_coupled",
+    }
+    assert not removed & keys
+    assert replacement_result["usable_ac_system_production_kwh"] > 0
+    assert replacement_result["usable_ac_system_production_kwh"] == pytest.approx(
+        replacement_result["yearly"][0]["usable_ac_system_production_kwh"], abs=0.01
+    )
+    assert replacement_result["usable_ac_system_production_kwh"] == pytest.approx(
+        replacement_result["self_consumption_kwh"] + replacement_result["grid_export_kwh"], abs=0.02
+    )
+    assert replacement_result["co2_avoided_total_year1_kg"] > 0
+    assert replacement_result["co2_avoided_total_lifetime_kg"] > 0
+    for row in [*replacement_result["monthly"], *replacement_result["yearly"]]:
+        assert row["usable_ac_system_production_kwh"] == pytest.approx(
+            row["direct_pv_ac_load_kwh"] + row["pv_origin_battery_ac_load_kwh"] + row["grid_export_kwh"],
+            abs=0.02,
+        )
+        assert "grid_import_kwh" in row
+        assert "grid_export_kwh" in row
+        assert "pv_kwh" not in row
+        assert "import_kwh" not in row
+        assert "export_kwh" not in row
 
 
 def test_replacement_npv_discounts_each_outlay_from_its_swap_instant(replacement_result):

@@ -164,8 +164,7 @@ class TestAppValidation:
                 "inverter_loading_ratio",
                 id="loading_ratio-bool",
             ),
-            pytest.param({"dc_coupled": False}, NotImplementedError, "DC-coupled", id="ac-coupled"),
-            pytest.param({"dc_coupled": "true"}, TypeError, "dc_coupled", id="dc_coupled-type"),
+            pytest.param({"dc_coupled": True}, ValueError, "Unknown config key.*dc_coupled", id="removed-dc-coupled"),
             # Must fail at config load, not with a late RuntimeError mid-simulation
             pytest.param({"projection_years": 0}, ValueError, "projection_years", id="projection_years"),
             pytest.param(
@@ -481,7 +480,7 @@ class TestAppValidation:
                 }
             )
             app.simulate()
-            return app.result()["pv_production_kwh"]
+            return app.result()["usable_ac_system_production_kwh"]
 
         # The model must flow all the way through App.simulate(); an
         # anisotropic model yields a different PV total than isotropic.
@@ -499,7 +498,7 @@ class TestAppValidation:
                 }
             )
             app.simulate()
-            return app.result()["pv_production_kwh"]
+            return app.result()["usable_ac_system_production_kwh"]
 
         assert _run("physical") != pytest.approx(_run("ashrae"))
 
@@ -515,7 +514,7 @@ class TestAppValidation:
                 }
             )
             app.simulate()
-            return app.result()["pv_production_kwh"]
+            return app.result()["usable_ac_system_production_kwh"]
 
         # A higher ground reflectance must raise PV production end-to-end.
         assert _run(albedo=0.65) > _run()
@@ -534,7 +533,7 @@ class TestAppValidation:
                 }
             )
             app.simulate()
-            return app.result()["pv_production_kwh"]
+            return app.result()["usable_ac_system_production_kwh"]
 
         base = _run(None)
         no_shading = _run({"shading": 0.0})
@@ -592,7 +591,7 @@ class TestAppValidation:
                 }
             )
             app.simulate()
-            return app.result()["pv_production_kwh"]
+            return app.result()["usable_ac_system_production_kwh"]
 
         # A heavily undersized inverter (high DC/AC ratio) must clip yield;
         # before 0.3.0 the App paid clipping-sized inverter CAPEX while
@@ -750,7 +749,7 @@ class TestAppSimulateNoBattery:
             "n_modules",
             "pv_kwp",
             "battery_kwh",
-            "pv_production_kwh",
+            "usable_ac_system_production_kwh",
             "consumption_kwh",
             "self_consumption_kwh",
             "grid_import_kwh",
@@ -761,8 +760,8 @@ class TestAppSimulateNoBattery:
             "payback_year",
             "npv_savings",
             "lcoe_per_kwh",
-            "co2_avoided_year1_kg",
-            "co2_avoided_total_kg",
+            "co2_avoided_total_year1_kg",
+            "co2_avoided_total_lifetime_kg",
             "yearly",
             "monthly",
             "financial",
@@ -785,7 +784,19 @@ class TestAppSimulateNoBattery:
         assert self.result["provenance"]["execution"]["dispatch_path"] == "pv_only_vectorized"
 
     def test_pv_production_positive(self):
-        assert self.result["pv_production_kwh"] > 0
+        assert self.result["usable_ac_system_production_kwh"] > 0
+        assert self.result["yearly"][0]["usable_ac_system_production_kwh"] == pytest.approx(
+            self.result["usable_ac_system_production_kwh"], abs=0.01
+        )
+        assert self.result["usable_ac_system_production_kwh"] == pytest.approx(
+            self.result["direct_pv_ac_load_kwh"]
+            + self.result["pv_origin_battery_ac_load_kwh"]
+            + self.result["grid_export_kwh"],
+            abs=0.02,
+        )
+        assert "pv_production_kwh" not in self.result
+        assert "pv_kwh" not in self.result["yearly"][0]
+        assert "pv_kwh" not in self.result["monthly"][0]
 
     def test_pv_loss_waterfall_reconciles_to_reported_pv(self):
         waterfall = self.result["pv_loss_waterfall"]
@@ -863,6 +874,7 @@ def test_blast_result_reports_model_identity_and_state_provenance(_patch_weather
     assert degradation["engine"] == "blast"
     assert degradation["model_key"] == "lfp_gr_250ah_prismatic"
     assert degradation["model_profile"]["key"] == degradation["model_key"]
+    assert "operating_defaults" not in degradation["model_profile"]
     assert degradation["model_profile"]["upstream"]["commit"] == "d789e00bca60f628de640745c18eb724b07358bd"
     assert degradation["model_profile"]["calibration_basis"] == "cell-model"
     assert degradation["pack_calibrated"] is False
@@ -925,7 +937,7 @@ def test_monthly_rows_follow_the_local_year_of_fixed_offset_weather(monkeypatch,
         "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"
     ]  # fmt: skip
     year_one = result["yearly"][0]
-    for key in ("pv_kwh", "consumption_kwh", "import_kwh", "export_kwh"):
+    for key in ("usable_ac_system_production_kwh", "consumption_kwh", "grid_import_kwh", "grid_export_kwh"):
         assert sum(row[key] for row in monthly) == pytest.approx(year_one[key], abs=0.1)
 
 
@@ -959,7 +971,7 @@ class TestAppSimulateMultiArray:
         assert self.result["financial"][-1]["year"] == 5
 
     def test_multi_array_energy_positive(self):
-        assert self.result["pv_production_kwh"] > 0
+        assert self.result["usable_ac_system_production_kwh"] > 0
 
 
 class TestAppBifacialConfig:
@@ -1089,7 +1101,7 @@ class TestAppSimulateTracking:
         )
         app.simulate()
         result = app.result()
-        assert result["pv_production_kwh"] > 0
+        assert result["usable_ac_system_production_kwh"] > 0
         json.dumps(result)
 
     def test_dual_axis_runs(self, _patch_weather):
@@ -1105,7 +1117,7 @@ class TestAppSimulateTracking:
         )
         app.simulate()
         result = app.result()
-        assert result["pv_production_kwh"] > 0
+        assert result["usable_ac_system_production_kwh"] > 0
 
     def test_tracking_beats_fixed_via_app(self, _patch_weather):
         """At the App level, single-axis (no backtrack, ±90°) should beat optimal fixed tilt."""
@@ -1120,7 +1132,7 @@ class TestAppSimulateTracking:
         fixed.simulate()
         tracked = App({**common, "tracking": "single_axis", "backtrack": False, "max_angle": 90.0})
         tracked.simulate()
-        assert tracked.result()["pv_production_kwh"] > fixed.result()["pv_production_kwh"]
+        assert tracked.result()["usable_ac_system_production_kwh"] > fixed.result()["usable_ac_system_production_kwh"]
 
     def test_per_array_tracking_flows_through(self, _patch_weather):
         """Tracking keys on pv_arrays entries must reach calculate_multi_array_production_breakdown."""
@@ -1158,7 +1170,10 @@ class TestAppSimulateTracking:
         # Tracking key must echo into result
         assert tracked_app.result()["pv_arrays"][0].get("tracking") == "single_axis"
         # And actually change production vs fixed
-        assert tracked_app.result()["pv_production_kwh"] != fixed_app.result()["pv_production_kwh"]
+        assert (
+            tracked_app.result()["usable_ac_system_production_kwh"]
+            != fixed_app.result()["usable_ac_system_production_kwh"]
+        )
 
 
 class TestAppSimulateWithBattery:
@@ -1275,5 +1290,5 @@ def test_multiyear_battery_inventory_and_pv_origin_cross_year_boundary(_patch_we
         year2["direct_pv_ac_load_kwh"] + year2["pv_origin_battery_ac_load_kwh"], abs=0.02
     )
     assert year2["usable_ac_system_production_kwh"] == pytest.approx(
-        year2["self_consumption_kwh"] + year2["export_kwh"], abs=0.02
+        year2["self_consumption_kwh"] + year2["grid_export_kwh"], abs=0.02
     )

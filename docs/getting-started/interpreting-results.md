@@ -28,9 +28,13 @@ cost projection and Monte Carlo trajectories, `"1.5"` adds `constraints` and
 columns to the Pareto rows of a search with `[emissions]`, `"1.6"` adds
 `inverter_ac_rating_kw` to the `resolved_config` of App and Monte Carlo
 results, `"1.7"` adds the [`period` keys](#period-runs) of a run over part
-of a year, and `"1.8"`, which 0.7.0 reports, adds `calendar_year`, the
+of a year, and `"1.8"` adds `calendar_year`, the
 `target_year` the load was built for, to Monte Carlo's
 `provenance.load_profile`.
+Version "2.0" removes configuration and metadata fields without an
+operational effect, removes duplicate CO2 and legacy PV keys, and renames
+monthly/yearly grid fields and optimizer payback columns. The migration table
+below lists every change.
 A renamed or removed key bumps the
 major version, an added key the minor. A result without the key predates 1.0.
 
@@ -42,7 +46,6 @@ major version, an added key the minor. A result without the key predates 1.0.
 | `n_modules` | Number of PV modules used in the simulation |
 | `pv_kwp` | System DC nameplate capacity (kWp) |
 | `battery_kwh` | Battery capacity (kWh) |
-| `pv_production_kwh` | Legacy AC-equivalent non-curtailed PV compatibility field |
 | `usable_ac_system_production_kwh` | PV-origin AC delivered to load or export in year 1 |
 | `pv_dc_generation_kwh` | PV DC generated before dispatch |
 | `direct_pv_ac_load_kwh` | Direct PV AC delivered to load |
@@ -117,13 +120,43 @@ Present only when `emissions_country` is set:
 | `co2_avoided_self_consumption_lifetime_kg` | Lifetime behind-the-meter benefit |
 | `co2_avoided_export_lifetime_kg` | Lifetime exported-generation benefit |
 | `co2_avoided_total_lifetime_kg` | Sum of the two lifetime pathways |
-| `co2_avoided_year1_kg`, `co2_avoided_total_kg` | Compatibility aliases for the corresponding total fields |
 
 Self-consumption uses the preset's avoided-grid factor. Export uses
 `export_emissions_factor_gco2_kwh` when configured; otherwise it explicitly
 falls back to the same avoided-grid factor. Curtailed energy, conversion and
 storage losses, initial SOC, and PV energy remaining stored at the reporting
 boundary receive no credit.
+
+## Migrating from result schema 1.8
+
+Schema 2.0 removes the old names without compatibility aliases. Update readers
+using the following mappings:
+
+| Schema 1.8 field | Schema 2.0 field or action |
+|---|---|
+| App config `dc_coupled` and `provenance.resolved_config.dc_coupled` | Remove the config key; it is now unknown. BREOS always uses its supported DC-coupled/hybrid dispatch. |
+| `BatteryModelProfile.operating_defaults`, discovery JSON `operating_defaults`, and serialized `model_profile.operating_defaults` | Remove the read. Profiles did not define any defaults; this field was always empty. |
+| `co2_avoided_year1_kg` | Remove; read the existing `co2_avoided_total_year1_kg` field |
+| `co2_avoided_total_kg` | Remove; read the existing `co2_avoided_total_lifetime_kg` field |
+| Top-level `pv_production_kwh` | Remove; read the existing `usable_ac_system_production_kwh` field, which reports a different quantity |
+| `monthly[].pv_kwh`, `yearly[].pv_kwh` | Remove; read each row's existing `usable_ac_system_production_kwh`, which reports a different quantity |
+| Shared annual `Legacy_PV_Production_kWh` | Remove; read the existing `PV_Production_kWh`, which already means usable AC production |
+| Monte Carlo `mean_pv_production_kwh` | Remove; read the existing `mean_usable_ac_system_production_kwh` |
+| `monthly[].import_kwh`, `yearly[].import_kwh` | Corresponding `grid_import_kwh` row field; values are unchanged |
+| `monthly[].export_kwh`, `yearly[].export_kwh` | Corresponding `grid_export_kwh` row field; values are unchanged |
+| Optimizer `Projected_Breakeven_Year` | `Projected_Payback_Year` |
+| Optimizer `Projected_Breakeven_Year_Interpolated` | `Projected_Payback_Year_Interpolated` |
+
+The removed legacy PV fields and `usable_ac_system_production_kwh` report
+different quantities. The old value counted PV DC sent into storage before
+storage losses, along with direct and exported AC. The existing usable-AC
+field counts direct AC delivered to load, PV-origin battery AC delivered to
+load, and exported AC. This is also the retained definition of annual
+`PV_Production_kWh`. The timestep ledger still carries its `PV_Production`
+field, and dispatch values do not change.
+
+Schema 2.0 does not normalize enum spelling in echoed provenance: for example,
+the configured spelling remains in `provenance.resolved_config`.
 
 ## Multi-array systems
 
@@ -192,11 +225,11 @@ A list of 12 dicts, one per month of year 1:
 ```python
 {
     "month": "Jan",
-    "pv_kwh": 245.3,
+    "usable_ac_system_production_kwh": 245.3,
     "consumption_kwh": 412.5,
     "self_consumption_kwh": 180.2,
-    "import_kwh": 232.3,
-    "export_kwh": 65.1,
+    "grid_import_kwh": 232.3,
+    "grid_export_kwh": 65.1,
     "grid_independence_pct": 43.7,
 }
 ```
@@ -235,7 +268,7 @@ A run with a [`[period]`](recipes.md#simulate-part-of-a-year) window
 simulates that window once, with no projection years. Its result keeps the
 full-year keys, with these differences:
 
-- The energy keys (`pv_production_kwh`, `grid_import_kwh`,
+- The energy keys (`usable_ac_system_production_kwh`, `grid_import_kwh`,
   `self_consumption_kwh` and the rest), the [year-1 money
   keys](#year-1-money-keys), the year-1 CO2 keys and the PV loss waterfall
   cover the window. The waterfall's `basis` is `"period"`. The fixed charge
