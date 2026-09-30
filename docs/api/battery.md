@@ -46,8 +46,8 @@ and daily mean absolute SOC.
 ## Degradation primitives
 
 Low-level update functions for the degradation model. The energy balance
-ages the pack once per daily degradation window, not each timestep. It calls
-`update_battery_soh_calendar` once per window, with that window's mean cell
+ages the pack once per daily degradation window, not each timestep. With the
+native engine, it calls `update_battery_soh_calendar` once per window, with that window's mean cell
 temperature and mean absolute SOC. When resistance fade is enabled, it also
 calls the two resistance functions once per window. It does not call
 `update_battery_soh_cyclewise`: its cycle step takes the window's cycles from

@@ -1618,9 +1618,13 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   cycle does; a missing one used to be read as a full cycle. BREOS has no
   public replacement for the two detectors. To count cycles outside a
   simulation, call `rainflow.extract_cycles` on the SOC series directly,
-  which is what `detect_cycles_rainflow` wrapped. To age a pack from a whole
-  SOC series, `update_battery_soh_cyclewise` still counts its cycles with
-  rainflow.
+  which is what `detect_cycles_rainflow` wrapped. The wrapper also built the
+  dicts that `update_battery_resistance_cyclewise` takes: from each
+  `(range, mean, count, i_start, i_end)` tuple of an SOC series in percent,
+  `doc` is `range / 100`, `count` is `count`, and `mean_c_rate` is `doc`
+  divided by the hours from step `i_start` to step `i_end`. To age a pack
+  from a whole SOC series, `update_battery_soh_cyclewise` still counts its
+  cycles with rainflow.
 - `breos.battery.k_c_rate_R` and `k_doc_R`, also in the top-level namespace
   ([#186](https://github.com/Str4vinci/breos/issues/186)). They were the
   resistance-growth factors of `update_battery_resistance_cyclewise`, which
