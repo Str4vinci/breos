@@ -102,7 +102,7 @@ def test_sweep_heatmap_colours_cell_text_by_the_cell_luminance(tmp_path, drawn):
 
     # The two ends of RdBu are dark, its centre is near white.
     colours = {text.get_text(): text.get_color() for text in drawn[0].axes[0].texts}
-    assert colours == {"+10.0": "white", "+0.0": "black", "-10.0": "white", "+0.5": "black"}
+    assert colours == {"+10.0": "white", "+0.0": "black", "\u221210.0": "white", "+0.5": "black"}
 
 
 def test_sweep_heatmap_reads_the_csv_and_named_parameters(tmp_path, drawn):
@@ -222,6 +222,32 @@ def test_sweep_heatmap_centres_gains_and_losses_on_zero(tmp_path, drawn):
     # Explicit limits keep the sequential scale.
     assert (fixed.norm.vmin, fixed.norm.vmax) == (-100.0, 400.0)
     assert fixed.get_cmap().name == "YlGnBu"
+
+
+def test_sweep_heatmap_centres_an_all_loss_sweep_on_zero(tmp_path, drawn):
+    frame = _sweep([1.0] * 4)
+    frame["npv_savings"] = [-100.0, -200.0, -300.0, -400.0]
+
+    plotting.plot_sweep_heatmap(frame, "npv_savings", str(tmp_path))
+
+    ax = drawn[0].axes[0]
+    # Losses only still read against break-even, not as a sequential scale.
+    assert (ax.images[0].norm.vmin, ax.images[0].norm.vcenter, ax.images[0].norm.vmax) == (-400.0, 0.0, 400.0)
+    assert ax.images[0].get_cmap().name == "RdBu"
+    # Cell text uses the minus sign the colour bar uses.
+    assert [text.get_text() for text in ax.texts] == ["\u2212100", "\u2212300", "\u2212200", "\u2212400"]
+
+
+def test_sweep_heatmap_ignores_currencies_when_nothing_is_money(tmp_path, drawn):
+    a, b = _sweep([40.0, 60.0, 45.0, 70.0]), _sweep([30.0, 55.0, 35.0, 50.0])
+    a.attrs["currency"], b.attrs["currency"] = "CHF", "EUR"
+
+    plotting.plot_sweep_heatmap(a, "grid_independence_pct", str(tmp_path), diff=b, labels=("Zurich", "Porto"))
+
+    assert drawn[0].axes[1].get_ylabel() == "Grid independence, Zurich − Porto (percentage points)"
+    a["npv_savings"], b["npv_savings"] = [1.0] * 4, [2.0] * 4
+    with pytest.raises(ValueError, match=r"different currencies \(CHF, EUR\)"):
+        plotting.plot_sweep_heatmap(a, "npv_savings", str(tmp_path), diff=b)
 
 
 # ---------------------------------------------------------------------------

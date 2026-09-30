@@ -352,9 +352,9 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
     result column of a two-parameter sweep. With `diff=`, a second sweep over
     the same grid, it draws the difference, for example the same sizing grid
     at two locations; a difference of a percentage is labelled in percentage
-    points. A difference, and a metric with both gains and losses such as
-    `npv_savings`, use a diverging colour scale centred on zero. `labels`
-    without `diff` raises `ValueError`.
+    points. A difference, and a metric with a negative value such as a loss
+    in `npv_savings`, use a diverging colour scale centred on zero, unless
+    `vmin` or `vmax` is given. `labels` without `diff` raises `ValueError`.
   - `plot_orientation_landscape(sweep, metric, results_directory, tilt="tilt",
     azimuth="azimuth", maximize=True, ..., currency=None, ...)` maps a tilt ×
     azimuth sweep, marks the best orientation and draws the east-west profile

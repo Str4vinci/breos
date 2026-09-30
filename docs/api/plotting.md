@@ -93,8 +93,9 @@ plot_pareto_front(result, "plots", color_by="Battery_kWh")
 A swept key names the swept `param_` column, not the result column of the
 same name, which holds the App's resolved value. A difference of a
 percentage, such as grid independence, is labelled in percentage points. A
-difference, and a metric with both gains and losses such as `npv_savings`,
-use a diverging colour scale centred on zero.
+difference, and a metric with a negative value such as a loss in
+`npv_savings`, use a diverging colour scale centred on zero, unless `vmin`
+or `vmax` is given.
 
 Sweep CSVs do not record their currency. Pass `currency="EUR"` (or another
 code) to label their money; without it, money labels name no currency, such

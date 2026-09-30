@@ -1741,6 +1741,18 @@ def _column_label(column: str, currency: Optional[str]) -> str:
     return label.format(currency=currency)
 
 
+def _money_currency(frames: Sequence[pd.DataFrame], currency: Optional[str], columns: Sequence[str]) -> Optional[str]:
+    """:func:`_label_currency` when a label of ``columns`` shows money, else None.
+
+    Only a money label needs the inputs to agree on a currency, so a
+    grid-independence difference between a CHF and a EUR sweep still plots.
+    """
+    names = [str(column).removeprefix("param_").removeprefix("resolved_") for column in columns]
+    if any("{currency}" in _COLUMN_LABELS.get(name, "") for name in names):
+        return _label_currency(frames, currency)
+    return None
+
+
 def _difference_label(metric: str, label: str, labels: Optional[Tuple[str, str]]) -> str:
     """Colour-bar label of a difference: a percentage becomes percentage points."""
     name, unit = label, ""
@@ -1846,9 +1858,10 @@ def plot_sweep_heatmap(
     tariffs. Cells in only one of the two sweeps stay blank. A difference of
     a percentage, such as grid independence, is labelled in percentage points.
 
-    A difference, and a metric with both gains and losses such as
+    A difference, and a metric with a negative value such as a loss in
     ``npv_savings``, are drawn on a diverging scale centred on zero and
-    symmetric about it. Other metrics get a sequential scale.
+    symmetric about it, unless ``vmin`` or ``vmax`` is given. Other metrics
+    get a sequential scale.
 
     Args:
         sweep: The CSV ``breos sweep`` writes, or its DataFrame.
@@ -1867,7 +1880,8 @@ def plot_sweep_heatmap(
         cmap: Matplotlib colormap name. Defaults to ``RdBu`` on a diverging
             scale, else ``YlGnBu``.
         vmin: Colour-scale minimum (auto if None). Giving ``vmin`` or
-            ``vmax`` turns a metric with both signs to the sequential scale.
+            ``vmax`` turns a metric with a negative value to the sequential
+            scale.
             With ``diff`` the scale is always symmetric about zero, and
             ``vmin`` and ``vmax`` are not read.
         vmax: Colour-scale maximum (auto if None).
@@ -1902,10 +1916,10 @@ def plot_sweep_heatmap(
 
     if diff is None:
         values = grid
-        label_currency = _label_currency([frame], currency)
+        label_currency = _money_currency([frame], currency, [metric, x_column, y_column])
     else:
         other = _read_table(diff)
-        label_currency = _label_currency([frame, other], currency)
+        label_currency = _money_currency([frame, other], currency, [metric, x_column, y_column])
         # The difference table is resolved on its own, so either may name a key bare or as param_.
         other_x = _sweep_column(other, x_column.removeprefix("param_"))
         other_y = _sweep_column(other, y_column.removeprefix("param_"))
@@ -1923,8 +1937,8 @@ def plot_sweep_heatmap(
             label = _difference_label(metric, label, labels)
         else:
             label = f"{label} ({labels[0]} − {labels[1]})" if labels else f"{label} difference"
-    # Zero-centred when the cells are differences, or gains and losses.
-    signed = finite.min() < 0 < finite.max() and vmin is None and vmax is None
+    # Zero-centred when the cells are differences or include a loss.
+    signed = finite.min() < 0 and vmin is None and vmax is None
     if diff is not None or signed:
         abs_max = float(np.abs(finite).max()) or 1.0
         norm: Normalize = TwoSlopeNorm(vmin=-abs_max, vcenter=0, vmax=abs_max)
@@ -1958,7 +1972,7 @@ def plot_sweep_heatmap(
                     ax.text(
                         j,
                         i,
-                        format(val, number_format),
+                        format(val, number_format).replace("-", "\u2212"),
                         ha="center",
                         va="center",
                         color=text_color,
@@ -2045,7 +2059,7 @@ def plot_orientation_landscape(
     metric = _metric_column(frame, metric)
     if not np.isfinite(pd.to_numeric(frame[metric], errors="coerce").to_numpy(dtype=float)).any():
         raise ValueError(f"The sweep has no finite {metric} value")
-    label = metric_label or _column_label(metric, _label_currency([frame], currency))
+    label = metric_label or _column_label(metric, _money_currency([frame], currency, [metric]))
     pick = np.nanargmax if maximize else np.nanargmin
 
     if azimuth_column is None:
@@ -2180,7 +2194,9 @@ def plot_pareto_front(
     frame = _read_table(designs)
     x_column, y_column = _sweep_column(frame, x), _sweep_column(frame, y)
     color_column = None if color_by is None else _sweep_column(frame, color_by)
-    label_currency = _label_currency([frame], currency)
+    label_currency = _money_currency(
+        [frame], currency, [x_column, y_column] + ([] if color_column is None else [color_column])
+    )
     x_values = pd.to_numeric(frame[x_column], errors="coerce").to_numpy(dtype=float)
     y_values = pd.to_numeric(frame[y_column], errors="coerce").to_numpy(dtype=float)
     finite = np.isfinite(x_values) & np.isfinite(y_values)
