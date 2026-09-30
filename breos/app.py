@@ -109,15 +109,14 @@ class App:
                 UserWarning,
                 stacklevel=2,
             )
-        self._cfg = self._resolved.cfg
         self._input_repairs = input_repair_records(input_repairs)
         self._result: dict[str, Any] | None = None
         self._artifacts: SimulationArtifacts | None = None
 
     def simulate(self) -> None:
         """Run the full simulation pipeline."""
-        artifacts = run_app_simulation(self._cfg, self._resolved, self._runtime_dependencies())
-        self._result = build_app_result(self._cfg, self._resolved, artifacts, input_repairs=self._input_repairs)
+        artifacts = run_app_simulation(self._resolved, self._runtime_dependencies())
+        self._result = build_app_result(self._resolved, artifacts, input_repairs=self._input_repairs)
         self._artifacts = artifacts
 
     def revalue(self, changes: Mapping[str, Any]) -> dict[str, Any]:
@@ -159,10 +158,8 @@ class App:
                 f"Build a new App for it. Keys revalue() accepts: {', '.join(sorted(REVALUATION_KEYS))}."
             )
         resolved = resolve_app_config(config)
-        artifacts, method = revalue_app_simulation(
-            resolved.cfg, resolved, self._artifacts, self._runtime_dependencies()
-        )
-        result = build_app_result(resolved.cfg, resolved, artifacts, input_repairs=self._input_repairs)
+        artifacts, method = revalue_app_simulation(resolved, self._artifacts, self._runtime_dependencies())
+        result = build_app_result(resolved, artifacts, input_repairs=self._input_repairs)
         result["provenance"]["revaluation"] = {"method": method, "changed_keys": changed}
         return result
 

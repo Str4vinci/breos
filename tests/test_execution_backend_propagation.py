@@ -289,11 +289,7 @@ def test_missing_numba_is_reported_before_app_prepares_inputs(monkeypatch):
     monkeypatch.setattr(app_runner, "prepare_simulation_inputs", _must_not_run("inputs were prepared"))
 
     with pytest.raises(_numba_dispatch.NumbaUnavailableError):
-        app_runner.run_app_simulation(
-            {**resolve_app_config({**BASE_CONFIG, "execution_backend": "numba"}).cfg},
-            resolve_app_config({**BASE_CONFIG, "execution_backend": "numba"}),
-            None,
-        )
+        app_runner.run_app_simulation(resolve_app_config({**BASE_CONFIG, "execution_backend": "numba"}), None)
 
 
 def test_missing_numba_is_reported_before_the_first_candidate(monkeypatch):
@@ -357,8 +353,6 @@ def test_numba_provenance_always_carries_a_cache_field():
     pytest.importorskip("numba", reason="the compiled backend needs the breos[fast] extra")
 
     assert backend_provenance("numba")["jit_cache"] == "unknown"
-    assert backend_provenance("numba", jit_cache_states=["warm", "warm"])["jit_cache"] == "warm"
-    assert backend_provenance("numba", jit_cache_states=["warm", "cold"])["jit_cache"] == "cold"
     assert "jit_cache" not in backend_provenance("python")
 
 

@@ -1638,6 +1638,19 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 - **The `validation` and `location-tools` extras.** `validation` installed
   nothing. `location-tools` only served `tools/add_location.py`, which is not
   in the wheel; install `geopy` and `timezonefinder` to run it.
+- Pass-through helpers in the App runner, configuration and execution
+  modules, with no deprecation period. `breos.runners` no longer re-exports
+  `run_app_simulation` and `SimulationArtifacts`; import them from
+  `breos.runners.app`. `breos.app_config.load_json` only called
+  `breos.resources.load_config_json`; call that instead.
+  `breos.execution.backend_provenance` drops its `jit_cache_states`
+  argument: a `numba` record's `jit_cache` is `"unknown"` until the caller
+  sets it, for example to `aggregate_jit_cache_states(states)`. The App
+  runner functions take the resolved configuration without the `cfg` dict it
+  already holds: `run_app_simulation(resolved, deps)`,
+  `revalue_app_simulation(resolved, artifacts, deps)` and
+  `breos.app_results.build_result(resolved, artifacts)`. Results are
+  unchanged bit for bit.
 
 ### Documentation
 - The release checklist records that `v0.5.0`, `v0.5.1` and `v0.6.0` are

@@ -13,19 +13,20 @@ import sys
 import tomllib
 import warnings
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Callable, Sequence
 
 from breos.app import App
 from breos.app_config import (
     ALLOWED_CONFIG_KEYS,
     APP_CONFIG_FIELDS,
     NESTED_TABLE_SPECS,
+    ResolvedAppConfig,
     normalize_config_keys,
     override_config,
     resolve_app_config,
     validate_montecarlo_config,
 )
-from breos.app_inputs import input_configuration_key, reuse_prepared_inputs
+from breos.app_inputs import _input_cache_key, reuse_prepared_inputs
 from breos.config_schema import MappingOf
 from breos.degradation import get_battery_model_profile, list_battery_models
 from breos.execution import EXECUTION_BACKENDS
@@ -145,6 +146,11 @@ _SUMMARY_SECTIONS = ("location", "pv", "inverter", "load", "battery", "economics
 
 
 def _resolved_config_summary(config: dict[str, Any]) -> dict[str, Any]:
+    """Summarise a raw App config: :func:`_config_summary` of its resolution."""
+    return _config_summary(resolve_app_config(config))
+
+
+def _config_summary(resolved: ResolvedAppConfig) -> dict[str, Any]:
     """Summarise a resolved App config without fetching weather or simulating.
 
     Every registered key appears at its ``AppConfigField.summary`` place, as
@@ -155,7 +161,6 @@ def _resolved_config_summary(config: dict[str, Any]) -> dict[str, Any]:
     then replace or join them. Key order within a section follows the
     registry.
     """
-    resolved = resolve_app_config(config)
     cfg = resolved.cfg
     summary: dict[str, Any] = {"valid": True, **{section: {} for section in _SUMMARY_SECTIONS}}
     for name, field in APP_CONFIG_FIELDS.items():
@@ -558,16 +563,16 @@ def _sweep(args: argparse.Namespace) -> int:
     # combination (a tariff period the schedule lacks) fails in seconds, not
     # after the runs before it. Each App is built only when it runs, so a
     # finished run's result is not held until the sweep ends.
-    runs = [
-        (varied, run_config, _resolved_config_summary(run_config))
-        for varied, run_config in _sweep_run_configs(config, grid)
-    ]
-
+    runs: list[tuple[dict[str, Any], dict[str, Any], dict[str, Any]]] = []
     # Runs that differ only in keys the input stage never reads (a tariff, a
     # battery size) share one preparation of weather, PV and load (#181).
     # They run grouped by input configuration, so the one-entry cache serves
     # each group; the CSV keeps the grid order.
-    input_keys = [input_configuration_key(run_config) for _, run_config, _ in runs]
+    input_keys: list[str | None] = []
+    for varied, run_config in _sweep_run_configs(config, grid):
+        resolved = resolve_app_config(run_config)
+        runs.append((varied, run_config, _config_summary(resolved)))
+        input_keys.append(_input_cache_key(resolved.cfg))
     first_seen: dict[str | None, int] = {}
     for index, key in enumerate(input_keys):
         first_seen.setdefault(key, index)
@@ -575,10 +580,10 @@ def _sweep(args: argparse.Namespace) -> int:
     by_index: dict[int, dict[str, Any]] = {}
     with reuse_prepared_inputs():
         for index in order:
-            varied, run_config, resolved = runs[index]
+            varied, run_config, summary = runs[index]
             app = App(run_config)
             app.simulate()
-            by_index[index] = _sweep_row(index + 1, varied, resolved, app.result())
+            by_index[index] = _sweep_row(index + 1, varied, summary, app.result())
     rows = [by_index[index] for index in range(len(runs))]
 
     _write_sweep_csv(rows, args.output)
@@ -608,32 +613,37 @@ def _montecarlo(args: argparse.Namespace) -> int:
     if not weather_file:
         raise ValueError("Monte Carlo needs a weather file: set [montecarlo].weather_file or pass --weather-file.")
 
-    def _pick(cli_value: Any, key: str, default: Any) -> Any:
+    # Each setting's flag and conversion; None for a setting with no flag or
+    # no conversion. A flag beats [montecarlo], and a setting neither gives
+    # keeps its MonteCarloSettings default. An unset execution_backend lets
+    # run_montecarlo fall back to the top-level key, the same order a Python
+    # caller gets.
+    options: dict[str, tuple[Any, Callable[[Any], Any] | None]] = {
+        "n_runs": (args.runs, int),
+        "years_per_run": (args.years, None),
+        "load_uncertainty": (args.load_uncertainty, float),
+        "load_distribution": (args.load_distribution, str),
+        "target_year": (args.target_year, int),
+        "weather_start_year": (args.weather_start_year, None),
+        "weather_end_year": (args.weather_end_year, None),
+        "seed": (args.seed, None),
+        "min_load_scale": (None, float),
+        "max_load_scale": (None, None),
+        "preserve_irradiance_energy": (args.preserve_irradiance_energy, bool),
+        "collect_yearly": (args.collect_yearly, bool),
+        "n_procs": (args.n_procs, int),
+        "execution_backend": (args.execution_backend, None),
+    }
+    chosen: dict[str, Any] = {}
+    for name, (cli_value, convert) in options.items():
         if cli_value is not None:
-            return cli_value
-        if key in mc_cfg:
-            return mc_cfg[key]
-        return default
-
-    settings = MonteCarloSettings(
-        weather_file=str(weather_file),
-        n_runs=int(_pick(args.runs, "n_runs", 100)),
-        years_per_run=_pick(args.years, "years_per_run", None),
-        load_uncertainty=float(_pick(args.load_uncertainty, "load_uncertainty", 0.10)),
-        load_distribution=str(_pick(args.load_distribution, "load_distribution", "normal")),
-        target_year=int(_pick(args.target_year, "target_year", 2025)),
-        weather_start_year=_pick(args.weather_start_year, "weather_start_year", None),
-        weather_end_year=_pick(args.weather_end_year, "weather_end_year", None),
-        seed=_pick(args.seed, "seed", None),
-        min_load_scale=float(mc_cfg.get("min_load_scale", 0.0)),
-        max_load_scale=mc_cfg.get("max_load_scale"),
-        preserve_irradiance_energy=bool(_pick(args.preserve_irradiance_energy, "preserve_irradiance_energy", False)),
-        collect_yearly=bool(_pick(args.collect_yearly, "collect_yearly", False)),
-        n_procs=int(_pick(args.n_procs, "n_procs", 1)),
-        # None lets run_montecarlo fall back to the top-level key, the same
-        # order a Python caller gets.
-        execution_backend=_pick(args.execution_backend, "execution_backend", None),
-    )
+            value = cli_value
+        elif name in mc_cfg:
+            value = mc_cfg[name]
+        else:
+            continue
+        chosen[name] = convert(value) if convert is not None else value
+    settings = MonteCarloSettings(weather_file=str(weather_file), **chosen)
 
     result = run_montecarlo(config, settings)
 

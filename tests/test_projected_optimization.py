@@ -70,6 +70,7 @@ def test_projected_evaluator_carries_physical_and_degradation_state(monkeypatch)
             }
         )
         replacements = 1 if year == 2 else 0
+        results["Battery_Replaced"] = [False, bool(replacements)]
         results["Battery_Replaced_Capacity_Wh"] = [0.0, 2000.0 * replacements]
         return results, 0.0, pd.DataFrame(), replacements, degradation, {"year": year}
 

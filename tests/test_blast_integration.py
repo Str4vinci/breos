@@ -15,6 +15,7 @@ import pandas as pd
 import pytest
 
 import breos.projection as projection_module
+from breos.app_config import resolve_app_config
 from breos.app_inputs import PreparedSimulationInputs
 from breos.battery import BatteryConfig, simulate_energy_balance
 from breos.runners import app as app_runner
@@ -178,42 +179,28 @@ def test_blast_multiple_replacements_through_runner(monkeypatch):
     inflation_rate = 0.03
     max_soc = 0.9
     battery_kwh = 5.0
-    cfg = {
-        "resolution": "h",
-        "battery_kwh": battery_kwh,
-        "projection_years": 20,
-        "pv_degradation_rate": 0.005,
-        "n_modules": 10,
-        "inverter_loading_ratio": 1.25,
-        "battery_rte": None,
-        "battery_max_charge_power_w": None,
-        "battery_max_discharge_power_w": None,
-        "battery_power_limit_c_rate": None,
-        "enable_resistance_fade": False,
-        "battery_eol_percentage": 0.8,
-        "battery_max_soc": max_soc,
-        "battery_min_soc": 0.1,
-        "dc_coupled": True,
-        "inverter_efficiency": 0.96,
-        "calendar_model": "naumann_lam_field_calibrated",
-        "inflation_rate": inflation_rate,
-        "sell_price_inflation": 0.0,
-        "discount_rate": 0.04,
-        "degradation_engine": "blast",
-        "blast_model": "nmc811_grsi_lgmj1_4ah",
-    }
-    resolved = SimpleNamespace(
-        cost_params=SimpleNamespace(battery_cost_per_kwh=500.0),
-        avg_module_power_w=400.0,
-        inverter_ac_capacity_w=cfg["n_modules"] * 400.0 / cfg["inverter_loading_ratio"],
-        tariff=None,
-        smart_charging=None,
-        emissions_params=None,
+    resolved = resolve_app_config(
+        {
+            "location": "porto",
+            "n_modules": 10,
+            "annual_consumption_kwh": 4000,
+            "battery_kwh": battery_kwh,
+            "projection_years": 20,
+            "pv_degradation_rate": 0.005,
+            "battery_eol_percentage": 0.8,
+            "battery_max_soc": max_soc,
+            "inflation_rate": inflation_rate,
+            "sell_price_inflation": 0.0,
+            "discount_rate": 0.04,
+            "degradation_engine": "blast",
+            "blast_model": "nmc811_grsi_lgmj1_4ah",
+        }
     )
+    cfg = resolved.cfg
 
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        artifacts = app_runner.run_app_simulation(cfg, resolved, deps=SimpleNamespace())
+        artifacts = app_runner.run_app_simulation(resolved, deps=SimpleNamespace())
 
     assert len(captured_years) == cfg["projection_years"]
     per_year_counts = [year_result[3] for year_result in captured_years]

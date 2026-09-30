@@ -136,6 +136,7 @@ def _stub_projection_balance(monkeypatch, index, captured=None, **columns):
             "Battery_Energy_End",
             "Battery_PV_Origin_Energy_End",
             "Battery_Grid_Origin_Energy_End",
+            "Battery_Replaced",
             "Battery_Replaced_Capacity_Wh",
         ],
     )

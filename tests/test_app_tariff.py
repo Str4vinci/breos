@@ -66,7 +66,7 @@ def test_a_schedule_finer_than_every_app_step_names_what_it_needs(monkeypatch):
 
 def _artifacts(config):
     app = App(config)
-    return app, run_app_simulation(app._cfg, app._resolved, app._runtime_dependencies())
+    return app, run_app_simulation(app._resolved, app._runtime_dependencies())
 
 
 @pytest.mark.usefixtures("_patch_weather")

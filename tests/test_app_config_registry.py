@@ -1,6 +1,6 @@
 """Characterization tests for declarative App configuration metadata."""
 
-import argparse
+import re
 from datetime import date
 
 import pytest
@@ -76,63 +76,71 @@ EXPECTED_DEFAULTS = {
     "inverter_ac_rating_kw": None,
 }
 
-EXPECTED_CLI_FIELDS = [
-    "location",
-    "n_modules",
-    "annual_consumption_kwh",
-    "battery_kwh",
-    "battery_max_charge_power_w",
-    "battery_max_discharge_power_w",
-    "battery_power_limit_c_rate",
-    "cost_preset",
-    "emissions_country",
-    "pv_module",
-    "load_profile",
-    "rlp_directory",
-    "load_profile_file",
-    "load_profile_column",
-    "load_profile_unit",
-    "tilt",
-    "azimuth",
-    "transposition_model",
-    "albedo",
-    "surface_type",
-    "model_perez",
-    "solar_position",
-    "iam_model",
-    "diffuse_iam",
-    "temperature_model",
-    "bifacial_model",
-    "pvrow_height",
-    "pvrow_pitch",
-    "gcr",
-    "resolution",
-    "projection_years",
-    "inflation_rate",
-    "import_price_escalation",
-    "om_escalation",
-    "replacement_cost_learning",
-    "sell_price_inflation",
-    "export_emissions_factor_gco2_kwh",
-    "discount_rate",
-    "pv_degradation_rate",
-    "calendar_model",
-    "degradation_engine",
-    "blast_model",
-    "dc_coupled",
-    "inverter_efficiency",
-    "inverter_loading_ratio",
-    "inverter_ac_rating_kw",
-    "start_date",
-    "weather_source",
-    "execution_backend",
+# Every App flag of ``breos run``, in the order ``--help`` lists them: the
+# flag, a sample argument (none for a switch), and the config entry the flag
+# must produce, after the key's normalisation. The spellings are the
+# user-facing contract, so they are written out rather than read back from
+# the registry.
+RUN_FLAGS: list[tuple[str, list[str], str, object]] = [
+    ("--location", ["PORTO"], "location", "porto"),
+    ("--n-modules", ["12"], "n_modules", 12),
+    ("--annual-consumption-kwh", ["3500"], "annual_consumption_kwh", 3500.0),
+    ("--battery-kwh", ["5"], "battery_kwh", 5.0),
+    ("--battery-max-charge-power-w", ["2500"], "battery_max_charge_power_w", 2500.0),
+    ("--battery-max-discharge-power-w", ["2600"], "battery_max_discharge_power_w", 2600.0),
+    ("--battery-power-limit-c-rate", ["0.5"], "battery_power_limit_c_rate", 0.5),
+    ("--cost-preset", ["residential-pt"], "cost_preset", "residential_pt"),
+    ("--emissions-country", ["pt"], "emissions_country", "PT"),
+    ("--pv-module", ["Suntech_STP550S_STC"], "pv_module", "Suntech_STP550S_STC"),
+    ("--load-profile", ["bdew_h0"], "load_profile", "bdew_h0"),
+    ("--rlp-directory", ["rlp"], "rlp_directory", "rlp"),
+    ("--load-profile-file", ["load.csv"], "load_profile_file", "load.csv"),
+    ("--load-profile-column", ["Load"], "load_profile_column", "Load"),
+    ("--load-profile-unit", ["kWh"], "load_profile_unit", "kWh"),
+    ("--tilt", ["30"], "tilt", 30.0),
+    ("--azimuth", ["170"], "azimuth", 170.0),
+    ("--transposition-model", ["perez"], "transposition_model", "perez"),
+    ("--sky-model", ["haydavies"], "transposition_model", "haydavies"),
+    ("--albedo", ["0.2"], "albedo", 0.2),
+    ("--surface-type", ["grass"], "surface_type", "grass"),
+    ("--perez-model", ["allsitescomposite1988"], "model_perez", "allsitescomposite1988"),
+    ("--solar-position", ["mid-interval"], "solar_position", "mid-interval"),
+    ("--iam-model", ["physical"], "iam_model", "physical"),
+    ("--diffuse-iam", ["marion"], "diffuse_iam", "marion"),
+    ("--temperature-model", ["pvsyst-freestanding"], "temperature_model", "pvsyst-freestanding"),
+    ("--bifacial-model", ["infinite_sheds"], "bifacial_model", "infinite_sheds"),
+    ("--pvrow-height", ["1.5"], "pvrow_height", 1.5),
+    ("--pvrow-pitch", ["5"], "pvrow_pitch", 5.0),
+    ("--gcr", ["0.4"], "gcr", 0.4),
+    ("--resolution", ["15min"], "resolution", "15min"),
+    ("--projection-years", ["25"], "projection_years", 25),
+    ("--inflation-rate", ["0.02"], "inflation_rate", 0.02),
+    ("--import-price-escalation", ["0.03"], "import_price_escalation", 0.03),
+    ("--om-escalation", ["0.01"], "om_escalation", 0.01),
+    ("--replacement-cost-learning", ["0.02"], "replacement_cost_learning", 0.02),
+    ("--sell-price-inflation", ["0.015"], "sell_price_inflation", 0.015),
+    ("--export-emissions-factor-gco2-kwh", ["200"], "export_emissions_factor_gco2_kwh", 200.0),
+    ("--discount-rate", ["0.04"], "discount_rate", 0.04),
+    ("--pv-degradation-rate", ["0.005"], "pv_degradation_rate", 0.005),
+    ("--calendar-model", ["Naumann-Lam"], "calendar_model", "naumann_lam"),
+    ("--degradation-engine", ["blast"], "degradation_engine", "blast"),
+    ("--blast-model", ["lfp_gr_250ah_prismatic"], "blast_model", "lfp_gr_250ah_prismatic"),
+    ("--dc-coupled", [], "dc_coupled", True),
+    ("--inverter-efficiency", ["0.97"], "inverter_efficiency", 0.97),
+    ("--inverter-loading-ratio", ["1.2"], "inverter_loading_ratio", 1.2),
+    ("--inverter-ac-rating-kw", ["4.6"], "inverter_ac_rating_kw", 4.6),
+    ("--start-date", ["2024-01-01"], "start_date", "2024-01-01"),
+    ("--weather-source", ["pvgis"], "weather_source", "pvgis"),
+    ("--execution-backend", ["numba"], "execution_backend", "numba"),
 ]
 
+# The ``breos run`` options that are not App config keys.
+RUN_COMMAND_OPTIONS = ("-h", "--help", "--config", "--output", "--indent", "--dry-run")
 
-def _run_parser() -> argparse.ArgumentParser:
-    parser = cli.build_parser()
-    subcommands = next(action for action in parser._actions if isinstance(action, argparse._SubParsersAction))
-    return subcommands.choices["run"]
+
+def _run_config(*argv: str) -> dict[str, object]:
+    """The config overrides ``breos run`` builds from ``argv``."""
+    return cli._build_config(cli.build_parser().parse_args(["run", *argv]))
 
 
 def test_registry_preserves_defaults_and_allowed_top_level_keys():
@@ -152,26 +160,31 @@ def test_registry_preserves_defaults_and_allowed_top_level_keys():
     )
 
 
-def test_registry_generates_every_app_config_cli_option():
-    run_actions = _run_parser()._actions
-    actions = {action.dest: action for action in run_actions}
-    registered_cli_fields = {key for key, field in APP_CONFIG_FIELDS.items() if field.cli_flags}
-    non_config_destinations = {"help", "config", "output", "indent", "dry_run"}
+@pytest.mark.parametrize(("flag", "argument", "key", "expected"), RUN_FLAGS, ids=[row[0] for row in RUN_FLAGS])
+def test_each_run_flag_sets_its_config_key(flag, argument, key, expected):
+    assert _run_config(flag, *argument) == {key: expected}
 
-    assert set(actions) - non_config_destinations == registered_cli_fields
-    assert [action.dest for action in run_actions if action.dest not in non_config_destinations] == EXPECTED_CLI_FIELDS
-    for key in registered_cli_fields:
-        field = APP_CONFIG_FIELDS[key]
-        action = actions[key]
-        assert tuple(action.option_strings) == field.cli_flags
-        assert action.type is field.cli_type
-        assert action.help == field.cli_help
-        assert action.default is None
-        actual_choices = tuple(action.choices) if action.choices is not None else None
-        assert actual_choices == field.cli_choices
-        if field.cli_action == "store_true":
-            assert action.const is True
-            assert action.default is None
+
+def test_run_help_lists_exactly_the_tabled_flags_in_order(capsys):
+    with pytest.raises(SystemExit):
+        cli.build_parser().parse_args(["run", "--help"])
+    help_text = capsys.readouterr().out
+    listed = re.findall(r"(?:^  |, )(--?[a-z][a-z0-9-]*)", help_text, flags=re.MULTILINE)
+
+    assert [flag for flag in listed if flag not in RUN_COMMAND_OPTIONS] == [row[0] for row in RUN_FLAGS]
+
+
+def test_run_without_flags_sets_no_config_key():
+    assert _run_config() == {}
+
+
+@pytest.mark.parametrize(("flag", "value"), [("--resolution", "30min"), ("--degradation-engine", "Blast")])
+def test_choice_flags_reject_a_value_outside_their_choices(flag, value, capsys):
+    with pytest.raises(SystemExit) as excinfo:
+        _run_config(flag, value)
+
+    assert excinfo.value.code == 2
+    assert "invalid choice" in capsys.readouterr().err
 
 
 def test_registry_generated_cli_values_all_reach_config_overrides():
