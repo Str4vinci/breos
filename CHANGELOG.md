@@ -29,6 +29,17 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   so both files have the same phase. The output year comes from the dates, not
   the filename. The converter makes no network access, and BREOS still bundles
   no E-REDES data.
+- Experimental App smart charging with `mode = "daily_persistence"` chooses
+  a grid-charge target each local day from the last complete day's PV DC,
+  load and input temperature and the known tariff. It starts without grid
+  charging until a complete local day has been observed, carries observations
+  and physical battery state across project years, and prices forecast-terminal
+  energy shortfalls instead of treating depletion as free. The planner horizon
+  and target/state grids are configurable; Monte Carlo and optimization refuse
+  the mode. `App.revalue` simulates again when import or export prices change.
+  Result schema 2.2 records the experimental policy, effective settings,
+  executed instruction hash and initial/final stored energy by origin in
+  `provenance.smart_charging`; existing modes change only their schema version.
 - `[tariff.custom_schedule]` lets App, Monte Carlo and projected optimization
   use a strict inline schedule definition. It accepts the same periods, rules,
   effective dates and explicit year-keyed holidays as the tariff schedule

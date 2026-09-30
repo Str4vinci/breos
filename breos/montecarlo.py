@@ -57,7 +57,7 @@ from breos.load_profiles import LOAD_PROFILE_METADATA_KEY
 from breos.projection import ProjectionYear, build_pv_only_battery_config, run_projection, value_projection
 from breos.pv.model_options import DEFAULT_SOLAR_POSITION, resolve_solar_position_method, solar_position_time_offset
 from breos.result_schema import RESULT_SCHEMA_VERSION
-from breos.smart_charging import resolve_instructions, smart_charging_provenance
+from breos.smart_charging import PLANNER_MODES, resolve_instructions, smart_charging_provenance
 from breos.tariffs import ResolvedTariff, result_currency, tariff_provenance
 from breos.utils import package_version
 from breos.weather import (
@@ -406,6 +406,21 @@ def _reject_period(cfg: dict[str, Any]) -> None:
         )
 
 
+def _reject_planned_smart_charging(resolved: ResolvedAppConfig) -> None:
+    """Refuse daily-persistence smart charging, before any weather is loaded or any trajectory runs.
+
+    Every trajectory replays one set of static instructions, and that mode
+    decides its instructions day by day from each run's own observations.
+    """
+    spec = resolved.smart_charging
+    if spec is not None and spec.mode in PLANNER_MODES:
+        raise ValueError(
+            f"smart_charging mode = '{spec.mode}' is experimental and runs in breos.App only; Monte Carlo "
+            "shares one set of static instructions across trajectories. Use mode = 'fixed_target', or run the "
+            "design with breos.App."
+        )
+
+
 def build_year_cache(config: dict[str, Any], settings: MonteCarloSettings) -> MonteCarloYearCache:
     """Prepare the per-year weather and PV inputs once, for many Monte Carlo studies.
 
@@ -423,6 +438,7 @@ def build_year_cache(config: dict[str, Any], settings: MonteCarloSettings) -> Mo
     resolved = resolve_app_config(config)
     cfg = resolved.cfg
     _reject_period(cfg)
+    _reject_planned_smart_charging(resolved)
     weather_key = _weather_cache_key(cfg, resolved, settings)
     runtime_weather: dict[str, Any] = {}
     weather_by_year = _load_weather_years(cfg, resolved, settings, runtime_weather=runtime_weather)
@@ -785,6 +801,7 @@ def run_montecarlo(
     """
     resolved = resolve_app_config(config)
     cfg = resolved.cfg
+    _reject_planned_smart_charging(resolved)
     if settings.execution_backend is None:
         settings = replace(settings, execution_backend=cfg["execution_backend"])
     if settings.n_runs < 1:

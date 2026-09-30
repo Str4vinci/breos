@@ -41,6 +41,7 @@ from breos.config_schema import (
 from breos.economics import DEFAULT_DISCOUNT_RATE, DEFAULT_INFLATION_RATE
 from breos.emissions import EmissionsParams
 from breos.pv.model_options import PV_MODEL_CONFIG_KEYS
+from breos.smart_charging import PLANNER_MODES
 
 # Search defaults. They apply when [constraints] leaves a key out, and the
 # resolved values are recorded in the optimizer's provenance.
@@ -386,6 +387,12 @@ def resolve_optimization_config(config: Mapping[str, Any]) -> dict[str, Any]:
         # Validation normalises values; the tariff and smart-charging tables
         # are kept as given and resolved by the shared App resolvers.
         checked = OPTIMIZATION_TABLES[key].validate(value, key)
+        if key == "smart_charging" and checked["mode"] in PLANNER_MODES:
+            raise ValueError(
+                f"'smart_charging.mode' = '{checked['mode']}' is experimental and runs in breos.App only; the "
+                "optimizer shares one set of static instructions across candidate designs. Use "
+                "mode = 'fixed_target'."
+            )
         resolved[key] = deepcopy(dict(value)) if key in ("tariff", "smart_charging") else checked
 
     location = resolved["location"]

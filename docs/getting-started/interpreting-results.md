@@ -38,6 +38,14 @@ below lists every change.
 Version "2.1" adds `tariff.custom_schedule` to the `resolved_config` of App
 and Monte Carlo results that set an inline
 [custom schedule](../api/tariffs.md#custom-app-schedules).
+Version "2.2" adds the record of the experimental
+[daily-persistence smart charging](configuration.md#daily-persistence-experimental)
+to `provenance.smart_charging` of App results that configure it:
+`experimental`, `controller_version`, `planner_version`,
+`forecast_horizon_days`, `target_levels`, `soc_states`, `forecast_policy`,
+`warm_start_policy`, `planner_terminal_policy`, and the
+`initial_stored_energy` and `final_stored_energy` by origin. Other results
+are unchanged.
 A renamed or removed key bumps the
 major version, an added key the minor. A result without the key predates 1.0.
 
@@ -84,7 +92,7 @@ step's tariff price. Flat and tariff runs report the same four keys.
 | `grid_export_revenue_year1_prices` | Revenue from the year-1 grid export, `grid_export_kwh` |
 | `fixed_charge_year1_prices` | The fixed charge for the simulated duration of year 1: the daily charge times the simulated hours / 24 |
 | `no_system_import_cost_year1_prices` | Import cost of the household without a system, which buys its whole year-1 load, `consumption_kwh`. It is the import cost only; it does not include the fixed charge |
-| `grid_charge_cost_year1_prices` | Present only with smart charging (`smart_charging.mode = "fixed_target"`): the part of `grid_import_cost_year1_prices` bought to charge the battery |
+| `grid_charge_cost_year1_prices` | Present only with grid-charging smart charging (`smart_charging.mode = "fixed_target"` or `"daily_persistence"`): the part of `grid_import_cost_year1_prices` bought to charge the battery |
 
 `grid_charge_cost_year1_prices` is already included in
 `grid_import_cost_year1_prices`, so do not add the two. It is the same value

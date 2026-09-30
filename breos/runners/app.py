@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass, replace
 from typing import Any, cast
 
 import pandas as pd
 
+from breos._daily_persistence import DailyPersistenceController, daily_persistence_provenance
 from breos.app_config import ResolvedAppConfig, SimulationPeriod
 from breos.app_inputs import (
     AppRuntimeDependencies,
@@ -29,7 +31,13 @@ from breos.projection import (
     value_projection,
 )
 from breos.pv_modules import get_module
-from breos.smart_charging import resolve_instructions, smart_charging_provenance, stored_energy_by_origin
+from breos.smart_charging import (
+    PLANNER_MODES,
+    FixedTargetDayController,
+    resolve_instructions,
+    smart_charging_provenance,
+    stored_energy_by_origin,
+)
 from breos.solar import PVProductionBreakdown
 from breos.tariffs import ResolvedTariff, tariff_provenance
 from breos.utils import get_hours_per_step
@@ -58,10 +66,11 @@ class SimulationArtifacts:
     # The resolved tariff's provenance; None on flat prices.
     tariff: dict[str, Any] | None = None
     # Smart-charging provenance and the project's first and last stored
-    # energy by origin; None without fixed-target smart charging.
+    # energy by origin; None without configured grid-charging smart charging.
     smart_charging: dict[str, Any] | None = None
     # What revaluation re-prices from: the unpriced projection, and the
-    # tariff and instructions the run dispatched on.
+    # tariff and static instructions the run dispatched on (None for a
+    # daily-persistence run, whose instructions are decided while it runs).
     projection: ProjectionRun | None = None
     resolved_tariff: ResolvedTariff | None = None
     instructions: DispatchInstructions | None = None
@@ -347,6 +356,17 @@ def run_app_simulation(
     # on what counts as PV-only.
     has_battery = config_has_battery(cfg)
     execution = backend_provenance(execution_backend, pv_only=not has_battery)
+    spec = resolved.smart_charging
+    planned = instructions is None and spec is not None and spec.mode in PLANNER_MODES and has_battery
+    if planned and execution_backend == "python" and cfg["resolution"] == "15min":
+        # Warned before any input is prepared: the planner solves a dynamic
+        # program every simulated day, which the Python backend runs slowly.
+        warnings.warn(
+            "smart_charging mode = 'daily_persistence' re-plans every day, which is slow on the Python backend "
+            "at 15-minute resolution; set execution_backend = 'numba' (the breos[fast] extra) for this mode.",
+            UserWarning,
+            stacklevel=3,
+        )
 
     inputs = prepare_simulation_inputs_cached(cfg, resolved, deps, prepare=prepare_simulation_inputs)
 
@@ -379,10 +399,21 @@ def run_app_simulation(
     )
     # The instructions follow the tariff's calendar, so they too are resolved
     # once and replayed every year.
-    spec = resolved.smart_charging
     from_spec = instructions is None
-    if from_spec:
+    day_controller: FixedTargetDayController | DailyPersistenceController | None = None
+    if planned:
+        # daily_persistence decides each civil day while the run goes (ADR
+        # 0002 A12); it has no static instructions to resolve.
+        assert spec is not None and tariff is not None
+        day_controller = DailyPersistenceController.for_run(
+            spec, tariff, freq=cfg["resolution"], execution_backend=execution_backend
+        )
+    elif from_spec:
         instructions = resolve_instructions(spec, tariff) if spec is not None and has_battery else None
+        # The configured table runs through the civil-day controller seam
+        # (ADR 0002 A11); a replayed schedule stays on the static path.
+        if instructions is not None:
+            day_controller = FixedTargetDayController(instructions)
     projection = run_projection(
         cfg,
         resolved,
@@ -392,9 +423,13 @@ def run_app_simulation(
         execution_backend=execution_backend,
         observe_jit_per_year=True,
         tariff=tariff,
-        instructions=instructions,
+        instructions=None if day_controller is not None else instructions,
         # Kept so App.revalue can re-price the tariff without re-simulating.
         record_period_energy=True,
+        day_controller=day_controller,
+        # A [period] window is one standalone span; project years replay one
+        # calendar, so a civil day cut by a year's end continues next year.
+        replay_seam=period is None,
     )
     first_year_results_df = cast(pd.DataFrame, projection.first_year_results_df)
     current_soh = projection.carry.soh_pct
@@ -424,13 +459,12 @@ def run_app_simulation(
         execution["jit_cache"] = aggregate_jit_cache_states(jit_cache_states)
 
     smart_charging = None
-    if from_spec and instructions is not None and spec is not None and tariff is not None:
+    if from_spec and spec is not None and tariff is not None and (instructions is not None or planned):
         first = first_year_results_df.iloc[0]
         carry = projection.carry
-        smart_charging = {
-            **smart_charging_provenance(spec, instructions, tariff),
-            # The terminal convention is physical carry, so the state the
-            # project starts and ends in is reported rather than assumed.
+        # The terminal convention is physical carry, so the state the
+        # project starts and ends in is reported rather than assumed.
+        stored = {
             "initial_stored_energy": stored_energy_by_origin(
                 first["Battery_Energy_Beginning"],
                 first["Battery_PV_Origin_Energy_Beginning"],
@@ -440,6 +474,13 @@ def run_app_simulation(
                 carry.energy_wh or 0.0, carry.pv_origin_energy_wh or 0.0, carry.grid_origin_energy_wh or 0.0
             ),
         }
+        if planned:
+            executed = projection.controller_instructions
+            assert executed is not None
+            smart_charging = daily_persistence_provenance(spec, tariff, executed, **stored)
+        else:
+            assert instructions is not None
+            smart_charging = {**smart_charging_provenance(spec, instructions, tariff), **stored}
 
     return SimulationArtifacts(
         **economics,
@@ -467,6 +508,13 @@ def run_app_simulation(
 _TARIFF_MONEY_COLUMNS = ("Import_Cost", "Export_Revenue", "Baseline_Import_Cost", "Grid_Charge_Cost", "Fixed_Charge")
 
 
+def _same_step_prices(tariff: ResolvedTariff, old: ResolvedTariff) -> bool:
+    """Whether two tariffs on one calendar price every step's import and export alike."""
+    return tariff.import_price_per_kwh == old.import_price_per_kwh and (
+        tariff.export_price_per_kwh == old.export_price_per_kwh
+    )
+
+
 def revalue_app_simulation(
     resolved: ResolvedAppConfig,
     artifacts: SimulationArtifacts,
@@ -479,7 +527,9 @@ def revalue_app_simulation(
     prices cannot change the dispatch: flat prices, a tariff removed, or a
     tariff on the same schedule whose smart-charging instructions are
     unchanged. A tariff added, a different schedule or calendar, or
-    instructions that change re-simulate the run.
+    instructions that change re-simulate the run. Under ``daily_persistence``
+    so does any change to the per-step import or export prices, which its
+    planner reads; a change to the fixed charge alone is re-priced.
     """
     cfg = resolved.cfg
     run, old_tariff = artifacts.projection, artifacts.resolved_tariff
@@ -493,6 +543,11 @@ def revalue_app_simulation(
     yearly = run.yearly_df
     if tariff is not None and old_tariff is not None:
         if tariff.schedule_hash != old_tariff.schedule_hash:
+            return run_app_simulation(resolved, deps), "resimulated"
+        planner = resolved.smart_charging is not None and resolved.smart_charging.mode in PLANNER_MODES
+        if planner and not _same_step_prices(tariff, old_tariff):
+            # The planner chooses each day's target on these prices, so new
+            # prices can move the dispatch even on an unchanged schedule.
             return run_app_simulation(resolved, deps), "resimulated"
         if artifacts.instructions is not None and resolved.smart_charging is not None:
             instructions = resolve_instructions(resolved.smart_charging, tariff)
