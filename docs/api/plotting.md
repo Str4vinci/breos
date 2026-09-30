@@ -43,6 +43,12 @@ for battery_kwh in (0.0, 5.0, 10.0):
 plot_breakeven_comparison(results, ["PV only", "PV + 5 kWh", "PV + 10 kWh"], "plots")
 ```
 
+Each payback line is labelled with its year. Scenarios that share a
+no-system cost share one baseline, named "No system" when all of them share
+it. An App result records its currency; a cost projection read back from CSV
+does not, so pass `currency=` to label it, or its amounts show no currency
+code.
+
 ```{eval-rst}
 .. autosummary::
    :toctree: generated/
@@ -84,8 +90,16 @@ plot_orientation_landscape("orientation.csv", "pv_production_kwh", "plots")
 plot_pareto_front(result, "plots", color_by="Battery_kWh")
 ```
 
-Sweep CSVs do not record their currency, so their money labels show
-`EUR` unless the DataFrame's `attrs["currency"]` says otherwise.
+A swept key names the swept `param_` column, not the result column of the
+same name, which holds the App's resolved value. A difference of a
+percentage, such as grid independence, is labelled in percentage points. A
+difference, and a metric with both gains and losses such as `npv_savings`,
+use a diverging colour scale centred on zero.
+
+Sweep CSVs do not record their currency. Pass `currency="EUR"` (or another
+code) to label their money; without it, money labels name no currency, such
+as "NPV savings". A DataFrame can record it in `attrs["currency"]`, as the
+optimizer's `details["pareto"]` frame does.
 
 ```{eval-rst}
 .. autosummary::
@@ -123,7 +137,9 @@ Compare a TMY with the historical years a Monte Carlo study samples. Both
 plots take the TMY as a weather DataFrame, such as
 `breos.weather.load_weather(..., data_type="tmy")` returns, and the
 historical weather as the study's `weather_file` path or the per-year frames of
-`breos.weather.preload_weather_by_year`.
+`breos.weather.preload_weather_by_year`. The monthly minimum and maximum are
+each month's lowest and highest value over the historical years, so the two
+can come from different years.
 
 ```{eval-rst}
 .. autosummary::

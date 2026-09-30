@@ -230,6 +230,8 @@ over objectives and constraints.
 two-parameter sweep CSV as a heatmap, and
 {py:func}`~breos.plotting.plot_orientation_landscape` draws a `tilt` ×
 `azimuth` sweep ([Plotting](../api/plotting.md#sweeps-and-the-optimizer-front)).
+The CSV does not record the currency, so pass `currency=` to label a money
+column such as `npv_savings` with it.
 
 Every combination is validated before the first run starts, so a bad one,
 such as a charge period the tariff schedule does not have, stops the sweep

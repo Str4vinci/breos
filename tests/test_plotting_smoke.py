@@ -355,7 +355,18 @@ def orientation_sweep(tmp_path_factory):
 
 def test_plot_sweep_heatmap(sizing_sweep, tmp_path):
     plotting.plot_sweep_heatmap(sizing_sweep, "grid_independence_pct", str(tmp_path))
-    plotting.plot_sweep_heatmap(pd.read_csv(sizing_sweep), "npv_savings", str(tmp_path), diff=sizing_sweep)
+    # A second sweep whose NPV is 100 lower per kWh of battery: real, non-zero differences.
+    other = pd.read_csv(sizing_sweep)
+    other["npv_savings"] -= 100.0 * other["param_battery_kwh"]
+    with pytest.MonkeyPatch.context() as mp:
+        drawn = []
+        mp.setattr(plotting.plt, "close", lambda *args, **kwargs: drawn.append(plotting.plt.gcf()))
+        plotting.plot_sweep_heatmap(sizing_sweep, "npv_savings", str(tmp_path), diff=other, currency="EUR")
+    image = drawn[0].axes[0].images[0]
+    np.testing.assert_allclose(np.ma.filled(image.get_array(), np.nan), [[0.0, 0.0], [500.0, 500.0]], atol=1e-6)
+    assert (image.norm.vmin, image.norm.vmax) == pytest.approx((-500.0, 500.0))
+    assert drawn[0].axes[1].get_ylabel() == "NPV savings difference (EUR)"
+    plotting.plt.close("all")
     _assert_written(tmp_path, "sweep_grid_independence_pct.png", "sweep_npv_savings_diff.png")
 
 

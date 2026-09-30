@@ -9,6 +9,7 @@ This module provides visualization functions for:
 """
 
 import os
+import warnings
 from typing import Any, List, Mapping, Optional, Sequence, Tuple, Union
 
 import numpy as np
@@ -35,6 +36,24 @@ except ImportError as exc:
 def _currency(frame: pd.DataFrame) -> str:
     """The currency a frame's money is in, for labels: ``attrs["currency"]``, else the default."""
     return str(frame.attrs.get("currency", DEFAULT_CURRENCY))
+
+
+def _label_currency(frames: Sequence[pd.DataFrame], currency: Optional[str]) -> Optional[str]:
+    """The currency of the money in ``frames``, or None if nothing records it.
+
+    A frame records its currency in ``attrs["currency"]``; a table read back
+    from CSV records none. ``currency`` names it for those. Two different
+    recorded currencies, or a recorded one that ``currency`` contradicts,
+    raise ``ValueError``.
+    """
+    known = sorted({str(frame.attrs["currency"]) for frame in frames if frame.attrs.get("currency") is not None})
+    if len(known) > 1:
+        raise ValueError(f"The inputs are in different currencies ({', '.join(known)}); plot them apart")
+    if currency is not None and known and known[0] != currency:
+        raise ValueError(f"currency={currency!r}, but the input records its currency as {known[0]!r}")
+    if currency is not None:
+        return currency
+    return known[0] if known else None
 
 
 def _result_instants(results_df: pd.DataFrame) -> pd.DatetimeIndex:
@@ -1288,16 +1307,36 @@ def _weather_values(weather: pd.DataFrame, variable: str) -> pd.Series:
     return pd.Series(pd.to_numeric(weather[column], errors="coerce").to_numpy(dtype=float), index=index)
 
 
-def _weather_monthly(weather: pd.DataFrame, variable: str) -> pd.Series:
-    """Monthly irradiance totals in kWh/m², or monthly mean temperature, indexed 1 to 12."""
+def _weather_monthly(weather: pd.DataFrame, variable: str, source: str = "The weather") -> pd.Series:
+    """Monthly irradiance totals in kWh/m², or monthly mean temperature, indexed 1 to 12.
+
+    Missing values are skipped with a warning that names ``source``. A month
+    without any value is NaN.
+    """
     values = _weather_values(weather, variable)
+    missing = int(values.isna().sum())
+    if missing:
+        warnings.warn(
+            f"{source} has {missing} missing {variable} values; its monthly figures skip them",
+            UserWarning,
+            stacklevel=3,
+        )
     by_month = values.groupby(values.index.month)
     if variable == "temp_air":
         monthly = by_month.mean()
     else:
         hours_per_step = values.index.to_series().diff().median().total_seconds() / 3600.0
-        monthly = by_month.sum() * hours_per_step / 1000.0
+        monthly = by_month.sum(min_count=1) * hours_per_step / 1000.0
     return monthly.reindex(range(1, 13))
+
+
+def _annual_ghi(weather: pd.DataFrame, source: str) -> float:
+    """Annual GHI in kWh/m², the sum of the twelve monthly totals."""
+    monthly = _weather_monthly(weather, "ghi", source)
+    absent = [MONTH_LABELS[month - 1] for month in monthly.index[monthly.isna()]]
+    if absent:
+        raise ValueError(f"{source} has no GHI for {', '.join(absent)}, so it has no annual total")
+    return float(monthly.sum())
 
 
 def _historical_weather_years(
@@ -1314,8 +1353,14 @@ def _historical_weather_years(
 
 
 def _weather_monthly_stats(historical_years: Mapping[int, pd.DataFrame], variable: str) -> pd.DataFrame:
-    """Per month: the historical mean, its 95% confidence interval, and the lowest and highest year."""
-    table = pd.DataFrame({year: _weather_monthly(frame, variable) for year, frame in historical_years.items()})
+    """Per month: the historical mean, its 95% confidence interval, and the lowest and highest value.
+
+    The minimum and maximum of each month are taken over the years
+    separately, so they can come from different years.
+    """
+    table = pd.DataFrame(
+        {year: _weather_monthly(frame, variable, f"Historical year {year}") for year, frame in historical_years.items()}
+    )
     count = table.count(axis=1)
     mean = table.mean(axis=1)
     half_width = student_t.ppf(0.975, count - 1) * table.std(axis=1) / np.sqrt(count)
@@ -1342,8 +1387,10 @@ def plot_weather_monthly_comparison(
     Compare a TMY with historical weather years, month by month.
 
     Draws the TMY, the historical mean with its 95% confidence interval, and
-    each month's lowest and highest year. Irradiance is the monthly total in
-    kWh/m²; temperature is the monthly mean in °C.
+    the monthly minimum and maximum: each month's lowest and highest value
+    over the historical years, which can come from different years.
+    Irradiance is the monthly total in kWh/m²; temperature is the monthly
+    mean in °C. A month with missing values warns, and its total skips them.
 
     Args:
         tmy: One weather year, as :func:`breos.weather.load_weather` or
@@ -1358,7 +1405,7 @@ def plot_weather_monthly_comparison(
         filename: Output filename. Defaults to ``weather_monthly_<variable>.png``.
     """
     name, unit = _WEATHER_VARIABLES.get(variable, (variable, ""))
-    tmy_vals = _weather_monthly(tmy, variable).to_numpy()
+    tmy_vals = _weather_monthly(tmy, variable, "The TMY").to_numpy()
     historical_years = _historical_weather_years(historical)
     monthly_stats = _weather_monthly_stats(historical_years, variable)
     os.makedirs(results_directory, exist_ok=True)
@@ -1372,9 +1419,17 @@ def plot_weather_monthly_comparison(
 
     fig, ax = plt.subplots(figsize=(14, 7))
 
-    # Min / max envelope lines
+    # Monthly minimum / maximum over the historical years
     ax.plot(
-        x, hist_min, color="tomato", linewidth=1.5, linestyle="--", marker="v", markersize=5, zorder=3, label="Min year"
+        x,
+        hist_min,
+        color="tomato",
+        linewidth=1.5,
+        linestyle="--",
+        marker="v",
+        markersize=5,
+        zorder=3,
+        label="Monthly minimum",
     )
     ax.plot(
         x,
@@ -1385,7 +1440,7 @@ def plot_weather_monthly_comparison(
         marker="^",
         markersize=5,
         zorder=3,
-        label="Max year",
+        label="Monthly maximum",
     )
 
     # 95% CI shaded band
@@ -1442,11 +1497,15 @@ def plot_weather_annual_ghi_distribution(
         results_directory: Directory to save the plot.
         tmy_label: Legend label of the TMY line, for example its source.
         filename: Output filename.
+
+    Raises:
+        ValueError: If the TMY or a historical year has no GHI for a whole
+            month. Missing values inside a month warn, and the total skips them.
     """
-    tmy_annual_ghi = float(_weather_monthly(tmy, "ghi").sum())
+    tmy_annual_ghi = _annual_ghi(tmy, "The TMY")
     annual_ghi_per_year = pd.Series(
         {
-            year: float(_weather_monthly(frame, "ghi").sum())
+            year: _annual_ghi(frame, f"Historical year {year}")
             for year, frame in _historical_weather_years(historical).items()
         }
     )
@@ -1515,7 +1574,9 @@ def _breakeven_projection(projection: Union[pd.DataFrame, Mapping[str, Any]]) ->
     year_zero = [row for row in rows if row["year"] == 0]
     if year_zero:
         frame.attrs["total_investment"] = -float(year_zero[0]["balance"])
-    frame.attrs["currency"] = projection.get("provenance", {}).get("currency", DEFAULT_CURRENCY)
+    currency = (projection.get("provenance") or {}).get("currency")
+    if currency is not None:
+        frame.attrs["currency"] = currency
     return frame
 
 
@@ -1524,14 +1585,17 @@ def plot_breakeven_comparison(
     labels: Sequence[str],
     results_directory: str,
     colors: Optional[Sequence[str]] = None,
+    currency: Optional[str] = None,
     filename: str = "breakeven_comparison.png",
 ) -> None:
     """
     Multi-scenario break-even comparison: N cumulative cost curves vs No-System baseline.
 
-    Each curve starts at year 0 with the investment, and a dotted line marks
-    its payback by :func:`breos.economics.find_payback_year_interpolated`.
-    Scenarios with the same no-system cost share one baseline.
+    Each curve starts at year 0 with the investment, and a dotted line,
+    labelled with its year, marks its payback by
+    :func:`breos.economics.find_payback_year_interpolated`. Scenarios with the
+    same no-system cost share one baseline: "No system" when every scenario
+    shares it, else "No system (<labels>)" for each group.
 
     Args:
         projections: One per scenario: a :meth:`breos.App.result` dict, whose
@@ -1542,12 +1606,18 @@ def plot_breakeven_comparison(
         labels: Display label for each scenario.
         results_directory: Output directory.
         colors: Line colour for each scenario. Defaults to the colour cycle.
+        currency: Currency code for the money axis, for projections read
+            from CSV, which do not record it. An App result and a projection
+            frame from :func:`~breos.economics.cost_analysis_projection`
+            record their own. When no projection records it and ``currency``
+            is None, the axis shows the amounts without a currency code.
         filename: Output filename.
 
     Raises:
         ValueError: If the labels or colours do not match the projections,
-            the projections are in different currencies, or an App result
-            has no ``financial`` projection.
+            the projections record different currencies, ``currency``
+            contradicts the recorded one, or an App result has no
+            ``financial`` projection.
     """
     if len(labels) != len(projections):
         raise ValueError(f"{len(projections)} projections need {len(projections)} labels, not {len(labels)}")
@@ -1556,10 +1626,7 @@ def plot_breakeven_comparison(
     elif len(colors) != len(projections):
         raise ValueError(f"{len(projections)} projections need {len(projections)} colors, not {len(colors)}")
     cost_dfs = [_breakeven_projection(projection) for projection in projections]
-    currencies = sorted({_currency(df) for df in cost_dfs})
-    if len(currencies) > 1:
-        raise ValueError(f"The projections are in different currencies ({', '.join(currencies)}); plot them apart")
-    currency = currencies[0] if currencies else DEFAULT_CURRENCY
+    label_currency = _label_currency(cost_dfs, currency)
     os.makedirs(results_directory, exist_ok=True)
 
     fig, ax = plt.subplots(figsize=(14, 8))
@@ -1577,37 +1644,52 @@ def plot_breakeven_comparison(
             with_sys = np.concatenate(([investment], with_sys))
         curves.append((years, no_sys, with_sys))
 
-    # Plot No-System baseline for each scenario
-    # Track unique baselines to avoid duplicate lines when scenarios share the same baseline
-    seen_baselines = set()
-    for (years, no_sys, _), label, color in zip(curves, labels, colors, strict=True):
-        baseline = tuple(np.round(no_sys, 0))
-        if baseline not in seen_baselines:
-            seen_baselines.add(baseline)
-            no_sys_label = "No System" if len(cost_dfs) == 1 else f"No System ({label})"
-            ax.plot(years, no_sys, color=color, linestyle="--", label=no_sys_label, linewidth=2.5, alpha=0.7)
+    # One no-system baseline per group of scenarios that share it.
+    baselines: "dict[Tuple[Any, ...], List[int]]" = {}
+    for index, (years, no_sys, _) in enumerate(curves):
+        baselines.setdefault((tuple(years), tuple(np.round(no_sys, 0))), []).append(index)
+    for members in baselines.values():
+        years, no_sys, _ = curves[members[0]]
+        if len(baselines) == 1:
+            no_sys_label, no_sys_color = "No system", "black"
+        else:
+            no_sys_label = f"No system ({', '.join(str(labels[index]) for index in members)})"
+            no_sys_color = colors[members[0]]
+        ax.plot(years, no_sys, color=no_sys_color, linestyle="--", label=no_sys_label, linewidth=2.5, alpha=0.7)
 
     max_year = 0
     for df, (years, _, with_sys), label, color in zip(cost_dfs, curves, labels, colors, strict=True):
         ax.plot(years, with_sys, color=color, label=label, linewidth=2)
         max_year = max(max_year, int(df["Year"].max()))
 
-        # Break-even dotted line
+        # Break-even dotted line, labelled with its year at the foot of the axes
         be = find_payback_year_interpolated(df)
         if be is not None:
             ax.axvline(x=be, color=color, linestyle=":", alpha=0.5, linewidth=1)
+            ax.text(
+                be,
+                0.02,
+                f" {be:.1f} years",
+                transform=ax.get_xaxis_transform(),
+                rotation=90,
+                ha="right",
+                va="bottom",
+                color=color,
+                fontsize=10,
+            )
 
+    unit = f" {label_currency}" if label_currency else ""
     ax.set_xlabel("Year")
-    ax.set_ylabel(f"Cumulative Cost ({currency})")
+    ax.set_ylabel(f"Cumulative Cost ({label_currency})" if label_currency else "Cumulative Cost")
     ax.legend(loc="upper left")
     ax.grid(True, alpha=0.3)
-    ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, _: f"{x:,.0f} {currency}"))
+    ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, _: f"{x:,.0f}{unit}"))
     ax.set_xticks(range(0, max_year + 1))
     ax.set_xlim(0, max_year + 0.5)
 
-    plt.tight_layout()
-    plt.savefig(os.path.join(results_directory, filename), dpi=300)
-    plt.close()
+    fig.tight_layout()
+    fig.savefig(os.path.join(results_directory, filename), dpi=300, bbox_inches="tight")
+    plt.close(fig)
 
 
 # =========================================================================
@@ -1639,16 +1721,35 @@ _COLUMN_LABELS = {
     "Projected_Initial_Cost": "Investment ({currency})",
 }
 
-_COMPASS_POINTS = {0: "N", 45: "NE", 90: "E", 135: "SE", 180: "S", 225: "SW", 270: "W", 315: "NW", 360: "N"}
+_COMPASS_POINTS = {0: "N", 45: "NE", 90: "E", 135: "SE", 180: "S", 225: "SW", 270: "W", 315: "NW"}
 
 
-def _column_label(column: str, currency: str) -> str:
-    """Axis label of a sweep or optimizer column."""
+def _column_label(column: str, currency: Optional[str]) -> str:
+    """Axis label of a sweep or optimizer column.
+
+    Money is labelled in ``currency``; with None, the label names no currency
+    ("NPV savings", "LCOE (per kWh)").
+    """
     name = str(column)
     for prefix in ("param_", "resolved_"):
         name = name.removeprefix(prefix)
     label = _COLUMN_LABELS.get(name)
-    return name if label is None else label.format(currency=currency)
+    if label is None:
+        return name
+    if currency is None:
+        return label.replace(" ({currency})", "").replace("{currency}/kWh", "per kWh")
+    return label.format(currency=currency)
+
+
+def _difference_label(metric: str, label: str, labels: Optional[Tuple[str, str]]) -> str:
+    """Colour-bar label of a difference: a percentage becomes percentage points."""
+    name, unit = label, ""
+    if label.endswith(")") and " (" in label:
+        name, unit = label[:-1].rsplit(" (", 1)
+    if unit == "%" or (not unit and str(metric).endswith(("_pct", "_%"))):
+        unit = "percentage points"
+    compared = f", {labels[0]} − {labels[1]}" if labels else " difference"
+    return f"{name}{compared} ({unit})" if unit else f"{name}{compared}"
 
 
 def _read_table(data: Union[pd.DataFrame, str, "os.PathLike[str]"]) -> pd.DataFrame:
@@ -1657,11 +1758,25 @@ def _read_table(data: Union[pd.DataFrame, str, "os.PathLike[str]"]) -> pd.DataFr
 
 
 def _sweep_column(frame: pd.DataFrame, name: str) -> str:
-    """The column ``name``, or the ``param_<name>`` column ``breos sweep`` writes for a swept key."""
-    for column in (name, f"param_{name}"):
+    """The ``param_<name>`` column ``breos sweep`` writes for a swept key, else the column ``name``.
+
+    The swept column comes first: a sweep CSV also has result columns such as
+    ``n_modules`` and ``battery_kwh``, which hold the App's resolved values.
+    """
+    for column in (f"param_{name}", name):
         if column in frame.columns:
             return column
-    raise ValueError(f"The table has no {name!r} or 'param_{name}' column")
+    raise ValueError(
+        f"The table has no 'param_{name}' or {name!r} column; its columns are {', '.join(map(str, frame.columns))}"
+    )
+
+
+def _metric_column(frame: pd.DataFrame, metric: str) -> str:
+    """``metric``, checked to be a column of ``frame``."""
+    if metric not in frame.columns:
+        numeric = ", ".join(str(column) for column in frame.select_dtypes("number").columns)
+        raise ValueError(f"The table has no {metric!r} column; its numeric columns are {numeric}")
+    return metric
 
 
 def _swept_parameters(frame: pd.DataFrame) -> List[str]:
@@ -1672,7 +1787,12 @@ def _swept_parameters(frame: pd.DataFrame) -> List[str]:
 def _sweep_grid(frame: pd.DataFrame, x: str, y: str, metric: str) -> pd.DataFrame:
     """``metric`` with one row per ``y`` value and one column per ``x`` value, both ascending."""
     if frame[[y, x]].duplicated().any():
-        others = [column for column in _swept_parameters(frame) if column not in (x, y) and frame[column].nunique() > 1]
+        axes = {x.removeprefix("param_"), y.removeprefix("param_")}
+        others = [
+            column
+            for column in _swept_parameters(frame)
+            if column.removeprefix("param_") not in axes and frame[column].nunique() > 1
+        ]
         hint = f"; it also varies {', '.join(others)}, so select one value of each" if others else ""
         raise ValueError(f"The sweep has more than one row for some {x} and {y} pair{hint}")
     grid = frame.pivot(index=y, columns=x, values=metric).sort_index().sort_index(axis=1)
@@ -1680,8 +1800,13 @@ def _sweep_grid(frame: pd.DataFrame, x: str, y: str, metric: str) -> pd.DataFram
 
 
 def _tick_text(value: Any) -> str:
-    """A grid value as a tick label: 10.0 is "10"."""
-    return f"{value:g}" if isinstance(value, (int, float, np.number)) else str(value)
+    """A grid value as a tick label: 10.0 is "10", 2500000.0 is "2500000", 0.25 is "0.25"."""
+    if isinstance(value, (bool, np.bool_)) or not isinstance(value, (int, float, np.number)):
+        return str(value)
+    number = float(value)
+    if number.is_integer():
+        return str(int(number))
+    return f"{number:g}" if abs(number) < 1e6 else f"{number:.0f}"
 
 
 def _cell_format(values: np.ndarray) -> str:
@@ -1709,6 +1834,7 @@ def plot_sweep_heatmap(
     cmap: Optional[str] = None,
     vmin: Optional[float] = None,
     vmax: Optional[float] = None,
+    currency: Optional[str] = None,
     filename: Optional[str] = None,
 ) -> None:
     """
@@ -1716,9 +1842,13 @@ def plot_sweep_heatmap(
 
     Each cell is one run, annotated with its value when the grid has at most
     15 rows and 15 columns. With ``diff``, each cell is ``sweep`` minus
-    ``diff`` on a diverging scale centred on zero, for example the same
-    sizing grid at two locations or two tariffs. Cells in only one of the two
-    sweeps stay blank.
+    ``diff``, for example the same sizing grid at two locations or two
+    tariffs. Cells in only one of the two sweeps stay blank. A difference of
+    a percentage, such as grid independence, is labelled in percentage points.
+
+    A difference, and a metric with both gains and losses such as
+    ``npv_savings``, are drawn on a diverging scale centred on zero and
+    symmetric about it. Other metrics get a sequential scale.
 
     Args:
         sweep: The CSV ``breos sweep`` writes, or its DataFrame.
@@ -1726,27 +1856,38 @@ def plot_sweep_heatmap(
             or ``npv_savings``.
         results_directory: Directory to save the plot.
         x: Parameter on the horizontal axis, as its sweep key (``n_modules``)
-            or its column (``param_n_modules``). ``x`` and ``y`` default to
-            the two swept parameters, in sweep order.
+            or its column (``param_n_modules``). A sweep key names the swept
+            ``param_`` column, not the result column of the same name.
+            ``x`` and ``y`` default to the two swept parameters, in sweep order.
         y: Parameter on the vertical axis.
         diff: A second sweep over the same parameters, subtracted from ``sweep``.
         labels: Names of ``sweep`` and ``diff`` for the colour-bar label.
+            Only used with ``diff``.
         metric_label: Colour-bar label. Defaults to a label for the metric.
-        cmap: Matplotlib colormap name. Defaults to ``YlGnBu``, or ``RdBu``
-            with ``diff``.
-        vmin: Colour-scale minimum (auto if None). With ``diff`` the scale
-            is always symmetric about zero, and ``vmin`` and ``vmax`` are not read.
+        cmap: Matplotlib colormap name. Defaults to ``RdBu`` on a diverging
+            scale, else ``YlGnBu``.
+        vmin: Colour-scale minimum (auto if None). Giving ``vmin`` or
+            ``vmax`` turns a metric with both signs to the sequential scale.
+            With ``diff`` the scale is always symmetric about zero, and
+            ``vmin`` and ``vmax`` are not read.
         vmax: Colour-scale maximum (auto if None).
+        currency: Currency code for money labels, for a sweep CSV, which does
+            not record it. A DataFrame can record it in ``attrs["currency"]``.
+            When neither names it, money labels show no currency code.
         filename: Output filename. Defaults to ``sweep_<metric>.png``, or
             ``sweep_<metric>_diff.png`` with ``diff``.
 
     Raises:
         ValueError: If ``x`` and ``y`` are not given and the sweep does not
             vary exactly two parameters, if it has more than one run per cell
-            (it varies a third parameter), or if the two sweeps share no cell.
+            (it varies a third parameter), if a column is missing, if the two
+            sweeps share no cell or record different currencies, or if
+            ``labels`` is given without ``diff``.
     """
     from matplotlib.colors import Normalize, TwoSlopeNorm
 
+    if labels is not None and diff is None:
+        raise ValueError("labels names the two sweeps of a difference; pass diff= as well")
     frame = _read_table(sweep)
     if x is None and y is None:
         swept = _swept_parameters(frame)
@@ -1757,25 +1898,41 @@ def plot_sweep_heatmap(
         raise ValueError("Give both x and y, or neither")
     else:
         x_column, y_column = _sweep_column(frame, x), _sweep_column(frame, y)
-    grid = _sweep_grid(frame, x_column, y_column, metric)
-    label = metric_label or _column_label(metric, _currency(frame))
+    grid = _sweep_grid(frame, x_column, y_column, _metric_column(frame, metric))
 
     if diff is None:
         values = grid
-        norm: Normalize = Normalize(vmin=vmin, vmax=vmax)
-        cmap = cmap or "YlGnBu"
+        label_currency = _label_currency([frame], currency)
     else:
-        values = grid.sub(_sweep_grid(_read_table(diff), x_column, y_column, metric))
+        other = _read_table(diff)
+        label_currency = _label_currency([frame, other], currency)
+        # The difference table is resolved on its own, so either may name a key bare or as param_.
+        other_x = _sweep_column(other, x_column.removeprefix("param_"))
+        other_y = _sweep_column(other, y_column.removeprefix("param_"))
+        values = grid.sub(_sweep_grid(other, other_x, other_y, _metric_column(other, metric)))
         if not np.isfinite(values.to_numpy()).any():
             raise ValueError(f"The two sweeps share no {x_column} and {y_column} cell with a {metric} value")
-        abs_max = float(np.nanmax(np.abs(values.to_numpy()))) or 1.0
-        norm = TwoSlopeNorm(vmin=-abs_max, vcenter=0, vmax=abs_max)
-        cmap = cmap or "RdBu"
-        label = f"{label} ({labels[0]} − {labels[1]})" if labels else f"{label} difference"
     data = values.to_numpy()
-    if not np.isfinite(data).any():
+    finite = data[np.isfinite(data)]
+    if not finite.size:
         raise ValueError(f"The sweep has no finite {metric} value")
-    norm.autoscale_None(data[np.isfinite(data)])
+
+    label = metric_label or _column_label(metric, label_currency)
+    if diff is not None:
+        if metric_label is None:
+            label = _difference_label(metric, label, labels)
+        else:
+            label = f"{label} ({labels[0]} − {labels[1]})" if labels else f"{label} difference"
+    # Zero-centred when the cells are differences, or gains and losses.
+    signed = finite.min() < 0 < finite.max() and vmin is None and vmax is None
+    if diff is not None or signed:
+        abs_max = float(np.abs(finite).max()) or 1.0
+        norm: Normalize = TwoSlopeNorm(vmin=-abs_max, vcenter=0, vmax=abs_max)
+        cmap = cmap or "RdBu"
+    else:
+        norm = Normalize(vmin=vmin, vmax=vmax)
+        norm.autoscale_None(finite)
+        cmap = cmap or "YlGnBu"
     os.makedirs(results_directory, exist_ok=True)
 
     fig, ax = plt.subplots(figsize=(10, 5))
@@ -1786,8 +1943,8 @@ def plot_sweep_heatmap(
     ax.set_xticklabels([_tick_text(c) for c in values.columns])
     ax.set_yticks(range(len(values.index)))
     ax.set_yticklabels([_tick_text(i) for i in values.index])
-    ax.set_xlabel(_column_label(x_column, _currency(frame)))
-    ax.set_ylabel(_column_label(y_column, _currency(frame)))
+    ax.set_xlabel(_column_label(x_column, label_currency))
+    ax.set_ylabel(_column_label(y_column, label_currency))
 
     # Annotate cells, in white on dark colours
     if data.shape[0] <= 15 and data.shape[1] <= 15:
@@ -1819,12 +1976,16 @@ def plot_sweep_heatmap(
 
 
 def _set_azimuth_ticks(ax, azimuths: np.ndarray) -> None:
-    """Label azimuth ticks with their compass point, where the range spans three of them."""
+    """Label azimuth ticks with their compass point, where the range spans three of them.
+
+    Ticks are the multiples of 45° in the range, negative ones included, as a
+    southern-hemisphere sweep from −90° to 90° has them.
+    """
     low, high = float(np.min(azimuths)), float(np.max(azimuths))
-    ticks = [angle for angle in _COMPASS_POINTS if low <= angle <= high]
+    ticks = list(range(int(np.ceil(low / 45.0)) * 45, int(np.floor(high / 45.0)) * 45 + 1, 45))
     if len(ticks) >= 3:
         ax.set_xticks(ticks)
-        ax.set_xticklabels([f"{angle}° {_COMPASS_POINTS[angle]}" for angle in ticks])
+        ax.set_xticklabels([f"{angle}° {_COMPASS_POINTS[angle % 360]}".replace("-", "−") for angle in ticks])
 
 
 def plot_orientation_landscape(
@@ -1835,6 +1996,7 @@ def plot_orientation_landscape(
     azimuth: str = "azimuth",
     maximize: bool = True,
     metric_label: Optional[str] = None,
+    currency: Optional[str] = None,
     filename: str = "orientation_landscape.png",
 ) -> None:
     """
@@ -1842,7 +2004,9 @@ def plot_orientation_landscape(
 
     A tilt × azimuth sweep gets two panels. The left one maps the metric over
     both angles and marks the best orientation. The right one is the
-    east-west profile: the metric against azimuth at the best tilt.
+    east-west profile: the metric against azimuth at the best tilt. Azimuth
+    ticks carry compass points, negative azimuths included. A flat optimum
+    (0° tilt) is labelled without an azimuth, as every azimuth ties there.
 
     A sweep of tilt alone gets one panel, the metric against tilt, with the
     best tilt marked. This is the plot for an east-west roof whose
@@ -1860,11 +2024,15 @@ def plot_orientation_landscape(
         maximize: True if a higher metric is better; False for a metric such
             as ``lcoe_per_kwh``.
         metric_label: Axis and colour-bar label. Defaults to a label for the metric.
+        currency: Currency code for a money metric, for a sweep CSV, which
+            does not record it. When neither it nor ``attrs["currency"]``
+            names it, the label shows no currency code.
         filename: Output filename.
 
     Raises:
         ValueError: If the sweep has more than one run for an orientation
-            (it varies another parameter too).
+            (it varies another parameter too), if a column is missing, or if
+            the metric has no finite value.
     """
     frame = _read_table(sweep)
     tilt_column = _sweep_column(frame, tilt)
@@ -1874,7 +2042,10 @@ def plot_orientation_landscape(
         azimuth_column = None
     if azimuth_column is not None and frame[azimuth_column].nunique() < 2:
         azimuth_column = None
-    label = metric_label or _column_label(metric, _currency(frame))
+    metric = _metric_column(frame, metric)
+    if not np.isfinite(pd.to_numeric(frame[metric], errors="coerce").to_numpy(dtype=float)).any():
+        raise ValueError(f"The sweep has no finite {metric} value")
+    label = metric_label or _column_label(metric, _label_currency([frame], currency))
     pick = np.nanargmax if maximize else np.nanargmin
 
     if azimuth_column is None:
@@ -1898,30 +2069,27 @@ def plot_orientation_landscape(
         ax.set_ylabel(label)
         ax.grid(True, alpha=0.3)
         ax.legend()
-        plt.tight_layout()
-        plt.savefig(os.path.join(results_directory, filename), dpi=300)
-        plt.close()
+        fig.tight_layout()
+        fig.savefig(os.path.join(results_directory, filename), dpi=300, bbox_inches="tight")
+        plt.close(fig)
         return
 
     grid = _sweep_grid(frame, azimuth_column, tilt_column, metric)
     row, col = np.unravel_index(int(pick(grid.to_numpy())), grid.shape)
     best_tilt, best_azimuth = float(grid.index[row]), float(grid.columns[col])
     azimuths = grid.columns.to_numpy(dtype=float)
+    optimum = (
+        f"Optimum: {best_tilt:g}° tilt"
+        if best_tilt == 0
+        else f"Optimum: {best_tilt:g}° tilt, {best_azimuth:g}° azimuth"
+    )
     os.makedirs(results_directory, exist_ok=True)
 
     fig, (ax_map, ax_profile) = plt.subplots(1, 2, figsize=(16, 6.5), gridspec_kw={"width_ratios": [1.25, 1]})
     mesh = ax_map.pcolormesh(
         azimuths, grid.index.to_numpy(dtype=float), grid.to_numpy(), cmap="viridis", shading="nearest"
     )
-    ax_map.scatter(
-        [best_azimuth],
-        [best_tilt],
-        color="red",
-        marker="x",
-        s=200,
-        linewidth=3,
-        label=f"Optimum: {best_tilt:g}° tilt, {best_azimuth:g}° azimuth",
-    )
+    ax_map.scatter([best_azimuth], [best_tilt], color="red", marker="x", s=200, linewidth=3, label=optimum)
     fig.colorbar(mesh, ax=ax_map, label=label)
     ax_map.set_xlabel("Azimuth (°)")
     ax_map.set_ylabel("Tilt (°)")
@@ -1973,6 +2141,7 @@ def plot_pareto_front(
     y: str = "NPV",
     maximize: Tuple[bool, bool] = (True, True),
     color_by: Optional[str] = None,
+    currency: Optional[str] = None,
     filename: str = "pareto_front.png",
 ) -> None:
     """
@@ -1995,11 +2164,15 @@ def plot_pareto_front(
             cost such as ``Projected_Initial_Cost`` or ``lcoe_per_kwh``.
         color_by: Column that colours the front, such as ``Battery_kWh``,
             with a colour bar. None draws it in one colour.
+        currency: Currency code for money labels, for a CSV, which does not
+            record it. The optimizer's frame and a DataFrame with
+            ``attrs["currency"]`` record their own. When neither names it,
+            money labels show no currency code.
         filename: Output filename.
 
     Raises:
-        ValueError: If a column is missing, or no design has finite values
-            of both objectives.
+        ValueError: If a column is missing, ``currency`` contradicts the
+            recorded one, or no design has finite values of both objectives.
     """
     details = getattr(designs, "details", None)
     if isinstance(details, Mapping) and "pareto" in details:
@@ -2007,6 +2180,7 @@ def plot_pareto_front(
     frame = _read_table(designs)
     x_column, y_column = _sweep_column(frame, x), _sweep_column(frame, y)
     color_column = None if color_by is None else _sweep_column(frame, color_by)
+    label_currency = _label_currency([frame], currency)
     x_values = pd.to_numeric(frame[x_column], errors="coerce").to_numpy(dtype=float)
     y_values = pd.to_numeric(frame[y_column], errors="coerce").to_numpy(dtype=float)
     finite = np.isfinite(x_values) & np.isfinite(y_values)
@@ -2015,7 +2189,6 @@ def plot_pareto_front(
     frame, x_values, y_values = frame[finite], x_values[finite], y_values[finite]
     signs = [1.0 if higher else -1.0 for higher in maximize]
     front = _pareto_mask(signs[0] * x_values, signs[1] * y_values)
-    currency = _currency(frame)
     os.makedirs(results_directory, exist_ok=True)
 
     fig, ax = plt.subplots(figsize=(11, 7))
@@ -2041,9 +2214,9 @@ def plot_pareto_front(
             zorder=3,
             label=front_label,
         )
-        fig.colorbar(points, ax=ax, label=_column_label(color_column, currency))
-    ax.set_xlabel(_column_label(x_column, currency))
-    ax.set_ylabel(_column_label(y_column, currency))
+        fig.colorbar(points, ax=ax, label=_column_label(color_column, label_currency))
+    ax.set_xlabel(_column_label(x_column, label_currency))
+    ax.set_ylabel(_column_label(y_column, label_currency))
     ax.grid(True, alpha=0.3)
     ax.legend()
 

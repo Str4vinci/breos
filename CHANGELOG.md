@@ -344,35 +344,53 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   ([#186](https://github.com/Str4vinci/breos/issues/186)), in
   `breos.plotting` and the top-level `breos` namespace. They read the CSV
   `breos sweep` writes, or its DataFrame, and take a swept key as in the
-  config (`n_modules`) or as its column (`param_n_modules`):
+  config (`n_modules`) or as its column (`param_n_modules`); both name the
+  swept `param_` column, not the result column of the same name. A misspelt
+  key or metric raises `ValueError` and lists the table's columns:
   - `plot_sweep_heatmap(sweep, metric, results_directory, x=None, y=None,
-    diff=None, ...)` draws one result column of a two-parameter sweep. With
-    `diff=`, a second sweep over the same grid, it draws the difference on a
-    diverging scale, for example the same sizing grid at two locations.
+    diff=None, labels=None, ..., currency=None, filename=None)` draws one
+    result column of a two-parameter sweep. With `diff=`, a second sweep over
+    the same grid, it draws the difference, for example the same sizing grid
+    at two locations; a difference of a percentage is labelled in percentage
+    points. A difference, and a metric with both gains and losses such as
+    `npv_savings`, use a diverging colour scale centred on zero. `labels`
+    without `diff` raises `ValueError`.
   - `plot_orientation_landscape(sweep, metric, results_directory, tilt="tilt",
-    azimuth="azimuth", maximize=True, ...)` maps a tilt × azimuth sweep, marks
-    the best orientation and draws the east-west profile at the best tilt. A
-    sweep of tilt alone, such as an east-west roof, gets the tilt profile.
+    azimuth="azimuth", maximize=True, ..., currency=None, ...)` maps a tilt ×
+    azimuth sweep, marks the best orientation and draws the east-west profile
+    at the best tilt. Azimuth ticks carry compass points, negative
+    (southern-hemisphere) azimuths included. A sweep of tilt alone, such as
+    an east-west roof, gets the tilt profile.
   - `plot_pareto_front(designs, results_directory, x="Grid_Independence_%",
-    y="NPV", maximize=(True, True), color_by=None, ...)` draws two objectives
-    of the `OptimizationResult` of `optimize_system_multi_objective`, its
-    `details["pareto"]` frame, or any table of designs, and marks the designs
-    that no other one beats in both.
+    y="NPV", maximize=(True, True), color_by=None, currency=None, ...)` draws
+    two objectives of the `OptimizationResult` of
+    `optimize_system_multi_objective`, its `details["pareto"]` frame, or any
+    table of designs, and marks the designs that no other one beats in both.
+
+  A sweep CSV does not record its currency: `currency=` names it for the
+  money labels. Without it, and without `attrs["currency"]` on a DataFrame,
+  the labels name no currency ("NPV savings") rather than assume EUR.
 
 ### Changed
 - **`plot_breakeven_comparison` reads App results**
   ([#186](https://github.com/Str4vinci/breos/issues/186)). It takes
   `App.result()` dicts, whose `financial` rows it reads, or cost projection
   frames: `plot_breakeven_comparison(projections, labels, results_directory,
-  colors=None, filename=...)`. `colors` moves after the directory and
-  defaults to the colour cycle, and `results_dir` is now
+  colors=None, currency=None, filename=...)`. To migrate, the first
+  argument `cost_dfs` is now `projections`, `colors` moves after the
+  directory and defaults to the colour cycle, and `results_dir` is now
   `results_directory`, as in the other plots. Each curve now starts at year 0
   with the investment, and the no-system baseline at 0, so the dotted payback
   line meets the curves where they cross; before, the curves began at year 1.
-  Labels or colours that do not match the projections, projections in two
-  currencies, and a [period] result without `financial` rows raise
-  `ValueError`. The payback line was already the shared
-  `find_payback_year_interpolated` rule.
+  Each payback line is labelled with its year. A baseline that every
+  scenario shares is drawn once, in black, as "No system"; otherwise each
+  group of scenarios that share one gets "No system (<labels>)". A
+  projection read back from CSV records no currency: it takes the currency
+  of the other projections, or `currency=`, or the axis shows no currency
+  code. Labels or colours that do not match the projections, projections
+  that record two currencies, a `currency=` that contradicts a recorded one,
+  and a `[period]` result without `financial` rows raise `ValueError`. The
+  payback line was already the shared `find_payback_year_interpolated` rule.
 - **The TMY-versus-historical weather plots compute their own statistics**
   ([#186](https://github.com/Str4vinci/breos/issues/186)).
   `plot_weather_monthly_comparison(tmy, historical, results_directory,
@@ -384,6 +402,20 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   years as the study, and Open-Meteo column names. Before, they took monthly
   arrays and a statistics table that the caller had to build.
   `plot_weather_monthly_comparison` also draws `dni`, `dhi` and `temp_air`.
+  To migrate `plot_weather_monthly_comparison`: `tmy_vals` and `stats` are
+  replaced by `tmy` and `historical`; `ylabel` is gone, as the label comes
+  from `variable`; `tmy_source` is now `tmy_label`, and the TMY legend entry
+  is its text as given, not "TMY (<source>)"; `results_dir` is now
+  `results_directory`; and `filename` is optional, defaulting to
+  `weather_monthly_<variable>.png`. Its "Min year" and "Max year" legend
+  entries are now "Monthly minimum" and "Monthly maximum": each month's
+  lowest and highest value over the years, which can come from different
+  years. To migrate `plot_weather_annual_ghi_distribution`:
+  `annual_ghi_per_year`, `tmy_annual_ghi` and `hist_annual_ghi_mean` are
+  replaced by `tmy` and `historical`, and `results_dir` is now
+  `results_directory`. Missing weather values warn, and the monthly figures
+  skip them; the annual distribution raises `ValueError` for a TMY or year
+  without GHI for a whole month.
 - `breos validate-config --json` and `breos run --dry-run` build their
   resolved-config summary from the config registry: each `AppConfigField`
   names its place (`summary = "section.key"`), so every App key is reported
@@ -494,12 +526,12 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   | `breos.io` summary label | `LCOE [EUR/kWh]` | `LCOE [<currency>/kWh]` |
   | `breos.io` summary label | `Total Investment [EUR]` | `Total Investment [<currency>]` |
   | `breos.io` summary label | `NPV Savings [EUR]` | `NPV Savings [<currency>]` |
-  | `plot_pareto_front_analysis` input column | `Net_Cost_Eur` | `Net_Cost` |
 
   The ADR's table also lists `SteadyState_NPV_Eur` and
   `replacement_cost_eur_each`; both went earlier in this release with the
   steady-state objective basis. It lists two `plot_tariff_comparison` input
-  columns as well; that function was removed in this release (see Removed).
+  columns and a `plot_pareto_front_analysis` one as well; both functions
+  were removed in this release (see Removed).
   `_t0_prices` marks a total at t = 0 prices, neither inflated nor
   discounted. `App.result()` gains
   `battery_replacement_cost_npv` beside it: the same replacements inflated to
