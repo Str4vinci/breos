@@ -160,6 +160,8 @@ def quarter_hour_year(tmp_path_factory):
 
 
 def test_every_case_is_checked_before_the_first_child(quarter_hour_year, monkeypatch):
+    # The children are stubbed, so the checks run without pymoo or Numba installed.
+    monkeypatch.setattr(bench, "missing_dependencies", lambda: [])
     monkeypatch.setattr(bench, "run_child", lambda *args: pytest.fail("a child started before the inputs were checked"))
     argv = ["--weather-file", str(quarter_hour_year), "--resolution", "15min", "h", "--smoke", "--warm-repeats", "1"]
     with pytest.raises(ValueError, match="hourly case needs hourly weather"):
@@ -175,6 +177,7 @@ def test_a_failed_child_still_writes_a_partial_report(quarter_hour_year, monkeyp
             return _parity()
         raise RuntimeError("child measure-15min-cold-python-0 failed")
 
+    monkeypatch.setattr(bench, "missing_dependencies", lambda: [])
     monkeypatch.setattr(bench, "run_child", child)
     output = tmp_path / "out" / "report.json"
     argv = ["--weather-file", str(quarter_hour_year), "--resolution", "15min", "--smoke", "--warm-repeats", "1"]
