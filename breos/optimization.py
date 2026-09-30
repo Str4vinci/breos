@@ -16,8 +16,6 @@ import pandas as pd
 from breos.battery import BatteryConfig, simulate_energy_balance
 from breos.dispatch_instructions import DispatchInstructions
 from breos.economics import (
-    DEFAULT_DISCOUNT_RATE,
-    DEFAULT_INFLATION_RATE,
     calculate_costs,
     cost_analysis_projection,
     cost_params_from_config,
@@ -46,6 +44,7 @@ from breos.solar import (
 )
 from breos.tariffs import ResolvedTariff, result_currency, tariff_provenance
 from breos.utils import get_hours_per_step
+from breos.weather import build_battery_temperature_series
 
 
 @dataclass
@@ -262,8 +261,6 @@ def optimize_battery_size(
 # Constants for defaults (can be overridden by config)
 DEFAULT_MODULE_AREA = 1.134 * 2.278
 
-DEFAULT_PROJECT_LIFESPAN = 20
-
 
 def _pv_params_from_config(params: Dict[str, Any]) -> PVModuleParams:
     """Build PVModuleParams from an inline config mapping."""
@@ -324,25 +321,6 @@ def _resolve_pv_module_and_area(config: Dict[str, Any]) -> Tuple[PVModuleParams,
 
         pv_params = get_module(pv_cfg["module"])
     return pv_params, _module_area_from_dimensions(_dimensions_from_section(pv_cfg))
-
-
-def _temperature_series_from_config(
-    temp_config: Any,
-    index: pd.DatetimeIndex,
-    weather_df: Optional[pd.DataFrame] = None,
-    indoor_model: Optional[Dict[str, Any]] = None,
-    align_weather_year: bool = False,
-) -> pd.Series:
-    """Build a battery temperature series from config, weather, or a fixed value."""
-    from breos.weather import build_battery_temperature_series
-
-    return build_battery_temperature_series(
-        temp_config=temp_config,
-        index=index,
-        weather_df=weather_df,
-        indoor_model=indoor_model,
-        align_weather_year=align_weather_year,
-    )
 
 
 def _resolve_horizon_and_pv_degradation(config: Dict[str, Any]) -> Tuple[int, float]:
@@ -512,12 +490,12 @@ def _projection_rates(fin_cfg: Dict[str, Any]) -> Dict[str, Any]:
         return None if value is None else float(value)
 
     rates = {
-        "inflation_rate": float(fin_cfg.get("inflation_rate", DEFAULT_INFLATION_RATE)),
-        "sell_price_inflation": float(fin_cfg.get("sell_price_inflation", 0.0)),
+        "inflation_rate": float(fin_cfg["inflation_rate"]),
+        "sell_price_inflation": float(fin_cfg["sell_price_inflation"]),
         "import_price_escalation": optional("import_price_escalation"),
         "om_escalation": optional("om_escalation"),
         "replacement_cost_learning": optional("replacement_cost_learning") or 0.0,
-        "discount_rate": float(fin_cfg.get("discount_rate", DEFAULT_DISCOUNT_RATE)),
+        "discount_rate": float(fin_cfg["discount_rate"]),
     }
     for key in ("inflation_rate", "sell_price_inflation", "import_price_escalation", "om_escalation", "discount_rate"):
         if rates[key] is not None and not rates[key] > -1:
@@ -530,7 +508,6 @@ def _projection_rates(fin_cfg: Dict[str, Any]) -> Dict[str, Any]:
 def _evaluate_projected_design_metrics(
     *,
     base_dc_power: Union[pd.Series, Sequence[pd.Series]],
-    tmy_data: pd.DataFrame,
     houseload: pd.DataFrame,
     temperature_series: pd.Series,
     pv_params: PVModuleParams,
@@ -859,7 +836,7 @@ def evaluate_projected_design(
     # A weather sequence keeps the representative year's temperatures, so they
     # are restamped onto the sequence's calendar year rather than reindexed
     # across years, which found no match and used to fall back to 25 C.
-    temperature_series = _temperature_series_from_config(
+    temperature_series = build_battery_temperature_series(
         battery["temperature"],
         dc_index,
         weather_df=tmy_data,
@@ -871,7 +848,6 @@ def evaluate_projected_design(
     raw_metrics = _evaluate_projected_design_metrics(
         execution_backend=execution_backend,
         base_dc_power=base_dc_power,
-        tmy_data=tmy_data,
         houseload=houseload,
         temperature_series=temperature_series,
         pv_params=pv_params,
@@ -925,6 +901,7 @@ def _snap_to_grid_within_bounds(values: np.ndarray, step: float, lower: float, u
 # it optimize_system_multi_objective raises ImportError. They subclass pymoo
 # types at module level so an optimizer result that stores them pickles, which
 # means ``import breos`` imports pymoo whenever it is installed.
+_PYMOO_IMPORT_ERROR: Optional[ImportError] = None
 try:
     from pymoo.core.problem import ElementwiseProblem
     from pymoo.core.repair import Repair
@@ -946,29 +923,15 @@ try:
             return 0.0 if algorithm.n_gen < self.minimum else progress
 
     class DiscreteGridRepair(Repair):
-        def _do(self, problem, pop, **kwargs):
-            # 1. Handle Input Type
-            try:
-                X = pop.get("X")
-                is_population = True
-            except AttributeError:
-                X = pop
-                is_population = False
-
-            # --- 2. Apply Rounding Logic ---
-
-            # Modules and battery kWh snap to integers, tilt and azimuth to
-            # 5 degrees. Every column stays inside the problem bounds.
+        def _do(self, problem, X, **kwargs):
+            # pymoo's Repair.do passes the design matrix and writes the result
+            # back onto the population. Modules and battery kWh snap to
+            # integers, tilt and azimuth to 5 degrees. Every column stays
+            # inside the problem bounds.
             steps = (1.0, 1.0, 5.0, 5.0)
             for col in range(X.shape[1]):
                 X[:, col] = _snap_to_grid_within_bounds(X[:, col], steps[col], problem.xl[col], problem.xu[col])
-
-            # --- 3. Return Correct Format ---
-            if is_population:
-                pop.set("X", X)
-                return pop
-            else:
-                return X
+            return X
 
     class SolarDesignProblem(ElementwiseProblem):
         def __init__(
@@ -1084,9 +1047,6 @@ try:
             state["elementwise_runner"] = None
             return state
 
-        def __setstate__(self, state):
-            self.__dict__.update(state)
-
         def _evaluate(self, x, out, *args, **kwargs):
             # Extract Genes
             n_modules = int(round(x[0]))
@@ -1139,7 +1099,7 @@ try:
             pv_peak_w = n_modules * pv_params.Mpp
             inverter_ac_capacity_w = inverter_ac_capacity_w_for(pv_peak_w, self.dc_ac_ratio)
 
-            temperature_series = _temperature_series_from_config(
+            temperature_series = build_battery_temperature_series(
                 self.batt_temp_cfg,
                 dc_production.index,
                 weather_df=self.tmy_data,
@@ -1150,7 +1110,6 @@ try:
             projected_metrics = _evaluate_projected_design_metrics(
                 execution_backend=self.execution_backend,
                 base_dc_power=dc_production,
-                tmy_data=self.tmy_data,
                 houseload=houseload_df,
                 temperature_series=temperature_series,
                 pv_params=pv_params,
@@ -1195,9 +1154,8 @@ try:
             out["F"] = [objective_grid_dependence, -objective_npv]
             out["G"] = constraints
 
-except ImportError:
-    # If pymoo is not installed, these classes won't be available
-    pass
+except ImportError as exc:
+    _PYMOO_IMPORT_ERROR = exc
 
 
 def _build_multi_objective_termination(n_gen: int, early_stop: Any):
@@ -1296,21 +1254,16 @@ def optimize_system_multi_objective(
         ImportError: If pymoo is not installed.
         RuntimeError: If the optimizer returns no feasible solution.
     """
-    if "SolarDesignProblem" not in globals() or "DiscreteGridRepair" not in globals():
+    if _PYMOO_IMPORT_ERROR is not None:
         raise ImportError(
             "pymoo is required for optimize_system_multi_objective(). Install with: pip install 'breos[optimization]'"
-        )
+        ) from _PYMOO_IMPORT_ERROR
 
-    try:
-        from pymoo.algorithms.moo.nsga2 import NSGA2
-        from pymoo.operators.crossover.sbx import SBX
-        from pymoo.operators.mutation.pm import PM
-        from pymoo.operators.sampling.rnd import FloatRandomSampling
-        from pymoo.optimize import minimize
-    except ImportError as exc:
-        raise ImportError(
-            "pymoo is required for optimize_system_multi_objective(). Install with: pip install 'breos[optimization]'"
-        ) from exc
+    from pymoo.algorithms.moo.nsga2 import NSGA2
+    from pymoo.operators.crossover.sbx import SBX
+    from pymoo.operators.mutation.pm import PM
+    from pymoo.operators.sampling.rnd import FloatRandomSampling
+    from pymoo.optimize import minimize
 
     config = resolve_optimization_config(config)
     settings = resolve_run_settings(config, pop_size=pop_size, n_gen=n_gen, n_offsprings=n_offsprings, seed=seed)

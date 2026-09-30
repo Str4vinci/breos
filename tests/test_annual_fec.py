@@ -10,8 +10,17 @@ import pandas as pd
 import pytest
 
 from breos.battery import BatteryConfig, simulate_energy_balance
+from breos.economics import DEFAULT_DISCOUNT_RATE, DEFAULT_INFLATION_RATE
 from breos.optimization import ProjectedDesignResult, _evaluate_projected_design_metrics
 from breos.pv_modules import get_module
+
+# The rates resolve_optimization_config fills in; the private evaluator reads
+# them from the resolved financials rather than defaulting them again.
+_RATES = {
+    "inflation_rate": DEFAULT_INFLATION_RATE,
+    "sell_price_inflation": 0.0,
+    "discount_rate": DEFAULT_DISCOUNT_RATE,
+}
 
 # The battery and replacement series the yearly ledger reports per year.
 REQUIRED_YEARLY_BATTERY_COLUMNS = (
@@ -100,13 +109,12 @@ def _projected_result(*, battery_kwh: float, batt_spec: dict, years: int = 2, da
     idx, base_dc, houseload, temperature = _cycling_span(days)
     metrics = _evaluate_projected_design_metrics(
         base_dc_power=base_dc,
-        tmy_data=pd.DataFrame({"temp_air": 20.0, "ghi": 500.0}, index=idx),
         houseload=houseload,
         temperature_series=temperature,
         pv_params=get_module("Suntech_STP550S_STC"),
         batt_spec=batt_spec,
         costs_cfg={"storage_cost_per_kwh": 500.0},
-        fin_cfg={"project_lifespan": years},
+        fin_cfg={**_RATES, "project_lifespan": years},
         freq="h",
         years_projection=years,
         degradation_rate=0.005,
