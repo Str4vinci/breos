@@ -213,6 +213,9 @@ def test_cost_projection_needs_year_rows():
         cost_analysis_projection(None, {"total_initial_cost": 1000.0}, num_years=2)
     with pytest.raises(ValueError, match="needs yearly_summary_df"):
         cost_analysis_projection(pd.DataFrame(), {"total_initial_cost": 1000.0}, num_years=2)
+    steps = pd.DataFrame({"PV_AC_Export": [1.0]}, index=pd.date_range("2025-01-01", periods=1, freq="h"))
+    with pytest.raises(ValueError, match="not a per-step results frame"):
+        cost_analysis_projection(steps, {"total_initial_cost": 1000.0}, num_years=1)
 
 
 class TestFindPaybackYear:

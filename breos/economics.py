@@ -773,11 +773,17 @@ def cost_analysis_projection(
         DataFrame with yearly cost projections
 
     Raises:
-        ValueError: If ``yearly_summary_df`` is missing or empty, or its
-            ``Year`` labels are not exactly 1 through ``num_years``.
+        ValueError: If ``yearly_summary_df`` is missing, empty or has no
+            ``Year`` column, or its ``Year`` labels are not exactly 1 through
+            ``num_years``.
     """
     if not isinstance(yearly_summary_df, pd.DataFrame) or yearly_summary_df.empty:
         raise ValueError("cost_analysis_projection needs yearly_summary_df, one row per simulated project year")
+    if "Year" not in yearly_summary_df.columns:
+        raise ValueError(
+            "yearly_summary_df has no Year column: cost_analysis_projection takes one row per project year, "
+            "not a per-step results frame"
+        )
     year_rows = _validated_year_rows(yearly_summary_df, num_years)
     year_rows = price_year_rows(year_rows, costs)
 

@@ -436,7 +436,7 @@ def _evaluate_projected_design_metrics(
     total_replacements = projection.total_replacements
     current_soh = float(projection.carry.soh_pct)
     cost_projection = cost_analysis_projection(
-        yearly_summary_df,
+        yearly_summary_df=yearly_summary_df,
         costs=costs,
         num_years=years_projection,
         **_projection_rates(fin_cfg),
