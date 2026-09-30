@@ -929,17 +929,20 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   publication share a phase. A file in its own year loads unchanged. A dated
   E-REDES file must start at 1 January 00:00; one that starts elsewhere, for
   example with interval-end stamps from 00:15, raises `ValueError` and names
-  the converter. Undated E-REDES files, `bdew_h0`, `ree_2.0td` and `custom`
-  keep their positional placement, and the demandlib H0 alignment is unchanged
-  bit for bit. Monte Carlo aligns to its `target_year` the same way. No result
-  or provenance field is added; `provenance.load_profile` still records the
-  file and its SHA-256. **Results change for E-REDES runs whose study year
-  differs from the file's dated year.** This was measured on two BTN C files,
-  a 15-minute file dated 2025 and an hourly file dated 2023, for a 2026 study
-  at 3,500 kWh with 8 modules on the Porto TMY. The tariffs were the bundled
-  2026 weekly bi-hourly and tri-hourly schedules with illustrative prices.
-  Across PV only, PV with a 5 kWh battery, and fixed-target smart charging,
-  the change is:
+  the converter. Its timestamps must be naive civil times: a timestamp with a
+  UTC offset, fixed or changing at DST, raises `ValueError`, because read as a
+  UTC instant a summer row would move one hour from its civil time. Other
+  profiles still read offset timestamps as UTC instants. Undated E-REDES
+  files, `bdew_h0`, `ree_2.0td` and `custom` keep their positional placement,
+  and the demandlib H0 alignment is unchanged bit for bit. Monte Carlo aligns
+  to its `target_year` the same way. No result or provenance field is added;
+  `provenance.load_profile` still records the file and its SHA-256. **Results
+  change for E-REDES runs whose study year differs from the file's dated
+  year.** This was measured on two BTN C files, a 15-minute file dated 2025
+  and an hourly file dated 2023, for a 2026 study at 3,500 kWh with 8 modules
+  on the Porto TMY. The tariffs were the bundled 2026 weekly bi-hourly and
+  tri-hourly schedules with illustrative prices. Across PV only, PV with a 5
+  kWh battery, and fixed-target smart charging, the change is:
   - year-1 bill without a system: −0.49 to +1.29 EUR (−0.08% to +0.19%);
   - year-1 import bill with the system: −0.27 to +1.33 EUR (−0.16% to +0.76%);
   - grid import: −1.7 to +6.9 kWh;

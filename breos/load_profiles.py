@@ -8,6 +8,7 @@ and resampling between hourly and 15-minute intervals.
 
 import hashlib
 import os
+import re
 from contextlib import nullcontext
 from dataclasses import dataclass
 from datetime import date, timedelta
@@ -305,9 +306,9 @@ def load_profile(
         ValueError: If profile_type is not recognized or was removed, the
             column or unit options do not fit it, a filename pattern matches
             several files, or start_date is not 1 January. Also if a dated
-            E-REDES file does not start at 1 January 00:00, or its timestamp
-            year or the study year is before 2004, the first year of the
-            Portuguese holiday calendar
+            E-REDES file has timestamps with UTC offsets, does not start at
+            1 January 00:00, or its timestamp year or the study year is
+            before 2004, the first year of the Portuguese holiday calendar
         FileNotFoundError: If the profile's file is missing
     """
     freq = normalise_frequency(freq)
@@ -327,11 +328,15 @@ def load_profile(
     else:
         columns, default_unit = spec.columns, spec.unit
 
+    day_type = _DAY_TYPE_ALIGNED.get(source.key)
+    # A dated E-REDES file is aligned by civil date, so its timestamps must be
+    # on the civil clock, without UTC offsets.
+    is_eredes = day_type is _btn_day_type
     path_context = as_file(source.source) if source.packaged else nullcontext(source.source)
     with path_context as csv_file:
         csv_path = Path(csv_file)
         df, native_freq, column, unit, source_start = _load_profile_csv(
-            csv_path, columns, default_unit, source.native_freq
+            csv_path, columns, default_unit, source.native_freq, naive_timestamps=is_eredes
         )
         sha256 = hashlib.sha256(csv_path.read_bytes()).hexdigest()
 
@@ -342,7 +347,6 @@ def load_profile(
     end_ts = start_ts + pd.DateOffset(years=1)
     new_index = pd.date_range(start=start_ts, end=end_ts, freq=native_freq, inclusive="left")
 
-    day_type = _DAY_TYPE_ALIGNED.get(source.key)
     if source.key == "demandlib_h0":
         if (
             source_start is None
@@ -626,6 +630,8 @@ def _load_profile_csv(
     columns: tuple[tuple[str, str], ...],
     default_unit: str,
     native_freq: Optional[str],
+    *,
+    naive_timestamps: bool = False,
 ) -> tuple[pd.DataFrame, str, str, str, pd.Timestamp | None]:
     """Read a profile CSV, convert its load column to W, and validate it.
 
@@ -635,7 +641,8 @@ def _load_profile_csv(
     the row count. Fully blank rows (such as the trailing ``,,,`` row of
     E-REDES exports) are dropped. The remaining rows must be finite and
     non-negative, and a leading timestamp column, when present, must step at
-    the native resolution.
+    the native resolution. With ``naive_timestamps`` (dated E-REDES files),
+    a timestamp with a UTC offset is refused.
 
     Returns the frame, its native resolution, and the column and unit read.
     """
@@ -672,7 +679,7 @@ def _load_profile_csv(
             )
 
     df = raw[[column]].rename(columns={column: LOAD_COLUMN})
-    source_start = _validate_profile_rows(df, timestamps, native_freq, csv_file)
+    source_start = _validate_profile_rows(df, timestamps, native_freq, csv_file, naive_timestamps=naive_timestamps)
     if unit in _ENERGY_UNIT_TO_WH:
         df[LOAD_COLUMN] *= _ENERGY_UNIT_TO_WH[unit] / get_hours_per_step(native_freq)
     else:
@@ -681,7 +688,12 @@ def _load_profile_csv(
 
 
 def _validate_profile_rows(
-    df: pd.DataFrame, timestamps: Optional[pd.Series], native_freq: str, csv_file: Path
+    df: pd.DataFrame,
+    timestamps: Optional[pd.Series],
+    native_freq: str,
+    csv_file: Path,
+    *,
+    naive_timestamps: bool = False,
 ) -> pd.Timestamp | None:
     """Refuse non-numeric, non-finite, negative, or irregularly stamped rows."""
     values = pd.to_numeric(df["Electrical Consumption [W]"], errors="coerce").to_numpy(dtype=float)
@@ -704,7 +716,7 @@ def _validate_profile_rows(
     # a DST gap or a missing row would otherwise move later rows by one step.
     if timestamps is None or pd.api.types.is_numeric_dtype(timestamps):
         return None
-    stamps = _parse_profile_timestamps(timestamps, csv_file)
+    stamps = _parse_profile_timestamps(timestamps, csv_file, naive_timestamps=naive_timestamps)
     if stamps is None:
         return None
     step = pd.Timedelta(pd.tseries.frequencies.to_offset(native_freq))
@@ -718,13 +730,37 @@ def _validate_profile_rows(
     return stamps.iloc[0]
 
 
-def _parse_profile_timestamps(timestamps: pd.Series, csv_file: Path) -> Optional[pd.Series]:
+# A trailing UTC offset after a clock time: Z, +01, +0100 or +01:00.
+_UTC_OFFSET = re.compile(r"\d{2}:\d{2}(?::\d{2}(?:[.,]\d+)?)?\s*(?P<offset>[Zz]|[+-]\d{2}(?::?\d{2})?)$")
+
+
+def _parse_profile_timestamps(
+    timestamps: pd.Series, csv_file: Path, *, naive_timestamps: bool = False
+) -> Optional[pd.Series]:
     """Parse ISO or day-first (E-REDES) timestamps.
 
     Returns None when no row parses as a timestamp in either format: the first
     column is then a label, not a time column. Raises when some rows parse and
     others do not, because a damaged time column cannot be checked for gaps.
+
+    With ``naive_timestamps``, a stamp with a UTC offset raises before
+    parsing. The parse below reads every stamp as a UTC instant, which would
+    move an offset-stamped row off its civil date and hour.
     """
+    if naive_timestamps:
+        offsets = timestamps.astype(str).str.strip().str.extract(_UTC_OFFSET)["offset"]
+        stamped = np.flatnonzero(offsets.notna().to_numpy())
+        if stamped.size:
+            row = int(stamped[0])
+            distinct = sorted(set(offsets.dropna()))
+            kind = "one fixed offset" if len(distinct) == 1 else f"{len(distinct)} different offsets"
+            raise ValueError(
+                f"Load profile {csv_file} has {stamped.size} timestamps with a UTC offset, {kind} "
+                f"({', '.join(distinct)}; first at data row {row}: {timestamps.iloc[row]!r}). A dated E-REDES "
+                "file needs naive civil timestamps, the local wall-clock start of each interval, so each "
+                "row keeps its civil date. Remove the offsets, or convert the E-REDES publication with "
+                "tools/convert_eredes_profiles.py."
+            )
     best = None
     for kwargs in ({"format": "ISO8601"}, {"format": "%d/%m/%Y %H:%M"}):
         # utc=True compares offset-aware stamps as instants, so a file whose

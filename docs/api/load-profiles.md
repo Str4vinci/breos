@@ -89,8 +89,16 @@ For years after the current one, BREOS assumes that the current holiday list
 continues.
 
 A dated E-REDES file must start at 1 January 00:00, the start of its first
-interval, and hold exactly that calendar year. An undated E-REDES file is
-placed by position.
+interval, and hold exactly that calendar year. Its timestamps must be naive
+civil times: the local wall-clock start of each interval, with no UTC offset
+(`2026-07-01 13:00`, not `2026-07-01 13:00+01:00`). BREOS aligns the file by
+civil date and hour. It reads offset-stamped rows as UTC instants, so in
+summer each row would move one hour from its civil time. Thus a file with an
+offset on any timestamp raises `ValueError`. This applies to one fixed offset
+(including `Z` or `+00:00`) and to offsets that change at DST. The converter
+writes naive civil timestamps. This rule is only for E-REDES files. Other
+dated profiles, including `custom`, can still have offsets. An undated
+E-REDES file is placed by position.
 
 To make the files from the E-REDES publication
 (`Perfil_Consumo_Injecao_E-REDES_<year>.csv`), use the converter in the

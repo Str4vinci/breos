@@ -583,6 +583,104 @@ def test_dated_eredes_profile_from_2004_is_aligned(tmp_path):
     assert daily[date(2026, 1, 2)] / daily[date(2026, 1, 1)] == pytest.approx(1001 / 1000)
 
 
+def _write_stamped_eredes(path, stamps):
+    day = np.arange(len(stamps)) // (96 if len(stamps) > 9000 else 24)
+    lines = ["DateTime,BTN C - Wh", *(f"{stamp},{1000.0 + d}" for stamp, d in zip(stamps, day))]
+    path.write_text("\n".join(lines) + "\n")
+
+
+def _one_offset_row(freq, periods):
+    stamps = pd.date_range("2025-01-01", periods=periods, freq=freq).strftime("%Y-%m-%d %H:%M:%S").tolist()
+    stamps[4000] += "+01:00"
+    return stamps
+
+
+@pytest.mark.parametrize(
+    ("freq", "stamps", "message"),
+    [
+        # Lisbon offsets change at DST: one rejected file of each resolution.
+        (
+            "h",
+            lambda: pd.date_range("2025-01-01", periods=8760, freq="h", tz="Europe/Lisbon").astype(str),
+            r"8760 timestamps with a UTC offset, 2 different offsets \(\+00:00, \+01:00; first at data row 0",
+        ),
+        (
+            "15min",
+            lambda: pd.date_range("2025-01-01", periods=35040, freq="15min", tz="Europe/Lisbon").astype(str),
+            r"35040 timestamps with a UTC offset, 2 different offsets",
+        ),
+        # A fixed offset, even UTC itself, is refused too.
+        (
+            "h",
+            lambda: pd.date_range("2025-01-01", periods=8760, freq="h", tz="Etc/GMT-1").astype(str),
+            r"8760 timestamps with a UTC offset, one fixed offset \(\+01:00;",
+        ),
+        (
+            "15min",
+            lambda: pd.date_range("2025-01-01", periods=35040, freq="15min").strftime("%Y-%m-%dT%H:%M:%SZ"),
+            r"one fixed offset \(Z;",
+        ),
+        (
+            "h",
+            lambda: pd.date_range("2025-01-01", periods=8760, freq="h", tz="UTC").strftime("%Y-%m-%d %H:%M%z"),
+            r"one fixed offset \(\+0000;",
+        ),
+        # One offset-stamped row among naive ones.
+        ("h", lambda: _one_offset_row("h", 8760), r"has 1 timestamps with a UTC offset.*data row 4000"),
+    ],
+)
+def test_dated_eredes_file_with_utc_offsets_is_refused(tmp_path, freq, stamps, message):
+    # Read as UTC instants, Lisbon summer rows would move an hour off their
+    # civil time: 1 July 13:00 local would load at 12:00.
+    name = "EREDES_2025_BTN_1000kwh_15min.csv" if freq == "15min" else "EREDES_2025_BTN_1000kwh_hourly.csv"
+    _write_stamped_eredes(tmp_path / name, stamps())
+
+    with pytest.raises(ValueError, match=rf"{message}.*needs naive civil timestamps"):
+        load_profile("eredes_btn_c", 1000, start_date="2026-01-01", freq=freq, rlp_directory=str(tmp_path))
+    with pytest.raises(ValueError, match="needs naive civil timestamps"):
+        load_profile("eredes_btn_c", 1000, freq=freq, rlp_directory=str(tmp_path), profile_file=tmp_path / name)
+
+
+@pytest.mark.parametrize(
+    ("freq", "stamp_format"),
+    [("h", "%Y-%m-%d %H:%M:%S"), ("15min", "%Y-%m-%dT%H:%M"), ("15min", "%d/%m/%Y %H:%M")],
+)
+def test_dated_eredes_file_with_naive_civil_timestamps_loads(tmp_path, freq, stamp_format):
+    periods = 35040 if freq == "15min" else 8760
+    name = "EREDES_2025_BTN_1000kwh_15min.csv" if freq == "15min" else "EREDES_2025_BTN_1000kwh_hourly.csv"
+    _write_stamped_eredes(
+        tmp_path / name, pd.date_range("2025-01-01", periods=periods, freq=freq).strftime(stamp_format)
+    )
+
+    load = load_profile("eredes_btn_c", 1000, freq=freq, rlp_directory=str(tmp_path), timezone="Europe/Lisbon")
+
+    civil = load.iloc[:, 0]
+    civil.index = civil.index.tz_localize(None)
+    civil = civil[~civil.index.duplicated(keep="last")]
+    # 1 July 13:00 civil time keeps the value of the 1 July row.
+    scale = civil.loc["2025-01-01 00:00"] / 1000.0
+    assert civil.loc["2025-07-01 13:00"] == pytest.approx((1000.0 + 181) * scale)
+
+
+@pytest.mark.parametrize("key", ["custom", "ree_2.0td", "demandlib_h0"])
+def test_offset_stamped_profiles_other_than_eredes_still_load(tmp_path, key):
+    # Only dated E-REDES files need naive stamps. Other files keep reading
+    # offset stamps as UTC instants, evenly spaced across DST.
+    stamps = pd.date_range("2025-01-01", periods=8760, freq="h", tz="Europe/Lisbon").astype(str)
+    column = {"custom": "Power [W]", "ree_2.0td": "Electrical Consumption [W]"}.get(key, "Electrical Consumption [W]")
+    lines = [f"DateTime,{column}", *(f"{t},100" for t in stamps)]
+    name = {"custom": "measured.csv", "ree_2.0td": "REE_2025_2.0TD_1000kwh_hourly.csv"}.get(
+        key, PROFILES["demandlib_h0"].files["h"]
+    )
+    (tmp_path / name).write_text("\n".join(lines) + "\n")
+    options = {"profile_file": tmp_path / name, "profile_unit": "W"} if key == "custom" else {}
+
+    load = load_profile(key, 1000, start_date="2025-01-01", rlp_directory=str(tmp_path), **options)
+
+    assert len(load) == 8760
+    assert load.iloc[:, 0].sum() / 1000 == pytest.approx(1000)
+
+
 def test_dated_custom_and_other_external_profiles_stay_positional(tmp_path):
     day = np.arange(8760) // 24
     _write_custom(tmp_path / "measured.csv", 100.0 + day)
