@@ -2,9 +2,9 @@
  "case": "nsga2_front",
  "title": "NSGA-II sizing front",
  "breos_version": "0.6.2",
- "git_describe": "v0.6.2-570-g829b301-dirty",
- "generated_utc": "2026-10-01T16:04:03+00:00",
- "runtime_s": 230.5,
+ "git_describe": "v0.6.2-585-gde0b8a1",
+ "generated_utc": "2026-10-01T20:28:14+00:00",
+ "runtime_s": 227.2,
  "cheap": false,
  "configs": {
   "configs/optimization/projected-optimization.toml": "a4bc1f7f57216078e866db21a8f0dab34506e134e154a27b77edaf0410aefa0d"
@@ -24,6 +24,7 @@
   "numba": "0.66.0",
   "pymoo": "0.6.2"
  },
+ "currency": "EUR",
  "annual_consumption_kwh": 4000.0,
  "load_profile": "demandlib_h0",
  "n_procs": 8,

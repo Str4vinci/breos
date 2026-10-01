@@ -2,9 +2,9 @@
  "case": "montecarlo",
  "title": "Monte Carlo over weather years and demand",
  "breos_version": "0.6.2",
- "git_describe": "v0.6.2-580-g58b7cb0-dirty",
- "generated_utc": "2026-10-01T20:15:20+00:00",
- "runtime_s": 181.4,
+ "git_describe": "v0.6.2-585-gde0b8a1",
+ "generated_utc": "2026-10-01T20:24:27+00:00",
+ "runtime_s": 171.3,
  "cheap": false,
  "configs": {
   "configs/examples/montecarlo.toml": "122fb41cd4cea2562808be768f2acc8edc8626e26329d552ae6d8d89ac328982"
@@ -37,8 +37,8 @@
   "end": "2024-12-31"
  },
  "files": {
-  "runs.csv": "5177fcd99c57a6aa1f195331bdbf103c22a3e9500314a6927a1f29e816d30dc9",
-  "summary.json": "1f3a4ac5985a1e90a207a402d980d45f376a9974caa9a1d76ef3f62daa7a4e4e",
+  "runs.csv": "ec7e1fea0eb5b851b21011a60a7dfd067d05de4c375692f69d503217fcc112a7",
+  "summary.json": "7b1af4943941dc45610d89c76e656b2e9873aa907c612c399337b5fa0423fa96",
   "weather_years.csv": "e56deac7c5898d407d3d1f090e57c085a94f13adccf225ee8d9501e4f7a79709"
  }
 }

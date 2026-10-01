@@ -2,9 +2,9 @@
  "case": "replacement_timing",
  "title": "When the battery swap lands",
  "breos_version": "0.6.2",
- "git_describe": "v0.6.2-570-g829b301-dirty",
- "generated_utc": "2026-10-01T15:57:09+00:00",
- "runtime_s": 67.9,
+ "git_describe": "v0.6.2-585-gde0b8a1",
+ "generated_utc": "2026-10-01T20:20:56+00:00",
+ "runtime_s": 53.1,
  "cheap": false,
  "configs": {
   "configs/examples/quickstart.toml": "2d33e042ee2f71c9fea63c512bf0700930ee202d0cad75301d392c622e132996"

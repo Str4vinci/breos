@@ -2,9 +2,9 @@
  "case": "dispatch_strategies",
  "title": "Dispatch strategies on a bi-hourly tariff",
  "breos_version": "0.6.2",
- "git_describe": "v0.6.2-570-g829b301-dirty",
- "generated_utc": "2026-10-01T15:57:53+00:00",
- "runtime_s": 10.2,
+ "git_describe": "v0.6.2-585-gde0b8a1",
+ "generated_utc": "2026-10-01T20:21:31+00:00",
+ "runtime_s": 9.2,
  "cheap": false,
  "configs": {
   "configs/examples/smart-charging-portugal.toml": "0b00595602a16a8a74afb9cac539ae57c7d943ba0c1ad01a2d7b9833548dc07d"

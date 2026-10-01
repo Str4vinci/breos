@@ -2,9 +2,9 @@
  "case": "quarterly_berlin",
  "title": "A quarterly tariff in Berlin",
  "breos_version": "0.6.2",
- "git_describe": "v0.6.2-583-gb502b60-dirty",
- "generated_utc": "2026-10-01T20:15:45+00:00",
- "runtime_s": 15.7,
+ "git_describe": "v0.6.2-585-gde0b8a1",
+ "generated_utc": "2026-10-01T20:20:03+00:00",
+ "runtime_s": 6.4,
  "cheap": true,
  "configs": {
   "configs/examples/quarterly-tariff-berlin.toml": "8e993ee7abb351d7e2316f61973e84f8c7122576afef151c541f2cd30bdfefc1"
