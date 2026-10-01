@@ -49,18 +49,23 @@ case.stamp()
 # State of charge in the usable window and the power the grid sends into the
 # battery, for one February week. Off peak on this schedule is the night.
 
-fig, axes = plt.subplots(2, 1, figsize=(11, 6), sharex=True)
-colors = dict(zip(names, ["#3a6ea5", "#e6a700", "#c0392b", "#2e8b57"], strict=True))
-for name in names:
-    axes[0].plot(week["Datetime"], week[f"{name}:Battery_SOC_Normalized"] * 100, label=name, color=colors[name])
-    axes[1].plot(week["Datetime"], week[f"{name}:Grid_AC_To_Battery"] / 1000, label=name, color=colors[name])
-axes[0].set_ylabel("State of charge (%)")
-axes[1].set_ylabel("Grid to battery (kW)")
-axes[0].legend(ncol=4, loc="upper center", bbox_to_anchor=(0.5, 1.2), frameon=False)
-for ax in axes:
+fig, axes = plt.subplots(len(names), 1, figsize=(11, 2.1 * len(names)), sharex=True, sharey=True)
+for ax, name in zip(axes, names, strict=True):
+    ax.fill_between(week["Datetime"], week[f"{name}:Battery_SOC_Normalized"] * 100, color="#3a6ea5", alpha=0.35,
+                    label="State of charge (%)")  # fmt: skip
+    grid = ax.twinx()
+    grid.plot(week["Datetime"], week[f"{name}:Grid_AC_To_Battery"] / 1000, color="#c0392b", lw=1.2,
+              label="Grid to battery (kW)")  # fmt: skip
+    grid.set_ylim(0, max(1.0, week.filter(like="Grid_AC_To_Battery").max().max() / 1000 * 1.1))
+    grid.set_ylabel("kW", color="#c0392b")
+    ax.set_ylim(0, 105)
+    ax.set_ylabel("SOC (%)")
+    ax.set_title(name, loc="left", fontsize=10)
     ax.grid(alpha=0.3)
+handles = axes[0].get_legend_handles_labels()[0] + grid.get_legend_handles_labels()[0]
+fig.legend(handles, ["State of charge (%)", "Grid to battery (kW)"], loc="upper right", ncol=2, frameon=False)
 fig.autofmt_xdate()
-fig.tight_layout()
+fig.tight_layout(rect=(0, 0, 1, 0.97))
 
 # %%
 # The year and the money

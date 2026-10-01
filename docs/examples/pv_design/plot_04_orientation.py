@@ -66,9 +66,9 @@ say(
     f"The optimum is broad: {len(near)} of the {len(grid)} orientations reach at least 95 % of the best, "
     f"spanning tilts {near['tilt'].min():.0f}–{near['tilt'].max():.0f}° and azimuths "
     f"{near['azimuth'].min():.0f}–{near['azimuth'].max():.0f}°. A flat array gives "
-    f"{flat['usable_ac_system_production_kwh'] / best['usable_ac_system_production_kwh']:.0%} of the best"
+    f"{(flat['usable_ac_system_production_kwh'] / best['usable_ac_system_production_kwh']) * 100:.0f} % of the best"
     + (
-        f", and a 30° east-facing roof {east['usable_ac_system_production_kwh'].iloc[0] / best['usable_ac_system_production_kwh']:.0%}."
+        f", and a 30° east-facing roof {(east['usable_ac_system_production_kwh'].iloc[0] / best['usable_ac_system_production_kwh']) * 100:.0f} %."
         if len(east)
         else "."
     ),

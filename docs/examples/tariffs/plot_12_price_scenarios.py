@@ -60,7 +60,7 @@ grid = scenarios.pivot(index="import_price_escalation", columns="peak_price", va
 fig, ax = plt.subplots(figsize=(8, 4.5))
 image = ax.imshow(grid.to_numpy(), cmap="RdYlGn", aspect="auto", origin="lower")
 ax.set_xticks(range(len(grid.columns)), [f"{value:.3f}" for value in grid.columns])
-ax.set_yticks(range(len(grid.index)), [f"{value:.0%}" for value in grid.index])
+ax.set_yticks(range(len(grid.index)), [f"{(value) * 100:.0f} %" for value in grid.index])
 for row in range(grid.shape[0]):
     for column in range(grid.shape[1]):
         ax.text(column, row, f"{grid.iat[row, column]:,.0f}", ha="center", va="center", fontsize=8)
@@ -81,9 +81,9 @@ negative = int((scenarios["npv_savings"] < 0).sum())
 methods = scenarios["method"].value_counts()
 say(
     f"Across the {len(scenarios)} scenarios NPV savings range from {money(low, currency)} to "
-    f"{money(high, currency)}, and {negative} of them lose money. At the file's peak price "
+    f"{money(high, currency)}; {negative} of them {'loses' if negative == 1 else 'lose'} money. At the file's peak price "
     f"({base_peak}), the escalation alone moves them by {money(by_escalation, currency)}; at the default escalation "
-    f"({base_escalation:.0%}), the peak price alone moves them by {money(by_peak, currency)}. The escalation "
+    f"({(base_escalation) * 100:.0f} %), the peak price alone moves them by {money(by_peak, currency)}. The escalation "
     "compounds over every project year.",
     f"{methods.get('repriced', 0)} scenarios were re-priced from the stored simulation and "
     f"{methods.get('resimulated', 0)} simulated again. The simulation took {case.manifest['simulate_s']:.1f} s; "

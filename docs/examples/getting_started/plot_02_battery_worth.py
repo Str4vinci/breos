@@ -74,11 +74,7 @@ say(
     + (". The money goes the other way" if best is pv_only else ". The money follows")
     + ": at the preset storage price of "
     f"{preset_price:,.0f} {currency}/kWh, the highest NPV savings come from "
-    + (
-        "the PV-only system"
-        if best is pv_only
-        else f"the {best['battery_kwh']:g} kWh battery"
-    )
+    + ("the PV-only system" if best is pv_only else f"the {best['battery_kwh']:g} kWh battery")
     + f", {money(best['npv_savings'], currency)}. "
     + " ".join(
         f"The {d['battery_kwh']:g} kWh battery adds {money(d['total_investment'] - pv_only['total_investment'], currency)} "

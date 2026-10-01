@@ -79,9 +79,15 @@ shown = offers.pivot_table(
     index=["battery_kwh", "offer"], columns="baseline", values="npv_savings", sort=False
 ).reset_index()
 costs = offers[offers["baseline"] == baselines[0]].set_index(["battery_kwh", "offer"])
-shown["Year-1 bill"] = [costs.loc[(b, o), "bill_year1"] for b, o in zip(shown["battery_kwh"], shown["offer"], strict=True)]
-shown["Project cost"] = [costs.loc[(b, o), "project_cost"] for b, o in zip(shown["battery_kwh"], shown["offer"], strict=True)]
-shown = shown.rename(columns={"battery_kwh": "Battery (kWh)", "offer": "Offer", **{b: f"NPV vs {b}" for b in baselines}})
+shown["Year-1 bill"] = [
+    costs.loc[(b, o), "bill_year1"] for b, o in zip(shown["battery_kwh"], shown["offer"], strict=True)
+]
+shown["Project cost"] = [
+    costs.loc[(b, o), "project_cost"] for b, o in zip(shown["battery_kwh"], shown["offer"], strict=True)
+]
+shown = shown.rename(
+    columns={"battery_kwh": "Battery (kWh)", "offer": "Offer", **{b: f"NPV vs {b}" for b in baselines}}
+)
 table(shown, **{"Battery (kWh)": "g", **{f"NPV vs {b}": ",.0f" for b in baselines}, "Year-1 bill": ",.2f",
                 "Project cost": ",.0f"})  # fmt: skip
 
@@ -113,11 +119,15 @@ for battery in batteries:
         + f" The own-offer baseline changes the {biggest} offer's NPV savings by "
         f"{money(overstated[biggest], currency)}, because its no-system bill differs from today's."
         + (
-            f" Its highest NPV, {best_own}, is not the cheapest offer."
+            f" The highest NPV against the own-offer baseline, {best_own}, is not the cheapest offer."
             if best_own != cheapest
             else ""
         )
-        + (f" Against the shared reference the best NPV is {best_ref}, which is also the cheapest." if best_ref == cheapest else "")
+        + (
+            f" Against the shared reference the best NPV is {best_ref}, which is also the cheapest."
+            if best_ref == cheapest
+            else ""
+        )
     )
 say(*lines)
 

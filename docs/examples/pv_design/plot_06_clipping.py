@@ -78,7 +78,7 @@ best = pv_only["npv_savings"].idxmax()
 say(
     f"Without a battery, a ratio of {top:g} clips {pv_only.loc[top, 'curtailment_dc_kwh']:,.0f} kWh of "
     f"{pv_only.loc[top, 'pv_dc_generation_kwh']:,.0f} kWh DC in the first year "
-    f"({pv_only.loc[top, 'curtailment_dc_kwh'] / pv_only.loc[top, 'pv_dc_generation_kwh']:.1%}). NPV savings are "
+    f"({(pv_only.loc[top, 'curtailment_dc_kwh'] / pv_only.loc[top, 'pv_dc_generation_kwh']) * 100:.1f} %). NPV savings are "
     f"highest at a ratio of {best:g}, and stay within {money(pv_only['npv_savings'].max() - pv_only['npv_savings'].min(), currency)} "
     "across the range.",
     f"With the battery, the same ratio clips {battery.loc[top, 'curtailment_dc_kwh']:,.0f} kWh"

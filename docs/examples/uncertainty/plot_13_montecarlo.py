@@ -53,14 +53,14 @@ say(
     f"{settings['n_runs']} trajectories of {settings['years_per_run']} years, drawing from "
     f"{len(stored['available_years'])} complete weather years ({stored['available_years'][0]}–"
     f"{stored['available_years'][-1]}), with demand scaled by a {settings['load_distribution']} factor of standard "
-    f"deviation {settings['load_uncertainty']:.0%} and seed {settings['seed']}.",
+    f"deviation {(settings['load_uncertainty']) * 100:.0f} % and seed {settings['seed']}.",
     f"Median NPV savings are {money(npv['p50'], currency)}; 90 % of the runs fall between "
     f"{money(npv['p5'], currency)} and {money(npv['p95'], currency)}. The same system on the PVGIS TMY saves "
     f"{money(tmy['npv_savings'], currency)}, "
     + (
         "above every Monte Carlo run."
         if tmy["npv_savings"] > npv["max"]
-        else f"which sits at the {(runs['npv_savings'] < tmy['npv_savings']).mean():.0%} quantile of the runs."
+        else f"which sits at the {((runs['npv_savings'] < tmy['npv_savings']).mean()) * 100:.0f} % quantile of the runs."
     ),
 )
 

@@ -74,7 +74,7 @@ greedy, high_only = by_name["greedy"], by_name["discharge_only high"]
 summer = [m - 1 for m in range(4, 10)]
 idle = sum(high_only["monthly_battery_to_load_kwh"][m] for m in summer)
 say(
-    f"With `discharge_periods = [\"high\"]` the battery delivers {idle:.0f} kWh from April to September: the high "
+    f'With `discharge_periods = ["high"]` the battery delivers {idle:.0f} kWh from April to September: the high '
     "window does not exist in those quarters, so the battery fills with PV and then holds it. NPV savings fall "
     f"from {money(greedy['npv_savings'], currency)} under greedy dispatch to "
     f"{money(high_only['npv_savings'], currency)}.",

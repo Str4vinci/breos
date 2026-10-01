@@ -34,7 +34,7 @@ from breos.plotting import plot_pareto_front
 case = load_case("nsga2_front")
 front = case.csv("pareto.csv")
 manifest = case.manifest
-currency = manifest.get("currency", "EUR")
+currency = manifest["currency"]
 constraints = manifest["constraints"]
 case.stamp()
 

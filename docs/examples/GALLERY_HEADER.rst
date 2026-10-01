@@ -10,7 +10,10 @@ The results were computed once by ``tools/regenerate_gallery_results.py``
 from the configuration files in ``configs/examples/`` and the PVGIS weather
 committed in the repository. The documentation build only loads and plots
 them, so it needs no network and simulates nothing. To run a case yourself,
-use the command shown on its page.
+use the command shown on its page. Without a cached weather file BREOS fetches
+the PVGIS TMY, which can differ a little from the committed one; to get the
+stored numbers, copy the file from ``validation/data/weather/`` into a
+``weather/`` directory first (:doc:`/how-to/offline-weather`).
 
 The packaged cost presets, tariffs and load profile make these runs
 reproducible; they are not advice for a real project. Put your own prices,

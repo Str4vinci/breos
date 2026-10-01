@@ -1,0 +1,45 @@
+{
+ "case": "clipping",
+ "title": "DC/AC ratio and clipping at 15 minutes",
+ "breos_version": "0.6.2",
+ "git_describe": "v0.6.2-583-gb502b60-dirty",
+ "generated_utc": "2026-10-01T20:17:03+00:00",
+ "runtime_s": 41.0,
+ "cheap": false,
+ "configs": {
+  "configs/examples/quickstart.toml": "2d33e042ee2f71c9fea63c512bf0700930ee202d0cad75301d392c622e132996"
+ },
+ "weather": {
+  "validation/data/weather/porto_tmy_2005_2023_pvgis-sarah3.csv.gz": {
+   "sha256": "bf84e31b02ad9bf39f331a5ce8629b1ea8f80cd1597748e72a87a0fce56b4f15",
+   "attribution": "PVGIS typical meteorological year 2005-2023 (PVGIS-SARAH3). PVGIS data © European Union, 2001-2024, reused under Commission Decision 2011/833/EU."
+  }
+ },
+ "dependencies": {
+  "python": "3.12.13",
+  "numpy": "2.4.6",
+  "pandas": "3.0.5",
+  "pvlib": "0.15.2",
+  "scipy": "1.17.1",
+  "numba": "0.66.0",
+  "pymoo": "0.6.2"
+ },
+ "currency": "EUR",
+ "timezone": "Europe/Lisbon",
+ "overrides": {
+  "resolution": "15min"
+ },
+ "ratios": [
+  1.0,
+  1.25,
+  1.5,
+  1.75,
+  2.0
+ ],
+ "week_ratio": 2.0,
+ "iso_week": 27,
+ "files": {
+  "ratios.csv": "979382605257aff06bc41eb9eca0e6a51e958b43d45d1bd3616e354822ba5872",
+  "week_summer.csv": "1022109128285e3afafd0747e9c8a3440844e22bad631f5f1db74efe65994a5c"
+ }
+}
