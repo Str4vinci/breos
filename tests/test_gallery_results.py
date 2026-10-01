@@ -123,11 +123,18 @@ def _same_stack(manifest) -> bool:
     return True
 
 
+# The stored results come from another machine. BREOS does not promise bit
+# identity across machines: over 20 projected years a rounded value can move
+# by its last digit (0.01). These tolerances accept that and nothing more a
+# page would show; the maintainer's own --check runs at 1e-9.
+CROSS_MACHINE = ["--rtol", "1e-3", "--atol", "0.05"]
+
+
 def test_check_reproduces_the_quickstart_case(capsys):
     manifest = json.loads((RESULTS / "first_home" / "manifest.json").read_text(encoding="utf-8"))
     if not _same_stack(manifest):
         pytest.skip("the stored results were made with other numpy/pandas/pvlib/scipy versions")
-    assert TOOL.main(["--check", "first_home"]) == 0, capsys.readouterr().out
+    assert TOOL.main(["--check", "first_home", *CROSS_MACHINE]) == 0, capsys.readouterr().out
 
 
 @pytest.mark.slow
@@ -135,4 +142,4 @@ def test_check_reproduces_every_cheap_case(capsys):
     manifest = json.loads((RESULTS / "first_home" / "manifest.json").read_text(encoding="utf-8"))
     if not _same_stack(manifest):
         pytest.skip("the stored results were made with other numpy/pandas/pvlib/scipy versions")
-    assert TOOL.main(["--check"]) == 0, capsys.readouterr().out
+    assert TOOL.main(["--check", *CROSS_MACHINE]) == 0, capsys.readouterr().out

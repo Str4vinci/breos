@@ -24,7 +24,11 @@ file's SHA-256 in the manifest. The history is not committed.
 
 ``--check`` reruns the cases marked cheap into a temporary directory and
 compares every number with the stored one at a relative and absolute
-tolerance of 1e-9. It exits 1 on a difference and changes nothing.
+tolerance of 1e-9. It exits 1 on a difference and changes nothing. That
+holds on the machine that stored the results; BREOS does not promise bit
+identity across machines, and a 20-year run on other hardware can move a
+rounded value by its last digit. ``--rtol`` and ``--atol`` loosen the
+comparison for such a check.
 """
 
 from __future__ import annotations
@@ -912,7 +916,7 @@ def run_case(entry: Case, target: Path, options: argparse.Namespace) -> float:
 # --------------------------------------------------------------------------- check
 
 
-def _differences(stored: Any, fresh: Any, where: str) -> Iterator[str]:
+def _differences(stored: Any, fresh: Any, where: str, rtol: float, atol: float) -> Iterator[str]:
     if isinstance(stored, dict) and isinstance(fresh, dict):
         for key in sorted(stored.keys() | fresh.keys()):
             if key in VOLATILE_KEYS:
@@ -920,25 +924,25 @@ def _differences(stored: Any, fresh: Any, where: str) -> Iterator[str]:
             if key not in stored or key not in fresh:
                 yield f"{where}.{key}: present in only one"
                 continue
-            yield from _differences(stored[key], fresh[key], f"{where}.{key}")
+            yield from _differences(stored[key], fresh[key], f"{where}.{key}", rtol, atol)
     elif isinstance(stored, list) and isinstance(fresh, list):
         if len(stored) != len(fresh):
             yield f"{where}: length {len(stored)} != {len(fresh)}"
             return
         for index, (left, right) in enumerate(zip(stored, fresh)):
-            yield from _differences(left, right, f"{where}[{index}]")
+            yield from _differences(left, right, f"{where}[{index}]", rtol, atol)
     elif isinstance(stored, bool) or isinstance(fresh, bool) or not isinstance(stored, int | float):
         if stored != fresh:
             yield f"{where}: {stored!r} != {fresh!r}"
-    elif not isinstance(fresh, int | float) or not math.isclose(stored, fresh, rel_tol=TOLERANCE, abs_tol=TOLERANCE):
+    elif not isinstance(fresh, int | float) or not math.isclose(stored, fresh, rel_tol=rtol, abs_tol=atol):
         yield f"{where}: {stored!r} != {fresh!r}"
 
 
-def compare_file(stored: Path, fresh: Path) -> list[str]:
+def compare_file(stored: Path, fresh: Path, rtol: float = TOLERANCE, atol: float = TOLERANCE) -> list[str]:
     if stored.suffix == ".json":
         left = json.loads(stored.read_text(encoding="utf-8"))
         right = json.loads(fresh.read_text(encoding="utf-8"))
-        return list(_differences(left, right, stored.name))
+        return list(_differences(left, right, stored.name, rtol, atol))
     left_frame, right_frame = pd.read_csv(stored), pd.read_csv(fresh)
     if list(left_frame.columns) != list(right_frame.columns) or len(left_frame) != len(right_frame):
         return [f"{stored.name}: columns or row count differ"]
@@ -946,7 +950,7 @@ def compare_file(stored: Path, fresh: Path) -> list[str]:
     for column in left_frame.columns:
         left, right = left_frame[column], right_frame[column]
         if pd.api.types.is_numeric_dtype(left) and pd.api.types.is_numeric_dtype(right):
-            same = np.isclose(left.to_numpy(float), right.to_numpy(float), rtol=TOLERANCE, atol=TOLERANCE,
+            same = np.isclose(left.to_numpy(float), right.to_numpy(float), rtol=rtol, atol=atol,
                               equal_nan=True)  # fmt: skip
         else:
             same = (left.fillna("<na>").astype(str) == right.fillna("<na>").astype(str)).to_numpy()
@@ -966,7 +970,9 @@ def check_case(entry: Case, options: argparse.Namespace) -> list[str]:
         run_case(entry, fresh, options)
         problems = []
         for name in manifest["files"]:
-            problems.extend(f"{entry.name}/{line}" for line in compare_file(stored / name, fresh / name))
+            problems.extend(
+                f"{entry.name}/{line}" for line in compare_file(stored / name, fresh / name, options.rtol, options.atol)
+            )
         fresh_manifest = json.loads((fresh / "manifest.json").read_text(encoding="utf-8"))
         if fresh_manifest["configs"] != manifest["configs"]:
             print(f"note: {entry.name}: a config file changed since the results were stored", file=sys.stderr)
@@ -982,6 +988,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--check", action="store_true", help="Rerun cases and compare with the stored results.")
     parser.add_argument("--list", action="store_true", help="List the cases and exit.")
     parser.add_argument("--mc-weather", help="Local Open-Meteo history CSV for the Monte Carlo case (no fetch).")
+    parser.add_argument("--rtol", type=float, default=TOLERANCE, help="Relative tolerance of --check (1e-9).")
+    parser.add_argument("--atol", type=float, default=TOLERANCE, help="Absolute tolerance of --check (1e-9).")
     parser.add_argument("--procs", type=int, default=min(8, os.cpu_count() or 1), help="Optimizer worker processes.")
     options = parser.parse_args(argv)
 
