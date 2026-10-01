@@ -54,10 +54,11 @@ design and of an optimizer search. See
 [battery replacement at the end of the horizon](configuration.md#battery-replacement-at-the-end-of-the-horizon).
 Default results are otherwise unchanged.
 Version "2.4" adds the [`discharge_only`](configuration.md#discharge-only)
-smart-charging mode to `provenance.smart_charging` and the `smart_charging`
-block: such a run records its discharge periods, an empty `charge_periods`,
-and `None` for `target_usable_fraction`, `grid_charge_efficiency` and
-`grid_import_limit_w`. Other results are unchanged.
+smart-charging mode to `provenance.smart_charging`: such a run records its
+discharge periods, an empty `charge_periods`, and `None` for
+`target_usable_fraction`, `grid_charge_efficiency` and
+`grid_import_limit_w`. The App's top-level `smart_charging` block reports it
+as it reports the other modes. Other results are unchanged.
 A renamed or removed key bumps the
 major version, an added key the minor. A result without the key predates 1.0.
 
@@ -104,7 +105,7 @@ step's tariff price. Flat and tariff runs report the same four keys.
 | `grid_export_revenue_year1_prices` | Revenue from the year-1 grid export, `grid_export_kwh` |
 | `fixed_charge_year1_prices` | The fixed charge for the simulated duration of year 1: the daily charge times the simulated hours / 24 |
 | `no_system_import_cost_year1_prices` | Import cost of the household without a system, which buys its whole year-1 load, `consumption_kwh`. It is the import cost only; it does not include the fixed charge |
-| `grid_charge_cost_year1_prices` | Present only with grid-charging smart charging (`smart_charging.mode = "fixed_target"` or `"daily_persistence"`): the part of `grid_import_cost_year1_prices` bought to charge the battery |
+| `grid_charge_cost_year1_prices` | Present only with smart charging (`smart_charging.mode = "fixed_target"`, `"daily_persistence"` or `"discharge_only"`): the part of `grid_import_cost_year1_prices` bought to charge the battery. Always 0 with `discharge_only`, which never charges from the grid |
 
 `grid_charge_cost_year1_prices` is already included in
 `grid_import_cost_year1_prices`, so do not add the two. It is the same value

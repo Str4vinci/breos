@@ -47,11 +47,12 @@ App and Monte Carlo results, and ``battery_replacement_treatment``, with its
 to the provenance of a projected design and of an optimizer search. Default
 results are otherwise unchanged.
 
-2.4 adds ``mode = "discharge_only"`` to ``provenance.smart_charging`` and the
-``smart_charging`` block of App, Monte Carlo and optimizer results: a run in
-that mode records its discharge periods, an empty ``charge_periods`` and
-None for ``target_usable_fraction``, ``grid_charge_efficiency`` and
-``grid_import_limit_w``. Other results are unchanged.
+2.4 adds ``mode = "discharge_only"`` to ``provenance.smart_charging`` of App,
+Monte Carlo and optimizer results: a run in that mode records its discharge
+periods, an empty ``charge_periods`` and None for
+``target_usable_fraction``, ``grid_charge_efficiency`` and
+``grid_import_limit_w``. The App's top-level ``smart_charging`` block reports
+it as it reports the other modes. Other results are unchanged.
 """
 
 RESULT_SCHEMA_VERSION = "2.4"

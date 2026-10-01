@@ -26,7 +26,7 @@ from tools.oracles.lp_bound import (
     run_lp_bound,
     solve_lp_bound,
 )
-from tools.oracles.replay import prepare_replay, replay_instructions
+from tools.oracles.replay import prepare_replay, reference_dispatch, replay_instructions
 
 BASE = {"location": "porto", "n_modules": 8, "annual_consumption_kwh": 4000, "battery_kwh": 5.0, "projection_years": 1}
 TOU = {
@@ -228,6 +228,12 @@ def test_a_replacement_in_the_first_year_is_never_covered():
     run = result.runs[0]
     assert (run.name, run.covered, run.replacements > 0) == ("reference", False, True)
     assert report(result, case)["bound_is_strict"] is False
+
+
+def test_the_reference_names_a_discharge_only_table():
+    smart = {"mode": "discharge_only", "discharge_periods": ["peak"]}
+    assert reference_dispatch(prepare_replay(_config(1, smart_charging=smart))) == "discharge_only"
+    assert reference_dispatch(prepare_replay(_config(1))) == "fixed_target"
 
 
 def test_a_lower_floor_health_can_only_lower_the_bound():

@@ -458,6 +458,38 @@ def test_sweep_varies_the_discharge_periods(monkeypatch, tmp_path):
     assert [row["param_smart_charging.discharge_periods"] for row in rows] == ['["peak"]', '["off_peak", "peak"]']
 
 
+def test_sweep_compares_greedy_with_discharge_only_as_whole_tables(monkeypatch, tmp_path):
+    # A mode sweep alone cannot change the keys a mode takes, so the two
+    # policies are swept as whole tables.
+    config_path = tmp_path / "policy-sweep.toml"
+    config_path.write_text(
+        SWEEP_BASE
+        + '\n[sweep]\nsmart_charging = [{ mode = "disabled" }, '
+        + '{ mode = "discharge_only", discharge_periods = ["peak"] }]\n',
+        encoding="utf-8",
+    )
+    assert cli.main(["validate-config", str(config_path)]) == 0
+    seen = []
+
+    class SweepFakeApp:
+        def __init__(self, config):
+            seen.append(config)
+
+        def simulate(self):
+            return None
+
+        def result(self):
+            return {}
+
+    monkeypatch.setattr(cli, "App", SweepFakeApp)
+    output_path = tmp_path / "policy-sweep.csv"
+    assert cli.main(["sweep", "--config", str(config_path), "--output", str(output_path)]) == 0
+    assert [c["smart_charging"] for c in seen] == [
+        {"mode": "disabled"},
+        {"mode": "discharge_only", "discharge_periods": ["peak"]},
+    ]
+
+
 def test_sweep_refuses_a_grid_charge_key_for_discharge_only(tmp_path, capsys):
     config_path = tmp_path / "discharge-sweep.toml"
     config_path.write_text(

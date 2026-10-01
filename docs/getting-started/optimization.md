@@ -151,7 +151,7 @@ each timestep through the shared projection loop. Each project year replays
 the input calendar, with PV and battery degradation carried between years.
 Tariff prices affect the financial objective. The battery follows
 self-consumption dispatch unless a `smart_charging` table sets fixed-target
-charging, which the optimizer applies as App does. It is checked as App checks
+charging or `discharge_only`, which the optimizer applies as App does. It is checked as App checks
 it, with `battery_kwh` taken from the design, or from
 `constraints.max_battery_kwh` for a search. The instructions are resolved once
 per search; a candidate without a battery ignores them. Results record them
