@@ -256,6 +256,44 @@ def test_remap_tmy_year_fills_29_february_in_a_named_zone(zone, freq):
     assert remapped.attrs["breos_weather_metadata"]["leap_day"] == {"year": 2028, "filled_from": "2028-02-28"}
 
 
+@pytest.mark.parametrize("freq", ["h", "15min"])
+def test_remap_tmy_year_fills_29_february_before_almatys_offset_change(freq):
+    """#329: Almaty rolls back an hour at 1 March 2024, after the fill's fixed-clock day."""
+    source = _zone_tmy("Asia/Almaty", freq, 2023)
+    per_day = 24 if freq == "h" else 96
+    clock = timezone(timedelta(hours=6))
+
+    remapped = remap_tmy_year(source, 2024)
+
+    assert str(remapped.index.tz) == "Asia/Almaty"
+    assert len(remapped) == 366 * per_day
+    assert remapped.index.is_monotonic_increasing and remapped.index.is_unique
+    fixed = remapped.tz_convert(clock)
+    assert len(_on_day(fixed, 2, 29)) == per_day
+    np.testing.assert_array_equal(_on_day(fixed, 2, 29), _on_day(fixed, 2, 28))
+    np.testing.assert_array_equal(_on_day(fixed, 2, 28), _on_day(source, 2, 28))
+    np.testing.assert_array_equal(_on_day(fixed, 3, 1), _on_day(source, 3, 1))
+    np.testing.assert_array_equal(fixed.loc[~_is_29_february(fixed.index), "ghi"], source["ghi"])
+    # After conversion, local 29 February has a repeated final hour from
+    # fixed-clock 1 March; the copied day itself still has 24 fixed-clock hours.
+    assert len(_on_day(remapped, 2, 29)) == per_day + per_day // 24
+    assert remapped.attrs["breos_weather_metadata"]["leap_day"] == {"year": 2024, "filled_from": "2024-02-28"}
+    assert source.attrs == {"breos_weather_metadata": {"source": "PVGIS_TMY"}}
+
+
+def test_remap_tmy_year_uses_the_local_year_for_partial_new_year_input():
+    """#329: these local 2021 rows belong to UTC 2020, but should move to local 2025."""
+    source = _zone_tmy("Europe/Berlin", "15min", 2021).iloc[:3].copy()
+    assert (source.index.tz_convert("UTC").year == 2020).all()
+
+    remapped = remap_tmy_year(source, 2025)
+
+    expected = source.copy()
+    expected.index = pd.date_range("2025-01-01", periods=3, freq="15min", tz="Europe/Berlin")
+    pd.testing.assert_frame_equal(remapped, expected, check_freq=False)
+    assert remapped.attrs == source.attrs
+
+
 def test_remap_tmy_year_keeps_named_zone_rows_with_the_sun():
     """Between the two years' transition dates a row keeps its instant, not its wall time."""
     source = _zone_tmy("Europe/Berlin", "h", 2021)
@@ -289,8 +327,11 @@ def test_remap_tmy_year_drops_the_local_29_february_of_a_named_zone(zone, freq):
 
 
 @pytest.mark.parametrize("freq", ["h", "15min"])
-@pytest.mark.parametrize("zone", ["Europe/Berlin", "Australia/Sydney"])
-@pytest.mark.parametrize(("source_year", "target_year"), [(2021, 2025), (2025, 2021), (2024, 2028), (2028, 2020)])
+@pytest.mark.parametrize("zone", ["Europe/Berlin", "Australia/Sydney", "America/New_York", "Asia/Tokyo"])
+@pytest.mark.parametrize(
+    ("source_year", "target_year"),
+    [(2021, 2023), (2020, 2024), (2021, 2025), (2025, 2021), (2024, 2028), (2028, 2020)],
+)
 def test_remap_tmy_year_of_a_named_zone_between_like_years_is_its_utc_shift(zone, freq, source_year, target_year):
     """Common to common and leap to leap, a named-zone TMY is shifted as before #329."""
     source = _zone_tmy(zone, freq, source_year)

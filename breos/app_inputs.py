@@ -95,8 +95,10 @@ def remap_tmy_year(df: pd.DataFrame, target_year: int) -> pd.DataFrame:
 
     An index in a named zone, such as ``Europe/Berlin``, is shifted on the
     fixed offset the zone keeps in late February of the TMY's year, so its
-    local 29 February is dropped or filled as for a fixed-offset index. Every
-    other row keeps its instant shifted by whole years, as in UTC, so
+    local 29 February is dropped or filled as for a fixed-offset index,
+    before converting back to the zone. The dominant year is read on that
+    fixed clock too, so rows at local New Year move by their local year.
+    Every other row keeps its instant shifted by whole years, as in UTC, so
     irradiance stays with the sun. The zone then reads the instants with the
     target year's transitions: the hour its spring change skips has no row,
     and the hour its autumn change repeats has two, as on the App's
@@ -126,13 +128,16 @@ def remap_tmy_year(df: pd.DataFrame, target_year: int) -> pd.DataFrame:
     remapped = df.copy()
     remapped.index = idx_shift
     remapped = remap_datetime_index_years(remapped, offset)
-    if not own_clock:
-        new_idx = remapped.index
-        new_idx = new_idx.tz_convert(was_tz) if was_tz is not None else new_idx.tz_localize(None)
-        remapped.index = new_idx
     if weather_metadata is not None:
         remapped.attrs[WEATHER_METADATA_KEY] = weather_metadata
-    return fill_leap_day(remapped)
+    # Fill on the clock where the day was dropped, before the target zone's
+    # transitions can put a neighbouring day's row on local 29 February.
+    remapped = fill_leap_day(remapped)
+    if not own_clock:
+        new_idx = cast(pd.DatetimeIndex, remapped.index)
+        new_idx = new_idx.tz_convert(was_tz) if was_tz is not None else new_idx.tz_localize(None)
+        remapped.index = new_idx
+    return remapped
 
 
 def _weather_source_label(weather: pd.DataFrame) -> str:

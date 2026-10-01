@@ -1067,9 +1067,11 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   hour its autumn change repeats has two, and the index is the App's
   simulation calendar for that year. A leap-year named-zone TMY moved to a
   common year now drops its own local 29 February, where it previously
-  dropped the UTC day and shifted part of it into 1 March. A named-zone TMY
-  moved between two common years or between two leap years is unchanged bit
-  for bit. The App's own weather loaders return UTC or fixed-offset indices,
+  dropped the UTC day and shifted part of it into 1 March. A full-year
+  named-zone TMY moved between two common years or between two leap years
+  is unchanged bit for bit. A named-zone input whose UTC year differs from
+  its local year, such as rows at local New Year, is now moved by its local
+  year. The App's own weather loaders return UTC or fixed-offset indices,
   so only weather passed to `remap_tmy_year` or `load_weather_for_simulation`
   directly, or through injected runtime dependencies, changes; App results
   from the bundled loaders are unchanged.
