@@ -40,7 +40,7 @@ from breos.solar import (
     PVModuleParams,
     calculate_pv_production_dc,
 )
-from breos.tariffs import ResolvedTariff, result_currency, tariff_provenance
+from breos.tariffs import ResolvedTariff, reference_tariff_provenance, result_currency, tariff_provenance
 from breos.weather import build_battery_temperature_series
 
 
@@ -377,6 +377,8 @@ def _evaluate_projected_design_metrics(
     ac_output_scale: float = 1.0,
     tariff: ResolvedTariff | None = None,
     instructions: DispatchInstructions | None = None,
+    reference_tariff: ResolvedTariff | None = None,
+    reference_import_price_escalation: Optional[float] = None,
 ) -> Dict[str, Any]:
     """Evaluate one design over the projected horizon using production engines.
 
@@ -386,6 +388,11 @@ def _evaluate_projected_design_metrics(
     study can keep observed inter-annual variability rather than repeating a
     single year. The sequence must have exactly ``years_projection`` entries.
     A one-year sequence is equivalent to passing that series directly.
+
+    A ``reference_tariff``, resolved on the tariff's calendar, prices the
+    no-system household, so ``Projected_NPV`` is the saving against it. Its
+    cost escalates at ``reference_import_price_escalation``; None uses the
+    ``financials`` import escalation.
     """
     if years_projection < 1:
         raise ValueError("projected optimization requires at least one project year")
@@ -449,6 +456,7 @@ def _evaluate_projected_design_metrics(
         initial_carry=CarryState(soh_pct=float(batt_spec.get("initial_soh", 100.0)) if has_battery else 100.0),
         tariff=tariff,
         instructions=instructions if has_battery else None,
+        reference_tariff=reference_tariff,
     )
     # Priced here, as App and Monte Carlo price theirs (ADR 0003 E4, E7).
     yearly_summary_df = price_year_rows(projection.yearly_df, costs)
@@ -461,6 +469,7 @@ def _evaluate_projected_design_metrics(
         **_projection_rates(fin_cfg),
         emissions_params=emissions_params,
         currency=result_currency(tariff),
+        baseline_import_price_escalation=reference_import_price_escalation,
     )
     payback_year = cost_projection.attrs.get("payback_year")
     payback_interpolated = find_payback_year_interpolated(cost_projection)
@@ -503,6 +512,11 @@ class _OptimizationTariff:
     tariff: ResolvedTariff | None = None
     instructions: DispatchInstructions | None = None
     smart_charging: Dict[str, Any] | None = None
+    # The no-system reference tariff and its configured escalation (None:
+    # the financials import escalation), and its provenance record.
+    reference_tariff: ResolvedTariff | None = None
+    reference_import_price_escalation: float | None = None
+    reference_record: Dict[str, Any] | None = None
 
     def provenance(self) -> Dict[str, Any]:
         # Every money column is in this currency; BREOS does not convert.
@@ -513,6 +527,8 @@ class _OptimizationTariff:
         if self.tariff is not None:
             year = self.tariff.index.tz_convert(self.tariff.timezone)[0].year
             record["tariff"] = tariff_provenance(self.tariff, calendar_year=year)
+        if self.reference_record is not None:
+            record["reference_tariff"] = dict(self.reference_record)
         if self.smart_charging is not None:
             record["smart_charging"] = dict(self.smart_charging)
         return record
@@ -528,26 +544,50 @@ def _resolve_optimization_tariff(
     ``battery_key`` names which, for the error when it is zero.
     The instructions are resolved once, on the tariff's calendar, and replayed
     every project year, as App does. A candidate without a battery ignores
-    them.
+    them. A ``[reference_tariff]`` is resolved on the same calendar and
+    prices the no-system household of every candidate.
     """
-    from breos.app_config import resolve_smart_charging_spec, resolve_tariff_spec
+    from breos.app_config import resolve_reference_tariff_spec, resolve_smart_charging_spec, resolve_tariff_spec
 
     timezone = config["location"]["timezone"]
+    resolution = config["simulation"]["resolution"]
     spec = resolve_tariff_spec(
-        {"tariff": config["tariff"], "costs": config["costs"], "resolution": config["simulation"]["resolution"]},
+        {"tariff": config["tariff"], "costs": config["costs"], "resolution": resolution},
         timezone,
+    )
+    reference_spec = resolve_reference_tariff_spec(
+        {"reference_tariff": config.get("reference_tariff"), "resolution": resolution}, timezone, spec
     )
     smart_charging = resolve_smart_charging_spec(
         {"smart_charging": config["smart_charging"], "battery_kwh": battery_kwh}, spec, battery_key
     )
     tariff = spec.resolve(index, timezone) if spec is not None else None
+    reference: Dict[str, Any] = {}
+    if reference_spec is not None:
+        reference_tariff = reference_spec.resolve(index, timezone)
+        configured = reference_spec.import_price_escalation
+        effective = (
+            configured
+            if configured is not None
+            else projection_rates_record(_projection_rates(config["financials"]))["import_price_escalation"]
+        )
+        reference = {
+            "reference_tariff": reference_tariff,
+            "reference_import_price_escalation": configured,
+            "reference_record": reference_tariff_provenance(
+                reference_tariff,
+                calendar_year=reference_tariff.index.tz_convert(reference_tariff.timezone)[0].year,
+                import_price_escalation=effective,
+            ),
+        }
     instructions = resolve_instructions(smart_charging, tariff) if smart_charging is not None else None
     if instructions is None or tariff is None or smart_charging is None:
-        return _OptimizationTariff(tariff=tariff)
+        return _OptimizationTariff(tariff=tariff, **reference)
     return _OptimizationTariff(
         tariff=tariff,
         instructions=instructions,
         smart_charging=smart_charging_provenance(smart_charging, instructions, tariff),
+        **reference,
     )
 
 
@@ -712,6 +752,8 @@ def evaluate_projected_design(
         ac_output_scale=_validated_ac_output_scale(config),
         tariff=pricing.tariff,
         instructions=pricing.instructions,
+        reference_tariff=pricing.reference_tariff,
+        reference_import_price_escalation=pricing.reference_import_price_escalation,
     )
     yearly = raw_metrics.pop("_yearly_summary_df")
     financial = raw_metrics.pop("_cost_projection_df")
@@ -971,6 +1013,8 @@ try:
                 emissions_params=self.emissions_params,
                 tariff=self.tariff,
                 instructions=self.pricing.instructions,
+                reference_tariff=self.pricing.reference_tariff,
+                reference_import_price_escalation=self.pricing.reference_import_price_escalation,
             )
             out.update(projected_metrics)
             objective_grid_dependence = 1.0 - float(projected_metrics["Projected_Grid_Independence_%"]) / 100.0

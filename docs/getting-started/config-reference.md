@@ -73,6 +73,7 @@ is a `breos run` option that overrides the config file.
 | `pv_module` | `None` | `--pv-module` | Module key from the built-in catalogue. `None` uses the first available |
 | `pvrow_height` | `None` | `--pvrow-height` | Height of the PV row center above ground; required by `"infinite_sheds"`, in the same unit as `pvrow_pitch` |
 | `pvrow_pitch` | `None` | `--pvrow-pitch` | Distance between adjacent PV rows; required by `"infinite_sheds"`, in the same unit as `pvrow_height` |
+| `reference_tariff` | *unset* | — | What the household would pay without the system: an import price, by period or flat, and a fixed charge, independent of the system's `[tariff]`. Unset, the no-system baseline is priced at the system's own prices; see [`[reference_tariff]`](#reference_tariff) and [No-system reference tariff](configuration.md#no-system-reference-tariff) |
 | `replacement_cost_learning` | `0.0` | `--replacement-cost-learning` | Annual fall in the battery replacement price on top of inflation: a swap at `t` years costs `C0 × (1 + inflation_rate)^t × (1 − learning)^t` |
 | `resolution` | `"h"` | `--resolution` | Simulation time resolution. One of `"h"`, `"15min"` |
 | `rlp_directory` | `None` | `--rlp-directory` | Directory containing licensed external RLP CSVs for non-bundled load profiles |
@@ -163,6 +164,21 @@ Time-of-use prices, as `[tariff]` in TOML; see [Time-of-use tariffs](configurati
 | `boundary_policy` |  | How a period boundary inside a step is handled. `strict`, the default, refuses it. One of `strict` |
 | `fixed_charge_per_day` |  | Fixed charge per day, at year-1 prices (default 0) |
 | `study_date` |  | A date in the schedule's effective window, needed when the simulated year is outside it |
+
+## reference_tariff
+
+What the household would pay without the system, as `[reference_tariff]` in TOML; see [No-system reference tariff](configuration.md#no-system-reference-tariff). It prices the whole household load and its own fixed charge for the no-system cost, and nothing else: no export, and no effect on the dispatch. Without a `schedule` or `custom_schedule` it is one flat price, `import_prices = { all = <price> }`.
+
+| Key | Required | Description |
+|---|---|---|
+| `currency` | yes | Currency of the prices: EUR. Must be the result's currency: the `[tariff]` currency, or EUR on flat prices |
+| `import_prices` | yes | Import price per kWh by period name, at year-1 prices; `all` prices every period. Without a schedule, only `all` |
+| `boundary_policy` |  | How a period boundary inside a step is handled, as in `tariff.boundary_policy`; needs a schedule |
+| `custom_schedule` |  | Inline schedule definition of the reference, in the shape of `tariff.custom_schedule`; set this, `schedule`, or neither for one flat price |
+| `fixed_charge_per_day` |  | Fixed charge per day without the system, at year-1 prices (default 0) |
+| `import_price_escalation` |  | Annual escalation of the reference energy and fixed charge. Default: the system's import escalation |
+| `schedule` |  | Bundled schedule key of the reference; see [Bundled schedules](../api/tariffs.md#bundled-schedules). Set this, `custom_schedule`, or neither for one flat price |
+| `study_date` |  | A date in the schedule's effective window, as in `tariff.study_date`; needs a schedule |
 
 ## smart_charging
 

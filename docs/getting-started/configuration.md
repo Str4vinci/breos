@@ -476,6 +476,60 @@ optimization accepts the same tariff table in its nested config; see
 [Optimization](optimization.md#price-a-design-with-a-time-of-use-tariff).
 To compare several offers, see [Compare tariffs](recipes.md#compare-tariffs).
 
+## No-system reference tariff
+
+The savings of a system are measured against the household without it. By
+default that household pays the system's own prices: the `[tariff]`, or the
+flat `costs` prices, and the same fixed charge. A `[reference_tariff]` prices
+the household without the system on its own tariff instead, for example the
+offer it has today while the system runs on a time-of-use offer:
+
+```toml
+[reference_tariff]
+schedule = "pt_mainland_2026_daily_bi"   # or custom_schedule, or neither for one flat price
+currency = "EUR"
+import_prices = { peak = 0.2310, off_peak = 0.1210 }
+fixed_charge_per_day = 0.30              # optional, default 0
+# import_price_escalation = 0.03         # optional, default the system's import escalation
+```
+
+- The no-system cost of each year is the whole household load at the
+  reference import prices, plus the reference fixed charge, both escalated at
+  `reference_tariff.import_price_escalation`. Without that key they escalate
+  at the system's import escalation: `import_price_escalation` or, when that
+  is unset, `inflation_rate`. An explicit `0` keeps the reference prices
+  constant.
+- The reference has no export prices: the household without a system exports
+  nothing.
+- `fixed_charge_per_day` defaults to 0. Without it, the no-system cost has no
+  fixed charge, even when the system's tariff has one; set it to the fixed
+  charge the household pays without the system.
+- Without `schedule` or `custom_schedule` the reference is one flat price,
+  `import_prices = { all = <price> }`, and takes no `boundary_policy` or
+  `study_date`. With a schedule, the prices follow the `[tariff]` rules:
+  every period priced, or `all`, a schedule in the location's timezone, and a
+  resolution fine enough for the schedule's boundaries.
+- The reference can be set with or without a `[tariff]`. Its `currency` must
+  be the result's currency: the `[tariff]` currency, or EUR with flat prices.
+  BREOS does not convert.
+- The reference never changes the dispatch, and the costs with the system do
+  not change. Every project year replays the start-year calendar, as the
+  system tariff does. A `[period]` run bills the reference fixed charge on the
+  window's civil days.
+- `App.revalue` re-prices a reference that is added, changed or removed. It
+  does not simulate again for the reference, also under `daily_persistence`.
+- Monte Carlo prices the sampled load of each trajectory at the reference, so
+  the costs with and without the system stay paired. Projected optimization
+  accepts the same table in its nested config, and its NPV objective is the
+  saving against the reference.
+
+Results gain `provenance.reference_tariff`, with the schedule, prices, fixed
+charge, calendar policy and the escalation used. The no-system cost
+components are reported with or without a reference; see [Year-1 money
+keys](interpreting-results.md#year-1-money-keys). BREOS does not choose the
+cheapest offer the household could have had: to compare candidates, run each
+one as the reference.
+
 ## Smart charging
 
 A `[smart_charging]` table sets when the battery may discharge and when the

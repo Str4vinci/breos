@@ -913,6 +913,41 @@ class TariffSpec:
         )
 
 
+@dataclass(frozen=True)
+class ReferenceTariffSpec:
+    """The tariff the household would pay without the system: the App's ``[reference_tariff]``.
+
+    It prices the whole household load and its own fixed charge for the
+    no-system baseline, and nothing else: it never prices the system's grid
+    flows and never drives dispatch. ``schedule`` is a bundled identifier or
+    a :class:`ScheduleDefinition`, or None for one flat price,
+    ``prices.import_prices == {"all": price}``. The no-system household
+    exports nothing, so ``prices.export_prices`` is ``{"all": 0.0}``.
+    ``import_price_escalation`` escalates the reference energy and fixed
+    charge; None inherits the system's import escalation. Every project year
+    replays the start-year calendar (ADR 0002 A2), as the system tariff does.
+    """
+
+    prices: TariffPrices
+    schedule: str | ScheduleDefinition | None = None
+    boundary_policy: str = "strict"
+    study_date: date | None = None
+    import_price_escalation: float | None = None
+
+    def resolve(self, index: pd.DatetimeIndex, timezone: str) -> ResolvedTariff:
+        """Resolve the reference on ``index``, the simulation index, in the location's ``timezone``."""
+        if self.schedule is None:
+            return resolve_tariff(index, ("all",) * len(index), FLAT_SCHEDULE, self.prices, timezone=timezone)
+        return resolve_named_tariff(
+            index,
+            self.schedule,
+            self.prices,
+            timezone=timezone,
+            study_date=self.study_date,
+            boundary_policy=self.boundary_policy,
+        )
+
+
 def result_currency(tariff: TariffSpec | ResolvedTariff | None) -> str:
     """The currency a run's money is in: its tariff's, or the cost catalogue's without one."""
     return tariff.prices.currency if tariff is not None else DEFAULT_CURRENCY
@@ -939,6 +974,21 @@ def tariff_provenance(resolved: ResolvedTariff, *, calendar_year: int) -> dict[s
         "calendar_policy": "replay_start_year",
         "calendar_year": int(calendar_year),
     }
+
+
+def reference_tariff_provenance(
+    resolved: ResolvedTariff, *, calendar_year: int, import_price_escalation: float
+) -> dict[str, Any]:
+    """A JSON-safe record of a resolved no-system reference tariff for run provenance.
+
+    The :func:`tariff_provenance` record without export prices, which the
+    reference does not have, and with the escalation its energy and fixed
+    charge took: the configured one, or the system's import escalation.
+    """
+    record = tariff_provenance(resolved, calendar_year=calendar_year)
+    del record["export_prices"]
+    record["import_price_escalation"] = float(import_price_escalation)
+    return record
 
 
 def schedule_resolution_minutes(schedule: str | ScheduleDefinition, years: Iterable[int] | None = None) -> int:

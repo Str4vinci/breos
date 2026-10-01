@@ -33,6 +33,7 @@ from breos.app_config import (  # noqa: E402
     NESTED_TABLE_SPECS,
     PERIOD_TABLE,
     PV_ARRAY_TABLE,
+    REFERENCE_TARIFF_TABLE,
     SMART_CHARGING_TABLE,
     TARIFF_TABLE,
 )
@@ -85,6 +86,14 @@ TABLES: tuple[tuple[str, TableSpec, str], ...] = (
         "tariff",
         TARIFF_TABLE,
         "Time-of-use prices, as `[tariff]` in TOML; see [Time-of-use tariffs](configuration.md#time-of-use-tariffs).",
+    ),
+    (
+        "reference_tariff",
+        REFERENCE_TARIFF_TABLE,
+        "What the household would pay without the system, as `[reference_tariff]` in TOML; see "
+        "[No-system reference tariff](configuration.md#no-system-reference-tariff). It prices the whole household "
+        "load and its own fixed charge for the no-system cost, and nothing else: no export, and no effect on the "
+        "dispatch. Without a `schedule` or `custom_schedule` it is one flat price, `import_prices = { all = <price> }`.",
     ),
     (
         "smart_charging",

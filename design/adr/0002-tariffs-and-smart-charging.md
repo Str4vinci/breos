@@ -1,8 +1,9 @@
 # 0002 — Tariffs are resolved values; smart charging is an instruction layer
 
-- **Status:** Accepted for 0.7.x implementation; amendments A1–A12 Accepted
+- **Status:** Accepted for 0.7.x implementation; amendments A1–A13 Accepted
 - **Date:** 2026-08-20; amendments 2026-09-26; A6 accepted 2026-09-26;
-  A1–A5 and A7–A10 accepted 2026-09-27; A11 and A12 accepted 2026-09-30
+  A1–A5 and A7–A10 accepted 2026-09-27; A11 and A12 accepted 2026-09-30;
+  A13 accepted 2026-10-01
 
 ## Context
 
@@ -128,7 +129,8 @@ pretending the schedule changed.
 Each project-year simulation is valued inside the existing App year loop.
 *(Replaced by A5, accepted 2026-09-27.)* Annual import cost and export revenue are sums of timestep energy multiplied by
 the resolved price arrays; the no-system baseline uses the same arrays and
-calendar. Annual energy totals remain alongside monetary components.
+calendar. *(Amended by A13, accepted 2026-10-01: a `[reference_tariff]`
+prices the baseline instead.)* Annual energy totals remain alongside monetary components.
 
 New monetary names are currency-neutral. Existing `*_eur` results remain
 compatibility aliases only while the resolved currency is EUR. *(Replaced by
@@ -234,9 +236,9 @@ Implementation follows the delivery sequence in
 
 The 0.7 readiness audit (#187) found details the decision above leaves open
 and statements the code has since outgrown. A6 was **Accepted** on 2026-09-26,
-A11 and A12 on 2026-09-30, and every other amendment below on 2026-09-27. Each
-one replaces the text it names, and that text is marked in place above; A11
-and A12 add rules and replace none. Accepting A6–A10 accepted the
+A11 and A12 on 2026-09-30, A13 on 2026-10-01, and every other amendment below on
+2026-09-27. Each one replaces the text it names, and that text is marked in
+place above; A11 and A12 add rules and replace none. Accepting A6–A10 accepted the
 design for the dispatch-seam and ledger work, not its implementation. Grid
 charging, origin accounting, ledger schema 2.0 and net-exchange emissions were
 then implemented for 0.7.0 in #279–#282 (#178). Economic
@@ -472,6 +474,41 @@ mode. Price-aware dispatch forces simulation, so `App.revalue` re-simulates
 when the per-step prices change. Result schema 2.2 records the policy in
 `provenance.smart_charging`, with a hash of the instructions every project
 year executed, and no forecast or per-day target.
+
+### A13. The no-system baseline can have its own reference tariff (#339) — Accepted 2026-10-01
+
+Amends "the no-system baseline uses the same arrays and calendar". An
+optional top-level `[reference_tariff]` prices the household without the
+system, independently of the system's `[tariff]` or flat costs:
+
+- **Baseline.** Each year's no-system cost is the reference import price
+  times the whole household load, summed over the steps, plus the reference
+  fixed charge: `Cost_No_Sys_Annual = (Baseline_Import_Cost +
+  Baseline_Fixed_Charge) × (1 + e)^(n − 1)`. The fixed charge is billed as
+  the system's is: on the simulated duration, or on a `[period]` window's
+  civil days. The reference has no export prices.
+- **Escalation.** `e` is `reference_tariff.import_price_escalation`, which
+  escalates both components. Absent, it is the system's resolved import
+  escalation; an explicit 0 is kept.
+- **Absent.** Without a `[reference_tariff]` the baseline is the system's
+  prices and fixed charge, as before, and results are bit-identical.
+- **Scope.** The reference must be in the result's currency, is checked for
+  timezone and resolution as the system tariff is, and is resolved once on
+  the simulated index; every project year replays the start-year calendar
+  (A2). A reference without a schedule is one flat price, `import_prices =
+  { all = x }`. It never drives dispatch and never prices the system's grid
+  flows.
+- **Revaluation.** `App.revalue` re-prices a reference that is added,
+  changed or removed from the retained household load, and never
+  re-simulates for it, also under `daily_persistence`.
+- **Entry points.** Monte Carlo resolves the reference once per study and
+  prices each trajectory's own sampled load, so the paired differences stay
+  consistent. The projected optimizer's NPV objective uses it. Choosing the
+  cheapest reference a household is eligible for is a study decision, not a
+  BREOS feature.
+
+Result schema 2.4 reports the baseline components with or without a
+reference, and `provenance.reference_tariff` only when one is configured.
 
 ### Implementation notes for the dispatch-seam PR
 

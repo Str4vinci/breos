@@ -123,6 +123,19 @@ classification and resolution functions and `TariffSpec` take either a
 bundled identifier or a definition. A definition is immutable and pickles, so
 it reaches optimizer worker processes unchanged.
 
+## No-system reference
+
+A {class}`~breos.tariffs.ReferenceTariffSpec` is the App's
+[`[reference_tariff]`](../getting-started/configuration.md#no-system-reference-tariff):
+the tariff the household would pay without the system. It holds import
+prices and a fixed charge on a bundled or custom schedule, or one flat price
+without a schedule, and an optional escalation. It prices only the
+no-system cost, the whole household load plus its fixed charge, and never
+the system's grid flows or the dispatch. Its `resolve` method gives a
+{class}`~breos.tariffs.ResolvedTariff` on the simulation index, as
+`TariffSpec` does, with an export price of 0: the household without a system
+exports nothing.
+
 ## Resolution
 
 ```{eval-rst}
@@ -134,6 +147,7 @@ it reaches optimizer worker processes unchanged.
    breos.tariffs.ScheduleRule
    breos.tariffs.HolidayCalendar
    breos.tariffs.TariffPrices
+   breos.tariffs.ReferenceTariffSpec
    breos.tariffs.ResolvedTariff
    breos.tariffs.available_tariff_schedules
    breos.tariffs.get_tariff_schedule

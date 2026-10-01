@@ -267,7 +267,9 @@ answer different questions:
   system's saving against no system *under the same offer*. Each offer has
   its own no-system bill, so a higher `npv_savings` does not mean a cheaper
   offer. An offer with an expensive peak can make PV save more while still
-  costing more overall.
+  costing more overall. To measure every offer against one no-system bill,
+  such as the household's current offer, set a
+  [`[reference_tariff]`](configuration.md#no-system-reference-tariff).
 
 ### From the CLI
 

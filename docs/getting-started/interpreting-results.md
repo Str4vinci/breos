@@ -53,6 +53,16 @@ policy and a `terminal_period` description, to the provenance of a projected
 design and of an optimizer search. See
 [battery replacement at the end of the horizon](configuration.md#battery-replacement-at-the-end-of-the-horizon).
 Default results are otherwise unchanged.
+Version "2.4" adds the no-system cost components: `no_system_fixed_charge_year1_prices`
+(see [Year-1 money keys](#year-1-money-keys)), `no_system_cost_import` and
+`no_system_cost_fixed_charge` in the `financial` rows, the
+`Cost_No_Sys_Import` and `Cost_No_Sys_Fixed_Charge` cost-projection columns
+and the `Baseline_Fixed_Charge` year-row column of Monte Carlo and optimizer
+tables, and `reference_tariff` in the
+`resolved_config` of App and Monte Carlo results. Results with a
+[no-system reference tariff](configuration.md#no-system-reference-tariff)
+also carry `provenance.reference_tariff`. Without one, every existing value is
+unchanged.
 A renamed or removed key bumps the
 major version, an added key the minor. A result without the key predates 1.0.
 
@@ -91,28 +101,34 @@ These keys give the first project year's money components at year-1 prices:
 the prices of the first project year, before escalation and discounting. They
 are in the run's currency and rounded to 0.01. Without a `[tariff]` they use
 the flat `costs` prices; with one, each step's energy is priced at that
-step's tariff price. Flat and tariff runs report the same four keys.
+step's tariff price. Flat and tariff runs report the same five keys. With a
+[`[reference_tariff]`](configuration.md#no-system-reference-tariff), the two
+no-system keys use the reference's prices instead.
 
 | Key | Description |
 |---|---|
 | `grid_import_cost_year1_prices` | Cost of the year-1 grid import, `grid_import_kwh` |
 | `grid_export_revenue_year1_prices` | Revenue from the year-1 grid export, `grid_export_kwh` |
 | `fixed_charge_year1_prices` | The fixed charge for the simulated duration of year 1: the daily charge times the simulated hours / 24 |
-| `no_system_import_cost_year1_prices` | Import cost of the household without a system, which buys its whole year-1 load, `consumption_kwh`. It is the import cost only; it does not include the fixed charge |
+| `no_system_import_cost_year1_prices` | Import cost of the household without a system, which buys its whole year-1 load, `consumption_kwh`. It is the import cost only; the fixed charge is `no_system_fixed_charge_year1_prices` |
+| `no_system_fixed_charge_year1_prices` | The fixed charge of the household without a system for year 1: `fixed_charge_year1_prices`, or the reference tariff's fixed charge for the same days when a `[reference_tariff]` is set |
 | `grid_charge_cost_year1_prices` | Present only with grid-charging smart charging (`smart_charging.mode = "fixed_target"` or `"daily_persistence"`): the part of `grid_import_cost_year1_prices` bought to charge the battery |
 
 `grid_charge_cost_year1_prices` is already included in
 `grid_import_cost_year1_prices`, so do not add the two. It is the same value
 as `smart_charging.yearly[0].grid_charge_cost_year1_prices`.
 
-The same fixed charge applies with or without the system. The projection's
-no-system annual cost is the no-system import cost plus the fixed charge, so
-the year-1 no-system bill is
-`no_system_import_cost_year1_prices + fixed_charge_year1_prices`.
+Without a `[reference_tariff]`, the same fixed charge applies with or
+without the system, so `no_system_fixed_charge_year1_prices` equals
+`fixed_charge_year1_prices`. The projection's no-system annual cost is the
+no-system import cost plus the no-system fixed charge, so the year-1
+no-system bill is
+`no_system_import_cost_year1_prices + no_system_fixed_charge_year1_prices`.
 
 Year 1 is not escalated, so these values match the `cost_import`,
-`revenue_export` and `cost_fixed_charge` of the year-1 `financial` row; the
-later rows escalate. `breos sweep` copies every top-level scalar key into its
+`revenue_export` and `cost_fixed_charge` of the year-1 `financial` row, and
+the two no-system keys match its `no_system_cost_import` and
+`no_system_cost_fixed_charge`; the later rows escalate. `breos sweep` copies every top-level scalar key into its
 CSV, so the sweep CSV carries these columns too.
 
 ## Battery-specific keys
@@ -276,7 +292,13 @@ A list of dicts with one row per year (year 0 is the investment row):
 
 `balance` is the cumulative NPV savings; `cost_with_system` and
 `cost_without_system` are the cumulative discounted costs of operating with
-and without the BREOS-sized system. `payback_year` is the sustained discounted
+and without the BREOS-sized system. From year 1, `no_system_cost_import` and
+`no_system_cost_fixed_charge` give that year's no-system cost by component,
+escalated and not discounted, beside the system's `cost_import`,
+`revenue_export`, `cost_operation`, `cost_fixed_charge` and
+`cost_replacement`. With a
+[no-system reference tariff](configuration.md#no-system-reference-tariff),
+they are at the reference's prices and escalation. `payback_year` is the sustained discounted
 payback within the simulated period: the year from which `balance ≥ 0` holds
 to the end of the horizon. The series starts at year 0, so a system that
 recovers its investment during year 1 reports 1. If a battery replacement

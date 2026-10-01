@@ -164,6 +164,12 @@ Fixed-design results record the schedule, prices, calendar and hashes in
 `result.details["provenance"]["tariff"]`. Tariff-enabled searches also support
 `n_procs`, and their results can be pickled.
 
+A [`[reference_tariff]`](configuration.md#no-system-reference-tariff) table,
+as in App, prices the household without the system for every candidate, so
+`Projected_NPV` and the NPV objective are the saving against it. Without
+`import_price_escalation` it escalates at the `financials` import escalation.
+Results record it in `provenance["reference_tariff"]`.
+
 ## Evaluate one design in detail
 
 Once you have chosen a design, {py:func}`~breos.optimization.evaluate_projected_design`
