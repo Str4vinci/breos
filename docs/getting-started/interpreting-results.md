@@ -53,7 +53,20 @@ policy and a `terminal_period` description, to the provenance of a projected
 design and of an optimizer search. See
 [battery replacement at the end of the horizon](configuration.md#battery-replacement-at-the-end-of-the-horizon).
 Default results are otherwise unchanged.
-Version "2.4" adds the no-system cost components: `no_system_fixed_charge_year1_prices`
+Version "2.4" adds calendar-month
+[seasons](../api/tariffs.md#month-seasons) to custom schedules: `seasons` in
+`resolved_config.tariff.custom_schedule` and, as the month partition, in
+`provenance.tariff`. With month seasons, `import_prices` and `export_prices`
+in the resolved config and in `provenance.tariff` may map each season to its
+period prices instead of each period to a price. Results without month
+seasons are unchanged.
+Version "2.5" adds the [`discharge_only`](configuration.md#discharge-only)
+smart-charging mode to `provenance.smart_charging`: such a run records its
+discharge periods, an empty `charge_periods`, and `None` for
+`target_usable_fraction`, `grid_charge_efficiency` and
+`grid_import_limit_w`. The App's top-level `smart_charging` block reports it
+as it reports the other modes. Other results are unchanged.
+Version "2.6" adds the no-system cost components: `no_system_fixed_charge_year1_prices`
 (see [Year-1 money keys](#year-1-money-keys)), `no_system_cost_import` and
 `no_system_cost_fixed_charge` in the `financial` rows, the
 `Cost_No_Sys_Import` and `Cost_No_Sys_Fixed_Charge` cost-projection columns
@@ -110,6 +123,8 @@ no-system keys use the reference's prices instead.
 | `grid_import_cost_year1_prices` | Cost of the year-1 grid import, `grid_import_kwh` |
 | `grid_export_revenue_year1_prices` | Revenue from the year-1 grid export, `grid_export_kwh` |
 | `fixed_charge_year1_prices` | The fixed charge for the simulated duration of year 1: the daily charge times the simulated hours / 24 |
+| `no_system_import_cost_year1_prices` | Import cost of the household without a system, which buys its whole year-1 load, `consumption_kwh`. It is the import cost only; it does not include the fixed charge |
+| `grid_charge_cost_year1_prices` | Present only with smart charging (`smart_charging.mode = "fixed_target"`, `"daily_persistence"` or `"discharge_only"`): the part of `grid_import_cost_year1_prices` bought to charge the battery. Always 0 with `discharge_only`, which never charges from the grid |
 | `no_system_import_cost_year1_prices` | Import cost of the household without a system, which buys its whole year-1 load, `consumption_kwh`. It is the import cost only; the fixed charge is `no_system_fixed_charge_year1_prices` |
 | `no_system_fixed_charge_year1_prices` | The fixed charge of the household without a system for year 1: `fixed_charge_year1_prices`, or the reference tariff's fixed charge for the same days when a `[reference_tariff]` is set |
 | `grid_charge_cost_year1_prices` | Present only with grid-charging smart charging (`smart_charging.mode = "fixed_target"` or `"daily_persistence"`): the part of `grid_import_cost_year1_prices` bought to charge the battery |

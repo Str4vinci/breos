@@ -629,7 +629,7 @@ battery_kwh = [0.0, 5.0]
     rows = list(csv.DictReader(output_path.open(encoding="utf-8")))
     assert len(rows) == 2
     for row in rows:
-        assert row["result_schema_version"] == "2.4"
+        assert row["result_schema_version"] == "2.6"
         for key in (
             "grid_import_cost_year1_prices",
             "grid_export_revenue_year1_prices",
@@ -825,14 +825,91 @@ def test_sweep_applies_dotted_tariff_and_smart_charging_keys(monkeypatch, tmp_pa
     assert [row["param_tariff.import_prices.off_peak"] for row in rows] == ["0.1", "0.1", "0.12", "0.12"]
 
 
+SEASONAL_SWEEP_BASE = """
+location = "porto"
+n_modules = 8
+annual_consumption_kwh = 4000
+battery_kwh = 5.0
+
+[tariff]
+currency = "EUR"
+export_prices = { all = 0.05 }
+
+[tariff.import_prices]
+winter = { low = 0.20, standard = 0.30, high = 0.45 }
+summer = { standard = 0.28 }
+
+[tariff.custom_schedule]
+identifier = "illustrative_two_season"
+version = "1"
+timezone = "Europe/Lisbon"
+cycle = "custom"
+periods = ["low", "standard", "high"]
+seasons = { winter = [1, 2, 3, 10, 11, 12], summer = [4, 5, 6, 7, 8, 9] }
+
+[[tariff.custom_schedule.rules]]
+days = "all"
+season = "winter"
+intervals = { low = [["00:00", "06:00"]], standard = [["06:00", "17:00"], ["21:00", "24:00"]], high = [["17:00", "21:00"]] }
+
+[[tariff.custom_schedule.rules]]
+days = "all"
+season = "summer"
+intervals = { standard = [["00:00", "24:00"]] }
+"""
+
+
+def test_sweep_addresses_a_season_price_two_levels_down(monkeypatch, tmp_path):
+    config_path = tmp_path / "seasonal-sweep.toml"
+    config_path.write_text(
+        SEASONAL_SWEEP_BASE + '\n[sweep]\n"tariff.import_prices.winter.high" = [0.40, 0.50]\n', encoding="utf-8"
+    )
+    assert cli.main(["validate-config", str(config_path)]) == 0
+
+    seen_configs = []
+
+    class SweepFakeApp:
+        def __init__(self, config):
+            seen_configs.append(config)
+
+        def simulate(self):
+            return None
+
+        def result(self):
+            return {}
+
+    monkeypatch.setattr(cli, "App", SweepFakeApp)
+    output_path = tmp_path / "seasonal-sweep.csv"
+    assert cli.main(["sweep", "--config", str(config_path), "--output", str(output_path)]) == 0
+    assert [c["tariff"]["import_prices"] for c in seen_configs] == [
+        {"winter": {"low": 0.20, "standard": 0.30, "high": 0.40}, "summer": {"standard": 0.28}},
+        {"winter": {"low": 0.20, "standard": 0.30, "high": 0.50}, "summer": {"standard": 0.28}},
+    ]
+    rows = list(csv.DictReader(output_path.open(encoding="utf-8")))
+    assert [row["param_tariff.import_prices.winter.high"] for row in rows] == ["0.4", "0.5"]
+
+
+def test_sweep_resolves_a_season_price_that_the_season_never_uses(tmp_path, capsys):
+    config_path = tmp_path / "seasonal-sweep.toml"
+    config_path.write_text(
+        SEASONAL_SWEEP_BASE + '\n[sweep]\n"tariff.import_prices.summer.high" = [0.40]\n', encoding="utf-8"
+    )
+    assert cli.main(["validate-config", str(config_path)]) == 1
+    assert "'tariff.import_prices.summer' prices high, which season 'summer' never uses" in capsys.readouterr().err
+
+
 @pytest.mark.parametrize(
     ("key", "message"),
     [
         ("tariff.shedule", r"Unknown sweep key 'tariff\.shedule'\. Available: tariff\.boundary_policy"),
         ("smart_charging.target", r"Available: smart_charging\.charge_periods"),
         ("tariff.schedule.peak", r"'tariff\.schedule' is not a table of named entries"),
-        ("tariff.import_prices.peak.low", r"'tariff\.import_prices' takes one more level, the entry name"),
-        ("tariff.export_prices.all.x", r"as in 'tariff\.export_prices\.all'"),
+        (
+            "tariff.import_prices.winter.peak.low",
+            r"'tariff\.import_prices' takes at most 2 more levels, as in 'tariff\.import_prices\.winter' or "
+            r"'tariff\.import_prices\.winter\.peak'",
+        ),
+        ("tariff.export_prices.all.x.y", r"as in 'tariff\.export_prices\.all'"),
         ("costs", r"Unknown sweep key 'costs'\. Available: costs\.daily_power_cost"),
         ("battery_indoor_model.setpoint", r"Available: battery_indoor_model\.ceiling_c"),
     ],

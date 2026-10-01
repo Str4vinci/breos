@@ -122,7 +122,7 @@ def test_numba_matches_python_exactly_under_instructions(scenario, freq):
     python_out = _run(scenario, "python", freq)
     _assert_identical(f"{scenario}@{freq}", python_out, _run(scenario, "numba", freq))
     grid_ac = python_out[0]["Grid_AC_To_Battery"]
-    if scenario == "noop_instructions":
+    if scenario in ("noop_instructions", "discharge_window"):
         assert (grid_ac == 0.0).all()
     else:
         assert grid_ac.sum() > 0.0, "the scenario must grid-charge"

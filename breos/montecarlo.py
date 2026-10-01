@@ -422,8 +422,8 @@ def _reject_planned_smart_charging(resolved: ResolvedAppConfig) -> None:
     if spec is not None and spec.mode in PLANNER_MODES:
         raise ValueError(
             f"smart_charging mode = '{spec.mode}' is experimental and runs in breos.App only; Monte Carlo "
-            "shares one set of static instructions across trajectories. Use mode = 'fixed_target', or run the "
-            "design with breos.App."
+            "shares one set of static instructions across trajectories. Use mode = 'fixed_target' or "
+            "'discharge_only', or run the design with breos.App."
         )
 
 

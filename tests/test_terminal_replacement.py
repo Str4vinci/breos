@@ -529,7 +529,7 @@ def test_app_prices_every_swap_but_the_terminal_one():
 
     assert default["provenance"]["resolved_config"]["battery_allow_terminal_replacement"] is True
     assert guarded["provenance"]["resolved_config"]["battery_allow_terminal_replacement"] is False
-    assert guarded["result_schema_version"] == RESULT_SCHEMA_VERSION == "2.4"
+    assert guarded["result_schema_version"] == RESULT_SCHEMA_VERSION == "2.6"
     assert default_art.yearly_df["Replacements"].tolist() == [365, 365]
     assert guarded_art.yearly_df["Replacements"].tolist() == [365, 364]
     assert guarded["battery_replacements"] == default["battery_replacements"] - 1
@@ -718,7 +718,7 @@ def test_a_projected_design_records_the_policy(monkeypatch, value):
     assert treatment["allow_terminal_replacement"] is expected
     assert treatment["method"] == "simulated_yearly_state_propagation"
     assert "ends on the horizon's last step, whole or partial" in treatment["terminal_period"]
-    assert result.provenance["result_schema_version"] == "2.4"
+    assert result.provenance["result_schema_version"] == "2.6"
     assert result.yearly["Replacements"].tolist() == ([3, 3] if expected else [3, 2])
 
 

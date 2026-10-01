@@ -190,12 +190,14 @@ class MappingOf:
     """The checker :func:`mapping_of` returns.
 
     It is a class rather than a closure so that a caller can tell a free-form
-    mapping from a scalar key: ``breos sweep`` allows one more dotted level
-    below it (``tariff.import_prices.P1``).
+    mapping from a scalar key: ``breos sweep`` allows ``depth`` more dotted
+    levels below it (``tariff.import_prices.P1``, or with ``depth=2``
+    ``tariff.import_prices.winter.P1`` when an entry may be a table itself).
     """
 
     key: Checker
     value: Checker
+    depth: int = 1
 
     def __call__(self, table: Any, where: str) -> dict[Any, Any]:
         if not isinstance(table, Mapping):
@@ -205,9 +207,13 @@ class MappingOf:
         }
 
 
-def mapping_of(key: Checker, value: Checker) -> MappingOf:
-    """A mapping with free-form keys, such as a tariff's period-to-price map."""
-    return MappingOf(key, value)
+def mapping_of(key: Checker, value: Checker, *, depth: int = 1) -> MappingOf:
+    """A mapping with free-form keys, such as a tariff's period-to-price map.
+
+    ``depth`` is the number of dotted levels a sweep key may address below
+    it: 2 when an entry may itself be a mapping.
+    """
+    return MappingOf(key, value, depth)
 
 
 def table(spec: TableSpec) -> Checker:

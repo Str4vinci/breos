@@ -52,6 +52,18 @@ CUSTOM_SCHEDULE = {
         }
     ],
 }
+QUARTERS = {"q1": [1, 2, 3], "q2": [4, 5, 6], "q3": [7, 8, 9], "q4": [10, 11, 12]}
+MONTH_REFERENCE = {
+    "currency": "EUR",
+    "custom_schedule": {**CUSTOM_SCHEDULE, "identifier": "reference_quarterly", "seasons": QUARTERS},
+    "import_prices": {
+        "q1": {"peak": 0.35, "off_peak": 0.09},
+        "q2": {"peak": 0.30, "off_peak": 0.12},
+        "q3": {"peak": 0.25, "off_peak": 0.08},
+        "q4": {"peak": 0.40, "off_peak": 0.15},
+    },
+    "fixed_charge_per_day": 0.20,
+}
 
 
 def _offline():
@@ -380,6 +392,7 @@ def test_revalue_reprices_a_reference_under_daily_persistence():
     for changes in (
         {"reference_tariff": TOU_REFERENCE},
         {"reference_tariff": FLAT_REFERENCE},
+        {"reference_tariff": MONTH_REFERENCE},
     ):
         revalued = _revalued(app, changes)
         assert revalued["provenance"]["revaluation"]["method"] == "repriced"
@@ -534,3 +547,171 @@ def test_sweeps_vary_reference_prices_by_dotted_key():
     prices = [resolve_app_config(config).reference_tariff.prices.import_prices["all"] for _, config in runs]
     assert prices == [0.2, 0.3]
     assert [config["reference_tariff"]["fixed_charge_per_day"] for _, config in runs] == [0.40, 0.40]
+
+
+# --- Integration with month seasons and discharge_only -----------------------------
+
+
+@pytest.fixture(scope="module")
+def month_reference_app():
+    return _simulated({**BASE, "reference_tariff": MONTH_REFERENCE})
+
+
+def test_month_reference_reconciles_with_the_step_ledger_and_records_the_partition(month_reference_app):
+    app = month_reference_app
+    run, result = app._artifacts, app.result()
+    ledger = run.first_year_results_df
+    local = pd.DatetimeIndex(ledger["Datetime"]).tz_convert(LISBON)
+    seasons = [f"q{(month - 1) // 3 + 1}" for month in local.month]
+    periods = np.where(_peak(ledger), "peak", "off_peak")
+    prices = np.array([MONTH_REFERENCE["import_prices"][s][p] for s, p in zip(seasons, periods, strict=True)])
+    expected = (ledger["Houseload"].to_numpy() * prices).sum() / 1000
+    np.testing.assert_allclose(run.yearly_df["Baseline_Import_Cost"], expected, rtol=1e-14)
+    assert result["no_system_import_cost_year1_prices"] == round(expected, 2)
+    assert result["no_system_fixed_charge_year1_prices"] == 365 * 0.20
+    for row, (_, projected) in zip(result["financial"][1:], run.cost_projection.iterrows(), strict=True):
+        assert row["no_system_cost_import"] == round(projected["Cost_No_Sys_Import"], 2)
+        assert row["no_system_cost_fixed_charge"] == round(projected["Cost_No_Sys_Fixed_Charge"], 2)
+        assert row["cost_without_system"] == round(projected["Cost_No_Sys_Cumulative_NPV"], 2)
+    reference = run.resolved_reference_tariff
+    assert reference.season_labels == tuple(seasons)
+    record = result["provenance"]["reference_tariff"]
+    assert record["seasons"] == QUARTERS
+    assert record["import_prices"] == MONTH_REFERENCE["import_prices"]
+    assert record["schedule_hash"] == reference.schedule_hash
+    assert record["price_hash"] == reference.price_hash
+    assert result["provenance"]["resolved_config"]["reference_tariff"]["custom_schedule"]["seasons"] == QUARTERS
+
+
+@pytest.mark.parametrize("system", ["flat", "month"])
+@pytest.mark.parametrize("step", ["add", "change"])
+def test_revalue_month_reference_is_bit_identical_to_a_fresh_run(system, step, flat_app, month_reference_app):
+    base = deepcopy(BASE)
+    if system == "month":
+        base["tariff"] = {**MONTH_REFERENCE, "export_prices": {"all": 0.05}}
+    if step == "add":
+        app = flat_app if system == "flat" else _simulated(base)
+        changes = {"reference_tariff": MONTH_REFERENCE}
+    else:
+        app = month_reference_app if system == "flat" else _simulated({**base, "reference_tariff": MONTH_REFERENCE})
+        # Replace the nested map whole, including each season's old periods.
+        changes = {"reference_tariff": {"import_prices": {s: {"all": 0.2 + i * 0.05} for i, s in enumerate(QUARTERS)}}}
+    with mock.patch("breos.runners.app.run_app_simulation", side_effect=AssertionError("reference drove dispatch")):
+        revalued = _revalued(app, changes)
+    assert revalued["provenance"]["revaluation"] == {"method": "repriced", "changed_keys": ["reference_tariff"]}
+    fresh = _simulated(_revalued_config(app._config, changes))
+    assert _fields(revalued) == _fields(fresh.result())
+    record = revalued["provenance"]["reference_tariff"]
+    assert record["import_prices"] == changes["reference_tariff"]["import_prices"]
+    assert record["seasons"] == QUARTERS
+    if step == "change":
+        old = app.result()["provenance"]["reference_tariff"]
+        assert record["schedule_hash"] == old["schedule_hash"]
+        assert record["price_hash"] != old["price_hash"]
+
+
+@pytest.mark.parametrize("kind", ["bundled", "dst", "flat", "flat_all"])
+def test_seasonal_reference_prices_need_a_month_schedule(kind):
+    reference = deepcopy(MONTH_REFERENCE)
+    reference.pop("custom_schedule")
+    if kind == "bundled":
+        reference["schedule"] = TOU_REFERENCE["schedule"]
+    elif kind == "dst":
+        reference["custom_schedule"] = deepcopy(CUSTOM_SCHEDULE)
+        rule = reference["custom_schedule"]["rules"][0]
+        reference["custom_schedule"]["rules"] = [{**rule, "season": s} for s in ("standard", "dst")]
+    elif kind == "flat_all":
+        reference["import_prices"] = {"all": {"peak": 0.3}}
+    message = "has no month seasons" if kind in ("bundled", "dst") else "one flat price"
+    with pytest.raises(ValueError, match=message):
+        App({**BASE, "reference_tariff": reference})
+
+
+def test_reference_season_cannot_price_a_period_it_never_uses():
+    reference = deepcopy(MONTH_REFERENCE)
+    rule = reference["custom_schedule"]["rules"][0]
+    reference["custom_schedule"]["rules"] = [
+        {**rule, "season": "q1"},
+        {**rule, "season": "q2"},
+        {**rule, "season": "q3", "intervals": {"off_peak": [["00:00", "24:00"]]}},
+        {**rule, "season": "q4"},
+    ]
+    with pytest.raises(ValueError, match=r"reference_tariff.import_prices.q3.*peak.*never uses"):
+        App({**BASE, "reference_tariff": reference})
+
+
+def test_sweep_accepts_a_reference_season_and_period():
+    key = "reference_tariff.import_prices.q1.peak"
+    cli._check_sweep_key(key)
+    runs = cli._sweep_run_configs({**BASE, "reference_tariff": MONTH_REFERENCE}, {key: [0.2, 0.3]})
+    for expected, (varied, config) in zip((0.2, 0.3), runs, strict=True):
+        spec = resolve_app_config(config).reference_tariff
+        assert spec.prices.import_prices["q1"]["peak"] == varied[key] == expected
+        assert config["reference_tariff"]["import_prices"]["q2"] == MONTH_REFERENCE["import_prices"]["q2"]
+    assert MONTH_REFERENCE["import_prices"]["q1"]["peak"] == 0.35
+
+
+@pytest.mark.parametrize("backend", ["python", "numba"])
+def test_month_reference_never_drives_discharge_only_dispatch(backend):
+    config = {
+        **BASE,
+        "execution_backend": backend,
+        "tariff": TOU,
+        "smart_charging": {"mode": "discharge_only", "discharge_periods": ["peak"]},
+    }
+    plain = _simulated(config)
+    priced = _simulated({**config, "reference_tariff": MONTH_REFERENCE})
+    pd.testing.assert_frame_equal(plain._artifacts.first_year_results_df, priced._artifacts.first_year_results_df)
+    assert plain.result()["provenance"]["smart_charging"] == priced.result()["provenance"]["smart_charging"]
+    assert priced._artifacts.first_year_results_df["Grid_AC_To_Battery"].sum() == 0
+    assert plain.result()["no_system_import_cost_year1_prices"] != priced.result()["no_system_import_cost_year1_prices"]
+    changes = {"reference_tariff": {"import_prices": {s: {"all": 0.1} for s in QUARTERS}}}
+    revalued = _revalued(priced, changes)
+    assert revalued["provenance"]["revaluation"]["method"] == "repriced"
+    assert _fields(revalued) == _fields(_simulated(_revalued_config(priced._config, changes)).result())
+
+
+def test_montecarlo_month_reference_matches_equivalent_flat_prices(tmp_path, write_multiyear_weather):
+    weather = write_multiyear_weather(tmp_path / "multi.csv")
+    settings = MonteCarloSettings(weather_file=str(weather), n_runs=2, years_per_run=2, seed=3, collect_yearly=True)
+    config = {
+        "location": "porto",
+        "n_modules": 8,
+        "annual_consumption_kwh": 4000,
+        "battery_kwh": 5.0,
+        "tariff": TOU,
+        "smart_charging": {"mode": "discharge_only", "discharge_periods": ["peak"]},
+    }
+    flat = run_montecarlo({**config, "reference_tariff": FLAT_REFERENCE}, settings)
+    reference = {**MONTH_REFERENCE, "import_prices": {s: {"all": 0.30} for s in QUARTERS}, "fixed_charge_per_day": 0.40}
+    month = run_montecarlo({**config, "reference_tariff": reference}, settings)
+    pd.testing.assert_frame_equal(month.yearly, flat.yearly, check_exact=True)
+    pd.testing.assert_frame_equal(month.runs, flat.runs, check_exact=True)
+    assert month.provenance["reference_tariff"]["seasons"] == QUARTERS
+    assert month.provenance["reference_tariff"]["import_prices"] == reference["import_prices"]
+    assert month.provenance["smart_charging"] == flat.provenance["smart_charging"]
+
+
+def test_optimizer_month_reference_prices_both_sides_of_a_quarter_boundary(optimizer_case, monkeypatch):
+    weather, load, config = optimizer_case
+    index = pd.date_range("2026-03-31", periods=48, freq="h", tz=LISBON)
+    weather.index = load.index = index
+    pv = pd.Series(np.where((index.hour >= 10) & (index.hour < 16), 1800.0, 0.0), index=index)
+    monkeypatch.setattr(optimization, "calculate_pv_production_dc", lambda **kwargs: pv.copy())
+    plain = _evaluate(weather, load, config)
+    priced = _evaluate(weather, load, {**config, "reference_tariff": MONTH_REFERENCE})
+    # One kWh each hour, 14 peak and 10 off-peak hours on each side.
+    expected = 14 * 0.35 + 10 * 0.09 + 14 * 0.30 + 10 * 0.12
+    np.testing.assert_allclose(priced.yearly["Baseline_Import_Cost"], expected, rtol=1e-14)
+    np.testing.assert_allclose(priced.yearly["Baseline_Fixed_Charge"], 2 * 0.20)
+    pd.testing.assert_series_equal(priced.yearly["Import_kWh"], plain.yearly["Import_kWh"], check_exact=True)
+    pd.testing.assert_series_equal(
+        priced.financial["Cost_System_Cumulative_NPV"], plain.financial["Cost_System_Cumulative_NPV"], check_exact=True
+    )
+    assert priced.provenance["reference_tariff"]["seasons"] == QUARTERS
+    assert priced.provenance["reference_tariff"]["import_prices"] == MONTH_REFERENCE["import_prices"]
+    assert priced.metrics["Projected_NPV"] == pytest.approx(
+        plain.metrics["Projected_NPV"]
+        + priced.financial["Cost_No_Sys_Cumulative_NPV"].iloc[-1]
+        - plain.financial["Cost_No_Sys_Cumulative_NPV"].iloc[-1]
+    )
