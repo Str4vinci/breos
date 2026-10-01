@@ -1,9 +1,9 @@
 # BREOS validation suite
 
 A standing benchmark that pins BREOS's PV chain against independent
-references at seven sites on four continents, and turns any unintended model
-drift into a CI failure. This is repo-side tooling — nothing in here ships in
-the package.
+references at seven sites on six continents, and turns any unintended model
+drift into a CI failure. This is repo-side tooling: it is in the source
+archive, but nothing in here is installed with the package.
 
 ## Layout
 
@@ -42,7 +42,10 @@ whole point of the baseline is that it does not move silently.
   https://developer.nrel.gov/signup/), falls back to `DEMO_KEY`. Coverage:
   NSRDB for the Americas and parts of Asia; station-based `intl` data
   elsewhere (the fetcher records station distance and marks references
-  \>200 km as untrusted, which excludes them from CI assertions).
+  \>200 km as untrusted, which excludes them from CI assertions). The
+  committed reference snapshot has no PVWatts results: the fetch failed when
+  it was taken, and each reference file records the error. The PVWatts band
+  test skips until a fetch succeeds and the references are committed again.
 - **PVGIS TMY** (via `breos.weather.fetch_tmy_weather_data`) — the checked-in
   hourly weather inputs, trimmed to the five columns BREOS reads
   (`ghi`/`dni`/`dhi`/`temp_air`/`wind_speed`), rounded to physical precision
