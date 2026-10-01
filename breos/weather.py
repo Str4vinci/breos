@@ -258,8 +258,11 @@ def parse_weather_filename(filename: str) -> Optional[Dict[str, str]]:
     Parse a weather filename following the convention:
     {location}_{type}_{yearstart}_{yearend}_{source}.csv
 
+    A gzip-compressed file with the same name plus ``.gz`` also matches.
+
     Examples:
         porto_tmy_2005_2023_pvgis-sarah3.csv
+        porto_tmy_2005_2023_pvgis-sarah3.csv.gz
         porto_historical_2005_2024_openmeteo.csv
         lisbon_tmy_2014_nsrdb.csv
 
@@ -268,10 +271,12 @@ def parse_weather_filename(filename: str) -> Optional[Dict[str, str]]:
         Returns None if filename doesn't match the convention.
     """
     basename = os.path.basename(filename)
-    if not basename.endswith(".csv"):
+    for extension in (".csv", ".csv.gz"):
+        if basename.endswith(extension):
+            name = basename[: -len(extension)]
+            break
+    else:
         return None
-
-    name = basename[:-4]  # strip .csv
 
     # Pattern: location_type_yearstart_yearend_source
     # Source may contain hyphens (e.g., pvgis-sarah3)

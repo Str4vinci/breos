@@ -13,8 +13,9 @@ independence, LCOE, and final state of health.
 
 BREOS ships no weather data, and Monte Carlo needs a multi-year historical CSV
 rather than a single TMY. Download one for your site, put it in a local
-`weather/` directory, and point `[montecarlo].weather_file` at it. The
-`weather/` directory is git-ignored by convention.
+`weather/` directory, and point `[montecarlo].weather_file` at it. A
+gzip-compressed `.csv.gz` file works as well. The `weather/` directory is
+git-ignored by convention.
 
 Fetch historical data with the `weather` extra:
 

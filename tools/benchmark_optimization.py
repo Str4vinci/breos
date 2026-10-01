@@ -264,10 +264,10 @@ def frame_sha256(frame: pd.DataFrame) -> str:
 def stage_weather(weather_file: Path, staging_dir: Path) -> tuple[Path, str, dict[str, Any]]:
     """Put the weather file in ``staging_dir`` as a plain CSV that ``load_weather`` accepts.
 
-    ``load_weather`` reads only ``.csv`` names of the form
-    ``{location}_{type}_{years}_{source}.csv``. A ``.csv.gz`` file is
-    decompressed, and a name outside that form is replaced by a canonical
-    one.
+    ``load_weather`` reads only names of the form
+    ``{location}_{type}_{years}_{source}.csv`` (or ``.csv.gz``). The staged
+    copy is always a plain CSV: a ``.csv.gz`` file is decompressed, and a
+    name outside that form is replaced by a canonical one.
 
     The metadata sidecar carries the timing fields the resampler and the PV
     model read, so it is checked as ``load_weather`` checks it: schema

@@ -353,7 +353,7 @@ def load_weather_for_simulation(
     if weather is None and weather_source is not None:
         raise FileNotFoundError(
             f"'weather_source' is {weather_source!r}, but no cached TMY weather file "
-            f"{resolved.loc_key}_tmy_<years>_{weather_source}.csv was found in {weather_path}. "
+            f"{resolved.loc_key}_tmy_<years>_{weather_source}.csv (or .csv.gz) was found in {weather_path}. "
             "Add the file, or unset 'weather_source' to fetch PVGIS weather."
         )
 

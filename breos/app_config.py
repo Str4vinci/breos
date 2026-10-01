@@ -712,13 +712,13 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         default=None,
         cli_flags=("--weather-source",),
         cli_help=(
-            "Source part of the cached weather/<location>_tmy_*_<source>.csv file to use when several "
+            "Source part of the cached weather/<location>_tmy_*_<source>.csv (or .csv.gz) file to use when several "
             "TMY files exist for the location preset, for example 'pvgis-sarah3'."
         ),
         doc=(
-            "Source part of the cached `weather/<location>_tmy_<years>_<source>.csv` file to load, e.g. "
-            '`"pvgis-sarah3"`. Needed only when several TMY files exist for a location preset; see [Offline runs with '
-            "cached weather](recipes.md#offline-runs-with-cached-weather)"
+            "Source part of the cached `weather/<location>_tmy_<years>_<source>.csv` (or gzip-compressed `.csv.gz`) "
+            'file to load, e.g. `"pvgis-sarah3"`. Needed only when several TMY files exist for a location preset; see '
+            "[Offline runs with cached weather](recipes.md#offline-runs-with-cached-weather)"
         ),
         summary="simulation.weather_source",
     ),
