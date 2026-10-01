@@ -1,0 +1,46 @@
+{
+ "case": "sun_prices_carbon",
+ "title": "Sun, prices or grid carbon?",
+ "breos_version": "0.6.2",
+ "git_describe": "v0.6.2-570-g829b301-dirty",
+ "generated_utc": "2026-10-01T15:55:34+00:00",
+ "runtime_s": 13.0,
+ "cheap": true,
+ "configs": {
+  "configs/examples/quickstart.toml": "2d33e042ee2f71c9fea63c512bf0700930ee202d0cad75301d392c622e132996"
+ },
+ "weather": {
+  "validation/data/weather/berlin_tmy_2005_2023_pvgis-sarah3.csv.gz": {
+   "sha256": "db4ed7ba4957a13855f683639440374eb26489d678bea6327f5035b74bae1117",
+   "attribution": "PVGIS typical meteorological year 2005-2023 (PVGIS-SARAH3). PVGIS data © European Union, 2001-2024, reused under Commission Decision 2011/833/EU."
+  },
+  "validation/data/weather/porto_tmy_2005_2023_pvgis-sarah3.csv.gz": {
+   "sha256": "bf84e31b02ad9bf39f331a5ce8629b1ea8f80cd1597748e72a87a0fce56b4f15",
+   "attribution": "PVGIS typical meteorological year 2005-2023 (PVGIS-SARAH3). PVGIS data © European Union, 2001-2024, reused under Commission Decision 2011/833/EU."
+  }
+ },
+ "dependencies": {
+  "python": "3.12.13",
+  "numpy": "2.4.6",
+  "pandas": "3.0.5",
+  "pvlib": "0.15.2",
+  "scipy": "1.17.1",
+  "numba": "0.66.0",
+  "pymoo": "0.6.2"
+ },
+ "currency": "EUR",
+ "variants": {
+  "Porto": {},
+  "Berlin, Porto prices and grid": {
+   "location": "berlin"
+  },
+  "Berlin": {
+   "location": "berlin",
+   "cost_preset": "residential_de",
+   "emissions_country": "DE"
+  }
+ },
+ "files": {
+  "sites.json": "f9cbb6357d91f5d15094cb0e4835f88a54697db0d0e8467db528ccaea89f36bc"
+ }
+}

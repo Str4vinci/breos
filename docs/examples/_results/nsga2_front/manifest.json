@@ -1,0 +1,44 @@
+{
+ "case": "nsga2_front",
+ "title": "NSGA-II sizing front",
+ "breos_version": "0.6.2",
+ "git_describe": "v0.6.2-570-g829b301-dirty",
+ "generated_utc": "2026-10-01T16:04:03+00:00",
+ "runtime_s": 230.5,
+ "cheap": false,
+ "configs": {
+  "configs/optimization/projected-optimization.toml": "a4bc1f7f57216078e866db21a8f0dab34506e134e154a27b77edaf0410aefa0d"
+ },
+ "weather": {
+  "validation/data/weather/porto_tmy_2005_2023_pvgis-sarah3.csv.gz": {
+   "sha256": "bf84e31b02ad9bf39f331a5ce8629b1ea8f80cd1597748e72a87a0fce56b4f15",
+   "attribution": "PVGIS typical meteorological year 2005-2023 (PVGIS-SARAH3). PVGIS data © European Union, 2001-2024, reused under Commission Decision 2011/833/EU."
+  }
+ },
+ "dependencies": {
+  "python": "3.12.13",
+  "numpy": "2.4.6",
+  "pandas": "3.0.5",
+  "pvlib": "0.15.2",
+  "scipy": "1.17.1",
+  "numba": "0.66.0",
+  "pymoo": "0.6.2"
+ },
+ "annual_consumption_kwh": 4000.0,
+ "load_profile": "demandlib_h0",
+ "n_procs": 8,
+ "generations": 40,
+ "constraints": {
+  "budget": 15000.0,
+  "max_area_m2": 25.0,
+  "max_modules": 20,
+  "max_battery_kwh": 30.0,
+  "min_tilt_deg": 10.0,
+  "max_tilt_deg": "adjust",
+  "enforce_zeb": false
+ },
+ "module_area_m2": 2.5833,
+ "files": {
+  "pareto.csv": "c5480da27f96a3e19ef3cd358d616665a5e6b6593b85bc84985495561919f303"
+ }
+}

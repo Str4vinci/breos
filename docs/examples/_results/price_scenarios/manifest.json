@@ -1,0 +1,38 @@
+{
+ "case": "price_scenarios",
+ "title": "Price scenarios with App.revalue",
+ "breos_version": "0.6.2",
+ "git_describe": "v0.6.2-570-g829b301-dirty",
+ "generated_utc": "2026-10-01T15:59:34+00:00",
+ "runtime_s": 5.1,
+ "cheap": true,
+ "configs": {
+  "configs/examples/time-of-use-portugal.toml": "384c5bfa5e09e50e2ea10d5a39b9bb492fdb20f91489bcb37c6401183596ebd1"
+ },
+ "weather": {
+  "validation/data/weather/porto_tmy_2005_2023_pvgis-sarah3.csv.gz": {
+   "sha256": "bf84e31b02ad9bf39f331a5ce8629b1ea8f80cd1597748e72a87a0fce56b4f15",
+   "attribution": "PVGIS typical meteorological year 2005-2023 (PVGIS-SARAH3). PVGIS data © European Union, 2001-2024, reused under Commission Decision 2011/833/EU."
+  }
+ },
+ "dependencies": {
+  "python": "3.12.13",
+  "numpy": "2.4.6",
+  "pandas": "3.0.5",
+  "pvlib": "0.15.2",
+  "scipy": "1.17.1",
+  "numba": "0.66.0",
+  "pymoo": "0.6.2"
+ },
+ "currency": "EUR",
+ "timezone": "Europe/Lisbon",
+ "scenarios": 24,
+ "base_peak_price": 0.231,
+ "base_import_price_escalation": 0.02,
+ "simulate_s": 2.3,
+ "revalue_all_s": 0.96,
+ "files": {
+  "scenarios.csv": "94a0f3676a51c2cb87969ecb354194147627af014ec299b1e2d676b4b12b62fb",
+  "parity.json": "3b3f24e8eab2a76db5478eedc0ec326fc48371e7b1ad0809ebb04a59fa45006f"
+ }
+}

@@ -1,0 +1,55 @@
+{
+ "case": "east_west",
+ "title": "East-West or South?",
+ "breos_version": "0.6.2",
+ "git_describe": "v0.6.2-570-g829b301-dirty",
+ "generated_utc": "2026-10-01T15:55:49+00:00",
+ "runtime_s": 15.7,
+ "cheap": true,
+ "configs": {
+  "configs/examples/east-west-roof.toml": "691138d0b19d94a546daf6684d434d35640510e6a9dcfcf02983b486448ee992"
+ },
+ "weather": {
+  "validation/data/weather/porto_tmy_2005_2023_pvgis-sarah3.csv.gz": {
+   "sha256": "bf84e31b02ad9bf39f331a5ce8629b1ea8f80cd1597748e72a87a0fce56b4f15",
+   "attribution": "PVGIS typical meteorological year 2005-2023 (PVGIS-SARAH3). PVGIS data © European Union, 2001-2024, reused under Commission Decision 2011/833/EU."
+  }
+ },
+ "dependencies": {
+  "python": "3.12.13",
+  "numpy": "2.4.6",
+  "pandas": "3.0.5",
+  "pvlib": "0.15.2",
+  "scipy": "1.17.1",
+  "numba": "0.66.0",
+  "pymoo": "0.6.2"
+ },
+ "currency": "EUR",
+ "timezone": "Europe/Lisbon",
+ "variants": {
+  "East-West 15°": {},
+  "South 15°": {
+   "pv_arrays": null,
+   "n_modules": 12,
+   "tilt": 15,
+   "azimuth": 180
+  },
+  "South, latitude tilt": {
+   "pv_arrays": null,
+   "n_modules": 12
+  }
+ },
+ "battery_kwh": [
+  0.0,
+  5.0
+ ],
+ "iso_weeks": {
+  "summer": 27,
+  "winter": 3
+ },
+ "files": {
+  "designs.csv": "6d80d5000447aa8fd956ca7c76172facac5ba44af22fcdfdc7f34e7af03f3dd7",
+  "week_summer.csv": "9a497f913f07fe3e9cf42235122b9452050b14445fbf905b4b92b95e211bb9da",
+  "week_winter.csv": "4bb0c2ee3bba7633c09792155ae9385e73de5cc758b8e48b54c76a7614ab987d"
+ }
+}
