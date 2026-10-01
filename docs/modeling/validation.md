@@ -148,8 +148,7 @@ SOC trace or nameplate data for a dispatch or degradation check.
 
 The Esposende field comparison is part of the upcoming publication, but it is
 not a release validation dataset. Its weather is not measured at the
-site, and its annual series comes from a hybrid inverter with a battery inside
-an unverified measurement boundary.
+site, and the measurement boundary of its annual series is not verified.
 
 Two other inspected datasets are excluded. The orientation-diversity workbook
 has no dates, site coordinates, or panel geometry, so BREOS cannot run on it.
