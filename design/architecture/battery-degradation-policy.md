@@ -74,10 +74,14 @@ metric and test protocol have a defensible, validated mapping to pack behavior.
 The executable isolation guard is
 `tests/test_battery.py::TestSimulateEnergyBalance::test_blast_resistance_output_is_diagnostic_only`.
 
-The reference Python path remains the accuracy and calibration basis. Optional
-Numba kernels are explicitly approximate screening tools and must not provide
+The Python path remains the accuracy and calibration reference. The optional
+Numba backend compiles the same within-day dispatch loop, keeps degradation in
+Python, and is bit-identical to the reference on one toolchain (see
+[Numba dispatch backend](numba-dispatch-backend.md)). The approximate
+whole-project screening kernels that BREOS once had were removed in 0.6.0. A
+faster path that does not reproduce the reference must not provide
 calibration evidence or replace the reference path in published accuracy
-comparisons merely because they are faster.
+comparisons.
 
 ## Provenance, legal records, and fixtures
 
