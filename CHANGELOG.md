@@ -1025,6 +1025,11 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   bit for bit.
 
 ### Fixed
+- A battery too small to dispatch (at most 1 Wh) no longer reports
+  `battery_soh_end_pct`, `battery_replacements` or the replacement-cost fields
+  ([#353](https://github.com/Str4vinci/breos/issues/353)). It already ran and
+  was priced as PV-only; its result now has the same fields as one with
+  `battery_kwh = 0`, instead of an uncomputed 100% health.
 - `calendar_model` is stored as it is validated: trimmed, lower-case, with
   hyphens as underscores ([#186](https://github.com/Str4vinci/breos/issues/186)).
   For `"Naumann-Lam"`, `degradation.model_key` and
