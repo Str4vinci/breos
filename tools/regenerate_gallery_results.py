@@ -270,6 +270,8 @@ class Context:
         self.options = options
         self.configs: dict[str, str] = {}
         self.weather: dict[str, dict[str, str]] = {}
+        self.currencies: set[str] = set()
+        self.timezones: set[str] = set()
         (work / "weather").mkdir(parents=True, exist_ok=True)
 
     def config(self, relative: str) -> dict[str, Any]:
@@ -305,6 +307,9 @@ class Context:
         with self.inside():
             app = breos.App(dict(config))
             app.simulate()
+        provenance = app.result()["provenance"]
+        self.currencies.add(provenance["currency"])
+        self.timezones.add(provenance["timezone"])
         return app
 
     def revalue(self, app: Any, changes: Mapping[str, Any]) -> dict[str, Any]:
@@ -489,8 +494,6 @@ def east_west(ctx: Context) -> Output:
             "variants": designs,
             "battery_kwh": [0.0, base["battery_kwh"]],
             "iso_weeks": {"summer": 27, "winter": 3},
-            "timezone": result["provenance"]["timezone"],
-            "currency": result["provenance"]["currency"],
         },
     )
 
@@ -524,7 +527,15 @@ def replacement_timing(ctx: Context) -> Output:
         for allow in (True, False):
             config = with_overrides(base, {"n_modules": count, "battery_allow_terminal_replacement": allow})
             result = ctx.simulate(config).result()
-            module_rows.append(row(result, n_modules=count, pv_kwp=result["pv_kwp"], terminal_replacement=allow))
+            module_rows.append(
+                row(
+                    result,
+                    n_modules=count,
+                    pv_kwp=result["pv_kwp"],
+                    terminal_replacement=allow,
+                    projection_years=len(result["yearly"]),
+                )
+            )
     return Output(
         {"horizons.csv": pd.DataFrame(horizon_rows), "modules.csv": pd.DataFrame(module_rows)},
         {
@@ -652,6 +663,8 @@ def price_scenarios(ctx: Context) -> Output:
         {"scenarios.csv": pd.DataFrame(rows), "parity.json": parity},
         {
             "scenarios": len(rows),
+            "base_peak_price": base["tariff"]["import_prices"]["peak"],
+            "base_import_price_escalation": app.result()["provenance"]["economics"]["import_price_escalation"],
             "simulate_s": round(simulate_s, 2),
             "revalue_all_s": round(revalue_s, 2),
         },
@@ -768,6 +781,8 @@ def nsga2_front(ctx: Context) -> Output:
             "load_profile": "demandlib_h0",
             "n_procs": ctx.options.procs,
             "generations": result.iterations,
+            "constraints": config["constraints"],
+            "module_area_m2": round(config["pv"]["module_width_m"] * config["pv"]["module_length_m"], 4),
         },
     )
 
@@ -807,6 +822,8 @@ def write_case(entry: Case, output: Output, target: Path, ctx: Context, runtime_
         "configs": dict(sorted(ctx.configs.items())),
         "weather": dict(sorted(ctx.weather.items())),
         "dependencies": dependency_versions(),
+        **({"currency": next(iter(ctx.currencies))} if len(ctx.currencies) == 1 else {}),
+        **({"timezone": next(iter(ctx.timezones))} if len(ctx.timezones) == 1 else {}),
         **json_ready(sanitise(output.manifest, roots)),
         "files": files,
     }

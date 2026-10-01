@@ -28,7 +28,8 @@ the threshold, at the replacement-pack price, and discounts it from the
 horizon. It is an accounting sensitivity, not resale value: the result keeps
 the unadjusted ``npv_savings`` and adds ``terminal_health_credit``,
 ``terminal_health_credit_npv`` and ``npv_savings_terminal_adjusted``. See
-:ref:`Terminal-health credit <terminal-health-credit>` for the formula.
+`Terminal-health credit <../../getting-started/configuration.html#terminal-health-credit>`__
+for the formula.
 """
 
 # %%
@@ -42,7 +43,7 @@ from gallery_results import load_case, money, say, table
 case = load_case("replacement_timing")
 horizons = case.csv("horizons.csv")
 modules = case.csv("modules.csv")
-currency = "EUR"
+currency = case.manifest["currency"]
 case.stamp()
 
 # %%
@@ -92,8 +93,8 @@ say(*lines)
 # Adding modules
 # --------------
 # A bigger array charges the battery harder, so it ages slightly faster and
-# its first replacement comes a little earlier. At 20 years that moves the
-# second replacement from just after the horizon to just before it.
+# its first replacement comes a little earlier. Near the horizon that can
+# move the second replacement from just after the end to just before it.
 
 counts = modules[modules["terminal_replacement"]].set_index("n_modules")
 fig, ax = plt.subplots(figsize=(9, 4.5))
@@ -111,7 +112,7 @@ for count, row in counts.iterrows():
     )
 ax.set_xlabel("PV modules")
 ax.set_ylabel(currency)
-ax.set_title("NPV savings against the array size, 20-year horizon")
+ax.set_title(f"NPV savings against the array size, {modules['projection_years'].iloc[0]}-year horizon")
 ax.grid(alpha=0.3)
 ax.legend()
 fig.tight_layout()
@@ -136,7 +137,7 @@ table(
 
 # %%
 
-horizon = int(horizons["projection_years"].iloc[case.manifest["projection_years"].index(20)])
+horizon = int(modules["projection_years"].iloc[0])
 cliff = counts["battery_replacements"].diff().fillna(0).gt(0)
 if cliff.any():
     count = int(counts.index[cliff][0])

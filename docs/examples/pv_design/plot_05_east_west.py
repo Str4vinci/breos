@@ -28,7 +28,6 @@ low tilt, ``tilt`` and ``azimuth = 180``. Each array may also set its own
 
 # sphinx_gallery_thumbnail_number = 1
 import matplotlib.pyplot as plt
-import pandas as pd
 from gallery_results import load_case, money, say, table
 
 case = load_case("east_west")
