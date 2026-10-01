@@ -1806,6 +1806,9 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   directory holds two TMY files for its location preset now stops** with the
   candidates and asks for `weather_source`. With one file, App results are
   unchanged.
+- A Monte Carlo `weather_file` without a `date` column, such as a PVGIS TMY,
+  now stops with an error that names the missing column instead of a bare
+  `KeyError: 'date'`.
 
 ### Removed
 - `resample_to_15min(..., preserve_irradiance_energy=...)`,

@@ -1004,6 +1004,12 @@ def _complete_weather_years(csv_file_path: str) -> Tuple[Dict[int, pd.DataFrame]
         Tuple of (source year -> frame with a ``date`` column, file metadata)
     """
     df = pd.read_csv(csv_file_path)
+    if "date" not in df.columns:
+        raise ValueError(
+            f"Weather file {csv_file_path} has no 'date' column. A multi-year weather file needs one "
+            "timestamp column named 'date', as `tools/fetch_weather.py historical` writes; a "
+            "single-year TMY cannot be sampled by year."
+        )
     try:
         df["date"] = pd.to_datetime(df["date"], format="ISO8601")
     except ValueError:
