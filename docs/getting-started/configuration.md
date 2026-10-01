@@ -496,7 +496,7 @@ offer it has today while the system runs on a time-of-use offer:
 schedule = "pt_mainland_2026_daily_bi"   # or custom_schedule, or neither for one flat price
 currency = "EUR"
 import_prices = { peak = 0.2310, off_peak = 0.1210 }
-fixed_charge_per_day = 0.30              # optional, default 0
+fixed_charge_per_day = 0.30              # required; use 0 for no fixed charge
 # import_price_escalation = 0.03         # optional, default the system's import escalation
 ```
 
@@ -508,9 +508,8 @@ fixed_charge_per_day = 0.30              # optional, default 0
   constant.
 - The reference has no export prices: the household without a system exports
   nothing.
-- `fixed_charge_per_day` defaults to 0. Without it, the no-system cost has no
-  fixed charge, even when the system's tariff has one; set it to the fixed
-  charge the household pays without the system.
+- `fixed_charge_per_day` is required. Set it to the fixed charge the household
+  pays without the system, or explicitly to `0` when there is no fixed charge.
 - Without `schedule` or `custom_schedule` the reference is one flat price,
   `import_prices = { all = <price> }`, and takes no `boundary_policy` or
   `study_date`. With a schedule, the prices follow the `[tariff]` rules:

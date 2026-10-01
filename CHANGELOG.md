@@ -11,7 +11,8 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   prices on a bundled or custom schedule, including per-season prices on a
   calendar-month custom schedule, or one flat price
   (`import_prices = { all = <price> }`) without a schedule, a
-  `fixed_charge_per_day` (default 0) and an optional
+  required `fixed_charge_per_day` (an explicit 0 is valid;
+  [#345](https://github.com/Str4vinci/breos/issues/345)) and an optional
   `import_price_escalation`, which escalates the reference energy and fixed
   charge and defaults to the system's import escalation; an explicit 0 is
   kept. It has no export prices. The no-system cost of each year is then the

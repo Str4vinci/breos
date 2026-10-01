@@ -19,6 +19,7 @@ from breos import App, cli, optimization
 from breos.app import _revalued_config
 from breos.app_config import resolve_app_config, resolve_reference_tariff_spec
 from breos.montecarlo import MonteCarloSettings, run_montecarlo
+from breos.optimization_config import resolve_optimization_config
 from breos.runners.app import run_app_simulation
 from tools.generate_app_golden import EXCLUDED_PREFIXES, SCENARIOS, _fake_fetch, flatten
 
@@ -160,6 +161,22 @@ def test_an_explicit_none_is_the_default(flat_app):
 # --- Flat and scheduled references ---------------------------------------------
 
 
+@pytest.mark.parametrize(
+    ("reference", "previous_npv"),
+    [(FLAT_REFERENCE, -9725.03), (TOU_REFERENCE, -9945.27), (MONTH_REFERENCE, -10042.23)],
+    ids=["flat", "bundled", "month"],
+)
+def test_app_accepts_zero_reference_fixed_charge_with_previous_results(reference, previous_npv):
+    app = _simulated({**BASE, "reference_tariff": {**reference, "fixed_charge_per_day": 0}})
+    result = app.result()
+    # Pin the results from when an omitted reference fixed charge defaulted to zero.
+    assert result["npv_savings"] == previous_npv
+    assert result["no_system_fixed_charge_year1_prices"] == 0
+    assert result["fixed_charge_year1_prices"] > 0
+    assert result["provenance"]["reference_tariff"]["fixed_charge_per_day"] == 0
+    assert (app._artifacts.cost_projection["Cost_No_Sys_Fixed_Charge"] == 0).all()
+
+
 def test_a_flat_reference_prices_the_whole_load_and_its_own_fixed_charge(flat_run):
     run = _artifacts({**BASE, "reference_tariff": FLAT_REFERENCE})
     frame = run.first_year_results_df
@@ -290,10 +307,39 @@ def test_a_period_bills_the_reference_fixed_charge_on_its_civil_days():
 
 
 @pytest.mark.parametrize(
+    "reference", [FLAT_REFERENCE, TOU_REFERENCE, MONTH_REFERENCE], ids=["flat", "bundled", "month"]
+)
+@pytest.mark.parametrize("entry_point", ["app", "app_config", "reference_spec", "montecarlo"])
+def test_reference_fixed_charge_is_required(reference, entry_point):
+    reference = {key: value for key, value in reference.items() if key != "fixed_charge_per_day"}
+    config = {**BASE, "reference_tariff": reference}
+    with pytest.raises(ValueError, match=r"reference_tariff\.fixed_charge_per_day"):
+        if entry_point == "app":
+            App(config)
+        elif entry_point == "app_config":
+            resolve_app_config(config)
+        elif entry_point == "reference_spec":
+            resolve_reference_tariff_spec(config, LISBON, None)
+        else:
+            run_montecarlo(config, MonteCarloSettings(weather_file="unused.csv", n_runs=1))
+
+
+def test_revalue_requires_fixed_charge_when_adding_a_reference(flat_app):
+    reference = {key: value for key, value in FLAT_REFERENCE.items() if key != "fixed_charge_per_day"}
+    with pytest.raises(ValueError, match=r"reference_tariff\.fixed_charge_per_day"):
+        flat_app.revalue({"reference_tariff": reference})
+
+
+@pytest.mark.parametrize(
     ("reference", "extra", "message"),
     [
         ({**FLAT_REFERENCE, "currency": "USD"}, {}, r"'reference_tariff\.currency' must be one of: EUR"),
         ({k: v for k, v in FLAT_REFERENCE.items() if k != "currency"}, {}, r"reference_tariff\.currency"),
+        (
+            {**FLAT_REFERENCE, "fixed_charge_per_day": -0.1},
+            {},
+            r"'reference_tariff\.fixed_charge_per_day' must be >= 0",
+        ),
         ({**FLAT_REFERENCE, "import_prices": {"peak": 0.3}}, {}, r"one flat price.*all = <price>"),
         ({**FLAT_REFERENCE, "study_date": "2025-06-01"}, {}, r"reference_tariff\.study_date applies to a schedule"),
         ({**FLAT_REFERENCE, "boundary_policy": "strict"}, {}, r"boundary_policy applies to a schedule"),
@@ -407,6 +453,27 @@ def test_revalue_reprices_a_reference_under_daily_persistence():
 # --- Monte Carlo -----------------------------------------------------------------
 
 
+@pytest.mark.parametrize(
+    ("reference", "previous_npv"),
+    [
+        (FLAT_REFERENCE, [-5234.194955228494, -5201.517082178313]),
+        (TOU_REFERENCE, [-5379.259727246049, -5351.478510011397]),
+        (MONTH_REFERENCE, [-5443.119039206365, -5417.493390597623]),
+    ],
+    ids=["flat", "bundled", "month"],
+)
+def test_montecarlo_accepts_zero_reference_fixed_charge_with_previous_results(
+    reference, previous_npv, tmp_path, write_multiyear_weather
+):
+    weather = write_multiyear_weather(tmp_path / "multi.csv")
+    settings = MonteCarloSettings(weather_file=str(weather), n_runs=2, years_per_run=2, seed=3, collect_yearly=True)
+    config = {"location": "porto", "n_modules": 8, "annual_consumption_kwh": 4000, "battery_kwh": 5.0}
+    result = run_montecarlo({**config, "reference_tariff": {**reference, "fixed_charge_per_day": 0}}, settings)
+    np.testing.assert_allclose(result.runs["npv_savings"], previous_npv, rtol=1e-12)
+    assert (result.yearly["Cost_No_Sys_Fixed_Charge"] == 0).all()
+    assert result.provenance["reference_tariff"]["fixed_charge_per_day"] == 0
+
+
 def test_montecarlo_prices_each_trajectory_load_at_the_reference(tmp_path, write_multiyear_weather):
     weather = write_multiyear_weather(tmp_path / "multi.csv")
     settings = MonteCarloSettings(weather_file=str(weather), n_runs=2, years_per_run=2, seed=3, collect_yearly=True)
@@ -472,6 +539,43 @@ def _evaluate(weather, load, config):
     )
 
 
+@pytest.mark.parametrize(
+    "reference", [FLAT_REFERENCE, TOU_REFERENCE, MONTH_REFERENCE], ids=["flat", "bundled", "month"]
+)
+@pytest.mark.parametrize("entry_point", ["config", "evaluation"])
+def test_optimizer_requires_reference_fixed_charge(reference, entry_point, optimizer_case, monkeypatch):
+    weather, load, config = optimizer_case
+    config["reference_tariff"] = {key: value for key, value in reference.items() if key != "fixed_charge_per_day"}
+    monkeypatch.setattr(
+        optimization, "calculate_pv_production_dc", lambda **kwargs: pytest.fail("PV ran before validation")
+    )
+    with pytest.raises(ValueError, match=r"reference_tariff\.fixed_charge_per_day"):
+        if entry_point == "config":
+            resolve_optimization_config(config)
+        else:
+            _evaluate(weather, load, config)
+
+
+@pytest.mark.parametrize(
+    ("reference", "previous_npv"),
+    [
+        (FLAT_REFERENCE, -2027.9893134920192),
+        (TOU_REFERENCE, -2033.2464563491621),
+        (MONTH_REFERENCE, -2033.2464563491621),
+    ],
+    ids=["flat", "bundled", "month"],
+)
+def test_optimizer_accepts_zero_reference_fixed_charge_with_previous_results(reference, previous_npv, optimizer_case):
+    weather, load, config = optimizer_case
+    config["reference_tariff"] = {**reference, "fixed_charge_per_day": 0}
+    resolved = resolve_optimization_config(config)
+    assert resolved["reference_tariff"]["fixed_charge_per_day"] == 0
+    result = _evaluate(weather, load, resolved)
+    assert result.metrics["Projected_NPV"] == pytest.approx(previous_npv, rel=1e-12)
+    assert (result.financial["Cost_No_Sys_Fixed_Charge"] == 0).all()
+    assert result.provenance["reference_tariff"]["fixed_charge_per_day"] == 0
+
+
 def test_the_optimizer_npv_is_the_saving_against_the_reference(optimizer_case):
     weather, load, config = optimizer_case
     plain = _evaluate(weather, load, config)
@@ -534,6 +638,43 @@ def test_the_optimizer_checks_the_reference_before_pv(optimizer_case, monkeypatc
 
 
 # --- Sweeps ------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        ["run", "--config"],
+        ["run", "--dry-run", "--config"],
+        ["validate-config"],
+        ["sweep", "--config"],
+        ["montecarlo", "--config"],
+    ],
+)
+def test_cli_requires_reference_fixed_charge(command, tmp_path, capsys):
+    path = tmp_path / "reference.toml"
+    config = (
+        'location = "porto"\nn_modules = 8\nannual_consumption_kwh = 4000\n'
+        '[reference_tariff]\ncurrency = "EUR"\nimport_prices = { all = 0.30 }\n'
+    )
+    if command[0] == "sweep":
+        config += "[sweep]\nbattery_kwh = [0]\n"
+    elif command[0] == "montecarlo":
+        config += '[montecarlo]\nweather_file = "unused.csv"\n'
+    path.write_text(config, encoding="utf-8")
+    assert cli.main([*command, str(path)]) == 1
+    assert "reference_tariff.fixed_charge_per_day" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("command", [["run", "--dry-run", "--config"], ["validate-config"]])
+def test_cli_accepts_zero_reference_fixed_charge(command, tmp_path, capsys):
+    path = tmp_path / "reference.toml"
+    path.write_text(
+        'location = "porto"\nn_modules = 8\nannual_consumption_kwh = 4000\n'
+        '[reference_tariff]\ncurrency = "EUR"\nimport_prices = { all = 0.30 }\nfixed_charge_per_day = 0\n',
+        encoding="utf-8",
+    )
+    assert cli.main([*command, str(path)]) == 0
+    assert not capsys.readouterr().err
 
 
 def test_sweeps_vary_reference_prices_by_dotted_key():

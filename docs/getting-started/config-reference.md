@@ -172,10 +172,10 @@ What the household would pay without the system, as `[reference_tariff]` in TOML
 | Key | Required | Description |
 |---|---|---|
 | `currency` | yes | Currency of the prices: EUR. Must be the result's currency: the `[tariff]` currency, or EUR on flat prices |
+| `fixed_charge_per_day` | yes | Fixed charge per day without the system, at year-1 prices; an explicit 0 is valid |
 | `import_prices` | yes | Import price per kWh by period name, at year-1 prices; `all` prices every period. With month seasons, a table of period prices for every season instead. Without a schedule, only `all` |
 | `boundary_policy` |  | How a period boundary inside a step is handled, as in `tariff.boundary_policy`; needs a schedule |
 | `custom_schedule` |  | Inline schedule definition of the reference, in the shape of `tariff.custom_schedule`; set this, `schedule`, or neither for one flat price |
-| `fixed_charge_per_day` |  | Fixed charge per day without the system, at year-1 prices (default 0) |
 | `import_price_escalation` |  | Annual escalation of the reference energy and fixed charge. Default: the system's import escalation |
 | `schedule` |  | Bundled schedule key of the reference; see [Bundled schedules](../api/tariffs.md#bundled-schedules). Set this, `custom_schedule`, or neither for one flat price |
 | `study_date` |  | A date in the schedule's effective window, as in `tariff.study_date`; needs a schedule |

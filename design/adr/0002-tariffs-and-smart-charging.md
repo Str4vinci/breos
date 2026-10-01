@@ -486,7 +486,9 @@ system, independently of the system's `[tariff]` or flat costs:
   fixed charge: `Cost_No_Sys_Annual = (Baseline_Import_Cost +
   Baseline_Fixed_Charge) × (1 + e)^(n − 1)`. The fixed charge is billed as
   the system's is: on the simulated duration, or on a `[period]` window's
-  civil days. The reference has no export prices.
+  civil days. `reference_tariff.fixed_charge_per_day` is required; an explicit
+  0 is valid when the household pays no fixed charge. The reference has no
+  export prices.
 - **Escalation.** `e` is `reference_tariff.import_price_escalation`, which
   escalates both components. Absent, it is the system's resolved import
   escalation; an explicit 0 is kept.
