@@ -233,6 +233,7 @@ def daily_persistence_provenance(
     """
     return {
         "mode": spec.mode,
+        "overlap_policy": spec.overlap_policy,
         "experimental": True,
         "controller_version": CONTROLLER_VERSION,
         "planner_version": PLANNER_VERSION,

@@ -112,7 +112,8 @@ TABLES: tuple[tuple[str, TableSpec, str], ...] = (
         "`target_usable_fraction`, which it refuses, and takes the optional planner keys `forecast_horizon_days`, "
         '`target_levels` and `soc_states`. `grid_import_limit_w` is optional in both. `mode = "discharge_only"` '
         "takes `discharge_periods` alone and refuses every grid-charging and planner key: it never charges from "
-        'the grid. `mode = "disabled"` takes no other key.',
+        'the grid. `mode = "disabled"` takes no other key. `overlap_policy` defaults to `"reject"`; '
+        '`"hold_target"` permits overlapping periods for `fixed_target` only, retaining the target as the discharge floor.',
     ),
     (
         "period",

@@ -10,7 +10,7 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   above its physical replacement threshold
   ([#346](https://github.com/Str4vinci/breos/issues/346)). It credits the
   resolved full replacement-pack price at the end of the horizon, using
-  replacement inflation, learning and discounting. Result schema 2.7 adds
+  replacement inflation, learning and discounting. Result schema 2.8 adds
   `terminal_health_credit`, `terminal_health_credit_npv` and
   `npv_savings_terminal_adjusted`, plus valuation provenance. App and Monte
   Carlo calculate it per run; `App.revalue` recomputes it from retained
@@ -20,13 +20,27 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   limits. Every replacement outlay remains; unadjusted NPV, cashflows,
   paybacks, LCOE, emissions, dispatch and aging are unchanged. Projected
   optimization accepts but ignores the table and ranks on unadjusted NPV.
+- `[smart_charging] overlap_policy = "hold_target"` permits overlapping
+  `charge_periods` and `discharge_periods` in `fixed_target`
+  ([#347](https://github.com/Str4vinci/breos/issues/347)). On overlapping
+  steps the grid target is also the discharge floor, moving with temperature
+  and health: above it the battery may discharge down to it; below it the
+  grid may charge up to it. A step never charges and discharges together,
+  and PV may charge above the target. App, Monte Carlo and projected
+  optimization accept it on both backends. `disabled` and `discharge_only`
+  refuse it because they have no grid target; `daily_persistence` refuses it
+  because its planner replaces targets while keeping reserves fixed. The
+  default `"reject"` still requires disjoint periods and preserves every
+  existing dispatch value bit for bit. Result schema 2.7 adds
+  `overlap_policy` to `provenance.smart_charging`; the ledger is unchanged.
 - A `[reference_tariff]` table prices the household without the system on
   its own tariff, independent of the system's `[tariff]` or flat prices
   ([#339](https://github.com/Str4vinci/breos/issues/339)). It takes import
   prices on a bundled or custom schedule, including per-season prices on a
   calendar-month custom schedule, or one flat price
   (`import_prices = { all = <price> }`) without a schedule, a
-  `fixed_charge_per_day` (default 0) and an optional
+  required `fixed_charge_per_day` (an explicit 0 is valid;
+  [#345](https://github.com/Str4vinci/breos/issues/345)) and an optional
   `import_price_escalation`, which escalates the reference energy and fixed
   charge and defaults to the system's import escalation; an explicit 0 is
   kept. It has no export prices. The no-system cost of each year is then the

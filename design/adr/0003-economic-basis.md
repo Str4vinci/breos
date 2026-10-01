@@ -286,7 +286,7 @@ receives zero credit if it is at or below threshold. A zero-capacity or
 absent battery reports explicit zero credit when enabled. A partial
 `[period]` run has no lifetime economics and reports null credit.
 
-Schema 2.7 adds `terminal_health_credit`, `terminal_health_credit_npv` and
+Schema 2.8 adds `terminal_health_credit`, `terminal_health_credit_npv` and
 `npv_savings_terminal_adjusted` (unadjusted NPV plus credit present value).
 App rounds money only at serialization. When disabled these scalars are
 null and terminal-value provenance is absent. When enabled for a lifetime

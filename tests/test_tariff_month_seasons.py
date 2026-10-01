@@ -484,7 +484,7 @@ def test_app_records_the_seasons_and_replays_them_from_its_resolved_config():
     app.simulate()
     result = app.result()
 
-    assert result["result_schema_version"] == "2.7"
+    assert result["result_schema_version"] == "2.8"
     tariff = result["provenance"]["tariff"]
     assert tariff["seasons"] == QUARTERS
     assert tariff["import_prices"] == SEASON_IMPORT
@@ -725,7 +725,7 @@ def test_montecarlo_prices_every_trajectory_by_season(tmp_path, write_multiyear_
 
     assert seasonal.provenance["tariff"]["seasons"] == QUARTERS
     assert seasonal.provenance["resolved_config"]["tariff"]["custom_schedule"]["seasons"] == QUARTERS
-    assert seasonal.provenance["result_schema_version"] == "2.7"
+    assert seasonal.provenance["result_schema_version"] == "2.8"
     money = ["Import_Cost", "Export_Revenue", "Baseline_Import_Cost", "Fixed_Charge"]
     pd.testing.assert_frame_equal(seasonal_equal.yearly[money], periods.yearly[money], check_exact=True)
     pd.testing.assert_series_equal(seasonal.yearly["Import_kWh"], periods.yearly["Import_kWh"])
@@ -757,7 +757,7 @@ def test_optimizer_prices_a_design_by_season_across_a_quarter_boundary(quarter_b
         weather, load, config, n_modules=4, battery_kwh=5.0, tilt=30.0, azimuth=180.0
     )
     assert design.provenance["tariff"]["seasons"] == QUARTERS
-    assert design.provenance["result_schema_version"] == "2.7"
+    assert design.provenance["result_schema_version"] == "2.8"
     # 1 kW of load each hour: 24 Q1 hours (windowed) and 24 Q2 hours (standard all day).
     expected = 6 * 0.25 + 4 * 0.42 + 14 * 0.33 + 24 * 0.31
     assert design.yearly["Baseline_Import_Cost"].iloc[0] == pytest.approx(expected, rel=1e-12)

@@ -465,6 +465,7 @@ def _grid_charge(
     cap_stored_wh: float,
     inverter_headroom_ac: float,
     site_headroom_ac: float,
+    hold_target: bool = False,
 ) -> Tuple[float, float, float]:
     """Charge from the grid toward *target_energy*, after PV has been allocated.
 
@@ -478,8 +479,9 @@ def _grid_charge(
     room = min(target_energy, emax) - battery_energy
     if room <= 0.0 or eff_charge <= 0.0:
         return battery_energy, 0.0, 0.0
+    required_ac = room / eff_charge / grid_eff
     grid_ac = min(
-        room / eff_charge / grid_eff,
+        required_ac,
         cap_charge_in_wh / grid_eff,
         cap_stored_wh / eff_charge / grid_eff,
         inverter_headroom_ac,
@@ -488,6 +490,8 @@ def _grid_charge(
     if grid_ac <= 0.0:
         return battery_energy, 0.0, 0.0
     grid_dc = grid_ac * grid_eff
+    if hold_target and grid_ac == required_ac:
+        return min(target_energy, emax), grid_ac, grid_dc
     return battery_energy + grid_dc * eff_charge, grid_ac, grid_dc
 
 
@@ -568,6 +572,7 @@ def _dispatch_dc_step(
     drawn = 0.0
     grid_ac = 0.0
     grid_dc = 0.0
+    hold_target = discharge_allowed and not math.isnan(grid_target_energy) and discharge_floor >= grid_target_energy
 
     pv_ac_max, pv_conversion_loss, pv_clipping_dc = _dc_ac(pv_dc, inv_cap_ac_wh, inv_eff, ac_output_scale, pow_two)
 
@@ -640,7 +645,18 @@ def _dispatch_dc_step(
                     pv_dc, battery_dc, inv_cap_ac_wh, inv_eff, ac_output_scale, pow_two
                 )
                 draw = battery_dc / eff_discharge
-                battery_energy -= draw
+                if hold_target:
+                    # Land exactly on a binding floor: multiplying available
+                    # energy by efficiency and dividing it back can undershoot
+                    # by an ulp and buy that rounding residue on the next step.
+                    if battery_dc == available * eff_discharge:
+                        draw = available
+                    draw = min(draw, available)
+                    battery_energy = (
+                        discharge_floor if draw == available else max(discharge_floor, battery_energy - draw)
+                    )
+                else:
+                    battery_energy -= draw
                 total_inverter_dc = pv_dc + battery_dc
                 battery_inverter_loss = (
                     total_inverter_loss * battery_dc / total_inverter_dc if total_inverter_dc > 0.0 else 0.0
@@ -670,6 +686,7 @@ def _dispatch_dc_step(
             cap_stored_wh - drawn * eff_charge,
             inv_cap_ac_wh - pv_ac_to_load - pv_ac_export,
             grid_import_cap_wh - grid_import,
+            hold_target,
         )
         battery_charge_input = drawn + grid_dc
         grid_import = grid_import + grid_ac
@@ -784,6 +801,9 @@ def _dispatch_day(
         discharge_floor = emin + reserve * (emax - emin) if reserve > 0.0 else emin
         target = grid_target_fraction[i]
         grid_target_energy = emin + target * (emax - emin) if not math.isnan(target) else math.nan
+        if discharge_allowed[i] and reserve == target:
+            # A14's shared fraction has one A7 energy bound, exactly.
+            discharge_floor = grid_target_energy
 
         # Discharge takes from every origin in proportion to its share before
         # dispatch. One share per step is exact only because a step either

@@ -173,10 +173,10 @@ What the household would pay without the system, as `[reference_tariff]` in TOML
 | Key | Required | Description |
 |---|---|---|
 | `currency` | yes | Currency of the prices: EUR. Must be the result's currency: the `[tariff]` currency, or EUR on flat prices |
+| `fixed_charge_per_day` | yes | Fixed charge per day without the system, at year-1 prices; an explicit 0 is valid |
 | `import_prices` | yes | Import price per kWh by period name, at year-1 prices; `all` prices every period. With month seasons, a table of period prices for every season instead. Without a schedule, only `all` |
 | `boundary_policy` |  | How a period boundary inside a step is handled, as in `tariff.boundary_policy`; needs a schedule |
 | `custom_schedule` |  | Inline schedule definition of the reference, in the shape of `tariff.custom_schedule`; set this, `schedule`, or neither for one flat price |
-| `fixed_charge_per_day` |  | Fixed charge per day without the system, at year-1 prices (default 0) |
 | `import_price_escalation` |  | Annual escalation of the reference energy and fixed charge. Default: the system's import escalation |
 | `schedule` |  | Bundled schedule key of the reference; see [Bundled schedules](../api/tariffs.md#bundled-schedules). Set this, `custom_schedule`, or neither for one flat price |
 | `study_date` |  | A date in the schedule's effective window, as in `tariff.study_date`; needs a schedule |
@@ -191,17 +191,18 @@ Optional final-pack health credit, as `[terminal_value]` in TOML. `basis` defaul
 
 ## smart_charging
 
-Battery dispatch by tariff period, as `[smart_charging]` in TOML; see [Smart charging](configuration.md#smart-charging). `mode = "fixed_target"` needs `target_usable_fraction`, `charge_periods`, `discharge_periods` and `grid_charge_efficiency`, and refuses the planner keys. The experimental `mode = "daily_persistence"` (App only) needs the same keys but `target_usable_fraction`, which it refuses, and takes the optional planner keys `forecast_horizon_days`, `target_levels` and `soc_states`. `grid_import_limit_w` is optional in both. `mode = "discharge_only"` takes `discharge_periods` alone and refuses every grid-charging and planner key: it never charges from the grid. `mode = "disabled"` takes no other key.
+Battery dispatch by tariff period, as `[smart_charging]` in TOML; see [Smart charging](configuration.md#smart-charging). `mode = "fixed_target"` needs `target_usable_fraction`, `charge_periods`, `discharge_periods` and `grid_charge_efficiency`, and refuses the planner keys. The experimental `mode = "daily_persistence"` (App only) needs the same keys but `target_usable_fraction`, which it refuses, and takes the optional planner keys `forecast_horizon_days`, `target_levels` and `soc_states`. `grid_import_limit_w` is optional in both. `mode = "discharge_only"` takes `discharge_periods` alone and refuses every grid-charging and planner key: it never charges from the grid. `mode = "disabled"` takes no other key. `overlap_policy` defaults to `"reject"`; `"hold_target"` permits overlapping periods for `fixed_target` only, retaining the target as the discharge floor.
 
 | Key | Required | Description |
 |---|---|---|
 | `charge_periods` | `fixed_target`, `daily_persistence` | Tariff periods in which the grid may charge the battery. Not with `discharge_only` |
-| `discharge_periods` | unless `disabled` | Tariff periods in which the battery may discharge to the load; not a charge period. Under `discharge_only` the battery holds its charge in every other period |
+| `discharge_periods` | unless `disabled` | Tariff periods in which the battery may discharge to the load; overlap needs `hold_target`. Under `discharge_only` the battery holds its charge in every other period |
 | `grid_charge_efficiency` | `fixed_target`, `daily_persistence` | AC-to-DC conversion efficiency of the grid-charging path, before the battery's own charge efficiency. No default. Not with `discharge_only` |
 | `mode` | yes | `fixed_target` charges from the grid toward a fixed target; `daily_persistence` (experimental, App only) plans each day's target; `discharge_only` discharges only in `discharge_periods` and never charges from the grid; `disabled` is greedy self-consumption |
 | `target_usable_fraction` | `fixed_target` | Grid-charging target as a fraction of the usable window: 0 is `battery_min_soc`, 1 is `battery_max_soc`. `fixed_target` only |
 | `forecast_horizon_days` |  | `daily_persistence` only: civil days the planner looks ahead, today included. An integer of at least 1; default 2 |
 | `grid_import_limit_w` |  | Site import limit in W for grid charging, which may import up to the limit minus the load's import. Load import is never cut. Unset is unlimited. Not with `discharge_only` |
+| `overlap_policy` |  | Default `reject`: charge and discharge periods must be disjoint. `hold_target` (`fixed_target` only) uses the grid target as the discharge floor on overlapping steps. Above it the battery may discharge; below it the grid may charge; PV may charge above it. `daily_persistence` refuses it because its planner keeps reserves fixed while replacing targets |
 | `soc_states` |  | `daily_persistence` only: stored-energy grid points of the planner's value function. An integer of at least 2; default 21 |
 | `target_levels` |  | `daily_persistence` only: candidate targets, evenly spaced from 0 to 1 of the usable window. An integer of at least 1 (one level selects target 0); default 11 |
 

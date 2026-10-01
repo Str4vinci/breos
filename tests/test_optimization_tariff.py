@@ -82,7 +82,7 @@ def test_optimizer_provenance_records_the_schema_version_and_currency(tariff_cas
 
     for case in (tariff_case, (weather, load, flat)):
         provenance = evaluate(case).provenance
-        assert provenance["result_schema_version"] == "2.7"
+        assert provenance["result_schema_version"] == "2.8"
         assert provenance["currency"] == "EUR"
     assert "tariff" not in evaluate((weather, load, flat)).provenance
 
@@ -134,10 +134,14 @@ def test_optimizer_checks_conflicts_and_unsupported_dispatch(tariff_case, monkey
         evaluate((weather, load, config), battery_kwh=5.0)
 
 
-def test_optimizer_prices_fixed_target_charging(tariff_case):
+@pytest.mark.parametrize("overlap", [False, True])
+def test_optimizer_prices_fixed_target_charging(tariff_case, overlap):
     weather, load, config = tariff_case
     greedy = evaluate(tariff_case, battery_kwh=5.0)
-    config["smart_charging"] = FIXED_TARGET
+    config["smart_charging"] = {
+        **FIXED_TARGET,
+        **({"overlap_policy": "hold_target", "discharge_periods": ["peak", "off_peak"]} if overlap else {}),
+    }
     charged = evaluate((weather, load, config), battery_kwh=5.0)
 
     assert charged.yearly["Grid_AC_To_Battery_kWh"].sum() > 0.0
@@ -146,14 +150,19 @@ def test_optimizer_prices_fixed_target_charging(tariff_case):
     assert charged.metrics["Projected_NPV"] != greedy.metrics["Projected_NPV"]
     record = charged.provenance["smart_charging"]
     assert record["mode"] == "fixed_target"
+    assert record["overlap_policy"] == ("hold_target" if overlap else "reject")
     assert record["schedule_hash"] == charged.provenance["tariff"]["schedule_hash"]
     assert "smart_charging" not in greedy.provenance
 
 
-def test_optimizer_search_shares_fixed_target_scoring_and_provenance(tariff_case):
+@pytest.mark.parametrize("overlap", [False, True])
+def test_optimizer_search_shares_fixed_target_scoring_and_provenance(tariff_case, overlap):
     pytest.importorskip("pymoo")
     weather, load, config = tariff_case
-    config["smart_charging"] = FIXED_TARGET
+    config["smart_charging"] = {
+        **FIXED_TARGET,
+        **({"overlap_policy": "hold_target", "discharge_periods": ["peak", "off_peak"]} if overlap else {}),
+    }
     fixed = evaluate((weather, load, config), battery_kwh=5.0)
     problem = optimization.SolarDesignProblem(weather, load, config)
     restored = pickle.loads(pickle.dumps(problem))

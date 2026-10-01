@@ -45,10 +45,12 @@ from breos.pv_modules import MODULES, PVModuleParams, get_module
 from breos.resources import load_config_json
 from breos.smart_charging import (
     DISCHARGE_ONLY_MODES,
+    OVERLAP_POLICIES,
     PLANNER_MODES,
     PLANNER_SETTINGS,
     SMART_CHARGING_MODES,
     SmartChargingSpec,
+    check_overlap_policy,
 )
 from breos.solar import (
     BIFACIAL_MODELS,
@@ -1686,7 +1688,7 @@ REFERENCE_TARIFF_TABLE = TableSpec(
         "study_date": _tariff_study_date,
         "import_price_escalation": number(minimum=-1, min_exclusive=True),
     },
-    required=frozenset({"currency", "import_prices"}),
+    required=frozenset({"currency", "import_prices", "fixed_charge_per_day"}),
     check=_check_reference_prices,
     docs={
         "schedule": (
@@ -1705,7 +1707,7 @@ REFERENCE_TARIFF_TABLE = TableSpec(
             "Import price per kWh by period name, at year-1 prices; `all` prices every period. With month seasons, "
             "a table of period prices for every season instead. Without a schedule, only `all`"
         ),
-        "fixed_charge_per_day": "Fixed charge per day without the system, at year-1 prices (default 0)",
+        "fixed_charge_per_day": "Fixed charge per day without the system, at year-1 prices; an explicit 0 is valid",
         "boundary_policy": (
             "How a period boundary inside a step is handled, as in `tariff.boundary_policy`; needs a schedule"
         ),
@@ -1746,7 +1748,7 @@ def resolve_reference_tariff_spec(
         import_prices=table["import_prices"],
         # The no-system household exports nothing.
         export_prices={"all": 0.0},
-        fixed_charge_per_day=table.get("fixed_charge_per_day", 0.0),
+        fixed_charge_per_day=table["fixed_charge_per_day"],
         identifier="reference",
         version="1",
     )
@@ -1782,6 +1784,7 @@ _MODE_REFUSED = {
 
 def _check_smart_charging_keys(table: dict[str, Any], where: str) -> None:
     mode = table["mode"]
+    check_overlap_policy(mode, table.get("overlap_policy", "reject"))
     if mode == "disabled":
         extra = sorted(key for key in table if key != "mode")
         if extra:
@@ -1804,10 +1807,11 @@ def _check_smart_charging_keys(table: dict[str, Any], where: str) -> None:
     if missing:
         raise ValueError(f"'{where}' needs {', '.join(f'{where}.{k}' for k in missing)} for mode = '{mode}'")
     overlap = sorted(set(table.get("charge_periods", ())) & set(table["discharge_periods"]))
-    if overlap:
+    if overlap and table.get("overlap_policy", "reject") == "reject":
         raise ValueError(
             f"'{where}.charge_periods' and '{where}.discharge_periods' share {', '.join(overlap)}; "
-            "every step either charges or discharges (ADR 0002 A8)"
+            "every step either charges or discharges (ADR 0002 A8); "
+            "set overlap_policy = 'hold_target' with mode = 'fixed_target' to allow overlap"
         )
 
 
@@ -1815,6 +1819,7 @@ SMART_CHARGING_TABLE = TableSpec(
     "smart_charging",
     keys={
         "mode": choice(SMART_CHARGING_MODES),
+        "overlap_policy": choice(OVERLAP_POLICIES),
         "target_usable_fraction": number(minimum=0, maximum=1),
         "charge_periods": list_of(text, min_length=1),
         "discharge_periods": list_of(text, min_length=1),
@@ -1826,6 +1831,12 @@ SMART_CHARGING_TABLE = TableSpec(
     required=frozenset({"mode"}),
     check=_check_smart_charging_keys,
     docs={
+        "overlap_policy": (
+            "Default `reject`: charge and discharge periods must be disjoint. `hold_target` (`fixed_target` only) "
+            "uses the grid target as the discharge floor on overlapping steps. Above it the battery may "
+            "discharge; below it the grid may charge; PV may charge above it. `daily_persistence` refuses it "
+            "because its planner keeps reserves fixed while replacing targets"
+        ),
         "mode": (
             "`fixed_target` charges from the grid toward a fixed target; `daily_persistence` (experimental, App "
             "only) plans each day's target; `discharge_only` discharges only in `discharge_periods` and never "
@@ -1851,7 +1862,7 @@ SMART_CHARGING_TABLE = TableSpec(
         ),
         "charge_periods": "Tariff periods in which the grid may charge the battery. Not with `discharge_only`",
         "discharge_periods": (
-            "Tariff periods in which the battery may discharge to the load; not a charge period. Under "
+            "Tariff periods in which the battery may discharge to the load; overlap needs `hold_target`. Under "
             "`discharge_only` the battery holds its charge in every other period"
         ),
         "grid_charge_efficiency": (
@@ -1942,6 +1953,7 @@ def resolve_smart_charging_spec(
         return SmartChargingSpec(mode="disabled")
     return SmartChargingSpec(
         mode=table["mode"],
+        overlap_policy=table.get("overlap_policy", "reject"),
         target_usable_fraction=table.get("target_usable_fraction"),
         # A period named twice is still one period.
         charge_periods=tuple(dict.fromkeys(table.get("charge_periods", ()))),
