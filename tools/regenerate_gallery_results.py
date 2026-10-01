@@ -33,6 +33,7 @@ import argparse
 import contextlib
 import copy
 import datetime as dt
+import functools
 import hashlib
 import json
 import math
@@ -99,7 +100,9 @@ def repo_relative(path: Path) -> str:
     return path.resolve().relative_to(REPO).as_posix()
 
 
+@functools.cache
 def git_describe() -> str:
+    """The checkout's ``git describe``, read once before any result file is written."""
     out = subprocess.run(
         ["git", "-C", str(REPO), "describe", "--tags", "--always", "--dirty"],
         capture_output=True,
@@ -206,6 +209,12 @@ def scalars(result: Mapping[str, Any]) -> dict[str, Any]:
         row["bill_year1"] = year1_bill(result)
         row["no_system_bill_year1"] = no_system_bill(result)
     return row
+
+
+def financial_rows(result: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """The discounted cumulative ledger a break-even plot reads, year 0 first."""
+    keys = ("year", "balance", "cost_with_system", "cost_without_system")
+    return [{key: row.get(key) for key in keys} for row in result["financial"]]
 
 
 def replacement_times(result: Mapping[str, Any]) -> list[float]:
@@ -363,7 +372,8 @@ def battery_worth(ctx: Context) -> Output:
         designs.append(
             {
                 **scalars(result),
-                "financial": [{"year": row["year"], "balance": row["balance"]} for row in result["financial"]],
+                "financial": financial_rows(result),
+                "provenance": {"currency": result["provenance"]["currency"]},
             }
         )
         if size == 0:
@@ -382,7 +392,11 @@ def battery_worth(ctx: Context) -> Output:
             )
     return Output(
         {"designs.json": designs, "storage_prices.csv": pd.DataFrame(rows)},
-        {"variants": {f"{size:g} kWh": {"battery_kwh": size} for size in sizes}, "storage_prices": storage_prices},
+        {
+            "variants": {f"{size:g} kWh": {"battery_kwh": size} for size in sizes},
+            "storage_prices": storage_prices,
+            "preset_storage_cost_per_kwh": _preset_cost(result, "storage_cost_per_kwh"),
+        },
     )
 
 
@@ -406,9 +420,11 @@ def sun_prices_carbon(ctx: Context) -> Output:
                 "tilt": result["provenance"]["resolved_config"]["tilt"],
                 "electricity_cost": _preset_cost(result, "electricity_cost"),
                 "electricity_sold_cost": _preset_cost(result, "electricity_sold_cost"),
+                "grid_carbon": _grid_carbon(result),
                 "monthly_production_kwh": [row["usable_ac_system_production_kwh"] for row in result["monthly"]],
                 "monthly_consumption_kwh": [row["consumption_kwh"] for row in result["monthly"]],
-                "financial": [{"year": row["year"], "balance": row["balance"]} for row in result["financial"]],
+                "financial": financial_rows(result),
+                "provenance": {"currency": result["provenance"]["currency"]},
             }
         )
     return Output({"sites.json": sites}, {"variants": variants})
@@ -419,6 +435,14 @@ def _preset_cost(result: Mapping[str, Any], key: str) -> float:
 
     preset = result["provenance"]["resolved_config"]["cost_preset"]
     return float(load_config_json("costs.json")[preset][key])
+
+
+def _grid_carbon(result: Mapping[str, Any]) -> dict[str, Any]:
+    from breos.resources import load_config_json
+
+    country = result["provenance"]["resolved_config"]["emissions_country"]
+    entry = load_config_json("emissions.json")[country]
+    return {"country": country, **entry}
 
 
 @case("east_west", "East-West or South?", cheap=True)
@@ -436,8 +460,15 @@ def east_west(ctx: Context) -> Output:
         for name, overrides in designs.items():
             app = ctx.simulate(with_overrides(base, {**overrides, "battery_kwh": battery}))
             result = app.result()
+            resolved = result["provenance"]["resolved_config"]
+            arrays = resolved.get("pv_arrays") or [resolved]
             rows.append(
-                {"design": name, **scalars(result), "tilt": result["provenance"]["resolved_config"]["tilt"]}
+                {
+                    "design": name,
+                    **scalars(result),
+                    "tilts": ";".join(f"{array['tilt']:g}" for array in arrays),
+                    "azimuths": ";".join(f"{array['azimuth']:g}" for array in arrays),
+                }
             )
             if battery:
                 continue
@@ -450,9 +481,17 @@ def east_west(ctx: Context) -> Output:
                     summer = piece if summer is None else summer.join(piece[[name]])
                 else:
                     winter = piece if winter is None else winter.join(piece[[name]])
+    assert summer is not None and winter is not None
+    order = ["Datetime", "Houseload", *designs]
     return Output(
-        {"designs.csv": pd.DataFrame(rows), "week_summer.csv": summer, "week_winter.csv": winter},
-        {"variants": designs, "battery_kwh": [0.0, base["battery_kwh"]], "iso_weeks": {"summer": 27, "winter": 3}},
+        {"designs.csv": pd.DataFrame(rows), "week_summer.csv": summer[order], "week_winter.csv": winter[order]},
+        {
+            "variants": designs,
+            "battery_kwh": [0.0, base["battery_kwh"]],
+            "iso_weeks": {"summer": 27, "winter": 3},
+            "timezone": result["provenance"]["timezone"],
+            "currency": result["provenance"]["currency"],
+        },
     )
 
 
@@ -639,20 +678,33 @@ def montecarlo(ctx: Context) -> Output:
         study = run_montecarlo(config, settings)
     deterministic = ctx.simulate(with_overrides(config, {"start_date": f"{settings.target_year}-01-01"})).result()
 
+    ctx.stage_tmy(MC_HISTORY["location"])
     with ctx.inside():
-        hourly = load_weather(str(history))
-    years = hourly.index.year
-    ghi_by_year = (hourly["ghi"].groupby(years).sum() / 1000.0).round(2)
-    with ctx.inside():
-        tmy = load_weather(str(ctx.stage_tmy("porto")))
+        hourly = load_weather(MC_HISTORY["location"], data_type="historical")
+        tmy = load_weather(MC_HISTORY["location"], data_type="tmy")
+    if hourly is None or tmy is None:
+        raise RuntimeError("the staged Monte Carlo history or TMY did not load")
+    # Open-Meteo's hourly means are labelled at the end of their hour.
+    years = (hourly.index - pd.Timedelta(hours=1)).year
+    ghi_by_year = (hourly["shortwave_radiation"].groupby(years).sum() / 1000.0).round(2)
     weather_years = pd.DataFrame({"year": ghi_by_year.index.astype(int), "ghi_kwh_m2": ghi_by_year.to_numpy()})
     summary = {
         "summary": study.summary,
         "available_years": list(study.available_years),
-        "settings": {key: getattr(study.settings, key) for key in ("n_runs", "years_per_run", "load_uncertainty",
-                                                                    "load_distribution", "target_year", "seed",
-                                                                    "execution_backend")},  # fmt: skip
+        "settings": {
+            key: getattr(study.settings, key)
+            for key in (
+                "n_runs",
+                "years_per_run",
+                "load_uncertainty",
+                "load_distribution",
+                "target_year",
+                "seed",
+                "execution_backend",
+            )
+        },  # fmt: skip
         "tmy_ghi_kwh_m2": round(float(tmy["ghi"].sum()) / 1000.0, 2),
+        "tmy_file": TMY_FILES[MC_HISTORY["location"]],
         "tmy_result": scalars(deterministic),
     }
     return Output(
@@ -693,10 +745,13 @@ def nsga2_front(ctx: Context) -> Output:
     from breos.weather import load_weather
 
     config = ctx.config("configs/optimization/projected-optimization.toml")
-    tmy = ctx.stage_tmy("porto")
+    ctx.stage_tmy("porto")
     annual_kwh = 4000.0
     with ctx.inside():
-        weather = load_weather(str(tmy))
+        weather = load_weather("porto", data_type="tmy")
+    if weather is None:
+        raise RuntimeError("the staged Porto TMY did not load")
+    with ctx.inside():
         load = load_profile(
             "demandlib_h0",
             annual_kwh,
@@ -792,9 +847,7 @@ def _differences(stored: Any, fresh: Any, where: str) -> Iterator[str]:
     elif isinstance(stored, bool) or isinstance(fresh, bool) or not isinstance(stored, int | float):
         if stored != fresh:
             yield f"{where}: {stored!r} != {fresh!r}"
-    elif not isinstance(fresh, int | float) or not math.isclose(
-        stored, fresh, rel_tol=TOLERANCE, abs_tol=TOLERANCE
-    ):
+    elif not isinstance(fresh, int | float) or not math.isclose(stored, fresh, rel_tol=TOLERANCE, abs_tol=TOLERANCE):
         yield f"{where}: {stored!r} != {fresh!r}"
 
 
@@ -857,6 +910,7 @@ def main(argv: list[str] | None = None) -> int:
     if unknown:
         parser.error(f"unknown case(s): {', '.join(unknown)}; see --list")
 
+    git_describe()  # before writing: a rewritten result file would mark the tree dirty
     if options.check:
         names = options.cases or [entry.name for entry in CASES.values() if entry.cheap]
         problems = []

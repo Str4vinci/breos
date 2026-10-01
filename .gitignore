@@ -18,6 +18,7 @@ dev/
 !breos/data/rlp/*.csv
 !validation/data/weather/*.csv
 !validation/data/weather/*.csv.gz
+!docs/examples/_results/*/*.csv
 .codex
 .claude/
 .DS_Store
@@ -25,6 +26,7 @@ dev/
 # Sphinx
 docs/_build/
 docs/api/generated/
+docs/gallery/
 
 # Local-only working references (do not commit)
 pysam-removal.md

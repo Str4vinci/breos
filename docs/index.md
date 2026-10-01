@@ -148,6 +148,8 @@ getting-started/installation
 getting-started/quickstart
 getting-started/troubleshooting
 getting-started/inputs
+gallery/index
+how-to/index
 getting-started/recipes
 getting-started/optimization
 getting-started/monte-carlo
