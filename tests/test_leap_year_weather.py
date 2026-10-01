@@ -1,5 +1,6 @@
 """A leap-year start_date runs on a TMY remapped onto the leap calendar (#170)."""
 
+import calendar
 from datetime import timedelta, timezone
 from types import SimpleNamespace
 
@@ -8,8 +9,11 @@ import pandas as pd
 import pytest
 from pvlib.location import Location
 
+import breos.app_inputs as app_inputs
 from breos.app import App
 from breos.app_inputs import AppRuntimeDependencies, load_weather_for_simulation, remap_tmy_year
+from breos.load_profiles import load_profile
+from breos.runners.app import run_app_simulation
 from breos.weather import fetch_tmy_weather_data, fill_leap_day, load_weather, resample_to_15min
 
 
@@ -209,3 +213,339 @@ def test_remap_tmy_year_of_a_naive_index_matches_its_utc_remap():
     assert remapped.index.tz is None
     np.testing.assert_array_equal(remapped.index, utc.index.tz_localize(None))
     np.testing.assert_array_equal(remapped["ghi"].to_numpy(), utc["ghi"].to_numpy())
+
+
+def _zone_tmy(zone: str, freq: str, year: int) -> pd.DataFrame:
+    """One civil year in a named zone whose every row has a distinct value."""
+    index = pd.date_range(f"{year}-01-01", f"{year + 1}-01-01", freq=freq, tz=zone, inclusive="left")
+    frame = pd.DataFrame({"ghi": np.arange(len(index), dtype=float)}, index=index)
+    frame.attrs["breos_weather_metadata"] = {"source": "PVGIS_TMY"}
+    return frame
+
+
+def _civil_year(zone: str, freq: str, year: int) -> pd.DatetimeIndex:
+    """The App's simulation calendar for ``year`` in ``zone``: steps of fixed length."""
+    return pd.date_range(f"{year}-01-01", f"{year + 1}-01-01", freq=freq, tz=zone, inclusive="left")
+
+
+def _is_29_february(index: pd.DatetimeIndex) -> np.ndarray:
+    return (index.month == 2) & (index.day == 29)
+
+
+def _on_day(frame: pd.DataFrame, month: int, day: int) -> np.ndarray:
+    index = frame.index
+    return frame.loc[(index.month == month) & (index.day == day), "ghi"].to_numpy()
+
+
+@pytest.mark.parametrize("freq", ["h", "15min"])
+@pytest.mark.parametrize("zone", ["Europe/Berlin", "Australia/Sydney", "Australia/Lord_Howe"])
+def test_remap_tmy_year_fills_29_february_in_a_named_zone(zone, freq):
+    """#329: shifted in UTC, local 1 March 00:00 landed on 29 February."""
+    source = _zone_tmy(zone, freq, 2021)
+    per_day = 24 if freq == "h" else 96
+
+    remapped = remap_tmy_year(source, 2028)
+
+    # The study year's own transitions: its spring hour has no row and its
+    # autumn hour two, as on the App's calendar.
+    assert str(remapped.index.tz) == zone
+    pd.testing.assert_index_equal(remapped.index, _civil_year(zone, freq, 2028).as_unit(remapped.index.unit))
+    np.testing.assert_array_equal(_on_day(remapped, 2, 29), _on_day(remapped, 2, 28))
+    assert len(_on_day(remapped, 2, 29)) == per_day
+    np.testing.assert_array_equal(_on_day(remapped, 3, 1), _on_day(source, 3, 1))
+    # Every other row is the source's, in its order.
+    others = remapped[~_is_29_february(remapped.index)]
+    np.testing.assert_array_equal(others["ghi"].to_numpy(), source["ghi"].to_numpy())
+    assert remapped.attrs["breos_weather_metadata"]["leap_day"] == {"year": 2028, "filled_from": "2028-02-28"}
+
+
+@pytest.mark.parametrize("freq", ["h", "15min"])
+def test_remap_tmy_year_fills_29_february_before_almatys_offset_change(freq):
+    """#329: Almaty rolls back an hour at 1 March 2024, after the fill's fixed-clock day."""
+    source = _zone_tmy("Asia/Almaty", freq, 2023)
+    per_day = 24 if freq == "h" else 96
+    clock = timezone(timedelta(hours=6))
+
+    remapped = remap_tmy_year(source, 2024)
+
+    assert str(remapped.index.tz) == "Asia/Almaty"
+    assert len(remapped) == 366 * per_day
+    assert remapped.index.is_monotonic_increasing and remapped.index.is_unique
+    fixed = remapped.tz_convert(clock)
+    assert len(_on_day(fixed, 2, 29)) == per_day
+    np.testing.assert_array_equal(_on_day(fixed, 2, 29), _on_day(fixed, 2, 28))
+    np.testing.assert_array_equal(_on_day(fixed, 2, 28), _on_day(source, 2, 28))
+    np.testing.assert_array_equal(_on_day(fixed, 3, 1), _on_day(source, 3, 1))
+    np.testing.assert_array_equal(fixed.loc[~_is_29_february(fixed.index), "ghi"], source["ghi"])
+    # After conversion, local 29 February has a repeated final hour from
+    # fixed-clock 1 March; the copied day itself still has 24 fixed-clock hours.
+    assert len(_on_day(remapped, 2, 29)) == per_day + per_day // 24
+    assert remapped.attrs["breos_weather_metadata"]["leap_day"] == {"year": 2024, "filled_from": "2024-02-28"}
+    assert source.attrs == {"breos_weather_metadata": {"source": "PVGIS_TMY"}}
+
+
+@pytest.mark.parametrize("freq", ["h", "15min"])
+@pytest.mark.parametrize(
+    ("zone", "source_year", "target_year", "first"),
+    [
+        ("Asia/Almaty", 2023, 2024, "2024-01-01 00:00+06:00"),
+        ("America/Sao_Paulo", 2018, 2020, "2019-12-31 23:00-03:00"),
+    ],
+)
+def test_weather_loader_rejects_a_tmy_remapped_across_changed_offset_rules(
+    tmp_path, freq, zone, source_year, target_year, first
+):
+    source = _zone_tmy(zone, freq, source_year)
+    step = pd.Timedelta(hours=1 if freq == "h" else 0.25)
+    remapped = remap_tmy_year(source, target_year)
+    year_end = pd.Timestamp(f"{target_year + 1}-01-01", tz=zone)
+    assert len(remapped) == 8784 * (1 if freq == "h" else 4)
+    assert remapped.index[0] == pd.Timestamp(first)
+    assert remapped.index[-1] == year_end - pd.Timedelta(hours=1) - step
+    deps = AppRuntimeDependencies(
+        load_profile=lambda **kwargs: None,
+        load_weather=lambda **kwargs: source.copy(),
+        fetch_tmy_weather_data=lambda **kwargs: pytest.fail("the injected weather should be used"),
+        resample_to_15min=lambda *args, **kwargs: pytest.fail("the source already has the requested cadence"),
+        build_battery_temperature_series=lambda **kwargs: None,
+    )
+    resolved = SimpleNamespace(loc_key="here", lat=0.0, lon=0.0, timezone=zone)
+
+    with pytest.raises(
+        ValueError, match=f"Weather from PVGIS_TMY does not cover the simulated year {target_year}"
+    ) as exc:
+        load_weather_for_simulation(resolved, freq, target_year, deps, weather_dir=tmp_path)
+
+    message = str(exc.value)
+    assert f"after restamping onto {target_year} it runs from {remapped.index[0]} to {remapped.index[-1]}" in message
+    assert f"the trailing 0 days 01:00:00 ({int(pd.Timedelta(hours=1) / step)} steps" in message
+    assert message.endswith(
+        "The App simulates the whole calendar year of start_date; supply weather for the full year, "
+        "or fill the missing rows explicitly."
+    )
+
+
+def test_remap_tmy_year_uses_the_local_year_for_partial_new_year_input():
+    """#329: these local 2021 rows belong to UTC 2020, but should move to local 2025."""
+    source = _zone_tmy("Europe/Berlin", "15min", 2021).iloc[:3].copy()
+    assert (source.index.tz_convert("UTC").year == 2020).all()
+
+    remapped = remap_tmy_year(source, 2025)
+
+    expected = source.copy()
+    expected.index = pd.date_range("2025-01-01", periods=3, freq="15min", tz="Europe/Berlin")
+    pd.testing.assert_frame_equal(remapped, expected, check_freq=False)
+    assert remapped.attrs == source.attrs
+
+
+@pytest.mark.parametrize(("zone", "year"), [("Africa/Casablanca", 2025), ("Pacific/Fiji", 2019)])
+def test_remap_tmy_year_reads_the_local_year_when_february_has_another_offset(zone, year):
+    """#329: the year comes from the zone's clock, not from its late-February offset."""
+    source = _zone_tmy(zone, "15min", year).iloc[:3].copy()
+    january = source.index[0].utcoffset()
+    february = pd.Timestamp(year=year, month=2, day=28, hour=12).tz_localize(zone).utcoffset()
+    assert january != february
+
+    # Read on the February clock these rows are the year before, and would move one year too far.
+    assert remap_tmy_year(source, year).index.equals(source.index)
+    clock = timezone(february)
+    moved = remap_tmy_year(source, year + 2)
+    expected = pd.DatetimeIndex([t.replace(year=t.year + 2) for t in source.index.tz_convert(clock)]).tz_convert(zone)
+    assert moved.index.equals(expected)
+
+
+def test_remap_tmy_year_keeps_named_zone_rows_with_the_sun():
+    """Between the two years' transition dates a row keeps its instant, not its wall time."""
+    source = _zone_tmy("Europe/Berlin", "h", 2021)
+
+    remapped = remap_tmy_year(source, 2028)
+
+    # 2028 springs forward on 26 March, 2021 on 28 March: local noon on 27
+    # March 2028 (10:00 UTC) carries 27 March 2021 at 11:00 (also 10:00 UTC).
+    noon = pd.Timestamp("2028-03-27 12:00", tz="Europe/Berlin")
+    assert remapped.loc[noon, "ghi"] == source.loc[pd.Timestamp("2021-03-27 11:00", tz="Europe/Berlin"), "ghi"]
+    wall = remapped.index.tz_localize(None)
+    assert not (wall == pd.Timestamp("2028-03-26 02:00")).any()
+    assert (wall == pd.Timestamp("2028-10-29 02:00")).sum() == 2
+    assert (wall == pd.Timestamp("2028-10-31 02:00")).sum() == 1
+
+
+@pytest.mark.parametrize("freq", ["h", "15min"])
+def test_remap_tmy_year_keeps_rows_with_the_sun_across_lord_howes_half_hour_dst(freq):
+    source = _zone_tmy("Australia/Lord_Howe", freq, 2021)
+
+    remapped = remap_tmy_year(source, 2028)
+
+    # Target DST starts on 1 October, source DST on 3 October.
+    target = pd.Timestamp("2028-10-01 12:00", tz="Australia/Lord_Howe")
+    original = pd.Timestamp("2021-10-01 11:30", tz="Australia/Lord_Howe")
+    assert target.dst() == timedelta(minutes=30)
+    assert original.dst() == timedelta(0)
+    assert target.tz_convert("UTC").strftime("%m-%d %H:%M") == original.tz_convert("UTC").strftime("%m-%d %H:%M")
+    assert remapped.loc[target, "ghi"] == source.loc[original, "ghi"]
+    wall = remapped.index.tz_localize(None)
+    assert not ((wall >= pd.Timestamp("2028-10-01 02:00")) & (wall < pd.Timestamp("2028-10-01 02:30"))).any()
+    assert (wall == pd.Timestamp("2028-04-02 01:30")).sum() == (1 if freq == "h" else 2)
+
+
+@pytest.mark.parametrize("source_freq", ["h", "15min"])
+def test_app_remaps_weather_instants_but_uses_target_civil_time_for_load_and_tariff(tmp_path, monkeypatch, source_freq):
+    # Bundled DST-season schedules need half-hour boundaries, so both source
+    # cadences feed a 15-minute run in the schedule's own Lisbon timezone.
+    zone = "Europe/Lisbon"
+    source = Location(41.15, -8.61).get_clearsky(_civil_year(zone, source_freq, 2021))
+    source["temp_air"] = np.arange(len(source), dtype=float) / 10000.0
+    source["wind_speed"] = 2.0
+    source.attrs["breos_weather_metadata"] = {"source": "injected"}
+    (tmp_path / "weather").mkdir()
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("breos.app.load_weather", lambda **kwargs: source.copy())
+    monkeypatch.setattr(
+        "breos.app.fetch_tmy_weather_data", lambda **kwargs: pytest.fail("the injected weather should be used")
+    )
+    prepared_weather = []
+    build_pv = app_inputs.build_pv_production_breakdown
+
+    def record_weather(cfg, resolved, weather):
+        prepared_weather.append(weather)
+        return build_pv(cfg, resolved, weather)
+
+    monkeypatch.setattr(app_inputs, "build_pv_production_breakdown", record_weather)
+    app = App(
+        {
+            "location": "porto",
+            "n_modules": 8,
+            "annual_consumption_kwh": 3500,
+            "battery_kwh": 0,
+            "projection_years": 1,
+            "resolution": "15min",
+            "start_date": "2028-01-01",
+            "tariff": {
+                "schedule": "pt_mainland_2026_daily_tri",
+                "study_date": "2026-01-01",
+                "currency": "EUR",
+                "import_prices": {"peak": 0.30, "mid_peak": 0.20, "off_peak": 0.10},
+                "export_prices": {"all": 0.05},
+            },
+        }
+    )
+
+    artifacts = run_app_simulation(app._resolved, app._runtime_dependencies())
+
+    weather = prepared_weather[0]
+    calendar = _civil_year(zone, "15min", 2028)
+    pd.testing.assert_index_equal(weather.index, calendar.as_unit(weather.index.unit))
+    # Every original value keeps its UTC month, day and time, including the
+    # intervals between the source and target spring/autumn transition dates.
+    expected_instants = source.index.tz_convert("UTC") + pd.DateOffset(years=7)
+    np.testing.assert_allclose(weather.loc[expected_instants, "temp_air"], source["temp_air"], rtol=0, atol=1e-12)
+
+    frame = artifacts.first_year_results_df.set_index("Datetime")
+    pd.testing.assert_index_equal(pd.DatetimeIndex(frame.index), calendar.as_unit(frame.index.unit), check_names=False)
+    profile = load_profile("demandlib_h0", 3500, start_date="2028-01-01", freq="15min", timezone=zone).iloc[:, 0]
+    np.testing.assert_allclose(frame["Houseload"], profile, rtol=1e-12)
+    assert frame["Houseload"].sum() * 0.25 / 1000 == pytest.approx(3500)
+    steps_per_day = pd.Series(calendar.date).value_counts()
+    assert steps_per_day[pd.Timestamp("2028-03-26").date()] == 92
+    assert steps_per_day[pd.Timestamp("2028-10-29").date()] == 100
+
+    tariff = artifacts.resolved_tariff
+    assert tariff is not None
+    periods = pd.Series(tariff.period_labels, index=tariff.index)
+    # Spring: target DST is already in force on 27 March, source DST is not.
+    # Autumn: target DST has ended on 30 October, source DST has not.
+    for day, hour, source_hour, period in [("03-27", 12, 11, "peak"), ("10-30", 9, 10, "peak")]:
+        target = pd.Timestamp(f"2028-{day} {hour}:00", tz=zone)
+        original = pd.Timestamp(f"2021-{day} {source_hour}:00", tz=zone)
+        assert target.tz_convert("UTC").strftime("%m-%d %H:%M") == original.tz_convert("UTC").strftime("%m-%d %H:%M")
+        assert weather.loc[target, "temp_air"] == pytest.approx(source.loc[original, "temp_air"], abs=1e-12)
+        assert weather.loc[target, "ghi"] == pytest.approx(source.loc[original, "ghi"], rel=1e-12)
+        assert frame.loc[target, "Houseload"] == pytest.approx(profile.loc[target], rel=1e-12)
+        assert periods.loc[target] == period
+    assert periods.loc[pd.Timestamp("2028-03-27 09:00", tz=zone)] == "mid_peak"
+    assert periods.loc[pd.Timestamp("2028-10-30 12:00", tz=zone)] == "mid_peak"
+
+
+@pytest.mark.parametrize("freq", ["h", "15min"])
+@pytest.mark.parametrize("zone", ["Europe/Berlin", "Australia/Sydney", "Australia/Lord_Howe"])
+def test_remap_tmy_year_drops_the_local_29_february_of_a_named_zone(zone, freq):
+    """#329: a leap TMY moved to a common year drops its own local 29 February."""
+    source = _zone_tmy(zone, freq, 2024)
+
+    remapped = remap_tmy_year(source, 2025)
+
+    pd.testing.assert_index_equal(remapped.index, _civil_year(zone, freq, 2025).as_unit(remapped.index.unit))
+    np.testing.assert_array_equal(_on_day(remapped, 2, 28), _on_day(source, 2, 28))
+    np.testing.assert_array_equal(_on_day(remapped, 3, 1), _on_day(source, 3, 1))
+    kept = source[~_is_29_february(source.index)]
+    np.testing.assert_array_equal(remapped["ghi"].to_numpy(), kept["ghi"].to_numpy())
+    assert "leap_day" not in remapped.attrs["breos_weather_metadata"]
+
+
+@pytest.mark.parametrize("freq", ["h", "15min"])
+@pytest.mark.parametrize("zone", ["Europe/Berlin", "Australia/Sydney", "America/New_York", "Asia/Tokyo"])
+@pytest.mark.parametrize(
+    ("source_year", "target_year"),
+    [(2021, 2023), (2020, 2024), (2021, 2025), (2025, 2021), (2024, 2028), (2028, 2020)],
+)
+def test_remap_tmy_year_of_a_named_zone_between_like_years_is_its_utc_shift(zone, freq, source_year, target_year):
+    """Common to common and leap to leap, a named-zone TMY is shifted as before #329."""
+    source = _zone_tmy(zone, freq, source_year)
+
+    remapped = remap_tmy_year(source, target_year)
+
+    expected = source.copy()
+    expected.index = (expected.index.tz_convert("UTC") + pd.DateOffset(years=target_year - source_year)).tz_convert(
+        zone
+    )
+    pd.testing.assert_frame_equal(remapped, expected, check_freq=False)
+    assert remapped.attrs == source.attrs
+
+
+@pytest.mark.parametrize("freq", ["h", "15min"])
+@pytest.mark.parametrize("tz", ["UTC", "Etc/GMT-1", timezone(timedelta(hours=1)), timezone(timedelta(hours=-5)), None])
+@pytest.mark.parametrize(("source_year", "target_year"), [(2021, 2025), (2024, 2028), (2021, 2028), (2024, 2025)])
+def test_remap_tmy_year_of_a_fixed_clock_is_a_shift_on_that_clock(tz, freq, source_year, target_year):
+    """UTC, fixed-offset and naive indices are shifted on their own clock, unchanged by #329."""
+    source = _zone_tmy("UTC", freq, source_year)
+    source.index = source.index.tz_convert(tz) if tz is not None else source.index.tz_localize(None)
+
+    remapped = remap_tmy_year(source, target_year)
+
+    expected = source.copy() if calendar.isleap(target_year) else source[~_is_29_february(source.index)].copy()
+    expected.index = expected.index + pd.DateOffset(years=target_year - source_year)
+    expected = fill_leap_day(expected)
+    pd.testing.assert_frame_equal(remapped, expected, check_freq=False)
+
+
+@pytest.mark.filterwarnings("ignore")
+@pytest.mark.parametrize("freq", ["h", "15min"])
+@pytest.mark.parametrize(
+    ("latitude", "longitude", "zone"), [(52.52, 13.40, "Europe/Berlin"), (-33.87, 151.21, "Australia/Sydney")]
+)
+def test_named_zone_weather_gets_29_february_in_the_app_input_stage(tmp_path, freq, latitude, longitude, zone):
+    """#329: injected weather in a named zone, through load_weather_for_simulation."""
+    source = _clear_sky_tmy(latitude, longitude, zone)
+    source.attrs["breos_weather_metadata"] = {"source": "injected"}
+    deps = AppRuntimeDependencies(
+        load_profile=lambda **kwargs: None,
+        load_weather=lambda **kwargs: source.copy(),
+        fetch_tmy_weather_data=lambda **kwargs: pytest.fail("the injected weather should be used"),
+        resample_to_15min=resample_to_15min,
+        build_battery_temperature_series=lambda **kwargs: None,
+    )
+    resolved = SimpleNamespace(loc_key="here", lat=latitude, lon=longitude, timezone=zone)
+
+    weather = load_weather_for_simulation(resolved, freq, 2028, deps, weather_dir=tmp_path)
+
+    per_day = 24 if freq == "h" else 96
+    pd.testing.assert_index_equal(weather.index, _civil_year(zone, freq, 2028).as_unit(weather.index.unit))
+    feb28 = _on_day(weather, 2, 28)
+    feb29 = _on_day(weather, 2, 29)
+    assert len(feb29) == per_day
+    if freq == "h":
+        np.testing.assert_array_equal(feb29, feb28)
+    else:
+        # The resampler reads one neighbouring hour across each midnight.
+        assert feb29.sum() == pytest.approx(feb28.sum(), rel=1e-3)
+    assert weather.attrs["breos_weather_metadata"]["leap_day"] == {"year": 2028, "filled_from": "2028-02-28"}

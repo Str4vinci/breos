@@ -342,7 +342,13 @@ def _replacement_npv(replacement: pd.Series, replacement_exponents: np.ndarray, 
 # Year-row money columns at year-1 prices (ADR 0003 E7). The projection
 # escalates, times and discounts them; TOU valuation fills them from per-step
 # energy and prices in the year loop.
-YEAR_ROW_MONEY_COLUMNS = ("Import_Cost", "Export_Revenue", "Fixed_Charge", "Baseline_Import_Cost")
+YEAR_ROW_MONEY_COLUMNS = (
+    "Import_Cost",
+    "Export_Revenue",
+    "Fixed_Charge",
+    "Baseline_Import_Cost",
+    "Baseline_Fixed_Charge",
+)
 
 
 def _replacement_outlays_t0(counts: Any, each: float) -> np.ndarray:
@@ -391,7 +397,9 @@ def price_year_rows(yearly_summary_df: pd.DataFrame, costs: Dict[str, float]) ->
     ``Import_Cost`` is ``Import_kWh`` times the import price, ``Export_Revenue``
     ``Export_kWh`` times the export price, ``Baseline_Import_Cost`` the load
     bought without a system, and ``Fixed_Charge`` the daily charge for the
-    simulated duration, ``Simulated_Hours / 24`` days (E5). A row with
+    simulated duration, ``Simulated_Hours / 24`` days (E5).
+    ``Baseline_Fixed_Charge``, the fixed charge without a system, is
+    ``Fixed_Charge`` unless a reference tariff set it. A row with
     ``Billed_Days`` (a [period] window) is billed on those civil days instead,
     and a row without either is billed as a 365-day year. ``Replacement_Cost`` is
     the year's ``Replacements`` at ``costs["replacement_cost_each"]``, t = 0
@@ -421,6 +429,9 @@ def price_year_rows(yearly_summary_df: pd.DataFrame, costs: Dict[str, float]) ->
         "Export_Revenue": lambda: priced["Export_kWh"] * costs["electricity_sold_cost"],
         "Fixed_Charge": lambda: days * costs["daily_power_cost"],
         "Baseline_Import_Cost": lambda: priced["Load_kWh"] * costs["electricity_cost"],
+        # After Fixed_Charge: without a reference tariff the household pays
+        # the same fixed charge with or without the system.
+        "Baseline_Fixed_Charge": lambda: priced["Fixed_Charge"],
     }
     for column, value in computed.items():
         if column not in priced.columns:
@@ -484,6 +495,102 @@ def _replacement_outlay(base: np.ndarray, exponents: np.ndarray, inflation_rate:
     return outlay if learning == 0.0 else outlay * (1 - learning) ** exponents
 
 
+@dataclass(frozen=True)
+class TerminalHealthCredit:
+    """An accounting sensitivity beside the unadjusted NPV (ADR 0003 E10)."""
+
+    nominal: float
+    npv: float
+    adjusted_npv: float
+    provenance: Dict[str, Any]
+
+
+def terminal_health_credit(
+    *,
+    final_soh_fraction: Optional[float],
+    threshold: float,
+    replacement_cost_each: float,
+    inflation_rate: float,
+    replacement_cost_learning: float,
+    discount_rate: float,
+    horizon_years: int,
+    npv_savings: float,
+    allow_terminal_replacement: bool,
+) -> TerminalHealthCredit:
+    """Credit the installed pack's capacity health above its physical EOL threshold.
+
+    ``None`` health denotes no battery. The full pack is priced as a replacement
+    booked at exactly t = T, with the outlay routine's t = 0 price convention,
+    and discounted from that instant. No cashflow or replacement is changed.
+    Capacity health omits resistance-related limits; this is not resale value.
+    """
+    inputs = {
+        "threshold": threshold,
+        "replacement_cost_each": replacement_cost_each,
+        "inflation_rate": inflation_rate,
+        "replacement_cost_learning": replacement_cost_learning,
+        "discount_rate": discount_rate,
+        "horizon_years": horizon_years,
+        "npv_savings": npv_savings,
+    }
+    if final_soh_fraction is not None:
+        inputs["final_soh_fraction"] = final_soh_fraction
+    for name, value in inputs.items():
+        if not np.isfinite(value):
+            raise ValueError(f"terminal health credit: {name} must be finite")
+    if not 0 <= threshold < 1:
+        raise ValueError("terminal health credit: threshold must be at least 0 and below 1")
+    if replacement_cost_each < 0 or horizon_years < 1:
+        raise ValueError("terminal health credit: price must be non-negative and horizon at least 1")
+    if inflation_rate <= -1 or discount_rate <= -1 or not 0 <= replacement_cost_learning < 1:
+        raise ValueError("terminal health credit: invalid escalation, learning or discount rate")
+    fraction = (
+        float(np.clip((final_soh_fraction - threshold) / (1 - threshold), 0, 1))
+        if final_soh_fraction is not None
+        else 0.0
+    )
+    full_price = float(
+        _replacement_outlay(
+            np.array([replacement_cost_each]),
+            np.array([horizon_years], dtype=float),
+            inflation_rate,
+            replacement_cost_learning,
+        )[0]
+    )
+    nominal = full_price * fraction
+    # Reuse replacement discounting at t = T, also the year-T convention.
+    npv = _replacement_npv(pd.Series([nominal]), np.array([horizon_years]), discount_rate)
+    adjusted = npv_savings + npv
+    if not all(np.isfinite(value) for value in (full_price, nominal, npv, adjusted)):
+        raise ValueError("terminal health credit: valuation must be finite")
+    return TerminalHealthCredit(
+        nominal=nominal,
+        npv=npv,
+        adjusted_npv=adjusted,
+        provenance={
+            "basis": "battery_health_fraction",
+            "formula_version": "1.0",
+            "formula": "clip((h - h*) / (1 - h*), 0, 1)",
+            "final_soh_fraction": final_soh_fraction,
+            "threshold": threshold,
+            "health_fraction": fraction,
+            "price_basis": "full_replacement_pack_t0_prices",
+            "replacement_cost_each_t0_prices": replacement_cost_each,
+            "replacement_pack_price_year_t": full_price,
+            "inflation_rate": inflation_rate,
+            "replacement_cost_learning": replacement_cost_learning,
+            "discount_rate": discount_rate,
+            "horizon_years": horizon_years,
+            "booking_time_years": horizon_years,
+            "timing": "end_of_horizon_after_degradation_and_replacement",
+            "replacement_policy": {
+                "enable_replacement": True,
+                "allow_terminal_replacement": allow_terminal_replacement,
+            },
+        },
+    )
+
+
 # Column order of a cost projection. Columns a stage does not produce (CO2
 # without emissions) are left out; any other column a caller added to the
 # cashflows follows, in its own order.
@@ -492,6 +599,8 @@ COST_PROJECTION_COLUMNS = (
     "Load_kWh",
     "Cost_No_Sys_Annual",
     "Cost_No_Sys_Cumulative",
+    "Cost_No_Sys_Import",
+    "Cost_No_Sys_Fixed_Charge",
     "PV_Production_kWh",
     "Export_kWh",
     "Degradation_Factor",
@@ -543,6 +652,7 @@ def value_year_rows(
     import_price_escalation: Optional[float] = None,
     om_escalation: Optional[float] = None,
     replacement_cost_learning: float = 0.0,
+    baseline_import_price_escalation: Optional[float] = None,
 ) -> pd.DataFrame:
     """Turn priced year rows into each year's component cashflows (the valuation stage).
 
@@ -550,19 +660,33 @@ def value_year_rows(
     money of :func:`price_year_rows`. Energy, fixed-charge and O&M flows are
     escalated from year-1 prices; each replacement is priced at t = 0 and
     inflated to its swap instant, ``Replacement_Time_Years`` (ADR 0003 E2,
-    E3). Nothing is discounted here. ``attrs["total_replacement_cost"]`` is
-    the replacements at t = 0 prices.
+    E3). The no-system cost, ``Baseline_Import_Cost`` plus
+    ``Baseline_Fixed_Charge``, escalates at ``baseline_import_price_escalation``,
+    a reference tariff's; None uses the import escalation. Nothing is
+    discounted here. ``attrs["total_replacement_cost"]`` is the replacements
+    at t = 0 prices.
     """
     years = year_rows["Year"]
     rates = resolve_escalation_rates(inflation_rate, import_price_escalation, om_escalation)
     inflation_factors = (1 + rates["import_price_escalation"]) ** (years - 1)
+    baseline_factors = (
+        inflation_factors
+        if baseline_import_price_escalation is None
+        else (1 + baseline_import_price_escalation) ** (years - 1)
+    )
     om_factors = (1 + rates["om_escalation"]) ** (years - 1)
     sell_inflation_factors = (1 + sell_price_inflation) ** (years - 1)
 
     flows = pd.DataFrame({"Year": years})
     if "Load_kWh" in year_rows.columns:
         flows["Load_kWh"] = year_rows["Load_kWh"]
-    flows["Cost_No_Sys_Annual"] = (year_rows["Baseline_Import_Cost"] + year_rows["Fixed_Charge"]) * inflation_factors
+    # Summed before escalating, as the no-system cost always was, so a run
+    # without a reference tariff gives the same floats.
+    flows["Cost_No_Sys_Annual"] = (
+        year_rows["Baseline_Import_Cost"] + year_rows["Baseline_Fixed_Charge"]
+    ) * baseline_factors
+    flows["Cost_No_Sys_Import"] = year_rows["Baseline_Import_Cost"] * baseline_factors
+    flows["Cost_No_Sys_Fixed_Charge"] = year_rows["Baseline_Fixed_Charge"] * baseline_factors
     flows["PV_Production_kWh"] = year_rows["PV_Production_kWh"]
     flows["Export_kWh"] = year_rows["Export_kWh"]
     flows["Degradation_Factor"] = year_rows["PV_Degradation_Factor"]
@@ -718,6 +842,7 @@ def cost_analysis_projection(
     import_price_escalation: Optional[float] = None,
     om_escalation: Optional[float] = None,
     replacement_cost_learning: float = 0.0,
+    baseline_import_price_escalation: Optional[float] = None,
 ) -> pd.DataFrame:
     """
     Perform multi-year cost projection analysis from simulated year rows.
@@ -749,6 +874,9 @@ def cost_analysis_projection(
             when given, the avoided-emissions columns are added.
         currency: The currency every money input is in. BREOS does not
             convert; it is recorded as ``attrs["currency"]`` for labels.
+        baseline_import_price_escalation: Annual escalation of the
+            no-system cost, a reference tariff's; None uses the import
+            escalation.
 
     Returns:
         DataFrame with yearly cost projections
@@ -776,6 +904,7 @@ def cost_analysis_projection(
         import_price_escalation=import_price_escalation,
         om_escalation=om_escalation,
         replacement_cost_learning=replacement_cost_learning,
+        baseline_import_price_escalation=baseline_import_price_escalation,
     )
     proj = discount_cashflows(
         flows, total_investment=costs["total_initial_cost"], discount_rate=discount_rate, currency=currency

@@ -1,19 +1,22 @@
 # 0003 — Economic basis, escalators, and currency-neutral results
 
-- **Status:** Accepted (E1–E9)
+- **Status:** Accepted (E1–E10); implemented in 0.7.0
 - **Date:** 2026-09-26; E1, E6 and E8 accepted 2026-09-26; E2–E5, E7, E9 and
-  the E6 inflation default accepted 2026-09-27
+  the E6 inflation default accepted 2026-09-27; E10 accepted 2026-10-01; E9
+  amended 2026-10-01
 
 ## Context
 
-The 0.7 plan calls for a BREOS economic-basis ADR before tariff valuation
-(`design/architecture/0.7x-tariffs-and-smart-charging-plan.md`, source-to-target
-map). The legacy research ADR it replaces is design evidence only. #183
+The 0.7 delivery plan called for a BREOS economic-basis ADR before tariff
+valuation. That plan was completed and removed;
+[Tariffs and smart charging](../architecture/tariffs-and-smart-charging.md)
+describes the result. The legacy research ADR this record replaces is design
+evidence only. #183
 records where the current code resists currency, TOU valuation and component
 cashflows. This record settles the conventions; it changes no code.
 
-What the code does today, in `cost_analysis_projection` (`breos/economics.py`)
-unless stated:
+What the code did when this record was written (0.6.x), in
+`cost_analysis_projection` (`breos/economics.py`) unless stated:
 
 - One rate, `inflation_rate`, escalates the import price, O&M, the daily
   charge and replacement cost. The CLI help calls it "annual electricity price
@@ -56,8 +59,8 @@ E1, E6 and E8 were **Accepted** on 2026-09-26. E2–E5, E7, E9 and the E6
 inflation default were **Accepted** on 2026-09-27. Accepting them accepted
 the design, not its implementation. All nine were then implemented for
 0.7.0 under #183: E6 in #271, E5 and E7 in #273, E8 and E9 in #283, E1, E2
-and E3 in #288, and E4 in #291. The changelog carries the migration table
-below as shipped.
+and E3 in #288, and E4 in #291. E10, accepted on 2026-10-01, was implemented
+in #352. The changelog carries the migration table below as shipped.
 
 ### E1. Nominal basis for the projection APIs — Accepted 2026-09-26
 
@@ -161,6 +164,8 @@ escalators, timing and discounting. The flat case computes kWh × price in the
 current operation order and stays bit-identical; TOU fills the same columns
 from `sum(energy × price)` over the steps. Storing each year's energy by
 tariff period, for revaluation without re-simulation, is a 0.7.x follow-up.
+*(Done in 0.7.0: a tariff run records its energy by period, and by season
+for a schedule with month seasons, and `App.revalue` re-prices from it.)*
 The App `financial` rows gain the component cashflows the projection already
 computes: `Cost_Import`, `Revenue_Export`, `Cost_Operation`, `Cost_Daily`,
 `Cost_Replacement` and `Replacement_Time_Years`.
@@ -189,9 +194,9 @@ migrate once. "Exact" overstates a linear interpolation between year-end
 points, so the fractional payback becomes "interpolated". It has no aliases
 either.
 
-Results that use the new names report `result_schema_version = "1.0"`, the
-first result schema version; E9 sets where the field is carried and how
-it is bumped. A result without the field predates the rename.
+Results that use the new names carry `result_schema_version`; E9 sets where
+the field is carried and when it changes. A result without the field
+predates the rename.
 
 The migration table below was built by searching `breos/` for `eur`, `Eur`,
 `EUR`, `€` and `_exact` at `origin/develop` 79bffcf. It lists every public
@@ -235,7 +240,10 @@ As shipped, the changelog's table omits rows 12 and 18, which went earlier in
 0.7.0 with the steady-state objective basis (#270), rows 28 and 29, whose
 function was removed (#287), row 27, whose function was removed with the
 tool-only plots (#186), and rows 24–26, whose labels went with the
-`breos.io` summary helper that produced them.
+`breos.io` summary helper that produced them. Later in 0.7.0 the optimizer
+columns `Projected_Breakeven_Year` and `Projected_Breakeven_Year_Interpolated`
+(row 17) became `Projected_Payback_Year` and
+`Projected_Payback_Year_Interpolated`.
 
 Rows 24–26 substitute the resolved currency code, so an EUR run writes the
 same text as today. (0.7.0 later removed the helper that wrote them.)
@@ -254,6 +262,61 @@ currency or say "currency". The changelog carries this table.
 top-level `result_schema_version`, independent of the ledger schema. It
 starts at `"1.0"` with the E8 names. A rename or removal bumps the major
 version; an added field bumps the minor.
+*(Amended 2026-10-01: `result_schema_version` is a format number, not a
+major.minor version. It changes, to the next integer, only when a field is
+renamed or removed; an added field leaves it unchanged, the release's
+changelog lists it, and `breos_version` identifies the release. No version
+had been released, so 0.7.0 ships format `"1"`, the first released format;
+results of earlier BREOS versions carry none. The ledger schema is
+unaffected.)*
+
+### E10. Optional terminal-health credit — Accepted 2026-10-01
+
+An optional `[terminal_value]` table has one key, `basis`: `"none"`
+(default, also when the table or key is omitted) or
+`"battery_health_fraction"`. It is an accounting sensitivity, not resale
+value. Only the battery pack installed at the end is credited; PV modules,
+the inverter and stored energy are excluded. Capacity health omits
+resistance-related limits.
+
+Let `h` be the final installed pack's capacity SOH fraction after the last
+step's degradation, terminal cycle finalization and any replacement, and
+`h*` the physical `battery_eol_percentage` used by the simulation. The
+credited fraction is `f = clip((h - h*) / (1 - h*), 0, 1)`. No separate
+threshold is introduced. Inputs must be finite and `h* < 1`. At or below
+threshold the credit is zero; a fresh pack receives full credit.
+
+At exactly `t = T`, the end of the project horizon in years, the full
+replacement-pack price is computed by the existing replacement-outlay
+routine (E3/E4): `C0 × (1 + inflation_rate)^T ×
+(1 - replacement_cost_learning)^T`. `C0` is the resolved full replacement
+price at t = 0, including cost overrides. The nominal credit is this price
+times `f`, and its present value is discounted by `(1 + discount_rate)^T`,
+the same convention as other year-T flows. This uses exponent T, not T − 1
+(the annual energy-flow exponent), and no mid-year fallback.
+
+Every replacement outlay remains. Replacement policy is unchanged: when the
+terminal-replacement guard skips the final swap, the old pack remains and
+receives zero credit if it is at or below threshold. A zero-capacity or
+absent battery reports explicit zero credit when enabled. A partial
+`[period]` run has no lifetime economics and reports null credit.
+
+Results gain `terminal_health_credit`, `terminal_health_credit_npv` and
+`npv_savings_terminal_adjusted` (unadjusted NPV plus credit present value).
+App rounds money only at serialization. When disabled these scalars are
+null and terminal-value provenance is absent. When enabled for a lifetime
+run, provenance records basis, formula version, final SOH, threshold,
+resolved price basis, rates, horizon, timing and replacement policy.
+Monte Carlo computes each trajectory before aggregation, reports all three
+statistics in its existing style, and records each trajectory's valuation
+inputs. Disabled Monte Carlo values are NaN and have no statistics.
+`App.revalue` recomputes from retained final health when prices, rates or the
+table change, without re-simulating for this sensitivity.
+
+Projected optimization accepts but ignores `[terminal_value]`: evaluated
+designs do not report the credit and ranking continues on unadjusted NPV.
+Unadjusted NPV, cashflows, paybacks, LCOE, emissions, dispatch and aging are
+unchanged even when the sensitivity is enabled.
 
 ## Consequences
 

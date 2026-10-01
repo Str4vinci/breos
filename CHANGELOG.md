@@ -48,6 +48,101 @@ reach that path, only a direct call to `remap_tmy_year` or
 `load_weather_for_simulation`.
 
 ### Added
+- `App.timeseries()` returns a copy of the first simulated year step by step
+  (or a `[period]` window's steps), with the energy-balance ledger columns.
+- Cached TMY weather files in `weather/` may be gzip-compressed
+  (`<location>_tmy_<years>_<source>.csv.gz`).
+- Optional `[terminal_value] basis = "battery_health_fraction"` reports an
+  accounting sensitivity for the final installed battery pack's health
+  above its physical replacement threshold
+  ([#346](https://github.com/Str4vinci/breos/issues/346)). It credits the
+  resolved full replacement-pack price at the end of the horizon, using
+  replacement inflation, learning and discounting. Results gain
+  `terminal_health_credit`, `terminal_health_credit_npv` and
+  `npv_savings_terminal_adjusted`, plus valuation provenance. App and Monte
+  Carlo calculate it per run; `App.revalue` recomputes it from retained
+  final health. The default `basis = "none"` leaves the new scalars null.
+  Enabled PV-only runs report zero; partial `[period]` runs keep them null.
+  This is not resale value, and capacity health omits resistance-related
+  limits. Every replacement outlay remains; unadjusted NPV, cashflows,
+  paybacks, LCOE, emissions, dispatch and aging are unchanged. Projected
+  optimization accepts but ignores the table and ranks on unadjusted NPV.
+- `[smart_charging] overlap_policy = "hold_target"` permits overlapping
+  `charge_periods` and `discharge_periods` in `fixed_target`
+  ([#347](https://github.com/Str4vinci/breos/issues/347)). On overlapping
+  steps the grid target is also the discharge floor, moving with temperature
+  and health: above it the battery may discharge down to it; below it the
+  grid may charge up to it. A step never charges and discharges together,
+  and PV may charge above the target. App, Monte Carlo and projected
+  optimization accept it on both backends. `disabled` and `discharge_only`
+  refuse it because they have no grid target; `daily_persistence` refuses it
+  because its planner replaces targets while keeping reserves fixed. The
+  default `"reject"` still requires disjoint periods and preserves every
+  existing dispatch value bit for bit. Results record
+  `overlap_policy` in `provenance.smart_charging`; the ledger is unchanged.
+- A `[reference_tariff]` table prices the household without the system on
+  its own tariff, independent of the system's `[tariff]` or flat prices
+  ([#339](https://github.com/Str4vinci/breos/issues/339)). It takes import
+  prices on a bundled or custom schedule, including per-season prices on a
+  calendar-month custom schedule, or one flat price
+  (`import_prices = { all = <price> }`) without a schedule, a
+  required `fixed_charge_per_day` (an explicit 0 is valid;
+  [#345](https://github.com/Str4vinci/breos/issues/345)) and an optional
+  `import_price_escalation`, which escalates the reference energy and fixed
+  charge and defaults to the system's import escalation; an explicit 0 is
+  kept. It has no export prices. The no-system cost of each year is then the
+  whole household load at the reference prices plus the reference fixed
+  charge. The reference must be in the result's currency and passes the
+  system tariff's timezone and resolution checks. It never changes the
+  dispatch or the costs with the system. App, Monte Carlo (each trajectory on
+  its own sampled load) and projected optimization (its NPV objective) accept
+  it. `App.revalue` re-prices a reference that is added, changed or removed
+  without simulating again, also under `daily_persistence`. Sweeps accept
+  dotted keys such as `reference_tariff.import_prices.all` or
+  `reference_tariff.import_prices.q1.peak`. Results gain
+  the no-system cost components with or without a reference
+  (`no_system_fixed_charge_year1_prices`, the `financial` rows'
+  `no_system_cost_import` and `no_system_cost_fixed_charge`, and the
+  `Cost_No_Sys_Import` and `Cost_No_Sys_Fixed_Charge` projection columns),
+  `reference_tariff` in `resolved_config`, and `provenance.reference_tariff`
+  when one is configured. Without a reference every existing value is
+  unchanged.
+- `[tariff.custom_schedule]` takes calendar-month `seasons`, such as
+  quarters, for tariffs whose windows or prices change by month rather than
+  by DST ([#337](https://github.com/Str4vinci/breos/issues/337)).
+  `seasons = { q1 = [1, 2, 3], ... }` must hold every month exactly once;
+  each rule's `season` then selects a season name or `all`, and a schedule
+  with month seasons refuses `standard` and `dst`. `import_prices` and
+  `export_prices` are given per period, as before, or per season and
+  period, where each season prices exactly the periods its rules use, or
+  gives `all`. A step's season is the month of its civil date in the
+  location's timezone; day types, holidays, effective dates and the
+  replayed start-year calendar are unchanged. Month seasons work in App,
+  Monte Carlo, projected optimization and `App.revalue`, which re-prices by
+  season and period; `breos sweep` takes keys such as
+  `tariff.import_prices.q1.high`. The partition joins the schedule hash
+  only for a schedule with month seasons, so every bundled and existing
+  custom schedule keeps its labels and hashes, and no result changes.
+  `breos.tariffs.MonthSeasons` holds the partition. BREOS still bundles no
+  German schedule; `configs/examples/quarterly-tariff-berlin.toml` shows a
+  §14a Module 3-style quarterly tariff with illustrative windows and
+  prices. Results record `seasons` in the resolved config and in
+  `provenance.tariff`, where the price lists may now be given by season.
+- `[smart_charging] mode = "discharge_only"` discharges the battery only in
+  the listed `discharge_periods` and never charges it from the grid
+  ([#338](https://github.com/Str4vinci/breos/issues/338)). It expresses a
+  peak-only or selected-period discharge policy directly, where a
+  `fixed_target` table with a zero target and unused grid-charging settings
+  was needed before. The mode takes `discharge_periods` alone and refuses
+  `charge_periods`, `target_usable_fraction`, `grid_charge_efficiency`,
+  `grid_import_limit_w` and the planner settings. PV may still charge the
+  battery in every period. It runs on the same dispatch instructions and
+  civil-day controller as `fixed_target`, in App, Monte Carlo and projected
+  optimization, on both execution backends; `App.revalue` re-prices it.
+  Listing every period gives the greedy result bit for bit, and the
+  default greedy dispatch is unchanged. ADR 0002 A8 is unchanged.
+  Results record the mode in `provenance.smart_charging`, with an
+  empty `charge_periods` and the grid-charge settings as None.
 - `battery_allow_terminal_replacement` (App and Monte Carlo), the
   optimizer's `[battery] allow_terminal_replacement` and
   `BatteryConfig.allow_terminal_replacement` can skip buying a battery that
@@ -67,7 +162,7 @@ reach that path, only a direct call to `remap_tmy_year` or
   the key to the final year of each trajectory. Smart-charging decisions do
   not change. The default `true` changes no result; only an opted-out
   horizon whose final period reaches end of life changes its final battery
-  state, replacement count and replacement costs. Result schema 2.3 records
+  state, replacement count and replacement costs. Results record
   the value in `provenance.resolved_config` and, for a projected design and
   an optimizer search, in `battery_replacement_treatment`.
 - `tools/convert_eredes_profiles.py` converts the E-REDES consumption-profile
@@ -102,14 +197,14 @@ reach that path, only a direct call to `remap_tmy_year` or
   energy shortfalls instead of treating depletion as free. The planner horizon
   and target/state grids are configurable; Monte Carlo and optimization refuse
   the mode. `App.revalue` simulates again when import or export prices change.
-  Result schema 2.2 records the experimental policy, effective settings,
+  Results record the experimental policy, effective settings,
   executed instruction hash and initial/final stored energy by origin in
-  `provenance.smart_charging`; existing modes change only their schema version.
+  `provenance.smart_charging`; results of existing modes are unchanged.
 - `[tariff.custom_schedule]` lets App, Monte Carlo and projected optimization
   use a strict inline schedule definition. It accepts the same periods, rules,
   effective dates and explicit year-keyed holidays as the tariff schedule
   parser, and records the definition in `provenance.resolved_config` so the
-  run can be reproduced. Result schema 2.1 adds that config field.
+  run can be reproduced.
 - `breos.tariffs.ScheduleDefinition` holds a complete tariff schedule: its
   `TariffSchedule` metadata, `ScheduleRule` intervals per day type and
   season, and an optional `HolidayCalendar`. It is frozen and pickles.
@@ -131,7 +226,7 @@ reach that path, only a direct call to `remap_tmy_year` or
   sweep over designs ([#165](https://github.com/Str4vinci/breos/issues/165)).
   The weather layer is keyed on the weather file's absolute path, its
   SHA-256 and that of its metadata sidecar, the year window, `target_year`,
-  resolution, coordinates, `preserve_irradiance_energy` and the
+  resolution, coordinates, `irradiance_resampling` and the
   solar-position method; a study with other weather inputs raises
   `ValueError`. The PV layer is keyed on the resolved config without
   `YEAR_CACHE_INDEPENDENT_KEYS` (the App sweep's `INPUT_INDEPENDENT_KEYS`,
@@ -166,8 +261,7 @@ reach that path, only a direct call to `remap_tmy_year` or
   civil month. A PV-only window equals the same steps of a full-year run
   exactly. `App.revalue` re-prices a window; `breos sweep` can vary
   `period.start` and `period.end`; Monte Carlo and the optimizer reject
-  `period`. Result schema 1.7. Runs without `period` are unchanged apart
-  from the schema version.
+  `period`. Runs without `period` are unchanged.
 - `inverter_ac_rating_kw` sets the inverter AC rating in kW, instead of
   `inverter_loading_ratio` ([#181](https://github.com/Str4vinci/breos/issues/181));
   setting both in one config raises. `--inverter-ac-rating-kw` sets it from
@@ -177,7 +271,7 @@ reach that path, only a direct call to `remap_tmy_year` or
   key, and the dispatch, CAPEX and the reports read it: `calculate_costs`
   gains `inverter_ac_capacity_w`, the rating to price, instead of re-deriving
   it from the ratio. With the rating set, `resolved_config` reports
-  `inverter_loading_ratio` as unset. Result schema 1.6. CAPEX now divides the
+  `inverter_loading_ratio` as unset. CAPEX now divides the
   rating in W by 1000 where it divided the kWp by the ratio, so
   `inverter_cost` can differ in the last bit: over 480 module, count, ratio
   and battery combinations it did in 86, `total_initial_cost` in 2 (by at
@@ -204,7 +298,7 @@ reach that path, only a direct call to `remap_tmy_year` or
   now reads `pop_size`, `n_gen`, `n_offsprings` and `seed` from
   `[optimization]` when they are not passed; an argument that disagrees with
   its key raises. `[emissions]` now reaches the search, so every Pareto row
-  of a search with emissions carries `Projected_CO2_*`. Result schema 1.5.
+  of a search with emissions carries `Projected_CO2_*`.
 
   Numbers change in one case: a config whose `[optimization]` sets
   `pop_size`, `n_gen`, `n_offsprings` or `seed`, run without passing them.
@@ -228,7 +322,7 @@ reach that path, only a direct call to `remap_tmy_year` or
   revaluation gives the same floats as a new run; a re-priced tariff sums
   each year's energy by tariff period, which projections on a tariff now
   record (`ProjectionRun.period_energy`), and agrees with a new run to
-  rounding. The App and its `result()` are unchanged. Result schema 1.4.
+  rounding. The App and its `result()` are unchanged.
 - `cost_analysis_projection` is split into public stages:
   `price_year_rows` and the new `value_year_rows` (energy to component
   cashflows), `discount_cashflows` (cumulative and discounted cashflows,
@@ -362,8 +456,7 @@ reach that path, only a direct call to `remap_tmy_year` or
   `grid_import_cost_year1_prices`. The `breos sweep` CSV copies top-level
   scalars, so it now carries these columns
   ([#181](https://github.com/Str4vinci/breos/issues/181),
-  [#183](https://github.com/Str4vinci/breos/issues/183)). The result schema
-  version becomes `"1.1"`, since an added field bumps the minor. No reported
+  [#183](https://github.com/Str4vinci/breos/issues/183)). No reported
   number changes.
 - **Tariff domain**, `breos.tariffs` (ADR 0002). A `TariffSchedule` assigns
   instants to named periods in local civil time and records its regulatory
@@ -438,7 +531,7 @@ reach that path, only a direct call to `remap_tmy_year` or
   replacement at `t` years costs `C0 × (1 + inflation_rate)^t × (1 −
   learning)^t`. `result()["provenance"]["economics"]`, the Monte Carlo
   provenance and the optimizer's provenance record the rates used and the
-  implied real discount rate (E1); the result schema version becomes `"1.2"`.
+  implied real discount rate (E1).
   The optimizer checks its `financials` rates before the search starts: a
   rate at or below −1, or a learning rate outside [0, 1), raises. `breos sweep` treats the
   three keys as input-independent, so sweeping them reuses the prepared
@@ -537,12 +630,33 @@ reach that path, only a direct call to `remap_tmy_year` or
   `breos_optimization_benchmark_v1`), also when a run fails part way.
 
 ### Changed
-- Result schema 2.0 renames `monthly[].import_kwh` and
-  `yearly[].import_kwh` to `grid_import_kwh`, with paired `export_kwh`
-  fields renamed to `grid_export_kwh`; values are unchanged. Optimizer columns
+- 15-minute runs on hourly weather no longer cut diffuse irradiance with a
+  universal 1.5 clear-sky-ratio cap ([#354](https://github.com/Str4vinci/breos/issues/354)).
+  On the saved PVGIS Porto TMY, annual DHI changes from 409.34 to 563.86
+  kWh/m² (hourly: 561.11); a 10-module PV-only case changes from 8,020.72
+  to 8,684.95 kWh DC (hourly: 8,672.06). The 5 W/m² regulariser remains,
+  with linear component interpolation at dawn/dusk where either source
+  clear-sky component is at most 5 W/m². The shared `irradiance_resampling`
+  policy defaults to `"auto"`: independent hourly component conservation
+  for declared interval means, and `"clear_sky"` for instantaneous or
+  undeclared input. Explicit `"clear_sky_energy_conserving"` requires
+  interval-mean metadata. App, Monte Carlo and projected optimization
+  share the policy (`simulation.irradiance_resampling` in the optimizer);
+  a 15-minute optimization given hourly weather now resamples it as App
+  does, where it used to raise on the hourly grid.
+  No irradiance closure or DHI/GHI clipping is imposed. Results replace
+  `preserve_irradiance_energy` in App weather provenance and in
+  Monte Carlo `settings` and `runtime_weather.metadata` with
+  `irradiance_resampling` and `irradiance_resampling_resolved`, and adds
+  fallback/support counts and closure diagnostics to weather provenance and
+  `simulation`, `weather` and `weather_by_year` records to optimizer
+  provenance.
+- `monthly[].import_kwh` and `yearly[].import_kwh` are renamed to
+  `grid_import_kwh`, with paired `export_kwh` fields renamed to
+  `grid_export_kwh`; values are unchanged. Optimizer columns
   `Projected_Breakeven_Year` and `Projected_Breakeven_Year_Interpolated` are
   now `Projected_Payback_Year` and `Projected_Payback_Year_Interpolated`.
-- The schema 2.0 migration guide maps removed CO2 aliases to the existing
+- The result migration guide maps removed CO2 aliases to the existing
   total-year and total-lifetime fields. Enum spelling in echoed provenance
   remains unchanged.
 - **`plot_breakeven_comparison` reads App results**
@@ -631,7 +745,7 @@ reach that path, only a direct call to `remap_tmy_year` or
   Python version. Year tables keep `Replacement_Cost` right after
   `Replacements`; `Replaced_Capacity_kWh` follows it, so the columns after it
   move one place. The optimizer's year tables also gain the year-1-price
-  money columns. Result schema 1.3.
+  money columns.
 
   Direct callers of the economics see one change: a hand-built `costs`
   dict without `replacement_cost_each` raises once the run has a
@@ -660,7 +774,7 @@ reach that path, only a direct call to `remap_tmy_year` or
   `[sweep]`. `breos run` merges its flags into the config file table by
   table, so a flag that sets one key of a table keeps the file's other keys
   (no flag sets a table key yet). No reported number changes.
-- **Currency-neutral result names and result schema 1.0** (ADR 0003 E8 and
+- **Currency-neutral result names and a result format number** (ADR 0003 E8 and
   E9, [#183](https://github.com/Str4vinci/breos/issues/183)). Money keys drop
   the currency, and the fractional payback is "interpolated" rather than
   "exact", since it is a straight line between year-end points. There are no
@@ -718,10 +832,13 @@ reach that path, only a direct call to `remap_tmy_year` or
 
   `App.result()`, Monte Carlo provenance and `--json` output, and optimizer
   provenance carry `result_schema_version`
-  (`breos.result_schema.RESULT_SCHEMA_VERSION`), independent of the ledger
-  schema: `"1.0"` for these names, `"1.1"` with the year-1 money keys above,
-  `"1.2"` in 0.7.0 with `provenance.economics`. A renamed or removed field bumps the major version, an added
-  field the minor. A result without it predates these names.
+  (`breos.result_schema.RESULT_SCHEMA_VERSION`), a format number independent
+  of the ledger schema. 0.7.0 results carry format `"1"`, the first released
+  format; results of earlier BREOS versions carry none. The format changes,
+  to the next integer, only when a field is renamed or removed. Added fields
+  leave it unchanged: the release's changelog lists them, and
+  `breos_version` in App, Monte Carlo and optimizer provenance identifies the release
+  that wrote a result.
 - **Avoided emissions use net exchange** (ADR 0002 A10,
   [#178](https://github.com/Str4vinci/breos/issues/178)). The self-consumed
   credit is `(Load − Import − B_u) × CI`, where `B_u` is unattributed battery
@@ -977,6 +1094,11 @@ reach that path, only a direct call to `remap_tmy_year` or
   bit for bit.
 
 ### Fixed
+- A battery too small to dispatch (at most 1 Wh) no longer reports
+  `battery_soh_end_pct`, `battery_replacements` or the replacement-cost fields
+  ([#353](https://github.com/Str4vinci/breos/issues/353)). It already ran and
+  was priced as PV-only; its result now has the same fields as one with
+  `battery_kwh = 0`, instead of an uncomputed 100% health.
 - `calendar_model` is stored as it is validated: trimmed, lower-case, with
   hyphens as underscores ([#186](https://github.com/Str4vinci/breos/issues/186)).
   For `"Naumann-Lam"`, `degradation.model_key` and
@@ -1058,8 +1180,8 @@ reach that path, only a direct call to `remap_tmy_year` or
   Profiles placed by position now also follow the target year's
   daylight-saving dates, which moves 169 hourly steps in Lisbon for 2025.
   Monte Carlo no longer uses `start_date` for the load or weather; its
-  provenance records the load's year as `load_profile.calendar_year`
-  (result schema 1.8). A leap `target_year`, which raised an error at hourly
+  provenance records the load's year as `load_profile.calendar_year`.
+  A leap `target_year`, which raised an error at hourly
   and 15-minute resolution, now runs: each weather year gets a 29 February
   copied from its 28 February on the file's own clock, including a UTC offset
   written in its timestamps, as the App gives a TMY. Before, 29 February was
@@ -1095,6 +1217,30 @@ reach that path, only a direct call to `remap_tmy_year` or
   with mixed daylight-saving offsets (read as UTC), and a fixed-offset TMY
   moved between two common years or between two leap years are unchanged
   bit for bit.
+- `remap_tmy_year` now gives a TMY indexed in a named time zone, such as
+  `Europe/Berlin` or `Australia/Sydney`, its 29 February in a leap study year
+  ([#329](https://github.com/Str4vinci/breos/issues/329)). Such an index was
+  still shifted in UTC, so local 1 March 00:00 landed on 29 February and the
+  leap-day fill skipped the day: a 2021 `Europe/Berlin` hourly TMY moved to
+  2028 had 8,760 rows, one of them dated 29 February, and no `leap_day` in
+  its metadata. A named-zone index is now shifted on the fixed UTC offset the
+  zone keeps in late February, so 29 February is a copy of 28 February,
+  1 March keeps its own hours, and the metadata records `leap_day`. Each row
+  still moves by whole years in absolute time, so irradiance stays with the
+  sun. The zone reads the shifted instants with the study year's
+  daylight-saving dates: the hour its spring change skips has no row, the
+  hour its autumn change repeats has two, and, unless the zone changed its
+  offset rules between the two years, the index is the App's simulation
+  calendar for that year. A leap-year named-zone TMY moved to a
+  common year now drops its own local 29 February, where it previously
+  dropped the UTC day and shifted part of it into 1 March. A full-year
+  named-zone TMY moved between two common years or between two leap years
+  is unchanged bit for bit. A partial named-zone input whose UTC year
+  differs from its local year, such as rows at local New Year, is now moved
+  by its local year, where it was previously moved by its UTC year. The App's own weather loaders return UTC or fixed-offset indices,
+  so only weather passed to `remap_tmy_year` or `load_weather_for_simulation`
+  directly, or through injected runtime dependencies, changes; App results
+  from the bundled loaders are unchanged.
 - Fixed-design evaluation and multi-objective optimization now validate and
   apply the optional `tariff` table through the shared projection loop.
   Previously they silently ignored it and valued the design at flat prices.
@@ -1688,6 +1834,12 @@ reach that path, only a direct call to `remap_tmy_year` or
   unchanged.
 
 ### Removed
+- `resample_to_15min(..., preserve_irradiance_energy=...)`,
+  `MonteCarloSettings.preserve_irradiance_energy`, the `[montecarlo]` key
+  and `--preserve-irradiance-energy`. Use the top-level App
+  `irradiance_resampling` key / `--irradiance-resampling`, or the function's
+  `irradiance_resampling` argument, with `"auto"`, `"clear_sky"` or
+  `"clear_sky_energy_conserving"` (#354).
 - The package root now exposes only the public non-module symbols listed in
   `breos.__all__`; import battery helpers, constants, repair events, catalogue
   values, and weather utilities from their owning modules (`breos.battery`,
@@ -1712,7 +1864,6 @@ reach that path, only a direct call to `remap_tmy_year` or
   `PV_Production_kWh`, and `mean_usable_ac_system_production_kwh`. The App PV
   values have different definitions; dispatch and retained usable-AC values
   do not change. The timestep ledger's `PV_Production` remains.
-- Bump result schema from 1.8 directly to 2.0 for these removals and renames.
 - `breos.optimization.DEFAULT_PROJECT_LIFESPAN`, with no deprecation period.
   Nothing read it: the optimizer's horizon comes from
   `simulation.years_projection` or `financials.project_lifespan`, and
@@ -1846,7 +1997,7 @@ reach that path, only a direct call to `remap_tmy_year` or
   that `celltype` is unused: it selects the empirical starting guess.
 - Optimization config keys that nothing read now raise
   ([#181](https://github.com/Str4vinci/breos/issues/181)): `[load]`,
-  `simulation.weather_file`, `simulation.irradiance_resampling`, the
+  `simulation.weather_file`, the
   top-level `name` and `execution_backend` (pass `execution_backend` to the
   function), and the undocumented `[pv_specs]` table, which duplicated
   `pv.params`. The example `configs/optimization/projected-optimization.toml`

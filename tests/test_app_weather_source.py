@@ -1,5 +1,7 @@
 """App selection among cached TMY weather files through ``weather_source``."""
 
+from pathlib import Path
+
 import pytest
 
 from breos import cli
@@ -110,3 +112,23 @@ def test_cli_weather_source_flag_reaches_the_config():
     args = cli.build_parser().parse_args(["run", "--location", "porto", "--weather-source", "nsrdb"])
 
     assert cli._build_config(args)["weather_source"] == "nsrdb"
+
+
+def test_a_gzip_compressed_cached_tmy_file_is_used(tmp_path, monkeypatch, no_fetch):
+    """The committed Porto TMY is a .csv.gz; App reads it from weather/ without decompressing it first."""
+    committed = Path(__file__).resolve().parents[1] / "validation" / "data" / "weather" / f"{SARAH3_FILE}.gz"
+    directory = tmp_path / "weather"
+    directory.mkdir()
+    target = directory / committed.name
+    target.write_bytes(committed.read_bytes())
+    Path(f"{target}.metadata.json").write_bytes(Path(f"{committed}.metadata.json").read_bytes())
+    monkeypatch.chdir(tmp_path)
+
+    result = _run({**BASE, "weather_source": "pvgis-sarah3"})
+
+    weather = result["provenance"]["weather"]
+    assert weather["source"] == "local_file"
+    assert weather["path"] == str(target.resolve())
+    assert weather["upstream_source"] == "PVGIS_TMY"
+    assert weather["parsed_filename"]["source"] == "pvgis-sarah3"
+    assert result["usable_ac_system_production_kwh"] > 0

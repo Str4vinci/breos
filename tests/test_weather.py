@@ -1,5 +1,6 @@
 """Tests for weather and weather-derived helpers."""
 
+import gzip
 import hashlib
 import json
 from pathlib import Path
@@ -424,12 +425,13 @@ def test_resample_to_15min_can_preserve_each_hours_irradiance_energy():
         index=idx,
     )
 
+    weather.attrs["breos_weather_metadata"] = {"radiation_time_basis": "interval_mean", "timestamp_label_basis": "left"}
     resampled = resample_to_15min(
         weather,
         method="linear",
         latitude=41.1579,
         longitude=-8.6291,
-        preserve_irradiance_energy=True,
+        irradiance_resampling="clear_sky_energy_conserving",
     )
 
     for column in ("ghi", "dni", "dhi"):
@@ -545,12 +547,16 @@ def test_resample_interpolates_clearness_index_at_interval_midpoints():
     weather = pd.DataFrame({"ghi": clearness(hour_mid) * (clear_hourly + epsilon)}, index=idx)
     weather.attrs["breos_weather_metadata"] = {"radiation_time_basis": "interval_mean", "timestamp_label_basis": "left"}
 
-    resampled = resample_to_15min(weather, latitude=41.1579, longitude=-8.6291, altitude=0.0)
+    resampled = resample_to_15min(
+        weather, latitude=41.1579, longitude=-8.6291, altitude=0.0, irradiance_resampling="clear_sky"
+    )
 
     quarter_mid = ((resampled.index - idx[0]) / pd.Timedelta(hours=1)).to_numpy() + 0.125
     clear_15 = site.get_clearsky(resampled.index + pd.Timedelta(minutes=7.5))["ghi"].to_numpy()
     expected = np.where(clear_15 > 0.0, clearness(quarter_mid) * (clear_15 + epsilon), 0.0)
-    inner = (quarter_mid >= 1.0) & (quarter_mid <= 46.0)
+    right = np.clip(np.searchsorted(hour_mid, quarter_mid, side="right"), 1, len(hour_mid) - 1)
+    ratio_support = (clear_hourly[right - 1] > epsilon) & (clear_hourly[right] > epsilon)
+    inner = (quarter_mid >= 1.0) & (quarter_mid <= 46.0) & ratio_support
     np.testing.assert_allclose(resampled["ghi"].to_numpy()[inner], expected[inner], atol=1e-9)
 
 
@@ -869,3 +875,67 @@ def test_load_weather_finds_a_date_column_in_any_case(tmp_path):
     assert isinstance(loaded.index, pd.DatetimeIndex)
     assert loaded.index.name == "Date"
     assert loaded["ghi"].tolist() == [0.0, 1.0]
+
+
+# The committed PVGIS TMY for Porto, gzip-compressed, with a sidecar bound to the .gz digest.
+COMMITTED_GZ_TMY = (
+    Path(__file__).resolve().parents[1] / "validation" / "data" / "weather" / "porto_tmy_2005_2023_pvgis-sarah3.csv.gz"
+)
+
+
+def _copy_committed_gz_tmy(directory: Path) -> Path:
+    directory.mkdir(exist_ok=True)
+    target = directory / COMMITTED_GZ_TMY.name
+    target.write_bytes(COMMITTED_GZ_TMY.read_bytes())
+    sidecar = Path(f"{COMMITTED_GZ_TMY}.metadata.json")
+    Path(f"{target}.metadata.json").write_bytes(sidecar.read_bytes())
+    return target
+
+
+def test_weather_filename_parser_accepts_gzip_compressed_csv():
+    assert parse_weather_filename("porto_tmy_2005_2023_pvgis-sarah3.csv.gz") == parse_weather_filename(
+        "porto_tmy_2005_2023_pvgis-sarah3.csv"
+    )
+    assert parse_weather_filename("porto_tmy_2005_2023_pvgis-sarah3.gz") is None
+
+
+def test_load_weather_reads_a_gzip_compressed_csv_like_the_plain_csv(tmp_path):
+    compressed = _copy_committed_gz_tmy(tmp_path / "gz")
+    plain_dir = tmp_path / "plain"
+    plain_dir.mkdir()
+    (plain_dir / compressed.name[: -len(".gz")]).write_bytes(gzip.decompress(compressed.read_bytes()))
+
+    loaded = load_weather("porto", data_type="tmy", weather_dir=str(compressed.parent))
+    reference = load_weather("porto", data_type="tmy", weather_dir=str(plain_dir))
+
+    pd.testing.assert_frame_equal(loaded, reference)
+    assert len(loaded) == 8760 and isinstance(loaded.index, pd.DatetimeIndex)
+    metadata = loaded.attrs["breos_weather_metadata"]
+    assert metadata["path"] == str(compressed.resolve())
+    assert metadata["sha256"] == hashlib.sha256(compressed.read_bytes()).hexdigest()
+    # The sidecar is bound to the compressed file's digest, so its metadata is read.
+    assert metadata["upstream_source"] == "PVGIS_TMY"
+    assert metadata["metadata_sidecar"] == f"{compressed.resolve()}.metadata.json"
+
+
+def test_plain_and_gzip_compressed_copies_of_one_file_are_ambiguous(tmp_path):
+    compressed = _copy_committed_gz_tmy(tmp_path)
+    (tmp_path / compressed.name[: -len(".gz")]).write_bytes(gzip.decompress(compressed.read_bytes()))
+
+    with pytest.raises(AmbiguousWeatherError) as excinfo:
+        load_weather("porto", data_type="tmy", weather_dir=str(tmp_path))
+
+    assert excinfo.value.filenames == [compressed.name[: -len(".gz")], compressed.name]
+
+
+def test_preload_weather_by_year_reads_a_gzip_compressed_csv(tmp_path, write_multiyear_weather):
+    plain = write_multiyear_weather(tmp_path / "porto_historical_2021_2022_openmeteo.csv")
+    compressed = tmp_path / f"{plain.name}.gz"
+    compressed.write_bytes(gzip.compress(plain.read_bytes()))
+
+    by_year = preload_weather_by_year(str(compressed), target_year=2025)
+    reference = preload_weather_by_year(str(plain), target_year=2025)
+
+    assert sorted(by_year) == [2021, 2022]
+    for year, frame in reference.items():
+        pd.testing.assert_frame_equal(by_year[year], frame)

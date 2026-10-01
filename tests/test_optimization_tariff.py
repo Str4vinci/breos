@@ -8,6 +8,8 @@ import pandas as pd
 import pytest
 
 from breos import optimization
+from breos.result_schema import RESULT_SCHEMA_VERSION
+from breos.utils import package_version
 
 TARIFF = {
     "schedule": "pt_mainland_2026_daily_bi",
@@ -82,7 +84,8 @@ def test_optimizer_provenance_records_the_schema_version_and_currency(tariff_cas
 
     for case in (tariff_case, (weather, load, flat)):
         provenance = evaluate(case).provenance
-        assert provenance["result_schema_version"] == "2.3"
+        assert provenance["result_schema_version"] == RESULT_SCHEMA_VERSION
+        assert provenance["breos_version"] == package_version()
         assert provenance["currency"] == "EUR"
     assert "tariff" not in evaluate((weather, load, flat)).provenance
 
@@ -134,10 +137,14 @@ def test_optimizer_checks_conflicts_and_unsupported_dispatch(tariff_case, monkey
         evaluate((weather, load, config), battery_kwh=5.0)
 
 
-def test_optimizer_prices_fixed_target_charging(tariff_case):
+@pytest.mark.parametrize("overlap", [False, True])
+def test_optimizer_prices_fixed_target_charging(tariff_case, overlap):
     weather, load, config = tariff_case
     greedy = evaluate(tariff_case, battery_kwh=5.0)
-    config["smart_charging"] = FIXED_TARGET
+    config["smart_charging"] = {
+        **FIXED_TARGET,
+        **({"overlap_policy": "hold_target", "discharge_periods": ["peak", "off_peak"]} if overlap else {}),
+    }
     charged = evaluate((weather, load, config), battery_kwh=5.0)
 
     assert charged.yearly["Grid_AC_To_Battery_kWh"].sum() > 0.0
@@ -146,14 +153,19 @@ def test_optimizer_prices_fixed_target_charging(tariff_case):
     assert charged.metrics["Projected_NPV"] != greedy.metrics["Projected_NPV"]
     record = charged.provenance["smart_charging"]
     assert record["mode"] == "fixed_target"
+    assert record["overlap_policy"] == ("hold_target" if overlap else "reject")
     assert record["schedule_hash"] == charged.provenance["tariff"]["schedule_hash"]
     assert "smart_charging" not in greedy.provenance
 
 
-def test_optimizer_search_shares_fixed_target_scoring_and_provenance(tariff_case):
+@pytest.mark.parametrize("overlap", [False, True])
+def test_optimizer_search_shares_fixed_target_scoring_and_provenance(tariff_case, overlap):
     pytest.importorskip("pymoo")
     weather, load, config = tariff_case
-    config["smart_charging"] = FIXED_TARGET
+    config["smart_charging"] = {
+        **FIXED_TARGET,
+        **({"overlap_policy": "hold_target", "discharge_periods": ["peak", "off_peak"]} if overlap else {}),
+    }
     fixed = evaluate((weather, load, config), battery_kwh=5.0)
     problem = optimization.SolarDesignProblem(weather, load, config)
     restored = pickle.loads(pickle.dumps(problem))
@@ -269,7 +281,9 @@ def test_invalid_tariff_fails_before_starting_workers(tariff_case, monkeypatch):
 
 
 @pytest.mark.parametrize(
-    "smart_charging", [None, {**FIXED_TARGET, "target_usable_fraction": 1.0}], ids=["greedy", "fixed-target"]
+    "smart_charging",
+    [None, {**FIXED_TARGET, "target_usable_fraction": 1.0}, {"mode": "discharge_only", "discharge_periods": ["peak"]}],
+    ids=["greedy", "fixed-target", "discharge-only"],
 )
 @pytest.mark.parametrize(("freq", "backend"), [("h", "python"), ("15min", "numba")])
 def test_three_year_tariff_design_reproduces_through_app(
@@ -361,7 +375,10 @@ def test_three_year_tariff_design_reproduces_through_app(
     assert result["provenance"]["tariff"] == fixed.provenance["tariff"]
     if smart_charging:
         assert result["provenance"]["smart_charging"] == fixed.provenance["smart_charging"]
+    if smart_charging and smart_charging["mode"] == "fixed_target":
         assert fixed.yearly["Grid_AC_To_Battery_kWh"].min() > 0.0, "the design must grid-charge"
+    elif smart_charging:
+        assert (fixed.yearly["Grid_AC_To_Battery_kWh"] == 0.0).all()
     for app_row, (_, opt_row) in zip(result["financial"][1:], fixed.financial.iterrows(), strict=True):
         for app_key, column in (
             ("cost_import", "Cost_Import"),

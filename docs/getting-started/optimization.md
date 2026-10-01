@@ -71,8 +71,11 @@ load = load_profile(
 )
 ```
 
-For 15-minute runs, upsample the weather with
-{py:func}`~breos.weather.resample_to_15min` before you pass it in.
+For 15-minute runs, hourly weather is prepared with the same resampling
+helper as App and Monte Carlo. Set `simulation.irradiance_resampling` to
+`"auto"` (default), `"clear_sky"` or `"clear_sky_energy_conserving"`; see
+[the irradiance policy](configuration.md#hourly-weather-at-15-minute-resolution).
+Weather already at 15 minutes is used directly.
 
 ## Search the design space
 
@@ -151,7 +154,7 @@ each timestep through the shared projection loop. Each project year replays
 the input calendar, with PV and battery degradation carried between years.
 Tariff prices affect the financial objective. The battery follows
 self-consumption dispatch unless a `smart_charging` table sets fixed-target
-charging, which the optimizer applies as App does. It is checked as App checks
+charging or `discharge_only`, which the optimizer applies as App does. It is checked as App checks
 it, with `battery_kwh` taken from the design, or from
 `constraints.max_battery_kwh` for a search. The instructions are resolved once
 per search; a candidate without a battery ignores them. Results record them
@@ -163,6 +166,12 @@ Fixed-design results record the schedule, prices, calendar and hashes in
 `result.provenance["tariff"]`. Search results record the same fields in
 `result.details["provenance"]["tariff"]`. Tariff-enabled searches also support
 `n_procs`, and their results can be pickled.
+
+A [`[reference_tariff]`](configuration.md#no-system-reference-tariff) table,
+as in App, prices the household without the system for every candidate, so
+`Projected_NPV` and the NPV objective are the saving against it. Without
+`import_price_escalation` it escalates at the `financials` import escalation.
+Results record it in `provenance["reference_tariff"]`.
 
 ## Evaluate one design in detail
 
@@ -203,3 +212,8 @@ came from.
 - [Interpreting results](interpreting-results.md) for the meaning of the
   headline metrics.
 - [Optimization API](../api/optimization.md) for the full signatures.
+
+The optional [`[terminal_value]`](configuration.md#terminal-health-credit)
+table is accepted but ignored by projected optimization. Evaluated designs
+report no terminal-health credit or adjusted NPV; ranking uses unadjusted
+NPV. Use App or Monte Carlo for this accounting sensitivity.

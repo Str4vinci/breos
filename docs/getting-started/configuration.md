@@ -36,6 +36,40 @@ silently ignored (which would quietly fall back to the default). The optional
 `[sweep]` and `[montecarlo]` sections used by their dedicated CLI commands are
 recognised and allowed.
 
+## Hourly weather at 15-minute resolution
+
+With `resolution = "15min"`, hourly weather is reconstructed at quarter-hour
+representative times. The top-level `irradiance_resampling` key (CLI:
+`--irradiance-resampling`) applies in App and Monte Carlo; projected
+optimization reads the same values from `simulation.irradiance_resampling`:
+
+- `"auto"` (default) uses `"clear_sky_energy_conserving"` for weather declaring
+  `radiation_time_basis = "interval_mean"`, and `"clear_sky"` otherwise.
+- `"clear_sky"` interpolates each component's clear-sky ratio with makima,
+  retaining a 5 W/m² denominator regulariser and no upper ratio cap.
+  Between source points where either clear-sky component is at most 5 W/m²,
+  direct linear component interpolation guards dawn and dusk. Negative
+  overshoot is clipped and zero clear-sky support stays zero.
+- `"clear_sky_energy_conserving"` then scales each source hour's four quarters
+  to reproduce that hour's mean, independently for GHI, DNI and DHI. It
+  raises for instantaneous or undeclared input. Positive source hours with
+  no reconstructed support receive a flat fill, recorded in provenance.
+
+PVGIS TMY is instantaneous with a provider offset, so `"auto"` resolves to
+`"clear_sky"`. Open-Meteo interval means and EPW use hourly conservation.
+Without coordinates, direct interpolation replaces clear-sky reconstruction;
+the policy still controls hourly conservation. Already-quarter-hour weather
+is unchanged.
+
+No GHI/DNI/DHI closure is enforced, and DHI is never clipped to GHI.
+Weather metadata and result provenance record requested and resolved policy,
+interpolation method, the daylight quarter-hours filled by the dawn/dusk
+fallback and the zero-support hour counts, per component. With coordinates and all three components, `irradiance_closure`
+records before/after conservation diagnostics over daylight quarter-hours:
+the GHI-weighted mean absolute residual in W/m² and the absolute residual
+energy divided by GHI energy. Solar position uses apparent zenith at the
+same representative times as reconstruction.
+
 ## Battery capacity and the SOC window
 
 `battery_kwh` is the **nominal** pack capacity. The energy balance only
@@ -443,7 +477,10 @@ fixed_charge_per_day = 0.25              # optional, default 0
 
 - Every period of the schedule needs an import and an export price, or an
   `all` price for every period. A period the schedule does not have is an
-  error; there is no fallback to another schedule.
+  error; there is no fallback to another schedule. A custom schedule with
+  month seasons is priced by season instead: each season's table prices the
+  periods that season's rules use, or gives `all`, and pricing a period the
+  season never uses is an error.
 - Instead of `schedule`, you can define `[tariff.custom_schedule]` inline.
   Set `identifier`, `version`, `timezone`, `cycle`, `periods`, and one or
   more `[[tariff.custom_schedule.rules]]` tables. Do not set both schedule
@@ -451,6 +488,10 @@ fixed_charge_per_day = 0.25              # optional, default 0
   each rule's intervals must cover the whole local day without gaps or
   overlaps. See [Custom App schedules](../api/tariffs.md#custom-app-schedules)
   for a complete example.
+- A custom schedule can name calendar-month `seasons`, such as quarters,
+  instead of the standard/DST seasons. Its rules then select a season by
+  name, and each price list may give a table of period prices for every
+  season. See [Month seasons](../api/tariffs.md#month-seasons).
 - Holidays are optional and explicit. `holidays.dates` maps each covered
   year to its dates; provide the complete calendar you intend for each year
   the simulation can use. A run in a year absent from that map fails rather
@@ -476,6 +517,111 @@ optimization accepts the same tariff table in its nested config; see
 [Optimization](optimization.md#price-a-design-with-a-time-of-use-tariff).
 To compare several offers, see [Compare tariffs](recipes.md#compare-tariffs).
 
+## Terminal-health credit
+
+An optional accounting sensitivity credits the final installed battery
+pack's remaining capacity health above its physical replacement threshold:
+
+```toml
+[terminal_value]
+basis = "battery_health_fraction"
+```
+
+The default `basis = "none"`, also used when the table or key is omitted,
+keeps this sensitivity off. No other keys are accepted. It inherits
+`battery_eol_percentage` and the resolved full replacement-pack price,
+including cost overrides; there is no separate threshold or price.
+
+With final SOH fraction `h` and replacement threshold `h*`, the fraction is
+`clip((h - h*) / (1 - h*), 0, 1)`. SOH is measured after the last step's
+aging, terminal cycle finalization and any replacement. A fresh pack gets
+full credit; at or below threshold it gets zero. Inputs must be finite and
+`h* < 1`. Capacity health omits resistance-related limits.
+
+The nominal credit at exactly project time `T` is the fraction times the
+replacement price `C0 × (1 + inflation_rate)^T ×
+(1 - replacement_cost_learning)^T`. The present value divides that credit
+by `(1 + discount_rate)^T`. This is the existing replacement-outlay
+convention with a t = 0 price and exponent T, rather than the T − 1
+escalation used for annual energy prices. The credit is an accounting
+sensitivity, not resale value; PV modules, the inverter and stored energy
+are excluded.
+
+Only the pack present at the end is credited. Every replacement outlay
+remains, and replacement policy is unchanged. If
+`battery_allow_terminal_replacement = false` skips the final swap, the old
+pack remains and earns zero at or below threshold. Enabled PV-only and
+zero-capacity runs explicitly report zero. A partial `[period]` run keeps
+all lifetime credit fields null.
+
+App reports the three credit/adjusted fields beside unadjusted NPV.
+`App.revalue` can enable, disable or reprice the sensitivity using retained
+final health without simulating again for it. Monte Carlo computes it for
+each trajectory before aggregation. Projected optimization accepts but
+ignores this table, reports no adjusted values for evaluated designs and
+continues ranking on unadjusted NPV. Cashflows, paybacks, LCOE, emissions,
+dispatch and aging stay unchanged. See [Terminal-health
+results](interpreting-results.md#terminal-health-credit).
+
+## No-system reference tariff
+
+The savings of a system are measured against the household without it. By
+default that household pays the system's own prices: the `[tariff]`, or the
+flat `costs` prices, and the same fixed charge. A `[reference_tariff]` prices
+the household without the system on its own tariff instead, for example the
+offer it has today while the system runs on a time-of-use offer:
+
+```toml
+[reference_tariff]
+schedule = "pt_mainland_2026_daily_bi"   # or custom_schedule, or neither for one flat price
+currency = "EUR"
+import_prices = { peak = 0.2310, off_peak = 0.1210 }
+fixed_charge_per_day = 0.30              # required; use 0 for no fixed charge
+# import_price_escalation = 0.03         # optional, default the system's import escalation
+```
+
+- The no-system cost of each year is the whole household load at the
+  reference import prices, plus the reference fixed charge, both escalated at
+  `reference_tariff.import_price_escalation`. Without that key they escalate
+  at the system's import escalation: `import_price_escalation` or, when that
+  is unset, `inflation_rate`. An explicit `0` keeps the reference prices
+  constant.
+- The reference has no export prices: the household without a system exports
+  nothing.
+- `fixed_charge_per_day` is required. Set it to the fixed charge the household
+  pays without the system, or explicitly to `0` when there is no fixed charge.
+- Without `schedule` or `custom_schedule` the reference is one flat price,
+  `import_prices = { all = <price> }`, and takes no `boundary_policy` or
+  `study_date`. With a schedule, the prices follow the `[tariff]` rules:
+  every period priced, or `all`, a schedule in the location's timezone, and a
+  resolution fine enough for the schedule's boundaries. A custom schedule
+  with calendar-month `seasons` also accepts prices per season and period,
+  such as `import_prices = { q1 = { peak = 0.30, off_peak = 0.12 }, ... }`.
+  Price every season and exactly the periods its rules use, or give `all`
+  within that season. Bundled, DST-season and flat references take prices
+  per period only. See [month seasons](../api/tariffs.md#month-seasons).
+- The reference can be set with or without a `[tariff]`. Its `currency` must
+  be the result's currency: the `[tariff]` currency, or EUR with flat prices.
+  BREOS does not convert.
+- The reference never changes the dispatch, and the costs with the system do
+  not change. Every project year replays the start-year calendar, as the
+  system tariff does. A `[period]` run bills the reference fixed charge on the
+  window's civil days.
+- `App.revalue` re-prices a reference that is added, changed or removed. It
+  does not simulate again for the reference, also under `daily_persistence`.
+- Monte Carlo prices the sampled load of each trajectory at the reference, so
+  the costs with and without the system stay paired. Projected optimization
+  accepts the same table in its nested config, and its NPV objective is the
+  saving against the reference.
+
+Results gain `provenance.reference_tariff`, with the schedule, prices, fixed
+charge, calendar policy and the escalation used, and the month partition
+`seasons` when configured. The no-system cost
+components are reported with or without a reference; see [Year-1 money
+keys](interpreting-results.md#year-1-money-keys). BREOS does not choose the
+cheapest offer the household could have had: to compare candidates, run each
+one as the reference.
+
 ## Smart charging
 
 A `[smart_charging]` table sets when the battery may discharge and when the
@@ -485,12 +631,13 @@ unchanged results:
 
 ```toml
 [smart_charging]
-mode = "fixed_target"               # or "disabled", or the experimental "daily_persistence"
+mode = "fixed_target"               # or "disabled", "discharge_only", or the experimental "daily_persistence"
 target_usable_fraction = 0.50       # 0 is battery_min_soc, 1 is battery_max_soc
 charge_periods = ["off_peak"]
 discharge_periods = ["mid_peak", "peak"]
 grid_charge_efficiency = 0.95       # required: AC-to-DC conversion of the grid-charging path
 grid_import_limit_w = 5000          # optional: grid charging keeps total import below this
+overlap_policy = "reject"           # default; "hold_target" permits overlap in fixed_target
 ```
 
 - In a charge period the grid may charge the battery toward
@@ -501,7 +648,13 @@ grid_import_limit_w = 5000          # optional: grid charging keeps total import
   `battery_min_soc` and `battery_max_soc`, not of nominal capacity. The window
   shrinks with temperature and state of health, and the target moves with it.
 - The period names must exist in the tariff's schedule, and the two lists
-  must not share a period: every step either charges or discharges.
+  must not share a period under the default `overlap_policy = "reject"`.
+  With `overlap_policy = "hold_target"` (`fixed_target` only), the grid target
+  is also the discharge floor on steps in both lists: above it the battery
+  may discharge down to it; below it the grid may charge up to it. It never
+  charges and discharges in the same step. Both bounds move together with
+  temperature and health. PV may still charge above the target. Steps in
+  only one list keep their usual behavior.
 - `grid_charge_efficiency` has no default, because the inverter model has no
   AC-to-DC path to derive one from. Stored energy then also passes through
   the battery's own charge efficiency.
@@ -524,11 +677,44 @@ battery delivery counts as self-consumption. Avoided emissions use net
 exchange: grid energy shifted through the battery is imported, so it earns
 nothing, and its round-trip loss counts against the system.
 `provenance.smart_charging` records the parameters, the hash of the resolved
-instructions and the tariff's schedule hash.
+instructions, `overlap_policy` and the tariff's schedule hash.
+
+To allow discharge in every period while retaining an off-peak target, use
+`charge_periods = ["off_peak"]`, list every tariff period in
+`discharge_periods`, and set `overlap_policy = "hold_target"`.
+`disabled` and `discharge_only` refuse `hold_target` because they have no grid
+target. `daily_persistence` also refuses it: its planner replaces charge
+targets while keeping reserves fixed, so planning and production replay
+cannot hold the same target.
 
 Monte Carlo applies the same instructions to every trajectory, and projected
 optimization to every candidate design with a battery; both record the same
 provenance. See `configs/examples/smart-charging-portugal.toml`.
+
+### Discharge only
+
+`mode = "discharge_only"` restricts when the battery discharges, without
+any grid charging:
+
+```toml
+[smart_charging]
+mode = "discharge_only"
+discharge_periods = ["peak"]        # required: the battery holds its charge in every other period
+```
+
+- In a discharge period the battery may discharge to the load. In every
+  other period it holds its charge. PV may charge the battery in every
+  period, and the grid never does.
+- The mode takes `discharge_periods` only. `charge_periods`,
+  `target_usable_fraction`, `grid_charge_efficiency`, `grid_import_limit_w`
+  and the planner settings are errors, since no grid charging takes place.
+- A peak-only policy lists the peak period; a selected-period policy lists
+  several. Discharge in every period is greedy self-consumption: use
+  `mode = "disabled"`, or list every period, which gives the same results.
+- It runs on the same dispatch instructions as `fixed_target`, in App, Monte
+  Carlo and projected optimization, on both execution backends.
+  `provenance.smart_charging` records the mode, the discharge periods and
+  the instruction and schedule hashes, with the grid-charge settings unset.
 
 ### Daily persistence (experimental)
 

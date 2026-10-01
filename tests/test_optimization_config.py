@@ -44,7 +44,11 @@ def test_every_default_is_filled_in_by_name():
     }
     assert (DEFAULT_BUDGET, DEFAULT_MAX_AREA_M2, DEFAULT_MIN_TILT_DEG) == (10000.0, 20.0, 10.0)
     # The settings the App shares default as the App's do.
-    assert resolved["simulation"] == {"resolution": "h", "years_projection": DEFAULTS["projection_years"]}
+    assert resolved["simulation"] == {
+        "resolution": "h",
+        "years_projection": DEFAULTS["projection_years"],
+        "irradiance_resampling": "auto",
+    }
     assert resolved["pv"] == {"module": default_module_key(), "degradation_rate": DEFAULTS["pv_degradation_rate"]}
     assert resolved["inverter_efficiency"] == DEFAULTS["inverter_efficiency"]
     assert resolved["battery"]["temperature"] == DEFAULTS["battery_temperature"]
@@ -124,7 +128,6 @@ def test_removed_battery_keys_are_unknown(key, value):
 def test_keys_nothing_read_are_refused():
     for config in (
         {**MINIMAL, "simulation": {"weather_file": "weather/porto.csv"}},
-        {**MINIMAL, "simulation": {"irradiance_resampling": "clear_sky_energy_conserving"}},
         {**MINIMAL, "name": "study"},
     ):
         with pytest.raises(ValueError, match="Unknown"):
@@ -181,6 +184,7 @@ def test_an_inline_module_states_its_rating():
         ("constraints", {"enforce_zeb": "yes"}, "must be true or false"),
         ("optimization", {"early_stop": {"ftol": 0}}, "optimization.early_stop.ftol"),
         ("simulation", {"resolution": "30min"}, "must be one of: h, 15min"),
+        ("simulation", {"irradiance_resampling": "invalid"}, "must be one of: auto, clear_sky"),
         ("battery", {"indoor_model": {"setpoint": 22}}, "battery.indoor_model.setpoint"),
     ],
 )
@@ -199,7 +203,7 @@ def test_run_settings_come_from_the_argument_or_the_config():
 
 def test_whole_numbers_may_be_written_as_floats():
     resolved = resolve_optimization_config({**MINIMAL, "simulation": {"years_projection": 20.0, "resolution": "H"}})
-    assert resolved["simulation"] == {"years_projection": 20, "resolution": "h"}
+    assert resolved["simulation"] == {"years_projection": 20, "resolution": "h", "irradiance_resampling": "auto"}
     with pytest.raises(ValueError, match="simulation.years_projection' must be a whole number"):
         resolve_optimization_config({**MINIMAL, "simulation": {"years_projection": 20.5}})
 

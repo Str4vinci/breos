@@ -193,8 +193,10 @@ of App config values. The top-level keys define the base scenario; every key
 under `[sweep]` replaces the matching key for each run. Quote dotted keys to
 vary one value inside a table: `[costs]`, `[battery_indoor_model]`,
 `[tariff]` or `[smart_charging]`. A tariff's price maps take one more level,
-the period name, as in `"tariff.import_prices.off_peak"`. Any other key
-inside a table, or a level past the period name, is refused. The command runs
+the period name, as in `"tariff.import_prices.off_peak"`, or two on a
+schedule with month seasons, the season and the period, as in
+`"tariff.import_prices.q1.high"`. Any other key inside a table, or a level
+past those, is refused. The command runs
 the Cartesian product and writes one CSV row per combination:
 
 ```toml
@@ -267,7 +269,9 @@ answer different questions:
   system's saving against no system *under the same offer*. Each offer has
   its own no-system bill, so a higher `npv_savings` does not mean a cheaper
   offer. An offer with an expensive peak can make PV save more while still
-  costing more overall.
+  costing more overall. To measure every offer against one no-system bill,
+  such as the household's current offer, set a
+  [`[reference_tariff]`](configuration.md#no-system-reference-tariff).
 
 ### From the CLI
 

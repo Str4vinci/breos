@@ -41,7 +41,6 @@ from breos.app_config import resolve_app_config
 from breos.dispatch_instructions import DispatchInstructions
 from breos.montecarlo import MonteCarloSettings, build_year_cache, run_montecarlo
 from breos.optimization_config import resolve_optimization_config
-from breos.result_schema import RESULT_SCHEMA_VERSION
 from breos.smart_charging import SmartChargingSpec, resolve_instructions, stored_energy_by_origin
 from breos.utils import get_hours_per_step
 from tests.test_controller_seam import (
@@ -818,9 +817,9 @@ def test_provenance_identifies_the_policy_and_its_executed_trace(monkeypatch):
     result = app.result()
     record = result["provenance"]["smart_charging"]
 
-    assert result["result_schema_version"] == RESULT_SCHEMA_VERSION == "2.3"
     assert set(record) == {
         "mode",
+        "overlap_policy",
         "experimental",
         "controller_version",
         "planner_version",
@@ -842,6 +841,7 @@ def test_provenance_identifies_the_policy_and_its_executed_trace(monkeypatch):
     }
     assert {key: record[key] for key in record if not key.endswith(("_hash", "_stored_energy"))} == {
         "mode": "daily_persistence",
+        "overlap_policy": "reject",
         "experimental": True,
         "controller_version": CONTROLLER_VERSION,
         "planner_version": PLANNER_VERSION,
@@ -921,6 +921,7 @@ def test_fixed_target_provenance_is_unchanged_by_the_new_mode():
     record = app.result()["provenance"]["smart_charging"]
     assert set(record) == {
         "mode",
+        "overlap_policy",
         "target_usable_fraction",
         "charge_periods",
         "discharge_periods",

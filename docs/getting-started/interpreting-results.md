@@ -4,7 +4,40 @@
 pandas or numpy types. The same dict is written by the CLI's `--output`
 flag.
 
-## Currency and schema version
+## Terminal-health credit
+
+The optional [`[terminal_value]`](configuration.md#terminal-health-credit)
+accounting sensitivity adds a final-pack health credit beside the unchanged
+`npv_savings`. It is not resale value: capacity health omits
+resistance-related limits and no PV, inverter or stored energy is credited.
+The fraction above the simulation's replacement threshold is clipped to
+0–1; only the pack present after final aging and any final replacement is
+credited. All replacement outlays remain, including a final-year swap.
+
+`terminal_health_credit` is nominal year-T money, priced with the resolved
+replacement-pack price at t = 0, inflated and reduced by replacement
+learning to exactly t = T. `terminal_health_credit_npv` discounts it from T.
+`npv_savings_terminal_adjusted` adds that present value to the unrounded
+unadjusted NPV; each money field is then rounded to two decimals, so the
+reported scalars can differ by a cent from adding rounded values.
+`financial`, paybacks and LCOE exclude the credit.
+
+Disabled App runs and partial `[period]` runs report all three fields as
+null and carry no `provenance.terminal_value`. Enabled PV-only runs report
+zero credits and adjusted NPV equal to unadjusted NPV. Enabled lifetime
+runs record basis, formula version, unrounded final SOH fraction, physical
+threshold, credited fraction, full replacement price at t = 0 and T,
+inflation, learning, discount rate, horizon, booking time and replacement
+policy in `provenance.terminal_value`.
+
+Monte Carlo's `runs` frame has the three fields per trajectory; its
+`summary` reports their existing mean, spread, percentile, range and count
+statistics. Its `provenance.terminal_value.trajectories` records the inputs
+for each numbered run. Disabled values are NaN with no statistics or
+terminal-value provenance. Projected optimization ignores the table and
+ranks on unadjusted NPV.
+
+## Currency and result format
 
 Money keys carry no currency. Every money value in a result is in the run's
 currency, which `provenance.currency` records: the tariff's `currency` when
@@ -12,55 +45,95 @@ the run has a `[tariff]` table, otherwise `EUR`, the currency of the bundled
 cost catalogue. BREOS does not convert currencies. Summary and plot labels
 read the recorded currency.
 
-`result_schema_version` versions the result's names, independently of the
-ledger schema. Version `"1.0"` dropped the `_eur` suffixes and renamed the
-`_exact` payback fields to `_interpolated`, with no aliases (the
+`result_schema_version` is the result's format number, independent of the
+ledger schema. The format changes, to the next integer, only when a field is
+renamed or removed, a change that breaks existing readers. Added fields do
+not change it: the
 [changelog](https://github.com/Str4vinci/breos/blob/develop/CHANGELOG.md)
-lists every rename). Version `"1.1"` adds the
-[year-1 money keys](#year-1-money-keys), `"1.2"` adds `provenance.economics`
-([Economic conventions](#economic-conventions)), `"1.3"` adds
-`Replaced_Capacity_kWh` to the year rows of Monte Carlo trajectories and
-optimizer tables, `"1.4"` adds `provenance.revaluation` to the results of
-[`App.revalue`](recipes.md#revalue-a-run-at-other-prices) and the export CO2
-columns (`CO2_Avoided_Export_kg`, `CO2_Avoided_Export_Cumulative_kg`) to the
-cost projection and Monte Carlo trajectories, `"1.5"` adds `constraints` and
-`run_settings` to the optimizer's provenance and the `Projected_CO2_*`
-columns to the Pareto rows of a search with `[emissions]`, `"1.6"` adds
-`inverter_ac_rating_kw` to the `resolved_config` of App and Monte Carlo
-results, `"1.7"` adds the [`period` keys](#period-runs) of a run over part
-of a year, and `"1.8"` adds `calendar_year`, the
-`target_year` the load was built for, to Monte Carlo's
-`provenance.load_profile`.
-Version "2.0" removes configuration and metadata fields without an
-operational effect, removes duplicate CO2 and legacy PV keys, and renames
-monthly/yearly grid fields and optimizer payback columns. The migration table
-below lists every change.
-Version "2.1" adds `tariff.custom_schedule` to the `resolved_config` of App
-and Monte Carlo results that set an inline
-[custom schedule](../api/tariffs.md#custom-app-schedules).
-Version "2.2" adds the record of the experimental
-[daily-persistence smart charging](configuration.md#daily-persistence-experimental)
-to `provenance.smart_charging` of App results that configure it:
-`experimental`, `controller_version`, `planner_version`,
-`forecast_horizon_days`, `target_levels`, `soc_states`, `forecast_policy`,
-`warm_start_policy`, `planner_terminal_policy`, and the
-`initial_stored_energy` and `final_stored_energy` by origin. Other results
-are unchanged.
-Version "2.3" adds `battery_allow_terminal_replacement` to the
-`resolved_config` of App and Monte Carlo results, and
-`battery_replacement_treatment`, with its `allow_terminal_replacement`
-policy and a `terminal_period` description, to the provenance of a projected
-design and of an optimizer search. See
-[battery replacement at the end of the horizon](configuration.md#battery-replacement-at-the-end-of-the-horizon).
-Default results are otherwise unchanged.
-A renamed or removed key bumps the
-major version, an added key the minor. A result without the key predates 1.0.
+of each release lists them, and `breos_version` in App, Monte Carlo and optimizer
+provenance identifies the release that wrote a result. BREOS 0.7.0 writes format `"1"`, the first
+released format. Results from earlier BREOS versions carry no format number;
+the [migration table](#migrating-from-breos-062) maps their names.
+
+## Provenance records
+
+Besides the [top-level keys](#top-level-keys), results record the following,
+by feature:
+
+- **Economics.** `provenance.economics` holds the rates a projection used
+  ([Economic conventions](#economic-conventions)) in App, Monte Carlo and
+  optimizer provenance. The year rows of Monte Carlo trajectories and
+  optimizer tables carry `Replaced_Capacity_kWh` and the year-1-price money
+  columns. The cost projection and Monte Carlo trajectories carry the export
+  CO2 columns, `CO2_Avoided_Export_kg` and `CO2_Avoided_Export_Cumulative_kg`.
+- **Revaluation.** Results of
+  [`App.revalue`](recipes.md#revalue-a-run-at-other-prices) carry
+  `provenance.revaluation`.
+- **Optimizer.** The optimizer's provenance carries `constraints` and
+  `run_settings`; the Pareto rows of a search with `[emissions]` carry the
+  `Projected_CO2_*` columns.
+- **Inverter.** `inverter_ac_rating_kw` is in the `resolved_config` of App
+  and Monte Carlo results.
+- **Period runs.** A run over part of a year carries the
+  [`period` keys](#period-runs).
+- **Load year.** Monte Carlo's `provenance.load_profile` records
+  `calendar_year`, the `target_year` the load was built for.
+- **Custom schedules.** App and Monte Carlo results that set an inline
+  [custom schedule](../api/tariffs.md#custom-app-schedules) carry
+  `tariff.custom_schedule` in `resolved_config`. A schedule with calendar-month
+  [seasons](../api/tariffs.md#month-seasons) records `seasons` in
+  `resolved_config.tariff.custom_schedule` and, as the month partition, in
+  `provenance.tariff`. With month seasons, `import_prices` and
+  `export_prices` in the resolved config and in `provenance.tariff` may map
+  each season to its period prices instead of each period to a price.
+- **Smart charging.** `provenance.smart_charging` records `overlap_policy`
+  in App, Monte Carlo and optimizer results, including the default `reject`;
+  `hold_target` permits overlapping periods in `fixed_target` only and keeps
+  the grid target as the discharge floor. A
+  [`discharge_only`](configuration.md#discharge-only) run records its
+  discharge periods, an empty `charge_periods`, and `None` for
+  `target_usable_fraction`, `grid_charge_efficiency` and
+  `grid_import_limit_w`; the App's top-level `smart_charging` block reports
+  it as it reports the other modes. An App run with the experimental
+  [daily-persistence smart charging](configuration.md#daily-persistence-experimental)
+  records `experimental`, `controller_version`, `planner_version`,
+  `forecast_horizon_days`, `target_levels`, `soc_states`, `forecast_policy`,
+  `warm_start_policy`, `planner_terminal_policy`, and the
+  `initial_stored_energy` and `final_stored_energy` by origin.
+- **Battery replacement at the end of the horizon.**
+  `battery_allow_terminal_replacement` is in the `resolved_config` of App and
+  Monte Carlo results, and the provenance of a projected design and of an
+  optimizer search carries `battery_replacement_treatment`, with its
+  `allow_terminal_replacement` policy and a `terminal_period` description.
+  See
+  [battery replacement at the end of the horizon](configuration.md#battery-replacement-at-the-end-of-the-horizon).
+- **No-system costs.** Results carry `no_system_fixed_charge_year1_prices`
+  (see [Year-1 money keys](#year-1-money-keys)), `no_system_cost_import` and
+  `no_system_cost_fixed_charge` in the `financial` rows, the
+  `Cost_No_Sys_Import` and `Cost_No_Sys_Fixed_Charge` cost-projection columns,
+  the `Baseline_Fixed_Charge` year-row column of Monte Carlo and optimizer
+  tables, and `reference_tariff` in the `resolved_config` of App and Monte
+  Carlo results. Results with a
+  [no-system reference tariff](configuration.md#no-system-reference-tariff)
+  also carry `provenance.reference_tariff`.
+- **Terminal-health credit.** The three terminal-health fields,
+  `terminal_value` in the resolved config and the optional
+  `provenance.terminal_value` are described [above](#terminal-health-credit).
+- **Irradiance resampling.** App `provenance.weather` and Monte Carlo
+  `settings` and `runtime_weather.metadata` record `irradiance_resampling`
+  (requested) and `irradiance_resampling_resolved`, with per-component
+  fallback and zero-support counts and the observational
+  `irradiance_closure` residuals. `irradiance_resampling` is in
+  `resolved_config` and in the optimizer's `simulation` config, and
+  optimizer provenance carries `simulation`, `weather` and, for a real
+  weather sequence, `weather_by_year`. See
+  [hourly weather at 15-minute resolution](configuration.md#hourly-weather-at-15-minute-resolution).
 
 ## Top-level keys
 
 | Key | Description |
 |---|---|
-| `result_schema_version` | Version of the result's names (see above) |
+| `result_schema_version` | Format number of the result's names (see [Currency and result format](#currency-and-result-format)) |
 | `n_modules` | Number of PV modules used in the simulation |
 | `pv_kwp` | System DC nameplate capacity (kWp) |
 | `battery_kwh` | Battery capacity (kWh) |
@@ -78,6 +151,9 @@ major version, an added key the minor. A result without the key predates 1.0.
 | `total_investment` | Total CAPEX |
 | `payback_year` | Sustained discounted payback within the simulated period, as a whole year: the year from which cumulative NPV savings are zero or above and stay so to the horizon (`None` if not reached) |
 | `npv_savings` | Cumulative NPV savings over the projection horizon |
+| `terminal_health_credit` | Optional nominal credit at the end of year T; null when disabled or on a partial period |
+| `terminal_health_credit_npv` | Present value of that credit |
+| `npv_savings_terminal_adjusted` | Unadjusted NPV plus credit present value, before rounding |
 | `lcoe_per_kwh` | Levelized cost of electricity from system CAPEX, O&M, simulated replacements, and discounted PV production |
 | `monthly` | Year 1 monthly energy balance rows |
 | `financial` | Yearly financial projection rows (year 0 = investment) |
@@ -91,28 +167,34 @@ These keys give the first project year's money components at year-1 prices:
 the prices of the first project year, before escalation and discounting. They
 are in the run's currency and rounded to 0.01. Without a `[tariff]` they use
 the flat `costs` prices; with one, each step's energy is priced at that
-step's tariff price. Flat and tariff runs report the same four keys.
+step's tariff price. Flat and tariff runs report the same five keys. With a
+[`[reference_tariff]`](configuration.md#no-system-reference-tariff), the two
+no-system keys use the reference's prices instead.
 
 | Key | Description |
 |---|---|
 | `grid_import_cost_year1_prices` | Cost of the year-1 grid import, `grid_import_kwh` |
 | `grid_export_revenue_year1_prices` | Revenue from the year-1 grid export, `grid_export_kwh` |
 | `fixed_charge_year1_prices` | The fixed charge for the simulated duration of year 1: the daily charge times the simulated hours / 24 |
-| `no_system_import_cost_year1_prices` | Import cost of the household without a system, which buys its whole year-1 load, `consumption_kwh`. It is the import cost only; it does not include the fixed charge |
-| `grid_charge_cost_year1_prices` | Present only with grid-charging smart charging (`smart_charging.mode = "fixed_target"` or `"daily_persistence"`): the part of `grid_import_cost_year1_prices` bought to charge the battery |
+| `grid_charge_cost_year1_prices` | Present only with smart charging (`smart_charging.mode = "fixed_target"`, `"daily_persistence"` or `"discharge_only"`): the part of `grid_import_cost_year1_prices` bought to charge the battery. Always 0 with `discharge_only`, which never charges from the grid |
+| `no_system_import_cost_year1_prices` | Import cost of the household without a system, which buys its whole year-1 load, `consumption_kwh`. It is the import cost only; the fixed charge is `no_system_fixed_charge_year1_prices` |
+| `no_system_fixed_charge_year1_prices` | The fixed charge of the household without a system for year 1: `fixed_charge_year1_prices`, or the reference tariff's fixed charge for the same days when a `[reference_tariff]` is set |
 
 `grid_charge_cost_year1_prices` is already included in
 `grid_import_cost_year1_prices`, so do not add the two. It is the same value
 as `smart_charging.yearly[0].grid_charge_cost_year1_prices`.
 
-The same fixed charge applies with or without the system. The projection's
-no-system annual cost is the no-system import cost plus the fixed charge, so
-the year-1 no-system bill is
-`no_system_import_cost_year1_prices + fixed_charge_year1_prices`.
+Without a `[reference_tariff]`, the same fixed charge applies with or
+without the system, so `no_system_fixed_charge_year1_prices` equals
+`fixed_charge_year1_prices`. The projection's no-system annual cost is the
+no-system import cost plus the no-system fixed charge, so the year-1
+no-system bill is
+`no_system_import_cost_year1_prices + no_system_fixed_charge_year1_prices`.
 
 Year 1 is not escalated, so these values match the `cost_import`,
-`revenue_export` and `cost_fixed_charge` of the year-1 `financial` row; the
-later rows escalate. `breos sweep` copies every top-level scalar key into its
+`revenue_export` and `cost_fixed_charge` of the year-1 `financial` row, and
+the two no-system keys match its `no_system_cost_import` and
+`no_system_cost_fixed_charge`; the later rows escalate. `breos sweep` copies every top-level scalar key into its
 CSV, so the sweep CSV carries these columns too.
 
 ## Battery-specific keys
@@ -151,12 +233,15 @@ falls back to the same avoided-grid factor. Curtailed energy, conversion and
 storage losses, initial SOC, and PV energy remaining stored at the reporting
 boundary receive no credit.
 
-## Migrating from result schema 1.8
+## Migrating from BREOS 0.6.2
 
-Schema 2.0 removes the old names without compatibility aliases. Update readers
-using the following mappings:
+BREOS 0.7.0 removes the old names below without compatibility aliases.
+Update readers using the following mappings. The currency-neutral renames
+(the dropped `_eur` suffixes and the `_exact` payback fields, now
+`_interpolated`) are listed in the
+[changelog](https://github.com/Str4vinci/breos/blob/develop/CHANGELOG.md).
 
-| Schema 1.8 field | Schema 2.0 field or action |
+| 0.6.2 field | 0.7.0 field or action |
 |---|---|
 | App config `dc_coupled` and `provenance.resolved_config.dc_coupled` | Remove the config key; it is now unknown. BREOS always uses its supported DC-coupled/hybrid dispatch. |
 | `BatteryModelProfile.operating_defaults`, discovery JSON `operating_defaults`, and serialized `model_profile.operating_defaults` | Remove the read. Profiles did not define any defaults; this field was always empty. |
@@ -169,7 +254,7 @@ using the following mappings:
 | `monthly[].import_kwh`, `yearly[].import_kwh` | Corresponding `grid_import_kwh` row field; values are unchanged |
 | `monthly[].export_kwh`, `yearly[].export_kwh` | Corresponding `grid_export_kwh` row field; values are unchanged |
 | Optimizer `Projected_Breakeven_Year` | `Projected_Payback_Year` |
-| Optimizer `Projected_Breakeven_Year_Interpolated` | `Projected_Payback_Year_Interpolated` |
+| Optimizer `Projected_Breakeven_Year_Exact` | `Projected_Payback_Year_Interpolated` |
 
 The removed legacy PV fields and `usable_ac_system_production_kwh` report
 different quantities. The old value counted PV DC sent into storage before
@@ -179,7 +264,7 @@ load, and exported AC. This is also the retained definition of annual
 `PV_Production_kWh`. The timestep ledger still carries its `PV_Production`
 field, and dispatch values do not change.
 
-Schema 2.0 does not normalize enum spelling in echoed provenance: for example,
+BREOS 0.7.0 does not normalize enum spelling in echoed provenance: for example,
 the configured spelling remains in `provenance.resolved_config`.
 
 ## Multi-array systems
@@ -276,7 +361,13 @@ A list of dicts with one row per year (year 0 is the investment row):
 
 `balance` is the cumulative NPV savings; `cost_with_system` and
 `cost_without_system` are the cumulative discounted costs of operating with
-and without the BREOS-sized system. `payback_year` is the sustained discounted
+and without the BREOS-sized system. From year 1, `no_system_cost_import` and
+`no_system_cost_fixed_charge` give that year's no-system cost by component,
+escalated and not discounted, beside the system's `cost_import`,
+`revenue_export`, `cost_operation`, `cost_fixed_charge` and
+`cost_replacement`. With a
+[no-system reference tariff](configuration.md#no-system-reference-tariff),
+they are at the reference's prices and escalation. `payback_year` is the sustained discounted
 payback within the simulated period: the year from which `balance ≥ 0` holds
 to the end of the horizon. The series starts at year 0, so a system that
 recovers its investment during year 1 reports 1. If a battery replacement

@@ -12,6 +12,7 @@ import pandas as pd
 from breos.app_config import ResolvedAppConfig
 from breos.battery import LEDGER_SCHEMA_VERSION
 from breos.economics import projection_rates_record
+from breos.execution import config_has_battery
 from breos.result_schema import RESULT_SCHEMA_VERSION
 from breos.runners.app import CO2_COLUMNS, SimulationArtifacts
 from breos.smart_charging import PLANNER_MODES
@@ -87,6 +88,10 @@ def financial_to_dicts(cost_proj: pd.DataFrame, total_initial_cost: float) -> li
                 "reference": 0.0,
                 "cost_with_system": round(float(row["Cost_System_Cumulative_NPV"]), 2),
                 "cost_without_system": round(float(row["Cost_No_Sys_Cumulative_NPV"]), 2),
+                # The no-system household's year: its import and its fixed
+                # charge, escalated and not discounted.
+                "no_system_cost_import": round(float(row["Cost_No_Sys_Import"]), 2),
+                "no_system_cost_fixed_charge": round(float(row["Cost_No_Sys_Fixed_Charge"]), 2),
                 # The year's component cashflows, escalated and not discounted
                 # (ADR 0003 E7); a replacement is booked at its swap instant.
                 "cost_import": round(float(row["Cost_Import"]), 2),
@@ -181,13 +186,19 @@ def _provenance(
     # Flat-price runs carry no tariff block, so their results are unchanged.
     if artifacts.tariff is not None:
         provenance["tariff"] = deepcopy(artifacts.tariff)
+    # Only runs with a [reference_tariff] carry it; without one, the
+    # no-system household pays the system's own prices.
+    if artifacts.reference_tariff is not None:
+        provenance["reference_tariff"] = deepcopy(artifacts.reference_tariff)
+    if artifacts.terminal_health is not None:
+        provenance["terminal_value"] = deepcopy(artifacts.terminal_health.provenance)
     # Only [period] runs carry the window, so full-year results are unchanged.
     if artifacts.period is not None:
         provenance["period"] = deepcopy(artifacts.period)
     if artifacts.smart_charging is not None:
         # The result's smart_charging block reports the stored energy. The
         # experimental daily_persistence record also keeps it, unrounded, as
-        # part of what identifies the policy's run (result schema 2.2).
+        # part of what identifies the policy's run.
         planned = artifacts.smart_charging["mode"] in PLANNER_MODES
         provenance["smart_charging"] = {
             key: deepcopy(value)
@@ -286,6 +297,11 @@ def build_result(
         "total_investment": round(float(total_initial), 2),
         "payback_year": int(artifacts.payback_year) if artifacts.payback_year is not None else None,
         "npv_savings": npv_savings,
+        "terminal_health_credit": round(artifacts.terminal_health.nominal, 2) if artifacts.terminal_health else None,
+        "terminal_health_credit_npv": round(artifacts.terminal_health.npv, 2) if artifacts.terminal_health else None,
+        "npv_savings_terminal_adjusted": round(artifacts.terminal_health.adjusted_npv, 2)
+        if artifacts.terminal_health
+        else None,
         "lcoe_per_kwh": round(lcoe, 4) if math.isfinite(lcoe) else None,
         "yearly": yearly_to_dicts(artifacts.yearly_df, artifacts.period),
         "monthly": monthly_to_dicts(
@@ -311,6 +327,7 @@ def build_result(
             "grid_export_revenue_year1_prices": _round2(year1["Export_Revenue"]),
             "fixed_charge_year1_prices": _round2(year1["Fixed_Charge"]),
             "no_system_import_cost_year1_prices": _round2(year1["Baseline_Import_Cost"]),
+            "no_system_fixed_charge_year1_prices": _round2(year1["Baseline_Fixed_Charge"]),
         }
     )
 
@@ -321,7 +338,9 @@ def build_result(
         # The part of grid_import_cost_year1_prices bought to charge the battery.
         result["grid_charge_cost_year1_prices"] = _round2(year1["Grid_Charge_Cost"])
 
-    if cfg["battery_kwh"] > 0:
+    # A battery too small to dispatch runs, and is priced, as PV-only; it has
+    # no state of health or replacements to report.
+    if config_has_battery(cfg):
         soh_digits = 1 if cfg["degradation_engine"] == "blast" else 2
         result["battery_soh_end_pct"] = round(float(artifacts.current_soh), soh_digits)
         result["battery_replacements"] = artifacts.total_replacements
@@ -379,6 +398,9 @@ PERIOD_ECONOMICS_REASON = (
 PERIOD_SKIPPED_FIELDS = (
     "payback_year",
     "npv_savings",
+    "terminal_health_credit",
+    "terminal_health_credit_npv",
+    "npv_savings_terminal_adjusted",
     "lcoe_per_kwh",
     "financial",
     "battery_replacement_cost_t0_prices",

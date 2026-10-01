@@ -1,8 +1,10 @@
 # 0002 — Tariffs are resolved values; smart charging is an instruction layer
 
-- **Status:** Accepted for 0.7.x implementation; amendments A1–A12 Accepted
+- **Status:** Accepted; amendments A1–A14 Accepted. Implemented in 0.7.0;
+  see [Implementation status](#implementation-status-070).
 - **Date:** 2026-08-20; amendments 2026-09-26; A6 accepted 2026-09-26;
-  A1–A5 and A7–A10 accepted 2026-09-27; A11 and A12 accepted 2026-09-30
+  A1–A5 and A7–A10 accepted 2026-09-27; A11 and A12 accepted 2026-09-30;
+  A13 and A14 accepted 2026-10-01
 
 ## Context
 
@@ -21,27 +23,13 @@ for that step; they may not reproduce it.
 
 ## Source freeze
 
-The legacy source is frozen at commit
-`183bcc124d2176c496d189cee0341bac617b6d54`. The reviewed files and Git blob
-identifiers are:
+The review used a frozen, committed revision of the historical research
+implementation. That code is design evidence, not an implementation source.
+Ports are derived from the frozen revision or reimplemented independently
+against primary sources. Uncommitted research files and notebook results are
+evidence only.
 
-| Legacy path | Blob |
-|---|---|
-| `dev/pvbat/tou.py` | `ac77e9af52028f3b8e0e3670a0ef67f439ccfb23` |
-| `dev/pvbat/payback.py` | `318fd40ad05308b0f1add6fbc740812a4e3865a7` |
-| `dev/pvbat/acc.py` | `4ada58a38ef32470207eb1ac56c1a59b259661ce` |
-| `dev/pvbat/numba_kernels.py` | `ec7e410fa9fd389ece8a57a6217c2d55dea769e8` |
-| `dev/tools/compute_a2_daily_sc_oracle.py` | `c9efa5398cd4ff53d51ebe7366f2de2d94685078` |
-| `dev/tools/compute_a2_perfect_foresight_bound.py` | `d1bcf9a24329e55b9e9268ea0d6b4f42abe4398d` |
-| `dev/docs/a2_daily_sc_oracle_handover.md` | `8383a8b40947c77cbd197ee75cf90d7ea3f27868` |
-| `dev/docs/adr/0003-real-economics-basis.md` | `8da169bb6dc68c9dadffae5370ee032e3325dc13` |
-
-The historical research worktree was dirty during review. Uncommitted files
-and notebook results are evidence, not implementation sources. Ports must be
-derived from the frozen blobs above or independently reimplemented against
-primary sources.
-
-The frozen TOU blob's 2027 Portuguese citation needs the directive's date:
+The frozen TOU source's 2027 Portuguese citation needs the directive's date:
 [Diretiva n.º 3/2026, de 19 de agosto](https://diariodarepublica.pt/dr/detalhe/diretiva/3-2026-1159784501)
 approves the electricity periods. A separate
 [Diretiva n.º 3/2026, de 26 de junho](https://diariodarepublica.pt/dr/detalhe/diretiva/3-2026-1138879591)
@@ -128,7 +116,8 @@ pretending the schedule changed.
 Each project-year simulation is valued inside the existing App year loop.
 *(Replaced by A5, accepted 2026-09-27.)* Annual import cost and export revenue are sums of timestep energy multiplied by
 the resolved price arrays; the no-system baseline uses the same arrays and
-calendar. Annual energy totals remain alongside monetary components.
+calendar. *(Amended by A13, accepted 2026-10-01: a `[reference_tariff]`
+prices the baseline instead.)* Annual energy totals remain alongside monetary components.
 
 New monetary names are currency-neutral. Existing `*_eur` results remain
 compatibility aliases only while the resolved currency is EUR. *(Replaced by
@@ -137,7 +126,9 @@ are renamed in 0.7.0 with no aliases.)* Mixed-currency
 inputs fail before simulation. Initial CAPEX, imports, exports, fixed charges,
 O&M, and replacements remain distinct annual cashflow components. Simple and
 sustained discounted payback are separate outputs; NPV remains the financial
-ranking metric.
+ranking metric. *(Not implemented as written: 0.7.0 reports the sustained
+discounted payback, as a whole year and interpolated, and no simple
+payback.)*
 
 ### Smart-charging configuration
 
@@ -158,7 +149,9 @@ grid_import_limit_w = 5000
 the configured minimum SOC and one maps to the configured maximum SOC. This
 avoids treating unusable nominal capacity as an available target. Charge and
 discharge period names must exist in the resolved tariff. Fixed-target mode
-requires a tariff and a positive-capacity battery.
+requires a tariff and a positive-capacity battery. *(0.7.0 also has
+`discharge_only` and the experimental `daily_persistence` (A12); see
+[Implementation status](#implementation-status-070).)*
 
 `grid_import_limit_w` caps total site import, including simultaneous load. Grid
 charging is also bounded by battery charge power and the hybrid inverter's AC
@@ -199,12 +192,18 @@ shares, and degradation state flow from one project year into the next and the
 initial/final states are reported. Validation or optimisation objectives must
 declare a terminal convention. Smart-charging oracle comparisons default to
 `cyclic_soc`; free terminal depletion is never an unreported benefit.
+*(Implemented differently in 0.7.0: each oracle records its own terminal
+rule. The daily-target program buys back the energy the year ends without,
+at the cheapest charge-step price. The LP bound leaves terminal energy free,
+because a cyclic end state is not a bound on one year's bill. See
+[validation tooling](../architecture/tariffs-and-smart-charging.md#validation-tooling).)*
 
 Adding grid-origin flows and component cashflows advances the ledger schema to
 2.0. The default greedy path remains numerically compatible, but consumers can
 use the schema version to detect the additive origin and valuation fields.
 *(Amended by A9, accepted 2026-09-27: schema 2.0 also drops four duplicate
-columns.)*
+columns. Ledger schema 3.0 then took money out of the ledger, under
+[ADR 0003](0003-economic-basis.md) E4.)*
 
 ## Consequences
 
@@ -220,8 +219,9 @@ columns.)*
 
 ## Implementation gates
 
-Implementation follows the delivery sequence in
-`design/architecture/0.7x-tariffs-and-smart-charging-plan.md`. In particular:
+Implementation followed a delivery plan that was completed in 0.7.0 and then
+removed; [Tariffs and smart charging](../architecture/tariffs-and-smart-charging.md)
+describes the result. The gates were:
 
 1. tariff resolution and valuation land before dispatch changes;
 2. no-op instruction parity covers native and BLAST degradation;
@@ -230,13 +230,42 @@ Implementation follows the delivery sequence in
 4. persistence controllers and perfect-information oracles remain experimental
    or tooling-only and replay every schedule through production physics.
 
+All four gates were met in 0.7.0.
+
+## Implementation status (0.7.0)
+
+The decision and amendments A1–A14 are implemented, with these exceptions
+and additions:
+
+- **A1, monthly rows.** Monthly rows group by civil month in the configured
+  zone only for a `[period]` run. A full-year run groups them on the result
+  frame's own clock.
+- **Payback.** No simple payback is reported (see
+  [Valuation and cashflows](#valuation-and-cashflows)).
+- **Oracle terminal rules.** They differ from `cyclic_soc` (see
+  [Boundary and terminal conventions](#boundary-and-terminal-conventions)).
+- **A9, grid-charge cost.** Ledger schema 3.0 (ADR 0003 E4) took money out of
+  the ledger. The grid-charge cost is a year-row and result value at year-1
+  prices (`grid_charge_cost_year1_prices`), not a ledger column.
+- **Added without an amendment:** `smart_charging.mode = "discharge_only"`
+  (#341). It discharges only in `discharge_periods`, never grid-charges, and
+  refuses every grid-charging key. It resolves to the same instruction
+  arrays. Because it never grid-charges, A8's disjoint-period rule does not
+  come into play, and it refuses `hold_target` (A14). App, Monte Carlo and
+  the projected optimizer accept it.
+- **Added without an amendment:** `[tariff.custom_schedule]` defines a
+  schedule inline (#327). Since #340 a custom schedule can have
+  calendar-month seasons, so a quarter is a season of three months, and
+  prices can then be given per season and period. Every project year still
+  replays the start-year calendar (A2). The bundled schedules are unchanged.
+
 ## Amendments for 0.7 readiness
 
 The 0.7 readiness audit (#187) found details the decision above leaves open
 and statements the code has since outgrown. A6 was **Accepted** on 2026-09-26,
-A11 and A12 on 2026-09-30, and every other amendment below on 2026-09-27. Each
-one replaces the text it names, and that text is marked in place above; A11
-and A12 add rules and replace none. Accepting A6–A10 accepted the
+A11 and A12 on 2026-09-30, A13 and A14 on 2026-10-01, and every other amendment below on
+2026-09-27. Each one replaces the text it names, and that text is marked in
+place above; A11 and A12 add rules and replace none. Accepting A6–A10 accepted the
 design for the dispatch-seam and ledger work, not its implementation. Grid
 charging, origin accounting, ledger schema 2.0 and net-exchange emissions were
 then implemented for 0.7.0 in #279–#282 (#178). Economic
@@ -274,7 +303,8 @@ civil time.
 Follow-up test (with #184): pin the result index timezone for each weather
 source (PVGIS fetch, preset-named local file, naive CSV, timezone-aware CSV,
 injected weather and Monte Carlo), so a change in a source's offset fails a
-test before it moves tariff periods.
+test before it moves tariff periods. *(Done in
+`tests/test_result_index_timezone.py`.)*
 
 ### A2. Project years replay the start-year calendar (#180) — Accepted 2026-09-27
 
@@ -322,7 +352,8 @@ three loops: `run_app_simulation`, Monte Carlo's `_simulate_trajectory`, and
 import cost, export revenue and fixed charge are computed once, in the shared
 projection loop #179 introduces. Until an entry point uses that loop, it
 rejects a `tariff` or `smart_charging` table rather than valuing at flat
-prices.
+prices. *(In 0.7.0 all three entry points use the shared loop in
+`breos/projection.py`.)*
 
 `objective_basis = "steady_state"` was to reject a tariff or smart charging
 until #179 retired `calculate_financials`, which valued one year at scalar
@@ -389,6 +420,8 @@ operation. Only PV-origin discharge counts as self-consumption, as today.
 `charge_periods` and `discharge_periods` must be disjoint, so every step
 either charges or discharges. That keeps exact the single origin fraction the
 step takes before dispatch; the step asserts it.
+*(Amended by A14, accepted 2026-10-01: opt-in overlap retains the target as
+the discharge floor; one direction per step remains required.)*
 
 ### A9. Ledger schema 2.0 reconciles origins from output (#178) — Accepted 2026-09-27
 
@@ -469,24 +502,75 @@ function; it is biased when recharge prices beyond the window differ from
 those inside it. Monte Carlo and projected optimization, which share one
 set of static instructions across trajectories or candidates, refuse the
 mode. Price-aware dispatch forces simulation, so `App.revalue` re-simulates
-when the per-step prices change. Result schema 2.2 records the policy in
+when the per-step prices change. Results record the policy in
 `provenance.smart_charging`, with a hash of the instructions every project
 year executed, and no forecast or per-day target.
 
-### Implementation notes for the dispatch-seam PR
+### A13. The no-system baseline can have its own reference tariff (#339) — Accepted 2026-10-01
 
-These are not decisions. They record where the step resisted A6–A9 before
-the seam work that followed #177. All four were resolved in #279–#281.
+Amends "the no-system baseline uses the same arrays and calendar". An
+optional top-level `[reference_tariff]` prices the household without the
+system, independently of the system's `[tariff]` or flat costs:
 
-- `_dispatch_dc_step`'s `charge()` assigns its ledger entries and runs at
-  most once per step. PV and grid charge must accumulate into one charge
-  input, which A6 also needs for self-heating: the thermal model reads only
-  that input.
-- Seam points: discharge availability plus a `discharge_allowed[i]` gate, and
-  grid charge as a sub-step after PV allocation in both branches of the step.
-- Ledger construction is spread across the step's keys, `_LEDGER_COLUMNS`,
-  `_STATE_ROWS`, the compiled kernel's row constants, replacement row
-  rewrites, column renames, the PV-only summary buffers and the three year
-  loops. Consolidate it before adding schema 2.0 columns.
-- `_ResultBuffers` and `_PvOnlySummaryBuffers` create columns with `setattr`
-  in a loop, so a misspelled new column is not caught. Use explicit fields.
+- **Baseline.** Each year's no-system cost is the reference import price
+  times the whole household load, summed over the steps, plus the reference
+  fixed charge: `Cost_No_Sys_Annual = (Baseline_Import_Cost +
+  Baseline_Fixed_Charge) × (1 + e)^(n − 1)`. The fixed charge is billed as
+  the system's is: on the simulated duration, or on a `[period]` window's
+  civil days. `reference_tariff.fixed_charge_per_day` is required; an explicit
+  0 is valid when the household pays no fixed charge. The reference has no
+  export prices.
+- **Escalation.** `e` is `reference_tariff.import_price_escalation`, which
+  escalates both components. Absent, it is the system's resolved import
+  escalation; an explicit 0 is kept.
+- **Absent.** Without a `[reference_tariff]` the baseline is the system's
+  prices and fixed charge, as before, and results are bit-identical.
+- **Scope.** The reference must be in the result's currency, is checked for
+  timezone and resolution as the system tariff is, and is resolved once on
+  the simulated index; every project year replays the start-year calendar
+  (A2). A reference without a schedule is one flat price, `import_prices =
+  { all = x }`. It never drives dispatch and never prices the system's grid
+  flows.
+- **Revaluation.** `App.revalue` re-prices a reference that is added,
+  changed or removed from the retained household load, and never
+  re-simulates for it, also under `daily_persistence`.
+- **Entry points.** Monte Carlo resolves the reference once per study and
+  prices each trajectory's own sampled load, so the paired differences stay
+  consistent. The projected optimizer's NPV objective uses it. Choosing the
+  cheapest reference a household is eligible for is a study decision, not a
+  BREOS feature.
+
+Results report the baseline components with or without a
+reference, and `provenance.reference_tariff` only when one is configured.
+
+### A14. Overlapping periods hold the target (#347) — Accepted 2026-10-01
+
+Amends A8's requirement that `charge_periods` and `discharge_periods` be
+disjoint. `smart_charging.overlap_policy` is `"reject"` by default, preserving
+the existing validation and dispatch bit for bit. `"hold_target"` permits
+shared periods under `mode = "fixed_target"`:
+
+- On a step in both lists, `reserve_fraction = grid_target_fraction`. The
+  target is also the discharge floor: above it the battery may discharge
+  down to it; below it the grid may charge up to it. Non-overlap steps are
+  unchanged. PV may charge above the target on every step.
+- Both fractions use A7's same current usable-energy mapping, including
+  temperature, health and replacement. Binding overlap discharge and grid
+  charging land exactly on the bound, preventing rounding residues from
+  causing tiny purchases or discharges on the next step. The existing
+  disjoint dispatch arithmetic remains unchanged.
+- The instruction invariant is that a step allowing discharge with a finite
+  grid target has `reserve_fraction >= grid_target_fraction`. Production
+  physics still forbids grid charging after discharge or while exporting
+  PV, and asserts that no step both charges and discharges. The single
+  pre-dispatch origin share remains exact for all three origins.
+- `disabled` and `discharge_only` refuse `hold_target`, since they have no
+  grid target. `daily_persistence` refuses it because its planning path
+  replaces targets while retaining fixed reserves; it cannot plan and replay
+  the same held-target instructions. Supporting it later requires the floor
+  to follow each candidate and executed daily target, including warm start.
+- App, Monte Carlo and projected optimization accept `hold_target` for
+  `fixed_target`. Python and Numba execute the same kernel source. Results
+  record `overlap_policy` in `provenance.smart_charging`; the
+  instruction hash already covers the reserve and target arrays. The ledger
+  schema does not change.

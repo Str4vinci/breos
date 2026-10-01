@@ -77,13 +77,13 @@ class DispatchInstructions:
             raise ValueError("'grid_target_fraction' must be finite, or NaN for no grid charge")
         if ((active < 0.0) | (active > 1.0)).any():
             raise ValueError("'grid_target_fraction' must be between 0 and 1, or NaN for no grid charge")
-        # ADR 0002 A8: a step either charges from the grid or may discharge,
-        # which keeps the step's single origin fraction exact.
-        both = np.flatnonzero(discharge & ~idle)
+        # ADR 0002 A14: a discharge floor at or above the grid target keeps
+        # one direction per step and the step's single origin fraction exact.
+        both = np.flatnonzero(discharge & ~idle & (reserve < target))
         if both.size:
             raise ValueError(
                 f"Step {int(both[0])} both allows discharge and has a grid-charge target; "
-                "every step either charges or discharges (ADR 0002 A8)"
+                "reserve_fraction must be >= grid_target_fraction (ADR 0002 A8, A14)"
             )
 
         efficiency = _scalar(self.grid_charge_efficiency, "grid_charge_efficiency")

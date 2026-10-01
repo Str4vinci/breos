@@ -23,6 +23,8 @@ from collections.abc import Mapping
 from copy import deepcopy
 from typing import Any
 
+import pandas as pd
+
 from breos.app_config import APP_CONFIG_FIELDS, normalize_config_keys, resolve_app_config
 from breos.app_inputs import AppRuntimeDependencies
 from breos.app_results import build_result as build_app_result
@@ -33,7 +35,9 @@ from breos.weather import build_battery_temperature_series, fetch_tmy_weather_da
 
 # Nested tables App.revalue replaces whole: the entries of a price list
 # belong together, so a change must not keep a period it leaves out.
-_REPLACED_TABLES = frozenset({("tariff", "import_prices"), ("tariff", "export_prices")})
+_REPLACED_TABLES = frozenset(
+    {("tariff", "import_prices"), ("tariff", "export_prices"), ("reference_tariff", "import_prices")}
+)
 
 
 def _revalued_config(config: dict[str, Any], changes: Mapping[str, Any]) -> dict[str, Any]:
@@ -125,17 +129,21 @@ class App:
         ``changes`` holds configuration keys. A nested table such as
         ``costs`` or ``tariff`` changes only the keys it sets, and a key set
         to ``None`` in it is removed; ``{"tariff": None}`` removes the table.
-        A price list (``tariff.import_prices``, ``tariff.export_prices``)
-        replaces the old one whole. Only the economics keys in
-        :data:`REVALUATION_KEYS` may change: ``costs``, ``cost_preset``,
-        ``tariff``, the discount rate and the escalators.
+        A price list (``tariff.import_prices``, ``tariff.export_prices``,
+        ``reference_tariff.import_prices``) replaces the old one whole. Only
+        the economics keys in :data:`REVALUATION_KEYS` may change: ``costs``,
+        ``cost_preset``, ``tariff``, ``reference_tariff``, the discount rate,
+        the escalators and ``terminal_value``. The terminal-health credit is
+        recomputed from retained final health without simulating again.
 
         When the new prices cannot change the dispatch, the stored simulation
         is re-priced: flat prices, a tariff removed, or a tariff on the same
         schedule whose smart-charging instructions stay the same. Otherwise (a
         tariff added, a different schedule, or new import or export prices
         under the experimental ``daily_persistence`` smart charging, which
-        plans on them) the run is simulated again. The
+        plans on them) the run is simulated again. A ``reference_tariff``
+        added, changed or removed is always re-priced: it prices only the
+        no-system household, which the dispatch never sees. The
         result records which in ``provenance["revaluation"]``, with the keys
         that changed. A flat-price revaluation gives the same floats as a new
         simulation; a re-priced tariff sums energy by period instead of by
@@ -174,6 +182,39 @@ class App:
         if self._result is None:
             raise RuntimeError("Call simulate() before result().")
         return self._result
+
+    def timeseries(self) -> pd.DataFrame:
+        """Return the first simulated year step by step, as a new DataFrame.
+
+        The frame has one row per simulation step: 8,760 for an hourly year
+        (8,784 in a leap year), and four times as many at
+        ``resolution = "15min"``. A ``[period]`` run has the rows of its
+        window only. Later project years are not kept step by step;
+        ``result()["yearly"]`` holds their totals and state of health.
+
+        The index is a ``RangeIndex``. The ``Datetime`` column is
+        timezone-aware and on the clock of the weather, which for a PVGIS TMY
+        is the fixed UTC offset of 1 January. These columns are stable:
+
+        - ``PV_DC``, ``PV_Production``, ``Houseload``, ``Import_From_Grid``,
+          ``PV_AC_To_Load``, ``PV_AC_Export``, ``PV_DC_Curtailed`` and
+          ``Battery_AC_To_Load``: mean power over the step, in W. Multiply
+          by the step length in hours and divide by 1,000 to get kWh.
+        - ``Battery_Energy``, ``Battery_Energy_Beginning`` and
+          ``Battery_Energy_End``: stored energy, in Wh.
+        - ``Battery_SOC_Normalized``: state of charge in the usable window,
+          from 0 to 1. ``Battery_SOH``: state of health, in %.
+
+        The energy-balance ledger schema in the API reference defines the
+        other columns. A later release can add columns. The frame is a copy:
+        a change to it does not change this App or its results.
+
+        Raises:
+            RuntimeError: If :meth:`simulate` has not been called.
+        """
+        if self._artifacts is None:
+            raise RuntimeError("Call simulate() before timeseries().")
+        return self._artifacts.first_year_results_df.copy(deep=True)
 
     @staticmethod
     def _runtime_dependencies() -> AppRuntimeDependencies:

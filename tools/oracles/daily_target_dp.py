@@ -34,7 +34,7 @@ step may pay, so the plan does not drain the battery on the last day
 first year's instructions (A2); the costs compared are the first year's.
 
 Legacy behaviour not ported: the causal persistence-forecast controller
-(that is the ``daily_persistence`` controller of plan step 7), re-planning
+(BREOS has it as the ``daily_persistence`` smart-charging mode), re-planning
 at each project year's opening health, the matched sweep over every fixed
 target (``--compare-fixed``), the terminal-health sensitivity and the
 lifetime NPV sums.

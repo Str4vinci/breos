@@ -48,7 +48,9 @@ def test_15min_app_run_keeps_the_resampling_provenance():
     assert weather["input_resolution"] == "h"
     assert weather["output_resolution"] == "15min"
     assert weather["irradiance_resampling_method"] == "makima"
-    assert weather["preserve_irradiance_energy"] is False
+    assert weather["irradiance_resampling"] == "auto"
+    assert weather["irradiance_resampling_resolved"] == "clear_sky"
+    assert "preserve_irradiance_energy" not in weather
 
 
 @pytest.mark.usefixtures("_patch_weather")

@@ -55,6 +55,7 @@ is a `breos run` option that overrides the config file.
 | `inverter_ac_rating_kw` | `None` | `--inverter-ac-rating-kw` | Absolute inverter AC rating in kW, instead of `inverter_loading_ratio`: it clips production and CAPEX prices it. Not with `inverter_loading_ratio` |
 | `inverter_efficiency` | `0.96` | `--inverter-efficiency` | Nominal inverter efficiency used by the PVWatts part-load curve |
 | `inverter_loading_ratio` | `1.25` | `--inverter-loading-ratio` | DC/AC oversizing ratio; also sets the inverter AC rating that clips production and that CAPEX prices. Not with `inverter_ac_rating_kw` |
+| `irradiance_resampling` | `"auto"` | `--irradiance-resampling` | Hourly-to-15-minute irradiance policy: `"auto"` conserves declared interval means and uses `"clear_sky"` otherwise. `"clear_sky_energy_conserving"` requires interval-mean weather metadata. Each component is conserved independently; no GHI/DNI/DHI closure is enforced. One of `"auto"`, `"clear_sky"`, `"clear_sky_energy_conserving"` |
 | `load_profile` | `"demandlib_h0"` | `--load-profile` | Load profile key; see [Load profiles](configuration.md#load-profiles) and [Packaged options](options.md#load-profiles) |
 | `load_profile_column` | `None` | `--load-profile-column` | For `load_profile = "custom"` only: the CSV column holding the load, if the file has several. Refused for any other profile |
 | `load_profile_file` | `None` | `--load-profile-file` | Load-profile CSV to read instead of the key's filename pattern; required for `load_profile = "custom"`. A relative path is taken inside `rlp_directory` when that is set |
@@ -73,6 +74,7 @@ is a `breos run` option that overrides the config file.
 | `pv_module` | `None` | `--pv-module` | Module key from the built-in catalogue. `None` uses the first available |
 | `pvrow_height` | `None` | `--pvrow-height` | Height of the PV row center above ground; required by `"infinite_sheds"`, in the same unit as `pvrow_pitch` |
 | `pvrow_pitch` | `None` | `--pvrow-pitch` | Distance between adjacent PV rows; required by `"infinite_sheds"`, in the same unit as `pvrow_height` |
+| `reference_tariff` | *unset* | — | What the household would pay without the system: an import price, by period or flat, and a fixed charge, independent of the system's `[tariff]`. Unset, the no-system baseline is priced at the system's own prices; see [`[reference_tariff]`](#reference_tariff) and [No-system reference tariff](configuration.md#no-system-reference-tariff) |
 | `replacement_cost_learning` | `0.0` | `--replacement-cost-learning` | Annual fall in the battery replacement price on top of inflation: a swap at `t` years costs `C0 × (1 + inflation_rate)^t × (1 − learning)^t` |
 | `resolution` | `"h"` | `--resolution` | Simulation time resolution. One of `"h"`, `"15min"` |
 | `rlp_directory` | `None` | `--rlp-directory` | Directory containing licensed external RLP CSVs for non-bundled load profiles |
@@ -84,10 +86,11 @@ is a `breos run` option that overrides the config file.
 | `sweep` | *unset* | — | Parameter grid, read by `breos sweep`; see [Parameter sweep](recipes.md#parameter-sweep) |
 | `tariff` | *unset* | — | Time-of-use import and export prices on a bundled schedule, replacing the flat `costs.electricity_cost`, `costs.electricity_sold_cost` and `costs.daily_power_cost`; see [`[tariff]`](#tariff) and [Time-of-use tariffs](configuration.md#time-of-use-tariffs) |
 | `temperature_model` | `"faiman"` | `--temperature-model` | Cell-temperature model and mounting preset. `"pvsyst-*"` and `"sapm-*"` use documented mounting coefficients; `"noct-sam"` needs sourced module NOCT and efficiency metadata, which no bundled module has yet. The default is Faiman, open rack. One of `"faiman"`, `"pvsyst-freestanding"`, `"pvsyst-semi-integrated"`, `"pvsyst-insulated"`, `"sapm-open-rack-glass-glass"`, `"sapm-close-mount-glass-glass"`, `"sapm-open-rack-glass-polymer"`, `"sapm-insulated-back-glass-polymer"`, `"noct-sam"` |
+| `terminal_value` | *unset (basis = none)* | — | Optional accounting sensitivity for the final battery pack's capacity health; see [`[terminal_value]`](#terminal_value) and [Terminal-health credit](configuration.md#terminal-health-credit) |
 | `tilt` | `None` | `--tilt` | Tilt angle (degrees). `None` estimates it from the latitude |
 | `tracking` | `"fixed"` | — | Tracking mode: `"fixed"`, `"single_axis"`, `"dual_axis"` |
 | `transposition_model` | `"isotropic"` | `--transposition-model`, `--sky-model` | Sky-diffusion model used to project GHI/DHI/DNI onto the plane of array; see [Sky-diffusion model](configuration.md#sky-diffusion-transposition-model). One of `"isotropic"`, `"klucher"`, `"haydavies"`, `"reindl"`, `"king"`, `"perez"`, `"perez-driesse"` |
-| `weather_source` | `None` | `--weather-source` | Source part of the cached `weather/<location>_tmy_<years>_<source>.csv` file to load, e.g. `"pvgis-sarah3"`. Needed only when several TMY files exist for a location preset; see [Offline runs with cached weather](recipes.md#offline-runs-with-cached-weather) |
+| `weather_source` | `None` | `--weather-source` | Source part of the cached `weather/<location>_tmy_<years>_<source>.csv` (or gzip-compressed `.csv.gz`) file to load, e.g. `"pvgis-sarah3"`. Needed only when several TMY files exist for a location preset; see [Offline runs with cached weather](recipes.md#offline-runs-with-cached-weather) |
 
 ## costs
 
@@ -156,27 +159,51 @@ Time-of-use prices, as `[tariff]` in TOML; see [Time-of-use tariffs](configurati
 | Key | Required | Description |
 |---|---|---|
 | `currency` | yes | Currency of the prices: EUR. The cost preset should be in the same currency; BREOS does not convert |
-| `custom_schedule` | exactly one of these | Inline schedule definition with `identifier`, `version`, `timezone`, `cycle`, `periods`, and `rules`; set this or `schedule`, not both. See [Custom App schedules](../api/tariffs.md#custom-app-schedules) |
-| `export_prices` | yes | Export price per kWh by period name, at year-1 prices; `all` prices every period |
-| `import_prices` | yes | Import price per kWh by period name, at year-1 prices; `all` prices every period |
+| `custom_schedule` | exactly one of these | Inline schedule definition with `identifier`, `version`, `timezone`, `cycle`, `periods`, and `rules`, and optional calendar-month `seasons`; set this or `schedule`, not both. See [Custom App schedules](../api/tariffs.md#custom-app-schedules) |
+| `export_prices` | yes | Export price per kWh by period name, at year-1 prices; `all` prices every period. With month seasons, a table of period prices for every season instead |
+| `import_prices` | yes | Import price per kWh by period name, at year-1 prices; `all` prices every period. With month seasons, a table of period prices for every season instead |
 | `schedule` | exactly one of these | Bundled schedule key, which fixes the periods in local civil time; see [Bundled schedules](../api/tariffs.md#bundled-schedules). Set this or `custom_schedule`, not both |
 | `boundary_policy` |  | How a period boundary inside a step is handled. `strict`, the default, refuses it. One of `strict` |
 | `fixed_charge_per_day` |  | Fixed charge per day, at year-1 prices (default 0) |
 | `study_date` |  | A date in the schedule's effective window, needed when the simulated year is outside it |
 
-## smart_charging
+## reference_tariff
 
-Grid charging by tariff period, as `[smart_charging]` in TOML; see [Smart charging](configuration.md#smart-charging). `mode = "fixed_target"` needs `target_usable_fraction`, `charge_periods`, `discharge_periods` and `grid_charge_efficiency`, and refuses the planner keys. The experimental `mode = "daily_persistence"` (App only) needs the same keys but `target_usable_fraction`, which it refuses, and takes the optional planner keys `forecast_horizon_days`, `target_levels` and `soc_states`. `grid_import_limit_w` is optional in both. `mode = "disabled"` takes no other key.
+What the household would pay without the system, as `[reference_tariff]` in TOML; see [No-system reference tariff](configuration.md#no-system-reference-tariff). It prices the whole household load and its own fixed charge for the no-system cost, and nothing else: no export, and no effect on the dispatch. Without a `schedule` or `custom_schedule` it is one flat price, `import_prices = { all = <price> }`.
 
 | Key | Required | Description |
 |---|---|---|
-| `charge_periods` | unless `disabled` | Tariff periods in which the grid may charge the battery |
-| `discharge_periods` | unless `disabled` | Tariff periods in which the battery may discharge to the load; not a charge period |
-| `grid_charge_efficiency` | unless `disabled` | AC-to-DC conversion efficiency of the grid-charging path, before the battery's own charge efficiency. No default |
-| `mode` | yes | `fixed_target` charges from the grid toward a fixed target; `daily_persistence` (experimental, App only) plans each day's target; `disabled` is greedy self-consumption |
+| `currency` | yes | Currency of the prices: EUR. Must be the result's currency: the `[tariff]` currency, or EUR on flat prices |
+| `fixed_charge_per_day` | yes | Fixed charge per day without the system, at year-1 prices; an explicit 0 is valid |
+| `import_prices` | yes | Import price per kWh by period name, at year-1 prices; `all` prices every period. With month seasons, a table of period prices for every season instead. Without a schedule, only `all` |
+| `boundary_policy` |  | How a period boundary inside a step is handled, as in `tariff.boundary_policy`; needs a schedule |
+| `custom_schedule` |  | Inline schedule definition of the reference, in the shape of `tariff.custom_schedule`; set this, `schedule`, or neither for one flat price |
+| `import_price_escalation` |  | Annual escalation of the reference energy and fixed charge. Default: the system's import escalation |
+| `schedule` |  | Bundled schedule key of the reference; see [Bundled schedules](../api/tariffs.md#bundled-schedules). Set this, `custom_schedule`, or neither for one flat price |
+| `study_date` |  | A date in the schedule's effective window, as in `tariff.study_date`; needs a schedule |
+
+## terminal_value
+
+Optional final-pack health credit, as `[terminal_value]` in TOML. `basis` defaults to `"none"`; see [Terminal-health credit](configuration.md#terminal-health-credit).
+
+| Key | Required | Description |
+|---|---|---|
+| `basis` |  | Accounting sensitivity: `"none"` (default) or `"battery_health_fraction"`. Inherits the resolved replacement-pack price and physical `battery_eol_percentage`; introduces no separate threshold. No resale value, PV, inverter or stored-energy credit; projected optimization ignores this table. |
+
+## smart_charging
+
+Battery dispatch by tariff period, as `[smart_charging]` in TOML; see [Smart charging](configuration.md#smart-charging). `mode = "fixed_target"` needs `target_usable_fraction`, `charge_periods`, `discharge_periods` and `grid_charge_efficiency`, and refuses the planner keys. The experimental `mode = "daily_persistence"` (App only) needs the same keys but `target_usable_fraction`, which it refuses, and takes the optional planner keys `forecast_horizon_days`, `target_levels` and `soc_states`. `grid_import_limit_w` is optional in both. `mode = "discharge_only"` takes `discharge_periods` alone and refuses every grid-charging and planner key: it never charges from the grid. `mode = "disabled"` takes no other key. `overlap_policy` defaults to `"reject"`; `"hold_target"` permits overlapping periods for `fixed_target` only, retaining the target as the discharge floor.
+
+| Key | Required | Description |
+|---|---|---|
+| `charge_periods` | `fixed_target`, `daily_persistence` | Tariff periods in which the grid may charge the battery. Not with `discharge_only` |
+| `discharge_periods` | unless `disabled` | Tariff periods in which the battery may discharge to the load; overlap needs `hold_target`. Under `discharge_only` the battery holds its charge in every other period |
+| `grid_charge_efficiency` | `fixed_target`, `daily_persistence` | AC-to-DC conversion efficiency of the grid-charging path, before the battery's own charge efficiency. No default. Not with `discharge_only` |
+| `mode` | yes | `fixed_target` charges from the grid toward a fixed target; `daily_persistence` (experimental, App only) plans each day's target; `discharge_only` discharges only in `discharge_periods` and never charges from the grid; `disabled` is greedy self-consumption |
 | `target_usable_fraction` | `fixed_target` | Grid-charging target as a fraction of the usable window: 0 is `battery_min_soc`, 1 is `battery_max_soc`. `fixed_target` only |
 | `forecast_horizon_days` |  | `daily_persistence` only: civil days the planner looks ahead, today included. An integer of at least 1; default 2 |
-| `grid_import_limit_w` |  | Site import limit in W for grid charging, which may import up to the limit minus the load's import. Load import is never cut. Unset is unlimited |
+| `grid_import_limit_w` |  | Site import limit in W for grid charging, which may import up to the limit minus the load's import. Load import is never cut. Unset is unlimited. Not with `discharge_only` |
+| `overlap_policy` |  | Default `reject`: charge and discharge periods must be disjoint. `hold_target` (`fixed_target` only) uses the grid target as the discharge floor on overlapping steps. Above it the battery may discharge; below it the grid may charge; PV may charge above it. `daily_persistence` refuses it because its planner keeps reserves fixed while replacing targets |
 | `soc_states` |  | `daily_persistence` only: stored-energy grid points of the planner's value function. An integer of at least 2; default 21 |
 | `target_levels` |  | `daily_persistence` only: candidate targets, evenly spaced from 0 to 1 of the usable window. An integer of at least 1 (one level selects target 0); default 11 |
 

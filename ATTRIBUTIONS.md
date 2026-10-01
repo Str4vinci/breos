@@ -16,17 +16,17 @@ This is a project-maintainer note, not legal advice.
 
 | Files | Source | License / Terms |
 |-------|--------|-----------------|
-| `breos/degradation/blast/` | BLAST-Lite 1.1.0, vendored from the clean NREL source history at commit `d789e00` (`Correct Tesla Model 3 data source in README`). The GitHub organization has since redirected from `NREL/BLAST-Lite` to `NatLabRockies/BLAST-Lite`. | BSD-3-Clause. The vendored BLAST `LICENSE` and DOE `NOTICE` are preserved at `breos/degradation/blast/LICENSE` and `breos/degradation/blast/NOTICE`. Phase 0 applies only mechanical BREOS vendoring transforms: `np.trapz` to `np.trapezoid`, pandas/matplotlib import trim, package-relative imports, and extraction of `rescale_soc`. Golden parity fixtures were generated from the local BLAST-Lite prep commit `b12e8f3`. Per-file source/result hashes and the complete transformation record are in `breos/degradation/blast/VENDORED.md`. |
+| `breos/degradation/blast/` | BLAST-Lite 1.1.0, vendored from the clean NREL source history at commit `d789e00` (`Correct Tesla Model 3 data source in README`). The GitHub organization has since redirected from `NREL/BLAST-Lite` to `NatLabRockies/BLAST-Lite`. | BSD-3-Clause. The vendored BLAST `LICENSE` and DOE `NOTICE` are preserved at `breos/degradation/blast/LICENSE` and `breos/degradation/blast/NOTICE`. The vendored copy has only mechanical BREOS transforms: `np.trapz` to `np.trapezoid`, pandas/matplotlib import trim, package-relative imports, and extraction of `rescale_soc`. The all-model golden trajectory fixture was generated from the untransformed models in a BLAST-Lite preparation commit (`b12e8f3`); the multi-condition parity fixture records its source commit in its manifest. Per-file source/result hashes and the complete transformation record are in `breos/degradation/blast/VENDORED.md`. |
 
 ## Supported but not redistributed
 
-BREOS can load the following profile families when users provide their own licensed local copies through `breos.load_profile(..., rlp_directory="...")`:
+BREOS can load the following profile families when users provide their own licensed local copies through `rlp_directory` (App and CLI) or `breos.load_profile(..., rlp_directory="...")`:
 
 | Profile family | Why not bundled in this public release |
 |----------------|-----------------------------------------|
-| Direct BDEW Standardlastprofile exports (`h0_SLP.csv`, `bdew_h0_2025_15min.csv`) | BDEW publishes downloadable SLP files, but its public site terms reserve copyright rights and limit downloads/copies to private, non-commercial use unless written permission is granted. |
-| E-REDES BTN profiles (`EREDES_2025_BTN_*.csv`) | Public website terms reviewed for this release do not provide a clear redistribution grant for bundling derived CSVs in an OSS package. |
-| REE 2.0TD profiles (`REE_2026_2.0TD_*.csv`) | REE legal terms reserve intellectual-property rights and do not clearly authorize republishing derived CSV datasets in this package. |
+| BDEW H0 publication (`bdew_h0`, `bdew_h0_*_15min.csv`) | BDEW publishes downloadable SLP files, but its public site terms reserve copyright rights and limit downloads/copies to private, non-commercial use unless written permission is granted. |
+| E-REDES BTN A/B/C profiles (`eredes_btn_a`/`_b`/`_c`, `EREDES_*_BTN_1000kwh_hourly.csv` or `_15min.csv`) | Public website terms reviewed for this release do not provide a clear redistribution grant for bundling derived CSVs in an OSS package. |
+| REE 2.0TD profiles (`ree_2.0td`, `REE_*_2.0TD_1000kwh_hourly.csv` or `_15min.csv`) | REE legal terms reserve intellectual-property rights and do not clearly authorize republishing derived CSV datasets in this package. |
 
 Users can still provide these files locally through `rlp_directory` when their source terms permit their use case. If written redistribution permission is granted, store the permission text with the release record before adding the files back to package data.
 
@@ -34,8 +34,8 @@ Users can still provide these files locally through `rlp_directory` when their s
 
 | Service | Used by | License | Caveats |
 |---------|---------|---------|---------|
-| **Open-Meteo** Historical & Forecast API | `breos/weather.py` (`fetch_*_openmeteo`) | Data licensed **CC-BY 4.0**. | **Free API tier is non-commercial.** Commercial workloads require a paid Open-Meteo subscription. Attribution required: "Weather data by Open-Meteo.com". |
-| **PVGIS** (JRC) | `breos/weather.py` (PVGIS endpoints) | Governed by Commission Decision 2011/833/EU on reuse of Commission documents — free reuse including commercial, with attribution. | Attribution: "© European Union, [year], PVGIS". |
+| **Open-Meteo** Historical Weather API | `breos/weather.py` (`fetch_weather_data`) | Data licensed **CC-BY 4.0**. | **Free API tier is non-commercial.** Commercial workloads require a paid Open-Meteo subscription. Attribution required: "Weather data by Open-Meteo.com". |
+| **PVGIS** (JRC) | `breos/weather.py` (`fetch_tmy_weather_data`) | Governed by Commission Decision 2011/833/EU on reuse of Commission documents — free reuse including commercial, with attribution. | Attribution: "© European Union, [year], PVGIS". |
 
 ## Python dependencies
 
@@ -43,7 +43,6 @@ BREOS's Python dependencies are open-source packages under their respective
 licenses. See `pyproject.toml`, `uv.lock`, and each package's own metadata for
 the authoritative license text. Core and optional dependencies currently include:
 
-- **joblib** — BSD 3-Clause
 - **matplotlib** — Matplotlib / PSF-style license terms
 - **numba** — BSD
 - **numpy** — BSD 3-Clause

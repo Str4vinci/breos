@@ -54,11 +54,17 @@ from breos.execution import (
     validate_execution_backend,
 )
 from breos.load_profiles import LOAD_PROFILE_METADATA_KEY
-from breos.projection import ProjectionYear, build_pv_only_battery_config, run_projection, value_projection
+from breos.projection import (
+    ProjectionYear,
+    build_pv_only_battery_config,
+    effective_reference_escalation,
+    run_projection,
+    value_projection,
+)
 from breos.pv.model_options import DEFAULT_SOLAR_POSITION, resolve_solar_position_method, solar_position_time_offset
 from breos.result_schema import RESULT_SCHEMA_VERSION
 from breos.smart_charging import PLANNER_MODES, resolve_instructions, smart_charging_provenance
-from breos.tariffs import ResolvedTariff, result_currency, tariff_provenance
+from breos.tariffs import ResolvedTariff, reference_tariff_provenance, result_currency, tariff_provenance
 from breos.utils import package_version
 from breos.weather import (
     _weather_file_sha256,
@@ -73,6 +79,9 @@ from breos.weather import (
 # Per-run columns summarized across runs, under the same names.
 _SUMMARY_METRICS = (
     "npv_savings",
+    "terminal_health_credit",
+    "terminal_health_credit_npv",
+    "npv_savings_terminal_adjusted",
     "payback_year",
     "payback_year_interpolated",
     "lcoe_per_kwh",
@@ -100,7 +109,6 @@ class MonteCarloSettings:
     seed: int | None = None
     min_load_scale: float = 0.0
     max_load_scale: float | None = None
-    preserve_irradiance_energy: bool = False
     collect_yearly: bool = False
     n_procs: int = 1
     # "python" is the reference implementation and the default. "numba"
@@ -194,7 +202,7 @@ def _load_weather_years(
             latitude=resolved.lat,
             longitude=resolved.lon,
             resample=resample_to_15min,
-            preserve_irradiance_energy=settings.preserve_irradiance_energy,
+            irradiance_resampling=cfg.get("irradiance_resampling", "auto"),
         )
         if runtime_weather is not None and not runtime_weather:
             # The same resolution the PV model applies, so a spelling such as
@@ -295,7 +303,7 @@ def _weather_cache_key(
         "resolution": cfg["resolution"],
         "latitude": resolved.lat,
         "longitude": resolved.lon,
-        "preserve_irradiance_energy": settings.preserve_irradiance_energy,
+        "irradiance_resampling": cfg.get("irradiance_resampling", "auto"),
         "solar_position": resolve_solar_position_method(cfg.get("solar_position", DEFAULT_SOLAR_POSITION)),
     }
 
@@ -326,7 +334,7 @@ class MonteCarloYearCache:
     restamped and resampled to the study resolution. It is keyed on the
     weather file's absolute path, its SHA-256 and that of its metadata
     sidecar, the year window and target year, the resolution, the
-    coordinates, ``preserve_irradiance_energy`` and the solar-position
+    coordinates, ``irradiance_resampling`` and the solar-position
     method, and a study whose weather key differs is refused. The PV layer
     is each year's DC production and battery temperature. It is keyed on the
     resolved config without :data:`YEAR_CACHE_INDEPENDENT_KEYS`, such as the
@@ -416,8 +424,8 @@ def _reject_planned_smart_charging(resolved: ResolvedAppConfig) -> None:
     if spec is not None and spec.mode in PLANNER_MODES:
         raise ValueError(
             f"smart_charging mode = '{spec.mode}' is experimental and runs in breos.App only; Monte Carlo "
-            "shares one set of static instructions across trajectories. Use mode = 'fixed_target', or run the "
-            "design with breos.App."
+            "shares one set of static instructions across trajectories. Use mode = 'fixed_target' or "
+            "'discharge_only', or run the design with breos.App."
         )
 
 
@@ -427,8 +435,9 @@ def build_year_cache(config: dict[str, Any], settings: MonteCarloSettings) -> Mo
     Args:
         config: An App configuration dict, as for :func:`run_montecarlo`.
         settings: Monte Carlo controls. Only the weather settings are read:
-            ``weather_file``, ``target_year``, ``weather_start_year``,
-            ``weather_end_year`` and ``preserve_irradiance_energy``.
+            ``weather_file``, ``target_year``, ``weather_start_year`` and
+            ``weather_end_year``. The irradiance policy comes from the App
+            config's ``irradiance_resampling``.
 
     Returns:
         A :class:`MonteCarloYearCache` to pass to :func:`run_montecarlo` as
@@ -574,8 +583,13 @@ def _simulate_trajectory(
     pv_chains: dict[tuple[int, int], AlignedSimulationInputs] | None,
     tariff: ResolvedTariff | None = None,
     instructions: DispatchInstructions | None = None,
+    reference_tariff: ResolvedTariff | None = None,
 ) -> tuple[dict[str, Any], pd.DataFrame]:
-    """Run one Monte Carlo trajectory and return its summary metrics."""
+    """Run one Monte Carlo trajectory and return its summary metrics.
+
+    A ``reference_tariff`` prices the trajectory's no-system household on its
+    own sampled load, so the with- and without-system costs stay paired.
+    """
     degradation_rate = cfg["pv_degradation_rate"]
     has_battery = config_has_battery(cfg)
 
@@ -612,6 +626,7 @@ def _simulate_trajectory(
         execution_backend=cast(str, settings.execution_backend),
         tariff=tariff,
         instructions=instructions,
+        reference_tariff=reference_tariff,
     )
     current_soh = projection.carry.soh_pct
     total_replacements = projection.total_replacements
@@ -647,6 +662,14 @@ def _simulate_trajectory(
         "mean_import_kwh": float(yearly_df["Import_kWh"].mean()),
         "mean_export_kwh": float(yearly_df["Export_kWh"].mean()),
     }
+    terminal = value.terminal_health
+    metrics.update(
+        terminal_health_credit=terminal.nominal if terminal else float("nan"),
+        terminal_health_credit_npv=terminal.npv if terminal else float("nan"),
+        npv_savings_terminal_adjusted=terminal.adjusted_npv if terminal else float("nan"),
+    )
+    if terminal is not None:
+        metrics["_terminal_value_provenance"] = terminal.provenance
     return metrics, trajectory
 
 
@@ -706,11 +729,24 @@ def _resolve_study_tariff(
     """
     if resolved.tariff is None:
         return None
+    return resolved.tariff.resolve(_study_calendar(aligned_by_year), resolved.timezone)
+
+
+def _resolve_study_reference_tariff(
+    resolved: ResolvedAppConfig, aligned_by_year: dict[int, AlignedSimulationInputs]
+) -> ResolvedTariff | None:
+    """Resolve the configured no-system reference tariff once for the whole study, as the tariff is."""
+    if resolved.reference_tariff is None:
+        return None
+    return resolved.reference_tariff.resolve(_study_calendar(aligned_by_year), resolved.timezone)
+
+
+def _study_calendar(aligned_by_year: dict[int, AlignedSimulationInputs]) -> pd.DatetimeIndex:
     calendars = [inputs.index for inputs in aligned_by_year.values()]
-    reference = calendars[0]
-    if any(not calendar.equals(reference) for calendar in calendars[1:]):
+    calendar = calendars[0]
+    if any(not other.equals(calendar) for other in calendars[1:]):
         raise ValueError("Monte Carlo weather years do not share one calendar, so one tariff cannot price them")
-    return resolved.tariff.resolve(reference, resolved.timezone)
+    return pd.DatetimeIndex(calendar)
 
 
 def _initialize_worker(*context: Any) -> None:
@@ -733,6 +769,7 @@ def _run_trajectory_index(run_idx: int) -> tuple[int, dict[str, Any], pd.DataFra
         pv_chains,
         tariff,
         instructions,
+        reference_tariff,
     ) = _WORKER_CONTEXT
     # One observation window per trajectory: that is the unit of work whose
     # compile cost is being attributed. A no-op on the Python backend.
@@ -753,6 +790,7 @@ def _run_trajectory_index(run_idx: int) -> tuple[int, dict[str, Any], pd.DataFra
         pv_chains,
         tariff,
         instructions,
+        reference_tariff,
     )
     # None from a numba run means no compiled dispatch call was observed -- a
     # trajectory can legitimately never enter the kernel. Record that as
@@ -879,6 +917,7 @@ def run_montecarlo(
     )
     pv_chains = _prepare_pv_chains(cfg, resolved, aligned_by_year, settings, years_per_run)
     tariff = _resolve_study_tariff(resolved, aligned_by_year)
+    reference_tariff = _resolve_study_reference_tariff(resolved, aligned_by_year)
     # Every sampled weather year shares the tariff's calendar, so one set of
     # smart-charging instructions serves every trajectory and year.
     spec = resolved.smart_charging
@@ -897,6 +936,7 @@ def run_montecarlo(
         pv_chains,
         tariff,
         instructions,
+        reference_tariff,
     )
     if settings.n_procs == 1:
         _initialize_worker(*context)
@@ -908,7 +948,11 @@ def run_montecarlo(
     rows: list[dict[str, Any]] = []
     yearly_frames: list[pd.DataFrame] = []
     jit_cache_states: list[str] = []
+    terminal_records = []
     for run_idx, metrics, trajectory, jit_cache_state in outputs:
+        terminal_record = metrics.pop("_terminal_value_provenance", None)
+        if terminal_record is not None:
+            terminal_records.append({"run": run_idx + 1, **terminal_record})
         rows.append({"run": run_idx + 1, **metrics})
         if jit_cache_state is not None:
             jit_cache_states.append(jit_cache_state)
@@ -950,8 +994,24 @@ def run_montecarlo(
             ),
             "execution": execution,
             "economics": projection_rates_record(cfg),
+            **(
+                {"terminal_value": {"basis": "battery_health_fraction", "trajectories": terminal_records}}
+                if terminal_records
+                else {}
+            ),
             "ledger_schema_version": LEDGER_SCHEMA_VERSION,
             **({"tariff": tariff_provenance(tariff, calendar_year=settings.target_year)} if tariff is not None else {}),
+            **(
+                {
+                    "reference_tariff": reference_tariff_provenance(
+                        reference_tariff,
+                        calendar_year=settings.target_year,
+                        import_price_escalation=effective_reference_escalation(resolved),
+                    )
+                }
+                if reference_tariff is not None
+                else {}
+            ),
             **(
                 {"smart_charging": smart_charging_provenance(spec, instructions, tariff)}
                 if spec is not None and instructions is not None and tariff is not None

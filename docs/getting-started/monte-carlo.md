@@ -13,8 +13,9 @@ independence, LCOE, and final state of health.
 
 BREOS ships no weather data, and Monte Carlo needs a multi-year historical CSV
 rather than a single TMY. Download one for your site, put it in a local
-`weather/` directory, and point `[montecarlo].weather_file` at it. The
-`weather/` directory is git-ignored by convention.
+`weather/` directory, and point `[montecarlo].weather_file` at it. A
+gzip-compressed `.csv.gz` file works as well. The `weather/` directory is
+git-ignored by convention.
 
 Fetch historical data with the `weather` extra:
 
@@ -91,7 +92,7 @@ provenance JSON recording the resolved settings and hashes of the inputs and
 outputs, which is what makes a published result auditable later. It and the
 `--json` output carry `result_schema_version` and `currency`, the currency of
 every money column (see
-[Interpreting results](interpreting-results.md#currency-and-schema-version)).
+[Interpreting results](interpreting-results.md#currency-and-result-format)).
 
 `--collect-yearly` adds a second CSV with one row per run and projection year,
 carrying the energy, degradation, and discounted-cost ledger. Cost envelopes and
@@ -179,7 +180,7 @@ cache has two layers:
 
 - The weather layer is reused only for the same weather file (its absolute
   path, its contents and those of its `.metadata.json` sidecar), year window,
-  `target_year`, resolution, location, `preserve_irradiance_energy`, and
+  `target_year`, resolution, location, `irradiance_resampling`, and
   solar-position method. A study with other weather inputs raises
   `ValueError`.
 - The PV layer is reused when the config differs only in keys that do not

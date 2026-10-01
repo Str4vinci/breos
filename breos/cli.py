@@ -439,9 +439,10 @@ def _check_sweep_key(key: str) -> None:
 
     A top-level key must be registered. A dotted key must name a key of a
     nested table (``costs``, ``battery_indoor_model``, ``tariff``,
-    ``smart_charging``), and may go one level further only into a free-form
-    mapping such as ``tariff.import_prices.P1``. Values are checked later,
-    when each run's config is resolved.
+    ``reference_tariff``, ``smart_charging``), and may go further only into a free-form mapping,
+    as deep as it allows: ``tariff.import_prices.P1``, or
+    ``tariff.import_prices.winter.P1`` for prices by month season. Values are
+    checked later, when each run's config is resolved.
     """
     parts = key.split(".")
     top_level = parts[0]
@@ -464,16 +465,21 @@ def _check_sweep_key(key: str) -> None:
         raise ValueError(f"Unknown sweep key '{key}'. Available: {available}")
     if len(parts) == 2:
         return
-    if not isinstance(spec.keys[table_key], MappingOf):
+    checker = spec.keys[table_key]
+    if not isinstance(checker, MappingOf):
         raise ValueError(
             f"Unknown sweep key '{key}'. '{top_level}.{table_key}' is not a table of named entries; "
             f"sweep '{top_level}.{table_key}' itself."
         )
-    if len(parts) > 3:
-        raise ValueError(
-            f"Unknown sweep key '{key}'. '{top_level}.{table_key}' takes one more level, the entry name, "
-            f"as in '{top_level}.{table_key}.{parts[2]}'."
-        )
+    if len(parts) > 2 + checker.depth:
+        if checker.depth == 1:
+            levels = f"one more level, the entry name, as in '{top_level}.{table_key}.{parts[2]}'"
+        else:
+            levels = (
+                f"at most {checker.depth} more levels, as in '{top_level}.{table_key}.{parts[2]}' or "
+                f"'{top_level}.{table_key}.{parts[2]}.{parts[3]}'"
+            )
+        raise ValueError(f"Unknown sweep key '{key}'. '{top_level}.{table_key}' takes {levels}.")
 
 
 def _apply_sweep_values(config: dict[str, Any], varied: dict[str, Any]) -> dict[str, Any]:
@@ -603,6 +609,8 @@ def _montecarlo(args: argparse.Namespace) -> int:
     _ignore_unused_runner_sections(config, command="montecarlo", used_sections=frozenset({"montecarlo"}))
     if args.rlp_directory is not None:
         config["rlp_directory"] = str(args.rlp_directory)
+    if getattr(args, "irradiance_resampling", None) is not None:
+        config["irradiance_resampling"] = args.irradiance_resampling
 
     # Report a typo such as [montecarlo].weather_fille before a missing-file
     # error. The runner validates the full App config before weather access.
@@ -629,7 +637,6 @@ def _montecarlo(args: argparse.Namespace) -> int:
         "seed": (args.seed, None),
         "min_load_scale": (None, float),
         "max_load_scale": (None, None),
-        "preserve_irradiance_energy": (args.preserve_irradiance_energy, bool),
         "collect_yearly": (args.collect_yearly, bool),
         "n_procs": (args.n_procs, int),
         "execution_backend": (args.execution_backend, None),
@@ -786,6 +793,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     mc.add_argument("--config", type=Path, required=True, help="TOML or JSON config file with a [montecarlo] section.")
     mc.add_argument("--weather-file", help="Multi-year historical weather CSV (overrides [montecarlo].weather_file).")
+    policy_field = APP_CONFIG_FIELDS["irradiance_resampling"]
+    mc.add_argument(*policy_field.cli_flags, choices=policy_field.cli_choices, help=policy_field.cli_help)
     mc.add_argument("--rlp-directory", type=Path, help="Directory containing a licensed external RLP CSV.")
     mc.add_argument("--runs", type=int, help="Number of Monte Carlo runs (trajectories).")
     mc.add_argument(
@@ -824,12 +833,6 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         default=None,
         help="Write one row per run and project year for cost-envelope analysis.",
-    )
-    mc.add_argument(
-        "--preserve-irradiance-energy",
-        action="store_true",
-        default=None,
-        help="Preserve each source hour's irradiance energy during 15-minute resampling.",
     )
     mc.add_argument("--plots", action="store_true", help="Generate Monte Carlo distribution plots next to the CSV.")
     mc.add_argument("--json", action="store_true", help="Write machine-readable JSON summary to stdout.")

@@ -183,7 +183,6 @@ def test_a_module_count_sweep_rebuilds_the_pv_layer_from_the_cached_weather(weat
         ({"weather_start_year": 2022}, "weather_start_year"),
         ({"weather_end_year": 2021}, "weather_end_year"),
         ({"target_year": 2024}, "target_year"),
-        ({"preserve_irradiance_energy": True}, "preserve_irradiance_energy"),
     ],
 )
 def test_a_cache_for_other_weather_settings_is_refused(weather, change, field):
@@ -198,6 +197,7 @@ def test_a_cache_for_other_weather_settings_is_refused(weather, change, field):
         ({"resolution": "15min"}, "resolution"),
         ({"location": "lisbon"}, "latitude, longitude"),
         ({"solar_position": "mid-interval"}, "solar_position"),
+        ({"irradiance_resampling": "clear_sky"}, "irradiance_resampling"),
     ],
 )
 def test_a_cache_for_another_site_or_resolution_is_refused(weather, change, fields):
