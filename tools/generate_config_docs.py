@@ -119,7 +119,7 @@ TABLES: tuple[tuple[str, TableSpec, str], ...] = (
         "period",
         PERIOD_TABLE,
         "A window shorter than a year, as `[period]` in TOML; see "
-        "[Simulate part of a year](../how-to/partial-year.md). Both dates are local civil dates in the "
+        "[Simulate part of a year](configuration.md#simulate-part-of-a-year). Both dates are local civil dates in the "
         "location's timezone, in the year of `start_date`, and the window runs from local midnight of `start` to "
         "local midnight of `end`.",
     ),

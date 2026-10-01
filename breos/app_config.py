@@ -662,7 +662,7 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
             "Simulate only the window from `start` to `end`, local dates in the year of `start_date`, `end` "
             "exclusive. The window runs once: energy and year-1 money cover the window, and lifetime economics are "
             "`None`. See "
-            "[`[period]`](#period) and [Simulate part of a year](../how-to/partial-year.md)"
+            "[`[period]`](#period) and [Simulate part of a year](configuration.md#simulate-part-of-a-year)"
         ),
         default_doc="*unset*",
         summary="simulation.period",

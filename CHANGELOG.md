@@ -5,6 +5,11 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 ## [Unreleased]
 
 ### Added
+- Documentation gains an example gallery of case reports (first home, battery
+  value, sites, east-west roofs, replacement timing, tariffs, dispatch, price
+  scenarios, Monte Carlo, NSGA-II) built from stored results, plus how-to
+  guides; they replace the recipes page. `tools/regenerate_gallery_results.py`
+  reruns the cases, and the `docs` extra now includes matplotlib and sphinx-gallery.
 - `App.timeseries()` returns a copy of the first simulated year step by step
   (or a `[period]` window's steps), with the energy-balance ledger columns.
 - Cached TMY weather files in `weather/` may be gzip-compressed

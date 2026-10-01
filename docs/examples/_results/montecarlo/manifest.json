@@ -2,9 +2,9 @@
  "case": "montecarlo",
  "title": "Monte Carlo over weather years and demand",
  "breos_version": "0.6.2",
- "git_describe": "v0.6.2-563-ga0b27d1-dirty",
- "generated_utc": "2026-10-01T15:53:35+00:00",
- "runtime_s": 209.4,
+ "git_describe": "v0.6.2-580-g58b7cb0-dirty",
+ "generated_utc": "2026-10-01T20:15:20+00:00",
+ "runtime_s": 181.4,
  "cheap": false,
  "configs": {
   "configs/examples/montecarlo.toml": "122fb41cd4cea2562808be768f2acc8edc8626e26329d552ae6d8d89ac328982"
@@ -29,6 +29,8 @@
   "numba": "0.66.0",
   "pymoo": "0.6.2"
  },
+ "currency": "EUR",
+ "timezone": "Europe/Lisbon",
  "history": {
   "location": "porto",
   "start": "2005-01-01",

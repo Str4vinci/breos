@@ -799,7 +799,7 @@ controller and planner versions, the effective planner settings, the
 forecast, warm-start and terminal policies, the schedule hash, an
 `instruction_hash` of the instructions the run executed in every project
 year, and the stored energy by origin at the start and end of the project.
-[`App.revalue`](../api/app.md) simulates the run
+[`App.revalue`](../api/app.md#revalue-a-finished-run) simulates the run
 again when the import or export prices change, since they move the plan; a
 change to the fixed charge alone is re-priced. Monte Carlo and projected
 optimization refuse the mode, because they share one set of static

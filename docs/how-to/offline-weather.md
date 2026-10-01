@@ -49,7 +49,7 @@ filename (including the source), is recorded under `provenance.weather`.
 The file is restamped onto the year of `start_date` and must then cover that
 whole calendar year. A file missing its first or last rows raises `ValueError`
 that names the file and the missing span, rather than simulating a shorter
-year. With a [`[period]`](partial-year.md), the file needs to cover
+year. With a [`[period]`](../getting-started/configuration.md#simulate-part-of-a-year), the file needs to cover
 only the window.
 
 The repository's `validation/data/weather/` directory holds PVGIS TMYs for a

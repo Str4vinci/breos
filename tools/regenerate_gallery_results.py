@@ -498,6 +498,70 @@ def east_west(ctx: Context) -> Output:
     )
 
 
+@case("orientation", "How much does orientation matter?", cheap=False)
+def orientation(ctx: Context) -> Output:
+    base = ctx.config("configs/examples/pv-only.toml")
+    tilts = list(range(0, 65, 5))
+    azimuths = list(range(90, 285, 15))
+    rows = []
+    for tilt in tilts:
+        for azimuth in azimuths:
+            result = ctx.simulate(with_overrides(base, {"tilt": tilt, "azimuth": azimuth})).result()
+            rows.append({"tilt": tilt, "azimuth": azimuth, **scalars(result)})
+    default = ctx.simulate(base).result()
+    resolved = default["provenance"]["resolved_config"]
+    return Output(
+        {
+            "orientations.csv": pd.DataFrame(rows),
+            "default.json": {"tilt": resolved["tilt"], "azimuth": resolved["azimuth"], **scalars(default)},
+        },
+        {"tilts": tilts, "azimuths": azimuths},
+    )
+
+
+@case("clipping", "DC/AC ratio and clipping at 15 minutes", cheap=False)
+def clipping(ctx: Context) -> Output:
+    base = with_overrides(ctx.config(QUICKSTART), {"resolution": "15min"})
+    ratios = [1.0, 1.25, 1.5, 1.75, 2.0]
+    rows, week = [], None
+    for battery in (0.0, base["battery_kwh"]):
+        for ratio in ratios:
+            app = ctx.simulate(with_overrides(base, {"battery_kwh": battery, "inverter_loading_ratio": ratio}))
+            result = app.result()
+            rows.append({"inverter_loading_ratio": ratio, **scalars(result)})
+            if battery == 0 and ratio == max(ratios):
+                piece = week_slice(first_year_frame(app), result["provenance"]["timezone"], 27)
+                week = piece[["Datetime", "PV_DC", "PV_DC_Curtailed", "PV_Production", "Houseload"]]
+    return Output(
+        {"ratios.csv": pd.DataFrame(rows), "week_summer.csv": week},
+        {"overrides": {"resolution": "15min"}, "ratios": ratios, "week_ratio": max(ratios), "iso_week": 27},
+    )
+
+
+@case("quarterly_berlin", "A quarterly tariff in Berlin", cheap=True)
+def quarterly_berlin(ctx: Context) -> Output:
+    base = ctx.config("configs/examples/quarterly-tariff-berlin.toml")
+    strategies = {
+        "greedy": {},
+        "discharge_only high": {"smart_charging": {"mode": "discharge_only", "discharge_periods": ["high"]}},
+        "discharge_only standard and high": {
+            "smart_charging": {"mode": "discharge_only", "discharge_periods": ["standard", "high"]}
+        },
+    }
+    rows = []
+    for name, overrides in strategies.items():
+        result = ctx.simulate(with_overrides(base, overrides)).result()
+        rows.append(
+            {
+                "strategy": name,
+                **scalars(result),
+                "monthly_battery_to_load_kwh": [row["pv_origin_battery_ac_load_kwh"] for row in result["monthly"]],
+                "monthly_import_kwh": [row["grid_import_kwh"] for row in result["monthly"]],
+            }
+        )
+    return Output({"strategies.json": rows}, {"variants": strategies})
+
+
 @case("replacement_timing", "When the battery swap lands", cheap=False)
 def replacement_timing(ctx: Context) -> Output:
     base = with_overrides(ctx.config(QUICKSTART), {"terminal_value": {"basis": "battery_health_fraction"}})

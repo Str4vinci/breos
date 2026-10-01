@@ -66,7 +66,7 @@ is a `breos run` option that overrides the config file.
 | `montecarlo` | *unset* | — | Monte Carlo study controls, read by `breos montecarlo`; see [Monte Carlo](monte-carlo.md#configure-a-study) |
 | `n_modules` | *required unless `pv_arrays` is set* | `--n-modules` | Number of PV modules |
 | `om_escalation` | `None` | `--om-escalation` | Annual escalation of O&M costs; `None` uses `inflation_rate` |
-| `period` | *unset* | — | Simulate only the window from `start` to `end`, local dates in the year of `start_date`, `end` exclusive. The window runs once: energy and year-1 money cover the window, and lifetime economics are `None`. See [`[period]`](#period) and [Simulate part of a year](../how-to/partial-year.md) |
+| `period` | *unset* | — | Simulate only the window from `start` to `end`, local dates in the year of `start_date`, `end` exclusive. The window runs once: energy and year-1 money cover the window, and lifetime economics are `None`. See [`[period]`](#period) and [Simulate part of a year](configuration.md#simulate-part-of-a-year) |
 | `projection_years` | `20` | `--projection-years` | Economic projection horizon in years |
 | `pv_arrays` | `None` | — | List of arrays, each with at least `modules`; other keys inherit from the top level. The array module total replaces `n_modules`; see [`[[pv_arrays]]`](#pv_arrays) |
 | `pv_degradation_rate` | `0.005` | `--pv-degradation-rate` | Annual PV degradation rate, compounded and counted from the start of each year, so year 1 has none; see [Module aging](../api/pv.md#module-aging) |
@@ -209,7 +209,7 @@ Battery dispatch by tariff period, as `[smart_charging]` in TOML; see [Smart cha
 
 ## period
 
-A window shorter than a year, as `[period]` in TOML; see [Simulate part of a year](../how-to/partial-year.md). Both dates are local civil dates in the location's timezone, in the year of `start_date`, and the window runs from local midnight of `start` to local midnight of `end`.
+A window shorter than a year, as `[period]` in TOML; see [Simulate part of a year](configuration.md#simulate-part-of-a-year). Both dates are local civil dates in the location's timezone, in the year of `start_date`, and the window runs from local midnight of `start` to local midnight of `end`.
 
 | Key | Required | Description |
 |---|---|---|
