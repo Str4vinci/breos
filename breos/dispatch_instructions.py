@@ -44,7 +44,7 @@ def _scalar(value: Any, name: str) -> float:
 
 @dataclass(frozen=True)
 class DispatchInstructions:
-    """Per-step instructions for the canonical dispatch step (ADR 0002)."""
+    """Per-step instructions for the canonical dispatch step."""
 
     discharge_allowed: np.ndarray  # bool, shape (n,)
     reserve_fraction: np.ndarray  # float64 in [0, 1]; usable fraction kept before discharge
@@ -83,7 +83,7 @@ class DispatchInstructions:
         if both.size:
             raise ValueError(
                 f"Step {int(both[0])} both allows discharge and has a grid-charge target; "
-                "reserve_fraction must be >= grid_target_fraction (ADR 0002 A8, A14)"
+                "reserve_fraction must be >= grid_target_fraction"
             )
 
         efficiency = _scalar(self.grid_charge_efficiency, "grid_charge_efficiency")

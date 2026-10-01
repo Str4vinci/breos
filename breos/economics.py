@@ -128,7 +128,7 @@ def cost_params_from_config(
 
 
 def replacement_event_cost(battery_kwh: float, cost_per_kwh: float, configured: Any = None) -> float:
-    """The t = 0 price of one battery replacement (ADR 0003 E4).
+    """The t = 0 price of one battery replacement.
 
     The physics reports when a pack is swapped and its nominal capacity; the
     economics prices each swap here, so App, Monte Carlo and the optimizer
@@ -397,13 +397,13 @@ def price_year_rows(yearly_summary_df: pd.DataFrame, costs: Dict[str, float]) ->
     ``Import_Cost`` is ``Import_kWh`` times the import price, ``Export_Revenue``
     ``Export_kWh`` times the export price, ``Baseline_Import_Cost`` the load
     bought without a system, and ``Fixed_Charge`` the daily charge for the
-    simulated duration, ``Simulated_Hours / 24`` days (E5).
+    simulated duration, ``Simulated_Hours / 24`` days.
     ``Baseline_Fixed_Charge``, the fixed charge without a system, is
     ``Fixed_Charge`` unless a reference tariff set it. A row with
     ``Billed_Days`` (a [period] window) is billed on those civil days instead,
     and a row without either is billed as a 365-day year. ``Replacement_Cost`` is
     the year's ``Replacements`` at ``costs["replacement_cost_each"]``, t = 0
-    prices (E4). Columns already present (TOU valuation sets them) are kept.
+    prices. Columns already present (TOU valuation sets them) are kept.
     The operation order is the one the projection used before these columns
     existed, so flat results are the same floats.
     """
@@ -659,8 +659,7 @@ def value_year_rows(
     ``year_rows`` are rows 1 through N, in order, carrying the year-1-price
     money of :func:`price_year_rows`. Energy, fixed-charge and O&M flows are
     escalated from year-1 prices; each replacement is priced at t = 0 and
-    inflated to its swap instant, ``Replacement_Time_Years`` (ADR 0003 E2,
-    E3). The no-system cost, ``Baseline_Import_Cost`` plus
+    inflated to its swap instant, ``Replacement_Time_Years``. The no-system cost, ``Baseline_Import_Cost`` plus
     ``Baseline_Fixed_Charge``, escalates at ``baseline_import_price_escalation``,
     a reference tariff's; None uses the import escalation. Nothing is
     discounted here. ``attrs["total_replacement_cost"]`` is the replacements
@@ -786,7 +785,7 @@ def add_co2_projection(proj: pd.DataFrame, year_rows: pd.DataFrame, emissions_pa
     """Add each year's avoided CO2 to a cost projection, in place (the emissions stage).
 
     Self-consumption is ``PV_Production_kWh - Export_kWh`` plus any grid
-    shift through the battery (ADR 0002 A10). Sets
+    shift through the battery. Sets
     ``attrs["lifetime_co2_avoided_total_kg"]`` and
     ``attrs["lifetime_co2_avoided_self_consumed_kg"]``.
     """
@@ -865,7 +864,7 @@ def cost_analysis_projection(
         num_years: Number of years to project
         inflation_rate: General annual inflation. Import energy, the fixed
             charge and O&M escalate at it unless their own rate is given,
-            and replacement prices always inflate at it (ADR 0003 E2).
+            and replacement prices always inflate at it.
         sell_price_inflation: Annual escalation of the export price
         discount_rate: Nominal discount rate for NPV calculations
         results_directory: Optional directory to save results
