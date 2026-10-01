@@ -76,6 +76,15 @@ provenance. Without one, every existing value is unchanged.
 2.7 adds ``overlap_policy`` to ``provenance.smart_charging`` in App, Monte
 Carlo and optimizer results, including the default ``reject``. ``hold_target``
 is supported for ``fixed_target`` only (#347). The ledger is unchanged.
+
+2.8 adds the optional terminal-health accounting sensitivity (#346):
+``terminal_health_credit``, ``terminal_health_credit_npv`` and
+``npv_savings_terminal_adjusted`` in App results and Monte Carlo runs and
+statistics; ``terminal_value`` in resolved config; and, when enabled for a
+lifetime run, ``provenance.terminal_value`` with formula and price inputs.
+The three App scalars are None when disabled or on a [period] run. Monte
+Carlo uses NaN for disabled values and omits their statistics. Projected
+optimization ignores the table and continues ranking on unadjusted NPV.
 """
 
-RESULT_SCHEMA_VERSION = "2.7"
+RESULT_SCHEMA_VERSION = "2.8"

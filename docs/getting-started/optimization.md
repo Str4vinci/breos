@@ -209,3 +209,8 @@ came from.
 - [Interpreting results](interpreting-results.md) for the meaning of the
   headline metrics.
 - [Optimization API](../api/optimization.md) for the full signatures.
+
+The optional [`[terminal_value]`](configuration.md#terminal-health-credit)
+table is accepted but ignored by projected optimization. Evaluated designs
+report no terminal-health credit or adjusted NPV; ranking uses unadjusted
+NPV. Use App or Monte Carlo for this accounting sensitivity.

@@ -4,6 +4,39 @@
 pandas or numpy types. The same dict is written by the CLI's `--output`
 flag.
 
+## Terminal-health credit
+
+The optional [`[terminal_value]`](configuration.md#terminal-health-credit)
+accounting sensitivity adds a final-pack health credit beside the unchanged
+`npv_savings`. It is not resale value: capacity health omits
+resistance-related limits and no PV, inverter or stored energy is credited.
+The fraction above the simulation's replacement threshold is clipped to
+0–1; only the pack present after final aging and any final replacement is
+credited. All replacement outlays remain, including a final-year swap.
+
+`terminal_health_credit` is nominal year-T money, priced with the resolved
+replacement-pack price at t = 0, inflated and reduced by replacement
+learning to exactly t = T. `terminal_health_credit_npv` discounts it from T.
+`npv_savings_terminal_adjusted` adds that present value to the unrounded
+unadjusted NPV; each money field is then rounded to two decimals, so the
+reported scalars can differ by a cent from adding rounded values.
+`financial`, paybacks and LCOE exclude the credit.
+
+Disabled App runs and partial `[period]` runs report all three fields as
+null and carry no `provenance.terminal_value`. Enabled PV-only runs report
+zero credits and adjusted NPV equal to unadjusted NPV. Enabled lifetime
+runs record basis, formula version, unrounded final SOH fraction, physical
+threshold, credited fraction, full replacement price at t = 0 and T,
+inflation, learning, discount rate, horizon, booking time and replacement
+policy in `provenance.terminal_value`.
+
+Monte Carlo's `runs` frame has the three fields per trajectory; its
+`summary` reports their existing mean, spread, percentile, range and count
+statistics. Its `provenance.terminal_value.trajectories` records the inputs
+for each numbered run. Disabled values are NaN with no statistics or
+terminal-value provenance. Projected optimization ignores the table and
+ranks on unadjusted NPV.
+
 ## Currency and schema version
 
 Money keys carry no currency. Every money value in a result is in the run's
@@ -66,6 +99,9 @@ discharge periods, an empty `charge_periods`, and `None` for
 `target_usable_fraction`, `grid_charge_efficiency` and
 `grid_import_limit_w`. The App's top-level `smart_charging` block reports it
 as it reports the other modes. Other results are unchanged.
+Version "2.7" adds the three terminal-health fields, `terminal_value` in
+resolved config and optional `provenance.terminal_value` (see above).
+
 Version "2.6" adds the no-system cost components: `no_system_fixed_charge_year1_prices`
 (see [Year-1 money keys](#year-1-money-keys)), `no_system_cost_import` and
 `no_system_cost_fixed_charge` in the `financial` rows, the
@@ -105,6 +141,9 @@ major version, an added key the minor. A result without the key predates 1.0.
 | `total_investment` | Total CAPEX |
 | `payback_year` | Sustained discounted payback within the simulated period, as a whole year: the year from which cumulative NPV savings are zero or above and stay so to the horizon (`None` if not reached) |
 | `npv_savings` | Cumulative NPV savings over the projection horizon |
+| `terminal_health_credit` | Optional nominal credit at the end of year T; null when disabled or on a partial period |
+| `terminal_health_credit_npv` | Present value of that credit |
+| `npv_savings_terminal_adjusted` | Unadjusted NPV plus credit present value, before rounding |
 | `lcoe_per_kwh` | Levelized cost of electricity from system CAPEX, O&M, simulated replacements, and discounted PV production |
 | `monthly` | Year 1 monthly energy balance rows |
 | `financial` | Yearly financial projection rows (year 0 = investment) |

@@ -5,6 +5,21 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 ## [Unreleased]
 
 ### Added
+- Optional `[terminal_value] basis = "battery_health_fraction"` reports an
+  accounting sensitivity for the final installed battery pack's health
+  above its physical replacement threshold
+  ([#346](https://github.com/Str4vinci/breos/issues/346)). It credits the
+  resolved full replacement-pack price at the end of the horizon, using
+  replacement inflation, learning and discounting. Result schema 2.8 adds
+  `terminal_health_credit`, `terminal_health_credit_npv` and
+  `npv_savings_terminal_adjusted`, plus valuation provenance. App and Monte
+  Carlo calculate it per run; `App.revalue` recomputes it from retained
+  final health. The default `basis = "none"` leaves the new scalars null.
+  Enabled PV-only runs report zero; partial `[period]` runs keep them null.
+  This is not resale value, and capacity health omits resistance-related
+  limits. Every replacement outlay remains; unadjusted NPV, cashflows,
+  paybacks, LCOE, emissions, dispatch and aging are unchanged. Projected
+  optimization accepts but ignores the table and ranks on unadjusted NPV.
 - `[smart_charging] overlap_policy = "hold_target"` permits overlapping
   `charge_periods` and `discharge_periods` in `fixed_target`
   ([#347](https://github.com/Str4vinci/breos/issues/347)). On overlapping

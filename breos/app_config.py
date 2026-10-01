@@ -676,6 +676,15 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         default_doc="*unset*",
         summary="economics.reference_tariff",
     ),
+    "terminal_value": AppConfigField(
+        default=None,
+        doc=(
+            "Optional accounting sensitivity for the final battery pack's capacity health; see "
+            "[`[terminal_value]`](#terminal_value) and [Terminal-health credit](configuration.md#terminal-health-credit)"
+        ),
+        default_doc="*unset (basis = none)*",
+        summary="economics.terminal_value",
+    ),
     # The [smart_charging] table (ADR 0002). Omitted: greedy self-consumption.
     "smart_charging": AppConfigField(
         default=None,
@@ -1867,6 +1876,17 @@ SMART_CHARGING_TABLE = TableSpec(
     },
 )
 
+TERMINAL_VALUE_TABLE = TableSpec(
+    "terminal_value",
+    {"basis": choice(("none", "battery_health_fraction"))},
+    docs={
+        "basis": 'Accounting sensitivity: `"none"` (default) or `"battery_health_fraction"`. Inherits the resolved '
+        "replacement-pack price and physical `battery_eol_percentage`; introduces no separate threshold. "
+        "No resale value, PV, inverter or stored-energy credit; projected optimization ignores this table.",
+    },
+)
+
+
 # The nested tables of an App config, by top-level key. ``pv_arrays`` is a
 # list of tables and is not here: a sweep or merge cannot address one entry.
 NESTED_TABLE_SPECS: Mapping[str, TableSpec] = {
@@ -1874,6 +1894,7 @@ NESTED_TABLE_SPECS: Mapping[str, TableSpec] = {
     "battery_indoor_model": INDOOR_MODEL_TABLE,
     "tariff": TARIFF_TABLE,
     "reference_tariff": REFERENCE_TARIFF_TABLE,
+    "terminal_value": TERMINAL_VALUE_TABLE,
     "smart_charging": SMART_CHARGING_TABLE,
     "period": PERIOD_TABLE,
 }
@@ -2164,6 +2185,9 @@ def _validate_economics(cfg: dict[str, Any]) -> None:
             raise ValueError(f"'{key}' must be greater than -1 when configured")
     if not 0 <= _finite_real(cfg["replacement_cost_learning"], "replacement_cost_learning") < 1:
         raise ValueError("'replacement_cost_learning' must be at least 0 and below 1")
+    if cfg["terminal_value"] is not None:
+        cfg["terminal_value"] = TERMINAL_VALUE_TABLE.validate(cfg["terminal_value"])
+        cfg["terminal_value"].setdefault("basis", "none")
     if "costs" in cfg:
         COSTS_TABLE.validate(cfg["costs"])
     if cfg["export_emissions_factor_gco2_kwh"] is not None:

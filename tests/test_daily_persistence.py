@@ -818,7 +818,7 @@ def test_provenance_identifies_the_policy_and_its_executed_trace(monkeypatch):
     result = app.result()
     record = result["provenance"]["smart_charging"]
 
-    assert result["result_schema_version"] == RESULT_SCHEMA_VERSION == "2.7"
+    assert result["result_schema_version"] == RESULT_SCHEMA_VERSION == "2.8"
     assert set(record) == {
         "mode",
         "overlap_policy",
