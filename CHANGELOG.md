@@ -5,6 +5,19 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 ## [Unreleased]
 
 ### Added
+- `[smart_charging] overlap_policy = "hold_target"` permits overlapping
+  `charge_periods` and `discharge_periods` in `fixed_target`
+  ([#347](https://github.com/Str4vinci/breos/issues/347)). On overlapping
+  steps the grid target is also the discharge floor, moving with temperature
+  and health: above it the battery may discharge down to it; below it the
+  grid may charge up to it. A step never charges and discharges together,
+  and PV may charge above the target. App, Monte Carlo and projected
+  optimization accept it on both backends. `disabled` and `discharge_only`
+  refuse it because they have no grid target; `daily_persistence` refuses it
+  because its planner replaces targets while keeping reserves fixed. The
+  default `"reject"` still requires disjoint periods and preserves every
+  existing dispatch value bit for bit. Result schema 2.7 adds
+  `overlap_policy` to `provenance.smart_charging`; the ledger is unchanged.
 - A `[reference_tariff]` table prices the household without the system on
   its own tariff, independent of the system's `[tariff]` or flat prices
   ([#339](https://github.com/Str4vinci/breos/issues/339)). It takes import

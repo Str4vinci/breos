@@ -10,6 +10,9 @@ period is a charge period the grid may charge the battery toward
 ``target_usable_fraction`` of that step's usable window (A7). On a step whose
 period is a discharge period the battery may discharge. A step in neither
 set does neither; PV may charge the battery on every step.
+With ``overlap_policy = "hold_target"`` a period in both sets keeps the grid
+target as its discharge floor: above it discharge is allowed, below it grid
+charging is allowed. The default ``reject`` requires disjoint periods.
 
 ``discharge_only`` lets the battery discharge on a step whose period is a
 discharge period and hold its charge on every other step. The grid never
@@ -43,6 +46,7 @@ from breos.dispatch_instructions import DispatchInstructions
 from breos.tariffs import ResolvedTariff
 
 SMART_CHARGING_MODES = ("disabled", "fixed_target", "daily_persistence", "discharge_only")
+OVERLAP_POLICIES = ("reject", "hold_target")
 # The modes that plan targets at runtime; they take the planner settings.
 PLANNER_MODES = ("daily_persistence",)
 # The modes that never charge from the grid; they take discharge periods only.
@@ -87,10 +91,12 @@ class SmartChargingSpec:
     forecast_horizon_days: int | None = None
     target_levels: int | None = None
     soc_states: int | None = None
+    overlap_policy: str = "reject"
 
     def __post_init__(self) -> None:
         if self.mode not in SMART_CHARGING_MODES:
             raise ValueError(f"'smart_charging.mode' must be one of: {', '.join(SMART_CHARGING_MODES)}")
+        check_overlap_policy(self.mode, self.overlap_policy)
         object.__setattr__(self, "charge_periods", tuple(self.charge_periods))
         object.__setattr__(self, "discharge_periods", tuple(self.discharge_periods))
         planner = {name: getattr(self, name) for name in PLANNER_SETTINGS}
@@ -154,11 +160,26 @@ class SmartChargingSpec:
                     f"remove {', '.join(f'smart_charging.{name}' for name in given)}"
                 )
         overlap = sorted(set(self.charge_periods) & set(self.discharge_periods))
-        if overlap:
+        if overlap and self.overlap_policy == "reject":
             raise ValueError(
                 f"'smart_charging.charge_periods' and 'smart_charging.discharge_periods' share {', '.join(overlap)}; "
-                "every step either charges or discharges (ADR 0002 A8)"
+                "every step either charges or discharges (ADR 0002 A8); "
+                "set overlap_policy = 'hold_target' with mode = 'fixed_target' to allow overlap"
             )
+
+
+def check_overlap_policy(mode: str, policy: str) -> None:
+    """Validate the overlap policy for a table or a directly constructed spec."""
+    if policy not in OVERLAP_POLICIES:
+        raise ValueError(f"'smart_charging.overlap_policy' must be one of: {', '.join(OVERLAP_POLICIES)}")
+    if policy == "hold_target" and mode != "fixed_target":
+        reason = (
+            "the daily-persistence planner replaces grid targets but keeps reserves fixed, "
+            "so planning and replay cannot hold the same target"
+            if mode == "daily_persistence"
+            else "this mode has no grid-charge target to hold"
+        )
+        raise ValueError(f"'smart_charging.overlap_policy' = 'hold_target' requires mode = 'fixed_target': {reason}")
 
 
 def resolve_instructions(spec: SmartChargingSpec, tariff: ResolvedTariff | None) -> DispatchInstructions | None:
@@ -200,14 +221,16 @@ def period_layout(spec: SmartChargingSpec, period_labels: Any, target_usable_fra
     """The fixed-target instruction layout on ``period_labels``, charge steps targeting ``target_usable_fraction``.
 
     A discharge period may discharge; a charge period may grid-charge; the
-    reserve is zero. ``daily_persistence`` plans its targets on this layout.
+    reserve is zero except on overlapping steps under ``hold_target``, where
+    it equals the target. ``daily_persistence`` plans on the disjoint layout.
     """
     assert spec.grid_charge_efficiency is not None
     labels = np.asarray(period_labels, dtype=object)
     charge = np.isin(labels, spec.charge_periods)
+    discharge = np.isin(labels, spec.discharge_periods)
     return DispatchInstructions(
-        discharge_allowed=np.isin(labels, spec.discharge_periods),
-        reserve_fraction=np.zeros(len(labels)),
+        discharge_allowed=discharge,
+        reserve_fraction=np.where(charge & discharge, target_usable_fraction, 0.0),
         grid_target_fraction=np.where(charge, target_usable_fraction, np.nan),
         grid_charge_efficiency=spec.grid_charge_efficiency,
         grid_import_limit_w=math.inf if spec.grid_import_limit_w is None else spec.grid_import_limit_w,
@@ -287,6 +310,7 @@ def smart_charging_provenance(
         )
     return {
         "mode": spec.mode,
+        "overlap_policy": spec.overlap_policy,
         "target_usable_fraction": spec.target_usable_fraction,
         "charge_periods": list(spec.charge_periods),
         "discharge_periods": list(spec.discharge_periods),
