@@ -818,8 +818,10 @@ demandlib-derived H0 example bundled with BREOS. The other standard profiles,
 supported when you provide the required CSV files yourself through
 `rlp_directory`. `load_profile = "custom"` reads any CSV you name with
 `load_profile_file`, `load_profile_column` and `load_profile_unit`. Keys are
-case-insensitive; the numeric keys (`"1"` to `"8"`) and the aliases `h0`,
-`default` and `crest` were removed in 0.7.0.
+case-insensitive. The numeric keys and the aliases `h0`, `default` and
+`crest` were removed in 0.7.0;
+[Migrating from BREOS 0.6.2](interpreting-results.md#migrating-from-breos-062)
+maps them to the current keys.
 
 ```python
 breos.App({

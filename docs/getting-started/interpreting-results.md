@@ -4,15 +4,101 @@
 pandas or numpy types. The same dict is written by the CLI's `--output`
 flag.
 
+## Top-level keys
+
+| Key | Description |
+|---|---|
+| `result_schema_version` | Format number of the result's names (see [Currency and result format](#currency-and-result-format)) |
+| `n_modules` | Number of PV modules used in the simulation |
+| `pv_kwp` | System DC nameplate capacity (kWp) |
+| `battery_kwh` | Battery capacity (kWh) |
+| `usable_ac_system_production_kwh` | PV-origin AC delivered to load or export in year 1 |
+| `pv_dc_generation_kwh` | PV DC generated before dispatch |
+| `direct_pv_ac_load_kwh` | Direct PV AC delivered to load |
+| `pv_origin_battery_ac_load_kwh` | PV-origin AC delivered from storage to load |
+| `curtailment_dc_kwh` | PV DC that could not serve load, charge storage, or export |
+| `consumption_kwh` | Year 1 load |
+| `self_consumption_kwh` | Direct PV AC plus PV-origin battery AC delivered to load |
+| `grid_import_kwh` | Year 1 energy bought from the grid |
+| `grid_export_kwh` | Year 1 energy sold to the grid |
+| `grid_independence_pct` | Year 1 grid independence ratio |
+| `self_consumption_pct` | Year 1 self-consumption ratio |
+| `total_investment` | Total CAPEX |
+| `payback_year` | Sustained discounted payback within the simulated period, as a whole year: the year from which cumulative NPV savings are zero or above and stay so to the horizon (`None` if not reached) |
+| `npv_savings` | Cumulative NPV savings over the projection horizon |
+| `terminal_health_credit` | Optional nominal credit at the end of year T; null when disabled or on a partial period |
+| `terminal_health_credit_npv` | Present value of that credit |
+| `npv_savings_terminal_adjusted` | Unadjusted NPV plus credit present value, before rounding |
+| `lcoe_per_kwh` | Levelized cost of electricity from system CAPEX, O&M, simulated replacements, and discounted PV production |
+| `monthly` | Year 1 monthly energy balance rows |
+| `financial` | Yearly financial projection rows (year 0 = investment) |
+| `yearly` | Per-year breakdown of production, load, imports, exports |
+| `pv_loss_waterfall` | Year 1 PV loss waterfall from the irradiance reference through the static PVWatts losses, with inverter and dispatch blocks beside it (see [PV loss waterfall](#pv-loss-waterfall)) |
+| `degradation` | Battery degradation engine, model, initial and final state of health and replacement events |
+| `smart_charging` | Present with [smart charging](configuration.md#smart-charging): grid charging, delivery by origin and stored energy by origin |
+| `pv_arrays` | Present with `pv_arrays` (see [Multi-array systems](#multi-array-systems)) |
+| `period` | Present on a [period run](#period-runs) |
+| `provenance` | BREOS version, currency, normalized resolved config, ledger schema version, weather/location metadata, resolution, timezone, and start date; `input_repairs` holds the reports passed as `App(..., input_repairs=...)`, and is present only then (see [Repairing measured data](inputs.md#repairing-measured-data)) |
+
+## Year-1 money keys
+
+These keys give the first project year's money components at year-1 prices:
+the prices of the first project year, before escalation and discounting. They
+are in the run's currency and rounded to 0.01. Without a `[tariff]` they use
+the flat `costs` prices; with one, each step's energy is priced at that
+step's tariff price. Flat and tariff runs report the same five keys. With a
+[`[reference_tariff]`](configuration.md#no-system-reference-tariff), the two
+no-system keys use the reference's prices instead.
+
+| Key | Description |
+|---|---|
+| `grid_import_cost_year1_prices` | Cost of the year-1 grid import, `grid_import_kwh` |
+| `grid_export_revenue_year1_prices` | Revenue from the year-1 grid export, `grid_export_kwh` |
+| `fixed_charge_year1_prices` | The fixed charge for the simulated duration of year 1: the daily charge times the simulated hours / 24 |
+| `grid_charge_cost_year1_prices` | Present only with smart charging (`smart_charging.mode = "fixed_target"`, `"daily_persistence"` or `"discharge_only"`): the part of `grid_import_cost_year1_prices` bought to charge the battery. Always 0 with `discharge_only`, which never charges from the grid |
+| `no_system_import_cost_year1_prices` | Import cost of the household without a system, which buys its whole year-1 load, `consumption_kwh`. It is the import cost only; the fixed charge is `no_system_fixed_charge_year1_prices` |
+| `no_system_fixed_charge_year1_prices` | The fixed charge of the household without a system for year 1: `fixed_charge_year1_prices`, or the reference tariff's fixed charge for the same days when a `[reference_tariff]` is set |
+
+`grid_charge_cost_year1_prices` is already included in
+`grid_import_cost_year1_prices`, so do not add the two. It is the same value
+as `smart_charging.yearly[0].grid_charge_cost_year1_prices`.
+
+Without a `[reference_tariff]`, the same fixed charge applies with or
+without the system, so `no_system_fixed_charge_year1_prices` equals
+`fixed_charge_year1_prices`. The projection's no-system annual cost is the
+no-system import cost plus the no-system fixed charge, so the year-1
+no-system bill is
+`no_system_import_cost_year1_prices + no_system_fixed_charge_year1_prices`.
+
+Year 1 is not escalated, so these values match the `cost_import`,
+`revenue_export` and `cost_fixed_charge` of the year-1 `financial` row, and
+the two no-system keys match its `no_system_cost_import` and
+`no_system_cost_fixed_charge`; the later rows escalate. `breos sweep` copies every top-level scalar key into its
+CSV, so the sweep CSV carries these columns too.
+
+## Battery-specific keys
+
+Present only with a battery that can dispatch (`battery_kwh > 0`, and more
+than 1 Wh):
+
+| Key | Description |
+|---|---|
+| `battery_soh_end_pct` | State of health at the end of the projection horizon |
+| `battery_replacements` | Total number of replacements over the projection |
+| `battery_replacement_cost_t0_prices` | Total replacement cost at t = 0 prices, neither inflated nor discounted |
+| `battery_replacement_cost_npv` | The same replacements inflated to and discounted from each swap instant, as `npv_savings` counts them |
+
+With `battery_allow_terminal_replacement = false`, a pack that reaches end of
+life in the final degradation period of the horizon is not replaced. The
+replacement count and costs then leave out that one swap, and
+`battery_soh_end_pct` can end below the end-of-life threshold. See
+[Battery replacement at the end of the horizon](configuration.md#battery-replacement-at-the-end-of-the-horizon).
+
 ## Terminal-health credit
 
 The optional [`[terminal_value]`](configuration.md#terminal-health-credit)
-accounting sensitivity adds a final-pack health credit beside the unchanged
-`npv_savings`. It is not resale value: capacity health omits
-resistance-related limits and no PV, inverter or stored energy is credited.
-The fraction above the simulation's replacement threshold is clipped to
-0–1; only the pack present after final aging and any final replacement is
-credited. All replacement outlays remain, including a final-year swap.
+accounting sensitivity adds three fields beside the unchanged `npv_savings`.
+The configuration page gives the formula and what is credited.
 
 `terminal_health_credit` is nominal year-T money, priced with the resolved
 replacement-pack price at t = 0, inflated and reduced by replacement
@@ -36,6 +122,205 @@ statistics. Its `provenance.terminal_value.trajectories` records the inputs
 for each numbered run. Disabled values are NaN with no statistics or
 terminal-value provenance. Projected optimization ignores the table and
 ranks on unadjusted NPV.
+
+## Emissions keys
+
+Present only when `emissions_country` is set:
+
+| Key | Description |
+|---|---|
+| `co2_avoided_self_consumption_year1_kg` | Year 1 behind-the-meter benefit |
+| `co2_avoided_export_year1_kg` | Year 1 exported-generation benefit |
+| `co2_avoided_total_year1_kg` | Sum of the two year 1 pathways |
+| `co2_avoided_self_consumption_lifetime_kg` | Lifetime behind-the-meter benefit |
+| `co2_avoided_export_lifetime_kg` | Lifetime exported-generation benefit |
+| `co2_avoided_total_lifetime_kg` | Sum of the two lifetime pathways |
+
+Self-consumption uses the preset's avoided-grid factor. Export uses
+`export_emissions_factor_gco2_kwh` when configured; otherwise it explicitly
+falls back to the same avoided-grid factor. Curtailed energy, conversion and
+storage losses, initial SOC, and PV energy remaining stored at the reporting
+boundary receive no credit.
+
+## Multi-array systems
+
+When `pv_arrays` is set, the result also contains a `pv_arrays` list with
+each array's resolved configuration: `modules`, `module`, `tilt`, `azimuth`,
+and `tracking`, plus the resolved tracker geometry for a tracking array.
+
+## PV loss waterfall
+
+`pv_loss_waterfall` reports the year 1 PV production chain in kWh. Its
+ordered `stages` cover only the linear PV-model chain: horizontal reference,
+transposition, front-side incidence-angle modifier, optional bifacial rear
+gain, cell temperature, and static PVWatts losses. There is no degradation
+stage because year 1 has none (see [Module aging](../api/pv.md#module-aging)),
+so the last stage equals `energy_balance.pv_dc.generation_kwh`. Dispatch
+is a branching flow and is therefore reported under `energy_balance`, not
+forced into a misleading linear stage.
+
+The `bifacial` block identifies the resolved model and per-array module factor
+and geometry. It reports rear gain in effective-DC-equivalent kWh and as a
+percentage of front effective irradiance. The same block is retained under
+`provenance.pv_model.bifacial` so serialized results carry the assumptions that
+produced the gain.
+
+The `pvwatts` block contains fixed-loss percentages and attributed kWh. The
+`inverter` block reports AC rating plus separate direct-PV and
+battery-discharge conversion losses. `energy_balance.pv_dc` reconciles PV
+routing; `energy_balance.ac_delivery` reconciles delivered/exported AC; and
+`energy_balance.battery_stored_energy` reconciles beginning/end energy,
+charge, discharge, standby, capacity-window, and replacement boundary flows.
+
+Use {py:func}`breos.plotting.plot_pv_loss_waterfall` to render the same
+block as a PV loss diagram.
+
+## Economic conventions
+
+The projection is in nominal terms: `inflation_rate`, the escalators and
+`discount_rate` are nominal annual rates. `result()["provenance"]["economics"]`
+records the rates a run used, each escalator after inheriting from
+`inflation_rate`, and the implied real discount rate,
+`(1 + discount_rate) / (1 + inflation_rate) − 1`. To run a real study, give
+real rates and zero inflation; the arithmetic is the same, and BREOS records
+the rates rather than the intent.
+
+Timing:
+
+- The initial investment is at year 0.
+- Energy, the fixed charge and O&M are at year-1 prices, escalated
+  `(1 + rate)^(n − 1)` in year `n` and booked at the end of the year, so
+  discounted by `(1 + discount_rate)^n`. When an escalator equals the
+  discount rate, one year of discounting still remains.
+- A battery replacement is priced at today's (t = 0) storage cost, inflated
+  to the instant of the swap and discounted from that instant, not from a
+  year boundary. The simulation reports only when a pack was swapped and its
+  capacity; the economics prices it, the same way for the App,
+  Monte Carlo and the optimizer.
+- The daily fixed charge is billed on the simulated duration: 365 days for a
+  common year, 366 for a leap year.
+
+## Monthly and yearly breakdowns
+
+### `monthly`
+
+A list of dicts, one per month of year 1 (12 rows; a period run has one per
+civil month of its window). From the quickstart run:
+
+```python
+{
+    "month": "Jan",
+    "pv_dc_generation_kwh": 572.25,
+    "direct_pv_ac_load_kwh": 157.52,
+    "pv_origin_battery_ac_load_kwh": 99.62,
+    "usable_ac_system_production_kwh": 538.94,
+    "curtailment_dc_kwh": 0.0,
+    "consumption_kwh": 407.38,
+    "self_consumption_kwh": 257.15,
+    "grid_import_kwh": 146.36,
+    "grid_export_kwh": 281.8,
+    "grid_independence_pct": 64.07,
+}
+```
+
+### `yearly`
+
+A list of one dict per simulation year (length `projection_years`). Each
+row contains the same fields as `monthly` aggregated to a year, plus
+`soh_pct` when a battery is present.
+
+### `financial`
+
+A list of dicts with one row per year (year 0 is the investment row). From
+the quickstart run:
+
+```python
+{"year": 0, "balance": -7788.85, "reference": 0.0}
+{"year": 1, "balance": -6899.8, "reference": 0.0, "cost_with_system": 8008.83,
+ "cost_without_system": 1109.03, "no_system_cost_import": 1032.8,
+ "no_system_cost_fixed_charge": 109.5, "cost_import": 216.91,
+ "revenue_export": 199.84, "cost_operation": 100.0, "cost_fixed_charge": 109.5,
+ "cost_replacement": 0.0, "replacement_time_years": None}
+# ...
+```
+
+`balance` is the cumulative NPV savings, `cost_without_system` minus
+`cost_with_system`. `cost_with_system` and `cost_without_system` are the
+cumulative discounted costs with and without the system; `cost_with_system`
+includes the investment. `replacement_time_years` is the project time, in
+years, of a battery replacement in that year, or `None`. From year 1,
+`no_system_cost_import` and
+`no_system_cost_fixed_charge` give that year's no-system cost by component,
+escalated and not discounted, beside the system's `cost_import`,
+`revenue_export`, `cost_operation`, `cost_fixed_charge` and
+`cost_replacement`. With a
+[no-system reference tariff](configuration.md#no-system-reference-tariff),
+they are at the reference's prices and escalation. `payback_year` is the sustained discounted
+payback within the simulated period: the year from which `balance ≥ 0` holds
+to the end of the horizon. The series starts at year 0, so a system that
+recovers its investment during year 1 reports 1. If a battery replacement
+turns `balance` negative again, payback is the later recovery, and a
+`balance` that is negative in the last year means no payback.
+`economics.find_payback_year_interpolated` gives the same crossing as a fractional
+year, interpolated linearly between the annual points; it is an estimate
+from year-end values, not an exact date.
+
+## Period runs
+
+A run with a [`[period]`](recipes.md#simulate-part-of-a-year) window
+simulates that window once, with no projection years. Its result keeps the
+full-year keys, with these differences:
+
+- The energy keys (`usable_ac_system_production_kwh`, `grid_import_kwh`,
+  `self_consumption_kwh` and the rest), the [year-1 money
+  keys](#year-1-money-keys), the year-1 CO2 keys and the PV loss waterfall
+  cover the window. The waterfall's `basis` is `"period"`. The fixed charge
+  is billed on the window's civil days.
+- `yearly` has one row, labelled with the window's `period_start` and
+  `period_end` (exclusive). `monthly` groups the window by the location's
+  civil months, so a window inside June has one `"Jun"` row. A full-year
+  run groups by the weather's clock instead, so where that clock is not the
+  civil one, a window's month can differ from the full-year run's by the
+  hour at the month edge.
+- The lifetime economics are `None`: `npv_savings`, `payback_year`,
+  the three terminal-health fields,
+  `lcoe_per_kwh`, `financial`, `battery_replacement_cost_t0_prices`,
+  `battery_replacement_cost_npv` and the lifetime CO2 keys. A window has no
+  project lifetime to escalate, discount or pay back over. `total_investment`
+  is still reported.
+- `battery_soh_end_pct` is the state of health at the end of the window,
+  including the rainflow cycles still open at its end, which the last day
+  of any run counts.
+- A top-level `period` block, also recorded as `provenance.period`, describes
+  the window:
+
+```python
+{
+    "start": "2025-06-01",
+    "end": "2025-06-08",
+    "end_exclusive": True,
+    "timezone": "Europe/Lisbon",
+    "days": 7,
+    "start_time": "2025-06-01T00:00:00+01:00",
+    "end_time": "2025-06-08T00:00:00+01:00",
+    "projection_years_used": 1,
+    "simulated_hours": 168.0,
+    "lifetime_economics": "skipped",
+    "lifetime_economics_reason": "A period shorter than a year runs once, ...",
+    "skipped_fields": [
+        "payback_year",
+        "npv_savings",
+        "terminal_health_credit",
+        "terminal_health_credit_npv",
+        "npv_savings_terminal_adjusted",
+        "lcoe_per_kwh",
+        "financial",
+    ],
+}
+```
+
+`skipped_fields` lists the keys of this result that are `None` for that
+reason; the example is a PV-only run without emissions.
 
 ## Currency and result format
 
@@ -129,132 +414,36 @@ by feature:
   weather sequence, `weather_by_year`. See
   [hourly weather at 15-minute resolution](configuration.md#hourly-weather-at-15-minute-resolution).
 
-## Top-level keys
-
-| Key | Description |
-|---|---|
-| `result_schema_version` | Format number of the result's names (see [Currency and result format](#currency-and-result-format)) |
-| `n_modules` | Number of PV modules used in the simulation |
-| `pv_kwp` | System DC nameplate capacity (kWp) |
-| `battery_kwh` | Battery capacity (kWh) |
-| `usable_ac_system_production_kwh` | PV-origin AC delivered to load or export in year 1 |
-| `pv_dc_generation_kwh` | PV DC generated before dispatch |
-| `direct_pv_ac_load_kwh` | Direct PV AC delivered to load |
-| `pv_origin_battery_ac_load_kwh` | PV-origin AC delivered from storage to load |
-| `curtailment_dc_kwh` | PV DC that could not serve load, charge storage, or export |
-| `consumption_kwh` | Year 1 load |
-| `self_consumption_kwh` | Direct PV AC plus PV-origin battery AC delivered to load |
-| `grid_import_kwh` | Year 1 energy bought from the grid |
-| `grid_export_kwh` | Year 1 energy sold to the grid |
-| `grid_independence_pct` | Year 1 grid independence ratio |
-| `self_consumption_pct` | Year 1 self-consumption ratio |
-| `total_investment` | Total CAPEX |
-| `payback_year` | Sustained discounted payback within the simulated period, as a whole year: the year from which cumulative NPV savings are zero or above and stay so to the horizon (`None` if not reached) |
-| `npv_savings` | Cumulative NPV savings over the projection horizon |
-| `terminal_health_credit` | Optional nominal credit at the end of year T; null when disabled or on a partial period |
-| `terminal_health_credit_npv` | Present value of that credit |
-| `npv_savings_terminal_adjusted` | Unadjusted NPV plus credit present value, before rounding |
-| `lcoe_per_kwh` | Levelized cost of electricity from system CAPEX, O&M, simulated replacements, and discounted PV production |
-| `monthly` | Year 1 monthly energy balance rows |
-| `financial` | Yearly financial projection rows (year 0 = investment) |
-| `yearly` | Per-year breakdown of production, load, imports, exports |
-| `pv_loss_waterfall` | Year 1 PV loss waterfall from irradiance reference through PVWatts losses, inverter losses, and dispatch losses |
-| `provenance` | BREOS version, currency, normalized resolved config, ledger schema version, weather/location metadata, resolution, timezone, and start date; `input_repairs` holds the reports passed as `App(..., input_repairs=...)`, and is present only then (see [Repairing measured data](inputs.md#repairing-measured-data)) |
-
-## Year-1 money keys
-
-These keys give the first project year's money components at year-1 prices:
-the prices of the first project year, before escalation and discounting. They
-are in the run's currency and rounded to 0.01. Without a `[tariff]` they use
-the flat `costs` prices; with one, each step's energy is priced at that
-step's tariff price. Flat and tariff runs report the same five keys. With a
-[`[reference_tariff]`](configuration.md#no-system-reference-tariff), the two
-no-system keys use the reference's prices instead.
-
-| Key | Description |
-|---|---|
-| `grid_import_cost_year1_prices` | Cost of the year-1 grid import, `grid_import_kwh` |
-| `grid_export_revenue_year1_prices` | Revenue from the year-1 grid export, `grid_export_kwh` |
-| `fixed_charge_year1_prices` | The fixed charge for the simulated duration of year 1: the daily charge times the simulated hours / 24 |
-| `grid_charge_cost_year1_prices` | Present only with smart charging (`smart_charging.mode = "fixed_target"`, `"daily_persistence"` or `"discharge_only"`): the part of `grid_import_cost_year1_prices` bought to charge the battery. Always 0 with `discharge_only`, which never charges from the grid |
-| `no_system_import_cost_year1_prices` | Import cost of the household without a system, which buys its whole year-1 load, `consumption_kwh`. It is the import cost only; the fixed charge is `no_system_fixed_charge_year1_prices` |
-| `no_system_fixed_charge_year1_prices` | The fixed charge of the household without a system for year 1: `fixed_charge_year1_prices`, or the reference tariff's fixed charge for the same days when a `[reference_tariff]` is set |
-
-`grid_charge_cost_year1_prices` is already included in
-`grid_import_cost_year1_prices`, so do not add the two. It is the same value
-as `smart_charging.yearly[0].grid_charge_cost_year1_prices`.
-
-Without a `[reference_tariff]`, the same fixed charge applies with or
-without the system, so `no_system_fixed_charge_year1_prices` equals
-`fixed_charge_year1_prices`. The projection's no-system annual cost is the
-no-system import cost plus the no-system fixed charge, so the year-1
-no-system bill is
-`no_system_import_cost_year1_prices + no_system_fixed_charge_year1_prices`.
-
-Year 1 is not escalated, so these values match the `cost_import`,
-`revenue_export` and `cost_fixed_charge` of the year-1 `financial` row, and
-the two no-system keys match its `no_system_cost_import` and
-`no_system_cost_fixed_charge`; the later rows escalate. `breos sweep` copies every top-level scalar key into its
-CSV, so the sweep CSV carries these columns too.
-
-## Battery-specific keys
-
-Present only when `battery_kwh > 0`:
-
-| Key | Description |
-|---|---|
-| `battery_soh_end_pct` | State of health at the end of the projection horizon |
-| `battery_replacements` | Total number of replacements over the projection |
-| `battery_replacement_cost_t0_prices` | Total replacement cost at t = 0 prices, neither inflated nor discounted |
-| `battery_replacement_cost_npv` | The same replacements inflated to and discounted from each swap instant, as `npv_savings` counts them |
-
-With `battery_allow_terminal_replacement = false`, a pack that reaches end of
-life in the final degradation period of the horizon is not replaced. The
-replacement count and costs then leave out that one swap, and
-`battery_soh_end_pct` can end below the end-of-life threshold. See
-[Battery replacement at the end of the horizon](configuration.md#battery-replacement-at-the-end-of-the-horizon).
-
-## Emissions keys
-
-Present only when `emissions_country` is set:
-
-| Key | Description |
-|---|---|
-| `co2_avoided_self_consumption_year1_kg` | Year 1 behind-the-meter benefit |
-| `co2_avoided_export_year1_kg` | Year 1 exported-generation benefit |
-| `co2_avoided_total_year1_kg` | Sum of the two year 1 pathways |
-| `co2_avoided_self_consumption_lifetime_kg` | Lifetime behind-the-meter benefit |
-| `co2_avoided_export_lifetime_kg` | Lifetime exported-generation benefit |
-| `co2_avoided_total_lifetime_kg` | Sum of the two lifetime pathways |
-
-Self-consumption uses the preset's avoided-grid factor. Export uses
-`export_emissions_factor_gco2_kwh` when configured; otherwise it explicitly
-falls back to the same avoided-grid factor. Curtailed energy, conversion and
-storage losses, initial SOC, and PV energy remaining stored at the reporting
-boundary receive no credit.
-
 ## Migrating from BREOS 0.6.2
 
-BREOS 0.7.0 removes the old names below without compatibility aliases.
-Update readers using the following mappings. The currency-neutral renames
-(the dropped `_eur` suffixes and the `_exact` payback fields, now
-`_interpolated`) are listed in the
-[changelog](https://github.com/Str4vinci/breos/blob/develop/CHANGELOG.md).
+BREOS 0.7.0 removes the old names below without compatibility aliases; a
+removed config key raises an error that names its replacement. Results of
+BREOS 0.6.2 carry no `result_schema_version`; 0.7.0 results carry format
+`"1"` (see [Currency and result format](#currency-and-result-format)).
+
+### Result fields
 
 | 0.6.2 field | 0.7.0 field or action |
 |---|---|
-| App config `dc_coupled` and `provenance.resolved_config.dc_coupled` | Remove the config key; it is now unknown. BREOS always uses its supported DC-coupled/hybrid dispatch. |
-| `BatteryModelProfile.operating_defaults`, discovery JSON `operating_defaults`, and serialized `model_profile.operating_defaults` | Remove the read. Profiles did not define any defaults; this field was always empty. |
+| `total_investment_eur`, `npv_savings_eur`, `lcoe_eur_kwh`, `battery_replacement_cost_eur` (App result and sweep CSV) | `total_investment`, `npv_savings`, `lcoe_per_kwh`, `battery_replacement_cost_t0_prices` |
+| Monte Carlo `npv_savings_eur`, `lcoe_eur_kwh`, `total_replacement_cost_eur`, `payback_year_exact` (runs, summary and CSV) | `npv_savings`, `lcoe_per_kwh`, `total_replacement_cost_t0_prices`, `payback_year_interpolated` |
+| Optimizer `NPV_Eur`, `Objective_NPV_Eur`, `Projected_NPV_Eur`, `Projected_Initial_Cost_Eur`, `Projected_Replacement_Cost_Eur`, `Projected_LCOE_Eur_kWh` | `NPV`, `Objective_NPV`, `Projected_NPV`, `Projected_Initial_Cost`, `Projected_Replacement_Cost_T0_Prices`, `Projected_LCOE_per_kWh` |
+| Optimizer `Projected_Breakeven_Year`, `Projected_Breakeven_Year_Exact` | `Projected_Payback_Year`, `Projected_Payback_Year_Interpolated` |
+| Optimizer `SteadyState_*` columns and `Objective_ZEB_Ratio` | Remove; the steady-state basis is gone and ZEB is not an objective |
+| `evaluate_projected_design(...).yearly` `PV_DC_kWh`, `PV_DC_Curtailed_kWh` | `PV_DC_Generation_kWh`, `Curtailment_DC_kWh` |
+| `breos list cost-presets --json` `*_eur_kwh` | `*_per_kwh`, with a `currency` field |
 | `co2_avoided_year1_kg` | Remove; read the existing `co2_avoided_total_year1_kg` field |
 | `co2_avoided_total_kg` | Remove; read the existing `co2_avoided_total_lifetime_kg` field |
 | Top-level `pv_production_kwh` | Remove; read the existing `usable_ac_system_production_kwh` field, which reports a different quantity |
 | `monthly[].pv_kwh`, `yearly[].pv_kwh` | Remove; read each row's existing `usable_ac_system_production_kwh`, which reports a different quantity |
-| Shared annual `Legacy_PV_Production_kWh` | Remove; read the existing `PV_Production_kWh`, which already means usable AC production |
+| `Legacy_PV_Production_kWh` in Monte Carlo trajectory and yearly tables and optimizer year tables | Remove; read the existing `PV_Production_kWh`, which already means usable AC production |
 | Monte Carlo `mean_pv_production_kwh` | Remove; read the existing `mean_usable_ac_system_production_kwh` |
 | `monthly[].import_kwh`, `yearly[].import_kwh` | Corresponding `grid_import_kwh` row field; values are unchanged |
 | `monthly[].export_kwh`, `yearly[].export_kwh` | Corresponding `grid_export_kwh` row field; values are unchanged |
-| Optimizer `Projected_Breakeven_Year` | `Projected_Payback_Year` |
-| Optimizer `Projected_Breakeven_Year_Exact` | `Projected_Payback_Year_Interpolated` |
+| `pv_loss_waterfall.stages` entry `year_1_degradation` | Remove; year 1 has no PV degradation, so `pvwatts_static` is the last stage |
+| `preserve_irradiance_energy` in App `provenance.weather` and Monte Carlo `settings` and weather metadata | `irradiance_resampling` (requested) and `irradiance_resampling_resolved` |
+| `provenance.resolved_config.dc_coupled` | Remove the read |
+| `BatteryModelProfile.operating_defaults`, discovery JSON `operating_defaults`, and serialized `model_profile.operating_defaults` | Remove the read. Profiles did not define any defaults; this field was always empty. |
 
 The removed legacy PV fields and `usable_ac_system_production_kwh` report
 different quantities. The old value counted PV DC sent into storage before
@@ -262,165 +451,43 @@ storage losses, along with direct and exported AC. The existing usable-AC
 field counts direct AC delivered to load, PV-origin battery AC delivered to
 load, and exported AC. This is also the retained definition of annual
 `PV_Production_kWh`. The timestep ledger still carries its `PV_Production`
-field, and dispatch values do not change.
+field, and dispatch values do not change. The ledger schema in provenance is
+now `"3.0"`.
 
-BREOS 0.7.0 does not normalize enum spelling in echoed provenance: for example,
-the configured spelling remains in `provenance.resolved_config`.
+`provenance.resolved_config` stores `calendar_model` and `load_profile` in
+their canonical spelling, for example `"demandlib_h0"` for `"DemandLib_H0"`.
+Other keys keep the spelling you configured.
 
-## Multi-array systems
+### Configuration keys and CLI flags
 
-When `pv_arrays` is set, the result also contains a `pv_arrays` list with
-each array's resolved configuration: `modules`, `module`, `tilt`, `azimuth`,
-and `tracking`, plus the resolved tracker geometry for a tracking array.
+| 0.6.2 key or flag | 0.7.0 replacement or action |
+|---|---|
+| App `dc_coupled`, `breos run --dc-coupled`, optimizer `battery.dc_coupled` | Remove. BREOS always uses its DC-coupled/hybrid dispatch. |
+| `load_profile = "1"` or `"default"` | `"demandlib_h0"` |
+| `load_profile = "4"`, `"5"`, `"6"` | `"eredes_btn_a"`, `"eredes_btn_b"`, `"eredes_btn_c"` |
+| `load_profile = "7"`, `"8"` | `"bdew_h0"`, `"ree_2.0td"` |
+| `load_profile = "h0"` | `"demandlib_h0"` (bundled) or `"bdew_h0"` (the BDEW publication) |
+| `load_profile = "crest"` | `"custom"` with `load_profile_file` for a CREST export; `"crest"` loaded the demandlib H0 profile |
+| `load_profile = "bdew_h0"` without `rlp_directory` | `bdew_h0` now reads the BDEW publication file you supply; use `"demandlib_h0"` for the bundled profile |
+| `[montecarlo] preserve_irradiance_energy`, `breos montecarlo --preserve-irradiance-energy` | Top-level `irradiance_resampling`, `--irradiance-resampling`; see [Hourly weather at 15-minute resolution](configuration.md#hourly-weather-at-15-minute-resolution) |
+| Optimizer `constraints.budget_eur` | `constraints.budget` |
+| Optimizer `optimization.objective_basis = "steady_state"` | Remove; `"projected"` is the only basis |
+| Optimizer `pv.params` `T_Pmax`, `T_Voc`, `T_Isc` | `T_Pmax_pct`, `T_Voc_pct`, `T_Isc_pct` |
+| Optimizer `name`, `[load]`, `[pv_specs]`, `simulation.weather_file`, `optimization.algorithm`, `costs.panel_wp`, `battery.battery_type` | Remove; the weather and load are function arguments, see [Optimization](optimization.md) |
+| Optimizer top-level `execution_backend` | Pass `execution_backend=` to the function |
 
-## PV loss waterfall
+`breos list load-profiles` lists the named keys; its `aliases` field is
+removed. The [optimizer configuration keys](../api/optimization.md#configuration-keys)
+lists every accepted optimizer key.
 
-`pv_loss_waterfall` reports the year 1 PV production chain in kWh. Its
-ordered `stages` cover only the linear PV-model chain: horizontal reference,
-transposition, front-side incidence-angle modifier, optional bifacial rear
-gain, cell temperature, and static PVWatts losses. There is no degradation
-stage because year 1 has none (see [Module aging](../api/pv.md#module-aging)),
-so the last stage equals `energy_balance.pv_dc.generation_kwh`. Dispatch
-is a branching flow and is therefore reported under `energy_balance`, not
-forced into a misleading linear stage.
+### Python API
 
-The `bifacial` block identifies the resolved model and per-array module factor
-and geometry. It reports rear gain in effective-DC-equivalent kWh and as a
-percentage of front effective irradiance. The same block is retained under
-`provenance.pv_model.bifacial` so serialized results carry the assumptions that
-produced the gain.
-
-The `pvwatts` block contains fixed-loss percentages and attributed kWh. The
-`inverter` block reports AC rating plus separate direct-PV and
-battery-discharge conversion losses. `energy_balance.pv_dc` reconciles PV
-routing; `energy_balance.ac_delivery` reconciles delivered/exported AC; and
-`energy_balance.battery_stored_energy` reconciles beginning/end energy,
-charge, discharge, standby, capacity-window, and replacement boundary flows.
-
-Use {py:func}`breos.plotting.plot_pv_loss_waterfall` to render the same
-block as a PV loss diagram.
-
-## Economic conventions
-
-The projection is in nominal terms: `inflation_rate`, the escalators and
-`discount_rate` are nominal annual rates. `result()["provenance"]["economics"]`
-records the rates a run used, each escalator after inheriting from
-`inflation_rate`, and the implied real discount rate,
-`(1 + discount_rate) / (1 + inflation_rate) − 1`. To run a real study, give
-real rates and zero inflation; the arithmetic is the same, and BREOS records
-the rates rather than the intent.
-
-Timing (ADR 0003 E3):
-
-- The initial investment is at year 0.
-- Energy, the fixed charge and O&M are at year-1 prices, escalated
-  `(1 + rate)^(n − 1)` in year `n` and booked at the end of the year, so
-  discounted by `(1 + discount_rate)^n`. When an escalator equals the
-  discount rate, one year of discounting still remains.
-- A battery replacement is priced at today's (t = 0) storage cost, inflated
-  to the instant of the swap and discounted from that instant, not from a
-  year boundary. The simulation reports only when a pack was swapped and its
-  capacity; the economics prices it (ADR 0003 E4), the same way for the App,
-  Monte Carlo and the optimizer.
-- The daily fixed charge is billed on the simulated duration: 365 days for a
-  common year, 366 for a leap year.
-
-## Monthly and yearly breakdowns
-
-### `monthly`
-
-A list of 12 dicts, one per month of year 1:
-
-```python
-{
-    "month": "Jan",
-    "usable_ac_system_production_kwh": 245.3,
-    "consumption_kwh": 412.5,
-    "self_consumption_kwh": 180.2,
-    "grid_import_kwh": 232.3,
-    "grid_export_kwh": 65.1,
-    "grid_independence_pct": 43.7,
-}
-```
-
-### `yearly`
-
-A list of one dict per simulation year (length `projection_years`). Each
-row contains the same fields as `monthly` aggregated to a year, plus
-`soh_pct` when a battery is present.
-
-### `financial`
-
-A list of dicts with one row per year (year 0 is the investment row):
-
-```python
-{"year": 0, "balance": -8500.0, "reference": 0.0}
-{"year": 1, "balance": -7950.4, "reference": 0.0, "cost_with_system": 542.1, "cost_without_system": 1092.5}
-# ...
-```
-
-`balance` is the cumulative NPV savings; `cost_with_system` and
-`cost_without_system` are the cumulative discounted costs of operating with
-and without the BREOS-sized system. From year 1, `no_system_cost_import` and
-`no_system_cost_fixed_charge` give that year's no-system cost by component,
-escalated and not discounted, beside the system's `cost_import`,
-`revenue_export`, `cost_operation`, `cost_fixed_charge` and
-`cost_replacement`. With a
-[no-system reference tariff](configuration.md#no-system-reference-tariff),
-they are at the reference's prices and escalation. `payback_year` is the sustained discounted
-payback within the simulated period: the year from which `balance ≥ 0` holds
-to the end of the horizon. The series starts at year 0, so a system that
-recovers its investment during year 1 reports 1. If a battery replacement
-turns `balance` negative again, payback is the later recovery, and a
-`balance` that is negative in the last year means no payback.
-`economics.find_payback_year_interpolated` gives the same crossing as a fractional
-year, interpolated linearly between the annual points; it is an estimate
-from year-end values, not an exact date.
-
-## Period runs
-
-A run with a [`[period]`](recipes.md#simulate-part-of-a-year) window
-simulates that window once, with no projection years. Its result keeps the
-full-year keys, with these differences:
-
-- The energy keys (`usable_ac_system_production_kwh`, `grid_import_kwh`,
-  `self_consumption_kwh` and the rest), the [year-1 money
-  keys](#year-1-money-keys), the year-1 CO2 keys and the PV loss waterfall
-  cover the window. The waterfall's `basis` is `"period"`. The fixed charge
-  is billed on the window's civil days.
-- `yearly` has one row, labelled with the window's `period_start` and
-  `period_end` (exclusive). `monthly` groups the window by the location's
-  civil months, so a window inside June has one `"Jun"` row. A full-year
-  run groups by the weather's clock instead, so where that clock is not the
-  civil one, a window's month can differ from the full-year run's by the
-  hour at the month edge.
-- The lifetime economics are `None`: `npv_savings`, `payback_year`,
-  `lcoe_per_kwh`, `financial`, `battery_replacement_cost_t0_prices`,
-  `battery_replacement_cost_npv` and the lifetime CO2 keys. A window has no
-  project lifetime to escalate, discount or pay back over. `total_investment`
-  is still reported.
-- `battery_soh_end_pct` is the state of health at the end of the window,
-  including the rainflow cycles still open at its end, which the last day
-  of any run counts.
-- A top-level `period` block, also recorded as `provenance.period`, describes
-  the window:
-
-```python
-{
-    "start": "2025-06-01",
-    "end": "2025-06-08",
-    "end_exclusive": True,
-    "timezone": "Europe/Lisbon",
-    "days": 7,
-    "start_time": "2025-06-01T00:00:00+01:00",
-    "end_time": "2025-06-08T00:00:00+01:00",
-    "projection_years_used": 1,
-    "simulated_hours": 168.0,
-    "lifetime_economics": "skipped",
-    "lifetime_economics_reason": "A period shorter than a year runs once, ...",
-    "skipped_fields": ["payback_year", "npv_savings", "lcoe_per_kwh", "financial"],
-}
-```
-
-`skipped_fields` lists the keys of this result that are `None` for that
-reason; the example is a PV-only run without emissions.
+The top-level `breos` namespace is now exactly `breos.__all__`; import
+lower-level names from their modules. Removed functions include
+`optimize_tilt`, `optimize_battery_size`,
+`calculate_lcoe`, `calculate_financials`, `calculate_co2_savings`,
+`align_load_to_pv`, the inverter presets, `resample_tmy_to_15min`, the
+`preserve_irradiance_energy` argument of `resample_to_15min`, and many
+plotting helpers. The `Removed` and `Changed` sections of the
+[changelog](https://github.com/Str4vinci/breos/blob/develop/CHANGELOG.md)
+list each one with its replacement.
