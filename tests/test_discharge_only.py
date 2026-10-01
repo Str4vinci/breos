@@ -218,7 +218,7 @@ def test_app_discharges_only_in_the_listed_periods(resolution, tariff, backend):
 
     app.simulate()
     result = app.result()
-    assert result["result_schema_version"] == "2.4"
+    assert result["result_schema_version"] == "2.5"
     record = result["provenance"]["smart_charging"]
     assert record["mode"] == "discharge_only"
     assert record["discharge_periods"] == ["peak"]
@@ -350,7 +350,7 @@ def test_montecarlo_runs_discharge_only(tmp_path, write_multiyear_weather):
     record = gated.provenance["smart_charging"]
     assert record["mode"] == "discharge_only" and record["discharge_periods"] == ["peak"]
     assert record["schedule_hash"] == gated.provenance["tariff"]["schedule_hash"]
-    assert gated.provenance["result_schema_version"] == "2.4"
+    assert gated.provenance["result_schema_version"] == "2.5"
     pd.testing.assert_frame_equal(every.runs, greedy.runs, check_exact=True)
 
 
@@ -391,7 +391,7 @@ def test_optimizer_scores_a_discharge_only_design(tariff_case):
     every = _evaluate(tariff_case, smart_charging={"mode": "discharge_only", "discharge_periods": ["off_peak", "peak"]})
 
     assert gated.provenance["smart_charging"]["mode"] == "discharge_only"
-    assert gated.provenance["result_schema_version"] == "2.4"
+    assert gated.provenance["result_schema_version"] == "2.5"
     assert (gated.yearly["Grid_AC_To_Battery_kWh"] == 0.0).all()
     assert not gated.yearly["Import_kWh"].equals(greedy.yearly["Import_kWh"])
     pd.testing.assert_frame_equal(every.yearly, greedy.yearly, check_exact=True)

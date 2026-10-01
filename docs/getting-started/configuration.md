@@ -443,7 +443,10 @@ fixed_charge_per_day = 0.25              # optional, default 0
 
 - Every period of the schedule needs an import and an export price, or an
   `all` price for every period. A period the schedule does not have is an
-  error; there is no fallback to another schedule.
+  error; there is no fallback to another schedule. A custom schedule with
+  month seasons is priced by season instead: each season's table prices the
+  periods that season's rules use, or gives `all`, and pricing a period the
+  season never uses is an error.
 - Instead of `schedule`, you can define `[tariff.custom_schedule]` inline.
   Set `identifier`, `version`, `timezone`, `cycle`, `periods`, and one or
   more `[[tariff.custom_schedule.rules]]` tables. Do not set both schedule
@@ -451,6 +454,10 @@ fixed_charge_per_day = 0.25              # optional, default 0
   each rule's intervals must cover the whole local day without gaps or
   overlaps. See [Custom App schedules](../api/tariffs.md#custom-app-schedules)
   for a complete example.
+- A custom schedule can name calendar-month `seasons`, such as quarters,
+  instead of the standard/DST seasons. Its rules then select a season by
+  name, and each price list may give a table of period prices for every
+  season. See [Month seasons](../api/tariffs.md#month-seasons).
 - Holidays are optional and explicit. `holidays.dates` maps each covered
   year to its dates; provide the complete calendar you intend for each year
   the simulation can use. A run in a year absent from that map fails rather

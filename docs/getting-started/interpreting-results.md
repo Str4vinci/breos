@@ -53,7 +53,14 @@ policy and a `terminal_period` description, to the provenance of a projected
 design and of an optimizer search. See
 [battery replacement at the end of the horizon](configuration.md#battery-replacement-at-the-end-of-the-horizon).
 Default results are otherwise unchanged.
-Version "2.4" adds the [`discharge_only`](configuration.md#discharge-only)
+Version "2.4" adds calendar-month
+[seasons](../api/tariffs.md#month-seasons) to custom schedules: `seasons` in
+`resolved_config.tariff.custom_schedule` and, as the month partition, in
+`provenance.tariff`. With month seasons, `import_prices` and `export_prices`
+in the resolved config and in `provenance.tariff` may map each season to its
+period prices instead of each period to a price. Results without month
+seasons are unchanged.
+Version "2.5" adds the [`discharge_only`](configuration.md#discharge-only)
 smart-charging mode to `provenance.smart_charging`: such a run records its
 discharge periods, an empty `charge_periods`, and `None` for
 `target_usable_fraction`, `grid_charge_efficiency` and

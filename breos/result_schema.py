@@ -47,7 +47,15 @@ App and Monte Carlo results, and ``battery_replacement_treatment``, with its
 to the provenance of a projected design and of an optimizer search. Default
 results are otherwise unchanged.
 
-2.4 adds ``mode = "discharge_only"`` to ``provenance.smart_charging`` of App,
+2.4 adds calendar-month seasons to custom tariff schedules: ``seasons`` in
+``resolved_config.tariff.custom_schedule`` and, as the month partition, in
+``provenance.tariff`` of App, Monte Carlo and optimizer results that define
+them. With month seasons, ``import_prices`` and ``export_prices`` in the
+resolved config and in ``provenance.tariff`` may map each season to its
+period prices instead of each period to a price. Results without month
+seasons are unchanged.
+
+2.5 adds ``mode = "discharge_only"`` to ``provenance.smart_charging`` of App,
 Monte Carlo and optimizer results: a run in that mode records its discharge
 periods, an empty ``charge_periods`` and None for
 ``target_usable_fraction``, ``grid_charge_efficiency`` and
@@ -55,4 +63,4 @@ periods, an empty ``charge_periods`` and None for
 it as it reports the other modes. Other results are unchanged.
 """
 
-RESULT_SCHEMA_VERSION = "2.4"
+RESULT_SCHEMA_VERSION = "2.5"
