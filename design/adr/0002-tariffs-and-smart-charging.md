@@ -507,7 +507,7 @@ system, independently of the system's `[tariff]` or flat costs:
   cheapest reference a household is eligible for is a study decision, not a
   BREOS feature.
 
-Result schema 2.4 reports the baseline components with or without a
+Result schema 2.6 reports the baseline components with or without a
 reference, and `provenance.reference_tariff` only when one is configured.
 
 ### Implementation notes for the dispatch-seam PR
