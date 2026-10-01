@@ -1342,11 +1342,19 @@ _CUSTOM_SCHEDULE_KEYS = frozenset(
         "effective_from",
         "effective_to",
         "holidays",
+        "seasons",
     }
 )
 _CUSTOM_SCHEDULE_REQUIRED = frozenset({"identifier", "version", "timezone", "cycle", "periods", "rules"})
 _CUSTOM_RULE_KEYS = frozenset({"days", "season", "intervals"})
 _CUSTOM_HOLIDAY_KEYS = frozenset({"day_type", "dates", "source"})
+
+
+def _month(value: Any, where: str) -> int:
+    month = integer(minimum=1)(value, where)
+    if month > 12:
+        raise ValueError(f"'{where}' must be a month from 1 through 12")
+    return month
 
 
 def _custom_schedule(value: Any, where: str) -> ScheduleDefinition:
@@ -1370,6 +1378,18 @@ def _custom_schedule(value: Any, where: str) -> ScheduleDefinition:
     if not isinstance(periods, (list, tuple)):
         raise TypeError(f"'{where}.periods' must be a list of period names")
 
+    seasons = raw.get("seasons")
+    season_selectors: tuple[str, ...] = ("all", "dst", "standard")
+    if seasons is not None:
+        if not isinstance(seasons, Mapping) or not seasons:
+            raise TypeError(f"'{where}.seasons' must be a table of season names to lists of months")
+        normalized_seasons: dict[str, list[int]] = {}
+        for name, months in seasons.items():
+            season = text(name, f"{where}.seasons key")
+            normalized_seasons[season] = list_of(_month, min_length=1)(months, f"{where}.seasons.{season}")
+        normalized_raw["seasons"] = normalized_seasons
+        season_selectors = ("all", *sorted(normalized_seasons))
+
     rules = raw["rules"]
     if not isinstance(rules, (list, tuple)) or not rules:
         raise TypeError(f"'{where}.rules' must be a non-empty list")
@@ -1386,7 +1406,7 @@ def _custom_schedule(value: Any, where: str) -> ScheduleDefinition:
         normalized_rule["days"] = choice(("all", "saturday", "sunday", "weekday"))(
             rule_table["days"], f"{rule_where}.days"
         )
-        normalized_rule["season"] = choice(("all", "dst", "standard"))(rule_table["season"], f"{rule_where}.season")
+        normalized_rule["season"] = choice(season_selectors)(rule_table["season"], f"{rule_where}.season")
         if not isinstance(rule_table["intervals"], Mapping):
             raise TypeError(f"'{rule_where}.intervals' must be a table/dict")
         normalized_rules.append(normalized_rule)
@@ -1433,12 +1453,66 @@ def _selected_schedule(table: Mapping[str, Any]) -> ScheduleDefinition:
     return get_schedule_definition(table["schedule"])
 
 
+def _check_season_prices(definition: ScheduleDefinition, prices: Mapping[str, Any], where: str) -> None:
+    """Check prices given per month season: every season, each pricing exactly the periods it uses."""
+    schedule = definition.schedule
+    if definition.seasons is None:
+        raise ValueError(
+            f"'{where}' gives prices by season, but schedule {schedule.identifier!r} has no month seasons. "
+            "Price each period, or define [tariff.custom_schedule] seasons."
+        )
+    seasons = definition.seasons.names
+    unknown = sorted(set(prices) - set(seasons))
+    if unknown:
+        raise ValueError(
+            f"'{where}' has season(s) {', '.join(unknown)} that schedule {schedule.identifier!r} does not have. "
+            f"Its seasons: {', '.join(seasons)}."
+        )
+    missing = [season for season in seasons if season not in prices]
+    if missing:
+        raise ValueError(
+            f"'{where}' has no prices for season(s) {', '.join(missing)}. Price every season of "
+            f"{schedule.identifier!r}: {', '.join(seasons)}."
+        )
+    for season in seasons:
+        given = set(prices[season])
+        used = definition.season_periods(season)
+        not_periods = sorted(given - set(schedule.periods) - {"all"})
+        if not_periods:
+            raise ValueError(
+                f"'{where}.{season}' has period(s) {', '.join(not_periods)} that schedule "
+                f"{schedule.identifier!r} does not have. Its periods: {', '.join(sorted(schedule.periods))}."
+            )
+        unused = sorted(given - used - {"all"})
+        if unused:
+            raise ValueError(
+                f"'{where}.{season}' prices {', '.join(unused)}, which season {season!r} never uses. "
+                f"Its periods: {', '.join(sorted(used))}; 'all' prices every one."
+            )
+        uncovered = sorted(used - given) if "all" not in given else []
+        if uncovered:
+            raise ValueError(
+                f"'{where}.{season}' has no price for {', '.join(uncovered)}. Price every period season "
+                f"{season!r} uses, or give 'all'."
+            )
+
+
 def _check_tariff_prices(table: dict[str, Any], where: str) -> None:
     if ("schedule" in table) == ("custom_schedule" in table):
         raise ValueError(f"'{where}' must set exactly one of 'schedule' or 'custom_schedule'")
-    schedule = _selected_schedule(table).schedule
+    definition = _selected_schedule(table)
+    schedule = definition.schedule
     periods = set(schedule.periods)
     for name in ("import_prices", "export_prices"):
+        nested = [isinstance(value, Mapping) for value in table[name].values()]
+        if any(nested) and not all(nested):
+            raise ValueError(
+                f"'{where}.{name}' mixes prices and season tables. Give every entry as a period price, or every "
+                "entry as a table of period prices for one month season."
+            )
+        if nested and all(nested):
+            _check_season_prices(definition, table[name], f"{where}.{name}")
+            continue
         given = set(table[name])
         unknown = sorted(given - periods - {"all"})
         if unknown:
@@ -1454,14 +1528,28 @@ def _check_tariff_prices(table: dict[str, Any], where: str) -> None:
             )
 
 
+_PERIOD_PRICES = mapping_of(text, number(minimum=0))
+
+
+def _price_entry(value: Any, where: str) -> Any:
+    """A period's price, or, for a schedule with month seasons, one season's period prices."""
+    if isinstance(value, Mapping):
+        return _PERIOD_PRICES(value, where)
+    return number(minimum=0)(value, where)
+
+
+# Prices by period, or by month season and then period; a sweep can address
+# either level (tariff.import_prices.peak, tariff.import_prices.winter.peak).
+_PRICE_LIST = mapping_of(text, _price_entry, depth=2)
+
 TARIFF_TABLE = TableSpec(
     "tariff",
     keys={
         "schedule": choice(available_tariff_schedules()),
         "custom_schedule": _custom_schedule,
         "currency": choice(tuple(sorted(SUPPORTED_CURRENCIES))),
-        "import_prices": mapping_of(text, number(minimum=0)),
-        "export_prices": mapping_of(text, number(minimum=0)),
+        "import_prices": _PRICE_LIST,
+        "export_prices": _PRICE_LIST,
         "fixed_charge_per_day": number(minimum=0),
         "boundary_policy": choice(tuple(sorted(BOUNDARY_POLICIES))),
         "study_date": _tariff_study_date,
@@ -1474,15 +1562,22 @@ TARIFF_TABLE = TableSpec(
             "[Bundled schedules](../api/tariffs.md#bundled-schedules). Set this or `custom_schedule`, not both"
         ),
         "custom_schedule": (
-            "Inline schedule definition with `identifier`, `version`, `timezone`, `cycle`, `periods`, and `rules`; "
-            "set this or `schedule`, not both. See [Custom App schedules](../api/tariffs.md#custom-app-schedules)"
+            "Inline schedule definition with `identifier`, `version`, `timezone`, `cycle`, `periods`, and `rules`, "
+            "and optional calendar-month `seasons`; set this or `schedule`, not both. See "
+            "[Custom App schedules](../api/tariffs.md#custom-app-schedules)"
         ),
         "currency": (
             f"Currency of the prices: {', '.join(sorted(SUPPORTED_CURRENCIES))}. The cost preset should be in the "
             "same currency; BREOS does not convert"
         ),
-        "import_prices": "Import price per kWh by period name, at year-1 prices; `all` prices every period",
-        "export_prices": "Export price per kWh by period name, at year-1 prices; `all` prices every period",
+        "import_prices": (
+            "Import price per kWh by period name, at year-1 prices; `all` prices every period. With month seasons, "
+            "a table of period prices for every season instead"
+        ),
+        "export_prices": (
+            "Export price per kWh by period name, at year-1 prices; `all` prices every period. With month seasons, "
+            "a table of period prices for every season instead"
+        ),
         "fixed_charge_per_day": "Fixed charge per day, at year-1 prices (default 0)",
         "boundary_policy": (
             "How a period boundary inside a step is handled. `strict`, the default, refuses it. One of "

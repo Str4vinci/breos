@@ -451,6 +451,10 @@ fixed_charge_per_day = 0.25              # optional, default 0
   each rule's intervals must cover the whole local day without gaps or
   overlaps. See [Custom App schedules](../api/tariffs.md#custom-app-schedules)
   for a complete example.
+- A custom schedule can name calendar-month `seasons`, such as quarters,
+  instead of the standard/DST seasons. Its rules then select a season by
+  name, and each price list may give a table of period prices for every
+  season. See [Month seasons](../api/tariffs.md#month-seasons).
 - Holidays are optional and explicit. `holidays.dates` maps each covered
   year to its dates; provide the complete calendar you intend for each year
   the simulation can use. A run in a year absent from that map fails rather

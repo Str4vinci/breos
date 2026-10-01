@@ -342,22 +342,37 @@ _PRICED_FLOWS: dict[str, tuple[str, str]] = {
 }
 
 
-def _period_energy_name(money_column: str, period: str) -> str:
-    return f"{_PRICED_FLOWS[money_column][0]}_kWh@{period}"
+def _period_energy_name(money_column: str, bucket: str) -> str:
+    return f"{_PRICED_FLOWS[money_column][0]}_kWh@{bucket}"
+
+
+def _price_buckets(tariff: ResolvedTariff) -> tuple[str, ...]:
+    """Each step's price bucket: its period, or its month season and period.
+
+    Every step in a bucket has one price under any prices for the schedule,
+    so energy summed by bucket can be re-priced exactly.
+    """
+    if tariff.season_labels is None:
+        return tariff.period_labels
+    return tuple(
+        f"{season}/{period}" for season, period in zip(tariff.season_labels, tariff.period_labels, strict=True)
+    )
 
 
 def _period_weights(tariff: ResolvedTariff) -> dict[str, tuple[str, np.ndarray]]:
-    """One 0/1 mask per tariff period and priced flow, so each year also records its energy by period.
+    """One 0/1 mask per price bucket and priced flow, so each year also records its energy by bucket.
 
-    That energy is what :func:`reprice_tariff_year_rows` re-prices a year from
-    when only the prices change.
+    A bucket is a tariff period, or a month season and period for a schedule
+    with month seasons. That energy is what :func:`reprice_tariff_year_rows`
+    re-prices a year from when only the prices change.
     """
-    labels = np.asarray(tariff.period_labels, dtype=object)
+    buckets = _price_buckets(tariff)
+    labels = np.asarray(buckets, dtype=object)
     weights: dict[str, tuple[str, np.ndarray]] = {}
-    for period in dict.fromkeys(tariff.period_labels):
-        mask = (labels == period).astype(float)
+    for bucket in dict.fromkeys(buckets):
+        mask = (labels == bucket).astype(float)
         for money_column, (column, _price) in _PRICED_FLOWS.items():
-            weights[_period_energy_name(money_column, period)] = (column, mask)
+            weights[_period_energy_name(money_column, bucket)] = (column, mask)
     return weights
 
 
@@ -398,10 +413,10 @@ def _tariff_money(
 
 def _period_prices(tariff: ResolvedTariff, kind: str) -> dict[str, float]:
     prices = tariff.import_price_per_kwh if kind == "import" else tariff.export_price_per_kwh
-    by_period: dict[str, float] = {}
-    for label, price in zip(tariff.period_labels, prices, strict=True):
-        by_period.setdefault(label, float(price))
-    return by_period
+    by_bucket: dict[str, float] = {}
+    for bucket, price in zip(_price_buckets(tariff), prices, strict=True):
+        by_bucket.setdefault(bucket, float(price))
+    return by_bucket
 
 
 def reprice_tariff_year_rows(
@@ -412,7 +427,8 @@ def reprice_tariff_year_rows(
     For revaluation without re-simulation: ``period_energy`` is the
     :attr:`ProjectionRun.period_energy` of a run on a tariff with the same
     schedule, so only the prices differ. Each money column becomes the sum over
-    periods of energy times price, and the fixed charge the new daily charge
+    periods (month season and period, with month seasons) of energy times
+    price, and the fixed charge the new daily charge
     over the simulated hours. A fresh simulation sums energy times price per
     step instead, so the two agree to rounding, not bit for bit.
     """
@@ -463,8 +479,9 @@ class ProjectionRun:
     # The first year's per-step frame; None for a summary projection.
     first_year_results_df: pd.DataFrame | None
     jit_cache_states: list[str]
-    # With a tariff, each year's priced energy by tariff period (kWh), one
-    # row per year, so a price change can be re-priced without re-simulating.
+    # With a tariff, each year's priced energy by tariff period, or by month
+    # season and period (kWh), one row per year, so a price change can be
+    # re-priced without re-simulating.
     period_energy: pd.DataFrame | None = None
     # With a daily controller, the instructions it executed, one per
     # simulated step in project order across every year (ADR 0002 A11).

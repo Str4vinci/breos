@@ -39,7 +39,10 @@ SCHEDULE_CYCLES = frozenset({"flat", "daily", "weekly", "custom"})
 _PERIOD_PATTERN = re.compile(r"^[a-z][a-z0-9_]*$")
 _CLOCK_PATTERN = re.compile(r"^(?:[01]\d|2[0-3]):[0-5]\d$|^24:00$")
 _DAY_TYPES = ("weekday", "saturday", "sunday")
-_SEASONS = ("standard", "dst")
+# The seasons of a schedule without month seasons: whether DST is in force.
+_DST_SEASONS = ("standard", "dst")
+# Names a month season cannot take: the rule wildcard and the DST seasons.
+_RESERVED_SEASON_NAMES = frozenset({"all", *_DST_SEASONS})
 
 
 def _nonempty_text(value: object, where: str) -> str:
@@ -139,13 +142,32 @@ class TariffSchedule:
         _date_range(self.effective_from, self.effective_to, "schedule")
 
 
+# A price list: prices per kWh by period, or, for a schedule with month
+# seasons, a table of period prices for each season.
+PriceList = Mapping[str, float] | Mapping[str, Mapping[str, float]]
+
+
+def _is_seasonal(values: PriceList) -> bool:
+    return any(isinstance(value, Mapping) for value in values.values())
+
+
+def thaw_prices(values: PriceList) -> dict[str, Any]:
+    """A price list as plain, JSON-safe dicts."""
+    return {key: dict(value) if isinstance(value, Mapping) else value for key, value in values.items()}
+
+
 @dataclass(frozen=True)
 class TariffPrices:
-    """Currency-qualified import/export prices and their provenance."""
+    """Currency-qualified import/export prices and their provenance.
+
+    Each price list maps period names to prices per kWh, or, for a schedule
+    with month seasons, maps every season to such a map. ``all`` prices every
+    period it does not name.
+    """
 
     currency: str
-    import_prices: Mapping[str, float]
-    export_prices: Mapping[str, float]
+    import_prices: PriceList
+    export_prices: PriceList
     fixed_charge_per_day: float = 0.0
     identifier: str = "user"
     version: str = "1"
@@ -174,9 +196,30 @@ class TariffPrices:
         _date_range(self.effective_from, self.effective_to, "prices")
 
     @staticmethod
-    def _freeze_prices(values: Mapping[str, float], name: str) -> Mapping[str, float]:
+    def _freeze_prices(values: PriceList, name: str) -> PriceList:
+        """Freeze a price list: prices by period, or tables of period prices by month season."""
         if not isinstance(values, Mapping):
             raise TypeError(f"'prices.{name}' must be a mapping of period names to prices")
+        if not values:
+            raise ValueError(f"'prices.{name}' must define at least one price")
+        nested = [isinstance(value, Mapping) for value in values.values()]
+        if any(nested) and not all(nested):
+            raise ValueError(
+                f"'prices.{name}' mixes prices and season tables: give every entry as a period price, or every "
+                "entry as a table of period prices for one month season"
+            )
+        if all(nested):
+            seasons: dict[str, Mapping[str, float]] = {}
+            for raw_season, raw_prices in values.items():
+                season = _period_name(raw_season, f"prices.{name} season")
+                seasons[season] = TariffPrices._freeze_period_prices(
+                    cast(Mapping[str, Any], raw_prices), f"{name}.{season}"
+                )
+            return MappingProxyType(seasons)
+        return TariffPrices._freeze_period_prices(values, name)
+
+    @staticmethod
+    def _freeze_period_prices(values: Mapping[str, Any], name: str) -> Mapping[str, float]:
         if not values:
             raise ValueError(f"'prices.{name}' must define at least one price")
         resolved: dict[str, float] = {}
@@ -185,12 +228,17 @@ class TariffPrices:
             resolved[period] = _nonnegative_price(raw_price, f"prices.{name}.{period}")
         return MappingProxyType(resolved)
 
+    @property
+    def is_seasonal(self) -> bool:
+        """Whether a price list is given per month season rather than per period."""
+        return _is_seasonal(self.import_prices) or _is_seasonal(self.export_prices)
+
     def __reduce__(self) -> tuple[Any, tuple[Any, ...]]:
         """Rebuild immutable price maps in optimizer worker processes."""
         return type(self), (
             self.currency,
-            dict(self.import_prices),
-            dict(self.export_prices),
+            thaw_prices(self.import_prices),
+            thaw_prices(self.export_prices),
             self.fixed_charge_per_day,
             self.identifier,
             self.version,
@@ -210,6 +258,10 @@ class ResolvedTariff:
     ``index[day_starts[i]:day_starts[i + 1]]``. A civil day has 23, 24 or 25
     hours; everything with per-day meaning (the fixed charge, daily charge
     windows) uses these boundaries, never a steps-per-day count.
+
+    ``season_labels`` holds each step's month season and ``seasons`` the
+    month partition, for a schedule with month seasons; both are None
+    otherwise.
     """
 
     index: pd.DatetimeIndex
@@ -224,6 +276,8 @@ class ResolvedTariff:
     boundary_policy: str
     schedule_hash: str
     price_hash: str
+    season_labels: tuple[str, ...] | None = None
+    seasons: MonthSeasons | None = None
 
     @property
     def n_days(self) -> int:
@@ -264,13 +318,71 @@ def _clock_minutes(value: object, where: str) -> int:
 
 
 @dataclass(frozen=True)
+class MonthSeasons:
+    """Named seasons that partition the calendar months.
+
+    ``seasons`` pairs each season name with its months, 1 through 12; every
+    month is in exactly one season. A quarter is a season of three months.
+    A step's season is the month of its civil date in the schedule's zone.
+    """
+
+    seasons: tuple[tuple[str, tuple[int, ...]], ...]
+
+    def __post_init__(self) -> None:
+        seasons = tuple(self.seasons)
+        if not seasons:
+            raise ValueError("'seasons' must define at least one season")
+        resolved: list[tuple[str, tuple[int, ...]]] = []
+        owner: dict[int, str] = {}
+        for entry in seasons:
+            if not isinstance(entry, tuple) or len(entry) != 2:
+                raise TypeError("'seasons' must hold (name, months) pairs")
+            raw_name, raw_months = entry
+            name = _period_name(raw_name, "seasons name")
+            if name in _RESERVED_SEASON_NAMES:
+                raise ValueError(f"Season name {name!r} is reserved; 'all', 'standard' and 'dst' are rule selectors")
+            if any(name == existing for existing, _ in resolved):
+                raise ValueError(f"Season {name!r} is defined twice")
+            months = tuple(raw_months)
+            if not months:
+                raise ValueError(f"Season {name!r} must have at least one month")
+            for month in months:
+                if isinstance(month, bool) or not isinstance(month, int) or not 1 <= month <= 12:
+                    raise ValueError(f"Season {name!r} months must be whole numbers from 1 through 12, not {month!r}")
+                if month in owner:
+                    where = "twice" if owner[month] == name else f"in both {owner[month]!r} and {name!r}"
+                    raise ValueError(f"Month {month} is {where}; every month is in exactly one season")
+                owner[month] = name
+            resolved.append((name, months))
+        uncovered = [month for month in range(1, 13) if month not in owner]
+        if uncovered:
+            raise ValueError(
+                f"Month(s) {', '.join(map(str, uncovered))} are in no season; every month is in exactly one season"
+            )
+        object.__setattr__(self, "seasons", tuple(resolved))
+
+    @property
+    def names(self) -> tuple[str, ...]:
+        return tuple(name for name, _months in self.seasons)
+
+    def season_of_month(self, month: int) -> str:
+        return next(name for name, months in self.seasons if month in months)
+
+    def as_dict(self) -> dict[str, list[int]]:
+        """The partition as JSON-safe lists of months by season."""
+        return {name: list(months) for name, months in self.seasons}
+
+
+@dataclass(frozen=True)
 class ScheduleRule:
     """The periods of one day selector and season, tiling the civil day.
 
-    ``days`` is ``weekday``, ``saturday``, ``sunday`` or ``all``; ``season``
-    is ``standard``, ``dst`` or ``all``. Each interval is ``(start, end,
-    period)`` in minutes after local midnight, ``end`` exclusive; together
-    they cover 0 through 1440 with no gap or overlap.
+    ``days`` is ``weekday``, ``saturday``, ``sunday`` or ``all``. ``season``
+    is ``standard``, ``dst`` or ``all`` in a schedule without month seasons,
+    and a month-season name or ``all`` in one with them; the definition
+    checks which. Each interval is ``(start, end, period)`` in minutes after
+    local midnight, ``end`` exclusive; together they cover 0 through 1440
+    with no gap or overlap.
     """
 
     days: str
@@ -280,7 +392,7 @@ class ScheduleRule:
     def __post_init__(self) -> None:
         if self.days not in {*_DAY_TYPES, "all"}:
             raise ValueError(f"Unknown day selector: {self.days!r}")
-        if self.season not in {*_SEASONS, "all"}:
+        if not isinstance(self.season, str) or not _PERIOD_PATTERN.fullmatch(self.season):
             raise ValueError(f"Unknown season selector: {self.season!r}")
         intervals = []
         for start, end, period in self.intervals:
@@ -340,10 +452,13 @@ class HolidayCalendar:
 
 @dataclass(frozen=True)
 class ScheduleDefinition:
-    """A complete tariff schedule: its metadata, period rules and holidays.
+    """A complete tariff schedule: its metadata, period rules, holidays and seasons.
 
     Every day type and season is matched by exactly one rule. A holiday takes
-    the rule of ``holidays.day_type``. The values are immutable and pickle,
+    the rule of ``holidays.day_type``. Without ``seasons`` the seasons are
+    ``standard`` and ``dst``, whether DST is in force; with them they are the
+    named month seasons, and a rule may not select ``standard`` or ``dst``.
+    Season names must differ from period names. The values are immutable and pickle,
     so a definition can travel to optimizer worker processes. The bundled
     catalogue is built with :func:`parse_schedule_definition`.
 
@@ -355,22 +470,41 @@ class ScheduleDefinition:
     schedule: TariffSchedule
     rules: tuple[ScheduleRule, ...]
     holidays: HolidayCalendar | None = None
+    seasons: MonthSeasons | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.schedule, TariffSchedule):
             raise TypeError("'schedule' must be a TariffSchedule")
+        if self.seasons is not None and not isinstance(self.seasons, MonthSeasons):
+            raise TypeError("'seasons' must be MonthSeasons when configured")
         rules = tuple(self.rules)
         if not rules or any(not isinstance(rule, ScheduleRule) for rule in rules):
             raise TypeError("'rules' must be a non-empty sequence of ScheduleRule")
         identifier = self.schedule.identifier
+        seasons = self.season_names
+        clashing = sorted(set(seasons) & set(self.schedule.periods)) if self.seasons is not None else []
+        if clashing:
+            raise ValueError(
+                f"Schedule {identifier!r} uses {', '.join(map(repr, clashing))} as both a season and a period; "
+                "name them differently"
+            )
         for position, rule in enumerate(rules):
             unknown = {period for _start, _end, period in rule.intervals} - set(self.schedule.periods)
             if unknown:
                 raise ValueError(
                     f"Schedule {identifier!r} rules[{position}] uses unknown period(s): {', '.join(sorted(unknown))}"
                 )
+            if rule.season not in {*seasons, "all"}:
+                known = (
+                    f"its month seasons are {', '.join(seasons)}"
+                    if self.seasons is not None
+                    else "without month seasons a rule selects standard, dst or all"
+                )
+                raise ValueError(
+                    f"Schedule {identifier!r} rules[{position}] selects season {rule.season!r}, but {known}"
+                )
         for day_type in _DAY_TYPES:
-            for season in _SEASONS:
+            for season in seasons:
                 matches = sum(rule.applies_to(day_type, season) for rule in rules)
                 if matches != 1:
                     raise ValueError(
@@ -390,6 +524,23 @@ class ScheduleDefinition:
         """
         bounds = (bound for rule in self.rules for start, end, _ in rule.intervals for bound in (start, end))
         return math.gcd(24 * 60, *bounds)
+
+    @property
+    def season_names(self) -> tuple[str, ...]:
+        """The month seasons, or ``standard`` and ``dst`` without them."""
+        return self.seasons.names if self.seasons is not None else _DST_SEASONS
+
+    def season_of(self, timestamp: pd.Timestamp) -> str:
+        """The season of a local timestamp: its month's season, or whether DST is in force."""
+        if self.seasons is not None:
+            return self.seasons.season_of_month(timestamp.month)
+        return _season(timestamp)
+
+    def season_periods(self, season: str) -> frozenset[str]:
+        """The periods some rule uses in ``season``, on any day type."""
+        return frozenset(
+            period for rule in self.rules if rule.season in {season, "all"} for _start, _end, period in rule.intervals
+        )
 
     def rule_for(self, day_type: str, season: str) -> ScheduleRule:
         return next(rule for rule in self.rules if rule.applies_to(day_type, season))
@@ -464,6 +615,23 @@ def _parse_holidays(raw: object, where: str) -> HolidayCalendar | None:
     return HolidayCalendar(day_type=day_type, dates=frozenset(dates), years=frozenset(years), source=raw.get("source"))
 
 
+def _parse_seasons(raw: object, where: str) -> MonthSeasons | None:
+    """Read month seasons: each season name mapped to its months, 1 through 12."""
+    if raw is None:
+        return None
+    if not isinstance(raw, Mapping) or not raw:
+        raise TypeError(f"'{where}' must map season names to lists of months")
+    pairs = []
+    for name, months in raw.items():
+        if not isinstance(months, (list, tuple)):
+            raise TypeError(f"'{where}.{name}' must be a list of months from 1 through 12")
+        pairs.append((name, tuple(months)))
+    try:
+        return MonthSeasons(tuple(pairs))
+    except (TypeError, ValueError) as exc:
+        raise type(exc)(f"'{where}': {exc}") from exc
+
+
 def parse_schedule_definition(
     identifier: str, raw: Mapping[str, Any], *, where: str | None = None
 ) -> ScheduleDefinition:
@@ -471,10 +639,12 @@ def parse_schedule_definition(
 
     ``raw`` holds ``version``, ``timezone``, ``cycle``, ``periods`` and
     ``rules``, and optionally ``source_url``, ``source``, ``note``,
-    ``effective_from``, ``effective_to`` and ``holidays``. Each rule has a
-    ``days`` selector, a ``season`` selector and ``intervals`` mapping periods
-    to ``["HH:MM", "HH:MM"]`` ranges; ``"24:00"`` closes the day. Holidays
-    have a ``day_type`` and ``dates`` mapping each year to its dates. The
+    ``effective_from``, ``effective_to``, ``holidays`` and ``seasons``. Each
+    rule has a ``days`` selector, a ``season`` selector and ``intervals``
+    mapping periods to ``["HH:MM", "HH:MM"]`` ranges; ``"24:00"`` closes the
+    day. Holidays have a ``day_type`` and ``dates`` mapping each year to its
+    dates. ``seasons`` maps season names to the calendar months, 1 through
+    12, that make them up; together they hold every month once. The
     time resolution the schedule needs follows from the boundaries and the
     zone's UTC-offset changes.
     ``where`` names the source in error messages; it defaults to the
@@ -508,7 +678,10 @@ def parse_schedule_definition(
         raise TypeError(f"'{where}.rules' must be a non-empty list")
     rules = tuple(_parse_rule(raw_rule, f"{where}.rules[{position}]") for position, raw_rule in enumerate(raw_rules))
     return ScheduleDefinition(
-        schedule=schedule, rules=rules, holidays=_parse_holidays(raw.get("holidays"), f"{where}.holidays")
+        schedule=schedule,
+        rules=rules,
+        holidays=_parse_holidays(raw.get("holidays"), f"{where}.holidays"),
+        seasons=_parse_seasons(raw.get("seasons"), f"{where}.seasons"),
     )
 
 
@@ -673,6 +846,10 @@ def classify_tariff_periods(
 ) -> tuple[str, ...]:
     """Classify instants with a schedule in the configured civil time.
 
+    A step's season is its civil month's season in a schedule with month
+    seasons, and whether DST is in force otherwise; its day type is the
+    weekday or holiday of its civil date.
+
     ``schedule`` is a bundled schedule identifier or a
     :class:`ScheduleDefinition`. ``timezone`` is the location's IANA zone
     (the App's ``ResolvedAppConfig.timezone``). The index is converted to it
@@ -685,6 +862,18 @@ def classify_tariff_periods(
             hourly steps, under ``boundary_policy="strict"``), or the
             schedule is not effective on the index dates or ``study_date``.
     """
+    return _classify(index, schedule, timezone=timezone, study_date=study_date, boundary_policy=boundary_policy)[0]
+
+
+def _classify(
+    index: pd.DatetimeIndex,
+    schedule: str | ScheduleDefinition,
+    *,
+    timezone: str,
+    study_date: date | None,
+    boundary_policy: str,
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """Each step's period and season label, as :func:`classify_tariff_periods` documents."""
     resolved_index = _validate_index(index)
     if boundary_policy not in BOUNDARY_POLICIES:
         allowed = ", ".join(sorted(BOUNDARY_POLICIES))
@@ -710,12 +899,15 @@ def classify_tariff_periods(
     holiday_dates = _holiday_dates(metadata.identifier, holidays, covered)
     holiday_day_type = holidays.day_type if holidays is not None else "sunday"
     labels: list[str] = []
+    seasons: list[str] = []
     for timestamp in local_index:
-        rule = definition.rule_for(_day_type(timestamp, holiday_dates, holiday_day_type), _season(timestamp))
+        season = definition.season_of(timestamp)
+        rule = definition.rule_for(_day_type(timestamp, holiday_dates, holiday_day_type), season)
         minute = timestamp.hour * 60 + timestamp.minute
         label = next(period for start, end, period in rule.intervals if start <= minute < end)
         labels.append(label)
-    return tuple(labels)
+        seasons.append(season)
+    return tuple(labels), tuple(seasons)
 
 
 def resolve_named_tariff(
@@ -729,15 +921,23 @@ def resolve_named_tariff(
 ) -> ResolvedTariff:
     """Classify and price one tariff schedule, bundled or defined, in the configured civil time."""
     definition = _as_definition(schedule)
-    labels = classify_tariff_periods(
+    labels, seasons = _classify(
         index,
         definition,
         timezone=timezone,
         study_date=study_date,
         boundary_policy=boundary_policy,
     )
+    month_seasons = definition.seasons
     return resolve_tariff(
-        index, labels, definition.schedule, prices, timezone=timezone, boundary_policy=boundary_policy
+        index,
+        labels,
+        definition.schedule,
+        prices,
+        timezone=timezone,
+        boundary_policy=boundary_policy,
+        season_labels=seasons if month_seasons is not None else None,
+        seasons=month_seasons,
     )
 
 
@@ -765,22 +965,61 @@ def _validate_index(index: pd.DatetimeIndex) -> pd.DatetimeIndex:
     return index.copy()
 
 
-def _validate_price_periods(schedule: TariffSchedule, prices: TariffPrices) -> None:
+def _validate_price_periods(schedule: TariffSchedule, prices: TariffPrices, seasons: MonthSeasons | None) -> None:
     allowed = {*schedule.periods, "all"}
     for name, values in (("import_prices", prices.import_prices), ("export_prices", prices.export_prices)):
-        unknown = set(values) - allowed
-        if unknown:
-            raise ValueError(
-                f"Unknown {name} period(s) for schedule {schedule.identifier!r}: {', '.join(sorted(unknown))}"
-            )
+        tables: Mapping[str, Mapping[str, Any]] = {"": values}
+        if _is_seasonal(values):
+            if seasons is None:
+                raise ValueError(
+                    f"{name} are given by season, but schedule {schedule.identifier!r} has no month seasons"
+                )
+            given, known = set(values), set(seasons.names)
+            if given != known:
+                problem = (
+                    f"no prices for season(s) {', '.join(sorted(known - given))}"
+                    if known - given
+                    else f"unknown season(s) {', '.join(sorted(given - known))}"
+                )
+                raise ValueError(f"{name} for schedule {schedule.identifier!r} have {problem}")
+            tables = cast(Mapping[str, Mapping[str, Any]], values)
+        for season, table in tables.items():
+            unknown = set(table) - allowed
+            if unknown:
+                where = f" in season {season!r}" if season else ""
+                raise ValueError(
+                    f"Unknown {name} period(s){where} for schedule {schedule.identifier!r}: "
+                    f"{', '.join(sorted(unknown))}"
+                )
 
 
-def _prices_for_labels(labels: tuple[str, ...], values: Mapping[str, float], name: str) -> tuple[float, ...]:
-    fallback = values.get("all")
-    missing = sorted({label for label in labels if label not in values and fallback is None})
+def _prices_for_labels(
+    labels: tuple[str, ...], values: PriceList, name: str, seasons: tuple[str, ...] | None = None
+) -> tuple[float, ...]:
+    if _is_seasonal(values):
+        if seasons is None:
+            raise ValueError(f"{name}s are given by season, but the steps have no month seasons")
+        tables = cast(Mapping[str, Mapping[str, float]], values)
+        missing = sorted(
+            {
+                f"{period} in {season}"
+                for period, season in zip(labels, seasons, strict=True)
+                if period not in tables[season] and "all" not in tables[season]
+            }
+        )
+        if missing:
+            raise ValueError(f"Missing {name} for used tariff period(s): {', '.join(missing)}")
+        return tuple(_period_price(tables[season], period) for period, season in zip(labels, seasons, strict=True))
+    flat = cast(Mapping[str, float], values)
+    missing = sorted({label for label in labels if label not in flat and "all" not in flat})
     if missing:
         raise ValueError(f"Missing {name} for used tariff period(s): {', '.join(missing)}")
-    return tuple(values.get(label, fallback) for label in labels)  # type: ignore[arg-type]
+    return tuple(_period_price(flat, label) for label in labels)
+
+
+def _period_price(prices: Mapping[str, float], period: str) -> float:
+    """A period's price, or the ``all`` price when the period has none of its own."""
+    return prices[period] if period in prices else prices["all"]
 
 
 def resolve_tariff(
@@ -791,11 +1030,16 @@ def resolve_tariff(
     *,
     timezone: str,
     boundary_policy: str = "strict",
+    season_labels: Sequence[str] | None = None,
+    seasons: MonthSeasons | None = None,
 ) -> ResolvedTariff:
     """Resolve classified schedule periods to aligned import/export prices.
 
     ``timezone`` is the civil time the labels were classified in; it sets the
-    civil-day boundaries.
+    civil-day boundaries. A schedule with month seasons also gives each
+    step's ``season_labels`` and the ``seasons`` partition: the steps' season
+    selects its prices when they are given by season, and the seasons join
+    the schedule hash.
     """
     resolved_index = _validate_index(index)
     zone = _nonempty_text(timezone, "timezone")
@@ -816,30 +1060,44 @@ def resolve_tariff(
         allowed = ", ".join(sorted(BOUNDARY_POLICIES))
         raise ValueError(f"'boundary_policy' must be one of: {allowed}")
 
-    _validate_price_periods(schedule, prices)
-    import_values = _prices_for_labels(labels, prices.import_prices, "import price")
-    export_values = _prices_for_labels(labels, prices.export_prices, "export price")
+    if (season_labels is None) != (seasons is None):
+        raise ValueError("'season_labels' and 'seasons' must be given together")
+    step_seasons: tuple[str, ...] | None = None
+    if season_labels is not None and seasons is not None:
+        step_seasons = tuple(season_labels)
+        if len(step_seasons) != len(resolved_index):
+            raise ValueError("'season_labels' must have the same length as 'index'")
+        unknown_seasons = set(step_seasons) - set(seasons.names)
+        if unknown_seasons:
+            raise ValueError(f"Unknown resolved season(s): {', '.join(sorted(unknown_seasons))}")
+
+    _validate_price_periods(schedule, prices, seasons)
+    import_values = _prices_for_labels(labels, prices.import_prices, "import price", step_seasons)
+    export_values = _prices_for_labels(labels, prices.export_prices, "export price", step_seasons)
     code_by_period = {period: code for code, period in enumerate(schedule.periods)}
     codes = tuple(code_by_period[label] for label in labels)
 
     utc_nanoseconds = tuple(int(value) for value in _utc_nanoseconds(resolved_index))
-    schedule_hash = _canonical_hash(
-        {
-            "identifier": schedule.identifier,
-            "version": schedule.version,
-            "timezone": zone,
-            "instants_utc_ns": utc_nanoseconds,
-            "period_labels": labels,
-        }
-    )
+    schedule_payload: dict[str, Any] = {
+        "identifier": schedule.identifier,
+        "version": schedule.version,
+        "timezone": zone,
+        "instants_utc_ns": utc_nanoseconds,
+        "period_labels": labels,
+    }
+    if step_seasons is not None:
+        # Only a schedule with month seasons hashes them, so every other
+        # schedule keeps the hash it had before seasons existed.
+        schedule_payload["season_labels"] = step_seasons
+    schedule_hash = _canonical_hash(schedule_payload)
     price_hash = _canonical_hash(
         {
             "currency": prices.currency,
             "identifier": prices.identifier,
             "version": prices.version,
             "source_url": prices.source_url,
-            "import_prices": dict(prices.import_prices),
-            "export_prices": dict(prices.export_prices),
+            "import_prices": thaw_prices(prices.import_prices),
+            "export_prices": thaw_prices(prices.export_prices),
             "fixed_charge_per_day": prices.fixed_charge_per_day,
             "effective_from": prices.effective_from.isoformat() if prices.effective_from else None,
             "effective_to": prices.effective_to.isoformat() if prices.effective_to else None,
@@ -859,6 +1117,8 @@ def resolve_tariff(
         boundary_policy=boundary_policy,
         schedule_hash=schedule_hash,
         price_hash=price_hash,
+        season_labels=step_seasons,
+        seasons=seasons,
     )
 
 
@@ -919,17 +1179,21 @@ def result_currency(tariff: TariffSpec | ResolvedTariff | None) -> str:
 
 
 def tariff_provenance(resolved: ResolvedTariff, *, calendar_year: int) -> dict[str, Any]:
-    """A JSON-safe record of a resolved tariff for run provenance."""
+    """A JSON-safe record of a resolved tariff for run provenance.
+
+    Price lists keep their configured shape: per period, or per season and
+    period, when ``seasons`` records the month partition.
+    """
     schedule, prices = resolved.schedule, resolved.prices
-    return {
+    record: dict[str, Any] = {
         "schedule": schedule.identifier,
         "schedule_version": schedule.version,
         "schedule_source": schedule.source,
         "schedule_source_url": schedule.source_url,
         "timezone": resolved.timezone,
         "currency": prices.currency,
-        "import_prices": dict(prices.import_prices),
-        "export_prices": dict(prices.export_prices),
+        "import_prices": thaw_prices(prices.import_prices),
+        "export_prices": thaw_prices(prices.export_prices),
         "fixed_charge_per_day": prices.fixed_charge_per_day,
         "boundary_policy": resolved.boundary_policy,
         "schedule_hash": resolved.schedule_hash,
@@ -939,6 +1203,10 @@ def tariff_provenance(resolved: ResolvedTariff, *, calendar_year: int) -> dict[s
         "calendar_policy": "replay_start_year",
         "calendar_year": int(calendar_year),
     }
+    if resolved.seasons is not None:
+        # The month partition; only a schedule with month seasons has one.
+        record["seasons"] = resolved.seasons.as_dict()
+    return record
 
 
 def schedule_resolution_minutes(schedule: str | ScheduleDefinition, years: Iterable[int] | None = None) -> int:

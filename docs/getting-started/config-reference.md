@@ -156,9 +156,9 @@ Time-of-use prices, as `[tariff]` in TOML; see [Time-of-use tariffs](configurati
 | Key | Required | Description |
 |---|---|---|
 | `currency` | yes | Currency of the prices: EUR. The cost preset should be in the same currency; BREOS does not convert |
-| `custom_schedule` | exactly one of these | Inline schedule definition with `identifier`, `version`, `timezone`, `cycle`, `periods`, and `rules`; set this or `schedule`, not both. See [Custom App schedules](../api/tariffs.md#custom-app-schedules) |
-| `export_prices` | yes | Export price per kWh by period name, at year-1 prices; `all` prices every period |
-| `import_prices` | yes | Import price per kWh by period name, at year-1 prices; `all` prices every period |
+| `custom_schedule` | exactly one of these | Inline schedule definition with `identifier`, `version`, `timezone`, `cycle`, `periods`, and `rules`, and optional calendar-month `seasons`; set this or `schedule`, not both. See [Custom App schedules](../api/tariffs.md#custom-app-schedules) |
+| `export_prices` | yes | Export price per kWh by period name, at year-1 prices; `all` prices every period. With month seasons, a table of period prices for every season instead |
+| `import_prices` | yes | Import price per kWh by period name, at year-1 prices; `all` prices every period. With month seasons, a table of period prices for every season instead |
 | `schedule` | exactly one of these | Bundled schedule key, which fixes the periods in local civil time; see [Bundled schedules](../api/tariffs.md#bundled-schedules). Set this or `custom_schedule`, not both |
 | `boundary_policy` |  | How a period boundary inside a step is handled. `strict`, the default, refuses it. One of `strict` |
 | `fixed_charge_per_day` |  | Fixed charge per day, at year-1 prices (default 0) |
