@@ -32,7 +32,7 @@ breos list battery-models --json
 
 The registry reports stable keys, readable names, chemistry, cell form factor,
 nominal cell capacity, experimental ranges, study citations, capacity and
-resistance outputs, upstream BLAST provenance, and its integration phase. All
+resistance outputs, and upstream BLAST provenance. All
 14 vendored models are discoverable and enabled end to end. Their parameters
 and trajectories are checked against fixtures generated from the pinned,
 unmodified BLAST-Lite source across storage, cycling, temperature, and C-rate
@@ -79,6 +79,17 @@ one: the Panasonic NCA profile warns after its documented 300-day calendar
 aging horizon. Models without a sourced numeric horizon leave that field
 unknown rather than inventing a limit.
 
-BLAST plus Monte Carlo is rejected explicitly in 0.4.0. It never falls back to
-native degradation. BLAST resistance outputs are reported as capabilities but
-do not alter dispatch efficiency or power limits.
+Monte Carlo rejects BLAST explicitly; it never falls back to native
+degradation. BLAST resistance outputs are reported as capabilities but do not
+alter dispatch efficiency or power limits.
+
+## Model registry
+
+```{eval-rst}
+.. autosummary::
+   :toctree: generated/
+
+   breos.list_battery_models
+   breos.get_battery_model_profile
+   breos.BatteryModelProfile
+```

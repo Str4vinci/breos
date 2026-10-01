@@ -156,3 +156,12 @@ has no dates, site coordinates, or panel geometry, so BREOS cannot run on it.
 The HKUST metadata has no usable tilt or azimuth, so that check fitted an
 effective orientation and an output scale on earlier years before evaluating
 2023. It is a calibrated forward check, not an independent test.
+
+## Reproducing the upcoming publication
+
+The configurations, drivers, and run records for the upcoming publication
+were removed from the repository after 0.6.2. They are preserved in the
+[BREOS 0.6.2 archive](https://doi.org/10.5281/zenodo.22938914) and at the
+[`v0.6.2` tag](https://github.com/Str4vinci/breos/tree/v0.6.2), under
+`validation/article1/` and `tools/`. Reproduce the upcoming publication's
+numbers from that release, not from a later version.
