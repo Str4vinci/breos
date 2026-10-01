@@ -7,6 +7,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from copy import deepcopy
 from dataclasses import dataclass
+from datetime import timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterator, TypeVar, cast
 
@@ -73,6 +74,14 @@ def _ensure_weather_horizon_metadata(weather: pd.DataFrame) -> None:
     weather.attrs[WEATHER_METADATA_KEY] = metadata
 
 
+def _leap_day_clock(tz: Any, year: int) -> timezone:
+    """The fixed UTC offset that ``tz`` keeps in late February of ``year``."""
+    noon = pd.Timestamp(year=year, month=2, day=28, hour=12).tz_localize(
+        tz, ambiguous=True, nonexistent="shift_forward"
+    )
+    return timezone(cast(timedelta, noon.utcoffset()))
+
+
 def remap_tmy_year(df: pd.DataFrame, target_year: int) -> pd.DataFrame:
     """Remap a TMY DatetimeIndex to target_year.
 
@@ -82,20 +91,41 @@ def remap_tmy_year(df: pd.DataFrame, target_year: int) -> pd.DataFrame:
     An index at a fixed UTC offset, such as a PVGIS TMY saved at ``+01:00``,
     is shifted on its own clock, the clock :func:`fill_leap_day` reads. Shifted
     in UTC, its local 1 March 00:00 would land on 29 February of a leap year,
-    and the fill would be skipped. A naive index, or one under a zone with
-    transitions, is shifted in UTC, where a whole-year shift cannot land on a
-    nonexistent or ambiguous local time.
+    and the fill would be skipped. A naive index is shifted in UTC.
+
+    An index in a named zone, such as ``Europe/Berlin``, is shifted on the
+    fixed offset the zone keeps in late February of the TMY's year, so its
+    local 29 February is dropped or filled as for a fixed-offset index,
+    before converting back to the zone. The dominant year is read on the
+    zone's own clock, so rows at local New Year move by their local year.
+    Every other row keeps its instant shifted by whole years, as in UTC, so
+    irradiance stays with the sun. The zone then reads the instants with the
+    target year's transitions: the hour its spring change skips has no row,
+    and the hour its autumn change repeats has two, as on the App's
+    simulation calendar unless the zone's offset rules differ between the
+    two years. A shift on the zone's wall clock would instead move
+    the hours between the two years' transition dates by an hour against the
+    sun.
     """
     idx = df.index
     if not isinstance(idx, pd.DatetimeIndex) or len(idx) == 0:
         return df
     was_tz = idx.tz
     own_clock = was_tz is not None and _has_fixed_utc_offset(was_tz)
+    dominant_year: int | None = None
     if own_clock:
         idx_shift = idx
+    elif was_tz is not None:
+        # On the zone's late-February offset the local 29 February is a whole
+        # day, and the shift moves every other instant as a UTC shift would.
+        # The year is the zone's own: rows at local New Year can read as the
+        # year before on a February offset that differs from January's.
+        dominant_year = cast(int, idx.year.value_counts().idxmax())
+        idx_shift = idx.tz_convert(_leap_day_clock(was_tz, dominant_year))
     else:
-        idx_shift = idx.tz_convert("UTC") if was_tz is not None else idx.tz_localize("UTC")
-    dominant_year = cast(int, idx_shift.year.value_counts().idxmax())
+        idx_shift = idx.tz_localize("UTC")
+    if dominant_year is None:
+        dominant_year = cast(int, idx_shift.year.value_counts().idxmax())
     offset = target_year - dominant_year
     if offset == 0:
         return fill_leap_day(df)
@@ -103,13 +133,16 @@ def remap_tmy_year(df: pd.DataFrame, target_year: int) -> pd.DataFrame:
     remapped = df.copy()
     remapped.index = idx_shift
     remapped = remap_datetime_index_years(remapped, offset)
-    if not own_clock:
-        new_idx = remapped.index
-        new_idx = new_idx.tz_convert(was_tz) if was_tz is not None else new_idx.tz_localize(None)
-        remapped.index = new_idx
     if weather_metadata is not None:
         remapped.attrs[WEATHER_METADATA_KEY] = weather_metadata
-    return fill_leap_day(remapped)
+    # Fill on the clock where the day was dropped, before the target zone's
+    # transitions can put a neighbouring day's row on local 29 February.
+    remapped = fill_leap_day(remapped)
+    if not own_clock:
+        new_idx = cast(pd.DatetimeIndex, remapped.index)
+        new_idx = new_idx.tz_convert(was_tz) if was_tz is not None else new_idx.tz_localize(None)
+        remapped.index = new_idx
+    return remapped
 
 
 def _weather_source_label(weather: pd.DataFrame) -> str:
