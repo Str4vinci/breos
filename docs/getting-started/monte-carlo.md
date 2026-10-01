@@ -236,7 +236,8 @@ each with a `ValueError` before any trajectory runs. `[tariff]`,
 
 ## Related pages
 
-- [Recipes](recipes.md) for the single-run scenario keys.
+- [How-to guides](../how-to/index.md) for the single-run scenario keys, and the
+  {doc}`Monte Carlo case example <../gallery/uncertainty/plot_13_montecarlo>`.
 - [Interpreting results](interpreting-results.md) for what each metric means.
 - [Optimization](optimization.md) for searching designs rather than sampling
   uncertainty.

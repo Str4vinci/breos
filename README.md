@@ -112,7 +112,8 @@ breos run --location porto --n-modules 10 --annual-consumption-kwh 4000 \
 
 The CLI also drives config files, parameter sweeps, and Monte Carlo studies, and
 `breos list <category>` shows bundled presets (locations, modules, cost presets,
-…). See the [CLI recipes](docs/getting-started/recipes.md).
+…). See the [how-to guides](docs/how-to/index.md) and the
+[case examples](https://breos.readthedocs.io/en/latest/gallery/index.html).
 
 ## Citation
 

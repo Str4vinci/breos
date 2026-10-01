@@ -47,7 +47,7 @@ SECTIONS: list[dict[str, Any]] = [
         "intro": (
             "Preset keys for the `location` config key, from"
             " `breos/data/configs/locations.json`. Any other site works with a"
-            " coordinate dict — see [Recipes](recipes.md)."
+            " coordinate dict — see [Simulate any site by coordinates](../how-to/custom-location.md)."
         ),
         "columns": [
             ("key", "Key", "code"),

@@ -5,7 +5,7 @@ designs instead: it varies module count, battery capacity, tilt, and azimuth,
 and returns the trade-off front between energy independence and money.
 
 This is a Python API. There is no `breos optimize` subcommand, so the
-command-line workflow in [Recipes](recipes.md) does not reach it.
+command-line workflow in the [how-to guides](../how-to/index.md) does not reach it.
 
 ## Install the extra
 
@@ -221,7 +221,8 @@ came from.
 
 ## Related pages
 
-- [Recipes](recipes.md) for single-design runs through `App` and the CLI.
+- [How-to guides](../how-to/index.md) for single-design runs through `App` and the CLI.
+- {doc}`The NSGA-II sizing front <../gallery/uncertainty/plot_14_nsga2_front>`, a stored front with its figures.
 - [Interpreting results](interpreting-results.md) for the meaning of the
   headline metrics.
 - [Optimization API](../api/optimization.md) for the full signatures.

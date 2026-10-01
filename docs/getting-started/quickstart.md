@@ -175,9 +175,12 @@ The CLI writes the same JSON-serializable dict that `App.result()` returns.
 
 ## Next steps
 
-- See [Recipes](recipes.md) for copy-paste configs: PV-only, east-west
-  roofs, custom coordinates, 15-minute resolution, external load profiles,
-  and offline runs.
+- See the [case examples](../gallery/index.rst) for stored runs that answer
+  common questions: what a battery adds, east-west roofs, tariffs, battery
+  replacement, Monte Carlo and the optimizer front.
+- See the [how-to guides](../how-to/index.md) for custom coordinates, your
+  own PV module, partial years, sweeps, 15-minute resolution, external load
+  profiles and offline runs.
 - See [Configuration](configuration.md) for every option `App` accepts.
 - See [Interpreting results](interpreting-results.md) for what each result
   key means.

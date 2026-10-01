@@ -13,7 +13,7 @@ matter to your project.
 
 ## Locations
 
-Preset keys for the `location` config key, from `breos/data/configs/locations.json`. Any other site works with a coordinate dict — see [Recipes](recipes.md).
+Preset keys for the `location` config key, from `breos/data/configs/locations.json`. Any other site works with a coordinate dict — see [Simulate any site by coordinates](../how-to/custom-location.md).
 
 | Key | Name | Latitude | Longitude | Timezone |
 |---|---|---|---|---|

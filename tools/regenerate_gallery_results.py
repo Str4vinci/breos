@@ -773,6 +773,8 @@ def nsga2_front(ctx: Context) -> Output:
             timezone=config["location"]["timezone"],
         )
         result = optimize_system_multi_objective(weather, load, config, n_procs=ctx.options.procs)
+    if result.details["pareto"].attrs.get("currency"):
+        ctx.currencies.add(str(result.details["pareto"].attrs["currency"]))
     pareto = result.details["pareto"].sort_values("Battery_kWh").reset_index(drop=True)
     return Output(
         {"pareto.csv": pareto},

@@ -7,7 +7,7 @@ independence and NPV; ZEB is a diagnostic. The
 search. For end-to-end App
 runs over an explicit config grid, including one-dimensional tilt or battery
 sweeps, use the `breos sweep` CLI command documented in
-[Recipes](../getting-started/recipes.md#parameter-sweep).
+[Run a parameter sweep](../how-to/parameter-sweep.md).
 
 Install `breos[optimization]` to use pymoo-backed multi-objective sizing.
 `evaluate_projected_design` uses the core scientific stack.
