@@ -94,16 +94,19 @@ def remap_tmy_year(df: pd.DataFrame, target_year: int) -> pd.DataFrame:
     and the fill would be skipped. A naive index is shifted in UTC.
 
     An index in a named zone, such as ``Europe/Berlin``, is shifted on the
-    fixed offset the zone keeps in late February of the TMY's year, so its
-    local 29 February is dropped or filled as for a fixed-offset index,
+    fixed offset the zone keeps in late February of the TMY's year (summer
+    time in southern DST zones), so its local 29 February is dropped or
+    filled as for a fixed-offset index,
     before converting back to the zone. The dominant year is read on the
     zone's own clock, so rows at local New Year move by their local year.
     Every other row keeps its instant shifted by whole years, as in UTC, so
     irradiance stays with the sun. The zone then reads the instants with the
     target year's transitions: the hour its spring change skips has no row,
     and the hour its autumn change repeats has two, as on the App's
-    simulation calendar unless the zone's offset rules differ between the
-    two years. A shift on the zone's wall clock would instead move
+    simulation calendar. Differing offset rules between the two years can
+    leave a target-year boundary hour missing; the full-year check rejects
+    that weather. Remapping cannot correct mislabelled input.
+    A shift on the zone's wall clock would instead move
     the hours between the two years' transition dates by an hour against the
     sun.
     """
