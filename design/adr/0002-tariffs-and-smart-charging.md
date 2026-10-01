@@ -1,9 +1,9 @@
 # 0002 — Tariffs are resolved values; smart charging is an instruction layer
 
-- **Status:** Accepted for 0.7.x implementation; amendments A1–A13 Accepted
+- **Status:** Accepted for 0.7.x implementation; amendments A1–A14 Accepted
 - **Date:** 2026-08-20; amendments 2026-09-26; A6 accepted 2026-09-26;
   A1–A5 and A7–A10 accepted 2026-09-27; A11 and A12 accepted 2026-09-30;
-  A13 accepted 2026-10-01
+  A13 and A14 accepted 2026-10-01
 
 ## Context
 
@@ -236,7 +236,7 @@ Implementation follows the delivery sequence in
 
 The 0.7 readiness audit (#187) found details the decision above leaves open
 and statements the code has since outgrown. A6 was **Accepted** on 2026-09-26,
-A11 and A12 on 2026-09-30, A13 on 2026-10-01, and every other amendment below on
+A11 and A12 on 2026-09-30, A13 and A14 on 2026-10-01, and every other amendment below on
 2026-09-27. Each one replaces the text it names, and that text is marked in
 place above; A11 and A12 add rules and replace none. Accepting A6–A10 accepted the
 design for the dispatch-seam and ledger work, not its implementation. Grid
@@ -391,6 +391,8 @@ operation. Only PV-origin discharge counts as self-consumption, as today.
 `charge_periods` and `discharge_periods` must be disjoint, so every step
 either charges or discharges. That keeps exact the single origin fraction the
 step takes before dispatch; the step asserts it.
+*(Amended by A14, accepted 2026-10-01: opt-in overlap retains the target as
+the discharge floor; one direction per step remains required.)*
 
 ### A9. Ledger schema 2.0 reconciles origins from output (#178) — Accepted 2026-09-27
 
@@ -511,6 +513,38 @@ system, independently of the system's `[tariff]` or flat costs:
 
 Result schema 2.6 reports the baseline components with or without a
 reference, and `provenance.reference_tariff` only when one is configured.
+
+### A14. Overlapping periods hold the target (#347) — Accepted 2026-10-01
+
+Amends A8's requirement that `charge_periods` and `discharge_periods` be
+disjoint. `smart_charging.overlap_policy` is `"reject"` by default, preserving
+the existing validation and dispatch bit for bit. `"hold_target"` permits
+shared periods under `mode = "fixed_target"`:
+
+- On a step in both lists, `reserve_fraction = grid_target_fraction`. The
+  target is also the discharge floor: above it the battery may discharge
+  down to it; below it the grid may charge up to it. Non-overlap steps are
+  unchanged. PV may charge above the target on every step.
+- Both fractions use A7's same current usable-energy mapping, including
+  temperature, health and replacement. Binding overlap discharge and grid
+  charging land exactly on the bound, preventing rounding residues from
+  causing tiny purchases or discharges on the next step. The existing
+  disjoint dispatch arithmetic remains unchanged.
+- The instruction invariant is that a step allowing discharge with a finite
+  grid target has `reserve_fraction >= grid_target_fraction`. Production
+  physics still forbids grid charging after discharge or while exporting
+  PV, and asserts that no step both charges and discharges. The single
+  pre-dispatch origin share remains exact for all three origins.
+- `disabled` and `discharge_only` refuse `hold_target`, since they have no
+  grid target. `daily_persistence` refuses it because its planning path
+  replaces targets while retaining fixed reserves; it cannot plan and replay
+  the same held-target instructions. Supporting it later requires the floor
+  to follow each candidate and executed daily target, including warm start.
+- App, Monte Carlo and projected optimization accept `hold_target` for
+  `fixed_target`. Python and Numba execute the same kernel source. Result
+  schema 2.7 records `overlap_policy` in `provenance.smart_charging`; the
+  instruction hash already covers the reserve and target arrays. The ledger
+  schema does not change.
 
 ### Implementation notes for the dispatch-seam PR
 

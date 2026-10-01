@@ -72,6 +72,10 @@ trajectories and optimizer tables), and
 results. ``provenance.reference_tariff`` is present only when a
 ``[reference_tariff]`` is configured, in App, Monte Carlo and optimizer
 provenance. Without one, every existing value is unchanged.
+
+2.7 adds ``overlap_policy`` to ``provenance.smart_charging`` in App, Monte
+Carlo and optimizer results, including the default ``reject``. ``hold_target``
+is supported for ``fixed_target`` only (#347). The ledger is unchanged.
 """
 
-RESULT_SCHEMA_VERSION = "2.6"
+RESULT_SCHEMA_VERSION = "2.7"

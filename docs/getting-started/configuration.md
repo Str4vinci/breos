@@ -557,6 +557,7 @@ charge_periods = ["off_peak"]
 discharge_periods = ["mid_peak", "peak"]
 grid_charge_efficiency = 0.95       # required: AC-to-DC conversion of the grid-charging path
 grid_import_limit_w = 5000          # optional: grid charging keeps total import below this
+overlap_policy = "reject"           # default; "hold_target" permits overlap in fixed_target
 ```
 
 - In a charge period the grid may charge the battery toward
@@ -567,7 +568,13 @@ grid_import_limit_w = 5000          # optional: grid charging keeps total import
   `battery_min_soc` and `battery_max_soc`, not of nominal capacity. The window
   shrinks with temperature and state of health, and the target moves with it.
 - The period names must exist in the tariff's schedule, and the two lists
-  must not share a period: every step either charges or discharges.
+  must not share a period under the default `overlap_policy = "reject"`.
+  With `overlap_policy = "hold_target"` (`fixed_target` only), the grid target
+  is also the discharge floor on steps in both lists: above it the battery
+  may discharge down to it; below it the grid may charge up to it. It never
+  charges and discharges in the same step. Both bounds move together with
+  temperature and health. PV may still charge above the target. Steps in
+  only one list keep their usual behavior.
 - `grid_charge_efficiency` has no default, because the inverter model has no
   AC-to-DC path to derive one from. Stored energy then also passes through
   the battery's own charge efficiency.
@@ -590,7 +597,15 @@ battery delivery counts as self-consumption. Avoided emissions use net
 exchange: grid energy shifted through the battery is imported, so it earns
 nothing, and its round-trip loss counts against the system.
 `provenance.smart_charging` records the parameters, the hash of the resolved
-instructions and the tariff's schedule hash.
+instructions, `overlap_policy` and the tariff's schedule hash (result schema 2.7).
+
+To allow discharge in every period while retaining an off-peak target, use
+`charge_periods = ["off_peak"]`, list every tariff period in
+`discharge_periods`, and set `overlap_policy = "hold_target"`.
+`disabled` and `discharge_only` refuse `hold_target` because they have no grid
+target. `daily_persistence` also refuses it: its planner replaces charge
+targets while keeping reserves fixed, so planning and production replay
+cannot hold the same target.
 
 Monte Carlo applies the same instructions to every trajectory, and projected
 optimization to every candidate design with a battery; both record the same

@@ -76,6 +76,10 @@ tables, and `reference_tariff` in the
 [no-system reference tariff](configuration.md#no-system-reference-tariff)
 also carry `provenance.reference_tariff`. Without one, every existing value is
 unchanged.
+Version "2.7" adds `overlap_policy` to `provenance.smart_charging` in App,
+Monte Carlo and optimizer results, including the default `reject`.
+`hold_target` permits overlapping periods in `fixed_target` only and keeps
+the grid target as the discharge floor. The timestep ledger is unchanged.
 A renamed or removed key bumps the
 major version, an added key the minor. A result without the key predates 1.0.
 

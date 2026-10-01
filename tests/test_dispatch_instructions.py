@@ -82,6 +82,15 @@ def test_instructions_accept_their_bounds():
     assert instructions.grid_import_limit_w == math.inf
 
 
+@pytest.mark.parametrize("reserve", [0.5, 0.7])
+def test_overlap_is_valid_only_with_a_floor_at_or_above_the_target(reserve):
+    instructions = _instructions(reserve_fraction=[reserve, 0.0, 0.2], grid_target_fraction=[0.5, 0.5, np.nan])
+    assert instructions.reserve_fraction[0] >= instructions.grid_target_fraction[0]
+    assert instructions.instruction_hash() != _instructions().instruction_hash()
+    with pytest.raises(ValueError, match="reserve_fraction must be >= grid_target_fraction"):
+        _instructions(reserve_fraction=[np.nextafter(0.5, 0.0), 0.0, 0.2], grid_target_fraction=[0.5, 0.5, np.nan])
+
+
 def test_noop_changes_nothing():
     noop = DispatchInstructions.noop(np.int64(4))
 
