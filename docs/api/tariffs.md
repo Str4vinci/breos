@@ -96,7 +96,8 @@ The schedule table requires `identifier`, `version`, `timezone`, `cycle`,
 `effective_from`, `effective_to`, `holidays`, and `seasons`. Unknown keys are rejected
 throughout the nested definition. Use a valid IANA timezone and make it match
 the configured location exactly. Prices at `[tariff]` must cover every listed
-period, or use `all`.
+period, or use `all`; with [month seasons](#month-seasons), each season's
+table prices the periods that season's rules use, and no others.
 
 Rules use the same semantics as bundled schedules: `days` is `weekday`,
 `saturday`, `sunday`, or `all`; `season` is `standard`, `dst`, or `all`, or
@@ -196,7 +197,6 @@ the prices change. Schedules without month seasons keep the hashes they had
 before seasons existed.
 
 ## Schedule definitions
-## Schedule definitions
 
 A {class}`~breos.tariffs.ScheduleDefinition` is a complete schedule: its
 {class}`~breos.tariffs.TariffSchedule` metadata, its
@@ -228,6 +228,7 @@ it reaches optimizer worker processes unchanged.
    breos.tariffs.parse_schedule_definition
    breos.tariffs.schedule_resolution_minutes
    breos.tariffs.classify_tariff_periods
+   breos.tariffs.classify_tariff_seasons
    breos.tariffs.resolve_named_tariff
    breos.tariffs.resolve_tariff
    breos.tariffs.resolve_flat_tariff

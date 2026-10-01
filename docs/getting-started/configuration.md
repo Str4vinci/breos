@@ -443,7 +443,10 @@ fixed_charge_per_day = 0.25              # optional, default 0
 
 - Every period of the schedule needs an import and an export price, or an
   `all` price for every period. A period the schedule does not have is an
-  error; there is no fallback to another schedule.
+  error; there is no fallback to another schedule. A custom schedule with
+  month seasons is priced by season instead: each season's table prices the
+  periods that season's rules use, or gives `all`, and pricing a period the
+  season never uses is an error.
 - Instead of `schedule`, you can define `[tariff.custom_schedule]` inline.
   Set `identifier`, `version`, `timezone`, `cycle`, `periods`, and one or
   more `[[tariff.custom_schedule.rules]]` tables. Do not set both schedule

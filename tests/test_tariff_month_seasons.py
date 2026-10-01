@@ -16,7 +16,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from breos import optimization
+from breos import _daily_persistence, optimization
 from breos.app import App
 from breos.montecarlo import MonteCarloSettings, run_montecarlo
 from breos.runners.app import run_app_simulation
@@ -27,8 +27,10 @@ from breos.tariffs import (
     TariffPrices,
     TariffSchedule,
     classify_tariff_periods,
+    classify_tariff_seasons,
     parse_schedule_definition,
     resolve_named_tariff,
+    resolve_tariff,
     tariff_provenance,
 )
 
@@ -319,7 +321,7 @@ def test_seasonal_price_lists_are_frozen_strictly(import_prices, error, message)
         ({**SEASON_IMPORT, "q5": {"all": 0.3}}, None, r"unknown season\(s\) q5"),
         ({**SEASON_IMPORT, "q2": {"peak": 0.3}}, None, r"Unknown import_prices period\(s\) in season 'q2'.*peak"),
         ({**SEASON_IMPORT, "q1": {"low": 0.3}}, None, "Missing import price for used tariff period"),
-        (SEASON_IMPORT, "pt_mainland_2026_daily_bi", "has no month seasons"),
+        (SEASON_IMPORT, "pt_mainland_2026_daily_bi", "was resolved without month seasons"),
     ],
 )
 def test_resolution_rejects_prices_its_seasons_cannot_use(import_prices, definition, message):
@@ -328,6 +330,30 @@ def test_resolution_rejects_prices_its_seasons_cannot_use(import_prices, definit
     zone = "Europe/Lisbon" if definition else "Europe/Berlin"
     with pytest.raises(ValueError, match=message):
         resolve_named_tariff(index, definition or _definition(), prices, timezone=zone)
+
+
+def test_the_two_step_path_resolves_a_month_season_schedule_as_one_step_does():
+    index = pd.date_range("2026-03-25", periods=24 * 14, freq="h", tz="Europe/Berlin")
+    definition = _definition()
+    one_step = resolve_named_tariff(index, definition, SEASON_PRICES, timezone="Europe/Berlin")
+    labels = classify_tariff_periods(index, definition, timezone="Europe/Berlin")
+    season_labels = classify_tariff_seasons(index, definition, timezone="Europe/Berlin")
+    two_step = resolve_tariff(
+        index,
+        labels,
+        definition.schedule,
+        SEASON_PRICES,
+        timezone="Europe/Berlin",
+        season_labels=season_labels,
+        seasons=definition.seasons,
+    )
+    assert two_step.schedule_hash == one_step.schedule_hash
+    assert two_step.import_price_per_kwh == one_step.import_price_per_kwh
+    assert set(season_labels) == {"q1", "q2"}
+    # Without month seasons there are no season labels to pass.
+    assert classify_tariff_seasons(index[:24], "pt_mainland_2026_daily_bi", timezone="Europe/Lisbon") is None
+    with pytest.raises(ValueError, match="was resolved without month seasons"):
+        resolve_tariff(index, labels, definition.schedule, SEASON_PRICES, timezone="Europe/Berlin")
 
 
 def test_bundled_schedule_and_flat_price_hashes_are_unchanged():
@@ -570,7 +596,20 @@ def test_smart_charging_periods_follow_the_seasons():
 
 
 @pytest.mark.usefixtures("_patch_weather")
-def test_daily_persistence_plans_on_the_seasonal_prices():
+def test_daily_persistence_plans_on_the_seasonal_prices(monkeypatch):
+    planned = []
+    solve = _daily_persistence.solve_daily_targets
+
+    def spy(problem, **kwargs):
+        planned.append(
+            (
+                sorted(set(problem.import_price_per_kwh.tolist())),
+                sorted(set(problem.export_price_per_kwh.tolist())),
+            )
+        )
+        return solve(problem, **kwargs)
+
+    monkeypatch.setattr(_daily_persistence, "solve_daily_targets", spy)
     smart = {
         "mode": "daily_persistence",
         "charge_periods": ["low"],
@@ -588,6 +627,18 @@ def test_daily_persistence_plans_on_the_seasonal_prices():
     result = app.result()
     assert result["provenance"]["smart_charging"]["mode"] == "daily_persistence"
     assert result["provenance"]["tariff"]["seasons"] == QUARTERS
+    # Each day is planned on its own season's prices: Q1's windows through
+    # 31 March, Q2's single price from 1 April. The first day has no
+    # observation to forecast from.
+    q1 = (sorted(WINDOW_PRICES.values()), [0.06])
+    q2 = ([0.31], [0.04])
+    assert planned == [q1] * 4 + [q2] * 3
+
+    # The planner reads the prices, so a seasonal price change re-simulates.
+    q2_price = {**SEASON_IMPORT, "q2": {"standard": 0.29}}
+    revalued = app.revalue({"tariff": {"import_prices": q2_price, "export_prices": SEASONAL_TARIFF["export_prices"]}})
+    assert revalued["provenance"]["revaluation"]["method"] == "resimulated"
+    assert planned[7:] == [q1] * 4 + [([0.29], [0.04])] * 3
 
 
 def _revalue(app, changes):

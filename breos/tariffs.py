@@ -865,6 +865,28 @@ def classify_tariff_periods(
     return _classify(index, schedule, timezone=timezone, study_date=study_date, boundary_policy=boundary_policy)[0]
 
 
+def classify_tariff_seasons(
+    index: pd.DatetimeIndex,
+    schedule: str | ScheduleDefinition,
+    *,
+    timezone: str,
+    study_date: date | None = None,
+    boundary_policy: str = "strict",
+) -> tuple[str, ...] | None:
+    """Each step's month season, or None for a schedule without month seasons.
+
+    The second half of the two-step path for a schedule with month seasons:
+    pass these to :func:`resolve_tariff` as ``season_labels``, with the
+    schedule's ``seasons``, beside the :func:`classify_tariff_periods`
+    labels. :func:`resolve_named_tariff` takes both steps at once. The
+    arguments and checks are those of :func:`classify_tariff_periods`.
+    """
+    definition = _as_definition(schedule)
+    if definition.seasons is None:
+        return None
+    return _classify(index, definition, timezone=timezone, study_date=study_date, boundary_policy=boundary_policy)[1]
+
+
 def _classify(
     index: pd.DatetimeIndex,
     schedule: str | ScheduleDefinition,
@@ -972,7 +994,9 @@ def _validate_price_periods(schedule: TariffSchedule, prices: TariffPrices, seas
         if _is_seasonal(values):
             if seasons is None:
                 raise ValueError(
-                    f"{name} are given by season, but schedule {schedule.identifier!r} has no month seasons"
+                    f"{name} are given by season, but schedule {schedule.identifier!r} was resolved without "
+                    "month seasons. A schedule with month seasons resolves with resolve_named_tariff, or with "
+                    "season_labels and seasons from classify_tariff_seasons"
                 )
             given, known = set(values), set(seasons.names)
             if given != known:
@@ -1037,9 +1061,11 @@ def resolve_tariff(
 
     ``timezone`` is the civil time the labels were classified in; it sets the
     civil-day boundaries. A schedule with month seasons also gives each
-    step's ``season_labels`` and the ``seasons`` partition: the steps' season
-    selects its prices when they are given by season, and the seasons join
-    the schedule hash.
+    step's ``season_labels`` (:func:`classify_tariff_seasons`) and the
+    ``seasons`` partition: the steps' season selects its prices when they
+    are given by season, and the seasons join the schedule hash. Leave them
+    out for such a schedule and the hash is not the one
+    :func:`resolve_named_tariff` gives.
     """
     resolved_index = _validate_index(index)
     zone = _nonempty_text(timezone, "timezone")
