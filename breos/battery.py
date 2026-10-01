@@ -40,6 +40,7 @@ from breos.constants import (
     D_DOC_R,
     DEFAULT_CHARGE_EFFICIENCY,
     DEFAULT_DISCHARGE_EFFICIENCY,
+    DEFAULT_EOL_PERCENTAGE,
     DEFAULT_INDOOR_CEILING_C,
     DEFAULT_INDOOR_COUPLING_ALPHA,
     DEFAULT_INDOOR_FLOOR_C,
@@ -143,7 +144,7 @@ class BatteryConfig:
 
     nominal_energy_wh: float  # Required — nominal capacity in Wh
     initial_soh: float = 100.0  # Initial state of health (%)
-    eol_percentage: float = 0.70  # End of life threshold (fraction)
+    eol_percentage: float = DEFAULT_EOL_PERCENTAGE  # End of life threshold (fraction)
     max_soc: float = DEFAULT_MAX_SOC
     min_soc: float = DEFAULT_MIN_SOC
     charge_efficiency: float = DEFAULT_CHARGE_EFFICIENCY
