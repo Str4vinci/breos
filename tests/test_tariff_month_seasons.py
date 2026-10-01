@@ -318,10 +318,10 @@ def test_seasonal_price_lists_are_frozen_strictly(import_prices, error, message)
     ("import_prices", "definition", "message"),
     [
         ({"q1": {"all": 0.3}}, None, r"no prices for season\(s\) q2, q3, q4"),
-        ({**SEASON_IMPORT, "q5": {"all": 0.3}}, None, r"unknown season\(s\) q5"),
-        ({**SEASON_IMPORT, "q2": {"peak": 0.3}}, None, r"Unknown import_prices period\(s\) in season 'q2'.*peak"),
-        ({**SEASON_IMPORT, "q1": {"low": 0.3}}, None, "Missing import price for used tariff period"),
-        (SEASON_IMPORT, "pt_mainland_2026_daily_bi", "was resolved without month seasons"),
+        ({**SEASON_IMPORT, "q5": {"all": 0.3}}, None, r"has season\(s\) q5 that schedule"),
+        ({**SEASON_IMPORT, "q2": {"peak": 0.3}}, None, r"q2' has period\(s\) peak that schedule"),
+        ({**SEASON_IMPORT, "q1": {"low": 0.3}}, None, "q1' has no price for high, standard"),
+        (SEASON_IMPORT, "pt_mainland_2026_daily_bi", "has no month seasons"),
     ],
 )
 def test_resolution_rejects_prices_its_seasons_cannot_use(import_prices, definition, message):
@@ -330,6 +330,36 @@ def test_resolution_rejects_prices_its_seasons_cannot_use(import_prices, definit
     zone = "Europe/Lisbon" if definition else "Europe/Berlin"
     with pytest.raises(ValueError, match=message):
         resolve_named_tariff(index, definition or _definition(), prices, timezone=zone)
+
+
+@pytest.mark.parametrize("name", ["import_prices", "export_prices"])
+@pytest.mark.parametrize(
+    ("season", "season_prices", "start", "end", "message"),
+    [
+        (
+            "q2",
+            {"standard": 0.31, "high": 0.99},
+            "2026-04-01",
+            "2026-07-01",
+            r"q2' prices high, which season 'q2' never uses",
+        ),
+        (
+            "q4",
+            {"low": 0.25, "standard": 0.33},
+            "2026-01-01",
+            "2026-02-01",
+            r"q4' has no price for high",
+        ),
+    ],
+)
+def test_named_resolution_validates_every_seasons_used_periods(name, season, season_prices, start, end, message):
+    index = pd.date_range(start, end, freq="h", tz="Europe/Berlin", inclusive="left")
+    values = {**SEASON_IMPORT, season: season_prices}
+    price_lists = {"import_prices": SEASON_IMPORT, "export_prices": SEASON_IMPORT}
+    price_lists[name] = values
+    prices = TariffPrices(currency="EUR", **price_lists)
+    with pytest.raises(ValueError, match=message):
+        resolve_named_tariff(index, _definition(), prices, timezone="Europe/Berlin")
 
 
 def test_the_two_step_path_resolves_a_month_season_schedule_as_one_step_does():

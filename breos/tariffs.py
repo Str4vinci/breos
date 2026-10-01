@@ -932,6 +932,50 @@ def _classify(
     return tuple(labels), tuple(seasons)
 
 
+def validate_season_prices(definition: ScheduleDefinition, prices: Mapping[str, Mapping[str, Any]], where: str) -> None:
+    """Check prices given per month season: every season, each pricing exactly the periods it uses."""
+    schedule = definition.schedule
+    if definition.seasons is None:
+        raise ValueError(
+            f"'{where}' gives prices by season, but schedule {schedule.identifier!r} has no month seasons. "
+            "Price each period, or define [tariff.custom_schedule] seasons."
+        )
+    seasons = definition.seasons.names
+    unknown = sorted(set(prices) - set(seasons))
+    if unknown:
+        raise ValueError(
+            f"'{where}' has season(s) {', '.join(unknown)} that schedule {schedule.identifier!r} does not have. "
+            f"Its seasons: {', '.join(seasons)}."
+        )
+    missing = [season for season in seasons if season not in prices]
+    if missing:
+        raise ValueError(
+            f"'{where}' has no prices for season(s) {', '.join(missing)}. Price every season of "
+            f"{schedule.identifier!r}: {', '.join(seasons)}."
+        )
+    for season in seasons:
+        given = set(prices[season])
+        used = definition.season_periods(season)
+        not_periods = sorted(given - set(schedule.periods) - {"all"})
+        if not_periods:
+            raise ValueError(
+                f"'{where}.{season}' has period(s) {', '.join(not_periods)} that schedule "
+                f"{schedule.identifier!r} does not have. Its periods: {', '.join(sorted(schedule.periods))}."
+            )
+        unused = sorted(given - used - {"all"})
+        if unused:
+            raise ValueError(
+                f"'{where}.{season}' prices {', '.join(unused)}, which season {season!r} never uses. "
+                f"Its periods: {', '.join(sorted(used))}; 'all' prices every one."
+            )
+        uncovered = sorted(used - given) if "all" not in given else []
+        if uncovered:
+            raise ValueError(
+                f"'{where}.{season}' has no price for {', '.join(uncovered)}. Price every period season "
+                f"{season!r} uses, or give 'all'."
+            )
+
+
 def resolve_named_tariff(
     index: pd.DatetimeIndex,
     schedule: str | ScheduleDefinition,
@@ -943,6 +987,11 @@ def resolve_named_tariff(
 ) -> ResolvedTariff:
     """Classify and price one tariff schedule, bundled or defined, in the configured civil time."""
     definition = _as_definition(schedule)
+    # Validate every season against its rules before retaining only schedule metadata.
+    # The simulation window may omit a season or some of its periods.
+    for name, values in (("import_prices", prices.import_prices), ("export_prices", prices.export_prices)):
+        if _is_seasonal(values):
+            validate_season_prices(definition, cast(Mapping[str, Mapping[str, float]], values), f"prices.{name}")
     labels, seasons = _classify(
         index,
         definition,

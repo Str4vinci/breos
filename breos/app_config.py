@@ -76,6 +76,7 @@ from breos.tariffs import (
     get_schedule_definition,
     parse_schedule_definition,
     schedule_resolution_minutes,
+    validate_season_prices,
 )
 from breos.utils import get_hours_per_step
 
@@ -1453,50 +1454,6 @@ def _selected_schedule(table: Mapping[str, Any]) -> ScheduleDefinition:
     return get_schedule_definition(table["schedule"])
 
 
-def _check_season_prices(definition: ScheduleDefinition, prices: Mapping[str, Any], where: str) -> None:
-    """Check prices given per month season: every season, each pricing exactly the periods it uses."""
-    schedule = definition.schedule
-    if definition.seasons is None:
-        raise ValueError(
-            f"'{where}' gives prices by season, but schedule {schedule.identifier!r} has no month seasons. "
-            "Price each period, or define [tariff.custom_schedule] seasons."
-        )
-    seasons = definition.seasons.names
-    unknown = sorted(set(prices) - set(seasons))
-    if unknown:
-        raise ValueError(
-            f"'{where}' has season(s) {', '.join(unknown)} that schedule {schedule.identifier!r} does not have. "
-            f"Its seasons: {', '.join(seasons)}."
-        )
-    missing = [season for season in seasons if season not in prices]
-    if missing:
-        raise ValueError(
-            f"'{where}' has no prices for season(s) {', '.join(missing)}. Price every season of "
-            f"{schedule.identifier!r}: {', '.join(seasons)}."
-        )
-    for season in seasons:
-        given = set(prices[season])
-        used = definition.season_periods(season)
-        not_periods = sorted(given - set(schedule.periods) - {"all"})
-        if not_periods:
-            raise ValueError(
-                f"'{where}.{season}' has period(s) {', '.join(not_periods)} that schedule "
-                f"{schedule.identifier!r} does not have. Its periods: {', '.join(sorted(schedule.periods))}."
-            )
-        unused = sorted(given - used - {"all"})
-        if unused:
-            raise ValueError(
-                f"'{where}.{season}' prices {', '.join(unused)}, which season {season!r} never uses. "
-                f"Its periods: {', '.join(sorted(used))}; 'all' prices every one."
-            )
-        uncovered = sorted(used - given) if "all" not in given else []
-        if uncovered:
-            raise ValueError(
-                f"'{where}.{season}' has no price for {', '.join(uncovered)}. Price every period season "
-                f"{season!r} uses, or give 'all'."
-            )
-
-
 def _check_tariff_prices(table: dict[str, Any], where: str) -> None:
     if ("schedule" in table) == ("custom_schedule" in table):
         raise ValueError(f"'{where}' must set exactly one of 'schedule' or 'custom_schedule'")
@@ -1511,7 +1468,7 @@ def _check_tariff_prices(table: dict[str, Any], where: str) -> None:
                 "entry as a table of period prices for one month season."
             )
         if nested and all(nested):
-            _check_season_prices(definition, table[name], f"{where}.{name}")
+            validate_season_prices(definition, table[name], f"{where}.{name}")
             continue
         given = set(table[name])
         unknown = sorted(given - periods - {"all"})
