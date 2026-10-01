@@ -1,3 +1,9 @@
+# Minimal PV + battery run for Porto: the config the quickstart guide uses.
+# pv-plus-battery.toml shows the same system with every common key annotated.
+#
+#   breos validate-config configs/examples/quickstart.toml
+#   breos run --config configs/examples/quickstart.toml --output result.json
+
 location = "porto"
 n_modules = 10
 annual_consumption_kwh = 4000

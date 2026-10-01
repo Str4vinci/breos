@@ -8,9 +8,12 @@
 # gives the spread of NPV savings, payback year, grid independence, and SoH.
 #
 # BREOS does NOT ship weather data. Provide your own multi-year historical CSV
-# (a 'date' column plus the weather fields the PV model uses) and point
-# [montecarlo].weather_file at it. The conventional location is a local
-# weather/ directory, which is git-ignored.
+# (a 'date' column with UTC offsets, plus the weather fields the PV model
+# uses: ghi, dni, dhi, temp_air, wind_speed) and point
+# [montecarlo].weather_file at it, or pass --weather-file. The conventional
+# location is a local weather/ directory, which is git-ignored.
+#
+# Each setting below shows its default in [brackets].
 
 # --- Scenario (same keys as `breos run`) ------------------------------------
 location = "porto"
@@ -27,11 +30,11 @@ projection_years = 20
 # --- Monte Carlo controls ---------------------------------------------------
 [montecarlo]
 weather_file = "weather/porto_historical_2005_2024_openmeteo.csv"  # provide your own
-n_runs = 100             # number of Monte Carlo trajectories
-years_per_run = 20       # projection horizon; weather + demand resampled each year
-load_uncertainty = 0.10  # std-dev of the annual demand multiplier (Normal, mean 1.0)
-load_distribution = "normal" # backwards-compatible default; "uniform" uses 1 +/- load_uncertainty
-target_year = 2025       # calendar year of the weather, load and tariff; start_date is not used
-seed = 42                # fixed seed -> reproducible; remove for fresh randomness
-collect_yearly = false   # opt in to the per-run, per-year financial/degradation ledger
-n_procs = 1              # independent trajectory workers
+n_runs = 100             # [100] number of Monte Carlo trajectories
+years_per_run = 20       # [projection_years] horizon; weather + demand resampled each year
+load_uncertainty = 0.10  # [0.10] std-dev of the annual demand multiplier (mean 1.0)
+load_distribution = "normal"  # ["normal"]; "uniform" draws from 1 +/- load_uncertainty
+target_year = 2025       # [2025] study year of weather, load and tariff; not start_date
+seed = 42                # [none] fixed seed -> reproducible; remove for fresh randomness
+collect_yearly = false   # [false] true writes the per-run, per-year ledger CSV
+n_procs = 1              # [1] parallel trajectory worker processes

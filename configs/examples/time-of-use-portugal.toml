@@ -1,6 +1,14 @@
 # Time-of-use pricing on the Portuguese mainland daily bi-hourly schedule.
 # BREOS bundles the schedule (Diretiva ERSE n.º 1/2026); the prices below are
 # illustrative, not a supplier's offer. Put your own tariff's prices here.
+#
+# Only the pricing changes: the battery still charges from surplus PV and
+# discharges to the load at any hour. smart-charging-portugal.toml adds grid
+# charging to this system, and custom-tariff-schedule.toml defines a schedule
+# inline when BREOS does not bundle it.
+#
+#   breos run --config configs/examples/time-of-use-portugal.toml
+
 location = "porto"
 n_modules = 10
 annual_consumption_kwh = 4000
