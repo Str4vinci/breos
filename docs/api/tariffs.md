@@ -93,13 +93,15 @@ dates = { "2026" = [2026-01-01, 2026-12-25] }
 
 The schedule table requires `identifier`, `version`, `timezone`, `cycle`,
 `periods`, and `rules`; optional metadata is `source`, `source_url`, `note`,
-`effective_from`, `effective_to`, and `holidays`. Unknown keys are rejected
+`effective_from`, `effective_to`, `holidays`, and `seasons`. Unknown keys are rejected
 throughout the nested definition. Use a valid IANA timezone and make it match
 the configured location exactly. Prices at `[tariff]` must cover every listed
-period, or use `all`.
+period, or use `all`; with [month seasons](#month-seasons), each season's
+table prices the periods that season's rules use, and no others.
 
 Rules use the same semantics as bundled schedules: `days` is `weekday`,
-`saturday`, `sunday`, or `all`; `season` is `standard`, `dst`, or `all`. Every
+`saturday`, `sunday`, or `all`; `season` is `standard`, `dst`, or `all`, or
+with [month seasons](#month-seasons) a season name or `all`. Every
 day-type/season combination must resolve to exactly one rule. Period intervals
 are inclusive at the start and exclusive at the end, and must tile the local
 day from `00:00` through `24:00` without gaps or overlaps. `24:00` is valid
@@ -111,13 +113,97 @@ complete calendar you intend for every simulated tariff year; resolving a
 year absent from the map raises an error. Omit the `holidays` table when the
 schedule has no separate holiday classification.
 
+## Month seasons
+
+A custom schedule can vary its periods and prices by calendar month instead
+of by DST. `seasons` names each season and lists its months, 1 through 12; a
+quarter is a season of three months. The seasons must hold every month
+exactly once. Each rule's `season` then selects a season name or `all`, and
+`standard` and `dst` are refused: a schedule uses DST seasons or month
+seasons, never both. Season names follow the period-name rules, must differ
+from the period names, and cannot be `all`, `standard` or `dst`.
+
+A step's season is the month of its civil date in the location's timezone,
+so the season changes at local midnight on the first of the month, whatever
+the index's own timezone. Day types, holidays and effective dates apply as
+they do without seasons, and every project year replays the start-year
+calendar.
+
+Germany's §14a EnWG Module 3 network charges are one such tariff: the
+network operator publishes low, standard and high windows that apply in some
+quarters only, with the standard price all day in the others. BREOS bundles
+no German schedule, because each network operator sets its own windows and
+prices. Enter the operator's published values as a custom schedule. The
+windows and prices below are illustrative, not any operator's:
+
+```toml
+[tariff]
+currency = "EUR"
+export_prices = { all = 0.08 }
+
+[tariff.import_prices]
+q1 = { low = 0.25, standard = 0.33, high = 0.42 }
+q2 = { standard = 0.33 }
+q3 = { standard = 0.33 }
+q4 = { low = 0.25, standard = 0.33, high = 0.42 }
+
+[tariff.custom_schedule]
+identifier = "illustrative_module3"
+version = "1"
+timezone = "Europe/Berlin"
+cycle = "custom"
+periods = ["low", "standard", "high"]
+seasons = { q1 = [1, 2, 3], q2 = [4, 5, 6], q3 = [7, 8, 9], q4 = [10, 11, 12] }
+
+[[tariff.custom_schedule.rules]]
+days = "all"
+season = "q1"
+intervals = { low = [["00:00", "06:00"]], standard = [["06:00", "17:00"], ["21:00", "24:00"]], high = [["17:00", "21:00"]] }
+
+[[tariff.custom_schedule.rules]]
+days = "all"
+season = "q2"
+intervals = { standard = [["00:00", "24:00"]] }
+
+[[tariff.custom_schedule.rules]]
+days = "all"
+season = "q3"
+intervals = { standard = [["00:00", "24:00"]] }
+
+[[tariff.custom_schedule.rules]]
+days = "all"
+season = "q4"
+intervals = { low = [["00:00", "06:00"]], standard = [["06:00", "17:00"], ["21:00", "24:00"]], high = [["17:00", "21:00"]] }
+```
+
+`import_prices` and `export_prices` are each given one of two ways:
+
+- per period, as without seasons: every period of the schedule, or `all`;
+  or
+- per season and then per period, as above. Every season needs a table. A
+  table prices exactly the periods that season's rules use, or gives `all`.
+  A period the season never uses is an error, since its price could never
+  apply.
+
+A price list cannot mix the two forms, and prices by season need a schedule
+with month seasons. `breos sweep` can vary one season's price with a key
+such as `tariff.import_prices.q1.high`.
+
+The month partition is part of the schedule: it is recorded in
+`provenance.tariff.seasons`, and each step's season joins the schedule hash.
+Two partitions that give the same periods still have different hashes, so
+`App.revalue` re-simulates when the seasons change and re-prices when only
+the prices change. Schedules without month seasons keep the hashes they had
+before seasons existed.
+
 ## Schedule definitions
 
 A {class}`~breos.tariffs.ScheduleDefinition` is a complete schedule: its
 {class}`~breos.tariffs.TariffSchedule` metadata, its
 {class}`~breos.tariffs.ScheduleRule` values, which give every day type and
-season exactly one set of intervals, and an optional
-{class}`~breos.tariffs.HolidayCalendar`. Every bundled schedule is one, built
+season exactly one set of intervals, an optional
+{class}`~breos.tariffs.HolidayCalendar`, and optional
+{class}`~breos.tariffs.MonthSeasons`. Every bundled schedule is one, built
 from `tariffs.json` by {func}`~breos.tariffs.parse_schedule_definition`. The
 classification and resolution functions and `TariffSpec` take either a
 bundled identifier or a definition. A definition is immutable and pickles, so
@@ -133,6 +219,7 @@ it reaches optimizer worker processes unchanged.
    breos.tariffs.ScheduleDefinition
    breos.tariffs.ScheduleRule
    breos.tariffs.HolidayCalendar
+   breos.tariffs.MonthSeasons
    breos.tariffs.TariffPrices
    breos.tariffs.ResolvedTariff
    breos.tariffs.available_tariff_schedules
@@ -141,6 +228,7 @@ it reaches optimizer worker processes unchanged.
    breos.tariffs.parse_schedule_definition
    breos.tariffs.schedule_resolution_minutes
    breos.tariffs.classify_tariff_periods
+   breos.tariffs.classify_tariff_seasons
    breos.tariffs.resolve_named_tariff
    breos.tariffs.resolve_tariff
    breos.tariffs.resolve_flat_tariff

@@ -279,9 +279,9 @@ def replay_summary(replay: ReplayResult, hours_per_step: float) -> dict[str, Any
 
 
 def reference_dispatch(case: ReplayCase) -> str:
-    """``"fixed_target"`` when App dispatches with a fixed-target table, else ``"greedy"``."""
+    """The static mode App dispatches with, ``"fixed_target"`` or ``"discharge_only"``, else ``"greedy"``."""
     spec = case.resolved.smart_charging
-    return "fixed_target" if spec is not None and spec.mode == "fixed_target" else "greedy"
+    return spec.mode if spec is not None and spec.mode in ("fixed_target", "discharge_only") else "greedy"
 
 
 def plan_comparison(replay: ReplayResult) -> dict[str, Any]:

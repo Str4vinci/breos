@@ -443,7 +443,10 @@ fixed_charge_per_day = 0.25              # optional, default 0
 
 - Every period of the schedule needs an import and an export price, or an
   `all` price for every period. A period the schedule does not have is an
-  error; there is no fallback to another schedule.
+  error; there is no fallback to another schedule. A custom schedule with
+  month seasons is priced by season instead: each season's table prices the
+  periods that season's rules use, or gives `all`, and pricing a period the
+  season never uses is an error.
 - Instead of `schedule`, you can define `[tariff.custom_schedule]` inline.
   Set `identifier`, `version`, `timezone`, `cycle`, `periods`, and one or
   more `[[tariff.custom_schedule.rules]]` tables. Do not set both schedule
@@ -451,6 +454,10 @@ fixed_charge_per_day = 0.25              # optional, default 0
   each rule's intervals must cover the whole local day without gaps or
   overlaps. See [Custom App schedules](../api/tariffs.md#custom-app-schedules)
   for a complete example.
+- A custom schedule can name calendar-month `seasons`, such as quarters,
+  instead of the standard/DST seasons. Its rules then select a season by
+  name, and each price list may give a table of period prices for every
+  season. See [Month seasons](../api/tariffs.md#month-seasons).
 - Holidays are optional and explicit. `holidays.dates` maps each covered
   year to its dates; provide the complete calendar you intend for each year
   the simulation can use. A run in a year absent from that map fails rather
@@ -485,7 +492,7 @@ unchanged results:
 
 ```toml
 [smart_charging]
-mode = "fixed_target"               # or "disabled", or the experimental "daily_persistence"
+mode = "fixed_target"               # or "disabled", "discharge_only", or the experimental "daily_persistence"
 target_usable_fraction = 0.50       # 0 is battery_min_soc, 1 is battery_max_soc
 charge_periods = ["off_peak"]
 discharge_periods = ["mid_peak", "peak"]
@@ -529,6 +536,31 @@ instructions and the tariff's schedule hash.
 Monte Carlo applies the same instructions to every trajectory, and projected
 optimization to every candidate design with a battery; both record the same
 provenance. See `configs/examples/smart-charging-portugal.toml`.
+
+### Discharge only
+
+`mode = "discharge_only"` restricts when the battery discharges, without
+any grid charging:
+
+```toml
+[smart_charging]
+mode = "discharge_only"
+discharge_periods = ["peak"]        # required: the battery holds its charge in every other period
+```
+
+- In a discharge period the battery may discharge to the load. In every
+  other period it holds its charge. PV may charge the battery in every
+  period, and the grid never does.
+- The mode takes `discharge_periods` only. `charge_periods`,
+  `target_usable_fraction`, `grid_charge_efficiency`, `grid_import_limit_w`
+  and the planner settings are errors, since no grid charging takes place.
+- A peak-only policy lists the peak period; a selected-period policy lists
+  several. Discharge in every period is greedy self-consumption: use
+  `mode = "disabled"`, or list every period, which gives the same results.
+- It runs on the same dispatch instructions as `fixed_target`, in App, Monte
+  Carlo and projected optimization, on both execution backends.
+  `provenance.smart_charging` records the mode, the discharge periods and
+  the instruction and schedule hashes, with the grid-charge settings unset.
 
 ### Daily persistence (experimental)
 

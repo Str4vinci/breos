@@ -5,6 +5,42 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 ## [Unreleased]
 
 ### Added
+- `[tariff.custom_schedule]` takes calendar-month `seasons`, such as
+  quarters, for tariffs whose windows or prices change by month rather than
+  by DST ([#337](https://github.com/Str4vinci/breos/issues/337)).
+  `seasons = { q1 = [1, 2, 3], ... }` must hold every month exactly once;
+  each rule's `season` then selects a season name or `all`, and a schedule
+  with month seasons refuses `standard` and `dst`. `import_prices` and
+  `export_prices` are given per period, as before, or per season and
+  period, where each season prices exactly the periods its rules use, or
+  gives `all`. A step's season is the month of its civil date in the
+  location's timezone; day types, holidays, effective dates and the
+  replayed start-year calendar are unchanged. Month seasons work in App,
+  Monte Carlo, projected optimization and `App.revalue`, which re-prices by
+  season and period; `breos sweep` takes keys such as
+  `tariff.import_prices.q1.high`. The partition joins the schedule hash
+  only for a schedule with month seasons, so every bundled and existing
+  custom schedule keeps its labels and hashes, and no result changes.
+  `breos.tariffs.MonthSeasons` holds the partition. BREOS still bundles no
+  German schedule; `configs/examples/quarterly-tariff-berlin.toml` shows a
+  §14a Module 3-style quarterly tariff with illustrative windows and
+  prices. Result schema 2.4 records `seasons` in the resolved config and in
+  `provenance.tariff`, where the price lists may now be given by season.
+- `[smart_charging] mode = "discharge_only"` discharges the battery only in
+  the listed `discharge_periods` and never charges it from the grid
+  ([#338](https://github.com/Str4vinci/breos/issues/338)). It expresses a
+  peak-only or selected-period discharge policy directly, where a
+  `fixed_target` table with a zero target and unused grid-charging settings
+  was needed before. The mode takes `discharge_periods` alone and refuses
+  `charge_periods`, `target_usable_fraction`, `grid_charge_efficiency`,
+  `grid_import_limit_w` and the planner settings. PV may still charge the
+  battery in every period. It runs on the same dispatch instructions and
+  civil-day controller as `fixed_target`, in App, Monte Carlo and projected
+  optimization, on both execution backends; `App.revalue` re-prices it.
+  Listing every period gives the greedy result bit for bit, and the
+  default greedy dispatch is unchanged. ADR 0002 A8 is unchanged.
+  Result schema 2.5 records the mode in `provenance.smart_charging`, with an
+  empty `charge_periods` and the grid-charge settings as None.
 - `battery_allow_terminal_replacement` (App and Monte Carlo), the
   optimizer's `[battery] allow_terminal_replacement` and
   `BatteryConfig.allow_terminal_replacement` can skip buying a battery that

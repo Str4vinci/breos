@@ -407,7 +407,7 @@
   "pv_loss_waterfall.state_unit": "kWh at period boundary",
   "pv_loss_waterfall.unit": "kWh",
   "pv_origin_battery_ac_load_kwh": 858.03,
-  "result_schema_version": "2.3",
+  "result_schema_version": "2.5",
   "self_consumption_kwh": 2564.44,
   "self_consumption_pct": 68.42,
   "total_investment": 6801.08,
@@ -451,7 +451,7 @@
   "yearly[2].year": 3
  },
  "generated_with": {
-  "breos_commit": "c113f2a1306d922aae89e140b873a7025ede3ca7",
+  "breos_commit": "c83848789290bb60647ccffc013d790aa7768147",
   "numpy": "2.4.6",
   "pandas": "3.0.5",
   "pvlib": "0.15.2",
