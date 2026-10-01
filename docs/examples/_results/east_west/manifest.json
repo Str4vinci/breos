@@ -1,10 +1,10 @@
 {
  "case": "east_west",
  "title": "East-West or South?",
- "breos_version": "0.6.2",
- "git_describe": "v0.6.2-585-gde0b8a1",
- "generated_utc": "2026-10-01T20:19:03+00:00",
- "runtime_s": 5.9,
+ "breos_version": "0.7.0",
+ "git_describe": "v0.6.2-610-gd29419b",
+ "generated_utc": "2026-10-01T20:54:40+00:00",
+ "runtime_s": 6.0,
  "cheap": true,
  "configs": {
   "configs/examples/east-west-roof.toml": "691138d0b19d94a546daf6684d434d35640510e6a9dcfcf02983b486448ee992"

@@ -1,13 +1,13 @@
 {
  "case": "montecarlo",
  "title": "Monte Carlo over weather years and demand",
- "breos_version": "0.6.2",
- "git_describe": "v0.6.2-585-gde0b8a1",
- "generated_utc": "2026-10-01T20:24:27+00:00",
- "runtime_s": 171.3,
+ "breos_version": "0.7.0",
+ "git_describe": "v0.6.2-610-gd29419b",
+ "generated_utc": "2026-10-01T21:00:02+00:00",
+ "runtime_s": 170.6,
  "cheap": false,
  "configs": {
-  "configs/examples/montecarlo.toml": "122fb41cd4cea2562808be768f2acc8edc8626e26329d552ae6d8d89ac328982"
+  "configs/examples/montecarlo.toml": "f8aed7e52e2a98849b02c9337dbe73b90ffe1f35e9dcba0ac618cde84cd32442"
  },
  "weather": {
   "validation/data/weather/porto_tmy_2005_2023_pvgis-sarah3.csv.gz": {

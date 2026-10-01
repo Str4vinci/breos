@@ -1,10 +1,10 @@
 {
  "case": "which_tariff",
  "title": "Which tariff after PV?",
- "breos_version": "0.6.2",
- "git_describe": "v0.6.2-585-gde0b8a1",
- "generated_utc": "2026-10-01T20:21:21+00:00",
- "runtime_s": 25.4,
+ "breos_version": "0.7.0",
+ "git_describe": "v0.6.2-610-gd29419b",
+ "generated_utc": "2026-10-01T20:56:58+00:00",
+ "runtime_s": 23.8,
  "cheap": false,
  "configs": {
   "configs/examples/tariff-comparison.toml": "7ffde52188a4e89f76c91f3cc58225b558992cbb82df06ce55602487b6ee7540"

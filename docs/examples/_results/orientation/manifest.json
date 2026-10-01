@@ -1,10 +1,10 @@
 {
  "case": "orientation",
  "title": "How much does orientation matter?",
- "breos_version": "0.6.2",
- "git_describe": "v0.6.2-585-gde0b8a1",
- "generated_utc": "2026-10-01T20:19:25+00:00",
- "runtime_s": 21.8,
+ "breos_version": "0.7.0",
+ "git_describe": "v0.6.2-610-gd29419b",
+ "generated_utc": "2026-10-01T20:55:02+00:00",
+ "runtime_s": 21.9,
  "cheap": false,
  "configs": {
   "configs/examples/pv-only.toml": "b05d6a251ee3a4b9a4510866f9268b740434280ced704f9e8e4654363c35c8b0"

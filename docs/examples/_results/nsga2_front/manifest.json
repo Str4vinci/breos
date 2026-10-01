@@ -1,13 +1,13 @@
 {
  "case": "nsga2_front",
  "title": "NSGA-II sizing front",
- "breos_version": "0.6.2",
- "git_describe": "v0.6.2-585-gde0b8a1",
- "generated_utc": "2026-10-01T20:28:14+00:00",
- "runtime_s": 227.2,
+ "breos_version": "0.7.0",
+ "git_describe": "v0.6.2-610-gd29419b",
+ "generated_utc": "2026-10-01T21:03:49+00:00",
+ "runtime_s": 226.7,
  "cheap": false,
  "configs": {
-  "configs/optimization/projected-optimization.toml": "a4bc1f7f57216078e866db21a8f0dab34506e134e154a27b77edaf0410aefa0d"
+  "configs/optimization/projected-optimization.toml": "087ac2850d8f6e7dc6b3d1db2ed9e36b2397488a668c19ea80c9ded6d9ec1216"
  },
  "weather": {
   "validation/data/weather/porto_tmy_2005_2023_pvgis-sarah3.csv.gz": {
