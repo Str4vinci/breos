@@ -939,3 +939,12 @@ def test_preload_weather_by_year_reads_a_gzip_compressed_csv(tmp_path, write_mul
     assert sorted(by_year) == [2021, 2022]
     for year, frame in reference.items():
         pd.testing.assert_frame_equal(by_year[year], frame)
+
+
+def test_preload_weather_by_year_names_a_missing_date_column(tmp_path):
+    # A PVGIS TMY labels its timestamps time(UTC), not date: refuse it clearly.
+    path = tmp_path / "porto_tmy_2005_2023_pvgis-sarah3.csv"
+    path.write_text("time(UTC),ghi,dni,dhi,temp_air,wind_speed\n2025-01-01 00:00:00+00:00,0,0,0,11.7,5.1\n")
+
+    with pytest.raises(ValueError, match="has no 'date' column"):
+        preload_weather_by_year(str(path), target_year=2025)
