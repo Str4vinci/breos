@@ -1,7 +1,9 @@
 # 0002 — Tariffs are resolved values; smart charging is an instruction layer
 
-- **Status:** Accepted; amendments A1–A14 Accepted. Implemented in 0.7.0;
-  see [Implementation status](#implementation-status-070).
+- **Status:** Accepted; amendments A1–A14 Accepted. Implemented in 0.7.0,
+  with two additions that no amendment accepted: discharge-only mode and
+  calendar-month seasons (see
+  [Additions without an amendment](#additions-without-an-amendment)).
 - **Date:** 2026-08-20; amendments 2026-09-26; A6 accepted 2026-09-26;
   A1–A5 and A7–A10 accepted 2026-09-27; A11 and A12 accepted 2026-09-30;
   A13 and A14 accepted 2026-10-01
@@ -91,6 +93,10 @@ Schedule and price data remain separate internally. A later convenience preset
 may refer to one schedule and one dated price set, but neither can mutate the
 other and the resolved result records both identifiers.
 
+*(0.7.0 also accepts an inline `[tariff.custom_schedule]`, which can have
+calendar-month seasons; see
+[Additions without an amendment](#additions-without-an-amendment).)*
+
 ### Resolved tariff value
 
 The tariff domain exposes three immutable concepts:
@@ -150,8 +156,8 @@ the configured minimum SOC and one maps to the configured maximum SOC. This
 avoids treating unusable nominal capacity as an available target. Charge and
 discharge period names must exist in the resolved tariff. Fixed-target mode
 requires a tariff and a positive-capacity battery. *(0.7.0 also has
-`discharge_only` and the experimental `daily_persistence` (A12); see
-[Implementation status](#implementation-status-070).)*
+the experimental `daily_persistence` (A12) and `discharge_only`; see
+[Additions without an amendment](#additions-without-an-amendment).)*
 
 `grid_import_limit_w` caps total site import, including simultaneous load. Grid
 charging is also bounded by battery charge power and the hybrid inverter's AC
@@ -247,17 +253,47 @@ and additions:
 - **A9, grid-charge cost.** Ledger schema 3.0 (ADR 0003 E4) took money out of
   the ledger. The grid-charge cost is a year-row and result value at year-1
   prices (`grid_charge_cost_year1_prices`), not a ledger column.
-- **Added without an amendment:** `smart_charging.mode = "discharge_only"`
-  (#341). It discharges only in `discharge_periods`, never grid-charges, and
-  refuses every grid-charging key. It resolves to the same instruction
-  arrays. Because it never grid-charges, A8's disjoint-period rule does not
-  come into play, and it refuses `hold_target` (A14). App, Monte Carlo and
-  the projected optimizer accept it.
-- **Added without an amendment:** `[tariff.custom_schedule]` defines a
-  schedule inline (#327). Since #340 a custom schedule can have
-  calendar-month seasons, so a quarter is a season of three months, and
-  prices can then be given per season and period. Every project year still
-  replays the start-year calendar (A2). The bundled schedules are unchanged.
+
+### Additions without an amendment
+
+Two features were implemented without an amendment of their own. They are
+recorded here as the 0.7.0 contract. No amendment accepted them, so they
+carry no acceptance date. A later change to either
+one needs an amendment, as for any other part of this decision.
+
+**Discharge-only mode** (#338, PR #341). `smart_charging.mode =
+"discharge_only"` lets the battery discharge on a step whose tariff period
+is in `discharge_periods` and holds its charge on every other step.
+
+- The grid never charges the battery. PV may charge it on every step.
+- `discharge_periods` is required. Every grid-charging key is refused:
+  `target_usable_fraction`, `charge_periods`, `grid_charge_efficiency` and
+  `grid_import_limit_w`, and also the `daily_persistence` planner settings.
+- It resolves to the same instruction arrays as `fixed_target`: a zero
+  reserve and no grid target on any step. Discharging in every period is
+  the same as greedy dispatch.
+- Because the grid never charges the battery, A8's disjoint-period rule
+  does not apply. The mode refuses `overlap_policy = "hold_target"` (A14).
+- App, Monte Carlo and the projected optimizer accept it, and
+  `provenance.smart_charging` records it.
+
+**Inline schedules with calendar-month seasons** (PR #327; seasons #337,
+PR #340). `[tariff.custom_schedule]` defines a schedule in the
+configuration, with the same strict validation as a bundled one.
+
+- Optional `seasons` maps each season name to its calendar months. Every
+  month must be in exactly one season, so a quarter is a season of three
+  months. A season name must not also be a period name.
+- A step's season is the month of its civil date in the schedule's zone.
+  With month seasons, a rule selects a season name or `all`, never
+  `standard` or `dst`. Every day type and season must match exactly one
+  rule. A holiday takes the rule of `holidays.day_type` in the season of its
+  month.
+- Import and export prices can be given per season and period. Each season
+  must be priced, and each season prices exactly the periods it uses, or
+  `all`. A seasonal reference tariff (A13) follows the same rules.
+- Every project year replays the start-year calendar (A2). The bundled
+  schedules are unchanged and have no month seasons.
 
 ## Amendments for 0.7 readiness
 
