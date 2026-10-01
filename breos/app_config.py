@@ -1677,7 +1677,7 @@ REFERENCE_TARIFF_TABLE = TableSpec(
         "study_date": _tariff_study_date,
         "import_price_escalation": number(minimum=-1, min_exclusive=True),
     },
-    required=frozenset({"currency", "import_prices"}),
+    required=frozenset({"currency", "import_prices", "fixed_charge_per_day"}),
     check=_check_reference_prices,
     docs={
         "schedule": (
@@ -1696,7 +1696,7 @@ REFERENCE_TARIFF_TABLE = TableSpec(
             "Import price per kWh by period name, at year-1 prices; `all` prices every period. With month seasons, "
             "a table of period prices for every season instead. Without a schedule, only `all`"
         ),
-        "fixed_charge_per_day": "Fixed charge per day without the system, at year-1 prices (default 0)",
+        "fixed_charge_per_day": "Fixed charge per day without the system, at year-1 prices; an explicit 0 is valid",
         "boundary_policy": (
             "How a period boundary inside a step is handled, as in `tariff.boundary_policy`; needs a schedule"
         ),
@@ -1737,7 +1737,7 @@ def resolve_reference_tariff_spec(
         import_prices=table["import_prices"],
         # The no-system household exports nothing.
         export_prices={"all": 0.0},
-        fixed_charge_per_day=table.get("fixed_charge_per_day", 0.0),
+        fixed_charge_per_day=table["fixed_charge_per_day"],
         identifier="reference",
         version="1",
     )
