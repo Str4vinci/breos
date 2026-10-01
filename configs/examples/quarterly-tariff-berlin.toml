@@ -1,4 +1,8 @@
 # Quarterly time-of-use tariff as a custom schedule with calendar-month seasons.
+# The system is the one in germany-berlin.toml; the [tariff] table replaces the
+# residential_de preset's flat import, export and fixed prices, and the preset
+# still supplies the investment costs.
+#
 # The windows and prices are illustrative, in the style of a German §14a EnWG
 # Module 3 network tariff: low/standard/high windows in Q1 and Q4, the
 # standard price all day in Q2 and Q3. They are not any network operator's

@@ -3,6 +3,14 @@
 # toward half its usable window; at peak, the battery discharges to the load.
 # The prices and power limits are illustrative, not a supplier's offer or a
 # product's rating. Put your own here.
+#
+# The system and prices are those of time-of-use-portugal.toml, plus 3 kW
+# battery power limits, so the two runs compare grid charging with plain
+# self-consumption. Energy charged from the grid counts as grid import, so
+# grid independence is lower here.
+#
+#   breos run --config configs/examples/smart-charging-portugal.toml
+
 location = "porto"
 n_modules = 10
 annual_consumption_kwh = 4000

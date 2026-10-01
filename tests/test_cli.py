@@ -2,6 +2,7 @@
 
 import csv
 import json
+import logging
 import re
 from pathlib import Path
 
@@ -444,11 +445,16 @@ def test_example_configs_are_discovered():
 
 
 @pytest.mark.parametrize("config_path", EXAMPLE_CONFIGS, ids=lambda path: path.name)
-def test_shipped_example_configs_validate(config_path, capsys):
+def test_shipped_example_configs_validate(config_path, capsys, caplog, recwarn):
     exit_code = cli.main(["validate-config", str(config_path)])
 
     assert exit_code == 0
-    assert "Config OK" in capsys.readouterr().out
+    captured = capsys.readouterr()
+    assert "Config OK" in captured.out
+    # An example resolves cleanly: no stderr output, logged warning or Python warning.
+    assert captured.err == ""
+    assert [record.getMessage() for record in caplog.records if record.levelno >= logging.WARNING] == []
+    assert [str(warning.message) for warning in recwarn] == []
 
 
 def test_validate_config_rejects_malformed_sweep(tmp_path, capsys):

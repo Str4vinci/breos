@@ -1,8 +1,8 @@
-# Recommended rooftop PV-model profile for interval-averaged hourly weather.
+# Recommended rooftop PV-model profile for a new hourly study.
 #
-# This example opts into BREOS's higher-fidelity choices explicitly. They are
-# recommendations, not global defaults: existing configurations retain the
-# historical compatible model path unless they select these keys.
+# This example opts into BREOS's higher-fidelity PV-model choices explicitly.
+# They are recommendations, not defaults: a config that does not set these
+# keys keeps the default models, so earlier results stay reproducible.
 #
 #   breos validate-config configs/examples/recommended-pv.toml
 #   breos run --config configs/examples/recommended-pv.toml
@@ -18,9 +18,14 @@ battery_kwh = 0
 # PVsyst heat-balance model consumes. The semi-integrated preset represents a
 # close rooftop mount with a rear air gap; choose a mount-appropriate thermal
 # preset for a different installation.
+#
+# solar_position = "weather" reads the timing of each irradiance value from
+# the weather metadata: the PVGIS fetch and the weather CSVs BREOS writes
+# (with their .metadata.json sidecar) carry it. A CSV without that metadata is
+# refused; set "interval-start" or "mid-interval" to match its timestamps.
 pv_module = "Suntech_STP550S_STC"
 transposition_model = "perez"
-solar_position = "mid-interval"
+solar_position = "weather"
 iam_model = "physical"
 diffuse_iam = "marion"
 temperature_model = "pvsyst-semi-integrated"
