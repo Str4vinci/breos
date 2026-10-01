@@ -29,6 +29,8 @@ currency-neutral, and removes APIs that nothing used. The main changes:
 - Named load-profile keys; demandlib H0 and dated E-REDES profiles follow
   the study year's day classes.
 - Sweep, orientation and Pareto plots, and plot helpers return their figures.
+- The documentation gains an example gallery of case reports built from
+  stored results, with how-to guides; it replaces the recipes page.
 - Result format `"1"`: money keys drop the currency, `import_kwh` and
   `export_kwh` become `grid_import_kwh` and `grid_export_kwh`, and breakeven
   columns become payback columns. `result_schema_version` changes only when
