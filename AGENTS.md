@@ -9,11 +9,14 @@ Keep changes scoped and preserve the `breos.App` facade as the most stable publi
 - `breos/app.py` - public facade that wires weather, PV, load, battery, economics, and emissions.
 - `breos/load_profiles.py` - bundled demandlib H0 profile support plus user-supplied external RLPs.
 - `breos/battery.py`, `breos/solar.py`, `breos/weather.py` - core simulation models.
-- `breos/economics.py`, `breos/emissions.py`, `breos/optimization.py` - analysis and sizing helpers.
+- `breos/tariffs.py`, `breos/smart_charging.py` - time-of-use tariffs, schedules and grid-charging policies.
+- `breos/economics.py`, `breos/emissions.py`, `breos/optimization.py`, `breos/montecarlo.py` - analysis, sizing and uncertainty helpers.
 - `breos/data/` - packaged presets and redistributable sample data used after installation.
 - `configs/` - editable example and template configuration files for users.
 - `tests/` - pytest coverage for public behavior and lower-level modules.
 - `docs/` - Sphinx/MyST source; generated output lives in `docs/_build/` and is ignored.
+- `design/` - architecture decision records and short notes on the current design.
+- `maintainers/` - release checklist and maintainer notes.
 
 ## Common commands
 
@@ -22,6 +25,7 @@ uv sync --extra dev --extra docs
 uv run pytest -q
 uv run ruff check breos tests tools
 uv run ruff format --check breos tests tools
+uv run mypy breos
 uv build
 ```
 
