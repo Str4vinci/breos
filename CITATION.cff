@@ -23,6 +23,7 @@ keywords:
   - degradation
 license: BSD-3-Clause
 version: 0.7.0
+date-released: 2026-10-02
 references:
   - type: article
     title: "pvlib python: 2023 project update"

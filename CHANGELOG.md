@@ -4,7 +4,7 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 
 ## [Unreleased]
 
-## [0.7.0] - Unreleased
+## [0.7.0] - 2026-10-02
 
 0.7.0 adds time-of-use tariffs and grid charging, makes the results
 currency-neutral, and removes APIs that nothing used. The main changes:
@@ -44,7 +44,10 @@ and "Migrating from BREOS 0.6.2" on the Interpreting results page, before
 upgrading. Fixes that change results say so in their entries.
 
 Known limits: `daily_persistence` is experimental, App only, and Monte Carlo
-and optimization refuse it.
+and optimization refuse it. The PVWatts v8 band of the PV validation suite
+was not checked for 0.7.0: the committed reference snapshot has no trusted
+PVWatts result, because every fetch failed, so its test skips at all seven
+sites. The PVGIS band and the baseline regression run as before.
 
 ### Added
 - Documentation gains an example gallery of case reports (first home, battery
