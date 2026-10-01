@@ -282,15 +282,13 @@ def test_overlap_controller_carries_exact_instructions_across_the_year_seam(freq
 
 
 # Captured before adding overlap support: every numeric ledger column, in
-# order, at both resolutions and with each aging engine.
-@pytest.mark.filterwarnings("ignore::breos.degradation.validation.BlastExperimentalRangeWarning")
+# order, at both resolutions. BLAST aging's float bits differ between
+# environments, so its default path is pinned by the App goldens instead.
 @pytest.mark.parametrize(
     ("name", "freq", "digest"),
     [
         ("fixed_target", "h", "40da4a37357944f0f5d4bcb304ab8680ee59f3773d0efa9a149278174e9b412a"),
         ("fixed_target", "15min", "5ebb36809c4cd411e9493c080c3aa607146f9f4e68a30f928519cf01a2725261"),
-        ("fixed_target_blast", "h", "8f3513ed5fae3e95b8b87e9dd60568df0fcf7ef18314ad408b1cbe5cd370688c"),
-        ("fixed_target_blast", "15min", "81cdd6efb46399168f1aa28847fb4d7cc73dd0478293649c5907bda658c6a272"),
     ],
 )
 def test_default_reject_preserves_the_existing_ledger_bits(name, freq, digest):
