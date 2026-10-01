@@ -1,5 +1,6 @@
 """Tests for weather and weather-derived helpers."""
 
+import gzip
 import hashlib
 import json
 from pathlib import Path
@@ -874,3 +875,67 @@ def test_load_weather_finds_a_date_column_in_any_case(tmp_path):
     assert isinstance(loaded.index, pd.DatetimeIndex)
     assert loaded.index.name == "Date"
     assert loaded["ghi"].tolist() == [0.0, 1.0]
+
+
+# The committed PVGIS TMY for Porto, gzip-compressed, with a sidecar bound to the .gz digest.
+COMMITTED_GZ_TMY = (
+    Path(__file__).resolve().parents[1] / "validation" / "data" / "weather" / "porto_tmy_2005_2023_pvgis-sarah3.csv.gz"
+)
+
+
+def _copy_committed_gz_tmy(directory: Path) -> Path:
+    directory.mkdir(exist_ok=True)
+    target = directory / COMMITTED_GZ_TMY.name
+    target.write_bytes(COMMITTED_GZ_TMY.read_bytes())
+    sidecar = Path(f"{COMMITTED_GZ_TMY}.metadata.json")
+    Path(f"{target}.metadata.json").write_bytes(sidecar.read_bytes())
+    return target
+
+
+def test_weather_filename_parser_accepts_gzip_compressed_csv():
+    assert parse_weather_filename("porto_tmy_2005_2023_pvgis-sarah3.csv.gz") == parse_weather_filename(
+        "porto_tmy_2005_2023_pvgis-sarah3.csv"
+    )
+    assert parse_weather_filename("porto_tmy_2005_2023_pvgis-sarah3.gz") is None
+
+
+def test_load_weather_reads_a_gzip_compressed_csv_like_the_plain_csv(tmp_path):
+    compressed = _copy_committed_gz_tmy(tmp_path / "gz")
+    plain_dir = tmp_path / "plain"
+    plain_dir.mkdir()
+    (plain_dir / compressed.name[: -len(".gz")]).write_bytes(gzip.decompress(compressed.read_bytes()))
+
+    loaded = load_weather("porto", data_type="tmy", weather_dir=str(compressed.parent))
+    reference = load_weather("porto", data_type="tmy", weather_dir=str(plain_dir))
+
+    pd.testing.assert_frame_equal(loaded, reference)
+    assert len(loaded) == 8760 and isinstance(loaded.index, pd.DatetimeIndex)
+    metadata = loaded.attrs["breos_weather_metadata"]
+    assert metadata["path"] == str(compressed.resolve())
+    assert metadata["sha256"] == hashlib.sha256(compressed.read_bytes()).hexdigest()
+    # The sidecar is bound to the compressed file's digest, so its metadata is read.
+    assert metadata["upstream_source"] == "PVGIS_TMY"
+    assert metadata["metadata_sidecar"] == f"{compressed.resolve()}.metadata.json"
+
+
+def test_plain_and_gzip_compressed_copies_of_one_file_are_ambiguous(tmp_path):
+    compressed = _copy_committed_gz_tmy(tmp_path)
+    (tmp_path / compressed.name[: -len(".gz")]).write_bytes(gzip.decompress(compressed.read_bytes()))
+
+    with pytest.raises(AmbiguousWeatherError) as excinfo:
+        load_weather("porto", data_type="tmy", weather_dir=str(tmp_path))
+
+    assert excinfo.value.filenames == [compressed.name[: -len(".gz")], compressed.name]
+
+
+def test_preload_weather_by_year_reads_a_gzip_compressed_csv(tmp_path, write_multiyear_weather):
+    plain = write_multiyear_weather(tmp_path / "porto_historical_2021_2022_openmeteo.csv")
+    compressed = tmp_path / f"{plain.name}.gz"
+    compressed.write_bytes(gzip.compress(plain.read_bytes()))
+
+    by_year = preload_weather_by_year(str(compressed), target_year=2025)
+    reference = preload_weather_by_year(str(plain), target_year=2025)
+
+    assert sorted(by_year) == [2021, 2022]
+    for year, frame in reference.items():
+        pd.testing.assert_frame_equal(by_year[year], frame)

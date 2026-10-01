@@ -5,6 +5,10 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 ## [Unreleased]
 
 ### Added
+- `App.timeseries()` returns a copy of the first simulated year step by step
+  (or a `[period]` window's steps), with the energy-balance ledger columns.
+- Cached TMY weather files in `weather/` may be gzip-compressed
+  (`<location>_tmy_<years>_<source>.csv.gz`).
 - Optional `[terminal_value] basis = "battery_health_fraction"` reports an
   accounting sensitivity for the final installed battery pack's health
   above its physical replacement threshold
