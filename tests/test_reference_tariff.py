@@ -653,6 +653,8 @@ def test_sweep_accepts_a_reference_season_and_period():
 
 @pytest.mark.parametrize("backend", ["python", "numba"])
 def test_month_reference_never_drives_discharge_only_dispatch(backend):
+    if backend == "numba":
+        pytest.importorskip("numba")
     config = {
         **BASE,
         "execution_backend": backend,
