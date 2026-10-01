@@ -124,17 +124,15 @@ def _same_stack(manifest) -> bool:
 
 
 # The stored results come from another machine. BREOS does not promise bit
-# identity across machines: over 20 projected years a rounded value can move
-# by its last digit (0.01). These tolerances accept that and nothing more a
-# page would show; the maintainer's own --check runs at 1e-9.
-CROSS_MACHINE = ["--rtol", "1e-3", "--atol", "0.05"]
-
-
+# identity across machines: a rounded value can move by one unit in the last
+# decimal place it is written with (CI runners without AVX-512 move 24 of
+# first_home's values by 0.01). --cross-machine accepts that and nothing more;
+# the maintainer's own --check runs at 1e-9.
 def test_check_reproduces_the_quickstart_case(capsys):
     manifest = json.loads((RESULTS / "first_home" / "manifest.json").read_text(encoding="utf-8"))
     if not _same_stack(manifest):
         pytest.skip("the stored results were made with other numpy/pandas/pvlib/scipy versions")
-    assert TOOL.main(["--check", "first_home", *CROSS_MACHINE]) == 0, capsys.readouterr().out
+    assert TOOL.main(["--check", "first_home", "--cross-machine"]) == 0, capsys.readouterr().out
 
 
 @pytest.mark.slow
@@ -142,4 +140,63 @@ def test_check_reproduces_every_cheap_case(capsys):
     manifest = json.loads((RESULTS / "first_home" / "manifest.json").read_text(encoding="utf-8"))
     if not _same_stack(manifest):
         pytest.skip("the stored results were made with other numpy/pandas/pvlib/scipy versions")
-    assert TOOL.main(["--check", *CROSS_MACHINE]) == 0, capsys.readouterr().out
+    assert TOOL.main(["--check", "--cross-machine"]) == 0, capsys.readouterr().out
+
+
+def _compare(tmp_path, stored, fresh, suffix, cross_machine=True):
+    paths = []
+    for name, content in (("stored", stored), ("fresh", fresh)):
+        path = tmp_path / name / f"case{suffix}"
+        path.parent.mkdir(exist_ok=True)
+        if suffix == ".json":
+            path.write_text(json.dumps(content, indent=1), encoding="utf-8")
+        else:
+            pd.DataFrame(content).to_csv(path, index=False)
+        paths.append(path)
+    return TOOL.compare_file(*paths, cross_machine=cross_machine)
+
+
+@pytest.mark.parametrize(
+    ("stored", "fresh", "accepted"),
+    [
+        ({"npv_savings": 4735.25}, {"npv_savings": 4735.26}, True),
+        ({"npv_savings": 4735.25}, {"npv_savings": 4735.27}, False),
+        ({"npv_savings": 5000.0}, {"npv_savings": 5004.0}, False),
+        # The field's precision is its most decimals in either file, not one value's trailing zeros.
+        ({"rows": [{"kwh": 4000.0}, {"kwh": 812.34}]}, {"rows": [{"kwh": 4000.1}, {"kwh": 812.34}]}, False),
+        ({"rows": [{"kwh": 4000.0}, {"kwh": 812.34}]}, {"rows": [{"kwh": 4000.01}, {"kwh": 812.34}]}, True),
+        ({"lcoe_per_kwh": 0.1015}, {"lcoe_per_kwh": 0.1016}, True),
+        ({"lcoe_per_kwh": 0.1015}, {"lcoe_per_kwh": 0.1025}, False),
+        ({"payback_year": 13}, {"payback_year": 14}, False),
+        ({"battery_replacements": 1}, {"battery_replacements": 2}, False),
+        ({"bill_year1": 512.40}, {"bill_year1": 512.43}, True),
+        ({"bill_year1": 512.40}, {"bill_year1": 512.44}, False),
+        ({"residual_kwh": -0.0}, {"residual_kwh": 0.0}, True),
+        ({"method": "repriced"}, {"method": "resimulated"}, False),
+        ({"credit": None}, {"credit": 0.0}, False),
+    ],
+)
+def test_cross_machine_json_allows_one_unit_in_the_last_written_place(tmp_path, stored, fresh, accepted):
+    assert (_compare(tmp_path, stored, fresh, ".json") == []) is accepted
+
+
+@pytest.mark.parametrize(
+    ("column", "stored", "fresh", "accepted"),
+    [
+        ("Battery_SOC_Normalized", [0.5, 0.5123], [0.5001, 0.5123], True),
+        ("Battery_SOC_Normalized", [0.5, 0.5123], [0.54, 0.5123], False),
+        ("PV_Production", [1234.5, 0.0], [1234.6, 0.0], True),
+        ("PV_Production", [1234.5, 0.0], [1234.7, 0.0], False),
+        # Floats only because a missing value forces the column to float: still a count.
+        ("payback_year", [13.0, None], [14.0, None], False),
+        ("payback_year", [13.0, None], [13.0, 12.0], False),
+        ("storage_cost_per_kwh", [150, 175], [151, 175], False),
+    ],
+)
+def test_cross_machine_csv_allows_one_unit_in_the_last_written_place(tmp_path, column, stored, fresh, accepted):
+    assert (_compare(tmp_path, {column: stored}, {column: fresh}, ".csv") == []) is accepted
+
+
+def test_same_machine_check_allows_no_last_place_change(tmp_path):
+    assert _compare(tmp_path, {"npv_savings": 4735.25}, {"npv_savings": 4735.26}, ".json", cross_machine=False)
+    assert not _compare(tmp_path, {"npv_savings": 4735.25}, {"npv_savings": 4735.25}, ".json", cross_machine=False)
