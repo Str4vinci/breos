@@ -179,7 +179,7 @@ cache has two layers:
 
 - The weather layer is reused only for the same weather file (its absolute
   path, its contents and those of its `.metadata.json` sidecar), year window,
-  `target_year`, resolution, location, `preserve_irradiance_energy`, and
+  `target_year`, resolution, location, `irradiance_resampling`, and
   solar-position method. A study with other weather inputs raises
   `ValueError`.
 - The PV layer is reused when the config differs only in keys that do not

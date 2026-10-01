@@ -12,6 +12,7 @@ from typing import Any, Callable, Dict, Mapping, Optional, Sequence, Tuple, Unio
 import numpy as np
 import pandas as pd
 
+from breos.app_inputs import resample_hourly_weather
 from breos.battery import BatteryConfig
 from breos.dispatch_instructions import DispatchInstructions
 from breos.economics import (
@@ -41,7 +42,7 @@ from breos.solar import (
     calculate_pv_production_dc,
 )
 from breos.tariffs import ResolvedTariff, reference_tariff_provenance, result_currency, tariff_provenance
-from breos.weather import build_battery_temperature_series
+from breos.weather import build_battery_temperature_series, resample_to_15min, weather_metadata
 
 
 @dataclass
@@ -614,6 +615,25 @@ def _site_location(location: dict[str, Any]) -> Any:
     )
 
 
+def _prepare_study_weather(weather: pd.DataFrame, config: dict[str, Any], loc_obj: Any) -> pd.DataFrame:
+    """Resample hourly weather for a 15-minute study with App's helper and policy.
+
+    The site's altitude is passed through, so a configured ``location.altitude``
+    sets the clear-sky model as it sets the PV model; without one it is the
+    same pvlib lookup App's resampling makes. Weather already at the study
+    resolution is returned unchanged.
+    """
+    return resample_hourly_weather(
+        weather,
+        str(config["simulation"]["resolution"]),
+        latitude=loc_obj.latitude,
+        longitude=loc_obj.longitude,
+        resample=resample_to_15min,
+        irradiance_resampling=config["simulation"]["irradiance_resampling"],
+        altitude=loc_obj.altitude,
+    )
+
+
 def evaluate_projected_design(
     tmy_data: pd.DataFrame,
     houseload: pd.DataFrame,
@@ -669,13 +689,16 @@ def evaluate_projected_design(
 
     config = resolve_optimization_config(config)
     frames = list(weather_by_year) if weather_by_year is not None else None
+    loc_obj = _site_location(config["location"])
+    freq = str(config["simulation"]["resolution"])
+    tmy_data = _prepare_study_weather(tmy_data, config, loc_obj)
+    if frames is not None:
+        frames = [_prepare_study_weather(frame, config, loc_obj) for frame in frames]
     tariff_index = frames[0].index if frames else tmy_data.index
     pricing = _resolve_optimization_tariff(config, tariff_index, float(battery_kwh))
-    loc_obj = _site_location(config["location"])
     financials = config["financials"]
     emissions_config = config["emissions"]
     battery = config["battery"]
-    freq = str(config["simulation"]["resolution"])
     years_projection, degradation_rate = _resolve_horizon_and_pv_degradation(config)
     pv_params, _module_area = _resolve_pv_module_and_area(config)
 
@@ -767,6 +790,9 @@ def evaluate_projected_design(
     provenance = {
         **pricing.provenance(),
         "economics": projection_rates_record(_projection_rates(financials)),
+        "simulation": dict(config["simulation"]),
+        "weather": weather_metadata(tmy_data),
+        **({"weather_by_year": [weather_metadata(frame) for frame in frames]} if frames is not None else {}),
         "battery_replacement_treatment": _battery_replacement_treatment(battery),
     }
     return ProjectedDesignResult(metrics=metrics, yearly=yearly, financial=financial, provenance=provenance)
@@ -840,27 +866,27 @@ try:
             # it exactly the place where a silently-inherited backend would be
             # hardest to notice and hardest to attribute afterwards.
             self.execution_backend = validate_execution_backend(execution_backend)
-            self.tmy_data = tmy_data
             self.houseload = houseload
             # Checked and defaulted once, before any model preparation: an
             # unknown key raises, and every default is in the resolved config.
             config = resolve_optimization_config(config)
             self.config = config
+            self.location = config["location"]
+            # config['location'] is a plain dict; the pvlib Location that
+            # calculate_pv_production_dc needs is constructed once here.
+            self.loc_obj = _site_location(self.location)
+            self.tmy_data = _prepare_study_weather(tmy_data, config, self.loc_obj)
 
             self.constraints = config["constraints"]
             # One schedule/price resolution per search, shared by every
             # candidate and project year. Validate before model preparation.
             self.pricing = _resolve_optimization_tariff(
                 config,
-                tmy_data.index,
+                self.tmy_data.index,
                 float(self.constraints["max_battery_kwh"]),
                 battery_key="constraints.max_battery_kwh",
             )
             self.tariff = self.pricing.tariff
-            self.location = config["location"]
-            # config['location'] is a plain dict; the pvlib Location that
-            # calculate_pv_production_dc needs is constructed once here.
-            self.loc_obj = _site_location(self.location)
 
             self.budget_limit = self.constraints["budget"]
             self.area_limit = self.constraints["max_area_m2"]
@@ -1249,6 +1275,8 @@ def optimize_system_multi_objective(
     provenance = {
         **problem.pricing.provenance(),
         "economics": economics,
+        "simulation": dict(config["simulation"]),
+        "weather": weather_metadata(problem.tmy_data),
         # The search bounds and run settings the search used, defaults included.
         "constraints": dict(config["constraints"]),
         "run_settings": settings,

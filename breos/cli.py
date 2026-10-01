@@ -609,6 +609,8 @@ def _montecarlo(args: argparse.Namespace) -> int:
     _ignore_unused_runner_sections(config, command="montecarlo", used_sections=frozenset({"montecarlo"}))
     if args.rlp_directory is not None:
         config["rlp_directory"] = str(args.rlp_directory)
+    if getattr(args, "irradiance_resampling", None) is not None:
+        config["irradiance_resampling"] = args.irradiance_resampling
 
     # Report a typo such as [montecarlo].weather_fille before a missing-file
     # error. The runner validates the full App config before weather access.
@@ -635,7 +637,6 @@ def _montecarlo(args: argparse.Namespace) -> int:
         "seed": (args.seed, None),
         "min_load_scale": (None, float),
         "max_load_scale": (None, None),
-        "preserve_irradiance_energy": (args.preserve_irradiance_energy, bool),
         "collect_yearly": (args.collect_yearly, bool),
         "n_procs": (args.n_procs, int),
         "execution_backend": (args.execution_backend, None),
@@ -792,6 +793,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     mc.add_argument("--config", type=Path, required=True, help="TOML or JSON config file with a [montecarlo] section.")
     mc.add_argument("--weather-file", help="Multi-year historical weather CSV (overrides [montecarlo].weather_file).")
+    policy_field = APP_CONFIG_FIELDS["irradiance_resampling"]
+    mc.add_argument(*policy_field.cli_flags, choices=policy_field.cli_choices, help=policy_field.cli_help)
     mc.add_argument("--rlp-directory", type=Path, help="Directory containing a licensed external RLP CSV.")
     mc.add_argument("--runs", type=int, help="Number of Monte Carlo runs (trajectories).")
     mc.add_argument(
@@ -830,12 +833,6 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         default=None,
         help="Write one row per run and project year for cost-envelope analysis.",
-    )
-    mc.add_argument(
-        "--preserve-irradiance-energy",
-        action="store_true",
-        default=None,
-        help="Preserve each source hour's irradiance energy during 15-minute resampling.",
     )
     mc.add_argument("--plots", action="store_true", help="Generate Monte Carlo distribution plots next to the CSV.")
     mc.add_argument("--json", action="store_true", help="Write machine-readable JSON summary to stdout.")

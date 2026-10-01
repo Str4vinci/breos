@@ -85,11 +85,12 @@ sunrise / sunset transitions stay physically consistent. Every column is
 interpolated at each row's representative time from the weather metadata:
 hourly means at the middle of their hour, read back at the middle of each
 quarter-hour, and instant samples at their label plus any recorded provider
-offset. Set
-`preserve_irradiance_energy=True` to renormalize each source hour's four GHI,
-DNI, and DHI values to the original hourly mean. This opt-in mode is useful
-when the source values represent hourly averages; the default keeps the
-established interpolation output.
+offset. `irradiance_resampling="auto"` (default) conserves each source hour's
+GHI, DNI and DHI independently for declared interval means, and selects
+`"clear_sky"` for instantaneous or undeclared input. Explicit
+`"clear_sky_energy_conserving"` requires interval-mean metadata. Ratios have
+no upper cap; low clear-sky support uses linear component interpolation.
+See [the policy and diagnostics](../getting-started/configuration.md#hourly-weather-at-15-minute-resolution).
 
 ```{eval-rst}
 .. autosummary::

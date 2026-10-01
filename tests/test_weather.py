@@ -424,12 +424,13 @@ def test_resample_to_15min_can_preserve_each_hours_irradiance_energy():
         index=idx,
     )
 
+    weather.attrs["breos_weather_metadata"] = {"radiation_time_basis": "interval_mean", "timestamp_label_basis": "left"}
     resampled = resample_to_15min(
         weather,
         method="linear",
         latitude=41.1579,
         longitude=-8.6291,
-        preserve_irradiance_energy=True,
+        irradiance_resampling="clear_sky_energy_conserving",
     )
 
     for column in ("ghi", "dni", "dhi"):
@@ -545,12 +546,16 @@ def test_resample_interpolates_clearness_index_at_interval_midpoints():
     weather = pd.DataFrame({"ghi": clearness(hour_mid) * (clear_hourly + epsilon)}, index=idx)
     weather.attrs["breos_weather_metadata"] = {"radiation_time_basis": "interval_mean", "timestamp_label_basis": "left"}
 
-    resampled = resample_to_15min(weather, latitude=41.1579, longitude=-8.6291, altitude=0.0)
+    resampled = resample_to_15min(
+        weather, latitude=41.1579, longitude=-8.6291, altitude=0.0, irradiance_resampling="clear_sky"
+    )
 
     quarter_mid = ((resampled.index - idx[0]) / pd.Timedelta(hours=1)).to_numpy() + 0.125
     clear_15 = site.get_clearsky(resampled.index + pd.Timedelta(minutes=7.5))["ghi"].to_numpy()
     expected = np.where(clear_15 > 0.0, clearness(quarter_mid) * (clear_15 + epsilon), 0.0)
-    inner = (quarter_mid >= 1.0) & (quarter_mid <= 46.0)
+    right = np.clip(np.searchsorted(hour_mid, quarter_mid, side="right"), 1, len(hour_mid) - 1)
+    ratio_support = (clear_hourly[right - 1] > epsilon) & (clear_hourly[right] > epsilon)
+    inner = (quarter_mid >= 1.0) & (quarter_mid <= 46.0) & ratio_support
     np.testing.assert_allclose(resampled["ghi"].to_numpy()[inner], expected[inner], atol=1e-9)
 
 

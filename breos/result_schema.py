@@ -85,6 +85,18 @@ lifetime run, ``provenance.terminal_value`` with formula and price inputs.
 The three App scalars are None when disabled or on a [period] run. Monte
 Carlo uses NaN for disabled values and omits their statistics. Projected
 optimization ignores the table and continues ranking on unadjusted NPV.
+
+3.0 replaces ``preserve_irradiance_energy`` with the irradiance resampling
+policy (#354). The boolean is removed from App weather provenance, from Monte
+Carlo ``settings`` and from ``runtime_weather.metadata``. Those weather
+records carry ``irradiance_resampling`` (the requested policy) and
+``irradiance_resampling_resolved`` instead, plus the reconstruction,
+per-component dawn/dusk fallback and zero-support counts, and the
+observational ``irradiance_closure`` residuals before and after
+conservation. ``irradiance_resampling`` is added to the App and Monte Carlo
+``resolved_config`` and to the optimizer's ``simulation`` config; optimizer
+provenance gains ``simulation`` and ``weather`` records, and
+``weather_by_year`` when a real weather sequence is given.
 """
 
-RESULT_SCHEMA_VERSION = "2.8"
+RESULT_SCHEMA_VERSION = "3.0"

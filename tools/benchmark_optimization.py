@@ -412,7 +412,12 @@ def prepare_case_inputs(
     steps.append(f"remap_tmy_year(target_year={STUDY_YEAR})")
     if resolution == "15min" and hourly:
         weather = resample_hourly_weather(
-            weather, resolution, latitude=latitude, longitude=longitude, resample=resample_to_15min
+            weather,
+            resolution,
+            latitude=latitude,
+            longitude=longitude,
+            resample=resample_to_15min,
+            irradiance_resampling="auto",
         )
         steps.append("resample_to_15min(latitude, longitude), the App default")
     require_full_year_weather(weather, STUDY_YEAR, resolution, TIMEZONE)

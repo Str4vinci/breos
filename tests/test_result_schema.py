@@ -41,12 +41,12 @@ def _keys(value, prefix=""):
             yield from _keys(item, prefix)
 
 
-def test_the_result_schema_version_is_2_8():
-    assert RESULT_SCHEMA_VERSION == "2.8"
+def test_the_result_schema_version_is_3_0():
+    assert RESULT_SCHEMA_VERSION == "3.0"
 
 
 def test_app_result_records_the_schema_version_and_currency(replacement_result):
-    assert replacement_result["result_schema_version"] == "2.8"
+    assert replacement_result["result_schema_version"] == "3.0"
     assert replacement_result["provenance"]["currency"] == "EUR"
 
 

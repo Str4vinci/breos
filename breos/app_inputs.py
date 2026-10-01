@@ -281,11 +281,12 @@ def resample_hourly_weather(
     latitude: float,
     longitude: float,
     resample: Callable[..., pd.DataFrame],
+    irradiance_resampling: str = "auto",
     **resample_kwargs: Any,
 ) -> pd.DataFrame:
     """Resample hourly weather to 15 minutes for a 15-minute study.
 
-    App and Monte Carlo both call this, with ``resample`` normally
+    App, Monte Carlo and the optimizer call this, with ``resample`` normally
     :func:`breos.weather.resample_to_15min`. Weather that is not hourly, or a
     study that is not at 15 minutes, is returned unchanged.
     """
@@ -293,7 +294,13 @@ def resample_hourly_weather(
         return weather
     input_frequency = weather_input_frequency(weather)
     if input_frequency and "h" in input_frequency.lower() and "15" not in input_frequency:
-        return resample(weather, latitude=latitude, longitude=longitude, **resample_kwargs)
+        return resample(
+            weather,
+            latitude=latitude,
+            longitude=longitude,
+            irradiance_resampling=irradiance_resampling,
+            **resample_kwargs,
+        )
     return weather
 
 
@@ -306,6 +313,7 @@ def load_weather_for_simulation(
     *,
     horizon_profile: Any = None,
     solar_position: str = DEFAULT_SOLAR_POSITION,
+    irradiance_resampling: str = "auto",
     weather_source: str | None = None,
     period: SimulationPeriod | None = None,
 ) -> pd.DataFrame:
@@ -368,7 +376,12 @@ def load_weather_for_simulation(
     # The resampler carries the weather metadata over and adds its own
     # resolution and method fields to it.
     weather = resample_hourly_weather(
-        weather, freq, latitude=resolved.lat, longitude=resolved.lon, resample=deps.resample_to_15min
+        weather,
+        freq,
+        latitude=resolved.lat,
+        longitude=resolved.lon,
+        resample=deps.resample_to_15min,
+        irradiance_resampling=irradiance_resampling,
     )
     if period is None:
         require_full_year_weather(weather, start_year, freq, resolved.timezone)
@@ -481,6 +494,7 @@ def prepare_simulation_inputs(
         deps,
         horizon_profile=cfg["horizon_profile"],
         solar_position=cfg["solar_position"],
+        irradiance_resampling=cfg["irradiance_resampling"],
         weather_source=cfg["weather_source"],
         period=period,
     )

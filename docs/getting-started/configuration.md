@@ -36,6 +36,40 @@ silently ignored (which would quietly fall back to the default). The optional
 `[sweep]` and `[montecarlo]` sections used by their dedicated CLI commands are
 recognised and allowed.
 
+## Hourly weather at 15-minute resolution
+
+With `resolution = "15min"`, hourly weather is reconstructed at quarter-hour
+representative times. The top-level `irradiance_resampling` key (CLI:
+`--irradiance-resampling`) applies in App and Monte Carlo; projected
+optimization reads the same values from `simulation.irradiance_resampling`:
+
+- `"auto"` (default) uses `"clear_sky_energy_conserving"` for weather declaring
+  `radiation_time_basis = "interval_mean"`, and `"clear_sky"` otherwise.
+- `"clear_sky"` interpolates each component's clear-sky ratio with makima,
+  retaining a 5 W/m² denominator regulariser and no upper ratio cap.
+  Between source points where either clear-sky component is at most 5 W/m²,
+  direct linear component interpolation guards dawn and dusk. Negative
+  overshoot is clipped and zero clear-sky support stays zero.
+- `"clear_sky_energy_conserving"` then scales each source hour's four quarters
+  to reproduce that hour's mean, independently for GHI, DNI and DHI. It
+  raises for instantaneous or undeclared input. Positive source hours with
+  no reconstructed support receive a flat fill, recorded in provenance.
+
+PVGIS TMY is instantaneous with a provider offset, so `"auto"` resolves to
+`"clear_sky"`. Open-Meteo interval means and EPW use hourly conservation.
+Without coordinates, direct interpolation replaces clear-sky reconstruction;
+the policy still controls hourly conservation. Already-quarter-hour weather
+is unchanged.
+
+No GHI/DNI/DHI closure is enforced, and DHI is never clipped to GHI.
+Weather metadata and result provenance record requested and resolved policy,
+interpolation method, the daylight quarter-hours filled by the dawn/dusk
+fallback and the zero-support hour counts, per component. With coordinates and all three components, `irradiance_closure`
+records before/after conservation diagnostics over daylight quarter-hours:
+the GHI-weighted mean absolute residual in W/m² and the absolute residual
+energy divided by GHI energy. Solar position uses apparent zenith at the
+same representative times as reconstruction.
+
 ## Battery capacity and the SOC window
 
 `battery_kwh` is the **nominal** pack capacity. The energy balance only

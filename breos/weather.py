@@ -35,6 +35,16 @@ from breos.utils import (
 
 logger = logging.getLogger(__name__)
 
+IRRADIANCE_RESAMPLING_POLICIES = ("auto", "clear_sky", "clear_sky_energy_conserving")
+
+
+def validate_irradiance_resampling(value: Any) -> str:
+    """Validate the shared hourly-to-quarter-hour irradiance policy."""
+    if value not in IRRADIANCE_RESAMPLING_POLICIES:
+        raise ValueError("'irradiance_resampling' must be one of: " + ", ".join(IRRADIANCE_RESAMPLING_POLICIES))
+    return str(value)
+
+
 WEATHER_METADATA_KEY = "breos_weather_metadata"
 _WEATHER_METADATA_SCHEMA_VERSION = 1
 
@@ -750,7 +760,7 @@ def resample_to_15min(
     method: str = "makima",
     latitude: Optional[float] = None,
     longitude: Optional[float] = None,
-    preserve_irradiance_energy: bool = False,
+    irradiance_resampling: str = "auto",
     altitude: Optional[float] = None,
 ) -> pd.DataFrame:
     """
@@ -776,9 +786,11 @@ def resample_to_15min(
         method: Interpolation method ('makima', 'linear', 'cubic')
         latitude: Location latitude for clear-sky scaling (optional)
         longitude: Location longitude for clear-sky scaling (optional)
-        preserve_irradiance_energy: Renormalize each source hour's four
-            irradiance values so their mean equals the source-hour value.
-            This is opt-in because it changes established interpolation output.
+        irradiance_resampling: "auto" conserves each source hour's component
+            means for declared interval-mean input, and uses "clear_sky"
+            otherwise. "clear_sky_energy_conserving" explicitly requests
+            conservation and requires interval-mean metadata. Components
+            are independent: no irradiance closure is imposed.
         altitude: Site elevation in metres for the clear-sky model (optional;
             pvlib looks it up from the coordinates when omitted)
 
@@ -789,7 +801,17 @@ def resample_to_15min(
         ValueError: If DataFrame doesn't have DatetimeIndex
     """
     df_hourly = relabel_right_labeled_interval_means(df_hourly)
-    weather_metadata = deepcopy(df_hourly.attrs.get(WEATHER_METADATA_KEY))
+    weather_metadata = deepcopy(df_hourly.attrs.get(WEATHER_METADATA_KEY) or {})
+    requested_policy = validate_irradiance_resampling(irradiance_resampling)
+    time_basis = weather_metadata.get("radiation_time_basis", "undeclared")
+    resolved_policy = requested_policy
+    if requested_policy == "auto":
+        resolved_policy = "clear_sky_energy_conserving" if time_basis == "interval_mean" else "clear_sky"
+    if resolved_policy == "clear_sky_energy_conserving" and time_basis != "interval_mean":
+        raise ValueError(
+            "irradiance_resampling='clear_sky_energy_conserving' requires radiation_time_basis='interval_mean'; "
+            f"input radiation_time_basis={time_basis!r}"
+        )
 
     # Ensure DatetimeIndex
     if not isinstance(df_hourly.index, pd.DatetimeIndex):
@@ -811,10 +833,8 @@ def resample_to_15min(
     # start, so the result would run 22.5 minutes early. Shifting only the
     # source points by the difference keeps the target grid on the output
     # labels; for instant samples the difference is zero.
-    source_offset = _representative_time_offset(weather_metadata or {}, pd.Timedelta(hours=1), require_metadata=False)
-    target_offset = _representative_time_offset(
-        weather_metadata or {}, pd.Timedelta(minutes=15), require_metadata=False
-    )
+    source_offset = _representative_time_offset(weather_metadata, pd.Timedelta(hours=1), require_metadata=False)
+    target_offset = _representative_time_offset(weather_metadata, pd.Timedelta(minutes=15), require_metadata=False)
     x_original = _datetime_index_seconds(df_hourly.index) + (source_offset - target_offset).total_seconds()
     x_target = _datetime_index_seconds(target_index)
     # Makima does not extrapolate: quarter-hours before the first or after the
@@ -833,12 +853,19 @@ def resample_to_15min(
     use_clearsky = latitude is not None and longitude is not None and len(irrad_col_map) > 0
 
     df_15min = pd.DataFrame(index=target_index)
-    epsilon = 5.0  # Increased epsilon to avoid divide-by-zero spikes near dawn/dusk
+    epsilon = 5.0  # Regularise ratios; low clear-sky support uses direct linear interpolation.
+    fallback_counts = dict.fromkeys(irrad_col_map.values(), 0)
+    zero_support_counts = dict.fromkeys(irrad_col_map.values(), 0)
+    # Brackets are evaluated on representative times, including provider offsets.
+    right = np.clip(np.searchsorted(x_original, x_target, side="right"), 1, len(x_original) - 1)
+    left = right - 1
 
     if use_clearsky:
         site = Location(latitude, longitude, altitude=altitude)
         cs_hourly = site.get_clearsky(df_hourly.index + source_offset)
-        cs_15min = site.get_clearsky(target_index + target_offset)
+        # One solar position serves the clear-sky model and the closure diagnostic.
+        solar_position_15min = site.get_solarposition(target_index + target_offset)
+        cs_15min = site.get_clearsky(target_index + target_offset, solar_position=solar_position_15min)
 
     # Get numeric columns only
     numeric_df = df_hourly.select_dtypes(include=[np.number])
@@ -849,10 +876,7 @@ def resample_to_15min(
         if use_clearsky and col in irrad_col_map:
             # Clear-sky scaling: interpolate clearness index, not raw irradiance
             cs_comp = irrad_col_map[col]
-            k_hourly = y_original / (cs_hourly[cs_comp].values + epsilon)
-
-            # Clip K multiplier to physically reasonable max (e.g. 1.5x) to avoid massive dawn/dusk spikes
-            k_hourly = np.clip(k_hourly, 0, 1.5)
+            k_hourly = np.clip(y_original / (cs_hourly[cs_comp].values + epsilon), 0, None)
 
             if method == "makima":
                 interp_k = Akima1DInterpolator(x_original, k_hourly, method="makima")
@@ -866,6 +890,15 @@ def resample_to_15min(
                 k_15min[after_last] = k_hourly[-1]
             clear_sky = cs_15min[cs_comp].to_numpy(dtype=float)
             reconstructed = k_15min * (clear_sky + epsilon)
+            source_clear_sky = cs_hourly[cs_comp].to_numpy(dtype=float)
+            fallback = (source_clear_sky[left] <= epsilon) | (source_clear_sky[right] <= epsilon)
+            # Outside the source range use the edge point's support, not an
+            # unrelated neighbouring hour; np.interp holds that edge value.
+            fallback[before_first] = source_clear_sky[0] <= epsilon
+            fallback[after_last] = source_clear_sky[-1] <= epsilon
+            reconstructed[fallback] = np.interp(x_target[fallback], x_original, y_original)
+            # Count only the quarter-hours the fallback supplies; night ones are zeroed next.
+            fallback_counts[cs_comp] += int(np.sum(fallback & (clear_sky > 0.0)))
             reconstructed[clear_sky <= 0.0] = 0.0
             df_15min[col] = np.clip(reconstructed, 0, None)
         else:
@@ -887,17 +920,41 @@ def resample_to_15min(
     for col in df_15min.columns:
         if col in irrad_col_map and use_clearsky:
             continue
-        if any(x in col.lower() for x in ["irrad", "radiation", "tilted", "terrestrial", "wind", "speed"]):
+        if col in irrad_col_map or any(
+            x in col.lower() for x in ["irrad", "radiation", "tilted", "terrestrial", "wind", "speed"]
+        ):
             df_15min[col] = np.clip(df_15min[col], 0, None)
 
-    if preserve_irradiance_energy and irrad_col_map:
+    # Diagnostics describe quarter-hours before and after hourly conservation,
+    # at exactly the representative solar times used by clear-sky reconstruction.
+    component_columns = {component: col for col, component in irrad_col_map.items() if col in df_15min}
+
+    def closure_diagnostic() -> dict[str, float] | None:
+        if not use_clearsky or not {"ghi", "dni", "dhi"} <= component_columns.keys():
+            return None
+        cos_zenith = np.maximum(np.cos(np.deg2rad(solar_position_15min["apparent_zenith"].to_numpy())), 0.0)
+        daylight = cs_15min["ghi"].to_numpy() > 0.0
+        ghi = df_15min[component_columns["ghi"]].to_numpy()[daylight]
+        dni = df_15min[component_columns["dni"]].to_numpy()[daylight]
+        dhi = df_15min[component_columns["dhi"]].to_numpy()[daylight]
+        residual = np.abs(ghi - dni * cos_zenith[daylight] - dhi)
+        energy = float(ghi.sum())
+        return {
+            "ghi_weighted_mean_absolute_residual_w_m2": float(np.sum(residual * ghi) / energy) if energy > 0 else 0.0,
+            "absolute_residual_energy_fraction": float(residual.sum() / energy) if energy > 0 else 0.0,
+        }
+
+    closure_before = closure_diagnostic()
+    if resolved_policy == "clear_sky_energy_conserving" and irrad_col_map:
         if len(df_hourly.index) > 1:
             intervals = df_hourly.index[1:] - df_hourly.index[:-1]
             if not np.all(intervals == pd.Timedelta(hours=1)):
-                raise ValueError("preserve_irradiance_energy requires a regular hourly index")
+                raise ValueError("irradiance_resampling=clear_sky_energy_conserving requires a regular hourly index")
         expected_rows = len(df_hourly) * 4
         if len(df_15min) != expected_rows:
-            raise ValueError("preserve_irradiance_energy requires four 15-minute rows per source hour")
+            raise ValueError(
+                "irradiance_resampling=clear_sky_energy_conserving requires four 15-minute rows per source hour"
+            )
 
         for col in irrad_col_map:
             if col not in df_15min.columns:
@@ -907,15 +964,25 @@ def resample_to_15min(
             block_sums = blocks.sum(axis=1)
             nonzero = block_sums > 1e-12
             blocks[nonzero] *= (4.0 * hourly_values[nonzero] / block_sums[nonzero])[:, None]
+            zero_support_counts[irrad_col_map[col]] += int(np.sum((~nonzero) & (hourly_values > 0.0)))
             blocks[~nonzero] = hourly_values[~nonzero, None]
             df_15min[col] = np.clip(blocks.reshape(-1), 0.0, None)
 
-    if weather_metadata is not None:
-        weather_metadata["input_resolution"] = "h"
-        weather_metadata["output_resolution"] = "15min"
-        weather_metadata["irradiance_resampling_method"] = method
-        weather_metadata["preserve_irradiance_energy"] = preserve_irradiance_energy
-        df_15min.attrs[WEATHER_METADATA_KEY] = weather_metadata
+    weather_metadata.update(
+        {
+            "input_resolution": "h",
+            "output_resolution": "15min",
+            "irradiance_resampling": requested_policy,
+            "irradiance_resampling_resolved": resolved_policy,
+            "irradiance_resampling_method": method,
+            "irradiance_resampling_reconstruction": "clear_sky_ratio" if use_clearsky else "direct",
+            "irradiance_resampling_fallback_counts": fallback_counts,
+            "irradiance_resampling_zero_support_counts": zero_support_counts,
+        }
+    )
+    if closure_before is not None:
+        weather_metadata["irradiance_closure"] = {"before": closure_before, "after": closure_diagnostic()}
+    df_15min.attrs[WEATHER_METADATA_KEY] = weather_metadata
 
     return df_15min
 

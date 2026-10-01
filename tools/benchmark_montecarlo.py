@@ -110,7 +110,6 @@ def build_study(weather: Path, runs: int, procs: int, backend: str, years: int):
         load_distribution="uniform",
         min_load_scale=0.95,
         max_load_scale=1.05,
-        preserve_irradiance_energy=True,
         collect_yearly=False,
         n_procs=procs,
         execution_backend=backend,

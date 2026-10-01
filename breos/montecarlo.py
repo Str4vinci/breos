@@ -109,7 +109,6 @@ class MonteCarloSettings:
     seed: int | None = None
     min_load_scale: float = 0.0
     max_load_scale: float | None = None
-    preserve_irradiance_energy: bool = False
     collect_yearly: bool = False
     n_procs: int = 1
     # "python" is the reference implementation and the default. "numba"
@@ -203,7 +202,7 @@ def _load_weather_years(
             latitude=resolved.lat,
             longitude=resolved.lon,
             resample=resample_to_15min,
-            preserve_irradiance_energy=settings.preserve_irradiance_energy,
+            irradiance_resampling=cfg.get("irradiance_resampling", "auto"),
         )
         if runtime_weather is not None and not runtime_weather:
             # The same resolution the PV model applies, so a spelling such as
@@ -304,7 +303,7 @@ def _weather_cache_key(
         "resolution": cfg["resolution"],
         "latitude": resolved.lat,
         "longitude": resolved.lon,
-        "preserve_irradiance_energy": settings.preserve_irradiance_energy,
+        "irradiance_resampling": cfg.get("irradiance_resampling", "auto"),
         "solar_position": resolve_solar_position_method(cfg.get("solar_position", DEFAULT_SOLAR_POSITION)),
     }
 
@@ -335,7 +334,7 @@ class MonteCarloYearCache:
     restamped and resampled to the study resolution. It is keyed on the
     weather file's absolute path, its SHA-256 and that of its metadata
     sidecar, the year window and target year, the resolution, the
-    coordinates, ``preserve_irradiance_energy`` and the solar-position
+    coordinates, ``irradiance_resampling`` and the solar-position
     method, and a study whose weather key differs is refused. The PV layer
     is each year's DC production and battery temperature. It is keyed on the
     resolved config without :data:`YEAR_CACHE_INDEPENDENT_KEYS`, such as the
@@ -436,8 +435,9 @@ def build_year_cache(config: dict[str, Any], settings: MonteCarloSettings) -> Mo
     Args:
         config: An App configuration dict, as for :func:`run_montecarlo`.
         settings: Monte Carlo controls. Only the weather settings are read:
-            ``weather_file``, ``target_year``, ``weather_start_year``,
-            ``weather_end_year`` and ``preserve_irradiance_energy``.
+            ``weather_file``, ``target_year``, ``weather_start_year`` and
+            ``weather_end_year``. The irradiance policy comes from the App
+            config's ``irradiance_resampling``.
 
     Returns:
         A :class:`MonteCarloYearCache` to pass to :func:`run_montecarlo` as
