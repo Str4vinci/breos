@@ -116,9 +116,9 @@ _CONDITIONALLY_REQUIRED = {
         "custom_schedule": "exactly one of these",
     },
     "smart_charging": {
-        "charge_periods": "unless `disabled`",
+        "charge_periods": "`fixed_target`, `daily_persistence`",
         "discharge_periods": "unless `disabled`",
-        "grid_charge_efficiency": "unless `disabled`",
+        "grid_charge_efficiency": "`fixed_target`, `daily_persistence`",
         "target_usable_fraction": "`fixed_target`",
     },
 }

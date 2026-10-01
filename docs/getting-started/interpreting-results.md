@@ -53,6 +53,11 @@ policy and a `terminal_period` description, to the provenance of a projected
 design and of an optimizer search. See
 [battery replacement at the end of the horizon](configuration.md#battery-replacement-at-the-end-of-the-horizon).
 Default results are otherwise unchanged.
+Version "2.4" adds the [`discharge_only`](configuration.md#discharge-only)
+smart-charging mode to `provenance.smart_charging` and the `smart_charging`
+block: such a run records its discharge periods, an empty `charge_periods`,
+and `None` for `target_usable_fraction`, `grid_charge_efficiency` and
+`grid_import_limit_w`. Other results are unchanged.
 A renamed or removed key bumps the
 major version, an added key the minor. A result without the key predates 1.0.
 

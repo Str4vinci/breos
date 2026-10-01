@@ -394,7 +394,7 @@ def resolve_optimization_config(config: Mapping[str, Any]) -> dict[str, Any]:
             raise ValueError(
                 f"'smart_charging.mode' = '{checked['mode']}' is experimental and runs in breos.App only; the "
                 "optimizer shares one set of static instructions across candidate designs. Use "
-                "mode = 'fixed_target'."
+                "mode = 'fixed_target' or 'discharge_only'."
             )
         resolved[key] = deepcopy(dict(value)) if key in ("tariff", "smart_charging") else checked
 

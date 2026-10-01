@@ -170,13 +170,13 @@ Grid charging by tariff period, as `[smart_charging]` in TOML; see [Smart chargi
 
 | Key | Required | Description |
 |---|---|---|
-| `charge_periods` | unless `disabled` | Tariff periods in which the grid may charge the battery |
-| `discharge_periods` | unless `disabled` | Tariff periods in which the battery may discharge to the load; not a charge period |
-| `grid_charge_efficiency` | unless `disabled` | AC-to-DC conversion efficiency of the grid-charging path, before the battery's own charge efficiency. No default |
-| `mode` | yes | `fixed_target` charges from the grid toward a fixed target; `daily_persistence` (experimental, App only) plans each day's target; `disabled` is greedy self-consumption |
+| `charge_periods` | `fixed_target`, `daily_persistence` | Tariff periods in which the grid may charge the battery. Not with `discharge_only` |
+| `discharge_periods` | unless `disabled` | Tariff periods in which the battery may discharge to the load; not a charge period. Under `discharge_only` the battery holds its charge in every other period |
+| `grid_charge_efficiency` | `fixed_target`, `daily_persistence` | AC-to-DC conversion efficiency of the grid-charging path, before the battery's own charge efficiency. No default. Not with `discharge_only` |
+| `mode` | yes | `fixed_target` charges from the grid toward a fixed target; `daily_persistence` (experimental, App only) plans each day's target; `discharge_only` discharges only in `discharge_periods` and never charges from the grid; `disabled` is greedy self-consumption |
 | `target_usable_fraction` | `fixed_target` | Grid-charging target as a fraction of the usable window: 0 is `battery_min_soc`, 1 is `battery_max_soc`. `fixed_target` only |
 | `forecast_horizon_days` |  | `daily_persistence` only: civil days the planner looks ahead, today included. An integer of at least 1; default 2 |
-| `grid_import_limit_w` |  | Site import limit in W for grid charging, which may import up to the limit minus the load's import. Load import is never cut. Unset is unlimited |
+| `grid_import_limit_w` |  | Site import limit in W for grid charging, which may import up to the limit minus the load's import. Load import is never cut. Unset is unlimited. Not with `discharge_only` |
 | `soc_states` |  | `daily_persistence` only: stored-energy grid points of the planner's value function. An integer of at least 2; default 21 |
 | `target_levels` |  | `daily_persistence` only: candidate targets, evenly spaced from 0 to 1 of the usable window. An integer of at least 1 (one level selects target 0); default 11 |
 

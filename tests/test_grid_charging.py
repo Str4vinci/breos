@@ -110,7 +110,14 @@ def test_instructed_runs_conserve_energy_and_reconcile_origins(scenario, freq, b
 
     assert_energy_conservation(results, config)
     assert_origin_reconciliation(results, 0.25 if freq == "15min" else 1.0)
-    if scenario != "noop_instructions":
+    if scenario == "discharge_window":
+        # A discharge gate without a grid target never charges from the grid.
+        assert results["Grid_AC_To_Battery"].sum() == 0.0
+        assert results["Grid_Origin_Battery_Charge_Stored"].sum() == 0.0
+        hour = pd.DatetimeIndex(results["Datetime"]).hour
+        assert results["Battery_Discharge_DC"][(hour < 17) | (hour >= 23)].sum() == 0.0
+        assert results["Battery_Discharge_DC"].sum() > 0.0
+    elif scenario != "noop_instructions":
         assert results["Grid_Origin_Battery_Charge_Stored"].sum() > 0.0
         assert results["Grid_Origin_Battery_AC_To_Load"].sum() > 0.0
     if scenario == "fixed_target_replacement":
