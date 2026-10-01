@@ -14,8 +14,9 @@ when no battery is configured, it simply skips the storage path.
 ```
 
 The function returns a five-tuple of `(results_df, total_pv_wh,
-summary_df, n_replacements, degradation_df)`. Battery-specific outputs are
-empty when running without storage.
+summary_df, n_replacements, degradation_df)`, with the degradation state as
+a sixth item when `return_degradation_state=True`. Battery-specific outputs
+are empty when running without storage.
 
 The physics carries no money. A replacement is reported where it happens:
 `Battery_Replaced` marks the step, and `Battery_Replaced_Capacity_Wh` holds
@@ -65,9 +66,9 @@ inverter losses.
 ## Dispatch instructions and grid charging
 
 `simulate_energy_balance(..., dispatch_instructions=...)` takes a
-`breos.dispatch_instructions.DispatchInstructions`: per-step arrays that gate
-the greedy step without replacing it (ADR 0002). There is one entry per
-simulation step.
+{py:class}`~breos.dispatch_instructions.DispatchInstructions`, which gates
+the greedy step without replacing it. Its first three fields are arrays with
+one entry per simulation step; the last two are scalars.
 
 - `discharge_allowed`: whether the battery may discharge in that step.
 - `reserve_fraction`: the usable fraction kept before discharge. The battery
@@ -80,9 +81,19 @@ simulation step.
   counting the load's own import against it (`math.inf` for none). Load
   import itself is never cut.
 
-A step may discharge or have a grid target, never both. Omitting the
+A step that allows discharge and has a grid target must keep
+`reserve_fraction` at or above `grid_target_fraction`, so the target is also
+the discharge floor; this is how `overlap_policy = "hold_target"` runs. A
+step never charges from the grid and discharges at once. Omitting the
 instructions, or passing `DispatchInstructions.noop(n)`, is greedy
 self-consumption, bit for bit.
+
+```{eval-rst}
+.. autosummary::
+   :toctree: generated/
+
+   breos.dispatch_instructions.DispatchInstructions
+```
 
 Fractions apply to each step's capacity window, which scales with the
 temperature capacity factor every step and with SOH every day. The same

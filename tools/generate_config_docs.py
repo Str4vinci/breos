@@ -67,7 +67,7 @@ TABLES: tuple[tuple[str, TableSpec, str], ...] = (
         "costs",
         COSTS_TABLE,
         "Cost overrides, as `[costs]` in TOML. A key you omit comes from `cost_preset`, and without a preset from "
-        "the {py:class}`~breos.CostParams` default shown. Values are in the cost preset's currency and must be "
+        "the {py:class}`~breos.economics.CostParams` default shown. Values are in the cost preset's currency and must be "
         "finite and not negative.",
     ),
     (

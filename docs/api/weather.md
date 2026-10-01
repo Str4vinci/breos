@@ -36,7 +36,7 @@ Azimuth is clockwise from north and both values are degrees. BREOS linearly
 interpolates across north, including between the last and first point. It
 zeros DNI while the apparent sun elevation is on or below that line and
 removes the corresponding direct-horizontal component from GHI. DHI is kept:
-the v1 profile models far-horizon beam obstruction, not diffuse sky-view loss.
+the profile models far-horizon beam obstruction, not diffuse sky-view loss.
 
 When this key is active and no cached weather matches, the App automatically
 requests fresh PVGIS data with `use_horizon=False`. It refuses weather marked
@@ -79,18 +79,16 @@ filename such as `pvgis-sarah3`.
 
 ## Resampling
 
-Convert hourly weather to 15-minute steps. The resampler uses
-Makima interpolation on clearness indices rather than raw irradiance so
-sunrise / sunset transitions stay physically consistent. Every column is
-interpolated at each row's representative time from the weather metadata:
-hourly means at the middle of their hour, read back at the middle of each
-quarter-hour, and instant samples at their label plus any recorded provider
-offset. `irradiance_resampling="auto"` (default) conserves each source hour's
-GHI, DNI and DHI independently for declared interval means, and selects
-`"clear_sky"` for instantaneous or undeclared input. Explicit
-`"clear_sky_energy_conserving"` requires interval-mean metadata. Ratios have
-no upper cap; low clear-sky support uses linear component interpolation.
-See [the policy and diagnostics](../getting-started/configuration.md#hourly-weather-at-15-minute-resolution).
+Convert hourly weather to 15-minute steps. With `latitude` and `longitude`,
+the resampler interpolates each irradiance component's clear-sky ratio
+rather than the raw irradiance, so sunrise and sunset stay physically
+consistent; without them it interpolates the components directly. Every
+column is interpolated at each row's representative time from the weather
+metadata: hourly means at the middle of their hour, read back at the middle
+of each quarter-hour, and instant samples at their label plus any recorded
+provider offset. The `irradiance_resampling` policies, the fallbacks and the
+recorded diagnostics are described under
+[Hourly weather at 15-minute resolution](../getting-started/configuration.md#hourly-weather-at-15-minute-resolution).
 
 ```{eval-rst}
 .. autosummary::
