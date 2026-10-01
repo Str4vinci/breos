@@ -1051,9 +1051,6 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   bit for bit.
 
 ### Fixed
-- A Monte Carlo `weather_file` without a `date` column, such as a PVGIS TMY,
-  now stops with an error that names the missing column instead of a bare
-  `KeyError: 'date'`.
 - A battery too small to dispatch (at most 1 Wh) no longer reports
   `battery_soh_end_pct`, `battery_replacements` or the replacement-cost fields
   ([#353](https://github.com/Str4vinci/breos/issues/353)). It already ran and
@@ -1794,6 +1791,9 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   directory holds two TMY files for its location preset now stops** with the
   candidates and asks for `weather_source`. With one file, App results are
   unchanged.
+- A Monte Carlo `weather_file` without a `date` column, such as a PVGIS TMY,
+  now stops with an error that names the missing column instead of a bare
+  `KeyError: 'date'`.
 
 ### Removed
 - `resample_to_15min(..., preserve_irradiance_energy=...)`,
