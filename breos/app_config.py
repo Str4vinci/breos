@@ -17,6 +17,7 @@ from breos.config_schema import TableSpec, anything, boolean, choice, integer, l
 from breos.constants import (
     DEFAULT_CHARGE_EFFICIENCY,
     DEFAULT_DISCHARGE_EFFICIENCY,
+    DEFAULT_EOL_PERCENTAGE,
     DEFAULT_INDOOR_CEILING_C,
     DEFAULT_INDOOR_COUPLING_ALPHA,
     DEFAULT_INDOOR_FLOOR_C,
@@ -780,7 +781,7 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         summary="battery.max_soc",
     ),
     "battery_eol_percentage": AppConfigField(
-        default=0.70,
+        default=DEFAULT_EOL_PERCENTAGE,
         doc="SOH fraction that triggers a battery replacement",
         summary="battery.eol_percentage",
     ),

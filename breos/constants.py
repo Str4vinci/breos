@@ -73,6 +73,7 @@ DEFAULT_DISCHARGE_EFFICIENCY = math.sqrt(_ROUND_TRIP_EFFICIENCY)  # ~0.9747
 DEFAULT_STANDBY_LOSS_WH = 5.0
 DEFAULT_MAX_SOC = 0.90  # LFP long-life window (10-90%); use 1.0 for max performance
 DEFAULT_MIN_SOC = 0.10  # LFP long-life window
+DEFAULT_EOL_PERCENTAGE = 0.70  # Replace the battery when its SOH falls to 70% of nominal capacity
 
 # === LFP Temperature-Capacity Derating ===
 # Piecewise-linear approximation for LFP usable capacity vs. temperature.

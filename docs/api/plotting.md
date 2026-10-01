@@ -1,11 +1,26 @@
 # Plotting
 
 Matplotlib figures of BREOS results, grouped by what they visualize. They
-need the `plots` extra (`pip install "breos[plots]"`). Most functions take a
-results directory and write one or more PNG files there;
-`plot_pv_loss_waterfall` returns the figure and saves it only when given an
-`output_path`. Use `set_presentation_mode` to enlarge the fonts of every
-figure.
+need the `plots` extra (`pip install "breos[plots]"`). Every function returns
+what it draws: a matplotlib `Figure`, or, for a function that draws several,
+a dict of figures keyed by file name (`plot_breakeven` returns
+`breakeven_cumulative` and `breakeven_annual`). Given a results directory
+(`output_path` for `plot_pv_loss_waterfall`), a function saves its PNG files
+there and closes the figures it returns. Without one, it saves nothing and
+leaves them open, for `plt.show()`, a notebook or a documentation example:
+
+```python
+import matplotlib.pyplot as plt
+from breos.plotting import plot_monthly_balance
+
+fig = plot_monthly_balance(results)  # open, not saved
+fig.axes[0].set_title("Porto, 10 modules")
+plt.show()
+
+plot_monthly_balance(results, "plots")  # saved to plots/monthly_balance.png and closed
+```
+
+Use `set_presentation_mode` to enlarge the fonts of every figure.
 
 ## Time series
 
