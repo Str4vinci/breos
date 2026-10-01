@@ -5,31 +5,25 @@ module — the [PV reference](pv.md) pulls names from `breos.solar`,
 `breos.pv_modules`, and `breos.inverter`, since all three describe the same
 part of a system.
 
-The {py:class}`~breos.App` facade is the recommended entry point. The
+The [App facade](app.md) is the recommended entry point. The
 top-level `breos.__all__` list is intentionally narrower than the full
 reference: it marks the stable release surface for `from breos import *`.
 The pages below cover lower-level module APIs you reach for when composing a
 custom pipeline. Import those lower-level names from their modules, for example
 `from breos.solar import calculate_pv_production_dc`.
 
-## The App facade
-
-{py:meth}`App.result() <breos.App.result>` returns the run's results as a
-plain dict. {py:meth}`App.timeseries() <breos.App.timeseries>` returns the
-first simulated year step by step, as a DataFrame with the columns of the
-[ledger schema](energy-balance.md#ledger-schema).
-
-```{eval-rst}
-.. autosummary::
-   :toctree: generated/
-
-   breos.App
-```
-
 ## Domain areas
 
 ::::{grid} 1 2 2 4
 :gutter: 3
+
+:::{grid-item-card} App facade
+:link: app
+:link-type: doc
+
+`breos.App`: simulate one design, read its result and time series, and
+revalue it at other prices.
+:::
 
 :::{grid-item-card} Weather
 :link: weather
@@ -71,7 +65,7 @@ Configuration, indoor temperature model, calendar and cycle degradation.
 :link: degradation-models
 :link-type: doc
 
-Native and BLAST model selection, discovery, provenance, and migration.
+Native and BLAST model selection, discovery, and provenance.
 :::
 
 :::{grid-item-card} Cost analysis
@@ -92,7 +86,16 @@ Time-of-use schedules, prices, and their resolution onto a simulation index.
 :link: optimization
 :link-type: doc
 
-Tilt search, battery sizing, ZEB sizing, and NSGA-II multi-objective sizing.
+NSGA-II multi-objective sizing and detailed evaluation of one design over
+its projected lifetime.
+:::
+
+:::{grid-item-card} Monte Carlo
+:link: montecarlo
+:link-type: doc
+
+Studies over resampled weather years and demand, and reuse of the per-year
+inputs across designs.
 :::
 
 :::{grid-item-card} Plotting
@@ -107,13 +110,14 @@ fronts.
 
 ## Other surfaces
 
-[Appendix](appendix.md) documents additional module APIs — constants, I/O
-helpers, utilities, and research-validation modules that remain importable but
-are not part of the narrow top-level release surface.
+[Appendix](appendix.md) documents additional module APIs (constants, I/O
+helpers and utilities) that remain importable but are not part of the narrow
+top-level release surface.
 
 ```{toctree}
 :hidden:
 
+app
 weather
 pv
 load-profiles
@@ -123,6 +127,7 @@ degradation-models
 cost-analysis
 tariffs
 optimization
+montecarlo
 plotting
 appendix
 ```

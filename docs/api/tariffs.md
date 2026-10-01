@@ -1,6 +1,6 @@
 # Tariffs
 
-A time-of-use tariff has three parts (ADR 0002):
+A time-of-use tariff has three parts:
 
 - a **schedule**, which assigns every instant to a named period (`off_peak`,
   `mid_peak`, `peak`) in local civil time and carries its regulatory source;
@@ -35,8 +35,10 @@ for each installation between 1 July and 31 December 2027, as its meter is
 reparametrised. They are never chosen by date: select one explicitly, and pass
 a `study_date` in its effective window when the simulated year is earlier.
 `es_2_0td` is the Spanish Peninsula 2.0TD access tariff (up to 15 kW); its
-weekends and national holidays are `off_peak` all day, using the holiday
-calendar BREOS carries for each year. A year without one raises.
+weekends and national holidays are `off_peak` all day. BREOS carries the
+national holidays for 2026 only, so a simulated year without a holiday
+calendar raises; use a custom schedule with your own `holidays` for other
+years.
 
 The boundary step is the coarsest step that lands on every period boundary
 and on every change of the zone's UTC offset in the simulated years, since a
@@ -234,6 +236,7 @@ exports nothing.
    breos.tariffs.HolidayCalendar
    breos.tariffs.MonthSeasons
    breos.tariffs.TariffPrices
+   breos.tariffs.TariffSpec
    breos.tariffs.ReferenceTariffSpec
    breos.tariffs.ResolvedTariff
    breos.tariffs.available_tariff_schedules

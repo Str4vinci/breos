@@ -1224,7 +1224,7 @@ class TariffSpec:
 
     ``schedule`` is a bundled schedule identifier or a
     :class:`ScheduleDefinition`. ``resolve`` classifies and prices one index. Every project year replays
-    the start-year calendar (ADR 0002 A2), so a run resolves once and reuses
+    the start-year calendar, so a run resolves once and reuses
     the result for every year.
     """
 
@@ -1260,7 +1260,7 @@ class ReferenceTariffSpec:
     exports nothing, so ``prices.export_prices`` is ``{"all": 0.0}``.
     ``import_price_escalation`` escalates the reference energy and fixed
     charge; None inherits the system's import escalation. Every project year
-    replays the start-year calendar (ADR 0002 A2), as the system tariff does.
+    replays the start-year calendar, as the system tariff does.
     """
 
     prices: TariffPrices

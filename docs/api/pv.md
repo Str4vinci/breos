@@ -22,6 +22,7 @@ model documentation and comparison data.
    :toctree: generated/
 
    breos.solar.calculate_pv_production_dc
+   breos.solar.calculate_pv_production_dc_tracking
    breos.solar.calculate_pv_production_breakdown
    breos.solar.calculate_pv_production_ac
    breos.solar.calculate_multi_array_production

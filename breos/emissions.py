@@ -67,7 +67,7 @@ def calculate_co2_projection(
     """
     Calculate multi-year CO2 savings projection.
 
-    Avoided emissions use net exchange (ADR 0002 A10): the load the system
+    Avoided emissions use net exchange: the load the system
     covered without importing, times the grid factor, plus PV export times
     the export factor. Grid energy shifted through the battery is imported,
     so it earns nothing, and its round-trip loss counts against the system.

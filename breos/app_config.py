@@ -253,7 +253,7 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         normalizer=_underscored,
         doc=(
             "Cost preset key from the packaged defaults; see [Packaged options](options.md#cost-presets). `None` uses "
-            "the {py:class}`~breos.CostParams` defaults"
+            "the {py:class}`~breos.economics.CostParams` defaults"
         ),
         summary="economics.cost_preset",
     ),
@@ -272,7 +272,7 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         default=None,
         cli_flags=("--pv-module",),
         cli_help="PV module catalogue key.",
-        doc="Module key from the built-in catalogue. `None` uses the first available",
+        doc="Module key from the built-in catalogue. `None` uses the catalogue's first entry, `Suntech_STP550S_STC`",
         summary="pv.module",
     ),
     "load_profile": AppConfigField(
@@ -660,7 +660,8 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
     "period": AppConfigField(
         doc=(
             "Simulate only the window from `start` to `end`, local dates in the year of `start_date`, `end` "
-            "exclusive. The window runs once and reports energy only: lifetime economics are `None`. See "
+            "exclusive. The window runs once: energy and year-1 money cover the window, and lifetime economics are "
+            "`None`. See "
             "[`[period]`](#period) and [Simulate part of a year](recipes.md#simulate-part-of-a-year)"
         ),
         default_doc="*unset*",
@@ -670,7 +671,8 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
     "tariff": AppConfigField(
         default=None,
         doc=(
-            "Time-of-use import and export prices on a bundled schedule, replacing the flat `costs.electricity_cost`, "
+            "Time-of-use import and export prices on a bundled or custom schedule, replacing the flat "
+            "`costs.electricity_cost`, "
             "`costs.electricity_sold_cost` and `costs.daily_power_cost`; see [`[tariff]`](#tariff) and [Time-of-use "
             "tariffs](configuration.md#time-of-use-tariffs)"
         ),
@@ -703,7 +705,8 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
     "smart_charging": AppConfigField(
         default=None,
         doc=(
-            "Grid charging toward a fixed or a daily planned target in the tariff's cheap periods; see "
+            "Battery dispatch by tariff period: grid charging toward a fixed target or, experimentally, a daily "
+            "planned target in the listed charge periods, or discharge only in the listed periods; see "
             "[`[smart_charging]`](#smart_charging) and [Smart charging](configuration.md#smart-charging)"
         ),
         default_doc="*unset*",
@@ -732,7 +735,8 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
     "pv_arrays": AppConfigField(
         default=None,
         doc=(
-            "List of arrays, each with `modules`, `module`, `tilt` and `azimuth`. The array module total replaces "
+            "List of arrays, each with at least `modules`; other keys inherit from the top level. The array module "
+            "total replaces "
             "`n_modules`; see [`[[pv_arrays]]`](#pv_arrays)"
         ),
         summary="pv.arrays",
@@ -1629,7 +1633,7 @@ def _check_schedule_resolution(cfg: dict[str, Any], schedule: ScheduleDefinition
         identifier = schedule.schedule.identifier
         raise ValueError(
             f"Schedule {identifier!r} needs steps that divide {required} minutes, which "
-            f"{cfg['resolution']!r} steps do not; {remedy} (ADR 0002 A3)."
+            f"{cfg['resolution']!r} steps do not; {remedy}."
         )
 
 
@@ -1823,7 +1827,7 @@ def _check_smart_charging_keys(table: dict[str, Any], where: str) -> None:
     if overlap and table.get("overlap_policy", "reject") == "reject":
         raise ValueError(
             f"'{where}.charge_periods' and '{where}.discharge_periods' share {', '.join(overlap)}; "
-            "every step either charges or discharges (ADR 0002 A8); "
+            "every step either charges or discharges; "
             "set overlap_policy = 'hold_target' with mode = 'fixed_target' to allow overlap"
         )
 

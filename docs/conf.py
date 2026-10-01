@@ -134,7 +134,9 @@ html_theme_options = {
     "footer_end": ["sphinx-version", "theme-version"],
     "switcher": {
         "json_url": "https://breos.readthedocs.io/en/latest/_static/switcher.json",
-        "version_match": "latest",
+        # Read the Docs sets READTHEDOCS_VERSION to "stable" or "latest", so
+        # the selector marks the version being read; local builds use latest.
+        "version_match": os.environ.get("READTHEDOCS_VERSION", "latest"),
     },
     "check_switcher": False,
     "secondary_sidebar_items": ["page-toc", "edit-this-page"],

@@ -163,7 +163,7 @@ class SmartChargingSpec:
         if overlap and self.overlap_policy == "reject":
             raise ValueError(
                 f"'smart_charging.charge_periods' and 'smart_charging.discharge_periods' share {', '.join(overlap)}; "
-                "every step either charges or discharges (ADR 0002 A8); "
+                "every step either charges or discharges; "
                 "set overlap_policy = 'hold_target' with mode = 'fixed_target' to allow overlap"
             )
 

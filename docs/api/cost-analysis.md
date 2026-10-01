@@ -26,7 +26,7 @@ energy balance.
    breos.economics.cost_analysis_projection
 ```
 
-`cost_analysis_projection` runs four stages, each public, so a caller can
+`cost_analysis_projection` runs in stages, each public, so a caller can
 re-price stored year rows without repeating the rest:
 
 ```{eval-rst}
