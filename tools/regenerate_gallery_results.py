@@ -33,7 +33,6 @@ import argparse
 import contextlib
 import copy
 import datetime as dt
-import gzip
 import hashlib
 import json
 import math
@@ -138,8 +137,6 @@ def with_overrides(config: Mapping[str, Any], overrides: Mapping[str, Any]) -> d
 
 def first_year_frame(app: Any) -> pd.DataFrame:
     """The first simulated year, one row per step, from the public accessor."""
-    if not hasattr(app, "timeseries"):  # TEMP-ACCESSOR: remove once App.timeseries() is merged
-        return app._artifacts.first_year_results_df
     return app.timeseries()
 
 
@@ -271,14 +268,17 @@ class Context:
         self.configs[relative] = sha256(REPO / relative)
         return load_toml(relative)
 
-    def stage_tmy(self, location: str) -> None:
-        """Decompress the committed PVGIS TMY for ``location`` into ``weather/``, where App looks for it."""
+    def stage_tmy(self, location: str) -> Path:
+        """Copy the committed PVGIS TMY for ``location`` (and its sidecar) into ``weather/``, where App looks."""
         source = WEATHER_DIR / TMY_FILES[location]
-        target = self.work / "weather" / source.name.removesuffix(".gz")
+        target = self.work / "weather" / source.name
         if not target.exists():
-            with gzip.open(source, "rb") as src, open(target, "wb") as dst:
-                shutil.copyfileobj(src, dst)
+            shutil.copyfile(source, target)
+            sidecar = source.with_name(source.name + ".metadata.json")
+            if sidecar.exists():
+                shutil.copyfile(sidecar, target.with_name(sidecar.name))
         self.weather[repo_relative(source)] = {"sha256": sha256(source), "attribution": PVGIS_ATTRIBUTION}
+        return target
 
     @contextlib.contextmanager
     def inside(self) -> Iterator[None]:
@@ -303,7 +303,14 @@ class Context:
             return app.revalue(changes)
 
     def roots(self) -> dict[str, str]:
-        return {str(self.work.resolve()): "", str(self.work): "", str(REPO): ""}
+        """Absolute prefixes to rewrite: a staged TMY becomes its committed path, the rest repo-relative."""
+        staged = {}
+        for committed in self.weather:
+            if committed.startswith("validation/"):
+                name = Path(committed).name
+                for work in (self.work, self.work.resolve()):
+                    staged[str(work / "weather" / name)] = committed
+        return {**staged, str(self.work.resolve()): "", str(self.work): "", str(REPO): ""}
 
 
 @dataclass(frozen=True)
@@ -637,7 +644,7 @@ def montecarlo(ctx: Context) -> Output:
     years = hourly.index.year
     ghi_by_year = (hourly["ghi"].groupby(years).sum() / 1000.0).round(2)
     with ctx.inside():
-        tmy = load_weather(str(ctx.work / "weather" / TMY_FILES["porto"].removesuffix(".gz")))
+        tmy = load_weather(str(ctx.stage_tmy("porto")))
     weather_years = pd.DataFrame({"year": ghi_by_year.index.astype(int), "ghi_kwh_m2": ghi_by_year.to_numpy()})
     summary = {
         "summary": study.summary,
@@ -686,10 +693,10 @@ def nsga2_front(ctx: Context) -> Output:
     from breos.weather import load_weather
 
     config = ctx.config("configs/optimization/projected-optimization.toml")
-    ctx.stage_tmy("porto")
+    tmy = ctx.stage_tmy("porto")
     annual_kwh = 4000.0
     with ctx.inside():
-        weather = load_weather(str(ctx.work / "weather" / TMY_FILES["porto"].removesuffix(".gz")))
+        weather = load_weather(str(tmy))
         load = load_profile(
             "demandlib_h0",
             annual_kwh,
