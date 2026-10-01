@@ -677,7 +677,7 @@ battery delivery counts as self-consumption. Avoided emissions use net
 exchange: grid energy shifted through the battery is imported, so it earns
 nothing, and its round-trip loss counts against the system.
 `provenance.smart_charging` records the parameters, the hash of the resolved
-instructions, `overlap_policy` and the tariff's schedule hash (result schema 2.7).
+instructions, `overlap_policy` and the tariff's schedule hash.
 
 To allow discharge in every period while retaining an off-peak target, use
 `charge_periods = ["off_peak"]`, list every tariff period in

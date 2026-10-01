@@ -2,7 +2,8 @@
 
 - **Status:** Accepted (E1–E10)
 - **Date:** 2026-09-26; E1, E6 and E8 accepted 2026-09-26; E2–E5, E7, E9 and
-  the E6 inflation default accepted 2026-09-27; E10 accepted 2026-10-01
+  the E6 inflation default accepted 2026-09-27; E10 accepted 2026-10-01; E9
+  amended 2026-10-01
 
 ## Context
 
@@ -189,9 +190,9 @@ migrate once. "Exact" overstates a linear interpolation between year-end
 points, so the fractional payback becomes "interpolated". It has no aliases
 either.
 
-Results that use the new names report `result_schema_version = "1.0"`, the
-first result schema version; E9 sets where the field is carried and how
-it is bumped. A result without the field predates the rename.
+Results that use the new names carry `result_schema_version`; E9 sets where
+the field is carried and when it changes. A result without the field
+predates the rename.
 
 The migration table below was built by searching `breos/` for `eur`, `Eur`,
 `EUR`, `€` and `_exact` at `origin/develop` 79bffcf. It lists every public
@@ -254,6 +255,13 @@ currency or say "currency". The changelog carries this table.
 top-level `result_schema_version`, independent of the ledger schema. It
 starts at `"1.0"` with the E8 names. A rename or removal bumps the major
 version; an added field bumps the minor.
+*(Amended 2026-10-01: `result_schema_version` is a format number, not a
+major.minor version. It changes, to the next integer, only when a field is
+renamed or removed; an added field leaves it unchanged, the release's
+changelog lists it, and `breos_version` identifies the release. No version
+had been released, so 0.7.0 ships format `"1"`, the first released format;
+results of earlier BREOS versions carry none. The ledger schema is
+unaffected.)*
 
 ### E10. Optional terminal-health credit — Accepted 2026-10-01
 
@@ -286,7 +294,7 @@ receives zero credit if it is at or below threshold. A zero-capacity or
 absent battery reports explicit zero credit when enabled. A partial
 `[period]` run has no lifetime economics and reports null credit.
 
-Schema 2.8 adds `terminal_health_credit`, `terminal_health_credit_npv` and
+Results gain `terminal_health_credit`, `terminal_health_credit_npv` and
 `npv_savings_terminal_adjusted` (unadjusted NPV plus credit present value).
 App rounds money only at serialization. When disabled these scalars are
 null and terminal-value provenance is absent. When enabled for a lifetime

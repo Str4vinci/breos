@@ -8,6 +8,8 @@ import pandas as pd
 import pytest
 
 from breos import optimization
+from breos.result_schema import RESULT_SCHEMA_VERSION
+from breos.utils import package_version
 
 TARIFF = {
     "schedule": "pt_mainland_2026_daily_bi",
@@ -82,7 +84,8 @@ def test_optimizer_provenance_records_the_schema_version_and_currency(tariff_cas
 
     for case in (tariff_case, (weather, load, flat)):
         provenance = evaluate(case).provenance
-        assert provenance["result_schema_version"] == "3.0"
+        assert provenance["result_schema_version"] == RESULT_SCHEMA_VERSION
+        assert provenance["breos_version"] == package_version()
         assert provenance["currency"] == "EUR"
     assert "tariff" not in evaluate((weather, load, flat)).provenance
 

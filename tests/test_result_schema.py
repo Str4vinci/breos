@@ -1,4 +1,4 @@
-"""Currency-neutral result names and the result schema version (ADR 0003 E8, E9)."""
+"""Currency-neutral result names and the result format number (ADR 0003 E8, E9)."""
 
 from unittest import mock
 
@@ -41,12 +41,12 @@ def _keys(value, prefix=""):
             yield from _keys(item, prefix)
 
 
-def test_the_result_schema_version_is_3_0():
-    assert RESULT_SCHEMA_VERSION == "3.0"
+def test_the_result_format_is_1():
+    assert RESULT_SCHEMA_VERSION == "1"
 
 
-def test_app_result_records_the_schema_version_and_currency(replacement_result):
-    assert replacement_result["result_schema_version"] == "3.0"
+def test_app_result_records_the_format_and_currency(replacement_result):
+    assert replacement_result["result_schema_version"] == RESULT_SCHEMA_VERSION
     assert replacement_result["provenance"]["currency"] == "EUR"
 
 
@@ -76,7 +76,7 @@ def test_app_result_keys_name_no_currency_and_no_exact_payback(replacement_resul
         assert renamed in replacement_result
 
 
-def test_schema_2_removes_legacy_and_duplicate_result_keys(replacement_result):
+def test_app_result_omits_removed_legacy_and_duplicate_keys(replacement_result):
     keys = set(_keys(replacement_result))
     removed = {
         "pv_production_kwh",

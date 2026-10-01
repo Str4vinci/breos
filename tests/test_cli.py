@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from breos import cli
+from breos.result_schema import RESULT_SCHEMA_VERSION
 
 EXAMPLE_CONFIGS = sorted((Path(__file__).resolve().parents[1] / "configs" / "examples").glob("*.toml"))
 
@@ -629,7 +630,7 @@ battery_kwh = [0.0, 5.0]
     rows = list(csv.DictReader(output_path.open(encoding="utf-8")))
     assert len(rows) == 2
     for row in rows:
-        assert row["result_schema_version"] == "3.0"
+        assert row["result_schema_version"] == RESULT_SCHEMA_VERSION
         for key in (
             "grid_import_cost_year1_prices",
             "grid_export_revenue_year1_prices",

@@ -35,7 +35,6 @@ from breos.optimization import _evaluate_projected_design_metrics, evaluate_proj
 from breos.optimization_config import resolve_optimization_config
 from breos.projection import ProjectionYear, project_years, value_projection
 from breos.pv_modules import get_module
-from breos.result_schema import RESULT_SCHEMA_VERSION
 from breos.smart_charging import FixedTargetDayController
 from tests.test_controller_seam import _battery, _core, _Recording, _scenario
 from tests.test_daily_persistence import _small_grid
@@ -529,7 +528,6 @@ def test_app_prices_every_swap_but_the_terminal_one():
 
     assert default["provenance"]["resolved_config"]["battery_allow_terminal_replacement"] is True
     assert guarded["provenance"]["resolved_config"]["battery_allow_terminal_replacement"] is False
-    assert guarded["result_schema_version"] == RESULT_SCHEMA_VERSION == "3.0"
     assert default_art.yearly_df["Replacements"].tolist() == [365, 365]
     assert guarded_art.yearly_df["Replacements"].tolist() == [365, 364]
     assert guarded["battery_replacements"] == default["battery_replacements"] - 1
@@ -718,7 +716,6 @@ def test_a_projected_design_records_the_policy(monkeypatch, value):
     assert treatment["allow_terminal_replacement"] is expected
     assert treatment["method"] == "simulated_yearly_state_propagation"
     assert "ends on the horizon's last step, whole or partial" in treatment["terminal_period"]
-    assert result.provenance["result_schema_version"] == "3.0"
     assert result.yearly["Replacements"].tolist() == ([3, 3] if expected else [3, 2])
 
 

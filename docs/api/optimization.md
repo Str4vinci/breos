@@ -125,7 +125,7 @@ metrics sent to NSGA-II explicitly.
 
 `details["provenance"]`, and the `provenance` of `evaluate_projected_design`,
 carry `result_schema_version` and `currency`, the currency of every money
-column (see [Interpreting results](../getting-started/interpreting-results.md#currency-and-schema-version)),
+column (see [Interpreting results](../getting-started/interpreting-results.md#currency-and-result-format)),
 plus the tariff and smart-charging records when the config has them. Their
 `battery_replacement_treatment` records the replacement method, the configured
 `allow_terminal_replacement` and what the terminal period is;

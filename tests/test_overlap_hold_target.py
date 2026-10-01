@@ -311,7 +311,6 @@ def test_app_executes_and_records_hold_target():
     app.simulate()
     result = app.result()
     assert result["provenance"]["smart_charging"]["overlap_policy"] == "hold_target"
-    assert result["result_schema_version"] == "3.0"
     instructions = app._artifacts.instructions
     overlap = instructions.discharge_allowed & np.isfinite(instructions.grid_target_fraction)
     np.testing.assert_array_equal(instructions.reserve_fraction[overlap], instructions.grid_target_fraction[overlap])

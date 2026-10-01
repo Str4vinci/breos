@@ -11,6 +11,7 @@ import breos.montecarlo as montecarlo_module
 from breos import cli
 from breos.io import nonfinite_to_none
 from breos.montecarlo import MonteCarloResult, MonteCarloSettings, _summarize, run_montecarlo
+from breos.result_schema import RESULT_SCHEMA_VERSION
 
 
 def _reject_constant(token):
@@ -171,7 +172,7 @@ def test_montecarlo_provenance_and_json_write_nonfinite_statistics_as_null(monke
             settings=settings,
             available_years=[2021],
             provenance={
-                "result_schema_version": "3.0",
+                "result_schema_version": RESULT_SCHEMA_VERSION,
                 "currency": "EUR",
                 "settings": {"max_load_scale": settings.max_load_scale},
             },
@@ -192,7 +193,7 @@ def test_montecarlo_provenance_and_json_write_nonfinite_statistics_as_null(monke
     assert payload["settings"]["max_load_scale"] is None
     assert provenance["settings"]["max_load_scale"] is None
     for record in (payload, provenance):
-        assert record["result_schema_version"] == "3.0"
+        assert record["result_schema_version"] == RESULT_SCHEMA_VERSION
         assert record["currency"] == "EUR"
 
 
