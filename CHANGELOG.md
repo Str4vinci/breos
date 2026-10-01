@@ -5,6 +5,27 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 ## [Unreleased]
 
 ### Added
+- `[tariff.custom_schedule]` takes calendar-month `seasons`, such as
+  quarters, for tariffs whose windows or prices change by month rather than
+  by DST ([#337](https://github.com/Str4vinci/breos/issues/337)).
+  `seasons = { q1 = [1, 2, 3], ... }` must hold every month exactly once;
+  each rule's `season` then selects a season name or `all`, and a schedule
+  with month seasons refuses `standard` and `dst`. `import_prices` and
+  `export_prices` are given per period, as before, or per season and
+  period, where each season prices exactly the periods its rules use, or
+  gives `all`. A step's season is the month of its civil date in the
+  location's timezone; day types, holidays, effective dates and the
+  replayed start-year calendar are unchanged. Month seasons work in App,
+  Monte Carlo, projected optimization and `App.revalue`, which re-prices by
+  season and period; `breos sweep` takes keys such as
+  `tariff.import_prices.q1.high`. The partition joins the schedule hash
+  only for a schedule with month seasons, so every bundled and existing
+  custom schedule keeps its labels and hashes, and no result changes.
+  `breos.tariffs.MonthSeasons` holds the partition. BREOS still bundles no
+  German schedule; `configs/examples/quarterly-tariff-berlin.toml` shows a
+  §14a Module 3-style quarterly tariff with illustrative windows and
+  prices. Result schema 2.4 records `seasons` in the resolved config and in
+  `provenance.tariff`, where the price lists may now be given by season.
 - `battery_allow_terminal_replacement` (App and Monte Carlo), the
   optimizer's `[battery] allow_terminal_replacement` and
   `BatteryConfig.allow_terminal_replacement` can skip buying a battery that
