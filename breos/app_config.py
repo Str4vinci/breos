@@ -89,6 +89,7 @@ from breos.tariffs import (
     validate_season_prices,
 )
 from breos.utils import get_hours_per_step
+from breos.weather import IRRADIANCE_RESAMPLING_POLICIES, validate_irradiance_resampling
 
 _NO_DEFAULT = object()
 _TRACKING_MODES = ("fixed", "single_axis", "dual_axis")
@@ -381,6 +382,18 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         cli_help="Perez coefficient set (only used with --transposition-model perez).",
         doc='Perez coefficient set; only used when `transposition_model = "perez"`',
         summary="pv.model_perez",
+    ),
+    "irradiance_resampling": AppConfigField(
+        default="auto",
+        cli_flags=("--irradiance-resampling",),
+        cli_choices=IRRADIANCE_RESAMPLING_POLICIES,
+        cli_help="Hourly irradiance to 15 minutes: auto conserves interval means; clear_sky reconstructs instant samples.",
+        doc=(
+            'Hourly-to-15-minute irradiance policy: `"auto"` conserves declared interval means and uses '
+            '`"clear_sky"` otherwise. `"clear_sky_energy_conserving"` requires interval-mean weather metadata. '
+            "Each component is conserved independently; no GHI/DNI/DHI closure is enforced"
+        ),
+        summary="simulation.irradiance_resampling",
     ),
     "solar_position": AppConfigField(
         default=DEFAULT_SOLAR_POSITION,
@@ -1047,7 +1060,6 @@ MONTECARLO_CONFIG_KEYS: frozenset[str] = frozenset(
         "seed",
         "min_load_scale",
         "max_load_scale",
-        "preserve_irradiance_energy",
         "collect_yearly",
         "n_procs",
         "execution_backend",
@@ -2122,6 +2134,7 @@ def _validate_time_and_weather(cfg: dict[str, Any]) -> None:
         raise ValueError("'pv_degradation_rate' must be between 0 (inclusive) and 1 (exclusive)")
     if cfg["resolution"] not in ("h", "15min"):
         raise ValueError("'resolution' must be 'h' or '15min'")
+    cfg["irradiance_resampling"] = validate_irradiance_resampling(cfg["irradiance_resampling"])
     _validate_weather_source(cfg)
     cfg["horizon_profile"] = normalise_horizon_profile(cfg["horizon_profile"])
     _validate_sky_settings(cfg["transposition_model"], cfg["albedo"], cfg["surface_type"], cfg["model_perez"])

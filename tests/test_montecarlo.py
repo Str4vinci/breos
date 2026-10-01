@@ -136,6 +136,7 @@ def test_montecarlo_records_transformed_runtime_weather_timing(monkeypatch):
     monkeypatch.setattr(montecarlo_module, "preload_weather_by_year", lambda *args, **kwargs: {2021: frame})
 
     def resample(weather, **kwargs):
+        assert kwargs["irradiance_resampling"] == "clear_sky_energy_conserving"
         result = pd.DataFrame({"temperature_2m": 10.0}, index=index)
         result.attrs = weather.attrs.copy()
         result.attrs["breos_weather_metadata"].update(
@@ -143,7 +144,7 @@ def test_montecarlo_records_transformed_runtime_weather_timing(monkeypatch):
                 "input_resolution": "h",
                 "output_resolution": "15min",
                 "irradiance_resampling_method": "makima",
-                "preserve_irradiance_energy": True,
+                "irradiance_resampling_resolved": "clear_sky_energy_conserving",
             }
         )
         return result
@@ -164,19 +165,20 @@ def test_montecarlo_records_transformed_runtime_weather_timing(monkeypatch):
     _precompute_year_caches(
         {
             "resolution": "15min",
+            "irradiance_resampling": "clear_sky_energy_conserving",
             "solar_position": "weather",
             "battery_temperature": 25.0,
             "battery_indoor_model": {"enabled": False},
         },
         type("Resolved", (), {"lat": 41.0, "lon": -8.0})(),
-        MonteCarloSettings(weather_file="unused.csv", preserve_irradiance_energy=True),
+        MonteCarloSettings(weather_file="unused.csv"),
         runtime_weather=runtime_weather,
     )
 
     assert runtime_weather["solar_position_offset_minutes"] == 7.5
     assert runtime_weather["metadata"]["timestamp_label_basis"] == "left"
     assert runtime_weather["metadata"]["source_timestamp_label_basis"] == "right"
-    assert runtime_weather["metadata"]["preserve_irradiance_energy"] is True
+    assert runtime_weather["metadata"]["irradiance_resampling_resolved"] == "clear_sky_energy_conserving"
 
 
 def test_run_montecarlo_shapes_and_years(tmp_path, write_multiyear_weather):
@@ -364,7 +366,7 @@ def test_run_montecarlo_run_streams_are_spawned_from_the_base_seed(tmp_path, wri
             assert row["Load_Scale"] == scale
     assert "SeedSequence(base_seed).spawn(n_runs)" in result.provenance["random_stream"]
     assert result.provenance["ledger_schema_version"] == "3.0"
-    assert result.provenance["result_schema_version"] == "2.8"
+    assert result.provenance["result_schema_version"] == "3.0"
     assert result.provenance["currency"] == "EUR"
     assert result.runs.attrs["currency"] == "EUR"
     assert result.provenance["economics"]["import_price_escalation"] == result.provenance["economics"]["inflation_rate"]

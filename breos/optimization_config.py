@@ -44,6 +44,7 @@ from breos.economics import DEFAULT_DISCOUNT_RATE, DEFAULT_INFLATION_RATE
 from breos.emissions import EmissionsParams
 from breos.pv.model_options import PV_MODEL_CONFIG_KEYS
 from breos.smart_charging import PLANNER_MODES
+from breos.weather import IRRADIANCE_RESAMPLING_POLICIES
 
 # Search defaults. They apply when [constraints] leaves a key out, and the
 # resolved values are recorded in the optimizer's provenance.
@@ -292,7 +293,11 @@ OPTIMIZATION_TABLE = TableSpec(
 )
 SIMULATION_TABLE = TableSpec(
     "simulation",
-    keys={"resolution": choice(("h", "15min")), "years_projection": _integer(1)},
+    keys={
+        "resolution": choice(("h", "15min")),
+        "years_projection": _integer(1),
+        "irradiance_resampling": choice(IRRADIANCE_RESAMPLING_POLICIES),
+    },
 )
 INVERTER_TABLE = TableSpec("inverter", keys={"efficiency": number(minimum=0, maximum=1, min_exclusive=True)})
 EMISSIONS_TABLE = TableSpec("emissions", keys={field.name: anything for field in fields(EmissionsParams)})
@@ -421,6 +426,7 @@ def resolve_optimization_config(config: Mapping[str, Any]) -> dict[str, Any]:
     inverter = resolved.pop("inverter", None) or {}
 
     simulation.setdefault("resolution", DEFAULT_RESOLUTION)
+    simulation.setdefault("irradiance_resampling", DEFAULTS["irradiance_resampling"])
     simulation["years_projection"] = _first_set(
         (
             ("simulation.years_projection", simulation.get("years_projection")),

@@ -99,8 +99,6 @@ discharge periods, an empty `charge_periods`, and `None` for
 `target_usable_fraction`, `grid_charge_efficiency` and
 `grid_import_limit_w`. The App's top-level `smart_charging` block reports it
 as it reports the other modes. Other results are unchanged.
-Version "2.7" adds the three terminal-health fields, `terminal_value` in
-resolved config and optional `provenance.terminal_value` (see above).
 
 Version "2.6" adds the no-system cost components: `no_system_fixed_charge_year1_prices`
 (see [Year-1 money keys](#year-1-money-keys)), `no_system_cost_import` and
@@ -116,6 +114,18 @@ Version "2.7" adds `overlap_policy` to `provenance.smart_charging` in App,
 Monte Carlo and optimizer results, including the default `reject`.
 `hold_target` permits overlapping periods in `fixed_target` only and keeps
 the grid target as the discharge floor. The timestep ledger is unchanged.
+Version "2.8" adds the three terminal-health fields, `terminal_value` in
+resolved config and optional `provenance.terminal_value` (see above).
+Version "3.0" replaces `preserve_irradiance_energy` with the irradiance
+resampling policy. The boolean is gone from App `provenance.weather` and
+from Monte Carlo `settings` and `runtime_weather.metadata`; those weather
+records carry `irradiance_resampling` (requested) and
+`irradiance_resampling_resolved` instead, with per-component fallback and
+zero-support counts and the observational `irradiance_closure` residuals.
+`irradiance_resampling` is added to `resolved_config` and to the optimizer's
+`simulation` config, and optimizer provenance gains `simulation`, `weather`
+and, for a real weather sequence, `weather_by_year`. See
+[hourly weather at 15-minute resolution](configuration.md#hourly-weather-at-15-minute-resolution).
 A renamed or removed key bumps the
 major version, an added key the minor. A result without the key predates 1.0.
 

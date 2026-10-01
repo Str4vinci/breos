@@ -179,7 +179,7 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   sweep over designs ([#165](https://github.com/Str4vinci/breos/issues/165)).
   The weather layer is keyed on the weather file's absolute path, its
   SHA-256 and that of its metadata sidecar, the year window, `target_year`,
-  resolution, coordinates, `preserve_irradiance_energy` and the
+  resolution, coordinates, `irradiance_resampling` and the
   solar-position method; a study with other weather inputs raises
   `ValueError`. The PV layer is keyed on the resolved config without
   `YEAR_CACHE_INDEPENDENT_KEYS` (the App sweep's `INPUT_INDEPENDENT_KEYS`,
@@ -585,6 +585,27 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   `breos_optimization_benchmark_v1`), also when a run fails part way.
 
 ### Changed
+- 15-minute runs on hourly weather no longer cut diffuse irradiance with a
+  universal 1.5 clear-sky-ratio cap ([#354](https://github.com/Str4vinci/breos/issues/354)).
+  On the saved PVGIS Porto TMY, annual DHI changes from 409.34 to 563.86
+  kWh/m² (hourly: 561.11); a 10-module PV-only case changes from 8,020.72
+  to 8,684.95 kWh DC (hourly: 8,672.06). The 5 W/m² regulariser remains,
+  with linear component interpolation at dawn/dusk where either source
+  clear-sky component is at most 5 W/m². The shared `irradiance_resampling`
+  policy defaults to `"auto"`: independent hourly component conservation
+  for declared interval means, and `"clear_sky"` for instantaneous or
+  undeclared input. Explicit `"clear_sky_energy_conserving"` requires
+  interval-mean metadata. App, Monte Carlo and projected optimization
+  share the policy (`simulation.irradiance_resampling` in the optimizer);
+  a 15-minute optimization given hourly weather now resamples it as App
+  does, where it used to raise on the hourly grid.
+  No irradiance closure or DHI/GHI clipping is imposed. Result schema 3.0
+  replaces `preserve_irradiance_energy` in App weather provenance and in
+  Monte Carlo `settings` and `runtime_weather.metadata` with
+  `irradiance_resampling` and `irradiance_resampling_resolved`, and adds
+  fallback/support counts and closure diagnostics to weather provenance and
+  `simulation`, `weather` and `weather_by_year` records to optimizer
+  provenance.
 - Result schema 2.0 renames `monthly[].import_kwh` and
   `yearly[].import_kwh` to `grid_import_kwh`, with paired `export_kwh`
   fields renamed to `grid_export_kwh`; values are unchanged. Optimizer columns
@@ -1767,6 +1788,12 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   unchanged.
 
 ### Removed
+- `resample_to_15min(..., preserve_irradiance_energy=...)`,
+  `MonteCarloSettings.preserve_irradiance_energy`, the `[montecarlo]` key
+  and `--preserve-irradiance-energy`. Use the top-level App
+  `irradiance_resampling` key / `--irradiance-resampling`, or the function's
+  `irradiance_resampling` argument, with `"auto"`, `"clear_sky"` or
+  `"clear_sky_energy_conserving"` (#354).
 - The package root now exposes only the public non-module symbols listed in
   `breos.__all__`; import battery helpers, constants, repair events, catalogue
   values, and weather utilities from their owning modules (`breos.battery`,
@@ -1925,7 +1952,7 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   that `celltype` is unused: it selects the empirical starting guess.
 - Optimization config keys that nothing read now raise
   ([#181](https://github.com/Str4vinci/breos/issues/181)): `[load]`,
-  `simulation.weather_file`, `simulation.irradiance_resampling`, the
+  `simulation.weather_file`, the
   top-level `name` and `execution_backend` (pass `execution_backend` to the
   function), and the undocumented `[pv_specs]` table, which duplicated
   `pv.params`. The example `configs/optimization/projected-optimization.toml`
