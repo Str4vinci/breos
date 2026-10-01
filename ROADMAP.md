@@ -10,7 +10,7 @@ plans behind individual items.
   provenance-bound schedules; opt-in fixed-target smart charging; descriptive
   load-profile keys replacing the numeric ones. Flat pricing and greedy
   self-consumption stay the compatible defaults. See
-  [design/architecture/0.7x-tariffs-and-smart-charging-plan.md](design/architecture/0.7x-tariffs-and-smart-charging-plan.md).
+  [design/architecture/tariffs-and-smart-charging.md](design/architecture/tariffs-and-smart-charging.md).
 - **0.7.x** — economic scenario and sensitivity analysis (scenarios,
   switching values, and probabilistic inputs), then broader price-aware
   dispatch strategies.

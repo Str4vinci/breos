@@ -1,8 +1,12 @@
 # String Inverter Sizing Design Note
 
+**Status:** Proposed. Only Phase 1, aggregate inverter clipping, is
+implemented.
+
 BREOS currently simulates PV production at the array level: a system has a
 module count, module model, tilt, azimuth, optional tracking, and an inverter
-loading ratio. That is enough for fast techno-economic simulation, but it does
+AC rating, set by `inverter_loading_ratio` or `inverter_ac_rating_kw`. That is
+enough for fast techno-economic simulation, but it does
 not prove that a design is electrically buildable.
 
 This note scopes future string-inverter support for the BREOS engine. The goal
@@ -132,7 +136,8 @@ Needed catalog fields:
 
 ## Recommended Order
 
-1. Add aggregate inverter AC clipping to the main `App` energy flow.
+1. Add aggregate inverter AC clipping to the main `App` energy flow (done
+   in 0.3.0).
 2. Add a pure validation API for string length, voltage, current, startup, and
    DC/AC ratio checks.
 3. Extend PV module and inverter data models/catalogs with required datasheet
