@@ -33,6 +33,7 @@ from breos.app_config import (  # noqa: E402
     NESTED_TABLE_SPECS,
     PERIOD_TABLE,
     PV_ARRAY_TABLE,
+    REFERENCE_TARIFF_TABLE,
     SMART_CHARGING_TABLE,
     TARIFF_TABLE,
 )
@@ -87,15 +88,24 @@ TABLES: tuple[tuple[str, TableSpec, str], ...] = (
         "Time-of-use prices, as `[tariff]` in TOML; see [Time-of-use tariffs](configuration.md#time-of-use-tariffs).",
     ),
     (
+        "reference_tariff",
+        REFERENCE_TARIFF_TABLE,
+        "What the household would pay without the system, as `[reference_tariff]` in TOML; see "
+        "[No-system reference tariff](configuration.md#no-system-reference-tariff). It prices the whole household "
+        "load and its own fixed charge for the no-system cost, and nothing else: no export, and no effect on the "
+        "dispatch. Without a `schedule` or `custom_schedule` it is one flat price, `import_prices = { all = <price> }`.",
+    ),
+    (
         "smart_charging",
         SMART_CHARGING_TABLE,
-        "Grid charging by tariff period, as `[smart_charging]` in TOML; see "
+        "Battery dispatch by tariff period, as `[smart_charging]` in TOML; see "
         '[Smart charging](configuration.md#smart-charging). `mode = "fixed_target"` needs '
         "`target_usable_fraction`, `charge_periods`, `discharge_periods` and `grid_charge_efficiency`, and refuses "
         'the planner keys. The experimental `mode = "daily_persistence"` (App only) needs the same keys but '
         "`target_usable_fraction`, which it refuses, and takes the optional planner keys `forecast_horizon_days`, "
-        '`target_levels` and `soc_states`. `grid_import_limit_w` is optional in both. `mode = "disabled"` takes '
-        "no other key.",
+        '`target_levels` and `soc_states`. `grid_import_limit_w` is optional in both. `mode = "discharge_only"` '
+        "takes `discharge_periods` alone and refuses every grid-charging and planner key: it never charges from "
+        'the grid. `mode = "disabled"` takes no other key.',
     ),
     (
         "period",
@@ -116,9 +126,9 @@ _CONDITIONALLY_REQUIRED = {
         "custom_schedule": "exactly one of these",
     },
     "smart_charging": {
-        "charge_periods": "unless `disabled`",
+        "charge_periods": "`fixed_target`, `daily_persistence`",
         "discharge_periods": "unless `disabled`",
-        "grid_charge_efficiency": "unless `disabled`",
+        "grid_charge_efficiency": "`fixed_target`, `daily_persistence`",
         "target_usable_fraction": "`fixed_target`",
     },
 }

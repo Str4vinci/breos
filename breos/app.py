@@ -33,7 +33,9 @@ from breos.weather import build_battery_temperature_series, fetch_tmy_weather_da
 
 # Nested tables App.revalue replaces whole: the entries of a price list
 # belong together, so a change must not keep a period it leaves out.
-_REPLACED_TABLES = frozenset({("tariff", "import_prices"), ("tariff", "export_prices")})
+_REPLACED_TABLES = frozenset(
+    {("tariff", "import_prices"), ("tariff", "export_prices"), ("reference_tariff", "import_prices")}
+)
 
 
 def _revalued_config(config: dict[str, Any], changes: Mapping[str, Any]) -> dict[str, Any]:
@@ -125,17 +127,20 @@ class App:
         ``changes`` holds configuration keys. A nested table such as
         ``costs`` or ``tariff`` changes only the keys it sets, and a key set
         to ``None`` in it is removed; ``{"tariff": None}`` removes the table.
-        A price list (``tariff.import_prices``, ``tariff.export_prices``)
-        replaces the old one whole. Only the economics keys in
-        :data:`REVALUATION_KEYS` may change: ``costs``, ``cost_preset``,
-        ``tariff``, the discount rate and the escalators.
+        A price list (``tariff.import_prices``, ``tariff.export_prices``,
+        ``reference_tariff.import_prices``) replaces the old one whole. Only
+        the economics keys in :data:`REVALUATION_KEYS` may change: ``costs``,
+        ``cost_preset``, ``tariff``, ``reference_tariff``, the discount rate
+        and the escalators.
 
         When the new prices cannot change the dispatch, the stored simulation
         is re-priced: flat prices, a tariff removed, or a tariff on the same
         schedule whose smart-charging instructions stay the same. Otherwise (a
         tariff added, a different schedule, or new import or export prices
         under the experimental ``daily_persistence`` smart charging, which
-        plans on them) the run is simulated again. The
+        plans on them) the run is simulated again. A ``reference_tariff``
+        added, changed or removed is always re-priced: it prices only the
+        no-system household, which the dispatch never sees. The
         result records which in ``provenance["revaluation"]``, with the keys
         that changed. A flat-price revaluation gives the same floats as a new
         simulation; a re-priced tariff sums energy by period instead of by

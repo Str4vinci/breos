@@ -54,11 +54,17 @@ from breos.execution import (
     validate_execution_backend,
 )
 from breos.load_profiles import LOAD_PROFILE_METADATA_KEY
-from breos.projection import ProjectionYear, build_pv_only_battery_config, run_projection, value_projection
+from breos.projection import (
+    ProjectionYear,
+    build_pv_only_battery_config,
+    effective_reference_escalation,
+    run_projection,
+    value_projection,
+)
 from breos.pv.model_options import DEFAULT_SOLAR_POSITION, resolve_solar_position_method, solar_position_time_offset
 from breos.result_schema import RESULT_SCHEMA_VERSION
 from breos.smart_charging import PLANNER_MODES, resolve_instructions, smart_charging_provenance
-from breos.tariffs import ResolvedTariff, result_currency, tariff_provenance
+from breos.tariffs import ResolvedTariff, reference_tariff_provenance, result_currency, tariff_provenance
 from breos.utils import package_version
 from breos.weather import (
     _weather_file_sha256,
@@ -416,8 +422,8 @@ def _reject_planned_smart_charging(resolved: ResolvedAppConfig) -> None:
     if spec is not None and spec.mode in PLANNER_MODES:
         raise ValueError(
             f"smart_charging mode = '{spec.mode}' is experimental and runs in breos.App only; Monte Carlo "
-            "shares one set of static instructions across trajectories. Use mode = 'fixed_target', or run the "
-            "design with breos.App."
+            "shares one set of static instructions across trajectories. Use mode = 'fixed_target' or "
+            "'discharge_only', or run the design with breos.App."
         )
 
 
@@ -574,8 +580,13 @@ def _simulate_trajectory(
     pv_chains: dict[tuple[int, int], AlignedSimulationInputs] | None,
     tariff: ResolvedTariff | None = None,
     instructions: DispatchInstructions | None = None,
+    reference_tariff: ResolvedTariff | None = None,
 ) -> tuple[dict[str, Any], pd.DataFrame]:
-    """Run one Monte Carlo trajectory and return its summary metrics."""
+    """Run one Monte Carlo trajectory and return its summary metrics.
+
+    A ``reference_tariff`` prices the trajectory's no-system household on its
+    own sampled load, so the with- and without-system costs stay paired.
+    """
     degradation_rate = cfg["pv_degradation_rate"]
     has_battery = config_has_battery(cfg)
 
@@ -612,6 +623,7 @@ def _simulate_trajectory(
         execution_backend=cast(str, settings.execution_backend),
         tariff=tariff,
         instructions=instructions,
+        reference_tariff=reference_tariff,
     )
     current_soh = projection.carry.soh_pct
     total_replacements = projection.total_replacements
@@ -706,11 +718,24 @@ def _resolve_study_tariff(
     """
     if resolved.tariff is None:
         return None
+    return resolved.tariff.resolve(_study_calendar(aligned_by_year), resolved.timezone)
+
+
+def _resolve_study_reference_tariff(
+    resolved: ResolvedAppConfig, aligned_by_year: dict[int, AlignedSimulationInputs]
+) -> ResolvedTariff | None:
+    """Resolve the configured no-system reference tariff once for the whole study, as the tariff is."""
+    if resolved.reference_tariff is None:
+        return None
+    return resolved.reference_tariff.resolve(_study_calendar(aligned_by_year), resolved.timezone)
+
+
+def _study_calendar(aligned_by_year: dict[int, AlignedSimulationInputs]) -> pd.DatetimeIndex:
     calendars = [inputs.index for inputs in aligned_by_year.values()]
-    reference = calendars[0]
-    if any(not calendar.equals(reference) for calendar in calendars[1:]):
+    calendar = calendars[0]
+    if any(not other.equals(calendar) for other in calendars[1:]):
         raise ValueError("Monte Carlo weather years do not share one calendar, so one tariff cannot price them")
-    return resolved.tariff.resolve(reference, resolved.timezone)
+    return pd.DatetimeIndex(calendar)
 
 
 def _initialize_worker(*context: Any) -> None:
@@ -733,6 +758,7 @@ def _run_trajectory_index(run_idx: int) -> tuple[int, dict[str, Any], pd.DataFra
         pv_chains,
         tariff,
         instructions,
+        reference_tariff,
     ) = _WORKER_CONTEXT
     # One observation window per trajectory: that is the unit of work whose
     # compile cost is being attributed. A no-op on the Python backend.
@@ -753,6 +779,7 @@ def _run_trajectory_index(run_idx: int) -> tuple[int, dict[str, Any], pd.DataFra
         pv_chains,
         tariff,
         instructions,
+        reference_tariff,
     )
     # None from a numba run means no compiled dispatch call was observed -- a
     # trajectory can legitimately never enter the kernel. Record that as
@@ -879,6 +906,7 @@ def run_montecarlo(
     )
     pv_chains = _prepare_pv_chains(cfg, resolved, aligned_by_year, settings, years_per_run)
     tariff = _resolve_study_tariff(resolved, aligned_by_year)
+    reference_tariff = _resolve_study_reference_tariff(resolved, aligned_by_year)
     # Every sampled weather year shares the tariff's calendar, so one set of
     # smart-charging instructions serves every trajectory and year.
     spec = resolved.smart_charging
@@ -897,6 +925,7 @@ def run_montecarlo(
         pv_chains,
         tariff,
         instructions,
+        reference_tariff,
     )
     if settings.n_procs == 1:
         _initialize_worker(*context)
@@ -952,6 +981,17 @@ def run_montecarlo(
             "economics": projection_rates_record(cfg),
             "ledger_schema_version": LEDGER_SCHEMA_VERSION,
             **({"tariff": tariff_provenance(tariff, calendar_year=settings.target_year)} if tariff is not None else {}),
+            **(
+                {
+                    "reference_tariff": reference_tariff_provenance(
+                        reference_tariff,
+                        calendar_year=settings.target_year,
+                        import_price_escalation=effective_reference_escalation(resolved),
+                    )
+                }
+                if reference_tariff is not None
+                else {}
+            ),
             **(
                 {"smart_charging": smart_charging_provenance(spec, instructions, tariff)}
                 if spec is not None and instructions is not None and tariff is not None

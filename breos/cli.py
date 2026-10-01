@@ -439,9 +439,10 @@ def _check_sweep_key(key: str) -> None:
 
     A top-level key must be registered. A dotted key must name a key of a
     nested table (``costs``, ``battery_indoor_model``, ``tariff``,
-    ``smart_charging``), and may go one level further only into a free-form
-    mapping such as ``tariff.import_prices.P1``. Values are checked later,
-    when each run's config is resolved.
+    ``reference_tariff``, ``smart_charging``), and may go further only into a free-form mapping,
+    as deep as it allows: ``tariff.import_prices.P1``, or
+    ``tariff.import_prices.winter.P1`` for prices by month season. Values are
+    checked later, when each run's config is resolved.
     """
     parts = key.split(".")
     top_level = parts[0]
@@ -464,16 +465,21 @@ def _check_sweep_key(key: str) -> None:
         raise ValueError(f"Unknown sweep key '{key}'. Available: {available}")
     if len(parts) == 2:
         return
-    if not isinstance(spec.keys[table_key], MappingOf):
+    checker = spec.keys[table_key]
+    if not isinstance(checker, MappingOf):
         raise ValueError(
             f"Unknown sweep key '{key}'. '{top_level}.{table_key}' is not a table of named entries; "
             f"sweep '{top_level}.{table_key}' itself."
         )
-    if len(parts) > 3:
-        raise ValueError(
-            f"Unknown sweep key '{key}'. '{top_level}.{table_key}' takes one more level, the entry name, "
-            f"as in '{top_level}.{table_key}.{parts[2]}'."
-        )
+    if len(parts) > 2 + checker.depth:
+        if checker.depth == 1:
+            levels = f"one more level, the entry name, as in '{top_level}.{table_key}.{parts[2]}'"
+        else:
+            levels = (
+                f"at most {checker.depth} more levels, as in '{top_level}.{table_key}.{parts[2]}' or "
+                f"'{top_level}.{table_key}.{parts[2]}.{parts[3]}'"
+            )
+        raise ValueError(f"Unknown sweep key '{key}'. '{top_level}.{table_key}' takes {levels}.")
 
 
 def _apply_sweep_values(config: dict[str, Any], varied: dict[str, Any]) -> dict[str, Any]:

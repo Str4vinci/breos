@@ -443,7 +443,10 @@ fixed_charge_per_day = 0.25              # optional, default 0
 
 - Every period of the schedule needs an import and an export price, or an
   `all` price for every period. A period the schedule does not have is an
-  error; there is no fallback to another schedule.
+  error; there is no fallback to another schedule. A custom schedule with
+  month seasons is priced by season instead: each season's table prices the
+  periods that season's rules use, or gives `all`, and pricing a period the
+  season never uses is an error.
 - Instead of `schedule`, you can define `[tariff.custom_schedule]` inline.
   Set `identifier`, `version`, `timezone`, `cycle`, `periods`, and one or
   more `[[tariff.custom_schedule.rules]]` tables. Do not set both schedule
@@ -451,6 +454,10 @@ fixed_charge_per_day = 0.25              # optional, default 0
   each rule's intervals must cover the whole local day without gaps or
   overlaps. See [Custom App schedules](../api/tariffs.md#custom-app-schedules)
   for a complete example.
+- A custom schedule can name calendar-month `seasons`, such as quarters,
+  instead of the standard/DST seasons. Its rules then select a season by
+  name, and each price list may give a table of period prices for every
+  season. See [Month seasons](../api/tariffs.md#month-seasons).
 - Holidays are optional and explicit. `holidays.dates` maps each covered
   year to its dates; provide the complete calendar you intend for each year
   the simulation can use. A run in a year absent from that map fails rather
@@ -476,6 +483,66 @@ optimization accepts the same tariff table in its nested config; see
 [Optimization](optimization.md#price-a-design-with-a-time-of-use-tariff).
 To compare several offers, see [Compare tariffs](recipes.md#compare-tariffs).
 
+## No-system reference tariff
+
+The savings of a system are measured against the household without it. By
+default that household pays the system's own prices: the `[tariff]`, or the
+flat `costs` prices, and the same fixed charge. A `[reference_tariff]` prices
+the household without the system on its own tariff instead, for example the
+offer it has today while the system runs on a time-of-use offer:
+
+```toml
+[reference_tariff]
+schedule = "pt_mainland_2026_daily_bi"   # or custom_schedule, or neither for one flat price
+currency = "EUR"
+import_prices = { peak = 0.2310, off_peak = 0.1210 }
+fixed_charge_per_day = 0.30              # optional, default 0
+# import_price_escalation = 0.03         # optional, default the system's import escalation
+```
+
+- The no-system cost of each year is the whole household load at the
+  reference import prices, plus the reference fixed charge, both escalated at
+  `reference_tariff.import_price_escalation`. Without that key they escalate
+  at the system's import escalation: `import_price_escalation` or, when that
+  is unset, `inflation_rate`. An explicit `0` keeps the reference prices
+  constant.
+- The reference has no export prices: the household without a system exports
+  nothing.
+- `fixed_charge_per_day` defaults to 0. Without it, the no-system cost has no
+  fixed charge, even when the system's tariff has one; set it to the fixed
+  charge the household pays without the system.
+- Without `schedule` or `custom_schedule` the reference is one flat price,
+  `import_prices = { all = <price> }`, and takes no `boundary_policy` or
+  `study_date`. With a schedule, the prices follow the `[tariff]` rules:
+  every period priced, or `all`, a schedule in the location's timezone, and a
+  resolution fine enough for the schedule's boundaries. A custom schedule
+  with calendar-month `seasons` also accepts prices per season and period,
+  such as `import_prices = { q1 = { peak = 0.30, off_peak = 0.12 }, ... }`.
+  Price every season and exactly the periods its rules use, or give `all`
+  within that season. Bundled, DST-season and flat references take prices
+  per period only. See [month seasons](../api/tariffs.md#month-seasons).
+- The reference can be set with or without a `[tariff]`. Its `currency` must
+  be the result's currency: the `[tariff]` currency, or EUR with flat prices.
+  BREOS does not convert.
+- The reference never changes the dispatch, and the costs with the system do
+  not change. Every project year replays the start-year calendar, as the
+  system tariff does. A `[period]` run bills the reference fixed charge on the
+  window's civil days.
+- `App.revalue` re-prices a reference that is added, changed or removed. It
+  does not simulate again for the reference, also under `daily_persistence`.
+- Monte Carlo prices the sampled load of each trajectory at the reference, so
+  the costs with and without the system stay paired. Projected optimization
+  accepts the same table in its nested config, and its NPV objective is the
+  saving against the reference.
+
+Results gain `provenance.reference_tariff`, with the schedule, prices, fixed
+charge, calendar policy and the escalation used, and the month partition
+`seasons` when configured. The no-system cost
+components are reported with or without a reference; see [Year-1 money
+keys](interpreting-results.md#year-1-money-keys). BREOS does not choose the
+cheapest offer the household could have had: to compare candidates, run each
+one as the reference.
+
 ## Smart charging
 
 A `[smart_charging]` table sets when the battery may discharge and when the
@@ -485,7 +552,7 @@ unchanged results:
 
 ```toml
 [smart_charging]
-mode = "fixed_target"               # or "disabled", or the experimental "daily_persistence"
+mode = "fixed_target"               # or "disabled", "discharge_only", or the experimental "daily_persistence"
 target_usable_fraction = 0.50       # 0 is battery_min_soc, 1 is battery_max_soc
 charge_periods = ["off_peak"]
 discharge_periods = ["mid_peak", "peak"]
@@ -529,6 +596,31 @@ instructions and the tariff's schedule hash.
 Monte Carlo applies the same instructions to every trajectory, and projected
 optimization to every candidate design with a battery; both record the same
 provenance. See `configs/examples/smart-charging-portugal.toml`.
+
+### Discharge only
+
+`mode = "discharge_only"` restricts when the battery discharges, without
+any grid charging:
+
+```toml
+[smart_charging]
+mode = "discharge_only"
+discharge_periods = ["peak"]        # required: the battery holds its charge in every other period
+```
+
+- In a discharge period the battery may discharge to the load. In every
+  other period it holds its charge. PV may charge the battery in every
+  period, and the grid never does.
+- The mode takes `discharge_periods` only. `charge_periods`,
+  `target_usable_fraction`, `grid_charge_efficiency`, `grid_import_limit_w`
+  and the planner settings are errors, since no grid charging takes place.
+- A peak-only policy lists the peak period; a selected-period policy lists
+  several. Discharge in every period is greedy self-consumption: use
+  `mode = "disabled"`, or list every period, which gives the same results.
+- It runs on the same dispatch instructions as `fixed_target`, in App, Monte
+  Carlo and projected optimization, on both execution backends.
+  `provenance.smart_charging` records the mode, the discharge periods and
+  the instruction and schedule hashes, with the grid-charge settings unset.
 
 ### Daily persistence (experimental)
 

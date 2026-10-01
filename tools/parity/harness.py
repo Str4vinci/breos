@@ -239,6 +239,7 @@ SCENARIOS = (
 # SCENARIOS, which also run against older trees.
 INSTRUCTION_SCENARIOS = (
     "noop_instructions",
+    "discharge_window",
     "fixed_target",
     "fixed_target_limited",
     "reserve_floor",
@@ -281,6 +282,17 @@ def build_instructed(name: str, freq: str = FREQ):
             grid_target_fraction=np.full(len(index), np.nan),
             grid_charge_efficiency=0.9,
             grid_import_limit_w=1500.0,
+        )
+    elif name == "discharge_window":
+        # discharge_only smart charging: the evening gate alone, no grid
+        # target, and the no-op scalars it resolves to.
+        hour = index.hour.to_numpy()
+        instructions = DispatchInstructions(
+            discharge_allowed=(hour >= 17) & (hour < 23),
+            reserve_fraction=np.zeros(len(index)),
+            grid_target_fraction=np.full(len(index), np.nan),
+            grid_charge_efficiency=1.0,
+            grid_import_limit_w=math.inf,
         )
     elif name == "fixed_target_limited":
         # Every shared limit binds some night: a 1 kW charge cap, a 1.2 kW

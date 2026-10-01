@@ -151,7 +151,7 @@ each timestep through the shared projection loop. Each project year replays
 the input calendar, with PV and battery degradation carried between years.
 Tariff prices affect the financial objective. The battery follows
 self-consumption dispatch unless a `smart_charging` table sets fixed-target
-charging, which the optimizer applies as App does. It is checked as App checks
+charging or `discharge_only`, which the optimizer applies as App does. It is checked as App checks
 it, with `battery_kwh` taken from the design, or from
 `constraints.max_battery_kwh` for a search. The instructions are resolved once
 per search; a candidate without a battery ignores them. Results record them
@@ -163,6 +163,12 @@ Fixed-design results record the schedule, prices, calendar and hashes in
 `result.provenance["tariff"]`. Search results record the same fields in
 `result.details["provenance"]["tariff"]`. Tariff-enabled searches also support
 `n_procs`, and their results can be pickled.
+
+A [`[reference_tariff]`](configuration.md#no-system-reference-tariff) table,
+as in App, prices the household without the system for every candidate, so
+`Projected_NPV` and the NPV objective are the saving against it. Without
+`import_price_escalation` it escalates at the `financials` import escalation.
+Results record it in `provenance["reference_tariff"]`.
 
 ## Evaluate one design in detail
 

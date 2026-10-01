@@ -32,6 +32,7 @@ from breos.dispatch_instructions import DispatchInstructions
 from breos.economics import (
     cost_analysis_projection,
     price_year_rows,
+    projection_rates_record,
     replacement_fraction_from_steps,
 )
 from breos.execution import observed_jit_cache_state, reset_jit_cache_observation
@@ -342,22 +343,37 @@ _PRICED_FLOWS: dict[str, tuple[str, str]] = {
 }
 
 
-def _period_energy_name(money_column: str, period: str) -> str:
-    return f"{_PRICED_FLOWS[money_column][0]}_kWh@{period}"
+def _period_energy_name(money_column: str, bucket: str) -> str:
+    return f"{_PRICED_FLOWS[money_column][0]}_kWh@{bucket}"
+
+
+def _price_buckets(tariff: ResolvedTariff) -> tuple[str, ...]:
+    """Each step's price bucket: its period, or its month season and period.
+
+    Every step in a bucket has one price under any prices for the schedule,
+    so energy summed by bucket can be re-priced exactly.
+    """
+    if tariff.season_labels is None:
+        return tariff.period_labels
+    return tuple(
+        f"{season}/{period}" for season, period in zip(tariff.season_labels, tariff.period_labels, strict=True)
+    )
 
 
 def _period_weights(tariff: ResolvedTariff) -> dict[str, tuple[str, np.ndarray]]:
-    """One 0/1 mask per tariff period and priced flow, so each year also records its energy by period.
+    """One 0/1 mask per price bucket and priced flow, so each year also records its energy by bucket.
 
-    That energy is what :func:`reprice_tariff_year_rows` re-prices a year from
-    when only the prices change.
+    A bucket is a tariff period, or a month season and period for a schedule
+    with month seasons. That energy is what :func:`reprice_tariff_year_rows`
+    re-prices a year from when only the prices change.
     """
-    labels = np.asarray(tariff.period_labels, dtype=object)
+    buckets = _price_buckets(tariff)
+    labels = np.asarray(buckets, dtype=object)
     weights: dict[str, tuple[str, np.ndarray]] = {}
-    for period in dict.fromkeys(tariff.period_labels):
-        mask = (labels == period).astype(float)
+    for bucket in dict.fromkeys(buckets):
+        mask = (labels == bucket).astype(float)
         for money_column, (column, _price) in _PRICED_FLOWS.items():
-            weights[_period_energy_name(money_column, period)] = (column, mask)
+            weights[_period_energy_name(money_column, bucket)] = (column, mask)
     return weights
 
 
@@ -396,12 +412,57 @@ def _tariff_money(
     return money
 
 
+def _reference_weights(reference: ResolvedTariff) -> dict[str, tuple[str, np.ndarray]]:
+    # The no-system household buys its whole load at the reference prices.
+    return {"Baseline_Import_Cost": ("Houseload", np.asarray(reference.import_price_per_kwh, dtype=float))}
+
+
+def _reference_money(
+    reference: ResolvedTariff,
+    weighted_w: Mapping[str, float],
+    hours_per_step: float,
+    n_steps: int,
+    billed_days: float | None = None,
+) -> dict[str, float]:
+    """A year's no-system money at the reference tariff's year-1 prices, billed as :func:`_tariff_money` bills."""
+    return {
+        "Baseline_Import_Cost": float(weighted_w["Baseline_Import_Cost"] * hours_per_step / 1000),
+        "Baseline_Fixed_Charge": (
+            reference.prices.fixed_charge_per_day * billed_days
+            if billed_days is not None
+            else _fixed_charge(reference, n_steps * hours_per_step)
+        ),
+    }
+
+
+def price_reference_year_rows(
+    yearly_df: pd.DataFrame, houseload_w: np.ndarray, reference: ResolvedTariff, freq: str
+) -> pd.DataFrame:
+    """Year rows with the no-system money re-priced at ``reference``, from one year's per-step load.
+
+    For revaluation without re-simulation. The reference prices only the
+    household load, which no price changes, and every App year replays the
+    one load on the one calendar, so ``houseload_w``, the first year's
+    ``Houseload``, is every year's. The sums are the year loop's own, so a
+    reference priced here gives the floats a fresh run gives.
+    """
+    if len(houseload_w) != len(reference.index):
+        raise ValueError("the household load and the reference tariff are on different calendars")
+    hours_per_step = get_hours_per_step(freq)
+    weights = _reference_weights(reference)
+    weighted = weighted_column_sums({"Houseload": np.asarray(houseload_w)}, weights)
+    repriced = yearly_df.copy()
+    repriced["Baseline_Import_Cost"] = float(weighted["Baseline_Import_Cost"] * hours_per_step / 1000)
+    repriced["Baseline_Fixed_Charge"] = [_billed_fixed_charge(reference, row) for _, row in repriced.iterrows()]
+    return repriced
+
+
 def _period_prices(tariff: ResolvedTariff, kind: str) -> dict[str, float]:
     prices = tariff.import_price_per_kwh if kind == "import" else tariff.export_price_per_kwh
-    by_period: dict[str, float] = {}
-    for label, price in zip(tariff.period_labels, prices, strict=True):
-        by_period.setdefault(label, float(price))
-    return by_period
+    by_bucket: dict[str, float] = {}
+    for bucket, price in zip(_price_buckets(tariff), prices, strict=True):
+        by_bucket.setdefault(bucket, float(price))
+    return by_bucket
 
 
 def reprice_tariff_year_rows(
@@ -412,7 +473,8 @@ def reprice_tariff_year_rows(
     For revaluation without re-simulation: ``period_energy`` is the
     :attr:`ProjectionRun.period_energy` of a run on a tariff with the same
     schedule, so only the prices differ. Each money column becomes the sum over
-    periods of energy times price, and the fixed charge the new daily charge
+    periods (month season and period, with month seasons) of energy times
+    price, and the fixed charge the new daily charge
     over the simulated hours. A fresh simulation sums energy times price per
     step instead, so the two agree to rounding, not bit for bit.
     """
@@ -463,8 +525,9 @@ class ProjectionRun:
     # The first year's per-step frame; None for a summary projection.
     first_year_results_df: pd.DataFrame | None
     jit_cache_states: list[str]
-    # With a tariff, each year's priced energy by tariff period (kWh), one
-    # row per year, so a price change can be re-priced without re-simulating.
+    # With a tariff, each year's priced energy by tariff period, or by month
+    # season and period (kWh), one row per year, so a price change can be
+    # re-priced without re-simulating.
     period_energy: pd.DataFrame | None = None
     # With a daily controller, the instructions it executed, one per
     # simulated step in project order across every year (ADR 0002 A11).
@@ -489,6 +552,7 @@ def project_years(
     record_period_energy: bool = False,
     day_controller: DailyDispatchController | None = None,
     replay_seam: bool = True,
+    reference_tariff: ResolvedTariff | None = None,
 ) -> ProjectionRun:
     """Simulate ``years`` project years, carrying the battery from one to the next.
 
@@ -518,6 +582,12 @@ def project_years(
     instructions each year executed. ``replay_seam`` says the next year
     replays the calendar, so a civil day cut by a year's end continues at
     the next year's head; a standalone ``[period]`` passes False.
+
+    A ``reference_tariff``, resolved on the same calendar, prices the
+    no-system household instead: each row's ``Baseline_Import_Cost`` is the
+    year's load at its prices and ``Baseline_Fixed_Charge`` its fixed
+    charge. It never touches the dispatch. Without one, the no-system
+    household pays the system's own prices.
     """
     if day_controller is not None:
         if instructions is not None:
@@ -530,6 +600,8 @@ def project_years(
     record_period_energy = record_period_energy and tariff is not None
     period_weights = _period_weights(tariff) if record_period_energy and tariff is not None else {}
     weights = {**_tariff_weights(tariff), **period_weights} if tariff is not None else None
+    if reference_tariff is not None:
+        weights = {**(weights or {}), **_reference_weights(reference_tariff)}
     carry = initial_carry or CarryState()
     rows: list[dict[str, Any]] = []
     period_rows: list[dict[str, float]] = []
@@ -565,8 +637,9 @@ def project_years(
         if year.aligned is not None:
             if day_controller is not None:
                 raise ValueError("a daily controller runs on per-step projection years, not aligned summaries")
-            if tariff is not None:
-                _check_tariff_calendar(tariff, year.aligned.index)
+            for priced in (tariff, reference_tariff):
+                if priced is not None:
+                    _check_tariff_calendar(priced, year.aligned.index)
             summary = simulate_energy_balance_summary(aligned=year.aligned, weights=weights, **common)
             weighted_w: Mapping[str, float] = summary.weighted_sums
             carry = carry.after_summary(
@@ -580,11 +653,12 @@ def project_years(
         else:
             if year.pv_dc is None or year.houseload is None:
                 raise ValueError("a projection year needs aligned inputs, or pv_dc and houseload")
-            if tariff is not None:
-                # The simulation runs on this range (align_simulation_inputs).
-                # Checked first, so a year off the tariff's calendar fails
-                # here rather than on the instructions' step count.
-                _check_tariff_calendar(tariff, pd.date_range(year.pv_dc.index[0], year.pv_dc.index[-1], freq=freq))
+            # The simulation runs on this range (align_simulation_inputs).
+            # Checked first, so a year off the tariff's calendar fails here
+            # rather than on the instructions' step count.
+            for priced in (tariff, reference_tariff):
+                if priced is not None:
+                    _check_tariff_calendar(priced, pd.date_range(year.pv_dc.index[0], year.pv_dc.index[-1], freq=freq))
             if day_controller is None:
                 results_df, _total_pv, _summary_df, n_rep, degradation_df, state = cast(
                     "tuple[pd.DataFrame, float, pd.DataFrame, int, pd.DataFrame, dict[str, Any]]",
@@ -658,11 +732,20 @@ def project_years(
                 pv_degradation_factor=year.pv_degradation_factor,
                 annual_fec=annual_fec,
                 extra=year.extra,
-                money=(
-                    _tariff_money(tariff, weighted_w, hours_per_step, n_steps, year.extra.get("Billed_Days"))
-                    if tariff is not None
-                    else None
-                ),
+                money={
+                    **(
+                        _tariff_money(tariff, weighted_w, hours_per_step, n_steps, year.extra.get("Billed_Days"))
+                        if tariff is not None
+                        else {}
+                    ),
+                    **(
+                        _reference_money(
+                            reference_tariff, weighted_w, hours_per_step, n_steps, year.extra.get("Billed_Days")
+                        )
+                        if reference_tariff is not None
+                        else {}
+                    ),
+                },
             )
         )
         if record_period_energy:
@@ -695,6 +778,7 @@ def run_projection(
     record_period_energy: bool = False,
     day_controller: DailyDispatchController | None = None,
     replay_seam: bool = True,
+    reference_tariff: ResolvedTariff | None = None,
 ) -> ProjectionRun:
     """Run :func:`project_years` for an App configuration.
 
@@ -722,6 +806,7 @@ def run_projection(
         record_period_energy=record_period_energy,
         day_controller=day_controller,
         replay_seam=replay_seam,
+        reference_tariff=reference_tariff,
     )
 
 
@@ -737,6 +822,13 @@ class ProjectionValue:
     cost_projection: pd.DataFrame
     lcoe: float
     total_replacement_cost: float
+
+
+def effective_reference_escalation(resolved: ResolvedAppConfig) -> float:
+    """The escalation of a run's no-system reference tariff: its own, else the system's import escalation."""
+    if resolved.reference_tariff is not None and resolved.reference_tariff.import_price_escalation is not None:
+        return float(resolved.reference_tariff.import_price_escalation)
+    return projection_rates_record(resolved.cfg)["import_price_escalation"]
 
 
 def value_projection(cfg: dict[str, Any], resolved: ResolvedAppConfig, run: ProjectionRun) -> ProjectionValue:
@@ -760,6 +852,9 @@ def value_projection(cfg: dict[str, Any], resolved: ResolvedAppConfig, run: Proj
         discount_rate=cfg["discount_rate"],
         emissions_params=resolved.emissions_params,
         currency=result_currency(resolved.tariff),
+        baseline_import_price_escalation=(
+            resolved.reference_tariff.import_price_escalation if resolved.reference_tariff is not None else None
+        ),
     )
     return ProjectionValue(
         costs=costs,

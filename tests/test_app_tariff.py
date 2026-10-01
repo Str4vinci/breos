@@ -505,7 +505,7 @@ def test_custom_schedule_run_records_its_config_and_tariff_provenance():
     app.simulate()
     result = app.result()
 
-    assert result["result_schema_version"] == "2.3"
+    assert result["result_schema_version"] == "2.6"
     assert result["provenance"]["tariff"]["schedule"] == "example_supplier_2023"
     assert result["provenance"]["tariff"]["schedule_version"] == "2023-01"
     custom = result["provenance"]["resolved_config"]["tariff"]["custom_schedule"]
@@ -568,6 +568,6 @@ def test_montecarlo_accepts_custom_schedule_with_explicit_calendar(tmp_path, wri
     result = run_montecarlo({**BASE, "projection_years": 1, "tariff": CUSTOM_TARIFF}, settings)
 
     assert result.provenance["tariff"]["schedule"] == "example_supplier_2023"
-    assert result.provenance["result_schema_version"] == "2.3"
+    assert result.provenance["result_schema_version"] == "2.6"
     recorded = result.provenance["resolved_config"]["tariff"]["custom_schedule"]
     assert recorded["identifier"] == "example_supplier_2023"

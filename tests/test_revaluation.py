@@ -163,6 +163,7 @@ def test_revaluation_keys_are_the_prices():
         "import_price_escalation",
         "inflation_rate",
         "om_escalation",
+        "reference_tariff",
         "replacement_cost_learning",
         "sell_price_inflation",
         "tariff",

@@ -342,7 +342,13 @@ def _replacement_npv(replacement: pd.Series, replacement_exponents: np.ndarray, 
 # Year-row money columns at year-1 prices (ADR 0003 E7). The projection
 # escalates, times and discounts them; TOU valuation fills them from per-step
 # energy and prices in the year loop.
-YEAR_ROW_MONEY_COLUMNS = ("Import_Cost", "Export_Revenue", "Fixed_Charge", "Baseline_Import_Cost")
+YEAR_ROW_MONEY_COLUMNS = (
+    "Import_Cost",
+    "Export_Revenue",
+    "Fixed_Charge",
+    "Baseline_Import_Cost",
+    "Baseline_Fixed_Charge",
+)
 
 
 def _replacement_outlays_t0(counts: Any, each: float) -> np.ndarray:
@@ -391,7 +397,9 @@ def price_year_rows(yearly_summary_df: pd.DataFrame, costs: Dict[str, float]) ->
     ``Import_Cost`` is ``Import_kWh`` times the import price, ``Export_Revenue``
     ``Export_kWh`` times the export price, ``Baseline_Import_Cost`` the load
     bought without a system, and ``Fixed_Charge`` the daily charge for the
-    simulated duration, ``Simulated_Hours / 24`` days (E5). A row with
+    simulated duration, ``Simulated_Hours / 24`` days (E5).
+    ``Baseline_Fixed_Charge``, the fixed charge without a system, is
+    ``Fixed_Charge`` unless a reference tariff set it. A row with
     ``Billed_Days`` (a [period] window) is billed on those civil days instead,
     and a row without either is billed as a 365-day year. ``Replacement_Cost`` is
     the year's ``Replacements`` at ``costs["replacement_cost_each"]``, t = 0
@@ -421,6 +429,9 @@ def price_year_rows(yearly_summary_df: pd.DataFrame, costs: Dict[str, float]) ->
         "Export_Revenue": lambda: priced["Export_kWh"] * costs["electricity_sold_cost"],
         "Fixed_Charge": lambda: days * costs["daily_power_cost"],
         "Baseline_Import_Cost": lambda: priced["Load_kWh"] * costs["electricity_cost"],
+        # After Fixed_Charge: without a reference tariff the household pays
+        # the same fixed charge with or without the system.
+        "Baseline_Fixed_Charge": lambda: priced["Fixed_Charge"],
     }
     for column, value in computed.items():
         if column not in priced.columns:
@@ -492,6 +503,8 @@ COST_PROJECTION_COLUMNS = (
     "Load_kWh",
     "Cost_No_Sys_Annual",
     "Cost_No_Sys_Cumulative",
+    "Cost_No_Sys_Import",
+    "Cost_No_Sys_Fixed_Charge",
     "PV_Production_kWh",
     "Export_kWh",
     "Degradation_Factor",
@@ -543,6 +556,7 @@ def value_year_rows(
     import_price_escalation: Optional[float] = None,
     om_escalation: Optional[float] = None,
     replacement_cost_learning: float = 0.0,
+    baseline_import_price_escalation: Optional[float] = None,
 ) -> pd.DataFrame:
     """Turn priced year rows into each year's component cashflows (the valuation stage).
 
@@ -550,19 +564,33 @@ def value_year_rows(
     money of :func:`price_year_rows`. Energy, fixed-charge and O&M flows are
     escalated from year-1 prices; each replacement is priced at t = 0 and
     inflated to its swap instant, ``Replacement_Time_Years`` (ADR 0003 E2,
-    E3). Nothing is discounted here. ``attrs["total_replacement_cost"]`` is
-    the replacements at t = 0 prices.
+    E3). The no-system cost, ``Baseline_Import_Cost`` plus
+    ``Baseline_Fixed_Charge``, escalates at ``baseline_import_price_escalation``,
+    a reference tariff's; None uses the import escalation. Nothing is
+    discounted here. ``attrs["total_replacement_cost"]`` is the replacements
+    at t = 0 prices.
     """
     years = year_rows["Year"]
     rates = resolve_escalation_rates(inflation_rate, import_price_escalation, om_escalation)
     inflation_factors = (1 + rates["import_price_escalation"]) ** (years - 1)
+    baseline_factors = (
+        inflation_factors
+        if baseline_import_price_escalation is None
+        else (1 + baseline_import_price_escalation) ** (years - 1)
+    )
     om_factors = (1 + rates["om_escalation"]) ** (years - 1)
     sell_inflation_factors = (1 + sell_price_inflation) ** (years - 1)
 
     flows = pd.DataFrame({"Year": years})
     if "Load_kWh" in year_rows.columns:
         flows["Load_kWh"] = year_rows["Load_kWh"]
-    flows["Cost_No_Sys_Annual"] = (year_rows["Baseline_Import_Cost"] + year_rows["Fixed_Charge"]) * inflation_factors
+    # Summed before escalating, as the no-system cost always was, so a run
+    # without a reference tariff gives the same floats.
+    flows["Cost_No_Sys_Annual"] = (
+        year_rows["Baseline_Import_Cost"] + year_rows["Baseline_Fixed_Charge"]
+    ) * baseline_factors
+    flows["Cost_No_Sys_Import"] = year_rows["Baseline_Import_Cost"] * baseline_factors
+    flows["Cost_No_Sys_Fixed_Charge"] = year_rows["Baseline_Fixed_Charge"] * baseline_factors
     flows["PV_Production_kWh"] = year_rows["PV_Production_kWh"]
     flows["Export_kWh"] = year_rows["Export_kWh"]
     flows["Degradation_Factor"] = year_rows["PV_Degradation_Factor"]
@@ -718,6 +746,7 @@ def cost_analysis_projection(
     import_price_escalation: Optional[float] = None,
     om_escalation: Optional[float] = None,
     replacement_cost_learning: float = 0.0,
+    baseline_import_price_escalation: Optional[float] = None,
 ) -> pd.DataFrame:
     """
     Perform multi-year cost projection analysis from simulated year rows.
@@ -749,6 +778,9 @@ def cost_analysis_projection(
             when given, the avoided-emissions columns are added.
         currency: The currency every money input is in. BREOS does not
             convert; it is recorded as ``attrs["currency"]`` for labels.
+        baseline_import_price_escalation: Annual escalation of the
+            no-system cost, a reference tariff's; None uses the import
+            escalation.
 
     Returns:
         DataFrame with yearly cost projections
@@ -776,6 +808,7 @@ def cost_analysis_projection(
         import_price_escalation=import_price_escalation,
         om_escalation=om_escalation,
         replacement_cost_learning=replacement_cost_learning,
+        baseline_import_price_escalation=baseline_import_price_escalation,
     )
     proj = discount_cashflows(
         flows, total_investment=costs["total_initial_cost"], discount_rate=discount_rate, currency=currency

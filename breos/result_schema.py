@@ -46,6 +46,32 @@ App and Monte Carlo results, and ``battery_replacement_treatment``, with its
 ``allow_terminal_replacement`` policy and a ``terminal_period`` description,
 to the provenance of a projected design and of an optimizer search. Default
 results are otherwise unchanged.
+
+2.4 adds calendar-month seasons to custom tariff schedules: ``seasons`` in
+``resolved_config.tariff.custom_schedule`` and, as the month partition, in
+``provenance.tariff`` of App, Monte Carlo and optimizer results that define
+them. With month seasons, ``import_prices`` and ``export_prices`` in the
+resolved config and in ``provenance.tariff`` may map each season to its
+period prices instead of each period to a price. Results without month
+seasons are unchanged.
+
+2.5 adds ``mode = "discharge_only"`` to ``provenance.smart_charging`` of App,
+Monte Carlo and optimizer results: a run in that mode records its discharge
+periods, an empty ``charge_periods`` and None for
+``target_usable_fraction``, ``grid_charge_efficiency`` and
+``grid_import_limit_w``. The App's top-level ``smart_charging`` block reports
+it as it reports the other modes. Other results are unchanged.
+
+2.6 adds the no-system cost components (#339): ``no_system_cost_import`` and
+``no_system_cost_fixed_charge`` in each App ``financial`` row from year 1,
+the top-level ``no_system_fixed_charge_year1_prices``, the
+``Cost_No_Sys_Import`` and ``Cost_No_Sys_Fixed_Charge`` cost-projection
+columns and the ``Baseline_Fixed_Charge`` year-row column (and so Monte Carlo
+trajectories and optimizer tables), and
+``reference_tariff`` in the ``resolved_config`` of App and Monte Carlo
+results. ``provenance.reference_tariff`` is present only when a
+``[reference_tariff]`` is configured, in App, Monte Carlo and optimizer
+provenance. Without one, every existing value is unchanged.
 """
 
-RESULT_SCHEMA_VERSION = "2.3"
+RESULT_SCHEMA_VERSION = "2.6"

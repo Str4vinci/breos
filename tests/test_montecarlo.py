@@ -68,7 +68,7 @@ def test_montecarlo_worker_omits_uncollected_trajectory(monkeypatch):
         "_simulate_trajectory",
         lambda *args: ({"npv_savings": 1.0}, trajectory),
     )
-    montecarlo_module._initialize_worker({}, None, np.array([2021]), 1, settings, {}, {}, None, None)
+    montecarlo_module._initialize_worker({}, None, np.array([2021]), 1, settings, {}, {}, None, None, None)
 
     run_idx, metrics, returned_trajectory, jit_cache_state = montecarlo_module._run_trajectory_index(0)
 
@@ -364,7 +364,7 @@ def test_run_montecarlo_run_streams_are_spawned_from_the_base_seed(tmp_path, wri
             assert row["Load_Scale"] == scale
     assert "SeedSequence(base_seed).spawn(n_runs)" in result.provenance["random_stream"]
     assert result.provenance["ledger_schema_version"] == "3.0"
-    assert result.provenance["result_schema_version"] == "2.3"
+    assert result.provenance["result_schema_version"] == "2.6"
     assert result.provenance["currency"] == "EUR"
     assert result.runs.attrs["currency"] == "EUR"
     assert result.provenance["economics"]["import_price_escalation"] == result.provenance["economics"]["inflation_rate"]

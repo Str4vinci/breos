@@ -82,7 +82,7 @@ def test_optimizer_provenance_records_the_schema_version_and_currency(tariff_cas
 
     for case in (tariff_case, (weather, load, flat)):
         provenance = evaluate(case).provenance
-        assert provenance["result_schema_version"] == "2.3"
+        assert provenance["result_schema_version"] == "2.6"
         assert provenance["currency"] == "EUR"
     assert "tariff" not in evaluate((weather, load, flat)).provenance
 
@@ -269,7 +269,9 @@ def test_invalid_tariff_fails_before_starting_workers(tariff_case, monkeypatch):
 
 
 @pytest.mark.parametrize(
-    "smart_charging", [None, {**FIXED_TARGET, "target_usable_fraction": 1.0}], ids=["greedy", "fixed-target"]
+    "smart_charging",
+    [None, {**FIXED_TARGET, "target_usable_fraction": 1.0}, {"mode": "discharge_only", "discharge_periods": ["peak"]}],
+    ids=["greedy", "fixed-target", "discharge-only"],
 )
 @pytest.mark.parametrize(("freq", "backend"), [("h", "python"), ("15min", "numba")])
 def test_three_year_tariff_design_reproduces_through_app(
@@ -361,7 +363,10 @@ def test_three_year_tariff_design_reproduces_through_app(
     assert result["provenance"]["tariff"] == fixed.provenance["tariff"]
     if smart_charging:
         assert result["provenance"]["smart_charging"] == fixed.provenance["smart_charging"]
+    if smart_charging and smart_charging["mode"] == "fixed_target":
         assert fixed.yearly["Grid_AC_To_Battery_kWh"].min() > 0.0, "the design must grid-charge"
+    elif smart_charging:
+        assert (fixed.yearly["Grid_AC_To_Battery_kWh"] == 0.0).all()
     for app_row, (_, opt_row) in zip(result["financial"][1:], fixed.financial.iterrows(), strict=True):
         for app_key, column in (
             ("cost_import", "Cost_Import"),
