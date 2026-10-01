@@ -26,6 +26,21 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   §14a Module 3-style quarterly tariff with illustrative windows and
   prices. Result schema 2.4 records `seasons` in the resolved config and in
   `provenance.tariff`, where the price lists may now be given by season.
+- `[smart_charging] mode = "discharge_only"` discharges the battery only in
+  the listed `discharge_periods` and never charges it from the grid
+  ([#338](https://github.com/Str4vinci/breos/issues/338)). It expresses a
+  peak-only or selected-period discharge policy directly, where a
+  `fixed_target` table with a zero target and unused grid-charging settings
+  was needed before. The mode takes `discharge_periods` alone and refuses
+  `charge_periods`, `target_usable_fraction`, `grid_charge_efficiency`,
+  `grid_import_limit_w` and the planner settings. PV may still charge the
+  battery in every period. It runs on the same dispatch instructions and
+  civil-day controller as `fixed_target`, in App, Monte Carlo and projected
+  optimization, on both execution backends; `App.revalue` re-prices it.
+  Listing every period gives the greedy result bit for bit, and the
+  default greedy dispatch is unchanged. ADR 0002 A8 is unchanged.
+  Result schema 2.5 records the mode in `provenance.smart_charging`, with an
+  empty `charge_periods` and the grid-charge settings as None.
 - `battery_allow_terminal_replacement` (App and Monte Carlo), the
   optimizer's `[battery] allow_terminal_replacement` and
   `BatteryConfig.allow_terminal_replacement` can skip buying a battery that

@@ -492,7 +492,7 @@ unchanged results:
 
 ```toml
 [smart_charging]
-mode = "fixed_target"               # or "disabled", or the experimental "daily_persistence"
+mode = "fixed_target"               # or "disabled", "discharge_only", or the experimental "daily_persistence"
 target_usable_fraction = 0.50       # 0 is battery_min_soc, 1 is battery_max_soc
 charge_periods = ["off_peak"]
 discharge_periods = ["mid_peak", "peak"]
@@ -536,6 +536,31 @@ instructions and the tariff's schedule hash.
 Monte Carlo applies the same instructions to every trajectory, and projected
 optimization to every candidate design with a battery; both record the same
 provenance. See `configs/examples/smart-charging-portugal.toml`.
+
+### Discharge only
+
+`mode = "discharge_only"` restricts when the battery discharges, without
+any grid charging:
+
+```toml
+[smart_charging]
+mode = "discharge_only"
+discharge_periods = ["peak"]        # required: the battery holds its charge in every other period
+```
+
+- In a discharge period the battery may discharge to the load. In every
+  other period it holds its charge. PV may charge the battery in every
+  period, and the grid never does.
+- The mode takes `discharge_periods` only. `charge_periods`,
+  `target_usable_fraction`, `grid_charge_efficiency`, `grid_import_limit_w`
+  and the planner settings are errors, since no grid charging takes place.
+- A peak-only policy lists the peak period; a selected-period policy lists
+  several. Discharge in every period is greedy self-consumption: use
+  `mode = "disabled"`, or list every period, which gives the same results.
+- It runs on the same dispatch instructions as `fixed_target`, in App, Monte
+  Carlo and projected optimization, on both execution backends.
+  `provenance.smart_charging` records the mode, the discharge periods and
+  the instruction and schedule hashes, with the grid-charge settings unset.
 
 ### Daily persistence (experimental)
 

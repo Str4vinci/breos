@@ -68,7 +68,7 @@ def _tri_tariff(index):
             {**FIXED, "mode": "perfect_foresight"},
             {},
             ValueError,
-            r"'smart_charging\.mode' must be one of: disabled, fixed_target, daily_persistence; got 'perfect_foresight'",
+            r"'smart_charging\.mode' must be one of: disabled, fixed_target, daily_persistence, discharge_only; got 'perfect_foresight'",
         ),
         (
             {**FIXED, "target_soc": 0.5},

@@ -54,6 +54,13 @@ them. With month seasons, ``import_prices`` and ``export_prices`` in the
 resolved config and in ``provenance.tariff`` may map each season to its
 period prices instead of each period to a price. Results without month
 seasons are unchanged.
+
+2.5 adds ``mode = "discharge_only"`` to ``provenance.smart_charging`` of App,
+Monte Carlo and optimizer results: a run in that mode records its discharge
+periods, an empty ``charge_periods`` and None for
+``target_usable_fraction``, ``grid_charge_efficiency`` and
+``grid_import_limit_w``. The App's top-level ``smart_charging`` block reports
+it as it reports the other modes. Other results are unchanged.
 """
 
-RESULT_SCHEMA_VERSION = "2.4"
+RESULT_SCHEMA_VERSION = "2.5"
