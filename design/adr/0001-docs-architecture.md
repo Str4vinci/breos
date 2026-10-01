@@ -26,7 +26,7 @@ doesn't drown the practical battery-configuration page.
 
 ## Update (0.7.0)
 
-The reference now has nine domain areas: battery degradation models gained
-their own page. Narrative guides live in `docs/getting-started/`, and model
+The reference now has ten domain areas: battery degradation models and
+tariffs gained their own pages. Narrative guides live in `docs/getting-started/`, and model
 boundaries and validation live in `docs/modeling/`, instead of the
 `user-guide/` and `concepts/` folders this record anticipated.

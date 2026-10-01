@@ -2,7 +2,7 @@
 
 What the current release line delivers and what is planned next. Future items
 are intentions, not commitments. See GitHub issues for active work, and
-`design/` for the decision records and plans behind individual items.
+`design/` for the decision records and design notes behind individual items.
 
 ## 0.7.0
 
@@ -32,7 +32,7 @@ greedy self-consumption stay the defaults.
 - Sub-year simulation windows (`[period]`) and an absolute inverter AC rating.
 
 See [CHANGELOG.md](CHANGELOG.md) for the complete list, and
-[design/architecture/0.7x-tariffs-and-smart-charging-plan.md](design/architecture/0.7x-tariffs-and-smart-charging-plan.md)
+[design/architecture/tariffs-and-smart-charging.md](design/architecture/tariffs-and-smart-charging.md)
 for the tariff and smart-charging design.
 
 ## Next releases

@@ -1,20 +1,22 @@
 # 0003 — Economic basis, escalators, and currency-neutral results
 
-- **Status:** Accepted (E1–E10)
+- **Status:** Accepted (E1–E10); implemented in 0.7.0
 - **Date:** 2026-09-26; E1, E6 and E8 accepted 2026-09-26; E2–E5, E7, E9 and
   the E6 inflation default accepted 2026-09-27; E10 accepted 2026-10-01; E9
   amended 2026-10-01
 
 ## Context
 
-The 0.7 plan calls for a BREOS economic-basis ADR before tariff valuation
-(`design/architecture/0.7x-tariffs-and-smart-charging-plan.md`, source-to-target
-map). The legacy research ADR it replaces is design evidence only. #183
+The 0.7 delivery plan called for a BREOS economic-basis ADR before tariff
+valuation. That plan was completed and removed;
+[Tariffs and smart charging](../architecture/tariffs-and-smart-charging.md)
+describes the result. The legacy research ADR this record replaces is design
+evidence only. #183
 records where the current code resists currency, TOU valuation and component
 cashflows. This record settles the conventions; it changes no code.
 
-What the code does today, in `cost_analysis_projection` (`breos/economics.py`)
-unless stated:
+What the code did when this record was written (0.6.x), in
+`cost_analysis_projection` (`breos/economics.py`) unless stated:
 
 - One rate, `inflation_rate`, escalates the import price, O&M, the daily
   charge and replacement cost. The CLI help calls it "annual electricity price
@@ -57,8 +59,8 @@ E1, E6 and E8 were **Accepted** on 2026-09-26. E2–E5, E7, E9 and the E6
 inflation default were **Accepted** on 2026-09-27. Accepting them accepted
 the design, not its implementation. All nine were then implemented for
 0.7.0 under #183: E6 in #271, E5 and E7 in #273, E8 and E9 in #283, E1, E2
-and E3 in #288, and E4 in #291. The changelog carries the migration table
-below as shipped.
+and E3 in #288, and E4 in #291. E10, accepted on 2026-10-01, was implemented
+in #352. The changelog carries the migration table below as shipped.
 
 ### E1. Nominal basis for the projection APIs — Accepted 2026-09-26
 
@@ -162,6 +164,8 @@ escalators, timing and discounting. The flat case computes kWh × price in the
 current operation order and stays bit-identical; TOU fills the same columns
 from `sum(energy × price)` over the steps. Storing each year's energy by
 tariff period, for revaluation without re-simulation, is a 0.7.x follow-up.
+*(Done in 0.7.0: a tariff run records its energy by period, and by season
+for a schedule with month seasons, and `App.revalue` re-prices from it.)*
 The App `financial` rows gain the component cashflows the projection already
 computes: `Cost_Import`, `Revenue_Export`, `Cost_Operation`, `Cost_Daily`,
 `Cost_Replacement` and `Replacement_Time_Years`.
@@ -236,7 +240,10 @@ As shipped, the changelog's table omits rows 12 and 18, which went earlier in
 0.7.0 with the steady-state objective basis (#270), rows 28 and 29, whose
 function was removed (#287), row 27, whose function was removed with the
 tool-only plots (#186), and rows 24–26, whose labels went with the
-`breos.io` summary helper that produced them.
+`breos.io` summary helper that produced them. Later in 0.7.0 the optimizer
+columns `Projected_Breakeven_Year` and `Projected_Breakeven_Year_Interpolated`
+(row 17) became `Projected_Payback_Year` and
+`Projected_Payback_Year_Interpolated`.
 
 Rows 24–26 substitute the resolved currency code, so an EUR run writes the
 same text as today. (0.7.0 later removed the helper that wrote them.)

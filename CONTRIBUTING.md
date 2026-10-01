@@ -83,9 +83,10 @@ Keep documentation close to its audience:
   model behavior, data resources, and public API documentation there.
 - `ROADMAP.md` communicates public release intent and capabilities under
   consideration.
-- `design/` keeps proposals, implementation plans, and architecture decision
-  records for contributor discussion without presenting them as released
-  behavior.
+- `design/` keeps architecture decision records and short notes on the
+  current design or on proposals, for contributors, without presenting them
+  as released behavior. Delivery plans are removed once they ship; git
+  history keeps them.
 - `maintainers/` keeps operational procedures such as the release checklist.
 
 When an issue moves from proposal to implementation, update the public guide
