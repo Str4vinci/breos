@@ -21,10 +21,10 @@ body:
     id: environment
     attributes:
       label: Environment
-      description: Python version, OS, BREOS version
+      description: Python version, OS, and BREOS version (`breos --version`)
       placeholder: |
         Python: 3.13
         OS: Ubuntu 24.04
-        breos: 0.2.0
+        breos: X.Y.Z
     validations:
       required: true

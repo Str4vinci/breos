@@ -42,11 +42,17 @@ For release-style validation, run the same gates used by CI:
 ```bash
 uv run ruff check breos/ tests/ tools/
 uv run ruff format --check breos/ tests/ tools/
-uv run pytest tests/ -v --cov=breos --cov-report=term-missing
+uv run mypy breos
+uv run pytest tests/ -v -n auto
 uv run pytest tests/ -m slow -v
 uv run python tools/verify_release_artifacts.py
-uv run --extra docs sphinx-build -W -b html docs docs/_build/html
+BREOS_DOCS_OFFLINE=1 uv run --extra docs sphinx-build -W -b html docs docs/_build/html
 ```
+
+`BREOS_DOCS_OFFLINE=1` skips the intersphinx inventories, as CI does; drop it
+to check the external type links too. The pytest suite includes the
+generated-reference and golden-output checks (`tools/generate_config_docs.py
+--check` and `tools/generate_app_golden.py --check`).
 
 ## Branching
 
@@ -90,6 +96,8 @@ checklist verbatim.
 
 All tests are in `tests/` and use pytest. Tests run offline using synthetic weather fixtures — no API calls required.
 
+Some entry points:
+
 - `test_app.py` — public API facade
 - `test_battery.py` — battery simulation and degradation
 - `test_economics.py` — cost calculations and projections
@@ -106,12 +114,14 @@ uv run pytest tests/test_app.py -v
 
 - PRs should target `develop`, not `main`
 - Include a brief description of what changed and why
-- Make sure CI passes. It runs lint, format checks, tests on Python 3.11
-  through 3.14, release artifact verification, and the Sphinx docs build on
-  every PR. The lightweight macOS/Windows public-entrypoint checks run on PRs
-  into `main` or `release/**`, and nightly on `develop`. Core-package coverage
-  is published by a separate `coverage-report` job that runs nightly, on
-  demand, and at release.
+- Make sure CI passes. Every PR, and every push to `develop`, `main` or
+  `release/**`, runs lint, format and type checks, tests on Python 3.11
+  through 3.14, release artifact verification and the Sphinx docs build, plus
+  the suite on the lowest supported dependency versions and without Numba.
+  The lightweight macOS/Windows public-entrypoint checks run on pushes to and
+  PRs into `main` or `release/**`; the slow tests and the core-package
+  coverage report run on pushes to and PRs into `release/**`. All three also
+  run nightly and on demand.
 - Keep PRs focused — one feature or fix per PR
 
 ## Reporting Issues

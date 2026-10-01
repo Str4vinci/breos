@@ -1,19 +1,52 @@
 # BREOS Roadmap
 
-Planned work that is not yet scheduled. These are intentions, not commitments.
-See GitHub issues for active work, and `design/architecture/` for the detailed
-plans behind individual items.
+What the current release line delivers and what is planned next. Future items
+are intentions, not commitments. See GitHub issues for active work, and
+`design/` for the decision records and plans behind individual items.
+
+## 0.7.0
+
+0.7.0 adds tariff-aware economics and opt-in battery control. Flat pricing and
+greedy self-consumption stay the defaults.
+
+- Time-of-use tariff valuation through a `[tariff]` table, with packaged
+  Portuguese and Spanish schedules and custom schedules that can change prices
+  and windows by calendar month.
+- A separate `[reference_tariff]` for the household without the system.
+- Opt-in `[smart_charging]`: fixed-target grid charging, discharge-only
+  windows, and an experimental daily persistence planner.
+- Separate escalators for import prices, export prices and O&M, a replacement
+  cost learning rate, and one default discount and inflation rate everywhere.
+- An optional terminal-health credit reported beside the unadjusted NPV, and
+  `App.revalue` for price scenarios on a finished run.
+- Currency-neutral result names, with the result currency in provenance. EUR
+  is the only supported currency so far.
+- Descriptive load-profile keys: demandlib H0 (bundled), E-REDES BTN A/B/C,
+  the BDEW H0 publication and REE 2.0TD (external files only), plus `custom`
+  for any other CSV. The numeric keys are gone. The SynPRO family profile is
+  dropped; LoadProfileGenerator, CREST and measured data are read through
+  `custom`.
+- One explicit `irradiance_resampling` policy for hourly-to-15-minute weather
+  in App, Monte Carlo and optimization, without the old cap on diffuse
+  irradiance.
+- Sub-year simulation windows (`[period]`) and an absolute inverter AC rating.
+
+See [CHANGELOG.md](CHANGELOG.md) for the complete list, and
+[design/architecture/0.7x-tariffs-and-smart-charging-plan.md](design/architecture/0.7x-tariffs-and-smart-charging-plan.md)
+for the tariff and smart-charging design.
 
 ## Next releases
 
-- **0.7.0** — currency concept; time-of-use tariff valuation with static,
-  provenance-bound schedules; opt-in fixed-target smart charging; descriptive
-  load-profile keys replacing the numeric ones. Flat pricing and greedy
-  self-consumption stay the compatible defaults. See
-  [design/architecture/0.7x-tariffs-and-smart-charging-plan.md](design/architecture/0.7x-tariffs-and-smart-charging-plan.md).
-- **0.7.x** — economic scenario and sensitivity analysis (scenarios,
-  switching values, and probabilistic inputs), then broader price-aware
-  dispatch strategies.
+- **0.7.1** — study tooling: scripted, reproducible study workflows on the
+  public API, such as paired Monte Carlo comparisons across designs and
+  tariffs, and reusable revaluation scenarios. A general capability that these
+  workflows need goes into the library itself.
+- **0.8** — 15-minute irradiance from hourly data by quadrature
+  reconstruction, with GHI derived from DNI and DHI. The `solar_position`
+  default changes from `"interval-start"` to `"weather"`, which reads the
+  representative time of each step from the weather metadata. Both change
+  results and will ship with an upgrade note. BLAST degradation under Monte
+  Carlo is a candidate.
 - **1.0** — flip to the recommended model defaults with a documented upgrade
   note.
 
@@ -24,8 +57,8 @@ plans behind individual items.
   drift suite, so per-dataset deltas are tracked in CI alongside PVGIS and
   PVWatts.
 - A documented "recommended" model profile (haydavies/perez transposition,
-  mid-interval sun position, diffuse IAM, mount-appropriate thermal
-  coefficients) to become the default at 1.0.
+  diffuse IAM, mount-appropriate thermal coefficients) to become the default
+  at 1.0.
 - More pvlib physics behind the self-contained PV stage: extended
   cell-temperature and IAM options, and optional DC-side loss models (ohmic,
   soiling, snow).
@@ -34,28 +67,28 @@ plans behind individual items.
 
 ## Economics
 
-- Currency concept plus non-EU cost and grid-emission presets.
-- Time-of-use tariff structures as pluggable price time series.
-- Economic scenario and sensitivity analysis: escalator decomposition, a
-  scenario runner, switching values, and economic uncertainty in Monte Carlo.
+- More currencies, and non-EU cost presets.
+- Economic sensitivity analysis on top of `App.revalue`: switching values and
+  economic uncertainty in Monte Carlo.
+- Broader price-aware dispatch strategies.
 
 ## Battery
 
-- Per-chemistry aging for NMC and NCA alongside the native LFP model.
-- BLAST under Monte Carlo (candidate 0.8.0).
+- Per-chemistry aging for NMC and NCA in the native model, alongside LFP.
+- BLAST under Monte Carlo (candidate for 0.8).
 
 ## Performance and portability
 
-- Worker controls (`--workers`) and conservative auto-defaults for CPU and
-  memory, with care for fanless Apple Silicon machines.
+- Conservative automatic worker defaults for CPU and memory, in place of the
+  explicit `n_procs` (default 1) of Monte Carlo and optimization, with care for
+  fanless laptops.
 - A startup diagnostic and a benchmark/smoke mode for long runs.
 
 ## Onboarding and tooling
 
-- Keep install snippets, config tables, and version-specific text aligned with
-  the current PyPI release.
 - Multi-config parameter sweeps and parallel batch runs.
 - An offline `breos demo` command using clearly labeled synthetic inputs.
+- A named LoadProfileGenerator adapter, beside the `custom` CSV path.
 
 ## Assumptions to bound
 
@@ -129,15 +162,3 @@ for and against, not designs.
   deficit is a billable import. Open question: "simulator for PV and storage
   for buildings" currently means grid-connected buildings throughout the code,
   and declining this is a legitimate answer.
-
-## Reference load profiles
-
-The profile set is settled for 0.7.0 (#182): demandlib H0 (bundled), E-REDES
-BTN A/B/C, the BDEW H0 publication and REE 2.0TD (external files only), plus
-`custom` for any other CSV.
-
-- **SynPRO Family profile** (Fraunhofer ISE), once profile key `"2"`, is
-  dropped for good.
-- **LoadProfileGenerator** output (Noah Pflugradt, FZJ IEK-3), once profile key
-  `"3"`, is user input through `load_profile = "custom"`, as are CREST exports
-  and measured data. A named LoadProfileGenerator adapter can follow later.
