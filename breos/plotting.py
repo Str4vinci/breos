@@ -6,6 +6,23 @@ This module provides visualization functions for:
 - Energy balance results
 - Monthly/yearly/weekly analysis
 - Battery degradation
+
+Every plot function returns what it draws, and one rule decides whether it
+saves and closes it:
+
+- With an output directory (``results_directory``, or ``output_path`` for
+  :func:`plot_pv_loss_waterfall`), the function saves the figure there,
+  closes it, and returns it. A closed figure can still be saved again with
+  ``fig.savefig``, but ``plt.show()`` and tools that collect the open
+  figures no longer see it.
+- With ``results_directory=None``, the default, nothing is written, and the
+  figure is returned open, for ``plt.show()``, a notebook or a
+  sphinx-gallery example. Close it with ``plt.close(fig)`` when done.
+
+A function that draws one figure returns a matplotlib ``Figure``, or None
+when it has nothing to draw. A function that draws several returns a dict of
+them, keyed by the file name each is saved as, without the scenario suffix
+and the ``.png`` extension, for example ``"breakeven_cumulative"``.
 """
 
 import os
@@ -16,6 +33,7 @@ import numpy as np
 import pandas as pd
 from scipy.stats import t as student_t
 
+from breos.constants import DEFAULT_EOL_PERCENTAGE
 from breos.economics import _initial_investment, find_payback_year_interpolated
 from breos.tariffs import DEFAULT_CURRENCY
 from breos.utils import find_irradiance_column, local_datetime_index
@@ -27,9 +45,31 @@ MONTH_LABELS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "
 try:
     import matplotlib.dates as mdates
     import matplotlib.pyplot as plt
+    from matplotlib.figure import Figure
+    from matplotlib.lines import Line2D
     from matplotlib.patches import Polygon, Rectangle
+    from matplotlib.ticker import MaxNLocator
 except ImportError as exc:
     raise ModuleNotFoundError('breos.plotting needs matplotlib. Install it with: pip install "breos[plots]"') from exc
+
+
+def _finish(
+    fig: Figure,
+    results_directory: Optional[str],
+    filename: str,
+    dpi: int = 300,
+    bbox_inches: Optional[str] = None,
+) -> Figure:
+    """Save ``fig`` as ``filename`` in ``results_directory`` and close it; with None, leave it open.
+
+    Returns ``fig`` either way. See the module docstring for the rule.
+    """
+    if results_directory is None:
+        return fig
+    os.makedirs(results_directory, exist_ok=True)
+    fig.savefig(os.path.join(results_directory, filename), dpi=dpi, bbox_inches=bbox_inches)
+    plt.close(fig)
+    return fig
 
 
 def _currency(frame: pd.DataFrame) -> str:
@@ -148,6 +188,16 @@ def _format_loss_delta(stage: dict) -> str:
     return f"{sign}{delta_pct:.2f}% ({sign}{_format_loss_energy(delta_kwh)})"
 
 
+def _is_monofacial_rear_stage(stage: Mapping[str, Any], waterfall: Mapping[str, Any]) -> bool:
+    """True for the bifacial rear-gain stage of a system without bifacial modelling."""
+    if stage.get("key") != "bifacial_rear_gain":
+        return False
+    bifacial = waterfall.get("bifacial")
+    if isinstance(bifacial, Mapping) and "enabled" in bifacial:
+        return not bifacial["enabled"]
+    return float(stage.get("delta_kwh", 0.0)) == 0.0
+
+
 def plot_pv_loss_waterfall(
     waterfall: dict,
     output_path: Optional[str] = None,
@@ -157,17 +207,22 @@ def plot_pv_loss_waterfall(
     """
     Plot an annual PV loss diagram from ``pv_loss_waterfall``.
 
+    A monofacial system has no ``Bifacial rear gain`` stage on the diagram:
+    the stage is left out when ``waterfall["bifacial"]["enabled"]`` is false,
+    or, for a waterfall without that block, when the stage changes nothing.
+
     Args:
         waterfall: ``App.result()["pv_loss_waterfall"]`` dictionary.
         output_path: Optional PNG/PDF/SVG path. When provided, parent
-            directories are created and the figure is saved.
+            directories are created, the figure is saved and then closed.
+            Without it, the figure is returned open.
         title: Figure title.
         figsize: Matplotlib figure size.
 
     Returns:
         The matplotlib ``Figure``.
     """
-    stages = list(waterfall.get("stages", []))
+    stages = [stage for stage in waterfall.get("stages", []) if not _is_monofacial_rear_stage(stage, waterfall)]
     if len(stages) < 2:
         raise ValueError("waterfall must contain at least two stages")
 
@@ -384,20 +439,23 @@ def plot_pv_loss_waterfall(
         if output_dir:
             os.makedirs(output_dir, exist_ok=True)
         fig.savefig(output_path, dpi=200, bbox_inches="tight")
+        plt.close(fig)
 
     return fig
 
 
-def yearly_graphs(results_df: pd.DataFrame, results_directory: str) -> None:
+def yearly_graphs(results_df: pd.DataFrame, results_directory: Optional[str] = None) -> Figure:
     """
     Create yearly aggregated summary.
 
     Args:
         results_df: Energy balance results DataFrame
-        results_directory: Directory to save plots
-    """
-    os.makedirs(results_directory, exist_ok=True)
+        results_directory: Directory to save ``yearly_energy.png`` in. None
+            returns the figure open without saving it.
 
+    Returns:
+        The matplotlib ``Figure``.
+    """
     df = _local_time_indexed(results_df)
 
     columns = ["PV_Production", "Houseload", "Import_From_Grid", "PV_AC_Export"]
@@ -420,22 +478,30 @@ def yearly_graphs(results_df: pd.DataFrame, results_directory: str) -> None:
     ax.legend([labels[column] for column in columns])
     ax.grid(True, alpha=0.3, axis="y")
 
-    plt.tight_layout()
-    plt.savefig(f"{results_directory}/yearly_energy.png", dpi=300)
-    plt.close()
+    fig.tight_layout()
+    return _finish(fig, results_directory, "yearly_energy.png")
 
 
-def weekly_graphs(results_df: pd.DataFrame, week_number: int, results_directory: str) -> None:
+def weekly_graphs(
+    results_df: pd.DataFrame, week_number: int, results_directory: Optional[str] = None
+) -> Optional[Figure]:
     """
     Create detailed weekly time series plot.
 
+    Draws PV production and load in kW, and the battery's stored energy in
+    kWh on a second axis when the results have it, with one legend for all
+    three and a title naming the ISO week and its dates.
+
     Args:
         results_df: Energy balance results DataFrame
-        week_number: Week of year to plot (1-52)
-        results_directory: Directory to save plots
-    """
-    os.makedirs(results_directory, exist_ok=True)
+        week_number: ISO week of the year to plot (1-53)
+        results_directory: Directory to save ``week_<n>_profile.png`` in.
+            None returns the figure open without saving it.
 
+    Returns:
+        The matplotlib ``Figure``, or None when the results have no row in
+        that week.
+    """
     df = _local_time_indexed(results_df)
 
     # Filter to specific week
@@ -444,28 +510,41 @@ def weekly_graphs(results_df: pd.DataFrame, week_number: int, results_directory:
 
     if week_data.empty:
         print(f"No data found for week {week_number}")
-        return
+        return None
 
     fig, ax = plt.subplots(figsize=(14, 6))
+    # The legend goes on the top axes, so the battery line does not hide it.
+    legend_ax = ax
+    handles = []
 
     if "PV_Production" in week_data.columns:
-        ax.fill_between(
-            week_data.index, 0, week_data["PV_Production"] / 1000, alpha=0.3, color="gold", label="PV Production"
+        handles.append(
+            ax.fill_between(
+                week_data.index, 0, week_data["PV_Production"] / 1000, alpha=0.3, color="gold", label="PV production"
+            )
         )
     if "Houseload" in week_data.columns:
-        ax.plot(week_data.index, week_data["Houseload"] / 1000, "b-", label="Load", linewidth=1.5)
+        handles += ax.plot(week_data.index, week_data["Houseload"] / 1000, "b-", label="Load", linewidth=1.5)
     if "Battery_Energy" in week_data.columns:
-        ax2 = ax.twinx()
-        ax2.plot(week_data.index, week_data["Battery_Energy"] / 1000, "g--", label="Battery (kWh)", linewidth=1.5)
+        ax2 = legend_ax = ax.twinx()
+        handles += ax2.plot(
+            week_data.index, week_data["Battery_Energy"] / 1000, "g--", label="Battery energy (kWh)", linewidth=1.5
+        )
         ax2.set_ylabel("Battery Energy (kWh)", color="green")
 
     ax.set_xlabel("Date")
     ax.set_ylabel("Power (kW)")
     ax.xaxis.set_major_formatter(mdates.DateFormatter("%a %d"))
+    first, last = week_data.index.min(), week_data.index.max()
+    ax.set_title(f"Week {week_number}: {first:%d %b %Y} to {last:%d %b %Y}", loc="left")
+    if handles:
+        # Above the axes, right of the title, where it hides no data.
+        legend_ax.legend(
+            handles=handles, loc="lower right", bbox_to_anchor=(1.0, 1.0), ncol=len(handles), frameon=False
+        )
 
-    plt.tight_layout()
-    plt.savefig(f"{results_directory}/week_{week_number}_profile.png", dpi=300)
-    plt.close()
+    fig.tight_layout()
+    return _finish(fig, results_directory, f"week_{week_number}_profile.png")
 
 
 def _degradation_x(degradation_df: pd.DataFrame) -> pd.Index:
@@ -475,7 +554,7 @@ def _degradation_x(degradation_df: pd.DataFrame) -> pd.Index:
     return degradation_df.index
 
 
-def degradation_plots(degradation_df: pd.DataFrame, results_directory: str) -> None:
+def degradation_plots(degradation_df: pd.DataFrame, results_directory: Optional[str] = None) -> "dict[str, Figure]":
     """
     Create battery degradation visualization.
     Generates separate plots for SOH, degradation components and FEC, plus
@@ -483,13 +562,20 @@ def degradation_plots(degradation_df: pd.DataFrame, results_directory: str) -> N
 
     Args:
         degradation_df: Degradation tracking DataFrame
-        results_directory: Directory to save plots
+        results_directory: Directory to save plots. None returns the figures
+            open without saving them.
+
+    Returns:
+        The figures, keyed by file name: ``battery_degradation_soh``,
+        ``battery_degradation_components_per_battery``,
+        ``battery_degradation_fec``, ``battery_resistance_growth`` and
+        ``battery_effective_rte``, each when the frame has its columns.
+        Empty for an empty frame.
     """
+    figures: "dict[str, Figure]" = {}
     if degradation_df.empty:
         print("No degradation data to plot")
-        return
-
-    os.makedirs(results_directory, exist_ok=True)
+        return figures
 
     x = _degradation_x(degradation_df)
 
@@ -498,9 +584,8 @@ def degradation_plots(degradation_df: pd.DataFrame, results_directory: str) -> N
     ax1.plot(x, degradation_df["SOH"], "b-", linewidth=2)
     ax1.set_ylabel("SOH (%)")
     ax1.grid(True, alpha=0.3)
-    plt.tight_layout()
-    plt.savefig(f"{results_directory}/battery_degradation_soh.png", dpi=300)
-    plt.close()
+    fig.tight_layout()
+    figures["battery_degradation_soh"] = _finish(fig, results_directory, "battery_degradation_soh.png")
 
     # 2. Degradation components for the active battery inventory.
     def _plot_degradation_components(cycle_data, calendar_data, filename, ylabel):
@@ -519,9 +604,8 @@ def degradation_plots(degradation_df: pd.DataFrame, results_directory: str) -> N
         ax.set_ylabel(ylabel)
         ax.legend()
         ax.grid(True, alpha=0.3)
-        plt.tight_layout()
-        plt.savefig(os.path.join(results_directory, filename), dpi=300)
-        plt.close()
+        fig.tight_layout()
+        figures[filename.removesuffix(".png")] = _finish(fig, results_directory, filename)
 
     # These production columns reset when the battery is replaced.
     if "Cumulative_Cycle_Degradation" in degradation_df.columns:
@@ -537,27 +621,34 @@ def degradation_plots(degradation_df: pd.DataFrame, results_directory: str) -> N
         ax3.plot(x, degradation_df["Cumulative_FEC"], "g-", linewidth=2)
         ax3.set_ylabel("Full Equivalent Cycles")
         ax3.grid(True, alpha=0.3)
-        plt.tight_layout()
-        plt.savefig(f"{results_directory}/battery_degradation_fec.png", dpi=300)
-        plt.close()
+        fig.tight_layout()
+        figures["battery_degradation_fec"] = _finish(fig, results_directory, "battery_degradation_fec.png")
 
     # 4. Resistance growth and RTE (if available)
     if "Resistance_Growth" in degradation_df.columns:
-        plot_resistance_and_efficiency(degradation_df, results_directory)
+        figures.update(plot_resistance_and_efficiency(degradation_df, results_directory))
+    return figures
 
 
-def plot_resistance_and_efficiency(degradation_df: pd.DataFrame, results_directory: str) -> None:
+def plot_resistance_and_efficiency(
+    degradation_df: pd.DataFrame, results_directory: Optional[str] = None
+) -> "dict[str, Figure]":
     """
     Plot battery resistance growth and effective round-trip efficiency.
 
     Args:
         degradation_df: Degradation tracking DataFrame with Resistance_Growth and Effective_RTE columns
-        results_directory: Directory to save plots
-    """
-    if degradation_df.empty or "Resistance_Growth" not in degradation_df.columns:
-        return
+        results_directory: Directory to save plots. None returns the figures
+            open without saving them.
 
-    os.makedirs(results_directory, exist_ok=True)
+    Returns:
+        The figures, keyed by file name: ``battery_resistance_growth``, and
+        ``battery_effective_rte`` when the frame has ``Effective_RTE``. Empty
+        when the frame has no ``Resistance_Growth``.
+    """
+    figures: "dict[str, Figure]" = {}
+    if degradation_df.empty or "Resistance_Growth" not in degradation_df.columns:
+        return figures
 
     x = _degradation_x(degradation_df)
 
@@ -566,9 +657,8 @@ def plot_resistance_and_efficiency(degradation_df: pd.DataFrame, results_directo
     ax.plot(x, degradation_df["Resistance_Growth"] * 100, "r-", linewidth=2)
     ax.set_ylabel("Resistance Growth (%)")
     ax.grid(True, alpha=0.3)
-    plt.tight_layout()
-    plt.savefig(f"{results_directory}/battery_resistance_growth.png", dpi=300)
-    plt.close()
+    fig.tight_layout()
+    figures["battery_resistance_growth"] = _finish(fig, results_directory, "battery_resistance_growth.png")
 
     # Effective RTE plot
     if "Effective_RTE" in degradation_df.columns:
@@ -576,15 +666,15 @@ def plot_resistance_and_efficiency(degradation_df: pd.DataFrame, results_directo
         ax.plot(x, degradation_df["Effective_RTE"] * 100, "m-", linewidth=2)
         ax.set_ylabel("Round-Trip Efficiency (%)")
         ax.grid(True, alpha=0.3)
-        plt.tight_layout()
-        plt.savefig(f"{results_directory}/battery_effective_rte.png", dpi=300)
-        plt.close()
+        fig.tight_layout()
+        figures["battery_effective_rte"] = _finish(fig, results_directory, "battery_effective_rte.png")
+    return figures
 
 
 def plot_cell_temperature(
     results_df: pd.DataFrame,
-    results_directory: str,
-) -> None:
+    results_directory: Optional[str] = None,
+) -> Optional[Figure]:
     """
     Plot monthly battery cell temperature statistics (min, mean, max).
 
@@ -593,12 +683,15 @@ def plot_cell_temperature(
 
     Args:
         results_df: Hourly results DataFrame with 'Datetime' and 'T_cell' columns.
-        results_directory: Directory to save plots
+        results_directory: Directory to save ``battery_cell_temperature.png``
+            in. None returns the figure open without saving it.
+
+    Returns:
+        The matplotlib ``Figure``, or None when the results have no
+        ``T_cell`` column.
     """
     if "T_cell" not in results_df.columns:
-        return
-
-    os.makedirs(results_directory, exist_ok=True)
+        return None
 
     df = _local_time_indexed(results_df)
 
@@ -632,28 +725,29 @@ def plot_cell_temperature(
     ax.set_ylabel("Cell Temperature (\u00b0C)", fontsize=12)
     ax.grid(True, alpha=0.3)
     ax.legend(fontsize=10)
-    plt.tight_layout()
-    plt.savefig(f"{results_directory}/battery_cell_temperature.png", dpi=300)
-    plt.close()
+    fig.tight_layout()
+    return _finish(fig, results_directory, "battery_cell_temperature.png")
 
 
 def plot_timeseries(
     df: pd.DataFrame,
     columns: List[str],
-    results_directory: str,
+    results_directory: Optional[str] = None,
     filename: str = "timeseries.png",
-) -> None:
+) -> Figure:
     """
     Plot multiple columns as time series.
 
     Args:
         df: DataFrame with datetime index
         columns: Column names to plot
-        results_directory: Directory to save plot
+        results_directory: Directory to save plot. None returns the figure
+            open without saving it.
         filename: Output filename
-    """
-    os.makedirs(results_directory, exist_ok=True)
 
+    Returns:
+        The matplotlib ``Figure``.
+    """
     fig, ax = plt.subplots(figsize=(14, 6))
 
     for col in columns:
@@ -665,12 +759,13 @@ def plot_timeseries(
     ax.legend()
     ax.grid(True, alpha=0.3)
 
-    plt.tight_layout()
-    plt.savefig(f"{results_directory}/{filename}", dpi=300)
-    plt.close()
+    fig.tight_layout()
+    return _finish(fig, results_directory, filename)
 
 
-def plot_breakeven(cost_projection: pd.DataFrame, results_directory: str, scenario_name: str = "") -> None:
+def plot_breakeven(
+    cost_projection: pd.DataFrame, results_directory: Optional[str] = None, scenario_name: str = ""
+) -> "dict[str, Figure]":
     """
     Plot break-even analysis: PV system vs no system accumulated costs.
 
@@ -682,10 +777,13 @@ def plot_breakeven(cost_projection: pd.DataFrame, results_directory: str, scenar
 
     Args:
         cost_projection: DataFrame from cost_analysis_projection()
-        results_directory: Directory to save plots
+        results_directory: Directory to save plots. None returns the figures
+            open without saving them.
         scenario_name: Optional suffix for filenames
+
+    Returns:
+        The figures, keyed ``breakeven_cumulative`` and ``breakeven_annual``.
     """
-    os.makedirs(results_directory, exist_ok=True)
     suffix = f"_{scenario_name}" if scenario_name else ""
 
     years = cost_projection["Year"]
@@ -751,9 +849,8 @@ def plot_breakeven(cost_projection: pd.DataFrame, results_directory: str, scenar
     ax1.legend(loc="upper left", fontsize=11)
     ax1.grid(True, alpha=0.3)
 
-    plt.tight_layout()
-    plt.savefig(f"{results_directory}/breakeven_cumulative{suffix}.png", dpi=300)
-    plt.close()
+    fig1.tight_layout()
+    _finish(fig1, results_directory, f"breakeven_cumulative{suffix}.png")
 
     # =========================================================================
     # GRAPH 2: Annual savings
@@ -770,12 +867,12 @@ def plot_breakeven(cost_projection: pd.DataFrame, results_directory: str, scenar
     ax2.set_xticks(years)  # Show every year
     ax2.grid(True, alpha=0.3, axis="y")
 
-    plt.tight_layout()
-    plt.savefig(f"{results_directory}/breakeven_annual{suffix}.png", dpi=300)
-    plt.close()
+    fig2.tight_layout()
+    _finish(fig2, results_directory, f"breakeven_annual{suffix}.png")
 
     # Print BEP to console
     print(f"   Break-even point: {be_text}")
+    return {"breakeven_cumulative": fig1, "breakeven_annual": fig2}
 
 
 def _on_index_clock(value, index: pd.Index) -> pd.Timestamp:
@@ -791,22 +888,38 @@ def _on_index_clock(value, index: pd.Index) -> pd.Timestamp:
 
 def plot_battery_soh_timeseries(
     results_df: pd.DataFrame,
-    results_directory: str,
+    results_directory: Optional[str] = None,
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
     scenario_name: str = "",
-) -> None:
+    eol_percentage: float = DEFAULT_EOL_PERCENTAGE,
+) -> Optional[Figure]:
     """
     Time series plot of battery State of Health (SOH) over time.
 
     Args:
         results_df: Energy balance results DataFrame with Battery_SOH column
-        results_directory: Directory to save plots
+        results_directory: Directory to save plots. None returns the figure
+            open without saving it.
         start_date: Optional start date filter (e.g., '2025-01-01')
         end_date: Optional end date filter (e.g., '2025-12-31')
         scenario_name: Optional suffix for filenames
+        eol_percentage: The end-of-life threshold the run replaced the
+            battery at, as a fraction like the ``battery_eol_percentage``
+            config key. Drawn as the "End of Life" line. Defaults to that
+            key's default, 0.70.
+
+    Returns:
+        The matplotlib ``Figure``, or None when the results have no
+        ``Battery_SOH`` column.
+
+    Raises:
+        ValueError: If ``eol_percentage`` is not between 0 and 1.
     """
-    os.makedirs(results_directory, exist_ok=True)
+    eol_percentage = float(eol_percentage)
+    if not 0.0 < eol_percentage < 1.0:
+        raise ValueError(f"eol_percentage is a fraction between 0 and 1, not {eol_percentage!r}")
+    eol_pct = 100.0 * eol_percentage
     suffix = f"_{scenario_name}" if scenario_name else ""
 
     df = _local_time_indexed(results_df)
@@ -820,7 +933,7 @@ def plot_battery_soh_timeseries(
 
     if "Battery_SOH" not in df.columns:
         print("Warning: Battery_SOH column not found in results")
-        return
+        return None
 
     fig, ax = plt.subplots(figsize=(14, 6))
 
@@ -828,23 +941,25 @@ def plot_battery_soh_timeseries(
 
     # Add reference lines
     ax.axhline(y=100, color="green", linestyle="--", alpha=0.5, label="Initial (100%)")
-    ax.axhline(y=80, color="red", linestyle="--", alpha=0.5, label="End of Life (80%)")
+    ax.axhline(y=eol_pct, color="red", linestyle="--", alpha=0.5, label=f"End of Life ({eol_pct:g}%)")
 
     # Fill degradation region
     ax.fill_between(df.index, df["Battery_SOH"], 100, alpha=0.2, color="red")
 
     ax.set_xlabel("Date", fontsize=12)
     ax.set_ylabel("State of Health (%)", fontsize=12)
-    ax.legend(loc="lower left")
+    # Between the degradation fill at the top and the end-of-life line.
+    ax.legend(loc="center left")
     ax.grid(True, alpha=0.3)
-    ax.set_ylim([min(75, df["Battery_SOH"].min() - 5), 102])
+    ax.set_ylim([min(eol_pct - 5, df["Battery_SOH"].min() - 5), 102])
 
-    plt.tight_layout()
-    plt.savefig(f"{results_directory}/battery_soh_timeseries{suffix}.png", dpi=300)
-    plt.close()
+    fig.tight_layout()
+    return _finish(fig, results_directory, f"battery_soh_timeseries{suffix}.png")
 
 
-def plot_monthly_comparison(results_df: pd.DataFrame, results_directory: str, scenario_name: str = "") -> None:
+def plot_monthly_comparison(
+    results_df: pd.DataFrame, results_directory: Optional[str] = None, scenario_name: str = ""
+) -> Figure:
     """
     Compare PV production, load, import, and export by month.
 
@@ -852,10 +967,13 @@ def plot_monthly_comparison(results_df: pd.DataFrame, results_directory: str, sc
 
     Args:
         results_df: Energy balance results DataFrame
-        results_directory: Directory to save plots
+        results_directory: Directory to save plots. None returns the figure
+            open without saving it.
         scenario_name: Optional suffix for filenames
+
+    Returns:
+        The matplotlib ``Figure``.
     """
-    os.makedirs(results_directory, exist_ok=True)
     suffix = f"_{scenario_name}" if scenario_name else ""
 
     df = _local_time_indexed(results_df)
@@ -918,19 +1036,22 @@ def plot_monthly_comparison(results_df: pd.DataFrame, results_directory: str, sc
                     rotation=90,
                 )
 
-    plt.tight_layout()
-    plt.savefig(f"{results_directory}/monthly_comparison{suffix}.png", dpi=300)
-    plt.close()
+    fig.tight_layout()
+    return _finish(fig, results_directory, f"monthly_comparison{suffix}.png")
 
 
-def plot_monthly_balance(results_df: pd.DataFrame, results_directory: str) -> None:
+def plot_monthly_balance(results_df: pd.DataFrame, results_directory: Optional[str] = None) -> Figure:
     """
     Plot monthly energy balance with positive (PV, Export) and negative (Load, Import) bars.
     X-axis shows only month names (1-12).
 
     Args:
         results_df: Simulation results DataFrame
-        results_directory: Directory to save plots
+        results_directory: Directory to save ``monthly_balance.png`` in.
+            None returns the figure open without saving it.
+
+    Returns:
+        The matplotlib ``Figure``.
     """
     df = _local_time_indexed(results_df)
 
@@ -973,11 +1094,8 @@ def plot_monthly_balance(results_df: pd.DataFrame, results_directory: str) -> No
     ax.legend(loc="upper right", ncol=2)
 
     # Reduce margins
-    plt.tight_layout()
-
-    # Save
-    plt.savefig(f"{results_directory}/monthly_balance.png", dpi=300)
-    plt.close()
+    fig.tight_layout()
+    return _finish(fig, results_directory, "monthly_balance.png")
 
 
 def _finite_numeric_series(df: pd.DataFrame, column: str) -> pd.Series:
@@ -993,19 +1111,33 @@ def _is_breos_montecarlo_summary(df: pd.DataFrame) -> bool:
     return "npv_savings" in df.columns and ("run" in df.columns or "payback_year" in df.columns)
 
 
+def _zero_is_near(values: pd.Series) -> bool:
+    """True when zero lies inside the values' range, or within half its width of either end."""
+    low, high = float(values.min()), float(values.max())
+    if low <= 0.0 <= high:
+        return True
+    return min(abs(low), abs(high)) <= 0.5 * (high - low)
+
+
 def _plot_montecarlo_distribution(
     values: pd.Series,
-    results_directory: str,
+    results_directory: Optional[str],
     filename: str,
     xlabel: str,
     color: str,
     suffix: str = "",
-    include_zero: bool = False,
-) -> bool:
-    """Shared histogram with P5/P50/P95 markers for MC summary metrics."""
+    zero_line: Optional[bool] = False,
+) -> Optional[Figure]:
+    """Shared histogram with P5/P50/P95 markers for MC summary metrics.
+
+    ``zero_line`` draws the break-even line at zero: True always, False
+    never, None when zero is inside or near the values' range. When None
+    leaves the line out, a note says that every run is on one side of it,
+    so the axis keeps the distribution's scale.
+    """
     values = pd.to_numeric(values, errors="coerce").replace([np.inf, -np.inf], np.nan).dropna()
     if values.empty:
-        return False
+        return None
 
     p5 = float(values.quantile(0.05))
     p50 = float(values.quantile(0.50))
@@ -1022,21 +1154,35 @@ def _plot_montecarlo_distribution(
     ):
         ax.axvline(val, color="tab:red", linestyle=linestyle, linewidth=linewidth, label=f"{label}: {val:,.2f}")
 
-    if include_zero:
-        ax.axvline(0, color="black", linewidth=0.8, alpha=0.5)
+    legend_loc = "best"
+    if zero_line or (zero_line is None and _zero_is_near(values)):
+        ax.axvline(0, color="black", linewidth=1.2, alpha=0.7, label="Break-even (0)")
+    elif zero_line is None:
+        side = "above" if float(values.min()) > 0.0 else "below"
+        legend_loc = "upper left"
+        ax.text(
+            0.98,
+            0.98,
+            f"All {len(values)} runs are {side} break-even (0),\nwhich is off the axis",
+            transform=ax.transAxes,
+            ha="right",
+            va="top",
+            fontsize=10,
+            bbox=dict(boxstyle="round", facecolor="white", alpha=0.8),
+        )
 
     ax.set_xlabel(xlabel, fontsize=12)
     ax.set_ylabel("Runs", fontsize=12)
     ax.grid(True, alpha=0.3, axis="y")
-    ax.legend()
+    ax.legend(loc=legend_loc)
 
-    plt.tight_layout()
-    plt.savefig(f"{results_directory}/{filename}{suffix}.png", dpi=300)
-    plt.close()
-    return True
+    fig.tight_layout()
+    return _finish(fig, results_directory, f"{filename}{suffix}.png")
 
 
-def _plot_montecarlo_payback_summary(df: pd.DataFrame, results_directory: str, suffix: str = "") -> None:
+def _plot_montecarlo_payback_summary(
+    df: pd.DataFrame, results_directory: Optional[str], suffix: str = ""
+) -> "dict[str, Figure]":
     """Plot payback distribution, CDF, and achieved/not-achieved summary."""
     total_runs = len(df)
     # The fractional year, which the distribution's 0.1-year bins and mean need;
@@ -1046,28 +1192,42 @@ def _plot_montecarlo_payback_summary(df: pd.DataFrame, results_directory: str, s
     )
     achieved_count = len(payback)
 
+    figures: "dict[str, Figure]" = {}
     if achieved_count:
         payback_values = payback.tolist()
-        plot_breakeven_distribution(payback_values, total_runs, results_directory, suffix)
-        plot_breakeven_cdf(payback_values, results_directory, suffix)
-    plot_breakeven_summary_bar(achieved_count, total_runs, results_directory, suffix)
+        histogram = plot_breakeven_distribution(payback_values, total_runs, results_directory, suffix)
+        cdf = plot_breakeven_cdf(payback_values, results_directory, suffix, total_runs=total_runs)
+        if histogram is not None:
+            figures["breakeven_histogram"] = histogram
+        if cdf is not None:
+            figures["breakeven_cdf"] = cdf
+    figures["breakeven_summary_bar"] = plot_breakeven_summary_bar(achieved_count, total_runs, results_directory, suffix)
+    return figures
 
 
 def plot_montecarlo_simulation(
     runs: pd.DataFrame,
-    results_directory: str,
+    results_directory: Optional[str] = None,
     scenario_name: str = "",
     verbose: bool = True,
-) -> None:
+) -> "dict[str, Figure]":
     """
     Generate all plots for Monte Carlo simulation results.
 
     Args:
         runs: The one-row-per-run table written by ``breos montecarlo``.
         results_directory: Directory to save plots; they go in its ``plots``
-            subdirectory.
+            subdirectory. None returns the figures open without saving them.
         scenario_name: Optional suffix for filenames
         verbose: Print the output directory when plots are generated.
+
+    Returns:
+        The figures, keyed by file name: ``montecarlo_npv_distribution``,
+        ``montecarlo_grid_independence_distribution``,
+        ``montecarlo_final_soh_distribution``,
+        ``montecarlo_lcoe_distribution``, ``breakeven_histogram``,
+        ``breakeven_cdf`` and ``breakeven_summary_bar``, each when the table
+        has values for it.
     """
     if not _is_breos_montecarlo_summary(runs):
         raise ValueError(
@@ -1076,50 +1236,77 @@ def plot_montecarlo_simulation(
         )
 
     suffix = f"_{scenario_name}" if scenario_name else ""
-    plots_folder = os.path.join(results_directory, "plots")
-    os.makedirs(plots_folder, exist_ok=True)
+    plots_folder = None if results_directory is None else os.path.join(results_directory, "plots")
+    if plots_folder is not None:
+        os.makedirs(plots_folder, exist_ok=True)
 
-    plot_montecarlo_npv_distribution(runs, plots_folder, suffix)
-    plot_montecarlo_grid_independence_distribution(runs, plots_folder, suffix)
-    plot_montecarlo_final_soh_distribution(runs, plots_folder, suffix)
-    _plot_montecarlo_distribution(
-        _finite_numeric_series(runs, "lcoe_per_kwh"),
-        plots_folder,
-        "montecarlo_lcoe_distribution",
-        f"LCOE ({_currency(runs)}/kWh)",
-        "tab:purple",
-        suffix,
-    )
-    _plot_montecarlo_payback_summary(runs, plots_folder, suffix)
-    if verbose:
+    drawn = {
+        "montecarlo_npv_distribution": plot_montecarlo_npv_distribution(runs, plots_folder, suffix),
+        "montecarlo_grid_independence_distribution": plot_montecarlo_grid_independence_distribution(
+            runs, plots_folder, suffix
+        ),
+        "montecarlo_final_soh_distribution": plot_montecarlo_final_soh_distribution(runs, plots_folder, suffix),
+        "montecarlo_lcoe_distribution": _plot_montecarlo_distribution(
+            _finite_numeric_series(runs, "lcoe_per_kwh"),
+            plots_folder,
+            "montecarlo_lcoe_distribution",
+            f"LCOE ({_currency(runs)}/kWh)",
+            "tab:purple",
+            suffix,
+        ),
+    }
+    figures = {name: fig for name, fig in drawn.items() if fig is not None}
+    figures.update(_plot_montecarlo_payback_summary(runs, plots_folder, suffix))
+    if verbose and plots_folder is not None:
         print(f"Monte Carlo plots saved to: {plots_folder}")
+    return figures
+
+
+def _finite_payback_years(breakeven_steps: Sequence[Optional[float]]) -> np.ndarray:
+    """The payback years that are numbers; NaN, None and inf are runs that never pay back."""
+    years = pd.to_numeric(pd.Series(list(breakeven_steps), dtype=object), errors="coerce").to_numpy(dtype=float)
+    return years[np.isfinite(years)]
 
 
 def plot_breakeven_distribution(
-    breakeven_steps: List[float], total_runs: int, results_directory: str, suffix: str = ""
-) -> None:
+    breakeven_steps: List[float], total_runs: int, results_directory: Optional[str] = None, suffix: str = ""
+) -> Optional[Figure]:
     """
-    Create histogram availability of break-even years.
+    Histogram of the time to break-even of the runs that pay back.
+
+    Args:
+        breakeven_steps: The fractional payback year of each run, such as
+            the ``payback_year_interpolated`` column of a Monte Carlo run
+            table. NaN, None and inf entries, runs that never pay back, are
+            not drawn.
+        total_runs: The number of runs, those that never pay back included.
+        results_directory: Directory to save ``breakeven_histogram.png`` in.
+            None returns the figure open without saving it.
+        suffix: Suffix for the file name.
+
+    Returns:
+        The matplotlib ``Figure``, or None when no run pays back.
     """
-    if not breakeven_steps:
+    paid_back = _finite_payback_years(breakeven_steps)
+    if not paid_back.size:
         print("No break-even points to plot histogram.")
-        return
+        return None
 
     fig, ax = plt.subplots(figsize=(12, 8))
 
     # Create histogram with 0.1 year bins
     bin_width = 0.1
-    min_be = min(breakeven_steps)
-    max_be = max(breakeven_steps)
+    min_be = float(paid_back.min())
+    max_be = float(paid_back.max())
     bins = np.arange(min_be - 0.05, max_be + 0.15, bin_width)
 
-    n, bins, patches = ax.hist(breakeven_steps, bins=bins, color="skyblue", edgecolor="black", alpha=0.7, linewidth=1)
+    n, bins, patches = ax.hist(paid_back, bins=bins, color="skyblue", edgecolor="black", alpha=0.7, linewidth=1)
 
     # Stats box
-    achieved = len(breakeven_steps)
-    mean_val = np.mean(breakeven_steps)
-    median_val = np.median(breakeven_steps)
-    std_val = np.std(breakeven_steps)
+    achieved = len(paid_back)
+    mean_val = np.mean(paid_back)
+    median_val = np.median(paid_back)
+    std_val = np.std(paid_back)
 
     stats_text = (
         f"Total Runs: {total_runs}\n"
@@ -1140,7 +1327,7 @@ def plot_breakeven_distribution(
         fontfamily="monospace",
     )
 
-    ax.set_xlabel("Break-even Year", fontsize=12)
+    ax.set_xlabel("Years to break-even", fontsize=12)
     ax.set_ylabel("Number of Runs", fontsize=12)
     ax.grid(True, alpha=0.3, axis="y")
 
@@ -1149,48 +1336,94 @@ def plot_breakeven_distribution(
         if n[i] > 0:
             ax.text((bins[i] + bins[i + 1]) / 2, n[i] + 0.1, int(n[i]), ha="center", va="bottom", fontsize=8)
 
-    plt.tight_layout()
-    plt.savefig(f"{results_directory}/breakeven_histogram{suffix}.png", dpi=300)
-    plt.close()
+    fig.tight_layout()
+    return _finish(fig, results_directory, f"breakeven_histogram{suffix}.png")
 
 
-def plot_breakeven_cdf(breakeven_steps: List[float], results_directory: str, suffix: str = "") -> None:
+def plot_breakeven_cdf(
+    breakeven_steps: List[float],
+    results_directory: Optional[str] = None,
+    suffix: str = "",
+    total_runs: Optional[int] = None,
+) -> Optional[Figure]:
     """
-    Plot Cumulative Distribution Function of break-even years.
-    """
-    if not breakeven_steps:
-        return
+    Plot the cumulative share of runs that have paid back, against the years to break-even.
 
-    x = np.sort(breakeven_steps)
+    The curve is normalised by every run, so its plateau is the share of
+    runs that ever pay back; a dotted line marks it. The 2.5, 25, 50, 75 and
+    97.5% points are marked where the curve reaches them; a level above the
+    plateau has no point, since that share of runs never pays back.
+
+    Args:
+        breakeven_steps: The fractional payback year of each run, such as
+            the ``payback_year_interpolated`` column of a Monte Carlo run
+            table. NaN, None and inf entries are runs that never pay back.
+        results_directory: Directory to save ``breakeven_cdf.png`` in. None
+            returns the figure open without saving it.
+        suffix: Suffix for the file name.
+        total_runs: The number of runs. Defaults to the length of
+            ``breakeven_steps``; give it when that list holds only the runs
+            that pay back.
+
+    Returns:
+        The matplotlib ``Figure``, or None when no run pays back.
+
+    Raises:
+        ValueError: If ``total_runs`` is less than the number of runs that
+            pay back.
+    """
+    x = np.sort(_finite_payback_years(breakeven_steps))
     n = len(x)
-    y = np.arange(1, n + 1) / n
+    if not n:
+        return None
+    total = len(breakeven_steps) if total_runs is None else int(total_runs)
+    if total < n:
+        raise ValueError(f"total_runs is {total}, but {n} runs pay back")
+    y = np.arange(1, n + 1) / total
+    share = n / total
 
     fig, ax = plt.subplots(figsize=(12, 8))
-    ax.step(x, y, where="post", color="blue", linewidth=2, label="CDF")
+    ax.step(np.r_[x[0], x], np.r_[0.0, y], where="post", color="blue", linewidth=2, label="Runs paid back")
+    ax.axhline(share, color="blue", linestyle=":", alpha=0.6, linewidth=1, label=f"Ever pay back: {share:.1%}")
 
-    # Quantiles
+    # Quantiles of every run; a run that never pays back sits at infinity.
     quantiles = [0.025, 0.25, 0.5, 0.75, 0.975]
     colors = ["red", "gray", "black", "gray", "red"]
+    every_run = np.concatenate([x, np.full(total - n, np.inf)])
 
     for q, color in zip(quantiles, colors, strict=True):
-        val = np.quantile(x, q)
+        val = float(np.quantile(every_run, q, method="inverted_cdf"))
+        if not np.isfinite(val):
+            continue
         ax.axvline(val, color=color, linestyle="--", alpha=0.6, linewidth=1)
         ax.scatter([val], [q], color=color, zorder=5)
         ax.text(val, q, f" {q:.1%} ({val:.1f}y)", color=color, ha="left", va="bottom", fontsize=9)
 
-    ax.set_xlabel("Break-even Year", fontsize=12)
-    ax.set_ylabel("Cumulative Probability", fontsize=12)
+    ax.set_xlabel("Years to break-even", fontsize=12)
+    ax.set_ylabel(f"Share of runs paid back (of {total})", fontsize=12)
     ax.grid(True, alpha=0.3)
     ax.set_ylim(0, 1.05)
+    ax.legend(loc="lower right")
 
-    plt.tight_layout()
-    plt.savefig(f"{results_directory}/breakeven_cdf{suffix}.png", dpi=300)
-    plt.close()
+    fig.tight_layout()
+    return _finish(fig, results_directory, f"breakeven_cdf{suffix}.png")
 
 
-def plot_breakeven_summary_bar(achieved_count: int, total_runs: int, results_directory: str, suffix: str = "") -> None:
+def plot_breakeven_summary_bar(
+    achieved_count: int, total_runs: int, results_directory: Optional[str] = None, suffix: str = ""
+) -> Figure:
     """
     Bar chart of Success vs Failure for break-even.
+
+    Args:
+        achieved_count: The number of runs that pay back.
+        total_runs: The number of runs.
+        results_directory: Directory to save ``breakeven_summary_bar.png``
+            in. None returns the figure open without saving it.
+        suffix: Suffix for the file name.
+
+    Returns:
+        The matplotlib ``Figure``.
     """
     fig, ax = plt.subplots(figsize=(8, 6))
 
@@ -1217,33 +1450,62 @@ def plot_breakeven_summary_bar(achieved_count: int, total_runs: int, results_dir
     ax.grid(True, alpha=0.3, axis="y")
     ax.set_ylim(0, max(counts) * 1.2)
 
-    plt.tight_layout()
-    plt.savefig(f"{results_directory}/breakeven_summary_bar{suffix}.png", dpi=300)
-    plt.close()
+    fig.tight_layout()
+    return _finish(fig, results_directory, f"breakeven_summary_bar{suffix}.png")
 
 
-def plot_montecarlo_npv_distribution(all_results_df: pd.DataFrame, results_directory: str, suffix: str = "") -> None:
+def plot_montecarlo_npv_distribution(
+    all_results_df: pd.DataFrame,
+    results_directory: Optional[str] = None,
+    suffix: str = "",
+    zero_line: Optional[bool] = None,
+) -> Optional[Figure]:
     """
     Histogram of NPV savings (``npv_savings``) across one-row-per-run MC results.
+
+    Args:
+        all_results_df: The one-row-per-run table written by ``breos montecarlo``.
+        results_directory: Directory to save
+            ``montecarlo_npv_distribution.png`` in. None returns the figure
+            open without saving it.
+        suffix: Suffix for the file name.
+        zero_line: Whether to draw the break-even line at zero NPV. True
+            always draws it, False never does. None, the default, draws it
+            when zero is inside the range of the runs' NPV, or within half
+            that range's width of it, so a distribution far from zero keeps
+            its own scale; a note then says that every run is above (or
+            below) break-even.
+
+    Returns:
+        The matplotlib ``Figure``, or None when no run has a finite NPV.
     """
-    _plot_montecarlo_distribution(
+    return _plot_montecarlo_distribution(
         _finite_numeric_series(all_results_df, "npv_savings"),
         results_directory,
         "montecarlo_npv_distribution",
         f"NPV Savings ({_currency(all_results_df)})",
         "tab:blue",
         suffix,
-        include_zero=True,
+        zero_line=zero_line,
     )
 
 
 def plot_montecarlo_grid_independence_distribution(
-    all_results_df: pd.DataFrame, results_directory: str, suffix: str = ""
-) -> None:
+    all_results_df: pd.DataFrame, results_directory: Optional[str] = None, suffix: str = ""
+) -> Optional[Figure]:
     """
     Histogram of mean grid independence (``mean_grid_independence_pct``) across one-row-per-run MC results.
+
+    Args:
+        all_results_df: The one-row-per-run table written by ``breos montecarlo``.
+        results_directory: Directory to save the plot in. None returns the
+            figure open without saving it.
+        suffix: Suffix for the file name.
+
+    Returns:
+        The matplotlib ``Figure``, or None when no run has a finite value.
     """
-    _plot_montecarlo_distribution(
+    return _plot_montecarlo_distribution(
         _finite_numeric_series(all_results_df, "mean_grid_independence_pct"),
         results_directory,
         "montecarlo_grid_independence_distribution",
@@ -1254,12 +1516,21 @@ def plot_montecarlo_grid_independence_distribution(
 
 
 def plot_montecarlo_final_soh_distribution(
-    all_results_df: pd.DataFrame, results_directory: str, suffix: str = ""
-) -> None:
+    all_results_df: pd.DataFrame, results_directory: Optional[str] = None, suffix: str = ""
+) -> Optional[Figure]:
     """
     Histogram of final battery state-of-health across one-row-per-run MC results.
+
+    Args:
+        all_results_df: The one-row-per-run table written by ``breos montecarlo``.
+        results_directory: Directory to save the plot in. None returns the
+            figure open without saving it.
+        suffix: Suffix for the file name.
+
+    Returns:
+        The matplotlib ``Figure``, or None when no run has a finite value.
     """
-    _plot_montecarlo_distribution(
+    return _plot_montecarlo_distribution(
         _finite_numeric_series(all_results_df, "final_soh_pct"),
         results_directory,
         "montecarlo_final_soh_distribution",
@@ -1377,11 +1648,11 @@ def _weather_monthly_stats(historical_years: Mapping[int, pd.DataFrame], variabl
 def plot_weather_monthly_comparison(
     tmy: pd.DataFrame,
     historical: Union[str, "os.PathLike[str]", Mapping[int, pd.DataFrame]],
-    results_directory: str,
+    results_directory: Optional[str] = None,
     variable: str = "ghi",
     tmy_label: str = "TMY",
     filename: Optional[str] = None,
-) -> None:
+) -> Figure:
     """
     Compare a TMY with historical weather years, month by month.
 
@@ -1392,22 +1663,27 @@ def plot_weather_monthly_comparison(
     mean in °C. A month with missing values warns, and its total skips them.
 
     Args:
-        tmy: One weather year, as :func:`breos.weather.load_weather` or
-            :func:`breos.weather.fetch_tmy_weather_data` return it.
+        tmy: One weather year as a DataFrame: the frame
+            :func:`breos.weather.load_weather` returns, or the first item of
+            the ``(frame, metadata)`` tuple
+            :func:`breos.weather.fetch_tmy_weather_data` returns.
         historical: The multi-year weather CSV that a Monte Carlo study
             samples (``MonteCarloSettings.weather_file``), or the per-year
             frames :func:`breos.weather.preload_weather_by_year` splits it
             into. Only complete years count, as in the study.
-        results_directory: Directory to save the plot.
+        results_directory: Directory to save the plot. None returns the
+            figure open without saving it.
         variable: ``"ghi"``, ``"dni"``, ``"dhi"`` or ``"temp_air"``.
         tmy_label: Legend label of the TMY line, for example its source.
         filename: Output filename. Defaults to ``weather_monthly_<variable>.png``.
+
+    Returns:
+        The matplotlib ``Figure``.
     """
     name, unit = _WEATHER_VARIABLES.get(variable, (variable, ""))
     tmy_vals = _weather_monthly(tmy, variable, "The TMY").to_numpy()
     historical_years = _historical_weather_years(historical)
     monthly_stats = _weather_monthly_stats(historical_years, variable)
-    os.makedirs(results_directory, exist_ok=True)
 
     x = np.arange(12)
     hist_mean = monthly_stats["mean"].values
@@ -1470,32 +1746,35 @@ def plot_weather_monthly_comparison(
 
     fig.tight_layout()
     fig.subplots_adjust(bottom=0.22)
-    fig.savefig(
-        os.path.join(results_directory, filename or f"weather_monthly_{variable}.png"), dpi=300, bbox_inches="tight"
-    )
-    plt.close(fig)
+    return _finish(fig, results_directory, filename or f"weather_monthly_{variable}.png", bbox_inches="tight")
 
 
 def plot_weather_annual_ghi_distribution(
     tmy: pd.DataFrame,
     historical: Union[str, "os.PathLike[str]", Mapping[int, pd.DataFrame]],
-    results_directory: str,
+    results_directory: Optional[str] = None,
     tmy_label: str = "TMY",
     filename: str = "annual_ghi_distribution.png",
-) -> None:
+) -> Figure:
     """
     Histogram of the annual GHI of historical weather years, with the TMY and the historical mean.
 
     Args:
-        tmy: One weather year, as :func:`breos.weather.load_weather` or
-            :func:`breos.weather.fetch_tmy_weather_data` return it.
+        tmy: One weather year as a DataFrame: the frame
+            :func:`breos.weather.load_weather` returns, or the first item of
+            the ``(frame, metadata)`` tuple
+            :func:`breos.weather.fetch_tmy_weather_data` returns.
         historical: The multi-year weather CSV that a Monte Carlo study
             samples (``MonteCarloSettings.weather_file``), or the per-year
             frames :func:`breos.weather.preload_weather_by_year` splits it
             into. Only complete years count, as in the study.
-        results_directory: Directory to save the plot.
+        results_directory: Directory to save the plot. None returns the
+            figure open without saving it.
         tmy_label: Legend label of the TMY line, for example its source.
         filename: Output filename.
+
+    Returns:
+        The matplotlib ``Figure``.
 
     Raises:
         ValueError: If the TMY or a historical year has no GHI for a whole
@@ -1509,7 +1788,6 @@ def plot_weather_annual_ghi_distribution(
         }
     )
     hist_annual_ghi_mean = float(annual_ghi_per_year.mean())
-    os.makedirs(results_directory, exist_ok=True)
 
     n_years = len(annual_ghi_per_year)
     fig, ax = plt.subplots(figsize=(10, 6))
@@ -1549,8 +1827,7 @@ def plot_weather_annual_ghi_distribution(
     ax.set_xlim(x_min - 0.05 * span, x_max + 0.05 * span)
 
     fig.tight_layout()
-    fig.savefig(os.path.join(results_directory, filename), dpi=300, bbox_inches="tight")
-    plt.close(fig)
+    return _finish(fig, results_directory, filename, bbox_inches="tight")
 
 
 def _breakeven_projection(projection: Union[pd.DataFrame, Mapping[str, Any]]) -> pd.DataFrame:
@@ -1582,11 +1859,11 @@ def _breakeven_projection(projection: Union[pd.DataFrame, Mapping[str, Any]]) ->
 def plot_breakeven_comparison(
     projections: Sequence[Union[pd.DataFrame, Mapping[str, Any]]],
     labels: Sequence[str],
-    results_directory: str,
+    results_directory: Optional[str] = None,
     colors: Optional[Sequence[str]] = None,
     currency: Optional[str] = None,
     filename: str = "breakeven_comparison.png",
-) -> None:
+) -> Figure:
     """
     Multi-scenario break-even comparison: N cumulative cost curves vs No-System baseline.
 
@@ -1603,7 +1880,8 @@ def plot_breakeven_comparison(
             with ``Year``, ``Cost_No_Sys_Cumulative_NPV``,
             ``Cost_System_Cumulative_NPV`` and ``Savings_Cumulative_NPV``.
         labels: Display label for each scenario.
-        results_directory: Output directory.
+        results_directory: Output directory. None returns the figure open
+            without saving it.
         colors: Line colour for each scenario. Defaults to the colour cycle.
         currency: Currency code for the money axis, for projections read
             from CSV, which do not record it. An App result and a projection
@@ -1611,6 +1889,9 @@ def plot_breakeven_comparison(
             record their own. When no projection records it and ``currency``
             is None, the axis shows the amounts without a currency code.
         filename: Output filename.
+
+    Returns:
+        The matplotlib ``Figure``.
 
     Raises:
         ValueError: If the labels or colours do not match the projections,
@@ -1626,7 +1907,6 @@ def plot_breakeven_comparison(
         raise ValueError(f"{len(projections)} projections need {len(projections)} colors, not {len(colors)}")
     cost_dfs = [_breakeven_projection(projection) for projection in projections]
     label_currency = _label_currency(cost_dfs, currency)
-    os.makedirs(results_directory, exist_ok=True)
 
     fig, ax = plt.subplots(figsize=(14, 8))
 
@@ -1687,8 +1967,7 @@ def plot_breakeven_comparison(
     ax.set_xlim(0, max_year + 0.5)
 
     fig.tight_layout()
-    fig.savefig(os.path.join(results_directory, filename), dpi=300, bbox_inches="tight")
-    plt.close(fig)
+    return _finish(fig, results_directory, filename, bbox_inches="tight")
 
 
 # =========================================================================
@@ -1696,7 +1975,9 @@ def plot_breakeven_comparison(
 # =========================================================================
 
 # Axis labels of the sweep and optimizer columns BREOS writes, without their
-# ``param_`` or ``resolved_`` prefix. Other columns are labelled by name.
+# ``param_`` or ``resolved_`` prefix; an optimizer ``Projected_`` or
+# ``Objective_`` column is looked up by its full name, then without the
+# prefix. Other columns get a label made from their name.
 _COLUMN_LABELS = {
     "n_modules": "Number of PV modules",
     "battery_kwh": "Battery capacity (kWh)",
@@ -1718,9 +1999,48 @@ _COLUMN_LABELS = {
     "NPV": "NPV savings ({currency})",
     "ZEB_Ratio": "ZEB ratio",
     "Projected_Initial_Cost": "Investment ({currency})",
+    "LCOE_per_kWh": "LCOE ({currency}/kWh)",
+    "Payback_Year": "Payback (years)",
+    "Payback_Year_Interpolated": "Payback (years)",
+    "Final_SOH_%": "Final battery SOH (%)",
+    "Total_Replacements": "Battery replacements",
+    "Replacement_Cost_T0_Prices": "Replacement cost at today's prices ({currency})",
+    "CO2_Avoided_Total_kg": "CO$_2$ avoided over the projection (kg CO$_2$eq)",
+    "CO2_Avoided_SelfConsumed_kg": "CO$_2$ avoided by self-consumed PV over the projection (kg CO$_2$eq)",
 }
 
+# Trailing unit tokens of a column name, as the label's unit.
+_NAME_UNITS = {"kg": "kg", "kWh": "kWh", "kWp": "kWp", "pct": "%", "%": "%", "kW": "kW", "W": "W", "years": "years"}
+
 _COMPASS_POINTS = {0: "N", 45: "NE", 90: "E", 135: "SE", 180: "S", 225: "SW", 270: "W", 315: "NW"}
+
+
+def _label_template(column: str) -> Optional[str]:
+    """The ``_COLUMN_LABELS`` entry of a column, with ``{currency}`` unfilled, or None."""
+    name = str(column)
+    for prefix in ("param_", "resolved_"):
+        name = name.removeprefix(prefix)
+    if name in _COLUMN_LABELS:
+        return _COLUMN_LABELS[name]
+    for prefix in ("Projected_", "Objective_"):
+        if name.startswith(prefix):
+            return _COLUMN_LABELS.get(name.removeprefix(prefix))
+    return None
+
+
+def _name_label(column: str) -> str:
+    """A label made from a column name: words for the underscores, a trailing unit in parentheses.
+
+    ``Projected_PV_DC_Year1_kWh`` is "PV DC Year1 (kWh)".
+    """
+    name = str(column)
+    for prefix in ("param_", "resolved_", "Projected_", "Objective_"):
+        name = name.removeprefix(prefix)
+    words = [word for word in name.split("_") if word]
+    if len(words) > 1 and words[-1] in _NAME_UNITS:
+        unit = _NAME_UNITS[words.pop()]
+        return f"{' '.join(words)} ({unit})"
+    return " ".join(words) or str(column)
 
 
 def _column_label(column: str, currency: Optional[str]) -> str:
@@ -1729,12 +2049,9 @@ def _column_label(column: str, currency: Optional[str]) -> str:
     Money is labelled in ``currency``; with None, the label names no currency
     ("NPV savings", "LCOE (per kWh)").
     """
-    name = str(column)
-    for prefix in ("param_", "resolved_"):
-        name = name.removeprefix(prefix)
-    label = _COLUMN_LABELS.get(name)
+    label = _label_template(column)
     if label is None:
-        return name
+        return _name_label(column)
     if currency is None:
         return label.replace(" ({currency})", "").replace("{currency}/kWh", "per kWh")
     return label.format(currency=currency)
@@ -1746,8 +2063,7 @@ def _money_currency(frames: Sequence[pd.DataFrame], currency: Optional[str], col
     Only a money label needs the inputs to agree on a currency, so a
     grid-independence difference between a CHF and a EUR sweep still plots.
     """
-    names = [str(column).removeprefix("param_").removeprefix("resolved_") for column in columns]
-    if any("{currency}" in _COLUMN_LABELS.get(name, "") for name in names):
+    if any("{currency}" in (_label_template(column) or "") for column in columns):
         return _label_currency(frames, currency)
     return None
 
@@ -1836,7 +2152,7 @@ def _cell_format(values: np.ndarray) -> str:
 def plot_sweep_heatmap(
     sweep: Union[pd.DataFrame, str, "os.PathLike[str]"],
     metric: str,
-    results_directory: str,
+    results_directory: Optional[str] = None,
     x: Optional[str] = None,
     y: Optional[str] = None,
     diff: Union[pd.DataFrame, str, "os.PathLike[str]", None] = None,
@@ -1847,7 +2163,7 @@ def plot_sweep_heatmap(
     vmax: Optional[float] = None,
     currency: Optional[str] = None,
     filename: Optional[str] = None,
-) -> None:
+) -> Figure:
     """
     Heatmap of one metric of a two-parameter ``breos sweep`` result.
 
@@ -1866,7 +2182,8 @@ def plot_sweep_heatmap(
         sweep: The CSV ``breos sweep`` writes, or its DataFrame.
         metric: The result column to draw, such as ``grid_independence_pct``
             or ``npv_savings``.
-        results_directory: Directory to save the plot.
+        results_directory: Directory to save the plot. None returns the
+            figure open without saving it.
         x: Parameter on the horizontal axis, as its sweep key (``n_modules``)
             or its column (``param_n_modules``). A sweep key names the swept
             ``param_`` column, not the result column of the same name.
@@ -1889,6 +2206,9 @@ def plot_sweep_heatmap(
             When neither names it, money labels show no currency code.
         filename: Output filename. Defaults to ``sweep_<metric>.png``, or
             ``sweep_<metric>_diff.png`` with ``diff``.
+
+    Returns:
+        The matplotlib ``Figure``.
 
     Raises:
         ValueError: If ``x`` and ``y`` are not given and the sweep does not
@@ -1946,7 +2266,6 @@ def plot_sweep_heatmap(
         norm = Normalize(vmin=vmin, vmax=vmax)
         norm.autoscale_None(finite)
         cmap = cmap or "YlGnBu"
-    os.makedirs(results_directory, exist_ok=True)
 
     fig, ax = plt.subplots(figsize=(10, 5))
     im = ax.imshow(data, aspect="auto", cmap=cmap, norm=norm, origin="lower")
@@ -1984,8 +2303,7 @@ def plot_sweep_heatmap(
 
     default_name = f"sweep_{metric}_diff.png" if diff is not None else f"sweep_{metric}.png"
     fig.tight_layout()
-    fig.savefig(os.path.join(results_directory, filename or default_name), dpi=300, bbox_inches="tight")
-    plt.close(fig)
+    return _finish(fig, results_directory, filename or default_name, bbox_inches="tight")
 
 
 def _set_azimuth_ticks(ax, azimuths: np.ndarray) -> None:
@@ -2004,14 +2322,14 @@ def _set_azimuth_ticks(ax, azimuths: np.ndarray) -> None:
 def plot_orientation_landscape(
     sweep: Union[pd.DataFrame, str, "os.PathLike[str]"],
     metric: str,
-    results_directory: str,
+    results_directory: Optional[str] = None,
     tilt: str = "tilt",
     azimuth: str = "azimuth",
     maximize: bool = True,
     metric_label: Optional[str] = None,
     currency: Optional[str] = None,
     filename: str = "orientation_landscape.png",
-) -> None:
+) -> Figure:
     """
     Plot a metric over panel orientation from a ``breos sweep`` result.
 
@@ -2030,7 +2348,8 @@ def plot_orientation_landscape(
             one run per orientation.
         metric: The result column to draw, such as ``usable_ac_system_production_kwh`` or
             ``npv_savings``.
-        results_directory: Directory to save the plot.
+        results_directory: Directory to save the plot. None returns the
+            figure open without saving it.
         tilt: The tilt parameter, as its sweep key or column.
         azimuth: The azimuth parameter, as its sweep key or column. A table
             without it, or with one azimuth only, is a tilt sweep.
@@ -2041,6 +2360,9 @@ def plot_orientation_landscape(
             does not record it. When neither it nor ``attrs["currency"]``
             names it, the label shows no currency code.
         filename: Output filename.
+
+    Returns:
+        The matplotlib ``Figure``.
 
     Raises:
         ValueError: If the sweep has more than one run for an orientation
@@ -2066,7 +2388,6 @@ def plot_orientation_landscape(
             raise ValueError(f"The sweep has more than one row for some {tilt_column}; select one value of the others")
         profile = frame.set_index(tilt_column)[metric].astype(float).sort_index()
         best = int(pick(profile.to_numpy()))
-        os.makedirs(results_directory, exist_ok=True)
 
         fig, ax = plt.subplots(figsize=(10, 6))
         ax.plot(profile.index, profile.values, "b-", marker="o", linewidth=2)
@@ -2083,9 +2404,7 @@ def plot_orientation_landscape(
         ax.grid(True, alpha=0.3)
         ax.legend()
         fig.tight_layout()
-        fig.savefig(os.path.join(results_directory, filename), dpi=300, bbox_inches="tight")
-        plt.close(fig)
-        return
+        return _finish(fig, results_directory, filename, bbox_inches="tight")
 
     grid = _sweep_grid(frame, azimuth_column, tilt_column, metric)
     row, col = np.unravel_index(int(pick(grid.to_numpy())), grid.shape)
@@ -2096,7 +2415,6 @@ def plot_orientation_landscape(
         if best_tilt == 0
         else f"Optimum: {best_tilt:g}° tilt, {best_azimuth:g}° azimuth"
     )
-    os.makedirs(results_directory, exist_ok=True)
 
     fig, (ax_map, ax_profile) = plt.subplots(1, 2, figsize=(16, 6.5), gridspec_kw={"width_ratios": [1.25, 1]})
     mesh = ax_map.pcolormesh(
@@ -2119,8 +2437,7 @@ def plot_orientation_landscape(
     ax_profile.legend()
 
     fig.tight_layout()
-    fig.savefig(os.path.join(results_directory, filename), dpi=300, bbox_inches="tight")
-    plt.close(fig)
+    return _finish(fig, results_directory, filename, bbox_inches="tight")
 
 
 # =========================================================================
@@ -2149,27 +2466,33 @@ def _pareto_mask(x: np.ndarray, y: np.ndarray) -> np.ndarray:
 
 def plot_pareto_front(
     designs: Any,
-    results_directory: str,
+    results_directory: Optional[str] = None,
     x: str = "Grid_Independence_%",
     y: str = "NPV",
     maximize: Tuple[bool, bool] = (True, True),
     color_by: Optional[str] = None,
     currency: Optional[str] = None,
     filename: str = "pareto_front.png",
-) -> None:
+) -> Figure:
     """
     Scatter two objectives of a set of designs and draw their Pareto front.
 
     The designs no other design beats in both objectives are drawn large and
     joined by a line; the dominated ones are drawn small and grey. On the
     optimizer's front with its own two objectives, every design is on it.
+    Axes are labelled with the quantity and its unit; the optimizer's
+    ``Projected_`` columns are labelled like the ones they project, and other
+    columns by their name, with a trailing unit such as ``_kg`` in
+    parentheses. With ``color_by``, the legend draws the front's marker
+    without fill, since the colour bar gives its colours.
 
     Args:
         designs: The :class:`~breos.optimization.OptimizationResult` of
             :func:`~breos.optimization.optimize_system_multi_objective`, its
             ``details["pareto"]`` frame or that frame's CSV, or any table of
             designs, such as a ``breos sweep`` CSV.
-        results_directory: Directory to save the plot.
+        results_directory: Directory to save the plot. None returns the
+            figure open without saving it.
         x: Column of the objective on the horizontal axis, or a swept key.
         y: Column of the objective on the vertical axis, or a swept key.
             The defaults are the optimizer's two objectives.
@@ -2182,6 +2505,9 @@ def plot_pareto_front(
             ``attrs["currency"]`` record their own. When neither names it,
             money labels show no currency code.
         filename: Output filename.
+
+    Returns:
+        The matplotlib ``Figure``.
 
     Raises:
         ValueError: If a column is missing, ``currency`` contradicts the
@@ -2204,7 +2530,6 @@ def plot_pareto_front(
     frame, x_values, y_values = frame[finite], x_values[finite], y_values[finite]
     signs = [1.0 if higher else -1.0 for higher in maximize]
     front = _pareto_mask(signs[0] * x_values, signs[1] * y_values)
-    os.makedirs(results_directory, exist_ok=True)
 
     fig, ax = plt.subplots(figsize=(11, 7))
     if not front.all():
@@ -2227,24 +2552,39 @@ def plot_pareto_front(
             cmap="viridis",
             edgecolor="black",
             zorder=3,
-            label=front_label,
         )
         fig.colorbar(points, ax=ax, label=_column_label(color_column, label_currency))
+    handles, _ = ax.get_legend_handles_labels()
+    if color_column is not None:
+        # A legend marker in one of the colour-map colours would match only
+        # some of the points; an open marker on the joining line matches all.
+        handles.append(
+            Line2D(
+                [],
+                [],
+                color="dimgray",
+                linewidth=1,
+                marker="o",
+                markersize=np.sqrt(70),
+                markerfacecolor="none",
+                markeredgecolor="black",
+                label=front_label,
+            )
+        )
     ax.set_xlabel(_column_label(x_column, label_currency))
     ax.set_ylabel(_column_label(y_column, label_currency))
     ax.grid(True, alpha=0.3)
-    ax.legend()
+    ax.legend(handles=handles)
 
     fig.tight_layout()
-    fig.savefig(os.path.join(results_directory, filename), dpi=300, bbox_inches="tight")
-    plt.close(fig)
+    return _finish(fig, results_directory, filename, bbox_inches="tight")
 
 
 def plot_co2_savings(
     cost_projection: pd.DataFrame,
-    results_directory: str,
+    results_directory: Optional[str] = None,
     scenario_name: str = "",
-) -> None:
+) -> "dict[str, Figure]":
     """
     Plot CO2 emissions avoided over system lifetime.
 
@@ -2254,13 +2594,18 @@ def plot_co2_savings(
 
     Args:
         cost_projection: DataFrame from cost_analysis_projection() with CO2 columns
-        results_directory: Directory to save plots
+        results_directory: Directory to save plots. None returns the figures
+            open without saving them.
         scenario_name: Optional suffix for filenames
+
+    Returns:
+        The figures, keyed ``co2_avoided_yearly`` and
+        ``co2_avoided_cumulative``. Empty when the projection has no CO2
+        columns.
     """
     if "CO2_Avoided_Total_kg" not in cost_projection.columns:
-        return
+        return {}
 
-    os.makedirs(results_directory, exist_ok=True)
     suffix = f"_{scenario_name}" if scenario_name else ""
 
     years = cost_projection["Year"]
@@ -2288,8 +2633,7 @@ def plot_co2_savings(
     ax.grid(axis="y", alpha=0.3)
 
     fig.tight_layout()
-    fig.savefig(os.path.join(results_directory, f"co2_avoided_yearly{suffix}.png"), dpi=300, bbox_inches="tight")
-    plt.close(fig)
+    yearly_fig = _finish(fig, results_directory, f"co2_avoided_yearly{suffix}.png", bbox_inches="tight")
 
     # =========================================================================
     # GRAPH 2: Cumulative CO2 avoided (lines)
@@ -2301,33 +2645,31 @@ def plot_co2_savings(
     ax.fill_between(years, 0, co2_self_cum / 1000, alpha=0.15, color="green")
     ax.fill_between(years, co2_self_cum / 1000, co2_total_cum / 1000, alpha=0.10, color="blue")
 
-    # Annotate final values
+    # Annotate final values right of the last point, in room added to the
+    # axes, so the labels cross neither the lines nor the frame.
     final_total = co2_total_cum.iloc[-1] / 1000
     final_self = co2_self_cum.iloc[-1] / 1000
-    ax.annotate(
-        f"{final_total:,.1f} t",
-        xy=(years.iloc[-1], final_total),
-        xytext=(-50, 10),
-        textcoords="offset points",
-        fontsize=11,
-        fontweight="bold",
-        color="#1565C0",
-    )
-    ax.annotate(
-        f"{final_self:,.1f} t",
-        xy=(years.iloc[-1], final_self),
-        xytext=(-50, -20),
-        textcoords="offset points",
-        fontsize=11,
-        fontweight="bold",
-        color="#2E7D32",
-    )
+    first_year, last_year = float(years.iloc[0]), float(years.iloc[-1])
+    ax.set_xlim(first_year - 0.5, last_year + max(1.0, 0.12 * (last_year - first_year)))
+    for value, offset, va, color in ((final_total, 3, "bottom", "#1565C0"), (final_self, -3, "top", "#2E7D32")):
+        ax.annotate(
+            f"{value:,.1f} t",
+            xy=(last_year, value),
+            xytext=(8, offset),
+            textcoords="offset points",
+            ha="left",
+            va=va,
+            fontsize=11,
+            fontweight="bold",
+            color=color,
+        )
 
     ax.set_xlabel("Year", fontsize=12)
     ax.set_ylabel("Cumulative CO$_2$ Avoided (t CO$_2$eq)", fontsize=12)
+    ax.xaxis.set_major_locator(MaxNLocator(integer=True))
     ax.legend(fontsize=11, loc="upper left")
     ax.grid(alpha=0.3)
 
     fig.tight_layout()
-    fig.savefig(os.path.join(results_directory, f"co2_avoided_cumulative{suffix}.png"), dpi=300, bbox_inches="tight")
-    plt.close(fig)
+    cumulative_fig = _finish(fig, results_directory, f"co2_avoided_cumulative{suffix}.png", bbox_inches="tight")
+    return {"co2_avoided_yearly": yearly_fig, "co2_avoided_cumulative": cumulative_fig}
