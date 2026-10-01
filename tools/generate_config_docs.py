@@ -52,7 +52,7 @@ Every key a {py:class}`~breos.App` config accepts, generated from the
 configuration registry that validates it. A key that is not listed here is
 rejected. The keys inside the `[montecarlo]` and `[sweep]` runner sections are
 described on the [Monte Carlo](monte-carlo.md) and
-[Parameter sweep](recipes.md#parameter-sweep) pages. [Configuration](configuration.md) explains how the keys work
+[Run a parameter sweep](../how-to/parameter-sweep.md) pages. [Configuration](configuration.md) explains how the keys work
 together; [Packaged options](options.md) lists the preset keys they accept.
 """
 
@@ -119,7 +119,7 @@ TABLES: tuple[tuple[str, TableSpec, str], ...] = (
         "period",
         PERIOD_TABLE,
         "A window shorter than a year, as `[period]` in TOML; see "
-        "[Simulate part of a year](recipes.md#simulate-part-of-a-year). Both dates are local civil dates in the "
+        "[Simulate part of a year](configuration.md#simulate-part-of-a-year). Both dates are local civil dates in the "
         "location's timezone, in the year of `start_date`, and the window runs from local midnight of `start` to "
         "local midnight of `end`.",
     ),

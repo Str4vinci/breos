@@ -3,7 +3,12 @@
 from __future__ import annotations
 
 import os
+import sys
 from importlib.metadata import version as pkg_version
+from pathlib import Path
+
+# The gallery pages import their results loader from docs/_ext.
+sys.path.insert(0, str(Path(__file__).parent / "_ext"))
 
 project = "BREOS"
 author = "Leonardo Rodrigues"
@@ -22,6 +27,7 @@ extensions = [
     "sphinx_design",
     "sphinx_copybutton",
     "sphinx_autodoc_typehints",
+    "sphinx_gallery.gen_gallery",
 ]
 
 # --- Source files -----------------------------------------------------------
@@ -31,7 +37,7 @@ source_suffix = {
     ".md": "markdown",
 }
 master_doc = "index"
-exclude_patterns = ["_build", "Thumbs.db", ".DS_Store"]
+exclude_patterns = ["_build", "Thumbs.db", ".DS_Store", "examples/**", "gallery/sg_execution_times.rst"]
 
 # --- Autosummary / autodoc --------------------------------------------------
 
@@ -76,6 +82,38 @@ myst_enable_extensions = [
     "substitution",
 ]
 myst_heading_anchors = 3
+
+# --- Example gallery --------------------------------------------------------
+#
+# Each page in docs/examples/ reports a stored run: it loads results that
+# tools/regenerate_gallery_results.py wrote under docs/examples/_results/ and
+# draws them. Nothing is simulated or fetched while the docs build.
+
+sphinx_gallery_conf = {
+    "examples_dirs": "examples",
+    "gallery_dirs": "gallery",
+    "filename_pattern": r"/plot_",
+    "ignore_pattern": r"__init__\.py",
+    "subsection_order": [
+        "examples/getting_started",
+        "examples/pv_design",
+        "examples/battery",
+        "examples/tariffs",
+        "examples/uncertainty",
+    ],
+    "within_subsection_order": "FileNameSortKey",
+    "download_all_examples": False,
+    "remove_config_comments": True,
+    "abort_on_example_error": True,
+    "only_warn_on_example_error": False,
+    "reset_modules": ("matplotlib",),
+    "capture_repr": ("_repr_html_",),
+    "min_reported_time": 3600,
+    "write_computation_times": False,
+    "show_signature": False,
+    "default_thumb_file": str(Path(__file__).parent / "_static" / "BREOS.png"),
+    "matplotlib_animations": False,
+}
 
 # --- HTML output ------------------------------------------------------------
 

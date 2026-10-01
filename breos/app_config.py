@@ -662,7 +662,7 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
             "Simulate only the window from `start` to `end`, local dates in the year of `start_date`, `end` "
             "exclusive. The window runs once: energy and year-1 money cover the window, and lifetime economics are "
             "`None`. See "
-            "[`[period]`](#period) and [Simulate part of a year](recipes.md#simulate-part-of-a-year)"
+            "[`[period]`](#period) and [Simulate part of a year](configuration.md#simulate-part-of-a-year)"
         ),
         default_doc="*unset*",
         summary="simulation.period",
@@ -722,7 +722,7 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         doc=(
             "Source part of the cached `weather/<location>_tmy_<years>_<source>.csv` (or gzip-compressed `.csv.gz`) "
             'file to load, e.g. `"pvgis-sarah3"`. Needed only when several TMY files exist for a location preset; see '
-            "[Offline runs with cached weather](recipes.md#offline-runs-with-cached-weather)"
+            "[Run offline with cached weather](../how-to/offline-weather.md)"
         ),
         summary="simulation.weather_source",
     ),
@@ -871,7 +871,7 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         default_doc="*unset*",
     ),
     "sweep": AppConfigField(
-        doc="Parameter grid, read by `breos sweep`; see [Parameter sweep](recipes.md#parameter-sweep)",
+        doc="Parameter grid, read by `breos sweep`; see [Run a parameter sweep](../how-to/parameter-sweep.md)",
         default_doc="*unset*",
     ),
 }

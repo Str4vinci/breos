@@ -66,6 +66,13 @@ BREOS from the installed wheel instead of the source checkout. It also imports
 all 14 vendored BLAST models and verifies the installed BLAST license, DOE
 notice, and pinned upstream provenance.
 
+Regenerate the example-gallery results *after* bumping the package version,
+so every page is stamped with the release: run
+`uv run python tools/regenerate_gallery_results.py` (all cases, about ten
+minutes; it fetches the Open-Meteo history for the Monte Carlo case), then
+`uv run python tools/regenerate_gallery_results.py --check`, and commit
+`docs/examples/_results/`.
+
 Regenerate `validation/baselines/breos_baseline.json` *after* bumping the
 package version, not before. The baseline records `breos.__version__` as read
 at generation time, so a baseline generated on the previous version stamps

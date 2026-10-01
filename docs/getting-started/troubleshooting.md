@@ -39,7 +39,7 @@ directory's `weather/` folder when available; otherwise it fetches PVGIS TMY
 weather. Check internet access and retry before changing model settings.
 
 For repeatable or offline work, seed the weather cache as shown in
-[Offline runs with cached weather](recipes.md#offline-runs-with-cached-weather).
+[Run offline with cached weather](../how-to/offline-weather.md).
 To use NSRDB data, download it separately with your own NREL credentials and
 load the saved weather file locally. Custom coordinate-dict locations do not
 use a preset cache key and therefore fetch weather when used through `App`.

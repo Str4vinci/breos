@@ -527,7 +527,7 @@ fixed_charge_per_day = 0.25              # optional, default 0
 Monte Carlo prices every trajectory with the same tariff. Projected
 optimization accepts the same tariff table in its nested config; see
 [Optimization](optimization.md#price-a-design-with-a-time-of-use-tariff).
-To compare several offers, see [Compare tariffs](recipes.md#compare-tariffs).
+To compare several offers, see {doc}`Which tariff after PV? <../gallery/tariffs/plot_09_which_tariff>`.
 
 ## Terminal-health credit
 
@@ -799,7 +799,7 @@ controller and planner versions, the effective planner settings, the
 forecast, warm-start and terminal policies, the schedule hash, an
 `instruction_hash` of the instructions the run executed in every project
 year, and the stored energy by origin at the start and end of the project.
-[`App.revalue`](recipes.md#revalue-a-run-at-other-prices) simulates the run
+[`App.revalue`](../api/app.md#revalue-a-finished-run) simulates the run
 again when the import or export prices change, since they move the plan; a
 change to the fixed charge alone is re-priced. Monte Carlo and projected
 optimization refuse the mode, because they share one set of static

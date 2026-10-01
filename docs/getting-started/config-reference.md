@@ -6,7 +6,7 @@ Every key a {py:class}`~breos.App` config accepts, generated from the
 configuration registry that validates it. A key that is not listed here is
 rejected. The keys inside the `[montecarlo]` and `[sweep]` runner sections are
 described on the [Monte Carlo](monte-carlo.md) and
-[Parameter sweep](recipes.md#parameter-sweep) pages. [Configuration](configuration.md) explains how the keys work
+[Run a parameter sweep](../how-to/parameter-sweep.md) pages. [Configuration](configuration.md) explains how the keys work
 together; [Packaged options](options.md) lists the preset keys they accept.
 
 ## Top-level keys
@@ -66,7 +66,7 @@ is a `breos run` option that overrides the config file.
 | `montecarlo` | *unset* | — | Monte Carlo study controls, read by `breos montecarlo`; see [Monte Carlo](monte-carlo.md#configure-a-study) |
 | `n_modules` | *required unless `pv_arrays` is set* | `--n-modules` | Number of PV modules |
 | `om_escalation` | `None` | `--om-escalation` | Annual escalation of O&M costs; `None` uses `inflation_rate` |
-| `period` | *unset* | — | Simulate only the window from `start` to `end`, local dates in the year of `start_date`, `end` exclusive. The window runs once: energy and year-1 money cover the window, and lifetime economics are `None`. See [`[period]`](#period) and [Simulate part of a year](recipes.md#simulate-part-of-a-year) |
+| `period` | *unset* | — | Simulate only the window from `start` to `end`, local dates in the year of `start_date`, `end` exclusive. The window runs once: energy and year-1 money cover the window, and lifetime economics are `None`. See [`[period]`](#period) and [Simulate part of a year](configuration.md#simulate-part-of-a-year) |
 | `projection_years` | `20` | `--projection-years` | Economic projection horizon in years |
 | `pv_arrays` | `None` | — | List of arrays, each with at least `modules`; other keys inherit from the top level. The array module total replaces `n_modules`; see [`[[pv_arrays]]`](#pv_arrays) |
 | `pv_degradation_rate` | `0.005` | `--pv-degradation-rate` | Annual PV degradation rate, compounded and counted from the start of each year, so year 1 has none; see [Module aging](../api/pv.md#module-aging) |
@@ -83,14 +83,14 @@ is a `breos run` option that overrides the config file.
 | `solar_position` | `"interval-start"` | `--solar-position` | Where within each timestep the sun position is evaluated. `"mid-interval"` adds half a timestep. `"weather"` reads the representative-time offset from content-bound weather metadata, including provider offsets for instantaneous irradiance and left- or right-labelled interval means. One of `"interval-start"`, `"mid-interval"`, `"weather"` |
 | `start_date` | `"2023-01-01"` | `--start-date` | 1 January of the study year, `YYYY-01-01`. The App simulates that year, or the `period` window in it. Monte Carlo does not use it for the load or weather; its `target_year` sets the study year |
 | `surface_type` | `None` | `--surface-type` | Named ground cover mapped to an albedo; an alternative to `albedo`. One of `"aluminum"`, `"asphalt"`, `"concrete"`, `"copper"`, `"dirty steel"`, `"fresh grass"`, `"fresh snow"`, `"fresh steel"`, `"grass"`, `"sand"`, `"sea"`, `"snow"`, `"soil"`, `"urban"` |
-| `sweep` | *unset* | — | Parameter grid, read by `breos sweep`; see [Parameter sweep](recipes.md#parameter-sweep) |
+| `sweep` | *unset* | — | Parameter grid, read by `breos sweep`; see [Run a parameter sweep](../how-to/parameter-sweep.md) |
 | `tariff` | *unset* | — | Time-of-use import and export prices on a bundled or custom schedule, replacing the flat `costs.electricity_cost`, `costs.electricity_sold_cost` and `costs.daily_power_cost`; see [`[tariff]`](#tariff) and [Time-of-use tariffs](configuration.md#time-of-use-tariffs) |
 | `temperature_model` | `"faiman"` | `--temperature-model` | Cell-temperature model and mounting preset. `"pvsyst-*"` and `"sapm-*"` use documented mounting coefficients; `"noct-sam"` needs sourced module NOCT and efficiency metadata, which no bundled module has yet. The default is Faiman, open rack. One of `"faiman"`, `"pvsyst-freestanding"`, `"pvsyst-semi-integrated"`, `"pvsyst-insulated"`, `"sapm-open-rack-glass-glass"`, `"sapm-close-mount-glass-glass"`, `"sapm-open-rack-glass-polymer"`, `"sapm-insulated-back-glass-polymer"`, `"noct-sam"` |
 | `terminal_value` | *unset (basis = none)* | — | Optional accounting sensitivity for the final battery pack's capacity health; see [`[terminal_value]`](#terminal_value) and [Terminal-health credit](configuration.md#terminal-health-credit) |
 | `tilt` | `None` | `--tilt` | Tilt angle (degrees). `None` estimates it from the latitude |
 | `tracking` | `"fixed"` | — | Tracking mode: `"fixed"`, `"single_axis"`, `"dual_axis"` |
 | `transposition_model` | `"isotropic"` | `--transposition-model`, `--sky-model` | Sky-diffusion model used to project GHI/DHI/DNI onto the plane of array; see [Sky-diffusion model](configuration.md#sky-diffusion-transposition-model). One of `"isotropic"`, `"klucher"`, `"haydavies"`, `"reindl"`, `"king"`, `"perez"`, `"perez-driesse"` |
-| `weather_source` | `None` | `--weather-source` | Source part of the cached `weather/<location>_tmy_<years>_<source>.csv` (or gzip-compressed `.csv.gz`) file to load, e.g. `"pvgis-sarah3"`. Needed only when several TMY files exist for a location preset; see [Offline runs with cached weather](recipes.md#offline-runs-with-cached-weather) |
+| `weather_source` | `None` | `--weather-source` | Source part of the cached `weather/<location>_tmy_<years>_<source>.csv` (or gzip-compressed `.csv.gz`) file to load, e.g. `"pvgis-sarah3"`. Needed only when several TMY files exist for a location preset; see [Run offline with cached weather](../how-to/offline-weather.md) |
 
 ## costs
 
@@ -209,7 +209,7 @@ Battery dispatch by tariff period, as `[smart_charging]` in TOML; see [Smart cha
 
 ## period
 
-A window shorter than a year, as `[period]` in TOML; see [Simulate part of a year](recipes.md#simulate-part-of-a-year). Both dates are local civil dates in the location's timezone, in the year of `start_date`, and the window runs from local midnight of `start` to local midnight of `end`.
+A window shorter than a year, as `[period]` in TOML; see [Simulate part of a year](configuration.md#simulate-part-of-a-year). Both dates are local civil dates in the location's timezone, in the year of `start_date`, and the window runs from local midnight of `start` to local midnight of `end`.
 
 | Key | Required | Description |
 |---|---|---|

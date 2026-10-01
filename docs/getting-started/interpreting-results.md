@@ -268,7 +268,7 @@ from year-end values, not an exact date.
 
 ## Period runs
 
-A run with a [`[period]`](recipes.md#simulate-part-of-a-year) window
+A run with a [`[period]`](configuration.md#simulate-part-of-a-year) window
 simulates that window once, with no projection years. Its result keeps the
 full-year keys, with these differences:
 
@@ -353,7 +353,7 @@ by feature:
   columns. The cost projection and Monte Carlo trajectories carry the export
   CO2 columns, `CO2_Avoided_Export_kg` and `CO2_Avoided_Export_Cumulative_kg`.
 - **Revaluation.** Results of
-  [`App.revalue`](recipes.md#revalue-a-run-at-other-prices) carry
+  [`App.revalue`](../api/app.md#revalue-a-finished-run) carry
   `provenance.revaluation`.
 - **Optimizer.** The optimizer's provenance carries `constraints` and
   `run_settings`; the Pareto rows of a search with `[emissions]` carry the
