@@ -12,6 +12,7 @@ import pandas as pd
 from breos.app_config import ResolvedAppConfig
 from breos.battery import LEDGER_SCHEMA_VERSION
 from breos.economics import projection_rates_record
+from breos.execution import config_has_battery
 from breos.result_schema import RESULT_SCHEMA_VERSION
 from breos.runners.app import CO2_COLUMNS, SimulationArtifacts
 from breos.smart_charging import PLANNER_MODES
@@ -337,7 +338,9 @@ def build_result(
         # The part of grid_import_cost_year1_prices bought to charge the battery.
         result["grid_charge_cost_year1_prices"] = _round2(year1["Grid_Charge_Cost"])
 
-    if cfg["battery_kwh"] > 0:
+    # A battery too small to dispatch runs, and is priced, as PV-only; it has
+    # no state of health or replacements to report.
+    if config_has_battery(cfg):
         soh_digits = 1 if cfg["degradation_engine"] == "blast" else 2
         result["battery_soh_end_pct"] = round(float(artifacts.current_soh), soh_digits)
         result["battery_replacements"] = artifacts.total_replacements

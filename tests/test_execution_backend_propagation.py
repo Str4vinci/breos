@@ -349,7 +349,14 @@ def test_app_records_the_pv_only_path_for_a_battery_too_small_to_dispatch(_patch
     """
     app = App({**BASE_CONFIG, "battery_kwh": 0.0005})
     app.simulate()
-    assert app.result()["provenance"]["execution"]["dispatch_path"] == PV_ONLY_DISPATCH_PATH
+    result = app.result()
+    assert result["provenance"]["execution"]["dispatch_path"] == PV_ONLY_DISPATCH_PATH
+    # Nor does it report a battery's health or replacements, as a PV-only run does not.
+    pv_only = App({**BASE_CONFIG, "battery_kwh": 0})
+    pv_only.simulate()
+    battery_fields = {key for key in result if key.startswith("battery_")}
+    assert battery_fields == {key for key in pv_only.result() if key.startswith("battery_")}
+    assert "battery_soh_end_pct" not in result
 
 
 def test_app_assembled_outputs_are_identical_on_both_backends(_patch_weather):
