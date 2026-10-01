@@ -122,6 +122,7 @@ def build_rows(results: dict):
                     else None
                 ),
                 "pvwatts": pvwatts_annual,
+                "pvwatts_trusted": bool(pvwatts_annual and pvwatts.get("trusted")),
                 "pvwatts_dev": _pct(perez, pvwatts_annual),
                 "monthly_dev_max": monthly_dev_max,
                 "notes": "; ".join(notes),
@@ -168,6 +169,26 @@ def print_table(rows, results):
         )
 
 
+def _pvwatts_status(rows):
+    """Report lines saying which locations the PVWatts band test checks; it skips the others."""
+    untrusted = [r["name"] for r in rows if not r["pvwatts_trusted"]]
+    if not untrusted:
+        return []
+    if len(untrusted) == len(rows):
+        text = (
+            "No location has a trusted PVWatts v8 reference in the committed snapshot (the Notes column "
+            "gives each fetch result), so the PVWatts columns are empty and the PVWatts band test skips. "
+            "This report is not a PVWatts validation."
+        )
+    else:
+        text = (
+            f"{', '.join(untrusted)} {'has' if len(untrusted) == 1 else 'have'} no trusted PVWatts v8 "
+            "reference in the committed snapshot, so the PVWatts band test skips "
+            f"{'it' if len(untrusted) == 1 else 'them'}."
+        )
+    return [text, ""]
+
+
 def write_report(rows, results):
     system, _ = load_spec()
     lines = [
@@ -185,6 +206,7 @@ def write_report(rows, results):
         "PVWatts uses NSRDB/international station data). The tight regression guarantee "
         "is the baseline test in `tests/test_validation_drift.py`; these bands catch gross drift.",
         "",
+        *_pvwatts_status(rows),
         "The roof-mount column is the yield delta of `perez_roof` (PVsyst semi-integrated "
         "thermal preset) against `perez` (free-standing) — a documented model-choice effect, "
         "not a comparison against the free-standing references.",
