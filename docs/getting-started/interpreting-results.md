@@ -2,7 +2,8 @@
 
 `App.result()` returns a plain Python dict, JSON-serializable, with no
 pandas or numpy types. The same dict is written by the CLI's `--output`
-flag.
+flag. For the step-by-step flows of the first year, use
+[`App.timeseries()`](../api/app.md).
 
 ## Top-level keys
 

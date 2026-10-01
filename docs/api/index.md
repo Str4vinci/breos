@@ -12,20 +12,6 @@ The pages below cover lower-level module APIs you reach for when composing a
 custom pipeline. Import those lower-level names from their modules, for example
 `from breos.solar import calculate_pv_production_dc`.
 
-## The App facade
-
-{py:meth}`App.result() <breos.App.result>` returns the run's results as a
-plain dict. {py:meth}`App.timeseries() <breos.App.timeseries>` returns the
-first simulated year step by step, as a DataFrame with the columns of the
-[ledger schema](energy-balance.md#ledger-schema).
-
-```{eval-rst}
-.. autosummary::
-   :toctree: generated/
-
-   breos.App
-```
-
 ## Domain areas
 
 ::::{grid} 1 2 2 4
@@ -35,8 +21,8 @@ first simulated year step by step, as a DataFrame with the columns of the
 :link: app
 :link-type: doc
 
-`breos.App`: simulate one design, read its result, and revalue it at other
-prices.
+`breos.App`: simulate one design, read its result and time series, and
+revalue it at other prices.
 :::
 
 :::{grid-item-card} Weather

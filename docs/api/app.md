@@ -7,6 +7,9 @@ dict, the same keys as a TOML file for `breos run`
 load, battery, economics and emissions with `simulate()`, and returns a plain
 JSON-serializable dict from `result()`
 ([Interpreting results](../getting-started/interpreting-results.md)).
+{py:meth}`App.timeseries() <breos.App.timeseries>` returns the first
+simulated year step by step (a `[period]` run's window), as a DataFrame with
+the columns of the [ledger schema](energy-balance.md#ledger-schema).
 
 ```{eval-rst}
 .. autosummary::
