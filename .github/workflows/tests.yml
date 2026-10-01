@@ -1,12 +1,12 @@
 name: Tests
 
 on:
-  # Not develop: its branch protection requires a pull request to be up to
-  # date before it merges, so the pull_request run has already tested the exact
-  # tree the merge lands. The nightly coverage run still runs the full suite on
-  # develop itself.
+  # Develop too: its branch protection does not require a pull request to be
+  # up to date before it merges, so two PRs that pass alone can still break
+  # together. The push run tests the tree each merge lands, without blocking
+  # it; the nightly coverage run still runs the full suite on develop itself.
   push:
-    branches: [main, "release/**"]
+    branches: [main, develop, "release/**"]
   # Deliberately unfiltered: a `branches` filter here matches the *base* of the
   # pull request, so a PR stacked on another feature branch would get no run at
   # all until it was retargeted at develop, which is the point where a failure
@@ -82,10 +82,10 @@ jobs:
     # the complete version matrix remains on Linux above. macOS minutes are
     # metered at about ten times the Linux rate, so this runs nightly, on
     # demand, and at the release gates (pushes to main and release/**, and PRs
-    # into them) rather than on every PR commit. A platform-only break on
-    # develop surfaces within a day.
+    # into them) rather than on every PR commit or develop merge. A
+    # platform-only break on develop surfaces within a day.
     if: >-
-      github.event_name == 'push' ||
+      (github.event_name == 'push' && github.ref != 'refs/heads/develop') ||
       github.event_name == 'schedule' ||
       github.event_name == 'workflow_dispatch' ||
       github.base_ref == 'main' ||
