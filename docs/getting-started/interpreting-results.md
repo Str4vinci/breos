@@ -37,7 +37,7 @@ for each numbered run. Disabled values are NaN with no statistics or
 terminal-value provenance. Projected optimization ignores the table and
 ranks on unadjusted NPV.
 
-## Currency and schema version
+## Currency and result format
 
 Money keys carry no currency. Every money value in a result is in the run's
 currency, which `provenance.currency` records: the tariff's `currency` when
@@ -45,95 +45,95 @@ the run has a `[tariff]` table, otherwise `EUR`, the currency of the bundled
 cost catalogue. BREOS does not convert currencies. Summary and plot labels
 read the recorded currency.
 
-`result_schema_version` versions the result's names, independently of the
-ledger schema. Version `"1.0"` dropped the `_eur` suffixes and renamed the
-`_exact` payback fields to `_interpolated`, with no aliases (the
+`result_schema_version` is the result's format number, independent of the
+ledger schema. The format changes, to the next integer, only when a field is
+renamed or removed, a change that breaks existing readers. Added fields do
+not change it: the
 [changelog](https://github.com/Str4vinci/breos/blob/develop/CHANGELOG.md)
-lists every rename). Version `"1.1"` adds the
-[year-1 money keys](#year-1-money-keys), `"1.2"` adds `provenance.economics`
-([Economic conventions](#economic-conventions)), `"1.3"` adds
-`Replaced_Capacity_kWh` to the year rows of Monte Carlo trajectories and
-optimizer tables, `"1.4"` adds `provenance.revaluation` to the results of
-[`App.revalue`](recipes.md#revalue-a-run-at-other-prices) and the export CO2
-columns (`CO2_Avoided_Export_kg`, `CO2_Avoided_Export_Cumulative_kg`) to the
-cost projection and Monte Carlo trajectories, `"1.5"` adds `constraints` and
-`run_settings` to the optimizer's provenance and the `Projected_CO2_*`
-columns to the Pareto rows of a search with `[emissions]`, `"1.6"` adds
-`inverter_ac_rating_kw` to the `resolved_config` of App and Monte Carlo
-results, `"1.7"` adds the [`period` keys](#period-runs) of a run over part
-of a year, and `"1.8"` adds `calendar_year`, the
-`target_year` the load was built for, to Monte Carlo's
-`provenance.load_profile`.
-Version "2.0" removes configuration and metadata fields without an
-operational effect, removes duplicate CO2 and legacy PV keys, and renames
-monthly/yearly grid fields and optimizer payback columns. The migration table
-below lists every change.
-Version "2.1" adds `tariff.custom_schedule` to the `resolved_config` of App
-and Monte Carlo results that set an inline
-[custom schedule](../api/tariffs.md#custom-app-schedules).
-Version "2.2" adds the record of the experimental
-[daily-persistence smart charging](configuration.md#daily-persistence-experimental)
-to `provenance.smart_charging` of App results that configure it:
-`experimental`, `controller_version`, `planner_version`,
-`forecast_horizon_days`, `target_levels`, `soc_states`, `forecast_policy`,
-`warm_start_policy`, `planner_terminal_policy`, and the
-`initial_stored_energy` and `final_stored_energy` by origin. Other results
-are unchanged.
-Version "2.3" adds `battery_allow_terminal_replacement` to the
-`resolved_config` of App and Monte Carlo results, and
-`battery_replacement_treatment`, with its `allow_terminal_replacement`
-policy and a `terminal_period` description, to the provenance of a projected
-design and of an optimizer search. See
-[battery replacement at the end of the horizon](configuration.md#battery-replacement-at-the-end-of-the-horizon).
-Default results are otherwise unchanged.
-Version "2.4" adds calendar-month
-[seasons](../api/tariffs.md#month-seasons) to custom schedules: `seasons` in
-`resolved_config.tariff.custom_schedule` and, as the month partition, in
-`provenance.tariff`. With month seasons, `import_prices` and `export_prices`
-in the resolved config and in `provenance.tariff` may map each season to its
-period prices instead of each period to a price. Results without month
-seasons are unchanged.
-Version "2.5" adds the [`discharge_only`](configuration.md#discharge-only)
-smart-charging mode to `provenance.smart_charging`: such a run records its
-discharge periods, an empty `charge_periods`, and `None` for
-`target_usable_fraction`, `grid_charge_efficiency` and
-`grid_import_limit_w`. The App's top-level `smart_charging` block reports it
-as it reports the other modes. Other results are unchanged.
+of each release lists them, and `breos_version` in App, Monte Carlo and optimizer
+provenance identifies the release that wrote a result. BREOS 0.7.0 writes format `"1"`, the first
+released format. Results from earlier BREOS versions carry no format number;
+the [migration table](#migrating-from-breos-062) maps their names.
 
-Version "2.6" adds the no-system cost components: `no_system_fixed_charge_year1_prices`
-(see [Year-1 money keys](#year-1-money-keys)), `no_system_cost_import` and
-`no_system_cost_fixed_charge` in the `financial` rows, the
-`Cost_No_Sys_Import` and `Cost_No_Sys_Fixed_Charge` cost-projection columns
-and the `Baseline_Fixed_Charge` year-row column of Monte Carlo and optimizer
-tables, and `reference_tariff` in the
-`resolved_config` of App and Monte Carlo results. Results with a
-[no-system reference tariff](configuration.md#no-system-reference-tariff)
-also carry `provenance.reference_tariff`. Without one, every existing value is
-unchanged.
-Version "2.7" adds `overlap_policy` to `provenance.smart_charging` in App,
-Monte Carlo and optimizer results, including the default `reject`.
-`hold_target` permits overlapping periods in `fixed_target` only and keeps
-the grid target as the discharge floor. The timestep ledger is unchanged.
-Version "2.8" adds the three terminal-health fields, `terminal_value` in
-resolved config and optional `provenance.terminal_value` (see above).
-Version "3.0" replaces `preserve_irradiance_energy` with the irradiance
-resampling policy. The boolean is gone from App `provenance.weather` and
-from Monte Carlo `settings` and `runtime_weather.metadata`; those weather
-records carry `irradiance_resampling` (requested) and
-`irradiance_resampling_resolved` instead, with per-component fallback and
-zero-support counts and the observational `irradiance_closure` residuals.
-`irradiance_resampling` is added to `resolved_config` and to the optimizer's
-`simulation` config, and optimizer provenance gains `simulation`, `weather`
-and, for a real weather sequence, `weather_by_year`. See
-[hourly weather at 15-minute resolution](configuration.md#hourly-weather-at-15-minute-resolution).
-A renamed or removed key bumps the
-major version, an added key the minor. A result without the key predates 1.0.
+## Provenance records
+
+Besides the [top-level keys](#top-level-keys), results record the following,
+by feature:
+
+- **Economics.** `provenance.economics` holds the rates a projection used
+  ([Economic conventions](#economic-conventions)) in App, Monte Carlo and
+  optimizer provenance. The year rows of Monte Carlo trajectories and
+  optimizer tables carry `Replaced_Capacity_kWh` and the year-1-price money
+  columns. The cost projection and Monte Carlo trajectories carry the export
+  CO2 columns, `CO2_Avoided_Export_kg` and `CO2_Avoided_Export_Cumulative_kg`.
+- **Revaluation.** Results of
+  [`App.revalue`](recipes.md#revalue-a-run-at-other-prices) carry
+  `provenance.revaluation`.
+- **Optimizer.** The optimizer's provenance carries `constraints` and
+  `run_settings`; the Pareto rows of a search with `[emissions]` carry the
+  `Projected_CO2_*` columns.
+- **Inverter.** `inverter_ac_rating_kw` is in the `resolved_config` of App
+  and Monte Carlo results.
+- **Period runs.** A run over part of a year carries the
+  [`period` keys](#period-runs).
+- **Load year.** Monte Carlo's `provenance.load_profile` records
+  `calendar_year`, the `target_year` the load was built for.
+- **Custom schedules.** App and Monte Carlo results that set an inline
+  [custom schedule](../api/tariffs.md#custom-app-schedules) carry
+  `tariff.custom_schedule` in `resolved_config`. A schedule with calendar-month
+  [seasons](../api/tariffs.md#month-seasons) records `seasons` in
+  `resolved_config.tariff.custom_schedule` and, as the month partition, in
+  `provenance.tariff`. With month seasons, `import_prices` and
+  `export_prices` in the resolved config and in `provenance.tariff` may map
+  each season to its period prices instead of each period to a price.
+- **Smart charging.** `provenance.smart_charging` records `overlap_policy`
+  in App, Monte Carlo and optimizer results, including the default `reject`;
+  `hold_target` permits overlapping periods in `fixed_target` only and keeps
+  the grid target as the discharge floor. A
+  [`discharge_only`](configuration.md#discharge-only) run records its
+  discharge periods, an empty `charge_periods`, and `None` for
+  `target_usable_fraction`, `grid_charge_efficiency` and
+  `grid_import_limit_w`; the App's top-level `smart_charging` block reports
+  it as it reports the other modes. An App run with the experimental
+  [daily-persistence smart charging](configuration.md#daily-persistence-experimental)
+  records `experimental`, `controller_version`, `planner_version`,
+  `forecast_horizon_days`, `target_levels`, `soc_states`, `forecast_policy`,
+  `warm_start_policy`, `planner_terminal_policy`, and the
+  `initial_stored_energy` and `final_stored_energy` by origin.
+- **Battery replacement at the end of the horizon.**
+  `battery_allow_terminal_replacement` is in the `resolved_config` of App and
+  Monte Carlo results, and the provenance of a projected design and of an
+  optimizer search carries `battery_replacement_treatment`, with its
+  `allow_terminal_replacement` policy and a `terminal_period` description.
+  See
+  [battery replacement at the end of the horizon](configuration.md#battery-replacement-at-the-end-of-the-horizon).
+- **No-system costs.** Results carry `no_system_fixed_charge_year1_prices`
+  (see [Year-1 money keys](#year-1-money-keys)), `no_system_cost_import` and
+  `no_system_cost_fixed_charge` in the `financial` rows, the
+  `Cost_No_Sys_Import` and `Cost_No_Sys_Fixed_Charge` cost-projection columns,
+  the `Baseline_Fixed_Charge` year-row column of Monte Carlo and optimizer
+  tables, and `reference_tariff` in the `resolved_config` of App and Monte
+  Carlo results. Results with a
+  [no-system reference tariff](configuration.md#no-system-reference-tariff)
+  also carry `provenance.reference_tariff`.
+- **Terminal-health credit.** The three terminal-health fields,
+  `terminal_value` in the resolved config and the optional
+  `provenance.terminal_value` are described [above](#terminal-health-credit).
+- **Irradiance resampling.** App `provenance.weather` and Monte Carlo
+  `settings` and `runtime_weather.metadata` record `irradiance_resampling`
+  (requested) and `irradiance_resampling_resolved`, with per-component
+  fallback and zero-support counts and the observational
+  `irradiance_closure` residuals. `irradiance_resampling` is in
+  `resolved_config` and in the optimizer's `simulation` config, and
+  optimizer provenance carries `simulation`, `weather` and, for a real
+  weather sequence, `weather_by_year`. See
+  [hourly weather at 15-minute resolution](configuration.md#hourly-weather-at-15-minute-resolution).
 
 ## Top-level keys
 
 | Key | Description |
 |---|---|
-| `result_schema_version` | Version of the result's names (see above) |
+| `result_schema_version` | Format number of the result's names (see [Currency and result format](#currency-and-result-format)) |
 | `n_modules` | Number of PV modules used in the simulation |
 | `pv_kwp` | System DC nameplate capacity (kWp) |
 | `battery_kwh` | Battery capacity (kWh) |
@@ -233,12 +233,15 @@ falls back to the same avoided-grid factor. Curtailed energy, conversion and
 storage losses, initial SOC, and PV energy remaining stored at the reporting
 boundary receive no credit.
 
-## Migrating from result schema 1.8
+## Migrating from BREOS 0.6.2
 
-Schema 2.0 removes the old names without compatibility aliases. Update readers
-using the following mappings:
+BREOS 0.7.0 removes the old names below without compatibility aliases.
+Update readers using the following mappings. The currency-neutral renames
+(the dropped `_eur` suffixes and the `_exact` payback fields, now
+`_interpolated`) are listed in the
+[changelog](https://github.com/Str4vinci/breos/blob/develop/CHANGELOG.md).
 
-| Schema 1.8 field | Schema 2.0 field or action |
+| 0.6.2 field | 0.7.0 field or action |
 |---|---|
 | App config `dc_coupled` and `provenance.resolved_config.dc_coupled` | Remove the config key; it is now unknown. BREOS always uses its supported DC-coupled/hybrid dispatch. |
 | `BatteryModelProfile.operating_defaults`, discovery JSON `operating_defaults`, and serialized `model_profile.operating_defaults` | Remove the read. Profiles did not define any defaults; this field was always empty. |
@@ -251,7 +254,7 @@ using the following mappings:
 | `monthly[].import_kwh`, `yearly[].import_kwh` | Corresponding `grid_import_kwh` row field; values are unchanged |
 | `monthly[].export_kwh`, `yearly[].export_kwh` | Corresponding `grid_export_kwh` row field; values are unchanged |
 | Optimizer `Projected_Breakeven_Year` | `Projected_Payback_Year` |
-| Optimizer `Projected_Breakeven_Year_Interpolated` | `Projected_Payback_Year_Interpolated` |
+| Optimizer `Projected_Breakeven_Year_Exact` | `Projected_Payback_Year_Interpolated` |
 
 The removed legacy PV fields and `usable_ac_system_production_kwh` report
 different quantities. The old value counted PV DC sent into storage before
@@ -261,7 +264,7 @@ load, and exported AC. This is also the retained definition of annual
 `PV_Production_kWh`. The timestep ledger still carries its `PV_Production`
 field, and dispatch values do not change.
 
-Schema 2.0 does not normalize enum spelling in echoed provenance: for example,
+BREOS 0.7.0 does not normalize enum spelling in echoed provenance: for example,
 the configured spelling remains in `provenance.resolved_config`.
 
 ## Multi-array systems

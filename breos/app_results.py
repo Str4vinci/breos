@@ -197,7 +197,7 @@ def _provenance(
     if artifacts.smart_charging is not None:
         # The result's smart_charging block reports the stored energy. The
         # experimental daily_persistence record also keeps it, unrounded, as
-        # part of what identifies the policy's run (result schema 2.2).
+        # part of what identifies the policy's run.
         planned = artifacts.smart_charging["mode"] in PLANNER_MODES
         provenance["smart_charging"] = {
             key: deepcopy(value)

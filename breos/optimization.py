@@ -42,6 +42,7 @@ from breos.solar import (
     calculate_pv_production_dc,
 )
 from breos.tariffs import ResolvedTariff, reference_tariff_provenance, result_currency, tariff_provenance
+from breos.utils import package_version
 from breos.weather import build_battery_temperature_series, resample_to_15min, weather_metadata
 
 
@@ -523,6 +524,7 @@ class _OptimizationTariff:
         # Every money column is in this currency; BREOS does not convert.
         record: Dict[str, Any] = {
             "result_schema_version": RESULT_SCHEMA_VERSION,
+            "breos_version": package_version(),
             "currency": result_currency(self.tariff),
         }
         if self.tariff is not None:

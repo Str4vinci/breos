@@ -86,8 +86,8 @@ top-level values close to these:
 Exact numbers shift with the PVGIS TMY vintage and dependency versions, but a
 plausible first run lands in the same neighborhood — roughly 8 MWh/yr of PV
 usable AC production and 75–85% grid independence for this config. The
-production value is the current usable-AC measure; schema 1.8's
-`pv_production_kwh` also counted DC energy sent into storage, so its numbers
+production value is the current usable-AC measure; the `pv_production_kwh`
+of BREOS 0.6.2 also counted DC energy sent into storage, so its numbers
 cannot be carried over to this field. If your values are far off, use the
 dry-run summary and [Required Inputs](inputs.md) to check which defaults your
 run actually used.

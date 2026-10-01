@@ -473,7 +473,7 @@ function; it is biased when recharge prices beyond the window differ from
 those inside it. Monte Carlo and projected optimization, which share one
 set of static instructions across trajectories or candidates, refuse the
 mode. Price-aware dispatch forces simulation, so `App.revalue` re-simulates
-when the per-step prices change. Result schema 2.2 records the policy in
+when the per-step prices change. Results record the policy in
 `provenance.smart_charging`, with a hash of the instructions every project
 year executed, and no forecast or per-day target.
 
@@ -511,7 +511,7 @@ system, independently of the system's `[tariff]` or flat costs:
   cheapest reference a household is eligible for is a study decision, not a
   BREOS feature.
 
-Result schema 2.6 reports the baseline components with or without a
+Results report the baseline components with or without a
 reference, and `provenance.reference_tariff` only when one is configured.
 
 ### A14. Overlapping periods hold the target (#347) — Accepted 2026-10-01
@@ -541,8 +541,8 @@ shared periods under `mode = "fixed_target"`:
   the same held-target instructions. Supporting it later requires the floor
   to follow each candidate and executed daily target, including warm start.
 - App, Monte Carlo and projected optimization accept `hold_target` for
-  `fixed_target`. Python and Numba execute the same kernel source. Result
-  schema 2.7 records `overlap_policy` in `provenance.smart_charging`; the
+  `fixed_target`. Python and Numba execute the same kernel source. Results
+  record `overlap_policy` in `provenance.smart_charging`; the
   instruction hash already covers the reserve and target arrays. The ledger
   schema does not change.
 

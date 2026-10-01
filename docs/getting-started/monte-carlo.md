@@ -91,7 +91,7 @@ provenance JSON recording the resolved settings and hashes of the inputs and
 outputs, which is what makes a published result auditable later. It and the
 `--json` output carry `result_schema_version` and `currency`, the currency of
 every money column (see
-[Interpreting results](interpreting-results.md#currency-and-schema-version)).
+[Interpreting results](interpreting-results.md#currency-and-result-format)).
 
 `--collect-yearly` adds a second CSV with one row per run and projection year,
 carrying the energy, degradation, and discounted-cost ledger. Cost envelopes and

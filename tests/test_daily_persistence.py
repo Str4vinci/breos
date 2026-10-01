@@ -41,7 +41,6 @@ from breos.app_config import resolve_app_config
 from breos.dispatch_instructions import DispatchInstructions
 from breos.montecarlo import MonteCarloSettings, build_year_cache, run_montecarlo
 from breos.optimization_config import resolve_optimization_config
-from breos.result_schema import RESULT_SCHEMA_VERSION
 from breos.smart_charging import SmartChargingSpec, resolve_instructions, stored_energy_by_origin
 from breos.utils import get_hours_per_step
 from tests.test_controller_seam import (
@@ -818,7 +817,6 @@ def test_provenance_identifies_the_policy_and_its_executed_trace(monkeypatch):
     result = app.result()
     record = result["provenance"]["smart_charging"]
 
-    assert result["result_schema_version"] == RESULT_SCHEMA_VERSION == "3.0"
     assert set(record) == {
         "mode",
         "overlap_policy",
