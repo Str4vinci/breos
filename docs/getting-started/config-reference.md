@@ -85,6 +85,7 @@ is a `breos run` option that overrides the config file.
 | `sweep` | *unset* | — | Parameter grid, read by `breos sweep`; see [Parameter sweep](recipes.md#parameter-sweep) |
 | `tariff` | *unset* | — | Time-of-use import and export prices on a bundled schedule, replacing the flat `costs.electricity_cost`, `costs.electricity_sold_cost` and `costs.daily_power_cost`; see [`[tariff]`](#tariff) and [Time-of-use tariffs](configuration.md#time-of-use-tariffs) |
 | `temperature_model` | `"faiman"` | `--temperature-model` | Cell-temperature model and mounting preset. `"pvsyst-*"` and `"sapm-*"` use documented mounting coefficients; `"noct-sam"` needs sourced module NOCT and efficiency metadata, which no bundled module has yet. The default is Faiman, open rack. One of `"faiman"`, `"pvsyst-freestanding"`, `"pvsyst-semi-integrated"`, `"pvsyst-insulated"`, `"sapm-open-rack-glass-glass"`, `"sapm-close-mount-glass-glass"`, `"sapm-open-rack-glass-polymer"`, `"sapm-insulated-back-glass-polymer"`, `"noct-sam"` |
+| `terminal_value` | *unset (basis = none)* | — | Optional accounting sensitivity for the final battery pack's capacity health; see [`[terminal_value]`](#terminal_value) and [Terminal-health credit](configuration.md#terminal-health-credit) |
 | `tilt` | `None` | `--tilt` | Tilt angle (degrees). `None` estimates it from the latitude |
 | `tracking` | `"fixed"` | — | Tracking mode: `"fixed"`, `"single_axis"`, `"dual_axis"` |
 | `transposition_model` | `"isotropic"` | `--transposition-model`, `--sky-model` | Sky-diffusion model used to project GHI/DHI/DNI onto the plane of array; see [Sky-diffusion model](configuration.md#sky-diffusion-transposition-model). One of `"isotropic"`, `"klucher"`, `"haydavies"`, `"reindl"`, `"king"`, `"perez"`, `"perez-driesse"` |
@@ -179,6 +180,14 @@ What the household would pay without the system, as `[reference_tariff]` in TOML
 | `import_price_escalation` |  | Annual escalation of the reference energy and fixed charge. Default: the system's import escalation |
 | `schedule` |  | Bundled schedule key of the reference; see [Bundled schedules](../api/tariffs.md#bundled-schedules). Set this, `custom_schedule`, or neither for one flat price |
 | `study_date` |  | A date in the schedule's effective window, as in `tariff.study_date`; needs a schedule |
+
+## terminal_value
+
+Optional final-pack health credit, as `[terminal_value]` in TOML. `basis` defaults to `"none"`; see [Terminal-health credit](configuration.md#terminal-health-credit).
+
+| Key | Required | Description |
+|---|---|---|
+| `basis` |  | Accounting sensitivity: `"none"` (default) or `"battery_health_fraction"`. Inherits the resolved replacement-pack price and physical `battery_eol_percentage`; introduces no separate threshold. No resale value, PV, inverter or stored-energy credit; projected optimization ignores this table. |
 
 ## smart_charging
 

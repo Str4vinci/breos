@@ -19,7 +19,7 @@ from breos.app_inputs import (
 from breos.battery import LEDGER_SCHEMA_VERSION
 from breos.degradation.results import DegradationEngineName, build_degradation_summary_from_state
 from breos.dispatch_instructions import DispatchInstructions
-from breos.economics import find_payback_year
+from breos.economics import TerminalHealthCredit, find_payback_year
 from breos.execution import aggregate_jit_cache_states, backend_provenance, config_has_battery
 from breos.load_profiles import LOAD_PROFILE_METADATA_KEY
 from breos.projection import (
@@ -84,6 +84,7 @@ class SimulationArtifacts:
     # no-system household; None when it pays the system's own prices.
     reference_tariff: dict[str, Any] | None = None
     resolved_reference_tariff: ResolvedTariff | None = None
+    terminal_health: TerminalHealthCredit | None = None
 
 
 # The avoided-CO2 columns a result reports for its first year, or its window.
@@ -106,6 +107,7 @@ def _economics_fields(value: ProjectionValue, period: SimulationPeriod | None) -
             "lcoe": value.lcoe,
             "total_replacement_cost": value.total_replacement_cost,
             "period_co2": None,
+            "terminal_health": value.terminal_health,
         }
     projection = value.cost_projection
     co2 = (
@@ -121,6 +123,7 @@ def _economics_fields(value: ProjectionValue, period: SimulationPeriod | None) -
         "lcoe": None,
         "total_replacement_cost": None,
         "period_co2": co2,
+        "terminal_health": None,
     }
 
 

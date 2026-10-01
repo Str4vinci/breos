@@ -1,8 +1,8 @@
 # 0003 — Economic basis, escalators, and currency-neutral results
 
-- **Status:** Accepted (E1–E9)
+- **Status:** Accepted (E1–E10)
 - **Date:** 2026-09-26; E1, E6 and E8 accepted 2026-09-26; E2–E5, E7, E9 and
-  the E6 inflation default accepted 2026-09-27
+  the E6 inflation default accepted 2026-09-27; E10 accepted 2026-10-01
 
 ## Context
 
@@ -254,6 +254,54 @@ currency or say "currency". The changelog carries this table.
 top-level `result_schema_version`, independent of the ledger schema. It
 starts at `"1.0"` with the E8 names. A rename or removal bumps the major
 version; an added field bumps the minor.
+
+### E10. Optional terminal-health credit — Accepted 2026-10-01
+
+An optional `[terminal_value]` table has one key, `basis`: `"none"`
+(default, also when the table or key is omitted) or
+`"battery_health_fraction"`. It is an accounting sensitivity, not resale
+value. Only the battery pack installed at the end is credited; PV modules,
+the inverter and stored energy are excluded. Capacity health omits
+resistance-related limits.
+
+Let `h` be the final installed pack's capacity SOH fraction after the last
+step's degradation, terminal cycle finalization and any replacement, and
+`h*` the physical `battery_eol_percentage` used by the simulation. The
+credited fraction is `f = clip((h - h*) / (1 - h*), 0, 1)`. No separate
+threshold is introduced. Inputs must be finite and `h* < 1`. At or below
+threshold the credit is zero; a fresh pack receives full credit.
+
+At exactly `t = T`, the end of the project horizon in years, the full
+replacement-pack price is computed by the existing replacement-outlay
+routine (E3/E4): `C0 × (1 + inflation_rate)^T ×
+(1 - replacement_cost_learning)^T`. `C0` is the resolved full replacement
+price at t = 0, including cost overrides. The nominal credit is this price
+times `f`, and its present value is discounted by `(1 + discount_rate)^T`,
+the same convention as other year-T flows. This uses exponent T, not T − 1
+(the annual energy-flow exponent), and no mid-year fallback.
+
+Every replacement outlay remains. Replacement policy is unchanged: when the
+terminal-replacement guard skips the final swap, the old pack remains and
+receives zero credit if it is at or below threshold. A zero-capacity or
+absent battery reports explicit zero credit when enabled. A partial
+`[period]` run has no lifetime economics and reports null credit.
+
+Schema 2.7 adds `terminal_health_credit`, `terminal_health_credit_npv` and
+`npv_savings_terminal_adjusted` (unadjusted NPV plus credit present value).
+App rounds money only at serialization. When disabled these scalars are
+null and terminal-value provenance is absent. When enabled for a lifetime
+run, provenance records basis, formula version, final SOH, threshold,
+resolved price basis, rates, horizon, timing and replacement policy.
+Monte Carlo computes each trajectory before aggregation, reports all three
+statistics in its existing style, and records each trajectory's valuation
+inputs. Disabled Monte Carlo values are NaN and have no statistics.
+`App.revalue` recomputes from retained final health when prices, rates or the
+table change, without re-simulating for this sensitivity.
+
+Projected optimization accepts but ignores `[terminal_value]`: evaluated
+designs do not report the credit and ranking continues on unadjusted NPV.
+Unadjusted NPV, cashflows, paybacks, LCOE, emissions, dispatch and aging are
+unchanged even when the sensitivity is enabled.
 
 ## Consequences
 

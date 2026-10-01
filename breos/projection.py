@@ -30,10 +30,12 @@ from breos.battery import (
 )
 from breos.dispatch_instructions import DispatchInstructions
 from breos.economics import (
+    TerminalHealthCredit,
     cost_analysis_projection,
     price_year_rows,
     projection_rates_record,
     replacement_fraction_from_steps,
+    terminal_health_credit,
 )
 from breos.execution import observed_jit_cache_state, reset_jit_cache_observation
 from breos.tariffs import ResolvedTariff, result_currency
@@ -822,6 +824,7 @@ class ProjectionValue:
     cost_projection: pd.DataFrame
     lcoe: float
     total_replacement_cost: float
+    terminal_health: TerminalHealthCredit | None = None
 
 
 def effective_reference_escalation(resolved: ResolvedAppConfig) -> float:
@@ -856,10 +859,24 @@ def value_projection(cfg: dict[str, Any], resolved: ResolvedAppConfig, run: Proj
             resolved.reference_tariff.import_price_escalation if resolved.reference_tariff is not None else None
         ),
     )
+    terminal = None
+    if (cfg.get("terminal_value") or {}).get("basis", "none") == "battery_health_fraction" and resolved.period is None:
+        terminal = terminal_health_credit(
+            final_soh_fraction=run.carry.soh_pct / 100 if cfg["battery_kwh"] > 0 else None,
+            threshold=cfg["battery_eol_percentage"],
+            replacement_cost_each=costs["replacement_cost_each"],
+            inflation_rate=cfg["inflation_rate"],
+            replacement_cost_learning=cfg.get("replacement_cost_learning", 0.0),
+            discount_rate=cfg["discount_rate"],
+            horizon_years=len(yearly_df),
+            npv_savings=float(cost_projection.attrs["final_npv_savings"]),
+            allow_terminal_replacement=cfg.get("battery_allow_terminal_replacement", True),
+        )
     return ProjectionValue(
         costs=costs,
         yearly_df=yearly_df,
         cost_projection=cost_projection,
         lcoe=cost_projection.attrs["lcoe_per_kwh"],
         total_replacement_cost=cost_projection.attrs["total_replacement_cost"],
+        terminal_health=terminal,
     )

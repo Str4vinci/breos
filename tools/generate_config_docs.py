@@ -36,6 +36,7 @@ from breos.app_config import (  # noqa: E402
     REFERENCE_TARIFF_TABLE,
     SMART_CHARGING_TABLE,
     TARIFF_TABLE,
+    TERMINAL_VALUE_TABLE,
 )
 from breos.config_schema import TableSpec  # noqa: E402
 from breos.economics import COST_CONFIG_KEY_TO_PARAM, CostParams  # noqa: E402
@@ -94,6 +95,12 @@ TABLES: tuple[tuple[str, TableSpec, str], ...] = (
         "[No-system reference tariff](configuration.md#no-system-reference-tariff). It prices the whole household "
         "load and its own fixed charge for the no-system cost, and nothing else: no export, and no effect on the "
         "dispatch. Without a `schedule` or `custom_schedule` it is one flat price, `import_prices = { all = <price> }`.",
+    ),
+    (
+        "terminal_value",
+        TERMINAL_VALUE_TABLE,
+        'Optional final-pack health credit, as `[terminal_value]` in TOML. `basis` defaults to `"none"`; '
+        "see [Terminal-health credit](configuration.md#terminal-health-credit).",
     ),
     (
         "smart_charging",

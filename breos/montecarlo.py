@@ -79,6 +79,9 @@ from breos.weather import (
 # Per-run columns summarized across runs, under the same names.
 _SUMMARY_METRICS = (
     "npv_savings",
+    "terminal_health_credit",
+    "terminal_health_credit_npv",
+    "npv_savings_terminal_adjusted",
     "payback_year",
     "payback_year_interpolated",
     "lcoe_per_kwh",
@@ -659,6 +662,14 @@ def _simulate_trajectory(
         "mean_import_kwh": float(yearly_df["Import_kWh"].mean()),
         "mean_export_kwh": float(yearly_df["Export_kWh"].mean()),
     }
+    terminal = value.terminal_health
+    metrics.update(
+        terminal_health_credit=terminal.nominal if terminal else float("nan"),
+        terminal_health_credit_npv=terminal.npv if terminal else float("nan"),
+        npv_savings_terminal_adjusted=terminal.adjusted_npv if terminal else float("nan"),
+    )
+    if terminal is not None:
+        metrics["_terminal_value_provenance"] = terminal.provenance
     return metrics, trajectory
 
 
@@ -937,7 +948,11 @@ def run_montecarlo(
     rows: list[dict[str, Any]] = []
     yearly_frames: list[pd.DataFrame] = []
     jit_cache_states: list[str] = []
+    terminal_records = []
     for run_idx, metrics, trajectory, jit_cache_state in outputs:
+        terminal_record = metrics.pop("_terminal_value_provenance", None)
+        if terminal_record is not None:
+            terminal_records.append({"run": run_idx + 1, **terminal_record})
         rows.append({"run": run_idx + 1, **metrics})
         if jit_cache_state is not None:
             jit_cache_states.append(jit_cache_state)
@@ -979,6 +994,11 @@ def run_montecarlo(
             ),
             "execution": execution,
             "economics": projection_rates_record(cfg),
+            **(
+                {"terminal_value": {"basis": "battery_health_fraction", "trajectories": terminal_records}}
+                if terminal_records
+                else {}
+            ),
             "ledger_schema_version": LEDGER_SCHEMA_VERSION,
             **({"tariff": tariff_provenance(tariff, calendar_year=settings.target_year)} if tariff is not None else {}),
             **(

@@ -495,6 +495,102 @@ def _replacement_outlay(base: np.ndarray, exponents: np.ndarray, inflation_rate:
     return outlay if learning == 0.0 else outlay * (1 - learning) ** exponents
 
 
+@dataclass(frozen=True)
+class TerminalHealthCredit:
+    """An accounting sensitivity beside the unadjusted NPV (ADR 0003 E10)."""
+
+    nominal: float
+    npv: float
+    adjusted_npv: float
+    provenance: Dict[str, Any]
+
+
+def terminal_health_credit(
+    *,
+    final_soh_fraction: Optional[float],
+    threshold: float,
+    replacement_cost_each: float,
+    inflation_rate: float,
+    replacement_cost_learning: float,
+    discount_rate: float,
+    horizon_years: int,
+    npv_savings: float,
+    allow_terminal_replacement: bool,
+) -> TerminalHealthCredit:
+    """Credit the installed pack's capacity health above its physical EOL threshold.
+
+    ``None`` health denotes no battery. The full pack is priced as a replacement
+    booked at exactly t = T, with the outlay routine's t = 0 price convention,
+    and discounted from that instant. No cashflow or replacement is changed.
+    Capacity health omits resistance-related limits; this is not resale value.
+    """
+    inputs = {
+        "threshold": threshold,
+        "replacement_cost_each": replacement_cost_each,
+        "inflation_rate": inflation_rate,
+        "replacement_cost_learning": replacement_cost_learning,
+        "discount_rate": discount_rate,
+        "horizon_years": horizon_years,
+        "npv_savings": npv_savings,
+    }
+    if final_soh_fraction is not None:
+        inputs["final_soh_fraction"] = final_soh_fraction
+    for name, value in inputs.items():
+        if not np.isfinite(value):
+            raise ValueError(f"terminal health credit: {name} must be finite")
+    if not 0 <= threshold < 1:
+        raise ValueError("terminal health credit: threshold must be at least 0 and below 1")
+    if replacement_cost_each < 0 or horizon_years < 1:
+        raise ValueError("terminal health credit: price must be non-negative and horizon at least 1")
+    if inflation_rate <= -1 or discount_rate <= -1 or not 0 <= replacement_cost_learning < 1:
+        raise ValueError("terminal health credit: invalid escalation, learning or discount rate")
+    fraction = (
+        float(np.clip((final_soh_fraction - threshold) / (1 - threshold), 0, 1))
+        if final_soh_fraction is not None
+        else 0.0
+    )
+    full_price = float(
+        _replacement_outlay(
+            np.array([replacement_cost_each]),
+            np.array([horizon_years], dtype=float),
+            inflation_rate,
+            replacement_cost_learning,
+        )[0]
+    )
+    nominal = full_price * fraction
+    # Reuse replacement discounting at t = T, also the year-T convention.
+    npv = _replacement_npv(pd.Series([nominal]), np.array([horizon_years]), discount_rate)
+    adjusted = npv_savings + npv
+    if not all(np.isfinite(value) for value in (full_price, nominal, npv, adjusted)):
+        raise ValueError("terminal health credit: valuation must be finite")
+    return TerminalHealthCredit(
+        nominal=nominal,
+        npv=npv,
+        adjusted_npv=adjusted,
+        provenance={
+            "basis": "battery_health_fraction",
+            "formula_version": "1.0",
+            "formula": "clip((h - h*) / (1 - h*), 0, 1)",
+            "final_soh_fraction": final_soh_fraction,
+            "threshold": threshold,
+            "health_fraction": fraction,
+            "price_basis": "full_replacement_pack_t0_prices",
+            "replacement_cost_each_t0_prices": replacement_cost_each,
+            "replacement_pack_price_year_t": full_price,
+            "inflation_rate": inflation_rate,
+            "replacement_cost_learning": replacement_cost_learning,
+            "discount_rate": discount_rate,
+            "horizon_years": horizon_years,
+            "booking_time_years": horizon_years,
+            "timing": "end_of_horizon_after_degradation_and_replacement",
+            "replacement_policy": {
+                "enable_replacement": True,
+                "allow_terminal_replacement": allow_terminal_replacement,
+            },
+        },
+    )
+
+
 # Column order of a cost projection. Columns a stage does not produce (CO2
 # without emissions) are left out; any other column a caller added to the
 # cashflows follows, in its own order.

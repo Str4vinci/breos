@@ -70,6 +70,7 @@ EXPECTED_DEFAULTS = {
     "load_profile_unit": None,
     "tariff": None,
     "reference_tariff": None,
+    "terminal_value": None,
     "smart_charging": None,
     "import_price_escalation": None,
     "om_escalation": None,

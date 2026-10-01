@@ -27,6 +27,7 @@ from breos.app_config import (
     REFERENCE_TARIFF_TABLE,
     SMART_CHARGING_TABLE,
     TARIFF_TABLE,
+    TERMINAL_VALUE_TABLE,
     check_calendar_model,
     default_module_key,
 )
@@ -312,6 +313,8 @@ OPTIMIZATION_TABLES: Mapping[str, TableSpec] = {
     "emissions": EMISSIONS_TABLE,
     "tariff": TARIFF_TABLE,
     "reference_tariff": REFERENCE_TARIFF_TABLE,
+    # Accepted for shared study configs; projected objectives ignore this sensitivity.
+    "terminal_value": TERMINAL_VALUE_TABLE,
     "smart_charging": SMART_CHARGING_TABLE,
 }
 # Top-level scalars: the App keys the optimizer reads under the same name.
