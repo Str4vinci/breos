@@ -189,11 +189,73 @@ def test_final_installed_pack_is_credited_without_changing_any_outlay_or_state(b
     assert override.nominal == pytest.approx(credit.nominal * 1234 / 2000)
 
 
-def test_enabled_pv_only_reports_zero_credit():
-    result = _app(battery_kwh=0, terminal_value=ENABLED).result()
+@pytest.mark.parametrize("engine", [{}, BLAST], ids=["native", "blast"])
+@pytest.mark.parametrize("freq", ["h", "15min"])
+def test_normally_aged_pack_credit_matches_independent_formula_and_backends(engine, freq):
+    pytest.importorskip("numba")
+    pv, load, temp = _inputs(8760 if freq == "h" else 35040, freq)
+    credits = []
+    for backend in ("python", "numba"):
+        resolved = resolve_app_config(
+            {**BASE, **engine, "resolution": freq, "execution_backend": backend, "terminal_value": ENABLED}
+        )
+        cfg = resolved.cfg
+        run = run_projection(
+            cfg,
+            resolved,
+            cfg["projection_years"],
+            lambda year: ProjectionYear(1.0, pv_dc=pv, houseload=load, temperature_series=temp),
+            has_battery=True,
+            execution_backend=backend,
+        )
+        value = value_projection(cfg, resolved, run)
+        credit = value.terminal_health
+        assert credit is not None
+        assert run.total_replacements == 0
+        health = float(value.yearly_df["Battery_SOH_%"].iloc[-1]) / 100
+        threshold = cfg["battery_eol_percentage"]
+        assert threshold < health < 1
+        horizon = len(value.yearly_df)
+        fraction = (health - threshold) / (1 - threshold)
+        expected_nominal = (
+            value.costs["replacement_cost_each"]
+            * (1 + cfg["inflation_rate"]) ** horizon
+            * (1 - cfg["replacement_cost_learning"]) ** horizon
+            * fraction
+        )
+        expected_npv = expected_nominal / (1 + cfg["discount_rate"]) ** horizon
+        assert credit.nominal == pytest.approx(expected_nominal, rel=1e-14)
+        assert credit.npv == pytest.approx(expected_npv, rel=1e-14)
+        assert credit.adjusted_npv == pytest.approx(
+            value.cost_projection.attrs["final_npv_savings"] + expected_npv, rel=1e-14
+        )
+        assert credit.provenance["final_soh_fraction"] == health
+        credits.append(credit)
+    assert credits[0] == credits[1]
+
+
+@pytest.mark.parametrize("capacity", [0, 0.0005, 0.001], ids=["no-pack", "below-boundary", "at-boundary"])
+def test_enabled_pv_only_reports_zero_credit(capacity):
+    result = _app(battery_kwh=capacity, terminal_value=ENABLED).result()
     assert result["terminal_health_credit"] == result["terminal_health_credit_npv"] == 0
     assert result["npv_savings_terminal_adjusted"] == result["npv_savings"]
     assert result["provenance"]["terminal_value"]["final_soh_fraction"] is None
+    assert result["provenance"]["execution"]["dispatch_path"] == "pv_only_vectorized"
+
+
+@pytest.mark.parametrize("capacity", [0.0005, 0.001], ids=["below-boundary", "at-boundary"])
+@pytest.mark.parametrize("table", [None, ENABLED], ids=["enable-credit", "reprice-credit"])
+def test_revalue_keeps_pv_only_boundary_credit_zero(capacity, table, monkeypatch):
+    app = _app(battery_kwh=capacity, terminal_value=table)
+    monkeypatch.setattr(
+        "breos.runners.app.run_app_simulation", mock.Mock(side_effect=AssertionError("unexpected simulation"))
+    )
+    result = app.revalue({"terminal_value": ENABLED, "costs": {"storage_cost_per_kwh": 1000}, "discount_rate": 0.08})
+    assert result["terminal_health_credit"] == result["terminal_health_credit_npv"] == 0
+    assert result["npv_savings_terminal_adjusted"] == result["npv_savings"]
+    assert result["provenance"]["terminal_value"]["final_soh_fraction"] is None
+    assert result["provenance"]["execution"]["dispatch_path"] == "pv_only_vectorized"
+    assert result["provenance"]["revaluation"]["method"] == "repriced"
 
 
 def test_period_keeps_credit_null_also_on_revalue():
@@ -243,7 +305,7 @@ def test_revalue_can_disable_an_enabled_credit(monkeypatch):
         assert _old_values(result) == _old_values(app.result())
 
 
-@pytest.mark.parametrize("capacity", [0, 5])
+@pytest.mark.parametrize("capacity", [0, 0.0005, 0.001, 5])
 def test_montecarlo_enabled_and_disabled_keep_existing_trajectory_values(capacity):
     pv, load, temp = _inputs(72)
     aligned = align_simulation_inputs(pv, load, temp, freq="h")
@@ -271,9 +333,12 @@ def test_montecarlo_enabled_and_disabled_keep_existing_trajectory_values(capacit
     )
     assert all(np.isnan(metrics[0][field]) for field in FIELDS)
     assert not set(FIELDS) & _summarize(pd.DataFrame([metrics[0]])).keys()
-    if capacity == 0:
+    if capacity <= 0.001:
         assert metrics[1]["terminal_health_credit"] == metrics[1]["terminal_health_credit_npv"] == 0
         assert metrics[1]["npv_savings_terminal_adjusted"] == metrics[1]["npv_savings"]
+        assert np.isnan(metrics[1]["final_soh_pct"])
+        assert metrics[1]["_terminal_value_provenance"]["final_soh_fraction"] is None
+        assert trajectories[1]["Battery_SOH_%"].isna().all()
 
 
 def test_montecarlo_values_each_trajectory_before_aggregation(monkeypatch):

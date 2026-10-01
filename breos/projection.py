@@ -37,7 +37,7 @@ from breos.economics import (
     replacement_fraction_from_steps,
     terminal_health_credit,
 )
-from breos.execution import observed_jit_cache_state, reset_jit_cache_observation
+from breos.execution import config_has_battery, observed_jit_cache_state, reset_jit_cache_observation
 from breos.tariffs import ResolvedTariff, result_currency
 from breos.utils import get_hours_per_step
 
@@ -862,7 +862,7 @@ def value_projection(cfg: dict[str, Any], resolved: ResolvedAppConfig, run: Proj
     terminal = None
     if (cfg.get("terminal_value") or {}).get("basis", "none") == "battery_health_fraction" and resolved.period is None:
         terminal = terminal_health_credit(
-            final_soh_fraction=run.carry.soh_pct / 100 if cfg["battery_kwh"] > 0 else None,
+            final_soh_fraction=run.carry.soh_pct / 100 if config_has_battery(cfg) else None,
             threshold=cfg["battery_eol_percentage"],
             replacement_cost_each=costs["replacement_cost_each"],
             inflation_rate=cfg["inflation_rate"],
