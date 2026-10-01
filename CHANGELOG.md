@@ -1064,14 +1064,15 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   still moves by whole years in absolute time, so irradiance stays with the
   sun. The zone reads the shifted instants with the study year's
   daylight-saving dates: the hour its spring change skips has no row, the
-  hour its autumn change repeats has two, and the index is the App's
-  simulation calendar for that year. A leap-year named-zone TMY moved to a
+  hour its autumn change repeats has two, and, unless the zone changed its
+  offset rules between the two years, the index is the App's simulation
+  calendar for that year. A leap-year named-zone TMY moved to a
   common year now drops its own local 29 February, where it previously
   dropped the UTC day and shifted part of it into 1 March. A full-year
   named-zone TMY moved between two common years or between two leap years
-  is unchanged bit for bit. A named-zone input whose UTC year differs from
-  its local year, such as rows at local New Year, is now moved by its local
-  year. The App's own weather loaders return UTC or fixed-offset indices,
+  is unchanged bit for bit. A partial named-zone input whose UTC year
+  differs from its local year, such as rows at local New Year, is now moved
+  by its local year, where it was previously moved by its UTC year. The App's own weather loaders return UTC or fixed-offset indices,
   so only weather passed to `remap_tmy_year` or `load_weather_for_simulation`
   directly, or through injected runtime dependencies, changes; App results
   from the bundled loaders are unchanged.

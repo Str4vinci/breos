@@ -96,13 +96,14 @@ def remap_tmy_year(df: pd.DataFrame, target_year: int) -> pd.DataFrame:
     An index in a named zone, such as ``Europe/Berlin``, is shifted on the
     fixed offset the zone keeps in late February of the TMY's year, so its
     local 29 February is dropped or filled as for a fixed-offset index,
-    before converting back to the zone. The dominant year is read on that
-    fixed clock too, so rows at local New Year move by their local year.
+    before converting back to the zone. The dominant year is read on the
+    zone's own clock, so rows at local New Year move by their local year.
     Every other row keeps its instant shifted by whole years, as in UTC, so
     irradiance stays with the sun. The zone then reads the instants with the
     target year's transitions: the hour its spring change skips has no row,
     and the hour its autumn change repeats has two, as on the App's
-    simulation calendar. A shift on the zone's wall clock would instead move
+    simulation calendar unless the zone's offset rules differ between the
+    two years. A shift on the zone's wall clock would instead move
     the hours between the two years' transition dates by an hour against the
     sun.
     """
@@ -111,16 +112,20 @@ def remap_tmy_year(df: pd.DataFrame, target_year: int) -> pd.DataFrame:
         return df
     was_tz = idx.tz
     own_clock = was_tz is not None and _has_fixed_utc_offset(was_tz)
+    dominant_year: int | None = None
     if own_clock:
         idx_shift = idx
     elif was_tz is not None:
         # On the zone's late-February offset the local 29 February is a whole
         # day, and the shift moves every other instant as a UTC shift would.
-        local_year = cast(int, idx.year.value_counts().idxmax())
-        idx_shift = idx.tz_convert(_leap_day_clock(was_tz, local_year))
+        # The year is the zone's own: rows at local New Year can read as the
+        # year before on a February offset that differs from January's.
+        dominant_year = cast(int, idx.year.value_counts().idxmax())
+        idx_shift = idx.tz_convert(_leap_day_clock(was_tz, dominant_year))
     else:
         idx_shift = idx.tz_localize("UTC")
-    dominant_year = cast(int, idx_shift.year.value_counts().idxmax())
+    if dominant_year is None:
+        dominant_year = cast(int, idx_shift.year.value_counts().idxmax())
     offset = target_year - dominant_year
     if offset == 0:
         return fill_leap_day(df)

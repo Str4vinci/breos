@@ -294,6 +294,22 @@ def test_remap_tmy_year_uses_the_local_year_for_partial_new_year_input():
     assert remapped.attrs == source.attrs
 
 
+@pytest.mark.parametrize(("zone", "year"), [("Africa/Casablanca", 2025), ("Pacific/Fiji", 2019)])
+def test_remap_tmy_year_reads_the_local_year_when_february_has_another_offset(zone, year):
+    """#329: the year comes from the zone's clock, not from its late-February offset."""
+    source = _zone_tmy(zone, "15min", year).iloc[:3].copy()
+    january = source.index[0].utcoffset()
+    february = pd.Timestamp(year=year, month=2, day=28, hour=12).tz_localize(zone).utcoffset()
+    assert january != february
+
+    # Read on the February clock these rows are the year before, and would move one year too far.
+    assert remap_tmy_year(source, year).index.equals(source.index)
+    clock = timezone(february)
+    moved = remap_tmy_year(source, year + 2)
+    expected = pd.DatetimeIndex([t.replace(year=t.year + 2) for t in source.index.tz_convert(clock)]).tz_convert(zone)
+    assert moved.index.equals(expected)
+
+
 def test_remap_tmy_year_keeps_named_zone_rows_with_the_sun():
     """Between the two years' transition dates a row keeps its instant, not its wall time."""
     source = _zone_tmy("Europe/Berlin", "h", 2021)
