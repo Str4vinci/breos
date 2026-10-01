@@ -87,6 +87,10 @@ def financial_to_dicts(cost_proj: pd.DataFrame, total_initial_cost: float) -> li
                 "reference": 0.0,
                 "cost_with_system": round(float(row["Cost_System_Cumulative_NPV"]), 2),
                 "cost_without_system": round(float(row["Cost_No_Sys_Cumulative_NPV"]), 2),
+                # The no-system household's year: its import and its fixed
+                # charge, escalated and not discounted.
+                "no_system_cost_import": round(float(row["Cost_No_Sys_Import"]), 2),
+                "no_system_cost_fixed_charge": round(float(row["Cost_No_Sys_Fixed_Charge"]), 2),
                 # The year's component cashflows, escalated and not discounted
                 # (ADR 0003 E7); a replacement is booked at its swap instant.
                 "cost_import": round(float(row["Cost_Import"]), 2),
@@ -181,6 +185,10 @@ def _provenance(
     # Flat-price runs carry no tariff block, so their results are unchanged.
     if artifacts.tariff is not None:
         provenance["tariff"] = deepcopy(artifacts.tariff)
+    # Only runs with a [reference_tariff] carry it; without one, the
+    # no-system household pays the system's own prices.
+    if artifacts.reference_tariff is not None:
+        provenance["reference_tariff"] = deepcopy(artifacts.reference_tariff)
     # Only [period] runs carry the window, so full-year results are unchanged.
     if artifacts.period is not None:
         provenance["period"] = deepcopy(artifacts.period)
@@ -311,6 +319,7 @@ def build_result(
             "grid_export_revenue_year1_prices": _round2(year1["Export_Revenue"]),
             "fixed_charge_year1_prices": _round2(year1["Fixed_Charge"]),
             "no_system_import_cost_year1_prices": _round2(year1["Baseline_Import_Cost"]),
+            "no_system_fixed_charge_year1_prices": _round2(year1["Baseline_Fixed_Charge"]),
         }
     )
 

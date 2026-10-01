@@ -8,7 +8,7 @@ checks it once, before any candidate is scored: every table allows a fixed set
 of keys, so a misspelt or unsupported key raises instead of being ignored,
 and every default the optimizer applies is filled in here, by name, rather
 than inside the code that reads it. The values a key shares with the App
-(the tariff and smart-charging tables, the cost keys, the indoor model, the
+(the tariff, reference-tariff and smart-charging tables, the cost keys, the indoor model, the
 projection horizon, PV degradation, inverter efficiency and the default
 module) are checked and defaulted the way the App does.
 """
@@ -24,6 +24,7 @@ from breos.app_config import (
     COSTS_TABLE,
     DEFAULTS,
     INDOOR_MODEL_TABLE,
+    REFERENCE_TARIFF_TABLE,
     SMART_CHARGING_TABLE,
     TARIFF_TABLE,
     check_calendar_model,
@@ -295,8 +296,8 @@ SIMULATION_TABLE = TableSpec(
 INVERTER_TABLE = TableSpec("inverter", keys={"efficiency": number(minimum=0, maximum=1, min_exclusive=True)})
 EMISSIONS_TABLE = TableSpec("emissions", keys={field.name: anything for field in fields(EmissionsParams)})
 
-# Every table the optimizer reads, by its top-level key. [tariff] and
-# [smart_charging] are the App's own tables.
+# Every table the optimizer reads, by its top-level key. [tariff],
+# [reference_tariff] and [smart_charging] are the App's own tables.
 OPTIMIZATION_TABLES: Mapping[str, TableSpec] = {
     "location": LOCATION_TABLE,
     "pv": PV_TABLE,
@@ -310,6 +311,7 @@ OPTIMIZATION_TABLES: Mapping[str, TableSpec] = {
     "inverter": INVERTER_TABLE,
     "emissions": EMISSIONS_TABLE,
     "tariff": TARIFF_TABLE,
+    "reference_tariff": REFERENCE_TARIFF_TABLE,
     "smart_charging": SMART_CHARGING_TABLE,
 }
 # Top-level scalars: the App keys the optimizer reads under the same name.
@@ -387,8 +389,9 @@ def resolve_optimization_config(config: Mapping[str, Any]) -> dict[str, Any]:
             for name in value:
                 if (key, name) in _REMOVED_KEYS:
                     raise ValueError(_REMOVED_KEYS[(key, name)])
-        # Validation normalises values; the tariff and smart-charging tables
-        # are kept as given and resolved by the shared App resolvers.
+        # Validation normalises values; the tariff, reference-tariff and
+        # smart-charging tables are kept as given and resolved by the shared
+        # App resolvers.
         checked = OPTIMIZATION_TABLES[key].validate(value, key)
         if key == "smart_charging" and checked["mode"] in PLANNER_MODES:
             raise ValueError(
@@ -396,7 +399,7 @@ def resolve_optimization_config(config: Mapping[str, Any]) -> dict[str, Any]:
                 "optimizer shares one set of static instructions across candidate designs. Use "
                 "mode = 'fixed_target' or 'discharge_only'."
             )
-        resolved[key] = deepcopy(dict(value)) if key in ("tariff", "smart_charging") else checked
+        resolved[key] = deepcopy(dict(value)) if key in ("tariff", "reference_tariff", "smart_charging") else checked
 
     location = resolved["location"]
     location.setdefault("timezone", DEFAULT_TIMEZONE)
@@ -483,7 +486,7 @@ def resolve_optimization_config(config: Mapping[str, Any]) -> dict[str, Any]:
     resolved["optimization"] = optimization
     optimization.setdefault("objective_basis", DEFAULT_OBJECTIVE_BASIS)
     optimization.setdefault("early_stop", None)
-    for key in ("emissions", "tariff", "smart_charging"):
+    for key in ("emissions", "tariff", "reference_tariff", "smart_charging"):
         resolved.setdefault(key, None)
     return resolved
 

@@ -74,6 +74,7 @@ from breos.tariffs import (
     BOUNDARY_POLICIES,
     SCHEDULE_CYCLES,
     SUPPORTED_CURRENCIES,
+    ReferenceTariffSpec,
     ScheduleDefinition,
     TariffPrices,
     TariffSchedule,
@@ -81,6 +82,7 @@ from breos.tariffs import (
     available_tariff_schedules,
     get_schedule_definition,
     parse_schedule_definition,
+    result_currency,
     schedule_resolution_minutes,
     validate_season_prices,
 )
@@ -659,6 +661,19 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         default_doc="*unset*",
         summary="economics.tariff",
     ),
+    # The [reference_tariff] table. Omitted: the no-system household pays the
+    # system's own prices, the [tariff] or the flat costs.
+    "reference_tariff": AppConfigField(
+        default=None,
+        doc=(
+            "What the household would pay without the system: an import price, by period or flat, and a fixed "
+            "charge, independent of the system's `[tariff]`. Unset, the no-system baseline is priced at the "
+            "system's own prices; see [`[reference_tariff]`](#reference_tariff) and [No-system reference "
+            "tariff](configuration.md#no-system-reference-tariff)"
+        ),
+        default_doc="*unset*",
+        summary="economics.reference_tariff",
+    ),
     # The [smart_charging] table (ADR 0002). Omitted: greedy self-consumption.
     "smart_charging": AppConfigField(
         default=None,
@@ -1076,6 +1091,9 @@ class ResolvedAppConfig:
     emissions_params: EmissionsParams | None
     # The configured [period], or None for the whole calendar year of start_date.
     period: SimulationPeriod | None = None
+    # The configured [reference_tariff], or None: the no-system baseline is
+    # then priced at the system's own prices.
+    reference_tariff: ReferenceTariffSpec | None = None
 
 
 def normalize_config_keys(config: dict[str, Any]) -> dict[str, Any]:
@@ -1296,6 +1314,8 @@ def validate_config(cfg: dict[str, Any]) -> TariffSpec | None:
         # conversion that may be deferred until the simulation is running.
         timezone = resolve_location(cfg)[2]
         tariff_spec = resolve_tariff_spec(cfg, timezone)
+    if cfg["reference_tariff"] is not None:
+        resolve_reference_tariff_spec(cfg, resolve_location(cfg)[2], tariff_spec)
     _validate_battery_and_degradation(cfg)
     _validate_period(cfg)
     _validate_smart_charging(cfg, tariff_spec)
@@ -1463,10 +1483,14 @@ def _selected_schedule(table: Mapping[str, Any]) -> ScheduleDefinition:
 def _check_tariff_prices(table: dict[str, Any], where: str) -> None:
     if ("schedule" in table) == ("custom_schedule" in table):
         raise ValueError(f"'{where}' must set exactly one of 'schedule' or 'custom_schedule'")
+    _check_period_prices(table, where, ("import_prices", "export_prices"))
+
+
+def _check_period_prices(table: dict[str, Any], where: str, names: tuple[str, ...]) -> None:
     definition = _selected_schedule(table)
     schedule = definition.schedule
     periods = set(schedule.periods)
-    for name in ("import_prices", "export_prices"):
+    for name in names:
         nested = [isinstance(value, Mapping) for value in table[name].values()]
         if any(nested) and not all(nested):
             raise ValueError(
@@ -1561,12 +1585,17 @@ def _validate_tariff(cfg: dict[str, Any]) -> tuple[dict[str, Any], ScheduleDefin
             f"A [tariff] sets the energy prices and the fixed charge, so {', '.join(f'costs.{k}' for k in clashing)} "
             "would price them twice. Remove them, or remove [tariff]."
         )
+    schedule = _selected_schedule(table)
+    _check_schedule_resolution(cfg, schedule)
+    return table, schedule
+
+
+def _check_schedule_resolution(cfg: dict[str, Any], schedule: ScheduleDefinition) -> None:
     step_minutes = int(get_hours_per_step(cfg["resolution"]) * 60)
     # The clock changes of the study year count; the optimizer's adapted config
     # has no start_date, and classifying its index checks them instead.
     start = cfg.get("start_date")
     years = None if start is None else ((start if isinstance(start, date) else date.fromisoformat(start)).year,)
-    schedule = _selected_schedule(table)
     required = schedule_resolution_minutes(schedule, years)
     if required % step_minutes:
         fitting = [freq for freq in ("h", "15min") if required % int(get_hours_per_step(freq) * 60) == 0]
@@ -1578,7 +1607,15 @@ def _validate_tariff(cfg: dict[str, Any]) -> tuple[dict[str, Any], ScheduleDefin
             f"Schedule {identifier!r} needs steps that divide {required} minutes, which "
             f"{cfg['resolution']!r} steps do not; {remedy} (ADR 0002 A3)."
         )
-    return table, schedule
+
+
+def _check_schedule_timezone(schedule: ScheduleDefinition, timezone: str) -> None:
+    metadata = schedule.schedule
+    if metadata.timezone != timezone:
+        raise ValueError(
+            f"Schedule {metadata.identifier!r} is defined in {metadata.timezone} civil time, but the "
+            f"location's timezone is {timezone}. BREOS does not move a schedule to another zone."
+        )
 
 
 def resolve_tariff_spec(cfg: dict[str, Any], timezone: str) -> TariffSpec | None:
@@ -1592,12 +1629,7 @@ def resolve_tariff_spec(cfg: dict[str, Any], timezone: str) -> TariffSpec | None
     if cfg["tariff"] is None:
         return None
     table, schedule = _validate_tariff(cfg)
-    metadata = schedule.schedule
-    if metadata.timezone != timezone:
-        raise ValueError(
-            f"Schedule {metadata.identifier!r} is defined in {metadata.timezone} civil time, but the "
-            f"location's timezone is {timezone}. BREOS does not move a schedule to another zone."
-        )
+    _check_schedule_timezone(schedule, timezone)
     prices = TariffPrices(
         currency=table["currency"],
         import_prices=table["import_prices"],
@@ -1611,6 +1643,110 @@ def resolve_tariff_spec(cfg: dict[str, Any], timezone: str) -> TariffSpec | None
         prices=prices,
         boundary_policy=table.get("boundary_policy", "strict"),
         study_date=table.get("study_date"),
+    )
+
+
+def _check_reference_prices(table: dict[str, Any], where: str) -> None:
+    if "schedule" in table and "custom_schedule" in table:
+        raise ValueError(f"'{where}' sets both 'schedule' and 'custom_schedule'; set one, or neither for a flat price")
+    if "schedule" in table or "custom_schedule" in table:
+        _check_period_prices(table, where, ("import_prices",))
+        return
+    # Without a schedule the reference is one flat price.
+    if set(table["import_prices"]) != {"all"} or isinstance(table["import_prices"].get("all"), Mapping):
+        raise ValueError(
+            f"'{where}' has no schedule, so it is one flat price: set '{where}.import_prices' = {{ all = <price> }}, "
+            "or set a schedule or custom_schedule"
+        )
+    scheduled = sorted(key for key in ("boundary_policy", "study_date") if key in table)
+    if scheduled:
+        raise ValueError(
+            f"{', '.join(f'{where}.{key}' for key in scheduled)} applies to a schedule, and '{where}' has none"
+        )
+
+
+REFERENCE_TARIFF_TABLE = TableSpec(
+    "reference_tariff",
+    keys={
+        "schedule": choice(available_tariff_schedules()),
+        "custom_schedule": _custom_schedule,
+        "currency": choice(tuple(sorted(SUPPORTED_CURRENCIES))),
+        "import_prices": _PRICE_LIST,
+        "fixed_charge_per_day": number(minimum=0),
+        "boundary_policy": choice(tuple(sorted(BOUNDARY_POLICIES))),
+        "study_date": _tariff_study_date,
+        "import_price_escalation": number(minimum=-1, min_exclusive=True),
+    },
+    required=frozenset({"currency", "import_prices"}),
+    check=_check_reference_prices,
+    docs={
+        "schedule": (
+            "Bundled schedule key of the reference; see [Bundled schedules](../api/tariffs.md#bundled-schedules). "
+            "Set this, `custom_schedule`, or neither for one flat price"
+        ),
+        "custom_schedule": (
+            "Inline schedule definition of the reference, in the shape of `tariff.custom_schedule`; set this, "
+            "`schedule`, or neither for one flat price"
+        ),
+        "currency": (
+            f"Currency of the prices: {', '.join(sorted(SUPPORTED_CURRENCIES))}. Must be the result's currency: the "
+            "`[tariff]` currency, or EUR on flat prices"
+        ),
+        "import_prices": (
+            "Import price per kWh by period name, at year-1 prices; `all` prices every period. With month seasons, "
+            "a table of period prices for every season instead. Without a schedule, only `all`"
+        ),
+        "fixed_charge_per_day": "Fixed charge per day without the system, at year-1 prices (default 0)",
+        "boundary_policy": (
+            "How a period boundary inside a step is handled, as in `tariff.boundary_policy`; needs a schedule"
+        ),
+        "study_date": "A date in the schedule's effective window, as in `tariff.study_date`; needs a schedule",
+        "import_price_escalation": (
+            "Annual escalation of the reference energy and fixed charge. Default: the system's import escalation"
+        ),
+    },
+)
+
+
+def resolve_reference_tariff_spec(
+    cfg: dict[str, Any], timezone: str, tariff: TariffSpec | None
+) -> ReferenceTariffSpec | None:
+    """Validate and build the no-system reference tariff for App or an adapted optimizer config.
+
+    ``cfg`` supplies ``reference_tariff`` and ``resolution``, and from App
+    ``start_date``, as :func:`resolve_tariff_spec` reads them. ``tariff`` is
+    the system's: the reference must be in the result's currency, since
+    BREOS does not convert.
+    """
+    if cfg.get("reference_tariff") is None:
+        return None
+    table = REFERENCE_TARIFF_TABLE.validate(cfg["reference_tariff"])
+    currency = result_currency(tariff)
+    if table["currency"] != currency:
+        raise ValueError(
+            f"'reference_tariff.currency' is {table['currency']}, but the result is in {currency}"
+            f"{' (the [tariff] currency)' if tariff is not None else ' (flat prices)'}. BREOS does not convert."
+        )
+    schedule: ScheduleDefinition | None = None
+    if "schedule" in table or "custom_schedule" in table:
+        schedule = _selected_schedule(table)
+        _check_schedule_resolution(cfg, schedule)
+        _check_schedule_timezone(schedule, timezone)
+    prices = TariffPrices(
+        currency=table["currency"],
+        import_prices=table["import_prices"],
+        # The no-system household exports nothing.
+        export_prices={"all": 0.0},
+        fixed_charge_per_day=table.get("fixed_charge_per_day", 0.0),
+        identifier="reference",
+        version="1",
+    )
+    return ReferenceTariffSpec(
+        prices=prices,
+        schedule=schedule,
+        boundary_policy=table.get("boundary_policy", "strict"),
+        study_date=table.get("study_date"),
+        import_price_escalation=table.get("import_price_escalation"),
     )
 
 
@@ -1726,6 +1862,7 @@ NESTED_TABLE_SPECS: Mapping[str, TableSpec] = {
     "costs": COSTS_TABLE,
     "battery_indoor_model": INDOOR_MODEL_TABLE,
     "tariff": TARIFF_TABLE,
+    "reference_tariff": REFERENCE_TARIFF_TABLE,
     "smart_charging": SMART_CHARGING_TABLE,
     "period": PERIOD_TABLE,
 }
@@ -2415,4 +2552,5 @@ def resolve_app_config(config: dict[str, Any]) -> ResolvedAppConfig:
         cost_params=cost_params,
         emissions_params=resolve_emissions(cfg),
         period=resolve_period(cfg, timezone),
+        reference_tariff=resolve_reference_tariff_spec(cfg, timezone, tariff),
     )

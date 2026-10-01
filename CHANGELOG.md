@@ -5,6 +5,32 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 ## [Unreleased]
 
 ### Added
+- A `[reference_tariff]` table prices the household without the system on
+  its own tariff, independent of the system's `[tariff]` or flat prices
+  ([#339](https://github.com/Str4vinci/breos/issues/339)). It takes import
+  prices on a bundled or custom schedule, including per-season prices on a
+  calendar-month custom schedule, or one flat price
+  (`import_prices = { all = <price> }`) without a schedule, a
+  `fixed_charge_per_day` (default 0) and an optional
+  `import_price_escalation`, which escalates the reference energy and fixed
+  charge and defaults to the system's import escalation; an explicit 0 is
+  kept. It has no export prices. The no-system cost of each year is then the
+  whole household load at the reference prices plus the reference fixed
+  charge. The reference must be in the result's currency and passes the
+  system tariff's timezone and resolution checks. It never changes the
+  dispatch or the costs with the system. App, Monte Carlo (each trajectory on
+  its own sampled load) and projected optimization (its NPV objective) accept
+  it. `App.revalue` re-prices a reference that is added, changed or removed
+  without simulating again, also under `daily_persistence`. Sweeps accept
+  dotted keys such as `reference_tariff.import_prices.all` or
+  `reference_tariff.import_prices.q1.peak`. Result schema 2.6
+  adds the no-system cost components with or without a reference
+  (`no_system_fixed_charge_year1_prices`, the `financial` rows'
+  `no_system_cost_import` and `no_system_cost_fixed_charge`, and the
+  `Cost_No_Sys_Import` and `Cost_No_Sys_Fixed_Charge` projection columns),
+  `reference_tariff` in `resolved_config`, and `provenance.reference_tariff`
+  when one is configured. Without a reference every existing value is
+  unchanged.
 - `[tariff.custom_schedule]` takes calendar-month `seasons`, such as
   quarters, for tariffs whose windows or prices change by month rather than
   by DST ([#337](https://github.com/Str4vinci/breos/issues/337)).

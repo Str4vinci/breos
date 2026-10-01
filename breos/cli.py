@@ -439,7 +439,7 @@ def _check_sweep_key(key: str) -> None:
 
     A top-level key must be registered. A dotted key must name a key of a
     nested table (``costs``, ``battery_indoor_model``, ``tariff``,
-    ``smart_charging``), and may go further only into a free-form mapping,
+    ``reference_tariff``, ``smart_charging``), and may go further only into a free-form mapping,
     as deep as it allows: ``tariff.import_prices.P1``, or
     ``tariff.import_prices.winter.P1`` for prices by month season. Values are
     checked later, when each run's config is resolved.
