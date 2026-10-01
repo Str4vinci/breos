@@ -1,11 +1,19 @@
-# Inline example only; the prices and supplier calendar are illustrative.
-# Replace the holiday dates with the complete calendar intended for each year.
+# A time-of-use tariff defined inline with [tariff.custom_schedule], for a
+# supplier calendar that BREOS does not bundle: weekday peak hours, weekends
+# and holidays off peak. time-of-use-portugal.toml uses a bundled schedule
+# instead.
+#
+# The prices and the supplier calendar are illustrative. Replace the holiday
+# dates with the complete calendar intended for each year.
+#
+#   breos run --config configs/examples/custom-tariff-schedule.toml
+
 location = "porto"
 n_modules = 8
 annual_consumption_kwh = 4000
 battery_kwh = 5.0
 start_date = 2026-01-01
-projection_years = 3
+projection_years = 3   # a short horizon; the default is 20
 
 [tariff]
 currency = "EUR"

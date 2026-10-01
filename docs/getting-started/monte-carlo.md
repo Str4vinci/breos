@@ -12,16 +12,34 @@ independence, LCOE, and final state of health.
 ## You have to supply the weather
 
 BREOS ships no weather data, and Monte Carlo needs a multi-year historical CSV
-rather than a single TMY. Download one for your site, put it in a local
-`weather/` directory, and point `[montecarlo].weather_file` at it. A
-gzip-compressed `.csv.gz` file works as well. The `weather/` directory is
-git-ignored by convention.
-
-Fetch historical data with the `weather` extra:
+rather than a single TMY. The file needs a `date` column plus the irradiance
+and temperature fields the PV model uses; a PVGIS TMY file is not accepted. A gzip-compressed
+`.csv.gz` file works as well.
+Fetch one from Open-Meteo with {py:func}`~breos.weather.fetch_weather_data`,
+which needs the `weather` extra and saves
+`weather/<location>_historical_<start>_<end>_openmeteo.csv` with its metadata
+sidecar:
 
 ```bash
 pip install "breos[weather]"
 ```
+
+```python
+from breos.weather import fetch_weather_data
+
+fetch_weather_data(
+    latitude=41.1579,
+    longitude=-8.6291,
+    start_date="2005-01-01",
+    end_date="2024-12-31",
+    tilt=35,
+    azimuth=0,
+    location_name="porto",
+)
+```
+
+Then point `[montecarlo].weather_file` at the saved file. Keep weather files
+out of version control; check the provider's terms before sharing them.
 
 To see how the TMY that `breos run` uses compares with those years, pass
 both to {py:func}`~breos.plotting.plot_weather_monthly_comparison` or
@@ -82,25 +100,29 @@ Common settings have command-line overrides. For example, `--runs`, `--seed`,
 `--years`, `--n-procs`, and `--weather-file` work without editing the file.
 Start with `--runs 10` to check that the config resolves, then raise it.
 
-`--n-procs` runs trajectories in parallel processes and is the setting that
-matters most for wall-clock time.
+`--n-procs` runs trajectories in parallel processes. On Linux this usually
+cuts wall-clock time; on macOS and Windows the start-up cost of each process
+can outweigh it.
 
 ## What you get back
 
-`monte_carlo_results.csv` holds one row per run. Alongside it, BREOS writes a
-provenance JSON recording the resolved settings and hashes of the inputs and
-outputs, which is what makes a published result auditable later. It and the
+`monte_carlo_results.csv` holds one row per run. Alongside it, BREOS writes
+`monte_carlo_results.provenance.json`, recording the resolved settings and
+hashes of the inputs and outputs, which is what makes a published result
+auditable later. Both names follow the `--output` path unless
+`--provenance-output` sets another. The provenance and the
 `--json` output carry `result_schema_version` and `currency`, the currency of
 every money column (see
 [Interpreting results](interpreting-results.md#currency-and-result-format)).
 
-`--collect-yearly` adds a second CSV with one row per run and projection year,
-carrying the energy, degradation, and discounted-cost ledger. Cost envelopes and
-fan charts need it, and it is off by default because it is much larger.
+`--collect-yearly` adds `monte_carlo_results_yearly.csv`, with one row per run
+and projection year, carrying the energy, degradation, and discounted-cost
+ledger. Use it for your own cost-envelope or fan-chart analysis; it is off by
+default because it is much larger.
 
 `--plots` writes payback, NPV, grid-independence, final-SoH, and LCOE
-distributions into `plots/`. `--json` prints a machine-readable summary to
-stdout for scripting.
+distributions into a `plots/` directory next to the results CSV. `--json`
+prints a machine-readable summary to stdout for scripting.
 
 Each summary entry gives `count`, the number of runs its statistics cover, out
 of `n_runs`. `payback_year` and `payback_year_interpolated` are the sustained
@@ -146,8 +168,9 @@ Installing the extra changes nothing on its own. Without
 The kernel is the production BREOS dispatch and its energy ledger, compiled
 from the same functions the Python path runs rather than from a copy. Rainflow
 counting, degradation, resistance growth, and replacement stay in Python, so the
-backend accelerates one stage rather than the whole model. It is private, with
-no public API, and configuration is the only supported way to select it.
+backend accelerates one stage rather than the whole model. It has no public
+API of its own: select it with `execution_backend`, as a config key, with
+`--execution-backend`, or with `MonteCarloSettings(execution_backend=...)`.
 
 BREOS works fully without Numba. The Python path stays the default and remains
 the numerical reference that the backend is checked against. The same compiled
@@ -167,7 +190,15 @@ study as `year_cache`:
 ```python
 from breos.montecarlo import MonteCarloSettings, build_year_cache, run_montecarlo
 
-settings = MonteCarloSettings(weather_file="weather/porto_2005_2024.csv", n_runs=100, seed=42)
+config = {  # an App config, as in the TOML above
+    "location": "porto",
+    "n_modules": 10,
+    "annual_consumption_kwh": 4000,
+    "cost_preset": "residential_pt",
+}
+settings = MonteCarloSettings(
+    weather_file="weather/porto_historical_2005_2024_openmeteo.csv", n_runs=100, seed=42
+)
 cache = build_year_cache(config, settings)
 results = {
     kwh: run_montecarlo({**config, "battery_kwh": kwh}, settings, year_cache=cache)
@@ -195,9 +226,19 @@ cache has two layers:
 A study may replace the PV layer, so do not share one cache between threads
 running studies at the same time.
 
+## Limits
+
+Monte Carlo rejects `[period]`, `degradation_engine = "blast"`,
+`horizon_profile` and the experimental `daily_persistence` smart charging,
+each with a `ValueError` before any trajectory runs. `[tariff]`,
+`[reference_tariff]`, `[smart_charging]` with the other modes, and
+`[terminal_value]` work as in App.
+
 ## Related pages
 
-- [Recipes](recipes.md) for the single-run scenario keys.
+- [How-to guides](../how-to/index.md) for the single-run scenario keys, and the
+  {doc}`Monte Carlo case example <../gallery/uncertainty/plot_13_montecarlo>`.
 - [Interpreting results](interpreting-results.md) for what each metric means.
 - [Optimization](optimization.md) for searching designs rather than sampling
   uncertainty.
+- [Monte Carlo API](../api/montecarlo.md) for the Python signatures.

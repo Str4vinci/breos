@@ -14,6 +14,9 @@ configs/
 - **`examples/`** holds CLI configs: single-run inputs for `breos run`, plus
   dedicated `sweep` and Monte Carlo examples. Every file here validates with
   `breos validate-config`.
+  `breos run` and `breos sweep` download a PVGIS TMY for the location unless a
+  matching `weather/<location>_tmy_<years>_<source>.csv` file is in the
+  directory you run from.
 - **`optimization/`** holds configs for the optimization API. These use a
   different, nested shape and you load them from Python, so `breos run` and
   `breos validate-config` reject them.
@@ -53,9 +56,11 @@ section — BREOS does not bundle weather data. Drop your file in a local
 
 The established demand multiplier is normal with `load_uncertainty` as its
 standard deviation. Set `load_distribution = "uniform"` to use
-`[1 - load_uncertainty, 1 + load_uncertainty]`. Weather-year bounds,
-energy-conserving hourly-to-15-minute interpolation, and worker count are also
-explicit `[montecarlo]` settings.
+`[1 - load_uncertainty, 1 + load_uncertainty]`. Weather-year bounds
+(`weather_start_year`, `weather_end_year`), demand-multiplier bounds
+(`min_load_scale`, `max_load_scale`), and the worker count (`n_procs`) are
+also `[montecarlo]` settings. The hourly-to-15-minute irradiance policy is the
+top-level `irradiance_resampling` key, as for `breos run`.
 
 The catalogue keys used in a config (`location`, `pv_module`, `cost_preset`,
 `emissions_country`, `load_profile`) come from the packaged presets. List the
@@ -73,18 +78,18 @@ breos list load-profiles
 
 | File | What it shows |
 | --- | --- |
-| [`quickstart.toml`](examples/quickstart.toml) | Minimal happy-path run (Porto, PV + battery) |
+| [`quickstart.toml`](examples/quickstart.toml) | Minimal PV + battery run for Porto, as in the quickstart guide |
 | [`pv-plus-battery.toml`](examples/pv-plus-battery.toml) | **Annotated reference** — the common keys with their defaults |
 | [`pv-only.toml`](examples/pv-only.toml) | Baseline with no battery, to compare storage scenarios against |
-| [`germany-berlin.toml`](examples/germany-berlin.toml) | Swapping location + cost preset + emissions factor together |
+| [`germany-berlin.toml`](examples/germany-berlin.toml) | Swapping location + cost preset + emissions factor together, on flat prices |
 | [`east-west-roof.toml`](examples/east-west-roof.toml) | Multiple `[[pv_arrays]]` (split east/west roof) |
 | [`bifacial-ground-mount.toml`](examples/bifacial-ground-mount.toml) | Opt-in infinite-sheds rear gain with explicit row geometry |
-| [`recommended-pv.toml`](examples/recommended-pv.toml) | Explicit higher-fidelity rooftop PV choices while compatible defaults remain unchanged |
+| [`recommended-pv.toml`](examples/recommended-pv.toml) | Higher-fidelity rooftop PV-model choices, set explicitly; the defaults stay unchanged |
 | [`sweep.toml`](examples/sweep.toml) | Parameter grid over module count and battery size (`breos sweep`) |
-| [`time-of-use-portugal.toml`](examples/time-of-use-portugal.toml) | Time-of-use `[tariff]` on a bundled Portuguese schedule |
-| [`custom-tariff-schedule.toml`](examples/custom-tariff-schedule.toml) | Inline tariff periods, rules and explicit holidays |
-| [`quarterly-tariff-berlin.toml`](examples/quarterly-tariff-berlin.toml) | Calendar-month (quarterly) tariff seasons with illustrative §14a-style windows |
-| [`smart-charging-portugal.toml`](examples/smart-charging-portugal.toml) | Fixed-target grid charging in the tariff's off-peak period |
+| [`time-of-use-portugal.toml`](examples/time-of-use-portugal.toml) | Time-of-use `[tariff]` on a bundled Portuguese schedule; the battery dispatch is unchanged |
+| [`custom-tariff-schedule.toml`](examples/custom-tariff-schedule.toml) | A schedule BREOS does not bundle, defined inline: periods, rules and explicit holidays |
+| [`quarterly-tariff-berlin.toml`](examples/quarterly-tariff-berlin.toml) | The `germany-berlin.toml` system on calendar-month (quarterly) seasons with illustrative §14a-style windows |
+| [`smart-charging-portugal.toml`](examples/smart-charging-portugal.toml) | The `time-of-use-portugal.toml` system with fixed-target grid charging off peak |
 | [`tariff-comparison.toml`](examples/tariff-comparison.toml) | Three offers, with and without a battery, in one `breos sweep` |
 | [`montecarlo.toml`](examples/montecarlo.toml) | Monte Carlo over weather years + demand (`breos montecarlo`) |
 | [`external-rlp.toml`](examples/external-rlp.toml) | Using non-bundled, licensed load profiles |
@@ -119,8 +124,8 @@ Load it from Python and pass it to
   overrides. The `[sweep]` and `[montecarlo]` tables are read by their dedicated
   CLI commands; sweep entries can use quoted dotted keys such as
   `"costs.electricity_cost"`.
-- Configs written for the research `pvbat` engine — with nested model sections,
-  inheritance, or simulation-type blocks — are **not** compatible. BREOS
-  rejects unknown top-level keys rather than silently applying defaults.
-  Translate the values you need into the flat keys shown in
-  `pv-plus-battery.toml` (and `[montecarlo]` for MC studies).
+- BREOS rejects unknown top-level keys rather than silently applying
+  defaults, so configs with nested model sections, inheritance, or
+  simulation-type blocks are **not** accepted. Translate the values you need
+  into the flat keys shown in `pv-plus-battery.toml` (and `[montecarlo]` for
+  Monte Carlo studies).

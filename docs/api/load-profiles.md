@@ -2,7 +2,8 @@
 
 Bundled demandlib-derived H0 examples plus utilities for scaling and time
 alignment. BREOS also supports user-supplied BDEW, E-REDES, REE, and custom
-CSV files through the `rlp_directory` argument.
+CSV files: standard profiles through the `rlp_directory` argument, and any
+CSV of your own through `profile_file` (the App's `load_profile_file`).
 
 For public examples, use `profile_type="demandlib_h0"`, the bundled profile.
 Other profile keys are treated as external data and require local files that
@@ -18,7 +19,8 @@ days from the target's month and day. On up to six days a year, that
 source day falls in the neighbouring demandlib season: for example, 21 and
 22 March 2026 get winter shapes, and 14 May 2025 gets a summer shape. BREOS
 scales the resulting profile to the requested annual consumption after
-alignment. The default 2023 study year retains its original rows. A
+alignment. A 2023 study year, the App's default `start_date`, retains the
+original rows; `load_profile` itself defaults to `start_date="2025-01-01"`. A
 `demandlib_h0` file supplied through `rlp_directory` uses the year on its
 dated first row by the same rule. That row must be 1 January 00:00; an
 undated `demandlib_h0` file raises `ValueError`. Dated E-REDES files follow

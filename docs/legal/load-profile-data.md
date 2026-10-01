@@ -78,16 +78,11 @@ For E-REDES, the same CSV can contain BTN A, BTN B, and BTN C columns; BREOS cho
 
 `custom` takes the unit of each row: `W` or `kW` for the mean power over the row's interval, `Wh` or `kWh` for the energy delivered in it. The profile is scaled to `annual_consumption_kwh` either way, so the unit fixes only what the column means. Its resolution comes from its row count. Provenance records the key, the file read and its SHA-256, the column and the unit (`result()["provenance"]["load_profile"]`).
 
-The bundled demandlib H0's dated 2023 source days are matched to the study
-year's weekday, Saturday or Sunday near the same calendar date. A
-`demandlib_h0` file supplied through `rlp_directory` uses its own dated source
-year by the same rule. A dated E-REDES file is matched the same way, by
-working day, Saturday and Sunday/holiday, with Portugal's national holidays
-as Sundays; its year comes from its timestamps, not its filename (see
-[E-REDES profiles](../api/load-profiles.md#e-redes-profiles)). BREOS places
-the rows of other external profile families, of undated files and of
-`custom` files on the calendar by position, starting on 1 January. Every file
-must hold exactly one calendar year.
+Dated demandlib H0 and E-REDES files are aligned to the study year by day
+type; the [Load profiles API page](../api/load-profiles.md) gives the rule.
+BREOS places the rows of other external profile families, of undated files
+and of `custom` files on the calendar by position, starting on 1 January.
+Every file must hold exactly one calendar year.
 After fully blank rows are dropped, an hourly file needs 8,760 or 8,784 rows
 and a 15-minute file 35,040 or 35,136. A common-year external file on a
 leap-year run repeats 28 February; a leap-year external file on a common-year
@@ -102,10 +97,6 @@ or later (see [E-REDES profiles](../api/load-profiles.md#e-redes-profiles)).
 Other dated files can have offset timestamps; BREOS reads them as UTC
 instants. A file that breaks any of these rules raises `ValueError` when it
 loads.
-
-## If redistribution permission is granted
-
-If an operator explicitly allows redistribution, keep a copy of the permission or license text with the release record, update `ATTRIBUTIONS.md`, add the files back under `breos/data/rlp/`, and add a test that the installed wheel can load the profile without `rlp_directory`.
 
 ## Practical rule
 

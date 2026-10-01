@@ -55,7 +55,11 @@ def test_instructions_are_frozen_contiguous_copies():
         ({"reserve_fraction": [-0.1, 0.0, 0.0]}, ValueError, "'reserve_fraction' must be between 0 and 1"),
         ({"grid_target_fraction": [np.nan, np.inf, np.nan]}, ValueError, "'grid_target_fraction' must be finite"),
         ({"grid_target_fraction": [np.nan, 1.1, np.nan]}, ValueError, "'grid_target_fraction' must be between"),
-        ({"grid_target_fraction": [0.5, 0.5, np.nan]}, ValueError, r"Step 0 both allows discharge.*A8"),
+        (
+            {"grid_target_fraction": [0.5, 0.5, np.nan]},
+            ValueError,
+            r"Step 0 both allows discharge.*reserve_fraction must be >= grid_target_fraction",
+        ),
         ({"grid_charge_efficiency": 0.0}, ValueError, "'grid_charge_efficiency' must be between 0"),
         ({"grid_charge_efficiency": 1.01}, ValueError, "'grid_charge_efficiency' must be between 0"),
         ({"grid_charge_efficiency": math.nan}, ValueError, "'grid_charge_efficiency' must be between 0"),

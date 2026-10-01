@@ -5,7 +5,7 @@ designs instead: it varies module count, battery capacity, tilt, and azimuth,
 and returns the trade-off front between energy independence and money.
 
 This is a Python API. There is no `breos optimize` subcommand, so the
-command-line workflow in [Recipes](recipes.md) does not reach it.
+command-line workflow in the [how-to guides](../how-to/index.md) does not reach it.
 
 ## Install the extra
 
@@ -22,10 +22,11 @@ raises `ImportError` and names this command.
 
 This trips people up, so it is worth stating plainly. `App` takes a flat
 dictionary of keys such as `n_modules` and `cost_preset`. The optimizer takes a
-nested dictionary grouped into sections: `location`, `pv`, `battery`,
-`optimization`, `constraints`, `costs`, `financials`, `emissions`, and
-`simulation`, with optional `tariff` and `smart_charging` tables. The two
-shapes are not interchangeable. Every table takes a fixed set of keys, so a
+nested dictionary grouped into tables: `location` (required), `pv`,
+`battery`, `costs`, `financials`, `constraints`, `mode`, `optimization`,
+`simulation`, `inverter` and `emissions`, plus the App's `tariff`,
+`reference_tariff`, `smart_charging` and `terminal_value`. The two shapes are
+not interchangeable. Every table takes a fixed set of keys, so a
 flat `App` config passed to the optimizer, or a misspelt key, raises before
 any design is scored; the [API reference](../api/optimization.md#configuration-keys)
 lists the keys and their defaults. The `financials` section takes the App's rate keys:
@@ -75,7 +76,13 @@ For 15-minute runs, hourly weather is prepared with the same resampling
 helper as App and Monte Carlo. Set `simulation.irradiance_resampling` to
 `"auto"` (default), `"clear_sky"` or `"clear_sky_energy_conserving"`; see
 [the irradiance policy](configuration.md#hourly-weather-at-15-minute-resolution).
-Weather already at 15 minutes is used directly.
+Weather already at 15 minutes is used directly. A frame read with
+`pd.read_csv` carries none of the metadata sidecar, so `"auto"` treats it as
+instantaneous and `"clear_sky_energy_conserving"` refuses it. To keep the
+metadata, load the file and its `.metadata.json` sidecar with
+{py:func}`breos.weather.load_weather`, for example
+`load_weather("porto", data_type="tmy")` for
+`weather/porto_tmy_2005_2023_pvgis-sarah3.csv`.
 
 ## Search the design space
 
@@ -124,10 +131,16 @@ degradation factor after the simulation. ZEB is a diagnostic. To keep ZEB as a
 feasibility constraint, set `enforce_zeb = true` under `[constraints]`.
 
 Projected scoring simulates `years_projection` years for every candidate. Start
-with a small `pop_size` and `n_gen` while you check that the config resolves,
-then scale up. To screen a wide design space at lower cost, shorten
+with a small `pop_size` and `n_gen` in `[optimization]` while you check that
+the config resolves, then scale up; passing different values as arguments
+raises. To screen a wide design space at lower cost, shorten
 `years_projection` for the screening run. The single-year `steady_state` basis
 was removed in 0.7.0, and a config that still sets it raises an error.
+
+The optional [`[terminal_value]`](configuration.md#terminal-health-credit)
+table is accepted but ignored. Evaluated designs report no terminal-health
+credit or adjusted NPV, and ranking uses unadjusted NPV. Use App or Monte
+Carlo for this accounting sensitivity.
 
 ## Price a design with a time-of-use tariff
 
@@ -208,12 +221,8 @@ came from.
 
 ## Related pages
 
-- [Recipes](recipes.md) for single-design runs through `App` and the CLI.
+- [How-to guides](../how-to/index.md) for single-design runs through `App` and the CLI.
+- {doc}`The NSGA-II sizing front <../gallery/uncertainty/plot_14_nsga2_front>`, a stored front with its figures.
 - [Interpreting results](interpreting-results.md) for the meaning of the
   headline metrics.
 - [Optimization API](../api/optimization.md) for the full signatures.
-
-The optional [`[terminal_value]`](configuration.md#terminal-health-credit)
-table is accepted but ignored by projected optimization. Evaluated designs
-report no terminal-health credit or adjusted NPV; ranking uses unadjusted
-NPV. Use App or Monte Carlo for this accounting sensitivity.

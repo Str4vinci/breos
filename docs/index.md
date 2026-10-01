@@ -97,15 +97,22 @@ Read the energy, financial, emissions, degradation, and provenance fields.
 
 ## Browse the documentation
 
-::::{grid} 1 2 2 3
+::::{grid} 1 2 2 4
 :gutter: 3
 
-:::{grid-item-card} Guides and recipes
+:::{grid-item-card} Guides
 :link: getting-started/index
 :link-type: doc
 
 Task-oriented guides for common systems, inputs, configuration, and
 troubleshooting.
+:::
+
+:::{grid-item-card} Case examples
+:link: gallery/index
+:link-type: doc
+
+Question-led reports of stored runs, with their configurations and figures.
 :::
 
 :::{grid-item-card} Models and assumptions
@@ -148,7 +155,8 @@ getting-started/installation
 getting-started/quickstart
 getting-started/troubleshooting
 getting-started/inputs
-getting-started/recipes
+gallery/index
+how-to/index
 getting-started/optimization
 getting-started/monte-carlo
 getting-started/configuration

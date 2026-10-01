@@ -136,7 +136,7 @@ def _tri_tariff(index):
             {},
             ValueError,
             r"'smart_charging\.charge_periods' and 'smart_charging\.discharge_periods' share off_peak; "
-            r"every step either charges or discharges \(ADR 0002 A8\)",
+            r"every step either charges or discharges;",
         ),
         (
             _without(FIXED, "grid_charge_efficiency"),

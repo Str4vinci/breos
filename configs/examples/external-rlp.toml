@@ -1,6 +1,10 @@
 # Template for using non-bundled load profiles.
-# Put licensed CSV files in this directory; do not commit third-party RLPs
-# unless their license explicitly allows redistribution.
+# Put the licensed CSV files in rlp_directory, a path relative to the
+# directory you run breos from. Do not commit third-party RLPs unless their
+# license explicitly allows redistribution.
+#
+#   breos run --config configs/examples/external-rlp.toml
+
 rlp_directory = "external_rlp"
 
 location = "porto"

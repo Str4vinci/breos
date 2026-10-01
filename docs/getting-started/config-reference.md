@@ -6,7 +6,7 @@ Every key a {py:class}`~breos.App` config accepts, generated from the
 configuration registry that validates it. A key that is not listed here is
 rejected. The keys inside the `[montecarlo]` and `[sweep]` runner sections are
 described on the [Monte Carlo](monte-carlo.md) and
-[Parameter sweep](recipes.md#parameter-sweep) pages. [Configuration](configuration.md) explains how the keys work
+[Run a parameter sweep](../how-to/parameter-sweep.md) pages. [Configuration](configuration.md) explains how the keys work
 together; [Packaged options](options.md) lists the preset keys they accept.
 
 ## Top-level keys
@@ -36,7 +36,7 @@ is a `breos run` option that overrides the config file.
 | `bifacial_model` | `"none"` | `--bifacial-model` | Rear-irradiance model. `"none"` is front-only production; `"infinite_sheds"` needs sourced module bifaciality plus `gcr`, `pvrow_height` and `pvrow_pitch`. One of `"none"`, `"infinite_sheds"` |
 | `blast_model` | `None` | `--blast-model` | Stable BLAST model key; required with `degradation_engine = "blast"` and invalid with the native engine |
 | `calendar_model` | `"naumann_lam_field_calibrated"` | `--calendar-model` | Battery calendar aging model. The default is the v1 field calibration; `"naumann_lam_field_calibrated_v2"` is the v2 fit with Lam `Ea`/`n` fixed and `k0`/`b` fitted |
-| `cost_preset` | `None` | `--cost-preset` | Cost preset key from the packaged defaults; see [Packaged options](options.md#cost-presets). `None` uses the {py:class}`~breos.CostParams` defaults |
+| `cost_preset` | `None` | `--cost-preset` | Cost preset key from the packaged defaults; see [Packaged options](options.md#cost-presets). `None` uses the {py:class}`~breos.economics.CostParams` defaults |
 | `costs` | *unset* | — | Cost overrides layered over the selected preset and the built-in defaults; see [`[costs]`](#costs) |
 | `cross_axis_tilt` | `0.0` | — | Cross-axis terrain slope for single-axis tracking (degrees) |
 | `degradation_engine` | `"native"` | `--degradation-engine` | `"native"` keeps Naumann/Lam; `"blast"` opts into a vendored BLAST cell model. One of `"native"`, `"blast"` |
@@ -66,12 +66,12 @@ is a `breos run` option that overrides the config file.
 | `montecarlo` | *unset* | — | Monte Carlo study controls, read by `breos montecarlo`; see [Monte Carlo](monte-carlo.md#configure-a-study) |
 | `n_modules` | *required unless `pv_arrays` is set* | `--n-modules` | Number of PV modules |
 | `om_escalation` | `None` | `--om-escalation` | Annual escalation of O&M costs; `None` uses `inflation_rate` |
-| `period` | *unset* | — | Simulate only the window from `start` to `end`, local dates in the year of `start_date`, `end` exclusive. The window runs once and reports energy only: lifetime economics are `None`. See [`[period]`](#period) and [Simulate part of a year](recipes.md#simulate-part-of-a-year) |
+| `period` | *unset* | — | Simulate only the window from `start` to `end`, local dates in the year of `start_date`, `end` exclusive. The window runs once: energy and year-1 money cover the window, and lifetime economics are `None`. See [`[period]`](#period) and [Simulate part of a year](configuration.md#simulate-part-of-a-year) |
 | `projection_years` | `20` | `--projection-years` | Economic projection horizon in years |
-| `pv_arrays` | `None` | — | List of arrays, each with `modules`, `module`, `tilt` and `azimuth`. The array module total replaces `n_modules`; see [`[[pv_arrays]]`](#pv_arrays) |
+| `pv_arrays` | `None` | — | List of arrays, each with at least `modules`; other keys inherit from the top level. The array module total replaces `n_modules`; see [`[[pv_arrays]]`](#pv_arrays) |
 | `pv_degradation_rate` | `0.005` | `--pv-degradation-rate` | Annual PV degradation rate, compounded and counted from the start of each year, so year 1 has none; see [Module aging](../api/pv.md#module-aging) |
 | `pv_loss_overrides` | `None` | — | Per-component overrides (percent) for the fixed PVWatts system losses, e.g. `{"shading": 0.0}` |
-| `pv_module` | `None` | `--pv-module` | Module key from the built-in catalogue. `None` uses the first available |
+| `pv_module` | `None` | `--pv-module` | Module key from the built-in catalogue. `None` uses the catalogue's first entry, `Suntech_STP550S_STC` |
 | `pvrow_height` | `None` | `--pvrow-height` | Height of the PV row center above ground; required by `"infinite_sheds"`, in the same unit as `pvrow_pitch` |
 | `pvrow_pitch` | `None` | `--pvrow-pitch` | Distance between adjacent PV rows; required by `"infinite_sheds"`, in the same unit as `pvrow_height` |
 | `reference_tariff` | *unset* | — | What the household would pay without the system: an import price, by period or flat, and a fixed charge, independent of the system's `[tariff]`. Unset, the no-system baseline is priced at the system's own prices; see [`[reference_tariff]`](#reference_tariff) and [No-system reference tariff](configuration.md#no-system-reference-tariff) |
@@ -79,22 +79,22 @@ is a `breos run` option that overrides the config file.
 | `resolution` | `"h"` | `--resolution` | Simulation time resolution. One of `"h"`, `"15min"` |
 | `rlp_directory` | `None` | `--rlp-directory` | Directory containing licensed external RLP CSVs for non-bundled load profiles |
 | `sell_price_inflation` | `0.0` | `--sell-price-inflation` | Annual escalation of the grid export (sell) price |
-| `smart_charging` | *unset* | — | Grid charging toward a fixed or a daily planned target in the tariff's cheap periods; see [`[smart_charging]`](#smart_charging) and [Smart charging](configuration.md#smart-charging) |
+| `smart_charging` | *unset* | — | Battery dispatch by tariff period: grid charging toward a fixed target or, experimentally, a daily planned target in the listed charge periods, or discharge only in the listed periods; see [`[smart_charging]`](#smart_charging) and [Smart charging](configuration.md#smart-charging) |
 | `solar_position` | `"interval-start"` | `--solar-position` | Where within each timestep the sun position is evaluated. `"mid-interval"` adds half a timestep. `"weather"` reads the representative-time offset from content-bound weather metadata, including provider offsets for instantaneous irradiance and left- or right-labelled interval means. One of `"interval-start"`, `"mid-interval"`, `"weather"` |
 | `start_date` | `"2023-01-01"` | `--start-date` | 1 January of the study year, `YYYY-01-01`. The App simulates that year, or the `period` window in it. Monte Carlo does not use it for the load or weather; its `target_year` sets the study year |
 | `surface_type` | `None` | `--surface-type` | Named ground cover mapped to an albedo; an alternative to `albedo`. One of `"aluminum"`, `"asphalt"`, `"concrete"`, `"copper"`, `"dirty steel"`, `"fresh grass"`, `"fresh snow"`, `"fresh steel"`, `"grass"`, `"sand"`, `"sea"`, `"snow"`, `"soil"`, `"urban"` |
-| `sweep` | *unset* | — | Parameter grid, read by `breos sweep`; see [Parameter sweep](recipes.md#parameter-sweep) |
-| `tariff` | *unset* | — | Time-of-use import and export prices on a bundled schedule, replacing the flat `costs.electricity_cost`, `costs.electricity_sold_cost` and `costs.daily_power_cost`; see [`[tariff]`](#tariff) and [Time-of-use tariffs](configuration.md#time-of-use-tariffs) |
+| `sweep` | *unset* | — | Parameter grid, read by `breos sweep`; see [Run a parameter sweep](../how-to/parameter-sweep.md) |
+| `tariff` | *unset* | — | Time-of-use import and export prices on a bundled or custom schedule, replacing the flat `costs.electricity_cost`, `costs.electricity_sold_cost` and `costs.daily_power_cost`; see [`[tariff]`](#tariff) and [Time-of-use tariffs](configuration.md#time-of-use-tariffs) |
 | `temperature_model` | `"faiman"` | `--temperature-model` | Cell-temperature model and mounting preset. `"pvsyst-*"` and `"sapm-*"` use documented mounting coefficients; `"noct-sam"` needs sourced module NOCT and efficiency metadata, which no bundled module has yet. The default is Faiman, open rack. One of `"faiman"`, `"pvsyst-freestanding"`, `"pvsyst-semi-integrated"`, `"pvsyst-insulated"`, `"sapm-open-rack-glass-glass"`, `"sapm-close-mount-glass-glass"`, `"sapm-open-rack-glass-polymer"`, `"sapm-insulated-back-glass-polymer"`, `"noct-sam"` |
 | `terminal_value` | *unset (basis = none)* | — | Optional accounting sensitivity for the final battery pack's capacity health; see [`[terminal_value]`](#terminal_value) and [Terminal-health credit](configuration.md#terminal-health-credit) |
 | `tilt` | `None` | `--tilt` | Tilt angle (degrees). `None` estimates it from the latitude |
 | `tracking` | `"fixed"` | — | Tracking mode: `"fixed"`, `"single_axis"`, `"dual_axis"` |
 | `transposition_model` | `"isotropic"` | `--transposition-model`, `--sky-model` | Sky-diffusion model used to project GHI/DHI/DNI onto the plane of array; see [Sky-diffusion model](configuration.md#sky-diffusion-transposition-model). One of `"isotropic"`, `"klucher"`, `"haydavies"`, `"reindl"`, `"king"`, `"perez"`, `"perez-driesse"` |
-| `weather_source` | `None` | `--weather-source` | Source part of the cached `weather/<location>_tmy_<years>_<source>.csv` (or gzip-compressed `.csv.gz`) file to load, e.g. `"pvgis-sarah3"`. Needed only when several TMY files exist for a location preset; see [Offline runs with cached weather](recipes.md#offline-runs-with-cached-weather) |
+| `weather_source` | `None` | `--weather-source` | Source part of the cached `weather/<location>_tmy_<years>_<source>.csv` (or gzip-compressed `.csv.gz`) file to load, e.g. `"pvgis-sarah3"`. Needed only when several TMY files exist for a location preset; see [Run offline with cached weather](../how-to/offline-weather.md) |
 
 ## costs
 
-Cost overrides, as `[costs]` in TOML. A key you omit comes from `cost_preset`, and without a preset from the {py:class}`~breos.CostParams` default shown. Values are in the cost preset's currency and must be finite and not negative.
+Cost overrides, as `[costs]` in TOML. A key you omit comes from `cost_preset`, and without a preset from the {py:class}`~breos.economics.CostParams` default shown. Values are in the cost preset's currency and must be finite and not negative.
 
 | Key | Default | Description |
 |---|---|---|
@@ -209,7 +209,7 @@ Battery dispatch by tariff period, as `[smart_charging]` in TOML; see [Smart cha
 
 ## period
 
-A window shorter than a year, as `[period]` in TOML; see [Simulate part of a year](recipes.md#simulate-part-of-a-year). Both dates are local civil dates in the location's timezone, in the year of `start_date`, and the window runs from local midnight of `start` to local midnight of `end`.
+A window shorter than a year, as `[period]` in TOML; see [Simulate part of a year](configuration.md#simulate-part-of-a-year). Both dates are local civil dates in the location's timezone, in the year of `start_date`, and the window runs from local midnight of `start` to local midnight of `end`.
 
 | Key | Required | Description |
 |---|---|---|

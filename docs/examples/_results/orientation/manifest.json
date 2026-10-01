@@ -1,0 +1,63 @@
+{
+ "case": "orientation",
+ "title": "How much does orientation matter?",
+ "breos_version": "0.6.2",
+ "git_describe": "v0.6.2-585-gde0b8a1",
+ "generated_utc": "2026-10-01T20:19:25+00:00",
+ "runtime_s": 21.8,
+ "cheap": false,
+ "configs": {
+  "configs/examples/pv-only.toml": "b05d6a251ee3a4b9a4510866f9268b740434280ced704f9e8e4654363c35c8b0"
+ },
+ "weather": {
+  "validation/data/weather/porto_tmy_2005_2023_pvgis-sarah3.csv.gz": {
+   "sha256": "bf84e31b02ad9bf39f331a5ce8629b1ea8f80cd1597748e72a87a0fce56b4f15",
+   "attribution": "PVGIS typical meteorological year 2005-2023 (PVGIS-SARAH3). PVGIS data © European Union, 2001-2024, reused under Commission Decision 2011/833/EU."
+  }
+ },
+ "dependencies": {
+  "python": "3.12.13",
+  "numpy": "2.4.6",
+  "pandas": "3.0.5",
+  "pvlib": "0.15.2",
+  "scipy": "1.17.1",
+  "numba": "0.66.0",
+  "pymoo": "0.6.2"
+ },
+ "currency": "EUR",
+ "timezone": "Europe/Lisbon",
+ "tilts": [
+  0,
+  5,
+  10,
+  15,
+  20,
+  25,
+  30,
+  35,
+  40,
+  45,
+  50,
+  55,
+  60
+ ],
+ "azimuths": [
+  90,
+  105,
+  120,
+  135,
+  150,
+  165,
+  180,
+  195,
+  210,
+  225,
+  240,
+  255,
+  270
+ ],
+ "files": {
+  "orientations.csv": "fd75d3c9b92f7684a2fc028964fd37c6640e91c59484ab63786cd49ea2c586ac",
+  "default.json": "0c351b0ceeaf118d7c1a7a42680f42e8f9cb94c094951d4194b9f96c2c3fe6c8"
+ }
+}

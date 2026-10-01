@@ -4,7 +4,8 @@
 #
 # The top-level keys and tables are the base App config. Each key under
 # [sweep] replaces the matching App config value for that run. Quote dotted
-# keys to reach values inside tables such as [costs].
+# keys to reach values inside tables such as [costs]. This grid is
+# 3 x 2 x 2 = 12 runs.
 
 location = "porto"
 n_modules = 10
@@ -17,7 +18,7 @@ projection_years = 20
 resolution = "h"
 
 [costs]
-electricity_cost = 0.2582
+electricity_cost = 0.2582  # flat import price, EUR/kWh; the residential_pt value
 
 [sweep]
 n_modules = [8, 10, 12]

@@ -20,6 +20,15 @@ its default, CLI flag, allowed values and nested-table keys. It is generated
 from the configuration registry that validates a config, so it cannot miss a
 key. The sections below explain how the keys work together.
 
+Unknown keys are rejected at load time, at the top level and inside every
+table. A misspelled key such as `batery_kwh` raises an error listing the
+offending key rather than being silently ignored (which would quietly fall
+back to the default). The `[sweep]` and `[montecarlo]` runner sections are
+allowed in an App config; App checks the `[montecarlo]` keys, and
+`breos sweep` checks the `[sweep]` keys.
+
+## Leap years
+
 Real calendar-year load profiles follow `start_date`: leap years contain
 8,784 hourly (35,136 quarter-hourly) intervals and preserve exact annual
 energy. An 8,760-hour TMY restamped onto a leap year gets the same treatment:
@@ -29,12 +38,6 @@ keeps its own data. External load profiles placed by position likewise copy
 the leap day's weekday, Saturday or Sunday type, and a dated E-REDES file the
 nearest of its working-day, Saturday or Sunday/holiday class. The result's weather
 provenance records the copied weather day under `leap_day`.
-
-Unknown top-level keys are rejected at load time. A misspelled key such as
-`batery_kwh` raises an error listing the offending key rather than being
-silently ignored (which would quietly fall back to the default). The optional
-`[sweep]` and `[montecarlo]` sections used by their dedicated CLI commands are
-recognised and allowed.
 
 ## Hourly weather at 15-minute resolution
 
@@ -46,10 +49,11 @@ optimization reads the same values from `simulation.irradiance_resampling`:
 - `"auto"` (default) uses `"clear_sky_energy_conserving"` for weather declaring
   `radiation_time_basis = "interval_mean"`, and `"clear_sky"` otherwise.
 - `"clear_sky"` interpolates each component's clear-sky ratio with makima,
-  retaining a 5 W/m² denominator regulariser and no upper ratio cap.
-  Between source points where either clear-sky component is at most 5 W/m²,
-  direct linear component interpolation guards dawn and dusk. Negative
-  overshoot is clipped and zero clear-sky support stays zero.
+  retaining a 5 W/m² denominator regulariser and no upper ratio cap. Where a
+  component's clear-sky value at either bracketing source point is at most
+  5 W/m², that component is interpolated linearly instead, which guards dawn
+  and dusk. Negative overshoot is clipped and zero clear-sky support stays
+  zero.
 - `"clear_sky_energy_conserving"` then scales each source hour's four quarters
   to reproduce that hour's mean, independently for GHI, DNI and DHI. It
   raises for instantaneous or undeclared input. Positive source hours with
@@ -425,7 +429,7 @@ Built-in presets are packaged with BREOS; [Packaged options](options.md)
 lists them, and `configs/examples/` has runnable configs that use them.
 Pass the key, then use the optional `costs` table for project-specific values.
 Explicit overrides win over the named preset; preset values win over
-{py:class}`~breos.CostParams` defaults:
+{py:class}`~breos.economics.CostParams` defaults:
 
 ```python
 breos.App({
@@ -455,8 +459,8 @@ The accepted keys follow the packaged cost-catalogue names; the
 [key reference](config-reference.md#costs) lists them with their defaults.
 Unknown keys and negative or non-finite values are rejected before simulation.
 
-For full control, build a {py:class}`~breos.CostParams` and
-{py:class}`~breos.EmissionsParams` yourself and call the lower-level
+For full control, build a {py:class}`~breos.economics.CostParams` and
+{py:class}`~breos.emissions.EmissionsParams` yourself and call the lower-level
 functions documented in the [Cost and emissions API](../api/cost-analysis.md).
 
 ## Time-of-use tariffs
@@ -492,19 +496,27 @@ fixed_charge_per_day = 0.25              # optional, default 0
   instead of the standard/DST seasons. Its rules then select a season by
   name, and each price list may give a table of period prices for every
   season. See [Month seasons](../api/tariffs.md#month-seasons).
-- Holidays are optional and explicit. `holidays.dates` maps each covered
-  year to its dates; provide the complete calendar you intend for each year
-  the simulation can use. A run in a year absent from that map fails rather
-  than guessing or reusing dates.
+- `currency` must be `"EUR"`, the only currency BREOS accepts so far, and
+  the currency of the cost presets. BREOS does not convert.
+- Holidays of a custom schedule are optional and explicit. The
+  `[tariff.custom_schedule.holidays]` table needs `day_type`, the day type
+  holidays follow, and `dates`, which maps each covered year to its dates;
+  provide the complete calendar you intend for each year the simulation can
+  use. A run in a year absent from that map fails rather than guessing or
+  reusing dates. The bundled `es_2_0td` carries Spanish national holidays for
+  2026 only.
 - The schedule must be defined in the location's timezone, and the
-  resolution fine enough for its boundaries: the Portuguese tri-hourly and
-  2027 schedules change on the half hour, so they need `resolution = "15min"`.
+  resolution fine enough for its boundaries. Of the bundled schedules, only
+  `pt_mainland_2026_daily_bi` and `es_2_0td` run at hourly resolution; the
+  others need `resolution = "15min"`. See the boundary-step column in
+  [Bundled schedules](../api/tariffs.md#bundled-schedules).
 - A tariff replaces the flat `costs.electricity_cost`,
   `costs.electricity_sold_cost` and `costs.daily_power_cost`, so setting
   those as well is an error. CAPEX, O&M and replacement costs still come from
   the cost preset, in the same currency.
-- Dispatch does not change: the battery still maximises self-consumption.
-  The tariff changes what the energy costs. Each year row records its import
+- Without [`[smart_charging]`](#smart-charging) the dispatch does not
+  change: the battery still maximises self-consumption, and the tariff
+  changes only what the energy costs. Each year row records its import
   cost, export revenue, no-system import cost and fixed charge at year-1
   prices; the projection escalates and discounts them as it does flat prices.
 - Every project year replays the start-year calendar, so weekdays and
@@ -515,7 +527,7 @@ fixed_charge_per_day = 0.25              # optional, default 0
 Monte Carlo prices every trajectory with the same tariff. Projected
 optimization accepts the same tariff table in its nested config; see
 [Optimization](optimization.md#price-a-design-with-a-time-of-use-tariff).
-To compare several offers, see [Compare tariffs](recipes.md#compare-tariffs).
+To compare several offers, see {doc}`Which tariff after PV? <../gallery/tariffs/plot_09_which_tariff>`.
 
 ## Terminal-health credit
 
@@ -625,9 +637,9 @@ one as the reference.
 ## Smart charging
 
 A `[smart_charging]` table sets when the battery may discharge and when the
-grid may charge it, by tariff period. It needs a `[tariff]` and a battery.
-Omitting it, or setting `mode = "disabled"`, is greedy self-consumption with
-unchanged results:
+grid may charge it, by tariff period. Every mode except `disabled` needs a
+`[tariff]` and `battery_kwh > 0`. Omitting the table, or setting
+`mode = "disabled"`, is greedy self-consumption with unchanged results:
 
 ```toml
 [smart_charging]
@@ -787,7 +799,7 @@ controller and planner versions, the effective planner settings, the
 forecast, warm-start and terminal policies, the schedule hash, an
 `instruction_hash` of the instructions the run executed in every project
 year, and the stored energy by origin at the start and end of the project.
-[`App.revalue`](recipes.md#revalue-a-run-at-other-prices) simulates the run
+[`App.revalue`](../api/app.md#revalue-a-finished-run) simulates the run
 again when the import or export prices change, since they move the plan; a
 change to the fixed charge alone is re-priced. Monte Carlo and projected
 optimization refuse the mode, because they share one set of static
@@ -806,8 +818,10 @@ demandlib-derived H0 example bundled with BREOS. The other standard profiles,
 supported when you provide the required CSV files yourself through
 `rlp_directory`. `load_profile = "custom"` reads any CSV you name with
 `load_profile_file`, `load_profile_column` and `load_profile_unit`. Keys are
-case-insensitive; the numeric keys (`"1"` to `"8"`) and the aliases `h0`,
-`default` and `crest` were removed in 0.7.0.
+case-insensitive. The numeric keys and the aliases `h0`, `default` and
+`crest` were removed in 0.7.0;
+[Migrating from BREOS 0.6.2](interpreting-results.md#migrating-from-breos-062)
+maps them to the current keys.
 
 ```python
 breos.App({
@@ -823,3 +837,54 @@ breos.App({
 Use external BDEW, E-REDES, REE, or custom profiles only under terms that
 permit your intended use. See [Load Profile Data](../legal/load-profile-data.md)
 for the expected filenames and the reason these CSVs are not bundled.
+
+## Simulate part of a year
+
+A `[period]` table simulates a window shorter than a year, for example one
+week in June:
+
+```toml
+location = "porto"
+n_modules = 10
+annual_consumption_kwh = 4000
+battery_kwh = 5.0
+start_date = "2025-01-01"
+
+[period]
+start = 2025-06-01
+end = 2025-06-08
+```
+
+As a Python dict, give the dates as ISO strings or `datetime.date` values:
+`"period": {"start": "2025-06-01", "end": "2025-06-08"}`.
+
+- `start` and `end` are dates in the location's timezone, in the year of
+  `start_date`. The window starts at local midnight of `start` and ends at
+  local midnight of `end`, so `end` is exclusive: the example covers 1 to 7
+  June. `end` may be 1 January of the next year. A window of the whole year
+  raises; omit `[period]` for that.
+- The load profile is built for the whole year and scaled to
+  `annual_consumption_kwh` as usual, and the window gets its share of it.
+  Weather, PV, load and battery temperature are then cut to the window.
+- The weather must cover the whole window, in civil time. Weather that
+  covers one UTC year, such as an Open-Meteo CSV, cannot serve a window that
+  touches the civil year edge away from UTC, and weather stamped at half
+  past the hour cannot place a window that starts at local midnight. Both
+  raise `ValueError` before anything is simulated. PVGIS TMY weather covers
+  both year edges.
+- The window runs once, from the battery's initial state; nothing is
+  repeated or carried over. `projection_years` is not used: setting it gives
+  a warning, and the result records `projection_years_used = 1`.
+- The fixed charge (`costs.daily_power_cost`, or a tariff's
+  `fixed_charge_per_day`) is billed on the window's civil days.
+- Energy results cover the window, and the lifetime economics are `None`;
+  see [Period runs](interpreting-results.md#period-runs).
+
+A PV-only window equals the same steps of a full-year run exactly. With a
+battery the dispatch differs, because the window starts from the battery's
+initial state of charge and health.
+
+Monte Carlo and the optimizer reject `[period]`, because they rank designs on
+lifetime economics. `breos sweep` accepts it and can vary `period.start` and
+`period.end`. `App.revalue` re-prices the window; its lifetime economics stay
+`None`.

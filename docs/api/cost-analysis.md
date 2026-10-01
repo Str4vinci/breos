@@ -26,7 +26,7 @@ energy balance.
    breos.economics.cost_analysis_projection
 ```
 
-`cost_analysis_projection` runs four stages, each public, so a caller can
+`cost_analysis_projection` runs in stages, each public, so a caller can
 re-price stored year rows without repeating the rest:
 
 ```{eval-rst}
@@ -46,7 +46,7 @@ payback, NPV and LCOE, `add_co2_projection` adds the avoided emissions, and
 `write_cost_projection` writes `cost_projection.csv`. App, Monte Carlo and the
 optimizer read LCOE and lifetime CO2 from the projection these stages build,
 so each is computed once per run. To value a finished App run at other
-prices, use `App.revalue` ([recipe](../getting-started/recipes.md#revalue-a-run-at-other-prices)).
+prices, use `App.revalue` ([Revalue a finished run](app.md#revalue-a-finished-run), and the {doc}`price-scenario example <../gallery/tariffs/plot_12_price_scenarios>`).
 
 ## Metrics
 

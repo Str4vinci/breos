@@ -1,19 +1,21 @@
 # Optimization
 
-Optimization helpers for system configuration.
-[pymoo](https://pymoo.org/) powers public multi-objective PV/battery sizing (PV
-count, battery, cost, grid independence, and ZEB ratio). For end-to-end App
+[pymoo](https://pymoo.org/) powers multi-objective PV/battery sizing over
+module count, battery capacity, tilt and azimuth, against projected grid
+independence and NPV; ZEB is a diagnostic. The
+[optimization guide](../getting-started/optimization.md) walks through a
+search. For end-to-end App
 runs over an explicit config grid, including one-dimensional tilt or battery
 sweeps, use the `breos sweep` CLI command documented in
-[Recipes](../getting-started/recipes.md#parameter-sweep).
+[Run a parameter sweep](../how-to/parameter-sweep.md).
 
 Install `breos[optimization]` to use pymoo-backed multi-objective sizing.
 `evaluate_projected_design` uses the core scientific stack.
 
 ZEB and financial production use usable AC system energy from the dispatch
 ledger, not raw PV DC, so inverter efficiency and clipping affect candidate
-scores. Physical size, inverter rating, and CAPEX use the selected module's
-`Mpp`.
+scores. System kWp, inverter rating, and CAPEX use the selected module's
+`Mpp`; module frame area uses `pv.dimensions`.
 
 ## Projected objectives
 
@@ -47,16 +49,11 @@ Projected NPV uses each simulated year's import, export, load, usable AC PV
 production, and replacement cost. This is a repeated-TMY scenario, not a
 forecast of distinct future weather years.
 
-An optional `tariff` table uses the same schema and validation as App. The
-shared projection loop values imports, exports and the no-system baseline at
-the timestep prices and bills the fixed charge by simulated duration. The
-table replaces the three flat energy/fixed-charge entries in `costs`; giving
-both raises. The schedule is resolved once per search in `location.timezone`.
-The [optimization guide](../getting-started/optimization.md#price-a-design-with-a-time-of-use-tariff)
-shows the configuration and provenance fields. A `smart_charging` table applies
-fixed-target charging, or `discharge_only`, to every candidate with a battery,
-as App does. The
-experimental, App-only `daily_persistence` mode raises `ValueError`.
+Optional `tariff`, `reference_tariff` and `smart_charging` tables use the
+App's schema and validation; the
+[optimization guide](../getting-started/optimization.md#price-a-design-with-a-time-of-use-tariff)
+describes how a search uses them. The experimental, App-only
+`daily_persistence` smart-charging mode raises `ValueError`.
 
 ZEB remains a reported diagnostic in projected mode. Set
 `constraints.enforce_zeb = true` to require a projected lifetime ZEB ratio of
@@ -78,12 +75,12 @@ call takes them as DataFrames.
 | `costs` | the App's `costs` keys, plus `dc_ac_ratio` (1.25), the DC peak over the inverter AC rating |
 | `financials` | `inflation_rate` (0.02), `sell_price_inflation` (0), `import_price_escalation`, `om_escalation`, `replacement_cost_learning`, `discount_rate` (0.03), `project_lifespan`, `pv_degradation_rate`, and the flat-price fallbacks `electricity_cost` and `electricity_sold_cost` |
 | `constraints` | see below |
-| `mode` | `fixed_azimuth` (none: azimuth is searched, 90–270° in the north, −90–90° in the south) |
-| `optimization` | `objective_basis` (`"projected"`); `early_stop` (off; a table takes `enabled`, `ftol` 0.0025, `period` 10, `n_skip` 0, `min_gen` min(20, `n_gen`), `only_feasible` `true`); `pop_size` (40), `n_gen` (100), `n_offsprings` (pymoo's), `seed` (1) |
-| `simulation` | `resolution` (`"h"` or `"15min"`); `years_projection` (20, or `financials.project_lifespan`) |
+| `mode` | `fixed_azimuth` (none: azimuth is searched, 90–270° in the northern hemisphere, −90–90° in the southern) |
+| `optimization` | `objective_basis` (`"projected"`); `early_stop` (off; `true` or a table turns it on, and a table takes `enabled` (`true`), `ftol` 0.0025, `period` 10, `n_skip` 0, `min_gen` min(20, `n_gen`), `only_feasible` `true`); `pop_size` (40), `n_gen` (100), `n_offsprings` (pymoo's), `seed` (1) |
+| `simulation` | `resolution` (`"h"`, or `"15min"`); `irradiance_resampling` (`"auto"`); `years_projection` (20, or `financials.project_lifespan`) |
 | `inverter` | `efficiency`, used when the top-level `inverter_efficiency` (0.96) is not set |
 | `emissions` | the `EmissionsParams` fields; the search then reports `Projected_CO2_*` for every Pareto row |
-| `tariff`, `smart_charging` | the App's tables |
+| `tariff`, `reference_tariff`, `smart_charging`, `terminal_value` | the App's tables; `terminal_value` is accepted and ignored |
 | top level | `pv_module`, `inverter_efficiency`, `dc_output_scale` (1), `ac_output_scale` (1), and the App's PV model keys (`transposition_model`, `albedo`, `iam_model`, ...) |
 
 Where two keys set one thing, the first one set wins:
@@ -139,14 +136,7 @@ included in the metrics, while the financial table retains their annual source
 columns. These tables are intended as stable source data for custom
 analysis and plots; BREOS does not require a particular visualization layer.
 
-## Reproducing the upcoming publication
-
-The configurations, drivers, and run records for the upcoming publication
-were removed from the repository after 0.6.2. They are preserved in the
-[BREOS 0.6.2 archive](https://doi.org/10.5281/zenodo.22938914) and at the
-[`v0.6.2` tag](https://github.com/Str4vinci/breos/tree/v0.6.2), under
-`validation/article1/` and `tools/`. Reproduce the published numbers from that
-release, not from a later version.
+>>>
 
 ## Multi-objective sizing
 

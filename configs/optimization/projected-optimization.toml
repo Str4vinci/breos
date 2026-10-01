@@ -75,20 +75,21 @@ max_tilt_deg = "adjust"          # or a number in degrees
 enforce_zeb = false              # true makes the ZEB ratio a hard constraint
 
 [costs]
+# Prices from the residential_pt cost preset; replace them with your own quotes.
 electricity_cost = 0.2582        # EUR/kWh imported
 electricity_sold_cost = 0.04     # EUR/kWh exported
 daily_power_cost = 0.30          # EUR/day standing charge
-module_cost_per_w = 0.125
-storage_cost_per_kwh = 500.0
-inverter_cost_per_kw_hybrid = 102.58
-inverter_cost_per_kw_simple = 48.37
-installation_cost_per_module = 350.0
-installation_cost_battery = 350.0
-other_cost_per_module = 30.0
-other_costs = 0.0
-maintenance_cost_per_panel = 10.0
-maintenance_cost = 0.0
-dc_ac_ratio = 1.25
+module_cost_per_w = 0.125        # EUR/W of module rating
+storage_cost_per_kwh = 500.0     # EUR/kWh of nominal capacity
+inverter_cost_per_kw_hybrid = 102.58  # EUR/kW AC, with a battery
+inverter_cost_per_kw_simple = 48.37   # EUR/kW AC, PV only
+installation_cost_per_module = 350.0  # EUR per module
+installation_cost_battery = 350.0     # EUR, once, with a battery
+other_cost_per_module = 30.0     # EUR per module, such as cabling
+other_costs = 0.0                # EUR, once
+maintenance_cost_per_panel = 10.0  # EUR per module per year
+maintenance_cost = 0.0           # EUR per year
+dc_ac_ratio = 1.25               # DC/AC ratio that sets the inverter AC rating
 
 [financials]
 discount_rate = 0.05
@@ -99,6 +100,7 @@ sell_price_inflation = 0.0
 # replacement_cost_learning = 0.0 # annual fall in the replacement price
 
 [emissions]                      # adds Projected_CO2_* to every Pareto row
+# The packaged PT emissions factor; `breos list emissions` shows the others.
 country = "Portugal"
 average_grid_carbon_intensity_gco2_kwh = 127.91
 source = "Ember Climate, Europe Yearly Full Release"

@@ -45,6 +45,11 @@ Known limits: `daily_persistence` is experimental, App only, and Monte Carlo
 and optimization refuse it.
 
 ### Added
+- Documentation gains an example gallery of case reports (first home, battery
+  value, sites, east-west roofs, replacement timing, tariffs, dispatch, price
+  scenarios, Monte Carlo, NSGA-II) built from stored results, plus how-to
+  guides; they replace the recipes page. `tools/regenerate_gallery_results.py`
+  reruns the cases, and the `docs` extra now includes matplotlib and sphinx-gallery.
 - `App.timeseries()` returns a copy of the first simulated year step by step
   (or a `[period]` window's steps), with the energy-balance ledger columns.
 - Cached TMY weather files in `weather/` may be gzip-compressed
@@ -1105,8 +1110,23 @@ and optimization refuse it.
   `compute_cell_temperature` takes the same new keyword. No App, optimizer or
   CLI key sets it. The old keyword raises `TypeError`. Results are unchanged
   bit for bit.
+- Every `breos.plotting` function returns its matplotlib `Figure`, or a dict
+  of figures keyed by file name for those that draw several. The results
+  directory is now optional: without it, nothing is saved and the figure is
+  left open; with it, the figure is saved, closed and returned. A saved
+  `plot_pv_loss_waterfall` is now closed too.
 
 ### Fixed
+- `plot_breakeven_cdf` normalises by every run, so its plateau is the share
+  that ever pays back; NaN entries, or `total_runs=`, count runs that never do.
+- `plot_battery_soh_timeseries` draws the end-of-life line at
+  `eol_percentage` (default 0.70, the battery default), not a fixed 80%.
+- `weekly_graphs` has a legend and a title; the Monte Carlo NPV histogram
+  draws its zero line only near the data (`zero_line=` overrides).
+- `plot_pareto_front` labels optimizer columns in words with units, and its
+  legend marker no longer takes one colour-map colour.
+- `plot_co2_savings` uses whole-year ticks and keeps its labels inside the
+  axes; `plot_pv_loss_waterfall` hides the bifacial stage of a monofacial system.
 - A battery too small to dispatch (at most 1 Wh) no longer reports
   `battery_soh_end_pct`, `battery_replacements` or the replacement-cost fields
   ([#353](https://github.com/Str4vinci/breos/issues/353)). It already ran and
@@ -1826,6 +1846,9 @@ and optimization refuse it.
   directory holds two TMY files for its location preset now stops** with the
   candidates and asks for `weather_source`. With one file, App results are
   unchanged.
+- A Monte Carlo `weather_file` without a `date` column, such as a PVGIS TMY,
+  now stops with an error that names the missing column instead of a bare
+  `KeyError: 'date'`.
 
 ### Removed
 - `resample_to_15min(..., preserve_irradiance_energy=...)`,

@@ -1,0 +1,38 @@
+{
+ "case": "first_home",
+ "title": "Your first home",
+ "breos_version": "0.6.2",
+ "git_describe": "v0.6.2-585-gde0b8a1",
+ "generated_utc": "2026-10-01T20:18:48+00:00",
+ "runtime_s": 2.3,
+ "cheap": true,
+ "configs": {
+  "configs/examples/quickstart.toml": "2d33e042ee2f71c9fea63c512bf0700930ee202d0cad75301d392c622e132996"
+ },
+ "weather": {
+  "validation/data/weather/porto_tmy_2005_2023_pvgis-sarah3.csv.gz": {
+   "sha256": "bf84e31b02ad9bf39f331a5ce8629b1ea8f80cd1597748e72a87a0fce56b4f15",
+   "attribution": "PVGIS typical meteorological year 2005-2023 (PVGIS-SARAH3). PVGIS data © European Union, 2001-2024, reused under Commission Decision 2011/833/EU."
+  }
+ },
+ "dependencies": {
+  "python": "3.12.13",
+  "numpy": "2.4.6",
+  "pandas": "3.0.5",
+  "pvlib": "0.15.2",
+  "scipy": "1.17.1",
+  "numba": "0.66.0",
+  "pymoo": "0.6.2"
+ },
+ "currency": "EUR",
+ "timezone": "Europe/Lisbon",
+ "iso_weeks": {
+  "winter": 3,
+  "summer": 27
+ },
+ "files": {
+  "result.json": "02bee7b153e07b545d6c467101bd1865e72bf1221d54689ef6bacc6719a93641",
+  "week_winter.csv": "f2ecc5d21e3e61543c9874d27c41f11276a1f8c8e677b40618b600c58cf897a5",
+  "week_summer.csv": "599ef11d587048e3957d092a0da54f4dced176f8f225621f06311f3cb9d997d2"
+ }
+}

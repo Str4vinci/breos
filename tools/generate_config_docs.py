@@ -52,7 +52,7 @@ Every key a {py:class}`~breos.App` config accepts, generated from the
 configuration registry that validates it. A key that is not listed here is
 rejected. The keys inside the `[montecarlo]` and `[sweep]` runner sections are
 described on the [Monte Carlo](monte-carlo.md) and
-[Parameter sweep](recipes.md#parameter-sweep) pages. [Configuration](configuration.md) explains how the keys work
+[Run a parameter sweep](../how-to/parameter-sweep.md) pages. [Configuration](configuration.md) explains how the keys work
 together; [Packaged options](options.md) lists the preset keys they accept.
 """
 
@@ -67,7 +67,7 @@ TABLES: tuple[tuple[str, TableSpec, str], ...] = (
         "costs",
         COSTS_TABLE,
         "Cost overrides, as `[costs]` in TOML. A key you omit comes from `cost_preset`, and without a preset from "
-        "the {py:class}`~breos.CostParams` default shown. Values are in the cost preset's currency and must be "
+        "the {py:class}`~breos.economics.CostParams` default shown. Values are in the cost preset's currency and must be "
         "finite and not negative.",
     ),
     (
@@ -119,7 +119,7 @@ TABLES: tuple[tuple[str, TableSpec, str], ...] = (
         "period",
         PERIOD_TABLE,
         "A window shorter than a year, as `[period]` in TOML; see "
-        "[Simulate part of a year](recipes.md#simulate-part-of-a-year). Both dates are local civil dates in the "
+        "[Simulate part of a year](configuration.md#simulate-part-of-a-year). Both dates are local civil dates in the "
         "location's timezone, in the year of `start_date`, and the window runs from local midnight of `start` to "
         "local midnight of `end`.",
     ),

@@ -22,6 +22,7 @@ model documentation and comparison data.
    :toctree: generated/
 
    breos.solar.calculate_pv_production_dc
+   breos.solar.calculate_pv_production_dc_tracking
    breos.solar.calculate_pv_production_breakdown
    breos.solar.calculate_pv_production_ac
    breos.solar.calculate_multi_array_production
@@ -54,7 +55,7 @@ and `list_modules` returns the available keys.
 `add_module` registers hardware that BREOS does not ship. It writes to the
 in-memory catalogue and persists nothing, so call it once per process before
 you build an `App`. See
-[Use your own PV module](../getting-started/recipes.md) for a worked example.
+[Use your own PV module](../how-to/own-pv-module.md) for a worked example.
 
 ```{eval-rst}
 .. autosummary::
