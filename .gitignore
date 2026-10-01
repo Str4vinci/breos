@@ -23,6 +23,9 @@ dev/
 .claude/
 .DS_Store
 
+# Local gate and run logs
+*.log
+
 # Sphinx
 docs/_build/
 docs/api/generated/
