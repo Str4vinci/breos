@@ -10,9 +10,9 @@ and the project ends before it is used. NPV savings then drop by almost the
 price of a pack, for a design that is no worse than its neighbours.
 
 This page shows that drop twice, by moving the horizon and by adding
-modules, and shows how valuing the battery's residual value at the horizon
-removes it. The runs are the quickstart home
-(:doc:`/gallery/getting_started/plot_01_first_home`) with the residual value
+modules, and shows how an estimated battery residual value at the horizon
+smooths it. The runs are the quickstart home
+(:doc:`/gallery/getting_started/plot_01_first_home`) with the estimate
 switched on:
 
 .. literalinclude:: /../configs/examples/quickstart.toml
@@ -24,13 +24,17 @@ switched on:
     [terminal_value]
     basis = "battery_health_fraction"
 
-The residual value is the pack present at the end, valued by its remaining
-health above the end-of-life threshold at the replacement-pack price and
-discounted from the horizon. It is an accounting sensitivity, not a resale
-price. The result keeps the plain ``npv_savings`` and adds the residual value
-as ``terminal_health_credit`` (``terminal_health_credit_npv`` discounted) and
-``npv_savings_terminal_adjusted``, the NPV including it. See
-`Terminal-health credit <../../getting-started/configuration.html#terminal-health-credit>`__
+**Estimated battery residual value.** At the end of the project, BREOS
+optionally estimates the installed battery's residual value by scaling its
+replacement cost by the fraction of capacity health remaining above the
+replacement threshold. This assumes value declines linearly with that
+fraction. The discounted estimate is reported alongside the NPV excluding
+residual value; it does not estimate resale proceeds. Payback and LCOE
+exclude it. The result keeps ``npv_savings`` and adds
+``terminal_health_credit`` (the estimate at the horizon),
+``terminal_health_credit_npv`` (discounted) and
+``npv_savings_terminal_adjusted`` (the NPV including it). See
+`Estimated battery residual value <../../getting-started/configuration.html#estimated-battery-residual-value>`__
 for the formula.
 """
 
@@ -55,13 +59,14 @@ case.stamp()
 # so the yearly energy and degradation are identical up to each horizon.
 
 fig, ax = plt.subplots(figsize=(9, 4.5))
-ax.plot(horizons["projection_years"], horizons["npv_savings"], "o-", color="#EE6677", label="NPV savings")
+ax.plot(horizons["projection_years"], horizons["npv_savings"], "o-", color="#EE6677",
+        label="NPV excluding residual value")  # fmt: skip
 ax.plot(
     horizons["projection_years"],
     horizons["npv_savings_terminal_adjusted"],
     "s-",
     color="#228833",
-    label="NPV savings including the battery's residual value",
+    label="NPV including estimated residual value",
 )
 for years in horizons.loc[horizons["battery_replacements"].diff() > 0, "projection_years"]:
     ax.axvline(years, color="0.6", ls=":")
@@ -86,7 +91,7 @@ for years in jumps:
         f"From {years - 1} to {years} years a replacement enters the project (at "
         f"{after['last_replacement_years']:.2f} years): NPV savings fall from {money(before['npv_savings'], currency)} "
         f"to {money(after['npv_savings'], currency)}, although the longer project earns one more year of savings. "
-        f"The pack ends at {after['battery_soh_end_pct']:.1f} % health, and its residual value, "
+        f"The pack ends at {after['battery_soh_end_pct']:.1f} % health, and its estimated residual value, "
         f"{money(after['terminal_health_credit_npv'], currency)} discounted, keeps the NPV including it rising: "
         f"{money(before['npv_savings_terminal_adjusted'], currency)} to "
         f"{money(after['npv_savings_terminal_adjusted'], currency)}."
@@ -103,9 +108,9 @@ say(*lines)
 
 counts = modules[modules["terminal_replacement"]].set_index("n_modules")
 fig, ax = plt.subplots(figsize=(9, 4.5))
-ax.plot(counts.index, counts["npv_savings"], "o-", color="#EE6677", label="NPV savings")
+ax.plot(counts.index, counts["npv_savings"], "o-", color="#EE6677", label="NPV excluding residual value")
 ax.plot(counts.index, counts["npv_savings_terminal_adjusted"], "s-", color="#228833",
-        label="NPV savings including the battery's residual value")  # fmt: skip
+        label="NPV including estimated residual value")  # fmt: skip
 for count, row in counts.iterrows():
     ax.annotate(
         f"{row['battery_replacements']:.0f} replacement" + ("s" if row["battery_replacements"] != 1 else ""),
@@ -132,12 +137,13 @@ table(
             "pv_kwp": "kWp",
             "replacement_times_years": "Replacements at (years)",
             "battery_soh_end_pct": "Final health (%)",
-            "npv_savings": "NPV savings",
-            "terminal_health_credit_npv": "Residual value (discounted)",
-            "npv_savings_terminal_adjusted": "NPV with residual value",
+            "npv_savings": "NPV excluding residual value",
+            "terminal_health_credit_npv": "Estimated residual value (discounted)",
+            "npv_savings_terminal_adjusted": "NPV including estimated residual value",
         }
     ),
-    **{"NPV savings": ".0f", "Residual value (discounted)": ".0f", "NPV with residual value": ".0f", "kWp": "g"},
+    **{"NPV excluding residual value": ".0f", "Estimated residual value (discounted)": ".0f",
+       "NPV including estimated residual value": ".0f", "kWp": "g"},
 )  # fmt: skip
 
 # %%
@@ -154,7 +160,7 @@ if cliff.any():
         f"{after['last_replacement_years']:.4f} years, about {days:.0f} days before the {horizon}-year horizon. "
         f"NPV savings fall from {money(before['npv_savings'], currency)} to {money(after['npv_savings'], currency)}, "
         f"a drop of {money(before['npv_savings'] - after['npv_savings'], currency)} for one more module. With the "
-        f"residual value, the new pack's {after['battery_soh_end_pct']:.1f} % health is worth "
+        f"estimated residual value, the new pack's {after['battery_soh_end_pct']:.1f} % health is worth "
         f"{money(after['terminal_health_credit_npv'], currency)}, and the NPV including it moves smoothly: "
         f"{money(before['npv_savings_terminal_adjusted'], currency)} to "
         f"{money(after['npv_savings_terminal_adjusted'], currency)}."
@@ -173,7 +179,8 @@ pairs = modules.pivot(index="n_modules", columns="terminal_replacement", values=
 unchanged = (pairs[True] == pairs[False]).all()
 say(
     "Here every design gives the same NPV savings with and without terminal replacement, because no replacement "
-    "falls on the last day: the policy does not remove the drop, and the residual value is the tool for it."
+    "falls on the last day: the policy does not remove the drop; the estimated residual value shows how much "
+    "of it is timing."
     if unchanged
     else "Here the policy changes the result for "
     + ", ".join(f"{count} modules" for count in pairs.index[pairs[True] != pairs[False]])
@@ -184,9 +191,9 @@ say(
 # %%
 # Which number to use
 # -------------------
-# The plain NPV is what the household pays and saves within the horizon,
-# and it stays the headline. Read it with the replacement times next to it: a
-# design that buys a pack in the last months of the project looks worse than
-# it is. The NPV including the residual value is a sensitivity that says how
-# much of that is timing. When designs are ranked by NPV, for example in a
-# sweep, check both.
+# The NPV excluding residual value is what the household pays and saves
+# within the horizon, and it stays the headline. Read it with the replacement
+# times next to it: a design that buys a pack in the last months of the
+# project looks worse than it is. The NPV including the estimated residual
+# value is a sensitivity that says how much of that is timing. When designs
+# are ranked by NPV, for example in a sweep, check both.
