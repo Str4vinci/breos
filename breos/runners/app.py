@@ -28,6 +28,7 @@ from breos.projection import (
     ProjectionRun,
     ProjectionValue,
     ProjectionYear,
+    YearInstructions,
     effective_reference_escalation,
     price_reference_year_rows,
     reprice_network_credit_year_rows,
@@ -349,15 +350,18 @@ def run_app_simulation(
     resolved: ResolvedAppConfig,
     deps: AppRuntimeDependencies,
     *,
-    instructions: DispatchInstructions | None = None,
+    instructions: YearInstructions | None = None,
 ) -> SimulationArtifacts:
     """Run the weather/PV/load/battery/economics simulation pipeline.
 
     ``instructions`` replaces the dispatch instructions the ``[smart_charging]``
     table would give, for a validation tool that replays a schedule of its
     own (``tools/oracles/replay.py``). They must be resolved on the simulated
-    index. The run then reports no smart-charging provenance, since the table
-    did not produce them. App never passes them.
+    index. They are one set every project year replays, one set per project
+    year, or a year planner asked as each year begins (ADR 0002 A16); the
+    projection's ``year_instructions`` records what each year dispatched on.
+    The run then reports no smart-charging provenance, since the table did
+    not produce them. App never passes them.
     """
     cfg = resolved.cfg
     # Resolve the backend before anything is fetched or computed. Input
@@ -497,7 +501,7 @@ def run_app_simulation(
             assert executed is not None
             smart_charging = daily_persistence_provenance(spec, tariff, executed, **stored)
         else:
-            assert instructions is not None
+            assert isinstance(instructions, DispatchInstructions)
             smart_charging = {**smart_charging_provenance(spec, instructions, tariff), **stored}
 
     return SimulationArtifacts(
@@ -516,7 +520,8 @@ def run_app_simulation(
         smart_charging=smart_charging,
         projection=projection,
         resolved_tariff=tariff,
-        instructions=instructions,
+        # Only one static set can be re-resolved and compared on revaluation.
+        instructions=instructions if isinstance(instructions, DispatchInstructions) else None,
         period=period.record() if period is not None else None,
         **_reference_fields(resolved, reference_tariff),
     )

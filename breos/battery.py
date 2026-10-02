@@ -12,7 +12,7 @@ import dataclasses
 import math
 from dataclasses import dataclass, field
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Dict, List, Mapping, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Mapping, Optional, Tuple, Union
 
 import numpy as np
 import pandas as pd
@@ -1487,6 +1487,7 @@ def _simulate_core(
     controller_carry: Optional[ControllerCarry] = None,
     projection_year: int = 0,
     replay_seam: bool = False,
+    instruction_planner: Optional[Callable[[ControllerBatteryState], DispatchInstructions]] = None,
 ) -> "_CoreRun":
     """
     Simulate energy balance with battery storage and degradation.
@@ -1553,6 +1554,10 @@ def _simulate_core(
         replay_seam: True when the next span replays this calendar (ADR 0002
             A2), so a civil day cut by the span's end continues at its head.
             False for a standalone span such as a ``[period]``.
+        instruction_planner: Optional private hook (ADR 0002 A16), called
+            once before the first step with the state the span opens in, after
+            the degradation engine has restored its health. It returns the
+            span's ``dispatch_instructions``; pass it instead of them.
 
     Returns:
         A :class:`_CoreRun` holding the filled result buffers, the calendar,
@@ -1735,6 +1740,26 @@ def _simulate_core(
     cap_stored_wh = _step_energy_cap(battery_config.stored_power_limit_w, hours_per_step)
 
     dispatch_day = _resolve_dispatch_day(execution_backend)
+    if instruction_planner is not None:
+        if dispatch_instructions is not None or day_controller is not None:
+            raise ValueError("pass one of dispatch_instructions, an instruction planner or a daily controller")
+        if not has_battery:
+            raise ValueError("an instruction planner needs a battery; a PV-only run has nothing to dispatch")
+        # Planned from the state the first step dispatches from, the one a
+        # daily controller's first decision would see.
+        dispatch_instructions = instruction_planner(
+            ControllerBatteryState(
+                energy_wh=Battery_Energy_Wh,
+                pv_origin_energy_wh=Battery_PV_Origin_Energy_Wh,
+                grid_origin_energy_wh=Battery_Grid_Origin_Energy_Wh,
+                soh_fraction=battery_soh_decimal,
+                resistance_growth=aging.resistance_growth,
+                charge_efficiency=eff_charge,
+                discharge_efficiency=eff_discharge,
+            )
+        )
+        if not isinstance(dispatch_instructions, DispatchInstructions):
+            raise TypeError("an instruction planner must return DispatchInstructions")
     if dispatch_instructions is not None and len(dispatch_instructions) != n_steps:
         raise ValueError(
             f"dispatch_instructions cover {len(dispatch_instructions)} steps; the simulation has {n_steps}"
