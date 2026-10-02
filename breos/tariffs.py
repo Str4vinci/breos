@@ -18,7 +18,7 @@ import json
 import math
 import re
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from functools import lru_cache
 from numbers import Real
 from types import MappingProxyType
@@ -43,6 +43,7 @@ _DAY_TYPES = ("weekday", "saturday", "sunday")
 _DST_SEASONS = ("standard", "dst")
 # Names a month season cannot take: the rule wildcard and the DST seasons.
 _RESERVED_SEASON_NAMES = frozenset({"all", *_DST_SEASONS})
+_EPOCH_DATE = date(1970, 1, 1)
 
 
 def _nonempty_text(value: object, where: str) -> str:
@@ -833,11 +834,10 @@ def _validate_schedule_resolution(
     if len(index) < 2:
         return
     utc_nanoseconds = _utc_nanoseconds(index)
-    deltas = utc_nanoseconds[1:] - utc_nanoseconds[:-1]
-    unique_deltas = set(int(delta) for delta in deltas)
+    unique_deltas = np.unique(utc_nanoseconds[1:] - utc_nanoseconds[:-1])
     if len(unique_deltas) != 1:
         raise ValueError("Tariff classification requires a regular simulation index")
-    cadence_ns = unique_deltas.pop()
+    cadence_ns = int(unique_deltas[0])
     minute_ns = 60 * 1_000_000_000
     if cadence_ns % minute_ns:
         raise ValueError("Tariff classification requires a whole-minute simulation resolution")
@@ -894,11 +894,16 @@ def _season(timestamp: pd.Timestamp) -> str:
 def _validate_study_date(
     schedule: TariffSchedule, index: pd.DatetimeIndex, study_date: date | None, timezone: str
 ) -> None:
-    local_dates = index.tz_convert(timezone).date
     if study_date is not None and not isinstance(study_date, date):
         raise TypeError("'study_date' must be a date when configured")
-    references = (study_date,) if study_date is not None else tuple(local_dates)
-    if not references:
+    if study_date is not None:
+        references: tuple[date, ...] = (study_date,)
+    elif len(index):
+        # The window is one range, so the earliest and latest civil dates decide.
+        wall_ns = cast(Any, index.tz_convert(timezone).tz_localize(None).as_unit("ns")).asi8
+        civil_days = np.floor_divide(wall_ns, 24 * 60 * 60 * 1_000_000_000)
+        references = tuple(_EPOCH_DATE + timedelta(days=int(day)) for day in (civil_days.min(), civil_days.max()))
+    else:
         return
 
     outside_window = any(
@@ -985,6 +990,14 @@ def classify_tariff_seasons(
     return _classify(index, definition, timezone=timezone, study_date=study_date, boundary_policy=boundary_policy)[1]
 
 
+# Recent classifications, by schedule, zone, study date, boundary policy and
+# instants. A run classifies its tariff and its reference tariff on one index,
+# and App.revalue classifies both again with new prices, so most calls repeat
+# one of the last few. Only a classification that passed every check is kept.
+_CLASSIFICATIONS: dict[tuple[Any, ...], tuple[tuple[str, ...], tuple[str, ...]]] = {}
+_CLASSIFICATIONS_KEPT = 8
+
+
 def _classify(
     index: pd.DatetimeIndex,
     schedule: str | ScheduleDefinition,
@@ -1000,8 +1013,28 @@ def _classify(
         raise ValueError(f"'boundary_policy' must be one of: {allowed}")
 
     definition = _as_definition(schedule)
+    zone = _check_timezone(definition.schedule, timezone)
+    if study_date is not None and not isinstance(study_date, date):
+        # Classify uncached, so the study date fails where it always has.
+        return _classify_steps(resolved_index, definition, zone, study_date)
+    # Classification depends only on these and the index's instants, not on
+    # the index's own timezone.
+    utc_index = resolved_index.tz_convert("UTC")
+    key = (definition, zone, study_date, boundary_policy, utc_index.unit, cast(Any, utc_index).asi8.tobytes())
+    cached = _CLASSIFICATIONS.get(key)
+    if cached is None:
+        cached = _classify_steps(resolved_index, definition, zone, study_date)
+        while len(_CLASSIFICATIONS) >= _CLASSIFICATIONS_KEPT:
+            _CLASSIFICATIONS.pop(next(iter(_CLASSIFICATIONS)), None)
+        _CLASSIFICATIONS[key] = cached
+    return cached
+
+
+def _classify_steps(
+    resolved_index: pd.DatetimeIndex, definition: ScheduleDefinition, zone: str, study_date: date | None
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """Check the index against the schedule, then label each step with its period and season."""
     metadata = definition.schedule
-    zone = _check_timezone(metadata, timezone)
     local_index = resolved_index.tz_convert(zone)
     # The clock changes that matter are those in the years the index touches.
     touched_years = range(local_index[0].year, local_index[-1].year + 1) if len(local_index) else ()
@@ -1018,16 +1051,53 @@ def _classify(
     covered = {int(year) for year, count in zip(years, counts, strict=True) if count * step_hours >= 24}
     holiday_dates = _holiday_dates(metadata.identifier, holidays, covered)
     holiday_day_type = holidays.day_type if holidays is not None else "sunday"
-    labels: list[str] = []
-    seasons: list[str] = []
-    for timestamp in local_index:
-        season = definition.season_of(timestamp)
-        rule = definition.rule_for(_day_type(timestamp, holiday_dates, holiday_day_type), season)
-        minute = timestamp.hour * 60 + timestamp.minute
-        label = next(period for start, end, period in rule.intervals if start <= minute < end)
-        labels.append(label)
-        seasons.append(season)
-    return tuple(labels), tuple(seasons)
+    if not len(local_index):
+        return (), ()
+
+    # The day type and season are fixed within a run of steps on one civil
+    # date and one UTC offset: they are found once per run, on its first
+    # step, and the period then follows from each step's minute of the day.
+    utc_ns = _utc_nanoseconds(resolved_index)
+    wall_ns = cast(Any, local_index.tz_localize(None).as_unit("ns")).asi8
+    day_ns = 24 * 60 * 60 * 1_000_000_000
+    civil_days = np.floor_divide(wall_ns, day_ns)
+    minutes = (wall_ns - civil_days * day_ns) // (60 * 1_000_000_000)
+    offsets = wall_ns - utc_ns
+    changes = (civil_days[1:] != civil_days[:-1]) | (offsets[1:] != offsets[:-1])
+    run_starts = np.concatenate(([0], np.flatnonzero(changes) + 1))
+    run_ends = np.append(run_starts[1:], len(local_index))
+
+    season_names = definition.season_names
+    rules: list[ScheduleRule] = []
+    rule_positions: dict[tuple[str, str], int] = {}
+    step_rules = np.empty(len(local_index), dtype=np.intp)
+    step_seasons = np.empty(len(local_index), dtype=np.intp)
+    for start, end in zip(run_starts.tolist(), run_ends.tolist(), strict=True):
+        day_type = _day_type(local_index[start], holiday_dates, holiday_day_type)
+        run_seasons = [definition.season_of(local_index[start])]
+        if end - start > 1 and definition.season_of(local_index[end - 1]) != run_seasons[0]:
+            # DST can start or end without a change of offset (Lisbon, 31 March
+            # 1996): such a run takes its season step by step.
+            run_seasons = [definition.season_of(local_index[position]) for position in range(start, end)]
+        for position, season in enumerate(run_seasons, start=start):
+            key = (day_type, season)
+            if key not in rule_positions:
+                rule_positions[key] = len(rules)
+                rules.append(definition.rule_for(day_type, season))
+            stop = end if len(run_seasons) == 1 else position + 1
+            step_rules[position:stop] = rule_positions[key]
+            step_seasons[position:stop] = season_names.index(season)
+
+    periods = definition.schedule.periods
+    step_periods = np.empty(len(local_index), dtype=np.intp)
+    for position, rule in enumerate(rules):
+        in_rule = step_rules == position
+        starts = np.array([start for start, _end, _period in rule.intervals])
+        codes = np.array([periods.index(period) for _start, _end, period in rule.intervals])
+        step_periods[in_rule] = codes[np.searchsorted(starts, minutes[in_rule], side="right") - 1]
+    labels = np.array(periods, dtype=object)[step_periods]
+    seasons = np.array(season_names, dtype=object)[step_seasons]
+    return tuple(labels.tolist()), tuple(seasons.tolist())
 
 
 def validate_season_prices(definition: ScheduleDefinition, prices: Mapping[str, Mapping[str, Any]], where: str) -> None:

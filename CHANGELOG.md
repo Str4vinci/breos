@@ -57,6 +57,11 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 
 - A change to `[reference_tariff]` no longer invalidates the App input cache
   or the Monte Carlo year cache: it prices only the household load.
+- Tariff period classification finds each step's day type and season once
+  per civil day and its period with array lookups: a 15-minute year takes
+  about 12 ms instead of about 95 ms. The last few classifications are kept,
+  so a `[reference_tariff]` on the run's schedule and `App.revalue` at new
+  prices do not classify again. The labels are the same as before (#392).
 
 ### Fixed
 
