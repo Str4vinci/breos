@@ -150,12 +150,25 @@ def test_the_daily_mode_resolves_with_the_planner_defaults():
     )
     assert (DEFAULT_HORIZON_DAYS, DEFAULT_TARGET_LEVELS, DEFAULT_SOC_STATES) == (2, 11, 21)
     assert spec.grid_import_limit_w is None
-    given = {**DAILY, "forecast_horizon_days": 3, "target_levels": 1, "soc_states": 2, "grid_import_limit_w": 4000}
+    assert spec.wear_cost_per_kwh == 0.0
+    given = {
+        **DAILY,
+        "forecast_horizon_days": 3,
+        "target_levels": 1,
+        "soc_states": 2,
+        "grid_import_limit_w": 4000,
+        "wear_cost_per_kwh": 0.04,
+    }
     spec = resolve_app_config({**BASE, "smart_charging": given}).smart_charging
     assert (spec.forecast_horizon_days, spec.target_levels, spec.soc_states) == (3, 1, 2)
     assert spec.grid_import_limit_w == 4000.0
+    assert spec.wear_cost_per_kwh == 0.04
+    assert resolve_app_config({**BASE, "smart_charging": {**DAILY, "wear_cost_per_kwh": 0}}).smart_charging == (
+        resolve_app_config({**BASE, "smart_charging": DAILY}).smart_charging
+    )
     # Only the planner mode takes the settings; the others keep None.
-    assert resolve_app_config({**BASE, "smart_charging": FIXED}).smart_charging.target_levels is None
+    fixed = resolve_app_config({**BASE, "smart_charging": FIXED}).smart_charging
+    assert fixed.target_levels is None and fixed.wear_cost_per_kwh is None
 
 
 @pytest.mark.parametrize(
@@ -235,6 +248,37 @@ def test_the_daily_mode_resolves_with_the_planner_defaults():
         ),
         ({**DAILY, "target_levels": 0}, {}, ValueError, r"'smart_charging\.target_levels' must be >= 1"),
         ({**DAILY, "soc_states": 1}, {}, ValueError, r"'smart_charging\.soc_states' must be >= 2"),
+        ({**DAILY, "wear_cost_per_kwh": -0.01}, {}, ValueError, r"'smart_charging\.wear_cost_per_kwh' must be >= 0"),
+        (
+            {**DAILY, "wear_cost_per_kwh": math.inf},
+            {},
+            ValueError,
+            r"'smart_charging\.wear_cost_per_kwh' must be a finite number",
+        ),
+        (
+            {**DAILY, "wear_cost_per_kwh": math.nan},
+            {},
+            ValueError,
+            r"'smart_charging\.wear_cost_per_kwh' must be a finite number",
+        ),
+        (
+            {**DAILY, "wear_cost_per_kwh": "0.05"},
+            {},
+            TypeError,
+            r"'smart_charging\.wear_cost_per_kwh' must be a finite number",
+        ),
+        (
+            {**FIXED, "wear_cost_per_kwh": 0.05},
+            {},
+            ValueError,
+            r"'smart_charging\.mode' = 'fixed_target' does not take smart_charging\.wear_cost_per_kwh",
+        ),
+        (
+            {"mode": "discharge_only", "discharge_periods": ["peak"], "wear_cost_per_kwh": 0.05},
+            {},
+            ValueError,
+            r"'smart_charging\.mode' = 'discharge_only' does not take smart_charging\.wear_cost_per_kwh",
+        ),
     ],
 )
 def test_the_daily_mode_is_checked_before_any_input_is_prepared(table, extra, error, message):
@@ -256,11 +300,15 @@ def test_the_daily_mode_is_checked_before_any_input_is_prepared(table, extra, er
         ({"soc_states": 1}, r"'smart_charging\.soc_states' must be an integer of at least 2"),
         ({"target_levels": False}, r"'smart_charging\.target_levels' must be an integer of at least 1"),
         ({"forecast_horizon_days": 2.0}, r"'smart_charging\.forecast_horizon_days' must be an integer of at least 1"),
+        ({"wear_cost_per_kwh": -1.0}, r"'smart_charging\.wear_cost_per_kwh' must be a finite number of at least 0"),
+        ({"wear_cost_per_kwh": math.nan}, r"'smart_charging\.wear_cost_per_kwh' must be a finite number of at least 0"),
     ],
 )
 def test_a_daily_spec_built_directly_stays_coherent(fields, message):
     with pytest.raises(ValueError, match=message):
         dataclasses.replace(SPEC, **fields)
+    with pytest.raises(TypeError, match=r"'smart_charging\.wear_cost_per_kwh' must be a finite number"):
+        dataclasses.replace(SPEC, wear_cost_per_kwh=True)
     with pytest.raises(ValueError, match=r"takes no planner settings; remove smart_charging\.soc_states"):
         SmartChargingSpec(
             mode="fixed_target",
@@ -411,6 +459,7 @@ def _check_rolling_solves(scenario, recording, calls, run, spec=SPEC):
         )
         assert kwargs["free_terminal"] is False
         assert (kwargs["target_levels"], kwargs["soc_states"]) == (spec.target_levels, spec.soc_states)
+        assert kwargs["wear_cost_per_kwh"] == spec.wear_cost_per_kwh
         cap = (
             problem.battery_config.nominal_energy_wh
             * state.soh_fraction
@@ -775,6 +824,31 @@ def test_revalue_simulates_again_when_the_planner_prices_change():
     assert priced["provenance"]["smart_charging"] == fresh.result()["provenance"]["smart_charging"]
 
 
+def test_a_wear_cost_moves_only_the_planned_targets():
+    config = {**WINDOW, "period": JANUARY, "smart_charging": {**DAILY, **COARSE}}
+    default = _app(config)
+    zero = _app({**config, "smart_charging": {**DAILY, **COARSE, "wear_cost_per_kwh": 0.0}})
+    worn = _app({**config, "smart_charging": {**DAILY, **COARSE, "wear_cost_per_kwh": 0.5}})
+    frames = {
+        name: app._artifacts.first_year_results_df
+        for name, app in (("default", default), ("zero", zero), ("worn", worn))
+    }
+
+    # A zero wear cost is the default: the same run, step for step.
+    pd.testing.assert_frame_equal(frames["zero"], frames["default"], check_exact=True)
+    assert default.result()["provenance"]["smart_charging"]["wear_cost_per_kwh"] == 0.0
+    # Above the peak and off-peak spread, no grid energy is worth its
+    # cycling: the planner keeps target 0, which only tops standby losses
+    # back up to the minimum SOC.
+    grid = {name: frame["Grid_AC_To_Battery"].sum() for name, frame in frames.items()}
+    assert grid["default"] > 10000.0
+    assert grid["worn"] < 1e-3 * grid["default"]
+    assert frames["worn"]["Battery_Discharge_DC"].sum() < frames["default"]["Battery_Discharge_DC"].sum()
+    record = worn.result()["provenance"]["smart_charging"]
+    assert record["wear_cost_per_kwh"] == 0.5
+    assert record["instruction_hash"] != default.result()["provenance"]["smart_charging"]["instruction_hash"]
+
+
 @pytest.mark.parametrize(
     ("backend", "resolution", "warned"),
     [("python", "15min", True), ("python", "h", False), ("numba", "15min", False)],
@@ -830,6 +904,7 @@ def test_provenance_identifies_the_policy_and_its_executed_trace(monkeypatch):
         "forecast_horizon_days",
         "target_levels",
         "soc_states",
+        "wear_cost_per_kwh",
         "forecast_policy",
         "warm_start_policy",
         "planner_terminal_policy",
@@ -852,6 +927,7 @@ def test_provenance_identifies_the_policy_and_its_executed_trace(monkeypatch):
         "forecast_horizon_days": 2,
         "target_levels": 3,
         "soc_states": 3,
+        "wear_cost_per_kwh": 0.0,
         "forecast_policy": FORECAST_POLICY,
         "warm_start_policy": WARM_START_POLICY,
         "planner_terminal_policy": PLANNER_TERMINAL_POLICY,

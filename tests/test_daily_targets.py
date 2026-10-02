@@ -136,15 +136,15 @@ def _limited_pack():
     return _pack(inverter_ac_capacity_w=2500.0, max_charge_power_w=1500.0, max_discharge_power_w=2000.0)
 
 
-def _cheapest_schedule_cost(problem, efficiency):
+def _cheapest_schedule_cost(problem, efficiency, wear_cost_per_kwh=0.0):
     """The lowest objective of every one of the 11**3 schedules of a 3-day problem.
 
     Each schedule is chained through the planner's own day transitions from
-    the unsnapped energy and priced with the same refill, so it is the exact
-    optimum the gridded value function approximates.
+    the unsnapped energy and priced with the same refill and wear cost, so it
+    is the exact optimum the gridded value function approximates.
     """
     levels = np.linspace(0.0, 1.0, 11)
-    evaluator = _DayEvaluator(problem, levels, "python")
+    evaluator = _DayEvaluator(problem, levels, "python", wear_cost_per_kwh)
     refill_per_wh = OFF_PEAK / 1000 / (efficiency * 0.95)
     best = math.inf
     for schedule in itertools.product(range(len(levels)), repeat=3):
@@ -156,11 +156,12 @@ def _cheapest_schedule_cost(problem, efficiency):
     return best
 
 
+@pytest.mark.parametrize("wear", [0.0, 0.05], ids=["no-wear", "wear"])
 @pytest.mark.parametrize(("config", "efficiency"), [(None, 1.0), (_limited_pack(), 0.93)], ids=["plain", "limited"])
-def test_the_plan_is_the_cheapest_of_every_schedule(config, efficiency):
+def test_the_plan_is_the_cheapest_of_every_schedule(config, efficiency, wear):
     problem = _problem(3, config=config, efficiency=efficiency)
-    plan = solve_daily_targets(problem, initial_energy_wh=1200.0)
-    assert plan.objective == pytest.approx(_cheapest_schedule_cost(problem, efficiency), rel=0, abs=1e-12)
+    plan = solve_daily_targets(problem, initial_energy_wh=1200.0, wear_cost_per_kwh=wear)
+    assert plan.objective == pytest.approx(_cheapest_schedule_cost(problem, efficiency, wear), rel=0, abs=1e-12)
 
 
 def test_a_two_state_grid_interpolates_close_to_the_optimum():
@@ -374,6 +375,9 @@ def test_a_planner_holds_the_given_health_for_its_window():
         ({"target_levels": [0.5, 1.2]}, "between 0 and 1"),
         ({"soc_states": 1}, "at least 2"),
         ({"initial_energy_wh": math.nan}, "must be finite"),
+        ({"wear_cost_per_kwh": -0.01}, "'wear_cost_per_kwh' must be a finite number of at least 0"),
+        ({"wear_cost_per_kwh": math.inf}, "'wear_cost_per_kwh' must be a finite number of at least 0"),
+        ({"wear_cost_per_kwh": math.nan}, "'wear_cost_per_kwh' must be a finite number of at least 0"),
     ],
 )
 def test_bad_planner_settings_are_rejected(kwargs, message):
@@ -384,3 +388,74 @@ def test_bad_planner_settings_are_rejected(kwargs, message):
 def test_target_grid_defaults_to_tenths():
     np.testing.assert_allclose(target_grid(11), np.arange(11) / 10)
     assert target_grid(1).tolist() == [0.0]
+
+
+# --- the wear cost ------------------------------------------------------------
+
+
+def _planned_discharge_kwh(problem, plan, initial_energy_wh):
+    """The DC energy the battery discharges over ``plan``'s schedule, on the planner's own day transitions."""
+    energy, total = initial_energy_wh, 0.0
+    for day, target in enumerate(plan.targets):
+        # One level and a wear cost of 1 per kWh: the day's wear cost is its kWh.
+        step = solve_daily_targets(
+            problem.horizon(day, 1), initial_energy_wh=energy, target_levels=[target], wear_cost_per_kwh=1.0
+        )
+        energy, total = step.end_energy_wh, total + step.wear_cost
+    return total
+
+
+def _narrow_spread_problem():
+    # Off-peak energy at 0.22 only just pays for the round trip to a 0.30
+    # peak: 0.22 / (0.95 * 0.95 * 0.96) = 0.254 per kWh delivered.
+    problem = _problem(3)
+    cheap = ~np.isnan(problem.instructions.grid_target_fraction)
+    return replace(problem, import_price_per_kwh=np.where(cheap, 0.22, PEAK))
+
+
+def test_without_a_wear_cost_the_plan_is_unchanged():
+    problem = _problem(n_steps=68)
+    default = solve_daily_targets(problem, initial_energy_wh=1200.0)
+    zero = solve_daily_targets(problem, initial_energy_wh=1200.0, wear_cost_per_kwh=0)
+    np.testing.assert_array_equal(zero.targets, default.targets)
+    assert (zero.objective, zero.stage_cost, zero.terminal_cost, zero.end_energy_wh) == (
+        default.objective,
+        default.stage_cost,
+        default.terminal_cost,
+        default.end_energy_wh,
+    )
+    assert default.wear_cost == zero.wear_cost == 0.0
+
+
+def test_a_wear_cost_stops_grid_charging_the_spread_barely_pays_for():
+    problem = _narrow_spread_problem()
+    free = solve_daily_targets(problem, initial_energy_wh=1200.0)
+    worn = solve_daily_targets(problem, initial_energy_wh=1200.0, wear_cost_per_kwh=0.05)
+    grid = {}
+    for name, plan in (("free", free), ("worn", worn)):
+        instructions = daily_target_instructions(problem.instructions, problem.day_starts, plan.targets)
+        results, _cost = _priced_run(problem, instructions, initial_energy_wh=1200.0)
+        grid[name] = results["Grid_AC_To_Battery"].sum()
+    assert grid["free"] > 0.0
+    assert grid["worn"] == 0.0
+    # The wear cost is a weight on the plan, kept apart from its money.
+    assert worn.stage_cost > free.stage_cost
+    assert worn.wear_cost == pytest.approx(0.05 * _planned_discharge_kwh(problem, worn, 1200.0), rel=1e-12)
+    assert worn.objective == worn.stage_cost + worn.wear_cost + worn.terminal_cost
+
+
+def test_a_higher_wear_cost_never_plans_more_discharge():
+    problem = _problem(3)
+    discharged = [
+        _planned_discharge_kwh(
+            problem, solve_daily_targets(problem, initial_energy_wh=1200.0, wear_cost_per_kwh=w), 1200.0
+        )
+        for w in np.linspace(0.0, 0.4, 9)
+    ]
+    assert all(later <= earlier + 1e-9 for earlier, later in zip(discharged, discharged[1:]))
+    assert discharged[-1] < discharged[0]
+
+
+def test_a_wear_cost_is_a_number():
+    with pytest.raises(TypeError, match="'wear_cost_per_kwh' must be a finite number"):
+        solve_daily_targets(_problem(1), wear_cost_per_kwh=True)

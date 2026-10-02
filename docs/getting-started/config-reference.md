@@ -204,7 +204,7 @@ Optional estimated residual value of the final battery pack, as `[terminal_value
 
 ## smart_charging
 
-Battery dispatch by tariff period, as `[smart_charging]` in TOML; see [Smart charging](configuration.md#smart-charging). `mode = "fixed_target"` needs `target_usable_fraction`, `charge_periods`, `discharge_periods` and `grid_charge_efficiency`, and refuses the planner keys. The experimental `mode = "daily_persistence"` (App only) needs the same keys but `target_usable_fraction`, which it refuses, and takes the optional planner keys `forecast_horizon_days`, `target_levels` and `soc_states`. `grid_import_limit_w` is optional in both. `mode = "discharge_only"` takes `discharge_periods` alone and refuses every grid-charging and planner key: it never charges from the grid. `mode = "disabled"` takes no other key. `overlap_policy` defaults to `"reject"`; `"hold_target"` permits overlapping periods for `fixed_target` only, retaining the target as the discharge floor.
+Battery dispatch by tariff period, as `[smart_charging]` in TOML; see [Smart charging](configuration.md#smart-charging). `mode = "fixed_target"` needs `target_usable_fraction`, `charge_periods`, `discharge_periods` and `grid_charge_efficiency`, and refuses the planner keys. The experimental `mode = "daily_persistence"` (App only) needs the same keys but `target_usable_fraction`, which it refuses, and takes the optional planner keys `forecast_horizon_days`, `target_levels`, `soc_states` and `wear_cost_per_kwh`. `grid_import_limit_w` is optional in both. `mode = "discharge_only"` takes `discharge_periods` alone and refuses every grid-charging and planner key: it never charges from the grid. `mode = "disabled"` takes no other key. `overlap_policy` defaults to `"reject"`; `"hold_target"` permits overlapping periods for `fixed_target` only, retaining the target as the discharge floor.
 
 | Key | Required | Description |
 |---|---|---|
@@ -218,6 +218,7 @@ Battery dispatch by tariff period, as `[smart_charging]` in TOML; see [Smart cha
 | `overlap_policy` |  | Default `reject`: charge and discharge periods must be disjoint. `hold_target` (`fixed_target` only) uses the grid target as the discharge floor on overlapping steps. Above it the battery may discharge; below it the grid may charge; PV may charge above it. `daily_persistence` refuses it because its planner keeps reserves fixed while replacing targets |
 | `soc_states` |  | `daily_persistence` only: stored-energy grid points of the planner's value function. An integer of at least 2; default 21 |
 | `target_levels` |  | `daily_persistence` only: candidate targets, evenly spaced from 0 to 1 of the usable window. An integer of at least 1 (one level selects target 0); default 11 |
+| `wear_cost_per_kwh` |  | `daily_persistence` only: a planning weight, in the tariff's currency per kWh of DC energy the battery discharges, that the planner adds to each day's cost. Not a degradation model: realised ageing still comes from the battery model. At least 0; default 0 |
 
 ## period
 

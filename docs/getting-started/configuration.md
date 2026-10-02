@@ -800,10 +800,11 @@ charge_periods = ["off_peak"]
 discharge_periods = ["peak"]
 grid_charge_efficiency = 0.95       # required, as for fixed_target
 grid_import_limit_w = 5000          # optional
-# Optional planner settings (integers), shown at their defaults:
+# Optional planner settings, shown at their defaults:
 forecast_horizon_days = 2           # days the planner looks ahead, today included
 target_levels = 11                  # candidate targets 0, 0.1, ..., 1 of the usable window
 soc_states = 21                     # stored-energy grid points of the planner
+wear_cost_per_kwh = 0               # planning weight per kWh the battery discharges
 ```
 
 At each local midnight in the tariff's timezone the mode:
@@ -821,9 +822,11 @@ At each local midnight in the tariff's timezone the mode:
 
 The table takes the same `charge_periods`, `discharge_periods`,
 `grid_charge_efficiency` and `grid_import_limit_w` as `fixed_target`, and
-refuses `target_usable_fraction`, since the planner chooses it. The planner
-settings are integers (not booleans or `2.0`); `fixed_target` and `disabled`
-refuse them. `target_levels = 1` is valid and selects the sole target 0.
+refuses `target_usable_fraction`, since the planner chooses it.
+`forecast_horizon_days`, `target_levels` and `soc_states` are integers (not
+booleans or `2.0`), and `wear_cost_per_kwh` is a number of at least 0 (see
+"Wear cost in the planner" below); `fixed_target`,
+`discharge_only` and `disabled` refuse every planner setting. `target_levels = 1` is valid and selects the sole target 0.
 The run starts with no complete day to repeat, so until one
 complete local day has been observed it sets no grid target
 (`warm_start_policy = "no_grid_until_one_complete_local_day"`); PV charging
@@ -852,6 +855,7 @@ Keep these modelling assumptions in mind when reading the results:
   window differ.
 - State of health and efficiencies stay fixed inside each short solve; the
   simulation still ages the battery every day.
+- The planner weighs no battery ageing unless `wear_cost_per_kwh` is set.
 
 `provenance.smart_charging` of such a run records `experimental = true`, the
 controller and planner versions, the effective planner settings, the
@@ -868,6 +872,41 @@ The planner simulates each candidate target with the same dispatch step as
 the run, several hundred times a day, so the mode is much slower than
 `fixed_target`. Use `execution_backend = "numba"` (the `breos[fast]` extra); the Python
 backend at 15 minutes gives a warning.
+
+#### Wear cost in the planner
+
+Without a wear cost the planner charges from the grid whenever the price
+spread pays for the conversion and battery losses, however little it saves.
+`wear_cost_per_kwh` adds a price, in the tariff's currency, for each kWh of
+DC energy the battery discharges (`Battery_Discharge_DC`) to the cost each
+daily solve minimises. Grid energy is then bought only when the spread also
+pays for the cycling it causes. The default is 0, which gives the same
+results as a table without the key.
+
+It is a planning weight, not a degradation model. It changes only which
+targets the planner picks. It does not enter the import cost, the export
+revenue or the NPV, and the battery still ages and is replaced as the
+degradation model gives. The weight applies to all discharge, including
+PV-charged energy, because a target the planner raises adds cycling
+whatever the energy's origin. Charged energy that the battery still holds
+at the end of the planning window carries no wear cost; the terminal value
+prices it as energy only.
+
+BREOS does not compute a value for you. One simple estimate is the price of
+a replacement pack divided by the energy the battery can discharge before it
+reaches end of life:
+
+```text
+wear_cost_per_kwh = replacement pack price / usable discharge throughput to end of life
+                  = 2500 / 20 000 = 0.125 per kWh
+```
+
+Here the throughput is taken from a warranty, or from the expected cycles to
+end of life times the average usable energy per cycle. This counts all of the
+pack's ageing against cycling. Part of it is calendar ageing, which happens
+whether the battery cycles or not, so a lower value can be argued. Compare
+runs at several values rather than reading one as exact.
+`provenance.smart_charging.wear_cost_per_kwh` records the value a run used.
 
 ## Load profiles
 

@@ -1,13 +1,13 @@
 # 0002 — Tariffs are resolved values; smart charging is an instruction layer
 
-- **Status:** Accepted; amendments A1–A16 Accepted. Implemented in 0.7.0,
-  A15 and A16 in 0.7.1,
+- **Status:** Accepted; amendments A1–A17 Accepted. Implemented in 0.7.0,
+  A15–A17 in 0.7.1,
   with two additions that no amendment accepted: discharge-only mode and
   calendar-month seasons (see
   [Additions without an amendment](#additions-without-an-amendment)).
 - **Date:** 2026-08-20; amendments 2026-09-26; A6 accepted 2026-09-26;
   A1–A5 and A7–A10 accepted 2026-09-27; A11 and A12 accepted 2026-09-30;
-  A13 and A14 accepted 2026-10-01; A15 and A16 accepted 2026-10-02
+  A13 and A14 accepted 2026-10-01; A15–A17 accepted 2026-10-02
 
 ## Context
 
@@ -545,6 +545,8 @@ mode. Price-aware dispatch forces simulation, so `App.revalue` re-simulates
 when the per-step prices change. Results record the policy in
 `provenance.smart_charging`, with a hash of the instructions every project
 year executed, and no forecast or per-day target.
+*(Extended by A17, accepted 2026-10-02: an optional wear cost in the
+planner's objective.)*
 
 ### A13. The no-system baseline can have its own reference tariff (#339) — Accepted 2026-10-01
 
@@ -743,3 +745,36 @@ on a grid. It is not a bound on lifetime NPV: each year is chosen at its
 opening health, and the choice ignores what the year's cycling costs later
 years.
 
+### A17. Daily persistence: an optional wear cost in the planner (#381) — Accepted 2026-10-02
+
+Adds a rule to A12 and replaces none. A12's rolling solve minimises import
+cost less export revenue plus the forecast-terminal value, with no term for
+battery ageing. `smart_charging.wear_cost_per_kwh`, a `daily_persistence`
+planner setting, adds one:
+
+- **Term.** Each day's stage cost in the shared daily-target solver gains
+  `wear_cost_per_kwh` times the DC energy the battery discharges that day
+  (`Battery_Discharge_DC` of the planner's own dispatch, in kWh). It counts
+  every discharge, whatever the stored energy's origin. Charge is not
+  counted: energy still stored at the end of the window has not cycled, and
+  the A12 terminal value prices it as energy only. Over a full cycle,
+  charge and discharge throughput differ only by the losses, so their
+  mean would add little but a charge on energy the window never uses.
+- **Default.** 0, which leaves every decision and result bit-identical to
+  0.7.0. The value must be finite and at least 0. `fixed_target`,
+  `discharge_only` and `disabled` refuse the key, as they refuse the other
+  planner settings.
+- **Scope.** It is a planning weight in the tariff's currency, not a
+  degradation model. It moves only the targets the planner picks. It is
+  not a cash flow: the import cost, export revenue and NPV are unchanged,
+  and realised ageing and replacement still come from the degradation
+  model. BREOS does not derive a value; the user documentation shows one
+  estimate, a replacement pack's price over its usable discharge throughput
+  to end of life.
+- **Callers.** `solve_daily_targets` takes it as `wear_cost_per_kwh`, so
+  the offline oracles that use the same solver can set it. The plan reports
+  it as `wear_cost`, apart from `stage_cost`, so a replay compares the
+  plan's money with production's money alone.
+- **Provenance.** `provenance.smart_charging.wear_cost_per_kwh` records the
+  resolved value of every `daily_persistence` run, 0 included.
+  `planner_version` stays `"1"`: the default planner decides as before.

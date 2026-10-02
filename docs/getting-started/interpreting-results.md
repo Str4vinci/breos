@@ -403,7 +403,7 @@ by feature:
   it as it reports the other modes. An App run with the experimental
   [daily-persistence smart charging](configuration.md#daily-persistence-experimental)
   records `experimental`, `controller_version`, `planner_version`,
-  `forecast_horizon_days`, `target_levels`, `soc_states`, `forecast_policy`,
+  `forecast_horizon_days`, `target_levels`, `soc_states`, `wear_cost_per_kwh`, `forecast_policy`,
   `warm_start_policy`, `planner_terminal_policy`, and the
   `initial_stored_energy` and `final_stored_energy` by origin.
 - **Battery replacement at the end of the horizon.**

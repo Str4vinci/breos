@@ -42,6 +42,16 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   perfect-information daily targets at each project year's opening state
   of health, efficiency and stored energy, and records each year's inputs
   and plan. It is not a bound on lifetime NPV.
+- `[smart_charging] wear_cost_per_kwh` (`daily_persistence` only) adds a
+  battery-wear weight to the daily-target planner: a price per kWh of DC
+  energy the battery discharges, added to the cost each daily solve
+  minimises ([#381](https://github.com/Str4vinci/breos/issues/381), ADR 0002
+  A17). The planner then grid-charges only when the price spread also pays
+  for the cycling. It is a planning weight, not a degradation model: it does
+  not enter the import cost, export revenue or NPV, and ageing still comes
+  from the degradation model. The default 0 gives results bit-identical to
+  0.7.0. `provenance.smart_charging` records the value, and the shared
+  solver takes it as a `wear_cost_per_kwh` argument for its other callers.
 
 ### Changed
 
