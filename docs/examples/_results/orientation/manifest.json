@@ -1,10 +1,10 @@
 {
  "case": "orientation",
  "title": "Array tilt and azimuth",
- "breos_version": "0.6.2",
- "git_describe": "v0.6.2-606-g5f94fbd",
- "generated_utc": "2026-10-02T01:40:38+00:00",
- "runtime_s": 249.4,
+ "breos_version": "0.7.0",
+ "git_describe": "v0.6.2-625-gfef7fe9",
+ "generated_utc": "2026-10-02T11:45:03+00:00",
+ "runtime_s": 247.4,
  "cheap": false,
  "configs": {
   "configs/examples/pv-only.toml": "b05d6a251ee3a4b9a4510866f9268b740434280ced704f9e8e4654363c35c8b0"
@@ -16,7 +16,7 @@
   }
  },
  "dependencies": {
-  "python": "3.13.14",
+  "python": "3.12.13",
   "numpy": "2.4.6",
   "pandas": "3.0.5",
   "pvlib": "0.15.2",

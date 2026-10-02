@@ -1,13 +1,13 @@
 {
  "case": "quarterly_berlin",
  "title": "A quarterly tariff in Berlin",
- "breos_version": "0.6.2",
- "git_describe": "v0.6.2-585-gde0b8a1",
- "generated_utc": "2026-10-01T20:20:03+00:00",
- "runtime_s": 6.4,
+ "breos_version": "0.7.0",
+ "git_describe": "v0.6.2-610-gd29419b",
+ "generated_utc": "2026-10-01T20:55:41+00:00",
+ "runtime_s": 6.5,
  "cheap": true,
  "configs": {
-  "configs/examples/quarterly-tariff-berlin.toml": "8e993ee7abb351d7e2316f61973e84f8c7122576afef151c541f2cd30bdfefc1"
+  "configs/examples/quarterly-tariff-berlin.toml": "63e894a58eacc784a1546efdebba74004615238857f5d5b65625b9c4b59c3b41"
  },
  "weather": {
   "validation/data/weather/berlin_tmy_2005_2023_pvgis-sarah3.csv.gz": {

@@ -1,13 +1,13 @@
 {
  "case": "sun_prices_carbon",
  "title": "Sun, prices or grid carbon?",
- "breos_version": "0.6.2",
- "git_describe": "v0.6.2-585-gde0b8a1",
- "generated_utc": "2026-10-01T20:18:57+00:00",
- "runtime_s": 5.3,
+ "breos_version": "0.7.0",
+ "git_describe": "v0.6.2-610-gd29419b",
+ "generated_utc": "2026-10-01T20:54:34+00:00",
+ "runtime_s": 5.4,
  "cheap": true,
  "configs": {
-  "configs/examples/quickstart.toml": "2d33e042ee2f71c9fea63c512bf0700930ee202d0cad75301d392c622e132996"
+  "configs/examples/quickstart.toml": "f6c4bca0d4c3b28c126e5eb3bd8e41f12fb0f144297447dfe7b530202c759156"
  },
  "weather": {
   "validation/data/weather/berlin_tmy_2005_2023_pvgis-sarah3.csv.gz": {

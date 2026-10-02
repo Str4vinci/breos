@@ -17,8 +17,8 @@ greedy self-consumption stay the defaults.
   windows, and an experimental daily persistence planner.
 - Separate escalators for import prices, export prices and O&M, a replacement
   cost learning rate, and one default discount and inflation rate everywhere.
-- An optional terminal-health credit reported beside the unadjusted NPV, and
-  `App.revalue` for price scenarios on a finished run.
+- An optional estimated battery residual value reported beside the unadjusted
+  NPV, and `App.revalue` for price scenarios on a finished run.
 - Currency-neutral result names, with the result currency in provenance. EUR
   is the only supported currency so far.
 - Descriptive load-profile keys: demandlib H0 (bundled), E-REDES BTN A/B/C,
