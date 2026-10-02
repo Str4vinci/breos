@@ -359,7 +359,7 @@ def case(name: str, title: str, *, cheap: bool = False) -> Callable[[Callable[[C
 QUICKSTART = "configs/examples/quickstart.toml"
 
 
-@case("first_home", "Your first home", cheap=True)
+@case("first_home", "PV and battery system in Porto", cheap=True)
 def first_home(ctx: Context) -> Output:
     config = ctx.config(QUICKSTART)
     app = ctx.simulate(config)
@@ -373,7 +373,7 @@ def first_home(ctx: Context) -> Output:
     return Output(files, {"iso_weeks": weeks})
 
 
-@case("battery_worth", "Is a battery worth it?", cheap=True)
+@case("battery_worth", "Battery size and storage price", cheap=True)
 def battery_worth(ctx: Context) -> Output:
     base = ctx.config(QUICKSTART)
     sizes = (0.0, 5.0, 10.0)
@@ -413,7 +413,7 @@ def battery_worth(ctx: Context) -> Output:
     )
 
 
-@case("sun_prices_carbon", "Sun, prices or grid carbon?", cheap=True)
+@case("sun_prices_carbon", "Porto and Berlin compared", cheap=True)
 def sun_prices_carbon(ctx: Context) -> Output:
     base = ctx.config(QUICKSTART)
     variants = {
@@ -458,15 +458,16 @@ def _grid_carbon(result: Mapping[str, Any]) -> dict[str, Any]:
     return {"country": country, **entry}
 
 
-@case("east_west", "East-West or South?", cheap=True)
+@case("east_west", "East-west and south-facing arrays", cheap=True)
 def east_west(ctx: Context) -> Output:
     base = ctx.config("configs/examples/east-west-roof.toml")
     modules = sum(array["modules"] for array in base["pv_arrays"])
     tilt = base["pv_arrays"][0]["tilt"]
+    south = 35
     designs = {
         f"East-West {tilt}°": {},
         f"South {tilt}°": {"pv_arrays": None, "n_modules": modules, "tilt": tilt, "azimuth": 180},
-        "South, latitude tilt": {"pv_arrays": None, "n_modules": modules},
+        f"South {south}°": {"pv_arrays": None, "n_modules": modules, "tilt": south, "azimuth": 180},
     }
     rows, summer, winter = [], None, None
     for battery in (0.0, base["battery_kwh"]):
@@ -506,24 +507,60 @@ def east_west(ctx: Context) -> Output:
     )
 
 
-@case("orientation", "How much does orientation matter?", cheap=False)
+# The optical and solar-position choices of configs/examples/recommended-pv.toml,
+# applied to the PV-only example so that only the sky and optics model changes.
+PEREZ_MARION = {
+    "transposition_model": "perez",
+    "diffuse_iam": "marion",
+    "iam_model": "physical",
+    "solar_position": "weather",
+}
+
+
+# What the orientation page reads from each of its ~1900 runs.
+ORIENTATION_FIELDS = ("usable_ac_system_production_kwh", "self_consumption_pct", "npv_savings")
+
+
+@case("orientation", "Array tilt and azimuth", cheap=False)
 def orientation(ctx: Context) -> Output:
     base = ctx.config("configs/examples/pv-only.toml")
+    models = {"default": {}, "perez_marion": PEREZ_MARION}
     tilts = list(range(0, 65, 5))
-    azimuths = list(range(90, 285, 15))
-    rows = []
-    for tilt in tilts:
-        for azimuth in azimuths:
-            result = ctx.simulate(with_overrides(base, {"tilt": tilt, "azimuth": azimuth})).result()
-            rows.append({"tilt": tilt, "azimuth": azimuth, **scalars(result)})
-    default = ctx.simulate(base).result()
-    resolved = default["provenance"]["resolved_config"]
+    azimuths = list(range(90, 275, 5))
+    fine_tilts = list(range(30, 45))
+    fine_azimuths = list(range(170, 201))
+    coarse, fine, defaults = [], [], {}
+    for model, overrides in models.items():
+        config = with_overrides(base, overrides)
+        for grid, rows in (((tilts, azimuths), coarse), ((fine_tilts, fine_azimuths), fine)):
+            for tilt in grid[0]:
+                for azimuth in grid[1]:
+                    result = ctx.simulate(with_overrides(config, {"tilt": tilt, "azimuth": azimuth})).result()
+                    rows.append(
+                        {
+                            "model": model,
+                            "tilt": tilt,
+                            "azimuth": azimuth,
+                            **{key: result[key] for key in ORIENTATION_FIELDS},
+                        }
+                    )
+        best = max(
+            (row for row in fine if row["model"] == model), key=lambda row: row["usable_ac_system_production_kwh"]
+        )
+        if best["tilt"] in (fine_tilts[0], fine_tilts[-1]) or best["azimuth"] in (fine_azimuths[0], fine_azimuths[-1]):
+            raise RuntimeError(f"the {model} optimum {best['tilt']}/{best['azimuth']} is on the fine grid's edge")
+        result = ctx.simulate(config).result()
+        resolved = result["provenance"]["resolved_config"]
+        defaults[model] = {"tilt": resolved["tilt"], "azimuth": resolved["azimuth"], **scalars(result)}
     return Output(
+        {"orientations.csv": pd.DataFrame(coarse), "fine.csv": pd.DataFrame(fine), "default.json": defaults},
         {
-            "orientations.csv": pd.DataFrame(rows),
-            "default.json": {"tilt": resolved["tilt"], "azimuth": resolved["azimuth"], **scalars(default)},
+            "models": models,
+            "tilts": tilts,
+            "azimuths": azimuths,
+            "fine_tilts": fine_tilts,
+            "fine_azimuths": fine_azimuths,
         },
-        {"tilts": tilts, "azimuths": azimuths},
     )
 
 
@@ -531,22 +568,55 @@ def orientation(ctx: Context) -> Output:
 def clipping(ctx: Context) -> Output:
     base = with_overrides(ctx.config(QUICKSTART), {"resolution": "15min"})
     ratios = [1.0, 1.25, 1.5, 1.75, 2.0]
-    rows, week = [], None
+    rows, week, distribution = [], None, None
     for battery in (0.0, base["battery_kwh"]):
         for ratio in ratios:
             app = ctx.simulate(with_overrides(base, {"battery_kwh": battery, "inverter_loading_ratio": ratio}))
             result = app.result()
-            rows.append({"inverter_loading_ratio": ratio, **scalars(result)})
+            inverter = result["pv_loss_waterfall"]["inverter"]
+            rows.append(
+                {
+                    "inverter_loading_ratio": ratio,
+                    **scalars(result),
+                    "inverter_ac_kw": inverter["ac_capacity_kw"],
+                    "inverter_conversion_loss_kwh": inverter["conversion_loss_kwh"],
+                }
+            )
+            if battery == 0 and ratio == min(ratios):
+                distribution = dc_power_distribution(first_year_frame(app), result["pv_kwp"])
             if battery == 0 and ratio == max(ratios):
                 piece = week_slice(first_year_frame(app), result["provenance"]["timezone"], 27)
                 week = piece[["Datetime", "PV_DC", "PV_DC_Curtailed", "PV_Production", "Houseload"]]
     return Output(
-        {"ratios.csv": pd.DataFrame(rows), "week_summer.csv": week},
-        {"overrides": {"resolution": "15min"}, "ratios": ratios, "week_ratio": max(ratios), "iso_week": 27},
+        {"ratios.csv": pd.DataFrame(rows), "week_summer.csv": week, "dc_power_distribution.csv": distribution},
+        {
+            "overrides": {"resolution": "15min"},
+            "ratios": ratios,
+            "week_ratio": max(ratios),
+            "iso_week": 27,
+            "inverter_efficiency": result["provenance"]["resolved_config"]["inverter_efficiency"],
+        },
     )
 
 
-@case("quarterly_berlin", "A quarterly tariff in Berlin", cheap=True)
+def dc_power_distribution(frame: pd.DataFrame, pv_kwp: float, width: float = 0.025) -> pd.DataFrame:
+    """Year-1 DC energy by DC power as a fraction of the array's DC rating, in bins of ``width``."""
+    instants = pd.to_datetime(frame["Datetime"], utc=True)
+    step_h = (instants.iloc[1] - instants.iloc[0]).total_seconds() / 3600
+    fraction = frame["PV_DC"] / (pv_kwp * 1000)
+    edges = np.arange(0.0, max(1.0, float(fraction.max())) + width, width)
+    bins = pd.cut(fraction[fraction > 0], edges, right=False)
+    energy = (frame.loc[fraction > 0, "PV_DC"] * step_h / 1000).groupby(bins, observed=False).sum()
+    return pd.DataFrame(
+        {
+            "dc_fraction_low": edges[:-1].round(3),
+            "dc_fraction_high": edges[1:].round(3),
+            "energy_kwh": energy.to_numpy().round(2),
+        }
+    )
+
+
+@case("quarterly_berlin", "Discharge-only dispatch on a quarterly tariff in Berlin", cheap=True)
 def quarterly_berlin(ctx: Context) -> Output:
     base = ctx.config("configs/examples/quarterly-tariff-berlin.toml")
     strategies = {
@@ -570,7 +640,7 @@ def quarterly_berlin(ctx: Context) -> Output:
     return Output({"strategies.json": rows}, {"variants": strategies})
 
 
-@case("replacement_timing", "When the battery swap lands", cheap=False)
+@case("replacement_timing", "Battery replacement timing", cheap=False)
 def replacement_timing(ctx: Context) -> Output:
     base = with_overrides(ctx.config(QUICKSTART), {"terminal_value": {"basis": "battery_health_fraction"}})
 
@@ -618,7 +688,7 @@ def replacement_timing(ctx: Context) -> Output:
     )
 
 
-@case("which_tariff", "Which tariff after PV?", cheap=False)
+@case("which_tariff", "Simple, bi-hourly and tri-hourly tariffs", cheap=False)
 def which_tariff(ctx: Context) -> Output:
     sweep_config = ctx.config("configs/examples/tariff-comparison.toml")
     sweep = sweep_config.pop("sweep")
@@ -743,7 +813,7 @@ def price_scenarios(ctx: Context) -> Output:
     )
 
 
-@case("montecarlo", "Monte Carlo over weather years and demand", cheap=False)
+@case("montecarlo", "Monte Carlo analysis of weather and demand", cheap=False)
 def montecarlo(ctx: Context) -> Output:
     from breos.montecarlo import MonteCarloSettings, run_montecarlo
     from breos.weather import load_weather
@@ -823,7 +893,7 @@ def _mc_history(ctx: Context) -> Path:
     return ctx.work / "weather" / f"{MC_HISTORY['location']}_historical_{start}_{end}_openmeteo.csv"
 
 
-@case("nsga2_front", "NSGA-II sizing front", cheap=False)
+@case("nsga2_front", "Multi-objective sizing with NSGA-II", cheap=False)
 def nsga2_front(ctx: Context) -> Output:
     from breos.load_profiles import load_profile
     from breos.optimization import optimize_system_multi_objective

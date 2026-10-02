@@ -1,10 +1,10 @@
 """
-Monte Carlo over weather years and demand
-=========================================
+Monte Carlo analysis of weather and demand
+==========================================
 
-A single run on a typical meteorological year (TMY) gives one number. How
-much could the outcome move with real weather and a household that uses more
-or less than planned? ``breos montecarlo`` runs many 20-year trajectories.
+A single run on a typical meteorological year (TMY) gives one outcome.
+``breos montecarlo`` shows how it varies with historical weather and with
+demand above or below plan: it runs many 20-year trajectories.
 For each project year it draws a historical weather year at random, and for
 each trajectory it scales the demand by a random factor.
 
@@ -30,7 +30,7 @@ The Python API is :func:`breos.montecarlo.run_montecarlo`; see
 
 # sphinx_gallery_thumbnail_number = 1
 import matplotlib.pyplot as plt
-from gallery_results import load_case, money, say
+from gallery_results import load_case, money, number, say
 
 from breos.plotting import (
     plot_breakeven_cdf,
@@ -48,6 +48,7 @@ case.stamp()
 
 # %%
 
+# sphinx_gallery_start_ignore
 npv = summary["npv_savings"]
 say(
     f"{settings['n_runs']} trajectories of {settings['years_per_run']} years, drawing from "
@@ -63,6 +64,7 @@ say(
         else f"which sits at the {((runs['npv_savings'] < tmy['npv_savings']).mean()) * 100:.0f} % quantile of the runs."
     ),
 )
+# sphinx_gallery_end_ignore
 
 # %%
 # NPV savings
@@ -94,8 +96,8 @@ fig = plot_montecarlo_final_soh_distribution(runs)
 
 used = weather_years[weather_years["year"].isin(stored["available_years"])]
 fig, ax = plt.subplots(figsize=(9, 4))
-ax.bar(used["year"], used["ghi_kwh_m2"], color="#7f9fc4", label="Open-Meteo historical year")
-ax.axhline(stored["tmy_ghi_kwh_m2"], color="#e6a700", lw=2, label="PVGIS TMY")
+ax.bar(used["year"], used["ghi_kwh_m2"], color="#66CCEE", label="Open-Meteo historical year")
+ax.axhline(stored["tmy_ghi_kwh_m2"], color="#CCBB44", lw=2, label="PVGIS TMY")
 ax.set_ylim(used["ghi_kwh_m2"].min() * 0.9, max(used["ghi_kwh_m2"].max(), stored["tmy_ghi_kwh_m2"]) * 1.03)
 ax.set_ylabel("GHI (kWh/m²/yr)")
 ax.set_title("Annual global horizontal irradiation, Porto")
@@ -105,13 +107,19 @@ fig.tight_layout()
 
 # %%
 
+# sphinx_gallery_start_ignore
 sunnier = int((used["ghi_kwh_m2"] < stored["tmy_ghi_kwh_m2"]).sum())
 say(
-    f"The TMY receives {stored['tmy_ghi_kwh_m2']:,.0f} kWh/m², more than {sunnier} of the {len(used)} historical "
-    f"years (mean {used['ghi_kwh_m2'].mean():,.0f} kWh/m²). The spread across weather years and demand is "
+    f"The TMY receives {number(stored['tmy_ghi_kwh_m2'])} kWh/m², more than {sunnier} of the {len(used)} historical "
+    f"years (mean {number(used['ghi_kwh_m2'].mean())} kWh/m²). The spread across weather years and demand is "
     f"{money(npv['p95'] - npv['p5'], currency)} between the 5th and 95th percentiles, and the TMY run is "
     f"{money(tmy['npv_savings'] - npv['p50'], currency)} above the median. Before trusting the level of a result, "
     "check the weather source "
     "against local measurements; the Monte Carlo spread says how much the year-to-year weather and the demand "
     "move it."
 )
+# sphinx_gallery_end_ignore
+
+# %%
+# .. sphinx-gallery drops a final code block whose code is all hidden, output
+#    included; this closing text block keeps the summary above.

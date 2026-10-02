@@ -1,10 +1,10 @@
 """
-Which tariff after PV?
-======================
+Simple, bi-hourly and tri-hourly tariffs with PV and storage
+============================================================
 
-A household installing PV usually also picks an electricity offer. Is the
-offer under which the system shows the highest NPV also the cheapest one?
-Not necessarily. ``npv_savings`` measures the system against *no system
+A household installing PV usually also picks an electricity offer. The
+offer under which the system shows the highest NPV is not necessarily the
+cheapest one: ``npv_savings`` measures the system against *no system
 under the same offer*, and each offer has its own no-system bill. An offer
 with an expensive peak makes PV look valuable because the household without
 PV would pay a lot on it.
@@ -45,12 +45,14 @@ case.stamp()
 
 # %%
 
+# sphinx_gallery_start_ignore
 say(
     "The reference is today's simple offer: "
     f"`import_prices = {{ all = {reference['import_prices']['all']} }}` and "
     f"`fixed_charge_per_day = {reference['fixed_charge_per_day']}`, in {reference['currency']}. As TOML it is a "
     "`[reference_tariff]` table with those keys and `currency`."
 )
+# sphinx_gallery_end_ignore
 
 # %%
 # Two baselines, two rankings
@@ -63,7 +65,7 @@ fig, axes = plt.subplots(1, len(batteries), figsize=(11, 4), sharey=True)
 for ax, battery in zip(np.atleast_1d(axes), batteries, strict=True):
     subset = offers[offers["battery_kwh"] == battery]
     x = np.arange(len(names))
-    for i, (baseline, color) in enumerate(zip(baselines, ["#9db4d0", "#3a6ea5"], strict=True)):
+    for i, (baseline, color) in enumerate(zip(baselines, ["#9db4d0", "#4477AA"], strict=True)):
         values = subset[subset["baseline"] == baseline].set_index("offer").loc[names, "npv_savings"]
         ax.bar(x + (i - 0.5) * 0.38, values, 0.38, label=f"against {baseline}", color=color)
     ax.set_xticks(x, names)
@@ -88,8 +90,8 @@ shown["Project cost"] = [
 shown = shown.rename(
     columns={"battery_kwh": "Battery (kWh)", "offer": "Offer", **{b: f"NPV vs {b}" for b in baselines}}
 )
-table(shown, **{"Battery (kWh)": "g", **{f"NPV vs {b}": ",.0f" for b in baselines}, "Year-1 bill": ",.2f",
-                "Project cost": ",.0f"})  # fmt: skip
+table(shown, **{"Battery (kWh)": "g", **{f"NPV vs {b}": ".0f" for b in baselines}, "Year-1 bill": ".2f",
+                "Project cost": ".0f"})  # fmt: skip
 
 # %%
 # What the numbers say
@@ -99,6 +101,7 @@ table(shown, **{"Battery (kWh)": "g", **{f"NPV vs {b}": ",.0f" for b in baseline
 # charge, O&M and replacements. It ranks the offers by what the household
 # pays. Against one shared reference, NPV savings rank them the same way.
 
+# sphinx_gallery_start_ignore
 lines = []
 for battery in batteries:
     subset = offers[offers["battery_kwh"] == battery]
@@ -130,6 +133,7 @@ for battery in batteries:
         )
     )
 say(*lines)
+# sphinx_gallery_end_ignore
 
 # %%
 # In Python

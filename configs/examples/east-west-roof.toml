@@ -19,10 +19,10 @@ resolution = "h"
 # catalogue module is used.
 [[pv_arrays]]
 modules = 6
-tilt = 15
+tilt = 10
 azimuth = 90     # east-facing
 
 [[pv_arrays]]
 modules = 6
-tilt = 15
+tilt = 10
 azimuth = 270    # west-facing

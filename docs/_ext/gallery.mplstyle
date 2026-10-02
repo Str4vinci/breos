@@ -1,0 +1,44 @@
+# Gallery figure style, after the maintainer's journal style.
+# Palette: Paul Tol's 'bright' (colourblind-safe, greyscale-robust).
+axes.prop_cycle: cycler('color', ['4477AA', '228833', 'EE6677', 'CCBB44', '66CCEE', 'AA3377', 'BBBBBB'])
+
+figure.dpi: 100
+savefig.bbox: tight
+savefig.pad_inches: 0.05
+
+font.family: serif
+font.size: 12
+axes.labelsize: 12
+axes.titlesize: 12
+xtick.labelsize: 11
+ytick.labelsize: 11
+legend.fontsize: 11
+figure.titlesize: 13
+mathtext.fontset: dejavuserif
+
+axes.linewidth: 0.8
+grid.linewidth: 0.5
+lines.linewidth: 1.5
+lines.markersize: 5
+patch.linewidth: 0.5
+
+axes.grid: True
+axes.axisbelow: True
+grid.linestyle: --
+grid.color: cccccc
+grid.alpha: 0.5
+
+legend.frameon: True
+legend.facecolor: white
+legend.edgecolor: black
+legend.framealpha: 1.0
+legend.numpoints: 1
+
+xtick.direction: out
+ytick.direction: out
+xtick.major.size: 4
+ytick.major.size: 4
+xtick.major.width: 0.8
+ytick.major.width: 0.8
+xtick.minor.visible: False
+ytick.minor.visible: False

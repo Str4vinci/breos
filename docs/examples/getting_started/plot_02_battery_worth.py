@@ -1,11 +1,11 @@
 """
-Is a battery worth it?
-======================
+Battery size and storage price against PV only
+==============================================
 
 A battery raises how much of its own PV a household uses, but it also costs
-money and wears out. Does adding one pay? This page runs the quickstart home
+money and wears out. This page runs the quickstart home
 (:doc:`plot_01_first_home`) with no battery, a 5 kWh battery and a 10 kWh
-battery, then asks how cheap storage would have to be for the battery to win,
+battery, then finds the storage price below which each battery beats PV only,
 using :meth:`breos.App.revalue` to re-price each battery run without
 simulating it again.
 
@@ -35,7 +35,7 @@ and run ``breos sweep --config config.toml --output sweep.csv``.
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-from gallery_results import load_case, money, say, table
+from gallery_results import load_case, money, number, say, table
 
 from breos.plotting import plot_breakeven_comparison
 
@@ -61,19 +61,20 @@ rows = pd.DataFrame(
         "NPV savings": [d["npv_savings"] for d in designs],
     }
 )
-table(rows, **{"Battery (kWh)": "g", "Investment": ",.0f", "NPV savings": ",.0f", "Grid independence (%)": ".1f",
+table(rows, **{"Battery (kWh)": "g", "Investment": ".0f", "NPV savings": ".0f", "Grid independence (%)": ".1f",
                "Self-consumption (%)": ".1f"})  # fmt: skip
 
 # %%
 
 pv_only, *batteries = designs
+# sphinx_gallery_start_ignore
 best = max(designs, key=lambda d: d["npv_savings"])
 say(
     f"Each battery size raises grid independence, from {pv_only['grid_independence_pct']:.0f} % without a battery "
     + " and ".join(f"to {d['grid_independence_pct']:.0f} % with {d['battery_kwh']:g} kWh" for d in batteries)
     + (". The money goes the other way" if best is pv_only else ". The money follows")
     + ": at the preset storage price of "
-    f"{preset_price:,.0f} {currency}/kWh, the highest NPV savings come from "
+    f"{number(preset_price)} {currency}/kWh, the highest NPV savings come from "
     + ("the PV-only system" if best is pv_only else f"the {best['battery_kwh']:g} kWh battery")
     + f", {money(best['npv_savings'], currency)}. "
     + " ".join(
@@ -82,6 +83,7 @@ say(
         for d in batteries
     )
 )
+# sphinx_gallery_end_ignore
 
 # %%
 # Cumulative cost with and without the system
@@ -115,6 +117,7 @@ fig.tight_layout()
 # %%
 
 
+# sphinx_gallery_start_ignore
 def break_even_price(group: pd.DataFrame) -> float | None:
     """The storage price at which the battery's NPV equals the PV-only NPV."""
     gap = group["npv_savings"].to_numpy() - pv_only["npv_savings"]
@@ -130,11 +133,16 @@ lines = []
 for size, group in prices.groupby("battery_kwh"):
     crossing = break_even_price(group)
     lines.append(
-        f"The {size:g} kWh battery beats PV only below about {crossing:,.0f} {currency}/kWh."
+        f"The {size:g} kWh battery beats PV only below about {number(crossing)} {currency}/kWh."
         if crossing is not None
-        else f"The {size:g} kWh battery does not beat PV only between {group['storage_cost_per_kwh'].min():,.0f} "
-        f"and {group['storage_cost_per_kwh'].max():,.0f} {currency}/kWh."
+        else f"The {size:g} kWh battery does not beat PV only between {number(group['storage_cost_per_kwh'].min())} "
+        f"and {number(group['storage_cost_per_kwh'].max())} {currency}/kWh."
     )
 resimulated = int((prices["method"] != "repriced").sum())
 say(*lines, f"Of the {len(prices)} storage-price scenarios, {len(prices) - resimulated} were re-priced from the "
     f"stored runs and {resimulated} simulated again.")  # fmt: skip
+# sphinx_gallery_end_ignore
+
+# %%
+# .. sphinx-gallery drops a final code block whose code is all hidden, output
+#    included; this closing text block keeps the summary above.

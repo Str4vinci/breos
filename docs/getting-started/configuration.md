@@ -527,7 +527,7 @@ fixed_charge_per_day = 0.25              # optional, default 0
 Monte Carlo prices every trajectory with the same tariff. Projected
 optimization accepts the same tariff table in its nested config; see
 [Optimization](optimization.md#price-a-design-with-a-time-of-use-tariff).
-To compare several offers, see {doc}`Which tariff after PV? <../gallery/tariffs/plot_09_which_tariff>`.
+To compare several offers, see {doc}`Simple, bi-hourly and tri-hourly tariffs <../gallery/tariffs/plot_09_which_tariff>`.
 
 ## Terminal-health credit
 

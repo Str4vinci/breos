@@ -592,6 +592,10 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   `breos_optimization_benchmark_v1`), also when a run fails part way.
 
 ### Changed
+- `breos.plotting` writes numbers without comma thousands separators: four
+  digits stay bare (5000) and longer numbers group by a space (12 345). This
+  affects the break-even cost axis, the Monte Carlo percentile legend and the
+  CO2 annotations. `weekly_graphs` starts the battery energy axis at zero.
 - 15-minute runs on hourly weather no longer cut diffuse irradiance with a
   universal 1.5 clear-sky-ratio cap ([#354](https://github.com/Str4vinci/breos/issues/354)).
   On the saved PVGIS Porto TMY, annual DHI changes from 409.34 to 563.86

@@ -173,6 +173,13 @@ def set_presentation_mode(enabled: bool = True, scale: float = 1.5):
         plt.rcdefaults()
 
 
+def _grouped(value: float, decimals: int = 0) -> str:
+    """``value`` with ``decimals`` places, digits grouped by a space from five digits up: 5000, 12 345."""
+    text = f"{value:,.{decimals}f}"
+    whole = text.split(".")[0].lstrip("-")
+    return text.replace(",", " " if len(whole) > 5 else "")
+
+
 def _format_loss_energy(value_kwh: float) -> str:
     """Format kWh values compactly for plot annotations."""
     if abs(value_kwh) >= 1000:
@@ -531,6 +538,8 @@ def weekly_graphs(
             week_data.index, week_data["Battery_Energy"] / 1000, "g--", label="Battery energy (kWh)", linewidth=1.5
         )
         ax2.set_ylabel("Battery Energy (kWh)", color="green")
+        ax2.set_ylim(bottom=0)
+        ax2.grid(False)
 
     ax.set_xlabel("Date")
     ax.set_ylabel("Power (kW)")
@@ -1152,7 +1161,7 @@ def _plot_montecarlo_distribution(
         (p50, "P50", "-", 2.5),
         (p95, "P95", "--", 1.5),
     ):
-        ax.axvline(val, color="tab:red", linestyle=linestyle, linewidth=linewidth, label=f"{label}: {val:,.2f}")
+        ax.axvline(val, color="tab:red", linestyle=linestyle, linewidth=linewidth, label=f"{label}: {_grouped(val, 2)}")
 
     legend_loc = "best"
     if zero_line or (zero_line is None and _zero_is_near(values)):
@@ -1962,7 +1971,7 @@ def plot_breakeven_comparison(
     ax.set_ylabel(f"Cumulative Cost ({label_currency})" if label_currency else "Cumulative Cost")
     ax.legend(loc="upper left")
     ax.grid(True, alpha=0.3)
-    ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, _: f"{x:,.0f}{unit}"))
+    ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, _: f"{_grouped(x)}{unit}"))
     ax.set_xticks(range(0, max_year + 1))
     ax.set_xlim(0, max_year + 0.5)
 
@@ -2653,7 +2662,7 @@ def plot_co2_savings(
     ax.set_xlim(first_year - 0.5, last_year + max(1.0, 0.12 * (last_year - first_year)))
     for value, offset, va, color in ((final_total, 3, "bottom", "#1565C0"), (final_self, -3, "top", "#2E7D32")):
         ax.annotate(
-            f"{value:,.1f} t",
+            f"{_grouped(value, 1)} t",
             xy=(last_year, value),
             xytext=(8, offset),
             textcoords="offset points",
