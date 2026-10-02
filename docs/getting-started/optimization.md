@@ -110,7 +110,7 @@ stochastic; `details["provenance"]["run_settings"]` records what the search
 used, and `details["provenance"]["constraints"]` its bounds. Raise the population and
 generation counts for a denser front and a longer runtime. Pass `n_procs` to
 `optimize_system_multi_objective` to evaluate candidates in parallel
-processes.
+processes; each runs NumPy's BLAS library on one thread.
 
 If no candidate satisfies the constraints, the call raises `RuntimeError`.
 Loosen `budget`, `max_area_m2`, `max_modules`, or `max_battery_kwh` in

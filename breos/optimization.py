@@ -25,7 +25,12 @@ from breos.economics import (
     replacement_event_cost,
 )
 from breos.emissions import EmissionsParams
-from breos.execution import DEFAULT_EXECUTION_BACKEND, require_backend, validate_execution_backend
+from breos.execution import (
+    DEFAULT_EXECUTION_BACKEND,
+    limit_worker_threads,
+    require_backend,
+    validate_execution_backend,
+)
 from breos.inverter import inverter_ac_capacity_w as inverter_ac_capacity_w_for
 from breos.optimization_config import (
     DEFAULT_TIMEZONE,
@@ -1221,7 +1226,7 @@ def optimize_system_multi_objective(
         except ImportError:  # pymoo 0.6.1 compatibility
             from pymoo.core.problem import StarmapParallelization
 
-        pool = Pool(n_procs)
+        pool = Pool(n_procs, initializer=limit_worker_threads)
         problem.elementwise_runner = StarmapParallelization(pool.starmap)
     try:
         result = minimize(

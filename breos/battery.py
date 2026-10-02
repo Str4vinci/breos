@@ -81,7 +81,7 @@ from breos.degradation.protocol import (
     NativeDegradationAdapter,
 )
 from breos.dispatch_instructions import DispatchInstructions
-from breos.execution import is_pv_only_dispatch, validate_execution_backend
+from breos.execution import is_pv_only_dispatch, single_thread_blas, validate_execution_backend
 from breos.inverter import _calculate_dc_ac_power_arrays
 from breos.utils import _datetime_index_ticks, get_hours_per_step, remap_datetime_index_years
 
@@ -1370,16 +1370,19 @@ def weighted_column_sums(
     """``sum(columns[column] * w)`` for each ``name: (column, w)`` in ``weights``.
 
     Frames and summaries both reduce through this, so a priced total is the
-    same float whichever path produced the column.
+    same float whichever path produced the column. The dot products run on one
+    BLAS thread, so it is also the same float in a serial run and in a worker
+    process, whatever the core count.
     """
     if not weights:
         return {}
     sums: Dict[str, float] = {}
-    for name, (column, values) in weights.items():
-        array = np.asarray(columns[column], dtype=float)
-        if len(values) != len(array):
-            raise ValueError(f"weights {name!r} have {len(values)} steps; the simulation has {len(array)}")
-        sums[name] = float(np.dot(array, np.asarray(values, dtype=float)))
+    with single_thread_blas():
+        for name, (column, values) in weights.items():
+            array = np.asarray(columns[column], dtype=float)
+            if len(values) != len(array):
+                raise ValueError(f"weights {name!r} have {len(values)} steps; the simulation has {len(array)}")
+            sums[name] = float(np.dot(array, np.asarray(values, dtype=float)))
     return sums
 
 
