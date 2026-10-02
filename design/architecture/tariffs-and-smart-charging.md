@@ -161,14 +161,22 @@ through the production App run (`tools/oracles/replay.py`) before it reports
 a cost. The two tools answer different questions and are not
 interchangeable:
 
-- `tools/oracles/daily_target_dp.py` is an **opportunity benchmark**. It
-  plans the first project year with perfect foresight, with one grid-charge
-  target per civil day from a grid of usable fractions. It holds state of
-  health and efficiencies at the year's opening values and keeps the
-  configured instruction layout. The result is the best schedule within that
-  policy class under the planner's model. It is not a bound and not a
-  lifetime result: other policies can do better, and the replayed cost
-  under production physics differs from the plan as health moves.
+- `tools/oracles/daily_target_dp.py` gives **perfect-information daily
+  targets** on a grid. It plans a project year with perfect foresight, with
+  one grid-charge target per civil day from a grid of usable fractions
+  (`--target-levels`) and a grid of stored energy (`--soc-states`). It
+  holds state of health and efficiencies at the year's opening values and
+  keeps the configured instruction layout. By default it plans the first
+  year, and every year replays that plan. With `--planning yearly` (ADR
+  0002 A16) it plans each year as the year begins: on that year's degraded
+  PV, load and temperature, and at the stored energy, health and
+  efficiencies that the production replay of the earlier years reached. The
+  report records the planning mode and each year's inputs, opening state,
+  plan and replayed cost. The result is the best schedule within that
+  policy class under the planner's model. It is not a bound, and not a
+  bound on lifetime NPV: other policies can do better, the replayed cost
+  under production physics differs from the plan as health moves, and a
+  year's choice ignores what its cycling costs later years.
 - `tools/oracles/lp_bound.py` is a **conditional lower bound** on the first
   project year's import cost less export revenue, without the fixed charge.
   The linear program relaxes the dispatch rules. The bound holds only for a
@@ -179,7 +187,7 @@ interchangeable:
   checks each reported run against the bound and reports `bound_is_strict`.
   Outside this scope it claims nothing.
 
-Neither tool gives a forecast, a deployable controller or a lifetime NPV.
+Neither tool gives a forecast, a deployable controller or a bound on lifetime NPV.
 
 ## Outside 0.7.0
 

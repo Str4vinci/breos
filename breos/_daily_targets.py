@@ -270,6 +270,15 @@ class DailyTargetPlan:
     soc_grid_wh: np.ndarray = field(repr=False)
 
 
+def full_terminal_energy_wh(problem: DailyTargetProblem) -> float:
+    """The default terminal target: the max-SOC energy at the last step's temperature, at the problem's health."""
+    config = problem.battery_config
+    usable_wh = config.nominal_energy_wh * problem.health()[0]
+    temperatures = problem.temperature_c
+    end_capacity = lfp_capacity_factor(float(temperatures[-1])) if len(temperatures) else 1.0
+    return usable_wh * config.max_soc * end_capacity
+
+
 class _DayEvaluator:
     """Run one day of production dispatch on a scratch buffer and price it."""
 
@@ -359,8 +368,7 @@ def solve_daily_targets(
     usable_wh = config.nominal_energy_wh * soh
     temperatures = problem.temperature_c
     start = usable_wh * config.max_soc if initial_energy_wh is None else float(initial_energy_wh)
-    end_capacity = lfp_capacity_factor(float(temperatures[-1])) if len(temperatures) else 1.0
-    target = usable_wh * config.max_soc * end_capacity if terminal_energy_wh is None else float(terminal_energy_wh)
+    target = full_terminal_energy_wh(problem) if terminal_energy_wh is None else float(terminal_energy_wh)
     if not (math.isfinite(start) and math.isfinite(target)):
         raise ValueError("'initial_energy_wh' and 'terminal_energy_wh' must be finite")
 

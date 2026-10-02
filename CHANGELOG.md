@@ -33,6 +33,15 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   fields of each `financial` row, the matching year-row and cost-projection
   columns, and `annual_network_credit` in `provenance.tariff` and
   `provenance.reference_tariff`. Without the table every result is unchanged.
+- A projection takes dispatch instructions per project year: one set for
+  every year as before, one set per year, or a year planner that chooses
+  each year's set from the state the year opens in (ADR 0002 A16). This is
+  for validation tools, through `run_app_simulation(instructions=)`; App
+  configuration is unchanged.
+- `tools/oracles/daily_target_dp.py --planning yearly` replans the
+  perfect-information daily targets at each project year's opening state
+  of health, efficiency and stored energy, and records each year's inputs
+  and plan. It is not a bound on lifetime NPV.
 
 ### Changed
 

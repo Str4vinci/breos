@@ -10,13 +10,14 @@ from breos._daily_targets import _DayEvaluator, daily_target_instructions, targe
 from tools.oracles.daily_target_dp import (
     DP_DAYS_SCHEMA,
     DP_ORACLE_SCHEMA,
+    DP_YEAR_DAYS_SCHEMA,
     daily_target_problem,
     fixed_health_state,
     main,
     report,
     run_daily_target_oracle,
 )
-from tools.oracles.replay import DEFAULT_TOLERANCE, prepare_replay
+from tools.oracles.replay import DEFAULT_TOLERANCE, prepare_replay, replay_instructions
 
 BASE = {"location": "porto", "n_modules": 8, "annual_consumption_kwh": 4000, "battery_kwh": 5.0, "projection_years": 1}
 TOU = {
@@ -121,3 +122,115 @@ def test_the_planned_flows_use_the_planners_own_day_state():
     case = prepare_replay(_config(1, battery_max_charge_power_w=1500.0))
     problem = daily_target_problem(case)
     assert fixed_health_state(problem) == _DayEvaluator(problem, target_grid(1), "python").state
+
+
+# Three whole years, so each year opens at the health the last one left.
+YEARLY = {**BASE, "tariff": TOU, "smart_charging": FIXED, "start_date": "2025-01-01", "projection_years": 3}
+YEARLY_PLANNER = {"target_levels": 3, "soc_states": 3}
+
+
+@pytest.fixture(scope="module")
+def yearly():
+    from tests.conftest import _build_synthetic_weather
+
+    weather = _build_synthetic_weather()
+    weather.attrs["breos_weather_metadata"] = {"source": "PVGIS_TMY"}
+    tmy = {"inputs": {"location": {"latitude": 41.15, "longitude": -8.63, "elevation": 0}}}
+    with pytest.MonkeyPatch.context() as monkeypatch:
+        monkeypatch.setattr("breos.app.fetch_tmy_weather_data", lambda *args, **kwargs: (weather.copy(), tmy))
+        monkeypatch.setattr("breos.app.load_weather", lambda **kw: None)
+        case = prepare_replay(YEARLY)
+        result = run_daily_target_oracle(case, planning="yearly", **YEARLY_PLANNER)
+        first_year = run_daily_target_oracle(case, **YEARLY_PLANNER)
+        replayed = replay_instructions(case, [plan.instructions for plan in result.year_plans])
+    return case, result, first_year, replayed
+
+
+def test_yearly_replanning_plans_each_year_at_the_state_the_replay_reached(yearly):
+    case, result, _first_year, _replayed = yearly
+    plans, rows = result.year_plans, result.replay.artifacts.yearly_df
+
+    assert [plan.year for plan in plans] == [1, 2, 3] and result.planning == "yearly"
+    assert plans[0].problem.health()[0] == 1.0
+    for plan in plans[1:]:
+        previous = rows.iloc[plan.year - 2]
+        soh, eff_charge, eff_discharge = plan.problem.health()
+        assert soh == pytest.approx(previous["Battery_SOH_%"] / 100.0, rel=1e-12) and soh < 1.0
+        assert plan.problem.battery_config.initial_soh == previous["Battery_SOH_%"]
+        assert plan.start_energy_wh == previous["Battery_Carried_Energy_Wh"]
+        assert plan.plan.start_energy_wh == plan.start_energy_wh
+        assert plan.terminal_energy_wh <= plan.start_energy_wh
+        assert plan.pv_degradation_factor == rows["PV_Degradation_Factor"].iloc[plan.year - 1] < 1.0
+        assert (eff_charge, eff_discharge) == (
+            plan.problem.battery_config.charge_efficiency,
+            plan.problem.battery_config.discharge_efficiency,
+        )
+    # Each year is planned on its own degraded PV.
+    assert plans[1].problem.pv_dc_w.sum() < plans[0].problem.pv_dc_w.sum()
+    assert len({plan.inputs_sha256() for plan in plans}) == 3
+    # The replay dispatched every year on that year's plan.
+    assert result.replay.year_instruction_hashes == tuple(plan.instructions.instruction_hash() for plan in plans)
+
+
+def test_yearly_replanning_replays_as_the_same_schedule_given_per_year(yearly):
+    _case, result, _first_year, replayed = yearly
+    # Handing the chosen sets back as one set per year reproduces the planner's run bit for bit.
+    pd.testing.assert_frame_equal(result.replay.artifacts.yearly_df, replayed.artifacts.yearly_df, check_exact=True)
+    assert replayed.instruction_hash == result.replay.instruction_hash
+    assert replayed.year_instruction_hashes == result.replay.year_instruction_hashes
+
+
+def test_yearly_replanning_plans_year_one_as_the_first_year_mode(yearly):
+    _case, result, first_year, _replayed = yearly
+    np.testing.assert_array_equal(result.plan.targets, first_year.plan.targets)
+    assert result.instructions == first_year.instructions
+    assert result.plan.objective == first_year.plan.objective
+    # A first-year plan replays its year-one set every year.
+    assert set(first_year.replay.year_instruction_hashes) == {first_year.instructions.instruction_hash()}
+    pd.testing.assert_frame_equal(
+        result.replay.artifacts.first_year_results_df,
+        first_year.replay.artifacts.first_year_results_df,
+        check_exact=True,
+    )
+    assert result.replay.plan_matched == first_year.replay.plan_matched
+
+
+def test_the_yearly_report_records_the_planning_mode_and_each_years_inputs(yearly):
+    case, result, first_year, _replayed = yearly
+    summary = report(result, case)
+    json.dumps(summary, allow_nan=False)
+
+    assert summary["planner"]["planning"] == "yearly"
+    years = summary["years"]
+    assert [year["year"] for year in years] == [1, 2, 3]
+    rows = result.replay.artifacts.yearly_df
+    for year, plan in zip(years, result.year_plans, strict=True):
+        assert year["opening_state"]["soh_fraction"] == plan.problem.health()[0]
+        assert year["inputs"]["sha256"] == plan.inputs_sha256()
+        assert year["replayed_cost"] == pytest.approx(
+            rows["Import_Cost"].iloc[plan.year - 1] - rows["Export_Revenue"].iloc[plan.year - 1], rel=1e-12
+        )
+    lifetime = summary["lifetime"]
+    assert len(lifetime["replay"]["year_costs"]) == 3 and lifetime["replay"]["npv_savings"] is not None
+    assert "not an NPV bound" in lifetime["basis"]
+    assert report(first_year, case)["years"] == [] and report(first_year, case)["planner"]["planning"] == "first_year"
+
+
+def test_the_command_line_writes_one_row_per_year_and_day_under_yearly_planning(tmp_path, monkeypatch):
+    config = tmp_path / "config.json"
+    config.write_text(json.dumps({**YEARLY, "projection_years": 2}), encoding="utf-8")
+    output, days = tmp_path / "dp.json", tmp_path / "days.csv"
+    argv = ["--config", str(config), "--output", str(output), "--csv", str(days), "--planning", "yearly"]
+    assert main([*argv, "--target-levels", "2", "--soc-states", "2"]) == 0
+
+    summary = json.loads(output.read_text(encoding="utf-8"))
+    assert summary["planner"]["planning"] == "yearly" and summary["planner"]["soc_states"] == 2
+    assert days.read_text(encoding="utf-8").splitlines()[0] == f"# schema: {DP_YEAR_DAYS_SCHEMA}"
+    frame = pd.read_csv(days, comment="#")
+    assert list(frame["year"].unique()) == [1, 2] and len(frame) == 2 * 365
+
+
+def test_the_oracle_refuses_an_unknown_planning_mode():
+    case = prepare_replay(_config(1))
+    with pytest.raises(ValueError, match="'planning' must be one of first_year, yearly"):
+        run_daily_target_oracle(case, planning="rolling")

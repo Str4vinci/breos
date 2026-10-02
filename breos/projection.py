@@ -12,12 +12,17 @@ from __future__ import annotations
 import calendar
 import math
 from dataclasses import dataclass, field, replace
-from typing import Any, Callable, Mapping, Sequence, cast
+from typing import Any, Callable, Mapping, Sequence, TypeAlias, cast
 
 import numpy as np
 import pandas as pd
 
-from breos._controller import ControllerCarry, DailyDispatchController, concatenate_instructions
+from breos._controller import (
+    ControllerBatteryState,
+    ControllerCarry,
+    DailyDispatchController,
+    concatenate_instructions,
+)
 from breos.app_config import ResolvedAppConfig, build_costs_dict
 from breos.battery import (
     AlignedSimulationInputs,
@@ -663,6 +668,44 @@ class ProjectionYear:
 
 
 @dataclass(frozen=True)
+class YearStart:
+    """What a year planner sees as a project year begins (ADR 0002 A16).
+
+    ``year`` is the year's inputs, with its PV degradation already applied,
+    and ``battery_config`` the battery it runs. ``battery_state`` is the
+    state the year's first step dispatches from: the carried stored energy
+    and origins, and the health and efficiencies after the degradation
+    engine has restored them.
+    """
+
+    year_idx: int
+    year: ProjectionYear
+    battery_config: BatteryConfig
+    battery_state: ControllerBatteryState
+
+
+# Returns one project year's instructions, on the replayed calendar.
+YearPlanner: TypeAlias = Callable[[YearStart], DispatchInstructions]
+# One set for every year, one set per year, or a planner asked at each year start.
+YearInstructions: TypeAlias = DispatchInstructions | Sequence[DispatchInstructions] | YearPlanner
+
+
+def _instructions_by_year(
+    instructions: YearInstructions | None, years: int
+) -> Callable[[int], DispatchInstructions | YearPlanner | None]:
+    """Each year's static set or planner, from what :func:`project_years` was given."""
+    if instructions is None or isinstance(instructions, DispatchInstructions) or callable(instructions):
+        single = instructions
+        return lambda _year_idx: single
+    sets = tuple(instructions)
+    if len(sets) != years:
+        raise ValueError(f"per-year instructions hold {len(sets)} sets; the projection has {years} years")
+    if not all(isinstance(item, DispatchInstructions) for item in sets):
+        raise TypeError("per-year instructions must be DispatchInstructions, one per project year")
+    return sets.__getitem__
+
+
+@dataclass(frozen=True)
 class ProjectionRun:
     """What a multi-year projection produced."""
 
@@ -680,6 +723,9 @@ class ProjectionRun:
     # simulated step in project order across every year (ADR 0002 A11).
     # Slots of a decision that no year dispatched are not in it.
     controller_instructions: DispatchInstructions | None = None
+    # With static instructions or a year planner, the set each project year
+    # dispatched on, in year order (ADR 0002 A16).
+    year_instructions: tuple[DispatchInstructions, ...] | None = None
 
 
 def project_years(
@@ -695,7 +741,7 @@ def project_years(
     initial_carry: CarryState | None = None,
     observe_jit_per_year: bool = False,
     tariff: ResolvedTariff | None = None,
-    instructions: DispatchInstructions | None = None,
+    instructions: YearInstructions | None = None,
     record_period_energy: bool = False,
     day_controller: DailyDispatchController | None = None,
     replay_seam: bool = True,
@@ -722,6 +768,12 @@ def project_years(
     also keeps each year's priced energy by tariff period, which App.revalue
     re-prices from.
 
+    ``instructions`` is one set every year replays, a sequence of one set
+    per project year, or a :data:`YearPlanner` (ADR 0002 A16). A planner is
+    asked once as each per-step year begins, with a :class:`YearStart` that
+    holds the state the year opens in, and returns that year's set. The run's
+    ``year_instructions`` records the set each year dispatched on.
+
     A private ``day_controller`` (ADR 0002 A11) decides each civil day of
     the ``tariff``'s calendar in place of static ``instructions``, on
     per-step years with a battery. Its carry crosses the years beside the
@@ -741,6 +793,7 @@ def project_years(
     system tariff's credit covers both households unless a reference prices
     the no-system one, which then has the reference's credit or none.
     """
+    instructions_for_year = _instructions_by_year(instructions, years)
     if day_controller is not None:
         if instructions is not None:
             raise ValueError("pass either instructions or a daily controller, not both")
@@ -761,12 +814,16 @@ def project_years(
     first_year_results_df: pd.DataFrame | None = None
     jit_cache_states: list[str] = []
     executed: list[DispatchInstructions] = []
+    dispatched: list[DispatchInstructions] = []
 
     for year_idx in range(years):
         year = year_inputs(year_idx)
         batt_cfg = battery_config(carry.soh_pct)
         if year_idx < years - 1 and not batt_cfg.allow_terminal_replacement:
             batt_cfg = replace(batt_cfg, allow_terminal_replacement=True)
+        year_set = instructions_for_year(year_idx)
+        planner = None if year_set is None or isinstance(year_set, DispatchInstructions) else year_set
+        static = year_set if isinstance(year_set, DispatchInstructions) else None
         common = {
             **carry.simulation_kwargs(),
             "battery_config": batt_cfg,
@@ -776,7 +833,7 @@ def project_years(
             "return_degradation_state": True,
             "finalize_degradation": year_idx == years - 1,
             "execution_backend": execution_backend,
-            "dispatch_instructions": instructions,
+            "dispatch_instructions": static,
         }
 
         if observe_jit_per_year:
@@ -789,6 +846,8 @@ def project_years(
         if year.aligned is not None:
             if day_controller is not None:
                 raise ValueError("a daily controller runs on per-step projection years, not aligned summaries")
+            if planner is not None:
+                raise ValueError("a year planner runs on per-step projection years, not aligned summaries")
             for priced in (tariff, reference_tariff):
                 if priced is not None:
                     _check_tariff_calendar(priced, year.aligned.index)
@@ -811,7 +870,43 @@ def project_years(
             for priced in (tariff, reference_tariff):
                 if priced is not None:
                     _check_tariff_calendar(priced, pd.date_range(year.pv_dc.index[0], year.pv_dc.index[-1], freq=freq))
-            if day_controller is None:
+            if planner is not None:
+                core_kwargs = {
+                    key: value
+                    for key, value in common.items()
+                    if key not in ("return_degradation_state", "dispatch_instructions")
+                }
+                planned: list[DispatchInstructions] = []
+
+                def plan_year(
+                    state: ControllerBatteryState,
+                    planner: YearPlanner = planner,
+                    year_idx: int = year_idx,
+                    year: ProjectionYear = year,
+                    batt_cfg: BatteryConfig = batt_cfg,
+                    planned: list[DispatchInstructions] = planned,
+                ) -> DispatchInstructions:
+                    chosen = planner(YearStart(year_idx, year, batt_cfg, state))
+                    planned.append(chosen)
+                    return chosen
+
+                detailed = _simulate_detailed_run(
+                    pv_dc=year.pv_dc,
+                    houseload=year.houseload,
+                    temperature_series=year.temperature_series if has_battery else None,
+                    instruction_planner=plan_year,
+                    **core_kwargs,
+                )
+                results_df, n_rep, degradation_df = (
+                    detailed.results_df,
+                    detailed.n_replacements,
+                    detailed.degradation_df,
+                )
+                carry = carry.after_frames(
+                    results_df, degradation_df, detailed.degradation_state, has_battery=has_battery
+                )
+                dispatched.extend(planned)
+            elif day_controller is None:
                 results_df, _total_pv, _summary_df, n_rep, degradation_df, state = cast(
                     "tuple[pd.DataFrame, float, pd.DataFrame, int, pd.DataFrame, dict[str, Any]]",
                     simulate_energy_balance(
@@ -864,6 +959,9 @@ def project_years(
                 {column: results_df[column].to_numpy() for column, _ in (weights or {}).values()}, weights
             )
 
+        if static is not None:
+            dispatched.append(static)
+
         if observe_jit_per_year:
             state_name = observed_jit_cache_state(execution_backend)
             if state_name is not None:
@@ -902,6 +1000,7 @@ def project_years(
         jit_cache_states=jit_cache_states,
         period_energy=pd.DataFrame(period_rows) if record_period_energy else None,
         controller_instructions=concatenate_instructions(executed),
+        year_instructions=tuple(dispatched) if instructions is not None else None,
     )
 
 
@@ -915,7 +1014,7 @@ def run_projection(
     execution_backend: str,
     observe_jit_per_year: bool = False,
     tariff: ResolvedTariff | None = None,
-    instructions: DispatchInstructions | None = None,
+    instructions: YearInstructions | None = None,
     record_period_energy: bool = False,
     day_controller: DailyDispatchController | None = None,
     replay_seam: bool = True,

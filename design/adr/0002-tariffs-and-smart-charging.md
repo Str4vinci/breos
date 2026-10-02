@@ -1,13 +1,13 @@
 # 0002 — Tariffs are resolved values; smart charging is an instruction layer
 
-- **Status:** Accepted; amendments A1–A15 Accepted. Implemented in 0.7.0,
-  A15 in 0.7.1,
+- **Status:** Accepted; amendments A1–A16 Accepted. Implemented in 0.7.0,
+  A15 and A16 in 0.7.1,
   with two additions that no amendment accepted: discharge-only mode and
   calendar-month seasons (see
   [Additions without an amendment](#additions-without-an-amendment)).
 - **Date:** 2026-08-20; amendments 2026-09-26; A6 accepted 2026-09-26;
   A1–A5 and A7–A10 accepted 2026-09-27; A11 and A12 accepted 2026-09-30;
-  A13 and A14 accepted 2026-10-01; A15 accepted 2026-10-02
+  A13 and A14 accepted 2026-10-01; A15 and A16 accepted 2026-10-02
 
 ## Context
 
@@ -351,7 +351,9 @@ load and PV series each year, projected optimization repeats one weather year
 with one load series, and Monte Carlo restamps each sampled weather year to
 its target year. The tariff follows the same rule in 0.7.0: it is resolved
 once on the simulated calendar and reused for every project year. Weekday
-patterns, holidays and effective dates do not advance.
+patterns, holidays and effective dates do not advance. *(Amended by A16,
+accepted 2026-10-02: the calendar still replays, but static instructions may differ by
+project year.)*
 
 Advancing calendars needs per-year load, PV and tariff construction, which
 belongs to the shared projection loop of #179, and the inputs do not support
@@ -613,6 +615,10 @@ shared periods under `mode = "fixed_target"`:
   instruction hash already covers the reserve and target arrays. The ledger
   schema does not change.
 
+## Amendments for 0.7.1
+
+These amendments follow the 0.7.0 release. Each one names the text it amends.
+
 ### A15. An annual network credit capped at the household's own network charges (#375) — Accepted 2026-10-02
 
 Adds a rule; it replaces no text. Some network tariffs reduce a
@@ -681,3 +687,59 @@ network_import_prices = { low = 0.0311, standard = 0.0888, high = 0.1659 }
 - **Scope.** This is not a billing engine. Metering, control-box and other
   per-connection charges stay outside BREOS; a study adds them to the
   fixed charge or leaves them out.
+
+### A16. Instructions per project year (#383) — Accepted 2026-10-02
+
+Amends A2 for static instructions only; the calendar still replays.
+
+The projection takes static instructions in one of three forms, through
+`project_years`, `run_projection` and `run_app_simulation(instructions=)`:
+
+- **One set** for every year: today's path, unchanged and bit-identical.
+- **One set per project year**: a sequence with exactly one set for each
+  year, all on the replayed calendar. A sequence of the same set is the one
+  set, bit for bit.
+- **A year planner**: a function called once as each project year begins,
+  which returns that year's set. It receives a `YearStart`: the year index,
+  the year's inputs with its PV degradation applied, the year's battery
+  configuration, and the state its first step dispatches from. That state
+  is the carried stored energy and origins, and the state of health,
+  resistance growth and efficiencies after the degradation engine has
+  restored them. It is the state a daily controller's first decision of
+  the year would see (A11).
+
+The seam is a planner hook at each year start, not only a precomputed list.
+A list cannot express a plan that depends on the state earlier years left,
+because that state exists only once the production run reaches it. A
+planner can, in one pass. Planning outside the loop instead would need a
+separate projection for each year, or a second copy of the year loop's
+carry. The hook is called inside the simulation core after the opening
+state is restored, so the planner reads the dispatch's own values and does
+not repeat the core's rules for the native and BLAST engines. A list is
+still accepted, because a schedule that is planned once is easier to
+replay and compare as data.
+
+Rules:
+
+- A planner runs on per-step years with a battery, as a daily controller
+  does; summary years accept one set or a sequence. Static instructions and
+  a daily controller cannot be combined.
+- Health changes inside a year as before. The planner sees only the year's
+  opening state.
+- The run records the set each year dispatched on
+  (`ProjectionRun.year_instructions`). The replay tool records each year's
+  instruction hash.
+- App configuration does not change. No config key selects per-year
+  instructions; they are for validation tools.
+
+The daily-target oracle uses the planner for its `yearly` planning mode.
+Year `y` is planned with perfect information on that year's PV, load and
+temperature, at the state the production replay of years `1..y-1` reached.
+The replay then runs year `y`. The stored energy that ends a year below its
+opening energy is bought back, capped at the max-SOC energy at the year's
+last temperature. Because of that cap, year one is planned as the
+first-year mode plans it. The result is perfect-information daily targets
+on a grid. It is not a bound on lifetime NPV: each year is chosen at its
+opening health, and the choice ignores what the year's cycling costs later
+years.
+
