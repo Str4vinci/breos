@@ -34,6 +34,7 @@ from breos.execution import (
 from breos.inverter import inverter_ac_capacity_w as inverter_ac_capacity_w_for
 from breos.optimization_config import (
     DEFAULT_TIMEZONE,
+    LAYOUTS,
     adjusted_max_tilt_deg,
     resolve_optimization_config,
     resolve_run_settings,
@@ -641,6 +642,61 @@ def _prepare_study_weather(weather: pd.DataFrame, config: dict[str, Any], loc_ob
     )
 
 
+# The azimuths of an East-West layout: the first array faces east, the second west.
+EAST_WEST_AZIMUTHS = (90.0, 270.0)
+
+
+def _layout_arrays(layout: str, n_modules: int, tilt: Any, azimuth: Any) -> list[Tuple[int, Any, Any]]:
+    """The fixed arrays of one design, as ``(modules, tilt, azimuth)``.
+
+    A ``"single"`` layout is one array. An ``"east_west"`` layout puts
+    floor(n / 2) modules at azimuth 90 and the rest at 270, both at ``tilt``,
+    so the extra module of an odd count faces west. This is the split of the
+    exhaustive lattice the upcoming publication compares the search with. An
+    empty array is dropped, as the App drops one, unless every array is empty.
+    """
+    if layout == "single":
+        return [(int(n_modules), tilt, azimuth)]
+    if layout != "east_west":
+        raise ValueError(f"layout must be one of: {', '.join(LAYOUTS)}; got {layout!r}")
+    east = int(n_modules) // 2
+    arrays = [(east, tilt, EAST_WEST_AZIMUTHS[0]), (int(n_modules) - east, tilt, EAST_WEST_AZIMUTHS[1])]
+    return [array for array in arrays if array[0] > 0] or arrays[:1]
+
+
+def _layout_dc_production(
+    arrays: Sequence[Tuple[int, Any, Any]],
+    *,
+    weather_data: pd.DataFrame,
+    location: Any,
+    pv_params: PVModuleParams,
+    freq: str,
+    model_options: Mapping[str, Any],
+) -> pd.Series:
+    """The DC output of every array, summed as the App sums ``[[pv_arrays]]``.
+
+    Each array is its own fixed-tilt PV model run, and the series are added
+    in order with ``fill_value=0``, as ``calculate_multi_array_production``
+    does, so an East-West design gives the App's floats.
+    """
+    total: Optional[pd.Series] = None
+    for modules, tilt, azimuth in arrays:
+        series = calculate_pv_production_dc(
+            weather_data=weather_data,
+            location=location,
+            tilt=tilt,
+            surface_azimuth=azimuth,
+            n_modules=modules,
+            pv_params=pv_params,
+            freq=freq,
+            **model_options,
+        )
+        total = series if total is None else total.add(series, fill_value=0.0)
+    if total is None:
+        raise ValueError("a design needs at least one PV array")
+    return total
+
+
 def evaluate_projected_design(
     tmy_data: pd.DataFrame,
     houseload: pd.DataFrame,
@@ -649,7 +705,8 @@ def evaluate_projected_design(
     n_modules: int,
     battery_kwh: float,
     tilt: float,
-    azimuth: float,
+    azimuth: Optional[float] = None,
+    layout: str = "single",
     execution_backend: str = DEFAULT_EXECUTION_BACKEND,
     weather_by_year: Optional[Sequence[pd.DataFrame]] = None,
 ) -> ProjectedDesignResult:
@@ -666,8 +723,14 @@ def evaluate_projected_design(
         config: Nested projected-optimization configuration.
         n_modules: Installed PV module count.
         battery_kwh: Installed nominal battery capacity in kWh.
-        tilt: PV surface tilt in degrees.
-        azimuth: PV surface azimuth in degrees.
+        tilt: PV surface tilt in degrees, of every array.
+        azimuth: PV surface azimuth in degrees, for the ``"single"`` layout.
+            An East-West layout fixes its azimuths, so it takes none.
+        layout: ``"single"``, one array at ``tilt`` and ``azimuth``, or
+            ``"east_west"``: floor(n_modules / 2) modules at azimuth 90 and
+            the rest at 270, the App's ``[[pv_arrays]]`` result for the same
+            two arrays. Area, CAPEX and the inverter rating count every
+            module.
         weather_by_year: Optional real weather sequence, one frame per
             projected year, replacing the repeated ``tmy_data`` year. Each
             frame is run through the same PV model, and PV degradation still
@@ -688,6 +751,11 @@ def evaluate_projected_design(
         raise ValueError("n_modules must be non-negative")
     if float(battery_kwh) < 0.0:
         raise ValueError("battery_kwh must be non-negative")
+    if layout == "single" and azimuth is None:
+        raise ValueError("the single layout needs an azimuth")
+    if layout == "east_west" and azimuth is not None:
+        raise ValueError("the east_west layout faces azimuths 90 and 270; do not pass an azimuth")
+    arrays = _layout_arrays(layout, int(n_modules), float(tilt), None if azimuth is None else float(azimuth))
 
     # Before the PV production model runs, not after it. Computing a year of
     # irradiance and then failing on a missing import wastes the expensive part
@@ -715,16 +783,16 @@ def evaluate_projected_design(
     # why it is the correction to reach for when the model under-predicts.
     dc_output_scale = _validated_dc_output_scale(config)
 
+    model_options = configured_pv_model_kwargs(config)
+
     def _dc_for(weather_frame: pd.DataFrame) -> pd.Series:
-        series = calculate_pv_production_dc(
+        series = _layout_dc_production(
+            arrays,
             weather_data=weather_frame,
             location=loc_obj,
-            tilt=float(tilt),
-            surface_azimuth=float(azimuth),
-            n_modules=int(n_modules),
             pv_params=pv_params,
             freq=freq,
-            **configured_pv_model_kwargs(config),
+            model_options=model_options,
         )
         return series if dc_output_scale == 1.0 else series * dc_output_scale
 
@@ -791,7 +859,9 @@ def evaluate_projected_design(
         "Modules": int(n_modules),
         "Battery_kWh": float(battery_kwh),
         "Tilt": float(tilt),
-        "Azimuth": float(azimuth),
+        # An East-West design has two azimuths, which its layout names.
+        "Azimuth": float(azimuth) if azimuth is not None else np.nan,
+        "Layout": layout,
         **raw_metrics,
     }
     provenance = {
@@ -851,11 +921,20 @@ try:
         def _do(self, problem, X, **kwargs):
             # pymoo's Repair.do passes the design matrix and writes the result
             # back onto the population. Modules and battery kWh snap to
-            # integers, tilt and azimuth to 5 degrees. Every column stays
-            # inside the problem bounds.
-            steps = (1.0, 1.0, 5.0, 5.0)
-            for col in range(X.shape[1]):
-                X[:, col] = _snap_to_grid_within_bounds(X[:, col], steps[col], problem.xl[col], problem.xu[col])
+            # integers, tilt and azimuth to 5 degrees, and the layout gene to
+            # a layout index. Every column stays inside the problem bounds.
+            for col, step in enumerate(problem.gene_steps):
+                X[:, col] = _snap_to_grid_within_bounds(X[:, col], step, problem.xl[col], problem.xu[col])
+            if problem.layout_gene is not None:
+                # An East-West design does not read the single array's tilt
+                # and azimuth genes. They are set to their lowest grid value,
+                # so two East-West designs that differ only there are the
+                # duplicates they are, and NSGA-II does not score both.
+                east_west = X[:, problem.layout_gene] == problem.layouts.index("east_west")
+                for col in problem.single_orientation_genes:
+                    X[east_west, col] = _snap_to_grid_within_bounds(
+                        problem.xl[col], problem.gene_steps[col], problem.xl[col], problem.xu[col]
+                    )
             return X
 
     class SolarDesignProblem(ElementwiseProblem):
@@ -930,30 +1009,47 @@ try:
             self.battery_replacement_treatment = _battery_replacement_treatment(config["battery"])
 
             self.fixed_azimuth = config["mode"]["fixed_azimuth"]
+            # The layouts searched, in LAYOUTS order, and the fixed tilt of
+            # an East-West design.
+            self.layouts = tuple(config["mode"]["layouts"])
+            self.east_west_tilt_deg = float(config["mode"]["east_west_tilt_deg"])
 
             # --- Dynamic Variable Setup ---
-            if self.fixed_azimuth is not None:
-                # RETROFIT MODE: 3 Variables
-                # x[0]: n_modules (1-max_modules)
-                # x[1]: battery_kwh (0-max_battery_kwh)
+            # x[0]: n_modules (1-max_modules)
+            # x[1]: battery_kwh (0-max_battery_kwh)
+            lower = [1, 0.0]
+            upper = [self.max_modules, self.max_battery_kwh]
+            self.gene_steps: Tuple[float, ...] = (1.0, 1.0)
+            # The genes only the single layout reads: tilt, then azimuth
+            # unless it is fixed.
+            self.single_orientation_genes: Tuple[int, ...] = ()
+            if "single" in self.layouts:
                 # x[2]: surface_tilt (min_tilt_deg-max_tilt_deg)
-                n_var = 3
-                xl = np.array([1, 0.0, self.min_tilt_deg])
-                xu = np.array([self.max_modules, self.max_battery_kwh, self.max_tilt_deg])
-            else:
-                # PROJECT MODE: 4 Variables (+ Azimuth)
-                # Azimuth bounds depend on hemisphere
-                lat = self.location["latitude"]
-                if lat >= 0:
-                    azi_lower, azi_upper = 90.0, 270.0  # Search around South (180°)
-                else:
-                    azi_lower, azi_upper = -90.0, 90.0  # Search around North (0°)
-                n_var = 4
-                xl = np.array([1, 0.0, self.min_tilt_deg, azi_lower])
-                xu = np.array([self.max_modules, self.max_battery_kwh, self.max_tilt_deg, azi_upper])
+                lower.append(self.min_tilt_deg)
+                upper.append(self.max_tilt_deg)
+                if self.fixed_azimuth is None:
+                    # x[3]: azimuth; the bounds depend on the hemisphere
+                    if self.location["latitude"] >= 0:
+                        lower.append(90.0)  # Search around South (180°)
+                        upper.append(270.0)
+                    else:
+                        lower.append(-90.0)  # Search around North (0°)
+                        upper.append(90.0)
+                self.single_orientation_genes = tuple(range(2, len(lower)))
+                self.gene_steps += (5.0,) * len(self.single_orientation_genes)
+            # The last gene picks the layout when more than one is searched:
+            # its value is an index into self.layouts.
+            self.layout_gene: Optional[int] = None
+            if len(self.layouts) > 1:
+                self.layout_gene = len(lower)
+                lower.append(0)
+                upper.append(len(self.layouts) - 1)
+                self.gene_steps += (1.0,)
+            xl = np.array(lower)
+            xu = np.array(upper)
 
             super().__init__(
-                n_var=n_var,
+                n_var=len(lower),
                 n_obj=2,
                 n_ieq_constr=3 if self.enforce_zeb else 2,
                 xl=xl,
@@ -967,34 +1063,41 @@ try:
             state["elementwise_runner"] = None
             return state
 
+        def design_layout(self, x) -> str:
+            """The layout a design vector encodes."""
+            if self.layout_gene is None:
+                return self.layouts[0]
+            return self.layouts[int(round(x[self.layout_gene]))]
+
         def _evaluate(self, x, out, *args, **kwargs):
             # Extract Genes
             n_modules = int(round(x[0]))
             battery_kwh = int(round(x[1]))
-            tilt = x[2]
+            layout = self.design_layout(x)
 
-            if self.fixed_azimuth is not None:
-                azimuth = self.fixed_azimuth
+            if layout == "east_west":
+                tilt = self.east_west_tilt_deg
+                azimuth = None
             else:
-                azimuth = x[3]
+                tilt = x[2]
+                azimuth = self.fixed_azimuth if self.fixed_azimuth is not None else x[3]
 
             pv_params = self.pv_params
             module_area = self.module_area_m2
 
             # --- 1. Constraint Check: Area ---
+            # Every array's modules: the layouts split one module count.
             system_area = n_modules * module_area
 
             # --- 2. Simulation ---
-            # Calculate PV Production (DC)
-            dc_production = calculate_pv_production_dc(
+            # Calculate PV Production (DC), summed over the layout's arrays
+            dc_production = _layout_dc_production(
+                _layout_arrays(layout, n_modules, tilt, azimuth),
                 weather_data=self.tmy_data,
                 location=self.loc_obj,
-                tilt=tilt,
-                surface_azimuth=azimuth,
-                n_modules=n_modules,
                 pv_params=pv_params,
                 freq=self.freq,
-                **self.model_options,
+                model_options=self.model_options,
             )
             # Apply the DC-side correction before scoring. This keeps
             # clipping, charging and the part-load ratio on the corrected raw
@@ -1139,7 +1242,9 @@ def optimize_system_multi_objective(
     """Run NSGA-II multi-objective PV/battery sizing.
 
     This is the public wrapper around :class:`SolarDesignProblem`. It optimizes
-    module count, battery capacity, tilt, and optionally azimuth. It optimizes
+    module count, battery capacity, tilt, and optionally azimuth, and, when
+    ``mode.layouts`` names more than one, the layout: one array or an
+    East-West roof at ``mode.east_west_tilt_deg``. It optimizes
     two values, projected lifetime grid independence and projected NPV,
     scoring every candidate over the full project lifetime with PV
     degradation, battery state propagation, and replacement events. ZEB
@@ -1167,8 +1272,9 @@ def optimize_system_multi_objective(
 
     Returns:
         :class:`OptimizationResult` whose ``details["pareto"]`` is a DataFrame
-        with ``Modules``, ``Battery_kWh``, ``Tilt``, ``Azimuth``, objective
-        values, ZEB diagnostics, and the ``Projected_*`` fields.
+        with ``Modules``, ``Battery_kWh``, ``Tilt``, ``Azimuth``, ``Layout``,
+        objective values, ZEB diagnostics, and the ``Projected_*`` fields. An
+        East-West row has the configured tilt and a NaN azimuth.
 
     Raises:
         ImportError: If pymoo is not installed.
@@ -1247,11 +1353,23 @@ def optimize_system_multi_objective(
     x = np.atleast_2d(result.X)
     f = np.atleast_2d(result.F)
     fixed_azimuth = config["mode"]["fixed_azimuth"]
-    if fixed_azimuth is not None:
-        pareto = pd.DataFrame(x, columns=["Modules", "Battery_kWh", "Tilt"])
-        pareto["Azimuth"] = fixed_azimuth
-    else:
-        pareto = pd.DataFrame(x, columns=["Modules", "Battery_kWh", "Tilt", "Azimuth"])
+    pareto = pd.DataFrame(x[:, :2], columns=["Modules", "Battery_kWh"])
+    if problem.single_orientation_genes:
+        pareto["Tilt"] = x[:, 2]
+        pareto["Azimuth"] = fixed_azimuth if fixed_azimuth is not None else x[:, 3]
+    layouts = [problem.design_layout(row) for row in x]
+    pareto["Layout"] = layouts
+    east_west = np.array([layout == "east_west" for layout in layouts], dtype=bool)
+    if east_west.any():
+        # An East-West design has the configured tilt and two azimuths,
+        # which its layout names.
+        if "Tilt" not in pareto:
+            pareto["Tilt"] = np.nan
+            pareto["Azimuth"] = np.nan
+        pareto["Azimuth"] = pareto["Azimuth"].astype(float)
+        pareto.loc[east_west, "Tilt"] = problem.east_west_tilt_deg
+        pareto.loc[east_west, "Azimuth"] = np.nan
+        pareto = pareto[["Modules", "Battery_kWh", "Tilt", "Azimuth", "Layout"]]
 
     pareto["Modules"] = pareto["Modules"].round().astype(int)
     pareto["Battery_kWh"] = pareto["Battery_kWh"].round().astype(float)
@@ -1286,6 +1404,7 @@ def optimize_system_multi_objective(
         "weather": weather_metadata(problem.tmy_data),
         # The search bounds and run settings the search used, defaults included.
         "constraints": dict(config["constraints"]),
+        "mode": {**config["mode"], "layouts": list(config["mode"]["layouts"])},
         "run_settings": settings,
         "battery_replacement_treatment": dict(problem.battery_replacement_treatment),
     }

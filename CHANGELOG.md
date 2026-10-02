@@ -4,6 +4,18 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 
 ## [Unreleased]
 
+### Added
+
+- The optimizer can search East–West roofs (#384). `[mode] layouts =
+  ["single", "east_west"]` adds a layout gene; an East–West design puts
+  floor(n / 2) modules at azimuth 90 and the rest at 270, at
+  `east_west_tilt_deg` (10° by default), and gives the same floats as the
+  App's `[[pv_arrays]]` run of the same two arrays. Area, budget and
+  inverter sizing count every module. The Pareto table and
+  `evaluate_projected_design` metrics gain a `Layout` column, and
+  `evaluate_projected_design` takes `layout="east_west"`. The default,
+  `layouts = ["single"]`, gives the same results as before.
+
 ### Fixed
 
 - Monte Carlo and optimizer workers no longer oversubscribe the CPU at

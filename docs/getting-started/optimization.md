@@ -92,12 +92,13 @@ from breos.optimization import optimize_system_multi_objective
 result = optimize_system_multi_objective(weather, load, config)
 
 pareto = result.details["pareto"]
-print(pareto[["Modules", "Battery_kWh", "Tilt", "Azimuth"]])
+print(pareto[["Modules", "Battery_kWh", "Tilt", "Azimuth", "Layout"]])
 ```
 
 `pareto` is a DataFrame with one row per non-dominated design, holding the
 sizing columns above, the objective values, ZEB diagnostics, and the
-`Projected_*` fields. There is no single best row. Pick the design
+`Projected_*` fields. `Layout` is `"single"` unless the search also tries
+East–West roofs (see below). There is no single best row. Pick the design
 whose balance of independence and cost matches the project.
 
 {py:func}`~breos.plotting.plot_pareto_front` draws the front, two objectives
@@ -111,6 +112,27 @@ used, and `details["provenance"]["constraints"]` its bounds. Raise the populatio
 generation counts for a denser front and a longer runtime. Pass `n_procs` to
 `optimize_system_multi_objective` to evaluate candidates in parallel
 processes; each runs NumPy's BLAS library on one thread.
+
+### Search East–West layouts too
+
+By default every candidate is one array whose tilt and azimuth are searched.
+`[mode] layouts` adds an East–West roof to the search space:
+
+```toml
+[mode]
+layouts = ["single", "east_west"]
+east_west_tilt_deg = 10          # the default
+```
+
+An East–West design has no tilt or azimuth genes. It puts floor(n / 2) of its
+`n` modules at azimuth 90 and the rest at azimuth 270, so the extra module of
+an odd count faces west, both at `east_west_tilt_deg`. It gives the same
+floats as an App run with the two `[[pv_arrays]]` of
+`configs/examples/east-west-roof.toml`. The area limit, the budget and the
+inverter rating count every module, as for one array. In the front, an
+East–West row has `Layout = "east_west"`, the configured tilt, and no
+`Azimuth` (NaN). `layouts = ["east_west"]` searches East–West roofs only,
+and does not accept `mode.fixed_azimuth`.
 
 If no candidate satisfies the constraints, the call raises `RuntimeError`.
 Loosen `budget`, `max_area_m2`, `max_modules`, or `max_battery_kwh` in
@@ -214,6 +236,10 @@ mean, and minimum variants of grid independence and ZEB ratio. `yearly` is the
 per-year energy and degradation ledger, and `financial` is the matching
 discounted cost ledger. Both are DataFrames, so they go straight into a plot or
 a CSV.
+
+For an East–West design, pass `layout="east_west"` and the tilt, without an
+azimuth: `evaluate_projected_design(weather, load, config, n_modules=9,
+battery_kwh=5.0, tilt=10.0, layout="east_west")`.
 
 This function uses the same PV, battery, replacement, degradation, and
 economics components as the optimizer, so its numbers agree with the front it
