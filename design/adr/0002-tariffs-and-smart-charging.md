@@ -1,12 +1,13 @@
 # 0002 — Tariffs are resolved values; smart charging is an instruction layer
 
-- **Status:** Accepted; amendments A1–A14 Accepted. Implemented in 0.7.0,
+- **Status:** Accepted; amendments A1–A15 Accepted. Implemented in 0.7.0,
+  A15 in 0.7.1,
   with two additions that no amendment accepted: discharge-only mode and
   calendar-month seasons (see
   [Additions without an amendment](#additions-without-an-amendment)).
 - **Date:** 2026-08-20; amendments 2026-09-26; A6 accepted 2026-09-26;
   A1–A5 and A7–A10 accepted 2026-09-27; A11 and A12 accepted 2026-09-30;
-  A13 and A14 accepted 2026-10-01
+  A13 and A14 accepted 2026-10-01; A15 accepted 2026-10-02
 
 ## Context
 
@@ -299,9 +300,10 @@ configuration, with the same strict validation as a bundled one.
 
 The 0.7 readiness audit (#187) found details the decision above leaves open
 and statements the code has since outgrown. A6 was **Accepted** on 2026-09-26,
-A11 and A12 on 2026-09-30, A13 and A14 on 2026-10-01, and every other amendment below on
+A11 and A12 on 2026-09-30, A13 and A14 on 2026-10-01, A15 on 2026-10-02 for
+0.7.1, and every other amendment below on
 2026-09-27. Each one replaces the text it names, and that text is marked in
-place above; A11 and A12 add rules and replace none. Accepting A6–A10 accepted the
+place above; A11, A12 and A15 add rules and replace none. Accepting A6–A10 accepted the
 design for the dispatch-seam and ledger work, not its implementation. Grid
 charging, origin accounting, ledger schema 2.0 and net-exchange emissions were
 then implemented for 0.7.0 in #279–#282 (#178). Economic
@@ -610,3 +612,72 @@ shared periods under `mode = "fixed_target"`:
   record `overlap_policy` in `provenance.smart_charging`; the
   instruction hash already covers the reserve and target arrays. The ledger
   schema does not change.
+
+### A15. An annual network credit capped at the household's own network charges (#375) — Accepted 2026-10-02
+
+Adds a rule; it replaces no text. Some network tariffs reduce a
+household's network charges by an annual amount that cannot exceed what the
+household paid for the network that year. Stromnetz Berlin's §14a EnWG
+Modul 1 is one: 146.58 EUR a year, gross, capped at the connection's
+network charges. A household with PV and storage imports less, so its cap
+can bind where the same household without the system gets the full
+amount. An optional `[tariff.annual_network_credit]` table, and the same
+table under `[reference_tariff]`, express it:
+
+```toml
+[tariff.annual_network_credit]
+amount_per_year = 146.58
+network_fixed_per_year = 39.70
+network_import_prices = { low = 0.0311, standard = 0.0888, high = 0.1659 }
+```
+
+- **Keys.** All three are required; an explicit 0 is valid.
+  `amount_per_year` is the annual reduction. `network_fixed_per_year` is
+  the network part of the fixed charge. `network_import_prices` is the
+  network part of each import price per kWh, in the shape of
+  `import_prices`: by period, or by month season and period, with `all` as
+  the fallback. A reference without a schedule gives `{ all = x }`.
+- **Gross parts, never added.** Every value is a part of a price the
+  tariff already sets, with the same taxes. The network price of every
+  period is at most its import price, and `network_fixed_per_year` is at
+  most 365 days of the fixed charge; validation refuses anything else.
+  Neither is added to the bill: the import cost and the fixed charge are
+  priced as before, and the parts only set the cap.
+- **Cap basis.** A household's eligible network charges for year `y` are
+  its grid import times the network price, summed over the steps, plus
+  `network_fixed_per_year × f`. The credit is `credit_y = min(amount_per_year
+  × f, eligible_y)`. `f` is 1 for a simulated year, a leap year too, and
+  `d / D` for a `[period]` window of `d` civil days in a year of `D` days:
+  the amounts are annual, so they are pro rata by civil days, and a full
+  year gets exactly the annual amount.
+- **Households.** The system household's credit comes from
+  `[tariff.annual_network_credit]` and its own grid import. The no-system
+  household's credit comes from `[reference_tariff.annual_network_credit]`
+  and the whole household load when a `[reference_tariff]` is set (none
+  if that reference has no table), and otherwise from the `[tariff]` table
+  and the whole load, as A13 prices it at the system's prices.
+- **Escalation.** The amount and the cap escalate at the tariff's own
+  import escalation: the system's import escalation for the system
+  household, and A13's reference escalation for the no-system household.
+- **Cash flows.** Each credit is booked in its household's yearly cash
+  flow, `Cost_System_Annual` or `Cost_No_Sys_Annual`, before discounting,
+  so NPV, payback and every comparison include it. LCOE excludes it, as it
+  excludes the other tariff outcomes.
+- **Dispatch.** The credit never drives dispatch. Smart charging and the
+  experimental `daily_persistence` planner see the per-step prices only,
+  also when a binding cap makes extra network charges free at the margin.
+- **Entry points.** App, Monte Carlo (each trajectory from its own import
+  and load), the projected optimizer objective and `App.revalue` apply it.
+  `App.revalue` re-prices a credit added, changed or removed from the
+  retained energy by period and the retained household load, and never
+  re-simulates for it. The credit is pricing only, so it does not change a
+  Monte Carlo year cache.
+- **Results.** A household with a credit gets its eligible network charges
+  and its credit in the year rows, the cost projection and each App
+  `financial` row, and `provenance.tariff.annual_network_credit` or
+  `provenance.reference_tariff.annual_network_credit` records the table.
+  Without the table, results are unchanged bit for bit, and the result
+  format stays "1".
+- **Scope.** This is not a billing engine. Metering, control-box and other
+  per-connection charges stay outside BREOS; a study adds them to the
+  fixed charge or leaves them out.

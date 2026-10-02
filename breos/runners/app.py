@@ -23,11 +23,14 @@ from breos.economics import TerminalHealthCredit, find_payback_year
 from breos.execution import aggregate_jit_cache_states, backend_provenance, config_has_battery
 from breos.load_profiles import LOAD_PROFILE_METADATA_KEY
 from breos.projection import (
+    BASELINE_NETWORK_CREDIT_COLUMNS,
+    SYSTEM_NETWORK_CREDIT_COLUMNS,
     ProjectionRun,
     ProjectionValue,
     ProjectionYear,
     effective_reference_escalation,
     price_reference_year_rows,
+    reprice_network_credit_year_rows,
     reprice_tariff_year_rows,
     run_projection,
     value_projection,
@@ -533,10 +536,18 @@ def _reference_fields(resolved: ResolvedAppConfig, reference: ResolvedTariff | N
 
 # The year-row columns a tariff fills; without one, economics prices the
 # energy at the flat rates instead.
-_TARIFF_MONEY_COLUMNS = ("Import_Cost", "Export_Revenue", "Baseline_Import_Cost", "Grid_Charge_Cost", "Fixed_Charge")
+_TARIFF_MONEY_COLUMNS = (
+    "Import_Cost",
+    "Export_Revenue",
+    "Baseline_Import_Cost",
+    "Grid_Charge_Cost",
+    "Fixed_Charge",
+    *SYSTEM_NETWORK_CREDIT_COLUMNS,
+    *BASELINE_NETWORK_CREDIT_COLUMNS,
+)
 # The year-row columns a reference tariff fills; without one, they follow the
 # system's prices.
-_REFERENCE_MONEY_COLUMNS = ("Baseline_Import_Cost", "Baseline_Fixed_Charge")
+_REFERENCE_MONEY_COLUMNS = ("Baseline_Import_Cost", "Baseline_Fixed_Charge", *BASELINE_NETWORK_CREDIT_COLUMNS)
 
 
 def _simulated_index(artifacts: SimulationArtifacts) -> pd.DatetimeIndex:
@@ -570,7 +581,8 @@ def revalue_app_simulation(
     so does any change to the per-step import or export prices, which its
     planner reads; a change to the fixed charge alone is re-priced. A
     reference tariff added, changed or removed is always re-priced: it
-    prices only the household load, which no dispatch changes.
+    prices only the household load, which no dispatch changes. So is an
+    annual network credit, of either household: the dispatch never sees it.
     """
     cfg = resolved.cfg
     run, old_tariff = artifacts.projection, artifacts.resolved_tariff
@@ -595,7 +607,15 @@ def revalue_app_simulation(
             if instructions is None or instructions.instruction_hash() != artifacts.instructions.instruction_hash():
                 return run_app_simulation(resolved, deps), "resimulated"
         if tariff.price_hash != old_tariff.price_hash:
-            yearly = reprice_tariff_year_rows(yearly, cast(pd.DataFrame, run.period_energy), tariff)
+            period_energy = cast(pd.DataFrame, run.period_energy)
+            if _same_step_prices(tariff, old_tariff) and (
+                tariff.prices.fixed_charge_per_day == old_tariff.prices.fixed_charge_per_day
+            ):
+                # Only the annual network credit changed: the energy money
+                # keeps the floats the simulation summed per step.
+                yearly = reprice_network_credit_year_rows(yearly, period_energy, tariff)
+            else:
+                yearly = reprice_tariff_year_rows(yearly, period_energy, tariff)
     elif old_tariff is not None:
         yearly = yearly.drop(columns=[column for column in _TARIFF_MONEY_COLUMNS if column in yearly.columns])
 
@@ -613,7 +633,8 @@ def revalue_app_simulation(
         yearly = yearly.drop(columns=[column for column in _REFERENCE_MONEY_COLUMNS if column in yearly.columns])
         if tariff is not None:
             baseline = reprice_tariff_year_rows(yearly, cast(pd.DataFrame, run.period_energy), tariff)
-            yearly = yearly.assign(Baseline_Import_Cost=baseline["Baseline_Import_Cost"])
+            columns = ["Baseline_Import_Cost", *(c for c in BASELINE_NETWORK_CREDIT_COLUMNS if c in baseline)]
+            yearly = yearly.assign(**{column: baseline[column] for column in columns})
 
     value = value_projection(cfg, resolved, replace(run, yearly_df=yearly))
     smart_charging = artifacts.smart_charging

@@ -102,9 +102,33 @@ def financial_to_dicts(cost_proj: pd.DataFrame, total_initial_cost: float) -> li
                 "replacement_time_years": (
                     round(float(row["Replacement_Time_Years"]), 4) if pd.notna(row["Replacement_Time_Years"]) else None
                 ),
+                # A household with an annual network credit: its eligible
+                # network charges (the cap basis) and the credit, escalated
+                # and not discounted (ADR 0002 A15).
+                **{
+                    name: round(float(row[column]), 2)
+                    for name, column in _NETWORK_CREDIT_FIELDS.items()
+                    if column in row.index
+                },
             }
         )
     return rows
+
+
+# The financial-row fields of an annual network credit, by cost-projection column.
+_NETWORK_CREDIT_FIELDS = {
+    "network_charge": "Cost_Network_Charge",
+    "network_credit": "Cost_Network_Credit",
+    "no_system_network_charge": "Cost_No_Sys_Network_Charge",
+    "no_system_network_credit": "Cost_No_Sys_Network_Credit",
+}
+# The year-1 fields of an annual network credit, by year-row column.
+_NETWORK_CREDIT_YEAR1_FIELDS = {
+    "network_charge_year1_prices": "Network_Charge",
+    "network_credit_year1_prices": "Network_Credit",
+    "no_system_network_charge_year1_prices": "Baseline_Network_Charge",
+    "no_system_network_credit_year1_prices": "Baseline_Network_Credit",
+}
 
 
 def yearly_to_dicts(yearly_df: pd.DataFrame, period: dict[str, Any] | None = None) -> list[dict[str, Any]]:
@@ -329,6 +353,11 @@ def build_result(
             "no_system_import_cost_year1_prices": _round2(year1["Baseline_Import_Cost"]),
             "no_system_fixed_charge_year1_prices": _round2(year1["Baseline_Fixed_Charge"]),
         }
+    )
+    # Only a household with an annual network credit reports it, so other
+    # results are unchanged.
+    result.update(
+        {name: _round2(year1[column]) for name, column in _NETWORK_CREDIT_YEAR1_FIELDS.items() if column in year1.index}
     )
 
     if resolved.pv_arrays:

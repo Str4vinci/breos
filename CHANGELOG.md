@@ -15,6 +15,29 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   `evaluate_projected_design` metrics gain a `Layout` column, and
   `evaluate_projected_design` takes `layout="east_west"`. The default,
   `layouts = ["single"]`, gives the same results as before.
+- An annual network credit capped at the household's own network charges
+  (#375, ADR 0002 A15). `[tariff.annual_network_credit]` gives the system
+  household an annual amount, capped at its grid import times the network
+  part of each import price plus a network fixed amount, both given gross as
+  parts of the tariff's own prices and never added to the bill. The household
+  without the system gets its own credit on its whole load, from the same
+  table or from `[reference_tariff.annual_network_credit]`. Each credit
+  escalates with its household's import prices and is booked in that
+  household's yearly cost before NPV and payback. App, Monte Carlo, the
+  projected optimizer and `App.revalue` (without simulating again) apply it.
+  New result fields, present only with the table:
+  `network_charge_year1_prices`, `network_credit_year1_prices`,
+  `no_system_network_charge_year1_prices`,
+  `no_system_network_credit_year1_prices`, the `network_charge`,
+  `network_credit`, `no_system_network_charge` and `no_system_network_credit`
+  fields of each `financial` row, the matching year-row and cost-projection
+  columns, and `annual_network_credit` in `provenance.tariff` and
+  `provenance.reference_tariff`. Without the table every result is unchanged.
+
+### Changed
+
+- A change to `[reference_tariff]` no longer invalidates the App input cache
+  or the Monte Carlo year cache: it prices only the household load.
 
 ### Fixed
 

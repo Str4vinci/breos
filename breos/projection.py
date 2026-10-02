@@ -9,6 +9,7 @@ frames; Monte Carlo runs summaries.
 
 from __future__ import annotations
 
+import calendar
 import math
 from dataclasses import dataclass, field, replace
 from typing import Any, Callable, Mapping, Sequence, cast
@@ -325,7 +326,7 @@ def build_year_row(
 
 def _tariff_weights(tariff: ResolvedTariff) -> dict[str, tuple[str, np.ndarray]]:
     import_prices = np.asarray(tariff.import_price_per_kwh, dtype=float)
-    return {
+    weights = {
         "Import_Cost": ("Import_From_Grid", import_prices),
         "Export_Revenue": ("PV_AC_Export", np.asarray(tariff.export_price_per_kwh, dtype=float)),
         # The no-system household buys its whole load at the same prices.
@@ -333,6 +334,51 @@ def _tariff_weights(tariff: ResolvedTariff) -> dict[str, tuple[str, np.ndarray]]
         # The part of Import_Cost bought to charge the battery.
         "Grid_Charge_Cost": ("Grid_AC_To_Battery", import_prices),
     }
+    if tariff.network_price_per_kwh is not None:
+        network_prices = np.asarray(tariff.network_price_per_kwh, dtype=float)
+        # The network part of each household's import, which caps its annual
+        # network credit (ADR 0002 A15).
+        weights[_NETWORK_IMPORT] = ("Import_From_Grid", network_prices)
+        weights[_BASELINE_NETWORK_IMPORT] = ("Houseload", network_prices)
+    return weights
+
+
+# The weighted sums of each household's import at the network prices.
+_NETWORK_IMPORT = "Network_Import_Charge"
+_BASELINE_NETWORK_IMPORT = "Baseline_Network_Import_Charge"
+# The year-row columns of an annual network credit, at year-1 prices: each
+# household's eligible network charges (the cap basis) and its credit.
+SYSTEM_NETWORK_CREDIT_COLUMNS = ("Network_Charge", "Network_Credit")
+BASELINE_NETWORK_CREDIT_COLUMNS = ("Baseline_Network_Charge", "Baseline_Network_Credit")
+
+
+def _credit_year_fraction(tariff: ResolvedTariff, billed_days: float | None) -> float:
+    """The share of a year an annual network credit is billed on (ADR 0002 A15).
+
+    A simulated year is a whole year, a leap year too. A [period] window of
+    ``billed_days`` civil days lies in one calendar year, its tariff's first
+    civil year, and is that share of its days.
+    """
+    if billed_days is None or pd.isna(billed_days):
+        return 1.0
+    year = int(tariff.index[0].tz_convert(tariff.timezone).year)
+    return float(billed_days) / (366 if calendar.isleap(year) else 365)
+
+
+def _network_credit_money(
+    tariff: ResolvedTariff, network_import_charge: float, billed_days: float | None, columns: tuple[str, str]
+) -> dict[str, float]:
+    """One household's eligible network charges and its credit, from its import at the network prices.
+
+    The credit is the annual amount, capped at the eligible network charges:
+    the network part of the import plus the network fixed amount, both for
+    the billed share of the year.
+    """
+    credit = tariff.prices.annual_network_credit
+    assert credit is not None
+    fraction = _credit_year_fraction(tariff, billed_days)
+    charge = network_import_charge + credit.network_fixed_per_year * fraction
+    return {columns[0]: charge, columns[1]: min(credit.amount_per_year * fraction, charge)}
 
 
 # The flows a tariff prices, by the money column each fills and the frame
@@ -411,12 +457,23 @@ def _tariff_money(
         if billed_days is not None
         else _fixed_charge(tariff, n_steps * hours_per_step)
     )
+    if tariff.prices.annual_network_credit is not None:
+        for name, columns in (
+            (_NETWORK_IMPORT, SYSTEM_NETWORK_CREDIT_COLUMNS),
+            (_BASELINE_NETWORK_IMPORT, BASELINE_NETWORK_CREDIT_COLUMNS),
+        ):
+            money.update(
+                _network_credit_money(tariff, float(weighted_w[name] * hours_per_step / 1000), billed_days, columns)
+            )
     return money
 
 
 def _reference_weights(reference: ResolvedTariff) -> dict[str, tuple[str, np.ndarray]]:
     # The no-system household buys its whole load at the reference prices.
-    return {"Baseline_Import_Cost": ("Houseload", np.asarray(reference.import_price_per_kwh, dtype=float))}
+    weights = {"Baseline_Import_Cost": ("Houseload", np.asarray(reference.import_price_per_kwh, dtype=float))}
+    if reference.network_price_per_kwh is not None:
+        weights[_BASELINE_NETWORK_IMPORT] = ("Houseload", np.asarray(reference.network_price_per_kwh, dtype=float))
+    return weights
 
 
 def _reference_money(
@@ -426,8 +483,12 @@ def _reference_money(
     n_steps: int,
     billed_days: float | None = None,
 ) -> dict[str, float]:
-    """A year's no-system money at the reference tariff's year-1 prices, billed as :func:`_tariff_money` bills."""
-    return {
+    """A year's no-system money at the reference tariff's year-1 prices, billed as :func:`_tariff_money` bills.
+
+    The reference's own annual network credit, if it has one, replaces any
+    the system tariff gave the no-system household.
+    """
+    money = {
         "Baseline_Import_Cost": float(weighted_w["Baseline_Import_Cost"] * hours_per_step / 1000),
         "Baseline_Fixed_Charge": (
             reference.prices.fixed_charge_per_day * billed_days
@@ -435,6 +496,16 @@ def _reference_money(
             else _fixed_charge(reference, n_steps * hours_per_step)
         ),
     }
+    if reference.prices.annual_network_credit is not None:
+        money.update(
+            _network_credit_money(
+                reference,
+                float(weighted_w[_BASELINE_NETWORK_IMPORT] * hours_per_step / 1000),
+                billed_days,
+                BASELINE_NETWORK_CREDIT_COLUMNS,
+            )
+        )
+    return money
 
 
 def price_reference_year_rows(
@@ -453,14 +524,32 @@ def price_reference_year_rows(
     hours_per_step = get_hours_per_step(freq)
     weights = _reference_weights(reference)
     weighted = weighted_column_sums({"Houseload": np.asarray(houseload_w)}, weights)
-    repriced = yearly_df.copy()
+    repriced = yearly_df.drop(columns=[column for column in BASELINE_NETWORK_CREDIT_COLUMNS if column in yearly_df])
     repriced["Baseline_Import_Cost"] = float(weighted["Baseline_Import_Cost"] * hours_per_step / 1000)
     repriced["Baseline_Fixed_Charge"] = [_billed_fixed_charge(reference, row) for _, row in repriced.iterrows()]
+    if reference.prices.annual_network_credit is not None:
+        network = float(weighted[_BASELINE_NETWORK_IMPORT] * hours_per_step / 1000)
+        credits = [
+            _network_credit_money(reference, network, _billed_days(row), BASELINE_NETWORK_CREDIT_COLUMNS)
+            for _, row in repriced.iterrows()
+        ]
+        for column in BASELINE_NETWORK_CREDIT_COLUMNS:
+            repriced[column] = [money[column] for money in credits]
     return repriced
 
 
+def _billed_days(row: pd.Series) -> float | None:
+    billed_days = row.get("Billed_Days")
+    return None if billed_days is None or pd.isna(billed_days) else float(billed_days)
+
+
 def _period_prices(tariff: ResolvedTariff, kind: str) -> dict[str, float]:
-    prices = tariff.import_price_per_kwh if kind == "import" else tariff.export_price_per_kwh
+    prices = {
+        "import": tariff.import_price_per_kwh,
+        "export": tariff.export_price_per_kwh,
+        "network": tariff.network_price_per_kwh,
+    }[kind]
+    assert prices is not None
     by_bucket: dict[str, float] = {}
     for bucket, price in zip(_price_buckets(tariff), prices, strict=True):
         by_bucket.setdefault(bucket, float(price))
@@ -478,7 +567,9 @@ def reprice_tariff_year_rows(
     periods (month season and period, with month seasons) of energy times
     price, and the fixed charge the new daily charge
     over the simulated hours. A fresh simulation sums energy times price per
-    step instead, so the two agree to rounding, not bit for bit.
+    step instead, so the two agree to rounding, not bit for bit. The annual
+    network credit of each household is re-priced too
+    (:func:`reprice_network_credit_year_rows`).
     """
     repriced = yearly_df.copy()
     prices = {kind: _period_prices(tariff, kind) for kind in ("import", "export")}
@@ -488,7 +579,61 @@ def reprice_tariff_year_rows(
             total = total + period_energy[_period_energy_name(money_column, period)].to_numpy(dtype=float) * price
         repriced[money_column] = total
     repriced["Fixed_Charge"] = [_billed_fixed_charge(tariff, row) for _, row in repriced.iterrows()]
+    return reprice_network_credit_year_rows(repriced, period_energy, tariff)
+
+
+def reprice_network_credit_year_rows(
+    yearly_df: pd.DataFrame, period_energy: pd.DataFrame, tariff: ResolvedTariff
+) -> pd.DataFrame:
+    """Year rows with only the annual network credits re-priced at ``tariff``'s, from each year's energy by period.
+
+    The credit of each household (ADR 0002 A15), with its cap basis, from
+    the same retained energy :func:`reprice_tariff_year_rows` re-prices from;
+    without a credit on ``tariff`` the columns are dropped. Every other
+    column is kept as it is.
+    """
+    repriced = yearly_df.drop(
+        columns=[
+            column
+            for column in (*SYSTEM_NETWORK_CREDIT_COLUMNS, *BASELINE_NETWORK_CREDIT_COLUMNS)
+            if column in yearly_df
+        ]
+    )
+    if tariff.prices.annual_network_credit is None:
+        return repriced
+    network_prices = _period_prices(tariff, "network")
+    for money_column, columns in (
+        ("Import_Cost", SYSTEM_NETWORK_CREDIT_COLUMNS),
+        ("Baseline_Import_Cost", BASELINE_NETWORK_CREDIT_COLUMNS),
+    ):
+        network = np.zeros(len(repriced))
+        for period, price in network_prices.items():
+            network = network + period_energy[_period_energy_name(money_column, period)].to_numpy(dtype=float) * price
+        credits = [
+            _network_credit_money(tariff, float(charge), _billed_days(row), columns)
+            for charge, (_, row) in zip(network, repriced.iterrows(), strict=True)
+        ]
+        for column in columns:
+            repriced[column] = [money[column] for money in credits]
     return repriced
+
+
+def _year_money(
+    tariff: ResolvedTariff | None,
+    reference: ResolvedTariff | None,
+    weighted_w: Mapping[str, float],
+    hours_per_step: float,
+    n_steps: int,
+    billed_days: float | None,
+) -> dict[str, float]:
+    """A year's money from the system tariff, then the no-system reference, which prices that household instead."""
+    money = _tariff_money(tariff, weighted_w, hours_per_step, n_steps, billed_days) if tariff is not None else {}
+    if reference is not None:
+        if reference.prices.annual_network_credit is None:
+            for column in BASELINE_NETWORK_CREDIT_COLUMNS:
+                money.pop(column, None)
+        money.update(_reference_money(reference, weighted_w, hours_per_step, n_steps, billed_days))
+    return money
 
 
 def _check_tariff_calendar(tariff: ResolvedTariff, index: pd.DatetimeIndex) -> None:
@@ -590,6 +735,11 @@ def project_years(
     year's load at its prices and ``Baseline_Fixed_Charge`` its fixed
     charge. It never touches the dispatch. Without one, the no-system
     household pays the system's own prices.
+
+    A tariff or reference with an annual network credit (ADR 0002 A15) adds
+    its household's eligible network charges and credit to each row. The
+    system tariff's credit covers both households unless a reference prices
+    the no-system one, which then has the reference's credit or none.
     """
     if day_controller is not None:
         if instructions is not None:
@@ -734,20 +884,9 @@ def project_years(
                 pv_degradation_factor=year.pv_degradation_factor,
                 annual_fec=annual_fec,
                 extra=year.extra,
-                money={
-                    **(
-                        _tariff_money(tariff, weighted_w, hours_per_step, n_steps, year.extra.get("Billed_Days"))
-                        if tariff is not None
-                        else {}
-                    ),
-                    **(
-                        _reference_money(
-                            reference_tariff, weighted_w, hours_per_step, n_steps, year.extra.get("Billed_Days")
-                        )
-                        if reference_tariff is not None
-                        else {}
-                    ),
-                },
+                money=_year_money(
+                    tariff, reference_tariff, weighted_w, hours_per_step, n_steps, year.extra.get("Billed_Days")
+                ),
             )
         )
         if record_period_energy:

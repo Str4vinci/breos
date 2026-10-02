@@ -174,6 +174,7 @@ class TariffPrices:
     source_url: str | None = None
     effective_from: date | None = None
     effective_to: date | None = None
+    annual_network_credit: AnnualNetworkCredit | None = None
 
     def __post_init__(self) -> None:
         currency = _nonempty_text(self.currency, "prices.currency").upper()
@@ -194,6 +195,11 @@ class TariffPrices:
         if self.source_url is not None:
             object.__setattr__(self, "source_url", _nonempty_text(self.source_url, "prices.source_url"))
         _date_range(self.effective_from, self.effective_to, "prices")
+        credit = self.annual_network_credit
+        if credit is not None:
+            if not isinstance(credit, AnnualNetworkCredit):
+                raise TypeError("'prices.annual_network_credit' must be an AnnualNetworkCredit")
+            credit.check_parts_of(self)
 
     @staticmethod
     def _freeze_prices(values: PriceList, name: str) -> PriceList:
@@ -245,7 +251,96 @@ class TariffPrices:
             self.source_url,
             self.effective_from,
             self.effective_to,
+            self.annual_network_credit,
         )
+
+
+def _effective_price(values: PriceList, season: str | None, period: str) -> float | None:
+    """The price a season and period would pay under a price list, or None when it gives none."""
+    table: Mapping[str, Any] = values
+    if _is_seasonal(values):
+        if season is None or season not in values:
+            return None
+        table = cast(Mapping[str, Any], values[season])
+    if period in table:
+        return float(table[period])
+    return float(table["all"]) if "all" in table else None
+
+
+@dataclass(frozen=True)
+class AnnualNetworkCredit:
+    """An annual reduction of a household's network charges, capped at what it paid (ADR 0002 A15).
+
+    The App's ``[tariff.annual_network_credit]``, or the same table under
+    ``[reference_tariff]``. ``network_import_prices`` is the network part of
+    each import price per kWh and ``network_fixed_per_year`` the network part
+    of the fixed charge, both gross, as the tariff's own prices are. They are
+    parts of prices the tariff already sets: they are never added to the
+    bill, and only set the cap. A year's credit is ``min(amount_per_year ×
+    f, eligible)``, where the eligible network charges are the year's grid
+    import times the network price plus ``network_fixed_per_year × f``, and
+    ``f`` is the share of the year billed: 1 for a simulated year, ``d / D``
+    for a window of ``d`` civil days in a year of ``D``.
+    """
+
+    amount_per_year: float
+    network_fixed_per_year: float
+    network_import_prices: PriceList
+
+    def __post_init__(self) -> None:
+        for name in ("amount_per_year", "network_fixed_per_year"):
+            object.__setattr__(self, name, _nonnegative_price(getattr(self, name), f"annual_network_credit.{name}"))
+        object.__setattr__(
+            self,
+            "network_import_prices",
+            TariffPrices._freeze_prices(self.network_import_prices, "annual_network_credit.network_import_prices"),
+        )
+
+    def check_parts_of(self, prices: TariffPrices) -> None:
+        """Refuse network parts larger than the prices they are part of: the network price of every
+        period at most its import price, and the network fixed amount at most 365 days of the fixed charge.
+        """
+        network, imports = self.network_import_prices, prices.import_prices
+        seasons: Sequence[str | None] = (None,)
+        for values in (network, imports):
+            if _is_seasonal(values):
+                seasons = sorted(values)
+        periods = {"all"}
+        for values in (network, imports):
+            tables = values.values() if _is_seasonal(values) else [values]
+            for table in tables:
+                periods.update(cast(Mapping[str, Any], table))
+        for season in seasons:
+            for period in sorted(periods):
+                part, whole = _effective_price(network, season, period), _effective_price(imports, season, period)
+                if part is not None and whole is not None and part > whole:
+                    where = f"{season}.{period}" if season is not None else period
+                    raise ValueError(
+                        f"'annual_network_credit.network_import_prices' gives {where} a network price of {part}, "
+                        f"more than its import price of {whole}. The network price is the network part of the "
+                        "import price, with the same taxes, so it cannot exceed it."
+                    )
+        annual_fixed = prices.fixed_charge_per_day * 365
+        if self.network_fixed_per_year > annual_fixed * (1 + 1e-12):
+            raise ValueError(
+                f"'annual_network_credit.network_fixed_per_year' is {self.network_fixed_per_year}, more than 365 "
+                f"days of the fixed charge ({annual_fixed}). It is the network part of the fixed charge, so it "
+                "cannot exceed it."
+            )
+
+    def record(self) -> dict[str, Any]:
+        """A JSON-safe record of the credit, for provenance."""
+        return {
+            "amount_per_year": self.amount_per_year,
+            "network_fixed_per_year": self.network_fixed_per_year,
+            "network_import_prices": thaw_prices(self.network_import_prices),
+            "cap": "min(amount_per_year * f, grid_import * network_import_price + network_fixed_per_year * f)",
+            "year_fraction": "1 for a simulated year; civil days / days of the year for a [period] window",
+        }
+
+    def __reduce__(self) -> tuple[Any, tuple[Any, ...]]:
+        """Rebuild immutable price maps in worker processes."""
+        return type(self), (self.amount_per_year, self.network_fixed_per_year, thaw_prices(self.network_import_prices))
 
 
 @dataclass(frozen=True)
@@ -278,6 +373,9 @@ class ResolvedTariff:
     price_hash: str
     season_labels: tuple[str, ...] | None = None
     seasons: MonthSeasons | None = None
+    # With an annual network credit, each step's network price per kWh, the
+    # network part of its import price (ADR 0002 A15); None without one.
+    network_price_per_kwh: tuple[float, ...] | None = None
 
     @property
     def n_days(self) -> int:
@@ -989,7 +1087,7 @@ def resolve_named_tariff(
     definition = _as_definition(schedule)
     # Validate every season against its rules before retaining only schedule metadata.
     # The simulation window may omit a season or some of its periods.
-    for name, values in (("import_prices", prices.import_prices), ("export_prices", prices.export_prices)):
+    for name, values in _price_lists(prices):
         if _is_seasonal(values):
             validate_season_prices(definition, cast(Mapping[str, Mapping[str, float]], values), f"prices.{name}")
     labels, seasons = _classify(
@@ -1036,9 +1134,22 @@ def _validate_index(index: pd.DatetimeIndex) -> pd.DatetimeIndex:
     return index.copy()
 
 
+def _price_lists(prices: TariffPrices) -> list[tuple[str, PriceList]]:
+    """Each price list of ``prices`` by name, the network prices of an annual network credit last."""
+    lists: list[tuple[str, PriceList]] = [
+        ("import_prices", prices.import_prices),
+        ("export_prices", prices.export_prices),
+    ]
+    if prices.annual_network_credit is not None:
+        lists.append(
+            ("annual_network_credit.network_import_prices", prices.annual_network_credit.network_import_prices)
+        )
+    return lists
+
+
 def _validate_price_periods(schedule: TariffSchedule, prices: TariffPrices, seasons: MonthSeasons | None) -> None:
     allowed = {*schedule.periods, "all"}
-    for name, values in (("import_prices", prices.import_prices), ("export_prices", prices.export_prices)):
+    for name, values in _price_lists(prices):
         tables: Mapping[str, Mapping[str, Any]] = {"": values}
         if _is_seasonal(values):
             if seasons is None:
@@ -1149,6 +1260,13 @@ def resolve_tariff(
     _validate_price_periods(schedule, prices, seasons)
     import_values = _prices_for_labels(labels, prices.import_prices, "import price", step_seasons)
     export_values = _prices_for_labels(labels, prices.export_prices, "export price", step_seasons)
+    network_values = (
+        _prices_for_labels(
+            labels, prices.annual_network_credit.network_import_prices, "network import price", step_seasons
+        )
+        if prices.annual_network_credit is not None
+        else None
+    )
     code_by_period = {period: code for code, period in enumerate(schedule.periods)}
     codes = tuple(code_by_period[label] for label in labels)
 
@@ -1165,19 +1283,26 @@ def resolve_tariff(
         # schedule keeps the hash it had before seasons existed.
         schedule_payload["season_labels"] = step_seasons
     schedule_hash = _canonical_hash(schedule_payload)
-    price_hash = _canonical_hash(
-        {
-            "currency": prices.currency,
-            "identifier": prices.identifier,
-            "version": prices.version,
-            "source_url": prices.source_url,
-            "import_prices": thaw_prices(prices.import_prices),
-            "export_prices": thaw_prices(prices.export_prices),
-            "fixed_charge_per_day": prices.fixed_charge_per_day,
-            "effective_from": prices.effective_from.isoformat() if prices.effective_from else None,
-            "effective_to": prices.effective_to.isoformat() if prices.effective_to else None,
+    price_payload: dict[str, Any] = {
+        "currency": prices.currency,
+        "identifier": prices.identifier,
+        "version": prices.version,
+        "source_url": prices.source_url,
+        "import_prices": thaw_prices(prices.import_prices),
+        "export_prices": thaw_prices(prices.export_prices),
+        "fixed_charge_per_day": prices.fixed_charge_per_day,
+        "effective_from": prices.effective_from.isoformat() if prices.effective_from else None,
+        "effective_to": prices.effective_to.isoformat() if prices.effective_to else None,
+    }
+    if prices.annual_network_credit is not None:
+        # Only prices with a credit hash it, so every other tariff keeps its hash.
+        credit = prices.annual_network_credit
+        price_payload["annual_network_credit"] = {
+            "amount_per_year": credit.amount_per_year,
+            "network_fixed_per_year": credit.network_fixed_per_year,
+            "network_import_prices": thaw_prices(credit.network_import_prices),
         }
-    )
+    price_hash = _canonical_hash(price_payload)
 
     return ResolvedTariff(
         index=resolved_index,
@@ -1194,6 +1319,7 @@ def resolve_tariff(
         price_hash=price_hash,
         season_labels=step_seasons,
         seasons=seasons,
+        network_price_per_kwh=network_values,
     )
 
 
@@ -1316,6 +1442,9 @@ def tariff_provenance(resolved: ResolvedTariff, *, calendar_year: int) -> dict[s
     if resolved.seasons is not None:
         # The month partition; only a schedule with month seasons has one.
         record["seasons"] = resolved.seasons.as_dict()
+    if prices.annual_network_credit is not None:
+        # Only a tariff with an annual network credit records one (ADR 0002 A15).
+        record["annual_network_credit"] = prices.annual_network_credit.record()
     return record
 
 

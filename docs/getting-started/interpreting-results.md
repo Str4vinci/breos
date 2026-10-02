@@ -60,6 +60,20 @@ no-system keys use the reference's prices instead.
 | `no_system_import_cost_year1_prices` | Import cost of the household without a system, which buys its whole year-1 load, `consumption_kwh`. It is the import cost only; the fixed charge is `no_system_fixed_charge_year1_prices` |
 | `no_system_fixed_charge_year1_prices` | The fixed charge of the household without a system for year 1: `fixed_charge_year1_prices`, or the reference tariff's fixed charge for the same days when a `[reference_tariff]` is set |
 
+With an [annual network credit](configuration.md#annual-network-credit),
+each household that has one also reports its eligible network charges, the
+cap basis, and its credit:
+
+| Key | Description |
+|---|---|
+| `network_charge_year1_prices` | The system household's eligible network charges for year 1: its grid import at the network prices, plus the network fixed amount |
+| `network_credit_year1_prices` | The system household's credit for year 1: the annual amount, capped at `network_charge_year1_prices` |
+| `no_system_network_charge_year1_prices` | The eligible network charges of the household without a system, on its whole year-1 load |
+| `no_system_network_credit_year1_prices` | The credit of the household without a system, capped at `no_system_network_charge_year1_prices` |
+
+The eligible network charges are part of the import cost and the fixed
+charge, not an addition to them. Each credit lowers its household's bill.
+
 `grid_charge_cost_year1_prices` is already included in
 `grid_import_cost_year1_prices`, so do not add the two. It is the same value
 as `smart_charging.yearly[0].grid_charge_cost_year1_prices`.
@@ -257,7 +271,12 @@ escalated and not discounted, beside the system's `cost_import`,
 `revenue_export`, `cost_operation`, `cost_fixed_charge` and
 `cost_replacement`. With a
 [no-system reference tariff](configuration.md#no-system-reference-tariff),
-they are at the reference's prices and escalation. `payback_year` is the sustained discounted
+they are at the reference's prices and escalation. With an
+[annual network credit](configuration.md#annual-network-credit), the rows of
+a household with a credit also carry `network_charge` and `network_credit`,
+or `no_system_network_charge` and `no_system_network_credit`, escalated and
+not discounted; each credit is already in that household's cost.
+`payback_year` is the sustained discounted
 payback within the simulated period: the year from which `balance ≥ 0` holds
 to the end of the horizon. The series starts at year 0, so a system that
 recovers its investment during year 1 reports 1. If a battery replacement
@@ -403,6 +422,16 @@ by feature:
   Carlo results. Results with a
   [no-system reference tariff](configuration.md#no-system-reference-tariff)
   also carry `provenance.reference_tariff`.
+- **Annual network credit (0.7.1).** A household with an
+  [annual network credit](configuration.md#annual-network-credit) carries
+  its year-1 keys (see [Year-1 money keys](#year-1-money-keys)), its
+  `financial` row fields, the `Network_Charge` and `Network_Credit`, or
+  `Baseline_Network_Charge` and `Baseline_Network_Credit`, year-row columns,
+  and the `Cost_Network_Charge` and `Cost_Network_Credit`, or
+  `Cost_No_Sys_Network_Charge` and `Cost_No_Sys_Network_Credit`,
+  cost-projection columns. `provenance.tariff.annual_network_credit` and
+  `provenance.reference_tariff.annual_network_credit` record the table.
+  Without the table none of these are present.
 - **Estimated battery residual value.** The three residual-value fields,
   `terminal_value` in the resolved config and the optional
   `provenance.terminal_value` are described [above](#estimated-battery-residual-value).
