@@ -31,6 +31,7 @@ from breos.projection import (
     YearInstructions,
     effective_reference_escalation,
     price_reference_year_rows,
+    price_tariff_year_rows_by_step,
     reprice_network_credit_year_rows,
     reprice_tariff_year_rows,
     run_projection,
@@ -452,6 +453,7 @@ def run_app_simulation(
         # calendar, so a civil day cut by a year's end continues next year.
         replay_seam=period is None,
         reference_tariff=reference_tariff,
+        record_priced_flows=_price_blind(instructions, day_controller),
     )
     first_year_results_df = cast(pd.DataFrame, projection.first_year_results_df)
     current_soh = projection.carry.soh_pct
@@ -527,6 +529,17 @@ def run_app_simulation(
     )
 
 
+def _price_blind(instructions: object, day_controller: object) -> bool:
+    """Whether a run dispatches without reading a tariff, so any schedule can price its stored flows.
+
+    Greedy dispatch, with or without a battery, never sees the tariff.
+    Static instructions, per-year instructions, a year planner and a daily
+    controller all follow the tariff's periods or prices, so such a run keeps
+    no step flows and a new schedule simulates it again.
+    """
+    return instructions is None and day_controller is None
+
+
 def _reference_fields(resolved: ResolvedAppConfig, reference: ResolvedTariff | None) -> dict[str, Any]:
     """The artifact fields of a run's no-system reference tariff."""
     if reference is None or resolved.reference_tariff is None:
@@ -575,33 +588,45 @@ def revalue_app_simulation(
     artifacts: SimulationArtifacts,
     deps: AppRuntimeDependencies,
 ) -> tuple[SimulationArtifacts, str]:
-    """Value a finished run at ``resolved``'s prices; return the artifacts and ``"repriced"`` or ``"resimulated"``.
+    """Value a finished run at ``resolved``'s prices; return the artifacts and how they were valued.
 
     ``resolved`` must differ from the run's configuration in economics keys only
-    (App.revalue checks). The stored projection is re-priced when the new
-    prices cannot change the dispatch: flat prices, a tariff removed, or a
-    tariff on the same schedule whose smart-charging instructions are
-    unchanged. A tariff added, a different schedule or calendar, or
-    instructions that change re-simulate the run. Under ``daily_persistence``
-    so does any change to the per-step import or export prices, which its
-    planner reads; a change to the fixed charge alone is re-priced. A
-    reference tariff added, changed or removed is always re-priced: it
-    prices only the household load, which no dispatch changes. So is an
-    annual network credit, of either household: the dispatch never sees it.
+    (App.revalue checks). The stored projection is re-priced (``"repriced"``)
+    when the new prices cannot change the dispatch: flat prices, a tariff
+    removed, or a tariff on the same schedule whose smart-charging
+    instructions are unchanged. A tariff added, or a different schedule or
+    calendar, is priced from the stored step flows (``"repriced_by_step"``)
+    when the dispatch never read a tariff, and re-simulates the run
+    (``"resimulated"``) when it did. Instructions that change re-simulate
+    the run. Under ``daily_persistence`` so does any change to the per-step
+    import or export prices, which its planner reads; a change to the fixed
+    charge alone is re-priced. A reference tariff added, changed or removed
+    is always re-priced: it prices only the household load, which no
+    dispatch changes. So is an annual network credit, of either household:
+    the dispatch never sees it.
     """
     cfg = resolved.cfg
     run, old_tariff = artifacts.projection, artifacts.resolved_tariff
     if run is None:
         raise ValueError("these artifacts carry no projection to re-price")
-    if resolved.tariff is not None and old_tariff is None:
+    tariff = (
+        resolved.tariff.resolve(old_tariff.index if old_tariff else _simulated_index(artifacts), resolved.timezone)
+        if resolved.tariff
+        else None
+    )
+    # A new schedule, or a first one, gives the stored energy by period no
+    # meaning; only a run whose dispatch never read a tariff can be priced
+    # on it, step by step.
+    new_schedule = tariff is not None and (old_tariff is None or tariff.schedule_hash != old_tariff.schedule_hash)
+    if new_schedule and run.priced_flows is None:
         return run_app_simulation(resolved, deps), "resimulated"
 
-    tariff = resolved.tariff.resolve(old_tariff.index, resolved.timezone) if resolved.tariff and old_tariff else None
     instructions = None
     yearly = run.yearly_df
-    if tariff is not None and old_tariff is not None:
-        if tariff.schedule_hash != old_tariff.schedule_hash:
-            return run_app_simulation(resolved, deps), "resimulated"
+    if new_schedule:
+        assert tariff is not None and run.priced_flows is not None
+        yearly = price_tariff_year_rows_by_step(yearly, run.priced_flows, tariff, cfg["resolution"])
+    elif tariff is not None and old_tariff is not None:
         planner = resolved.smart_charging is not None and resolved.smart_charging.mode in PLANNER_MODES
         if planner and not _same_step_prices(tariff, old_tariff):
             # The planner chooses each day's target on these prices, so new
@@ -632,7 +657,7 @@ def revalue_app_simulation(
     if reference is not None:
         houseload = artifacts.first_year_results_df["Houseload"].to_numpy(dtype=float)
         yearly = price_reference_year_rows(yearly, houseload, reference, cfg["resolution"])
-    elif artifacts.resolved_reference_tariff is not None:
+    elif artifacts.resolved_reference_tariff is not None and not new_schedule:
         # The reference is gone: the no-system household pays the system's
         # prices again, the tariff's by period or the flat costs.
         yearly = yearly.drop(columns=[column for column in _REFERENCE_MONEY_COLUMNS if column in yearly.columns])
@@ -654,4 +679,4 @@ def revalue_app_simulation(
         resolved_tariff=tariff,
         **_reference_fields(resolved, reference),
     )
-    return revalued, "repriced"
+    return revalued, "repriced_by_step" if new_schedule else "repriced"

@@ -394,6 +394,8 @@ _PRICED_FLOWS: dict[str, tuple[str, str]] = {
     "Baseline_Import_Cost": ("Houseload", "import"),
     "Grid_Charge_Cost": ("Grid_AC_To_Battery", "import"),
 }
+# The frame columns those flows are summed from, once each.
+_PRICED_FLOW_COLUMNS = tuple(dict.fromkeys(column for column, _kind in _PRICED_FLOWS.values()))
 
 
 def _period_energy_name(money_column: str, bucket: str) -> str:
@@ -641,6 +643,50 @@ def _year_money(
     return money
 
 
+def price_tariff_year_rows_by_step(
+    yearly_df: pd.DataFrame, priced_flows: Sequence[Mapping[str, np.ndarray]], tariff: ResolvedTariff, freq: str
+) -> pd.DataFrame:
+    """Year rows priced at ``tariff`` from each year's retained step flows, on any schedule.
+
+    For revaluation without re-simulation of a run whose dispatch never saw
+    a tariff: ``priced_flows`` is its :attr:`ProjectionRun.priced_flows`,
+    and ``tariff`` is resolved on its calendar. The money columns of the old
+    prices, a reference tariff's included, give way to the ``tariff``'s, and
+    the no-system household pays the ``tariff`` too;
+    :func:`price_reference_year_rows` then prices a reference. The sums are
+    the year loop's own, so the rows carry the floats a fresh run gives.
+    """
+    if len(priced_flows) != len(yearly_df):
+        raise ValueError(f"{len(priced_flows)} years of step flows for {len(yearly_df)} year rows")
+    hours_per_step = get_hours_per_step(freq)
+    weights = _tariff_weights(tariff)
+    money_rows = []
+    for (_, row), flows in zip(yearly_df.iterrows(), priced_flows, strict=True):
+        n_steps = len(flows["Import_From_Grid"])
+        if n_steps != len(tariff.index):
+            raise ValueError("the step flows and the tariff are on different calendars")
+        billed_days = row.get("Billed_Days")
+        money_rows.append(
+            _tariff_money(
+                tariff,
+                weighted_column_sums(flows, weights),
+                hours_per_step,
+                n_steps,
+                None if billed_days is None or pd.isna(billed_days) else float(billed_days),
+            )
+        )
+    money_columns = (
+        *_PRICED_FLOWS,
+        "Fixed_Charge",
+        "Baseline_Fixed_Charge",
+        *SYSTEM_NETWORK_CREDIT_COLUMNS,
+        *BASELINE_NETWORK_CREDIT_COLUMNS,
+    )
+    unpriced = yearly_df.drop(columns=[column for column in money_columns if column in yearly_df.columns])
+    # The money columns go last, where the year loop puts them.
+    return pd.concat([unpriced, pd.DataFrame(money_rows, index=yearly_df.index)], axis=1)
+
+
 def _check_tariff_calendar(tariff: ResolvedTariff, index: pd.DatetimeIndex) -> None:
     same = len(index) == len(tariff.index) and bool((index.tz_convert("UTC") == tariff.index.tz_convert("UTC")).all())
     if not same:
@@ -726,6 +772,11 @@ class ProjectionRun:
     # With static instructions or a year planner, the set each project year
     # dispatched on, in year order (ADR 0002 A16).
     year_instructions: tuple[DispatchInstructions, ...] | None = None
+    # With record_priced_flows, each year's per-step flows a tariff prices
+    # (W), by frame column, so the run can be priced on another schedule
+    # without re-simulating. A flow equal to the year before's is that
+    # array, kept once: the load, and the zero grid charge of a greedy run.
+    priced_flows: tuple[dict[str, np.ndarray], ...] | None = None
 
 
 def project_years(
@@ -746,6 +797,7 @@ def project_years(
     day_controller: DailyDispatchController | None = None,
     replay_seam: bool = True,
     reference_tariff: ResolvedTariff | None = None,
+    record_priced_flows: bool = False,
 ) -> ProjectionRun:
     """Simulate ``years`` project years, carrying the battery from one to the next.
 
@@ -766,7 +818,9 @@ def project_years(
     year replays the one calendar (ADR 0002 A2), and so do smart-charging
     ``instructions``, resolved on that calendar. ``record_period_energy``
     also keeps each year's priced energy by tariff period, which App.revalue
-    re-prices from.
+    re-prices from. ``record_priced_flows`` keeps each per-step year's
+    priced flows step by step, with or without a tariff, which App.revalue
+    prices on another schedule from when no tariff steered the dispatch.
 
     ``instructions`` is one set every year replays, a sequence of one set
     per project year, or a :data:`YearPlanner` (ADR 0002 A16). A planner is
@@ -815,6 +869,7 @@ def project_years(
     jit_cache_states: list[str] = []
     executed: list[DispatchInstructions] = []
     dispatched: list[DispatchInstructions] = []
+    priced_flows: list[dict[str, np.ndarray]] = []
 
     for year_idx in range(years):
         year = year_inputs(year_idx)
@@ -848,6 +903,8 @@ def project_years(
                 raise ValueError("a daily controller runs on per-step projection years, not aligned summaries")
             if planner is not None:
                 raise ValueError("a year planner runs on per-step projection years, not aligned summaries")
+            if record_priced_flows:
+                raise ValueError("step flows are recorded on per-step projection years, not aligned summaries")
             for priced in (tariff, reference_tariff):
                 if priced is not None:
                     _check_tariff_calendar(priced, year.aligned.index)
@@ -958,6 +1015,15 @@ def project_years(
             weighted_w = weighted_column_sums(
                 {column: results_df[column].to_numpy() for column, _ in (weights or {}).values()}, weights
             )
+            if record_priced_flows:
+                previous = priced_flows[-1] if priced_flows else {}
+                flows: dict[str, np.ndarray] = {}
+                for column in _PRICED_FLOW_COLUMNS:
+                    # A copy, so the year's frame is not kept alive by a view.
+                    values = results_df[column].to_numpy(dtype=float, copy=True)
+                    same = previous.get(column)
+                    flows[column] = same if same is not None and np.array_equal(same, values) else values
+                priced_flows.append(flows)
 
         if static is not None:
             dispatched.append(static)
@@ -1001,6 +1067,7 @@ def project_years(
         period_energy=pd.DataFrame(period_rows) if record_period_energy else None,
         controller_instructions=concatenate_instructions(executed),
         year_instructions=tuple(dispatched) if instructions is not None else None,
+        priced_flows=tuple(priced_flows) if record_priced_flows else None,
     )
 
 
@@ -1019,6 +1086,7 @@ def run_projection(
     day_controller: DailyDispatchController | None = None,
     replay_seam: bool = True,
     reference_tariff: ResolvedTariff | None = None,
+    record_priced_flows: bool = False,
 ) -> ProjectionRun:
     """Run :func:`project_years` for an App configuration.
 
@@ -1047,6 +1115,7 @@ def run_projection(
         day_controller=day_controller,
         replay_seam=replay_seam,
         reference_tariff=reference_tariff,
+        record_priced_flows=record_priced_flows,
     )
 
 

@@ -115,8 +115,12 @@ say(
 # prices on the same tariff schedule when the smart-charging instructions do
 # not change (fixed-target instructions follow the periods, not the prices).
 #
-# ``"resimulated"``: the run was simulated again, because a tariff was added,
-# the schedule changed, or the instructions would change. Under the
+# ``"repriced_by_step"``: a run without smart charging was priced on a tariff
+# added, or on another schedule, from each year's stored step flows.
+#
+# ``"resimulated"``: the run was simulated again, because a tariff was added
+# or the schedule changed under smart charging, or the instructions would
+# change. Under the
 # experimental ``daily_persistence`` smart charging, whose planner reads the
 # prices, any change to the import or export prices simulates again; a change
 # to the fixed charge alone is re-priced.
