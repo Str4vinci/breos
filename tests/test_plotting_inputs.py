@@ -646,7 +646,8 @@ def test_breakeven_comparison_labels_csv_projections_by_the_known_currency(tmp_p
     assert drawn[1].axes[0].get_ylabel() == "Cumulative Cost (CHF)"
     assert drawn[2].axes[0].get_ylabel() == "Cumulative Cost"
     formatter = drawn[2].axes[0].yaxis.get_major_formatter()
-    assert formatter(1500.0, 0) == "1,500"
+    assert formatter(1500.0, 0) == "1500"
+    assert formatter(-12345.0, 0) == "-12 345"
     with pytest.raises(ValueError, match="records its currency as 'USD'"):
         plotting.plot_breakeven_comparison([usd, from_csv], ["App", "CSV"], str(tmp_path), currency="EUR")
 

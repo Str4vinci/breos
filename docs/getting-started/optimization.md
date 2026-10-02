@@ -222,7 +222,7 @@ came from.
 ## Related pages
 
 - [How-to guides](../how-to/index.md) for single-design runs through `App` and the CLI.
-- {doc}`The NSGA-II sizing front <../gallery/uncertainty/plot_14_nsga2_front>`, a stored front with its figures.
+- {doc}`Multi-objective sizing with NSGA-II <../gallery/uncertainty/plot_14_nsga2_front>`, a stored front with its figures.
 - [Interpreting results](interpreting-results.md) for the meaning of the
   headline metrics.
 - [Optimization API](../api/optimization.md) for the full signatures.

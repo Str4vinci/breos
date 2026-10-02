@@ -1,9 +1,8 @@
 """
-Price scenarios with App.revalue
-================================
+Electricity price scenarios by revaluation
+==========================================
 
-Electricity prices over a 20-year project are a guess. How much does the
-answer depend on that guess? :meth:`breos.App.revalue` returns the result a
+Electricity prices over a 20-year project are uncertain. :meth:`breos.App.revalue` returns the result a
 finished run would give at other prices, and when the new prices cannot
 change the dispatch it re-prices the stored simulation instead of running
 it again. That makes a grid of price scenarios cheap.
@@ -44,7 +43,7 @@ that changes the simulation, such as ``battery_kwh`` or
 
 # sphinx_gallery_thumbnail_number = 1
 import matplotlib.pyplot as plt
-from gallery_results import load_case, money, say
+from gallery_results import load_case, money, number, say
 
 case = load_case("price_scenarios")
 scenarios = case.csv("scenarios.csv")
@@ -63,7 +62,7 @@ ax.set_xticks(range(len(grid.columns)), [f"{value:.3f}" for value in grid.column
 ax.set_yticks(range(len(grid.index)), [f"{(value) * 100:.0f} %" for value in grid.index])
 for row in range(grid.shape[0]):
     for column in range(grid.shape[1]):
-        ax.text(column, row, f"{grid.iat[row, column]:,.0f}", ha="center", va="center", fontsize=8)
+        ax.text(column, row, f"{number(grid.iat[row, column])}", ha="center", va="center", fontsize=8)
 ax.set_xlabel(f"Peak import price ({currency}/kWh)")
 ax.set_ylabel("Import price escalation per year")
 ax.set_title(f"NPV savings ({currency})")
@@ -72,6 +71,7 @@ fig.tight_layout()
 
 # %%
 
+# sphinx_gallery_start_ignore
 low, high = scenarios["npv_savings"].min(), scenarios["npv_savings"].max()
 base_peak = case.manifest["base_peak_price"]
 base_escalation = case.manifest["base_import_price_escalation"]
@@ -89,6 +89,7 @@ say(
     f"{methods.get('resimulated', 0)} simulated again. The simulation took {case.manifest['simulate_s']:.1f} s; "
     f"all {len(scenarios)} revaluations together took {case.manifest['revalue_all_s']:.1f} s.",
 )
+# sphinx_gallery_end_ignore
 
 # %%
 # Same answer as a new run
@@ -96,6 +97,7 @@ say(
 # One scenario was also simulated from scratch with the changed keys in the
 # config.
 
+# sphinx_gallery_start_ignore
 say(
     f"With `import_price_escalation = {parity['changes']['import_price_escalation']}` and a peak price of "
     f"{parity['changes']['tariff']['import_prices']['peak']}, revaluation gives "
@@ -103,6 +105,7 @@ say(
     f"{money(parity['simulated_npv_savings'], currency)}. A re-priced tariff sums each year's energy by period "
     "instead of by step, so it agrees with a new run to rounding."
 )
+# sphinx_gallery_end_ignore
 
 # %%
 # What ``provenance.revaluation.method`` says

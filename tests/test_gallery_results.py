@@ -200,3 +200,28 @@ def test_cross_machine_csv_allows_one_unit_in_the_last_written_place(tmp_path, c
 def test_same_machine_check_allows_no_last_place_change(tmp_path):
     assert _compare(tmp_path, {"npv_savings": 4735.25}, {"npv_savings": 4735.26}, ".json", cross_machine=False)
     assert not _compare(tmp_path, {"npv_savings": 4735.25}, {"npv_savings": 4735.25}, ".json", cross_machine=False)
+
+
+def _gallery_helpers():
+    path = PROJECT_ROOT / "docs" / "_ext" / "gallery_results.py"
+    spec = importlib.util.spec_from_file_location("gallery_results", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+@pytest.mark.parametrize(
+    ("value", "decimals", "text"),
+    [(5000.4, 0, "5000"), (12345.4, 0, "12 345"), (-123456.78, 1, "−123 456.8"), (2026, 0, "2026")],
+)
+def test_gallery_numbers_group_digits_from_five_up(value, decimals, text):
+    assert _gallery_helpers().number(value, decimals) == text
+
+
+def test_gallery_money_and_tables_never_use_commas():
+    helpers = _gallery_helpers()
+    assert helpers.money(-6077.4) == "−6077 EUR"
+    assert helpers.money(-0.3) == "0 EUR"
+    markup = helpers.table(pd.DataFrame({"NPV": [12345.6, 999.0]}), NPV=",.0f").markup
+    assert "12 346" in markup and "999" in markup and "," not in markup
