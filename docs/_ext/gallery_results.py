@@ -49,11 +49,28 @@ def bullets(*items: str) -> Html:
     return Html("<ul>" + "".join(f"<li>{_inline(item)}</li>" for item in items) + "</ul>")
 
 
+GROUPED = re.compile(r"(?<![\d.])\d{5,}")
+
+
+def group_digits(text: str, sep: str = "\u00a0") -> str:
+    """``text`` with every run of five or more integer digits grouped by thousands: 5000, 12 345."""
+    return GROUPED.sub(lambda match: f"{int(match.group()):,}".replace(",", sep), text)
+
+
+def number(value: float, decimals: int = 0) -> str:
+    """``value`` with ``decimals`` places and the documentation's digit grouping."""
+    return number_text(f"{value:.{decimals}f}")
+
+
 def table(frame: pd.DataFrame, **formats: str) -> Html:
-    """``frame`` as a plain HTML table; ``formats`` maps a column to a format spec such as ``",.0f"``."""
+    """``frame`` as a plain HTML table; ``formats`` maps a column to a format spec such as ``".0f"``.
+
+    Numbers get the documentation's digit grouping (5000, 12 345) whatever the spec says.
+    """
     shown = frame.copy()
     for column, spec in formats.items():
-        shown[column] = [("" if pd.isna(value) else format(value, spec)) for value in shown[column]]
+        spec = spec.replace(",", "")
+        shown[column] = [("" if pd.isna(value) else number_text(format(value, spec))) for value in shown[column]]
     markup = shown.to_html(index=False, border=0, classes="table", na_rep="", escape=True)
     return Html(markup)
 
@@ -113,7 +130,12 @@ def load_case(name: str) -> StoredCase:
     return case
 
 
+def number_text(text: str) -> str:
+    """Formatted number ``text`` with digit grouping and a true minus sign."""
+    return group_digits(text).replace("-", "−")
+
+
 def money(value: float, currency: str = "EUR") -> str:
-    """``value`` as whole currency units with a thousands separator, sign first."""
-    sign = "−" if value < 0 else ""
-    return f"{sign}{abs(value):,.0f} {currency}"
+    """``value`` as whole currency units with the documentation's digit grouping, sign first."""
+    sign = "−" if round(value) < 0 else ""
+    return f"{sign}{group_digits(f'{abs(value):.0f}')} {currency}"

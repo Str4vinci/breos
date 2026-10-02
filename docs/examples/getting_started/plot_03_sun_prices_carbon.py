@@ -1,9 +1,9 @@
 """
-Sun, prices or grid carbon?
-===========================
+Porto and Berlin: solar resource, electricity prices and grid emissions
+=======================================================================
 
-Move the quickstart home from Porto to Berlin. Berlin gets much less sun, so
-does the same system do worse there? This page separates the three things a
+The quickstart home moved from Porto to Berlin, which gets much less sun.
+This page separates the three things a
 site changes: the solar resource, the electricity prices and the carbon
 intensity of the grid the system displaces.
 
@@ -31,7 +31,7 @@ cost presets are packaged examples, not current offers.
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-from gallery_results import load_case, money, say, table
+from gallery_results import load_case, money, number, say, table
 
 from breos.plotting import plot_breakeven_comparison
 
@@ -61,7 +61,7 @@ table(
             "CO2 avoided (t)": [s["co2_avoided_total_lifetime_kg"] / 1000 for s in sites],
         }
     ),
-    **{"Tilt (°)": ".0f", "Usable PV (kWh/yr)": ",.0f", "Investment": ",.0f", "NPV savings": ",.0f",
+    **{"Tilt (°)": ".0f", "Usable PV (kWh/yr)": ".0f", "Investment": ".0f", "NPV savings": ".0f",
        "CO2 avoided (t)": ".1f"},
 )  # fmt: skip
 
@@ -69,24 +69,26 @@ table(
 # Less sun
 # --------
 
+# sphinx_gallery_start_ignore
 drop = 1 - berlin_sun["usable_ac_system_production_kwh"] / porto["usable_ac_system_production_kwh"]
 say(
     f"The same array delivers {drop * 100:.0f} % less usable energy in Berlin "
-    f"({berlin_sun['usable_ac_system_production_kwh']:,.0f} against "
-    f"{porto['usable_ac_system_production_kwh']:,.0f} kWh). At Porto's prices, NPV savings fall from "
+    f"({number(berlin_sun['usable_ac_system_production_kwh'])} against "
+    f"{number(porto['usable_ac_system_production_kwh'])} kWh). At Porto's prices, NPV savings fall from "
     f"{money(porto['npv_savings'], currency)} to {money(berlin_sun['npv_savings'], currency)} and payback moves "
     f"from year {porto['payback_year']} to year {berlin_sun['payback_year']}. Self-consumption rises, from "
     f"{porto['self_consumption_pct']:.0f} % to {berlin_sun['self_consumption_pct']:.0f} %, only because there is "
     "less surplus to export."
 )
+# sphinx_gallery_end_ignore
 
 # %%
 
 months = np.arange(1, 13)
 labels = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
 fig, ax = plt.subplots(figsize=(9, 4))
-ax.bar(months - 0.2, porto["monthly_production_kwh"], 0.4, label="Porto", color="#e6a700")
-ax.bar(months + 0.2, berlin_sun["monthly_production_kwh"], 0.4, label="Berlin", color="#3a6ea5")
+ax.bar(months - 0.2, porto["monthly_production_kwh"], 0.4, label="Porto", color="#CCBB44")
+ax.bar(months + 0.2, berlin_sun["monthly_production_kwh"], 0.4, label="Berlin", color="#4477AA")
 ax.plot(months, porto["monthly_consumption_kwh"], "k_", ms=18, mew=2, label="Load")
 ax.set_xticks(months, labels)
 ax.set_ylabel("Usable PV energy (kWh)")
@@ -102,6 +104,7 @@ fig.tight_layout()
 # price is higher, so every self-consumed kWh saves more, and exported energy
 # earns more.
 
+# sphinx_gallery_start_ignore
 say(
     f"The German preset prices imports at {berlin['electricity_cost']:.4f} {currency}/kWh against "
     f"{porto['electricity_cost']:.4f}, and pays {berlin['electricity_sold_cost']:.3f} against "
@@ -117,6 +120,7 @@ say(
     if berlin["npv_savings"] > porto["npv_savings"]
     else "Prices do not make up for the lower yield here."
 )
+# sphinx_gallery_end_ignore
 
 # %%
 
@@ -132,7 +136,7 @@ fig = plot_breakeven_comparison(sites, [s["site"] for s in sites])
 fig, ax = plt.subplots(figsize=(7, 3.5))
 names = [s["site"] for s in sites]
 values = [s["co2_avoided_total_lifetime_kg"] / 1000 for s in sites]
-bars = ax.barh(names, values, color=["#e6a700", "#7f9fc4", "#3a6ea5"])
+bars = ax.barh(names, values, color=["#CCBB44", "#66CCEE", "#4477AA"])
 ax.bar_label(bars, fmt="%.1f t", padding=3)
 ax.invert_yaxis()
 ax.set_xlabel("CO2 avoided over the project (t)")
@@ -141,6 +145,7 @@ fig.tight_layout()
 
 # %%
 
+# sphinx_gallery_start_ignore
 say(
     f"On Porto's grid ({porto['grid_carbon']['average_grid_carbon_intensity_gco2_kwh']:.0f} gCO2/kWh) the "
     f"Berlin system would avoid {berlin_sun['co2_avoided_total_lifetime_kg'] / 1000:.1f} t of CO2 over the "
@@ -149,3 +154,8 @@ say(
     f"{berlin['grid_carbon']['source']} {berlin['grid_carbon']['year']}) it avoids "
     f"{berlin['co2_avoided_total_lifetime_kg'] / 1000:.1f} t: less sun, but each kWh displaces dirtier power."
 )
+# sphinx_gallery_end_ignore
+
+# %%
+# .. sphinx-gallery drops a final code block whose code is all hidden, output
+#    included; this closing text block keeps the summary above.

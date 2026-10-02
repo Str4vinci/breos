@@ -137,10 +137,10 @@ raises. To screen a wide design space at lower cost, shorten
 `years_projection` for the screening run. The single-year `steady_state` basis
 was removed in 0.7.0, and a config that still sets it raises an error.
 
-The optional [`[terminal_value]`](configuration.md#terminal-health-credit)
-table is accepted but ignored. Evaluated designs report no terminal-health
-credit or adjusted NPV, and ranking uses unadjusted NPV. Use App or Monte
-Carlo for this accounting sensitivity.
+The optional [`[terminal_value]`](configuration.md#estimated-battery-residual-value)
+table is accepted but ignored. Evaluated designs report no estimated battery
+residual value or NPV including it, and ranking uses the NPV excluding
+residual value. Use App or Monte Carlo for this estimate.
 
 ## Price a design with a time-of-use tariff
 
@@ -222,7 +222,7 @@ came from.
 ## Related pages
 
 - [How-to guides](../how-to/index.md) for single-design runs through `App` and the CLI.
-- {doc}`The NSGA-II sizing front <../gallery/uncertainty/plot_14_nsga2_front>`, a stored front with its figures.
+- {doc}`Multi-objective sizing with NSGA-II <../gallery/uncertainty/plot_14_nsga2_front>`, a stored front with its figures.
 - [Interpreting results](interpreting-results.md) for the meaning of the
   headline metrics.
 - [Optimization API](../api/optimization.md) for the full signatures.

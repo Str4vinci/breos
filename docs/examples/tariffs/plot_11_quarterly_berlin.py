@@ -1,12 +1,12 @@
 """
-A quarterly tariff in Berlin
-============================
+Discharge-only dispatch on a quarterly tariff in Berlin
+=======================================================
 
 Some tariffs change their time windows with the season. This example uses a
 custom schedule in the style of a German §14a EnWG "Module 3" network tariff:
 low, standard and high windows in the first and fourth quarters, and the
-standard price all day in the second and third. What happens if the battery
-is told to discharge only in the high window?
+standard price all day in the second and third. The page compares greedy
+dispatch with a battery that discharges only in the dearer windows.
 
 .. literalinclude:: /../configs/examples/quarterly-tariff-berlin.toml
    :language: toml
@@ -64,11 +64,12 @@ table(
             "NPV savings": [row["npv_savings"] for row in strategies],
         }
     ),
-    **{"Grid independence (%)": ".1f", "Import (kWh)": ",.0f", "Year-1 bill": ",.2f", "NPV savings": ",.0f"},
+    **{"Grid independence (%)": ".1f", "Import (kWh)": ".0f", "Year-1 bill": ".2f", "NPV savings": ".0f"},
 )
 
 # %%
 
+# sphinx_gallery_start_ignore
 by_name = {row["strategy"]: row for row in strategies}
 greedy, high_only = by_name["greedy"], by_name["discharge_only high"]
 summer = [m - 1 for m in range(4, 10)]
@@ -82,3 +83,8 @@ say(
     f"{money(by_name['discharge_only standard and high']['npv_savings'], currency)}. A discharge restriction "
     "names periods, and on a seasonal schedule a period can be absent for months.",
 )
+# sphinx_gallery_end_ignore
+
+# %%
+# .. sphinx-gallery drops a final code block whose code is all hidden, output
+#    included; this closing text block keeps the summary above.

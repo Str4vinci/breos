@@ -527,12 +527,17 @@ fixed_charge_per_day = 0.25              # optional, default 0
 Monte Carlo prices every trajectory with the same tariff. Projected
 optimization accepts the same tariff table in its nested config; see
 [Optimization](optimization.md#price-a-design-with-a-time-of-use-tariff).
-To compare several offers, see {doc}`Which tariff after PV? <../gallery/tariffs/plot_09_which_tariff>`.
+To compare several offers, see {doc}`Simple, bi-hourly and tri-hourly tariffs <../gallery/tariffs/plot_09_which_tariff>`.
 
-## Terminal-health credit
+## Estimated battery residual value
 
-An optional accounting sensitivity credits the final installed battery
-pack's remaining capacity health above its physical replacement threshold:
+At the end of the project, BREOS can estimate the installed battery's
+residual value by scaling its replacement cost by the fraction of capacity
+health remaining above the replacement threshold. This assumes the value
+declines linearly with that fraction. The discounted estimate is reported
+beside the NPV excluding residual value; it does not estimate resale
+proceeds. The table and the result fields keep their names,
+`[terminal_value]` and `terminal_health_credit*`:
 
 ```toml
 [terminal_value]
@@ -540,40 +545,43 @@ basis = "battery_health_fraction"
 ```
 
 The default `basis = "none"`, also used when the table or key is omitted,
-keeps this sensitivity off. No other keys are accepted. It inherits
+leaves the residual value out. No other keys are accepted. It inherits
 `battery_eol_percentage` and the resolved full replacement-pack price,
 including cost overrides; there is no separate threshold or price.
 
 With final SOH fraction `h` and replacement threshold `h*`, the fraction is
 `clip((h - h*) / (1 - h*), 0, 1)`. SOH is measured after the last step's
-aging, terminal cycle finalization and any replacement. A fresh pack gets
-full credit; at or below threshold it gets zero. Inputs must be finite and
-`h* < 1`. Capacity health omits resistance-related limits.
+aging, terminal cycle finalization and any replacement. A fresh pack is
+valued at the full replacement price; at or below threshold it is valued at
+zero. Inputs must be finite and `h* < 1`. For example, a pack at 90 % SOH
+with an 80 % threshold is valued at half the replacement price. That is half
+of the capacity-health margin, not necessarily half of the pack's remaining
+service life or market value: degradation can be nonlinear, and capacity
+health omits resistance-related limits.
 
-The nominal credit at exactly project time `T` is the fraction times the
+The nominal residual value at exactly project time `T` is the fraction times the
 replacement price `C0 × (1 + inflation_rate)^T ×
-(1 - replacement_cost_learning)^T`. The present value divides that credit
-by `(1 + discount_rate)^T`. This is the existing replacement-outlay
+(1 - replacement_cost_learning)^T`. The present value divides it by
+`(1 + discount_rate)^T`. This is the existing replacement-outlay
 convention with a t = 0 price and exponent T, rather than the T − 1
-escalation used for annual energy prices. The credit is an accounting
-sensitivity, not resale value; PV modules, the inverter and stored energy
-are excluded.
+escalation used for annual energy prices. PV modules, the inverter and
+stored energy are excluded.
 
-Only the pack present at the end is credited. Every replacement outlay
+Only the pack present at the end is valued. Every replacement outlay
 remains, and replacement policy is unchanged. If
 `battery_allow_terminal_replacement = false` skips the final swap, the old
 pack remains and earns zero at or below threshold. Enabled PV-only and
 zero-capacity runs explicitly report zero. A partial `[period]` run keeps
 all lifetime credit fields null.
 
-App reports the three credit/adjusted fields beside unadjusted NPV.
-`App.revalue` can enable, disable or reprice the sensitivity using retained
+App reports the three residual-value fields beside the NPV excluding
+residual value. `App.revalue` can enable, disable or reprice the estimate using retained
 final health without simulating again for it. Monte Carlo computes it for
 each trajectory before aggregation. Projected optimization accepts but
 ignores this table, reports no adjusted values for evaluated designs and
-continues ranking on unadjusted NPV. Cashflows, paybacks, LCOE, emissions,
-dispatch and aging stay unchanged. See [Terminal-health
-results](interpreting-results.md#terminal-health-credit).
+continues ranking on the NPV excluding residual value. Cashflows, paybacks,
+LCOE, emissions, dispatch and aging exclude it and stay unchanged. See
+[Residual value in the results](interpreting-results.md#estimated-battery-residual-value).
 
 ## No-system reference tariff
 

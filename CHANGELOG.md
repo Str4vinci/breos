@@ -60,10 +60,10 @@ sites. The PVGIS band and the baseline regression run as before.
 - Cached TMY weather files in `weather/` may be gzip-compressed
   (`<location>_tmy_<years>_<source>.csv.gz`).
 - Optional `[terminal_value] basis = "battery_health_fraction"` reports an
-  accounting sensitivity for the final installed battery pack's health
-  above its physical replacement threshold
-  ([#346](https://github.com/Str4vinci/breos/issues/346)). It credits the
-  resolved full replacement-pack price at the end of the horizon, using
+  estimated battery residual value: the final installed pack's capacity
+  health above its physical replacement threshold, as a linear fraction
+  ([#346](https://github.com/Str4vinci/breos/issues/346)). It values that
+  fraction of the resolved full replacement-pack price at the end of the horizon, using
   replacement inflation, learning and discounting. Results gain
   `terminal_health_credit`, `terminal_health_credit_npv` and
   `npv_savings_terminal_adjusted`, plus valuation provenance. App and Monte
@@ -639,6 +639,10 @@ sites. The PVGIS band and the baseline regression run as before.
   `breos_optimization_benchmark_v1`), also when a run fails part way.
 
 ### Changed
+- `breos.plotting` writes numbers without comma thousands separators: four
+  digits stay bare (5000) and longer numbers group by a space (12 345). This
+  affects the break-even cost axis, the Monte Carlo percentile legend and the
+  CO2 annotations. `weekly_graphs` starts the battery energy axis at zero.
 - 15-minute runs on hourly weather no longer cut diffuse irradiance with a
   universal 1.5 clear-sky-ratio cap ([#354](https://github.com/Str4vinci/breos/issues/354)).
   **This changes 15-minute results from hourly weather.** On the saved PVGIS

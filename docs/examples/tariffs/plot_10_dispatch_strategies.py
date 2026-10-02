@@ -1,11 +1,11 @@
 """
-Dispatch strategies on a bi-hourly tariff
-=========================================
+Battery dispatch strategies on a bi-hourly tariff
+=================================================
 
 On a time-of-use tariff a battery can do more than store surplus PV: it can
 hold its charge for the expensive hours, or charge from the grid off peak.
-Which strategy earns most for the quickstart home on the Portuguese
-bi-hourly schedule? This page compares four ``[smart_charging]`` settings:
+This page compares, for the quickstart home on the Portuguese bi-hourly
+schedule, four ``[smart_charging]`` settings:
 
 - **greedy**: no ``[smart_charging]`` table. The battery stores PV surplus
   and discharges whenever the house needs power.
@@ -51,13 +51,13 @@ case.stamp()
 
 fig, axes = plt.subplots(len(names), 1, figsize=(11, 2.1 * len(names)), sharex=True, sharey=True)
 for ax, name in zip(axes, names, strict=True):
-    ax.fill_between(week["Datetime"], week[f"{name}:Battery_SOC_Normalized"] * 100, color="#3a6ea5", alpha=0.35,
+    ax.fill_between(week["Datetime"], week[f"{name}:Battery_SOC_Normalized"] * 100, color="#4477AA", alpha=0.35,
                     label="State of charge (%)")  # fmt: skip
     grid = ax.twinx()
-    grid.plot(week["Datetime"], week[f"{name}:Grid_AC_To_Battery"] / 1000, color="#c0392b", lw=1.2,
+    grid.plot(week["Datetime"], week[f"{name}:Grid_AC_To_Battery"] / 1000, color="#EE6677", lw=1.2,
               label="Grid to battery (kW)")  # fmt: skip
     grid.set_ylim(0, max(1.0, week.filter(like="Grid_AC_To_Battery").max().max() / 1000 * 1.1))
-    grid.set_ylabel("kW", color="#c0392b")
+    grid.set_ylabel("kW", color="#EE6677")
     ax.set_ylim(0, 105)
     ax.set_ylabel("SOC (%)")
     ax.set_title(name, loc="left", fontsize=10)
@@ -86,11 +86,12 @@ table(
             "payback_year": "Payback year",
         }
     ),
-    **{"Import (kWh)": ",.0f", "Export (kWh)": ",.0f", "Year-1 bill": ",.2f", "NPV savings": ",.0f"},
+    **{"Import (kWh)": ".0f", "Export (kWh)": ".0f", "Year-1 bill": ".2f", "NPV savings": ".0f"},
 )
 
 # %%
 
+# sphinx_gallery_start_ignore
 hours = (week["Datetime"].iloc[1] - week["Datetime"].iloc[0]).total_seconds() / 3600
 grid_charge = {name: week[f"{name}:Grid_AC_To_Battery"].sum() * hours / 1000 for name in names}
 best = strategies["npv_savings"].idxmax()
@@ -123,6 +124,7 @@ say(
     f"{strategies.loc['fixed_target', 'grid_independence_pct']:.1f} % under fixed_target. Grid charging lowers "
     "it by definition: energy stored from the grid counts as imported.",
 )
+# sphinx_gallery_end_ignore
 
 # %%
 # When a strategy can win

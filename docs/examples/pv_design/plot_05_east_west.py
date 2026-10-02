@@ -1,13 +1,14 @@
 """
-East–West or South?
-===================
+East–west and south-facing arrays
+=================================
 
 An east–west roof spreads production over the morning and the afternoon
 instead of one midday peak, so more of it lands when the house is using
-power. Does that make it the better layout? This page compares the packaged
-east–west roof with the same twelve modules facing south, at the same low
-tilt and at the latitude tilt BREOS picks by default, each without a battery
-and with the file's 5 kWh battery.
+power, but it produces less over the year. This page compares the packaged
+east–west roof, two faces at 10°, the usual tilt of an east–west mounting
+system, with the same twelve modules facing south at 35°, a usual tilt for a
+south-facing roof in Porto, and at the same 10°, each without a battery and
+with the file's 5 kWh battery.
 
 ``[[pv_arrays]]`` simulates each face separately and adds their DC output
 before the energy balance, so an east–west roof is not collapsed into one
@@ -17,8 +18,8 @@ average orientation:
    :language: toml
    :caption: configs/examples/east-west-roof.toml
 
-The south designs replace ``[[pv_arrays]]`` with ``n_modules`` and, for the
-low tilt, ``tilt`` and ``azimuth = 180``. Each array may also set its own
+The south designs replace ``[[pv_arrays]]`` with ``n_modules``, ``tilt`` and
+``azimuth = 180``. Each array may also set its own
 ``module``.
 """
 
@@ -28,7 +29,7 @@ low tilt, ``tilt`` and ``azimuth = 180``. Each array may also set its own
 
 # sphinx_gallery_thumbnail_number = 1
 import matplotlib.pyplot as plt
-from gallery_results import load_case, money, say, table
+from gallery_results import load_case, money, number, say, table
 
 case = load_case("east_west")
 designs = case.csv("designs.csv")
@@ -45,7 +46,7 @@ case.stamp()
 # starts earlier and ends later, but its peak is lower and its day total
 # smaller.
 
-colors = dict(zip(names, ["#c0392b", "#e6a700", "#3a6ea5"], strict=True))
+colors = dict(zip(names, ["#EE6677", "#CCBB44", "#4477AA"], strict=True))
 fig, axes = plt.subplots(1, 2, figsize=(11, 4), sharey=True)
 for ax, week, title in ((axes[0], summer, "July week"), (axes[1], winter, "January week")):
     hour = week["Datetime"].dt.hour
@@ -79,18 +80,22 @@ shown = shown.rename(
         "payback_year": "Payback year",
     }
 )
-table(shown, **{"Battery (kWh)": "g", "Usable PV (kWh)": ",.0f", "Export (kWh)": ",.0f", "NPV savings": ",.0f"})
+table(shown, **{"Battery (kWh)": "g", "Usable PV (kWh)": ".0f", "Export (kWh)": ".0f", "NPV savings": ".0f"})
 
 # %%
 
+# sphinx_gallery_start_ignore
 pv_only = designs[designs["battery_kwh"] == 0].set_index("design")
 battery = designs[designs["battery_kwh"] > 0].set_index("design")
 east_west, south_low, south = names
+yield_kwh = pv_only["usable_ac_system_production_kwh"]
+gap = yield_kwh[south] - yield_kwh[east_west]
+tilt_part = yield_kwh[south] - yield_kwh[south_low]
 say(
     f"Without a battery the east–west roof uses {pv_only.loc[east_west, 'self_consumption_pct']:.1f} % of its "
-    f"production in the house, against {pv_only.loc[south, 'self_consumption_pct']:.1f} % facing south at the "
-    f"latitude tilt. But it produces "
-    f"{pv_only.loc[south, 'usable_ac_system_production_kwh'] - pv_only.loc[east_west, 'usable_ac_system_production_kwh']:,.0f} "
+    f"production in the house, against {pv_only.loc[south, 'self_consumption_pct']:.1f} % facing south at "
+    f"35°. But it produces "
+    f"{number(pv_only.loc[south, 'usable_ac_system_production_kwh'] - pv_only.loc[east_west, 'usable_ac_system_production_kwh'])} "
     f"kWh less a year, so grid independence moves by only "
     f"{pv_only.loc[east_west, 'grid_independence_pct'] - pv_only.loc[south, 'grid_independence_pct']:+.1f} points "
     f"and NPV savings change by {money(pv_only.loc[east_west, 'npv_savings'] - pv_only.loc[south, 'npv_savings'], currency)}.",
@@ -101,8 +106,12 @@ say(
     f"{money(battery.loc[east_west, 'npv_savings'] - battery.loc[south, 'npv_savings'], currency)}.",
     "A higher self-consumption share flatters the east–west roof: it is a share of a smaller production. "
     "Where the roof allows a choice, compare the absolute energy and the money. Where it does not, an "
-    "east–west roof is a reasonable use of the space; the low south-facing tilt shows how much of the gap "
-    "comes from the tilt alone: "
-    f"{pv_only.loc[south_low, 'usable_ac_system_production_kwh']:,.0f} kWh against "
-    f"{pv_only.loc[south, 'usable_ac_system_production_kwh']:,.0f} kWh.",
+    "east–west roof is a reasonable use of the space. Facing south at the same 10° splits the gap: of the "
+    f"{number(gap)} kWh, {number(tilt_part)} kWh come from the lower tilt and {number(gap - tilt_part)} kWh "
+    "from facing east and west.",
 )
+# sphinx_gallery_end_ignore
+
+# %%
+# .. sphinx-gallery drops a final code block whose code is all hidden, output
+#    included; this closing text block keeps the summary above.
