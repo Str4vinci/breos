@@ -4,6 +4,19 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 
 ## [Unreleased]
 
+### Fixed
+
+- Monte Carlo and optimizer workers no longer oversubscribe the CPU at
+  15-minute resolution (#382). Each worker process limits its BLAS and
+  OpenMP pools to one thread; the parent process keeps its own. On a
+  20-thread machine, a 15-minute study of 8 runs × 20 years on 10 workers
+  went from 6.0 s, slower than the 4.5 s serial run, to 1.0 s. The tariff
+  sums also run on one BLAS thread for their duration, in the parent too,
+  so a 15-minute result no longer depends on the core count and is the same
+  for every `n_procs`. On a multi-core machine this can move a 15-minute
+  money total in its last digit; hourly results do not change.
+  `threadpoolctl` (3.5.0 or newer) becomes a dependency.
+
 ## [0.7.0] - 2026-10-02
 
 0.7.0 adds time-of-use tariffs and grid charging, makes the results

@@ -103,6 +103,8 @@ Start with `--runs 10` to check that the config resolves, then raise it.
 `--n-procs` runs trajectories in parallel processes. On Linux this usually
 cuts wall-clock time; on macOS and Windows the start-up cost of each process
 can outweigh it.
+Each worker runs NumPy's BLAS library on one thread, so workers do not compete
+for the same cores; the calling process keeps its own thread settings.
 
 ## What you get back
 

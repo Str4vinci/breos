@@ -49,6 +49,7 @@ from breos.execution import (
     aggregate_jit_cache_states,
     backend_provenance,
     config_has_battery,
+    limit_worker_threads,
     observed_jit_cache_state,
     reset_jit_cache_observation,
     validate_execution_backend,
@@ -755,6 +756,12 @@ def _initialize_worker(*context: Any) -> None:
     _WORKER_CONTEXT = context
 
 
+def _initialize_pool_worker(*context: Any) -> None:
+    """Initialise a pool worker: one native thread, then the trajectory inputs."""
+    limit_worker_threads()
+    _initialize_worker(*context)
+
+
 def _run_trajectory_index(run_idx: int) -> tuple[int, dict[str, Any], pd.DataFrame | None, str | None]:
     """Evaluate one deterministic per-run random stream in a worker."""
     if _WORKER_CONTEXT is None:
@@ -942,7 +949,7 @@ def run_montecarlo(
         _initialize_worker(*context)
         outputs = [_run_trajectory_index(run_idx) for run_idx in range(settings.n_runs)]
     else:
-        with Pool(settings.n_procs, initializer=_initialize_worker, initargs=context) as pool:
+        with Pool(settings.n_procs, initializer=_initialize_pool_worker, initargs=context) as pool:
             outputs = pool.map(_run_trajectory_index, range(settings.n_runs))
 
     rows: list[dict[str, Any]] = []

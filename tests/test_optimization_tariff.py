@@ -8,6 +8,7 @@ import pandas as pd
 import pytest
 
 from breos import optimization
+from breos.execution import limit_worker_threads
 from breos.result_schema import RESULT_SCHEMA_VERSION
 from breos.utils import package_version
 
@@ -278,6 +279,25 @@ def test_invalid_tariff_fails_before_starting_workers(tariff_case, monkeypatch):
     monkeypatch.setattr("multiprocessing.Pool", lambda *args, **kwargs: pytest.fail("Started worker pool"))
     with pytest.raises(ValueError, match="tariff.currency"):
         optimization.optimize_system_multi_objective(weather, load, config, n_procs=2)
+
+
+def test_optimizer_workers_start_with_one_native_thread(tariff_case, monkeypatch):
+    pytest.importorskip("pymoo")
+    weather, load, config = tariff_case
+    started = {}
+
+    class PoolStarted(Exception):
+        pass
+
+    def recording_pool(processes, **kwargs):
+        started.update(processes=processes, **kwargs)
+        raise PoolStarted
+
+    monkeypatch.setattr("multiprocessing.Pool", recording_pool)
+    with pytest.raises(PoolStarted):
+        optimization.optimize_system_multi_objective(weather, load, config, n_procs=2)
+
+    assert started == {"processes": 2, "initializer": limit_worker_threads}
 
 
 @pytest.mark.parametrize(
