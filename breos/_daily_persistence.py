@@ -13,6 +13,11 @@ civil day while the App runs. Each day it:
    energy, state of health and resistance-adjusted efficiencies;
 3. solves it and executes the first day's target only.
 
+The optional ``wear_cost_per_kwh`` (ADR 0002 A17) adds a planning weight per
+kWh of DC energy the battery discharges to each solve's cost. It moves only
+the targets the planner picks; the run's money and ageing come from the
+dispatch and the degradation model as before.
+
 Until one complete local day has been observed there is nothing to repeat,
 so the day runs with no grid target: PV charging and the discharge gate
 still apply. The planner prices energy that ends its window below the day's
@@ -193,6 +198,7 @@ class DailyPersistenceController:
             terminal_energy_wh=preserve_start_energy(battery, state.energy_wh, state.soh_fraction, temperature),
             free_terminal=False,
             execution_backend=self.execution_backend,
+            wear_cost_per_kwh=self._wear_cost(),
         )
         # Only today's target is executed; tomorrow is planned again.
         today = daily_target_instructions(_slice(layout, count), (0, count), plan.targets[:1])
@@ -201,6 +207,11 @@ class DailyPersistenceController:
     def _setting(self, name: str) -> int:
         value = getattr(self.spec, name)
         assert isinstance(value, int)
+        return value
+
+    def _wear_cost(self) -> float:
+        value = self.spec.wear_cost_per_kwh
+        assert isinstance(value, float)
         return value
 
 
@@ -245,6 +256,7 @@ def daily_persistence_provenance(
         "forecast_horizon_days": spec.forecast_horizon_days,
         "target_levels": spec.target_levels,
         "soc_states": spec.soc_states,
+        "wear_cost_per_kwh": spec.wear_cost_per_kwh,
         "forecast_policy": FORECAST_POLICY,
         "warm_start_policy": WARM_START_POLICY,
         "planner_terminal_policy": PLANNER_TERMINAL_POLICY,

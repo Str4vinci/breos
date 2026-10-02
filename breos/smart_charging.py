@@ -41,7 +41,7 @@ from typing import Any
 import numpy as np
 
 from breos._controller import ControllerDayDecision, ControllerDayInput
-from breos._daily_targets import DEFAULT_HORIZON_DAYS, DEFAULT_SOC_STATES, DEFAULT_TARGET_LEVELS
+from breos._daily_targets import DEFAULT_HORIZON_DAYS, DEFAULT_SOC_STATES, DEFAULT_TARGET_LEVELS, check_wear_cost
 from breos.dispatch_instructions import DispatchInstructions
 from breos.tariffs import ResolvedTariff
 
@@ -57,6 +57,11 @@ PLANNER_SETTINGS: dict[str, tuple[int, int]] = {
     "target_levels": (DEFAULT_TARGET_LEVELS, 1),
     "soc_states": (DEFAULT_SOC_STATES, 2),
 }
+# The planner's wear cost (ADR 0002 A17), a planner setting that is a price,
+# not an integer: currency per kWh of DC energy the battery discharges.
+WEAR_COST_KEY = "wear_cost_per_kwh"
+# Every planner setting, the integers and the wear cost.
+PLANNER_KEYS = (*PLANNER_SETTINGS, WEAR_COST_KEY)
 # Normal App runs carry stored energy, origin shares and degradation from one
 # project year into the next (ADR 0002, boundary and terminal conventions).
 TERMINAL_CONVENTION = "physical_carry"
@@ -73,7 +78,9 @@ class SmartChargingSpec:
 
     ``fixed_target`` needs ``target_usable_fraction``. ``daily_persistence``
     refuses it, since the planner picks each day's target, and takes the
-    three planner settings instead. ``discharge_only`` takes
+    planner settings instead: three integers and ``wear_cost_per_kwh``, a
+    planning weight in currency per kWh of battery DC discharge (0 when
+    unset). ``discharge_only`` takes
     ``discharge_periods`` alone: it never charges from the grid, so every
     grid-charging setting stays unset. A planner setting left None is filled
     with the planner's default, so a resolved spec always holds the values
@@ -92,6 +99,7 @@ class SmartChargingSpec:
     target_levels: int | None = None
     soc_states: int | None = None
     overlap_policy: str = "reject"
+    wear_cost_per_kwh: float | None = None
 
     def __post_init__(self) -> None:
         if self.mode not in SMART_CHARGING_MODES:
@@ -99,7 +107,7 @@ class SmartChargingSpec:
         check_overlap_policy(self.mode, self.overlap_policy)
         object.__setattr__(self, "charge_periods", tuple(self.charge_periods))
         object.__setattr__(self, "discharge_periods", tuple(self.discharge_periods))
-        planner = {name: getattr(self, name) for name in PLANNER_SETTINGS}
+        planner = {name: getattr(self, name) for name in PLANNER_KEYS}
         if self.mode == "disabled":
             settings = (
                 self.target_usable_fraction,
@@ -122,7 +130,7 @@ class SmartChargingSpec:
                     "charge_periods",
                     "grid_charge_efficiency",
                     "grid_import_limit_w",
-                    *PLANNER_SETTINGS,
+                    *PLANNER_KEYS,
                 )
                 if getattr(self, name) not in (None, ())
             ]
@@ -152,6 +160,8 @@ class SmartChargingSpec:
                 if isinstance(value, bool) or not isinstance(value, Integral) or value < minimum:
                     raise ValueError(f"'smart_charging.{name}' must be an integer of at least {minimum}")
                 object.__setattr__(self, name, int(value))
+            wear = 0.0 if self.wear_cost_per_kwh is None else self.wear_cost_per_kwh
+            object.__setattr__(self, WEAR_COST_KEY, check_wear_cost(wear, f"smart_charging.{WEAR_COST_KEY}"))
         else:
             given = [name for name, value in planner.items() if value is not None]
             if given:

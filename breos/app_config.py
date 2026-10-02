@@ -47,9 +47,11 @@ from breos.resources import load_config_json
 from breos.smart_charging import (
     DISCHARGE_ONLY_MODES,
     OVERLAP_POLICIES,
+    PLANNER_KEYS,
     PLANNER_MODES,
     PLANNER_SETTINGS,
     SMART_CHARGING_MODES,
+    WEAR_COST_KEY,
     SmartChargingSpec,
     check_overlap_policy,
 )
@@ -1861,9 +1863,9 @@ _MODE_REQUIRED = {
 # setting where the grid never charges.
 _GRID_CHARGE_KEYS = ("target_usable_fraction", "charge_periods", "grid_charge_efficiency", "grid_import_limit_w")
 _MODE_REFUSED = {
-    "fixed_target": tuple(PLANNER_SETTINGS),
+    "fixed_target": PLANNER_KEYS,
     "daily_persistence": ("target_usable_fraction",),
-    "discharge_only": (*_GRID_CHARGE_KEYS, *PLANNER_SETTINGS),
+    "discharge_only": (*_GRID_CHARGE_KEYS, *PLANNER_KEYS),
 }
 
 
@@ -1912,6 +1914,7 @@ SMART_CHARGING_TABLE = TableSpec(
         # None, as well as omitting the key, leaves site import unlimited.
         "grid_import_limit_w": number(minimum=0, min_exclusive=True, allow_none=True),
         **{name: integer(minimum=minimum) for name, (_default, minimum) in PLANNER_SETTINGS.items()},
+        WEAR_COST_KEY: number(minimum=0),
     },
     required=frozenset({"mode"}),
     check=_check_smart_charging_keys,
@@ -1944,6 +1947,11 @@ SMART_CHARGING_TABLE = TableSpec(
         "soc_states": (
             f"`daily_persistence` only: stored-energy grid points of the planner's value function. An integer of "
             f"at least {PLANNER_SETTINGS['soc_states'][1]}; default {PLANNER_SETTINGS['soc_states'][0]}"
+        ),
+        WEAR_COST_KEY: (
+            "`daily_persistence` only: a planning weight, in the tariff's currency per kWh of DC energy the "
+            "battery discharges, that the planner adds to each day's cost. Not a degradation model: realised "
+            "ageing still comes from the battery model. At least 0; default 0"
         ),
         "charge_periods": "Tariff periods in which the grid may charge the battery. Not with `discharge_only`",
         "discharge_periods": (
@@ -2047,7 +2055,7 @@ def resolve_smart_charging_spec(
         grid_import_limit_w=table.get("grid_import_limit_w"),
         # Omitted planner settings take the planner's defaults, which the
         # spec then records.
-        **{name: table[name] for name in PLANNER_SETTINGS if name in table},
+        **{name: table[name] for name in PLANNER_KEYS if name in table},
     )
 
 
