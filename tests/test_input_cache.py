@@ -78,6 +78,18 @@ CHANGES = {
     "replacement_cost_learning": {"replacement_cost_learning": 0.03},
     "discount_rate": {"discount_rate": 0.05},
     "tariff": {"tariff": TOU},
+    "reference_tariff": {
+        "reference_tariff": {
+            "currency": "EUR",
+            "import_prices": {"all": 0.30},
+            "fixed_charge_per_day": 0.40,
+            "annual_network_credit": {
+                "amount_per_year": 100.0,
+                "network_fixed_per_year": 40.0,
+                "network_import_prices": {"all": 0.09},
+            },
+        }
+    },
     "smart_charging": {"tariff": TOU, "smart_charging": FIXED_TARGET},
     "emissions_country": {"emissions_country": "ES"},
     "export_emissions_factor_gco2_kwh": {"export_emissions_factor_gco2_kwh": 100.0},

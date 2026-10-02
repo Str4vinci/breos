@@ -559,6 +559,9 @@ INPUT_INDEPENDENT_KEYS: frozenset[str] = frozenset(
         "replacement_cost_learning",
         "discount_rate",
         "tariff",
+        # The no-system reference, with its annual network credit, prices
+        # only the household load.
+        "reference_tariff",
         "smart_charging",
         # Emissions and execution.
         "emissions_country",

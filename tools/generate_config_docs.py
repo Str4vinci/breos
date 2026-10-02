@@ -27,6 +27,7 @@ sys.path.insert(0, str(REPO_ROOT))
 
 from breos import app_config  # noqa: E402
 from breos.app_config import (  # noqa: E402
+    ANNUAL_NETWORK_CREDIT_TABLE,
     APP_CONFIG_FIELDS,
     COSTS_TABLE,
     INDOOR_MODEL_TABLE,
@@ -95,6 +96,15 @@ TABLES: tuple[tuple[str, TableSpec, str], ...] = (
         "[No-system reference tariff](configuration.md#no-system-reference-tariff). It prices the whole household "
         "load and its own fixed charge for the no-system cost, and nothing else: no export, and no effect on the "
         "dispatch. Without a `schedule` or `custom_schedule` it is one flat price, `import_prices = { all = <price> }`.",
+    ),
+    (
+        "annual_network_credit",
+        ANNUAL_NETWORK_CREDIT_TABLE,
+        "An annual reduction of a household's network charges, capped at what it paid for the network that year, "
+        "as `[tariff.annual_network_credit]` (the system household) or `[reference_tariff.annual_network_credit]` "
+        "(the no-system household) in TOML; see [Annual network credit](configuration.md#annual-network-credit). "
+        "The network prices and fixed amount are parts of the tariff's own prices, given gross; they set the cap "
+        "and are never added to the bill.",
     ),
     (
         "terminal_value",

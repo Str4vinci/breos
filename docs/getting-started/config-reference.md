@@ -163,6 +163,7 @@ Time-of-use prices, as `[tariff]` in TOML; see [Time-of-use tariffs](configurati
 | `export_prices` | yes | Export price per kWh by period name, at year-1 prices; `all` prices every period. With month seasons, a table of period prices for every season instead |
 | `import_prices` | yes | Import price per kWh by period name, at year-1 prices; `all` prices every period. With month seasons, a table of period prices for every season instead |
 | `schedule` | exactly one of these | Bundled schedule key, which fixes the periods in local civil time; see [Bundled schedules](../api/tariffs.md#bundled-schedules). Set this or `custom_schedule`, not both |
+| `annual_network_credit` |  | Annual network credit of the system household, capped at its own network charges; see [`annual_network_credit`](#annual_network_credit) |
 | `boundary_policy` |  | How a period boundary inside a step is handled. `strict`, the default, refuses it. One of `strict` |
 | `fixed_charge_per_day` |  | Fixed charge per day, at year-1 prices (default 0) |
 | `study_date` |  | A date in the schedule's effective window, needed when the simulated year is outside it |
@@ -176,11 +177,22 @@ What the household would pay without the system, as `[reference_tariff]` in TOML
 | `currency` | yes | Currency of the prices: EUR. Must be the result's currency: the `[tariff]` currency, or EUR on flat prices |
 | `fixed_charge_per_day` | yes | Fixed charge per day without the system, at year-1 prices; an explicit 0 is valid |
 | `import_prices` | yes | Import price per kWh by period name, at year-1 prices; `all` prices every period. With month seasons, a table of period prices for every season instead. Without a schedule, only `all` |
+| `annual_network_credit` |  | Annual network credit of the no-system household, capped at its own network charges, in the shape of [`annual_network_credit`](#annual_network_credit). Without a schedule, `network_import_prices = { all = <price> }` |
 | `boundary_policy` |  | How a period boundary inside a step is handled, as in `tariff.boundary_policy`; needs a schedule |
 | `custom_schedule` |  | Inline schedule definition of the reference, in the shape of `tariff.custom_schedule`; set this, `schedule`, or neither for one flat price |
 | `import_price_escalation` |  | Annual escalation of the reference energy and fixed charge. Default: the system's import escalation |
 | `schedule` |  | Bundled schedule key of the reference; see [Bundled schedules](../api/tariffs.md#bundled-schedules). Set this, `custom_schedule`, or neither for one flat price |
 | `study_date` |  | A date in the schedule's effective window, as in `tariff.study_date`; needs a schedule |
+
+## annual_network_credit
+
+An annual reduction of a household's network charges, capped at what it paid for the network that year, as `[tariff.annual_network_credit]` (the system household) or `[reference_tariff.annual_network_credit]` (the no-system household) in TOML; see [Annual network credit](configuration.md#annual-network-credit). The network prices and fixed amount are parts of the tariff's own prices, given gross; they set the cap and are never added to the bill.
+
+| Key | Required | Description |
+|---|---|---|
+| `amount_per_year` | yes | Annual reduction of the household's network charges, at year-1 prices; an explicit 0 is valid |
+| `network_fixed_per_year` | yes | Network part of the fixed charge per year, gross, at year-1 prices: at most 365 days of `fixed_charge_per_day`, and never added to it. An explicit 0 is valid |
+| `network_import_prices` | yes | Network part of the import price per kWh, gross, by period name, in the shape of `import_prices`; `all` prices every period. At most the period's import price, and never added to it |
 
 ## terminal_value
 

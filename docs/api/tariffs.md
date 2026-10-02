@@ -224,6 +224,17 @@ the system's grid flows or the dispatch. Its `resolve` method gives a
 `TariffSpec` does, with an export price of 0: the household without a system
 exports nothing.
 
+## Annual network credit
+
+An {class}`~breos.tariffs.AnnualNetworkCredit` is the App's
+[`annual_network_credit`](../getting-started/configuration.md#annual-network-credit)
+table of `[tariff]` or `[reference_tariff]`, held as
+`TariffPrices.annual_network_credit`. It gives an annual amount, the network
+part of the fixed charge, and the network part of each import price, given
+gross. Resolving the tariff adds each step's network price as
+`ResolvedTariff.network_price_per_kwh`. The projection caps each household's
+credit at that year's eligible network charges.
+
 ## Resolution
 
 ```{eval-rst}
@@ -236,6 +247,7 @@ exports nothing.
    breos.tariffs.HolidayCalendar
    breos.tariffs.MonthSeasons
    breos.tariffs.TariffPrices
+   breos.tariffs.AnnualNetworkCredit
    breos.tariffs.TariffSpec
    breos.tariffs.ReferenceTariffSpec
    breos.tariffs.ResolvedTariff

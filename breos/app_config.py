@@ -77,6 +77,7 @@ from breos.tariffs import (
     BOUNDARY_POLICIES,
     SCHEDULE_CYCLES,
     SUPPORTED_CURRENCIES,
+    AnnualNetworkCredit,
     ReferenceTariffSpec,
     ScheduleDefinition,
     TariffPrices,
@@ -1513,6 +1514,7 @@ def _check_tariff_prices(table: dict[str, Any], where: str) -> None:
     if ("schedule" in table) == ("custom_schedule" in table):
         raise ValueError(f"'{where}' must set exactly one of 'schedule' or 'custom_schedule'")
     _check_period_prices(table, where, ("import_prices", "export_prices"))
+    _check_network_credit_periods(table, where)
 
 
 def _check_period_prices(table: dict[str, Any], where: str, names: tuple[str, ...]) -> None:
@@ -1558,6 +1560,51 @@ def _price_entry(value: Any, where: str) -> Any:
 # either level (tariff.import_prices.peak, tariff.import_prices.winter.peak).
 _PRICE_LIST = mapping_of(text, _price_entry, depth=2)
 
+ANNUAL_NETWORK_CREDIT_TABLE = TableSpec(
+    "annual_network_credit",
+    keys={
+        "amount_per_year": number(minimum=0),
+        "network_fixed_per_year": number(minimum=0),
+        "network_import_prices": _PRICE_LIST,
+    },
+    required=frozenset({"amount_per_year", "network_fixed_per_year", "network_import_prices"}),
+    docs={
+        "amount_per_year": "Annual reduction of the household's network charges, at year-1 prices; an explicit 0 is valid",
+        "network_fixed_per_year": (
+            "Network part of the fixed charge per year, gross, at year-1 prices: at most 365 days of "
+            "`fixed_charge_per_day`, and never added to it. An explicit 0 is valid"
+        ),
+        "network_import_prices": (
+            "Network part of the import price per kWh, gross, by period name, in the shape of `import_prices`; "
+            "`all` prices every period. At most the period's import price, and never added to it"
+        ),
+    },
+)
+
+
+def _annual_network_credit(value: Any, where: str) -> dict[str, Any]:
+    return ANNUAL_NETWORK_CREDIT_TABLE.validate(value, where)
+
+
+def _network_credit(table: Mapping[str, Any]) -> AnnualNetworkCredit | None:
+    """The annual network credit a validated [tariff] or [reference_tariff] table sets, or None."""
+    credit = table.get("annual_network_credit")
+    if credit is None:
+        return None
+    return AnnualNetworkCredit(
+        amount_per_year=credit["amount_per_year"],
+        network_fixed_per_year=credit["network_fixed_per_year"],
+        network_import_prices=credit["network_import_prices"],
+    )
+
+
+def _check_network_credit_periods(table: dict[str, Any], where: str) -> None:
+    # The network prices name the schedule's periods, as the import prices do.
+    if "annual_network_credit" in table:
+        credit = {**table, **table["annual_network_credit"]}
+        _check_period_prices(credit, f"{where}.annual_network_credit", ("network_import_prices",))
+
+
 TARIFF_TABLE = TableSpec(
     "tariff",
     keys={
@@ -1569,6 +1616,7 @@ TARIFF_TABLE = TableSpec(
         "fixed_charge_per_day": number(minimum=0),
         "boundary_policy": choice(tuple(sorted(BOUNDARY_POLICIES))),
         "study_date": _tariff_study_date,
+        "annual_network_credit": _annual_network_credit,
     },
     required=frozenset({"currency", "import_prices", "export_prices"}),
     check=_check_tariff_prices,
@@ -1600,6 +1648,10 @@ TARIFF_TABLE = TableSpec(
             + ", ".join(f"`{policy}`" for policy in sorted(BOUNDARY_POLICIES))
         ),
         "study_date": "A date in the schedule's effective window, needed when the simulated year is outside it",
+        "annual_network_credit": (
+            "Annual network credit of the system household, capped at its own network charges; see "
+            "[`annual_network_credit`](#annual_network_credit)"
+        ),
     },
 )
 # Flat-price cost keys a tariff replaces; setting both would price energy twice.
@@ -1666,6 +1718,7 @@ def resolve_tariff_spec(cfg: dict[str, Any], timezone: str) -> TariffSpec | None
         fixed_charge_per_day=table.get("fixed_charge_per_day", 0.0),
         identifier="config",
         version="1",
+        annual_network_credit=_network_credit(table),
     )
     return TariffSpec(
         schedule=schedule,
@@ -1680,12 +1733,19 @@ def _check_reference_prices(table: dict[str, Any], where: str) -> None:
         raise ValueError(f"'{where}' sets both 'schedule' and 'custom_schedule'; set one, or neither for a flat price")
     if "schedule" in table or "custom_schedule" in table:
         _check_period_prices(table, where, ("import_prices",))
+        _check_network_credit_periods(table, where)
         return
     # Without a schedule the reference is one flat price.
     if set(table["import_prices"]) != {"all"} or isinstance(table["import_prices"].get("all"), Mapping):
         raise ValueError(
             f"'{where}' has no schedule, so it is one flat price: set '{where}.import_prices' = {{ all = <price> }}, "
             "or set a schedule or custom_schedule"
+        )
+    network = (table.get("annual_network_credit") or {}).get("network_import_prices")
+    if network is not None and (set(network) != {"all"} or isinstance(network.get("all"), Mapping)):
+        raise ValueError(
+            f"'{where}' has no schedule, so its network price is flat too: set "
+            f"'{where}.annual_network_credit.network_import_prices' = {{ all = <price> }}"
         )
     scheduled = sorted(key for key in ("boundary_policy", "study_date") if key in table)
     if scheduled:
@@ -1705,6 +1765,7 @@ REFERENCE_TARIFF_TABLE = TableSpec(
         "boundary_policy": choice(tuple(sorted(BOUNDARY_POLICIES))),
         "study_date": _tariff_study_date,
         "import_price_escalation": number(minimum=-1, min_exclusive=True),
+        "annual_network_credit": _annual_network_credit,
     },
     required=frozenset({"currency", "import_prices", "fixed_charge_per_day"}),
     check=_check_reference_prices,
@@ -1732,6 +1793,11 @@ REFERENCE_TARIFF_TABLE = TableSpec(
         "study_date": "A date in the schedule's effective window, as in `tariff.study_date`; needs a schedule",
         "import_price_escalation": (
             "Annual escalation of the reference energy and fixed charge. Default: the system's import escalation"
+        ),
+        "annual_network_credit": (
+            "Annual network credit of the no-system household, capped at its own network charges, in the shape of "
+            "[`annual_network_credit`](#annual_network_credit). Without a schedule, "
+            "`network_import_prices = { all = <price> }`"
         ),
     },
 )
@@ -1769,6 +1835,7 @@ def resolve_reference_tariff_spec(
         fixed_charge_per_day=table["fixed_charge_per_day"],
         identifier="reference",
         version="1",
+        annual_network_credit=_network_credit(table),
     )
     return ReferenceTariffSpec(
         prices=prices,

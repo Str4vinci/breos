@@ -601,6 +601,8 @@ COST_PROJECTION_COLUMNS = (
     "Cost_No_Sys_Cumulative",
     "Cost_No_Sys_Import",
     "Cost_No_Sys_Fixed_Charge",
+    "Cost_No_Sys_Network_Charge",
+    "Cost_No_Sys_Network_Credit",
     "PV_Production_kWh",
     "Export_kWh",
     "Degradation_Factor",
@@ -608,6 +610,8 @@ COST_PROJECTION_COLUMNS = (
     "Revenue_Export",
     "Cost_Operation",
     "Cost_Daily",
+    "Cost_Network_Charge",
+    "Cost_Network_Credit",
     "Replacement_Time_Years",
     "Cost_Replacement",
     "Cost_System_Annual",
@@ -664,6 +668,14 @@ def value_year_rows(
     a reference tariff's; None uses the import escalation. Nothing is
     discounted here. ``attrs["total_replacement_cost"]`` is the replacements
     at t = 0 prices.
+
+    Rows with an annual network credit (ADR 0002 A15) carry each credit and
+    its cap basis, the eligible network charges, at year-1 prices:
+    ``Network_Credit`` and ``Network_Charge`` for the system household,
+    ``Baseline_Network_Credit`` and ``Baseline_Network_Charge`` for the
+    no-system one. Each escalates with its household's import prices and is
+    subtracted from its yearly cost, ``Cost_System_Annual`` or
+    ``Cost_No_Sys_Annual``. Rows without them value as before, bit for bit.
     """
     years = year_rows["Year"]
     rates = resolve_escalation_rates(inflation_rate, import_price_escalation, om_escalation)
@@ -686,6 +698,10 @@ def value_year_rows(
     ) * baseline_factors
     flows["Cost_No_Sys_Import"] = year_rows["Baseline_Import_Cost"] * baseline_factors
     flows["Cost_No_Sys_Fixed_Charge"] = year_rows["Baseline_Fixed_Charge"] * baseline_factors
+    if "Baseline_Network_Credit" in year_rows.columns:
+        flows["Cost_No_Sys_Network_Charge"] = year_rows["Baseline_Network_Charge"] * baseline_factors
+        flows["Cost_No_Sys_Network_Credit"] = year_rows["Baseline_Network_Credit"] * baseline_factors
+        flows["Cost_No_Sys_Annual"] = flows["Cost_No_Sys_Annual"] - flows["Cost_No_Sys_Network_Credit"]
     flows["PV_Production_kWh"] = year_rows["PV_Production_kWh"]
     flows["Export_kWh"] = year_rows["Export_kWh"]
     flows["Degradation_Factor"] = year_rows["PV_Degradation_Factor"]
@@ -693,6 +709,9 @@ def value_year_rows(
     flows["Revenue_Export"] = year_rows["Export_Revenue"] * sell_inflation_factors
     flows["Cost_Operation"] = costs["annual_operation_cost"] * om_factors
     flows["Cost_Daily"] = year_rows["Fixed_Charge"] * inflation_factors
+    if "Network_Credit" in year_rows.columns:
+        flows["Cost_Network_Charge"] = year_rows["Network_Charge"] * inflation_factors
+        flows["Cost_Network_Credit"] = year_rows["Network_Credit"] * inflation_factors
 
     # The replacement outlay is booked at the instant the pack is swapped:
     # inflated to it here and discounted from it later. The annual flows
@@ -721,6 +740,8 @@ def value_year_rows(
         + flows["Cost_Daily"]
         + flows["Cost_Replacement"]
     )
+    if "Cost_Network_Credit" in flows.columns:
+        flows["Cost_System_Annual"] = flows["Cost_System_Annual"] - flows["Cost_Network_Credit"]
     flows.attrs["total_replacement_cost"] = replacement_total_t0(replacement_base)
     return flows
 

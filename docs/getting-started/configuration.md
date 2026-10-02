@@ -642,6 +642,57 @@ keys](interpreting-results.md#year-1-money-keys). BREOS does not choose the
 cheapest offer the household could have had: to compare candidates, run each
 one as the reference.
 
+## Annual network credit
+
+Some network tariffs reduce a household's network charges by an annual
+amount that cannot exceed what the household paid for the network that
+year. Stromnetz Berlin's §14a EnWG Modul 1 is one: 146.58 EUR a year, gross,
+capped at the connection's network charges. A household with PV and storage
+imports less, so the cap can bind and it receives less than the same
+household without the system. An `annual_network_credit` table under
+`[tariff]` gives the system household its credit:
+
+```toml
+[tariff.annual_network_credit]
+amount_per_year = 146.58           # the annual reduction
+network_fixed_per_year = 39.70     # network part of the fixed charge
+network_import_prices = { low = 0.0311, standard = 0.0888, high = 0.1659 }
+```
+
+- The household's eligible network charges for a year are its grid import
+  times the network price of each step, plus `network_fixed_per_year`. Its
+  credit is `amount_per_year`, capped at those charges.
+- The network values are the network parts of the tariff's own prices, with
+  the same taxes. They set the cap and are never added to the bill: the
+  import cost and the fixed charge do not change. A period's network price
+  may not exceed its import price, and `network_fixed_per_year` may not
+  exceed 365 days of `fixed_charge_per_day`.
+- `network_import_prices` has the shape of `import_prices`: by period, or by
+  month season and period, with `all` as the fallback. All three keys are
+  required; an explicit 0 is valid.
+- The household without the system gets its own credit, capped at its own
+  network charges on the whole load. Without a `[reference_tariff]` it is the
+  `[tariff]` table. With one, it is
+  `[reference_tariff.annual_network_credit]`, and without that table the
+  household has no credit. A reference without a schedule takes
+  `network_import_prices = { all = <price> }`.
+- Each credit escalates with its household's import prices and lowers that
+  household's yearly cost before NPV and payback. LCOE leaves it out, as it
+  leaves out the other tariff outcomes.
+- A simulated year gets the annual amounts in full, also a leap year. A
+  `[period]` window of `d` civil days gets `d / 365` of them, or `d / 366`
+  in a leap year.
+- The credit never changes the dispatch. `App.revalue` re-prices a credit
+  that is added, changed or removed without simulating again, also under
+  `daily_persistence`. Monte Carlo caps each trajectory at its own import
+  and load, and the projected optimizer's NPV objective includes both
+  credits.
+- This is not a billing engine: metering, control-box and other connection
+  charges are not modelled.
+
+Results then carry each household's eligible network charges and credit;
+see [Year-1 money keys](interpreting-results.md#year-1-money-keys).
+
 ## Smart charging
 
 A `[smart_charging]` table sets when the battery may discharge and when the
