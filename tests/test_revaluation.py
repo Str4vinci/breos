@@ -40,6 +40,13 @@ DAILY_TRI = {**TOU, "schedule": "pt_mainland_2026_daily_tri", "import_prices": T
 WEEKLY_BI = {**TOU, "schedule": "pt_mainland_2026_weekly_bi", "import_prices": {"peak": 0.26, "off_peak": 0.12}}
 WEEKLY_TRI = {**TOU, "schedule": "pt_mainland_2026_weekly_tri", "import_prices": TRI_PRICES}
 REFERENCE = {"currency": "EUR", "import_prices": {"all": 0.30}, "fixed_charge_per_day": 0.40}
+# Annual network credits for the daily bi-hourly and weekly tri-hourly schedules.
+BI_CREDIT = {
+    "amount_per_year": 146.58,
+    "network_fixed_per_year": 39.70,
+    "network_import_prices": {"peak": 0.0888, "off_peak": 0.0311},
+}
+TRI_CREDIT = {**BI_CREDIT, "network_import_prices": {"peak": 0.0888, "mid_peak": 0.0520, "off_peak": 0.0311}}
 # Native and BLAST aging, each with a pack replacement inside the three years.
 GREEDY_15MIN = {
     "native": {**SCENARIOS["native_15min_replacement"], "execution_backend": "python"},
@@ -60,6 +67,19 @@ SCHEDULE_CHANGES = {
         {"tariff": WEEKLY_TRI, "reference_tariff": REFERENCE},
         # A table merges key by key, so the bundled schedule is removed.
         {"tariff": {**SEASONAL_TARIFF, "schedule": None}, "reference_tariff": None},
+    ),
+    # Annual network credits added, replaced and removed (#375).
+    "daily_bi_to_weekly_tri_with_a_credit": (
+        {"tariff": TOU},
+        {"tariff": {**WEEKLY_TRI, "annual_network_credit": TRI_CREDIT}},
+    ),
+    "daily_bi_with_a_credit_to_weekly_tri_with_one": (
+        {"tariff": {**TOU, "annual_network_credit": BI_CREDIT}},
+        {"tariff": {**WEEKLY_TRI, "annual_network_credit": TRI_CREDIT}},
+    ),
+    "daily_bi_with_a_credit_to_weekly_tri_without": (
+        {"tariff": {**TOU, "annual_network_credit": BI_CREDIT}},
+        {"tariff": {**WEEKLY_TRI, "annual_network_credit": None}},
     ),
 }
 
