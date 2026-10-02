@@ -19,9 +19,9 @@ currency-neutral, and removes APIs that nothing used. The main changes:
   periods. Stored energy is tracked by origin, and avoided emissions use net
   exchange. `mode = "daily_persistence"` plans a target each day.
 - `[period]` runs a window shorter than a year, `App.timeseries()` returns
-  the first year step by step, `[terminal_value]` credits the final battery
-  pack's health beside the unadjusted NPV, `inverter_ac_rating_kw` sets the
-  inverter rating, and cached weather may be `.csv.gz`.
+  the first year step by step, `[terminal_value]` reports an estimated
+  battery residual value beside the unadjusted NPV, `inverter_ac_rating_kw`
+  sets the inverter rating, and cached weather may be `.csv.gz`.
 - Hourly weather is resampled to 15 minutes under one `irradiance_resampling`
   policy, without the old cap on diffuse irradiance. This changes 15-minute
   results: on the Porto TMY, annual DHI rises by about 38% and a PV-only
