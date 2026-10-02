@@ -133,8 +133,8 @@ class App:
         ``reference_tariff.import_prices``) replaces the old one whole. Only
         the economics keys in :data:`REVALUATION_KEYS` may change: ``costs``,
         ``cost_preset``, ``tariff``, ``reference_tariff``, the discount rate,
-        the escalators and ``terminal_value``. The terminal-health credit is
-        recomputed from retained final health without simulating again.
+        the escalators and ``terminal_value``. The estimated battery residual
+        value is recomputed from retained final health without simulating again.
 
         When the new prices cannot change the dispatch, the stored simulation
         is re-priced: flat prices, a tariff removed, or a tariff on the same

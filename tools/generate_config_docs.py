@@ -99,8 +99,8 @@ TABLES: tuple[tuple[str, TableSpec, str], ...] = (
     (
         "terminal_value",
         TERMINAL_VALUE_TABLE,
-        'Optional final-pack health credit, as `[terminal_value]` in TOML. `basis` defaults to `"none"`; '
-        "see [Terminal-health credit](configuration.md#terminal-health-credit).",
+        "Optional estimated residual value of the final battery pack, as `[terminal_value]` in TOML. `basis` "
+        'defaults to `"none"`; see [Estimated battery residual value](configuration.md#estimated-battery-residual-value).',
     ),
     (
         "smart_charging",

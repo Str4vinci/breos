@@ -95,23 +95,24 @@ replacement count and costs then leave out that one swap, and
 `battery_soh_end_pct` can end below the end-of-life threshold. See
 [Battery replacement at the end of the horizon](configuration.md#battery-replacement-at-the-end-of-the-horizon).
 
-## Terminal-health credit
+## Estimated battery residual value
 
-The optional [`[terminal_value]`](configuration.md#terminal-health-credit)
-accounting sensitivity adds three fields beside the unchanged `npv_savings`.
-The configuration page gives the formula and what is credited.
+The optional [`[terminal_value]`](configuration.md#estimated-battery-residual-value)
+estimate adds three fields beside the unchanged `npv_savings`, the NPV
+excluding residual value. The configuration page gives the formula, its
+assumption and what is valued.
 
 `terminal_health_credit` is nominal year-T money, priced with the resolved
 replacement-pack price at t = 0, inflated and reduced by replacement
 learning to exactly t = T. `terminal_health_credit_npv` discounts it from T.
-`npv_savings_terminal_adjusted` adds that present value to the unrounded
-unadjusted NPV; each money field is then rounded to two decimals, so the
+`npv_savings_terminal_adjusted`, the NPV including the estimated residual
+value, adds that present value to the unrounded NPV excluding it; each money field is then rounded to two decimals, so the
 reported scalars can differ by a cent from adding rounded values.
-`financial`, paybacks and LCOE exclude the credit.
+`financial`, paybacks and LCOE exclude the residual value.
 
 Disabled App runs and partial `[period]` runs report all three fields as
 null and carry no `provenance.terminal_value`. Enabled PV-only runs report
-zero credits and adjusted NPV equal to unadjusted NPV. Enabled lifetime
+a zero residual value and equal NPVs with and without it. Enabled lifetime
 runs record basis, formula version, unrounded final SOH fraction, physical
 threshold, credited fraction, full replacement price at t = 0 and T,
 inflation, learning, discount rate, horizon, booking time and replacement
@@ -122,7 +123,7 @@ Monte Carlo's `runs` frame has the three fields per trajectory; its
 statistics. Its `provenance.terminal_value.trajectories` records the inputs
 for each numbered run. Disabled values are NaN with no statistics or
 terminal-value provenance. Projected optimization ignores the table and
-ranks on unadjusted NPV.
+ranks on the NPV excluding residual value.
 
 ## Emissions keys
 
@@ -284,7 +285,7 @@ full-year keys, with these differences:
   civil one, a window's month can differ from the full-year run's by the
   hour at the month edge.
 - The lifetime economics are `None`: `npv_savings`, `payback_year`,
-  the three terminal-health fields,
+  the three residual-value fields,
   `lcoe_per_kwh`, `financial`, `battery_replacement_cost_t0_prices`,
   `battery_replacement_cost_npv` and the lifetime CO2 keys. A window has no
   project lifetime to escalate, discount or pay back over. `total_investment`
@@ -402,9 +403,9 @@ by feature:
   Carlo results. Results with a
   [no-system reference tariff](configuration.md#no-system-reference-tariff)
   also carry `provenance.reference_tariff`.
-- **Terminal-health credit.** The three terminal-health fields,
+- **Estimated battery residual value.** The three residual-value fields,
   `terminal_value` in the resolved config and the optional
-  `provenance.terminal_value` are described [above](#terminal-health-credit).
+  `provenance.terminal_value` are described [above](#estimated-battery-residual-value).
 - **Irradiance resampling.** App `provenance.weather` and Monte Carlo
   `settings` and `runtime_weather.metadata` record `irradiance_resampling`
   (requested) and `irradiance_resampling_resolved`, with per-component
