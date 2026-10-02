@@ -32,7 +32,7 @@ breos list battery-models --json
 
 The registry reports stable keys, readable names, chemistry, cell form factor,
 nominal cell capacity, experimental ranges, study citations, capacity and
-resistance outputs, upstream BLAST provenance, and its integration phase. All
+resistance outputs, and upstream BLAST provenance. All
 14 vendored models are discoverable and enabled end to end. Their parameters
 and trajectories are checked against fixtures generated from the pinned,
 unmodified BLAST-Lite source across storage, cycling, temperature, and C-rate
@@ -43,28 +43,21 @@ conditions.
 Resolved settings use this order:
 
 1. explicit user configuration;
-2. sourced model-profile defaults;
-3. global BREOS defaults.
+2. global BREOS defaults.
 
-No BLAST paper bundled here defines generic pack operating limits, so the
-profiles currently contain no invented SOC, efficiency, power, or replacement
-defaults. Existing global settings therefore remain unchanged unless a user
-overrides them.
+Choosing a `blast_model` does not change any operating setting. No BLAST paper
+bundled here defines generic pack operating limits, so BREOS does not invent
+SOC, efficiency, power, or replacement defaults per model. The global settings
+apply unless a user overrides them.
 
-## Migration from `battery_type`
+## Selecting the engine
 
-Do not use the legacy `battery_type` selector in `App` configuration. It was
-ambiguous: it mixed chemistry identity with degradation-model selection.
-Strict `App` validation already rejected this key as unknown in 0.3.4; 0.4.0
-adds targeted migration guidance rather than introducing a new breaking
-change.
-Choose `degradation_engine="native"` (or omit it) for the existing LFP
-Naumann/Lam model. Choose `degradation_engine="blast"` together with one
-stable `blast_model` key for BLAST. Supplying `blast_model` while the native
-engine is active raises instead of silently changing behavior.
-
-The lower-level `BatteryConfig.battery_type` field remains temporarily limited
-to `"lfp"` for native cycle-aging compatibility; it does not select BLAST.
+Choose `degradation_engine="native"` (or omit it) for the LFP Naumann/Lam
+model. Choose `degradation_engine="blast"` together with one stable
+`blast_model` key for BLAST. Supplying `blast_model` while the native engine
+is active raises instead of silently changing behavior. There is no
+`battery_type` selector: `App` rejects it as an unknown key, and
+`BatteryConfig` has no such field.
 
 BLAST selection requires `battery_kwh > 0`; PV-only configurations should keep
 the default native engine and omit `blast_model`.
@@ -86,6 +79,17 @@ one: the Panasonic NCA profile warns after its documented 300-day calendar
 aging horizon. Models without a sourced numeric horizon leave that field
 unknown rather than inventing a limit.
 
-BLAST plus Monte Carlo is rejected explicitly in 0.4.0. It never falls back to
-native degradation. BLAST resistance outputs are reported as capabilities but
-do not alter dispatch efficiency or power limits.
+Monte Carlo rejects BLAST explicitly; it never falls back to native
+degradation. BLAST resistance outputs are reported as capabilities but do not
+alter dispatch efficiency or power limits.
+
+## Model registry
+
+```{eval-rst}
+.. autosummary::
+   :toctree: generated/
+
+   breos.list_battery_models
+   breos.get_battery_model_profile
+   breos.BatteryModelProfile
+```

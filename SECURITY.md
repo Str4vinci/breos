@@ -2,14 +2,11 @@
 
 ## Supported versions
 
-BREOS is pre-1.0 and under active development. Security fixes are applied to the
-latest released version only. Please make sure you are on the most recent
-release before reporting an issue.
-
-| Version | Supported          |
-| ------- | ------------------ |
-| 0.5.x   | :white_check_mark: |
-| < 0.5   | :x:                |
+BREOS is pre-1.0 and under active development. Only the latest published
+release receives security fixes. Earlier releases and unreleased development
+versions, such as the `develop` branch or a version not yet published on PyPI,
+are not supported. Please make sure you are on the most recent release before
+reporting an issue.
 
 ## Reporting a vulnerability
 

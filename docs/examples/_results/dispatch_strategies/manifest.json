@@ -1,0 +1,64 @@
+{
+ "case": "dispatch_strategies",
+ "title": "Dispatch strategies on a bi-hourly tariff",
+ "breos_version": "0.7.0",
+ "git_describe": "v0.6.2-610-gd29419b",
+ "generated_utc": "2026-10-01T20:57:07+00:00",
+ "runtime_s": 9.2,
+ "cheap": false,
+ "configs": {
+  "configs/examples/smart-charging-portugal.toml": "a07d92cece2557fe891c02ebb36c770e80f5fbf675d71bc018f2110125a1ca6e"
+ },
+ "weather": {
+  "validation/data/weather/porto_tmy_2005_2023_pvgis-sarah3.csv.gz": {
+   "sha256": "bf84e31b02ad9bf39f331a5ce8629b1ea8f80cd1597748e72a87a0fce56b4f15",
+   "attribution": "PVGIS typical meteorological year 2005-2023 (PVGIS-SARAH3). PVGIS data © European Union, 2001-2024, reused under Commission Decision 2011/833/EU."
+  }
+ },
+ "dependencies": {
+  "python": "3.12.13",
+  "numpy": "2.4.6",
+  "pandas": "3.0.5",
+  "pvlib": "0.15.2",
+  "scipy": "1.17.1",
+  "numba": "0.66.0",
+  "pymoo": "0.6.2"
+ },
+ "currency": "EUR",
+ "timezone": "Europe/Lisbon",
+ "variants": {
+  "greedy": {
+   "smart_charging": null
+  },
+  "discharge_only": {
+   "smart_charging": {
+    "mode": "discharge_only",
+    "discharge_periods": [
+     "peak"
+    ]
+   }
+  },
+  "fixed_target": {},
+  "hold_target": {
+   "smart_charging": {
+    "mode": "fixed_target",
+    "target_usable_fraction": 0.5,
+    "charge_periods": [
+     "off_peak"
+    ],
+    "discharge_periods": [
+     "peak",
+     "off_peak"
+    ],
+    "grid_charge_efficiency": 0.95,
+    "grid_import_limit_w": 6900,
+    "overlap_policy": "hold_target"
+   }
+  }
+ },
+ "iso_week": 6,
+ "files": {
+  "strategies.csv": "1e8b3c8a26284aa33fe5cf59f34ec149a4eed79e3b35dbae75fba85ff6bbe927",
+  "week_winter.csv": "5d932ee30bf07a4b28028cef8ef6180a8623d9b8028a169473c0175abc3ecb5b"
+ }
+}

@@ -7,11 +7,11 @@ was built for: a parity test over a scenario that never exercises the
 discharge cap passes without testing anything, so every branch case asserts
 its own precondition before asserting parity.
 
-The forthcoming publication study cases do not cover this ground. C1 and C6
-have no battery, and the rest reach their charge and discharge caps only
-through the symmetric 1 C ``power_limit_c_rate`` the configs now set, which
-derives both limits from capacity rather than exercising the absolute caps and
-the binding behaviour the scenarios below are built to vary.
+Typical sizing studies do not cover this ground. PV-only designs have no
+battery, and battery designs often reach their power limits only through a
+symmetric ``power_limit_c_rate``, which caps the stored energy rather than
+exercising the absolute caps and the binding behaviour the scenarios below
+are built to vary.
 """
 
 from __future__ import annotations
@@ -25,29 +25,29 @@ import numpy as np
 import pandas as pd
 import pytest
 
-import breos.battery as battery_module
-from breos._numba_dispatch import _build_kernel
+from breos._numba_dispatch import _dispatch_day_numba, _kernel
 from breos.battery import (
-    _STATE_ROW_INDEX,
+    _ROW,
     BatteryConfig,
+    _ResultBuffers,
     simulate_energy_balance,
     simulate_energy_balance_summary,
 )
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools" / "parity"))
 
-from harness import FREQ, SCENARIOS, build  # noqa: E402
+from harness import FREQ, INSTRUCTION_SCENARIOS, RESOLUTIONS, SCENARIOS, build, build_instructed  # noqa: E402
 
 numba = pytest.importorskip("numba", reason="the compiled backend needs the breos[fast] extra")
 
 
-def _run(name: str, backend: str):
-    pv, load, temp, cfg, sim_kwargs = build(name)
+def _run(name: str, backend: str, freq: str = FREQ):
+    pv, load, temp, cfg, sim_kwargs = (build_instructed if name in INSTRUCTION_SCENARIOS else build)(name, freq)
     return simulate_energy_balance(
         pv_dc=pv,
         houseload=load,
         battery_config=BatteryConfig(**cfg),
-        freq=FREQ,
+        freq=freq,
         temperature_series=temp,
         return_degradation_state=True,
         execution_backend=backend,
@@ -56,8 +56,8 @@ def _run(name: str, backend: str):
 
 
 def _assert_identical(name: str, python_out, numba_out) -> None:
-    py_df, py_total, py_summary, py_cost, py_reps, py_deg = python_out[:6]
-    nb_df, nb_total, nb_summary, nb_cost, nb_reps, nb_deg = numba_out[:6]
+    py_df, py_total, py_summary, py_reps, py_deg = python_out[:5]
+    nb_df, nb_total, nb_summary, nb_reps, nb_deg = numba_out[:5]
 
     assert list(py_df.columns) == list(nb_df.columns)
     for column in py_df.columns:
@@ -74,7 +74,6 @@ def _assert_identical(name: str, python_out, numba_out) -> None:
         )
 
     assert py_total == nb_total
-    assert py_cost == nb_cost
     assert py_reps == nb_reps
     for column in py_deg.columns:
         if column == "Datetime":
@@ -82,57 +81,67 @@ def _assert_identical(name: str, python_out, numba_out) -> None:
         assert np.array_equal(py_deg[column].to_numpy(), nb_deg[column].to_numpy()), f"{name}: degradation {column}"
     for column in py_summary.columns:
         assert py_summary[column].iloc[0] == nb_summary[column].iloc[0], f"{name}: summary {column}"
-    assert python_out[6] == numba_out[6]
+    assert _same_state(python_out[5], numba_out[5]), f"{name}: degradation state differs"
 
 
+def _same_state(left, right) -> bool:
+    """Compare nested degradation state exactly, with NaN equal to NaN.
+
+    The BLAST state carries NaN placeholders in its stressor and rate
+    histories, and ``nan == nan`` is false even for identical states.
+    """
+    if isinstance(left, dict):
+        return (
+            isinstance(right, dict)
+            and left.keys() == right.keys()
+            and all(_same_state(left[key], right[key]) for key in left)
+        )
+    if isinstance(left, (list, tuple)):
+        return (
+            isinstance(right, (list, tuple))
+            and len(left) == len(right)
+            and all(_same_state(a, b) for a, b in zip(left, right))
+        )
+    if isinstance(left, np.ndarray):
+        return isinstance(right, np.ndarray) and np.array_equal(left, right, equal_nan=True)
+    if isinstance(left, float) and isinstance(right, float) and np.isnan(left) and np.isnan(right):
+        return True
+    return type(left) is type(right) and left == right
+
+
+@pytest.mark.parametrize("freq", RESOLUTIONS)
 @pytest.mark.parametrize("scenario", SCENARIOS)
-def test_numba_matches_python_exactly(scenario):
-    _assert_identical(scenario, _run(scenario, "python"), _run(scenario, "numba"))
+def test_numba_matches_python_exactly(scenario, freq):
+    _assert_identical(f"{scenario}@{freq}", _run(scenario, "python", freq), _run(scenario, "numba", freq))
 
 
-def test_single_day_matches():
-    """Validation step 2: one compiled day against one reference day."""
-    _assert_identical("one_day", _run("one_day", "python"), _run("one_day", "numba"))
+@pytest.mark.filterwarnings("ignore::breos.degradation.validation.BlastExperimentalRangeWarning")
+@pytest.mark.parametrize("freq", RESOLUTIONS)
+@pytest.mark.parametrize("scenario", INSTRUCTION_SCENARIOS)
+def test_numba_matches_python_exactly_under_instructions(scenario, freq):
+    python_out = _run(scenario, "python", freq)
+    _assert_identical(f"{scenario}@{freq}", python_out, _run(scenario, "numba", freq))
+    grid_ac = python_out[0]["Grid_AC_To_Battery"]
+    if scenario in ("noop_instructions", "discharge_window"):
+        assert (grid_ac == 0.0).all()
+    else:
+        assert grid_ac.sum() > 0.0, "the scenario must grid-charge"
 
 
-def test_numba_pv_only_summary_uses_common_vectorized_path(monkeypatch):
-    pv, load, temp, cfg, sim_kwargs = build("no_battery")
-    vectorized_calls = []
-    reduced_buffer_calls = []
-    original_dispatch = battery_module._dispatch_no_battery_vectorized
-    original_buffers = battery_module._PvOnlySummaryBuffers
+def test_compiled_backend_compiles_the_python_backends_own_day_loop():
+    """One source: the kernel is built from the function the Python backend runs, not a copy of it."""
+    from breos import _dispatch
 
-    def recording_dispatch(*args, **kwargs):
-        vectorized_calls.append(len(args[1]))
-        return original_dispatch(*args, **kwargs)
-
-    def recording_buffers(n_steps):
-        reduced_buffer_calls.append(n_steps)
-        return original_buffers(n_steps)
-
-    monkeypatch.setattr(battery_module, "_dispatch_no_battery_vectorized", recording_dispatch)
-    monkeypatch.setattr(battery_module, "_PvOnlySummaryBuffers", recording_buffers)
-    result = simulate_energy_balance_summary(
-        pv_dc=pv,
-        houseload=load,
-        battery_config=BatteryConfig(**cfg),
-        freq=FREQ,
-        temperature_series=temp,
-        execution_backend="numba",
-        **sim_kwargs,
-    )
-
-    assert vectorized_calls == [35040]
-    assert reduced_buffer_calls == [35040]
-    assert result.n_steps == 35040
+    assert _kernel().py_func is _dispatch._dispatch_day
 
 
 def test_trailing_partial_day_matches():
-    """A day window that does not close must still dispatch identically."""
+    """A trailing partial day must age the battery identically in both backends."""
     python_out = _run("partial_day", "python")
     assert len(python_out[0]) % 96 != 0, "scenario no longer has a trailing partial day"
-    # One closed day only: the stub contributes no degradation row.
-    assert len(python_out[5]) == 1
+    assert len(python_out[4]) == 2
+    assert python_out[4]["Datetime"].iloc[-1] == python_out[0]["Datetime"].iloc[-1]
+    assert python_out[4]["Cumulative_Calendar_Seconds"].iloc[-1] == pytest.approx(len(python_out[0]) * 900.0)
     _assert_identical("partial_day", python_out, _run("partial_day", "numba"))
 
 
@@ -185,10 +194,10 @@ def test_both_inverter_loss_channels_are_populated():
 
 def test_replacement_at_threshold_matches():
     python_out = _run("replacement", "python")
-    df, deg = python_out[0], python_out[5]
-    assert python_out[4] > 0, "scenario never replaces the pack"
+    df, deg = python_out[0], python_out[4]
+    assert python_out[3] > 0, "scenario never replaces the pack"
     replaced_at = np.flatnonzero(df["Battery_Replaced"].to_numpy())
-    assert replaced_at.size == python_out[4]
+    assert replaced_at.size == python_out[3]
     # A replacement fires on the day the pack crosses end of life, and the
     # closing step's recorded state is rewritten to the fresh pack.
     for step in replaced_at:
@@ -210,15 +219,6 @@ def test_carried_state_between_years_matches():
     assert df["Battery_Energy_Beginning"].iloc[0] > 0.0
     assert df["Battery_PV_Origin_Energy_Beginning"].iloc[0] > 0.0
     _assert_identical("carried_state", python_out, _run("carried_state", "numba"))
-
-
-def test_cycle_counting_boundary_is_unaffected_by_backend():
-    """Degradation is Python-only, so its inputs must arrive bit-identical."""
-    py_deg = _run("baseline", "python")[5]
-    nb_deg = _run("baseline", "numba")[5]
-    for column in ("Cumulative_FEC", "Cumulative_Cycle_Degradation", "Cumulative_Calendar_Degradation", "SOH"):
-        assert np.array_equal(py_deg[column].to_numpy(), nb_deg[column].to_numpy()), column
-    assert py_deg["Cumulative_FEC"].iloc[-1] > 0.0
 
 
 def test_summary_path_matches_detailed_path_under_numba():
@@ -245,9 +245,8 @@ def test_summary_path_matches_detailed_path_under_numba():
 # the loop, so the kernel cannot tell a remapped series from raw weather or a
 # pinned constant. What it does branch on is the *value*: lfp_capacity_factor
 # switches at 25 C and at 0 C and saturates at 0.5, and compute_cell_temperature
-# runs every step. These cases pin bit-identity across the range that the
-# forthcoming publication study can produce, including the fixed 25 C control
-# and the clamp boundaries of the indoor model.
+# runs every step. These cases pin bit-identity across the realistic range,
+# including a fixed 25 C control and the clamp boundaries of the indoor model.
 
 
 def _temperature_variant(values: np.ndarray):
@@ -410,9 +409,10 @@ def test_zeta_squared_must_use_libm_pow_not_the_folded_square():
 
     CPython evaluates ``zeta ** 2`` as a libm ``pow`` call. LLVM rewrites a
     constant-exponent ``pow`` into ``x * x``, and for some inputs libm's
-    ``pow`` and the correctly rounded square differ by one ULP. Simplifying
-    the kernel back to ``zeta ** 2`` would reintroduce that difference, so
-    this test drives the kernel with an input where it shows up.
+    ``pow`` and the correctly rounded square differ by one ULP. Writing the
+    shared inverter core with a literal exponent, ``zeta ** 2`` included,
+    would let the compiled backend fold it, so this test drives the compiled
+    dispatch with an input where the difference shows up.
 
     BREOS promises no bit identity across platforms or libm versions. It does
     promise it between the Python and numba backends on one machine, and that
@@ -437,40 +437,41 @@ def test_zeta_squared_must_use_libm_pow_not_the_folded_square():
         dc_power, ac_rating, efficiency, _folded_square
     ), "input no longer distinguishes libm pow from the folded square"
 
-    kernel = _build_kernel()
-    matrix = np.zeros((37, 1))
-    pv = np.array([dc_power * 4.0])  # Wh at a 15-minute step
-    load = np.zeros(1)
-    temp = np.full(1, 25.0)
-    kernel(
-        matrix,
-        pv,
-        load,
-        temp,
+    # A full pack cannot charge, and with no load the whole step goes through
+    # the direct PV conversion, so its production is the helper's to the bit.
+    config = BatteryConfig(
+        nominal_energy_wh=1000.0, max_soc=0.9, min_soc=0.1, standby_loss_wh=0.0, inverter_efficiency=efficiency
+    )
+    out = _ResultBuffers(1)
+    _dispatch_day_numba(
+        out,
+        np.array([dc_power * 4.0]),  # W at a 15-minute step, so the step carries dc_power Wh
+        np.zeros(1),
+        np.full(1, 25.0),
         0,
         1,
-        0.0,
-        0.0,
-        False,
-        0.0,
-        1.0,
-        100.0,
-        0.9,
-        0.1,
-        0.0,
-        0.95,
-        0.95,
-        efficiency,
-        np.inf,
-        np.inf,
-        ac_rating,
-        False,
-        0.05,
-        0.25,
-        2.0,
-        1.0,
+        battery_config=config,
+        battery_soh_decimal=1.0,
+        Battery_Energy_Wh=900.0,
+        Battery_PV_Origin_Energy_Wh=0.0,
+        Battery_Grid_Origin_Energy_Wh=0.0,
+        eff_charge=0.95,
+        eff_discharge=0.95,
+        hours_per_step=0.25,
+        standby_loss_per_step_wh=0.0,
+        cap_wh=ac_rating,
+        cap_charge_wh=np.inf,
+        cap_discharge_wh=np.inf,
     )
+    assert out.columns["Battery_Charge_Input"][0] == 0.0, "the pack charged, so the step is not all direct PV"
     reference = calculate_dc_ac_power(dc_power, ac_rating, efficiency)
-    assert matrix[_STATE_ROW_INDEX["pv_production"], 0] * 0.25 == pytest.approx(
+    assert out.matrix[_ROW["PV_Production"], 0] * 0.25 == pytest.approx(
         dc_power - reference.clipping_loss_dc_w - reference.conversion_loss_w, abs=0.0, rel=0.0
     )
+
+
+def test_compiled_kernel_does_not_start_its_own_threads():
+    # Parallelism comes only from the n_procs worker processes; a parallel
+    # kernel inside each worker would oversubscribe the machine.
+    options = _kernel().targetoptions
+    assert not options.get("parallel", False)

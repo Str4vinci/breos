@@ -1,20 +1,18 @@
 # Architecture and implementation notes
 
-These documents preserve design context for contributors. They are not part of
-the Read the Docs user site and may describe proposals, superseded approaches,
-or implementation history.
+These documents give contributors design context. They are not part of the
+Read the Docs user site. A note describes either the current design or a
+proposal. Accepted decisions and their reasons are in the
+[architecture decision records](../adr/index.md). Delivery plans are removed
+once they ship; git history keeps them.
 
 | Note | Status |
 |---|---|
-| [Third-party module wrapping](third-party-wrapping.md) | Proposed; tracked by GitHub issue #11 |
-| [String inverter sizing](string-inverter-sizing.md) | Proposed capability |
-| [0.6.x projected optimization plan](0.6x-projected-optimization-plan.md) | Projected-lifetime sizing, detailed source data, Monte Carlo reproducibility, and release gates |
-| [0.7.x tariffs and smart-charging plan](0.7x-tariffs-and-smart-charging-plan.md) | Proposed nonthermal scope: TOU, smart charging, acceleration, economics, and ACC follow-up |
-| [0.4.x refactor and onboarding plan](0.4x-refactor-plan.md) | Historical delivery plan |
-| [0.5.x dead code and bloat cleanup plan](0.5x-cleanup-plan.md) | Active; public deprecations delivered in 0.5.1 |
-| [0.5.x cleanup deprecation audit](0.5x-deprecation-audit.md) | Downstream-search and removal record |
+| [Tariffs and smart charging](tariffs-and-smart-charging.md) | Current design (0.7.0): tariff domain, smart-charging modes, valuation and validation tooling |
+| [Numba dispatch backend](numba-dispatch-backend.md) | Current design: bit-identity contract and backend boundaries |
+| [BLAST degradation engine](blast-degradation-engine.md) | Current design, with deferred Monte Carlo and resistance work |
 | [Battery degradation policy](battery-degradation-policy.md) | Active maintainer policy |
-| [BLAST degradation engine](blast-degradation-engine.md) | Implementation record with deferred work |
+| [String inverter sizing](string-inverter-sizing.md) | Proposed capability |
 
 Use `ROADMAP.md` for public release intent and GitHub issues for active
 discussion. Update user-facing `docs/` only when behavior is implemented and

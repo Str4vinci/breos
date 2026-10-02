@@ -38,9 +38,10 @@ def _golden_battery_inputs():
 
 
 def test_simulate_energy_balance_battery_golden_output():
+    # This two-day dispatch includes cycles that span the daily boundaries.
     pv_dc, load, temperature, config = _golden_battery_inputs()
 
-    results_df, total_pv, summary_df, replacement_cost, n_replacements, degradation_df = simulate_energy_balance(
+    results_df, total_pv, summary_df, n_replacements, degradation_df = simulate_energy_balance(
         pv_dc=pv_dc,
         houseload=load,
         battery_config=config,
@@ -51,22 +52,24 @@ def test_simulate_energy_balance_battery_golden_output():
     _assert_numeric_record(
         summary_df.iloc[0].to_dict(),
         {
-            "Total PV [kWh]": 22.272,
+            # Without an inverter rating, DC sent to the battery counts at its DC
+            # value, as it does with a rating (#214); it used to be scaled by the
+            # inverter efficiency, which gave 22.272.
+            "Total PV [kWh]": 22.472847970810438,
             "Total Load [kWh]": 36.0,
-            "Sell [kWh]": 7.042554072316412,
-            "Import [kWh]": 19.06413916898237,
-            "Import [%]": 52.95594213606214,
-            "Grid Independence [%]": 47.04405786393786,
-            "Final SOH [%]": 99.76714723691977,
+            "Sell [kWh]": 7.039648700549445,
+            "Import [kWh]": 19.061844833215137,
+            "Import [%]": 52.94956898115316,
+            "Grid Independence [%]": 47.05043101884684,
+            "Final SOH [%]": 99.75909416992017,
             "N_Replacements": 0,
-            "Replacement_Cost": 0.0,
+            "Replaced_Capacity_kWh": 0.0,
         },
     )
-    assert total_pv == pytest.approx(22272.0)
-    assert replacement_cost == pytest.approx(0.0)
+    assert total_pv == pytest.approx(22472.84797081044)
     assert n_replacements == 0
     assert len(degradation_df) == 2
-    assert results_df["Battery_Energy"].iloc[-1] == pytest.approx(297.70796832641753)
+    assert results_df["Battery_Energy"].iloc[-1] == pytest.approx(298.067413343493)
 
 
 def test_simulate_energy_balance_15min_golden_output():
@@ -92,12 +95,12 @@ def test_simulate_energy_balance_15min_golden_output():
             "Grid Independence [%]": 69.2,
             "Final SOH [%]": 100.0,
             "N_Replacements": 0,
-            "Replacement_Cost": 0.0,
+            "Replaced_Capacity_kWh": 0.0,
         },
     )
     assert total_pv == pytest.approx(1152.0)
     assert results_df["Import_From_Grid"].sum() * 0.25 / 1000 == pytest.approx(0.308)
-    assert results_df["Sell_To_Grid"].sum() * 0.25 / 1000 == pytest.approx(0.46)
+    assert results_df["PV_AC_Export"].sum() * 0.25 / 1000 == pytest.approx(0.46)
 
 
 def test_cost_analysis_projection_golden_output():
@@ -136,14 +139,12 @@ def test_cost_analysis_projection_golden_output():
     )
 
     projection = cost_analysis_projection(
-        pd.DataFrame(),
+        yearly_summary,
         costs,
         num_years=3,
         inflation_rate=0.02,
         sell_price_inflation=0.01,
         discount_rate=0.03,
-        yearly_summary_df=yearly_summary,
-        total_replacement_cost=800.0,
         emissions_params=EmissionsParams(average_grid_carbon_intensity_gco2_kwh=200.0, country="Testland"),
     )
 

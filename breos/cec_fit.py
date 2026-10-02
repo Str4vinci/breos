@@ -101,9 +101,9 @@ _EMPIRICAL_GUESS = {
 _GAMMA_TOL = 1e-3
 
 
-def _initial_guess(v_mp, i_mp, v_oc, i_sc, cells_in_series, temp_ref):
+def _initial_guess(v_mp, i_mp, v_oc, i_sc, cells_in_series):
     """De Soto five-parameter initial guess (Duffie & Beckman, as in pvlib)."""
-    t_ref_k = temp_ref + 273.15
+    t_ref_k = _TEMP_REF + 273.15
     a0 = 1.5 * _BOLTZMANN_EV_K * t_ref_k * cells_in_series
     i_l0 = i_sc
     i_o0 = i_sc * np.exp(-v_oc / a0)
@@ -123,7 +123,7 @@ def _empirical_guess(celltype, v_mp, i_mp, v_oc, i_sc, cells_in_series):
     return np.array([i_l0, i_o0, r_s0, r_sh0, a0])
 
 
-def _reference_equations(params, v_mp, i_mp, v_oc, i_sc, alpha_eff, beta_eff, temp_ref):
+def _reference_equations(params, v_mp, i_mp, v_oc, i_sc, alpha_eff, beta_eff):
     """Residuals of the five reference-condition constraints (Dobos 2012).
 
     ``params`` is ``[I_L, I_o, R_s, R_sh, a]`` at the reference conditions.
@@ -135,7 +135,7 @@ def _reference_equations(params, v_mp, i_mp, v_oc, i_sc, alpha_eff, beta_eff, te
     coefficient evaluated ``_DELTA_T_VOC`` above the reference (Eq. 22).
     """
     i_l, i_o, r_s, r_sh, a = params
-    t_ref_k = temp_ref + 273.15
+    t_ref_k = _TEMP_REF + 273.15
 
     y = np.empty(5)
     # Short-circuit point: V = 0, I = Isc (Eq. 11).
@@ -159,7 +159,7 @@ def _reference_equations(params, v_mp, i_mp, v_oc, i_sc, alpha_eff, beta_eff, te
     return y
 
 
-def _solve_five_params(adjust, v_mp, i_mp, v_oc, i_sc, alpha_sc, beta_voc, x0, temp_ref):
+def _solve_five_params(adjust, v_mp, i_mp, v_oc, i_sc, alpha_sc, beta_voc, x0):
     """Solve the five reference parameters for a fixed ``Adjust``.
 
     ``alpha_sc`` and ``beta_voc`` are the *unscaled* datasheet coefficients;
@@ -172,7 +172,7 @@ def _solve_five_params(adjust, v_mp, i_mp, v_oc, i_sc, alpha_sc, beta_voc, x0, t
         sol = root(
             _reference_equations,
             x0,
-            args=(v_mp, i_mp, v_oc, i_sc, alpha_eff, beta_eff, temp_ref),
+            args=(v_mp, i_mp, v_oc, i_sc, alpha_eff, beta_eff),
             method="lm",
         )
     return sol.x, sol.success
@@ -228,7 +228,7 @@ def _is_physical(five, adjust):
 _ADJUST_SCAN = np.arange(0.0, 60.0001, 4.0)
 
 
-def _solve_adjust(v_mp, i_mp, v_oc, i_sc, alpha_sc, beta_voc, gamma_pmp, x0, temp_ref):
+def _solve_adjust(v_mp, i_mp, v_oc, i_sc, alpha_sc, beta_voc, gamma_pmp, x0):
     """Find ``Adjust`` so the modeled gamma matches the datasheet ``gamma_pmp``.
 
     ``gamma`` decreases monotonically with ``Adjust`` along a fixed solution
@@ -248,7 +248,7 @@ def _solve_adjust(v_mp, i_mp, v_oc, i_sc, alpha_sc, beta_voc, gamma_pmp, x0, tem
         guess = np.array(x0, dtype=float)
         for step in _ADJUST_SCAN:
             adjust = direction * step
-            five, ok = _solve_five_params(adjust, v_mp, i_mp, v_oc, i_sc, alpha_sc, beta_voc, guess, temp_ref)
+            five, ok = _solve_five_params(adjust, v_mp, i_mp, v_oc, i_sc, alpha_sc, beta_voc, guess)
             if not ok or not _is_physical(five, adjust):
                 break
             gamma = _modeled_gamma(five, adjust, alpha_sc)
@@ -265,20 +265,18 @@ def _solve_adjust(v_mp, i_mp, v_oc, i_sc, alpha_sc, beta_voc, gamma_pmp, x0, tem
         return None
     samples.sort(key=lambda s: s[0])
 
-    for (a_lo, r_lo, five_lo), (a_hi, r_hi, _five_hi) in zip(samples, samples[1:]):
+    for (a_lo, r_lo, five_lo), (a_hi, r_hi, _five_hi) in zip(samples, samples[1:], strict=False):
         if r_lo == 0.0:
             return a_lo, five_lo
         if r_lo * r_hi < 0.0:
             # Refine within the bracket, warm-starting from the low end each call.
             def residual(adjust, _g=np.array(five_lo, dtype=float)):
-                five, _ok = _solve_five_params(adjust, v_mp, i_mp, v_oc, i_sc, alpha_sc, beta_voc, _g, temp_ref)
+                five, _ok = _solve_five_params(adjust, v_mp, i_mp, v_oc, i_sc, alpha_sc, beta_voc, _g)
                 _g[:] = five
                 return _modeled_gamma(five, adjust, alpha_sc) - gamma_pmp
 
             adjust = brentq(residual, a_lo, a_hi, xtol=1e-10, rtol=1e-12)
-            five, _ = _solve_five_params(
-                adjust, v_mp, i_mp, v_oc, i_sc, alpha_sc, beta_voc, np.array(five_lo), temp_ref
-            )
+            five, _ = _solve_five_params(adjust, v_mp, i_mp, v_oc, i_sc, alpha_sc, beta_voc, np.array(five_lo))
             return adjust, five
 
     # No sign change on this branch: return the closest physical sample so the
@@ -297,17 +295,18 @@ def fit_cec_params(
     beta_voc: float,
     gamma_pmp: float,
     cells_in_series: int,
-    temp_ref: float = 25.0,
 ) -> Tuple[float, float, float, float, float, float]:
     """Fit the CEC single-diode reference parameters from datasheet values.
 
-    Drop-in replacement for :func:`pvlib.ivtools.sdm.fit_cec_sam` that needs no
-    ``nrel-pysam``. Implements the coefficient calculator of Dobos 2012
-    (DOI:10.1115/1.4005759) with ``scipy`` and ``pvlib`` only.
+    Replacement for :func:`pvlib.ivtools.sdm.fit_cec_sam` at its default 25 °C
+    reference temperature that needs no ``nrel-pysam``. Implements the
+    coefficient calculator of Dobos 2012 (DOI:10.1115/1.4005759) with ``scipy``
+    and ``pvlib`` only.
 
     Args:
-        celltype: Cell technology label (kept for signature parity with
-            ``fit_cec_sam``; the solver itself is technology-independent).
+        celltype: Cell technology label. It selects the technology-specific
+            empirical initial guess (Dobos §4.3), which the solver tries after
+            the De Soto guess. An unknown label uses the mono-Si row.
         Vmp: Voltage at the maximum-power point [V].
         Imp: Current at the maximum-power point [A].
         Voc: Open-circuit voltage [V].
@@ -316,7 +315,6 @@ def fit_cec_params(
         beta_voc: Open-circuit-voltage temperature coefficient [V/°C].
         gamma_pmp: Maximum-power temperature coefficient [%/°C].
         cells_in_series: Number of cells in series.
-        temp_ref: Reference temperature [°C] (default 25).
 
     Returns:
         ``(I_L_ref, I_o_ref, R_s, R_sh_ref, a_ref, Adjust)`` — the same tuple,
@@ -326,7 +324,7 @@ def fit_cec_params(
         RuntimeError: if no physical parameter set can be found.
     """
     guesses = (
-        _initial_guess(Vmp, Imp, Voc, Isc, cells_in_series, temp_ref),
+        _initial_guess(Vmp, Imp, Voc, Isc, cells_in_series),
         _empirical_guess(celltype, Vmp, Imp, Voc, Isc, cells_in_series),
     )
 
@@ -341,7 +339,7 @@ def fit_cec_params(
     for bump in range(6):
         i_sc = Isc * (1.01**bump)
         for x0 in guesses:
-            result = _solve_adjust(Vmp, Imp, Voc, i_sc, alpha_sc, beta_voc, gamma_pmp, x0, temp_ref)
+            result = _solve_adjust(Vmp, Imp, Voc, i_sc, alpha_sc, beta_voc, gamma_pmp, x0)
             if result is None:
                 continue
             adjust, five = result

@@ -1,5 +1,6 @@
 """Tests for weather and weather-derived helpers."""
 
+import gzip
 import hashlib
 import json
 from pathlib import Path
@@ -7,8 +8,10 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import pytest
+from pvlib.location import Location
 
 from breos.weather import (
+    AmbiguousWeatherError,
     build_battery_temperature_series,
     fetch_tmy_weather_data,
     fetch_weather_data,
@@ -17,10 +20,9 @@ from breos.weather import (
     preload_weather_by_year,
     read_epw_file,
     relabel_right_labeled_interval_means,
-    resample_tmy_to_15min,
     resample_to_15min,
     save_weather_csv,
-    select_random_year_and_replace_datetime,
+    weather_file_metadata,
     weather_representative_time_offset,
 )
 
@@ -108,42 +110,47 @@ def _write_leap_year_15min_weather(tmp_path):
     return path, df
 
 
-@pytest.mark.parametrize(
-    ("radiation_time_basis", "suffix", "label_basis"),
-    [("interval_mean", "", "right"), ("instant", "_instant", "instant")],
-)
-def test_fetch_weather_data_requests_selected_openmeteo_radiation(
-    monkeypatch, radiation_time_basis, suffix, label_basis
-):
-    captured = {}
+def _install_fake_openmeteo(monkeypatch, captured):
+    # The fake replaces attributes of the optional Open-Meteo client modules.
+    pytest.importorskip("requests_cache", reason="the Open-Meteo client needs the breos[weather] extra")
+    pytest.importorskip("openmeteo_requests", reason="the Open-Meteo client needs the breos[weather] extra")
+    """Serve hourly labels from start_date 00:00 to end_date 23:00, as Open-Meteo does."""
 
     class FakeSession:
         def mount(self, *_args, **_kwargs):
             pass
 
     class FakeVariable:
-        def __init__(self, value):
-            self.value = value
+        def __init__(self, values):
+            self.values = values
 
         def ValuesAsNumpy(self):
-            return np.array([self.value], dtype=float)
+            return self.values
 
     class FakeHourly:
+        def __init__(self, params):
+            self.start = pd.Timestamp(params["start_date"])
+            self.end = pd.Timestamp(params["end_date"]) + pd.Timedelta(days=1)
+
         def Time(self):
-            return 0
+            return int(self.start.timestamp())
 
         def TimeEnd(self):
-            return 3600
+            return int(self.end.timestamp())
 
         def Interval(self):
             return 3600
 
         def Variables(self, index):
-            return FakeVariable(index)
+            hours = int((self.end - self.start) / pd.Timedelta(hours=1))
+            return FakeVariable(np.arange(hours, dtype=float) + 1000.0 * index)
 
     class FakeResponse:
+        def __init__(self, params):
+            self.params = params
+
         def Hourly(self):
-            return FakeHourly()
+            return FakeHourly(self.params)
 
     class FakeClient:
         def __init__(self, *, session):
@@ -152,10 +159,21 @@ def test_fetch_weather_data_requests_selected_openmeteo_radiation(
         def weather_api(self, url, *, params):
             captured["url"] = url
             captured["params"] = params
-            return [FakeResponse()]
+            return [FakeResponse(params)]
 
     monkeypatch.setattr("breos.weather.requests_cache.CachedSession", lambda *_args, **_kwargs: FakeSession())
     monkeypatch.setattr("breos.weather.openmeteo_requests.Client", FakeClient)
+
+
+@pytest.mark.parametrize(
+    ("radiation_time_basis", "suffix", "label_basis"),
+    [("interval_mean", "", "right"), ("instant", "_instant", "instant")],
+)
+def test_fetch_weather_data_requests_selected_openmeteo_radiation(
+    monkeypatch, radiation_time_basis, suffix, label_basis
+):
+    captured = {}
+    _install_fake_openmeteo(monkeypatch, captured)
 
     weather = fetch_weather_data(
         latitude=41.1579,
@@ -207,6 +225,108 @@ def test_fetch_weather_data_rejects_unknown_radiation_time_basis():
         )
 
 
+@pytest.mark.parametrize("freq", ["30min", "15T", "H"])
+def test_fetch_weather_data_rejects_unsupported_frequency_before_fetching(monkeypatch, freq):
+    # 30min used to return hourly data without a warning.
+    captured = {}
+    _install_fake_openmeteo(monkeypatch, captured)
+
+    with pytest.raises(ValueError, match="Unsupported frequency"):
+        fetch_weather_data(
+            latitude=41.1579,
+            longitude=-8.6291,
+            start_date="2024-06-01",
+            end_date="2024-06-01",
+            tilt=0,
+            azimuth=0,
+            freq=freq,
+            save_to_file=False,
+        )
+
+    assert "params" not in captured
+
+
+@pytest.mark.parametrize(
+    ("radiation_time_basis", "requested_end", "first_label", "last_label"),
+    [
+        ("interval_mean", "2025-01-01", "2024-01-01 01:00", "2025-01-01 00:00"),
+        ("instant", "2024-12-31", "2024-01-01 00:00", "2024-12-31 23:00"),
+    ],
+)
+def test_fetch_weather_data_covers_the_requested_hours(
+    monkeypatch, radiation_time_basis, requested_end, first_label, last_label
+):
+    captured = {}
+    _install_fake_openmeteo(monkeypatch, captured)
+
+    weather = fetch_weather_data(
+        latitude=41.1579,
+        longitude=-8.6291,
+        start_date="2024-01-01",
+        end_date="2024-12-31",
+        tilt=0,
+        azimuth=0,
+        save_to_file=False,
+        radiation_time_basis=radiation_time_basis,
+    )
+
+    assert captured["params"]["end_date"] == requested_end
+    assert len(weather) == 8784
+    assert weather.index[0] == pd.Timestamp(first_label)
+    assert weather.index[-1] == pd.Timestamp(last_label)
+
+
+def test_fetched_right_labelled_file_keeps_its_last_year(monkeypatch, tmp_path):
+    captured = {}
+    _install_fake_openmeteo(monkeypatch, captured)
+    fetched = fetch_weather_data(
+        latitude=41.1579,
+        longitude=-8.6291,
+        start_date="2022-01-01",
+        end_date="2024-12-31",
+        tilt=0,
+        azimuth=0,
+        location_name="porto",
+        output_dir=str(tmp_path),
+    )
+    path = tmp_path / "porto_historical_2022_2024_openmeteo.csv"
+
+    by_year = preload_weather_by_year(str(path), target_year=2025)
+
+    assert sorted(by_year) == [2022, 2023, 2024]
+    last = by_year[2024]
+    assert len(last) == 8760
+    assert last["date"].iloc[-1] == pd.Timestamp("2025-12-31 23:00")
+    # The mean over 2024-12-31 23:00-24:00 is labelled at the following midnight.
+    midnight_mean = fetched.loc[pd.Timestamp("2025-01-01 00:00"), "shortwave_radiation"]
+    assert last["shortwave_radiation"].iloc[-1] == midnight_mean
+
+
+def _write_right_labelled_file_without_trailing_midnight(tmp_path):
+    path = tmp_path / "historical.csv"
+    dates = pd.date_range("2022-01-01 00:00", "2024-12-31 23:00", freq="h")
+    pd.DataFrame({"date": dates, "shortwave_radiation": 0.0}).to_csv(path, index=False)
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    sidecar = {
+        "schema_version": 1,
+        "weather_sha256": digest,
+        "breos_weather_metadata": {"radiation_time_basis": "interval_mean", "timestamp_label_basis": "right"},
+    }
+    Path(f"{path}.metadata.json").write_text(json.dumps(sidecar))
+    return path
+
+
+def test_preload_weather_by_year_warns_about_the_years_it_skips(tmp_path, caplog):
+    path = _write_right_labelled_file_without_trailing_midnight(tmp_path)
+
+    with caplog.at_level("WARNING", logger="breos.weather"):
+        by_year = preload_weather_by_year(str(path), target_year=2025)
+
+    assert sorted(by_year) == [2022, 2023]
+    assert "2021 (1 of 8760 rows), 2024 (8759 of 8760 rows)" in caplog.text
+    assert "midnight after the last day" in caplog.text
+
+
 def test_battery_temperature_helper_applies_indoor_default():
     idx = pd.date_range("2025-01-01 00:00", periods=2, freq="h", tz="UTC")
     weather = pd.DataFrame({"temp_air": [10.0, 20.0]}, index=idx)
@@ -236,6 +356,39 @@ def test_weather_filename_parser_accepts_locations_with_underscores():
         "year_end": "2024",
         "source": "openmeteo",
     }
+
+
+def test_historical_weather_without_requested_year_coverage_is_not_selected(tmp_path):
+    path = tmp_path / "porto_historical_2020_2021_openmeteo.csv"
+    pd.DataFrame(
+        {"ghi": [0.0, 1.0]},
+        index=pd.date_range("2020-01-01", periods=2, freq="h", tz="UTC"),
+    ).to_csv(path)
+
+    loaded = load_weather("porto", data_type="historical", start_year=2022, end_year=2023, weather_dir=str(tmp_path))
+
+    assert loaded is None
+
+
+def test_ambiguous_weather_files_are_rejected(tmp_path):
+    for filename in (
+        "porto_historical_2018_2024_openmeteo.csv",
+        "porto_historical_2020_2024_openmeteo.csv",
+    ):
+        pd.DataFrame(
+            {"ghi": [0.0, 1.0]},
+            index=pd.date_range("2020-01-01", periods=2, freq="h", tz="UTC"),
+        ).to_csv(tmp_path / filename)
+
+    with pytest.raises(AmbiguousWeatherError, match="Multiple weather files match") as excinfo:
+        load_weather("porto", data_type="historical", start_year=2021, end_year=2022, weather_dir=str(tmp_path))
+
+    assert isinstance(excinfo.value, ValueError)
+    assert excinfo.value.filenames == [
+        "porto_historical_2018_2024_openmeteo.csv",
+        "porto_historical_2020_2024_openmeteo.csv",
+    ]
+    assert excinfo.value.sources == ["openmeteo"]
 
 
 def test_resample_to_15min_keeps_all_slots_in_last_hour():
@@ -272,12 +425,13 @@ def test_resample_to_15min_can_preserve_each_hours_irradiance_energy():
         index=idx,
     )
 
+    weather.attrs["breos_weather_metadata"] = {"radiation_time_basis": "interval_mean", "timestamp_label_basis": "left"}
     resampled = resample_to_15min(
         weather,
         method="linear",
         latitude=41.1579,
         longitude=-8.6291,
-        preserve_irradiance_energy=True,
+        irradiance_resampling="clear_sky_energy_conserving",
     )
 
     for column in ("ghi", "dni", "dhi"):
@@ -294,7 +448,119 @@ def test_clear_sky_resampling_does_not_attenuate_values_at_source_timestamps():
     assert resampled.loc[idx, "ghi"].to_numpy() == pytest.approx(weather["ghi"].to_numpy())
 
 
-def test_fetch_tmy_weather_accepts_hourly_frequency_alias_and_uses_horizon_by_default(monkeypatch):
+def _three_day_hourly_weather(unit: str) -> pd.DataFrame:
+    idx = pd.date_range("2025-06-20", periods=72, freq="h", tz="UTC").as_unit(unit)
+    hour = np.arange(72) % 24
+    daylight = np.clip(np.sin((hour - 6) / 12 * np.pi), 0.0, None)
+    return pd.DataFrame(
+        {
+            "ghi": 800.0 * daylight,
+            "dni": 600.0 * daylight,
+            "dhi": 200.0 * daylight,
+            "temp_air": 18.0 + 6.0 * np.sin((hour - 9) / 24 * 2 * np.pi),
+            "wind_speed": 2.0 + hour / 12.0,
+        },
+        index=idx,
+    )
+
+
+_RESAMPLERS = {
+    "clear_sky_makima": lambda df: resample_to_15min(df, latitude=41.1579, longitude=-8.6291),
+    "clear_sky_linear": lambda df: resample_to_15min(df, method="linear", latitude=41.1579, longitude=-8.6291),
+    "direct_makima": lambda df: resample_to_15min(df),
+}
+
+
+@pytest.mark.parametrize("resampler", sorted(_RESAMPLERS))
+@pytest.mark.parametrize("unit", ["s", "ms", "us"])
+def test_resamplers_do_not_depend_on_the_index_resolution(resampler, unit):
+    """pandas 3 parses timestamps as microseconds, pandas 2 as nanoseconds.
+
+    The resamplers used to divide the raw integers by 10**9, which jittered
+    the microsecond abscissa and made second-resolution input fail outright.
+    """
+    reference = _RESAMPLERS[resampler](_three_day_hourly_weather("ns"))
+    resampled = _RESAMPLERS[resampler](_three_day_hourly_weather(unit))
+
+    assert resampled.index.equals(reference.index)
+    assert resampled.columns.tolist() == reference.columns.tolist()
+    np.testing.assert_array_equal(resampled.to_numpy(), reference.to_numpy())
+
+
+def _hourly_ramp_weather(metadata):
+    """Hourly frame whose columns are linear in time, so Makima reproduces them exactly."""
+    idx = pd.date_range("2025-06-20", periods=48, freq="h", tz="UTC")
+    hours = np.arange(48, dtype=float)
+    if metadata.get("radiation_time_basis") == "interval_mean":
+        # The mean of a linear function over [t, t + 1 h] is its value at t + 30 min.
+        hours = hours + 0.5
+    weather = pd.DataFrame({"temp_air": 10.0 + hours, "wind_speed": 1.0 + 0.1 * hours}, index=idx)
+    weather.attrs["breos_weather_metadata"] = dict(metadata)
+    return weather
+
+
+@pytest.mark.parametrize(
+    ("metadata", "quarter_offset_hours"),
+    [
+        # Left-labelled hourly means: each quarter-hour is the mean over its own
+        # 15 minutes, the ramp's value at the quarter's midpoint.
+        ({"radiation_time_basis": "interval_mean", "timestamp_label_basis": "left"}, 0.125),
+        # Instant samples stay at their labels.
+        ({"radiation_time_basis": "instant", "irradiance_time_offset_hours": 0.0}, 0.0),
+        ({}, 0.0),
+    ],
+)
+def test_resample_interpolates_weather_at_representative_times(metadata, quarter_offset_hours):
+    resampled = resample_to_15min(_hourly_ramp_weather(metadata))
+
+    elapsed_hours = (resampled.index - resampled.index[0]) / pd.Timedelta(hours=1)
+    target_hours = elapsed_hours.to_numpy() + quarter_offset_hours
+    # Leave out the edge quarter-hours, which hold the first or last value.
+    inner = (target_hours >= 1.0) & (target_hours <= 46.0)
+    np.testing.assert_allclose(resampled["temp_air"].to_numpy()[inner], 10.0 + target_hours[inner], atol=1e-9)
+    np.testing.assert_allclose(resampled["wind_speed"].to_numpy()[inner], 1.0 + 0.1 * target_hours[inner], atol=1e-9)
+
+
+def test_resample_moves_right_labelled_means_to_their_interval_before_interpolating():
+    left = _hourly_ramp_weather({"radiation_time_basis": "interval_mean", "timestamp_label_basis": "left"})
+    right = left.copy()
+    right.index = right.index + pd.Timedelta(hours=1)
+    right.attrs["breos_weather_metadata"] = {"radiation_time_basis": "interval_mean", "timestamp_label_basis": "right"}
+
+    from_left = resample_to_15min(left)
+    from_right = resample_to_15min(right)
+
+    assert from_right.index.equals(from_left.index)
+    np.testing.assert_allclose(from_right.to_numpy(), from_left.to_numpy(), atol=1e-12)
+
+
+def test_resample_interpolates_clearness_index_at_interval_midpoints():
+    site = Location(41.1579, -8.6291, altitude=0.0)
+    idx = pd.date_range("2025-06-20", periods=48, freq="h", tz="UTC")
+    epsilon = 5.0  # the resampler's clear-sky guard
+
+    def clearness(hours):
+        return 0.4 + 0.005 * hours
+
+    hour_mid = np.arange(48, dtype=float) + 0.5
+    clear_hourly = site.get_clearsky(idx + pd.Timedelta(minutes=30))["ghi"].to_numpy()
+    weather = pd.DataFrame({"ghi": clearness(hour_mid) * (clear_hourly + epsilon)}, index=idx)
+    weather.attrs["breos_weather_metadata"] = {"radiation_time_basis": "interval_mean", "timestamp_label_basis": "left"}
+
+    resampled = resample_to_15min(
+        weather, latitude=41.1579, longitude=-8.6291, altitude=0.0, irradiance_resampling="clear_sky"
+    )
+
+    quarter_mid = ((resampled.index - idx[0]) / pd.Timedelta(hours=1)).to_numpy() + 0.125
+    clear_15 = site.get_clearsky(resampled.index + pd.Timedelta(minutes=7.5))["ghi"].to_numpy()
+    expected = np.where(clear_15 > 0.0, clearness(quarter_mid) * (clear_15 + epsilon), 0.0)
+    right = np.clip(np.searchsorted(hour_mid, quarter_mid, side="right"), 1, len(hour_mid) - 1)
+    ratio_support = (clear_hourly[right - 1] > epsilon) & (clear_hourly[right] > epsilon)
+    inner = (quarter_mid >= 1.0) & (quarter_mid <= 46.0) & ratio_support
+    np.testing.assert_allclose(resampled["ghi"].to_numpy()[inner], expected[inner], atol=1e-9)
+
+
+def test_fetch_tmy_weather_uses_horizon_by_default(monkeypatch):
     tmy = pd.DataFrame({"ghi": [0.0]}, index=pd.date_range("2020-01-01 00:00", periods=1, freq="h"))
     captured = {}
 
@@ -304,7 +570,7 @@ def test_fetch_tmy_weather_accepts_hourly_frequency_alias_and_uses_horizon_by_de
 
     monkeypatch.setattr("breos.weather.pvlib.iotools.get_pvgis_tmy", fake_get_pvgis_tmy)
 
-    weather, _metadata = fetch_tmy_weather_data(41.0, -8.0, sample_year=None, freq="H")
+    weather, _metadata = fetch_tmy_weather_data(41.0, -8.0, sample_year=None)
 
     assert len(weather) == 1
     assert captured["usehorizon"] is True
@@ -432,26 +698,6 @@ def test_resample_to_15min_preserves_weather_metadata():
     assert metadata is not weather.attrs["breos_weather_metadata"]
 
 
-def test_resample_tmy_to_15min_preserves_weather_metadata():
-    idx = pd.date_range("2025-01-01 00:00", periods=4, freq="h", tz="UTC")
-    weather = pd.DataFrame({"temp_air": [0.0, 4.0, 8.0, 12.0]}, index=idx)
-    weather.attrs["breos_weather_metadata"] = {
-        "source": "test",
-        "horizon": {"status": "applied", "provider": "test", "profile": "test"},
-    }
-    api_metadata = {"inputs": {"location": {"latitude": 41.0, "longitude": -8.0, "elevation": 0.0}}}
-
-    resampled = resample_tmy_to_15min(weather, api_metadata)
-
-    metadata = resampled.attrs["breos_weather_metadata"]
-    assert metadata["source"] == "test"
-    assert metadata["horizon"] == weather.attrs["breos_weather_metadata"]["horizon"]
-    assert metadata["input_resolution"] == "h"
-    assert metadata["output_resolution"] == "15min"
-    assert metadata["irradiance_resampling_method"] == "makima_clear_sky"
-    assert metadata is not weather.attrs["breos_weather_metadata"]
-
-
 def test_fetch_tmy_keeps_utc_instants_for_non_utc_location(monkeypatch):
     # PVGIS serves UTC-ordered rows; synthetic GHI peaks at 11:00 UTC
     # (solar noon near Berlin's longitude). The fetch must roll the data
@@ -528,7 +774,7 @@ def test_fetch_tmy_rejects_fractional_hour_timezone_before_request(monkeypatch):
     assert requested is False
 
 
-def test_read_epw_accepts_15t_frequency_alias(monkeypatch):
+def test_read_epw_resamples_when_15min_is_requested(monkeypatch):
     epw = pd.DataFrame(
         {
             "ghi": [0.0, 10.0],
@@ -553,7 +799,7 @@ def test_read_epw_accepts_15t_frequency_alias(monkeypatch):
     monkeypatch.setattr("breos.weather.pvlib.iotools.read_epw", fake_read_epw)
     monkeypatch.setattr("breos.weather.resample_to_15min", fake_resample)
 
-    weather = read_epw_file("dummy.epw", freq="15T")
+    weather = read_epw_file("dummy.epw", freq="15min")
 
     assert calls == {"method": "makima", "latitude": 41.0, "longitude": -8.0}
     assert weather.attrs["breos_weather_metadata"]["horizon"] == {
@@ -563,21 +809,16 @@ def test_read_epw_accepts_15t_frequency_alias(monkeypatch):
     }
 
 
-def test_select_random_year_accepts_15min_leap_year_after_dropping_feb_29(tmp_path):
-    weather_path, source = _write_leap_year_15min_weather(tmp_path)
+@pytest.mark.parametrize("freq", ["30min", "15T", "H"])
+def test_read_epw_rejects_unsupported_frequency_before_reading(monkeypatch, freq):
+    # 30min used to return the hourly file unchanged.
+    def fail_read_epw(_filepath):
+        raise AssertionError("the file must not be read for an unsupported frequency")
 
-    selected, selected_year = select_random_year_and_replace_datetime(str(weather_path), target_year=2025)
+    monkeypatch.setattr("breos.weather.pvlib.iotools.read_epw", fail_read_epw)
 
-    dates = pd.to_datetime(selected["date"])
-    source_march_1 = source.loc[source["date"] == pd.Timestamp("2024-03-01 00:00"), "temp_air"].item()
-    mapped_march_1 = selected.loc[dates == pd.Timestamp("2025-03-01 00:00"), "temp_air"].item()
-
-    assert selected_year == 2024
-    assert len(selected) == 35040
-    assert not ((dates.dt.month == 2) & (dates.dt.day == 29)).any()
-    assert dates.iloc[0] == pd.Timestamp("2025-01-01 00:00")
-    assert dates.iloc[-1] == pd.Timestamp("2025-12-31 23:45")
-    assert mapped_march_1 == source_march_1
+    with pytest.raises(ValueError, match="Unsupported frequency"):
+        read_epw_file("dummy.epw", freq=freq)
 
 
 def test_preload_weather_by_year_accepts_15min_leap_year_after_dropping_feb_29(tmp_path):
@@ -606,3 +847,104 @@ def test_save_weather_csv_writes_content_bound_metadata(tmp_path):
     payload = json.loads(Path(f"{path}.metadata.json").read_text())
     assert payload["weather_sha256"] == hashlib.sha256(path.read_bytes()).hexdigest()
     assert payload["breos_weather_metadata"]["radiation_time_basis"] == "interval_mean"
+
+
+def test_pre_060_openmeteo_sidecar_reads_as_instant_gmt(tmp_path):
+    # Sidecars written before 0.6.0 carry no timing fields. Their Open-Meteo
+    # files hold instant GMT samples, so the naive-timestamp warning is wrong.
+    weather = pd.DataFrame({"ghi": [0.0, 1.0]}, index=pd.date_range("2020-01-01", periods=2, freq="h", tz="UTC"))
+    weather.attrs["breos_weather_metadata"] = {"source": "OpenMeteo_historical", "radiation_time_basis": "instant"}
+    path = tmp_path / "weather.csv"
+    save_weather_csv(weather, path)
+
+    metadata = weather_file_metadata(path)
+
+    assert metadata["timestamp_label_basis"] == "instant"
+    assert metadata["timestamp_timezone"] == "GMT"
+    assert metadata["irradiance_time_offset_hours"] == 0.0
+
+
+def test_load_weather_finds_a_date_column_in_any_case(tmp_path):
+    csv_path = tmp_path / "lat41_lon-8_tmy_2005_2023_pvgis-sarah3.csv"
+    pd.DataFrame({"station": ["a", "b"], "Date": ["2020-01-01 00:00", "2020-01-01 01:00"], "ghi": [0.0, 1.0]}).to_csv(
+        csv_path, index=False
+    )
+
+    loaded = load_weather("lat41_lon-8", data_type="tmy", weather_dir=str(tmp_path))
+
+    assert isinstance(loaded.index, pd.DatetimeIndex)
+    assert loaded.index.name == "Date"
+    assert loaded["ghi"].tolist() == [0.0, 1.0]
+
+
+# The committed PVGIS TMY for Porto, gzip-compressed, with a sidecar bound to the .gz digest.
+COMMITTED_GZ_TMY = (
+    Path(__file__).resolve().parents[1] / "validation" / "data" / "weather" / "porto_tmy_2005_2023_pvgis-sarah3.csv.gz"
+)
+
+
+def _copy_committed_gz_tmy(directory: Path) -> Path:
+    directory.mkdir(exist_ok=True)
+    target = directory / COMMITTED_GZ_TMY.name
+    target.write_bytes(COMMITTED_GZ_TMY.read_bytes())
+    sidecar = Path(f"{COMMITTED_GZ_TMY}.metadata.json")
+    Path(f"{target}.metadata.json").write_bytes(sidecar.read_bytes())
+    return target
+
+
+def test_weather_filename_parser_accepts_gzip_compressed_csv():
+    assert parse_weather_filename("porto_tmy_2005_2023_pvgis-sarah3.csv.gz") == parse_weather_filename(
+        "porto_tmy_2005_2023_pvgis-sarah3.csv"
+    )
+    assert parse_weather_filename("porto_tmy_2005_2023_pvgis-sarah3.gz") is None
+
+
+def test_load_weather_reads_a_gzip_compressed_csv_like_the_plain_csv(tmp_path):
+    compressed = _copy_committed_gz_tmy(tmp_path / "gz")
+    plain_dir = tmp_path / "plain"
+    plain_dir.mkdir()
+    (plain_dir / compressed.name[: -len(".gz")]).write_bytes(gzip.decompress(compressed.read_bytes()))
+
+    loaded = load_weather("porto", data_type="tmy", weather_dir=str(compressed.parent))
+    reference = load_weather("porto", data_type="tmy", weather_dir=str(plain_dir))
+
+    pd.testing.assert_frame_equal(loaded, reference)
+    assert len(loaded) == 8760 and isinstance(loaded.index, pd.DatetimeIndex)
+    metadata = loaded.attrs["breos_weather_metadata"]
+    assert metadata["path"] == str(compressed.resolve())
+    assert metadata["sha256"] == hashlib.sha256(compressed.read_bytes()).hexdigest()
+    # The sidecar is bound to the compressed file's digest, so its metadata is read.
+    assert metadata["upstream_source"] == "PVGIS_TMY"
+    assert metadata["metadata_sidecar"] == f"{compressed.resolve()}.metadata.json"
+
+
+def test_plain_and_gzip_compressed_copies_of_one_file_are_ambiguous(tmp_path):
+    compressed = _copy_committed_gz_tmy(tmp_path)
+    (tmp_path / compressed.name[: -len(".gz")]).write_bytes(gzip.decompress(compressed.read_bytes()))
+
+    with pytest.raises(AmbiguousWeatherError) as excinfo:
+        load_weather("porto", data_type="tmy", weather_dir=str(tmp_path))
+
+    assert excinfo.value.filenames == [compressed.name[: -len(".gz")], compressed.name]
+
+
+def test_preload_weather_by_year_reads_a_gzip_compressed_csv(tmp_path, write_multiyear_weather):
+    plain = write_multiyear_weather(tmp_path / "porto_historical_2021_2022_openmeteo.csv")
+    compressed = tmp_path / f"{plain.name}.gz"
+    compressed.write_bytes(gzip.compress(plain.read_bytes()))
+
+    by_year = preload_weather_by_year(str(compressed), target_year=2025)
+    reference = preload_weather_by_year(str(plain), target_year=2025)
+
+    assert sorted(by_year) == [2021, 2022]
+    for year, frame in reference.items():
+        pd.testing.assert_frame_equal(by_year[year], frame)
+
+
+def test_preload_weather_by_year_names_a_missing_date_column(tmp_path):
+    # A PVGIS TMY labels its timestamps time(UTC), not date: refuse it clearly.
+    path = tmp_path / "porto_tmy_2005_2023_pvgis-sarah3.csv"
+    path.write_text("time(UTC),ghi,dni,dhi,temp_air,wind_speed\n2025-01-01 00:00:00+00:00,0,0,0,11.7,5.1\n")
+
+    with pytest.raises(ValueError, match="has no 'date' column"):
+        preload_weather_by_year(str(path), target_year=2025)

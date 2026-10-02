@@ -1,0 +1,44 @@
+{
+ "case": "montecarlo",
+ "title": "Monte Carlo over weather years and demand",
+ "breos_version": "0.7.0",
+ "git_describe": "v0.6.2-610-gd29419b",
+ "generated_utc": "2026-10-01T21:00:02+00:00",
+ "runtime_s": 170.6,
+ "cheap": false,
+ "configs": {
+  "configs/examples/montecarlo.toml": "f8aed7e52e2a98849b02c9337dbe73b90ffe1f35e9dcba0ac618cde84cd32442"
+ },
+ "weather": {
+  "validation/data/weather/porto_tmy_2005_2023_pvgis-sarah3.csv.gz": {
+   "sha256": "bf84e31b02ad9bf39f331a5ce8629b1ea8f80cd1597748e72a87a0fce56b4f15",
+   "attribution": "PVGIS typical meteorological year 2005-2023 (PVGIS-SARAH3). PVGIS data © European Union, 2001-2024, reused under Commission Decision 2011/833/EU."
+  },
+  "weather/porto_historical_2005_2024_openmeteo.csv": {
+   "sha256": "cb1d28b19a1f465c81678944981a417f2ba240f2e7441bf14f9ca3be7207d741",
+   "attribution": "Weather data by Open-Meteo.com, licensed CC BY 4.0.",
+   "note": "fetched at regeneration time; not committed"
+  }
+ },
+ "dependencies": {
+  "python": "3.12.13",
+  "numpy": "2.4.6",
+  "pandas": "3.0.5",
+  "pvlib": "0.15.2",
+  "scipy": "1.17.1",
+  "numba": "0.66.0",
+  "pymoo": "0.6.2"
+ },
+ "currency": "EUR",
+ "timezone": "Europe/Lisbon",
+ "history": {
+  "location": "porto",
+  "start": "2005-01-01",
+  "end": "2024-12-31"
+ },
+ "files": {
+  "runs.csv": "ec7e1fea0eb5b851b21011a60a7dfd067d05de4c375692f69d503217fcc112a7",
+  "summary.json": "7b1af4943941dc45610d89c76e656b2e9873aa907c612c399337b5fa0423fa96",
+  "weather_years.csv": "e56deac7c5898d407d3d1f090e57c085a94f13adccf225ee8d9501e4f7a79709"
+ }
+}

@@ -1,0 +1,50 @@
+# Compare three electricity offers, with and without a battery, in one sweep.
+#
+#   breos sweep --config configs/examples/tariff-comparison.toml --output tariff_comparison.csv
+#
+# Each [[sweep.tariff]] table replaces the whole tariff for its runs, so the
+# sweep runs 3 offers x 2 battery sizes = 6 runs. Weather and PV are prepared
+# once and shared by all six. The schedules are bundled (Diretiva ERSE
+# n.º 1/2026); the prices are illustrative, not a supplier's offer. Put the
+# offers you are comparing here.
+#
+# In the CSV, param_tariff holds each run's tariff as JSON. The year-1 money
+# columns (grid_import_cost_year1_prices, grid_export_revenue_year1_prices,
+# fixed_charge_year1_prices) give each offer's first-year bill: import plus
+# fixed charge minus export. npv_savings is the system's saving against no
+# system under the same offer, so it shows where the system pays most, not
+# which offer is cheapest.
+location = "porto"
+n_modules = 10
+annual_consumption_kwh = 4000
+cost_preset = "residential_pt"
+emissions_country = "PT"
+# The tri-hourly schedule changes on the half hour, so it needs 15-minute steps.
+resolution = "15min"
+
+[sweep]
+battery_kwh = [0.0, 5.0]
+
+# Simple: one price at all hours, on any schedule, with an `all` price.
+[[sweep.tariff]]
+schedule = "pt_mainland_2026_daily_bi"
+currency = "EUR"
+import_prices = { all = 0.1950 }
+export_prices = { all = 0.0500 }
+fixed_charge_per_day = 0.30
+
+# Bi-hourly, daily cycle.
+[[sweep.tariff]]
+schedule = "pt_mainland_2026_daily_bi"
+currency = "EUR"
+import_prices = { peak = 0.2310, off_peak = 0.1210 }
+export_prices = { all = 0.0500 }
+fixed_charge_per_day = 0.30
+
+# Tri-hourly, daily cycle.
+[[sweep.tariff]]
+schedule = "pt_mainland_2026_daily_tri"
+currency = "EUR"
+import_prices = { peak = 0.2890, mid_peak = 0.1920, off_peak = 0.1210 }
+export_prices = { all = 0.0500 }
+fixed_charge_per_day = 0.30

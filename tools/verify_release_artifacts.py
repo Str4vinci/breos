@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import json
+import argparse
 import os
 import shutil
 import site
@@ -20,9 +20,8 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 REQUIRED_WHEEL_FILES = {
     "breos/data/configs/locations.json",
     "breos/data/configs/costs.json",
-    "breos/data/configs/electricity.json",
     "breos/data/configs/emissions.json",
-    "breos/data/configs/financials.json",
+    "breos/data/configs/tariffs.json",
     "breos/data/rlp/h0SLP_demandlib_1000kwh_hourly.csv",
     "breos/data/rlp/h0SLP_demandlib_1000kwh_15min.csv",
     "breos/degradation/blast/LICENSE",
@@ -69,7 +68,6 @@ ALLOWED_SDIST_TOP_LEVEL = {
     "docs",
     "maintainers",
     "pyproject.toml",
-    "rlp",
     "tests",
     "tools",
     "uv.lock",
@@ -88,6 +86,16 @@ def _run(
         raise
 
 
+def _artifact_paths(dist_dir: Path) -> tuple[Path, Path]:
+    wheels = sorted(dist_dir.glob("*.whl"))
+    sdists = sorted(dist_dir.glob("*.tar.gz"))
+    if len(wheels) != 1:
+        raise AssertionError(f"Expected exactly one wheel, found {len(wheels)}")
+    if len(sdists) != 1:
+        raise AssertionError(f"Expected exactly one sdist, found {len(sdists)}")
+    return wheels[0], sdists[0]
+
+
 def _build_artifacts(dist_dir: Path) -> tuple[Path, Path]:
     uv = shutil.which("uv")
     if uv is None:
@@ -97,13 +105,7 @@ def _build_artifacts(dist_dir: Path) -> tuple[Path, Path]:
     sys.stdout.write(result.stdout)
     sys.stderr.write(result.stderr)
 
-    wheels = sorted(dist_dir.glob("*.whl"))
-    sdists = sorted(dist_dir.glob("*.tar.gz"))
-    if len(wheels) != 1:
-        raise AssertionError(f"Expected exactly one wheel, found {len(wheels)}")
-    if len(sdists) != 1:
-        raise AssertionError(f"Expected exactly one sdist, found {len(sdists)}")
-    return wheels[0], sdists[0]
+    return _artifact_paths(dist_dir)
 
 
 def _assert_wheel_contents(wheel: Path) -> None:
@@ -194,6 +196,11 @@ def _smoke_test_installed_wheel(wheel: Path, work_dir: Path) -> None:
             if dep_path not in sys.path:
                 sys.path.append(dep_path)
 
+        import numpy as np
+        import pandas as pd
+
+        import breos.app as app_module
+
         import breos
         from breos.app import App
         from breos.degradation.engine import BLAST_MODEL_CLASSES
@@ -209,16 +216,54 @@ def _smoke_test_installed_wheel(wheel: Path, work_dir: Path) -> None:
         if "porto" not in locations:
             raise AssertionError("packaged locations.json did not contain porto")
 
+        tariff_catalog = load_config_json("tariffs.json")
+        if len(tariff_catalog.get("schedules", {})) != 9:
+            raise AssertionError("packaged tariffs.json did not contain the expected schedules")
+
         hourly = rlp_resource("h0SLP_demandlib_1000kwh_hourly.csv")
         if not hourly.is_file():
             raise AssertionError(f"packaged RLP file is missing: {hourly}")
 
-        profile = load_profile("1", 1000, start_date="2025-01-01", freq="h", timezone="UTC")
+        profile = load_profile("demandlib_h0", 1000, start_date="2025-01-01", freq="h", timezone="UTC")
         if len(profile) != 8760:
             raise AssertionError(f"unexpected hourly load profile length: {len(profile)}")
 
-        app = App({"location": "porto", "n_modules": 1, "annual_consumption_kwh": 1000})
-        if app._cfg["location"] != "porto":
+        idx = pd.date_range("2023-01-01", periods=8760, freq="h", tz="UTC")
+        hours = np.arange(len(idx), dtype=float)
+        day_of_year = hours / 24.0
+        hour_of_day = hours % 24
+        solar_angle = np.clip(np.sin((hour_of_day - 6) / 12 * np.pi), 0, 1)
+        seasonal = 0.6 + 0.4 * np.sin((day_of_year - 80) / 365 * 2 * np.pi)
+        ghi = solar_angle * seasonal * 800
+        weather = pd.DataFrame(
+            {
+                "ghi": ghi,
+                "dni": ghi * 0.7,
+                "dhi": ghi * 0.3,
+                "temp_air": 15 + 8 * np.sin((day_of_year - 80) / 365 * 2 * np.pi),
+                "wind_speed": 3.0,
+            },
+            index=idx,
+        )
+        app_module.load_weather = lambda **kwargs: None
+        app_module.fetch_tmy_weather_data = lambda **kwargs: (
+            weather.copy(),
+            {"inputs": {"location": {"latitude": 41.15, "longitude": -8.63, "elevation": 0}}},
+        )
+
+        app = App(
+            {
+                "location": "porto",
+                "n_modules": 1,
+                "annual_consumption_kwh": 1000,
+                "projection_years": 1,
+            }
+        )
+        app.simulate()
+        result = app.result()
+        if len(result["yearly"]) != 1 or result["usable_ac_system_production_kwh"] <= 0:
+            raise AssertionError("installed wheel did not produce a simulated PV result")
+        if app._resolved.cfg["location"] != "porto":
             raise AssertionError("App did not resolve packaged configuration")
 
         profiles = breos.list_battery_models()
@@ -247,6 +292,7 @@ def _smoke_test_installed_wheel(wheel: Path, work_dir: Path) -> None:
                 {
                     "breos_file": str(breos_file),
                     "profile_rows": len(profile),
+                    "simulated_usable_ac_system_production_kwh": result["usable_ac_system_production_kwh"],
                     "blast_models": len(profiles),
                     "blast_upstream": f"{BLAST_UPSTREAM_VERSION}@{BLAST_UPSTREAM_COMMIT}",
                 }
@@ -263,12 +309,23 @@ def _smoke_test_installed_wheel(wheel: Path, work_dir: Path) -> None:
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--dist-dir",
+        type=Path,
+        help="verify artifacts already built in this directory instead of building a fresh pair",
+    )
+    args = parser.parse_args()
+
     with tempfile.TemporaryDirectory(prefix="breos-release-") as tmp:
         work_dir = Path(tmp)
-        dist_dir = work_dir / "dist"
-        dist_dir.mkdir()
+        if args.dist_dir is None:
+            dist_dir = work_dir / "dist"
+            dist_dir.mkdir()
+            wheel, sdist = _build_artifacts(dist_dir)
+        else:
+            wheel, sdist = _artifact_paths(args.dist_dir.resolve())
 
-        wheel, sdist = _build_artifacts(dist_dir)
         _assert_wheel_contents(wheel)
         _assert_sdist_contents(sdist)
         _smoke_test_installed_wheel(wheel, work_dir)

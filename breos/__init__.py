@@ -24,17 +24,13 @@ Usage:
 """
 
 # Version — resolved from the installed package metadata so it always matches
-# the version declared in pyproject.toml (the single source of truth). This is
-# the same mechanism used by breos/cli.py and docs/conf.py, which keeps the
-# literal from drifting out of sync with the distribution version on a release.
-from importlib import import_module
-from importlib.metadata import PackageNotFoundError
-from importlib.metadata import version as _version
+# the version declared in pyproject.toml (the single source of truth). The CLI
+# and result provenance read the same helper, and docs/conf.py the same
+# metadata, which keeps the literal from drifting out of sync with the
+# distribution version on a release.
+from breos.utils import package_version as _package_version
 
-try:
-    __version__ = _version("breos")
-except PackageNotFoundError:  # running from a source tree without an install
-    __version__ = "0.0.0+unknown"
+__version__ = _package_version()
 
 # Public facade
 from breos.app import App
@@ -43,51 +39,7 @@ from breos.app import App
 from breos.battery import (
     BatteryConfig,
     apply_indoor_temperature_model,
-    compute_cell_temperature,
-    detect_cycles_rainflow,
-    detect_half_cycles_from_soc_series,
-    k_c_rate_R,
-    k_doc_R,
-    resistance_to_efficiency,
     simulate_energy_balance,
-    update_battery_resistance_calendar,
-    update_battery_resistance_cyclewise,
-    update_battery_soh_calendar,
-    update_battery_soh_cyclewise,
-)
-
-# Constants
-from breos.constants import (
-    A_Q,
-    A_R,
-    B_Q,
-    B_R,
-    C_DOC_Q,
-    C_DOC_R,
-    D_DOC_Q,
-    D_DOC_R,
-    DEFAULT_CHARGE_EFFICIENCY,
-    DEFAULT_DISCHARGE_EFFICIENCY,
-    DEFAULT_INDOOR_CEILING_C,
-    DEFAULT_INDOOR_COUPLING_ALPHA,
-    DEFAULT_INDOOR_FLOOR_C,
-    DEFAULT_INDOOR_SETPOINT_C,
-    DEFAULT_MAX_SOC,
-    DEFAULT_MIN_SOC,
-    LAM_EA_J_MOL,
-    LAM_EXPONENT_B,
-    LAM_K0_FRAC,
-    LAM_SOC_EXPONENT_N,
-    NAUMANN_EA_J_MOL,
-    NAUMANN_EA_R_J_MOL,
-    NAUMANN_EXPONENT_B,
-    NAUMANN_K0_PERCENT,
-    NAUMANN_K0_R_PERCENT,
-    NAUMANN_SOC_EXPONENT_N,
-    R_GAS,
-    T_REF_K,
-    Z_Q,
-    Z_R,
 )
 
 # Battery degradation model discovery
@@ -102,7 +54,6 @@ from breos.degradation import (
 from breos.economics import (
     CostParams,
     calculate_costs,
-    calculate_lcoe,
     calculate_lcoe_from_projection,
     cost_analysis_projection,
     cost_params_from_config,
@@ -113,30 +64,26 @@ from breos.economics import (
 from breos.emissions import (
     EmissionsParams,
     calculate_co2_projection,
-    calculate_co2_savings,
 )
 
 # Inverter
 from breos.inverter import (
-    INVERTER_PRESETS,
-    InverterConfig,
     InverterConversionResult,
     calculate_dc_ac_power,
     dc_power_for_ac_output,
-    get_inverter_preset,
 )
 
 # I/O (export/import functions)
 from breos.io import (
-    export_cost_analysis,
+    InputRepairReport,
     export_results,
     export_summary,
     load_results,
+    repair_series,
 )
 
 # Load Profiles
 from breos.load_profiles import (
-    align_load_to_pv,
     load_profile,
     scale_to_annual_consumption,
 )
@@ -145,6 +92,8 @@ from breos.load_profiles import (
 from breos.montecarlo import (
     MonteCarloResult,
     MonteCarloSettings,
+    MonteCarloYearCache,
+    build_year_cache,
     run_montecarlo,
 )
 
@@ -153,14 +102,11 @@ from breos.optimization import (
     OptimizationResult,
     ProjectedDesignResult,
     evaluate_projected_design,
-    optimize_battery_size,
     optimize_system_multi_objective,
-    optimize_tilt,
 )
 
 # PV Module Database
 from breos.pv_modules import (
-    MODULES,
     get_module,
     get_module_info,
     list_modules,
@@ -178,91 +124,13 @@ from breos.solar import (
     estimate_optimal_tilt,
 )
 
-# Utils
-from breos.utils import (
-    get_hours_per_step,
-    get_steps_per_day,
-    get_steps_per_year,
-    is_leap_year,
-    remap_datetime_index_years,
-)
-
 # Weather
 from breos.weather import (
-    build_battery_temperature_series,
-    extract_ambient_temperature,
     fetch_tmy_weather_data,
     fetch_weather_data,
     load_weather,
-    parse_weather_filename,
-    preload_weather_by_year,
     read_epw_file,
-    resample_tmy_to_15min,
-    resample_to_15min,
-    select_random_year_and_replace_datetime,
 )
-
-# Plotting functions historically remain available as top-level attributes, but
-# importing core BREOS or invoking a non-plotting CLI command must not initialize
-# Matplotlib. PEP 562 module attribute hooks preserve those compatibility names
-# while deferring the optional plotting stack until a caller actually uses it.
-_LAZY_PLOTTING_EXPORTS = frozenset(
-    {
-        "create_cost_plots",
-        "degradation_plots",
-        "monthly_graphs",
-        "plot_azitilt_ew_1d",
-        "plot_azitilt_landscape_2d",
-        "plot_azitilt_landscape_3d",
-        "plot_battery_soh_timeseries",
-        "plot_breakeven",
-        "plot_breakeven_comparison",
-        "plot_breakeven_two",
-        "plot_calendar_aging_sensitivity",
-        "plot_cell_temperature",
-        "plot_co2_savings",
-        "plot_grid_independence_heatmap",
-        "plot_location_comparison_delta",
-        "plot_montecarlo_final_soh_distribution",
-        "plot_montecarlo_grid_independence_distribution",
-        "plot_montecarlo_npv_distribution",
-        "plot_montecarlo_simulation",
-        "plot_monthly_balance",
-        "plot_monthly_comparison",
-        "plot_pareto_front_analysis",
-        "plot_pv_loss_waterfall",
-        "plot_resistance_and_efficiency",
-        "plot_tilt_optimization",
-        "plot_timeseries",
-        "plot_validation_degradation_split",
-        "plot_validation_multi_system",
-        "plot_validation_parity",
-        "plot_validation_residuals",
-        "plot_validation_soh_comparison",
-        "plot_weather_annual_ghi_distribution",
-        "plot_weather_monthly_comparison",
-        "set_presentation_mode",
-        "weekly_graphs",
-        "yearly_graphs",
-    }
-)
-
-
-def __getattr__(name: str):
-    """Resolve compatibility plotting attributes without eager imports."""
-
-    if name not in _LAZY_PLOTTING_EXPORTS:
-        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-    value = getattr(import_module("breos.plotting"), name)
-    globals()[name] = value
-    return value
-
-
-def __dir__() -> list[str]:
-    """Include lazy compatibility attributes in interactive discovery."""
-
-    return sorted(set(globals()) | _LAZY_PLOTTING_EXPORTS)
-
 
 __all__ = [
     # Public facade
@@ -273,7 +141,6 @@ __all__ = [
     "BatteryConfig",
     "CostParams",
     "EmissionsParams",
-    "InverterConfig",
     "InverterConversionResult",
     "OptimizationResult",
     "PVModuleParams",
@@ -297,9 +164,7 @@ __all__ = [
     # Load Profiles
     "load_profile",
     "scale_to_annual_consumption",
-    "align_load_to_pv",
     # Inverter
-    "get_inverter_preset",
     "calculate_dc_ac_power",
     "dc_power_for_ac_output",
     # Battery
@@ -310,27 +175,28 @@ __all__ = [
     "BatteryModelProfile",
     "BATTERY_MODEL_REGISTRY",
     # Emissions
-    "calculate_co2_savings",
     "calculate_co2_projection",
     # Economics
     "calculate_costs",
     "cost_analysis_projection",
     "cost_params_from_config",
     "find_payback_year",
-    "calculate_lcoe",
     "calculate_lcoe_from_projection",
     # Optimization
-    "optimize_tilt",
-    "optimize_battery_size",
     "optimize_system_multi_objective",
     "evaluate_projected_design",
     "ProjectedDesignResult",
     # Monte Carlo
     "run_montecarlo",
+    "build_year_cache",
     "MonteCarloSettings",
     "MonteCarloResult",
+    "MonteCarloYearCache",
     # I/O
     "export_results",
     "export_summary",
     "load_results",
+    # Input repair
+    "repair_series",
+    "InputRepairReport",
 ]

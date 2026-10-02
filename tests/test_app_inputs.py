@@ -4,11 +4,13 @@ from types import SimpleNamespace
 
 import pandas as pd
 
+from breos.app_config import resolve_app_config
 from breos.app_inputs import (
     AppRuntimeDependencies,
     load_weather_for_simulation,
     prepare_simulation_inputs,
     remap_tmy_year,
+    weather_input_frequency,
 )
 
 
@@ -31,8 +33,8 @@ def test_remap_tmy_year_preserves_weather_metadata():
 
 def test_load_weather_for_simulation_marks_injected_weather_horizon_unknown(tmp_path):
     weather = pd.DataFrame(
-        {"ghi": [0.0, 1.0]},
-        index=pd.date_range("2020-01-01", periods=2, freq="h", tz="UTC"),
+        {"ghi": 0.0},
+        index=pd.date_range("2021-01-01", periods=8760, freq="h", tz="UTC"),
     )
     deps = AppRuntimeDependencies(
         load_profile=lambda **kwargs: None,
@@ -80,17 +82,33 @@ def test_prepare_inputs_threads_explicit_battery_temperature(monkeypatch):
         resample_to_15min=lambda frame, **kwargs: frame,
         build_battery_temperature_series=temperature_builder,
     )
-    cfg = {
-        "resolution": "h",
-        "start_date": "2025-01-01",
-        "horizon_profile": None,
-        "solar_position": "interval-start",
-        "battery_temperature": 25.0,
-        "battery_indoor_model": {"enabled": False},
-    }
-    resolved = SimpleNamespace(timezone="UTC")
+    resolved = resolve_app_config(
+        {
+            "location": {"latitude": 41.0, "longitude": -8.0, "timezone": "UTC"},
+            "n_modules": 1,
+            "annual_consumption_kwh": 1000,
+            "battery_temperature": 25.0,
+            "battery_indoor_model": {"enabled": False},
+        }
+    )
 
-    prepared = prepare_simulation_inputs(cfg, resolved, deps)
+    prepared = prepare_simulation_inputs(resolved.cfg, resolved, deps)
 
     assert prepared.temperature_series.tolist() == [25.0, 25.0]
     assert captured == {"temp_config": 25.0, "indoor_model": {"enabled": False}}
+
+
+def test_weather_input_frequency_falls_back_to_the_first_step():
+    def frame(index):
+        return pd.DataFrame({"ghi": 0.0}, index=index)
+
+    hourly = pd.date_range("2025-01-01", periods=24, freq="h", tz="UTC")
+
+    assert weather_input_frequency(frame(hourly)) == "h"
+    assert weather_input_frequency(frame(pd.date_range("2025-01-01", periods=8, freq="15min", tz="UTC"))) == "15min"
+    # Too few rows for pandas to infer a frequency.
+    assert weather_input_frequency(frame(hourly[:2])) == "h"
+    # An early gap makes the first ten steps irregular, so App resamples by
+    # the first step as Monte Carlo does, and the resampler fills the gap.
+    assert weather_input_frequency(frame(hourly.delete(5))) == "h"
+    assert weather_input_frequency(frame(hourly[:1])) is None

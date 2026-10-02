@@ -1,42 +1,52 @@
 """Tests for load profile helpers."""
 
+import hashlib
+import shutil
+from datetime import date, timedelta
+from importlib.resources import as_file
+
 import numpy as np
 import pandas as pd
 import pytest
 
-from breos.load_profiles import _extend_to_years, load_profile
+from breos.load_profiles import (
+    PROFILE_KEYS,
+    PROFILES,
+    _btn_day_type,
+    _easter_sunday,
+    _parse_profile_timestamps,
+    _portugal_national_holidays,
+    _resample_load_to_15min,
+    load_profile,
+    resolve_profile_key,
+)
+from breos.resources import rlp_resource
+from tools import convert_eredes_profiles as convert_eredes
+
+_LOAD_COLUMN = "Electrical Consumption [W]"
 
 
-def test_extend_to_years_duplicates_feb_28_for_leap_day_without_shifting_rest():
-    idx = pd.date_range("2023-01-01 00:00", periods=8760, freq="h", tz="UTC")
-    profile = pd.DataFrame({"Load": np.arange(len(idx), dtype=float)}, index=idx)
-
-    extended = _extend_to_years(profile, start_year=2024, num_years=1)
-
-    feb_28 = extended.loc[pd.Timestamp("2024-02-28 12:00", tz="UTC"), "Load"]
-    feb_29 = extended.loc[pd.Timestamp("2024-02-29 12:00", tz="UTC"), "Load"]
-    mar_1 = extended.loc[pd.Timestamp("2024-03-01 00:00", tz="UTC"), "Load"]
-    source_mar_1 = profile.loc[pd.Timestamp("2023-03-01 00:00", tz="UTC"), "Load"]
-
-    assert len(extended) == 8784
-    assert feb_29 == pytest.approx(feb_28)
-    assert mar_1 == pytest.approx(source_mar_1)
-
-
-def test_load_profile_accepts_aliases_and_15t_frequency():
-    profile = load_profile("bdew_h0", 1000, freq="15T")
+def test_load_profile_is_case_insensitive_at_15min():
+    profile = load_profile("DemandLib_H0", 1000, freq="15min")
     annual_kwh = profile["Electrical Consumption [W]"].sum() * 0.25 / 1000
 
     assert len(profile) == 35040
     assert annual_kwh == pytest.approx(1000)
 
 
+@pytest.mark.parametrize("freq", ["30min", "15T", "H"])
+def test_load_profile_rejects_unsupported_frequency(freq):
+    # 30min used to return the hourly profile unchanged.
+    with pytest.raises(ValueError, match="Unsupported frequency"):
+        load_profile("demandlib_h0", 1000, freq=freq)
+
+
 def test_load_profile_pins_rows_to_local_wall_clock_across_dst():
     # Household behavior follows the legal clock, so a localized profile must
     # keep each row's wall-clock label year-round (UTC instants shift by the
     # DST offset) — an instant-spaced index would only shift the start.
-    utc_prof = load_profile("1", 5000, freq="h", timezone="UTC").iloc[:, 0]
-    loc_prof = load_profile("1", 5000, freq="h", timezone="Europe/Berlin").iloc[:, 0]
+    utc_prof = load_profile("demandlib_h0", 5000, freq="h", timezone="UTC").iloc[:, 0]
+    loc_prof = load_profile("demandlib_h0", 5000, freq="h", timezone="Europe/Berlin").iloc[:, 0]
 
     idx = loc_prof.index
     assert len(loc_prof) == 8760
@@ -56,11 +66,151 @@ def test_load_profile_pins_rows_to_local_wall_clock_across_dst():
 
 
 def test_load_profile_utc_default_keeps_legacy_convention():
-    profile = load_profile("1", 1000, freq="h")
+    profile = load_profile("demandlib_h0", 1000, freq="h")
 
     assert str(profile.index.tz) == "UTC"
     assert profile.index[0] == pd.Timestamp("2025-01-01 00:00", tz="UTC")
     assert len(profile) == 8760
+
+
+@pytest.mark.parametrize("freq", ["h", "15min"])
+def test_bundled_h0_uses_the_target_years_day_types(freq):
+    source = load_profile("demandlib_h0", 1000, start_date="2023-01-01", freq=freq, timezone="UTC").iloc[:, 0]
+    target = load_profile("demandlib_h0", 1000, start_date="2025-01-01", freq=freq, timezone="UTC").iloc[:, 0]
+
+    def shape(values):
+        return values.to_numpy() / values.sum()
+
+    # 8 January is Sunday in the source year but Wednesday in the study year.
+    # The nearest source weekday is Monday 9 January; the source Sunday must
+    # still be used for a target Sunday.
+    np.testing.assert_allclose(shape(target.loc["2025-01-08"]), shape(source.loc["2023-01-09"]), atol=1e-14)
+    np.testing.assert_allclose(shape(target.loc["2025-01-05"]), shape(source.loc["2023-01-08"]), atol=1e-14)
+    assert not np.allclose(shape(target.loc["2025-01-08"]), shape(source.loc["2023-01-08"]))
+    assert target.sum() * (0.25 if freq == "15min" else 1.0) / 1000 == pytest.approx(1000)
+
+
+@pytest.mark.parametrize("freq", ["h", "15min"])
+def test_bundled_h0_leap_day_uses_its_real_day_type(freq):
+    source = load_profile("demandlib_h0", 1000, start_date="2023-01-01", freq=freq, timezone="UTC").iloc[:, 0]
+    target = load_profile("demandlib_h0", 1000, start_date="2020-01-01", freq=freq, timezone="UTC").iloc[:, 0]
+
+    # 29 February 2020 was Saturday. The nearest source Saturday to the
+    # non-leap 28 February anchor is 25 February 2023.
+    leap_shape = target.loc["2020-02-29"].to_numpy() / target.loc["2020-02-29"].sum()
+    saturday_shape = source.loc["2023-02-25"].to_numpy() / source.loc["2023-02-25"].sum()
+    np.testing.assert_allclose(leap_shape, saturday_shape, atol=1e-14)
+    assert target.sum() * (0.25 if freq == "15min" else 1.0) / 1000 == pytest.approx(1000)
+
+
+def test_external_demandlib_h0_uses_its_own_dated_source_year(tmp_path):
+    source_index = pd.date_range("2024-01-01", "2025-01-01", freq="h", inclusive="left")
+    values = np.full(len(source_index), 50.0)
+    values[::24] += np.arange(366)
+    pd.DataFrame({_LOAD_COLUMN: values}, index=source_index).to_csv(tmp_path / "h0SLP_demandlib_1000kwh_hourly.csv")
+
+    source = load_profile("demandlib_h0", 1000, start_date="2024-01-01", rlp_directory=str(tmp_path)).iloc[:, 0]
+    target = load_profile("demandlib_h0", 1000, start_date="2025-01-01", rlp_directory=str(tmp_path)).iloc[:, 0]
+    target_sunday = target.loc["2025-01-05"]
+    source_sunday = source.loc["2024-01-07"]
+    np.testing.assert_allclose(
+        target_sunday.to_numpy() / target_sunday.sum(), source_sunday.to_numpy() / source_sunday.sum()
+    )
+
+
+def test_external_demandlib_h0_without_dated_rows_raises(tmp_path):
+    # Positional placement cannot align day types, so an undated H0 file that
+    # loaded before the alignment fix is now refused.
+    pd.DataFrame({_LOAD_COLUMN: np.full(8760, 50.0)}).to_csv(
+        tmp_path / "h0SLP_demandlib_1000kwh_hourly.csv", index=False
+    )
+
+    with pytest.raises(ValueError, match="needs a dated first row at 1 January 00:00"):
+        load_profile("demandlib_h0", 1000, start_date="2025-01-01", rlp_directory=str(tmp_path))
+
+
+def _assert_source_days(target, source, pairs):
+    """Each target day equals its source day times one profile-wide scale.
+
+    The bundled H0 days have distinct daily energies, so a common scale
+    identifies the source day even where same-type days share a shape.
+    """
+    ratios = [target.loc[day].to_numpy() / source.loc[source_day].to_numpy() for day, source_day in pairs]
+    np.testing.assert_allclose(np.concatenate(ratios), ratios[0][0], rtol=1e-12)
+
+
+# (target day, expected source day in the bundled 2023 file)
+_PINNED_H0_DAYS = {
+    2025: [
+        ("2025-01-08", "2023-01-09"),  # Wednesday; the source Sunday 8 January is skipped
+        ("2025-05-14", "2023-05-15"),  # Wednesday takes a summer-season source Monday
+    ],
+    2026: [
+        ("2026-01-01", "2023-01-02"),  # Thursday; the source 1 January is a Sunday
+        ("2026-01-03", "2023-12-30"),  # Saturday; the search wraps back across New Year
+        ("2026-03-21", "2023-03-18"),  # Saturday takes a winter-season source Saturday
+        ("2026-12-31", "2023-12-29"),  # Thursday
+    ],
+    2020: [
+        ("2020-02-28", "2023-02-28"),  # Friday
+        ("2020-02-29", "2023-02-25"),  # Saturday leap day, anchored on 28 February
+        ("2020-03-01", "2023-02-26"),  # Sunday reaches back into February
+    ],
+    2024: [
+        ("2024-02-29", "2023-02-28"),  # Thursday leap day
+        ("2024-03-01", "2023-03-01"),  # Friday keeps its own date
+    ],
+}
+
+
+@pytest.mark.parametrize("freq", ["h", "15min"])
+@pytest.mark.parametrize("year", sorted(_PINNED_H0_DAYS))
+def test_bundled_h0_pins_the_chosen_source_day(year, freq):
+    source = load_profile("demandlib_h0", 1000, start_date="2023-01-01", freq=freq, timezone="UTC").iloc[:, 0]
+    target = load_profile("demandlib_h0", 1000, start_date=f"{year}-01-01", freq=freq, timezone="UTC").iloc[:, 0]
+
+    _assert_source_days(target, source, _PINNED_H0_DAYS[year])
+    # Another winter weekday has the same shape but not the same scale.
+    with pytest.raises(AssertionError):
+        _assert_source_days(target, source, [*_PINNED_H0_DAYS[year], (_PINNED_H0_DAYS[year][0][0], "2023-01-10")])
+
+
+def test_bundled_h0_day_types_follow_the_civil_calendar_across_dst():
+    source = load_profile("demandlib_h0", 1000, start_date="2023-01-01", freq="15min", timezone="UTC").iloc[:, 0]
+    target = load_profile("demandlib_h0", 1000, start_date="2025-01-01", freq="15min", timezone="Europe/Berlin")
+    civil = target.iloc[:, 0].copy()
+    civil.index = civil.index.tz_localize(None)
+
+    steps = civil.groupby(civil.index.date).size()
+    assert steps.loc[pd.Timestamp("2025-03-30").date()] == 92
+    assert steps.loc[pd.Timestamp("2025-10-26").date()] == 100
+    assert set(steps.drop([pd.Timestamp("2025-03-30").date(), pd.Timestamp("2025-10-26").date()])) == {96}
+
+    # The fall-back hour's second (standard-time) occurrence carries the
+    # profile row; the spring-forward hour does not exist on the civil clock.
+    civil = civil[~civil.index.duplicated(keep="last")]
+    spring = civil.loc["2025-03-30"]
+    source_spring = source.loc["2023-04-02"]
+    source_spring = source_spring[source_spring.index.hour != 2]
+    ratios = np.concatenate(
+        [
+            civil.loc["2025-01-08"].to_numpy() / source.loc["2023-01-09"].to_numpy(),  # Wednesday
+            spring.to_numpy() / source_spring.to_numpy(),  # Sunday, 92 steps
+            civil.loc["2025-10-26"].to_numpy() / source.loc["2023-10-29"].to_numpy(),  # Sunday, 100 steps
+        ]
+    )
+    np.testing.assert_allclose(ratios, ratios[0], rtol=1e-12)
+
+    # Every ordinary civil day carries a source day of its own H0 type.
+    def day_type(day):
+        return 0 if day.weekday() < 5 else day.weekday() - 4
+
+    source_days = source.to_numpy().reshape(365, 96)
+    for day, values in civil.groupby(civil.index.date):
+        if len(values) != 96:
+            continue
+        match = np.abs(source_days * ratios[0] - values.to_numpy()).max(axis=1).argmin()
+        assert day_type(pd.Timestamp(day)) == day_type(pd.Timestamp("2023-01-01") + pd.Timedelta(days=int(match)))
 
 
 @pytest.mark.parametrize(
@@ -75,7 +225,7 @@ def test_load_profile_uses_real_leap_calendar_and_preserves_energy(
     freq, expected_length, expected_end, hours_per_step, timezone
 ):
     profile = load_profile(
-        "1",
+        "demandlib_h0",
         4321,
         start_date="2024-01-01",
         freq=freq,
@@ -95,16 +245,14 @@ def test_load_profile_uses_real_leap_calendar_and_preserves_energy(
 
 
 def test_load_profile_leap_day_does_not_shift_march_profile():
-    leap = load_profile("1", 1000, start_date="2024-01-01", freq="h", timezone="UTC")
-    canonical = load_profile("1", 1000, start_date="2025-01-01", freq="h", timezone="UTC")
+    leap = load_profile("demandlib_h0", 1000, start_date="2024-01-01", freq="h", timezone="UTC")
+    source = load_profile("demandlib_h0", 1000, start_date="2023-01-01", freq="h", timezone="UTC")
 
-    # Compare against a within-profile reference because each returned calendar
-    # is independently scaled to the requested annual energy.
-    leap_load = leap.iloc[:, 0]
-    canonical_load = canonical.iloc[:, 0]
-    assert leap_load.loc["2024-03-01 00:00"] / leap_load.iloc[0] == pytest.approx(
-        canonical_load.loc["2025-03-01 00:00"] / canonical_load.iloc[0]
-    )
+    # March 1 in 2024 and 2023 are both weekdays: inserting 29 February must
+    # keep March 1 near its own season, not move it to the source's March 2.
+    march = leap.loc["2024-03-01"].iloc[:, 0]
+    source_march = source.loc["2023-03-01"].iloc[:, 0]
+    np.testing.assert_allclose(march.to_numpy() / march.sum(), source_march.to_numpy() / source_march.sum())
 
 
 def test_non_bundled_profile_requires_external_directory():
@@ -116,8 +264,767 @@ def test_external_native_15min_profile_can_downsample_to_hourly(tmp_path):
     profile_path = tmp_path / "bdew_h0_2025_15min.csv"
     pd.DataFrame({"Electrical Consumption [W]": np.ones(35040)}).to_csv(profile_path)
 
-    profile = load_profile("7", 1000, freq="h", rlp_directory=str(tmp_path))
+    profile = load_profile("bdew_h0", 1000, freq="h", rlp_directory=str(tmp_path))
     annual_kwh = profile["Electrical Consumption [W]"].sum() / 1000
 
     assert len(profile) == 8760
     assert annual_kwh == pytest.approx(1000)
+
+
+@pytest.mark.parametrize("start_date", ["2025-07-01", "2025-01-02", "2025-01-01 06:00"])
+def test_load_profile_rejects_a_start_that_would_shift_the_seasons(start_date):
+    with pytest.raises(ValueError, match=r"start_date must be 1 January at midnight"):
+        load_profile("demandlib_h0", 3500, start_date=start_date)
+
+
+def _write_eredes(path, n_rows, start="2025-01-01", freq="15min", trailing_blank=True, dated=True):
+    stamps = pd.date_range(start, periods=n_rows, freq=freq)
+    day = np.arange(n_rows) // (96 if freq == "15min" else 24)
+    frame = pd.DataFrame(
+        {
+            "Datetime": stamps.strftime("%d/%m/%Y %H:%M"),
+            "BTN A - Wh": 1.0 + day,
+            "BTN B - Wh": 2.0 + day,
+            "BTN C - Wh": 1000.0 + day,
+        }
+    )
+    if not dated:
+        frame = frame.drop(columns="Datetime")
+    text = frame.to_csv(index=False)
+    if trailing_blank:
+        text += "," * (len(frame.columns) - 1) + "\n"
+    path.write_text(text)
+
+
+@pytest.mark.parametrize("timezone", ["UTC", "Europe/Lisbon"])
+def test_undated_eredes_file_with_trailing_blank_row_keeps_leap_calendar(tmp_path, timezone):
+    # The E-REDES exports carry 35040 intervals plus a trailing ",,," row.
+    # Column BTN C is 1000 + day-of-year, so each day is identifiable. An
+    # undated file has no calendar to align, so its rows are placed by
+    # position.
+    _write_eredes(tmp_path / "EREDES_2025_BTN_1000kwh_15min.csv", 35040, dated=False)
+
+    load = load_profile(
+        "eredes_btn_c", 1000, start_date="2024-01-01", freq="15min", rlp_directory=str(tmp_path), timezone=timezone
+    ).iloc[:, 0]
+    daily = load.groupby(load.index.date).mean()
+    reference = daily.iloc[0] / 1000.0  # scale of the source's first day
+
+    assert len(load) == 35136
+    assert np.isfinite(load).all()
+    assert daily[pd.Timestamp("2024-02-29").date()] == pytest.approx(daily[pd.Timestamp("2024-02-28").date()])
+    # 1 March and 31 December keep the source's own days (day 59 and day 364).
+    assert daily[pd.Timestamp("2024-03-01").date()] == pytest.approx(1059 * reference, rel=1e-3)
+    assert daily[pd.Timestamp("2024-12-31").date()] == pytest.approx(1364 * reference, rel=1e-3)
+
+
+def test_eredes_profile_selects_its_own_column_by_exact_name(tmp_path):
+    _write_eredes(tmp_path / "EREDES_2025_BTN_1000kwh_hourly.csv", 8760, freq="h")
+    text = (tmp_path / "EREDES_2025_BTN_1000kwh_hourly.csv").read_text()
+    (tmp_path / "EREDES_2025_BTN_1000kwh_hourly.csv").write_text(text.replace("BTN C - Wh", "Other"))
+
+    with pytest.raises(ValueError, match="needs the column 'BTN C - Wh'"):
+        load_profile("eredes_btn_c", 1000, rlp_directory=str(tmp_path))
+    assert len(load_profile("eredes_btn_a", 1000, rlp_directory=str(tmp_path))) == 8760
+
+
+@pytest.mark.parametrize(("freq", "n_rows"), [("h", 8759), ("h", 8761), ("15min", 35037), ("15min", 35137)])
+def test_external_profile_of_the_wrong_length_raises(tmp_path, freq, n_rows):
+    name = "EREDES_2025_BTN_1000kwh_15min.csv" if freq == "15min" else "EREDES_2025_BTN_1000kwh_hourly.csv"
+    _write_eredes(tmp_path / name, n_rows, freq=freq)
+
+    with pytest.raises(ValueError, match=f"has {n_rows} data rows"):
+        load_profile("eredes_btn_c", 1000, freq=freq, rlp_directory=str(tmp_path))
+
+
+def test_undated_leap_year_profile_on_common_year_drops_its_leap_day(tmp_path):
+    _write_eredes(tmp_path / "EREDES_2025_BTN_1000kwh_hourly.csv", 8784, start="2024-01-01", freq="h", dated=False)
+
+    load = load_profile("eredes_btn_c", 1000, start_date="2025-01-01", rlp_directory=str(tmp_path)).iloc[:, 0]
+    daily = load.groupby(load.index.date).mean()
+    reference = daily.iloc[0] / 1000.0
+
+    assert len(load) == 8760
+    assert daily[pd.Timestamp("2025-02-28").date()] == pytest.approx(1058 * reference)
+    assert daily[pd.Timestamp("2025-03-01").date()] == pytest.approx(1060 * reference)
+    assert daily[pd.Timestamp("2025-12-31").date()] == pytest.approx(1365 * reference)
+
+
+# --- Dated E-REDES profiles on the study calendar (#303) ----------------------
+
+
+def test_portugal_national_holidays_follow_the_labour_code():
+    assert sorted(_portugal_national_holidays(2026)) == [
+        date(2026, 1, 1),
+        date(2026, 4, 3),  # Good Friday
+        date(2026, 4, 5),  # Easter Sunday
+        date(2026, 4, 25),
+        date(2026, 5, 1),
+        date(2026, 6, 4),  # Corpus Christi, Easter + 60 days
+        date(2026, 6, 10),
+        date(2026, 8, 15),
+        date(2026, 10, 5),
+        date(2026, 11, 1),
+        date(2026, 12, 1),
+        date(2026, 12, 8),
+        date(2026, 12, 25),
+    ]
+    easter = {2008: date(2008, 3, 23), 2019: date(2019, 4, 21), 2024: date(2024, 3, 31), 2038: date(2038, 4, 25)}
+    for year, sunday in easter.items():
+        assert sunday in _portugal_national_holidays(year)
+    # Carnival Tuesday and municipal holidays are optional, so they are not national.
+    assert date(2026, 2, 17) not in _portugal_national_holidays(2026)
+    assert date(2026, 6, 24) not in _portugal_national_holidays(2026)  # Porto's São João
+
+
+@pytest.mark.parametrize(
+    ("year", "suspended"), [(2012, False), (2013, True), (2014, True), (2015, True), (2016, False)]
+)
+def test_four_holidays_are_absent_only_while_suspended(year, suspended):
+    # Law 23/2012 suspended them from 2013; Law 8/2016 restored them from 2 April 2016.
+    four = {_easter_sunday(year) + timedelta(days=60), date(year, 10, 5), date(year, 11, 1), date(year, 12, 1)}
+    holidays = _portugal_national_holidays(year)
+
+    assert not four & holidays if suspended else four <= holidays
+    assert len(holidays) == (9 if suspended else 13)
+
+
+@pytest.mark.parametrize(
+    ("day", "expected"),
+    [
+        ("2026-06-03", 0),  # Wednesday
+        ("2026-06-04", 2),  # Thursday, Corpus Christi
+        ("2026-06-06", 1),  # Saturday
+        ("2026-04-25", 2),  # Saturday and a holiday: the Sunday/holiday class
+        ("2026-06-07", 2),  # Sunday
+        ("2026-02-17", 0),  # Carnival Tuesday is a working day
+        ("2014-06-19", 0),  # Corpus Christi while suspended
+        ("2015-12-01", 0),  # 1 December while suspended
+    ],
+)
+def test_btn_day_classes(day, expected):
+    assert _btn_day_type(pd.Timestamp(day)) == expected
+
+
+# (target day, expected source day in a dated 2025 file)
+_PINNED_EREDES_DAYS = {
+    2026: [
+        ("2026-01-01", "2025-01-01"),  # New Year's Day, Thursday, takes the source's, a Wednesday
+        ("2026-01-02", "2025-01-02"),  # Friday takes a Thursday
+        ("2026-01-03", "2025-01-04"),  # Saturday
+        ("2026-01-04", "2025-01-05"),  # Sunday
+        ("2026-02-17", "2025-02-17"),  # Carnival Tuesday is a working day
+        ("2026-04-25", "2025-04-25"),  # Saturday holiday takes a Friday holiday
+        ("2026-06-04", "2025-06-01"),  # Corpus Christi, Thursday, takes the nearest Sunday
+        ("2026-06-19", "2025-06-18"),  # Friday skips the source's Corpus Christi
+        ("2026-10-31", "2025-10-25"),  # Saturday skips the source's Saturday holiday, 1 November
+        ("2026-12-31", "2025-12-31"),
+    ],
+    2028: [
+        ("2028-02-29", "2025-02-28"),  # Tuesday leap day, anchored on 28 February
+        ("2028-12-31", "2025-01-01"),  # Sunday; the search wraps forward across New Year to a holiday
+    ],
+}
+
+
+@pytest.mark.parametrize("freq", ["h", "15min"])
+@pytest.mark.parametrize("year", sorted(_PINNED_EREDES_DAYS))
+def test_dated_eredes_profile_takes_the_study_years_day_classes(tmp_path, year, freq):
+    name = "EREDES_2025_BTN_1000kwh_15min.csv" if freq == "15min" else "EREDES_2025_BTN_1000kwh_hourly.csv"
+    _write_eredes(tmp_path / name, 35040 if freq == "15min" else 8760, freq=freq, trailing_blank=False)
+    options = {"freq": freq, "rlp_directory": str(tmp_path), "timezone": "UTC"}
+
+    source = load_profile("eredes_btn_c", 1000, start_date="2025-01-01", **options).iloc[:, 0]
+    target = load_profile("eredes_btn_c", 1000, start_date=f"{year}-01-01", **options).iloc[:, 0]
+
+    _assert_source_days(target, source, _PINNED_EREDES_DAYS[year])
+    with pytest.raises(AssertionError):
+        _assert_source_days(
+            target, source, [*_PINNED_EREDES_DAYS[year], (_PINNED_EREDES_DAYS[year][0][0], "2025-06-04")]
+        )
+    assert target.sum() * (0.25 if freq == "15min" else 1.0) / 1000 == pytest.approx(1000)
+    assert len(target) == (366 if year == 2028 else 365) * (96 if freq == "15min" else 24)
+
+
+def test_dated_eredes_profile_in_its_own_year_is_unchanged(tmp_path):
+    _write_eredes(tmp_path / "EREDES_2025_BTN_1000kwh_15min.csv", 35040)
+    load = load_profile("eredes_btn_c", 1000, freq="15min", rlp_directory=str(tmp_path)).iloc[:, 0].to_numpy()
+
+    source = 1000.0 + np.arange(35040) // 96
+    np.testing.assert_allclose(load / load.sum(), source / source.sum(), rtol=1e-13)
+
+
+def test_dated_leap_year_eredes_profile_on_a_common_year(tmp_path):
+    _write_eredes(tmp_path / "EREDES_2024_BTN_1000kwh_hourly.csv", 8784, start="2024-01-01", freq="h")
+    options = {"rlp_directory": str(tmp_path), "timezone": "UTC"}
+
+    source = load_profile("eredes_btn_c", 1000, start_date="2024-01-01", **options).iloc[:, 0]
+    target = load_profile("eredes_btn_c", 1000, start_date="2025-01-01", **options).iloc[:, 0]
+
+    assert len(target) == 8760
+    # Saturday 1 March 2025 takes Saturday 2 March 2024, not the 29 February a
+    # positional fit would drop or the Friday 1 March it would keep.
+    _assert_source_days(target, source, [("2025-02-28", "2024-02-28"), ("2025-03-01", "2024-03-02")])
+
+
+def test_dated_eredes_year_comes_from_the_timestamps_not_the_filename(tmp_path):
+    # Named 2025 but stamped 2023, like a known user copy of the hourly file.
+    _write_eredes(tmp_path / "EREDES_2025_BTN_1000kwh_hourly.csv", 8760, start="2023-01-01", freq="h")
+    options = {"rlp_directory": str(tmp_path), "timezone": "UTC"}
+
+    in_2023 = load_profile("eredes_btn_c", 1000, start_date="2023-01-01", **options).iloc[:, 0].to_numpy()
+    source = 1000.0 + np.arange(8760) // 24
+    np.testing.assert_allclose(in_2023 / in_2023.sum(), source / source.sum(), rtol=1e-13)
+    in_2025 = load_profile("eredes_btn_c", 1000, start_date="2025-01-01", **options).iloc[:, 0]
+    # Wednesday 1 January 2025 is a holiday: it takes Sunday 1 January 2023.
+    # Thursday 2 January takes Monday 2 January 2023.
+    daily = in_2025.groupby(in_2025.index.date).mean()
+    scale = daily.iloc[0] / 1000.0
+    assert daily.iloc[1] == pytest.approx(1001 * scale)
+    assert daily[date(2025, 1, 4)] == pytest.approx(1006 * scale)  # Saturday takes Saturday 7 January 2023
+
+
+def test_hourly_and_15min_eredes_files_from_one_source_share_the_day_phase(tmp_path):
+    days = pd.date_range("2025-01-01", periods=365, freq="D")
+    quarter_index = pd.date_range("2025-01-01", periods=35040, freq="15min")
+    shape = 1.0 + 0.5 * np.sin(np.arange(35040) * 2 * np.pi / 96)
+    kwh = pd.DataFrame(
+        {column: shape * (1.0 + np.repeat(np.arange(len(days)), 96)) for column in convert_eredes.OUTPUT_COLUMNS},
+        index=quarter_index,
+    )
+    quarter, hourly = convert_eredes.to_breos_frames(kwh)
+    quarter.to_csv(tmp_path / "EREDES_2025_BTN_1000kwh_15min.csv")
+    hourly.to_csv(tmp_path / "EREDES_2025_BTN_1000kwh_hourly.csv")
+
+    for year in (2025, 2026, 2028):
+        from_quarter = load_profile(
+            "eredes_btn_a",
+            1000,
+            start_date=f"{year}-01-01",
+            rlp_directory=str(tmp_path),
+            profile_file=tmp_path / "EREDES_2025_BTN_1000kwh_15min.csv",
+        )
+        from_hourly = load_profile("eredes_btn_a", 1000, start_date=f"{year}-01-01", rlp_directory=str(tmp_path))
+        assert from_hourly.attrs["breos_load_profile"]["native_resolution"] == "h"
+        assert from_quarter.attrs["breos_load_profile"]["native_resolution"] == "15min"
+        np.testing.assert_allclose(from_quarter.to_numpy(), from_hourly.to_numpy(), rtol=1e-12)
+
+
+def test_dated_eredes_day_classes_follow_the_civil_calendar_across_dst(tmp_path):
+    _write_eredes(tmp_path / "EREDES_2025_BTN_1000kwh_15min.csv", 35040)
+    options = {"freq": "15min", "rlp_directory": str(tmp_path)}
+
+    source = load_profile("eredes_btn_c", 1000, start_date="2025-01-01", timezone="UTC", **options).iloc[:, 0]
+    target = load_profile("eredes_btn_c", 1000, start_date="2026-01-01", timezone="Europe/Lisbon", **options)
+    load = target.iloc[:, 0]
+
+    assert len(load) == 35040
+    assert load.sum() * 0.25 / 1000 == pytest.approx(1000)
+    civil = load.copy()
+    civil.index = civil.index.tz_localize(None)
+    steps = civil.groupby(civil.index.date).size()
+    assert (steps[date(2026, 3, 29)], steps[date(2026, 10, 25)]) == (92, 100)
+    # Both DST dates are Sundays; they take source Sundays.
+    civil = civil[~civil.index.duplicated(keep="last")]
+    ratio = source.loc["2025-01-02"].iloc[0] / civil.loc["2026-01-02"].iloc[0]
+    assert civil.loc["2026-03-29"].iloc[0] * ratio == pytest.approx(source.loc["2025-03-30"].iloc[0])
+    assert civil.loc["2026-10-25"].iloc[0] * ratio == pytest.approx(source.loc["2025-10-26"].iloc[0])
+
+
+def test_dated_eredes_file_must_start_at_the_first_interval(tmp_path):
+    # Interval-end stamps, as in the raw publication, start at 00:15.
+    _write_eredes(tmp_path / "EREDES_2025_BTN_1000kwh_15min.csv", 35040, start="2025-01-01 00:15")
+
+    with pytest.raises(ValueError, match=r"starts at 2025-01-01 00:15.*tools/convert_eredes_profiles\.py"):
+        load_profile("eredes_btn_c", 1000, freq="15min", rlp_directory=str(tmp_path))
+
+
+def test_portugal_holiday_calendar_starts_in_2004():
+    # The 2003 Labour Code, in force from December 2003, is the earliest
+    # source for the full list.
+    with pytest.raises(ValueError, match="calendar starts in 2004; it has no holiday list for 2003"):
+        _portugal_national_holidays(2003)
+    holidays = _portugal_national_holidays(2004)
+    # Corpus Christi, Easter (11 April) + 60 days, is 10 June in 2004, so the
+    # 13 holidays fall on 12 dates.
+    assert _easter_sunday(2004) + timedelta(days=60) == date(2004, 6, 10)
+    assert len(holidays) == 12
+    assert {date(2004, 4, 9), date(2004, 4, 11), date(2004, 6, 10), date(2004, 10, 5), date(2004, 12, 1)} <= holidays
+
+
+@pytest.mark.parametrize(
+    ("source_year", "study_year", "role"),
+    [
+        (2003, 2026, "its timestamp year is 2003"),
+        (2025, 2003, "the study year is 2003"),
+        # The same-year shortcut does not skip the check.
+        (2003, 2003, "its timestamp year is 2003"),
+    ],
+)
+def test_dated_eredes_years_before_2004_are_refused(tmp_path, source_year, study_year, role):
+    _write_eredes(tmp_path / "EREDES_2025_BTN_1000kwh_hourly.csv", 8760, start=f"{source_year}-01-01", freq="h")
+
+    with pytest.raises(
+        ValueError, match=rf"cannot be aligned: {role}.*calendar for E-REDES day classes starts in 2004"
+    ):
+        load_profile("eredes_btn_c", 1000, start_date=f"{study_year}-01-01", rlp_directory=str(tmp_path))
+
+
+def test_dated_eredes_profile_from_2004_is_aligned(tmp_path):
+    _write_eredes(tmp_path / "EREDES_2004_BTN_1000kwh_hourly.csv", 8784, start="2004-01-01", freq="h")
+    options = {"rlp_directory": str(tmp_path), "timezone": "UTC"}
+
+    same_year = load_profile("eredes_btn_c", 1000, start_date="2004-01-01", **options).iloc[:, 0].to_numpy()
+    source = 1000.0 + np.arange(8784) // 24
+    np.testing.assert_allclose(same_year / same_year.sum(), source / source.sum(), rtol=1e-13)
+    in_2026 = load_profile("eredes_btn_c", 1000, start_date="2026-01-01", **options).iloc[:, 0]
+    # Thursday 1 January 2026, a holiday, takes Thursday 1 January 2004, a holiday.
+    # Friday 2 January takes Friday 2 January 2004.
+    daily = in_2026.groupby(in_2026.index.date).mean()
+    assert daily[date(2026, 1, 2)] / daily[date(2026, 1, 1)] == pytest.approx(1001 / 1000)
+
+
+def _write_stamped_eredes(path, stamps):
+    day = np.arange(len(stamps)) // (96 if len(stamps) > 9000 else 24)
+    lines = ["DateTime,BTN C - Wh", *(f"{stamp},{1000.0 + d}" for stamp, d in zip(stamps, day))]
+    path.write_text("\n".join(lines) + "\n")
+
+
+def _one_offset_row(freq, periods):
+    stamps = pd.date_range("2025-01-01", periods=periods, freq=freq).strftime("%Y-%m-%d %H:%M:%S").tolist()
+    stamps[4000] += "+01:00"
+    return stamps
+
+
+@pytest.mark.parametrize(
+    ("freq", "stamps", "message"),
+    [
+        # Lisbon offsets change at DST: one rejected file of each resolution.
+        (
+            "h",
+            lambda: pd.date_range("2025-01-01", periods=8760, freq="h", tz="Europe/Lisbon").astype(str),
+            r"8760 timestamps with a UTC offset, 2 different offsets \(\+00:00, \+01:00; first at data row 0",
+        ),
+        (
+            "15min",
+            lambda: pd.date_range("2025-01-01", periods=35040, freq="15min", tz="Europe/Lisbon").astype(str),
+            r"35040 timestamps with a UTC offset, 2 different offsets",
+        ),
+        # A fixed offset, even UTC itself, is refused too.
+        (
+            "h",
+            lambda: pd.date_range("2025-01-01", periods=8760, freq="h", tz="Etc/GMT-1").astype(str),
+            r"8760 timestamps with a UTC offset, one fixed offset \(\+01:00;",
+        ),
+        (
+            "15min",
+            lambda: pd.date_range("2025-01-01", periods=35040, freq="15min").strftime("%Y-%m-%dT%H:%M:%SZ"),
+            r"one fixed offset \(Z;",
+        ),
+        (
+            "h",
+            lambda: pd.date_range("2025-01-01", periods=8760, freq="h", tz="UTC").strftime("%Y-%m-%d %H:%M%z"),
+            r"one fixed offset \(\+0000;",
+        ),
+        # One offset-stamped row among naive ones.
+        ("h", lambda: _one_offset_row("h", 8760), r"has 1 timestamps with a UTC offset.*data row 4000"),
+        # Hour-only and compact ISO forms, which pandas also reads as offset-aware.
+        (
+            "h",
+            lambda: pd.date_range("2025-01-01", periods=8760, freq="h").strftime("%Y-%m-%dT%H+01:00"),
+            r"8760 timestamps with a UTC offset, one fixed offset \(\+01:00;",
+        ),
+        (
+            "15min",
+            lambda: pd.date_range("2025-01-01", periods=35040, freq="15min").strftime("%Y%m%dT%H%M+0100"),
+            r"35040 timestamps with a UTC offset, one fixed offset \(\+0100;",
+        ),
+        # An ISO range label: pandas reads its end time as an offset.
+        (
+            "h",
+            lambda: [
+                f"{t:%Y-%m-%d %H:%M}-{t + pd.Timedelta(hours=1):%H:%M}"
+                for t in pd.date_range("2025-01-01", periods=8760, freq="h")
+            ],
+            r"8760 timestamps with a UTC offset, 24 different offsets",
+        ),
+    ],
+)
+def test_dated_eredes_file_with_utc_offsets_is_refused(tmp_path, freq, stamps, message):
+    # Read as UTC instants, Lisbon summer rows would move an hour off their
+    # civil time: 1 July 13:00 local would load at 12:00.
+    name = "EREDES_2025_BTN_1000kwh_15min.csv" if freq == "15min" else "EREDES_2025_BTN_1000kwh_hourly.csv"
+    _write_stamped_eredes(tmp_path / name, stamps())
+
+    with pytest.raises(ValueError, match=rf"{message}.*needs naive civil timestamps"):
+        load_profile("eredes_btn_c", 1000, start_date="2026-01-01", freq=freq, rlp_directory=str(tmp_path))
+    with pytest.raises(ValueError, match="needs naive civil timestamps"):
+        load_profile("eredes_btn_c", 1000, freq=freq, rlp_directory=str(tmp_path), profile_file=tmp_path / name)
+
+
+@pytest.mark.parametrize(
+    ("freq", "stamp_format"),
+    [("h", "%Y-%m-%d %H:%M:%S"), ("15min", "%Y-%m-%dT%H:%M"), ("15min", "%d/%m/%Y %H:%M")],
+)
+def test_dated_eredes_file_with_naive_civil_timestamps_loads(tmp_path, freq, stamp_format):
+    periods = 35040 if freq == "15min" else 8760
+    name = "EREDES_2025_BTN_1000kwh_15min.csv" if freq == "15min" else "EREDES_2025_BTN_1000kwh_hourly.csv"
+    _write_stamped_eredes(
+        tmp_path / name, pd.date_range("2025-01-01", periods=periods, freq=freq).strftime(stamp_format)
+    )
+
+    load = load_profile("eredes_btn_c", 1000, freq=freq, rlp_directory=str(tmp_path), timezone="Europe/Lisbon")
+
+    civil = load.iloc[:, 0]
+    civil.index = civil.index.tz_localize(None)
+    civil = civil[~civil.index.duplicated(keep="last")]
+    # 1 July 13:00 civil time keeps the value of the 1 July row.
+    scale = civil.loc["2025-01-01 00:00"] / 1000.0
+    assert civil.loc["2025-07-01 13:00"] == pytest.approx((1000.0 + 181) * scale)
+
+
+@pytest.mark.parametrize(
+    "stamp",
+    [
+        "01/01/2025 00:00",
+        "2025-01-01 00:00:00",
+        "2025-01-01T00:00",
+        "2025-01-01T00",
+        "20250101T0000",
+        "2025-01-01",
+        " 2025-01-01 00:00 ",
+        # Range labels are not offsets.
+        "01/01/2025 00:00-01:00",
+        "00:00-00:15",
+    ],
+)
+def test_naive_and_range_label_stamps_are_not_read_as_offsets(tmp_path, stamp):
+    _parse_profile_timestamps(pd.Series([stamp, stamp]), tmp_path / "f.csv", naive_timestamps=True)
+
+
+@pytest.mark.parametrize(
+    ("freq", "label"),
+    [
+        ("h", lambda t, step: f"{t:%d/%m/%Y %H:%M}-{t + step:%H:%M}"),
+        ("15min", lambda t, step: f"{t:%H:%M}-{t + step:%H:%M}"),
+    ],
+)
+def test_eredes_file_with_range_labels_stays_positional(tmp_path, freq, label):
+    # Day-first and clock-only range labels do not parse as timestamps, so
+    # the file is undated and its rows are placed by position, not aligned.
+    periods = 35040 if freq == "15min" else 8760
+    step = pd.Timedelta(minutes=15 if freq == "15min" else 60)
+    name = "EREDES_2025_BTN_1000kwh_15min.csv" if freq == "15min" else "EREDES_2025_BTN_1000kwh_hourly.csv"
+    _write_stamped_eredes(
+        tmp_path / name, [label(t, step) for t in pd.date_range("2025-01-01", periods=periods, freq=freq)]
+    )
+
+    load = load_profile(
+        "eredes_btn_c", 1000, start_date="2026-01-01", freq=freq, rlp_directory=str(tmp_path), timezone="UTC"
+    )
+
+    values = load.iloc[:, 0].to_numpy()
+    source = 1000.0 + np.arange(periods) // (96 if freq == "15min" else 24)
+    assert len(values) == periods
+    np.testing.assert_allclose(values / values[0], source / source[0], rtol=1e-12)
+
+
+@pytest.mark.parametrize("key", ["custom", "ree_2.0td", "demandlib_h0"])
+def test_offset_stamped_profiles_other_than_eredes_still_load(tmp_path, key):
+    # Only dated E-REDES files need naive stamps. Other files keep reading
+    # offset stamps as UTC instants, evenly spaced across DST.
+    stamps = pd.date_range("2025-01-01", periods=8760, freq="h", tz="Europe/Lisbon").astype(str)
+    column = {"custom": "Power [W]", "ree_2.0td": "Electrical Consumption [W]"}.get(key, "Electrical Consumption [W]")
+    lines = [f"DateTime,{column}", *(f"{t},100" for t in stamps)]
+    name = {"custom": "measured.csv", "ree_2.0td": "REE_2025_2.0TD_1000kwh_hourly.csv"}.get(
+        key, PROFILES["demandlib_h0"].files["h"]
+    )
+    (tmp_path / name).write_text("\n".join(lines) + "\n")
+    options = {"profile_file": tmp_path / name, "profile_unit": "W"} if key == "custom" else {}
+
+    load = load_profile(key, 1000, start_date="2025-01-01", rlp_directory=str(tmp_path), **options)
+
+    assert len(load) == 8760
+    assert load.iloc[:, 0].sum() / 1000 == pytest.approx(1000)
+
+
+def test_dated_custom_and_other_external_profiles_stay_positional(tmp_path):
+    day = np.arange(8760) // 24
+    _write_custom(tmp_path / "measured.csv", 100.0 + day)
+    frame = pd.DataFrame(
+        {"Electrical Consumption [W]": 100.0 + day}, index=pd.date_range("2025-01-01", periods=8760, freq="h")
+    )
+    frame.to_csv(tmp_path / "REE_2025_2.0TD_1000kwh_hourly.csv")
+
+    custom = load_profile(
+        "custom", 1000, start_date="2026-01-01", profile_file=tmp_path / "measured.csv", profile_unit="W"
+    )
+    ree = load_profile("ree_2.0td", 1000, start_date="2026-01-01", rlp_directory=str(tmp_path))
+    for profile in (custom, ree):
+        values = profile.iloc[:, 0].to_numpy()
+        np.testing.assert_allclose(values / values[0], (100.0 + day) / 100.0, rtol=1e-12)
+
+
+@pytest.mark.parametrize(
+    ("value", "message"),
+    [("", "missing, non-numeric, or infinite"), ("inf", "missing, non-numeric, or infinite"), ("-1", "negative")],
+)
+def test_external_profile_rejects_bad_values(tmp_path, value, message):
+    values = ["100"] * 8760
+    values[1234] = value
+    stamps = pd.date_range("2025-01-01", periods=8760, freq="h").strftime("%Y-%m-%d %H:%M:%S")
+    lines = ["DateTime,Electrical Consumption [W]", *(f"{t},{v}" for t, v in zip(stamps, values))]
+    (tmp_path / "REE_2026_2.0TD_1000kwh_hourly.csv").write_text("\n".join(lines) + "\n")
+
+    with pytest.raises(ValueError, match=rf"{message}.*data row 1234"):
+        load_profile("ree_2.0td", 1000, rlp_directory=str(tmp_path))
+
+
+def test_external_profile_rejects_irregular_timestamps(tmp_path):
+    # A local-clock file with a DST gap has the right length but moves every
+    # later row by one hour.
+    stamps = pd.date_range("2025-01-01", periods=8761, freq="h").delete(2000)
+    frame = pd.DataFrame({"Electrical Consumption [W]": np.ones(8760)}, index=stamps)
+    frame.to_csv(tmp_path / "REE_2026_2.0TD_1000kwh_hourly.csv")
+
+    with pytest.raises(ValueError, match="not evenly spaced at h: data row 2000"):
+        load_profile("ree_2.0td", 1000, rlp_directory=str(tmp_path))
+
+
+def test_external_profile_rejects_a_damaged_timestamp_column(tmp_path):
+    # One malformed stamp used to switch the spacing check off, so this file's
+    # missing hour went through.
+    stamps = pd.date_range("2025-01-01", periods=8761, freq="h").delete(2000).strftime("%Y-%m-%d %H:%M:%S").tolist()
+    stamps[5000] = "not a time"
+    lines = ["DateTime,Electrical Consumption [W]", *(f"{t},100" for t in stamps)]
+    (tmp_path / "REE_2026_2.0TD_1000kwh_hourly.csv").write_text("\n".join(lines) + "\n")
+
+    with pytest.raises(ValueError, match="1 timestamps that do not parse.*data row 5000: 'not a time'"):
+        load_profile("ree_2.0td", 1000, rlp_directory=str(tmp_path))
+
+
+def test_external_profile_with_a_label_column_skips_the_spacing_check(tmp_path):
+    lines = ["Label,Electrical Consumption [W]", *(f"row{i},100" for i in range(8760))]
+    (tmp_path / "REE_2026_2.0TD_1000kwh_hourly.csv").write_text("\n".join(lines) + "\n")
+
+    assert len(load_profile("ree_2.0td", 1000, rlp_directory=str(tmp_path))) == 8760
+
+
+def test_external_profile_with_dst_offsets_is_evenly_spaced(tmp_path):
+    # Offsets change at DST; the instants still step by one hour.
+    stamps = pd.date_range("2025-01-01", periods=8760, freq="h", tz="Europe/Lisbon").astype(str)
+    lines = ["DateTime,Electrical Consumption [W]", *(f"{t},100" for t in stamps)]
+    (tmp_path / "REE_2026_2.0TD_1000kwh_hourly.csv").write_text("\n".join(lines) + "\n")
+
+    assert len(load_profile("ree_2.0td", 1000, rlp_directory=str(tmp_path))) == 8760
+
+
+def _hourly_only_rlp_directory(tmp_path):
+    """An external profile directory with the bundled hourly H0 file and no 15-minute file."""
+    with as_file(rlp_resource(PROFILES["demandlib_h0"].files["h"])) as source:
+        shutil.copy(source, tmp_path / PROFILES["demandlib_h0"].files["h"])
+    return str(tmp_path)
+
+
+def _lag_in_steps(resampled, reference):
+    """Vertex of the mean squared error over shifts of -1, 0 and +1 step; > 0 means late."""
+    early = np.mean((resampled[:-1] - reference[1:]) ** 2)
+    aligned = np.mean((resampled - reference) ** 2)
+    late = np.mean((resampled[1:] - reference[:-1]) ** 2)
+    return (early - late) / (2.0 * (early - 2.0 * aligned + late)), early, aligned, late
+
+
+def test_hourly_h0_resampled_to_15min_has_no_lag_and_keeps_each_hours_mean():
+    # The bundled 15-minute H0 profile, averaged to hours and resampled back,
+    # used to run about 22.5 minutes early and miss each hour's mean by 6 W.
+    native = load_profile("demandlib_h0", 1000, freq="15min")[_LOAD_COLUMN]
+    hourly = native.resample("h").mean().to_frame()
+
+    resampled = _resample_load_to_15min(hourly)[_LOAD_COLUMN]
+
+    assert resampled.index.equals(native.index)
+    lag, early, aligned, late = _lag_in_steps(resampled.to_numpy(), native.to_numpy())
+    assert abs(lag) < 0.05
+    assert aligned < early and aligned < late
+    hour_means = resampled.to_numpy().reshape(-1, 4).mean(axis=1)
+    np.testing.assert_allclose(hour_means, hourly[_LOAD_COLUMN].to_numpy(), rtol=0, atol=1e-9)
+    assert resampled.min() >= 0.0
+
+
+@pytest.mark.parametrize("timezone", ["UTC", "Europe/Berlin"])
+def test_load_profile_from_an_hourly_file_keeps_each_hours_mean_at_15min(tmp_path, timezone):
+    directory = _hourly_only_rlp_directory(tmp_path)
+    hourly = load_profile("demandlib_h0", 3500, freq="h", rlp_directory=directory, timezone=timezone)[_LOAD_COLUMN]
+
+    quarter = load_profile("demandlib_h0", 3500, freq="15min", rlp_directory=directory, timezone=timezone)[_LOAD_COLUMN]
+
+    assert len(quarter) == 4 * len(hourly)
+    assert quarter.index[0] == hourly.index[0]
+    np.testing.assert_allclose(quarter.to_numpy().reshape(-1, 4).mean(axis=1), hourly.to_numpy(), rtol=0, atol=1e-9)
+    assert quarter.sum() * 0.25 / 1000 == pytest.approx(3500, rel=1e-12)
+
+
+def test_resample_load_rejects_an_irregular_index():
+    idx = pd.DatetimeIndex(["2025-01-01 00:00", "2025-01-01 01:00", "2025-01-01 03:00"], tz="UTC")
+    with pytest.raises(ValueError, match="regular hourly index"):
+        _resample_load_to_15min(pd.DataFrame({_LOAD_COLUMN: [1.0, 2.0, 3.0]}, index=idx))
+
+
+# --- Profile registry (#182) -------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("removed", "replacement"),
+    [
+        ("1", "demandlib_h0"),
+        ("4", "eredes_btn_a"),
+        ("5", "eredes_btn_b"),
+        ("6", "eredes_btn_c"),
+        ("7", "bdew_h0"),
+        ("8", "ree_2.0td"),
+        (6, "eredes_btn_c"),
+        ("h0", "demandlib_h0"),
+        ("default", "demandlib_h0"),
+        ("crest", "custom"),
+    ],
+)
+def test_removed_profile_keys_raise_and_name_the_replacement(removed, replacement):
+    with pytest.raises(ValueError, match=rf"removed in BREOS 0\.7\.0; use '{replacement}'"):
+        resolve_profile_key(removed)
+    with pytest.raises(ValueError, match="removed in BREOS 0.7.0"):
+        load_profile(removed, 1000)
+
+
+def test_profile_keys_are_canonical_and_case_insensitive():
+    assert PROFILE_KEYS == (
+        "demandlib_h0",
+        "eredes_btn_a",
+        "eredes_btn_b",
+        "eredes_btn_c",
+        "bdew_h0",
+        "ree_2.0td",
+        "custom",
+    )
+    assert resolve_profile_key(" REE_2.0TD ") == "ree_2.0td"
+    with pytest.raises(ValueError, match="Unknown load_profile 'ree_2_0td'"):
+        resolve_profile_key("ree_2_0td")
+
+
+def test_bundled_profile_records_its_key_file_and_hash():
+    profile = load_profile("demandlib_h0", 1000, freq="15min")
+    metadata = profile.attrs["breos_load_profile"]
+
+    with as_file(rlp_resource("h0SLP_demandlib_1000kwh_15min.csv")) as source:
+        digest = hashlib.sha256(source.read_bytes()).hexdigest()
+    assert metadata == {
+        "key": "demandlib_h0",
+        "name": PROFILES["demandlib_h0"].name,
+        "file": "h0SLP_demandlib_1000kwh_15min.csv",
+        "packaged": True,
+        "sha256": digest,
+        "native_resolution": "15min",
+        "column": "h0_dyn",
+        "unit": "kW",
+    }
+
+
+def test_external_profile_is_found_by_pattern_whatever_its_year(tmp_path):
+    _write_eredes(tmp_path / "EREDES_2031_BTN_1000kwh_hourly.csv", 8760, freq="h")
+
+    profile = load_profile("eredes_btn_b", 1000, rlp_directory=str(tmp_path))
+
+    metadata = profile.attrs["breos_load_profile"]
+    assert metadata["file"] == str((tmp_path / "EREDES_2031_BTN_1000kwh_hourly.csv").resolve())
+    assert metadata["packaged"] is False
+    assert (metadata["column"], metadata["unit"], metadata["native_resolution"]) == ("BTN B - Wh", "Wh", "h")
+
+
+def test_several_matching_files_raise_and_list_them(tmp_path):
+    for year in (2024, 2025):
+        _write_eredes(tmp_path / f"EREDES_{year}_BTN_1000kwh_15min.csv", 35040)
+
+    with pytest.raises(
+        ValueError, match=r"2 files .* EREDES_2024_BTN_1000kwh_15min\.csv, EREDES_2025_BTN_1000kwh_15min\.csv"
+    ):
+        load_profile("eredes_btn_c", 1000, freq="15min", rlp_directory=str(tmp_path))
+
+    # Naming the file settles it; its resolution comes from its row count.
+    chosen = load_profile(
+        "eredes_btn_c",
+        1000,
+        freq="15min",
+        rlp_directory=str(tmp_path),
+        profile_file="EREDES_2024_BTN_1000kwh_15min.csv",
+    )
+    assert chosen.attrs["breos_load_profile"]["file"].endswith("EREDES_2024_BTN_1000kwh_15min.csv")
+    assert chosen.attrs["breos_load_profile"]["native_resolution"] == "15min"
+
+
+def test_the_requested_resolution_is_preferred_and_the_other_is_resampled(tmp_path):
+    _write_eredes(tmp_path / "EREDES_2025_BTN_1000kwh_hourly.csv", 8760, freq="h")
+
+    quarter = load_profile("eredes_btn_a", 1000, freq="15min", rlp_directory=str(tmp_path))
+
+    assert len(quarter) == 35040
+    assert quarter.attrs["breos_load_profile"]["native_resolution"] == "h"
+    _write_eredes(tmp_path / "EREDES_2025_BTN_1000kwh_15min.csv", 35040)
+    native = load_profile("eredes_btn_a", 1000, freq="15min", rlp_directory=str(tmp_path))
+    assert native.attrs["breos_load_profile"]["native_resolution"] == "15min"
+
+
+def test_missing_external_file_names_the_patterns(tmp_path):
+    with pytest.raises(FileNotFoundError, match=r"no file in .* matches 'REE_\*_2\.0TD_1000kwh_hourly\.csv' or"):
+        load_profile("ree_2.0td", 1000, rlp_directory=str(tmp_path))
+
+
+def _write_custom(path, values, column="Power [W]", extra=False, freq="h"):
+    stamps = pd.date_range("2025-01-01", periods=len(values), freq=freq)
+    frame = pd.DataFrame({column: values}, index=stamps)
+    if extra:
+        frame["Other"] = 1.0
+    frame.to_csv(path)
+
+
+@pytest.mark.parametrize(("unit", "scale"), [("W", 1.0), ("kW", 1e-3), ("Wh", 0.25), ("kWh", 0.25e-3)])
+def test_custom_profile_reads_its_declared_unit(tmp_path, unit, scale):
+    watts = 100.0 + np.arange(35040) % 96
+    _write_custom(tmp_path / "measured.csv", watts * scale, freq="15min")
+
+    profile = load_profile("custom", 1000, freq="15min", profile_file=tmp_path / "measured.csv", profile_unit=unit)
+
+    load = profile[_LOAD_COLUMN].to_numpy()
+    np.testing.assert_allclose(load / load[0], watts / watts[0], rtol=1e-12)
+    assert load.sum() * 0.25 / 1000 == pytest.approx(1000)
+    metadata = profile.attrs["breos_load_profile"]
+    assert (metadata["key"], metadata["column"], metadata["unit"]) == ("custom", "Power [W]", unit)
+
+
+def test_custom_profile_needs_a_file_and_a_unit_and_a_column_when_ambiguous(tmp_path):
+    _write_custom(tmp_path / "measured.csv", np.full(8760, 100.0), extra=True)
+
+    with pytest.raises(ValueError, match="needs load_profile_file"):
+        load_profile("custom", 1000, profile_unit="W")
+    with pytest.raises(ValueError, match="needs load_profile_unit"):
+        load_profile("custom", 1000, profile_file=tmp_path / "measured.csv")
+    with pytest.raises(ValueError, match="2 value columns"):
+        load_profile("custom", 1000, profile_file=tmp_path / "measured.csv", profile_unit="W")
+    with pytest.raises(ValueError, match="needs the column 'Missing'"):
+        load_profile("custom", 1000, profile_file=tmp_path / "measured.csv", profile_column="Missing", profile_unit="W")
+    chosen = load_profile(
+        "custom", 1000, profile_file=tmp_path / "measured.csv", profile_column="Power [W]", profile_unit="W"
+    )
+    assert len(chosen) == 8760
+
+
+def test_column_and_unit_options_are_rejected_for_registered_profiles():
+    with pytest.raises(ValueError, match="apply only to load_profile 'custom'"):
+        load_profile("demandlib_h0", 1000, profile_unit="kW")
+    with pytest.raises(ValueError, match="Unknown load_profile_unit 'MW'"):
+        load_profile("custom", 1000, profile_unit="MW")
+
+
+def test_named_file_of_an_unknown_length_raises(tmp_path):
+    _write_custom(tmp_path / "short.csv", np.full(1000, 100.0))
+
+    with pytest.raises(ValueError, match="has 1000 data rows"):
+        load_profile("custom", 1000, profile_file=tmp_path / "short.csv", profile_unit="W")

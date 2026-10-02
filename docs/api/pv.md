@@ -22,11 +22,28 @@ model documentation and comparison data.
    :toctree: generated/
 
    breos.solar.calculate_pv_production_dc
+   breos.solar.calculate_pv_production_dc_tracking
    breos.solar.calculate_pv_production_breakdown
    breos.solar.calculate_pv_production_ac
    breos.solar.calculate_multi_array_production
    breos.solar.dc_to_ac
 ```
+
+## Module aging
+
+PV module degradation is counted at the start of each simulated year and
+compounds. Year 1 of operation, age 0, has no degradation. Year `n` is
+degraded by `n - 1` full years, so its DC output after the static PVWatts
+losses is scaled by `(1 - degradation_rate) ** (n - 1)`. With the default
+`pv_degradation_rate = 0.005`, year 2 produces 99.5% of year 1 and year 20
+produces 90.9%.
+
+App, Monte Carlo, the optimizer and the economics projection all apply this
+rule. The `breos.solar` production functions apply it through `current_year`
+and `start_year`: the modules are `current_year - start_year` years old, and
+`current_year == start_year` is the installation year. Without both
+arguments there is no age loss. The year 1 PV loss waterfall therefore has
+no degradation stage.
 
 ## Module catalogue
 
@@ -38,7 +55,7 @@ and `list_modules` returns the available keys.
 `add_module` registers hardware that BREOS does not ship. It writes to the
 in-memory catalogue and persists nothing, so call it once per process before
 you build an `App`. See
-[Use your own PV module](../getting-started/recipes.md) for a worked example.
+[Use your own PV module](../how-to/own-pv-module.md) for a worked example.
 
 ```{eval-rst}
 .. autosummary::
@@ -64,13 +81,11 @@ you build an `App`. See
 
 ## Inverter
 
-Common inverter configurations live in `breos.inverter.INVERTER_PRESETS`.
-Use `get_inverter_preset` to look one up by key.
-
 ```{eval-rst}
 .. autosummary::
    :toctree: generated/
 
-   breos.inverter.InverterConfig
-   breos.inverter.get_inverter_preset
+   breos.inverter.calculate_dc_ac_power
+   breos.inverter.dc_power_for_ac_output
+   breos.inverter.InverterConversionResult
 ```

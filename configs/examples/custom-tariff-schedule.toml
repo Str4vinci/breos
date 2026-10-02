@@ -1,0 +1,53 @@
+# A time-of-use tariff defined inline with [tariff.custom_schedule], for a
+# supplier calendar that BREOS does not bundle: weekday peak hours, weekends
+# and holidays off peak. time-of-use-portugal.toml uses a bundled schedule
+# instead.
+#
+# The prices and the supplier calendar are illustrative. Replace the holiday
+# dates with the complete calendar intended for each year.
+#
+#   breos run --config configs/examples/custom-tariff-schedule.toml
+
+location = "porto"
+n_modules = 8
+annual_consumption_kwh = 4000
+battery_kwh = 5.0
+start_date = 2026-01-01
+projection_years = 3   # a short horizon; the default is 20
+
+[tariff]
+currency = "EUR"
+import_prices = { peak = 0.31, off_peak = 0.12 }
+export_prices = { all = 0.05 }
+fixed_charge_per_day = 0.20
+
+[tariff.custom_schedule]
+identifier = "example_supplier_2026"
+version = "2026-01"
+timezone = "Europe/Lisbon"
+cycle = "weekly"
+periods = ["peak", "off_peak"]
+source = "Illustrative supplier tariff sheet"
+effective_from = 2026-01-01
+effective_to = 2026-12-31
+
+[[tariff.custom_schedule.rules]]
+days = "weekday"
+season = "all"
+intervals = { off_peak = [["00:00", "08:00"], ["22:00", "24:00"]], peak = [["08:00", "22:00"]] }
+
+[[tariff.custom_schedule.rules]]
+days = "saturday"
+season = "all"
+intervals = { off_peak = [["00:00", "24:00"]] }
+
+[[tariff.custom_schedule.rules]]
+days = "sunday"
+season = "all"
+intervals = { off_peak = [["00:00", "24:00"]] }
+
+[tariff.custom_schedule.holidays]
+day_type = "sunday"
+source = "Illustrative supplier holiday calendar"
+# These are the complete explicit holidays in this fictional example.
+dates = { "2026" = [2026-01-01, 2026-12-25] }

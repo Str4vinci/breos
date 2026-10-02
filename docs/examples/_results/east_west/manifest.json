@@ -1,0 +1,57 @@
+{
+ "case": "east_west",
+ "title": "East-west and south-facing arrays",
+ "breos_version": "0.7.0",
+ "git_describe": "v0.6.2-625-gfef7fe9",
+ "generated_utc": "2026-10-02T11:45:09+00:00",
+ "runtime_s": 6.0,
+ "cheap": true,
+ "configs": {
+  "configs/examples/east-west-roof.toml": "3c7ac2449fc6717d2828c23e108fd9ff649eb252082a07f6fc8f8f6965a577a8"
+ },
+ "weather": {
+  "validation/data/weather/porto_tmy_2005_2023_pvgis-sarah3.csv.gz": {
+   "sha256": "bf84e31b02ad9bf39f331a5ce8629b1ea8f80cd1597748e72a87a0fce56b4f15",
+   "attribution": "PVGIS typical meteorological year 2005-2023 (PVGIS-SARAH3). PVGIS data © European Union, 2001-2024, reused under Commission Decision 2011/833/EU."
+  }
+ },
+ "dependencies": {
+  "python": "3.12.13",
+  "numpy": "2.4.6",
+  "pandas": "3.0.5",
+  "pvlib": "0.15.2",
+  "scipy": "1.17.1",
+  "numba": "0.66.0",
+  "pymoo": "0.6.2"
+ },
+ "currency": "EUR",
+ "timezone": "Europe/Lisbon",
+ "variants": {
+  "East-West 10°": {},
+  "South 10°": {
+   "pv_arrays": null,
+   "n_modules": 12,
+   "tilt": 10,
+   "azimuth": 180
+  },
+  "South 35°": {
+   "pv_arrays": null,
+   "n_modules": 12,
+   "tilt": 35,
+   "azimuth": 180
+  }
+ },
+ "battery_kwh": [
+  0.0,
+  5.0
+ ],
+ "iso_weeks": {
+  "summer": 27,
+  "winter": 3
+ },
+ "files": {
+  "designs.csv": "4d6b4f4e17f59fdda7ab471fb90d7e810e86190b1e8e6b20a970689d7785fc41",
+  "week_summer.csv": "5a71f6b30a783d8bf5452176f4228de12908f40a0b565c0ff7ce97bdf8246690",
+  "week_winter.csv": "998bb141d26f6c39e897c311be1c2e7b5f019757661a6e9206897309751dd469"
+ }
+}

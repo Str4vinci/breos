@@ -14,8 +14,8 @@ pv_module = "Generic_600W_Bifacial"
 bifacial_model = "infinite_sheds"
 albedo = 0.2
 gcr = 0.35
-pvrow_height = 1.5  # row-center height; same unit as pitch
-pvrow_pitch = 6.0   # distance between rows
+pvrow_height = 1.5  # row-center height above ground, m; same unit as pitch
+pvrow_pitch = 6.0   # distance between rows, m
 
 load_profile = "demandlib_h0"
 cost_preset = "residential_pt"

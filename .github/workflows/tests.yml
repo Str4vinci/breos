@@ -1,6 +1,10 @@
 name: Tests
 
 on:
+  # Develop too: its branch protection does not require a pull request to be
+  # up to date before it merges, so two PRs that pass alone can still break
+  # together. The push run tests the tree each merge lands, without blocking
+  # it; the nightly coverage run still runs the full suite on develop itself.
   push:
     branches: [main, develop, "release/**"]
   # Deliberately unfiltered: a `branches` filter here matches the *base* of the
@@ -13,6 +17,16 @@ on:
   schedule:
     - cron: "0 4 * * *"  # 04:00 UTC every day
   workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A new push to a pull request cancels that PR's run still in progress. Other
+# events get a group of their own (the run id), so pushes, nightly, and manual
+# runs are never cancelled or queued behind one another.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
 
 jobs:
   test:
@@ -30,10 +44,10 @@ jobs:
       UV_PYTHON: ${{ matrix.python-version }}
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v7
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
 
       - name: Set up Python
         run: uv python install ${{ matrix.python-version }}
@@ -47,9 +61,13 @@ jobs:
       - name: Check formatting
         run: uv run ruff format --check breos/ tests/ tools/
 
+      - name: Type check
+        run: uv run mypy breos
+
       - name: Run tests
         # Slow tests are deselected by default (pyproject addopts: -m "not slow").
-        run: uv run pytest tests/ -v
+        # -n auto spreads the suite over the runner's cores (pytest-xdist).
+        run: uv run pytest tests/ -v -n auto
 
       - name: Verify release artifacts
         run: uv run python tools/verify_release_artifacts.py
@@ -61,8 +79,17 @@ jobs:
 
   platform-smoke:
     # Keep non-Linux coverage focused on installation and public entrypoints;
-    # the complete version matrix remains on Linux above.
-    if: github.event_name == 'push' || github.event_name == 'pull_request'
+    # the complete version matrix remains on Linux above. macOS minutes are
+    # metered at about ten times the Linux rate, so this runs nightly, on
+    # demand, and at the release gates (pushes to main and release/**, and PRs
+    # into them) rather than on every PR commit or develop merge. A
+    # platform-only break on develop surfaces within a day.
+    if: >-
+      (github.event_name == 'push' && github.ref != 'refs/heads/develop') ||
+      github.event_name == 'schedule' ||
+      github.event_name == 'workflow_dispatch' ||
+      github.base_ref == 'main' ||
+      startsWith(github.base_ref, 'release/')
     runs-on: ${{ matrix.os }}
 
     strategy:
@@ -74,10 +101,10 @@ jobs:
       UV_PYTHON: "3.12"
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v7
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
 
       - name: Set up Python
         run: uv python install 3.12
@@ -89,9 +116,72 @@ jobs:
         run: >-
           uv run pytest
           tests/test_public_api.py
-          tests/test_cli_correctness.py
+          tests/test_cli.py::test_cli_threads_battery_power_limits tests/test_cli.py::test_cli_does_not_advertise_unsupported_ac_coupling
           tests/test_release_smoke.py::test_readme_quickstart_smoke
           -q
+
+      - name: Check backend bit identity on this platform
+        # Bit identity between the Python and Numba backends depends on the
+        # platform's libm (see the zeta-pow test), so check it off Linux too.
+        run: uv run pytest tests/test_numba_dispatch_parity.py -q
+
+  floors:
+    # The declared dependency floors (numpy 2.0, pandas 2.3.3, pvlib 0.14,
+    # scipy 1.14) on the oldest supported Python. The lock pins much newer
+    # releases, so without this job a floor could break unnoticed (#150 was
+    # a pandas-version bug).
+    if: github.event_name == 'push' || github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+
+    env:
+      UV_PYTHON: "3.11"
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+
+      - name: Set up Python
+        run: uv python install 3.11
+
+      - name: Install the lowest direct dependencies
+        # Re-resolves instead of using uv.lock; the rewritten lock is discarded.
+        run: uv sync --extra dev --resolution lowest-direct
+
+      - name: Show the resolved floors
+        run: uv run --no-sync python -c "import numpy, pandas, pvlib, scipy; print(numpy.__version__, pandas.__version__, pvlib.__version__, scipy.__version__)"
+
+      - name: Run tests
+        run: uv run --no-sync pytest tests/ -q -n auto
+
+  no-numba:
+    # Numba is an optional extra, and importing BREOS must not need it. The
+    # dev extra installs it, so remove it and run the whole suite: backend
+    # tests skip, and everything else runs on the Python path.
+    if: github.event_name == 'push' || github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+
+    env:
+      UV_PYTHON: "3.12"
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Install dependencies without Numba
+        run: |
+          uv sync --extra dev
+          uv pip uninstall numba llvmlite
+          uv run --no-sync python -c "import importlib.util, sys; sys.exit(importlib.util.find_spec('numba') is not None)"
+
+      - name: Run tests
+        run: uv run --no-sync pytest tests/ -q -n auto
 
   slow-tests:
     # Long-running endurance tests on Python 3.12. Release pushes and PRs run
@@ -107,10 +197,10 @@ jobs:
       UV_PYTHON: "3.12"
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v7
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
 
       - name: Set up Python
         run: uv python install 3.12
@@ -125,9 +215,9 @@ jobs:
     # Publishes a branch-aware core-coverage snapshot; it is a report, not a
     # gate. No threshold is configured, so a failure here means the instrumented
     # run itself broke, never that coverage is too low. Instrumenting the whole
-    # suite costs 25-45 minutes against ~2 minutes uninstrumented, which is why
-    # it stays off the per-PR path. If diff coverage matters later, add a check
-    # scoped to the changed lines rather than restoring this to the matrix.
+    # suite makes it several times slower, which is why it stays off the
+    # per-PR path. If diff coverage matters later, add a check scoped to the
+    # changed lines rather than restoring this to the matrix.
     if: >-
       github.event_name == 'schedule' ||
       github.event_name == 'workflow_dispatch' ||
@@ -139,10 +229,10 @@ jobs:
       UV_PYTHON: "3.12"
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v7
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
 
       - name: Set up Python
         run: uv python install 3.12
@@ -152,10 +242,11 @@ jobs:
 
       - name: Run tests with core coverage
         # Vendored BLAST-Lite is excluded by the coverage configuration.
-        run: uv run pytest tests/ -v --cov=breos --cov-report=term-missing --cov-report=xml
+        # pytest-cov combines the xdist workers' data into one report.
+        run: uv run pytest tests/ -v -n auto --cov=breos --cov-report=term-missing --cov-report=xml
 
       - name: Upload core coverage report
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: core-coverage-python-3.12
           path: coverage.xml

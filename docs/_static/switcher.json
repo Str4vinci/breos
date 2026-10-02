@@ -1,8 +1,13 @@
 [
   {
-    "name": "latest",
-    "version": "latest",
-    "url": "https://breos.readthedocs.io/en/latest/",
+    "name": "stable",
+    "version": "stable",
+    "url": "https://breos.readthedocs.io/en/stable/",
     "preferred": true
+  },
+  {
+    "name": "latest (development)",
+    "version": "latest",
+    "url": "https://breos.readthedocs.io/en/latest/"
   }
 ]

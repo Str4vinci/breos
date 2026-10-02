@@ -11,24 +11,32 @@ import json
 import shlex
 import sys
 import tomllib
-from importlib.metadata import PackageNotFoundError, version
+import warnings
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Callable, Sequence
 
 from breos.app import App
-from breos.app_config import ALLOWED_CONFIG_KEYS, APP_CONFIG_FIELDS, COST_OVERRIDE_KEYS, resolve_app_config
+from breos.app_config import (
+    ALLOWED_CONFIG_KEYS,
+    APP_CONFIG_FIELDS,
+    NESTED_TABLE_SPECS,
+    ResolvedAppConfig,
+    normalize_config_keys,
+    override_config,
+    resolve_app_config,
+    validate_montecarlo_config,
+)
+from breos.app_inputs import _input_cache_key, reuse_prepared_inputs
+from breos.config_schema import MappingOf
 from breos.degradation import get_battery_model_profile, list_battery_models
-from breos.load_profiles import PROFILE_ALIASES, PROFILE_FILES, PROFILE_FILES_15MIN, PROFILE_NAMES
+from breos.execution import EXECUTION_BACKENDS
+from breos.io import nonfinite_to_none
+from breos.load_profiles import PROFILES, resolve_profile_file
 from breos.pv_modules import MODULES
 from breos.resources import load_config_json
 from breos.solar import resolve_pvwatts_losses
-
-
-def _package_version() -> str:
-    try:
-        return version("breos")
-    except PackageNotFoundError:
-        return "0.1.0"
+from breos.tariffs import DEFAULT_CURRENCY
+from breos.utils import package_version
 
 
 def _sha256(path: Path) -> str:
@@ -37,23 +45,6 @@ def _sha256(path: Path) -> str:
         for block in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(block)
     return digest.hexdigest()
-
-
-def _external_rlp_path(config: dict[str, Any]) -> Path | None:
-    """Resolve the external load-profile file selected by App semantics."""
-    directory = config.get("rlp_directory")
-    if directory is None:
-        return None
-    profile = PROFILE_ALIASES.get(str(config.get("load_profile", "1")).lower(), str(config.get("load_profile", "1")))
-    root = Path(directory)
-    candidates: list[Path] = []
-    if str(config.get("resolution", "h")) in {"15min", "15T"} and profile in PROFILE_FILES_15MIN:
-        candidates.append(root / PROFILE_FILES_15MIN[profile])
-    if profile in PROFILE_FILES:
-        candidates.append(root / PROFILE_FILES[profile])
-    if profile in PROFILE_FILES_15MIN:
-        candidates.append(root / PROFILE_FILES_15MIN[profile])
-    return next((path for path in candidates if path.is_file()), None)
 
 
 def _load_config(path: Path) -> dict[str, Any]:
@@ -73,7 +64,7 @@ def _load_config(path: Path) -> dict[str, Any]:
 
     if not isinstance(data, dict):
         raise ValueError("Config file must contain an object at the top level")
-    return {key.replace("-", "_"): value for key, value in data.items()}
+    return normalize_config_keys(data)
 
 
 def _build_config(args: argparse.Namespace) -> dict[str, Any]:
@@ -86,28 +77,61 @@ def _build_config(args: argparse.Namespace) -> dict[str, Any]:
         value = getattr(args, key)
         if value is None:
             continue
-        if field.cli_normalizer is not None:
-            value = field.cli_normalizer(value)
-        if value is None:
+        if field.normalizer is not None:
+            value = field.normalizer(value)
+        if value is None or value == "":
             continue
         overrides[key] = value
 
-    return {**config, **overrides}
+    return _deep_merge(override_config(config, overrides), overrides)
+
+
+def _deep_merge(base: dict[str, Any], overrides: dict[str, Any]) -> dict[str, Any]:
+    """Return ``base`` with ``overrides`` applied, merging nested tables key by key.
+
+    An override table replaces only the keys it sets, so a flag that sets one
+    ``[tariff]`` key keeps the rest of the file's table. Neither input is
+    changed.
+    """
+    merged = dict(base)
+    for key, value in overrides.items():
+        current = merged.get(key)
+        if isinstance(current, dict) and isinstance(value, dict):
+            merged[key] = _deep_merge(current, value)
+        else:
+            merged[key] = value
+    return merged
+
+
+def _json_text(data: Any, what: str, **kwargs: Any) -> str:
+    """Serialise user-facing output as strict JSON.
+
+    ``NaN`` and ``Infinity`` are not JSON, and many parsers reject them. A
+    payload whose metrics can be undefined goes through
+    :func:`breos.io.nonfinite_to_none` first; any non-finite value left after
+    that is a bug, so it fails here instead of writing an invalid file.
+    """
+    try:
+        return json.dumps(data, allow_nan=False, **kwargs)
+    except ValueError as exc:
+        raise ValueError(f"Cannot write {what} as JSON: it contains a non-finite number (NaN or Infinity)") from exc
 
 
 def _run(args: argparse.Namespace) -> int:
     config = _build_config(args)
+    _ignore_unused_runner_sections(config, command="run")
     if args.dry_run:
-        return _write_payload(_resolved_config_summary(config), args)
+        return _write_payload(_resolved_config_summary(config), args, "the resolved config")
 
     app = App(config)
     app.simulate()
-    return _write_payload(app.result(), args)
+    # An undefined metric (an LCOE with no production) is reported as null.
+    return _write_payload(nonfinite_to_none(app.result()), args, "the run result")
 
 
-def _write_payload(data: dict[str, Any], args: argparse.Namespace) -> int:
+def _write_payload(data: dict[str, Any], args: argparse.Namespace, what: str) -> int:
     indent = args.indent if args.indent > 0 else None
-    payload = json.dumps(data, indent=indent)
+    payload = _json_text(data, what, indent=indent)
 
     if args.output:
         args.output.write_text(payload + "\n", encoding="utf-8")
@@ -116,85 +140,75 @@ def _write_payload(data: dict[str, Any], args: argparse.Namespace) -> int:
     return 0
 
 
+# The sections of the resolved-config summary, in output order. Each App key
+# names its place through ``AppConfigField.summary``.
+_SUMMARY_SECTIONS = ("location", "pv", "inverter", "load", "battery", "economics", "emissions", "simulation")
+
+
 def _resolved_config_summary(config: dict[str, Any]) -> dict[str, Any]:
-    resolved = resolve_app_config(config)
+    """Summarise a raw App config: :func:`_config_summary` of its resolution."""
+    return _config_summary(resolve_app_config(config))
+
+
+def _config_summary(resolved: ResolvedAppConfig) -> dict[str, Any]:
+    """Summarise a resolved App config without fetching weather or simulating.
+
+    Every registered key appears at its ``AppConfigField.summary`` place, as
+    configured after defaults and normalisation; ``None`` still means "not
+    set" (an escalator that follows ``inflation_rate``, pvlib's albedo). Values
+    the resolver derives (the location's coordinates, the tilt, azimuth and
+    tracker axis, the module, the inverter AC rating, the load-profile file)
+    then replace or join them. Key order within a section follows the
+    registry.
+    """
     cfg = resolved.cfg
-    inverter_ac_kw = resolved.system_kwp / cfg["inverter_loading_ratio"]
-    return {
-        "valid": True,
-        "location": {
-            "key": resolved.loc_key,
-            "latitude": resolved.lat,
-            "longitude": resolved.lon,
-            "timezone": resolved.timezone,
-        },
-        "pv": {
-            "n_modules": cfg["n_modules"],
-            "system_kwp": resolved.system_kwp,
-            "module": resolved.pv_params.Name,
-            "arrays": resolved.pv_arrays or None,
-            "tilt": resolved.tilt,
-            "azimuth": resolved.azimuth,
-            "transposition_model": cfg["transposition_model"],
-            "albedo": cfg["albedo"],
-            "surface_type": cfg["surface_type"],
-            "model_perez": cfg["model_perez"],
-            "solar_position": cfg["solar_position"],
-            "iam_model": cfg["iam_model"],
-            "diffuse_iam": cfg["diffuse_iam"],
-            "temperature_model": cfg["temperature_model"],
-            "bifacial_model": cfg["bifacial_model"],
-            "gcr": cfg["gcr"],
-            "pvrow_height": cfg["pvrow_height"],
-            "pvrow_pitch": cfg["pvrow_pitch"],
-            "pv_loss_overrides": cfg["pv_loss_overrides"],
-            "losses": resolve_pvwatts_losses(cfg["pv_loss_overrides"]),
-        },
-        "inverter": {
-            "efficiency": cfg["inverter_efficiency"],
-            "loading_ratio": cfg["inverter_loading_ratio"],
-            "ac_rating_kw": inverter_ac_kw,
-            "dc_coupled": cfg["dc_coupled"],
-        },
-        "load": {
-            "annual_consumption_kwh": cfg["annual_consumption_kwh"],
-            "load_profile": cfg["load_profile"],
-            "rlp_directory": cfg["rlp_directory"],
-            "resolution": cfg["resolution"],
-            "start_date": cfg["start_date"],
-        },
-        "battery": {
-            "capacity_kwh": cfg["battery_kwh"],
-            "max_charge_power_w": cfg["battery_max_charge_power_w"],
-            "max_discharge_power_w": cfg["battery_max_discharge_power_w"],
-            "power_limit_c_rate": cfg["battery_power_limit_c_rate"],
-            "min_soc": cfg["battery_min_soc"],
-            "max_soc": cfg["battery_max_soc"],
-            "eol_percentage": cfg["battery_eol_percentage"],
-            "round_trip_efficiency": cfg["battery_rte"] if cfg["battery_rte"] is not None else 0.95,
-            "degradation_engine": cfg["degradation_engine"],
-            "blast_model": cfg["blast_model"],
-            "model_profile": (
-                get_battery_model_profile(cfg["blast_model"]).as_dict() if cfg["blast_model"] is not None else None
-            ),
-        },
-        "economics": {
-            "cost_preset": cfg["cost_preset"],
-            "projection_years": cfg["projection_years"],
-            "inflation_rate": cfg["inflation_rate"],
-            "sell_price_inflation": cfg["sell_price_inflation"],
-            "discount_rate": cfg["discount_rate"],
-        },
-        "emissions": {
-            "country": cfg["emissions_country"],
-            "enabled": resolved.emissions_params is not None,
-            "export_factor_gco2_kwh": cfg["export_emissions_factor_gco2_kwh"],
-        },
-        "notes": [
-            "This is a resolved configuration check only; no weather fetch or simulation was run.",
-            "Packaged defaults are examples. Replace weather, load, PV, inverter, cost, and emissions inputs for real studies.",
-        ],
-    }
+    summary: dict[str, Any] = {"valid": True, **{section: {} for section in _SUMMARY_SECTIONS}}
+    for name, field in APP_CONFIG_FIELDS.items():
+        # An unset [period] is left out, so a full-year summary is unchanged.
+        if name == "period" and cfg.get(name) is None:
+            continue
+        if field.summary is not None:
+            section, key = field.summary.split(".")
+            summary[section][key] = cfg.get(name)
+    # A table can hold values JSON has no type for, such as a TOML date in
+    # [tariff]; they are written as text, as in the result's provenance.
+    summary = json.loads(json.dumps(summary, default=str))
+
+    # A config is valid before its external profile file is in place, so a
+    # missing file is reported rather than raised; several matches still raise.
+    try:
+        profile_file: str | None = resolve_profile_file(
+            cfg["load_profile"], cfg["resolution"], cfg["rlp_directory"], cfg["load_profile_file"]
+        ).label
+        profile_file_error = None
+    except FileNotFoundError as exc:
+        profile_file, profile_file_error = None, str(exc)
+    summary["location"].update(
+        key=resolved.loc_key, latitude=resolved.lat, longitude=resolved.lon, timezone=resolved.timezone
+    )
+    summary["pv"].update(
+        system_kwp=resolved.system_kwp,
+        module=resolved.pv_module_key,
+        arrays=resolved.pv_arrays or None,
+        tilt=resolved.tilt,
+        azimuth=resolved.azimuth,
+        axis_azimuth=resolved.axis_azimuth,
+        losses=resolve_pvwatts_losses(cfg["pv_loss_overrides"]),
+    )
+    summary["inverter"]["ac_rating_kw"] = (resolved.inverter_ac_capacity_w or 0.0) / 1000
+    summary["load"].update(load_profile_file=profile_file, load_profile_file_error=profile_file_error)
+    summary["battery"].update(
+        round_trip_efficiency=cfg["battery_rte"] if cfg["battery_rte"] is not None else 0.95,
+        model_profile=(
+            get_battery_model_profile(cfg["blast_model"]).as_dict() if cfg["blast_model"] is not None else None
+        ),
+    )
+    summary["emissions"]["enabled"] = resolved.emissions_params is not None
+    summary["notes"] = [
+        "This is a resolved configuration check only; no weather fetch or simulation was run.",
+        "Packaged defaults are examples. Replace weather, load, PV, inverter, cost, and emissions inputs for real studies.",
+    ]
+    return summary
 
 
 def _load_options(category: str) -> list[dict[str, Any]]:
@@ -230,9 +244,11 @@ def _load_options(category: str) -> list[dict[str, Any]]:
         return [
             {
                 "key": key,
-                "electricity_cost_eur_kwh": value.get("electricity_cost"),
-                "export_price_eur_kwh": value.get("electricity_sold_cost"),
-                "storage_cost_eur_kwh": value.get("storage_cost_per_kwh"),
+                # The bundled catalogue is in one currency; BREOS does not convert.
+                "currency": DEFAULT_CURRENCY,
+                "electricity_cost_per_kwh": value.get("electricity_cost"),
+                "export_price_per_kwh": value.get("electricity_sold_cost"),
+                "storage_cost_per_kwh": value.get("storage_cost_per_kwh"),
             }
             for key, value in sorted(presets.items())
         ]
@@ -250,19 +266,16 @@ def _load_options(category: str) -> list[dict[str, Any]]:
         ]
 
     if category == "load-profiles":
-        bundled = {"1"}
-        aliases_by_key: dict[str, list[str]] = {}
-        for alias, key in PROFILE_ALIASES.items():
-            aliases_by_key.setdefault(key, []).append(alias)
         return [
             {
                 "key": key,
-                "name": name,
-                "aliases": ", ".join(sorted(aliases_by_key.get(key, []))) or None,
-                "bundled": key in bundled,
-                "requires_rlp_directory": key not in bundled,
+                "name": spec.name,
+                "bundled": spec.bundled,
+                "files": sorted(set(spec.files.values())),
+                "requires_rlp_directory": not spec.bundled and key != "custom",
+                "requires_load_profile_file": key == "custom",
             }
-            for key, name in sorted(PROFILE_NAMES.items())
+            for key, spec in PROFILES.items()
         ]
 
     if category == "battery-models":
@@ -287,8 +300,9 @@ def _format_options(category: str, rows: list[dict[str, Any]]) -> str:
         return "\n".join(lines)
     if category == "cost-presets":
         return "\n".join(
-            f"{row['key']}: buy {row['electricity_cost_eur_kwh']} EUR/kWh, "
-            f"sell {row['export_price_eur_kwh']} EUR/kWh, battery {row['storage_cost_eur_kwh']} EUR/kWh"
+            f"{row['key']}: buy {row['electricity_cost_per_kwh']} {row['currency']}/kWh, "
+            f"sell {row['export_price_per_kwh']} {row['currency']}/kWh, "
+            f"battery {row['storage_cost_per_kwh']} {row['currency']}/kWh"
             for row in rows
         )
     if category == "emissions":
@@ -298,10 +312,13 @@ def _format_options(category: str, rows: list[dict[str, Any]]) -> str:
     if category == "load-profiles":
         lines = []
         for row in rows:
-            name = row["name"].replace(" (external file required)", "")
-            status = "bundled" if row["bundled"] else "external CSV required via rlp_directory"
-            alias_text = f"; aliases: {row['aliases']}" if row.get("aliases") else ""
-            lines.append(f"{row['key']}: {name} ({status}{alias_text})")
+            if row["bundled"]:
+                status = "bundled"
+            elif row["requires_load_profile_file"]:
+                status = "your CSV via load_profile_file"
+            else:
+                status = f"external CSV via rlp_directory: {' or '.join(row['files'])}"
+            lines.append(f"{row['key']}: {row['name']} ({status})")
         return "\n".join(lines)
     if category == "battery-models":
         return "\n".join(
@@ -314,7 +331,7 @@ def _format_options(category: str, rows: list[dict[str, Any]]) -> str:
 def _list_options_command(args: argparse.Namespace) -> int:
     rows = _load_options(args.category)
     if args.json:
-        print(json.dumps(rows, indent=2))
+        print(_json_text(rows, f"the {args.category} list", indent=2))
     else:
         print(_format_options(args.category, rows))
     return 0
@@ -323,20 +340,48 @@ def _list_options_command(args: argparse.Namespace) -> int:
 def _validate_config(args: argparse.Namespace) -> int:
     config = _load_config(args.config)
     if "sweep" in config:
-        _normalise_sweep_grid(config["sweep"])
+        grid = _normalise_sweep_grid(config["sweep"])
+        base = {key: value for key, value in config.items() if key != "sweep"}
+        for _, run_config in _sweep_run_configs(base, grid):
+            _resolved_config_summary(run_config)
     payload = _resolved_config_summary(config)
     if args.json:
-        print(json.dumps(payload, indent=2))
+        print(_json_text(payload, "the config summary", indent=2))
     else:
         print(f"Config OK: {args.config}")
         print(f"Location: {payload['location']['key'] or 'custom'} ({payload['location']['timezone']})")
         print(f"PV: {payload['pv']['n_modules']} modules, {payload['pv']['system_kwp']:.3f} kWp")
         print(f"Inverter AC rating: {payload['inverter']['ac_rating_kw']:.3f} kW")
-        print(f"Load profile: {payload['load']['load_profile']} at {payload['load']['resolution']}")
+        load = payload["load"]
+        source = load["load_profile_file"] or f"file not found yet: {load['load_profile_file_error']}"
+        print(f"Load profile: {load['load_profile']} at {load['resolution']}, from {source}")
         print(f"Battery: {payload['battery']['capacity_kwh']} kWh")
         print(f"Cost preset: {payload['economics']['cost_preset'] or 'none'}")
         print(f"Emissions: {payload['emissions']['country'] or 'disabled'}")
+        period = payload["simulation"].get("period")
+        if period is not None:
+            print(f"Period: {period['start']} to {period['end']} (end exclusive); lifetime economics are skipped")
     return 0
+
+
+def _ignore_unused_runner_sections(
+    config: dict[str, Any],
+    *,
+    command: str,
+    used_sections: frozenset[str] = frozenset(),
+) -> None:
+    """Warn about and remove runner tables that this command cannot use."""
+    unused = sorted(({"montecarlo", "sweep"} - used_sections) & config.keys())
+    if not unused:
+        return
+    section_names = ", ".join(f"[{name}]" for name in unused)
+    warnings.warn(
+        f"breos {command} does not use {section_names}; ignoring these runner sections",
+        UserWarning,
+        stacklevel=2,
+    )
+    for name in unused:
+        config.pop(name, None)
 
 
 def _normalise_sweep_grid(raw_grid: Any) -> dict[str, list[Any]]:
@@ -365,18 +410,7 @@ def _normalise_sweep_grid(raw_grid: Any) -> dict[str, list[Any]]:
         raise ValueError("Sweep config must define at least one parameter under [sweep].")
 
     for key in grid:
-        top_level, separator, nested = key.partition(".")
-        if top_level not in ALLOWED_CONFIG_KEYS:
-            available = ", ".join(sorted(ALLOWED_CONFIG_KEYS))
-            raise ValueError(f"Unknown sweep key '{key}'. Available: {available}")
-        if separator and top_level != "costs":
-            available = ", ".join(f"costs.{name}" for name in sorted(COST_OVERRIDE_KEYS))
-            raise ValueError(
-                f"Unknown sweep key '{key}'. Dotted keys are supported only under 'costs'. Available: {available}"
-            )
-        if top_level == "costs" and (not separator or nested not in COST_OVERRIDE_KEYS):
-            available = ", ".join(f"costs.{name}" for name in sorted(COST_OVERRIDE_KEYS))
-            raise ValueError(f"Unknown sweep key '{key}'. Available: {available}")
+        _check_sweep_key(key)
 
     keys = set(grid)
     for key in keys:
@@ -388,9 +422,73 @@ def _normalise_sweep_grid(raw_grid: Any) -> dict[str, list[Any]]:
     return grid
 
 
+def _sweep_run_configs(
+    config: dict[str, Any], grid: dict[str, list[Any]]
+) -> list[tuple[dict[str, Any], dict[str, Any]]]:
+    """Each grid point's varied values and run config, in sweep order."""
+    keys = list(grid)
+    runs = []
+    for values in itertools.product(*(grid[key] for key in keys)):
+        varied = dict(zip(keys, values, strict=True))
+        runs.append((varied, _apply_sweep_values(config, varied)))
+    return runs
+
+
+def _check_sweep_key(key: str) -> None:
+    """Check one sweep key against the config registry.
+
+    A top-level key must be registered. A dotted key must name a key of a
+    nested table (``costs``, ``battery_indoor_model``, ``tariff``,
+    ``reference_tariff``, ``smart_charging``), and may go further only into a free-form mapping,
+    as deep as it allows: ``tariff.import_prices.P1``, or
+    ``tariff.import_prices.winter.P1`` for prices by month season. Values are
+    checked later, when each run's config is resolved.
+    """
+    parts = key.split(".")
+    top_level = parts[0]
+    if top_level not in ALLOWED_CONFIG_KEYS:
+        available = ", ".join(sorted(ALLOWED_CONFIG_KEYS))
+        raise ValueError(f"Unknown sweep key '{key}'. Available: {available}")
+    if top_level == "costs" and len(parts) == 1:
+        # A whole [costs] table per run would drop the file's other overrides.
+        available = ", ".join(f"costs.{name}" for name in sorted(NESTED_TABLE_SPECS["costs"].keys))
+        raise ValueError(f"Unknown sweep key '{key}'. Available: {available}")
+    if len(parts) == 1:
+        return
+    spec = NESTED_TABLE_SPECS.get(top_level)
+    if spec is None:
+        tables = ", ".join(f"'{name}'" for name in sorted(NESTED_TABLE_SPECS))
+        raise ValueError(f"Unknown sweep key '{key}'. Dotted keys are supported only under {tables}.")
+    table_key = parts[1]
+    if table_key not in spec.keys:
+        available = ", ".join(f"{top_level}.{name}" for name in sorted(spec.keys))
+        raise ValueError(f"Unknown sweep key '{key}'. Available: {available}")
+    if len(parts) == 2:
+        return
+    checker = spec.keys[table_key]
+    if not isinstance(checker, MappingOf):
+        raise ValueError(
+            f"Unknown sweep key '{key}'. '{top_level}.{table_key}' is not a table of named entries; "
+            f"sweep '{top_level}.{table_key}' itself."
+        )
+    if len(parts) > 2 + checker.depth:
+        if checker.depth == 1:
+            levels = f"one more level, the entry name, as in '{top_level}.{table_key}.{parts[2]}'"
+        else:
+            levels = (
+                f"at most {checker.depth} more levels, as in '{top_level}.{table_key}.{parts[2]}' or "
+                f"'{top_level}.{table_key}.{parts[2]}.{parts[3]}'"
+            )
+        raise ValueError(f"Unknown sweep key '{key}'. '{top_level}.{table_key}' takes {levels}.")
+
+
 def _apply_sweep_values(config: dict[str, Any], varied: dict[str, Any]) -> dict[str, Any]:
-    """Return a run config with top-level or dotted sweep values applied."""
-    result = copy.deepcopy(config)
+    """Return a run config with top-level or dotted sweep values applied.
+
+    A value replaces the base's alternative key, as a CLI flag does
+    (``inverter_ac_rating_kw`` over a base ``inverter_loading_ratio``).
+    """
+    result = override_config(copy.deepcopy(config), varied)
     for key, value in varied.items():
         parts = key.split(".")
         target = result
@@ -437,46 +535,68 @@ def _write_sweep_csv(rows: list[dict[str, Any]], output: Path) -> None:
             writer.writerow({key: _csv_cell(value) for key, value in row.items()})
 
 
+def _sweep_row(
+    run_idx: int, varied: dict[str, Any], resolved: dict[str, Any], result: dict[str, Any]
+) -> dict[str, Any]:
+    """One sweep CSV row: the run, its varied values, resolved sizing and scalar results."""
+    row: dict[str, Any] = {
+        "run": run_idx,
+        "breos_version": package_version(),
+    }
+    row.update({f"param_{key}": value for key, value in varied.items()})
+    row.update(
+        {
+            "resolved_location": resolved["location"]["key"] or "custom",
+            "resolved_n_modules": resolved["pv"]["n_modules"],
+            "resolved_battery_kwh": resolved["battery"]["capacity_kwh"],
+            "resolved_pv_kwp": resolved["pv"]["system_kwp"],
+            "resolved_inverter_ac_kw": resolved["inverter"]["ac_rating_kw"],
+        }
+    )
+    row.update(_scalar_result_items(result))
+    return row
+
+
 def _sweep(args: argparse.Namespace) -> int:
     config = _load_config(args.config)
+    _ignore_unused_runner_sections(config, command="sweep", used_sections=frozenset({"sweep"}))
     raw_grid = config.pop("sweep", None)
     if raw_grid is None:
         raise ValueError("Sweep config must include a [sweep] section.")
 
     grid = _normalise_sweep_grid(raw_grid)
-    param_keys = list(grid)
-    rows: list[dict[str, Any]] = []
-
-    for run_idx, values in enumerate(itertools.product(*(grid[key] for key in param_keys)), start=1):
-        varied = dict(zip(param_keys, values))
-        run_config = _apply_sweep_values(config, varied)
-        resolved = _resolved_config_summary(run_config)
-
-        app = App(run_config)
-        app.simulate()
-        result = app.result()
-
-        row: dict[str, Any] = {
-            "run": run_idx,
-            "breos_version": _package_version(),
-        }
-        row.update({f"param_{key}": value for key, value in varied.items()})
-        row.update(
-            {
-                "resolved_location": resolved["location"]["key"] or "custom",
-                "resolved_n_modules": resolved["pv"]["n_modules"],
-                "resolved_battery_kwh": resolved["battery"]["capacity_kwh"],
-                "resolved_pv_kwp": resolved["pv"]["system_kwp"],
-                "resolved_inverter_ac_kw": resolved["inverter"]["ac_rating_kw"],
-            }
-        )
-        row.update(_scalar_result_items(result))
-        rows.append(row)
+    # Every grid point is resolved before the first one runs, so a bad
+    # combination (a tariff period the schedule lacks) fails in seconds, not
+    # after the runs before it. Each App is built only when it runs, so a
+    # finished run's result is not held until the sweep ends.
+    runs: list[tuple[dict[str, Any], dict[str, Any], dict[str, Any]]] = []
+    # Runs that differ only in keys the input stage never reads (a tariff, a
+    # battery size) share one preparation of weather, PV and load (#181).
+    # They run grouped by input configuration, so the one-entry cache serves
+    # each group; the CSV keeps the grid order.
+    input_keys: list[str | None] = []
+    for varied, run_config in _sweep_run_configs(config, grid):
+        resolved = resolve_app_config(run_config)
+        runs.append((varied, run_config, _config_summary(resolved)))
+        input_keys.append(_input_cache_key(resolved.cfg))
+    first_seen: dict[str | None, int] = {}
+    for index, key in enumerate(input_keys):
+        first_seen.setdefault(key, index)
+    order = sorted(range(len(runs)), key=lambda index: first_seen[input_keys[index]])
+    by_index: dict[int, dict[str, Any]] = {}
+    with reuse_prepared_inputs():
+        for index in order:
+            varied, run_config, summary = runs[index]
+            app = App(run_config)
+            app.simulate()
+            by_index[index] = _sweep_row(index + 1, varied, summary, app.result())
+    rows = [by_index[index] for index in range(len(runs))]
 
     _write_sweep_csv(rows, args.output)
 
     if args.json:
-        print(json.dumps({"runs": len(rows), "results_csv": str(args.output), "rows": rows}, indent=2))
+        payload = {"runs": len(rows), "results_csv": str(args.output), "rows": nonfinite_to_none(rows)}
+        print(_json_text(payload, "the sweep summary", indent=2))
     else:
         print(f"Sweep: {len(rows)} runs written to {args.output}")
     return 0
@@ -486,34 +606,51 @@ def _montecarlo(args: argparse.Namespace) -> int:
     from breos.montecarlo import MonteCarloSettings, run_montecarlo
 
     config = _load_config(args.config)
-    mc_cfg = config.get("montecarlo", {}) if isinstance(config.get("montecarlo"), dict) else {}
+    _ignore_unused_runner_sections(config, command="montecarlo", used_sections=frozenset({"montecarlo"}))
     if args.rlp_directory is not None:
         config["rlp_directory"] = str(args.rlp_directory)
+    if getattr(args, "irradiance_resampling", None) is not None:
+        config["irradiance_resampling"] = args.irradiance_resampling
+
+    # Report a typo such as [montecarlo].weather_fille before a missing-file
+    # error. The runner validates the full App config before weather access.
+    validate_montecarlo_config(config)
+    mc_cfg = config.get("montecarlo", {})
 
     weather_file = args.weather_file or mc_cfg.get("weather_file")
     if not weather_file:
         raise ValueError("Monte Carlo needs a weather file: set [montecarlo].weather_file or pass --weather-file.")
 
-    def _pick(cli_value: Any, key: str, default: Any) -> Any:
-        return cli_value if cli_value is not None else mc_cfg.get(key, default)
-
-    settings = MonteCarloSettings(
-        weather_file=str(weather_file),
-        n_runs=int(_pick(args.runs, "n_runs", 100)),
-        years_per_run=_pick(args.years, "years_per_run", None),
-        load_uncertainty=float(_pick(args.load_uncertainty, "load_uncertainty", 0.10)),
-        load_distribution=str(_pick(args.load_distribution, "load_distribution", "normal")),
-        target_year=int(_pick(args.target_year, "target_year", 2025)),
-        weather_start_year=_pick(args.weather_start_year, "weather_start_year", None),
-        weather_end_year=_pick(args.weather_end_year, "weather_end_year", None),
-        seed=_pick(args.seed, "seed", None),
-        min_load_scale=float(mc_cfg.get("min_load_scale", 0.0)),
-        max_load_scale=mc_cfg.get("max_load_scale"),
-        preserve_irradiance_energy=bool(_pick(args.preserve_irradiance_energy, "preserve_irradiance_energy", False)),
-        collect_yearly=bool(_pick(args.collect_yearly, "collect_yearly", False)),
-        n_procs=int(_pick(args.n_procs, "n_procs", 1)),
-        execution_backend=str(_pick(args.execution_backend, "execution_backend", "python")),
-    )
+    # Each setting's flag and conversion; None for a setting with no flag or
+    # no conversion. A flag beats [montecarlo], and a setting neither gives
+    # keeps its MonteCarloSettings default. An unset execution_backend lets
+    # run_montecarlo fall back to the top-level key, the same order a Python
+    # caller gets.
+    options: dict[str, tuple[Any, Callable[[Any], Any] | None]] = {
+        "n_runs": (args.runs, int),
+        "years_per_run": (args.years, None),
+        "load_uncertainty": (args.load_uncertainty, float),
+        "load_distribution": (args.load_distribution, str),
+        "target_year": (args.target_year, int),
+        "weather_start_year": (args.weather_start_year, None),
+        "weather_end_year": (args.weather_end_year, None),
+        "seed": (args.seed, None),
+        "min_load_scale": (None, float),
+        "max_load_scale": (None, None),
+        "collect_yearly": (args.collect_yearly, bool),
+        "n_procs": (args.n_procs, int),
+        "execution_backend": (args.execution_backend, None),
+    }
+    chosen: dict[str, Any] = {}
+    for name, (cli_value, convert) in options.items():
+        if cli_value is not None:
+            value = cli_value
+        elif name in mc_cfg:
+            value = mc_cfg[name]
+        else:
+            continue
+        chosen[name] = convert(value) if convert is not None else value
+    settings = MonteCarloSettings(weather_file=str(weather_file), **chosen)
 
     result = run_montecarlo(config, settings)
 
@@ -538,24 +675,31 @@ def _montecarlo(args: argparse.Namespace) -> int:
         "runs_csv_sha256": _sha256(out_path),
         "yearly_csv": str(yearly_path) if yearly_path is not None else None,
         "yearly_csv_sha256": _sha256(yearly_path) if yearly_path is not None else None,
-        "summary": result.summary,
+        # A statistic with no defined value is written as null.
+        "summary": nonfinite_to_none(result.summary),
     }
-    rlp_path = _external_rlp_path(config)
-    provenance["external_rlp_file"] = str(rlp_path.resolve()) if rlp_path is not None else None
-    provenance["external_rlp_file_sha256"] = _sha256(rlp_path) if rlp_path is not None else None
+    # The load profile's file and hash come from the run's provenance
+    # (load_profile.file, load_profile.sha256); these keys repeat them for an
+    # external file.
+    profile = result.provenance.get("load_profile", {})
+    external = profile.get("file") if profile.get("packaged") is False else None
+    provenance["external_rlp_file"] = external
+    provenance["external_rlp_file_sha256"] = profile.get("sha256") if external is not None else None
     provenance_path.parent.mkdir(parents=True, exist_ok=True)
-    provenance_path.write_text(json.dumps(provenance, indent=2, default=str) + "\n")
+    provenance_path.write_text(_json_text(provenance, "the Monte Carlo provenance", indent=2, default=str) + "\n")
     plots_dir = None
     if args.plots:
         from breos.plotting import plot_montecarlo_simulation
 
-        plot_montecarlo_simulation([], str(out_path.parent), full_df=result.runs, verbose=not args.json)
+        plot_montecarlo_simulation(result.runs, str(out_path.parent), verbose=not args.json)
         plots_dir = out_path.parent / "plots"
 
     if args.json:
         payload = {
+            "result_schema_version": result.provenance["result_schema_version"],
+            "currency": result.provenance["currency"],
             "settings": settings.__dict__,
-            "summary": result.summary,
+            "summary": nonfinite_to_none(result.summary),
             "available_years": result.available_years,
             "results_csv": str(out_path),
             "yearly_csv": str(yearly_path) if yearly_path is not None else None,
@@ -563,7 +707,7 @@ def _montecarlo(args: argparse.Namespace) -> int:
         }
         if plots_dir is not None:
             payload["plots_directory"] = str(plots_dir)
-        print(json.dumps(payload, indent=2))
+        print(_json_text(payload, "the Monte Carlo summary", indent=2))
         return 0
 
     print(
@@ -576,9 +720,22 @@ def _montecarlo(args: argparse.Namespace) -> int:
     if yearly_path is not None:
         print(f"Per-year trajectory results written to: {yearly_path}")
     print(f"Provenance written to: {provenance_path}")
-    print(f"{'metric':<28}{'mean':>12}{'p5':>12}{'p50':>12}{'p95':>12}")
+    print(f"{'metric':<28}{'runs':>12}{'mean':>12}{'p5':>12}{'p50':>12}{'p95':>12}")
     for metric, stats in result.summary.items():
-        print(f"{metric:<28}{stats['mean']:>12.2f}{stats['p5']:>12.2f}{stats['p50']:>12.2f}{stats['p95']:>12.2f}")
+        runs = f"{stats['count']}/{stats['n_runs']}"
+        if "mean" not in stats:
+            print(f"{metric:<28}{runs:>12}{'-':>12}{'-':>12}{'-':>12}{'-':>12}")
+            continue
+        print(
+            f"{metric:<28}{runs:>12}{stats['mean']:>12.2f}{stats['p5']:>12.2f}{stats['p50']:>12.2f}{stats['p95']:>12.2f}"
+        )
+    payback = result.summary.get("payback_year")
+    if payback is not None:
+        print(
+            f"Paid back within the horizon: {payback['count']} of {payback['n_runs']} runs "
+            f"({100.0 * payback['payback_probability']:.1f}%). "
+            "Payback statistics cover those runs only."
+        )
     return 0
 
 
@@ -593,16 +750,12 @@ def _add_run_config_arguments(parser: argparse.ArgumentParser) -> None:
             kwargs["type"] = field.cli_type
         if field.cli_choices is not None:
             kwargs["choices"] = field.cli_choices
-        if field.cli_action is not None:
-            kwargs["action"] = field.cli_action
-            # A missing boolean flag must not overwrite a config-file value.
-            kwargs["default"] = None
         parser.add_argument(*field.cli_flags, **kwargs)
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="breos", description="Run BREOS simulations from the command line.")
-    parser.add_argument("--version", action="version", version=f"breos {_package_version()}")
+    parser.add_argument("--version", action="version", version=f"breos {package_version()}")
 
     subparsers = parser.add_subparsers(dest="command", required=True)
 
@@ -640,6 +793,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     mc.add_argument("--config", type=Path, required=True, help="TOML or JSON config file with a [montecarlo] section.")
     mc.add_argument("--weather-file", help="Multi-year historical weather CSV (overrides [montecarlo].weather_file).")
+    policy_field = APP_CONFIG_FIELDS["irradiance_resampling"]
+    mc.add_argument(*policy_field.cli_flags, choices=policy_field.cli_choices, help=policy_field.cli_help)
     mc.add_argument("--rlp-directory", type=Path, help="Directory containing a licensed external RLP CSV.")
     mc.add_argument("--runs", type=int, help="Number of Monte Carlo runs (trajectories).")
     mc.add_argument(
@@ -655,14 +810,16 @@ def build_parser() -> argparse.ArgumentParser:
         choices=("normal", "uniform"),
         help="Demand multiplier distribution; uncertainty is sigma for normal or half-width for uniform.",
     )
-    mc.add_argument("--target-year", type=int, help="Calendar year the weather index is mapped to.")
+    mc.add_argument(
+        "--target-year", type=int, help="Study calendar year: the weather, load and tariff are all placed on it."
+    )
     mc.add_argument("--weather-start-year", type=int, help="First historical weather year eligible for sampling.")
     mc.add_argument("--weather-end-year", type=int, help="Last historical weather year eligible for sampling.")
     mc.add_argument("--seed", type=int, help="Base random seed for reproducible runs.")
     mc.add_argument("--n-procs", type=int, help="Worker processes for independent trajectories (default: 1).")
     mc.add_argument(
         "--execution-backend",
-        choices=("python", "numba"),
+        choices=EXECUTION_BACKENDS,
         help=(
             "Within-day dispatch implementation. 'python' (default) is the numerical reference; "
             "'numba' is the optional compiled backend and needs: pip install \"breos[fast]\"."
@@ -677,12 +834,6 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Write one row per run and project year for cost-envelope analysis.",
     )
-    mc.add_argument(
-        "--preserve-irradiance-energy",
-        action="store_true",
-        default=None,
-        help="Preserve each source hour's irradiance energy during 15-minute resampling.",
-    )
     mc.add_argument("--plots", action="store_true", help="Generate Monte Carlo distribution plots next to the CSV.")
     mc.add_argument("--json", action="store_true", help="Write machine-readable JSON summary to stdout.")
     mc.set_defaults(func=_montecarlo)
@@ -695,7 +846,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         return args.func(args)
-    except (OSError, TypeError, ValueError, RuntimeError) as exc:
+    # ImportError covers a missing optional extra, such as numba for
+    # execution_backend="numba".
+    except (ImportError, OSError, TypeError, ValueError, RuntimeError) as exc:
         print(f"breos: error: {exc}", file=sys.stderr)
         return 1
 

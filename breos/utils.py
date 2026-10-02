@@ -2,15 +2,25 @@
 Utility functions for breos library.
 """
 
-import datetime
-import multiprocessing
-import os
 import re
+from importlib.metadata import PackageNotFoundError, version
 
 import numpy as np
 import pandas as pd
 
 _SAFE_SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
+
+
+def package_version() -> str:
+    """Return the installed BREOS version, or ``"0.0.0+unknown"`` from a source tree.
+
+    ``breos.__version__``, the CLI and every result's provenance read it here,
+    so they cannot report different versions for one run.
+    """
+    try:
+        return version("breos")
+    except PackageNotFoundError:
+        return "0.0.0+unknown"
 
 
 def safe_path_slug(name: str) -> str:
@@ -55,9 +65,10 @@ def _has_fixed_utc_offset(tz) -> bool:
     """
     if tz is None:
         return True
-    if isinstance(tz, datetime.timezone):
-        return True
-    return str(tz).upper() == "UTC"
+    # A tzinfo can answer utcoffset(None) only when its offset never changes:
+    # datetime.timezone, ZoneInfo("UTC") and ZoneInfo("Etc/GMT+1") do, and a
+    # zone with transitions returns None.
+    return tz.utcoffset(None) is not None
 
 
 def _remap_years_vectorized(index: "pd.DatetimeIndex", year_offset: int):
@@ -127,12 +138,104 @@ def remap_datetime_index_years(obj, year_offset: int):
     return out
 
 
+_TICKS_PER_SECOND = {
+    "s": 1.0,
+    "ms": 1_000.0,
+    "us": 1_000_000.0,
+    "ns": 1_000_000_000.0,
+}
+
+
+def _datetime_index_ticks(time_index: "pd.DatetimeIndex") -> "tuple[np.ndarray, float]":
+    """Return integer timestamps and their scale without changing resolution."""
+    try:
+        ticks_per_second = _TICKS_PER_SECOND[time_index.unit]
+    except KeyError as exc:
+        raise ValueError(f"Unsupported DatetimeIndex resolution: {time_index.unit}") from exc
+    return time_index.asi8, ticks_per_second  # type: ignore[attr-defined]  # pandas-stubs omits asi8
+
+
+def _datetime_index_seconds(time_index: "pd.DatetimeIndex") -> np.ndarray:
+    """Return Unix-epoch seconds as floats, whatever the index resolution.
+
+    pandas 2 builds nanosecond indexes and pandas 3 defaults to microseconds,
+    so the raw integers cannot be divided by one fixed constant. The whole
+    seconds are split off in integer arithmetic first, because a nanosecond
+    count near the present exceeds float64's exact-integer range.
+    """
+    ticks, ticks_per_second = _datetime_index_ticks(time_index)
+    whole_seconds, remainder = np.divmod(ticks, int(ticks_per_second))
+    return whole_seconds.astype(float) + remainder / ticks_per_second
+
+
+def local_datetime_index(values) -> "pd.DatetimeIndex":
+    """Parse a result ``Datetime`` column on its own local calendar.
+
+    Month, year and day groups must follow the wall clock of the result
+    frame. A conversion to UTC moves every boundary by the UTC offset, so a
+    Berlin year starts with a one-hour stub of the previous December.
+
+    Datetime values keep their zone. Text with one UTC offset (a CSV of a
+    fixed-offset run) parses to that offset. Text with more than one offset
+    (a CSV of an IANA-zone run across DST) has no single zone to parse to, so
+    each value keeps its own wall-clock time, which is the civil time the
+    offset recorded.
+    """
+    if pd.api.types.is_datetime64_any_dtype(values):
+        return pd.DatetimeIndex(values)
+    try:
+        return pd.DatetimeIndex(pd.to_datetime(values))
+    except ValueError:
+        return pd.DatetimeIndex([pd.Timestamp(value).tz_localize(None) for value in values])
+
+
+# Time-step spellings BREOS accepts, mapped to the canonical pandas 3 string.
+# Only spellings that pandas 3 itself parses are listed, so a value accepted
+# here cannot fail later in ``pd.date_range``. The pandas 2 aliases ``"H"``,
+# ``"1H"``, ``"15T"`` and ``"15m"`` are rejected: pandas 3 no longer parses
+# the first three, and ``"m"`` is not a minute alias.
+_FREQUENCY_SPELLINGS = {
+    "h": "h",
+    "1h": "h",
+    "15min": "15min",
+}
+_HOURS_PER_STEP = {"h": 1.0, "15min": 0.25}
+
+
+def normalise_frequency(freq: str) -> str:
+    """
+    Return the canonical time-step string for a supported frequency.
+
+    BREOS simulates at two resolutions: hourly (``"h"``) and 15-minute
+    (``"15min"``). ``"1h"`` is also accepted and returns ``"h"``.
+
+    Args:
+        freq: Frequency string.
+
+    Returns:
+        ``"h"`` or ``"15min"``.
+
+    Raises:
+        ValueError: If ``freq`` is any other value, including the pandas 2
+            aliases ``"H"``, ``"1H"``, ``"15T"`` and ``"15m"``.
+    """
+    canonical = _FREQUENCY_SPELLINGS.get(freq) if isinstance(freq, str) else None
+    if canonical is None:
+        accepted = ", ".join(repr(spelling) for spelling in _FREQUENCY_SPELLINGS)
+        raise ValueError(
+            f"Unsupported frequency: {freq!r}. Use 'h' for hourly or '15min' for 15-minute steps "
+            f"(accepted spellings: {accepted})."
+        )
+    return canonical
+
+
 def get_hours_per_step(freq: str) -> float:
     """
     Get the number of hours per timestep based on frequency.
 
     Args:
-        freq: Frequency string ('h' for hourly, '15min' for 15-minute)
+        freq: Frequency string ('h' for hourly, '15min' for 15-minute); see
+            :func:`normalise_frequency` for the accepted spellings.
 
     Returns:
         Hours per timestep (1.0 for hourly, 0.25 for 15-min)
@@ -140,44 +243,48 @@ def get_hours_per_step(freq: str) -> float:
     Raises:
         ValueError: If freq is not recognized
     """
-    freq_map = {
-        "h": 1.0,
-        "H": 1.0,
-        "1h": 1.0,
-        "1H": 1.0,
-        "15min": 0.25,
-        "15T": 0.25,
-        "15m": 0.25,
-    }
-    if freq not in freq_map:
-        raise ValueError(f"Unsupported frequency: {freq}. Use 'h' or '15min'.")
-    return freq_map[freq]
+    return _HOURS_PER_STEP[normalise_frequency(freq)]
 
 
-def get_steps_per_day(freq: str) -> int:
+# Irradiance column names BREOS recognises, per component, in order of
+# preference: pvlib/PVGIS names first, then the Open-Meteo and long-form
+# names. Matching is case-insensitive, so ``GHI`` is ``ghi``.
+IRRADIANCE_COLUMN_ALIASES = {
+    "ghi": ("ghi", "shortwave_radiation", "global_horizontal_irradiance"),
+    "dni": ("dni", "direct_normal_irradiance"),
+    "dhi": ("dhi", "diffuse_radiation", "diffuse_horizontal_irradiance"),
+}
+
+
+def irradiance_component(column: object) -> str | None:
+    """Return ``"ghi"``, ``"dni"`` or ``"dhi"`` for a recognised column name, else None."""
+    name = str(column).lower()
+    for component, aliases in IRRADIANCE_COLUMN_ALIASES.items():
+        if name in aliases:
+            return component
+    return None
+
+
+def find_irradiance_column(columns, component: str) -> str | None:
+    """Return the column holding ``component``, preferring the earlier aliases.
+
+    An exact-case match wins over a case-insensitive one, so a frame with both
+    ``ghi`` and ``GHI`` resolves to ``ghi``.
     """
-    Get the number of timesteps per day based on frequency.
-
-    Args:
-        freq: Frequency string ('h' for hourly, '15min' for 15-minute)
-
-    Returns:
-        Steps per day (24 for hourly, 96 for 15-min)
-    """
-    hours_per_step = get_hours_per_step(freq)
-    return int(24 / hours_per_step)
+    columns = list(columns)
+    for alias in IRRADIANCE_COLUMN_ALIASES[component]:
+        if alias in columns:
+            return alias
+        for column in columns:
+            if str(column).lower() == alias:
+                return column
+    return None
 
 
-def get_steps_per_year(freq: str, leap_year: bool = False) -> int:
-    """
-    Get the number of timesteps per year based on frequency.
-
-    Args:
-        freq: Frequency string ('h' for hourly, '15min' for 15-minute)
-        leap_year: Whether to account for leap year (366 days)
-
-    Returns:
-        Steps per year (8760/8784 for hourly, 35040/35136 for 15-min)
-    """
-    days = 366 if leap_year else 365
-    return get_steps_per_day(freq) * days
+def format_years_months(years_decimal) -> str:
+    """Format a decimal number of years as ``"4y"`` or ``"4y 2m"``; None is ``"N/A"``."""
+    if years_decimal is None:
+        return "N/A"
+    years = int(years_decimal)
+    months = int((years_decimal - years) * 12)
+    return f"{years}y" if months == 0 else f"{years}y {months}m"

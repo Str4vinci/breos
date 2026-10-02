@@ -1,4 +1,4 @@
-# Guides and recipes
+# Guides
 
 Start with the installation check and quickstart, then browse by the task you
 are trying to complete. The guides use the `breos.App` facade and the same
@@ -47,12 +47,20 @@ Identify the project weather, load, components, costs, and emissions data you
 need for a defensible result.
 :::
 
-:::{grid-item-card} Recipes
-:link: recipes
+:::{grid-item-card} Case examples
+:link: ../gallery/index
 :link-type: doc
 
-Copy working configurations for PV-only, PV + battery, east-west roofs,
-external load profiles, sweeps, and offline runs.
+Stored runs that answer common questions: what a battery adds, east-west
+roofs, tariffs, battery replacement, Monte Carlo and the optimizer front.
+:::
+
+:::{grid-item-card} How-to guides
+:link: ../how-to/index
+:link-type: doc
+
+Configurations to copy for custom coordinates, your own PV module, partial
+years, sweeps, 15-minute runs, external load profiles and offline weather.
 :::
 
 :::{grid-item-card} Optimization
@@ -76,6 +84,14 @@ number, with reproducible seeds and provenance.
 :link-type: doc
 
 Understand every `App` config area, its defaults, and its validation rules.
+:::
+
+:::{grid-item-card} Configuration key reference
+:link: config-reference
+:link-type: doc
+
+Look up every config key and nested-table key, with its default, CLI flag and
+allowed values.
 :::
 
 :::{grid-item-card} Packaged options

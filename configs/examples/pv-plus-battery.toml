@@ -1,8 +1,12 @@
 # ============================================================================
 # BREOS run config — annotated reference
 #
-# Shows every available key with its default in [brackets]. Delete any line to
-# fall back to the default. This file doubles as a realistic PV + battery run.
+# Shows the common keys, each with its default in [brackets]; [none] means
+# the key is unset by default. Delete any line to fall back to the default.
+# This file doubles as a runnable PV + battery example. Every accepted key is
+# listed in the configuration key reference,
+# docs/getting-started/config-reference.md (https://breos.readthedocs.io/).
+# The run fetches PVGIS TMY weather unless a cached weather/ file matches.
 #
 #   breos run --config configs/examples/pv-plus-battery.toml
 #
@@ -13,23 +17,23 @@
 # --- Required ---------------------------------------------------------------
 location = "porto"                 # preset key; see `breos list locations`
 n_modules = 10                     # PV module count (omit if using [[pv_arrays]])
-annual_consumption_kwh = 4000      # yearly household demand
+annual_consumption_kwh = 4000      # yearly household demand, kWh
 
 # --- Storage ----------------------------------------------------------------
-battery_kwh = 5.0                  # [0.0] usable capacity; 0 = PV-only
-degradation_engine = "native"      # ["native"] Naumann/Lam; use "blast" explicitly
+battery_kwh = 5.0                  # [0.0] nominal capacity, kWh; 0 = PV-only
+degradation_engine = "native"      # ["native"] Naumann/Lam; "blast" opts into a BLAST cell model
 # blast_model = "lfp_gr_250ah_prismatic"  # required when degradation_engine = "blast"
 
 # --- Catalogue selections ---------------------------------------------------
 pv_module = "Suntech_STP550S_STC"  # [first catalogue module]; `breos list modules`
-cost_preset = "residential_pt"     # [none] tariffs + capex; `breos list cost-presets`
+cost_preset = "residential_pt"     # [none] flat prices + capex; `breos list cost-presets`
 emissions_country = "PT"           # [none] grid carbon intensity; `breos list emissions`
-load_profile = "demandlib_h0"      # ["1"] bundled H0 profile; `breos list load-profiles`
+load_profile = "demandlib_h0"      # ["demandlib_h0"] bundled H0 profile; `breos list load-profiles`
 # rlp_directory = "external_rlp"   # only needed for external (non-bundled) profiles
 
 # --- Array geometry ---------------------------------------------------------
-tilt = 35                          # [optimal for latitude] degrees from horizontal
-azimuth = 180                      # [equator-facing] 180 = south, 90 = east, 270 = west
+tilt = 35                          # [estimated from latitude] degrees from horizontal
+azimuth = 180                      # [equator-facing] degrees; 180 = south, 90 = east, 270 = west
 gcr = 0.35                         # [0.35] row slant length / row pitch
 bifacial_model = "none"            # ["none"] or "infinite_sheds"
 # pvrow_height = 1.5               # required for infinite_sheds; same unit as pitch
@@ -37,22 +41,23 @@ bifacial_model = "none"            # ["none"] or "infinite_sheds"
 
 # --- Time + horizon ---------------------------------------------------------
 resolution = "h"                   # ["h"] "h" (hourly) or "15min"
-projection_years = 20              # [20] economic projection horizon
-start_date = "2023-01-01"          # ["2023-01-01"] first simulated day
+projection_years = 20              # [20] economic projection horizon, years
+start_date = "2023-01-01"          # ["2023-01-01"] 1 January of the study year
 
 # --- Economics --------------------------------------------------------------
-inflation_rate = 0.02              # [0.02] annual electricity price growth
-discount_rate = 0.03               # [0.03] NPV discount rate
-pv_degradation_rate = 0.005        # [0.005] annual PV output loss
+inflation_rate = 0.02              # [0.02] general inflation per year; import price, O&M follow it
+discount_rate = 0.03               # [0.03] nominal discount rate per year, for NPV
+pv_degradation_rate = 0.005        # [0.005] PV output loss per year, as a fraction
 
 # --- Inverter ---------------------------------------------------------------
-dc_coupled = true                  # [true] BREOS currently supports DC-coupled/hybrid dispatch only
-inverter_efficiency = 0.96         # [0.96]
+inverter_efficiency = 0.96         # [0.96] nominal efficiency
 inverter_loading_ratio = 1.25      # [1.25] DC/AC oversizing ratio
+# inverter_ac_rating_kw = 4.0      # AC rating in kW, instead of the ratio; set only one
 
 # --- Battery detail (advanced) ----------------------------------------------
-calendar_model = "naumann_lam_field_calibrated"  # calendar aging model
-battery_min_soc = 0.10             # [0.10] lower SoC limit
-battery_max_soc = 0.90             # [0.90] upper SoC limit
-battery_eol_percentage = 0.70      # [0.70] capacity fraction at end-of-life
-# battery_rte = 0.95               # [derived] round-trip efficiency override
+calendar_model = "naumann_lam_field_calibrated"  # ["naumann_lam_field_calibrated"] calendar aging
+battery_min_soc = 0.10             # [0.10] lower SoC limit, fraction of capacity
+battery_max_soc = 0.90             # [0.90] upper SoC limit, fraction of capacity
+battery_eol_percentage = 0.70      # [0.70] SoH fraction that triggers a replacement
+battery_allow_terminal_replacement = true  # [true] false: no pack bought at the horizon's final degradation period
+# battery_rte = 0.95               # [unset, 0.95] round-trip efficiency

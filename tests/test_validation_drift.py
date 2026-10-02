@@ -60,6 +60,17 @@ else:  # pragma: no cover - guarded by pytestmark
 _RESULT_CACHE = {}
 
 
+def test_every_baseline_location_has_its_weather_file():
+    # Cases are built only for weather files on disk, so a missing file would
+    # silently drop that location from the drift suite instead of failing it.
+    missing = sorted(
+        entry["weather_file"]
+        for entry in _BASELINE["locations"].values()
+        if not (VALIDATION_DIR / "data" / "weather" / entry["weather_file"]).exists()
+    )
+    assert not missing, f"validation weather files missing from validation/data/weather: {missing}"
+
+
 def test_equal_nameplate_comparison_contract():
     from breos.pv_modules import get_module
     from validation.common import MODEL_CONFIGS

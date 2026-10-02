@@ -2,11 +2,9 @@
 
 Used for validation steps 4 and 6: the same seeded study must produce
 identical run metrics and identical yearly trajectories across the pre-refactor
-baseline, the summary path, and the compiled backend. The five cases mirror the
-range of system shapes the forthcoming publication study spans: no battery,
-battery only, PV only, PV plus battery, and a larger PV-plus-battery system.
-They are shapes, not that study's representative configurations, so they do not
-track its set as it is revised.
+baseline, the summary path, and the compiled backend. The five cases span the
+range of residential system shapes: no battery, battery only, PV only, PV plus
+battery, and a larger PV-plus-battery system.
 """
 
 from __future__ import annotations
@@ -18,10 +16,9 @@ import numpy as np
 import pandas as pd
 
 CASES = {
-    # (n_modules, battery_kwh). Shaped like the forthcoming publication study
-    # set: two cases with no battery, three with one. A configuration needs at
-    # least one module, so
-    # the battery-led case uses a minimal array rather than none.
+    # (n_modules, battery_kwh): two cases with no battery, three with one. A
+    # configuration needs at least one module, so the battery-led case uses a
+    # minimal array rather than none.
     "C1": (8, 0.0),
     "C2": (4, 5.0),
     "C3": (8, 5.0),

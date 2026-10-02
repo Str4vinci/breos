@@ -1,1 +1,0 @@
-{"arm": "laboratory", "state": "killed", "exit_code": null, "at": "2026-09-03T19:15:40+01:00", "note": "stopped deliberately; ran against the superseded candidate set and the 4352 W cap. Outputs deleted. Superseded by driver-rerun2.sh, which rewrote all four cells 20:08-20:24."}

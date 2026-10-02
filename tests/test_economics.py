@@ -8,17 +8,13 @@ from breos.economics import (
     DEFAULT_REPLACEMENT_YEAR_FRACTION,
     CostParams,
     calculate_costs,
-    calculate_lcoe,
     calculate_lcoe_from_projection,
     cost_analysis_projection,
     cost_params_from_config,
     find_payback_year,
     replacement_booking_time,
-    replacement_fraction_by_year,
     replacement_fraction_from_steps,
-    system_ac_production_power,
 )
-from breos.optimization import calculate_financials
 
 
 class TestCostDefaultsSingleSource:
@@ -36,7 +32,7 @@ class TestCostDefaultsSingleSource:
     def test_resolve_costs_preset_fallbacks_match_dataclass_defaults(self, monkeypatch):
         from breos import app_config
 
-        monkeypatch.setattr(app_config, "load_json", lambda name: {"minimal": {}})
+        monkeypatch.setattr(app_config, "load_config_json", lambda name: {"minimal": {}})
         cfg = {
             "cost_preset": "minimal",
             "inverter_loading_ratio": 1.25,
@@ -62,7 +58,7 @@ class TestCostDefaultsSingleSource:
 
         monkeypatch.setattr(
             app_config,
-            "load_json",
+            "load_config_json",
             lambda name: {
                 "partial": {
                     "electricity_cost": 0.31,
@@ -171,76 +167,33 @@ class TestCalculateCosts:
         )
         assert costs["total_initial_cost"] == pytest.approx(parts, rel=0.001)
 
-    def test_optimizer_financials_honor_modern_cost_keys(self):
-        base = dict(
-            n_modules=10,
-            battery_kwh=5.0,
-            annual_import_kwh=2000.0,
-            annual_export_kwh=1000.0,
-            annual_load_kwh=4000.0,
-            costs_config={
-                "module_cost_per_w": 0.10,
-                "storage_cost_per_kwh": 400.0,
-                "installation_cost_per_module": 200.0,
-                "installation_cost_battery": 500.0,
-                "other_costs": 100.0,
-            },
-            financials_config={
-                "electricity_cost": 0.30,
-                "electricity_sold_cost": 0.05,
-                "inflation_rate": 0.01,
-                "discount_rate": 0.0,
-                "project_lifespan": 5,
-            },
-        )
-
-        capex_a, npv_a = calculate_financials(**base)
-
-        modified = dict(base)
-        modified["costs_config"] = dict(base["costs_config"], module_cost_per_w=0.30)
-        modified["financials_config"] = dict(base["financials_config"], electricity_cost=0.45)
-        capex_b, npv_b = calculate_financials(**modified)
-
-        assert capex_b > capex_a
-        assert npv_b != npv_a
-
-    def test_optimizer_financials_use_selected_module_mpp_unless_overridden(self):
+    def test_capex_uses_selected_module_mpp(self):
         base = {
             "module_cost_per_w": 0.20,
             "inverter_cost_per_kw_simple": 0.0,
             "installation_cost_per_module": 0.0,
             "other_cost_per_module": 0.0,
         }
-        financials = {"project_lifespan": 1}
+        cost_params = cost_params_from_config(base, {"project_lifespan": 1})
 
-        capex_400, _ = calculate_financials(10, 0.0, 0.0, 0.0, 0.0, base, financials, module_power_w=400.0)
-        capex_550, _ = calculate_financials(10, 0.0, 0.0, 0.0, 0.0, base, financials, module_power_w=550.0)
+        capex_400 = calculate_costs(10, 400.0, 0.0, cost_params)["total_initial_cost"]
+        capex_550 = calculate_costs(10, 550.0, 0.0, cost_params)["total_initial_cost"]
         assert capex_550 - capex_400 == pytest.approx(10 * 150 * 0.20)
 
-        override = dict(base, panel_wp=500.0)
-        capex_override, _ = calculate_financials(10, 0.0, 0.0, 0.0, 0.0, override, financials, module_power_w=400.0)
-        capex_500, _ = calculate_financials(10, 0.0, 0.0, 0.0, 0.0, base, financials, module_power_w=500.0)
-        assert capex_override == pytest.approx(capex_500)
+        # The removed costs.panel_wp priced CAPEX at a wattage other than the
+        # module's, which let the budget pass a design over budget (#157).
+        with pytest.raises(ValueError, match="costs.panel_wp was removed"):
+            cost_params_from_config(dict(base, panel_wp=500.0), {"project_lifespan": 1})
 
 
-def test_system_ac_production_prefers_explicit_ledger_over_legacy_field():
-    results = pd.DataFrame(
-        {
-            "PV_AC_To_Load": [300.0, 100.0],
-            "Battery_AC_To_Load_PV": [50.0, 25.0],
-            "PV_AC_Export": [200.0, 75.0],
-            "Sell_To_Grid": [999.0, 999.0],
-            "PV_Production": [9999.0, 9999.0],
-        }
-    )
-
-    assert system_ac_production_power(results).tolist() == pytest.approx([550.0, 200.0])
-
-
-def test_system_ac_production_accepts_legacy_field():
-    results = pd.DataFrame({"PV_Production": [500.0, 250.0]})
-
-    assert system_ac_production_power(results).tolist() == pytest.approx([500.0, 250.0])
+def test_cost_projection_needs_year_rows():
+    with pytest.raises(ValueError, match="needs yearly_summary_df"):
+        cost_analysis_projection(None, {"total_initial_cost": 1000.0}, num_years=2)
+    with pytest.raises(ValueError, match="needs yearly_summary_df"):
+        cost_analysis_projection(pd.DataFrame(), {"total_initial_cost": 1000.0}, num_years=2)
+    steps = pd.DataFrame({"PV_AC_Export": [1.0]}, index=pd.date_range("2025-01-01", periods=1, freq="h"))
+    with pytest.raises(ValueError, match="not a per-step results frame"):
+        cost_analysis_projection(steps, {"total_initial_cost": 1000.0}, num_years=1)
 
 
 class TestFindPaybackYear:
@@ -269,46 +222,6 @@ class TestFindPaybackYear:
 
 
 class TestLCOE:
-    def test_basic(self):
-        lcoe = calculate_lcoe(
-            total_investment=5000,
-            annual_production_kwh=5000,
-            annual_operation_cost=50,
-            lifetime_years=20,
-            discount_rate=0.0,
-            degradation_rate=0.0,
-        )
-        # (5000 + 50*20) / (5000*20) = 6000/100000 = 0.06
-        assert lcoe == pytest.approx(0.06, rel=0.01)
-
-    def test_degradation_increases_lcoe(self):
-        lcoe_no_deg = calculate_lcoe(
-            total_investment=5000,
-            annual_production_kwh=5000,
-            annual_operation_cost=50,
-            lifetime_years=20,
-            discount_rate=0.0,
-            degradation_rate=0.0,
-        )
-        lcoe_with_deg = calculate_lcoe(
-            total_investment=5000,
-            annual_production_kwh=5000,
-            annual_operation_cost=50,
-            lifetime_years=20,
-            discount_rate=0.0,
-            degradation_rate=0.01,
-        )
-        assert lcoe_with_deg > lcoe_no_deg
-
-    def test_zero_production(self):
-        lcoe = calculate_lcoe(
-            total_investment=5000,
-            annual_production_kwh=0,
-            annual_operation_cost=50,
-            lifetime_years=20,
-        )
-        assert lcoe == float("inf")
-
     def test_projection_lcoe_includes_replacement_costs(self):
         projection = pd.DataFrame(
             {
@@ -322,6 +235,64 @@ class TestLCOE:
         lcoe = calculate_lcoe_from_projection(projection, total_investment=1000.0, discount_rate=0.0)
 
         assert lcoe == pytest.approx(0.85)
+
+    def test_projection_lcoe_matches_the_closed_form_without_inflation(self):
+        # An independent 20-year oracle with PV degradation and a non-zero
+        # discount rate. With no inflation, O&M escalation or replacement,
+        # the projection's LCOE is the closed form
+        #   (I + sum_t OM / (1 + d)^t) / sum_t P0 (1 - g)^(t - 1) / (1 + d)^t
+        # for t = 1..N.
+        years, degradation, discount = 20, 0.005, 0.05
+        investment, operation, first_year_kwh = 5000.0, 75.0, 4000.0
+        costs = {
+            "electricity_cost": 0.30,
+            "electricity_sold_cost": 0.05,
+            "daily_power_cost": 0.20,
+            "total_initial_cost": investment,
+            "annual_operation_cost": operation,
+        }
+        production = first_year_kwh * (1.0 - degradation) ** np.arange(years)
+        yearly_summary = pd.DataFrame(
+            {
+                "Year": range(1, years + 1),
+                "Load_kWh": 5000.0,
+                "PV_Production_kWh": production,
+                "Import_kWh": 2500.0,
+                "Export_kWh": 1500.0,
+                "PV_Degradation_Factor": production / production[0],
+                "Replacement_Cost": 0.0,
+            }
+        )
+        projection = cost_analysis_projection(
+            yearly_summary, costs, num_years=years, inflation_rate=0.0, discount_rate=discount
+        )
+
+        t = np.arange(1, years + 1)
+        discounting = (1.0 + discount) ** t
+        npv_costs = investment + np.sum(operation / discounting)
+        npv_production = np.sum(first_year_kwh * (1.0 - degradation) ** (t - 1) / discounting)
+        closed_form = npv_costs / npv_production
+
+        assert projection.attrs["lcoe_per_kwh"] == pytest.approx(closed_form, rel=1e-12)
+        assert calculate_lcoe_from_projection(projection, discount_rate=discount) == pytest.approx(
+            closed_form, rel=1e-12
+        )
+
+    def test_projection_lcoe_reads_the_recorded_investment_and_does_not_infer_it(self):
+        projection = pd.DataFrame(
+            {
+                "Year": [1, 2],
+                "PV_Production_kWh": [1000.0, 1000.0],
+                "Cost_Operation": [100.0, 100.0],
+                "Cost_System_Annual": [100.0, 100.0],
+                "Cost_System_Cumulative": [1100.0, 1200.0],
+            }
+        )
+        with pytest.raises(ValueError, match="total_investment is required"):
+            calculate_lcoe_from_projection(projection, discount_rate=0.0)
+
+        projection.attrs["total_investment"] = 1000.0
+        assert calculate_lcoe_from_projection(projection, discount_rate=0.0) == pytest.approx(0.6)
 
     def test_cost_projection_exposes_lcoe_attr(self):
         costs = {
@@ -344,15 +315,14 @@ class TestLCOE:
         )
 
         projection = cost_analysis_projection(
-            pd.DataFrame(),
+            yearly_summary,
             costs,
             num_years=2,
             inflation_rate=0.0,
             discount_rate=0.0,
-            yearly_summary_df=yearly_summary,
         )
 
-        assert projection.attrs["lcoe_eur_kwh"] == pytest.approx((1000 + 100 + 100 + 500) / (1000 + 900))
+        assert projection.attrs["lcoe_per_kwh"] == pytest.approx((1000 + 100 + 100 + 500) / (1000 + 900))
 
     def test_cost_projection_uses_yearly_load_for_no_system_baseline(self):
         costs = {
@@ -364,32 +334,45 @@ class TestLCOE:
         }
         yearly_summary = pd.DataFrame(
             {
-                "Year": [1, 2],
-                "Load_kWh": [1000.0, 2000.0],
-                "PV_Production_kWh": [800.0, 800.0],
-                "Import_kWh": [300.0, 600.0],
-                "Export_kWh": [100.0, 100.0],
-                "PV_Degradation_Factor": [1.0, 1.0],
-                "Replacement_Cost": [0.0, 0.0],
+                "Year": [2, 1],
+                "Load_kWh": [2000.0, 1000.0],
+                "PV_Production_kWh": [800.0, 900.0],
+                "Import_kWh": [600.0, 300.0],
+                "Export_kWh": [100.0, 200.0],
+                "PV_Degradation_Factor": [0.9, 1.0],
+                "Replacement_Cost": [500.0, 0.0],
             }
         )
 
         projection = cost_analysis_projection(
-            pd.DataFrame(),
+            yearly_summary,
             costs,
             num_years=2,
             inflation_rate=0.0,
             discount_rate=0.0,
-            yearly_summary_df=yearly_summary,
         )
 
         daily = 365 * costs["daily_power_cost"]
+        assert projection["Load_kWh"].tolist() == [1000.0, 2000.0]
         assert projection["Cost_No_Sys_Annual"].tolist() == pytest.approx(
             [
                 1000.0 * costs["electricity_cost"] + daily,
                 2000.0 * costs["electricity_cost"] + daily,
             ]
         )
+        assert projection["PV_Production_kWh"].tolist() == [900.0, 800.0]
+        assert projection["Export_kWh"].tolist() == [200.0, 100.0]
+        assert projection["Cost_Import"].tolist() == [90.0, 180.0]
+        assert projection["Cost_Replacement"].tolist() == [0.0, 500.0]
+
+    @pytest.mark.parametrize("years", [[1, 1], [1, 3]])
+    def test_cost_projection_rejects_duplicate_or_incomplete_year_labels(self, years):
+        with pytest.raises(ValueError, match="yearly_summary_df Year values"):
+            cost_analysis_projection(
+                pd.DataFrame({"Year": years}),
+                costs={},
+                num_years=2,
+            )
 
 
 class TestReplacementBookingTime:
@@ -402,10 +385,12 @@ class TestReplacementBookingTime:
     """
 
     def test_step_fraction_locates_the_swap_within_its_year(self):
-        # Hourly year, swap on day 109: step 2616 of 8760.
-        assert replacement_fraction_from_steps([2616], 8760) == pytest.approx(0.29863, abs=1e-5)
+        # A replacement flagged on an interval happens at that interval's end.
+        assert replacement_fraction_from_steps([0], 4) == pytest.approx(0.25)
+        # Hourly year, the interval at index 2616 ends at step 2617 of 8760.
+        assert replacement_fraction_from_steps([2616], 8760) == pytest.approx(2617 / 8760)
         # The same instant on a 15-minute timebase is the same fraction.
-        assert replacement_fraction_from_steps([2616 * 4], 8760 * 4) == pytest.approx(0.29863, abs=1e-5)
+        assert replacement_fraction_from_steps([2616 * 4 + 3], 8760 * 4) == pytest.approx(2617 / 8760)
 
     def test_year_without_a_swap_has_no_fraction(self):
         assert np.isnan(replacement_fraction_from_steps([], 8760))
@@ -428,15 +413,6 @@ class TestReplacementBookingTime:
 
         assert booked[0] == pytest.approx(2.0 + DEFAULT_REPLACEMENT_YEAR_FRACTION)
 
-    def test_fraction_by_year_reads_the_ledger_column(self):
-        years = [2025] * 4 + [2026] * 4
-        replaced = [False, False, True, False, False, False, False, False]
-
-        fractions = replacement_fraction_by_year(years, replaced)
-
-        assert fractions.index.tolist() == [2025]
-        assert fractions.loc[2025] == pytest.approx(0.5)
-
 
 class TestReplacementBookingInProjection:
     INFLATION = 0.03
@@ -458,7 +434,7 @@ class TestReplacementBookingInProjection:
             }
         )
         return cost_analysis_projection(
-            results_df=None,
+            yearly,
             costs={
                 "electricity_cost": 0.22,
                 "electricity_sold_cost": 0.05,
@@ -469,7 +445,6 @@ class TestReplacementBookingInProjection:
             num_years=12,
             inflation_rate=self.INFLATION,
             discount_rate=self.DISCOUNT,
-            yearly_summary_df=yearly,
         )
 
     def test_both_rates_are_applied_at_the_same_instant(self):

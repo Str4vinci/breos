@@ -5,35 +5,60 @@ This checklist keeps the public release process reproducible and protects
 
 ## Branch Protection
 
-Before publishing a public package release, protect `develop` in GitHub
-repository settings.
+`develop` and `main` are protected in the GitHub repository settings, with
+the rules enforced for administrators too:
 
-Recommended `develop` rules:
-
-- Require pull requests before merging.
-- Require the `Tests` workflow to pass, including the installed-wheel release
-  artifact smoke test.
-- Require branches to be up to date before merging.
-- Dismiss stale approvals when new commits are pushed.
-- Block force pushes.
-- Block branch deletion.
+- Require pull requests before merging, and dismiss stale approvals when new
+  commits are pushed.
+- Require the four `test (3.11)` to `test (3.14)` checks of the `Tests`
+  workflow. Each runs lint, format and type checks, the test suite, the
+  installed-wheel release artifact check and the docs build.
 - Require conversation resolution before merging.
+- Block force pushes and branch deletion.
 
-Use `main` only for stable releases and protect it at least as strictly as
-`develop`. Release tags should be created from `main` after the release commit
-has passed the same checks.
+`main` also requires branches to be up to date before merging. `develop` does
+not (since 2026-10-01), so two PRs that pass alone can still break together;
+the `Tests` run on every push to `develop` checks each merged tree.
+
+Use `main` only for stable releases. Release tags are created on `main` after
+the release commit has passed the same checks.
+
+## Release Branch
+
+1. Merge every release-scope PR into `develop` and wait for the `Tests` run
+   on the resulting `develop` push. Trigger the workflow manually
+   (`workflow_dispatch`) on `develop` once, so the macOS/Windows, slow and
+   coverage jobs run on the release candidate too.
+2. Create `release/X.Y.Z` from `develop`. On it:
+   - Set `version` in `pyproject.toml` and run `uv lock`, which records the
+     new version in `uv.lock`.
+   - Move the `[Unreleased]` changelog entries under `## [X.Y.Z] - YYYY-MM-DD`.
+   - Set `version` in `CITATION.cff`; set `date-released` on the release day.
+   - Update the supported-versions table in `SECURITY.md`.
+   - Regenerate the PV validation baseline and report after the version
+     bump (see below).
+3. Push the branch and open a PR from it into `main`. The push and the PR run
+   the full Linux matrix, the floors and no-Numba jobs, the macOS/Windows
+   smoke tests, the slow tests and the coverage report.
 
 ## Pre-Release Gates
 
-Run these checks locally before cutting a release candidate:
+Run these checks locally on the release branch:
 
 ```bash
 uv run ruff check breos/ tests/ tools/
 uv run ruff format --check breos/ tests/ tools/
-uv run pytest tests/ -v
+uv run mypy breos
+uv run pytest tests/ -v -n auto
+uv run pytest tests/ -m slow -v
 uv run python tools/verify_release_artifacts.py
-uv run --extra docs sphinx-build -W -b html docs docs/_build/html
+BREOS_DOCS_OFFLINE=1 uv run --extra docs sphinx-build -W -b html docs docs/_build/html
+uvx cffconvert --validate
 ```
+
+The test suite includes `tools/generate_config_docs.py --check` (the
+generated configuration reference matches the schema) and the App golden
+outputs (`tools/generate_app_golden.py --check`, bit for bit).
 
 The release artifact verifier must build both wheel and sdist, confirm packaged
 runtime data is present, confirm generated docs are not shipped, and import
@@ -41,23 +66,45 @@ BREOS from the installed wheel instead of the source checkout. It also imports
 all 14 vendored BLAST models and verifies the installed BLAST license, DOE
 notice, and pinned upstream provenance.
 
+Regenerate the example-gallery results *after* bumping the package version,
+so every page is stamped with the release: run
+`uv run python tools/regenerate_gallery_results.py` (all cases, about ten
+minutes; it fetches the Open-Meteo history for the Monte Carlo case), then
+`uv run python tools/regenerate_gallery_results.py --check`, and commit
+`docs/examples/_results/`.
+
 Regenerate `validation/baselines/breos_baseline.json` *after* bumping the
 package version, not before. The baseline records `breos.__version__` as read
 at generation time, so a baseline generated on the previous version stamps
 itself with that version while encoding the new release's behavior, which
-misleads anyone later diffing it against the release it names.
+misleads anyone later diffing it against the release it names. The same
+applies to `validation/REPORT.md`, which names the version it was generated
+against:
+
+```bash
+uv run python validation/run_breos.py --write-baseline
+uv run python validation/compare.py
+uv run pytest tests/test_validation_drift.py
+```
+
+Any yield change in the regenerated baseline must be explained by a changelog
+entry.
 
 ## Release Validation Matrix
 
 The `Tests` workflow runs the complete matrix on Python 3.11, 3.12, 3.13, and
-3.14, while macOS and Windows run a focused public-entrypoint smoke suite. A
-separate `coverage-report` job publishes branch-aware core-package coverage on
-Python 3.12, excluding the vendored BLAST-Lite implementation; it runs nightly,
-on demand, and on `release/**`, so a release build produces a coverage snapshot
-without every pull request paying for one. That job is a report, not a gate — no
-threshold is configured, and a failure there means the instrumented run broke
-rather than that coverage is insufficient. The following release claims must
-remain tied to executable checks:
+3.14 on every PR and push, together with a `floors` job on the lowest declared
+dependency versions and a `no-numba` job without the optional Numba backend.
+macOS and Windows run a focused public-entrypoint smoke suite and the backend
+bit-identity check on PRs into and pushes to `main` and `release/**`, nightly,
+and on demand. The slow tests and a separate `coverage-report` job run
+nightly, on demand, and on pushes to and PRs into `release/**`. The coverage
+job publishes branch-aware core-package coverage on Python 3.12, excluding the
+vendored BLAST-Lite implementation, so a release build produces a coverage
+snapshot without every pull request paying for one. That job is a report, not
+a gate — no threshold is configured, and a failure there means the
+instrumented run broke rather than that coverage is insufficient. The
+following release claims must remain tied to executable checks:
 
 | Gate | Executable coverage |
 | --- | --- |
@@ -73,6 +120,10 @@ remain tied to executable checks:
 | Snapshot JSON round trips and schema rejection | `tests/test_battery_profiles.py` |
 | Range/horizon warnings deduplicate across continuation | `tests/test_blast_engine.py`, `tests/test_runners.py` |
 | Installed wheel contains models, provenance, license, and notice | `tools/verify_release_artifacts.py` |
+| App results match the committed golden outputs bit for bit | `tests/test_app_golden.py` |
+| Tariff valuation, reference tariff, and smart charging | `tests/test_app_tariff.py`, `tests/test_reference_tariff.py`, `tests/test_smart_charging.py` |
+| Python and Numba dispatch backends are bit-identical | `tests/test_numba_dispatch_parity.py` |
+| Importing BREOS does not need Numba | `no-numba` job in `.github/workflows/tests.yml` |
 
 The upstream parity fixture records the generating Python and NumPy versions;
 it is a checked release artifact, not regenerated during CI. Regeneration must
@@ -110,8 +161,10 @@ that updates BREOS's upstream pin.
 
 The `Publish` workflow (`.github/workflows/publish.yml`) uses
 [PyPI trusted publishing](https://docs.pypi.org/trusted-publishers/) — no
-API tokens are stored in the repository. It re-runs the release artifact
-verifier, builds the wheel and sdist with `uv build`, and uploads them.
+API tokens are stored in the repository. It builds the wheel and sdist with
+`uv build`, runs the release artifact verifier on exactly those files, and
+uploads them. A tag push publishes to PyPI after checking that the tagged
+commit is on `main`; a manual run publishes to TestPyPI.
 
 One-time PyPI setup (per index):
 
@@ -129,8 +182,8 @@ One-time PyPI setup (per index):
 Release flow:
 
 1. Merge the release PR into `main` after all gates pass.
-2. Optionally trigger the `Publish` workflow manually (`workflow_dispatch`)
-   to dry-run the upload against TestPyPI, then verify the release installs
+2. Optionally trigger the `Publish` workflow manually (`workflow_dispatch`) on
+   `main` to dry-run the upload against TestPyPI, then verify the release installs
    into a throwaway environment. TestPyPI serves `breos` itself; the runtime
    dependencies still come from PyPI:
 
@@ -148,10 +201,13 @@ Release flow:
    uv's default `first-index` strategy: if an unexpected TestPyPI package
    shadows a dependency, investigate it rather than enabling an `unsafe-*`
    index strategy.
-3. Tag the release commit on `main` (`git tag vX.Y.Z && git push origin vX.Y.Z`).
-   The workflow refuses tags whose commit is not on `main`, then publishes to
-   PyPI.
-4. Create the GitHub Release from the tag and confirm the published release
+3. Tag the release commit on `main` with an annotated tag
+   (`git tag -a vX.Y.Z -m "BREOS X.Y.Z" && git push origin vX.Y.Z`). The
+   workflow refuses tags whose commit is not on `main`, then publishes to
+   PyPI. See [Release tags](#release-tags) for the historical exceptions.
+4. Create the GitHub Release from the tag. Publishing it triggers the
+   repository's Zenodo webhook, which archives the release; check the Zenodo
+   record's metadata against `CITATION.cff`. Confirm the published release
    installs from a clean environment:
 
    ```
@@ -160,6 +216,26 @@ Release flow:
    VIRTUAL_ENV=/tmp/breos-pypi uv pip show breos
    VIRTUAL_ENV=/tmp/breos-pypi uv pip check
    ```
+5. Merge `main` back into `develop` with a PR ("Merge main into develop after
+   X.Y.Z release"), so the release commits and dates are on `develop`.
+
+## Release Tags
+
+Release tags are annotated, with the message `BREOS X.Y.Z`. Three historical
+tags are lightweight instead:
+
+| Tag | Commit | Date |
+| --- | --- | --- |
+| `v0.5.0` | `134c99e` (merge of #108) | 2026-08-05 |
+| `v0.5.1` | `62ab4f4` (merge of #117) | 2026-08-11 |
+| `v0.6.0` | `c1a641d` (merge of #140) | 2026-08-31 |
+
+Each points at the release merge commit and was published from it, so the
+commit is correct; only the tag object is missing. Leave them as they are. Do
+not delete and re-push them as annotated tags: that rewrites a published ref,
+and anyone who fetched the old tag keeps it. `git describe` skips lightweight
+tags unless `--tags` is passed, so use `git describe --tags` when these
+releases matter.
 
 ## Data And Docs
 

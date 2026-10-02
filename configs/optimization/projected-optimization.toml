@@ -16,8 +16,11 @@
 #
 # There is no n_modules or battery_kwh here on purpose. The optimizer searches
 # for them within the [constraints] bounds.
+#
+# Every table takes a fixed set of keys, and an unknown key raises. A key left
+# out takes the default docs/api/optimization.md lists. The weather and load
+# are not config keys: the call takes them as DataFrames.
 
-name = "Projected-lifetime sizing example"
 inverter_efficiency = 0.96
 
 [location]
@@ -25,12 +28,6 @@ latitude = 41.1579
 longitude = -8.6291
 timezone = "Europe/Lisbon"
 name = "Porto, Portugal"
-
-[load]
-# "1" is the bundled demandlib H0 household profile. External profiles need a
-# licensed CSV and an rlp_directory; see examples/external-rlp.toml.
-profile_type = "1"
-annual_consumption_kwh = 4000.0
 
 [pv]
 module = "Suntech_STP550S_STC"   # `breos list modules` shows the catalogue
@@ -40,6 +37,7 @@ degradation_rate = 0.005         # fraction per year
 
 [battery]
 eol_percentage = 0.70            # replace once usable capacity drops below this
+allow_terminal_replacement = true  # false: no pack bought at the horizon's final degradation period
 calendar_model = "naumann_lam_field_calibrated"
 max_soc = 0.90
 min_soc = 0.10
@@ -51,14 +49,15 @@ enable_replacement = true
 replacement_cost = "calculate"
 
 [optimization]
-algorithm = "nsga2"
 # "projected" scores candidates over the whole horizon using simulated yearly
-# values. Use "steady_state" for the faster year-one objectives.
+# values. It is the only basis; "steady_state" was removed in 0.7.0.
 objective_basis = "projected"
 pop_size = 40
 n_offsprings = 20
 n_gen = 40
 seed = 1                         # fix this; NSGA-II is stochastic
+# optimize_system_multi_objective reads the four settings above unless you pass
+# them as arguments; an argument that disagrees with its key raises.
 
 [optimization.early_stop]
 ftol = 0.0025
@@ -67,37 +66,41 @@ min_gen = 20
 n_skip = 0
 
 [constraints]
-budget_eur = 15000.0
+budget = 15000.0
 max_area_m2 = 25.0
 max_modules = 20
 max_battery_kwh = 30.0
+min_tilt_deg = 10.0              # lower tilt bound, degrees
 max_tilt_deg = "adjust"          # or a number in degrees
 enforce_zeb = false              # true makes the ZEB ratio a hard constraint
 
 [costs]
+# Prices from the residential_pt cost preset; replace them with your own quotes.
 electricity_cost = 0.2582        # EUR/kWh imported
 electricity_sold_cost = 0.04     # EUR/kWh exported
 daily_power_cost = 0.30          # EUR/day standing charge
-module_cost_per_w = 0.125
-storage_cost_per_kwh = 500.0
-inverter_cost_per_kw_hybrid = 102.58
-inverter_cost_per_kw_simple = 48.37
-installation_cost_per_module = 350.0
-installation_cost_battery = 350.0
-other_cost_per_module = 30.0
-other_costs = 0.0
-maintenance_cost_per_panel = 10.0
-maintenance_cost = 0.0
-dc_ac_ratio = 1.25
+module_cost_per_w = 0.125        # EUR/W of module rating
+storage_cost_per_kwh = 500.0     # EUR/kWh of nominal capacity
+inverter_cost_per_kw_hybrid = 102.58  # EUR/kW AC, with a battery
+inverter_cost_per_kw_simple = 48.37   # EUR/kW AC, PV only
+installation_cost_per_module = 350.0  # EUR per module
+installation_cost_battery = 350.0     # EUR, once, with a battery
+other_cost_per_module = 30.0     # EUR per module, such as cabling
+other_costs = 0.0                # EUR, once
+maintenance_cost_per_panel = 10.0  # EUR per module per year
+maintenance_cost = 0.0           # EUR per year
+dc_ac_ratio = 1.25               # DC/AC ratio that sets the inverter AC rating
 
 [financials]
 discount_rate = 0.05
-inflation_rate = 0.02
+inflation_rate = 0.02            # general inflation; the escalators below inherit it
 sell_price_inflation = 0.0
-project_lifespan = 20
-pv_degradation_rate = 0.005
+# import_price_escalation = 0.03  # import energy and the fixed charge
+# om_escalation = 0.02            # O&M
+# replacement_cost_learning = 0.0 # annual fall in the replacement price
 
-[emissions]
+[emissions]                      # adds Projected_CO2_* to every Pareto row
+# The packaged PT emissions factor; `breos list emissions` shows the others.
 country = "Portugal"
 average_grid_carbon_intensity_gco2_kwh = 127.91
 source = "Ember Climate, Europe Yearly Full Release"
@@ -106,7 +109,3 @@ year = 2025
 [simulation]
 resolution = "h"                 # "15min" is four times slower
 years_projection = 20
-# BREOS ships no weather data. Point this at your own TMY or historical CSV.
-# The conventional location is a local weather/ directory, which is git-ignored.
-weather_file = "weather/porto_tmy_2005_2023_pvgis-sarah3.csv"
-irradiance_resampling = "clear_sky_energy_conserving"   # only used at 15min

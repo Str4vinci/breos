@@ -43,7 +43,6 @@ class BatteryModelProfile:
     experimental_range: Mapping[str, Any]
     citations: tuple[str, ...]
     output_keys: tuple[str, ...]
-    operating_defaults: Mapping[str, Any]
     release_phase: str
     aging_horizon_days: float | None = None
     notes: str = ""
@@ -68,7 +67,6 @@ class BatteryModelProfile:
             "experimental_range": _json_metadata(self.experimental_range),
             "citations": list(self.citations),
             "output_keys": list(self.output_keys),
-            "operating_defaults": _json_metadata(self.operating_defaults),
             "release_phase": self.release_phase,
             "aging_horizon_days": self.aging_horizon_days,
             "notes": self.notes,
@@ -99,8 +97,6 @@ def _profile(
     aging_horizon_days: float | None = None,
     notes: str = "",
 ) -> BatteryModelProfile:
-    # BLAST model papers do not define pack-level operating defaults. Keep the
-    # mapping empty rather than inventing generic chemistry assumptions.
     return BatteryModelProfile(
         key=key,
         name=name,
@@ -112,7 +108,6 @@ def _profile(
         experimental_range=_freeze_metadata(experimental_range),
         citations=citations,
         output_keys=output_keys,
-        operating_defaults=_freeze_metadata({}),
         release_phase=release_phase,
         aging_horizon_days=aging_horizon_days,
         notes=notes,
@@ -405,27 +400,6 @@ def get_battery_model_profile(key: str) -> BatteryModelProfile:
         raise KeyError(f"Unknown battery model {key!r}. Available: {available}") from exc
 
 
-def list_battery_models(*, enabled_only: bool = False) -> list[dict[str, Any]]:
+def list_battery_models() -> list[dict[str, Any]]:
     """Return JSON-serializable discovery metadata for BLAST battery models."""
-    return [
-        profile.as_dict()
-        for profile in BATTERY_MODEL_REGISTRY.values()
-        if not enabled_only or profile.key in ENABLED_BLAST_MODEL_KEYS
-    ]
-
-
-def apply_battery_profile_defaults(
-    global_defaults: Mapping[str, Any], user_config: Mapping[str, Any]
-) -> dict[str, Any]:
-    """Resolve configuration as user values > profile defaults > globals."""
-    model_key = user_config.get("blast_model")
-    profile = BATTERY_MODEL_REGISTRY.get(str(model_key)) if model_key is not None else None
-    profile_defaults = profile.operating_defaults if profile is not None else {}
-    return merge_battery_config_layers(global_defaults, profile_defaults, user_config)
-
-
-def merge_battery_config_layers(
-    global_defaults: Mapping[str, Any], profile_defaults: Mapping[str, Any], user_config: Mapping[str, Any]
-) -> dict[str, Any]:
-    """Merge the documented config precedence without mutating any input."""
-    return {**global_defaults, **profile_defaults, **user_config}
+    return [profile.as_dict() for profile in BATTERY_MODEL_REGISTRY.values()]

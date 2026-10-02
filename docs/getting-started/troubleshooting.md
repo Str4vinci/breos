@@ -26,8 +26,11 @@ breos list battery-models
 
 Use `breos validate-config config.toml` to see a concise resolved summary, or
 `breos run --config config.toml --dry-run` for the complete JSON form. Config
-files are flat TOML or JSON mappings except for supported `[[pv_arrays]]`,
-`[sweep]`, and `[montecarlo]` sections.
+files are flat TOML or JSON mappings plus the tables listed in the
+[configuration key reference](config-reference.md), such as `[costs]`,
+`[tariff]`, `[smart_charging]`, `[period]`, `[[pv_arrays]]`, `[sweep]` and
+`[montecarlo]`. Keys inside a table are checked as strictly as top-level
+keys.
 
 ## Weather download fails
 
@@ -36,7 +39,7 @@ directory's `weather/` folder when available; otherwise it fetches PVGIS TMY
 weather. Check internet access and retry before changing model settings.
 
 For repeatable or offline work, seed the weather cache as shown in
-[Offline runs with cached weather](recipes.md#offline-runs-with-cached-weather).
+[Run offline with cached weather](../how-to/offline-weather.md).
 To use NSRDB data, download it separately with your own NREL credentials and
 load the saved weather file locally. Custom coordinate-dict locations do not
 use a preset cache key and therefore fetch weather when used through `App`.
@@ -60,9 +63,7 @@ argument to an optimization entry point. The Python backend remains the
 default and numerical reference, so installing `fast` alone changes nothing.
 The backend chooses a battery dispatch loop and nothing else, so a PV-only
 study takes the same vectorized balance either way; selecting `numba` for one
-changes only the toolchain recorded in its provenance. The earlier standalone
-`breos.numba_kernels` screening engine is removed in 0.6.0; replacements are
-listed in the archived v0.5.2 migration guide.
+changes only the toolchain recorded in its provenance.
 
 Core imports, help, option discovery, and configuration validation do not load
 Matplotlib. If an actual plotting command reports that its configuration

@@ -48,7 +48,9 @@ breos run --config quickstart.toml --output result.json
 
 `validate-config` checks required keys and prints the resolved choices without
 fetching weather or running a simulation. `--dry-run` writes the same resolved
-configuration summary as JSON. A successful dry run shows the location,
+configuration summary as JSON, with every config key grouped by section:
+its configured value after defaults, or the value BREOS derives from it
+(tilt, azimuth, module, inverter AC rating). A successful dry run shows the location,
 timezone, module count, PV size, inverter AC rating, load profile, battery
 capacity, cost preset, emissions preset, and resolved static PVWatts loss
 components. The loss block applies any `pv_loss_overrides` and reports the
@@ -63,30 +65,33 @@ local weather cache is present.
 Source checkouts also include the same example at
 `configs/examples/quickstart.toml`.
 
-A representative run (PVGIS TMY for Porto, packaged defaults) produces
-top-level values close to these:
+A representative run with BREOS 0.7.0 and a fresh PVGIS TMY for Porto
+(PVGIS-SARAH3 radiation and ERA5 meteorology, 2005–2023) produces these
+top-level values:
 
 ```json
 {
   "n_modules": 10,
   "pv_kwp": 5.5,
   "battery_kwh": 5.0,
-  "pv_production_kwh": 8288.0,
-  "grid_independence_pct": 80.2,
-  "self_consumption_pct": 39.8,
-  "total_investment_eur": 7788.9,
-  "payback_year": 10,
-  "npv_savings_eur": 5041.3,
-  "battery_soh_end_pct": 70.6,
-  "co2_avoided_total_kg": 20228.0
+  "usable_ac_system_production_kwh": 8152.05,
+  "grid_independence_pct": 79.0,
+  "self_consumption_pct": 38.71,
+  "total_investment": 7788.85,
+  "payback_year": 13,
+  "npv_savings": 4735.24,
+  "battery_soh_end_pct": 70.46,
+  "co2_avoided_total_lifetime_kg": 19932.17
 }
 ```
 
 Exact numbers shift with the PVGIS TMY vintage and dependency versions, but a
-plausible first run lands in the same neighborhood — roughly 8 MWh/yr of PV
-production and 75–85% grid independence for this config. If your values are
-far off, use the dry-run summary and [Required Inputs](inputs.md) to check
-which defaults your run actually used.
+plausible first run lands in the same neighborhood: roughly 8 MWh/yr of
+usable AC production and 75–85% grid independence for this config. Results
+of BREOS 0.6.2 and earlier are not directly comparable; see
+[Migrating from BREOS 0.6.2](interpreting-results.md#migrating-from-breos-062).
+If your values are far off, use the dry-run summary and
+[Required Inputs](inputs.md) to check which defaults your run actually used.
 
 To discover packaged option keys:
 
@@ -119,9 +124,10 @@ app.simulate()
 result = app.result()
 
 print(f"Grid independence: {result['grid_independence_pct']:.1f}%")
+print(f"Usable AC production: {result['usable_ac_system_production_kwh']:,.0f} kWh")
 print(f"Payback: {result['payback_year']} years")
-print(f"NPV savings: {result['npv_savings_eur']:,.0f} EUR")
-print(f"CO2 avoided: {result['co2_avoided_total_kg']:,.0f} kg")
+print(f"NPV savings: {result['npv_savings']:,.0f} EUR")
+print(f"CO2 avoided: {result['co2_avoided_total_lifetime_kg']:,.0f} kg")
 ```
 
 What just happened, end-to-end:
@@ -169,9 +175,12 @@ The CLI writes the same JSON-serializable dict that `App.result()` returns.
 
 ## Next steps
 
-- See [Recipes](recipes.md) for copy-paste configs: PV-only, east-west
-  roofs, custom coordinates, 15-minute resolution, external load profiles,
-  and offline runs.
+- See the [case examples](../gallery/index.rst) for stored runs that answer
+  common questions: what a battery adds, east-west roofs, tariffs, battery
+  replacement, Monte Carlo and the optimizer front.
+- See the [how-to guides](../how-to/index.md) for custom coordinates, your
+  own PV module, partial years, sweeps, 15-minute resolution, external load
+  profiles and offline runs.
 - See [Configuration](configuration.md) for every option `App` accepts.
 - See [Interpreting results](interpreting-results.md) for what each result
   key means.

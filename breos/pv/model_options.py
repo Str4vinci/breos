@@ -10,11 +10,15 @@ already-resolved :class:`PVModelOptions` and do no validation of their own.
 from __future__ import annotations
 
 import math
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from typing import Any, Mapping
 
 import numpy as np
+import pandas as pd
 from pvlib.albedo import SURFACE_ALBEDOS
+
+from breos.utils import get_hours_per_step
+from breos.weather import weather_representative_time_offset
 
 # Sky-diffusion (transposition) models for projecting GHI/DHI/DNI onto the
 # plane of array, as supported by pvlib.irradiance.get_total_irradiance.
@@ -64,9 +68,11 @@ SURFACE_TYPES = tuple(sorted(SURFACE_ALBEDOS))
 # metadata. It supports instantaneous samples with an explicit provider
 # offset and interval means with either left or right labels.
 #
-# Applied in breos.solar._prepare_solarpos_and_weather, which shifts the
-# solar-position times before transposition, so it is resolved separately
-# from PVModelOptions rather than carried on it.
+# Resolved by solar_position_at_labels, which both transposition
+# (breos.solar._prepare_solarpos_and_weather) and terrain shading
+# (breos.pv.horizon) call, so the two cannot disagree about where the sun is.
+# It depends on the weather, so it is resolved separately from
+# PVModelOptions rather than carried on it.
 SOLAR_POSITION_METHODS = (
     "interval-start",
     "mid-interval",
@@ -245,6 +251,36 @@ def resolve_solar_position_method(method: str) -> str:
     return normalise_model_name(method)
 
 
+def solar_position_time_offset(method: str, weather: pd.DataFrame, freq: str) -> pd.Timedelta:
+    """Return how far after each weather label the sun position is evaluated.
+
+    ``interval-start`` gives zero and ``mid-interval`` half a step. ``weather``
+    reads the offset from the weather metadata and raises when the metadata
+    does not state its radiation time basis.
+    """
+    method = resolve_solar_position_method(method)
+    if method == "mid-interval":
+        return pd.Timedelta(hours=get_hours_per_step(freq) / 2.0)
+    if method == "weather":
+        return weather_representative_time_offset(weather, freq)
+    return pd.Timedelta(0)
+
+
+def solar_position_at_labels(
+    location: Any, times: pd.DatetimeIndex, weather: pd.DataFrame, freq: str, solar_position: str
+) -> tuple[pd.DataFrame, str]:
+    """Return the sun position for each label in ``times`` and the resolved method.
+
+    The sun is evaluated :func:`solar_position_time_offset` after each label,
+    and the result is indexed at the labels.
+    """
+    method = resolve_solar_position_method(solar_position)
+    offset = solar_position_time_offset(method, weather, freq)
+    solarpos = location.get_solarposition(times=times + offset)
+    solarpos.index = times
+    return solarpos, method
+
+
 def resolve_iam_model(model: str) -> str:
     """Normalise and validate a beam incidence-angle modifier model."""
     if not is_known_model(model, IAM_MODELS):
@@ -305,16 +341,18 @@ def validate_bifacial_inputs(
         "pvrow_height": pvrow_height,
         "pvrow_pitch": pvrow_pitch,
     }
+    checked: dict[str, float] = {}
     for name, value in geometry.items():
         if isinstance(value, bool) or not isinstance(value, (int, float, np.number)):
             raise TypeError(f"{name} must be a finite number for bifacial modeling")
-        if not math.isfinite(float(value)):
+        checked[name] = float(value)
+        if not math.isfinite(checked[name]):
             raise ValueError(f"{name} must be a finite number for bifacial modeling")
     if not is_valid_gcr(gcr):
         raise ValueError("gcr must be between 0 (exclusive) and 1 (inclusive) for bifacial modeling")
-    if float(pvrow_height) <= 0.0:
+    if checked["pvrow_height"] <= 0.0:
         raise ValueError("pvrow_height must be > 0 for bifacial modeling")
-    if float(pvrow_pitch) <= 0.0:
+    if checked["pvrow_pitch"] <= 0.0:
         raise ValueError("pvrow_pitch must be > 0 for bifacial modeling")
     return model
 
@@ -402,19 +440,6 @@ def configured_pv_model_kwargs(config: Mapping[str, Any]) -> dict[str, Any]:
     """Return the PV model kwargs present in a resolved application config.
 
     Missing keys stay missing so the public PV function owns its defaults.
-    This function is the single config-to-call mapping used by optimization
-    and manuscript reproduction tools.
+    This function is the single config-to-call mapping used by App and optimization.
     """
     return {key: config[key] for key in PV_MODEL_CONFIG_KEYS if key in config}
-
-
-def resolve_configured_pv_model_options(
-    config: Mapping[str, Any], *, bifaciality: float | None = None
-) -> dict[str, Any]:
-    """Resolve the effective PV model chain for runtime provenance."""
-    kwargs = configured_pv_model_kwargs(config)
-    solar_position = resolve_solar_position_method(kwargs.pop("solar_position", DEFAULT_SOLAR_POSITION))
-    resolved = resolve_pv_model_options(bifaciality=bifaciality, **kwargs)
-    effective = asdict(resolved)
-    effective["solar_position"] = solar_position
-    return effective

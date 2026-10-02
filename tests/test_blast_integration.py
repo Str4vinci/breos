@@ -14,6 +14,8 @@ import numpy as np
 import pandas as pd
 import pytest
 
+import breos.projection as projection_module
+from breos.app_config import resolve_app_config
 from breos.app_inputs import PreparedSimulationInputs
 from breos.battery import BatteryConfig, simulate_energy_balance
 from breos.runners import app as app_runner
@@ -72,7 +74,7 @@ def test_blast_15min_resolution_two_days():
 
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        results_df, _total_pv, summary_df, _cost, _n_rep, degradation_df, degradation_state = simulate_energy_balance(
+        results_df, _total_pv, summary_df, _n_rep, degradation_df, degradation_state = simulate_energy_balance(
             pv_dc=pv_dc,
             houseload=houseload,
             battery_config=config,
@@ -158,61 +160,53 @@ def test_blast_multiple_replacements_through_runner(monkeypatch):
         "daily_power_cost": 0.3,
         "annual_operation_cost": 50.0,
         "total_initial_cost": 12000.0,
+        "replacement_cost_each": 5.0 * 500.0,
     }
     monkeypatch.setattr(app_runner, "prepare_simulation_inputs", lambda cfg, resolved, deps: inputs)
-    monkeypatch.setattr(app_runner, "build_costs_dict", lambda cfg, resolved: costs)
+    monkeypatch.setattr(projection_module, "build_costs_dict", lambda cfg, resolved: costs)
 
     # Wrap (do not mock) the real degradation call to retain each year's frames.
     captured_years: list[tuple] = []
-    real_simulate = app_runner.simulate_energy_balance
+    real_simulate = projection_module.simulate_energy_balance
 
     def _capturing_simulate(*args, **kwargs):
         result = real_simulate(*args, **kwargs)
         captured_years.append(result)
         return result
 
-    monkeypatch.setattr(app_runner, "simulate_energy_balance", _capturing_simulate)
+    monkeypatch.setattr(projection_module, "simulate_energy_balance", _capturing_simulate)
 
     inflation_rate = 0.03
     max_soc = 0.9
     battery_kwh = 5.0
-    cfg = {
-        "resolution": "h",
-        "battery_kwh": battery_kwh,
-        "projection_years": 20,
-        "pv_degradation_rate": 0.005,
-        "n_modules": 10,
-        "inverter_loading_ratio": 1.25,
-        "battery_rte": None,
-        "battery_max_charge_power_w": None,
-        "battery_max_discharge_power_w": None,
-        "battery_power_limit_c_rate": None,
-        "enable_resistance_fade": False,
-        "battery_eol_percentage": 0.8,
-        "battery_max_soc": max_soc,
-        "battery_min_soc": 0.1,
-        "dc_coupled": True,
-        "inverter_efficiency": 0.96,
-        "calendar_model": "naumann_lam_field_calibrated",
-        "inflation_rate": inflation_rate,
-        "sell_price_inflation": 0.0,
-        "discount_rate": 0.04,
-        "degradation_engine": "blast",
-        "blast_model": "nmc811_grsi_lgmj1_4ah",
-    }
-    resolved = SimpleNamespace(
-        cost_params=SimpleNamespace(battery_cost_per_kwh=500.0),
-        avg_module_power_w=400.0,
-        emissions_params=None,
+    resolved = resolve_app_config(
+        {
+            "location": "porto",
+            "n_modules": 10,
+            "annual_consumption_kwh": 4000,
+            "battery_kwh": battery_kwh,
+            "projection_years": 20,
+            "pv_degradation_rate": 0.005,
+            "battery_eol_percentage": 0.8,
+            "battery_max_soc": max_soc,
+            "inflation_rate": inflation_rate,
+            "sell_price_inflation": 0.0,
+            "discount_rate": 0.04,
+            "degradation_engine": "blast",
+            "blast_model": "nmc811_grsi_lgmj1_4ah",
+        }
     )
+    cfg = resolved.cfg
 
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        artifacts = app_runner.run_app_simulation(cfg, resolved, deps=SimpleNamespace())
+        artifacts = app_runner.run_app_simulation(resolved, deps=SimpleNamespace())
 
     assert len(captured_years) == cfg["projection_years"]
-    per_year_counts = [year_result[4] for year_result in captured_years]
-    per_year_costs = [year_result[3] for year_result in captured_years]
+    per_year_counts = [year_result[3] for year_result in captured_years]
+    # The economics prices each replacement at the pack's t = 0 price (ADR 0003 E4).
+    per_year_costs = artifacts.yearly_df["Replacement_Cost"].tolist()
+    assert per_year_costs == [count * battery_kwh * 500.0 for count in per_year_counts]
 
     # Multiple replacement events occur (stable minimum for this committed fixture;
     # the deterministic run currently produces 11).
@@ -249,8 +243,8 @@ def test_blast_multiple_replacements_through_runner(monkeypatch):
     replacement_years_seen = 0
     for year_idx, year_result in enumerate(captured_years):
         results_df = year_result[0]
-        degradation_df = year_result[5]
-        year_replacements = year_result[4]
+        degradation_df = year_result[4]
+        year_replacements = year_result[3]
 
         # Ledger closes on every row of every year, including replacement rows.
         _assert_energy_ledger_closes(results_df)

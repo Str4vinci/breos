@@ -8,32 +8,10 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from breos.battery import EXECUTION_BACKENDS, _dispatch_day_python, _resolve_dispatch_day
-from breos.montecarlo import MonteCarloSettings, _aggregate_jit_cache_states, run_montecarlo
-
-
-def _write_multiyear_weather(path, years=(2021, 2022)):
-    frames = []
-    for year in years:
-        idx = pd.date_range(f"{year}-01-01", f"{year}-12-31 23:00", freq="h")
-        idx = idx[~((idx.month == 2) & (idx.day == 29))]
-        hour = idx.hour.to_numpy()
-        daylight = np.clip(np.sin((hour - 6) / 12 * np.pi), 0, None)
-        ghi = 700.0 * daylight
-        frames.append(
-            pd.DataFrame(
-                {
-                    "date": idx,
-                    "temperature_2m": 15.0 + 8.0 * daylight,
-                    "wind_speed_10m": 2.0,
-                    "shortwave_radiation": ghi,
-                    "direct_normal_irradiance": 0.8 * ghi,
-                    "diffuse_radiation": 0.2 * ghi,
-                }
-            )
-        )
-    pd.concat(frames, ignore_index=True).to_csv(path, index=False)
-    return path
+from breos.app_config import APP_CONFIG_FIELDS
+from breos.battery import BatteryConfig, _dispatch_day_python, _resolve_dispatch_day, _ResultBuffers
+from breos.execution import EXECUTION_BACKENDS, aggregate_jit_cache_states
+from breos.montecarlo import MonteCarloSettings, run_montecarlo
 
 
 def _base_config():
@@ -51,13 +29,10 @@ def _base_config():
 
 def test_python_is_the_default_and_the_reference():
     assert EXECUTION_BACKENDS == ("python", "numba")
-    assert MonteCarloSettings(weather_file="x").execution_backend == "python"
+    # Unset Monte Carlo settings inherit the App key, whose default is python.
+    assert MonteCarloSettings(weather_file="x").execution_backend is None
+    assert APP_CONFIG_FIELDS["execution_backend"].default == "python"
     assert _resolve_dispatch_day("python") is _dispatch_day_python
-
-
-def test_unknown_backend_is_rejected():
-    with pytest.raises(ValueError, match="execution_backend must be one of"):
-        _resolve_dispatch_day("cuda")
 
 
 def test_montecarlo_rejects_unknown_backend_before_loading_inputs(tmp_path):
@@ -66,25 +41,26 @@ def test_montecarlo_rejects_unknown_backend_before_loading_inputs(tmp_path):
         run_montecarlo(_base_config(), settings)
 
 
-def test_missing_numba_fails_before_any_trajectory_runs(tmp_path, monkeypatch):
+def test_missing_numba_fails_before_any_trajectory_runs(tmp_path, monkeypatch, write_multiyear_weather):
     import breos._numba_dispatch as dispatch
-    import breos.montecarlo as mc_module
+    import breos.projection as projection_module
 
-    weather = _write_multiyear_weather(tmp_path / "multi.csv")
+    weather = write_multiyear_weather(tmp_path / "multi.csv")
     monkeypatch.setattr(dispatch, "numba_available", lambda: False)
 
     def _must_not_run(*args, **kwargs):
         raise AssertionError("a trajectory started despite the missing dependency")
 
-    monkeypatch.setattr(mc_module, "simulate_energy_balance_summary", _must_not_run)
+    # Trajectories run through the shared projection loop.
+    monkeypatch.setattr(projection_module, "simulate_energy_balance_summary", _must_not_run)
 
     settings = MonteCarloSettings(weather_file=str(weather), n_runs=4, execution_backend="numba")
     with pytest.raises(dispatch.NumbaUnavailableError, match=r"breos\[fast\]"):
         run_montecarlo(_base_config(), settings)
 
 
-def test_provenance_records_the_python_backend_and_versions(tmp_path):
-    weather = _write_multiyear_weather(tmp_path / "multi.csv")
+def test_provenance_records_the_python_backend_and_versions(tmp_path, write_multiyear_weather):
+    weather = write_multiyear_weather(tmp_path / "multi.csv")
     settings = MonteCarloSettings(weather_file=str(weather), n_runs=1, years_per_run=1, seed=3)
     result = run_montecarlo(_base_config(), settings)
 
@@ -98,12 +74,12 @@ def test_provenance_records_the_python_backend_and_versions(tmp_path):
     assert "jit_cache" not in execution
 
 
-def test_provenance_records_the_compiler_versions_and_cache_state(tmp_path):
+def test_provenance_records_the_compiler_versions_and_cache_state(tmp_path, write_multiyear_weather):
     pytest.importorskip("numba", reason="the compiled backend needs the breos[fast] extra")
     import llvmlite
     import numba
 
-    weather = _write_multiyear_weather(tmp_path / "multi.csv")
+    weather = write_multiyear_weather(tmp_path / "multi.csv")
     settings = MonteCarloSettings(
         weather_file=str(weather), n_runs=1, years_per_run=1, seed=3, execution_backend="numba"
     )
@@ -118,37 +94,19 @@ def test_provenance_records_the_compiler_versions_and_cache_state(tmp_path):
     assert execution["jit_cache"] in {"warm", "cold"}
 
 
-def test_jit_cache_state_ignores_unverified_cache_files(tmp_path, monkeypatch):
-    import breos._numba_dispatch as dispatch
-
-    monkeypatch.setenv("NUMBA_CACHE_DIR", str(tmp_path))
-    (tmp_path / "_numba_dispatch.stale.nbi").write_bytes(b"not a valid Numba cache index")
-    dispatch.reset_jit_cache_observation()
-
-    assert dispatch.jit_cache_state() is None
-
-
 def _call_numba_cache_probe(dispatch):
     dispatch._dispatch_day_numba(
-        SimpleNamespace(matrix=np.zeros((37, 1))),
+        _ResultBuffers(1),
         np.zeros(1),
         np.zeros(1),
         np.full(1, 25.0),
         0,
         1,
-        battery_config=SimpleNamespace(
-            nominal_energy_wh=0.0,
-            max_soc=0.9,
-            min_soc=0.1,
-            inverter_efficiency=0.96,
-            thermal_resistance_kw=0.05,
-            ac_output_scale=1.0,
-        ),
-        has_battery=False,
+        battery_config=BatteryConfig(nominal_energy_wh=5000.0),
         battery_soh_decimal=1.0,
-        Battery_SOH=100.0,
         Battery_Energy_Wh=0.0,
         Battery_PV_Origin_Energy_Wh=0.0,
+        Battery_Grid_Origin_Energy_Wh=0.0,
         eff_charge=0.95,
         eff_discharge=0.95,
         hours_per_step=1.0,
@@ -170,19 +128,20 @@ def test_jit_cache_state_reports_miss_then_in_memory_reuse(monkeypatch):
             if not self.signatures:
                 self.stats.cache_misses["signature"] = 1
                 self.signatures.append(("compiled",))
-            return 0.0, 0.0, 0.0, 0.0
 
-    monkeypatch.setattr(dispatch, "_KERNEL", _Kernel())
+    kernel = _Kernel()
+    monkeypatch.setattr(dispatch, "_kernel", lambda: kernel)
     dispatch.reset_jit_cache_observation()
     _call_numba_cache_probe(dispatch)
-    assert dispatch.observed_jit_cache_state() == "cold"
+    assert dispatch.jit_cache_state() == "cold"
 
     dispatch.reset_jit_cache_observation()
     _call_numba_cache_probe(dispatch)
-    assert dispatch.observed_jit_cache_state() == "warm"
+    assert dispatch.jit_cache_state() == "warm"
 
 
 def test_montecarlo_provenance_uses_worker_observations_across_repeated_studies(monkeypatch):
+    pytest.importorskip("numba", reason="the compiled backend needs the breos[fast] extra")
     import breos._numba_dispatch as dispatch
     import breos.montecarlo as mc_module
 
@@ -194,13 +153,16 @@ def test_montecarlo_provenance_uses_worker_observations_across_repeated_studies(
             if not self.signatures:
                 self.stats.cache_misses["signature"] = 1
                 self.signatures.append(("compiled",))
-            return 0.0, 0.0, 0.0, 0.0
 
-    monkeypatch.setattr(dispatch, "_KERNEL", _Kernel())
+    kernel = _Kernel()
+    monkeypatch.setattr(dispatch, "_kernel", lambda: kernel)
     monkeypatch.setattr(
         mc_module,
         "_precompute_year_caches",
-        lambda *args, **kwargs: ({2021: pd.Series([0.0])}, {2021: pd.Series([25.0])}),
+        lambda *args, **kwargs: (
+            {2021: pd.Series([0.0], index=pd.DatetimeIndex(["2021-01-01"]))},
+            {2021: pd.Series([25.0], index=pd.DatetimeIndex(["2021-01-01"]))},
+        ),
     )
     # A one-column frame, which is what load_consumption_profile really
     # returns; the study now aligns it before any trajectory runs.
@@ -238,7 +200,7 @@ def test_montecarlo_provenance_uses_worker_observations_across_repeated_studies(
     ],
 )
 def test_jit_cache_worker_observations_are_aggregated(states, expected):
-    assert _aggregate_jit_cache_states(states) == expected
+    assert aggregate_jit_cache_states(states) == expected
 
 
 @pytest.mark.parametrize("states", [[], ["unknown"], ["warm", "unknown"], ["cold", "unknown"]])
@@ -249,12 +211,12 @@ def test_unclassifiable_jit_cache_observations_degrade_to_unknown(states):
     cache; a single "unknown" from any worker makes the study-level claim
     untrustworthy. Both report "unknown" rather than raising.
     """
-    assert _aggregate_jit_cache_states(states) == "unknown"
+    assert aggregate_jit_cache_states(states) == "unknown"
 
 
-def test_both_backends_agree_on_a_seeded_study(tmp_path):
+def test_both_backends_agree_on_a_seeded_study(tmp_path, write_multiyear_weather):
     pytest.importorskip("numba", reason="the compiled backend needs the breos[fast] extra")
-    weather = _write_multiyear_weather(tmp_path / "multi.csv")
+    weather = write_multiyear_weather(tmp_path / "multi.csv")
 
     def run(backend):
         return run_montecarlo(
@@ -280,16 +242,18 @@ def test_both_backends_agree_on_a_seeded_study(tmp_path):
 _CACHE_PROBE = """
 import json, sys
 sys.path.insert(0, {root!r})
-from breos._numba_dispatch import _build_kernel
 import numpy as np
+from breos._numba_dispatch import _dispatch_day_numba, _kernel
+from breos.battery import BatteryConfig, _ResultBuffers
 
-kernel = _build_kernel()
-matrix = np.zeros((37, 96))
-kernel(
-    matrix, np.zeros(96), np.zeros(96), np.full(96, 25.0), 0, 96,
-    0.0, 0.0, False, 0.0, 1.0, 100.0, 0.9, 0.1, 0.0, 0.95, 0.95, 0.96,
-    np.inf, np.inf, np.inf, True, 0.05, 0.25, 2.0, 1.0,
+_dispatch_day_numba(
+    _ResultBuffers(96), np.zeros(96), np.zeros(96), np.full(96, 25.0), 0, 96,
+    battery_config=BatteryConfig(nominal_energy_wh=5000.0),
+    battery_soh_decimal=1.0, Battery_Energy_Wh=0.0, Battery_PV_Origin_Energy_Wh=0.0, Battery_Grid_Origin_Energy_Wh=0.0,
+    eff_charge=0.95, eff_discharge=0.95, hours_per_step=0.25, standby_loss_per_step_wh=0.0,
+    cap_wh=np.inf, cap_charge_wh=np.inf, cap_discharge_wh=np.inf,
 )
+kernel = _kernel()
 print(json.dumps({{
     "hits": int(sum(kernel.stats.cache_hits.values())),
     "misses": int(sum(kernel.stats.cache_misses.values())),
@@ -319,15 +283,15 @@ def _run_cache_probe(cache_dir):
 def _dispatch_cache_data_files(cache_dir):
     from pathlib import Path
 
-    return sorted(Path(cache_dir).glob("**/*_dispatch_day_kernel*.nbc"))
+    return sorted(Path(cache_dir).glob("**/_dispatch._dispatch_day-*.nbc"))
 
 
 def test_dispatch_kernel_cache_survives_a_new_process(tmp_path):
     """The on-disk cache must work across processes, not just within one.
 
     This is a regression test for a defect, not a nicety. When the kernels were
-    defined inside a factory, ``_dispatch_day_kernel`` closed over the three
-    helper dispatchers; Numba's cache index key for a closure includes the cell
+    defined inside a factory, the day kernel closed over the three helper
+    dispatchers; Numba's cache index key for a closure includes the cell
     contents, which are not stable across processes, so every process missed
     the cache and appended another data file. Under multiprocessing that meant
     every worker recompiled, and the cache directory grew without bound.

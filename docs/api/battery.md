@@ -10,12 +10,11 @@ with Lam `Ea`/`n` fixed and `k0`/`b` fitted to field data.
 
 ## Configuration
 
-BREOS currently supports stationary DC-coupled/hybrid batteries only.
-AC-coupled dispatch is not implemented and fails explicitly. Optional charge
-and discharge nameplate limits default to unlimited for backward
-compatibility; configure them for realistic sizing studies. Charge power is
-measured at the DC charge-path input. Discharge power is measured as AC
-delivered to load.
+BREOS supports stationary DC-coupled/hybrid batteries only; there is no
+AC-coupled option (see [Energy balance](energy-balance.md#physical-boundary-and-coupling)).
+Optional charge and discharge nameplate limits default to unlimited;
+configure them for realistic sizing studies. Charge power is measured at the
+DC charge-path input. Discharge power is measured as AC delivered to load.
 
 ```{eval-rst}
 .. autosummary::
@@ -43,21 +42,19 @@ and daily mean absolute SOC.
    breos.battery.compute_cell_temperature
 ```
 
-## Cycle detection
-
-```{eval-rst}
-.. autosummary::
-   :toctree: generated/
-
-   breos.battery.detect_cycles_rainflow
-   breos.battery.detect_half_cycles_from_soc_series
-```
-
 ## Degradation primitives
 
-Low-level update functions that the energy balance loop calls each
-timestep. Use these directly only when reproducing or critiquing the
-degradation model.
+Low-level update functions for the degradation model. The energy balance
+ages the pack once per daily degradation window, not each timestep. With the
+native engine, it calls `update_battery_soh_calendar` once per window, with that window's mean cell
+temperature and mean absolute SOC. When resistance fade is enabled, it also
+calls the two resistance functions once per window. It does not call
+`update_battery_soh_cyclewise`: its cycle step takes the window's cycles from
+an incremental rainflow counter. `update_battery_soh_cyclewise` is a
+standalone equivalent of that cycle step for one whole SOC series. It closes
+the rainflow residue at the end of the series, so calling it once per day
+does not reproduce a simulation. Use these functions directly only when
+reproducing or critiquing the degradation model.
 
 ```{eval-rst}
 .. autosummary::

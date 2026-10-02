@@ -1,0 +1,52 @@
+{
+ "case": "quarterly_berlin",
+ "title": "A quarterly tariff in Berlin",
+ "breos_version": "0.7.0",
+ "git_describe": "v0.6.2-610-gd29419b",
+ "generated_utc": "2026-10-01T20:55:41+00:00",
+ "runtime_s": 6.5,
+ "cheap": true,
+ "configs": {
+  "configs/examples/quarterly-tariff-berlin.toml": "63e894a58eacc784a1546efdebba74004615238857f5d5b65625b9c4b59c3b41"
+ },
+ "weather": {
+  "validation/data/weather/berlin_tmy_2005_2023_pvgis-sarah3.csv.gz": {
+   "sha256": "db4ed7ba4957a13855f683639440374eb26489d678bea6327f5035b74bae1117",
+   "attribution": "PVGIS typical meteorological year 2005-2023 (PVGIS-SARAH3). PVGIS data © European Union, 2001-2024, reused under Commission Decision 2011/833/EU."
+  }
+ },
+ "dependencies": {
+  "python": "3.12.13",
+  "numpy": "2.4.6",
+  "pandas": "3.0.5",
+  "pvlib": "0.15.2",
+  "scipy": "1.17.1",
+  "numba": "0.66.0",
+  "pymoo": "0.6.2"
+ },
+ "currency": "EUR",
+ "timezone": "Europe/Berlin",
+ "variants": {
+  "greedy": {},
+  "discharge_only high": {
+   "smart_charging": {
+    "mode": "discharge_only",
+    "discharge_periods": [
+     "high"
+    ]
+   }
+  },
+  "discharge_only standard and high": {
+   "smart_charging": {
+    "mode": "discharge_only",
+    "discharge_periods": [
+     "standard",
+     "high"
+    ]
+   }
+  }
+ },
+ "files": {
+  "strategies.json": "137181c4741452e38f3f234f57c67c5afd2b222e99238ad3f4efce43ebdd291f"
+ }
+}

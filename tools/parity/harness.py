@@ -5,6 +5,18 @@ BREOS checkout: it touches only ``BatteryConfig`` and
 ``simulate_energy_balance``, which are stable across the revisions being
 compared. Every scenario is deterministic given its name.
 
+Every scenario runs at both resolutions in ``RESOLUTIONS``, hourly and
+15-minute; the dump keys are ``<scenario>@<freq>``.
+
+Usage::
+
+    python tools/parity/harness.py OUT.npz [python|numba] [--instructions]
+
+The backend defaults to ``python``. ``--instructions`` adds
+``INSTRUCTION_SCENARIOS``, which need a tree with ``dispatch_instructions``;
+leave it off when dumping an older tree. ``-h`` or ``--help`` prints this
+text.
+
 Run it against two trees and compare the ``.npz`` files with
 ``compare.py``; any differing bit in any exported column shows up as a
 non-zero maximum absolute difference for that column.
@@ -19,10 +31,17 @@ import pandas as pd
 
 FREQ = "15min"
 STEPS_PER_DAY = 96
+# Every scenario runs at both resolutions: the day loop takes 96 steps or 24,
+# and hours_per_step enters every energy conversion.
+RESOLUTIONS = ("15min", "h")
 
 
-def _index(days: int, start: str = "2024-01-01") -> pd.DatetimeIndex:
-    return pd.date_range(start=start, periods=days * STEPS_PER_DAY, freq=FREQ, tz="UTC")
+def _steps_per_day(freq: str) -> int:
+    return {"15min": 96, "h": 24}[freq]
+
+
+def _index(days: int, start: str = "2024-01-01", freq: str = FREQ) -> pd.DatetimeIndex:
+    return pd.date_range(start=start, periods=days * _steps_per_day(freq), freq=freq, tz="UTC")
 
 
 def _profiles(index: pd.DatetimeIndex, seed: int, pv_peak_w: float, load_base_w: float):
@@ -35,7 +54,8 @@ def _profiles(index: pd.DatetimeIndex, seed: int, pv_peak_w: float, load_base_w:
     # Diurnal PV with a seasonal envelope and per-day cloud variability.
     daylight = np.clip(np.sin((hour - 6.0) / 12.0 * np.pi), 0.0, None)
     seasonal = 0.65 + 0.35 * np.cos((doy - 172) / 365.0 * 2.0 * np.pi)
-    cloud = np.repeat(rng.uniform(0.15, 1.0, size=n // STEPS_PER_DAY + 1), STEPS_PER_DAY)[:n]
+    steps_per_day = int(pd.Timedelta(days=1) / (index[1] - index[0]))
+    cloud = np.repeat(rng.uniform(0.15, 1.0, size=n // steps_per_day + 1), steps_per_day)[:n]
     pv = pv_peak_w * daylight * seasonal * cloud
     pv[rng.random(n) < 0.004] = 0.0
 
@@ -55,19 +75,18 @@ def _profiles(index: pd.DatetimeIndex, seed: int, pv_peak_w: float, load_base_w:
     )
 
 
-def build(name: str):
+def build(name: str, freq: str = FREQ):
     """Return ``(pv_dc, houseload, temperature, battery_kwargs, sim_kwargs)``."""
-    from breos.battery import BatteryConfig
-
     days = {"one_day": 1, "partial_day": 2}.get(name, 365)
-    index = _index(days)
+    index = _index(days, freq=freq)
     if name == "partial_day":
-        index = index[: STEPS_PER_DAY + 37]  # a full day plus a trailing stub
+        steps_per_day = _steps_per_day(freq)
+        # A full day plus a trailing stub of about nine hours.
+        index = index[: steps_per_day + 37 * steps_per_day // 96]
 
     common = dict(
         max_soc=0.95,
         min_soc=0.10,
-        dc_coupled=True,
         inverter_efficiency=0.96,
         enable_replacement=True,
         calendar_model="naumann_lam",
@@ -81,7 +100,7 @@ def build(name: str):
 
     if name == "discharge_limited":
         # A hard AC discharge cap that binds most evenings, which is the one
-        # dispatch branch no forthcoming publication study case reaches.
+        # dispatch branch typical sizing-study cases never reach.
         pv, load, temp = _profiles(index, 12, 7000.0, 2200.0)
         cfg = dict(
             nominal_energy_wh=14000.0,
@@ -162,6 +181,31 @@ def build(name: str):
         )
         return pv, load, temp, cfg, {}
 
+    if name == "blast":
+        # BLAST aging instead of the native models; it cannot be combined with
+        # resistance fade. The degradation_engine keyword exists since 0.6.0.
+        pv, load, temp = _profiles(index, 20, 9000.0, 2100.0)
+        cfg = dict(
+            nominal_energy_wh=10000.0,
+            inverter_ac_capacity_w=5400.0,
+            max_charge_power_w=4500.0,
+            max_discharge_power_w=3500.0,
+            **{**common, "enable_resistance_fade": False},
+        )
+        return pv, load, temp, cfg, {"degradation_engine": "blast", "blast_model": "nmc_gr_50ah_b1"}
+
+    if name == "c_rate_limited":
+        # A C-rate that binds in both directions: the stored-energy cap, not
+        # the absolute DC-input or AC-output limits.
+        pv, load, temp = _profiles(index, 19, 12000.0, 3000.0)
+        cfg = dict(
+            nominal_energy_wh=6000.0,
+            inverter_ac_capacity_w=9000.0,
+            power_limit_c_rate=0.4,
+            **common,
+        )
+        return pv, load, temp, cfg, {}
+
     # "baseline", "one_day", "partial_day"
     pv, load, temp = _profiles(index, 18, 9000.0, 2100.0)
     cfg = dict(
@@ -185,49 +229,148 @@ SCENARIOS = (
     "replacement",
     "carried_state",
     "no_inverter_cap",
+    "c_rate_limited",
+    "blast",
 )
 
 
-def run(name: str, backend: str = "python"):
+# Scenarios that drive the dispatch with ADR 0002 instructions. They need a
+# BREOS with ``dispatch_instructions`` (0.7.0), so they are kept apart from
+# SCENARIOS, which also run against older trees.
+INSTRUCTION_SCENARIOS = (
+    "noop_instructions",
+    "discharge_window",
+    "fixed_target",
+    "fixed_target_limited",
+    "reserve_floor",
+    "fixed_target_replacement",
+    "fixed_target_blast",
+)
+
+
+def _tou_instructions(index: pd.DatetimeIndex, *, target: float, reserve: float, efficiency: float, limit_w: float):
+    """Charge from the grid overnight, discharge in the evening, hold in between."""
+    from breos.dispatch_instructions import DispatchInstructions
+
+    hour = index.hour.to_numpy()
+    charge = (hour >= 1) & (hour < 6)
+    discharge = (hour >= 17) & (hour < 23)
+    return DispatchInstructions(
+        discharge_allowed=discharge,
+        reserve_fraction=np.where(discharge, reserve, 0.0),
+        grid_target_fraction=np.where(charge, target, np.nan),
+        grid_charge_efficiency=efficiency,
+        grid_import_limit_w=limit_w,
+    )
+
+
+def build_instructed(name: str, freq: str = FREQ):
+    """Return ``build``'s tuple for an instruction scenario, instructions in the sim kwargs."""
+    import math
+
+    from breos.dispatch_instructions import DispatchInstructions
+
+    base = {"fixed_target_replacement": "replacement", "fixed_target_blast": "blast"}.get(name, "baseline")
+    pv, load, temp, cfg, sim = build(base, freq)
+    index = pv.index
+    if name == "noop_instructions":
+        # Every instruction field set to its no-op value but the scalars, which
+        # a no-op must also ignore.
+        instructions = DispatchInstructions(
+            discharge_allowed=np.ones(len(index), dtype=bool),
+            reserve_fraction=np.zeros(len(index)),
+            grid_target_fraction=np.full(len(index), np.nan),
+            grid_charge_efficiency=0.9,
+            grid_import_limit_w=1500.0,
+        )
+    elif name == "discharge_window":
+        # discharge_only smart charging: the evening gate alone, no grid
+        # target, and the no-op scalars it resolves to.
+        hour = index.hour.to_numpy()
+        instructions = DispatchInstructions(
+            discharge_allowed=(hour >= 17) & (hour < 23),
+            reserve_fraction=np.zeros(len(index)),
+            grid_target_fraction=np.full(len(index), np.nan),
+            grid_charge_efficiency=1.0,
+            grid_import_limit_w=math.inf,
+        )
+    elif name == "fixed_target_limited":
+        # Every shared limit binds some night: a 1 kW charge cap, a 1.2 kW
+        # site limit against overnight load, and a small inverter.
+        cfg = {**cfg, "max_charge_power_w": 1000.0, "inverter_ac_capacity_w": 2500.0}
+        instructions = _tou_instructions(index, target=0.9, reserve=0.0, efficiency=0.93, limit_w=1200.0)
+    elif name == "reserve_floor":
+        instructions = _tou_instructions(index, target=0.4, reserve=0.35, efficiency=0.95, limit_w=math.inf)
+    else:
+        instructions = _tou_instructions(index, target=0.7, reserve=0.0, efficiency=0.95, limit_w=5000.0)
+    return pv, load, temp, cfg, {**sim, "dispatch_instructions": instructions}
+
+
+def run(name: str, backend: str = "python", freq: str = FREQ):
     from breos.battery import BatteryConfig, simulate_energy_balance
 
-    pv, load, temp, cfg, sim_kwargs = build(name)
+    pv, load, temp, cfg, sim_kwargs = (build_instructed if name in INSTRUCTION_SCENARIOS else build)(name, freq)
     battery_config = BatteryConfig(**cfg)
     kwargs = dict(sim_kwargs)
     if backend != "python":
         kwargs["execution_backend"] = backend
-    results_df, total_pv, summary_df, rep_cost, n_rep, deg_df = simulate_energy_balance(
+    output = simulate_energy_balance(
         pv_dc=pv,
         houseload=load,
         battery_config=battery_config,
-        freq=FREQ,
+        freq=freq,
         temperature_series=temp,
         **kwargs,
     )
-    return results_df, total_pv, summary_df, rep_cost, n_rep, deg_df
+    # A tree before ADR 0003 E4 also returned the replacement money, fourth.
+    if len(output) == 6:
+        output = (*output[:3], *output[4:])
+    results_df, total_pv, summary_df, n_rep, deg_df = output
+    return results_df, total_pv, summary_df, n_rep, deg_df
 
 
-def dump(path: str, backend: str = "python") -> None:
+def _column(values: pd.Series) -> np.ndarray:
+    """A column as float64 bits, or as text when it is not numeric (BLAST names its model per row)."""
+    if pd.api.types.is_numeric_dtype(values) or pd.api.types.is_bool_dtype(values):
+        return values.to_numpy(dtype=np.float64)
+    return values.astype(str).to_numpy(dtype=np.str_)
+
+
+def dump(path: str, backend: str = "python", *, instructions: bool = False) -> None:
+    """Write every scenario's columns to ``path``.
+
+    ``instructions`` adds INSTRUCTION_SCENARIOS, which need a tree with
+    ``dispatch_instructions``; leave it off when dumping an older tree.
+    """
+    names = SCENARIOS + (INSTRUCTION_SCENARIOS if instructions else ())
     payload: dict[str, np.ndarray] = {}
-    for name in SCENARIOS:
-        results_df, total_pv, summary_df, rep_cost, n_rep, deg_df = run(name, backend)
-        for col in results_df.columns:
-            if col == "Datetime":
-                continue
-            payload[f"{name}::results::{col}"] = results_df[col].to_numpy(dtype=np.float64)
-        for col in deg_df.columns:
-            if col == "Datetime":
-                continue
-            payload[f"{name}::degradation::{col}"] = deg_df[col].to_numpy(dtype=np.float64)
-        for col in summary_df.columns:
-            payload[f"{name}::summary::{col}"] = summary_df[col].to_numpy(dtype=np.float64)
-        payload[f"{name}::scalar::total_pv"] = np.array([total_pv], dtype=np.float64)
-        payload[f"{name}::scalar::replacement_cost"] = np.array([rep_cost], dtype=np.float64)
-        payload[f"{name}::scalar::n_replacements"] = np.array([n_rep], dtype=np.float64)
-        print(f"  {name}: {len(results_df)} steps, {n_rep} replacement(s)", flush=True)
+    for freq in RESOLUTIONS:
+        for name in names:
+            results_df, total_pv, summary_df, n_rep, deg_df = run(name, backend, freq)
+            key = f"{name}@{freq}"
+            for col in results_df.columns:
+                if col == "Datetime":
+                    continue
+                payload[f"{key}::results::{col}"] = _column(results_df[col])
+            for col in deg_df.columns:
+                if col == "Datetime":
+                    continue
+                payload[f"{key}::degradation::{col}"] = _column(deg_df[col])
+            for col in summary_df.columns:
+                payload[f"{key}::summary::{col}"] = _column(summary_df[col])
+            payload[f"{key}::scalar::total_pv"] = np.array([total_pv], dtype=np.float64)
+            payload[f"{key}::scalar::n_replacements"] = np.array([n_rep], dtype=np.float64)
+            print(f"  {key}: {len(results_df)} steps, {n_rep} replacement(s)", flush=True)
     np.savez(path, **payload)
     print(f"wrote {path} ({len(payload)} arrays)")
 
 
 if __name__ == "__main__":
-    dump(sys.argv[1], sys.argv[2] if len(sys.argv) > 2 else "python")
+    if any(arg in ("-h", "--help") for arg in sys.argv[1:]):
+        print(__doc__)
+        sys.exit(0)
+    args = [arg for arg in sys.argv[1:] if arg != "--instructions"]
+    if not args:
+        print(__doc__, file=sys.stderr)
+        sys.exit(2)
+    dump(args[0], args[1] if len(args) > 1 else "python", instructions="--instructions" in sys.argv[1:])

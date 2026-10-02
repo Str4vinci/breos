@@ -15,76 +15,64 @@ weather/data access, load profiles, PV system data, and cost assumptions; see
 
 ## All keys
 
-| Key | Default | Description |
-|---|---|---|
-| `location` | *required* | Preset key (e.g. `"porto"`, `"berlin"`) or `{"latitude": ..., "longitude": ..., "timezone": ...}` |
-| `n_modules` | *required unless `pv_arrays` is set* | Number of PV modules |
-| `pv_arrays` | `None` | List of arrays with `modules`, `module`, `tilt`, and `azimuth`. When present, the array module total overrides `n_modules` |
-| `annual_consumption_kwh` | *required* | Annual electricity demand (kWh) |
-| `battery_kwh` | `0.0` | Nominal battery capacity in kWh (`0` = no battery). The SOC window sets the usable share — see [below](#battery-capacity-and-the-soc-window) |
-| `pv_module` | `None` | Module key from the built-in catalogue. `None` uses the first available |
-| `load_profile` | `"1"` | Bundled demandlib-derived H0 profile; `"demandlib_h0"` is the friendly alias (see {py:func}`~breos.load_profiles.load_profile`) |
-| `rlp_directory` | `None` | Directory containing licensed external RLP CSVs for non-bundled load profiles |
-| `tilt` | auto | Tilt angle (degrees). Auto-estimated from latitude when `None` |
-| `azimuth` | auto | Surface azimuth (degrees). Auto-set to 180 in the northern hemisphere |
-| `tracking` | `"fixed"` | Tracking mode (`"fixed"`, `"single_axis"`, or `"dual_axis"`) |
-| `axis_tilt` | `0.0` | Single-axis tracker axis tilt |
-| `axis_azimuth` | auto | Tracker axis azimuth. Auto-set from latitude when `None` |
-| `max_angle` | `60.0` | Single-axis tracker maximum rotation angle |
-| `backtrack` | `True` | Whether single-axis trackers backtrack to avoid row shading |
-| `gcr` | `0.35` | Ground coverage ratio for single-axis tracking and infinite-sheds bifacial geometry |
-| `cross_axis_tilt` | `0.0` | Cross-axis terrain slope for single-axis tracking |
-| `dual_axis_max_tilt` | `90.0` | Maximum panel tilt for dual-axis tracking |
-| `transposition_model` | `"isotropic"` | Sky-diffusion model used to project GHI/DHI/DNI onto the plane of array (see [below](#sky-diffusion-transposition-model)) |
-| `albedo` | `None` | Ground reflectance (0-1) for the ground-diffuse component; `None` uses pvlib's 0.25 default. Mutually exclusive with `surface_type` |
-| `surface_type` | `None` | Named ground cover (e.g. `"snow"`, `"sea"`, `"grass"`) mapped to an albedo; an alternative to `albedo` |
-| `model_perez` | `"allsitescomposite1990"` | Perez coefficient set; only used when `transposition_model = "perez"` |
-| `solar_position` | `"interval-start"` | Where within each timestep the sun position is evaluated. `"mid-interval"` adds half a timestep. `"weather"` instead reads the representative-time offset from content-bound weather metadata, including provider offsets for instantaneous irradiance and left- or right-labelled interval means. |
-| `horizon_profile` | `None` | Optional `[[azimuth_deg, elevation_deg], ...]` far-horizon profile. Points are circularly interpolated; direct beam is removed while the sun is on or below the terrain line. Requires weather explicitly marked as unshaded |
-| `iam_model` | `"ashrae"` | Beam incidence-angle modifier. `"physical"` uses pvlib's physical optics model and `"martin_ruiz"` its empirical model; the Ashrae default preserves historical results |
-| `diffuse_iam` | `"none"` | Whether the incidence-angle modifier is also applied to the diffuse POA components. `"marion"` weighs sky- and ground-diffuse with the view-factor-integrated selected IAM model (Marion 2017); the default applies IAM to beam only, a known ~0.5–1% overestimate |
-| `temperature_model` | `"faiman"` | Cell-temperature model / mounting preset. `"pvsyst-*"` and `"sapm-*"` expose documented mounting/construction coefficients; `"noct-sam"` requires sourced module NOCT and efficiency metadata (not yet available for bundled modules). The default Faiman open-rack result is unchanged |
-| `bifacial_model` | `"none"` | Rear-irradiance model. `"none"` preserves front-only production; `"infinite_sheds"` requires sourced module bifaciality plus `gcr`, `pvrow_height`, and `pvrow_pitch` |
-| `pvrow_height` | `None` | Height of the PV row center above ground; required by `"infinite_sheds"` and expressed in the same unit as `pvrow_pitch` |
-| `pvrow_pitch` | `None` | Distance between adjacent PV rows; required by `"infinite_sheds"` and expressed in the same unit as `pvrow_height` |
-| `resolution` | `"h"` | Time resolution (`"h"` or `"15min"`) |
-| `projection_years` | `20` | Economic projection horizon |
-| `execution_backend` | `"python"` | Within-day dispatch implementation. `"numba"` selects the optional compiled backend installed by `breos[fast]` |
-| `cost_preset` | `None` | Cost preset key from packaged defaults |
-| `costs` | *unset* | Optional cost overrides layered over the selected preset and built-in defaults; see [below](#cost-and-emissions-presets) |
-| `inflation_rate` | `0.02` | Annual electricity price inflation |
-| `sell_price_inflation` | `0.0` | Annual inflation of the grid export (sell) price |
-| `discount_rate` | `0.03` | Discount rate for NPV |
-| `emissions_country` | `None` | Country code for CO2 calculations (`"PT"`, `"DE"`, `"ES"`, ...) |
-| `export_emissions_factor_gco2_kwh` | `None` | Optional displacement factor for exported PV. `None` uses the preset's avoided-grid factor and reports that fallback explicitly |
-| `pv_degradation_rate` | `0.005` | Annual PV degradation rate (0.5% / year) |
-| `calendar_model` | `"naumann_lam_field_calibrated"` | Battery calendar aging model. Default is the v1 field calibration; use `"naumann_lam_field_calibrated_v2"` for the v2 field-calibrated fit with Lam `Ea`/`n` fixed and `k0`/`b` fitted |
-| `degradation_engine` | `"native"` | `"native"` keeps Naumann/Lam; `"blast"` explicitly opts into a vendored BLAST cell model |
-| `blast_model` | `None` | Stable BLAST model key; required with `degradation_engine="blast"` and invalid with the native engine |
-| `battery_min_soc` | `0.10` | Battery SOC floor (fraction of nominal, SOH-derated capacity) |
-| `battery_max_soc` | `0.90` | Battery SOC ceiling (same basis as `battery_min_soc`) |
-| `battery_eol_percentage` | `0.70` | SOH fraction that triggers battery replacement |
-| `battery_rte` | `None` | Battery round-trip efficiency (`None` = 0.95), split evenly across charge/discharge |
-| `battery_max_charge_power_w` | `None` | Maximum DC power entering the battery charge path; `None` is unlimited |
-| `battery_max_discharge_power_w` | `None` | Maximum battery AC power delivered to load; `None` is unlimited |
-| `battery_temperature` | `"weather"` | Battery temperature used for degradation: `"weather"`, a fixed temperature in °C, or a timestamped CSV path |
-| `battery_indoor_model` | `None` | Optional indoor-temperature model settings. `None` applies the default indoor buffering; use `{"enabled": false}` to use `battery_temperature` without remapping |
-| `dc_coupled` | `True` | DC-coupled / hybrid inverter. `False` is currently unsupported and raises |
-| `inverter_efficiency` | `0.96` | Nominal inverter efficiency used by the PVWatts part-load curve |
-| `inverter_loading_ratio` | `1.25` | DC/AC oversizing ratio; also sets the inverter AC rating that clips production |
-| `pv_loss_overrides` | `None` | Per-component overrides (percent) for the fixed PVWatts system losses, e.g. `{"shading": 0.0}` |
-| `start_date` | `"2023-01-01"` | First simulation date |
+The [Configuration key reference](config-reference.md) lists every key, with
+its default, CLI flag, allowed values and nested-table keys. It is generated
+from the configuration registry that validates a config, so it cannot miss a
+key. The sections below explain how the keys work together.
+
+Unknown keys are rejected at load time, at the top level and inside every
+table. A misspelled key such as `batery_kwh` raises an error listing the
+offending key rather than being silently ignored (which would quietly fall
+back to the default). The `[sweep]` and `[montecarlo]` runner sections are
+allowed in an App config; App checks the `[montecarlo]` keys, and
+`breos sweep` checks the `[sweep]` keys.
+
+## Leap years
 
 Real calendar-year load profiles follow `start_date`: leap years contain
 8,784 hourly (35,136 quarter-hourly) intervals and preserve exact annual
-energy. Conventional 8,760-hour TMY weather remains a separate weather-data
-convention and is not blindly expanded to 8,784 rows.
+energy. An 8,760-hour TMY restamped onto a leap year gets the same treatment:
+29 February is a copy of 28 February for the weather, and 1 March onwards
+keeps its own data. External load profiles placed by position likewise copy
+28 February. The bundled demandlib H0 instead uses the nearest source day of
+the leap day's weekday, Saturday or Sunday type, and a dated E-REDES file the
+nearest of its working-day, Saturday or Sunday/holiday class. The result's weather
+provenance records the copied weather day under `leap_day`.
 
-Unknown top-level keys are rejected at load time. A misspelled key such as
-`batery_kwh` raises an error listing the offending key rather than being
-silently ignored (which would quietly fall back to the default). The optional
-`[sweep]` and `[montecarlo]` sections used by their dedicated CLI commands are
-recognised and allowed.
+## Hourly weather at 15-minute resolution
+
+With `resolution = "15min"`, hourly weather is reconstructed at quarter-hour
+representative times. The top-level `irradiance_resampling` key (CLI:
+`--irradiance-resampling`) applies in App and Monte Carlo; projected
+optimization reads the same values from `simulation.irradiance_resampling`:
+
+- `"auto"` (default) uses `"clear_sky_energy_conserving"` for weather declaring
+  `radiation_time_basis = "interval_mean"`, and `"clear_sky"` otherwise.
+- `"clear_sky"` interpolates each component's clear-sky ratio with makima,
+  retaining a 5 W/m² denominator regulariser and no upper ratio cap. Where a
+  component's clear-sky value at either bracketing source point is at most
+  5 W/m², that component is interpolated linearly instead, which guards dawn
+  and dusk. Negative overshoot is clipped and zero clear-sky support stays
+  zero.
+- `"clear_sky_energy_conserving"` then scales each source hour's four quarters
+  to reproduce that hour's mean, independently for GHI, DNI and DHI. It
+  raises for instantaneous or undeclared input. Positive source hours with
+  no reconstructed support receive a flat fill, recorded in provenance.
+
+PVGIS TMY is instantaneous with a provider offset, so `"auto"` resolves to
+`"clear_sky"`. Open-Meteo interval means and EPW use hourly conservation.
+Without coordinates, direct interpolation replaces clear-sky reconstruction;
+the policy still controls hourly conservation. Already-quarter-hour weather
+is unchanged.
+
+No GHI/DNI/DHI closure is enforced, and DHI is never clipped to GHI.
+Weather metadata and result provenance record requested and resolved policy,
+interpolation method, the daylight quarter-hours filled by the dawn/dusk
+fallback and the zero-support hour counts, per component. With coordinates and all three components, `irradiance_closure`
+records before/after conservation diagnostics over daylight quarter-hours:
+the GHI-weighted mean absolute residual in W/m² and the absolute residual
+energy divided by GHI energy. Solar position uses apparent zenith at the
+same representative times as reconstruction.
 
 ## Battery capacity and the SOC window
 
@@ -125,6 +113,14 @@ The mapping also accepts `setpoint_c`, `coupling_alpha`, `floor_c`, and
 `ceiling_c`. Set `coupling_alpha` between 0 and 1, and do not set `floor_c`
 above `ceiling_c`.
 
+A CSV `battery_temperature` needs a timestamp column (`date`, `datetime`, or
+`time`) and a temperature column (`temp`, `temperature`, `t_cell`, or `t_amb`)
+that cover the simulated year. Naive timestamps are read as UTC. Each step
+takes the latest reading within the file's own sampling interval, so hourly
+readings can drive a 15-minute run. A file that is missing or unreadable, that
+comes from another calendar year, or that has gaps raises an error instead of
+falling back to a default temperature.
+
 ## Battery degradation calibration
 
 `calendar_model = "naumann_lam_field_calibrated"` is the stable default and
@@ -133,14 +129,51 @@ maps to the v1 field calibration. The explicit
 `"naumann_lam_field_calibrated_v2"` for the v2 field-calibrated fit with Lam
 `Ea`/`n` fixed and `k0`/`b` fitted to field data.
 
-The native BREOS degradation path is calibrated for LFP cells only. App config
-must not use the ambiguous legacy `battery_type` selector: omit
+The native BREOS degradation path is calibrated for LFP cells only. Omit
 `degradation_engine` for native behavior, or set `degradation_engine="blast"`
-and a stable `blast_model` key. Lower-level
-`BatteryConfig(battery_type="LFP")` still normalizes to `"lfp"` for native
-compatibility; it does not select BLAST. See the
+and a stable `blast_model` key. See the
 [degradation model reference](../api/degradation-models.md) for discovery,
-precedence, provenance, and migration details.
+precedence, provenance, and engine selection.
+
+## Battery replacement at the end of the horizon
+
+BREOS replaces the battery when its state of health falls to
+`battery_eol_percentage`. The check runs when each degradation period closes.
+A degradation period is a fixed window of one day of simulation steps (24
+hourly or 96 fifteen-minute steps), counted from the start of the simulated
+span; it is not a civil or tariff day. By default the check also runs when
+the horizon's final period closes. A pack that reaches end of life there is
+bought and priced, but it serves no step inside the horizon, so the result
+depends on whether the crossing falls just before or just after the horizon
+ends.
+
+`battery_allow_terminal_replacement = false` skips only that final
+replacement:
+
+- The final period is the one that ends on the last simulated step of the
+  last project year. When the span is whole days, it is the last whole day.
+  When the span ends with a partial day, it is that partial period, and the
+  whole day before it can still replace, because the new pack serves the
+  remaining steps. A span shorter than a day, such as a short `[period]`,
+  has one partial period, and that period is the final one.
+- The final period is still dispatched, aged and recorded, and its remaining
+  rainflow cycles are still counted. The result reports the old pack's state
+  of health, cycles, resistance and stored energy. No replacement, replaced
+  capacity or replacement cost is recorded for it.
+- Every earlier period replaces as usual. This includes the close of each
+  earlier project year, because the next year uses the new pack. A
+  replacement earlier in the final year is still counted and priced.
+- Smart-charging decisions do not change. The key controls only the
+  replacement in the simulated battery.
+
+Only a horizon whose final period reaches end of life gives a different
+result. Monte Carlo applies the key to the final year of each trajectory. The
+optimizer takes it as `[battery] allow_terminal_replacement`. The default is
+`true`. The resolved value is in `provenance.resolved_config`, and the
+optimizer records it in `battery_replacement_treatment`. A direct
+{py:class}`~breos.battery.BatteryConfig` call treats its own span as the horizon, so a
+caller that splits one horizon across several calls must keep
+`allow_terminal_replacement=True` on every span except the last.
 
 ## Discovering available options
 
@@ -325,6 +358,14 @@ any explicit `n_modules` key is ignored.
 Each array may also set its own `transposition_model`, overriding the
 top-level default for that array only.
 
+Arrays inherit `tracking` and the tracker geometry (`axis_tilt`,
+`axis_azimuth`, `max_angle`, `backtrack`, `cross_axis_tilt`, and
+`dual_axis_max_tilt`) from the top level, and an array may override any of
+them. So a top-level `tracking = "single_axis"` makes every array a tracker
+unless the array sets `tracking = "fixed"`. An array entry accepts only the
+keys named in this section and the sky, ground, and bifacial keys; any other
+key, such as a misspelled `tlt`, is rejected.
+
 ## Sky-diffusion (transposition) model
 
 To compute plane-of-array (POA) irradiance, BREOS transposes the horizontal
@@ -384,11 +425,11 @@ location/era-specific fits from the Perez papers and are only consulted when
 
 ## Cost and emissions presets
 
-Built-in presets are packaged with BREOS. Editable copies and examples live
-in `configs/base/` and `configs/examples/`.
+Built-in presets are packaged with BREOS; [Packaged options](options.md)
+lists them, and `configs/examples/` has runnable configs that use them.
 Pass the key, then use the optional `costs` table for project-specific values.
 Explicit overrides win over the named preset; preset values win over
-{py:class}`~breos.CostParams` defaults:
+{py:class}`~breos.economics.CostParams` defaults:
 
 ```python
 breos.App({
@@ -414,33 +455,388 @@ electricity_cost = 0.22
 storage_cost_per_kwh = 425.0
 ```
 
-The accepted keys follow the packaged cost-catalogue names:
-`electricity_cost`, `electricity_sold_cost`, `daily_power_cost`,
-`module_cost_per_w`, `storage_cost_per_kwh`,
-`inverter_cost_per_kw_hybrid`, `inverter_cost_per_kw_simple`,
-`installation_cost_per_module`, `installation_cost_battery`,
-`other_cost_per_module`, `other_costs`, `land_cost`,
-`maintenance_cost_per_panel`, `maintenance_cost`, and `operation_cost`.
+The accepted keys follow the packaged cost-catalogue names; the
+[key reference](config-reference.md#costs) lists them with their defaults.
 Unknown keys and negative or non-finite values are rejected before simulation.
 
-For full control, build a {py:class}`~breos.CostParams` and
-{py:class}`~breos.EmissionsParams` yourself and call the lower-level
+For full control, build a {py:class}`~breos.economics.CostParams` and
+{py:class}`~breos.emissions.EmissionsParams` yourself and call the lower-level
 functions documented in the [Cost and emissions API](../api/cost-analysis.md).
+
+## Time-of-use tariffs
+
+A `[tariff]` table prices energy by period instead of at one flat rate. It
+names a bundled schedule, which fixes the periods in local civil time, and
+you give the prices, which BREOS does not bundle:
+
+```toml
+[tariff]
+schedule = "pt_mainland_2026_daily_bi"   # see the schedule list in the Tariffs API page
+currency = "EUR"
+import_prices = { peak = 0.28, off_peak = 0.11 }
+export_prices = { all = 0.05 }
+fixed_charge_per_day = 0.25              # optional, default 0
+# study_date = 2027-07-01                # needed for a 2027 schedule on an earlier simulated year
+```
+
+- Every period of the schedule needs an import and an export price, or an
+  `all` price for every period. A period the schedule does not have is an
+  error; there is no fallback to another schedule. A custom schedule with
+  month seasons is priced by season instead: each season's table prices the
+  periods that season's rules use, or gives `all`, and pricing a period the
+  season never uses is an error.
+- Instead of `schedule`, you can define `[tariff.custom_schedule]` inline.
+  Set `identifier`, `version`, `timezone`, `cycle`, `periods`, and one or
+  more `[[tariff.custom_schedule.rules]]` tables. Do not set both schedule
+  forms. The rules must cover every day type and season exactly once, and
+  each rule's intervals must cover the whole local day without gaps or
+  overlaps. See [Custom App schedules](../api/tariffs.md#custom-app-schedules)
+  for a complete example.
+- A custom schedule can name calendar-month `seasons`, such as quarters,
+  instead of the standard/DST seasons. Its rules then select a season by
+  name, and each price list may give a table of period prices for every
+  season. See [Month seasons](../api/tariffs.md#month-seasons).
+- `currency` must be `"EUR"`, the only currency BREOS accepts so far, and
+  the currency of the cost presets. BREOS does not convert.
+- Holidays of a custom schedule are optional and explicit. The
+  `[tariff.custom_schedule.holidays]` table needs `day_type`, the day type
+  holidays follow, and `dates`, which maps each covered year to its dates;
+  provide the complete calendar you intend for each year the simulation can
+  use. A run in a year absent from that map fails rather than guessing or
+  reusing dates. The bundled `es_2_0td` carries Spanish national holidays for
+  2026 only.
+- The schedule must be defined in the location's timezone, and the
+  resolution fine enough for its boundaries. Of the bundled schedules, only
+  `pt_mainland_2026_daily_bi` and `es_2_0td` run at hourly resolution; the
+  others need `resolution = "15min"`. See the boundary-step column in
+  [Bundled schedules](../api/tariffs.md#bundled-schedules).
+- A tariff replaces the flat `costs.electricity_cost`,
+  `costs.electricity_sold_cost` and `costs.daily_power_cost`, so setting
+  those as well is an error. CAPEX, O&M and replacement costs still come from
+  the cost preset, in the same currency.
+- Without [`[smart_charging]`](#smart-charging) the dispatch does not
+  change: the battery still maximises self-consumption, and the tariff
+  changes only what the energy costs. Each year row records its import
+  cost, export revenue, no-system import cost and fixed charge at year-1
+  prices; the projection escalates and discounts them as it does flat prices.
+- Every project year replays the start-year calendar, so weekdays and
+  holidays do not advance; provenance records this as
+  `calendar_policy = "replay_start_year"`, with the schedule, prices and
+  their hashes.
+
+Monte Carlo prices every trajectory with the same tariff. Projected
+optimization accepts the same tariff table in its nested config; see
+[Optimization](optimization.md#price-a-design-with-a-time-of-use-tariff).
+To compare several offers, see {doc}`Simple, bi-hourly and tri-hourly tariffs <../gallery/tariffs/plot_09_which_tariff>`.
+
+## Estimated battery residual value
+
+At the end of the project, BREOS can estimate the installed battery's
+residual value by scaling its replacement cost by the fraction of capacity
+health remaining above the replacement threshold. This assumes the value
+declines linearly with that fraction. The discounted estimate is reported
+beside the NPV excluding residual value; it does not estimate resale
+proceeds. The table and the result fields keep their names,
+`[terminal_value]` and `terminal_health_credit*`:
+
+```toml
+[terminal_value]
+basis = "battery_health_fraction"
+```
+
+The default `basis = "none"`, also used when the table or key is omitted,
+leaves the residual value out. No other keys are accepted. It inherits
+`battery_eol_percentage` and the resolved full replacement-pack price,
+including cost overrides; there is no separate threshold or price.
+
+With final SOH fraction `h` and replacement threshold `h*`, the fraction is
+`clip((h - h*) / (1 - h*), 0, 1)`. SOH is measured after the last step's
+aging, terminal cycle finalization and any replacement. A fresh pack is
+valued at the full replacement price; at or below threshold it is valued at
+zero. Inputs must be finite and `h* < 1`. For example, a pack at 90 % SOH
+with an 80 % threshold is valued at half the replacement price. That is half
+of the capacity-health margin, not necessarily half of the pack's remaining
+service life or market value: degradation can be nonlinear, and capacity
+health omits resistance-related limits.
+
+The nominal residual value at exactly project time `T` is the fraction times the
+replacement price `C0 × (1 + inflation_rate)^T ×
+(1 - replacement_cost_learning)^T`. The present value divides it by
+`(1 + discount_rate)^T`. This is the existing replacement-outlay
+convention with a t = 0 price and exponent T, rather than the T − 1
+escalation used for annual energy prices. PV modules, the inverter and
+stored energy are excluded.
+
+Only the pack present at the end is valued. Every replacement outlay
+remains, and replacement policy is unchanged. If
+`battery_allow_terminal_replacement = false` skips the final swap, the old
+pack remains and earns zero at or below threshold. Enabled PV-only and
+zero-capacity runs explicitly report zero. A partial `[period]` run keeps
+all lifetime credit fields null.
+
+App reports the three residual-value fields beside the NPV excluding
+residual value. `App.revalue` can enable, disable or reprice the estimate using retained
+final health without simulating again for it. Monte Carlo computes it for
+each trajectory before aggregation. Projected optimization accepts but
+ignores this table, reports no adjusted values for evaluated designs and
+continues ranking on the NPV excluding residual value. Cashflows, paybacks,
+LCOE, emissions, dispatch and aging exclude it and stay unchanged. See
+[Residual value in the results](interpreting-results.md#estimated-battery-residual-value).
+
+## No-system reference tariff
+
+The savings of a system are measured against the household without it. By
+default that household pays the system's own prices: the `[tariff]`, or the
+flat `costs` prices, and the same fixed charge. A `[reference_tariff]` prices
+the household without the system on its own tariff instead, for example the
+offer it has today while the system runs on a time-of-use offer:
+
+```toml
+[reference_tariff]
+schedule = "pt_mainland_2026_daily_bi"   # or custom_schedule, or neither for one flat price
+currency = "EUR"
+import_prices = { peak = 0.2310, off_peak = 0.1210 }
+fixed_charge_per_day = 0.30              # required; use 0 for no fixed charge
+# import_price_escalation = 0.03         # optional, default the system's import escalation
+```
+
+- The no-system cost of each year is the whole household load at the
+  reference import prices, plus the reference fixed charge, both escalated at
+  `reference_tariff.import_price_escalation`. Without that key they escalate
+  at the system's import escalation: `import_price_escalation` or, when that
+  is unset, `inflation_rate`. An explicit `0` keeps the reference prices
+  constant.
+- The reference has no export prices: the household without a system exports
+  nothing.
+- `fixed_charge_per_day` is required. Set it to the fixed charge the household
+  pays without the system, or explicitly to `0` when there is no fixed charge.
+- Without `schedule` or `custom_schedule` the reference is one flat price,
+  `import_prices = { all = <price> }`, and takes no `boundary_policy` or
+  `study_date`. With a schedule, the prices follow the `[tariff]` rules:
+  every period priced, or `all`, a schedule in the location's timezone, and a
+  resolution fine enough for the schedule's boundaries. A custom schedule
+  with calendar-month `seasons` also accepts prices per season and period,
+  such as `import_prices = { q1 = { peak = 0.30, off_peak = 0.12 }, ... }`.
+  Price every season and exactly the periods its rules use, or give `all`
+  within that season. Bundled, DST-season and flat references take prices
+  per period only. See [month seasons](../api/tariffs.md#month-seasons).
+- The reference can be set with or without a `[tariff]`. Its `currency` must
+  be the result's currency: the `[tariff]` currency, or EUR with flat prices.
+  BREOS does not convert.
+- The reference never changes the dispatch, and the costs with the system do
+  not change. Every project year replays the start-year calendar, as the
+  system tariff does. A `[period]` run bills the reference fixed charge on the
+  window's civil days.
+- `App.revalue` re-prices a reference that is added, changed or removed. It
+  does not simulate again for the reference, also under `daily_persistence`.
+- Monte Carlo prices the sampled load of each trajectory at the reference, so
+  the costs with and without the system stay paired. Projected optimization
+  accepts the same table in its nested config, and its NPV objective is the
+  saving against the reference.
+
+Results gain `provenance.reference_tariff`, with the schedule, prices, fixed
+charge, calendar policy and the escalation used, and the month partition
+`seasons` when configured. The no-system cost
+components are reported with or without a reference; see [Year-1 money
+keys](interpreting-results.md#year-1-money-keys). BREOS does not choose the
+cheapest offer the household could have had: to compare candidates, run each
+one as the reference.
+
+## Smart charging
+
+A `[smart_charging]` table sets when the battery may discharge and when the
+grid may charge it, by tariff period. Every mode except `disabled` needs a
+`[tariff]` and `battery_kwh > 0`. Omitting the table, or setting
+`mode = "disabled"`, is greedy self-consumption with unchanged results:
+
+```toml
+[smart_charging]
+mode = "fixed_target"               # or "disabled", "discharge_only", or the experimental "daily_persistence"
+target_usable_fraction = 0.50       # 0 is battery_min_soc, 1 is battery_max_soc
+charge_periods = ["off_peak"]
+discharge_periods = ["mid_peak", "peak"]
+grid_charge_efficiency = 0.95       # required: AC-to-DC conversion of the grid-charging path
+grid_import_limit_w = 5000          # optional: grid charging keeps total import below this
+overlap_policy = "reject"           # default; "hold_target" permits overlap in fixed_target
+```
+
+- In a charge period the grid may charge the battery toward
+  `target_usable_fraction` of the usable window. In a discharge period the
+  battery may discharge to the load. In a period in neither list it does
+  neither. PV may charge the battery in every period.
+- `target_usable_fraction` is a fraction of the usable window between
+  `battery_min_soc` and `battery_max_soc`, not of nominal capacity. The window
+  shrinks with temperature and state of health, and the target moves with it.
+- The period names must exist in the tariff's schedule, and the two lists
+  must not share a period under the default `overlap_policy = "reject"`.
+  With `overlap_policy = "hold_target"` (`fixed_target` only), the grid target
+  is also the discharge floor on steps in both lists: above it the battery
+  may discharge down to it; below it the grid may charge up to it. It never
+  charges and discharges in the same step. Both bounds move together with
+  temperature and health. PV may still charge above the target. Steps in
+  only one list keep their usual behavior.
+- `grid_charge_efficiency` has no default, because the inverter model has no
+  AC-to-DC path to derive one from. Stored energy then also passes through
+  the battery's own charge efficiency.
+- `grid_import_limit_w` limits grid charging only: in each step it may import
+  up to the limit minus what the load already imports. Load import is never
+  cut, so a load above the limit still imports in full. Omit it for no site
+  limit. Grid charging is also bounded by the battery's charge power and by
+  the inverter's AC rating, which PV output uses first.
+- `mode = "disabled"` accepts no other key. Unknown keys are errors.
+- Grid charging runs after PV in each step and never while PV is exported,
+  so it never takes PV self-consumption. The grid-charge import is part of
+  `grid_import_kwh`, and the tariff prices it like any import.
+
+Results gain a `smart_charging` block: per year, the grid-charge AC energy,
+its conversion loss, its cost at year-1 prices, and battery delivery to load
+split into PV, grid and unattributed origin. It also gives the stored energy
+by origin at the start and end of the project, since stored energy carries
+from year to year (`terminal_convention = "physical_carry"`). Only PV-origin
+battery delivery counts as self-consumption. Avoided emissions use net
+exchange: grid energy shifted through the battery is imported, so it earns
+nothing, and its round-trip loss counts against the system.
+`provenance.smart_charging` records the parameters, the hash of the resolved
+instructions, `overlap_policy` and the tariff's schedule hash.
+
+To allow discharge in every period while retaining an off-peak target, use
+`charge_periods = ["off_peak"]`, list every tariff period in
+`discharge_periods`, and set `overlap_policy = "hold_target"`.
+`disabled` and `discharge_only` refuse `hold_target` because they have no grid
+target. `daily_persistence` also refuses it: its planner replaces charge
+targets while keeping reserves fixed, so planning and production replay
+cannot hold the same target.
+
+Monte Carlo applies the same instructions to every trajectory, and projected
+optimization to every candidate design with a battery; both record the same
+provenance. See `configs/examples/smart-charging-portugal.toml`.
+
+### Discharge only
+
+`mode = "discharge_only"` restricts when the battery discharges, without
+any grid charging:
+
+```toml
+[smart_charging]
+mode = "discharge_only"
+discharge_periods = ["peak"]        # required: the battery holds its charge in every other period
+```
+
+- In a discharge period the battery may discharge to the load. In every
+  other period it holds its charge. PV may charge the battery in every
+  period, and the grid never does.
+- The mode takes `discharge_periods` only. `charge_periods`,
+  `target_usable_fraction`, `grid_charge_efficiency`, `grid_import_limit_w`
+  and the planner settings are errors, since no grid charging takes place.
+- A peak-only policy lists the peak period; a selected-period policy lists
+  several. Discharge in every period is greedy self-consumption: use
+  `mode = "disabled"`, or list every period, which gives the same results.
+- It runs on the same dispatch instructions as `fixed_target`, in App, Monte
+  Carlo and projected optimization, on both execution backends.
+  `provenance.smart_charging` records the mode, the discharge periods and
+  the instruction and schedule hashes, with the grid-charge settings unset.
+
+### Daily persistence (experimental)
+
+`mode = "daily_persistence"` keeps the fixed-target layout but chooses the
+grid-charge target once per day while the run goes, instead of fixing it in
+the configuration. It is experimental and runs in `App` only:
+
+```toml
+[smart_charging]
+mode = "daily_persistence"
+charge_periods = ["off_peak"]
+discharge_periods = ["peak"]
+grid_charge_efficiency = 0.95       # required, as for fixed_target
+grid_import_limit_w = 5000          # optional
+# Optional planner settings (integers), shown at their defaults:
+forecast_horizon_days = 2           # days the planner looks ahead, today included
+target_levels = 11                  # candidate targets 0, 0.1, ..., 1 of the usable window
+soc_states = 21                     # stored-energy grid points of the planner
+```
+
+At each local midnight in the tariff's timezone the mode:
+
+1. forecasts PV, load and temperature for the planning window by repeating
+   the last complete local day that has been simulated. Slots match by local
+   wall-clock time, so a 23- or 25-hour day keeps every tariff period in
+   place: a repeated fall-back hour reuses the observed hour, and the hour a
+   spring-forward day skipped is interpolated between its neighbours;
+2. solves a small dynamic program over that forecast and the known tariff
+   prices, from the battery's measured stored energy, state of health and
+   efficiencies, choosing one target per day from `target_levels` candidates;
+3. applies the first day's target to that day's charge periods, and plans
+   the next day again from what actually happened.
+
+The table takes the same `charge_periods`, `discharge_periods`,
+`grid_charge_efficiency` and `grid_import_limit_w` as `fixed_target`, and
+refuses `target_usable_fraction`, since the planner chooses it. The planner
+settings are integers (not booleans or `2.0`); `fixed_target` and `disabled`
+refuse them. `target_levels = 1` is valid and selects the sole target 0.
+The run starts with no complete day to repeat, so until one
+complete local day has been observed it sets no grid target
+(`warm_start_policy = "no_grid_until_one_complete_local_day"`); PV charging
+and the discharge periods run as configured. A partial first or last day
+does not count as observed, and the two ends of a `[period]` are never
+joined into one day.
+
+The planner's terminal target is the day's starting energy, capped at the
+max-SOC capacity at the final forecast temperature and current state of
+health. Energy that ends the window below that target is priced at the
+cheapest import price of a step that may grid-charge, through both charge
+efficiencies (`planner_terminal_policy = "preserve_start_energy"`). When no
+step permits grid charging, it uses the cheapest import price of any step.
+The same policy applies at the project's final horizon.
+This only keeps a rolling plan from treating an empty battery at the end of
+its window as free. It is not an instruction: the simulated battery still
+carries its stored energy, origins and degradation from year to year
+(`terminal_convention = "physical_carry"`).
+
+Keep these modelling assumptions in mind when reading the results:
+
+- The forecast is naive persistence, not a weather or load forecast.
+- The end-of-window price is a simple continuation value, not a learned one.
+  It assumes missing energy can be bought back at the cheapest chargeable
+  price within the window, and is biased when recharge prices beyond the
+  window differ.
+- State of health and efficiencies stay fixed inside each short solve; the
+  simulation still ages the battery every day.
+
+`provenance.smart_charging` of such a run records `experimental = true`, the
+controller and planner versions, the effective planner settings, the
+forecast, warm-start and terminal policies, the schedule hash, an
+`instruction_hash` of the instructions the run executed in every project
+year, and the stored energy by origin at the start and end of the project.
+[`App.revalue`](../api/app.md#revalue-a-finished-run) simulates the run
+again when the import or export prices change, since they move the plan; a
+change to the fixed charge alone is re-priced. Monte Carlo and projected
+optimization refuse the mode, because they share one set of static
+instructions across trajectories and candidate designs.
+
+The planner simulates each candidate target with the same dispatch step as
+the run, several hundred times a day, so the mode is much slower than
+`fixed_target`. Use `execution_backend = "numba"` (the `breos[fast]` extra); the Python
+backend at 15 minutes gives a warning.
 
 ## Load profiles
 
-The public package default is `load_profile = "1"`, a demandlib-derived H0
-example bundled with BREOS. `load_profile = "demandlib_h0"` is the same
-profile under a readable alias and is preferred in examples. Other standard
-profile keys remain supported when you provide the required CSV files yourself
-through `rlp_directory`:
+The public package default is `load_profile = "demandlib_h0"`, a
+demandlib-derived H0 example bundled with BREOS. The other standard profiles,
+`eredes_btn_a`, `eredes_btn_b`, `eredes_btn_c`, `bdew_h0` and `ree_2.0td`, are
+supported when you provide the required CSV files yourself through
+`rlp_directory`. `load_profile = "custom"` reads any CSV you name with
+`load_profile_file`, `load_profile_column` and `load_profile_unit`. Keys are
+case-insensitive. The numeric keys and the aliases `h0`, `default` and
+`crest` were removed in 0.7.0;
+[Migrating from BREOS 0.6.2](interpreting-results.md#migrating-from-breos-062)
+maps them to the current keys.
 
 ```python
 breos.App({
     "location": "porto",
     "n_modules": 10,
     "annual_consumption_kwh": 4000,
-    "load_profile": "6",
+    "load_profile": "eredes_btn_c",
     "rlp_directory": "/path/to/licensed/rlp/files",
     "resolution": "15min",
 })
@@ -449,3 +845,54 @@ breos.App({
 Use external BDEW, E-REDES, REE, or custom profiles only under terms that
 permit your intended use. See [Load Profile Data](../legal/load-profile-data.md)
 for the expected filenames and the reason these CSVs are not bundled.
+
+## Simulate part of a year
+
+A `[period]` table simulates a window shorter than a year, for example one
+week in June:
+
+```toml
+location = "porto"
+n_modules = 10
+annual_consumption_kwh = 4000
+battery_kwh = 5.0
+start_date = "2025-01-01"
+
+[period]
+start = 2025-06-01
+end = 2025-06-08
+```
+
+As a Python dict, give the dates as ISO strings or `datetime.date` values:
+`"period": {"start": "2025-06-01", "end": "2025-06-08"}`.
+
+- `start` and `end` are dates in the location's timezone, in the year of
+  `start_date`. The window starts at local midnight of `start` and ends at
+  local midnight of `end`, so `end` is exclusive: the example covers 1 to 7
+  June. `end` may be 1 January of the next year. A window of the whole year
+  raises; omit `[period]` for that.
+- The load profile is built for the whole year and scaled to
+  `annual_consumption_kwh` as usual, and the window gets its share of it.
+  Weather, PV, load and battery temperature are then cut to the window.
+- The weather must cover the whole window, in civil time. Weather that
+  covers one UTC year, such as an Open-Meteo CSV, cannot serve a window that
+  touches the civil year edge away from UTC, and weather stamped at half
+  past the hour cannot place a window that starts at local midnight. Both
+  raise `ValueError` before anything is simulated. PVGIS TMY weather covers
+  both year edges.
+- The window runs once, from the battery's initial state; nothing is
+  repeated or carried over. `projection_years` is not used: setting it gives
+  a warning, and the result records `projection_years_used = 1`.
+- The fixed charge (`costs.daily_power_cost`, or a tariff's
+  `fixed_charge_per_day`) is billed on the window's civil days.
+- Energy results cover the window, and the lifetime economics are `None`;
+  see [Period runs](interpreting-results.md#period-runs).
+
+A PV-only window equals the same steps of a full-year run exactly. With a
+battery the dispatch differs, because the window starts from the battery's
+initial state of charge and health.
+
+Monte Carlo and the optimizer reject `[period]`, because they rank designs on
+lifetime economics. `breos sweep` accepts it and can vary `period.start` and
+`period.end`. `App.revalue` re-prices the window; its lifetime economics stay
+`None`.

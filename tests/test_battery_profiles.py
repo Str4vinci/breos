@@ -15,7 +15,6 @@ from breos.degradation.profiles import (
     CORE_BLAST_MODEL_KEYS,
     ENABLED_BLAST_MODEL_KEYS,
     get_battery_model_profile,
-    merge_battery_config_layers,
 )
 
 
@@ -47,7 +46,7 @@ def test_registry_is_the_single_catalog_for_all_vendored_models():
         assert profile.experimental_range["max_c_rate_discharge"] == model.experimental_range["max_rate_discharge"]
         assert profile.output_keys == tuple(model.outputs)
         assert profile.citations
-        assert profile.operating_defaults == {}
+        assert "operating_defaults" not in profile.as_dict()
 
 
 def test_python_discovery_is_public_and_json_serializable():
@@ -57,7 +56,11 @@ def test_python_discovery_is_public_and_json_serializable():
     assert get_battery_model_profile("nmc111_gr_sanyo_2ah").supports_resistance is True
     assert models[0]["calibration_basis"] == "cell-model"
     assert models[0]["pack_calibrated"] is False
+    assert all("operating_defaults" not in model for model in models)
     json.dumps(models)
+    # Every registered model is enabled, so there is no filter to ask for.
+    with pytest.raises(TypeError, match="enabled_only"):
+        breos.list_battery_models(enabled_only=True)
 
 
 def test_registry_metadata_is_immutable_and_discovery_results_are_isolated():
@@ -82,15 +85,6 @@ def test_registry_upstream_identity_matches_vendoring_manifest():
     assert BLAST_UPSTREAM_COMMIT in manifest
 
 
-def test_config_precedence_is_user_then_profile_then_global():
-    resolved = merge_battery_config_layers(
-        {"battery_min_soc": 0.1, "battery_max_soc": 0.9, "source": "global"},
-        {"battery_min_soc": 0.2, "source": "profile"},
-        {"battery_min_soc": 0.3},
-    )
-    assert resolved == {"battery_min_soc": 0.3, "battery_max_soc": 0.9, "source": "profile"}
-
-
 def test_native_is_default_and_blast_is_explicit_opt_in():
     native = resolve_app_config(_base_config()).cfg
     assert native["degradation_engine"] == "native"
@@ -102,7 +96,7 @@ def test_native_is_default_and_blast_is_explicit_opt_in():
 
 
 def test_config_rejects_ambiguous_or_incomplete_model_selection():
-    with pytest.raises(ValueError, match="ambiguous legacy selector"):
+    with pytest.raises(ValueError, match="Unknown config key.*battery_type"):
         resolve_app_config(_base_config(battery_type="lfp"))
     with pytest.raises(ValueError, match="requires.*degradation_engine=blast"):
         resolve_app_config(_base_config(blast_model="lfp_gr_250ah_prismatic"))

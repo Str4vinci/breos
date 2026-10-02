@@ -39,7 +39,7 @@ def test_all_model_parameters_match_upstream(model_key, parity_fixture):
     assert model.experimental_range == expected["experimental_range"]
 
 
-@pytest.mark.filterwarnings("ignore::breos.degradation.engine.BlastExperimentalRangeWarning")
+@pytest.mark.filterwarnings("ignore::breos.degradation.validation.BlastExperimentalRangeWarning")
 @pytest.mark.parametrize("model_key", tuple(BLAST_MODEL_CLASSES))
 @pytest.mark.parametrize(
     "condition_name",

@@ -2,11 +2,14 @@
 
 import csv
 import json
+import logging
+import re
 from pathlib import Path
 
 import pytest
 
 from breos import cli
+from breos.result_schema import RESULT_SCHEMA_VERSION
 
 EXAMPLE_CONFIGS = sorted((Path(__file__).resolve().parents[1] / "configs" / "examples").glob("*.toml"))
 
@@ -48,7 +51,7 @@ def test_run_from_flags_outputs_json(monkeypatch, capsys):
             "--emissions-country",
             "pt",
             "--load-profile",
-            "6",
+            "eredes_btn_c",
             "--rlp-directory",
             "/tmp/external-rlp",
         ]
@@ -62,11 +65,107 @@ def test_run_from_flags_outputs_json(monkeypatch, capsys):
     assert FakeApp.seen_config["battery_kwh"] == 5.0
     assert FakeApp.seen_config["cost_preset"] == "residential_pt"
     assert FakeApp.seen_config["emissions_country"] == "PT"
-    assert FakeApp.seen_config["load_profile"] == "6"
+    assert FakeApp.seen_config["load_profile"] == "eredes_btn_c"
     assert FakeApp.seen_config["rlp_directory"] == "/tmp/external-rlp"
 
     output = json.loads(capsys.readouterr().out)
     assert output["grid_independence_pct"] == 42.0
+
+
+def test_run_warns_and_ignores_unused_runner_sections(tmp_path, capsys):
+    config_path = tmp_path / "runner-sections.toml"
+    config_path.write_text(
+        'location = "porto"\n'
+        "n_modules = 10\n"
+        "annual_consumption_kwh = 4000\n"
+        "battery_kwh = 5.0\n"
+        'degradation_engine = "blast"\n'
+        'blast_model = "lfp_gr_250ah_prismatic"\n'
+        "\n[montecarlo]\n"
+        'weather_file = "unused.csv"\n'
+        "n_runs = 1\n"
+        "\n[sweep]\n"
+        "battery_kwh = [5.0]\n",
+        encoding="utf-8",
+    )
+
+    with pytest.warns(UserWarning, match=r"breos run does not use \[montecarlo\], \[sweep\]"):
+        assert cli.main(["run", "--config", str(config_path), "--dry-run"]) == 0
+    assert '"degradation_engine": "blast"' in capsys.readouterr().out
+
+
+class _BackendChosen(Exception):
+    pass
+
+
+def _record_montecarlo_backend(monkeypatch):
+    """Stop run_montecarlo where it resolves the backend, and record it."""
+    import breos.montecarlo as montecarlo
+
+    observed = {}
+
+    def fake_backend_provenance(execution_backend, *, pv_only=False):
+        observed["execution_backend"] = execution_backend
+        raise _BackendChosen
+
+    monkeypatch.setattr(montecarlo, "backend_provenance", fake_backend_provenance)
+    return observed
+
+
+def _montecarlo_config(tmp_path, *, top_level=None, section=None):
+    weather_file = tmp_path / "weather.csv"
+    weather_file.write_text("weather", encoding="utf-8")
+    lines = ['location = "porto"', "n_modules = 10", "annual_consumption_kwh = 4000"]
+    if top_level is not None:
+        lines.append(f'execution_backend = "{top_level}"')
+    lines += ["", "[montecarlo]", f'weather_file = "{weather_file}"']
+    if section is not None:
+        lines.append(f'execution_backend = "{section}"')
+    config_path = tmp_path / "montecarlo.toml"
+    config_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return config_path
+
+
+@pytest.mark.parametrize(
+    ("top_level", "section", "flag", "expected"),
+    [
+        (None, None, None, "python"),
+        ("numba", None, None, "numba"),
+        ("numba", "python", None, "python"),
+        ("python", None, "numba", "numba"),
+        ("numba", "numba", "python", "python"),
+    ],
+)
+def test_montecarlo_backend_precedence_matches_python_api(tmp_path, monkeypatch, top_level, section, flag, expected):
+    # Flag, then [montecarlo], then the top-level key, then "python"; the
+    # Python API must pick the same backend for the same config.
+    import tomllib
+
+    from breos.montecarlo import MonteCarloSettings, run_montecarlo
+
+    config_path = _montecarlo_config(tmp_path, top_level=top_level, section=section)
+    observed = _record_montecarlo_backend(monkeypatch)
+    argv = ["montecarlo", "--config", str(config_path), "--output", str(tmp_path / "runs.csv")]
+    if flag is not None:
+        argv += ["--execution-backend", flag]
+    with pytest.raises(_BackendChosen):
+        cli._montecarlo(cli.build_parser().parse_args(argv))
+    assert observed.pop("execution_backend") == expected
+
+    if flag is None:
+        config = tomllib.loads(config_path.read_text(encoding="utf-8"))
+        settings = MonteCarloSettings(**config.pop("montecarlo"))
+        with pytest.raises(_BackendChosen):
+            run_montecarlo(config, settings)
+        assert observed["execution_backend"] == expected
+
+
+def test_montecarlo_reports_unknown_setting_before_weather_lookup(tmp_path, capsys):
+    config_path = tmp_path / "montecarlo.toml"
+    config_path.write_text('location = "porto"\n\n[montecarlo]\nweather_fille = "missing.csv"\n', encoding="utf-8")
+
+    assert cli.main(["montecarlo", "--config", str(config_path)]) == 1
+    assert "Unknown Monte Carlo config key(s): montecarlo.weather_fille" in capsys.readouterr().err
 
 
 def test_run_flag_sell_price_inflation_reaches_config(monkeypatch, capsys):
@@ -120,6 +219,41 @@ def test_run_bifacial_flags_reach_config(monkeypatch, capsys):
     assert FakeApp.seen_config["gcr"] == 0.35
     assert FakeApp.seen_config["pvrow_height"] == 1.5
     assert FakeApp.seen_config["pvrow_pitch"] == 6.0
+
+
+def test_cli_threads_battery_power_limits(monkeypatch, capsys):
+    monkeypatch.setattr(cli, "App", FakeApp)
+
+    assert (
+        cli.main(
+            [
+                "run",
+                "--location",
+                "porto",
+                "--n-modules",
+                "10",
+                "--annual-consumption-kwh",
+                "4000",
+                "--battery-max-charge-power-w",
+                "2500",
+                "--battery-max-discharge-power-w",
+                "1800",
+                "--export-emissions-factor-gco2-kwh",
+                "120",
+            ]
+        )
+        == 0
+    )
+    capsys.readouterr()
+    assert FakeApp.seen_config["battery_max_charge_power_w"] == 2500
+    assert FakeApp.seen_config["battery_max_discharge_power_w"] == 1800
+    assert FakeApp.seen_config["export_emissions_factor_gco2_kwh"] == 120
+
+
+def test_cli_does_not_advertise_unsupported_ac_coupling(capsys):
+    with pytest.raises(SystemExit):
+        cli.main(["run", "--ac-coupled"])
+    assert "unrecognized arguments: --ac-coupled" in capsys.readouterr().err
 
 
 def test_run_from_toml_config_with_cli_override(monkeypatch, tmp_path):
@@ -311,11 +445,16 @@ def test_example_configs_are_discovered():
 
 
 @pytest.mark.parametrize("config_path", EXAMPLE_CONFIGS, ids=lambda path: path.name)
-def test_shipped_example_configs_validate(config_path, capsys):
+def test_shipped_example_configs_validate(config_path, capsys, caplog, recwarn):
     exit_code = cli.main(["validate-config", str(config_path)])
 
     assert exit_code == 0
-    assert "Config OK" in capsys.readouterr().out
+    captured = capsys.readouterr()
+    assert "Config OK" in captured.out
+    # An example resolves cleanly: no stderr output, logged warning or Python warning.
+    assert captured.err == ""
+    assert [record.getMessage() for record in caplog.records if record.levelno >= logging.WARNING] == []
+    assert [str(warning.message) for warning in recwarn] == []
 
 
 def test_validate_config_rejects_malformed_sweep(tmp_path, capsys):
@@ -439,7 +578,7 @@ def test_sweep_expands_grid_and_writes_combined_csv(monkeypatch, tmp_path, capsy
         def result(self):
             return {
                 "grid_independence_pct": 40.0 + self.config["n_modules"],
-                "npv_savings_eur": 1000.0 + self.config["battery_kwh"],
+                "npv_savings": 1000.0 + self.config["battery_kwh"],
                 "yearly": [{"year": 1}],
             }
 
@@ -475,6 +614,39 @@ battery_kwh = [0.0, 5.0]
     assert rows[0]["grid_independence_pct"] == "48.0"
 
 
+@pytest.mark.usefixtures("_patch_weather")
+def test_sweep_csv_carries_the_year1_money_components(tmp_path, capsys):
+    config_path = tmp_path / "money-sweep.toml"
+    config_path.write_text(
+        """
+location = "porto"
+n_modules = 8
+annual_consumption_kwh = 3500
+projection_years = 1
+
+[sweep]
+battery_kwh = [0.0, 5.0]
+""".strip(),
+        encoding="utf-8",
+    )
+    output_path = tmp_path / "money-sweep.csv"
+
+    assert cli.main(["sweep", "--config", str(config_path), "--output", str(output_path)]) == 0
+
+    rows = list(csv.DictReader(output_path.open(encoding="utf-8")))
+    assert len(rows) == 2
+    for row in rows:
+        assert row["result_schema_version"] == RESULT_SCHEMA_VERSION
+        for key in (
+            "grid_import_cost_year1_prices",
+            "grid_export_revenue_year1_prices",
+            "fixed_charge_year1_prices",
+            "no_system_import_cost_year1_prices",
+        ):
+            assert float(row[key]) >= 0.0
+        assert float(row["no_system_import_cost_year1_prices"]) > float(row["grid_import_cost_year1_prices"])
+
+
 def test_sweep_applies_dotted_cost_keys_without_mutating_base_config(monkeypatch, tmp_path, capsys):
     seen_configs = []
 
@@ -487,7 +659,7 @@ def test_sweep_applies_dotted_cost_keys_without_mutating_base_config(monkeypatch
             return None
 
         def result(self):
-            return {"npv_savings_eur": self.config["costs"]["electricity_cost"] * 1000}
+            return {"npv_savings": self.config["costs"]["electricity_cost"] * 1000}
 
     monkeypatch.setattr(cli, "App", SweepFakeApp)
     config_path = tmp_path / "cost-sweep.toml"
@@ -517,7 +689,7 @@ storage_cost_per_kwh = 420.0
     ]
     rows = list(csv.DictReader(output_path.open(encoding="utf-8")))
     assert [row["param_costs.electricity_cost"] for row in rows] == ["0.2", "0.3"]
-    assert [row["npv_savings_eur"] for row in rows] == ["200.0", "300.0"]
+    assert [row["npv_savings"] for row in rows] == ["200.0", "300.0"]
 
 
 def test_sweep_accepts_unquoted_toml_dotted_cost_key(monkeypatch, tmp_path, capsys):
@@ -595,5 +767,223 @@ annual_consumption_kwh = 3500
     assert exit_code == 1
     error = capsys.readouterr().err
     assert "Unknown sweep key 'location.foo'" in error
-    assert "Dotted keys are supported only under 'costs'" in error
-    assert "costs.electricity_cost" in error
+    assert (
+        "Dotted keys are supported only under 'battery_indoor_model', 'costs', 'period', 'reference_tariff', "
+        "'smart_charging', 'tariff'" in error
+    )
+
+
+SMART_CHARGING_SWEEP_BASE = """
+location = "porto"
+n_modules = 10
+annual_consumption_kwh = 4000
+battery_kwh = 5.0
+
+[tariff]
+schedule = "pt_mainland_2026_daily_bi"
+currency = "EUR"
+import_prices = { peak = 0.2310, off_peak = 0.1210 }
+export_prices = { all = 0.0500 }
+
+[smart_charging]
+mode = "fixed_target"
+target_usable_fraction = 0.50
+charge_periods = ["off_peak"]
+discharge_periods = ["peak"]
+grid_charge_efficiency = 0.95
+"""
+
+
+def test_sweep_applies_dotted_tariff_and_smart_charging_keys(monkeypatch, tmp_path):
+    seen_configs = []
+
+    class SweepFakeApp:
+        def __init__(self, config):
+            seen_configs.append(config)
+
+        def simulate(self):
+            return None
+
+        def result(self):
+            return {}
+
+    monkeypatch.setattr(cli, "App", SweepFakeApp)
+    config_path = tmp_path / "tariff-sweep.toml"
+    config_path.write_text(
+        SMART_CHARGING_SWEEP_BASE
+        + """
+[sweep]
+"tariff.import_prices.off_peak" = [0.10, 0.12]
+"smart_charging.target_usable_fraction" = [0.5, 0.8]
+""",
+        encoding="utf-8",
+    )
+    output_path = tmp_path / "tariff-sweep.csv"
+
+    assert cli.main(["sweep", "--config", str(config_path), "--output", str(output_path)]) == 0
+
+    assert [(c["tariff"]["import_prices"], c["smart_charging"]["target_usable_fraction"]) for c in seen_configs] == [
+        ({"peak": 0.2310, "off_peak": 0.10}, 0.5),
+        ({"peak": 0.2310, "off_peak": 0.10}, 0.8),
+        ({"peak": 0.2310, "off_peak": 0.12}, 0.5),
+        ({"peak": 0.2310, "off_peak": 0.12}, 0.8),
+    ]
+    rows = list(csv.DictReader(output_path.open(encoding="utf-8")))
+    assert [row["param_tariff.import_prices.off_peak"] for row in rows] == ["0.1", "0.1", "0.12", "0.12"]
+
+
+SEASONAL_SWEEP_BASE = """
+location = "porto"
+n_modules = 8
+annual_consumption_kwh = 4000
+battery_kwh = 5.0
+
+[tariff]
+currency = "EUR"
+export_prices = { all = 0.05 }
+
+[tariff.import_prices]
+winter = { low = 0.20, standard = 0.30, high = 0.45 }
+summer = { standard = 0.28 }
+
+[tariff.custom_schedule]
+identifier = "illustrative_two_season"
+version = "1"
+timezone = "Europe/Lisbon"
+cycle = "custom"
+periods = ["low", "standard", "high"]
+seasons = { winter = [1, 2, 3, 10, 11, 12], summer = [4, 5, 6, 7, 8, 9] }
+
+[[tariff.custom_schedule.rules]]
+days = "all"
+season = "winter"
+intervals = { low = [["00:00", "06:00"]], standard = [["06:00", "17:00"], ["21:00", "24:00"]], high = [["17:00", "21:00"]] }
+
+[[tariff.custom_schedule.rules]]
+days = "all"
+season = "summer"
+intervals = { standard = [["00:00", "24:00"]] }
+"""
+
+
+def test_sweep_addresses_a_season_price_two_levels_down(monkeypatch, tmp_path):
+    config_path = tmp_path / "seasonal-sweep.toml"
+    config_path.write_text(
+        SEASONAL_SWEEP_BASE + '\n[sweep]\n"tariff.import_prices.winter.high" = [0.40, 0.50]\n', encoding="utf-8"
+    )
+    assert cli.main(["validate-config", str(config_path)]) == 0
+
+    seen_configs = []
+
+    class SweepFakeApp:
+        def __init__(self, config):
+            seen_configs.append(config)
+
+        def simulate(self):
+            return None
+
+        def result(self):
+            return {}
+
+    monkeypatch.setattr(cli, "App", SweepFakeApp)
+    output_path = tmp_path / "seasonal-sweep.csv"
+    assert cli.main(["sweep", "--config", str(config_path), "--output", str(output_path)]) == 0
+    assert [c["tariff"]["import_prices"] for c in seen_configs] == [
+        {"winter": {"low": 0.20, "standard": 0.30, "high": 0.40}, "summer": {"standard": 0.28}},
+        {"winter": {"low": 0.20, "standard": 0.30, "high": 0.50}, "summer": {"standard": 0.28}},
+    ]
+    rows = list(csv.DictReader(output_path.open(encoding="utf-8")))
+    assert [row["param_tariff.import_prices.winter.high"] for row in rows] == ["0.4", "0.5"]
+
+
+def test_sweep_resolves_a_season_price_that_the_season_never_uses(tmp_path, capsys):
+    config_path = tmp_path / "seasonal-sweep.toml"
+    config_path.write_text(
+        SEASONAL_SWEEP_BASE + '\n[sweep]\n"tariff.import_prices.summer.high" = [0.40]\n', encoding="utf-8"
+    )
+    assert cli.main(["validate-config", str(config_path)]) == 1
+    assert "'tariff.import_prices.summer' prices high, which season 'summer' never uses" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    ("key", "message"),
+    [
+        ("tariff.shedule", r"Unknown sweep key 'tariff\.shedule'\. Available: tariff\.boundary_policy"),
+        ("smart_charging.target", r"Available: smart_charging\.charge_periods"),
+        ("tariff.schedule.peak", r"'tariff\.schedule' is not a table of named entries"),
+        (
+            "tariff.import_prices.winter.peak.low",
+            r"'tariff\.import_prices' takes at most 2 more levels, as in 'tariff\.import_prices\.winter' or "
+            r"'tariff\.import_prices\.winter\.peak'",
+        ),
+        ("tariff.export_prices.all.x.y", r"as in 'tariff\.export_prices\.all'"),
+        ("costs", r"Unknown sweep key 'costs'\. Available: costs\.daily_power_cost"),
+        ("battery_indoor_model.setpoint", r"Available: battery_indoor_model\.ceiling_c"),
+    ],
+)
+def test_sweep_rejects_dotted_keys_the_registry_does_not_have(tmp_path, capsys, key, message):
+    config_path = tmp_path / "bad-key-sweep.toml"
+    config_path.write_text(SMART_CHARGING_SWEEP_BASE + f'\n[sweep]\n"{key}" = [1.0]\n', encoding="utf-8")
+
+    assert cli.main(["validate-config", str(config_path)]) == 1
+    assert re.search(message, capsys.readouterr().err)
+
+
+def test_sweep_resolves_every_grid_point_before_the_first_run(monkeypatch, tmp_path, capsys):
+    simulated = []
+    monkeypatch.setattr(cli.App, "simulate", lambda self: simulated.append(self))
+    config_path = tmp_path / "bad-point-sweep.toml"
+    # The second value names a period the schedule does not have.
+    config_path.write_text(
+        SMART_CHARGING_SWEEP_BASE + '\n[sweep]\n"smart_charging.charge_periods" = [["off_peak"], ["night"]]\n',
+        encoding="utf-8",
+    )
+
+    assert cli.main(["sweep", "--config", str(config_path), "--output", str(tmp_path / "out.csv")]) == 1
+    assert "'smart_charging.charge_periods' has period(s) night" in capsys.readouterr().err
+    assert simulated == []
+    assert not (tmp_path / "out.csv").exists()
+
+    # validate-config checks every grid point too, not only the base config.
+    assert cli.main(["validate-config", str(config_path)]) == 1
+    assert "'smart_charging.charge_periods' has period(s) night" in capsys.readouterr().err
+
+
+def test_sweep_builds_each_app_only_when_it_runs(monkeypatch, tmp_path):
+    events = []
+
+    class SweepFakeApp:
+        def __init__(self, config):
+            events.append(("build", config["n_modules"]))
+            self.n_modules = config["n_modules"]
+
+        def simulate(self):
+            events.append(("run", self.n_modules))
+
+        def result(self):
+            return {}
+
+    monkeypatch.setattr(cli, "App", SweepFakeApp)
+    config_path = tmp_path / "order-sweep.toml"
+    config_path.write_text('location = "porto"\nannual_consumption_kwh = 3500\n\n[sweep]\nn_modules = [8, 10]\n')
+
+    assert cli.main(["sweep", "--config", str(config_path), "--output", str(tmp_path / "out.csv")]) == 0
+    # A finished run's App, and its result, is not held until the sweep ends.
+    assert events == [("build", 8), ("run", 8), ("build", 10), ("run", 10)]
+
+
+def test_deep_merge_keeps_the_rest_of_a_nested_table():
+    base = {"n_modules": 8, "tariff": {"schedule": "pt_mainland_2026_daily_bi", "import_prices": {"peak": 0.23}}}
+    overrides = {"n_modules": 10, "tariff": {"import_prices": {"off_peak": 0.12}}, "battery_kwh": 5.0}
+
+    merged = cli._deep_merge(base, overrides)
+
+    assert merged == {
+        "n_modules": 10,
+        "tariff": {"schedule": "pt_mainland_2026_daily_bi", "import_prices": {"peak": 0.23, "off_peak": 0.12}},
+        "battery_kwh": 5.0,
+    }
+    assert base["tariff"] == {"schedule": "pt_mainland_2026_daily_bi", "import_prices": {"peak": 0.23}}
+    # A scalar override replaces a table, and a table replaces a scalar.
+    assert cli._deep_merge({"costs": {"a": 1}}, {"costs": None}) == {"costs": None}
+    assert cli._deep_merge({"costs": None}, {"costs": {"a": 1}}) == {"costs": {"a": 1}}

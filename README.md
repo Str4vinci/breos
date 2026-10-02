@@ -28,12 +28,13 @@ its production pipeline on.
 - **Weather:** TMY from PVGIS, local weather files, and historical data from Open-Meteo at hourly or 15-minute resolution.
 - **PV production** — pvlib CEC single-diode model, with a small example module catalog to get started.
 - **Multi-array systems** — combine multiple faces/orientations (e.g. an east-west roof) at the DC stage instead of one representative tilt.
-- **Battery** — energy balance with calendar + cycle aging (Naumann 2020, Lam 2025) and field-calibrated LFP parameters.
-- **Economics** — NPV, LCOE, breakeven, and cost projections with configurable tariffs and inflation.
+- **Battery** — energy balance with calendar + cycle aging (Naumann 2020, Lam 2025) and field-calibrated LFP parameters, or one of 14 vendored BLAST-Lite aging models.
+- **Battery control** — greedy self-consumption by default; opt-in fixed-target grid charging and discharge-only windows under time-of-use prices.
+- **Economics** — NPV, LCOE, breakeven, and cost projections with flat or time-of-use tariffs, a separate tariff for the no-system baseline, and separate price escalators.
 - **Monte Carlo** — weather-year and demand resampling for NPV, payback, grid-independence, LCOE, and SoH distributions.
-- **Optimization** — multi-objective PV/battery sizing (pymoo NSGA-II), tilt optimization, and sizing sweeps.
+- **Optimization** — multi-objective PV/battery sizing and orientation (pymoo NSGA-II), and parameter-grid sweeps.
 - **Emissions** — CO<sub>2</sub> savings and projections.
-- **Visualization** — publication-ready plots for energy balances, degradation, breakeven, and Pareto fronts.
+- **Visualization** — plots for energy balances, degradation, breakeven, Monte Carlo distributions, sweep heatmaps, orientation landscapes and Pareto fronts.
 - **Bring your own data** — every layer accepts custom inputs: PV module parameters, battery degradation coefficients, weather CSVs, load profiles, and cost/tariff/emissions assumptions. The packaged presets are starting points, not fixed defaults.
 
 ## Installation
@@ -86,10 +87,12 @@ result = app.result()
 
 print(f"Grid independence: {result['grid_independence_pct']:.1f}%")
 print(f"Payback: {result['payback_year']} years")
-print(f"NPV savings: {result['npv_savings_eur']:,.0f} EUR")
+print(f"NPV savings: {result['npv_savings']:,.0f} EUR")
 ```
 
-`result()` returns a plain JSON-serializable dict. The
+`result()` returns a plain JSON-serializable dict. Money fields are in the
+currency recorded in `result["provenance"]["currency"]` (EUR for the bundled
+cost presets). The
 [configuration reference](docs/getting-started/configuration.md)
 lists every option, and
 [interpreting results](docs/getting-started/interpreting-results.md)
@@ -112,7 +115,8 @@ breos run --location porto --n-modules 10 --annual-consumption-kwh 4000 \
 
 The CLI also drives config files, parameter sweeps, and Monte Carlo studies, and
 `breos list <category>` shows bundled presets (locations, modules, cost presets,
-…). See the [CLI recipes](docs/getting-started/recipes.md).
+…). See the [how-to guides](docs/how-to/index.md) and the
+[case examples](https://breos.readthedocs.io/en/latest/gallery/index.html).
 
 ## Citation
 

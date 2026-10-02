@@ -1,0 +1,36 @@
+# Fixed-target smart charging on the Portuguese mainland daily bi-hourly
+# schedule (Diretiva ERSE n.º 1/2026). Off peak, the grid charges the battery
+# toward half its usable window; at peak, the battery discharges to the load.
+# The prices and power limits are illustrative, not a supplier's offer or a
+# product's rating. Put your own here.
+#
+# The system and prices are those of time-of-use-portugal.toml, plus 3 kW
+# battery power limits, so the two runs compare grid charging with plain
+# self-consumption. Energy charged from the grid counts as grid import, so
+# grid independence is lower here.
+#
+#   breos run --config configs/examples/smart-charging-portugal.toml
+
+location = "porto"
+n_modules = 10
+annual_consumption_kwh = 4000
+battery_kwh = 5.0
+battery_max_charge_power_w = 3000
+battery_max_discharge_power_w = 3000
+cost_preset = "residential_pt"
+emissions_country = "PT"
+
+[tariff]
+schedule = "pt_mainland_2026_daily_bi"
+currency = "EUR"
+import_prices = { peak = 0.2310, off_peak = 0.1210 }
+export_prices = { all = 0.0500 }
+fixed_charge_per_day = 0.30
+
+[smart_charging]
+mode = "fixed_target"
+target_usable_fraction = 0.50
+charge_periods = ["off_peak"]
+discharge_periods = ["peak"]
+grid_charge_efficiency = 0.95
+grid_import_limit_w = 6900

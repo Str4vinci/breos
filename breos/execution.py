@@ -16,6 +16,7 @@ selection explicitly, never by ambient configuration.
 from __future__ import annotations
 
 import platform
+from collections.abc import Mapping
 from typing import Any
 
 import numpy as np
@@ -58,6 +59,16 @@ def is_pv_only_dispatch(nominal_energy_wh: float, max_soc: float, min_soc: float
     return not (nominal_energy_wh > MIN_DISPATCHABLE_ENERGY_WH and (max_soc - min_soc) > 0.0)
 
 
+def config_has_battery(cfg: Mapping[str, Any]) -> bool:
+    """Return True when a resolved App config dispatches a battery.
+
+    Asks :func:`is_pv_only_dispatch` of the config's ``battery_kwh`` and SOC
+    window, before any battery config exists. App, Monte Carlo and the replay
+    oracle ask here, so they cannot disagree about which runs are PV-only.
+    """
+    return not is_pv_only_dispatch(cfg["battery_kwh"] * 1000, cfg["battery_max_soc"], cfg["battery_min_soc"])
+
+
 def validate_execution_backend(execution_backend: Any) -> str:
     """Return a known backend name, or say what was asked for and what exists."""
     if execution_backend not in EXECUTION_BACKENDS:
@@ -78,24 +89,20 @@ def require_backend(execution_backend: str) -> None:
         require_numba_dispatch_day()
 
 
-def backend_provenance(
-    execution_backend: str,
-    *,
-    jit_cache_states: list[str] | None = None,
-    pv_only: bool = False,
-) -> dict[str, Any]:
+def backend_provenance(execution_backend: str, *, pv_only: bool = False) -> dict[str, Any]:
     """Check the backend is usable and record the toolchain it ran on.
 
     A bit-identity claim cannot be checked after the fact without a stated
     toolchain, so the versions are recorded for every run rather than only for
     benchmarks.
 
-    A ``numba`` record always carries a ``jit_cache`` field. Callers that
-    aggregate worker observations pass them in; callers that cannot observe
-    their workers -- a driver that fans work out to subprocesses, for instance
-    -- pass nothing and get ``"unknown"``. A field that admits it could not
-    tell is provenance; a missing field is a gap that reads as an oversight
-    later, which is worse on a run that took hours.
+    A ``numba`` record always carries a ``jit_cache`` field, ``"unknown"``
+    until the caller replaces it with its aggregated observations
+    (:func:`aggregate_jit_cache_states`). A caller that cannot observe its
+    workers -- a driver that fans work out to subprocesses, for instance --
+    leaves it. A field that admits it could not tell is provenance; a missing
+    field is a gap that reads as an oversight later, which is worse on a run
+    that took hours.
 
     ``pv_only`` records that the run took the shared vectorized PV-only
     balance, which no backend name implies on its own. Callers decide it with
@@ -113,7 +120,7 @@ def backend_provenance(
 
         require_numba_dispatch_day()
         provenance.update(numba_versions())
-        provenance["jit_cache"] = aggregate_jit_cache_states(list(jit_cache_states or []))
+        provenance["jit_cache"] = UNKNOWN_JIT_CACHE_STATE
     if pv_only:
         provenance["dispatch_path"] = PV_ONLY_DISPATCH_PATH
     return provenance
@@ -136,7 +143,7 @@ def observed_jit_cache_state(execution_backend: str) -> str | None:
     """Return the cache outcome observed since the last reset, or None."""
     if execution_backend != "numba":
         return None
-    from breos._numba_dispatch import observed_jit_cache_state as _observed
+    from breos._numba_dispatch import jit_cache_state as _observed
 
     return _observed()
 

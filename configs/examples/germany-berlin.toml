@@ -1,6 +1,9 @@
 # Germany scenario: location, cost preset, and emissions factor swapped together.
 # Compare against configs/examples/pv-plus-battery.toml (Portugal) to see how
-# tariffs and grid carbon intensity change the economics and CO2 results.
+# prices and grid carbon intensity change the economics and CO2 results. The
+# system is also sized up for the higher demand (12 modules, 7.5 kWh).
+# The residential_de preset prices energy at one flat rate;
+# quarterly-tariff-berlin.toml prices the same system with a time-of-use tariff.
 #
 #   breos run --config configs/examples/germany-berlin.toml
 

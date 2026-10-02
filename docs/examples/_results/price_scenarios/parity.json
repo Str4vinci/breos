@@ -1,0 +1,14 @@
+{
+ "changes": {
+  "import_price_escalation": 0.03,
+  "tariff": {
+   "import_prices": {
+    "peak": 0.28,
+    "off_peak": 0.121
+   }
+  }
+ },
+ "revalued_npv_savings": 6897.43,
+ "simulated_npv_savings": 6897.43,
+ "base_npv_savings": 3307.08
+}

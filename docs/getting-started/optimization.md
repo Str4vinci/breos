@@ -5,7 +5,7 @@ designs instead: it varies module count, battery capacity, tilt, and azimuth,
 and returns the trade-off front between energy independence and money.
 
 This is a Python API. There is no `breos optimize` subcommand, so the
-command-line workflow in [Recipes](recipes.md) does not reach it.
+command-line workflow in the [how-to guides](../how-to/index.md) does not reach it.
 
 ## Install the extra
 
@@ -22,10 +22,18 @@ raises `ImportError` and names this command.
 
 This trips people up, so it is worth stating plainly. `App` takes a flat
 dictionary of keys such as `n_modules` and `cost_preset`. The optimizer takes a
-nested dictionary grouped into sections: `location`, `load`, `pv`, `battery`,
-`optimization`, `constraints`, `costs`, `financials`, `emissions`, and
-`simulation`. The two shapes are not interchangeable, and a flat `App` config
-passed to the optimizer fails on the first missing section.
+nested dictionary grouped into tables: `location` (required), `pv`,
+`battery`, `costs`, `financials`, `constraints`, `mode`, `optimization`,
+`simulation`, `inverter` and `emissions`, plus the App's `tariff`,
+`reference_tariff`, `smart_charging` and `terminal_value`. The two shapes are
+not interchangeable. Every table takes a fixed set of keys, so a
+flat `App` config passed to the optimizer, or a misspelt key, raises before
+any design is scored; the [API reference](../api/optimization.md#configuration-keys)
+lists the keys and their defaults. The `financials` section takes the App's rate keys:
+`inflation_rate`, `sell_price_inflation`, `discount_rate` and the separate
+escalators `import_price_escalation`, `om_escalation` and
+`replacement_cost_learning`
+([Economic conventions](interpreting-results.md#economic-conventions)).
 
 A ready-to-edit nested config ships as
 [`configs/optimization/projected-optimization.toml`](https://github.com/Str4vinci/breos/blob/main/configs/optimization/projected-optimization.toml).
@@ -44,66 +52,73 @@ optimizer chooses them, bounded by `[constraints]`.
 ## Load the weather and the load profile
 
 The optimizer takes one weather year and one load year as DataFrames, and
-reuses them for every candidate and every projection year:
+reuses them for every candidate and every projection year. They are not
+config keys. BREOS ships no weather data, so point this at your own TMY or
+historical CSV:
 
 ```python
 import pandas as pd
 from breos.load_profiles import load_profile
 
-weather = pd.read_csv(config["simulation"]["weather_file"], index_col=0)
+weather = pd.read_csv("weather/porto_tmy_2005_2023_pvgis-sarah3.csv", index_col=0)
 weather.index = pd.to_datetime(weather.index, utc=True)
 
 load = load_profile(
-    config["load"]["profile_type"],
-    config["load"]["annual_consumption_kwh"],
+    "demandlib_h0",
+    4000.0,
     start_date=f"{weather.index[0].year}-01-01",
     freq=config["simulation"]["resolution"],
     timezone=config["location"]["timezone"],
 )
 ```
 
-For 15-minute runs, upsample the weather with
-{py:func}`~breos.weather.resample_to_15min` before you pass it in.
+For 15-minute runs, hourly weather is prepared with the same resampling
+helper as App and Monte Carlo. Set `simulation.irradiance_resampling` to
+`"auto"` (default), `"clear_sky"` or `"clear_sky_energy_conserving"`; see
+[the irradiance policy](configuration.md#hourly-weather-at-15-minute-resolution).
+Weather already at 15 minutes is used directly. A frame read with
+`pd.read_csv` carries none of the metadata sidecar, so `"auto"` treats it as
+instantaneous and `"clear_sky_energy_conserving"` refuses it. To keep the
+metadata, load the file and its `.metadata.json` sidecar with
+{py:func}`breos.weather.load_weather`, for example
+`load_weather("porto", data_type="tmy")` for
+`weather/porto_tmy_2005_2023_pvgis-sarah3.csv`.
 
 ## Search the design space
 
 ```python
 from breos.optimization import optimize_system_multi_objective
 
-result = optimize_system_multi_objective(
-    weather,
-    load,
-    config,
-    pop_size=config["optimization"]["pop_size"],
-    n_offsprings=config["optimization"]["n_offsprings"],
-    n_gen=config["optimization"]["n_gen"],
-    seed=config["optimization"]["seed"],
-)
+result = optimize_system_multi_objective(weather, load, config)
 
 pareto = result.details["pareto"]
 print(pareto[["Modules", "Battery_kWh", "Tilt", "Azimuth"]])
 ```
 
 `pareto` is a DataFrame with one row per non-dominated design, holding the
-sizing columns above, the objective values, ZEB diagnostics, and both
-steady-state and projected fields. There is no single best row. Pick the design
+sizing columns above, the objective values, ZEB diagnostics, and the
+`Projected_*` fields. There is no single best row. Pick the design
 whose balance of independence and cost matches the project.
 
-The optimizer does not read `pop_size`, `n_offsprings`, `n_gen`, or `seed`
-from the nested config automatically. Forward them as shown above. Set and
-record the seed because NSGA-II is stochastic. Raise the population and
+{py:func}`~breos.plotting.plot_pareto_front` draws the front, two objectives
+at a time: `plot_pareto_front(result, "plots", color_by="Battery_kWh")`.
+
+The call reads `pop_size`, `n_offsprings`, `n_gen` and `seed` from
+`[optimization]`. You can pass them as arguments instead; an argument that
+disagrees with its key raises. Set and record the seed because NSGA-II is
+stochastic; `details["provenance"]["run_settings"]` records what the search
+used, and `details["provenance"]["constraints"]` its bounds. Raise the population and
 generation counts for a denser front and a longer runtime. Pass `n_procs` to
 `optimize_system_multi_objective` to evaluate candidates in parallel
 processes.
 
 If no candidate satisfies the constraints, the call raises `RuntimeError`.
-Loosen `budget_eur`, `max_area_m2`, `max_modules`, or `max_battery_kwh` in
+Loosen `budget`, `max_area_m2`, `max_modules`, or `max_battery_kwh` in
 `[constraints]` and run it again.
 
 ## Score designs over their projected lifetime
 
-The default `projected` basis scores each candidate over the whole configured
-horizon:
+The optimizer scores each candidate over the whole configured horizon:
 
 ```toml
 [optimization]
@@ -116,18 +131,60 @@ degradation factor after the simulation. ZEB is a diagnostic. To keep ZEB as a
 feasibility constraint, set `enforce_zeb = true` under `[constraints]`.
 
 Projected scoring simulates `years_projection` years for every candidate. Start
-with a small `pop_size` and `n_gen` while you check that the config resolves,
-then scale up. To screen a wide design space at lower cost, opt into the
-single-year basis:
+with a small `pop_size` and `n_gen` in `[optimization]` while you check that
+the config resolves, then scale up; passing different values as arguments
+raises. To screen a wide design space at lower cost, shorten
+`years_projection` for the screening run. The single-year `steady_state` basis
+was removed in 0.7.0, and a config that still sets it raises an error.
+
+The optional [`[terminal_value]`](configuration.md#estimated-battery-residual-value)
+table is accepted but ignored. Evaluated designs report no estimated battery
+residual value or NPV including it, and ranking uses the NPV excluding
+residual value. Use App or Monte Carlo for this estimate.
+
+## Price a design with a time-of-use tariff
+
+Add the same `[tariff]` table accepted by App to the optimizer config:
 
 ```toml
-[optimization]
-objective_basis = "steady_state"
+# Illustrative prices, not a supplier offer.
+[tariff]
+schedule = "pt_mainland_2026_daily_bi"
+currency = "EUR"
+import_prices = { peak = 0.28, off_peak = 0.11 }
+export_prices = { all = 0.05 }
+fixed_charge_per_day = 0.30
 ```
 
-The `steady_state` basis optimizes annual grid independence, NPV, and ZEB ratio.
-It estimates battery replacement from first-year state-of-health loss instead
-of propagating battery state through the project lifetime.
+Remove `electricity_cost`, `electricity_sold_cost`, and `daily_power_cost`
+from `[costs]` when you add `[tariff]`. Supplying both raises an error.
+The schedule must match `location.timezone`. Schedules with half-hour or
+quarter-hour boundaries require `simulation.resolution = "15min"`.
+See [Tariffs](../api/tariffs.md) for effective dates and Spanish holiday coverage.
+
+Both `evaluate_projected_design` and `optimize_system_multi_objective` price
+each timestep through the shared projection loop. Each project year replays
+the input calendar, with PV and battery degradation carried between years.
+Tariff prices affect the financial objective. The battery follows
+self-consumption dispatch unless a `smart_charging` table sets fixed-target
+charging or `discharge_only`, which the optimizer applies as App does. It is checked as App checks
+it, with `battery_kwh` taken from the design, or from
+`constraints.max_battery_kwh` for a search. The instructions are resolved once
+per search; a candidate without a battery ignores them. Results record them
+in `provenance["smart_charging"]`. The experimental `daily_persistence` mode
+plans each day while a single run goes, so the optimizer refuses it before
+any candidate runs. See [Smart charging](configuration.md#smart-charging).
+
+Fixed-design results record the schedule, prices, calendar and hashes in
+`result.provenance["tariff"]`. Search results record the same fields in
+`result.details["provenance"]["tariff"]`. Tariff-enabled searches also support
+`n_procs`, and their results can be pickled.
+
+A [`[reference_tariff]`](configuration.md#no-system-reference-tariff) table,
+as in App, prices the household without the system for every candidate, so
+`Projected_NPV` and the NPV objective are the saving against it. Without
+`import_price_escalation` it escalates at the `financials` import escalation.
+Results record it in `provenance["reference_tariff"]`.
 
 ## Evaluate one design in detail
 
@@ -164,7 +221,8 @@ came from.
 
 ## Related pages
 
-- [Recipes](recipes.md) for single-design runs through `App` and the CLI.
+- [How-to guides](../how-to/index.md) for single-design runs through `App` and the CLI.
+- {doc}`Multi-objective sizing with NSGA-II <../gallery/uncertainty/plot_14_nsga2_front>`, a stored front with its figures.
 - [Interpreting results](interpreting-results.md) for the meaning of the
   headline metrics.
 - [Optimization API](../api/optimization.md) for the full signatures.

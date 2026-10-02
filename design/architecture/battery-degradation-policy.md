@@ -12,10 +12,10 @@ remains its default; BLAST is an explicit opt-in through
 `degradation_engine="blast"` and a named `blast_model`. Unsupported
 combinations raise rather than silently falling back to native behavior.
 
-The App-level `battery_type` key was already rejected by strict validation in
-0.3.4. Its targeted 0.4.0 error is migration guidance, not a newly removed App
-feature. The lower-level `BatteryConfig(battery_type="LFP")` API remains
-supported for native degradation and is not a BLAST model selector.
+There is no chemistry selector. The App-level `battery_type` key was rejected
+by strict validation from 0.3.4, with a targeted error from 0.4.0; 0.7.0
+removed that error and the lower-level `BatteryConfig.battery_type` field,
+which only ever accepted `"lfp"`. `App` now rejects the key as unknown.
 
 Changes to these selectors, documented result/provenance fields, or default
 behavior require focused `App` tests and an explicit changelog migration note.
@@ -50,9 +50,9 @@ predictive validity.
 A `blast_model` key identifies a particular empirical cell model, not a generic
 chemistry curve. Model identity, citations, experimental ranges, and output
 capabilities come from the single public registry. Experimental ranges drive
-warnings; they are not recommended pack settings. Operating defaults are added
-only when a source supports them, with precedence remaining explicit user
-configuration over sourced profile defaults over global defaults.
+warnings; they are not recommended pack settings. A model key does not supply
+operating defaults: settings resolve as explicit user configuration over global
+defaults.
 
 BLAST outputs are cell-model projections, not pack-calibrated predictions.
 Thermal gradients, cell variation, imbalance, interconnects, and BMS behavior
@@ -74,10 +74,14 @@ metric and test protocol have a defensible, validated mapping to pack behavior.
 The executable isolation guard is
 `tests/test_battery.py::TestSimulateEnergyBalance::test_blast_resistance_output_is_diagnostic_only`.
 
-The reference Python path remains the accuracy and calibration basis. Optional
-Numba kernels are explicitly approximate screening tools and must not provide
+The Python path remains the accuracy and calibration reference. The optional
+Numba backend compiles the same within-day dispatch loop, keeps degradation in
+Python, and is bit-identical to the reference on one toolchain (see
+[Numba dispatch backend](numba-dispatch-backend.md)). The approximate
+whole-project screening kernels that BREOS once had were removed in 0.6.0. A
+faster path that does not reproduce the reference must not provide
 calibration evidence or replace the reference path in published accuracy
-comparisons merely because they are faster.
+comparisons.
 
 ## Provenance, legal records, and fixtures
 

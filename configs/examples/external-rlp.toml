@@ -1,6 +1,10 @@
 # Template for using non-bundled load profiles.
-# Put licensed CSV files in this directory; do not commit third-party RLPs
-# unless their license explicitly allows redistribution.
+# Put the licensed CSV files in rlp_directory, a path relative to the
+# directory you run breos from. Do not commit third-party RLPs unless their
+# license explicitly allows redistribution.
+#
+#   breos run --config configs/examples/external-rlp.toml
+
 rlp_directory = "external_rlp"
 
 location = "porto"
@@ -8,9 +12,11 @@ n_modules = 10
 annual_consumption_kwh = 4000
 battery_kwh = 5.0
 
-# E-REDES BTN C. Requires EREDES_2025_BTN_1000kwh_hourly.csv and/or
-# EREDES_2025_BTN_1000kwh_15min.csv inside rlp_directory.
-load_profile = "6"
+# E-REDES BTN C. Requires one EREDES_<year>_BTN_1000kwh_15min.csv and/or one
+# EREDES_<year>_BTN_1000kwh_hourly.csv inside rlp_directory. If several years
+# are there, name the one to use with load_profile_file.
+# tools/convert_eredes_profiles.py makes both files from the E-REDES publication.
+load_profile = "eredes_btn_c"
 resolution = "15min"
 
 cost_preset = "residential_pt"

@@ -4,7 +4,7 @@ The timestep parity tests compare the physics -- the buffer matrix, step by
 step. They say nothing about what App *builds* out of that: the yearly rollups,
 the cost projection, LCOE, NPV, payback, the monthly and financial tables, the
 degradation summary and the PV loss waterfall. Those are the numbers a reader
-of the forthcoming publication study actually sees, and they pass through
+of a sizing study actually sees, and they pass through
 economics and aggregation code that the timestep comparison never touches.
 
 So this walks the whole result dict, flattens every leaf to a comparable value,
@@ -30,7 +30,7 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PROJECT_ROOT))
 
-# Configurations shaped like the forthcoming publication study's cases: one
+# Configurations shaped like typical sizing-study cases: one
 # with no battery and a trivial dispatch branch, one balanced case with a
 # binding charge cap, one larger system, and one at 15-minute resolution where
 # the day loop runs 96 steps instead of 24.

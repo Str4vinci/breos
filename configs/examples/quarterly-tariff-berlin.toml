@@ -1,0 +1,61 @@
+# Quarterly time-of-use tariff as a custom schedule with calendar-month seasons.
+# The system is the one in germany-berlin.toml; the [tariff] table replaces the
+# residential_de preset's flat import, export and fixed prices, and the preset
+# still supplies the investment costs.
+#
+# The windows and prices are illustrative, in the style of a German §14a EnWG
+# Module 3 network tariff: low/standard/high windows in Q1 and Q4, the
+# standard price all day in Q2 and Q3. They are not any network operator's
+# published values; replace them with the operator's own before a study.
+#
+#   breos run --config configs/examples/quarterly-tariff-berlin.toml
+
+location = "berlin"
+n_modules = 12
+annual_consumption_kwh = 4500
+battery_kwh = 7.5
+cost_preset = "residential_de"
+emissions_country = "DE"
+start_date = 2026-01-01
+projection_years = 20
+resolution = "h"
+
+[tariff]
+currency = "EUR"
+export_prices = { all = 0.08 }
+fixed_charge_per_day = 0.40
+
+[tariff.import_prices]
+q1 = { low = 0.25, standard = 0.33, high = 0.42 }
+q2 = { standard = 0.33 }
+q3 = { standard = 0.33 }
+q4 = { low = 0.25, standard = 0.33, high = 0.42 }
+
+[tariff.custom_schedule]
+identifier = "illustrative_module3_quarterly"
+version = "1"
+timezone = "Europe/Berlin"
+cycle = "custom"
+periods = ["low", "standard", "high"]
+source = "Illustrative §14a Module 3-style windows; not a network operator's published tariff"
+seasons = { q1 = [1, 2, 3], q2 = [4, 5, 6], q3 = [7, 8, 9], q4 = [10, 11, 12] }
+
+[[tariff.custom_schedule.rules]]
+days = "all"
+season = "q1"
+intervals = { low = [["00:00", "06:00"]], standard = [["06:00", "17:00"], ["21:00", "24:00"]], high = [["17:00", "21:00"]] }
+
+[[tariff.custom_schedule.rules]]
+days = "all"
+season = "q2"
+intervals = { standard = [["00:00", "24:00"]] }
+
+[[tariff.custom_schedule.rules]]
+days = "all"
+season = "q3"
+intervals = { standard = [["00:00", "24:00"]] }
+
+[[tariff.custom_schedule.rules]]
+days = "all"
+season = "q4"
+intervals = { low = [["00:00", "06:00"]], standard = [["06:00", "17:00"], ["21:00", "24:00"]], high = [["17:00", "21:00"]] }

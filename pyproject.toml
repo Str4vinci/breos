@@ -1,6 +1,6 @@
 [project]
 name = "breos"
-version = "0.6.2"
+version = "0.7.0"
 description = "Python library for PV and battery energy-system simulation and optimization"
 readme = "README.md"
 license = "BSD-3-Clause"
@@ -65,17 +65,13 @@ weather = [
     "requests-cache>=1.2.1",
     "timezonefinder>=8.2.1",
 ]
-# Compatibility alias for setup scripts written before 0.4.2. The validation
-# harness uses committed CSV/JSON artifacts and needs no dedicated packages.
-validation = []
-location-tools = [
-    "geopy>=2.4.1",
-    "timezonefinder>=8.2.1",
-]
 dev = [
     "pytest>=8.0",
     "pytest-cov>=7.0",
+    "pytest-xdist>=3.8",
     "ruff>=0.15",
+    "mypy>=1.18",
+    "pandas-stubs>=2.3",
     "matplotlib>=3.10.8",
     "numba>=0.63.1",
     "openmeteo-requests>=1.7.4",
@@ -90,6 +86,8 @@ docs = [
     "sphinx-design>=0.6",
     "sphinx-copybutton>=0.5",
     "sphinx-autodoc-typehints>=2.5",
+    "matplotlib>=3.10.8",
+    "sphinx-gallery>=0.19",
 ]
 
 [tool.pytest.ini_options]
@@ -117,18 +115,18 @@ line-length = 120
 target-version = "py311"
 
 [tool.ruff.lint]
-select = ["E", "F", "W", "I"]
+select = ["E", "F", "W", "I", "B904", "B905"]
 ignore = [
     "E501",   # line too long — handled by formatter
-    "F401",   # unused import — __init__.py re-exports intentionally
     "E741",   # ambiguous variable name — common in scientific code (l, I, O)
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"breos/__init__.py" = ["F401", "F811"]   # re-exports and shadowed imports
-"tests/*" = ["F811"]                      # pytest fixtures
-"tools/*" = ["E402"]                      # CLI scripts insert PROJECT_ROOT before imports
-"breos/degradation/blast/**/*.py" = ["E401", "F841", "I001", "W291", "W292", "W293"]  # vendored BLAST-Lite source
+"breos/__init__.py" = ["F811"]          # shadowed imports
+"breos/degradation/blast/models/__init__.py" = ["F401"]  # vendored package re-export; source hash must stay intact
+"tests/*" = ["F811", "B905"]              # pytest fixtures; zip lengths are often intentionally dynamic
+"tools/*" = ["E402", "B905"]               # CLI scripts; keep B905 focused on core modules
+"breos/degradation/blast/**/*.py" = ["E401", "F841", "I001", "W291", "W292", "W293", "B905"]  # vendored BLAST-Lite source
 
 [build-system]
 requires = ["hatchling"]
@@ -153,9 +151,52 @@ include = [
     "/docs",
     "/maintainers",
     "/pyproject.toml",
-    "/rlp",
     "/tests",
     "/tools",
     "/uv.lock",
     "/validation",
 ]
+
+[tool.mypy]
+# Baseline type checking for the published package. It runs with the `dev`
+# extra installed and pandas-stubs; untyped function bodies are not checked
+# yet (check_untyped_defs is off), so this catches errors in annotated code.
+python_version = "3.11"
+files = ["breos"]
+exclude = ['^breos/degradation/blast/']  # vendored BLAST-Lite source
+warn_unused_configs = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+
+# Third-party libraries that ship neither inline types nor a py.typed marker.
+[[tool.mypy.overrides]]
+module = [
+    "llvmlite.*",
+    "mpl_toolkits.*",
+    "pvlib.*",
+    "pymoo.*",
+    "rainflow.*",
+    "requests.*",
+    "scipy.*",
+]
+ignore_missing_imports = true
+
+# Vendored BLAST-Lite source: excluded from discovery above, but still reached
+# through breos.degradation.engine, so its errors are silenced here too.
+[[tool.mypy.overrides]]
+module = ["breos.degradation.blast.*"]
+ignore_errors = true
+
+# Modules not yet clean. Each is a follow-up; remove it from this list once
+# `uv run mypy breos` passes without it. battery.py's errors come mostly from
+# its dynamically attached buffer attributes (#178).
+[[tool.mypy.overrides]]
+module = [
+    "breos.battery",
+    "breos.load_profiles",
+    "breos.montecarlo",
+    "breos.optimization",
+    "breos.plotting",
+    "breos.weather",
+]
+ignore_errors = true

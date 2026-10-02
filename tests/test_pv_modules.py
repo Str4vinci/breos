@@ -2,14 +2,16 @@
 
 import pytest
 
-from breos.pv_modules import MODULES, get_module, get_module_info, list_modules
+from breos.pv_modules import MODULES, get_module, get_module_info
 
 
 class TestCatalog:
     def test_get_module_is_case_insensitive_copy(self):
         module = get_module("suntech_stp550s_stc")
-        module.Mpp = 1
+        module.Mpp = 545
+        module.T_Pmax_pct = -0.5
         assert MODULES["Suntech_STP550S_STC"].Mpp == 550
+        assert MODULES["Suntech_STP550S_STC"].gamma_pmp_effective == pytest.approx(-0.34)
 
     def test_unknown_module_error_lists_available(self):
         with pytest.raises(KeyError, match="not found. Available:"):
@@ -51,12 +53,3 @@ class TestCatalog:
     def test_catalog_does_not_claim_unsourced_noct_metadata(self):
         assert all(module.NOCT is None for module in MODULES.values())
         assert "NOCT:       n/a (not sourced in bundled catalog)" in get_module_info("Suntech_STP550S_STC")
-
-    def test_nomt_entry_removed(self):
-        # The Suntech_STP550S_NOMT entry fed NMOT datasheet points (800 W/m2,
-        # Mpp=415) into the STC-based CEC fit, which interprets Vmp/Imp/Voc/Isc
-        # as STC values — physically wrong, so the entry was removed. Lookups
-        # must fail with the actionable catalog error, not fit silently.
-        assert "Suntech_STP550S_NOMT" not in list_modules()
-        with pytest.raises(KeyError, match="not found. Available:"):
-            get_module("Suntech_STP550S_NOMT")

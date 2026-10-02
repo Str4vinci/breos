@@ -16,7 +16,12 @@ from harness import FREQ, SCENARIOS, build  # noqa: E402
 
 
 def check(name: str, backend: str = "python") -> list[str]:
-    from breos.battery import BatteryConfig, simulate_energy_balance, simulate_energy_balance_summary
+    from breos.battery import (
+        BatteryConfig,
+        frame_replaced_capacity_wh,
+        simulate_energy_balance,
+        simulate_energy_balance_summary,
+    )
 
     pv, load, temp, cfg, sim_kwargs = build(name)
     common = dict(
@@ -31,8 +36,8 @@ def check(name: str, backend: str = "python") -> list[str]:
     detailed = simulate_energy_balance(**common)
     summary = simulate_energy_balance_summary(**common, execution_backend=backend)
 
-    results_df, total_pv, summary_df, rep_cost, n_rep, deg_df = detailed[:6]
-    detailed_state = detailed[6]
+    results_df, total_pv, summary_df, n_rep, deg_df = detailed[:5]
+    detailed_state = detailed[5]
 
     failures: list[str] = []
 
@@ -46,7 +51,7 @@ def check(name: str, backend: str = "python") -> list[str]:
         same(f"sum::{col}", float(results_df[col].sum()), summary.column_sums[col])
 
     same("total_pv", float(total_pv), float(summary.total_pv_wh))
-    same("replacement_cost", float(rep_cost), float(summary.total_replacement_cost))
+    same("replaced_capacity", frame_replaced_capacity_wh(results_df), summary.replaced_capacity_wh)
     same("n_replacements", int(n_rep), int(summary.n_replacements))
     for col in summary_df.columns:
         same(f"summary_row::{col}", float(summary_df[col].iloc[0]), float(summary.summary_row[col]))
@@ -56,6 +61,11 @@ def check(name: str, backend: str = "python") -> list[str]:
         "carried_pv_origin",
         float(results_df["Battery_PV_Origin_Energy_End"].iloc[-1]),
         summary.carried_pv_origin_energy_wh,
+    )
+    same(
+        "carried_grid_origin",
+        float(results_df["Battery_Grid_Origin_Energy_End"].iloc[-1]),
+        summary.carried_grid_origin_energy_wh,
     )
     same("has_degradation_rows", not deg_df.empty, summary.has_degradation_rows)
     if not deg_df.empty:

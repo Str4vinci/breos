@@ -1,43 +1,18 @@
 """Release-smoke coverage for documented public workflows."""
 
+import hashlib
+import json
+import shutil
 import tomllib
 from pathlib import Path
 
-import numpy as np
 import pandas as pd
 import pytest
 
 import breos
-from breos.montecarlo import MonteCarloSettings, run_montecarlo
+from breos import cli
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-
-
-def _weather_frame(index: pd.DatetimeIndex) -> pd.DataFrame:
-    hour = index.hour.to_numpy()
-    daylight = np.clip(np.sin((hour - 6) / 12 * np.pi), 0, None)
-    ghi = 700.0 * daylight
-    return pd.DataFrame(
-        {
-            "temperature_2m": 15.0 + 8.0 * daylight,
-            "wind_speed_10m": 2.0,
-            "shortwave_radiation": ghi,
-            "direct_normal_irradiance": 0.8 * ghi,
-            "diffuse_radiation": 0.2 * ghi,
-        },
-        index=index,
-    )
-
-
-def _write_multiyear_weather(path: Path, years=(2021,)) -> Path:
-    frames = []
-    for year in years:
-        idx = pd.date_range(f"{year}-01-01", f"{year}-12-31 23:00", freq="h")
-        weather = _weather_frame(idx)
-        weather.insert(0, "date", idx)
-        frames.append(weather)
-    pd.concat(frames, ignore_index=True).to_csv(path, index=False)
-    return path
 
 
 def test_readme_quickstart_smoke(_patch_weather):
@@ -57,47 +32,68 @@ def test_readme_quickstart_smoke(_patch_weather):
 
     assert result["grid_independence_pct"] > 0
     assert result["payback_year"] is None or result["payback_year"] >= 1
-    assert "npv_savings_eur" in result
-    assert result["co2_avoided_total_kg"] > 0
+    assert "npv_savings" in result
+    assert result["co2_avoided_total_lifetime_kg"] > 0
 
 
-def test_montecarlo_example_config_smoke(tmp_path):
-    with (REPO_ROOT / "configs" / "examples" / "montecarlo.toml").open("rb") as f:
-        config = tomllib.load(f)
+def test_montecarlo_example_config_smoke(tmp_path, write_multiyear_weather):
+    """The documented ``breos montecarlo --config`` run reads the example's [montecarlo] table.
 
-    weather_file = _write_multiyear_weather(tmp_path / "historical.csv")
-    config["projection_years"] = 1
-    config["montecarlo"]["weather_file"] = str(weather_file)
-    config["montecarlo"]["n_runs"] = 1
-    config["montecarlo"]["years_per_run"] = 1
+    Flags replace the file's run count and horizon, and the weather file its
+    missing one; every other setting must come from the example.
+    """
+    config_path = tmp_path / "montecarlo.toml"
+    shutil.copy(REPO_ROOT / "configs" / "examples" / "montecarlo.toml", config_path)
+    with config_path.open("rb") as f:
+        section = tomllib.load(f)["montecarlo"]
+    weather_file = write_multiyear_weather(tmp_path / "historical.csv", years=(2021,))
+    output = tmp_path / "runs.csv"
 
-    settings = MonteCarloSettings(
-        weather_file=str(weather_file),
-        n_runs=1,
-        years_per_run=1,
-        seed=42,
+    code = cli.main(
+        [
+            "montecarlo",
+            "--config",
+            str(config_path),
+            "--weather-file",
+            str(weather_file),
+            "--runs",
+            "1",
+            "--years",
+            "1",
+            "--output",
+            str(output),
+        ]
     )
 
-    result = run_montecarlo(config, settings)
+    assert code == 0
+    runs = pd.read_csv(output)
+    assert runs["run"].tolist() == [1]
+    assert runs["npv_savings"].notna().all()
+    provenance = json.loads(output.with_name("runs.provenance.json").read_text())
+    settings = provenance["settings"]
+    assert settings["n_runs"] == 1
+    assert settings["years_per_run"] == 1
+    assert settings["weather_file"] == str(weather_file)
+    for key in ("load_uncertainty", "load_distribution", "target_year", "seed", "collect_yearly", "n_procs"):
+        assert settings[key] == section[key], key
+    assert provenance["available_weather_years"] == [2021]
+    assert provenance["resolved_config"]["pv_module"] == "Suntech_STP550S_STC"
+    assert provenance["weather_file_sha256"] == hashlib.sha256(weather_file.read_bytes()).hexdigest()
 
-    assert len(result.runs) == 1
-    assert result.available_years == [2021]
-    assert "npv_savings_eur" in result.summary
 
-
-def test_multi_objective_optimization_smoke():
+def test_multi_objective_optimization_smoke(open_meteo_weather):
     pytest.importorskip("pymoo")
 
     from breos.optimization import optimize_system_multi_objective
 
     idx = pd.date_range("2025-01-01 00:00", periods=24, freq="h", tz="UTC")
-    tmy_data = _weather_frame(idx)
+    tmy_data = open_meteo_weather(idx)
     houseload = pd.DataFrame({"Load": [500.0] * len(idx)}, index=idx)
     config = {
         "location": {"latitude": 41.15, "longitude": -8.61, "timezone": "UTC"},
         "simulation": {"resolution": "h"},
         "constraints": {
-            "budget_eur": 100000.0,
+            "budget": 100000.0,
             "max_area_m2": 100.0,
             "max_modules": 4,
             "max_battery_kwh": 2.0,
@@ -119,4 +115,4 @@ def test_multi_objective_optimization_smoke():
 
     pareto = result.details["pareto"]
     assert not pareto.empty
-    assert {"Modules", "Battery_kWh", "Grid_Independence_%", "NPV_Eur", "ZEB_Ratio"}.issubset(pareto.columns)
+    assert {"Modules", "Battery_kWh", "Grid_Independence_%", "NPV", "ZEB_Ratio"}.issubset(pareto.columns)

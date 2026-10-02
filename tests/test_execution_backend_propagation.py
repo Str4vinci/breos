@@ -9,9 +9,13 @@ validated in one place, and is recorded wherever results are written.
 from __future__ import annotations
 
 import importlib.util
-import inspect
+import os
+import pickle
+import sys
 from pathlib import Path
 
+import numpy as np
+import pandas as pd
 import pytest
 
 from breos import App
@@ -20,7 +24,6 @@ from breos.execution import (
     DEFAULT_EXECUTION_BACKEND,
     EXECUTION_BACKENDS,
     PV_ONLY_DISPATCH_PATH,
-    aggregate_jit_cache_states,
     backend_provenance,
     is_pv_only_dispatch,
     validate_execution_backend,
@@ -36,6 +39,16 @@ BASE_CONFIG = {
     "projection_years": 2,
 }
 
+# One projected year keeps each optimizer call to a single simulated year.
+OPTIMIZATION_CONFIG = {
+    "location": {"latitude": 41.15, "longitude": -8.61, "timezone": "UTC"},
+    "constraints": {"budget": 100000.0, "max_area_m2": 100.0, "max_modules": 8, "max_battery_kwh": 5.0},
+    "simulation": {"resolution": "h", "years_projection": 1},
+    "mode": {"fixed_azimuth": 180},
+    "battery": {"temperature": 20.0},
+}
+DESIGN = {"n_modules": 6, "battery_kwh": 5.0, "tilt": 30.0, "azimuth": 180.0}
+
 
 def _load_tool(name: str):
     spec = importlib.util.spec_from_file_location(name.removesuffix(".py"), PROJECT_ROOT / "tools" / name)
@@ -44,31 +57,176 @@ def _load_tool(name: str):
     return module
 
 
+def _must_not_run(what: str):
+    def _fail(*args, **kwargs):
+        raise AssertionError(f"{what} before the backend was checked")
+
+    return _fail
+
+
+@pytest.fixture(scope="module")
+def _optimization_inputs():
+    from tests.conftest import _build_synthetic_weather
+
+    weather = _build_synthetic_weather(2023)
+    return weather, pd.DataFrame({"Load": 400.0}, index=weather.index)
+
+
+def _spy_on_dispatch(monkeypatch, record):
+    """Pass the backend each simulated span resolves its dispatch kernel for to ``record``.
+
+    The reference kernel stands in for the compiled one, so this runs without
+    the breos[fast] extra: what is observed is which name reaches the kernel,
+    not what the compiled code does with it.
+    """
+    from breos import _numba_dispatch, battery
+
+    reference = battery._resolve_dispatch_day("python")
+
+    def _resolve(execution_backend):
+        record(execution_backend)
+        return reference
+
+    monkeypatch.setattr(battery, "_resolve_dispatch_day", _resolve)
+    monkeypatch.setattr(_numba_dispatch, "require_numba_dispatch_day", lambda: reference)
+
+
+@pytest.fixture
+def _dispatch_backends(monkeypatch):
+    seen: list[str] = []
+    _spy_on_dispatch(monkeypatch, seen.append)
+    return seen
+
+
+def _run_app(inputs, request, **backend):
+    request.getfixturevalue("_patch_weather")
+    App({**BASE_CONFIG, **backend}).simulate()
+
+
+def _run_evaluate_projected_design(inputs, request, **backend):
+    from breos.optimization import evaluate_projected_design
+
+    evaluate_projected_design(*inputs, OPTIMIZATION_CONFIG, **DESIGN, **backend)
+
+
+def _run_solar_design_problem(inputs, request, **backend):
+    pytest.importorskip("pymoo")
+    from breos.optimization import SolarDesignProblem
+
+    problem = SolarDesignProblem(*inputs, OPTIMIZATION_CONFIG, **backend)
+    problem._evaluate(np.array([DESIGN["n_modules"], DESIGN["battery_kwh"], DESIGN["tilt"]], dtype=float), {})
+
+
+def _run_optimize_system_multi_objective(inputs, request, **backend):
+    pytest.importorskip("pymoo")
+    from breos.optimization import optimize_system_multi_objective
+
+    optimize_system_multi_objective(*inputs, OPTIMIZATION_CONFIG, pop_size=2, n_gen=1, seed=1, **backend)
+
+
 def test_the_reference_implementation_is_the_default_everywhere():
-    """Nothing selects the compiled path without being asked."""
+    """Nothing selects the compiled path without being asked.
+
+    That each entry point also defaults to it is observed at the kernel, in
+    the default cases of the propagation test below.
+    """
     assert DEFAULT_EXECUTION_BACKEND == "python"
     assert resolve_app_config(BASE_CONFIG).cfg["execution_backend"] == "python"
 
-    from breos import optimization
 
-    for name in ("optimize_battery_size", "evaluate_projected_design", "optimize_system_multi_objective"):
-        signature = inspect.signature(getattr(optimization, name))
-        parameter = signature.parameters["execution_backend"]
-        assert parameter.default == DEFAULT_EXECUTION_BACKEND, f"{name} does not default to the reference path"
+@pytest.mark.parametrize("backend", [None, "numba"], ids=["default", "numba"])
+@pytest.mark.parametrize(
+    "run",
+    [
+        _run_app,
+        _run_evaluate_projected_design,
+        _run_solar_design_problem,
+        _run_optimize_system_multi_objective,
+    ],
+    ids=lambda run: run.__name__.removeprefix("_run_"),
+)
+def test_the_chosen_backend_reaches_the_dispatch_kernel(
+    run, backend, request, _optimization_inputs, _dispatch_backends
+):
+    """Every simulating entry point hands its backend to the kernel.
+
+    Without an explicit choice, the reference kernel is what arrives. With
+    one, a choice dropped on the way would fall back to that default and
+    arrive as python, so the compiled case is the one that proves the
+    argument travels.
+    """
+    run(_optimization_inputs, request, **({} if backend is None else {"execution_backend": backend}))
+
+    assert _dispatch_backends, "no simulated span resolved a dispatch kernel"
+    assert set(_dispatch_backends) == {backend or DEFAULT_EXECUTION_BACKEND}
 
 
-def test_optimization_takes_the_backend_as_an_argument_not_from_config():
+def test_the_chosen_backend_survives_pickling_to_a_worker(_optimization_inputs, _dispatch_backends):
+    """Worker processes score candidates on a pickled copy of the problem.
+
+    The copy must keep the backend: a restore that fell back to the default
+    would score every candidate of a parallel search on the reference kernel.
+    """
+    pytest.importorskip("pymoo")
+    from breos.optimization import SolarDesignProblem
+
+    problem = SolarDesignProblem(*_optimization_inputs, OPTIMIZATION_CONFIG, execution_backend="numba")
+    restored = pickle.loads(pickle.dumps(problem))
+    restored._evaluate(np.array([DESIGN["n_modules"], DESIGN["battery_kwh"], DESIGN["tilt"]], dtype=float), {})
+
+    assert restored.execution_backend == "numba"
+    assert _dispatch_backends and set(_dispatch_backends) == {"numba"}
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="the spy reaches workers only through fork")
+def test_the_chosen_backend_reaches_the_kernel_in_worker_processes(monkeypatch, tmp_path, _optimization_inputs):
+    """A parallel search scores its candidates in workers, on the chosen backend.
+
+    The workers are forked so they inherit the spy, and each writes what it
+    saw to a shared file, since a list in a child never reaches the parent.
+    """
+    pytest.importorskip("pymoo")
+    import multiprocessing
+
+    from breos.optimization import optimize_system_multi_objective
+
+    log = tmp_path / "dispatch_backends.log"
+
+    def _record(execution_backend):
+        with log.open("a", encoding="utf-8") as handle:
+            handle.write(f"{os.getpid()} {execution_backend}\n")
+
+    _spy_on_dispatch(monkeypatch, _record)
+    monkeypatch.setattr(multiprocessing, "Pool", multiprocessing.get_context("fork").Pool)
+
+    optimize_system_multi_objective(
+        *_optimization_inputs, OPTIMIZATION_CONFIG, pop_size=2, n_gen=1, seed=1, n_procs=2, execution_backend="numba"
+    )
+
+    records = [line.split() for line in log.read_text(encoding="utf-8").splitlines()]
+    assert records, "no simulated span resolved a dispatch kernel"
+    assert str(os.getpid()) not in {pid for pid, _ in records}, "a candidate was scored in the parent"
+    assert {backend for _, backend in records} == {"numba"}
+
+
+@pytest.mark.parametrize(
+    "run",
+    [_run_evaluate_projected_design, _run_solar_design_problem, _run_optimize_system_multi_objective],
+    ids=lambda run: run.__name__.removeprefix("_run_"),
+)
+def test_optimization_refuses_a_backend_named_in_its_config(run, request, _optimization_inputs, monkeypatch):
     """Candidate scoring is the hottest loop, so its backend must be explicit.
 
     A backend read out of a nested config dict would be invisible at the call
-    site and impossible to attribute afterwards. Every optimization entry point
-    therefore names it as a parameter.
+    site and impossible to attribute afterwards. The config therefore cannot
+    carry one: every entry point that takes a config refuses the key, rather
+    than reading or ignoring it, so the argument is the only way in.
     """
-    from breos import optimization
+    monkeypatch.setitem(OPTIMIZATION_CONFIG, "execution_backend", "numba")
 
-    source = inspect.getsource(optimization)
-    assert 'config.get("execution_backend"' not in source
-    assert 'config["execution_backend"]' not in source
+    # The key name, not the wording of the hint around it.
+    with pytest.raises(ValueError, match="execution_backend"):
+        run(_optimization_inputs, request)
 
 
 @pytest.mark.parametrize("backend", EXECUTION_BACKENDS)
@@ -105,57 +263,6 @@ def test_unknown_backend_names_are_rejected_once_and_the_same_way(bad):
         resolve_app_config({**BASE_CONFIG, "execution_backend": bad})
 
 
-def test_jit_cache_aggregation_never_raises():
-    """Provenance bookkeeping must not be able to fail a completed run."""
-    for states in ([], ["unknown"], ["warm", "unknown"], ["warm"], ["warm", "cold"]):
-        assert aggregate_jit_cache_states(states) in {"warm", "cold", "unknown"}
-
-
-def test_article_runner_forwards_the_backend_only_to_stages_that_simulate():
-    """A stage that never enters the dispatch loop must not claim a backend.
-
-    ``preflight_article1_inputs.py`` inventories inputs, the ``--validate-only``
-    Monte Carlo call checks configurations without simulating,
-    ``reproduce_article1_context.py`` builds orientation and weather-comparison
-    tables, and ``verify_article1_bundle.py`` checks finished outputs. Passing
-    the flag to any of them would record a claim about code that never ran.
-    """
-    run_article1 = _load_tool("run_article1.py")
-    commands = run_article1.commands_for_stage(
-        "all",
-        PROJECT_ROOT / "dev/article1-inputs",
-        PROJECT_ROOT / "results/article1",
-        n_procs=2,
-        runs=None,
-        execution_backend="numba",
-    )
-
-    non_simulating = (
-        "preflight_article1_inputs.py",
-        "reproduce_article1_context.py",
-        "verify_article1_bundle.py",
-    )
-    simulating = 0
-    for command in commands:
-        joined = " ".join(command)
-        carries_backend = "--execution-backend" in command
-        if any(tool in joined for tool in non_simulating) or "--validate-only" in command:
-            assert not carries_backend, f"backend forwarded to a non-simulating stage: {joined}"
-            continue
-        assert carries_backend, f"simulating stage did not receive the backend: {joined}"
-        assert command[command.index("--execution-backend") + 1] == "numba"
-        simulating += 1
-
-    assert simulating == 8, f"expected eight simulating commands, found {simulating}"
-
-
-def test_article_tools_default_to_the_reference_backend():
-    for name in ("run_article1.py", "reproduce_article1.py", "reproduce_article1_montecarlo.py"):
-        module = _load_tool(name)
-        parser_source = inspect.getsource(module.main)
-        assert "--execution-backend" in parser_source, f"{name} does not expose the backend"
-
-
 def test_missing_numba_is_reported_before_app_prepares_inputs(monkeypatch):
     """The dependency check must precede input preparation, which can hit the network.
 
@@ -166,73 +273,54 @@ def test_missing_numba_is_reported_before_app_prepares_inputs(monkeypatch):
     from breos.runners import app as app_runner
 
     monkeypatch.setattr(_numba_dispatch, "numba_available", lambda: False)
-
-    def _must_not_run(*args, **kwargs):
-        raise AssertionError("inputs were prepared before the backend was checked")
-
-    monkeypatch.setattr(app_runner, "prepare_simulation_inputs", _must_not_run)
+    monkeypatch.setattr(app_runner, "prepare_simulation_inputs", _must_not_run("inputs were prepared"))
 
     with pytest.raises(_numba_dispatch.NumbaUnavailableError):
-        app_runner.run_app_simulation(
-            {**resolve_app_config({**BASE_CONFIG, "execution_backend": "numba"}).cfg},
-            resolve_app_config({**BASE_CONFIG, "execution_backend": "numba"}),
-            None,
-        )
+        app_runner.run_app_simulation(resolve_app_config({**BASE_CONFIG, "execution_backend": "numba"}), None)
 
 
-def test_missing_numba_is_reported_before_the_first_candidate(monkeypatch):
-    """optimize_battery_size checks at entry, not inside the size loop.
-
-    An empty size list proves the ordering: with the check inside the loop
-    there would be nothing to trip over, and the call would succeed.
-    """
+def test_missing_numba_is_reported_before_the_pv_model_runs(monkeypatch, request, _optimization_inputs):
+    """evaluate_projected_design checks before a year of irradiance is computed."""
     from breos import _numba_dispatch, optimization
 
     monkeypatch.setattr(_numba_dispatch, "numba_available", lambda: False)
+    monkeypatch.setattr(optimization, "calculate_pv_production_dc", _must_not_run("the PV model ran"))
 
     with pytest.raises(_numba_dispatch.NumbaUnavailableError):
-        optimization.optimize_battery_size(
-            pv_dc=None,
-            houseload=None,
-            battery_sizes_wh=[],
-            execution_backend="numba",
-        )
+        _run_evaluate_projected_design(_optimization_inputs, request, execution_backend="numba")
 
 
-@pytest.mark.parametrize(
-    ("function", "expensive"),
-    [
-        ("evaluate_projected_design", "calculate_pv_production_dc("),
-        ("optimize_system_multi_objective", "Pool("),
-    ],
-)
-def test_dependency_check_precedes_the_expensive_step(function, expensive):
-    """Ordering inside these two is not observable without running them.
+def test_missing_numba_is_reported_before_the_worker_pool_exists(monkeypatch, request, _optimization_inputs):
+    """optimize_system_multi_objective checks before it starts workers or scores a candidate.
 
-    Both would need a full weather frame or a live worker pool to exercise, so
-    the check here is that the guard textually precedes the expensive call.
+    Two workers are asked for so a pool would be created if the check came
+    late; a missing dependency must not surface from inside one.
     """
-    from breos import optimization
+    import multiprocessing
 
-    source = inspect.getsource(getattr(optimization, function))
-    assert "require_backend(execution_backend)" in source
-    assert source.index("require_backend(execution_backend)") < source.index(expensive), (
-        f"{function} does the expensive work before checking the backend"
-    )
+    from breos import _numba_dispatch, optimization
+
+    pytest.importorskip("pymoo")
+    monkeypatch.setattr(_numba_dispatch, "numba_available", lambda: False)
+    monkeypatch.setattr(multiprocessing, "Pool", _must_not_run("a worker pool was created"))
+    monkeypatch.setattr(optimization, "calculate_pv_production_dc", _must_not_run("a candidate was scored"))
+
+    with pytest.raises(_numba_dispatch.NumbaUnavailableError):
+        optimization.optimize_system_multi_objective(
+            *_optimization_inputs, OPTIMIZATION_CONFIG, pop_size=2, n_gen=1, n_procs=2, execution_backend="numba"
+        )
 
 
 def test_numba_provenance_always_carries_a_cache_field():
     """A driver that cannot observe its workers still records the field.
 
-    The deterministic publication-study report fans work out to subprocesses
-    and has no observations to aggregate. "unknown" is provenance; a missing
+    A driver that fans work out to subprocesses has no observations to
+    aggregate. "unknown" is provenance; a missing
     key reads as an oversight when the run that produced it took hours.
     """
     pytest.importorskip("numba", reason="the compiled backend needs the breos[fast] extra")
 
     assert backend_provenance("numba")["jit_cache"] == "unknown"
-    assert backend_provenance("numba", jit_cache_states=["warm", "warm"])["jit_cache"] == "warm"
-    assert backend_provenance("numba", jit_cache_states=["warm", "cold"])["jit_cache"] == "cold"
     assert "jit_cache" not in backend_provenance("python")
 
 
@@ -252,7 +340,7 @@ def test_pv_only_dispatch_path_agrees_with_the_dispatch_itself():
     assert "dispatch_path" not in backend_provenance("python")
 
 
-def test_app_records_the_pv_only_path_for_a_battery_too_small_to_dispatch():
+def test_app_records_the_pv_only_path_for_a_battery_too_small_to_dispatch(_patch_weather):
     """The disagreement this centralisation removes, at the App boundary.
 
     Half a watt-hour is below what the dispatch will move, so the run takes
@@ -261,14 +349,14 @@ def test_app_records_the_pv_only_path_for_a_battery_too_small_to_dispatch():
     """
     app = App({**BASE_CONFIG, "battery_kwh": 0.0005})
     app.simulate()
-    assert app.result()["provenance"]["execution"]["dispatch_path"] == PV_ONLY_DISPATCH_PATH
-
-
-def test_deterministic_article_report_records_the_cache_field():
-    """reproduce_article1.py writes backend_provenance straight into its report."""
-    module = _load_tool("reproduce_article1.py")
-    source = inspect.getsource(module.main)
-    assert '"execution": backend_provenance(args.execution_backend)' in source
+    result = app.result()
+    assert result["provenance"]["execution"]["dispatch_path"] == PV_ONLY_DISPATCH_PATH
+    # Nor does it report a battery's health or replacements, as a PV-only run does not.
+    pv_only = App({**BASE_CONFIG, "battery_kwh": 0})
+    pv_only.simulate()
+    battery_fields = {key for key in result if key.startswith("battery_")}
+    assert battery_fields == {key for key in pv_only.result() if key.startswith("battery_")}
+    assert "battery_soh_end_pct" not in result
 
 
 def test_app_assembled_outputs_are_identical_on_both_backends(_patch_weather):

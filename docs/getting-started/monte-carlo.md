@@ -12,15 +12,38 @@ independence, LCOE, and final state of health.
 ## You have to supply the weather
 
 BREOS ships no weather data, and Monte Carlo needs a multi-year historical CSV
-rather than a single TMY. Download one for your site, put it in a local
-`weather/` directory, and point `[montecarlo].weather_file` at it. The
-`weather/` directory is git-ignored by convention.
-
-Fetch historical data with the `weather` extra:
+rather than a single TMY. The file needs a `date` column plus the irradiance
+and temperature fields the PV model uses; a PVGIS TMY file is not accepted. A gzip-compressed
+`.csv.gz` file works as well.
+Fetch one from Open-Meteo with {py:func}`~breos.weather.fetch_weather_data`,
+which needs the `weather` extra and saves
+`weather/<location>_historical_<start>_<end>_openmeteo.csv` with its metadata
+sidecar:
 
 ```bash
 pip install "breos[weather]"
 ```
+
+```python
+from breos.weather import fetch_weather_data
+
+fetch_weather_data(
+    latitude=41.1579,
+    longitude=-8.6291,
+    start_date="2005-01-01",
+    end_date="2024-12-31",
+    tilt=35,
+    azimuth=0,
+    location_name="porto",
+)
+```
+
+Then point `[montecarlo].weather_file` at the saved file. Keep weather files
+out of version control; check the provider's terms before sharing them.
+
+To see how the TMY that `breos run` uses compares with those years, pass
+both to {py:func}`~breos.plotting.plot_weather_monthly_comparison` or
+{py:func}`~breos.plotting.plot_weather_annual_ghi_distribution`.
 
 ## Configure a study
 
@@ -55,6 +78,15 @@ draw from `1 - load_uncertainty` to `1 + load_uncertainty` instead.
 `weather_start_year` and `weather_end_year` restrict which years are eligible
 for sampling when your file covers more history than you want to use.
 
+`target_year` is the study's calendar year. Every sampled weather year is
+restamped to it, and the demand profile and any tariff follow its calendar.
+The bundled H0 profile therefore puts its weekday, Saturday and Sunday shapes
+on that year's days, as an App run with `start_date` on 1 January of that year
+does. Monte Carlo does not use `start_date` for the load or weather; the
+provenance records the load's year as `load_profile.calendar_year`. Weather
+years are read without 29 February, so for a leap `target_year` each one
+gets a copy of its 28 February, as the App gives a TMY.
+
 A runnable version ships as
 [`configs/examples/montecarlo.toml`](https://github.com/Str4vinci/breos/blob/main/configs/examples/montecarlo.toml).
 
@@ -68,28 +100,53 @@ Common settings have command-line overrides. For example, `--runs`, `--seed`,
 `--years`, `--n-procs`, and `--weather-file` work without editing the file.
 Start with `--runs 10` to check that the config resolves, then raise it.
 
-`--n-procs` runs trajectories in parallel processes and is the setting that
-matters most for wall-clock time.
+`--n-procs` runs trajectories in parallel processes. On Linux this usually
+cuts wall-clock time; on macOS and Windows the start-up cost of each process
+can outweigh it.
 
 ## What you get back
 
-`monte_carlo_results.csv` holds one row per run. Alongside it, BREOS writes a
-provenance JSON recording the resolved settings and hashes of the inputs and
-outputs, which is what makes a published result auditable later.
+`monte_carlo_results.csv` holds one row per run. Alongside it, BREOS writes
+`monte_carlo_results.provenance.json`, recording the resolved settings and
+hashes of the inputs and outputs, which is what makes a published result
+auditable later. Both names follow the `--output` path unless
+`--provenance-output` sets another. The provenance and the
+`--json` output carry `result_schema_version` and `currency`, the currency of
+every money column (see
+[Interpreting results](interpreting-results.md#currency-and-result-format)).
 
-`--collect-yearly` adds a second CSV with one row per run and projection year,
-carrying the energy, degradation, and discounted-cost ledger. Cost envelopes and
-fan charts need it, and it is off by default because it is much larger.
+`--collect-yearly` adds `monte_carlo_results_yearly.csv`, with one row per run
+and projection year, carrying the energy, degradation, and discounted-cost
+ledger. Use it for your own cost-envelope or fan-chart analysis; it is off by
+default because it is much larger.
 
 `--plots` writes payback, NPV, grid-independence, final-SoH, and LCOE
-distributions into `plots/`. `--json` prints a machine-readable summary to
-stdout for scripting.
+distributions into a `plots/` directory next to the results CSV. `--json`
+prints a machine-readable summary to stdout for scripting.
+
+Each summary entry gives `count`, the number of runs its statistics cover, out
+of `n_runs`. `payback_year` and `payback_year_interpolated` are the sustained
+discounted payback within the simulated period, as a whole and as an
+interpolated fractional year: the time from which cumulative discounted savings
+stay zero or above to the horizon (see
+[Interpreting results](interpreting-results.md)). A run that never pays back
+within the horizon has no payback year, so the payback statistics cover only
+the runs that paid back.
+`payback_probability` gives the share of runs that did. Read the two together:
+a payback median of 9.8 years means little if only 60% of runs pay back.
+The provenance file and the `--json` output are standard JSON, so a statistic
+with no defined value is written as `null`, never as `NaN` or `Infinity`.
 
 ## Fix the seed
 
 Set `seed` and keep it with the results. Without it, each study draws fresh
 randomness and the numbers move between runs, which makes a figure impossible to
 reproduce. The seed is recorded in the provenance JSON.
+
+Each run draws from its own stream, spawned from the seed with NumPy's
+`SeedSequence`. Studies under different seeds, even adjacent ones such as 42
+and 43, share no trajectory, so they can be compared or pooled as independent
+samples. The results do not depend on `n_procs`.
 
 ## The optional Numba backend
 
@@ -108,19 +165,80 @@ execution_backend = "numba"
 Installing the extra changes nothing on its own. Without
 `execution_backend = "numba"`, Monte Carlo uses the Python path.
 
-The kernel carries the production BREOS dispatch and its energy ledger. Rainflow
+The kernel is the production BREOS dispatch and its energy ledger, compiled
+from the same functions the Python path runs rather than from a copy. Rainflow
 counting, degradation, resistance growth, and replacement stay in Python, so the
-backend accelerates one stage rather than the whole model. It is private, with
-no public API, and configuration is the only supported way to select it.
+backend accelerates one stage rather than the whole model. It has no public
+API of its own: select it with `execution_backend`, as a config key, with
+`--execution-backend`, or with `MonteCarloSettings(execution_backend=...)`.
 
 BREOS works fully without Numba. The Python path stays the default and remains
 the numerical reference that the backend is checked against. The same compiled
 dispatch backend is also available to `breos.App` and multi-objective
 optimization through their `execution_backend` option.
 
+## Sweep designs over one weather file
+
+Before its first trajectory, a study reads the weather file, resamples it, and
+computes each weather year's PV production and battery temperature. That setup
+does not depend on the number of runs, so with the Numba backend it is often
+most of a small study's time. A sweep over designs repeats it for every design.
+
+From Python, build the setup once with `build_year_cache` and pass it to each
+study as `year_cache`:
+
+```python
+from breos.montecarlo import MonteCarloSettings, build_year_cache, run_montecarlo
+
+config = {  # an App config, as in the TOML above
+    "location": "porto",
+    "n_modules": 10,
+    "annual_consumption_kwh": 4000,
+    "cost_preset": "residential_pt",
+}
+settings = MonteCarloSettings(
+    weather_file="weather/porto_historical_2005_2024_openmeteo.csv", n_runs=100, seed=42
+)
+cache = build_year_cache(config, settings)
+results = {
+    kwh: run_montecarlo({**config, "battery_kwh": kwh}, settings, year_cache=cache)
+    for kwh in (2.5, 5.0, 7.5, 10.0)
+}
+```
+
+The results are the same, bit for bit, as studies run without the cache. The
+cache has two layers:
+
+- The weather layer is reused only for the same weather file (its absolute
+  path, its contents and those of its `.metadata.json` sidecar), year window,
+  `target_year`, resolution, location, `irradiance_resampling`, and
+  solar-position method. A study with other weather inputs raises
+  `ValueError`.
+- The PV layer is reused when the config differs only in keys that do not
+  reach PV production or battery temperature: battery sizing and dispatch,
+  inverter, degradation, cost, tariff, emissions, and demand settings
+  (`breos.montecarlo.YEAR_CACHE_INDEPENDENT_KEYS`). Any other change, such as
+  `n_modules`, `tilt`, `battery_temperature`, `battery_indoor_model`, or new
+  contents in a `battery_temperature` CSV, rebuilds the PV layer from the
+  cached weather and replaces the old one. Run designs grouped by PV
+  configuration to get the most reuse.
+
+A study may replace the PV layer, so do not share one cache between threads
+running studies at the same time.
+
+## Limits
+
+Monte Carlo rejects `[period]`, `degradation_engine = "blast"`,
+`horizon_profile` and the experimental `daily_persistence` smart charging,
+each with a `ValueError` before any trajectory runs. `[tariff]`,
+`[reference_tariff]`, `[smart_charging]` with the other modes, and
+`[terminal_value]` work as in App.
+
 ## Related pages
 
-- [Recipes](recipes.md) for the single-run scenario keys.
+- [How-to guides](../how-to/index.md) for the single-run scenario keys, and the
+  {doc}`Monte Carlo case example <../gallery/uncertainty/plot_13_montecarlo>`.
 - [Interpreting results](interpreting-results.md) for what each metric means.
 - [Optimization](optimization.md) for searching designs rather than sampling
   uncertainty.
+- [Monte Carlo API](../api/montecarlo.md) for the Python signatures.

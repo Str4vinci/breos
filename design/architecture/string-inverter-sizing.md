@@ -1,8 +1,12 @@
 # String Inverter Sizing Design Note
 
+**Status:** Proposed. Only Phase 1, aggregate inverter clipping, is
+implemented.
+
 BREOS currently simulates PV production at the array level: a system has a
 module count, module model, tilt, azimuth, optional tracking, and an inverter
-loading ratio. That is enough for fast techno-economic simulation, but it does
+AC rating, set by `inverter_loading_ratio` or `inverter_ac_rating_kw`. That is
+enough for fast techno-economic simulation, but it does
 not prove that a design is electrically buildable.
 
 This note scopes future string-inverter support for the BREOS engine. The goal
@@ -32,15 +36,11 @@ and datasheet inputs exist.
 
 ## Proposed Scope
 
-### Phase 1: Aggregate Inverter Clipping
+### Phase 1: Aggregate Inverter Clipping (shipped in 0.3.0)
 
-Apply inverter AC power limits consistently in the main simulation path.
-BREOS already has a `dc_to_ac()` helper that applies a PVWatts inverter model,
-but `App.simulate()` currently passes array DC production into the energy
-balance, where inverter efficiency is applied without an AC clipping limit.
-
-This is the highest-priority accuracy improvement because it affects normal
-simulations even when no explicit string topology is available.
+`App.simulate()` applies the inverter AC power limit in the energy pipeline,
+so aggregate clipping no longer depends on string topology. The phases below
+remain proposals.
 
 ### Phase 2: Electrical Feasibility Validation
 
@@ -136,7 +136,8 @@ Needed catalog fields:
 
 ## Recommended Order
 
-1. Add aggregate inverter AC clipping to the main `App` energy flow.
+1. Add aggregate inverter AC clipping to the main `App` energy flow (done
+   in 0.3.0).
 2. Add a pure validation API for string length, voltage, current, startup, and
    DC/AC ratio checks.
 3. Extend PV module and inverter data models/catalogs with required datasheet

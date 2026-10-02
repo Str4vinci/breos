@@ -53,7 +53,7 @@ result = app.result()
 
 print(f"Grid independence: {result['grid_independence_pct']:.1f}%")
 print(f"Payback: {result['payback_year']} years")
-print(f"NPV savings: {result['npv_savings_eur']:,.0f} EUR")
+print(f"NPV savings: {result['npv_savings']:,.0f} EUR")
 ```
 
 `result` is a plain JSON-serializable dict — no pandas types leak out.
@@ -97,15 +97,22 @@ Read the energy, financial, emissions, degradation, and provenance fields.
 
 ## Browse the documentation
 
-::::{grid} 1 2 2 3
+::::{grid} 1 2 2 4
 :gutter: 3
 
-:::{grid-item-card} Guides and recipes
+:::{grid-item-card} Guides
 :link: getting-started/index
 :link-type: doc
 
 Task-oriented guides for common systems, inputs, configuration, and
 troubleshooting.
+:::
+
+:::{grid-item-card} Case examples
+:link: gallery/index
+:link-type: doc
+
+Question-led reports of stored runs, with their configurations and figures.
 :::
 
 :::{grid-item-card} Models and assumptions
@@ -148,10 +155,12 @@ getting-started/installation
 getting-started/quickstart
 getting-started/troubleshooting
 getting-started/inputs
-getting-started/recipes
+gallery/index
+how-to/index
 getting-started/optimization
 getting-started/monte-carlo
 getting-started/configuration
+getting-started/config-reference
 getting-started/options
 getting-started/interpreting-results
 ```
@@ -161,6 +170,7 @@ getting-started/interpreting-results
 :caption: Models and data
 
 modeling/index
+modeling/validation
 resources
 legal/load-profile-data
 ```

@@ -1,7 +1,6 @@
 {
     "residential_de": {
         "electricity_cost": 0.4042,
-        "electricity_cost_excl_vat": 0.2772,
         "electricity_sold_cost": 0.079,
         "module_cost_per_w": 0.25,
         "inverter_cost_per_kw_hybrid": 102.58,
@@ -17,7 +16,6 @@
     },
     "residential_es": {
         "electricity_cost": 0.2841,
-        "electricity_cost_excl_vat": 0.1967,
         "electricity_sold_cost": 0.08,
         "module_cost_per_w": 0.2,
         "inverter_cost_per_kw_hybrid": 102.58,
@@ -33,7 +31,6 @@
     },
     "residential_pt": {
         "electricity_cost": 0.2582,
-        "electricity_cost_excl_vat": 0.1695,
         "electricity_sold_cost": 0.04,
         "module_cost_per_w": 0.125,
         "inverter_cost_per_kw_hybrid": 102.58,

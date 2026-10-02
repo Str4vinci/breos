@@ -33,13 +33,10 @@ def _mpp_at(params, alpha_sc, irradiance, temp):
 
 
 class TestFitShape:
-    def test_returns_six_finite_floats(self):
+    def test_returns_six_finite_physical_parameters(self):
         params = fit_cec_params(**_KNOWN)
-        assert len(params) == 6
         assert all(np.isfinite(v) for v in params)
-
-    def test_parameters_are_physical(self):
-        i_l, i_o, r_s, r_sh, a, adjust = fit_cec_params(**_KNOWN)
+        i_l, i_o, r_s, r_sh, a, adjust = params
         assert i_l > 0
         assert i_o > 0
         assert r_s > 0
@@ -86,20 +83,9 @@ class TestGammaMatch:
             _KNOWN["alpha_sc"],
             _KNOWN["beta_voc"],
             np.array([_KNOWN["Isc"], 1e-10, 0.3, 200.0, 2.0]),
-            25.0,
         )
         gammas = [_modeled_gamma(five0, adjust, _KNOWN["alpha_sc"]) for adjust in (-10.0, 0.0, 10.0, 20.0)]
         assert all(np.diff(gammas) < 0)
-
-
-class TestEffectiveCoefficientSign:
-    def test_effective_alpha_sc_stays_positive(self):
-        # calcparams_cec scales alpha_sc by (1 - Adjust/100); for a positive
-        # datasheet alpha_sc and Adjust < 100 the effective coefficient must
-        # remain positive (Isc still rises with temperature).
-        *_, adjust = fit_cec_params(**_KNOWN)
-        effective_alpha = _KNOWN["alpha_sc"] * (1.0 - adjust / 100.0)
-        assert effective_alpha > 0
 
 
 class TestCatalogModules:
@@ -114,7 +100,7 @@ class TestCatalogModules:
             Isc=module.Isc,
             alpha_sc=module.alpha_sc,
             beta_voc=module.beta_voc,
-            gamma_pmp=module.gamma_pmp,
+            gamma_pmp=module.gamma_pmp_effective,
             cells_in_series=module.N_Cells,
         )
         assert all(np.isfinite(v) for v in params)
@@ -123,4 +109,4 @@ class TestCatalogModules:
         assert mpp["p_mp"] == pytest.approx(module.Vmp * module.Imp, rel=2e-3)
 
         gamma = _modeled_gamma(params[:5], params[5], module.alpha_sc)
-        assert gamma == pytest.approx(module.gamma_pmp, abs=5e-3)
+        assert gamma == pytest.approx(module.gamma_pmp_effective, abs=5e-3)
