@@ -1226,6 +1226,32 @@ def _build_multi_objective_termination(n_gen: int, early_stop: Any):
     )
 
 
+def _design_columns(problem: Any, x: np.ndarray) -> pd.DataFrame:
+    """The design columns of the Pareto table, one row per design vector.
+
+    ``Modules``, ``Battery_kWh``, ``Tilt``, ``Azimuth`` and ``Layout``. An
+    East-West row has the configured tilt and a NaN azimuth, since its two
+    arrays face 90 and 270.
+    """
+    fixed_azimuth = problem.fixed_azimuth
+    designs = pd.DataFrame(x[:, :2], columns=["Modules", "Battery_kWh"])
+    if problem.single_orientation_genes:
+        designs["Tilt"] = x[:, 2]
+        designs["Azimuth"] = fixed_azimuth if fixed_azimuth is not None else x[:, 3]
+    layouts = [problem.design_layout(row) for row in x]
+    designs["Layout"] = layouts
+    east_west = np.array([layout == "east_west" for layout in layouts], dtype=bool)
+    if east_west.any():
+        if "Tilt" not in designs:
+            designs["Tilt"] = np.nan
+            designs["Azimuth"] = np.nan
+        designs["Azimuth"] = designs["Azimuth"].astype(float)
+        designs.loc[east_west, "Tilt"] = problem.east_west_tilt_deg
+        designs.loc[east_west, "Azimuth"] = np.nan
+        designs = designs[["Modules", "Battery_kWh", "Tilt", "Azimuth", "Layout"]]
+    return designs
+
+
 def optimize_system_multi_objective(
     tmy_data: pd.DataFrame,
     houseload: pd.DataFrame,
@@ -1352,25 +1378,7 @@ def optimize_system_multi_objective(
 
     x = np.atleast_2d(result.X)
     f = np.atleast_2d(result.F)
-    fixed_azimuth = config["mode"]["fixed_azimuth"]
-    pareto = pd.DataFrame(x[:, :2], columns=["Modules", "Battery_kWh"])
-    if problem.single_orientation_genes:
-        pareto["Tilt"] = x[:, 2]
-        pareto["Azimuth"] = fixed_azimuth if fixed_azimuth is not None else x[:, 3]
-    layouts = [problem.design_layout(row) for row in x]
-    pareto["Layout"] = layouts
-    east_west = np.array([layout == "east_west" for layout in layouts], dtype=bool)
-    if east_west.any():
-        # An East-West design has the configured tilt and two azimuths,
-        # which its layout names.
-        if "Tilt" not in pareto:
-            pareto["Tilt"] = np.nan
-            pareto["Azimuth"] = np.nan
-        pareto["Azimuth"] = pareto["Azimuth"].astype(float)
-        pareto.loc[east_west, "Tilt"] = problem.east_west_tilt_deg
-        pareto.loc[east_west, "Azimuth"] = np.nan
-        pareto = pareto[["Modules", "Battery_kWh", "Tilt", "Azimuth", "Layout"]]
-
+    pareto = _design_columns(problem, x)
     pareto["Modules"] = pareto["Modules"].round().astype(int)
     pareto["Battery_kWh"] = pareto["Battery_kWh"].round().astype(float)
     pareto["Grid_Independence_%"] = (1 - f[:, 0]) * 100

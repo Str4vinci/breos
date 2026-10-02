@@ -247,23 +247,55 @@ def test_the_search_scores_an_east_west_gene_as_the_fixed_design(year_inputs):
     assert single["Projected_PV_DC_Year1_kWh"] != out["Projected_PV_DC_Year1_kWh"]
 
 
-def test_a_search_over_both_layouts_reports_the_layout_of_every_design(year_inputs):
-    pytest.importorskip("pymoo")
-    from breos.optimization import optimize_system_multi_objective
+def test_the_design_columns_name_each_designs_layout(year_inputs):
+    """A front holding both layouts reports each row's own tilt, azimuth and layout."""
+    from breos.optimization import _design_columns
 
+    problem = _problem(year_inputs, layouts=["single", "east_west"], fixed_azimuth=180)
+    x = np.array([[4.0, 1.0, 30.0, 0.0], [6.0, 2.0, 10.0, 1.0]])
+    designs = _design_columns(problem, x)
+    assert list(designs.columns) == ["Modules", "Battery_kWh", "Tilt", "Azimuth", "Layout"]
+    assert list(designs["Layout"]) == ["single", "east_west"]
+    assert list(designs["Tilt"]) == [30.0, 10.0]
+    assert designs["Azimuth"].iloc[0] == 180.0 and np.isnan(designs["Azimuth"].iloc[1])
+
+
+def test_a_search_over_both_layouts_scores_both_and_reports_the_layout(year_inputs, monkeypatch):
+    """The layout gene is searched, and every Pareto row decodes to the layout it was scored as.
+
+    Which layouts survive on the front depends on the stochastic search (and
+    on the dependency versions), so the test checks the designs scored, not
+    the front's mix.
+    """
+    pytest.importorskip("pymoo")
+    import breos.optimization as optimization
+
+    scored = []
+    layout_arrays = optimization._layout_arrays
+
+    def spy(layout, *args):
+        scored.append(layout)
+        return layout_arrays(layout, *args)
+
+    monkeypatch.setattr(optimization, "_layout_arrays", spy)
     weather, houseload = year_inputs
     config = _optimizer_config(layouts=["single", "east_west"])
     config["simulation"]["years_projection"] = 1
-    result = optimize_system_multi_objective(
+    result = optimization.optimize_system_multi_objective(
         weather, houseload, config, pop_size=12, n_gen=2, seed=3, execution_backend="python"
     )
+    assert set(scored) == {"single", "east_west"}
+
     pareto = result.details["pareto"]
+    problem = result.details["problem"]
     assert list(pareto.columns[:5]) == ["Modules", "Battery_kWh", "Tilt", "Azimuth", "Layout"]
+    assert list(pareto["Layout"]) == [
+        problem.design_layout(row) for row in np.atleast_2d(result.details["pymoo_result"].X)
+    ]
     assert set(pareto["Layout"]) <= {"single", "east_west"}
-    east_west = pareto[pareto["Layout"] == "east_west"]
-    assert not east_west.empty and (pareto["Layout"] == "single").any()
-    assert (east_west["Tilt"] == 10.0).all() and east_west["Azimuth"].isna().all()
-    assert pareto.loc[pareto["Layout"] == "single", "Azimuth"].notna().all()
+    east_west = pareto["Layout"] == "east_west"
+    assert (pareto.loc[east_west, "Tilt"] == 10.0).all() and pareto.loc[east_west, "Azimuth"].isna().all()
+    assert pareto.loc[~east_west, "Azimuth"].notna().all()
     assert result.details["provenance"]["mode"]["layouts"] == ["single", "east_west"]
 
 
