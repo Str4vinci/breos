@@ -52,6 +52,12 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   from the degradation model. The default 0 gives results bit-identical to
   0.7.0. `provenance.smart_charging` records the value, and the shared
   solver takes it as a `wear_cost_per_kwh` argument for its other callers.
+- `tools/oracles/daily_target_dp.py --wear-cost-per-kwh` gives the same
+  wear weight to every solve of the perfect-information daily targets, in
+  both planning modes, and `run_daily_target_oracle` takes it as
+  `wear_cost_per_kwh`. The summary records the setting and each plan's
+  `wear_cost` apart from its stage cost. The default 0 gives the same plans
+  and costs as before.
 
 ### Changed
 

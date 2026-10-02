@@ -32,6 +32,13 @@ ends the year below full is bought back at the cheapest price a charge
 step may pay, so the plan does not drain the battery on the last day
 (``free_terminal`` drops the refill).
 
+``wear_cost_per_kwh`` passes the planner's battery-wear weight (ADR 0002
+A17) to every solve: a price per kWh of DC energy the battery discharges,
+added to the cost the plan minimises. It is a planning weight only. The
+plan reports it as ``wear_cost``, apart from ``stage_cost``; the planned and
+replayed costs are import cost less export revenue alone. At 0, the
+default, the plan is the one the planner makes without it.
+
 Two planning modes:
 
 - ``first_year`` (the default) plans the first project year from a new
@@ -59,6 +66,7 @@ sensitivity.
 Usage:
     python tools/oracles/daily_target_dp.py --config my.toml --output dp.json --csv days.csv
     python tools/oracles/daily_target_dp.py --config my.toml --planning yearly --soc-states 41 --target-levels 21
+    python tools/oracles/daily_target_dp.py --config my.toml --wear-cost-per-kwh 0.05
 """
 
 from __future__ import annotations
@@ -83,6 +91,7 @@ from breos._daily_targets import (
     DEFAULT_TARGET_LEVELS,
     DailyTargetPlan,
     DailyTargetProblem,
+    check_wear_cost,
     daily_target_instructions,
     full_terminal_energy_wh,
     solve_daily_targets,
@@ -157,6 +166,7 @@ class YearlyDailyTargetPlanner:
         soc_states: int,
         free_terminal: bool,
         execution_backend: str,
+        wear_cost_per_kwh: float = 0.0,
     ) -> None:
         self.case = case
         self.layout = case.configured_instructions()
@@ -164,6 +174,7 @@ class YearlyDailyTargetPlanner:
         self.soc_states = soc_states
         self.free_terminal = free_terminal
         self.execution_backend = execution_backend
+        self.wear_cost_per_kwh = wear_cost_per_kwh
         self.plans: list[YearPlan] = []
 
     def __call__(self, start: YearStart) -> DispatchInstructions:
@@ -197,6 +208,7 @@ class YearlyDailyTargetPlanner:
             terminal_energy_wh=terminal,
             free_terminal=self.free_terminal,
             execution_backend=self.execution_backend,
+            wear_cost_per_kwh=self.wear_cost_per_kwh,
         )
         elapsed = time.perf_counter() - started
         instructions = daily_target_instructions(problem.instructions, problem.day_starts, plan.targets)
@@ -226,7 +238,8 @@ class DailyTargetOracleResult:
     cost less export revenue. ``replay`` compares them with production.
     ``fixed_target`` replays the configured instructions, which App
     dispatches with. Under ``yearly`` planning, ``year_plans`` holds every
-    year's plan and ``solve_seconds`` their sum.
+    year's plan and ``solve_seconds`` their sum. ``wear_cost_per_kwh`` is
+    the wear weight every solve was given.
     """
 
     problem: DailyTargetProblem
@@ -241,6 +254,7 @@ class DailyTargetOracleResult:
     soc_states: int
     free_terminal: bool
     planning: str = "first_year"
+    wear_cost_per_kwh: float = 0.0
     year_plans: tuple[YearPlan, ...] = ()
     schema: str = DP_ORACLE_SCHEMA
 
@@ -337,16 +351,20 @@ def run_daily_target_oracle(
     tolerance: Tolerance = DEFAULT_REPLAY_TOLERANCE,
     execution_backend: str | None = None,
     planning: str = "first_year",
+    wear_cost_per_kwh: float = 0.0,
 ) -> DailyTargetOracleResult:
     """Plan ``case`` one target per day, replay the plan and App's fixed-target run.
 
     ``planning`` is ``"first_year"`` or ``"yearly"`` (see the module
     docstring). ``soc_states`` and ``target_levels`` set the program's grid
-    of stored energy and of targets. The planner and the replays run on the
-    configuration's execution backend unless ``execution_backend`` names one.
+    of stored energy and of targets. ``wear_cost_per_kwh`` is the planner's
+    wear weight (ADR 0002 A17), given to every solve; it must be finite and
+    at least 0. The planner and the replays run on the configuration's
+    execution backend unless ``execution_backend`` names one.
     """
     if planning not in PLANNING_MODES:
         raise ValueError(f"'planning' must be one of {', '.join(PLANNING_MODES)}")
+    wear = check_wear_cost(wear_cost_per_kwh)
     backend = execution_backend or case.resolved.cfg.get("execution_backend", "python")
     if planning == "yearly":
         return _run_yearly(
@@ -356,6 +374,7 @@ def run_daily_target_oracle(
             free_terminal=free_terminal,
             tolerance=tolerance,
             backend=backend,
+            wear_cost_per_kwh=wear,
         )
     problem = daily_target_problem(case)
     started = time.perf_counter()
@@ -365,6 +384,7 @@ def run_daily_target_oracle(
         soc_states=soc_states,
         free_terminal=free_terminal,
         execution_backend=backend,
+        wear_cost_per_kwh=wear,
     )
     elapsed = time.perf_counter() - started
     instructions = daily_target_instructions(problem.instructions, problem.day_starts, plan.targets)
@@ -383,6 +403,7 @@ def run_daily_target_oracle(
         target_levels=target_grid(target_levels),
         soc_states=int(soc_states),
         free_terminal=free_terminal,
+        wear_cost_per_kwh=wear,
     )
 
 
@@ -394,6 +415,7 @@ def _run_yearly(
     free_terminal: bool,
     tolerance: Tolerance,
     backend: str,
+    wear_cost_per_kwh: float,
 ) -> DailyTargetOracleResult:
     daily_target_problem(case)  # the same table check as the first-year mode
     planner = YearlyDailyTargetPlanner(
@@ -402,6 +424,7 @@ def _run_yearly(
         soc_states=soc_states,
         free_terminal=free_terminal,
         execution_backend=backend,
+        wear_cost_per_kwh=wear_cost_per_kwh,
     )
     replay = replay_instructions(case, planner, execution_backend=backend)
     first = planner.plans[0]
@@ -421,6 +444,7 @@ def _run_yearly(
         soc_states=int(soc_states),
         free_terminal=free_terminal,
         planning="yearly",
+        wear_cost_per_kwh=wear_cost_per_kwh,
         year_plans=tuple(planner.plans),
     )
 
@@ -466,6 +490,7 @@ def _year_record(year_plan: YearPlan, replayed_cost: float, levels: np.ndarray) 
         "terminal_energy_wh": year_plan.terminal_energy_wh,
         "objective": plan.objective,
         "stage_cost": plan.stage_cost,
+        "wear_cost": plan.wear_cost,
         "terminal_cost": plan.terminal_cost,
         "end_energy_wh": plan.end_energy_wh,
         "replayed_cost": replayed_cost,
@@ -500,9 +525,11 @@ def report(result: DailyTargetOracleResult, case: ReplayCase) -> dict[str, Any]:
             "target_levels": result.target_levels.tolist(),
             "soc_states": result.soc_states,
             "free_terminal": result.free_terminal,
+            "wear_cost_per_kwh": result.wear_cost_per_kwh,
             "soh_fraction": problem.health()[0],
             "objective": plan.objective,
             "stage_cost": plan.stage_cost,
+            "wear_cost": plan.wear_cost,
             "terminal_cost": plan.terminal_cost,
             "planned_cost": float(result.planned_step_cost.sum()),
             "start_energy_wh": plan.start_energy_wh,
@@ -569,6 +596,13 @@ def year_days_frame(result: DailyTargetOracleResult, case: ReplayCase) -> pd.Dat
     )
 
 
+def _wear_cost(text: str) -> float:
+    try:
+        return check_wear_cost(float(text))
+    except ValueError as error:
+        raise argparse.ArgumentTypeError(f"must be a finite number of at least 0, not {text!r}") from error
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument(
@@ -584,6 +618,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--target-levels", type=int, default=DEFAULT_TARGET_LEVELS, help="Targets from 0 to 1")
     parser.add_argument("--soc-states", type=int, default=DEFAULT_SOC_STATES, help="Stored-energy grid points")
     parser.add_argument("--free-terminal", action="store_true", help="Do not buy back energy the year ends without")
+    parser.add_argument(
+        "--wear-cost-per-kwh",
+        type=_wear_cost,
+        default=0.0,
+        help="Planner wear weight per kWh of battery DC discharge, in the tariff's currency (default 0)",
+    )
     parser.add_argument("--atol-wh", type=float, default=DEFAULT_REPLAY_TOLERANCE.atol_wh, help="Replay tolerance")
     parser.add_argument("--execution-backend", choices=("python", "numba"), help="Planner and replay backend")
     args = parser.parse_args(argv)
@@ -598,6 +638,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             tolerance=Tolerance(atol_wh=args.atol_wh),
             execution_backend=args.execution_backend,
             planning=args.planning,
+            wear_cost_per_kwh=args.wear_cost_per_kwh,
         )
     write_json(report(result, case), args.output)
     if args.csv:
