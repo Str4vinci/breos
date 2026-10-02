@@ -36,6 +36,7 @@ from breos.config_schema import (
     anything,
     boolean,
     choice,
+    list_of,
     number,
     table,
     text,
@@ -58,6 +59,14 @@ DEFAULT_TILT_MARGIN_DEG = 15.0
 DEFAULT_TIMEZONE = "UTC"
 DEFAULT_RESOLUTION = "h"
 DEFAULT_OBJECTIVE_BASIS = "projected"
+
+# PV layouts the search can choose between (#384), in gene order. "single" is
+# one array whose tilt and azimuth are searched; "east_west" is two arrays at
+# azimuths 90 and 270 on one fixed tilt. A search covers "single" only unless
+# [mode] layouts names more.
+LAYOUTS = ("single", "east_west")
+DEFAULT_LAYOUTS = ("single",)
+DEFAULT_EAST_WEST_TILT_DEG = 10.0
 
 # NSGA-II run settings: an ``optimize_system_multi_objective`` argument, else
 # the [optimization] key, else this.
@@ -268,7 +277,22 @@ CONSTRAINTS_TABLE = TableSpec(
         "enforce_zeb": boolean,
     },
 )
-MODE_TABLE = TableSpec("mode", keys={"fixed_azimuth": _optional(_real(-360, 360))})
+
+
+def _layouts(value: Any, where: str) -> list[str]:
+    """The layouts to search, once each and in :data:`LAYOUTS` order, so the layout gene is stable."""
+    named = set(list_of(choice(LAYOUTS), min_length=1)(value, where))
+    return [layout for layout in LAYOUTS if layout in named]
+
+
+MODE_TABLE = TableSpec(
+    "mode",
+    keys={
+        "fixed_azimuth": _optional(_real(-360, 360)),
+        "layouts": _layouts,
+        "east_west_tilt_deg": number(minimum=0, maximum=90),
+    },
+)
 EARLY_STOP_TABLE = TableSpec(
     "optimization.early_stop",
     keys={
@@ -490,6 +514,13 @@ def resolve_optimization_config(config: Mapping[str, Any]) -> dict[str, Any]:
     mode = resolved.setdefault("mode", {}) or {}
     resolved["mode"] = mode
     mode.setdefault("fixed_azimuth", None)
+    mode.setdefault("layouts", list(DEFAULT_LAYOUTS))
+    mode.setdefault("east_west_tilt_deg", DEFAULT_EAST_WEST_TILT_DEG)
+    if mode["fixed_azimuth"] is not None and "single" not in mode["layouts"]:
+        raise ValueError(
+            "mode.fixed_azimuth sets the azimuth of the single-array layout, which mode.layouts does not "
+            "search; remove mode.fixed_azimuth or add 'single' to mode.layouts"
+        )
 
     optimization = resolved.setdefault("optimization", {}) or {}
     resolved["optimization"] = optimization

@@ -74,6 +74,11 @@ min_tilt_deg = 10.0              # lower tilt bound, degrees
 max_tilt_deg = "adjust"          # or a number in degrees
 enforce_zeb = false              # true makes the ZEB ratio a hard constraint
 
+# [mode]
+# layouts = ["single", "east_west"]  # also search East-West roofs; default ["single"]
+# east_west_tilt_deg = 10            # fixed tilt of an East-West design
+# fixed_azimuth = 180                # fix the single array's azimuth instead of searching it
+
 [costs]
 # Prices from the residential_pt cost preset; replace them with your own quotes.
 electricity_cost = 0.2582        # EUR/kWh imported

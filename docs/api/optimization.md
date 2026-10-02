@@ -1,7 +1,8 @@
 # Optimization
 
 [pymoo](https://pymoo.org/) powers multi-objective PV/battery sizing over
-module count, battery capacity, tilt and azimuth, against projected grid
+module count, battery capacity, tilt and azimuth, and optionally an East–West
+layout, against projected grid
 independence and NPV; ZEB is a diagnostic. The
 [optimization guide](../getting-started/optimization.md) walks through a
 search. For end-to-end App
@@ -75,7 +76,7 @@ call takes them as DataFrames.
 | `costs` | the App's `costs` keys, plus `dc_ac_ratio` (1.25), the DC peak over the inverter AC rating |
 | `financials` | `inflation_rate` (0.02), `sell_price_inflation` (0), `import_price_escalation`, `om_escalation`, `replacement_cost_learning`, `discount_rate` (0.03), `project_lifespan`, `pv_degradation_rate`, and the flat-price fallbacks `electricity_cost` and `electricity_sold_cost` |
 | `constraints` | see below |
-| `mode` | `fixed_azimuth` (none: azimuth is searched, 90–270° in the northern hemisphere, −90–90° in the southern) |
+| `mode` | `fixed_azimuth` (none: azimuth is searched, 90–270° in the northern hemisphere, −90–90° in the southern); `layouts` (`["single"]`; add `"east_west"` to search East–West roofs too); `east_west_tilt_deg` (10), the fixed tilt of an East–West design |
 | `optimization` | `objective_basis` (`"projected"`); `early_stop` (off; `true` or a table turns it on, and a table takes `enabled` (`true`), `ftol` 0.0025, `period` 10, `n_skip` 0, `min_gen` min(20, `n_gen`), `only_feasible` `true`); `pop_size` (40), `n_gen` (100), `n_offsprings` (pymoo's), `seed` (1) |
 | `simulation` | `resolution` (`"h"`, or `"15min"`); `irradiance_resampling` (`"auto"`); `years_projection` (20, or `financials.project_lifespan`) |
 | `inverter` | `efficiency`, used when the top-level `inverter_efficiency` (0.96) is not set |
@@ -113,6 +114,18 @@ report. The defaults preserve earlier direct-API behavior; they are not
 site-specific recommendations. The search records the bounds it used,
 defaults included, in `details["provenance"]["constraints"]`, and its run
 settings in `details["provenance"]["run_settings"]`.
+
+With more than one entry in `mode.layouts`, a layout gene is added after the
+tilt and azimuth genes. An East–West design does not read those two genes,
+and the repair sets them to their lowest grid value so that NSGA-II drops
+East–West duplicates. An East–West design puts floor(n / 2) modules at
+azimuth 90 and the rest at azimuth 270, at `east_west_tilt_deg`; its DC output
+is the sum of the two arrays, computed as the App computes `[[pv_arrays]]`.
+The Pareto table's `Layout` column names each design's layout; an East–West
+row has the configured `Tilt` and a NaN `Azimuth`.
+`details["provenance"]["mode"]` records the layouts and tilt used.
+`evaluate_projected_design` takes `layout="east_west"` with a `tilt` and no
+`azimuth`, and its metrics carry `Layout` too.
 
 Results expose `Projected_*` diagnostics. The ordinary `Grid_Independence_%`
 and `NPV` columns equal `Projected_Grid_Independence_%` and
