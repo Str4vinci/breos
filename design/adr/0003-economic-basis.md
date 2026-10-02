@@ -166,6 +166,11 @@ from `sum(energy × price)` over the steps. Storing each year's energy by
 tariff period, for revaluation without re-simulation, is a 0.7.x follow-up.
 *(Done in 0.7.0: a tariff run records its energy by period, and by season
 for a schedule with month seasons, and `App.revalue` re-prices from it.)*
+*(0.7.1, #393: an App run whose dispatch reads no tariff, greedy or PV-only,
+also keeps each year's priced flows step by step, so `App.revalue` prices it
+on a first or a different schedule with the year loop's own sums. Energy by
+period cannot serve there, and sums over the years cannot either, because
+each year is escalated and discounted on its own.)*
 The App `financial` rows gain the component cashflows the projection already
 computes: `Cost_Import`, `Revenue_Export`, `Cost_Operation`, `Cost_Daily`,
 `Cost_Replacement` and `Replacement_Time_Years`.

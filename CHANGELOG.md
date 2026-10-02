@@ -52,6 +52,13 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   about 12 ms instead of about 95 ms. The last few classifications are kept,
   so a `[reference_tariff]` on the run's schedule and `App.revalue` at new
   prices do not classify again. The labels are the same as before (#392).
+- `App.revalue` prices a run without smart charging on a tariff added, or on
+  a different schedule, from the stored step flows instead of simulating
+  again, and records `method = "repriced_by_step"` in
+  `provenance.revaluation`. The result has the same floats as a new run. To
+  allow this, such a run keeps each year's grid import and export step by
+  step in memory: about 11 MB for 20 years at 15-minute resolution. Runs
+  with smart charging still simulate again (#393).
 
 ### Fixed
 

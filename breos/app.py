@@ -137,17 +137,26 @@ class App:
         value is recomputed from retained final health without simulating again.
 
         When the new prices cannot change the dispatch, the stored simulation
-        is re-priced: flat prices, a tariff removed, or a tariff on the same
-        schedule whose smart-charging instructions stay the same. Otherwise (a
-        tariff added, a different schedule, or new import or export prices
-        under the experimental ``daily_persistence`` smart charging, which
-        plans on them) the run is simulated again. A ``reference_tariff``
-        added, changed or removed is always re-priced: it prices only the
-        no-system household, which the dispatch never sees. The
-        result records which in ``provenance["revaluation"]``, with the keys
-        that changed. A flat-price revaluation gives the same floats as a new
-        simulation; a re-priced tariff sums energy by period instead of by
-        step, so it agrees to rounding.
+        is re-priced (``"repriced"``): flat prices, a tariff removed, or a
+        tariff on the same schedule whose smart-charging instructions stay
+        the same. A tariff added, or a different schedule, is priced from the
+        stored per-step flows of every year (``"repriced_by_step"``) when the
+        run has no smart charging, whose greedy dispatch never sees the
+        tariff. Otherwise (a tariff added or a different schedule under
+        smart charging, or new import or export prices under the
+        experimental ``daily_persistence`` smart charging, which plans on
+        them) the run is simulated again (``"resimulated"``). A
+        ``reference_tariff`` added, changed or removed is always re-priced:
+        it prices only the no-system household, which the dispatch never
+        sees. The result records the method in
+        ``provenance["revaluation"]``, with the keys that changed. Flat
+        prices and ``"repriced_by_step"`` give the same floats as a new
+        simulation; a tariff re-priced on its own schedule sums energy by
+        period instead of by step, so it agrees to rounding.
+
+        A run without smart charging keeps each year's grid import and
+        export step by step for this: about 11 MB for 20 years at 15-minute
+        resolution, a quarter of that hourly.
 
         Raises:
             RuntimeError: If :meth:`simulate` has not been called.

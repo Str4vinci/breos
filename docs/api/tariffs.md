@@ -194,8 +194,9 @@ such as `tariff.import_prices.q1.high`.
 The month partition is part of the schedule: it is recorded in
 `provenance.tariff.seasons`, and each step's season joins the schedule hash.
 Two partitions that give the same periods still have different hashes, so
-`App.revalue` re-simulates when the seasons change and re-prices when only
-the prices change. Schedules without month seasons keep the hashes they had
+`App.revalue` re-prices by period only when the prices alone change. When
+the seasons change, it prices a run without smart charging from its stored
+step flows and simulates a smart-charging run again. Schedules without month seasons keep the hashes they had
 before seasons existed.
 
 ## Schedule definitions

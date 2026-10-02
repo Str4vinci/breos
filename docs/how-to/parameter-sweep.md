@@ -79,6 +79,7 @@ export_prices = { all = 0.0500 }
 ```
 
 Each run simulates again. For price scenarios on a finished run,
-{py:meth}`breos.App.revalue` re-prices the stored simulation instead; see
+{py:meth}`breos.App.revalue` re-prices the stored simulation instead, also on
+another tariff schedule when the run has no smart charging; see
 {doc}`../gallery/tariffs/plot_12_price_scenarios`. To compare whole offers,
 see {doc}`../gallery/tariffs/plot_09_which_tariff`.
