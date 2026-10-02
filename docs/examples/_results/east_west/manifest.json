@@ -1,10 +1,10 @@
 {
  "case": "east_west",
  "title": "East-west and south-facing arrays",
- "breos_version": "0.6.2",
- "git_describe": "v0.6.2-606-g5f94fbd",
- "generated_utc": "2026-10-02T01:40:43+00:00",
- "runtime_s": 5.2,
+ "breos_version": "0.7.0",
+ "git_describe": "v0.6.2-625-gfef7fe9",
+ "generated_utc": "2026-10-02T11:45:09+00:00",
+ "runtime_s": 6.0,
  "cheap": true,
  "configs": {
   "configs/examples/east-west-roof.toml": "3c7ac2449fc6717d2828c23e108fd9ff649eb252082a07f6fc8f8f6965a577a8"
@@ -16,7 +16,7 @@
   }
  },
  "dependencies": {
-  "python": "3.13.14",
+  "python": "3.12.13",
   "numpy": "2.4.6",
   "pandas": "3.0.5",
   "pvlib": "0.15.2",
