@@ -86,7 +86,7 @@ is a `breos run` option that overrides the config file.
 | `sweep` | *unset* | — | Parameter grid, read by `breos sweep`; see [Run a parameter sweep](../how-to/parameter-sweep.md) |
 | `tariff` | *unset* | — | Time-of-use import and export prices on a bundled or custom schedule, replacing the flat `costs.electricity_cost`, `costs.electricity_sold_cost` and `costs.daily_power_cost`; see [`[tariff]`](#tariff) and [Time-of-use tariffs](configuration.md#time-of-use-tariffs) |
 | `temperature_model` | `"faiman"` | `--temperature-model` | Cell-temperature model and mounting preset. `"pvsyst-*"` and `"sapm-*"` use documented mounting coefficients; `"noct-sam"` needs sourced module NOCT and efficiency metadata, which no bundled module has yet. The default is Faiman, open rack. One of `"faiman"`, `"pvsyst-freestanding"`, `"pvsyst-semi-integrated"`, `"pvsyst-insulated"`, `"sapm-open-rack-glass-glass"`, `"sapm-close-mount-glass-glass"`, `"sapm-open-rack-glass-polymer"`, `"sapm-insulated-back-glass-polymer"`, `"noct-sam"` |
-| `terminal_value` | *unset (basis = none)* | — | Optional accounting sensitivity for the final battery pack's capacity health; see [`[terminal_value]`](#terminal_value) and [Terminal-health credit](configuration.md#terminal-health-credit) |
+| `terminal_value` | *unset (basis = none)* | — | Optional estimate of the final battery pack's residual value from its capacity health; see [`[terminal_value]`](#terminal_value) and [Estimated battery residual value](configuration.md#estimated-battery-residual-value) |
 | `tilt` | `None` | `--tilt` | Tilt angle (degrees). `None` estimates it from the latitude |
 | `tracking` | `"fixed"` | — | Tracking mode: `"fixed"`, `"single_axis"`, `"dual_axis"` |
 | `transposition_model` | `"isotropic"` | `--transposition-model`, `--sky-model` | Sky-diffusion model used to project GHI/DHI/DNI onto the plane of array; see [Sky-diffusion model](configuration.md#sky-diffusion-transposition-model). One of `"isotropic"`, `"klucher"`, `"haydavies"`, `"reindl"`, `"king"`, `"perez"`, `"perez-driesse"` |
@@ -184,7 +184,7 @@ What the household would pay without the system, as `[reference_tariff]` in TOML
 
 ## terminal_value
 
-Optional final-pack health credit, as `[terminal_value]` in TOML. `basis` defaults to `"none"`; see [Terminal-health credit](configuration.md#terminal-health-credit).
+Optional estimated residual value of the final battery pack, as `[terminal_value]` in TOML. `basis` defaults to `"none"`; see [Estimated battery residual value](configuration.md#estimated-battery-residual-value).
 
 | Key | Required | Description |
 |---|---|---|

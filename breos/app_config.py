@@ -695,8 +695,9 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
     "terminal_value": AppConfigField(
         default=None,
         doc=(
-            "Optional accounting sensitivity for the final battery pack's capacity health; see "
-            "[`[terminal_value]`](#terminal_value) and [Terminal-health credit](configuration.md#terminal-health-credit)"
+            "Optional estimate of the final battery pack's residual value from its capacity health; see "
+            "[`[terminal_value]`](#terminal_value) and "
+            "[Estimated battery residual value](configuration.md#estimated-battery-residual-value)"
         ),
         default_doc="*unset (basis = none)*",
         summary="economics.terminal_value",

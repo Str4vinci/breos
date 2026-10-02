@@ -15,10 +15,10 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 - Cached TMY weather files in `weather/` may be gzip-compressed
   (`<location>_tmy_<years>_<source>.csv.gz`).
 - Optional `[terminal_value] basis = "battery_health_fraction"` reports an
-  accounting sensitivity for the final installed battery pack's health
-  above its physical replacement threshold
-  ([#346](https://github.com/Str4vinci/breos/issues/346)). It credits the
-  resolved full replacement-pack price at the end of the horizon, using
+  estimated battery residual value: the final installed pack's capacity
+  health above its physical replacement threshold, as a linear fraction
+  ([#346](https://github.com/Str4vinci/breos/issues/346)). It values that
+  fraction of the resolved full replacement-pack price at the end of the horizon, using
   replacement inflation, learning and discounting. Results gain
   `terminal_health_credit`, `terminal_health_credit_npv` and
   `npv_savings_terminal_adjusted`, plus valuation provenance. App and Monte

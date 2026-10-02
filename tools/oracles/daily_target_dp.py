@@ -36,7 +36,7 @@ first year's instructions (A2); the costs compared are the first year's.
 Legacy behaviour not ported: the causal persistence-forecast controller
 (BREOS has it as the ``daily_persistence`` smart-charging mode), re-planning
 at each project year's opening health, the matched sweep over every fixed
-target (``--compare-fixed``), the terminal-health sensitivity and the
+target (``--compare-fixed``), the residual-value sensitivity and the
 lifetime NPV sums.
 
 Usage:
