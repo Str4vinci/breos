@@ -107,6 +107,7 @@ than 1 Wh):
 | `battery_first_end_of_life_action` | What was done at the first crossing: `"replaced"`, `"kept"` or `"retired"`; None without one |
 | `battery_first_end_of_life_reason` | Why, as in `battery_end_of_life_events`; None without one |
 | `battery_first_end_of_life_soh_pct` | State of health at the first crossing; None without one |
+| `battery_degradation_history` | The battery's state at the end of each project year, with the year's use and stress; see [Degradation history](#degradation-history) |
 
 With `battery_allow_terminal_replacement = false`, a pack that reaches end of
 life in the final degradation period of the horizon is not replaced. The
@@ -129,7 +130,7 @@ records one:
 | `time_years` | Years from commissioning to the end of the closing step: the instant a replacement is booked at, equal to the `financial` row's `replacement_time_years` |
 | `date` | Calendar date of the closing step; every project year replays the simulated calendar, moved forward by its year |
 | `action` | `"replaced"`: a new pack was installed. `"kept"`: no pack was bought and the old one stays in service below its threshold. `"retired"`: no pack was bought and the old one was switched off; the project finishes PV-only (`battery_skipped_replacement_action = "retire"`) |
-| `reason` | `"end_of_life"` for a replacement. For a skipped one, `"min_remaining_years"` (less than `battery_replacement_min_remaining_years` was left) or `"terminal_period"` (the final period with `battery_allow_terminal_replacement = false`) |
+| `reason` | `"end_of_life"` for a replacement. For a skipped one, `"replacement_disabled"` (`battery_enable_replacement = false`), `"min_remaining_years"` (less than `battery_replacement_min_remaining_years` was left) or `"terminal_period"` (the final period with `battery_allow_terminal_replacement = false`) |
 | `soh_pct` | State of health at the crossing, the value compared with the threshold |
 
 A replaced pack's successor can cross again, so a long horizon can list
@@ -150,6 +151,38 @@ optimizer reports it as `Projected_First_End_Of_Life_Years`,
 `Projected_First_End_Of_Life_Action`, `Projected_First_End_Of_Life_Reason`
 and `Projected_First_End_Of_Life_SOH_%`. Without a crossing the times and
 health are NaN and the text fields None.
+
+### Degradation history
+
+`battery_degradation_history` has one entry per project year. The state of
+health, capacities, `cumulative_fec` and loss split belong to the pack
+installed at the end of the year, so they restart after a replacement. The
+year's own figures cover every pack that served in it.
+
+| Field | Description |
+|---|---|
+| `year` | Project year, from 1 |
+| `soh_pct` | State of health at the end of the year, as `yearly[].soh_pct` |
+| `capacity_kwh` | `battery_kwh` times the state of health |
+| `usable_capacity_kwh` | `capacity_kwh` times the SOC window, `battery_max_soc - battery_min_soc` |
+| `replacements` | Replacements in the year |
+| `charge_throughput_kwh` | Energy stored in the cells in the year, after charging losses |
+| `discharge_throughput_kwh` | Energy drawn from the cells in the year, before inverter losses |
+| `fec` | Full equivalent cycles in the year, from rainflow counting, over every pack |
+| `cumulative_fec` | Full equivalent cycles of the installed pack since it was installed |
+| `mean_soc_pct` | Mean state of charge over the year, as a share of the pack's aged capacity; the SOC the ageing model sees |
+| `mean_cell_temperature_c` | Mean cell temperature over the year, the temperature the ageing model sees |
+| `cycle_loss_pct` | State of health the installed pack has lost to cycling, in percentage points. Native engine only; None with BLAST |
+| `calendar_loss_pct` | The same for calendar ageing. Native engine only; None with BLAST |
+| `resistance_growth_pct` | Growth of the installed pack's internal resistance, in percent. Only with `enable_resistance_fade` (native engine); None otherwise |
+| `round_trip_efficiency` | Cell round-trip efficiency at that resistance, as the dispatch applies it. Only with `enable_resistance_fade`; None otherwise |
+
+A field is None when the degradation model does not supply it, never 0. The
+BLAST models report a state of health but no split into cycle and calendar
+loss, and only the native engine has a resistance model. For the native
+engine `cycle_loss_pct + calendar_loss_pct` is the state of health lost
+since the pack was installed, to rounding. The year rows behind the history
+also carry `Battery_Cell_Temperature_Mean_C`.
 
 ## Estimated battery residual value
 

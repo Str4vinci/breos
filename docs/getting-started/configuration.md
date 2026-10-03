@@ -262,10 +262,11 @@ battery_skipped_replacement_action = "retire"  # "keep" is the default
   fade. Like a kept pack, it is at or below
   its threshold, so an enabled `[terminal_value]` credits it nothing.
 - The key acts only on a crossing whose replacement is skipped, so with the
-  defaults (`battery_replacement_min_remaining_years = 0`,
+  defaults (`battery_enable_replacement = true`,
+  `battery_replacement_min_remaining_years = 0`,
   `battery_allow_terminal_replacement = true`) it changes nothing. To retire
   at the first end of life and never replace, set
-  `battery_replacement_min_remaining_years` above `projection_years`.
+  `battery_enable_replacement = false` (below).
 
 Monte Carlo applies the key to each trajectory and the optimizer takes it as
 `[battery] skipped_replacement_action`; both record it as they record the
@@ -274,6 +275,49 @@ minimum service time, and an enabled `[terminal_value]` lists it in its
 year. A direct {py:class}`~breos.battery.BatteryConfig` call takes
 `skipped_replacement_action`. A span continued from a retired span's
 degradation state stays retired; `battery_retired=True` says so explicitly.
+
+### Running without replacement
+
+`battery_enable_replacement = false` never replaces the battery. One pack then
+serves the whole projection, which is how to follow its state of health past
+the end-of-life threshold:
+
+```toml
+projection_years = 20
+battery_enable_replacement = false
+battery_skipped_replacement_action = "keep"  # or "retire"
+```
+
+- The pack reaches end of life where it would with replacement on, at the
+  first degradation period that closes at or below `battery_eol_percentage`.
+  Only the swap is skipped, and the crossing is reported as an end-of-life
+  event with the reason `"replacement_disabled"`.
+- With `"keep"` (the default) the pack stays in service to the end of the
+  project. Nothing is frozen or restored: the aging model keeps running, the
+  state of health keeps falling below the threshold, and the SOC window
+  shrinks with it. With `enable_resistance_fade` the efficiencies keep
+  falling too. No replacement is bought or priced.
+- With `"retire"` the pack is switched off at that first crossing, as
+  described above, and the project finishes PV-only.
+- Every crossing is skipped already, so `battery_replacement_min_remaining_years`
+  and `battery_allow_terminal_replacement` change nothing more. The event's
+  reason stays `"replacement_disabled"` when they would also have skipped it.
+- A kept pack ends at or below its threshold, so an enabled
+  `[terminal_value]` credits it nothing. A pack that never reaches the
+  threshold is credited as with replacement on.
+- A state of health far below the usual end-of-life thresholds lies outside
+  the ageing data the models were fitted to. Treat it as a model projection,
+  not as a measured behaviour.
+
+`battery_degradation_history` in the result lists the pack's state at the
+end of every project year; see
+[Degradation history](interpreting-results.md#degradation-history). Monte
+Carlo applies the key to each trajectory, and the optimizer takes it as
+`[battery] enable_replacement` and records it in
+`battery_replacement_treatment`. The resolved value is in
+`provenance.resolved_config`, and an enabled `[terminal_value]` lists it in
+its `replacement_policy`. A direct {py:class}`~breos.battery.BatteryConfig`
+call takes `enable_replacement`.
 
 ## Discovering available options
 

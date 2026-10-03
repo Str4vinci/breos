@@ -51,6 +51,7 @@ EXPECTED_DEFAULTS = {
     "battery_min_soc": 0.10,
     "battery_max_soc": 0.90,
     "battery_eol_percentage": 0.70,
+    "battery_enable_replacement": True,
     "battery_allow_terminal_replacement": True,
     "battery_replacement_min_remaining_years": 0.0,
     "battery_skipped_replacement_action": "keep",

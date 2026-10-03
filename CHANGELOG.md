@@ -112,6 +112,29 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   later projection years and in a span continued from its degradation
   state (or `simulate_energy_balance(battery_retired=True)`).
   The default `"keep"` gives results bit-identical to 0.7.0.
+- `battery_enable_replacement` (App and Monte Carlo), the App name of the
+  optimizer's `[battery] enable_replacement` and
+  `BatteryConfig.enable_replacement`
+  ([#377](https://github.com/Str4vinci/breos/issues/377)). `false` never
+  replaces the battery: one pack serves the whole projection and keeps
+  ageing below its end-of-life threshold, or is retired at its first
+  crossing with `battery_skipped_replacement_action = "retire"`. The
+  crossing is an end-of-life event with the reason `"replacement_disabled"`.
+  The value is recorded in `provenance.resolved_config`, the
+  `[terminal_value]` `replacement_policy` (which recorded `true` before)
+  and the optimizer's `battery_replacement_treatment`. The default `true`
+  gives results bit-identical to 0.7.0.
+- App results with a battery list its state at the end of each project
+  year in `battery_degradation_history`
+  ([#377](https://github.com/Str4vinci/breos/issues/377)): state of health,
+  capacity and usable capacity, replacements, charge and discharge
+  throughput, the year's and the installed pack's full equivalent cycles,
+  mean state of charge and mean cell temperature, the native engine's
+  cycle and calendar loss, and, with `enable_resistance_fade`, resistance
+  growth and round-trip efficiency. A quantity the degradation model does
+  not supply is None, not 0: BLAST has no cycle and calendar split. Year
+  rows gain `Battery_Cell_Temperature_Mean_C`. Existing fields are
+  unchanged.
 - `[smart_charging] decision_boundary = "charge_window_start"`, a
   `daily_persistence` planner setting
   ([#406](https://github.com/Str4vinci/breos/issues/406), ADR 0002 A19),

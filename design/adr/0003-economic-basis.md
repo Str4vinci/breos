@@ -380,9 +380,9 @@ one project year remains for it.
   (measured as `Replacement_Time_Years` books a swap, so a replaced
   crossing's time is the booked one), the closing step's `date`, the
   `action` (`"replaced"` or `"kept"`), the `reason` (`"end_of_life"` for a
-  swap; `"min_remaining_years"`, `"terminal_period"` or, for a direct
-  `BatteryConfig` with replacement off, `"replacement_disabled"` for a
-  skipped one) and the `soh_pct` the check compared with the threshold. A
+  swap; `"min_remaining_years"`, `"terminal_period"` or, with replacement off
+  (`battery_enable_replacement = false`, #377, or a direct `BatteryConfig`),
+  `"replacement_disabled"` for a skipped one) and the `soh_pct` the check compared with the threshold. A
   pack that is kept crosses once, so it is recorded once, and a skipped
   swap is always the last event. App results list the events in
   `battery_end_of_life_events` and repeat the first in the scalar
@@ -417,8 +417,9 @@ end-of-life policies for the final project year: replace, keep and retire.
   `"retire"`.
 - **Composition with E11.** The key says what happens at a crossing whose
   replacement is skipped, by `battery_replacement_min_remaining_years`, by
-  `battery_allow_terminal_replacement = false`, or (direct `BatteryConfig`)
-  by `enable_replacement = false`. Whether to buy stays with those rules;
+  `battery_allow_terminal_replacement = false`, or by
+  `battery_enable_replacement = false` (#377; `[battery] enable_replacement`
+  and `BatteryConfig.enable_replacement`), which skips every swap. Whether to buy stays with those rules;
   the new key only chooses the alternative to buying. The three policies
   are then: replace (minimum 0), keep (minimum `m`, `"keep"`) and retire
   (minimum `m`, `"retire"`). A single `battery_end_of_life_action =
@@ -427,9 +428,11 @@ end-of-life policies for the final project year: replace, keep and retire.
   which is `"keep"` under another name; and a policy that replaces early
   swaps but retires in the final year, the study's case, would need the
   minimum as well, so the three values would not be independent. Never
-  replacing is a minimum above the horizon with either action. With the
-  default minimum and terminal guard no swap is skipped, so the key has no
-  effect unless one of them is set.
+  replacing is `battery_enable_replacement = false` with either action; a
+  minimum above the horizon gives the same run with the reason
+  `"min_remaining_years"`. With replacement on and the default minimum and
+  terminal guard no swap is skipped, so the key has no effect unless one of
+  them is set.
 - **Retirement instant.** The crossing: the close of the degradation period
   whose health reached the threshold, the instant a replacement would have
   been booked at (E3, E4). The closing step was dispatched as usual.

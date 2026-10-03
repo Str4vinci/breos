@@ -54,14 +54,15 @@ def build_battery_config(cfg: dict[str, Any], resolved: ResolvedAppConfig, *, in
     """Build the battery one projection year runs, starting at ``initial_soh``.
 
     A configured round-trip efficiency is split evenly across charge and
-    discharge, the BatteryConfig default convention. Replacement is on; the
-    economics prices each one (ADR 0003 E4). ``battery_allow_terminal_replacement``
+    discharge, the BatteryConfig default convention. Replacement is on unless
+    ``battery_enable_replacement`` turns it off; the economics prices each one
+    (ADR 0003 E4). ``battery_allow_terminal_replacement``
     is the project's policy for its final period; :func:`project_years`
     applies it to the final year only. ``battery_replacement_min_remaining_years``
     is the project's minimum service time for a new pack; :func:`project_years`
     tells each year how many project years follow it.
     ``battery_skipped_replacement_action`` keeps or retires a pack whose swap
-    either rule skips.
+    any of the three skips.
     """
     battery_kwh = cfg["battery_kwh"]
     efficiency: dict[str, Any] = {}
@@ -76,7 +77,7 @@ def build_battery_config(cfg: dict[str, Any], resolved: ResolvedAppConfig, *, in
         min_soc=cfg["battery_min_soc"],
         inverter_efficiency=cfg["inverter_efficiency"],
         inverter_ac_capacity_w=resolved.inverter_ac_capacity_w,
-        enable_replacement=True,
+        enable_replacement=cfg.get("battery_enable_replacement", True),
         allow_terminal_replacement=cfg.get("battery_allow_terminal_replacement", True),
         replacement_min_remaining_years=cfg.get("battery_replacement_min_remaining_years", 0.0),
         skipped_replacement_action=cfg.get("battery_skipped_replacement_action", "keep"),
@@ -237,6 +238,7 @@ _ROW_SUM_COLUMNS = (
     "Battery_Charge_Stored",
     "Battery_SOC_Normalized",
     "Battery_SOC_Absolute",
+    "T_cell",
     *_DIAGNOSTIC_COLUMNS.values(),
 )
 
@@ -333,6 +335,8 @@ def build_year_row(
     # SOH-derated pack, so it rises as the pack fades.
     row["Battery_SOC_Normalized_Mean_%"] = float(sums_w["Battery_SOC_Normalized"] / n_steps * 100.0)
     row["Battery_SOC_Absolute_Mean_%"] = float(sums_w["Battery_SOC_Absolute"] / n_steps * 100.0)
+    # The cell temperature the aging model saw, averaged over the year.
+    row["Battery_Cell_Temperature_Mean_C"] = float(sums_w["T_cell"] / n_steps)
     # Cumulative FEC belongs to the installed pack and restarts at zero on
     # replacement, so the year's own count comes from the all-pack total.
     row["Battery_Annual_FEC"] = float(annual_fec)
@@ -1250,6 +1254,7 @@ def value_projection(cfg: dict[str, Any], resolved: ResolvedAppConfig, run: Proj
             discount_rate=cfg["discount_rate"],
             horizon_years=len(yearly_df),
             npv_savings=float(cost_projection.attrs["final_npv_savings"]),
+            enable_replacement=cfg.get("battery_enable_replacement", True),
             allow_terminal_replacement=cfg.get("battery_allow_terminal_replacement", True),
             replacement_min_remaining_years=cfg.get("battery_replacement_min_remaining_years", 0.0),
             skipped_replacement_action=cfg.get("battery_skipped_replacement_action", "keep"),

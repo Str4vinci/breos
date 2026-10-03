@@ -245,6 +245,7 @@
   "provenance.resolved_config.azimuth": 180.0,
   "provenance.resolved_config.backtrack": true,
   "provenance.resolved_config.battery_allow_terminal_replacement": true,
+  "provenance.resolved_config.battery_enable_replacement": true,
   "provenance.resolved_config.battery_eol_percentage": 0.7,
   "provenance.resolved_config.battery_indoor_model": null,
   "provenance.resolved_config.battery_kwh": 0,
