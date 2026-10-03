@@ -7,7 +7,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from breos._daily_targets import _DayEvaluator, daily_target_instructions, target_grid
+from breos._daily_targets import _DayEvaluator, daily_target_instructions, solve_daily_targets, target_grid
 from tools.oracles.daily_target_dp import (
     DP_DAYS_SCHEMA,
     DP_ORACLE_SCHEMA,
@@ -337,3 +337,71 @@ def test_the_command_line_plans_charge_windows(tmp_path):
     # The run opens in the 00:00-08:00 window; every later window starts at 22:00.
     frame = pd.read_csv(days, comment="#")
     assert frame["day_start"].str.slice(11, 16).tolist() == ["00:00", "22:00", "22:00"]
+
+
+def _discharge_kwh(replay):
+    frame = replay.artifacts.first_year_results_df
+    return float(frame["Battery_Discharge_DC"].sum())
+
+
+def test_a_wear_cost_reaches_every_solve_and_the_summary(monkeypatch):
+    calls = []
+
+    def solve(*args, **kwargs):
+        calls.append(kwargs["wear_cost_per_kwh"])
+        return solve_daily_targets(*args, **kwargs)
+
+    monkeypatch.setattr("tools.oracles.daily_target_dp.solve_daily_targets", solve)
+    case = prepare_replay(_config(3))
+    first_year = run_daily_target_oracle(case, wear_cost_per_kwh=0.04, **PLANNER)
+    # Two whole years, so the yearly planner solves twice.
+    yearly_case = prepare_replay({**YEARLY, "projection_years": 2})
+    yearly = run_daily_target_oracle(
+        yearly_case, planning="yearly", wear_cost_per_kwh=0.04, target_levels=2, soc_states=2
+    )
+    assert calls == [0.04, 0.04, 0.04]
+
+    for result, result_case in ((first_year, case), (yearly, yearly_case)):
+        plan, summary = result.plan, report(result, result_case)
+        assert result.wear_cost_per_kwh == summary["planner"]["wear_cost_per_kwh"] == 0.04
+        assert summary["planner"]["wear_cost"] == plan.wear_cost
+        assert plan.objective == pytest.approx(plan.stage_cost + plan.wear_cost + plan.terminal_cost, rel=1e-12)
+        json.dumps(summary, allow_nan=False)
+    assert [year["wear_cost"] for year in report(yearly, yearly_case)["years"]] == [
+        year_plan.plan.wear_cost for year_plan in yearly.year_plans
+    ]
+    # The planned cost stays import cost less export revenue; the wear weight is not money.
+    assert first_year.planned_step_cost.sum() == pytest.approx(first_year.plan.stage_cost, rel=1e-12)
+
+
+def test_a_wear_cost_does_not_raise_the_discharge_throughput():
+    case = prepare_replay(_config(5))
+    free = run_daily_target_oracle(case, **PLANNER)
+    worn = run_daily_target_oracle(case, wear_cost_per_kwh=0.5, **PLANNER)
+
+    assert free.plan.wear_cost == 0.0 and worn.plan.wear_cost > 0.0
+    assert worn.plan.targets.sum() < free.plan.targets.sum()
+    assert _discharge_kwh(worn.replay) < _discharge_kwh(free.replay)
+
+
+def test_the_command_line_records_the_wear_cost(tmp_path):
+    config = tmp_path / "config.json"
+    config.write_text(json.dumps(_config(2)), encoding="utf-8")
+    output = tmp_path / "dp.json"
+    argv = ["--config", str(config), "--output", str(output), "--target-levels", "3", "--soc-states", "3"]
+    assert main([*argv, "--wear-cost-per-kwh", "0.05"]) == 0
+    assert json.loads(output.read_text(encoding="utf-8"))["planner"]["wear_cost_per_kwh"] == 0.05
+
+
+@pytest.mark.parametrize("value", ["-0.01", "nan", "inf"])
+def test_the_command_line_refuses_a_negative_or_non_finite_wear_cost(tmp_path, value, capsys):
+    with pytest.raises(SystemExit) as raised:
+        main(["--config", str(tmp_path / "unused.json"), f"--wear-cost-per-kwh={value}"])
+    assert raised.value.code == 2
+    assert "--wear-cost-per-kwh: must be a finite number of at least 0" in capsys.readouterr().err
+
+
+def test_the_oracle_refuses_a_negative_wear_cost():
+    case = prepare_replay(_config(1))
+    with pytest.raises(ValueError, match="'wear_cost_per_kwh' must be a finite number of at least 0"):
+        run_daily_target_oracle(case, wear_cost_per_kwh=-0.01)
