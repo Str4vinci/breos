@@ -721,11 +721,14 @@ overlap_policy = "reject"           # default; "hold_target" permits overlap
 - The period names must exist in the tariff's schedule, and the two lists
   must not share a period under the default `overlap_policy = "reject"`.
   With `overlap_policy = "hold_target"` (`fixed_target` and
-  `daily_persistence`), the grid target is also the discharge floor on steps in both lists: above it the battery
-  may discharge down to it; below it the grid may charge up to it. It never
-  charges and discharges in the same step. Both bounds move together with
-  temperature and health. PV may still charge above the target. Steps in
-  only one list keep their usual behavior.
+  `daily_persistence`), the grid target is also the discharge floor on steps
+  in both lists: above it the battery may discharge down to it; below it the
+  grid may charge up to it. It never charges and discharges in the same
+  step. Both bounds move together with temperature and health. PV may still
+  charge above the target. Steps in only one list keep their usual behavior.
+  The floor holds the energy up to the target, not all the stored energy:
+  to keep the battery from discharging in a period at all, leave that period
+  out of `discharge_periods`.
 - `grid_charge_efficiency` has no default, because the inverter model has no
   AC-to-DC path to derive one from. Stored energy then also passes through
   the battery's own charge efficiency.
@@ -859,9 +862,16 @@ overlap_policy = "hold_target"
 On a step in both lists, the day's planned target is also the discharge
 floor, as under `fixed_target`: above it the battery may discharge down to
 it; below it the grid may charge up to it. The planner tries every candidate
-target with its own floor, so the day it runs is the day it planned. On a
-day with no grid target, which is every warm-start day, such a step has no
-floor, and the battery may discharge to `battery_min_soc` there.
+target with its own floor, so the instructions it executes are the ones it
+planned with. On a day with no grid target, which is every warm-start day,
+such a step has no floor, and the battery may discharge to
+`battery_min_soc` there.
+
+The target changes from day to day. A shared period that crosses midnight
+holds the previous day's target before midnight and the new day's after it,
+so when the new target is lower the battery may discharge, in that same
+period, grid energy it bought the evening before. The planner counts that
+cost when it chooses the targets.
 
 Keep these modelling assumptions in mind when reading the results:
 

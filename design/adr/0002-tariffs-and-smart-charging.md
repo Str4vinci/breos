@@ -811,7 +811,22 @@ period, charge off-peak, hold the target) could not be planned.
   for the whole day. The `daily_persistence` warm start
   (`no_grid_until_one_complete_local_day`) is such a day, so under
   `hold_target` it discharges in every discharge period, shared ones
-  included. The planner never chooses NaN; its candidates are finite.
+  included. That is one day for a run that starts at local midnight and two
+  when the first day is partial; the observation then carries across project
+  years and replacements, so the warm start does not recur. The planner
+  never chooses NaN; its candidates are finite.
+- **What holding the target means.** The floor holds the energy up to the
+  day's target, not all the stored energy. Above the target the battery may
+  discharge to the load in a shared period, whatever charged it. A policy
+  that never discharges off-peak is a discharge restriction, a period left
+  out of `discharge_periods` under `reject`, not `hold_target`. With a
+  target that changes from day to day, a shared period that crosses
+  midnight holds the previous day's target before midnight and the new
+  day's after it. When the new target is lower, the energy above it can
+  include grid charge bought the evening before, and the battery may
+  discharge it in the same shared period. The planner prices this in the
+  costs it compares; it is a property of the policy, not of the dispatch
+  step.
 - **Configuration.** `daily_persistence` accepts
   `overlap_policy = "hold_target"`, in App configuration and in a directly
   constructed `SmartChargingSpec`. `disabled` and `discharge_only` still
