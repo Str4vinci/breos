@@ -52,6 +52,20 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   from the degradation model. The default 0 gives results bit-identical to
   0.7.0. `provenance.smart_charging` records the value, and the shared
   solver takes it as a `wear_cost_per_kwh` argument for its other callers.
+- `[smart_charging] mode = "daily_persistence"` accepts
+  `overlap_policy = "hold_target"`
+  ([#398](https://github.com/Str4vinci/breos/issues/398), ADR 0002 A18), so
+  the planner can run Always dispatch with off-peak charging: discharge in
+  every period, grid-charge off-peak, and hold each day's planned target as
+  the off-peak discharge floor. On a step in both period lists the reserve
+  now follows each day's target in every candidate the shared daily-target
+  solver evaluates and in the day it executes; on a day with no grid target,
+  such as the warm-start day, there is no floor there (reserve 0). The
+  daily-target oracle (`tools/oracles/daily_target_dp.py`, first-year and
+  yearly planning) plans and replays `hold_target` configurations on the
+  same rule; before, a day target above the configured one failed. Runs
+  without `hold_target` are bit-identical, and the dispatch kernel is
+  unchanged.
 - `tools/oracles/daily_target_dp.py --wear-cost-per-kwh` gives the same
   wear weight to every solve of the perfect-information daily targets, in
   both planning modes, and `run_daily_target_oracle` takes it as
@@ -68,6 +82,13 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   about 12 ms instead of about 95 ms. The last few classifications are kept,
   so a `[reference_tariff]` on the run's schedule and `App.revalue` at new
   prices do not classify again. The labels are the same as before (#392).
+- `App.revalue` prices a run without smart charging on a tariff added, or on
+  a different schedule, from the stored step flows instead of simulating
+  again, and records `method = "repriced_by_step"` in
+  `provenance.revaluation`. The result has the same floats as a new run. To
+  allow this, such a run keeps each year's grid import and export step by
+  step in memory: about 11 MB for 20 years at 15-minute resolution. Runs
+  with smart charging still simulate again (#393).
 
 ### Fixed
 

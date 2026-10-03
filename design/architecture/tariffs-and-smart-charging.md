@@ -127,8 +127,10 @@ The amendments to ADR 0002 settle these conventions:
   discharge counts as self-consumption. Avoided emissions use net exchange,
   so grid energy that the battery time-shifts earns no credit (A8, A10).
 - Charge and discharge periods are disjoint by default. With
-  `overlap_policy = "hold_target"` (`fixed_target` only), a period in both
-  sets holds the target as the discharge floor (A14).
+  `overlap_policy = "hold_target"` (`fixed_target` and `daily_persistence`),
+  a period in both sets holds the target as the discharge floor (A14). Under
+  `daily_persistence` and the daily-target oracle the floor follows each
+  day's target (A18).
 - Controllers decide at configured-timezone civil-day boundaries.
   Degradation windows stay positional (A11).
 - Normal runs carry stored energy, origins and degradation state from one

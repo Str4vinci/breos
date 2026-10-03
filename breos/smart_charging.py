@@ -28,7 +28,9 @@ resolved instructions.
 the fixed-target layout but chooses each day's target at runtime: a private
 controller (``breos._daily_persistence``) re-plans every civil day from a
 forecast that repeats the last complete observed day. It has no static
-instructions, so :func:`resolve_instructions` refuses it.
+instructions, so :func:`resolve_instructions` refuses it. It also takes
+``hold_target`` (A18): on a period in both sets the floor is each day's
+planned target.
 """
 
 from __future__ import annotations
@@ -47,6 +49,8 @@ from breos.tariffs import ResolvedTariff
 
 SMART_CHARGING_MODES = ("disabled", "fixed_target", "daily_persistence", "discharge_only")
 OVERLAP_POLICIES = ("reject", "hold_target")
+# The modes with a grid-charge target that ``hold_target`` can hold (A14, A18).
+HOLD_TARGET_MODES = ("fixed_target", "daily_persistence")
 # The modes that plan targets at runtime; they take the planner settings.
 PLANNER_MODES = ("daily_persistence",)
 # The modes that never charge from the grid; they take discharge periods only.
@@ -174,7 +178,8 @@ class SmartChargingSpec:
             raise ValueError(
                 f"'smart_charging.charge_periods' and 'smart_charging.discharge_periods' share {', '.join(overlap)}; "
                 "every step either charges or discharges; "
-                "set overlap_policy = 'hold_target' with mode = 'fixed_target' to allow overlap"
+                "set overlap_policy = 'hold_target' with mode = 'fixed_target' or 'daily_persistence' "
+                "to allow overlap"
             )
 
 
@@ -182,14 +187,11 @@ def check_overlap_policy(mode: str, policy: str) -> None:
     """Validate the overlap policy for a table or a directly constructed spec."""
     if policy not in OVERLAP_POLICIES:
         raise ValueError(f"'smart_charging.overlap_policy' must be one of: {', '.join(OVERLAP_POLICIES)}")
-    if policy == "hold_target" and mode != "fixed_target":
-        reason = (
-            "the daily-persistence planner replaces grid targets but keeps reserves fixed, "
-            "so planning and replay cannot hold the same target"
-            if mode == "daily_persistence"
-            else "this mode has no grid-charge target to hold"
+    if policy == "hold_target" and mode not in HOLD_TARGET_MODES:
+        raise ValueError(
+            "'smart_charging.overlap_policy' = 'hold_target' requires mode = 'fixed_target' or "
+            "'daily_persistence': this mode has no grid-charge target to hold"
         )
-        raise ValueError(f"'smart_charging.overlap_policy' = 'hold_target' requires mode = 'fixed_target': {reason}")
 
 
 def resolve_instructions(spec: SmartChargingSpec, tariff: ResolvedTariff | None) -> DispatchInstructions | None:
@@ -232,7 +234,9 @@ def period_layout(spec: SmartChargingSpec, period_labels: Any, target_usable_fra
 
     A discharge period may discharge; a charge period may grid-charge; the
     reserve is zero except on overlapping steps under ``hold_target``, where
-    it equals the target. ``daily_persistence`` plans on the disjoint layout.
+    it equals the target. ``daily_persistence`` plans on this layout, and
+    :func:`breos._daily_targets.daily_target_instructions` moves the target
+    and that reserve together to each day's target (A18).
     """
     assert spec.grid_charge_efficiency is not None
     labels = np.asarray(period_labels, dtype=object)

@@ -7,7 +7,10 @@ temperature of every day. The policy class is the configured instruction
 layout, with one target per day in place of the configured one: every
 charge step of a day takes that day's target, from a grid of usable
 fractions. The discharge gate, the reserve, the grid-charge efficiency and
-the site limit stay as configured. The planned schedule is then replayed
+the site limit stay as configured. Under ``overlap_policy = "hold_target"``
+a period that both charges and discharges holds each day's target as its
+discharge floor (ADR 0002 A18), so Always dispatch with off-peak charging
+plans and replays as one policy. The planned schedule is then replayed
 through the production App run (:mod:`tools.oracles.replay`) and priced,
 next to App's own fixed-target run of the same configuration.
 
