@@ -112,6 +112,23 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   later projection years and in a span continued from its degradation
   state (or `simulate_energy_balance(battery_retired=True)`).
   The default `"keep"` gives results bit-identical to 0.7.0.
+- `[smart_charging] decision_boundary = "charge_window_start"`, a
+  `daily_persistence` planner setting
+  ([#406](https://github.com/Str4vinci/breos/issues/406), ADR 0002 A19),
+  decides one grid-charge target at the start of each charge window and
+  holds it until the next window starts, instead of one per civil day at
+  midnight. A window is a run of consecutive charge-period steps, so a
+  22:00–08:00 off-peak window, or an off-peak weekend, has one target, and
+  under `hold_target` one floor. The decision sees the battery at the window
+  start and only earlier observations; its forecast repeats the local day
+  before it, and each planning stage is one window. The daily-target solver
+  (`DailyTargetProblem.from_tariff`) and the oracle (`--decision-boundary`)
+  take the same boundary; the oracle plans one project year at a time, so it
+  still cuts the window that crosses the year seam into a short last stage
+  and a first stage of the next year. `provenance.smart_charging` records
+  `decision_boundary` for every `daily_persistence` run; the new mode
+  reports controller and planner version `"2"`. The default `"civil_day"`
+  is bit-identical to before, and the dispatch kernel is unchanged.
 
 ### Changed
 

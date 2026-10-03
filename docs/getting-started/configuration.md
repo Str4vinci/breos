@@ -908,6 +908,7 @@ forecast_horizon_days = 2           # days the planner looks ahead, today includ
 target_levels = 11                  # candidate targets 0, 0.1, ..., 1 of the usable window
 soc_states = 21                     # stored-energy grid points of the planner
 wear_cost_per_kwh = 0               # planning weight per kWh the battery discharges
+decision_boundary = "civil_day"     # or "charge_window_start"
 ```
 
 At each local midnight in the tariff's timezone the mode:
@@ -928,8 +929,10 @@ The table takes the same `charge_periods`, `discharge_periods`,
 `fixed_target`, and refuses `target_usable_fraction`, since the planner
 chooses it.
 `forecast_horizon_days`, `target_levels` and `soc_states` are integers (not
-booleans or `2.0`), and `wear_cost_per_kwh` is a number of at least 0 (see
-"Wear cost in the planner" below); `fixed_target`,
+booleans or `2.0`), `wear_cost_per_kwh` is a number of at least 0 (see
+"Wear cost in the planner" below), and `decision_boundary` is `"civil_day"`
+or `"charge_window_start"` (see "Deciding at the start of each charge
+window" below); `fixed_target`,
 `discharge_only` and `disabled` refuse every planner setting. `target_levels = 1` is valid and selects the sole target 0.
 The run starts with no complete day to repeat, so until one
 complete local day has been observed it sets no grid target
@@ -972,7 +975,8 @@ The target changes from day to day. A shared period that crosses midnight
 holds the previous day's target before midnight and the new day's after it,
 so when the new target is lower the battery may discharge, in that same
 period, grid energy it bought the evening before. The planner counts that
-cost when it chooses the targets.
+cost when it chooses the targets. Deciding at the start of each charge
+window, below, avoids this split.
 
 Keep these modelling assumptions in mind when reading the results:
 
@@ -1035,6 +1039,44 @@ pack's ageing against cycling. Part of it is calendar ageing, which happens
 whether the battery cycles or not, so a lower value can be argued. Compare
 runs at several values rather than reading one as exact.
 `provenance.smart_charging.wear_cost_per_kwh` records the value a run used.
+
+#### Deciding at the start of each charge window
+
+By default the planner decides at local midnight, so an off-peak window
+that crosses midnight, such as Bi-hourly 22:00–08:00, is split between two
+days' targets. With
+
+```toml
+decision_boundary = "charge_window_start"
+```
+
+the planner decides one target at the start of each charge window instead,
+and the target holds until the next window starts:
+
+- A charge window is a run of consecutive steps whose period is in
+  `charge_periods`. Adjacent charge periods form one window, a day can have
+  several windows, and a window can cross midnight or last a whole weekend:
+  under the 2026 weekly cycle, off-peak from Saturday 22:00 to Monday 07:00
+  is one window with one target.
+- The decision sees the battery's state at the window start and only the
+  data observed before it. Its forecast repeats the local day before the
+  decision: today's observed hours, and the rest from the last complete
+  day.
+- Each planning stage is one window. The planner looks ahead over the
+  windows that start within `forecast_horizon_days` days.
+- Under `overlap_policy = "hold_target"` the floor is the window's one
+  target for the whole window, across midnight.
+- A window that starts before one complete local day has been observed
+  gets no grid target, and holds none until the next window.
+- At least one tariff period must be outside `charge_periods`, or a window
+  would never end.
+
+`provenance.smart_charging.decision_boundary` records the boundary; under
+`charge_window_start` the controller and planner versions are `"2"`. The
+daily-target oracle takes the same choice as `--decision-boundary`, so a
+perfect-information replay stays comparable with the controller. The oracle
+plans one project year at a time, so it still splits the night that crosses
+the year seam between two targets; the controller does not.
 
 ## Load profiles
 

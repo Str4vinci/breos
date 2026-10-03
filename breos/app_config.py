@@ -46,6 +46,8 @@ from breos.pv.temperature import validate_temperature_inputs
 from breos.pv_modules import MODULES, PVModuleParams, get_module
 from breos.resources import load_config_json
 from breos.smart_charging import (
+    DECISION_BOUNDARIES,
+    DECISION_BOUNDARY_KEY,
     DISCHARGE_ONLY_MODES,
     OVERLAP_POLICIES,
     PLANNER_KEYS,
@@ -54,6 +56,7 @@ from breos.smart_charging import (
     SMART_CHARGING_MODES,
     WEAR_COST_KEY,
     SmartChargingSpec,
+    check_charge_windows,
     check_overlap_policy,
 )
 from breos.solar import (
@@ -1937,6 +1940,7 @@ SMART_CHARGING_TABLE = TableSpec(
         "grid_import_limit_w": number(minimum=0, min_exclusive=True, allow_none=True),
         **{name: integer(minimum=minimum) for name, (_default, minimum) in PLANNER_SETTINGS.items()},
         WEAR_COST_KEY: number(minimum=0),
+        DECISION_BOUNDARY_KEY: choice(DECISION_BOUNDARIES),
     },
     required=frozenset({"mode"}),
     check=_check_smart_charging_keys,
@@ -1957,7 +1961,8 @@ SMART_CHARGING_TABLE = TableSpec(
             "`battery_max_soc`. `fixed_target` only"
         ),
         "forecast_horizon_days": (
-            f"`daily_persistence` only: civil days the planner looks ahead, today included. An integer of at "
+            f"`daily_persistence` only: civil days the planner looks ahead, today included; under "
+            f"`charge_window_start`, the windows that start within that many days. An integer of at "
             f"least {PLANNER_SETTINGS['forecast_horizon_days'][1]}; default "
             f"{PLANNER_SETTINGS['forecast_horizon_days'][0]}"
         ),
@@ -1974,6 +1979,12 @@ SMART_CHARGING_TABLE = TableSpec(
             "`daily_persistence` only: a planning weight, in the tariff's currency per kWh of DC energy the "
             "battery discharges, that the planner adds to each day's cost. Not a degradation model: realised "
             "ageing still comes from the battery model. At least 0; default 0"
+        ),
+        DECISION_BOUNDARY_KEY: (
+            "`daily_persistence` only: when the planner decides a target. `civil_day` (default) decides one per "
+            "civil day at local midnight; `charge_window_start` decides one per charge window at its start, held "
+            "until the next window starts. A window is a run of consecutive steps in `charge_periods`; it may "
+            "cross midnight or span a weekend. Needs a tariff period outside `charge_periods`"
         ),
         "charge_periods": "Tariff periods in which the grid may charge the battery. Not with `discharge_only`",
         "discharge_periods": (
@@ -2040,6 +2051,7 @@ def _checked_smart_charging(
                 f"'smart_charging.{name}' has period(s) {', '.join(unknown)} that schedule {schedule.identifier!r} "
                 f"does not have. Its periods: {', '.join(sorted(periods))}."
             )
+    check_charge_windows(table.get(DECISION_BOUNDARY_KEY), table.get("charge_periods", ()), periods)
     return table
 
 

@@ -444,10 +444,12 @@ by feature:
   `grid_import_limit_w`; the App's top-level `smart_charging` block reports
   it as it reports the other modes. An App run with the experimental
   [daily-persistence smart charging](configuration.md#daily-persistence-experimental)
-  records `experimental`, `controller_version`, `planner_version`,
-  `forecast_horizon_days`, `target_levels`, `soc_states`, `wear_cost_per_kwh`, `forecast_policy`,
-  `warm_start_policy`, `planner_terminal_policy`, and the
-  `initial_stored_energy` and `final_stored_energy` by origin.
+  records `experimental`, `decision_boundary`, `controller_version`,
+  `planner_version`, `forecast_horizon_days`, `target_levels`, `soc_states`,
+  `wear_cost_per_kwh`, `forecast_policy`, `warm_start_policy`,
+  `planner_terminal_policy`, and the `initial_stored_energy` and
+  `final_stored_energy` by origin. Under
+  `decision_boundary = "charge_window_start"` the two versions are `"2"`.
 - **Battery replacement at the end of the horizon.**
   `battery_allow_terminal_replacement` and
   `battery_replacement_min_remaining_years` are in the `resolved_config` of

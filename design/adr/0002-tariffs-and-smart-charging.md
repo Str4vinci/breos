@@ -1,14 +1,14 @@
 # 0002 — Tariffs are resolved values; smart charging is an instruction layer
 
-- **Status:** Accepted; amendments A1–A17 Accepted, A18 Proposed.
-  Implemented in 0.7.0, A15–A18 in 0.7.1,
+- **Status:** Accepted; amendments A1–A17 Accepted, A18 and A19 Proposed.
+  Implemented in 0.7.0, A15–A19 in 0.7.1,
   with two additions that no amendment accepted: discharge-only mode and
   calendar-month seasons (see
   [Additions without an amendment](#additions-without-an-amendment)).
 - **Date:** 2026-08-20; amendments 2026-09-26; A6 accepted 2026-09-26;
   A1–A5 and A7–A10 accepted 2026-09-27; A11 and A12 accepted 2026-09-30;
-  A13 and A14 accepted 2026-10-01; A15–A17 accepted 2026-10-02; A18
-  proposed 2026-10-03
+  A13 and A14 accepted 2026-10-01; A15–A17 accepted 2026-10-02; A18 and
+  A19 proposed 2026-10-03
 
 ## Context
 
@@ -500,6 +500,8 @@ degradation still closes once on its existing positional window. A controller
 at a shared boundary observes the post-aging/post-replacement state. The
 window close uses the `Battery_Energy_Beginning` ledger value from the
 subcall containing its last step.
+*(Extended by A19, proposed 2026-10-03: a controller may also decide on
+steps it marks inside a civil day.)*
 
 ### A12. Daily persistence: warm start and forecast-terminal value — Accepted 2026-09-30
 
@@ -838,3 +840,86 @@ period, charge off-peak, hold the target) could not be planned.
   target, so every reserve, plan and result is bit-identical. The dispatch
   kernel is unchanged; Python and Numba run the same held-target step as
   under `fixed_target`. The result format stays `"1"`.
+
+### A19. Daily targets can be decided at the start of each charge window (#406) — Proposed 2026-10-03
+
+Extends A11 and A12 and replaces neither. Under A12 `daily_persistence`
+picks one target per civil day, decided at local midnight. Off-peak windows
+usually cross midnight: under Bi-hourly, 22:00–08:00 is split between two
+targets, and the 22:00–24:00 part charges toward a target chosen for a day
+whose peak it does not serve. Under `hold_target` (A18) the floor also
+changes at midnight, and a lower new target can release the grid energy the
+battery bought the evening before. A household controller sets its target
+when charging starts.
+
+- **Configuration.** `smart_charging.decision_boundary`, a
+  `daily_persistence` planner setting: `"civil_day"`, the default, keeps
+  A12 bit for bit; `"charge_window_start"` decides one target per charge
+  window. `fixed_target`, `discharge_only` and `disabled` refuse the key, as
+  they refuse the other planner settings.
+- **Windows.** A charge window is a maximal run of consecutive steps whose
+  period is in `charge_periods`. Adjacent charge periods therefore form one
+  window, a day may hold several windows (the Saturday of the Portuguese
+  weekly cycle has three), and a window may cross midnight or run for days
+  (off-peak from Saturday 22:00 to Monday 07:00 is one window). A window
+  starts at a charge step that does not follow one; the first step of a
+  replayed calendar follows the calendar's last step (A2). Windows are
+  local wall-clock periods of the resolved tariff, so they keep their
+  local start across DST. With every tariff period a charge period a
+  window would never end, and the boundary is refused.
+- **Decision and hold.** The target is decided at the window's first step
+  and holds on every charge step until the next window starts. Under
+  `hold_target` the floor is that one target for the whole window, across
+  midnight. Steps before the first window start the run sees have no
+  target, as in the warm start.
+- **Controller seam (A11).** A controller may name, per step of the
+  resolved calendar, where it decides inside a civil day. The session then
+  ends a dispatch segment at each marked step and asks the controller there
+  for the rest of the logical day, with the battery state the segment left.
+  Civil-day decisions, observations, aging windows and the A2 seam carry
+  are unchanged; a marked decision inside a day carried across the seam
+  replaces the carried instructions from its step. A civil-day start that
+  is not a window start keeps the target in force. A controller that marks
+  no step decides exactly as before.
+- **Causality and forecast (A12).** A window decision sees the known
+  tariff, the battery state at the window start, and observations made
+  before it only. Its forecast
+  (`repeat_local_day_before_decision`) repeats, slot by wall time and fold,
+  each slot's most recent observation: the current day so far, then the
+  last complete local day. When that is the day before, the forecast is the
+  local day that ends at the decision (23 or 25 hours across a DST change).
+- **Warm start** (`no_grid_until_a_window_after_one_complete_local_day`).
+  A window that starts before one complete local day has been observed gets
+  no grid target and holds none until the next window starts. A run that
+  begins at local midnight plans its first target at the first window start
+  after its first day ends; one that begins mid-day, whose first day is not
+  an observation, a day later. The day before a decision can be fully
+  observed before that; it is not used, so the observation unit stays the
+  civil day.
+- **Rolling solve.** Each planning stage is one window, from its start to
+  the next window's start. A solve covers the windows that start before the
+  decision's wall-clock time `forecast_horizon_days` civil days later, the
+  decision's own window first, cut where the known tariff ends. For a
+  window every day at 22:00 that is `forecast_horizon_days` days, as under
+  civil days. The session supplies two more days of known tariff for the
+  last window's run to the next window start. Only the first window's
+  target is executed; the next window is planned again. The A12 terminal
+  value and the A17 wear cost apply unchanged.
+- **Oracle and solver.** `DailyTargetProblem.from_tariff` and the
+  daily-target oracle (`--decision-boundary`) take the same boundary, so
+  each planning day is a window, from one window start to the next. A plan
+  covers one project year in both oracle modes, so the window across the
+  year seam is cut there: its last part (31 December 22:00–24:00 under
+  Bi-hourly) is a short final planning day whose target is chosen against
+  the year-end refill, and the year starts with the rest of it as a day of
+  its own. The oracle therefore still splits one night per project year,
+  where the controller holds one target across the seam; a comparison of
+  the two differs by that night. The oracle's CSV records the boundary.
+- **Provenance.** `provenance.smart_charging.decision_boundary` records the
+  boundary of every `daily_persistence` run. Under `charge_window_start`
+  `controller_version` and `planner_version` are `"2"` and the forecast and
+  warm-start policies carry the names above; under `civil_day` everything
+  stays as in A12. The result format stays `"1"`.
+- **Unchanged.** The dispatch kernel. Every configuration accepted before
+  decides, dispatches and reports as before, apart from the new
+  `decision_boundary` provenance key; App goldens are bit-identical.
