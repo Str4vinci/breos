@@ -41,6 +41,7 @@ from breos.config_schema import (
     table,
     text,
 )
+from breos.constants import SKIPPED_REPLACEMENT_ACTIONS
 from breos.economics import DEFAULT_DISCOUNT_RATE, DEFAULT_INFLATION_RATE
 from breos.emissions import EmissionsParams
 from breos.pv.model_options import PV_MODEL_CONFIG_KEYS
@@ -236,6 +237,10 @@ BATTERY_TABLE = TableSpec(
         # The final period of the last project year only; earlier years
         # always replace, since the next year inherits the pack.
         "allow_terminal_replacement": boolean,
+        # Measured to the end of the project, across its years.
+        "replacement_min_remaining_years": number(minimum=0),
+        # What a swap the two rules above skip does with the old pack.
+        "skipped_replacement_action": choice(SKIPPED_REPLACEMENT_ACTIONS),
         "initial_soh": number(minimum=0, maximum=100, min_exclusive=True),
     },
 )
@@ -489,6 +494,8 @@ def resolve_optimization_config(config: Mapping[str, Any]) -> dict[str, Any]:
     battery.setdefault("replacement_cost", None)
     battery.setdefault("enable_replacement", True)
     battery.setdefault("allow_terminal_replacement", True)
+    battery.setdefault("replacement_min_remaining_years", 0.0)
+    battery.setdefault("skipped_replacement_action", "keep")
     battery.setdefault("initial_soh", 100.0)
     resolved["costs"] = resolved.get("costs") or {}
 

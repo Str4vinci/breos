@@ -516,6 +516,8 @@ def terminal_health_credit(
     horizon_years: int,
     npv_savings: float,
     allow_terminal_replacement: bool,
+    replacement_min_remaining_years: float = 0.0,
+    skipped_replacement_action: str = "keep",
 ) -> TerminalHealthCredit:
     """Credit the installed pack's capacity health above its physical EOL threshold.
 
@@ -523,6 +525,8 @@ def terminal_health_credit(
     booked at exactly t = T, with the outlay routine's t = 0 price convention,
     and discounted from that instant. No cashflow or replacement is changed.
     Capacity health omits resistance-related limits; this is not resale value.
+    A pack kept or retired below its threshold (ADR 0003 E11, E12) has no
+    health above it, so it earns no credit.
     """
     inputs = {
         "threshold": threshold,
@@ -586,6 +590,8 @@ def terminal_health_credit(
             "replacement_policy": {
                 "enable_replacement": True,
                 "allow_terminal_replacement": allow_terminal_replacement,
+                "replacement_min_remaining_years": replacement_min_remaining_years,
+                "skipped_replacement_action": skipped_replacement_action,
             },
         },
     )

@@ -23,6 +23,17 @@ DC charge-path input. Discharge power is measured as AC delivered to load.
    breos.battery.BatteryConfig
 ```
 
+Each crossing of the end-of-life threshold in a simulated span, replaced or
+not, is reported as an {py:class}`~breos.battery.EndOfLifeEvent` (ADR 0003
+E11).
+
+```{eval-rst}
+.. autosummary::
+   :toctree: generated/
+
+   breos.battery.EndOfLifeEvent
+```
+
 ## Temperature model
 
 The indoor temperature model couples ambient air temperature to a damped
