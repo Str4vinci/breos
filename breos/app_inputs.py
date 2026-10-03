@@ -29,6 +29,7 @@ from breos.weather import (
     AmbiguousWeatherError,
     _normalised_horizon_metadata,
     fill_leap_day,
+    read_weather_csv,
     warn_if_naive_weather_timestamps,
 )
 
@@ -316,13 +317,18 @@ def load_weather_for_simulation(
     irradiance_resampling: str = "auto",
     weather_source: str | None = None,
     period: SimulationPeriod | None = None,
+    weather_file: str | None = None,
 ) -> pd.DataFrame:
     """Load TMY weather, falling back to PVGIS fetch.
 
     The weather must cover the whole calendar year of ``start_year``, or with
     a ``period`` the whole window, which the returned weather is cut to.
 
-    When ``weather_dir`` is not given, a ``weather/`` directory in the
+    ``weather_file`` (the App ``weather_file`` key) names the file to read,
+    relative to the working directory, and nothing is scanned or fetched. It
+    must hold at most one year of weather.
+
+    Otherwise, when ``weather_dir`` is not given, a ``weather/`` directory in the
     current working directory is scanned first: a file matching the
     location preset key takes precedence over the PVGIS fetch. Remove or
     rename the directory (or its files) to force a fresh fetch.
@@ -335,7 +341,10 @@ def load_weather_for_simulation(
     weather = None
     weather_path = weather_dir or Path.cwd() / "weather"
 
-    if resolved.loc_key and weather_path.is_dir():
+    if weather_file is not None:
+        weather = read_weather_csv(weather_file)
+        _require_one_year_weather(weather)
+    elif resolved.loc_key and weather_path.is_dir():
         try:
             weather = deps.load_weather(
                 location=resolved.loc_key,
@@ -402,6 +411,23 @@ def load_weather_for_simulation(
         # a full-year run computes for it.
         weather = cut_to_period(weather, period)
     return weather
+
+
+def _require_one_year_weather(weather: pd.DataFrame) -> None:
+    """Raise unless a ``weather_file`` holds timestamped weather spanning at most one year.
+
+    The App restamps the weather onto the simulated year, so a multi-year
+    file would put several years of weather on one calendar.
+    """
+    index = weather.index
+    if not isinstance(index, pd.DatetimeIndex) or index.empty:
+        raise ValueError(f"Weather from {_weather_source_label(weather)} has no timestamped rows")
+    if index.max() - index.min() >= pd.Timedelta(days=366):
+        raise ValueError(
+            f"Weather from {_weather_source_label(weather)} runs from {index.min()} to {index.max()}, more than "
+            "one year. 'weather_file' takes one year of weather, such as a TMY; sample multi-year historical "
+            "weather with breos.montecarlo."
+        )
 
 
 def build_dc_system_base(cfg: dict[str, Any], resolved: ResolvedAppConfig, weather: pd.DataFrame) -> pd.Series:
@@ -497,6 +523,7 @@ def prepare_simulation_inputs(
         irradiance_resampling=cfg["irradiance_resampling"],
         weather_source=cfg["weather_source"],
         period=period,
+        weather_file=cfg["weather_file"],
     )
     pv_breakdown = build_pv_production_breakdown(cfg, resolved, weather)
     dc_system_base = pv_breakdown.dc_after_losses

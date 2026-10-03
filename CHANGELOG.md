@@ -6,6 +6,18 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
 
 ### Added
 
+- `weather_file` names the App's weather file directly
+  ([#394](https://github.com/Str4vinci/breos/issues/394)). The App reads that
+  CSV (or `.csv.gz`), whatever its name and for any location, instead of
+  scanning `weather/` or fetching from PVGIS; `breos run` takes
+  `--weather-file`. A relative path is taken from the working directory, as
+  for the other path keys. The file must exist when the App is built and hold
+  at most one year of weather. `provenance.weather` records its absolute
+  `path` and `sha256`, and `provenance.resolved_config.weather_file` the path
+  as given. It cannot be combined with `weather_source`, and Monte Carlo,
+  which samples `[montecarlo].weather_file`, refuses it.
+  `breos.weather.read_weather_csv` reads one such file with its provenance.
+  Without the key every result is unchanged.
 - The optimizer can search East–West roofs (#384). `[mode] layouts =
   ["single", "east_west"]` adds a layout gene; an East–West design puts
   floor(n / 2) modules at azimuth 90 and the rest at 270, at
