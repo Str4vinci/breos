@@ -140,6 +140,23 @@ class BatteryConfig:
     A call treats its own span as the horizon: a caller that splits one
     horizon across several calls must leave it ``True`` on every span but
     the last, because the next span inherits the pack.
+
+    ``replacement_min_remaining_years`` skips any end-of-life swap that
+    would leave the new pack less than this many years of the horizon to
+    serve. The default 0 skips none. Time is counted as a projection books a
+    swap's ``Replacement_Time_Years``: this span is one project year, and
+    ``replacement_years_after_span`` whole project years follow it. A swap at
+    the close of a period ending on span step ``k`` of ``n`` therefore has
+    ``replacement_years_after_span + (n - k) / n`` years left, and it is
+    skipped when that is below the minimum. The test is made in steps,
+    ``replacement_years_after_span * n + n - k`` against
+    ``replacement_min_remaining_years * n``, so a swap with exactly the
+    minimum left still happens. A skipped pack keeps ageing below end of
+    life and is reported as it is, as with the terminal guard. Any positive
+    minimum also skips the final period's swap, whatever
+    ``allow_terminal_replacement`` says. A call with
+    ``replacement_years_after_span = 0`` treats its own span as the last
+    project year; a projection sets the field for each year it runs.
     """
 
     nominal_energy_wh: float  # Required — nominal capacity in Wh
@@ -154,6 +171,11 @@ class BatteryConfig:
     # False skips the end-of-life swap at the close of the span's final
     # degradation period only; that period still ages the pack.
     allow_terminal_replacement: bool = True
+    # Skips a swap that leaves the new pack less than this many project
+    # years to serve; 0 skips none. The years that follow this span count
+    # toward what is left.
+    replacement_min_remaining_years: float = 0.0
+    replacement_years_after_span: int = 0
     calendar_model: str = "naumann_lam_field_calibrated"  # v1 field-calibrated default alias
     # Resistance fade (opt-in): grows internal resistance daily and derates
     # the charge/discharge efficiencies in the energy loop so the effective
@@ -200,6 +222,18 @@ class BatteryConfig:
         if not isinstance(self.allow_terminal_replacement, (bool, np.bool_)):
             raise ValueError("allow_terminal_replacement must be a bool")
         self.allow_terminal_replacement = bool(self.allow_terminal_replacement)
+        if isinstance(self.replacement_years_after_span, (bool, np.bool_)) or not isinstance(
+            self.replacement_years_after_span, (int, np.integer)
+        ):
+            raise ValueError("replacement_years_after_span must be a non-negative integer")
+        if self.replacement_years_after_span < 0:
+            raise ValueError("replacement_years_after_span must be a non-negative integer")
+        self.replacement_years_after_span = int(self.replacement_years_after_span)
+        self.replacement_min_remaining_years = finite(
+            "replacement_min_remaining_years", self.replacement_min_remaining_years
+        )
+        if self.replacement_min_remaining_years < 0.0:
+            raise ValueError("replacement_min_remaining_years must be non-negative")
 
         self.nominal_energy_wh = finite("nominal_energy_wh", self.nominal_energy_wh)
         self.initial_soh = finite("initial_soh", self.initial_soh)
@@ -1096,9 +1130,11 @@ def _apply_daily_degradation(
     boundary; a replacement moves that endpoint to the fresh pack's
     max SOC, since the recorded state was rewritten to match.
 
-    ``replacement_allowed`` is False only for the span's final period when
-    the battery does not allow a terminal replacement. The period still ages
-    the pack and is still recorded; only the end-of-life swap is skipped.
+    ``replacement_allowed`` is False for the span's final period when the
+    battery does not allow a terminal replacement, and for any period that
+    closes with less than the battery's minimum service time left. The
+    period still ages the pack and is still recorded; only the end-of-life
+    swap is skipped.
     """
     period_steps = len(soc_absolute_day)
     period_seconds = period_steps * hours_per_step * 3600.0
@@ -1818,6 +1854,11 @@ def _simulate_core(
     # Slicing the DatetimeIndex once per day was a measurable share of a
     # compiled year, so the aging model gets views of one tick array instead.
     time_ticks, ticks_per_second = _datetime_index_ticks(rng)
+    # The horizon's steps after this span, and the fewest steps a new pack
+    # must have left to serve; both count this span as one project year
+    # (see BatteryConfig.replacement_min_remaining_years).
+    steps_after_span = battery_config.replacement_years_after_span * n_steps
+    min_remaining_steps = battery_config.replacement_min_remaining_years * n_steps
     window_start = 0
     while window_start < n_steps:
         window_end = min(window_start + steps_per_day, n_steps)
@@ -1902,8 +1943,11 @@ def _simulate_core(
             grid_origin_energy_wh=Battery_Grid_Origin_Energy_Wh,
             battery_energy_beginning=battery_energy_beginning,
             # The period closing on the span's last step is its final one,
-            # whole or partial; a pack bought there would serve no step.
-            replacement_allowed=battery_config.allow_terminal_replacement or window_end < n_steps,
+            # whole or partial; a pack bought there would serve no step. A
+            # pack bought with less than the minimum left to serve is not
+            # bought either.
+            replacement_allowed=(battery_config.allow_terminal_replacement or window_end < n_steps)
+            and steps_after_span + n_steps - window_end >= min_remaining_steps,
         )
         # Refresh the loop's hot copies of the daily-boundary state.
         battery_soh_decimal = aging.soh_fraction

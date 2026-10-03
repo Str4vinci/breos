@@ -243,6 +243,7 @@ _BATTERY_SPEC_KEYS = (
     "calendar_model",
     "enable_resistance_fade",
     "allow_terminal_replacement",
+    "replacement_min_remaining_years",
 )
 
 
@@ -279,17 +280,24 @@ def _battery_replacement_treatment(battery: Mapping[str, Any]) -> Dict[str, Any]
 
     ``allow_terminal_replacement`` is the configured policy for the final
     period; the earlier years' internal permission is not the user's setting.
+    ``replacement_min_remaining_years`` is the configured minimum service
+    time of a new pack, measured to the end of the project.
     """
     return {
         "method": "simulated_yearly_state_propagation",
         "description": "Projected scoring simulates every year and records actual replacement events.",
         "higher_fidelity_basis": "App multiyear SOH propagation",
         "allow_terminal_replacement": bool(battery.get("allow_terminal_replacement", True)),
+        "replacement_min_remaining_years": float(battery.get("replacement_min_remaining_years", 0.0)),
         "terminal_period": (
             "The final degradation period of the last project year: the elapsed one-day window of simulation "
             "steps that ends on the horizon's last step, whole or partial. It is always aged and recorded; "
             "allow_terminal_replacement = false skips only its end-of-life replacement. Every earlier period, "
             "including the close of each earlier project year, replaces as usual."
+        ),
+        "minimum_service": (
+            "In any project year, an end-of-life replacement that would leave the new pack less than "
+            "replacement_min_remaining_years of the project to serve is skipped; 0 skips none."
         ),
     }
 

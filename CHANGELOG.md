@@ -52,6 +52,21 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   from the degradation model. The default 0 gives results bit-identical to
   0.7.0. `provenance.smart_charging` records the value, and the shared
   solver takes it as a `wear_cost_per_kwh` argument for its other callers.
+- `battery_replacement_min_remaining_years` (App and Monte Carlo), the
+  optimizer's `[battery] replacement_min_remaining_years` and
+  `BatteryConfig.replacement_min_remaining_years` skip a battery
+  replacement that would leave the new pack less than that many project
+  years to serve ([#400](https://github.com/Str4vinci/breos/issues/400),
+  ADR 0003 E11). The time left runs from the swap, as
+  `Replacement_Time_Years` books it, to the end of the project, so each
+  projection year counts the years after it
+  (`BatteryConfig.replacement_years_after_span`). A skipped pack keeps
+  ageing below its end-of-life threshold and is reported as it is. Any
+  positive value also skips the final-period swap that
+  `battery_allow_terminal_replacement = false` skips. The value is recorded
+  in `provenance.resolved_config`, the optimizer's
+  `battery_replacement_treatment` and the `[terminal_value]`
+  `replacement_policy`. The default 0 gives results bit-identical to 0.7.0.
 
 ### Changed
 

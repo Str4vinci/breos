@@ -175,6 +175,50 @@ optimizer records it in `battery_replacement_treatment`. A direct
 caller that splits one horizon across several calls must keep
 `allow_terminal_replacement=True` on every span except the last.
 
+### Minimum service time of a replacement
+
+`battery_allow_terminal_replacement` covers only the last day. A pack that
+reaches end of life on day 100 of the last project year is still bought at
+full price and serves only the rest of that year.
+`battery_replacement_min_remaining_years` sets the fewest project years a
+replacement must have left to serve:
+
+```toml
+projection_years = 20
+battery_replacement_min_remaining_years = 1.0  # no pack bought in the last year
+```
+
+- A replacement is skipped when less than this time is left from the swap
+  to the end of the project. The time is counted as
+  `Replacement_Time_Years` books a swap: each project year is one simulated
+  year, and the swap happens at the end of the step that closes the
+  degradation period where the pack reaches end of life. With 20 years and
+  `1.0`, a pack that reaches end of life at 19.3 years is not replaced. A
+  swap with exactly the minimum left, such as one at the close of year 19,
+  still happens.
+- The comparison is made in simulation steps: the steps left in the project
+  against the minimum times the steps in one year. A minimum such as
+  `0.25`, `0.5` or `1.0` is a whole number of steps, so its boundary is
+  exact.
+- A skipped pack stays installed. It keeps ageing below its end-of-life
+  threshold until the end of the project, and the result reports its state
+  of health, cycles, resistance and stored energy. No replacement, replaced
+  capacity or replacement cost is recorded for it.
+- The default `0` replaces at every end of life, as before. Any positive
+  value also skips the final period's replacement, so
+  `battery_allow_terminal_replacement` matters only when this key is `0`.
+- A `[period]` window is one project year, so the minimum is a fraction of
+  the window.
+
+Monte Carlo applies the key to each trajectory, measured to the end of that
+trajectory's years. The optimizer takes it as `[battery]
+replacement_min_remaining_years` and records it in
+`battery_replacement_treatment`. The resolved value is in
+`provenance.resolved_config`. A direct
+{py:class}`~breos.battery.BatteryConfig` call treats its own span as the
+last project year; set `replacement_years_after_span` to the number of
+project years that follow it.
+
 ## Discovering available options
 
 Use the CLI to list packaged option keys:
@@ -569,8 +613,9 @@ stored energy are excluded.
 
 Only the pack present at the end is valued. Every replacement outlay
 remains, and replacement policy is unchanged. If
-`battery_allow_terminal_replacement = false` skips the final swap, the old
-pack remains and earns zero at or below threshold. Enabled PV-only and
+`battery_allow_terminal_replacement = false` or
+`battery_replacement_min_remaining_years` skips a late swap, the old pack
+remains and earns zero at or below threshold. Enabled PV-only and
 zero-capacity runs explicitly report zero. A partial `[period]` run keeps
 all lifetime credit fields null.
 

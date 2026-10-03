@@ -38,6 +38,7 @@ degradation_rate = 0.005         # fraction per year
 [battery]
 eol_percentage = 0.70            # replace once usable capacity drops below this
 allow_terminal_replacement = true  # false: no pack bought at the horizon's final degradation period
+replacement_min_remaining_years = 0.0  # no pack bought with less than this many project years left
 calendar_model = "naumann_lam_field_calibrated"
 max_soc = 0.90
 min_soc = 0.10

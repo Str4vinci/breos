@@ -10,4 +10,4 @@ or that the implementation does differently.
 |---|---|
 | [0001: Documentation architecture](0001-docs-architecture.md) | Accepted; updated for 0.7.0 |
 | [0002: Tariffs and smart charging](0002-tariffs-and-smart-charging.md) | Accepted, amendments A1–A17; implemented in 0.7.0, A15–A17 in 0.7.1 |
-| [0003: Economic basis and currency-neutral results](0003-economic-basis.md) | Accepted, E1–E10; implemented in 0.7.0 |
+| [0003: Economic basis and currency-neutral results](0003-economic-basis.md) | Accepted, E1–E10; implemented in 0.7.0. E11 Proposed, implemented for 0.7.1 |

@@ -55,7 +55,9 @@ def build_battery_config(cfg: dict[str, Any], resolved: ResolvedAppConfig, *, in
     discharge, the BatteryConfig default convention. Replacement is on; the
     economics prices each one (ADR 0003 E4). ``battery_allow_terminal_replacement``
     is the project's policy for its final period; :func:`project_years`
-    applies it to the final year only.
+    applies it to the final year only. ``battery_replacement_min_remaining_years``
+    is the project's minimum service time for a new pack; :func:`project_years`
+    tells each year how many project years follow it.
     """
     battery_kwh = cfg["battery_kwh"]
     efficiency: dict[str, Any] = {}
@@ -72,6 +74,7 @@ def build_battery_config(cfg: dict[str, Any], resolved: ResolvedAppConfig, *, in
         inverter_ac_capacity_w=resolved.inverter_ac_capacity_w,
         enable_replacement=True,
         allow_terminal_replacement=cfg.get("battery_allow_terminal_replacement", True),
+        replacement_min_remaining_years=cfg.get("battery_replacement_min_remaining_years", 0.0),
         calendar_model=cfg["calendar_model"],
         max_charge_power_w=cfg["battery_max_charge_power_w"],
         max_discharge_power_w=cfg["battery_max_discharge_power_w"],
@@ -810,7 +813,11 @@ def project_years(
     The battery's ``allow_terminal_replacement`` is the project's policy for
     the final degradation period of its last year. Every earlier year runs a
     copy that allows it, because the next year inherits the pack a year-end
-    replacement installs.
+    replacement installs. Its ``replacement_min_remaining_years`` is measured
+    to the end of the project: with a positive minimum each year runs a copy
+    whose ``replacement_years_after_span`` is the number of years after it,
+    so a swap is skipped when the project time left after its
+    ``Replacement_Time_Years`` is below the minimum.
 
     With a ``tariff``, resolved on the simulation calendar, each year row
     carries its import cost, export revenue, no-system import cost and fixed
@@ -876,6 +883,8 @@ def project_years(
         batt_cfg = battery_config(carry.soh_pct)
         if year_idx < years - 1 and not batt_cfg.allow_terminal_replacement:
             batt_cfg = replace(batt_cfg, allow_terminal_replacement=True)
+        if batt_cfg.replacement_min_remaining_years > 0.0:
+            batt_cfg = replace(batt_cfg, replacement_years_after_span=years - 1 - year_idx)
         year_set = instructions_for_year(year_idx)
         planner = None if year_set is None or isinstance(year_set, DispatchInstructions) else year_set
         static = year_set if isinstance(year_set, DispatchInstructions) else None
@@ -1178,6 +1187,7 @@ def value_projection(cfg: dict[str, Any], resolved: ResolvedAppConfig, run: Proj
             horizon_years=len(yearly_df),
             npv_savings=float(cost_projection.attrs["final_npv_savings"]),
             allow_terminal_replacement=cfg.get("battery_allow_terminal_replacement", True),
+            replacement_min_remaining_years=cfg.get("battery_replacement_min_remaining_years", 0.0),
         )
     return ProjectionValue(
         costs=costs,

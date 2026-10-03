@@ -106,7 +106,10 @@ than 1 Wh):
 With `battery_allow_terminal_replacement = false`, a pack that reaches end of
 life in the final degradation period of the horizon is not replaced. The
 replacement count and costs then leave out that one swap, and
-`battery_soh_end_pct` can end below the end-of-life threshold. See
+`battery_soh_end_pct` can end below the end-of-life threshold. With
+`battery_replacement_min_remaining_years` above 0, every swap that would leave
+the new pack less than that many project years is left out in the same way,
+and the old pack ages below the threshold until the end of the project. See
 [Battery replacement at the end of the horizon](configuration.md#battery-replacement-at-the-end-of-the-horizon).
 
 ## Estimated battery residual value
@@ -407,10 +410,13 @@ by feature:
   `warm_start_policy`, `planner_terminal_policy`, and the
   `initial_stored_energy` and `final_stored_energy` by origin.
 - **Battery replacement at the end of the horizon.**
-  `battery_allow_terminal_replacement` is in the `resolved_config` of App and
-  Monte Carlo results, and the provenance of a projected design and of an
-  optimizer search carries `battery_replacement_treatment`, with its
-  `allow_terminal_replacement` policy and a `terminal_period` description.
+  `battery_allow_terminal_replacement` and
+  `battery_replacement_min_remaining_years` are in the `resolved_config` of
+  App and Monte Carlo results, and the provenance of a projected design and
+  of an optimizer search carries `battery_replacement_treatment`, with its
+  `allow_terminal_replacement` policy, a `terminal_period` description, its
+  `replacement_min_remaining_years` and a `minimum_service` description. An
+  enabled `[terminal_value]` records both in its `replacement_policy`.
   See
   [battery replacement at the end of the horizon](configuration.md#battery-replacement-at-the-end-of-the-horizon).
 - **No-system costs.** Results carry `no_system_fixed_charge_year1_prices`

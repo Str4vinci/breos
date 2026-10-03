@@ -516,6 +516,7 @@ def terminal_health_credit(
     horizon_years: int,
     npv_savings: float,
     allow_terminal_replacement: bool,
+    replacement_min_remaining_years: float = 0.0,
 ) -> TerminalHealthCredit:
     """Credit the installed pack's capacity health above its physical EOL threshold.
 
@@ -586,6 +587,7 @@ def terminal_health_credit(
             "replacement_policy": {
                 "enable_replacement": True,
                 "allow_terminal_replacement": allow_terminal_replacement,
+                "replacement_min_remaining_years": replacement_min_remaining_years,
             },
         },
     )
