@@ -102,6 +102,11 @@ than 1 Wh):
 | `battery_replacements` | Total number of replacements over the projection |
 | `battery_replacement_cost_t0_prices` | Total replacement cost at t = 0 prices, neither inflated nor discounted |
 | `battery_replacement_cost_npv` | The same replacements inflated to and discounted from each swap instant, as `npv_savings` counts them |
+| `battery_end_of_life_events` | Every end-of-life crossing over the projection, in order; see [End-of-life events](#end-of-life-events) |
+| `battery_first_end_of_life_years` | Time of the first crossing, in years from commissioning; None without one |
+| `battery_first_end_of_life_action` | What was done at the first crossing: `"replaced"` or `"kept"`; None without one |
+| `battery_first_end_of_life_reason` | Why, as in `battery_end_of_life_events`; None without one |
+| `battery_first_end_of_life_soh_pct` | State of health at the first crossing; None without one |
 
 With `battery_allow_terminal_replacement = false`, a pack that reaches end of
 life in the final degradation period of the horizon is not replaced. The
@@ -111,6 +116,38 @@ replacement count and costs then leave out that one swap, and
 the new pack less than that many project years is left out in the same way,
 and the old pack ages below the threshold until the end of the project. See
 [Battery replacement at the end of the horizon](configuration.md#battery-replacement-at-the-end-of-the-horizon).
+
+### End-of-life events
+
+A crossing is a degradation period that closes with the installed pack at or
+below `battery_eol_percentage`. Each entry of `battery_end_of_life_events`
+records one:
+
+| Field | Description |
+|---|---|
+| `year` | Project year of the crossing, from 1 |
+| `time_years` | Years from commissioning to the end of the closing step: the instant a replacement is booked at, equal to the `financial` row's `replacement_time_years` |
+| `date` | Calendar date of the closing step; every project year replays the simulated calendar, moved forward by its year |
+| `action` | `"replaced"`: a new pack was installed. `"kept"`: no pack was bought and the old one stays in service below its threshold |
+| `reason` | `"end_of_life"` for a replacement. For a skipped one, `"min_remaining_years"` (less than `battery_replacement_min_remaining_years` was left) or `"terminal_period"` (the final period with `battery_allow_terminal_replacement = false`) |
+| `soh_pct` | State of health at the crossing, the value compared with the threshold |
+
+A replaced pack's successor can cross again, so a long horizon can list
+several replacements. A pack that is kept crosses once: it stays below its
+threshold, and no later period records it again. A skipped replacement is
+therefore always the last entry. For example, with 20 project years and
+`battery_replacement_min_remaining_years = 1.0`, a pack that reaches end of
+life at 19.3 years shows as `{"year": 20, "time_years": 19.3, "action":
+"kept", "reason": "min_remaining_years", ...}`: the replacement was skipped
+and the old battery was retained.
+
+Monte Carlo reports the first crossing of each trajectory as
+`first_end_of_life_years`, `first_end_of_life_action`,
+`first_end_of_life_reason` and `first_end_of_life_soh_pct`; the projected
+optimizer reports it as `Projected_First_End_Of_Life_Years`,
+`Projected_First_End_Of_Life_Action`, `Projected_First_End_Of_Life_Reason`
+and `Projected_First_End_Of_Life_SOH_%`. Without a crossing the times and
+health are NaN and the text fields None.
 
 ## Estimated battery residual value
 

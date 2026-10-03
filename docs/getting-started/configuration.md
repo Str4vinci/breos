@@ -219,6 +219,11 @@ replacement_min_remaining_years` and records it in
 last project year; set `replacement_years_after_span` to the number of
 project years that follow it.
 
+Every end-of-life crossing is reported with what was done and why: a skipped
+swap shows as `"kept"` with the reason `"min_remaining_years"` or
+`"terminal_period"`. See
+[End-of-life events](interpreting-results.md#end-of-life-events).
+
 ## Discovering available options
 
 Use the CLI to list packaged option keys:

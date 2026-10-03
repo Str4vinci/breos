@@ -1102,6 +1102,20 @@
  "battery_replacements": 1,
  "battery_replacement_cost_t0_prices": 2500.0,
  "battery_replacement_cost_npv": 2265.19,
+ "battery_end_of_life_events": [
+  {
+   "year": 11,
+   "time_years": 10.1096,
+   "date": "2033-02-09",
+   "action": "replaced",
+   "reason": "end_of_life",
+   "soh_pct": 70.0
+  }
+ ],
+ "battery_first_end_of_life_years": 10.1096,
+ "battery_first_end_of_life_action": "replaced",
+ "battery_first_end_of_life_reason": "end_of_life",
+ "battery_first_end_of_life_soh_pct": 70.0,
  "co2_avoided_self_consumption_year1_kg": 403.69,
  "co2_avoided_export_year1_kg": 639.04,
  "co2_avoided_total_year1_kg": 1042.73,

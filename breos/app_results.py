@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import math
+from collections.abc import Mapping, Sequence
 from copy import deepcopy
 from typing import Any, cast
 
@@ -129,6 +130,34 @@ _NETWORK_CREDIT_YEAR1_FIELDS = {
     "no_system_network_charge_year1_prices": "Baseline_Network_Charge",
     "no_system_network_credit_year1_prices": "Baseline_Network_Credit",
 }
+
+
+def end_of_life_fields(events: Sequence[Mapping[str, Any]], soh_digits: int) -> dict[str, Any]:
+    """The result fields of a battery's end-of-life crossings (ADR 0003 E11).
+
+    ``battery_end_of_life_events`` lists every crossing in project order:
+    its project ``year``, ``time_years`` from commissioning (the instant a
+    replacement is booked at), ``date``, the ``action`` taken, the
+    ``reason`` for it and the ``soh_pct`` at the crossing. The
+    ``battery_first_end_of_life_*`` fields repeat the first crossing, or are
+    None without one, so a sweep CSV keeps them.
+    """
+    rows = [
+        {
+            **event,
+            "time_years": round(float(event["time_years"]), 4),
+            "soh_pct": round(float(event["soh_pct"]), soh_digits),
+        }
+        for event in events
+    ]
+    first: Mapping[str, Any] = rows[0] if rows else {}
+    return {
+        "battery_end_of_life_events": rows,
+        "battery_first_end_of_life_years": first.get("time_years"),
+        "battery_first_end_of_life_action": first.get("action"),
+        "battery_first_end_of_life_reason": first.get("reason"),
+        "battery_first_end_of_life_soh_pct": first.get("soh_pct"),
+    }
 
 
 def yearly_to_dicts(yearly_df: pd.DataFrame, period: dict[str, Any] | None = None) -> list[dict[str, Any]]:
@@ -381,6 +410,7 @@ def build_result(
         result["battery_replacement_cost_npv"] = (
             round(float(cost_projection.attrs["replacement_cost_npv"]), 2) if cost_projection is not None else None
         )
+        result.update(end_of_life_fields(artifacts.end_of_life_events, soh_digits))
         if cfg["degradation_engine"] == "blast":
             for row in result["yearly"]:
                 if "soh_pct" in row:

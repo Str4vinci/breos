@@ -372,8 +372,30 @@ one project year remains for it.
   in the `[terminal_value]` `replacement_policy` beside
   `allow_terminal_replacement`.
 
+- **Reporting.** The final state of health does not say when a swap was
+  skipped or why, so every crossing of the threshold is recorded as an
+  event: a degradation period that closes with the installed pack at or
+  below `eol_percentage`. Each event holds the project `year`, `time_years`
+  (measured as `Replacement_Time_Years` books a swap, so a replaced
+  crossing's time is the booked one), the closing step's `date`, the
+  `action` (`"replaced"` or `"kept"`), the `reason` (`"end_of_life"` for a
+  swap; `"min_remaining_years"`, `"terminal_period"` or, for a direct
+  `BatteryConfig` with replacement off, `"replacement_disabled"` for a
+  skipped one) and the `soh_pct` the check compared with the threshold. A
+  pack that is kept crosses once, so it is recorded once, and a skipped
+  swap is always the last event. App results list the events in
+  `battery_end_of_life_events` and repeat the first in the scalar
+  `battery_first_end_of_life_*` fields, which a sweep CSV keeps. Monte
+  Carlo reports the first crossing per trajectory and the projected
+  optimizer per design. `SimulationSummary.end_of_life_events` and the
+  detailed degradation frame's `attrs` carry the span's
+  `breos.battery.EndOfLifeEvent` records, so the public return tuple keeps
+  its shape. `action` and `reason` are open vocabularies: a new end-of-life
+  action adds a value and renames none.
+
 With the default 0 no swap is skipped and results are bit-identical. The
-result format stays `"1"`; the key adds fields and renames none.
+result format stays `"1"`; the key and the event fields add fields and
+rename none.
 
 ## Consequences
 

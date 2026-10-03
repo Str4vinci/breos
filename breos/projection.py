@@ -25,8 +25,10 @@ from breos._controller import (
 )
 from breos.app_config import ResolvedAppConfig, build_costs_dict
 from breos.battery import (
+    END_OF_LIFE_EVENTS_ATTR,
     AlignedSimulationInputs,
     BatteryConfig,
+    EndOfLifeEvent,
     SimulationSummary,
     _simulate_detailed_run,
     frame_replaced_capacity_wh,
@@ -780,6 +782,44 @@ class ProjectionRun:
     # without re-simulating. A flow equal to the year before's is that
     # array, kept once: the load, and the zero grid charge of a greedy run.
     priced_flows: tuple[dict[str, np.ndarray], ...] | None = None
+    # Each end-of-life crossing, in project order, as end_of_life_record
+    # reports it (ADR 0003 E11).
+    end_of_life_events: tuple[dict[str, Any], ...] = ()
+
+
+def end_of_life_record(event: EndOfLifeEvent, year_idx: int, n_steps: int) -> dict[str, Any]:
+    """One span's end-of-life crossing on the project clock.
+
+    ``time_years`` is measured from commissioning as ``Replacement_Time_Years``
+    books a swap, ``year_idx + (step + 1) / n_steps``, so a replaced
+    crossing's time is the booked one. ``date`` is the closing step's
+    calendar date moved forward by ``year_idx`` years, since every project
+    year replays the one calendar. ``soh_pct`` is the health the check
+    compared with the threshold, before any swap.
+    """
+    return {
+        "year": year_idx + 1,
+        "time_years": year_idx + (event.step + 1.0) / n_steps,
+        "date": (event.timestamp + pd.DateOffset(years=year_idx)).date().isoformat(),
+        "action": event.action,
+        "reason": event.reason,
+        "soh_pct": float(event.soh_pct),
+    }
+
+
+def first_end_of_life_metrics(events: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    """A run's first end-of-life crossing as flat metrics, NaN and None without one.
+
+    Monte Carlo reports these per trajectory and the projected optimizer per
+    design, beside their replacement counts.
+    """
+    first: Mapping[str, Any] = events[0] if events else {}
+    return {
+        "first_end_of_life_years": float(first.get("time_years", math.nan)),
+        "first_end_of_life_action": first.get("action"),
+        "first_end_of_life_reason": first.get("reason"),
+        "first_end_of_life_soh_pct": float(first.get("soh_pct", math.nan)),
+    }
 
 
 def project_years(
@@ -817,7 +857,9 @@ def project_years(
     to the end of the project: with a positive minimum each year runs a copy
     whose ``replacement_years_after_span`` is the number of years after it,
     so a swap is skipped when the project time left after its
-    ``Replacement_Time_Years`` is below the minimum.
+    ``Replacement_Time_Years`` is below the minimum. The run's
+    ``end_of_life_events`` lists every crossing of the end-of-life threshold,
+    replaced or not, on the project clock (:func:`end_of_life_record`).
 
     With a ``tariff``, resolved on the simulation calendar, each year row
     carries its import cost, export revenue, no-system import cost and fixed
@@ -877,6 +919,7 @@ def project_years(
     executed: list[DispatchInstructions] = []
     dispatched: list[DispatchInstructions] = []
     priced_flows: list[dict[str, np.ndarray]] = []
+    end_of_life_events: list[dict[str, Any]] = []
 
     for year_idx in range(years):
         year = year_inputs(year_idx)
@@ -927,6 +970,7 @@ def project_years(
             replacement_steps: Sequence[int] = summary.replacement_steps
             n_steps = summary.n_steps
             annual_fec = summary.fec_all_packs if has_battery and summary.has_degradation_rows else 0.0
+            span_events: Sequence[EndOfLifeEvent] = summary.end_of_life_events
         else:
             if year.pv_dc is None or year.houseload is None:
                 raise ValueError("a projection year needs aligned inputs, or pv_dc and houseload")
@@ -1012,6 +1056,7 @@ def project_years(
             replaced_wh = frame_replaced_capacity_wh(results_df)
             replacement_steps = np.flatnonzero(results_df["Battery_Replaced"].to_numpy()).tolist()
             n_steps = len(results_df)
+            span_events = degradation_df.attrs.get(END_OF_LIFE_EVENTS_ATTR, ())
             # Each project year is its own simulation span, so the span's
             # all-pack total is exactly this year's FEC.
             annual_fec = (
@@ -1043,6 +1088,7 @@ def project_years(
                 jit_cache_states.append(state_name)
 
         total_replacements += n_rep
+        end_of_life_events.extend(end_of_life_record(event, year_idx, n_steps) for event in span_events)
         rows.append(
             build_year_row(
                 year_idx,
@@ -1077,6 +1123,7 @@ def project_years(
         controller_instructions=concatenate_instructions(executed),
         year_instructions=tuple(dispatched) if instructions is not None else None,
         priced_flows=tuple(priced_flows) if record_priced_flows else None,
+        end_of_life_events=tuple(end_of_life_events),
     )
 
 

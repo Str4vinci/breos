@@ -39,7 +39,7 @@ from breos.optimization_config import (
     resolve_optimization_config,
     resolve_run_settings,
 )
-from breos.projection import CarryState, ProjectionYear, project_years
+from breos.projection import CarryState, ProjectionYear, first_end_of_life_metrics, project_years
 from breos.pv.model_options import configured_pv_model_kwargs
 from breos.result_schema import RESULT_SCHEMA_VERSION
 from breos.smart_charging import resolve_instructions, smart_charging_provenance
@@ -275,6 +275,15 @@ def _build_battery_config_from_spec(
     )
 
 
+# The projected metric each first-crossing field is reported under.
+_PROJECTED_END_OF_LIFE_METRICS = {
+    "first_end_of_life_years": "Projected_First_End_Of_Life_Years",
+    "first_end_of_life_action": "Projected_First_End_Of_Life_Action",
+    "first_end_of_life_reason": "Projected_First_End_Of_Life_Reason",
+    "first_end_of_life_soh_pct": "Projected_First_End_Of_Life_SOH_%",
+}
+
+
 def _battery_replacement_treatment(battery: Mapping[str, Any]) -> Dict[str, Any]:
     """How projected scoring treats battery replacement, for the provenance.
 
@@ -498,6 +507,11 @@ def _evaluate_projected_design_metrics(
         "Projected_Replacement_Cost_T0_Prices": float(cost_projection.attrs["total_replacement_cost"]),
         "Projected_Total_Replacements": int(total_replacements),
         "Projected_Final_SOH_%": float(current_soh),
+        # The first end-of-life crossing (ADR 0003 E11); NaN and None without one.
+        **{
+            _PROJECTED_END_OF_LIFE_METRICS[name]: value
+            for name, value in first_end_of_life_metrics(projection.end_of_life_events).items()
+        },
         "Projected_PV_Production_Year1_kWh": float(yearly_summary_df["PV_Production_kWh"].iloc[0]),
         "Projected_PV_Production_FinalYear_kWh": float(yearly_summary_df["PV_Production_kWh"].iloc[-1]),
         "Projected_PV_DC_Year1_kWh": float(yearly_summary_df["PV_DC_Generation_kWh"].iloc[0]),
