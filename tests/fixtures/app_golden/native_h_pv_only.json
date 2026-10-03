@@ -253,6 +253,7 @@
   "provenance.resolved_config.battery_max_soc": 0.9,
   "provenance.resolved_config.battery_min_soc": 0.1,
   "provenance.resolved_config.battery_power_limit_c_rate": null,
+  "provenance.resolved_config.battery_replacement_min_remaining_years": 0.0,
   "provenance.resolved_config.battery_rte": null,
   "provenance.resolved_config.battery_temperature": "weather",
   "provenance.resolved_config.bifacial_model": "none",
