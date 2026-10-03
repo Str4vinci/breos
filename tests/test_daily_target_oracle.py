@@ -337,6 +337,21 @@ def test_the_command_line_plans_charge_windows(tmp_path):
     # The run opens in the 00:00-08:00 window; every later window starts at 22:00.
     frame = pd.read_csv(days, comment="#")
     assert frame["day_start"].str.slice(11, 16).tolist() == ["00:00", "22:00", "22:00"]
+    assert set(frame["decision_boundary"]) == {"charge_window_start"}
+
+
+def test_the_window_boundary_needs_a_step_outside_the_charge_periods():
+    # Charging in every period: a window would never end, as the controller refuses.
+    every = {**HOLD, "charge_periods": ["off_peak", "peak"]}
+    case = prepare_replay(_config(2, smart_charging=every))
+    with pytest.raises(ValueError, match="a charge window never ends"):
+        daily_target_problem(case, "charge_window_start")
+    with pytest.raises(ValueError, match="a charge window never ends"):
+        run_daily_target_oracle(case, **PLANNER, decision_boundary="charge_window_start")
+    with pytest.raises(ValueError, match="a charge window never ends"):
+        run_daily_target_oracle(case, planning="yearly", **PLANNER, decision_boundary="charge_window_start")
+    # One target per civil day is still a valid plan there.
+    assert daily_target_problem(case).n_days == 2
 
 
 def _discharge_kwh(replay):

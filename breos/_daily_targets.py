@@ -258,11 +258,17 @@ class DailyTargetProblem:
 
         ``decision_boundary`` is ``"civil_day"``, one target per civil day, or
         ``"charge_window_start"``, one per charge window of ``instructions``
-        (ADR 0002 A19).
+        (ADR 0002 A19). Windows need a step that is not a charge step: with
+        every step a charge step, a window never ends.
         """
         if decision_boundary == "civil_day":
             day_starts = tuple(tariff.day_starts)
         elif decision_boundary == "charge_window_start":
+            if len(instructions) and not np.isnan(instructions.grid_target_fraction).any():
+                raise ValueError(
+                    "'decision_boundary' = 'charge_window_start' needs a step outside the charge periods: "
+                    "with every step a charge step, a charge window never ends"
+                )
             day_starts = charge_window_day_starts(instructions)
         else:
             raise ValueError("'decision_boundary' must be 'civil_day' or 'charge_window_start'")

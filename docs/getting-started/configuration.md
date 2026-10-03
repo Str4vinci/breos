@@ -973,7 +973,9 @@ and the target holds until the next window starts:
 `provenance.smart_charging.decision_boundary` records the boundary; under
 `charge_window_start` the controller and planner versions are `"2"`. The
 daily-target oracle takes the same choice as `--decision-boundary`, so a
-perfect-information replay stays comparable with the controller.
+perfect-information replay stays comparable with the controller. The oracle
+plans one project year at a time, so it still splits the night that crosses
+the year seam between two targets; the controller does not.
 
 ## Load profiles
 

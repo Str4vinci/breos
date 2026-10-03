@@ -410,3 +410,22 @@ def test_provenance_records_the_window_boundary_and_its_versions():
     assert explicit_record == civil
     assert civil["decision_boundary"] == "civil_day"
     assert (civil["controller_version"], civil["planner_version"]) == ("1", "1")
+
+
+def test_the_session_refuses_a_decision_at_an_unmarked_step():
+    from breos._controller import ControllerBatteryState, _ControllerSession
+
+    scenario = _night_scenario("2025-01-06T00:00Z", 2 * 24, "h", "Europe/Lisbon")
+    session = _ControllerSession(
+        _controller("h"),
+        scenario.tariff,
+        scenario.pv.index,
+        hours_per_step=1.0,
+        carry=None,
+        projection_year=0,
+        replay_seam=False,
+        battery_config={},
+    )
+    state = ControllerBatteryState(0.0, 0.0, 0.0, 1.0, 1.0, 0.95, 0.95)
+    with pytest.raises(RuntimeError, match="civil day 0 begins at step 0, not 5"):
+        session.decide(5, state)

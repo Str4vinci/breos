@@ -34,9 +34,14 @@ Days are the tariff's civil days (ADR 0002 A1), or with
 ``decision_boundary = "charge_window_start"`` (``--decision-boundary``) the
 charge windows of the layout (A19): each window's target is chosen at its
 start and holds until the next window starts, as ``daily_persistence``
-decides under the same boundary. The steps before the first window form a
-planning day of their own, and under ``yearly`` planning a window that
-crosses the year seam takes a new target at the year start. By default, energy that
+decides under the same boundary. A plan covers one project year, so in both
+planning modes the window that crosses the year seam is cut there. Its
+last part (under Bi-hourly, 31 December 22:00-24:00) is a short final
+planning day whose target is chosen against the year-end refill, not the
+next day's peak, and the year starts with the rest of it as a planning day
+of its own (1 January 00:00-22:00). The oracle therefore still splits one
+night per year, where the controller holds one target across the seam. The
+CSV gives the boundary in a ``decision_boundary`` column. By default, energy that
 ends the year below full is bought back at the cheapest price a charge
 step may pay, so the plan does not drain the battery on the last day
 (``free_terminal`` drops the refill).
@@ -605,6 +610,7 @@ def days_frame(result: DailyTargetOracleResult, case: ReplayCase) -> pd.DataFram
             "fixed_target_cost": np.add.reduceat(result.fixed_target.first_year_step_cost, first),
             "planned_end_energy_wh": result.planned["battery_energy_wh"][last],
             "replayed_end_energy_wh": delivered[last],
+            "decision_boundary": result.decision_boundary,
         }
     )
 
@@ -616,7 +622,12 @@ def year_days_frame(result: DailyTargetOracleResult, case: ReplayCase) -> pd.Dat
     return pd.concat(
         [
             pd.DataFrame(
-                {"year": year_plan.year, "day_start": day_start, "target_usable_fraction": year_plan.plan.targets}
+                {
+                    "year": year_plan.year,
+                    "day_start": day_start,
+                    "target_usable_fraction": year_plan.plan.targets,
+                    "decision_boundary": result.decision_boundary,
+                }
             )
             for year_plan in result.year_plans
         ],

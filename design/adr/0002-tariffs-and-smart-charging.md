@@ -907,14 +907,19 @@ when charging starts.
   value and the A17 wear cost apply unchanged.
 - **Oracle and solver.** `DailyTargetProblem.from_tariff` and the
   daily-target oracle (`--decision-boundary`) take the same boundary, so
-  each planning day is a window, from one window start to the next, and the
-  steps before the first window form a day of their own. The oracle's
-  yearly mode plans each project year on its own, so a window across the
-  year seam takes a new target at the year start.
+  each planning day is a window, from one window start to the next. A plan
+  covers one project year in both oracle modes, so the window across the
+  year seam is cut there: its last part (31 December 22:00–24:00 under
+  Bi-hourly) is a short final planning day whose target is chosen against
+  the year-end refill, and the year starts with the rest of it as a day of
+  its own. The oracle therefore still splits one night per project year,
+  where the controller holds one target across the seam; a comparison of
+  the two differs by that night. The oracle's CSV records the boundary.
 - **Provenance.** `provenance.smart_charging.decision_boundary` records the
   boundary of every `daily_persistence` run. Under `charge_window_start`
   `controller_version` and `planner_version` are `"2"` and the forecast and
   warm-start policies carry the names above; under `civil_day` everything
   stays as in A12. The result format stays `"1"`.
 - **Unchanged.** The dispatch kernel. Every configuration accepted before
-  decides, dispatches and reports as before; App goldens are bit-identical.
+  decides, dispatches and reports as before, apart from the new
+  `decision_boundary` provenance key; App goldens are bit-identical.

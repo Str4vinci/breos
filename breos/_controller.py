@@ -414,10 +414,12 @@ class _ControllerSession:
     """One simulation call's controller state, driven by the dispatch core.
 
     At each dispatch segment start the core asks :meth:`decides_at`, calls
-    :meth:`decide` with the current battery state when a civil day begins,
-    takes the segment end from :meth:`prepare_segment`, dispatches, and
-    reports the finished segment through :meth:`complete_segment`. Civil
-    boundaries come from ``tariff.day_starts`` only.
+    :meth:`decide` with the current battery state when a civil day begins or
+    the step is one the controller marked (A19), takes the segment end from
+    :meth:`prepare_segment`, dispatches, and reports the finished segment
+    through :meth:`complete_segment`. Civil boundaries come from
+    ``tariff.day_starts`` only; marks from the controller's optional
+    ``decision_starts``.
     """
 
     def __init__(
@@ -589,6 +591,9 @@ class _ControllerSession:
         """
         day = self._day + 1
         if day >= self._n_days or position != self._day_starts[day]:
+            if self._marks is None or not self._marks[position]:
+                lo = self._day_starts[day] if day < self._n_days else self._n_steps
+                raise RuntimeError(f"civil day {day} begins at step {lo}, not {position}")
             self._decide_within(position, battery_state)
             return
         lo, hi = self._day_starts[day], self._day_starts[day + 1]

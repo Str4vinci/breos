@@ -83,7 +83,9 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   start and only earlier observations; its forecast repeats the local day
   before it, and each planning stage is one window. The daily-target solver
   (`DailyTargetProblem.from_tariff`) and the oracle (`--decision-boundary`)
-  take the same boundary. `provenance.smart_charging` records
+  take the same boundary; the oracle plans one project year at a time, so it
+  still cuts the window that crosses the year seam into a short last stage
+  and a first stage of the next year. `provenance.smart_charging` records
   `decision_boundary` for every `daily_persistence` run; the new mode
   reports controller and planner version `"2"`. The default `"civil_day"`
   is bit-identical to before, and the dispatch kernel is unchanged.

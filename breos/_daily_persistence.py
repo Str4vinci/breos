@@ -169,8 +169,11 @@ class DailyPersistenceController:
     efficiency and import limit fix the instruction layout, and its planner
     settings the solve. ``hours_per_step`` is the simulation's step and
     ``execution_backend`` the backend the planner's day transitions run on,
-    the simulation's own. It keeps no policy state: every decision follows
-    from the day's input.
+    the simulation's own. Under ``civil_day`` it keeps no policy state:
+    every decision follows from the day's input. Under
+    ``charge_window_start`` the policy state is the target in force (None for
+    none), carried across midnights and the A2 year seam until the next
+    window starts.
     """
 
     spec: SmartChargingSpec
@@ -326,7 +329,9 @@ def observed_day_before(
     at the same wall time and fold, and add any it lacks. When the last
     complete day is the day before, this is the 24 hours (23 or 25 across a
     DST change) that end at the decision. None until one complete day has
-    been observed.
+    been observed. A slot the last complete day lacks is appended after its
+    slots, so the result is not in local-slot order: it is read by slot key
+    only, as :func:`persistence_forecast` does.
     """
     if last_complete is None:
         return None
