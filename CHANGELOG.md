@@ -72,6 +72,32 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   `wear_cost_per_kwh`. The summary records the setting and each plan's
   `wear_cost` apart from its stage cost. The default 0 gives the same plans
   and costs as before.
+- `battery_replacement_min_remaining_years` (App and Monte Carlo), the
+  optimizer's `[battery] replacement_min_remaining_years` and
+  `BatteryConfig.replacement_min_remaining_years` skip a battery
+  replacement that would leave the new pack less than that many project
+  years to serve ([#400](https://github.com/Str4vinci/breos/issues/400),
+  ADR 0003 E11). The time left runs from the swap, as
+  `Replacement_Time_Years` books it, to the end of the project, so each
+  projection year counts the years after it
+  (`BatteryConfig.replacement_years_after_span`). A skipped pack keeps
+  ageing below its end-of-life threshold and is reported as it is. Any
+  positive value also skips the final-period swap that
+  `battery_allow_terminal_replacement = false` skips. The value is recorded
+  in `provenance.resolved_config`, the optimizer's
+  `battery_replacement_treatment` and the `[terminal_value]`
+  `replacement_policy`. The default 0 gives results bit-identical to 0.7.0.
+- Battery end-of-life events (ADR 0003 E11). App results list every
+  crossing of the end-of-life threshold in `battery_end_of_life_events`,
+  each with its project `year`, `time_years`, `date`, `action`
+  (`"replaced"` or `"kept"`), `reason` and `soh_pct`, and repeat the first
+  in `battery_first_end_of_life_years`, `_action`, `_reason` and
+  `_soh_pct`. Monte Carlo runs report `first_end_of_life_*` and the
+  projected optimizer `Projected_First_End_Of_Life_*`.
+  `SimulationSummary.end_of_life_events` holds the span's
+  `breos.battery.EndOfLifeEvent` records, and the detailed degradation
+  frame's `attrs["end_of_life_events"]` the same as JSON-safe dicts.
+  Existing fields are unchanged.
 
 ### Changed
 

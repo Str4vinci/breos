@@ -90,6 +90,8 @@ class SimulationArtifacts:
     reference_tariff: dict[str, Any] | None = None
     resolved_reference_tariff: ResolvedTariff | None = None
     terminal_health: TerminalHealthCredit | None = None
+    # Each end-of-life crossing of the battery, in project order (ADR 0003 E11).
+    end_of_life_events: tuple[dict[str, Any], ...] = ()
 
 
 # The avoided-CO2 columns a result reports for its first year, or its window.
@@ -511,6 +513,7 @@ def run_app_simulation(
         first_year_results_df=first_year_results_df,
         current_soh=current_soh,
         total_replacements=total_replacements,
+        end_of_life_events=projection.end_of_life_events,
         pv_loss_waterfall=_build_pv_loss_waterfall(inputs.pv_breakdown, first_year_results_df, resolved),
         weather_metadata=dict(inputs.weather.attrs.get(WEATHER_METADATA_KEY, unknown_source_metadata("weather"))),
         load_profile_metadata=dict(

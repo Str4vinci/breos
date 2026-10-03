@@ -59,6 +59,7 @@ CHANGES = {
     "battery_power_limit_c_rate": {"battery_power_limit_c_rate": 0.5},
     "battery_eol_percentage": {"battery_eol_percentage": 0.8},
     "battery_allow_terminal_replacement": {"battery_allow_terminal_replacement": False},
+    "battery_replacement_min_remaining_years": {"battery_replacement_min_remaining_years": 1.0},
     "battery_rte": {"battery_rte": 0.9},
     "enable_resistance_fade": {"enable_resistance_fade": True},
     "inverter_efficiency": {"inverter_efficiency": 0.97},

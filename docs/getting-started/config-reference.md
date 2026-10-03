@@ -31,6 +31,7 @@ is a `breos run` option that overrides the config file.
 | `battery_max_soc` | `0.9` | — | Battery SOC ceiling, on the same basis as `battery_min_soc` |
 | `battery_min_soc` | `0.1` | — | Battery SOC floor, as a fraction of nominal SOH-derated capacity |
 | `battery_power_limit_c_rate` | `None` | `--battery-power-limit-c-rate` | Charge and discharge limit on the stored energy, as a multiple of capacity (1.0 = 1 C). It scales with `battery_kwh` and cannot be combined with `battery_max_charge_power_w` or `battery_max_discharge_power_w` |
+| `battery_replacement_min_remaining_years` | `0.0` | — | Fewest project years a replacement battery must have left to serve. A battery that reaches end of life with less than this left before the end of the horizon is not replaced; it keeps ageing below its end-of-life threshold. `0` replaces at every end of life. See [Battery replacement at the end of the horizon](configuration.md#battery-replacement-at-the-end-of-the-horizon) |
 | `battery_rte` | `None` | — | Battery round-trip efficiency, split evenly across charge and discharge; `None` is 0.95 |
 | `battery_temperature` | `"weather"` | — | Battery temperature used for degradation: `"weather"`, a fixed temperature in °C, or a timestamped CSV path. The indoor model then remaps it unless `battery_indoor_model` disables it |
 | `bifacial_model` | `"none"` | `--bifacial-model` | Rear-irradiance model. `"none"` is front-only production; `"infinite_sheds"` needs sourced module bifaciality plus `gcr`, `pvrow_height` and `pvrow_pitch`. One of `"none"`, `"infinite_sheds"` |

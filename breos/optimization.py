@@ -39,7 +39,7 @@ from breos.optimization_config import (
     resolve_optimization_config,
     resolve_run_settings,
 )
-from breos.projection import CarryState, ProjectionYear, project_years
+from breos.projection import CarryState, ProjectionYear, first_end_of_life_metrics, project_years
 from breos.pv.model_options import configured_pv_model_kwargs
 from breos.result_schema import RESULT_SCHEMA_VERSION
 from breos.smart_charging import resolve_instructions, smart_charging_provenance
@@ -243,6 +243,7 @@ _BATTERY_SPEC_KEYS = (
     "calendar_model",
     "enable_resistance_fade",
     "allow_terminal_replacement",
+    "replacement_min_remaining_years",
 )
 
 
@@ -274,22 +275,38 @@ def _build_battery_config_from_spec(
     )
 
 
+# The projected metric each first-crossing field is reported under.
+_PROJECTED_END_OF_LIFE_METRICS = {
+    "first_end_of_life_years": "Projected_First_End_Of_Life_Years",
+    "first_end_of_life_action": "Projected_First_End_Of_Life_Action",
+    "first_end_of_life_reason": "Projected_First_End_Of_Life_Reason",
+    "first_end_of_life_soh_pct": "Projected_First_End_Of_Life_SOH_%",
+}
+
+
 def _battery_replacement_treatment(battery: Mapping[str, Any]) -> Dict[str, Any]:
     """How projected scoring treats battery replacement, for the provenance.
 
     ``allow_terminal_replacement`` is the configured policy for the final
     period; the earlier years' internal permission is not the user's setting.
+    ``replacement_min_remaining_years`` is the configured minimum service
+    time of a new pack, measured to the end of the project.
     """
     return {
         "method": "simulated_yearly_state_propagation",
         "description": "Projected scoring simulates every year and records actual replacement events.",
         "higher_fidelity_basis": "App multiyear SOH propagation",
         "allow_terminal_replacement": bool(battery.get("allow_terminal_replacement", True)),
+        "replacement_min_remaining_years": float(battery.get("replacement_min_remaining_years", 0.0)),
         "terminal_period": (
             "The final degradation period of the last project year: the elapsed one-day window of simulation "
             "steps that ends on the horizon's last step, whole or partial. It is always aged and recorded; "
             "allow_terminal_replacement = false skips only its end-of-life replacement. Every earlier period, "
             "including the close of each earlier project year, replaces as usual."
+        ),
+        "minimum_service": (
+            "In any project year, an end-of-life replacement that would leave the new pack less than "
+            "replacement_min_remaining_years of the project to serve is skipped; 0 skips none."
         ),
     }
 
@@ -490,6 +507,11 @@ def _evaluate_projected_design_metrics(
         "Projected_Replacement_Cost_T0_Prices": float(cost_projection.attrs["total_replacement_cost"]),
         "Projected_Total_Replacements": int(total_replacements),
         "Projected_Final_SOH_%": float(current_soh),
+        # The first end-of-life crossing (ADR 0003 E11); NaN and None without one.
+        **{
+            _PROJECTED_END_OF_LIFE_METRICS[name]: value
+            for name, value in first_end_of_life_metrics(projection.end_of_life_events).items()
+        },
         "Projected_PV_Production_Year1_kWh": float(yearly_summary_df["PV_Production_kWh"].iloc[0]),
         "Projected_PV_Production_FinalYear_kWh": float(yearly_summary_df["PV_Production_kWh"].iloc[-1]),
         "Projected_PV_DC_Year1_kWh": float(yearly_summary_df["PV_DC_Generation_kWh"].iloc[0]),

@@ -140,6 +140,23 @@ class BatteryConfig:
     A call treats its own span as the horizon: a caller that splits one
     horizon across several calls must leave it ``True`` on every span but
     the last, because the next span inherits the pack.
+
+    ``replacement_min_remaining_years`` skips any end-of-life swap that
+    would leave the new pack less than this many years of the horizon to
+    serve. The default 0 skips none. Time is counted as a projection books a
+    swap's ``Replacement_Time_Years``: this span is one project year, and
+    ``replacement_years_after_span`` whole project years follow it. A swap at
+    the close of a period ending on span step ``k`` of ``n`` therefore has
+    ``replacement_years_after_span + (n - k) / n`` years left, and it is
+    skipped when that is below the minimum. The test is made in steps,
+    ``replacement_years_after_span * n + n - k`` against
+    ``replacement_min_remaining_years * n``, so a swap with exactly the
+    minimum left still happens. A skipped pack keeps ageing below end of
+    life and is reported as it is, as with the terminal guard. Any positive
+    minimum also skips the final period's swap, whatever
+    ``allow_terminal_replacement`` says. A call with
+    ``replacement_years_after_span = 0`` treats its own span as the last
+    project year; a projection sets the field for each year it runs.
     """
 
     nominal_energy_wh: float  # Required — nominal capacity in Wh
@@ -154,6 +171,11 @@ class BatteryConfig:
     # False skips the end-of-life swap at the close of the span's final
     # degradation period only; that period still ages the pack.
     allow_terminal_replacement: bool = True
+    # Skips a swap that leaves the new pack less than this many project
+    # years to serve; 0 skips none. The years that follow this span count
+    # toward what is left.
+    replacement_min_remaining_years: float = 0.0
+    replacement_years_after_span: int = 0
     calendar_model: str = "naumann_lam_field_calibrated"  # v1 field-calibrated default alias
     # Resistance fade (opt-in): grows internal resistance daily and derates
     # the charge/discharge efficiencies in the energy loop so the effective
@@ -200,6 +222,18 @@ class BatteryConfig:
         if not isinstance(self.allow_terminal_replacement, (bool, np.bool_)):
             raise ValueError("allow_terminal_replacement must be a bool")
         self.allow_terminal_replacement = bool(self.allow_terminal_replacement)
+        if isinstance(self.replacement_years_after_span, (bool, np.bool_)) or not isinstance(
+            self.replacement_years_after_span, (int, np.integer)
+        ):
+            raise ValueError("replacement_years_after_span must be a non-negative integer")
+        if self.replacement_years_after_span < 0:
+            raise ValueError("replacement_years_after_span must be a non-negative integer")
+        self.replacement_years_after_span = int(self.replacement_years_after_span)
+        self.replacement_min_remaining_years = finite(
+            "replacement_min_remaining_years", self.replacement_min_remaining_years
+        )
+        if self.replacement_min_remaining_years < 0.0:
+            raise ValueError("replacement_min_remaining_years must be non-negative")
 
         self.nominal_energy_wh = finite("nominal_energy_wh", self.nominal_energy_wh)
         self.initial_soh = finite("initial_soh", self.initial_soh)
@@ -875,6 +909,72 @@ class _PvOnlySummaryBuffers:
         return dict(self.columns)
 
 
+# What an end-of-life crossing did to the installed pack (ADR 0003 E11): it
+# was replaced, or it stayed in service below its threshold.
+END_OF_LIFE_ACTIONS: Tuple[str, ...] = ("replaced", "kept")
+# Why: the pack reached its threshold and a replacement was allowed; or the
+# swap was skipped because less than the minimum service time remained, or
+# because it fell in the span's final period with terminal replacement off,
+# or because replacement is disabled.
+END_OF_LIFE_REASONS: Tuple[str, ...] = (
+    "end_of_life",
+    "min_remaining_years",
+    "terminal_period",
+    "replacement_disabled",
+)
+
+
+# The detailed degradation frame's attrs key for the span's crossings.
+END_OF_LIFE_EVENTS_ATTR = "end_of_life_events"
+
+
+@dataclass(frozen=True, slots=True)
+class EndOfLifeEvent:
+    """One crossing of the end-of-life threshold inside a simulated span.
+
+    A crossing is a degradation period that closes with the installed pack's
+    state of health at or below ``eol_percentage``. ``step`` is the
+    zero-based closing step of that period and ``timestamp`` its index
+    label; the event happens at that step's end, the instant a replacement
+    is booked at. ``soh_pct`` is the health the end-of-life check compared
+    with the threshold. ``action`` is one of :data:`END_OF_LIFE_ACTIONS` and
+    ``reason`` one of :data:`END_OF_LIFE_REASONS`.
+
+    A replaced pack's successor can cross again, so a span may hold several
+    replacements. A pack that stays in service below its threshold crosses
+    once: later periods, and later spans that inherit it, record nothing
+    more. A pack that starts a span at or below its threshold has already
+    crossed, unless that span replaces it.
+    """
+
+    step: int
+    timestamp: pd.Timestamp
+    action: str
+    reason: str
+    soh_pct: float
+
+    def to_record(self) -> Dict[str, Any]:
+        """The event as JSON-safe values, its timestamp in ISO 8601."""
+        return {
+            "step": int(self.step),
+            "timestamp": self.timestamp.isoformat(),
+            "action": self.action,
+            "reason": self.reason,
+            "soh_pct": float(self.soh_pct),
+        }
+
+    @classmethod
+    def from_record(cls, record: Mapping[str, Any]) -> "EndOfLifeEvent":
+        """The event a :meth:`to_record` dict describes."""
+        return cls(
+            int(record["step"]),
+            pd.Timestamp(record["timestamp"]),
+            str(record["action"]),
+            str(record["reason"]),
+            float(record["soh_pct"]),
+        )
+
+
 @dataclass(slots=True)
 class _AgingState:
     """Battery health state that only changes at a daily boundary.
@@ -910,6 +1010,10 @@ class _AgingState:
     replaced_capacity_wh: float
     day_start_soc: float
     day_start_t_cell: float
+    # True once the installed pack is in service at or below its end-of-life
+    # threshold without a replacement, so the crossing is recorded once.
+    past_end_of_life: bool = False
+    end_of_life_events: List[EndOfLifeEvent] = field(default_factory=list)
 
 
 def _apply_resistance_fade(
@@ -1082,7 +1186,7 @@ def _apply_daily_degradation(
     pv_origin_energy_wh: float,
     grid_origin_energy_wh: float,
     battery_energy_beginning: float,
-    replacement_allowed: bool = True,
+    replacement_skipped_by: Optional[str] = None,
 ) -> Tuple[float, float, float]:
     """Close out one degradation period, returning ``(energy, pv_origin, grid_origin)``.
 
@@ -1096,9 +1200,13 @@ def _apply_daily_degradation(
     boundary; a replacement moves that endpoint to the fresh pack's
     max SOC, since the recorded state was rewritten to match.
 
-    ``replacement_allowed`` is False only for the span's final period when
-    the battery does not allow a terminal replacement. The period still ages
-    the pack and is still recorded; only the end-of-life swap is skipped.
+    ``replacement_skipped_by`` names the rule that skips this period's
+    end-of-life swap, one of :data:`END_OF_LIFE_REASONS`: the span's final
+    period when the battery does not allow a terminal replacement, or any
+    period that closes with less than the battery's minimum service time
+    left. None allows the swap. The period still ages the pack and is still
+    recorded; only the swap is skipped. A crossing is recorded on
+    ``aging.end_of_life_events``, with what was done and why.
     """
     period_steps = len(soc_absolute_day)
     period_seconds = period_steps * hours_per_step * 3600.0
@@ -1144,11 +1252,11 @@ def _apply_daily_degradation(
             dt_days=dt_days,
         )
 
-    if (
-        replacement_allowed
-        and battery_config.enable_replacement
-        and aging.soh_fraction <= battery_config.eol_percentage
-    ):
+    reached_end_of_life = aging.soh_fraction <= battery_config.eol_percentage
+    if reached_end_of_life and replacement_skipped_by is None and battery_config.enable_replacement:
+        aging.end_of_life_events.append(
+            EndOfLifeEvent(step_index, step_time, "replaced", "end_of_life", aging.soh_percent)
+        )
         # A retired native pack owns its unresolved terminal half cycles.
         # Settle them before reset so its lifetime FEC remains complete while
         # the replacement starts with a clean rainflow residue.
@@ -1173,8 +1281,14 @@ def _apply_daily_degradation(
                 battery_energy_beginning=battery_energy_beginning,
             )
         )
+        aging.past_end_of_life = False
     else:
         cycle_degradation_for_row = degradation_step.cycle_degradation
+        if reached_end_of_life and not aging.past_end_of_life:
+            reason = "replacement_disabled" if not battery_config.enable_replacement else replacement_skipped_by
+            assert reason is not None
+            aging.end_of_life_events.append(EndOfLifeEvent(step_index, step_time, "kept", reason, aging.soh_percent))
+            aging.past_end_of_life = True
 
     degradation_record = {
         "Datetime": step_time,
@@ -1198,6 +1312,23 @@ def _apply_daily_degradation(
     aging.day_start_soc = day_end_soc_absolute
     aging.day_start_t_cell = day_end_t_cell
     return battery_energy_wh, pv_origin_energy_wh, grid_origin_energy_wh
+
+
+def _replacement_skipped_by(
+    battery_config: BatteryConfig, *, final_period: bool, remaining_steps: int, min_remaining_steps: float
+) -> Optional[str]:
+    """The rule that skips an end-of-life swap at a period close, or None.
+
+    A pack bought with less than the minimum left to serve is not bought.
+    The period closing on the span's last step is its final one, whole or
+    partial; a pack bought there would serve no step. Any positive minimum
+    skips that period too, so it is named first.
+    """
+    if remaining_steps < min_remaining_steps:
+        return "min_remaining_years"
+    if final_period and not battery_config.allow_terminal_replacement:
+        return "terminal_period"
+    return None
 
 
 def _build_summary_row(
@@ -1342,6 +1473,8 @@ class SimulationSummary:
     # part-period included; ``fec_cum`` restarts at zero on replacement.
     fec_all_packs: float = 0.0
     final_degradation_state: Optional[Dict[str, Any]] = None
+    # Each end-of-life crossing in the span, in step order (ADR 0003 E11).
+    end_of_life_events: Tuple[EndOfLifeEvent, ...] = ()
     # ``sum(column * weights)`` for each requested (column, weights) pair,
     # such as import power times the step's import price.
     weighted_sums: Dict[str, float] = field(default_factory=dict)
@@ -1440,6 +1573,7 @@ def _build_simulation_summary(
         replacement_steps=tuple(int(i) for i in np.flatnonzero(buffers.replaced)),
         fec_all_packs=aging.fec_lifetime,
         final_degradation_state=final_state,
+        end_of_life_events=tuple(aging.end_of_life_events),
         weighted_sums=weighted_column_sums(columns, weights),
     )
 
@@ -1729,6 +1863,7 @@ def _simulate_core(
         replaced_capacity_wh=0.0,
         day_start_soc=degradation_day_start_soc,
         day_start_t_cell=degradation_day_start_t_cell,
+        past_end_of_life=battery_soh_decimal <= battery_config.eol_percentage,
     )
 
     # Per-step energy caps (Wh) for the shared inverter AC nameplate and the
@@ -1818,6 +1953,11 @@ def _simulate_core(
     # Slicing the DatetimeIndex once per day was a measurable share of a
     # compiled year, so the aging model gets views of one tick array instead.
     time_ticks, ticks_per_second = _datetime_index_ticks(rng)
+    # The horizon's steps after this span, and the fewest steps a new pack
+    # must have left to serve; both count this span as one project year
+    # (see BatteryConfig.replacement_min_remaining_years).
+    steps_after_span = battery_config.replacement_years_after_span * n_steps
+    min_remaining_steps = battery_config.replacement_min_remaining_years * n_steps
     window_start = 0
     while window_start < n_steps:
         window_end = min(window_start + steps_per_day, n_steps)
@@ -1901,9 +2041,12 @@ def _simulate_core(
             pv_origin_energy_wh=Battery_PV_Origin_Energy_Wh,
             grid_origin_energy_wh=Battery_Grid_Origin_Energy_Wh,
             battery_energy_beginning=battery_energy_beginning,
-            # The period closing on the span's last step is its final one,
-            # whole or partial; a pack bought there would serve no step.
-            replacement_allowed=battery_config.allow_terminal_replacement or window_end < n_steps,
+            replacement_skipped_by=_replacement_skipped_by(
+                battery_config,
+                final_period=window_end == n_steps,
+                remaining_steps=steps_after_span + n_steps - window_end,
+                min_remaining_steps=min_remaining_steps,
+            ),
         )
         # Refresh the loop's hot copies of the daily-boundary state.
         battery_soh_decimal = aging.soh_fraction
@@ -2008,9 +2151,17 @@ def simulate_energy_balance(
 
 
 def _detailed_frames(core: _CoreRun) -> Tuple[pd.DataFrame, float, pd.DataFrame, int, pd.DataFrame]:
-    """The detailed path's frames: results, total PV, summary, replacements and degradation."""
+    """The detailed path's frames: results, total PV, summary, replacements and degradation.
+
+    The degradation frame's ``attrs["end_of_life_events"]`` holds the span's
+    end-of-life crossings, as :class:`SimulationSummary` does, so the
+    public return tuple keeps its shape. They are
+    :meth:`EndOfLifeEvent.to_record` dicts, because pandas writes a frame's
+    attrs as JSON (``to_parquet``) and copies them into derived frames.
+    """
     df = core.buffers.to_frame(core.rng)
     deg_df = pd.DataFrame(core.degradation_tracking) if core.degradation_tracking else pd.DataFrame()
+    deg_df.attrs[END_OF_LIFE_EVENTS_ATTR] = [event.to_record() for event in core.aging.end_of_life_events]
     summary_row, total_pv = _build_summary_row(
         core.buffers,
         core.hours_per_step,

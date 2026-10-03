@@ -804,6 +804,17 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         ),
         summary="battery.allow_terminal_replacement",
     ),
+    "battery_replacement_min_remaining_years": AppConfigField(
+        default=0.0,
+        doc=(
+            "Fewest project years a replacement battery must have left to serve. A battery that reaches end of "
+            "life with less than this left before the end of the horizon is not replaced; it keeps ageing below "
+            "its end-of-life threshold. `0` replaces at every end of life. See "
+            "[Battery replacement at the end of the horizon]"
+            "(configuration.md#battery-replacement-at-the-end-of-the-horizon)"
+        ),
+        summary="battery.replacement_min_remaining_years",
+    ),
     "battery_rte": AppConfigField(
         default=None,
         doc=(
@@ -2342,6 +2353,12 @@ def _validate_battery_and_degradation(cfg: dict[str, Any]) -> None:
         raise TypeError("'enable_resistance_fade' must be a boolean")
     if not isinstance(cfg["battery_allow_terminal_replacement"], bool):
         raise TypeError("'battery_allow_terminal_replacement' must be a boolean")
+    min_remaining = _finite_real(
+        cfg["battery_replacement_min_remaining_years"], "battery_replacement_min_remaining_years"
+    )
+    if min_remaining < 0:
+        raise ValueError("'battery_replacement_min_remaining_years' must be >= 0")
+    cfg["battery_replacement_min_remaining_years"] = min_remaining
 
     # Validated through breos.execution so App and Monte Carlo cannot disagree
     # about which names exist. The default stays "python": the compiled path is

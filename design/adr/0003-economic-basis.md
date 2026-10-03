@@ -1,9 +1,10 @@
 # 0003 — Economic basis, escalators, and currency-neutral results
 
-- **Status:** Accepted (E1–E10); implemented in 0.7.0
+- **Status:** Accepted (E1–E10); implemented in 0.7.0. E11 Proposed,
+  implemented for 0.7.1
 - **Date:** 2026-09-26; E1, E6 and E8 accepted 2026-09-26; E2–E5, E7, E9 and
   the E6 inflation default accepted 2026-09-27; E10 accepted 2026-10-01; E9
-  amended 2026-10-01
+  amended 2026-10-01; E11 proposed 2026-10-03
 
 ## Context
 
@@ -61,6 +62,7 @@ the design, not its implementation. All nine were then implemented for
 0.7.0 under #183: E6 in #271, E5 and E7 in #273, E8 and E9 in #283, E1, E2
 and E3 in #288, and E4 in #291. E10, accepted on 2026-10-01, was implemented
 in #352. The changelog carries the migration table below as shipped.
+E11, proposed on 2026-10-03, is implemented for 0.7.1 under #400.
 
 ### E1. Nominal basis for the projection APIs — Accepted 2026-09-26
 
@@ -322,6 +324,81 @@ Projected optimization accepts but ignores `[terminal_value]`: evaluated
 designs do not report the credit and ranking continues on unadjusted NPV.
 Unadjusted NPV, cashflows, paybacks, LCOE, emissions, dispatch and aging are
 unchanged even when the sensitivity is enabled.
+
+### E11. Minimum service time of a replacement battery (#400) — Proposed 2026-10-03
+
+Adds a rule; it replaces no text. E3 and E4 book a replacement at its swap
+instant at full price, however little of the project is left for the new
+pack. `battery_allow_terminal_replacement = false` (#304) skips only the
+swap at the close of the horizon's final degradation period, the last day.
+A pack that reaches end of life on day 100 of year 20 is still bought and
+serves about nine months. In the time-of-use study for the upcoming
+publication this happens in 426 of 24 516 Porto R1 cases and in 4482 of
+17 700 fixed-target grid-charging runs, and a swap at 19.3 years costs
+about 3700 EUR. The study's rule is that a pack is replaced only if at least
+one project year remains for it.
+
+- **Key.** `battery_replacement_min_remaining_years` (App and Monte Carlo),
+  `[battery] replacement_min_remaining_years` (optimizer) and
+  `BatteryConfig.replacement_min_remaining_years`: a finite number of at
+  least 0, default 0. A swap is skipped when the project time left after
+  it is less than this. A minimum above the horizon skips every swap.
+- **Time basis.** The time left is the horizon less the swap's
+  `Replacement_Time_Years`: each project year is one simulated span, and a
+  swap at the end of step `k` (1-based) of an `n`-step year `y` is booked at
+  `y − 1 + k / n`. The horizon is the project's, not the span's: a
+  projection year passes the whole years after it to its battery
+  (`BatteryConfig.replacement_years_after_span`), so the test is
+  `years_after × n + (n − k) < minimum × n`, in steps. A swap with exactly
+  the minimum left is kept, which is what "at least one project year
+  remained" means at the close of year T − 1. A minimum that is a whole
+  number of steps per year has an exact boundary; any other is rounded once,
+  in the product.
+- **Skipped pack.** The skipped swap is not recorded and not priced. The
+  old pack stays installed and keeps ageing below its end-of-life
+  threshold, and its state is reported, as with the terminal guard. Every
+  later end-of-life check is skipped too, because less time is left.
+- **Old key.** `battery_allow_terminal_replacement` keeps its meaning. The
+  two are independent tests, and a swap must pass both. The final period
+  has no time left, so any positive minimum also skips it; the old key
+  matters only at minimum 0. Neither key is deprecated: the old one is the
+  exact last-day guard and needs no horizon.
+- **Where it is enforced.** At the same end-of-life check as the terminal
+  guard, between degradation windows in Python. The compiled dispatch
+  kernel is unchanged, so Python and Numba skip the same swaps.
+- **Provenance.** The resolved value is in `provenance.resolved_config`
+  (App and Monte Carlo), in the optimizer's
+  `battery_replacement_treatment` with a `minimum_service` description, and
+  in the `[terminal_value]` `replacement_policy` beside
+  `allow_terminal_replacement`.
+
+- **Reporting.** The final state of health does not say when a swap was
+  skipped or why, so every crossing of the threshold is recorded as an
+  event: a degradation period that closes with the installed pack at or
+  below `eol_percentage`. Each event holds the project `year`, `time_years`
+  (measured as `Replacement_Time_Years` books a swap, so a replaced
+  crossing's time is the booked one), the closing step's `date`, the
+  `action` (`"replaced"` or `"kept"`), the `reason` (`"end_of_life"` for a
+  swap; `"min_remaining_years"`, `"terminal_period"` or, for a direct
+  `BatteryConfig` with replacement off, `"replacement_disabled"` for a
+  skipped one) and the `soh_pct` the check compared with the threshold. A
+  pack that is kept crosses once, so it is recorded once, and a skipped
+  swap is always the last event. App results list the events in
+  `battery_end_of_life_events` and repeat the first in the scalar
+  `battery_first_end_of_life_*` fields, which a sweep CSV keeps. Monte
+  Carlo reports the first crossing per trajectory and the projected
+  optimizer per design. `SimulationSummary.end_of_life_events` carries
+  the span's `breos.battery.EndOfLifeEvent` records, and the detailed
+  degradation frame's `attrs` the same events as JSON-safe dicts (pandas
+  writes attrs as JSON), so the public return tuple keeps its shape. The
+  `date` moves the closing step's date forward by the project year, since
+  every year replays the first year's calendar; Monte Carlo restamps its
+  sampled weather years to `target_year`. `action` and `reason` are open vocabularies: a new end-of-life
+  action adds a value and renames none.
+
+With the default 0 no swap is skipped and results are bit-identical. The
+result format stays `"1"`; the key and the event fields add fields and
+rename none.
 
 ## Consequences
 
