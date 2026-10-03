@@ -244,6 +244,7 @@ _BATTERY_SPEC_KEYS = (
     "enable_resistance_fade",
     "allow_terminal_replacement",
     "replacement_min_remaining_years",
+    "skipped_replacement_action",
 )
 
 
@@ -298,6 +299,7 @@ def _battery_replacement_treatment(battery: Mapping[str, Any]) -> Dict[str, Any]
         "higher_fidelity_basis": "App multiyear SOH propagation",
         "allow_terminal_replacement": bool(battery.get("allow_terminal_replacement", True)),
         "replacement_min_remaining_years": float(battery.get("replacement_min_remaining_years", 0.0)),
+        "skipped_replacement_action": str(battery.get("skipped_replacement_action", "keep")),
         "terminal_period": (
             "The final degradation period of the last project year: the elapsed one-day window of simulation "
             "steps that ends on the horizon's last step, whole or partial. It is always aged and recorded; "
@@ -306,7 +308,9 @@ def _battery_replacement_treatment(battery: Mapping[str, Any]) -> Dict[str, Any]
         ),
         "minimum_service": (
             "In any project year, an end-of-life replacement that would leave the new pack less than "
-            "replacement_min_remaining_years of the project to serve is skipped; 0 skips none."
+            "replacement_min_remaining_years of the project to serve is skipped; 0 skips none. "
+            'A skipped swap keeps the old pack in service ("keep") or switches it off for the rest of the '
+            'project ("retire"), as skipped_replacement_action says.'
         ),
     }
 

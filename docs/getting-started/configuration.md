@@ -220,9 +220,59 @@ last project year; set `replacement_years_after_span` to the number of
 project years that follow it.
 
 Every end-of-life crossing is reported with what was done and why: a skipped
-swap shows as `"kept"` with the reason `"min_remaining_years"` or
-`"terminal_period"`. See
+swap shows as `"kept"` (or `"retired"`, below) with the reason
+`"min_remaining_years"` or `"terminal_period"`. See
 [End-of-life events](interpreting-results.md#end-of-life-events).
+
+### Retiring the battery instead of keeping it
+
+A skipped replacement keeps the old battery in service by default: it goes on
+charging and discharging below its threshold until the end of the project.
+That is not always better than no battery. Under smart charging, for
+example, grid charging whose conversion and round-trip losses exceed the
+tariff saving loses money every day the battery runs.
+`battery_skipped_replacement_action` chooses what happens instead:
+
+```toml
+projection_years = 20
+battery_replacement_min_remaining_years = 1.0
+battery_skipped_replacement_action = "retire"  # "keep" is the default
+```
+
+- `"keep"` (the default) is the behaviour described above.
+- `"retire"` switches the battery off at the crossing, the instant the
+  skipped replacement would have been booked at. The step that closes the
+  degradation period was dispatched as usual. From the next step the battery
+  neither charges nor discharges, from PV or from the grid, and the system
+  runs exactly as a PV-only system with the same inverter: PV serves the
+  load first, the rest is exported, and the grid covers what PV does not.
+  Smart-charging instructions, the daily controller and its plans still run
+  and are recorded, but they no longer move any energy.
+- The energy stored at that instant leaves the system with the retired
+  pack: it is reported in `Battery_Replacement_Energy_Removed` (and the year
+  rows' `Replacement_Energy_Removed_kWh`) with its PV and grid origins, and
+  nothing is added. The pack's open rainflow half cycles are counted, as for
+  a replaced pack.
+- The investment and every cash flow up to the crossing are unchanged. No
+  replacement is bought or priced, and the fixed charge and O&M continue as
+  before: BREOS has no separate battery O&M line to stop.
+- The retired pack stays installed at zero charge and keeps its reported
+  state of health; it ages only by calendar time at zero charge, which the
+  native model counts as no further fade. Like a kept pack, it is at or below
+  its threshold, so an enabled `[terminal_value]` credits it nothing.
+- The key acts only on a crossing whose replacement is skipped, so with the
+  defaults (`battery_replacement_min_remaining_years = 0`,
+  `battery_allow_terminal_replacement = true`) it changes nothing. To retire
+  at the first end of life and never replace, set
+  `battery_replacement_min_remaining_years` above `projection_years`.
+
+Monte Carlo applies the key to each trajectory and the optimizer takes it as
+`[battery] skipped_replacement_action`; both record it as they record the
+minimum service time, and an enabled `[terminal_value]` lists it in its
+`replacement_policy`. A retired battery stays off in every later projection
+year. A direct {py:class}`~breos.battery.BatteryConfig` call takes
+`skipped_replacement_action`, and a span that continues a retired battery
+passes `battery_retired=True`.
 
 ## Discovering available options
 

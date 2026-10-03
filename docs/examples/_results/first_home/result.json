@@ -970,6 +970,7 @@
    "battery_eol_percentage": 0.7,
    "battery_allow_terminal_replacement": true,
    "battery_replacement_min_remaining_years": 0.0,
+   "battery_skipped_replacement_action": "keep",
    "battery_rte": null,
    "enable_resistance_fade": false,
    "pv_loss_overrides": null,

@@ -1,10 +1,10 @@
 # 0003 — Economic basis, escalators, and currency-neutral results
 
-- **Status:** Accepted (E1–E10); implemented in 0.7.0. E11 Proposed,
-  implemented for 0.7.1
+- **Status:** Accepted (E1–E10); implemented in 0.7.0. E11 and E12
+  Proposed, implemented for 0.7.1
 - **Date:** 2026-09-26; E1, E6 and E8 accepted 2026-09-26; E2–E5, E7, E9 and
   the E6 inflation default accepted 2026-09-27; E10 accepted 2026-10-01; E9
-  amended 2026-10-01; E11 proposed 2026-10-03
+  amended 2026-10-01; E11 and E12 proposed 2026-10-03
 
 ## Context
 
@@ -62,7 +62,8 @@ the design, not its implementation. All nine were then implemented for
 0.7.0 under #183: E6 in #271, E5 and E7 in #273, E8 and E9 in #283, E1, E2
 and E3 in #288, and E4 in #291. E10, accepted on 2026-10-01, was implemented
 in #352. The changelog carries the migration table below as shipped.
-E11, proposed on 2026-10-03, is implemented for 0.7.1 under #400.
+E11, proposed on 2026-10-03, is implemented for 0.7.1 under #400, and E12,
+proposed the same day, under #404.
 
 ### E1. Nominal basis for the projection APIs — Accepted 2026-09-26
 
@@ -396,6 +397,73 @@ one project year remains for it.
 With the default 0 no swap is skipped and results are bit-identical. The
 result format stays `"1"`; the key and the event fields add fields and
 rename none.
+
+### E12. Retire a battery whose replacement is skipped (#404) — Proposed 2026-10-03
+
+Adds a rule; it replaces no text. Under E11 a pack whose swap is skipped
+stays in service and keeps dispatching below its threshold to the end of
+the project. That assumes a worn battery is at least as good as none, and it
+is not always: a prescribed dispatch, such as grid charging whose conversion
+and round-trip losses exceed the tariff saving, loses money every day it
+runs. The time-of-use study for the upcoming publication compares three
+end-of-life policies for the final project year: replace, keep and retire.
+
+- **Key.** `battery_skipped_replacement_action` (App and Monte Carlo),
+  `[battery] skipped_replacement_action` (optimizer) and
+  `BatteryConfig.skipped_replacement_action`: `"keep"` (default) or
+  `"retire"`.
+- **Composition with E11.** The key says what happens at a crossing whose
+  replacement is skipped, by `battery_replacement_min_remaining_years`, by
+  `battery_allow_terminal_replacement = false`, or (direct `BatteryConfig`)
+  by `enable_replacement = false`. Whether to buy stays with those rules;
+  the new key only chooses the alternative to buying. The three policies
+  are then: replace (minimum 0), keep (minimum `m`, `"keep"`) and retire
+  (minimum `m`, `"retire"`). A single `battery_end_of_life_action =
+  "replace" | "keep" | "retire"` was considered and rejected. Its
+  `"replace"` would mean "replace unless the minimum skips it, then keep",
+  which is `"keep"` under another name; and a policy that replaces early
+  swaps but retires in the final year, the study's case, would need the
+  minimum as well, so the three values would not be independent. Never
+  replacing is a minimum above the horizon with either action. With the
+  default minimum and terminal guard no swap is skipped, so the key has no
+  effect unless one of them is set.
+- **Retirement instant.** The crossing: the close of the degradation period
+  whose health reached the threshold, the instant a replacement would have
+  been booked at (E3, E4). The closing step was dispatched as usual.
+- **Operation after it.** The battery neither charges nor discharges, from
+  PV or from the grid, whatever the dispatch instructions say. Each later
+  step is computed by the PV-only path with the same inverter, so its flows
+  equal the PV-only system's bit for bit, and Python and Numba agree. A
+  daily controller and a year planner still run, and their instructions are
+  recorded, but they move no energy. A retired pack stays off in every
+  later projection year (`CarryState.battery_retired`; a span that
+  continues it passes `battery_retired=True`).
+- **Stored energy.** It leaves the system with the retired pack, as a
+  replaced pack's does: it is booked in `Battery_Replacement_Energy_Removed`
+  with its origins, nothing is added, and the ledger closes. Freezing it in
+  a disconnected pack was the alternative; it would report energy that can
+  never be used as stored, and as final stored energy by origin, and leave
+  it to the capacity window as the health changes. The pack's open
+  rainflow half cycles are counted at the crossing, as for a replaced pack.
+- **Money.** The investment and every cash flow before the crossing are
+  unchanged, and no replacement is bought or priced. The fixed charge and
+  O&M continue: BREOS has no separate battery O&M line, so retirement
+  saves none. The retired pack is at or below its threshold, so the E10
+  terminal health credit is zero, as for a kept pack; a retired pack is
+  never replaced later. `[terminal_value]`'s `replacement_policy` records
+  the action.
+- **Health.** The pack stays installed at zero charge and keeps ageing by
+  calendar time, which the native model counts as no further fade at zero
+  charge. Its health is reported as for a kept pack.
+- **Reporting.** The crossing is an E11 event with action `"retired"` and
+  the reason of the skip.
+
+The default `"keep"` is E11's behaviour, and results are bit-identical. The
+result format stays `"1"`.
+
+Follow-ups, not part of E12: a tariff switch from a given project year,
+independent of retirement (#402), and an economic rule that compares
+replace, keep and retire at each crossing (#403).
 
 ## Consequences
 

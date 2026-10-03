@@ -60,6 +60,8 @@ def build_battery_config(cfg: dict[str, Any], resolved: ResolvedAppConfig, *, in
     applies it to the final year only. ``battery_replacement_min_remaining_years``
     is the project's minimum service time for a new pack; :func:`project_years`
     tells each year how many project years follow it.
+    ``battery_skipped_replacement_action`` keeps or retires a pack whose swap
+    either rule skips.
     """
     battery_kwh = cfg["battery_kwh"]
     efficiency: dict[str, Any] = {}
@@ -77,6 +79,7 @@ def build_battery_config(cfg: dict[str, Any], resolved: ResolvedAppConfig, *, in
         enable_replacement=True,
         allow_terminal_replacement=cfg.get("battery_allow_terminal_replacement", True),
         replacement_min_remaining_years=cfg.get("battery_replacement_min_remaining_years", 0.0),
+        skipped_replacement_action=cfg.get("battery_skipped_replacement_action", "keep"),
         calendar_model=cfg["calendar_model"],
         max_charge_power_w=cfg["battery_max_charge_power_w"],
         max_discharge_power_w=cfg["battery_max_discharge_power_w"],
@@ -127,6 +130,9 @@ class CarryState:
     soh_pct: float = 100.0
     degradation_state: dict[str, Any] | None = None
     controller_carry: ControllerCarry | None = None
+    # True once a year has retired the battery (ADR 0003 E12); every later
+    # year starts with it switched off.
+    battery_retired: bool = False
 
     def simulation_kwargs(self) -> dict[str, Any]:
         """Keyword arguments that start a simulation from this state."""
@@ -142,6 +148,8 @@ class CarryState:
             kwargs["initial_energy_wh"] = self.energy_wh
             kwargs["initial_pv_origin_energy_wh"] = self.pv_origin_energy_wh or 0.0
             kwargs["initial_grid_origin_energy_wh"] = self.grid_origin_energy_wh or 0.0
+        if self.battery_retired:
+            kwargs["battery_retired"] = True
         return kwargs
 
     def after_frames(
@@ -857,7 +865,9 @@ def project_years(
     to the end of the project: with a positive minimum each year runs a copy
     whose ``replacement_years_after_span`` is the number of years after it,
     so a swap is skipped when the project time left after its
-    ``Replacement_Time_Years`` is below the minimum. The run's
+    ``Replacement_Time_Years`` is below the minimum. A skipped swap keeps or
+    retires the pack (``skipped_replacement_action``); a retired pack is
+    carried switched off into every later year. The run's
     ``end_of_life_events`` lists every crossing of the end-of-life threshold,
     replaced or not, on the project clock (:func:`end_of_life_record`).
 
@@ -1089,6 +1099,8 @@ def project_years(
 
         total_replacements += n_rep
         end_of_life_events.extend(end_of_life_record(event, year_idx, n_steps) for event in span_events)
+        if any(event.action == "retired" for event in span_events):
+            carry = replace(carry, battery_retired=True)
         rows.append(
             build_year_row(
                 year_idx,
@@ -1235,6 +1247,7 @@ def value_projection(cfg: dict[str, Any], resolved: ResolvedAppConfig, run: Proj
             npv_savings=float(cost_projection.attrs["final_npv_savings"]),
             allow_terminal_replacement=cfg.get("battery_allow_terminal_replacement", True),
             replacement_min_remaining_years=cfg.get("battery_replacement_min_remaining_years", 0.0),
+            skipped_replacement_action=cfg.get("battery_skipped_replacement_action", "keep"),
         )
     return ProjectionValue(
         costs=costs,
