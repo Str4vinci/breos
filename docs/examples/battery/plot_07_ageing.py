@@ -75,7 +75,6 @@ styles = {
     model: {"color": f"C{i}", "ls": "-" if models.loc[model, "engine"] == "native" else "--"}
     for i, model in enumerate(models.index)
 }
-case.stamp()
 
 
 def first_year_at_or_below(frame: pd.DataFrame, model: str) -> float | None:
@@ -93,11 +92,13 @@ def at_year(frame: pd.DataFrame, model: str, year: int, column: str) -> float:
     return float(frame.loc[(frame["model"] == model) & (frame["year"] == year), column].iloc[0])
 
 
+case.stamp()
+
 # %%
 # Identical imposed stress history
 # --------------------------------
-# One year of state of charge and cell temperature, repeated for 20 years,
-# drives each model. The imposed year is the native v1 run's first year:
+# One year of state of charge and cell temperature, repeated every project
+# year, drives each model. The imposed year is the native v1 run's first year:
 
 table(
     pd.DataFrame(
