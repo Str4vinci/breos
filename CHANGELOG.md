@@ -66,6 +66,12 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   same rule; before, a day target above the configured one failed. Runs
   without `hold_target` are bit-identical, and the dispatch kernel is
   unchanged.
+- `tools/oracles/daily_target_dp.py --wear-cost-per-kwh` gives the same
+  wear weight to every solve of the perfect-information daily targets, in
+  both planning modes, and `run_daily_target_oracle` takes it as
+  `wear_cost_per_kwh`. The summary records the setting and each plan's
+  `wear_cost` apart from its stage cost. The default 0 gives the same plans
+  and costs as before.
 - `battery_replacement_min_remaining_years` (App and Monte Carlo), the
   optimizer's `[battery] replacement_min_remaining_years` and
   `BatteryConfig.replacement_min_remaining_years` skip a battery

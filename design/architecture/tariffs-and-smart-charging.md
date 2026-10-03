@@ -174,11 +174,14 @@ interchangeable:
   PV, load and temperature, and at the stored energy, health and
   efficiencies that the production replay of the earlier years reached. The
   report records the planning mode and each year's inputs, opening state,
-  plan and replayed cost. The result is the best schedule within that
-  policy class under the planner's model. It is not a bound, and not a
-  bound on lifetime NPV: other policies can do better, the replayed cost
-  under production physics differs from the plan as health moves, and a
-  year's choice ignores what its cycling costs later years.
+  plan and replayed cost. `--wear-cost-per-kwh` gives every solve the
+  planner's wear weight (ADR 0002 A17, default 0); the report records it
+  and each plan's wear cost apart from its stage cost. The result is the
+  best schedule within that policy class under the planner's model. It is
+  not a bound, and not a bound on lifetime NPV: other policies can do
+  better, the replayed cost under production physics differs from the plan
+  as health moves, and a year's choice ignores what its cycling costs later
+  years.
 - `tools/oracles/lp_bound.py` is a **conditional lower bound** on the first
   project year's import cost less export revenue, without the fixed charge.
   The linear program relaxes the dispatch rules. The bound holds only for a
