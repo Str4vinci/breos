@@ -1,5 +1,10 @@
 {
  "fields": {
+  "battery_end_of_life_events.__len__": 0,
+  "battery_first_end_of_life_action": null,
+  "battery_first_end_of_life_reason": null,
+  "battery_first_end_of_life_soh_pct": null,
+  "battery_first_end_of_life_years": null,
   "battery_kwh": 5,
   "battery_replacement_cost_npv": 0.0,
   "battery_replacement_cost_t0_prices": 0.0,
