@@ -168,7 +168,7 @@ year's own figures cover every pack that served in it.
 | `replacements` | Replacements in the year |
 | `charge_throughput_kwh` | Energy stored in the cells in the year, after charging losses |
 | `discharge_throughput_kwh` | Energy drawn from the cells in the year, before inverter losses |
-| `fec` | Full equivalent cycles in the year, from rainflow counting, over every pack |
+| `fec` | Full equivalent cycles in the year, over every pack, as the degradation model counts them (below) |
 | `cumulative_fec` | Full equivalent cycles of the installed pack since it was installed |
 | `mean_soc_pct` | Mean state of charge over the year, as a share of the pack's aged capacity; the SOC the ageing model sees |
 | `mean_cell_temperature_c` | Mean cell temperature over the year, the temperature the ageing model sees |
@@ -183,6 +183,12 @@ loss, and only the native engine has a resistance model. For the native
 engine `cycle_loss_pct + calendar_loss_pct` is the state of health lost
 since the pack was installed, to rounding. The year rows behind the history
 also carry `Battery_Cell_Temperature_Mean_C`.
+
+The cycle counts are the model's own. The native engine counts rainflow
+cycles of the state of charge, which is a share of the aged capacity, so a
+full cycle of a worn pack counts as one. BLAST scales each cycle by the
+capacity left, so it counts cycles of the new pack's capacity, and the same
+use gives fewer cycles as the pack ages.
 
 ## Estimated battery residual value
 
