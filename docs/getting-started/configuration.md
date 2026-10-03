@@ -272,8 +272,8 @@ Monte Carlo applies the key to each trajectory and the optimizer takes it as
 minimum service time, and an enabled `[terminal_value]` lists it in its
 `replacement_policy`. A retired battery stays off in every later projection
 year. A direct {py:class}`~breos.battery.BatteryConfig` call takes
-`skipped_replacement_action`, and a span that continues a retired battery
-passes `battery_retired=True`.
+`skipped_replacement_action`. A span continued from a retired span's
+degradation state stays retired; `battery_retired=True` says so explicitly.
 
 ## Discovering available options
 

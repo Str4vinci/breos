@@ -439,8 +439,12 @@ end-of-life policies for the final project year: replace, keep and retire.
   equal the PV-only system's bit for bit, and Python and Numba agree. A
   daily controller and a year planner still run, and their instructions are
   recorded, but they move no energy. A retired pack stays off in every
-  later projection year (`CarryState.battery_retired`; a span that
-  continues it passes `battery_retired=True`).
+  later projection year (`CarryState.battery_retired`). The retired span's
+  degradation state holds `"battery_retired": True`, so a span continued
+  from it stays retired; `battery_retired=True` says the same explicitly,
+  and is refused with a state from a pack that was not retired. A fresh
+  pack that starts at or below its threshold crosses at its first period
+  close, so a skipped swap retires it there.
 - **Stored energy.** It leaves the system with the retired pack, as a
   replaced pack's does: it is booked in `Battery_Replacement_Energy_Removed`
   with its origins, nothing is added, and the ledger closes. Freezing it in

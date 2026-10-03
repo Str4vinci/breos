@@ -109,7 +109,8 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   PV-only system; the stored energy leaves with the pack. Earlier cash flows
   and the investment are unchanged and no replacement is priced. The event
   is reported with action `"retired"`, and a retired battery stays off in
-  later projection years (`simulate_energy_balance(battery_retired=True)`).
+  later projection years and in a span continued from its degradation
+  state (or `simulate_energy_balance(battery_retired=True)`).
   The default `"keep"` gives results bit-identical to 0.7.0.
 
 ### Changed
