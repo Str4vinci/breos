@@ -455,9 +455,11 @@ end-of-life policies for the final project year: replace, keep and retire.
   terminal health credit is zero, as for a kept pack; a retired pack is
   never replaced later. `[terminal_value]`'s `replacement_policy` records
   the action.
-- **Health.** The pack stays installed at zero charge and keeps ageing by
-  calendar time, which the native model counts as no further fade at zero
-  charge. Its health is reported as for a kept pack.
+- **Health.** The pack stays installed at zero charge and the aging model
+  still runs on it, with no cycles. At zero charge both the native and the
+  BLAST engines give little or no further fade: none for the native
+  engine, and under 1e-6 percentage points a day for BLAST in the tested
+  cases. It is reported as for a kept pack.
 - **Reporting.** The crossing is an E11 event with action `"retired"` and
   the reason of the skip.
 

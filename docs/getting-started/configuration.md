@@ -257,8 +257,9 @@ battery_skipped_replacement_action = "retire"  # "keep" is the default
   replacement is bought or priced, and the fixed charge and O&M continue as
   before: BREOS has no separate battery O&M line to stop.
 - The retired pack stays installed at zero charge and keeps its reported
-  state of health; it ages only by calendar time at zero charge, which the
-  native model counts as no further fade. Like a kept pack, it is at or below
+  state of health. The aging model still runs on it, at zero charge and
+  with no cycles; at zero charge both engines give little or no further
+  fade. Like a kept pack, it is at or below
   its threshold, so an enabled `[terminal_value]` credits it nothing.
 - The key acts only on a crossing whose replacement is skipped, so with the
   defaults (`battery_replacement_min_remaining_years = 0`,

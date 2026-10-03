@@ -21,7 +21,7 @@ import pytest
 
 import breos.optimization as optimization_module
 from breos.app_config import resolve_app_config
-from breos.battery import BatteryConfig, align_simulation_inputs, simulate_energy_balance
+from breos.battery import BatteryConfig, EndOfLifeEvent, align_simulation_inputs, simulate_energy_balance
 from breos.dispatch_instructions import DispatchInstructions
 from breos.montecarlo import MonteCarloSettings, run_montecarlo
 from breos.optimization_config import resolve_optimization_config
@@ -95,6 +95,10 @@ FILL_OFF_PEAK = {
 }
 
 
+def _events(run) -> tuple[EndOfLifeEvent, ...]:
+    return tuple(EndOfLifeEvent.from_record(record) for record in run[4].attrs["end_of_life_events"])
+
+
 def _pv_only(n_steps: int, freq: str = "h"):
     pv, load, temperature = _inputs(n_steps, freq)
     return simulate_energy_balance(
@@ -166,7 +170,7 @@ def test_retire_changes_nothing_before_the_crossing_and_dispatches_pv_only_after
     pv_only = _pv_only(96)
 
     assert _replaced_steps(keep) == _replaced_steps(retire) == [23]
-    assert [(e.step, e.action, e.reason) for e in retire[4].attrs["end_of_life_events"]] == [
+    assert [(e.step, e.action, e.reason) for e in _events(retire)] == [
         (23, "replaced", "end_of_life"),
         (47, "retired", "min_remaining_years"),
     ]
@@ -226,7 +230,7 @@ def test_the_terminal_guard_retires_on_the_last_day():
     retire = _run(
         96, eol_percentage=EVERY_PERIOD_EOL, allow_terminal_replacement=False, skipped_replacement_action="retire"
     )
-    events = retire[4].attrs["end_of_life_events"]
+    events = _events(retire)
     assert (events[-1].step, events[-1].action, events[-1].reason) == (95, "retired", "terminal_period")
     assert retire[0]["Battery_Energy"].iloc[-1] == 0.0
 
@@ -254,7 +258,7 @@ def test_a_span_that_inherits_a_retired_battery_is_pv_only():
     )
     for column in PV_ONLY_COLUMNS:
         np.testing.assert_array_equal(run[0][column], _pv_only(48)[column], err_msg=column)
-    assert run[3] == 0 and run[4].attrs["end_of_life_events"] == ()
+    assert run[3] == 0 and _events(run) == ()
     with pytest.raises(ValueError, match="a retired battery holds no energy"):
         simulate_energy_balance(
             pv_dc=pv,
@@ -265,6 +269,57 @@ def test_a_span_that_inherits_a_retired_battery_is_pv_only():
             initial_energy_wh=100.0,
             battery_retired=True,
         )
+
+
+def test_a_fresh_pack_below_its_threshold_retires_at_its_first_close():
+    config = {"initial_soh": 65.0, "eol_percentage": 0.70, "replacement_min_remaining_years": 10.0}
+    keep = _run(96, **config)
+    retire = _run(96, **config, skipped_replacement_action="retire")
+
+    assert [(e.step, e.action, e.reason) for e in _events(keep)] == [(23, "kept", "min_remaining_years")]
+    assert [(e.step, e.action, e.reason) for e in _events(retire)] == [(23, "retired", "min_remaining_years")]
+    pd.testing.assert_frame_equal(keep[0].iloc[:23], retire[0].iloc[:23], check_exact=True)
+    for column in PV_ONLY_COLUMNS:
+        np.testing.assert_array_equal(retire[0][column].iloc[24:], _pv_only(96)[column].iloc[24:], err_msg=column)
+    assert keep[0]["Battery_Discharge_DC"].iloc[24:].sum() > 0.0
+
+
+def _continue(state, *, retired: bool = False, energy: float | None = 0.0, n_steps: int = 48):
+    pv, load, temperature = _inputs(n_steps)
+    return simulate_energy_balance(
+        pv_dc=pv,
+        houseload=load,
+        battery_config=BatteryConfig(nominal_energy_wh=5000.0, eol_percentage=EVERY_PERIOD_EOL),
+        freq="h",
+        temperature_series=temperature,
+        initial_energy_wh=energy,
+        initial_degradation_state=state,
+        battery_retired=retired,
+        dispatch_instructions=_grid_charging(n_steps),
+        return_degradation_state=True,
+    )
+
+
+def test_the_degradation_state_carries_the_retirement():
+    first = _run(96, eol_percentage=EVERY_PERIOD_EOL, allow_terminal_replacement=False, finalize=False)
+    assert "battery_retired" not in first[5]
+    retired = _run(
+        96,
+        eol_percentage=EVERY_PERIOD_EOL,
+        allow_terminal_replacement=False,
+        skipped_replacement_action="retire",
+        finalize=False,
+    )
+    assert retired[5]["battery_retired"] is True
+
+    # Continued from the state alone, the pack stays off; the argument agrees.
+    for second in (_continue(retired[5]), _continue(retired[5], retired=True), _continue(retired[5], energy=None)):
+        for column in PV_ONLY_COLUMNS:
+            np.testing.assert_array_equal(second[0][column], _pv_only(48)[column], err_msg=column)
+        assert _events(second) == () and second[5]["battery_retired"] is True
+    # The argument with a state from a pack that was not retired contradicts it.
+    with pytest.raises(ValueError, match="comes from a battery that was not retired"):
+        _continue(first[5], retired=True)
 
 
 @pytest.mark.parametrize("freq", ["h", "15min"])
@@ -459,9 +514,9 @@ def test_a_blast_pack_retires_the_same_way():
     from tests.test_terminal_replacement import BLAST
 
     retire = _run(96, engine=BLAST, **SKIP_SECOND, skipped_replacement_action="retire")
-    assert [e.action for e in retire[4].attrs["end_of_life_events"]] == ["replaced", "retired"]
+    assert [e.action for e in _events(retire)] == ["replaced", "retired"]
     for column in PV_ONLY_COLUMNS:
         np.testing.assert_array_equal(retire[0][column].iloc[48:], _pv_only(96)[column].iloc[48:], err_msg=column)
-    # Calendar time still ages the pack a little at zero charge.
+    # No cycles after retirement; at zero charge the health barely moves.
     soh = retire[4]["SOH"].to_numpy()
-    assert soh[3] <= soh[2] <= soh[1]
+    assert soh[3] <= soh[2] <= soh[1] and soh[1] - soh[3] < 1e-6

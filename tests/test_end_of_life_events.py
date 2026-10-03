@@ -20,6 +20,7 @@ from breos.battery import (
     END_OF_LIFE_REASONS,
     BatteryConfig,
     EndOfLifeEvent,
+    simulate_energy_balance,
     simulate_energy_balance_summary,
 )
 from breos.economics import replacement_booking_time
@@ -116,12 +117,29 @@ def test_a_kept_pack_crosses_once():
     ]
 
 
-def test_a_pack_that_starts_below_its_threshold_has_already_crossed():
+def test_a_fresh_pack_below_its_threshold_crosses_at_its_first_close():
     run = _run(48, eol_percentage=0.8, initial_soh=75.0, enable_replacement=False)
-    assert _events(run) == ()
-    # Unless the span replaces it.
+    assert [(event.step, event.action, event.reason) for event in _events(run)] == [
+        (23, "kept", "replacement_disabled")
+    ]
     replaced = _run(48, eol_percentage=0.8, initial_soh=75.0)
     assert [(event.step, event.action) for event in _events(replaced)] == [(23, "replaced")]
+
+
+def test_a_continued_pack_below_its_threshold_has_already_crossed():
+    first = _run(48, eol_percentage=0.8, initial_soh=75.0, enable_replacement=False, finalize=False)
+    pv, load, temperature = _inputs(48)
+    second = simulate_energy_balance(
+        pv_dc=pv,
+        houseload=load,
+        battery_config=BatteryConfig(nominal_energy_wh=5000.0, eol_percentage=0.8, enable_replacement=False),
+        freq="h",
+        temperature_series=temperature,
+        initial_energy_wh=float(first[0]["Battery_Energy_End"].iloc[-1]),
+        initial_degradation_state=first[5],
+        return_degradation_state=True,
+    )
+    assert _events(second) == ()
 
 
 def test_the_degradation_frame_attrs_stay_json_safe():

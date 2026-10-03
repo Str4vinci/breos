@@ -167,8 +167,9 @@ class BatteryConfig:
     energy leaves the system as a replacement's does, and from the next step
     the battery neither charges nor discharges, so PV serves the load and
     the grid covers the rest as in a PV-only system. Dispatch instructions
-    have no effect after it. The retired pack stays installed and keeps
-    ageing at zero charge. A span that inherits a retired pack takes
+    have no effect after it. The retired pack stays installed at zero
+    charge, and the aging model still runs on it. A span that inherits a retired pack continues
+    it retired from the returned degradation state, or takes
     ``battery_retired=True``.
     """
 
@@ -962,8 +963,10 @@ class EndOfLifeEvent:
     A replaced pack's successor can cross again, so a span may hold several
     replacements. A pack that stays in service below its threshold, or is
     retired, crosses once: later periods, and later spans that inherit it,
-    record nothing more. A pack that starts a span at or below its threshold
-    has already crossed, unless that span replaces it.
+    record nothing more. A pack continued from an earlier span (through
+    ``initial_degradation_state``) at or below its threshold has already
+    crossed there, unless this span replaces it. A fresh pack that starts at
+    or below its threshold crosses at its first period close.
     """
 
     step: int
@@ -1487,6 +1490,8 @@ def _build_final_degradation_state(
         "cumulative_cycle_degradation": float(aging.cumulative_cycle_deg),
         "cumulative_calendar_degradation": float(aging.cumulative_cal_deg),
         **adapter_snapshot,
+        # Only a retired pack carries the flag, so other states are unchanged.
+        **({"battery_retired": True} if aging.retired else {}),
     }
 
 
@@ -1794,7 +1799,11 @@ def _simulate_core(
         battery_retired: The span inherits a battery a previous span retired
             (``BatteryConfig.skipped_replacement_action = "retire"``). It
             holds no energy, every step dispatches PV-only, and the pack
-            only ages. A carried stored energy must be zero.
+            only ages. A carried stored energy must be zero. A retired span's
+            returned degradation state holds ``"battery_retired": True``, so
+            passing it as ``initial_degradation_state`` continues it retired
+            without this argument; True with a state from a pack that was not
+            retired is refused.
 
     Returns:
         A :class:`_CoreRun` holding the filled result buffers, the calendar,
@@ -1943,6 +1952,13 @@ def _simulate_core(
             "the starting energy at the restored BLAST SOH minus initial_pv_origin_energy_wh",
         )
 
+    # A state from a span that retired the pack continues it retired.
+    state_retired = bool(state_payload.get("battery_retired", False))
+    if battery_retired and initial_degradation_state is not None and not state_retired:
+        raise ValueError(
+            "battery_retired=True, but initial_degradation_state comes from a battery that was not retired"
+        )
+    battery_retired = battery_retired or state_retired
     if battery_retired:
         if not has_battery:
             raise ValueError("battery_retired needs a battery; a PV-only run has none to retire")
@@ -1973,7 +1989,11 @@ def _simulate_core(
         replaced_capacity_wh=0.0,
         day_start_soc=0.0 if battery_retired else degradation_day_start_soc,
         day_start_t_cell=degradation_day_start_t_cell,
-        past_end_of_life=battery_retired or battery_soh_decimal <= battery_config.eol_percentage,
+        # A pack continued at or below its threshold crossed it in an earlier
+        # span, which recorded the crossing. A fresh pack that starts there
+        # crosses at its first period close.
+        past_end_of_life=battery_retired
+        or (initial_degradation_state is not None and battery_soh_decimal <= battery_config.eol_percentage),
         retired=battery_retired,
     )
 
