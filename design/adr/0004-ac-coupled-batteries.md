@@ -563,7 +563,7 @@ with two changes that are zero for DC coupling:
    inputs stay PV DC, grid AC to the battery and replacement-added energy
    (changed). `PV_AC_To_Battery` is internal and appears in neither.
 
-Two identities and two bounds are new, asserted for AC coupling:
+New, asserted for AC coupling:
 
 4. PV inverter: `PV_DC_To_Inverter − PV_Direct_Inverter_Loss = PV_AC_To_Load
    + PV_AC_Export + PV_AC_To_Battery`.
@@ -611,13 +611,13 @@ the current code at `2e06c99`.
 Step 1 closes: 3000 = 1000 + 120 + 75.2 + 90.24 (charge loss) + 1714.56.
 Delivering 1500 Wh from the battery costs the same in both. From the same PV
 surplus, AC coupling stores `η × η_b = 0.9216` of the DC-coupled stored
-energy. PV DC to load through the
-battery is `0.96 × 0.96 × 0.95 × 0.95 × 0.96 = 0.798` in AC coupling against
+energy. PV DC to load through the battery is
+`0.96 × 0.96 × 0.95 × 0.95 × 0.96 = 0.798` in AC coupling against
 `0.95 × 0.95 × 0.96 = 0.866` in DC coupling.
 
 **AC2 — clipping is not recovered.** PV inverter 2000 W, PV DC 3000, load 0,
-initial energy 5000. At full load the PVWatts curve returns the rating
-exactly, so these values are exact.
+initial energy 5000. At full load the PVWatts curve returns the rating,
+so these values can be computed by hand.
 
 | Column | AC | AC, battery inverter 1500 W | DC |
 |---|---|---|---|
