@@ -872,6 +872,47 @@ def test_python_at_15_minutes_recommends_numba_once(backend, resolution, warned)
         assert recommended[0].category is UserWarning
 
 
+# -- held targets (ADR 0002 A18) -------------------------------------------------
+
+# Always dispatch with off-peak charging: discharge in every period, the planned target held off-peak.
+ALWAYS = {**DAILY, "discharge_periods": ["off_peak", "peak"], "overlap_policy": "hold_target"}
+
+
+def test_the_daily_mode_takes_hold_target():
+    spec = resolve_app_config({**BASE, "smart_charging": ALWAYS}).smart_charging
+    assert (spec.mode, spec.overlap_policy) == ("daily_persistence", "hold_target")
+    assert spec.discharge_periods == ("off_peak", "peak")
+    direct = dataclasses.replace(SPEC, discharge_periods=("off_peak", "peak"), overlap_policy="hold_target")
+    assert direct.overlap_policy == "hold_target"
+    with pytest.raises(ValueError, match="share off_peak.*'daily_persistence' to allow overlap"):
+        dataclasses.replace(direct, overlap_policy="reject")
+
+
+@pytest.mark.filterwarnings("ignore:.*execution_backend = 'numba'")
+def test_always_dispatch_holds_each_days_planned_target_at_15_minutes():
+    app = _app({**WINDOW, "resolution": "15min", "period": JANUARY, "smart_charging": {**ALWAYS, **COARSE}})
+    assert app.result()["provenance"]["smart_charging"]["overlap_policy"] == "hold_target"
+    artifacts = app._artifacts
+    executed = artifacts.projection.controller_instructions
+    off_peak = np.asarray(artifacts.resolved_tariff.period_labels) == "off_peak"
+    target = executed.grid_target_fraction
+    planned = ~np.isnan(target)
+
+    assert executed.discharge_allowed.all()
+    np.testing.assert_array_equal(planned, off_peak & planned)
+    # Off-peak, the floor is the day's planned target; with no target (the
+    # warm-start day, and every peak step) there is no floor.
+    np.testing.assert_array_equal(executed.reserve_fraction[planned], target[planned])
+    np.testing.assert_array_equal(executed.reserve_fraction[~planned], 0.0)
+    assert np.isnan(target[:96]).all() and (target[planned] > 0.0).any()
+
+    frame = artifacts.first_year_results_df
+    grid = frame["Grid_AC_To_Battery"].to_numpy()
+    discharge = frame["Battery_Discharge_DC"].to_numpy()
+    assert grid.sum() > 0.0 and discharge[off_peak].sum() > 0.0
+    assert not ((grid > 0.0) & (discharge > 0.0)).any()
+
+
 # -- provenance -----------------------------------------------------------------
 
 

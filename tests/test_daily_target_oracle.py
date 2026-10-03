@@ -1,6 +1,7 @@
 """The daily-target oracle: one grid-charge target per day, planned and replayed (plan step 7)."""
 
 import json
+from contextlib import contextmanager
 
 import numpy as np
 import pandas as pd
@@ -129,8 +130,9 @@ YEARLY = {**BASE, "tariff": TOU, "smart_charging": FIXED, "start_date": "2025-01
 YEARLY_PLANNER = {"target_levels": 3, "soc_states": 3}
 
 
-@pytest.fixture(scope="module")
-def yearly():
+@contextmanager
+def _synthetic_tmy():
+    """Offline TMY weather for whole project years, outside the per-test weather fixture."""
     from tests.conftest import _build_synthetic_weather
 
     weather = _build_synthetic_weather()
@@ -139,6 +141,12 @@ def yearly():
     with pytest.MonkeyPatch.context() as monkeypatch:
         monkeypatch.setattr("breos.app.fetch_tmy_weather_data", lambda *args, **kwargs: (weather.copy(), tmy))
         monkeypatch.setattr("breos.app.load_weather", lambda **kw: None)
+        yield
+
+
+@pytest.fixture(scope="module")
+def yearly():
+    with _synthetic_tmy():
         case = prepare_replay(YEARLY)
         result = run_daily_target_oracle(case, planning="yearly", **YEARLY_PLANNER)
         first_year = run_daily_target_oracle(case, **YEARLY_PLANNER)
@@ -234,3 +242,45 @@ def test_the_oracle_refuses_an_unknown_planning_mode():
     case = prepare_replay(_config(1))
     with pytest.raises(ValueError, match="'planning' must be one of first_year, yearly"):
         run_daily_target_oracle(case, planning="rolling")
+
+
+# Always dispatch with off-peak charging: discharge in every period, the target held off-peak (ADR 0002 A18).
+HOLD = {**FIXED, "overlap_policy": "hold_target", "discharge_periods": ["off_peak", "peak"]}
+
+
+def _held_floor_follows_the_target(instructions):
+    held = instructions.discharge_allowed & ~np.isnan(instructions.grid_target_fraction)
+    assert held.any()
+    np.testing.assert_array_equal(instructions.reserve_fraction[held], instructions.grid_target_fraction[held])
+
+
+def test_a_held_target_plan_replays_as_planned():
+    # One civil day: the planner's fixed health is exact, so production
+    # delivers every planned flow, here with a day target above the
+    # configured one that the held floor follows.
+    case = prepare_replay(_config(1, smart_charging=HOLD))
+    result = run_daily_target_oracle(case, **PLANNER, tolerance=DEFAULT_TOLERANCE)
+    assert result.plan.targets[0] > HOLD["target_usable_fraction"]
+    _held_floor_follows_the_target(result.instructions)
+    assert result.replay.plan_matched, result.replay.mismatched_steps
+    assert result.replay.first_year_step_cost.sum() == pytest.approx(result.plan.stage_cost, rel=1e-12)
+
+    week = run_daily_target_oracle(prepare_replay(_config(5, smart_charging=HOLD)), **PLANNER)
+    _held_floor_follows_the_target(week.instructions)
+    assert week.replay.first_year_step_cost.sum() == pytest.approx(week.plan.stage_cost, rel=1e-3)
+    assert week.replay.first_year_step_cost.sum() < week.fixed_target.first_year_step_cost.sum()
+
+
+def test_yearly_replanning_holds_each_years_targets():
+    # Two whole years on the coarsest grid: each year's plan holds its own
+    # targets, here the top one above the configured floor.
+    config = {**YEARLY, "smart_charging": HOLD, "projection_years": 2}
+    with _synthetic_tmy():
+        result = run_daily_target_oracle(prepare_replay(config), planning="yearly", target_levels=2, soc_states=2)
+    assert [plan.year for plan in result.year_plans] == [1, 2]
+    for plan in result.year_plans:
+        _held_floor_follows_the_target(plan.instructions)
+        assert (plan.plan.targets == 1.0).any()
+    assert result.replay.year_instruction_hashes == tuple(
+        plan.instructions.instruction_hash() for plan in result.year_plans
+    )

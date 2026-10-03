@@ -708,7 +708,7 @@ charge_periods = ["off_peak"]
 discharge_periods = ["mid_peak", "peak"]
 grid_charge_efficiency = 0.95       # required: AC-to-DC conversion of the grid-charging path
 grid_import_limit_w = 5000          # optional: grid charging keeps total import below this
-overlap_policy = "reject"           # default; "hold_target" permits overlap in fixed_target
+overlap_policy = "reject"           # default; "hold_target" permits overlap
 ```
 
 - In a charge period the grid may charge the battery toward
@@ -720,8 +720,8 @@ overlap_policy = "reject"           # default; "hold_target" permits overlap in 
   shrinks with temperature and state of health, and the target moves with it.
 - The period names must exist in the tariff's schedule, and the two lists
   must not share a period under the default `overlap_policy = "reject"`.
-  With `overlap_policy = "hold_target"` (`fixed_target` only), the grid target
-  is also the discharge floor on steps in both lists: above it the battery
+  With `overlap_policy = "hold_target"` (`fixed_target` and
+  `daily_persistence`), the grid target is also the discharge floor on steps in both lists: above it the battery
   may discharge down to it; below it the grid may charge up to it. It never
   charges and discharges in the same step. Both bounds move together with
   temperature and health. PV may still charge above the target. Steps in
@@ -754,9 +754,8 @@ To allow discharge in every period while retaining an off-peak target, use
 `charge_periods = ["off_peak"]`, list every tariff period in
 `discharge_periods`, and set `overlap_policy = "hold_target"`.
 `disabled` and `discharge_only` refuse `hold_target` because they have no grid
-target. `daily_persistence` also refuses it: its planner replaces charge
-targets while keeping reserves fixed, so planning and production replay
-cannot hold the same target.
+target. `daily_persistence` accepts it; see
+[Daily persistence](#daily-persistence-experimental).
 
 Monte Carlo applies the same instructions to every trajectory, and projected
 optimization to every candidate design with a battery; both record the same
@@ -821,8 +820,9 @@ At each local midnight in the tariff's timezone the mode:
    the next day again from what actually happened.
 
 The table takes the same `charge_periods`, `discharge_periods`,
-`grid_charge_efficiency` and `grid_import_limit_w` as `fixed_target`, and
-refuses `target_usable_fraction`, since the planner chooses it.
+`grid_charge_efficiency`, `grid_import_limit_w` and `overlap_policy` as
+`fixed_target`, and refuses `target_usable_fraction`, since the planner
+chooses it.
 `forecast_horizon_days`, `target_levels` and `soc_states` are integers (not
 booleans or `2.0`), and `wear_cost_per_kwh` is a number of at least 0 (see
 "Wear cost in the planner" below); `fixed_target`,
@@ -845,6 +845,23 @@ This only keeps a rolling plan from treating an empty battery at the end of
 its window as free. It is not an instruction: the simulated battery still
 carries its stored energy, origins and degradation from year to year
 (`terminal_convention = "physical_carry"`).
+
+To discharge in every period while the planner still chooses an off-peak
+target, list every tariff period in `discharge_periods` and set
+`overlap_policy = "hold_target"`:
+
+```toml
+charge_periods = ["off_peak"]
+discharge_periods = ["off_peak", "peak"]
+overlap_policy = "hold_target"
+```
+
+On a step in both lists, the day's planned target is also the discharge
+floor, as under `fixed_target`: above it the battery may discharge down to
+it; below it the grid may charge up to it. The planner tries every candidate
+target with its own floor, so the day it runs is the day it planned. On a
+day with no grid target, which is every warm-start day, such a step has no
+floor, and the battery may discharge to `battery_min_soc` there.
 
 Keep these modelling assumptions in mind when reading the results:
 

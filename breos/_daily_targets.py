@@ -6,7 +6,10 @@ research tool (``tools/compute_a2_daily_sc_oracle.py`` at ``07dc0e40``,
 ``solve_daily_sc_schedule``). The policy class is the fixed-target
 instruction layout with one change: every charge step of a day takes that
 day's target, chosen from a grid of usable fractions. The discharge gate, the
-reserve, the grid-charge efficiency and the import limit stay as given.
+reserve, the grid-charge efficiency and the import limit stay as given, with
+one exception: under ``overlap_policy = "hold_target"`` a step that may both
+discharge and grid-charge holds its target as its discharge floor, so its
+reserve is the day's target too (ADR 0002 A18).
 
 The state is stored energy at a day boundary and the stage cost is the day's
 import cost less its export revenue, plus an optional wear cost on the energy
@@ -113,6 +116,13 @@ def daily_target_instructions(
     other field are kept. ``day_starts`` is the first step of every day
     followed by the step count, as :attr:`ResolvedTariff.day_starts`. A NaN
     target leaves its day with no grid charge.
+
+    A charge step that also allows discharge holds its target
+    (``overlap_policy = "hold_target"``, ADR 0002 A14 and A18): its reserve
+    becomes the day's target, so the discharge floor follows the target. On
+    a NaN day the reserve there is 0, the floor of a target-0 day: with no
+    target there is nothing to hold, and the reserve the layout gives such a
+    step is only the target it was built with.
     """
     starts = _checked_day_starts(day_starts, len(instructions))
     values = np.asarray(targets, dtype=np.float64)
@@ -121,9 +131,13 @@ def daily_target_instructions(
         raise ValueError(f"'targets' must hold one target per day ({n_days}), got shape {values.shape}")
     per_step = np.repeat(values, np.diff(starts))
     base = instructions.grid_target_fraction
+    reserve = instructions.reserve_fraction
+    held = instructions.discharge_allowed & ~np.isnan(base)
+    if held.any():
+        reserve = np.where(held, np.nan_to_num(per_step, nan=0.0), reserve)
     return DispatchInstructions(
         discharge_allowed=instructions.discharge_allowed,
-        reserve_fraction=instructions.reserve_fraction,
+        reserve_fraction=reserve,
         grid_target_fraction=np.where(np.isnan(base), np.nan, per_step),
         grid_charge_efficiency=instructions.grid_charge_efficiency,
         grid_import_limit_w=instructions.grid_import_limit_w,
