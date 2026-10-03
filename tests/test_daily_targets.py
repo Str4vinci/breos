@@ -21,7 +21,7 @@ from breos._dispatch import lfp_capacity_factor
 from breos.app_config import resolve_tariff_spec
 from breos.battery import BatteryConfig, simulate_energy_balance
 from breos.dispatch_instructions import DispatchInstructions
-from breos.smart_charging import SmartChargingSpec, resolve_instructions
+from breos.smart_charging import SmartChargingSpec, period_layout, resolve_instructions
 
 _BACKENDS = [
     "python",
@@ -303,6 +303,7 @@ def test_daily_targets_replace_only_the_charge_steps_of_their_day():
     placed = daily_target_instructions(base, (0, 2, 5, 6), [0.4, np.nan, 1.0])
     np.testing.assert_array_equal(placed.grid_target_fraction, [0.4, np.nan, np.nan, np.nan, np.nan, 1.0])
     np.testing.assert_array_equal(placed.discharge_allowed, base.discharge_allowed)
+    np.testing.assert_array_equal(placed.reserve_fraction, base.reserve_fraction)
     assert (placed.grid_charge_efficiency, placed.grid_import_limit_w) == (0.9, 4000.0)
     with pytest.raises(ValueError, match="one target per day"):
         daily_target_instructions(base, (0, 2, 5, 6), [0.4, 0.5])
@@ -459,3 +460,97 @@ def test_a_higher_wear_cost_never_plans_more_discharge():
 def test_a_wear_cost_is_a_number():
     with pytest.raises(TypeError, match="'wear_cost_per_kwh' must be a finite number"):
         solve_daily_targets(_problem(1), wear_cost_per_kwh=True)
+
+
+# --- held targets (ADR 0002 A18) ----------------------------------------------
+
+
+def _hold_problem(n_days=3, **kwargs):
+    """``_problem`` under Always dispatch: discharge on every step, grid-charge off-peak, the target held."""
+    problem = _problem(n_days, **kwargs)
+    cheap = ~np.isnan(problem.instructions.grid_target_fraction)
+    # The layout's target and reserve are placeholders; each candidate replaces both.
+    layout = replace(
+        problem.instructions,
+        discharge_allowed=np.ones(len(cheap), dtype=bool),
+        reserve_fraction=np.where(cheap, 1.0, 0.0),
+        grid_target_fraction=np.where(cheap, 1.0, np.nan),
+    )
+    return replace(problem, instructions=layout)
+
+
+def test_a_day_target_above_the_layouts_held_floor_is_placed():
+    # The upcoming publication's probe: Always dispatch, the layout built at
+    # target 0, and a day target of 0.5 above that floor.
+    spec = SmartChargingSpec(
+        mode="fixed_target",
+        target_usable_fraction=0.0,
+        charge_periods=("off_peak",),
+        discharge_periods=("off_peak", "peak"),
+        grid_charge_efficiency=0.95,
+        overlap_policy="hold_target",
+    )
+    labels = np.array(["off_peak", "off_peak", "peak", "peak"], dtype=object)
+    placed = daily_target_instructions(period_layout(spec, labels, 0.0), [0, 4], [0.5])
+    np.testing.assert_array_equal(placed.grid_target_fraction, [0.5, 0.5, np.nan, np.nan])
+    np.testing.assert_array_equal(placed.reserve_fraction, [0.5, 0.5, 0.0, 0.0])
+
+
+def test_a_held_floor_follows_each_days_target_and_nothing_else_moves():
+    # Per day: a charge-only step, a held step, a discharge-only step with a
+    # reserve of its own, and an idle step.
+    base = DispatchInstructions(
+        discharge_allowed=np.tile([False, True, True, False], 3),
+        reserve_fraction=np.tile([0.0, 0.3, 0.2, 0.0], 3),
+        grid_target_fraction=np.tile([0.3, 0.3, np.nan, np.nan], 3),
+        grid_charge_efficiency=0.9,
+        grid_import_limit_w=4000.0,
+    )
+    placed = daily_target_instructions(base, (0, 4, 8, 12), [0.8, np.nan, 0.1])
+    np.testing.assert_array_equal(
+        placed.grid_target_fraction, [0.8, 0.8, np.nan, np.nan] + [np.nan] * 4 + [0.1, 0.1, np.nan, np.nan]
+    )
+    # The held step's floor is the day's target, and 0 on the day with none.
+    np.testing.assert_array_equal(
+        placed.reserve_fraction, [0.0, 0.8, 0.2, 0.0] + [0.0, 0.0, 0.2, 0.0] + [0.0, 0.1, 0.2, 0.0]
+    )
+    np.testing.assert_array_equal(placed.discharge_allowed, base.discharge_allowed)
+    assert (placed.grid_charge_efficiency, placed.grid_import_limit_w) == (0.9, 4000.0)
+    # A NaN day holds the same floor as a target-0 day.
+    zero = daily_target_instructions(base, (0, 4, 8, 12), [0.8, 0.0, 0.1])
+    np.testing.assert_array_equal(placed.reserve_fraction, zero.reserve_fraction)
+
+
+def test_a_held_target_plan_is_what_production_dispatches():
+    # One day: production holds health fixed until the day closes, as the
+    # planner does, so the plan's cost and end energy are production's. A
+    # full start and a terminal target below full keep the day's target
+    # under 1, so there is room above the held floor.
+    problem = _hold_problem(1)
+    plan = solve_daily_targets(problem, initial_energy_wh=4500.0, terminal_energy_wh=2500.0)
+    assert 0.0 < plan.targets[0] < 1.0
+    instructions = daily_target_instructions(problem.instructions, problem.day_starts, plan.targets)
+    results, cost = _priced_run(problem, instructions, initial_energy_wh=4500.0)
+    held = ~np.isnan(instructions.grid_target_fraction)
+    np.testing.assert_array_equal(instructions.reserve_fraction[held], plan.targets[0])
+    assert plan.stage_cost == pytest.approx(cost, rel=1e-12)
+    assert plan.end_energy_wh == results["Battery_Energy_End"].iloc[-1]
+    # Always dispatch: off-peak, the battery discharges above the held floor
+    # and the grid charges below it, never both in one step.
+    discharge = results["Battery_Discharge_DC"].to_numpy()[held]
+    grid = results["Grid_AC_To_Battery"].to_numpy()[held]
+    assert discharge.sum() > 0.0 and grid.sum() > 0.0
+    assert not ((discharge > 0.0) & (grid > 0.0)).any()
+
+
+@pytest.mark.parametrize("steps_per_day", [24, 96])
+def test_python_and_numba_plan_a_held_target_alike(steps_per_day):
+    pytest.importorskip("numba")
+    temperature = 8.0 + 10.0 * np.sin(np.arange(3 * steps_per_day) / steps_per_day * 2 * np.pi)
+    problem = _hold_problem(
+        3, config=_limited_pack(), steps_per_day=steps_per_day, temperature_c=temperature, efficiency=0.93
+    )
+    python = solve_daily_targets(problem, initial_energy_wh=900.0, execution_backend="python")
+    numba = solve_daily_targets(problem, initial_energy_wh=900.0, execution_backend="numba")
+    np.testing.assert_array_equal(python.targets, numba.targets)
+    assert (python.objective, python.end_energy_wh) == (numba.objective, numba.end_energy_wh)
