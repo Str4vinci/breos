@@ -18,12 +18,18 @@ kWh of DC energy the battery discharges to each solve's cost. It moves only
 the targets the planner picks; the run's money and ageing come from the
 dispatch and the degradation model as before.
 
+With ``overlap_policy = "hold_target"`` (ADR 0002 A18) a period may be both a
+charge and a discharge period. On its steps the day's target is also the
+discharge floor, in every candidate the planner evaluates and in the day it
+executes: :func:`~breos._daily_targets.daily_target_instructions` places both.
+
 Until one complete local day has been observed there is nothing to repeat,
 so the day runs with no grid target: PV charging and the discharge gate
-still apply. The planner prices energy that ends its window below the day's
-starting energy (``preserve_start_energy``); that is a planning penalty, not
-a dispatch instruction, and the live battery carries its physical state from
-year to year as every App run does.
+still apply, and a period that both charges and discharges has no floor
+(reserve 0), as on a target-0 day. The planner prices energy that ends its
+window below the day's starting energy (``preserve_start_energy``); that is
+a planning penalty, not a dispatch instruction, and the live battery carries
+its physical state from year to year as every App run does.
 
 The controller runs through the private civil-day seam in
 :mod:`breos._controller`: it sees no current or future PV, load or
@@ -56,7 +62,8 @@ FORECAST_POLICY = "repeat_previous_complete_local_day"
 WARM_START_POLICY = "no_grid_until_one_complete_local_day"
 PLANNER_TERMINAL_POLICY = "preserve_start_energy"
 # The candidate targets' placeholder on the layout: any finite value marks a
-# charge step; the planner replaces it with each day's target.
+# charge step; the planner replaces it with each day's target, and with it
+# the held floor of a step that also discharges.
 _CHARGE_STEP = 1.0
 
 
@@ -160,18 +167,10 @@ class DailyPersistenceController:
         layout = period_layout(self.spec, horizon.period_labels, _CHARGE_STEP)
         observed = day.last_complete_observed_day
         if observed is None:
-            # Warm start: no complete day to repeat yet, so no grid target.
-            today = _slice(layout, count)
-            return ControllerDayDecision(
-                DispatchInstructions(
-                    discharge_allowed=today.discharge_allowed,
-                    reserve_fraction=today.reserve_fraction,
-                    grid_target_fraction=np.full(count, np.nan),
-                    grid_charge_efficiency=today.grid_charge_efficiency,
-                    grid_import_limit_w=today.grid_import_limit_w,
-                ),
-                policy_state,
-            )
+            # Warm start: no complete day to repeat yet, so no grid target,
+            # and no held floor on a period that both charges and discharges.
+            today = daily_target_instructions(_slice(layout, count), (0, count), [np.nan])
+            return ControllerDayDecision(today, policy_state)
 
         pv, load, temperature = persistence_forecast(observed, horizon.slot_keys)
         battery = BatteryConfig(**cast("dict[str, Any]", dict(day.battery_config)))

@@ -52,6 +52,26 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   from the degradation model. The default 0 gives results bit-identical to
   0.7.0. `provenance.smart_charging` records the value, and the shared
   solver takes it as a `wear_cost_per_kwh` argument for its other callers.
+- `[smart_charging] mode = "daily_persistence"` accepts
+  `overlap_policy = "hold_target"`
+  ([#398](https://github.com/Str4vinci/breos/issues/398), ADR 0002 A18), so
+  the planner can run Always dispatch with off-peak charging: discharge in
+  every period, grid-charge off-peak, and hold each day's planned target as
+  the off-peak discharge floor. On a step in both period lists the reserve
+  now follows each day's target in every candidate the shared daily-target
+  solver evaluates and in the day it executes; on a day with no grid target,
+  such as the warm-start day, there is no floor there (reserve 0). The
+  daily-target oracle (`tools/oracles/daily_target_dp.py`, first-year and
+  yearly planning) plans and replays `hold_target` configurations on the
+  same rule; before, a day target above the configured one failed. Runs
+  without `hold_target` are bit-identical, and the dispatch kernel is
+  unchanged.
+- `tools/oracles/daily_target_dp.py --wear-cost-per-kwh` gives the same
+  wear weight to every solve of the perfect-information daily targets, in
+  both planning modes, and `run_daily_target_oracle` takes it as
+  `wear_cost_per_kwh`. The summary records the setting and each plan's
+  `wear_cost` apart from its stage cost. The default 0 gives the same plans
+  and costs as before.
 - `battery_replacement_min_remaining_years` (App and Monte Carlo), the
   optimizer's `[battery] replacement_min_remaining_years` and
   `BatteryConfig.replacement_min_remaining_years` skip a battery
@@ -74,9 +94,10 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   in `battery_first_end_of_life_years`, `_action`, `_reason` and
   `_soh_pct`. Monte Carlo runs report `first_end_of_life_*` and the
   projected optimizer `Projected_First_End_Of_Life_*`.
-  `SimulationSummary.end_of_life_events` and the detailed degradation
-  frame's `attrs["end_of_life_events"]` hold the span's
-  `breos.battery.EndOfLifeEvent` records. Existing fields are unchanged.
+  `SimulationSummary.end_of_life_events` holds the span's
+  `breos.battery.EndOfLifeEvent` records, and the detailed degradation
+  frame's `attrs["end_of_life_events"]` the same as JSON-safe dicts.
+  Existing fields are unchanged.
 - `battery_skipped_replacement_action = "retire"` (App and Monte Carlo),
   the optimizer's `[battery] skipped_replacement_action` and
   `BatteryConfig.skipped_replacement_action` switch off a battery whose

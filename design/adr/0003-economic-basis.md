@@ -388,10 +388,13 @@ one project year remains for it.
   `battery_end_of_life_events` and repeat the first in the scalar
   `battery_first_end_of_life_*` fields, which a sweep CSV keeps. Monte
   Carlo reports the first crossing per trajectory and the projected
-  optimizer per design. `SimulationSummary.end_of_life_events` and the
-  detailed degradation frame's `attrs` carry the span's
-  `breos.battery.EndOfLifeEvent` records, so the public return tuple keeps
-  its shape. `action` and `reason` are open vocabularies: a new end-of-life
+  optimizer per design. `SimulationSummary.end_of_life_events` carries
+  the span's `breos.battery.EndOfLifeEvent` records, and the detailed
+  degradation frame's `attrs` the same events as JSON-safe dicts (pandas
+  writes attrs as JSON), so the public return tuple keeps its shape. The
+  `date` moves the closing step's date forward by the project year, since
+  every year replays the first year's calendar; Monte Carlo restamps its
+  sampled weather years to `target_year`. `action` and `reason` are open vocabularies: a new end-of-life
   action adds a value and renames none.
 
 With the default 0 no swap is skipped and results are bit-identical. The

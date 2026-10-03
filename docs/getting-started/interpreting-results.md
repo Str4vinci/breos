@@ -436,8 +436,8 @@ by feature:
   each season to its period prices instead of each period to a price.
 - **Smart charging.** `provenance.smart_charging` records `overlap_policy`
   in App, Monte Carlo and optimizer results, including the default `reject`;
-  `hold_target` permits overlapping periods in `fixed_target` only and keeps
-  the grid target as the discharge floor. A
+  `hold_target` permits overlapping periods in `fixed_target` and
+  `daily_persistence` and keeps the grid target as the discharge floor. A
   [`discharge_only`](configuration.md#discharge-only) run records its
   discharge periods, an empty `charge_periods`, and `None` for
   `target_usable_fraction`, `grid_charge_efficiency` and

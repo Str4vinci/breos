@@ -801,9 +801,12 @@ def end_of_life_record(event: EndOfLifeEvent, year_idx: int, n_steps: int) -> di
     ``time_years`` is measured from commissioning as ``Replacement_Time_Years``
     books a swap, ``year_idx + (step + 1) / n_steps``, so a replaced
     crossing's time is the booked one. ``date`` is the closing step's
-    calendar date moved forward by ``year_idx`` years, since every project
-    year replays the one calendar. ``soh_pct`` is the health the check
-    compared with the threshold, before any swap.
+    calendar date moved forward by ``year_idx`` years: every project year
+    replays the first year's calendar (ADR 0002 A2). App and the optimizer
+    reuse one year's series; Monte Carlo restamps every sampled weather year
+    to ``target_year``, so its dates run from ``target_year``.
+    ``soh_pct`` is the health the check compared with the threshold, before
+    any swap.
     """
     return {
         "year": year_idx + 1,
@@ -1066,7 +1069,9 @@ def project_years(
             replaced_wh = frame_replaced_capacity_wh(results_df)
             replacement_steps = np.flatnonzero(results_df["Battery_Replaced"].to_numpy()).tolist()
             n_steps = len(results_df)
-            span_events = degradation_df.attrs.get(END_OF_LIFE_EVENTS_ATTR, ())
+            span_events = [
+                EndOfLifeEvent.from_record(record) for record in degradation_df.attrs.get(END_OF_LIFE_EVENTS_ATTR, ())
+            ]
             # Each project year is its own simulation span, so the span's
             # all-pack total is exactly this year's FEC.
             annual_fec = (

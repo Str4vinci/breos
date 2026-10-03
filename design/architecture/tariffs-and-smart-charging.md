@@ -127,8 +127,10 @@ The amendments to ADR 0002 settle these conventions:
   discharge counts as self-consumption. Avoided emissions use net exchange,
   so grid energy that the battery time-shifts earns no credit (A8, A10).
 - Charge and discharge periods are disjoint by default. With
-  `overlap_policy = "hold_target"` (`fixed_target` only), a period in both
-  sets holds the target as the discharge floor (A14).
+  `overlap_policy = "hold_target"` (`fixed_target` and `daily_persistence`),
+  a period in both sets holds the target as the discharge floor (A14). Under
+  `daily_persistence` and the daily-target oracle the floor follows each
+  day's target (A18).
 - Controllers decide at configured-timezone civil-day boundaries.
   Degradation windows stay positional (A11).
 - Normal runs carry stored energy, origins and degradation state from one
@@ -172,11 +174,14 @@ interchangeable:
   PV, load and temperature, and at the stored energy, health and
   efficiencies that the production replay of the earlier years reached. The
   report records the planning mode and each year's inputs, opening state,
-  plan and replayed cost. The result is the best schedule within that
-  policy class under the planner's model. It is not a bound, and not a
-  bound on lifetime NPV: other policies can do better, the replayed cost
-  under production physics differs from the plan as health moves, and a
-  year's choice ignores what its cycling costs later years.
+  plan and replayed cost. `--wear-cost-per-kwh` gives every solve the
+  planner's wear weight (ADR 0002 A17, default 0); the report records it
+  and each plan's wear cost apart from its stage cost. The result is the
+  best schedule within that policy class under the planner's model. It is
+  not a bound, and not a bound on lifetime NPV: other policies can do
+  better, the replayed cost under production physics differs from the plan
+  as health moves, and a year's choice ignores what its cycling costs later
+  years.
 - `tools/oracles/lp_bound.py` is a **conditional lower bound** on the first
   project year's import cost less export revenue, without the fixed charge.
   The linear program relaxes the dispatch rules. The bound holds only for a

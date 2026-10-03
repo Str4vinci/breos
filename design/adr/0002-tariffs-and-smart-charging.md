@@ -1,13 +1,14 @@
 # 0002 — Tariffs are resolved values; smart charging is an instruction layer
 
-- **Status:** Accepted; amendments A1–A17 Accepted. Implemented in 0.7.0,
-  A15–A17 in 0.7.1,
+- **Status:** Accepted; amendments A1–A17 Accepted, A18 Proposed.
+  Implemented in 0.7.0, A15–A18 in 0.7.1,
   with two additions that no amendment accepted: discharge-only mode and
   calendar-month seasons (see
   [Additions without an amendment](#additions-without-an-amendment)).
 - **Date:** 2026-08-20; amendments 2026-09-26; A6 accepted 2026-09-26;
   A1–A5 and A7–A10 accepted 2026-09-27; A11 and A12 accepted 2026-09-30;
-  A13 and A14 accepted 2026-10-01; A15–A17 accepted 2026-10-02
+  A13 and A14 accepted 2026-10-01; A15–A17 accepted 2026-10-02; A18
+  proposed 2026-10-03
 
 ## Context
 
@@ -521,6 +522,8 @@ the current or a future day's PV, load or temperature.
   and a clipped `[period]` edge are not observations. The observation and
   any day decision in progress carry across the A2 year seam; a standalone
   `[period]` never joins its end to its start.
+  *(Amended by A18, proposed 2026-10-03: under `hold_target` a step in both
+  period lists has no floor, reserve 0, while there is no grid target.)*
 - **Rolling solve.** Each day builds a fresh daily-target problem on the
   forecast from the measured stored energy, the current state of health and
   the resistance-adjusted efficiencies, which stay fixed inside the solve.
@@ -611,6 +614,8 @@ shared periods under `mode = "fixed_target"`:
   replaces targets while retaining fixed reserves; it cannot plan and replay
   the same held-target instructions. Supporting it later requires the floor
   to follow each candidate and executed daily target, including warm start.
+  *(Replaced by A18, proposed 2026-10-03: the floor follows each daily
+  target, and `daily_persistence` accepts `hold_target`.)*
 - App, Monte Carlo and projected optimization accept `hold_target` for
   `fixed_target`. Python and Numba execute the same kernel source. Results
   record `overlap_policy` in `provenance.smart_charging`; the
@@ -778,3 +783,58 @@ planner setting, adds one:
 - **Provenance.** `provenance.smart_charging.wear_cost_per_kwh` records the
   resolved value of every `daily_persistence` run, 0 included.
   `planner_version` stays `"1"`: the default planner decides as before.
+
+### A18. Daily targets hold the floor on shared periods (#398) — Proposed 2026-10-03
+
+Replaces A14's refusal of `hold_target` under `daily_persistence`; the
+rest of A14 stands. A14 made the grid target the discharge floor on a step
+in both period lists, but the daily-target planner replaced the target and
+kept the reserve. A day target above the layout's reserve then broke the
+instruction invariant, and one below it planned a floor that was not the
+held target. Always dispatch with off-peak charging (discharge in every
+period, charge off-peak, hold the target) could not be planned.
+
+- **The floor follows the target.** `daily_target_instructions`, which
+  places one target per day on the fixed-target layout, also sets the
+  reserve to that day's target on every step that allows discharge and has
+  a grid target. Other steps keep their reserve. Every caller places
+  targets through it: each candidate the shared solver evaluates, the day
+  `daily_persistence` executes, its warm start, and both planning modes of
+  the daily-target oracle, the yearly planner (A16) included. Planning and
+  production replay then run the same held-target instructions.
+- **A day with no target.** On a day with no grid target (NaN), the
+  reserve on those steps is 0, so the battery may discharge to the minimum
+  SOC, as on a target-0 day. With no target there is nothing to hold. The
+  layout's own reserve on such a step is only the target the layout was
+  built with: the configured one for the oracle, a placeholder of 1 for
+  `daily_persistence`, which would forbid discharge in the shared period
+  for the whole day. The `daily_persistence` warm start
+  (`no_grid_until_one_complete_local_day`) is such a day, so under
+  `hold_target` it discharges in every discharge period, shared ones
+  included. That is one day for a run that starts at local midnight and two
+  when the first day is partial; the observation then carries across project
+  years and replacements, so the warm start does not recur. The planner
+  never chooses NaN; its candidates are finite.
+- **What holding the target means.** The floor holds the energy up to the
+  day's target, not all the stored energy. Above the target the battery may
+  discharge to the load in a shared period, whatever charged it. A policy
+  that never discharges off-peak is a discharge restriction, a period left
+  out of `discharge_periods` under `reject`, not `hold_target`. With a
+  target that changes from day to day, a shared period that crosses
+  midnight holds the previous day's target before midnight and the new
+  day's after it. When the new target is lower, the energy above it can
+  include grid charge bought the evening before, and the battery may
+  discharge it in the same shared period. The planner prices this in the
+  costs it compares; it is a property of the policy, not of the dispatch
+  step.
+- **Configuration.** `daily_persistence` accepts
+  `overlap_policy = "hold_target"`, in App configuration and in a directly
+  constructed `SmartChargingSpec`. `disabled` and `discharge_only` still
+  refuse it. `provenance.smart_charging` records `overlap_policy` as for
+  `fixed_target`, and the instruction hash covers the executed reserves.
+  `controller_version` and `planner_version` stay `"1"`: a configuration
+  accepted before decides as before.
+- **Unchanged.** Under `reject` no step both may discharge and has a grid
+  target, so every reserve, plan and result is bit-identical. The dispatch
+  kernel is unchanged; Python and Numba run the same held-target step as
+  under `fixed_target`. The result format stays `"1"`.

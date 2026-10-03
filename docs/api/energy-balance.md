@@ -35,8 +35,10 @@ whose replacement is skipped: from the next step the span dispatches as a
 PV-only system, and a later span continues it with `battery_retired=True`.
 Each end-of-life crossing, replaced or not, is a
 {py:class}`~breos.battery.EndOfLifeEvent`: the summary's
-`end_of_life_events`, and the degradation frame's
-`attrs["end_of_life_events"]` on the detailed path.
+`end_of_life_events`, and on the detailed path the degradation frame's
+`attrs["end_of_life_events"]`, as JSON-safe
+{py:meth}`~breos.battery.EndOfLifeEvent.to_record` dicts (pandas writes
+attrs as JSON in `to_parquet`).
 
 ## Physical boundary and coupling
 

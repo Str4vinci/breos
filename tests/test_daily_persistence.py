@@ -407,6 +407,36 @@ def test_warm_start_sends_no_grid_target_until_one_complete_local_day(freq):
 
 
 @pytest.mark.parametrize("freq", FREQS)
+def test_a_held_period_has_no_floor_until_the_first_planned_day(freq):
+    # ADR 0002 A18 under Always dispatch. Local 12:00 in Berlin: the partial
+    # first day and the first complete day are both warm-start days.
+    steps_per_day = _steps_per_day(freq)
+    scenario = _scenario("2024-06-10T10:00Z", 4 * steps_per_day, freq, "Europe/Berlin")
+    spec = dataclasses.replace(SPEC, discharge_periods=("off_peak", "mid", "peak"), overlap_policy="hold_target")
+    recording = _Recording(_controller(freq, "python", spec))
+    run = _core(scenario, "python", controller=recording, initial_energy_wh=600.0)
+    starts = scenario.tariff.day_starts
+    off_peak = np.asarray(scenario.tariff.period_labels) == "off_peak"
+
+    warm = [day.last_complete_observed_day is None for day in recording.days]
+    assert warm == [True, True] + [False] * (len(starts) - 3)
+    for number, decision in enumerate(recording.decisions):
+        day = decision.instructions
+        assert day.discharge_allowed.all()
+        if warm[number]:
+            # No target, so no floor anywhere, the shared period included.
+            assert np.isnan(day.grid_target_fraction).all()
+            np.testing.assert_array_equal(day.reserve_fraction, 0.0)
+        else:
+            # Every off-peak step holds the day's target as its floor.
+            held = ~np.isnan(day.grid_target_fraction)
+            np.testing.assert_array_equal(held, off_peak[starts[number] : starts[number + 1]])
+            np.testing.assert_array_equal(day.reserve_fraction[held], day.grid_target_fraction[held])
+            np.testing.assert_array_equal(day.reserve_fraction[~held], 0.0)
+    assert run.buffers.columns["Grid_AC_To_Battery"][: starts[2]].sum() == 0
+
+
+@pytest.mark.parametrize("freq", FREQS)
 def test_a_period_edge_is_never_forecast_history(freq):
     steps_per_day = _steps_per_day(freq)
     half = steps_per_day // 2
@@ -870,6 +900,50 @@ def test_python_at_15_minutes_recommends_numba_once(backend, resolution, warned)
     assert len(recommended) == (1 if warned else 0)
     if warned:
         assert recommended[0].category is UserWarning
+
+
+# -- held targets (ADR 0002 A18) -------------------------------------------------
+
+# Always dispatch with off-peak charging: discharge in every period, the planned target held off-peak.
+ALWAYS = {**DAILY, "discharge_periods": ["off_peak", "peak"], "overlap_policy": "hold_target"}
+
+
+def test_the_daily_mode_takes_hold_target():
+    spec = resolve_app_config({**BASE, "smart_charging": ALWAYS}).smart_charging
+    assert (spec.mode, spec.overlap_policy) == ("daily_persistence", "hold_target")
+    assert spec.discharge_periods == ("off_peak", "peak")
+    direct = dataclasses.replace(SPEC, discharge_periods=("off_peak", "peak"), overlap_policy="hold_target")
+    assert direct.overlap_policy == "hold_target"
+    with pytest.raises(ValueError, match="share off_peak.*'daily_persistence' to allow overlap"):
+        dataclasses.replace(direct, overlap_policy="reject")
+
+
+@pytest.mark.filterwarnings("ignore:.*execution_backend = 'numba'")
+def test_always_dispatch_holds_each_days_planned_target_at_15_minutes():
+    app = _app({**WINDOW, "resolution": "15min", "period": JANUARY, "smart_charging": {**ALWAYS, **COARSE}})
+    assert app.result()["provenance"]["smart_charging"]["overlap_policy"] == "hold_target"
+    artifacts = app._artifacts
+    executed = artifacts.projection.controller_instructions
+    off_peak = np.asarray(artifacts.resolved_tariff.period_labels) == "off_peak"
+    target = executed.grid_target_fraction
+    planned = ~np.isnan(target)
+
+    assert executed.discharge_allowed.all()
+    # The one warm-start day has no target; after it, every off-peak step
+    # holds one and no other step does.
+    assert np.isnan(target[:96]).all()
+    np.testing.assert_array_equal(planned[96:], off_peak[96:])
+    # Off-peak, the floor is the day's planned target; with no target (the
+    # warm-start day, and every peak step) there is no floor.
+    np.testing.assert_array_equal(executed.reserve_fraction[planned], target[planned])
+    np.testing.assert_array_equal(executed.reserve_fraction[~planned], 0.0)
+    assert (target[planned] > 0.0).any()
+
+    frame = artifacts.first_year_results_df
+    grid = frame["Grid_AC_To_Battery"].to_numpy()
+    discharge = frame["Battery_Discharge_DC"].to_numpy()
+    assert grid.sum() > 0.0 and discharge[off_peak].sum() > 0.0
+    assert not ((grid > 0.0) & (discharge > 0.0)).any()
 
 
 # -- provenance -----------------------------------------------------------------

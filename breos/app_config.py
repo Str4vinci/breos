@@ -1920,7 +1920,7 @@ def _check_smart_charging_keys(table: dict[str, Any], where: str) -> None:
         raise ValueError(
             f"'{where}.charge_periods' and '{where}.discharge_periods' share {', '.join(overlap)}; "
             "every step either charges or discharges; "
-            "set overlap_policy = 'hold_target' with mode = 'fixed_target' to allow overlap"
+            "set overlap_policy = 'hold_target' with mode = 'fixed_target' or 'daily_persistence' to allow overlap"
         )
 
 
@@ -1942,10 +1942,10 @@ SMART_CHARGING_TABLE = TableSpec(
     check=_check_smart_charging_keys,
     docs={
         "overlap_policy": (
-            "Default `reject`: charge and discharge periods must be disjoint. `hold_target` (`fixed_target` only) "
-            "uses the grid target as the discharge floor on overlapping steps. Above it the battery may "
-            "discharge; below it the grid may charge; PV may charge above it. `daily_persistence` refuses it "
-            "because its planner keeps reserves fixed while replacing targets"
+            "Default `reject`: charge and discharge periods must be disjoint. `hold_target` (`fixed_target` and "
+            "`daily_persistence`) uses the grid target as the discharge floor on overlapping steps. Above it the "
+            "battery may discharge; below it the grid may charge; PV may charge above it. Under "
+            "`daily_persistence` the floor is each day's planned target, and 0 on a day with no grid target"
         ),
         "mode": (
             "`fixed_target` charges from the grid toward a fixed target; `daily_persistence` (experimental, App "
