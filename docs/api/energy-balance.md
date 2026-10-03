@@ -32,8 +32,10 @@ it. See
 [Battery replacement at the end of the horizon](../getting-started/configuration.md#battery-replacement-at-the-end-of-the-horizon).
 Each end-of-life crossing, replaced or not, is a
 {py:class}`~breos.battery.EndOfLifeEvent`: the summary's
-`end_of_life_events`, and the degradation frame's
-`attrs["end_of_life_events"]` on the detailed path.
+`end_of_life_events`, and on the detailed path the degradation frame's
+`attrs["end_of_life_events"]`, as JSON-safe
+{py:meth}`~breos.battery.EndOfLifeEvent.to_record` dicts (pandas writes
+attrs as JSON in `to_parquet`).
 
 ## Physical boundary and coupling
 

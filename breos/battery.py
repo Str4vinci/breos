@@ -953,6 +953,27 @@ class EndOfLifeEvent:
     reason: str
     soh_pct: float
 
+    def to_record(self) -> Dict[str, Any]:
+        """The event as JSON-safe values, its timestamp in ISO 8601."""
+        return {
+            "step": int(self.step),
+            "timestamp": self.timestamp.isoformat(),
+            "action": self.action,
+            "reason": self.reason,
+            "soh_pct": float(self.soh_pct),
+        }
+
+    @classmethod
+    def from_record(cls, record: Mapping[str, Any]) -> "EndOfLifeEvent":
+        """The event a :meth:`to_record` dict describes."""
+        return cls(
+            int(record["step"]),
+            pd.Timestamp(record["timestamp"]),
+            str(record["action"]),
+            str(record["reason"]),
+            float(record["soh_pct"]),
+        )
+
 
 @dataclass(slots=True)
 class _AgingState:
@@ -2134,11 +2155,13 @@ def _detailed_frames(core: _CoreRun) -> Tuple[pd.DataFrame, float, pd.DataFrame,
 
     The degradation frame's ``attrs["end_of_life_events"]`` holds the span's
     end-of-life crossings, as :class:`SimulationSummary` does, so the
-    public return tuple keeps its shape.
+    public return tuple keeps its shape. They are
+    :meth:`EndOfLifeEvent.to_record` dicts, because pandas writes a frame's
+    attrs as JSON (``to_parquet``) and copies them into derived frames.
     """
     df = core.buffers.to_frame(core.rng)
     deg_df = pd.DataFrame(core.degradation_tracking) if core.degradation_tracking else pd.DataFrame()
-    deg_df.attrs[END_OF_LIFE_EVENTS_ATTR] = tuple(core.aging.end_of_life_events)
+    deg_df.attrs[END_OF_LIFE_EVENTS_ATTR] = [event.to_record() for event in core.aging.end_of_life_events]
     summary_row, total_pv = _build_summary_row(
         core.buffers,
         core.hours_per_step,

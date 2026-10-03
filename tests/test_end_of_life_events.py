@@ -9,6 +9,7 @@ events add fields only: every existing value is unchanged.
 
 from __future__ import annotations
 
+import json
 import math
 
 import pandas as pd
@@ -37,7 +38,7 @@ from tests.test_terminal_replacement import (
 
 
 def _events(run) -> tuple[EndOfLifeEvent, ...]:
-    return run[4].attrs["end_of_life_events"]
+    return tuple(EndOfLifeEvent.from_record(record) for record in run[4].attrs["end_of_life_events"])
 
 
 def _summary(n_steps: int, **config):
@@ -121,6 +122,28 @@ def test_a_pack_that_starts_below_its_threshold_has_already_crossed():
     # Unless the span replaces it.
     replaced = _run(48, eol_percentage=0.8, initial_soh=75.0)
     assert [(event.step, event.action) for event in _events(replaced)] == [(23, "replaced")]
+
+
+def test_the_degradation_frame_attrs_stay_json_safe():
+    run = _run(96, eol_percentage=EVERY_PERIOD_EOL, replacement_min_remaining_years=0.6)
+    records = run[4].attrs["end_of_life_events"]
+    assert records[0] == {
+        "step": 23,
+        "timestamp": "2025-01-01T23:00:00+00:00",
+        "action": "replaced",
+        "reason": "end_of_life",
+        "soh_pct": records[0]["soh_pct"],
+    }
+    # pandas writes attrs as JSON in to_parquet and copies them into derived frames.
+    assert json.loads(json.dumps(run[4].attrs)) == run[4].attrs
+    assert run[4].iloc[:2].attrs == run[4].attrs
+
+
+def test_a_degradation_frame_with_a_crossing_writes_to_parquet(tmp_path):
+    pytest.importorskip("pyarrow")
+    run = _run(96, eol_percentage=EVERY_PERIOD_EOL, replacement_min_remaining_years=0.6)
+    run[4].to_parquet(tmp_path / "degradation.parquet")
+    assert pd.read_parquet(tmp_path / "degradation.parquet").attrs == run[4].attrs
 
 
 def test_summaries_hold_the_frames_events():
@@ -242,3 +265,28 @@ def test_the_projected_optimizer_reports_the_first_crossing(monkeypatch):
     assert math.isnan(never["Projected_First_End_Of_Life_Years"])
     assert never["Projected_First_End_Of_Life_Action"] is None
     assert pd.isna(never["Projected_First_End_Of_Life_SOH_%"])
+
+
+def test_monte_carlo_dates_run_from_the_target_year(tmp_path, write_multiyear_weather, monkeypatch):
+    import breos.montecarlo as montecarlo_module
+
+    seen: list = []
+    real = montecarlo_module.first_end_of_life_metrics
+
+    def recording(events):
+        seen.append(events)
+        return real(events)
+
+    monkeypatch.setattr(montecarlo_module, "first_end_of_life_metrics", recording)
+    weather = write_multiyear_weather(tmp_path / "multi.csv")
+    settings = MonteCarloSettings(weather_file=str(weather), n_runs=2, years_per_run=3, seed=7, target_year=2030)
+    run_montecarlo(
+        _mc_config(battery_eol_percentage=EVERY_PERIOD_EOL, battery_replacement_min_remaining_years=1.0), settings
+    )
+
+    # Every sampled weather year is restamped to target_year, so a year's
+    # dates are target_year's moved forward by the year index.
+    for events in seen:
+        assert events[0]["date"] == "2030-01-01"
+        assert {event["date"][:4] for event in events if event["year"] == 2} == {"2031"}
+        assert events[-1]["action"] == "kept" and events[-1]["date"] == "2032-01-01"

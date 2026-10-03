@@ -94,9 +94,10 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   in `battery_first_end_of_life_years`, `_action`, `_reason` and
   `_soh_pct`. Monte Carlo runs report `first_end_of_life_*` and the
   projected optimizer `Projected_First_End_Of_Life_*`.
-  `SimulationSummary.end_of_life_events` and the detailed degradation
-  frame's `attrs["end_of_life_events"]` hold the span's
-  `breos.battery.EndOfLifeEvent` records. Existing fields are unchanged.
+  `SimulationSummary.end_of_life_events` holds the span's
+  `breos.battery.EndOfLifeEvent` records, and the detailed degradation
+  frame's `attrs["end_of_life_events"]` the same as JSON-safe dicts.
+  Existing fields are unchanged.
 
 ### Changed
 
