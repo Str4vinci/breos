@@ -104,7 +104,7 @@ than 1 Wh):
 | `battery_replacement_cost_npv` | The same replacements inflated to and discounted from each swap instant, as `npv_savings` counts them |
 | `battery_end_of_life_events` | Every end-of-life crossing over the projection, in order; see [End-of-life events](#end-of-life-events) |
 | `battery_first_end_of_life_years` | Time of the first crossing, in years from commissioning; None without one |
-| `battery_first_end_of_life_action` | What was done at the first crossing: `"replaced"` or `"kept"`; None without one |
+| `battery_first_end_of_life_action` | What was done at the first crossing: `"replaced"`, `"kept"` or `"retired"`; None without one |
 | `battery_first_end_of_life_reason` | Why, as in `battery_end_of_life_events`; None without one |
 | `battery_first_end_of_life_soh_pct` | State of health at the first crossing; None without one |
 
@@ -128,18 +128,20 @@ records one:
 | `year` | Project year of the crossing, from 1 |
 | `time_years` | Years from commissioning to the end of the closing step: the instant a replacement is booked at, equal to the `financial` row's `replacement_time_years` |
 | `date` | Calendar date of the closing step; every project year replays the simulated calendar, moved forward by its year |
-| `action` | `"replaced"`: a new pack was installed. `"kept"`: no pack was bought and the old one stays in service below its threshold |
+| `action` | `"replaced"`: a new pack was installed. `"kept"`: no pack was bought and the old one stays in service below its threshold. `"retired"`: no pack was bought and the old one was switched off; the project finishes PV-only (`battery_skipped_replacement_action = "retire"`) |
 | `reason` | `"end_of_life"` for a replacement. For a skipped one, `"min_remaining_years"` (less than `battery_replacement_min_remaining_years` was left) or `"terminal_period"` (the final period with `battery_allow_terminal_replacement = false`) |
 | `soh_pct` | State of health at the crossing, the value compared with the threshold |
 
 A replaced pack's successor can cross again, so a long horizon can list
-several replacements. A pack that is kept crosses once: it stays below its
+several replacements. A pack that is kept or retired crosses once: it stays below its
 threshold, and no later period records it again. A skipped replacement is
 therefore always the last entry. For example, with 20 project years and
 `battery_replacement_min_remaining_years = 1.0`, a pack that reaches end of
 life at 19.3 years shows as `{"year": 20, "time_years": 19.3, "action":
 "kept", "reason": "min_remaining_years", ...}`: the replacement was skipped
-and the old battery was retained.
+and the old battery was retained. With
+`battery_skipped_replacement_action = "retire"` the same entry has `"action":
+"retired"`: the old battery was switched off at 19.3 years.
 
 Monte Carlo reports the first crossing of each trajectory as
 `first_end_of_life_years`, `first_end_of_life_action`,

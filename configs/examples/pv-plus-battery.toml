@@ -61,4 +61,5 @@ battery_max_soc = 0.90             # [0.90] upper SoC limit, fraction of capacit
 battery_eol_percentage = 0.70      # [0.70] SoH fraction that triggers a replacement
 battery_allow_terminal_replacement = true  # [true] false: no pack bought at the horizon's final degradation period
 battery_replacement_min_remaining_years = 0.0  # [0.0] no pack bought with less than this many project years left
+battery_skipped_replacement_action = "keep"  # ["keep"] "retire": a skipped swap switches the battery off
 # battery_rte = 0.95               # [unset, 0.95] round-trip efficiency

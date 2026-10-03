@@ -70,6 +70,7 @@ from breos.constants import (
     NAUMANN_SOC_EXPONENT_N,
     NAUMANN_SOC_EXPONENT_N_R,
     R_GAS,
+    SKIPPED_REPLACEMENT_ACTIONS,
     T_REF_K,
     Z_Q,
     Z_R,
@@ -157,6 +158,19 @@ class BatteryConfig:
     ``allow_terminal_replacement`` says. A call with
     ``replacement_years_after_span = 0`` treats its own span as the last
     project year; a projection sets the field for each year it runs.
+
+    ``skipped_replacement_action`` decides what happens to a pack whose
+    end-of-life swap is skipped, by the minimum service time, the terminal
+    guard or ``enable_replacement = False``. ``"keep"`` (the default) leaves
+    it in service below its threshold. ``"retire"`` switches it off at the
+    crossing, the instant a swap would have been booked at: the stored
+    energy leaves the system as a replacement's does, and from the next step
+    the battery neither charges nor discharges, so PV serves the load and
+    the grid covers the rest as in a PV-only system. Dispatch instructions
+    have no effect after it. The retired pack stays installed at zero
+    charge, and the aging model still runs on it. A span that inherits a retired pack continues
+    it retired from the returned degradation state, or takes
+    ``battery_retired=True``.
     """
 
     nominal_energy_wh: float  # Required — nominal capacity in Wh
@@ -176,6 +190,9 @@ class BatteryConfig:
     # toward what is left.
     replacement_min_remaining_years: float = 0.0
     replacement_years_after_span: int = 0
+    # What a skipped swap does with the old pack: "keep" it in service or
+    # "retire" it and finish the span PV-only.
+    skipped_replacement_action: str = "keep"
     calendar_model: str = "naumann_lam_field_calibrated"  # v1 field-calibrated default alias
     # Resistance fade (opt-in): grows internal resistance daily and derates
     # the charge/discharge efficiencies in the energy loop so the effective
@@ -234,6 +251,8 @@ class BatteryConfig:
         )
         if self.replacement_min_remaining_years < 0.0:
             raise ValueError("replacement_min_remaining_years must be non-negative")
+        if self.skipped_replacement_action not in SKIPPED_REPLACEMENT_ACTIONS:
+            raise ValueError(f"skipped_replacement_action must be one of: {', '.join(SKIPPED_REPLACEMENT_ACTIONS)}")
 
         self.nominal_energy_wh = finite("nominal_energy_wh", self.nominal_energy_wh)
         self.initial_soh = finite("initial_soh", self.initial_soh)
@@ -909,9 +928,10 @@ class _PvOnlySummaryBuffers:
         return dict(self.columns)
 
 
-# What an end-of-life crossing did to the installed pack (ADR 0003 E11): it
-# was replaced, or it stayed in service below its threshold.
-END_OF_LIFE_ACTIONS: Tuple[str, ...] = ("replaced", "kept")
+# What an end-of-life crossing did to the installed pack (ADR 0003 E11, E12):
+# it was replaced, it stayed in service below its threshold, or it was
+# switched off.
+END_OF_LIFE_ACTIONS: Tuple[str, ...] = ("replaced", "kept", "retired")
 # Why: the pack reached its threshold and a replacement was allowed; or the
 # swap was skipped because less than the minimum service time remained, or
 # because it fell in the span's final period with terminal replacement off,
@@ -941,10 +961,12 @@ class EndOfLifeEvent:
     ``reason`` one of :data:`END_OF_LIFE_REASONS`.
 
     A replaced pack's successor can cross again, so a span may hold several
-    replacements. A pack that stays in service below its threshold crosses
-    once: later periods, and later spans that inherit it, record nothing
-    more. A pack that starts a span at or below its threshold has already
-    crossed, unless that span replaces it.
+    replacements. A pack that stays in service below its threshold, or is
+    retired, crosses once: later periods, and later spans that inherit it,
+    record nothing more. A pack continued from an earlier span (through
+    ``initial_degradation_state``) at or below its threshold has already
+    crossed there, unless this span replaces it. A fresh pack that starts at
+    or below its threshold crosses at its first period close.
     """
 
     step: int
@@ -1014,6 +1036,8 @@ class _AgingState:
     # threshold without a replacement, so the crossing is recorded once.
     past_end_of_life: bool = False
     end_of_life_events: List[EndOfLifeEvent] = field(default_factory=list)
+    # True once the pack is switched off (BatteryConfig.skipped_replacement_action).
+    retired: bool = False
 
 
 def _apply_resistance_fade(
@@ -1109,6 +1133,55 @@ def _apply_battery_replacement(
     return battery_energy_wh, 0.0, 0.0, battery_config.max_soc
 
 
+def _settle_terminal_cycles(aging: _AgingState, lifecycle: DegradationLifecycle) -> float:
+    """Charge a pack leaving service with its unresolved terminal half cycles.
+
+    A replaced or retired native pack owns them. Settling them keeps its
+    lifetime FEC complete, and leaves a clean rainflow residue for a new
+    pack or for a retired pack that no longer cycles. Returns the cycle
+    degradation they added.
+    """
+    terminal_cycles = lifecycle.finalize_cycles()
+    aging.fec_lifetime += terminal_cycles.fec - aging.fec_cum
+    aging.fec_cum = terminal_cycles.fec
+    aging.soh_fraction = terminal_cycles.soh_fraction
+    aging.soh_percent = aging.soh_fraction * 100.0
+    aging.cumulative_cycle_deg += terminal_cycles.cycle_degradation
+    return terminal_cycles.cycle_degradation
+
+
+def _apply_battery_retirement(
+    aging: _AgingState,
+    out: _ResultBuffers,
+    *,
+    step_index: int,
+    hours_per_step: float,
+    battery_energy_wh: float,
+    pv_origin_energy_wh: float,
+    grid_origin_energy_wh: float,
+    battery_energy_beginning: float,
+) -> Tuple[float, float, float, float]:
+    """Switch the pack off, returning ``(energy, pv_origin, grid_origin, day_end_soc)``.
+
+    Like a replacement it happens *inside* the closing timestep, after that
+    step was dispatched. The stored energy leaves the system as a replaced
+    pack's does, booked as ``Battery_Replacement_Energy_Removed`` with its
+    origins, and nothing is added, so the ledger closes and every later step
+    starts empty. The pack stays installed and keeps its health.
+    """
+    aging.retired = True
+    out.columns["Battery_Energy"][step_index] = 0.0
+    out.columns["Battery_SOC_Normalized"][step_index] = 0.0
+    out.columns["Battery_SOC_Absolute"][step_index] = 0.0
+    out.columns["Battery_PV_Origin_Energy_End"][step_index] = 0.0
+    out.columns["Battery_Grid_Origin_Energy_End"][step_index] = 0.0
+    out.columns["Battery_Replacement_Energy_Removed"][step_index] = battery_energy_wh / hours_per_step
+    out.columns["PV_Origin_Replacement_Energy_Removed"][step_index] = pv_origin_energy_wh / hours_per_step
+    out.columns["Grid_Origin_Replacement_Energy_Removed"][step_index] = grid_origin_energy_wh / hours_per_step
+    out.columns["Battery_Energy_Delta"][step_index] = (0.0 - battery_energy_beginning) / hours_per_step
+    return 0.0, 0.0, 0.0, 0.0
+
+
 def _dispatch_no_battery_vectorized(
     out: Union["_ResultBuffers", "_PvOnlySummaryBuffers"],
     pv_dc_values: np.ndarray,
@@ -1119,12 +1192,23 @@ def _dispatch_no_battery_vectorized(
     hours_per_step: float,
     cap_wh: float,
     pv_chain: Optional[Tuple[np.ndarray, np.ndarray, np.ndarray]] = None,
+    steps: slice = slice(None),
 ) -> None:
-    """Fill a PV-only result buffer without entering the timestep loop."""
-    out.zero_fill()
+    """Fill a PV-only result buffer without entering the timestep loop.
 
-    pv_dc_wh = np.maximum(0.0, pv_dc_values * hours_per_step)
-    load_wh = load_values * hours_per_step
+    ``steps`` fills only those steps of a full buffer, which is how a retired
+    battery's steps are dispatched: element by element the same expressions,
+    so each step equals the PV-only system's. A memoized ``pv_chain`` covers
+    the whole span only.
+    """
+    if steps == slice(None):
+        out.zero_fill()
+    else:
+        assert isinstance(out, _ResultBuffers) and pv_chain is None
+        out.matrix[:, steps] = 0.0
+
+    pv_dc_wh = np.maximum(0.0, pv_dc_values[steps] * hours_per_step)
+    load_wh = load_values[steps] * hours_per_step
     if pv_chain is None:
         ac_wh, conversion_loss_wh, clipping_loss_dc_wh = _calculate_dc_ac_power_arrays(
             pv_dc_wh,
@@ -1151,20 +1235,20 @@ def _dispatch_no_battery_vectorized(
     grid_export_w = grid_export_wh / hours_per_step
     conversion_w = conversion_loss_wh / hours_per_step
 
-    out.columns["PV_DC"][:] = pv_dc_wh / hours_per_step
-    out.columns["PV_Production"][:] = pv_production_wh / hours_per_step
-    out.columns["Houseload"][:] = load_wh / hours_per_step
-    out.columns["PV_Delta"][:] = (pv_production_wh - load_wh) / hours_per_step
-    out.columns["Import_From_Grid"][:] = grid_import_wh / hours_per_step
-    out.columns["Battery_SOH"].fill(100.0)
-    out.columns["T_cell"][:] = temperature_values
+    out.columns["PV_DC"][steps] = pv_dc_wh / hours_per_step
+    out.columns["PV_Production"][steps] = pv_production_wh / hours_per_step
+    out.columns["Houseload"][steps] = load_wh / hours_per_step
+    out.columns["PV_Delta"][steps] = (pv_production_wh - load_wh) / hours_per_step
+    out.columns["Import_From_Grid"][steps] = grid_import_wh / hours_per_step
+    out.columns["Battery_SOH"][steps] = 100.0
+    out.columns["T_cell"][steps] = temperature_values[steps]
 
-    out.columns["PV_DC_To_Inverter"][:] = (pv_dc_wh - clipping_loss_dc_wh) / hours_per_step
-    out.columns["PV_DC_Curtailed"][:] = curtailment_w
-    out.columns["PV_AC_To_Load"][:] = pv_ac_to_load_wh / hours_per_step
-    out.columns["PV_AC_Export"][:] = grid_export_w
-    out.columns["PV_Direct_Inverter_Loss"][:] = conversion_w
-    out.columns["Inverter_Loss"][:] = conversion_w
+    out.columns["PV_DC_To_Inverter"][steps] = (pv_dc_wh - clipping_loss_dc_wh) / hours_per_step
+    out.columns["PV_DC_Curtailed"][steps] = curtailment_w
+    out.columns["PV_AC_To_Load"][steps] = pv_ac_to_load_wh / hours_per_step
+    out.columns["PV_AC_Export"][steps] = grid_export_w
+    out.columns["PV_Direct_Inverter_Loss"][steps] = conversion_w
+    out.columns["Inverter_Loss"][steps] = conversion_w
 
 
 def _apply_daily_degradation(
@@ -1206,7 +1290,9 @@ def _apply_daily_degradation(
     period that closes with less than the battery's minimum service time
     left. None allows the swap. The period still ages the pack and is still
     recorded; only the swap is skipped. A crossing is recorded on
-    ``aging.end_of_life_events``, with what was done and why.
+    ``aging.end_of_life_events``, with what was done and why. A skipped swap
+    with ``skipped_replacement_action = "retire"`` switches the pack off at
+    the period's close; a retired pack is never replaced.
     """
     period_steps = len(soc_absolute_day)
     period_seconds = period_steps * hours_per_step * 3600.0
@@ -1253,20 +1339,16 @@ def _apply_daily_degradation(
         )
 
     reached_end_of_life = aging.soh_fraction <= battery_config.eol_percentage
-    if reached_end_of_life and replacement_skipped_by is None and battery_config.enable_replacement:
+    if (
+        reached_end_of_life
+        and replacement_skipped_by is None
+        and battery_config.enable_replacement
+        and not aging.retired
+    ):
         aging.end_of_life_events.append(
             EndOfLifeEvent(step_index, step_time, "replaced", "end_of_life", aging.soh_percent)
         )
-        # A retired native pack owns its unresolved terminal half cycles.
-        # Settle them before reset so its lifetime FEC remains complete while
-        # the replacement starts with a clean rainflow residue.
-        terminal_cycles = lifecycle.finalize_cycles()
-        aging.fec_lifetime += terminal_cycles.fec - aging.fec_cum
-        aging.fec_cum = terminal_cycles.fec
-        aging.soh_fraction = terminal_cycles.soh_fraction
-        aging.soh_percent = aging.soh_fraction * 100.0
-        aging.cumulative_cycle_deg += terminal_cycles.cycle_degradation
-        cycle_degradation_for_row = degradation_step.cycle_degradation + terminal_cycles.cycle_degradation
+        cycle_degradation_for_row = degradation_step.cycle_degradation + _settle_terminal_cycles(aging, lifecycle)
         battery_energy_wh, pv_origin_energy_wh, grid_origin_energy_wh, day_end_soc_absolute = (
             _apply_battery_replacement(
                 aging,
@@ -1287,8 +1369,27 @@ def _apply_daily_degradation(
         if reached_end_of_life and not aging.past_end_of_life:
             reason = "replacement_disabled" if not battery_config.enable_replacement else replacement_skipped_by
             assert reason is not None
-            aging.end_of_life_events.append(EndOfLifeEvent(step_index, step_time, "kept", reason, aging.soh_percent))
+            retire = battery_config.skipped_replacement_action == "retire"
+            aging.end_of_life_events.append(
+                EndOfLifeEvent(step_index, step_time, "retired" if retire else "kept", reason, aging.soh_percent)
+            )
             aging.past_end_of_life = True
+            if retire:
+                # The pack's last cycles end here: the energy it holds is
+                # written off, not discharged, and it never cycles again.
+                cycle_degradation_for_row += _settle_terminal_cycles(aging, lifecycle)
+                battery_energy_wh, pv_origin_energy_wh, grid_origin_energy_wh, day_end_soc_absolute = (
+                    _apply_battery_retirement(
+                        aging,
+                        out,
+                        step_index=step_index,
+                        hours_per_step=hours_per_step,
+                        battery_energy_wh=battery_energy_wh,
+                        pv_origin_energy_wh=pv_origin_energy_wh,
+                        grid_origin_energy_wh=grid_origin_energy_wh,
+                        battery_energy_beginning=battery_energy_beginning,
+                    )
+                )
 
     degradation_record = {
         "Datetime": step_time,
@@ -1389,6 +1490,8 @@ def _build_final_degradation_state(
         "cumulative_cycle_degradation": float(aging.cumulative_cycle_deg),
         "cumulative_calendar_degradation": float(aging.cumulative_cal_deg),
         **adapter_snapshot,
+        # Only a retired pack carries the flag, so other states are unchanged.
+        **({"battery_retired": True} if aging.retired else {}),
     }
 
 
@@ -1622,6 +1725,7 @@ def _simulate_core(
     projection_year: int = 0,
     replay_seam: bool = False,
     instruction_planner: Optional[Callable[[ControllerBatteryState], DispatchInstructions]] = None,
+    battery_retired: bool = False,
 ) -> "_CoreRun":
     """
     Simulate energy balance with battery storage and degradation.
@@ -1692,6 +1796,14 @@ def _simulate_core(
             once before the first step with the state the span opens in, after
             the degradation engine has restored its health. It returns the
             span's ``dispatch_instructions``; pass it instead of them.
+        battery_retired: The span inherits a battery a previous span retired
+            (``BatteryConfig.skipped_replacement_action = "retire"``). It
+            holds no energy, every step dispatches PV-only, and the pack
+            only ages. A carried stored energy must be zero. A retired span's
+            returned degradation state holds ``"battery_retired": True``, so
+            passing it as ``initial_degradation_state`` continues it retired
+            without this argument; True with a state from a pack that was not
+            retired is refused.
 
     Returns:
         A :class:`_CoreRun` holding the filled result buffers, the calendar,
@@ -1840,6 +1952,20 @@ def _simulate_core(
             "the starting energy at the restored BLAST SOH minus initial_pv_origin_energy_wh",
         )
 
+    # A state from a span that retired the pack continues it retired.
+    state_retired = bool(state_payload.get("battery_retired", False))
+    if battery_retired and initial_degradation_state is not None and not state_retired:
+        raise ValueError(
+            "battery_retired=True, but initial_degradation_state comes from a battery that was not retired"
+        )
+    battery_retired = battery_retired or state_retired
+    if battery_retired:
+        if not has_battery:
+            raise ValueError("battery_retired needs a battery; a PV-only run has none to retire")
+        if initial_energy_wh not in (None, 0.0):
+            raise ValueError("a retired battery holds no energy; initial_energy_wh must be 0 or None")
+        Battery_Energy_Wh = Battery_PV_Origin_Energy_Wh = Battery_Grid_Origin_Energy_Wh = 0.0
+
     # Health state advanced only at daily boundaries. The loop keeps hot
     # copies of the four fields it reads every step (SOH and the two
     # efficiencies) and refreshes them whenever a day closes.
@@ -1861,9 +1987,14 @@ def _simulate_core(
         eff_discharge=eff_discharge,
         n_replacements=0,
         replaced_capacity_wh=0.0,
-        day_start_soc=degradation_day_start_soc,
+        day_start_soc=0.0 if battery_retired else degradation_day_start_soc,
         day_start_t_cell=degradation_day_start_t_cell,
-        past_end_of_life=battery_soh_decimal <= battery_config.eol_percentage,
+        # A pack continued at or below its threshold crossed it in an earlier
+        # span, which recorded the crossing. A fresh pack that starts there
+        # crosses at its first period close.
+        past_end_of_life=battery_retired
+        or (initial_degradation_state is not None and battery_soh_decimal <= battery_config.eol_percentage),
+        retired=battery_retired,
     )
 
     # Per-step energy caps (Wh) for the shared inverter AC nameplate and the
@@ -1986,28 +2117,43 @@ def _simulate_core(
                         ),
                     )
                 segment_end = session.prepare_segment(segment_start, window_end)
-            dispatch_day(
-                out,
-                _pv_dc_vals,
-                _load_vals,
-                _temp_vals,
-                segment_start,
-                segment_end,
-                battery_config=battery_config,
-                battery_soh_decimal=battery_soh_decimal,
-                Battery_Energy_Wh=Battery_Energy_Wh,
-                Battery_PV_Origin_Energy_Wh=Battery_PV_Origin_Energy_Wh,
-                Battery_Grid_Origin_Energy_Wh=Battery_Grid_Origin_Energy_Wh,
-                eff_charge=eff_charge,
-                eff_discharge=eff_discharge,
-                hours_per_step=hours_per_step,
-                standby_loss_per_step_wh=standby_loss_per_step_wh,
-                cap_wh=cap_wh,
-                cap_charge_wh=cap_charge_wh,
-                cap_discharge_wh=cap_discharge_wh,
-                cap_stored_wh=cap_stored_wh,
-                instructions=dispatch_arrays,
-            )
+            if aging.retired:
+                # A retired pack neither charges nor discharges, whatever the
+                # instructions say: the steps are the PV-only system's.
+                _dispatch_no_battery_vectorized(
+                    out,
+                    _pv_dc_vals,
+                    _load_vals,
+                    _temp_vals,
+                    battery_config=battery_config,
+                    hours_per_step=hours_per_step,
+                    cap_wh=cap_wh,
+                    steps=slice(segment_start, segment_end),
+                )
+                out.columns["Battery_SOH"][segment_start:segment_end] = aging.soh_percent
+            else:
+                dispatch_day(
+                    out,
+                    _pv_dc_vals,
+                    _load_vals,
+                    _temp_vals,
+                    segment_start,
+                    segment_end,
+                    battery_config=battery_config,
+                    battery_soh_decimal=battery_soh_decimal,
+                    Battery_Energy_Wh=Battery_Energy_Wh,
+                    Battery_PV_Origin_Energy_Wh=Battery_PV_Origin_Energy_Wh,
+                    Battery_Grid_Origin_Energy_Wh=Battery_Grid_Origin_Energy_Wh,
+                    eff_charge=eff_charge,
+                    eff_discharge=eff_discharge,
+                    hours_per_step=hours_per_step,
+                    standby_loss_per_step_wh=standby_loss_per_step_wh,
+                    cap_wh=cap_wh,
+                    cap_charge_wh=cap_charge_wh,
+                    cap_discharge_wh=cap_discharge_wh,
+                    cap_stored_wh=cap_stored_wh,
+                    instructions=dispatch_arrays,
+                )
             if session is not None:
                 session.complete_segment(_pv_dc_vals, _load_vals, _temp_vals)
             segment_last = segment_end - 1
@@ -2092,6 +2238,7 @@ def simulate_energy_balance(
     dispatch_instructions: Optional[DispatchInstructions] = None,
     execution_backend: str = "python",
     finalize_degradation: Optional[bool] = None,
+    battery_retired: bool = False,
 ) -> (
     Tuple[pd.DataFrame, float, pd.DataFrame, int, pd.DataFrame]
     | Tuple[pd.DataFrame, float, pd.DataFrame, int, pd.DataFrame, Dict[str, Any]]
@@ -2141,6 +2288,7 @@ def simulate_energy_balance(
         initial_grid_origin_energy_wh=initial_grid_origin_energy_wh,
         dispatch_instructions=dispatch_instructions,
         execution_backend=execution_backend,
+        battery_retired=battery_retired,
     )
     result = _detailed_frames(core)
     if not return_degradation_state:
@@ -2244,6 +2392,7 @@ def simulate_energy_balance_summary(
     aligned: Optional[AlignedSimulationInputs] = None,
     finalize_degradation: Optional[bool] = None,
     weights: Optional[Mapping[str, Tuple[str, np.ndarray]]] = None,
+    battery_retired: bool = False,
 ) -> SimulationSummary:
     """Simulate an energy balance and return annual totals and carry state.
 
@@ -2299,6 +2448,7 @@ def simulate_energy_balance_summary(
         # call materialises a per-timestep frame.
         summary_only=True,
         aligned=aligned,
+        battery_retired=battery_retired,
     )
     return _build_simulation_summary(core, return_degradation_state=return_degradation_state, weights=weights)
 

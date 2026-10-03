@@ -30,6 +30,10 @@ that leaves the new pack less than that many project years: the call's span
 counts as one project year, and `replacement_years_after_span` more follow
 it. See
 [Battery replacement at the end of the horizon](../getting-started/configuration.md#battery-replacement-at-the-end-of-the-horizon).
+`BatteryConfig(skipped_replacement_action="retire")` switches off a pack
+whose replacement is skipped: from the next step the span dispatches as a
+PV-only system. A later span continued from its returned degradation state
+stays retired, or takes `battery_retired=True`.
 Each end-of-life crossing, replaced or not, is a
 {py:class}`~breos.battery.EndOfLifeEvent`: the summary's
 `end_of_life_events`, and on the detailed path the degradation frame's

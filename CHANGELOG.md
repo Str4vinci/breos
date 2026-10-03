@@ -98,6 +98,20 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   `breos.battery.EndOfLifeEvent` records, and the detailed degradation
   frame's `attrs["end_of_life_events"]` the same as JSON-safe dicts.
   Existing fields are unchanged.
+- `battery_skipped_replacement_action = "retire"` (App and Monte Carlo),
+  the optimizer's `[battery] skipped_replacement_action` and
+  `BatteryConfig.skipped_replacement_action` switch off a battery whose
+  end-of-life replacement `battery_replacement_min_remaining_years` or
+  `battery_allow_terminal_replacement` skips
+  ([#404](https://github.com/Str4vinci/breos/issues/404), ADR 0003 E12).
+  From the crossing the battery neither charges nor discharges, whatever
+  the smart-charging instructions say, and the project finishes as a
+  PV-only system; the stored energy leaves with the pack. Earlier cash flows
+  and the investment are unchanged and no replacement is priced. The event
+  is reported with action `"retired"`, and a retired battery stays off in
+  later projection years and in a span continued from its degradation
+  state (or `simulate_energy_balance(battery_retired=True)`).
+  The default `"keep"` gives results bit-identical to 0.7.0.
 
 ### Changed
 

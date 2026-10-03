@@ -25,6 +25,7 @@ from breos.constants import (
     DEFAULT_INDOOR_SETPOINT_C,
     DEFAULT_MAX_SOC,
     DEFAULT_MIN_SOC,
+    SKIPPED_REPLACEMENT_ACTIONS,
 )
 from breos.degradation.profiles import ENABLED_BLAST_MODEL_KEYS
 from breos.economics import (
@@ -814,6 +815,16 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
             "(configuration.md#battery-replacement-at-the-end-of-the-horizon)"
         ),
         summary="battery.replacement_min_remaining_years",
+    ),
+    "battery_skipped_replacement_action": AppConfigField(
+        default="keep",
+        doc=(
+            'What happens to a battery whose end-of-life replacement is skipped. `"keep"` leaves it in service '
+            'below its threshold; `"retire"` switches it off, and the project finishes PV-only. Applies only when '
+            "`battery_replacement_min_remaining_years` or `battery_allow_terminal_replacement` skips a swap. See "
+            "[Retiring the battery instead of keeping it](configuration.md#retiring-the-battery-instead-of-keeping-it)"
+        ),
+        summary="battery.skipped_replacement_action",
     ),
     "battery_rte": AppConfigField(
         default=None,
@@ -2359,6 +2370,10 @@ def _validate_battery_and_degradation(cfg: dict[str, Any]) -> None:
     if min_remaining < 0:
         raise ValueError("'battery_replacement_min_remaining_years' must be >= 0")
     cfg["battery_replacement_min_remaining_years"] = min_remaining
+    if cfg["battery_skipped_replacement_action"] not in SKIPPED_REPLACEMENT_ACTIONS:
+        raise ValueError(
+            f"'battery_skipped_replacement_action' must be one of: {', '.join(SKIPPED_REPLACEMENT_ACTIONS)}"
+        )
 
     # Validated through breos.execution so App and Monte Carlo cannot disagree
     # about which names exist. The default stays "python": the compiled path is
