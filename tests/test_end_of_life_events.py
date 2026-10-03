@@ -52,7 +52,7 @@ def _summary(n_steps: int, **config):
 
 
 def test_the_vocabularies_are_closed_lists():
-    assert END_OF_LIFE_ACTIONS == ("replaced", "kept")
+    assert END_OF_LIFE_ACTIONS == ("replaced", "kept", "retired")
     assert END_OF_LIFE_REASONS == ("end_of_life", "min_remaining_years", "terminal_period", "replacement_disabled")
 
 

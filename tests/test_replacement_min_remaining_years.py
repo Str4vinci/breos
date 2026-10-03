@@ -304,6 +304,7 @@ def test_app_skips_the_last_years_swaps_and_records_the_setting():
         "enable_replacement": True,
         "allow_terminal_replacement": True,
         "replacement_min_remaining_years": 1.0,
+        "skipped_replacement_action": "keep",
     }
     # The close of year 1 leaves exactly one year, so it still swaps.
     assert default._artifacts.yearly_df["Replacements"].tolist() == [365, 365]
