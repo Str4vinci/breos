@@ -72,20 +72,37 @@ def _finish(
     return fig
 
 
+def _recorded_currency(frame: pd.DataFrame) -> Optional[str]:
+    """The currency a frame records: ``attrs["currency"]``, else its ``currency`` column, else None.
+
+    BREOS writes a ``currency`` column into the CSVs it saves, since a CSV
+    keeps no attrs; a column that names more than one currency raises.
+    """
+    if frame.attrs.get("currency") is not None:
+        return str(frame.attrs["currency"])
+    if "currency" not in frame.columns:
+        return None
+    codes = sorted({str(code) for code in frame["currency"].dropna()})
+    if len(codes) > 1:
+        raise ValueError(f"The input's currency column names several currencies ({', '.join(codes)}); plot them apart")
+    return codes[0] if codes else None
+
+
 def _currency(frame: pd.DataFrame) -> str:
-    """The currency a frame's money is in, for labels: ``attrs["currency"]``, else the default."""
-    return str(frame.attrs.get("currency", DEFAULT_CURRENCY))
+    """The currency a frame's money is in, for labels: the recorded one, else the default."""
+    return _recorded_currency(frame) or DEFAULT_CURRENCY
 
 
 def _label_currency(frames: Sequence[pd.DataFrame], currency: Optional[str]) -> Optional[str]:
     """The currency of the money in ``frames``, or None if nothing records it.
 
-    A frame records its currency in ``attrs["currency"]``; a table read back
-    from CSV records none. ``currency`` names it for those. Two different
-    recorded currencies, or a recorded one that ``currency`` contradicts,
-    raise ``ValueError``.
+    A frame records its currency in ``attrs["currency"]`` or, read back from
+    a CSV that BREOS wrote, in a ``currency`` column; another table records
+    none. ``currency`` names it for those. Two different recorded
+    currencies, or a recorded one that ``currency`` contradicts, raise
+    ``ValueError``.
     """
-    known = sorted({str(frame.attrs["currency"]) for frame in frames if frame.attrs.get("currency") is not None})
+    known = sorted({code for code in map(_recorded_currency, frames) if code is not None})
     if len(known) > 1:
         raise ValueError(f"The inputs are in different currencies ({', '.join(known)}); plot them apart")
     if currency is not None and known and known[0] != currency:
@@ -1892,9 +1909,10 @@ def plot_breakeven_comparison(
         results_directory: Output directory. None returns the figure open
             without saving it.
         colors: Line colour for each scenario. Defaults to the colour cycle.
-        currency: Currency code for the money axis, for projections read
-            from CSV, which do not record it. An App result and a projection
-            frame from :func:`~breos.economics.cost_analysis_projection`
+        currency: Currency code for the money axis, for projections that
+            do not record it. An App result, a projection frame from
+            :func:`~breos.economics.cost_analysis_projection` and a
+            projection CSV that BREOS wrote, with its ``currency`` column,
             record their own. When no projection records it and ``currency``
             is None, the axis shows the amounts without a currency code.
         filename: Output filename.
@@ -2210,9 +2228,10 @@ def plot_sweep_heatmap(
             With ``diff`` the scale is always symmetric about zero, and
             ``vmin`` and ``vmax`` are not read.
         vmax: Colour-scale maximum (auto if None).
-        currency: Currency code for money labels, for a sweep CSV, which does
-            not record it. A DataFrame can record it in ``attrs["currency"]``.
-            When neither names it, money labels show no currency code.
+        currency: Currency code for money labels, for a table that does not
+            record it. A sweep CSV records it in its ``currency`` column, and
+            a DataFrame can in ``attrs["currency"]``. When nothing names it,
+            money labels show no currency code.
         filename: Output filename. Defaults to ``sweep_<metric>.png``, or
             ``sweep_<metric>_diff.png`` with ``diff``.
 
@@ -2365,9 +2384,10 @@ def plot_orientation_landscape(
         maximize: True if a higher metric is better; False for a metric such
             as ``lcoe_per_kwh``.
         metric_label: Axis and colour-bar label. Defaults to a label for the metric.
-        currency: Currency code for a money metric, for a sweep CSV, which
-            does not record it. When neither it nor ``attrs["currency"]``
-            names it, the label shows no currency code.
+        currency: Currency code for a money metric, for a table that does
+            not record it in ``attrs["currency"]`` or, as a sweep CSV does, in
+            a ``currency`` column. When nothing names it, the label shows no
+            currency code.
         filename: Output filename.
 
     Returns:
@@ -2509,10 +2529,11 @@ def plot_pareto_front(
             cost such as ``Projected_Initial_Cost`` or ``lcoe_per_kwh``.
         color_by: Column that colours the front, such as ``Battery_kWh``,
             with a colour bar. None draws it in one colour.
-        currency: Currency code for money labels, for a CSV, which does not
-            record it. The optimizer's frame and a DataFrame with
-            ``attrs["currency"]`` record their own. When neither names it,
-            money labels show no currency code.
+        currency: Currency code for money labels, for a table that does not
+            record it. The optimizer's frame, a DataFrame with
+            ``attrs["currency"]`` and a CSV with a ``currency`` column record
+            their own. When nothing names it, money labels show no currency
+            code.
         filename: Output filename.
 
     Returns:

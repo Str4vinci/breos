@@ -86,7 +86,7 @@ call takes them as DataFrames.
 | `inverter` | `efficiency`, used when the top-level `inverter_efficiency` (0.96) is not set |
 | `emissions` | the `EmissionsParams` fields; the search then reports `Projected_CO2_*` for every Pareto row |
 | `tariff`, `reference_tariff`, `smart_charging`, `terminal_value` | the App's tables; `terminal_value` is accepted and ignored |
-| top level | `pv_module`, `inverter_efficiency`, `dc_output_scale` (1), `ac_output_scale` (1), and the App's PV model keys (`transposition_model`, `albedo`, `iam_model`, ...) |
+| top level | `currency` (the tariff's, else EUR), `pv_module`, `inverter_efficiency`, `dc_output_scale` (1), `ac_output_scale` (1), and the App's PV model keys (`transposition_model`, `albedo`, `iam_model`, ...) |
 
 Where two keys set one thing, the first one set wins:
 `simulation.years_projection` over `financials.project_lifespan`,
@@ -100,11 +100,18 @@ Where two keys set one thing, the first one set wins:
 `dc_output_scale` and `ac_output_scale` are optimizer-only keys: the App and
 the Monte Carlo runner do not take them.
 
+`currency` selects the run's currency as the App's key does (see
+[Currency](../getting-started/configuration.md#currency)). In a run whose
+currency is not EUR, `[costs]` (or `[financials]` for the two flat prices)
+sets every cost with a default that is not zero, and `constraints.budget` is
+set; a search with `constraints.max_battery_kwh = 0` needs no battery costs.
+An explicit `battery.replacement_cost` is in the run's currency.
+
 The search bounds:
 
 | Key | Default | Meaning |
 | --- | ---: | --- |
-| `constraints.budget` | 10,000 | Maximum initial system cost, in the run's currency. `budget_eur`, its name before 0.7.0, is an error |
+| `constraints.budget` | 10000 | Maximum initial system cost, in the run's currency. A run in another currency than EUR must set it. `budget_eur`, its name before 0.7.0, is an error |
 | `constraints.max_area_m2` | 20 | Maximum PV-module frame area in m² |
 | `constraints.max_battery_kwh` | 30 | Maximum battery decision-variable value in kWh |
 | `constraints.max_modules` | 60 | Maximum PV-module decision-variable value |

@@ -563,6 +563,52 @@ For full control, build a {py:class}`~breos.economics.CostParams` and
 {py:class}`~breos.emissions.EmissionsParams` yourself and call the lower-level
 functions documented in the [Cost and emissions API](../api/cost-analysis.md).
 
+## Currency
+
+A run has one currency, an ISO 4217 code such as `EUR`, `USD` or `GBP`. Every
+money input is read in it and every money output is reported in it. BREOS
+does not convert between currencies and does not check whether prices are
+realistic; it checks that every amount is labelled with the run's currency.
+
+The run's currency is the top-level `currency` key, else the `[tariff]`
+`currency`, else `EUR`. The bundled cost presets and the
+{py:class}`~breos.economics.CostParams` defaults are in EUR, so a run in
+another currency gives its own costs:
+
+```toml
+currency = "USD"
+
+[costs]
+electricity_cost = 0.18
+electricity_sold_cost = 0.05
+daily_power_cost = 0.40
+module_cost_per_w = 0.30
+inverter_cost_per_kw_hybrid = 150
+inverter_cost_per_kw_simple = 80
+storage_cost_per_kwh = 450
+installation_cost_per_module = 300
+installation_cost_battery = 600
+other_cost_per_module = 40
+maintenance_cost_per_panel = 12
+```
+
+- A cost preset in another currency than the run's is an error. BREOS never
+  relabels a EUR preset as another currency.
+- In a run whose currency is not EUR, every cost the run prices with whose
+  default is not zero must be set under `[costs]`. The error names the keys
+  that are missing. A PV-only run does not need the battery costs, and a run
+  with a `[tariff]` does not need the flat prices, which the tariff replaces.
+  Defaults of zero, such as `land_cost`, are zero in any currency and need
+  not be set.
+- `[tariff]` and `[reference_tariff]` state their `currency`, which must be
+  the run's. A smart-charging `wear_cost_per_kwh` is in the run's currency.
+- Results record the currency in `provenance.currency`. The sweep CSV, the
+  Monte Carlo CSVs and a written cost projection have a `currency` column,
+  and plots label money with it.
+- The optimizer takes the same top-level `currency` key. Its
+  `constraints.budget` defaults to 10000 EUR, so a run in another currency
+  sets it; see [Optimization](optimization.md).
+
 ## Time-of-use tariffs
 
 A `[tariff]` table prices energy by period instead of at one flat rate. It
@@ -596,8 +642,9 @@ fixed_charge_per_day = 0.25              # optional, default 0
   instead of the standard/DST seasons. Its rules then select a season by
   name, and each price list may give a table of period prices for every
   season. See [Month seasons](../api/tariffs.md#month-seasons).
-- `currency` must be `"EUR"`, the only currency BREOS accepts so far, and
-  the currency of the cost presets. BREOS does not convert.
+- `currency` is the ISO 4217 code of the prices. It sets the run's currency
+  unless the top-level `currency` key does, which it must then equal. BREOS
+  does not convert; see [Currency](#currency).
 - Holidays of a custom schedule are optional and explicit. The
   `[tariff.custom_schedule.holidays]` table needs `day_type`, the day type
   holidays follow, and `dates`, which maps each covered year to its dates;
@@ -613,7 +660,7 @@ fixed_charge_per_day = 0.25              # optional, default 0
 - A tariff replaces the flat `costs.electricity_cost`,
   `costs.electricity_sold_cost` and `costs.daily_power_cost`, so setting
   those as well is an error. CAPEX, O&M and replacement costs still come from
-  the cost preset, in the same currency.
+  the cost preset or `[costs]`, in the same currency.
 - Without [`[smart_charging]`](#smart-charging) the dispatch does not
   change: the battery still maximises self-consumption, and the tariff
   changes only what the energy costs. Each year row records its import
@@ -722,7 +769,7 @@ fixed_charge_per_day = 0.30              # required; use 0 for no fixed charge
   within that season. Bundled, DST-season and flat references take prices
   per period only. See [month seasons](../api/tariffs.md#month-seasons).
 - The reference can be set with or without a `[tariff]`. Its `currency` must
-  be the result's currency: the `[tariff]` currency, or EUR with flat prices.
+  be the run's currency: `currency`, else the `[tariff]` currency, else EUR.
   BREOS does not convert.
 - The reference never changes the dispatch, and the costs with the system do
   not change. Every project year replays the start-year calendar, as the

@@ -66,7 +66,7 @@ from breos.projection import (
 from breos.pv.model_options import DEFAULT_SOLAR_POSITION, resolve_solar_position_method, solar_position_time_offset
 from breos.result_schema import RESULT_SCHEMA_VERSION
 from breos.smart_charging import PLANNER_MODES, resolve_instructions, smart_charging_provenance
-from breos.tariffs import ResolvedTariff, reference_tariff_provenance, result_currency, tariff_provenance
+from breos.tariffs import ResolvedTariff, reference_tariff_provenance, tariff_provenance
 from breos.utils import package_version
 from breos.weather import (
     _weather_file_sha256,
@@ -975,7 +975,7 @@ def run_montecarlo(
         execution["jit_cache"] = aggregate_jit_cache_states(jit_cache_states)
 
     runs_df = pd.DataFrame(rows)
-    currency = result_currency(resolved.tariff)
+    currency = resolved.currency
     # Plot labels read the currency from the frame.
     runs_df.attrs["currency"] = currency
     yearly_df = pd.concat(yearly_frames, ignore_index=True) if yearly_frames else None

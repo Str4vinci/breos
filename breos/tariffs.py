@@ -30,8 +30,22 @@ import pandas as pd
 
 from breos.resources import load_config_json
 
-SUPPORTED_CURRENCIES = frozenset({"EUR"})
-# The bundled cost catalogue's currency, and the currency of a run without a tariff.
+# The active ISO 4217 currency codes, without fund codes, precious metals and
+# the testing and no-currency codes. BREOS checks that money is labelled with
+# one of them and that a run labels all its money alike; it never converts.
+SUPPORTED_CURRENCIES = frozenset(
+    """
+    AED AFN ALL AMD AOA ARS AUD AWG AZN BAM BBD BDT BHD BIF BMD BND BOB BRL BSD BTN BWP BYN BZD CAD CDF
+    CHF CLP CNY COP CRC CUP CVE CZK DJF DKK DOP DZD EGP ERN ETB EUR FJD FKP GBP GEL GHS GIP GMD GNF GTQ
+    GYD HKD HNL HTG HUF IDR ILS INR IQD IRR ISK JMD JOD JPY KES KGS KHR KMF KPW KRW KWD KYD KZT LAK LBP
+    LKR LRD LSL LYD MAD MDL MGA MKD MMK MNT MOP MRU MUR MVR MWK MXN MYR MZN NAD NGN NIO NOK NPR NZD OMR
+    PAB PEN PGK PHP PKR PLN PYG QAR RON RSD RUB RWF SAR SBD SCR SDG SEK SGD SHP SLE SOS SRD SSP STN SVC
+    SYP SZL THB TJS TMT TND TOP TRY TTD TWD TZS UAH UGX USD UYU UZS VED VES VND VUV WST XAF XCD XCG XOF
+    XPF YER ZAR ZMW ZWG
+    """.split()
+)
+# The currency of the bundled cost catalogue and of the CostParams defaults,
+# and of a run that selects no other.
 DEFAULT_CURRENCY = "EUR"
 BOUNDARY_POLICIES = frozenset({"strict"})
 SCHEDULE_CYCLES = frozenset({"flat", "daily", "weekly", "custom"})
@@ -50,6 +64,14 @@ def _nonempty_text(value: object, where: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise TypeError(f"'{where}' must be a non-empty string")
     return value.strip()
+
+
+def check_currency(value: object, where: str) -> str:
+    """An ISO 4217 currency code, in upper case; ``"usd"`` gives ``"USD"``."""
+    code = _nonempty_text(value, where).upper()
+    if code not in SUPPORTED_CURRENCIES:
+        raise ValueError(f"'{where}' must be an ISO 4217 currency code such as EUR, USD or GBP; got {value!r}")
+    return code
 
 
 def _period_name(value: object, where: str) -> str:
@@ -178,11 +200,7 @@ class TariffPrices:
     annual_network_credit: AnnualNetworkCredit | None = None
 
     def __post_init__(self) -> None:
-        currency = _nonempty_text(self.currency, "prices.currency").upper()
-        if currency not in SUPPORTED_CURRENCIES:
-            allowed = ", ".join(sorted(SUPPORTED_CURRENCIES))
-            raise ValueError(f"Unsupported tariff currency {currency!r}. Available: {allowed}")
-        object.__setattr__(self, "currency", currency)
+        object.__setattr__(self, "currency", check_currency(self.currency, "prices.currency"))
 
         object.__setattr__(self, "import_prices", self._freeze_prices(self.import_prices, "import_prices"))
         object.__setattr__(self, "export_prices", self._freeze_prices(self.export_prices, "export_prices"))
@@ -1479,9 +1497,21 @@ class ReferenceTariffSpec:
         )
 
 
-def result_currency(tariff: TariffSpec | ResolvedTariff | None) -> str:
-    """The currency a run's money is in: its tariff's, or the cost catalogue's without one."""
-    return tariff.prices.currency if tariff is not None else DEFAULT_CURRENCY
+def run_currency(configured: str | None, tariff_currency: str | None) -> str:
+    """The currency a run's money is in: ``configured``, else its tariff's, else :data:`DEFAULT_CURRENCY`.
+
+    ``configured`` is the run's ``currency`` key and ``tariff_currency`` its
+    ``[tariff]`` currency, both checked, or None. BREOS does not convert, so
+    a tariff priced in another currency raises.
+    """
+    if configured is None:
+        return tariff_currency or DEFAULT_CURRENCY
+    if tariff_currency is not None and tariff_currency != configured:
+        raise ValueError(
+            f"'tariff.currency' is {tariff_currency}, but 'currency' is {configured}. BREOS does not convert "
+            f"currencies: give the tariff prices in {configured}."
+        )
+    return configured
 
 
 def tariff_provenance(resolved: ResolvedTariff, *, calendar_year: int) -> dict[str, Any]:

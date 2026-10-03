@@ -8,7 +8,7 @@ from dataclasses import dataclass, replace
 from datetime import date, datetime
 from numbers import Real
 from pathlib import Path
-from typing import Any, Callable, Mapping
+from typing import Any, Callable, Iterable, Mapping
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import pandas as pd
@@ -34,6 +34,7 @@ from breos.economics import (
     DEFAULT_INFLATION_RATE,
     CostParams,
     calculate_costs,
+    default_amount_cost_keys,
     replacement_event_cost,
 )
 from breos.emissions import EmissionsParams
@@ -81,8 +82,8 @@ from breos.solar import (
 from breos.solar import default_azimuth as default_azimuth_fn
 from breos.tariffs import (
     BOUNDARY_POLICIES,
+    DEFAULT_CURRENCY,
     SCHEDULE_CYCLES,
-    SUPPORTED_CURRENCIES,
     AnnualNetworkCredit,
     ReferenceTariffSpec,
     ScheduleDefinition,
@@ -90,9 +91,10 @@ from breos.tariffs import (
     TariffSchedule,
     TariffSpec,
     available_tariff_schedules,
+    check_currency,
     get_schedule_definition,
     parse_schedule_definition,
-    result_currency,
+    run_currency,
     schedule_resolution_minutes,
     validate_season_prices,
 )
@@ -263,6 +265,19 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
             "the {py:class}`~breos.economics.CostParams` defaults"
         ),
         summary="economics.cost_preset",
+    ),
+    "currency": AppConfigField(
+        default=None,
+        cli_flags=("--currency",),
+        cli_help="ISO 4217 code of the run's money, for example 'USD' (default: the tariff's, else EUR).",
+        normalizer=_upper,
+        doc=(
+            'ISO 4217 code of the run\'s money, such as `"USD"`. Every money input must be in it, and every money '
+            "output is; BREOS does not convert. Unset, the run takes the `[tariff]` currency, else EUR. A run in "
+            "another currency than EUR gives its costs in that currency; see [Currency](configuration.md#currency)"
+        ),
+        default_doc='*the `[tariff]` currency, else `"EUR"`*',
+        summary="economics.currency",
     ),
     "emissions_country": AppConfigField(
         default=None,
@@ -1151,6 +1166,8 @@ class ResolvedAppConfig:
     # The configured [reference_tariff], or None: the no-system baseline is
     # then priced at the system's own prices.
     reference_tariff: ReferenceTariffSpec | None = None
+    # The currency of every money input and output (run_currency).
+    currency: str = DEFAULT_CURRENCY
 
 
 def normalize_config_keys(config: dict[str, Any]) -> dict[str, Any]:
@@ -1371,8 +1388,16 @@ def validate_config(cfg: dict[str, Any]) -> TariffSpec | None:
         # conversion that may be deferred until the simulation is running.
         timezone = resolve_location(cfg)[2]
         tariff_spec = resolve_tariff_spec(cfg, timezone)
+    currency = run_currency(cfg["currency"], tariff_spec.prices.currency if tariff_spec is not None else None)
     if cfg["reference_tariff"] is not None:
-        resolve_reference_tariff_spec(cfg, resolve_location(cfg)[2], tariff_spec)
+        resolve_reference_tariff_spec(cfg, resolve_location(cfg)[2], currency)
+    check_cost_currency(
+        currency,
+        given=cfg.get("costs") or {},
+        preset=cfg.get("cost_preset"),
+        tariff=tariff_spec is not None,
+        battery=cfg["battery_kwh"] * 1000 > 1,
+    )
     _validate_battery_and_degradation(cfg)
     _validate_period(cfg)
     _validate_smart_charging(cfg, tariff_spec)
@@ -1637,7 +1662,7 @@ TARIFF_TABLE = TableSpec(
     keys={
         "schedule": choice(available_tariff_schedules()),
         "custom_schedule": _custom_schedule,
-        "currency": choice(tuple(sorted(SUPPORTED_CURRENCIES))),
+        "currency": check_currency,
         "import_prices": _PRICE_LIST,
         "export_prices": _PRICE_LIST,
         "fixed_charge_per_day": number(minimum=0),
@@ -1658,8 +1683,8 @@ TARIFF_TABLE = TableSpec(
             "[Custom App schedules](../api/tariffs.md#custom-app-schedules)"
         ),
         "currency": (
-            f"Currency of the prices: {', '.join(sorted(SUPPORTED_CURRENCIES))}. The cost preset should be in the "
-            "same currency; BREOS does not convert"
+            "ISO 4217 code of the prices, such as `EUR`. It is the run's currency unless the top-level `currency` "
+            "is set, which it must then equal; BREOS does not convert"
         ),
         "import_prices": (
             "Import price per kWh by period name, at year-1 prices; `all` prices every period. With month seasons, "
@@ -1786,7 +1811,7 @@ REFERENCE_TARIFF_TABLE = TableSpec(
     keys={
         "schedule": choice(available_tariff_schedules()),
         "custom_schedule": _custom_schedule,
-        "currency": choice(tuple(sorted(SUPPORTED_CURRENCIES))),
+        "currency": check_currency,
         "import_prices": _PRICE_LIST,
         "fixed_charge_per_day": number(minimum=0),
         "boundary_policy": choice(tuple(sorted(BOUNDARY_POLICIES))),
@@ -1806,8 +1831,8 @@ REFERENCE_TARIFF_TABLE = TableSpec(
             "`schedule`, or neither for one flat price"
         ),
         "currency": (
-            f"Currency of the prices: {', '.join(sorted(SUPPORTED_CURRENCIES))}. Must be the result's currency: the "
-            "`[tariff]` currency, or EUR on flat prices"
+            "ISO 4217 code of the prices. Must be the run's currency: `currency`, else the `[tariff]` currency, "
+            "else EUR"
         ),
         "import_prices": (
             "Import price per kWh by period name, at year-1 prices; `all` prices every period. With month seasons, "
@@ -1830,24 +1855,21 @@ REFERENCE_TARIFF_TABLE = TableSpec(
 )
 
 
-def resolve_reference_tariff_spec(
-    cfg: dict[str, Any], timezone: str, tariff: TariffSpec | None
-) -> ReferenceTariffSpec | None:
+def resolve_reference_tariff_spec(cfg: dict[str, Any], timezone: str, currency: str) -> ReferenceTariffSpec | None:
     """Validate and build the no-system reference tariff for App or an adapted optimizer config.
 
     ``cfg`` supplies ``reference_tariff`` and ``resolution``, and from App
-    ``start_date``, as :func:`resolve_tariff_spec` reads them. ``tariff`` is
-    the system's: the reference must be in the result's currency, since
-    BREOS does not convert.
+    ``start_date``, as :func:`resolve_tariff_spec` reads them. ``currency``
+    is the run's (:func:`~breos.tariffs.run_currency`): the reference must be
+    in it, since BREOS does not convert.
     """
     if cfg.get("reference_tariff") is None:
         return None
     table = REFERENCE_TARIFF_TABLE.validate(cfg["reference_tariff"])
-    currency = result_currency(tariff)
     if table["currency"] != currency:
         raise ValueError(
-            f"'reference_tariff.currency' is {table['currency']}, but the result is in {currency}"
-            f"{' (the [tariff] currency)' if tariff is not None else ' (flat prices)'}. BREOS does not convert."
+            f"'reference_tariff.currency' is {table['currency']}, but the run is in {currency}. BREOS does not "
+            f"convert currencies: give the reference prices in {currency}."
         )
     schedule: ScheduleDefinition | None = None
     if "schedule" in table or "custom_schedule" in table:
@@ -2318,6 +2340,8 @@ def _validate_economics(cfg: dict[str, Any]) -> None:
         cfg["terminal_value"].setdefault("basis", "none")
     if "costs" in cfg:
         COSTS_TABLE.validate(cfg["costs"])
+    if cfg["currency"] is not None:
+        cfg["currency"] = check_currency(cfg["currency"], "currency")
     if cfg["export_emissions_factor_gco2_kwh"] is not None:
         if _finite_real(cfg["export_emissions_factor_gco2_kwh"], "export_emissions_factor_gco2_kwh") < 0:
             raise ValueError("'export_emissions_factor_gco2_kwh' must be >= 0 when configured")
@@ -2561,6 +2585,56 @@ def resolve_tracking(cfg: dict[str, Any]) -> str:
     return tracking
 
 
+def _cost_preset_currency(key: str) -> str:
+    """The currency of a packaged cost preset; an unknown key raises with the available ones."""
+    costs_db = load_config_json("costs.json")
+    if key not in costs_db:
+        raise ValueError(f"Unknown cost preset '{key}'. Available: {', '.join(sorted(costs_db))}")
+    return str(costs_db[key]["currency"])
+
+
+def check_cost_currency(
+    currency: str,
+    *,
+    given: Iterable[str],
+    preset: str | None = None,
+    tariff: bool,
+    battery: bool | None,
+    where: str = "[costs]",
+) -> None:
+    """Refuse cost inputs that are not in the run's ``currency``.
+
+    BREOS does not convert, and never relabels an amount: a cost preset must
+    be in the run's currency, and in a run whose currency is not EUR every
+    cost the run prices with whose :class:`~breos.economics.CostParams`
+    default is a EUR amount must be given, in ``given`` (the cost keys set
+    explicitly) or by a preset in that currency. Defaults of zero are zero in
+    any currency and stay. ``tariff`` and ``battery`` select the keys the run
+    prices with (:func:`~breos.economics.default_amount_cost_keys`).
+
+    Raises:
+        ValueError: If the preset's currency differs, or a EUR default would be read.
+    """
+    supplied = set(given)
+    if preset:
+        preset_currency = _cost_preset_currency(preset)
+        if preset_currency != currency:
+            raise ValueError(
+                f"cost_preset '{preset}' is priced in {preset_currency}, but the run is in {currency}. BREOS does "
+                f"not convert currencies: remove cost_preset and give the costs in {currency} under {where}, or "
+                f"choose a cost preset in {currency}."
+            )
+        supplied.update(load_config_json("costs.json")[preset])
+    if currency == DEFAULT_CURRENCY:
+        return
+    missing = [key for key in default_amount_cost_keys(tariff=tariff, battery=battery) if key not in supplied]
+    if missing:
+        raise ValueError(
+            f"The run is in {currency}, but {', '.join(missing)} would come from the built-in "
+            f"{DEFAULT_CURRENCY} defaults. BREOS does not convert currencies: set them in {currency} under {where}."
+        )
+
+
 def resolve_costs(cfg: dict[str, Any]) -> CostParams:
     """Build CostParams from packaged presets, overrides, and financial defaults.
 
@@ -2705,6 +2779,7 @@ def resolve_app_config(config: dict[str, Any]) -> ResolvedAppConfig:
     else:
         ac_capacity_w = inverter_ac_capacity_w(n_modules * avg_module_power_w, cfg["inverter_loading_ratio"])
 
+    currency = run_currency(cfg["currency"], tariff.prices.currency if tariff is not None else None)
     return ResolvedAppConfig(
         cfg=cfg,
         lat=lat,
@@ -2726,5 +2801,6 @@ def resolve_app_config(config: dict[str, Any]) -> ResolvedAppConfig:
         cost_params=cost_params,
         emissions_params=resolve_emissions(cfg),
         period=resolve_period(cfg, timezone),
-        reference_tariff=resolve_reference_tariff_spec(cfg, timezone, tariff),
+        reference_tariff=resolve_reference_tariff_spec(cfg, timezone, currency),
+        currency=currency,
     )

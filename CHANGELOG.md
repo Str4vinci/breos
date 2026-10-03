@@ -129,6 +129,23 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   `decision_boundary` for every `daily_persistence` run; the new mode
   reports controller and planner version `"2"`. The default `"civil_day"`
   is bit-identical to before, and the dispatch kernel is unchanged.
+- Currency selection for flat-price and time-of-use runs (#376, ADR 0003
+  E13). A top-level `currency` key (CLI `--currency`, and the optimizer's
+  top level) takes an ISO 4217 code; unset, the run takes the `[tariff]`
+  currency, else EUR as before. `[tariff]` and `[reference_tariff]` accept
+  any ISO 4217 code and must match the run. BREOS does not convert and never
+  relabels EUR amounts: a cost preset in another currency is refused, and a
+  run in another currency than EUR must set under `[costs]` every cost it
+  prices with whose default is not zero (the error names them), and in the
+  optimizer `constraints.budget`. `provenance.currency` records the result;
+  the sweep CSV, the Monte Carlo runs and yearly CSVs and a written cost
+  projection gain a `currency` column, which plots read for their labels;
+  `breos validate-config` prints the resolved currency; each bundled cost
+  preset records its `currency`, which `breos list cost-presets` reports;
+  and `App.revalue` accepts `currency`. Scaling every money input by k scales
+  every money output by k and leaves energy, ageing, payback years and the
+  optimizer's ranking unchanged, which the tests check. Runs that set no
+  `currency` are bit-identical, and the result format stays `"1"`.
 
 ### Changed
 
@@ -146,6 +163,10 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   allow this, such a run keeps each year's grid import and export step by
   step in memory: about 11 MB for 20 years at 15-minute resolution. Runs
   with smart charging still simulate again (#393).
+- `breos.tariffs.result_currency` is replaced by `run_currency(configured,
+  tariff_currency)`, which also reads the `currency` key, and
+  `resolve_reference_tariff_spec` takes the run's currency instead of the
+  system tariff (#376).
 
 ### Fixed
 

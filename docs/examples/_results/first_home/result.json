@@ -913,6 +913,7 @@
    "battery_max_discharge_power_w": null,
    "battery_power_limit_c_rate": null,
    "cost_preset": "residential_pt",
+   "currency": null,
    "emissions_country": "PT",
    "pv_module": "Suntech_STP550S_STC",
    "load_profile": "demandlib_h0",

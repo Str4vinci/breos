@@ -1,10 +1,11 @@
 # 0003 — Economic basis, escalators, and currency-neutral results
 
-- **Status:** Accepted (E1–E10); implemented in 0.7.0. E11 and E12
+- **Status:** Accepted (E1–E10); implemented in 0.7.0. E11–E13
   Proposed, implemented for 0.7.1
 - **Date:** 2026-09-26; E1, E6 and E8 accepted 2026-09-26; E2–E5, E7, E9 and
   the E6 inflation default accepted 2026-09-27; E10 accepted 2026-10-01; E9
-  amended 2026-10-01; E11 and E12 proposed 2026-10-03
+  amended 2026-10-01; E11 and E12 proposed 2026-10-03; E13 proposed
+  2026-10-03
 
 ## Context
 
@@ -62,8 +63,9 @@ the design, not its implementation. All nine were then implemented for
 0.7.0 under #183: E6 in #271, E5 and E7 in #273, E8 and E9 in #283, E1, E2
 and E3 in #288, and E4 in #291. E10, accepted on 2026-10-01, was implemented
 in #352. The changelog carries the migration table below as shipped.
-E11, proposed on 2026-10-03, is implemented for 0.7.1 under #400, and E12,
-proposed the same day, under #404.
+E11, proposed on 2026-10-03, is implemented for 0.7.1 under #400, E12,
+proposed the same day, under #404, and E13, also proposed that day, under
+#376.
 
 ### E1. Nominal basis for the projection APIs — Accepted 2026-09-26
 
@@ -473,6 +475,63 @@ result format stays `"1"`.
 Follow-ups, not part of E12: a tariff switch from a given project year,
 independent of retirement (#402), and an economic rule that compares
 replace, keep and retire at each crossing (#403).
+
+### E13. Currency selection (#376) — Proposed 2026-10-03
+
+Adds a rule; it replaces E8's "the resolved currency" source, which in
+0.7.0 was the `[tariff]` currency or EUR, and `SUPPORTED_CURRENCIES =
+{"EUR"}`. The arithmetic never depended on the currency, but a study in
+another currency could only be run by labelling its inputs EUR, and the
+EUR cost presets and defaults then mixed silently with them.
+
+- **Key.** A top-level `currency` (App, Monte Carlo, `breos sweep`, CLI
+  `--currency`, and the optimizer's top level): an ISO 4217 code, upper-cased.
+  `SUPPORTED_CURRENCIES` becomes the active ISO 4217 codes without fund,
+  precious-metal, testing and no-currency codes. The check is of the label,
+  not of price realism.
+- **Resolution.** The run's currency is `currency`, else the `[tariff]`
+  currency, else EUR (`DEFAULT_CURRENCY`, the currency of the bundled cost
+  catalogue and the `CostParams` defaults). `breos.tariffs.run_currency`
+  replaces `result_currency`, which could not see the key.
+- **Consistency.** `[tariff].currency` and `[reference_tariff].currency`
+  must equal it. Each cost preset records its own `currency` in
+  `costs.json`; a preset in another currency than the run's is refused,
+  however many of its values `[costs]` overrides. No exchange rates exist.
+- **No relabelling.** In a run whose currency is not EUR, every cost the run
+  prices with whose `CostParams` default is not zero must be given in
+  `[costs]` (for the optimizer, the flat prices may come from
+  `[financials]`), or by a preset in the run's currency. The error names
+  every missing key. Which costs a run prices with follows
+  `calculate_costs`: a PV-only run (or a search whose
+  `constraints.max_battery_kwh` is 0) needs no battery costs, and a run with
+  a `[tariff]` needs no flat prices. Zero defaults (`land_cost`,
+  `other_costs`, `maintenance_cost`, `operation_cost`, a zero
+  `wear_cost_per_kwh`) are zero in any currency and stay. The optimizer's
+  `constraints.budget` defaults to 10000 EUR, so such a run sets it. The
+  tariff, the reference tariff, the annual network credit, an explicit
+  `battery.replacement_cost` and `wear_cost_per_kwh` are explicit inputs in
+  the run's currency.
+- **Carried.** `provenance.currency` (App, Monte Carlo, optimizer),
+  `attrs["currency"]` on the cost projection, Monte Carlo runs and the
+  optimizer's Pareto frame, as in E8. A CSV keeps no attrs, so the sweep
+  CSV, the Monte Carlo runs and yearly CSVs and `write_cost_projection` add
+  a `currency` column, and plots read it as they read `attrs["currency"]`.
+  `breos validate-config` reports the resolved currency, and
+  `breos list cost-presets` each preset's own. `currency` is an economics
+  key, so `App.revalue` accepts it with prices in the new currency, and it
+  is one of the keys the input stage never reads, so a sweep over it shares
+  prepared inputs.
+- **Property.** Scaling every money input by k scales every money output by
+  k and leaves every physical output, the payback years and, with the budget
+  scaled too, the optimizer's feasibility and ranking unchanged. The tests
+  check it with k a power of two, for which the floats scale exactly, in
+  App (flat, tariff with reference, network credit, terminal value, fixed
+  target and daily persistence with a wear weight), Monte Carlo and the
+  optimizer.
+
+A run that sets no `currency` resolves as before, and results are
+bit-identical. The result format stays `"1"`: the resolved config gains
+`currency`, the CSVs gain a column, and nothing is renamed or removed.
 
 ## Consequences
 
