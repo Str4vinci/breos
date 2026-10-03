@@ -2,6 +2,8 @@
 
 A daily controller decides one configured-zone civil day at a time and returns
 canonical :class:`~breos.dispatch_instructions.DispatchInstructions` for it.
+A controller may also name steps inside a day where it decides again (A19):
+each such decision covers the rest of the day from that step.
 It receives the day's calendar, the known tariff for the day, the current
 battery state, and observations of days that have already completed.
 Simulation truth is captured by the core after each dispatch segment and is
@@ -177,6 +179,13 @@ class ControllerDayInput:
     in the next call. ``initial_partial_day`` marks a projection that starts
     mid-day, ``clipped_start`` and ``clipped_end`` a span that lacks the day's
     first or last slots for any other reason, such as a ``[period]`` edge.
+
+    ``decision_start`` is True on a step the controller's own
+    ``decision_starts`` marks (A19), whether a civil day starts there or
+    not. A decision inside a civil day covers the rest of the logical day
+    from its step, and ``observed_today`` holds the day's observations made
+    before it; ``civil_slot_offset`` is then the step's own slot. At a
+    civil-day start ``observed_today`` is None.
     """
 
     projection_year: int
@@ -197,6 +206,8 @@ class ControllerDayInput:
     battery_state: ControllerBatteryState
     last_complete_observed_day: ObservedCivilDay | None
     complete_days_observed: int
+    decision_start: bool = False
+    observed_today: PendingObservedCivilDay | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -246,6 +257,12 @@ class DailyDispatchController(Protocol):
 
     ``tariff_horizon_days`` is how many logical days of known tariff the
     controller sees from the start of each decision.
+
+    A controller may also define ``decision_starts(tariff)``, returning one
+    boolean per step of the resolved calendar, or None. The session then
+    also decides on every marked step inside a civil day (A19). A mark on
+    the first step treats the step before it as the calendar's last, as an
+    A2 replay continues it.
     """
 
     @property
@@ -448,6 +465,17 @@ class _ControllerSession:
         self._replay_seam = bool(replay_seam)
         self._battery_config = battery_config
 
+        starts = getattr(controller, "decision_starts", None)
+        marks = None if starts is None else starts(tariff)
+        self._marks: np.ndarray | None = None
+        self._next_mark = np.full(n_steps + 1, n_steps, dtype=np.int64)
+        if marks is not None:
+            self._marks = np.asarray(marks, dtype=np.bool_)
+            if self._marks.shape != (n_steps,):
+                raise ValueError("a controller's decision_starts must hold one flag per simulated step")
+            # The first marked step at or after each position.
+            positions = np.flatnonzero(self._marks)
+            self._next_mark[:n_steps] = np.append(positions, n_steps)[np.searchsorted(positions, np.arange(n_steps))]
         self._labels = np.asarray(tariff.period_labels, dtype=object)
         self._codes = np.asarray(tariff.period_codes, dtype=np.int64)
         self._import = np.asarray(tariff.import_price_per_kwh, dtype=np.float64)
@@ -466,6 +494,7 @@ class _ControllerSession:
         self._day = -1
         self._segment: tuple[int, int, int] | None = None
         self._seam_head: tuple[SlotKey, ...] | None = None
+        self._day_input: ControllerDayInput | None = None
 
     # -- calendar ---------------------------------------------------------
 
@@ -548,18 +577,26 @@ class _ControllerSession:
     # -- the core's calls -------------------------------------------------
 
     def decides_at(self, position: int) -> bool:
-        """Whether a civil day begins at ``position``, which is about to be dispatched."""
-        return self._day + 1 < self._n_days and position == self._day_starts[self._day + 1]
+        """Whether a civil day begins at ``position``, which is about to be dispatched, or the controller marks it."""
+        if self._day + 1 < self._n_days and position == self._day_starts[self._day + 1]:
+            return True
+        return self._marks is not None and bool(self._marks[position])
 
     def decide(self, position: int, battery_state: ControllerBatteryState) -> None:
-        """Begin the civil day at ``position``: resume a carried decision or ask the controller."""
+        """Begin the civil day at ``position``: resume a carried decision or ask the controller.
+
+        On a marked step inside the current day, decide the rest of the day again.
+        """
         day = self._day + 1
+        if day >= self._n_days or position != self._day_starts[day]:
+            self._decide_within(position, battery_state)
+            return
         lo, hi = self._day_starts[day], self._day_starts[day + 1]
-        if position != lo:
-            raise RuntimeError(f"civil day {day} begins at step {lo}, not {position}")
         self._day = day
         present = self._slot_keys(lo, hi)
         if day == 0 and self._continue_carried(present):
+            if self._marks is not None and self._marks[position]:
+                self._decide_within(position, battery_state)
             return
 
         # The previous day has ended. A complete day was promoted as it
@@ -596,7 +633,14 @@ class _ControllerSession:
             battery_state=battery_state,
             last_complete_observed_day=self._last_complete,
             complete_days_observed=self._complete_days,
+            decision_start=self._marks is not None and bool(self._marks[lo]),
         )
+        instructions = self._ask(day_input, span_count)
+        self._day_input = day_input
+        self._active = _ActiveDecision(ordinal, label, expected, offset, instructions, 0)
+        self._pending = PendingObservedCivilDay.empty(ordinal, label, self._timezone, expected)
+
+    def _ask(self, day_input: ControllerDayInput, span_count: int) -> DispatchInstructions:
         decision = self._controller.decide_day(day_input, self._policy_state)
         if not isinstance(decision, ControllerDayDecision):
             raise TypeError("a daily controller must return a ControllerDayDecision")
@@ -607,8 +651,48 @@ class _ControllerSession:
             raise ValueError(f"the daily decision covers {len(instructions)} steps; its decision span has {span_count}")
         self.instructions.bind_scalars(instructions)
         self._policy_state = decision.next_policy_state
-        self._active = _ActiveDecision(ordinal, label, expected, offset, instructions, 0)
-        self._pending = PendingObservedCivilDay.empty(ordinal, label, self._timezone, expected)
+        return instructions
+
+    def _decide_within(self, position: int, battery_state: ControllerBatteryState) -> None:
+        """Decide the rest of the current logical day again from the marked step ``position``."""
+        active = self._active
+        if active is None or self._day < 0 or not self._day_starts[self._day] <= position < self._n_steps:
+            raise RuntimeError(f"step {position} is not inside a decided civil day")
+        lo = self._day_starts[self._day]
+        ranges, next_start = self._logical_day(lo)
+        ranges[0] = range(position, ranges[0].stop)
+        span_count = len(active.instructions) - active.cursor
+        if sum(len(part) for part in ranges) != span_count:
+            # A day resumed across an A2 seam is the head part only.
+            ranges = [range(position, self._day_starts[self._day + 1])]
+        offset = active.civil_slot_offset + active.cursor
+        base = self._day_input
+        day_input = ControllerDayInput(
+            projection_year=self._projection_year,
+            project_step_ordinal=self._base_step + position,
+            logical_day_ordinal=active.logical_day_ordinal,
+            local_date=date.fromisoformat(active.local_date),
+            timezone=self._timezone,
+            expected_slot_keys=active.expected_slot_keys,
+            decision_step_count=span_count,
+            segment_offset=0,
+            segment_step_count=self._day_starts[self._day + 1] - position,
+            civil_slot_offset=offset,
+            initial_partial_day=False if base is None else base.initial_partial_day,
+            clipped_start=False if base is None else base.clipped_start,
+            clipped_end=offset + span_count < len(active.expected_slot_keys),
+            tariff=self._horizon(ranges, next_start),
+            battery_config=self._battery_config,
+            battery_state=battery_state,
+            last_complete_observed_day=self._last_complete,
+            complete_days_observed=self._complete_days,
+            decision_start=True,
+            observed_today=self._pending,
+        )
+        instructions = self._ask(day_input, span_count)
+        self._active = _ActiveDecision(
+            active.logical_day_ordinal, active.local_date, active.expected_slot_keys, offset, instructions, 0
+        )
 
     def _continue_carried(self, present: tuple[SlotKey, ...]) -> bool:
         """Resume a day that began before this call, when the replay continues it."""
@@ -638,7 +722,8 @@ class _ControllerSession:
         active = self._active
         if active is None:
             raise RuntimeError("a dispatch segment began before its civil day was decided")
-        end = min(window_end, self._day_starts[self._day + 1])
+        # A marked step ends the segment, so its decision sees the state there.
+        end = min(window_end, self._day_starts[self._day + 1], int(self._next_mark[position + 1]))
         count = end - position
         self.instructions.write(position, active.instructions, active.cursor, count)
         self._segment = (position, end, active.civil_slot_offset + active.cursor)

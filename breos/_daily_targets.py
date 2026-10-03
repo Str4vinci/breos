@@ -28,7 +28,10 @@ the efficiencies fixed over its whole window, as the legacy tool held them
 over a project year.
 
 Days are civil days (ADR 0002 A1), given as the resolved tariff's
-``day_starts``. The legacy tool used positional ``steps_per_day`` windows.
+``day_starts``, or charge windows (A19): a "day" then runs from the start of
+one charge window to the start of the next (:func:`charge_window_day_starts`).
+The planner only needs a partition of the steps. The legacy tool used
+positional ``steps_per_day`` windows.
 Production still advances health on positional degradation windows, so a
 closed-loop controller that plans civil days will run a degradation window
 in two ``_dispatch_day`` calls when a civil day starts inside it. Carrying
@@ -144,6 +147,37 @@ def daily_target_instructions(
     )
 
 
+def charge_window_starts(charge: np.ndarray, *, previous_charge: bool = False) -> np.ndarray:
+    """Where a charge window starts: a charge step that does not follow one.
+
+    ``charge`` marks the charge steps in time order. A window is a maximal run
+    of consecutive charge steps, so adjacent charge periods form one window and
+    a window may cross midnight or last several days (an off-peak weekend).
+    ``previous_charge`` says whether the step before the first was a charge
+    step; the first step starts a window when it is a charge step and that one
+    was not.
+    """
+    charge = np.asarray(charge, dtype=np.bool_)
+    before = np.empty_like(charge)
+    if len(charge):
+        before[0] = previous_charge
+        before[1:] = charge[:-1]
+    return charge & ~before
+
+
+def charge_window_day_starts(instructions: DispatchInstructions) -> tuple[int, ...]:
+    """Day starts that give one target per charge window, for a planning problem.
+
+    A charge step is one with a finite grid target. Each window start begins
+    a planning day that runs to the next window start, so a target holds from
+    its window's start until the next window starts. Step 0 always begins a
+    day: the steps before the first window, if any, form a day of their own.
+    """
+    charge = ~np.isnan(instructions.grid_target_fraction)
+    starts = np.flatnonzero(charge_window_starts(charge))
+    return (0, *(int(start) for start in starts if start > 0), len(instructions))
+
+
 def _checked_day_starts(day_starts: Sequence[int], n_steps: int) -> np.ndarray:
     starts = np.asarray(day_starts)
     if starts.ndim != 1 or len(starts) < 1 or not np.issubdtype(starts.dtype, np.integer):
@@ -217,16 +251,28 @@ class DailyTargetProblem:
         load_w: Any,
         temperature_c: Any,
         freq: str,
+        decision_boundary: str = "civil_day",
         **state: float,
     ) -> DailyTargetProblem:
-        """A problem on ``tariff``'s calendar: its prices and civil days."""
+        """A problem on ``tariff``'s calendar: its prices, and its civil days or charge windows.
+
+        ``decision_boundary`` is ``"civil_day"``, one target per civil day, or
+        ``"charge_window_start"``, one per charge window of ``instructions``
+        (ADR 0002 A19).
+        """
+        if decision_boundary == "civil_day":
+            day_starts = tuple(tariff.day_starts)
+        elif decision_boundary == "charge_window_start":
+            day_starts = charge_window_day_starts(instructions)
+        else:
+            raise ValueError("'decision_boundary' must be 'civil_day' or 'charge_window_start'")
         return cls(
             pv_dc_w=pv_dc_w,
             load_w=load_w,
             temperature_c=temperature_c,
             import_price_per_kwh=np.asarray(tariff.import_price_per_kwh),
             export_price_per_kwh=np.asarray(tariff.export_price_per_kwh),
-            day_starts=tariff.day_starts,
+            day_starts=day_starts,
             instructions=instructions,
             battery_config=battery_config,
             hours_per_step=get_hours_per_step(freq),

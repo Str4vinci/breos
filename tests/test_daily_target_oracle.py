@@ -284,3 +284,56 @@ def test_yearly_replanning_holds_each_years_targets():
     assert result.replay.year_instruction_hashes == tuple(
         plan.instructions.instruction_hash() for plan in result.year_plans
     )
+
+
+# -- charge-window boundary (ADR 0002 A19) ---------------------------------------
+
+
+def _window_targets(instructions, starts):
+    """Each planning day's distinct grid targets on its charge steps."""
+    target = instructions.grid_target_fraction
+    return [set(target[lo:hi][~np.isnan(target[lo:hi])].tolist()) for lo, hi in zip(starts, starts[1:])]
+
+
+def test_the_oracle_plans_one_target_per_charge_window():
+    # Bi-hourly off-peak runs 22:00-08:00, so each window crosses midnight.
+    case = prepare_replay(_config(5, smart_charging=HOLD))
+    result = run_daily_target_oracle(case, **PLANNER, decision_boundary="charge_window_start")
+    problem = result.problem
+    labels = np.asarray(case.tariff.period_labels)
+    hours = case.index.tz_convert("Europe/Lisbon").hour
+
+    # Day 0 begins the run; every other planning day begins at a 22:00 window start.
+    starts = problem.day_starts
+    assert starts[0] == 0 and starts[-1] == len(labels)
+    assert all(hours[start] == 22 and labels[start - 1] == "peak" for start in starts[1:-1])
+    assert problem.n_days == 6 and result.decision_boundary == "charge_window_start"
+    # One target, and one held floor, from each window start to the next.
+    for targets in _window_targets(result.instructions, starts):
+        assert len(targets) == 1
+    _held_floor_follows_the_target(result.instructions)
+    assert result.instructions == daily_target_instructions(case.configured_instructions(), starts, result.plan.targets)
+    assert result.replay.first_year_step_cost.sum() == pytest.approx(result.plan.stage_cost, rel=1e-3)
+    assert report(result, case)["planner"]["decision_boundary"] == "charge_window_start"
+
+    civil = run_daily_target_oracle(case, **PLANNER)
+    assert civil.problem.day_starts == case.tariff.day_starts
+    assert report(civil, case)["planner"]["decision_boundary"] == "civil_day"
+
+
+def test_the_oracle_refuses_an_unknown_decision_boundary():
+    with pytest.raises(ValueError, match="'decision_boundary' must be one of"):
+        run_daily_target_oracle(prepare_replay(_config(1)), decision_boundary="hourly")
+
+
+def test_the_command_line_plans_charge_windows(tmp_path):
+    config = tmp_path / "config.json"
+    config.write_text(json.dumps(_config(2)), encoding="utf-8")
+    output, days = tmp_path / "dp.json", tmp_path / "days.csv"
+    argv = ["--config", str(config), "--output", str(output), "--csv", str(days), "--target-levels", "3"]
+    assert main([*argv, "--decision-boundary", "charge_window_start"]) == 0
+    summary = json.loads(output.read_text(encoding="utf-8"))
+    assert summary["planner"]["decision_boundary"] == "charge_window_start"
+    # The run opens in the 00:00-08:00 window; every later window starts at 22:00.
+    frame = pd.read_csv(days, comment="#")
+    assert frame["day_start"].str.slice(11, 16).tolist() == ["00:00", "22:00", "22:00"]

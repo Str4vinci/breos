@@ -968,6 +968,7 @@ def test_provenance_identifies_the_policy_and_its_executed_trace(monkeypatch):
     assert set(record) == {
         "mode",
         "overlap_policy",
+        "decision_boundary",
         "experimental",
         "controller_version",
         "planner_version",
@@ -991,6 +992,7 @@ def test_provenance_identifies_the_policy_and_its_executed_trace(monkeypatch):
     assert {key: record[key] for key in record if not key.endswith(("_hash", "_stored_energy"))} == {
         "mode": "daily_persistence",
         "overlap_policy": "reject",
+        "decision_boundary": "civil_day",
         "experimental": True,
         "controller_version": CONTROLLER_VERSION,
         "planner_version": PLANNER_VERSION,

@@ -30,7 +30,9 @@ controller (``breos._daily_persistence``) re-plans every civil day from a
 forecast that repeats the last complete observed day. It has no static
 instructions, so :func:`resolve_instructions` refuses it. It also takes
 ``hold_target`` (A18): on a period in both sets the floor is each day's
-planned target.
+planned target. With ``decision_boundary = "charge_window_start"`` (A19) it
+decides one target at the start of each charge window instead of each civil
+day, held until the next window starts.
 """
 
 from __future__ import annotations
@@ -64,8 +66,12 @@ PLANNER_SETTINGS: dict[str, tuple[int, int]] = {
 # The planner's wear cost (ADR 0002 A17), a planner setting that is a price,
 # not an integer: currency per kWh of DC energy the battery discharges.
 WEAR_COST_KEY = "wear_cost_per_kwh"
-# Every planner setting, the integers and the wear cost.
-PLANNER_KEYS = (*PLANNER_SETTINGS, WEAR_COST_KEY)
+# When the planner decides (ADR 0002 A19): at each configured-zone civil
+# midnight, the default, or at the start of each charge window.
+DECISION_BOUNDARY_KEY = "decision_boundary"
+DECISION_BOUNDARIES = ("civil_day", "charge_window_start")
+# Every planner setting: the integers, the wear cost and the decision boundary.
+PLANNER_KEYS = (*PLANNER_SETTINGS, WEAR_COST_KEY, DECISION_BOUNDARY_KEY)
 # Normal App runs carry stored energy, origin shares and degradation from one
 # project year into the next (ADR 0002, boundary and terminal conventions).
 TERMINAL_CONVENTION = "physical_carry"
@@ -82,9 +88,10 @@ class SmartChargingSpec:
 
     ``fixed_target`` needs ``target_usable_fraction``. ``daily_persistence``
     refuses it, since the planner picks each day's target, and takes the
-    planner settings instead: three integers and ``wear_cost_per_kwh``, a
+    planner settings instead: three integers, ``wear_cost_per_kwh``, a
     planning weight in currency per kWh of battery DC discharge (0 when
-    unset). ``discharge_only`` takes
+    unset), and ``decision_boundary``, when each target is decided
+    (``"civil_day"`` when unset). ``discharge_only`` takes
     ``discharge_periods`` alone: it never charges from the grid, so every
     grid-charging setting stays unset. A planner setting left None is filled
     with the planner's default, so a resolved spec always holds the values
@@ -104,6 +111,7 @@ class SmartChargingSpec:
     soc_states: int | None = None
     overlap_policy: str = "reject"
     wear_cost_per_kwh: float | None = None
+    decision_boundary: str | None = None
 
     def __post_init__(self) -> None:
         if self.mode not in SMART_CHARGING_MODES:
@@ -166,6 +174,12 @@ class SmartChargingSpec:
                 object.__setattr__(self, name, int(value))
             wear = 0.0 if self.wear_cost_per_kwh is None else self.wear_cost_per_kwh
             object.__setattr__(self, WEAR_COST_KEY, check_wear_cost(wear, f"smart_charging.{WEAR_COST_KEY}"))
+            boundary = "civil_day" if self.decision_boundary is None else self.decision_boundary
+            if boundary not in DECISION_BOUNDARIES:
+                raise ValueError(
+                    f"'smart_charging.{DECISION_BOUNDARY_KEY}' must be one of: {', '.join(DECISION_BOUNDARIES)}"
+                )
+            object.__setattr__(self, DECISION_BOUNDARY_KEY, boundary)
         else:
             given = [name for name, value in planner.items() if value is not None]
             if given:
@@ -218,7 +232,11 @@ def resolve_instructions(spec: SmartChargingSpec, tariff: ResolvedTariff | None)
 
 
 def check_tariff_periods(spec: SmartChargingSpec, tariff: ResolvedTariff) -> None:
-    """Raise ValueError if ``spec`` names a period that ``tariff``'s schedule does not have."""
+    """Raise ValueError if ``spec`` names a period that ``tariff``'s schedule does not have.
+
+    Also when ``spec`` decides at charge-window starts and every period is a
+    charge period: a window would then never end.
+    """
     periods = set(tariff.schedule.periods)
     for name in ("charge_periods", "discharge_periods"):
         unknown = sorted(set(getattr(spec, name)) - periods)
@@ -227,6 +245,16 @@ def check_tariff_periods(spec: SmartChargingSpec, tariff: ResolvedTariff) -> Non
                 f"'smart_charging.{name}' has period(s) {', '.join(unknown)} that schedule "
                 f"{tariff.schedule.identifier!r} does not have. Its periods: {', '.join(sorted(periods))}."
             )
+    check_charge_windows(spec.decision_boundary, spec.charge_periods, tariff.schedule.periods)
+
+
+def check_charge_windows(decision_boundary: str | None, charge_periods: Any, periods: Any) -> None:
+    """Raise ValueError if charge windows are the decision boundary and every period charges."""
+    if decision_boundary == "charge_window_start" and set(periods) <= set(charge_periods):
+        raise ValueError(
+            f"'smart_charging.{DECISION_BOUNDARY_KEY}' = 'charge_window_start' needs a tariff period outside "
+            "charge_periods: with every period a charge period, a charge window never ends"
+        )
 
 
 def period_layout(spec: SmartChargingSpec, period_labels: Any, target_usable_fraction: float) -> DispatchInstructions:

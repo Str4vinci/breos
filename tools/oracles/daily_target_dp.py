@@ -30,7 +30,13 @@ so the planned-against-delivered comparison isolates what health moving
 during the year changed. With perfect foresight and one plan for the whole
 window, the replayed cost and the plan's stage cost differ only by that.
 
-Days are the tariff's civil days (ADR 0002 A1). By default, energy that
+Days are the tariff's civil days (ADR 0002 A1), or with
+``decision_boundary = "charge_window_start"`` (``--decision-boundary``) the
+charge windows of the layout (A19): each window's target is chosen at its
+start and holds until the next window starts, as ``daily_persistence``
+decides under the same boundary. The steps before the first window form a
+planning day of their own, and under ``yearly`` planning a window that
+crosses the year seam takes a new target at the year start. By default, energy that
 ends the year below full is bought back at the cheapest price a charge
 step may pay, so the plan does not drain the battery on the last day
 (``free_terminal`` drops the refill).
@@ -95,6 +101,7 @@ from breos.app_inputs import reuse_prepared_inputs
 from breos.battery import _resolve_dispatch_day, _ResultBuffers, _step_energy_cap, align_simulation_inputs
 from breos.dispatch_instructions import DispatchInstructions
 from breos.projection import YearStart
+from breos.smart_charging import DECISION_BOUNDARIES
 from breos.tariffs import result_currency
 from tools.oracles._output import load_config, write_csv, write_json
 from tools.oracles.replay import (
@@ -160,8 +167,10 @@ class YearlyDailyTargetPlanner:
         soc_states: int,
         free_terminal: bool,
         execution_backend: str,
+        decision_boundary: str = "civil_day",
     ) -> None:
         self.case = case
+        self.decision_boundary = decision_boundary
         self.layout = case.configured_instructions()
         self.target_levels = target_levels
         self.soc_states = soc_states
@@ -185,6 +194,7 @@ class YearlyDailyTargetPlanner:
             load_w=aligned.load_w,
             temperature_c=aligned.temperature_c,
             freq=freq,
+            decision_boundary=self.decision_boundary,
             soh_fraction=state.soh_fraction,
             eff_charge=state.charge_efficiency,
             eff_discharge=state.discharge_efficiency,
@@ -246,10 +256,13 @@ class DailyTargetOracleResult:
     planning: str = "first_year"
     year_plans: tuple[YearPlan, ...] = ()
     schema: str = DP_ORACLE_SCHEMA
+    decision_boundary: str = "civil_day"
 
 
-def daily_target_problem(case: ReplayCase) -> DailyTargetProblem:
+def daily_target_problem(case: ReplayCase, decision_boundary: str = "civil_day") -> DailyTargetProblem:
     """``case``'s first project year as a daily-target problem on its fixed-target layout.
+
+    ``decision_boundary`` partitions it into civil days or charge windows.
 
     Raises:
         ValueError: If the configuration has no fixed-target ``[smart_charging]`` table.
@@ -266,6 +279,7 @@ def daily_target_problem(case: ReplayCase) -> DailyTargetProblem:
         load_w=aligned.load_w,
         temperature_c=aligned.temperature_c,
         freq=case.resolved.cfg["resolution"],
+        decision_boundary=decision_boundary,
     )
 
 
@@ -340,6 +354,7 @@ def run_daily_target_oracle(
     tolerance: Tolerance = DEFAULT_REPLAY_TOLERANCE,
     execution_backend: str | None = None,
     planning: str = "first_year",
+    decision_boundary: str = "civil_day",
 ) -> DailyTargetOracleResult:
     """Plan ``case`` one target per day, replay the plan and App's fixed-target run.
 
@@ -347,9 +362,13 @@ def run_daily_target_oracle(
     docstring). ``soc_states`` and ``target_levels`` set the program's grid
     of stored energy and of targets. The planner and the replays run on the
     configuration's execution backend unless ``execution_backend`` names one.
+    ``decision_boundary`` plans one target per civil day (the default) or per
+    charge window (ADR 0002 A19).
     """
     if planning not in PLANNING_MODES:
         raise ValueError(f"'planning' must be one of {', '.join(PLANNING_MODES)}")
+    if decision_boundary not in DECISION_BOUNDARIES:
+        raise ValueError(f"'decision_boundary' must be one of {', '.join(DECISION_BOUNDARIES)}")
     backend = execution_backend or case.resolved.cfg.get("execution_backend", "python")
     if planning == "yearly":
         return _run_yearly(
@@ -359,8 +378,9 @@ def run_daily_target_oracle(
             free_terminal=free_terminal,
             tolerance=tolerance,
             backend=backend,
+            decision_boundary=decision_boundary,
         )
-    problem = daily_target_problem(case)
+    problem = daily_target_problem(case, decision_boundary)
     started = time.perf_counter()
     plan = solve_daily_targets(
         problem,
@@ -386,6 +406,7 @@ def run_daily_target_oracle(
         target_levels=target_grid(target_levels),
         soc_states=int(soc_states),
         free_terminal=free_terminal,
+        decision_boundary=decision_boundary,
     )
 
 
@@ -397,6 +418,7 @@ def _run_yearly(
     free_terminal: bool,
     tolerance: Tolerance,
     backend: str,
+    decision_boundary: str = "civil_day",
 ) -> DailyTargetOracleResult:
     daily_target_problem(case)  # the same table check as the first-year mode
     planner = YearlyDailyTargetPlanner(
@@ -405,6 +427,7 @@ def _run_yearly(
         soc_states=soc_states,
         free_terminal=free_terminal,
         execution_backend=backend,
+        decision_boundary=decision_boundary,
     )
     replay = replay_instructions(case, planner, execution_backend=backend)
     first = planner.plans[0]
@@ -425,6 +448,7 @@ def _run_yearly(
         free_terminal=free_terminal,
         planning="yearly",
         year_plans=tuple(planner.plans),
+        decision_boundary=decision_boundary,
     )
 
 
@@ -500,6 +524,7 @@ def report(result: DailyTargetOracleResult, case: ReplayCase) -> dict[str, Any]:
         "cost_basis": "first project year import cost less export revenue; standing charge excluded",
         "planner": {
             "planning": result.planning,
+            "decision_boundary": result.decision_boundary,
             "target_levels": result.target_levels.tolist(),
             "soc_states": result.soc_states,
             "free_terminal": result.free_terminal,
@@ -540,7 +565,7 @@ def report(result: DailyTargetOracleResult, case: ReplayCase) -> dict[str, Any]:
 
 
 def days_frame(result: DailyTargetOracleResult, case: ReplayCase) -> pd.DataFrame:
-    """One row per civil day: its target, and its planned and replayed cost and end energy."""
+    """One row per planning day (civil day or charge window): its target, and its planned and replayed cost and end energy."""
     starts = np.asarray(result.problem.day_starts)
     first, last = starts[:-1], starts[1:] - 1
     delivered = result.replay.artifacts.first_year_results_df["Battery_Energy_End"].to_numpy()
@@ -558,7 +583,7 @@ def days_frame(result: DailyTargetOracleResult, case: ReplayCase) -> pd.DataFram
 
 
 def year_days_frame(result: DailyTargetOracleResult, case: ReplayCase) -> pd.DataFrame:
-    """One row per project year and civil day of a yearly plan: the target it chose."""
+    """One row per project year and planning day of a yearly plan: the target it chose."""
     first = np.asarray(result.problem.day_starts)[:-1]
     day_start = case.index[first].astype(str)
     return pd.concat(
@@ -584,6 +609,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument(
         "--planning", choices=PLANNING_MODES, default="first_year", help="Plan the first year, or replan every year"
     )
+    parser.add_argument(
+        "--decision-boundary",
+        choices=DECISION_BOUNDARIES,
+        default="civil_day",
+        help="One target per civil day (default), or per charge window from its start",
+    )
     parser.add_argument("--target-levels", type=int, default=DEFAULT_TARGET_LEVELS, help="Targets from 0 to 1")
     parser.add_argument("--soc-states", type=int, default=DEFAULT_SOC_STATES, help="Stored-energy grid points")
     parser.add_argument("--free-terminal", action="store_true", help="Do not buy back energy the year ends without")
@@ -601,6 +632,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             tolerance=Tolerance(atol_wh=args.atol_wh),
             execution_backend=args.execution_backend,
             planning=args.planning,
+            decision_boundary=args.decision_boundary,
         )
     write_json(report(result, case), args.output)
     if args.csv:
