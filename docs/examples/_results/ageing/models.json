@@ -1,0 +1,120 @@
+[
+ {
+  "model": "native_v1",
+  "label": "Native LFP, v1 field fit",
+  "engine": "native",
+  "model_key": "naumann_lam_field_calibrated_v1",
+  "chemistry": "LFP/graphite",
+  "cell_capacity_ah": null,
+  "basis": "field-calibrated",
+  "first_end_of_life_years": 10.1096,
+  "battery_soh_end_pct": 50.98,
+  "experimental_range_warnings": [],
+  "experimental_range": null
+ },
+ {
+  "model": "native_v2",
+  "label": "Native LFP, v2 field fit",
+  "engine": "native",
+  "model_key": "naumann_lam_field_calibrated_v2",
+  "chemistry": "LFP/graphite",
+  "cell_capacity_ah": null,
+  "basis": "field-calibrated",
+  "first_end_of_life_years": 15.463,
+  "battery_soh_end_pct": 64.54,
+  "experimental_range_warnings": [],
+  "experimental_range": null
+ },
+ {
+  "model": "lfp_gr_250ah_prismatic",
+  "label": "BLAST LFP-Gr 250 Ah",
+  "engine": "blast",
+  "model_key": "lfp_gr_250ah_prismatic",
+  "chemistry": "LFP/graphite",
+  "cell_capacity_ah": 250.0,
+  "basis": "cell model",
+  "first_end_of_life_years": null,
+  "battery_soh_end_pct": 83.4,
+  "experimental_range_warnings": [
+   "c_rate_charge",
+   "dod"
+  ],
+  "experimental_range": {
+   "cycling_temperature_c": [
+    10,
+    45
+   ],
+   "dod": [
+    0.8,
+    1.0
+   ],
+   "soc": [
+    0,
+    1
+   ],
+   "max_c_rate_charge": 0.65,
+   "max_c_rate_discharge": 1.0
+  }
+ },
+ {
+  "model": "lfp_gr_sonymurata_3ah",
+  "label": "BLAST LFP-Gr 3 Ah",
+  "engine": "blast",
+  "model_key": "lfp_gr_sonymurata_3ah",
+  "chemistry": "LFP/graphite",
+  "cell_capacity_ah": 3.0,
+  "basis": "cell model",
+  "first_end_of_life_years": null,
+  "battery_soh_end_pct": 83.0,
+  "experimental_range_warnings": [
+   "dod",
+   "temperature_c"
+  ],
+  "experimental_range": {
+   "cycling_temperature_c": [
+    20,
+    40
+   ],
+   "dod": [
+    0.8,
+    1.0
+   ],
+   "soc": [
+    0,
+    1
+   ],
+   "max_c_rate_charge": 1.0,
+   "max_c_rate_discharge": 2.0
+  }
+ },
+ {
+  "model": "nmc_gr_50ah_b1",
+  "label": "BLAST NMC-Gr 50 Ah",
+  "engine": "blast",
+  "model_key": "nmc_gr_50ah_b1",
+  "chemistry": "NMC/graphite",
+  "cell_capacity_ah": 50.0,
+  "basis": "cell model",
+  "first_end_of_life_years": null,
+  "battery_soh_end_pct": 75.6,
+  "experimental_range_warnings": [
+   "dod"
+  ],
+  "experimental_range": {
+   "cycling_temperature_c": [
+    10,
+    45
+   ],
+   "dod": [
+    0.8,
+    1.0
+   ],
+   "soc": [
+    0,
+    1
+   ],
+   "max_c_rate_charge": 1.75,
+   "max_c_rate_discharge": 1.75
+  }
+ }
+]

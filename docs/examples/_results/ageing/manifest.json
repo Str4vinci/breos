@@ -1,0 +1,44 @@
+{
+ "case": "ageing",
+ "title": "Battery ageing with different degradation models",
+ "breos_version": "0.7.0",
+ "git_describe": "v0.7.0-49-g9e3deed-dirty",
+ "generated_utc": "2026-10-03T22:19:48+00:00",
+ "runtime_s": 18.0,
+ "cheap": false,
+ "configs": {
+  "configs/examples/quickstart.toml": "f6c4bca0d4c3b28c126e5eb3bd8e41f12fb0f144297447dfe7b530202c759156"
+ },
+ "weather": {
+  "validation/data/weather/porto_tmy_2005_2023_pvgis-sarah3.csv.gz": {
+   "sha256": "bf84e31b02ad9bf39f331a5ce8629b1ea8f80cd1597748e72a87a0fce56b4f15",
+   "attribution": "PVGIS typical meteorological year 2005-2023 (PVGIS-SARAH3). PVGIS data © European Union, 2001-2024, reused under Commission Decision 2011/833/EU."
+  }
+ },
+ "dependencies": {
+  "python": "3.13.14",
+  "numpy": "2.4.6",
+  "pandas": "3.0.5",
+  "pvlib": "0.15.2",
+  "scipy": "1.17.1",
+  "numba": "0.66.0",
+  "pymoo": "0.6.2"
+ },
+ "currency": "EUR",
+ "timezone": "Europe/Lisbon",
+ "overrides": {
+  "battery_enable_replacement": false
+ },
+ "battery_eol_percentage": 0.7,
+ "imposed_stress": {
+  "source": "native_v1",
+  "mean_soc_pct": 44.41,
+  "mean_cell_temperature_c": 20.5,
+  "fec_per_year": 270.82
+ },
+ "files": {
+  "models.json": "73cfd46e86e5193d00e63af38d11bced69852d70cd729253e59b6fb358948d6e",
+  "simulated.csv": "480fb2a55584f285ca416cbd4043379d780cd2f5b6cea00df63615ac1dc4e31b",
+  "imposed.csv": "aa5d52af9fcb08aca29d4adae65f7ede6d4b70aa949ff8d3a53e629a9ccb2341"
+ }
+}
