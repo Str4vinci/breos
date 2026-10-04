@@ -8,7 +8,8 @@ swap ``battery_replacement_min_remaining_years`` or
 charges nor discharges, whatever the dispatch instructions say, and the
 project finishes as a PV-only system. Every earlier step and cash flow is
 unchanged, and no replacement is bought. The default ``"keep"`` changes
-nothing.
+nothing, except that a kept pack whose health reaches zero is retired the
+same way (#413).
 """
 
 from __future__ import annotations
@@ -520,3 +521,54 @@ def test_a_blast_pack_retires_the_same_way():
     # No cycles after retirement; at zero charge the health barely moves.
     soh = retire[4]["SOH"].to_numpy()
     assert soh[3] <= soh[2] <= soh[1] and soh[1] - soh[3] < 1e-6
+
+
+# -- a kept pack at zero health (#413) ---------------------------------------------------
+
+# A native pack at 0.2 % health on the test series crosses its threshold at
+# the first close (step 23) and reaches zero health at the third (step 71).
+ZERO_AT_THIRD_CLOSE = {"initial_soh": 0.2, "eol_percentage": 0.70}
+
+
+@pytest.mark.parametrize(
+    ("skip", "reason"),
+    [
+        ({"enable_replacement": False}, "replacement_disabled"),
+        ({"replacement_min_remaining_years": 10.0}, "min_remaining_years"),
+    ],
+)
+def test_a_kept_pack_retires_when_its_health_reaches_zero(skip, reason):
+    run = _run(96, **ZERO_AT_THIRD_CLOSE, **skip)
+    events = _events(run)
+    assert [(e.step, e.action, e.reason) for e in events] == [(23, "kept", reason), (71, "retired", "zero_health")]
+    assert events[-1].soh_pct == 0.0
+    # Kept, it served until then; from the next step it is the PV-only system.
+    assert run[0]["Battery_Discharge_DC"].iloc[:72].sum() > 0.0
+    for column in PV_ONLY_COLUMNS:
+        np.testing.assert_array_equal(run[0][column].iloc[72:], _pv_only(96)[column].iloc[72:], err_msg=column)
+    for column in BATTERY_FLOW_COLUMNS:
+        assert (run[0][column].iloc[72:] == 0.0).all(), column
+    assert (run[0]["Battery_SOH"] >= 0.0).all()
+    assert run[5]["battery_retired"] is True
+
+
+def test_a_pack_at_zero_health_at_its_crossing_is_retired_once():
+    config = {"initial_soh": 0.0, "eol_percentage": 0.70, "enable_replacement": False}
+    keep = _run(96, **config)
+    retire = _run(96, **config, skipped_replacement_action="retire")
+    assert [(e.step, e.action, e.reason) for e in _events(keep)] == [
+        (23, "kept", "replacement_disabled"),
+        (23, "retired", "zero_health"),
+    ]
+    # Retired at the crossing already, so zero health records nothing more.
+    assert [(e.step, e.action, e.reason) for e in _events(retire)] == [(23, "retired", "replacement_disabled")]
+    # The same run otherwise: both retire the pack at that close.
+    _assert_same_run(keep, retire)
+
+
+def test_python_and_numba_retire_a_pack_at_zero_health_the_same_way():
+    _require_numba()
+    config = {**ZERO_AT_THIRD_CLOSE, "enable_replacement": False}
+    python = _run(96, **config)
+    assert _events(python)[-1].reason == "zero_health"
+    _assert_same_run(python, _run(96, backend="numba", **config))

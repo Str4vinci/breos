@@ -23,6 +23,7 @@ import breos.projection as projection_module
 from breos.app import App
 from breos.app_config import resolve_app_config
 from breos.app_inputs import AppRuntimeDependencies
+from breos.app_results import degradation_history_to_dicts
 from breos.battery import END_OF_LIFE_EVENTS_ATTR
 from breos.montecarlo import MonteCarloSettings, run_montecarlo
 from breos.optimization import evaluate_projected_design
@@ -278,6 +279,51 @@ def test_a_retired_pack_is_out_of_service_and_keeps_its_last_state():
     rows = app._artifacts.yearly_df
     assert rows["Battery_In_Service_Hours"].tolist() == [8760.0, retiring + 1.0, 0.0]
     assert np.isnan(rows["Battery_Cell_Temperature_Mean_C"].iloc[2])
+
+
+# At a fixed 60 °C with replacement off, these BLAST cells reach zero health
+# inside the horizon (#413).
+@pytest.mark.parametrize(
+    ("model", "years", "zero_year"),
+    [("nmc111_gr_sanyo_2ah", 6, 5), ("lmo_gr_nissanleaf_66ah_2nd", 3, 2)],
+)
+def test_a_kept_pack_at_zero_health_is_retired(model, years, zero_year):
+    app, frames = _app_with_frames(
+        projection_years=years,
+        battery_enable_replacement=False,
+        degradation_engine="blast",
+        blast_model=model,
+        battery_eol_percentage=0.7,
+        battery_temperature=60.0,
+        battery_indoor_model={"enabled": False},
+    )
+    result = app.result()
+    events = result["battery_end_of_life_events"]
+    assert [(e["year"], e["action"], e["reason"]) for e in events] == [
+        (1, "kept", "replacement_disabled"),
+        (zero_year, "retired", "zero_health"),
+    ]
+    assert events[1]["soh_pct"] == 0.0
+    assert result["battery_first_end_of_life_action"] == "kept"
+    history = result["battery_degradation_history"]
+    assert [entry["in_service"] for entry in history] == [year < zero_year for year in range(1, years + 1)]
+    for entry in history[zero_year:]:
+        assert entry["soh_pct"] == entry["fec"] == entry["discharge_throughput_kwh"] == 0.0
+        assert entry["mean_soc_pct"] is None and entry["mean_cell_temperature_c"] is None
+    # Stored energy and per-step health never go below zero.
+    for results, _ in frames:
+        assert (results["Battery_Energy"] >= 0.0).all() and (results["Battery_SOH"] >= 0.0).all()
+    assert [entry["soh_pct"] for entry in history] == [row["soh_pct"] for row in result["yearly"]]
+
+
+def test_blast_history_health_is_rounded_as_the_yearly_health():
+    app = _app(battery_enable_replacement=False, **BLAST)
+    rows = app._artifacts.yearly_df.copy()
+    # Rounded once this is 89.4; to 2 decimals and then 1, as yearly is, 89.5.
+    rows.loc[0, "Battery_SOH_%"] = 89.44602509354391
+    resolved = resolve_app_config(app._config)
+    history = degradation_history_to_dicts(rows, [], resolved, soh_digits=1)
+    assert history[0]["soh_pct"] == 89.5
 
 
 def test_a_pv_only_run_has_no_history():

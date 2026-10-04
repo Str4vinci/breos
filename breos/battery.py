@@ -162,7 +162,8 @@ class BatteryConfig:
     ``skipped_replacement_action`` decides what happens to a pack whose
     end-of-life swap is skipped, by the minimum service time, the terminal
     guard or ``enable_replacement = False``. ``"keep"`` (the default) leaves
-    it in service below its threshold. ``"retire"`` switches it off at the
+    it in service below its threshold until its health reaches zero, when it
+    is retired. ``"retire"`` switches it off at the
     crossing, the instant a swap would have been booked at: the stored
     energy leaves the system as a replacement's does, and from the next step
     the battery neither charges nor discharges, so PV serves the load and
@@ -935,12 +936,14 @@ END_OF_LIFE_ACTIONS: Tuple[str, ...] = ("replaced", "kept", "retired")
 # Why: the pack reached its threshold and a replacement was allowed; or the
 # swap was skipped because less than the minimum service time remained, or
 # because it fell in the span's final period with terminal replacement off,
-# or because replacement is disabled.
+# or because replacement is disabled; or a pack kept below its threshold
+# reached zero health and was retired.
 END_OF_LIFE_REASONS: Tuple[str, ...] = (
     "end_of_life",
     "min_remaining_years",
     "terminal_period",
     "replacement_disabled",
+    "zero_health",
 )
 
 
@@ -963,7 +966,8 @@ class EndOfLifeEvent:
     A replaced pack's successor can cross again, so a span may hold several
     replacements. A pack that stays in service below its threshold, or is
     retired, crosses once: later periods, and later spans that inherit it,
-    record nothing more. A pack continued from an earlier span (through
+    record nothing more, except that a kept pack whose health reaches zero
+    is retired then, an event with the reason ``"zero_health"``. A pack continued from an earlier span (through
     ``initial_degradation_state``) at or below its threshold has already
     crossed there, unless this span replaces it. A fresh pack that starts at
     or below its threshold crosses at its first period close.
@@ -1300,7 +1304,8 @@ def _apply_daily_degradation(
     recorded; only the swap is skipped. A crossing is recorded on
     ``aging.end_of_life_events``, with what was done and why. A skipped swap
     with ``skipped_replacement_action = "retire"`` switches the pack off at
-    the period's close; a retired pack is never replaced.
+    the period's close, and so does a kept pack's period that closes at zero
+    health; a retired pack is never replaced.
     """
     period_steps = len(soc_absolute_day)
     period_seconds = period_steps * hours_per_step * 3600.0
@@ -1374,6 +1379,7 @@ def _apply_daily_degradation(
         aging.past_end_of_life = False
     else:
         cycle_degradation_for_row = degradation_step.cycle_degradation
+        retire = False
         if reached_end_of_life and not aging.past_end_of_life:
             reason = "replacement_disabled" if not battery_config.enable_replacement else replacement_skipped_by
             assert reason is not None
@@ -1382,22 +1388,29 @@ def _apply_daily_degradation(
                 EndOfLifeEvent(step_index, step_time, "retired" if retire else "kept", reason, aging.soh_percent)
             )
             aging.past_end_of_life = True
-            if retire:
-                # The pack's last cycles end here: the energy it holds is
-                # written off, not discharged, and it never cycles again.
-                cycle_degradation_for_row += _settle_terminal_cycles(aging, lifecycle)
-                battery_energy_wh, pv_origin_energy_wh, grid_origin_energy_wh, day_end_soc_absolute = (
-                    _apply_battery_retirement(
-                        aging,
-                        out,
-                        step_index=step_index,
-                        hours_per_step=hours_per_step,
-                        battery_energy_wh=battery_energy_wh,
-                        pv_origin_energy_wh=pv_origin_energy_wh,
-                        grid_origin_energy_wh=grid_origin_energy_wh,
-                        battery_energy_beginning=battery_energy_beginning,
-                    )
+        if not retire and not aging.retired and aging.soh_fraction <= 0.0:
+            # A kept pack at zero health has no capacity left to serve, so it
+            # is retired as a skipped swap's "retire" retires one.
+            retire = True
+            aging.end_of_life_events.append(
+                EndOfLifeEvent(step_index, step_time, "retired", "zero_health", aging.soh_percent)
+            )
+        if retire:
+            # The pack's last cycles end here: the energy it holds is
+            # written off, not discharged, and it never cycles again.
+            cycle_degradation_for_row += _settle_terminal_cycles(aging, lifecycle)
+            battery_energy_wh, pv_origin_energy_wh, grid_origin_energy_wh, day_end_soc_absolute = (
+                _apply_battery_retirement(
+                    aging,
+                    out,
+                    step_index=step_index,
+                    hours_per_step=hours_per_step,
+                    battery_energy_wh=battery_energy_wh,
+                    pv_origin_energy_wh=pv_origin_energy_wh,
+                    grid_origin_energy_wh=grid_origin_energy_wh,
+                    battery_energy_beginning=battery_energy_beginning,
                 )
+            )
 
     degradation_record = {
         "Datetime": step_time,

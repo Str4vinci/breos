@@ -155,9 +155,14 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   growth and round-trip efficiency. A quantity the degradation model does
   not supply is None, not 0: BLAST has no cycle and calendar split, and a
   retired pack keeps its last state with `in_service` false and no means
-  in the years after. Year rows gain `Battery_In_Service_Hours` and
-  `Battery_Cell_Temperature_Mean_C`, both None without a battery. Existing
-  fields are unchanged.
+  in the years after. The history's `soh_pct` is rounded as
+  `yearly[].soh_pct` is. Year rows gain `Battery_In_Service_Hours` and
+  `Battery_Cell_Temperature_Mean_C`, both None without a battery;
+  `Battery_Cell_Temperature_Mean_C` is also None in a year that starts with
+  the pack retired. `SimulationSummary.in_service_t_cell_sum` holds the cell
+  temperature summed over the steps the pack served when the span retired
+  it, and `breos.battery.retiring_step` the step whose end retires it.
+  Existing fields are unchanged.
 - `[smart_charging] decision_boundary = "charge_window_start"`, a
   `daily_persistence` planner setting
   ([#406](https://github.com/Str4vinci/breos/issues/406), ADR 0002 A19),
@@ -237,6 +242,23 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   `{"costs": {"module-cost-per-w": None}}`, used to leave the old
   `module_cost_per_w` in place without an error; it now changes or removes
   that key. Results with underscore spellings do not change.
+- A battery kept below its end-of-life threshold whose state of health
+  reaches 0 is retired at the close of that degradation period
+  ([#413](https://github.com/Str4vinci/breos/issues/413), ADR 0003 E12).
+  Before, it stayed in service at zero capacity: the history reported it in
+  service, and a BLAST pack restored below 0 at the next project year moved
+  energy it did not hold, with stored energy down to −360 Wh and per-step
+  `Battery_SOH` down to −72 %. Now it follows the retire path: an
+  end-of-life event with action `"retired"` and reason `"zero_health"`
+  after the `"kept"` one, `in_service` false from that year, and PV-only
+  flows after it. A BLAST state restored below 0 starts at 0. On the BLAST
+  `lmo_gr_nissanleaf_66ah_2nd` cell at a fixed 60 °C with replacement off,
+  8 years, `npv_savings` moves from −3190.67 to −3190.85 and a later year's
+  grid import by up to 0.3 kWh; for `nmc111_gr_sanyo_2ah` it is unchanged
+  to the cent. The year the pack reaches 0 reports its `mean_soc_pct` over
+  the steps it served (32.65 % instead of 30.33 % for the second case).
+  Runs whose pack never reaches zero health, every default run among them,
+  are bit-identical.
 
 ## [0.7.0] - 2026-10-02
 

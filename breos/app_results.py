@@ -204,7 +204,8 @@ def degradation_history_to_dicts(
             {
                 "year": int(row["Year"]),
                 "in_service": retired_year is None or int(row["Year"]) < retired_year,
-                "soh_pct": round(soh, soh_digits),
+                # Rounded as yearly[].soh_pct is, so the two lists agree.
+                "soh_pct": round(round(soh, 2), soh_digits),
                 "capacity_kwh": round(capacity_kwh, 3),
                 "usable_capacity_kwh": round(capacity_kwh * window, 3),
                 "replacements": int(row["Replacements"]),
