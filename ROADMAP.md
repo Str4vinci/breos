@@ -45,8 +45,9 @@ for the tariff and smart-charging design.
   reconstruction, with GHI derived from DNI and DHI. The `solar_position`
   default changes from `"interval-start"` to `"weather"`, which reads the
   representative time of each step from the weather metadata. Both change
-  results and will ship with an upgrade note. AC-coupled batteries, as
-  accepted in ADR 0004. BLAST degradation under Monte Carlo is a candidate.
+  results and will ship with an upgrade note. AC-coupled batteries are
+  planned as accepted in ADR 0004. BLAST degradation under Monte Carlo is a
+  candidate.
 - **1.0** — flip to the recommended model defaults with a documented upgrade
   note.
 

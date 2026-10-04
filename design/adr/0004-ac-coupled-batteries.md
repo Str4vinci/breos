@@ -34,9 +34,9 @@ separate converters, so the PV and battery inverter limits are independent.
 
 This record specifies the topology, the models, the configuration, the
 accounting, the costs and the tests. It changes no code. It also estimates
-the implementation effort, as the issue asks, before any work is scheduled.
-Its open questions were decided on 2026-10-04, and the sections below follow
-those decisions.
+the implementation effort, as the issue asks. Its open questions were
+decided on 2026-10-04, the sections below follow those decisions, and the
+implementation is planned for 0.8.0.
 
 ## Current behaviour this record relies on
 
@@ -434,7 +434,7 @@ battery inverter, not the PV inverter:
   site limit. The conversion loss has no priority order. Both shares convert
   at the one operating point, so the PV share's DC moves with the operating
   point when grid AC joins it. In AC7 it rises by 3.902847 Wh with a 3000 W
-  battery inverter and falls by 1.698618 Wh with a 2000 W one, whose full
+  battery inverter and falls by 1.698617 Wh with a 2000 W one, whose full
   load is less efficient than PV's own part load. A grid-charge instruction
   therefore never reduces PV AC to the load or to the battery, but it can
   move the PV-origin stored energy by this part-load difference.
@@ -538,9 +538,12 @@ gains `pv_to_battery_kwh` (`breos/runners/app.py:314-335`).
 - **Replacement.** By default a battery replacement prices the pack, per kWh
   of storage (`replacement_event_cost`), in both topologies (ADR 0003 E3,
   E4). Decided 2026-10-04 (decision 6): App and Monte Carlo gain
-  `battery_replacement_cost`, the price at t = 0 of one replacement, a
-  non-negative number, as the optimizer's `[battery] replacement_cost` gives
-  it. Omitted, the price is today's pack price. A unit sold as pack and
+  `battery_replacement_cost`, the price at t = 0 of one replacement, as the
+  optimizer's `[battery] replacement_cost` gives it. It accepts only a
+  finite non-negative number or omission; unlike the optimizer key
+  (`breos/economics.py:130-155`) it takes no `"auto"` or `"calculate"`, since
+  omission already means the calculated price. Omitted, the price is today's
+  pack price. A unit sold as pack and
   inverter together is replaced at the unit's price by setting the key to
   it, without a separate inverter lifetime. The key is accepted in both
   topologies, as the optimizer's is. Booking time, inflation, learning and
@@ -549,7 +552,10 @@ gains `pv_to_battery_kwh` (`breos/runners/app.py:314-335`).
   excluded, as the inverter is now. The credit's `C0` stays the pack price
   that `replacement_event_cost` computes from `battery_cost_per_kwh`; it is
   never `battery_replacement_cost`, so a bundled replacement price does not
-  credit the inverter.
+  credit the inverter. This amends E10, whose `C0` is the replacement price
+  "including cost overrides" and is read today from `replacement_cost_each`
+  (`breos/projection.py:1247`), which a replacement override feeds. The E10
+  text is updated with the 0.8.0 implementation.
 - **Omissions.** Decided 2026-10-04 (decision 7): an inverter replacement on
   its own schedule and inverter standby consumption are out of scope, for the
   PV, hybrid and battery inverters alike. The battery standby loss
@@ -604,8 +610,17 @@ outlays and every cash flow are unchanged.
   `grid_charge_efficiency × eff_charge`. It is a flat price per stored
   kWh, as today; the part-load curve is not used there.
 - **Controllers** carry the instructions' scalars and require them equal
-  across a run (`breos/_controller.py:346-351`); `None` is one value there
-  like any other.
+  across a run (`breos/_controller.py:345-352`). They cannot take the AC
+  `None` as it is, because `None` already means "not bound yet" there: the
+  stored efficiency starts as `None` (`:336`), `bind_scalars` binds again
+  whenever it is still `None` (`:347`), and `executed` returns no
+  instructions while it is `None` (`:369`), so an AC-coupled run would lose
+  `controller_instructions`. The controller therefore gets its own unbound
+  marker, distinct from the AC `None`, and compares `None` with `None` as
+  equal. `period_layout` asserts a float efficiency
+  (`breos/smart_charging.py:269`) and accepts `None` for AC coupling. This is
+  PR 4's work; until then a day controller with an AC-coupled battery is
+  refused (see the rollout gates).
 
 ### C12. Retirement and replacement
 
@@ -792,7 +807,7 @@ rating.
   part-load ratio of 0.308 (3000 W) or 0.462 (2000 W). With grid AC the
   battery inverter runs at 0.729333 or at full load, and the PV share's DC
   is recomputed there, by C7's proportional split: it rises by 3.902847 Wh
-  at 3000 W and falls by 1.698618 Wh at 2000 W.
+  at 3000 W and falls by 1.698617 Wh at 2000 W.
 - **Target reached.** At 3000 W the grid AC is `required_ac`, and
   `Battery_Energy` lands on 4000 exactly; without the landing it would be
   4000.000000000002.
@@ -811,8 +826,10 @@ rating.
   W instead of `P_wh` would act as a 12 000 Wh inverter in that step: the
   first column would draw 1298.354007 Wh of grid AC at a part-load ratio of
   0.185.
-- **Tolerance.** Values are rounded to six decimals. A test compares them to
-  1e-9 relative, as P1 does, and `Battery_Energy` at 3000 W exactly.
+- **Tolerance.** The table shows the values rounded to six decimals. A test
+  compares the step's output with the full-precision helper values (the
+  script's, not the table's) to 1e-9 relative, as P1 does, and
+  `Battery_Energy` at 3000 W exactly.
 
 **Invariants**, tested on App-sized cases at hourly and 15-minute steps,
 Python and Numba:
@@ -855,10 +872,11 @@ Python and Numba:
 
 ## Implementation plan and effort
 
-Five PRs, about 12.5 working days for one developer, plus review and the
+Five PRs, about 13 working days for one developer, plus review and the
 platform CI runs each kernel change needs. The proposal said 11 days; the
-decisions of 2026-10-04 add about 1.5 for the App replacement price and its
-pack-only credit basis, the `None` hash, the rollout gates and AC7. A sixth,
+decisions of 2026-10-04 add about 2 for the App replacement price and its
+pack-only credit basis, the `None` hash, the controller's unbound marker,
+the rollout gates and AC7. A sixth,
 optional PR adds the performance steps. Once the work ships, this section is
 replaced by an implementation status, as in ADR 0002.
 
@@ -869,23 +887,24 @@ without its inverter:
   an AC-coupled `BatteryConfig` stops with a message that AC coupling is not
   implemented yet, so the DC step never runs an AC config.
 - PR 2 lifts that refusal for a direct `BatteryConfig`, for the reference
-  cases and the parity tests. No App, Monte Carlo or optimizer key selects
-  AC coupling yet.
+  cases and the parity tests, but still refuses a day controller with an
+  AC-coupled battery (C11). No App, Monte Carlo or optimizer key selects AC
+  coupling yet.
 - PR 3 adds the battery inverter price, and `calculate_costs` refuses an
   AC-coupled battery without it.
 - PR 4 is the first PR that exposes AC runs to App, Monte Carlo and the
   optimizer, and it refuses a missing price at configuration resolution. It
-  merges only after PR 3, so no AC-coupled economic run exists without a
-  required, validated price.
+  merges only after PR 3, so no App, Monte Carlo or optimizer run is
+  AC-coupled without a required, validated price.
 - AC coupling ships in 0.8.0 only after the C10 gates and the reference
   cases AC1–AC7 pass (decision 8).
 
 | PR | Scope | Effort | Main risk |
 |---|---|---|---|
 | 1 | `BatteryConfig.coupling` and the battery inverter fields with validation (DC refuses AC fields; AC requires the efficiency); `"ac"` refused at run time; the two ledger columns written as zeros; ledger schema 3.1; conservation helper with the new identities. No behaviour change. | 1.5 days | Golden or schema tests that list columns. |
-| 2 | `_dispatch_ac_step` with C7's reachability test, the day-loop branch, `P_wh` and the PV chain arrays in `_day_arguments` and `_simulate_core`, Numba registration, the PV origin input; `None` grid-charge efficiency in the instructions, its hash and its NaN at the kernel boundary; the PR 1 refusal lifted for a direct `BatteryConfig`; reference cases AC1–AC7, invariants P1–P6 at hourly and 15-minute steps, parity harness scenarios. | 4.5 days | DC bit identity, and Numba cold-compile time with a second step function. |
+| 2 | `_dispatch_ac_step` with C7's reachability test, the day-loop branch, `P_wh` and the PV chain arrays in `_day_arguments` and `_simulate_core`, Numba registration, the PV origin input; `None` grid-charge efficiency in the instructions, its hash and its NaN at the kernel boundary; the PR 1 refusal lifted for a direct `BatteryConfig`, a day controller with AC coupling still refused; reference cases AC1–AC7, invariants P1–P6 at hourly and 15-minute steps, parity harness scenarios. | 4.5 days | DC bit identity, and Numba cold-compile time with a second step function. |
 | 3 | Costs: `battery_inverter_cost_per_kw` with no default, PV inverter at the simple rate, `battery_inverter_cost`, the refusal of an AC-coupled battery without the price in `calculate_costs`. | 1.5 days | A missing price must fail, not price zero. |
-| 4 | App, Monte Carlo and optimizer keys, with the missing price refused at configuration resolution; rating resolution against nominal capacity; smart-charging rules for `grid_charge_efficiency`; planner evaluator and refill price; App `battery_replacement_cost` with the pack-only terminal credit; optimizer CAPEX per candidate; retirement test; provenance; regenerated config docs and golden provenance. | 3.5 days | Planner and controller paths that build `BatteryConfig` from a dict; a config path that reaches economics before the price check. |
+| 4 | App, Monte Carlo and optimizer keys, with the missing price refused at configuration resolution; rating resolution against nominal capacity; smart-charging rules for `grid_charge_efficiency`; the controller's unbound marker and `period_layout` for `None`, lifting PR 2's controller refusal; planner evaluator and refill price; App `battery_replacement_cost` with the pack-only terminal credit; optimizer CAPEX per candidate; retirement test; provenance; regenerated config docs and golden provenance. | 4 days | Planner and controller paths that build `BatteryConfig` from a dict; a config path that reaches economics before the price check. |
 | 5 | Docs: energy-balance and battery pages, configuration guide (with the omissions in C9), results guide (waterfall block, year-row diagnostics), CHANGELOG; ADR implementation status. | 1.5 days | None significant. |
 | 6 (optional) | PV chain memo for AC-coupled battery runs in Monte Carlo; PV chain hoisted across battery capacities in the optimizer. | 1 day | Memo key must include everything the PV inverter depends on. |
 
@@ -920,7 +939,9 @@ are answered here, and the body sections above follow the answers.
    and the key refused**, as proposed (C7). `instruction_hash` gives `None` a
    representation distinct from every float, so existing DC-coupled hashes
    do not change, and `_day_arguments` turns it into a float (NaN) at the
-   Numba boundary, so both backends keep one signature.
+   Numba boundary, so both backends keep one signature. The day controllers
+   get an unbound marker of their own, since they use `None` for that today
+   (C11).
 3. **`ac_output_scale`: the PV inverter only**, as proposed (C6).
 4. **Battery inverter rating: both the absolute and the per-kWh key**,
    mutually exclusive, one of them required for a battery with positive
@@ -934,7 +955,7 @@ are answered here, and the body sections above follow the answers.
    App and Monte Carlo replacement price, `battery_replacement_cost`, as the
    optimizer's `[battery] replacement_cost` (C9). Omitted, the replacement
    keeps today's pack-only price. The ADR 0003 E10 terminal credit stays
-   pack-only.
+   pack-only, which amends E10 (C9).
 7. **Inverter replacement and standby consumption: out of scope** for this
    work, for both topologies, and documented as omissions (C9).
 8. **Target release: 0.8.0**, after the gates in C10 and the reference cases
