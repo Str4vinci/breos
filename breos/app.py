@@ -77,7 +77,7 @@ def _is_zero(value: Any) -> bool:
 
 def _kept_amounts(table: Mapping[str, Any], change: Any, keys: Iterable[str], where: str) -> list[str]:
     """The non-zero amounts among ``keys`` in an old table that its revalue ``change`` does not restate."""
-    restated = {str(key).replace("-", "_") for key in change or {}}
+    restated = set(change or {})
     return [f"{where}.{key}" for key in keys if key in table and key not in restated and not _is_zero(table[key])]
 
 
@@ -92,6 +92,7 @@ def _check_currency_change(old: ResolvedAppConfig, currency: str, changes: Mappi
     removed, counts as restated. A cost preset carries its own currency and
     is checked when the new configuration resolves. The planner's wear
     weight is not a revaluation key, so a non-zero one cannot be restated.
+    ``changes`` has normalised keys (:func:`normalize_config_keys`).
     """
     if currency == old.currency:
         return
@@ -101,7 +102,7 @@ def _check_currency_change(old: ResolvedAppConfig, currency: str, changes: Mappi
         table = old.cfg.get(name)
         if not isinstance(table, Mapping) or (name in changes and changes[name] is None):
             continue
-        change = {str(key).replace("-", "_"): value for key, value in (changes.get(name) or {}).items()}
+        change = changes.get(name) or {}
         kept += _kept_amounts(table, change, _TARIFF_MONEY_KEYS, name)
         credit, credit_change = table.get("annual_network_credit"), change.get("annual_network_credit", {})
         if isinstance(credit, Mapping) and credit_change is not None:
@@ -232,11 +233,15 @@ class App:
         """
         if self._artifacts is None:
             raise RuntimeError("Call simulate() before revalue().")
+        # Hyphens and underscores name the same key, as in App, so a change
+        # spelled either way meets the key it changes or removes.
+        changes = normalize_config_keys(dict(changes))
         unknown = sorted(key for key in changes if key not in APP_CONFIG_FIELDS)
         if unknown:
             raise ValueError(f"Unknown config key(s) for revalue(): {', '.join(unknown)}")
-        config = _revalued_config(self._config, changes)
-        changed = sorted(key for key in config.keys() | self._config.keys() if config.get(key) != self._config.get(key))
+        old = normalize_config_keys(self._config)
+        config = _revalued_config(old, changes)
+        changed = sorted(key for key in config.keys() | old.keys() if config.get(key) != old.get(key))
         outside = [key for key in changed if key not in REVALUATION_KEYS]
         if outside:
             raise ValueError(

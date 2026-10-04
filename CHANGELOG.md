@@ -198,6 +198,11 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   for every `n_procs`. On a multi-core machine this can move a 15-minute
   money total in its last digit; hourly results do not change.
   `threadpoolctl` (3.5.0 or newer) becomes a dependency.
+- `App.revalue` reads hyphens and underscores in key names as the same key,
+  as `App` does. A change spelled with hyphens, such as
+  `{"costs": {"module-cost-per-w": None}}`, used to leave the old
+  `module_cost_per_w` in place without an error; it now changes or removes
+  that key. Results with underscore spellings do not change.
 
 ## [0.7.0] - 2026-10-02
 

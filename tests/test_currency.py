@@ -265,7 +265,15 @@ def test_revalue_into_another_currency_restates_every_cost():
         assert _named_amounts(error, "EUR") == sorted(f"costs.{key}" for key in usd if key != "module_cost_per_w")
         with pytest.raises(ValueError, match=r"cost_preset 'residential_pt' is priced in EUR, but the run is in USD"):
             base.revalue({"currency": "USD", "costs": usd})
+        # A hyphenated key is the same key: set to None, it is removed, not kept.
+        hyphenated = {**usd, "module-cost-per-w": None}
+        del hyphenated["module_cost_per_w"]
+        with pytest.raises(ValueError, match=r"The run is in USD, but module_cost_per_w would come from the built-in"):
+            base.revalue({"currency": "USD", "cost_preset": None, "costs": hyphenated})
+        same = base.revalue({"costs": {"other-costs": None}})
         revalued = base.revalue({"currency": "USD", "costs": usd, "cost_preset": None})
+    assert same["provenance"]["revaluation"]["changed_keys"] == ["costs"]
+    assert "other_costs" not in same["provenance"]["resolved_config"]["costs"]
     assert revalued["provenance"]["currency"] == "USD"
     assert revalued["total_investment"] == pytest.approx(K * base.result()["total_investment"], abs=0.005 * (K + 1))
 
@@ -314,15 +322,15 @@ def test_revalue_into_another_currency_restates_every_tariff_amount():
             ["tariff.fixed_charge_per_day", "reference_tariff.fixed_charge_per_day"]
             + [f"{table}.annual_network_credit.{key}" for table in ("tariff", "reference_tariff") for key in credit]
         )
-        # A network credit removed counts as restated.
+        # A network credit removed counts as restated, in either spelling.
         removed = base.revalue(
             {
                 "currency": "USD",
                 "costs": usd["costs"],
                 "tariff": {
                     **prices,
-                    "fixed_charge_per_day": usd["tariff"]["fixed_charge_per_day"],
-                    "annual_network_credit": None,
+                    "fixed-charge-per-day": usd["tariff"]["fixed_charge_per_day"],
+                    "annual-network-credit": None,
                 },
                 "reference_tariff": usd["reference_tariff"],
             }
