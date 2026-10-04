@@ -671,60 +671,91 @@ def blast_inputs(record: dict[str, dict[str, list[float]]]) -> Iterator[None]:
 
     The result keeps only the first input outside a model's tested range.
     This keeps every period's, as the experimental-range check
-    (``BlastWarningCollector.check_experimental_range``) receives them.
+    (``BlastWarningCollector.check_experimental_range``) receives them. The
+    check measures the C-rate against the aged capacity; the rate times the
+    state of health at the period's start is the same rate against the
+    nominal capacity.
     """
     from unittest import mock
 
+    from breos.degradation.engine import BlastEngine
     from breos.degradation.validation import BlastWarningCollector
 
-    check = BlastWarningCollector.check_experimental_range
+    step, check = BlastEngine.step, BlastWarningCollector.check_experimental_range
+    start_soh: dict[str, float] = {}
+
+    def stepping(self: Any, t_secs_day: Any, soc_abs_day: Any, t_cell_day_c: Any) -> float:
+        start_soh[self.blast_model_key] = self.soh()
+        return step(self, t_secs_day, soc_abs_day, t_cell_day_c)
 
     def recording(self: Any, t_secs: np.ndarray, soc: np.ndarray, temperature_c: np.ndarray) -> None:
-        periods = record.setdefault(self.blast_model_key, {"c_rate_charge": [], "dod": [], "t_min": [], "t_max": []})
-        periods["c_rate_charge"].append(max(0.0, float(np.max(np.diff(soc) / (np.diff(t_secs) / 3600.0)))))
+        periods = record.setdefault(
+            self.blast_model_key,
+            {"c_rate_charge": [], "c_rate_charge_nominal": [], "dod": [], "t_min": [], "t_max": []},
+        )
+        c_rate = max(0.0, float(np.max(np.diff(soc) / (np.diff(t_secs) / 3600.0))))
+        periods["c_rate_charge"].append(c_rate)
+        periods["c_rate_charge_nominal"].append(c_rate * start_soh[self.blast_model_key])
         periods["dod"].append(float(np.ptp(soc)))
         periods["t_min"].append(float(np.min(temperature_c)))
         periods["t_max"].append(float(np.max(temperature_c)))
         check(self, t_secs, soc, temperature_c)
 
-    with mock.patch.object(BlastWarningCollector, "check_experimental_range", recording):
+    with (
+        mock.patch.object(BlastEngine, "step", stepping),
+        mock.patch.object(BlastWarningCollector, "check_experimental_range", recording),
+    ):
         yield
 
 
-def input_ranges(periods: Mapping[str, list[float]], tested: Mapping[str, Any], years: int) -> list[dict[str, Any]]:
+def input_ranges(
+    periods: Mapping[str, list[float]], tested: Mapping[str, Any], years: int
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Each input in ``AGEING_INPUTS``: its tested range, the range the run gave it, and the periods outside.
 
-    A charge C-rate is tested up to a maximum, so it has no minimum. A period
-    that does not move the state of charge has no depth of discharge, as in
-    the check itself. ``first_year_outside`` is the project year of the first
-    period outside, for a run of ``years`` equal years.
+    A charge C-rate is tested up to a maximum, so it has no minimum; it is
+    given against the aged capacity, as the check measures it, and against
+    the nominal capacity. A period that does not move the state of charge has
+    no depth of discharge, as in the check itself, so the depth has no
+    minimum either. ``first_year_outside`` is the project year of the first
+    period outside, for a run of ``years`` equal years. Also returns, per
+    input with a period outside, the first such value as the check's warning
+    records it (``observed``).
     """
-    c_rate = np.asarray(periods["c_rate_charge"])
+    c_rate, nominal = np.asarray(periods["c_rate_charge"]), np.asarray(periods["c_rate_charge_nominal"])
     dod = np.asarray(periods["dod"])
     moved = dod > 1e-12
     t_min, t_max = np.asarray(periods["t_min"]), np.asarray(periods["t_max"])
+    c_limit = tested["max_c_rate_charge"]
     dod_low, dod_high = min(tested["dod"]), max(tested["dod"])
     t_low, t_high = min(tested["cycling_temperature_c"]), max(tested["cycling_temperature_c"])
     rows = (
-        ("c_rate_charge", None, tested["max_c_rate_charge"], None, c_rate.max(),
-         c_rate > tested["max_c_rate_charge"] + 1e-12),
-        ("dod", dod_low, dod_high, dod[moved].min(), dod.max(),
-         moved & ((dod < dod_low - 1e-12) | (dod > dod_high + 1e-12))),
-        ("temperature_c", t_low, t_high, t_min.min(), t_max.max(), (t_min < t_low - 1e-12) | (t_max > t_high + 1e-12)),
+        ("c_rate_charge", None, c_limit, None, c_rate.max(), c_rate > c_limit + 1e-12, lambda i: float(c_rate[i])),
+        ("dod", dod_low, dod_high, None, dod.max(), moved & ((dod < dod_low - 1e-12) | (dod > dod_high + 1e-12)),
+         lambda i: [float(dod[i]), float(dod[i])]),
+        ("temperature_c", t_low, t_high, t_min.min(), t_max.max(), (t_min < t_low - 1e-12) | (t_max > t_high + 1e-12),
+         lambda i: [float(t_min[i]), float(t_max[i])]),
     )  # fmt: skip
-    return [
-        {
-            "input": name,
-            "tested_min": json_ready(low),
-            "tested_max": json_ready(high),
-            "run_min": None if run_low is None else round(float(run_low), 4),
-            "run_max": round(float(run_high), 4),
-            "periods_outside": int(outside.sum()),
-            "periods": len(dod),
-            "first_year_outside": int(np.argmax(outside)) * years // len(dod) + 1 if outside.any() else None,
-        }
-        for name, low, high, run_low, run_high, outside in rows
-    ]
+    ranges, observed = [], {}
+    for name, low, high, run_low, run_high, outside, value in rows:
+        first = int(np.argmax(outside)) if outside.any() else None
+        if first is not None:
+            observed[name] = value(first)
+        ranges.append(
+            {
+                "input": name,
+                "tested_min": json_ready(low),
+                "tested_max": json_ready(high),
+                "run_min": None if run_low is None else round(float(run_low), 4),
+                "run_max": round(float(run_high), 4),
+                "periods_outside": int(outside.sum()),
+                "periods": len(dod),
+                "first_year_outside": None if first is None else first * years // len(dod) + 1,
+                "run_max_nominal": round(float(nominal.max()), 4) if name == "c_rate_charge" else None,
+                "periods_outside_nominal": int((nominal > c_limit + 1e-12).sum()) if name == "c_rate_charge" else None,
+            }
+        )
+    return ranges, observed
 
 
 def imposed_ageing(
@@ -826,11 +857,14 @@ def ageing(ctx: Context) -> Output:
         profile = breos.get_battery_model_profile(selection["blast_model"]) if "blast_model" in selection else None
         ranges = None
         if profile is not None:
-            ranges = input_ranges(inputs[profile.key], profile.experimental_range, years)
-            outside = sorted(row["input"] for row in ranges if row["periods_outside"])
-            # The page shows these inputs only, so they must be every input the result warns about.
-            if outside != warned:
-                raise RuntimeError(f"{key}: recorded inputs outside the tested range {outside}, warnings {warned}")
+            ranges, first_outside = input_ranges(inputs[profile.key], profile.experimental_range, years)
+            # The page shows these inputs only, so they must be every input the result warns about,
+            # and the recorder must find the first value outside where the check found it.
+            recorded = {
+                warning["field"]: warning["observed"] for warning in degradation.get("experimental_range_warnings", [])
+            }
+            if first_outside != recorded:
+                raise RuntimeError(f"{key}: recorded first inputs outside {first_outside}, warnings {recorded}")
         models.append(
             {
                 "model": key,

@@ -165,9 +165,11 @@ def test_ageing_case_steps_every_model_and_records_the_blast_inputs():
     blast = [selection["blast_model"] for _key, _label, selection in TOOL.AGEING_MODELS if "blast_model" in selection]
     assert sorted(record) == sorted(blast)
     profile = breos.get_battery_model_profile(blast[0])
-    ranges = TOOL.input_ranges(record[blast[0]], profile.experimental_range, 2)
+    ranges, _first_outside = TOOL.input_ranges(record[blast[0]], profile.experimental_range, 2)
     assert [row["input"] for row in ranges] == list(TOOL.AGEING_INPUTS)
     assert all(row["periods"] == 4 for row in ranges)
+    # A fresh cell's first period: the same C-rate against aged and nominal capacity.
+    assert record[blast[0]]["c_rate_charge_nominal"][0] == record[blast[0]]["c_rate_charge"][0]
 
 
 def _compare(tmp_path, stored, fresh, suffix, cross_machine=True):

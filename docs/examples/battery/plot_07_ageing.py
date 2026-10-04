@@ -318,7 +318,7 @@ table(
 # the table counts every day of the stored runs.
 
 INPUTS = {
-    "c_rate_charge": ("Charge C-rate (per hour)", 1.0, 2),
+    "c_rate_charge": ("Charge C-rate (per hour, of aged capacity)", 1.0, 2),
     "dod": ("Depth of discharge (%)", 100.0, 0),
     "temperature_c": ("Cell temperature (°C)", 1.0, 1),
 }
@@ -364,11 +364,19 @@ lines = [
     "shallower still."
 ]
 for row in ranges[(ranges["input"] == "c_rate_charge") & (ranges["periods_outside"] > 0)].itertuples():
+    nominal = (
+        f"it stays below {row.tested_max:g} C on every day (peak {row.run_max_nominal:.2f} C)"
+        if row.periods_outside_nominal == 0
+        else f"it passes {row.tested_max:g} C on {number(row.periods_outside_nominal)} days "
+        f"(peak {row.run_max_nominal:.2f} C)"
+    )
     lines.append(
-        f"The {labels[row.model]} cell was tested at charge rates up to {row.tested_max:g} C. The C-rate is "
-        "measured against the aged capacity, so the same charging power is a higher C-rate as the pack fades: "
-        f"here the charge rate passes {row.tested_max:g} C on {number(row.periods_outside)} of "
-        f"{number(row.periods)} days, the first in year {row.first_year_outside:.0f}, and reaches {row.run_max:.2f} C."
+        f"The {labels[row.model]} cell was tested at charge rates up to {row.tested_max:g} C. The model record "
+        "does not state the test protocol behind that limit, so whether it refers to the nominal or the aged "
+        "capacity is not known, and this page reports both. Against the aged capacity, which the range check "
+        "uses, the same charging power is a higher C-rate as the pack fades: the charge rate passes "
+        f"{row.tested_max:g} C on {number(row.periods_outside)} of {number(row.periods)} days, the first in year "
+        f"{row.first_year_outside:.0f}, and reaches {row.run_max:.2f} C. Against the nominal capacity {nominal}."
     )
 for row in ranges[(ranges["input"] == "temperature_c") & (ranges["periods_outside"] > 0)].itertuples():
     below = row.run_max <= row.tested_max

@@ -2,8 +2,8 @@
  "case": "ageing",
  "title": "Battery ageing with different degradation models",
  "breos_version": "0.7.0",
- "git_describe": "v0.7.0-71-gb8ee30f",
- "generated_utc": "2026-10-04T08:25:59+00:00",
+ "git_describe": "v0.7.0-72-g0d5533c-dirty",
+ "generated_utc": "2026-10-04T08:34:41+00:00",
  "runtime_s": 17.0,
  "cheap": false,
  "configs": {
@@ -42,7 +42,7 @@
   "fec_per_year": 270.82
  },
  "files": {
-  "models.json": "21cdc5ff0ea3ccfd0a52d276e47af5737203c03a102af6bf29af74d91eb2641c",
+  "models.json": "b5f85f59d4678a83aede098f7750ab1924f69562c0f654d0bb1edc57abcaefe5",
   "simulated.csv": "e30ef78c082faef829f40066b4b3b96f5a74be130f236d90d66da354339d3a20",
   "imposed.csv": "41afb9f60e16335160d8d2cbe1f5f6bdbfcd65d48f3b3c9dfea09327249eaf4d"
  }
