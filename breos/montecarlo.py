@@ -416,6 +416,16 @@ def _reject_period(cfg: dict[str, Any]) -> None:
         )
 
 
+def _reject_weather_file(cfg: dict[str, Any]) -> None:
+    """Refuse the App's one-year ``weather_file``: a study samples ``MonteCarloSettings.weather_file``."""
+    if cfg.get("weather_file") is not None:
+        raise ValueError(
+            "'weather_file' names the App's one-year weather and is not used by Monte Carlo, which samples the "
+            "years of MonteCarloSettings.weather_file ([montecarlo].weather_file in a config file). "
+            "Remove 'weather_file' from the config."
+        )
+
+
 def _reject_planned_smart_charging(resolved: ResolvedAppConfig) -> None:
     """Refuse daily-persistence smart charging, before any weather is loaded or any trajectory runs.
 
@@ -449,6 +459,7 @@ def build_year_cache(config: dict[str, Any], settings: MonteCarloSettings) -> Mo
     resolved = resolve_app_config(config)
     cfg = resolved.cfg
     _reject_period(cfg)
+    _reject_weather_file(cfg)
     _reject_planned_smart_charging(resolved)
     weather_key = _weather_cache_key(cfg, resolved, settings)
     runtime_weather: dict[str, Any] = {}
@@ -887,6 +898,7 @@ def run_montecarlo(
     if cfg["degradation_engine"] == "blast":
         raise ValueError("degradation_engine='blast' is not supported with Monte Carlo yet")
     _reject_period(cfg)
+    _reject_weather_file(cfg)
     if cfg["horizon_profile"] is not None:
         raise ValueError(
             "'horizon_profile' is not supported with Monte Carlo weather files yet because their "

@@ -62,6 +62,7 @@ filename such as `pvgis-sarah3`.
    :toctree: generated/
 
    breos.weather.load_weather
+   breos.weather.read_weather_csv
    breos.weather.AmbiguousWeatherError
    breos.weather.parse_weather_filename
    breos.weather.read_epw_file
