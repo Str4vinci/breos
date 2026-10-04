@@ -12,7 +12,7 @@ import dataclasses
 import math
 from dataclasses import dataclass, field
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Mapping, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple, Union
 
 import numpy as np
 import pandas as pd
@@ -997,6 +997,14 @@ class EndOfLifeEvent:
         )
 
 
+def retiring_step(events: Sequence[EndOfLifeEvent]) -> Optional[int]:
+    """The step at whose end a span's events retire the pack, or None.
+
+    A retired pack crosses no more, so a span holds at most one retirement.
+    """
+    return next((event.step for event in events if event.action == "retired"), None)
+
+
 @dataclass(slots=True)
 class _AgingState:
     """Battery health state that only changes at a daily boundary.
@@ -1581,6 +1589,9 @@ class SimulationSummary:
     # ``sum(column * weights)`` for each requested (column, weights) pair,
     # such as import power times the step's import price.
     weighted_sums: Dict[str, float] = field(default_factory=dict)
+    # ``T_cell`` summed over the steps the pack served, through the one that
+    # retired it, when the span retired it; None otherwise.
+    in_service_t_cell_sum: Optional[float] = None
     # The ledger schema the column sums follow; App and Monte Carlo report
     # the same version.
     ledger_schema_version: str = LEDGER_SCHEMA_VERSION
@@ -1645,6 +1656,7 @@ def _build_simulation_summary(
     final_state = None
     if return_degradation_state:
         final_state = _build_final_degradation_state(core.lifecycle, aging)
+    retiring = retiring_step(aging.end_of_life_events)
 
     return SimulationSummary(
         n_steps=len(buffers.columns["Battery_Energy"]),
@@ -1678,6 +1690,7 @@ def _build_simulation_summary(
         final_degradation_state=final_state,
         end_of_life_events=tuple(aging.end_of_life_events),
         weighted_sums=weighted_column_sums(columns, weights),
+        in_service_t_cell_sum=float(np.sum(columns["T_cell"][: retiring + 1])) if retiring is not None else None,
     )
 
 

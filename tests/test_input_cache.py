@@ -59,6 +59,7 @@ CHANGES = {
     "battery_max_discharge_power_w": {"battery_max_discharge_power_w": 2000.0},
     "battery_power_limit_c_rate": {"battery_power_limit_c_rate": 0.5},
     "battery_eol_percentage": {"battery_eol_percentage": 0.8},
+    "battery_enable_replacement": {"battery_enable_replacement": False},
     "battery_allow_terminal_replacement": {"battery_allow_terminal_replacement": False},
     "battery_replacement_min_remaining_years": {"battery_replacement_min_remaining_years": 1.0},
     "battery_skipped_replacement_action": {"battery_skipped_replacement_action": "retire"},
