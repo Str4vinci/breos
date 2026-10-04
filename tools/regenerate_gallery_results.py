@@ -661,7 +661,7 @@ AGEING_MODELS = (
 # of life. The PV array keeps its first-year output, so the only feedback into
 # the dispatch is the battery's own fade.
 AGEING_OVERRIDES = {"battery_enable_replacement": False, "pv_degradation_rate": 0.0}
-# The BLAST inputs the ageing page sets against each model's tested range.
+# The BLAST inputs the ageing page sets against each model's experimental-range limits.
 AGEING_INPUTS = ("c_rate_charge", "dod", "temperature_c")
 
 
@@ -669,7 +669,7 @@ AGEING_INPUTS = ("c_rate_charge", "dod", "temperature_c")
 def blast_inputs(record: dict[str, dict[str, list[float]]]) -> Iterator[None]:
     """Record, per BLAST model key, each period's charge C-rate, depth of discharge and cell temperature.
 
-    The result keeps only the first input outside a model's tested range.
+    The result keeps only the first input outside a model's limits.
     This keeps every period's, as the experimental-range check
     (``BlastWarningCollector.check_experimental_range``) receives them. The
     check measures the C-rate against the aged capacity; the rate times the
@@ -709,15 +709,16 @@ def blast_inputs(record: dict[str, dict[str, list[float]]]) -> Iterator[None]:
 
 
 def input_ranges(
-    periods: Mapping[str, list[float]], tested: Mapping[str, Any], years: int
+    periods: Mapping[str, list[float]], limits: Mapping[str, Any], years: int
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    """Each input in ``AGEING_INPUTS``: its tested range, the range the run gave it, and the periods outside.
+    """Each input in ``AGEING_INPUTS``: its limits, the range the run gave it, and the periods outside.
 
-    A charge C-rate is tested up to a maximum, so it has no minimum; it is
-    given against the aged capacity, as the check measures it, and against
-    the nominal capacity. A period that does not move the state of charge has
-    no depth of discharge, as in the check itself, so the depth has no
-    minimum either. ``first_year_outside`` is the project year of the first
+    ``limits`` is the model's ``experimental_range``, which the range check
+    warns outside of. A charge C-rate is limited to a maximum, so it has no
+    minimum; it is given against the aged capacity, as the check measures it,
+    and against the nominal capacity. A period that does not move the state of
+    charge has no depth of discharge, as in the check itself, so the depth has
+    no minimum either. ``first_year_outside`` is the project year of the first
     period outside, for a run of ``years`` equal years. Also returns, per
     input with a period outside, the first such value as the check's warning
     records it (``observed``).
@@ -726,9 +727,9 @@ def input_ranges(
     dod = np.asarray(periods["dod"])
     moved = dod > 1e-12
     t_min, t_max = np.asarray(periods["t_min"]), np.asarray(periods["t_max"])
-    c_limit = tested["max_c_rate_charge"]
-    dod_low, dod_high = min(tested["dod"]), max(tested["dod"])
-    t_low, t_high = min(tested["cycling_temperature_c"]), max(tested["cycling_temperature_c"])
+    c_limit = limits["max_c_rate_charge"]
+    dod_low, dod_high = min(limits["dod"]), max(limits["dod"])
+    t_low, t_high = min(limits["cycling_temperature_c"]), max(limits["cycling_temperature_c"])
     rows = (
         ("c_rate_charge", None, c_limit, None, c_rate.max(), c_rate > c_limit + 1e-12, lambda i: float(c_rate[i])),
         ("dod", dod_low, dod_high, None, dod.max(), moved & ((dod < dod_low - 1e-12) | (dod > dod_high + 1e-12)),
@@ -744,8 +745,8 @@ def input_ranges(
         ranges.append(
             {
                 "input": name,
-                "tested_min": json_ready(low),
-                "tested_max": json_ready(high),
+                "limit_min": json_ready(low),
+                "limit_max": json_ready(high),
                 "run_min": None if run_low is None else round(float(run_low), 4),
                 "run_max": round(float(run_high), 4),
                 "periods_outside": int(outside.sum()),

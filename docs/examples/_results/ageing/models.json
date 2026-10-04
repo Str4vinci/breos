@@ -46,8 +46,8 @@
   "input_ranges": [
    {
     "input": "c_rate_charge",
-    "tested_min": null,
-    "tested_max": 0.65,
+    "limit_min": null,
+    "limit_max": 0.65,
     "run_min": null,
     "run_max": 0.7461,
     "periods_outside": 19,
@@ -58,8 +58,8 @@
    },
    {
     "input": "dod",
-    "tested_min": 0.8,
-    "tested_max": 1.0,
+    "limit_min": 0.8,
+    "limit_max": 1.0,
     "run_min": null,
     "run_max": 0.801,
     "periods_outside": 6767,
@@ -70,8 +70,8 @@
    },
    {
     "input": "temperature_c",
-    "tested_min": 10,
-    "tested_max": 45,
+    "limit_min": 10,
+    "limit_max": 45,
     "run_min": 15.46,
     "run_max": 27.2794,
     "periods_outside": 0,
@@ -101,8 +101,8 @@
   "input_ranges": [
    {
     "input": "c_rate_charge",
-    "tested_min": null,
-    "tested_max": 1.0,
+    "limit_min": null,
+    "limit_max": 1.0,
     "run_min": null,
     "run_max": 0.7495,
     "periods_outside": 0,
@@ -113,8 +113,8 @@
    },
    {
     "input": "dod",
-    "tested_min": 0.8,
-    "tested_max": 1.0,
+    "limit_min": 0.8,
+    "limit_max": 1.0,
     "run_min": null,
     "run_max": 0.801,
     "periods_outside": 6749,
@@ -125,8 +125,8 @@
    },
    {
     "input": "temperature_c",
-    "tested_min": 20,
-    "tested_max": 40,
+    "limit_min": 20,
+    "limit_max": 40,
     "run_min": 15.46,
     "run_max": 27.2794,
     "periods_outside": 5163,
@@ -155,8 +155,8 @@
   "input_ranges": [
    {
     "input": "c_rate_charge",
-    "tested_min": null,
-    "tested_max": 1.75,
+    "limit_min": null,
+    "limit_max": 1.75,
     "run_min": null,
     "run_max": 0.791,
     "periods_outside": 0,
@@ -167,8 +167,8 @@
    },
    {
     "input": "dod",
-    "tested_min": 0.8,
-    "tested_max": 1.0,
+    "limit_min": 0.8,
+    "limit_max": 1.0,
     "run_min": null,
     "run_max": 0.801,
     "periods_outside": 6725,
@@ -179,8 +179,8 @@
    },
    {
     "input": "temperature_c",
-    "tested_min": 10,
-    "tested_max": 45,
+    "limit_min": 10,
+    "limit_max": 45,
     "run_min": 15.46,
     "run_max": 27.2794,
     "periods_outside": 0,

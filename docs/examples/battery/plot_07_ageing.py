@@ -46,14 +46,16 @@ different questions:
 
 .. note::
 
-   The sources of these models do not state how many years of ageing their
-   data cover, so BREOS cannot check a 20-year projection against them: read
-   the late years as model projections, not measured behaviour. The native
-   engine combines Naumann's laboratory LFP cycle-ageing model with calendar
-   parameters fitted to field data from LFP home storage systems. The BLAST
-   models are fitted to laboratory tests of single cells; BREOS applies a
-   cell's relative fade to the whole pack, without cell-to-cell spread, pack
-   thermal behaviour or battery-management effects. Each model is a separate
+   BREOS records no ageing horizon for these models, and the laboratory
+   tests behind them ran for a few years, not 20: read the late years as
+   model projections, not measured behaviour. The native engine combines
+   Naumann's laboratory LFP cycle-ageing model with calendar parameters
+   fitted to field data from LFP home storage systems. The BLAST models are
+   fitted to laboratory tests of single cells; BREOS applies a cell's
+   relative fade to the whole pack, without cell-to-cell spread, temperature
+   differences within the pack (BREOS models one lumped cell temperature,
+   heated by the pack's own losses) or battery-management effects. Each model
+   is a separate
    empirical fit. The native cycle model and the BLAST LFP-Gr 3 Ah model both
    relate to Naumann's laboratory data on Sony/Murata 3 Ah LFP cells, which
    makes that pair the closest native-to-BLAST comparison; the native
@@ -111,18 +113,21 @@ case.stamp()
 # Identical imposed stress history
 # --------------------------------
 # One year of state of charge and cell temperature, repeated every project
-# year, drives each model. The imposed year is the native v1 run's first year:
+# year, drives each model. The imposed year is the native v1 run's first year.
+# Its cycle count is the native engine's for that run; each BLAST model counts
+# full equivalent cycles itself from the same state of charge, against the
+# capacity it has left, so its count differs as it fades.
 
 table(
     pd.DataFrame(
         {
             "Mean state of charge (%)": [stress["mean_soc_pct"]],
             "Mean cell temperature (°C)": [stress["mean_cell_temperature_c"]],
-            "Full equivalent cycles per year": [stress["fec_per_year"]],
+            "Full equivalent cycles in the year, native count": [stress["fec_per_year"]],
         }
     ),
     **{"Mean state of charge (%)": ".1f", "Mean cell temperature (°C)": ".1f",
-       "Full equivalent cycles per year": ".0f"},
+       "Full equivalent cycles in the year, native count": ".0f"},
 )  # fmt: skip
 
 # %%
@@ -223,20 +228,20 @@ right.set_title("Energy discharged from the cells")
 fig.legend(loc="outside lower center", ncol=3)
 
 # %%
-# The fade with and without feedback, model by model:
+# Each model's full simulation against the common imposed reference:
 
 table(
     pd.DataFrame(
         {
             "Model": [labels[m] for m in models.index],
             f"Health after {years} years, imposed use (%)": [at_year(imposed, m, years, "soh_pct") for m in models.index],
-            "Same, with feedback (%)": [at_year(simulated, m, years, "soh_pct") for m in models.index],
+            "Same, full simulation (%)": [at_year(simulated, m, years, "soh_pct") for m in models.index],
             "First end of life, imposed use (years)": models["imposed_first_end_of_life_years"].to_list(),
-            "Same, with feedback (years)": models["first_end_of_life_years"].to_list(),
+            "Same, full simulation (years)": models["first_end_of_life_years"].to_list(),
         }
     ),
-    **{f"Health after {years} years, imposed use (%)": ".1f", "Same, with feedback (%)": ".1f",
-       "First end of life, imposed use (years)": ".2f", "Same, with feedback (years)": ".2f"},
+    **{f"Health after {years} years, imposed use (%)": ".1f", "Same, full simulation (%)": ".1f",
+       "First end of life, imposed use (years)": ".2f", "Same, full simulation (years)": ".2f"},
 )  # fmt: skip
 
 # %%
@@ -253,8 +258,8 @@ split = {
 }
 soc_first = simulated.groupby("model", sort=False)["mean_soc_pct"].first()
 soc_last = simulated.groupby("model", sort=False)["mean_soc_pct"].last()
-# Every pack holds a lower mean state of charge as it fades. With feedback the native packs
-# lose less to calendar ageing and more to cycling, over more cycles, and end healthier and later.
+# Every pack holds a lower mean state of charge as it fades. In the full simulations the native
+# packs lose less to calendar ageing and more to cycling, over more cycles, and end healthier and later.
 assert (soc_last < soc_first).all()
 for m in native:
     assert split[m]["simulated"]["calendar_loss_pct"] < split[m]["imposed"]["calendar_loss_pct"]
@@ -263,11 +268,13 @@ for m in native:
     assert gaps[m] > 0
     assert models.loc[m, "first_end_of_life_years"] > models.loc[m, "imposed_first_end_of_life_years"]
 say(
-    f"Feedback changes the health after {years} years by at most {abs(gaps[widest]):.1f} percentage points "
-    f"({labels[widest]}). As the pack fades, the dispatch holds it at a lower mean state of charge: "
+    f"After {years} years each model's full simulation is within {abs(gaps[widest]):.1f} percentage points of "
+    f"the imposed reference (the widest gap: {labels[widest]}). The gap is not the feedback alone: the reference "
+    "repeats the native v1 run's first year for every model, while each full simulation starts from its own "
+    "first year. In the full simulations, as the pack fades, the dispatch holds it at a lower mean state of charge: "
     f"{soc_first.min():.1f}–{soc_first.max():.1f} % in year 1, {soc_last.min():.1f}–{soc_last.max():.1f} % in "
     f"year {years}. A lower state of charge slows calendar ageing, and a smaller pack makes more full equivalent "
-    "cycles for the same energy. The native split shows both. "
+    "cycles for the same energy. The native split, against the imposed reference, shows both. "
     + " ".join(
         f"Under the {labels[m].split(', ')[-1]} the pack loses {split[m]['simulated']['calendar_loss_pct']:.1f} "
         "percentage points to calendar ageing "
@@ -277,8 +284,8 @@ say(
         f"equivalent cycles instead of {number(split[m]['imposed']['cumulative_fec'])}."
         for m in native
     )
-    + " The slower calendar ageing outweighs the extra cycling, so with feedback both native packs keep more "
-    "health and reach end of life later.",
+    + " The slower calendar ageing outweighs the extra cycling, so both native packs end their full simulation "
+    "with more health and a later end of life than under the imposed reference.",
 )
 # sphinx_gallery_end_ignore
 
@@ -312,10 +319,15 @@ table(
 #
 # What the models were fitted to
 # -------------------------------
-# A BLAST model reports when its input leaves the range of the laboratory
-# tests it was fitted to (``degradation.experimental_range_warnings`` in the
-# result). The result records the first day each input leaves its range;
-# the table counts every day of the stored runs.
+# Each BLAST model file gives an ``experimental_range``: in its own words,
+# the range of conditions the model is expected to be valid in. BREOS copies
+# it into its model registry (``breos.get_battery_model_profile(key)``), and
+# its range check (``BlastWarningCollector``) warns when an input leaves it
+# (``degradation.experimental_range_warnings`` in the result). These are the
+# limits below. They are not the test conditions themselves; the model files
+# describe those in their notes, summarised after the table. The result
+# records the first day each input leaves its limits; the table counts every
+# day of the stored runs.
 
 INPUTS = {
     "c_rate_charge": ("Charge C-rate (per hour, of aged capacity)", 1.0, 2),
@@ -326,7 +338,7 @@ ranges = pd.DataFrame([{"model": m, **row} for m in blast for row in models.loc[
 
 
 def span(low: float | None, high: float, scale: float, decimals: int | None = None) -> str:
-    """``low–high``, or ``up to high`` without a lower bound, in the page's units; tested limits as given."""
+    """``low–high``, or ``up to high`` without a lower bound, in the page's units; registry limits as given."""
     shown = (lambda v: f"{v * scale:g}") if decimals is None else (lambda v: f"{v * scale:.{decimals}f}")
     return f"up to {shown(high)}" if pd.isna(low) else f"{shown(low)}–{shown(high)}"
 
@@ -336,9 +348,11 @@ table(
         {
             "Model": [labels[row.model] for row in ranges.itertuples()],
             "Input": [INPUTS[row.input][0] for row in ranges.itertuples()],
-            "Tested range": [span(row.tested_min, row.tested_max, INPUTS[row.input][1]) for row in ranges.itertuples()],
+            "Range-check limits": [
+                span(row.limit_min, row.limit_max, INPUTS[row.input][1]) for row in ranges.itertuples()
+            ],
             "In these runs": [span(row.run_min, row.run_max, *INPUTS[row.input][1:]) for row in ranges.itertuples()],
-            "Days outside the tested range": [
+            "Days outside the limits": [
                 f"{number(row.periods_outside)} of {number(row.periods)}" for row in ranges.itertuples()
             ],
         }
@@ -351,43 +365,63 @@ table(
 low, high = case.manifest["soc_window"]
 dod = ranges[ranges["input"] == "dod"]
 # One degradation period is one day; the window's width is the lower edge of every
-# tested depth, no day swings deeper than the window by more than a rounding, so a
-# day outside the tested depths is a shallower one.
+# depth limit, no day swings deeper than the window by more than a rounding, so a
+# day outside the depth limits is a shallower one.
 assert (ranges["periods"] == 365 * years).all()
-assert (dod["tested_min"] - (high - low)).abs().lt(1e-9).all() and dod["run_max"].lt(high - low + 0.01).all()
-assert dod["run_max"].lt(dod["tested_max"]).all()
+assert (dod["limit_min"] - (high - low)).abs().lt(1e-9).all() and dod["run_max"].lt(high - low + 0.01).all()
+assert dod["run_max"].lt(dod["limit_max"]).all()
 share = 100 * dod["periods_outside"] / dod["periods"]
 lines = [
     f"The depth-of-discharge flag is structural. The {100 * low:.0f}–{100 * high:.0f} % SOC window caps the daily "
-    f"swing at about {100 * (high - low):.0f} %, the lower edge of every tested range. A day can at best "
-    f"reach the shallowest tested cycle, and on {share.min():.0f}–{share.max():.0f} % of days the swing is "
-    "shallower still."
+    f"swing at about {100 * (high - low):.0f} %, the lower edge of every model's depth limits. A day can at best "
+    f"reach that edge, and on {share.min():.0f}–{share.max():.0f} % of days the swing is shallower still."
 ]
 for row in ranges[(ranges["input"] == "c_rate_charge") & (ranges["periods_outside"] > 0)].itertuples():
     nominal = (
-        f"it stays below {row.tested_max:g} C on every day (peak {row.run_max_nominal:.2f} C)"
+        f"it stays below {row.limit_max:g} C on every day (peak {row.run_max_nominal:.2f} C)"
         if row.periods_outside_nominal == 0
-        else f"it passes {row.tested_max:g} C on {number(row.periods_outside_nominal)} days "
+        else f"it passes {row.limit_max:g} C on {number(row.periods_outside_nominal)} days "
         f"(peak {row.run_max_nominal:.2f} C)"
     )
     lines.append(
-        f"The {labels[row.model]} cell was tested at charge rates up to {row.tested_max:g} C. The model record "
-        "does not state the test protocol behind that limit, so whether it refers to the nominal or the aged "
-        "capacity is not known, and this page reports both. Against the aged capacity, which the range check "
+        f"The {labels[row.model]} model's charge-rate limit is {row.limit_max:g} C. The model file does not say "
+        "whether that rate refers to the nominal or the aged capacity, so this page reports both. Against the "
+        "aged capacity, which the range check "
         "uses, the same charging power is a higher C-rate as the pack fades: the charge rate passes "
-        f"{row.tested_max:g} C on {number(row.periods_outside)} of {number(row.periods)} days, the first in year "
+        f"{row.limit_max:g} C on {number(row.periods_outside)} of {number(row.periods)} days, the first in year "
         f"{row.first_year_outside:.0f}, and reaches {row.run_max:.2f} C. Against the nominal capacity {nominal}."
     )
 for row in ranges[(ranges["input"] == "temperature_c") & (ranges["periods_outside"] > 0)].itertuples():
-    below = row.run_max <= row.tested_max
+    below = row.run_max <= row.limit_max
     lines.append(
-        f"The {labels[row.model]} cell was tested at {row.tested_min:g}–{row.tested_max:g} °C. The cell temperature "
-        f"here ranges from {row.run_min:.1f} to {row.run_max:.1f} °C, and on {number(row.periods_outside)} of "
-        f"{number(row.periods)} days it leaves the tested range"
-        + (f", always below {row.tested_min:g} °C." if below else ".")
+        f"The {labels[row.model]} model's temperature limits are {row.limit_min:g}–{row.limit_max:g} °C. The cell "
+        f"temperature here ranges from {row.run_min:.1f} to {row.run_max:.1f} °C, and on "
+        f"{number(row.periods_outside)} of {number(row.periods)} days it leaves those limits"
+        + (f", always below {row.limit_min:g} °C." if below else ".")
     )
 say(*lines)
 # sphinx_gallery_end_ignore
+
+# %%
+# What each vendored model file (``breos/degradation/blast/models/``) says
+# about its ageing tests, where that bears on these limits:
+
+# sphinx_gallery_start_ignore
+# The notes below compare with these limits.
+limits = ranges.set_index(["model", "input"])
+assert (limits.loc[("lfp_gr_250ah_prismatic", "c_rate_charge"), "limit_max"] == 0.65
+        and limits.loc[("lfp_gr_250ah_prismatic", "temperature_c"), ["limit_min", "limit_max"]].tolist() == [10, 45])
+assert limits.loc[("lfp_gr_sonymurata_3ah", "temperature_c"), ["limit_min", "limit_max"]].tolist() == [20, 40]
+# sphinx_gallery_end_ignore
+TEST_NOTES = {
+    "lfp_gr_250ah_prismatic": "Cycling at 10–45 °C; charging limited to 0.16 C at 10 °C and 0.65 C at higher "
+    "temperatures. The limits above follow these conditions.",
+    "lfp_gr_sonymurata_3ah": "Cycling only at 25 °C and 45 °C, with no low-temperature cycling data; calendar "
+    "ageing varied temperature and SOC. The 20–40 °C limit is not the range of the cycling tests.",
+    "nmc_gr_50ah_b1": "Calendar ageing varied temperature and SOC, cycle ageing depth of discharge, average SOC and "
+    "C-rate; no test temperatures or depths are given. Charging at 10 °C was limited to 0.3 C.",
+}
+table(pd.DataFrame({"Model": [labels[m] for m in blast], "Model file note on the tests": [TEST_NOTES[m] for m in blast]}))
 
 # %%
 # The native engine has no such check. Its calendar parameters are fitted to
