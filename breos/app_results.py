@@ -162,19 +162,25 @@ def end_of_life_fields(events: Sequence[Mapping[str, Any]], soh_digits: int) -> 
 
 
 def degradation_history_to_dicts(
-    yearly_df: pd.DataFrame, resolved: ResolvedAppConfig, soh_digits: int
+    yearly_df: pd.DataFrame,
+    events: Sequence[Mapping[str, Any]],
+    resolved: ResolvedAppConfig,
+    soh_digits: int,
 ) -> list[dict[str, Any]]:
     """The battery's state at the end of each project year, and the year's use and stress.
 
     The state (``soh_pct``, capacities, ``cumulative_fec`` and the loss
     split) belongs to the pack installed at the year's end, so it restarts
     after a replacement; the year's own figures (``replacements``,
-    throughput, ``fec``, means) cover every pack that served in it. A
-    quantity the degradation model does not supply is None, never 0: the
-    cycle and calendar split comes from the native engine only, and the
-    resistance growth and round-trip efficiency from the native engine with
-    ``enable_resistance_fade``.
+    throughput, ``fec``) cover every pack that served in it, and its means
+    the steps a pack served. A retired pack is out of service from the year
+    it is retired in and keeps its last state; a year it never serves has no
+    means. A quantity the degradation model does not supply is None, never
+    0: the cycle and calendar split comes from the native engine only, and
+    the resistance growth and round-trip efficiency from the native engine
+    with ``enable_resistance_fade``.
     """
+    retired_year = next((event["year"] for event in events if event["action"] == "retired"), None)
     cfg = resolved.cfg
     native = cfg["degradation_engine"] == "native"
     resistance = native and bool(cfg.get("enable_resistance_fade", False))
@@ -188,9 +194,17 @@ def degradation_history_to_dicts(
         charge, discharge = resistance_to_efficiency(
             float(row["Battery_Resistance_Growth"]), battery.charge_efficiency, battery.discharge_efficiency
         )
+        hours = float(row["Battery_In_Service_Hours"])
+        # A retired pack holds no charge, so the mean over every step, scaled
+        # to the hours served, is the mean over the steps it served.
+        mean_soc = (
+            float(row["Battery_SOC_Absolute_Mean_%"]) * (float(row["Simulated_Hours"]) / hours) if hours else None
+        )
+        mean_temperature = row["Battery_Cell_Temperature_Mean_C"]
         rows.append(
             {
                 "year": int(row["Year"]),
+                "in_service": retired_year is None or int(row["Year"]) < retired_year,
                 "soh_pct": round(soh, soh_digits),
                 "capacity_kwh": round(capacity_kwh, 3),
                 "usable_capacity_kwh": round(capacity_kwh * window, 3),
@@ -199,8 +213,8 @@ def degradation_history_to_dicts(
                 "discharge_throughput_kwh": round(float(row["Battery_Discharge_Throughput_kWh"]), 2),
                 "fec": round(float(row["Battery_Annual_FEC"]), 2),
                 "cumulative_fec": round(float(row["Battery_Cumulative_FEC"]), 2),
-                "mean_soc_pct": round(float(row["Battery_SOC_Absolute_Mean_%"]), 2),
-                "mean_cell_temperature_c": round(float(row["Battery_Cell_Temperature_Mean_C"]), 2),
+                "mean_soc_pct": round(mean_soc, 2) if mean_soc is not None else None,
+                "mean_cell_temperature_c": round(float(mean_temperature), 2) if pd.notna(mean_temperature) else None,
                 "cycle_loss_pct": (
                     round(float(row["Battery_Cumulative_Cycle_Degradation"]) * 100.0, soh_digits) if native else None
                 ),
@@ -467,7 +481,9 @@ def build_result(
             round(float(cost_projection.attrs["replacement_cost_npv"]), 2) if cost_projection is not None else None
         )
         result.update(end_of_life_fields(artifacts.end_of_life_events, soh_digits))
-        result["battery_degradation_history"] = degradation_history_to_dicts(artifacts.yearly_df, resolved, soh_digits)
+        result["battery_degradation_history"] = degradation_history_to_dicts(
+            artifacts.yearly_df, artifacts.end_of_life_events, resolved, soh_digits
+        )
         if cfg["degradation_engine"] == "blast":
             for row in result["yearly"]:
                 if "soh_pct" in row:

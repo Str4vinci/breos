@@ -11,14 +11,24 @@ supply is None, never 0.
 
 from __future__ import annotations
 
+import copy
+from unittest import mock
+
 import numpy as np
 import pandas as pd
 import pytest
 
 import breos.optimization as optimization_module
+import breos.projection as projection_module
+from breos.app import App
 from breos.app_config import resolve_app_config
+from breos.app_inputs import AppRuntimeDependencies
+from breos.battery import END_OF_LIFE_EVENTS_ATTR
 from breos.montecarlo import MonteCarloSettings, run_montecarlo
+from breos.optimization import evaluate_projected_design
 from breos.projection import build_battery_config
+from breos.weather import build_battery_temperature_series
+from tests.conftest import _build_open_meteo_weather
 from tests.test_terminal_replacement import BLAST, EVERY_PERIOD_EOL, _app, _mc_config
 
 pytestmark = pytest.mark.filterwarnings("ignore::breos.degradation.validation.BlastExperimentalRangeWarning")
@@ -26,6 +36,7 @@ pytestmark = pytest.mark.filterwarnings("ignore::breos.degradation.validation.Bl
 BASE = {"location": "porto", "n_modules": 8, "annual_consumption_kwh": 4000, "battery_kwh": 5}
 HISTORY_FIELDS = [
     "year",
+    "in_service",
     "soh_pct",
     "capacity_kwh",
     "usable_capacity_kwh",
@@ -43,10 +54,49 @@ HISTORY_FIELDS = [
 ]
 
 
+# Native v1 on the test home crosses 93 % in year 2.
+RETIRES_IN_YEAR_2 = {
+    "projection_years": 3,
+    "battery_eol_percentage": 0.93,
+    "battery_enable_replacement": False,
+    "battery_skipped_replacement_action": "retire",
+}
+
+
 @pytest.fixture(scope="module")
 def disabled():
     """Two years with replacement off and a threshold every period crosses."""
     return _app(battery_enable_replacement=False, terminal_value={"basis": "battery_health_fraction"})
+
+
+def _app_with_frames(**overrides):
+    """An App run, with each project year's results and degradation frames."""
+    frames = []
+    simulate = projection_module.simulate_energy_balance
+
+    def record(**kwargs):
+        output = simulate(**kwargs)
+        frames.append((output[0], output[4]))
+        return output
+
+    with mock.patch.object(projection_module, "simulate_energy_balance", record):
+        app = _app(**overrides)
+    return app, frames
+
+
+def _without_replacement_keys(result):
+    """A result without the fields that name the replacement setting or the skip reason."""
+    result = copy.deepcopy(result)
+    result["provenance"].pop("execution", None)
+    for key in ("battery_enable_replacement", "battery_replacement_min_remaining_years"):
+        result["provenance"]["resolved_config"].pop(key)
+    policy = result["provenance"]["terminal_value"]["replacement_policy"]
+    for key in ("enable_replacement", "replacement_min_remaining_years"):
+        policy.pop(key)
+    for event in result["battery_end_of_life_events"]:
+        event.pop("reason")
+    result.pop("battery_first_end_of_life_reason")
+    return result
 
 
 # -- the setting ---------------------------------------------------------------------
@@ -96,6 +146,22 @@ def test_a_pack_without_replacement_keeps_ageing_below_its_threshold(disabled):
     assert result["provenance"]["terminal_value"]["replacement_policy"]["enable_replacement"] is False
 
 
+@pytest.mark.parametrize("action", ["keep", "retire"])
+def test_disabled_replacement_is_a_minimum_service_time_beyond_the_horizon(action):
+    # ADR 0003 E12: the same run, with only the reason different.
+    common = {
+        **RETIRES_IN_YEAR_2,
+        "battery_skipped_replacement_action": action,
+        "terminal_value": {"basis": "battery_health_fraction"},
+    }
+    disabled = _app(**common).result()
+    common["battery_enable_replacement"] = True
+    beyond = _app(**common, battery_replacement_min_remaining_years=99.0).result()
+    assert disabled["battery_first_end_of_life_reason"] == "replacement_disabled"
+    assert beyond["battery_first_end_of_life_reason"] == "min_remaining_years"
+    assert _without_replacement_keys(disabled) == _without_replacement_keys(beyond)
+
+
 def test_a_pack_without_replacement_retires_at_its_first_crossing():
     result = _app(battery_enable_replacement=False, battery_skipped_replacement_action="retire").result()
     assert [(e["action"], e["reason"]) for e in result["battery_end_of_life_events"]] == [
@@ -140,6 +206,8 @@ def test_the_history_reports_each_year_from_the_year_rows(disabled):
     assert [list(entry) for entry in history] == [HISTORY_FIELDS] * 2
     for entry, (_, row) in zip(history, rows.iterrows(), strict=True):
         assert entry["year"] == row["Year"]
+        # A kept pack stays in service below its threshold.
+        assert entry["in_service"] is True
         assert entry["soh_pct"] == round(row["Battery_SOH_%"], 2)
         assert entry["capacity_kwh"] == round(5 * row["Battery_SOH_%"] / 100, 3)
         assert entry["usable_capacity_kwh"] == round(5 * row["Battery_SOH_%"] / 100 * 0.8, 3)
@@ -186,8 +254,46 @@ def test_resistance_fade_reports_growth_and_efficiency():
     assert 0.9 > history[0]["round_trip_efficiency"] > history[1]["round_trip_efficiency"]
 
 
+def test_a_retired_pack_is_out_of_service_and_keeps_its_last_state():
+    app, frames = _app_with_frames(**RETIRES_IN_YEAR_2)
+    result = app.result()
+    assert [(e["year"], e["action"]) for e in result["battery_end_of_life_events"]] == [(2, "retired")]
+    history = result["battery_degradation_history"]
+    assert [entry["in_service"] for entry in history] == [True, False, False]
+    for key in ("soh_pct", "capacity_kwh", "usable_capacity_kwh", "cumulative_fec", "cycle_loss_pct"):
+        assert history[2][key] == history[1][key], key
+    assert history[2]["fec"] == history[2]["discharge_throughput_kwh"] == 0.0
+
+    # The means cover the steps the pack served, through the step that retired it.
+    results, degradation = frames[1]
+    retiring = degradation.attrs[END_OF_LIFE_EVENTS_ATTR][0]["step"]
+    served = results.iloc[: retiring + 1]
+    assert 0 < retiring < len(results) - 1
+    assert history[1]["mean_soc_pct"] == pytest.approx(served["Battery_SOC_Absolute"].mean() * 100, abs=0.006)
+    assert history[1]["mean_cell_temperature_c"] == pytest.approx(served["T_cell"].mean(), abs=0.006)
+    first = frames[0][0]
+    assert history[0]["mean_soc_pct"] == pytest.approx(first["Battery_SOC_Absolute"].mean() * 100, abs=0.006)
+    # A year the pack never serves has no means.
+    assert history[2]["mean_soc_pct"] is None and history[2]["mean_cell_temperature_c"] is None
+    rows = app._artifacts.yearly_df
+    assert rows["Battery_In_Service_Hours"].tolist() == [8760.0, retiring + 1.0, 0.0]
+    assert np.isnan(rows["Battery_Cell_Temperature_Mean_C"].iloc[2])
+
+
 def test_a_pv_only_run_has_no_history():
     assert "battery_degradation_history" not in _app(battery_kwh=0).result()
+
+
+def test_pv_only_year_rows_have_no_battery_temperature(tmp_path, write_multiyear_weather):
+    rows = _app(battery_kwh=0)._artifacts.yearly_df
+    weather = write_multiyear_weather(tmp_path / "multi.csv")
+    settings = MonteCarloSettings(weather_file=str(weather), n_runs=2, years_per_run=2, seed=7, collect_yearly=True)
+    trajectories = run_montecarlo(_mc_config(battery_kwh=0.0), settings).yearly
+    design = _optimizer_design(battery_kwh=0.0, enable_replacement=True, years=1)
+    for frame in (rows, trajectories, design.yearly):
+        # As Battery_SOH_% says: there is no battery.
+        for column in ("Battery_Cell_Temperature_Mean_C", "Battery_In_Service_Hours", "Battery_SOH_%"):
+            assert frame[column].isna().all(), column
 
 
 def test_the_history_follows_a_revaluation(disabled):
@@ -195,15 +301,111 @@ def test_the_history_follows_a_revaluation(disabled):
     assert revalued["battery_degradation_history"] == disabled.result()["battery_degradation_history"]
 
 
-def test_summaries_and_frames_agree_on_the_new_row_column():
+@pytest.mark.parametrize("action", ["keep", "retire"])
+def test_summaries_and_frames_agree_on_the_new_row_columns(action):
     from tests.test_battery_retire import _project
 
-    frames, summary = _project("keep"), _project("keep", aligned=True)
-    pd.testing.assert_series_equal(
-        frames.yearly_df["Battery_Cell_Temperature_Mean_C"],
-        summary.yearly_df["Battery_Cell_Temperature_Mean_C"],
-        check_exact=True,
+    frames, summary = _project(action), _project(action, aligned=True)
+    for column in ("Battery_Cell_Temperature_Mean_C", "Battery_In_Service_Hours"):
+        pd.testing.assert_series_equal(frames.yearly_df[column], summary.yearly_df[column], check_exact=True)
+    if action == "retire":
+        # Retired partway through year 2, and off for all of year 3.
+        hours = frames.yearly_df["Battery_In_Service_Hours"].tolist()
+        assert hours[0] == frames.yearly_df["Simulated_Hours"].iloc[0] > hours[1] > hours[2] == 0.0
+
+
+# -- App and the optimizer -----------------------------------------------------------
+
+OPTIMIZER_COSTS = {
+    "electricity_cost": 0.25,
+    "electricity_sold_cost": 0.07,
+    "daily_power_cost": 0.5,
+    "module_cost_per_w": 0.15,
+    "storage_cost_per_kwh": 400.0,
+    "installation_cost_per_module": 300.0,
+    "maintenance_cost_per_panel": 12.0,
+    "maintenance_cost": 30.0,
+}
+OPTIMIZER_RATES = {"inflation_rate": 0.03, "sell_price_inflation": 0.015, "discount_rate": 0.04}
+LOCATION = {"latitude": 41.15, "longitude": -8.61, "timezone": "UTC"}
+DESIGN_EOL = 0.95
+
+
+def _design_inputs():
+    index = pd.date_range("2023-01-01", periods=8760, freq="h", tz="UTC")
+    return _build_open_meteo_weather(index), pd.DataFrame({"Load": [500.0] * len(index)}, index=index)
+
+
+def _optimizer_design(*, battery_kwh, enable_replacement, years):
+    weather, load = _design_inputs()
+    config = {
+        "location": LOCATION,
+        "simulation": {"resolution": "h", "years_projection": years},
+        "pv": {"module": "Suntech_STP550S_STC", "degradation_rate": 0.007},
+        "battery": {
+            "temperature": 20.0,
+            "indoor_model": {"enabled": False},
+            "eol_percentage": DESIGN_EOL,
+            "enable_replacement": enable_replacement,
+        },
+        "costs": {**OPTIMIZER_COSTS, "dc_ac_ratio": 1.25},
+        "financials": {**OPTIMIZER_RATES, "pv_degradation_rate": 0.007, "project_lifespan": years},
+    }
+    return evaluate_projected_design(
+        weather,
+        load,
+        config,
+        n_modules=4,
+        battery_kwh=battery_kwh,
+        tilt=30.0,
+        azimuth=180.0,
+        execution_backend="python",
     )
+
+
+def test_app_without_replacement_matches_the_optimizer(monkeypatch):
+    weather, load = _design_inputs()
+    deps = AppRuntimeDependencies(
+        load_profile=lambda **_kwargs: load.copy(),
+        load_weather=lambda **_kwargs: None,
+        fetch_tmy_weather_data=lambda **_kwargs: (weather.copy(), {}),
+        resample_to_15min=lambda frame, **_kwargs: frame,
+        build_battery_temperature_series=build_battery_temperature_series,
+    )
+    monkeypatch.setattr(App, "_runtime_dependencies", staticmethod(lambda: deps))
+    app = App(
+        {
+            "location": LOCATION,
+            "n_modules": 4,
+            "annual_consumption_kwh": float(load["Load"].sum() / 1000),
+            "battery_kwh": 5.0,
+            "pv_module": "Suntech_STP550S_STC",
+            "tilt": 30.0,
+            "azimuth": 180.0,
+            "projection_years": 2,
+            "resolution": "h",
+            "start_date": "2023-01-01",
+            "costs": OPTIMIZER_COSTS,
+            "inverter_loading_ratio": 1.25,
+            **OPTIMIZER_RATES,
+            "pv_degradation_rate": 0.007,
+            "battery_temperature": 20.0,
+            "battery_indoor_model": {"enabled": False},
+            "execution_backend": "python",
+            "battery_eol_percentage": DESIGN_EOL,
+            "battery_enable_replacement": False,
+        }
+    )
+    app.simulate()
+    design = _optimizer_design(battery_kwh=5.0, enable_replacement=False, years=2)
+
+    assert app.result()["battery_first_end_of_life_reason"] == "replacement_disabled"
+    assert design.metrics["Projected_First_End_Of_Life_Reason"] == "replacement_disabled"
+    assert app.result()["npv_savings"] == round(design.metrics["Projected_NPV"], 2)
+    pd.testing.assert_series_equal(
+        app._artifacts.yearly_df["Battery_SOH_%"], design.yearly["Battery_SOH_%"], check_exact=True
+    )
+    assert (design.yearly["Replacements"] == 0).all()
 
 
 def test_the_key_reference_lists_the_setting():

@@ -138,15 +138,18 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   gives results bit-identical to 0.7.0.
 - App results with a battery list its state at the end of each project
   year in `battery_degradation_history`
-  ([#377](https://github.com/Str4vinci/breos/issues/377)): state of health,
-  capacity and usable capacity, replacements, charge and discharge
-  throughput, the year's and the installed pack's full equivalent cycles,
-  mean state of charge and mean cell temperature, the native engine's
+  ([#377](https://github.com/Str4vinci/breos/issues/377)): whether the
+  pack is in service, state of health, capacity and usable capacity,
+  replacements, charge and discharge throughput, the year's and the
+  installed pack's full equivalent cycles, mean state of charge and mean
+  cell temperature over the steps the pack served, the native engine's
   cycle and calendar loss, and, with `enable_resistance_fade`, resistance
   growth and round-trip efficiency. A quantity the degradation model does
-  not supply is None, not 0: BLAST has no cycle and calendar split. Year
-  rows gain `Battery_Cell_Temperature_Mean_C`. Existing fields are
-  unchanged.
+  not supply is None, not 0: BLAST has no cycle and calendar split, and a
+  retired pack keeps its last state with `in_service` false and no means
+  in the years after. Year rows gain `Battery_In_Service_Hours` and
+  `Battery_Cell_Temperature_Mean_C`, both None without a battery. Existing
+  fields are unchanged.
 - `[smart_charging] decision_boundary = "charge_window_start"`, a
   `daily_persistence` planner setting
   ([#406](https://github.com/Str4vinci/breos/issues/406), ADR 0002 A19),

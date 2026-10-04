@@ -1122,6 +1122,7 @@
  "battery_degradation_history": [
   {
    "year": 1,
+   "in_service": true,
    "soh_pct": 94.11,
    "capacity_kwh": 4.705,
    "usable_capacity_kwh": 3.764,
@@ -1139,6 +1140,7 @@
   },
   {
    "year": 2,
+   "in_service": true,
    "soh_pct": 90.46,
    "capacity_kwh": 4.523,
    "usable_capacity_kwh": 3.619,
@@ -1156,6 +1158,7 @@
   },
   {
    "year": 3,
+   "in_service": true,
    "soh_pct": 87.33,
    "capacity_kwh": 4.366,
    "usable_capacity_kwh": 3.493,
@@ -1173,6 +1176,7 @@
   },
   {
    "year": 4,
+   "in_service": true,
    "soh_pct": 84.48,
    "capacity_kwh": 4.224,
    "usable_capacity_kwh": 3.379,
@@ -1190,6 +1194,7 @@
   },
   {
    "year": 5,
+   "in_service": true,
    "soh_pct": 81.82,
    "capacity_kwh": 4.091,
    "usable_capacity_kwh": 3.273,
@@ -1207,6 +1212,7 @@
   },
   {
    "year": 6,
+   "in_service": true,
    "soh_pct": 79.31,
    "capacity_kwh": 3.966,
    "usable_capacity_kwh": 3.172,
@@ -1224,6 +1230,7 @@
   },
   {
    "year": 7,
+   "in_service": true,
    "soh_pct": 76.91,
    "capacity_kwh": 3.846,
    "usable_capacity_kwh": 3.077,
@@ -1241,6 +1248,7 @@
   },
   {
    "year": 8,
+   "in_service": true,
    "soh_pct": 74.61,
    "capacity_kwh": 3.73,
    "usable_capacity_kwh": 2.984,
@@ -1258,6 +1266,7 @@
   },
   {
    "year": 9,
+   "in_service": true,
    "soh_pct": 72.38,
    "capacity_kwh": 3.619,
    "usable_capacity_kwh": 2.895,
@@ -1275,6 +1284,7 @@
   },
   {
    "year": 10,
+   "in_service": true,
    "soh_pct": 70.22,
    "capacity_kwh": 3.511,
    "usable_capacity_kwh": 2.809,
@@ -1292,6 +1302,7 @@
   },
   {
    "year": 11,
+   "in_service": true,
    "soh_pct": 94.52,
    "capacity_kwh": 4.726,
    "usable_capacity_kwh": 3.781,
@@ -1309,6 +1320,7 @@
   },
   {
    "year": 12,
+   "in_service": true,
    "soh_pct": 90.8,
    "capacity_kwh": 4.54,
    "usable_capacity_kwh": 3.632,
@@ -1326,6 +1338,7 @@
   },
   {
    "year": 13,
+   "in_service": true,
    "soh_pct": 87.63,
    "capacity_kwh": 4.382,
    "usable_capacity_kwh": 3.505,
@@ -1343,6 +1356,7 @@
   },
   {
    "year": 14,
+   "in_service": true,
    "soh_pct": 84.76,
    "capacity_kwh": 4.238,
    "usable_capacity_kwh": 3.391,
@@ -1360,6 +1374,7 @@
   },
   {
    "year": 15,
+   "in_service": true,
    "soh_pct": 82.1,
    "capacity_kwh": 4.105,
    "usable_capacity_kwh": 3.284,
@@ -1377,6 +1392,7 @@
   },
   {
    "year": 16,
+   "in_service": true,
    "soh_pct": 79.57,
    "capacity_kwh": 3.979,
    "usable_capacity_kwh": 3.183,
@@ -1394,6 +1410,7 @@
   },
   {
    "year": 17,
+   "in_service": true,
    "soh_pct": 77.17,
    "capacity_kwh": 3.858,
    "usable_capacity_kwh": 3.087,
@@ -1411,6 +1428,7 @@
   },
   {
    "year": 18,
+   "in_service": true,
    "soh_pct": 74.86,
    "capacity_kwh": 3.743,
    "usable_capacity_kwh": 2.994,
@@ -1428,6 +1446,7 @@
   },
   {
    "year": 19,
+   "in_service": true,
    "soh_pct": 72.63,
    "capacity_kwh": 3.631,
    "usable_capacity_kwh": 2.905,
@@ -1445,6 +1464,7 @@
   },
   {
    "year": 20,
+   "in_service": true,
    "soh_pct": 70.46,
    "capacity_kwh": 3.523,
    "usable_capacity_kwh": 2.818,
