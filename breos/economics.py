@@ -50,6 +50,37 @@ COST_CONFIG_KEY_TO_PARAM: dict[str, str] = {
 }
 
 
+# The flat energy prices, which a time-of-use tariff replaces.
+FLAT_PRICE_COST_KEYS: tuple[str, ...] = ("electricity_cost", "electricity_sold_cost", "daily_power_cost")
+# The cost keys :func:`calculate_costs` prices only with a battery, and only without one.
+BATTERY_COST_KEYS: tuple[str, ...] = (
+    "storage_cost_per_kwh",
+    "installation_cost_battery",
+    "inverter_cost_per_kw_hybrid",
+)
+PV_ONLY_COST_KEYS: tuple[str, ...] = ("inverter_cost_per_kw_simple",)
+
+
+def default_amount_cost_keys(*, tariff: bool, battery: bool | None) -> tuple[str, ...]:
+    """The cost keys a run prices with whose :class:`CostParams` default is an amount of money.
+
+    Those defaults are amounts in the default currency, EUR; a zero default
+    is zero in any currency and is left out. ``tariff`` drops the flat energy
+    prices a tariff replaces. ``battery`` keeps the keys priced with a
+    battery (True), without one (False), or both (None, for a search that
+    may install either).
+    """
+    defaults = CostParams()
+    skipped = set(FLAT_PRICE_COST_KEYS if tariff else ())
+    if battery is True:
+        skipped.update(PV_ONLY_COST_KEYS)
+    elif battery is False:
+        skipped.update(BATTERY_COST_KEYS)
+    return tuple(
+        key for key, param in COST_CONFIG_KEY_TO_PARAM.items() if key not in skipped and getattr(defaults, param) != 0
+    )
+
+
 # The one default set for every projection entry point (ADR 0003 E6). Both are
 # nominal annual rates; an explicit 0.0 is valid and used as given, so callers
 # test for an absent key, never a falsy value.
@@ -842,14 +873,37 @@ def add_co2_projection(proj: pd.DataFrame, year_rows: pd.DataFrame, emissions_pa
     proj.attrs["lifetime_co2_avoided_export_kg"] = float(proj["CO2_Avoided_Export_Cumulative_kg"].iloc[-1])
 
 
+def _recorded_currency(frame: pd.DataFrame) -> Optional[str]:
+    """The currency a frame records: ``attrs["currency"]``, else its ``currency`` column, else None.
+
+    BREOS writes a ``currency`` column into the CSVs it saves, since a CSV
+    keeps no attrs; a column that names more than one currency raises.
+    """
+    if frame.attrs.get("currency") is not None:
+        return str(frame.attrs["currency"])
+    if "currency" not in frame.columns:
+        return None
+    codes = sorted({str(code) for code in frame["currency"].dropna()})
+    if len(codes) > 1:
+        raise ValueError(f"The input's currency column names several currencies ({', '.join(codes)}); keep them apart")
+    return codes[0] if codes else None
+
+
 def write_cost_projection(proj: pd.DataFrame, results_directory: str, scenario_name: str = "") -> str:
-    """Write a cost projection to ``cost_projection[_<scenario>].csv`` in ``results_directory``; return the path."""
+    """Write a cost projection to ``cost_projection[_<scenario>].csv`` in ``results_directory``; return the path.
+
+    The ``currency`` column names the currency the frame records
+    (``attrs["currency"]``, else its own ``currency`` column); a frame that
+    records none is written without one.
+    """
     import os
 
     os.makedirs(results_directory, exist_ok=True)
     suffix = f"_{scenario_name}" if scenario_name else ""
     path = f"{results_directory}/cost_projection{suffix}.csv"
-    proj.to_csv(path, index=False)
+    # A CSV keeps no attrs, so each row names the currency of its money.
+    currency = _recorded_currency(proj)
+    (proj if currency is None else proj.assign(currency=currency)).to_csv(path, index=False)
     return path
 
 

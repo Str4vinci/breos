@@ -21,6 +21,7 @@ from breos.app_inputs import (
     prepare_simulation_inputs,
     reuse_prepared_inputs,
 )
+from breos.economics import default_amount_cost_keys
 from tools.generate_app_golden import _fake_fetch
 
 BASE = {
@@ -73,6 +74,11 @@ CHANGES = {
     "projection_years": {"projection_years": 5},
     "cost_preset": {"cost_preset": "residential_es"},
     "costs": {"costs": {"storage_cost_per_kwh": 300.0}},
+    "currency": {
+        "currency": "USD",
+        "cost_preset": None,
+        "costs": dict.fromkeys(default_amount_cost_keys(tariff=False, battery=True), 1.0),
+    },
     "inflation_rate": {"inflation_rate": 0.03},
     "sell_price_inflation": {"sell_price_inflation": 0.01},
     "import_price_escalation": {"import_price_escalation": 0.04},
