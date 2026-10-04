@@ -657,20 +657,89 @@ AGEING_MODELS = (
     ),
     ("nmc_gr_50ah_b1", "BLAST NMC-Gr 50 Ah", {"degradation_engine": "blast", "blast_model": "nmc_gr_50ah_b1"}),
 )
-# One pack serves the whole projection, so its health can be followed past end of life.
-AGEING_OVERRIDES = {"battery_enable_replacement": False}
+# One pack serves the whole projection, so its health can be followed past end
+# of life. The PV array keeps its first-year output, so the only feedback into
+# the dispatch is the battery's own fade.
+AGEING_OVERRIDES = {"battery_enable_replacement": False, "pv_degradation_rate": 0.0}
+# The BLAST inputs the ageing page sets against each model's tested range.
+AGEING_INPUTS = ("c_rate_charge", "dod", "temperature_c")
+
+
+@contextlib.contextmanager
+def blast_inputs(record: dict[str, dict[str, list[float]]]) -> Iterator[None]:
+    """Record, per BLAST model key, each period's charge C-rate, depth of discharge and cell temperature.
+
+    The result keeps only the first input outside a model's tested range.
+    This keeps every period's, as the experimental-range check
+    (``BlastWarningCollector.check_experimental_range``) receives them.
+    """
+    from unittest import mock
+
+    from breos.degradation.validation import BlastWarningCollector
+
+    check = BlastWarningCollector.check_experimental_range
+
+    def recording(self: Any, t_secs: np.ndarray, soc: np.ndarray, temperature_c: np.ndarray) -> None:
+        periods = record.setdefault(self.blast_model_key, {"c_rate_charge": [], "dod": [], "t_min": [], "t_max": []})
+        periods["c_rate_charge"].append(max(0.0, float(np.max(np.diff(soc) / (np.diff(t_secs) / 3600.0)))))
+        periods["dod"].append(float(np.ptp(soc)))
+        periods["t_min"].append(float(np.min(temperature_c)))
+        periods["t_max"].append(float(np.max(temperature_c)))
+        check(self, t_secs, soc, temperature_c)
+
+    with mock.patch.object(BlastWarningCollector, "check_experimental_range", recording):
+        yield
+
+
+def input_ranges(periods: Mapping[str, list[float]], tested: Mapping[str, Any], years: int) -> list[dict[str, Any]]:
+    """Each input in ``AGEING_INPUTS``: its tested range, the range the run gave it, and the periods outside.
+
+    A charge C-rate is tested up to a maximum, so it has no minimum. A period
+    that does not move the state of charge has no depth of discharge, as in
+    the check itself. ``first_year_outside`` is the project year of the first
+    period outside, for a run of ``years`` equal years.
+    """
+    c_rate = np.asarray(periods["c_rate_charge"])
+    dod = np.asarray(periods["dod"])
+    moved = dod > 1e-12
+    t_min, t_max = np.asarray(periods["t_min"]), np.asarray(periods["t_max"])
+    dod_low, dod_high = min(tested["dod"]), max(tested["dod"])
+    t_low, t_high = min(tested["cycling_temperature_c"]), max(tested["cycling_temperature_c"])
+    rows = (
+        ("c_rate_charge", None, tested["max_c_rate_charge"], None, c_rate.max(),
+         c_rate > tested["max_c_rate_charge"] + 1e-12),
+        ("dod", dod_low, dod_high, dod[moved].min(), dod.max(),
+         moved & ((dod < dod_low - 1e-12) | (dod > dod_high + 1e-12))),
+        ("temperature_c", t_low, t_high, t_min.min(), t_max.max(), (t_min < t_low - 1e-12) | (t_max > t_high + 1e-12)),
+    )  # fmt: skip
+    return [
+        {
+            "input": name,
+            "tested_min": json_ready(low),
+            "tested_max": json_ready(high),
+            "run_min": None if run_low is None else round(float(run_low), 4),
+            "run_max": round(float(run_high), 4),
+            "periods_outside": int(outside.sum()),
+            "periods": len(dod),
+            "first_year_outside": int(np.argmax(outside)) * years // len(dod) + 1 if outside.any() else None,
+        }
+        for name, low, high, run_low, run_high, outside in rows
+    ]
 
 
 def imposed_ageing(
     selection: Mapping[str, Any], soc: np.ndarray, temperature_c: np.ndarray, *, years: int, step_seconds: float,
-    start_soc: float,
-) -> list[dict[str, Any]]:  # fmt: skip
+    start_soc: float, eol_fraction: float,
+) -> tuple[list[dict[str, Any]], float | None]:  # fmt: skip
     """Age one model under one year of SOC and cell temperature, repeated for ``years``.
 
     The stress history is imposed: it does not respond to the model's fade.
     Each day is handed to the same degradation lifecycle the simulation
     steps (``breos.battery._build_degradation_lifecycle``), in the same
     one-day periods, and the rainflow residue is closed after the last day.
+    Returns the unrounded year-end rows and the time of the first end-of-life
+    crossing in years, defined as in the simulation: the end of the first
+    period that closes at or below ``eol_fraction``, or None.
     """
     from breos.battery import BatteryConfig, _build_degradation_lifecycle
     from breos.degradation.protocol import DegradationDay
@@ -694,6 +763,7 @@ def imposed_ageing(
     per_day = int(round(86400.0 / step_seconds))
     ticks = np.arange(per_day, dtype=float) * step_seconds
     cycle_loss = calendar_loss = 0.0
+    first_end_of_life = None
     rows = []
     for year in range(1, years + 1):
         for start in range(0, len(soc), per_day):
@@ -713,17 +783,19 @@ def imposed_ageing(
             cycle_loss += step.cycle_degradation
             calendar_loss += step.calendar_degradation
             day_start_soc, day_start_t = float(day_soc[-1]), float(day_t[-1])
+            if first_end_of_life is None and step.soh_fraction <= eol_fraction:
+                first_end_of_life = year - 1 + (start + len(day_soc)) / len(soc)
         rows.append(
             {
                 "year": year,
-                "soh_pct": round(step.soh_fraction * 100.0, 4),
-                "cumulative_fec": round(step.fec, 2),
+                "soh_pct": step.soh_fraction * 100.0,
+                "cumulative_fec": step.fec,
                 # BLAST reports no split; its zero increments mean "not supplied".
-                "cycle_loss_pct": round(cycle_loss * 100.0, 4) if engine == "native" else None,
-                "calendar_loss_pct": round(calendar_loss * 100.0, 4) if engine == "native" else None,
+                "cycle_loss_pct": cycle_loss * 100.0 if engine == "native" else None,
+                "calendar_loss_pct": calendar_loss * 100.0 if engine == "native" else None,
             }
         )
-    return rows
+    return rows, first_end_of_life
 
 
 @case("ageing", "Battery ageing with different degradation models", cheap=False)
@@ -732,15 +804,15 @@ def ageing(ctx: Context) -> Output:
 
     base = with_overrides(ctx.config(QUICKSTART), AGEING_OVERRIDES)
     years = int(base["projection_years"])
+    battery_wh = float(base["battery_kwh"]) * 1000.0
     models, simulated, imposed = [], [], []
-    reference: pd.DataFrame | None = None
+    runs: dict[str, tuple[pd.DataFrame, dict[str, Any]]] = {}
+    inputs: dict[str, dict[str, list[float]]] = {}
     for key, label, selection in AGEING_MODELS:
-        app = ctx.simulate(with_overrides(base, selection))
+        with blast_inputs(inputs):
+            app = ctx.simulate(with_overrides(base, selection))
         result = app.result()
-        if reference is None:
-            # The first model's first simulated year is the stress history every model is given.
-            reference = first_year_frame(app)
-            reference_result = result
+        runs[key] = first_year_frame(app), result
         for entry in result["battery_degradation_history"]:
             simulated.append({"model": key, **entry})
         events = result["battery_end_of_life_events"]
@@ -752,6 +824,13 @@ def ageing(ctx: Context) -> Output:
             }
         )
         profile = breos.get_battery_model_profile(selection["blast_model"]) if "blast_model" in selection else None
+        ranges = None
+        if profile is not None:
+            ranges = input_ranges(inputs[profile.key], profile.experimental_range, years)
+            outside = sorted(row["input"] for row in ranges if row["periods_outside"])
+            # The page shows these inputs only, so they must be every input the result warns about.
+            if outside != warned:
+                raise RuntimeError(f"{key}: recorded inputs outside the tested range {outside}, warnings {warned}")
         models.append(
             {
                 "model": key,
@@ -760,30 +839,62 @@ def ageing(ctx: Context) -> Output:
                 "model_key": degradation["model_key"],
                 "chemistry": profile.chemistry if profile is not None else "LFP/graphite",
                 "cell_capacity_ah": profile.nominal_capacity_ah if profile is not None else None,
-                "basis": "cell model" if profile is not None else "field-calibrated",
+                "basis": "laboratory cell model"
+                if profile is not None
+                else "field calendar fit, laboratory cycle model",
                 "first_end_of_life_years": events[0]["time_years"] if events else None,
                 "battery_soh_end_pct": result["battery_soh_end_pct"],
                 "experimental_range_warnings": warned,
-                "experimental_range": json_ready(profile.as_dict()["experimental_range"]) if profile else None,
+                "input_ranges": ranges,
+                "aging_horizon_days": profile.aging_horizon_days if profile is not None else None,
             }
         )
-    assert reference is not None
-    soc = reference["Battery_SOC_Absolute"].to_numpy(dtype=float)
-    temperature = reference["T_cell"].to_numpy(dtype=float)
-    battery_wh = float(base["battery_kwh"]) * 1000.0
-    start_soc = float(reference["Battery_Energy_Beginning"].iloc[0]) / battery_wh
+    resolved = runs[AGEING_MODELS[0][0]][1]["provenance"]["resolved_config"]
+    eol_fraction = float(resolved["battery_eol_percentage"])
+
+    def stress(frame: pd.DataFrame) -> tuple[np.ndarray, np.ndarray]:
+        return frame["Battery_SOC_Absolute"].to_numpy(dtype=float), frame["T_cell"].to_numpy(dtype=float)
+
     with ctx.inside():
-        for key, _label, selection in AGEING_MODELS:
-            rows = imposed_ageing(selection, soc, temperature, years=years, step_seconds=3600.0, start_soc=start_soc)
-            imposed.extend({"model": key, **row} for row in rows)
-    # The imposed history is the reference run's own first year, so the first
-    # model's first imposed year must give that run's first-year health.
-    first_simulated = reference_result["battery_degradation_history"][0]["soh_pct"]
-    if abs(imposed[0]["soh_pct"] - first_simulated) > 0.01:
-        raise RuntimeError(
-            f"imposed year 1 ({imposed[0]['soh_pct']}) does not reproduce the simulation ({first_simulated})"
-        )
-    stress = reference_result["battery_degradation_history"][0]
+        for (key, _label, selection), entry in zip(AGEING_MODELS, models, strict=True):
+            frame, result = runs[key]
+            options = {
+                "step_seconds": 3600.0,
+                "start_soc": float(frame["Battery_Energy_Beginning"].iloc[0]) / battery_wh,
+                "eol_fraction": eol_fraction,
+            }
+            # The result's own precision: two decimals for the native engine, one for a BLAST cell model.
+            digits = 2 if entry["engine"] == "native" else 1
+            # Each model's own first simulated year, imposed, must give that run's first-year health
+            # to within the rounding of the stored result. Two years, so the first does not close the
+            # rainflow residue the simulation carries on.
+            own, _ = imposed_ageing(selection, *stress(frame), years=2, **options)
+            first = result["battery_degradation_history"][0]["soh_pct"]
+            if abs(own[0]["soh_pct"] - first) > 0.5 * 10.0**-digits + 1e-9:
+                raise RuntimeError(
+                    f"{key}: imposed year 1 ({own[0]['soh_pct']}) does not reproduce the simulation ({first})"
+                )
+            # Every model is given the first model's first simulated year.
+            rows, first_end_of_life = imposed_ageing(
+                selection, *stress(runs[AGEING_MODELS[0][0]][0]), years=years, **options
+            )
+            imposed.extend(
+                {
+                    "model": key,
+                    "year": row["year"],
+                    "soh_pct": round(row["soh_pct"], digits),
+                    "cumulative_fec": round(row["cumulative_fec"], 2),
+                    **{
+                        column: None if row[column] is None else round(row[column], digits)
+                        for column in ("cycle_loss_pct", "calendar_loss_pct")
+                    },
+                }
+                for row in rows
+            )
+            entry["imposed_first_end_of_life_years"] = (
+                None if first_end_of_life is None else round(first_end_of_life, 4)
+            )
+    stress_year = runs[AGEING_MODELS[0][0]][1]["battery_degradation_history"][0]
     return Output(
         {
             "models.json": models,
@@ -792,12 +903,13 @@ def ageing(ctx: Context) -> Output:
         },
         {
             "overrides": AGEING_OVERRIDES,
-            "battery_eol_percentage": reference_result["provenance"]["resolved_config"]["battery_eol_percentage"],
+            "battery_eol_percentage": eol_fraction,
+            "soc_window": [resolved["battery_min_soc"], resolved["battery_max_soc"]],
             "imposed_stress": {
                 "source": AGEING_MODELS[0][0],
-                "mean_soc_pct": stress["mean_soc_pct"],
-                "mean_cell_temperature_c": stress["mean_cell_temperature_c"],
-                "fec_per_year": stress["fec"],
+                "mean_soc_pct": stress_year["mean_soc_pct"],
+                "mean_cell_temperature_c": stress_year["mean_cell_temperature_c"],
+                "fec_per_year": stress_year["fec"],
             },
         },
     )

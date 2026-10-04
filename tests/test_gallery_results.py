@@ -15,6 +15,7 @@ import sys
 from importlib import metadata
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -141,6 +142,32 @@ def test_check_reproduces_every_cheap_case(capsys):
     if not _same_stack(manifest):
         pytest.skip("the stored results were made with other numpy/pandas/pvlib/scipy versions")
     assert TOOL.main(["--check", "--cross-machine"]) == 0, capsys.readouterr().out
+
+
+# The ageing case is not cheap, so --check never reaches it. It drives the
+# library's private degradation lifecycle and BLAST range check directly; this
+# fails as soon as either changes in a way the case cannot follow.
+def test_ageing_case_steps_every_model_and_records_the_blast_inputs():
+    import breos
+
+    day = np.r_[np.linspace(0.1, 0.9, 12), np.linspace(0.9, 0.1, 12)]
+    soc, temperature = np.tile(day, 2), np.full(48, 25.0)
+    record: dict = {}
+    with TOOL.blast_inputs(record):
+        for key, _label, selection in TOOL.AGEING_MODELS:
+            rows, first_end_of_life = TOOL.imposed_ageing(
+                selection, soc, temperature, years=2, step_seconds=3600.0, start_soc=0.1, eol_fraction=0.7
+            )
+            assert [row["year"] for row in rows] == [1, 2]
+            assert 0.0 < rows[1]["soh_pct"] < rows[0]["soh_pct"] < 100.0, key
+            assert (rows[0]["cycle_loss_pct"] is None) == (selection.get("degradation_engine") == "blast")
+            assert first_end_of_life is None
+    blast = [selection["blast_model"] for _key, _label, selection in TOOL.AGEING_MODELS if "blast_model" in selection]
+    assert sorted(record) == sorted(blast)
+    profile = breos.get_battery_model_profile(blast[0])
+    ranges = TOOL.input_ranges(record[blast[0]], profile.experimental_range, 2)
+    assert [row["input"] for row in ranges] == list(TOOL.AGEING_INPUTS)
+    assert all(row["periods"] == 4 for row in ranges)
 
 
 def _compare(tmp_path, stored, fresh, suffix, cross_machine=True):

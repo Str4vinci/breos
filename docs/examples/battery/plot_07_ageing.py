@@ -4,11 +4,11 @@ Battery ageing with different degradation models
 
 How fast a home battery loses capacity depends on the degradation model as
 much as on how it is used. This page follows one battery pack for 20 years
-under five models: the two field-calibrated fits of the native engine and
-three BLAST cell models. Replacement is switched off
-(``battery_enable_replacement = false``), so one pack serves the whole
-projection and its state of health can be followed past the 70 % end-of-life
-threshold. See
+under five models: the native engine's two fits, which pair a calendar model
+fitted to field data with a laboratory cycle model, and three BLAST cell
+models. Replacement is switched off (``battery_enable_replacement = false``),
+so one pack serves the whole projection and its state of health can be
+followed past the 70 % end-of-life threshold. See
 `Running without replacement <../../getting-started/configuration.html#running-without-replacement>`__.
 
 The runs are the quickstart home (:doc:`/gallery/getting_started/plot_01_first_home`):
@@ -17,41 +17,51 @@ The runs are the quickstart home (:doc:`/gallery/getting_started/plot_01_first_h
    :language: toml
    :caption: configs/examples/quickstart.toml
 
-with replacement off and one model selected per run:
+with replacement off, PV module ageing off and one model selected per run:
 
 .. code-block:: toml
 
     battery_enable_replacement = false
+    pv_degradation_rate = 0.0
 
     calendar_model = "naumann_lam_field_calibrated_v1"  # native, v1 field fit
     calendar_model = "naumann_lam_field_calibrated_v2"  # native, v2 field fit
     degradation_engine = "blast"                         # or a BLAST cell model
     blast_model = "lfp_gr_250ah_prismatic"               # also lfp_gr_sonymurata_3ah, nmc_gr_50ah_b1
 
-The models are compared in two ways, which answer different questions:
+The PV array is held at its first-year output, so the only feedback is the
+battery's own fade. The models are compared in two ways, which answer
+different questions:
 
 - **Identical imposed stress history.** Every model is given the same state
   of charge and cell temperature, step by step: the first simulated year of
   the native v1 run, repeated every year. The use does not respond to the
   fade, so any difference between the curves comes from the models alone.
 - **Full simulation with feedback into dispatch.** Each model runs in the
-  App. As the pack loses capacity its SOC window shrinks, the dispatch moves
-  less energy and the state of charge it holds changes, and that use is what
-  ages the pack next. This is what the household would see under each model.
+  App. As the pack loses capacity its usable energy shrinks: the state of
+  charge stays within the same 10–90 % window, but of a smaller capacity.
+  The dispatch moves less energy and the state of charge it holds changes,
+  and that use is what ages the pack next. This is what the household would
+  see under each model.
 
 .. note::
 
-   Twenty years is longer than the ageing data behind any of these models,
-   so every curve beyond the first years is a model projection, not a
-   measured behaviour, and the further below the end-of-life threshold, the
-   further it extrapolates. The native engine combines Naumann's laboratory
-   LFP cycle-ageing model with calendar parameters fitted to field data from
-   LFP home storage systems. The BLAST models are fitted to laboratory tests
-   of single cells; BREOS applies a cell's relative fade to the whole pack,
-   without cell-to-cell spread, pack thermal behaviour or battery-management
-   effects. Each model is a separate empirical fit for its own cell and
-   chemistry: the models do not share physics, and a difference between them
-   is not a difference between chemistries in general.
+   The sources of these models do not state how many years of ageing their
+   data cover, so BREOS cannot check a 20-year projection against them: read
+   the late years as model projections, not measured behaviour. The native
+   engine combines Naumann's laboratory LFP cycle-ageing model with calendar
+   parameters fitted to field data from LFP home storage systems. The BLAST
+   models are fitted to laboratory tests of single cells; BREOS applies a
+   cell's relative fade to the whole pack, without cell-to-cell spread, pack
+   thermal behaviour or battery-management effects. Each model is a separate
+   empirical fit. The native cycle model and the BLAST LFP-Gr 3 Ah model both
+   relate to Naumann's laboratory data on Sony/Murata 3 Ah LFP cells, which
+   makes that pair the closest native-to-BLAST comparison; the native
+   calendar parameters come from field data, and the other two BLAST models
+   from other cells (see the
+   `battery degradation policy <https://github.com/Str4vinci/breos/blob/develop/design/architecture/battery-degradation-policy.md>`__).
+   A difference between the models is not a difference between chemistries
+   in general.
 """
 
 # %%
@@ -61,7 +71,7 @@ The models are compared in two ways, which answer different questions:
 # sphinx_gallery_thumbnail_number = 1
 import matplotlib.pyplot as plt
 import pandas as pd
-from gallery_results import load_case, table
+from gallery_results import load_case, number, say, table
 
 case = load_case("ageing")
 models = pd.DataFrame(case.json("models.json")).set_index("model")
@@ -70,17 +80,14 @@ simulated = case.csv("simulated.csv")
 threshold = 100 * case.manifest["battery_eol_percentage"]
 stress = case.manifest["imposed_stress"]
 labels = models["label"].to_dict()
+years = int(imposed["year"].max())
+native = [m for m in models.index if models.loc[m, "engine"] == "native"]
+blast = [m for m in models.index if models.loc[m, "engine"] == "blast"]
 # Native fits solid, BLAST cell models dashed, one colour per model.
 styles = {
     model: {"color": f"C{i}", "ls": "-" if models.loc[model, "engine"] == "native" else "--"}
     for i, model in enumerate(models.index)
 }
-
-
-def first_year_at_or_below(frame: pd.DataFrame, model: str) -> float | None:
-    """The first project year that ends at or below the end-of-life threshold."""
-    years = frame.loc[(frame["model"] == model) & (frame["soh_pct"] <= threshold), "year"]
-    return float(years.min()) if len(years) else None
 
 
 def from_installation(group: pd.DataFrame, column: str, start: float) -> tuple[list, list]:
@@ -92,6 +99,12 @@ def at_year(frame: pd.DataFrame, model: str, year: int, column: str) -> float:
     return float(frame.loc[(frame["model"] == model) & (frame["year"] == year), column].iloc[0])
 
 
+# sphinx_gallery_start_ignore
+# The fixed text above holds for the stored runs.
+assert case.manifest["overrides"]["pv_degradation_rate"] == 0
+assert case.manifest["soc_window"] == [0.1, 0.9]
+assert models.loc[blast, "aging_horizon_days"].isna().all()
+# sphinx_gallery_end_ignore
 case.stamp()
 
 # %%
@@ -121,13 +134,12 @@ ax.axhline(threshold, color="k", lw=0.8, ls=":", label=f"End-of-life threshold (
 ax.set_xlabel("Project year")
 ax.set_ylabel("State of health at year end (%)")
 ax.set_title("Model projections under the same imposed use")
-ax.set_xticks(range(0, int(imposed["year"].max()) + 1, 2))
-ax.legend(fontsize=9)
+ax.set_xticks(range(0, years + 1, 2))
+ax.legend()
 fig.tight_layout()
 
 # %%
 
-years = int(imposed["year"].max())
 table(
     pd.DataFrame(
         {
@@ -136,38 +148,57 @@ table(
             "Basis": models["basis"].to_list(),
             "Health after 10 years (%)": [at_year(imposed, m, 10, "soh_pct") for m in models.index],
             f"Health after {years} years (%)": [at_year(imposed, m, years, "soh_pct") for m in models.index],
-            f"First year at or below {threshold:.0f} %": [first_year_at_or_below(imposed, m) for m in models.index],
+            "First end of life (years)": models["imposed_first_end_of_life_years"].to_list(),
         }
     ),
     **{"Health after 10 years (%)": ".1f", f"Health after {years} years (%)": ".1f",
-       f"First year at or below {threshold:.0f} %": ".0f"},
+       "First end of life (years)": ".2f"},
 )  # fmt: skip
 
 # %%
-# An empty cell in the last column means the model stays above the threshold
-# for the whole projection.
+# "First end of life" is the time from installation to the end of the first
+# day that closes at or below the threshold. The full simulation records the
+# same instant as ``battery_first_end_of_life_years``, so the tables below
+# compare like with like. An empty cell means the model stays above the
+# threshold for the whole projection.
 #
 # Cycle and calendar ageing in the native fits
 # --------------------------------------------
 # The native engine reports how much health each pack lost to cycling and
-# how much to calendar ageing. The v1 and v2 fits share the cycle model and,
-# here, the same imposed use, so their cycle losses are identical; they
-# differ only in the calendar parameters. The BLAST models report a state of
-# health without this split, so the result leaves it empty (None) for them
-# rather than reporting zero.
+# how much to calendar ageing. The BLAST models report a state of health
+# without this split, so the result leaves it empty (None) for them rather
+# than reporting zero.
 
-native = [m for m in models.index if models.loc[m, "engine"] == "native"]
+# sphinx_gallery_start_ignore
+cycling = imposed[imposed["model"].isin(native)].pivot(index="year", columns="model", values="cycle_loss_pct")
+# The v1 and v2 fits share the cycle model and, here, the use, so they lose the same health to cycling.
+assert cycling.nunique(axis=1).eq(1).all()
+say(
+    "The v1 and v2 fits share the cycle model and, here, the same imposed use, so their cycle losses are "
+    f"identical: {at_year(imposed, native[0], years, 'cycle_loss_pct'):.1f} percentage points after {years} years. "
+    "They differ only in the calendar parameters: "
+    + " against ".join(
+        f"{at_year(imposed, m, years, 'calendar_loss_pct'):.1f} percentage points of calendar loss under the "
+        f"{labels[m].split(', ')[-1]}"
+        for m in native
+    )
+    + "."
+)
+# sphinx_gallery_end_ignore
+
+# %%
+
 fig, ax = plt.subplots(figsize=(9, 4.2))
 for model in native:
     group = imposed[imposed["model"] == model]
     ax.plot(*from_installation(group, "calendar_loss_pct", 0.0), label=f"{labels[model]}: calendar", **styles[model])
-    ax.plot(*from_installation(group, "cycle_loss_pct", 0.0), label=f"{labels[model]}: cycling",
-            color=styles[model]["color"], ls="-.")  # fmt: skip
+ax.plot(*from_installation(imposed[imposed["model"] == native[0]], "cycle_loss_pct", 0.0), color="0.3", ls="-.",
+        label="Both native fits: cycling")  # fmt: skip
 ax.set_xlabel("Project year")
-ax.set_ylabel("Health lost since installation (percentage points)")
+ax.set_ylabel("Health lost (percentage points)")
 ax.set_title("Calendar and cycle loss, native fits, imposed use")
 ax.set_xticks(range(0, years + 1, 2))
-ax.legend(fontsize=9)
+ax.legend()
 fig.tight_layout()
 
 # %%
@@ -175,94 +206,186 @@ fig.tight_layout()
 # -------------------------------------------
 # The same five models, each in its own App run. The left panel is the state
 # of health; the right panel is the energy the cells deliver each year,
-# which falls as the usable capacity shrinks.
+# which falls as the usable energy shrinks.
 
-fig, (left, right) = plt.subplots(1, 2, figsize=(11, 4.5))
+fig, (left, right) = plt.subplots(1, 2, figsize=(11, 5.6), layout="constrained")
 for model, group in simulated.groupby("model", sort=False):
     left.plot(*from_installation(group, "soh_pct", 100.0), marker="o", ms=3, label=labels[model], **styles[model])
-    right.plot(group["year"], group["discharge_throughput_kwh"], marker="o", ms=3, label=labels[model],
-               **styles[model])  # fmt: skip
-left.axhline(threshold, color="k", lw=0.8, ls=":")
+    right.plot(group["year"], group["discharge_throughput_kwh"], marker="o", ms=3, **styles[model])
+left.axhline(threshold, color="k", lw=0.8, ls=":", label=f"End-of-life threshold ({threshold:.0f} %)")
 left.set_ylabel("State of health at year end (%)")
-right.set_ylabel("Energy discharged from the cells (kWh per year)")
+right.set_ylabel("kWh per year")
 for ax in (left, right):
     ax.set_xlabel("Project year")
     ax.set_xticks(range(0, years + 1, 4))
 left.set_title("State of health")
-right.set_title("Battery use")
-right.legend(fontsize=9)
-fig.tight_layout()
+right.set_title("Energy discharged from the cells")
+fig.legend(loc="outside lower center", ncol=3)
+
+# %%
+# The fade with and without feedback, model by model:
+
+table(
+    pd.DataFrame(
+        {
+            "Model": [labels[m] for m in models.index],
+            f"Health after {years} years, imposed use (%)": [at_year(imposed, m, years, "soh_pct") for m in models.index],
+            "Same, with feedback (%)": [at_year(simulated, m, years, "soh_pct") for m in models.index],
+            "First end of life, imposed use (years)": models["imposed_first_end_of_life_years"].to_list(),
+            "Same, with feedback (years)": models["first_end_of_life_years"].to_list(),
+        }
+    ),
+    **{f"Health after {years} years, imposed use (%)": ".1f", "Same, with feedback (%)": ".1f",
+       "First end of life, imposed use (years)": ".2f", "Same, with feedback (years)": ".2f"},
+)  # fmt: skip
 
 # %%
 
-
-def simulated_row(model: str) -> dict:
-    group = simulated[simulated["model"] == model]
-    first, last = group.iloc[0], group.iloc[-1]
-    return {
-        "Model": labels[model],
-        f"Health after {years} years (%)": last["soh_pct"],
-        "Same, imposed use (%)": at_year(imposed, model, years, "soh_pct"),
-        "First end of life (years)": models.loc[model, "first_end_of_life_years"],
-        "Discharged in year 1 (kWh)": first["discharge_throughput_kwh"],
-        f"Discharged in year {years} (kWh)": last["discharge_throughput_kwh"],
-        "Mean SOC, year 1 (%)": first["mean_soc_pct"],
-        f"Mean SOC, year {years} (%)": last["mean_soc_pct"],
+# sphinx_gallery_start_ignore
+gaps = {m: at_year(simulated, m, years, "soh_pct") - at_year(imposed, m, years, "soh_pct") for m in models.index}
+widest = max(gaps, key=lambda m: abs(gaps[m]))
+split = {
+    m: {
+        arm: {column: at_year(frame, m, years, column) for column in ("calendar_loss_pct", "cycle_loss_pct", "cumulative_fec")}
+        for arm, frame in (("imposed", imposed), ("simulated", simulated))
     }
+    for m in native
+}
+soc_first = simulated.groupby("model", sort=False)["mean_soc_pct"].first()
+soc_last = simulated.groupby("model", sort=False)["mean_soc_pct"].last()
+# Every pack holds a lower mean state of charge as it fades. With feedback the native packs
+# lose less to calendar ageing and more to cycling, over more cycles, and end healthier and later.
+assert (soc_last < soc_first).all()
+for m in native:
+    assert split[m]["simulated"]["calendar_loss_pct"] < split[m]["imposed"]["calendar_loss_pct"]
+    assert split[m]["simulated"]["cycle_loss_pct"] > split[m]["imposed"]["cycle_loss_pct"]
+    assert split[m]["simulated"]["cumulative_fec"] > split[m]["imposed"]["cumulative_fec"]
+    assert gaps[m] > 0
+    assert models.loc[m, "first_end_of_life_years"] > models.loc[m, "imposed_first_end_of_life_years"]
+say(
+    f"Feedback changes the health after {years} years by at most {abs(gaps[widest]):.1f} percentage points "
+    f"({labels[widest]}). As the pack fades, the dispatch holds it at a lower mean state of charge: "
+    f"{soc_first.min():.1f}–{soc_first.max():.1f} % in year 1, {soc_last.min():.1f}–{soc_last.max():.1f} % in "
+    f"year {years}. A lower state of charge slows calendar ageing, and a smaller pack makes more full equivalent "
+    "cycles for the same energy. The native split shows both. "
+    + " ".join(
+        f"Under the {labels[m].split(', ')[-1]} the pack loses {split[m]['simulated']['calendar_loss_pct']:.1f} "
+        "percentage points to calendar ageing "
+        f"instead of {split[m]['imposed']['calendar_loss_pct']:.1f}, and "
+        f"{split[m]['simulated']['cycle_loss_pct']:.2f} to cycling instead of "
+        f"{split[m]['imposed']['cycle_loss_pct']:.2f}, over {number(split[m]['simulated']['cumulative_fec'])} full "
+        f"equivalent cycles instead of {number(split[m]['imposed']['cumulative_fec'])}."
+        for m in native
+    )
+    + " The slower calendar ageing outweighs the extra cycling, so with feedback both native packs keep more "
+    "health and reach end of life later.",
+)
+# sphinx_gallery_end_ignore
 
+# %%
+# What the fade costs the household
+# ---------------------------------
+# Only the full simulation shows this; the imposed history has no dispatch.
+# The energy the battery discharges falls with its capacity:
 
 table(
-    pd.DataFrame([simulated_row(m) for m in models.index]),
-    **{f"Health after {years} years (%)": ".1f", "Same, imposed use (%)": ".1f", "First end of life (years)": ".1f",
-       "Discharged in year 1 (kWh)": ".0f", f"Discharged in year {years} (kWh)": ".0f", "Mean SOC, year 1 (%)": ".1f",
+    pd.DataFrame(
+        {
+            "Model": [labels[m] for m in models.index],
+            "Discharged in year 1 (kWh)": [at_year(simulated, m, 1, "discharge_throughput_kwh") for m in models.index],
+            f"Discharged in year {years} (kWh)": [
+                at_year(simulated, m, years, "discharge_throughput_kwh") for m in models.index
+            ],
+            "Mean SOC, year 1 (%)": [at_year(simulated, m, 1, "mean_soc_pct") for m in models.index],
+            f"Mean SOC, year {years} (%)": [at_year(simulated, m, years, "mean_soc_pct") for m in models.index],
+        }
+    ),
+    **{"Discharged in year 1 (kWh)": ".0f", f"Discharged in year {years} (kWh)": ".0f", "Mean SOC, year 1 (%)": ".1f",
        f"Mean SOC, year {years} (%)": ".1f"},
 )  # fmt: skip
 
 # %%
-# "First end of life" is the time of the first end-of-life crossing, the
-# instant a replacement would have been booked; with replacement off the
-# pack is kept (``battery_end_of_life_events`` records it with the reason
-# ``"replacement_disabled"``). Empty means no crossing within the projection.
-#
-# In this home the feedback changes the health curves little: the dispatch
-# works in shares of the aged capacity, so a smaller pack is cycled about as
-# deeply as a new one. It changes the household's outcome much more. The
-# energy the battery shifts falls with its capacity, and a pack that empties
-# earlier each evening also sits at a lower state of charge, which slows its
-# calendar ageing.
+# With replacement off the pack is kept after its end-of-life crossing:
+# ``battery_end_of_life_events`` records the crossing with the reason
+# ``"replacement_disabled"``, at the time a replacement would have been
+# booked.
 #
 # What the models were fitted to
 # -------------------------------
 # A BLAST model reports when its input leaves the range of the laboratory
 # tests it was fitted to (``degradation.experimental_range_warnings`` in the
-# result). Home use at hourly resolution often does: shallow daily cycles lie
-# below the tested depths of discharge, for example. The model then
-# extrapolates, and so does every number above.
+# result). The result records the first day each input leaves its range;
+# the table counts every day of the stored runs.
 
-blast = [m for m in models.index if models.loc[m, "engine"] == "blast"]
+INPUTS = {
+    "c_rate_charge": ("Charge C-rate (per hour)", 1.0, 2),
+    "dod": ("Depth of discharge (%)", 100.0, 0),
+    "temperature_c": ("Cell temperature (°C)", 1.0, 1),
+}
+ranges = pd.DataFrame([{"model": m, **row} for m in blast for row in models.loc[m, "input_ranges"]])
+
+
+def span(low: float | None, high: float, scale: float, decimals: int | None = None) -> str:
+    """``low–high``, or ``up to high`` without a lower bound, in the page's units; tested limits as given."""
+    shown = (lambda v: f"{v * scale:g}") if decimals is None else (lambda v: f"{v * scale:.{decimals}f}")
+    return f"up to {shown(high)}" if pd.isna(low) else f"{shown(low)}–{shown(high)}"
+
+
 table(
     pd.DataFrame(
         {
-            "Model": [labels[m] for m in blast],
-            "Cell": [f"{models.loc[m, 'cell_capacity_ah']:g} Ah, {models.loc[m, 'chemistry']}" for m in blast],
-            "Tested depth of discharge": [
-                "–".join(f"{v:g}" for v in models.loc[m, "experimental_range"]["dod"]) for m in blast
-            ],
-            "Tested temperature (°C)": [
-                "–".join(f"{v:g}" for v in models.loc[m, "experimental_range"]["cycling_temperature_c"]) for m in blast
-            ],
-            "Outside the tested range here": [
-                ", ".join(models.loc[m, "experimental_range_warnings"]) or "none" for m in blast
+            "Model": [labels[row.model] for row in ranges.itertuples()],
+            "Input": [INPUTS[row.input][0] for row in ranges.itertuples()],
+            "Tested range": [span(row.tested_min, row.tested_max, INPUTS[row.input][1]) for row in ranges.itertuples()],
+            "In these runs": [span(row.run_min, row.run_max, *INPUTS[row.input][1:]) for row in ranges.itertuples()],
+            "Days outside the tested range": [
+                f"{number(row.periods_outside)} of {number(row.periods)}" for row in ranges.itertuples()
             ],
         }
     )
-)
+)  # fmt: skip
+
+# %%
+
+# sphinx_gallery_start_ignore
+low, high = case.manifest["soc_window"]
+dod = ranges[ranges["input"] == "dod"]
+# One degradation period is one day; the window's width is the lower edge of every
+# tested depth, no day swings deeper than the window by more than a rounding, so a
+# day outside the tested depths is a shallower one.
+assert (ranges["periods"] == 365 * years).all()
+assert (dod["tested_min"] - (high - low)).abs().lt(1e-9).all() and dod["run_max"].lt(high - low + 0.01).all()
+assert dod["run_max"].lt(dod["tested_max"]).all()
+share = 100 * dod["periods_outside"] / dod["periods"]
+lines = [
+    f"The depth-of-discharge flag is structural. The {100 * low:.0f}–{100 * high:.0f} % SOC window caps the daily "
+    f"swing at about {100 * (high - low):.0f} %, the lower edge of every tested range. A day can at best "
+    f"reach the shallowest tested cycle, and on {share.min():.0f}–{share.max():.0f} % of days the swing is "
+    "shallower still."
+]
+for row in ranges[(ranges["input"] == "c_rate_charge") & (ranges["periods_outside"] > 0)].itertuples():
+    lines.append(
+        f"The {labels[row.model]} cell was tested at charge rates up to {row.tested_max:g} C. The C-rate is "
+        "measured against the aged capacity, so the same charging power is a higher C-rate as the pack fades: "
+        f"here the charge rate passes {row.tested_max:g} C on {number(row.periods_outside)} of "
+        f"{number(row.periods)} days, the first in year {row.first_year_outside:.0f}, and reaches {row.run_max:.2f} C."
+    )
+for row in ranges[(ranges["input"] == "temperature_c") & (ranges["periods_outside"] > 0)].itertuples():
+    below = row.run_max <= row.tested_max
+    lines.append(
+        f"The {labels[row.model]} cell was tested at {row.tested_min:g}–{row.tested_max:g} °C. The cell temperature "
+        f"here ranges from {row.run_min:.1f} to {row.run_max:.1f} °C, and on {number(row.periods_outside)} of "
+        f"{number(row.periods)} days it leaves the tested range"
+        + (f", always below {row.tested_min:g} °C." if below else ".")
+    )
+say(*lines)
+# sphinx_gallery_end_ignore
 
 # %%
 # The native engine has no such check. Its calendar parameters are fitted to
-# field records of five LFP home storage systems, and its cycle model to
+# field data from LFP home storage systems, and its cycle model to
 # laboratory LFP cells; the v1 and v2 fits are two calibrations of the same
-# calendar law to those records.
+# calendar law to that field data.
 #
 # Which comparison to use
 # -----------------------

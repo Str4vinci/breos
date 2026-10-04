@@ -138,10 +138,12 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   gives results bit-identical to 0.7.0.
 - The example gallery gains an ageing page
   ([#378](https://github.com/Str4vinci/breos/issues/378)): one battery
-  followed for 20 years with replacement off, under the native v1 and v2
-  field fits and three BLAST cell models, compared once under an identical
-  imposed stress history and once in full simulations whose fade feeds back
-  into the dispatch. `tools/regenerate_gallery_results.py ageing` stores it.
+  followed for 20 years with replacement off and the PV array held at its
+  first-year output, under the native v1 and v2 field fits and three BLAST
+  cell models, compared once under an identical imposed stress history and
+  once in full simulations whose fade feeds back into the dispatch. It also
+  counts the days each BLAST model's input leaves its tested range.
+  `tools/regenerate_gallery_results.py ageing` stores it.
 - App results with a battery list its state at the end of each project
   year in `battery_degradation_history`
   ([#377](https://github.com/Str4vinci/breos/issues/377)): whether the
