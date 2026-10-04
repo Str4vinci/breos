@@ -827,8 +827,20 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
     ),
     "battery_eol_percentage": AppConfigField(
         default=DEFAULT_EOL_PERCENTAGE,
-        doc="SOH fraction that triggers a battery replacement",
+        doc=(
+            "SOH fraction at which the battery reaches end of life: it is replaced, or, when the replacement is "
+            "skipped, kept or retired"
+        ),
         summary="battery.eol_percentage",
+    ),
+    "battery_enable_replacement": AppConfigField(
+        default=True,
+        doc=(
+            "Whether a battery that reaches end of life is replaced. `false` skips every replacement: the battery "
+            "keeps ageing below its threshold, or is retired, as `battery_skipped_replacement_action` says. See "
+            "[Running without replacement](configuration.md#running-without-replacement)"
+        ),
+        summary="battery.enable_replacement",
     ),
     "battery_allow_terminal_replacement": AppConfigField(
         default=True,
@@ -857,7 +869,8 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         doc=(
             'What happens to a battery whose end-of-life replacement is skipped. `"keep"` leaves it in service '
             'below its threshold; `"retire"` switches it off, and the project finishes PV-only. Applies only when '
-            "`battery_replacement_min_remaining_years` or `battery_allow_terminal_replacement` skips a swap. See "
+            "`battery_enable_replacement`, `battery_replacement_min_remaining_years` or "
+            "`battery_allow_terminal_replacement` skips a swap. See "
             "[Retiring the battery instead of keeping it](configuration.md#retiring-the-battery-instead-of-keeping-it)"
         ),
         summary="battery.skipped_replacement_action",
@@ -2435,6 +2448,8 @@ def _validate_battery_and_degradation(cfg: dict[str, Any]) -> None:
 
     if not isinstance(cfg["enable_resistance_fade"], bool):
         raise TypeError("'enable_resistance_fade' must be a boolean")
+    if not isinstance(cfg["battery_enable_replacement"], bool):
+        raise TypeError("'battery_enable_replacement' must be a boolean")
     if not isinstance(cfg["battery_allow_terminal_replacement"], bool):
         raise TypeError("'battery_allow_terminal_replacement' must be a boolean")
     min_remaining = _finite_real(

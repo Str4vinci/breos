@@ -292,11 +292,13 @@ def _battery_replacement_treatment(battery: Mapping[str, Any]) -> Dict[str, Any]
     period; the earlier years' internal permission is not the user's setting.
     ``replacement_min_remaining_years`` is the configured minimum service
     time of a new pack, measured to the end of the project.
+    ``enable_replacement = false`` skips every swap.
     """
     return {
         "method": "simulated_yearly_state_propagation",
         "description": "Projected scoring simulates every year and records actual replacement events.",
         "higher_fidelity_basis": "App multiyear SOH propagation",
+        "enable_replacement": bool(battery.get("enable_replacement", True)),
         "allow_terminal_replacement": bool(battery.get("allow_terminal_replacement", True)),
         "replacement_min_remaining_years": float(battery.get("replacement_min_remaining_years", 0.0)),
         "skipped_replacement_action": str(battery.get("skipped_replacement_action", "keep")),
