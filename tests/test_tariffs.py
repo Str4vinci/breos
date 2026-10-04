@@ -44,10 +44,15 @@ def test_tariff_values_are_frozen_and_currency_qualified():
         schedule.cycle = "weekly"
 
 
-@pytest.mark.parametrize("currency", ["USD", "XYZ"])
-def test_unsupported_currency_fails_before_resolution(currency):
-    with pytest.raises(ValueError, match="Unsupported tariff currency"):
+@pytest.mark.parametrize("currency", ["XYZ", "EURO", "US$"])
+def test_unknown_currency_fails_before_resolution(currency):
+    with pytest.raises(ValueError, match="must be an ISO 4217 currency code"):
         TariffPrices(currency=currency, import_prices={"all": 0.2}, export_prices={"all": 0.04})
+
+
+def test_currency_codes_are_upper_cased():
+    prices = TariffPrices(currency=" usd ", import_prices={"all": 20.0}, export_prices={"all": 4.0})
+    assert prices.currency == "USD"
 
 
 @pytest.mark.parametrize("value", [-0.01, float("nan"), float("inf"), True])

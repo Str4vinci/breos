@@ -32,6 +32,7 @@ from breos.battery import (
     SimulationSummary,
     _simulate_detailed_run,
     frame_replaced_capacity_wh,
+    retiring_step,
     simulate_energy_balance,
     simulate_energy_balance_summary,
     weighted_column_sums,
@@ -46,7 +47,7 @@ from breos.economics import (
     terminal_health_credit,
 )
 from breos.execution import config_has_battery, observed_jit_cache_state, reset_jit_cache_observation
-from breos.tariffs import ResolvedTariff, result_currency
+from breos.tariffs import ResolvedTariff
 from breos.utils import get_hours_per_step
 
 
@@ -255,6 +256,8 @@ def build_year_row(
     replacement_steps: Sequence[int],
     n_steps: int,
     pv_degradation_factor: float,
+    in_service_steps: int,
+    in_service_t_cell_sum: float | None,
     annual_fec: float = 0.0,
     extra: Mapping[str, Any] | None = None,
     money: Mapping[str, float] | None = None,
@@ -264,8 +267,10 @@ def build_year_row(
     ``sums_w`` holds each results column's sum over the year's steps; a
     summary's ``column_sums`` and a frame's column sums are the same floats.
     ``carry`` is the state at the end of the year and ``annual_fec`` the
-    rainflow cycles every pack accumulated in it. ``extra`` columns (Monte
-    Carlo's sampled weather year and load scale) follow
+    rainflow cycles every pack accumulated in it. ``in_service_steps`` are
+    the steps the battery served, every step unless it was retired, and
+    ``in_service_t_cell_sum`` its ``T_cell`` summed over them. ``extra``
+    columns (Monte Carlo's sampled weather year and load scale) follow
     ``PV_Degradation_Factor``.
     """
 
@@ -335,8 +340,15 @@ def build_year_row(
     # SOH-derated pack, so it rises as the pack fades.
     row["Battery_SOC_Normalized_Mean_%"] = float(sums_w["Battery_SOC_Normalized"] / n_steps * 100.0)
     row["Battery_SOC_Absolute_Mean_%"] = float(sums_w["Battery_SOC_Absolute"] / n_steps * 100.0)
-    # The cell temperature the aging model saw, averaged over the year.
-    row["Battery_Cell_Temperature_Mean_C"] = float(sums_w["T_cell"] / n_steps)
+    # The time the battery served, and the cell temperature the aging model
+    # saw, averaged over it: a retired battery has no cell temperature, and
+    # a PV-only system no battery.
+    row["Battery_In_Service_Hours"] = in_service_steps * hours_per_step if has_battery else None
+    row["Battery_Cell_Temperature_Mean_C"] = (
+        float(in_service_t_cell_sum / in_service_steps)
+        if has_battery and in_service_steps and in_service_t_cell_sum is not None
+        else None
+    )
     # Cumulative FEC belongs to the installed pack and restarts at zero on
     # replacement, so the year's own count comes from the all-pack total.
     row["Battery_Annual_FEC"] = float(annual_fec)
@@ -940,6 +952,7 @@ def project_years(
 
     for year_idx in range(years):
         year = year_inputs(year_idx)
+        started_retired = carry.battery_retired
         batt_cfg = battery_config(carry.soh_pct)
         if year_idx < years - 1 and not batt_cfg.allow_terminal_replacement:
             batt_cfg = replace(batt_cfg, allow_terminal_replacement=True)
@@ -988,6 +1001,7 @@ def project_years(
             n_steps = summary.n_steps
             annual_fec = summary.fec_all_packs if has_battery and summary.has_degradation_rows else 0.0
             span_events: Sequence[EndOfLifeEvent] = summary.end_of_life_events
+            retiring_t_cell_sum = summary.in_service_t_cell_sum
         else:
             if year.pv_dc is None or year.houseload is None:
                 raise ValueError("a projection year needs aligned inputs, or pv_dc and houseload")
@@ -1076,6 +1090,11 @@ def project_years(
             span_events = [
                 EndOfLifeEvent.from_record(record) for record in degradation_df.attrs.get(END_OF_LIFE_EVENTS_ATTR, ())
             ]
+            # Reduced as the summary reduces it, so both paths report one float.
+            last_served = retiring_step(span_events)
+            retiring_t_cell_sum = (
+                float(np.sum(results_df["T_cell"].to_numpy()[: last_served + 1])) if last_served is not None else None
+            )
             # Each project year is its own simulation span, so the span's
             # all-pack total is exactly this year's FEC.
             annual_fec = (
@@ -1108,7 +1127,16 @@ def project_years(
 
         total_replacements += n_rep
         end_of_life_events.extend(end_of_life_record(event, year_idx, n_steps) for event in span_events)
-        if any(event.action == "retired" for event in span_events):
+        # The battery serves through the step that retires it, and not at all
+        # in a year that starts retired.
+        retiring = retiring_step(span_events)
+        if started_retired:
+            in_service_steps, in_service_t_cell_sum = 0, None
+        elif retiring is None:
+            in_service_steps, in_service_t_cell_sum = n_steps, sums_w["T_cell"]
+        else:
+            in_service_steps, in_service_t_cell_sum = retiring + 1, retiring_t_cell_sum
+        if retiring is not None:
             carry = replace(carry, battery_retired=True)
         rows.append(
             build_year_row(
@@ -1123,6 +1151,8 @@ def project_years(
                 n_steps=n_steps,
                 pv_degradation_factor=year.pv_degradation_factor,
                 annual_fec=annual_fec,
+                in_service_steps=in_service_steps,
+                in_service_t_cell_sum=in_service_t_cell_sum,
                 extra=year.extra,
                 money=_year_money(
                     tariff, reference_tariff, weighted_w, hours_per_step, n_steps, year.extra.get("Billed_Days")
@@ -1238,7 +1268,7 @@ def value_projection(cfg: dict[str, Any], resolved: ResolvedAppConfig, run: Proj
         replacement_cost_learning=cfg.get("replacement_cost_learning", 0.0),
         discount_rate=cfg["discount_rate"],
         emissions_params=resolved.emissions_params,
-        currency=result_currency(resolved.tariff),
+        currency=resolved.currency,
         baseline_import_price_escalation=(
             resolved.reference_tariff.import_price_escalation if resolved.reference_tariff is not None else None
         ),

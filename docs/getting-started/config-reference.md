@@ -42,6 +42,7 @@ is a `breos run` option that overrides the config file.
 | `cost_preset` | `None` | `--cost-preset` | Cost preset key from the packaged defaults; see [Packaged options](options.md#cost-presets). `None` uses the {py:class}`~breos.economics.CostParams` defaults |
 | `costs` | *unset* | — | Cost overrides layered over the selected preset and the built-in defaults; see [`[costs]`](#costs) |
 | `cross_axis_tilt` | `0.0` | — | Cross-axis terrain slope for single-axis tracking (degrees) |
+| `currency` | *the `[tariff]` currency, else `"EUR"`* | `--currency` | ISO 4217 code of the run's money, such as `"USD"`. Every money input must be in it, and every money output is; BREOS does not convert. Unset, the run takes the `[tariff]` currency, else EUR. A run in another currency than EUR gives its costs in that currency; see [Currency](configuration.md#currency) |
 | `degradation_engine` | `"native"` | `--degradation-engine` | `"native"` keeps Naumann/Lam; `"blast"` opts into a vendored BLAST cell model. One of `"native"`, `"blast"` |
 | `diffuse_iam` | `"none"` | `--diffuse-iam` | Whether the incidence-angle modifier also applies to the diffuse POA components. `"marion"` weighs sky- and ground-diffuse with the view-factor-integrated selected IAM model (Marion 2017); the default applies IAM to beam only, a known ~0.5-1% overestimate. One of `"none"`, `"marion"` |
 | `discount_rate` | `0.03` | `--discount-rate` | Nominal discount rate for NPV |
@@ -162,7 +163,7 @@ Time-of-use prices, as `[tariff]` in TOML; see [Time-of-use tariffs](configurati
 
 | Key | Required | Description |
 |---|---|---|
-| `currency` | yes | Currency of the prices: EUR. The cost preset should be in the same currency; BREOS does not convert |
+| `currency` | yes | ISO 4217 code of the prices, such as `EUR`. It is the run's currency unless the top-level `currency` is set, which it must then equal; BREOS does not convert |
 | `custom_schedule` | exactly one of these | Inline schedule definition with `identifier`, `version`, `timezone`, `cycle`, `periods`, and `rules`, and optional calendar-month `seasons`; set this or `schedule`, not both. See [Custom App schedules](../api/tariffs.md#custom-app-schedules) |
 | `export_prices` | yes | Export price per kWh by period name, at year-1 prices; `all` prices every period. With month seasons, a table of period prices for every season instead |
 | `import_prices` | yes | Import price per kWh by period name, at year-1 prices; `all` prices every period. With month seasons, a table of period prices for every season instead |
@@ -178,7 +179,7 @@ What the household would pay without the system, as `[reference_tariff]` in TOML
 
 | Key | Required | Description |
 |---|---|---|
-| `currency` | yes | Currency of the prices: EUR. Must be the result's currency: the `[tariff]` currency, or EUR on flat prices |
+| `currency` | yes | ISO 4217 code of the prices. Must be the run's currency: `currency`, else the `[tariff]` currency, else EUR |
 | `fixed_charge_per_day` | yes | Fixed charge per day without the system, at year-1 prices; an explicit 0 is valid |
 | `import_prices` | yes | Import price per kWh by period name, at year-1 prices; `all` prices every period. With month seasons, a table of period prices for every season instead. Without a schedule, only `all` |
 | `annual_network_credit` |  | Annual network credit of the no-system household, capped at its own network charges, in the shape of [`annual_network_credit`](#annual_network_credit). Without a schedule, `network_import_prices = { all = <price> }` |

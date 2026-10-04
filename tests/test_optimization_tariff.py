@@ -275,7 +275,7 @@ def test_search_result_records_tariff_provenance(tariff_case):
 def test_invalid_tariff_fails_before_starting_workers(tariff_case, monkeypatch):
     pytest.importorskip("pymoo")
     weather, load, config = tariff_case
-    config["tariff"]["currency"] = "USD"
+    config["tariff"]["currency"] = "XYZ"
     monkeypatch.setattr("multiprocessing.Pool", lambda *args, **kwargs: pytest.fail("Started worker pool"))
     with pytest.raises(ValueError, match="tariff.currency"):
         optimization.optimize_system_multi_objective(weather, load, config, n_procs=2)

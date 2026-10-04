@@ -116,7 +116,6 @@ from breos.battery import _resolve_dispatch_day, _ResultBuffers, _step_energy_ca
 from breos.dispatch_instructions import DispatchInstructions
 from breos.projection import YearStart
 from breos.smart_charging import DECISION_BOUNDARIES
-from breos.tariffs import result_currency
 from tools.oracles._output import load_config, write_csv, write_json
 from tools.oracles.replay import (
     PLANNED_FLOWS,
@@ -544,7 +543,7 @@ def report(result: DailyTargetOracleResult, case: ReplayCase) -> dict[str, Any]:
     replayed_costs = _year_costs(result.replay)
     return {
         "schema": result.schema,
-        "currency": result_currency(case.tariff),
+        "currency": case.resolved.currency,
         "n_steps": len(problem.instructions),
         "n_days": problem.n_days,
         "resolution": case.resolved.cfg["resolution"],

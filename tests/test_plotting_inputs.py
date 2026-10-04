@@ -209,6 +209,20 @@ def test_sweep_heatmap_takes_the_currency_of_a_csv(tmp_path, drawn):
         plotting.plot_sweep_heatmap(frame, "npv_savings", str(tmp_path), diff=other)
 
 
+def test_sweep_heatmap_reads_the_currency_column_breos_writes(tmp_path, drawn):
+    path = tmp_path / "sweep.csv"
+    frame = _sweep([1.0] * 4)
+    frame["npv_savings"] = [100.0, 200.0, 300.0, 400.0]
+    frame["currency"] = "JPY"
+    frame.to_csv(path, index=False)
+
+    plotting.plot_sweep_heatmap(path, "npv_savings", str(tmp_path))
+
+    assert drawn[0].axes[1].get_ylabel() == "NPV savings (JPY)"
+    with pytest.raises(ValueError, match="records its currency as 'JPY'"):
+        plotting.plot_sweep_heatmap(path, "npv_savings", str(tmp_path), currency="EUR")
+
+
 def test_sweep_heatmap_centres_gains_and_losses_on_zero(tmp_path, drawn):
     frame = _sweep([1.0] * 4)
     frame["npv_savings"] = [-100.0, 200.0, 300.0, 400.0]

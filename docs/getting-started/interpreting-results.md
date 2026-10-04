@@ -154,14 +154,17 @@ health are NaN and the text fields None.
 
 ### Degradation history
 
-`battery_degradation_history` has one entry per project year. The state of
-health, capacities, `cumulative_fec` and loss split belong to the pack
-installed at the end of the year, so they restart after a replacement. The
-year's own figures cover every pack that served in it.
+`battery_degradation_history` has one entry per project year. A
+[`[period]`](configuration.md#simulate-part-of-a-year) run has one entry, labelled
+year 1, that covers the window. The state of health, capacities,
+`cumulative_fec` and loss split belong to the pack installed at the end of
+the year, so they restart after a replacement. The year's own figures cover
+every pack that served in it.
 
 | Field | Description |
 |---|---|
 | `year` | Project year, from 1 |
+| `in_service` | True while the pack is in service at the end of the year; false from the year it is retired in (`battery_skipped_replacement_action = "retire"`) |
 | `soh_pct` | State of health at the end of the year, as `yearly[].soh_pct` |
 | `capacity_kwh` | `battery_kwh` times the state of health |
 | `usable_capacity_kwh` | `capacity_kwh` times the SOC window, `battery_max_soc - battery_min_soc` |
@@ -170,8 +173,8 @@ year's own figures cover every pack that served in it.
 | `discharge_throughput_kwh` | Energy drawn from the cells in the year, before inverter losses |
 | `fec` | Full equivalent cycles in the year, over every pack, as the degradation model counts them (below) |
 | `cumulative_fec` | Full equivalent cycles of the installed pack since it was installed |
-| `mean_soc_pct` | Mean state of charge over the year, as a share of the pack's aged capacity; the SOC the ageing model sees |
-| `mean_cell_temperature_c` | Mean cell temperature over the year, the temperature the ageing model sees |
+| `mean_soc_pct` | Mean state of charge over the steps the pack served in the year, as a share of the pack's aged capacity; the SOC the ageing model sees. None for a year the pack never served |
+| `mean_cell_temperature_c` | Mean cell temperature over the steps the pack served in the year, the temperature the ageing model sees. None for a year the pack never served |
 | `cycle_loss_pct` | State of health the installed pack has lost to cycling, in percentage points. Native engine only; None with BLAST |
 | `calendar_loss_pct` | The same for calendar ageing. Native engine only; None with BLAST |
 | `resistance_growth_pct` | Growth of the installed pack's internal resistance, in percent. Only with `enable_resistance_fade` (native engine); None otherwise |
@@ -182,7 +185,14 @@ BLAST models report a state of health but no split into cycle and calendar
 loss, and only the native engine has a resistance model. For the native
 engine `cycle_loss_pct + calendar_loss_pct` is the state of health lost
 since the pack was installed, to rounding. The year rows behind the history
-also carry `Battery_Cell_Temperature_Mean_C`.
+also carry `Battery_Cell_Temperature_Mean_C` and `Battery_In_Service_Hours`,
+both None without a battery.
+
+A retired pack is switched off but stays installed. Its entries keep the
+state of health, capacities, `cumulative_fec` and loss split it had when it
+was retired, with `in_service` false. It stores and delivers nothing, so the
+throughput and `fec` are 0. The means cover the steps the pack served
+through the step that retired it, so a later year has none.
 
 The cycle counts are the model's own. The native engine counts rainflow
 cycles of the state of charge, which is a share of the aged capacity, so a
@@ -427,10 +437,12 @@ reason; the example is a PV-only run without emissions.
 ## Currency and result format
 
 Money keys carry no currency. Every money value in a result is in the run's
-currency, which `provenance.currency` records: the tariff's `currency` when
-the run has a `[tariff]` table, otherwise `EUR`, the currency of the bundled
-cost catalogue. BREOS does not convert currencies. Summary and plot labels
-read the recorded currency.
+currency, which `provenance.currency` records: the `currency` key, else the
+tariff's `currency` when the run has a `[tariff]` table, otherwise `EUR`, the
+currency of the bundled cost catalogue (see
+[Currency](configuration.md#currency)). BREOS does not convert currencies.
+The CSVs BREOS writes (sweep, Monte Carlo, cost projection) have a `currency`
+column. Summary and plot labels read the recorded currency.
 
 `result_schema_version` is the result's format number, independent of the
 ledger schema. The format changes, to the next integer, only when a field is

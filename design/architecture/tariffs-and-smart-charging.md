@@ -64,7 +64,9 @@ guides and in the [Tariffs API reference](../../docs/api/tariffs.md).
    inline, optionally with calendar-month seasons (a quarter is a season of
    three months) that switch rules and prices by month.
 2. **Prices** for import and export per period, or per season and period,
-   plus a daily fixed charge, in one currency. 0.7.0 supports EUR only.
+   plus a daily fixed charge, in one currency, an ISO 4217 code. 0.7.0
+   supported EUR only; 0.7.1 accepts any code, and the run's currency
+   (ADR 0003 E13) must match it.
 3. A **resolved tariff** is both of these aligned to one simulation index. It
    holds the period labels, the price arrays, the civil-day boundaries and
    separate schedule and price hashes.
