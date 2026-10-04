@@ -1,8 +1,9 @@
 # 0004 — AC-coupled batteries: a battery inverter on the AC bus
 
-- **Status:** Proposed. No code yet; implementation is for a later release,
-  after the maintainer accepts or amends the decisions below (#379).
-- **Date:** 2026-10-03
+- **Status:** Accepted, with the eight open questions decided (see
+  [Decisions on the open questions](#decisions-on-the-open-questions)). No
+  code yet; implementation is planned for 0.8.0 (#379).
+- **Date:** 2026-10-03; accepted 2026-10-04
 
 ## Context
 
@@ -34,6 +35,8 @@ separate converters, so the PV and battery inverter limits are independent.
 This record specifies the topology, the models, the configuration, the
 accounting, the costs and the tests. It changes no code. It also estimates
 the implementation effort, as the issue asks, before any work is scheduled.
+Its open questions were decided on 2026-10-04, and the sections below follow
+those decisions.
 
 ## Current behaviour this record relies on
 
@@ -135,10 +138,13 @@ and PV DC columns (`breos/runners/app.py:240-249`, `:314-335`).
 grid-charging modes and has no default, because the inverter model has no
 AC-to-DC path to derive it from (`breos/app_config.py:1876-1886`; ADR 0002
 A6). `DispatchInstructions` requires it in `(0, 1]`
-(`breos/dispatch_instructions.py:52`, `:89-91`). The daily-target planner
-dispatches candidate days through the same day loop with the config's caps
-(`breos/_daily_targets.py:382-397`) and prices terminal refill at
-`grid_charge_efficiency × eff_charge` (`:505-508`).
+(`breos/dispatch_instructions.py:52`, `:89-91`), hashes it as a float with
+the import limit (`:131-138`), and the no-op and discharge-only instructions
+carry 1.0 (`:124`, `breos/smart_charging.py:294`). `_day_arguments` passes it
+to both backends as `float(...)` (`breos/_dispatch.py:1017`). The
+daily-target planner dispatches candidate days through the same day loop
+with the config's caps (`breos/_daily_targets.py:382-397`) and prices
+terminal refill at `grid_charge_efficiency × eff_charge` (`:505-508`).
 
 **Costs.** `calculate_costs` (`breos/economics.py:157-243`) prices the
 inverter at `inverter_cost_per_kw` ("hybrid") with a battery and at
@@ -146,8 +152,10 @@ inverter at `inverter_cost_per_kw` ("hybrid") with a battery and at
 dispatch's AC rating (`:188-193`). The config keys are
 `inverter_cost_per_kw_hybrid` and `inverter_cost_per_kw_simple`
 (`:33-49`; presets in `breos/data/configs/costs.json`). A battery replacement
-is priced per kWh of storage (`replacement_event_cost`, `:130-155`). BREOS
-prices no inverter replacement.
+is priced per kWh of storage (`replacement_event_cost`, `:130-155`). The
+optimizer can replace that price with `[battery] replacement_cost`
+(`breos/optimization_config.py:235`); App cannot, and always prices the pack
+(`breos/app_config.py:2629`). BREOS prices no inverter replacement.
 
 **Optimizer.** `_build_battery_config_from_spec`
 (`breos/optimization.py:251-275`) forwards the `[battery]` keys
@@ -204,14 +212,22 @@ The battery inverter has three settings. They apply only to `"ac"`, and
   `inverter_loading_ratio` size the PV inverter today
   (`breos/app_config.py:2671-2674`). The per-kWh form lets a capacity sweep
   keep one inverter-to-battery ratio, as `power_limit_c_rate` keeps one
-  C-rate.
+  C-rate. It resolves against the nominal capacity (`battery_kwh`, or the
+  optimizer candidate's capacity), not the faded capacity, so the rating is
+  fixed for the project.
+- No rating is derived from `battery_power_limit_c_rate`. The C-rate limits
+  stored energy, not the inverter, and a rating taken from it would be an
+  equipment assumption the user never made.
 - `BatteryConfig.battery_inverter_ac_capacity_w = None` means no rating: the
   flat-efficiency, unclipped conversion `_dc_ac` already gives a missing PV
   inverter rating (`breos/_dispatch.py:77-79`). App never uses it; the
   reference cases below do, because flat conversion can be computed by hand.
-- The efficiency defaults to 0.96, the PV inverter's default
-  (`breos/app_config.py:626-627`). It is not tied to `inverter_efficiency`:
-  they are two products.
+- The efficiency has no default, in App, Monte Carlo, the optimizer or
+  `BatteryConfig`: an AC-coupled battery requires it. It is the battery
+  inverter's own nominal efficiency, taken by the user from a source such as
+  the product datasheet. The PV inverter's default of 0.96
+  (`breos/app_config.py:626-627`) describes a different converter and is not
+  reused. It is not tied to `inverter_efficiency`: they are two products.
 - With `"ac"`, `inverter_efficiency`, `inverter_ac_rating_kw`,
   `inverter_loading_ratio` and `ac_output_scale` describe the PV inverter
   only (C3, C6).
@@ -222,7 +238,8 @@ The battery inverter has three settings. They apply only to `"ac"`, and
   limits stored energy.
 - A config without `battery_coupling` is `"dc"` and resolves exactly as
   today. A PV-only config (`battery_kwh = 0`) accepts `"ac"` and the battery
-  inverter keys, does not require a rating, and runs the PV-only path; its
+  inverter keys, does not require a rating, an efficiency or a battery
+  inverter price, and runs the PV-only path; its
   CAPEX prices no battery inverter (C9), so a sweep over capacities from 0
   is consistent.
 
@@ -249,29 +266,44 @@ rating: the AC output when discharging and the AC input when charging, as
 residential battery inverter datasheets state it. The part-load ratio is the
 input over the rated input in both directions.
 
-- **Discharging** (DC to AC): `ac = _dc_ac(dc, P, η_b, 1.0, pow_two)`, so
-  `pdc0 = P / η_b`. The inverse is `_dc_for_ac(ac, P, η_b, 1.0)`.
-- **Charging** (AC to DC): `dc = _dc_ac(ac, P × η_b, η_b, 1.0, pow_two)`,
-  so the input limit `pdc0` is `P` itself and the DC output is at most
-  `P × η_b`. The inverse is `_dc_for_ac(dc, P × η_b, η_b, 1.0)`.
-- With `P` None both are flat: `ac = dc × η_b` and `dc = ac × η_b`.
+**Units.** `P` is a power in W, like every rating in the configuration. The
+AC step works in Wh per step, so `P` enters every per-step limit and every
+curve call as `P_wh = P × hours_per_step`, converted once per span by
+`_step_energy_cap` (`breos/battery.py:762-768`), as the DC step's
+`inv_cap_ac_wh` is today (`:2000-2006`). The part-load ratio is then a ratio
+of two energies in the same step, which equals the ratio of the average
+powers, so the curve gives the same efficiency at hourly and 15-minute
+steps. AC7 checks this.
+
+- **Discharging** (DC to AC): `ac = _dc_ac(dc, P_wh, η_b, 1.0, pow_two)`, so
+  `pdc0 = P_wh / η_b`. The inverse is `_dc_for_ac(ac, P_wh, η_b, 1.0)`.
+- **Charging** (AC to DC): `dc = _dc_ac(ac, P_wh × η_b, η_b, 1.0, pow_two)`,
+  so the input limit `pdc0` is `P_wh` itself and the DC output is at most
+  `P_wh × η_b`. The inverse is `_dc_for_ac(dc, P_wh × η_b, η_b, 1.0)`.
+- With `P` None, `P_wh` is infinite and both are flat: `ac = dc × η_b` and
+  `dc = ac × η_b`.
 - `ac_output_scale` is 1.0 for the battery inverter (C6).
 
-Using one core keeps DC-coupled and AC-coupled results comparable: the DC
-step already discharges through this curve, so a comparison between the two
-topologies shows the topology, not two converter models. The curve is an
-empirical inverter curve; using it in the charging direction is an
-assumption, stated as such in the docs. At light load it is markedly less
-efficient than `η_b`: 300 W from a 3000 W, 0.96 inverter needs 324.75 W of DC,
-an efficiency of 92.4 % (reference case AC6).
+Decided 2026-10-04 (decision 1). Using one core keeps DC-coupled and
+AC-coupled results comparable: the DC step already discharges through this
+curve, so a comparison between the two topologies shows the topology, not
+two converter models. The curve also carries the light-load losses that a
+flat efficiency misses: 300 W from a 3000 W, 0.96 inverter needs 324.75 W of
+DC, an efficiency of 92.4 % (reference case AC6). The curve is an empirical
+fit to inverters converting DC to AC. Using it in the charging direction is
+an assumption, not validated against measured battery inverters, and the
+docs state it as one. `η_b` has no default (C2): the user supplies it from a
+source for the product.
 
 ### C5. The AC step: conversion paths and their order
 
 A new scalar function `_dispatch_ac_step`, in `breos/_dispatch.py` beside
 `_dispatch_dc_step`, dispatches one AC-coupled step in Wh. It keeps the
-greedy order and the instruction semantics of the DC step. With
-`pv_ac`, `pv_loss` and `pv_clip` from C3, `E` the stored energy after the
-capacity window, `room = max(0, emax − E)` and
+greedy order and the instruction semantics of the DC step. Every quantity
+is Wh per step: `P_wh` is the battery inverter's rating times
+`hours_per_step` (C4), and the `_wh` caps are the DC step's per-step caps.
+With `pv_ac`, `pv_loss` and `pv_clip` from C3, `E` the stored energy after
+the capacity window, `room = max(0, emax − E)` and
 `available = max(0, E − discharge_floor)`:
 
 ```text
@@ -282,8 +314,8 @@ deficit       = load - pv_ac_to_load
 
 # 1. PV surplus charges through the battery inverter
 if surplus_ac > 0 and room > 0:
-    dc_wanted        = min(room / eff_c, cap_charge_in, cap_stored / eff_c)
-    pv_ac_to_battery = min(surplus_ac, charge_inverse(dc_wanted), P)
+    dc_wanted        = min(room / eff_c, cap_charge_in_wh, cap_stored_wh / eff_c)
+    pv_ac_to_battery = min(surplus_ac, charge_inverse(dc_wanted), P_wh)
     pv_dc_charge     = charge_forward(pv_ac_to_battery)
     E               += pv_dc_charge * eff_c
 pv_ac_export = surplus_ac - pv_ac_to_battery
@@ -291,8 +323,8 @@ pv_ac_export = surplus_ac - pv_ac_to_battery
 # 2. the battery serves the deficit through the battery inverter
 #    (a step with a surplus has no deficit)
 if deficit > 0 and discharge_allowed and available > 0:
-    ac_target  = min(deficit, cap_discharge_ac, P)
-    battery_dc = min(available * eff_d, discharge_inverse(ac_target), cap_stored * eff_d)
+    ac_target  = min(deficit, cap_discharge_ac_wh, P_wh)
+    battery_dc = min(available * eff_d, discharge_inverse(ac_target), cap_stored_wh * eff_d)
     battery_ac = discharge_forward(battery_dc)
     draw       = battery_dc / eff_d          # hold_target landing as at :648-657
     E         -= draw
@@ -304,8 +336,9 @@ grid_import = max(0, deficit - battery_ac)
 - PV serves the load first, then charges, then exports, as today. A step
   with a surplus has no deficit, so a step still charges or discharges, never
   both, and the check at `:858-859` stays.
-- `cap_discharge_ac` and `P` bound the AC target directly. No bisection is
-  needed: the battery inverter does not share an operating point with PV.
+- `cap_discharge_ac_wh` and `P_wh` bound the AC target directly. No
+  bisection is needed: the battery inverter does not share an operating
+  point with PV.
 - When the PV surplus is larger than the battery can take, the rest is
   exported. When the battery is full, `pv_ac_to_battery` is 0 and
   `pv_ac_export = surplus_ac − 0.0 = surplus_ac`. With no battery flow the
@@ -340,10 +373,11 @@ has no headroom, so the battery cannot discharge even when the load exceeds
 the PV output (`:598-607`). In AC coupling the battery inverter has its own
 rating, so the battery serves the remaining deficit.
 
-**`ac_output_scale`.** It stands in for AC shortfall of the PV system such
-as availability and downstream wiring (`breos/battery.py:114-121`). In AC
-coupling it applies to the PV inverter only. Applying it to the battery
-inverter would derate battery output for PV availability.
+**`ac_output_scale`.** Decided 2026-10-04 (decision 3). It stands in for AC
+shortfall of the PV system such as availability and downstream wiring
+(`breos/battery.py:114-121`). In AC coupling it applies to the PV inverter
+only. Applying it to the battery inverter would derate battery output for PV
+availability.
 
 ### C7. Grid charging
 
@@ -359,31 +393,69 @@ battery inverter, not the PV inverter:
   once and the DC is split in proportion to each source's AC.
 
   ```text
-  room_t          = min(target, emax) - E_after_pv
-  dc_total_wanted = min(pv_dc_charge + room_t / eff_c, cap_charge_in, cap_stored / eff_c)
-  grid_ac         = min(charge_inverse(dc_total_wanted) - pv_ac_to_battery,
-                        P - pv_ac_to_battery,
-                        grid_import_cap - grid_import)
+  # E_before_charge: after the capacity window; E_after_pv: after step 1
+  room_t      = min(target, emax) - E_after_pv
+  dc_needed   = (min(target, emax) - E_before_charge) / eff_c   # DC that lands on the target
+  dc_cap      = min(cap_charge_in_wh, cap_stored_wh / eff_c)
+  required_ac = charge_inverse(dc_needed) - pv_ac_to_battery if dc_needed < P_wh * η_b else inf
+  grid_ac     = min(required_ac,
+                    charge_inverse(dc_cap) - pv_ac_to_battery,
+                    P_wh - pv_ac_to_battery,
+                    grid_import_cap_wh - grid_import)
   # nothing more happens if room_t <= 0 or grid_ac <= 0
-  total_ac        = pv_ac_to_battery + grid_ac
-  dc_total        = charge_forward(total_ac)
-  grid_dc         = dc_total * grid_ac / total_ac
-  pv_dc_charge    = dc_total - grid_dc
-  E               = E_before_charge + dc_total * eff_c   # E_before_charge: after the capacity window
+  total_ac     = pv_ac_to_battery + grid_ac
+  dc_total     = charge_forward(total_ac)
+  grid_dc      = dc_total * grid_ac / total_ac
+  pv_dc_charge = dc_total - grid_dc
+  E            = E_before_charge + dc_total * eff_c
+  if hold_target and grid_ac == required_ac:
+      E = min(target, emax)
   ```
 
-  With `hold_target` and no limit binding (`grid_ac` equal to its first
-  term) `E` lands on `min(target, emax)` exactly, as `_grid_charge` does at
-  `:493-494`.
+  With `hold_target` and the target reachable (`grid_ac` equal to
+  `required_ac`) `E` lands on `min(target, emax)` exactly, as `_grid_charge`
+  does at `:493-494`. `charge_inverse` saturates at `P_wh`, so a DC need at
+  or above the rating's DC output `P_wh × η_b` makes `required_ac` infinite.
+  Without that test a binding rating would equal the saturated inverse and
+  pass for a reached target, and the step would store energy it never
+  converted: 176 Wh in AC7.
+- **PV and grid in one step.** A step can charge from PV surplus and the
+  grid together, and the AC step keeps that. It is the physics of the
+  topology: the battery inverter draws from the AC bus and cannot tell PV
+  from grid, so inside a grid-charging window a step whose PV surplus cannot
+  reach the target charges from both. A step also averages its interval: an
+  hourly step can hold PV charging in part of the hour and grid charging in
+  the rest. The DC step already does the same, running grid charge after PV
+  in the same step when no PV is exported and the target is not reached
+  (`breos/_dispatch.py:674-692`). AC7 checks this path.
+- **Priority.** PV keeps priority on every shared limit, as in A6: its AC
+  enters the battery inverter first (step 1 in C5), and grid AC gets only
+  what PV left of `P_wh`, the charge-input and stored-energy limits and the
+  site limit. The conversion loss has no priority order. Both shares convert
+  at the one operating point, so the PV share's DC moves with the operating
+  point when grid AC joins it. In AC7 it rises by 3.902847 Wh with a 3000 W
+  battery inverter and falls by 1.698618 Wh with a 2000 W one, whose full
+  load is less efficient than PV's own part load. A grid-charge instruction
+  therefore never reduces PV AC to the load or to the battery, but it can
+  move the PV-origin stored energy by this part-load difference.
 - **Rating.** The PV inverter's rating does not limit grid charge. A6's
   summed-throughput rule applies to the battery inverter instead: PV and grid
-  AC into it together are at most `P`.
-- **`grid_charge_efficiency`.** The battery inverter model is the AC-to-DC
-  path A6 said BREOS lacked. With `"ac"` the `[smart_charging]` key
-  `grid_charge_efficiency` is refused, and `DispatchInstructions` carry
-  `grid_charge_efficiency = None`, which only an AC-coupled run accepts; a DC
-  run still requires a value in `(0, 1]`. A value the step would ignore is
-  never accepted.
+  AC into it together are at most `P_wh`.
+- **`grid_charge_efficiency`.** Decided 2026-10-04 (decision 2). The battery
+  inverter model is the AC-to-DC path A6 said BREOS lacked. With `"ac"` the
+  `[smart_charging]` key `grid_charge_efficiency` is refused, and grid-charging
+  `DispatchInstructions` carry `grid_charge_efficiency = None`, which only an
+  AC-coupled run accepts; a DC run still requires a value in `(0, 1]`. A value
+  the step would ignore is never accepted from the user. The no-op and
+  discharge-only instructions keep their internal 1.0, which no step reads
+  because they never grid-charge.
+  - **Hash.** `instruction_hash` gives `None` its own representation, distinct
+    from every float, and keeps the bytes it packs for a float today
+    (`breos/dispatch_instructions.py:131-138`). Every existing DC-coupled hash
+    is therefore unchanged.
+  - **Numba.** `_day_arguments` turns `None` into NaN before the call
+    (`breos/_dispatch.py:1017`), so both backends keep one float signature.
+    The AC step never reads the value, and a DC run never carries `None`.
 
 With flat efficiencies and `η_b` equal to a DC run's `grid_charge_efficiency`,
 night-time grid charging is the same in both topologies (AC3). The
@@ -454,29 +526,50 @@ gains `pv_to_battery_kwh` (`breos/runners/app.py:314-335`).
   (`CostParams.battery_inverter_cost_per_kw`) prices the battery inverter's
   AC rating, only with `"ac"` and a battery. `calculate_costs` gains the
   rating and the coupling, and reports `battery_inverter_cost` (0.0 for DC
-  coupling) inside `total_initial_cost`. The key has no default and no preset
-  value: BREOS has no sourced price for it, so an AC-coupled run with a
-  battery and without the key is refused, with a message naming it. Adding
-  a sourced preset value is an open question.
+  coupling) inside `total_initial_cost`. Decided 2026-10-04 (decision 5): the
+  key is required and has no default and no preset value, because BREOS has
+  no sourced price for it. An AC-coupled config with a battery and without
+  the key fails at configuration resolution, in App, Monte Carlo and the
+  optimizer, before any simulation or candidate evaluation, with a message
+  naming it. A missing price never becomes zero. An explicit 0 is valid: it
+  states that the inverter is included in another price, such as a bundled
+  battery price per kWh.
 - **Installation.** `installation_cost_battery` applies in both topologies.
-- **Replacement.** A battery replacement prices the pack, per kWh of storage
-  (`replacement_event_cost`), in both topologies (ADR 0003 E3, E4). The
-  battery inverter is not replaced with the pack and no inverter replacement
-  is priced, as for the PV or hybrid inverter today. Products that sell pack
-  and inverter as one unit are an open question.
+- **Replacement.** By default a battery replacement prices the pack, per kWh
+  of storage (`replacement_event_cost`), in both topologies (ADR 0003 E3,
+  E4). Decided 2026-10-04 (decision 6): App and Monte Carlo gain
+  `battery_replacement_cost`, the price at t = 0 of one replacement, a
+  non-negative number, as the optimizer's `[battery] replacement_cost` gives
+  it. Omitted, the price is today's pack price. A unit sold as pack and
+  inverter together is replaced at the unit's price by setting the key to
+  it, without a separate inverter lifetime. The key is accepted in both
+  topologies, as the optimizer's is. Booking time, inflation, learning and
+  discounting are unchanged (E3, E4, E11).
 - **Terminal credit.** ADR 0003 E10 credits only the pack; both inverters are
-  excluded, as the inverter is now.
+  excluded, as the inverter is now. The credit's `C0` stays the pack price
+  that `replacement_event_cost` computes from `battery_cost_per_kwh`; it is
+  never `battery_replacement_cost`, so a bundled replacement price does not
+  credit the inverter.
+- **Omissions.** Decided 2026-10-04 (decision 7): an inverter replacement on
+  its own schedule and inverter standby consumption are out of scope, for the
+  PV, hybrid and battery inverters alike. The battery standby loss
+  (`standby_loss_wh`) is drawn from stored energy; it does not model an
+  inverter drawing AC from the bus. The user docs list both omissions.
+  They matter most for low household loads, long idle periods and studies
+  of inverter lifetime cost.
 - **O&M.** BREOS has no per-component O&M, so nothing is added.
 
-DC-coupled CAPEX, replacement outlays and every cash flow are unchanged.
+With `battery_replacement_cost` omitted, DC-coupled CAPEX, replacement
+outlays and every cash flow are unchanged.
 
 ### C10. DC-coupled results stay bit for bit
 
 - **Config.** `"dc"` is the default everywhere, and the AC-only keys are
   refused with it. `provenance.resolved_config` gains `battery_coupling:
-  "dc"` (and the AC keys as null), so the six App golden fixtures and the
-  stored gallery results are regenerated for that field only; no number
-  changes. Config docs are regenerated with `tools/generate_config_docs.py`.
+  "dc"` (and the AC keys and `battery_replacement_cost` as null), so the six
+  App golden fixtures and the stored gallery results are regenerated for
+  those fields only; no number changes. Config docs are regenerated with
+  `tools/generate_config_docs.py`.
 - **Dispatch selection.** One day loop serves both topologies. `_dispatch_day`
   gains a coupling flag, the battery inverter's rating and efficiency, and
   the three PV chain arrays (empty arrays for DC coupling). Each step calls
@@ -505,7 +598,7 @@ DC-coupled CAPEX, replacement outlays and every cash flow are unchanged.
   floor as at `:648-657` and a reached target as in C7.
 - **Daily persistence and the daily-target planner.** Both dispatch candidate
   days through the canonical day loop, so they model AC coupling once the
-  loop does. `_DayEvaluator` must pass the battery inverter caps and a PV
+  loop does. `_DayEvaluator` must pass the battery inverter's `P_wh` and a PV
   chain computed from the forecast PV (`breos/_daily_targets.py:382-397`).
   The terminal refill price (`:505-508`) uses `η_b × eff_charge` in place of
   `grid_charge_efficiency × eff_charge`. It is a flat price per stored
@@ -535,7 +628,7 @@ DC-coupled CAPEX, replacement outlays and every cash flow are unchanged.
   performance step; results are identical with and without it.
 - **Optimizer.** `coupling` is fixed for a study, not a decision variable:
   comparing topologies is two studies. With `inverter_kw_per_kwh` the battery
-  inverter rating follows each candidate's capacity; with
+  inverter rating follows each candidate's nominal capacity; with
   `inverter_ac_rating_kw` it is fixed. Each candidate's CAPEX includes its
   battery inverter. The design-invariant year cache is unchanged. For AC
   coupling the PV chain depends only on the module count, layout, weather and
@@ -661,9 +754,65 @@ initial energy 5000, battery inverter 2000 W. `Battery_AC_To_Load` 2000,
 inverter and no PV gives the same numbers.
 
 **AC6 — part load.** PV 0, load 300, initial energy 5000, battery inverter
-3000 W. `Battery_AC_To_Load` 300 (to 1e-12), DC from the battery 324.751952,
-`Battery_Inverter_Loss` 24.751952, `Battery_Discharge_DC` 341.844160,
-`Battery_Energy` 4658.155840.
+3000 W. `Battery_AC_To_Load` 300 to 1e-12 relative: the inverse and
+forward helpers return 300.00000000000136, an error of 4.5e-15 relative and
+1.4e-12 absolute, so an absolute 1e-12 is too tight. DC from the battery
+324.751952, `Battery_Inverter_Loss` 24.751952, `Battery_Discharge_DC`
+341.844160, `Battery_Energy` 4658.155840.
+
+**AC7 — PV and grid charge in one step.** PV inverter 4000 W, PV DC 2000,
+load 1000, initial energy 2000, `grid_target_fraction = 0.4` (4000 Wh) with
+discharge allowed and `reserve_fraction = 0.4`, so `hold_target` is set
+(A14). The PV inverter runs at a part-load ratio of 0.48 and both inverters
+follow the curve. The two columns differ only in the battery inverter
+rating.
+
+| Quantity | 3000 W, target reached | 2000 W, rating binds |
+|---|---|---|
+| `PV_Direct_Inverter_Loss` | 75.950939 | 75.950939 |
+| `PV_AC_To_Load` | 1000 | 1000 |
+| `PV_AC_To_Battery` | 924.049061 | 924.049061 |
+| `PV_AC_Export` | 0 | 0 |
+| PV DC into the battery, PV alone (step 1 in C5) | 885.204957 | 888.785716 |
+| `Grid_AC_To_Battery` | 1263.949329 | 1075.950939 |
+| Battery inverter AC input | 2187.998390 | 2000 |
+| Battery inverter part-load ratio | 0.729333 | 1 |
+| Battery inverter charging loss | 82.735232 | 80 |
+| `PV_Charge_Conversion_Loss` | 34.941257 | 36.961962 |
+| `Grid_DC_To_Battery` | 1216.155354 | 1032.912902 |
+| `Grid_Charge_Conversion_Loss` | 47.793975 | 43.038038 |
+| `Battery_Charge_Input` | 2105.263158 | 1920 |
+| `Battery_Charge_Stored` | 2000 | 1824 |
+| `PV_Origin_Battery_Charge_Stored` | 844.652414 | 842.732744 |
+| `Grid_Origin_Battery_Charge_Stored` | 1155.347586 | 981.267256 |
+| `Import_From_Grid` | 1263.949329 | 1075.950939 |
+| `Battery_Energy` | 4000 (exactly) | 3824 |
+
+- **Operating points.** Alone, PV's 924.049061 Wh would convert at a
+  part-load ratio of 0.308 (3000 W) or 0.462 (2000 W). With grid AC the
+  battery inverter runs at 0.729333 or at full load, and the PV share's DC
+  is recomputed there, by C7's proportional split: it rises by 3.902847 Wh
+  at 3000 W and falls by 1.698618 Wh at 2000 W.
+- **Target reached.** At 3000 W the grid AC is `required_ac`, and
+  `Battery_Energy` lands on 4000 exactly; without the landing it would be
+  4000.000000000002.
+- **Rating binds.** At 2000 W the DC need of 2105.263158 Wh is above
+  `P_wh × η_b` = 1920 Wh, so `required_ac` is infinite. Grid AC is the
+  rating's headroom, `P_wh − PV_AC_To_Battery`, and the battery stops 176 Wh
+  short of the target. Without C7's reachability test the landing would set
+  4000 Wh with 1824 Wh stored.
+- **Closure.** 2000 + 1263.949329 = 1000 + 75.950939 + 34.941257 +
+  47.793975 + 105.263158 (charge loss) + 2000 at 3000 W, and
+  2000 + 1075.950939 = 1000 + 75.950939 + 36.961962 + 43.038038 + 96 + 1824
+  at 2000 W.
+- **Step length.** At 15-minute steps with PV, load and both ratings four
+  times larger, every Wh value of the step is the same, and the ledger
+  columns, which are average W, are four times those above. A rating used in
+  W instead of `P_wh` would act as a 12 000 Wh inverter in that step: the
+  first column would draw 1298.354007 Wh of grid AC at a part-load ratio of
+  0.185.
+- **Tolerance.** Values are rounded to six decimals. A test compares them to
+  1e-9 relative, as P1 does, and `Battery_Energy` at 3000 W exactly.
 
 **Invariants**, tested on App-sized cases at hourly and 15-minute steps,
 Python and Numba:
@@ -687,10 +836,12 @@ Python and Numba:
 
 - **Restore `dc_coupled` as a boolean.** Rejected: 0.7.0 removed it, and a
   string leaves room for another topology without a second flag.
-- **Flat battery inverter efficiencies, one per direction.** Simple and close
-  to what some tools do, but DC coupling already discharges through the
-  part-load curve. Two converter models would mix model differences into a
-  topology comparison. It remains a possible amendment (open question 1).
+- **Flat battery inverter efficiencies, one per direction.** Rejected
+  2026-10-04 (decision 1). They need no assumption about the charging
+  direction and allow asymmetry, but DC coupling already discharges through
+  the part-load curve, so two converter models would mix model differences
+  into a topology comparison, and a flat efficiency misses the light-load
+  losses (AC6).
 - **Convert PV inside the AC step, per step.** Rejected: the vectorised and
   scalar conversions are not promised identical to the last bit, so P1, P3
   and P4 would hold only to rounding, and the PV chain memo could not serve
@@ -704,18 +855,38 @@ Python and Numba:
 
 ## Implementation plan and effort
 
-Five PRs, about 11 working days for one developer, plus review and the
-platform CI runs each kernel change needs. A sixth, optional PR adds the
-performance steps. Once the work ships, this section is replaced by an
-implementation status, as in ADR 0002.
+Five PRs, about 12.5 working days for one developer, plus review and the
+platform CI runs each kernel change needs. The proposal said 11 days; the
+decisions of 2026-10-04 add about 1.5 for the App replacement price and its
+pack-only credit basis, the `None` hash, the rollout gates and AC7. A sixth,
+optional PR adds the performance steps. Once the work ships, this section is
+replaced by an implementation status, as in ADR 0002.
+
+**Rollout gates.** No merged state runs a half-built topology or prices one
+without its inverter:
+
+- PR 1 adds the coupling field but refuses to run `"ac"`: a simulation with
+  an AC-coupled `BatteryConfig` stops with a message that AC coupling is not
+  implemented yet, so the DC step never runs an AC config.
+- PR 2 lifts that refusal for a direct `BatteryConfig`, for the reference
+  cases and the parity tests. No App, Monte Carlo or optimizer key selects
+  AC coupling yet.
+- PR 3 adds the battery inverter price, and `calculate_costs` refuses an
+  AC-coupled battery without it.
+- PR 4 is the first PR that exposes AC runs to App, Monte Carlo and the
+  optimizer, and it refuses a missing price at configuration resolution. It
+  merges only after PR 3, so no AC-coupled economic run exists without a
+  required, validated price.
+- AC coupling ships in 0.8.0 only after the C10 gates and the reference
+  cases AC1–AC7 pass (decision 8).
 
 | PR | Scope | Effort | Main risk |
 |---|---|---|---|
-| 1 | `BatteryConfig.coupling` and the battery inverter fields with validation (DC refuses AC fields); the two ledger columns written as zeros; ledger schema 3.1; conservation helper with the new identities. No behaviour change. | 1.5 days | Golden or schema tests that list columns. |
-| 2 | `_dispatch_ac_step`, the day-loop branch, PV chain arrays in `_day_arguments` and `_simulate_core`, Numba registration, the PV origin input; reference cases AC1–AC6, invariants P1–P6, parity harness scenarios. | 4 days | DC bit identity, and Numba cold-compile time with a second step function. |
-| 3 | App, Monte Carlo and optimizer keys; rating resolution; smart-charging rules for `grid_charge_efficiency`; planner evaluator and refill price; retirement test; provenance; regenerated config docs and golden provenance. | 2.5 days | Planner and controller paths that build `BatteryConfig` from a dict. |
-| 4 | Costs: `battery_inverter_cost_per_kw`, PV inverter at the simple rate, `battery_inverter_cost`, optimizer CAPEX per candidate. | 1.5 days | A missing price must fail early, not price zero. |
-| 5 | Docs: energy-balance and battery pages, configuration guide, results guide (waterfall block, year-row diagnostics), CHANGELOG; ADR status. | 1.5 days | None significant. |
+| 1 | `BatteryConfig.coupling` and the battery inverter fields with validation (DC refuses AC fields; AC requires the efficiency); `"ac"` refused at run time; the two ledger columns written as zeros; ledger schema 3.1; conservation helper with the new identities. No behaviour change. | 1.5 days | Golden or schema tests that list columns. |
+| 2 | `_dispatch_ac_step` with C7's reachability test, the day-loop branch, `P_wh` and the PV chain arrays in `_day_arguments` and `_simulate_core`, Numba registration, the PV origin input; `None` grid-charge efficiency in the instructions, its hash and its NaN at the kernel boundary; the PR 1 refusal lifted for a direct `BatteryConfig`; reference cases AC1–AC7, invariants P1–P6 at hourly and 15-minute steps, parity harness scenarios. | 4.5 days | DC bit identity, and Numba cold-compile time with a second step function. |
+| 3 | Costs: `battery_inverter_cost_per_kw` with no default, PV inverter at the simple rate, `battery_inverter_cost`, the refusal of an AC-coupled battery without the price in `calculate_costs`. | 1.5 days | A missing price must fail, not price zero. |
+| 4 | App, Monte Carlo and optimizer keys, with the missing price refused at configuration resolution; rating resolution against nominal capacity; smart-charging rules for `grid_charge_efficiency`; planner evaluator and refill price; App `battery_replacement_cost` with the pack-only terminal credit; optimizer CAPEX per candidate; retirement test; provenance; regenerated config docs and golden provenance. | 3.5 days | Planner and controller paths that build `BatteryConfig` from a dict; a config path that reaches economics before the price check. |
+| 5 | Docs: energy-balance and battery pages, configuration guide (with the omissions in C9), results guide (waterfall block, year-row diagnostics), CHANGELOG; ADR implementation status. | 1.5 days | None significant. |
 | 6 (optional) | PV chain memo for AC-coupled battery runs in Monte Carlo; PV chain hoisted across battery capacities in the optimizer. | 1 day | Memo key must include everything the PV inverter depends on. |
 
 Risks across the work:
@@ -728,32 +899,59 @@ Risks across the work:
   PR 2.
 - **Model validity.** The part-load curve in the charging direction is not
   validated against measured battery inverters. The docs must say so.
-- **Cost data.** There is no sourced battery inverter price for the presets.
+- **Cost data.** BREOS has no sourced battery inverter price, so every
+  AC-coupled study supplies its own (C9).
 
-## Open questions for the maintainer
+## Decisions on the open questions
 
-1. Battery inverter model: the PVWatts curve in both directions (proposed),
-   or flat charge and discharge efficiencies?
-2. `grid_charge_efficiency` with AC coupling: `None` in the instructions and
-   the key refused (proposed), or a fixed 1.0 that the AC step ignores?
-3. `ac_output_scale` with AC coupling: PV inverter only (proposed), or both
-   inverters?
-4. Battery inverter rating: both the absolute and the per-kWh key
-   (proposed), or one? Should App derive a default from
-   `battery_power_limit_c_rate` instead of requiring one?
-5. `battery_inverter_cost_per_kw`: required with no default (proposed), or a
-   preset value, and from which source?
-6. Units that sell pack and inverter together: should a battery replacement
-   in AC coupling be able to include the battery inverter, and should App
-   gain an explicit replacement price as the optimizer has?
-7. Inverter replacement and inverter standby consumption are not modelled
-   for either topology. Are they out of scope for this work?
-8. Target release.
+Decided by the maintainer on 2026-10-04. The proposal's eight open questions
+are answered here, and the body sections above follow the answers.
+
+1. **Battery inverter model: the PVWatts part-load curve in both
+   directions**, as proposed (C4). The DC step already discharges through
+   this curve, so a DC-versus-AC comparison shows the topology, not two
+   converter models, and the curve captures the light-load losses that flat
+   efficiencies miss (AC6). The charging direction stays a stated
+   assumption. The nominal efficiency `η_b` has no default: the user
+   supplies it from a source for the product, and the PV inverter's 0.96 is
+   not reused (C2). Flat efficiencies were rejected (see
+   [Alternatives considered](#alternatives-considered)).
+2. **`grid_charge_efficiency` with AC coupling: `None` in the instructions
+   and the key refused**, as proposed (C7). `instruction_hash` gives `None` a
+   representation distinct from every float, so existing DC-coupled hashes
+   do not change, and `_day_arguments` turns it into a float (NaN) at the
+   Numba boundary, so both backends keep one signature.
+3. **`ac_output_scale`: the PV inverter only**, as proposed (C6).
+4. **Battery inverter rating: both the absolute and the per-kWh key**,
+   mutually exclusive, one of them required for a battery with positive
+   capacity (C2). The per-kWh key resolves against nominal capacity. No
+   default is derived from `battery_power_limit_c_rate`, which would be a
+   hidden equipment assumption.
+5. **`battery_inverter_cost_per_kw`: required, with no preset** (C9). A
+   missing price fails at configuration resolution. An explicit 0 is valid
+   when the inverter is included in a bundled price.
+6. **Bundled units: an explicitly priced bundled replacement**, through a new
+   App and Monte Carlo replacement price, `battery_replacement_cost`, as the
+   optimizer's `[battery] replacement_cost` (C9). Omitted, the replacement
+   keeps today's pack-only price. The ADR 0003 E10 terminal credit stays
+   pack-only.
+7. **Inverter replacement and standby consumption: out of scope** for this
+   work, for both topologies, and documented as omissions (C9).
+8. **Target release: 0.8.0**, after the gates in C10 and the reference cases
+   pass (see the rollout gates in
+   [Implementation plan and effort](#implementation-plan-and-effort)).
+
+The maintainer also asked whether a step can charge from PV and the grid at
+once. It can, and BREOS keeps it: an AC-coupled battery inverter draws from
+the AC bus and cannot tell the sources apart, a step with weak PV inside a
+grid-charging window charges from both, and an hourly step can contain both.
+The DC step already does it, with PV keeping priority on the shared limits.
+C7 states the rule and AC7 checks it.
 
 ## Consequences
 
 - DC-coupled results, configs and costs are unchanged; resolved-config
-  provenance gains the coupling field.
+  provenance gains the coupling field and the replacement price.
 - An AC-coupled system can be simulated, priced and optimized through the
   same `breos.App` facade, with every flow in the same ledger and the same
   closure tests.
@@ -761,3 +959,7 @@ Risks across the work:
   format stays "1".
 - A6's summed-throughput rule keeps its scope, the hybrid inverter. AC
   coupling applies it to the battery inverter alone.
+- App and Monte Carlo can price a battery replacement explicitly in both
+  topologies, as the optimizer can; the terminal credit stays pack-only.
+- Inverter replacement and inverter standby consumption stay unmodelled for
+  every inverter, and the docs say so.
