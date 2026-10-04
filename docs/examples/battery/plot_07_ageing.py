@@ -46,9 +46,9 @@ different questions:
 
 .. note::
 
-   BREOS records no ageing horizon for these models, and the laboratory
-   tests behind them ran for a few years, not 20: read the late years as
-   model projections, not measured behaviour. The native engine combines
+   None of the BLAST model files states how long its tests ran, and BREOS
+   records no ageing horizon for these models: read the late years as model
+   projections, not measured behaviour. The native engine combines
    Naumann's laboratory LFP cycle-ageing model with calendar parameters
    fitted to field data from LFP home storage systems. The BLAST models are
    fitted to laboratory tests of single cells; BREOS applies a cell's
@@ -415,11 +415,16 @@ assert limits.loc[("lfp_gr_sonymurata_3ah", "temperature_c"), ["limit_min", "lim
 # sphinx_gallery_end_ignore
 TEST_NOTES = {
     "lfp_gr_250ah_prismatic": "Cycling at 10–45 °C; charging limited to 0.16 C at 10 °C and 0.65 C at higher "
-    "temperatures. The limits above follow these conditions.",
+    "temperatures, so the model is fitted to low-rate charging only. The temperature and charge-rate limits "
+    "follow these conditions. Cycle ageing varied depth of discharge, average SOC and C-rate, with no values "
+    "given, so the depth-of-discharge limit is not stated in the test note.",
     "lfp_gr_sonymurata_3ah": "Cycling only at 25 °C and 45 °C, with no low-temperature cycling data; calendar "
-    "ageing varied temperature and SOC. The 20–40 °C limit is not the range of the cycling tests.",
+    "ageing varied temperature and SOC. The 20–40 °C limit is not the range of the cycling tests. The model's "
+    "cycle fade does not depend on temperature (the file calls this not physically realistic), so the days "
+    "below 20 °C affect only its calendar ageing. Cycle ageing varied depth of discharge, average SOC and C-rate, "
+    "with no values given, so the depth-of-discharge limit is not stated in the test note.",
     "nmc_gr_50ah_b1": "Calendar ageing varied temperature and SOC, cycle ageing depth of discharge, average SOC and "
-    "C-rate; no test temperatures or depths are given. Charging at 10 °C was limited to 0.3 C.",
+    "C-rate; no temperature range or depths are given. Charging at 10 °C was limited to 0.3 C.",
 }
 table(pd.DataFrame({"Model": [labels[m] for m in blast], "Model file note on the tests": [TEST_NOTES[m] for m in blast]}))
 
