@@ -135,7 +135,8 @@ _NETWORK_CREDIT_YEAR1_FIELDS = {
 def end_of_life_fields(events: Sequence[Mapping[str, Any]], soh_digits: int) -> dict[str, Any]:
     """The result fields of a battery's end-of-life crossings (ADR 0003 E11).
 
-    ``battery_end_of_life_events`` lists every crossing in project order:
+    ``battery_end_of_life_events`` lists every crossing, and a kept pack's
+    retirement at zero health (reason ``"zero_health"``), in project order:
     its project ``year``, ``time_years`` from commissioning (the instant a
     replacement is booked at), ``date``, the ``action`` taken, the
     ``reason`` for it and the ``soh_pct`` at the crossing. The

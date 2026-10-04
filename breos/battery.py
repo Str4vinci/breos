@@ -1297,7 +1297,8 @@ def _apply_daily_degradation(
     max SOC, since the recorded state was rewritten to match.
 
     ``replacement_skipped_by`` names the rule that skips this period's
-    end-of-life swap, one of :data:`END_OF_LIFE_REASONS`: the span's final
+    end-of-life swap, one of the skip reasons of :data:`END_OF_LIFE_REASONS`
+    (never ``"zero_health"``): the span's final
     period when the battery does not allow a terminal replacement, or any
     period that closes with less than the battery's minimum service time
     left. None allows the swap. The period still ages the pack and is still
