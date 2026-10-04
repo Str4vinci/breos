@@ -76,6 +76,9 @@ for the tariff and smart-charging design.
 
 - Per-chemistry aging for NMC and NCA in the native model, alongside LFP.
 - BLAST under Monte Carlo (candidate for 0.8).
+- AC-coupled batteries: a battery with its own inverter on the AC bus,
+  beside the DC-coupled hybrid model. See
+  [design/adr/0004-ac-coupled-batteries.md](design/adr/0004-ac-coupled-batteries.md).
 
 ## Performance and portability
 

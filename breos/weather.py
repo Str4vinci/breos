@@ -401,6 +401,43 @@ def load_weather(
 
     logger.info("Found local weather file: %s", filepath)
 
+    df = _read_weather_frame(filepath)
+
+    # Subset by year range for historical data
+    if best["type"] == "historical" and start_year is not None and end_year is not None:
+        file_start = int(best["year_start"])
+        file_end = int(best["year_end"])
+        if file_start < start_year or file_end > end_year:
+            mask = (df.index.year >= start_year) & (df.index.year <= end_year)
+            df = df.loc[mask]
+            logger.info("Subset to %s-%s (%d rows)", start_year, end_year, len(df))
+
+    parsed_filename = {key: value for key, value in best.items() if key != "filepath"}
+    df.attrs[WEATHER_METADATA_KEY] = _local_weather_metadata(filepath, parsed_filename)
+
+    return df
+
+
+def read_weather_csv(filepath: str | os.PathLike[str]) -> pd.DataFrame:
+    """Read one weather CSV, whatever its name, with its provenance.
+
+    The file has the layout :func:`load_weather` reads and
+    :func:`save_weather_csv` writes: a timestamp first column, then the
+    irradiance and temperature columns. A gzip-compressed ``.csv.gz`` is read
+    as it is. The weather metadata records the file's absolute path and
+    SHA-256 digest, and the contents of a ``<file>.metadata.json`` sidecar
+    whose digest matches the file.
+
+    Raises:
+        FileNotFoundError: If the file does not exist.
+    """
+    df = _read_weather_frame(filepath)
+    df.attrs[WEATHER_METADATA_KEY] = _local_weather_metadata(filepath)
+    return df
+
+
+def _read_weather_frame(filepath: str | os.PathLike[str]) -> pd.DataFrame:
+    """Read a weather CSV into a frame indexed by its timestamps."""
     df = pd.read_csv(filepath, index_col=0, parse_dates=True)
 
     # Parse datetime index if it didn't work from index_col=0
@@ -415,35 +452,25 @@ def load_weather(
             if date_col is not None:
                 df[date_col] = pd.to_datetime(df[date_col])
                 df.set_index(date_col, inplace=True)
+    return df
 
-    # Subset by year range for historical data
-    if best["type"] == "historical" and start_year is not None and end_year is not None:
-        file_start = int(best["year_start"])
-        file_end = int(best["year_end"])
-        if file_start < start_year or file_end > end_year:
-            mask = (df.index.year >= start_year) & (df.index.year <= end_year)
-            df = df.loc[mask]
-            logger.info("Subset to %s-%s (%d rows)", start_year, end_year, len(df))
 
+def _local_weather_metadata(
+    filepath: str | os.PathLike[str], parsed_filename: dict[str, str] | None = None
+) -> dict[str, Any]:
+    """The weather metadata of a local file: its path, digest and validated sidecar."""
     path, sha256, persisted_metadata = _weather_file_sidecar(filepath)
     metadata = dict(persisted_metadata or {})
     upstream_source = metadata.get("source")
-    metadata.update(
-        {
-            "source": "local_file",
-            "path": path,
-            "sha256": sha256,
-            "parsed_filename": {key: value for key, value in best.items() if key != "filepath"},
-            "horizon": _normalised_horizon_metadata(metadata.get("horizon")),
-        }
-    )
+    metadata.update({"source": "local_file", "path": path, "sha256": sha256})
+    if parsed_filename is not None:
+        metadata["parsed_filename"] = parsed_filename
+    metadata["horizon"] = _normalised_horizon_metadata(metadata.get("horizon"))
     if persisted_metadata is not None:
         if upstream_source is not None:
             metadata["upstream_source"] = upstream_source
         metadata["metadata_sidecar"] = str(_weather_metadata_sidecar_path(path))
-    df.attrs[WEATHER_METADATA_KEY] = metadata
-
-    return df
+    return metadata
 
 
 def fill_leap_day(weather: pd.DataFrame) -> pd.DataFrame:

@@ -68,6 +68,7 @@ EXPECTED_DEFAULTS = {
     "battery_temperature": "weather",
     "battery_indoor_model": None,
     "execution_backend": "python",
+    "weather_file": None,
     "weather_source": None,
     "load_profile_file": None,
     "load_profile_column": None,
@@ -136,6 +137,7 @@ RUN_FLAGS: list[tuple[str, list[str], str, object]] = [
     ("--inverter-loading-ratio", ["1.2"], "inverter_loading_ratio", 1.2),
     ("--inverter-ac-rating-kw", ["4.6"], "inverter_ac_rating_kw", 4.6),
     ("--start-date", ["2024-01-01"], "start_date", "2024-01-01"),
+    ("--weather-file", ["tmy.csv"], "weather_file", "tmy.csv"),
     ("--weather-source", ["pvgis"], "weather_source", "pvgis"),
     ("--execution-backend", ["numba"], "execution_backend", "numba"),
 ]

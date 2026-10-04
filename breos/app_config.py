@@ -720,6 +720,24 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         default_doc="*unset*",
         summary="battery.smart_charging",
     ),
+    "weather_file": AppConfigField(
+        default=None,
+        cli_flags=("--weather-file",),
+        cli_type=Path,
+        cli_help=(
+            "One-year weather CSV to simulate, instead of the weather/ cache or a PVGIS fetch. "
+            "A relative path is taken from the working directory."
+        ),
+        normalizer=_path_string,
+        doc=(
+            "One-year weather CSV (or gzip-compressed `.csv.gz`) to simulate, in the layout of the cached "
+            "`weather/` files, instead of the `weather/` cache or a PVGIS fetch. Any filename and any location "
+            "work. A relative path is taken from the working directory. The file's path and SHA-256 digest are "
+            "recorded under `provenance.weather`; see [Run offline with cached "
+            "weather](../how-to/offline-weather.md#name-the-weather-file)"
+        ),
+        summary="simulation.weather_file",
+    ),
     "weather_source": AppConfigField(
         default=None,
         cli_flags=("--weather-source",),
@@ -2264,6 +2282,7 @@ def _validate_time_and_weather(cfg: dict[str, Any]) -> None:
         raise ValueError("'resolution' must be 'h' or '15min'")
     cfg["irradiance_resampling"] = validate_irradiance_resampling(cfg["irradiance_resampling"])
     _validate_weather_source(cfg)
+    _validate_weather_file(cfg)
     cfg["horizon_profile"] = normalise_horizon_profile(cfg["horizon_profile"])
     _validate_sky_settings(cfg["transposition_model"], cfg["albedo"], cfg["surface_type"], cfg["model_perez"])
     if not is_known_model(cfg["solar_position"], SOLAR_POSITION_METHODS):
@@ -2312,6 +2331,24 @@ def _validate_weather_source(cfg: dict[str, Any]) -> None:
             "'weather_source' selects a cached weather file by location preset key; "
             "coordinate-dict locations have no cache key and always fetch PVGIS weather"
         )
+
+
+def _validate_weather_file(cfg: dict[str, Any]) -> None:
+    """Check ``weather_file`` names an existing file, and is not combined with ``weather_source``.
+
+    A relative path is taken from the working directory, as for the other
+    path keys. The file is read when the weather is loaded.
+    """
+    weather_file = cfg["weather_file"]
+    if weather_file is None:
+        return
+    if cfg["weather_source"] is not None:
+        raise ValueError(
+            "'weather_file' names the weather file directly, and 'weather_source' selects one from the "
+            "weather/ cache; set one of them"
+        )
+    if not Path(weather_file).is_file():
+        raise FileNotFoundError(f"weather_file not found: {weather_file}")
 
 
 def _validate_economics(cfg: dict[str, Any]) -> None:
@@ -2669,6 +2706,8 @@ def _normalise_config_values(cfg: dict[str, Any]) -> dict[str, Any]:
 EXCLUSIVE_ALTERNATIVES: Mapping[str, str] = {
     "inverter_ac_rating_kw": "inverter_loading_ratio",
     "inverter_loading_ratio": "inverter_ac_rating_kw",
+    "weather_file": "weather_source",
+    "weather_source": "weather_file",
 }
 
 
