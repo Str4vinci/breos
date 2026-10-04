@@ -239,7 +239,10 @@ battery_replacement_min_remaining_years = 1.0
 battery_skipped_replacement_action = "retire"  # "keep" is the default
 ```
 
-- `"keep"` (the default) is the behaviour described above.
+- `"keep"` (the default) is the behaviour described above, until the
+  pack's state of health reaches 0: a pack with no capacity left is retired
+  then, as `"retire"` retires one, with an end-of-life event of the reason
+  `"zero_health"`.
 - `"retire"` switches the battery off at the crossing, the instant the
   skipped replacement would have been booked at. The step that closes the
   degradation period was dispatched as usual. From the next step the battery
@@ -296,7 +299,9 @@ battery_skipped_replacement_action = "keep"  # or "retire"
   project. Nothing is frozen or restored: the aging model keeps running, the
   state of health keeps falling below the threshold, and the SOC window
   shrinks with it. With `enable_resistance_fade` the efficiencies keep
-  falling too. No replacement is bought or priced.
+  falling too. No replacement is bought or priced. If the state of health
+  reaches 0, the pack is retired at that degradation period's close, as
+  with `"retire"`, and the event's reason is `"zero_health"`.
 - With `"retire"` the pack is switched off at that first crossing, as
   described above, and the project finishes PV-only.
 - Every crossing is skipped already, so `battery_replacement_min_remaining_years`

@@ -471,6 +471,15 @@ end-of-life policies for the final project year: replace, keep and retire.
   cases. It is reported as for a kept pack.
 - **Reporting.** The crossing is an E11 event with action `"retired"` and
   the reason of the skip.
+- **Zero health (#413).** A kept pack whose state of health reaches 0 has
+  no capacity left, but under `"keep"` it stayed in service, and BLAST
+  restored it below 0 at the next project year, so it moved energy it did
+  not have. It is now retired at the close of the period that brings it to
+  0, by the same path and with the same money and reporting, as a second
+  E11 event with action `"retired"` and the reason `"zero_health"`; the
+  first crossing stays the `"kept"` one. A pack already retired records
+  nothing more. A BLAST state restored below 0 starts at 0, as each period
+  close floors it. No default run reaches zero health.
 
 The default `"keep"` is E11's behaviour, and results are bit-identical. The
 result format stays `"1"`.

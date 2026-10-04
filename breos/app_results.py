@@ -135,7 +135,8 @@ _NETWORK_CREDIT_YEAR1_FIELDS = {
 def end_of_life_fields(events: Sequence[Mapping[str, Any]], soh_digits: int) -> dict[str, Any]:
     """The result fields of a battery's end-of-life crossings (ADR 0003 E11).
 
-    ``battery_end_of_life_events`` lists every crossing in project order:
+    ``battery_end_of_life_events`` lists every crossing, and a kept pack's
+    retirement at zero health (reason ``"zero_health"``), in project order:
     its project ``year``, ``time_years`` from commissioning (the instant a
     replacement is booked at), ``date``, the ``action`` taken, the
     ``reason`` for it and the ``soh_pct`` at the crossing. The
@@ -204,7 +205,8 @@ def degradation_history_to_dicts(
             {
                 "year": int(row["Year"]),
                 "in_service": retired_year is None or int(row["Year"]) < retired_year,
-                "soh_pct": round(soh, soh_digits),
+                # Rounded as yearly[].soh_pct is, so the two lists agree.
+                "soh_pct": round(round(soh, 2), soh_digits),
                 "capacity_kwh": round(capacity_kwh, 3),
                 "usable_capacity_kwh": round(capacity_kwh * window, 3),
                 "replacements": int(row["Replacements"]),

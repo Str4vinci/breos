@@ -868,7 +868,8 @@ APP_CONFIG_FIELDS: dict[str, AppConfigField] = {
         default="keep",
         doc=(
             'What happens to a battery whose end-of-life replacement is skipped. `"keep"` leaves it in service '
-            'below its threshold; `"retire"` switches it off, and the project finishes PV-only. Applies only when '
+            'below its threshold until its state of health reaches 0, when it is retired; `"retire"` switches it '
+            "off, and the project finishes PV-only. Applies only when "
             "`battery_enable_replacement`, `battery_replacement_min_remaining_years` or "
             "`battery_allow_terminal_replacement` skips a swap. See "
             "[Retiring the battery instead of keeping it](configuration.md#retiring-the-battery-instead-of-keeping-it)"

@@ -888,7 +888,7 @@ def project_years(
     retires the pack (``skipped_replacement_action``); a retired pack is
     carried switched off into every later year. The run's
     ``end_of_life_events`` lists every crossing of the end-of-life threshold,
-    replaced or not, on the project clock (:func:`end_of_life_record`).
+    replaced or not, and a kept pack's retirement at zero health, on the project clock (:func:`end_of_life_record`).
 
     With a ``tariff``, resolved on the simulation calendar, each year row
     carries its import cost, export revenue, no-system import cost and fixed

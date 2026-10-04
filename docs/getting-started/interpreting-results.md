@@ -129,14 +129,18 @@ records one:
 | `year` | Project year of the crossing, from 1 |
 | `time_years` | Years from commissioning to the end of the closing step: the instant a replacement is booked at, equal to the `financial` row's `replacement_time_years` |
 | `date` | Calendar date of the closing step; every project year replays the simulated calendar, moved forward by its year |
-| `action` | `"replaced"`: a new pack was installed. `"kept"`: no pack was bought and the old one stays in service below its threshold. `"retired"`: no pack was bought and the old one was switched off; the project finishes PV-only (`battery_skipped_replacement_action = "retire"`) |
-| `reason` | `"end_of_life"` for a replacement. For a skipped one, `"replacement_disabled"` (`battery_enable_replacement = false`), `"min_remaining_years"` (less than `battery_replacement_min_remaining_years` was left) or `"terminal_period"` (the final period with `battery_allow_terminal_replacement = false`) |
+| `action` | `"replaced"`: a new pack was installed. `"kept"`: no pack was bought and the old one stays in service below its threshold. `"retired"`: no pack was bought and the old one was switched off; the project finishes PV-only (`battery_skipped_replacement_action = "retire"`, or a kept pack whose state of health reached 0) |
+| `reason` | `"end_of_life"` for a replacement. For a skipped one, `"replacement_disabled"` (`battery_enable_replacement = false`), `"min_remaining_years"` (less than `battery_replacement_min_remaining_years` was left) or `"terminal_period"` (the final period with `battery_allow_terminal_replacement = false`). `"zero_health"` for a kept pack retired when its state of health reached 0 |
 | `soh_pct` | State of health at the crossing, the value compared with the threshold |
 
 A replaced pack's successor can cross again, so a long horizon can list
 several replacements. A pack that is kept or retired crosses once: it stays below its
-threshold, and no later period records it again. A skipped replacement is
-therefore always the last entry. For example, with 20 project years and
+threshold, and no later period records it again. A kept pack whose state of
+health reaches 0 has no capacity left: it is retired at the close of that
+period, as with `battery_skipped_replacement_action = "retire"`, and the
+retirement is a second entry, with `"action": "retired"` and `"reason":
+"zero_health"`. A skipped replacement, or that retirement, is therefore
+always the last entry. For example, with 20 project years and
 `battery_replacement_min_remaining_years = 1.0`, a pack that reaches end of
 life at 19.3 years shows as `{"year": 20, "time_years": 19.3, "action":
 "kept", "reason": "min_remaining_years", ...}`: the replacement was skipped
@@ -164,8 +168,8 @@ every pack that served in it.
 | Field | Description |
 |---|---|
 | `year` | Project year, from 1 |
-| `in_service` | True while the pack is in service at the end of the year; false from the year it is retired in (`battery_skipped_replacement_action = "retire"`) |
-| `soh_pct` | State of health at the end of the year, as `yearly[].soh_pct` |
+| `in_service` | True while the pack is in service at the end of the year; false from the year it is retired in (`battery_skipped_replacement_action = "retire"`, or a kept pack at zero health) |
+| `soh_pct` | State of health at the end of the year, as `yearly[].soh_pct`: rounded to 2 decimals, then, with BLAST, to 1. `battery_soh_end_pct` and an end-of-life event's `soh_pct` round once, so with BLAST they can differ from it by 0.1 |
 | `capacity_kwh` | `battery_kwh` times the state of health |
 | `usable_capacity_kwh` | `capacity_kwh` times the SOC window, `battery_max_soc - battery_min_soc` |
 | `replacements` | Replacements in the year |
@@ -186,13 +190,17 @@ loss, and only the native engine has a resistance model. For the native
 engine `cycle_loss_pct + calendar_loss_pct` is the state of health lost
 since the pack was installed, to rounding. The year rows behind the history
 also carry `Battery_Cell_Temperature_Mean_C` and `Battery_In_Service_Hours`,
-both None without a battery.
+both None without a battery. In a year that starts with the pack retired,
+`Battery_In_Service_Hours` is 0 and `Battery_Cell_Temperature_Mean_C` is
+None.
 
 A retired pack is switched off but stays installed. Its entries keep the
 state of health, capacities, `cumulative_fec` and loss split it had when it
 was retired, with `in_service` false. It stores and delivers nothing, so the
 throughput and `fec` are 0. The means cover the steps the pack served
-through the step that retired it, so a later year has none.
+through the step that retired it, so a later year has none. That step counts
+with a state of charge of 0, since its stored energy leaves with the pack at
+its end, and with its cell temperature as dispatched.
 
 The cycle counts are the model's own. The native engine counts rainflow
 cycles of the state of charge, which is a share of the aged capacity, so a
