@@ -154,9 +154,14 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   projection gain a `currency` column, which plots read for their labels;
   `breos validate-config` prints the resolved currency; each bundled cost
   preset records its `currency`, which `breos list cost-presets` reports;
-  and `App.revalue` accepts `currency`. Scaling every money input by k scales
-  every money output by k and leaves energy, ageing, payback years and the
-  optimizer's ranking unchanged, which the tests check. Runs that set no
+  and `App.revalue` accepts `currency` when the change restates every cost
+  the run set, and refuses it under a non-zero `wear_cost_per_kwh`. Scaling
+  every money input by k scales every money output by k and leaves energy,
+  ageing and payback years unchanged, and in the optimizer the NPV ranking
+  of the evaluated designs and their budget feasibility, which the tests
+  check. The NSGA-II search can still differ between currencies: pymoo adds
+  the budget violation, in money, to the area and ZEB violations unscaled,
+  so infeasible candidates can rank differently. Runs that set no
   `currency` are bit-identical, and the result format stays `"1"`.
 
 ### Changed

@@ -13,7 +13,7 @@ import pytest
 from breos import cli, optimization
 from breos.app import REVALUATION_KEYS, App
 from breos.app_config import resolve_app_config
-from breos.economics import default_amount_cost_keys, find_payback_year_interpolated
+from breos.economics import default_amount_cost_keys, find_payback_year_interpolated, write_cost_projection
 from breos.montecarlo import MonteCarloSettings, run_montecarlo
 from breos.optimization_config import resolve_optimization_config
 from tools.generate_app_golden import SCENARIOS, _fake_fetch
@@ -150,30 +150,38 @@ def _run(config):
     return app
 
 
-# Names a physical (non-money) result leaf has; a scaled leaf must not have one.
+# A money output is named for money and not for a physical unit; every one
+# must scale by K (a zero stays zero), and every other output must not move.
+_MONEY = re.compile(
+    r"cost|price|revenue|saving|npv|lcoe|investment|credit|balance|(fixed|network)_charge|reference", re.I
+)
 _PHYSICAL = re.compile(
-    r"(?<!per)_kwh$|_pct$|_kg$|(^|_)soh(_|$)|_years?$|_w$|_hours?$|(^|_)(fraction|ratio|count|replacements)$"
+    r"(?<!per)_kwh$|_pct$|_%$|_kg$|_wh$|(^|_)soh(_|$)|_years?$|_w$|_hours?$|(^|_)(fraction|ratio|count|replacements)$",
+    re.I,
 )
 
 
+def _is_money(name):
+    leaf = name.rsplit(".", 1)[-1]
+    return bool(_MONEY.search(leaf)) and not _PHYSICAL.search(leaf)
+
+
 def _assert_frames_scale(base, scaled, *, money):
-    """Every column of ``scaled`` equals ``base``, or ``K`` times it; the named ``money`` columns scale."""
+    """Every money column of ``scaled`` is ``K`` times ``base``, every other column equal; the named ``money`` move."""
     assert list(base.columns) == list(scaled.columns)
-    scaled_columns = set()
+    moved = set()
     for column in base.columns:
         left, right = base[column], scaled[column]
-        if not pd.api.types.is_numeric_dtype(left) or left.equals(right):
+        if pd.api.types.is_numeric_dtype(left) and _is_money(column):
+            np.testing.assert_array_equal(right.to_numpy(), K * left.to_numpy(), err_msg=column)
+            moved.update([column] if (left != 0).any() else [])
+        else:
             assert left.equals(right), column
-            continue
-        np.testing.assert_array_equal(right.to_numpy(), K * left.to_numpy(), err_msg=column)
-        scaled_columns.add(column)
-    assert set(money) <= scaled_columns
-    physical = {column for column in scaled_columns if re.search(r"_kWh$|_%$|_kg$|SOH", column)}
-    assert not physical, physical
+    assert set(money) <= moved
 
 
 def _assert_results_scale(base, scaled):
-    """Rounded result leaves: physical ones equal, money ones K times, to the 0.01 rounding."""
+    """Rounded result leaves: money ones K times, to the 0.01 rounding, and every other one equal."""
     left, right = flatten(base), flatten(scaled)
     assert left.keys() == right.keys()
     money = set()
@@ -181,13 +189,11 @@ def _assert_results_scale(base, scaled):
         if key.startswith("provenance."):
             continue
         other = right[key]
-        if not isinstance(value, float) or value == other or (np.isnan(value) and np.isnan(other)):
+        if isinstance(value, float) and _is_money(key):
+            assert other == pytest.approx(K * value, rel=1e-12, abs=0.005 * (K + 1)), key
+            money.update([key] if value != 0 else [])
+        else:
             assert value == other or (isinstance(value, float) and np.isnan(value) and np.isnan(other)), key
-            continue
-        assert other == pytest.approx(K * value, rel=1e-12, abs=0.005 * (K + 1)), key
-        money.add(key)
-    leaves = {key.rsplit(".", 1)[-1] for key in money}
-    assert not {leaf for leaf in leaves if _PHYSICAL.search(leaf)}, money
     return money
 
 
@@ -233,6 +239,52 @@ def test_revalue_moves_a_run_to_another_currency():
     assert revalued["provenance"]["revaluation"] == {"method": "repriced", "changed_keys": ["costs", "currency"]}
     del revalued["provenance"]["revaluation"]
     assert flatten(revalued) == flatten(_run(scaled).result())
+
+
+def test_revalue_into_another_currency_restates_every_cost():
+    base = _run({**BASE, "projection_years": 2, "cost_preset": "residential_pt"})
+    usd = {key: value * K for key, value in EUR_COSTS.items()}
+    weather_patch, load_patch = _offline()
+    with weather_patch, load_patch:
+        # A new label alone would report the EUR amounts as USD.
+        with pytest.raises(ValueError, match=r"cost_preset 'residential_pt' is priced in EUR, but the run is in USD"):
+            base.revalue({"currency": "USD"})
+        with pytest.raises(ValueError, match=r"from EUR to USD, but the costs daily_power_cost, .* are amounts in EUR"):
+            base.revalue({"currency": "USD", "cost_preset": None})
+        # One price restated, fourteen still in EUR.
+        with pytest.raises(ValueError) as error:
+            base.revalue({"currency": "USD", "cost_preset": None, "costs": {"module_cost_per_w": 0.30}})
+        named = re.search(r"the costs (.+) are amounts in EUR", str(error.value)).group(1).split(", ")
+        assert sorted(named) == sorted(key for key in EUR_COSTS if key != "module_cost_per_w")
+        with pytest.raises(ValueError, match=r"cost_preset 'residential_pt' is priced in EUR, but the run is in USD"):
+            base.revalue({"currency": "USD", "costs": usd})
+        revalued = base.revalue({"currency": "USD", "costs": usd, "cost_preset": None})
+    assert revalued["provenance"]["currency"] == "USD"
+    assert revalued["total_investment"] == pytest.approx(K * base.result()["total_investment"], abs=0.005 * (K + 1))
+
+
+def test_revalue_back_to_the_default_currency_restates_every_cost():
+    config = {**BASE, "projection_years": 2}
+    base = _run(_scaled_config(config, K, "JPY"))
+    weather_patch, load_patch = _offline()
+    with weather_patch, load_patch:
+        with pytest.raises(ValueError, match=r"from JPY to EUR, but the costs .* are amounts in JPY"):
+            base.revalue({"currency": None})
+        revalued = base.revalue({"currency": None, "costs": EUR_COSTS})
+        defaults = base.revalue({"currency": None, "costs": {key: None for key in EUR_COSTS}})
+    del revalued["provenance"]["revaluation"], defaults["provenance"]["revaluation"]
+    assert revalued["provenance"]["currency"] == defaults["provenance"]["currency"] == "EUR"
+    assert flatten(revalued) == flatten(_run({**config, "currency": None}).result())
+    assert flatten(defaults) == flatten(_run({**config, "currency": None, "costs": {}}).result())
+
+
+def test_revalue_refuses_a_currency_change_under_a_wear_cost():
+    base = _run(PLANNER_RUN)
+    scaled = _scaled_config(PLANNER_RUN, K, "JPY")
+    weather_patch, load_patch = _offline()
+    with weather_patch, load_patch:
+        with pytest.raises(ValueError, match=r"smart_charging\.wear_cost_per_kwh \(0\.02\) is in EUR, and revalue"):
+            base.revalue({key: scaled[key] for key in ("currency", "costs", "tariff", "reference_tariff")})
 
 
 def test_monte_carlo_money_scales_and_records_the_currency(tmp_path, write_multiyear_weather):
@@ -462,6 +514,20 @@ def test_sweep_and_monte_carlo_csvs_name_the_currency(tmp_path, write_multiyear_
     assert cli.main(["montecarlo", "--config", str(mc_config), "--output", str(runs)]) == 0
     assert set(pd.read_csv(runs)["currency"]) == {"JPY"}
     assert json.loads((tmp_path / "mc.provenance.json").read_text(encoding="utf-8"))["currency"] == "JPY"
+
+
+def test_a_written_projection_keeps_the_currency_it_records(tmp_path):
+    columns = {"Year": [1, 2], "Cost_Import": [12800.0, 13056.0]}
+    projection = pd.DataFrame(columns)
+    projection.attrs["currency"] = "JPY"
+    first = pd.read_csv(write_cost_projection(projection, str(tmp_path), "first"))
+    assert first.attrs == {} and set(first["currency"]) == {"JPY"}
+    # Read back, the column is the only record, and writing again keeps it.
+    second = pd.read_csv(write_cost_projection(first, str(tmp_path), "second"))
+    pd.testing.assert_frame_equal(second, first)
+    # A frame that records no currency is not labelled with the default.
+    unlabelled = pd.read_csv(write_cost_projection(pd.DataFrame(columns), str(tmp_path), "none"))
+    assert "currency" not in unlabelled.columns
 
 
 def test_plots_read_the_currency_column_of_a_breos_csv(tmp_path):

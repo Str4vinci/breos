@@ -33,6 +33,9 @@ from breos.resources import load_config_json
 # The active ISO 4217 currency codes, without fund codes, precious metals and
 # the testing and no-currency codes. BREOS checks that money is labelled with
 # one of them and that a run labels all its money alike; it never converts.
+# Source: iso_4217.json of iso-codes 4.20.1 (178 codes), checked 2026-10-04,
+# less 23 codes: the funds BOV CHE CHW CLF COU MXV USN UYI UYW, the metals XAG
+# XAU XPD XPT, the units XBA XBB XBC XBD XDR XSU XUA XAD, and XTS and XXX.
 SUPPORTED_CURRENCIES = frozenset(
     """
     AED AFN ALL AMD AOA ARS AUD AWG AZN BAM BBD BDT BHD BIF BMD BND BOB BRL BSD BTN BWP BYN BZD CAD CDF

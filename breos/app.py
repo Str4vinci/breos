@@ -25,7 +25,7 @@ from typing import Any
 
 import pandas as pd
 
-from breos.app_config import APP_CONFIG_FIELDS, normalize_config_keys, resolve_app_config
+from breos.app_config import APP_CONFIG_FIELDS, ResolvedAppConfig, normalize_config_keys, resolve_app_config
 from breos.app_inputs import AppRuntimeDependencies
 from breos.app_results import build_result as build_app_result
 from breos.load_profiles import load_profile
@@ -61,6 +61,36 @@ def _revalued_config(config: dict[str, Any], changes: Mapping[str, Any]) -> dict
                 table[name] = {**table[name], **deepcopy(dict(item))}
         merged[key] = table
     return merged
+
+
+def _check_currency_change(old: ResolvedAppConfig, currency: str, changes: Mapping[str, Any]) -> None:
+    """Refuse a revaluation into ``currency`` that keeps an amount stated in the run's old currency.
+
+    The merged ``[costs]`` counts as being in the new currency, so every cost
+    the old run set must be restated (a key set to None falls back to the
+    default, which a non-EUR run then refuses). The tariff, the reference
+    tariff and a cost preset carry their own currency and are checked when
+    the new configuration resolves. The planner's wear weight is not a
+    revaluation key, so a non-zero one cannot be restated.
+    """
+    if currency == old.currency:
+        return
+    move = f"revalue() moves the run from {old.currency} to {currency}"
+    if not ("costs" in changes and changes["costs"] is None):
+        restated = {str(key).replace("-", "_") for key in changes.get("costs") or {}}
+        kept = sorted(key for key in old.cfg.get("costs") or {} if key not in restated)
+        if kept:
+            raise ValueError(
+                f"{move}, but the costs {', '.join(kept)} are amounts in {old.currency}. BREOS does not convert "
+                f"currencies: restate each of them in {currency} under changes['costs'], or set it to None to "
+                "remove it."
+            )
+    wear = old.smart_charging.wear_cost_per_kwh if old.smart_charging is not None else None
+    if wear:
+        raise ValueError(
+            f"{move}, but smart_charging.wear_cost_per_kwh ({wear}) is in {old.currency}, and revalue() cannot "
+            f"change it. Build a new App with the wear cost in {currency}."
+        )
 
 
 # The keys App.revalue may change: the economics section of the resolved
@@ -136,6 +166,13 @@ class App:
         discount rate, the escalators and ``terminal_value``. The estimated battery residual
         value is recomputed from retained final health without simulating again.
 
+        A change of the run's currency must restate every money input in the
+        new currency: each key the old ``costs`` table set (or None to remove
+        it), a cost preset in the new currency or none, and the tariff and
+        reference tariff, which carry their own currency. A run whose
+        ``smart_charging.wear_cost_per_kwh`` is not zero cannot change
+        currency; build a new App for it.
+
         When the new prices cannot change the dispatch, the stored simulation
         is re-priced (``"repriced"``): flat prices, a tariff removed, or a
         tariff on the same schedule whose smart-charging instructions stay
@@ -161,7 +198,8 @@ class App:
         Raises:
             RuntimeError: If :meth:`simulate` has not been called.
             ValueError: If ``changes`` sets a key outside
-                :data:`REVALUATION_KEYS`; build a new App for those.
+                :data:`REVALUATION_KEYS`; build a new App for those. Or if it
+                changes the currency and keeps an amount in the old one.
         """
         if self._artifacts is None:
             raise RuntimeError("Call simulate() before revalue().")
@@ -177,6 +215,7 @@ class App:
                 f"Build a new App for it. Keys revalue() accepts: {', '.join(sorted(REVALUATION_KEYS))}."
             )
         resolved = resolve_app_config(config)
+        _check_currency_change(self._resolved, resolved.currency, changes)
         artifacts, method = revalue_app_simulation(resolved, self._artifacts, self._runtime_dependencies())
         result = build_app_result(resolved, artifacts, input_repairs=self._input_repairs)
         result["provenance"]["revaluation"] = {"method": method, "changed_keys": changed}

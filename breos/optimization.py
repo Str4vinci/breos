@@ -544,6 +544,8 @@ def _evaluate_projected_design_metrics(
 class _OptimizationTariff:
     """A search's or design's resolved tariff and smart-charging instructions, shared by every year."""
 
+    # The config's resolved currency, of every money input and column.
+    currency: str
     tariff: ResolvedTariff | None = None
     instructions: DispatchInstructions | None = None
     smart_charging: Dict[str, Any] | None = None
@@ -552,8 +554,6 @@ class _OptimizationTariff:
     reference_tariff: ResolvedTariff | None = None
     reference_import_price_escalation: float | None = None
     reference_record: Dict[str, Any] | None = None
-    # The config's resolved currency, of every money input and column.
-    currency: str = DEFAULT_CURRENCY
 
     def provenance(self) -> Dict[str, Any]:
         # Every money column is in this currency; BREOS does not convert.

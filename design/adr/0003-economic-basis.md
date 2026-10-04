@@ -516,18 +516,30 @@ EUR cost presets and defaults then mixed silently with them.
   optimizer's Pareto frame, as in E8. A CSV keeps no attrs, so the sweep
   CSV, the Monte Carlo runs and yearly CSVs and `write_cost_projection` add
   a `currency` column, and plots read it as they read `attrs["currency"]`.
-  `breos validate-config` reports the resolved currency, and
-  `breos list cost-presets` each preset's own. `currency` is an economics
-  key, so `App.revalue` accepts it with prices in the new currency, and it
-  is one of the keys the input stage never reads, so a sweep over it shares
-  prepared inputs.
+  `write_cost_projection` takes the label from `attrs["currency"]`, else
+  from the frame's own `currency` column, and writes none when the frame
+  records neither. `breos validate-config` reports the resolved currency,
+  and `breos list cost-presets` each preset's own. `currency` is an
+  economics key, so `App.revalue` accepts it, and it is one of the keys the
+  input stage never reads, so a sweep over it shares prepared inputs.
+  A revaluation that changes the run's currency must restate every money
+  input in the new one: each key the old `[costs]` set (or remove it), the
+  cost preset (removed, or one in the new currency), the tariff and the
+  reference tariff. A non-zero `wear_cost_per_kwh` is not a revaluation key,
+  so such a run is refused; a new App states it in the new currency.
 - **Property.** Scaling every money input by k scales every money output by
-  k and leaves every physical output, the payback years and, with the budget
-  scaled too, the optimizer's feasibility and ranking unchanged. The tests
-  check it with k a power of two, for which the floats scale exactly, in
-  App (flat, tariff with reference, network credit, terminal value, fixed
-  target and daily persistence with a wear weight), Monte Carlo and the
-  optimizer.
+  k and leaves every physical output and the payback years unchanged. In
+  the optimizer, with the budget scaled too, the NPV ranking of the
+  evaluated designs and their budget feasibility are unchanged. The search
+  itself is not invariant: pymoo sums the positive parts of the budget
+  violation (money) and the area and ZEB violations (m² and a fraction)
+  unscaled, so k re-orders infeasible candidates against each other, and
+  the NSGA-II path, and so the front, can differ between currencies.
+  Normalising the constraints would change EUR searches and is left out.
+  The tests check the property with k a power of two, for which the floats
+  scale exactly, in App (flat, tariff with reference, network credit,
+  terminal value, fixed target and daily persistence with a wear weight),
+  Monte Carlo and the optimizer, where no candidate violates the area.
 
 A run that sets no `currency` resolves as before, and results are
 bit-identical. The result format stays `"1"`: the resolved config gains

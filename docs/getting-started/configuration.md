@@ -608,6 +608,11 @@ maintenance_cost_per_panel = 12
 - The optimizer takes the same top-level `currency` key. Its
   `constraints.budget` defaults to 10000 EUR, so a run in another currency
   sets it; see [Optimization](optimization.md).
+- `App.revalue` can move a run to another currency, but only with every
+  money input restated in it: each key the run set under `[costs]` (or set
+  to None to remove it), no cost preset or one in the new currency, and the
+  tariff and reference tariff. A run with a non-zero smart-charging
+  `wear_cost_per_kwh` cannot change currency this way; build a new App.
 
 ## Time-of-use tariffs
 

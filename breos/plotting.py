@@ -34,7 +34,7 @@ import pandas as pd
 from scipy.stats import t as student_t
 
 from breos.constants import DEFAULT_EOL_PERCENTAGE
-from breos.economics import _initial_investment, find_payback_year_interpolated
+from breos.economics import _initial_investment, _recorded_currency, find_payback_year_interpolated
 from breos.tariffs import DEFAULT_CURRENCY
 from breos.utils import find_irradiance_column, local_datetime_index
 from breos.weather import extract_ambient_temperature, preload_weather_by_year
@@ -70,22 +70,6 @@ def _finish(
     fig.savefig(os.path.join(results_directory, filename), dpi=dpi, bbox_inches=bbox_inches)
     plt.close(fig)
     return fig
-
-
-def _recorded_currency(frame: pd.DataFrame) -> Optional[str]:
-    """The currency a frame records: ``attrs["currency"]``, else its ``currency`` column, else None.
-
-    BREOS writes a ``currency`` column into the CSVs it saves, since a CSV
-    keeps no attrs; a column that names more than one currency raises.
-    """
-    if frame.attrs.get("currency") is not None:
-        return str(frame.attrs["currency"])
-    if "currency" not in frame.columns:
-        return None
-    codes = sorted({str(code) for code in frame["currency"].dropna()})
-    if len(codes) > 1:
-        raise ValueError(f"The input's currency column names several currencies ({', '.join(codes)}); plot them apart")
-    return codes[0] if codes else None
 
 
 def _currency(frame: pd.DataFrame) -> str:

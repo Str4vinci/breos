@@ -873,15 +873,37 @@ def add_co2_projection(proj: pd.DataFrame, year_rows: pd.DataFrame, emissions_pa
     proj.attrs["lifetime_co2_avoided_export_kg"] = float(proj["CO2_Avoided_Export_Cumulative_kg"].iloc[-1])
 
 
+def _recorded_currency(frame: pd.DataFrame) -> Optional[str]:
+    """The currency a frame records: ``attrs["currency"]``, else its ``currency`` column, else None.
+
+    BREOS writes a ``currency`` column into the CSVs it saves, since a CSV
+    keeps no attrs; a column that names more than one currency raises.
+    """
+    if frame.attrs.get("currency") is not None:
+        return str(frame.attrs["currency"])
+    if "currency" not in frame.columns:
+        return None
+    codes = sorted({str(code) for code in frame["currency"].dropna()})
+    if len(codes) > 1:
+        raise ValueError(f"The input's currency column names several currencies ({', '.join(codes)}); keep them apart")
+    return codes[0] if codes else None
+
+
 def write_cost_projection(proj: pd.DataFrame, results_directory: str, scenario_name: str = "") -> str:
-    """Write a cost projection to ``cost_projection[_<scenario>].csv`` in ``results_directory``; return the path."""
+    """Write a cost projection to ``cost_projection[_<scenario>].csv`` in ``results_directory``; return the path.
+
+    The ``currency`` column names the currency the frame records
+    (``attrs["currency"]``, else its own ``currency`` column); a frame that
+    records none is written without one.
+    """
     import os
 
     os.makedirs(results_directory, exist_ok=True)
     suffix = f"_{scenario_name}" if scenario_name else ""
     path = f"{results_directory}/cost_projection{suffix}.csv"
     # A CSV keeps no attrs, so each row names the currency of its money.
-    proj.assign(currency=proj.attrs.get("currency", DEFAULT_CURRENCY)).to_csv(path, index=False)
+    currency = _recorded_currency(proj)
+    (proj if currency is None else proj.assign(currency=currency)).to_csv(path, index=False)
     return path
 
 

@@ -1179,13 +1179,13 @@ class ResolvedAppConfig:
     smart_charging: SmartChargingSpec | None
     cost_params: CostParams
     emissions_params: EmissionsParams | None
+    # The currency of every money input and output (run_currency).
+    currency: str
     # The configured [period], or None for the whole calendar year of start_date.
     period: SimulationPeriod | None = None
     # The configured [reference_tariff], or None: the no-system baseline is
     # then priced at the system's own prices.
     reference_tariff: ReferenceTariffSpec | None = None
-    # The currency of every money input and output (run_currency).
-    currency: str = DEFAULT_CURRENCY
 
 
 def normalize_config_keys(config: dict[str, Any]) -> dict[str, Any]:
