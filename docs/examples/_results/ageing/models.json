@@ -1,0 +1,196 @@
+[
+ {
+  "model": "native_v1",
+  "label": "Native LFP, v1 field fit",
+  "engine": "native",
+  "model_key": "naumann_lam_field_calibrated_v1",
+  "chemistry": "LFP/graphite",
+  "cell_capacity_ah": null,
+  "basis": "field calendar fit, laboratory cycle model",
+  "first_end_of_life_years": 10.0986,
+  "battery_soh_end_pct": 50.91,
+  "experimental_range_warnings": [],
+  "input_ranges": null,
+  "aging_horizon_days": null,
+  "imposed_first_end_of_life_years": 10.0849
+ },
+ {
+  "model": "native_v2",
+  "label": "Native LFP, v2 field fit",
+  "engine": "native",
+  "model_key": "naumann_lam_field_calibrated_v2",
+  "chemistry": "LFP/graphite",
+  "cell_capacity_ah": null,
+  "basis": "field calendar fit, laboratory cycle model",
+  "first_end_of_life_years": 15.3699,
+  "battery_soh_end_pct": 64.33,
+  "experimental_range_warnings": [],
+  "input_ranges": null,
+  "aging_horizon_days": null,
+  "imposed_first_end_of_life_years": 14.926
+ },
+ {
+  "model": "lfp_gr_250ah_prismatic",
+  "label": "BLAST LFP-Gr 250 Ah",
+  "engine": "blast",
+  "model_key": "lfp_gr_250ah_prismatic",
+  "chemistry": "LFP/graphite",
+  "cell_capacity_ah": 250.0,
+  "basis": "laboratory cell model",
+  "first_end_of_life_years": null,
+  "battery_soh_end_pct": 83.3,
+  "experimental_range_warnings": [
+   "c_rate_charge",
+   "dod"
+  ],
+  "input_ranges": [
+   {
+    "input": "c_rate_charge",
+    "limit_min": null,
+    "limit_max": 0.65,
+    "run_min": null,
+    "run_max": 0.7461,
+    "periods_outside": 19,
+    "periods": 7300,
+    "first_year_outside": 4,
+    "run_max_nominal": 0.6308,
+    "periods_outside_nominal": 0
+   },
+   {
+    "input": "dod",
+    "limit_min": 0.8,
+    "limit_max": 1.0,
+    "run_min": null,
+    "run_max": 0.801,
+    "periods_outside": 6767,
+    "periods": 7300,
+    "first_year_outside": 1,
+    "run_max_nominal": null,
+    "periods_outside_nominal": null
+   },
+   {
+    "input": "temperature_c",
+    "limit_min": 10,
+    "limit_max": 45,
+    "run_min": 15.46,
+    "run_max": 27.2794,
+    "periods_outside": 0,
+    "periods": 7300,
+    "first_year_outside": null,
+    "run_max_nominal": null,
+    "periods_outside_nominal": null
+   }
+  ],
+  "aging_horizon_days": null,
+  "imposed_first_end_of_life_years": null
+ },
+ {
+  "model": "lfp_gr_sonymurata_3ah",
+  "label": "BLAST LFP-Gr 3 Ah",
+  "engine": "blast",
+  "model_key": "lfp_gr_sonymurata_3ah",
+  "chemistry": "LFP/graphite",
+  "cell_capacity_ah": 3.0,
+  "basis": "laboratory cell model",
+  "first_end_of_life_years": null,
+  "battery_soh_end_pct": 83.0,
+  "experimental_range_warnings": [
+   "dod",
+   "temperature_c"
+  ],
+  "input_ranges": [
+   {
+    "input": "c_rate_charge",
+    "limit_min": null,
+    "limit_max": 1.0,
+    "run_min": null,
+    "run_max": 0.7495,
+    "periods_outside": 0,
+    "periods": 7300,
+    "first_year_outside": null,
+    "run_max_nominal": 0.6271,
+    "periods_outside_nominal": 0
+   },
+   {
+    "input": "dod",
+    "limit_min": 0.8,
+    "limit_max": 1.0,
+    "run_min": null,
+    "run_max": 0.801,
+    "periods_outside": 6749,
+    "periods": 7300,
+    "first_year_outside": 1,
+    "run_max_nominal": null,
+    "periods_outside_nominal": null
+   },
+   {
+    "input": "temperature_c",
+    "limit_min": 20,
+    "limit_max": 40,
+    "run_min": 15.46,
+    "run_max": 27.2794,
+    "periods_outside": 5163,
+    "periods": 7300,
+    "first_year_outside": 1,
+    "run_max_nominal": null,
+    "periods_outside_nominal": null
+   }
+  ],
+  "aging_horizon_days": null,
+  "imposed_first_end_of_life_years": null
+ },
+ {
+  "model": "nmc_gr_50ah_b1",
+  "label": "BLAST NMC-Gr 50 Ah",
+  "engine": "blast",
+  "model_key": "nmc_gr_50ah_b1",
+  "chemistry": "NMC/graphite",
+  "cell_capacity_ah": 50.0,
+  "basis": "laboratory cell model",
+  "first_end_of_life_years": null,
+  "battery_soh_end_pct": 75.5,
+  "experimental_range_warnings": [
+   "dod"
+  ],
+  "input_ranges": [
+   {
+    "input": "c_rate_charge",
+    "limit_min": null,
+    "limit_max": 1.75,
+    "run_min": null,
+    "run_max": 0.791,
+    "periods_outside": 0,
+    "periods": 7300,
+    "first_year_outside": null,
+    "run_max_nominal": 0.6254,
+    "periods_outside_nominal": 0
+   },
+   {
+    "input": "dod",
+    "limit_min": 0.8,
+    "limit_max": 1.0,
+    "run_min": null,
+    "run_max": 0.801,
+    "periods_outside": 6725,
+    "periods": 7300,
+    "first_year_outside": 1,
+    "run_max_nominal": null,
+    "periods_outside_nominal": null
+   },
+   {
+    "input": "temperature_c",
+    "limit_min": 10,
+    "limit_max": 45,
+    "run_min": 15.46,
+    "run_max": 27.2794,
+    "periods_outside": 0,
+    "periods": 7300,
+    "first_year_outside": null,
+    "run_max_nominal": null,
+    "periods_outside_nominal": null
+   }
+  ],
+  "aging_horizon_days": null,
+  "imposed_first_end_of_life_years": null
+ }
+]

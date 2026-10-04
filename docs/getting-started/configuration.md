@@ -311,7 +311,9 @@ battery_skipped_replacement_action = "keep"  # or "retire"
 
 `battery_degradation_history` in the result lists the pack's state at the
 end of every project year; see
-[Degradation history](interpreting-results.md#degradation-history). Monte
+[Degradation history](interpreting-results.md#degradation-history). The
+gallery page {doc}`/gallery/battery/plot_07_ageing` follows one pack this
+way under several degradation models. Monte
 Carlo applies the key to each trajectory, and the optimizer takes it as
 `[battery] enable_replacement` and records it in
 `battery_replacement_treatment`. The resolved value is in
