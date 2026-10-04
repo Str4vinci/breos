@@ -523,10 +523,15 @@ EUR cost presets and defaults then mixed silently with them.
   economics key, so `App.revalue` accepts it, and it is one of the keys the
   input stage never reads, so a sweep over it shares prepared inputs.
   A revaluation that changes the run's currency must restate every money
-  input in the new one: each key the old `[costs]` set (or remove it), the
-  cost preset (removed, or one in the new currency), the tariff and the
-  reference tariff. A non-zero `wear_cost_per_kwh` is not a revaluation key,
-  so such a run is refused; a new App states it in the new currency.
+  input in the new one, since `App.revalue` merges tables key by key and
+  checks only the labels of the tariff and the reference tariff: each
+  non-zero cost the old `[costs]` set, and each non-zero price list, fixed
+  charge and `annual_network_credit` amount of a `[tariff]` or
+  `[reference_tariff]` the run keeps, is refused unless the change restates
+  it, sets it to None or removes its table. Zero amounts are zero in any
+  currency and stay. The cost preset must be removed or one in the new
+  currency. A non-zero `wear_cost_per_kwh` is not a revaluation key, so such
+  a run is refused; a new App states it in the new currency.
 - **Property.** Scaling every money input by k scales every money output by
   k and leaves every physical output and the payback years unchanged. In
   the optimizer, with the budget scaled too, the NPV ranking of the

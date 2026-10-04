@@ -241,21 +241,28 @@ def test_revalue_moves_a_run_to_another_currency():
     assert flatten(revalued) == flatten(_run(scaled).result())
 
 
+def _named_amounts(error, currency):
+    match = re.search(rf"to \w+, but (.+) (?:is an amount|are amounts) in {currency}\.", str(error.value))
+    assert match, error.value
+    return sorted(match.group(1).split(", "))
+
+
 def test_revalue_into_another_currency_restates_every_cost():
-    base = _run({**BASE, "projection_years": 2, "cost_preset": "residential_pt"})
-    usd = {key: value * K for key, value in EUR_COSTS.items()}
+    # An explicit zero is zero in any currency and need not be restated.
+    costs = {**EUR_COSTS, "land_cost": 0.0}
+    base = _run({**BASE, "projection_years": 2, "cost_preset": "residential_pt", "costs": costs})
+    usd = {key: value * K for key, value in costs.items() if key != "land_cost"}
     weather_patch, load_patch = _offline()
     with weather_patch, load_patch:
         # A new label alone would report the EUR amounts as USD.
         with pytest.raises(ValueError, match=r"cost_preset 'residential_pt' is priced in EUR, but the run is in USD"):
             base.revalue({"currency": "USD"})
-        with pytest.raises(ValueError, match=r"from EUR to USD, but the costs daily_power_cost, .* are amounts in EUR"):
+        with pytest.raises(ValueError, match=r"from EUR to USD, but costs\.daily_power_cost, .* are amounts in EUR"):
             base.revalue({"currency": "USD", "cost_preset": None})
-        # One price restated, fourteen still in EUR.
+        # One price restated, thirteen still in EUR.
         with pytest.raises(ValueError) as error:
             base.revalue({"currency": "USD", "cost_preset": None, "costs": {"module_cost_per_w": 0.30}})
-        named = re.search(r"the costs (.+) are amounts in EUR", str(error.value)).group(1).split(", ")
-        assert sorted(named) == sorted(key for key in EUR_COSTS if key != "module_cost_per_w")
+        assert _named_amounts(error, "EUR") == sorted(f"costs.{key}" for key in usd if key != "module_cost_per_w")
         with pytest.raises(ValueError, match=r"cost_preset 'residential_pt' is priced in EUR, but the run is in USD"):
             base.revalue({"currency": "USD", "costs": usd})
         revalued = base.revalue({"currency": "USD", "costs": usd, "cost_preset": None})
@@ -263,12 +270,90 @@ def test_revalue_into_another_currency_restates_every_cost():
     assert revalued["total_investment"] == pytest.approx(K * base.result()["total_investment"], abs=0.005 * (K + 1))
 
 
+def test_revalue_into_another_currency_restates_every_tariff_amount():
+    # A zero price list is zero in any currency and need not be restated.
+    config = {
+        **TARIFF_RUN,
+        "projection_years": 2,
+        "smart_charging": None,
+        "terminal_value": None,
+        "tariff": {**TOU, "export_prices": {"all": 0.0}},
+    }
+    base = _run(config)
+    usd = _scaled_config(config, K, "USD")
+    credit = ("amount_per_year", "network_fixed_per_year", "network_import_prices")
+    weather_patch, load_patch = _offline()
+    with weather_patch, load_patch:
+        # Only the labels change: every tariff and reference amount would be EUR read as USD.
+        with pytest.raises(ValueError) as error:
+            base.revalue(
+                {
+                    "currency": "USD",
+                    "costs": usd["costs"],
+                    "tariff": {"currency": "USD"},
+                    "reference_tariff": {"currency": "USD"},
+                }
+            )
+        assert _named_amounts(error, "EUR") == sorted(
+            ["tariff.import_prices", "tariff.fixed_charge_per_day", "reference_tariff.import_prices"]
+            + ["reference_tariff.fixed_charge_per_day"]
+            + [f"{table}.annual_network_credit.{key}" for table in ("tariff", "reference_tariff") for key in credit]
+        )
+        # The price lists restated, the fixed charges and the network credits kept.
+        prices = {key: usd["tariff"][key] for key in ("currency", "import_prices")}
+        with pytest.raises(ValueError) as error:
+            base.revalue(
+                {
+                    "currency": "USD",
+                    "costs": usd["costs"],
+                    "tariff": prices,
+                    "reference_tariff": {key: usd["reference_tariff"][key] for key in ("currency", "import_prices")},
+                }
+            )
+        assert _named_amounts(error, "EUR") == sorted(
+            ["tariff.fixed_charge_per_day", "reference_tariff.fixed_charge_per_day"]
+            + [f"{table}.annual_network_credit.{key}" for table in ("tariff", "reference_tariff") for key in credit]
+        )
+        # A network credit removed counts as restated.
+        removed = base.revalue(
+            {
+                "currency": "USD",
+                "costs": usd["costs"],
+                "tariff": {
+                    **prices,
+                    "fixed_charge_per_day": usd["tariff"]["fixed_charge_per_day"],
+                    "annual_network_credit": None,
+                },
+                "reference_tariff": usd["reference_tariff"],
+            }
+        )
+        revalued = base.revalue({key: usd[key] for key in ("currency", "costs", "tariff", "reference_tariff")})
+    assert removed["provenance"]["currency"] == "USD"
+    assert removed["provenance"]["resolved_config"]["tariff"].get("annual_network_credit") is None
+    del revalued["provenance"]["revaluation"]
+    assert flatten(revalued) == flatten(_run(usd).result())
+
+
+def test_revalue_by_the_tariff_currency_alone_restates_every_tariff_amount():
+    # Without the currency key, the run's currency follows the tariff's.
+    config = {**TARIFF_RUN, "projection_years": 2, "smart_charging": None, "reference_tariff": None}
+    base = _run(config)
+    usd = _scaled_config(config, K, "USD")
+    weather_patch, load_patch = _offline()
+    with weather_patch, load_patch:
+        with pytest.raises(ValueError, match=r"from EUR to USD, but tariff\.import_prices, .* are amounts in EUR"):
+            base.revalue({"costs": usd["costs"], "tariff": {"currency": "USD"}})
+        revalued = base.revalue({"costs": usd["costs"], "tariff": usd["tariff"]})
+    del revalued["provenance"]["revaluation"]
+    assert flatten(revalued) == flatten(_run({**usd, "currency": None}).result())
+
+
 def test_revalue_back_to_the_default_currency_restates_every_cost():
     config = {**BASE, "projection_years": 2}
     base = _run(_scaled_config(config, K, "JPY"))
     weather_patch, load_patch = _offline()
     with weather_patch, load_patch:
-        with pytest.raises(ValueError, match=r"from JPY to EUR, but the costs .* are amounts in JPY"):
+        with pytest.raises(ValueError, match=r"from JPY to EUR, but costs\.\w+, .* are amounts in JPY"):
             base.revalue({"currency": None})
         revalued = base.revalue({"currency": None, "costs": EUR_COSTS})
         defaults = base.revalue({"currency": None, "costs": {key: None for key in EUR_COSTS}})
@@ -372,8 +457,7 @@ def test_optimizer_ranks_and_constrains_scaled_money_alike(monkeypatch):
     left = optimization.optimize_system_multi_objective(weather, load, config, **run).details["pareto"]
     right = optimization.optimize_system_multi_objective(weather, load, scaled_config, **run).details["pareto"]
     assert right.attrs["currency"] == "JPY"
-    pd.testing.assert_frame_equal(left[["Modules", "Battery_kWh", "Tilt"]], right[["Modules", "Battery_kWh", "Tilt"]])
-    np.testing.assert_array_equal(right["NPV"].to_numpy(), K * left["NPV"].to_numpy())
+    _assert_frames_scale(left, right, money=["NPV"])
 
 
 # --- Selection and consistency -----------------------------------------------
