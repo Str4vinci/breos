@@ -2,9 +2,9 @@
  "case": "ageing",
  "title": "Battery ageing with different degradation models",
  "breos_version": "0.7.0",
- "git_describe": "v0.7.0-74-ge1a9055-dirty",
- "generated_utc": "2026-10-04T09:07:50+00:00",
- "runtime_s": 17.2,
+ "git_describe": "v0.7.0-75-g59cbcec",
+ "generated_utc": "2026-10-04T09:08:22+00:00",
+ "runtime_s": 17.0,
  "cheap": false,
  "configs": {
   "configs/examples/quickstart.toml": "f6c4bca0d4c3b28c126e5eb3bd8e41f12fb0f144297447dfe7b530202c759156"
