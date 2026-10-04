@@ -397,6 +397,7 @@
   "provenance.resolved_config.tilt": 34.380004,
   "provenance.resolved_config.tracking": "fixed",
   "provenance.resolved_config.transposition_model": "isotropic",
+  "provenance.resolved_config.weather_file": null,
   "provenance.resolved_config.weather_source": null,
   "provenance.start_date": "2025-01-01",
   "provenance.timezone": "Europe/Lisbon",

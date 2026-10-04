@@ -956,6 +956,7 @@
    "reference_tariff": null,
    "terminal_value": null,
    "smart_charging": null,
+   "weather_file": null,
    "weather_source": null,
    "pv_arrays": null,
    "tracking": "fixed",
