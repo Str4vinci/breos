@@ -167,6 +167,29 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   `decision_boundary` for every `daily_persistence` run; the new mode
   reports controller and planner version `"2"`. The default `"civil_day"`
   is bit-identical to before, and the dispatch kernel is unchanged.
+- Currency selection for flat-price and time-of-use runs (#376, ADR 0003
+  E13). A top-level `currency` key (CLI `--currency`, and the optimizer's
+  top level) takes an ISO 4217 code; unset, the run takes the `[tariff]`
+  currency, else EUR as before. `[tariff]` and `[reference_tariff]` accept
+  any ISO 4217 code and must match the run. BREOS does not convert and never
+  relabels EUR amounts: a cost preset in another currency is refused, and a
+  run in another currency than EUR must set under `[costs]` every cost it
+  prices with whose default is not zero (the error names them), and in the
+  optimizer `constraints.budget`. `provenance.currency` records the result;
+  the sweep CSV, the Monte Carlo runs and yearly CSVs and a written cost
+  projection gain a `currency` column, which plots read for their labels;
+  `breos validate-config` prints the resolved currency; each bundled cost
+  preset records its `currency`, which `breos list cost-presets` reports;
+  and `App.revalue` accepts `currency` when the change restates every
+  non-zero amount the run set in `[costs]`, `[tariff]` and
+  `[reference_tariff]`, and refuses it under a non-zero `wear_cost_per_kwh`.
+  Scaling every money input by k scales every money output by k and leaves
+  energy, ageing and payback years unchanged, and in the optimizer the NPV
+  ranking of the evaluated designs and their budget feasibility, which the
+  tests check. The NSGA-II search can still differ between currencies: pymoo
+  adds the budget violation, in money, to the area and ZEB violations
+  unscaled, so infeasible candidates can rank differently. Runs that set no
+  `currency` are bit-identical, and the result format stays `"1"`.
 
 ### Changed
 
@@ -184,6 +207,10 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   allow this, such a run keeps each year's grid import and export step by
   step in memory: about 11 MB for 20 years at 15-minute resolution. Runs
   with smart charging still simulate again (#393).
+- `breos.tariffs.result_currency` is replaced by `run_currency(configured,
+  tariff_currency)`, which also reads the `currency` key, and
+  `resolve_reference_tariff_spec` takes the run's currency instead of the
+  system tariff (#376).
 
 ### Fixed
 
@@ -197,6 +224,11 @@ All notable changes to BREOS are documented here. Format follows [Keep a Changel
   for every `n_procs`. On a multi-core machine this can move a 15-minute
   money total in its last digit; hourly results do not change.
   `threadpoolctl` (3.5.0 or newer) becomes a dependency.
+- `App.revalue` reads hyphens and underscores in key names as the same key,
+  as `App` does. A change spelled with hyphens, such as
+  `{"costs": {"module-cost-per-w": None}}`, used to leave the old
+  `module_cost_per_w` in place without an error; it now changes or removes
+  that key. Results with underscore spellings do not change.
 
 ## [0.7.0] - 2026-10-02
 

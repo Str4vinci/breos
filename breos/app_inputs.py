@@ -582,6 +582,7 @@ INPUT_INDEPENDENT_KEYS: frozenset[str] = frozenset(
         # Prices, valuation and dispatch strategy.
         "cost_preset",
         "costs",
+        "currency",
         "inflation_rate",
         "sell_price_inflation",
         "import_price_escalation",

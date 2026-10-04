@@ -29,6 +29,7 @@ from breos.app_config import (
     TARIFF_TABLE,
     TERMINAL_VALUE_TABLE,
     check_calendar_model,
+    check_cost_currency,
     default_module_key,
 )
 from breos.config_schema import (
@@ -46,6 +47,7 @@ from breos.economics import DEFAULT_DISCOUNT_RATE, DEFAULT_INFLATION_RATE
 from breos.emissions import EmissionsParams
 from breos.pv.model_options import PV_MODEL_CONFIG_KEYS
 from breos.smart_charging import PLANNER_MODES
+from breos.tariffs import DEFAULT_CURRENCY, check_currency, run_currency
 from breos.weather import IRRADIANCE_RESAMPLING_POLICIES
 
 # Search defaults. They apply when [constraints] leaves a key out, and the
@@ -353,6 +355,8 @@ OPTIMIZATION_TABLES: Mapping[str, TableSpec] = {
 }
 # Top-level scalars: the App keys the optimizer reads under the same name.
 OPTIMIZATION_SCALARS: Mapping[str, Any] = {
+    # The run's currency, as the App's top-level key.
+    "currency": _optional(check_currency),
     "pv_module": text,
     "inverter_efficiency": number(minimum=0, maximum=1, min_exclusive=True),
     "dc_output_scale": _dc_output_scale,
@@ -367,6 +371,28 @@ def _first_set(where: tuple[tuple[str, Any], ...], default: Any) -> Any:
         if value is not None:
             return value
     return default
+
+
+def _currency(resolved: Mapping[str, Any]) -> str:
+    """The run's currency: ``currency``, else the tariff's, else EUR; and check the costs are in it.
+
+    The flat energy prices count as given in ``[financials]`` as well as in
+    ``[costs]``. A search whose ``constraints.max_battery_kwh`` is 0 never
+    prices a battery.
+    """
+    tariff = resolved.get("tariff")
+    tariff_currency = TARIFF_TABLE.validate(tariff, "tariff")["currency"] if tariff is not None else None
+    currency = run_currency(resolved.get("currency"), tariff_currency)
+    financials = resolved.get("financials") or {}
+    flat_prices = [key for key in ("electricity_cost", "electricity_sold_cost") if key in financials]
+    max_battery = (resolved.get("constraints") or {}).get("max_battery_kwh")
+    check_cost_currency(
+        currency,
+        given=[*resolved["costs"], *flat_prices],
+        tariff=tariff is not None,
+        battery=False if max_battery == 0 else None,
+    )
+    return currency
 
 
 def adjusted_max_tilt_deg(latitude: float, margin_deg: float) -> float:
@@ -501,6 +527,13 @@ def resolve_optimization_config(config: Mapping[str, Any]) -> dict[str, Any]:
 
     constraints = resolved.setdefault("constraints", {}) or {}
     resolved["constraints"] = constraints
+    resolved["currency"] = _currency(resolved)
+    if resolved["currency"] != DEFAULT_CURRENCY and "budget" not in constraints:
+        raise ValueError(
+            f"The run is in {resolved['currency']}, but constraints.budget would default to "
+            f"{DEFAULT_BUDGET:g} {DEFAULT_CURRENCY}. BREOS does not convert currencies: set constraints.budget in "
+            f"{resolved['currency']}."
+        )
     constraints.setdefault("budget", DEFAULT_BUDGET)
     constraints.setdefault("max_area_m2", DEFAULT_MAX_AREA_M2)
     constraints.setdefault("max_modules", DEFAULT_MAX_MODULES)

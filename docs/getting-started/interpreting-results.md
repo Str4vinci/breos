@@ -437,10 +437,12 @@ reason; the example is a PV-only run without emissions.
 ## Currency and result format
 
 Money keys carry no currency. Every money value in a result is in the run's
-currency, which `provenance.currency` records: the tariff's `currency` when
-the run has a `[tariff]` table, otherwise `EUR`, the currency of the bundled
-cost catalogue. BREOS does not convert currencies. Summary and plot labels
-read the recorded currency.
+currency, which `provenance.currency` records: the `currency` key, else the
+tariff's `currency` when the run has a `[tariff]` table, otherwise `EUR`, the
+currency of the bundled cost catalogue (see
+[Currency](configuration.md#currency)). BREOS does not convert currencies.
+The CSVs BREOS writes (sweep, Monte Carlo, cost projection) have a `currency`
+column. Summary and plot labels read the recorded currency.
 
 `result_schema_version` is the result's format number, independent of the
 ledger schema. The format changes, to the next integer, only when a field is

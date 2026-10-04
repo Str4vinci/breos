@@ -35,7 +35,6 @@ from breos.load_profiles import PROFILES, resolve_profile_file
 from breos.pv_modules import MODULES
 from breos.resources import load_config_json
 from breos.solar import resolve_pvwatts_losses
-from breos.tariffs import DEFAULT_CURRENCY
 from breos.utils import package_version
 
 
@@ -203,6 +202,7 @@ def _config_summary(resolved: ResolvedAppConfig) -> dict[str, Any]:
             get_battery_model_profile(cfg["blast_model"]).as_dict() if cfg["blast_model"] is not None else None
         ),
     )
+    summary["economics"]["currency"] = resolved.currency
     summary["emissions"]["enabled"] = resolved.emissions_params is not None
     summary["notes"] = [
         "This is a resolved configuration check only; no weather fetch or simulation was run.",
@@ -244,8 +244,8 @@ def _load_options(category: str) -> list[dict[str, Any]]:
         return [
             {
                 "key": key,
-                # The bundled catalogue is in one currency; BREOS does not convert.
-                "currency": DEFAULT_CURRENCY,
+                # A preset's prices are in its own currency; BREOS does not convert.
+                "currency": value["currency"],
                 "electricity_cost_per_kwh": value.get("electricity_cost"),
                 "export_price_per_kwh": value.get("electricity_sold_cost"),
                 "storage_cost_per_kwh": value.get("storage_cost_per_kwh"),
@@ -357,6 +357,7 @@ def _validate_config(args: argparse.Namespace) -> int:
         print(f"Load profile: {load['load_profile']} at {load['resolution']}, from {source}")
         print(f"Battery: {payload['battery']['capacity_kwh']} kWh")
         print(f"Cost preset: {payload['economics']['cost_preset'] or 'none'}")
+        print(f"Currency: {payload['economics']['currency']}")
         print(f"Emissions: {payload['emissions']['country'] or 'disabled'}")
         period = payload["simulation"].get("period")
         if period is not None:
@@ -542,6 +543,8 @@ def _sweep_row(
     row: dict[str, Any] = {
         "run": run_idx,
         "breos_version": package_version(),
+        # Every money column of the row is in this currency.
+        "currency": resolved["economics"]["currency"],
     }
     row.update({f"param_{key}": value for key, value in varied.items()})
     row.update(
@@ -656,12 +659,14 @@ def _montecarlo(args: argparse.Namespace) -> int:
 
     out_path = args.output or Path("monte_carlo_results.csv")
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    result.runs.to_csv(out_path, index=False)
+    # A CSV keeps no attrs, so each row names the currency of its money.
+    currency = result.provenance["currency"]
+    result.runs.assign(currency=currency).to_csv(out_path, index=False)
     yearly_path = None
     if result.yearly is not None:
         yearly_path = args.yearly_output or out_path.with_name(f"{out_path.stem}_yearly.csv")
         yearly_path.parent.mkdir(parents=True, exist_ok=True)
-        result.yearly.to_csv(yearly_path, index=False)
+        result.yearly.assign(currency=currency).to_csv(yearly_path, index=False)
 
     provenance_path = args.provenance_output or out_path.with_name(f"{out_path.stem}.provenance.json")
     provenance = {

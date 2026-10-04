@@ -1,5 +1,6 @@
 {
     "residential_de": {
+        "currency": "EUR",
         "electricity_cost": 0.4042,
         "electricity_sold_cost": 0.079,
         "module_cost_per_w": 0.25,
@@ -15,6 +16,7 @@
         "other_cost_per_module": 50
     },
     "residential_es": {
+        "currency": "EUR",
         "electricity_cost": 0.2841,
         "electricity_sold_cost": 0.08,
         "module_cost_per_w": 0.2,
@@ -30,6 +32,7 @@
         "other_cost_per_module": 30
     },
     "residential_pt": {
+        "currency": "EUR",
         "electricity_cost": 0.2582,
         "electricity_sold_cost": 0.04,
         "module_cost_per_w": 0.125,

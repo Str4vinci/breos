@@ -47,7 +47,7 @@ from breos.economics import (
     terminal_health_credit,
 )
 from breos.execution import config_has_battery, observed_jit_cache_state, reset_jit_cache_observation
-from breos.tariffs import ResolvedTariff, result_currency
+from breos.tariffs import ResolvedTariff
 from breos.utils import get_hours_per_step
 
 
@@ -1268,7 +1268,7 @@ def value_projection(cfg: dict[str, Any], resolved: ResolvedAppConfig, run: Proj
         replacement_cost_learning=cfg.get("replacement_cost_learning", 0.0),
         discount_rate=cfg["discount_rate"],
         emissions_params=resolved.emissions_params,
-        currency=result_currency(resolved.tariff),
+        currency=resolved.currency,
         baseline_import_price_escalation=(
             resolved.reference_tariff.import_price_escalation if resolved.reference_tariff is not None else None
         ),

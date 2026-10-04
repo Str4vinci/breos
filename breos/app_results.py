@@ -18,7 +18,6 @@ from breos.projection import build_battery_config
 from breos.result_schema import RESULT_SCHEMA_VERSION
 from breos.runners.app import CO2_COLUMNS, SimulationArtifacts
 from breos.smart_charging import PLANNER_MODES
-from breos.tariffs import result_currency
 from breos.utils import get_hours_per_step, local_datetime_index, package_version
 
 
@@ -286,7 +285,7 @@ def _provenance(
         "breos_version": package_version(),
         "ledger_schema_version": LEDGER_SCHEMA_VERSION,
         # Every money field is in this currency; BREOS does not convert.
-        "currency": result_currency(resolved.tariff),
+        "currency": resolved.currency,
         "resolved_config": normalized_cfg,
         "weather": weather,
         "load_profile": json.loads(json.dumps(artifacts.load_profile_metadata, default=str)),

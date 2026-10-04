@@ -251,6 +251,7 @@ def test_revaluation_keys_are_the_prices():
     assert REVALUATION_KEYS == {
         "cost_preset",
         "costs",
+        "currency",
         "discount_rate",
         "import_price_escalation",
         "inflation_rate",

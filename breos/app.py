@@ -19,13 +19,13 @@ Usage:
 from __future__ import annotations
 
 import warnings
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from copy import deepcopy
 from typing import Any
 
 import pandas as pd
 
-from breos.app_config import APP_CONFIG_FIELDS, normalize_config_keys, resolve_app_config
+from breos.app_config import APP_CONFIG_FIELDS, ResolvedAppConfig, normalize_config_keys, resolve_app_config
 from breos.app_inputs import AppRuntimeDependencies
 from breos.app_results import build_result as build_app_result
 from breos.load_profiles import load_profile
@@ -61,6 +61,64 @@ def _revalued_config(config: dict[str, Any], changes: Mapping[str, Any]) -> dict
                 table[name] = {**table[name], **deepcopy(dict(item))}
         merged[key] = table
     return merged
+
+
+# The money keys of a [tariff] or [reference_tariff] table, and of its annual_network_credit.
+_TARIFF_MONEY_KEYS = ("import_prices", "export_prices", "fixed_charge_per_day")
+_CREDIT_MONEY_KEYS = ("amount_per_year", "network_fixed_per_year", "network_import_prices")
+
+
+def _is_zero(value: Any) -> bool:
+    """Whether an amount, or every price in a price list, is zero: zero in any currency."""
+    if isinstance(value, Mapping):
+        return all(_is_zero(item) for item in value.values())
+    return bool(value == 0)
+
+
+def _kept_amounts(table: Mapping[str, Any], change: Any, keys: Iterable[str], where: str) -> list[str]:
+    """The non-zero amounts among ``keys`` in an old table that its revalue ``change`` does not restate."""
+    restated = set(change or {})
+    return [f"{where}.{key}" for key in keys if key in table and key not in restated and not _is_zero(table[key])]
+
+
+def _check_currency_change(old: ResolvedAppConfig, currency: str, changes: Mapping[str, Any]) -> None:
+    """Refuse a revaluation into ``currency`` that keeps an amount stated in the run's old currency.
+
+    Tables merge key by key, so after a currency change every amount the old
+    run set and the changes do not restate would be read in the new currency:
+    each non-zero cost under ``[costs]``, and each non-zero price list, fixed
+    charge and network-credit amount of a ``[tariff]`` or
+    ``[reference_tariff]`` the run keeps. A key set to None, or a table
+    removed, counts as restated. A cost preset carries its own currency and
+    is checked when the new configuration resolves. The planner's wear
+    weight is not a revaluation key, so a non-zero one cannot be restated.
+    ``changes`` has normalised keys (:func:`normalize_config_keys`).
+    """
+    if currency == old.currency:
+        return
+    move = f"revalue() moves the run from {old.currency} to {currency}"
+    kept = _kept_amounts(old.cfg.get("costs") or {}, changes.get("costs"), sorted(old.cfg.get("costs") or {}), "costs")
+    for name in ("tariff", "reference_tariff"):
+        table = old.cfg.get(name)
+        if not isinstance(table, Mapping) or (name in changes and changes[name] is None):
+            continue
+        change = changes.get(name) or {}
+        kept += _kept_amounts(table, change, _TARIFF_MONEY_KEYS, name)
+        credit, credit_change = table.get("annual_network_credit"), change.get("annual_network_credit", {})
+        if isinstance(credit, Mapping) and credit_change is not None:
+            kept += _kept_amounts(credit, credit_change, _CREDIT_MONEY_KEYS, f"{name}.annual_network_credit")
+    if kept:
+        raise ValueError(
+            f"{move}, but {', '.join(kept)} {'is an amount' if len(kept) == 1 else 'are amounts'} in "
+            f"{old.currency}. BREOS does not convert currencies: restate each of them in {currency} in the "
+            "changes, or set it to None to remove it."
+        )
+    wear = old.smart_charging.wear_cost_per_kwh if old.smart_charging is not None else None
+    if wear:
+        raise ValueError(
+            f"{move}, but smart_charging.wear_cost_per_kwh ({wear}) is in {old.currency}, and revalue() cannot "
+            f"change it. Build a new App with the wear cost in {currency}."
+        )
 
 
 # The keys App.revalue may change: the economics section of the resolved
@@ -132,9 +190,18 @@ class App:
         A price list (``tariff.import_prices``, ``tariff.export_prices``,
         ``reference_tariff.import_prices``) replaces the old one whole. Only
         the economics keys in :data:`REVALUATION_KEYS` may change: ``costs``,
-        ``cost_preset``, ``tariff``, ``reference_tariff``, the discount rate,
-        the escalators and ``terminal_value``. The estimated battery residual
+        ``cost_preset``, ``currency``, ``tariff``, ``reference_tariff``, the
+        discount rate, the escalators and ``terminal_value``. The estimated battery residual
         value is recomputed from retained final health without simulating again.
+
+        A change of the run's currency must restate every money input in the
+        new currency, since tables merge key by key: each non-zero cost the
+        old ``costs`` table set, and each non-zero price list, fixed charge
+        and ``annual_network_credit`` amount of a ``tariff`` or
+        ``reference_tariff`` the run keeps (a key set to None, or a table
+        removed, counts), and a cost preset in the new currency or none. A
+        run whose ``smart_charging.wear_cost_per_kwh`` is not zero cannot
+        change currency; build a new App for it.
 
         When the new prices cannot change the dispatch, the stored simulation
         is re-priced (``"repriced"``): flat prices, a tariff removed, or a
@@ -161,15 +228,20 @@ class App:
         Raises:
             RuntimeError: If :meth:`simulate` has not been called.
             ValueError: If ``changes`` sets a key outside
-                :data:`REVALUATION_KEYS`; build a new App for those.
+                :data:`REVALUATION_KEYS`; build a new App for those. Or if it
+                changes the currency and keeps an amount in the old one.
         """
         if self._artifacts is None:
             raise RuntimeError("Call simulate() before revalue().")
+        # Hyphens and underscores name the same key, as in App, so a change
+        # spelled either way meets the key it changes or removes.
+        changes = normalize_config_keys(dict(changes))
         unknown = sorted(key for key in changes if key not in APP_CONFIG_FIELDS)
         if unknown:
             raise ValueError(f"Unknown config key(s) for revalue(): {', '.join(unknown)}")
-        config = _revalued_config(self._config, changes)
-        changed = sorted(key for key in config.keys() | self._config.keys() if config.get(key) != self._config.get(key))
+        old = normalize_config_keys(self._config)
+        config = _revalued_config(old, changes)
+        changed = sorted(key for key in config.keys() | old.keys() if config.get(key) != old.get(key))
         outside = [key for key in changed if key not in REVALUATION_KEYS]
         if outside:
             raise ValueError(
@@ -177,6 +249,7 @@ class App:
                 f"Build a new App for it. Keys revalue() accepts: {', '.join(sorted(REVALUATION_KEYS))}."
             )
         resolved = resolve_app_config(config)
+        _check_currency_change(self._resolved, resolved.currency, changes)
         artifacts, method = revalue_app_simulation(resolved, self._artifacts, self._runtime_dependencies())
         result = build_app_result(resolved, artifacts, input_repairs=self._input_repairs)
         result["provenance"]["revaluation"] = {"method": method, "changed_keys": changed}

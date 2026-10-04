@@ -359,6 +359,7 @@
   "provenance.resolved_config.calendar_model": "naumann_lam_field_calibrated",
   "provenance.resolved_config.cost_preset": "residential_pt",
   "provenance.resolved_config.cross_axis_tilt": 0.0,
+  "provenance.resolved_config.currency": null,
   "provenance.resolved_config.degradation_engine": "blast",
   "provenance.resolved_config.diffuse_iam": "none",
   "provenance.resolved_config.discount_rate": 0.03,
